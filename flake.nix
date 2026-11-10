@@ -138,6 +138,7 @@
               ./tests
               ./oracle
               ./src/logos_core/pins.nim
+              ./src/logos_core/base/nfc_tables.nim
             ];
           };
           specCheck =
@@ -152,7 +153,7 @@
             spec-pins = specCheck "spec-pins" "spectrace pins";
             spec-ledger = specCheck "spec-ledger" "spectrace check";
             spec-gate = specCheck "spec-gate" "spectrace gate";
-            oracle-selftest = specCheck "oracle-selftest" "python3 oracle/selftest.py && python3 oracle/gen_cddl_vectors.py --check && python3 oracle/gen_hash_vectors.py --check";
+            oracle-selftest = specCheck "oracle-selftest" "python3 oracle/selftest.py && python3 oracle/gen_cddl_vectors.py --check && python3 oracle/gen_hash_vectors.py --check && python3 oracle/gen_ed25519_vectors.py --check && python3 oracle/gen_cose_vectors.py --check && python3 oracle/gen_nfc_tables.py --check";
           };
 
           # INTERFACE §2.1-§2.3, §2.5, §5.2 C type headers (types only, D29).
@@ -169,6 +170,22 @@
               install -Dm755 build/bin/lcn_gen $out/bin/lcn-gen
             '';
             meta.mainProgram = "lcn-gen";
+          };
+
+          # PM §3, §4, §4.3, §7.1 package tools (a subset: no fetch or install).
+          lcnPkg = nimDerivation {
+            pname = "lcn-pkg";
+            version = "0.0.1";
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c -d:release --outdir:build/bin src/lcn_pkg.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm755 build/bin/lcn_pkg $out/bin/lcn-pkg
+            '';
+            meta.mainProgram = "lcn-pkg";
           };
 
           updateNimbleDeps = pkgs.writeShellApplication {
@@ -193,6 +210,7 @@
             specChecks
             spectrace
             lcnGen
+            lcnPkg
             updateNimbleDeps
             ;
         };
@@ -203,6 +221,7 @@
       packages = forAllSystems (system: {
         inherit (bySystem.${system}) nim nph spectrace;
         lcn-gen = bySystem.${system}.lcnGen;
+        lcn-pkg = bySystem.${system}.lcnPkg;
       });
 
       apps = forAllSystems (system: {
@@ -217,6 +236,10 @@
         lcn-gen = {
           type = "app";
           program = lib.getExe bySystem.${system}.lcnGen;
+        };
+        lcn-pkg = {
+          type = "app";
+          program = lib.getExe bySystem.${system}.lcnPkg;
         };
       });
 

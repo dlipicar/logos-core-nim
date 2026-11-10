@@ -30,7 +30,7 @@ default = "deferred:tier-4"
 "§3.9.3" = "claimed"
 "§3.9.4" = "claimed"
 "§4" = "claimed"
-"§4.6" = "deferred:tier-3"
+"§4.6" = "claimed"
 "§5.1" = "claimed"
 "§5.2" = "deferred:tier-4"
 "§5.3" = "claimed"
@@ -63,10 +63,10 @@ default = "deferred:tier-4"
 "IFC-0045" = "deferred:tier-4"
 "IFC-0046" = "deferred:tier-4"
 "IFC-0057" = "deferred:tier-4"
-# §1.4: the module's logical name is a package property (PM §4 manifest).
-"IFC-0071" = "deferred:tier-3"
-# §4.5: forwarders carry payloads opaquely (TRANSPORT envelope codec).
-"IFC-0423" = "deferred:tier-3"
+# §1.4: a recommendation to contract authors on naming their namespace.
+"IFC-0071" = "out-of-scope:a recommendation to contract authors"
+# §4.6: the provider's C return code belongs to the §2.4 bindings.
+"IFC-0425" = "deferred:tier-4"
 # §5.3: routes, access, dispatch and providers exist only with RUNTIME.
 "IFC-0537" = "deferred:tier-4"
 # What a failure may disclose depends on authorization (RUNTIME, tier 4).

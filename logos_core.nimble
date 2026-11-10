@@ -6,8 +6,9 @@ description = "The Logos Core module specs in Nim"
 license = "MIT OR Apache-2.0"
 srcDir = "src"
 installExt = @["nim"]
-bin = @["lcn_gen"]
+bin = @["lcn_gen", "lcn_pkg"]
 namedBin["lcn_gen"] = "lcn-gen"
+namedBin["lcn_pkg"] = "lcn-pkg"
 
 # Dependencies
 #
@@ -18,6 +19,10 @@ namedBin["lcn_gen"] = "lcn-gen"
 requires "nim == 2.2.14"
 requires "results == 0.5.1"
 requires "unittest2 == 0.3.0"
+# Ed25519 for the package-signing profile (PM §4.3; D28, G135).
+requires "https://github.com/vacp2p/nim-boringssl == 0.0.14"
+# Raw deflate and CRC-32 for LGX's gzip layer (PM §7.1).
+requires "zlib == 0.3.0"
 
 # Tasks
 

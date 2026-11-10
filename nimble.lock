@@ -1,6 +1,16 @@
 {
   "version": 2,
   "packages": {
+    "boringssl": {
+      "version": "0.0.14",
+      "vcsRevision": "a57b97f5ba45353a1a38c81b4f5e6f537469a63e",
+      "url": "https://github.com/vacp2p/nim-boringssl",
+      "downloadMethod": "git",
+      "dependencies": [],
+      "checksums": {
+        "sha1": "a3e25afd96fc983d7d6eef29a319c35bf540c182"
+      }
+    },
     "results": {
       "version": "0.5.1",
       "vcsRevision": "df8113dda4c2d74d460a8fa98252b0b771bf1f27",
@@ -19,6 +29,18 @@
       "dependencies": [],
       "checksums": {
         "sha1": "a14b3648dc8bbbaefd0b16d9567b567cc264b042"
+      }
+    },
+    "zlib": {
+      "version": "0.3.0",
+      "vcsRevision": "7b1d6ed291df9fddcbb5cf16c1968c2b8c6e5a90",
+      "url": "https://github.com/status-im/nim-zlib",
+      "downloadMethod": "git",
+      "dependencies": [
+        "results"
+      ],
+      "checksums": {
+        "sha1": "f08631895c8ec74099a834008d48a2ac4e74635a"
       }
     }
   },

@@ -1,4 +1,9 @@
 {
+  "boringssl": {
+    "hash": "sha256-ETqSceUxZhDCw1N5rhsd5HdrT4KnmXmuGyJ8UuY2wHY=",
+    "rev": "a57b97f5ba45353a1a38c81b4f5e6f537469a63e",
+    "url": "https://github.com/vacp2p/nim-boringssl"
+  },
   "results": {
     "hash": "sha256-KbNqt0FMuzDF4X+XM6JEaZJBypLDnvVPpnBpE7Sq6sA=",
     "rev": "df8113dda4c2d74d460a8fa98252b0b771bf1f27",
@@ -8,5 +13,10 @@
     "hash": "sha256-LnG+BTHvT+eDIUQUKB9/wywMygp0KkuWde0UPuogYcw=",
     "rev": "19701632b4f287b3012a5e435a9d829b0f66c605",
     "url": "https://github.com/status-im/nim-unittest2"
+  },
+  "zlib": {
+    "hash": "sha256-vk2qpnOjYwBQrJjUQPtr8ftrtOV4QLGe/uV91UgfvRA=",
+    "rev": "7b1d6ed291df9fddcbb5cf16c1968c2b8c6e5a90",
+    "url": "https://github.com/status-im/nim-zlib"
   }
 }

@@ -1,0 +1,33 @@
+logos.package_manager.installed_package_record = {
+  identity: logos.package_manager.package_identity,
+  source: logos.package_manager.package_source,
+  variant: logos.package_manifest.package_variant_id,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+  modules: [* logos.package_manifest.module_declaration],
+  artifacts: [* logos.package_manager.installed_artifact],
+  resolved_dependencies: [* logos.package_manager.resolved_package_dependency],
+}
+
+logos.package_manager.package_source =
+  {
+    kind: "lgx",
+    storage: tstr .size (1..128),
+    object: bstr .size (1..4096),
+    ? provenance_object: bstr .size (1..4096),
+  } /
+  {
+    kind: "nix",
+    flake_ref: tstr .size (1..4096),
+    ? attr: tstr .size (1..255),
+    ? locked_ref: tstr .size (1..4096),
+  }
+
+logos.package_manager.manifest_commitment = {
+  commitment_model: "logos.commitment-model.2026-08",
+  schema_root: bstr .size 32,
+  schema_subtree_root: bstr .size 32,
+  value_root: bstr .size 32,
+  hash_profile: "logos.hash-profile.2026-08.choice-index",
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+

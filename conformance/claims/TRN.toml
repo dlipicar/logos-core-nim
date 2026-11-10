@@ -4,16 +4,62 @@
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
+# A `[units]` entry gives one requirement unit its own status, overriding its section's.
 
-default = "deferred:tier-3"
+default = "deferred:tier-4"
 
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
-"§3.1" = "deferred:tier-4"
+# Phase 3 (tier 3, sans-I/O): the envelope, framing, deterministic CBOR, Hello and
+# route tickets, requests and commitments, subscriptions, cancellation,
+# multiplexing, validation and evolution. Sockets, peer authentication and the
+# Runtime's route enforcement are tier 4; the Unix-stream, TLS and QUIC profiles
+# tier 5.
+"Abstract" = "claimed"
+"§1" = "claimed"
+"§2" = "claimed"
+"§3.1" = "claimed"
 "§3.2" = "deferred:tier-4"
-"§5" = "deferred:tier-4"
+"§3.3" = "claimed"
+"§4" = "claimed"
+"§5.1" = "claimed"
+"§5.2" = "deferred:tier-4"
+"§5.3" = "deferred:tier-4"
+"§6" = "claimed"
+"§7" = "claimed"
+"§8.1" = "claimed"
 "§8.2" = "deferred:tier-5"
+"§8.3" = "claimed"
 "§8.4" = "deferred:tier-5"
 "§8.5" = "deferred:tier-4"
 "§9" = "deferred:tier-4"
+"§10" = "claimed"
+
+[units]
+# §3.1: the endpoint comes from the Runtime's invocation descriptor.
+"TRN-0069" = "deferred:tier-4"
+# §3.2: no replay and no ticket reuse hold in the sans-I/O session.
+"TRN-0078" = "claimed"
+"TRN-0079" = "claimed"
+# Requirements on module contracts, not on the transport.
+"TRN-0098" = "out-of-scope:a requirement on module contracts that disclose partially"
+"TRN-0117" = "out-of-scope:a requirement on contracts that promise state reconstruction"
+"TRN-0118" = "out-of-scope:a requirement on contracts that promise state reconstruction"
+"TRN-0119" = "out-of-scope:a requirement on contracts that promise state reconstruction"
+"TRN-0134" = "out-of-scope:a requirement on module contracts"
+# §5.1 and §8.1: the route's access scope and authority decision are the
+# Runtime's to enforce (tier 4); the transport resolves names under the
+# selected contract.
+"TRN-0111" = "deferred:tier-4"
+"TRN-0112" = "deferred:tier-4"
+"TRN-0151" = "deferred:tier-4"
+"TRN-0153" = "deferred:tier-4"
+"TRN-0158" = "deferred:tier-4"
+"TRN-0159" = "deferred:tier-4"
+"TRN-0161" = "deferred:tier-4"
+"TRN-0162" = "deferred:tier-4"
+"TRN-0163" = "deferred:tier-4"
+"TRN-0165" = "out-of-scope:a requirement on other security profiles"
+# §10: a requirement on a future transport profile.
+"TRN-0252" = "out-of-scope:a requirement on future transport profiles"

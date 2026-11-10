@@ -10,6 +10,11 @@ The specs are being revised, so the work is ordered by how settled each area is
 - Tier 2: INTERFACE schema acceptance, call surfaces, payload validation and outcomes, the common
   schema, and `lcn-gen`, which generates C types and Nim types with codecs. Generated C headers are
   stamped `PROVISIONAL ABI`. Method signatures, lifecycle symbols and vtables come later.
+- Tier 3, without I/O: the TRANSPORT envelope, framing, Hello and route tickets, payload
+  commitments, cancellation and multiplexing as codecs and state machines; and the Package Manager's
+  package artifacts: the manifest and its commitment, package-signing trust input, COSE_Sign1 with
+  Ed25519 (BoringSSL plus the G42 checks), LGX archives, and `lcn-pkg`, the producer tools. Sockets,
+  fetch, catalogs, installation and the resolver come later.
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 
@@ -27,8 +32,8 @@ nimble setup -l
 nimble test && nimble test_refc
 ```
 
-`lcn-gen` builds with `--useSystemNim`. On macOS, nimble 0.20.1 crashes without it while looking up
-the Nim that `nimble.lock` names; on Linux the flag changes nothing:
+`lcn-gen` and `lcn-pkg` build with `--useSystemNim`. On macOS, nimble 0.20.1 crashes without it
+while looking up the Nim that `nimble.lock` names; on Linux the flag changes nothing:
 
 ```bash
 nimble build --useSystemNim
@@ -51,6 +56,12 @@ also a flake package:
 nix run .#lcn-gen -- types --out:include module.cddl
 ```
 
+So is `lcn-pkg`, which builds, signs, packs and checks packages (`lcn-pkg --help`):
+
+```bash
+nix run .#lcn-pkg -- verify example.lgx --trust:trust.json
+```
+
 The generated Nim modules (`src/logos_core/iface/common_types.nim`, `tests/generated/`) are
 committed, and a test fails when they are stale. To rewrite them:
 
@@ -59,7 +70,8 @@ nimble regen
 ```
 
 After changing a requirement in `logos_core.nimble`, regenerate the lock from scratch. With nimble
-0.20.1, `nimble lock` over an existing lock empties its package list or crashes.
+0.20.1, `nimble lock` over an existing lock empties its package list or crashes. Locking runs each
+dependency's `.nimble` script, so we lock on a separate Linux host (DECISIONS I35).
 
 ```bash
 rm nimble.lock && nimble -y lock
@@ -81,12 +93,15 @@ Evaluation fails while the JSON and `nimble.lock` disagree.
 | `src/logos_core/` | The library. BLAKE3 C sources are vendored under `crypto/blake3/` (`tools/update-blake3.sh`). |
 | `src/logos_core/iface/` | INTERFACE: acceptance, names, the C type mapping, call surfaces, payloads, outcomes. |
 | `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator and its runtime; the `lcn-gen` CLI. |
+| `src/logos_core/transport/` | TRANSPORT without I/O: envelope codec, framing, Hello, tickets, sessions, the schema boundary. |
+| `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; the `lcn-pkg` CLI. |
+| `src/logos_core/crypto/ed25519.nim`, `src/logos_core/base/nfc.nim` | Ed25519 over BoringSSL with the G42 checks; Unicode NFC for LGX paths. |
 | `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. `tests/generated/` is `lcn-gen` output. |
 | `spec/mirrors/`, `spec/mirrors.toml` | Verbatim copies of the spec blocks the code and tests are built from. |
 | `spec/pins.toml` | Every identifier, root and digest the specs pin, with the section it comes from. |
 | `conformance/` | Requirement ledger and per-section claims; see [docs/CONFORMANCE.md](docs/CONFORMANCE.md). |
 | `tools/spectrace/` | Requirement extraction, mirror and pin checks, coverage gate. |
-| `oracle/` | An independent Python reference for deterministic CBOR and hashing. |
+| `oracle/` | An independent Python reference for deterministic CBOR, hashing, Ed25519 and COSE vectors, and the NFC tables. |
 | `nix/` | Nim overlay, Nimble dependency fetching, the shared derivation helper. |
 
 ## Following the specs

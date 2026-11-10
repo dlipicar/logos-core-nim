@@ -453,3 +453,16 @@ section = "§4"
 out = "PKG/4.3.signing-profile.cddl"
 file = "spec-module-package-manager.md"
 section = "§4.3"
+
+# PM §5: the package records; `manifest_commitment` is the signed claim's field.
+[[mirror]]
+out = "PKG/5.package-records.cddl"
+file = "spec-module-package-manager.md"
+section = "§5"
+ordinal = 2
+
+# PM §14: the package error codes the package/ modules report.
+[[mirror]]
+out = "PKG/14.package-errors.cddl"
+file = "spec-module-package-manager.md"
+section = "§14"

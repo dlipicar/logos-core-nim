@@ -189,12 +189,14 @@ value = "ca004a96bbbce568ab0e7f996020e12d0dca353603671d5d6d8d5e364b830d32"
 [pkg-manifest-schema-root]
 file = "spec-module-package-manager.md"
 section = "§4"
+code = "PackageManifestSchemaRoot"
 value = "108b1bab1bf87dfed2ca431bf0591e33e937bb553a489df46b0a9023b9a98af1"
 
 [pkg-manifest-subtree-root]
 file = "spec-module-package-manager.md"
 section = "§4"
 definition = "logos.package_manifest.manifest"
+code = "PackageManifestSubtreeRoot"
 value = "a06c0c06d9493e19ab96baabd23b6520645195188af062f858f95f6922a128a1"
 
 [logos-types-header]
@@ -208,3 +210,53 @@ file = "spec-module-interface.md"
 section = "§2.3"
 code = "LogosTypesEmpty"
 mirror = "IFC/2.3.empty.h"
+
+# Tier 3 documents -------------------------------------------------------------
+
+[trn-envelope-primitives-document]
+file = "spec-module-transport.md"
+section = "§1.1"
+mirror = "TRN/1.1.envelope-primitives.cddl"
+code = "TransportPrimitivesDocument"
+
+[trn-envelopes-document]
+file = "spec-module-transport.md"
+section = "§1.3"
+mirror = "TRN/1.3.envelopes.cddl"
+code = "TransportEnvelopesDocument"
+
+# The smallest configured frame maximum a stream implementation must support;
+# `transport/framing.nim` checks its constant against this.
+[trn-max-frame-floor]
+file = "spec-module-transport.md"
+section = "§2.1"
+value = "16 MiB"
+
+[pkg-manifest-document]
+file = "spec-module-package-manager.md"
+section = "§4"
+mirror = "PKG/4.manifest.cddl"
+code = "PackageManifestDocument"
+
+[pkg-signing-profile-document]
+file = "spec-module-package-manager.md"
+section = "§4.3"
+mirror = "PKG/4.3.signing-profile.cddl"
+code = "PackageSigningProfileDocument"
+
+[pkg-records-document]
+file = "spec-module-package-manager.md"
+section = "§5"
+mirror = "PKG/5.package-records.cddl"
+code = "PackageRecordsDocument"
+
+[pkg-errors-document]
+file = "spec-module-package-manager.md"
+section = "§14"
+mirror = "PKG/14.package-errors.cddl"
+code = "PackageErrorsDocument"
+
+[pkg-manifest-max-size]
+file = "spec-module-package-manager.md"
+section = "§3"
+value = "4 MiB"

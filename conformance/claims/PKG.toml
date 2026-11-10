@@ -4,22 +4,86 @@
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
+# A `[units]` entry gives one requirement unit its own status, overriding its section's.
 
 default = "deferred:tier-5"
 
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
-"§3" = "deferred:tier-3"
-"§4" = "deferred:tier-3"
+# Phase 3 (tier 3): the manifest, its value commitment, package-signing trust
+# input, the COSE_Sign1 Ed25519 profile and LGX archives, as package artifacts
+# and the lcn-pkg producer tools. Fetch, catalogs, the storage role, installation,
+# the resolver, Runtime handoffs and the methods are tier 5; configuration schema
+# validation is tier 4 with CONFIG.
+"§2" = "claimed"
+"§3" = "claimed"
+"§4" = "claimed"
+"§4.1" = "claimed"
 "§4.2" = "deferred:tier-5"
+"§4.3" = "claimed"
 "§4.4" = "deferred:tier-5"
 "§4.5" = "deferred:tier-5"
-"§7.1" = "deferred:tier-3"
-"§8" = "deferred:tier-3"
-"§9" = "deferred:tier-3"
-"§10" = "deferred:tier-3"
-"§11" = "deferred:tier-3"
-"§14" = "deferred:tier-4"
-"§16" = "deferred:tier-3"
+"§5" = "claimed"
+"§7.1" = "claimed"
+"§8" = "claimed"
+"§9" = "claimed"
+"§10" = "deferred:tier-5"
+"§11" = "deferred:tier-5"
+"§14" = "deferred:tier-5"
+"§16" = "claimed"
 "§17" = "deferred:tier-4"
+
+[units]
+# §2: the Nix profile, and the catalog, Storage and backend metadata a manifest
+# must win over, come with fetch and the Nix profile.
+"PKG-0017" = "deferred:tier-5"
+"PKG-0019" = "deferred:tier-5"
+"PKG-0021" = "deferred:tier-5"
+# §3: there is no JSON mapping to compare manifest.json with; it is path-checked
+# and never read (G45).
+"PKG-0033" = "out-of-scope:G45: manifest.json is never read, and no JSON mapping defines its value"
+# §4: configuration schema and default artifacts are parsed and validated with CONFIG.
+"PKG-0060" = "deferred:tier-4"
+"PKG-0069" = "deferred:tier-5"
+# §4.1: verification caching, rotation and revocation act on resolution and the
+# installed set; catalog trust and the protected trust-input path come with the
+# Package Manager service.
+"PKG-0076" = "deferred:tier-5"
+"PKG-0077" = "deferred:tier-5"
+"PKG-0079" = "deferred:tier-5"
+"PKG-0080" = "deferred:tier-5"
+"PKG-0081" = "deferred:tier-5"
+"PKG-0082" = "deferred:tier-5"
+"PKG-0083" = "deferred:tier-5"
+# §4.3: freshness is the §4.2 catalog's.
+"PKG-0112" = "deferred:tier-5"
+# §5: package identity, installed records, sources and retention.
+"PKG-0172" = "deferred:tier-5"
+"PKG-0177" = "deferred:tier-5"
+"PKG-0178" = "deferred:tier-5"
+"PKG-0181" = "deferred:tier-5"
+"PKG-0182" = "deferred:tier-5"
+# §7.1: installation and extraction; Runtime and Module Loader execution.
+"PKG-0192" = "deferred:tier-5"
+"PKG-0204" = "deferred:tier-5"
+"PKG-0219" = "deferred:tier-5"
+"PKG-0220" = "deferred:tier-4"
+# §8: materialization through a source profile.
+"PKG-0271" = "deferred:tier-5"
+# §8: G156 is open (reported as NP-15): the §4 CDDL requires `hash`, so a manifest
+# artifact without one is invalid-package (tested as [IMPL-DECISION G156]), not
+# the artifact-integrity-failed this unit names.
+"PKG-0275" = "deferred:tier-3"
+# §9: checking `implements` against a contract's own commitments, and provider
+# validation, happen where the executable's call surface is known.
+"PKG-0287" = "deferred:tier-4"
+"PKG-0288" = "deferred:tier-4"
+"PKG-0289" = "deferred:tier-4"
+# §11: the manifest's dependency and permission rules are built; resolution is not.
+"PKG-0296" = "claimed"
+"PKG-0297" = "claimed"
+"PKG-0298" = "claimed"
+"PKG-0334" = "claimed"
+# §14: the error codes are built; method results are not.
+"PKG-0358" = "claimed"

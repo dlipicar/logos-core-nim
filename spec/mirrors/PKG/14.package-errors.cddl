@@ -1,0 +1,17 @@
+logos.package_manager.package_error = {
+  code: logos.package_manager.package_error_code,
+  ? message: tstr .size (0..512),
+}
+
+logos.package_manager.package_error_code =
+  "invalid-request" /
+  "unsupported-source" /
+  "package-unavailable" /
+  "package-not-installed" /
+  "package-conflict" /
+  "package-in-use" /
+  "invalid-package" /
+  "incompatible-platform" /
+  "dependency-unavailable" /
+  "artifact-integrity-failed" /
+  "signature-verification-failed"

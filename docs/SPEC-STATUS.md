@@ -57,10 +57,10 @@ Three spec facts drive the order:
 | 0 | 4 | 0 |
 | 1 | 34 | 15 |
 | 2 | 41 | 12 |
-| 3 | 61 | 6 |
+| 3 | 62 | 6 |
 | 4 | 58 | 1 |
 | 5 | 18 | 2 |
-| all | 216 | 36 |
+| all | 217 | 36 |
 
 ## Tier 0 — foundations
 
@@ -108,7 +108,7 @@ Three spec facts drive the order:
 | NX-02 | claude-spec-comments-2 | TRANSPORT §5.1; INTERFACE §2.6, §5.1 | M1, M2, M5 | LOW | Additive: Y [CR]. Restrict the snapshot-event model to Runtime contracts (editorial). Add `logos.revision`. Optional on-subscription hook. | — | open |
 | G151 | claude-spec-comments-2 (ND-10) | cdCDDLe §5.1 l.164 vs §8 l.530, l.537 | M1 | LOW | §5.1 allows `.size` on any target; the §8 node holds only a primitive. Interim: `x .size n` with `x` a rule name is rejected as unsupported, so no bytes are committed to. | `cddl/syntax.nim` `checkSize`; vector `unsupported-size-named-target` | reported as ND-10 (logos-lips `e7c53b7b`); open |
 | G152 | claude-spec-comments-2 (ND-11) | COMMITMENT §4 l.560-562 vs §8 l.1101 | M1 | **HIGH-n** | A leaf-bodied declaration's own node gets two identities (subtree root, leaf hash at `[]`); decides the schema identity in value nodes typed by it, so value roots. Interim: the subtree root. | `commitment/schema.nim` `nodeIdentity`, `commitment/normalize.nim` `identityOf`; tests `[IMPL-DECISION G152]` | reported as ND-11 (logos-lips `e7c53b7b`); open |
-| PM-06 | claude-spec-comments | PM §4.3; CA §9.1 | M1,M7 | MED | Signature edge cases; no byte change. | — | open |
+| PM-06 | claude-spec-comments | PM §4.3; CA §9.1 | M1,M7 | MED | Signature edge cases; no byte change. | `crypto/ed25519.nim` `verify`, `checkPublicKey` (G135); `tests/test_ed25519.nim` (RFC 8032, Wycheproof, edge vectors from `oracle/gen_ed25519_vectors.py`); test `[IMPL-DECISION G42]` | open |
 
 ## Tier 2 — schema surface and C types
 
@@ -164,7 +164,7 @@ Three spec facts drive the order:
 | NP-02 | claude-spec-comments-2 | PM §4, §7.1 l.837/846, §10; LOADER §3 | M5, M7, M12 | HIGH | Additive: Y [MR]. Executable artifact kind (0755, symlinks) plus a new realization strategy where the signed executable acts as the Module Host. | — | open |
 | NR-14 | claude-spec-comments-2 | TRANSPORT §8.2 l.951-967; SECURITY §11 | M5, M9 | HIGH | Additive: N. Security fix: a per-route socketpair or nonce instead of a socket path changes the endpoint model. Only MED if the owner picks uid+pid checks instead. | — | open |
 | AP-7 (G108) | claude-spec-comments | LOADER l.330 | M5 | LOW | Answered. | — | open |
-| C-07 | claude-spec-comments | PM §4 l.341/363 vs §8 | M7 | MED | Validation rule, error value, check precedence. =s | — | error value settled (NF-04); rest open |
+| C-07 | claude-spec-comments | PM §4 l.341/363 vs §8 | M7 | MED | Validation rule, error value, check precedence. =s | `package/manifest.nim` `checkManifest` (shared schema/default artifacts allowed, one implementation artifact per module), `package/lgx.nim` `openLgx` (G29 check order); tests `[PKG-0053] [PKG-0054]`, `[PKG-0267]` | error value settled (NF-04); rest open |
 | C-08 | claude-spec-comments | LOADER §6, §10 l.612 | M4,M5 | MED | Meaning of an error value; a new value would change the Loader root. =s | — | contradiction settled (NF-05); one code row open |
 | C-10 | claude-spec-comments | RUNTIME Abs vs LOADER §5, §5.4 | M4,M5 | LOW | An in-process Loader fits both suggested fixes. =s | — | open |
 | EC-05 | claude-spec-comments | RUNTIME §4.1; INTERFACE §5.2 | M3,M5 | MED | Error code. | — | open |
@@ -198,12 +198,12 @@ Three spec facts drive the order:
 | PM-01 | claude-spec-comments | PM §4.5/§5/§6/§13 | M7,M8 | **HIGH** | OPEN; locator encoding and fetch contract are undefined. cl l.546-553 | — | open |
 | PM-02 | claude-spec-comments | PM §5/§7/§13 | M7,M9 | MED | Additive source kind. | — | open |
 | PM-03 | claude-spec-comments | PM §15 | M7 | MED | Follows HC-03. | — | open |
-| PM-04 | claude-spec-comments | PM §4, §7.1 | M7 | MED | Pax touches only the reader; shrinking the path limit changes manifest roots. | — | open |
-| PM-05 | claude-spec-comments | PM §7.1 | M7 | MED | Archive acceptance. | — | open |
+| PM-04 | claude-spec-comments | PM §4, §7.1 | M7 | MED | Pax touches only the reader; shrinking the path limit changes manifest roots. | `package/lgx.nim` `splitPath`; test `[IMPL-DECISION G40]` | open |
+| PM-05 | claude-spec-comments | PM §7.1 | M7 | MED | Archive acceptance. | `package/lgx.nim` `gunzip`, `writeLgx`, `checkStructure`; tests `[IMPL-DECISION G41]` | open |
 | PM-07 | claude-spec-comments | PM §11/§15 | M7 | MED | Tie-break. | — | open |
 | PM-08 | claude-spec-comments | PM §11 | M7 | MED | Error. | — | open |
-| PM-09 | claude-spec-comments | PM §3, §7.1 | M7 | LOW | Diagnostic file. | — | open |
-| PM-10 | claude-spec-comments | PM §10 l.1082 (doc says §7.1), §4 l.316 | M7,M9,M12 | MED | Platform strings; turning them into an enum would change manifest roots. | — | open |
+| PM-09 | claude-spec-comments | PM §3, §7.1 | M7 | LOW | Diagnostic file. | `package/lgx.nim` `openLgx` (path-checked, never read); test `[IMPL-DECISION G45]` | open |
+| PM-10 | claude-spec-comments | PM §10 l.1082 (doc says §7.1), §4 l.316 | M7,M9,M12 | MED | Platform strings; turning them into an enum would change manifest roots. | `package/lgx.nim` `compatible`, `checkPlatformPaths`, `hostPlatform`; tests `[IMPL-DECISION G73]` | open |
 | PM-15 | claude-spec-comments | PM Scope/§11 | M7 | MED | Manifest field → manifest roots change. | — | open |
 | RT-04 | claude-spec-comments | RUNTIME §9.3; PM §5/§11; CA §3.3 | M3,M4,M7 | MED | Possible new `create_module` field. | — | open |
 | RT-05 | claude-spec-comments | LOADER §7; RUNTIME §10 | M4,M5 | MED | Adopt-or-terminate rule. | — | open |
@@ -212,15 +212,16 @@ Three spec facts drive the order:
 | SO-02 | claude-spec-comments | PM §4.5/§6/§13 | M7,M8 | **HIGH** | `lcn.storage_fetch` would become a spec contract. cl l.672-679 | — | open |
 | SO-05 | claude-spec-comments | CA §3.5; PM §4 | M4,M7,M8 | MED | Permission names. | — | open |
 | SO-09 | claude-spec-comments | RUNTIME §12; TRANSPORT §2.1 | M8 (M5) | MED | The spec calls streaming "future". | — | open, narrowed (NF-20) |
-| TR-01 | claude-spec-comments | TRANSPORT §1.2/§1.4/§2.3/§3.3 | M5 | MED | Receiver rule. | — | open |
-| TR-02 | claude-spec-comments | §1.4, §5.1, §6 | M5 | MED | Receiver rule. | — | open |
-| TR-03 | claude-spec-comments | §5.1 | M5 | MED | Error code. | — | open |
-| TR-04 | claude-spec-comments | §3.1 | M5 | MED | Error code. | — | open |
-| TR-05 | claude-spec-comments | §3.1/§3.2/§8.1.1; INTERFACE §4.6 | M5,M6 | MED | When the Hello happens. | — | open |
+| TR-01 | claude-spec-comments | TRANSPORT §1.2/§1.4/§2.3/§3.3 | M5 | MED | Receiver rule. | `transport/session.nim` `receive` (both sides), `transport/hello.nim`; tests `[IMPL-DECISION G30]` | open |
+| TR-02 | claude-spec-comments | §1.4, §5.1, §6 | M5 | MED | Receiver rule. | `transport/session.nim` `receive`; tests `[IMPL-DECISION G31]` | open |
+| TR-03 | claude-spec-comments | §5.1 | M5 | MED | Error code. | `transport/session.nim` `subscribe`, `unsubscribe`; test `[IMPL-DECISION G32]` | open |
+| TR-04 | claude-spec-comments | §3.1 | M5 | MED | Error code. | `transport/hello.nim` `acceptHelloResponse`; test `[TRN-0076] [TRN-0070]` (its `[IMPL-DECISION G33]` case) | open |
+| TR-05 | claude-spec-comments | §3.1/§3.2/§8.1.1; INTERFACE §4.6 | M5,M6 | MED | When the Hello happens. | `transport/hello.nim` `acceptHelloResponse` (the callee's ProtocolError code is the outcome); test `[TRN-0076] [TRN-0070]` (its `[IMPL-DECISION G34]` case). When the Hello runs is tier 4 | open |
 | TR-06 | claude-spec-comments | §8.1; CA §8 | M4,M5 | MED | HIGH only if a new message kind is added. | — | open |
-| TR-07 | claude-spec-comments | §4.1 | M5 | MED | Close vs error response. | — | open |
-| TR-08 | claude-spec-comments | §4.1 | M5 | MED | Check precedence. | — | open |
+| TR-07 | claude-spec-comments | §4.1 | M5 | MED | Close vs error response. | `transport/boundary.nim` `acceptResponse`, `acceptEvent`; test `[IMPL-DECISION G36]` | open |
+| TR-08 | claude-spec-comments | §4.1 | M5 | MED | Check precedence. | `transport/boundary.nim` `acceptRequest`; test `[IMPL-DECISION G37]` | open |
 | TR-09 | claude-spec-comments | §8.2, §9.1 | M5,M12 | MED | Windows mechanism. | — | open |
+| G156 | claude-spec-comments-2 (NP-15) | PM §8 l.1000 vs §4 l.326 and §8 l.974 | M7 | LOW | An artifact without its `hash` is named `artifact-integrity-failed` by §8 l.1000, but the §4 CDDL requires the field, so the manifest fails validation, which l.974 makes `invalid-package`. Error code only; no bytes change. Interim: `invalid-package` (the schema check runs first, G29). | `package/manifest.nim` `decodeManifest`; test `[IMPL-DECISION G156]`; unit PKG-0275 deferred | reported as NP-15 (logos-lips `05b137a4`); open |
 
 ## Tier 4 — runtime, Loader, CONFIG, CA
 
