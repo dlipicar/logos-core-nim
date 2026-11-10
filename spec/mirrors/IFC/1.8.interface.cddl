@@ -1,0 +1,7 @@
+; -- metadata --
+_interface = "metrics_provider"
+
+metrics_provider.snapshot_request = {}
+metrics_provider.snapshot_response = {
+    count: uint64,
+}

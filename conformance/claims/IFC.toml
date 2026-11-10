@@ -4,21 +4,71 @@
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
+# A `[units]` entry gives one requirement unit its own status, overriding its section's.
 
-default = "deferred:tier-2"
+default = "deferred:tier-4"
 
 
 [sections]
 "Abstract" = "deferred:tier-4"
 "References" = "informative"
 "Copyright" = "informative"
+# Phase 2: schema acceptance, the C type mapping (forward), encodings, validation,
+# the common schema and its limits.
+"§1" = "claimed"
+"§2" = "claimed"
 "§2.4" = "deferred:tier-4"
+"§2.5" = "deferred:tier-4"
 "§2.6" = "deferred:tier-4"
+"§2.7" = "deferred:tier-4"
 "§2.8" = "deferred:tier-4"
-"§3.3" = "deferred:tier-4"
-"§3.7" = "deferred:tier-4"
-"§4.1" = "deferred:tier-1"
-"§4.2" = "deferred:tier-1"
-"§4.3" = "deferred:tier-1"
-"§4.4" = "claimed"
+# The C-to-CDDL reverse mapper (D30, G139) waits for the revision; the §3.9 cases
+# are claimed in the forward direction.
+"§3" = "deferred:tier-5"
+"§3.9.1" = "claimed"
+"§3.9.2" = "claimed"
+"§3.9.3" = "claimed"
+"§3.9.4" = "claimed"
+"§4" = "claimed"
+"§4.6" = "deferred:tier-3"
+"§5.1" = "claimed"
+"§5.2" = "deferred:tier-4"
+"§5.3" = "claimed"
 "App A" = "deferred:tier-4"
+
+
+[units]
+# §2.5: the event struct is claimed; subscription and handler rules are runtime (tier 4).
+"IFC-0172" = "claimed"
+"IFC-0173" = "claimed"
+# §3.9.5: the namespace-projection collision, rejected at acceptance (forward).
+"IFC-0396" = "claimed"
+# §5.2: logos_types.h and its use; the ABI structs' behaviour is tier 4.
+"IFC-0475" = "claimed"
+"IFC-0481" = "claimed"
+# C values and C encoders/decoders: with the §2.4 bindings.
+"IFC-0137" = "deferred:tier-4"
+"IFC-0139" = "deferred:tier-4"
+"IFC-0140" = "deferred:tier-4"
+# §2.4 wrapper parameters.
+"IFC-0392" = "deferred:tier-4"
+# Round trips through the reverse mapper.
+"IFC-0366" = "deferred:tier-5"
+"IFC-0368" = "deferred:tier-5"
+"IFC-0381" = "deferred:tier-5"
+"IFC-0389" = "deferred:tier-5"
+"IFC-0393" = "deferred:tier-5"
+# §1.2, §1.3: the full ABI a module implements and the exported-symbol rule are
+# checked by the export-set gate, with the §2.4/§2.6 bindings.
+"IFC-0045" = "deferred:tier-4"
+"IFC-0046" = "deferred:tier-4"
+"IFC-0057" = "deferred:tier-4"
+# §1.4: the module's logical name is a package property (PM §4 manifest).
+"IFC-0071" = "deferred:tier-3"
+# §4.5: forwarders carry payloads opaquely (TRANSPORT envelope codec).
+"IFC-0423" = "deferred:tier-3"
+# §5.3: routes, access, dispatch and providers exist only with RUNTIME.
+"IFC-0537" = "deferred:tier-4"
+# What a failure may disclose depends on authorization (RUNTIME, tier 4).
+"IFC-0471" = "deferred:tier-4"
+"IFC-0472" = "deferred:tier-4"

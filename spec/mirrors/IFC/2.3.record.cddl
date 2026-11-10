@@ -1,0 +1,5 @@
+storage.record = {
+  sub: {
+    inner: uint64 / tstr,
+  },
+}

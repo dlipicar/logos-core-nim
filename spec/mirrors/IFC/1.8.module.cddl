@@ -1,0 +1,54 @@
+; -- metadata --
+_module = "storage_module"
+
+; -- types --
+storage.space_info = {
+    quota: uint64,
+    used: uint64,
+    available: uint64,
+}
+
+; -- methods --
+storage.init_request = {
+    data_dir: tstr,
+}
+storage.init_response = {}
+
+storage.exists_request = {
+    cid: tstr,
+}
+storage.exists_response = {
+    exists: bool,
+}
+
+storage.space_request = {}
+storage.space_response = {
+    info: storage.space_info,
+}
+
+storage.destroy_request = {}
+storage.destroy_response = {}
+
+storage.upload_url_request = {
+    chunk_size: uint64,
+    url: tstr,
+}
+storage.upload_url_response = {
+    accepted: bool,
+}
+
+storage.start_request = {}
+storage.start_response = {}
+
+; -- events --
+storage.upload_progress_event = {
+    session: tstr,
+    bytes_sent: uint64,
+    bytes_total: uint64,
+}
+
+storage.upload_done_event = {
+    cid: tstr,
+}
+
+storage.started_event = {}

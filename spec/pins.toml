@@ -196,3 +196,15 @@ file = "spec-module-package-manager.md"
 section = "§4"
 definition = "logos.package_manifest.manifest"
 value = "a06c0c06d9493e19ab96baabd23b6520645195188af062f858f95f6922a128a1"
+
+[logos-types-header]
+file = "spec-module-interface.md"
+section = "§5.2"
+code = "LogosTypesFixed"
+mirror = "IFC/5.2.logos_types.h"
+
+[logos-types-empty]
+file = "spec-module-interface.md"
+section = "§2.3"
+code = "LogosTypesEmpty"
+mirror = "IFC/2.3.empty.h"

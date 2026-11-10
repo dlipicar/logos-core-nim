@@ -1,1 +1,3 @@
-extend-exclude = ["nimbledeps", "build", "nimcache"]
+# nph 0.7.0 ignores exclusions (exclude / extend-exclude), so lcn-gen's Nim
+# output opts out with `#!fmt: off` instead. Generated files are regenerated
+# (`nimble regen`), never formatted.

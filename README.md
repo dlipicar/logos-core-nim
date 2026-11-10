@@ -4,9 +4,14 @@ A Nim implementation of the Logos Core module specs: logos-lips, branch
 `draft/logos-core-module-specs`, files `docs/logos-core/raw/spec-*.md`, pinned at `f4f83471`.
 
 The specs are being revised, so the work is ordered by how settled each area is
-([docs/SPEC-STATUS.md](docs/SPEC-STATUS.md)). Tier 1 comes first: deterministic CBOR, BLAKE3, cdCDDLe,
-the hash profile and the commitment model. Decisions the specs leave open are recorded in
-[docs/DECISIONS.md](docs/DECISIONS.md).
+([docs/SPEC-STATUS.md](docs/SPEC-STATUS.md)). Built so far:
+
+- Tier 1: deterministic CBOR, BLAKE3, cdCDDLe, the hash profile and the commitment model.
+- Tier 2: INTERFACE schema acceptance, call surfaces, payload validation and outcomes, the common
+  schema, and `lcn-gen`, which generates C types and Nim types with codecs. Generated C headers are
+  stamped `PROVISIONAL ABI`. Method signatures, lifecycle symbols and vtables come later.
+
+Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Building and testing
 
@@ -22,6 +27,13 @@ nimble setup -l
 nimble test && nimble test_refc
 ```
 
+`lcn-gen` builds with `--useSystemNim`. On macOS, nimble 0.20.1 crashes without it while looking up
+the Nim that `nimble.lock` names; on Linux the flag changes nothing:
+
+```bash
+nimble build --useSystemNim
+```
+
 With Nix, which also runs nph and the spec checks:
 
 ```bash
@@ -32,7 +44,19 @@ nix flake check -L
 nix develop
 ```
 
-The dev shell has nim, nimble, nph, `spectrace`, and Python with cbor2 and blake3.
+The dev shell has nim, nimble, nph, `spectrace`, and Python with cbor2 and blake3. `lcn-gen` is
+also a flake package:
+
+```bash
+nix run .#lcn-gen -- types --out:include module.cddl
+```
+
+The generated Nim modules (`src/logos_core/iface/common_types.nim`, `tests/generated/`) are
+committed, and a test fails when they are stale. To rewrite them:
+
+```bash
+nimble regen
+```
 
 After changing a requirement in `logos_core.nimble`, regenerate the lock from scratch. With nimble
 0.20.1, `nimble lock` over an existing lock empties its package list or crashes.
@@ -55,7 +79,9 @@ Evaluation fails while the JSON and `nimble.lock` disagree.
 | Path | What |
 |---|---|
 | `src/logos_core/` | The library. BLAKE3 C sources are vendored under `crypto/blake3/` (`tools/update-blake3.sh`). |
-| `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. |
+| `src/logos_core/iface/` | INTERFACE: acceptance, names, the C type mapping, call surfaces, payloads, outcomes. |
+| `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator and its runtime; the `lcn-gen` CLI. |
+| `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. `tests/generated/` is `lcn-gen` output. |
 | `spec/mirrors/`, `spec/mirrors.toml` | Verbatim copies of the spec blocks the code and tests are built from. |
 | `spec/pins.toml` | Every identifier, root and digest the specs pin, with the section it comes from. |
 | `conformance/` | Requirement ledger and per-section claims; see [docs/CONFORMANCE.md](docs/CONFORMANCE.md). |

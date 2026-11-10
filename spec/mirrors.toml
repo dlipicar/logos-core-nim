@@ -278,6 +278,160 @@ file = "spec-module-interface.md"
 section = "§3.9.5"
 lang = "c"
 
+[[mirror]]
+out = "IFC/1.2.module-metadata.cddl"
+file = "spec-module-interface.md"
+section = "§1.2"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/1.2.interface-metadata.cddl"
+file = "spec-module-interface.md"
+section = "§1.2"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/1.4.exists.cddl"
+file = "spec-module-interface.md"
+section = "§1.4"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/1.5.events.cddl"
+file = "spec-module-interface.md"
+section = "§1.5"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/1.6.types.cddl"
+file = "spec-module-interface.md"
+section = "§1.6"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/1.8.interface.cddl"
+file = "spec-module-interface.md"
+section = "§1.8"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/1.8.module.cddl"
+file = "spec-module-interface.md"
+section = "§1.8"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/2.1.namespaces.h"
+file = "spec-module-interface.md"
+section = "§2.1"
+lang = "c"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/2.1.dotted-namespace.h"
+file = "spec-module-interface.md"
+section = "§2.1"
+lang = "c"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/2.2.constrained.h"
+file = "spec-module-interface.md"
+section = "§2.2"
+lang = "c"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/2.2.exact-bstr.h"
+file = "spec-module-interface.md"
+section = "§2.2"
+lang = "c"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/2.3.space_info.cddl"
+file = "spec-module-interface.md"
+section = "§2.3"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/2.3.space_info.h"
+file = "spec-module-interface.md"
+section = "§2.3"
+lang = "c"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/2.3.peer_info.cddl"
+file = "spec-module-interface.md"
+section = "§2.3"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/2.3.peer_info.h"
+file = "spec-module-interface.md"
+section = "§2.3"
+lang = "c"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/2.3.empty.h"
+file = "spec-module-interface.md"
+section = "§2.3"
+lang = "c"
+ordinal = 3
+
+[[mirror]]
+out = "IFC/2.3.value.cddl"
+file = "spec-module-interface.md"
+section = "§2.3"
+ordinal = 3
+
+[[mirror]]
+out = "IFC/2.3.value.h"
+file = "spec-module-interface.md"
+section = "§2.3"
+lang = "c"
+ordinal = 4
+
+[[mirror]]
+out = "IFC/2.3.entry.cddl"
+file = "spec-module-interface.md"
+section = "§2.3"
+ordinal = 5
+
+[[mirror]]
+out = "IFC/2.3.record.cddl"
+file = "spec-module-interface.md"
+section = "§2.3"
+ordinal = 6
+
+[[mirror]]
+out = "IFC/2.3.entry-literals.h"
+file = "spec-module-interface.md"
+section = "§2.3"
+lang = "c"
+ordinal = 5
+
+[[mirror]]
+out = "IFC/2.4.resolve.cddl"
+file = "spec-module-interface.md"
+section = "§2.4"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/2.5.event.cddl"
+file = "spec-module-interface.md"
+section = "§2.5"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/2.5.event.h"
+file = "spec-module-interface.md"
+section = "§2.5"
+lang = "c"
+ordinal = 1
+
 # Tier 3: TRANSPORT envelope, PM manifest -------------------------------------
 
 [[mirror]]

@@ -58,6 +58,7 @@ stops that work item until the owner answers; the answer is added here.
 | G49 | What CA `publish_events` / `publish-event` mean | the final form of one CA test |
 | G93 | How a module reaches its own non-binary artifacts and native libraries | general support; our modules are self-contained meanwhile |
 | G116 | Who provides the live-acceptance host and the persistent testnet seeder | the live testnet run |
+| G151–G155 | Gaps found while building Tiers 1–2: `.size` targets and leaf identity (reported as ND-10, ND-11); alias cycles, list forward typedefs and definition order (reported as ND-12 to ND-14) | nothing yet: each has an interim choice in one named proc with a test; G152 would move value roots |
 
 External dependencies (not spec questions): an org-owned package-signing key (and a provenance key),
 an org Apple Developer ID, and the storage mix bootstrap data (mix pool and SPRs) for testnet.
@@ -78,7 +79,7 @@ an org Apple Developer ID, and the storage mix bootstrap data (mix pool and SPRs
 12. Platforms, build, CI and tooling
 13. Implementation defaults chosen without a separate question
 14. Index
-15. Revisions and implementation choices since work started (R1–R3, I1–I21)
+15. Revisions and implementation choices since work started (R1–R3, I1–I28)
 
 ---
 
@@ -488,7 +489,7 @@ below would not break our own consistency, only interoperability with another im
 - **Decision:** (b): CBOR container; classes syntax, unsupported, resolution, canonical, decode.
 
 ### G151 — `.size` on a named target
-- **Kind:** GAP, **OPEN** (found while building; not yet reported) · **Specs:** cdCDDLe §5.1 l.164 (the
+- **Kind:** GAP, **OPEN** (found while building; reported as ND-10 in `claude-spec-comments-2.md`, logos-lips `e7c53b7b`) · **Specs:** cdCDDLe §5.1 l.164 (the
   `.size` control is supported, with no limit on its target), §6 l.227 (every graph in the subset has a
   model), §8 l.530 and l.537 (the node's target is a `primitive`, one of `uint`, `tstr`, `bstr`).
 - **Description:** `b = tstr` and `a = b .size 3` is inside §5.1, but §8 has no node for it.
@@ -498,7 +499,7 @@ below would not break our own consistency, only interoperability with another im
   `bstr` directly.
 
 ### G152 — Identity of a leaf-bodied declaration's own node
-- **Kind:** GAP, **OPEN** (found while building; not yet reported) · **Specs:** COMMITMENT §4 l.560-562
+- **Kind:** GAP, **OPEN** (found while building; reported as ND-11 in `claude-spec-comments-2.md`, logos-lips `e7c53b7b`) · **Specs:** COMMITMENT §4 l.560-562
   (an empty path uses the declaration's subtree root; a primitive, literal or reference node uses its leaf
   hash; "exactly one schema identity" per node), §8 l.1101 (a child value carries the referenced local
   declaration's schema identity), §9.2 (`schema-leaf-payload` allows the path `[]`).
@@ -645,6 +646,53 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
 - **Options offered:** (a) forward declarations, type definitions (spec order), literal macros by name,
   provider functions by qualified name, lifecycle symbols; raised upstream *(recommended)*; (b) ask the
   spec author. **Decision:** (a).
+- **Status:** revised 2026-11-10 (building Tier 2). §3.9.2's required header puts the literal macros
+  right after the document-role constants, before any typedef, so the order of type declarations is:
+  role constants, literal macros by name, constrained-string typedefs by name, forward typedefs by
+  qualified name, then definitions in dependency order (G155). Provider functions and lifecycle symbols
+  come after them once §2.4 and §2.6 are built (Tier 4). `iface/cmap.nim` `emit`, test `G72`.
+
+### G153 — Local alias cycles
+- **Kind:** GAP, **OPEN** (found while building; reported as ND-12 in `claude-spec-comments-2.md`, logos-lips `2f6cbcb0`) · **Specs:** INTERFACE §2 (every
+  accepted schema set has one canonical C form), §2.1 (aliases become typedefs), §5.3 l.2878-2879,
+  l.2889-2895 (cyclic references are bounded, IFC-0532; reject unresolved or conflicting definitions);
+  COMMITMENT §3.1 (a reference node names its target and nothing more).
+- **Description:** `demo.a = demo.b` with `demo.b = demo.a` (or `demo.a = demo.a`) resolves, builds a
+  schema model and has a schema root, but no value and no C form: a typedef cannot name itself. No
+  rule rejects it.
+- **Options:** (a) reject a chain of local aliases that never reaches a structure, a scalar or an import,
+  at acceptance; (b) accept it and fail only in the C mapping; (c) ask the owner to state it.
+- **Interim (D9):** (a), in `iface/accept.nim` `checkAliasCycles`, test `[IMPL-DECISION G153]`. A cycle
+  that passes through a map, tuple, list or choice is untouched (it is the recursion §2.3 maps to
+  pointers). Narrowing only: no set the spec gives a C form for is rejected.
+
+### G154 — Forward typedefs for list targets on a reference cycle
+- **Kind:** GAP, **OPEN** (found while building; reported as ND-13 in `claude-spec-comments-2.md`, logos-lips `2f6cbcb0`) · **Specs:** INTERFACE §2.1 (canonical
+  order: forward declarations, then definitions with non-recursive dependencies first), §2.3 (recursive
+  by-value edges become `const T*` and their targets get forward typedefs; a list member is a
+  `const T*` plus a count).
+- **Description:** `demo.node = { kids: [* demo.node] }` has no by-value edge, so the spec's rule emits
+  no forward typedef, yet the `kids` member spells `logos_demo_node_t` inside the definition that
+  introduces it, which does not compile. The same holds across declarations: with
+  `demo.a = { bs: [* demo.b] }` and `demo.b = { a: demo.a }`, b embeds a by value and a's list member
+  spells b's typedef, so no order of definitions compiles without one.
+- **Options:** (a) a list member's target also gets a forward typedef when both lie on one cycle of the
+  graph of by-value and list edges; (b) forward-declare every list target; (c) ask the owner.
+- **Interim (D9):** (a), in `iface/cmap.nim` `resolveGraph`, test `G154`. Header text only: struct
+  layouts and every identifier are unchanged.
+
+### G155 — Tie-breaking among independent type definitions
+- **Kind:** CONTRA, **OPEN** (found while building; reported as ND-14 in `claude-spec-comments-2.md`, logos-lips `2f6cbcb0`) · **Specs:** INTERFACE §2.1 l.676-679
+  ("place non-recursive dependencies before dependents and break independent ties by qualified schema
+  name") vs the required §3.9.3 output (l.2102-2152).
+- **Description:** A topological order that picks the least qualified name among the definitions ready
+  at each step gives `left, node, branch, right` for §3.9.3 (branch is ready once node is placed, and
+  `branch` < `right`). The required header has `left, node, right, branch`.
+- **Options:** (a) order by dependency depth (the longest chain of definitions a definition waits for),
+  then by qualified name, which reproduces §3.9.3; (b) the least-name topological order, which
+  contradicts §3.9.3; (c) ask the owner which text is meant.
+- **Interim (D9):** (a), in `iface/cmap.nim` `ordered`, test `[IFC-0384]` (§3.9.3 byte-for-byte). Header
+  order only, not ABI.
 
 ---
 
@@ -1597,8 +1645,6 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G9 | choice selection plan literals | GAP | 2 |
 | G10–G16 | cdCDDLe details and vector format | GAP / FREE | 2 |
 | G17 | independent oracle | FREE | 2 |
-| G151 | `.size` on a named target | GAP, **OPEN** | 2 |
-| G152 | leaf-bodied declaration identity | GAP, **OPEN** | 2 |
 | G18–G28, G60 | error codes | GAP / CONTRA | 4 |
 | G29 | shared artifacts and precedence | CONTRA | 9 |
 | G30–G37 | transport receiver behaviour | GAP | 5 |
@@ -1611,7 +1657,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G58 | socket layout | CONTRA | 5 |
 | G59 | nesting depth | GAP | 3 |
 | G61 | timeouts | FREE | 6 |
-| G62–G72 | C mapping and generator | GAP / CONTRA | 3 |
+| G62–G72 | C mapping and generator (G72 revised) | GAP / CONTRA | 3 |
 | G73–G75 | platforms, catalog policy, bounds | GAP / FREE | 9 |
 | G76 | host configuration formats | FREE | 10 |
 | G77 | thread model | FREE | 6 |
@@ -1641,6 +1687,11 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G143 | state layout and retention | FREE | 6 |
 | G145, G146 | release form; service management | FREE | 10 |
 | G150 | catalog set/refresh | FREE | 9 |
+| G151 | `.size` on a named target | GAP, **OPEN** | 2 |
+| G152 | leaf-bodied declaration identity | GAP, **OPEN** | 2 |
+| G153 | local alias cycles | GAP, **OPEN** | 3 |
+| G154 | forward typedefs for list targets on cycles | GAP, **OPEN** | 3 |
+| G155 | tie-breaking among type definitions | CONTRA, **OPEN** | 3 |
 
 ---
 
@@ -1675,3 +1726,10 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I19 | IMPL | Choice selection plans (COMMITMENT §3.1) | `commitment/choice.nim`. An arm "proves" it rejects an outcome exactly for scalar values: bool, fixed-width integer ranges, and text (UTF-8, no NUL, `.size` byte length) or byte-string sizes; "any other value" counts what a primitive can hold (exact for bool, fixed-width integers and strings of at most one byte, unbounded otherwise). Scalar values are every CBOR item except arrays, maps and tags. References are followed with memoization keyed by (document, declaration, observation); one reached again for the same observation while it is being followed proves nothing (the arm stays a candidate). A plan node lists every outcome of its test, with no child where no arm remains; the same plans select arms when validating values (`validates`), which rebuilds them per call for now. | 2026-11-09 |
 | I20 | IMPL | Value normalization (COMMITMENT §7, §8) | `commitment/normalize.nim`. A `Site` (document, nearest named declaration, path, node) names each schema position; its identity is `identityOf` (G152 at the empty path, a leaf hash at a leaf node, a structural root otherwise), cached per site within one normalization, as are choice selection plans. A map value has text keys only; each schema field is looked up by name and any other entry rejects the value; an absent optional field becomes an absent node carrying the field's identity. Local references are followed by `throughLocal` (G1), bounded so a reference cycle is an error; imported ones become reference-value nodes resolved through the schema set's import table. A list node gets its element identity and packability from `packKindOf` (G119, I15). Input is decoded Logos deterministic CBOR (`normalizeBytes` decodes first), so floats, tags and non-shortest forms never reach it; scalars are accepted by `primitiveAccepts`, shared with choice plans. `parseValueNode` and `parseValueRoot` read §9.3 objects strictly (exact key sets, ordering and coverage) without the I15 annotations: a parsed list takes its element identity from its first element and is never packed, so a verifier with a schema re-normalizes the plain value (`plainValue`) to recover them. Errors are strings for now. Single implementation: the oracle does not normalize. | 2026-11-09 |
 | I21 | IMPL | Verified views (HASH §7.6, §8) | `hash/view.nim`. `viewOf` collects the complete payloads from the value root down the path and emits them disclosed-item first, value root last (App B.1/B.2's order); it refuses any path the verifier would reject. `verifyView` replays them from the value root down: each step must be in the domain of the record its parent selects, hash to that record's digest, repeat its schema identity and the current schema root in field 1 (the referenced root below a reference, G2), and every step must be used. Branches are entered by base-record index: the field's position in the schema map, the chunk, the tuple position or the byte chunk. A path crosses an imported reference without a segment and a choice only through its `choice-arm` segment (G8); a field or tuple position discloses the inner value (G7). An empty path discloses the `normalized-value-root` with no proof; any other path discloses a `value-node`, an absence marker or a string range. Seven error classes: `malformed-view`, `unknown-identifier`, `schema-mismatch`, `invalid-path`, `disclosed-mismatch`, `proof-mismatch`, `value-root-mismatch`. With a schema (G120) every node's identity is recomputed and the disclosed value re-normalized; without one only the physical proof is checked (enough for App B's synthetic identities), and a branched map cannot be descended because the field index comes from the schema. | 2026-11-09 |
+| I22 | IMPL | Schema acceptance (INTERFACE §1, §5.3) | `iface/accept.nim` `acceptContractSet(primary, interfaces, supporting, opts)` takes document text only: file names, labels and aliases never reach it. Each document is built through COMMITMENT construction (I18); then come the metadata block, prelude and reserved names, naming rules (`iface/names.nim`), method and event limits, the supporting-schema suffix rule, the §5.3 limits (1 MiB per document, 8 MiB per set, 65,536 schema nodes, 128 nesting levels), the input-set rules, G69, G153 and the C mapping (I23). `AcceptOptions.system` admits the reserved `logos` names, for Logos-defined contracts only. `_module` values follow the RUNTIME §1.3 grammar (at most 64 bytes). Errors are strings that cite the section. | 2026-11-10 |
+| I23 | IMPL | C mapping at acceptance; NX-04 interim | INTERFACE §2.1 says an accepted set never derives two identical C identifiers or a namespace-projection collision, so acceptance runs the whole forward C type mapping (`iface/cmap.nim` `cDeclarations`) and keeps only the verdict. Interim for NX-04: a derived identifier that `logos_types.h` declares (its fixed §5.2 block, the §2.3 empty types or a common type) is a collision too, so `module.context` and `schema.commitment` are rejected. Narrowing only: no accepted set's names change. | 2026-11-10 |
+| I24 | IMPL | Call surface and `logos.schema` (INTERFACE §1.4, §1.5, §5.1) | `iface/surface.nim`. `callSurface` lists each method by bare wire name with its defining contract and each event by its qualified event id; a bare name implemented twice is rejected at acceptance. `schemaCommitment` builds `logos.schema_commitment` from the pinned commitment model, hash profile and suite (`spec/pins.toml`). `schemaResponse` builds the response for a selected root (the primary contract with its interfaces and supporting schemas, or one interface alone); `acceptSchemaResponse` checks one against an expected root, rebuilding every entry. | 2026-11-10 |
+| I25 | IMPL | Payload validation and outcomes (INTERFACE §4.1–§4.5, §5.1) | `iface/payload.nim`: a `ContractValidator` from an accepted set checks params, results and event data: deterministic CBOR first (malformed and non-deterministic input are `INVALID_PARAMS` with that reason; text that is not UTF-8 is a `schema-mismatch`; nesting past the G59 cap has no detail), then an unknown bare method is `METHOD_NOT_FOUND`, then a schema mismatch carries the path to the first offending item. `iface/outcome.nim`: `ErrorCode` 0–9 named as in `logos_types.h`; any other status from a provider is a module failure; messages of at most 512 UTF-8 bytes, never with `LOGOS_OK`; detail is one valid `logos.invalid_params_detail` of 1–4096 bytes, only with `INVALID_PARAMS`. §4.6 is left to Tier 3: it binds the provider and the Transport adapter. | 2026-11-10 |
+| I26 | IMPL | lcn-gen, C types (D29, INTERFACE §2.1–§2.3, §2.5, §5.2) | `lcn-gen logos-types` writes `logos_types.h`: the §5.2 block without its `<module>` placeholder line and memory-management comment, the §2.3 empty types, and the common schema's named types except `logos.error_code` (the status enum). `lcn-gen types` accepts a construction input set and writes `<module or namespace>_types.h`. Document-role constants are emitted only where §2.1 needs them: several documents, a non-simple namespace, or a role nothing else shows. Every header is stamped `PROVISIONAL ABI (spec f4f83471)`. Tests compile every generated header with `cc -std=c11 -Wall -Wextra -Wpedantic -Werror`. Built by Nix (`packages.lcn-gen`) and by Nimble (`namedBin`; `nimble build --useSystemNim`, since on macOS nimble 0.20.1 otherwise crashes looking up the locked Nim). Verified on aarch64-darwin and x86_64-linux (2026-11-10). | 2026-11-10 |
+| I27 | IMPL | lcn-gen, Nim types (D29) | INTERFACE fixes only the C mapping; the Nim one follows it where Nim allows. Names are the PascalCase of the C stem (common types drop `logos`); inline maps and choices add the C path and `Map`/`Choice`. Choices are case objects over a pure `<Name>Kind` enum (`arm0`…, canonical arm order); scalars map to `bool`, `uint8`…`int64`, `string`, `seq[byte]`; lists to `seq`; tuples to anonymous tuples (`EmptyTuple` for `[]`); optional fields to `Opt`; `logos.error_code` to `ErrorCode`. A literal field defaults to its literal and is always encoded as it. A reference on a by-value cycle is a `ref`. Decoders take one deterministic-CBOR item, validate it against the embedded accepted schema (`codegen/nimrt.nim`), and only then convert; arms are picked by the selection plan. Names Nim's style-insensitive identifiers cannot tell apart are a generation error. `src/logos_core/iface/common_types.nim` and `tests/generated/` are committed output; `nimble regen` rewrites them and a test fails when they are stale. They start with `#!fmt: off`, because nph 0.7.0 ignores the `.nph.toml` exclusions and would otherwise reformat them. | 2026-11-10 |
+| I28 | IMPL | Per-unit claims | `conformance/claims/<SPEC>.toml` gains `[units]`: one requirement unit's status, overriding its section's, so a claimed section can defer the few units that belong to a later tier (e.g. §1.2's full-ABI rule waits for the export-set gate) and a deferred section can claim the units built now (§2.5's event struct, §3.9.5's projection collision, §5.2's `logos_types.h`). Units addressed to authors, or permissions, are covered by `conformance/inspection/<SPEC>.toml` items with a reason. | 2026-11-10 |

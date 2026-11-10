@@ -4,8 +4,9 @@
 ## schema model: role, namespace, declaration kinds, synthesized methods, node
 ## translation, imported references and implemented-interface roots.
 ##
-## Every choice must have a structural selection plan (`choice.nim`). Not yet
-## enforced here: the INTERFACE §1 acceptance rules beyond those §3.1 states.
+## Every choice must have a structural selection plan (`choice.nim`). The
+## INTERFACE §1 acceptance rules beyond those §3.1 states are in
+## `iface/accept.nim`, which builds through this module.
 
 {.push raises: [].}
 
@@ -360,6 +361,10 @@ proc buildSchema*(
     b.local[r.name] = classify(theRole, r.name)
   # Steps 4-6: methods and bodies.
   var model = SchemaModel(modelId: CommitmentModelId, role: theRole, namespace: ns)
+  if "_module" in metadata:
+    let t = metadata.getOrDefault("_module")
+    if t.kind == tkLiteral and t.literal.kind == lkTstr:
+      model.moduleName = Opt.some(t.literal.text)
   var taken: HashSet[string]
   for r in locals:
     let kind = b.local.getOrDefault(r.name)
@@ -417,10 +422,14 @@ let pinned = block:
   for (name, kind, root) in CommonRegistry:
     ctx.common.add((name, parseDeclKind(kind).get, toDigestHex(root)))
   let common = buildCommonSchema(CommonSchemaDocument)
-  doAssert common.isOk, "the pinned common schema document does not build"
+  doAssert common.isOk,
+    "the pinned common schema document does not build: " & common.error
   # The registry's roots are the ones imports carry [SPEC COMMITMENT §5]; the
   # document they were computed from must reproduce them.
-  doAssert schemaRoot(common.get) == ctx.commonRoot
+  doAssert schemaRoot(common.get) == ctx.commonRoot,
+    "the pinned common schema document has root " & toHex(schemaRoot(common.get)) &
+      ", not the pinned common root " & CommonSchemaRoot &
+      ": re-derive spec/pins.toml from the spec revision"
   ctx.commonModel = common.get
   ctx
 

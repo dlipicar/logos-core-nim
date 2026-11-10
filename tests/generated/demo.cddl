@@ -1,0 +1,49 @@
+; Input for tests/generated/demo_types.nim: every shape the Nim mapping has.
+demo.counter = uint32
+
+demo.entry =
+  { kind: "file", path: tstr } /
+  { kind: "dir", path: tstr, entries: [* tstr] }
+
+demo.k = {
+  a: 7,
+  b: -9223372036854775808,
+  c: "é1",
+  d: bstr .size 32,
+  e: [* bstr .size 4],
+  f: [* [uint64, tstr]],
+  g: demo.v / [uint64] / [uint64, uint64],
+  ? h: [uint64, bstr],
+  i: logos.schema_commitment,
+  j: [],
+  l: bstr .size 0,
+  m: int8,
+  n: uint16,
+  o: demo.counter,
+  p: logos.error_code,
+  q: logos.error_detail,
+  type: demo.names,
+}
+
+demo.leaf = "leaf"
+
+demo.names = [* tstr .size (1..8)]
+
+demo.pair = [demo.tree, uint64]
+
+demo.record = {
+  sub: {
+    inner: uint64 / tstr,
+  },
+}
+
+demo.tree = {
+  ? left: demo.tree,
+  kids: [* demo.tree],
+  tag: demo.leaf,
+  ? twin: demo.pair,
+}
+
+demo.v = { x: uint64 }
+
+demo.value = uint64 / tstr / bool

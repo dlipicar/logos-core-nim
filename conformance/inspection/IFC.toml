@@ -1,0 +1,22 @@
+# INTERFACE requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["IFC-0041"]
+reason = "A permission for toolchains. lcn-gen (src/lcn_gen.nim) reads the files named on its command line and passes their text on; acceptContractSet (iface/accept.nim) takes document text only, so no filename, workspace label or alias reaches acceptance or any identity."
+
+[[item]]
+ids = ["IFC-0043"]
+reason = "A permission for runtime, package and deployment records; no obligation follows. No such record exists in this repository yet (RUNTIME and PM are tiers 3-4), and acceptance recomputes every implemented-interface root from the supplied documents rather than reading one from a record (test [IFC-0038])."
+
+[[item]]
+ids = ["IFC-0077", "IFC-0078", "IFC-0460", "IFC-0473"]
+reason = "Addressed to contract authors and module implementations: which outcomes are expected domain failures is the author's judgement, and no schema or value shows it. The status paths in this repository (iface/payload.nim, iface/outcome.nim) produce a nonzero logos.error_code only for invocation failures (malformed or mismatched payloads, unknown methods), and logos.error_detail only with INVALID_PARAMS (test [IFC-0466])."
+
+[[item]]
+ids = ["IFC-0085"]
+reason = "Addressed to contract authors: what events are for. Acceptance enforces their shape and naming (tests [IFC-0081]-[IFC-0084]); whether an event stands in for a method is a design judgement no tool can check."
+
+[[item]]
+ids = ["IFC-0536"]
+reason = "No cache in this repository is keyed by less than its whole input. The parsed models kept beyond one call are the pinned common schema (commitment/construct.nim `pinned`), built once from the document in spec/pins.toml under the compiled-in commitment model, hash profile and suite and checked against the pinned root, and each generated Nim module's set (codegen/nimrt.nim loadSchema), built once from the exact documents embedded in that module. Nothing is looked up by name, path or alias; choice plans are rebuilt per call or held inside one such set."

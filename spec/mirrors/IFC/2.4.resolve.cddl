@@ -1,0 +1,7 @@
+storage.resolve_request =
+    { kind: "by-id", id: uint64 } /
+    { kind: "by-name", name: tstr }
+
+storage.resolve_response = {
+    matched: bool,
+}

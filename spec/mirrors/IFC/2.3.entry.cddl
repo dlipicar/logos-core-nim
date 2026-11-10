@@ -1,0 +1,3 @@
+storage.entry =
+  { kind: "file", path: tstr } /
+  { kind: "dir", path: tstr, entries: [* tstr] }

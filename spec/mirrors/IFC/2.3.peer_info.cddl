@@ -1,0 +1,4 @@
+storage.peer_info = {
+    id: tstr,
+    ? name: tstr,
+}

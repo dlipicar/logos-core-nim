@@ -55,12 +55,12 @@ Three spec facts drive the order:
 | Tier | Items | HIGH |
 |---|---|---|
 | 0 | 4 | 0 |
-| 1 | 33 | 14 |
-| 2 | 38 | 12 |
+| 1 | 34 | 15 |
+| 2 | 41 | 12 |
 | 3 | 61 | 6 |
 | 4 | 58 | 1 |
 | 5 | 18 | 2 |
-| all | 212 | 35 |
+| all | 216 | 36 |
 
 ## Tier 0 — foundations
 
@@ -106,8 +106,8 @@ Three spec facts drive the order:
 | ND-02 | claude-spec-comments-2 | INTERFACE §5.1 | M1, M2, M3, M4 | LOW | Additive: Y [CR]. Timestamp and duration common types. | — | open |
 | ND-07 | claude-spec-comments-2 | INTERFACE §1.4, §5.1; PM §15; CA; LOADER | M1, M2, M4, M7, M8 | MED | Additive: P [CR]. `logos.domain_error`; PM, CA and LOADER switching to it changes their schemas and generated names. | — | open |
 | NX-02 | claude-spec-comments-2 | TRANSPORT §5.1; INTERFACE §2.6, §5.1 | M1, M2, M5 | LOW | Additive: Y [CR]. Restrict the snapshot-event model to Runtime contracts (editorial). Add `logos.revision`. Optional on-subscription hook. | — | open |
-| G151 | not yet reported | cdCDDLe §5.1 l.164 vs §8 l.530, l.537 | M1 | LOW | §5.1 allows `.size` on any target; the §8 node holds only a primitive. Interim: `x .size n` with `x` a rule name is rejected as unsupported, so no bytes are committed to. | `cddl/syntax.nim` `checkSize`; vector `unsupported-size-named-target` | **open, to raise** |
-| G152 | not yet reported | COMMITMENT §4 l.560-562 vs §8 l.1101 | M1 | **HIGH-n** | A leaf-bodied declaration's own node gets two identities (subtree root, leaf hash at `[]`); decides the schema identity in value nodes typed by it, so value roots. Interim: the subtree root. | `commitment/schema.nim` `nodeIdentity`, `commitment/normalize.nim` `identityOf`; tests `[IMPL-DECISION G152]` | **open, to raise** |
+| G151 | claude-spec-comments-2 (ND-10) | cdCDDLe §5.1 l.164 vs §8 l.530, l.537 | M1 | LOW | §5.1 allows `.size` on any target; the §8 node holds only a primitive. Interim: `x .size n` with `x` a rule name is rejected as unsupported, so no bytes are committed to. | `cddl/syntax.nim` `checkSize`; vector `unsupported-size-named-target` | reported as ND-10 (logos-lips `e7c53b7b`); open |
+| G152 | claude-spec-comments-2 (ND-11) | COMMITMENT §4 l.560-562 vs §8 l.1101 | M1 | **HIGH-n** | A leaf-bodied declaration's own node gets two identities (subtree root, leaf hash at `[]`); decides the schema identity in value nodes typed by it, so value roots. Interim: the subtree root. | `commitment/schema.nim` `nodeIdentity`, `commitment/normalize.nim` `identityOf`; tests `[IMPL-DECISION G152]` | reported as ND-11 (logos-lips `e7c53b7b`); open |
 | PM-06 | claude-spec-comments | PM §4.3; CA §9.1 | M1,M7 | MED | Signature edge cases; no byte change. | — | open |
 
 ## Tier 2 — schema surface and C types
@@ -119,7 +119,7 @@ Three spec facts drive the order:
 | NL-03 | claude-spec-comments-2 | INTERFACE §2.6; RUNTIME §3.4, §10.2 | M2, M3 | HIGH | Additive: P. `_destroy` returns `logos_result_t` (N) or a `report_cleanup` call is appended to the vtable (Y). | — | open |
 | NR-11 | claude-spec-comments-2 | INTERFACE §2.8, §5.2; RUNTIME §4.1 | M2, M3, M5 | HIGH | Additive: Y. Async call appended to the route vtable, or several handles sharing one session (the handle-to-session model goes N:1). | — | open |
 | AP-9 | claude-spec-comments | INTERFACE §1.1/§1.8 | M2 | LOW | Answered. | — | open |
-| C-04 | claude-spec-comments | INTERFACE §2.3 vs §2 intro | M2 | LOW | Both suggested fixes accept "always emit the tag". =s | — | open |
+| C-04 | claude-spec-comments | INTERFACE §2.3 vs §2 intro | M2 | LOW | Both suggested fixes accept "always emit the tag". =s | G64: `iface/cmap.nim` `choiceDef` always emits `kind`; test `[IFC-0148]` (tagged map union) | open |
 | C-05 | claude-spec-comments | INTERFACE A.4/A.5 vs RUNTIME §4.1 | M2,M3 | LOW | Helper names that are never exported. =s | — | open |
 | C-06 | claude-spec-comments | RUNTIME §1.3 vs TRANSPORT §8.2 | M2,M5 | LOW | Socket path layout. =s | — | settled by spec text except the 4096-byte path vs sun_path residue (NF-03) |
 | C-11 | claude-spec-comments | INTERFACE A.3; SECURITY l.230/441 | M2,M9 | LOW | Editorial. | — | open |
@@ -130,15 +130,15 @@ Three spec facts drive the order:
 | HC-06 | human-spec-comments | INTERFACE §5.1/§5.2; TRANSPORT §6 | M2,M3,M5 | MED | Cancel can be appended; HIGH if `call` gains a timeout parameter. | — | open |
 | HC-07 | human-spec-comments | INTERFACE §2.6/§2.8/A.3; BCP §6.1 | M2,M8 | **HIGH** | The mandatory export set would change. hc l.166-182 | — | open |
 | HC-10 | human-spec-comments | INTERFACE §5.2 l.2626, A.4; RUNTIME §7.3 | M2,M3,M8 | **HIGH** | `logos_publish_fn` return type and the publish helpers. hc l.221-237 | — | open |
-| IF-03 | claude-spec-comments | INTERFACE §2.3; RUNTIME l.1814; CA l.1001 | M2,M3,M4 | **HIGH** | C names and struct shape for tuple arms and list items. cl l.293-298 | — | open |
-| IF-04 | claude-spec-comments | INTERFACE §1.5 vs §2.5 | M2 | **HIGH-n** | C form of choice-of-maps events. cl l.300-303 | — | open |
+| IF-03 | claude-spec-comments | INTERFACE §2.3; RUNTIME l.1814; CA l.1001 | M2,M3,M4 | **HIGH** | C names and struct shape for tuple arms and list items. cl l.293-298 | G62: `iface/cmap.nim` synthetic `_list_t`/`_tuple_t`/`_bstr_t` aggregates; test `G62` | open |
+| IF-04 | claude-spec-comments | INTERFACE §1.5 vs §2.5 | M2 | **HIGH-n** | C form of choice-of-maps events. cl l.300-303 | G63: `iface/cmap.nim` `choiceDef` (event tag); test `G63` | open |
 | IF-05 | claude-spec-comments | INTERFACE §2.3, §3.5 | M2,M10 | LOW | Header text, not ABI. | — | open |
-| IF-06 | claude-spec-comments | INTERFACE §3.4 | M2,M10 | **HIGH-n** | Position of the `has_` flag is struct layout. =s. cl l.311-314 | — | open |
+| IF-06 | claude-spec-comments | INTERFACE §3.4 | M2,M10 | **HIGH-n** | Position of the `has_` flag is struct layout. =s. cl l.311-314 | G66: `iface/cmap.nim` `fieldMembers`; test `G66` | open |
 | IF-07 | claude-spec-comments | INTERFACE §2.7 | M2 | MED | Allocation unit and free order. | — | open |
 | IF-08 | claude-spec-comments | INTERFACE §2.7, A.5 | M2 | MED | Name of a non-exported free helper. | — | open |
 | IF-09 | claude-spec-comments | INTERFACE §1.3/§2.1; RUNTIME §1.3 | M2 | LOW | Name reservation; HIGH only if the symbol-derivation scheme changes. =s | — | open |
 | IF-10 | claude-spec-comments | INTERFACE §5.2; RUNTIME §4.2 | M2,M6 | LOW | Editorial. | — | open |
-| IF-11 | claude-spec-comments | INTERFACE §2.1 | M2 | LOW | Header order, not ABI. | — | open |
+| IF-11 | claude-spec-comments | INTERFACE §2.1 | M2 | LOW | Header order, not ABI. | G72 (revised), G155: `iface/cmap.nim` `emit`, `ordered`; tests `G72`, `[IFC-0384]` | open |
 | NA-06 | claude-spec-comments-2 | CA §3.5, §10, §12; INTERFACE §2.6 | M2, M4 | MED | Additive: P. Scoped CA check method for providers (Y), or the allowed scope delivered with each dispatch (N, changes `_dispatch`). Depends on HC-03. | — | open |
 | NC-01 | claude-spec-comments-2 | CONFIG §3, §4, §7; INTERFACE §2.6 | M2, M4, M7 | MED | Additive: Y. Optional migration hook; MAY→MUST on retaining configuration. | — | open |
 | ND-03 | claude-spec-comments-2 | TRANSPORT §2.1, §3.1; INTERFACE §4.6 | M2, M3, M5 | MED | Additive: N. Sender-side size check with a named reason (maybe [CR]); Hello maximum would be [W]. | — | open |
@@ -149,9 +149,12 @@ Three spec facts drive the order:
 | NL-05 | claude-spec-comments-2 | RUNTIME §3.4, §13; INTERFACE §2.6; SECURITY §11.5 | M2, M3, M12 | MED | Additive: Y. Suspend/resume host operations plus an optional hook; no new state proposed. The engine needs a quiesce-without-destroy path. | — | open |
 | NL-09 | claude-spec-comments-2 | INTERFACE (new profile); TRANSPORT §3.2, §5.1 | M2, M8 | LOW | Additive: Y. Long-running-operation conventions. | — | open |
 | NR-12 | claude-spec-comments-2 | INTERFACE §2.6; TRANSPORT §6 | M2, M5 | MED | Additive: P. Statement or optional `_cancel` (Y). Its token needs a `_dispatch` change (N) or an appended getter (Y). | — | open |
-| NX-04 | claude-spec-comments-2 | INTERFACE §2, §2.1, §3.9.5 | M2, M10 | MED | Additive: N (narrowing). Acceptance rule that rejects derived C names equal to `logos_types.h` names, or reserved namespaces. No accepted schema's generated name changes. It becomes HIGH only if the owner re-prefixes the common types instead. | — | open |
+| NX-04 | claude-spec-comments-2 | INTERFACE §2, §2.1, §3.9.5 | M2, M10 | MED | Additive: N (narrowing). Acceptance rule that rejects derived C names equal to `logos_types.h` names, or reserved namespaces. No accepted schema's generated name changes. It becomes HIGH only if the owner re-prefixes the common types instead. | `iface/cmap.nim` `cDeclarations` rejects identifiers `logos_types.h` declares, at acceptance (I23); test `[IFC-0475] NX-04 interim` | open |
 | PM-11 | claude-spec-comments | PM §10/§12; LOADER §3/§5; INTERFACE §2.6 | M2,M4,M7,M8 | MED | OPEN; the init input can grow compatibly. | — | open |
 | SO-07 | claude-spec-comments | INTERFACE §1.3 | M2,M7,M8 | MED | Renaming `lcn.` changes our own roots and C symbols. | — | open |
+| G153 | claude-spec-comments-2 (ND-12) | INTERFACE §2, §2.1, §5.3 | M2 | LOW | A cycle of local aliases (`a = b`, `b = a`) resolves and has a root but no value and no C form. Interim: rejected at acceptance; cycles through a structure are recursion and stay. Narrowing only. | `iface/accept.nim` `checkAliasCycles`; test `[IMPL-DECISION G153]` | reported as ND-12 (logos-lips `2f6cbcb0`); open |
+| G154 | claude-spec-comments-2 (ND-13) | INTERFACE §2.1, §2.3 | M2 | LOW | §2.3 forward-declares only targets of recursive by-value edges, so `{ kids: [* demo.node] }` inside `demo.node` does not compile. Interim: a list target on a cycle of by-value and list edges also gets a forward typedef. Header text only. | `iface/cmap.nim` `resolveGraph`; test `G154` | reported as ND-13 (logos-lips `2f6cbcb0`); open |
+| G155 | claude-spec-comments-2 (ND-14) | INTERFACE §2.1 l.676-679 vs §3.9.3 | M2 | LOW | CONTRA: least-name topological order gives `left, node, branch, right`; the required §3.9.3 header has `left, node, right, branch`. Interim: dependency depth, then qualified name, which reproduces §3.9.3. Header order only. | `iface/cmap.nim` `ordered`; test `[IFC-0384]` | reported as ND-14 (logos-lips `2f6cbcb0`); open |
 
 ## Tier 3 — sans-I/O transport codecs, PM artifacts
 

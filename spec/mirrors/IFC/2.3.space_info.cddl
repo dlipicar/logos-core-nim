@@ -1,0 +1,5 @@
+storage.space_info = {
+    available: uint64,
+    quota: uint64,
+    used: uint64,
+}

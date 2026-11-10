@@ -69,6 +69,7 @@
             fileset = lib.fileset.unions [
               ./logos_core.nimble
               ./config.nims
+              ./.nph.toml
               ./src
               ./tests
               ./spec
@@ -154,6 +155,22 @@
             oracle-selftest = specCheck "oracle-selftest" "python3 oracle/selftest.py && python3 oracle/gen_cddl_vectors.py --check && python3 oracle/gen_hash_vectors.py --check";
           };
 
+          # INTERFACE §2.1-§2.3, §2.5, §5.2 C type headers (types only, D29).
+          lcnGen = nimDerivation {
+            pname = "lcn-gen";
+            version = "0.0.1";
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c -d:release --outdir:build/bin src/lcn_gen.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm755 build/bin/lcn_gen $out/bin/lcn-gen
+            '';
+            meta.mainProgram = "lcn-gen";
+          };
+
           updateNimbleDeps = pkgs.writeShellApplication {
             name = "update-nimble-deps";
             runtimeInputs = [
@@ -175,6 +192,7 @@
             testChecks
             specChecks
             spectrace
+            lcnGen
             updateNimbleDeps
             ;
         };
@@ -184,6 +202,7 @@
     {
       packages = forAllSystems (system: {
         inherit (bySystem.${system}) nim nph spectrace;
+        lcn-gen = bySystem.${system}.lcnGen;
       });
 
       apps = forAllSystems (system: {
@@ -194,6 +213,10 @@
         spectrace = {
           type = "app";
           program = lib.getExe bySystem.${system}.spectrace;
+        };
+        lcn-gen = {
+          type = "app";
+          program = lib.getExe bySystem.${system}.lcnGen;
         };
       });
 

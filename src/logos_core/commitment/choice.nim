@@ -19,7 +19,7 @@
 
 {.push raises: [].}
 
-import std/[algorithm, sets, tables]
+import std/[algorithm, sequtils, sets, tables]
 import ../cbor
 import ../hash/hashinput
 import ../base/hex
@@ -610,12 +610,16 @@ func fieldValue(v: CborValue, name: string): CborValue =
       return x
   nil
 
-func validates*(s: SchemaSet, doc: int, n: SchemaNode, v: CborValue, depth = 0): bool =
-  ## Whether the decoded value `v` is valid under the schema node `n` of
-  ## `s.docs[doc]`. Maps are closed; a choice selects its one candidate arm by its
-  ## structural selection plan and then validates the whole value against that arm
-  ## [SPEC COMMITMENT §3.1]. Plans are rebuilt per call [IMPL]; a decoder that
-  ## validates many values caches them.
+func validateAt(
+    s: SchemaSet,
+    doc: int,
+    n: SchemaNode,
+    v: CborValue,
+    depth: int,
+    path: var seq[CborValue],
+): bool =
+  ## As `validates`; on failure `path` locates the first offending item from the
+  ## value's root: a text key for a map entry, an index for an array element.
   if depth > DefaultMaxDepth or v.isNil:
     return false
   case n.kind
@@ -626,40 +630,68 @@ func validates*(s: SchemaSet, doc: int, n: SchemaNode, v: CborValue, depth = 0):
   of snMap:
     if v.kind != ckMap:
       return false
-    var seen = 0
+    for (k, _) in v.entries:
+      if k.kind != ckText or not n.fields.anyIt(it.name == k.text):
+        path.add(k)
+        return false
     for f in n.fields:
       let x = v.fieldValue(f.name)
       if x.isNil:
         if not f.optional:
           return false
-      elif not s.validates(doc, f.node, x, depth + 1):
-        return false
       else:
-        inc seen
-    seen == v.entries.len
+        path.add(cbor(f.name))
+        if not s.validateAt(doc, f.node, x, depth + 1, path):
+          return false
+        discard path.pop()
+    true
   of snList:
     if v.kind != ckArray:
       return false
-    for x in v.items:
-      if not s.validates(doc, n.element, x, depth + 1):
+    for i, x in v.items:
+      path.add(cbor(uint64(i)))
+      if not s.validateAt(doc, n.element, x, depth + 1, path):
         return false
+      discard path.pop()
     true
   of snTuple:
     if v.kind != ckArray or v.items.len != n.items.len:
       return false
     for i, x in v.items:
-      if not s.validates(doc, n.items[i], x, depth + 1):
+      path.add(cbor(uint64(i)))
+      if not s.validateAt(doc, n.items[i], x, depth + 1, path):
         return false
+      discard path.pop()
     true
   of snChoice:
     let plan = s.selectionPlan(doc, n)
     if plan.isNone:
       return false
     let arm = plan.get.select(v)
-    arm.isSome and s.validates(doc, n.arms[arm.get], v, depth + 1)
+    arm.isSome and s.validateAt(doc, n.arms[arm.get], v, depth + 1, path)
   of snLocalRef, snImportedRef:
     let t = s.resolve(doc, n)
-    t.isSome and s.validates(t.get[0], t.get[1].body, v, depth + 1)
+    t.isSome and s.validateAt(t.get[0], t.get[1].body, v, depth + 1, path)
+
+func validatePath*(
+    s: SchemaSet, doc: int, n: SchemaNode, v: CborValue
+): Result[void, seq[CborValue]] =
+  ## Whether `v` is valid under `n` of `s.docs[doc]`; the error is the path to the
+  ## first offending item (INTERFACE §5.1 `invalid_params_path_segment`s).
+  var path: seq[CborValue]
+  if s.validateAt(doc, n, v, 0, path):
+    ok()
+  else:
+    err(path)
+
+func validates*(s: SchemaSet, doc: int, n: SchemaNode, v: CborValue, depth = 0): bool =
+  ## Whether the decoded value `v` is valid under the schema node `n` of
+  ## `s.docs[doc]`. Maps are closed; a choice selects its one candidate arm by its
+  ## structural selection plan and then validates the whole value against that arm
+  ## [SPEC COMMITMENT §3.1]. Plans are rebuilt per call [IMPL]; a decoder that
+  ## validates many values caches them.
+  var path: seq[CborValue]
+  s.validateAt(doc, n, v, depth, path)
 
 # Every choice in a document ----------------------------------------------------------
 

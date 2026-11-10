@@ -512,6 +512,13 @@ def pins_nim(pins: dict, root: Path) -> str:
         "",
         "const",
     ]
+    # The revision every ledger was synced to: generated headers carry it.
+    revs = {json.loads(f.read_text(encoding="utf-8").split("\n", 1)[0])["rev"]
+            for f in (root / "conformance" / "requirements").glob("*.jsonl")}
+    if len(revs) != 1:
+        raise SystemExit(f"the ledgers name {len(revs)} spec revisions; run `spectrace sync`")
+    out.append("  # conformance/requirements/*.jsonl: the spec revision")
+    out.append(f'  SpecRevision* = "{revs.pop()}"')
     for p in pins.values():
         if "code" in p and "mirror" in p:
             text = (root / "spec" / "mirrors" / p["mirror"]).read_text(encoding="utf-8")
@@ -592,6 +599,11 @@ def section_status(claims: dict, section: str) -> str:
     return status
 
 
+def unit_status(claims: dict, unit) -> str:
+    """A `[units]` entry for the unit's id overrides its section's status."""
+    return claims.get("units", {}).get(unit.id) or section_status(claims, unit.section)
+
+
 def cmd_gate(args) -> int:
     """Every live unit in a claimed section is referenced by a test or an inspection item."""
     root = Path(args.root)
@@ -609,7 +621,10 @@ def cmd_gate(args) -> int:
     for fname, prefix in SPECS.items():
         claims = load_toml(root / "conformance" / "claims" / f"{prefix}.toml")
         bad_status = [
-            s for s in [claims.get("default", "")] + list(claims.get("sections", {}).values())
+            s
+            for s in [claims.get("default", "")]
+            + list(claims.get("sections", {}).values())
+            + list(claims.get("units", {}).values())
             if not STATUS_RE.fullmatch(s)
         ]
         if not claims or bad_status:
@@ -621,11 +636,15 @@ def cmd_gate(args) -> int:
             failures += 1
         live = [u for u in units if not u.retired and u.kind in GATED_KINDS]
         live_ids.update(u.id for u in units if not u.retired)
+        gated_ids = {u.id for u in live}
+        for uid in sorted(set(claims.get("units", {})) - gated_ids):
+            print(f"{prefix}: [units] names {uid}, which is not a live gated requirement")
+            failures += 1
         by_status: dict[str, int] = {}
         for u in live:
-            st = section_status(claims, u.section).split(":")[0]
+            st = unit_status(claims, u).split(":")[0]
             by_status[st] = by_status.get(st, 0) + 1
-        claimed = [u for u in live if section_status(claims, u.section) == "claimed"]
+        claimed = [u for u in live if unit_status(claims, u) == "claimed"]
         missing = [u for u in claimed if u.id not in referenced]
         summary = ", ".join(f"{v} {k}" for k, v in sorted(by_status.items()))
         print(f"{prefix}: {len(claimed) - len(missing)}/{len(claimed)} claimed units tested ({summary})")

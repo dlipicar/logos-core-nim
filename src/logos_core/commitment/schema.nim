@@ -84,6 +84,9 @@ type
     namespace*: string
     declarations*: seq[Declaration] ## sorted by qualified name
     implemented*: seq[Digest] ## implemented interface roots, sorted
+    moduleName*: Opt[string]
+      ## the `_module` text literal of a concrete module schema: metadata, not part
+      ## of the canonical model or its root
 
   PathSegmentKind* = enum
     psField = "field"
