@@ -1,0 +1,58 @@
+; Normative Logos prelude and common schema surface.
+
+; -- Logos prelude integer aliases --
+uint8  = uint .size 1
+uint16 = uint .size 2
+uint32 = uint .size 4
+uint64 = uint .size 8
+
+int8  = -128..127
+int16 = -32768..32767
+int32 = -2147483648..2147483647
+int64 = -9223372036854775808..9223372036854775807
+
+; -- error codes --
+logos.error_code =
+    0 / 1 / 2 / 3 / 4 / 5 / 6 / 7 / 8 / 9
+
+; -- bounded encoded invocation-failure detail --
+logos.error_detail = bstr .size (1..4096)
+
+logos.invalid_params_reason =
+    "malformed-cbor" /
+    "non-deterministic-cbor" /
+    "schema-mismatch"
+
+logos.invalid_params_path_segment = tstr / uint64
+
+logos.invalid_params_detail = {
+    reason: logos.invalid_params_reason,
+    ? path: [* logos.invalid_params_path_segment],
+}
+
+; -- exact schema commitment --
+logos.schema_commitment = {
+    commitment_model: "logos.commitment-model.2026-08",
+    schema_root: bstr .size 32,
+    hash_profile: "logos.hash-profile.2026-08.choice-index",
+    hash_suite: "logos.hash-suite.blake3-256",
+}
+
+; -- route handle (process-local, not on wire) --
+; logos_route_handle_t is a process-local binding concept, not serialised.
+
+; -- selected-contract introspection (well-known method) --
+logos.schema_request = {}
+logos.schema_response = {
+    schema: tstr .size (1..1048576),
+    interface_schemas: [* {
+        namespace: tstr .size (1..128),
+        commitment: logos.schema_commitment,
+        document: tstr .size (1..1048576),
+    }],
+    supporting_schemas: [* {
+        namespace: tstr .size (1..128),
+        commitment: logos.schema_commitment,
+        document: tstr .size (1..1048576),
+    }],
+}

@@ -1,0 +1,12 @@
+# Claim status of each section of spec-cdcddle.md.
+# The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
+#   claimed               every requirement unit in it needs a test tagged [CDE-NNNN]
+#   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   informative           no requirements to test
+#   out-of-scope:<why>    normative, but not this repository's to implement
+
+default = "claimed"
+
+[sections]
+"References" = "informative"
+"Copyright" = "informative"

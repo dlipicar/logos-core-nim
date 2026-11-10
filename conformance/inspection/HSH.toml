@@ -1,0 +1,14 @@
+# HASH requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["HSH-0004", "HSH-0008", "HSH-0067"]
+reason = "Addressed to authors of hash profiles and specifications: what a profile must state, and when an identifier must change. No implementation behaviour follows; a changed constant reaches this repository as a changed pin (spec/pins.toml) or mirror."
+
+[[item]]
+ids = ["HSH-0023"]
+reason = "Addressed to schema authors: module CDDL should not carry layout hints. The layout in src/logos_core/hash/layout.nim reads no hint from any schema; it has no input but the value tree."
+
+[[item]]
+ids = ["HSH-0051", "HSH-0053"]
+reason = "Prefix-state hashing is optional. src/logos_core/hash/hashinput.nim does not use it: digestOf always hashes the full deterministic-CBOR hash input, and no hash state appears in any payload, proof or identifier."

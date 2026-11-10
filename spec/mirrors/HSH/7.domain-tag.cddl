@@ -1,0 +1,12 @@
+domain-tag = tstr
+hash-profile-id = tstr
+hash-suite-id = tstr
+semantic-commitment-model-revision = tstr
+schema-root = bstr
+schema-subtree-root = bstr
+digest = bstr
+field-name = tstr
+scalar-kind = tstr
+choice-arm-index = uint64
+uint64 = uint .size 8
+int64 = -9223372036854775808..9223372036854775807

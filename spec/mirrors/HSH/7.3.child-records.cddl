@@ -1,0 +1,59 @@
+root-child-record = {
+    0: node-kind,
+    1: digest,
+    2: schema-subtree-root,
+}
+
+child-record = {
+    0: child-label,
+    1: node-kind,
+    2: digest,
+    3: schema-subtree-root,
+}
+
+child-label =
+    field-label /
+    index-label /
+    index-range-label /
+    tuple-label /
+    choice-label /
+    byte-range-label /
+    branch-label
+
+field-label = {
+    0: "field",
+    1: field-name,
+}
+
+index-label = {
+    0: "index",
+    1: uint64,
+}
+
+index-range-label = {
+    0: "index-range",
+    1: uint64,  ; start element index
+    2: uint64,  ; element count
+}
+
+tuple-label = {
+    0: "tuple-position",
+    1: uint64,
+}
+
+choice-label = {
+    0: "choice-arm",
+    1: choice-arm-index,
+}
+
+byte-range-label = {
+    0: "byte-range",
+    1: uint64,  ; start byte offset
+    2: uint64,  ; byte count
+}
+
+branch-label = {
+    0: "branch",
+    1: uint64,  ; start base-record index
+    2: uint64,  ; base-record count represented by branch
+}

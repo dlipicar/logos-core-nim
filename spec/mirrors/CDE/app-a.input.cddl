@@ -1,0 +1,18 @@
+_module = "storage_module"
+
+storage.cid = tstr .size (1..128)
+storage.blob_hash = bstr .size 32
+storage.lookup_key = storage.cid / storage.blob_hash
+
+storage.exists_request = {
+    key: storage.lookup_key,
+}
+
+storage.exists_response = {
+    exists: bool,
+}
+
+storage.changed_event = {
+    cid: storage.cid,
+    digest: storage.blob_hash,
+}

@@ -1,0 +1,9 @@
+_module = "demo_module"
+
+demo.ping_request = {
+    nonce: uint64,
+}
+
+demo.ping_response = {
+    ok: bool,
+}

@@ -1,0 +1,20 @@
+value-hash-payload =
+    value-root-payload /
+    map-payload /
+    field-payload /
+    absent-payload /
+    list-payload /
+    list-chunk-payload /
+    packed-scalar-list-chunk-payload /
+    tuple-payload /
+    tuple-element-payload /
+    choice-payload /
+    scalar-payload /
+    bstr-payload /
+    bstr-direct-payload /
+    bstr-chunk-payload /
+    tstr-payload /
+    tstr-direct-payload /
+    tstr-chunk-payload /
+    reference-value-payload /
+    branch-payload

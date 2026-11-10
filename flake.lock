@@ -1,0 +1,63 @@
+{
+  "nodes": {
+    "logos-lips": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791018740,
+        "narHash": "sha256-Nywy4kjAcFM7+Ofc3+A5QGBzcKwGndTRJmSmIaBUX/E=",
+        "ref": "draft/logos-core-module-specs",
+        "rev": "f4f83471bed90139901a4230299a66d1bc0cd9dd",
+        "revCount": 498,
+        "type": "git",
+        "url": "https://github.com/logos-co/logos-lips"
+      },
+      "original": {
+        "ref": "draft/logos-core-module-specs",
+        "rev": "f4f83471bed90139901a4230299a66d1bc0cd9dd",
+        "type": "git",
+        "url": "https://github.com/logos-co/logos-lips"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1783375776,
+        "narHash": "sha256-pg6hLjDeAWaUOzh2JM2Cw0BwYpGtOyNr6A4FBwP9Ymo=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "cd648d6ea62bc0ffba91e61fcfe5e33c1e2004b1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "cd648d6ea62bc0ffba91e61fcfe5e33c1e2004b1",
+        "type": "github"
+      }
+    },
+    "nixpkgs-nph": {
+      "locked": {
+        "lastModified": 1794042290,
+        "narHash": "sha256-ziZn2PvCJE5JEEpqTdxXwJpPB+L3YqoCpTAMCzyaP3U=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "f4a03c008967841f2a0b3cb7c436fc6fc31671f6",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "f4a03c008967841f2a0b3cb7c436fc6fc31671f6",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "logos-lips": "logos-lips",
+        "nixpkgs": "nixpkgs",
+        "nixpkgs-nph": "nixpkgs-nph"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

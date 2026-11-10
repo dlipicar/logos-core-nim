@@ -1,0 +1,16 @@
+; -- metadata --
+_module = "sensor_module"
+_implements = [
+  h'ca004a96bbbce568ab0e7f996020e12d0dca353603671d5d6d8d5e364b830d32',
+]
+
+sensor.control.settings = {
+  kind: "sensor",
+  limit: metrics_types.counter,
+}
+
+sensor.control.configure_request = {
+  settings: sensor.control.settings,
+}
+
+sensor.control.configure_response = {}

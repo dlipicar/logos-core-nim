@@ -1,0 +1,26 @@
+# COMMITMENT requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["CMT-0004", "CMT-0039"]
+reason = "Scope statements: COMMITMENT defines no trust anchoring, and runtimes, package managers or catalogs MAY bind metadata to roots elsewhere. Nothing in src/logos_core/commitment takes or emits trust, package or provider metadata; a schema root is computed from the schema model alone."
+
+[[item]]
+ids = ["CMT-0014", "CMT-0017"]
+reason = "Permissions for tooling. Names that are not contract-bearing exist only in the cdCDDLe model (src/logos_core/cddl); construct.buildSchema emits schema declarations only for local qualified names and metadata never reaches the Logos model, so no retained diagnostic name can affect an identity."
+
+[[item]]
+ids = ["CMT-0027", "CMT-0028"]
+reason = "Conditional on an expanded diagnostic view over local references, which this repository does not provide: SchemaNode keeps every local reference as a terminal local-reference node and no API expands it. The choice planner follows references only to answer structural questions, with cycle detection (choice.nim `follow`), and never builds an identity input from them."
+
+[[item]]
+ids = ["CMT-0058", "CMT-0059", "CMT-0065"]
+reason = "Addressed to authors of future cdCDDLe updates, commitment-model revisions and compatibility profiles: what they must define. A changed model or identifier reaches this repository as a changed pin (spec/pins.toml) or mirror."
+
+[[item]]
+ids = ["CMT-0067"]
+reason = "No compatibility profile exists in this revision and none is implemented: construct.buildSchema rejects any dependency whose commitment-model revision differs from CommitmentModelId, so no profile can relax verifier policy (test [CMT-0057])."
+
+[[item]]
+ids = ["CMT-0088"]
+reason = "Addressed to whoever defines a later physical layout. This repository implements exactly one layout, the HASH profile pinned in spec/pins.toml (hash/layout.nim); every value-root payload is hashed under that profile's domain tags, and verifyView rejects a view naming any other hash profile, suite or commitment model (test [HSH-0164])."

@@ -1,0 +1,70 @@
+logos.package_manifest.package_name = tstr .size (1..128)
+logos.package_manifest.package_version = tstr .size (1..128)
+logos.package_manifest.package_variant_id = tstr .size (1..128)
+logos.package_manifest.artifact_id = tstr .size (1..128)
+
+logos.package_manifest.manifest = {
+  package: logos.package_manifest.package_name,
+  version: logos.package_manifest.package_version,
+  modules: [* logos.package_manifest.module_declaration],
+  variants: [* logos.package_manifest.package_variant],
+  ? dependencies: [* logos.package_manifest.package_dependency],
+}
+
+logos.package_manifest.module_declaration = {
+  module: tstr .size (1..64),
+  artifact: logos.package_manifest.artifact_id,
+  ? primary_contract: logos.schema_commitment,
+  ? implements: [* logos.schema_commitment],
+  ? requires: [* logos.package_manifest.provider_requirement],
+  ? requested_permissions: [* logos.package_manifest.requested_permission],
+  ? configuration: logos.package_manifest.configuration_declaration,
+}
+
+logos.package_manifest.configuration_declaration = {
+  schema_artifact: logos.package_manifest.artifact_id,
+  root: tstr .size (1..255),
+  schema_commitment: logos.schema_commitment,
+  ? default_artifact: logos.package_manifest.artifact_id,
+  ? live_reconfiguration: true,
+}
+
+logos.package_manifest.provider_requirement = {
+  contract: logos.schema_commitment,
+  cardinality: "single" / "all-runtime-visible",
+}
+
+logos.package_manifest.requested_permission = {
+  permission: tstr .size (1..128),
+  constraints: bstr .size (1..1048576),
+  ? reason: tstr .size (1..512),
+}
+
+logos.package_manifest.package_dependency = {
+  package: logos.package_manifest.package_name,
+  requirement: logos.package_manifest.package_version_requirement,
+}
+
+logos.package_manifest.package_version_requirement = {
+  kind: "exact" / "compatible",
+  version: logos.package_manifest.package_version,
+}
+
+logos.package_manifest.package_variant = {
+  id: logos.package_manifest.package_variant_id,
+  platform: logos.package_manifest.platform_constraint,
+  artifacts: [* logos.package_manifest.manifest_artifact],
+}
+
+logos.package_manifest.platform_constraint = {
+  ? os: tstr .size (1..64),
+  ? architecture: tstr .size (1..64),
+  ? abi: tstr .size (1..64),
+}
+
+logos.package_manifest.manifest_artifact = {
+  id: logos.package_manifest.artifact_id,
+  kind: "module-binary" / "resource" / "schema" / "data",
+  path: tstr .size (1..4096),
+  hash: bstr .size 32,
+}

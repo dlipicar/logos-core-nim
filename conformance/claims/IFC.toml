@@ -1,0 +1,24 @@
+# Claim status of each section of spec-module-interface.md.
+# The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
+#   claimed               every requirement unit in it needs a test tagged [IFC-NNNN]
+#   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   informative           no requirements to test
+#   out-of-scope:<why>    normative, but not this repository's to implement
+
+default = "deferred:tier-2"
+
+
+[sections]
+"Abstract" = "deferred:tier-4"
+"References" = "informative"
+"Copyright" = "informative"
+"§2.4" = "deferred:tier-4"
+"§2.6" = "deferred:tier-4"
+"§2.8" = "deferred:tier-4"
+"§3.3" = "deferred:tier-4"
+"§3.7" = "deferred:tier-4"
+"§4.1" = "deferred:tier-1"
+"§4.2" = "deferred:tier-1"
+"§4.3" = "deferred:tier-1"
+"§4.4" = "claimed"
+"App A" = "deferred:tier-4"

@@ -1,0 +1,26 @@
+; -- primitive types used in the envelope --
+
+logos.transport.module-name       = tstr .size (1..64)
+logos.transport.method-name       = tstr .size (1..128)
+; Exact schema event identifier from the module's CDDL, e.g.
+; "storage.started_event".
+logos.transport.event-name        = tstr .size (1..128)
+logos.transport.call-id           = uint
+logos.transport.subscription-id   = uint
+logos.transport.authorization-material = bstr
+logos.transport.schema-subtree-root = bstr .size 32
+logos.transport.value-root        = bstr .size 32
+
+; This block is the owning registry for transport message-kind values.
+; Other Logos specifications may cite these values but do not allocate them.
+logos.transport.message-kind      = 0..8
+
+logos.transport.message-kind-hello       = 0
+logos.transport.message-kind-request     = 1
+logos.transport.message-kind-response    = 2
+logos.transport.message-kind-subscribe   = 3
+logos.transport.message-kind-unsubscribe = 4
+logos.transport.message-kind-event       = 5
+logos.transport.message-kind-error       = 6
+logos.transport.message-kind-cancel      = 7
+logos.transport.message-kind-subscription-result = 8

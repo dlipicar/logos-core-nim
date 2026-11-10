@@ -1,0 +1,9 @@
+logos.package_manager.package_signing_profile =
+  "logos.package-signing.cose-sign1-ed25519"
+
+logos.package_manager.package_signing_key_id = bstr .size (1..128)
+
+logos.package_manager.package_signature_claim = {
+  profile: logos.package_manager.package_signing_profile,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+}

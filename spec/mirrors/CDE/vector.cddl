@@ -1,0 +1,10 @@
+cdcddle-vector = {
+    "name": tstr,
+    ? "input-cddl": tstr,
+    ? "input-cbor-hex": tstr,
+    "expect": "valid" / "invalid",
+    ? "canonical-diagnostic": tstr,
+    ? "canonical-cbor-hex": tstr,
+    ? "error-class": tstr,
+    ? "notes": tstr,
+}

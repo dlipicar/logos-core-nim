@@ -1,0 +1,301 @@
+# Spec blocks copied verbatim into spec/mirrors/. Code and tests read the copies,
+# never hand-typed text. `spectrace mirror` fails when a copy no longer equals its
+# block in the pinned spec; `spectrace mirror --write` refreshes them.
+#
+# A block is named by spec file, section key and the ordinal among blocks of the
+# same fence language in that section, so line shifts elsewhere do not matter.
+# ordinal = 0 joins every block of that language in the section, in order.
+
+# cdCDDLe ---------------------------------------------------------------------
+
+[[mirror]]
+out = "CDE/schema-as-data.cddl"
+file = "spec-cdcddle.md"
+section = "§8"
+ordinal = 0
+
+[[mirror]]
+out = "CDE/vector.cddl"
+file = "spec-cdcddle.md"
+section = "§12"
+
+[[mirror]]
+out = "CDE/app-a.input.cddl"
+file = "spec-cdcddle.md"
+section = "App A"
+
+[[mirror]]
+out = "CDE/app-a.schema.diag"
+file = "spec-cdcddle.md"
+section = "App A"
+lang = "cbor-diag"
+
+[[mirror]]
+out = "CDE/app-a.cbor.hex"
+file = "spec-cdcddle.md"
+section = "App A"
+lang = "text"
+
+# HASH ------------------------------------------------------------------------
+
+[[mirror]]
+out = "HSH/5.domain-tags.md"
+file = "spec-module-hash-profile.md"
+section = "§5"
+lang = "table"
+
+[[mirror]]
+out = "HSH/7.5.domain-payloads.md"
+file = "spec-module-hash-profile.md"
+section = "§7.5"
+lang = "table"
+
+[[mirror]]
+out = "HSH/7.2.schema-domains.md"
+file = "spec-module-hash-profile.md"
+section = "§7.2"
+lang = "table"
+
+[[mirror]]
+out = "HSH/5.node-kind.cddl"
+file = "spec-module-hash-profile.md"
+section = "§5"
+
+[[mirror]]
+out = "HSH/6.hash-input.cddl"
+file = "spec-module-hash-profile.md"
+section = "§6"
+
+[[mirror]]
+out = "HSH/7.domain-tag.cddl"
+file = "spec-module-hash-profile.md"
+section = "§7"
+
+[[mirror]]
+out = "HSH/7.1.hash-input.cddl"
+file = "spec-module-hash-profile.md"
+section = "§7.1"
+
+[[mirror]]
+out = "HSH/7.2.schema-payloads.cddl"
+file = "spec-module-hash-profile.md"
+section = "§7.2"
+
+[[mirror]]
+out = "HSH/7.3.child-records.cddl"
+file = "spec-module-hash-profile.md"
+section = "§7.3"
+
+[[mirror]]
+out = "HSH/7.4.value-payloads.cddl"
+file = "spec-module-hash-profile.md"
+section = "§7.4"
+ordinal = 0
+
+[[mirror]]
+out = "HSH/7.5.domain-payloads.cddl"
+file = "spec-module-hash-profile.md"
+section = "§7.5"
+
+[[mirror]]
+out = "HSH/7.6.verified-view.cddl"
+file = "spec-module-hash-profile.md"
+section = "§7.6"
+ordinal = 0
+
+[[mirror]]
+out = "HSH/app-a.hash-input.hex"
+file = "spec-module-hash-profile.md"
+section = "App A"
+lang = "text"
+ordinal = 1
+
+[[mirror]]
+out = "HSH/app-a.root.hex"
+file = "spec-module-hash-profile.md"
+section = "App A"
+lang = "text"
+ordinal = 2
+
+# COMMITMENT ------------------------------------------------------------------
+
+[[mirror]]
+out = "CMT/4.structural-node.cddl"
+file = "spec-module-commitment-model.md"
+section = "§4"
+
+[[mirror]]
+out = "CMT/9.revision.cddl"
+file = "spec-module-commitment-model.md"
+section = "§9"
+
+[[mirror]]
+out = "CMT/9.1.schema-objects.cddl"
+file = "spec-module-commitment-model.md"
+section = "§9.1"
+ordinal = 0
+
+[[mirror]]
+out = "CMT/9.2.schema-payloads.cddl"
+file = "spec-module-commitment-model.md"
+section = "§9.2"
+
+[[mirror]]
+out = "CMT/9.3.value-objects.cddl"
+file = "spec-module-commitment-model.md"
+section = "§9.3"
+
+[[mirror]]
+out = "CMT/9.4.semantic-path.cddl"
+file = "spec-module-commitment-model.md"
+section = "§9.4"
+
+[[mirror]]
+out = "CMT/app-a.input.cddl"
+file = "spec-module-commitment-model.md"
+section = "App A"
+
+[[mirror]]
+out = "CMT/app-a.schema.diag"
+file = "spec-module-commitment-model.md"
+section = "App A"
+lang = "cbor-diag"
+
+[[mirror]]
+out = "CMT/app-b.input.cddl"
+file = "spec-module-commitment-model.md"
+section = "App B"
+
+[[mirror]]
+out = "CMT/app-b.schema.diag"
+file = "spec-module-commitment-model.md"
+section = "App B"
+lang = "cbor-diag"
+ordinal = 1
+
+[[mirror]]
+out = "CMT/app-b.ok-schema-path.diag"
+file = "spec-module-commitment-model.md"
+section = "App B"
+lang = "cbor-diag"
+ordinal = 2
+
+[[mirror]]
+out = "CMT/app-b.value.diag"
+file = "spec-module-commitment-model.md"
+section = "App B"
+lang = "cbor-diag"
+ordinal = 3
+
+[[mirror]]
+out = "CMT/app-b.value-tree.diag"
+file = "spec-module-commitment-model.md"
+section = "App B"
+lang = "cbor-diag"
+ordinal = 4
+
+[[mirror]]
+out = "CMT/app-b.root-path.diag"
+file = "spec-module-commitment-model.md"
+section = "App B"
+lang = "cbor-diag"
+ordinal = 5
+
+[[mirror]]
+out = "CMT/app-b.ok-path.diag"
+file = "spec-module-commitment-model.md"
+section = "App B"
+lang = "cbor-diag"
+ordinal = 6
+
+# INTERFACE -------------------------------------------------------------------
+
+[[mirror]]
+out = "IFC/1.3.prelude.cddl"
+file = "spec-module-interface.md"
+section = "§1.3"
+
+[[mirror]]
+out = "IFC/5.1.common-schema.cddl"
+file = "spec-module-interface.md"
+section = "§5.1"
+
+[[mirror]]
+out = "IFC/5.2.logos_types.h"
+file = "spec-module-interface.md"
+section = "§5.2"
+lang = "c"
+
+[[mirror]]
+out = "IFC/3.9.1.module.cddl"
+file = "spec-module-interface.md"
+section = "§3.9.1"
+
+[[mirror]]
+out = "IFC/3.9.1.module.h"
+file = "spec-module-interface.md"
+section = "§3.9.1"
+lang = "c"
+
+[[mirror]]
+out = "IFC/3.9.2.module.cddl"
+file = "spec-module-interface.md"
+section = "§3.9.2"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/3.9.2.interface.cddl"
+file = "spec-module-interface.md"
+section = "§3.9.2"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/3.9.2.supporting.cddl"
+file = "spec-module-interface.md"
+section = "§3.9.2"
+ordinal = 3
+
+[[mirror]]
+out = "IFC/3.9.2.module.h"
+file = "spec-module-interface.md"
+section = "§3.9.2"
+lang = "c"
+
+[[mirror]]
+out = "IFC/3.9.3.module.cddl"
+file = "spec-module-interface.md"
+section = "§3.9.3"
+
+[[mirror]]
+out = "IFC/3.9.3.module.h"
+file = "spec-module-interface.md"
+section = "§3.9.3"
+lang = "c"
+
+[[mirror]]
+out = "IFC/3.9.5.rejection.h"
+file = "spec-module-interface.md"
+section = "§3.9.5"
+lang = "c"
+
+# Tier 3: TRANSPORT envelope, PM manifest -------------------------------------
+
+[[mirror]]
+out = "TRN/1.1.envelope-primitives.cddl"
+file = "spec-module-transport.md"
+section = "§1.1"
+
+[[mirror]]
+out = "TRN/1.3.envelopes.cddl"
+file = "spec-module-transport.md"
+section = "§1.3"
+
+[[mirror]]
+out = "PKG/4.manifest.cddl"
+file = "spec-module-package-manager.md"
+section = "§4"
+
+[[mirror]]
+out = "PKG/4.3.signing-profile.cddl"
+file = "spec-module-package-manager.md"
+section = "§4.3"

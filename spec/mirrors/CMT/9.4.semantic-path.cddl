@@ -1,0 +1,41 @@
+semantic-path = [* path-segment]
+
+path-segment =
+    field-segment /
+    list-index-segment /
+    tuple-position-segment /
+    choice-arm-segment /
+    bstr-range-segment /
+    tstr-utf8-range-segment
+
+field-segment = {
+    0: "field",
+    1: field-name,
+}
+
+list-index-segment = {
+    0: "list-index",
+    1: uint64,
+}
+
+tuple-position-segment = {
+    0: "tuple-position",
+    1: uint64,
+}
+
+choice-arm-segment = {
+    0: "choice-arm",
+    1: choice-arm-index,
+}
+
+bstr-range-segment = {
+    0: "bstr-range",
+    1: uint64,  ; start byte offset
+    2: uint64,  ; byte length
+}
+
+tstr-utf8-range-segment = {
+    0: "tstr-utf8-range",
+    1: uint64,  ; start UTF-8 byte offset
+    2: uint64,  ; byte length
+}

@@ -1,0 +1,9 @@
+uint8  = uint .size 1
+uint16 = uint .size 2
+uint32 = uint .size 4
+uint64 = uint .size 8
+
+int8  = -128..127
+int16 = -32768..32767
+int32 = -2147483648..2147483647
+int64 = -9223372036854775808..9223372036854775807

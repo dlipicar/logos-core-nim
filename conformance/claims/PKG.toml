@@ -1,0 +1,25 @@
+# Claim status of each section of spec-module-package-manager.md.
+# The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
+#   claimed               every requirement unit in it needs a test tagged [PKG-NNNN]
+#   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   informative           no requirements to test
+#   out-of-scope:<why>    normative, but not this repository's to implement
+
+default = "deferred:tier-5"
+
+[sections]
+"References" = "informative"
+"Copyright" = "informative"
+"§3" = "deferred:tier-3"
+"§4" = "deferred:tier-3"
+"§4.2" = "deferred:tier-5"
+"§4.4" = "deferred:tier-5"
+"§4.5" = "deferred:tier-5"
+"§7.1" = "deferred:tier-3"
+"§8" = "deferred:tier-3"
+"§9" = "deferred:tier-3"
+"§10" = "deferred:tier-3"
+"§11" = "deferred:tier-3"
+"§14" = "deferred:tier-4"
+"§16" = "deferred:tier-3"
+"§17" = "deferred:tier-4"

@@ -1,0 +1,14 @@
+# nimble setup -l
+nimbledeps/
+nimble.paths
+nimble.develop
+
+# build outputs
+nimcache/
+build/
+result
+result-*
+
+__pycache__/
+*.pyc
+.DS_Store

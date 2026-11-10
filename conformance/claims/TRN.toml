@@ -1,0 +1,19 @@
+# Claim status of each section of spec-module-transport.md.
+# The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
+#   claimed               every requirement unit in it needs a test tagged [TRN-NNNN]
+#   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   informative           no requirements to test
+#   out-of-scope:<why>    normative, but not this repository's to implement
+
+default = "deferred:tier-3"
+
+[sections]
+"References" = "informative"
+"Copyright" = "informative"
+"§3.1" = "deferred:tier-4"
+"§3.2" = "deferred:tier-4"
+"§5" = "deferred:tier-4"
+"§8.2" = "deferred:tier-5"
+"§8.4" = "deferred:tier-5"
+"§8.5" = "deferred:tier-4"
+"§9" = "deferred:tier-4"

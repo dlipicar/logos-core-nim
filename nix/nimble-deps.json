@@ -1,0 +1,12 @@
+{
+  "results": {
+    "hash": "sha256-KbNqt0FMuzDF4X+XM6JEaZJBypLDnvVPpnBpE7Sq6sA=",
+    "rev": "df8113dda4c2d74d460a8fa98252b0b771bf1f27",
+    "url": "https://github.com/arnetheduck/nim-results"
+  },
+  "unittest2": {
+    "hash": "sha256-LnG+BTHvT+eDIUQUKB9/wywMygp0KkuWde0UPuogYcw=",
+    "rev": "19701632b4f287b3012a5e435a9d829b0f66c605",
+    "url": "https://github.com/status-im/nim-unittest2"
+  }
+}

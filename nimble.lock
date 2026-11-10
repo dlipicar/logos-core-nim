@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "packages": {
+    "results": {
+      "version": "0.5.1",
+      "vcsRevision": "df8113dda4c2d74d460a8fa98252b0b771bf1f27",
+      "url": "https://github.com/arnetheduck/nim-results",
+      "downloadMethod": "git",
+      "dependencies": [],
+      "checksums": {
+        "sha1": "a9c011f74bc9ed5c91103917b9f382b12e82a9e7"
+      }
+    },
+    "unittest2": {
+      "version": "0.3.0",
+      "vcsRevision": "19701632b4f287b3012a5e435a9d829b0f66c605",
+      "url": "https://github.com/status-im/nim-unittest2",
+      "downloadMethod": "git",
+      "dependencies": [],
+      "checksums": {
+        "sha1": "a14b3648dc8bbbaefd0b16d9567b567cc264b042"
+      }
+    }
+  },
+  "tasks": {}
+}

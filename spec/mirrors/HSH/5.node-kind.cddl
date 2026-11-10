@@ -1,0 +1,19 @@
+node-kind =
+    "map" /
+    "field" /
+    "absent" /
+    "list" /
+    "list-chunk" /
+    "packed-scalar-list-chunk" /
+    "tuple" /
+    "tuple-element" /
+    "choice" /
+    "scalar" /
+    "bstr" /
+    "bstr-direct" /
+    "bstr-chunk" /
+    "tstr" /
+    "tstr-direct" /
+    "tstr-chunk" /
+    "reference-value" /
+    "branch"

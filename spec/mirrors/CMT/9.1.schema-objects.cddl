@@ -1,0 +1,102 @@
+normalized-schema-root = {
+    0: "schema-root",
+    1: semantic-commitment-model-revision,
+    2: schema-namespace,
+    3: [* schema-declaration],
+    4: [* schema-root],       ; implemented interface roots
+}
+
+schema-import = {
+    0: schema-root,
+    1: schema-subtree-root,
+}
+
+schema-declaration-kind =
+    "type" / "method" / "method-request" / "method-response" / "event"
+
+schema-declaration = {
+    0: schema-declaration-kind,
+    1: qualified-name,
+    2: schema-declaration-body,
+}
+
+schema-declaration-body = schema-node / method-declaration
+
+method-declaration = {
+    0: "method",
+    1: qualified-name,       ; request declaration name
+    2: qualified-name,       ; response declaration name
+}
+
+schema-node =
+    primitive-schema /
+    literal-schema /
+    map-schema /
+    list-schema /
+    tuple-schema /
+    choice-schema /
+    reference-schema
+
+primitive-schema = {
+    0: "primitive",
+    1: scalar-kind,
+    ? 2: schema-constraint,
+}
+
+literal-schema = {
+    0: "literal",
+    1: scalar-kind,
+    2: scalar-data,
+}
+
+schema-constraint = size-constraint
+
+size-constraint = {
+    0: "size",
+    1: uint64,       ; minimum size
+    2: uint64,       ; maximum size
+}
+
+map-schema = {
+    0: "map",
+    1: [* schema-field],
+}
+
+schema-field = {
+    0: field-name,
+    1: bool,          ; true if optional
+    2: schema-node,
+}
+
+list-schema = {
+    0: "list",
+    1: schema-node,
+}
+
+tuple-schema = {
+    0: "tuple",
+    1: [* schema-node],
+}
+
+choice-schema = {
+    0: "choice",
+    1: [* schema-node],
+}
+
+reference-schema = local-reference-schema / imported-reference-schema
+
+local-reference-schema = {
+    0: "local-reference",
+    1: qualified-name,       ; referenced local type declaration name
+}
+
+imported-reference-schema = {
+    0: "imported-reference",
+    1: schema-import,
+}
+
+scalar-kind =
+    "bool" /
+    "uint8" / "uint16" / "uint32" / "uint64" /
+    "int8" / "int16" / "int32" / "int64" /
+    "tstr" / "bstr"

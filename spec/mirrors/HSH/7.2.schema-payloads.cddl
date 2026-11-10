@@ -1,0 +1,6 @@
+schema-hash-payload =
+    schema-root-payload /
+    schema-node-payload /
+    schema-structural-node-payload /
+    schema-leaf-payload /
+    schema-reference-payload

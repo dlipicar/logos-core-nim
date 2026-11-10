@@ -1,0 +1,9 @@
+hash-input = {
+    0: domain-tag,
+    1: hash-profile-id,
+    2: hash-suite-id,
+    3: semantic-commitment-model-revision,
+    4: hash-payload,
+}
+
+hash-payload = schema-hash-payload / value-hash-payload

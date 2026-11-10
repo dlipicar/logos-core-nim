@@ -1,0 +1,90 @@
+normalized-value-root = {
+    0: "value-root",
+    1: semantic-commitment-model-revision,
+    2: schema-root,
+    3: schema-subtree-root,
+    4: value-node,
+}
+
+value-node =
+    map-value /
+    field-value /
+    absent-value /
+    list-value /
+    list-element-value /
+    tuple-value /
+    tuple-element-value /
+    choice-value /
+    scalar-value /
+    reference-value
+
+map-value = {
+    0: "map",
+    1: schema-subtree-root,
+    2: [* field-value],
+}
+
+field-value = {
+    0: "field",
+    1: field-name,
+    2: schema-subtree-root,
+    3: value-node,
+}
+
+absent-value = {
+    0: "absent",
+    1: schema-subtree-root,
+}
+
+list-value = {
+    0: "list",
+    1: schema-subtree-root,
+    2: uint64,               ; list length
+    3: [* list-element-value],
+}
+
+list-element-value = {
+    0: "list-element",
+    1: uint64,               ; zero-based element index
+    2: schema-subtree-root,
+    3: value-node,
+}
+
+tuple-value = {
+    0: "tuple",
+    1: schema-subtree-root,
+    2: uint64,               ; tuple arity
+    3: [* tuple-element-value],
+}
+
+tuple-element-value = {
+    0: "tuple-element",
+    1: uint64,               ; zero-based tuple position
+    2: schema-subtree-root,
+    3: value-node,
+}
+
+choice-value = {
+    0: "choice",
+    1: schema-subtree-root,
+    2: choice-arm-index,     ; selected canonical arm index
+    3: schema-subtree-root,  ; selected arm schema identity
+    4: value-node,
+}
+
+scalar-value = {
+    0: "scalar",
+    1: schema-subtree-root,
+    2: scalar-kind,
+    3: scalar-data,
+}
+
+reference-value = {
+    0: "reference-value",
+    1: schema-subtree-root,  ; referring schema location
+    2: schema-root,          ; complete referenced schema root
+    3: schema-subtree-root,  ; referenced declaration subtree root
+    4: value-node,
+}
+
+scalar-data = bool / uint64 / int64 / tstr / bstr

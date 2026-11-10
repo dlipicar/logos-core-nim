@@ -1,0 +1,167 @@
+value-root-payload = {
+    0: "value-root",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: root-child-record,
+}
+
+map-payload = {
+    0: "map",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: uint64,            ; field count
+    4: [* child-record],  ; field records or branch records
+}
+
+field-payload = {
+    0: "field",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: field-name,
+    4: root-child-record,
+}
+
+absent-payload = {
+    0: "absent",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: field-name,
+}
+
+list-payload = {
+    0: "list",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: schema-subtree-root, ; element schema identity
+    4: uint64,              ; list length
+    5: [* child-record],    ; element, range-chunk, or branch records
+}
+
+list-chunk-payload = {
+    0: "list-chunk",
+    1: schema-root,
+    2: schema-subtree-root, ; list schema identity
+    3: schema-subtree-root, ; element schema identity
+    4: uint64,              ; chunk start element index
+    5: uint64,              ; element count in this chunk
+    6: [* child-record],    ; ordered element records
+}
+
+packed-scalar-list-chunk-payload = {
+    0: "packed-scalar-list-chunk",
+    1: schema-root,
+    2: schema-subtree-root, ; list schema identity
+    3: schema-subtree-root, ; element schema identity
+    4: scalar-kind,
+    5: uint64,              ; chunk start element index
+    6: uint64,              ; element count in this chunk
+    7: [* scalar-data],     ; ordered scalar values
+}
+
+scalar-data = bool / uint64 / int64 / tstr / bstr
+
+tuple-payload = {
+    0: "tuple",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: uint64,            ; tuple arity
+    4: [* child-record],  ; tuple-position or branch records
+}
+
+tuple-element-payload = {
+    0: "tuple-element",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: uint64,            ; zero-based tuple position
+    4: root-child-record,
+}
+
+choice-payload = {
+    0: "choice",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: choice-arm-index,     ; selected canonical arm index
+    4: schema-subtree-root,  ; selected arm schema identity
+    5: child-record,
+}
+
+scalar-payload = {
+    0: "scalar",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: scalar-kind,
+    4: scalar-data,
+}
+
+bstr-payload = {
+    0: "bstr",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: uint64,          ; total byte length
+    4: [* child-record],  ; byte-range chunk or branch records
+}
+
+bstr-direct-payload = {
+    0: "bstr-direct",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: uint64,  ; total byte length
+    4: bstr,
+}
+
+bstr-chunk-payload = {
+    0: "bstr-chunk",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: uint64,  ; total byte length
+    4: uint64,  ; chunk start byte offset
+    5: uint64,  ; byte count in this chunk
+    6: bstr,
+}
+
+tstr-payload = {
+    0: "tstr",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: uint64,          ; total UTF-8 byte length
+    4: [* child-record],  ; byte-range chunk or branch records
+}
+
+tstr-direct-payload = {
+    0: "tstr-direct",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: uint64,  ; total UTF-8 byte length
+    4: tstr,
+}
+
+tstr-chunk-payload = {
+    0: "tstr-chunk",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: uint64,  ; total UTF-8 byte length
+    4: uint64,  ; chunk start byte offset
+    5: uint64,  ; byte count in this chunk
+    6: bstr,    ; exact UTF-8 bytes in this chunk
+}
+
+reference-value-payload = {
+    0: "reference-value",
+    1: schema-root,
+    2: schema-subtree-root,  ; referring schema location
+    3: schema-root,          ; referenced schema root
+    4: schema-subtree-root,  ; referenced schema subtree root
+    5: root-child-record,
+}
+
+branch-payload = {
+    0: "branch",
+    1: schema-root,
+    2: schema-subtree-root,
+    3: branch-parent-kind,
+    4: uint64,             ; start base-record index
+    5: uint64,             ; represented base-record count
+    6: [* child-record],   ; child or child-branch records
+}
+
+branch-parent-kind = "map" / "list" / "tuple" / "bstr" / "tstr"

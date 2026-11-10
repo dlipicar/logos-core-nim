@@ -1,0 +1,16 @@
+recursive.branch = {
+  node: recursive.node,
+}
+
+recursive.left = {
+  ? right: recursive.right,
+}
+
+recursive.node = {
+  ? next: recursive.node,
+  value: uint64,
+}
+
+recursive.right = {
+  ? left: recursive.left,
+}

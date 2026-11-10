@@ -1,0 +1,11 @@
+semantic-commitment-model-revision = tstr
+schema-namespace = tstr
+qualified-name = tstr
+field-name = tstr
+scalar-kind = tstr
+choice-arm-index = uint64
+schema-root = bstr
+schema-subtree-root = bstr
+schema-leaf-hash = bstr
+uint64 = uint .size 8
+int64 = -9223372036854775808..9223372036854775807

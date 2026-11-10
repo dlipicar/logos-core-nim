@@ -1,0 +1,30 @@
+# Claim status of each section of spec-module-commitment-model.md.
+# The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
+#   claimed               every requirement unit in it needs a test tagged [CMT-NNNN]
+#   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   informative           no requirements to test
+#   out-of-scope:<why>    normative, but not this repository's to implement
+
+default = "claimed"
+
+[sections]
+# The schema side: construction, identity, imports, revision, schema data shapes.
+"§1" = "claimed"
+"§2" = "claimed"
+"§3" = "claimed"
+"§4" = "claimed"
+"§5" = "claimed"
+"§6" = "claimed"
+"§9" = "claimed"
+"§9.1" = "claimed"
+"§9.2" = "claimed"
+"App A" = "claimed"
+# The value side: value trees decoded under a schema and semantic paths.
+"§7" = "claimed"
+"§8" = "claimed"
+"§9.3" = "claimed"
+"§9.4" = "claimed"
+"§10" = "claimed"
+"App B" = "claimed"
+"References" = "informative"
+"Copyright" = "informative"

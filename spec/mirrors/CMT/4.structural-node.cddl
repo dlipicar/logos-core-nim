@@ -1,0 +1,8 @@
+schema-structural-node-payload = {
+    0: "schema-structural-node",
+    1: semantic-commitment-model-revision,
+    2: schema-declaration-kind,
+    3: qualified-name,       ; nearest named declaration
+    4: schema-node-path,
+    5: schema-node,
+}

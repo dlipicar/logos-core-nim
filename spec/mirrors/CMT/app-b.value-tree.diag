@@ -1,0 +1,23 @@
+{
+  0: "value-root",
+  1: "logos.commitment-model.2026-08",
+  2: h'...schema-root...',
+  3: h'...demo.ping_response-subtree-root...',
+  4: {
+    0: "map",
+    1: h'...demo.ping_response-subtree-root...',
+    2: [
+      {
+        0: "field",
+        1: "ok",
+        2: h'...ok-field-schema-identity...',
+        3: {
+          0: "scalar",
+          1: h'...ok-field-schema-identity...',
+          2: "bool",
+          3: true,
+        },
+      },
+    ],
+  },
+}

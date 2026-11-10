@@ -1,0 +1,119 @@
+{
+  0: "schema-root",
+  1: "logos.commitment-model.2026-08",
+  2: "storage",
+  3: [
+    {
+      0: "type",
+      1: "storage.blob_hash",
+      2: {
+        0: "primitive",
+        1: "bstr",
+        2: {
+          0: "size",
+          1: 32,
+          2: 32,
+        },
+      },
+    },
+    {
+      0: "event",
+      1: "storage.changed_event",
+      2: {
+        0: "map",
+        1: [
+          {
+            0: "cid",
+            1: false,
+            2: {
+              0: "local-reference",
+              1: "storage.cid",
+            },
+          },
+          {
+            0: "digest",
+            1: false,
+            2: {
+              0: "local-reference",
+              1: "storage.blob_hash",
+            },
+          },
+        ],
+      },
+    },
+    {
+      0: "type",
+      1: "storage.cid",
+      2: {
+        0: "primitive",
+        1: "tstr",
+        2: {
+          0: "size",
+          1: 1,
+          2: 128,
+        },
+      },
+    },
+    {
+      0: "method",
+      1: "storage.exists",
+      2: {
+        0: "method",
+        1: "storage.exists_request",
+        2: "storage.exists_response",
+      },
+    },
+    {
+      0: "method-request",
+      1: "storage.exists_request",
+      2: {
+        0: "map",
+        1: [
+          {
+            0: "key",
+            1: false,
+            2: {
+              0: "local-reference",
+              1: "storage.lookup_key",
+            },
+          },
+        ],
+      },
+    },
+    {
+      0: "method-response",
+      1: "storage.exists_response",
+      2: {
+        0: "map",
+        1: [
+          {
+            0: "exists",
+            1: false,
+            2: {
+              0: "primitive",
+              1: "bool",
+            },
+          },
+        ],
+      },
+    },
+    {
+      0: "type",
+      1: "storage.lookup_key",
+      2: {
+        0: "choice",
+        1: [
+          {
+            0: "local-reference",
+            1: "storage.cid",
+          },
+          {
+            0: "local-reference",
+            1: "storage.blob_hash",
+          },
+        ],
+      },
+    },
+  ],
+  4: [],
+}

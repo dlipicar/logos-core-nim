@@ -1,0 +1,56 @@
+schema-root-payload = normalized-schema-root
+
+schema-node-payload = {
+    0: "schema-node",
+    1: semantic-commitment-model-revision,
+    2: qualified-name,
+    3: schema-declaration-kind,
+    4: schema-declaration-body,
+}
+
+schema-structural-node-payload = {
+    0: "schema-structural-node",
+    1: semantic-commitment-model-revision,
+    2: schema-declaration-kind,
+    3: qualified-name,
+    4: schema-node-path,
+    5: schema-node,
+}
+
+schema-leaf-payload = {
+    0: "schema-leaf",
+    1: semantic-commitment-model-revision,
+    2: schema-declaration-kind,
+    3: qualified-name,       ; nearest named declaration
+    4: schema-node-path,
+    5: schema-node,          ; leaf node
+}
+
+schema-reference-payload = schema-import
+
+schema-node-path = [* schema-node-path-segment]
+
+schema-node-path-segment =
+    schema-field-segment /
+    schema-list-element-segment /
+    schema-tuple-position-segment /
+    schema-choice-arm-segment
+
+schema-field-segment = {
+    0: "field",
+    1: field-name,
+}
+
+schema-list-element-segment = {
+    0: "list-element",
+}
+
+schema-tuple-position-segment = {
+    0: "tuple-position",
+    1: uint64,
+}
+
+schema-choice-arm-segment = {
+    0: "choice-arm",
+    1: choice-arm-index,
+}

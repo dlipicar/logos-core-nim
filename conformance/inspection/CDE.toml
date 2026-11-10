@@ -1,0 +1,26 @@
+# cdCDDLe requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["CDE-0009"]
+reason = "BCP 14 boilerplate: defines how the other units are read; it has no behaviour of its own."
+
+[[item]]
+ids = ["CDE-0027"]
+reason = "Addressed to consumers. CddlDocument has no root field; the COMMITMENT layer selects rules by bound name (src/logos_core/cddl/model.nim)."
+
+[[item]]
+ids = ["CDE-0064", "CDE-0079"]
+reason = "No structural-equivalence view exists in this repository; the name-preserving model is the only one src/logos_core/cddl exposes."
+
+[[item]]
+ids = ["CDE-0065", "CDE-0066"]
+reason = "src/logos_core/cddl derives no identifier or hash from canonical bytes; hashing belongs to the COMMITMENT and HASH layers, which define their own domains."
+
+[[item]]
+ids = ["CDE-0078"]
+reason = "No expanded view that follows references exists in src/logos_core/cddl; references are stored by name and never followed."
+
+[[item]]
+ids = ["CDE-0134"]
+reason = "Canonicalization takes only the source text and the external scope (parseCddl); no tool version, date, file name or other metadata is an input."

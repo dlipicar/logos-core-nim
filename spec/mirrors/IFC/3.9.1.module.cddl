@@ -1,0 +1,20 @@
+; -- metadata --
+_module = "meter_module"
+
+meter.changed_event = {
+  value: uint64,
+}
+
+meter.reading = {
+  ? label: tstr,
+  value: uint64,
+}
+
+meter.read_request = {
+  channel: uint32,
+}
+
+meter.read_response = {
+  label: tstr .size (1..64),
+  reading: meter.reading,
+}

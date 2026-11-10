@@ -1,0 +1,51 @@
+{
+  0: "schema-root",
+  1: "logos.commitment-model.2026-08",
+  2: "demo",
+  3: [
+    {
+      0: "method",
+      1: "demo.ping",
+      2: {
+        0: "method",
+        1: "demo.ping_request",
+        2: "demo.ping_response",
+      },
+    },
+    {
+      0: "method-request",
+      1: "demo.ping_request",
+      2: {
+        0: "map",
+        1: [
+          {
+            0: "nonce",
+            1: false,
+            2: {
+              0: "primitive",
+              1: "uint64",
+            },
+          },
+        ],
+      },
+    },
+    {
+      0: "method-response",
+      1: "demo.ping_response",
+      2: {
+        0: "map",
+        1: [
+          {
+            0: "ok",
+            1: false,
+            2: {
+              0: "primitive",
+              1: "bool",
+            },
+          },
+        ],
+      },
+    },
+  ],
+  4: [],
+}

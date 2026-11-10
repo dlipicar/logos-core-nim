@@ -1,0 +1,165 @@
+; -- Hello --
+; Peer identification, authorization, and contract binding.
+; Stream bindings use Hello during connection establishment.
+
+logos.transport.hello = {
+    0:              logos.transport.message-kind-hello,
+    module:         logos.transport.module-name,
+    token:          logos.transport.authorization-material,
+    schema:         logos.schema_commitment,
+}
+
+logos.transport.payload-commitment = {
+    schema_subtree_root: logos.transport.schema-subtree-root,
+    value_root:          logos.transport.value-root,
+}
+
+
+; -- Request --
+; A method call. Params is a CBOR map whose concrete schema is defined
+; by the module's .cddl file (see LOGOS-MODULE-INTERFACE section 1.4).
+; The method field carries the bare method name defined by
+; LOGOS-MODULE-INTERFACE.
+; It does not carry the schema namespace or schema root.
+; The established provider session supplies the selected provider,
+; selected contract, consumer, route, and allowed method roots.
+; The transport layer uses a generic map type here; schema validation
+; happens at the module layer against the concrete request type.
+
+logos.transport.request = {
+    0:          logos.transport.message-kind-request,
+    id:         logos.transport.call-id,
+    method:     logos.transport.method-name,
+    params:     { * tstr => any },
+    commitment: logos.transport.payload-commitment,
+}
+
+
+; -- Response --
+; Reply to a Request. Exactly one of "result" or "error" MUST be present.
+; The result map's concrete schema is defined by the module's .cddl file.
+; Schema validation happens at the module layer.
+;
+; CDDL cannot express "exactly one of two optional fields" directly.
+; We use two variants in a choice:
+
+logos.transport.response = logos.transport.response-ok / logos.transport.response-err
+
+logos.transport.response-ok = {
+    0:          logos.transport.message-kind-response,
+    id:         logos.transport.call-id,
+    result:     { * tstr => any },
+    commitment: logos.transport.payload-commitment,
+}
+
+logos.transport.response-err = {
+    0:     logos.transport.message-kind-response,
+    id:    logos.transport.call-id,
+    error: logos.transport.error-payload,
+}
+
+
+; -- Subscribe --
+; Register interest in a named event.
+
+logos.transport.subscribe = {
+    0:     logos.transport.message-kind-subscribe,
+    id:    logos.transport.subscription-id,
+    event: logos.transport.event-name,
+}
+
+
+; -- Unsubscribe --
+
+logos.transport.unsubscribe = {
+    0:  logos.transport.message-kind-unsubscribe,
+    id: logos.transport.subscription-id,
+}
+
+
+; -- Subscription Result --
+; Complete one Subscribe or Unsubscribe operation.
+
+logos.transport.subscription-operation =
+      logos.transport.message-kind-subscribe
+    / logos.transport.message-kind-unsubscribe
+
+logos.transport.subscription-result =
+      logos.transport.subscription-result-ok
+    / logos.transport.subscription-result-err
+
+logos.transport.subscription-result-ok = {
+    0:         logos.transport.message-kind-subscription-result,
+    id:        logos.transport.subscription-id,
+    operation: logos.transport.subscription-operation,
+}
+
+logos.transport.subscription-result-err = {
+    0:         logos.transport.message-kind-subscription-result,
+    id:        logos.transport.subscription-id,
+    operation: logos.transport.subscription-operation,
+    error:     logos.transport.error-payload,
+}
+
+
+; -- Event --
+; Async event notification to a subscriber. Data is a CBOR map whose
+; concrete schema is defined by the module's .cddl file (see
+; LOGOS-MODULE-INTERFACE section 1.5). Schema validation at module layer.
+
+logos.transport.event = {
+    0:          logos.transport.message-kind-event,
+    sub:        logos.transport.subscription-id,
+    event:      logos.transport.event-name,
+    data:       { * tstr => any },
+    commitment: logos.transport.payload-commitment,
+}
+
+
+; -- ProtocolError message --
+; Protocol-level error not tied to a specific Request.
+
+logos.transport.protocol-error = {
+    0:        logos.transport.message-kind-error,
+    code:     logos.error_code,
+    ? message: tstr .size (0..512),
+    ? detail: logos.error_detail,
+}
+
+
+; -- Cancel --
+; Abort an in-flight request.
+
+logos.transport.cancel = {
+    0:  logos.transport.message-kind-cancel,
+    id: logos.transport.call-id,
+}
+
+
+; -- Shared status codes --
+; Shared status codes and encoded detail are defined by
+; LOGOS-MODULE-INTERFACE Section 5.1.
+; Transport defines no additional status-code registry.
+
+logos.transport.error-payload = {
+    code:     logos.error_code,
+    ? message: tstr .size (0..512),
+    ? detail: logos.error_detail,
+}
+
+; Defined by LOGOS-MODULE-INTERFACE Section 5.1:
+; logos.error_code =
+;     0 / 1 / 2 / 3 / 4 / 5 / 6 / 7 / 8 / 9
+
+
+; -- Top-level message union --
+
+logos.transport.message = logos.transport.hello
+        / logos.transport.request
+        / logos.transport.response
+        / logos.transport.subscribe
+        / logos.transport.unsubscribe
+        / logos.transport.subscription-result
+        / logos.transport.event
+        / logos.transport.protocol-error
+        / logos.transport.cancel

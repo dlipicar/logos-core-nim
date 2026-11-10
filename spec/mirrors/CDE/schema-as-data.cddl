@@ -1,0 +1,126 @@
+cdcddle-document = {
+    0: 0,
+    1: [+ cdcddle-type-rule],
+    2: "cdcddle",
+}
+
+cdcddle-type-rule = {
+    0: 1,
+    1: rule-name,
+    3: cdcddle-type,
+}
+
+rule-name = tstr
+
+type-reference = {
+    0: 3,
+    1: rule-name,
+}
+
+primitive = {
+    0: 5,
+    1: primitive-name,
+}
+
+uint-literal = {
+    0: 6,
+    1: "uint",
+    2: uint,
+}
+
+nint-literal = {
+    0: 6,
+    1: "nint",
+    2: nint,
+}
+
+bool-literal = {
+    0: 6,
+    1: "bool",
+    2: bool,
+}
+
+tstr-literal = {
+    0: 6,
+    1: "tstr",
+    2: tstr,
+}
+
+bstr-literal = {
+    0: 6,
+    1: "bstr",
+    2: bstr,
+}
+
+primitive-name = "uint" / "bool" / "tstr" / "bstr"
+integer-literal = uint-literal / nint-literal
+literal = integer-literal / bool-literal / tstr-literal / bstr-literal
+
+array-type = {
+    0: 7,
+    1: cdcddle-group,
+}
+
+map-type = {
+    0: 8,
+    1: cdcddle-group,
+}
+
+group = {
+    0: 9,
+    1: [* cdcddle-member],
+}
+
+member = {
+    0: 10,
+    ? 1: member-key,
+    2: cdcddle-type,
+    ? 3: occurrence,
+}
+
+member-key = {
+    0: 21,
+    1: tstr-literal,
+}
+
+occurrence = {
+    0: 11,
+    1: 0,
+    2: 1 / "unbounded",
+}
+
+choice = {
+    0: 12,
+    1: [cdcddle-type, cdcddle-type, * cdcddle-type],
+}
+
+range = {
+    0: 13,
+    1: integer-literal,
+    2: integer-literal,
+    3: true,
+    4: true,
+}
+
+size-control-application = {
+    0: 14,
+    1: "size",
+    2: primitive,
+    3: uint-literal / range,
+}
+
+cdcddle-type =
+    type-reference /
+    primitive /
+    literal /
+    array-type /
+    map-type /
+    choice /
+    range /
+    size-control-application
+
+cdcddle-group = group
+
+cdcddle-member = member
+
+cdcddle-rule = cdcddle-type-rule
