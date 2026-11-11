@@ -55,6 +55,16 @@ jobs:
         with:
           attic-token-ci: ${{ secrets.ATTIC_TOKEN_CI }}
 
+      # nimble 0.20.1 from the dev shell segfaults on macOS when it downloads the package list
+      # itself (reproduced locally; Linux is unaffected), so the runner's curl fetches it: into
+      # ~/.nimble for `nimble lock`, and into nimbledeps/ for the local-deps steps below.
+      - name: Fetch the Nimble package list
+        run: |
+          curl -sfL --retry 3 -o "$RUNNER_TEMP/packages_official.json" \
+            https://raw.githubusercontent.com/nim-lang/packages/master/packages.json
+          mkdir -p ~/.nimble
+          cp "$RUNNER_TEMP/packages_official.json" ~/.nimble/
+
       # Regenerated from scratch and before `nimble setup`: nimble 0.20.1 empties an existing lock
       # when run over it, and crashed when local deps were already installed.
       - name: nimble.lock matches logos_core.nimble
@@ -66,6 +76,8 @@ jobs:
       # Nix only supplies nim and nimble here; Nimble resolves and fetches the dependencies.
       - name: nimble setup and test
         run: |
+          mkdir -p nimbledeps
+          cp "$RUNNER_TEMP/packages_official.json" nimbledeps/
           nix develop -c nimble setup -l
           nix develop -c nimble test
           nix develop -c nimble test_refc
