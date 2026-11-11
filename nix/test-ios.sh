@@ -107,7 +107,13 @@ device=$(jq -r --arg r "$runtime" '.runtimes[] | select(.identifier == $r)
 udid=$(xcrun simctl create "logos-core-nim-test-$$" "$device" "$runtime")
 echo "test-ios: booting $device on $runtime" >&2
 xcrun simctl boot "$udid"
-xcrun simctl bootstatus "$udid" -b >/dev/null
+# A first boot can stall in data migration (seen for hours in the iOS 27.2
+# address-book migrator) while launchd already runs spawned programs, which is
+# all the suites need. Wait a bounded time, then run them anyway: a simulator
+# that cannot spawn fails every suite.
+if ! timeout 300 xcrun simctl bootstatus "$udid" -b >/dev/null; then
+  echo "test-ios: the simulator did not report booted within 300 s; running the suites anyway" >&2
+fi
 
 passed=()
 failed=()
