@@ -774,6 +774,134 @@ logos.package_manager.manifest_commitment = {
   hash_suite: "logos.hash-suite.blake3-256",
 }
 """
+  # spec-module-package-manager.md §5, spec/mirrors/PKG/5.package-identity.cddl
+  PackageIdentityDocument* = """
+logos.package_manager.package_identity = {
+  package: logos.package_manifest.package_name,
+  version: logos.package_manifest.package_version,
+}
+"""
+  # spec-module-package-manager.md §6, spec/mirrors/PKG/6.catalog-records.cddl
+  PackageCatalogRecordsDocument* = """
+logos.package_manager.package_catalog_entry = {
+  identity: logos.package_manager.package_identity,
+  source: logos.package_manager.package_source,
+}
+
+logos.package_manager.package_inspect_record = {
+  signer: logos.package_manager.package_signer,
+  source: logos.package_manager.package_source,
+  manifest: logos.package_manifest.manifest,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+}
+"""
+  # spec-module-package-manager.md §11, spec/mirrors/PKG/11.resolved-dependency.cddl
+  PackageResolvedDependencyDocument* = """
+logos.package_manager.resolved_package_dependency = {
+  identity: logos.package_manager.package_identity,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+}
+"""
+  # spec-module-package-manager.md §15, spec/mirrors/PKG/15.methods.cddl
+  PackageManagerMethodsDocument* = """
+_module = "logos_package_manager"
+
+logos.package_manager.cursor = tstr .size (1..512)
+logos.package_manager.progress_key = tstr .size (1..128)
+logos.package_manager.progress_phase =
+  "resolving" / "fetching" / "verifying" / "installing" / "removing"
+
+logos.package_manager.watch_installed_packages_request = {}
+
+logos.package_manager.watch_installed_packages_response =
+  {} /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.installed_packages_changed_event = {}
+
+logos.package_manager.operation_progress_event = {
+  progress_key: logos.package_manager.progress_key,
+  phase: logos.package_manager.progress_phase,
+  ? bytes_completed: uint64,
+  ? bytes_total: uint64,
+}
+
+logos.package_manager.list_packages_request = {
+  ? package: logos.package_manifest.package_name,
+  ? cursor: logos.package_manager.cursor,
+  ? limit: uint16,
+}
+
+logos.package_manager.list_packages_response =
+  {
+    packages: [* logos.package_manager.package_catalog_entry],
+    ? next_cursor: logos.package_manager.cursor,
+  } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.inspect_package_request = {
+  ? package: logos.package_manifest.package_name,
+  ? version: logos.package_manifest.package_version,
+  ? source: logos.package_manager.package_source,
+}
+
+logos.package_manager.inspect_package_response =
+  { inspection: logos.package_manager.package_inspect_record } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.install_package_request = {
+  package: logos.package_manifest.package_name,
+  ? version: logos.package_manifest.package_version,
+  ? source: logos.package_manager.package_source,
+  ? progress_key: logos.package_manager.progress_key,
+}
+
+logos.package_manager.install_package_response =
+  { installed: logos.package_manager.installed_package_record } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.remove_package_request = {
+  identity: logos.package_manager.package_identity,
+  ? progress_key: logos.package_manager.progress_key,
+}
+
+logos.package_manager.remove_package_response =
+  {} /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.update_package_request = {
+  current: logos.package_manager.package_identity,
+  ? target_version: logos.package_manifest.package_version,
+  ? source: logos.package_manager.package_source,
+  ? progress_key: logos.package_manager.progress_key,
+}
+
+logos.package_manager.update_package_response =
+  { installed: logos.package_manager.installed_package_record } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.list_installed_packages_request = {
+  ? package: logos.package_manifest.package_name,
+  ? cursor: logos.package_manager.cursor,
+  ? limit: uint16,
+}
+
+logos.package_manager.list_installed_packages_response =
+  {
+    packages: [* logos.package_manager.installed_package_record],
+    ? next_cursor: logos.package_manager.cursor,
+  } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.get_runtime_handoff_request = {
+  package: logos.package_manager.package_identity,
+  module: tstr .size (1..64),
+}
+
+logos.package_manager.get_runtime_handoff_response =
+  { handoff: logos.package_manager.runtime_handoff } /
+  { error: logos.package_manager.package_error }
+"""
   # spec-module-package-manager.md §14, spec/mirrors/PKG/14.package-errors.cddl
   PackageErrorsDocument* = """
 logos.package_manager.package_error = {

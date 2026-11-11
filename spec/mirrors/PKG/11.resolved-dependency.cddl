@@ -1,0 +1,4 @@
+logos.package_manager.resolved_package_dependency = {
+  identity: logos.package_manager.package_identity,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+}

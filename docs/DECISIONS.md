@@ -61,6 +61,7 @@ stops that work item until the owner answers; the answer is added here.
 | G159–G164 | Gaps found reviewing RUNTIME, CONFIG and BCP at 6a4dfa28 (TL-02, TF-08, TF-09, TF-10, a TF-06 note, TS-04) | nothing yet: each has a conformant Tier 4 interim |
 | G165 | An oversized Event from the void `logos_publish_fn`: close the subscriber's connection (TRANSPORT §2.1) or drop it (RUNTIME §7.3) (a TF-06 note, which reads it as close) | the Tier 4 publish adapter only; Tier 3 returns a typed error |
 | G166 | Key rotation: no operation moves an installed package to the new key, so it must be removed and reinstalled or re-released (TF-07) | installation and Runtime handoff (Tier 5) |
+| G167 | How an installed package reused as a dependency brings its recorded edges into a new closure; decided (a), fixed exact pins (the Fable 5.2 opinion agrees and names a fourth reading, (d), with other counters); not yet reported | nothing: the resolver follows (a) (I69) |
 | G116 | Who provides the live-acceptance host and the persistent testnet seeder | the live testnet run |
 | G151, G153, G156 | Gaps found while building Tiers 1–3, sent as ND-10, ND-12 and NP-15; not answered in 6a4dfa28, restated in `claude-spec-comments-2.md` | nothing yet: each has an interim choice in one named proc with a test |
 
@@ -111,7 +112,7 @@ Each row below also carries a *Revised* or *Settled* note. Where the code change
 12. Platforms, build, CI and tooling
 13. Implementation defaults chosen without a separate question
 14. Index
-15. Revisions and implementation choices since work started (R1–R4, I1–I68)
+15. Revisions and implementation choices since work started (R1–R4, I1–I69)
 
 ---
 
@@ -1547,6 +1548,45 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   it.
 - **Status:** OPEN, found 2026-11-10; reported as TF-07 in `claude-spec-comments-3.md` (logos-lips `68628d95`).
 
+### G167 — The recorded edges of an installed package reused as a dependency
+- **Kind:** GAP · **Specs:** PM §11 l.1287-1293 (a dependency candidate is checked against the installed
+  record of its exact identity; another commitment fails the operation), l.1292-1293 (an installed
+  candidate with that identity and commitment MAY satisfy the dependency without being materialized
+  again), l.1315 ("Source selection MUST preserve the recorded dependency edges of installed packages"),
+  l.1324-1326 (catalog changes MUST NOT alter recorded edges; one closure selects one version per name);
+  §15 l.1660-1661 (an installed package satisfies a selected dependency when its name, version and
+  commitment match the recorded resolution), l.1672 (`remove_package` checks recorded dependency
+  closures), l.1689-1690 (only for `update_package`'s root: an installed target's recorded edges must
+  equal the newly selected ones, or `dependency-unavailable`).
+- **Description:** nothing says how an installed package that the resolver reuses as a dependency brings
+  its own recorded edges into the new closure. Example: B@1.0.0 was installed when C@1.0.0 was the newest
+  C ^1.0.0, so its record holds the edge C@1.0.0; the catalog later gains C@1.1.0; installing R, which
+  needs B ^1.0.0, reaches the installed B.
+- **Options offered:** (a) the installed candidate's recorded edges are fixed exact identities and
+  commitments, not resolved again; a clash with another requirement rejects that candidate and resolution
+  backtracks *(recommended)*; (b) resolve its manifest requirements again and fail with
+  `dependency-unavailable` when the new edges differ from the recorded ones, as l.1689-1690 do for an
+  update's root; (c) resolve again and ignore the recorded edges, so R's recorded closure reaches both
+  C@1.0.0 (through B) and C@1.1.0.
+- **Independent opinion** (Fable 5.2 session, 2026-11-11, reading 6a4dfa28): (a) is the reading the text
+  supports best. A candidate is "an installed package record" (l.1280) whose entries bind exact
+  identities and commitments (l.1323), and the installed graph is the recorded one (l.1315, l.1324,
+  l.1660-1661, l.1672). (b) applies a root rule (l.1689-1690, which l.1291 leaves to the operation) to
+  dependencies: it fails while a closure exists, against l.1308-1309, and once C@1.1.0 is published no
+  operation repairs it. (c) breaks l.1325-1326 when R also requires C directly, and preserves no recorded
+  edge (l.1315). (a) still rests on reading a recorded edge as an accumulated requirement (l.1281), which
+  the text never says. A fourth reading, (d), re-resolves B afresh and backtracks over C until the
+  selected edges equal the record: same closures as (a), but C@1.1.0 counts as a consideration and an
+  attempt (l.1254-1265, which l.1270-1271 forbid to depend on local choices), and an unobtainable C@1.1.0
+  fails it with `package-unavailable` (l.1294) where (a) succeeds. So the spec must pick even between
+  (a) and (d).
+- **Decision:** (a) (owner, 2026-11-11: "I'm leaning towards A. Proceed with that option while we wait
+  for Fable's opinion"; the opinion agrees). Stated as: an installed candidate contributes its recorded
+  direct edges as exact requirements (identity and commitment), transitively; a version such an edge
+  excludes is neither inspected, considered nor charged; a clash makes the installed candidate
+  unsatisfiable and resolution backtracks. In the example, R installs with C@1.0.0. Implementation: I69.
+- **Status:** decided, found 2026-11-11; not yet sent to the spec author.
+
 ---
 
 ## 10. logosctl, logosd and the session
@@ -1968,6 +2008,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G159–G164 | Credential Store, static registration, observation scope, missing config, caller view, session reuse | GAP, **OPEN** | 6 |
 | G165 | oversized Event from the void publish callback | CONTRA, **OPEN** | 5 |
 | G166 | key rotation and installed packages | GAP, **OPEN** | 9 |
+| G167 | recorded edges of a reused installed package | GAP (decided) | 9 |
 
 ---
 
@@ -2050,3 +2091,4 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I66 | IMPL | Native ABI check codes and order (INTERFACE §2.4, §2.6, §2.9, §5.2) | `abi/checks.nim` holds what each side checks before it uses what the other hands it. Where the spec fixes the code, it is used: VERSION_MISMATCH for an unsupported version or too small an extent (l.3805-3807, l.3819), MODULE_ERROR for a null vtable, state or required operation from the binding's producer (l.3820), INVALID_PARAMS for malformed callback or option input to `prepare_call` (l.3911), MODULE_ERROR for a result and output combination a dispatch or typed-call caller rejects (l.1343, l.1764). Where the spec requires only a nonzero code or says only "reject", the same split applies: in the initialization input a null input, `runtime_control`, `invocation_access` member or (with declared events) `publish` is MODULE_ERROR, malformed configuration bytes or a non-UTF-8 `state_dir` INVALID_PARAMS; a provider invocation or caller view that breaks its rules is MODULE_ERROR; a rejected Runtime Control or route `call` combination (l.3830) and `_MODULE_init` combination (l.1635) are MODULE_ERROR. A null options or callbacks pointer counts as malformed input, INVALID_PARAMS: the text does not say whether a null options pointer means defaults (worth an editorial note). A module caller's identifier views must be nonempty UTF-8. Order: null pointer, then version, then extent, then null members, then values; the first failure is reported, so a short vtable whose later operations are null is VERSION_MISMATCH. An invalid combination or status carries no diagnostics; a valid failure status keeps its message and detail, as `checkedProviderStatus` does. Tests: the `ifc.abi-*` suites in `tests/test_abi.nim`, which also compare every struct's size, alignment and field offsets with the generated `logos_types.h`. |
 | I67 | IMPL | Validating the provider call-surface descriptor (INTERFACE §2.6 l.1680-1746) | `iface/provider.nim` checks the limits, the closed maps (no CDDL wildcard), the field types and each entry's supporting order first. It then gathers every supporting entry once, rejecting a namespace whose entries differ in document or root. The primary document, the interface documents and those supporting documents go to `acceptBinding` as one construction input set, so every §1 and §5.3 rule applies: roles, `_module` against `_MODULE_name()`, `_implements` exactness, reserved and colliding bare method names, unused supporting schemas and the duplicate interface namespace (I62). Each claimed commitment and supporting namespace is compared with its recomputed value; each entry must list exactly the supporting schemas its document uses (the primary entry: all of them); interfaces must be in derived namespace order. Last, the bytes must equal the binding's own encoding, so a check missed above cannot let a non-canonical descriptor through. `matchesContracts` compares supplied contract references with the descriptor as an optional primary root plus a set of interface roots. Not built here: calling the symbol (non-null `out_len`, the same bytes on every call), which is Tier 4. Tests: `tests/test_call_surface.nim`. |
 | I68 | IMPL | SLH-DSA-SHA2-192s package signing (R4; PM §4.3) | `crypto/slhdsa.nim` wraps the vendored slhdsa-c (`src/logos_core/crypto/slhdsa/`, commit `47451432bb04faf8217ffe8a961a75b542bf88e8`, refreshed by `tools/update-slhdsa.sh`; four C files: SHA-256, SHA-512, the SHA2 instantiation and the FIPS 205 algorithms) and exposes only SHA2-192s: pure sign and verify with a context, the internal functions for ACVP, `keyPairFromSeeds`, `generateKeyPair`. Key generation and hedged signing take a `RandomSource` (default: `std/sysrand`) and fail when it cannot supply bytes. `tests/test_slhdsa.nim` runs the NIST ACVP-Server v1.1.0.43 SHA2-192s cases extracted by `tools/extract_acvp_slhdsa.py` (10 keyGen, all 28 sigVer, 2 sigGen per group in debug and all 28 in release). The profile (`package/signing.nim`): protected header exactly `{4: kid}`, any `alg` refused before the signature is checked, `external_aad` = the mirrored profile id, pure SLH-DSA with the empty context over the Sig_structure, 16,224-byte signatures and 48-byte keys taken as given (no other length repaired). `signManifest` signs hedged and checks the signature against the key's own public key before returning it. `signerRecord` derives the §4.3 `package_signer` record; retaining and reporting it is tier 5. `lcn-pkg`: the key file is the 96-byte FIPS 205 secret key as 192 hex digits, created owner-only before the key is written; `--attach-sig` takes 16,224 bytes. `oracle/slhdsa.py` is an independent FIPS 205 SHA2-192s in Python (checked by the oracle selftest against ACVP keyGen, every sigVer verdict and two sigGen cases); it signs `tests/vectors/package/cose.json` deterministically and the Nim side must reproduce those signatures byte for byte. Signing takes about 0.8 s with this portable code (verification 0.6 ms), so tests sign as little as they can. nim-boringssl stays locked for TLS and QUIC (D28) though nothing imports it now. slhdsa-c's README calls it work in progress, not yet for production; its exported names (`sha2_256_init`, `wots_sign`, ...) are unprefixed, and a clash with another C library would fail the link. | 2026-11-10 |
+| I69 | IMPL | Catalog records and dependency resolution, sans-I/O (PM §5, §6, §11) | `package/records.nim` decodes and encodes `package_identity`, `package_source`, `package_catalog_entry`, `package_inspect_record` and `resolved_package_dependency` against the mirrored CDDL: one document headed by PM §15's `_module` rule with the §5, §4.3, §6 and §11 rules, and the §4 manifest as its supporting schema (a supporting schema may not reference another document, INTERFACE §1.1). Beyond the CDDL: identity versions are package versions, `provenance_object` differs from `object`, and an inspection record is built only from a `VerifiedPackage`; its decoder recomputes the manifest commitment. `package/resolver.nim` resolves one root over the installed records, the catalog entries and the protected limits; an `Inspector` answers eligible, ineligible or unavailable for a source record (`lgxInspector` wraps `openLgx`: a Nix source is `unsupported-source`, an archive `fetch` cannot return is unavailable). The search keeps its frames on the heap and logs nothing outside its counters. Readings of the text, none a gap: a name joins the partial closure when a candidate is bound to it, and the name limit is checked before that binding; a name's depth is the fewest edges from the root through bound packages when it is chosen, checked before any of its records is inspected; a candidate is one exact identity after eligibility and commitment selection, charged once per name and version, and an ineligible record is never charged; every catalog record of an identity is inspected, in ascending source encoding, when the identity is reached (also when it is installed, so a conflicting commitment is never skipped), and one that cannot be obtained fails the operation with `package-unavailable`; a record whose manifest names another identity than its catalog entry is ineligible (`invalid-package`); the installed-identity check follows the consideration charge and precedes the binding. The root is not a backtracking point: it counts as one name at depth 0, one consideration and one attempt, and its edges are always selected afresh (an installed root's conflict is the operation's rule); an explicit version reports its record's own error when none is eligible, an omitted one takes the highest eligible normal release, and a source whose manifest differs from the requested package or version is `invalid-request`. Installed dependencies keep their recorded edges as exact requirements, so a version they exclude is never inspected or charged (G167). Protected policy carries the limits as a map with exactly `assignment_attempts`, `candidates_per_name`, `dependency_depth` and `partial_closure_names`, each a positive integer (larger than int64 counts as int64's maximum); anything else is a configuration error. Not built: catalog documents and their refresh (G90), fetch and storage locators (G91), installation and the methods (tier 5). Tests: `tests/test_resolver.nim`; PKG §6 and §11 claimed. | 2026-11-11 |

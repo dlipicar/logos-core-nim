@@ -1,0 +1,4 @@
+logos.package_manager.package_identity = {
+  package: logos.package_manifest.package_name,
+  version: logos.package_manifest.package_version,
+}

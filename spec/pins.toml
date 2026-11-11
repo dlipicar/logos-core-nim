@@ -250,6 +250,30 @@ section = "§5"
 mirror = "PKG/5.package-records.cddl"
 code = "PackageRecordsDocument"
 
+[pkg-identity-document]
+file = "spec-module-package-manager.md"
+section = "§5"
+mirror = "PKG/5.package-identity.cddl"
+code = "PackageIdentityDocument"
+
+[pkg-catalog-records-document]
+file = "spec-module-package-manager.md"
+section = "§6"
+mirror = "PKG/6.catalog-records.cddl"
+code = "PackageCatalogRecordsDocument"
+
+[pkg-resolved-dependency-document]
+file = "spec-module-package-manager.md"
+section = "§11"
+mirror = "PKG/11.resolved-dependency.cddl"
+code = "PackageResolvedDependencyDocument"
+
+[pkg-methods-document]
+file = "spec-module-package-manager.md"
+section = "§15"
+mirror = "PKG/15.methods.cddl"
+code = "PackageManagerMethodsDocument"
+
 [pkg-errors-document]
 file = "spec-module-package-manager.md"
 section = "§14"

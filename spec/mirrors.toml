@@ -520,12 +520,38 @@ out = "PKG/4.3.signing-profile.cddl"
 file = "spec-module-package-manager.md"
 section = "§4.3"
 
+# PM §5: the package identity a catalog entry and a resolved dependency name.
+[[mirror]]
+out = "PKG/5.package-identity.cddl"
+file = "spec-module-package-manager.md"
+section = "§5"
+ordinal = 1
+
 # PM §5: the package records; `manifest_commitment` is the signed claim's field.
 [[mirror]]
 out = "PKG/5.package-records.cddl"
 file = "spec-module-package-manager.md"
 section = "§5"
 ordinal = 2
+
+# PM §6: catalog entries and inspection records.
+[[mirror]]
+out = "PKG/6.catalog-records.cddl"
+file = "spec-module-package-manager.md"
+section = "§6"
+
+# PM §11: the resolved dependency edge an installed record keeps.
+[[mirror]]
+out = "PKG/11.resolved-dependency.cddl"
+file = "spec-module-package-manager.md"
+section = "§11"
+
+# PM §15: the Package Manager module document; its `_module` rule heads the
+# record schema the package/ modules validate against.
+[[mirror]]
+out = "PKG/15.methods.cddl"
+file = "spec-module-package-manager.md"
+section = "§15"
 
 # PM §14: the package error codes the package/ modules report.
 [[mirror]]

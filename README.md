@@ -121,7 +121,7 @@ Evaluation fails while the JSON and `nimble.lock` disagree.
 | `src/logos_core/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
 | `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator and its runtime; the `lcn-gen` CLI. |
 | `src/logos_core/transport/` | TRANSPORT without I/O: envelope codec, framing, Hello, tickets, sessions, the schema boundary. |
-| `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; the `lcn-pkg` CLI. |
+| `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; catalog and inspection records (`records.nim`) and the sans-I/O dependency resolver (`resolver.nim`); the `lcn-pkg` CLI. |
 | `src/logos_core/crypto/slhdsa.nim`, `src/logos_core/base/nfc.nim` | SLH-DSA-SHA2-192s over slhdsa-c (pure and internal functions only); Unicode NFC for LGX paths. |
 | `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. `tests/generated/` is `lcn-gen` output. |
 | `spec/mirrors/`, `spec/mirrors.toml` | Verbatim copies of the spec blocks the code and tests are built from. |

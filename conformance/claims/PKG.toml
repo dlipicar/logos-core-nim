@@ -14,9 +14,11 @@ default = "deferred:tier-5"
 # Phase 3 (tier 3): the manifest, its value commitment, package-signing trust
 # input, the COSE_Sign1 profile and LGX archives, as package artifacts and the
 # lcn-pkg producer tools. At 6a4dfa28 PM-06 replaced Ed25519 with SLH-DSA-SHA2-192s
-# (§4.3), built over the vendored slhdsa-c (DECISIONS R4, I68). Fetch, catalogs, the
-# storage role, installation, the resolver, Runtime handoffs and the methods are
-# tier 5; configuration schema validation is tier 4 with CONFIG.
+# (§4.3), built over the vendored slhdsa-c (DECISIONS R4, I68). Promoted from tier
+# 5 as sans-I/O: §6 catalog entries and inspection records, and §11 resolution
+# (I69, G167). Fetch, catalog documents, the storage role, installation, Runtime
+# handoffs and the methods are tier 5; configuration schema validation is tier 4
+# with CONFIG.
 "§2" = "claimed"
 "§3" = "claimed"
 "§4" = "claimed"
@@ -26,11 +28,12 @@ default = "deferred:tier-5"
 "§4.4" = "deferred:tier-5"
 "§4.5" = "deferred:tier-5"
 "§5" = "claimed"
+"§6" = "claimed"
 "§7.1" = "claimed"
 "§8" = "claimed"
 "§9" = "claimed"
 "§10" = "deferred:tier-5"
-"§11" = "deferred:tier-5"
+"§11" = "claimed"
 "§14" = "deferred:tier-5"
 "§16" = "claimed"
 "§17" = "deferred:tier-4"
@@ -108,10 +111,15 @@ default = "deferred:tier-5"
 "PKG-0287" = "deferred:tier-4"
 "PKG-0288" = "deferred:tier-4"
 "PKG-0289" = "deferred:tier-4"
-# §11: the manifest's dependency and permission rules are built; resolution is not.
-"PKG-0296" = "claimed"
-"PKG-0297" = "claimed"
-"PKG-0298" = "claimed"
-"PKG-0334" = "claimed"
+# §6: catalog documents, their acquisition and the storage locators are fetch's
+# (G90, G91); presentation contracts belong to applications.
+"PKG-0472" = "deferred:tier-5"
+"PKG-0473" = "deferred:tier-5"
+"PKG-0474" = "deferred:tier-5"
+"PKG-0475" = "out-of-scope:a requirement on application catalog contracts"
+# §11: a permission package producers have; how a permission's reason leaves its
+# Capability Authority scope unchanged is CA's mapping (tier 4).
+"PKG-0502" = "out-of-scope:a permission for package producers"
+"PKG-0335" = "deferred:tier-4"
 # §14: the error codes are built; method results are not.
 "PKG-0358" = "claimed"

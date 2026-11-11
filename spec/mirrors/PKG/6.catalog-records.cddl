@@ -1,0 +1,11 @@
+logos.package_manager.package_catalog_entry = {
+  identity: logos.package_manager.package_identity,
+  source: logos.package_manager.package_source,
+}
+
+logos.package_manager.package_inspect_record = {
+  signer: logos.package_manager.package_signer,
+  source: logos.package_manager.package_source,
+  manifest: logos.package_manifest.manifest,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+}
