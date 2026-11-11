@@ -57,15 +57,19 @@ stops that work item until the owner answers; the answer is added here.
 | ID | Question | Blocks |
 |---|---|---|
 | R4 | Which SLH-DSA-SHA2-192s (FIPS 205) implementation replaces Ed25519 (PM-06), and whether to fetch the NIST ACVP vectors | PM §4.3 package signing, PM §4.5 provenance, CA §9.1 call evidence, `lcn-pkg` keygen/sign/verify; the code signs with Ed25519 meanwhile |
-| G157 | What a line break inside a single-quoted cdCDDLe byte string contributes | nothing: interim reject (`unsupported`) |
-| G158 | The "dedicated common-name projection" INTERFACE §5.2 names but never defines | the generated common section of `logos_types.h` (interim: stem = local name) |
-| G159–G164 | Gaps found reviewing RUNTIME, CONFIG and BCP at 6a4dfa28 | nothing yet: each has a conformant Tier 4 interim |
-| G165 | An oversized Event from the void `logos_publish_fn`: close the subscriber's connection (TRANSPORT §2.1) or drop it (RUNTIME §7.3) | the Tier 4 publish adapter only; Tier 3 returns a typed error |
+| G157 | What a line break inside a single-quoted cdCDDLe byte string contributes (TF-11) | nothing: interim reject (`unsupported`) |
+| G158 | The "dedicated common-name projection" INTERFACE §5.2 names but never defines (TL-01) | the generated common section of `logos_types.h` (interim: stem = local name) |
+| G159–G164 | Gaps found reviewing RUNTIME, CONFIG and BCP at 6a4dfa28 (TL-02, TF-08, TF-09, TF-10, a TF-06 note, TS-04) | nothing yet: each has a conformant Tier 4 interim |
+| G165 | An oversized Event from the void `logos_publish_fn`: close the subscriber's connection (TRANSPORT §2.1) or drop it (RUNTIME §7.3) (a TF-06 note, which reads it as close) | the Tier 4 publish adapter only; Tier 3 returns a typed error |
+| G166 | Key rotation: no operation moves an installed package to the new key, so it must be removed and reinstalled or re-released (TF-07) | installation and Runtime handoff (Tier 5) |
 | G58 claim | Whether Module Hosts claim same-identity protection (distinct OS identities) or document that they do not (NR-14) | the unix-stream transport with I/O (Tier 4) |
 | D13, D27 | Re-decide after RT-01 (logosctl as an admitted local module) and SO-08 (build mode alone must not enable development trust) | logosctl and logosd (Tier 4b) |
 | G137 | Trust-input continuity: how compiled-in and operator anchors share one protected revision and where its high-water mark persists (PM §4.1, NP-10) | protected trust provisioning (Tier 4/5) |
 | G116 | Who provides the live-acceptance host and the persistent testnet seeder | the live testnet run |
-| G151, G153, G156 | Gaps found while building Tiers 1–3, sent as ND-10, ND-12 and NP-15; not answered in 6a4dfa28 | nothing yet: each has an interim choice in one named proc with a test |
+| G151, G153, G156 | Gaps found while building Tiers 1–3, sent as ND-10, ND-12 and NP-15; not answered in 6a4dfa28, restated in `claude-spec-comments-2.md` | nothing yet: each has an interim choice in one named proc with a test |
+
+IDs in parentheses are where each item was reported: `claude-spec-comments-3.md` at logos-lips `68628d95`
+(branch `draft/logos-core-module-specs-discussion`). That report names no DECISIONS IDs.
 
 No longer open at 6a4dfa28: G5 (implementation-defined, PM-01), G49 (answered, CA-03), G93 (answered,
 PM-11), G152 (settled as our interim), G154 (settled by INTERFACE §2.3 l.1077), G155 (moot: placement is
@@ -90,7 +94,7 @@ Each row below also carries a *Revised* or *Settled* note. Where the code change
 | Re-decide | D13 (RT-01), D27 (SO-08) |
 | Transport, settled as chosen | G30 (plus a silent close on a first ProtocolError), G33, G34, G35, G36, G37 (order restated, no code change) |
 | Transport, settled differently: code changed | G31 (late replies validated), G32 (overlap closes, ids stay used); I51–I59 |
-| Transport, to decide before Tier 4 | G58 (the same-identity claim), G107 (direction confirmed, more requirements), G165 (new) |
+| Transport, to decide before Tier 4 | G58 (the same-identity claim), G107 (direction confirmed, more requirements), G165 (new; a TF-06 note) |
 | INTERFACE, settled as chosen | G64, G66, G68, G70, G71 (helper names implementation-defined), G139 (both mapping directions); G154 by spec text (§2.3 l.1077) |
 | INTERFACE, superseded by C mapping revision 3: code changed | G62, G63, G65, G69, G72 (retired), G155 (moot); I18 reversed (ND-08); I23 loses the NX-04 interim; I25, I26, I27 rewritten; I60–I63 |
 | INTERFACE, superseded and not yet built | G67 (response owners, IF-07) |
@@ -551,6 +555,8 @@ below would not break our own consistency, only interoperability with another im
 - **Interim (D9):** (a). No mirrored schema uses it: every `.size` in the specs is on `uint`, `tstr` or
   `bstr` directly.
 - **6a4dfa28:** not answered (ND-10 awaits the owner's follow-up). Interim unchanged.
+- **Restated:** against 6a4dfa28 in `claude-spec-comments-2.md`, "Items without a response" (logos-lips
+  `68628d95`).
 
 ### G152 — Identity of a leaf-bodied declaration's own node
 - **Kind:** GAP, **OPEN** (found while building; reported as ND-11 in `claude-spec-comments-2.md`, logos-lips `e7c53b7b`) · **Specs:** COMMITMENT §4 l.560-562
@@ -581,7 +587,9 @@ below would not break our own consistency, only interoperability with another im
   which bytes the source line break contributes (LF, CRLF as written, or nothing), so two parsers can give
   the same source different literal bytes and different schema roots.
 - **Interim:** reject it as `unsupported` (`cddl/syntax.nim`, vector
-  `unsupported-bytes-quoted-line-break`). **Status:** OPEN, found 2026-11-10; to be raised with the owner.
+  `unsupported-bytes-quoted-line-break`). **Status:** OPEN, found 2026-11-10; reported as TF-11 in
+  `claude-spec-comments-3.md` (logos-lips `68628d95`), rated minor there: in a Logos schema document a
+  byte-string literal is valid only in `_implements` (COMMITMENT l.396-397).
 
 ## 3. Interface: schemas, C mapping, code generation
 
@@ -746,6 +754,8 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
   that passes through a map, tuple, list or choice is untouched (it is the recursion §2.3 maps to
   pointers). Narrowing only: no set the spec gives a C form for is rejected.
 - **6a4dfa28:** not answered (ND-12). Interim unchanged.
+- **Restated:** against 6a4dfa28 in `claude-spec-comments-2.md`, "Items without a response" (logos-lips
+  `68628d95`).
 
 ### G154 — Forward typedefs for list targets on a reference cycle
 - **Kind:** GAP, settled by spec text at 6a4dfa28 (found while building; reported as ND-13 in `claude-spec-comments-2.md`, logos-lips `2f6cbcb0`) · **Specs:** INTERFACE §2.1 (canonical
@@ -793,8 +803,8 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
   recognize them.
 - **Interim:** stem = the local name, then the ordinary §2.1 families (for example
   `logos_invalid_params_reason_KIND_t`), confined to the generated common section of `logos_types.h`,
-  which stays PROVISIONAL. **Status:** OPEN, found 2026-11-10 (reviewer item N1); blocks that section
-  under D9.
+  which stays PROVISIONAL. **Status:** OPEN, found 2026-11-10 (reviewer item N1); reported as TL-01 in
+  `claude-spec-comments-3.md` (logos-lips `68628d95`); blocks that section under D9.
 
 ## 4. Error codes the specs require but do not assign
 
@@ -1027,6 +1037,10 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Decision:** open (6a4dfa28), for the owner. Tier 3 builds only the typed `PublishError(peTooLarge)`;
   the Tier 4 `logos_publish_fn` adapter is the only code that depends on the answer, so nothing is
   blocked now.
+- **Reported:** as a note in the editorial item TF-06 of `claude-spec-comments-3.md` (logos-lips `68628d95`), not
+  as a contradiction: it reads RUNTIME l.1225-1227 as covering events that fail validation and TRANSPORT
+  l.388-389 as governing size, which is option (a), and asks RUNTIME to say that its drop covers
+  validation failures only.
 
 ## 6. Runtime, lifecycle and system services
 
@@ -1128,8 +1142,8 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 ### G159 — Credential Store references without a definition
 - **Kind:** GAP · **Specs:** BCP l.23, l.52, l.199-209, l.276, l.282-285; SECURITY l.528-529.
 - **Description:** BCP and SECURITY refer to an optional Credential Store that no spec defines.
-- **Interim:** none needed: it is optional and we build none. **Status:** OPEN, found 2026-11-10; ask the
-  owner to publish it or drop the references.
+- **Interim:** none needed: it is optional and we build none. **Status:** OPEN, found 2026-11-10; reported
+  as TL-02 in `claude-spec-comments-3.md` (logos-lips `68628d95`): publish it or drop the references.
 
 ### G160 — Static registration across a host binary upgrade
 - **Kind:** GAP · **Specs:** RUNTIME l.1395 (retained declarations bound to the linked implementation
@@ -1137,21 +1151,29 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Description:** relinking a host that statically links a module (D14) replaces the implementation;
   the spec does not say whether the instance survives.
 - **Interim:** keep the instance only when the declaration facts are byte-identical; otherwise allocate a
-  fresh instance (l.2629-2635 allows a fresh address when continuity is lost). **Status:** OPEN (Tier 4).
+  fresh instance (l.2629-2635 allows a fresh address when continuity is lost).
+- **Status:** OPEN (Tier 4); reported as TF-08 in `claude-spec-comments-3.md` (logos-lips `68628d95`).
 
 ### G161 — The scope of "observation authority"
 - **Kind:** GAP · **Specs:** RUNTIME l.3665 (a request omitting both selectors needs observation
   authority over the complete selection scope).
 - **Description:** no RC scope or action is named for it.
 - **Interim:** evaluate the requested method's RC scope with `modules: [name]` and no instances or
-  providers. **Status:** OPEN (Tier 4).
+  providers.
+- **Status:** OPEN (Tier 4); reported as TF-09 in `claude-spec-comments-3.md` (logos-lips `68628d95`), which adds the
+  term's other uses (RUNTIME l.3157, l.3498, l.3594, l.1725; CA l.180-190, l.301-308).
 
 ### G162 — Lifecycle outcome of a start with missing configuration
 - **Kind:** GAP · **Specs:** CONFIG l.125-126 (missing eligible configuration prevents initialization,
   gives `NOT_READY`, and does not cancel execution intent); RUNTIME l.3750-3762 (failure codes).
 - **Description:** the resulting lifecycle state and failure classification are not stated.
-- **Interim:** the instance stays unloaded, the intent stays requested, no `failure` is set, and the next
-  configuration `set` re-triggers reconciliation. **Status:** OPEN (Tier 4).
+- **Interim:** the instance stays unloaded, the intent stays requested, no `failure` is set, and the retry
+  is left to orchestration.
+- **Revised 2026-11-10:** the first interim had the next configuration update re-trigger the start. CONFIG
+  l.213 says `update_configuration` invokes no lifecycle operation, so that re-trigger contradicted the
+  text; nothing was built on it.
+- **Status:** OPEN (Tier 4); reported as TF-10 in `claude-spec-comments-3.md` (logos-lips `68628d95`), which adds that
+  nothing says what makes the retained intent take effect once a value arrives.
 
 ### G163 — Which system service a caller view names
 - **Kind:** GAP · **Specs:** RUNTIME l.888 (an engine system-service binding identifies the invoking
@@ -1159,13 +1181,19 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   `kind`, `runtime_instance_id`, `module_instance_id`).
 - **Description:** the C caller view has no field for the system-service kind.
 - **Interim:** `kind = LOGOS_CALLER_SYSTEM_SERVICE`, with the service identified by the binding the
-  provider received. **Status:** OPEN (Tier 4).
+  provider received.
+- **Status:** OPEN (Tier 4); recorded as an ambiguity in the editorial item TF-06 of
+  `claude-spec-comments-3.md` (logos-lips `68628d95`): "the protected system-service kind" may mean the two-valued
+  caller `kind` the view already carries (INTERFACE l.3505-3506, l.3519-3523); under that reading the
+  interim is the spec.
 
 ### G164 — Session reuse
 - **Kind:** GAP · **Specs:** RUNTIME l.784 (materialization MAY reuse a live session bound to the same
   consumer, route, provider and contract); the NR-11 answer (no implicit sharing).
 - **Description:** the two agree only if "same route" excludes sharing across routes.
-- **Interim:** never reuse a session, which always conforms. **Status:** OPEN (Tier 4).
+- **Interim:** never reuse a session, which always conforms.
+- **Status:** OPEN (Tier 4); covered by TS-04 in `claude-spec-comments-3.md` (logos-lips `68628d95`), which cites l.784;
+  not raised separately.
 
 ## 7. Capability Authority
 
@@ -1494,6 +1522,29 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Interim (D9):** (a), in `package/manifest.nim` `decodeManifest`, test `[IMPL-DECISION G156]`;
   requirement unit PKG-0275 stays deferred. Error code only.
 - **6a4dfa28:** not answered (NP-15). PM §8 l.1070 now lets an implementation stop at the first detected failure, so the interim `invalid-package` conforms.
+- **Restated:** against 6a4dfa28 in `claude-spec-comments-2.md`, "Items without a response" (logos-lips
+  `68628d95`).
+
+### G166 — Key rotation leaves installed packages that cannot move to the new key
+- **Kind:** GAP · **Specs:** PM §4.1 l.429-431 (rotation MAY overlap old and new identities; a removed or
+  revoked anchor MUST NOT be used for a new resolution, installation, update or Runtime handoff),
+  l.403-405 (withdrawal blocks handoffs; retained verification provenance MUST NOT substitute for current
+  trust); §4.3 l.538-541 (the verified `package_signer` is retained with installed state and reported by a
+  handoff); l.1667 (installing an installed identity with the same manifest commitment returns the
+  current record and changes nothing); l.1672 (`remove_package` fails with `package-in-use` while another
+  installed package depends on it); l.1680 (an update needs a strictly greater version).
+- **Description:** once the overlap ends, an installed package whose only signature is from the removed
+  anchor can no longer be handed off, and no operation replaces its retained signer: the same manifest
+  re-signed with the new key installs as the old record, and an update needs a new version. What remains
+  is `remove_package` then `install_package`, which l.1672 refuses while another installed package
+  depends on it, or a re-release of every package signed with the old key.
+- **Options:** (a) install or update re-verifies an installed identity with an unchanged manifest
+  commitment under a new signature and replaces its retained signer *(recommended)*; (b) a dedicated
+  re-verification operation; (c) the spec states that rotation means re-releasing every such package.
+- **Interim:** none needed before installation is built (Tier 5); the text as written then applies: a
+  package whose signer is no longer accepted is not handed off, and the operator removes and reinstalls
+  it.
+- **Status:** OPEN, found 2026-11-10; reported as TF-07 in `claude-spec-comments-3.md` (logos-lips `68628d95`).
 
 ---
 
@@ -1914,6 +1965,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G158 | common-name projection | GAP, **OPEN** | 3 |
 | G159–G164 | Credential Store, static registration, observation scope, missing config, caller view, session reuse | GAP, **OPEN** | 6 |
 | G165 | oversized Event from the void publish callback | CONTRA, **OPEN** | 5 |
+| G166 | key rotation and installed packages | GAP, **OPEN** | 9 |
 
 ---
 

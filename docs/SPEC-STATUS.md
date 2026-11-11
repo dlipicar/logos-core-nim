@@ -7,6 +7,8 @@ since 2026-11-10; before that `f4f83471`. The spec owner revised them after four
 (HC-), `claude-spec-comments-2.md` (NX-, NE-, NI-, NL-, NA-, NR-, ND-, NP-, NC-, NS-, NO-, NF-) and
 `module-port-gaps.md`, and answered every item except the HC- items, the Fable 5.1 items (G151,
 G153–G156) and NP-11 to NP-14. Work is ordered so the parts least likely to change are built first.
+A follow-up report at 6a4dfa28, `claude-spec-comments-3.md` (TF-, TL-, TS-, TP-; logos-lips `68628d95`),
+carries the gaps found since (DECISIONS G157–G166) and restates the unanswered ones.
 Line numbers in the rows below are those of the report that raised each item (`f4f83471`); the Status
 column is current.
 
@@ -84,7 +86,7 @@ Three spec facts drive the order:
 | C-12 | claude-spec-comments | BCP §1 vs §5.3; RUNTIME §9 | M0,M3,M4 | MED | If audit/evidence types move namespace, their roots and evidence bytes change. | — | resolved in 6a4dfa28: upward dependencies listed (BCP §1.1); audit and evidence keep their namespace |
 | GN-01 | claude-spec-comments | all | M0 (all) | LOW | Editorial. | — | resolved in 6a4dfa28: every spec declares BCP 14 language |
 | NX-05 | claude-spec-comments-2 | RUNTIME References; BCP §1 | M0, M3 | LOW | Additive: Y. Add normative references. The "move shared records into RUNTIME" option would rename them, changing their C names and roots. | — | resolved in 6a4dfa28: references repaired; no records moved |
-| SO-10 | claude-spec-comments | mirrors; cdCDDLe §12 | M0,M1 | LOW | Published vectors would expose any CM-xx divergence. | — | resolved in 6a4dfa28 (no change); the owner points to mirrors and a corpus that logos-lips does not hold |
+| SO-10 | claude-spec-comments | mirrors; cdCDDLe §12 | M0,M1 | LOW | Published vectors would expose any CM-xx divergence. | — | resolved in 6a4dfa28 (no change); the owner points to mirrors and a corpus that logos-lips does not hold; remarked in `claude-spec-comments.md`, "Remarks on the response" (logos-lips `68628d95`) |
 
 ## Tier 1 — encoding, hashing, commitments
 
