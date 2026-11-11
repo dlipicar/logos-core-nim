@@ -2,7 +2,7 @@
 ## generated codecs round-trip, check every value against the schema, and agree
 ## with the hand-written INTERFACE §5.1 encoders.
 
-import std/strutils
+import std/[atomics, strutils, typedthreads]
 import unittest2
 import ../src/logos_core/[cbor, hash, pins]
 import ../src/logos_core/iface/surface
@@ -211,3 +211,31 @@ suite "ifc.nim-types: the common schema (INTERFACE §5.1)":
     check r.interface_schemas[0].namespace == "metrics_provider"
     check r.supporting_schemas[0].commitment.schema_root == @(s.supporting[0].root)
     check encode(r).get == resp
+
+# Concurrency ----------------------------------------------------------------------
+
+var concurrentFailures: Atomic[int]
+
+proc codecWorker(seed: int) {.thread.} =
+  ## Generated codecs, the pinned common schema and a library table used from
+  ## one of several threads at once (`base/perthread`).
+  for i in 0 ..< 200:
+    let label = "t" & $seed & "-" & $i
+    let r = MeterReadResponse(
+      label: label, reading: MeterReading(label: Opt.some(label), value: uint64(i))
+    )
+    let bytes = encode(r)
+    if bytes.isErr or MeterReadResponse.decode(bytes.get).get.label != label:
+      concurrentFailures += 1
+    if MeterReadResponse.decode(@[0x40'u8]).isOk: # not a map
+      concurrentFailures += 1
+    if oc.checkDetail(oc.ecInvalidParams, oc.invalidParamsDetail(oc.iprSchemaMismatch)).isErr:
+      concurrentFailures += 1
+
+suite "ifc.nim-types: concurrent use [IMPL]":
+  test "generated codecs and library tables work from several threads at once":
+    var threads: array[4, Thread[int]]
+    for i in 0 ..< threads.len:
+      createThread(threads[i], codecWorker, i)
+    joinThreads(threads)
+    check concurrentFailures.load == 0

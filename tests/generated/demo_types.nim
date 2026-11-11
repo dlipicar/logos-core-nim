@@ -2,7 +2,7 @@
 ## Nim types with Logos deterministic-CBOR codecs (D29). Do not edit.
 
 #!fmt: off
-{.push raises: [].}
+{.push raises: [], gcsafe.}
 
 import ../../src/logos_core/codegen/nimrt
 import ../../src/logos_core/iface/common_types
@@ -14,8 +14,12 @@ const
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
-let generatedSchema =
-  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false)
+perThread(
+  generatedSchema,
+  GeneratedSchema,
+  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false),
+)
+discard generatedSchema()
 
 type
   DemoCounter* = uint32
@@ -190,7 +194,7 @@ proc toCbor*(x: DemoEntry): CborValue =
     toCbor(x.arm_File)
 
 proc fromChecked*(T: type DemoEntry, v: CborValue): DemoEntry =
-  case generatedSchema.arm("demo.entry#", v)
+  case generatedSchema().arm("demo.entry#", v)
   of 0:
     DemoEntry(kind: DemoEntryKind.File, arm_File: fromChecked(DemoEntryARFileMap, v))
   of 1:
@@ -208,7 +212,7 @@ proc toCbor*(x: DemoKGChoice): CborValue =
     toCbor(x.arm_demo_V)
 
 proc fromChecked*(T: type DemoKGChoice, v: CborValue): DemoKGChoice =
-  case generatedSchema.arm("demo.k#g", v)
+  case generatedSchema().arm("demo.k#g", v)
   of 0:
     DemoKGChoice(kind: DemoKGChoiceKind.Tuple1, arm_Tuple1: (uint64(v.items[0].uint),))
   of 1:
@@ -287,7 +291,7 @@ proc toCbor*(x: DemoRecordSubInnerChoice): CborValue =
     cbor(uint64(x.arm_Uint64))
 
 proc fromChecked*(T: type DemoRecordSubInnerChoice, v: CborValue): DemoRecordSubInnerChoice =
-  case generatedSchema.arm("demo.record#sub/inner", v)
+  case generatedSchema().arm("demo.record#sub/inner", v)
   of 0:
     DemoRecordSubInnerChoice(kind: DemoRecordSubInnerChoiceKind.Tstr, arm_Tstr: v.text)
   of 1:
@@ -358,7 +362,7 @@ proc toCbor*(x: DemoValue): CborValue =
     cbor(uint64(x.arm_Uint64))
 
 proc fromChecked*(T: type DemoValue, v: CborValue): DemoValue =
-  case generatedSchema.arm("demo.value#", v)
+  case generatedSchema().arm("demo.value#", v)
   of 0:
     DemoValue(kind: DemoValueKind.Bool, arm_Bool: asBool(v))
   of 1:
@@ -370,84 +374,84 @@ proc fromChecked*(T: type DemoValue, v: CborValue): DemoValue =
 
 proc fromCbor*(T: type DemoEntry, v: CborValue): Result[DemoEntry, string] =
   ## A value checked against `demo.entry`.
-  ?generatedSchema.check("demo.entry", v)
+  ?generatedSchema().check("demo.entry", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: DemoEntry): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `demo.entry`.
-  generatedSchema.encodeChecked("demo.entry", toCbor(x))
+  generatedSchema().encodeChecked("demo.entry", toCbor(x))
 
 proc decode*(T: type DemoEntry, data: openArray[byte]): Result[DemoEntry, string] =
   ## One deterministic-CBOR `demo.entry` value.
-  let v = ?generatedSchema.decodeChecked("demo.entry", data)
+  let v = ?generatedSchema().decodeChecked("demo.entry", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type DemoK, v: CborValue): Result[DemoK, string] =
   ## A value checked against `demo.k`.
-  ?generatedSchema.check("demo.k", v)
+  ?generatedSchema().check("demo.k", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: DemoK): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `demo.k`.
-  generatedSchema.encodeChecked("demo.k", toCbor(x))
+  generatedSchema().encodeChecked("demo.k", toCbor(x))
 
 proc decode*(T: type DemoK, data: openArray[byte]): Result[DemoK, string] =
   ## One deterministic-CBOR `demo.k` value.
-  let v = ?generatedSchema.decodeChecked("demo.k", data)
+  let v = ?generatedSchema().decodeChecked("demo.k", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type DemoRecord, v: CborValue): Result[DemoRecord, string] =
   ## A value checked against `demo.record`.
-  ?generatedSchema.check("demo.record", v)
+  ?generatedSchema().check("demo.record", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: DemoRecord): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `demo.record`.
-  generatedSchema.encodeChecked("demo.record", toCbor(x))
+  generatedSchema().encodeChecked("demo.record", toCbor(x))
 
 proc decode*(T: type DemoRecord, data: openArray[byte]): Result[DemoRecord, string] =
   ## One deterministic-CBOR `demo.record` value.
-  let v = ?generatedSchema.decodeChecked("demo.record", data)
+  let v = ?generatedSchema().decodeChecked("demo.record", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type DemoTree, v: CborValue): Result[DemoTree, string] =
   ## A value checked against `demo.tree`.
-  ?generatedSchema.check("demo.tree", v)
+  ?generatedSchema().check("demo.tree", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: DemoTree): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `demo.tree`.
-  generatedSchema.encodeChecked("demo.tree", toCbor(x))
+  generatedSchema().encodeChecked("demo.tree", toCbor(x))
 
 proc decode*(T: type DemoTree, data: openArray[byte]): Result[DemoTree, string] =
   ## One deterministic-CBOR `demo.tree` value.
-  let v = ?generatedSchema.decodeChecked("demo.tree", data)
+  let v = ?generatedSchema().decodeChecked("demo.tree", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type DemoV, v: CborValue): Result[DemoV, string] =
   ## A value checked against `demo.v`.
-  ?generatedSchema.check("demo.v", v)
+  ?generatedSchema().check("demo.v", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: DemoV): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `demo.v`.
-  generatedSchema.encodeChecked("demo.v", toCbor(x))
+  generatedSchema().encodeChecked("demo.v", toCbor(x))
 
 proc decode*(T: type DemoV, data: openArray[byte]): Result[DemoV, string] =
   ## One deterministic-CBOR `demo.v` value.
-  let v = ?generatedSchema.decodeChecked("demo.v", data)
+  let v = ?generatedSchema().decodeChecked("demo.v", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type DemoValue, v: CborValue): Result[DemoValue, string] =
   ## A value checked against `demo.value`.
-  ?generatedSchema.check("demo.value", v)
+  ?generatedSchema().check("demo.value", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: DemoValue): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `demo.value`.
-  generatedSchema.encodeChecked("demo.value", toCbor(x))
+  generatedSchema().encodeChecked("demo.value", toCbor(x))
 
 proc decode*(T: type DemoValue, data: openArray[byte]): Result[DemoValue, string] =
   ## One deterministic-CBOR `demo.value` value.
-  let v = ?generatedSchema.decodeChecked("demo.value", data)
+  let v = ?generatedSchema().decodeChecked("demo.value", data)
   ok(fromChecked(T, v))

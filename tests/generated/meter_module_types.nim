@@ -2,7 +2,7 @@
 ## Nim types with Logos deterministic-CBOR codecs (D29). Do not edit.
 
 #!fmt: off
-{.push raises: [].}
+{.push raises: [], gcsafe.}
 
 import ../../src/logos_core/codegen/nimrt
 import ../../src/logos_core/iface/common_types
@@ -14,8 +14,12 @@ const
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
-let generatedSchema =
-  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false)
+perThread(
+  generatedSchema,
+  GeneratedSchema,
+  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false),
+)
+discard generatedSchema()
 
 type
   MeterChangedEvent* = object
@@ -91,56 +95,56 @@ proc fromChecked*(T: type MeterReading, v: CborValue): MeterReading =
 
 proc fromCbor*(T: type MeterChangedEvent, v: CborValue): Result[MeterChangedEvent, string] =
   ## A value checked against `meter.changed_event`.
-  ?generatedSchema.check("meter.changed_event", v)
+  ?generatedSchema().check("meter.changed_event", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: MeterChangedEvent): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `meter.changed_event`.
-  generatedSchema.encodeChecked("meter.changed_event", toCbor(x))
+  generatedSchema().encodeChecked("meter.changed_event", toCbor(x))
 
 proc decode*(T: type MeterChangedEvent, data: openArray[byte]): Result[MeterChangedEvent, string] =
   ## One deterministic-CBOR `meter.changed_event` value.
-  let v = ?generatedSchema.decodeChecked("meter.changed_event", data)
+  let v = ?generatedSchema().decodeChecked("meter.changed_event", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type MeterReadRequest, v: CborValue): Result[MeterReadRequest, string] =
   ## A value checked against `meter.read_request`.
-  ?generatedSchema.check("meter.read_request", v)
+  ?generatedSchema().check("meter.read_request", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: MeterReadRequest): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `meter.read_request`.
-  generatedSchema.encodeChecked("meter.read_request", toCbor(x))
+  generatedSchema().encodeChecked("meter.read_request", toCbor(x))
 
 proc decode*(T: type MeterReadRequest, data: openArray[byte]): Result[MeterReadRequest, string] =
   ## One deterministic-CBOR `meter.read_request` value.
-  let v = ?generatedSchema.decodeChecked("meter.read_request", data)
+  let v = ?generatedSchema().decodeChecked("meter.read_request", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type MeterReadResponse, v: CborValue): Result[MeterReadResponse, string] =
   ## A value checked against `meter.read_response`.
-  ?generatedSchema.check("meter.read_response", v)
+  ?generatedSchema().check("meter.read_response", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: MeterReadResponse): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `meter.read_response`.
-  generatedSchema.encodeChecked("meter.read_response", toCbor(x))
+  generatedSchema().encodeChecked("meter.read_response", toCbor(x))
 
 proc decode*(T: type MeterReadResponse, data: openArray[byte]): Result[MeterReadResponse, string] =
   ## One deterministic-CBOR `meter.read_response` value.
-  let v = ?generatedSchema.decodeChecked("meter.read_response", data)
+  let v = ?generatedSchema().decodeChecked("meter.read_response", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type MeterReading, v: CborValue): Result[MeterReading, string] =
   ## A value checked against `meter.reading`.
-  ?generatedSchema.check("meter.reading", v)
+  ?generatedSchema().check("meter.reading", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: MeterReading): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `meter.reading`.
-  generatedSchema.encodeChecked("meter.reading", toCbor(x))
+  generatedSchema().encodeChecked("meter.reading", toCbor(x))
 
 proc decode*(T: type MeterReading, data: openArray[byte]): Result[MeterReading, string] =
   ## One deterministic-CBOR `meter.reading` value.
-  let v = ?generatedSchema.decodeChecked("meter.reading", data)
+  let v = ?generatedSchema().decodeChecked("meter.reading", data)
   ok(fromChecked(T, v))

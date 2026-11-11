@@ -3,14 +3,15 @@
 ## (D29). Do not edit.
 
 #!fmt: off
-{.push raises: [].}
+{.push raises: [], gcsafe.}
 
 import ../codegen/nimrt
 from ../iface/outcome import ErrorCode
 
 export nimrt, ErrorCode
 
-let generatedSchema = loadCommonSchema()
+perThread(generatedSchema, GeneratedSchema, loadCommonSchema())
+discard generatedSchema()
 
 type
   ErrorDetail* = seq[byte]
@@ -119,7 +120,7 @@ proc toCbor*(x: InvalidParamsPathSegment): CborValue =
     cbor(uint64(x.arm_Uint64))
 
 proc fromChecked*(T: type InvalidParamsPathSegment, v: CborValue): InvalidParamsPathSegment =
-  case generatedSchema.arm("logos.invalid_params_path_segment#", v)
+  case generatedSchema().arm("logos.invalid_params_path_segment#", v)
   of 0:
     InvalidParamsPathSegment(kind: InvalidParamsPathSegmentKind.Tstr, arm_Tstr: v.text)
   of 1:
@@ -139,7 +140,7 @@ proc toCbor*(x: InvalidParamsReason): CborValue =
     cbor("schema-mismatch")
 
 proc fromChecked*(T: type InvalidParamsReason, v: CborValue): InvalidParamsReason =
-  case generatedSchema.arm("logos.invalid_params_reason#", v)
+  case generatedSchema().arm("logos.invalid_params_reason#", v)
   of 0:
     InvalidParamsReason(kind: InvalidParamsReasonKind.Malformed_cbor)
   of 1:
@@ -216,84 +217,84 @@ proc fromChecked*(T: type SchemaResponse, v: CborValue): SchemaResponse =
 
 proc fromCbor*(T: type InvalidParamsDetail, v: CborValue): Result[InvalidParamsDetail, string] =
   ## A value checked against `logos.invalid_params_detail`.
-  ?generatedSchema.check("logos.invalid_params_detail", v)
+  ?generatedSchema().check("logos.invalid_params_detail", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: InvalidParamsDetail): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `logos.invalid_params_detail`.
-  generatedSchema.encodeChecked("logos.invalid_params_detail", toCbor(x))
+  generatedSchema().encodeChecked("logos.invalid_params_detail", toCbor(x))
 
 proc decode*(T: type InvalidParamsDetail, data: openArray[byte]): Result[InvalidParamsDetail, string] =
   ## One deterministic-CBOR `logos.invalid_params_detail` value.
-  let v = ?generatedSchema.decodeChecked("logos.invalid_params_detail", data)
+  let v = ?generatedSchema().decodeChecked("logos.invalid_params_detail", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type InvalidParamsPathSegment, v: CborValue): Result[InvalidParamsPathSegment, string] =
   ## A value checked against `logos.invalid_params_path_segment`.
-  ?generatedSchema.check("logos.invalid_params_path_segment", v)
+  ?generatedSchema().check("logos.invalid_params_path_segment", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: InvalidParamsPathSegment): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `logos.invalid_params_path_segment`.
-  generatedSchema.encodeChecked("logos.invalid_params_path_segment", toCbor(x))
+  generatedSchema().encodeChecked("logos.invalid_params_path_segment", toCbor(x))
 
 proc decode*(T: type InvalidParamsPathSegment, data: openArray[byte]): Result[InvalidParamsPathSegment, string] =
   ## One deterministic-CBOR `logos.invalid_params_path_segment` value.
-  let v = ?generatedSchema.decodeChecked("logos.invalid_params_path_segment", data)
+  let v = ?generatedSchema().decodeChecked("logos.invalid_params_path_segment", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type InvalidParamsReason, v: CborValue): Result[InvalidParamsReason, string] =
   ## A value checked against `logos.invalid_params_reason`.
-  ?generatedSchema.check("logos.invalid_params_reason", v)
+  ?generatedSchema().check("logos.invalid_params_reason", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: InvalidParamsReason): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `logos.invalid_params_reason`.
-  generatedSchema.encodeChecked("logos.invalid_params_reason", toCbor(x))
+  generatedSchema().encodeChecked("logos.invalid_params_reason", toCbor(x))
 
 proc decode*(T: type InvalidParamsReason, data: openArray[byte]): Result[InvalidParamsReason, string] =
   ## One deterministic-CBOR `logos.invalid_params_reason` value.
-  let v = ?generatedSchema.decodeChecked("logos.invalid_params_reason", data)
+  let v = ?generatedSchema().decodeChecked("logos.invalid_params_reason", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type SchemaCommitment, v: CborValue): Result[SchemaCommitment, string] =
   ## A value checked against `logos.schema_commitment`.
-  ?generatedSchema.check("logos.schema_commitment", v)
+  ?generatedSchema().check("logos.schema_commitment", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: SchemaCommitment): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `logos.schema_commitment`.
-  generatedSchema.encodeChecked("logos.schema_commitment", toCbor(x))
+  generatedSchema().encodeChecked("logos.schema_commitment", toCbor(x))
 
 proc decode*(T: type SchemaCommitment, data: openArray[byte]): Result[SchemaCommitment, string] =
   ## One deterministic-CBOR `logos.schema_commitment` value.
-  let v = ?generatedSchema.decodeChecked("logos.schema_commitment", data)
+  let v = ?generatedSchema().decodeChecked("logos.schema_commitment", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type SchemaRequest, v: CborValue): Result[SchemaRequest, string] =
   ## A value checked against `logos.schema_request`.
-  ?generatedSchema.check("logos.schema_request", v)
+  ?generatedSchema().check("logos.schema_request", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: SchemaRequest): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `logos.schema_request`.
-  generatedSchema.encodeChecked("logos.schema_request", toCbor(x))
+  generatedSchema().encodeChecked("logos.schema_request", toCbor(x))
 
 proc decode*(T: type SchemaRequest, data: openArray[byte]): Result[SchemaRequest, string] =
   ## One deterministic-CBOR `logos.schema_request` value.
-  let v = ?generatedSchema.decodeChecked("logos.schema_request", data)
+  let v = ?generatedSchema().decodeChecked("logos.schema_request", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type SchemaResponse, v: CborValue): Result[SchemaResponse, string] =
   ## A value checked against `logos.schema_response`.
-  ?generatedSchema.check("logos.schema_response", v)
+  ?generatedSchema().check("logos.schema_response", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: SchemaResponse): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `logos.schema_response`.
-  generatedSchema.encodeChecked("logos.schema_response", toCbor(x))
+  generatedSchema().encodeChecked("logos.schema_response", toCbor(x))
 
 proc decode*(T: type SchemaResponse, data: openArray[byte]): Result[SchemaResponse, string] =
   ## One deterministic-CBOR `logos.schema_response` value.
-  let v = ?generatedSchema.decodeChecked("logos.schema_response", data)
+  let v = ?generatedSchema().decodeChecked("logos.schema_response", data)
   ok(fromChecked(T, v))

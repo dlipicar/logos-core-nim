@@ -9,6 +9,7 @@
 {.push raises: [].}
 
 import ../cbor
+import ../base/perthread
 import ../cbor/utf8
 import ../commitment
 
@@ -88,7 +89,7 @@ func parseErrorCode*(v: CborValue): Result[ErrorCode, string] =
 
 # logos.invalid_params_detail -------------------------------------------------------
 
-let commonSchema = pinnedContext().commonModel
+perThread(commonSchema, SchemaModel, pinnedContext().commonModel)
 
 func detailValue*(
     reason: InvalidParamsReason, path: Opt[seq[CborValue]] = Opt.none(seq[CborValue])
@@ -119,8 +120,8 @@ proc checkDetail*(code: ErrorCode, detail: openArray[byte]): Result[void, string
     return err("detail is not 1 to 4096 bytes")
   let v = decodeCbor(detail).valueOr:
     return err("detail is not one deterministic CBOR value: " & $error)
-  let decl = commonSchema.find("logos.invalid_params_detail").get
-  if not schemaSet(commonSchema).validates(0, decl.body, v):
+  let decl = commonSchema().find("logos.invalid_params_detail").get
+  if not schemaSet(commonSchema()).validates(0, decl.body, v):
     return err("detail is not a logos.invalid_params_detail")
   ok()
 

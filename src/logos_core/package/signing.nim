@@ -17,7 +17,7 @@
 
 import std/strutils
 import results
-import ../base/hex
+import ../base/[hex, perthread]
 import ../cbor
 import ../cddl/syntax
 import ../commitment
@@ -97,14 +97,17 @@ proc loadClaimSchema(): Result[ClaimSchema, string] =
     )
   )
 
-let claimSchema = block:
+proc loadPinnedClaimSchema(): ClaimSchema =
   let s = loadClaimSchema()
   doAssert s.isOk, "the pinned PM §4.3 / §5 claim schema does not load: " & s.error
   s.get
 
+perThread(claimSchema, ClaimSchema, loadPinnedClaimSchema())
+discard claimSchema()
+
 func claims(): ClaimSchema =
   {.cast(noSideEffect).}:
-    claimSchema
+    claimSchema()
 
 func signingProfile*(): string =
   ## [SPEC PM §4.3] The profile identifier, read from the mirrored CDDL.

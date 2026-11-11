@@ -2,7 +2,7 @@
 ## Nim types with Logos deterministic-CBOR codecs (D29). Do not edit.
 
 #!fmt: off
-{.push raises: [].}
+{.push raises: [], gcsafe.}
 
 import ../../src/logos_core/codegen/nimrt
 import ../../src/logos_core/iface/common_types
@@ -14,8 +14,12 @@ const
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
-let generatedSchema =
-  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false)
+perThread(
+  generatedSchema,
+  GeneratedSchema,
+  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false),
+)
+discard generatedSchema()
 
 type
   RecursiveBranch* = object
@@ -96,56 +100,56 @@ proc fromChecked*(T: type RecursiveRight, v: CborValue): RecursiveRight =
 
 proc fromCbor*(T: type RecursiveBranch, v: CborValue): Result[RecursiveBranch, string] =
   ## A value checked against `recursive.branch`.
-  ?generatedSchema.check("recursive.branch", v)
+  ?generatedSchema().check("recursive.branch", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: RecursiveBranch): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `recursive.branch`.
-  generatedSchema.encodeChecked("recursive.branch", toCbor(x))
+  generatedSchema().encodeChecked("recursive.branch", toCbor(x))
 
 proc decode*(T: type RecursiveBranch, data: openArray[byte]): Result[RecursiveBranch, string] =
   ## One deterministic-CBOR `recursive.branch` value.
-  let v = ?generatedSchema.decodeChecked("recursive.branch", data)
+  let v = ?generatedSchema().decodeChecked("recursive.branch", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type RecursiveLeft, v: CborValue): Result[RecursiveLeft, string] =
   ## A value checked against `recursive.left`.
-  ?generatedSchema.check("recursive.left", v)
+  ?generatedSchema().check("recursive.left", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: RecursiveLeft): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `recursive.left`.
-  generatedSchema.encodeChecked("recursive.left", toCbor(x))
+  generatedSchema().encodeChecked("recursive.left", toCbor(x))
 
 proc decode*(T: type RecursiveLeft, data: openArray[byte]): Result[RecursiveLeft, string] =
   ## One deterministic-CBOR `recursive.left` value.
-  let v = ?generatedSchema.decodeChecked("recursive.left", data)
+  let v = ?generatedSchema().decodeChecked("recursive.left", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type RecursiveNode, v: CborValue): Result[RecursiveNode, string] =
   ## A value checked against `recursive.node`.
-  ?generatedSchema.check("recursive.node", v)
+  ?generatedSchema().check("recursive.node", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: RecursiveNode): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `recursive.node`.
-  generatedSchema.encodeChecked("recursive.node", toCbor(x))
+  generatedSchema().encodeChecked("recursive.node", toCbor(x))
 
 proc decode*(T: type RecursiveNode, data: openArray[byte]): Result[RecursiveNode, string] =
   ## One deterministic-CBOR `recursive.node` value.
-  let v = ?generatedSchema.decodeChecked("recursive.node", data)
+  let v = ?generatedSchema().decodeChecked("recursive.node", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type RecursiveRight, v: CborValue): Result[RecursiveRight, string] =
   ## A value checked against `recursive.right`.
-  ?generatedSchema.check("recursive.right", v)
+  ?generatedSchema().check("recursive.right", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: RecursiveRight): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `recursive.right`.
-  generatedSchema.encodeChecked("recursive.right", toCbor(x))
+  generatedSchema().encodeChecked("recursive.right", toCbor(x))
 
 proc decode*(T: type RecursiveRight, data: openArray[byte]): Result[RecursiveRight, string] =
   ## One deterministic-CBOR `recursive.right` value.
-  let v = ?generatedSchema.decodeChecked("recursive.right", data)
+  let v = ?generatedSchema().decodeChecked("recursive.right", data)
   ok(fromChecked(T, v))

@@ -841,7 +841,7 @@ suite "ifc.c-types: primitives and composites (INTERFACE §2.2, §2.3, §2.5)":
     )
 
   test "§2.3 text literals: printable ASCII as is, three-digit octal for every other byte":
-    check cString("a\"b\\c?\n\r\t\x01\x7Fé1") ==
+    check cStringLiteral("a\"b\\c?\n\r\t\x01\x7Fé1") ==
       "\"a\\\"b\\\\c\\?\\n\\r\\t\\001\\177\\303\\2511\""
 
 suite "ifc.c-types: choices (INTERFACE §2.3, §3.9.9)":

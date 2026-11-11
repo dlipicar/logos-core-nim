@@ -16,7 +16,7 @@ import ../cddl
 import ../cddl/syntax
 import ../hash/hashinput
 import ../pins
-import ../base/hex
+import ../base/[hex, perthread]
 import ./[schema, choice]
 
 export schema, choice
@@ -454,7 +454,7 @@ proc buildCommonSchema*(source: string): Result[SchemaModel, string] =
   ## The pinned common schema document (INTERFACE §5.1) as a model.
   buildSchema(source, SchemaContext(), Opt.some(srCommon))
 
-let pinned = block:
+proc loadPinned(): SchemaContext =
   var ctx = SchemaContext(commonRoot: toDigestHex(CommonSchemaRoot))
   for (name, kind, root) in CommonRegistry:
     ctx.common.add((name, parseDeclKind(kind).get, toDigestHex(root)))
@@ -470,7 +470,11 @@ let pinned = block:
   ctx.commonModel = common.get
   ctx
 
+perThread(pinned, SchemaContext, loadPinned())
+discard pinned() # fail at start, not at first use, when the pins are stale
+
 proc pinnedContext*(): SchemaContext =
   ## The pinned common schema of COMMITMENT §5 (`pins.nim`): its registry roots
-  ## and its document. No other dependencies.
-  pinned
+  ## and its document. No other dependencies. Each thread has its own copy
+  ## (`base/perthread`).
+  pinned()

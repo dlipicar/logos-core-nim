@@ -1,7 +1,8 @@
 ## Runtime support for lcn-gen's Nim output [D29].
 ##
 ## A generated module embeds the schema documents it was generated from and
-## loads them once, as an accepted construction input set. Its decoders check a
+## loads them once per thread (`base/perthread`), as an accepted construction
+## input set. Its decoders check a
 ## value against the declaration first (INTERFACE §4.5: deterministic CBOR, then
 ## the schema) and only then convert it; choice arms are picked by the
 ## structural selection plan (COMMITMENT §3.1), never by trial.
@@ -12,8 +13,9 @@ import std/[sequtils, strutils, tables]
 import ../cbor
 import ../commitment
 import ../iface/accept
+import ../base/perthread
 
-export cbor, results, sequtils
+export cbor, results, sequtils, perthread
 
 type
   GeneratedSchema* = object

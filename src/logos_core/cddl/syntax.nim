@@ -562,8 +562,8 @@ func atGroupEntry(p: Parser): bool =
 func atGroupSeparator(p: Parser): bool =
   p.tok.kind == tPunct and p.tok.text in [",", "//", ":", "=>", "^"]
 
-proc parseType(p: var Parser): Result[SrcNode, CddlError]
-proc parseType1(p: var Parser): Result[SrcNode, CddlError]
+proc parseType(p: var Parser): Result[SrcNode, CddlError] {.gcsafe.}
+proc parseType1(p: var Parser): Result[SrcNode, CddlError] {.gcsafe.}
 
 proc parseChoiceRest(p: var Parser, first: SrcNode): Result[SrcNode, CddlError] =
   if not p.isPunct("/"):
@@ -574,7 +574,7 @@ proc parseChoiceRest(p: var Parser, first: SrcNode): Result[SrcNode, CddlError] 
     node.alternatives.add(?p.parseType1())
   ok(node)
 
-proc parseType(p: var Parser): Result[SrcNode, CddlError] =
+proc parseType(p: var Parser): Result[SrcNode, CddlError] {.gcsafe.} =
   let first = ?p.parseType1()
   p.parseChoiceRest(first)
 
@@ -735,7 +735,7 @@ func checkSize(p: Parser, target, controller: SrcNode): Result[void, CddlError] 
     )
   ok()
 
-proc parseType1(p: var Parser): Result[SrcNode, CddlError] =
+proc parseType1(p: var Parser): Result[SrcNode, CddlError] {.gcsafe.} =
   inc p.depth
   if p.depth > MaxNesting:
     return

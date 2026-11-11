@@ -2,7 +2,7 @@
 ## Nim types with Logos deterministic-CBOR codecs (D29). Do not edit.
 
 #!fmt: off
-{.push raises: [].}
+{.push raises: [], gcsafe.}
 
 import ../../src/logos_core/codegen/nimrt
 import ../../src/logos_core/iface/common_types
@@ -14,8 +14,12 @@ const
   interfaceDocuments: array[1, string] = ["; -- metadata --\x0A_interface = \"metrics_provider\"\x0A\x0Ametrics_provider.snapshot_request = {}\x0A\x0Ametrics_provider.snapshot_response = {\x0A  count: uint64,\x0A}\x0A"]
   supportingDocuments: array[1, string] = ["metrics_types.counter = uint64\x0A"]
 
-let generatedSchema =
-  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false)
+perThread(
+  generatedSchema,
+  GeneratedSchema,
+  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false),
+)
+discard generatedSchema()
 
 type
   SensorNSControlConfigureRequest* = object
@@ -102,70 +106,70 @@ proc decMetricsTypesCounter*(v: CborValue): MetricsTypesCounter =
 
 proc fromCbor*(T: type SensorNSControlConfigureRequest, v: CborValue): Result[SensorNSControlConfigureRequest, string] =
   ## A value checked against `sensor.control.configure_request`.
-  ?generatedSchema.check("sensor.control.configure_request", v)
+  ?generatedSchema().check("sensor.control.configure_request", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: SensorNSControlConfigureRequest): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `sensor.control.configure_request`.
-  generatedSchema.encodeChecked("sensor.control.configure_request", toCbor(x))
+  generatedSchema().encodeChecked("sensor.control.configure_request", toCbor(x))
 
 proc decode*(T: type SensorNSControlConfigureRequest, data: openArray[byte]): Result[SensorNSControlConfigureRequest, string] =
   ## One deterministic-CBOR `sensor.control.configure_request` value.
-  let v = ?generatedSchema.decodeChecked("sensor.control.configure_request", data)
+  let v = ?generatedSchema().decodeChecked("sensor.control.configure_request", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type SensorNSControlConfigureResponse, v: CborValue): Result[SensorNSControlConfigureResponse, string] =
   ## A value checked against `sensor.control.configure_response`.
-  ?generatedSchema.check("sensor.control.configure_response", v)
+  ?generatedSchema().check("sensor.control.configure_response", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: SensorNSControlConfigureResponse): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `sensor.control.configure_response`.
-  generatedSchema.encodeChecked("sensor.control.configure_response", toCbor(x))
+  generatedSchema().encodeChecked("sensor.control.configure_response", toCbor(x))
 
 proc decode*(T: type SensorNSControlConfigureResponse, data: openArray[byte]): Result[SensorNSControlConfigureResponse, string] =
   ## One deterministic-CBOR `sensor.control.configure_response` value.
-  let v = ?generatedSchema.decodeChecked("sensor.control.configure_response", data)
+  let v = ?generatedSchema().decodeChecked("sensor.control.configure_response", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type SensorNSControlSettings, v: CborValue): Result[SensorNSControlSettings, string] =
   ## A value checked against `sensor.control.settings`.
-  ?generatedSchema.check("sensor.control.settings", v)
+  ?generatedSchema().check("sensor.control.settings", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: SensorNSControlSettings): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `sensor.control.settings`.
-  generatedSchema.encodeChecked("sensor.control.settings", toCbor(x))
+  generatedSchema().encodeChecked("sensor.control.settings", toCbor(x))
 
 proc decode*(T: type SensorNSControlSettings, data: openArray[byte]): Result[SensorNSControlSettings, string] =
   ## One deterministic-CBOR `sensor.control.settings` value.
-  let v = ?generatedSchema.decodeChecked("sensor.control.settings", data)
+  let v = ?generatedSchema().decodeChecked("sensor.control.settings", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type MetricsProviderSnapshotRequest, v: CborValue): Result[MetricsProviderSnapshotRequest, string] =
   ## A value checked against `metrics_provider.snapshot_request`.
-  ?generatedSchema.check("metrics_provider.snapshot_request", v)
+  ?generatedSchema().check("metrics_provider.snapshot_request", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: MetricsProviderSnapshotRequest): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `metrics_provider.snapshot_request`.
-  generatedSchema.encodeChecked("metrics_provider.snapshot_request", toCbor(x))
+  generatedSchema().encodeChecked("metrics_provider.snapshot_request", toCbor(x))
 
 proc decode*(T: type MetricsProviderSnapshotRequest, data: openArray[byte]): Result[MetricsProviderSnapshotRequest, string] =
   ## One deterministic-CBOR `metrics_provider.snapshot_request` value.
-  let v = ?generatedSchema.decodeChecked("metrics_provider.snapshot_request", data)
+  let v = ?generatedSchema().decodeChecked("metrics_provider.snapshot_request", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type MetricsProviderSnapshotResponse, v: CborValue): Result[MetricsProviderSnapshotResponse, string] =
   ## A value checked against `metrics_provider.snapshot_response`.
-  ?generatedSchema.check("metrics_provider.snapshot_response", v)
+  ?generatedSchema().check("metrics_provider.snapshot_response", v)
   ok(fromChecked(T, v))
 
 proc encode*(x: MetricsProviderSnapshotResponse): Result[seq[byte], string] =
   ## Logos deterministic CBOR, checked against `metrics_provider.snapshot_response`.
-  generatedSchema.encodeChecked("metrics_provider.snapshot_response", toCbor(x))
+  generatedSchema().encodeChecked("metrics_provider.snapshot_response", toCbor(x))
 
 proc decode*(T: type MetricsProviderSnapshotResponse, data: openArray[byte]): Result[MetricsProviderSnapshotResponse, string] =
   ## One deterministic-CBOR `metrics_provider.snapshot_response` value.
-  let v = ?generatedSchema.decodeChecked("metrics_provider.snapshot_response", data)
+  let v = ?generatedSchema().decodeChecked("metrics_provider.snapshot_response", data)
   ok(fromChecked(T, v))

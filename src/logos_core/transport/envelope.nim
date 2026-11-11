@@ -16,6 +16,7 @@
 {.push raises: [].}
 
 import results
+import ../base/perthread
 import ../cbor
 import ../commitment
 import ../hash/hashinput
@@ -186,25 +187,28 @@ proc loadEnvelope(): Result[Envelope, string] =
       return err("logos.transport.message-kind allows " & $n)
   ok(e)
 
-let envelope = block:
+proc loadPinnedEnvelope(): Envelope =
   let e = loadEnvelope()
   doAssert e.isOk,
     "the pinned TRANSPORT §1 CDDL does not match the envelope types: " & e.error &
       ": re-derive transport/envelope.nim from the spec revision"
   e.get
 
+perThread(envelope, Envelope, loadPinnedEnvelope())
+discard envelope()
+
 func envelopeSchema*(): ProtocolSchema =
   {.cast(noSideEffect).}:
-    envelope.schema
+    envelope().schema
 
 func kindRangeRule(): PType =
   {.cast(noSideEffect).}:
-    envelope.kindRange
+    envelope().kindRange
 
 func messageArms*(k: MessageKind): seq[PType] =
   ## The closed maps a message of kind `k` may be.
   {.cast(noSideEffect).}:
-    envelope.arms[k]
+    envelope().arms[k]
 
 # Checking --------------------------------------------------------------------------
 

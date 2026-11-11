@@ -8,7 +8,7 @@
 
 import std/[sets, strutils, tables]
 import results
-import ../base/hex
+import ../base/[hex, perthread]
 import ../cbor
 import ../commitment
 import ../hash
@@ -114,15 +114,18 @@ proc loadManifestSchema(): Result[ManifestSchema, string] =
       err("the manifest subtree root is not the pinned " & PackageManifestSubtreeRoot)
   ok(ManifestSchema(contracts: c, set: c.schemaSet, body: d.body))
 
-let manifestSchema = block:
+proc loadPinnedManifestSchema(): ManifestSchema =
   let s = loadManifestSchema()
   doAssert s.isOk,
     "the pinned PM §4 manifest schema does not reproduce its pinned roots: " & s.error
   s.get
 
+perThread(manifestSchema, ManifestSchema, loadPinnedManifestSchema())
+discard manifestSchema()
+
 func schema(): ManifestSchema =
   {.cast(noSideEffect).}:
-    manifestSchema
+    manifestSchema()
 
 func manifestContracts*(): ContractSet =
   ## The accepted PM §4 schema document.

@@ -7,7 +7,7 @@
 import std/[os, parseopt, strutils]
 import results
 import ./logos_core/iface/accept
-import ./logos_core/codegen/nimgen
+import ./logos_core/codegen/[kitgen, nimgen]
 
 const usage = """
 Usage:
@@ -16,6 +16,8 @@ Usage:
                 [--interface:FILE]... [--supporting:FILE]...
   lcn-gen nim-common [--out:DIR] [--import-prefix:P]
   lcn-gen nim [--out:DIR] [--import-prefix:P] [--system] [--module:NAME] PRIMARY.cddl
+              [--interface:FILE]... [--supporting:FILE]...
+  lcn-gen kit [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
               [--interface:FILE]... [--supporting:FILE]...
 
 logos-types  writes DIR/logos_types.h
@@ -26,6 +28,10 @@ types        accepts the construction input set (INTERFACE §1.1, §5.3) and
              the --interface documents
 nim-common   writes DIR/common_types.nim (the pinned common schema)
 nim          accepts the set and writes DIR/<module or namespace>_types.nim
+kit          accepts a concrete module document's set and writes the Nim
+             types and DIR/<module>_kit.nim: the module's exported ABI
+             symbols over handlers its author writes in Nim (PROVISIONAL;
+             the typed _CALL_ provider functions are not generated yet)
 
 --import-prefix:P  how Nim output imports this library (default: logos_core/)
 
@@ -108,8 +114,8 @@ proc main(): int =
     let module = commonNimModule(NimOptions(importPrefix: prefix)).valueOr:
       return fail(error)
     write(outDir, "common_types.nim", module)
-  of "types", "nim":
-    if primary.len == 0 and (module.len == 0 or command == "nim"):
+  of "types", "nim", "kit":
+    if primary.len == 0 and (module.len == 0 or command != "types"):
       return fail("no primary document\n" & usage)
     var sources: seq[string]
     try:
@@ -138,9 +144,16 @@ proc main(): int =
       sources[0], sources[1 .. interfaces.len], sources[interfaces.len + 1 .. ^1], opts
     ).valueOr:
       return fail("the schema set is not accepted: " & error)
-    if command == "nim":
+    if command in ["nim", "kit"]:
       let module = nimModule(set, NimOptions(importPrefix: prefix), opts.system).valueOr:
         return fail(error)
+      if command == "kit":
+        let kit = kitModule(set, KitOptions(importPrefix: prefix), opts.system).valueOr:
+          return fail(error)
+        let r = write(outDir, set.cSchemaSet.headerName & "_types.nim", module)
+        if r != 0:
+          return r
+        return write(outDir, set.cSchemaSet.headerName & "_kit.nim", kit)
       return write(outDir, set.cSchemaSet.headerName & "_types.nim", module)
     let header = contractHeader(set.cSchemaSet).valueOr:
       return fail(error)

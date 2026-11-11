@@ -7,6 +7,7 @@
 
 import std/strutils
 import results
+import ../base/perthread
 import ../cbor
 import ../cddl/syntax
 import ../commitment
@@ -126,15 +127,18 @@ proc loadRecordSchema(): Result[RecordSchema, string] =
     )
   )
 
-let recordSchema = block:
+proc loadPinnedRecordSchema(): RecordSchema =
   let s = loadRecordSchema()
   doAssert s.isOk,
     "the pinned PM §5, §6 and §11 record schema does not load: " & s.error
   s.get
 
+perThread(recordSchema, RecordSchema, loadPinnedRecordSchema())
+discard recordSchema()
+
 func schema(): RecordSchema =
   {.cast(noSideEffect).}:
-    recordSchema
+    recordSchema()
 
 func check(node: SchemaNode, v: CborValue, what: string): Result[void, string] =
   let s = schema()

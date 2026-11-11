@@ -151,7 +151,7 @@ func scalarC(k: ScalarKind): string =
   of skTstr: "const char*"
   of skBstr: "const uint8_t*"
 
-func cString*(s: string): string =
+func cStringLiteral*(s: string): string =
   ## [SPEC INTERFACE §2.3] A generated text literal: one C string literal with
   ## the exact bytes. Printable ASCII as is, except `\"`, `\\` and `\?`;
   ## `\n`, `\r`, `\t`; every other byte as exactly three octal digits.
@@ -195,7 +195,7 @@ func literalC(d: ScalarData): (string, string) =
     else:
       ("int64_t", "(-INT64_C(" & $(-d.signed) & "))")
   of skTstr:
-    ("const char*", cString(d.text))
+    ("const char*", cStringLiteral(d.text))
   of skBstr:
     ("const uint8_t*", "") # construction admits no byte-string literal
 
@@ -425,11 +425,11 @@ proc literalMacro(g: var Gen, o: Owner, path: openArray[string], d: ScalarData) 
 
 proc single(
   g: var Gen, o: Owner, path: seq[string], n: SchemaNode, name: string
-): CMember
+): CMember {.gcsafe.}
 
 proc position(
   g: var Gen, o: Owner, path: seq[string], n: SchemaNode, name: string
-): CMember
+): CMember {.gcsafe.}
 
 proc addDef(g: var Gen, d: CDef) =
   g.defs[d.key] = d
@@ -607,7 +607,7 @@ proc choiceDef(
 
 proc position(
     g: var Gen, o: Owner, path: seq[string], n: SchemaNode, name: string
-): CMember =
+): CMember {.gcsafe.} =
   ## [SPEC INTERFACE §2.3] A tuple position, list element or choice arm: an
   ## inline tuple, list or byte string is one aggregate value named by its path
   ## (`_TUPLE`, `_LIST`, `_BSTR`, a positive exact size as `data[N]`); `[]` and
@@ -637,7 +637,7 @@ proc position(
 
 proc single(
     g: var Gen, o: Owner, path: seq[string], n: SchemaNode, name: string
-): CMember =
+): CMember {.gcsafe.} =
   ## A one-member representation of a scalar, literal, inline map or choice, or
   ## named reference at (`o`, `path`).
   let stem = stemPath(o.stem, path)
@@ -1166,7 +1166,7 @@ func roleConstant(m: SchemaModel, module: Opt[string]): (string, string) =
       "LOGOS_INTERFACE_NAMESPACE_" & projectNamespace(m.namespace)
     else:
       "LOGOS_SUPPORTING_NAMESPACE_" & projectNamespace(m.namespace)
-  (name, cString(m.namespace))
+  (name, cStringLiteral(m.namespace))
 
 func sensitiveConstants(m: SchemaModel): seq[(string, string)] =
   ## [SPEC INTERFACE §2.1] `LOGOS_SENSITIVE_<namespace>_INDEX<i>`, in the ASCII
@@ -1182,7 +1182,10 @@ func sensitiveConstants(m: SchemaModel): seq[(string, string)] =
   var cs: seq[(string, string)]
   for i, n in names:
     cs.add(
-      ("LOGOS_SENSITIVE_" & projectNamespace(m.namespace) & "_INDEX" & $i, cString(n))
+      (
+        "LOGOS_SENSITIVE_" & projectNamespace(m.namespace) & "_INDEX" & $i,
+        cStringLiteral(n),
+      )
     )
   cs
 
@@ -1200,7 +1203,7 @@ func moduleConstants(s: CSchemaSet): seq[(string, string)] =
     cs.add(
       (
         "LOGOS_IMPLEMENTS_" & projectModule(s.module.get) & "_INDEX" & $i,
-        cString(c.model.namespace),
+        cStringLiteral(c.model.namespace),
       )
     )
   cs

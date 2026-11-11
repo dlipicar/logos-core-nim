@@ -5,13 +5,14 @@
 import std/[os, sequtils]
 import results
 import ../../src/logos_core/iface/accept
-import ../../src/logos_core/codegen/nimgen
+import ../../src/logos_core/codegen/[kitgen, nimgen]
 
 type NimFixture* = object
   module*: string ## the file under tests/generated/
   primary*: string
   interfaces*, supporting*: seq[string]
   system*: bool
+  kit*: bool ## the module kit (`kitgen`) rather than the types
 
 const
   fixturePrefix* = "../../src/logos_core/"
@@ -29,6 +30,18 @@ const
       module: "recursive_types.nim", primary: "spec/mirrors/IFC/3.9.3.module.cddl"
     ),
     NimFixture(module: "demo_types.nim", primary: "tests/generated/demo.cddl"),
+    NimFixture(
+      module: "meter_module_kit.nim",
+      primary: "spec/mirrors/IFC/3.9.1.module.cddl",
+      kit: true,
+    ),
+    NimFixture(
+      module: "sensor_module_kit.nim",
+      primary: "spec/mirrors/IFC/3.9.2.module.cddl",
+      interfaces: @["spec/mirrors/IFC/3.9.2.interface.cddl"],
+      supporting: @["spec/mirrors/IFC/3.9.2.supporting.cddl"],
+      kit: true,
+    ),
   ]
 
 proc generated*(f: NimFixture): Result[string, string] =
@@ -40,7 +53,10 @@ proc generated*(f: NimFixture): Result[string, string] =
       f.supporting.mapIt(readFile(it)),
       AcceptOptions(system: f.system),
     )
-    nimModule(set, NimOptions(importPrefix: fixturePrefix), f.system)
+    if f.kit:
+      kitModule(set, KitOptions(importPrefix: fixturePrefix), f.system)
+    else:
+      nimModule(set, NimOptions(importPrefix: fixturePrefix), f.system)
   except IOError as e:
     err(e.msg)
 
