@@ -55,6 +55,13 @@ heading under a numbered one.
 | `informative` | Nothing to test (only References and Copyright). |
 | `out-of-scope:<why>` | Normative, but not this repository's to implement. |
 
+## Properties not claimed
+
+- Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
+  run as the daemon's user, so a process running as that user can replace a socket pathname or
+  impersonate an endpoint. Deployments that need that protection must run hosts under distinct OS
+  identities, which this implementation does not set up (DECISIONS G58).
+
 ## Tagging tests
 
 A test covers a unit by carrying its ID in brackets anywhere in the test file, normally in the test

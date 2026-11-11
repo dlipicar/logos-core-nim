@@ -17,7 +17,7 @@ The specs are being revised, so the work is ordered by how settled each area is
   package artifacts: the manifest and its commitment, package-signing trust input, COSE_Sign1, LGX
   archives, and `lcn-pkg`, the producer tools. Sockets, fetch, catalogs, installation and the
   resolver come later. At `6a4dfa28` package signing moved from Ed25519 to SLH-DSA-SHA2-192s (PM
-  §4.3); the code still signs with Ed25519 until the implementation is chosen (DECISIONS R4, I50).
+  §4.3); the code still signs with Ed25519 until the chosen implementation, vendored slhdsa-c, is built (DECISIONS R4, I50).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 
