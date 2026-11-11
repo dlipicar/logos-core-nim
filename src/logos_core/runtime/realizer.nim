@@ -21,7 +21,11 @@
 ## the Runtime rejects records that declare configuration, and the ABI caller
 ## always supplies the absent representation.
 ## [IMPL] A realizer is owned by one thread, the Runtime's; calls on it are
-## serialized, which gives LOADER §11's per-instance total order.
+## serialized, which gives LOADER §11's per-instance total order. Module code
+## runs in separate phases (`runBind`, `initModule`, a `Teardown`) that take
+## plain values only, so the Runtime can run them on worker threads under its
+## deadlines while its own thread keeps serving requests; `realize` and
+## `release` run every phase on the calling thread.
 
 {.push raises: [].}
 
@@ -106,6 +110,7 @@ type
     context*: ptr LogosModuleContext ## nil once destruction has begun
     stateDir*: Opt[string]
     key: string
+    releasing: bool ## `_MODULE_destroy` has been handed out
 
   RealizationRecord* = object
     ## [SPEC LOADER §7] The public record: no descriptor, handoff or path.
@@ -121,11 +126,58 @@ type
     hostedPlacements*: seq[string]
     forceRelease*: bool
 
+  BindSpec* = object ## What binding module code needs, as plain values (`runBind`).
+    key*: string
+    module*: string
+    case kind*: CodeKind
+    of codeStatic:
+      symbols*: Table[string, pointer]
+    of codeDynamic:
+      artifact*: ArtifactRecord
+      dir*: string ## the private artifact directory
+      name*: string ## the staged copy's file name
+
+  BindResult* = object
+    ## Plain values only: no `ref` built on one thread reaches another (ORC
+    ## keeps cycle candidates per thread).
+    key*: string
+    module*: string
+    code*: ModuleCode
+    probe*: Result[NativeProbe, LoaderError]
+    cache*: bool ## a final outcome: the code was found or mapped
+
+  StepKind* = enum
+    skLive ## the instance already has this realization
+    skBind ## run `runBind`, then `storeBinding`
+    skInit ## the binding is ready: `prepareInit`
+
+  Step* = object
+    case kind*: StepKind
+    of skLive:
+      realization*: Realization
+    of skBind:
+      spec*: BindSpec
+    of skInit:
+      binding*: ref NativeBinding
+
+  InitHandoff* = ref object
+    ## The initialization input and what it points to: neither moves nor
+    ## changes until `_MODULE_init` has returned.
+    request*: RealizeRequest
+    binding*: ref NativeBinding
+    input*: LogosModuleInitInput
+    stateDir: Opt[string]
+    stateDirText: string
+
+  Teardown* = object ## The one `_MODULE_destroy(context)` call a release hands out.
+    destroy*: ModuleDestroyFn
+    context*: ptr LogosModuleContext
+
   Realizer* = ref object
     statics: Table[string, StaticRegistration] ## by binding identifier
-    staticBindings: Table[string, Result[ref NativeBinding, string]]
-    dynamicBindings: Table[string, Result[ref NativeBinding, string]]
-      ## by artifact digest and module name
+    bindings: Table[string, Result[ref NativeBinding, LoaderError]]
+      ## final binding outcomes: `s:` and the static binding identifier, or
+      ## `d:`, the hash suite, the artifact digest and the module name
     live: Table[string, Realization] ## by module instance
     prefix: string
     issued: int
@@ -184,7 +236,7 @@ proc registerStatic*(
 func sized(s: string, lo, hi: int): bool =
   s.len >= lo and s.len <= hi and isValidUtf8(s)
 
-func pathSafe(s: string): bool =
+func pathSafe*(s: string): bool =
   s notin [".", ".."] and
     s.allCharsInSet({'a' .. 'z', 'A' .. 'Z', '0' .. '9', '.', '_', '-'})
 
@@ -234,66 +286,109 @@ func keyOf(req: RealizeRequest): string =
     )
   result.add("\0" & req.state.get("-"))
 
-# Bindings ---------------------------------------------------------------------
+func dynamicKey(d: RealizationDescriptor): string =
+  "d:" & d.artifact.hashSuite & ":" & hexOf(d.artifact.hash) & "/" & d.module
 
-proc staticBinding(
-    r: Realizer, d: RealizationDescriptor
-): Result[ref NativeBinding, LoaderError] =
+# Bindings ---------------------------------------------------------------------
+#
+# [IMPL] Binding runs artifact code (the platform loader, `_MODULE_name()`,
+# `_MODULE_call_surface()`, RUNTIME §3.6), so it is a separate phase: `begin`
+# returns a `BindSpec` of plain values, any thread may run `runBind` on it, and
+# the owning thread caches the result with `storeBinding`. The Runtime runs it
+# on a worker thread under the startup deadline; `realize` runs it inline.
+
+proc staticSpec(r: Realizer, d: RealizationDescriptor): Result[BindSpec, LoaderError] =
   if d.binding notin r.statics:
     # [IMPL] An unknown identifier is a request the Loader can never satisfy.
     return fail(lecInvalidRequest, "no static registration has that binding identifier")
   let reg = r.statics.getOrDefault(d.binding)
   if reg.module != d.module:
     return fail(lecAbiInvalid, "the registration holds another module's ABI symbols")
-  if d.binding notin r.staticBindings:
-    let b = bindNative(ModuleCode(kind: codeStatic, table: reg.symbols), d.module)
-    r.staticBindings[d.binding] =
-      if b.isOk:
-        let x = new NativeBinding
-        x[] = b.get
-        Result[ref NativeBinding, string].ok(x)
-      else:
-        Result[ref NativeBinding, string].err(b.error)
-  let b = r.staticBindings.getOrDefault(d.binding)
-  if b.isErr:
-    return fail(lecAbiInvalid, b.error)
-  ok(b.get)
+  ok(
+    BindSpec(
+      key: "s:" & d.binding, module: d.module, kind: codeStatic, symbols: reg.symbols
+    )
+  )
 
-proc dynamicBinding(
-    r: Realizer, d: RealizationDescriptor
-): Result[ref NativeBinding, LoaderError] =
+proc dynamicSpec(r: Realizer, d: RealizationDescriptor): Result[BindSpec, LoaderError] =
   ## [SPEC LOADER §3; RUNTIME §3.6 step 4] One verified copy and one mapping
   ## per artifact digest and module; a later instance reuses them (§2.2).
-  let key = d.artifact.hashSuite & ":" & hexOf(d.artifact.hash) & "/" & d.module
-  if key notin r.dynamicBindings:
-    if r.artifactDir.len == 0:
-      r.artifactDir = privateDir(r.workDir).valueOr:
-        return fail(lecRealizationFailed, "no private artifact directory: " & error)
-    inc r.staged
-    let path = stage(d.artifact, r.artifactDir, "a" & $r.staged).valueOr:
-      return fail(
-        (
-          case error.kind
-          of sfUnavailable: lecArtifactUnavailable
-          of sfIntegrity: lecArtifactIntegrityFailed
-        ),
-        error.msg,
-      )
-    let lib = mapLibrary(path)
-    if lib == nil:
-      return fail(lecArtifactUnavailable, "the platform loader refused the library")
-    let b = bindNative(ModuleCode(kind: codeDynamic, library: lib), d.module)
-    r.dynamicBindings[key] =
-      if b.isOk:
-        let x = new NativeBinding
-        x[] = b.get
-        Result[ref NativeBinding, string].ok(x)
+  if r.artifactDir.len == 0:
+    r.artifactDir = privateDir(r.workDir).valueOr:
+      return fail(lecRealizationFailed, "no private artifact directory: " & error)
+  inc r.staged
+  ok(
+    BindSpec(
+      key: dynamicKey(d),
+      module: d.module,
+      kind: codeDynamic,
+      artifact: d.artifact,
+      dir: r.artifactDir,
+      name: "a" & $r.staged,
+    )
+  )
+
+proc runBind*(spec: BindSpec): BindResult {.gcsafe.} =
+  ## Maps and probes the module code `spec` names (`probeNative`). Runs
+  ## artifact code; any thread may call it, and it touches no realizer
+  ## state.
+  result.key = spec.key
+  result.module = spec.module
+  let code =
+    case spec.kind
+    of codeStatic:
+      ModuleCode(kind: codeStatic, table: spec.symbols)
+    of codeDynamic:
+      let path = stage(spec.artifact, spec.dir, spec.name).valueOr:
+        # Not cached: a later request may find the artifact readable.
+        result.probe.err(
+          loaderError(
+            (
+              case error.kind
+              of sfUnavailable: lecArtifactUnavailable
+              of sfIntegrity: lecArtifactIntegrityFailed
+            ),
+            error.msg,
+          )
+        )
+        return
+      let lib = mapLibrary(path)
+      if lib == nil:
+        result.probe.err(
+          loaderError(lecArtifactUnavailable, "the platform loader refused the library")
+        )
+        return
+      ModuleCode(kind: codeDynamic, library: lib)
+  result.cache = true # the code is mapped: its binding outcome is final
+  result.code = code
+  let p = probeNative(code, spec.module)
+  if p.isOk:
+    result.probe.ok(p.get)
+  else:
+    result.probe.err(loaderError(lecAbiInvalid, p.error))
+
+proc storeBinding*(
+    r: Realizer, res: sink BindResult
+): Result[ref NativeBinding, LoaderError] =
+  ## Validates a probe on the owning thread (`completeNative`, no module
+  ## code) and caches a final outcome; an earlier cached outcome for the same
+  ## key wins.
+  if res.key in r.bindings:
+    return r.bindings.getOrDefault(res.key)
+  let x =
+    if res.probe.isErr:
+      Result[ref NativeBinding, LoaderError].err(res.probe.error)
+    else:
+      let c = completeNative(res.code, res.probe.get)
+      if c.isOk:
+        let b = new NativeBinding
+        b[] = c.get
+        Result[ref NativeBinding, LoaderError].ok(b)
       else:
-        Result[ref NativeBinding, string].err(b.error)
-  let b = r.dynamicBindings.getOrDefault(key)
-  if b.isErr:
-    return fail(lecAbiInvalid, b.error)
-  ok(b.get)
+        Result[ref NativeBinding, LoaderError].err(loaderError(lecAbiInvalid, c.error))
+  if res.cache:
+    r.bindings[res.key] = x
+  x
 
 # Realize and release ----------------------------------------------------------
 
@@ -310,15 +405,72 @@ proc stateDirFor(r: Realizer, assignment: string): Result[string, LoaderError] =
     return fail(lecRealizationFailed, "the state directory cannot be established")
   ok(dir)
 
-proc initInstance*(
-    b: ref NativeBinding, input: ptr LogosModuleInitInput
-): (LogosResult, ptr LogosModuleContext) =
+proc begin*(r: Realizer, req: RealizeRequest): Result[Step, LoaderError] =
+  ## [SPEC LOADER §6] The first phase of `realize`: the request checks, then
+  ## the instance's current realization, a cached binding, or the binding work
+  ## still to do. The caller runs one realization at a time per instance.
+  ?checkRequest(req)
+  let key = keyOf(req)
+  if req.moduleInstance in r.live:
+    let x = r.live.getOrDefault(req.moduleInstance)
+    if x.key == key and not x.releasing:
+      return ok(Step(kind: skLive, realization: x)) # §6: already realized
+    return fail(lecInstanceConflict, "the instance has another realization")
+  let d = req.descriptor
+  let spec =
+    case d.strategy
+    of stHostedDynamic:
+      return fail(lecUnsupportedStrategy, "hosted_dynamic is not advertised")
+    of stDirectStatic:
+      ?r.staticSpec(d)
+    of stDirectDynamic:
+      if dynamicKey(d) in r.bindings:
+        # A cached binding needs no new staged copy.
+        BindSpec(key: dynamicKey(d), module: d.module, kind: codeDynamic)
+      else:
+        ?r.dynamicSpec(d)
+  if spec.key in r.bindings:
+    let b = ?r.bindings.getOrDefault(spec.key)
+    return ok(Step(kind: skInit, binding: b))
+  ok(Step(kind: skBind, spec: spec))
+
+proc prepareInit*(
+    r: Realizer, req: RealizeRequest, b: ref NativeBinding
+): Result[InitHandoff, LoaderError] =
+  ## [SPEC LOADER §6 steps 4-7] The state directory and the initialization
+  ## input, which stay where they are until `_MODULE_init` has returned.
+  let h = InitHandoff(request: req, binding: b)
+  if req.state.isSome:
+    h.stateDir = Opt.some(?r.stateDirFor(req.state.get))
+    h.stateDirText = h.stateDir.get
+  h.input = LogosModuleInitInput(
+    abiVersion: ModuleInitAbiVersion,
+    structSize: csize_t(sizeof(LogosModuleInitInput)),
+    runtimeControl: req.services.runtimeControl,
+    publishUserData: req.services.publishUserData,
+    publish: req.services.publish,
+    stateDir: (if h.stateDir.isSome: cstring(h.stateDirText) else: nil),
+    invocationAccess: req.services.invocationAccess,
+  )
+  checkInitInput(addr h.input, b.declaresEvents).isOkOr:
+    return fail(
+      lecRealizationFailed,
+      "the Runtime's initialization services are invalid: " & error.message.get(""),
+    )
+  ok(h)
+
+proc initModule*(
+    init: ModuleInitFn, input: ptr LogosModuleInitInput
+): (LogosResult, ptr LogosModuleContext) {.gcsafe.} =
   ## [SPEC INTERFACE §2.6; LOADER §6 step 8] The one `_MODULE_init` call, with
   ## `*out_context` set to null first. Plain values only, so a Runtime can run
   ## it on a thread of its choosing.
   var ctx: ptr LogosModuleContext = nil
-  let res = b.init(input, addr ctx)
+  let res = init(input, addr ctx)
   (res, ctx)
+
+proc initInstance*(h: InitHandoff): (LogosResult, ptr LogosModuleContext) =
+  initModule(h.binding.init, addr h.input)
 
 proc nextId(r: Realizer): string =
   ## [SPEC LOADER §7] Never issued before by this Loader: a random prefix per
@@ -326,51 +478,22 @@ proc nextId(r: Realizer): string =
   inc r.issued
   "r-" & r.prefix & "-" & $r.issued
 
-proc realize*(r: Realizer, req: RealizeRequest): Result[Realization, LoaderError] =
-  ## [SPEC LOADER §6] Returns the active realization, or an error after every
-  ## partial context and binding it can clean is cleaned.
-  ?checkRequest(req)
-  let key = keyOf(req)
-  if req.moduleInstance in r.live:
-    let x = r.live.getOrDefault(req.moduleInstance)
-    if x.key == key:
-      return ok(x) # §6: the same descriptor and handoffs, already realized
-    return fail(lecInstanceConflict, "the instance has another realization")
-  let d = req.descriptor
-  let b =
-    case d.strategy
-    of stHostedDynamic:
-      return fail(lecUnsupportedStrategy, "hosted_dynamic is not advertised")
-    of stDirectStatic:
-      ?r.staticBinding(d)
-    of stDirectDynamic:
-      ?r.dynamicBinding(d)
-  var stateDir = Opt.none(string)
-  if req.state.isSome:
-    stateDir = Opt.some(?r.stateDirFor(req.state.get))
-  # [SPEC LOADER §6 steps 4-7] The initialization input.
-  let dirText = stateDir.get("")
-  var input = LogosModuleInitInput(
-    abiVersion: ModuleInitAbiVersion,
-    structSize: csize_t(sizeof(LogosModuleInitInput)),
-    runtimeControl: req.services.runtimeControl,
-    publishUserData: req.services.publishUserData,
-    publish: req.services.publish,
-    stateDir: (if stateDir.isSome: cstring(dirText) else: nil),
-    invocationAccess: req.services.invocationAccess,
-  )
-  checkInitInput(addr input, b.declaresEvents).isOkOr:
-    return fail(
-      lecRealizationFailed,
-      "the Runtime's initialization services are invalid: " & error.message.get(""),
-    )
-  let (res, ctx) = initInstance(b, addr input)
+proc completeInit*(
+    r: Realizer,
+    h: InitHandoff,
+    res: LogosResult,
+    ctx: ptr LogosModuleContext,
+    orphan: var ptr LogosModuleContext,
+): Result[Realization, LoaderError] =
+  ## [SPEC LOADER §6, §7] Checks what `_MODULE_init` returned. A failure is
+  ## not retained (§7 allows it; nothing about it can be cleaned later).
+  ## [IMPL] LOGOS_OK with a context but an invalid status: the instance exists,
+  ## so `orphan` names the context the caller must destroy exactly once.
+  orphan = nil
   let outcome = checkOutcome(res, contextShape(ctx))
   if outcome.isErr:
     if int64(res.code) == 0 and ctx != nil:
-      # [IMPL] LOGOS_OK with a context but an invalid status: the instance
-      # exists, so it is destroyed exactly once before the failure returns.
-      b.destroy(ctx)
+      orphan = ctx
     let f = outcome.error
     return err(
       loaderError(
@@ -379,22 +502,43 @@ proc realize*(r: Realizer, req: RealizeRequest): Result[Realization, LoaderError
     )
   let x = Realization(
     id: r.nextId(),
-    moduleInstance: req.moduleInstance,
+    moduleInstance: h.request.moduleInstance,
     status: rsActive,
-    binding: b,
+    binding: h.binding,
     context: ctx,
-    stateDir: stateDir,
-    key: key,
+    stateDir: h.stateDir,
+    key: keyOf(h.request),
   )
-  r.live[req.moduleInstance] = x
+  r.live[h.request.moduleInstance] = x
   ok(x)
 
-proc release*(
+proc realize*(r: Realizer, req: RealizeRequest): Result[Realization, LoaderError] =
+  ## [SPEC LOADER §6] Every phase on the calling thread. Returns the active
+  ## realization, or an error after every partial context it can clean is
+  ## cleaned.
+  let step = ?r.begin(req)
+  let b =
+    case step.kind
+    of skLive:
+      return ok(step.realization)
+    of skBind:
+      ?r.storeBinding(runBind(step.spec))
+    of skInit:
+      step.binding
+  let h = ?r.prepareInit(req, b)
+  let (res, ctx) = initInstance(h)
+  var orphan: ptr LogosModuleContext
+  result = r.completeInit(h, res, ctx, orphan)
+  if orphan != nil:
+    b.destroy(orphan)
+
+proc beginRelease*(
     r: Realizer, realization, moduleInstance: string, force = false
-): Result[void, LoaderError] =
-  ## [SPEC LOADER §9] Graceful release: `_MODULE_destroy` exactly once, then the
-  ## record is gone. The Runtime has already stopped and drained the instance's
-  ## work. The binding stays (never unloaded).
+): Result[Opt[Teardown], LoaderError] =
+  ## [SPEC LOADER §9] Graceful release, first phase: the context to destroy,
+  ## if the realization still has one. The Runtime has already stopped and
+  ## drained the instance's work. The record stays (as releasing) until
+  ## `finishRelease`.
   if force:
     return fail(lecInvalidRequest, "force_release is not advertised")
   var found: Realization = nil
@@ -402,14 +546,32 @@ proc release*(
     if x.id == realization:
       found = x
   if found.isNil:
-    return ok() # idempotent; touches no other realization
+    return ok(Opt.none(Teardown)) # idempotent; touches no other realization
   if found.moduleInstance != moduleInstance:
     return fail(lecRealizationNotFound, "no realization matches both identifiers")
-  if found.context != nil:
-    let ctx = found.context
-    found.context = nil # destruction begins: the context is consumed
-    found.binding.destroy(ctx)
-  r.live.del(moduleInstance)
+  found.releasing = true
+  if found.context == nil:
+    return ok(Opt.none(Teardown))
+  let t = Teardown(destroy: found.binding.destroy, context: found.context)
+  found.context = nil # destruction begins: the context is consumed
+  ok(Opt.some(t))
+
+proc finishRelease*(r: Realizer, moduleInstance: string) =
+  ## [SPEC LOADER §9] `_MODULE_destroy` has returned: the record is gone. The
+  ## binding stays (never unloaded).
+  let x = r.live.getOrDefault(moduleInstance)
+  if not x.isNil and x.releasing:
+    r.live.del(moduleInstance)
+
+proc release*(
+    r: Realizer, realization, moduleInstance: string, force = false
+): Result[void, LoaderError] =
+  ## [SPEC LOADER §9] Both phases on the calling thread: `_MODULE_destroy`
+  ## exactly once, then the record is gone.
+  let t = ?r.beginRelease(realization, moduleInstance, force)
+  if t.isSome:
+    t.get.destroy(t.get.context)
+  r.finishRelease(moduleInstance)
   ok()
 
 func record*(x: Realization): RealizationRecord =

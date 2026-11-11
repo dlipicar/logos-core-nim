@@ -64,6 +64,21 @@ type
     of codeDynamic:
       library*: LibHandle
 
+  NativeProbe* = object
+    ## What binding read from module code, as plain values (`probeNative`).
+    module*: string
+    moduleC*: string
+    name*: ModuleNameFn
+    init*: ModuleInitFn
+    destroy*: ModuleDestroyFn
+    applyConfiguration*: ModuleApplyConfigurationFn
+    provider*: bool
+    free*: ModuleFreeFn
+    dispatch*: ModuleDispatchFn
+    callSurface*: seq[byte]
+    asyncExported*: bool
+    asyncApi*: ptr LogosAsyncProviderApi
+
   NativeBinding* = object
     ## [SPEC RUNTIME §2.2] One accepted implementation binding: resolved once,
     ## shared by every instance initialized from it, never unloaded.
@@ -168,25 +183,24 @@ proc find*(code: ModuleCode, name: string): pointer =
   of codeDynamic:
     code.library.symAddr(cstring(name))
 
-proc bindNative*(
-    code: ModuleCode, module: string, opts = AcceptOptions()
-): Result[NativeBinding, string] =
-  ## [SPEC RUNTIME §2.2, §2.4; LOADER §6 steps 1-3] Resolves `module`'s symbols
-  ## from `code` and validates its metadata. Calls `_MODULE_name()`,
-  ## `_MODULE_call_surface()` and `_MODULE_async_api()` (module code) but not
-  ## `_MODULE_init()`. Every error is the Loader's `abi-invalid`.
+proc probeNative*(code: ModuleCode, module: string): Result[NativeProbe, string] =
+  ## [SPEC RUNTIME §2.2, §2.4; LOADER §6 steps 1-3] The part of binding that
+  ## runs module code: resolves the identity, lifecycle and provider symbols
+  ## and calls `_MODULE_name()`, then for a provider `_MODULE_call_surface()`
+  ## and `_MODULE_async_api()`. The result holds plain values only, so a
+  ## worker thread can hand it to the thread that validates it.
   let moduleC = projectModule(module)
-  var b = NativeBinding(module: module, moduleC: moduleC)
+  var p = NativeProbe(module: module, moduleC: moduleC)
   template sym(suffix: string): pointer =
     code.find(symbolName(moduleC, suffix))
 
   for s in RequiredSuffixes:
     if sym(s) == nil:
       return err("the code lacks " & symbolName(moduleC, s))
-  b.name = cast[ModuleNameFn](sym("name"))
-  b.init = cast[ModuleInitFn](sym("init"))
-  b.destroy = cast[ModuleDestroyFn](sym("destroy"))
-  b.applyConfiguration = cast[ModuleApplyConfigurationFn](sym("apply_configuration"))
+  p.name = cast[ModuleNameFn](sym("name"))
+  p.init = cast[ModuleInitFn](sym("init"))
+  p.destroy = cast[ModuleDestroyFn](sym("destroy"))
+  p.applyConfiguration = cast[ModuleApplyConfigurationFn](sym("apply_configuration"))
   var present = 0
   for s in ProviderSuffixes:
     if sym(s) != nil:
@@ -195,13 +209,47 @@ proc bindNative*(
     return err(
       "the code exports some but not all of _MODULE_call_surface, _MODULE_free and _MODULE_dispatch"
     )
-  b.provider = present == ProviderSuffixes.len
+  p.provider = present == ProviderSuffixes.len
   # [SPEC RUNTIME §2.2] `_MODULE_name()` before any other module call.
-  let reported = b.name()
+  let reported = p.name()
   if reported == nil:
     return err("_MODULE_name() returned null")
   if $reported != module:
     return err("_MODULE_name() does not return the expected module name")
+  if not p.provider:
+    return ok(p)
+  p.free = cast[ModuleFreeFn](sym("free"))
+  p.dispatch = cast[ModuleDispatchFn](sym("dispatch"))
+  # [SPEC RUNTIME §2.4] The complete descriptor, copied before init.
+  var len: csize_t = 0
+  let d = cast[ModuleCallSurfaceFn](sym("call_surface"))(addr len)
+  if d == nil or len == 0:
+    return err("_MODULE_call_surface() returned no descriptor")
+  if len > csize_t(MaxDescriptorBytes):
+    return err("the call-surface descriptor is larger than 8,388,608 bytes")
+  p.callSurface = @(cast[ptr UncheckedArray[uint8]](d).toOpenArray(0, int(len) - 1))
+  # [SPEC RUNTIME §2.2, §2.3; INTERFACE §2.9.2] The optional async descriptor.
+  let asyncSym = sym("async_api")
+  if asyncSym != nil:
+    p.asyncExported = true
+    p.asyncApi = cast[ModuleAsyncApiFn](asyncSym)()
+  ok(p)
+
+proc completeNative*(
+    code: ModuleCode, p: NativeProbe, opts = AcceptOptions()
+): Result[NativeBinding, string] =
+  ## [SPEC RUNTIME §2.2, §2.4; INTERFACE §2.6] The part of binding that runs
+  ## no module code: validates the descriptor `p` copied and resolves every
+  ## per-method function it requires.
+  var b = NativeBinding(
+    module: p.module,
+    moduleC: p.moduleC,
+    name: p.name,
+    init: p.init,
+    destroy: p.destroy,
+    applyConfiguration: p.applyConfiguration,
+    provider: p.provider,
+  )
   var staticCalls = initHashSet[string]()
   if code.kind == codeStatic:
     for name in code.table.keys:
@@ -211,17 +259,10 @@ proc bindNative*(
     if staticCalls.len > 0:
       return err("per-method functions without the provider symbols")
     return ok(b)
-  b.free = cast[ModuleFreeFn](sym("free"))
-  b.dispatch = cast[ModuleDispatchFn](sym("dispatch"))
-  # [SPEC RUNTIME §2.4] The complete descriptor, validated before init.
-  var len: csize_t = 0
-  let p = cast[ModuleCallSurfaceFn](sym("call_surface"))(addr len)
-  if p == nil or len == 0:
-    return err("_MODULE_call_surface() returned no descriptor")
-  if len > csize_t(MaxDescriptorBytes):
-    return err("the call-surface descriptor is larger than 8,388,608 bytes")
-  b.callSurface = @(cast[ptr UncheckedArray[uint8]](p).toOpenArray(0, int(len) - 1))
-  b.contracts = acceptCallSurfaceDescriptor(b.callSurface, module, opts).valueOr:
+  b.free = p.free
+  b.dispatch = p.dispatch
+  b.callSurface = p.callSurface
+  b.contracts = acceptCallSurfaceDescriptor(b.callSurface, b.module, opts).valueOr:
     return err("invalid call surface: " & error)
   if not b.contracts.isProvider:
     return err("the call surface exposes no provider contract")
@@ -239,12 +280,18 @@ proc bindNative*(
   for name in staticCalls:
     if name notin b.calls:
       return err("the table holds " & name & ", which the call surface does not define")
-  # [SPEC RUNTIME §2.2, §2.3; INTERFACE §2.9.2] The optional async descriptor.
-  let asyncSym = sym("async_api")
-  if asyncSym != nil:
-    let api = cast[ModuleAsyncApiFn](asyncSym)()
-    checkAsyncProviderApi(api).isOkOr:
+  if p.asyncExported:
+    checkAsyncProviderApi(p.asyncApi).isOkOr:
       return
         err("invalid _MODULE_async_api() descriptor: " & error.message.get($error.code))
-    b.asyncApi = api
+    b.asyncApi = p.asyncApi
   ok(b)
+
+proc bindNative*(
+    code: ModuleCode, module: string, opts = AcceptOptions()
+): Result[NativeBinding, string] =
+  ## [SPEC RUNTIME §2.2, §2.4; LOADER §6 steps 1-3] Both binding phases on the
+  ## calling thread. Calls `_MODULE_name()`, `_MODULE_call_surface()` and
+  ## `_MODULE_async_api()` (module code) but not `_MODULE_init()`. Every error
+  ## is the Loader's `abi-invalid`.
+  completeNative(code, ?probeNative(code, module), opts)
