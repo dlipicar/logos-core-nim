@@ -9,9 +9,10 @@
 ## inner value, as a list index does. [IMPL-DECISION G8] A path crosses a choice
 ## only through a `choice-arm` segment naming the selected arm. A path crosses an
 ## imported reference without a segment (none is defined). [IMPL-DECISION G120]
-## The verifier is handed the schema document and recomputes its root; without
-## one it checks only the physical proof (enough for the synthetic HASH App B
-## identities), and cannot descend a branched map.
+## `verifyView` takes the schema document and recomputes its root (HASH §8
+## l.1214-1215). `verifyPhysicalProof` checks only the physical proof, for the
+## synthetic HASH App B identities (TF-13); it is not a §8 verification and
+## cannot descend a branched map.
 
 {.push raises: [].}
 
@@ -554,8 +555,8 @@ func disclosedValue(
     return fail[void](veProof, "the disclosed value does not match its record")
   ok()
 
-func verifyView*(
-    view: VerifiedView, schema = Opt.none(ViewSchema), profile = SpecProfile
+func verifyAgainst(
+    view: VerifiedView, schema: Opt[ViewSchema], profile: HashProfile
 ): Result[void, ViewError] =
   ## [SPEC HASH §8] Checks `view` against its value root. Validity says nothing of
   ## whether that root is trusted.
@@ -852,3 +853,23 @@ func verifyView*(
     else:
       return fail[void](vePath, "the path continues below a " & $e.kind)
     inc i
+
+func verifyView*(
+    view: VerifiedView, schema: ViewSchema, profile = SpecProfile
+): Result[void, ViewError] =
+  ## [SPEC HASH §8 l.1214-1215, l.1242] Checks `view` against its value root
+  ## under `schema`, the schema construction input verification requires: its
+  ## root must be the view's schema root and its subtree root a value
+  ## declaration's [IMPL-DECISION G120]. Validity says nothing of whether that
+  ## root is trusted.
+  verifyAgainst(view, Opt.some(schema), profile)
+
+func verifyPhysicalProof*(
+    view: VerifiedView, profile = SpecProfile
+): Result[void, ViewError] =
+  ## Replays only the physical proof of `view`, with no schema. This is not a
+  ## HASH §8 verification (l.1214-1215 requires the schema construction input):
+  ## it exists for the synthetic HASH App B.1-B.3 identities, whose schema roots
+  ## name no schema (TF-13), and cannot descend a branched map. Production code
+  ## calls `verifyView`.
+  verifyAgainst(view, Opt.none(ViewSchema), profile)

@@ -238,15 +238,24 @@ suite "ifc.calls: typed call helpers from C (INTERFACE §2.4, §2.7.2, App A.5) 
 
   test "an input outside its schema reaches the provider, whose INVALID_PARAMS comes back":
     withRoute(shapesModule, r):
-      for v in [rvLongName, rvWrongLiteral, rvBadCode]:
+      for v in [rvLongName, rvBadCode]:
         let t = typedReflect(calls, r.asModule, v)
         checkpoint $v & ": " & t.message
         check t.code == ecInvalidParams and t.untouched
         check t.status.error.detail.isSome # the provider's validation detail
-      let tag = typedPick(calls, r.asModule, pvWrongTag)
-      check tag.code == ecInvalidParams and tag.untouched
-      check r.counts == (4, 0, 0)
+      check r.counts == (2, 0, 0)
       check shapesCalls(ctx) == 0
+
+  test "[IFC-0141] the helpers' encoders emit each required literal, whatever its C member holds":
+    withRoute(shapesModule, r):
+      # `a` is the literal 7; the harness sets it to 8
+      let t = typedReflect(calls, r.asModule, rvWrongLiteral)
+      check t.status.isOk and t.text.startsWith("a=7 ")
+      # arm `id` with the `name` arm's `by` literal: still a pick by id
+      let tag = typedPick(calls, r.asModule, pvWrongTag)
+      check tag.status.isOk
+      check tag.text == typedPick(calls, r.asModule, pvId).text
+      check r.counts == (3, 3, 0)
 
   test "the provider's failures and its own invalid response come back as it returned them":
     withRoute(shapesModule, r):
@@ -341,7 +350,7 @@ proc both(r: ptr TestRoute): (Typed, InvocationFailure) =
   (typedPing(calls, r.asModule), invoke(r.routeHandle, ShapesPingRequest()).failureOf)
 
 suite "ifc.calls: what a helper rejects from its route (INTERFACE §2.7.2, §5.2) [IMPL]":
-  test "[IFC-0490] a result and buffer combination the route may not return is MODULE_ERROR, and nothing is released":
+  test "[IFC-0490] [IFC-0491] [IFC-0933] a result and buffer combination the route may not return is MODULE_ERROR; only a buffer handed over with LOGOS_OK is released, exactly once":
     for mode in [rmOkNull, rmOkEmpty, rmOkMessage, rmFailBuffer, rmBadCode]:
       let r = newRoute(mode, response = diag("{}"))
       let (c, n) = both(r)
@@ -349,7 +358,9 @@ suite "ifc.calls: what a helper rejects from its route (INTERFACE §2.7.2, §5.2
       check c.code == ecModule and c.untouched
       check n.code == ecModule
       check "route call" in c.message
-      check r.counts == (2, 0, 0)
+      let released = if mode in {rmOkEmpty, rmOkMessage}: 2 else: 0
+      check r.counts == (2, released, 0)
+      check r.outstanding == (mode == rmFailBuffer)
       r.dispose()
 
   test "a valid failure comes back with its code and message":

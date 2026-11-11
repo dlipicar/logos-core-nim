@@ -298,7 +298,7 @@ proc cIn_logos_shapes_Entry_AR_Dir_t*(src: logos_shapes_Entry_AR_Dir_t, depth: i
   for i in 0 ..< n6:
     items7[i] = ?inText(src.m0[i])
   e.add((cbor("entries"), cborArray(items7)))
-  e.add((cbor("kind"), ?inText(src.m2)))
+  e.add((cbor("kind"), cbor("dir")))
   e.add((cbor("path"), ?inText(src.m3)))
   ok(cborMap(e))
 
@@ -313,7 +313,7 @@ proc cOut_logos_shapes_Entry_AR_File_t*(a: var CallArena, v: CborValue, dst: var
 proc cIn_logos_shapes_Entry_AR_File_t*(src: logos_shapes_Entry_AR_File_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("kind"), ?inText(src.m0)))
+  e.add((cbor("kind"), cbor("file")))
   e.add((cbor("path"), ?inText(src.m1)))
   ok(cborMap(e))
 
@@ -381,7 +381,7 @@ proc cOut_logos_shapes_Pick_request_AR_Id_t*(a: var CallArena, v: CborValue, dst
 proc cIn_logos_shapes_Pick_request_AR_Id_t*(src: logos_shapes_Pick_request_AR_Id_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("by"), ?inText(src.m0)))
+  e.add((cbor("by"), cbor("id")))
   e.add((cbor("id"), cbor(uint64(src.m1))))
   ok(cborMap(e))
 
@@ -396,7 +396,7 @@ proc cOut_logos_shapes_Pick_request_AR_Name_t*(a: var CallArena, v: CborValue, d
 proc cIn_logos_shapes_Pick_request_AR_Name_t*(src: logos_shapes_Pick_request_AR_Name_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("by"), ?inText(src.m0)))
+  e.add((cbor("by"), cbor("name")))
   e.add((cbor("name"), ?inText(src.m1)))
   ok(cborMap(e))
 
@@ -432,7 +432,7 @@ proc cOut_logos_shapes_Pick_response_AR_False_t*(a: var CallArena, v: CborValue,
 proc cIn_logos_shapes_Pick_response_AR_False_t*(src: logos_shapes_Pick_response_AR_False_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("found"), cbor(src.m0)))
+  e.add((cbor("found"), cbor(false)))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Pick_response_AR_True_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_AR_True_t, depth: int): Result[void, string] =
@@ -447,7 +447,7 @@ proc cIn_logos_shapes_Pick_response_AR_True_t*(src: logos_shapes_Pick_response_A
   ?depthCheck(depth)
   var e: seq[CborEntry]
   e.add((cbor("entry"), ?cIn_logos_shapes_Entry_t(src.m0, depth + 1)))
-  e.add((cbor("found"), cbor(src.m1)))
+  e.add((cbor("found"), cbor(true)))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Pick_response_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_t, depth: int): Result[void, string] =
@@ -508,7 +508,7 @@ proc cIn_logos_shapes_Tree_t*(src: logos_shapes_Tree_t, depth: int): Result[Cbor
   e.add((cbor("kids"), cborArray(items31)))
   if src.m2:
     e.add((cbor("left"), ?cIn_logos_shapes_Tree_t((?present(src.m3))[], depth + 1)))
-  e.add((cbor("tag"), ?inText(src.m4)))
+  e.add((cbor("tag"), cbor("leaf")))
   if src.m5:
     e.add((cbor("twin"), ?cIn_logos_shapes_Pair_t((?present(src.m6))[], depth + 1)))
   ok(cborMap(e))
@@ -800,7 +800,7 @@ proc callRequest2(p2: uint64, p3: int64, p4: cstring, p5: ptr array[32, uint8], 
   ## `shapes.reflect`'s request params from its typed inputs.
   let depth {.used.} = 1
   var e: seq[CborEntry]
-  e.add((cbor("a"), cbor(uint64(p2))))
+  e.add((cbor("a"), cbor(7'u64)))
   e.add((cbor("b"), cbor(int64(p3))))
   e.add((cbor("c"), ?inText(p4)))
   e.add((cbor("d"), cbor((?present(p5))[])))

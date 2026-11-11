@@ -103,16 +103,28 @@ func at(s: string, i: int): char =
 
 func isC1(s: string, j: int): bool =
   ## Whether a C1 control (U+0080 to U+009F, UTF-8 `C2 80` to `C2 9F`) starts
-  ## at `j`. RFC 9682 §2.1.2 excludes U+007F to U+009F from strings and comments.
+  ## at `j`. RFC 9682's NONASCII (§2.1.2) excludes U+007F to U+009F from string
+  ## literals; RFC 8610's PCHAR admits them in comments.
   s[j] == '\xC2' and s.at(j + 1) in {'\x80' .. '\x9F'}
 
+func isTopNoncharacter(s: string, j: int): bool =
+  ## Whether U+10FFFE or U+10FFFF (UTF-8 `F4 8F BF BE` or `F4 8F BF BF`) starts
+  ## at `j`. Both RFCs stop at U+10FFFD: RFC 8610's PCHAR and RFC 9682's
+  ## NONASCII.
+  s[j] == '\xF4' and s.at(j + 1) == '\x8F' and s.at(j + 2) == '\xBF' and
+    s.at(j + 3) in {'\xBE', '\xBF'}
+
 func skipComment(s: string, i: int): Result[int, Token] =
-  ## `COMMENT = ";" *PCHAR CRLF`, with RFC 9682's PCHAR; returns the index of
-  ## the line break.
+  ## `COMMENT = ";" *PCHAR CRLF` with RFC 8610's `PCHAR = %x20-7E /
+  ## %x80-10FFFD`: cdCDDLe §5 l.126-127 takes RFC 9682 for string literals
+  ## only, so a C1 control is admitted here. Returns the index of the line
+  ## break.
   var j = i + 1
   while j < s.len and s[j] notin {'\n', '\r'}:
-    if s[j] < ' ' or s[j] == '\x7f' or s.isC1(j):
+    if s[j] < ' ' or s[j] == '\x7f':
       return err(errTok(j, "control character in a comment"))
+    if s.isTopNoncharacter(j):
+      return err(errTok(j, "U+10FFFE or U+10FFFF in a comment"))
     inc j
   if j >= s.len:
     return err(errTok(i, "a comment must end with a line break (RFC 8610 Appendix B)"))
@@ -339,6 +351,8 @@ func lexQuoted(s: string, i: int, quote: char): Token =
       )
     elif c < ' ' or c == '\x7f' or s.isC1(j):
       return errTok(j, "control character in a string")
+    elif s.isTopNoncharacter(j):
+      return errTok(j, "U+10FFFE or U+10FFFF in a string (RFC 9682 NONASCII)")
     else:
       output.add(c)
       inc j
@@ -711,12 +725,13 @@ proc parseType2(p: var Parser): Result[SrcNode, CddlError] =
     err(p.unexpected())
 
 func checkRangeBound(p: Parser, n: SrcNode): Result[void, CddlError] =
-  let u = unwrap(n)
-  if u.kind == skLiteral and u.literal.isIntegerLiteral:
+  ## [SPEC cdCDDLe §5.1 l.181] A range bound is an integer literal written
+  ## directly in the source: a name or a parenthesized bound is rejected.
+  if n.kind == skLiteral and n.literal.isIntegerLiteral:
     return ok()
-  if u.kind == skName:
-    return err(p.unsupported(u.pos, "named range bounds are not supported [G12]"))
-  err(p.unsupported(u.pos, "range bounds must be integer literals"))
+  if n.kind == skName:
+    return err(p.unsupported(n.pos, "named range bounds are not supported [G12]"))
+  err(p.unsupported(n.pos, "range bounds must be integer literals written directly"))
 
 func checkSize(p: Parser, target, controller: SrcNode): Result[void, CddlError] =
   let t = unwrap(target)

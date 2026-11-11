@@ -565,7 +565,13 @@ proc selectRoot(r: var Resolver, root: RootReference): Result[Cand, PackageError
     of ikEligible:
       if root.package.get(x.identity.package) != x.identity.package or
           root.version.get(x.identity.version) != x.identity.version:
-        return err(invalidRequest("the source's manifest declares " & $x.identity))
+        # [SPEC PM §8 l.1074-1079] a manifest that conflicts with the selected
+        # package reference is an invalid package, not an invalid request
+        return err(
+          packageError(
+            pecInvalidPackage, "the source's manifest declares " & $x.identity
+          )
+        )
       let (names, deps) = fresh(x.dependencies)
       let at = r.installedAt.getOrDefault(x.identity.key, -1)
       return ok(

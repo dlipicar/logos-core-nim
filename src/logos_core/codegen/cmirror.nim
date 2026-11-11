@@ -65,6 +65,11 @@ type
     visited: HashSet[string] ## defs whose converters are emitted
     errors: seq[string]
     tmp: int
+    emitLiterals: bool
+      ## [SPEC INTERFACE §2.3 l.1096] the input converters encode a request (call
+      ## helpers): a literal position emits the required literal instead of
+      ## reading its C member, which a provider-side conversion reads so that
+      ## validation rejects another value
 
   KitMethod* = object ## What the kit's generic body calls for one provider function.
     request*: string ## the qualified request half (joins `CProviderCall`)
@@ -436,7 +441,10 @@ proc inPos(
     g.aggregate(o, path, n)
     inAggregate(g.defOf(o.doc, defKey(o, path)).typeName, m.recursive, src)
   of snLiteral:
-    inScalar(n.literal.kind, src)
+    if g.emitLiterals:
+      literalCbor(n.literal)
+    else:
+      inScalar(n.literal.kind, src)
   of snMap, snChoice, snList, snTuple:
     if n.kind == snTuple and n.items.len == 0:
       return "cborArray()"
@@ -449,7 +457,10 @@ proc inPos(
     elif f.decl.body.isAggregate:
       inAggregate(g.defOf(f.doc, f.decl.name).typeName, m.recursive, src)
     elif f.decl.body.kind == snLiteral:
-      inScalar(f.decl.body.literal.kind, src)
+      if g.emitLiterals:
+        literalCbor(f.decl.body.literal)
+      else:
+        inScalar(f.decl.body.literal.kind, src)
     else:
       inScalar(f.decl.body.scalar, src)
 
@@ -890,9 +901,11 @@ proc methodPieces(
     )
   r
 
-proc setGen(s: ContractSet, schema: string): Result[(MGen, seq[MDoc]), string] =
+proc setGen(
+    s: ContractSet, schema: string, emitLiterals = false
+): Result[(MGen, seq[MDoc]), string] =
   ## A generator over the set's documents and the pinned common one, with every
-  ## declared aggregate's converters.
+  ## declared aggregate's converters (`MGen.emitLiterals`).
   let layout = ?cLayout(s.cSchemaSet)
   var docs: seq[MDoc]
   var roots: seq[Digest]
@@ -906,6 +919,7 @@ proc setGen(s: ContractSet, schema: string): Result[(MGen, seq[MDoc]), string] =
   g.layout = layout
   g.common = commonLayout()
   g.schema = schema
+  g.emitLiterals = emitLiterals
   g.declarations()
   ok((g, docs))
 
@@ -1008,7 +1022,7 @@ proc callMirrors*(
   ## `nimgen` type of each declaration) and, for C callers, the bodies of
   ## `lcn_invoke_<namespace>_<Method>` and `lcn_clear_<namespace>_<Method>`,
   ## which the export template defines; `prefix` starts their Nim names.
-  var (g, docs) = ?setGen(s, "callsSchema()")
+  var (g, docs) = ?setGen(s, "callsSchema()", emitLiterals = true)
   var res = KitMirrors()
   var callProcs: seq[string]
   for k, m in g.layout.methods:

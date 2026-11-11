@@ -195,7 +195,10 @@ proc verdict(w: CborValue, schema = Opt.none(ViewSchema)): Result[void, ViewErro
   let v = parseView(w)
   if v.isErr:
     return err(v.error)
-  verifyView(v.get, schema)
+  if schema.isSome:
+    verifyView(v.get, schema.get)
+  else:
+    verifyPhysicalProof(v.get) # HASH App B and the proof-only cases (TF-13)
 
 proc accepted(w: CborValue, schema = Opt.none(ViewSchema)): bool =
   let r = verdict(w, schema)

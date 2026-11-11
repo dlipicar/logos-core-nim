@@ -16,7 +16,7 @@ type
     rmDirect ## dispatch into the module; release with its `_MODULE_free`
     rmGive ## LOGOS_OK with a copy of `response`
     rmOkNull ## LOGOS_OK without a buffer
-    rmOkEmpty ## LOGOS_OK with a non-null buffer of length zero
+    rmOkEmpty ## LOGOS_OK with a non-null (static) buffer of length zero
     rmOkMessage ## LOGOS_OK with a message, and a copy of `response`
     rmFailBuffer ## TIMEOUT that also hands out a copy of `response`
     rmFailure ## a valid failure: NOT_AUTHORISED, a message and no detail
@@ -112,7 +112,9 @@ proc routeReleaseOp(
     return
   for i in 0 ..< int(len):
     buf[i] = 0xEE # whatever still reads the buffer reads this (§2.7.2)
-  if st.mode == rmDirect:
+  if buf == cast[ptr UncheckedArray[uint8]](addr emptyBuffer):
+    discard # rmOkEmpty's static buffer
+  elif st.mode == rmDirect:
     st.free(st.module, buf)
   else:
     deallocShared(buf)

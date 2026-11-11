@@ -658,7 +658,7 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check o.chosen("C").source.isNone
     check u.log == @["R@1.0.0#0"]
 
-  test "[PKG-0320] [PKG-0321] the root is the highest available normal release unless a version or source fixes it":
+  test "[PKG-0259] [PKG-0320] [PKG-0321] the root is the highest available normal release unless a version or source fixes it; a source that conflicts with it is an invalid package":
     let u = Universe()
     u.add("R", "2.0.0-rc.1")
     u.add("R", "1.4.0", outcome = ikIneligible)
@@ -678,10 +678,10 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     named.package = Opt.some("R")
     check u.resolveRoot(named).picked == @["R@1.2.0"]
     named.version = Opt.some("1.3.0")
-    check u.resolveRoot(named).code == "invalid-request"
+    check u.resolveRoot(named).code == "invalid-package" # PKG-0259
     named.package = Opt.some("Q")
     named.version = Opt.none(string)
-    check u.resolveRoot(named).code == "invalid-request"
+    check u.resolveRoot(named).code == "invalid-package"
     check u.resolveRoot(RootReference()).code == "invalid-request"
     check u.resolveRoot(
       RootReference(version: Opt.some("1.3.0"), source: bySource.source)

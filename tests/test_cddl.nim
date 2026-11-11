@@ -178,7 +178,7 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
       @[
         "presentation-whitespace-compact", "presentation-whitespace-spread",
         "presentation-whitespace-crlf", "presentation-whitespace-no-final-newline",
-        "presentation-comments",
+        "presentation-comments", "presentation-comment-c1-control",
       ],
       @[
         "presentation-number-decimal", "presentation-number-hex",
@@ -241,6 +241,12 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
       "unsupported-size-reversed-range",
     ]:
       check category("unsupported").anyIt(it.name == name)
+    # A parenthesized bound is not a literal written directly (cdCDDLe l.181).
+    for src in ["a = (1)..2\n", "a = 1..(2)\n", "a = tstr .size ((1)..(8))\n"]:
+      let r = parseCddl(src)
+      checkpoint src
+      check r.isErr and $r.error.class == "unsupported"
+    check parseCddl("a = tstr .size (1..8)\n").isOk
 
   test "[CDE-0012] text that is not RFC 8610 CDDL is a syntax error":
     runAll("syntax", 20)

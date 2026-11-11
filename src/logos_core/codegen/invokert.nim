@@ -12,9 +12,10 @@
 ##    deterministic CBOR.
 ## 3. It checks the result and buffer together (`checkOutcome`). Any other
 ##    combination than a valid failure status with no buffer, or LOGOS_OK
-##    with a buffer, is MODULE_ERROR, and the caller uses and releases
-##    nothing the call wrote (I66). A valid failure is returned with its
-##    code, message and detail.
+##    with a buffer, is MODULE_ERROR, and the caller uses nothing the call
+##    wrote (I66). A buffer handed over with LOGOS_OK is still released once
+##    (`transfersBuffer`, §5.1 l.3364-3368); after a failure code nothing is.
+##    A valid failure is returned with its code, message and detail.
 ## 4. After a success, it decodes the buffer into a CBOR value the Nim heap
 ##    owns, then passes the exact pointer and length to `release_response`
 ##    once. It does so even when the bytes turn out not to be a response,
@@ -86,6 +87,8 @@ proc routeCall*(
     addr len,
   )
   checkOutcome(r, bufferShape(buffer, len)).isOkOr:
+    if transfersBuffer(r, buffer):
+      route.vtable.releaseResponse(route, buffer, len)
     return err(toFailure(error))
   var decoded = Result[CborValue, string].err("a response longer than memory")
   if len <= csize_t(high(int)):

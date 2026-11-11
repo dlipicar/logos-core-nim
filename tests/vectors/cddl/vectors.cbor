@@ -1,4 +1,4 @@
-¡gvectors™¦dnamexpresentation-whitespace-compactenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlga=uint
+¡gvectors™¦dnamexpresentation-whitespace-compactenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlga=uint
 rcanonical-cbor-hexx<a300000181a3000101616103a20005016475696e74026763646364646c65tcanonical-diagnosticx?{0: 0, 1: [{0: 1, 1: "a", 3: {0: 5, 1: "uint"}}], 2: "cdcddle"}¦dnamexpresentation-whitespace-spreadenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlx
 
   a
@@ -11,6 +11,7 @@ rcanonical-cbor-hexx<a300000181a3000101616103a20005016475696e74026763646364646c6
 a = ; inside
   uint ; trailing
 ; last
+rcanonical-cbor-hexx<a300000181a3000101616103a20005016475696e74026763646364646c65tcanonical-diagnosticx?{0: 0, 1: [{0: 1, 1: "a", 3: {0: 5, 1: "uint"}}], 2: "cdcddle"}¦dnamexpresentation-comment-c1-controlenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlqa = uint ; xÂ€ÂŸ
 rcanonical-cbor-hexx<a300000181a3000101616103a20005016475696e74026763646364646c65tcanonical-diagnosticx?{0: 0, 1: [{0: 1, 1: "a", 3: {0: 5, 1: "uint"}}], 2: "cdcddle"}¦dnamexpresentation-number-decimalenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlga = 26
 rcanonical-cbor-hexxBa300000181a3000101616103a30006016475696e7402181a026763646364646c65tcanonical-diagnosticxF{0: 0, 1: [{0: 1, 1: "a", 3: {0: 6, 1: "uint", 2: 26}}], 2: "cdcddle"}¦dnamewpresentation-number-hexenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlia = 0x1a
 rcanonical-cbor-hexxBa300000181a3000101616103a30006016475696e7402181a026763646364646c65tcanonical-diagnosticxF{0: 0, 1: [{0: 1, 1: "a", 3: {0: 6, 1: "uint", 2: 26}}], 2: "cdcddle"}¦dnamexpresentation-number-hex-upperenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlka = 0X001A
@@ -82,8 +83,7 @@ rcanonical-cbor-hexy.a300000181a3000101616103a2000801a200090184a3000a01a2001501
 rcanonical-cbor-hexxja300000181a3000101616103a5000d01a30006016475696e74020002a30006016475696e740218ff03f504f5026763646364646c65tcanonical-diagnosticx{0: 0, 1: [{0: 1, 1: "a", 3: {0: 13, 1: {0: 6, 1: "uint", 2: 0}, 2: {0: 6, 1: "uint", 2: 255}, 3: true, 4: true}}], 2: "cdcddle"}¦dnamesconstruct-range-hexenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddloa = 0x00..0xff
 rcanonical-cbor-hexxja300000181a3000101616103a5000d01a30006016475696e74020002a30006016475696e740218ff03f504f5026763646364646c65tcanonical-diagnosticx{0: 0, 1: [{0: 1, 1: "a", 3: {0: 13, 1: {0: 6, 1: "uint", 2: 0}, 2: {0: 6, 1: "uint", 2: 255}, 3: true, 4: true}}], 2: "cdcddle"}¦dnamexconstruct-range-negativeenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlla = -10..-1
 rcanonical-cbor-hexxha300000181a3000101616103a5000d01a3000601646e696e74022902a3000601646e696e74022003f504f5026763646364646c65tcanonical-diagnosticx‚{0: 0, 1: [{0: 1, 1: "a", 3: {0: 13, 1: {0: 6, 1: "nint", 2: -10}, 2: {0: 6, 1: "nint", 2: -1}, 3: true, 4: true}}], 2: "cdcddle"}¦dnameuconstruct-range-mixedenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlja = -1..1
-rcanonical-cbor-hexxha300000181a3000101616103a5000d01a3000601646e696e74022002a30006016475696e74020103f504f5026763646364646c65tcanonical-diagnosticx€{0: 0, 1: [{0: 1, 1: "a", 3: {0: 13, 1: {0: 6, 1: "nint", 2: -1}, 2: {0: 6, 1: "uint", 2: 1}, 3: true, 4: true}}], 2: "cdcddle"}¦dnamex$construct-range-parenthesized-boundsenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlma = (1)..(2)
-rcanonical-cbor-hexxha300000181a3000101616103a5000d01a30006016475696e74020102a30006016475696e74020203f504f5026763646364646c65tcanonical-diagnosticx{0: 0, 1: [{0: 1, 1: "a", 3: {0: 13, 1: {0: 6, 1: "uint", 2: 1}, 2: {0: 6, 1: "uint", 2: 2}, 3: true, 4: true}}], 2: "cdcddle"}¦dnameuconstruct-range-equalenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlia = 5..5
+rcanonical-cbor-hexxha300000181a3000101616103a5000d01a3000601646e696e74022002a30006016475696e74020103f504f5026763646364646c65tcanonical-diagnosticx€{0: 0, 1: [{0: 1, 1: "a", 3: {0: 13, 1: {0: 6, 1: "nint", 2: -1}, 2: {0: 6, 1: "uint", 2: 1}, 3: true, 4: true}}], 2: "cdcddle"}¦dnameuconstruct-range-equalenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlia = 5..5
 rcanonical-cbor-hexx@a300000181a3000101616103a30006016475696e740205026763646364646c65tcanonical-diagnosticxE{0: 0, 1: [{0: 1, 1: "a", 3: {0: 6, 1: "uint", 2: 5}}], 2: "cdcddle"}¦dnamexconstruct-range-equal-negativeenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlka = -3..-3
 rcanonical-cbor-hexx@a300000181a3000101616103a3000601646e696e740222026763646364646c65tcanonical-diagnosticxF{0: 0, 1: [{0: 1, 1: "a", 3: {0: 6, 1: "nint", 2: -3}}], 2: "cdcddle"}¦dnamesconstruct-size-uintenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlqa = uint .size 8
 rcanonical-cbor-hexxha300000181a3000101616103a4000e016473697a6502a20005016475696e7403a30006016475696e740208026763646364646c65tcanonical-diagnosticxr{0: 0, 1: [{0: 1, 1: "a", 3: {0: 14, 1: "size", 2: {0: 5, 1: "uint"}, 3: {0: 6, 1: "uint", 2: 8}}}], 2: "cdcddle"}¦dnamesconstruct-size-zeroenotesx3expected model written by hand from cdCDDLe Â§7-Â§8fexpectevalidjinput-cddlqa = tstr .size 0
@@ -150,6 +150,8 @@ kerror-classkunsupported¤dnamexunsupported-integer-too-smallfexpectginvalidjinp
 kerror-classkunsupported¥dnamexunsupported-named-range-boundenotescG12fexpectginvalidjinput-cddlra = 0 .. b
 b = 10
 kerror-classkunsupported¤dnamexunsupported-text-range-boundfexpectginvalidjinput-cddloa = "a" .. "z"
+kerror-classkunsupported¤dnamex&unsupported-range-parenthesized-boundsfexpectginvalidjinput-cddlma = (1)..(2)
+kerror-classkunsupported¤dnamex$unsupported-size-parenthesized-boundfexpectginvalidjinput-cddlxa = tstr .size ((1)..8)
 kerror-classkunsupported¤dnamewunsupported-prelude-intfexpectginvalidjinput-cddlha = int
 kerror-classkunsupported¤dnamexunsupported-prelude-textfexpectginvalidjinput-cddlia = text
 kerror-classkunsupported¤dnamewunsupported-prelude-anyfexpectginvalidjinput-cddlla = [* any]
@@ -179,7 +181,9 @@ kerror-classfsyntax¤dnamex!syntax-braced-escape-unterminatedfexpectginvalidjinpu
 kerror-classfsyntax¤dnamexsyntax-braced-escape-not-hexfexpectginvalidjinput-cddlma = "\u{4G}"
 kerror-classfsyntax¤dnamexsyntax-c1-control-in-textfexpectginvalidjinput-cddlja = "xÂ…"
 kerror-classfsyntax¤dnamexsyntax-c1-control-in-bytesfexpectginvalidjinput-cddlja = 'xÂŸ'
-kerror-classfsyntax¤dnamexsyntax-c1-control-in-commentfexpectginvalidjinput-cddloa = uint ; xÂ€
+kerror-classfsyntax¤dnamexsyntax-noncharacter-in-commentfexpectginvalidjinput-cddlqa = uint ; xô¿¿
+kerror-classfsyntax¤dnamexsyntax-noncharacter-in-textfexpectginvalidjinput-cddlla = "xô¿¾"
+kerror-classfsyntax¤dnamexsyntax-noncharacter-in-bytesfexpectginvalidjinput-cddlla = 'xô¿¿'
 kerror-classfsyntax¤dnamexsyntax-quote-escape-in-textfexpectginvalidjinput-cddlia = "\'"
 kerror-classfsyntax¤dnamexsyntax-unpaired-surrogatefexpectginvalidjinput-cddlma = "\ud800"
 kerror-classfsyntax¤dnamexsyntax-unterminated-textfexpectginvalidjinput-cddlia = "abc

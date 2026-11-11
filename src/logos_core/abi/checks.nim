@@ -281,9 +281,10 @@ proc checkOutcome*(r: LogosResult, outputs: OutputShape): AbiCheck =
   ## `prepare_call` and completion: success is LOGOS_OK, no message, no detail
   ## and every output a success requires; failure is a valid nonzero status
   ## with every output still at its initial value. Any other combination is
-  ## MODULE_ERROR without diagnostics, and the caller uses and releases nothing
-  ## the call wrote (for a Runtime Control or route `call`, where the spec only
-  ## says "reject", the same code [I66]).
+  ## MODULE_ERROR without diagnostics, and the caller uses nothing the call
+  ## wrote (for a Runtime Control or route `call`, where the spec only says
+  ## "reject", the same code [I66]). It releases nothing either, except a
+  ## buffer handed over with LOGOS_OK (`transfersBuffer`).
   if int64(r.code) == 0:
     if not outputs.success:
       return moduleFailure("LOGOS_OK without the outputs a success requires")
@@ -291,6 +292,14 @@ proc checkOutcome*(r: LogosResult, outputs: OutputShape): AbiCheck =
   if not outputs.failure:
     return moduleFailure("a failure that wrote its outputs")
   readStatus(r)
+
+func transfersBuffer*(r: LogosResult, buffer: pointer): bool =
+  ## [SPEC INTERFACE §5.1 l.3364-3368, §5.2 l.3831] A result with code LOGOS_OK
+  ## and a non-null response buffer hands that buffer to the caller, even when
+  ## `checkOutcome` rejects the result (a message or detail on success, a zero
+  ## length): the rejection does not remove the caller's obligation to release
+  ## the buffer exactly once. A failure code never transfers one.
+  int64(r.code) == 0 and buffer != nil
 
 func bufferShape*(p: pointer, len: csize_t): OutputShape =
   ## A response buffer the caller initialized to null and zero (`_MODULE_dispatch`,

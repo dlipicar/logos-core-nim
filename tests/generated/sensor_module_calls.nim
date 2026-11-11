@@ -51,7 +51,7 @@ proc cOut_logos_sensor_NS_control_Settings_t*(a: var CallArena, v: CborValue, ds
 proc cIn_logos_sensor_NS_control_Settings_t*(src: logos_sensor_NS_control_Settings_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("kind"), ?inText(src.m0)))
+  e.add((cbor("kind"), cbor("sensor")))
   e.add((cbor("limit"), cbor(uint64(src.m1))))
   ok(cborMap(e))
 
