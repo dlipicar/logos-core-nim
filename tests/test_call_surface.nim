@@ -1,7 +1,7 @@
 ## INTERFACE §2.6: the provider call-surface descriptor, encoded from an
 ## accepted binding and validated as an ABI caller must.
 
-import std/[algorithm, re, sequtils, strutils]
+import std/[algorithm, sequtils, strutils]
 import unittest2
 import ../src/logos_core/hash
 import ../src/logos_core/iface/[provider, surface]
@@ -94,19 +94,26 @@ proc entryOf(doc: string, root: Digest, supp: openArray[string]): CborValue =
 suite "ifc.call-surface: the provider call-surface descriptor (INTERFACE §2.6)":
   test "[IFC-0226] [IFC-0227] [IFC-0228] the descriptor maps, keys and limits are the mirrored CDDL's":
     let src = mirror("IFC/2.6.call-surface.cddl")
+    # A plain line scan, not std/re: PCRE is loaded at run time and Android has none.
     var rules: seq[(string, seq[string], seq[string])] # name, keys, optional keys
-    for m in src.findAll(re"(?s)([a-z-]+) = \{(.*?)\n\}"):
-      var caps: array[2, string]
-      doAssert m.match(re"(?s)([a-z-]+) = \{(.*?)\n\}", caps)
-      var keys, optional: seq[string]
-      for line in caps[1].splitLines:
-        var k: array[2, string]
-        if line.strip.match(re"(\?\s*)?([a-z_]+):.*", k):
-          if k[0].len > 0:
-            optional.add k[1]
+    var inRule = false
+    for line in src.splitLines:
+      if line.endsWith(" = {"):
+        rules.add (line[0 ..^ 5], newSeq[string](), newSeq[string]())
+        inRule = true
+      elif line == "}":
+        inRule = false
+      elif inRule:
+        var field = line.strip
+        let optional = field.startsWith("?")
+        if optional:
+          field = field[1 ..^ 1].strip
+        let colon = field.find(':')
+        if colon > 0:
+          if optional:
+            rules[^1][2].add field[0 ..< colon]
           else:
-            keys.add k[1]
-      rules.add (caps[0], keys, optional)
+            rules[^1][1].add field[0 ..< colon]
     check rules.len == 3
     check rules[0] == ("provider-call-surface", @["interfaces"], @["primary"])
     check DescriptorKeys.toSeq.filterIt(it != "primary") == rules[0][1]
