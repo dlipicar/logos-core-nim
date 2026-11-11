@@ -24,7 +24,7 @@ Unit kinds (G117, G118, I6):
 | Kind | Unit |
 |---|---|
 | `kw` | A sentence, list item or table row with an uppercase BCP 14 keyword. A list item with no keyword inherits its keyword lead-in. |
-| `lc` | The same, with a lowercase must, shall or should. |
+| `lc` | The same, with a lowercase must, shall or should. Informative: every spec says lowercase forms keep their ordinary meaning, so no claim needs them tested (G117, review item B1). |
 | `cddl` | One CDDL rule, identified by its rule name. |
 | `block` | Any other fenced block: vectors, C declarations, examples. |
 | `heading` | A section heading. |
@@ -50,7 +50,7 @@ heading under a numbered one.
 
 | Status | Meaning |
 |---|---|
-| `claimed` | Built. Every live `kw`, `lc`, `cddl` and `block` unit in the section must be referenced by a test. |
+| `claimed` | Built. Every live `kw`, `cddl` and `block` unit in the section must be referenced by a test. |
 | `deferred:tier-N` | Not built yet; N is the tier in `docs/SPEC-STATUS.md`. |
 | `informative` | Nothing to test (only References and Copyright). |
 | `out-of-scope:<why>` | Normative, but not this repository's to implement. |

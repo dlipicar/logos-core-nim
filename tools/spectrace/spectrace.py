@@ -9,7 +9,8 @@ Ledger: conformance/requirements/<PFX>.jsonl, one JSON object per unit:
   id, kind, section, heading, line, fingerprint, text[, rule][, lang][, retired]
 kind is one of:
   kw       a sentence, list item or table row with an uppercase BCP 14 keyword
-  lc       one with a lowercase must/shall/should (informative claims)
+  lc       one with a lowercase must/shall/should; informative, so not gated
+           (every spec: lowercase forms keep their ordinary meaning; G117, B1)
   cddl     one CDDL rule, keyed by rule name
   block    any other fenced block (vectors, C declarations, examples)
   heading  a section heading (used for section coverage)
@@ -584,7 +585,9 @@ def cmd_pins(args) -> int:
 # Coverage gate -------------------------------------------------------------------
 
 TEST_ID_RE = re.compile(r"\[([A-Z]{3}-\d{4})\]")
-GATED_KINDS = {"kw", "lc", "cddl", "block"}
+# `lc` units stay in the ledger, so tests may still cite them, but no claim
+# needs them covered: lowercase forms keep their ordinary meaning (G117, B1).
+GATED_KINDS = {"kw", "cddl", "block"}
 
 
 STATUS_RE = re.compile(r"claimed|deferred:tier-[1-5]|informative|out-of-scope:.+")
