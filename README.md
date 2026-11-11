@@ -41,6 +41,21 @@ nimble setup -l
 nimble test && nimble test_refc
 ```
 
+Under the sanitizers (DECISIONS I77): AddressSanitizer with UndefinedBehaviorSanitizer,
+ThreadSanitizer, and on Linux with clang MemorySanitizer. On macOS they build with the Xcode
+toolchain; on Linux `nix flake check` runs all three:
+
+```bash
+nimble test_asan && nimble test_tsan
+```
+
+A `?` inside a half-built constructor leaks under ORC on Nim 2.2.14 (I77). The flake's
+`lint-ctor-try` check rejects it; to run it by hand:
+
+```bash
+python3 tools/lint/ctortry.py src tests
+```
+
 `lcn-gen` and `lcn-pkg` build with `--useSystemNim`. On macOS, nimble 0.20.1 crashes without it
 while looking up the Nim that `nimble.lock` names; on Linux the flag changes nothing:
 

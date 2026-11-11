@@ -94,6 +94,33 @@
               suffix = "orc-release";
               flags = "--mm:orc -d:release";
             }
+          ]
+          # Sanitizers (switches in config.nims) on Linux: macOS has no MemorySanitizer, and
+          # nixpkgs' clang 21 sanitizer runtimes do not start on macOS 27, so the Mac runs
+          # `nimble test_asan` and `nimble test_tsan` with the Xcode toolchain instead.
+          ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            {
+              suffix = "asan";
+              flags = "--mm:orc -d:asan";
+              sanitizer = true;
+            }
+            {
+              suffix = "tsan";
+              flags = "--mm:orc -d:tsan";
+              sanitizer = true;
+            }
+            {
+              suffix = "msan";
+              flags = "--mm:orc -d:msan";
+              sanitizer = true;
+              # llvm-symbolizer, for the reports' stack traces.
+              nativeBuildInputs = [
+                pkgs.clang
+                pkgs.llvm
+              ];
+              # The Nix Nim build takes its C compiler from CC, which stdenv sets to gcc.
+              setup = "export CC=clang";
+            }
           ];
           testChecks = lib.listToAttrs (
             lib.concatMap (
@@ -103,15 +130,28 @@
                 let
                   name = "${lib.removeSuffix ".nim" file}-${variant.suffix}";
                 in
-                lib.nameValuePair name (nimDerivation {
-                  inherit name;
-                  src = nimSources;
-                  buildPhase = ''
-                    runHook preBuild
-                    nim c -r ${variant.flags} --outdir:build tests/${file}
-                    runHook postBuild
-                  '';
-                })
+                lib.nameValuePair name (
+                  nimDerivation (
+                    {
+                      inherit name;
+                      src = nimSources;
+                      nativeBuildInputs = variant.nativeBuildInputs or [ ];
+                      buildPhase = ''
+                        runHook preBuild
+                        ${variant.setup or ""}
+                        nim c -r ${variant.flags} --outdir:build tests/${file}
+                        runHook postBuild
+                      '';
+                    }
+                    // lib.optionalAttrs (variant.sanitizer or false) {
+                      # The sanitizers do not intercept _FORTIFY_SOURCE's checked libc calls.
+                      hardeningDisable = [
+                        "fortify"
+                        "fortify3"
+                      ];
+                    }
+                  )
+                )
               ) testVariants
             ) testFiles
           );
@@ -316,6 +356,12 @@
           nph = s.pkgs.runCommand "nph-check" { nativeBuildInputs = [ s.nph ]; } ''
             cd ${s.nimSources}
             nph --check src tests logos_core.nimble config.nims
+            touch $out
+          '';
+          # No `?` inside a half-built constructor: it leaks on Nim 2.2.14 (I77).
+          lint-ctor-try = s.pkgs.runCommand "lint-ctor-try" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+            cd ${s.nimSources}
+            python3 ${./tools/lint/ctortry.py} src tests
             touch $out
           '';
         }

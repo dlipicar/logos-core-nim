@@ -6,6 +6,7 @@ import std/[atomics, strutils, typedthreads]
 import unittest2
 import ../src/logos_core/[cbor, hash, pins]
 import ../src/logos_core/iface/surface
+import ../src/logos_core/base/perthread
 import ../src/logos_core/codegen/nimgen
 from ../src/logos_core/iface/outcome as oc import nil
 import ./support/[specdata, genfixtures]
@@ -22,6 +23,7 @@ suite "ifc.nim-types: generated modules (D29)":
   test "the committed lcn-gen output is current (run `nimble regen` if not)":
     check generatedCommon().get == readFile(commonTypesPath)
     check generatedCommonMirrors().get == readFile(commonMirrorsPath)
+    check generatedRcTypes().get == readFile(rcTypesPath)
     for f in nimFixtures:
       checkpoint f.module
       check f.generated.get == readFile(f.fixturePath)
@@ -33,6 +35,7 @@ suite "ifc.nim-types: generated modules (D29)":
     let stamp = "PROVISIONAL (spec " & SpecRevision[0 .. 7] & ")"
     check stamp in readFile(commonTypesPath)
     check stamp in readFile(commonMirrorsPath)
+    check stamp in readFile(rcTypesPath)
     for f in nimFixtures:
       check stamp in readFile(f.fixturePath)
 
@@ -236,6 +239,38 @@ proc codecWorker(seed: int) {.thread.} =
       concurrentFailures += 1
     if oc.checkDetail(oc.ecInvalidParams, oc.invalidParamsDetail(oc.iprSchemaMismatch)).isErr:
       concurrentFailures += 1
+    if i == 100:
+      # Released halfway: the next use loads this thread's tables again.
+      releasePerThread()
+
+{.compile: "support/cthread.c".}
+
+proc runCThread(
+  fn: proc() {.cdecl, gcsafe, raises: [].}
+): cint {.importc: "lcn_test_run_c_thread", cdecl.}
+
+var released: Atomic[int]
+
+proc countRelease() {.nimcall, gcsafe, raises: [].} =
+  released += 1
+
+proc useTables() {.gcsafe, raises: [].} =
+  if MeterReadResponse.decode(@[0x40'u8]).isOk:
+    concurrentFailures += 1
+  onThreadRelease(countRelease)
+
+proc nimThreadBody() {.thread.} =
+  useTables()
+
+proc cThreadBody() {.cdecl, gcsafe, raises: [].} =
+  # As the module kit's entry points: register before the first allocation.
+  setupForeignThreadGc()
+  enterThread()
+  useTables()
+  when not defined(gcDestructors):
+    # Under refc a C thread releases itself (`base/perthread`).
+    releasePerThread()
+    tearDownForeignThreadGc()
 
 suite "ifc.nim-types: concurrent use [IMPL]":
   test "generated codecs and library tables work from several threads at once":
@@ -243,4 +278,14 @@ suite "ifc.nim-types: concurrent use [IMPL]":
     for i in 0 ..< threads.len:
       createThread(threads[i], codecWorker, i)
     joinThreads(threads)
+    check concurrentFailures.load == 0
+
+  test "a thread's tables are released when it ends, whoever started it":
+    released.store(0)
+    var t: Thread[void]
+    createThread(t, nimThreadBody)
+    joinThread(t)
+    check released.load == 1
+    check runCThread(cThreadBody) == 0
+    check released.load == 2
     check concurrentFailures.load == 0

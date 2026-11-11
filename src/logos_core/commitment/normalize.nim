@@ -313,12 +313,13 @@ func normalize*(
   if d.isNone or d.get.kind == dkMethod:
     return err(declaration & " is not a type, request, response or event declaration")
   let m = s.docs[doc]
+  let node = ?s.normalizeAt(declSite(doc, d.get), v)
   ok(
     ValueRoot(
       modelId: m.modelId,
       schemaRoot: schemaRoot(m),
       subtreeRoot: declarationRoot(m, d.get),
-      node: ?s.normalizeAt(declSite(doc, d.get), v),
+      node: node,
     )
   )
 

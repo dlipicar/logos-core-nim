@@ -151,7 +151,8 @@ func commit(t: Target, v: CborValue): Result[PayloadCommitment, string] =
   ## [SPEC TRANSPORT §4.1] The roots of a validated value: the declaration's
   ## subtree root and the value root under the defining contract.
   let r = ?t.set.normalize(0, t.declaration, v)
-  ok(PayloadCommitment(subtreeRoot: r.subtreeRoot, valueRoot: ?valueRoot(r)))
+  let root = ?valueRoot(r)
+  ok(PayloadCommitment(subtreeRoot: r.subtreeRoot, valueRoot: root))
 
 # Sending ---------------------------------------------------------------------------
 #

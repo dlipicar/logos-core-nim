@@ -12,6 +12,7 @@
 import std/[sequtils, strutils, tables]
 import ../cbor
 import ../commitment
+import ../hash
 import ../iface/accept
 import ../base/perthread
 
@@ -95,6 +96,31 @@ proc check*(
       "not a " & declaration & " value at [" & error.mapIt(toDiag(it)).join(", ") & "]"
     )
   ok()
+
+func declares*(g: GeneratedSchema, declaration: string): bool =
+  declaration in g.bodies
+
+proc checkPath*(
+    g: GeneratedSchema, declaration: string, v: CborValue
+): Result[void, seq[CborValue]] =
+  ## [SPEC INTERFACE §4.5, §5.1] `check` with the path from `v` to the first
+  ## item the schema rejects, for `logos.invalid_params_detail`.
+  let (doc, body) = g.bodies.getOrDefault(declaration, (-1, nil))
+  if doc < 0:
+    return err(newSeq[CborValue]())
+  g.sets[doc].validatePath(0, body, v)
+
+proc commitment*(
+    g: GeneratedSchema, declaration: string, v: CborValue
+): Result[(Digest, Digest), string] =
+  ## [SPEC TRANSPORT §4.1; RUNTIME l.3747] The payload commitment of a checked
+  ## value: the declaration's subtree root and the value root.
+  let (doc, _) = g.bodies.getOrDefault(declaration, (-1, nil))
+  if doc < 0:
+    return err(declaration & " is not declared")
+  let r = ?g.sets[doc].normalize(0, declaration, v)
+  let root = ?valueRoot(r)
+  ok((r.subtreeRoot, root))
 
 proc arm*(g: GeneratedSchema, key: string, v: CborValue): int =
   ## The arm a checked value takes at the choice `key`.

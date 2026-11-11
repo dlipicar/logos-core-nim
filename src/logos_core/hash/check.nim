@@ -123,40 +123,34 @@ func parseLabel*(v: CborValue): Result[Label, HashError] =
   case kind
   of lkField:
     let f = ?fields(v, 2, "field label")
-    ok(Label(kind: kind, name: ?asText(f[1], "field label name")))
+    let name = ?asText(f[1], "field label name")
+    ok(Label(kind: kind, name: name))
   of lkIndex, lkTuple, lkChoice:
     let f = ?fields(v, 2, tag & " label")
-    ok(Label(kind: kind, a: ?asUint(f[1], tag & " label")))
+    let a = ?asUint(f[1], tag & " label")
+    ok(Label(kind: kind, a: a))
   of lkIndexRange, lkByteRange, lkBranch:
     let f = ?fields(v, 3, tag & " label")
-    ok(
-      Label(
-        kind: kind, a: ?asUint(f[1], tag & " start"), b: ?asUint(f[2], tag & " count")
-      )
-    )
+    let a = ?asUint(f[1], tag & " start")
+    let b = ?asUint(f[2], tag & " count")
+    ok(Label(kind: kind, a: a, b: b))
 
 func parseRootChildRecord*(v: CborValue): Result[ParsedRecord, HashError] =
   ## [SPEC HASH §7.3] `root-child-record`.
   let f = ?fields(v, 3, "root-child-record")
-  ok(
-    ParsedRecord(
-      kind: ?asNodeKind(f[0], "record node kind"),
-      digest: ?asDigest(f[1], "record digest"),
-      schema: ?asDigest(f[2], "record schema identity"),
-    )
-  )
+  let kind = ?asNodeKind(f[0], "record node kind")
+  let digest = ?asDigest(f[1], "record digest")
+  let schema = ?asDigest(f[2], "record schema identity")
+  ok(ParsedRecord(kind: kind, digest: digest, schema: schema))
 
 func parseChildRecord*(v: CborValue): Result[ParsedRecord, HashError] =
   ## [SPEC HASH §7.3] `child-record`.
   let f = ?fields(v, 4, "child-record")
-  ok(
-    ParsedRecord(
-      label: ?parseLabel(f[0]),
-      kind: ?asNodeKind(f[1], "record node kind"),
-      digest: ?asDigest(f[2], "record digest"),
-      schema: ?asDigest(f[3], "record schema identity"),
-    )
-  )
+  let label = ?parseLabel(f[0])
+  let kind = ?asNodeKind(f[1], "record node kind")
+  let digest = ?asDigest(f[2], "record digest")
+  let schema = ?asDigest(f[3], "record schema identity")
+  ok(ParsedRecord(label: label, kind: kind, digest: digest, schema: schema))
 
 func parseRecords(v: CborValue, what: string): Result[seq[ParsedRecord], HashError] =
   var output: seq[ParsedRecord]

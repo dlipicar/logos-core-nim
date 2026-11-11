@@ -29,219 +29,42 @@
 ## the shutdown grace (10 s) and then records `cleanup-timeout` (§10.2). A
 ## direct realization is never force-released (§10.2 l.3838).
 ##
-## Not yet built: Runtime Control (step 3: the engine takes the Runtime
-## Control binding and publish callback for each instance from
-## `EngineConfig.services`), routes and provider calls, events, the host API,
-## `recover_module` and `retire_module`, and persistence of execution state.
+## [IMPL] Runtime Control and direct routes (step 3). Each execution attempt
+## gets its own Runtime Control binding and invocation access
+## (`bindings.nim`); every operation through them that depends on Runtime-owned
+## state is one request to the Runtime thread, ordered with every lifecycle
+## change. A route call is admitted there (route, scope, per-call decision) and
+## joins its provider's in-flight count; the provider code then runs on the
+## caller's thread. A provider that leaves `ready` fails its routes at once,
+## and its `_MODULE_destroy` waits until its in-flight count is zero. A
+## consumer's routes close when it is stopped and fail when it fails (§3.4
+## l.624-626).
+##
+## [G171 interim (TF-18)] The order of checks for a Runtime Control request:
+## the caller's association (NOT_AUTHORISED), the method's own authority where
+## it names no target from the payload, the payload (INVALID_PARAMS), the
+## target's authority, then readiness, including whether the caller's binding
+## is still current (`originReady`), and last the contract root.
+##
+## Not yet built: the other Runtime Control methods, events and subscriptions,
+## asynchronous calls, remote Runtimes, the host API, `recover_module` and
+## `retire_module`, and persistence of execution state and routes.
 
 {.push raises: [].}
 
-import std/[locks, monotimes, sets, strutils, sysrand, tables, times, typedthreads]
+import
+  std/[atomics, locks, monotimes, sets, strutils, sysrand, tables, times, typedthreads]
 import results
 import ../abi/types
+import ../base/perthread
 import ../cbor/utf8
+import ../commitment
 import ../iface/[accept, outcome]
-import ./[authz, bell, records, realizer]
+import ./[bell, bindings, plumbing]
 
-export authz, records, realizer, outcome.ErrorCode
-
-const
-  DefaultStartupDeadline* = initDuration(seconds = 120)
-  DefaultStopDeadline* = initDuration(seconds = 10)
-  DefaultShutdownGrace* = initDuration(seconds = 10)
-  MaxWorkers* = 64 ## [IMPL] worker threads; more jobs wait in the queue
-  MaxRetainedChanges* = 4096 ## [IMPL] committed state changes kept for observation
+export plumbing
 
 type
-  ModuleState* = enum
-    ## [SPEC RUNTIME §3.4] `logos.runtime_control.state` for a local instance
-    msUnloaded = "unloaded"
-    msLoaded = "loaded"
-    msReady = "ready"
-    msStopping = "stopping"
-    msError = "error"
-
-  Intent* = enum ## [SPEC RUNTIME §9.3] `execution_state.intent`
-    inUninitialized = "uninitialized"
-    inRequested = "requested"
-    inStopped = "stopped"
-
-  FailureKind* = enum
-    ## [SPEC RUNTIME §9.3 l.3750-3756] The initial classifications; fkLoader
-    ## is `loader-` followed by a typed Module Loader error code.
-    fkStartupTimeout = "startup-timeout"
-    fkInitializationFailed = "initialization-failed"
-    fkReportedByModule = "reported-by-module"
-    fkHostTerminated = "host-terminated"
-    fkAuthorityDenied = "authority-denied"
-    fkAuthorityExpired = "authority-expired"
-    fkAuthorityRevoked = "authority-revoked"
-    fkAuthorityEvaluationFailed = "authority-evaluation-failed"
-    fkPermissionEnforcementFailed = "permission-enforcement-failed"
-    fkConfigurationIndeterminate = "configuration-indeterminate"
-    fkCleanupFailed = "cleanup-failed"
-    fkCleanupTimeout = "cleanup-timeout"
-    fkRemoteStateUnknown = "remote-state-unknown"
-    fkOther = "other"
-    fkLoader = "loader"
-
-  Failure* = object
-    kind*: FailureKind
-    loader*: LoaderErrorCode ## for fkLoader
-    reason*: string ## diagnostics only; never replaces the classification
-
-  Origin* = object
-    ## The authenticated requester: the host's protected input, or a module
-    ## instance through its Runtime Control binding.
-    host*: bool
-    instance*: string
-
-  ExecutionState* = object ## [SPEC RUNTIME §9.3] `execution_state`
-    revision*: uint64
-    intent*: Intent
-    intentRevision*: Opt[uint64] ## exactly when intent is `requested`
-
-  InstanceView* = object ## One committed snapshot of an instance (§9.1 l.1849-1850).
-    instance*: string
-    module*: string
-    state*: ModuleState
-    failure*: Opt[Failure]
-    execution*: ExecutionState
-    intentOrigin*: Origin ## the origin of `requested` intent
-    stateAssignment*: Opt[string]
-    primaryContract*: Opt[Digest]
-    implements*: seq[Digest]
-    provider*: bool ## a provider view passed the §3.3 checks
-    attempt*: string
-      ## the current execution attempt; Runtime Control bindings for this
-      ## realization are associated with it (report_failure)
-
-  StateChange* = object ## one committed transition, in commit order
-    serial*: uint64
-    view*: InstanceView
-
-  EngineError* = object
-    code*: ErrorCode ## NOT_AUTHORISED, NOT_READY or INVALID_PARAMS
-    message*: string
-
-  ServicesFn* =
-    proc(instance, attempt: cstring): InitServices {.nimcall, gcsafe, raises: [].}
-    ## The instance-bound initialization services for one execution attempt:
-    ## they must stay valid until that context's `_MODULE_destroy` returns.
-
-  EngineConfig* = object
-    workDir*: string ## private copies of dynamic artifacts
-    stateRoot*: Opt[string] ## module state directories [G143]
-    statics*: seq[StaticRegistration] ## protected static bindings (§2.3, §13.3)
-    policy*: AuthzPolicy
-    services*: ServicesFn
-    ordering*: seq[(string, string)]
-      ## [SPEC RUNTIME §3.7] accepted lifecycle-ordering constraints as
-      ## (prerequisite instance, dependent instance)
-    startupDeadline*: Duration
-    stopDeadline*: Duration
-    shutdownGrace*: Duration
-
-  # Messages ---------------------------------------------------------------------
-  RequestKind = enum
-    rqConfigure
-    rqCreate
-    rqStart
-    rqStop
-    rqReportFailure
-    rqView
-    rqList
-    rqAnswers
-    rqChanges
-    rqShutdown
-    rqTerminate
-
-  Reply = object
-    error: Opt[EngineError]
-    busy: int ## rqTerminate: jobs still running
-    view: InstanceView
-    views: seq[InstanceView]
-    answers: seq[AuthzAnswer]
-    changes: seq[StateChange]
-
-  ReplyChannel = ptr Channel[Reply]
-
-  Request = object
-    kind: RequestKind
-    origin: Origin
-    instance: string
-    record: ModuleRecord
-    expectedRevision: Opt[uint64]
-    attempt: string
-    reason: string
-    config: EngineConfig
-    reply: ReplyChannel
-
-  JobKind = enum
-    jkBind
-    jkInit
-    jkDestroy
-    jkQuit
-
-  Job = object
-    id: int
-    case kind: JobKind
-    of jkBind:
-      spec: BindSpec
-    of jkInit:
-      init: ModuleInitFn
-      input: ptr LogosModuleInitInput
-    of jkDestroy:
-      destroy: ModuleDestroyFn
-      context: ptr LogosModuleContext
-    of jkQuit:
-      discard
-
-  MsgKind = enum
-    mkRequest
-    mkBound
-    mkInitialized
-    mkDestroyed
-
-  Msg = object
-    job: int
-    case kind: MsgKind
-    of mkRequest:
-      request: Request
-    of mkBound:
-      bound: BindResult
-    of mkInitialized:
-      res: LogosResult
-      context: ptr LogosModuleContext
-    of mkDestroyed:
-      discard
-
-  ReplySlot = object
-    ## One reply channel, reused by one call after another [IMPL]. A sender
-    ## signals the channel after releasing its lock (Nim 2.2.14
-    ## `channels_builtin.sendImpl`), so the receiver cannot tell when the
-    ## sender is done with it; a channel closed and freed after each reply
-    ## takes that late signal in freed memory, often the next call's channel,
-    ## whose wake-up is then lost. Slots are closed only by `close`, after the
-    ## Runtime thread has been joined.
-    ch: Channel[Reply]
-    nextFree: ptr ReplySlot
-    nextAll: ptr ReplySlot
-
-  Shared = object
-    inbox: Channel[Msg]
-    jobs: Channel[Job]
-    bell: Bell
-    slotLock: Lock
-    freeSlots: ptr ReplySlot
-    allSlots: ptr ReplySlot
-    runtime: Thread[ptr Shared]
-    workers: array[MaxWorkers, Thread[ptr Shared]]
-    spawned: int ## written by the Runtime thread only
-    finished: bool ## the Runtime thread has left its loop
-
-  Engine* = ptr Shared
-
   # Runtime-thread state ---------------------------------------------------------
   AttemptPhase = enum
     apBind
@@ -260,10 +83,18 @@ type
     cancelled: bool ## an explicit stop or shutdown was ordered after it
     expired: bool ## the startup deadline passed
     failed: bool ## the attempt failed or a failure was reported
-    waiters: seq[ReplyChannel]
+    waiters: seq[Waiter]
+    services: ptr AttemptServices
+      ## its Runtime Control binding and invocation access, until the
+      ## realization it made takes them over or its outcome is final
+
+  Waiter = object
+    reply: ReplyChannel
+    origin: string ## the module instance waiting, empty for the host
 
   StopWaiter = object
     reply: ReplyChannel
+    origin: string
     deadline: MonoTime
 
   Inst = ref object
@@ -283,6 +114,10 @@ type
     provider: bool
     keepIntent: bool ## the stop in progress is a shutdown stop
     stopWaiters: seq[StopWaiter]
+    providerId: string ## its provider record, when its record expects a contract
+    services: ptr AttemptServices ## those of `realization`
+    inflight: int ## route calls admitted into `realization` and not yet left
+    releasePending: bool ## `realization` is released once `inflight` is zero
 
   State = ref object
     shared: ptr Shared
@@ -303,42 +138,14 @@ type
     shutdownWaiters: seq[ReplyChannel]
     shutdownDone: bool
     done: bool ## `close` asked the Runtime thread to leave
+    runtimeId: string
+    ctx: SchemaContext ## the pinned context, for the well-known methods
+    routes: OrderedTable[string, Route] ## every route, in creation order [IMPL]
+    keys: RequestKeys
+    routeCount: int
+    providerCount: int
 
-func classification*(f: Failure): string =
-  ## [SPEC RUNTIME §9.3] The failure code reported for `f`.
-  if f.kind == fkLoader:
-    "loader-" & $f.loader
-  else:
-    $f.kind
-
-func defaultConfig*(workDir: string): EngineConfig =
-  EngineConfig(
-    workDir: workDir,
-    policy: allowAll(),
-    startupDeadline: DefaultStartupDeadline,
-    stopDeadline: DefaultStopDeadline,
-    shutdownGrace: DefaultShutdownGrace,
-  )
-
-func hostOrigin*(): Origin =
-  Origin(host: true)
-
-func moduleOrigin*(instance: string): Origin =
-  Origin(instance: instance)
-
-func engineError(code: ErrorCode, message: string): EngineError =
-  EngineError(code: code, message: message)
-
-# Worker threads -----------------------------------------------------------------
-
-proc post(s: ptr Shared, m: sink Msg) =
-  try:
-    s.inbox.send(m)
-  except Exception:
-    discard # [IMPL] cannot happen for these value-only messages
-  s.bell.ring()
-
-proc workerMain(s: ptr Shared) {.thread.} =
+proc workerLoop(s: ptr Shared) =
   while true:
     var job: Job
     try:
@@ -356,6 +163,13 @@ proc workerMain(s: ptr Shared) {.thread.} =
     of jkDestroy:
       job.destroy(job.context)
       s.post(Msg(kind: mkDestroyed, job: job.id))
+    of jkObserveEnd:
+      runEnd(job.handle)
+      s.post(Msg(kind: mkJobDone, job: job.id))
+
+proc workerMain(s: ptr Shared) {.thread.} =
+  workerLoop(s)
+  releasePerThread() # after the loop's locals are gone
 
 proc dispatch(st: State, job: sink Job) =
   inc st.busy
@@ -388,20 +202,12 @@ func view(x: Inst): InstanceView =
     primaryContract: x.record.primaryContract,
     implements: x.record.implements,
     provider: x.provider,
+    providerId: x.providerId,
     attempt: x.current,
   )
   if x.intent == inRequested:
     result.execution.intentRevision = Opt.some(x.intentRevision)
     result.intentOrigin = x.intentOrigin
-
-proc commit(st: State, x: Inst) =
-  ## Records one committed change: the execution revision advances (§9.3
-  ## l.3504-3505) and the change joins the ordered log (§9.1 l.1851).
-  inc x.revision
-  inc st.serial
-  if st.changes.len >= MaxRetainedChanges:
-    st.changes.delete(0)
-  st.changes.add(StateChange(serial: st.serial, view: x.view))
 
 proc answer(r: ReplyChannel, reply: sink Reply) =
   if r != nil:
@@ -416,6 +222,69 @@ proc answerView(r: ReplyChannel, x: Inst) =
 proc answerError(r: ReplyChannel, code: ErrorCode, message: string) =
   r.answer(Reply(error: Opt.some(engineError(code, message))))
 
+proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
+  ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229; INTERFACE §2.5] The route takes no
+  ## new calls, and each handle observing it gets its terminal callback once,
+  ## on a worker.
+  if r.isTerminal:
+    return
+  r.terminate(state, failure)
+  for t in r.calls:
+    cast[ptr CallTicket](t).cancelled.store(true)
+  for h in r.handles:
+    scheduleEnd(h, r.endCode)
+    st.dispatch(Job(id: st.nextJobId(), kind: jkObserveEnd, handle: h))
+  r.handles.setLen(0)
+
+proc routesFollow(st: State, x: Inst) =
+  ## [SPEC RUNTIME §3.4 l.620-626, §9.3 l.3225] A provider that is no longer
+  ## `ready` fails its routes; a consumer that is no longer live closes its
+  ## routes after an authorized stop and fails them after a failure.
+  for r in st.routes.values:
+    if r.isTerminal:
+      continue
+    if r.providerInstance == x.id and x.state != msReady:
+      st.endRoute(r, rtFailed, Opt.some(rfProviderUnavailable))
+    elif r.consumer == x.id and x.state notin {msLoaded, msReady}:
+      if x.state == msError:
+        st.endRoute(r, rtFailed, Opt.some(rfConsumerUnavailable))
+      else:
+        st.endRoute(r, rtClosed, Opt.none(RouteFailureCode))
+
+proc releaseCallers(st: State, x: Inst) =
+  ## [IMPL] Runtime Control calls of `x` still waiting for another instance
+  ## (`start_module`, `stop_module`) end with NOT_READY once its binding is
+  ## invalidated (§3.4 l.629-631), so its threads can return.
+  for y in st.instances.values:
+    if y.attempt != nil:
+      var kept: seq[Waiter]
+      for w in y.attempt.waiters:
+        if w.origin == x.id:
+          w.reply.answerError(ecNotReady, "the Runtime Control binding is invalidated")
+        else:
+          kept.add(w)
+      y.attempt.waiters = kept
+    var kept: seq[StopWaiter]
+    for w in y.stopWaiters:
+      if w.origin == x.id:
+        w.reply.answerError(ecNotReady, "the Runtime Control binding is invalidated")
+      else:
+        kept.add(w)
+    y.stopWaiters = kept
+
+proc commit(st: State, x: Inst) =
+  ## Records one committed change: the execution revision advances (§9.3
+  ## l.3504-3505) and the change joins the ordered log (§9.1 l.1851). The
+  ## routes that depend on the instance follow it in the same step.
+  inc x.revision
+  inc st.serial
+  if st.changes.len >= MaxRetainedChanges:
+    st.changes.delete(0)
+  st.changes.add(StateChange(serial: st.serial, view: x.view))
+  st.routesFollow(x)
+  if x.state notin {msLoaded, msReady}:
+    st.releaseCallers(x)
+
 # Lifecycle ----------------------------------------------------------------------
 
 proc releaseWaiters(st: State, x: Inst) =
@@ -429,8 +298,10 @@ proc finishAttempt(st: State, a: Attempt) =
   ## The attempt has nothing left to clean: its outcome is final.
   let x = a.inst
   a.phase = apDone
+  freeAttemptServices(a.services)
+  a.services = nil
   for w in a.waiters:
-    w.answerView(x)
+    w.reply.answerView(x)
   a.waiters.setLen(0)
   if x.attempt == a:
     x.attempt = nil
@@ -454,7 +325,7 @@ proc failAttempt(st: State, a: Attempt, f: Failure) =
   x.provider = false
   st.commit(x)
   for w in a.waiters:
-    w.answerView(x)
+    w.reply.answerView(x)
   a.waiters.setLen(0)
 
 proc destroyContext(st: State, a: Attempt, ctx: ptr LogosModuleContext) =
@@ -472,6 +343,11 @@ proc releaseRealization(st: State, x: Inst) =
   let r = x.realization
   if r.isNil or x.teardown != 0:
     return
+  if x.inflight > 0:
+    # [IMPL] Calls already inside the provider finish first (§3.4 l.623).
+    x.releasePending = true
+    return
+  x.releasePending = false
   let t = st.realizer.beginRelease(r.id, x.id).valueOr:
     x.realization = nil
     return
@@ -544,6 +420,8 @@ proc initialized(st: State, a: Attempt, res: LogosResult, ctx: ptr LogosModuleCo
     st.releaseRealization(x)
     return
   # [SPEC RUNTIME §3.4] Every lifecycle and realization check succeeded.
+  x.services = a.services
+  a.services = nil
   x.provider = provider
   x.state = msReady
   st.commit(x)
@@ -590,7 +468,8 @@ proc authorize(st: State, q: AuthzRequest): Opt[EngineError] =
 
 proc lookup(st: State, q: Request, operation: string): Result[Inst, EngineError] =
   ## [SPEC RUNTIME §9.3 l.3661-3662] For a module consumer, an unknown target
-  ## and a refused one are the same NOT_AUTHORISED.
+  ## and a refused one are the same NOT_AUTHORISED; a module-name mismatch is
+  ## INVALID_PARAMS only after authorization (l.3663-3664).
   let x = st.instances.getOrDefault(q.instance)
   if not q.origin.host:
     let denied = st.authorize(
@@ -608,20 +487,40 @@ proc lookup(st: State, q: Request, operation: string): Result[Inst, EngineError]
       return err(engineError(ecNotAuthorised, "not authorised"))
   if x.isNil:
     return err(engineError(ecInvalidParams, "unknown module instance"))
+  if q.module.len > 0 and q.module != x.record.module:
+    return err(engineError(ecInvalidParams, "the module name does not match"))
   if q.expectedRevision.isSome and q.expectedRevision.get != x.revision:
     # [SPEC RUNTIME §9.1 l.1832-1833] compared atomically with acceptance
     return err(engineError(ecInvalidParams, "execution revision mismatch"))
   ok(x)
 
+proc originReady(st: State, q: Request): Opt[EngineError] =
+  ## [SPEC RUNTIME §3.4 l.629-631, §10.2; G171 interim (TF-18)] Checked after
+  ## the request's authorization: a Runtime Control binding that is
+  ## invalidated, or a Runtime that is shutting down, is NOT_READY. A request
+  ## that comes through no binding (the host API) has only the second.
+  if q.attempt.len > 0:
+    let x = st.instances.getOrDefault(q.origin.instance)
+    if x.isNil or q.attempt != x.current or x.state notin {msLoaded, msReady}:
+      return
+        Opt.some(engineError(ecNotReady, "the Runtime Control binding is invalidated"))
+  if st.shuttingDown:
+    return Opt.some(engineError(ecNotReady, "the Runtime is shutting down"))
+  Opt.none(EngineError)
+
+template requireReady(st: State, q: Request) =
+  let notReady = st.originReady(q)
+  if notReady.isSome:
+    q.reply.answerError(notReady.get.code, notReady.get.message)
+    return
+
 proc start(st: State, q: Request) =
   ## [SPEC RUNTIME §9.1, §9.3 start_module; §3.6] Replies once the attempt
   ## is ready or failed, or once its deadline passed.
-  if st.shuttingDown:
-    q.reply.answerError(ecNotReady, "the Runtime is shutting down")
-    return
   let x = st.lookup(q, "start_module").valueOr:
     q.reply.answerError(error.code, error.message)
     return
+  st.requireReady(q)
   case x.state
   of msLoaded, msReady:
     q.reply.answerView(x) # §9.1 l.1837: no new realization, intent unchanged
@@ -630,7 +529,7 @@ proc start(st: State, q: Request) =
     q.reply.answerError(ecNotReady, "the module instance is stopping")
     return
   of msError:
-    if x.attempt != nil or x.teardown != 0:
+    if x.attempt != nil or x.teardown != 0 or x.realization != nil:
       # [SPEC RUNTIME §3.4 l.587-588] intent and origin unchanged
       q.reply.answerError(ecNotReady, "cleanup of the previous realization is pending")
       return
@@ -670,9 +569,6 @@ proc start(st: State, q: Request) =
     st.commit(x)
     q.reply.answerError(ecNotAuthorised, "execution is not authorised")
     return
-  if st.cfg.services.isNil:
-    q.reply.answerError(ecNotReady, "the Runtime has no initialization services")
-    return
   # The attempt is accepted: `loaded`, failure cleared (§9.3 l.3758-3759).
   let id = st.nextJobId()
   let a = Attempt(
@@ -680,15 +576,22 @@ proc start(st: State, q: Request) =
     token: "a-" & st.prefix & "-" & $id,
     inst: x,
     deadline: getMonoTime() + st.cfg.startupDeadline,
-    waiters: @[q.reply],
+    waiters: @[Waiter(reply: q.reply, origin: q.origin.instance)],
   )
   x.tokens.incl(a.token)
   x.current = a.token
+  var services =
+    if st.cfg.services.isNil:
+      InitServices()
+    else:
+      st.cfg.services(cstring(x.id), cstring(a.token))
+  a.services = newAttemptServices(st.shared, x.id, a.token)
+  services.fill(a.services)
   a.request = RealizeRequest(
     moduleInstance: x.id,
     descriptor: x.record.descriptor,
     state: x.record.stateAssignment,
-    services: st.cfg.services(cstring(x.id), cstring(a.token)),
+    services: services,
   )
   x.attempt = a
   x.state = msLoaded
@@ -710,7 +613,9 @@ proc start(st: State, q: Request) =
   of skInit:
     st.beginInit(a, step.binding)
 
-proc stopInstance(st: State, x: Inst, reply: ReplyChannel, keepIntent: bool) =
+proc stopInstance(
+    st: State, x: Inst, reply: ReplyChannel, keepIntent: bool, origin = ""
+) =
   ## [SPEC RUNTIME §3.4, §9.1, §10.2] Moves `x` toward `unloaded`; replies
   ## once it is there or once the stop deadline passes.
   if not keepIntent and x.intent != inStopped:
@@ -728,7 +633,7 @@ proc stopInstance(st: State, x: Inst, reply: ReplyChannel, keepIntent: bool) =
     x.state = msStopping
     st.commit(x)
     for w in x.attempt.waiters:
-      w.answerView(x)
+      w.reply.answerView(x)
     x.attempt.waiters.setLen(0)
   of msReady:
     x.state = msStopping
@@ -740,7 +645,7 @@ proc stopInstance(st: State, x: Inst, reply: ReplyChannel, keepIntent: bool) =
       x.attempt.cancelled = true
       x.state = msStopping
       st.commit(x)
-    elif x.teardown != 0:
+    elif x.teardown != 0 or x.realization != nil:
       x.state = msStopping
       st.commit(x)
     else:
@@ -760,20 +665,36 @@ proc stopInstance(st: State, x: Inst, reply: ReplyChannel, keepIntent: bool) =
     reply.answerView(x)
   elif reply != nil:
     x.stopWaiters.add(
-      StopWaiter(reply: reply, deadline: getMonoTime() + st.cfg.stopDeadline)
+      StopWaiter(
+        reply: reply, origin: origin, deadline: getMonoTime() + st.cfg.stopDeadline
+      )
     )
+
+proc callsInto(st: State, consumer, provider: string): bool =
+  ## Whether `consumer` has an admitted call in progress through a route to
+  ## `provider`.
+  for r in st.routes.values:
+    if r.consumer == consumer and r.providerInstance == provider and r.calls.len > 0:
+      return true
+  false
 
 proc stop(st: State, q: Request) =
   ## [SPEC RUNTIME §9.1, §9.3 stop_module]
-  if st.shuttingDown:
-    q.reply.answerError(ecNotReady, "the Runtime is shutting down")
-    return
   let x = st.lookup(q, "stop_module").valueOr:
     q.reply.answerError(error.code, error.message)
     return
-  st.stopInstance(x, q.reply, keepIntent = false)
+  st.requireReady(q)
+  if not q.origin.host and
+      (q.origin.instance == x.id or st.callsInto(q.origin.instance, x.id)):
+    # [G173 interim (TF-20)] A module that stops itself, or that has a call in
+    # progress in the target, gets the state at once: waiting would hold that
+    # call, and so the target's release (l.3687 permits `stopping`).
+    st.stopInstance(x, nil, keepIntent = false)
+    q.reply.answerView(x)
+    return
+  st.stopInstance(x, q.reply, keepIntent = false, q.origin.instance)
 
-proc reportFailure(st: State, q: Request) =
+proc reportFailure(st: State, q: Request, success = Reply()) =
   ## [SPEC RUNTIME §9.3 report_failure] Authorized by the realization-bound
   ## association alone; the reply does not wait for cleanup.
   let x = st.instances.getOrDefault(q.instance)
@@ -794,7 +715,7 @@ proc reportFailure(st: State, q: Request) =
     x.provider = false
     st.commit(x)
     st.releaseRealization(x)
-  q.reply.answer(Reply())
+  q.reply.answer(success)
 
 proc create(st: State, q: Request) =
   ## A local module-instance record: `unloaded`, intent `uninitialized`
@@ -827,6 +748,11 @@ proc create(st: State, q: Request) =
         q.reply.answerError(ecInvalidParams, "the state assignment is in use")
         return
   let x = Inst(id: id, record: q.record, state: msUnloaded, intent: inUninitialized)
+  if q.record.primaryContract.isSome or q.record.implements.len > 0:
+    # [SPEC RUNTIME §9.3 l.2862-2871] Its provider record, kept across stop
+    # and start [IMPL: one per instance].
+    inc st.providerCount
+    x.providerId = "p-" & st.prefix & "-" & $st.providerCount
   st.instances[id] = x
   st.commit(x)
   q.reply.answerView(x)
@@ -845,7 +771,8 @@ proc shutdownStep(st: State) =
     for x in order:
       if x.state in {msUnloaded, msStopping}:
         continue
-      if x.state == msError and x.attempt.isNil and x.teardown == 0:
+      if x.state == msError and x.attempt.isNil and x.teardown == 0 and
+          x.realization.isNil:
         continue
       var dependentLive = false
       for (pre, dep) in st.cfg.ordering:
@@ -871,6 +798,571 @@ proc finishShutdown(st: State) =
     w.answer(Reply())
   st.shutdownWaiters.setLen(0)
   st.shutdownDone = true
+
+proc beginShutdown(st: State) =
+  ## [SPEC RUNTIME §10.2] Admission closes first; one sequence for every
+  ## accepted request.
+  if not st.shuttingDown:
+    st.shuttingDown = true
+    st.shutdownDeadline = getMonoTime() + st.cfg.shutdownGrace
+  st.shutdownStep()
+  if st.shutdownComplete():
+    st.finishShutdown()
+
+# Runtime Control ----------------------------------------------------------------
+
+proc denied(st: State, q: AuthzRequest): bool =
+  st.authorizer.decide(q).outcome != azAllow
+
+proc answerEncoded(r: ReplyChannel, bytes: Result[seq[byte], string]) =
+  if bytes.isErr:
+    r.answerError(ecModule, "the response cannot be encoded")
+  else:
+    r.answer(Reply(bytes: bytes.get))
+
+proc caller(st: State, q: Request): Result[Inst, EngineError] =
+  ## [SPEC RUNTIME §9.3 l.2553-2560] The module consumer a binding
+  ## authenticates; none is NOT_AUTHORISED. Whether the binding is still
+  ## usable is checked after the method's authorization (`originReady`).
+  let x = st.instances.getOrDefault(q.origin.instance)
+  if x.isNil or q.attempt notin x.tokens:
+    return err(engineError(ecNotAuthorised, "no authenticated module consumer"))
+  ok(x)
+
+proc rcPrecheck(st: State, q: Request) =
+  ## [G171 interim (TF-18)] Before a Runtime Control request whose payload
+  ## failed validation is answered INVALID_PARAMS: the caller's association,
+  ## and the method's authority where it names no target from the payload.
+  let x = st.caller(q).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  if q.bare in [$rmEstablishRoute, $rmShutdownRuntime] and
+      st.denied(
+        AuthzRequest(action: aaRuntimeControl, operation: q.bare, consumer: x.id)
+      ):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  q.reply.answer(Reply())
+
+proc selectLifecycle(
+    st: State,
+    x: Inst,
+    operation, module: string,
+    instance: Opt[string],
+    provider: Opt[LogosNSRuntimeModuleProviderAddress],
+    expected: Opt[uint64],
+): Result[string, EngineError] =
+  ## [SPEC RUNTIME §9.3 l.3656-3675] The local instance a Runtime Control
+  ## `start_module` or `stop_module` request selects. No remote-module facade
+  ## exists here, so a provider selector names a local implementation.
+  if instance.isSome and provider.isSome:
+    return err(engineError(ecInvalidParams, "both selectors are present"))
+  if provider.isSome:
+    if expected.isSome:
+      return err(engineError(ecInvalidParams, "a facade has no execution revision"))
+    let p = provider.get
+    if p.runtime_instance_id.isSome and p.runtime_instance_id.get != st.runtimeId:
+      return err(engineError(ecInvalidParams, "the provider names another Runtime"))
+    var owner: Inst
+    for y in st.instances.values:
+      if y.providerId.len > 0 and y.providerId == p.provider:
+        owner = y
+    let refused = st.denied(
+      AuthzRequest(
+        action: aaLifecycle,
+        operation: operation,
+        consumer: x.id,
+        target: p.provider,
+        module: (if owner.isNil: "" else: owner.record.module),
+      )
+    )
+    if refused or owner.isNil:
+      return err(engineError(ecNotAuthorised, "not authorised"))
+    return err(
+      engineError(ecInvalidParams, "the provider selector names a local implementation")
+    )
+  if instance.isSome:
+    return ok(instance.get)
+  # [SPEC RUNTIME §9.3 l.3666-3670] Observation authority over the whole name
+  # scope comes first, whatever the number of matches.
+  if st.denied(
+    AuthzRequest(
+      action: aaObserve, operation: operation, consumer: x.id, module: module
+    )
+  ):
+    return err(engineError(ecNotAuthorised, "not authorised"))
+  var found: seq[string]
+  for y in st.instances.values:
+    if y.record.module == module:
+      found.add(y.id)
+  if found.len != 1:
+    return err(
+      engineError(
+        ecInvalidParams, "the module name does not select exactly one instance"
+      )
+    )
+  ok(found[0])
+
+proc lifecycleCall(st: State, q: Request, x: Inst) =
+  ## `start_module` and `stop_module` through the step 2 paths, with this
+  ## module as origin; the reply's view becomes the response.
+  var r = q
+  # [IMPL] Field by field: Nim 2.2.14 builds a tuple's copy of an `Opt` by
+  # resetting a temporary it never initialized (`=wasMoved` reads its
+  # discriminator), which UBSan reports.
+  let start = q.rc.m == rmStartModule
+  let operation = if start: "start_module" else: "stop_module"
+  let module = if start: q.rc.start.module else: q.rc.stop.module
+  let instance = if start: q.rc.start.instance else: q.rc.stop.instance
+  let provider = if start: q.rc.start.provider else: q.rc.stop.provider
+  let expected =
+    if start:
+      q.rc.start.expected_execution_revision
+    else:
+      q.rc.stop.expected_execution_revision
+  let target = st.selectLifecycle(x, operation, module, instance, provider, expected).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  r.instance = target
+  r.module = module
+  r.expectedRevision = expected
+  if start:
+    st.start(r)
+  else:
+    st.stop(r)
+
+proc newRouteId(st: State): string =
+  ## [IMPL] Never reused by this engine; the random prefix keeps engines apart
+  ## (§9.3 l.3172-3175).
+  inc st.routeCount
+  "route-" & st.prefix & "-" & $st.routeCount
+
+func expects(y: Inst, root: Digest): bool =
+  ## The instance's record expects `root` as its primary contract or as an
+  ## implemented interface.
+  (y.record.primaryContract.isSome and y.record.primaryContract.get == root) or
+    root in y.record.implements
+
+proc establish(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §4.2, §9.3 l.3086-3183] Local direct routes for consumer `x`.
+  const op = "establish_route"
+  let req = q.rc.establish
+  # [SPEC RUNTIME l.1626, l.3138] The method itself; no provider access yet.
+  if st.denied(AuthzRequest(action: aaRuntimeControl, operation: op, consumer: x.id)):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  checkAccessOrder(req.access).isOkOr:
+    q.reply.answerError(ecInvalidParams, error)
+    return
+  let all =
+    req.cardinality.kind ==
+    LogosNSRuntimeControlProviderRequirementCardinalityKind.All_runtime_visible
+  if all and req.provider.isSome:
+    q.reply.answerError(
+      ecInvalidParams, "a provider selector requires single cardinality"
+    )
+    return
+  let root = toDigest(req.contract.schema_root).valueOr:
+    q.reply.answerError(ecInvalidParams, "the contract root is not 32 bytes")
+    return
+  let replayed = st.keys.replay(x.id, req.request_key, op, q.rc.request).valueOr:
+    q.reply.answerError(ecInvalidParams, error)
+    return
+  if replayed.isSome:
+    st.requireReady(q)
+    q.reply.answer(Reply(bytes: replayed.get))
+    return
+  if req.provider.isSome and req.provider.get.runtime_instance_id.isSome and
+      req.provider.get.runtime_instance_id.get != st.runtimeId:
+    # [IMPL] No remote Runtime is reachable: an unknown target.
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if all and st.denied(AuthzRequest(action: aaDiscover, operation: op, consumer: x.id)):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  # [SPEC RUNTIME §9.3 l.3088-3112] Candidates: the provider records whose
+  # module record expects the contract, in creation order; readiness is
+  # applied after the route decision.
+  var candidates: seq[Inst]
+  for y in st.instances.values:
+    if y.providerId.len == 0 or not y.expects(root):
+      continue
+    if req.provider.isSome and y.providerId != req.provider.get.provider:
+      continue
+    candidates.add(y)
+  if not all and candidates.len > 1:
+    # [IMPL] `single` selects first and then authorizes only the selected
+    # provider (l.3093-3094): the first ready candidate, else the first.
+    var pick = candidates[0]
+    for y in candidates:
+      if y.state == msReady:
+        pick = y
+        break
+    candidates = @[pick]
+  var
+    allowed: seq[(Inst, string, AuthzAnswer)]
+    omitted = false
+    made: seq[Route]
+  for y in candidates:
+    # [SPEC RUNTIME l.3155] The identifier is allocated before evaluation.
+    let id = st.newRouteId()
+    let ans = st.authorizer.decide(
+      AuthzRequest(
+        action: aaRoute,
+        operation: op,
+        consumer: x.id,
+        target: y.providerId,
+        route: id,
+        module: y.record.module,
+      )
+    )
+    if ans.outcome != azAllow:
+      omitted = true
+    else:
+      allowed.add((y, id, ans))
+  if allowed.len == 0:
+    # [SPEC RUNTIME l.3157-3159; G169 interim (TF-16)] Nothing the caller may
+    # route to: NOT_AUTHORISED, unless a `discover` allow covers the contract
+    # and no provider offers it, which the caller may learn.
+    let discoverable =
+      candidates.len == 0 and (
+        all or
+        not st.denied(AuthzRequest(action: aaDiscover, operation: op, consumer: x.id))
+      )
+    if not discoverable:
+      q.reply.answerError(ecNotAuthorised, "not authorised")
+      return
+  st.requireReady(q)
+  for (y, id, ans) in allowed:
+    let sel =
+      if y.state == msReady and y.provider and not y.realization.isNil:
+        selectContract(y.realization.binding.contracts, root, st.ctx)
+      else:
+        Opt.none(SelectedContract)
+    if sel.isNone:
+      omitted = true
+      continue
+    checkAccessRoots(req.access, sel.get).isOkOr:
+      q.reply.answerError(ecInvalidParams, error)
+      return
+    made.add(
+      Route(
+        id: id,
+        consumer: x.id,
+        provider: y.providerId,
+        providerInstance: y.id,
+        selected: sel.get,
+        access: req.access,
+        state: rtReady,
+        decisionId: ans.decisionId,
+      )
+    )
+  if made.len == 0:
+    # [G169 interim (TF-16)] The caller holds a route allow for a provider, or
+    # a `discover` allow and no provider offers the contract.
+    q.reply.answerError(ecNotReady, "no selected provider is ready")
+    return
+  var response = LogosNSRuntimeControlEstablishRouteResponse(partial: all and omitted)
+  for r in made:
+    st.routes[r.id] = r
+    response.routes.add(r.record(st.runtimeId))
+  let bytes = encode(response).valueOr:
+    q.reply.answerError(ecModule, "the response cannot be encoded")
+    return
+  st.keys.retain(x.id, req.request_key, op, q.rc.request, bytes)
+  q.reply.answer(Reply(bytes: bytes))
+
+proc renew(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 l.3183-3190, l.3471-3484] A new authority check for
+  ## an existing ready route. An allow replaces the decision; a deny makes the
+  ## route unusable [G170 interim (TF-17)].
+  const op = "renew_route"
+  let req = q.rc.renew
+  if st.denied(
+    AuthzRequest(
+      action: aaRuntimeControl,
+      operation: op,
+      consumer: x.id,
+      target: req.route,
+      route: req.route,
+    )
+  ):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  let replayed = st.keys.replay(x.id, req.request_key, op, q.rc.request).valueOr:
+    q.reply.answerError(ecInvalidParams, error)
+    return
+  if replayed.isSome:
+    st.requireReady(q)
+    q.reply.answer(Reply(bytes: replayed.get))
+    return
+  let r = st.routes.getOrDefault(req.route)
+  if r.isNil or r.consumer != x.id:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if r.state == rtRevoked and r.endCode == ecNotAuthorised:
+    # [SPEC RUNTIME §7.5 l.1347] A known authorization failure comes first.
+    q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
+    return
+  let ans = st.authorizer.decide(
+    AuthzRequest(
+      action: aaRoute,
+      operation: op,
+      consumer: x.id,
+      target: r.provider,
+      route: r.id,
+      module: r.selected.module,
+    )
+  )
+  if ans.outcome != azAllow:
+    # [G170 interim (TF-17)] No call is served under a decision a later check
+    # withdrew (CA l.906-911); a terminal route keeps its first end.
+    st.endRoute(
+      r,
+      rtRevoked,
+      Opt.some(
+        if ans.outcome == azDeny: rfAuthorityDenied else: rfAuthorityEvaluationFailed
+      ),
+    )
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  st.requireReady(q)
+  if r.isTerminal:
+    # [SPEC RUNTIME §9.3 l.1915, l.3482-3483] Closed or failed: NOT_READY;
+    # revoked: by its cause (§7.5).
+    q.reply.answerError(
+      (if r.state == rtRevoked: r.endCode else: ecNotReady), "the route is " & $r.state
+    )
+    return
+  r.decisionId = ans.decisionId
+  let bytes = encode(
+    LogosNSRuntimeControlRenewRouteResponse(route: r.record(st.runtimeId))
+  ).valueOr:
+    q.reply.answerError(ecModule, "the response cannot be encoded")
+    return
+  st.keys.retain(x.id, req.request_key, op, q.rc.request, bytes)
+  q.reply.answer(Reply(bytes: bytes))
+
+proc closeRoute(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 l.3486-3492] One decision for the method on that
+  ## route decides for its own consumer and for any other.
+  let req = q.rc.close
+  if st.denied(
+    AuthzRequest(
+      action: aaRuntimeControl,
+      operation: "close_route",
+      consumer: x.id,
+      target: req.route,
+      route: req.route,
+    )
+  ):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  let r = st.routes.getOrDefault(req.route)
+  if r.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  st.requireReady(q)
+  # [G170 interim (TF-17)] A terminal route keeps its state and is reported as
+  # it is.
+  st.endRoute(r, rtClosed, Opt.none(RouteFailureCode))
+  q.reply.answerEncoded(
+    encode(
+      LogosNSRuntimeControlCloseRouteResponse(route: r.id, state: routeState(r.state))
+    )
+  )
+
+proc rc(st: State, q: Request) =
+  ## [SPEC RUNTIME §9, §9.3] One Runtime Control method through a module's
+  ## binding.
+  let x = st.caller(q).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  case q.rc.m
+  of rmGetSelf:
+    # [SPEC RUNTIME §9.3 l.2553-2560] Caller-bound: no policy grant.
+    st.requireReady(q)
+    q.reply.answerEncoded(
+      encode(
+        LogosNSRuntimeControlGetSelfResponse(
+          consumer: LogosNSRuntimeModuleInstanceAddress(
+            runtime_instance_id: st.runtimeId, module_instance_id: x.id
+          )
+        )
+      )
+    )
+  of rmGetExecutionPermissions:
+    # [SPEC RUNTIME §9.3 l.2562-2574] Caller-bound; no operating-system
+    # permission enforcement is installed here, so no enforced snapshot.
+    st.requireReady(q)
+    q.reply.answerEncoded(
+      encode(
+        LogosNSRuntimeControlGetExecutionPermissionsResponse(
+          kind: LogosNSRuntimeControlGetExecutionPermissionsResponseKind.Unavailable
+        )
+      )
+    )
+  of rmReportFailure:
+    st.requireReady(q)
+    let response = encode(LogosNSRuntimeControlReportFailureResponse()).valueOr:
+      q.reply.answerError(ecModule, "the response cannot be encoded")
+      return
+    var r = q
+    r.instance = x.id
+    r.reason = q.rc.report.reason.get("")
+    st.reportFailure(r, Reply(bytes: response))
+  of rmStartModule, rmStopModule:
+    st.lifecycleCall(q, x)
+  of rmEstablishRoute:
+    st.establish(q, x)
+  of rmRenewRoute:
+    st.renew(q, x)
+  of rmCloseRoute:
+    st.closeRoute(q, x)
+  of rmShutdownRuntime:
+    # [SPEC RUNTIME §9.3 l.3695-3700] Runtime-wide; the response acknowledges
+    # acceptance and is attempted before teardown.
+    if st.denied(
+      AuthzRequest(
+        action: aaRuntimeControl, operation: "shutdown_runtime", consumer: x.id
+      )
+    ):
+      q.reply.answerError(ecNotAuthorised, "not authorised")
+      return
+    st.requireReady(q)
+    q.reply.answerEncoded(encode(LogosNSRuntimeControlShutdownRuntimeResponse()))
+    st.beginShutdown()
+
+# Route handles ------------------------------------------------------------------
+
+proc materialize(st: State, q: Request) =
+  ## [SPEC INTERFACE §5.2 l.3880-3890] Ownership and non-disclosure first,
+  ## then authorization and readiness (§7.5), then the contract root [IMPL:
+  ## readiness before the root].
+  let x = st.caller(q).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  let r = st.routes.getOrDefault(q.route)
+  if r.isNil or r.consumer != x.id:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  # [SPEC RUNTIME §4.3 l.982-984] The caller's access to the selected provider
+  # is verified before a handle is returned [IMPL: one route decision].
+  if st.denied(
+    AuthzRequest(
+      action: aaRoute,
+      operation: "materialize_route",
+      consumer: x.id,
+      target: r.provider,
+      route: r.id,
+      module: r.selected.module,
+    )
+  ):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if r.isTerminal and r.endCode == ecNotAuthorised:
+    q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
+    return
+  st.requireReady(q)
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
+  if r.selected.root != q.root or not q.rebuilt:
+    q.reply.answerError(
+      ecVersionMismatch, "the expected contract root is not the route's contract"
+    )
+    return
+  q.reply.answer(Reply())
+
+proc admit(st: State, q: Request) =
+  ## [SPEC RUNTIME §4.1, §6.4, §7.5, l.1732] Step 1 of a direct route call
+  ## (`bindings.nim`): the method and its scope, then authorization, then
+  ## readiness, so a known authorization failure takes precedence (l.1347).
+  let r = st.routes.getOrDefault(q.route)
+  if r.isNil or r.consumer != q.origin.instance:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if r.selected.methodRoot(q.bare).isNone:
+    q.reply.answerError(ecMethodNotFound, "unknown method " & q.bare)
+    return
+  if not r.allowsMethod(q.bare):
+    q.reply.answerError(ecNotAuthorised, "the method is outside the route's access")
+    return
+  if r.isTerminal and r.endCode == ecNotAuthorised:
+    q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
+    return
+  if st.denied(
+    AuthzRequest(
+      action: aaCall,
+      operation: q.bare,
+      consumer: r.consumer,
+      target: r.provider,
+      route: r.id,
+      module: r.selected.module,
+    )
+  ):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
+  let x = st.instances.getOrDefault(r.consumer)
+  if x.isNil or q.attempt != x.current or x.state notin {msLoaded, msReady} or
+      st.shuttingDown:
+    q.reply.answerError(ecNotReady, "the consumer is not live")
+    return
+  if r.selected.isWellKnown(q.bare):
+    # [SPEC INTERFACE l.3275-3277; RUNTIME l.429-431] The boundary answers;
+    # no provider code runs and no invocation context is made current.
+    q.reply.answer(Reply(admission: Admission(introspection: true)))
+    return
+  let p = st.instances.getOrDefault(r.providerInstance)
+  if p.isNil or p.state != msReady or p.realization.isNil or p.services.isNil:
+    q.reply.answerError(ecNotReady, "the provider is not ready")
+    return
+  inc p.inflight
+  let ticket = createShared(CallTicket)
+  r.calls.add(ticket)
+  let b = p.realization.binding
+  q.reply.answer(
+    Reply(
+      admission: Admission(
+        dispatch: b.dispatch,
+        free: b.free,
+        context: p.realization.context,
+        access: p.services,
+        provider: p.id,
+        route: r.id,
+        ticket: ticket,
+        runtimeId: st.runtimeId,
+      )
+    )
+  )
+
+proc observeEnd(st: State, q: Request) =
+  ## [SPEC INTERFACE §2.5 l.1477-1491] Installed in order with termination.
+  let r = st.routes.getOrDefault(q.route)
+  if r.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
+  if q.handle in r.handles:
+    q.reply.answerError(ecInvalidParams, "an observer is already installed")
+    return
+  installEnd(q.handle, q.handler, q.userData)
+  r.handles.add(q.handle)
+  q.reply.answer(Reply())
+
+proc releaseHandle(st: State, q: Request) =
+  ## No terminal callback is scheduled for the handle after this.
+  let r = st.routes.getOrDefault(q.route)
+  if not r.isNil:
+    let i = r.handles.find(q.handle)
+    if i >= 0:
+      r.handles.del(i)
+  q.reply.answer(Reply())
 
 # The Runtime thread ---------------------------------------------------------------
 
@@ -907,12 +1399,7 @@ proc handle(st: State, q: Request) =
       q.reply.answer(Reply())
       return
     st.shutdownWaiters.add(q.reply)
-    if not st.shuttingDown:
-      st.shuttingDown = true
-      st.shutdownDeadline = getMonoTime() + st.cfg.shutdownGrace
-    st.shutdownStep()
-    if st.shutdownComplete():
-      st.finishShutdown()
+    st.beginShutdown()
   of rqTerminate:
     # `close`: only after shutdown. The reply says whether module code is
     # still running on a worker.
@@ -921,6 +1408,25 @@ proc handle(st: State, q: Request) =
       return
     st.done = true
     q.reply.answer(Reply(busy: st.busy))
+  of rqRcPrecheck:
+    st.rcPrecheck(q)
+  of rqRc:
+    st.rc(q)
+  of rqMaterialize:
+    st.materialize(q)
+  of rqAdmit:
+    st.admit(q)
+  of rqObserveEnd:
+    st.observeEnd(q)
+  of rqReleaseHandle:
+    st.releaseHandle(q)
+  of rqIdentity:
+    q.reply.answer(Reply(id: st.runtimeId))
+  of rqRoutes:
+    var r = Reply()
+    for x in st.routes.values:
+      r.routes.add(x.record(st.runtimeId))
+    q.reply.answer(r)
 
 proc destroyed(st: State, job: int) =
   if job in st.teardowns:
@@ -929,6 +1435,8 @@ proc destroyed(st: State, job: int) =
     x.teardown = 0
     st.realizer.finishRelease(x.id)
     x.realization = nil
+    freeAttemptServices(x.services)
+    x.services = nil
     let a = x.attempt
     if a != nil and a.phase == apCleanup:
       st.finishAttempt(a)
@@ -948,8 +1456,10 @@ proc handle(st: State, m: sink Msg) =
   of mkRequest:
     st.handle(m.request)
     return
-  of mkBound, mkInitialized, mkDestroyed:
+  of mkBound, mkInitialized, mkDestroyed, mkJobDone:
     dec st.busy
+  of mkCallDone:
+    discard
   case m.kind
   of mkBound:
     var a: Attempt
@@ -961,7 +1471,20 @@ proc handle(st: State, m: sink Msg) =
       st.initialized(a, m.res, m.context)
   of mkDestroyed:
     st.destroyed(m.job)
-  of mkRequest:
+  of mkCallDone:
+    let r = st.routes.getOrDefault(m.route)
+    if r != nil:
+      let i = r.calls.find(m.ticket)
+      if i >= 0:
+        r.calls.del(i)
+    if m.ticket != nil:
+      freeShared(m.ticket)
+    let p = st.instances.getOrDefault(m.provider)
+    if p != nil:
+      dec p.inflight
+      if p.inflight == 0 and p.releasePending:
+        st.releaseRealization(p)
+  of mkRequest, mkJobDone:
     discard
   if st.shuttingDown and not st.shutdownDone:
     st.shutdownStep()
@@ -1019,7 +1542,7 @@ proc nextDeadline(st: State): Opt[MonoTime] =
     consider(st.shutdownDeadline)
   t
 
-proc runtimeMain(s: ptr Shared) {.thread.} =
+proc runtimeLoop(s: ptr Shared) =
   var first: Msg
   try:
     first = s.inbox.recv()
@@ -1038,6 +1561,8 @@ proc runtimeMain(s: ptr Shared) {.thread.} =
     realizer: newRealizer(cfg.workDir, cfg.stateRoot),
     authorizer: initAuthorizer(cfg.policy),
     prefix: prefix,
+    runtimeId: cfg.runtimeInstanceId,
+    ctx: pinnedContext(),
   )
   for reg in cfg.statics:
     discard st.realizer.registerStatic(reg)
@@ -1068,39 +1593,18 @@ proc runtimeMain(s: ptr Shared) {.thread.} =
       discard
   s.finished = true
 
+proc runtimeMain(s: ptr Shared) {.thread.} =
+  runtimeLoop(s)
+  releasePerThread() # after the loop's locals are gone
+
 # The engine handle ------------------------------------------------------------------
-
-proc takeSlot(e: Engine): ptr ReplySlot =
-  withLock e.slotLock:
-    result = e.freeSlots
-    if result != nil:
-      e.freeSlots = result.nextFree
-    else:
-      result = createShared(ReplySlot)
-      result.ch.open()
-      result.nextAll = e.allSlots
-      e.allSlots = result
-
-proc giveSlot(e: Engine, slot: ptr ReplySlot) =
-  withLock e.slotLock:
-    slot.nextFree = e.freeSlots
-    e.freeSlots = slot
-
-proc call(e: Engine, q: sink Request): Reply =
-  ## Sends `q` to the Runtime thread and waits for its one reply.
-  let slot = e.takeSlot()
-  q.reply = addr slot.ch
-  e.post(Msg(kind: mkRequest, request: q))
-  try:
-    result = slot.ch.recv()
-  except Exception:
-    # The slot stays out of use: its reply may still arrive.
-    return Reply(error: Opt.some(engineError(ecNotReady, "no reply")))
-  e.giveSlot(slot)
 
 proc newEngine*(cfg: EngineConfig): Engine =
   ## Starts the Runtime thread with `cfg`. Static registrations whose table
-  ## is invalid were rejected by `checkStaticRegistration` before this.
+  ## is invalid were rejected by `checkStaticRegistration` before this, and a
+  ## Runtime identity has 1 to 128 UTF-8 bytes (§9.2).
+  doAssert cfg.runtimeInstanceId.len in 1 .. 128 and isValidUtf8(cfg.runtimeInstanceId),
+    "invalid runtime instance id"
   result = createShared(Shared)
   result.inbox.open()
   result.jobs.open()
@@ -1188,6 +1692,13 @@ proc changes*(e: Engine): seq[StateChange] =
   ## The retained committed changes, in commit order.
   e.call(Request(kind: rqChanges)).changes
 
+proc runtimeInstanceId*(e: Engine): string =
+  e.call(Request(kind: rqIdentity)).id
+
+proc routes*(e: Engine): seq[LogosNSRuntimeControlRouteRecord] =
+  ## Every route record, in creation order (host and test observation).
+  e.call(Request(kind: rqRoutes)).routes
+
 proc shutdown*(e: Engine) =
   ## [SPEC RUNTIME §10.2] Host-initiated graceful shutdown; returns once every
   ## realization is released or its cleanup failure is recorded.
@@ -1208,12 +1719,7 @@ proc close*(e: Engine): bool =
   # No thread sends to any channel or rings the bell any more.
   e.inbox.close()
   e.jobs.close()
-  var slot = e.allSlots
-  while slot != nil:
-    let next = slot.nextAll
-    slot.ch.close()
-    deallocShared(slot)
-    slot = next
+  e.closeSlots()
   deinitLock(e.slotLock)
   freeBell(e.bell)
   deallocShared(e)

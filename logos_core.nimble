@@ -44,6 +44,17 @@ task test_release, "Run every test suite under --mm:orc -d:release":
 task test_refc, "Run every test suite under --mm:refc":
   runSuites("--mm:refc", "refc")
 
+# The sanitizer switches are in config.nims, their run-time defaults in
+# tests/support/sanitizers.c.
+task test_asan, "Run every test suite under AddressSanitizer and UBSan":
+  runSuites("--mm:orc -d:asan", "asan")
+
+task test_tsan, "Run every test suite under ThreadSanitizer":
+  runSuites("--mm:orc -d:tsan", "tsan")
+
+task test_msan, "Run every test suite under MemorySanitizer (clang on Linux)":
+  runSuites("--mm:orc -d:msan", "msan")
+
 task regen,
   "Rewrite the committed lcn-gen outputs (common types and mirrors, test fixtures)":
   exec "nim r --hints:off --outdir:build/tools tools/regen_nim.nim"

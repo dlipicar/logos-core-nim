@@ -321,7 +321,8 @@ func parseType(p: var Parser): Result[PType, string] =
     ok(PType(kind: pkChoice, arms: arms))
 
 func parseRules(src: string, s: var ProtocolSchema): Result[void, string] =
-  var p = Parser(toks: ?lex(src))
+  let toks = ?lex(src)
+  var p = Parser(toks: toks)
   while p.peek.kind != tkEnd:
     let name = p.next
     if name.kind != tkName:

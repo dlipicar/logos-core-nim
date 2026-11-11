@@ -175,6 +175,26 @@ proc generatedCommonMirrors*(): Result[string, string] =
 const
   commonTypesPath* = "src/logos_core/iface/common_types.nim"
   commonMirrorsPath* = "src/logos_core/codegen/common_mirrors.nim"
+  rcTypesPath* = "src/logos_core/runtime/rc_types.nim"
+  rcPrimary* = "spec/mirrors/RNT/9.3.runtime-control.cddl"
+  rcSupporting* = [
+    "spec/mirrors/RNT/9.2.runtime-types.cddl",
+    "spec/mirrors/CFG/9.configuration-types.cddl",
+  ]
+
+proc generatedRcTypes*(): Result[string, string] =
+  ## The Runtime Control contract's types (RUNTIME §9.2, §9.3; CONFIG §9), for
+  ## the engine.
+  try:
+    let set = ?acceptContractSet(
+      readFile(rcPrimary),
+      [],
+      rcSupporting.mapIt(readFile(it)),
+      AcceptOptions(system: true),
+    )
+    nimModule(set, NimOptions(importPrefix: "../", schemaAccessor: "rcSchema"), true)
+  except IOError as e:
+    err(e.msg)
 
 proc fixturePath*(f: NimFixture): string =
   "tests/generated" / f.module

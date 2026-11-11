@@ -302,7 +302,8 @@ proc variantFiles(dir: string): Result[seq[(string, seq[byte])], string] =
       let info = getFileInfo(full, followSymlink = false)
       if info.kind != pcFile:
         return err("not a regular file: " & full)
-      files.add((path.replace(DirSep, '/'), ?readBytes(full)))
+      let data = ?readBytes(full)
+      files.add((path.replace(DirSep, '/'), data))
   except CatchableError as e:
     return err("cannot list " & dir & ": " & e.msg)
   files.sort(

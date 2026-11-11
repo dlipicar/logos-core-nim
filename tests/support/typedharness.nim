@@ -40,6 +40,8 @@ type
     owner: LogosResponseOwner
     untouched, complete, same: cint
     text: array[thText, char]
+    message: array[513, char]
+    detail: array[4096, uint8]
 
   Typed* = object ## One typed call as its C caller saw it.
     status*: AbiCheck ## the result and outputs, read together (§2.4)
@@ -211,14 +213,21 @@ proc typedReflect*(
   run(keep):
     thShapesReflect(addr f, m, cint(ord(v)), rep)
 
+# Instrumented frames are larger, so the sanitizer builds (config.nims) check the
+# depth limits on a larger stack; the plain builds check the budget (I72).
+const sanitizerStackScale =
+  when defined(asan) or defined(tsan) or defined(msan): 4 else: 1
+
 proc typedReflectOnStack*(
     f: ThFns, m: ptr LogosModuleContext, v: ReflectVariant, stack: int
 ): Typed {.gcsafe.} =
-  ## `typedReflect` on a new C thread with exactly `stack` bytes of stack.
+  ## `typedReflect` on a new C thread with exactly `stack` bytes of stack, times
+  ## `sanitizerStackScale`.
   var f = f
   run(false):
-    doAssert thShapesReflectOnStack(addr f, m, cint(ord(v)), csize_t(stack), rep) == 0,
-      "could not start a thread"
+    doAssert thShapesReflectOnStack(
+      addr f, m, cint(ord(v)), csize_t(stack * sanitizerStackScale), rep
+    ) == 0, "could not start a thread"
 
 proc typedReflectCleared*(f: ThFns, m: ptr LogosModuleContext): Typed {.gcsafe.} =
   ## A full reflect whose outputs are read again after another call, then

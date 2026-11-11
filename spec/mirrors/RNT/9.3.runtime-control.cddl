@@ -1,0 +1,552 @@
+; -- metadata --
+_module = "logos_runtime_control"
+
+logos.runtime_control.cursor = tstr .size (1..512)
+logos.runtime_control.inventory_collection =
+    "modules" / "routes" / "remote-listeners" / "provider-exports"
+
+logos.runtime_control.reason = tstr .size (0..512)
+logos.runtime_control.address_profile = tstr .size (1..128)
+logos.runtime_control.decision_id = tstr .size (1..128)
+logos.runtime_control.failure_code = tstr .size (1..64)
+logos.runtime_control.host_name = tstr .size (1..255)
+logos.runtime_control.port = uint16
+logos.runtime_control.path = tstr .size (1..4096)
+logos.runtime_control.server_name = tstr .size (1..255)
+logos.runtime_control.alpn = tstr .size (1..255)
+
+logos.runtime_control.state =
+    "unloaded" /
+    "loaded" /
+    "ready" /
+    "stopping" /
+    "error"
+
+logos.runtime_control.mode =
+    "direct" /
+    "local-transport" /
+    "remote-transport"
+
+logos.runtime_control.route_state =
+    "establishing" /
+    "ready" /
+    "draining" /
+    "revoked" /
+    "failed" /
+    "closed"
+
+logos.runtime_control.unix_stream_runtime_address = {
+    transport: "unix-stream",
+    path: logos.runtime_control.path,
+    ? profile: logos.runtime_control.address_profile,
+}
+
+logos.runtime_control.tls_tcp_runtime_address = {
+    transport: "tls-tcp",
+    host: logos.runtime_control.host_name,
+    port: logos.runtime_control.port,
+    ? server_name: logos.runtime_control.server_name,
+    ? profile: logos.runtime_control.address_profile,
+}
+
+logos.runtime_control.quic_runtime_address = {
+    transport: "quic",
+    host: logos.runtime_control.host_name,
+    port: logos.runtime_control.port,
+    ? server_name: logos.runtime_control.server_name,
+    ? alpn: logos.runtime_control.alpn,
+    ? profile: logos.runtime_control.address_profile,
+}
+
+logos.runtime_control.runtime_address =
+    logos.runtime_control.unix_stream_runtime_address /
+    logos.runtime_control.tls_tcp_runtime_address /
+    logos.runtime_control.quic_runtime_address
+
+logos.runtime_control.runtime_endpoint = {
+    ? runtime_instance_id: logos.runtime.runtime_instance_id,
+    address: logos.runtime_control.runtime_address,
+}
+
+logos.runtime_control.remote_identity_profile =
+    "logos.remote.tls-tcp" /
+    "logos.remote.quic"
+
+logos.runtime_control.trust_anchor_id = bstr .size (1..128)
+logos.runtime_control.subject_public_key_info = bstr .size (1..8192)
+
+logos.runtime_control.remote_runtime_enrollment =
+    {
+        runtime_instance_id: logos.runtime.runtime_instance_id,
+        profile: logos.runtime_control.remote_identity_profile,
+        revision: uint64,
+        status: "active",
+        trust_anchor: logos.runtime_control.trust_anchor_id,
+        subject_public_keys: [logos.runtime_control.subject_public_key_info] /
+                             [logos.runtime_control.subject_public_key_info,
+                              logos.runtime_control.subject_public_key_info],
+    } /
+    {
+        runtime_instance_id: logos.runtime.runtime_instance_id,
+        profile: logos.runtime_control.remote_identity_profile,
+        revision: uint64,
+        status: "revoked",
+    }
+
+logos.runtime_control.remote_listener_address =
+    logos.runtime_control.tls_tcp_runtime_address /
+    logos.runtime_control.quic_runtime_address
+
+logos.runtime_control.remote_listener_record = {
+    address: logos.runtime_control.remote_listener_address,
+    enabled: bool,
+    runtime_control_enabled: bool,
+}
+
+logos.runtime_control.provider_export_record = {
+    listener: logos.runtime_control.remote_listener_address,
+    provider: logos.runtime.module_provider_address,
+    enabled: bool,
+}
+
+logos.runtime_control.remote_provider_target = {
+    runtime: logos.runtime_control.runtime_endpoint,
+    ? provider: logos.runtime.module_provider_id,
+    ? module: logos.runtime.module_name,
+}
+
+logos.runtime_control.execution_state = {
+    revision: uint64,
+    intent: "uninitialized" / "requested" / "stopped",
+    ? intent_revision: uint64,
+}
+
+logos.runtime_control.module_record = {
+    ? failure: logos.runtime_control.failure_code,
+    module: logos.runtime.module_name,
+    ? provider: logos.runtime.module_provider_address,
+    ? remote: logos.runtime_control.remote_provider_target,
+    ? instance: logos.runtime.module_instance_id,
+    ? state_assignment: logos.runtime.module_state_assignment_id,
+    ? execution: logos.runtime_control.execution_state,
+    state: logos.runtime_control.state,
+    mode: logos.runtime_control.mode,
+    ? primary_contract: logos.schema_commitment,
+    ? implements: [* logos.schema_commitment],
+    ? reason: logos.runtime_control.reason,
+}
+
+logos.runtime_control.invocation_descriptor =
+    {
+        kind: "local-transport",
+        profile: "logos.local.unix-stream",
+        path: logos.runtime_control.path,
+        ticket: bstr .size 32,
+    } /
+    {
+        kind: "remote-transport",
+        runtime: logos.runtime.runtime_instance_id,
+        provider: logos.runtime.module_provider_id,
+        endpoint: logos.runtime_control.remote_listener_address,
+        ticket: bstr .size 32,
+    }
+
+logos.runtime_control.route_failure = {
+    code: logos.runtime_control.failure_code,
+    ? message: logos.runtime_control.reason,
+}
+
+logos.runtime_control.route_access = {
+    ? methods: [* bstr .size 32],
+    ? publish_events: [* bstr .size 32],
+    ? subscribe_events: [* bstr .size 32],
+}
+
+logos.runtime_control.provider_requirement_cardinality =
+    "single" /
+    "all-runtime-visible"
+
+logos.runtime_control.route_record = {
+    route: logos.runtime.route_id,
+    consumer: logos.runtime.module_instance_address,
+    target_provider: logos.runtime.module_provider_address,
+    module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    ? expected_contract: logos.schema_commitment,
+    access: logos.runtime_control.route_access,
+    state: logos.runtime_control.route_state,
+    ? invocation: logos.runtime_control.invocation_descriptor,
+    ? decision_id: logos.runtime_control.decision_id,
+    ? expires_at: uint64,
+    ? failure: logos.runtime_control.route_failure,
+}
+
+logos.runtime_control.establish_route_request = {
+    request_key: tstr .size (1..128),
+    contract: logos.schema_commitment,
+    cardinality: logos.runtime_control.provider_requirement_cardinality,
+    ? provider: logos.runtime.module_provider_address,
+    access: logos.runtime_control.route_access,
+}
+
+logos.runtime_control.route_continuation = {
+    provider: logos.runtime.module_provider_address,
+    target: logos.runtime_control.remote_provider_target,
+}
+
+logos.runtime_control.establish_route_response = {
+    routes: [* logos.runtime_control.route_record],
+    continuations: [* logos.runtime_control.route_continuation],
+    partial: bool,
+}
+
+logos.runtime_control.renew_route_request = {
+    request_key: tstr .size (1..128),
+    route: logos.runtime.route_id,
+}
+
+logos.runtime_control.renew_route_response = {
+    route: logos.runtime_control.route_record,
+}
+
+logos.runtime_control.describe_provider_request = {
+    provider: logos.runtime.module_provider_address,
+}
+
+logos.runtime_control.describe_provider_response = {
+    provider: logos.runtime.module_provider_address,
+    surface: bstr .size (1..8388608),
+}
+
+logos.runtime_control.get_self_request = {}
+
+logos.runtime_control.get_self_response = {
+    consumer: logos.runtime.module_instance_address,
+}
+
+logos.runtime_control.list_modules_request = {
+    ? module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    ? cursor: logos.runtime_control.cursor,
+    ? limit: uint16,
+}
+
+logos.runtime_control.list_modules_response = {
+    modules: [* logos.runtime_control.module_record],
+    ? next_cursor: logos.runtime_control.cursor,
+}
+
+logos.runtime_control.list_routes_request = {
+    ? module: logos.runtime.module_name,
+    ? provider: logos.runtime.module_provider_address,
+    ? cursor: logos.runtime_control.cursor,
+    ? limit: uint16,
+}
+
+logos.runtime_control.list_routes_response = {
+    routes: [* logos.runtime_control.route_record],
+    ? next_cursor: logos.runtime_control.cursor,
+}
+
+logos.runtime_control.list_remote_listeners_request = {
+    ? cursor: logos.runtime_control.cursor,
+    ? limit: uint16,
+}
+
+logos.runtime_control.list_remote_listeners_response = {
+    listeners: [* logos.runtime_control.remote_listener_record],
+    ? next_cursor: logos.runtime_control.cursor,
+}
+
+logos.runtime_control.set_remote_listener_request = {
+    listener: logos.runtime_control.remote_listener_record,
+}
+
+logos.runtime_control.set_remote_listener_response = {
+    listener: logos.runtime_control.remote_listener_record,
+}
+
+logos.runtime_control.list_provider_exports_request = {
+    ? listener: logos.runtime_control.remote_listener_address,
+    ? provider: logos.runtime.module_provider_address,
+    ? cursor: logos.runtime_control.cursor,
+    ? limit: uint16,
+}
+
+logos.runtime_control.list_provider_exports_response = {
+    exports: [* logos.runtime_control.provider_export_record],
+    ? next_cursor: logos.runtime_control.cursor,
+}
+
+logos.runtime_control.set_provider_export_request = {
+    export: logos.runtime_control.provider_export_record,
+}
+
+logos.runtime_control.set_provider_export_response = {
+    export: logos.runtime_control.provider_export_record,
+}
+
+logos.runtime_control.close_route_request = {
+    route: logos.runtime.route_id,
+    ? reason: logos.runtime_control.reason,
+}
+
+logos.runtime_control.close_route_response = {
+    route: logos.runtime.route_id,
+    state: logos.runtime_control.route_state,
+}
+
+logos.runtime_control.create_module_request = {
+    request_key: tstr .size (1..128),
+    module: logos.runtime.module_name,
+}
+
+logos.runtime_control.create_module_response = {
+    module: logos.runtime.module_name,
+    instance: logos.runtime.module_instance_id,
+}
+
+logos.runtime_control.start_module_request = {
+    module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    ? provider: logos.runtime.module_provider_address,
+    ? expected_execution_revision: uint64,
+}
+
+logos.runtime_control.start_module_response = {
+    module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    ? provider: logos.runtime.module_provider_address,
+    state: logos.runtime_control.state,
+}
+
+logos.runtime_control.stop_module_request = {
+    module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    ? provider: logos.runtime.module_provider_address,
+    ? expected_execution_revision: uint64,
+}
+
+logos.runtime_control.stop_module_response = {
+    module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    ? provider: logos.runtime.module_provider_address,
+    state: logos.runtime_control.state,
+}
+
+logos.runtime_control.recover_module_request = {
+    module: logos.runtime.module_name,
+    instance: logos.runtime.module_instance_id,
+    expected_execution_revision: uint64,
+}
+
+logos.runtime_control.recover_module_response = {
+    module: logos.runtime.module_name,
+    instance: logos.runtime.module_instance_id,
+    state: logos.runtime_control.state,
+}
+
+logos.runtime_control.retire_module_request = {
+    target: logos.runtime.module_instance_address,
+    expected_execution_revision: uint64,
+}
+
+logos.runtime_control.retire_module_response = {}
+
+logos.runtime_control.report_failure_request = {
+    ? reason: logos.runtime_control.reason,
+}
+
+logos.runtime_control.report_failure_response = {}
+
+logos.runtime_control.shutdown_runtime_request = {}
+
+logos.runtime_control.shutdown_runtime_response = {}
+
+logos.runtime_control.execution_selection = {
+    ? signer: {
+        profile: "logos.package-signing.cose-sign1-slh-dsa-sha2-192s",
+        public_key: bstr .size 48,
+    },
+    ? package: {
+        package: tstr .size (1..128),
+        version: tstr .size (1..128),
+    },
+    implementation:
+        { strategy: "direct_static" } /
+        { strategy: "direct_dynamic" } /
+        {
+            strategy: "hosted_dynamic",
+            placement: "process" / "sandbox" / "container",
+        } /
+        { strategy: "implementation-specific" },
+}
+
+logos.runtime_control.get_execution_summary_request = {
+    target: logos.runtime.module_instance_address,
+}
+
+logos.runtime_control.get_execution_summary_response = {
+    ? failure: logos.runtime_control.failure_code,
+    target: logos.runtime.module_instance_address,
+    state: logos.runtime_control.state,
+    execution: logos.runtime_control.execution_state,
+    ? selection: logos.runtime_control.execution_selection,
+    realization: "current" / "absent" / "unknown",
+}
+
+logos.runtime_control.get_readiness_request = {
+    module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    ? provider: logos.runtime.module_provider_address,
+}
+
+logos.runtime_control.get_readiness_response = {
+    ? failure: logos.runtime_control.failure_code,
+    module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    ? provider: logos.runtime.module_provider_address,
+    ? execution: logos.runtime_control.execution_state,
+    state: logos.runtime_control.state,
+    ? reason: logos.runtime_control.reason,
+}
+
+logos.runtime_control.permission_setting = {
+    permission: tstr .size (1..128),
+    constraints: bstr .size (1..1048576),
+}
+
+logos.runtime_control.get_execution_permissions_request = {}
+
+logos.runtime_control.get_execution_permissions_response = {
+    status: "available",
+    permissions: [* logos.runtime_control.permission_setting],
+} / {
+    status: "unavailable",
+}
+
+logos.runtime_control.permission_settings_state = {
+    revision: uint64,
+    permissions: [* logos.runtime_control.permission_setting],
+    application: "pending" / "applied" / "failed",
+    ? failure: logos.runtime_control.failure_code,
+}
+
+logos.runtime_control.get_permission_settings_request = {
+    target: logos.runtime.module_instance_address,
+}
+
+logos.runtime_control.get_permission_settings_response = {
+    target: logos.runtime.module_instance_address,
+    state: logos.runtime_control.permission_settings_state,
+}
+
+logos.runtime_control.update_permission_settings_request = {
+    target: logos.runtime.module_instance_address,
+    expected_revision: uint64,
+    permissions: [* logos.runtime_control.permission_setting],
+}
+
+logos.runtime_control.update_permission_settings_response = {
+    target: logos.runtime.module_instance_address,
+    state: logos.runtime_control.permission_settings_state,
+}
+
+logos.runtime_control.permission_settings_changed_event = {
+    target: logos.runtime.module_instance_address,
+    state: logos.runtime_control.permission_settings_state,
+}
+
+logos.runtime_control.get_configuration_schema_request = {
+    target: logos.runtime.module_instance_address,
+}
+
+logos.runtime_control.get_configuration_schema_response = {
+    target: logos.runtime.module_instance_address,
+    state_revision: uint64,
+    schema: logos.module_configuration.schema_binding,
+}
+
+logos.runtime_control.get_configuration_summary_request = {
+    target: logos.runtime.module_instance_address,
+}
+
+logos.runtime_control.get_configuration_summary_response = {
+    target: logos.runtime.module_instance_address,
+    state: logos.module_configuration.configuration_state_summary,
+}
+
+logos.runtime_control.get_configuration_request = {
+    target: logos.runtime.module_instance_address,
+}
+
+logos.runtime_control.get_configuration_response = {
+    target: logos.runtime.module_instance_address,
+    state: logos.module_configuration.configuration_state,
+}
+
+logos.runtime_control.update_configuration_request =
+    {
+        target: logos.runtime.module_instance_address,
+        expected_state_revision: uint64,
+        expected_schema_commitment: logos.module_configuration.schema_commitment,
+        action: "stage",
+        value: logos.module_configuration.configuration_value,
+    } /
+    {
+        target: logos.runtime.module_instance_address,
+        expected_state_revision: uint64,
+        expected_schema_commitment: logos.module_configuration.schema_commitment,
+        action: "discard",
+    }
+
+logos.runtime_control.update_configuration_response = {
+    target: logos.runtime.module_instance_address,
+    state_revision: uint64,
+    ? staged: logos.module_configuration.value_record,
+}
+
+logos.runtime_control.apply_configuration_request = {
+    target: logos.runtime.module_instance_address,
+    expected_state_revision: uint64,
+}
+
+logos.runtime_control.apply_configuration_response = {
+    target: logos.runtime.module_instance_address,
+    state_revision: uint64,
+    applied_value_revision: uint64,
+}
+
+logos.runtime_control.configuration_state_changed_event = {
+    target: logos.runtime.module_instance_address,
+    state: logos.module_configuration.configuration_state_summary,
+}
+
+logos.runtime_control.execution_state_changed_event = {
+    module: logos.runtime.module_name,
+    instance: logos.runtime.module_instance_id,
+    execution: logos.runtime_control.execution_state,
+}
+
+logos.runtime_control.inventory_changed_event = {
+    collection: logos.runtime_control.inventory_collection,
+}
+
+logos.runtime_control.module_state_changed_event = {
+    ? failure: logos.runtime_control.failure_code,
+    module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    ? provider: logos.runtime.module_provider_address,
+    old_state: logos.runtime_control.state,
+    new_state: logos.runtime_control.state,
+    ? reason: logos.runtime_control.reason,
+}
+
+logos.runtime_control.route_state_changed_event = {
+    route: logos.runtime.route_id,
+    old_state: logos.runtime_control.route_state,
+    new_state: logos.runtime_control.route_state,
+    ? module: logos.runtime.module_name,
+    ? provider: logos.runtime.module_provider_address,
+    ? reason: logos.runtime_control.reason,
+}

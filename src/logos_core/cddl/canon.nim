@@ -75,7 +75,8 @@ proc build(c: Canon, n: SrcNode): Result[CddlType, CddlError] =
   of skArray:
     var node = CddlType(kind: tkArray)
     for m in n.members:
-      node.members.add(Member(typ: ?c.build(m.typ), occurrence: m.occurrence))
+      let typ = ?c.build(m.typ)
+      node.members.add(Member(typ: typ, occurrence: m.occurrence))
     ok(node)
   of skMap:
     var
@@ -85,9 +86,8 @@ proc build(c: Canon, n: SrcNode): Result[CddlType, CddlError] =
       let key = m.key.get
       if seen.containsOrIncl(key):
         return err(c.fail(m.pos, ecCanonical, "duplicate map key " & key))
-      node.members.add(
-        Member(key: m.key, typ: ?c.build(m.typ), occurrence: m.occurrence)
-      )
+      let typ = ?c.build(m.typ)
+      node.members.add(Member(key: m.key, typ: typ, occurrence: m.occurrence))
     node.members.sort(
       proc(a, b: Member): int =
         cmp(a.key.get, b.key.get)
@@ -172,7 +172,8 @@ proc canonicalize*(
     ?c.checkNames(r.typ)
   var doc: CddlDocument
   for r in rules:
-    doc.rules.add(Rule(name: r.name, typ: ?c.build(r.typ)))
+    let typ = ?c.build(r.typ)
+    doc.rules.add(Rule(name: r.name, typ: typ))
   doc.rules.sort(
     proc(a, b: Rule): int =
       cmp(a.name, b.name)

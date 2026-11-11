@@ -221,11 +221,11 @@ func matches(claimed, built: seq[Contract], what: string): Result[void, string] 
   ok()
 
 proc acceptSchemaResponse*(
-    data: openArray[byte], expected: Digest, opts = AcceptOptions()
+    data: openArray[byte], opts = AcceptOptions()
 ): Result[ContractSet, string] =
-  ## [SPEC INTERFACE §5.1, §5.3; RUNTIME materialize_route] Validates the
-  ## encoded `logos.schema_response` of a route expected to select the contract
-  ## `expected`, and returns the reconstructed set.
+  ## [SPEC INTERFACE §5.1, §5.3] Validates an encoded `logos.schema_response`
+  ## and returns the set its documents reconstruct, whose primary contract is
+  ## the selected one.
   if data.len == 0 or data.len > MaxSchemaResponseBytes:
     return err("a schema response is 1 byte to 8 MiB")
   let v = decodeCbor(data).valueOr:
@@ -242,6 +242,15 @@ proc acceptSchemaResponse*(
     )
   ?matches(ifaces, byNamespace(set.interfaces), "interface_schemas")
   ?matches(supp, set.supporting, "supporting_schemas")
+  ok(set)
+
+proc acceptSchemaResponse*(
+    data: openArray[byte], expected: Digest, opts = AcceptOptions()
+): Result[ContractSet, string] =
+  ## [SPEC INTERFACE §5.1, §5.3; RUNTIME materialize_route] Validates the
+  ## encoded `logos.schema_response` of a route expected to select the contract
+  ## `expected`, and returns the reconstructed set.
+  let set = ?acceptSchemaResponse(data, opts)
   if set.primary.root != expected:
     return err("the documents reconstruct another contract than the expected root")
   ok(set)

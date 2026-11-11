@@ -485,13 +485,20 @@ func fromCbor*(T: type ManifestCommitment, v: CborValue): Opt[ManifestCommitment
 
   if v.isNil or v.kind != ckMap:
     return Opt.none(ManifestCommitment)
+  # [IMPL] Every `?` runs before the record is built (tools/lint/ctortry.py).
+  let commitmentModel = ?v.optText("commitment_model")
+  let schemaRoot = ?v.root("schema_root")
+  let schemaSubtreeRoot = ?v.root("schema_subtree_root")
+  let valueRoot = ?v.root("value_root")
+  let hashProfile = ?v.optText("hash_profile")
+  let hashSuite = ?v.optText("hash_suite")
   Opt.some(
     ManifestCommitment(
-      commitmentModel: ?v.optText("commitment_model"),
-      schemaRoot: ?v.root("schema_root"),
-      schemaSubtreeRoot: ?v.root("schema_subtree_root"),
-      valueRoot: ?v.root("value_root"),
-      hashProfile: ?v.optText("hash_profile"),
-      hashSuite: ?v.optText("hash_suite"),
+      commitmentModel: commitmentModel,
+      schemaRoot: schemaRoot,
+      schemaSubtreeRoot: schemaSubtreeRoot,
+      valueRoot: valueRoot,
+      hashProfile: hashProfile,
+      hashSuite: hashSuite,
     )
   )

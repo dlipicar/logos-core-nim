@@ -120,41 +120,45 @@ proc cOut_logos_meter_Changed_event_t*(a: var CallArena, v: CborValue, dst: var 
 proc cIn_logos_meter_Changed_event_t*(src: logos_meter_Changed_event_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("value"), cbor(uint64(src.m0))))
+  let value2 = cbor(uint64(src.m0))
+  e.add((cbor("value"), value2))
   ok(cborMap(e))
 
 proc cOut_logos_meter_Reading_t*(a: var CallArena, v: CborValue, dst: var logos_meter_Reading_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f2 = v.lookup("label")
-  if f2.isSome:
+  let f3 = v.lookup("label")
+  if f3.isSome:
     dst.m0 = true
-    dst.m1 = ?a.text(f2.get.text)
-  let f3 = v.lookup("value").get
-  dst.m2 = uint64(f3.uint)
+    dst.m1 = ?a.text(f3.get.text)
+  let f4 = v.lookup("value").get
+  dst.m2 = uint64(f4.uint)
   ok()
 
 proc cIn_logos_meter_Reading_t*(src: logos_meter_Reading_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
   if src.m0:
-    e.add((cbor("label"), ?inText(src.m1)))
-  e.add((cbor("value"), cbor(uint64(src.m2))))
+    let value5 = ?inText(src.m1)
+    e.add((cbor("label"), value5))
+  let value6 = cbor(uint64(src.m2))
+  e.add((cbor("value"), value6))
   ok(cborMap(e))
 
 proc kitRequest0(p2: uint32): Result[seq[byte], string] =
   ## `meter.read`'s request params from its typed inputs.
   let depth {.used.} = 1
   var e: seq[CborEntry]
-  e.add((cbor("channel"), cbor(uint64(p2))))
+  let value7 = cbor(uint64(p2))
+  e.add((cbor("channel"), value7))
   ok(encodeCbor(cborMap(e)))
 
 proc kitRespond0(a: var CallArena, v: CborValue, o3: var logos_tstr_size_1_64_t, o4: var logos_meter_Reading_t): Result[void, string] =
   ## `meter.read`'s outputs from its checked response.
   let depth {.used.} = 1
-  let f4 = v.lookup("label").get
-  o3 = ?a.text(f4.text)
-  let f5 = v.lookup("reading").get
-  ?cOut_logos_meter_Reading_t(a, f5, o4, depth + 1)
+  let f8 = v.lookup("label").get
+  o3 = ?a.text(f8.text)
+  let f9 = v.lookup("reading").get
+  ?cOut_logos_meter_Reading_t(a, f9, o4, depth + 1)
   ok()
 
 proc kitCall0[T](p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: uint32, p3: ptr logos_tstr_size_1_64_t, p4: ptr logos_meter_Reading_t): LogosResult =

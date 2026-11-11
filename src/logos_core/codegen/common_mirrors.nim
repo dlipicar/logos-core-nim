@@ -96,8 +96,10 @@ proc cIn_logos_invalid_params_detail_t*(src: logos_invalid_params_detail_t, dept
     var items6 = newSeq[CborValue](n5)
     for i in 0 ..< n5:
       items6[i] = ?cIn_logos_invalid_params_path_segment_t(src.m1[i], depth + 1)
-    e.add((cbor("path"), cborArray(items6)))
-  e.add((cbor("reason"), ?cIn_logos_invalid_params_reason_t(src.m3, depth + 1)))
+    let value7 = cborArray(items6)
+    e.add((cbor("path"), value7))
+  let value8 = ?cIn_logos_invalid_params_reason_t(src.m3, depth + 1)
+  e.add((cbor("reason"), value8))
   ok(cborMap(e))
 
 proc cOut_logos_invalid_params_path_segment_t*(a: var CallArena, v: CborValue, dst: var logos_invalid_params_path_segment_t, depth: int): Result[void, string] =
@@ -154,23 +156,27 @@ proc cIn_logos_invalid_params_reason_t*(src: logos_invalid_params_reason_t, dept
 
 proc cOut_logos_schema_commitment_t*(a: var CallArena, v: CborValue, dst: var logos_schema_commitment_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f7 = v.lookup("commitment_model").get
-  dst.m0 = ?a.text(f7.text)
-  let f8 = v.lookup("hash_profile").get
-  dst.m1 = ?a.text(f8.text)
-  let f9 = v.lookup("hash_suite").get
-  dst.m2 = ?a.text(f9.text)
-  let f10 = v.lookup("schema_root").get
-  ?fill(f10.bytes, dst.m3)
+  let f9 = v.lookup("commitment_model").get
+  dst.m0 = ?a.text(f9.text)
+  let f10 = v.lookup("hash_profile").get
+  dst.m1 = ?a.text(f10.text)
+  let f11 = v.lookup("hash_suite").get
+  dst.m2 = ?a.text(f11.text)
+  let f12 = v.lookup("schema_root").get
+  ?fill(f12.bytes, dst.m3)
   ok()
 
 proc cIn_logos_schema_commitment_t*(src: logos_schema_commitment_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("commitment_model"), ?inText(src.m0)))
-  e.add((cbor("hash_profile"), ?inText(src.m1)))
-  e.add((cbor("hash_suite"), ?inText(src.m2)))
-  e.add((cbor("schema_root"), cbor(src.m3)))
+  let value13 = ?inText(src.m0)
+  e.add((cbor("commitment_model"), value13))
+  let value14 = ?inText(src.m1)
+  e.add((cbor("hash_profile"), value14))
+  let value15 = ?inText(src.m2)
+  e.add((cbor("hash_suite"), value15))
+  let value16 = cbor(src.m3)
+  e.add((cbor("schema_root"), value16))
   ok(cborMap(e))
 
 proc commonMirrorLayout*(): seq[(string, int)] =

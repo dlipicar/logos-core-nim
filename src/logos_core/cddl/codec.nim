@@ -188,7 +188,8 @@ func decodeMember(v: CborValue, path: string): Result[Member, CddlError] =
   if ?nodeKind(v, path) != 10:
     return err(fail(path, "expected a member node"))
   ?v.checkFields(path, [0'u64, 2], [1'u64, 3])
-  var member = Member(typ: ?decodeType(v.field(2), path & ".type"))
+  let typ = ?decodeType(v.field(2), path & ".type")
+  var member = Member(typ: typ)
   let key = v.lookup(1'u64)
   if key.isSome:
     let kp = path & ".key"
@@ -259,9 +260,11 @@ func decodeType(v: CborValue, path: string): Result[CddlType, CddlError] =
     ?checkName(name, path)
     ok(CddlType(kind: tkReference, name: name))
   of 5:
-    ok(CddlType(kind: tkPrimitive, primitive: ?decodePrimitive(v, path)))
+    let primitive = ?decodePrimitive(v, path)
+    ok(CddlType(kind: tkPrimitive, primitive: primitive))
   of 6:
-    ok(CddlType(kind: tkLiteral, literal: ?decodeLiteral(v, path)))
+    let literal = ?decodeLiteral(v, path)
+    ok(CddlType(kind: tkLiteral, literal: literal))
   of 7, 8:
     ?v.checkFields(path, [0'u64, 1])
     let isMap = kind == 8
@@ -339,7 +342,8 @@ func fromCbor*(v: CborValue): Result[CddlDocument, CddlError] =
         return err(fail(path, "duplicate rule " & name))
       if order > 0:
         return err(fail(path, "rules are not in canonical order"))
-    doc.rules.add(Rule(name: name, typ: ?decodeType(item.field(3), path & "." & name)))
+    let typ = ?decodeType(item.field(3), path & "." & name)
+    doc.rules.add(Rule(name: name, typ: typ))
   ok(doc)
 
 func decodeCddl*(data: openArray[byte]): Result[CddlDocument, CddlError] =

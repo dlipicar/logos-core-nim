@@ -12,7 +12,7 @@ const
   Blake3OutLen* = 32
   Blake3KeyLen* = 32
 
-when defined(amd64):
+when defined(amd64) and not defined(msan):
   when defined(windows):
     {.compile: "blake3/blake3_sse2_x86-64_windows_gnu.S".}
     {.compile: "blake3/blake3_sse41_x86-64_windows_gnu.S".}
@@ -26,7 +26,8 @@ when defined(amd64):
 elif defined(arm64):
   {.compile: "blake3/blake3_neon.c".}
 else:
-  {.passC: "-DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512".}
+  # [IMPL] Also the MemorySanitizer build, which cannot see what assembly writes.
+  {.passc: "-DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512".}
 
 {.compile: "blake3/blake3.c".}
 {.compile: "blake3/blake3_dispatch.c".}

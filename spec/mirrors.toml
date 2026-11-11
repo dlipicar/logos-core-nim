@@ -651,3 +651,20 @@ out = "IFC/2.1.keywords.txt"
 file = "spec-module-interface.md"
 section = "§2.1"
 lang = "text"
+
+# RUNTIME and CONFIG --------------------------------------------------------------
+
+[[mirror]]
+out = "RNT/9.2.runtime-types.cddl"
+file = "spec-module-runtime.md"
+section = "§9.2"
+
+[[mirror]]
+out = "RNT/9.3.runtime-control.cddl"
+file = "spec-module-runtime.md"
+section = "§9.3"
+
+[[mirror]]
+out = "CFG/9.configuration-types.cddl"
+file = "spec-module-configuration.md"
+section = "§9"

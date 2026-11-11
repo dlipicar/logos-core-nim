@@ -226,7 +226,8 @@ func parseSegment*(v: CborValue): Result[Segment, ViewError] =
     )
   of "bstr-range", "tstr-utf8-range":
     let f = ?exact(v, 3, tag & " segment")
-    let (a, b) = (?uintOf(f[1], tag & " start"), ?uintOf(f[2], tag & " length"))
+    let a = ?uintOf(f[1], tag & " start")
+    let b = ?uintOf(f[2], tag & " length")
     ok(
       if tag == "bstr-range":
         bstrRange(a, b)
@@ -268,14 +269,21 @@ func parseView*(v: CborValue): Result[VerifiedView, ViewError] =
   let f = ?exact(v, 10, "verified view")
   if (?textOf(f[0], "view tag")) != "verified-view":
     return fail[VerifiedView](veShape, "not a verified view")
+  let schemaRoot = ?digestField(f[1], "schema root")
+  let subtreeRoot = ?digestField(f[2], "schema subtree root")
+  let valueRoot = ?digestField(f[3], "value root")
+  let profileId = ?textOf(f[4], "hash profile id")
+  let suiteId = ?textOf(f[5], "hash suite id")
+  let modelId = ?textOf(f[6], "commitment model id")
+  let disclosed = ?parseDisclosed(f[8])
   var view = VerifiedView(
-    schemaRoot: ?digestField(f[1], "schema root"),
-    subtreeRoot: ?digestField(f[2], "schema subtree root"),
-    valueRoot: ?digestField(f[3], "value root"),
-    profileId: ?textOf(f[4], "hash profile id"),
-    suiteId: ?textOf(f[5], "hash suite id"),
-    modelId: ?textOf(f[6], "commitment model id"),
-    disclosed: ?parseDisclosed(f[8]),
+    schemaRoot: schemaRoot,
+    subtreeRoot: subtreeRoot,
+    valueRoot: valueRoot,
+    profileId: profileId,
+    suiteId: suiteId,
+    modelId: modelId,
+    disclosed: disclosed,
   )
   if f[7].kind != ckArray:
     return fail[VerifiedView](veShape, "the path is not an array")

@@ -559,24 +559,26 @@ func parseNode(v: CborValue, depth: int): Result[ValueNode, string] =
     else: 4
   if v.entries.len != expected:
     return err("a " & tag & " value node has " & $v.entries.len & " fields")
+  # [IMPL] Every `?` runs before its node is built (tools/lint/ctortry.py).
   var n: ValueNode
   case kind.get
   of vkMap:
-    n = ValueNode(kind: vkMap, schema: ?v.digestAt(1))
+    let schema = ?v.digestAt(1)
+    n = ValueNode(kind: vkMap, schema: schema)
     for f in ?v.arrayAt(2):
       n.fields.add(?parseNode(f, depth + 1))
   of vkField:
-    n = ValueNode(
-      kind: vkField,
-      fieldName: ?v.textAt(1),
-      schema: ?v.digestAt(2),
-      fieldValue: ?parseNode(?v.nodeAt(3), depth + 1),
-    )
+    let name = ?v.textAt(1)
+    let schema = ?v.digestAt(2)
+    let value = ?parseNode(?v.nodeAt(3), depth + 1)
+    n = ValueNode(kind: vkField, fieldName: name, schema: schema, fieldValue: value)
   of vkAbsent:
-    n = ValueNode(kind: vkAbsent, schema: ?v.digestAt(1))
+    let schema = ?v.digestAt(1)
+    n = ValueNode(kind: vkAbsent, schema: schema)
   of vkList:
-    n = ValueNode(kind: vkList, schema: ?v.digestAt(1))
+    let schema = ?v.digestAt(1)
     let length = ?v.uintAt(2)
+    n = ValueNode(kind: vkList, schema: schema)
     for e in ?v.arrayAt(3):
       n.elements.add(?parseNode(e, depth + 1))
     if uint64(n.elements.len) != length:
@@ -585,50 +587,57 @@ func parseNode(v: CborValue, depth: int): Result[ValueNode, string] =
     if n.elements.len > 0:
       n.elementSchema = n.elements[0].schema
   of vkListElement:
+    let index = ?v.uintAt(1)
+    let schema = ?v.digestAt(2)
+    let value = ?parseNode(?v.nodeAt(3), depth + 1)
     n = ValueNode(
-      kind: vkListElement,
-      elementIndex: ?v.uintAt(1),
-      schema: ?v.digestAt(2),
-      elementValue: ?parseNode(?v.nodeAt(3), depth + 1),
+      kind: vkListElement, elementIndex: index, schema: schema, elementValue: value
     )
   of vkTuple:
-    n = ValueNode(kind: vkTuple, schema: ?v.digestAt(1))
+    let schema = ?v.digestAt(1)
     let arity = ?v.uintAt(2)
+    n = ValueNode(kind: vkTuple, schema: schema)
     for e in ?v.arrayAt(3):
       n.positions.add(?parseNode(e, depth + 1))
     if uint64(n.positions.len) != arity:
       return err("tuple arity differs from its element count")
   of vkTupleElement:
+    let position = ?v.uintAt(1)
+    let schema = ?v.digestAt(2)
+    let value = ?parseNode(?v.nodeAt(3), depth + 1)
     n = ValueNode(
-      kind: vkTupleElement,
-      position: ?v.uintAt(1),
-      schema: ?v.digestAt(2),
-      positionValue: ?parseNode(?v.nodeAt(3), depth + 1),
+      kind: vkTupleElement, position: position, schema: schema, positionValue: value
     )
   of vkChoice:
+    let schema = ?v.digestAt(1)
+    let arm = ?v.uintAt(2)
+    let armSchema = ?v.digestAt(3)
+    let value = ?parseNode(?v.nodeAt(4), depth + 1)
     n = ValueNode(
       kind: vkChoice,
-      schema: ?v.digestAt(1),
-      armIndex: ?v.uintAt(2),
-      armSchema: ?v.digestAt(3),
-      armValue: ?parseNode(?v.nodeAt(4), depth + 1),
+      schema: schema,
+      armIndex: arm,
+      armSchema: armSchema,
+      armValue: value,
     )
   of vkScalar:
     let k = parseScalarKind(?v.textAt(2))
     if k.isNone:
       return err("unknown scalar kind")
-    n = ValueNode(
-      kind: vkScalar,
-      schema: ?v.digestAt(1),
-      scalar: ?parseScalarData(k.get, ?v.nodeAt(3)),
-    )
+    let schema = ?v.digestAt(1)
+    let scalar = ?parseScalarData(k.get, ?v.nodeAt(3))
+    n = ValueNode(kind: vkScalar, schema: schema, scalar: scalar)
   of vkReference:
+    let schema = ?v.digestAt(1)
+    let root = ?v.digestAt(2)
+    let subtree = ?v.digestAt(3)
+    let value = ?parseNode(?v.nodeAt(4), depth + 1)
     n = ValueNode(
       kind: vkReference,
-      schema: ?v.digestAt(1),
-      referencedRoot: ?v.digestAt(2),
-      referencedSubtree: ?v.digestAt(3),
-      referencedValue: ?parseNode(?v.nodeAt(4), depth + 1),
+      schema: schema,
+      referencedRoot: root,
+      referencedSubtree: subtree,
+      referencedValue: value,
     )
   ok(n)
 
@@ -644,11 +653,12 @@ func parseValueRoot*(v: CborValue): Result[ValueRoot, string] =
   ## [SPEC COMMITMENT §9.3, §10] A `normalized-value-root` object.
   if v.kind != ckMap or v.entries.len != 5 or (?v.textAt(0)) != "value-root":
     return err("not a normalized-value-root")
+  let modelId = ?v.textAt(1)
+  let schemaRoot = ?v.digestAt(2)
+  let subtreeRoot = ?v.digestAt(3)
+  let node = ?parseNode(?v.nodeAt(4), 0)
   let r = ValueRoot(
-    modelId: ?v.textAt(1),
-    schemaRoot: ?v.digestAt(2),
-    subtreeRoot: ?v.digestAt(3),
-    node: ?parseNode(?v.nodeAt(4), 0),
+    modelId: modelId, schemaRoot: schemaRoot, subtreeRoot: subtreeRoot, node: node
   )
   ?check(r)
   ok(r)

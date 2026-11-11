@@ -531,13 +531,19 @@ proc inMap(
     let srcs = src[mi ..< mi + k]
     mi += k
     let key = "cbor(" & escape(f.name) & ")"
+    # [IMPL] The value is bound before the pair is built: a `?` inside the tuple
+    # would leak its key on the early return (tools/lint/ctortry.py).
+    let at =
+      if f.optional:
+        ind + 2
+      else:
+        ind
     if f.optional:
       c.line(ind, "if " & src[presence] & ":")
-      let x = g.inField(c, ind + 2, o, fpath, f.node, ms, srcs)
-      c.line(ind + 2, entries & ".add((" & key & ", " & x & "))")
-    else:
-      let x = g.inField(c, ind, o, fpath, f.node, ms, srcs)
-      c.line(ind, entries & ".add((" & key & ", " & x & "))")
+    let x = g.inField(c, at, o, fpath, f.node, ms, srcs)
+    let value = g.fresh("value")
+    c.line(at, "let " & value & " = " & x)
+    c.line(at, entries & ".add((" & key & ", " & value & "))")
 
 # Converters ------------------------------------------------------------------------
 

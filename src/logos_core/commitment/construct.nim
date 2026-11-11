@@ -180,7 +180,8 @@ func translate(b: Builder, t: CddlType): Result[SchemaNode, string] =
       err("a byte-string literal is invalid in a schema declaration")
   of tkArray:
     if t.members.len == 1 and t.members[0].occurrence == occUnbounded:
-      return ok(SchemaNode(kind: snList, element: ?b.translate(t.members[0].typ)))
+      let element = ?b.translate(t.members[0].typ)
+      return ok(SchemaNode(kind: snList, element: element))
     var node = SchemaNode(kind: snTuple)
     for m in t.members:
       if m.occurrence != occOne:
@@ -192,12 +193,9 @@ func translate(b: Builder, t: CddlType): Result[SchemaNode, string] =
     for m in t.members:
       if m.occurrence == occUnbounded:
         return err("a map member cannot repeat")
+      let field = ?b.translate(m.typ)
       node.fields.add(
-        SchemaField(
-          name: m.key.get,
-          optional: m.occurrence == occOptional,
-          node: ?b.translate(m.typ),
-        )
+        SchemaField(name: m.key.get, optional: m.occurrence == occOptional, node: field)
       )
     # cdCDDLe already sorts members by key; §9.1 asks for UTF-8 byte order.
     node.fields.sort(

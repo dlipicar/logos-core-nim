@@ -742,11 +742,29 @@ typedef struct {
     th_report_t* rep;
 } reflect_job_t;
 
+/* The result's message and detail stay valid on the calling thread until its next
+ * call (INTERFACE §2.7.1), so a job thread copies them into the report before it ends. */
+static void keep_result(th_report_t* rep)
+{
+    logos_result_t* r = &rep->result;
+    if (r->message != NULL) {
+        size_t n = strnlen(r->message, sizeof rep->message - 1);
+        memcpy(rep->message, r->message, n);
+        rep->message[n] = '\0';
+        r->message = rep->message;
+    }
+    if (r->detail != NULL && r->detail_len <= sizeof rep->detail) {
+        memcpy(rep->detail, r->detail, r->detail_len);
+        r->detail = rep->detail;
+    }
+}
+
 #ifdef _WIN32
 static DWORD WINAPI reflect_job(LPVOID p)
 {
     reflect_job_t* j = (reflect_job_t*)p;
     th_shapes_reflect(j->f, j->m, j->variant, j->rep);
+    keep_result(j->rep);
     return 0;
 }
 
@@ -767,6 +785,7 @@ static void* reflect_job(void* p)
 {
     reflect_job_t* j = (reflect_job_t*)p;
     th_shapes_reflect(j->f, j->m, j->variant, j->rep);
+    keep_result(j->rep);
     return NULL;
 }
 

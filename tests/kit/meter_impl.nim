@@ -5,10 +5,12 @@
 ## Channels select behaviour: 13 fails with a message, 14 returns a response
 ## outside its schema, 15 publishes `meter.changed_event`, 16 returns a failure
 ## that is not a valid status, 17 reads the caller and publishes in the
-## invocation's scope; any other channel `c` reads `ch<c>` with value `10 c`.
+## invocation's scope, 18 reads the caller and whether the invocation is
+## cancelled, 19 does what 18 does once `gate` opens; any other channel `c`
+## reads `ch<c>` with value `10 c`.
 
 {.used.} # imported by the tests for the C symbols it exports
-import std/atomics
+import std/[atomics, os]
 import ../generated/meter_module_kit
 
 type Meter* = ref object
@@ -17,7 +19,10 @@ type Meter* = ref object
   configuration*: Opt[seq[byte]]
   reads*: Atomic[int]
 
-var destroyed*: Atomic[int] ## instances `destroyModule` has seen
+var
+  destroyed*: Atomic[int] ## instances `destroyModule` has seen
+  gate*: Atomic[bool] ## channel 19 waits while it is true
+  held*: Atomic[int] ## calls waiting at `gate`
 
 proc initModule(_: type Meter, init: ModuleInit): Result[Meter, InvocationFailure] =
   if init.configuration == Opt.some(@[0xF4'u8]): # CBOR `false`: refuse to start
@@ -48,6 +53,22 @@ proc `read`(
     ok(MeterReadResponse(label: "published", reading: MeterReading(value: 15)))
   of 16:
     err(InvocationFailure(code: ecOk))
+  of 18, 19:
+    if c == 19:
+      held += 1
+      while gate.load:
+        sleep(1)
+      held -= 1
+    let who = ?m.services.caller()
+    ok(
+      MeterReadResponse(
+        label: who.moduleInstance.get("system"),
+        reading: MeterReading(
+          label: Opt.some(who.runtimeInstance),
+          value: (if m.services.isCancelled: 1'u64 else: 0'u64),
+        ),
+      )
+    )
   of 17:
     let who = ?m.services.caller()
     ?m.services.publishScoped(MeterChangedEvent(value: 170))

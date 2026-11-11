@@ -373,7 +373,8 @@ proc typed(v: CborValue, mk: MessageKind): Result[Message, EnvelopeError] =
       )
     )
   of mkProtocolError:
-    ok(Message(kind: mkProtocolError, protocolError: ?failureOf(v, mk, "code")))
+    let failure = ?failureOf(v, mk, "code")
+    ok(Message(kind: mkProtocolError, protocolError: failure))
   of mkCancel:
     ok(Message(kind: mkCancel, cancel: Cancel(id: v.get("id").uint)))
   of mkSubscriptionResult:

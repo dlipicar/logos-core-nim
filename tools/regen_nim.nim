@@ -8,6 +8,8 @@ proc main() =
   echo commonTypesPath
   writeFile(commonMirrorsPath, generatedCommonMirrors().get)
   echo commonMirrorsPath
+  writeFile(rcTypesPath, generatedRcTypes().get)
+  echo rcTypesPath
   for f in nimFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath

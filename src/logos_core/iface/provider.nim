@@ -148,22 +148,18 @@ func sizedText(v: CborValue, what: string, maxBytes: int): Result[string, string
 
 func parseSupporting(v: CborValue): Result[SupportingClaim, string] =
   ?closedMap(v, "a supporting entry", SupportingEntryKeys)
-  ok(
-    SupportingClaim(
-      namespace: ?sizedText(
-        v.lookup("namespace").get, "a namespace", MaxSupportingNamespaceBytes
-      ),
-      root: ?parseSchemaCommitment(v.lookup("commitment").get),
-      document: ?sizedText(v.lookup("document").get, "a document", MaxDocumentBytes),
-    )
-  )
+  let namespace =
+    ?sizedText(v.lookup("namespace").get, "a namespace", MaxSupportingNamespaceBytes)
+  let root = ?parseSchemaCommitment(v.lookup("commitment").get)
+  let document = ?sizedText(v.lookup("document").get, "a document", MaxDocumentBytes)
+  ok(SupportingClaim(namespace: namespace, root: root, document: document))
 
 func parseContract(v: CborValue, what: string): Result[ContractClaim, string] =
   ?closedMap(v, what, ContractEntryKeys)
-  var c = ContractClaim(
-    root: ?parseSchemaCommitment(v.lookup("commitment").get),
-    document: ?sizedText(v.lookup("document").get, what & " document", MaxDocumentBytes),
-  )
+  let root = ?parseSchemaCommitment(v.lookup("commitment").get)
+  let document =
+    ?sizedText(v.lookup("document").get, what & " document", MaxDocumentBytes)
+  var c = ContractClaim(root: root, document: document)
   let supp = v.lookup("supporting_schemas").get
   if supp.kind != ckArray:
     return err(what & " supporting_schemas is not an array")

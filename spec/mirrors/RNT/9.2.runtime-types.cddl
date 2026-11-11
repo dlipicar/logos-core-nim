@@ -1,0 +1,16 @@
+logos.runtime.module_name = tstr .size (1..64)
+logos.runtime.runtime_instance_id = tstr .size (1..128)
+logos.runtime.module_instance_id = tstr .size (1..128)
+logos.runtime.module_provider_id = tstr .size (1..128)
+logos.runtime.route_id = tstr .size (1..128)
+logos.runtime.module_state_assignment_id = tstr .size (1..128)
+
+logos.runtime.module_instance_address = {
+    runtime_instance_id: logos.runtime.runtime_instance_id,
+    module_instance_id: logos.runtime.module_instance_id,
+}
+
+logos.runtime.module_provider_address = {
+    ? runtime_instance_id: logos.runtime.runtime_instance_id,
+    provider: logos.runtime.module_provider_id,
+}

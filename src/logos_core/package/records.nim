@@ -116,14 +116,19 @@ proc loadRecordSchema(): Result[RecordSchema, string] =
       return err("no " & name)
     ok(d.body)
 
+  let identity = ?body(IdentityType)
+  let source = ?body(SourceType)
+  let entry = ?body(CatalogEntryType)
+  let inspect = ?body(InspectRecordType)
+  let resolved = ?body(ResolvedDependencyType)
   ok(
     RecordSchema(
       set: c.schemaSet,
-      identity: ?body(IdentityType),
-      source: ?body(SourceType),
-      entry: ?body(CatalogEntryType),
-      inspect: ?body(InspectRecordType),
-      resolved: ?body(ResolvedDependencyType),
+      identity: identity,
+      source: source,
+      entry: entry,
+      inspect: inspect,
+      resolved: resolved,
     )
   )
 

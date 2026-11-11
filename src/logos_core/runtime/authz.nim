@@ -41,6 +41,7 @@ type
     consumer*: string ## the authenticated consumer instance; empty for the host
     target*: string ## the target instance, provider or route
     module*: string ## the target's module name, when known
+    route*: string ## the route the request concerns, when there is one
 
   AuthzOutcome* = enum
     azAllow = "allow"
@@ -61,6 +62,7 @@ type
     consumer*: string
     target*: string
     module*: string
+    route*: string
     outcome*: AuthzOutcome ## what a matching request gets
 
   AuthzPolicy* = object ## Allow-all, except what the first matching rule says.
@@ -84,6 +86,8 @@ func deny*(
     consumer = "",
     target = "",
     module = "",
+    route = "",
+    outcome = azDeny,
 ): AuthzRule =
   AuthzRule(
     action: action,
@@ -91,7 +95,8 @@ func deny*(
     consumer: consumer,
     target: target,
     module: module,
-    outcome: azDeny,
+    route: route,
+    outcome: outcome,
   )
 
 func initAuthorizer*(policy: AuthzPolicy): Authorizer =
@@ -102,7 +107,8 @@ func matches(r: AuthzRule, q: AuthzRequest): bool =
     (r.operation.len == 0 or r.operation == q.operation) and
     (r.consumer.len == 0 or r.consumer == q.consumer) and
     (r.target.len == 0 or r.target == q.target) and
-    (r.module.len == 0 or r.module == q.module)
+    (r.module.len == 0 or r.module == q.module) and
+    (r.route.len == 0 or r.route == q.route)
 
 func scopeOf(q: AuthzRequest): string =
   ## [IMPL] An internal decision covers exactly the one request it answered.

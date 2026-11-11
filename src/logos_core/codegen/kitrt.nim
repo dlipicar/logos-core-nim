@@ -38,6 +38,7 @@ import results
 import ../cbor
 import ../iface/[accept, outcome, payload]
 import ../abi/[types, checks]
+import ../base/perthread
 
 export results, outcome, types, payload
 
@@ -99,6 +100,7 @@ template kitEnter*() =
   ## deeper in the stack than the calls that come later. Without it refc takes
   ## the entry's stack slots for heap slots.
   setupForeignThreadGc()
+  enterThread()
   when not defined(gcDestructors):
     var kitStackBottom {.volatile, noinit.}: pointer
     nimGC_setStackBottom(addr kitStackBottom)

@@ -297,24 +297,29 @@ proc cIn_logos_shapes_Entry_AR_Dir_t*(src: logos_shapes_Entry_AR_Dir_t, depth: i
   var items7 = newSeq[CborValue](n6)
   for i in 0 ..< n6:
     items7[i] = ?inText(src.m0[i])
-  e.add((cbor("entries"), cborArray(items7)))
-  e.add((cbor("kind"), cbor("dir")))
-  e.add((cbor("path"), ?inText(src.m3)))
+  let value8 = cborArray(items7)
+  e.add((cbor("entries"), value8))
+  let value9 = cbor("dir")
+  e.add((cbor("kind"), value9))
+  let value10 = ?inText(src.m3)
+  e.add((cbor("path"), value10))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Entry_AR_File_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Entry_AR_File_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f8 = v.lookup("kind").get
-  dst.m0 = ?a.text(f8.text)
-  let f9 = v.lookup("path").get
-  dst.m1 = ?a.text(f9.text)
+  let f11 = v.lookup("kind").get
+  dst.m0 = ?a.text(f11.text)
+  let f12 = v.lookup("path").get
+  dst.m1 = ?a.text(f12.text)
   ok()
 
 proc cIn_logos_shapes_Entry_AR_File_t*(src: logos_shapes_Entry_AR_File_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("kind"), cbor("file")))
-  e.add((cbor("path"), ?inText(src.m1)))
+  let value13 = cbor("file")
+  e.add((cbor("kind"), value13))
+  let value14 = ?inText(src.m1)
+  e.add((cbor("path"), value14))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Entry_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Entry_t, depth: int): Result[void, string] =
@@ -342,27 +347,27 @@ proc cIn_logos_shapes_Entry_t*(src: logos_shapes_Entry_t, depth: int): Result[Cb
 
 proc cOut_logos_shapes_Names_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Names_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let items10 = v.items
-  let arr11 = ?a.list(logos_tstr_size_1_8_t, items10.len)
-  for i, it in items10:
-    arr11[i] = ?a.text(it.text)
-  dst.m0 = arr11
-  dst.m1 = csize_t(items10.len)
+  let items15 = v.items
+  let arr16 = ?a.list(logos_tstr_size_1_8_t, items15.len)
+  for i, it in items15:
+    arr16[i] = ?a.text(it.text)
+  dst.m0 = arr16
+  dst.m1 = csize_t(items15.len)
   ok()
 
 proc cIn_logos_shapes_Names_t*(src: logos_shapes_Names_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
-  let n12 = ?counted(src.m0, src.m1)
-  var items13 = newSeq[CborValue](n12)
-  for i in 0 ..< n12:
-    items13[i] = ?inText(src.m0[i])
-  ok(cborArray(items13))
+  let n17 = ?counted(src.m0, src.m1)
+  var items18 = newSeq[CborValue](n17)
+  for i in 0 ..< n17:
+    items18[i] = ?inText(src.m0[i])
+  ok(cborArray(items18))
 
 proc cOut_logos_shapes_Pair_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pair_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let p14 = ?a.boxed(logos_shapes_Tree_t)
-  ?cOut_logos_shapes_Tree_t(a, v.items[0], p14[], depth + 1)
-  dst.m0 = p14
+  let p19 = ?a.boxed(logos_shapes_Tree_t)
+  ?cOut_logos_shapes_Tree_t(a, v.items[0], p19[], depth + 1)
+  dst.m0 = p19
   dst.m1 = uint64(v.items[1].uint)
   ok()
 
@@ -372,32 +377,36 @@ proc cIn_logos_shapes_Pair_t*(src: logos_shapes_Pair_t, depth: int): Result[Cbor
 
 proc cOut_logos_shapes_Pick_request_AR_Id_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_request_AR_Id_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f15 = v.lookup("by").get
-  dst.m0 = ?a.text(f15.text)
-  let f16 = v.lookup("id").get
-  dst.m1 = uint64(f16.uint)
+  let f20 = v.lookup("by").get
+  dst.m0 = ?a.text(f20.text)
+  let f21 = v.lookup("id").get
+  dst.m1 = uint64(f21.uint)
   ok()
 
 proc cIn_logos_shapes_Pick_request_AR_Id_t*(src: logos_shapes_Pick_request_AR_Id_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("by"), cbor("id")))
-  e.add((cbor("id"), cbor(uint64(src.m1))))
+  let value22 = cbor("id")
+  e.add((cbor("by"), value22))
+  let value23 = cbor(uint64(src.m1))
+  e.add((cbor("id"), value23))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Pick_request_AR_Name_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_request_AR_Name_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f17 = v.lookup("by").get
-  dst.m0 = ?a.text(f17.text)
-  let f18 = v.lookup("name").get
-  dst.m1 = ?a.text(f18.text)
+  let f24 = v.lookup("by").get
+  dst.m0 = ?a.text(f24.text)
+  let f25 = v.lookup("name").get
+  dst.m1 = ?a.text(f25.text)
   ok()
 
 proc cIn_logos_shapes_Pick_request_AR_Name_t*(src: logos_shapes_Pick_request_AR_Name_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("by"), cbor("name")))
-  e.add((cbor("name"), ?inText(src.m1)))
+  let value26 = cbor("name")
+  e.add((cbor("by"), value26))
+  let value27 = ?inText(src.m1)
+  e.add((cbor("name"), value27))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Pick_request_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_request_t, depth: int): Result[void, string] =
@@ -425,29 +434,32 @@ proc cIn_logos_shapes_Pick_request_t*(src: logos_shapes_Pick_request_t, depth: i
 
 proc cOut_logos_shapes_Pick_response_AR_False_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_AR_False_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f19 = v.lookup("found").get
-  dst.m0 = asBool(f19)
+  let f28 = v.lookup("found").get
+  dst.m0 = asBool(f28)
   ok()
 
 proc cIn_logos_shapes_Pick_response_AR_False_t*(src: logos_shapes_Pick_response_AR_False_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("found"), cbor(false)))
+  let value29 = cbor(false)
+  e.add((cbor("found"), value29))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Pick_response_AR_True_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_AR_True_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f20 = v.lookup("entry").get
-  ?cOut_logos_shapes_Entry_t(a, f20, dst.m0, depth + 1)
-  let f21 = v.lookup("found").get
-  dst.m1 = asBool(f21)
+  let f30 = v.lookup("entry").get
+  ?cOut_logos_shapes_Entry_t(a, f30, dst.m0, depth + 1)
+  let f31 = v.lookup("found").get
+  dst.m1 = asBool(f31)
   ok()
 
 proc cIn_logos_shapes_Pick_response_AR_True_t*(src: logos_shapes_Pick_response_AR_True_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("entry"), ?cIn_logos_shapes_Entry_t(src.m0, depth + 1)))
-  e.add((cbor("found"), cbor(true)))
+  let value32 = ?cIn_logos_shapes_Entry_t(src.m0, depth + 1)
+  e.add((cbor("entry"), value32))
+  let value33 = cbor(true)
+  e.add((cbor("found"), value33))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Pick_response_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_t, depth: int): Result[void, string] =
@@ -475,42 +487,46 @@ proc cIn_logos_shapes_Pick_response_t*(src: logos_shapes_Pick_response_t, depth:
 
 proc cOut_logos_shapes_Tree_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Tree_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f22 = v.lookup("kids").get
-  let items23 = f22.items
-  let arr24 = ?a.list(logos_shapes_Tree_t, items23.len)
-  for i, it in items23:
-    ?cOut_logos_shapes_Tree_t(a, it, arr24[i], depth + 1)
-  dst.m0 = arr24
-  dst.m1 = csize_t(items23.len)
-  let f25 = v.lookup("left")
-  if f25.isSome:
+  let f34 = v.lookup("kids").get
+  let items35 = f34.items
+  let arr36 = ?a.list(logos_shapes_Tree_t, items35.len)
+  for i, it in items35:
+    ?cOut_logos_shapes_Tree_t(a, it, arr36[i], depth + 1)
+  dst.m0 = arr36
+  dst.m1 = csize_t(items35.len)
+  let f37 = v.lookup("left")
+  if f37.isSome:
     dst.m2 = true
-    let p26 = ?a.boxed(logos_shapes_Tree_t)
-    ?cOut_logos_shapes_Tree_t(a, f25.get, p26[], depth + 1)
-    dst.m3 = p26
-  let f27 = v.lookup("tag").get
-  dst.m4 = ?a.text(f27.text)
-  let f28 = v.lookup("twin")
-  if f28.isSome:
+    let p38 = ?a.boxed(logos_shapes_Tree_t)
+    ?cOut_logos_shapes_Tree_t(a, f37.get, p38[], depth + 1)
+    dst.m3 = p38
+  let f39 = v.lookup("tag").get
+  dst.m4 = ?a.text(f39.text)
+  let f40 = v.lookup("twin")
+  if f40.isSome:
     dst.m5 = true
-    let p29 = ?a.boxed(logos_shapes_Pair_t)
-    ?cOut_logos_shapes_Pair_t(a, f28.get, p29[], depth + 1)
-    dst.m6 = p29
+    let p41 = ?a.boxed(logos_shapes_Pair_t)
+    ?cOut_logos_shapes_Pair_t(a, f40.get, p41[], depth + 1)
+    dst.m6 = p41
   ok()
 
 proc cIn_logos_shapes_Tree_t*(src: logos_shapes_Tree_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  let n30 = ?counted(src.m0, src.m1)
-  var items31 = newSeq[CborValue](n30)
-  for i in 0 ..< n30:
-    items31[i] = ?cIn_logos_shapes_Tree_t(src.m0[i], depth + 1)
-  e.add((cbor("kids"), cborArray(items31)))
+  let n42 = ?counted(src.m0, src.m1)
+  var items43 = newSeq[CborValue](n42)
+  for i in 0 ..< n42:
+    items43[i] = ?cIn_logos_shapes_Tree_t(src.m0[i], depth + 1)
+  let value44 = cborArray(items43)
+  e.add((cbor("kids"), value44))
   if src.m2:
-    e.add((cbor("left"), ?cIn_logos_shapes_Tree_t((?present(src.m3))[], depth + 1)))
-  e.add((cbor("tag"), cbor("leaf")))
+    let value45 = ?cIn_logos_shapes_Tree_t((?present(src.m3))[], depth + 1)
+    e.add((cbor("left"), value45))
+  let value46 = cbor("leaf")
+  e.add((cbor("tag"), value46))
   if src.m5:
-    e.add((cbor("twin"), ?cIn_logos_shapes_Pair_t((?present(src.m6))[], depth + 1)))
+    let value47 = ?cIn_logos_shapes_Pair_t((?present(src.m6))[], depth + 1)
+    e.add((cbor("twin"), value47))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Value_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Value_t, depth: int): Result[void, string] =
@@ -618,20 +634,22 @@ proc cIn_logos_shapes_Reflect_request_H_TU1_t*(src: logos_shapes_Reflect_request
 
 proc cOut_logos_shapes_Reflect_request_V_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_V_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f38 = v.lookup("w").get
-  dst.m0 = asBool(f38)
-  let f39 = v.lookup("x")
-  if f39.isSome:
+  let f74 = v.lookup("w").get
+  dst.m0 = asBool(f74)
+  let f75 = v.lookup("x")
+  if f75.isSome:
     dst.m1 = true
-    dst.m2 = ?a.text(f39.get.text)
+    dst.m2 = ?a.text(f75.get.text)
   ok()
 
 proc cIn_logos_shapes_Reflect_request_V_t*(src: logos_shapes_Reflect_request_V_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("w"), cbor(src.m0)))
+  let value76 = cbor(src.m0)
+  e.add((cbor("w"), value76))
   if src.m1:
-    e.add((cbor("x"), ?inText(src.m2)))
+    let value77 = ?inText(src.m2)
+    e.add((cbor("x"), value77))
   ok(cborMap(e))
 
 proc cOut_logos_shapes_Reflect_response_E_LI_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_E_LI_t, depth: int): Result[void, string] =
@@ -711,20 +729,22 @@ proc cIn_logos_shapes_Reflect_response_H_TU1_t*(src: logos_shapes_Reflect_respon
 
 proc cOut_logos_shapes_Reflect_response_V_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_V_t, depth: int): Result[void, string] =
   ?depthCheck(depth)
-  let f67 = v.lookup("w").get
-  dst.m0 = asBool(f67)
-  let f68 = v.lookup("x")
-  if f68.isSome:
+  let f108 = v.lookup("w").get
+  dst.m0 = asBool(f108)
+  let f109 = v.lookup("x")
+  if f109.isSome:
     dst.m1 = true
-    dst.m2 = ?a.text(f68.get.text)
+    dst.m2 = ?a.text(f109.get.text)
   ok()
 
 proc cIn_logos_shapes_Reflect_response_V_t*(src: logos_shapes_Reflect_response_V_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("w"), cbor(src.m0)))
+  let value110 = cbor(src.m0)
+  e.add((cbor("w"), value110))
   if src.m1:
-    e.add((cbor("x"), ?inText(src.m2)))
+    let value111 = ?inText(src.m2)
+    e.add((cbor("x"), value111))
   ok(cborMap(e))
 
 proc callRequest0(p2: ptr logos_shapes_Pick_request_t): Result[seq[byte], string] =
@@ -800,112 +820,135 @@ proc callRequest2(p2: uint64, p3: int64, p4: cstring, p5: ptr array[32, uint8], 
   ## `shapes.reflect`'s request params from its typed inputs.
   let depth {.used.} = 1
   var e: seq[CborEntry]
-  e.add((cbor("a"), cbor(7'u64)))
-  e.add((cbor("b"), cbor(int64(p3))))
-  e.add((cbor("c"), ?inText(p4)))
-  e.add((cbor("d"), cbor((?present(p5))[])))
-  let n32 = ?counted(p6, p7)
-  var items33 = newSeq[CborValue](n32)
-  for i in 0 ..< n32:
-    items33[i] = ?cIn_logos_shapes_Reflect_request_E_LI_t(p6[i], depth + 1)
-  e.add((cbor("e"), cborArray(items33)))
-  let n34 = ?counted(p8, p9)
-  var items35 = newSeq[CborValue](n34)
-  for i in 0 ..< n34:
-    items35[i] = ?cIn_logos_shapes_Reflect_request_F_LI_t(p8[i], depth + 1)
-  e.add((cbor("f"), cborArray(items35)))
-  e.add((cbor("g"), ?cIn_logos_shapes_Reflect_request_G_t((?present(p10))[], depth + 1)))
+  let value48 = cbor(7'u64)
+  e.add((cbor("a"), value48))
+  let value49 = cbor(int64(p3))
+  e.add((cbor("b"), value49))
+  let value50 = ?inText(p4)
+  e.add((cbor("c"), value50))
+  let value51 = cbor((?present(p5))[])
+  e.add((cbor("d"), value51))
+  let n52 = ?counted(p6, p7)
+  var items53 = newSeq[CborValue](n52)
+  for i in 0 ..< n52:
+    items53[i] = ?cIn_logos_shapes_Reflect_request_E_LI_t(p6[i], depth + 1)
+  let value54 = cborArray(items53)
+  e.add((cbor("e"), value54))
+  let n55 = ?counted(p8, p9)
+  var items56 = newSeq[CborValue](n55)
+  for i in 0 ..< n55:
+    items56[i] = ?cIn_logos_shapes_Reflect_request_F_LI_t(p8[i], depth + 1)
+  let value57 = cborArray(items56)
+  e.add((cbor("f"), value57))
+  let value58 = ?cIn_logos_shapes_Reflect_request_G_t((?present(p10))[], depth + 1)
+  e.add((cbor("g"), value58))
   if p11:
-    e.add((cbor("h"), cborArray(cbor(uint64(p12)), ?cIn_logos_shapes_Reflect_request_H_TU1_t((?present(p13))[], depth + 1))))
-  e.add((cbor("i"), ?cIn_logos_schema_commitment_t((?present(p14))[], depth + 1)))
-  e.add((cbor("j"), cborArray()))
-  e.add((cbor("l"), cbor(newSeq[byte]())))
-  e.add((cbor("m"), cbor(int64(p17))))
-  e.add((cbor("n"), cbor(uint64(p18))))
-  e.add((cbor("o"), cbor(uint64(p19))))
-  e.add((cbor("p"), cbor(int64(p20))))
+    let value59 = cborArray(cbor(uint64(p12)), ?cIn_logos_shapes_Reflect_request_H_TU1_t((?present(p13))[], depth + 1))
+    e.add((cbor("h"), value59))
+  let value60 = ?cIn_logos_schema_commitment_t((?present(p14))[], depth + 1)
+  e.add((cbor("i"), value60))
+  let value61 = cborArray()
+  e.add((cbor("j"), value61))
+  let value62 = cbor(newSeq[byte]())
+  e.add((cbor("l"), value62))
+  let value63 = cbor(int64(p17))
+  e.add((cbor("m"), value63))
+  let value64 = cbor(uint64(p18))
+  e.add((cbor("n"), value64))
+  let value65 = cbor(uint64(p19))
+  e.add((cbor("o"), value65))
+  let value66 = cbor(int64(p20))
+  e.add((cbor("p"), value66))
   if p21:
-    e.add((cbor("q"), ?cIn_logos_error_detail_t((?present(p22))[], depth + 1)))
-  e.add((cbor("r"), ?cIn_logos_shapes_Names_t((?present(p23))[], depth + 1)))
-  e.add((cbor("s"), ?inBytes(p24, p25)))
-  let n36 = ?counted(p26, p27)
-  var items37 = newSeq[CborValue](n36)
-  for i in 0 ..< n36:
-    items37[i] = ?cIn_logos_shapes_Entry_t(p26[i], depth + 1)
-  e.add((cbor("t"), cborArray(items37)))
-  e.add((cbor("u"), ?cIn_logos_shapes_Tree_t((?present(p28))[], depth + 1)))
-  e.add((cbor("v"), ?cIn_logos_shapes_Reflect_request_V_t((?present(p29))[], depth + 1)))
-  e.add((cbor("y"), ?cIn_logos_shapes_Blob_t((?present(p30))[], depth + 1)))
-  e.add((cbor("z"), ?cIn_logos_shapes_Digest_t((?present(p31))[], depth + 1)))
+    let value67 = ?cIn_logos_error_detail_t((?present(p22))[], depth + 1)
+    e.add((cbor("q"), value67))
+  let value68 = ?cIn_logos_shapes_Names_t((?present(p23))[], depth + 1)
+  e.add((cbor("r"), value68))
+  let value69 = ?inBytes(p24, p25)
+  e.add((cbor("s"), value69))
+  let n70 = ?counted(p26, p27)
+  var items71 = newSeq[CborValue](n70)
+  for i in 0 ..< n70:
+    items71[i] = ?cIn_logos_shapes_Entry_t(p26[i], depth + 1)
+  let value72 = cborArray(items71)
+  e.add((cbor("t"), value72))
+  let value73 = ?cIn_logos_shapes_Tree_t((?present(p28))[], depth + 1)
+  e.add((cbor("u"), value73))
+  let value78 = ?cIn_logos_shapes_Reflect_request_V_t((?present(p29))[], depth + 1)
+  e.add((cbor("v"), value78))
+  let value79 = ?cIn_logos_shapes_Blob_t((?present(p30))[], depth + 1)
+  e.add((cbor("y"), value79))
+  let value80 = ?cIn_logos_shapes_Digest_t((?present(p31))[], depth + 1)
+  e.add((cbor("z"), value80))
   ok(encodeCbor(cborMap(e)))
 
 proc callRespond2(a: var CallArena, v: CborValue, o32: var uint64, o33: var int64, o34: var cstring, o35: var array[32, uint8], o36: var ptr UncheckedArray[logos_shapes_Reflect_response_E_LI_t], o37: var csize_t, o38: var ptr UncheckedArray[logos_shapes_Reflect_response_F_LI_t], o39: var csize_t, o40: var logos_shapes_Reflect_response_G_t, o41: var bool, o42: var uint64, o43: var logos_shapes_Reflect_response_H_TU1_t, o44: var logos_schema_commitment_t, o45: var logos_tuple_size_0_t, o46: var logos_bstr_size_0_t, o47: var int8, o48: var uint16, o49: var logos_shapes_Counter_t, o50: var CErrorCode, o51: var bool, o52: var logos_error_detail_t, o53: var logos_shapes_Names_t, o54: var ptr UncheckedArray[uint8], o55: var csize_t, o56: var ptr UncheckedArray[logos_shapes_Entry_t], o57: var csize_t, o58: var logos_shapes_Tree_t, o59: var logos_shapes_Reflect_response_V_t, o60: var logos_shapes_Blob_t, o61: var logos_shapes_Digest_t): Result[void, string] =
   ## `shapes.reflect`'s outputs from its checked response.
   let depth {.used.} = 1
-  let f40 = v.lookup("a").get
-  o32 = uint64(f40.uint)
-  let f41 = v.lookup("b").get
-  o33 = int64(asInt64(f41))
-  let f42 = v.lookup("c").get
-  o34 = ?a.text(f42.text)
-  let f43 = v.lookup("d").get
-  ?fill(f43.bytes, o35)
-  let f44 = v.lookup("e").get
-  let items45 = f44.items
-  let arr46 = ?a.list(logos_shapes_Reflect_response_E_LI_t, items45.len)
-  for i, it in items45:
-    ?cOut_logos_shapes_Reflect_response_E_LI_t(a, it, arr46[i], depth + 1)
-  o36 = arr46
-  o37 = csize_t(items45.len)
-  let f47 = v.lookup("f").get
-  let items48 = f47.items
-  let arr49 = ?a.list(logos_shapes_Reflect_response_F_LI_t, items48.len)
-  for i, it in items48:
-    ?cOut_logos_shapes_Reflect_response_F_LI_t(a, it, arr49[i], depth + 1)
-  o38 = arr49
-  o39 = csize_t(items48.len)
-  let f50 = v.lookup("g").get
-  ?cOut_logos_shapes_Reflect_response_G_t(a, f50, o40, depth + 1)
-  let f51 = v.lookup("h")
-  if f51.isSome:
+  let f81 = v.lookup("a").get
+  o32 = uint64(f81.uint)
+  let f82 = v.lookup("b").get
+  o33 = int64(asInt64(f82))
+  let f83 = v.lookup("c").get
+  o34 = ?a.text(f83.text)
+  let f84 = v.lookup("d").get
+  ?fill(f84.bytes, o35)
+  let f85 = v.lookup("e").get
+  let items86 = f85.items
+  let arr87 = ?a.list(logos_shapes_Reflect_response_E_LI_t, items86.len)
+  for i, it in items86:
+    ?cOut_logos_shapes_Reflect_response_E_LI_t(a, it, arr87[i], depth + 1)
+  o36 = arr87
+  o37 = csize_t(items86.len)
+  let f88 = v.lookup("f").get
+  let items89 = f88.items
+  let arr90 = ?a.list(logos_shapes_Reflect_response_F_LI_t, items89.len)
+  for i, it in items89:
+    ?cOut_logos_shapes_Reflect_response_F_LI_t(a, it, arr90[i], depth + 1)
+  o38 = arr90
+  o39 = csize_t(items89.len)
+  let f91 = v.lookup("g").get
+  ?cOut_logos_shapes_Reflect_response_G_t(a, f91, o40, depth + 1)
+  let f92 = v.lookup("h")
+  if f92.isSome:
     o41 = true
-    o42 = uint64(f51.get.items[0].uint)
-    ?cOut_logos_shapes_Reflect_response_H_TU1_t(a, f51.get.items[1], o43, depth + 1)
-  let f52 = v.lookup("i").get
-  ?cOut_logos_schema_commitment_t(a, f52, o44, depth + 1)
-  let f53 = v.lookup("j").get
-  let f54 = v.lookup("l").get
-  let f55 = v.lookup("m").get
-  o47 = int8(asInt64(f55))
-  let f56 = v.lookup("n").get
-  o48 = uint16(f56.uint)
-  let f57 = v.lookup("o").get
-  o49 = logos_shapes_Counter_t(f57.uint)
-  let f58 = v.lookup("p").get
-  o50 = CErrorCode(f58.uint)
-  let f59 = v.lookup("q")
-  if f59.isSome:
+    o42 = uint64(f92.get.items[0].uint)
+    ?cOut_logos_shapes_Reflect_response_H_TU1_t(a, f92.get.items[1], o43, depth + 1)
+  let f93 = v.lookup("i").get
+  ?cOut_logos_schema_commitment_t(a, f93, o44, depth + 1)
+  let f94 = v.lookup("j").get
+  let f95 = v.lookup("l").get
+  let f96 = v.lookup("m").get
+  o47 = int8(asInt64(f96))
+  let f97 = v.lookup("n").get
+  o48 = uint16(f97.uint)
+  let f98 = v.lookup("o").get
+  o49 = logos_shapes_Counter_t(f98.uint)
+  let f99 = v.lookup("p").get
+  o50 = CErrorCode(f99.uint)
+  let f100 = v.lookup("q")
+  if f100.isSome:
     o51 = true
-    ?cOut_logos_error_detail_t(a, f59.get, o52, depth + 1)
-  let f60 = v.lookup("r").get
-  ?cOut_logos_shapes_Names_t(a, f60, o53, depth + 1)
-  let f61 = v.lookup("s").get
-  ?a.bytes(f61.bytes, o54, o55)
-  let f62 = v.lookup("t").get
-  let items63 = f62.items
-  let arr64 = ?a.list(logos_shapes_Entry_t, items63.len)
-  for i, it in items63:
-    ?cOut_logos_shapes_Entry_t(a, it, arr64[i], depth + 1)
-  o56 = arr64
-  o57 = csize_t(items63.len)
-  let f65 = v.lookup("u").get
-  ?cOut_logos_shapes_Tree_t(a, f65, o58, depth + 1)
-  let f66 = v.lookup("v").get
-  ?cOut_logos_shapes_Reflect_response_V_t(a, f66, o59, depth + 1)
-  let f69 = v.lookup("y").get
-  ?cOut_logos_shapes_Blob_t(a, f69, o60, depth + 1)
-  let f70 = v.lookup("z").get
-  ?cOut_logos_shapes_Digest_t(a, f70, o61, depth + 1)
+    ?cOut_logos_error_detail_t(a, f100.get, o52, depth + 1)
+  let f101 = v.lookup("r").get
+  ?cOut_logos_shapes_Names_t(a, f101, o53, depth + 1)
+  let f102 = v.lookup("s").get
+  ?a.bytes(f102.bytes, o54, o55)
+  let f103 = v.lookup("t").get
+  let items104 = f103.items
+  let arr105 = ?a.list(logos_shapes_Entry_t, items104.len)
+  for i, it in items104:
+    ?cOut_logos_shapes_Entry_t(a, it, arr105[i], depth + 1)
+  o56 = arr105
+  o57 = csize_t(items104.len)
+  let f106 = v.lookup("u").get
+  ?cOut_logos_shapes_Tree_t(a, f106, o58, depth + 1)
+  let f107 = v.lookup("v").get
+  ?cOut_logos_shapes_Reflect_response_V_t(a, f107, o59, depth + 1)
+  let f112 = v.lookup("y").get
+  ?cOut_logos_shapes_Blob_t(a, f112, o60, depth + 1)
+  let f113 = v.lookup("z").get
+  ?cOut_logos_shapes_Digest_t(a, f113, o61, depth + 1)
   ok()
 
 proc invoke*(route: ptr LogosRouteHandle, request: ShapesReflectRequest): Result[ShapesReflectResponse, InvocationFailure] =

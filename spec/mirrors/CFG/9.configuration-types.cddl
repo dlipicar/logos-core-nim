@@ -1,0 +1,67 @@
+logos.module_configuration.schema_commitment = {
+  commitment_model: "logos.commitment-model.2026-10",
+  schema_root: bstr .size 32,
+  schema_subtree_root: bstr .size 32,
+  hash_profile: "logos.hash-profile.2026-08.choice-index",
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+
+logos.module_configuration.value_commitment = {
+  schema_subtree_root: bstr .size 32,
+  value_root: bstr .size 32,
+}
+
+logos.module_configuration.configuration_value =
+  bstr .size (1..8388608)
+
+logos.module_configuration.schema_binding = {
+  document: tstr .size (1..1048576),
+  root: tstr .size (1..255),
+  schema_commitment: logos.module_configuration.schema_commitment,
+  ? live_reconfiguration: true,
+}
+
+logos.module_configuration.configuration_declaration = {
+  schema: logos.module_configuration.schema_binding,
+  ? default_value: logos.module_configuration.configuration_value,
+}
+
+logos.module_configuration.provenance =
+  "package-default" /
+  "protected-provisioning" /
+  "runtime-control-update"
+
+logos.module_configuration.value_record = {
+  value: logos.module_configuration.configuration_value,
+  schema_commitment: logos.module_configuration.schema_commitment,
+  value_commitment: logos.module_configuration.value_commitment,
+  value_revision: uint64,
+  provenance: logos.module_configuration.provenance,
+}
+
+logos.module_configuration.value_record_metadata = {
+  schema_commitment: logos.module_configuration.schema_commitment,
+  value_commitment: logos.module_configuration.value_commitment,
+  value_revision: uint64,
+  provenance: logos.module_configuration.provenance,
+}
+
+logos.module_configuration.configuration_state = {
+  state_revision: uint64,
+  schema_commitment: logos.module_configuration.schema_commitment,
+  ? current: logos.module_configuration.value_record,
+  ? staged: logos.module_configuration.value_record,
+}
+
+logos.module_configuration.configuration_state_summary = {
+  state_revision: uint64,
+  ? schema_commitment: logos.module_configuration.schema_commitment,
+  ? current: logos.module_configuration.value_record_metadata,
+  ? staged: logos.module_configuration.value_record_metadata,
+}
+
+logos.module_configuration.configuration_input = {
+  value: logos.module_configuration.configuration_value,
+  schema_commitment: logos.module_configuration.schema_commitment,
+  value_revision: uint64,
+}

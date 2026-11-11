@@ -48,6 +48,8 @@ typedef struct {
 } th_helpers_t;
 
 #define TH_TEXT 32768
+#define TH_MESSAGE 513  /* 512 bytes and the NUL */
+#define TH_DETAIL 4096  /* LOGOS_ERROR_DETAIL_MAX_LEN */
 
 /* What one call left: the result and the owner as returned (the owner is not
  * cleared), and the outputs read as text. */
@@ -58,6 +60,10 @@ typedef struct {
     int complete;  /* every output pointer a success must set is non-null */
     int same;      /* reflect: the outputs read back exactly as the inputs */
     char text[TH_TEXT];
+    /* th_shapes_reflect_on_stack: the result's message and detail, copied on the
+     * calling thread, whose storage holds them (INTERFACE §2.7.1), before it ends. */
+    char message[TH_MESSAGE];
+    unsigned char detail[TH_DETAIL];
 } th_report_t;
 
 /* The variants of th_shapes_reflect. */

@@ -102,7 +102,8 @@ proc plainInit(
   of imOkMessage:
     outContext[] = ctx
     result.message = "fine"
-  contexts.add(ctx)
+  if outContext[] == ctx:
+    contexts.add(ctx)
 
 proc plainDestroy(module: ptr LogosModuleContext) {.cdecl.} =
   inc destroys
@@ -614,3 +615,10 @@ suite "run.realizer: verified dynamic libraries (RUNTIME §2.1, §3.6; LOADER §
       r.realize(dynamicRequest("u1", "meter_module", path, digestOfFile(meterLib)))
     check x.error.code == lecArtifactUnavailable
     check path notin x.error.message and work notin x.error.message
+
+# Tests leave realizations active, and one fake returns a context with MODULE_ERROR
+# that nothing may destroy. Their contexts are freed here, after every suite has run,
+# so LeakSanitizer reports only leaks of the code under test.
+for c in contexts:
+  deallocShared(c)
+contexts.setLen(0)

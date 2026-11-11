@@ -51,15 +51,18 @@ proc cOut_logos_sensor_NS_control_Settings_t*(a: var CallArena, v: CborValue, ds
 proc cIn_logos_sensor_NS_control_Settings_t*(src: logos_sensor_NS_control_Settings_t, depth: int): Result[CborValue, string] =
   ?depthCheck(depth)
   var e: seq[CborEntry]
-  e.add((cbor("kind"), cbor("sensor")))
-  e.add((cbor("limit"), cbor(uint64(src.m1))))
+  let value3 = cbor("sensor")
+  e.add((cbor("kind"), value3))
+  let value4 = cbor(uint64(src.m1))
+  e.add((cbor("limit"), value4))
   ok(cborMap(e))
 
 proc callRequest0(p2: ptr logos_sensor_NS_control_Settings_t): Result[seq[byte], string] =
   ## `sensor.control.configure`'s request params from its typed inputs.
   let depth {.used.} = 1
   var e: seq[CborEntry]
-  e.add((cbor("settings"), ?cIn_logos_sensor_NS_control_Settings_t((?present(p2))[], depth + 1)))
+  let value5 = ?cIn_logos_sensor_NS_control_Settings_t((?present(p2))[], depth + 1)
+  e.add((cbor("settings"), value5))
   ok(encodeCbor(cborMap(e)))
 
 proc invoke*(route: ptr LogosRouteHandle, request: SensorNSControlConfigureRequest): Result[SensorNSControlConfigureResponse, InvocationFailure] =
@@ -93,8 +96,8 @@ proc callRequest1(): Result[seq[byte], string] =
 proc callRespond1(a: var CallArena, v: CborValue, o2: var uint64): Result[void, string] =
   ## `metrics_provider.snapshot`'s outputs from its checked response.
   let depth {.used.} = 1
-  let f3 = v.lookup("count").get
-  o2 = uint64(f3.uint)
+  let f6 = v.lookup("count").get
+  o2 = uint64(f6.uint)
   ok()
 
 proc invoke*(route: ptr LogosRouteHandle, request: MetricsProviderSnapshotRequest): Result[MetricsProviderSnapshotResponse, InvocationFailure] =
