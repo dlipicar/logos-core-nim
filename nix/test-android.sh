@@ -76,7 +76,7 @@ echo "test-android: booted" >&2
 dest=/data/local/tmp/lcn
 "$adb" shell rm -rf "$dest"
 "$adb" shell mkdir -p "$dest"
-"$adb" push "$data/repo" "$data/boringssl" "$suites" "$dest/" >/dev/null
+"$adb" push "$data/repo" "$suites" "$dest/" >/dev/null
 # Store files arrive read-only; the suites write under build/.
 "$adb" shell chmod -R u+w "$dest"
 
@@ -88,7 +88,7 @@ for path in "$suites"/*; do
   echo "=== $name"
   # The command line is built here and runs on the device.
   # shellcheck disable=SC2029
-  if "$adb" shell "cd $dest/repo && LCN_BORINGSSL_DIR=$dest/boringssl $dest/bin/$name"; then
+  if "$adb" shell "cd $dest/repo && $dest/bin/$name"; then
     passed+=("$name")
   else
     failed+=("$name")

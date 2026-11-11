@@ -1,16 +1,18 @@
 ## lcn-pkg: package-producer and checking tools for the PM §3/§4 manifest, the
-## §4.3 COSE_Sign1 Ed25519 profile and §7.1 LGX archives. A subset for now:
-## no fetch, catalog, install or Nix profile.
+## §4.3 COSE_Sign1 SLH-DSA-SHA2-192s profile and §7.1 LGX archives. A subset for
+## now: no fetch, catalog, install or Nix profile.
 ##
 ## [IMPL] File formats that are tool conventions, not spec formats:
 ## - a manifest source is CBOR diagnostic notation (RFC 8949 §8); `manifest
 ##   build` fills each artifact `hash` from the variant directories and puts the
 ##   canonical arrays in order (variants keep theirs);
-## - a seed file holds the 32-byte Ed25519 seed as 64 hex digits;
+## - a key file holds the 96-byte FIPS 205 secret key `SK.seed || SK.prf ||
+##   PK.seed || PK.root` as 192 hex digits, readable only by its owner (PM §4.3
+##   leaves private-key storage to the producer);
 ## - a trust file is JSON: {"anchors": [{"kid": "<text>" | "kid_hex": "<hex>",
 ##   "public_key": "<hex>", "packages": ["<exact name>", ...]}]}.
 
-import std/[algorithm, json, os, parseopt, strutils, sysrand]
+import std/[algorithm, json, os, parseopt, strutils]
 import results
 import ./logos_core/base/hex
 import ./logos_core/cbor
@@ -19,22 +21,24 @@ import ./logos_core/package/lgx
 
 const usage = """
 Usage:
-  lcn-pkg keygen --out:SEED
+  lcn-pkg keygen --out:KEY
   lcn-pkg manifest build SOURCE.edn --variants:DIR [--out:manifest.cbor]
-  lcn-pkg sign MANIFEST.cbor --kid:KID --key:SEED [--out:manifest.cose]
+  lcn-pkg sign MANIFEST.cbor --kid:KID --key:KEY [--out:manifest.cose]
   lcn-pkg sign MANIFEST.cbor --kid:KID --emit-tbs:FILE
   lcn-pkg sign MANIFEST.cbor --kid:KID --attach-sig:FILE [--out:manifest.cose]
   lcn-pkg lgx pack --manifest:manifest.cbor --cose:manifest.cose --variants:DIR
                    --out:PACKAGE.lgx
   lcn-pkg verify PACKAGE.lgx --trust:TRUST.json [--platform:OS/ARCH[/ABI]]
 
-keygen         writes a fresh seed (operating-system CSPRNG, PM §4.3) readable
-               only by its owner, and prints the public key
+keygen         writes a fresh SLH-DSA-SHA2-192s secret key (FIPS 205 key
+               generation from the operating-system CSPRNG, PM §4.3) readable
+               only by its owner, and prints the 48-byte public key
 manifest build fills artifact hashes from DIR/<variant id>/<path>, orders the
                canonical arrays, validates (PM §4, §5, §8) and writes the manifest
-sign           signs the manifest's commitment claim (PM §4.3); --emit-tbs
-               writes the Sig_structure bytes for an external signer and
-               --attach-sig takes its 64-byte signature (raw or hex)
+sign           signs the manifest's commitment claim (PM §4.3, hedged); --emit-tbs
+               writes the Sig_structure bytes for an external signer (pure
+               SLH-DSA-SHA2-192s, empty context) and --attach-sig takes its
+               16224-byte signature (raw or hex)
 lgx pack       writes an LGX archive (PM §7.1) from DIR/<variant id>/...
 verify         opens a package: archive rules, signature against the trust
                file, variant selection (default: this host), artifact hashes
@@ -90,13 +94,19 @@ proc hexOrRaw(data: seq[byte], n: int): Result[seq[byte], string] =
     return h
   err("expected " & $n & " raw bytes or " & $(2 * n) & " hex digits")
 
-proc loadKey(path: string): Result[SigningKey, string] =
-  let raw = ?readBytes(path)
-  let seed = ?hexOrRaw(raw, SeedLen)
-  var s: Seed
-  for i in 0 ..< SeedLen:
-    s[i] = seed[i]
-  ok(keyFromSeed(s))
+proc loadKey(path: string): Result[SecretKey, string] =
+  ## The key file's secret key; the copies this code makes are cleared
+  ## (best effort: the runtime may have moved others).
+  var raw = ?readBytes(path)
+  let parsed = hexOrRaw(raw, SecretKeyBytes)
+  if raw.len > 0:
+    zeroMem(addr raw[0], raw.len)
+  var bytes = parsed.valueOr:
+    return err(path & ": " & error)
+  var k: SecretKey
+  copyMem(addr k[0], addr bytes[0], SecretKeyBytes)
+  zeroMem(addr bytes[0], bytes.len)
+  ok(k)
 
 proc loadTrust(path: string): Result[TrustInput, string] =
   var t: TrustInput
@@ -132,17 +142,23 @@ proc keygen*(output: string): int =
   if output.len == 0:
     return fail("--out is required")
   if fileExists(output):
-    return fail(output & " exists; refusing to overwrite a seed")
-  var seed: Seed
-  if not urandom(seed):
-    return fail("the operating-system random source failed")
-  writeBytes(output, bytesOf(seed.toHex & "\n")).isOkOr:
+    return fail(output & " exists; refusing to overwrite a key")
+  var (sk, pk) = generateKeyPair().valueOr:
+    return fail(error)
+  # Created empty and restricted before the key is written.
+  writeBytes(output, newSeq[byte]()).isOkOr:
     return fail(error)
   try:
     setFilePermissions(output, {fpUserRead, fpUserWrite})
   except CatchableError as e:
     return fail("cannot restrict " & output & ": " & e.msg)
-  echo "public key: ", keyFromSeed(seed).publicKey.toHex
+  var text = sk.toHex & "\n"
+  sk.clear()
+  let written = writeBytes(output, bytesOf(text))
+  zeroMem(addr text[0], text.len)
+  written.isOkOr:
+    return fail(error)
+  echo "public key: ", pk.toHex
   0
 
 proc text(v: CborValue, key: string): string =
@@ -249,13 +265,15 @@ proc signCmd*(manifest, kidText, keyPath, emitTbs, attachSig, output: string): i
     return 0
   let cose =
     if keyPath.len > 0:
-      let key = loadKey(keyPath).valueOr:
+      var key = loadKey(keyPath).valueOr:
         return fail(error)
-      signManifest(m, kid, key)
+      let r = signManifest(m, kid, key)
+      key.clear()
+      r
     else:
       let raw = readBytes(attachSig).valueOr:
         return fail(error)
-      let sig = hexOrRaw(raw, SignatureLen).valueOr:
+      let sig = hexOrRaw(raw, SignatureBytes).valueOr:
         return fail(attachSig & ": " & error)
       attachSignature(m, kid, sig)
   let bytes = cose.valueOr:

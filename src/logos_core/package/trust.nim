@@ -1,17 +1,18 @@
 ## PM §4.1, §4.3: package-signing trust input. Each accepted `kid` maps to
-## exactly one Ed25519 public key and authorizes a non-empty set of exact package
-## names. Matching is byte equality: no case folding, Unicode normalization,
-## prefixes, wildcards, or an all-packages entry. Where the input comes from
-## (compiled-in anchors, the protected daemon config) is G137, at tier 4.
+## exactly one 48-byte SLH-DSA-SHA2-192s public key and authorizes a non-empty
+## set of exact package names. Matching is byte equality: no case folding,
+## Unicode normalization, prefixes, wildcards, or an all-packages entry. Where
+## the input comes from (one protected trust file with a monotonic revision and
+## a compiled-in floor) is G137, built with the Package Manager at tier 4/5.
 
 {.push raises: [].}
 
 import std/[sets, tables]
 import results
 import ../base/hex
-import ../crypto/ed25519
+import ../crypto/slhdsa
 
-export results, ed25519
+export results, slhdsa
 
 const
   MinKidBytes* = 1 ## [SPEC PM §4.3] `package_signing_key_id = bstr .size (1..128)`
@@ -37,15 +38,18 @@ func len*(t: TrustInput): int =
 func addAnchor*(
     t: var TrustInput, kid, key: openArray[byte], packages: openArray[string]
 ): Result[void, string] =
-  ## [SPEC PM §4.1, §4.3] [IMPL-DECISION G42] Accepts one anchor: a 1..128-byte
-  ## kid not already used, a canonical non-small-order key, and a non-empty set
-  ## of package names, each 1..128 bytes.
+  ## [SPEC PM §4.1, §4.3] Accepts one anchor: a 1..128-byte kid not already
+  ## used, a key of exactly 48 bytes (`PK.seed || PK.root`; any 48 bytes are a
+  ## possible key, and no other length is repaired), and a non-empty set of
+  ## package names, each 1..128 bytes.
   if kid.len < MinKidBytes or kid.len > MaxKidBytes:
     return err("a kid is 1 to 128 bytes")
   if @kid in t.anchors:
     return err("two trust anchors use kid " & kid.toHex)
-  let k = checkPublicKey(key).valueOr:
-    return err("the key of kid " & kid.toHex & " is " & $error)
+  if key.len != PublicKeyBytes:
+    return err("the key of kid " & kid.toHex & " is not 48 bytes")
+  var k: PublicKey
+  copyMem(addr k[0], unsafeAddr key[0], PublicKeyBytes)
   if packages.len == 0:
     return err("kid " & kid.toHex & " authorizes no package name")
   var names = initHashSet[string]()

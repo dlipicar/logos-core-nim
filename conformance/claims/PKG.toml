@@ -14,16 +14,15 @@ default = "deferred:tier-5"
 # Phase 3 (tier 3): the manifest, its value commitment, package-signing trust
 # input, the COSE_Sign1 profile and LGX archives, as package artifacts and the
 # lcn-pkg producer tools. At 6a4dfa28 PM-06 replaced Ed25519 with SLH-DSA-SHA2-192s
-# (§4.3); the code still signs with Ed25519 until the implementation is chosen,
-# so §4.3 is deferred to that rewrite. Fetch, catalogs, the storage role, installation,
-# the resolver, Runtime handoffs and the methods are tier 5; configuration schema
-# validation is tier 4 with CONFIG.
+# (§4.3), built over the vendored slhdsa-c (DECISIONS R4, I68). Fetch, catalogs, the
+# storage role, installation, the resolver, Runtime handoffs and the methods are
+# tier 5; configuration schema validation is tier 4 with CONFIG.
 "§2" = "claimed"
 "§3" = "claimed"
 "§4" = "claimed"
 "§4.1" = "claimed"
 "§4.2" = "deferred:tier-5"
-"§4.3" = "deferred:tier-3"
+"§4.3" = "claimed"
 "§4.4" = "deferred:tier-5"
 "§4.5" = "deferred:tier-5"
 "§5" = "claimed"
@@ -57,6 +56,17 @@ default = "deferred:tier-5"
 "PKG-0083" = "deferred:tier-5"
 # §4.3: freshness is the §4.2 catalog's.
 "PKG-0112" = "deferred:tier-5"
+# §4.3: key separation across package signing, provenance (§4.5), call evidence (CA
+# §9.1) and TLS needs those other key uses, which arrive with tiers 4 and 5.
+"PKG-0435" = "deferred:tier-5"
+# §4.3: the signer record is derived (signerRecord) but retained with installed
+# state, reported by inspections and carried by handoffs only with installation.
+"PKG-0436" = "deferred:tier-5"
+"PKG-0437" = "deferred:tier-5"
+"PKG-0438" = "deferred:tier-5"
+"PKG-0439" = "deferred:tier-5"
+"PKG-0440" = "deferred:tier-5"
+"PKG-0441" = "deferred:tier-5"
 # §4.1: trust-input continuity, withdrawal and their CA integration need the
 # protected trust-input path (G137 continuity design, an open decision).
 "PKG-0418" = "deferred:tier-4"

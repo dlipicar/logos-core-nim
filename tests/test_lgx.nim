@@ -2,7 +2,7 @@
 ## opened with openLgx; malformed archives come from a USTAR builder in this file
 ## whose header fields can be set to anything.
 
-import std/[algorithm, os, sequtils, strutils]
+import std/[algorithm, os, sequtils, strutils, tables]
 import unittest2
 import ../src/logos_core/base/hex
 import ../src/logos_core/[cbor, pins]
@@ -116,24 +116,33 @@ proc manifestValue(): CborValue =
     ),
   )
 
-let key = keyFromSeed(
-  block:
-    var s: Seed
-    for i in 0 ..< SeedLen:
-      s[i] = byte(i * 3)
-    s
-)
+proc testKey(fill: byte): (SecretKey, PublicKey) =
+  ## A fixed SLH-DSA-SHA2-192s key pair (FIPS 205 `slh_keygen_internal`).
+  var a, b, c: Seed
+  for i in 0 ..< N:
+    a[i] = byte(i * 3) xor fill
+    b[i] = byte(i * 5) xor fill
+    c[i] = byte(i * 7) xor fill
+  keyPairFromSeeds(a, b, c)
+
+let (key, pub) = testKey(0)
 let kid = b("lgx-test")
 var trust: TrustInput
-doAssert trust.addAnchor(kid, key.publicKey, ["logos.example"]).isOk
+doAssert trust.addAnchor(kid, pub, ["logos.example"]).isOk
 
 let linuxHost = Platform(os: "linux", architecture: "x86_64", abi: Opt.some("gnu"))
 let darwinHost = Platform(os: "darwin", architecture: "aarch64")
 let windowsHost = Platform(os: "windows", architecture: "x86_64", abi: Opt.some("msvc"))
 
+var signatures: Table[seq[byte], seq[byte]]
+  ## One signature per distinct manifest: SLH-DSA-SHA2-192s signing takes most
+  ## of a second, and most tests pack the same manifest.
+
 proc signed(v: CborValue): (seq[byte], seq[byte]) =
   let m = decodeManifest(encodeCbor(v)).get
-  (m.encoded, signManifest(m, kid, key).get)
+  if m.encoded notin signatures:
+    signatures[m.encoded] = signManifest(m, kid, key).get
+  (m.encoded, signatures[m.encoded])
 
 proc pack(v = manifestValue(), linux = linuxFiles, darwin = darwinFiles): seq[byte] =
   let (cbor, cose) = signed(v)
@@ -609,10 +618,10 @@ suite "pkg.lgx: manifests, signatures and artifacts in the archive (PM §3, §7.
 
   test "[PKG-0018] [PKG-0068] [PKG-0074] a package is not opened without an accepted signature":
     var other: TrustInput
-    check other.addAnchor(kid, keyFromSeed(default(Seed)).publicKey, ["logos.example"]).isOk
+    check other.addAnchor(kid, testKey(1)[1], ["logos.example"]).isOk
     check openLgx(pack(), other, linuxHost).error.code == pecSignature
     var notThisName: TrustInput
-    check notThisName.addAnchor(kid, key.publicKey, ["logos.other"]).isOk
+    check notThisName.addAnchor(kid, pub, ["logos.other"]).isOk
     check openLgx(pack(), notThisName, linuxHost).error.code == pecSignature
 
   test "[PKG-0214] every regular file in a variant is declared":

@@ -13,7 +13,6 @@
   nimSources,
   testFiles,
   testVariants,
-  boringsslSrc,
 }:
 let
   androidPkgs = import nixpkgs {
@@ -114,15 +113,10 @@ let
     };
 
   # What the suites read at run time, laid out as on the host: the repository
-  # (they run from its root) and the two vector files test_ed25519 reads from
-  # nim-boringssl (through LCN_BORINGSSL_DIR).
+  # (they run from its root).
   data = pkgs.runCommand "logos-core-nim-android-data" { } ''
     mkdir -p $out
     cp -r ${nimSources} $out/repo
-    for f in crypto/curve25519/ed25519_tests.txt \
-             third_party/wycheproof_testvectors/ed25519_test.txt; do
-      install -Dm444 ${boringsslSrc}/boringssl/$f $out/boringssl/boringssl/$f
-    done
   '';
 
   x86_64 = suites "x86_64";

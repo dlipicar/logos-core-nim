@@ -155,7 +155,7 @@
             spec-pins = specCheck "spec-pins" "spectrace pins";
             spec-ledger = specCheck "spec-ledger" "spectrace check";
             spec-gate = specCheck "spec-gate" "spectrace gate";
-            oracle-selftest = specCheck "oracle-selftest" "python3 oracle/selftest.py && python3 oracle/gen_cddl_vectors.py --check && python3 oracle/gen_hash_vectors.py --check && python3 oracle/gen_ed25519_vectors.py --check && python3 oracle/gen_cose_vectors.py --check && python3 oracle/gen_nfc_tables.py --check";
+            oracle-selftest = specCheck "oracle-selftest" "python3 oracle/selftest.py && python3 oracle/gen_cddl_vectors.py --check && python3 oracle/gen_hash_vectors.py --check && python3 oracle/gen_cose_vectors.py --check && python3 oracle/gen_nfc_tables.py --check";
           };
 
           # INTERFACE §2.1-§2.3, §2.5, §5.2 C type headers (types only, D29).
@@ -205,7 +205,6 @@
                   testFiles
                   testVariants
                   ;
-                boringsslSrc = deps.boringssl.src;
               }
             else
               null;

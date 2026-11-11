@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import cdcddle  # noqa: E402
 import dcbor  # noqa: E402
 import hashlayout  # noqa: E402
+import slhdsa  # noqa: E402
 
 ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
 PINS = tomllib.loads((ROOT / "spec/pins.toml").read_text(encoding="utf-8"))
@@ -91,6 +92,42 @@ for h in disagree[:10]:
     print("     disagrees on", h)
 check("BLAKE3 of the empty input", blake3(b"").hexdigest()
       == "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262")
+
+# SLH-DSA-SHA2-192s (FIPS 205) against the NIST ACVP cases in tests/vectors/slhdsa:
+# two keyGen cases, every sigVer case, and one deterministic internal and one
+# hedged pure sigGen case (each signature takes the oracle a few seconds).
+acvp = json.loads((ROOT / "tests/vectors/slhdsa/acvp-sha2-192s.json").read_text(encoding="utf-8"))
+hx = bytes.fromhex
+check("the ACVP file is SLH-DSA-SHA2-192s", acvp["parameterSet"] == slhdsa.NAME)
+for c in acvp["keyGen"][:2]:
+    check(f"SLH-DSA keyGen tcId {c['tcId']}",
+          slhdsa.keygen_internal(hx(c["skSeed"]), hx(c["skPrf"]), hx(c["pkSeed"])) == (hx(c["sk"]), hx(c["pk"])))
+wrong = []
+for c in acvp["sigVer"]:
+    if c["interface"] == "internal":
+        got = slhdsa.verify_internal(hx(c["message"]), hx(c["signature"]), hx(c["pk"]))
+    else:
+        got = slhdsa.verify(hx(c["message"]), hx(c["signature"]), hx(c["context"]), hx(c["pk"]))
+    if got != c["testPassed"]:
+        wrong.append(f"{c['tcId']} ({c['reason']})")
+check(f"SLH-DSA sigVer: all {len(acvp['sigVer'])} verdicts match", not wrong)
+for w in wrong:
+    print("     disagrees on", w)
+for iface, det in (("internal", True), ("external", False)):
+    c = next(c for c in acvp["sigGen"] if c["interface"] == iface and c["deterministic"] == det)
+    rnd = None if det else hx(c["additionalRandomness"])
+    sig = (slhdsa.sign_internal(hx(c["message"]), hx(c["sk"]), rnd) if iface == "internal"
+           else slhdsa.sign(hx(c["message"]), hx(c["context"]), hx(c["sk"]), rnd))
+    check(f"SLH-DSA sigGen tcId {c['tcId']} ({iface}, {'deterministic' if det else 'hedged'})",
+          sig == hx(c["signature"]))
+# Algorithm 9 as written (recursive) against the one-pass tree the signer uses.
+a = slhdsa.Adrs()
+a.set_layer(3)
+a.set_tree(5)
+ctx = slhdsa.Ctx(bytes(range(24)))
+levels = slhdsa._xmss_levels(ctx, bytes(24), a)
+check("SLH-DSA xmss_node (Algorithm 9) equals the one-pass tree at height 2",
+      [slhdsa.xmss_node(ctx, bytes(24), i, 2, a.copy()) for i in range(3)] == levels[2][:3])
 
 print(f"{len(failures)} failures" if failures else "oracle selftest passed")
 sys.exit(1 if failures else 0)

@@ -13,16 +13,19 @@ const work = "build" / "scratch" / "test_lcn_pkg"
 proc b(s: string): seq[byte] =
   @(s.toOpenArrayByte(0, s.high))
 
+proc str(data: openArray[byte]): string =
+  result = newString(data.len)
+  for i, x in data:
+    result[i] = char(x)
+
 proc put(path, content: string) =
   createDir(path.parentDir)
   writeFile(path, content)
 
-proc seedOf(path: string): Seed =
+proc keyOf(path: string): SecretKey =
   let raw = hex.fromHex(readFile(path).strip).get
-  var s: Seed
-  for i in 0 ..< SeedLen:
-    s[i] = raw[i]
-  s
+  doAssert raw.len == SecretKeyBytes
+  copyMem(addr result[0], unsafeAddr raw[0], SecretKeyBytes)
 
 proc trustFile(path: string, key: PublicKey, packages: seq[string]) =
   put(
@@ -46,7 +49,7 @@ const source = """
 """
 
 let
-  seedPath = work / "dev.seed"
+  keyPath = work / "dev.key"
   edn = work / "manifest.edn"
   variants = work / "variants"
   manifestPath = work / "manifest.cbor"
@@ -60,18 +63,23 @@ put(variants / "linux-x86_64" / "lib" / "libalpha.so", "ALPHA for linux")
 put(variants / "darwin-aarch64" / "lib" / "libalpha.dylib", "ALPHA for darwin")
 
 suite "pkg.cli: lcn-pkg producer commands":
-  test "[IMPL-DECISION I41] keygen draws a fresh seed, readable only by its owner, and never overwrites one (Ed25519 interim until the PM-06 rewrite)":
-    let other = work / "other.seed"
+  test "[PKG-0442] [IMPL-DECISION I41] keygen makes a fresh FIPS 205 key pair, readable only by its owner, and never overwrites one":
+    let other = work / "other.key"
     check:
-      keygen(seedPath) == 0
+      keygen(keyPath) == 0
       keygen(other) == 0
-      seedOf(seedPath) != seedOf(other)
+      keyOf(keyPath) != keyOf(other)
     when defined(posix):
-      check getFilePermissions(seedPath) == {fpUserRead, fpUserWrite}
-    let before = readFile(seedPath)
+      check getFilePermissions(keyPath) == {fpUserRead, fpUserWrite}
+    # The file is the FIPS 205 secret key SK.seed || SK.prf || PK.seed || PK.root:
+    # its key pair signs and verifies.
+    let k = keyOf(keyPath)
+    let sig = sign(k, b("m")).get
+    check verify(publicKey(k), b("m"), sig)
+    let before = readFile(keyPath)
     check:
-      keygen(seedPath) == 1
-      readFile(seedPath) == before
+      keygen(keyPath) == 1
+      readFile(keyPath) == before
 
   test "[PKG-0020] manifest build generates the manifest from a source and the variant files":
     check manifestBuild(edn, variants, manifestPath) == 0
@@ -92,23 +100,33 @@ suite "pkg.cli: lcn-pkg producer commands":
       manifestBuild(escaping, variants, work / "escaping.cbor") == 1
       not fileExists(work / "missing.cbor")
 
-  test "sign: a local key and an external signer (--emit-tbs, --attach-sig) give the same object":
+  test "sign: a local key and an external signer (--emit-tbs, --attach-sig) differ only in the hedged signature":
     let tbs = work / "tbs.bin"
     let sig = work / "sig.hex"
     let external = work / "external.cose"
     check:
-      signCmd(manifestPath, "dev-1", seedPath, "", "", cosePath) == 0
+      signCmd(manifestPath, "dev-1", keyPath, "", "", cosePath) == 0
       signCmd(manifestPath, "dev-1", "", tbs, "", "") == 0
-    put(sig, keyFromSeed(seedOf(seedPath)).sign(b(readFile(tbs))).toHex & "\n")
+    # Signing is hedged, so the two objects differ only in their signatures.
+    let externalSig = sign(keyOf(keyPath), b(readFile(tbs))).get
+    put(sig, externalSig.toHex & "\n")
     check:
       signCmd(manifestPath, "dev-1", "", "", sig, external) == 0
-      readFile(external) == readFile(cosePath)
+      readFile(external).len == readFile(cosePath).len
+      readFile(external)[0 ..< ^SignatureBytes] ==
+        readFile(cosePath)[0 ..< ^SignatureBytes]
+      readFile(external)[^SignatureBytes .. ^1] == str(externalSig)
+      # A signature of the wrong length is refused.
+    put(work / "short.sig", externalSig[0 ..< 64].toHex)
+    check:
+      signCmd(manifestPath, "dev-1", "", "", work / "short.sig", work / "short.cose") ==
+        1
       # Exactly one of the three modes.
-      signCmd(manifestPath, "dev-1", seedPath, tbs, "", "") == 1
+      signCmd(manifestPath, "dev-1", keyPath, tbs, "", "") == 1
       signCmd(manifestPath, "dev-1", "", "", "", "") == 1
 
   test "lgx pack, then verify against a trust file, per platform":
-    let key = keyFromSeed(seedOf(seedPath)).publicKey
+    let key = publicKey(keyOf(keyPath))
     trustFile(trustPath, key, @["logos.example"])
     check:
       lgxPack(manifestPath, cosePath, variants, packagePath) == 0

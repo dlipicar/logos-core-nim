@@ -177,11 +177,14 @@ proc alpha(m: CborValue): CborValue =
 proc linux(m: CborValue): CborValue =
   m["variants"].items[0]
 
-proc seed(fill: byte): Seed =
-  var s: Seed
-  for i in 0 ..< SeedLen:
-    s[i] = fill
-  s
+proc testKey(fill: byte): (SecretKey, PublicKey) =
+  ## A fixed SLH-DSA-SHA2-192s key pair (FIPS 205 `slh_keygen_internal`).
+  var a, b, c: Seed
+  for i in 0 ..< N:
+    a[i] = fill
+    b[i] = fill xor 0x5a
+    c[i] = byte(i) + fill
+  keyPairFromSeeds(a, b, c)
 
 proc bytesOf(s: string): seq[byte] =
   @(s.toOpenArrayByte(0, s.high))
@@ -517,35 +520,29 @@ suite "pkg.errors: the PM §14 error codes":
     check codes == PackageErrorCode.toSeq.mapIt($it)
 
 suite "pkg.trust: package-signing trust input (PM §4.1, §4.3)":
-  let a = keyFromSeed(seed(1)).publicKey
-  let b = keyFromSeed(seed(2)).publicKey
+  let a = testKey(1)[1]
+  let b = testKey(2)[1]
 
-  test "[PKG-0071] [PKG-0072] [PKG-0097] [PKG-0107] each kid maps to one key; kids are unique; name sets are non-empty":
+  test "[PKG-0071] [PKG-0072] [PKG-0097] [PKG-0107] [PKG-0434] [PKG-0448] each kid maps to one 48-byte key; kids are unique; name sets are non-empty":
     var t: TrustInput
     check t.addAnchor(bytesOf("org-1"), a, ["logos.storage"]).isOk
     check t.addAnchor(bytesOf("org-1"), b, ["logos.storage"]).isErr
     check t.addAnchor(bytesOf("org-2"), b, []).isErr
     check t.addAnchor(newSeq[byte](), b, ["x"]).isErr
     check t.addAnchor(newSeq[byte](129), b, ["x"]).isErr
-    check t.addAnchor(bytesOf("org-2"), b[0 .. 30], ["x"]).isErr
+    check t.addAnchor(bytesOf("org-2"), b[0 .. 46], ["x"]).isErr
+    check t.addAnchor(bytesOf("org-2"), @b & @[0'u8], ["x"]).isErr
+    check t.addAnchor(bytesOf("org-2"), b[0 .. 31], ["x"]).isErr # an Ed25519-sized key
     check t.addAnchor(bytesOf("org-2"), b, [""]).isErr
     check t.len == 1
     check t.anchor(bytesOf("org-1")).get.key == a
-
-  test "[IMPL-DECISION G42] trust input refuses small-order and non-canonical keys":
-    var t: TrustInput
-    for e in SmallOrderEncodings:
-      check t.addAnchor(bytesOf("k"), e, ["x"]).isErr
-    check t.len == 0
 
   test "[PKG-0073] [PKG-0074] [PKG-0075] authorization is exact byte equality":
     var t: TrustInput
     check t.addAnchor(bytesOf("org"), a, ["logos.storage", "café"]).isOk
     check t.authorize(bytesOf("org"), "logos.storage").isOk
     check t.authorize(bytesOf("org"), "café").isOk
-    for other in [
-      "Logos.storage", "logos.storage2", "logos", "*", "logos.*", "cafe\u0301"
-    ]:
+    for other in ["Logos.storage", "logos.storage2", "logos", "*", "logos.*", "café"]:
       checkpoint other
       check t.authorize(bytesOf("org"), other).error == trNotAuthorized
     check t.authorize(bytesOf("nobody"), "logos.storage").error == trUnknownKid
@@ -558,18 +555,19 @@ suite "pkg.trust: package-signing trust input (PM §4.1, §4.3)":
     check t.authorize(bytesOf("two"), "p").isOk
     check t.authorize(bytesOf("two"), "q").error == trNotAuthorized
 
-suite "pkg.cose: the COSE_Sign1 Ed25519 profile (PM §4, §4.3)":
+suite "pkg.cose: the COSE_Sign1 SLH-DSA-SHA2-192s profile (PM §4, §4.3)":
   let doc = parseJson(readRepoFile("tests/vectors/package/cose.json"))
   let manifest = decodeManifest(encodeCbor(base())).get
-  let key = keyFromSeed(seed(7))
+  let (key, pub) = testKey(7)
   let kid = bytesOf("logos-test")
   var trust: TrustInput
-  doAssert trust.addAnchor(kid, key.publicKey, ["logos.example"]).isOk
+  doAssert trust.addAnchor(kid, pub, ["logos.example"]).isOk
 
   proc resign(cose: CoseSign1, k = key): seq[byte] =
-    ## `cose` with its payload and header as given, freshly signed.
+    ## `cose` with its payload and header as given, freshly signed over the
+    ## profile's Sig_structure.
     var c = cose
-    c.signature = k.sign(sigStructure(c.protectedBytes, c.payload))
+    c.signature = signDeterministic(k, sigStructure(c.protectedBytes, c.payload)).get
     encodeCoseSign1(c)
 
   proc outcome(coseBytes: seq[byte], t = trust): string =
@@ -584,36 +582,50 @@ suite "pkg.cose: the COSE_Sign1 Ed25519 profile (PM §4, §4.3)":
 
   let signed = signManifest(manifest, kid, key).get
   let parsed = decodeCoseSign1(signed).get
+  let deterministic = resign(parsed)
+
+  proc reason(coseBytes: seq[byte]): string =
+    let r = verifyPackage(manifest.encoded, coseBytes, trust)
+    if r.isOk: "" else: r.error.msg
 
   test "[PKG-0095] [PKG-0096] the profile identifier comes from the mirrored CDDL":
-    check signingProfile().len > 0
+    check signingProfile() == "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"
     check ("\"" & signingProfile() & "\"") in mirror("PKG/4.3.signing-profile.cddl")
-    # The oracle's vectors carry the same mirrored profile id but are still signed
-    # with Ed25519 (DECISIONS I50) until the SLH-DSA rewrite (R4) regenerates them.
+    check doc["profile"].getStr == signingProfile()
+    check doc["algorithm"].getStr == AlgorithmName
 
-  test "[PKG-0099] [PKG-0103] [PKG-0104] [IMPL-DECISION G135] the container matches the oracle's bytes (Ed25519 interim until the PM-06 rewrite)":
+  test "[PKG-0099] [PKG-0103] [PKG-0104] [PKG-0427] [PKG-0429] [PKG-0443] [PKG-0444] the container and the deterministic signature match the oracle's (an independent FIPS 205)":
     for v in doc["vectors"]:
       checkpoint v["name"].getStr
+      proc seed(field: string): Seed =
+        let s = hexBytes(v[field].getStr)
+        doAssert s.len == N
+        copyMem(addr result[0], unsafeAddr s[0], N)
+
+      let (sk, pk) = keyPairFromSeeds(seed("sk_seed"), seed("sk_prf"), seed("pk_seed"))
+      check pk.toHex == v["public_key"].getStr
       let (cose, tbs) =
         unsignedCose(hexBytes(v["kid"].getStr), hexBytes(v["payload"].getStr))
       check cose.protectedBytes.toHex == v["protected"].getStr
       check tbs.toHex == v["tbs"].getStr
+      # The Sig_structure's third element is the profile identifier's UTF-8 bytes.
+      let st = decodeCbor(tbs).get
+      check st.items.len == 4
+      check st.items[0].getText.get == "Signature1"
+      check st.items[2].getBytes.get == externalAad()
+      check externalAad() == bytesOf(signingProfile())
       var full = cose
-      let k = keyFromSeed(
-        block:
-          var s: Seed
-          let b = hexBytes(v["seed"].getStr)
-          for i in 0 ..< SeedLen:
-            s[i] = b[i]
-          s
-      )
-      check k.publicKey.toHex == v["public_key"].getStr
-      full.signature = k.sign(tbs)
+      full.signature = signDeterministic(sk, tbs).get
       check full.signature.toHex == v["signature"].getStr
       check encodeCoseSign1(full).toHex == v["cose"].getStr
+      # The FIPS 205 message is the Sig_structure as is: the pure-mode prefix
+      # comes from slh_sign, so the internal function over the same bytes fails.
+      check verify(pk, tbs, full.signature)
+      check not verifyInternal(pk, tbs, full.signature)
       let back = decodeCoseSign1(hexBytes(v["cose"].getStr)).get
       check back.kid.toHex == v["kid"].getStr
       check back.payload.toHex == v["payload"].getStr
+      check back.signature.toHex == v["signature"].getStr
 
   test "[PKG-0098] [PKG-0105] [PKG-0066] [PKG-0179] the payload is the Logos det-CBOR claim binding the manifest commitment":
     let claim = decodeCbor(parsed.payload).get
@@ -622,19 +634,43 @@ suite "pkg.cose: the COSE_Sign1 Ed25519 profile (PM §4, §4.3)":
       manifest.commitment.get
     check parsed.payload == claimPayload(manifest.commitment.get).get
 
-  test "[PKG-0068] [PKG-0074] [PKG-0110] a signed manifest verifies":
+  test "[PKG-0068] [PKG-0074] [PKG-0110] [PKG-0446] [PKG-0447] hedged and deterministic signatures both verify":
     let r = verifyPackage(manifest.encoded, signed, trust)
     check r.isOk
     check r.get.signer.kid == kid
     check r.get.commitment == manifest.commitment.get
+    # Hedged: a second signature of the same manifest differs, and verifies.
+    let again = signManifest(manifest, kid, key).get
+    check again != signed
+    check outcome(again) == "ok"
+    check outcome(deterministic) == "ok"
+
+  test "[PKG-0446] signing fails when no randomness can be obtained":
+    proc broken(dest: var openArray[byte]): bool =
+      false
+
+    let r = signManifest(manifest, kid, key, random = broken)
+    check r.isErr
+    check r.error.code == pecInvalidRequest
+
+  test "[PKG-0426] the signer record is the profile and the exact public key":
+    let r = verifyPackage(manifest.encoded, signed, trust).get
+    let rec = signerRecord(r)
+    check rec.lookup("profile").get.getText.get == signingProfile()
+    check rec.lookup("public_key").get.getBytes.get == @pub
+    check rec.entries.len == 2
 
   test "external signing: --emit-tbs then --attach-sig gives the same object":
     let (_, tbs) = toBeSigned(manifest, kid).get
-    check attachSignature(manifest, kid, key.sign(tbs)).get == signed
-    check attachSignature(manifest, kid, newSeq[byte](63)).isErr
+    let sig = signDeterministic(key, tbs).get
+    let attached = attachSignature(manifest, kid, sig).get
+    check attached == deterministic
+    check outcome(attached) == "ok"
+    check attachSignature(manifest, kid, sig[0 ..< SignatureBytes - 1]).isErr
+    check attachSignature(manifest, kid, sig & @[0'u8]).isErr
 
-  test "[PKG-0109] [PKG-0111] malformed structure, headers or encoding are signature-verification-failed":
-    let sig = @(parsed.signature)
+  test "[PKG-0109] [PKG-0111] [PKG-0448] malformed structure, headers or encoding are signature-verification-failed":
+    let sig = parsed.signature
     proc raw(items: varargs[CborValue]): seq[byte] =
       encodeCbor(cborTag(18, cborArray(items)))
 
@@ -646,8 +682,10 @@ suite "pkg.cose: the COSE_Sign1 Ed25519 profile (PM §4, §4.3)":
       "three elements": raw(p, cborMap(), body),
       "detached payload": raw(p, cborMap(), cborNull(), cbor(sig)),
       "unprotected kid": raw(p, cborMap((cbor(4'u64), cbor(kid))), body, cbor(sig)),
-      "63-byte signature": raw(p, cborMap(), body, cbor(sig[0 .. 62])),
-      "65-byte signature": raw(p, cborMap(), body, cbor(sig & @[0'u8])),
+      "truncated signature":
+        raw(p, cborMap(), body, cbor(sig[0 ..< SignatureBytes - 1])),
+      "padded signature": raw(p, cborMap(), body, cbor(sig & @[0'u8])),
+      "Ed25519-sized signature": raw(p, cborMap(), body, cbor(sig[0 ..< 64])),
       "protected not bstr": raw(cborMap(), cborMap(), body, cbor(sig)),
       "trailing byte": signed & @[0'u8],
       "non-shortest head": @[0xd2'u8, 0x98, 0x04] & signed[2 .. ^1],
@@ -656,55 +694,85 @@ suite "pkg.cose: the COSE_Sign1 Ed25519 profile (PM §4, §4.3)":
       checkpoint name
       check outcome(bytes) == "signature-verification-failed"
 
-  test "[PKG-0109] [IMPL-DECISION G135] protected headers other than alg -19 and kid fail, even when signed (Ed25519 interim until the PM-06 rewrite)":
+  test "[PKG-0109] [PKG-0425] [PKG-0427] [PKG-0428] a protected header other than exactly kid fails, before the signature is checked":
     proc header(entries: varargs[CborEntry]): seq[byte] =
       encodeCbor(cborMap(entries))
 
+    let k = (cbor(4'u64), cbor(kid))
     let cases = {
-      "alg -8 (EdDSA)": header((cbor(1'u64), cbor(-8'i64)), (cbor(4'u64), cbor(kid))),
-      "no alg": header((cbor(4'u64), cbor(kid))),
-      "no kid": header((cbor(1'u64), cbor(-19'i64))),
-      "crit": header(
-        (cbor(1'u64), cbor(-19'i64)),
-        (cbor(2'u64), cborArray(cbor(4'u64))),
-        (cbor(4'u64), cbor(kid)),
-      ),
-      "content type": header(
-        (cbor(1'u64), cbor(-19'i64)),
-        (cbor(3'u64), cbor(0'u64)),
-        (cbor(4'u64), cbor(kid)),
-      ),
-      "kid text":
-        header((cbor(1'u64), cbor(-19'i64)), (cbor(4'u64), cbor("logos-test"))),
-      "kid 129 bytes":
-        header((cbor(1'u64), cbor(-19'i64)), (cbor(4'u64), cbor(newSeq[byte](129)))),
-      "alg text": header((cbor(1'u64), cbor("Ed25519")), (cbor(4'u64), cbor(kid))),
+      "alg -19 (Ed25519)": header((cbor(1'u64), cbor(-19'i64)), k),
+      "alg naming this profile's algorithm":
+        header((cbor(1'u64), cbor(AlgorithmName)), k),
+      "alg alone": header((cbor(1'u64), cbor(-8'i64))),
+      "empty": header(),
+      "crit": header((cbor(2'u64), cborArray(cbor(4'u64))), k),
+      "content type": header((cbor(3'u64), cbor(0'u64)), k),
+      "kid text": header((cbor(4'u64), cbor("logos-test"))),
+      "kid empty": header((cbor(4'u64), cbor(newSeq[byte]()))),
+      "kid 129 bytes": header((cbor(4'u64), cbor(newSeq[byte](129)))),
+      "text label kid": header((cbor("kid"), cbor(kid))),
     }
     for (name, h) in cases:
       checkpoint name
       var c = parsed
       c.protectedBytes = h
-      check outcome(resign(c)) == "signature-verification-failed"
-    var c = parsed
-    c.protectedBytes =
-      @[0xa2'u8, 0x04, 0x4a] & kid & @[0x01'u8, 0x32] # keys out of order
-    check outcome(resign(c)) == "signature-verification-failed"
+      let bytes = encodeCoseSign1(c)
+      check outcome(bytes) == "signature-verification-failed"
+      # The header rule refuses it, not the signature (which would also fail).
+      check "does not verify" notin reason(bytes)
+      check reason(bytes).len > 0
 
-  test "[PKG-0068] [PKG-0075] [PKG-0109] unknown kid, wrong key, bad signature and unauthorized signer fail":
+  test "[PKG-0429] [PKG-0430] [PKG-0431] [PKG-0433] [PKG-0443] [PKG-0445] a signature over any other message or context fails, with no retry":
+    proc withSig(sig: seq[byte]): seq[byte] =
+      var c = parsed
+      c.signature = sig
+      encodeCoseSign1(c)
+
+    proc structure(aad: seq[byte]): seq[byte] =
+      encodeCbor(
+        cborArray(
+          cbor("Signature1"),
+          cbor(parsed.protectedBytes),
+          cbor(aad),
+          cbor(parsed.payload),
+        )
+      )
+
+    let tbs = sigStructure(parsed.protectedBytes, parsed.payload)
+    let cases = {
+      # RFC 9052's default zero-length external_aad, as the Ed25519 profile had.
+      "empty external_aad": signDeterministic(key, structure(@[])).get,
+      "another profile as external_aad":
+        signDeterministic(key, structure(bytesOf("logos.package-signing.other"))).get,
+      "the profile id with a terminator":
+        signDeterministic(key, structure(externalAad() & @[0'u8])).get,
+      "a nonempty FIPS 205 context": signDeterministic(key, tbs, bytesOf("x")).get,
+      "the profile id as FIPS 205 context":
+        signDeterministic(key, tbs, externalAad()).get,
+      "slh_sign_internal (no pure-mode prefix)":
+        signInternal(key, tbs, Opt.none(Seed)).get,
+      "the pure-mode prefix added twice": signDeterministic(key, @[0'u8, 0] & tbs).get,
+      "the payload alone": signDeterministic(key, parsed.payload).get,
+    }
+    for (name, sig) in cases:
+      checkpoint name
+      check outcome(withSig(sig)) == "signature-verification-failed"
+
+  test "[PKG-0068] [PKG-0075] [PKG-0109] [PKG-0434] unknown kid, wrong key, bad signature and unauthorized signer fail":
     var other: TrustInput
-    check other.addAnchor(bytesOf("someone-else"), key.publicKey, ["logos.example"]).isOk
+    check other.addAnchor(bytesOf("someone-else"), pub, ["logos.example"]).isOk
     check outcome(signed, other) == "signature-verification-failed"
     var wrongKey: TrustInput
-    check wrongKey.addAnchor(kid, keyFromSeed(seed(8)).publicKey, ["logos.example"]).isOk
+    check wrongKey.addAnchor(kid, testKey(8)[1], ["logos.example"]).isOk
     check outcome(signed, wrongKey) == "signature-verification-failed"
     var bad = signed
     bad[^1] = bad[^1] xor 1
     check outcome(bad) == "signature-verification-failed"
     var otherName: TrustInput
-    check otherName.addAnchor(kid, key.publicKey, ["logos.other"]).isOk
+    check otherName.addAnchor(kid, pub, ["logos.other"]).isOk
     check outcome(signed, otherName) == "signature-verification-failed"
 
-  test "[PKG-0066] [PKG-0068] [PKG-0110] a claim that differs from the computed commitment fails, even when signed":
+  test "[PKG-0066] [PKG-0068] [PKG-0110] [PKG-0432] a claim that differs from the computed commitment fails, even when signed":
     let c = manifest.commitment.get
     proc claimWith(f: proc(claim: CborValue)): seq[byte] =
       let claim = claimValue(c)
@@ -716,7 +784,7 @@ suite "pkg.cose: the COSE_Sign1 Ed25519 profile (PM §4, §4.3)":
     let cases = {
       "other profile": claimWith(
         proc(x: CborValue) =
-          x.put("profile", cbor("logos.package-signing.other"))
+          x.put("profile", cbor("logos.package-signing.cose-sign1-ed25519"))
       ),
       "other value root": claimWith(
         proc(x: CborValue) =

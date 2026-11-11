@@ -1,14 +1,17 @@
-## PM §4, §4.1, §4.3: the `logos.package-signing.cose-sign1-ed25519` profile.
-## `manifest.cose` is a tagged COSE_Sign1 (RFC 9052) whose embedded payload is
-## the Logos deterministic-CBOR signature claim; the protected header holds
-## exactly `alg` = -19 (Ed25519, RFC 9864) and `kid`.
+## PM §4, §4.1, §4.3: the `logos.package-signing.cose-sign1-slh-dsa-sha2-192s`
+## profile. `manifest.cose` is a tagged COSE_Sign1 (RFC 9052) whose embedded
+## payload is the Logos deterministic-CBOR signature claim; the protected header
+## holds exactly `kid`. The algorithm is implicit and fixed (RFC 9052 App. A):
+## pure SLH-DSA-SHA2-192s (FIPS 205) with the zero-length context over the
+## `Sig_structure`, whose `external_aad` is the profile identifier. Nothing in
+## the received object selects the algorithm, the profile or the context.
 ##
 ## The claim schema is the mirrored PM §4.3 block plus the
 ## `logos.package_manager.manifest_commitment` rule cut from the mirrored PM §5
 ## block, accepted as one supporting schema. The outer COSE structure and the
-## protected header use RFC 8949 §4.2.1 core deterministic encoding, which at
-## spec f4f83471 imposes the same bytes as the Logos profile, so the one
-## encoder and strict decoder serve both (I9).
+## protected header use RFC 8949 §4.2.1 core deterministic encoding, which
+## imposes the same bytes as the Logos profile here, so the one encoder and
+## strict decoder serve both (I9).
 
 {.push raises: [].}
 
@@ -20,27 +23,27 @@ import ../cddl/syntax
 import ../commitment
 import ../hash
 import ../iface/accept
-import ../crypto/ed25519
+import ../crypto/slhdsa
 import ./[errors, manifest, trust]
 
 export results, errors, manifest, trust
 
 const
   CoseSign1Tag* = 18'u64 ## [SPEC PM §4.3] RFC 9052 tagged COSE_Sign1
-  CoseHeaderAlg* = 1'u64 ## RFC 9052 `alg`
+  CoseHeaderAlg* = 1'u64 ## RFC 9052 `alg`: refused here [SPEC PM §4.3]
   CoseHeaderKid* = 4'u64 ## RFC 9052 `kid`
-  CoseAlgEd25519* = -19'i64 ## [SPEC PM §4.3] RFC 9864 fully specified Ed25519
   SignatureContext* = "Signature1" ## RFC 9052 §4.4
   ClaimType* = "logos.package_manager.package_signature_claim"
   ProfileType* = "logos.package_manager.package_signing_profile"
   CommitmentType* = "logos.package_manager.manifest_commitment"
+  SignerType* = "logos.package_manager.package_signer"
 
 type
   CoseSign1* = object
     protectedBytes*: seq[byte] ## the serialized protected header map
     kid*: seq[byte]
     payload*: seq[byte] ## the embedded claim bytes
-    signature*: Signature
+    signature*: seq[byte] ## 16,224 bytes once decoded or signed
 
   VerifiedPackage* = object ## A manifest whose signature PM §4.1 and §4.3 accept.
     manifest*: Manifest
@@ -52,6 +55,7 @@ type
 type ClaimSchema = ref object
   set: SchemaSet
   claim: SchemaNode
+  signer: SchemaNode
   profile: string ## the profile identifier literal
 
 proc claimDocument(): Result[string, string] =
@@ -78,11 +82,20 @@ proc loadClaimSchema(): Result[ClaimSchema, string] =
   let m = c.primary.model
   let claim = m.find(ClaimType).valueOr:
     return err("no " & ClaimType)
+  let signer = m.find(SignerType).valueOr:
+    return err("no " & SignerType)
   let p = m.find(ProfileType).valueOr:
     return err("no " & ProfileType)
   if p.body.kind != snLiteral or p.body.literal.kind != skTstr:
     return err(ProfileType & " is not a text literal")
-  ok(ClaimSchema(set: c.schemaSet, claim: claim.body, profile: p.body.literal.text))
+  ok(
+    ClaimSchema(
+      set: c.schemaSet,
+      claim: claim.body,
+      signer: signer.body,
+      profile: p.body.literal.text,
+    )
+  )
 
 let claimSchema = block:
   let s = loadClaimSchema()
@@ -96,6 +109,12 @@ func claims(): ClaimSchema =
 func signingProfile*(): string =
   ## [SPEC PM §4.3] The profile identifier, read from the mirrored CDDL.
   claims().profile
+
+func externalAad*(): seq[byte] =
+  ## [SPEC PM §4.3] The `Sig_structure`'s `external_aad`: the UTF-8 bytes of
+  ## the profile identifier, from this verifier's own context.
+  let p = signingProfile()
+  @(p.toOpenArrayByte(0, p.high))
 
 func claimValue*(c: ManifestCommitment): CborValue =
   cborMap(
@@ -114,22 +133,17 @@ func claimPayload*(c: ManifestCommitment): Result[seq[byte], string] =
 # COSE_Sign1 ------------------------------------------------------------------------
 
 func protectedHeader*(kid: openArray[byte]): seq[byte] =
-  ## [SPEC PM §4.3] Exactly `alg` and `kid`, core deterministic.
-  encodeCbor(
-    cborMap(
-      (cbor(CoseHeaderAlg), cbor(CoseAlgEd25519)), (cbor(CoseHeaderKid), cbor(@kid))
-    )
-  )
+  ## [SPEC PM §4.3] Exactly `kid`, core deterministic.
+  encodeCbor(cborMap((cbor(CoseHeaderKid), cbor(@kid))))
 
 func sigStructure*(protectedBytes, payload: openArray[byte]): seq[byte] =
   ## [SPEC PM §4.3] RFC 9052 §4.4 `Sig_structure` for `Signature1`: the
-  ## protected header bytes, a zero-length `external_aad`, the payload bytes.
+  ## protected header bytes, the profile identifier as `external_aad`, the
+  ## payload bytes. This is the exact FIPS 205 message; the pure-mode prefix
+  ## is the signing and verifying functions' to add.
   encodeCbor(
     cborArray(
-      cbor(SignatureContext),
-      cbor(@protectedBytes),
-      cbor(newSeq[byte]()),
-      cbor(@payload),
+      cbor(SignatureContext), cbor(@protectedBytes), cbor(externalAad()), cbor(@payload)
     )
   )
 
@@ -161,11 +175,20 @@ func toBeSigned*(
   ok(unsignedCose(kid, payload))
 
 proc signManifest*(
-    m: Manifest, kid: openArray[byte], key: SigningKey
+    m: Manifest, kid: openArray[byte], key: SecretKey, random: RandomSource = osRandom
 ): Result[seq[byte], PackageError] =
-  ## `manifest.cose` for `m`, signed with `key` under `kid`.
+  ## `manifest.cose` for `m`, signed with `key` under `kid`: pure
+  ## SLH-DSA-SHA2-192s, hedged with fresh bytes from `random`, failing when it
+  ## cannot supply them [SPEC PM §4.3]. The signature is checked against the
+  ## key's own public key before it is returned [IMPL].
   var (cose, tbs) = ?toBeSigned(m, kid)
-  cose.signature = key.sign(tbs)
+  let sig = sign(key, tbs, random = random).valueOr:
+    return err(packageError(pecInvalidRequest, "signing failed: " & error))
+  if not verify(publicKey(key), tbs, sig):
+    return err(
+      packageError(pecInvalidRequest, "the signature does not verify under the key")
+    )
+  cose.signature = sig
   ok(encodeCoseSign1(cose))
 
 func attachSignature*(
@@ -173,11 +196,12 @@ func attachSignature*(
 ): Result[seq[byte], PackageError] =
   ## `manifest.cose` from a signature made elsewhere over `toBeSigned`'s bytes
   ## (`lcn-pkg sign --attach-sig`). The signature is not checked here.
-  if signature.len != SignatureLen:
-    return err(packageError(pecInvalidRequest, "an Ed25519 signature is 64 bytes"))
+  if signature.len != SignatureBytes:
+    return err(
+      packageError(pecInvalidRequest, "an SLH-DSA-SHA2-192s signature is 16224 bytes")
+    )
   var (cose, _) = ?toBeSigned(m, kid)
-  for i in 0 ..< SignatureLen:
-    cose.signature[i] = signature[i]
+  cose.signature = @signature
   ok(encodeCoseSign1(cose))
 
 func refuse(msg: string): PackageError =
@@ -185,9 +209,10 @@ func refuse(msg: string): PackageError =
 
 func decodeCoseSign1*(data: openArray[byte]): Result[CoseSign1, PackageError] =
   ## [SPEC PM §4.3] The structural checks: deterministic CBOR, tag 18, four
-  ## elements, a protected header of exactly `alg` = -19 and a 1..128-byte
-  ## `kid`, an empty unprotected header, an embedded payload, and a 64-byte
-  ## signature. Every failure is `signature-verification-failed`.
+  ## elements, a protected header of exactly a 1..128-byte `kid` (an explicit
+  ## `alg` is refused, whatever it names), an empty unprotected header, an
+  ## embedded payload, and a 16,224-byte signature. Every failure is
+  ## `signature-verification-failed`.
   let v = decodeCbor(data).valueOr:
     return err(refuse("manifest.cose is not deterministic CBOR: " & $error))
   if v.kind != ckTag or v.tag != CoseSign1Tag:
@@ -199,14 +224,13 @@ func decodeCoseSign1*(data: openArray[byte]): Result[CoseSign1, PackageError] =
     return err(refuse("the protected header is not a byte string"))
   let h = decodeCbor(protectedBytes).valueOr:
     return err(refuse("the protected header is not deterministic CBOR: " & $error))
-  if h.kind != ckMap or h.entries.len != 2:
-    return err(refuse("the protected header holds exactly alg and kid"))
-  let alg = h.lookup(CoseHeaderAlg)
+  if h.kind != ckMap:
+    return err(refuse("the protected header is not a map"))
+  if h.lookup(CoseHeaderAlg).isSome:
+    return err(refuse("an explicit alg header is refused: the algorithm is fixed"))
   let kidValue = h.lookup(CoseHeaderKid)
-  if alg.isNone or kidValue.isNone:
-    return err(refuse("the protected header holds exactly alg and kid"))
-  if alg.get.kind != ckNint or alg.get.nint != uint64(-1 - CoseAlgEd25519):
-    return err(refuse("the algorithm is not -19 (Ed25519)"))
+  if h.entries.len != 1 or kidValue.isNone:
+    return err(refuse("the protected header holds exactly kid"))
   let kid = kidValue.get.getBytes.valueOr:
     return err(refuse("the kid is not a byte string"))
   if kid.len < MinKidBytes or kid.len > MaxKidBytes:
@@ -217,12 +241,13 @@ func decodeCoseSign1*(data: openArray[byte]): Result[CoseSign1, PackageError] =
     return err(refuse("the payload is missing or detached"))
   let sig = a.items[3].getBytes.valueOr:
     return err(refuse("the signature is not a byte string"))
-  if sig.len != SignatureLen:
-    return err(refuse("the signature is not 64 bytes"))
-  var c = CoseSign1(protectedBytes: protectedBytes, kid: kid, payload: payload)
-  for i in 0 ..< SignatureLen:
-    c.signature[i] = sig[i]
-  ok(c)
+  if sig.len != SignatureBytes:
+    return err(refuse("the signature is not 16224 bytes"))
+  ok(
+    CoseSign1(
+      protectedBytes: protectedBytes, kid: kid, payload: payload, signature: sig
+    )
+  )
 
 proc verifyPackage*(
     manifestCbor, manifestCose: openArray[byte], trust: TrustInput
@@ -230,7 +255,8 @@ proc verifyPackage*(
   ## [SPEC PM §4, §4.1, §4.3] In order: the manifest decodes and validates
   ## (`invalid-package` otherwise); then, each failure being
   ## `signature-verification-failed`, the COSE structure, an accepted `kid`,
-  ## the Ed25519 signature [IMPL-DECISION G42], the claim schema and profile,
+  ## the SLH-DSA-SHA2-192s signature under that kid's key (FIPS 205 `slh_verify`
+  ## with the zero-length context, no retry), the claim schema and profile,
   ## every commitment field against the commitment computed from
   ## `manifest.cbor`, and the signer's authorization for the exact package name.
   let m = ?decodeManifest(manifestCbor)
@@ -260,3 +286,16 @@ proc verifyPackage*(
   let signer = trust.authorize(cose.kid, m.package).valueOr:
     return err(refuse("kid " & cose.kid.toHex & ": " & $error & " (" & m.package & ")"))
   ok(VerifiedPackage(manifest: m, commitment: computed, signer: signer))
+
+func signerRecord*(v: VerifiedPackage): CborValue =
+  ## [SPEC PM §4.3] The `package_signer` record of the verification that
+  ## accepted `v`: the profile and the exact public-key bytes, not the kid.
+  ## Retaining it with installed state and reporting it in inspections and
+  ## handoffs is the Package Manager's (tier 5).
+  let r = cborMap(
+    (cbor("profile"), cbor(signingProfile())),
+    (cbor("public_key"), cbor(@(v.signer.key))),
+  )
+  let s = claims()
+  doAssert s.set.validatePath(0, s.signer, r).isOk, "package_signer drifted"
+  r
