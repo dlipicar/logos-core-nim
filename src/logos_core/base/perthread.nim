@@ -19,9 +19,9 @@
 ## - A thread Nim started releases them in its destruction handler, which runs
 ##   while the thread still owns its allocator region.
 ## - Under ORC, any other thread releases them in a thread-exit hook
-##   (`thread_exit.c`) and then gives its allocator region back. The hook also
-##   runs on Nim's threads, after Nim gave the region back, where it has nothing
-##   left to release and only frees.
+##   (`thread_exit.c`), collects cycles and then gives its allocator region
+##   back. The hook also runs on Nim's threads, after Nim gave the region back,
+##   where it only frees the handler list.
 ## - Under refc a C thread keeps them unless it calls `releasePerThread` last.
 ## - The thread that ran this module's initialization keeps them: it may be the
 ##   process's main thread, and its hook would run during process exit.
@@ -37,6 +37,7 @@ var
   pending {.threadvar.}: int # `releases.len`, readable without the heap
   hooked {.threadvar.}: bool
   initThread {.threadvar.}: bool
+  nimEnded {.threadvar.}: bool # Nim ran this thread's destruction handlers
 
 initThread = true
 
@@ -57,9 +58,14 @@ proc releasePerThread*() {.gcsafe.} =
 
 proc releaseAtNimThreadEnd() {.gcsafe, raises: [].} =
   releasePerThread()
+  nimEnded = true
 
 proc releaseAtThreadExit() {.cdecl, gcsafe, raises: [].} =
-  if pending > 0:
+  # On a C thread this always runs, tables or not: the cycle collector's root
+  # buffer is allocated by any call that drops a possibly cyclic reference, and
+  # only a collection frees it (upstream draft 10). On a Nim thread the handler
+  # already did, and the allocator region is gone.
+  if not nimEnded:
     releasePerThread()
   # The handler list `onThreadDestruction` added to: Nim runs it but never frees
   # it, and never runs it on a thread it did not start (upstream draft 11).
