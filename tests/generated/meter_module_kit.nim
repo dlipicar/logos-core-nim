@@ -9,15 +9,16 @@
 ##   proc destroyModule(m: T) # optional
 ##   proc `read`(m: T, request: MeterReadRequest): Result[MeterReadResponse, InvocationFailure]
 ##
-## Not generated yet: the typed `_CALL_` provider functions (INTERFACE §2.4).
+## The template also exports the typed provider functions (INTERFACE §2.4),
+## which call the same handlers.
 
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ../../src/logos_core/codegen/kitrt
+import ../../src/logos_core/codegen/[kitrt, common_mirrors]
 import ./meter_module_types
 
-export kitrt, meter_module_types
+export kitrt, common_mirrors, meter_module_types
 
 const
   moduleName* = "meter_module"
@@ -67,6 +68,12 @@ perThread(
   loadValidator(primaryDocument, interfaceDocuments, supportingDocuments, false),
 )
 
+perThread(
+  kitSchema,
+  GeneratedSchema,
+  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false),
+)
+
 proc publish*(s: ModuleServices, event: MeterChangedEvent): Result[void, InvocationFailure] =
   ## Publishes `meter.changed_event` through the instance's publish callback.
   let data = encode(event).valueOr:
@@ -87,6 +94,107 @@ proc routeMeterModule[T](instance: T, bare: string, params: openArray[byte]): Re
     return encodedResponse(encode(response))
   discard request
   err(failure(ecMethodNotFound, "unknown method " & bare))
+
+type
+  logos_tstr_size_1_64_t* = cstring
+
+  logos_meter_Changed_event_t* = object ## `logos_meter_Changed_event_EVENT`
+    m0*: uint64 ## value
+
+  logos_meter_Reading_t* = object ## `logos_meter_Reading_MAP`
+    m0*: bool ## has_label
+    m1*: cstring ## label
+    m2*: uint64 ## value
+
+proc cOut_logos_meter_Changed_event_t*(a: var CallArena, v: CborValue, dst: var logos_meter_Changed_event_t, depth: int): Result[void, string]
+proc cIn_logos_meter_Changed_event_t*(src: logos_meter_Changed_event_t, depth: int): Result[CborValue, string]
+proc cOut_logos_meter_Reading_t*(a: var CallArena, v: CborValue, dst: var logos_meter_Reading_t, depth: int): Result[void, string]
+proc cIn_logos_meter_Reading_t*(src: logos_meter_Reading_t, depth: int): Result[CborValue, string]
+
+proc cOut_logos_meter_Changed_event_t*(a: var CallArena, v: CborValue, dst: var logos_meter_Changed_event_t, depth: int): Result[void, string] =
+  ?depthCheck(depth)
+  let f1 = v.lookup("value").get
+  dst.m0 = uint64(f1.uint)
+  ok()
+
+proc cIn_logos_meter_Changed_event_t*(src: logos_meter_Changed_event_t, depth: int): Result[CborValue, string] =
+  ?depthCheck(depth)
+  var e: seq[CborEntry]
+  e.add((cbor("value"), cbor(uint64(src.m0))))
+  ok(cborMap(e))
+
+proc cOut_logos_meter_Reading_t*(a: var CallArena, v: CborValue, dst: var logos_meter_Reading_t, depth: int): Result[void, string] =
+  ?depthCheck(depth)
+  let f2 = v.lookup("label")
+  if f2.isSome:
+    dst.m0 = true
+    dst.m1 = ?a.text(f2.get.text)
+  let f3 = v.lookup("value").get
+  dst.m2 = uint64(f3.uint)
+  ok()
+
+proc cIn_logos_meter_Reading_t*(src: logos_meter_Reading_t, depth: int): Result[CborValue, string] =
+  ?depthCheck(depth)
+  var e: seq[CborEntry]
+  if src.m0:
+    e.add((cbor("label"), ?inText(src.m1)))
+  e.add((cbor("value"), cbor(uint64(src.m2))))
+  ok(cborMap(e))
+
+proc kitRequest0(p2: uint32): Result[seq[byte], string] =
+  ## `meter.read`'s request params from its typed inputs.
+  let depth {.used.} = 1
+  var e: seq[CborEntry]
+  e.add((cbor("channel"), cbor(uint64(p2))))
+  ok(encodeCbor(cborMap(e)))
+
+proc kitRespond0(a: var CallArena, v: CborValue, o3: var logos_tstr_size_1_64_t, o4: var logos_meter_Reading_t): Result[void, string] =
+  ## `meter.read`'s outputs from its checked response.
+  let depth {.used.} = 1
+  let f4 = v.lookup("label").get
+  o3 = ?a.text(f4.text)
+  let f5 = v.lookup("reading").get
+  ?cOut_logos_meter_Reading_t(a, f5, o4, depth + 1)
+  ok()
+
+proc kitCall0[T](p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: uint32, p3: ptr logos_tstr_size_1_64_t, p4: ptr logos_meter_Reading_t): LogosResult =
+  ## `logos_meter_module_CALL_meter_Read` (INTERFACE §2.4): `meter.read`.
+  mixin `read`
+  if p0 == nil or p1 == nil or p3 == nil or p4 == nil:
+    return failureResult(moduleError("a null module, response owner or output"))
+  let params = kitRequest0(p2).valueOr:
+    return failureResult(failure(ecInvalidParams, error))
+  let request = kitValidator().checkedRequest("read", params).valueOr:
+    return failureResult(error)
+  let instance {.cursor.} = cast[T](instanceOf(p0))
+  let response = `read`(instance, fromChecked(MeterReadRequest, request)).valueOr:
+    return failureResult(error)
+  let v = toCbor(response)
+  kitSchema().check("meter.read_response", v).isOkOr:
+    return failureResult(moduleError("the response does not match its schema: " & error))
+  var arena: CallArena
+  var o3: logos_tstr_size_1_64_t
+  var o4: logos_meter_Reading_t
+  kitRespond0(arena, v, o3, o4).isOkOr:
+    arena.release()
+    return failureResult(moduleError("the response has no canonical C value: " & error))
+  p3[] = o3
+  p4[] = o4
+  p1[] = arena.owner
+  okResult()
+
+proc meterModuleLayout*(): seq[(string, int)] =
+  ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).
+  @[
+    ("logos_meter_Changed_event_t", sizeof(logos_meter_Changed_event_t)),
+    ("logos_meter_Changed_event_t@align", alignof(logos_meter_Changed_event_t)),
+    ("logos_meter_Changed_event_t.value", offsetOf(logos_meter_Changed_event_t, m0)),
+    ("logos_meter_Reading_t", sizeof(logos_meter_Reading_t)),
+    ("logos_meter_Reading_t@align", alignof(logos_meter_Reading_t)),
+    ("logos_meter_Reading_t.has_label", offsetOf(logos_meter_Reading_t, m0)),
+    ("logos_meter_Reading_t.label", offsetOf(logos_meter_Reading_t, m1)),
+    ("logos_meter_Reading_t.value", offsetOf(logos_meter_Reading_t, m2)),
+  ]
 
 template exportMeterModule*(T: typedesc) =
   ## Defines `meter_module`'s exported symbols over the handlers of `T`.
@@ -133,3 +241,7 @@ template exportMeterModule*(T: typedesc) =
   proc meterModuleKitDispatch(module: ptr LogosModuleContext, methodName: cstring, paramsCbor: ptr UncheckedArray[uint8], paramsLen: csize_t, outResponseCbor: ptr ptr UncheckedArray[uint8], outResponseLen: ptr csize_t): LogosResult {.exportc: "logos_meter_module_MODULE_dispatch", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     kitDispatch(module, methodName, paramsCbor, paramsLen, outResponseCbor, outResponseLen, meterModuleKitRoute)
+
+  proc meterModuleKitCall0(p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: uint32, p3: ptr logos_tstr_size_1_64_t, p4: ptr logos_meter_Reading_t): LogosResult {.exportc: "logos_meter_module_CALL_meter_Read", dynlib, cdecl, gcsafe, raises: [].} =
+    kitEnter()
+    kitCall0[T](p0, p1, p2, p3, p4)

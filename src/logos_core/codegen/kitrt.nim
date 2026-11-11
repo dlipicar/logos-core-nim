@@ -13,6 +13,9 @@
 ##   schema (INTERFACE §4.4, §4.5), calls the author's handler, checks the
 ##   response against the response schema, and returns it in a buffer that
 ##   `_MODULE_free` releases.
+## - The typed `_CALL_` functions (§2.4) convert their C inputs and outputs with
+##   the generated converters (`callrt`, `cmirror`) and share the dispatch
+##   path's validation and handlers.
 ## - Every failure becomes a `logos_result_t` whose message and detail live in
 ##   thread-local storage until the next call on that thread (§2.7).
 ##

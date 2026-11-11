@@ -17,18 +17,21 @@
 ##   `<bare>(T, <Request>): Result[<Response>, InvocationFailure]`.
 ## - `publish(ModuleServices, <Event>)` and `publishScoped(ModuleServices,
 ##   <Event>)` for each event the primary contract or an interface declares.
+## - For a provider, the typed per-method functions
+##   `logos_<module-C>_CALL_<namespace>_<Method>` (§2.4). The template defines
+##   them over the same handlers. Their C-layout mirrors and converters come
+##   from `cmirror`, the common schema's from `codegen/common_mirrors`.
 ##
-## Not generated yet: the typed per-method `_CALL_` functions (§2.4, mandatory
-## for a provider), `_MODULE_apply_configuration` and `_MODULE_async_api` (both
-## optional), typed call helpers (App A.5), and kits for an interface-only
-## provider (no primary document).
+## Not generated yet: `_MODULE_apply_configuration` and `_MODULE_async_api`
+## (both optional), typed call helpers (App A.5), and kits for an
+## interface-only provider (no primary document).
 
 {.push raises: [].}
 
 import std/[sequtils, strutils, tables]
 import ../pins
 import ../iface/[accept, names, provider, surface]
-import ./nimgen
+import ./[cmirror, nimgen]
 
 type KitOptions* = object
   importPrefix*: string ## how the kit imports this library (`NimOptions`)
@@ -89,11 +92,29 @@ proc kitModule*(
         names.getOrDefault(m.request) & "): Result[" & names.getOrDefault(m.response) &
         ", InvocationFailure]\n"
     )
+  var mirrors = KitMirrors()
+  if provider:
+    var methods: seq[KitMethod]
+    for m in surface.methods:
+      methods.add(
+        KitMethod(
+          request: m.request,
+          response: m.response,
+          bare: m.bare,
+          handler: handlerName(m.bare),
+          requestType: names.getOrDefault(m.request),
+        )
+      )
+    mirrors = ?kitMirrors(s, prefix, methods)
+  if mirrors.exports.len > 0:
+    o.add(
+      "##\n## The template also exports the typed provider functions (INTERFACE §2.4),\n" &
+        "## which call the same handlers.\n"
+    )
   o.add(
-    "##\n## Not generated yet: the typed `_CALL_` provider functions (INTERFACE §2.4).\n\n" &
-      "#!fmt: off\n{.push raises: [], gcsafe.}\n\n" & "import " & opts.importPrefix &
-      "codegen/kitrt\nimport ./" & header & "_types\n\nexport kitrt, " & header &
-      "_types\n\n"
+    "\n#!fmt: off\n{.push raises: [], gcsafe.}\n\n" & "import " & opts.importPrefix &
+      "codegen/[kitrt, common_mirrors]\nimport ./" & header &
+      "_types\n\nexport kitrt, common_mirrors, " & header & "_types\n\n"
   )
   let descriptor =
     if provider:
@@ -119,6 +140,12 @@ proc kitModule*(
       "  loadValidator(primaryDocument, interfaceDocuments, supportingDocuments, " &
       $system & "),\n)\n"
   )
+  if "kitSchema()" in mirrors.procs:
+    o.add(
+      "\nperThread(\n  kitSchema,\n  GeneratedSchema,\n" &
+        "  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, " &
+        $system & "),\n)\n"
+    )
   # Events (App A.4).
   for e in surface.events:
     let t = names.getOrDefault(e.id)
@@ -157,6 +184,13 @@ proc kitModule*(
     o.add(
       "  discard request\n  err(failure(ecMethodNotFound, \"unknown method \" & bare))\n"
     )
+  # The typed provider functions (§2.4).
+  if mirrors.types.len > 0:
+    o.add("\n" & mirrors.types & "\n")
+  if mirrors.procs.len > 0:
+    o.add("\n" & mirrors.procs & "\n")
+  if provider:
+    o.add("\n" & mirrors.layout & "\n")
   # The export template.
   o.add(
     "\ntemplate " & tmpl & "*(T: typedesc) =\n" & "  ## Defines `" & b.module &
@@ -200,4 +234,6 @@ proc kitModule*(
         "    kitEnter()\n    kitDispatch(module, methodName, paramsCbor, paramsLen, outResponseCbor, outResponseLen, " &
         prefix & "KitRoute)\n"
     )
+    for e in mirrors.exports:
+      o.add("\n" & e & "\n")
   ok(o)

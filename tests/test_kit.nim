@@ -4,13 +4,22 @@
 ## call goes through the exported C functions; their results are checked with
 ## the ABI caller's own rules (`abi/checks`).
 
-import std/typedthreads
+import std/[algorithm, os, osproc, strutils, typedthreads]
 import unittest2
 import ../src/logos_core/cbor
 import ../src/logos_core/iface/[accept, provider]
-import ./support/[kitruntime, specdata]
+from ../src/logos_core/codegen/callrt import
+  arenaBlocks, failArenaAllocation, CallArena, text, release
+from ../src/logos_core/codegen/common_mirrors import commonMirrorLayout
+import ./support/[kitruntime, specdata, typedharness]
 import ./generated/meter_module_kit
-import ./kit/[meter_impl, sensor_impl]
+from ./generated/sensor_module_kit import sensorModuleLayout
+from ./generated/shapes_module_kit import shapesModuleLayout
+import ./kit/[meter_impl, sensor_impl, shapes_impl]
+
+{.compile("kit/typed_linked.c", "-Werror=incompatible-pointer-types").}
+
+const deviceTarget = defined(android) or defined(ios)
 
 # The exported symbols, as an ABI caller declares them -------------------------------
 
@@ -70,6 +79,18 @@ proc sensorFree(
   module: ptr LogosModuleContext, p: pointer
 ) {.importc: "logos_sensor_module_MODULE_free", cdecl, gcsafe, raises: [].}
 
+proc shapesInit(
+  input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+): LogosResult {.importc: "logos_shapes_module_MODULE_init", cdecl, gcsafe, raises: [].}
+
+proc shapesDestroy(
+  module: ptr LogosModuleContext
+) {.importc: "logos_shapes_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
+
+proc thLinked(f: ptr ThFns) {.importc: "th_linked", cdecl, gcsafe, raises: [].}
+  ## The typed provider functions of the modules linked in, by their header
+  ## names (`tests/kit/typed_linked.c`).
+
 # Calling helpers ------------------------------------------------------------------------
 
 proc newMeter(i: LogosModuleInitInput): ptr LogosModuleContext {.gcsafe.} =
@@ -78,6 +99,16 @@ proc newMeter(i: LogosModuleInitInput): ptr LogosModuleContext {.gcsafe.} =
   let r = meterInit(addr i, addr ctx)
   doAssert checkOutcome(r, contextShape(ctx)).isOk, "meter init failed"
   ctx
+
+proc newInstance(
+    init: proc(
+      input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+    ): LogosResult {.cdecl, gcsafe, raises: [].}
+): ptr LogosModuleContext {.gcsafe.} =
+  ## An instance of a module without events.
+  var i = input(publish = false)
+  let r = init(addr i, addr result)
+  doAssert checkOutcome(r, contextShape(result)).isOk, "init failed"
 
 proc meterCall(
     ctx: ptr LogosModuleContext, bare: string, params: openArray[byte]
@@ -334,3 +365,357 @@ suite "ifc.kit: concurrency (INTERFACE §2.7, §2.8) [IMPL]":
     withInstance(sharedMeter, Meter, m):
       check m.reads.load == workers * rounds * 2
     meterDestroy(sharedMeter)
+
+# Typed provider functions ------------------------------------------------------------------
+
+var linked: ThFns
+thLinked(addr linked)
+
+proc hexOf(bytes: openArray[int]): string =
+  result = "h'"
+  for b in bytes:
+    result.add toHex(b, 2).toLowerAscii
+  result.add "'"
+
+proc byteRange(a, b: int): seq[int] =
+  for i in a .. b:
+    result.add i
+
+let fullReflect =
+  "a=7 b=-42 c=\"see\" d=" & hexOf(byteRange(0, 31)) &
+  " e=[h'01020304',h'05060708'] f=[(1,\"one\"),(2,\"two\")] g=value:\"gee\"" &
+  " h=(9,h'abcd') i=(\"logos.commitment-model.2026-10\"," &
+  "\"logos.hash-profile.2026-08.choice-index\",\"logos.hash-suite.blake3-256\"," &
+  hexOf(byteRange(0xE0, 0xFF).reversed) & ")" &
+  " m=-5 n=65535 o=42 p=6 q=h'5a' r=[\"ab\",\"cdefghij\"] s=h'00ff00'" &
+  " t=[file{kind=\"file\" path=\"/f\"},dir{kind=\"dir\" path=\"/d\" entries=[\"x\"]}]" &
+  " u={kids=[{kids=[] tag=\"leaf\"}] left={kids=[] tag=\"leaf\"} tag=\"leaf\"" &
+  " twin=({kids=[] tag=\"leaf\"},77)} v=(true,\"ex\") y=h'1011' z=h'09080706'" &
+  " empty=0/0"
+
+template shapesCalls(ctx: ptr LogosModuleContext): int =
+  var n: int
+  withInstance(ctx, Shapes, s):
+    n = s.calls.load
+  n
+
+suite "ifc.kit: typed provider functions (INTERFACE §2.3, §2.4, §2.7.1) [IMPL]":
+  test "the harness's Nim mirrors have its C structs' sizes":
+    check harnessMatches()
+
+  test "[IFC-0164] [IFC-0648] a typed call reads C inputs and writes complete C outputs its owner holds":
+    let ctx = newMeter(input())
+    let base = arenaBlocks()
+    var t = typedRead(linked, ctx, 4, keep = true)
+    check t.status.isOk
+    check t.text == "label=\"ch4\" reading=(absent,40)"
+    check t.owned and ownerValid(t.owner)
+    check arenaBlocks() > base
+    clear(t.owner)
+    check arenaBlocks() == base
+    check meterCall(ctx, "read", read(4)).decoded.label == "ch4" # the same handler
+    withInstance(ctx, Meter, m):
+      check m.reads.load == 2
+    meterDestroy(ctx)
+
+  test "[IFC-0162] a failure leaves the owner and every output as the caller set them":
+    let ctx = newMeter(input())
+    let base = arenaBlocks()
+    let failed = typedRead(linked, ctx, 13)
+    check failed.code == ecModule and failed.untouched
+    check failed.message == "channel 13 is broken"
+    let invalid = typedRead(linked, ctx, 14) # label outside 1..64 bytes
+    check invalid.code == ecModule and invalid.untouched
+    let bogus = typedRead(linked, ctx, 16) # a failure with code OK
+    check bogus.code == ecModule and bogus.untouched
+    check arenaBlocks() == base
+    meterDestroy(ctx)
+
+  test "[IFC-0045] [IFC-0141] [IFC-0650] [IFC-0689] the primary and the implemented interface's methods; an empty response's empty owner":
+    let ctx = newInstance(sensorInit)
+    let conf = typedConfigure(linked, ctx, "sensor", 9)
+    check conf.status.isOk and not conf.owned
+    let wrong = typedConfigure(linked, ctx, "meter", 9) # the literal `kind`
+    check wrong.code == ecInvalidParams and wrong.untouched
+    let snap = typedSnapshot(linked, ctx)
+    check snap.status.isOk and not snap.owned
+    check snap.text == "count=1"
+    let viaDispatch = call(sensorDispatch, sensorFree, ctx, "snapshot", diag("{}"))
+    check viaDispatch.response == diag("{\"count\": 1}") # one instance behind both
+    withInstance(ctx, Sensor, sensor):
+      check sensor.limit.load == 9
+    sensorDestroy(ctx)
+    let shapes = newInstance(shapesInit)
+    let ping = typedPing(linked, shapes)
+    check ping.status.isOk and not ping.owned
+    withInstance(shapes, Shapes, s):
+      check s.pings.load == 1
+    shapesDestroy(shapes)
+
+  test "[IFC-0137] [IFC-0636] [IFC-0910] every C shape converts in both directions":
+    let ctx = newInstance(shapesInit)
+    let base = arenaBlocks()
+    let full = typedReflect(linked, ctx, rvFull)
+    check full.status.isOk and full.same and full.owned
+    check full.text == fullReflect
+    let deep = typedReflect(linked, ctx, rvDeep)
+    check deep.status.isOk and deep.same
+    check deep.text.count("left=") == 99 and "g=value:true" in deep.text
+    let absent = typedReflect(linked, ctx, rvAbsent)
+    check absent.status.isOk and absent.same
+    for part in [
+      " g=[5] ", " h=absent ", " q=absent ", " u={kids=[] tag=\"leaf\"} ",
+      " v=(true,absent) ",
+    ]:
+      check part in absent.text
+    let empty = typedReflect(linked, ctx, rvEmpty)
+    check empty.status.isOk and empty.same # empty outputs point to storage
+    for part in [" e=[] f=[] g=[3,4] ", " r=[] s=h'' t=[] u={kids=[] "]:
+      check part in empty.text
+    let numbers = typedReflect(linked, ctx, rvNumbers)
+    check numbers.status.isOk and numbers.same
+    for part in [
+      " b=-9223372036854775808 ", " g=value:18446744073709551615 ",
+      " m=-128 n=0 o=4294967295 p=0 ",
+    ]:
+      check part in numbers.text
+    for t in [full, deep, absent, empty, numbers]:
+      check t.text.endsWith(" empty=0/0")
+    check shapesCalls(ctx) == 5
+    check arenaBlocks() == base
+    shapesDestroy(ctx)
+
+  test "[IFC-0139] [IFC-0140] [IFC-0141] [IFC-0636] an input without a canonical value is INVALID_PARAMS and never reaches the handler":
+    let ctx = newInstance(shapesInit)
+    for v in [
+      rvNullText, rvBadKind, rvNullList, rvBadUtf8, rvLongName, rvWrongLiteral, rvCycle,
+      rvNullArray, rvNullBytes, rvNullRecursive, rvBadCode, rvNullStruct, rvTooDeep,
+      rvBadEntry,
+    ]:
+      let t = typedReflect(linked, ctx, v)
+      checkpoint $v & ": " & t.message
+      check t.code == ecInvalidParams and t.untouched
+    for v in [pvBadKind, pvNull, pvWrongTag]:
+      let t = typedPick(linked, ctx, v)
+      checkpoint $v & ": " & t.message
+      check t.code == ecInvalidParams and t.untouched
+    check shapesCalls(ctx) == 0
+    shapesDestroy(ctx)
+
+  test "[IFC-0925] [IFC-0926] [IFC-0927] [IFC-0928] [IFC-0929] the payload depth limit holds for typed inputs, on a thread with 1 MiB of stack [IMPL]":
+    ## The converters, like the dispatch codecs, recurse once per nesting
+    ## level: a provider entry at the limit needs up to 1 MiB of stack (I72).
+    let ctx = newInstance(shapesInit)
+    let base = arenaBlocks()
+    let deepest = typedReflectOnStack(linked, ctx, rvDeepest, 1 shl 20)
+    check deepest.status.isOk and deepest.same
+    check deepest.text.count("left=") == 1021
+    for v in [rvTooDeep, rvCycle]:
+      let t = typedReflectOnStack(linked, ctx, v, 1 shl 20)
+      check t.code == ecInvalidParams and t.untouched
+      check t.status.error.detail.isNone
+    check shapesCalls(ctx) == 1
+    check arenaBlocks() == base
+    shapesDestroy(ctx)
+
+  test "a handler's failure and a response outside its schema":
+    let ctx = newInstance(shapesInit)
+    let fails = typedReflect(linked, ctx, rvFails)
+    check fails.code == ecModule and fails.untouched and fails.message == "thirteen"
+    let bad = typedReflect(linked, ctx, rvBadResponse)
+    check bad.code == ecModule and bad.untouched
+    check shapesCalls(ctx) == 2
+    shapesDestroy(ctx)
+
+  test "a null module, owner or output is refused before the handler [IMPL]":
+    let ctx = newInstance(shapesInit)
+    for v in [rvNullOutput, rvNullOwner]:
+      let t = typedReflect(linked, ctx, v)
+      check t.code == ecModule and t.untouched
+    check typedPing(linked, nil).code == ecModule
+    check shapesCalls(ctx) == 0
+    withInstance(ctx, Shapes, s):
+      check s.pings.load == 0
+    shapesDestroy(ctx)
+
+  test "[IFC-0425] a choice-valued request and response, including a schema-defined miss":
+    let ctx = newInstance(shapesInit)
+    let byId = typedPick(linked, ctx, pvId)
+    check byId.status.isOk and byId.owned
+    check byId.text == "found=true entry=file{kind=\"file\" path=\"/id/5\"}"
+    let missing = typedPick(linked, ctx, pvMissing)
+    check missing.status.isOk and not missing.owned
+    check missing.text == "found=false"
+    let byName = typedPick(linked, ctx, pvName)
+    check byName.status.isOk
+    check byName.text ==
+      "found=true entry=dir{kind=\"dir\" path=\"/nm\" entries=[\"nm\",\"nm\"]}"
+    shapesDestroy(ctx)
+
+  test "[IFC-0162] an allocation failure anywhere in the response rolls it back":
+    let ctx = newInstance(shapesInit)
+    let base = arenaBlocks()
+    var n = 1
+    while n <= 500:
+      failArenaAllocation(n)
+      let t = typedReflect(linked, ctx, rvFull)
+      failArenaAllocation(0)
+      if t.status.isOk:
+        check t.same
+        break
+      checkpoint "allocation " & $n & ": " & t.message
+      check t.code == ecModule and t.untouched
+      check "out of memory" in t.message
+      check arenaBlocks() == base
+      inc n
+    check n > 20 and n <= 500 # every allocation of a full response failed once
+    check arenaBlocks() == base
+    shapesDestroy(ctx)
+
+  test "a text with U+0000 has no canonical C value":
+    var a: CallArena
+    check a.text("a\0b").isErr
+    check a.text("ab").isOk
+    a.release()
+
+  test "[IFC-0685] [IFC-0686] [IFC-0688] [IFC-0692] the owner keeps the response readable until cleared and frees only its own storage":
+    let ctx = newInstance(shapesInit)
+    let base = arenaBlocks()
+    let t = typedReflectCleared(linked, ctx)
+    check t.status.isOk and t.same
+    check t.text & " empty=0/0" == fullReflect
+    check arenaBlocks() == base
+    shapesDestroy(ctx)
+
+  test "[IFC-0694] distinct owners are released concurrently on threads other than the call's":
+    const owners = 40
+    let ctx = newInstance(shapesInit)
+    let base = arenaBlocks()
+    var held = newSeq[LogosResponseOwner](owners)
+    for i in 0 ..< owners:
+      let t =
+        typedReflect(linked, ctx, if i mod 2 == 0: rvFull else: rvDeep, keep = true)
+      check t.status.isOk
+      held[i] = t.owner
+    check arenaBlocks() > base
+
+    proc releaser(args: (ptr UncheckedArray[LogosResponseOwner], int)) {.thread.} =
+      for i in 0 ..< 10:
+        clear(args[0][args[1] * 10 + i])
+
+    var threads:
+      array[owners div 10, Thread[(ptr UncheckedArray[LogosResponseOwner], int)]]
+    let all = cast[ptr UncheckedArray[LogosResponseOwner]](addr held[0])
+    for k in 0 ..< threads.len:
+      createThread(threads[k], releaser, (all, k))
+    joinThreads(threads)
+    check arenaBlocks() == base
+    shapesDestroy(ctx)
+
+const typedRounds = 60
+
+var
+  sharedShapes: ptr LogosModuleContext
+  typedFailures: Atomic[int]
+
+proc typedWorker(id: int) {.thread.} =
+  for i in 0 ..< typedRounds:
+    let full = typedReflect(linked, sharedShapes, rvFull)
+    if not (full.status.isOk and full.same):
+      typedFailures += 1
+    let pick = typedPick(linked, sharedShapes, pvName)
+    if not pick.status.isOk or "\"/nm\"" notin pick.text:
+      typedFailures += 1
+    let bad = typedReflect(linked, sharedShapes, rvNullText)
+    if bad.code != ecInvalidParams or not bad.untouched:
+      typedFailures += 1
+    let channel = uint32(1000 + id * typedRounds + i)
+    let r = typedRead(linked, sharedMeter, channel)
+    if not r.status.isOk or
+        r.text != "label=\"ch" & $channel & "\" reading=(absent," & $(channel * 10) & ")":
+      typedFailures += 1
+
+suite "ifc.kit: typed calls on shared contexts (INTERFACE §2.7.1, §2.8) [IMPL]":
+  test "[IFC-0265] [IFC-0694] typed calls on one context from several threads at once":
+    sharedShapes = newInstance(shapesInit)
+    sharedMeter = newMeter(input())
+    let base = arenaBlocks()
+    var threads: array[workers, Thread[int]]
+    for i in 0 ..< workers:
+      createThread(threads[i], typedWorker, i)
+    joinThreads(threads)
+    check typedFailures.load == 0
+    check arenaBlocks() == base
+    check shapesCalls(sharedShapes) == workers * typedRounds * 2
+    shapesDestroy(sharedShapes)
+    meterDestroy(sharedMeter)
+
+# Layout --------------------------------------------------------------------------------------
+
+proc cCompiler(): string =
+  result = getEnv("CC")
+  for name in ["cc", "gcc", "clang"]:
+    if result.len == 0:
+      result = findExe(name)
+
+proc cExpr(key: string): string =
+  ## A layout fact's key (`T`, `T@align`, `T.m`, `T.m@size`) as a C expression.
+  if key.endsWith("@align"):
+    return "_Alignof(" & key[0 ..^ 7] & ")"
+  let dot = key.find('.')
+  if dot < 0:
+    return "sizeof(" & key & ")"
+  let (t, m) = (key[0 ..< dot], key[dot + 1 .. ^1])
+  if m.endsWith("@size"):
+    "sizeof(((" & t & "*)0)->" & m[0 ..^ 6] & ")"
+  else:
+    "offsetof(" & t & ", " & m & ")"
+
+proc cFacts(facts: seq[(string, int)]): Result[seq[string], string] =
+  ## Each fact as the C compiler computes it from the generated headers.
+  let cc = cCompiler()
+  if cc.len == 0:
+    return err("no C compiler on PATH")
+  let dir = "build" / "kit-layout"
+  createDir(dir)
+  var src =
+    "#include <stdio.h>\n#include <stddef.h>\n" &
+    "#include \"meter_module_types.h\"\n#include \"sensor_module_types.h\"\n" &
+    "#include \"shapes_module_types.h\"\nint main(void) {\n"
+  for (key, _) in facts:
+    src.add "  printf(\"" & key & " %zu\\n\", (size_t)" & cExpr(key) & ");\n"
+  src.add "  return 0;\n}\n"
+  let base = dir / "layout"
+  writeFile(base & ".c", src)
+  let exe = base & (when defined(windows): ".exe" else: "")
+  let generated = currentSourcePath().parentDir / "generated"
+  let (o, rc) = execCmdEx(
+    quoteShell(cc) & " -std=c17 -Wall -Werror -I " & quoteShell(generated) & " " &
+      quoteShell(base & ".c") & " -o " & quoteShell(exe)
+  )
+  if rc != 0:
+    return err(o)
+  let (run, rc2) = execCmdEx(quoteShell(exe))
+  if rc2 != 0:
+    return err(run)
+  ok(run.strip.splitLines)
+
+suite "ifc.kit: the converters' C layout (INTERFACE §2.3) [IMPL]":
+  test "[IFC-0934] every mirror's size, alignment and member offsets match the generated headers":
+    let facts =
+      commonMirrorLayout() & meterModuleLayout() & sensorModuleLayout() &
+      shapesModuleLayout()
+    check facts.len > 100
+    when deviceTarget:
+      skip()
+    else:
+      let got = cFacts(facts)
+      if got.isErr:
+        checkpoint got.error
+        fail()
+      else:
+        check got.get.len == facts.len
+        for i, (key, n) in facts:
+          if i < got.get.len and got.get[i] != key & " " & $n:
+            checkpoint "C: " & got.get[i] & "  Nim: " & key & " " & $n
+            fail()

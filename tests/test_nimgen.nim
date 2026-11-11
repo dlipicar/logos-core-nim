@@ -21,13 +21,18 @@ proc diag(s: string): seq[byte] =
 suite "ifc.nim-types: generated modules (D29)":
   test "the committed lcn-gen output is current (run `nimble regen` if not)":
     check generatedCommon().get == readFile(commonTypesPath)
+    check generatedCommonMirrors().get == readFile(commonMirrorsPath)
     for f in nimFixtures:
       checkpoint f.module
+      check f.generated.get == readFile(f.fixturePath)
+    for f in headerFixtures:
+      checkpoint f.header
       check f.generated.get == readFile(f.fixturePath)
 
   test "every generated module carries the provisional stamp of the pinned spec":
     let stamp = "PROVISIONAL (spec " & SpecRevision[0 .. 7] & ")"
     check stamp in readFile(commonTypesPath)
+    check stamp in readFile(commonMirrorsPath)
     for f in nimFixtures:
       check stamp in readFile(f.fixturePath)
 

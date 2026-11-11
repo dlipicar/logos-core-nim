@@ -98,28 +98,30 @@ default = "deferred:tier-4"
 "IFC-0602" = "deferred:tier-4"
 "IFC-0627" = "deferred:tier-4"
 "IFC-0628" = "deferred:tier-4"
-"IFC-0636" = "deferred:tier-4"
+"IFC-0636" = "claimed"
 "IFC-0904" = "deferred:tier-4"
-"IFC-0910" = "deferred:tier-4"
-# C values and C encoders/decoders: with the §2.4 bindings.
-"IFC-0137" = "deferred:tier-4"
-"IFC-0139" = "deferred:tier-4"
-"IFC-0140" = "deferred:tier-4"
+"IFC-0910" = "claimed"
+# C values and their converters: the module kit's typed provider functions
+# (part B, I72).
+"IFC-0137" = "claimed"
+"IFC-0139" = "claimed"
+"IFC-0140" = "claimed"
 # Round trips through the reverse mapper.
 "IFC-0366" = "deferred:tier-5"
 "IFC-0368" = "deferred:tier-5"
 "IFC-0381" = "deferred:tier-5"
 "IFC-0389" = "deferred:tier-5"
 "IFC-0393" = "deferred:tier-5"
-# §1.2, §1.3: the full ABI a module implements and the exported-symbol rule are
-# checked by the export-set gate, with the §2.4/§2.6 bindings.
-"IFC-0045" = "deferred:tier-4"
+# §1.2, §1.3: a kit module implements the full ABI for its primary and implemented
+# contracts (part B, I72); handwritten modules and the exported-symbol rule wait
+# for the export-set gate.
+"IFC-0045" = "claimed"
 "IFC-0046" = "deferred:tier-4"
 "IFC-0057" = "deferred:tier-4"
 # §1.4: a recommendation to contract authors on naming their namespace.
 "IFC-0071" = "out-of-scope:a recommendation to contract authors"
-# §4.6: the provider's C return code belongs to the §2.4 bindings.
-"IFC-0425" = "deferred:tier-4"
+# §4.6: a schema-defined outcome through a typed provider function (part B, I72).
+"IFC-0425" = "claimed"
 # §5.3: routes, access, dispatch and providers exist only with RUNTIME.
 "IFC-0537" = "deferred:tier-4"
 # What a failure may disclose depends on authorization (RUNTIME, tier 4).
@@ -205,8 +207,8 @@ default = "deferred:tier-4"
 "IFC-0674" = "claimed"
 # §2.6-§2.8 for a module built with lcn-gen's Nim module kit (I71): identity,
 # lifecycle and provider symbols, dispatch, publication, concurrency
-# (tests/test_kit.nim, tests/test_kit_dylib.nim). The typed `_CALL_` functions
-# (§2.4) and the Runtime's side of these rules stay tier 4.
+# (tests/test_kit.nim, tests/test_kit_dylib.nim). The Runtime's side of these
+# rules stays tier 4.
 "IFC-0194" = "claimed"
 "IFC-0195" = "claimed"
 "IFC-0196" = "claimed"
@@ -240,3 +242,18 @@ default = "deferred:tier-4"
 "IFC-0274" = "claimed"
 "IFC-0286" = "claimed"
 "IFC-0672" = "claimed"
+# §2.3, §2.4, §2.7.1: the module kit's typed provider functions (part B, I72):
+# C inputs converted and validated as dispatch does, complete outputs that one
+# arena owner holds, failures rolled back, owners released on any thread
+# (tests/test_kit.nim, tests/test_kit_dylib.nim, through a C harness). The ABI
+# caller's duties (§2.4 initialization, §2.7.1 clearing) come with the
+# generated call helpers (part C).
+"IFC-0162" = "claimed"
+"IFC-0648" = "claimed"
+"IFC-0650" = "claimed"
+"IFC-0685" = "claimed"
+"IFC-0686" = "claimed"
+"IFC-0688" = "claimed"
+"IFC-0689" = "claimed"
+"IFC-0692" = "claimed"
+"IFC-0694" = "claimed"

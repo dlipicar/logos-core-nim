@@ -44,5 +44,6 @@ task test_release, "Run every test suite under --mm:orc -d:release":
 task test_refc, "Run every test suite under --mm:refc":
   runSuites("--mm:refc", "refc")
 
-task regen, "Rewrite the committed lcn-gen Nim outputs (common types, test fixtures)":
+task regen,
+  "Rewrite the committed lcn-gen outputs (common types and mirrors, test fixtures)":
   exec "nim r --hints:off --outdir:build/tools tools/regen_nim.nim"

@@ -1,0 +1,94 @@
+; -- metadata --
+_module = "shapes_module"
+
+; Input for tests/generated/shapes_module_*: a module whose typed provider
+; functions (INTERFACE §2.4) carry every C shape lcn-gen's kit converts.
+
+shapes.blob = bstr .size (1..16)
+
+shapes.counter = uint32
+
+shapes.digest = bstr .size 4
+
+shapes.entry =
+  { kind: "file", path: tstr } /
+  { kind: "dir", path: tstr, entries: [* tstr] }
+
+shapes.leaf = "leaf"
+
+shapes.names = [* tstr .size (1..8)]
+
+shapes.pair = [shapes.tree, uint64]
+
+shapes.tree = {
+  ? left: shapes.tree,
+  kids: [* shapes.tree],
+  tag: shapes.leaf,
+  ? twin: shapes.pair,
+}
+
+shapes.value = uint64 / tstr / bool
+
+shapes.reflect_request = {
+  a: 7,
+  b: int64,
+  c: tstr,
+  d: bstr .size 32,
+  e: [* bstr .size 4],
+  f: [* [uint64, tstr]],
+  g: shapes.value / [uint64] / [uint64, uint64],
+  ? h: [uint64, bstr],
+  i: logos.schema_commitment,
+  j: [],
+  l: bstr .size 0,
+  m: int8,
+  n: uint16,
+  o: shapes.counter,
+  p: logos.error_code,
+  ? q: logos.error_detail,
+  r: shapes.names,
+  s: bstr,
+  t: [* shapes.entry],
+  u: shapes.tree,
+  v: { w: bool, ? x: tstr .size (1..8) },
+  y: shapes.blob,
+  z: shapes.digest,
+}
+
+shapes.reflect_response = {
+  a: 7,
+  b: int64,
+  c: tstr,
+  d: bstr .size 32,
+  e: [* bstr .size 4],
+  f: [* [uint64, tstr]],
+  g: shapes.value / [uint64] / [uint64, uint64],
+  ? h: [uint64, bstr],
+  i: logos.schema_commitment,
+  j: [],
+  l: bstr .size 0,
+  m: int8,
+  n: uint16,
+  o: shapes.counter,
+  p: logos.error_code,
+  ? q: logos.error_detail,
+  r: shapes.names,
+  s: bstr,
+  t: [* shapes.entry],
+  u: shapes.tree,
+  v: { w: bool, ? x: tstr .size (1..8) },
+  y: shapes.blob,
+  z: shapes.digest,
+}
+
+shapes.pick_request =
+  { by: "id", id: uint64 } /
+  { by: "name", name: tstr }
+
+shapes.pick_response =
+  { found: true, entry: shapes.entry } /
+  { found: false }
+
+shapes.ping_request = {}
+
+shapes.ping_response = {}

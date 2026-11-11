@@ -58,7 +58,7 @@ type
     module*: Opt[string]
       ## [SPEC INTERFACE §2] the module binding's runtime module name, if any
 
-  MemberRole = enum
+  MemberRole* = enum
     mrValue ## one value: a scalar, text string, literal or aggregate
     mrPresence ## `bool has_<field>`
     mrBytes ## an unbounded or ranged byte string's pointer
@@ -67,39 +67,42 @@ type
     mrCount ## its `<field>_count`
     mrArray ## a positive exact-size byte string, `uint8_t <field>[N]`
 
-  CMember = object
-    name: string ## the complete, escaped C identifier
-    raw: string ## the complete identifier before the escape (§2.1, §2.4)
-    role: MemberRole
-    byPointer: bool
+  CMember* = object
+    ## One member of a generated struct or choice union, or one flattened
+    ## member of a map-valued method half.
+    name*: string ## the complete, escaped C identifier
+    raw*: string ## the complete identifier before the escape (§2.1, §2.4)
+    role*: MemberRole
+    byPointer*: bool
       ## a value with a struct representation, which a method passes by
       ## pointer (§2.4 rule 10, §2.3), empty values included
-    element: string ## a list's element type (§2.4 rule 9)
-    ctype: string ## the type spelled before the name
-    arrayLen: uint64 ## > 0: `ctype name[N]`
-    target: string ## the aggregate embedded by value, if any
-    listTarget: string ## the aggregate a list member points into, if any
-    recursive: bool ## a recursive by-value edge: `const ctype* name`
+    element*: string ## a list's element type (§2.4 rule 9)
+    ctype*: string ## the type spelled before the name
+    arrayLen*: uint64 ## > 0: `ctype name[N]`
+    target*: string ## the aggregate embedded by value, if any
+    listTarget*: string ## the aggregate a list member points into, if any
+    recursive*: bool ## a recursive by-value edge: `const ctype* name`
 
-  DefKind = enum
+  DefKind* = enum
     dAlias
     dStruct
     dChoice
 
-  CDef = object
-    key: string ## the qualified name; `<owner>#<path>` for an inline type
-    doc: int ## the document whose group declares it
-    typeName: string
-    needs: seq[string] ## defs whose typedef names an alias spells
-    forward: bool
-    case kind: DefKind
+  CDef* = object
+    key*: string ## the qualified name; `<owner>#<path>` for an inline type
+    doc*: int ## the document whose group declares it
+    typeName*: string
+    needs*: seq[string] ## defs whose typedef names an alias spells
+    forward*: bool
+    case kind*: DefKind
     of dAlias:
-      aliased: string
+      aliased*: string
     of dStruct, dChoice:
-      tag: string
-      members: seq[CMember] ## struct members, or the union's arms
-      kindName: string ## a choice's discriminant typedef
-      cases: seq[(string, uint64)] ## a choice's arm constants, by value
+      tag*: string
+      members*: seq[CMember] ## struct members, or the union's arms
+      kindName*: string ## a choice's discriminant typedef
+      cases*: seq[(string, uint64)] ## a choice's arm constants, by value
+      caseArms*: seq[int] ## the canonical arm index of each case
 
   DocView = object
     model: SchemaModel
@@ -579,6 +582,7 @@ proc choiceDef(
   let (symbolic, steps) = g.armSteps(o.doc, n)
   let order = discriminantOrder(symbolic, steps)
   var cases: seq[(string, uint64)]
+  var caseArms: seq[int]
   var arms: seq[CMember]
   for value, i in order:
     let a = n.arms[i]
@@ -588,6 +592,7 @@ proc choiceDef(
       else:
         ("_AR" & steps[i], "_CASE" & steps[i], "arm_" & steps[i])
     cases.add(("LOGOS_ARM_" & stem & constant, uint64(value)))
+    caseArms.add(i)
     if a.kind == snLiteral:
       g.literalMacro(o, path & step, a.literal)
     else:
@@ -602,6 +607,7 @@ proc choiceDef(
       members: arms,
       kindName: "logos_" & stem & "_KIND_t",
       cases: cases,
+      caseArms: caseArms,
     )
   )
 
@@ -1221,14 +1227,34 @@ func rootMacros(cns: string, root: Digest): seq[(string, string)] =
     ms.add(("LOGOS_DOCUMENT_" & cns & "_ROOT_" & $i, h & "ULL"))
   ms
 
-type Generated = object
-  docs: seq[CDocument]
-  cns: seq[string]
-  constraints: seq[string]
-  groups: seq[DocGroup]
-  module: seq[(string, string)]
-  symbols: seq[string]
-    ## a module binding's provider functions and module symbols (§2.4, §2.6)
+type
+  CProviderCall* = object
+    ## [SPEC INTERFACE §2.4] One concrete provider function of a module binding.
+    symbol*: string ## `logos_<module-C>_CALL_<namespace>_<Method>`
+    methodName*: string ## the qualified method declaration
+    request*, response*: string ## its qualified request and response halves
+
+  CLayout* = object
+    ## [IMPL] The C representation of an accepted set or module binding, or of
+    ## the pinned common schema, for generators that bind to the headers (the
+    ## module kit's typed provider functions).
+    defs*: Table[string, CDef]
+      ## every generated aggregate and typedef, by `CDef.key`; for a contract
+      ## set, not the common schema's (see `commonLayout`)
+    halves*: Table[string, seq[CMember]]
+      ## a map-valued method half's flattened members, by its qualified name
+    constraints*: seq[string] ## the constraint typedefs the header declares, sorted
+    calls*: seq[CProviderCall] ## a module binding's provider functions (§2.4)
+
+  Generated = object
+    layout: CLayout
+    docs: seq[CDocument]
+    cns: seq[string]
+    constraints: seq[string]
+    groups: seq[DocGroup]
+    module: seq[(string, string)]
+    symbols: seq[string]
+      ## a module binding's provider functions and module symbols (§2.4, §2.6)
 
 proc generate(s: CSchemaSet): Result[Generated, string] =
   var views: seq[DocView]
@@ -1268,6 +1294,7 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
   # module symbols (§2.6). A provider contract declares a method or an event.
   var fns = newSeq[seq[(string, string)]](docs.len)
   var symbols: seq[(string, string)]
+  var calls: seq[CProviderCall]
   var provider = false
   let moduleC = projectModule(s.module.get(""))
   let exposed = (if s.primary.isSome: 1 else: 0) + s.interfaces.len
@@ -1277,6 +1304,14 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
         fns[i].add((g.fnTypedefName(i, d), g.fnTypedef(i, d)))
         if s.module.isSome and i < exposed:
           symbols.add((g.callName(i, d, moduleC), g.callDeclaration(i, d, moduleC)))
+          calls.add(
+            CProviderCall(
+              symbol: g.callName(i, d, moduleC),
+              methodName: d.name,
+              request: d.request,
+              response: d.response,
+            )
+          )
       if d.kind in {dkMethod, dkEvent} and i < exposed:
         provider = true
   if s.module.isSome:
@@ -1322,7 +1357,22 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
   for name in toSeq(g.constraints.keys).sorted:
     if name notin common.constraints:
       res.constraints.add(g.constraints.at(name))
+      res.layout.constraints.add(name)
+  res.layout.defs = g.defs
+  res.layout.halves = g.halves
+  res.layout.calls = calls
   ok(res)
+
+proc cLayout*(s: CSchemaSet): Result[CLayout, string] =
+  ## [IMPL] The C representation `contractHeader` declares for `s`; the same
+  ## errors.
+  ok((?generate(s)).layout)
+
+proc commonLayout*(): CLayout =
+  ## [IMPL] The C representation of the pinned common schema's named types,
+  ## which `logos_types.h` declares (§5.2).
+  let g = commonGen()
+  CLayout(defs: g.defs, constraints: toSeq(g.constraints.keys).sorted)
 
 proc cDeclarations*(s: CSchemaSet): Result[seq[string], string] =
   ## [SPEC INTERFACE §2, §2.1-§2.3, §2.5] The canonical C type declarations and

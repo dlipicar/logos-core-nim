@@ -10,15 +10,16 @@
 ##   proc `configure`(m: T, request: SensorNSControlConfigureRequest): Result[SensorNSControlConfigureResponse, InvocationFailure]
 ##   proc `snapshot`(m: T, request: MetricsProviderSnapshotRequest): Result[MetricsProviderSnapshotResponse, InvocationFailure]
 ##
-## Not generated yet: the typed `_CALL_` provider functions (INTERFACE §2.4).
+## The template also exports the typed provider functions (INTERFACE §2.4),
+## which call the same handlers.
 
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ../../src/logos_core/codegen/kitrt
+import ../../src/logos_core/codegen/[kitrt, common_mirrors]
 import ./sensor_module_types
 
-export kitrt, sensor_module_types
+export kitrt, common_mirrors, sensor_module_types
 
 const
   moduleName* = "sensor_module"
@@ -113,6 +114,12 @@ perThread(
   loadValidator(primaryDocument, interfaceDocuments, supportingDocuments, false),
 )
 
+perThread(
+  kitSchema,
+  GeneratedSchema,
+  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, false),
+)
+
 proc routeSensorModule[T](instance: T, bare: string, params: openArray[byte]): Result[seq[byte], InvocationFailure] =
   mixin `configure`, `snapshot`
   let request = ?kitValidator().checkedRequest(bare, params)
@@ -124,6 +131,100 @@ proc routeSensorModule[T](instance: T, bare: string, params: openArray[byte]): R
     return encodedResponse(encode(response))
   discard request
   err(failure(ecMethodNotFound, "unknown method " & bare))
+
+type
+  logos_metrics_types_Counter_t* = uint64
+
+  logos_sensor_NS_control_Settings_t* = object ## `logos_sensor_NS_control_Settings_MAP`
+    m0*: cstring ## kind
+    m1*: logos_metrics_types_Counter_t ## limit
+
+proc cOut_logos_sensor_NS_control_Settings_t*(a: var CallArena, v: CborValue, dst: var logos_sensor_NS_control_Settings_t, depth: int): Result[void, string]
+proc cIn_logos_sensor_NS_control_Settings_t*(src: logos_sensor_NS_control_Settings_t, depth: int): Result[CborValue, string]
+
+proc cOut_logos_sensor_NS_control_Settings_t*(a: var CallArena, v: CborValue, dst: var logos_sensor_NS_control_Settings_t, depth: int): Result[void, string] =
+  ?depthCheck(depth)
+  let f1 = v.lookup("kind").get
+  dst.m0 = ?a.text(f1.text)
+  let f2 = v.lookup("limit").get
+  dst.m1 = logos_metrics_types_Counter_t(f2.uint)
+  ok()
+
+proc cIn_logos_sensor_NS_control_Settings_t*(src: logos_sensor_NS_control_Settings_t, depth: int): Result[CborValue, string] =
+  ?depthCheck(depth)
+  var e: seq[CborEntry]
+  e.add((cbor("kind"), ?inText(src.m0)))
+  e.add((cbor("limit"), cbor(uint64(src.m1))))
+  ok(cborMap(e))
+
+proc kitRequest0(p2: ptr logos_sensor_NS_control_Settings_t): Result[seq[byte], string] =
+  ## `sensor.control.configure`'s request params from its typed inputs.
+  let depth {.used.} = 1
+  var e: seq[CborEntry]
+  e.add((cbor("settings"), ?cIn_logos_sensor_NS_control_Settings_t((?present(p2))[], depth + 1)))
+  ok(encodeCbor(cborMap(e)))
+
+proc kitCall0[T](p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: ptr logos_sensor_NS_control_Settings_t): LogosResult =
+  ## `logos_sensor_module_CALL_sensor_NS_control_Configure` (INTERFACE §2.4): `sensor.control.configure`.
+  mixin `configure`
+  if p0 == nil or p1 == nil:
+    return failureResult(moduleError("a null module, response owner or output"))
+  let params = kitRequest0(p2).valueOr:
+    return failureResult(failure(ecInvalidParams, error))
+  let request = kitValidator().checkedRequest("configure", params).valueOr:
+    return failureResult(error)
+  let instance {.cursor.} = cast[T](instanceOf(p0))
+  let response = `configure`(instance, fromChecked(SensorNSControlConfigureRequest, request)).valueOr:
+    return failureResult(error)
+  let v = toCbor(response)
+  kitSchema().check("sensor.control.configure_response", v).isOkOr:
+    return failureResult(moduleError("the response does not match its schema: " & error))
+  p1[] = LogosResponseOwner()
+  okResult()
+
+proc kitRequest1(): Result[seq[byte], string] =
+  ## `metrics_provider.snapshot`'s request params: the empty map.
+  ok(encodeCbor(cborMap()))
+
+proc kitRespond1(a: var CallArena, v: CborValue, o2: var uint64): Result[void, string] =
+  ## `metrics_provider.snapshot`'s outputs from its checked response.
+  let depth {.used.} = 1
+  let f3 = v.lookup("count").get
+  o2 = uint64(f3.uint)
+  ok()
+
+proc kitCall1[T](p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: ptr uint64): LogosResult =
+  ## `logos_sensor_module_CALL_metrics_provider_Snapshot` (INTERFACE §2.4): `metrics_provider.snapshot`.
+  mixin `snapshot`
+  if p0 == nil or p1 == nil or p2 == nil:
+    return failureResult(moduleError("a null module, response owner or output"))
+  let params = kitRequest1().valueOr:
+    return failureResult(failure(ecInvalidParams, error))
+  let request = kitValidator().checkedRequest("snapshot", params).valueOr:
+    return failureResult(error)
+  let instance {.cursor.} = cast[T](instanceOf(p0))
+  let response = `snapshot`(instance, fromChecked(MetricsProviderSnapshotRequest, request)).valueOr:
+    return failureResult(error)
+  let v = toCbor(response)
+  kitSchema().check("metrics_provider.snapshot_response", v).isOkOr:
+    return failureResult(moduleError("the response does not match its schema: " & error))
+  var arena: CallArena
+  var o2: uint64
+  kitRespond1(arena, v, o2).isOkOr:
+    arena.release()
+    return failureResult(moduleError("the response has no canonical C value: " & error))
+  p2[] = o2
+  p1[] = arena.owner
+  okResult()
+
+proc sensorModuleLayout*(): seq[(string, int)] =
+  ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).
+  @[
+    ("logos_sensor_NS_control_Settings_t", sizeof(logos_sensor_NS_control_Settings_t)),
+    ("logos_sensor_NS_control_Settings_t@align", alignof(logos_sensor_NS_control_Settings_t)),
+    ("logos_sensor_NS_control_Settings_t.kind", offsetOf(logos_sensor_NS_control_Settings_t, m0)),
+    ("logos_sensor_NS_control_Settings_t.limit", offsetOf(logos_sensor_NS_control_Settings_t, m1)),
+  ]
 
 template exportSensorModule*(T: typedesc) =
   ## Defines `sensor_module`'s exported symbols over the handlers of `T`.
@@ -170,3 +271,11 @@ template exportSensorModule*(T: typedesc) =
   proc sensorModuleKitDispatch(module: ptr LogosModuleContext, methodName: cstring, paramsCbor: ptr UncheckedArray[uint8], paramsLen: csize_t, outResponseCbor: ptr ptr UncheckedArray[uint8], outResponseLen: ptr csize_t): LogosResult {.exportc: "logos_sensor_module_MODULE_dispatch", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     kitDispatch(module, methodName, paramsCbor, paramsLen, outResponseCbor, outResponseLen, sensorModuleKitRoute)
+
+  proc sensorModuleKitCall0(p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: ptr logos_sensor_NS_control_Settings_t): LogosResult {.exportc: "logos_sensor_module_CALL_sensor_NS_control_Configure", dynlib, cdecl, gcsafe, raises: [].} =
+    kitEnter()
+    kitCall0[T](p0, p1, p2)
+
+  proc sensorModuleKitCall1(p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: ptr uint64): LogosResult {.exportc: "logos_sensor_module_CALL_metrics_provider_Snapshot", dynlib, cdecl, gcsafe, raises: [].} =
+    kitEnter()
+    kitCall1[T](p0, p1, p2)
