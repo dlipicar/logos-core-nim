@@ -1057,6 +1057,32 @@ func callDeclaration(g: Gen, doc: int, m: Declaration, moduleC: string): string 
   "logos_result_t " & g.callName(doc, m, moduleC) & renderParams(g.methodParams(doc, m)) &
     ";"
 
+func helperDeclarations(g: Gen, doc: int, m: Declaration): (string, string) =
+  ## [SPEC INTERFACE §2.7.2, App A.5] [IMPL] The typed call helper over a route
+  ## handle and its cleanup helper, named `lcn_invoke_<namespace>_<Method>` and
+  ## `lcn_clear_<namespace>_<Method>`: derived helpers (§2.1), outside the
+  ## `logos_` names a module may export (IFC-0057), and as unique as the method
+  ## typedefs.
+  ## Each comes with a function-pointer typedef, `lcn_invoke_<…>_fn` and
+  ## `lcn_clear_<…>_fn`, as `_FN_t` types a provider function.
+  let c = g.methodComponent(doc, m)
+  let outs = g.halfParams(doc, m.response, false)
+  let invoke = renderParams(
+    @[
+      CParam(ctype: "logos_route_handle_t*", name: "route"),
+      CParam(ctype: "logos_response_owner_t*", name: "response_owner"),
+    ] & g.halfParams(doc, m.request, true) & outs
+  )
+  let clear = renderParams(
+    @[CParam(ctype: "logos_response_owner_t*", name: "response_owner")] & outs
+  )
+  (
+    "typedef logos_result_t (*lcn_invoke_" & c & "_fn)" & invoke & ";\n\n" &
+      "logos_result_t lcn_invoke_" & c & invoke & ";",
+    "typedef void (*lcn_clear_" & c & "_fn)" & clear & ";\n\n" & "void lcn_clear_" & c &
+      clear & ";",
+  )
+
 func moduleSymbols(moduleC: string, provider: bool): seq[(string, string)] =
   ## [SPEC INTERFACE §2.6] (name, declaration) of the identity and lifecycle
   ## symbols and, for a provider, the call-surface, free and dispatch symbols.
@@ -1234,6 +1260,14 @@ type
     methodName*: string ## the qualified method declaration
     request*, response*: string ## its qualified request and response halves
 
+  CMethod* = object
+    ## [SPEC INTERFACE §1.4, §2.1] One method of a contract the set exposes (the
+    ## primary document and the implemented interfaces).
+    component*: string ## `<namespace>_<Method>` (§2.1)
+    methodName*: string ## the qualified method declaration
+    bare*: string ## the method-name string a route `call` takes
+    request*, response*: string ## its qualified request and response halves
+
   CLayout* = object
     ## [IMPL] The C representation of an accepted set or module binding, or of
     ## the pinned common schema, for generators that bind to the headers (the
@@ -1245,6 +1279,9 @@ type
       ## a map-valued method half's flattened members, by its qualified name
     constraints*: seq[string] ## the constraint typedefs the header declares, sorted
     calls*: seq[CProviderCall] ## a module binding's provider functions (§2.4)
+    methods*: seq[CMethod]
+      ## every method of the exposed contracts, in document and declaration
+      ## order (the typed call helpers)
 
   Generated = object
     layout: CLayout
@@ -1255,6 +1292,7 @@ type
     module: seq[(string, string)]
     symbols: seq[string]
       ## a module binding's provider functions and module symbols (§2.4, §2.6)
+    helpers: seq[(string, string)] ## (invoke, clear) per exposed method
 
 proc generate(s: CSchemaSet): Result[Generated, string] =
   var views: seq[DocView]
@@ -1295,6 +1333,8 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
   var fns = newSeq[seq[(string, string)]](docs.len)
   var symbols: seq[(string, string)]
   var calls: seq[CProviderCall]
+  var methods: seq[CMethod]
+  var helpers: seq[(string, string)]
   var provider = false
   let moduleC = projectModule(s.module.get(""))
   let exposed = (if s.primary.isSome: 1 else: 0) + s.interfaces.len
@@ -1302,6 +1342,17 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
     for d in views[i].model.declarations:
       if d.kind == dkMethod:
         fns[i].add((g.fnTypedefName(i, d), g.fnTypedef(i, d)))
+        if i < exposed:
+          methods.add(
+            CMethod(
+              component: g.methodComponent(i, d),
+              methodName: d.name,
+              bare: bareMethodName(d.name, views[i].model.namespace),
+              request: d.request,
+              response: d.response,
+            )
+          )
+          helpers.add(g.helperDeclarations(i, d))
         if s.module.isSome and i < exposed:
           symbols.add((g.callName(i, d, moduleC), g.callDeclaration(i, d, moduleC)))
           calls.add(
@@ -1344,7 +1395,9 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
           seen.at(id) & " (INTERFACE §2.1)"
       )
     seen[id] = origin
-  var res = Generated(docs: docs, module: module, symbols: symbols.mapIt(it[1]))
+  var res = Generated(
+    docs: docs, module: module, symbols: symbols.mapIt(it[1]), helpers: helpers
+  )
   res.groups = ?g.groups(consts)
   res.groups.setLen(docs.len)
   for i in 0 ..< docs.len:
@@ -1361,6 +1414,7 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
   res.layout.defs = g.defs
   res.layout.halves = g.halves
   res.layout.calls = calls
+  res.layout.methods = methods
   ok(res)
 
 proc cLayout*(s: CSchemaSet): Result[CLayout, string] =
@@ -1462,4 +1516,31 @@ proc contractHeader*(s: CSchemaSet): Result[string, string] =
     for d in gen.symbols:
       h.add("\n" & d & "\n")
   h.add("\n#ifdef __cplusplus\n}\n#endif\n")
+  ok(h)
+
+proc callsHeader*(s: CSchemaSet): Result[string, string] =
+  ## [SPEC INTERFACE §2.7.2, App A.1, A.5] [IMPL] `<stem>_calls.h`: the typed
+  ## call helpers and cleanup helpers of every method the set exposes, beside
+  ## `<stem>_types.h`, which it includes. A convenience header: it is not part
+  ## of the header set for schema reconstruction (§2.1).
+  let gen = ?generate(s)
+  if gen.helpers.len == 0:
+    return err("the set exposes no method")
+  let name = s.headerName
+  let guard = "LCN_" & name.toUpperAscii & "_CALLS_H"
+  var h =
+    "/* " & name & "_calls.h: generated by lcn-gen. " & ProvisionalStamp & ".\n" &
+    " * INTERFACE §2.7.2, App A.5: a typed call helper over a route handle and its\n" &
+    " * cleanup helper for each method of " & name & "_types.h's exposed contracts.\n" &
+    " * Derived helpers (§2.1), not part of the header set for schema\n" &
+    " * reconstruction; " & name & "_calls.nim implements them. Do not edit. */\n\n" &
+    "#ifndef " & guard & "\n#define " & guard & "\n\n#include \"" & name & "_types.h\"\n" &
+    "\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n"
+  for i, (invoke, clear) in gen.helpers:
+    let m = gen.layout.methods[i]
+    h.add(
+      "\n/* " & m.methodName & " (\"" & m.bare & "\"): " & m.request & " -> " &
+        m.response & " */\n" & invoke & "\n\n" & clear & "\n"
+    )
+  h.add("\n#ifdef __cplusplus\n}\n#endif\n\n#endif /* " & guard & " */\n")
   ok(h)

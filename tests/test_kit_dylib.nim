@@ -8,11 +8,16 @@
 ## runtime; here each library's runtime starts in a load-time constructor, as a
 ## module's does in a Runtime. The libraries are built when the suite starts,
 ## with this build's memory manager and mode.
+##
+## A fourth library exports the modules' typed call helpers (§2.7.2, App A.5),
+## which this host calls through route handles bound directly to the module
+## libraries (`support/testroute`): caller, helpers and provider then each run
+## on a Nim runtime of their own.
 
 import std/[dynlib, os, osproc, strutils, typedthreads]
 import unittest2
 import ../src/logos_core/iface/[accept, provider]
-import ./support/[kitruntime, specdata, typedharness]
+import ./support/[kitruntime, specdata, testroute, typedharness]
 import ./generated/[meter_module_types, sensor_module_types]
 
 const
@@ -105,6 +110,35 @@ let typed = ThFns(
   shapesPick: shapes.typedSymbol("logos_shapes_module_CALL_shapes_Pick"),
   shapesPing: shapes.typedSymbol("logos_shapes_module_CALL_shapes_Ping"),
 )
+
+let helpers = block:
+  ## The call helpers the helper library exports, in the harness's slots.
+  let lib = loadLib(build("calls_lib.nim", "kitcalls"))
+  doAssert lib != nil, "dlopen failed: kitcalls"
+  proc helper(name: string): pointer =
+    result = lib.symAddr(cstring(name))
+    doAssert result != nil, "missing symbol " & name
+
+  throughHelpers(
+    ThHelpers(
+      meterRead: helper("lcn_invoke_meter_Read"),
+      sensorConfigure: helper("lcn_invoke_sensor_NS_control_Configure"),
+      sensorSnapshot: helper("lcn_invoke_metrics_provider_Snapshot"),
+      shapesReflect: helper("lcn_invoke_shapes_Reflect"),
+      shapesPick: helper("lcn_invoke_shapes_Pick"),
+      shapesPing: helper("lcn_invoke_shapes_Ping"),
+      meterReadClear: helper("lcn_clear_meter_Read"),
+      sensorConfigureClear: helper("lcn_clear_sensor_NS_control_Configure"),
+      sensorSnapshotClear: helper("lcn_clear_metrics_provider_Snapshot"),
+      shapesReflectClear: helper("lcn_clear_shapes_Reflect"),
+      shapesPickClear: helper("lcn_clear_shapes_Pick"),
+      shapesPingClear: helper("lcn_clear_shapes_Ping"),
+    )
+  )
+
+proc routeTo(lib: Library, ctx: ptr LogosModuleContext): ptr TestRoute =
+  ## A route bound directly to a module library's instance.
+  newRoute(rmDirect, ctx, lib.dispatch, lib.free)
 
 proc start(lib: Library, publish = true): ptr LogosModuleContext {.gcsafe.} =
   var i = input(publish = publish)
@@ -285,4 +319,98 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
     check deepest.status.isOk and deepest.same
     let tooDeep = typedReflectOnStack(typed, ctx, rvTooDeep, 1 shl 20)
     check tooDeep.code == ecInvalidParams and tooDeep.untouched
+    shapes.destroy(ctx)
+
+  test "[IFC-0699] [IFC-0702] [IFC-0706] typed call helpers from a library of their own, through routes into the module libraries":
+    let m = meter.start()
+    let rm = meter.routeTo(m)
+    let r4 = typedRead(helpers, rm.asModule, 4)
+    check r4.status.isOk and r4.owned
+    check r4.text == "label=\"ch4\" reading=(absent,40)"
+    let r13 = typedRead(helpers, rm.asModule, 13)
+    check r13.code == ecModule and r13.untouched
+    check r13.message == "channel 13 is broken"
+    let cleared = typedClear(helpers, rm.asModule, ccRead)
+    check cleared.status.isOk and cleared.untouched and cleared.same
+    check not rm.outstanding and rm.counts == (3, 2, 0)
+    rm.dispose()
+    meter.destroy(m)
+    let s = sensor.start(publish = false)
+    let rs = sensor.routeTo(s)
+    check typedConfigure(helpers, rs.asModule, "sensor", 3).status.isOk
+    check typedSnapshot(helpers, rs.asModule).text == "count=1"
+    rs.dispose()
+    sensor.destroy(s)
+    let sh = shapes.start(publish = false)
+    let r = shapes.routeTo(sh)
+    for v in [rvFull, rvAbsent, rvEmpty, rvNumbers, rvDeep]:
+      let t = typedReflect(helpers, r.asModule, v)
+      checkpoint $v & ": " & t.message
+      check t.status.isOk and t.same
+    for v in [rvNullText, rvBadKind, rvCycle, rvNullRecursive, rvTooDeep, rvBadUtf8]:
+      let t = typedReflect(helpers, r.asModule, v)
+      checkpoint $v & ": " & t.message
+      check t.code == ecInvalidParams and t.untouched
+    check typedPick(helpers, r.asModule, pvName).text ==
+      "found=true entry=dir{kind=\"dir\" path=\"/nm\" entries=[\"nm\",\"nm\"]}"
+    check typedPing(helpers, r.asModule).status.isOk
+    check typedReflectCleared(helpers, r.asModule).same
+    for which in [ccReflect, ccPick, ccPing]:
+      let t = typedClear(helpers, r.asModule, which)
+      checkpoint $which & ": " & t.message
+      check t.status.isOk and t.untouched and t.same and not t.owned
+    let (calls, releases, mismatches) = r.counts
+    check calls == releases and mismatches == 0 and not r.outstanding
+    r.dispose()
+    shapes.destroy(sh)
+
+  test "[IFC-0265] [IFC-0702] [IFC-0706] call helpers from threads none of the three runtimes has seen; owners cleared on others":
+    const
+      workers = 4
+      rounds = 40
+    var failures: Atomic[int]
+    var held: array[workers * rounds, LogosResponseOwner]
+
+    proc caller(
+        args: (ptr TestRoute, ptr Atomic[int], ptr LogosResponseOwner, int)
+    ) {.thread.} =
+      let (route, failures, owners, id) = args
+      let owned = cast[ptr UncheckedArray[LogosResponseOwner]](owners)
+      for k in 0 ..< rounds:
+        let t = typedReflect(helpers, route.asModule, rvFull, keep = true)
+        if not (t.status.isOk and t.same and t.owned):
+          failures[] += 1
+        owned[id * rounds + k] = t.owner
+        let c = typedClear(helpers, route.asModule, ccPick)
+        if not (c.status.isOk and c.untouched and c.same):
+          failures[] += 1
+        let bad = typedReflect(helpers, route.asModule, rvBadUtf8)
+        if bad.code != ecInvalidParams or not bad.untouched:
+          failures[] += 1
+
+    proc clearer(args: (ptr LogosResponseOwner, int)) {.thread.} =
+      let owned = cast[ptr UncheckedArray[LogosResponseOwner]](args[0])
+      for k in 0 ..< rounds:
+        clear(owned[args[1] * rounds + k])
+
+    let ctx = shapes.start(publish = false)
+    var routes: array[workers, ptr TestRoute] # one per caller (§2.8)
+    var threads: array[
+      workers, Thread[(ptr TestRoute, ptr Atomic[int], ptr LogosResponseOwner, int)]
+    ]
+    for i in 0 ..< workers:
+      routes[i] = shapes.routeTo(ctx)
+      createThread(threads[i], caller, (routes[i], addr failures, addr held[0], i))
+    joinThreads(threads)
+    check failures.load == 0
+    var clearers: array[workers, Thread[(ptr LogosResponseOwner, int)]]
+    for i in 0 ..< workers:
+      # each clears another caller's owners
+      createThread(clearers[i], clearer, (addr held[0], (i + 1) mod workers))
+    joinThreads(clearers)
+    for o in held:
+      check ownerEmpty(o)
+    for r in routes:
+      check r.counts == (2 * rounds, 2 * rounds, 0) and not r.outstanding
+      r.dispose()
     shapes.destroy(ctx)

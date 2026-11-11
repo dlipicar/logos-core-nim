@@ -7,6 +7,7 @@
 ## that is not a valid status, 17 reads the caller and publishes in the
 ## invocation's scope; any other channel `c` reads `ch<c>` with value `10 c`.
 
+{.used.} # imported by the tests for the C symbols it exports
 import std/atomics
 import ../generated/meter_module_kit
 

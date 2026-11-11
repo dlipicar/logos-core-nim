@@ -9,6 +9,7 @@
 ##   the file `/id/<id>`, and a name is a directory listing that name twice.
 ## - `ping` counts its calls in `pings`, the others in `calls`.
 
+{.used.} # imported by the tests for the C symbols it exports
 import std/atomics
 import ../generated/shapes_module_kit
 

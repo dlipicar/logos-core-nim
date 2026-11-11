@@ -24,6 +24,8 @@ default = "deferred:tier-4"
 "§2.5" = "deferred:tier-4"
 "§2.6" = "deferred:tier-4"
 "§2.7" = "deferred:tier-4"
+# lcn-gen's typed call helpers and their cleanup helpers (part C, I73).
+"§2.7.2" = "claimed"
 "§2.8" = "deferred:tier-4"
 # The asynchronous call ABI and the protected invocation context.
 "§2.9" = "deferred:tier-4"
@@ -37,6 +39,9 @@ default = "deferred:tier-4"
 "§5.2" = "deferred:tier-4"
 "§5.3" = "claimed"
 "App A" = "deferred:tier-4"
+# Examples only, with implementation-defined names; lcn-gen's helpers follow
+# its shape as `lcn_invoke_` and `lcn_clear_` (part C, I73).
+"App A.5" = "informative"
 
 
 [units]
@@ -92,12 +97,13 @@ default = "deferred:tier-4"
 "IFC-0909" = "deferred:tier-5"
 "IFC-0917" = "deferred:tier-5"
 "IFC-0918" = "deferred:tier-5"
-# §2, §2.1, §2.3, §3.9: the ABI calling convention, typed helpers, C values and
-# the reverse direction of §3.9.8 come with the module kit and runtime.
+# §2, §2.1, §2.3, §3.9: the ABI calling convention, C values and the reverse
+# direction of §3.9.8 come with the module kit and runtime. The derived typed
+# call helpers stay outside the header set and identity (part C, I73).
 "IFC-0587" = "deferred:tier-4"
 "IFC-0602" = "deferred:tier-4"
-"IFC-0627" = "deferred:tier-4"
-"IFC-0628" = "deferred:tier-4"
+"IFC-0627" = "claimed"
+"IFC-0628" = "claimed"
 "IFC-0636" = "claimed"
 "IFC-0904" = "deferred:tier-4"
 "IFC-0910" = "claimed"
@@ -246,8 +252,9 @@ default = "deferred:tier-4"
 # C inputs converted and validated as dispatch does, complete outputs that one
 # arena owner holds, failures rolled back, owners released on any thread
 # (tests/test_kit.nim, tests/test_kit_dylib.nim, through a C harness). The ABI
-# caller's duties (§2.4 initialization, §2.7.1 clearing) come with the
-# generated call helpers (part C).
+# caller's duties toward a typed provider function (§2.4 initialization,
+# §2.7.1 clearing) are the Runtime's, tier 4; the generated call helpers (part
+# C) call through a route instead.
 "IFC-0162" = "claimed"
 "IFC-0648" = "claimed"
 "IFC-0650" = "claimed"
@@ -257,3 +264,10 @@ default = "deferred:tier-4"
 "IFC-0689" = "claimed"
 "IFC-0692" = "claimed"
 "IFC-0694" = "claimed"
+# §2.7, §5.2: lcn-gen's typed call helpers as a route's caller (part C, I73):
+# outputs initialized before `call`, the buffer released exactly once, the
+# message and detail kept per thread (tests/test_calls.nim,
+# tests/test_kit_dylib.nim). IFC-0490 is claimed above.
+"IFC-0260" = "claimed"
+"IFC-0489" = "claimed"
+"IFC-0491" = "claimed"

@@ -4,7 +4,7 @@
 ## call goes through the exported C functions; their results are checked with
 ## the ABI caller's own rules (`abi/checks`).
 
-import std/[algorithm, os, osproc, strutils, typedthreads]
+import std/[os, osproc, strutils, typedthreads]
 import unittest2
 import ../src/logos_core/cbor
 import ../src/logos_core/iface/[accept, provider]
@@ -370,28 +370,6 @@ suite "ifc.kit: concurrency (INTERFACE §2.7, §2.8) [IMPL]":
 
 var linked: ThFns
 thLinked(addr linked)
-
-proc hexOf(bytes: openArray[int]): string =
-  result = "h'"
-  for b in bytes:
-    result.add toHex(b, 2).toLowerAscii
-  result.add "'"
-
-proc byteRange(a, b: int): seq[int] =
-  for i in a .. b:
-    result.add i
-
-let fullReflect =
-  "a=7 b=-42 c=\"see\" d=" & hexOf(byteRange(0, 31)) &
-  " e=[h'01020304',h'05060708'] f=[(1,\"one\"),(2,\"two\")] g=value:\"gee\"" &
-  " h=(9,h'abcd') i=(\"logos.commitment-model.2026-10\"," &
-  "\"logos.hash-profile.2026-08.choice-index\",\"logos.hash-suite.blake3-256\"," &
-  hexOf(byteRange(0xE0, 0xFF).reversed) & ")" &
-  " m=-5 n=65535 o=42 p=6 q=h'5a' r=[\"ab\",\"cdefghij\"] s=h'00ff00'" &
-  " t=[file{kind=\"file\" path=\"/f\"},dir{kind=\"dir\" path=\"/d\" entries=[\"x\"]}]" &
-  " u={kids=[{kids=[] tag=\"leaf\"}] left={kids=[] tag=\"leaf\"} tag=\"leaf\"" &
-  " twin=({kids=[] tag=\"leaf\"},77)} v=(true,\"ex\") y=h'1011' z=h'09080706'" &
-  " empty=0/0"
 
 template shapesCalls(ctx: ptr LogosModuleContext): int =
   var n: int

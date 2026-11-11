@@ -6,7 +6,7 @@
 import std/[os, sequtils]
 import results
 import ../../src/logos_core/iface/[accept, cmap]
-import ../../src/logos_core/codegen/[cmirror, kitgen, nimgen]
+import ../../src/logos_core/codegen/[callsgen, cmirror, kitgen, nimgen]
 
 type NimFixture* = object
   module*: string ## the file under tests/generated/
@@ -14,6 +14,7 @@ type NimFixture* = object
   interfaces*, supporting*: seq[string]
   system*: bool
   kit*: bool ## the module kit (`kitgen`) rather than the types
+  calls*: bool ## the typed call helpers (`callsgen`) rather than the types
 
 const
   fixturePrefix* = "../../src/logos_core/"
@@ -51,6 +52,32 @@ const
       primary: "tests/kit/shapes_module.cddl",
       kit: true,
     ),
+    NimFixture(
+      module: "meter_module_calls.nim",
+      primary: "spec/mirrors/IFC/3.9.1.module.cddl",
+      calls: true,
+    ),
+    NimFixture(
+      module: "sensor_module_calls.nim",
+      primary: "spec/mirrors/IFC/3.9.2.module.cddl",
+      interfaces: @["spec/mirrors/IFC/3.9.2.interface.cddl"],
+      supporting: @["spec/mirrors/IFC/3.9.2.supporting.cddl"],
+      calls: true,
+    ),
+    NimFixture(
+      module: "shapes_module_calls.nim",
+      primary: "tests/kit/shapes_module.cddl",
+      calls: true,
+    ),
+    NimFixture(
+      module: "metrics_provider_types.nim",
+      primary: "spec/mirrors/IFC/3.9.2.interface.cddl",
+    ),
+    NimFixture(
+      module: "metrics_provider_calls.nim",
+      primary: "spec/mirrors/IFC/3.9.2.interface.cddl",
+      calls: true,
+    ),
   ]
 
 proc generated*(f: NimFixture): Result[string, string] =
@@ -64,6 +91,8 @@ proc generated*(f: NimFixture): Result[string, string] =
     )
     if f.kit:
       kitModule(set, KitOptions(importPrefix: fixturePrefix), f.system)
+    elif f.calls:
+      callsModule(set, CallsOptions(importPrefix: fixturePrefix), f.system)
     else:
       nimModule(set, NimOptions(importPrefix: fixturePrefix), f.system)
   except IOError as e:
@@ -73,6 +102,7 @@ type HeaderFixture* = object
   header*: string ## the file under tests/generated/
   primary*: string ## none: `logos_types.h`
   interfaces*, supporting*: seq[string]
+  calls*: bool ## the call helpers' header (`callsHeader`)
 
 const headerFixtures* = [
   HeaderFixture(header: "logos_types.h"),
@@ -88,6 +118,31 @@ const headerFixtures* = [
   HeaderFixture(
     header: "shapes_module_types.h", primary: "tests/kit/shapes_module.cddl"
   ),
+  HeaderFixture(
+    header: "metrics_provider_types.h", primary: "spec/mirrors/IFC/3.9.2.interface.cddl"
+  ),
+  HeaderFixture(
+    header: "meter_module_calls.h",
+    primary: "spec/mirrors/IFC/3.9.1.module.cddl",
+    calls: true,
+  ),
+  HeaderFixture(
+    header: "sensor_module_calls.h",
+    primary: "spec/mirrors/IFC/3.9.2.module.cddl",
+    interfaces: @["spec/mirrors/IFC/3.9.2.interface.cddl"],
+    supporting: @["spec/mirrors/IFC/3.9.2.supporting.cddl"],
+    calls: true,
+  ),
+  HeaderFixture(
+    header: "shapes_module_calls.h",
+    primary: "tests/kit/shapes_module.cddl",
+    calls: true,
+  ),
+  HeaderFixture(
+    header: "metrics_provider_calls.h",
+    primary: "spec/mirrors/IFC/3.9.2.interface.cddl",
+    calls: true,
+  ),
 ]
 
 proc generated*(f: HeaderFixture): Result[string, string] =
@@ -101,7 +156,10 @@ proc generated*(f: HeaderFixture): Result[string, string] =
       f.supporting.mapIt(readFile(it)),
       AcceptOptions(),
     )
-    contractHeader(set.cSchemaSet)
+    if f.calls:
+      callsHeader(set.cSchemaSet)
+    else:
+      contractHeader(set.cSchemaSet)
   except IOError as e:
     err(e.msg)
 

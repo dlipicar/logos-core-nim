@@ -15,7 +15,9 @@ The specs are being revised, so the work is ordered by how settled each area is
 - Tier 4, started: the Nim module kit. `lcn-gen kit` generates, for a module document, the exported identity,
   lifecycle and provider symbols (`_MODULE_name`, `_init`, `_destroy`, `_call_surface`, `_free`, `_dispatch`)
   over handlers the module author writes in Nim (I71), and the typed `_CALL_` provider functions with C
-  converters and arena response owners (I72). Typed call helpers come next.
+  converters and arena response owners (I72). `lcn-gen calls` generates, for a provider's set, typed call
+  helpers over a route handle: `invoke` for Nim callers, and `lcn_invoke_*` / `lcn_clear_*` with a C header
+  for C callers (INTERFACE §2.7.2, App A.5; I73).
 - Tier 3, without I/O: the TRANSPORT envelope, framing, Hello and route tickets, payload
   commitments, cancellation and multiplexing as codecs and state machines; and the Package Manager's
   package artifacts: the manifest and its commitment, package-signing trust input, COSE_Sign1, LGX
@@ -123,11 +125,11 @@ Evaluation fails while the JSON and `nimble.lock` disagree.
 | `src/logos_core/` | The library. BLAKE3 and slhdsa-c (FIPS 205) C sources are vendored under `crypto/blake3/` and `crypto/slhdsa/` (`tools/update-blake3.sh`, `tools/update-slhdsa.sh`). |
 | `src/logos_core/iface/` | INTERFACE: acceptance, names, the C type mapping, call surfaces and the provider call-surface descriptor, payloads, outcomes. |
 | `src/logos_core/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
-| `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`) and its C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
+| `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
 | `src/logos_core/transport/` | TRANSPORT without I/O: envelope codec, framing, Hello, tickets, sessions, the schema boundary. |
 | `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; catalog and inspection records (`records.nim`) and the sans-I/O dependency resolver (`resolver.nim`); the `lcn-pkg` CLI. |
 | `src/logos_core/crypto/slhdsa.nim`, `src/logos_core/base/nfc.nim` | SLH-DSA-SHA2-192s over slhdsa-c (pure and internal functions only); Unicode NFC for LGX paths. |
-| `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. `tests/generated/` is `lcn-gen` output; `tests/kit/` holds three modules written with the kit, which `test_kit_dylib` also builds as shared libraries, and the C harness that calls their typed functions. |
+| `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. `tests/generated/` is `lcn-gen` output; `tests/kit/` holds three modules written with the kit, which `test_kit_dylib` also builds as shared libraries, and the C harness that calls their typed functions directly or through the typed call helpers (`test_calls`). |
 | `spec/mirrors/`, `spec/mirrors.toml` | Verbatim copies of the spec blocks the code and tests are built from. |
 | `spec/pins.toml` | Every identifier, root and digest the specs pin, with the section it comes from. |
 | `conformance/` | Requirement ledger and per-section claims; see [docs/CONFORMANCE.md](docs/CONFORMANCE.md). |

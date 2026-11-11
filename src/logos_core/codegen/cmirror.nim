@@ -704,8 +704,13 @@ proc layoutRows(g: MGen): seq[string] =
 
 func layoutProc(name: string, rows: seq[string]): string =
   "proc " & name &
-    "*(): seq[(string, int)] =\n  ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).\n  @[\n" &
-    rows.mapIt("    " & it & ",").join("\n") & "\n  ]"
+    "*(): seq[(string, int)] =\n  ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).\n" &
+  (
+    if rows.len == 0:
+      "  @[]"
+    else:
+      "  @[\n" & rows.mapIt("    " & it & ",").join("\n") & "\n  ]"
+  )
 
 proc newMGen(docs: seq[MDoc], roots: seq[Digest]): MGen =
   var g = MGen(docs: docs)
@@ -772,11 +777,122 @@ proc paramTypes(m: CMember, input: bool): (string, string) =
   of mrPresence, mrBytes, mrLen, mrCount:
     (if input: (nimOf(m.ctype), "") else: ("ptr " & nimOf(m.ctype), nimOf(m.ctype)))
 
-proc kitMirrors*(
-    s: ContractSet, prefix: string, methods: seq[KitMethod]
-): Result[KitMirrors, string] =
-  ## [SPEC INTERFACE §2.4] The typed provider functions of the module binding
-  ## `s`, for `kitgen`; `prefix` starts the exported procs' Nim names.
+type MethodPieces = object
+  ## The parts of one method's typed signature that the kit's provider function
+  ## and the consumer's call helper share: everything after the state and owner
+  ## parameters (`p0`, `p1`), and the builders between them and CBOR.
+  params: seq[string] ## `p2: T`, … (inputs, then outputs)
+  ins, outs: seq[string] ## parameter names
+  staged: seq[(string, string)] ## (local, type) per output
+  builders: seq[string]
+    ## `<prefix>Request<k>` (typed inputs to params bytes) and, when the
+    ## response has outputs, `<prefix>Respond<k>` (checked response to the
+    ## staged outputs)
+
+proc findHalf(docs: seq[MDoc], name: string): (int, Declaration) =
+  for i, v in docs:
+    let d = v.model.find(name)
+    if d.isSome:
+      return (i, d.get)
+  (0, Declaration())
+
+proc methodPieces(
+    g: var MGen,
+    docs: seq[MDoc],
+    request, response, methodName: string,
+    k: int,
+    prefix: string,
+): MethodPieces =
+  ## [SPEC INTERFACE §2.4] One method's flattened parameters (`cmap.methodParams`
+  ## after its first two) and its builders, named `<prefix>Request<k>` and
+  ## `<prefix>Respond<k>`.
+  var r = MethodPieces()
+  var reqLines, resLines: seq[string]
+  var reqParams, resParams: seq[string]
+  template next(): string =
+    "p" & $(r.params.len + 2)
+
+  # The request.
+  let (rqDoc, rq) = findHalf(docs, request)
+  let rqOwner = Owner(doc: rqDoc, name: request)
+  if rq.body.kind == snChoice:
+    g.aggregate(rqOwner, @[], rq.body)
+    let t = g.defOf(rqDoc, request).typeName
+    let p = next()
+    r.params.add(p & ": ptr " & t)
+    reqParams.add(p & ": ptr " & t)
+    r.ins.add(p)
+    reqLines.line(2, "ok(encodeCbor(?cIn_" & t & "((?present(" & p & "))[], depth)))")
+  else:
+    let members = g.layout.halves.getOrDefault(request)
+    var srcs: seq[string]
+    for m in members:
+      let p = next()
+      let (pt, _) = paramTypes(m, true)
+      r.params.add(p & ": " & pt)
+      reqParams.add(p & ": " & pt)
+      r.ins.add(p)
+      srcs.add(
+        if m.role == mrArray or (m.role == mrValue and m.byPointer):
+          "(?present(" & p & "))[]"
+        else:
+          p
+      )
+    reqLines.line(2, "var e: seq[CborEntry]")
+    g.inMap(reqLines, 2, rqOwner, @[], rq.body, members, srcs, "e")
+    reqLines.line(2, "ok(encodeCbor(cborMap(e)))")
+  # The response.
+  let (rsDoc, rs) = findHalf(docs, response)
+  let rsOwner = Owner(doc: rsDoc, name: response)
+  if rs.body.kind == snChoice:
+    g.aggregate(rsOwner, @[], rs.body)
+    let t = g.defOf(rsDoc, response).typeName
+    let p = next()
+    let o = "o" & p[1 ..^ 1]
+    r.params.add(p & ": ptr " & t)
+    r.outs.add(p)
+    r.staged.add((o, t))
+    resParams.add(o & ": var " & t)
+    resLines.line(2, "?cOut_" & t & "(a, v, " & o & ", depth)")
+  else:
+    let members = g.layout.halves.getOrDefault(response)
+    var targets: seq[string]
+    for m in members:
+      let p = next()
+      let o = "o" & p[1 ..^ 1]
+      let (pt, st) = paramTypes(m, false)
+      r.params.add(p & ": " & pt)
+      r.outs.add(p)
+      r.staged.add((o, st))
+      resParams.add(o & ": var " & st)
+      targets.add(o)
+    g.outMap(resLines, 2, rsOwner, @[], rs.body, members, targets, "v")
+  resLines.line(2, "ok()")
+  # The builders.
+  let reqSig = "proc " & prefix & "Request" & $k & "("
+  if rq.body.kind != snChoice and g.layout.halves.getOrDefault(request).len == 0:
+    r.builders.add(
+      reqSig & "): Result[seq[byte], string] =\n  ## `" & methodName &
+        "`'s request params: the empty map.\n  ok(encodeCbor(cborMap()))"
+    )
+  else:
+    r.builders.add(
+      reqSig & reqParams.join(", ") & "): Result[seq[byte], string] =\n" & "  ## `" &
+        methodName & "`'s request params from its typed inputs.\n" &
+        "  let depth {.used.} = 1\n" & reqLines.join("\n")
+    )
+  if r.staged.len > 0:
+    r.builders.add(
+      "proc " & prefix & "Respond" & $k & "(a: var CallArena, v: CborValue, " &
+        resParams.join(", ") & "): Result[void, string] =\n  ## `" & methodName &
+        "`'s outputs from its checked response.\n  let depth {.used.} = 1\n" &
+        resLines.join("\n")
+    )
+  r
+
+proc setGen(s: ContractSet, schema: string): Result[(MGen, seq[MDoc]), string] =
+  ## A generator over the set's documents and the pinned common one, with every
+  ## declared aggregate's converters.
   let layout = ?cLayout(s.cSchemaSet)
   var docs: seq[MDoc]
   var roots: seq[Digest]
@@ -789,152 +905,16 @@ proc kitMirrors*(
   var g = newMGen(docs, roots)
   g.layout = layout
   g.common = commonLayout()
-  g.schema = "kitSchema()"
+  g.schema = schema
   g.declarations()
-  var byRequest: Table[string, KitMethod]
-  for m in methods:
-    byRequest[m.request] = m
-  var res = KitMirrors()
-  var callProcs: seq[string]
-  for k, call in layout.calls:
-    if call.request notin byRequest:
-      return err("no handler for " & call.methodName)
-    let km = byRequest.getOrDefault(call.request)
-    var params = @["p0: ptr LogosModuleContext", "p1: ptr LogosResponseOwner"]
-    var ins, outs: seq[string] # parameter names
-    var staged: seq[(string, string)] # (local, type) per output
-    var reqLines, resLines: seq[string]
-    var nonNull = @["p0", "p1"]
-    # The request.
-    let (rqDoc, rq) = block:
-      var found = (0, Declaration())
-      for i, v in docs:
-        let d = v.model.find(call.request)
-        if d.isSome:
-          found = (i, d.get)
-          break
-      found
-    let rqOwner = Owner(doc: rqDoc, name: call.request)
-    let reqSig = "proc kitRequest" & $k & "("
-    var reqParams: seq[string]
-    if rq.body.kind == snChoice:
-      g.aggregate(rqOwner, @[], rq.body)
-      let t = g.defOf(rqDoc, call.request).typeName
-      let p = "p" & $params.len
-      params.add(p & ": ptr " & t)
-      reqParams.add(p & ": ptr " & t)
-      ins.add(p)
-      reqLines.line(2, "ok(encodeCbor(?cIn_" & t & "((?present(" & p & "))[], depth)))")
-    else:
-      let members = layout.halves.getOrDefault(call.request)
-      var srcs: seq[string]
-      for m in members:
-        let p = "p" & $params.len
-        let (pt, _) = paramTypes(m, true)
-        params.add(p & ": " & pt)
-        reqParams.add(p & ": " & pt)
-        ins.add(p)
-        srcs.add(
-          if m.role == mrArray or (m.role == mrValue and m.byPointer):
-            "(?present(" & p & "))[]"
-          else:
-            p
-        )
-      reqLines.line(2, "var e: seq[CborEntry]")
-      g.inMap(reqLines, 2, rqOwner, @[], rq.body, members, srcs, "e")
-      reqLines.line(2, "ok(encodeCbor(cborMap(e)))")
-    # The response.
-    let (rsDoc, rs) = block:
-      var found = (0, Declaration())
-      for i, v in docs:
-        let d = v.model.find(call.response)
-        if d.isSome:
-          found = (i, d.get)
-          break
-      found
-    let rsOwner = Owner(doc: rsDoc, name: call.response)
-    var resParams: seq[string]
-    if rs.body.kind == snChoice:
-      g.aggregate(rsOwner, @[], rs.body)
-      let t = g.defOf(rsDoc, call.response).typeName
-      let p = "p" & $params.len
-      params.add(p & ": ptr " & t)
-      outs.add(p)
-      nonNull.add(p)
-      staged.add(("o" & $(params.len - 1), t))
-      resParams.add("o" & $(params.len - 1) & ": var " & t)
-      resLines.line(2, "?cOut_" & t & "(a, v, o" & $(params.len - 1) & ", depth)")
-    else:
-      let members = layout.halves.getOrDefault(call.response)
-      let first = params.len
-      for m in members:
-        let p = "p" & $params.len
-        let (pt, st) = paramTypes(m, false)
-        params.add(p & ": " & pt)
-        outs.add(p)
-        nonNull.add(p)
-        staged.add(("o" & $(params.len - 1), st))
-        resParams.add("o" & $(params.len - 1) & ": var " & st)
-      let targets = toSeq(0 ..< members.len).mapIt("o" & $(first + it))
-      g.outMap(resLines, 2, rsOwner, @[], rs.body, members, targets, "v")
-    resLines.line(2, "ok()")
-    # The builders.
-    var rb =
-      reqSig & reqParams.join(", ") & "): Result[seq[byte], string] =\n" & "  ## `" &
-      call.methodName & "`'s request params from its typed inputs.\n" &
-      "  let depth {.used.} = 1\n" & reqLines.join("\n")
-    if rq.body.kind != snChoice and layout.halves.getOrDefault(call.request).len == 0:
-      rb =
-        reqSig & "): Result[seq[byte], string] =\n  ## `" & call.methodName &
-        "`'s request params: the empty map.\n  ok(encodeCbor(cborMap()))"
-    callProcs.add(rb)
-    if staged.len > 0:
-      callProcs.add(
-        "proc kitRespond" & $k & "(a: var CallArena, v: CborValue, " &
-          resParams.join(", ") & "): Result[void, string] =\n  ## `" & call.methodName &
-          "`'s outputs from its checked response.\n  let depth {.used.} = 1\n" &
-          resLines.join("\n")
-      )
-    # The generic body.
-    var body =
-      "proc kitCall" & $k & "[T](" & params.join(", ") & "): LogosResult =\n" & "  ## `" &
-      call.symbol & "` (INTERFACE §2.4): `" & call.methodName & "`.\n" & "  mixin " &
-      km.handler & "\n" & "  if " & nonNull.mapIt(it & " == nil").join(" or ") & ":\n" &
-      "    return failureResult(moduleError(\"a null module, response owner or output\"))\n" &
-      "  let params = kitRequest" & $k & "(" & ins.join(", ") & ").valueOr:\n" &
-      "    return failureResult(failure(ecInvalidParams, error))\n" &
-      "  let request = kitValidator().checkedRequest(" & escape(km.bare) &
-      ", params).valueOr:\n" & "    return failureResult(error)\n" &
-      "  let instance {.cursor.} = cast[T](instanceOf(p0))\n" & "  let response = " &
-      km.handler & "(instance, fromChecked(" & km.requestType & ", request)).valueOr:\n" &
-      "    return failureResult(error)\n" & "  let v = toCbor(response)\n" &
-      "  kitSchema().check(" & escape(call.response) & ", v).isOkOr:\n" &
-      "    return failureResult(moduleError(\"the response does not match its schema: \" & error))\n"
-    if staged.len > 0:
-      body.add("  var arena: CallArena\n")
-      for (local, t) in staged:
-        body.add("  var " & local & ": " & t & "\n")
-      body.add(
-        "  kitRespond" & $k & "(arena, v, " & staged.mapIt(it[0]).join(", ") &
-          ").isOkOr:\n" & "    arena.release()\n" &
-          "    return failureResult(moduleError(\"the response has no canonical C value: \" & error))\n"
-      )
-      for i, p in outs:
-        body.add("  " & p & "[] = " & staged[i][0] & "\n")
-      body.add("  p1[] = arena.owner\n")
-    else:
-      body.add("  p1[] = LogosResponseOwner()\n")
-    body.add("  okResult()")
-    callProcs.add(body)
-    let names = toSeq(0 ..< params.len).mapIt("p" & $it)
-    res.exports.add(
-      "  proc " & prefix & "KitCall" & $k & "(" & params.join(", ") &
-        "): LogosResult {.exportc: \"" & call.symbol &
-        "\", dynlib, cdecl, gcsafe, raises: [].} =\n" & "    kitEnter()\n" &
-        "    kitCall" & $k & "[T](" & names.join(", ") & ")"
-    )
-  # Every aggregate has its converters.
-  for key, d in layout.defs:
+  ok((g, docs))
+
+proc finish(
+    g: var MGen, extra: seq[string], layoutName: string
+): Result[(string, string, string), string] =
+  ## (types, procs, layout proc): the mirror type section, the converters then
+  ## `extra`, and the layout table, once every aggregate has its converters.
+  for key, d in g.layout.defs:
     if d.kind != dAlias and key notin g.visited:
       g.errors.add("no converters for " & key)
   var reserved = @["logos_bstr_size_0_t", "logos_tuple_size_0_t"]
@@ -947,14 +927,155 @@ proc kitMirrors*(
   let types = g.mirrorTypes(reserved)
   if g.errors.len > 0:
     return err(g.errors[0])
-  res.types =
-    if types.len > 0:
-      "type\n" & types.join("\n\n")
+  ok(
+    (
+      (if types.len > 0: "type\n" & types.join("\n\n") else: ""),
+      (
+        g.forwards.join("\n") & "\n\n" & g.procs.join("\n\n") & "\n\n" &
+        extra.join("\n\n")
+      ).strip,
+      layoutProc(layoutName, g.layoutRows),
+    )
+  )
+
+proc kitMirrors*(
+    s: ContractSet, prefix: string, methods: seq[KitMethod]
+): Result[KitMirrors, string] =
+  ## [SPEC INTERFACE §2.4] The typed provider functions of the module binding
+  ## `s`, for `kitgen`; `prefix` starts the exported procs' Nim names.
+  var (g, docs) = ?setGen(s, "kitSchema()")
+  var byRequest: Table[string, KitMethod]
+  for m in methods:
+    byRequest[m.request] = m
+  var res = KitMirrors()
+  var callProcs: seq[string]
+  for k, call in g.layout.calls:
+    if call.request notin byRequest:
+      return err("no handler for " & call.methodName)
+    let km = byRequest.getOrDefault(call.request)
+    let mp =
+      g.methodPieces(docs, call.request, call.response, call.methodName, k, "kit")
+    callProcs.add(mp.builders)
+    let params =
+      @["p0: ptr LogosModuleContext", "p1: ptr LogosResponseOwner"] & mp.params
+    let nonNull = @["p0", "p1"] & mp.outs
+    # The generic body.
+    var body =
+      "proc kitCall" & $k & "[T](" & params.join(", ") & "): LogosResult =\n" & "  ## `" &
+      call.symbol & "` (INTERFACE §2.4): `" & call.methodName & "`.\n" & "  mixin " &
+      km.handler & "\n" & "  if " & nonNull.mapIt(it & " == nil").join(" or ") & ":\n" &
+      "    return failureResult(moduleError(\"a null module, response owner or output\"))\n" &
+      "  let params = kitRequest" & $k & "(" & mp.ins.join(", ") & ").valueOr:\n" &
+      "    return failureResult(failure(ecInvalidParams, error))\n" &
+      "  let request = kitValidator().checkedRequest(" & escape(km.bare) &
+      ", params).valueOr:\n" & "    return failureResult(error)\n" &
+      "  let instance {.cursor.} = cast[T](instanceOf(p0))\n" & "  let response = " &
+      km.handler & "(instance, fromChecked(" & km.requestType & ", request)).valueOr:\n" &
+      "    return failureResult(error)\n" & "  let v = toCbor(response)\n" &
+      "  kitSchema().check(" & escape(call.response) & ", v).isOkOr:\n" &
+      "    return failureResult(moduleError(\"the response does not match its schema: \" & error))\n"
+    if mp.staged.len > 0:
+      body.add("  var arena: CallArena\n")
+      for (local, t) in mp.staged:
+        body.add("  var " & local & ": " & t & "\n")
+      body.add(
+        "  kitRespond" & $k & "(arena, v, " & mp.staged.mapIt(it[0]).join(", ") &
+          ").isOkOr:\n" & "    arena.release()\n" &
+          "    return failureResult(moduleError(\"the response has no canonical C value: \" & error))\n"
+      )
+      for i, p in mp.outs:
+        body.add("  " & p & "[] = " & mp.staged[i][0] & "\n")
+      body.add("  p1[] = arena.owner\n")
     else:
-      ""
-  res.procs = (
-    g.forwards.join("\n") & "\n\n" & g.procs.join("\n\n") & "\n\n" &
-    callProcs.join("\n\n")
-  ).strip
-  res.layout = layoutProc(prefix & "Layout", g.layoutRows)
+      body.add("  p1[] = LogosResponseOwner()\n")
+    body.add("  okResult()")
+    callProcs.add(body)
+    let names = toSeq(0 ..< params.len).mapIt("p" & $it)
+    res.exports.add(
+      "  proc " & prefix & "KitCall" & $k & "(" & params.join(", ") &
+        "): LogosResult {.exportc: \"" & call.symbol &
+        "\", dynlib, cdecl, gcsafe, raises: [].} =\n" & "    kitEnter()\n" &
+        "    kitCall" & $k & "[T](" & names.join(", ") & ")"
+    )
+  (res.types, res.procs, res.layout) = ?g.finish(callProcs, prefix & "Layout")
+  ok(res)
+
+proc callMirrors*(
+    s: ContractSet, prefix: string, names: Table[string, string]
+): Result[KitMirrors, string] =
+  ## [SPEC INTERFACE §2.7.2, App A.5] The typed call helpers of every method the
+  ## set `s` exposes, for `callsgen`: `invoke` over the Nim types (`names`, the
+  ## `nimgen` type of each declaration) and, for C callers, the bodies of
+  ## `lcn_invoke_<namespace>_<Method>` and `lcn_clear_<namespace>_<Method>`,
+  ## which the export template defines; `prefix` starts their Nim names.
+  var (g, docs) = ?setGen(s, "callsSchema()")
+  var res = KitMirrors()
+  var callProcs: seq[string]
+  for k, m in g.layout.methods:
+    let mp = g.methodPieces(docs, m.request, m.response, m.methodName, k, "call")
+    callProcs.add(mp.builders)
+    let request = names.getOrDefault(m.request)
+    let response = names.getOrDefault(m.response)
+    if request.len == 0 or response.len == 0:
+      return err("no Nim type for " & m.methodName)
+    let call =
+      "routeCall(p0, " & escape(m.bare) & ", params, callsSchema(), " &
+      escape(m.response) & ")"
+    # Nim callers.
+    callProcs.add(
+      "proc invoke*(route: ptr LogosRouteHandle, request: " & request & "): Result[" &
+        response & ", InvocationFailure] =\n" & "  ## `" & m.methodName &
+        "` through `route` (INTERFACE §5.2).\n" & "  let p0 = route\n" &
+        "  let params = encodeCbor(toCbor(request))\n" & "  let v = ?" & call & "\n" &
+        "  ok(fromChecked(" & response & ", v))"
+    )
+    # C callers.
+    let params = @["p0: ptr LogosRouteHandle", "p1: ptr LogosResponseOwner"] & mp.params
+    let nonNull = @["p0", "p1"] & mp.outs
+    var body =
+      "proc callInvoke" & $k & "(" & params.join(", ") & "): LogosResult =\n" &
+      "  ## `lcn_invoke_" & m.component & "` (INTERFACE §2.7.2, App A.5): `" &
+      m.methodName & "`.\n" & "  if " & nonNull.mapIt(it & " == nil").join(" or ") &
+      ":\n" &
+      "    return failureResult(moduleError(\"a null route, response owner or output\"))\n" &
+      "  let params = callRequest" & $k & "(" & mp.ins.join(", ") & ").valueOr:\n" &
+      "    return failureResult(failure(ecInvalidParams, error))\n" & "  let v = " & call &
+      ".valueOr:\n" & "    return failureResult(error)\n"
+    if mp.staged.len > 0:
+      body.add("  var arena: CallArena\n")
+      for (local, t) in mp.staged:
+        body.add("  var " & local & ": " & t & "\n")
+      body.add(
+        "  callRespond" & $k & "(arena, v, " & mp.staged.mapIt(it[0]).join(", ") &
+          ").isOkOr:\n" & "    arena.release()\n" &
+          "    return failureResult(moduleError(\"the response has no canonical C value: \" & error))\n"
+      )
+      for i, p in mp.outs:
+        body.add("  " & p & "[] = " & mp.staged[i][0] & "\n")
+      body.add("  p1[] = arena.owner\n")
+    else:
+      body.add("  discard v\n  p1[] = LogosResponseOwner()\n")
+    body.add("  okResult()")
+    callProcs.add(body)
+    let outParams = mp.params[mp.params.len - mp.outs.len .. ^1]
+    let clearParams = @["p1: ptr LogosResponseOwner"] & outParams
+    var clear =
+      "proc callClear" & $k & "(" & clearParams.join(", ") & ") =\n" & "  ## `lcn_clear_" &
+      m.component & "` (INTERFACE §2.7.2): clears the owner, then\n" &
+      "  ## resets every output object without reading it.\n" & "  clearOwner(p1)"
+    for p in mp.outs:
+      clear.add("\n  resetOutput(" & p & ")")
+    callProcs.add(clear)
+    let all = toSeq(0 ..< params.len).mapIt("p" & $it)
+    let clearNames = @["p1"] & mp.outs
+    res.exports.add(
+      "  proc " & prefix & "Invoke" & $k & "(" & params.join(", ") &
+        "): LogosResult {.exportc: \"lcn_invoke_" & m.component &
+        "\", dynlib, cdecl, gcsafe, raises: [].} =\n" & "    kitEnter()\n" &
+        "    callInvoke" & $k & "(" & all.join(", ") & ")\n\n" & "  proc " & prefix &
+        "Clear" & $k & "(" & clearParams.join(", ") & ") {.exportc: \"lcn_clear_" &
+        m.component & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" & "    callClear" &
+        $k & "(" & clearNames.join(", ") & ")"
+    )
+  (res.types, res.procs, res.layout) = ?g.finish(callProcs, prefix & "Layout")
   ok(res)

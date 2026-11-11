@@ -1353,3 +1353,66 @@ storage.report_response =
         headers & impl,
         "#include <cstring>\n" & headers & "int main() {\n" & calls & "  return 0;\n}\n",
       ) == ""
+
+proc declaredName(item: string): string =
+  ## The identifier a normalized C declaration declares: a typedef's
+  ## `(*name)`, else the name before the first parenthesis.
+  let star = item.find("(*")
+  if item.startsWith("typedef") and star >= 0:
+    return item[star + 2 ..< item.find(')', star)]
+  let paren = item.find('(')
+  if paren < 0:
+    return ""
+  item[0 ..< paren].strip.splitWhitespace[^1].strip(chars = {'*'})
+
+suite "ifc.c-abi: the typed call helpers' header (INTERFACE §2.1, §2.7.2, App A.5) [IMPL]":
+  test "[IFC-0057] [IFC-0627] [IFC-0628] [IFC-0706] <stem>_calls.h: an invoke and a clear helper per exposed method, outside the header set and with no logos_ symbol":
+    let kitShapes =
+      readFile(currentSourcePath().parentDir / "kit" / "shapes_module.cddl")
+    for (stem, s) in [
+      ("shapes_module", accepted(kitShapes)),
+      ("sensor_module", accepted(mod392, [ifc392], [sup392])),
+      ("metrics_provider", accepted(ifc392)),
+    ]:
+      checkpoint stem
+      let cs = s.cSchemaSet
+      check cs.headerName == stem
+      let types = contractHeader(cs).get
+      let calls = callsHeader(cs)
+      check calls.isOk
+      let methods = cLayout(cs).get.methods
+      check methods.len > 0
+      # Derived helpers: the header set for reconstruction (§3) neither declares
+      # nor includes them, and generating them leaves that header as it was.
+      # Identity is computed from the documents alone, which the helpers do not
+      # feed.
+      check "lcn_" notin types and "_calls.h" notin types
+      check contractHeader(cs).get == types
+      check ("#include \"" & stem & "_types.h\"") in calls.get
+      var want: seq[string]
+      for m in methods:
+        for kind in ["invoke", "clear"]:
+          want.add("lcn_" & kind & "_" & m.component & "_fn")
+          want.add("lcn_" & kind & "_" & m.component)
+      let names = cItems(calls.get).mapIt(declaredName(it))
+      check sameSet(names, want)
+      check names.allIt(it.startsWith("lcn_")) # no logos_ symbol (IFC-0057)
+      # Each helper has its typedef's type, in every language mode.
+      var asserts =
+        "#include \"" & stem & "_calls.h\"\n#ifdef __cplusplus\n" &
+        "#include <type_traits>\n#define SAME(f, t) static_assert(" &
+        "std::is_same<decltype(&f), t>::value, #f)\n#else\n" &
+        "#define SAME(f, t) _Static_assert(_Generic(&f, t: 1, default: 0), #f)\n" &
+        "#endif\n"
+      for m in methods:
+        for kind in ["invoke", "clear"]:
+          let f = "lcn_" & kind & "_" & m.component
+          asserts.add("SAME(" & f & ", " & f & "_fn);\n")
+      createDir(outDir)
+      writeFile(outDir / stem & "_types.h", types)
+      writeFile(outDir / stem & "_calls.h", calls.get)
+      checkCompiles compileUnit(stem & "_calls", asserts)
+
+  test "a set that exposes no method has no calls header":
+    let r = callsHeader(accepted(sup392).cSchemaSet)
+    check r.isErr and "no method" in r.error

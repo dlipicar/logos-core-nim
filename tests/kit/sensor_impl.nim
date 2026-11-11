@@ -3,6 +3,7 @@
 ## interface's method, with empty request and response maps. `configure` sets
 ## the limit; `snapshot` counts configurations.
 
+{.used.} # imported by the tests for the C symbols it exports
 import std/atomics
 import ../generated/sensor_module_kit
 

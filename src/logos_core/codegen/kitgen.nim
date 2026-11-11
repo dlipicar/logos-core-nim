@@ -23,8 +23,8 @@
 ##   from `cmirror`, the common schema's from `codegen/common_mirrors`.
 ##
 ## Not generated yet: `_MODULE_apply_configuration` and `_MODULE_async_api`
-## (both optional), typed call helpers (App A.5), and kits for an
-## interface-only provider (no primary document).
+## (both optional), and kits for an interface-only provider (no primary
+## document). A consumer's typed call helpers (App A.5) come from `callsgen`.
 
 {.push raises: [].}
 

@@ -7,7 +7,7 @@
 import std/[os, parseopt, strutils]
 import results
 import ./logos_core/iface/accept
-import ./logos_core/codegen/[kitgen, nimgen]
+import ./logos_core/codegen/[callsgen, kitgen, nimgen]
 
 const usage = """
 Usage:
@@ -19,6 +19,8 @@ Usage:
               [--interface:FILE]... [--supporting:FILE]...
   lcn-gen kit [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
               [--interface:FILE]... [--supporting:FILE]...
+  lcn-gen calls [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
+                [--interface:FILE]... [--supporting:FILE]...
 
 logos-types  writes DIR/logos_types.h
 types        accepts the construction input set (INTERFACE §1.1, §5.3) and
@@ -30,8 +32,13 @@ nim-common   writes DIR/common_types.nim (the pinned common schema)
 nim          accepts the set and writes DIR/<module or namespace>_types.nim
 kit          accepts a concrete module document's set and writes the Nim
              types and DIR/<module>_kit.nim: the module's exported ABI
-             symbols over handlers its author writes in Nim (PROVISIONAL;
-             the typed _CALL_ provider functions are not generated yet)
+             symbols, typed _CALL_ provider functions included, over
+             handlers its author writes in Nim (PROVISIONAL)
+calls        accepts a provider's set (a concrete module document, or an
+             interface document) and writes DIR/<stem>_types.h,
+             <stem>_types.nim, <stem>_calls.nim and <stem>_calls.h: typed
+             calls to each exposed method through a route handle, for Nim
+             callers and, once exported, C callers (PROVISIONAL)
 
 --import-prefix:P  how Nim output imports this library (default: logos_core/)
 
@@ -114,7 +121,7 @@ proc main(): int =
     let module = commonNimModule(NimOptions(importPrefix: prefix)).valueOr:
       return fail(error)
     write(outDir, "common_types.nim", module)
-  of "types", "nim", "kit":
+  of "types", "nim", "kit", "calls":
     if primary.len == 0 and (module.len == 0 or command != "types"):
       return fail("no primary document\n" & usage)
     var sources: seq[string]
@@ -144,6 +151,26 @@ proc main(): int =
       sources[0], sources[1 .. interfaces.len], sources[interfaces.len + 1 .. ^1], opts
     ).valueOr:
       return fail("the schema set is not accepted: " & error)
+    if command == "calls":
+      let header = contractHeader(set.cSchemaSet).valueOr:
+        return fail(error)
+      let module = nimModule(set, NimOptions(importPrefix: prefix), opts.system).valueOr:
+        return fail(error)
+      let calls = callsModule(set, CallsOptions(importPrefix: prefix), opts.system).valueOr:
+        return fail(error)
+      let callsHeader = callsHeaderFile(set).valueOr:
+        return fail(error)
+      let stem = set.cSchemaSet.headerName
+      for (name, text) in [
+        (stem & "_types.h", header),
+        (stem & "_types.nim", module),
+        (stem & "_calls.nim", calls),
+        (stem & "_calls.h", callsHeader),
+      ]:
+        let r = write(outDir, name, text)
+        if r != 0:
+          return r
+      return 0
     if command in ["nim", "kit"]:
       let module = nimModule(set, NimOptions(importPrefix: prefix), opts.system).valueOr:
         return fail(error)

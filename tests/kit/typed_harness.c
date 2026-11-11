@@ -28,8 +28,9 @@
 
 #include "typed_harness.h"
 
-void th_sizes(size_t* fns, size_t* report, size_t* text)
+void th_sizes(size_t* fns, size_t* report, size_t* text, size_t* helpers)
 {
+    *helpers = sizeof(th_helpers_t);
     *fns = sizeof(th_fns_t);
     *report = sizeof(th_report_t);
     *text = offsetof(th_report_t, text);
@@ -912,4 +913,148 @@ void th_shapes_ping(const th_fns_t* f, logos_module_context_t* m, th_report_t* r
     finish(rep, r, owner, NULL, 0);
     sb_on(rep->text, sizeof rep->text);
     rep->complete = 1;
+}
+
+/* Typed cleanup (INTERFACE §2.7.2) ----------------------------------------------- */
+
+/* One successful call, then its typed cleanup helper. `untouched` reports
+ * that the owner and every output object then read as a {0} initializer
+ * leaves them; `same` that a second cleanup of those locations, a cleanup of
+ * a {0}-initialized set, and one of outputs full of garbage pointers beside
+ * an empty owner (which only a helper that never reads through its outputs
+ * survives) left everything zero. The result is the call's; the owner comes
+ * back cleared. */
+void th_typed_clear(const th_fns_t* f, logos_module_context_t* m, int which,
+                    th_report_t* rep)
+{
+    logos_response_owner_t owner = {0};
+    logos_response_owner_t fresh_owner = {0};
+    sb_t b = sb_on(rep->text, sizeof rep->text);
+    rep->untouched = 0;
+    rep->complete = 0;
+    rep->same = 0;
+    switch (which) {
+    case TH_CLEAR_READ: {
+        meter_out_t o, z;
+        memset(&o, 0, sizeof o);
+        memset(&z, 0, sizeof z);
+        rep->result = f->meter_read(m, &owner, 4, &o.label, &o.reading);
+        if (rep->result.code != LOGOS_OK)
+            break;
+        sbf(&b, "label=");
+        dump_text(&b, o.label);
+        f->meter_read_clear(&owner, &o.label, &o.reading);
+        rep->untouched = all_zero(&owner, sizeof owner) && all_zero(&o, sizeof o);
+        f->meter_read_clear(&owner, &o.label, &o.reading);
+        f->meter_read_clear(&fresh_owner, &z.label, &z.reading);
+        rep->same = all_zero(&owner, sizeof owner) && all_zero(&o, sizeof o) &&
+                    all_zero(&fresh_owner, sizeof fresh_owner) && all_zero(&z, sizeof z);
+        memset(&z, 0xA5, sizeof z);
+        f->meter_read_clear(&fresh_owner, &z.label, &z.reading);
+        rep->same = rep->same && all_zero(&z, sizeof z);
+        break;
+    }
+    case TH_CLEAR_REFLECT: {
+        reflect_store_t* st = (reflect_store_t*)calloc(1, sizeof *st);
+        reflect_call_t* c = (reflect_call_t*)calloc(1, sizeof *c);
+        reflect_out_t* z = (reflect_out_t*)calloc(1, sizeof *z);
+        if (st == NULL || c == NULL || z == NULL)
+            abort();
+        reflect_full(st);
+        reflect_into(f, m, st, c);
+        rep->result = c->r;
+        if (c->r.code == LOGOS_OK) {
+            DUMP_REFLECT(&b, &c->o, response);
+            reflect_out_t* o = &c->o;
+#define CLEAR_REFLECT(OWNER, O)                                                          \
+    f->shapes_reflect_clear(                                                             \
+        OWNER, &(O)->a, &(O)->b, &(O)->c, &(O)->d, &(O)->e, &(O)->e_count, &(O)->f,      \
+        &(O)->f_count, &(O)->g, &(O)->has_h, &(O)->h_0, &(O)->h_1, &(O)->i, &(O)->j,     \
+        &(O)->l, &(O)->m, &(O)->n, &(O)->o, &(O)->p, &(O)->has_q, &(O)->q, &(O)->r,      \
+        &(O)->s, &(O)->s_len, &(O)->t, &(O)->t_count, &(O)->u, &(O)->v, &(O)->y, &(O)->z)
+            CLEAR_REFLECT(&c->owner, o);
+            rep->untouched =
+                all_zero(&c->owner, sizeof c->owner) && all_zero(o, sizeof *o);
+            CLEAR_REFLECT(&c->owner, o);
+            CLEAR_REFLECT(&fresh_owner, z);
+            rep->same = all_zero(&c->owner, sizeof c->owner) && all_zero(o, sizeof *o) &&
+                        all_zero(&fresh_owner, sizeof fresh_owner) &&
+                        all_zero(z, sizeof *z);
+            /* Garbage in every payload pointer and count (the container's own
+             * padding, between the output objects, is no output). */
+            void* bad = (void*)(uintptr_t)0xA5A5A5A5u;
+            z->c = (const char*)bad;
+            z->e = (logos_shapes_Reflect_response_E_LI_t*)bad;
+            z->e_count = 7;
+            z->f = (logos_shapes_Reflect_response_F_LI_t*)bad;
+            z->f_count = 7;
+            z->has_h = true;
+            z->h_1.data = (const uint8_t*)bad;
+            z->h_1.len = 7;
+            z->i.commitment_model = (const char*)bad;
+            z->r.items = (const logos_tstr_size_1_8_t*)bad;
+            z->r.count = 7;
+            z->s = (const uint8_t*)bad;
+            z->s_len = 7;
+            z->t = (logos_shapes_Entry_t*)bad;
+            z->t_count = 7;
+            z->u.kids = (const logos_shapes_Tree_t*)bad;
+            z->u.kids_count = 7;
+            z->u.has_left = true;
+            z->u.left = (const logos_shapes_Tree_t*)bad;
+            z->u.tag = (const char*)bad;
+            z->v.has_x = true;
+            z->v.x = (const char*)bad;
+            CLEAR_REFLECT(&fresh_owner, z);
+            rep->same = rep->same && all_zero(z, sizeof *z);
+#undef CLEAR_REFLECT
+        }
+        owner = c->owner;
+        free(z);
+        free(c);
+        free(st);
+        break;
+    }
+    case TH_CLEAR_PICK: {
+        logos_shapes_Pick_request_t req;
+        memset(&req, 0, sizeof req);
+        req.kind = LOGOS_ARM_shapes_Pick_request_CASE_Name;
+        req.value.arm_Name.by = LOGOS_LITERAL_shapes_Pick_request_AR_Name_By;
+        req.value.arm_Name.name = "nm";
+        logos_shapes_Pick_response_t out, z;
+        memset(&out, 0, sizeof out);
+        memset(&z, 0, sizeof z);
+        rep->result = f->shapes_pick(m, &owner, &req, &out);
+        if (rep->result.code != LOGOS_OK)
+            break;
+        if (out.kind == LOGOS_ARM_shapes_Pick_response_CASE_True) {
+            sbf(&b, "entry=");
+            dump_entry(&b, &out.value.arm_True.entry);
+        }
+        f->shapes_pick_clear(&owner, &out);
+        rep->untouched = all_zero(&owner, sizeof owner) && all_zero(&out, sizeof out);
+        f->shapes_pick_clear(&owner, &out);
+        f->shapes_pick_clear(&fresh_owner, &z);
+        rep->same = all_zero(&owner, sizeof owner) && all_zero(&out, sizeof out) &&
+                    all_zero(&fresh_owner, sizeof fresh_owner) && all_zero(&z, sizeof z);
+        memset(&z, 0xA5, sizeof z);
+        f->shapes_pick_clear(&fresh_owner, &z);
+        rep->same = rep->same && all_zero(&z, sizeof z);
+        break;
+    }
+    default: {
+        rep->result = f->shapes_ping(m, &owner);
+        if (rep->result.code != LOGOS_OK)
+            break;
+        f->shapes_ping_clear(&owner);
+        rep->untouched = all_zero(&owner, sizeof owner);
+        f->shapes_ping_clear(&owner);
+        f->shapes_ping_clear(&fresh_owner);
+        rep->same = all_zero(&owner, sizeof owner) &&
+                    all_zero(&fresh_owner, sizeof fresh_owner);
+        break;
+    }
+    }
+    rep->owner = owner;
+    rep->complete = rep->result.code == LOGOS_OK && b.nulls == 0;
 }
