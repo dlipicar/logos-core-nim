@@ -82,6 +82,8 @@ type
     types*: string ## the mirror `type` section
     procs*: string ## converters, builders and generic bodies
     exports*: seq[string] ## the exported procs, for the export template
+    symbols*: seq[(string, string)]
+      ## each exported per-method function's C symbol and Nim proc name
     layout*: string ## the layout table proc
 
 # Names -----------------------------------------------------------------------------
@@ -1005,6 +1007,7 @@ proc kitMirrors*(
     body.add("  okResult()")
     callProcs.add(body)
     let names = toSeq(0 ..< params.len).mapIt("p" & $it)
+    res.symbols.add((call.symbol, prefix & "KitCall" & $k))
     res.exports.add(
       "  proc " & prefix & "KitCall" & $k & "(" & params.join(", ") &
         "): LogosResult {.exportc: \"" & call.symbol &

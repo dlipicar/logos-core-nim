@@ -148,17 +148,9 @@ type Call* = object
   status*: AbiCheck ## as the ABI caller reads the result and outputs
   response*: seq[byte]
 
-type DispatchFn* = proc(
-  module: ptr LogosModuleContext,
-  methodName: cstring,
-  params: ptr UncheckedArray[uint8],
-  paramsLen: csize_t,
-  outResponse: ptr ptr UncheckedArray[uint8],
-  outResponseLen: ptr csize_t,
-): LogosResult {.cdecl, gcsafe, raises: [].}
-
-type FreeFn* =
-  proc(module: ptr LogosModuleContext, p: pointer) {.cdecl, gcsafe, raises: [].}
+type
+  DispatchFn* = ModuleDispatchFn
+  FreeFn* = ModuleFreeFn
 
 proc call*(
     dispatch: DispatchFn,

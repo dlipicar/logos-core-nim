@@ -245,3 +245,15 @@ template exportMeterModule*(T: typedesc) =
   proc meterModuleKitCall0(p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: uint32, p3: ptr logos_tstr_size_1_64_t, p4: ptr logos_meter_Reading_t): LogosResult {.exportc: "logos_meter_module_CALL_meter_Read", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     kitCall0[T](p0, p1, p2, p3, p4)
+
+  proc meterModuleStaticSymbols*(): seq[(string, pointer)] =
+    ## [SPEC RUNTIME §13.3] `meter_module`'s symbol table for static registration.
+    @[
+      ("logos_meter_module_MODULE_name", cast[pointer](meterModuleKitName)),
+      ("logos_meter_module_MODULE_init", cast[pointer](meterModuleKitInit)),
+      ("logos_meter_module_MODULE_destroy", cast[pointer](meterModuleKitDestroy)),
+      ("logos_meter_module_MODULE_call_surface", cast[pointer](meterModuleKitCallSurface)),
+      ("logos_meter_module_MODULE_free", cast[pointer](meterModuleKitFree)),
+      ("logos_meter_module_MODULE_dispatch", cast[pointer](meterModuleKitDispatch)),
+      ("logos_meter_module_CALL_meter_Read", cast[pointer](meterModuleKitCall0)),
+    ]

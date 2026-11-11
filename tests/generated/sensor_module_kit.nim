@@ -279,3 +279,16 @@ template exportSensorModule*(T: typedesc) =
   proc sensorModuleKitCall1(p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: ptr uint64): LogosResult {.exportc: "logos_sensor_module_CALL_metrics_provider_Snapshot", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     kitCall1[T](p0, p1, p2)
+
+  proc sensorModuleStaticSymbols*(): seq[(string, pointer)] =
+    ## [SPEC RUNTIME §13.3] `sensor_module`'s symbol table for static registration.
+    @[
+      ("logos_sensor_module_MODULE_name", cast[pointer](sensorModuleKitName)),
+      ("logos_sensor_module_MODULE_init", cast[pointer](sensorModuleKitInit)),
+      ("logos_sensor_module_MODULE_destroy", cast[pointer](sensorModuleKitDestroy)),
+      ("logos_sensor_module_MODULE_call_surface", cast[pointer](sensorModuleKitCallSurface)),
+      ("logos_sensor_module_MODULE_free", cast[pointer](sensorModuleKitFree)),
+      ("logos_sensor_module_MODULE_dispatch", cast[pointer](sensorModuleKitDispatch)),
+      ("logos_sensor_module_CALL_sensor_NS_control_Configure", cast[pointer](sensorModuleKitCall0)),
+      ("logos_sensor_module_CALL_metrics_provider_Snapshot", cast[pointer](sensorModuleKitCall1)),
+    ]

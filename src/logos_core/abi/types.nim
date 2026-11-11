@@ -270,6 +270,40 @@ type
       route: ptr LogosRouteHandle, handler: LogosRouteEndHandler, userData: pointer
     ): LogosResult {.cdecl, gcsafe, raises: [].}
 
+type
+  # [SPEC INTERFACE §2.6, §5.2] The module symbols an ABI caller resolves, as
+  # function types (RUNTIME §13.3: an address is converted to its signature
+  # before it is called).
+  ModuleNameFn* = proc(): cstring {.cdecl, gcsafe, raises: [].}
+    ## `logos_<module-C>_MODULE_name`
+  ModuleInitFn* = proc(
+    input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+  ): LogosResult {.cdecl, gcsafe, raises: [].} ## `logos_<module-C>_MODULE_init`
+  ModuleApplyConfigurationFn* = proc(
+    module: ptr LogosModuleContext,
+    configurationCbor: ptr UncheckedArray[uint8],
+    configurationCborLen: csize_t,
+  ): LogosResult {.cdecl, gcsafe, raises: [].}
+    ## `logos_<module-C>_MODULE_apply_configuration`
+  ModuleDestroyFn* = proc(module: ptr LogosModuleContext) {.cdecl, gcsafe, raises: [].}
+    ## `logos_<module-C>_MODULE_destroy`
+  ModuleCallSurfaceFn* =
+    proc(outLen: ptr csize_t): ptr uint8 {.cdecl, gcsafe, raises: [].}
+    ## `logos_<module-C>_MODULE_call_surface`
+  ModuleFreeFn* =
+    proc(module: ptr LogosModuleContext, p: pointer) {.cdecl, gcsafe, raises: [].}
+    ## `logos_<module-C>_MODULE_free`
+  ModuleDispatchFn* = proc(
+    module: ptr LogosModuleContext,
+    methodName: cstring,
+    paramsCbor: ptr UncheckedArray[uint8],
+    paramsLen: csize_t,
+    outResponseCbor: ptr ptr UncheckedArray[uint8],
+    outResponseLen: ptr csize_t,
+  ): LogosResult {.cdecl, gcsafe, raises: [].} ## `logos_<module-C>_MODULE_dispatch`
+  ModuleAsyncApiFn* = proc(): ptr LogosAsyncProviderApi {.cdecl, gcsafe, raises: [].}
+    ## `logos_<module-C>_MODULE_async_api`
+
 template extentOf*(T: typedesc, last: untyped): int =
   ## The bytes a versioned struct needs to hold every field through `last`:
   ## its offset plus its size, so trailing padding is not required.

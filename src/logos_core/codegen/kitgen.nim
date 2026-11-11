@@ -17,6 +17,9 @@
 ##   `<bare>(T, <Request>): Result[<Response>, InvocationFailure]`.
 ## - `publish(ModuleServices, <Event>)` and `publishScoped(ModuleServices,
 ##   <Event>)` for each event the primary contract or an interface declares.
+## - `<module>StaticSymbols()`, defined by the template: every symbol it
+##   exports with its address, the table a host registers for static binding
+##   (RUNTIME §2.3, §13.3).
 ## - For a provider, the typed per-method functions
 ##   `logos_<module-C>_CALL_<namespace>_<Method>` (§2.4). The template defines
 ##   them over the same handlers. Their C-layout mirrors and converters come
@@ -236,4 +239,27 @@ proc kitModule*(
     )
     for e in mirrors.exports:
       o.add("\n" & e & "\n")
+  # [SPEC RUNTIME §2.3, §13.3] A generated registration table: every symbol the
+  # template exports, for a host that binds the module statically.
+  var table = @[
+    (sym("name"), prefix & "KitName"),
+    (sym("init"), prefix & "KitInit"),
+    (sym("destroy"), prefix & "KitDestroy"),
+  ]
+  if provider:
+    table.add(
+      [
+        (sym("call_surface"), prefix & "KitCallSurface"),
+        (sym("free"), prefix & "KitFree"),
+        (sym("dispatch"), prefix & "KitDispatch"),
+      ]
+    )
+    table.add(mirrors.symbols)
+  o.add(
+    "\n  proc " & prefix & "StaticSymbols*(): seq[(string, pointer)] =\n" &
+      "    ## [SPEC RUNTIME §13.3] `" & b.module &
+      "`'s symbol table for static registration.\n" & "    @[\n" &
+      table.mapIt("      (\"" & it[0] & "\", cast[pointer](" & it[1] & ")),\n").join &
+      "    ]\n"
+  )
   ok(o)

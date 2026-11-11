@@ -14,25 +14,11 @@
 ## libraries (`support/testroute`): caller, helpers and provider then each run
 ## on a Nim runtime of their own.
 
-import std/[dynlib, os, osproc, strutils, typedthreads]
+import std/[dynlib, typedthreads]
 import unittest2
 import ../src/logos_core/iface/[accept, provider]
-import ./support/[kitruntime, specdata, testroute, typedharness]
+import ./support/[kitbuild, kitruntime, specdata, testroute, typedharness]
 import ./generated/[meter_module_types, sensor_module_types]
-
-const
-  mm =
-    when compileOption("mm", "orc"):
-      "orc"
-    elif compileOption("mm", "refc"):
-      "refc"
-    elif compileOption("mm", "arc"):
-      "arc"
-    else:
-      {.error: "test_kit_dylib: unknown memory manager".}
-  variant = mm & (when defined(release): "-release" else: "")
-  testsDir = currentSourcePath().parentDir
-  nimExe = getCurrentCompilerExe()
 
 type
   NameFn = proc(): cstring {.cdecl, gcsafe, raises: [].}
@@ -50,27 +36,6 @@ type
     callSurface: CallSurfaceFn
     free: FreeFn
     dispatch: DispatchFn
-
-proc build(source, name: string): string =
-  ## `tests/kit/<source>` as `lib<name>`; `--nimMainPrefix` keeps each
-  ## library's `NimMain` distinct from the host's and the other library's.
-  let dir = testsDir.parentDir / "build" / "kit-dylib" / variant
-  createDir(dir)
-  result = dir / (DynlibFormat % name)
-  var args = @[nimExe, "c", "--hints:off", "--mm:" & mm]
-  when defined(release):
-    args.add("-d:release")
-  args.add(
-    [
-      "--app:lib",
-      "--nimMainPrefix:lib" & name,
-      "--nimcache:" & dir / ("nimcache-" & name),
-      "-o:" & result,
-      testsDir / "kit" / source,
-    ]
-  )
-  let (output, code) = execCmdEx(quoteShellCommand(args))
-  doAssert code == 0, "building " & source & " failed:\n" & output
 
 proc load(path, module: string): Library =
   let handle = loadLib(path)
@@ -91,9 +56,9 @@ proc load(path, module: string): Library =
   )
 
 let
-  meter = load(build("meter_impl.nim", "kitmeter"), "meter_module")
-  sensor = load(build("sensor_impl.nim", "kitsensor"), "sensor_module")
-  shapes = load(build("shapes_impl.nim", "kitshapes"), "shapes_module")
+  meter = load(buildKitLibrary("meter_impl.nim", "kitmeter"), "meter_module")
+  sensor = load(buildKitLibrary("sensor_impl.nim", "kitsensor"), "sensor_module")
+  shapes = load(buildKitLibrary("shapes_impl.nim", "kitshapes"), "shapes_module")
 
 proc typedSymbol(lib: Library, name: string): pointer =
   ## A typed provider function (INTERFACE §2.4) the library exports.
@@ -113,7 +78,7 @@ let typed = ThFns(
 
 let helpers = block:
   ## The call helpers the helper library exports, in the harness's slots.
-  let lib = loadLib(build("calls_lib.nim", "kitcalls"))
+  let lib = loadLib(buildKitLibrary("calls_lib.nim", "kitcalls"))
   doAssert lib != nil, "dlopen failed: kitcalls"
   proc helper(name: string): pointer =
     result = lib.symAddr(cstring(name))

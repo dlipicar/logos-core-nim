@@ -1324,3 +1324,17 @@ template exportShapesModule*(T: typedesc) =
   proc shapesModuleKitCall2(p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: uint64, p3: int64, p4: cstring, p5: ptr array[32, uint8], p6: ptr UncheckedArray[logos_shapes_Reflect_request_E_LI_t], p7: csize_t, p8: ptr UncheckedArray[logos_shapes_Reflect_request_F_LI_t], p9: csize_t, p10: ptr logos_shapes_Reflect_request_G_t, p11: bool, p12: uint64, p13: ptr logos_shapes_Reflect_request_H_TU1_t, p14: ptr logos_schema_commitment_t, p15: ptr logos_tuple_size_0_t, p16: ptr logos_bstr_size_0_t, p17: int8, p18: uint16, p19: logos_shapes_Counter_t, p20: CErrorCode, p21: bool, p22: ptr logos_error_detail_t, p23: ptr logos_shapes_Names_t, p24: ptr UncheckedArray[uint8], p25: csize_t, p26: ptr UncheckedArray[logos_shapes_Entry_t], p27: csize_t, p28: ptr logos_shapes_Tree_t, p29: ptr logos_shapes_Reflect_request_V_t, p30: ptr logos_shapes_Blob_t, p31: ptr logos_shapes_Digest_t, p32: ptr uint64, p33: ptr int64, p34: ptr cstring, p35: ptr array[32, uint8], p36: ptr ptr UncheckedArray[logos_shapes_Reflect_response_E_LI_t], p37: ptr csize_t, p38: ptr ptr UncheckedArray[logos_shapes_Reflect_response_F_LI_t], p39: ptr csize_t, p40: ptr logos_shapes_Reflect_response_G_t, p41: ptr bool, p42: ptr uint64, p43: ptr logos_shapes_Reflect_response_H_TU1_t, p44: ptr logos_schema_commitment_t, p45: ptr logos_tuple_size_0_t, p46: ptr logos_bstr_size_0_t, p47: ptr int8, p48: ptr uint16, p49: ptr logos_shapes_Counter_t, p50: ptr CErrorCode, p51: ptr bool, p52: ptr logos_error_detail_t, p53: ptr logos_shapes_Names_t, p54: ptr ptr UncheckedArray[uint8], p55: ptr csize_t, p56: ptr ptr UncheckedArray[logos_shapes_Entry_t], p57: ptr csize_t, p58: ptr logos_shapes_Tree_t, p59: ptr logos_shapes_Reflect_response_V_t, p60: ptr logos_shapes_Blob_t, p61: ptr logos_shapes_Digest_t): LogosResult {.exportc: "logos_shapes_module_CALL_shapes_Reflect", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     kitCall2[T](p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18, p19, p20, p21, p22, p23, p24, p25, p26, p27, p28, p29, p30, p31, p32, p33, p34, p35, p36, p37, p38, p39, p40, p41, p42, p43, p44, p45, p46, p47, p48, p49, p50, p51, p52, p53, p54, p55, p56, p57, p58, p59, p60, p61)
+
+  proc shapesModuleStaticSymbols*(): seq[(string, pointer)] =
+    ## [SPEC RUNTIME §13.3] `shapes_module`'s symbol table for static registration.
+    @[
+      ("logos_shapes_module_MODULE_name", cast[pointer](shapesModuleKitName)),
+      ("logos_shapes_module_MODULE_init", cast[pointer](shapesModuleKitInit)),
+      ("logos_shapes_module_MODULE_destroy", cast[pointer](shapesModuleKitDestroy)),
+      ("logos_shapes_module_MODULE_call_surface", cast[pointer](shapesModuleKitCallSurface)),
+      ("logos_shapes_module_MODULE_free", cast[pointer](shapesModuleKitFree)),
+      ("logos_shapes_module_MODULE_dispatch", cast[pointer](shapesModuleKitDispatch)),
+      ("logos_shapes_module_CALL_shapes_Pick", cast[pointer](shapesModuleKitCall0)),
+      ("logos_shapes_module_CALL_shapes_Ping", cast[pointer](shapesModuleKitCall1)),
+      ("logos_shapes_module_CALL_shapes_Reflect", cast[pointer](shapesModuleKitCall2)),
+    ]
