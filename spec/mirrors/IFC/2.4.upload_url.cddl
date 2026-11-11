@@ -1,0 +1,7 @@
+storage.upload_url_request = {
+    url: tstr,
+    chunk_size: uint64,
+}
+storage.upload_url_response = {
+    accepted: bool,
+}

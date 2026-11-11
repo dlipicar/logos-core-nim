@@ -420,6 +420,72 @@ section = "§2.4"
 ordinal = 2
 
 [[mirror]]
+out = "IFC/2.4.exists.cddl"
+file = "spec-module-interface.md"
+section = "§2.4"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/2.4.exists.h"
+file = "spec-module-interface.md"
+section = "§2.4"
+lang = "c"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/2.4.resolve.h"
+file = "spec-module-interface.md"
+section = "§2.4"
+lang = "c"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/2.4.space.cddl"
+file = "spec-module-interface.md"
+section = "§2.4"
+ordinal = 3
+
+[[mirror]]
+out = "IFC/2.4.space.h"
+file = "spec-module-interface.md"
+section = "§2.4"
+lang = "c"
+ordinal = 3
+
+[[mirror]]
+out = "IFC/2.4.upload_url.cddl"
+file = "spec-module-interface.md"
+section = "§2.4"
+ordinal = 4
+
+[[mirror]]
+out = "IFC/2.4.upload_url.h"
+file = "spec-module-interface.md"
+section = "§2.4"
+lang = "c"
+ordinal = 4
+
+[[mirror]]
+out = "IFC/2.6.symbols.h"
+file = "spec-module-interface.md"
+section = "§2.6"
+lang = "c"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/2.6.call-surface.cddl"
+file = "spec-module-interface.md"
+section = "§2.6"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/3.3.upload_url.h"
+file = "spec-module-interface.md"
+section = "§3.3"
+lang = "c"
+ordinal = 3
+
+[[mirror]]
 out = "IFC/2.5.event.cddl"
 file = "spec-module-interface.md"
 section = "§2.5"

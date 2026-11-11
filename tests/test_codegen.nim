@@ -119,8 +119,7 @@ proc norm(x: string): string =
 
 proc cItems(text: string): seq[string] =
   ## The top-level declarations of a C text, normalized: no comments, include
-  ## lines, conditionals, guards, document identity macros or function
-  ## declarations (§2.4, §2.6: not generated).
+  ## lines, conditionals, guards or document identity macros.
   # The C++ linkage wrapper's braces enclose declarations; they are no item.
   var lines = withoutComments(text).splitLines
   for i in 1 ..< lines.len:
@@ -131,7 +130,6 @@ proc cItems(text: string): seq[string] =
   var items: seq[string]
   var cur = ""
   var depth = 0
-  var parenTop = false
   var inStr = false
   var i = 0
   while i < s.len:
@@ -163,15 +161,10 @@ proc cItems(text: string): seq[string] =
       inc depth
     of '}':
       dec depth
-    of '(':
-      if depth == 0:
-        parenTop = true
     of ';':
       if depth == 0:
-        if not parenTop:
-          items.add(norm(cur))
+        items.add(norm(cur))
         cur = ""
-        parenTop = false
     else:
       discard
     inc i
@@ -345,7 +338,21 @@ suite "ifc.c-types: required C mapping cases (INTERFACE §3.9.1-§3.9.5)":
     )
 
   test "[IFC-0583] [IFC-0584] [IFC-0880] module bindings: interface-only, events-only, types-only primary, lifecycle-only":
-    # §3.9.2: sensor_module bound to metrics_provider alone, without a primary.
+    # The §3.9.1 module symbols under another module name; a module without a
+    # provider contract has only the identity and lifecycle ones (§2.6).
+    proc moduleSymbols(module: string, provider = true): seq[string] =
+      for item in cItems(mirror("IFC/3.9.1.module.h")):
+        if "_MODULE_" in item and (
+          provider or
+          ["_MODULE_call_surface(", "_MODULE_free(", "_MODULE_dispatch("].allIt(
+            it notin item
+          )
+        ):
+          result.add(item.replace("meter_module", module))
+
+    # §3.9.2: sensor_module bound to metrics_provider alone, without a primary:
+    # the role and implementation constants, the interface method typedef, the
+    # concrete interface method and the module symbols shown there.
     let only = bound("sensor_module", ifaces = [ifc392])
     check only.primary.isNone
     check only.interfaces[0].root == rootOf(ifc392) # the binding changes no identity
@@ -354,8 +361,12 @@ suite "ifc.c-types: required C mapping cases (INTERFACE §3.9.1-§3.9.5)":
       @[
         "#define LOGOS_INTERFACE_NAMESPACE_metrics_provider \"metrics_provider\"",
         "#define LOGOS_IMPLEMENTS_sensor_module_INDEX0 \"metrics_provider\"",
-      ],
+      ] &
+        cItems(mirror("IFC/3.9.2.module.h")).filterIt(
+          "metrics_provider_Snapshot" in it or "_MODULE_" in it
+        ),
     )
+    check moduleSymbols("sensor_module").allIt(it in decls(only.cSchemaSet))
     check only.cSchemaSet.headerName == "sensor_module"
     # An interface that declares only events.
     let ticks = "_interface = \"ticks\"\nticks.tick_event = { n: uint64 }\n"
@@ -365,7 +376,7 @@ suite "ifc.c-types: required C mapping cases (INTERFACE §3.9.1-§3.9.5)":
         "#define LOGOS_INTERFACE_NAMESPACE_ticks \"ticks\"",
         "#define LOGOS_IMPLEMENTS_tick_module_INDEX0 \"ticks\"",
         "typedef struct logos_ticks_Tick_event_EVENT{uint64_t n;}logos_ticks_Tick_event_t;",
-      ],
+      ] & moduleSymbols("tick_module"),
     )
     # A types-only primary document with an implemented callable interface.
     let typesOnly =
@@ -378,12 +389,19 @@ suite "ifc.c-types: required C mapping cases (INTERFACE §3.9.1-§3.9.5)":
         "#define LOGOS_IMPLEMENTS_types_module_INDEX0 \"metrics_provider\"",
         "#define LOGOS_INTERFACE_NAMESPACE_metrics_provider \"metrics_provider\"",
         "typedef uint64_t logos_demo_T_t;",
-      ],
+      ] &
+        cItems(mirror("IFC/3.9.2.module.h"))
+        .filterIt("metrics_provider_Snapshot" in it)
+        .mapIt(it.replace("sensor_module", "types_module")) &
+        moduleSymbols("types_module"),
     )
-    # A module with lifecycle declarations but no contracts: no documents.
+    # A module with lifecycle declarations but no contracts: no documents, and
+    # no provider symbols.
     let bare = bound("bare_module")
     check bare.primary.isNone and bare.interfaces.len == 0
-    check decls(bare.cSchemaSet).len == 0
+    check sameSet(
+      decls(bare.cSchemaSet), moduleSymbols("bare_module", provider = false)
+    )
     check contractHeader(bare.cSchemaSet).isOk
     # A supplied binding agrees with the primary's `_module` and `_implements`.
     check acceptBinding("other_module", Opt.some(typesOnly), [ifc392]).isErr
@@ -1061,3 +1079,277 @@ demo.tree = { ? left: demo.tree, kids: [* demo.tree], t: [demo.tree / uint64] }
 """
       ),
     )
+
+# Method typedefs, provider functions and module symbols ------------------------------
+
+proc linkRun(name, cSource, cxxSource: string): string =
+  ## Compiles `cSource` as C17 and `cxxSource` as C++17 next to the headers in
+  ## `outDir`, links them with the C++ compiler and runs the program: "" when it
+  ## exits 0, else the first failure. Proves C linkage and symbol distinctions
+  ## through the native toolchain (§3.9.6, §3.9.7).
+  createDir(outDir)
+  writeFile(outDir / "logos_types.h", logosTypesHeader())
+  let (cc, cxx) = (compilerFor(false), compilerFor(true))
+  if cc.len == 0 or cxx.len == 0:
+    return "no C or C++ compiler on PATH"
+  let base = outDir / name
+  writeFile(base & "_impl.c", cSource)
+  writeFile(base & "_main.cpp", cxxSource)
+  let exe = base & (when defined(windows): ".exe" else: "")
+  for cmd in [
+    quoteShell(cc) & " -std=c17 -Wall -Werror -I " & quoteShell(outDir) & " -c " &
+      quoteShell(base & "_impl.c") & " -o " & quoteShell(base & "_impl.o"),
+    quoteShell(cxx) & " -std=c++17 -Wall -Werror -I " & quoteShell(outDir) & " -c " &
+      quoteShell(base & "_main.cpp") & " -o " & quoteShell(base & "_main.o"),
+    quoteShell(cxx) & " " & quoteShell(base & "_impl.o") & " " &
+      quoteShell(base & "_main.o") & " -o " & quoteShell(exe),
+    quoteShell(exe),
+  ]:
+    let (o, code) = execCmdEx(cmd)
+    if code != 0:
+      return cmd & ":\n" & o
+  ""
+
+proc fnItem(text: string): string =
+  ## One C declaration, normalized like `cItems`.
+  let items = cItems(text)
+  doAssert items.len == 1, text
+  items[0]
+
+suite "ifc.c-abi: method typedefs, provider functions and module symbols (INTERFACE §2.4, §2.6, §3.9.4, §3.9.8)":
+  test "[IFC-0154] [IFC-0155] [IFC-0156] [IFC-0164] §2.4: the storage.exists typedef and provider function":
+    let got = decls(module(mirror("IFC/2.4.exists.cddl"), "storage_module"))
+    let want = cItems(mirror("IFC/2.4.exists.h"))
+    check want.len == 2
+    for item in want:
+      check item in got
+
+  test "[IFC-0158] [IFC-0159] [IFC-0160] [IFC-0392] §2.4, §3.9.4: one wrapper parameter for each choice-valued half":
+    let source = module(
+      mirror("IFC/2.4.resolve.cddl") & """
+storage.report_request = { id: uint64 }
+storage.report_response =
+    { kind: "found", size: uint64 } /
+    { kind: "missing" }
+""",
+      "storage_module",
+    )
+    let got = decls(source)
+    check cItems(mirror("IFC/2.4.resolve.h"))[0] in got
+    check fnItem(
+      """typedef logos_result_t (*logos_storage_Report_FN_t)(
+    logos_module_context_t* module,
+    logos_response_owner_t* response_owner,
+    uint64_t in_id,
+    logos_storage_Report_response_t* out_response
+);"""
+    ) in got
+    # The provider functions take exactly the typedefs' parameters, and each
+    # choice-valued half is one wrapper with no flattened arm field beside it.
+    for (m, params) in [
+      (
+        "Resolve",
+        "(logos_module_context_t*module,logos_response_owner_t*response_owner," &
+          "const logos_storage_Resolve_request_t*in_request,bool*out_matched);",
+      ),
+      (
+        "Report",
+        "(logos_module_context_t*module,logos_response_owner_t*response_owner," &
+          "uint64_t in_id,logos_storage_Report_response_t*out_response);",
+      ),
+    ]:
+      check ("logos_result_t logos_storage_module_CALL_storage_" & m & params) in got
+      check ("typedef logos_result_t(*logos_storage_" & m & "_FN_t)" & params) in got
+    checkCompiles compilesSet("abi394", accepted(source))
+
+  test "[IFC-0165] [IFC-0166] [IFC-0167] §2.4: an empty request adds no parameter; a struct output is caller-allocated":
+    let source = module(
+      mirror("IFC/2.3.space_info.cddl") & mirror("IFC/2.4.space.cddl"), "storage_module"
+    )
+    let got = decls(source)
+    check cItems(mirror("IFC/2.4.space.h"))[0] in got
+    check fnItem(
+      """typedef logos_result_t (*logos_storage_Space_FN_t)(
+    logos_module_context_t* module,
+    logos_response_owner_t* response_owner,
+    logos_storage_Space_info_t* out_info
+);"""
+    ) in got
+
+  test "[IFC-0168] [IFC-0169] [IFC-0170] §2.4: parameters follow canonical field order, not source order":
+    let got = decls(module(mirror("IFC/2.4.upload_url.cddl"), "storage_module"))
+    check cItems(mirror("IFC/2.4.upload_url.h"))[0] in got
+    check cItems(mirror("IFC/3.3.upload_url.h"))[0] in got
+    # An empty response has no output parameter (rule 7).
+    let empty = decls(module(ping, "storage_module"))
+    check fnItem(
+      """typedef logos_result_t (*logos_demo_Ping_FN_t)(
+    logos_module_context_t* module,
+    logos_response_owner_t* response_owner
+);"""
+    ) in empty
+
+  test "[IFC-0864] [IFC-0888] §2.4 rules 2-10: every field form as an input and as an output":
+    const fields = """{
+  a: uint32,
+  ? b: tstr,
+  c: tstr .size (1..64),
+  d: bstr,
+  e: bstr .size (1..4096),
+  f: bstr .size 32,
+  g: bstr .size 0,
+  h: [* uint64],
+  i: [* tstr],
+  j: [* demo.rec],
+  k: demo.rec,
+  l: { x: uint64 },
+  m: demo.mode,
+  ? n: [uint64, [tstr, bool]],
+  o: [],
+  ? p: [],
+  q: logos.error_code,
+  r: "lit",
+  class: uint8,
+}
+"""
+    let source = module(
+      "demo.rec = { v: uint64 }\ndemo.mode = \"a\" / \"b\"\n" & "demo.all_request = " &
+        fields & "demo.all_response = " & fields
+    )
+    let got = decls(source)
+    # I64: `out_d`, an unbounded byte string's output, is `const uint8_t**`.
+    check fnItem(
+      """typedef logos_result_t (*logos_demo_All_FN_t)(
+    logos_module_context_t* module,
+    logos_response_owner_t* response_owner,
+    uint32_t in_a,
+    bool in_has_b,
+    const char* in_b,
+    logos_tstr_size_1_64_t in_c,
+    uint8_t in_class,
+    const uint8_t* in_d,
+    size_t in_d_len,
+    logos_bstr_size_1_4096_t in_e,
+    size_t in_e_len,
+    const uint8_t (*in_f)[32],
+    const logos_bstr_size_0_t* in_g,
+    const uint64_t* in_h,
+    size_t in_h_count,
+    const char* const* in_i,
+    size_t in_i_count,
+    const logos_demo_Rec_t* in_j,
+    size_t in_j_count,
+    const logos_demo_Rec_t* in_k,
+    const logos_demo_All_request_L_t* in_l,
+    const logos_demo_Mode_t* in_m,
+    bool in_has_n,
+    uint64_t in_n_0,
+    const logos_demo_All_request_N_TU1_t* in_n_1,
+    const logos_tuple_size_0_t* in_o,
+    bool in_has_p,
+    const logos_tuple_size_0_t* in_p,
+    logos_error_code_t in_q,
+    const char* in_r,
+    uint32_t* out_a,
+    bool* out_has_b,
+    const char** out_b,
+    logos_tstr_size_1_64_t* out_c,
+    uint8_t* out_class,
+    const uint8_t** out_d,
+    size_t* out_d_len,
+    logos_bstr_size_1_4096_t* out_e,
+    size_t* out_e_len,
+    uint8_t (*out_f)[32],
+    logos_bstr_size_0_t* out_g,
+    uint64_t** out_h,
+    size_t* out_h_count,
+    const char*** out_i,
+    size_t* out_i_count,
+    logos_demo_Rec_t** out_j,
+    size_t* out_j_count,
+    logos_demo_Rec_t* out_k,
+    logos_demo_All_response_L_t* out_l,
+    logos_demo_Mode_t* out_m,
+    bool* out_has_n,
+    uint64_t* out_n_0,
+    logos_demo_All_response_N_TU1_t* out_n_1,
+    logos_tuple_size_0_t* out_o,
+    bool* out_has_p,
+    logos_tuple_size_0_t* out_p,
+    logos_error_code_t* out_q,
+    const char** out_r
+);"""
+    ) in got
+    # The escape applies to the complete identifier: `in_class` needs none (§2.1).
+    check "in_class_" notin got.text and "out_class_" notin got.text
+    checkCompiles compilesSet("abiforms", accepted(source))
+
+  test "[IFC-0903] §3.9.8: methods init, destroy and upload_url beside the lifecycle symbols":
+    let source = module(
+      "demo.init_request = {}\ndemo.init_response = {}\n" &
+        "demo.destroy_request = {}\ndemo.destroy_response = {}\n" &
+        "demo.upload_url_request = {}\ndemo.upload_url_response = {}\n",
+      "x_module",
+    )
+    let got = decls(source).text
+    for m in ["Init", "Destroy", "Upload_url"]:
+      check ("(*logos_demo_" & m & "_FN_t)") in got
+      check ("logos_result_t logos_x_module_CALL_demo_" & m & "(") in got
+    check "logos_x_module_MODULE_init(" in got
+    check "void logos_x_module_MODULE_destroy(" in got
+    checkCompiles compilesSet("abi398", accepted(source))
+
+  test "[IFC-0205] [IFC-0225] §2.6: the identity, lifecycle and provider symbols, without the optional hooks":
+    let symbols = cItems(mirror("IFC/2.6.symbols.h")).mapIt(
+        it.replace("<module-C>", "meter_module")
+      )
+    let got = decls(mirror("IFC/3.9.1.module.cddl"))
+    check symbols.len == 7
+    for s in symbols:
+      # [IMPL] The optional hook is the module author's to declare.
+      check (s in got) == ("_MODULE_apply_configuration(" notin s)
+    check "_MODULE_async_api" notin got.text
+    # Without a provider contract nothing beyond identity and lifecycle.
+    let bare = decls(bound("bare_module").cSchemaSet)
+    check bare.len == 3
+    check bare.allIt(
+      "_MODULE_name(" in it or "_MODULE_init(" in it or "_MODULE_destroy(" in it
+    )
+
+  test "[IFC-0586] [IFC-0623] [IFC-0892] [IFC-0896] [IFC-0897] provider functions keep C linkage and stay distinct through linking":
+    let iface =
+      "_interface = \"demo\"\ndemo.get_request = {}\ndemo.get_response = { n: uint64 }\n"
+    # 63 bytes: the longest module names differ only in their last letter.
+    let long = "m" & 'n'.repeat(60)
+    var headers, impl, calls: string
+    for (suffix, n) in [("_a", 1), ("_b", 2)]:
+      let b = bound(long & suffix, ifaces = [iface])
+      let h = contractHeader(b.cSchemaSet)
+      check h.isOk
+      writeFile(outDir / (long & suffix) & ".h", h.get)
+      headers.add("#include \"" & long & suffix & ".h\"\n")
+      let p = "logos_" & long & suffix
+      impl.add(
+        "logos_result_t " & p &
+          "_CALL_demo_Get(logos_module_context_t* module, logos_response_owner_t* " &
+          "response_owner, uint64_t* out_n) {\n  (void)module; (void)response_owner;\n" &
+          "  *out_n = " & $n &
+          ";\n  logos_result_t r = {LOGOS_OK, 0, 0, 0};\n  return r;\n}\n" &
+          "const char* " & p & "_MODULE_name(void) { return \"" & long & suffix &
+          "\"; }\n"
+      )
+      calls.add(
+        "  { logos_demo_Get_FN_t f = &" & p & "_CALL_demo_Get;\n" &
+          "    uint64_t n = 0; logos_response_owner_t o = {0, 0};\n" &
+          "    if (f(0, &o, &n).code != LOGOS_OK || n != " & $n & ") return 1;\n" &
+          "    if (std::strcmp(" & p & "_MODULE_name(), \"" & long & suffix &
+          "\") != 0) return 2; }\n"
+      )
+    when deviceTarget:
+      skip()
+    else:
+      check linkRun(
+        "abilink",
+        headers & impl,
+        "#include <cstring>\n" & headers & "int main() {\n" & calls & "  return 0;\n}\n",
+      ) == ""

@@ -1,0 +1,4 @@
+storage.space_request = {}
+storage.space_response = {
+    info: storage.space_info,
+}

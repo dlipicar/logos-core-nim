@@ -1,8 +1,8 @@
 ## lcn-gen: the canonical C type headers of an accepted Logos schema set or
 ## module binding (INTERFACE §2, §2.1-§2.3, §2.5, §3.2; C mapping revision 3)
-## and `logos_types.h` (§5.2). Types only for now (D29): method signatures,
-## lifecycle symbols and vtables come later. Every header is stamped
-## PROVISIONAL ABI.
+## and `logos_types.h` (§5.2): C types, method typedefs and, for a module
+## binding, its provider functions and module symbols (§2.4, §2.6). Every
+## header is stamped PROVISIONAL ABI.
 
 import std/[os, parseopt, strutils]
 import results

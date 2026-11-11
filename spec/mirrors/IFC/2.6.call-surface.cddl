@@ -1,0 +1,16 @@
+provider-call-surface = {
+    ? primary: provider-contract-schema,
+    interfaces: [* provider-contract-schema],
+}
+
+provider-contract-schema = {
+    commitment: logos.schema_commitment,
+    document: tstr .size (1..1048576),
+    supporting_schemas: [* provider-supporting-schema],
+}
+
+provider-supporting-schema = {
+    namespace: tstr .size (1..128),
+    commitment: logos.schema_commitment,
+    document: tstr .size (1..1048576),
+}

@@ -1,0 +1,6 @@
+storage.exists_request = {
+    cid: tstr,
+}
+storage.exists_response = {
+    exists: bool,
+}

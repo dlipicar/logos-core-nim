@@ -1,5 +1,5 @@
-## INTERFACE §2, §2.1-§2.3, §2.5, §3.2, §5.2: the canonical C type mapping of an
-## accepted schema set, C mapping revision 3.
+## INTERFACE §2, §2.1-§2.6, §3.2, §5.2: the canonical C mapping of an accepted
+## schema set or module binding, C mapping revision 3.
 ##
 ## Derived here: semantic stems and their families (`_MAP`, `_BSTR`, `_LIST`,
 ## `_TUPLE`, `_CHOICE`, `_EVENT`, `_KIND_t`), choice arm labels in symbolic or
@@ -9,8 +9,10 @@
 ## contract-header frame (mapping-revision and commitment-context checks,
 ## document guards with their root macros, the C++ linkage wrapper), and
 ## `logos_types.h` (the fixed §5.2 and §2.3 blocks plus the common schema's
-## named types). Not derived yet: method signatures (§2.4), lifecycle and
-## provider symbols (§2.6), response owners (§2.7), asynchronous calls (§2.9).
+## named types), each method's `_FN_t` typedef (§2.4), and for a module
+## binding its `_CALL_` provider functions and `_MODULE_` symbols (§2.4, §2.6).
+## The fixed block carries the response owner (§2.7.1) and the asynchronous
+## and invocation-context ABI (§2.9); optional helpers (App A) are not derived.
 ##
 ## Acceptance runs this mapping (`accept.nim`): an accepted set must be
 ## representable in C without two identical identifiers or a namespace-projection
@@ -24,7 +26,7 @@
 ## of memory aborts the process; no partial header is ever returned.
 ##
 ## Every header is stamped PROVISIONAL ABI: the common-name projection (G158) and
-## G153 are open, and §2.4-§2.9 are not generated yet.
+## G153 are open.
 
 {.push raises: [].}
 
@@ -56,8 +58,23 @@ type
     module*: Opt[string]
       ## [SPEC INTERFACE §2] the module binding's runtime module name, if any
 
+  MemberRole = enum
+    mrValue ## one value: a scalar, text string, literal or aggregate
+    mrPresence ## `bool has_<field>`
+    mrBytes ## an unbounded or ranged byte string's pointer
+    mrLen ## its `<field>_len`
+    mrList ## a variable-length list's element pointer
+    mrCount ## its `<field>_count`
+    mrArray ## a positive exact-size byte string, `uint8_t <field>[N]`
+
   CMember = object
     name: string ## the complete, escaped C identifier
+    raw: string ## the complete identifier before the escape (§2.1, §2.4)
+    role: MemberRole
+    byPointer: bool
+      ## a value with a struct representation, which a method passes by
+      ## pointer (§2.4 rule 10, §2.3), empty values included
+    element: string ## a list's element type (§2.4 rule 9)
     ctype: string ## the type spelled before the name
     arrayLen: uint64 ## > 0: `ctype name[N]`
     target: string ## the aggregate embedded by value, if any
@@ -101,6 +118,8 @@ type
     defs: Table[string, CDef]
     constraints: Table[string, string] ## typedef name -> declaration
     macros: Table[string, (int, string)] ## literal macro -> (document, value)
+    halves: Table[string, seq[CMember]]
+      ## a map-valued method half's members, by its qualified name (§2.4)
     errors: seq[string]
 
 func at[K, V](t: Table[K, V], k: K): V =
@@ -250,6 +269,19 @@ func aggregateOf(g: Gen, doc: int, d: Declaration): string =
       return cur.name
     else:
       return ""
+
+func structRef(g: Gen, doc: int, d: Declaration): bool =
+  ## [SPEC INTERFACE §2.3, §2.4 rule 10] Whether a use of `d` has a struct
+  ## representation, through aliases and into `logos_types.h`. The common
+  ## `logos.error_code` is the fixed enum `logos_error_code_t` (§2.1).
+  var (cd, cur) = (doc, d)
+  while true: # alias chains end: acceptance rejects alias cycles (G153)
+    if g.docs[cd].common and cur.name == "logos.error_code":
+      return false
+    if cur.body.kind in {snLocalRef, snImportedRef}:
+      (cd, cur) = g.resolve(cd, cur.body)
+    else:
+      return cur.body.isAggregate
 
 # Arm labels ------------------------------------------------------------------------
 
@@ -405,15 +437,22 @@ proc addDef(g: var Gen, d: CDef) =
 proc listMembers(
     g: var Gen, o: Owner, path: seq[string], n: SchemaNode, items, count: string
 ): seq[CMember] =
-  ## [SPEC INTERFACE §2.3] `const T* items` + `size_t count`, the element at
-  ## path step `_LI`. A list element adds no by-value edge.
-  let e = g.position(o, path & "_LI", n.element, items)
-  var m = CMember(name: items, listTarget: e.target)
+  ## [SPEC INTERFACE §2.3] `const T* items` + `size_t count` (unescaped names
+  ## given), the element at path step `_LI`. A list element adds no by-value
+  ## edge.
+  let e = g.position(o, path & "_LI", n.element, escapeC(items))
+  var m = CMember(
+    name: escapeC(items),
+    raw: items,
+    role: mrList,
+    element: e.ctype,
+    listTarget: e.target,
+  )
   if e.ctype.endsWith("*"):
     m.ctype = e.ctype & " const*" # `[* tstr]`: `const char* const*`
   else:
     m.ctype = "const " & e.ctype & "*"
-  @[m, CMember(name: count, ctype: "size_t")]
+  @[m, CMember(name: escapeC(count), raw: count, role: mrCount, ctype: "size_t")]
 
 proc fieldMembers(
     g: var Gen, o: Owner, path: seq[string], name: string, n: SchemaNode
@@ -427,22 +466,41 @@ proc fieldMembers(
       let exact = exactBstr(n)
       if exact.isNone:
         return @[
-          CMember(name: escapeC(name), ctype: g.bstrPtrType(n)),
-          CMember(name: escapeC(name & "_len"), ctype: "size_t"),
+          CMember(
+            name: escapeC(name), raw: name, role: mrBytes, ctype: g.bstrPtrType(n)
+          ),
+          CMember(
+            name: escapeC(name & "_len"),
+            raw: name & "_len",
+            role: mrLen,
+            ctype: "size_t",
+          ),
         ]
       if exact.get > 0:
-        return @[CMember(name: escapeC(name), ctype: "uint8_t", arrayLen: exact.get)]
+        return @[
+          CMember(
+            name: escapeC(name),
+            raw: name,
+            role: mrArray,
+            ctype: "uint8_t",
+            arrayLen: exact.get,
+          )
+        ]
   of snList:
-    return g.listMembers(o, path, n, escapeC(name), escapeC(name & "_count"))
+    return g.listMembers(o, path, n, name, name & "_count")
   of snTuple:
     if n.items.len > 0:
       var ms: seq[CMember]
       for i, item in n.items:
-        ms.add(g.position(o, path & ("_TU" & $i), item, escapeC(name & "_" & $i)))
+        var m = g.position(o, path & ("_TU" & $i), item, escapeC(name & "_" & $i))
+        m.raw = name & "_" & $i
+        ms.add(m)
       return ms
   else:
     discard
-  @[g.single(o, path, n, escapeC(name))]
+  var m = g.single(o, path, n, escapeC(name))
+  m.raw = name
+  @[m]
 
 proc mapMembers(g: var Gen, o: Owner, path: seq[string], n: SchemaNode): seq[CMember] =
   ## [SPEC INTERFACE §2.3] Canonical field order; `bool has_<f>` right before the
@@ -450,7 +508,14 @@ proc mapMembers(g: var Gen, o: Owner, path: seq[string], n: SchemaNode): seq[CMe
   var ms: seq[CMember]
   for f in n.fields:
     if f.optional:
-      ms.add(CMember(name: escapeC("has_" & f.name), ctype: "bool"))
+      ms.add(
+        CMember(
+          name: escapeC("has_" & f.name),
+          raw: "has_" & f.name,
+          role: mrPresence,
+          ctype: "bool",
+        )
+      )
     ms.add(g.fieldMembers(o, path & ("_" & capitalize(f.name)), f.name, f.node))
   ms
 
@@ -553,20 +618,20 @@ proc position(
     if n.scalar != skBstr:
       return g.single(o, path, n, name)
     if exactBstr(n) == Opt.some(0'u64):
-      return CMember(name: name, ctype: "logos_bstr_size_0_t")
+      return CMember(name: name, ctype: "logos_bstr_size_0_t", byPointer: true)
     let key = inlineKey(o, path)
     g.structDef(key, "BSTR", stem, o, path, n)
-    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key, byPointer: true)
   of snList:
     let key = inlineKey(o, path)
     g.structDef(key, "LIST", stem, o, path, n)
-    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key, byPointer: true)
   of snTuple:
     if n.items.len == 0:
-      return CMember(name: name, ctype: "logos_tuple_size_0_t")
+      return CMember(name: name, ctype: "logos_tuple_size_0_t", byPointer: true)
     let key = inlineKey(o, path)
     g.structDef(key, "TUPLE", stem, o, path, n)
-    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key, byPointer: true)
   else:
     g.single(o, path, n, name)
 
@@ -591,23 +656,27 @@ proc single(
   of snMap:
     let key = inlineKey(o, path)
     g.structDef(key, "MAP", stem, o, path, n)
-    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key, byPointer: true)
   of snChoice:
     let key = inlineKey(o, path)
     g.choiceDef(key, stem, o, path, n)
-    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key, byPointer: true)
   of snList, snTuple:
     g.position(o, path, n, name)
   of snLocalRef, snImportedRef:
     let (d, decl) = g.resolve(o.doc, n)
     CMember(
-      name: name, ctype: g.typeNameOf(d, decl.name), target: g.aggregateOf(d, decl)
+      name: name,
+      ctype: g.typeNameOf(d, decl.name),
+      target: g.aggregateOf(d, decl),
+      byPointer: g.structRef(d, decl),
     )
 
 proc declaration(g: var Gen, doc: int, d: Declaration) =
   ## The C declarations of one named schema declaration [SPEC INTERFACE §2.3,
   ## §2.4 rules 4-5, §2.5]. A map-valued method half has none (§2.4 flattens it
-  ## into parameters), but its inline composites and literals do.
+  ## into parameters, kept in `halves`), but its inline composites and literals
+  ## do.
   let o = Owner(doc: doc, name: d.name, stem: g.stemOf(doc, d.name))
   let typeName = g.typeNameOf(doc, d.name)
   case d.kind
@@ -618,7 +687,7 @@ proc declaration(g: var Gen, doc: int, d: Declaration) =
     if n.kind == snChoice:
       g.choiceDef(d.name, o.stem, o, @[], n)
     else:
-      discard g.mapMembers(o, @[], n)
+      g.halves[d.name] = g.mapMembers(o, @[], n)
   of dkEvent:
     let n = d.body
     if n.kind == snChoice:
@@ -859,11 +928,12 @@ func identifiers(d: CDef): seq[string] =
 
 type DocGroup = object
   ## One document's declarations: its constants, literal macros, forward
-  ## typedefs and definitions.
+  ## typedefs, definitions and method typedefs.
   consts: seq[(string, string)]
   macros: seq[(string, string)]
   forwards: seq[string]
   defs: seq[string]
+  fns: seq[string]
 
 proc groups(g: Gen, consts: seq[seq[(string, string)]]): Result[seq[DocGroup], string] =
   ## [IMPL] Within a group: constants, literal macros by name, forward typedefs
@@ -892,7 +962,124 @@ func flat(gr: DocGroup): seq[string] =
     res.add("#define " & name & " " & value)
   for (name, value) in gr.macros:
     res.add("#define " & name & " " & value)
-  res & gr.forwards & gr.defs
+  res & gr.forwards & gr.defs & gr.fns
+
+# Methods and module symbols ------------------------------------------------------
+
+type CParam = object
+  ctype, name: string
+  arrayLen: uint64 ## > 0: `ctype (*name)[N]`
+
+func render(p: CParam): string =
+  if p.arrayLen > 0:
+    p.ctype & " (*" & p.name & ")[" & $p.arrayLen & "]"
+  else:
+    p.ctype & " " & p.name
+
+func memberParam(m: CMember, input: bool): CParam =
+  ## [SPEC INTERFACE §2.4 rules 2-10, §2.3] One flattened member as a method
+  ## parameter: the direction prefix once, on the complete identifier, then the
+  ## keyword escape (§2.1). Inputs keep the member's type, except that a struct
+  ## representation is `const T*` and an exact-size byte string
+  ## `const uint8_t (*)[N]`; outputs point to it, except that a list is
+  ## `<element>**` (rule 9) and an exact-size byte string `uint8_t (*)[N]`.
+  ## [IMPL I64] An unbounded byte string's output is `const uint8_t**`: §2.3
+  ## gives it the ranged form's representation, whose pointer typedef is const.
+  let name = escapeC((if input: "in_" else: "out_") & m.raw)
+  case m.role
+  of mrArray:
+    CParam(
+      ctype: (if input: "const uint8_t" else: "uint8_t"),
+      name: name,
+      arrayLen: m.arrayLen,
+    )
+  of mrList:
+    CParam(ctype: (if input: m.ctype else: m.element & "**"), name: name)
+  of mrValue:
+    if m.byPointer:
+      CParam(ctype: (if input: "const " else: "") & m.ctype & "*", name: name)
+    else:
+      CParam(ctype: (if input: m.ctype else: m.ctype & "*"), name: name)
+  of mrPresence, mrBytes, mrLen, mrCount:
+    CParam(ctype: (if input: m.ctype else: m.ctype & "*"), name: name)
+
+func halfParams(g: Gen, doc: int, half: string, input: bool): seq[CParam] =
+  ## [SPEC INTERFACE §2.4] A method half's parameters: a choice-valued half is the
+  ## one `in_request` or `out_response` wrapper (rules 4-5); a map-valued half is
+  ## flattened in canonical field order; an empty map adds none (rule 7).
+  let d = g.docs[doc].model.find(half).get
+  if d.body.kind == snChoice:
+    let t = g.typeNameOf(doc, half)
+    if input:
+      return @[CParam(ctype: "const " & t & "*", name: "in_request")]
+    return @[CParam(ctype: t & "*", name: "out_response")]
+  g.halves.getOrDefault(half).mapIt(memberParam(it, input))
+
+func methodParams(g: Gen, doc: int, m: Declaration): seq[CParam] =
+  ## [SPEC INTERFACE §2.4 rule 1, §3.3] The ABI state parameters, then the
+  ## request's, then the response's.
+  @[
+    CParam(ctype: "logos_module_context_t*", name: "module"),
+    CParam(ctype: "logos_response_owner_t*", name: "response_owner"),
+  ] & g.halfParams(doc, m.request, true) & g.halfParams(doc, m.response, false)
+
+func renderParams(ps: seq[CParam]): string =
+  "(\n" & ps.mapIt("    " & render(it)).join(",\n") & "\n)"
+
+func methodComponent(g: Gen, doc: int, m: Declaration): string =
+  ## [SPEC INTERFACE §2.1] `<namespace>_<Method>`: the defining contract's C
+  ## namespace component and the bare method name, its first ASCII letter
+  ## capitalized.
+  let v = g.docs[doc]
+  v.cns & "_" & capitalize(bareMethodName(m.name, v.model.namespace))
+
+func fnTypedefName(g: Gen, doc: int, m: Declaration): string =
+  "logos_" & g.methodComponent(doc, m) & "_FN_t"
+
+func fnTypedef(g: Gen, doc: int, m: Declaration): string =
+  ## [SPEC INTERFACE §2.4] `logos_<namespace>_<Method>_FN_t`, the defining
+  ## contract's method typedef.
+  "typedef logos_result_t (*" & g.fnTypedefName(doc, m) & ")" &
+    renderParams(g.methodParams(doc, m)) & ";"
+
+func callName(g: Gen, doc: int, m: Declaration, moduleC: string): string =
+  "logos_" & moduleC & "_CALL_" & g.methodComponent(doc, m)
+
+func callDeclaration(g: Gen, doc: int, m: Declaration, moduleC: string): string =
+  ## [SPEC INTERFACE §2.4, §3.3] The concrete provider function: exactly the
+  ## typedef's return type and parameters.
+  "logos_result_t " & g.callName(doc, m, moduleC) & renderParams(g.methodParams(doc, m)) &
+    ";"
+
+func moduleSymbols(moduleC: string, provider: bool): seq[(string, string)] =
+  ## [SPEC INTERFACE §2.6] (name, declaration) of the identity and lifecycle
+  ## symbols and, for a provider, the call-surface, free and dispatch symbols.
+  ## [IMPL] The optional `_MODULE_apply_configuration` and `_MODULE_async_api`
+  ## are left to the module author, who declares the ones it exports.
+  let p = "logos_" & moduleC & "_MODULE_"
+  result = @[
+    (p & "name", "const char* " & p & "name(void);"),
+    (
+      p & "init",
+      "logos_result_t " & p & "init(\n" & "    const logos_module_init_input_t* input,\n" &
+        "    logos_module_context_t** out_context\n);",
+    ),
+    (p & "destroy", "void " & p & "destroy(logos_module_context_t* module);"),
+  ]
+  if provider:
+    result.add(
+      [
+        (p & "call_surface", "const uint8_t* " & p & "call_surface(size_t* out_len);"),
+        (p & "free", "void " & p & "free(logos_module_context_t* module, void* ptr);"),
+        (
+          p & "dispatch",
+          "logos_result_t " & p & "dispatch(\n" & "    logos_module_context_t* module,\n" &
+            "    const char* method,\n" & "    const uint8_t* params_cbor,\n" &
+            "    size_t params_len,\n" & "    uint8_t** out_response_cbor,\n" &
+            "    size_t* out_response_len\n);",
+        ),
+      ]
+    )
 
 # logos_types.h -------------------------------------------------------------------
 
@@ -1037,6 +1224,8 @@ type Generated = object
   constraints: seq[string]
   groups: seq[DocGroup]
   module: seq[(string, string)]
+  symbols: seq[string]
+    ## a module binding's provider functions and module symbols (§2.4, §2.6)
 
 proc generate(s: CSchemaSet): Result[Generated, string] =
   var views: seq[DocView]
@@ -1071,6 +1260,24 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
     cs.add(sensitiveConstants(c.model))
     consts.add(cs)
   let module = moduleConstants(s)
+  # [SPEC INTERFACE §2.4] Each document's method typedefs; a module binding's
+  # provider functions for its primary and implemented interfaces, then its
+  # module symbols (§2.6). A provider contract declares a method or an event.
+  var fns = newSeq[seq[(string, string)]](docs.len)
+  var symbols: seq[(string, string)]
+  var provider = false
+  let moduleC = projectModule(s.module.get(""))
+  let exposed = (if s.primary.isSome: 1 else: 0) + s.interfaces.len
+  for i in 0 ..< docs.len:
+    for d in views[i].model.declarations:
+      if d.kind == dkMethod:
+        fns[i].add((g.fnTypedefName(i, d), g.fnTypedef(i, d)))
+        if s.module.isSome and i < exposed:
+          symbols.add((g.callName(i, d, moduleC), g.callDeclaration(i, d, moduleC)))
+      if d.kind in {dkMethod, dkEvent} and i < exposed:
+        provider = true
+  if s.module.isSome:
+    symbols.add(moduleSymbols(moduleC, provider))
   # [SPEC INTERFACE §2.1] No two schema nodes derive one C identifier.
   var ids: seq[(string, string)]
   for k in toSeq(g.defs.keys).sorted:
@@ -1084,6 +1291,11 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
       ids.add((name, "a document root macro"))
   for (name, _) in module:
     ids.add((name, "a module-binding constant"))
+  for f in fns:
+    for (name, _) in f:
+      ids.add((name, "a method typedef"))
+  for (name, _) in symbols:
+    ids.add((name, "a module symbol"))
   for name in g.macros.keys:
     ids.add((name, "a literal macro"))
   var seen: Table[string, string]
@@ -1094,9 +1306,11 @@ proc generate(s: CSchemaSet): Result[Generated, string] =
           seen.at(id) & " (INTERFACE §2.1)"
       )
     seen[id] = origin
-  var res = Generated(docs: docs, module: module)
+  var res = Generated(docs: docs, module: module, symbols: symbols.mapIt(it[1]))
   res.groups = ?g.groups(consts)
   res.groups.setLen(docs.len)
+  for i in 0 ..< docs.len:
+    res.groups[i].fns = fns[i].mapIt(it[1])
   for v in views[0 ..< docs.len]:
     res.cns.add(v.cns)
   # [SPEC INTERFACE §5.2] logos_types.h already declares the common schema's
@@ -1121,7 +1335,7 @@ proc cDeclarations*(s: CSchemaSet): Result[seq[string], string] =
     res.add(gr.flat)
   for (name, value) in gen.module:
     res.add("#define " & name & " " & value)
-  ok(res)
+  ok(res & gen.symbols)
 
 func headerName*(s: CSchemaSet): string =
   ## The bound runtime module name, or the subject document's C namespace
@@ -1150,8 +1364,8 @@ proc contractHeader*(s: CSchemaSet): Result[string, string] =
   let name = s.headerName
   var h =
     "/* " & name & "_types.h: generated by lcn-gen. " & ProvisionalStamp & ".\n" &
-    " * C types only (INTERFACE §2.1-§2.3, §2.5, §3.2): method signatures and\n" &
-    " * lifecycle symbols are not generated yet. Do not edit. */\n\n" &
+    " * INTERFACE §2.1-§2.6, §3.2: C types, method typedefs and, for a module\n" &
+    " * binding, its provider functions and module symbols. Do not edit. */\n\n" &
     "#include \"logos_types.h\"\n" & revisionCheck() & "\n"
   for m in contextMarkers():
     h.add(
@@ -1188,9 +1402,11 @@ proc contractHeader*(s: CSchemaSet): Result[string, string] =
     if items.len > 0:
       h.add("\n" & items.join("\n\n") & "\n")
     h.add("#endif /* " & guard & " */\n")
-  if gen.module.len > 0:
+  if gen.module.len > 0 or gen.symbols.len > 0:
     h.add("\n/* module binding " & name & " */\n")
     for (n, v) in gen.module:
       h.add("#define " & n & " " & v & "\n")
+    for d in gen.symbols:
+      h.add("\n" & d & "\n")
   h.add("\n#ifdef __cplusplus\n}\n#endif\n")
   ok(h)
