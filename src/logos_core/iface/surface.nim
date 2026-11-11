@@ -125,7 +125,10 @@ func parseSchemaCommitment*(v: CborValue): Result[Digest, string] =
 
 # logos.schema_response -------------------------------------------------------------
 
-func entry(c: Contract): CborValue =
+func supportingEntry*(c: Contract): CborValue =
+  ## A supporting-schema entry: its commitment, document and namespace (the
+  ## shape of `logos.schema_response` entries and of INTERFACE §2.6
+  ## `provider-supporting-schema`).
   cborMap(
     (cbor("commitment"), schemaCommitment(c.root)),
     (cbor("document"), cbor(c.source)),
@@ -154,9 +157,12 @@ func schemaResponse*(s: ContractSet, selected: Digest): Result[CborValue, string
   var v: CborValue
   if selected == s.primary.root:
     v = cborMap(
-      (cbor("interface_schemas"), cborArray(byNamespace(s.interfaces).mapIt(entry(it)))),
+      (
+        cbor("interface_schemas"),
+        cborArray(byNamespace(s.interfaces).mapIt(supportingEntry(it))),
+      ),
       (cbor("schema"), cbor(s.primary.source)),
-      (cbor("supporting_schemas"), cborArray(s.supporting.mapIt(entry(it)))),
+      (cbor("supporting_schemas"), cborArray(s.supporting.mapIt(supportingEntry(it)))),
     )
   else:
     var found = false
@@ -166,7 +172,10 @@ func schemaResponse*(s: ContractSet, selected: Digest): Result[CborValue, string
         v = cborMap(
           (cbor("interface_schemas"), cborArray()),
           (cbor("schema"), cbor(c.source)),
-          (cbor("supporting_schemas"), cborArray(s.supportingOf(c).mapIt(entry(it)))),
+          (
+            cbor("supporting_schemas"),
+            cborArray(s.supportingOf(c).mapIt(supportingEntry(it))),
+          ),
         )
     if not found:
       return err("the set has no contract with the selected root")

@@ -117,7 +117,7 @@ Evaluation fails while the JSON and `nimble.lock` disagree.
 | Path | What |
 |---|---|
 | `src/logos_core/` | The library. BLAKE3 C sources are vendored under `crypto/blake3/` (`tools/update-blake3.sh`). |
-| `src/logos_core/iface/` | INTERFACE: acceptance, names, the C type mapping, call surfaces, payloads, outcomes. |
+| `src/logos_core/iface/` | INTERFACE: acceptance, names, the C type mapping, call surfaces and the provider call-surface descriptor, payloads, outcomes. |
 | `src/logos_core/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
 | `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator and its runtime; the `lcn-gen` CLI. |
 | `src/logos_core/transport/` | TRANSPORT without I/O: envelope codec, framing, Hello, tickets, sessions, the schema boundary. |
