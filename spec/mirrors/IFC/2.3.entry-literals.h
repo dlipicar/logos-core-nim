@@ -1,2 +1,2 @@
-#define LOGOS_STORAGE_ENTRY_ARM_0_KIND_LITERAL "file"
-#define LOGOS_STORAGE_ENTRY_ARM_1_KIND_LITERAL "dir"
+#define LOGOS_LITERAL_storage_Entry_AR_File_Kind "file"
+#define LOGOS_LITERAL_storage_Entry_AR_Dir_Kind "dir"

@@ -2,12 +2,17 @@
 ## an accepted schema set.
 ##
 ## The Nim mapping is ours [IMPL]; INTERFACE fixes only the C one. It follows the
-## C mapping's names and shapes where Nim allows:
+## C mapping's (revision 3) stems, paths and arm labels where Nim allows:
 ##
 ## - A named map or choice (types, method halves, events) is an object or a case
 ##   object named by the PascalCase of its C stem (`storage.space_info` →
-##   `StorageSpaceInfo`; common types drop `logos`). An inline map or choice adds
-##   its C path and `Map` / `Choice` (`StorageEntryArm0Map`).
+##   `StorageSpaceInfo`, `sensor.control.settings` → `SensorNSControlSettings`;
+##   common types use their local name, as `logos_types.h` does under G158). An
+##   inline map or choice adds its C path and `Map` / `Choice`
+##   (`StorageEntryARFileMap`, `StorageRecordSubInnerChoice`).
+## - A choice's kind enum lists the C arm labels in C discriminant order
+##   (`ValueKind.Bool`, `.Tstr`, `.Uint64`), or `Case<i>` in indexed form; an
+##   arm's payload field is `arm_<label>` / `arm_<i>`.
 ## - Any other named declaration is a type alias with `enc<Name>` / `dec<Name>`.
 ## - Scalars map to `bool`, `uint8`..`uint64`, `int8`..`int64`, `string` and
 ##   `seq[byte]`; lists to `seq`; tuples to anonymous tuples (`[]` to
@@ -17,6 +22,9 @@
 ##   [SPEC INTERFACE §2.3].
 ## - A reference on a by-value cycle (the C mapping's recursive edges) is a
 ##   `ref`.
+## - Nim identifiers ignore case after their first letter and underscores, so
+##   C names that differ only there collide in Nim: such a set has no Nim
+##   output, and generation fails with the colliding names.
 ##
 ## Decoders accept only checked values: deterministic CBOR, then the schema
 ## (`nimrt.check`), then conversion.
@@ -47,6 +55,11 @@ type
     doc: int
     name: string ## the owning declaration's qualified name
     stem: string ## its C stem
+
+  Step =
+    tuple
+      key: string ## the `nimrt.choiceKey` component
+      c: string ## the C path step (§2.1): `_Field`, `_LI`, `_TU<i>`, `_AR…`
 
   NGen = object
     docs: seq[Doc]
@@ -111,11 +124,12 @@ proc claim(g: var NGen, id, origin: string) =
     g.idents[k] = origin
 
 func stemOf(g: NGen, doc: int, name: string): string =
+  ## The C stem (§2.1; G158 interim for the common schema).
   let v = g.docs[doc]
   if v.common:
     localName(name, v.model.namespace)
   else:
-    v.cns & "_" & localName(name, v.model.namespace)
+    v.cns & "_" & capitalize(localName(name, v.model.namespace))
 
 func isErrorCode(g: NGen, doc: int, name: string): bool =
   g.docs[doc].common and name == "logos.error_code"
@@ -126,8 +140,20 @@ func typeNameOf(g: NGen, doc: int, name: string): string =
   else:
     pascal(g.stemOf(doc, name))
 
-func inlineName(o: Owner, path: openArray[string], suffix: string): string =
-  pascal(o.stem & "_" & path.join("_")) & suffix
+func inlineName(o: Owner, path: seq[Step], suffix: string): string =
+  pascal(o.stem & path.mapIt(it.c).join("")) & suffix
+
+func keys(path: seq[Step]): seq[string] =
+  path.mapIt(it.key)
+
+func fieldStep(name: string): Step =
+  (name, "_" & capitalize(name))
+
+func listStep(): Step =
+  ("list_item", "_LI")
+
+func tupleStep(i: int): Step =
+  ("tuple_" & $i, "_TU" & $i)
 
 func resolve(g: NGen, doc: int, n: SchemaNode): (int, Declaration) =
   if n.kind == snLocalRef:
@@ -253,12 +279,12 @@ proc findBoxed(g: var NGen) =
 
 # Expressions -----------------------------------------------------------------------
 
-proc enc(g: NGen, o: Owner, path: seq[string], n: SchemaNode, x: string): string
+proc enc(g: NGen, o: Owner, path: seq[Step], n: SchemaNode, x: string): string
 
-proc refEnc(g: NGen, o: Owner, path: seq[string], n: SchemaNode, x: string): string =
+proc refEnc(g: NGen, o: Owner, path: seq[Step], n: SchemaNode, x: string): string =
   let (d, decl) = g.resolve(o.doc, n)
   let x =
-    if choiceKey(o.name, path) in g.boxed:
+    if choiceKey(o.name, path.keys) in g.boxed:
       x & "[]"
     else:
       x
@@ -269,7 +295,7 @@ proc refEnc(g: NGen, o: Owner, path: seq[string], n: SchemaNode, x: string): str
   else:
     "enc" & g.typeNameOf(d, decl.name) & "(" & x & ")"
 
-proc enc(g: NGen, o: Owner, path: seq[string], n: SchemaNode, x: string): string =
+proc enc(g: NGen, o: Owner, path: seq[Step], n: SchemaNode, x: string): string =
   ## A Nim expression encoding `x`, a value of the node at (`o`, `path`).
   case n.kind
   of snPrimitive:
@@ -285,18 +311,18 @@ proc enc(g: NGen, o: Owner, path: seq[string], n: SchemaNode, x: string): string
   of snMap, snChoice:
     "toCbor(" & x & ")"
   of snList:
-    "cborArray(" & x & ".mapIt(" & g.enc(o, path & "list_item", n.element, "it") & "))"
+    "cborArray(" & x & ".mapIt(" & g.enc(o, path & listStep(), n.element, "it") & "))"
   of snTuple:
     var items: seq[string]
     for i, item in n.items:
-      items.add(g.enc(o, path & ("tuple_" & $i), item, x & "[" & $i & "]"))
+      items.add(g.enc(o, path & tupleStep(i), item, x & "[" & $i & "]"))
     "cborArray(" & items.join(", ") & ")"
   of snLocalRef, snImportedRef:
     g.refEnc(o, path, n, x)
 
-proc dec(g: NGen, o: Owner, path: seq[string], n: SchemaNode, v: string): string
+proc dec(g: NGen, o: Owner, path: seq[Step], n: SchemaNode, v: string): string
 
-proc refDec(g: NGen, o: Owner, path: seq[string], n: SchemaNode, v: string): string =
+proc refDec(g: NGen, o: Owner, path: seq[Step], n: SchemaNode, v: string): string =
   let (d, decl) = g.resolve(o.doc, n)
   let name = g.typeNameOf(d, decl.name)
   let e =
@@ -306,12 +332,12 @@ proc refDec(g: NGen, o: Owner, path: seq[string], n: SchemaNode, v: string): str
       "fromChecked(" & name & ", " & v & ")"
     else:
       "dec" & name & "(" & v & ")"
-  if choiceKey(o.name, path) in g.boxed:
+  if choiceKey(o.name, path.keys) in g.boxed:
     "boxed(" & e & ")"
   else:
     e
 
-proc dec(g: NGen, o: Owner, path: seq[string], n: SchemaNode, v: string): string =
+proc dec(g: NGen, o: Owner, path: seq[Step], n: SchemaNode, v: string): string =
   ## A Nim expression converting the checked value `v` of the node at
   ## (`o`, `path`).
   case n.kind
@@ -334,13 +360,13 @@ proc dec(g: NGen, o: Owner, path: seq[string], n: SchemaNode, v: string): string
   of snChoice:
     "fromChecked(" & inlineName(o, path, "Choice") & ", " & v & ")"
   of snList:
-    v & ".items.mapIt(" & g.dec(o, path & "list_item", n.element, "it") & ")"
+    v & ".items.mapIt(" & g.dec(o, path & listStep(), n.element, "it") & ")"
   of snTuple:
     if n.items.len == 0:
       return "EmptyTuple()"
     var items: seq[string]
     for i, item in n.items:
-      items.add(g.dec(o, path & ("tuple_" & $i), item, v & ".items[" & $i & "]"))
+      items.add(g.dec(o, path & tupleStep(i), item, v & ".items[" & $i & "]"))
     if items.len == 1:
       "(" & items[0] & ",)"
     else:
@@ -350,9 +376,9 @@ proc dec(g: NGen, o: Owner, path: seq[string], n: SchemaNode, v: string): string
 
 # Types -----------------------------------------------------------------------------
 
-proc genObject(g: var NGen, o: Owner, path: seq[string], n: SchemaNode, name: string)
+proc genObject(g: var NGen, o: Owner, path: seq[Step], n: SchemaNode, name: string)
 
-proc typeExpr(g: var NGen, o: Owner, path: seq[string], n: SchemaNode): string =
+proc typeExpr(g: var NGen, o: Owner, path: seq[Step], n: SchemaNode): string =
   ## The Nim type of the node at (`o`, `path`); inline maps and choices are
   ## generated on the way.
   case n.kind
@@ -369,13 +395,13 @@ proc typeExpr(g: var NGen, o: Owner, path: seq[string], n: SchemaNode): string =
     g.genObject(o, path, n, name)
     name
   of snList:
-    "seq[" & g.typeExpr(o, path & "list_item", n.element) & "]"
+    "seq[" & g.typeExpr(o, path & listStep(), n.element) & "]"
   of snTuple:
     if n.items.len == 0:
       return "EmptyTuple"
     var items: seq[string]
     for i, item in n.items:
-      items.add(g.typeExpr(o, path & ("tuple_" & $i), item))
+      items.add(g.typeExpr(o, path & tupleStep(i), item))
     if items.len == 1:
       "(" & items[0] & ",)"
     else:
@@ -383,14 +409,14 @@ proc typeExpr(g: var NGen, o: Owner, path: seq[string], n: SchemaNode): string =
   of snLocalRef, snImportedRef:
     let (d, decl) = g.resolve(o.doc, n)
     let name = g.typeNameOf(d, decl.name)
-    if choiceKey(o.name, path) in g.boxed:
+    if choiceKey(o.name, path.keys) in g.boxed:
       "ref " & name
     else:
       name
 
-proc genObject(g: var NGen, o: Owner, path: seq[string], n: SchemaNode, name: string) =
-  g.claim(name, choiceKey(o.name, path))
-  let key = choiceKey(o.name, path)
+proc genObject(g: var NGen, o: Owner, path: seq[Step], n: SchemaNode, name: string) =
+  g.claim(name, choiceKey(o.name, path.keys))
+  let key = choiceKey(o.name, path.keys)
   g.forwards.add("proc toCbor*(x: " & name & "): CborValue")
   g.forwards.add("proc fromChecked*(T: type " & name & ", v: CborValue): " & name)
   if n.kind == snMap:
@@ -409,7 +435,7 @@ proc genObject(g: var NGen, o: Owner, path: seq[string], n: SchemaNode, name: st
             seen.at(nimNorm(f.name)) & " of " & name
         )
       seen[nimNorm(f.name)] = f.name
-      let fpath = path & f.name
+      let fpath = path & fieldStep(f.name)
       let t = g.typeExpr(o, fpath, f.node)
       let lit = g.literalOf(o.doc, f.node)
       if f.optional:
@@ -445,27 +471,55 @@ proc genObject(g: var NGen, o: Owner, path: seq[string], n: SchemaNode, name: st
   else: # choice
     let kind = name & "Kind"
     g.claim(kind, key)
+    var labels: seq[Opt[string]]
+    for a in n.arms:
+      if a.kind in {snLocalRef, snImportedRef}:
+        let (d, decl) = g.resolve(o.doc, a)
+        labels.add(armLabelOf(a, referenceLabel(g.docs[d].model.namespace, decl.name)))
+      else:
+        labels.add(armLabelOf(a))
+    let (symbolic, steps) = choiceSteps(labels)
+    var members: seq[string] # by canonical arm index
+    var seen: Table[string, string]
+    for i in 0 ..< n.arms.len:
+      let m = (if symbolic: steps[i] else: "Case" & steps[i])
+      if nimNorm(m) in seen:
+        g.errors.add(
+          "Nim identifier collision: arms " & m & " and " & seen.at(nimNorm(m)) & " of " &
+            name
+        )
+      seen[nimNorm(m)] = m
+      members.add(m)
+    func armPath(i: int): seq[Step] =
+      path & (("arm_" & $i), (if symbolic: "_AR_" & steps[i]
+        else: "_AR" & steps[i]))
+
     var enumDecl = "  " & kind & "* {.pure.} = enum"
     var decl = "  " & name & "* = object\n    case kind*: " & kind
     var encBody = "proc toCbor*(x: " & name & "): CborValue =\n  case x.kind\n"
     var decBody =
       "proc fromChecked*(T: type " & name & ", v: CborValue): " & name &
       " =\n  case generatedSchema.arm(" & escape(key) & ", v)\n"
-    for i, a in n.arms:
-      let arm = "arm" & $i
-      let apath = path & ("arm_" & $i)
-      enumDecl.add("\n    " & arm)
-      decl.add("\n    of " & kind & "." & arm & ":")
-      encBody.add("  of " & kind & "." & arm & ":\n    ")
-      decBody.add("  of " & $i & ":\n    " & name & "(kind: " & kind & "." & arm)
+    for i in discriminantOrder(symbolic, steps):
+      let a = n.arms[i]
+      let m = members[i]
+      let field = "arm_" & steps[i]
+      enumDecl.add("\n    " & m)
+      decl.add("\n    of " & kind & "." & m & ":")
+      encBody.add("  of " & kind & "." & m & ":\n    ")
       if a.kind == snLiteral:
         decl.add("\n      discard")
-        encBody.add(g.enc(o, apath, a, "") & "\n")
+        encBody.add(g.enc(o, armPath(i), a, "") & "\n")
+      else:
+        decl.add("\n      " & field & "*: " & g.typeExpr(o, armPath(i), a))
+        encBody.add(g.enc(o, armPath(i), a, "x." & field) & "\n")
+    for i, a in n.arms:
+      let field = "arm_" & steps[i]
+      decBody.add("  of " & $i & ":\n    " & name & "(kind: " & kind & "." & members[i])
+      if a.kind == snLiteral:
         decBody.add(")\n")
       else:
-        decl.add("\n      " & arm & "*: " & g.typeExpr(o, apath, a))
-        encBody.add(g.enc(o, apath, a, "x." & arm) & "\n")
-        decBody.add(", " & arm & ": " & g.dec(o, apath, a, "v") & ")\n")
+        decBody.add(", " & field & ": " & g.dec(o, armPath(i), a, "v") & ")\n")
     g.types.add(enumDecl)
     g.types.add(decl)
     g.procs.add(encBody.strip(leading = false))

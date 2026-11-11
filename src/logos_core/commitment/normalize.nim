@@ -120,79 +120,184 @@ func fieldEntry(v: CborValue, name: string): CborValue =
       return x
   nil
 
-func value(
-    n: var Normalizer, at: Site, v: CborValue, depth: int
+type Wrapper = object
+  ## An imported reference or a choice the value passes through: its node wraps
+  ## the inner value's node once that is built.
+  site: Site
+  id: Digest
+  arm: int ## the selected arm of a choice; -1 for an imported reference
+  armId: Digest
+
+type Frame = object ## A map, list or tuple whose members are being normalized.
+  site: Site
+  id: Digest
+  v: CborValue
+  depth: int ## the maps and arrays above `v`
+  wrappers: seq[Wrapper] ## the imported references and choices around it
+  next: int ## the next schema field or array element
+  memberId: Digest ## map and tuple: the identity of the member being built
+  members: seq[ValueNode] ## map: field nodes; list: element values
+  positions: seq[(Digest, ValueNode)] ## tuple
+  seen: int ## map: the fields present in `v`
+
+func rewrap(node: ValueNode, wrappers: seq[Wrapper]): ValueNode =
+  ## `node` inside its reference and choice nodes, innermost first.
+  result = node
+  for i in countdown(wrappers.high, 0):
+    let w = wrappers[i]
+    result =
+      if w.arm < 0:
+        referenceNode(
+          w.id, w.site.node.imported.root, w.site.node.imported.subtree, result
+        )
+      else:
+        choiceNode(w.id, uint64(w.arm), w.armId, result)
+
+func enter(
+    n: var Normalizer, stack: var seq[Frame], at: Site, v: CborValue, depth: int
 ): Result[ValueNode, string] =
-  if depth > DefaultMaxDepth:
-    return err("value nested deeper than " & $DefaultMaxDepth)
-  let site = ?n.set[].throughLocal(at)
+  ## The node of `v` at `at` if it is a scalar; for a map, list or tuple, its frame
+  ## is pushed and the result is nil. Imported references and choice arms are
+  ## followed here and wrapped when the inner node is built.
+  var
+    site = ?n.set[].throughLocal(at)
+    wrappers: seq[Wrapper]
+  while site.node.kind in {snImportedRef, snChoice}:
+    for w in wrappers:
+      if w.site.doc == site.doc and
+          cast[pointer](w.site.node) == cast[pointer](site.node):
+        return err("references and choice arms form a cycle without structure")
+    var w = Wrapper(site: site, id: n.id(site), arm: -1)
+    if site.node.kind == snImportedRef:
+      site = ?n.set[].throughLocal(?n.set[].importedSite(site))
+    else:
+      let p = n.plan(site)
+      if p.isNone:
+        return err("the choice has no selection plan")
+      let arm = p.get.select(v)
+      if arm.isNone:
+        return err("no choice arm matches")
+      let arms = site.child(
+        PathSegment(kind: psChoiceArm, index: uint64(arm.get)), site.node.arms[arm.get]
+      )
+      w.arm = arm.get
+      w.armId = n.id(arms)
+      site = ?n.set[].throughLocal(arms)
+    wrappers.add(w)
+
   let id = n.id(site)
   let s = site.node
+  if s.kind in {snMap, snList, snTuple} and depth >= DefaultMaxDepth:
+    return err("value nested deeper than " & $DefaultMaxDepth & " maps and arrays")
   case s.kind
-  of snLocalRef:
+  of snLocalRef, snImportedRef, snChoice:
     err("unreachable")
-  of snImportedRef:
-    let target = ?n.set[].importedSite(site)
-    ok(
-      referenceNode(
-        id, s.imported.root, s.imported.subtree, ?n.value(target, v, depth + 1)
-      )
-    )
   of snPrimitive:
     if not s.primitiveAccepts(v):
       return err("not a valid " & $s.scalar & " value")
-    ok(scalarNode(id, scalarOf(s.scalar, v)))
+    ok(rewrap(scalarNode(id, scalarOf(s.scalar, v)), wrappers))
   of snLiteral:
     let lit = literalValue(s.literal)
     if v.kind != lit.kind or encodeCbor(v) != encodeCbor(lit):
       return err("not the literal " & $toDiag(lit))
-    ok(scalarNode(id, s.literal))
-  of snMap:
-    if v.kind != ckMap:
+    ok(rewrap(scalarNode(id, s.literal), wrappers))
+  of snMap, snList, snTuple:
+    if s.kind == snMap and v.kind != ckMap:
       return err("a map is expected")
-    var
-      fields: seq[ValueNode]
-      seen = 0
-    for f in s.fields:
-      let fs = site.child(PathSegment(kind: psField, field: f.name), f.node)
-      let x = v.fieldEntry(f.name)
-      if x.isNil:
-        if not f.optional:
-          return err("required field " & f.name & " is missing")
-        fields.add(absentField(n.id(fs), f.name))
-      else:
-        inc seen
-        fields.add(fieldNode(n.id(fs), f.name, ?n.value(fs, x, depth + 1)))
-    if seen != v.entries.len:
-      return err("the map has fields its schema does not define")
-    ok(mapNode(id, fields))
-  of snList:
-    if v.kind != ckArray:
+    if s.kind == snList and v.kind != ckArray:
       return err("a list is expected")
-    let es = site.child(PathSegment(kind: psListElement), s.element)
-    var values = newSeqOfCap[ValueNode](v.items.len)
-    for x in v.items:
-      values.add(?n.value(es, x, depth + 1))
-    ok(listNode(id, n.id(es), values, packKindOf(s.element)))
-  of snTuple:
-    if v.kind != ckArray or v.items.len != s.items.len:
+    if s.kind == snTuple and (v.kind != ckArray or v.items.len != s.items.len):
       return err("a tuple of " & $s.items.len & " elements is expected")
-    var positions: seq[(Digest, ValueNode)]
-    for i, x in v.items:
-      let ps =
-        site.child(PathSegment(kind: psTuplePosition, index: uint64(i)), s.items[i])
-      positions.add((n.id(ps), ?n.value(ps, x, depth + 1)))
-    ok(tupleNode(id, positions))
-  of snChoice:
-    let p = n.plan(site)
-    if p.isNone:
-      return err("the choice has no selection plan")
-    let arm = p.get.select(v)
-    if arm.isNone:
-      return err("no choice arm matches")
-    let a = arm.get
-    let arms = site.child(PathSegment(kind: psChoiceArm, index: uint64(a)), s.arms[a])
-    ok(choiceNode(id, uint64(a), n.id(arms), ?n.value(arms, v, depth + 1)))
+    stack.add(Frame(site: site, id: id, v: v, depth: depth, wrappers: wrappers))
+    ok(ValueNode(nil))
+
+func finish(n: var Normalizer, f: Frame): ValueNode =
+  ## The node of a frame whose members are all built.
+  let s = f.site.node
+  let node =
+    case s.kind
+    of snMap:
+      mapNode(f.id, f.members)
+    of snList:
+      let es = f.site.child(PathSegment(kind: psListElement), s.element)
+      listNode(f.id, n.id(es), f.members, packKindOf(s.element))
+    of snTuple:
+      tupleNode(f.id, f.positions)
+    else:
+      raiseAssert "frames hold maps, lists and tuples"
+  rewrap(node, f.wrappers)
+
+func value(
+    n: var Normalizer, at: Site, v: CborValue, depth: int
+): Result[ValueNode, string] =
+  ## `depth` counts the maps and arrays above `v`; imported references and choice
+  ## arms add no level. Members are normalized depth first in order, with the
+  ## frames on the heap, so the native stack does not grow with the payload depth
+  ## and every depth up to `DefaultMaxDepth` is supported on any thread
+  ## [SPEC INTERFACE §4.5.1] (DECISIONS I51).
+  var
+    stack: seq[Frame]
+    produced = ?n.enter(stack, at, v, depth)
+  while true:
+    if not produced.isNil:
+      # Hand the finished member to the frame that started it.
+      if stack.len == 0:
+        return ok(produced)
+      let t = stack.high
+      case stack[t].site.node.kind
+      of snMap:
+        let name = stack[t].site.node.fields[stack[t].next - 1].name
+        stack[t].members.add(fieldNode(stack[t].memberId, name, produced))
+      of snList:
+        stack[t].members.add(produced)
+      of snTuple:
+        stack[t].positions.add((stack[t].memberId, produced))
+      else:
+        raiseAssert "frames hold maps, lists and tuples"
+      produced = nil
+    # Start the top frame's next member, or finish the frame.
+    let t = stack.high
+    let (site, cv, below) = (stack[t].site, stack[t].v, stack[t].depth + 1)
+    let s = site.node
+    var started = false
+    case s.kind
+    of snMap:
+      while not started and stack[t].next < s.fields.len:
+        let f = s.fields[stack[t].next]
+        inc stack[t].next
+        let fs = site.child(PathSegment(kind: psField, field: f.name), f.node)
+        let x = cv.fieldEntry(f.name)
+        if x.isNil:
+          if not f.optional:
+            return err("required field " & f.name & " is missing")
+          stack[t].members.add(absentField(n.id(fs), f.name))
+        else:
+          inc stack[t].seen
+          stack[t].memberId = n.id(fs)
+          started = true
+          produced = ?n.enter(stack, fs, x, below)
+      if not started and stack[t].seen != cv.entries.len:
+        return err("the map has fields its schema does not define")
+    of snList:
+      let i = stack[t].next
+      if i < cv.items.len:
+        inc stack[t].next
+        let es = site.child(PathSegment(kind: psListElement), s.element)
+        started = true
+        produced = ?n.enter(stack, es, cv.items[i], below)
+    of snTuple:
+      let i = stack[t].next
+      if i < cv.items.len:
+        inc stack[t].next
+        let ps =
+          site.child(PathSegment(kind: psTuplePosition, index: uint64(i)), s.items[i])
+        stack[t].memberId = n.id(ps)
+        started = true
+        produced = ?n.enter(stack, ps, cv.items[i], below)
+    else:
+      raiseAssert "frames hold maps, lists and tuples"
+    if not started:
+      produced = n.finish(stack.pop())
 
 func normalizeAt*(s: SchemaSet, site: Site, v: CborValue): Result[ValueNode, string] =
   ## The value node of `v` at `site` (a declaration body or any node below one).

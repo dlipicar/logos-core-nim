@@ -466,3 +466,96 @@ ordinal = 2
 out = "PKG/14.package-errors.cddl"
 file = "spec-module-package-manager.md"
 section = "§14"
+
+# HASH App B.4: imported reference context (spec 6a4dfa28) ---------------------
+
+[[mirror]]
+out = "HSH/app-b4.a.cddl"
+file = "spec-module-hash-profile.md"
+section = "App B.4"
+ordinal = 1
+
+[[mirror]]
+out = "HSH/app-b4.c.cddl"
+file = "spec-module-hash-profile.md"
+section = "App B.4"
+ordinal = 2
+
+[[mirror]]
+out = "HSH/app-b4.types.cddl"
+file = "spec-module-hash-profile.md"
+section = "App B.4"
+ordinal = 3
+
+[[mirror]]
+out = "HSH/app-b4.value.diag"
+file = "spec-module-hash-profile.md"
+section = "App B.4"
+lang = "cbor-diag"
+ordinal = 1
+
+[[mirror]]
+out = "HSH/app-b4.documents.md"
+file = "spec-module-hash-profile.md"
+section = "App B.4"
+lang = "table"
+ordinal = 1
+
+[[mirror]]
+out = "HSH/app-b4.payloads.md"
+file = "spec-module-hash-profile.md"
+section = "App B.4"
+lang = "table"
+ordinal = 2
+
+[[mirror]]
+out = "HSH/app-b4.views.md"
+file = "spec-module-hash-profile.md"
+section = "App B.4"
+lang = "table"
+ordinal = 3
+
+[[mirror]]
+out = "HSH/app-b4.negative.md"
+file = "spec-module-hash-profile.md"
+section = "App B.4"
+lang = "table"
+ordinal = 4
+
+# COMMITMENT App B.1: local reference chain (spec 6a4dfa28) --------------------
+
+[[mirror]]
+out = "CMT/app-b1.input.cddl"
+file = "spec-module-commitment-model.md"
+section = "App B.1"
+
+[[mirror]]
+out = "CMT/app-b1.value-tree.diag"
+file = "spec-module-commitment-model.md"
+section = "App B.1"
+lang = "cbor-diag"
+
+[[mirror]]
+out = "IFC/1.2.1.sensitive.cddl"
+file = "spec-module-interface.md"
+section = "§1.2.1"
+
+[[mirror]]
+out = "IFC/2.linkage.h"
+file = "spec-module-interface.md"
+section = "§2"
+lang = "c"
+ordinal = 1
+
+[[mirror]]
+out = "IFC/2.revision-check.h"
+file = "spec-module-interface.md"
+section = "§2"
+lang = "c"
+ordinal = 2
+
+[[mirror]]
+out = "IFC/2.1.keywords.txt"
+file = "spec-module-interface.md"
+section = "§2.1"
+lang = "text"

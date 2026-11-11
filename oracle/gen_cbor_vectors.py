@@ -77,7 +77,8 @@ SELF = [
     ("5f4100ff", "non-deterministic", "indefinite byte string"),
     ("7fff", "non-deterministic", "empty indefinite text string"),
     ("bfff", "non-deterministic", "empty indefinite map"),
-    # G38: floats decode, but only in their shortest form
+    # floats: never Logos deterministic CBOR (INTERFACE §4.4 item 5); as generic
+    # data-model values, only in their shortest width
     ("fa3fc00000", "non-deterministic", "1.5 as single"),
     ("fb3ff8000000000000", "non-deterministic", "1.5 as double"),
     ("fa33800000", "non-deterministic", "2^-24 as single (a half subnormal)"),
@@ -110,6 +111,19 @@ SELF = [
 ]
 
 
+def nesting(v) -> int:
+    """Arrays, maps and tags on the deepest path (iterative)."""
+    deepest, stack = 0, [(v, 0)]
+    while stack:
+        x, d = stack.pop()
+        if isinstance(x, (list, dict, dcbor.Tag)):
+            d += 1
+            deepest = max(deepest, d)
+            kids = x if isinstance(x, list) else [x.content] if isinstance(x, dcbor.Tag) else [y for kv in x.items() for y in kv]
+            stack.extend((k, d) for k in kids)
+    return deepest
+
+
 def nested(n: int, inner: str) -> str:
     return "81" * n + inner
 
@@ -120,6 +134,12 @@ SELF += [
     (nested(1023, "a0"), "ok", "1023 arrays around an empty map"),
     ("d91770" * 1024 + "00", "ok", "1024 nested tags 6000"),
     ("d91770" * 1025 + "00", "too-deep", "1025 nested tags 6000"),
+    # INTERFACE §4.5.1: only arrays and maps count; tags have their own bound
+    ("81d91770" * 1023 + "80", "ok", "1024 nested arrays, each under a tag"),
+    ("81d91770" * 1024 + "80", "too-deep", "1025 nested arrays, each under a tag"),
+    # a float at any depth (INTERFACE §4.4 item 5)
+    (nested(3, "a1616181f93e00"), "ok", "a half float three arrays and a map down"),
+    ("d903e8f97c00", "ok", "a tagged half infinity"),
 ]
 
 
@@ -133,24 +153,35 @@ def main() -> int:
         cases.append((h, "malformed", "RFC 8949 App F"))
     cases += SELF
 
+    # `want` is the class in the generic data model, where floats decode;
+    # `expect` is the class under Logos deterministic CBOR, where they never do.
     out, bad = [], 0
     for h, want, note in cases:
         data = bytes.fromhex(h)
-        got = dcbor.classify(data)
+        got = dcbor.classify(data, allow_floats=True)
         if got != want:
             print(f"oracle says {got}, expected {want}: {h[:40]} ({note})")
             bad += 1
             continue
-        rec = {"hex": h, "expect": want, "note": note}
+        logos = dcbor.classify(data)
+        rec = {"hex": h, "expect": logos, "note": note}
+        if logos != want:
+            if logos != "non-deterministic":
+                print(f"a float changes {h[:40]} to {logos}, not non-deterministic")
+                bad += 1
+            rec["data_model"] = want
         if want == "ok":
-            v = dcbor.decode(data)
+            v = dcbor.decode(data, allow_floats=True)
             if dcbor.encode(v) != data:
                 print(f"oracle re-encoding differs: {h}")
                 bad += 1
-            try:
-                rec["diag"] = dcbor.diag(v)
-            except ValueError:
-                pass
+            # The diagnostic form is a test aid; it is not kept for the
+            # deepest items, whose printers would recurse past 1024 levels.
+            if nesting(v) <= 1024:
+                try:
+                    rec["diag"] = dcbor.diag(v)
+                except ValueError:
+                    pass
             try:
                 cbor2.loads(data)
             except Exception as e:  # cbor2 is only a second opinion

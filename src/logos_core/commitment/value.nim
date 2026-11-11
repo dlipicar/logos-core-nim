@@ -238,80 +238,125 @@ func scalarInRange*(d: ScalarData): bool =
   of skBool, skUint64, skInt64, skBstr:
     true
 
-func checkNode(n: ValueNode, depth: int): Result[void, string] =
-  if n.isNil:
-    return err("missing value node")
-  if depth > DefaultMaxDepth:
-    return err("value tree nested deeper than " & $DefaultMaxDepth)
+func innerOf(n: ValueNode): ValueNode =
   case n.kind
-  of vkMap:
-    var names: HashSet[string]
-    var previous = ""
-    for i, f in n.fields:
-      if f.isNil or f.kind != vkField:
-        return err("a map member is not a field node")
-      if names.containsOrIncl(f.fieldName):
-        return err("duplicate map field " & f.fieldName)
-      if i > 0 and f.fieldName < previous:
-        return err("map fields are not in canonical field-name order")
-      previous = f.fieldName
-      ?checkNode(f, depth + 1)
-  of vkField:
-    if not isValidUtf8(n.fieldName):
-      return err("field name is not UTF-8")
-    if n.fieldValue.isNil:
-      return err("field " & n.fieldName & " has no value node")
-    if n.fieldValue.kind == vkAbsent and n.fieldValue.schema != n.schema:
-      return err("absent field " & n.fieldName & " changes schema identity")
-    ?checkNode(n.fieldValue, depth + 1)
-  of vkAbsent:
-    discard
-  of vkList:
-    if n.packKind.isSome and n.packKind.get notin PackableKinds:
-      return err("list packed as a kind that is not packable")
-    for i, e in n.elements:
-      if e.isNil or e.kind != vkListElement:
-        return err("a list member is not a list-element node")
-      if e.elementIndex != uint64(i):
-        return err("list elements do not cover 0..length-1 in order")
-      if e.schema != n.elementSchema:
-        return err("list element identity differs from the element schema")
-      if n.packKind.isSome:
-        let v = e.elementValue
-        if v.isNil or v.kind != vkScalar or v.scalar.kind != n.packKind.get or
-            v.schema != n.elementSchema:
-          return err("packed list element is not a scalar of the list's kind")
-      ?checkNode(e, depth + 1)
-  of vkListElement:
-    ?checkNode(n.elementValue, depth + 1)
-  of vkTuple:
-    for i, e in n.positions:
-      if e.isNil or e.kind != vkTupleElement:
-        return err("a tuple member is not a tuple-element node")
-      if e.position != uint64(i):
-        return err("tuple elements do not cover 0..arity-1 in order")
-      ?checkNode(e, depth + 1)
-  of vkTupleElement:
-    ?checkNode(n.positionValue, depth + 1)
-  of vkChoice:
-    ?checkNode(n.armValue, depth + 1)
-  of vkScalar:
-    if not n.scalar.scalarInRange:
-      return err("scalar value outside the range of " & $n.scalar.kind)
-  of vkReference:
-    ?checkNode(n.referencedValue, depth + 1)
-  if n.kind in {vkField, vkListElement, vkTupleElement, vkChoice, vkReference}:
-    let child =
-      case n.kind
-      of vkField: n.fieldValue
-      of vkListElement: n.elementValue
-      of vkTupleElement: n.positionValue
-      of vkChoice: n.armValue
-      else: n.referencedValue
+  of vkField: n.fieldValue
+  of vkListElement: n.elementValue
+  of vkTupleElement: n.positionValue
+  of vkChoice: n.armValue
+  of vkReference: n.referencedValue
+  else: nil
+
+type CheckFrame = object ## A map, list or tuple whose members are being checked.
+  n: ValueNode
+  depth: int ## the maps, lists and tuples above `n`
+  next: int ## the next member to check
+  names: HashSet[string] ## map: the field names so far
+  previous: string ## map: the last field name
+
+func enterCheck(
+    stack: var seq[CheckFrame], n: ValueNode, depth: int
+): Result[void, string] =
+  ## Checks `n` and the field, element, choice and reference nodes below it down
+  ## to the next map, list, tuple, scalar or absent node; a container's frame is
+  ## pushed for its members.
+  var n = n
+  while true:
+    if n.isNil:
+      return err("missing value node")
+    if n.kind notin {vkField, vkListElement, vkTupleElement, vkChoice, vkReference}:
+      break
+    if n.kind == vkField:
+      if not isValidUtf8(n.fieldName):
+        return err("field name is not UTF-8")
+      if n.fieldValue.isNil:
+        return err("field " & n.fieldName & " has no value node")
+      if n.fieldValue.kind == vkAbsent and n.fieldValue.schema != n.schema:
+        return err("absent field " & n.fieldName & " changes schema identity")
+    let child = n.innerOf
+    if child.isNil:
+      return err("missing value node")
     if child.kind in {vkField, vkListElement, vkTupleElement} or
         (child.kind == vkAbsent and n.kind != vkField):
       return
         err("a " & $child.kind & " node cannot appear under a " & $n.kind & " node")
+    n = child
+  if n.kind in {vkMap, vkList, vkTuple} and depth >= DefaultMaxDepth:
+    return err("value tree nested deeper than " & $DefaultMaxDepth & " containers")
+  case n.kind
+  of vkMap, vkTuple:
+    stack.add(CheckFrame(n: n, depth: depth))
+  of vkList:
+    if n.packKind.isSome and n.packKind.get notin PackableKinds:
+      return err("list packed as a kind that is not packable")
+    stack.add(CheckFrame(n: n, depth: depth))
+  of vkAbsent:
+    discard
+  of vkScalar:
+    if not n.scalar.scalarInRange:
+      return err("scalar value outside the range of " & $n.scalar.kind)
+  of vkField, vkListElement, vkTupleElement, vkChoice, vkReference:
+    raiseAssert "followed above"
+  ok()
+
+func checkNode(n: ValueNode, depth: int): Result[void, string] =
+  ## `depth` counts the maps, lists and tuples above `n`; field, element, choice
+  ## and reference nodes add no level. Members are checked depth first in order,
+  ## with the frames on the heap, so the native stack does not grow with the
+  ## payload depth and every depth up to `DefaultMaxDepth` is supported on any
+  ## thread [SPEC INTERFACE §4.5.1] (DECISIONS I51).
+  var stack: seq[CheckFrame]
+  ?stack.enterCheck(n, depth)
+  while stack.len > 0:
+    let t = stack.high
+    let c = stack[t].n
+    let i = stack[t].next
+    case c.kind
+    of vkMap:
+      if i == c.fields.len:
+        discard stack.pop()
+        continue
+      let f = c.fields[i]
+      if f.isNil or f.kind != vkField:
+        return err("a map member is not a field node")
+      if stack[t].names.containsOrIncl(f.fieldName):
+        return err("duplicate map field " & f.fieldName)
+      if i > 0 and f.fieldName < stack[t].previous:
+        return err("map fields are not in canonical field-name order")
+      stack[t].previous = f.fieldName
+      inc stack[t].next
+      ?stack.enterCheck(f, stack[t].depth + 1)
+    of vkList:
+      if i == c.elements.len:
+        discard stack.pop()
+        continue
+      let e = c.elements[i]
+      if e.isNil or e.kind != vkListElement:
+        return err("a list member is not a list-element node")
+      if e.elementIndex != uint64(i):
+        return err("list elements do not cover 0..length-1 in order")
+      if e.schema != c.elementSchema:
+        return err("list element identity differs from the element schema")
+      if c.packKind.isSome:
+        let v = e.elementValue
+        if v.isNil or v.kind != vkScalar or v.scalar.kind != c.packKind.get or
+            v.schema != c.elementSchema:
+          return err("packed list element is not a scalar of the list's kind")
+      inc stack[t].next
+      ?stack.enterCheck(e, stack[t].depth + 1)
+    of vkTuple:
+      if i == c.positions.len:
+        discard stack.pop()
+        continue
+      let e = c.positions[i]
+      if e.isNil or e.kind != vkTupleElement:
+        return err("a tuple member is not a tuple-element node")
+      if e.position != uint64(i):
+        return err("tuple elements do not cover 0..arity-1 in order")
+      inc stack[t].next
+      ?stack.enterCheck(e, stack[t].depth + 1)
+    else:
+      raiseAssert "frames hold maps, lists and tuples"
   ok()
 
 func check*(n: ValueNode): Result[void, string] =

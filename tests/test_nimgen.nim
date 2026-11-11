@@ -4,7 +4,7 @@
 
 import std/strutils
 import unittest2
-import ../src/logos_core/[cbor, hash]
+import ../src/logos_core/[cbor, hash, pins]
 import ../src/logos_core/iface/surface
 import ../src/logos_core/codegen/nimgen
 from ../src/logos_core/iface/outcome as oc import nil
@@ -25,13 +25,14 @@ suite "ifc.nim-types: generated modules (D29)":
       checkpoint f.module
       check f.generated.get == readFile(f.fixturePath)
 
-  test "every generated module carries the provisional stamp":
-    check "PROVISIONAL (spec f4f83471)" in readFile(commonTypesPath)
+  test "every generated module carries the provisional stamp of the pinned spec":
+    let stamp = "PROVISIONAL (spec " & SpecRevision[0 .. 7] & ")"
+    check stamp in readFile(commonTypesPath)
     for f in nimFixtures:
-      check "PROVISIONAL (spec f4f83471)" in readFile(f.fixturePath)
+      check stamp in readFile(f.fixturePath)
 
   test "names Nim cannot tell apart are refused":
-    # C keeps `logos_demo_a_b_t` and `logos_demo_ab_t` apart; Nim's identifier
+    # C keeps `logos_demo_A_b_t` and `logos_demo_Ab_t` apart; Nim's identifier
     # equality does not.
     let s = acceptContractSet("demo.a_b = uint64\ndemo.ab = uint64\n").get
     let r = nimModule(s)
@@ -66,18 +67,18 @@ suite "ifc.nim-types: checked codecs":
     check encode(MeterReading(label: Opt.some("a\0b"), value: 1)).isErr
 
   test "[IFC-0141] [IFC-0151] encoders always emit the literal; decoders reject another":
-    var s = SensorControlSettings(limit: 3)
+    var s = SensorNSControlSettings(limit: 3)
     check s.kind == "sensor"
     let want = diag("""{"kind": "sensor", "limit": 3}""")
     check encode(s).get == want
     s.kind = "other"
     check encode(s).get == want
-    check SensorControlSettings.decode(diag("""{"kind": "other", "limit": 3}""")).isErr
-    check SensorControlSettings.decode(diag("""{"limit": 3}""")).isErr
+    check SensorNSControlSettings.decode(diag("""{"kind": "other", "limit": 3}""")).isErr
+    check SensorNSControlSettings.decode(diag("""{"limit": 3}""")).isErr
     # A tagged map union: the arm's literal tag is emitted and checked.
-    var dir = DemoEntryArm1Map(path: "/", entries: @["x"])
+    var dir = DemoEntryARDirMap(path: "/", entries: @["x"])
     dir.kind = "file"
-    check encode(DemoEntry(kind: DemoEntryKind.arm1, arm1: dir)).get ==
+    check encode(DemoEntry(kind: DemoEntryKind.Dir, arm_Dir: dir)).get ==
       diag("""{"entries": ["x"], "kind": "dir", "path": "/"}""")
 
   test "decoders take only one deterministic-CBOR item (INTERFACE §4.4)":
@@ -100,25 +101,29 @@ suite "ifc.nim-types: checked codecs":
     let branch = RecursiveBranch(node: RecursiveNode(value: 9))
     check RecursiveBranch.decode(encode(branch).get).get.node.value == 9
 
-  test "[IFC-0142] [IFC-0145] [IFC-0146] [IFC-0148] choices decode by the selection plan, in canonical arm order":
-    check DemoValue.decode(diag("true")).get.kind == DemoValueKind.arm0
-    check DemoValue.decode(diag("\"s\"")).get.arm1 == "s"
-    check DemoValue.decode(diag("7")).get.arm2 == 7
+  test "[IFC-0142] [IFC-0145] [IFC-0146] [IFC-0148] [IFC-0642] [IFC-0643] choices decode by the selection plan; kinds follow the C labels":
+    check DemoValue.decode(diag("true")).get.kind == DemoValueKind.Bool
+    check DemoValue.decode(diag("\"s\"")).get.arm_Tstr == "s"
+    check DemoValue.decode(diag("7")).get.arm_Uint64 == 7
     check DemoValue.decode(diag("-1")).isErr
     let file = DemoEntry.decode(diag("""{"kind": "file", "path": "/a"}""")).get
-    check file.kind == DemoEntryKind.arm0
-    check file.arm0.path == "/a"
+    check file.kind == DemoEntryKind.File
+    check file.arm_File.path == "/a"
     check DemoEntry.decode(diag("""{"kind": "dir", "path": "/a"}""")).isErr
+    # The kind is the C discriminant (labels in ASCII order: Dir 0, File 1),
+    # not the canonical arm index (file 0, dir 1).
+    check ord(DemoEntryKind.Dir) == 0
+    check ord(DemoEntryKind.File) == 1
     let rec = DemoRecord.decode(diag("""{"sub": {"inner": "x"}}""")).get
-    check rec.sub.inner.kind == DemoRecordSubInnerChoiceKind.arm0
-    check rec.sub.inner.arm0 == "x"
+    check rec.sub.inner.kind == DemoRecordSubInnerChoiceKind.Tstr
+    check rec.sub.inner.arm_Tstr == "x"
 
   test "every Nim shape round-trips: tuples, lists, sized bytes, common types, keywords":
     var k = DemoK(
       d: newSeq[byte](32),
       e: @[@[1'u8, 2, 3, 4]],
       f: @[(1'u64, "a")],
-      g: DemoKGChoice(kind: DemoKGChoiceKind.arm1, arm1: (1'u64, 2'u64)),
+      g: DemoKGChoice(kind: DemoKGChoiceKind.Tuple2, arm_Tuple2: (1'u64, 2'u64)),
       h: Opt.some((5'u64, @[9'u8])),
       i: SchemaCommitment(schema_root: newSeq[byte](32)),
       m: -3,
@@ -134,7 +139,7 @@ suite "ifc.nim-types: checked codecs":
     check back.a == 7
     check back.b == low(int64)
     check back.c == "é1"
-    check back.g.arm1 == (1'u64, 2'u64)
+    check back.g.arm_Tuple2 == (1'u64, 2'u64)
     check back.h.get == (5'u64, @[9'u8])
     check back.p == ErrorCode.ecTimeout
     check back.`type` == @["ab"]
@@ -151,8 +156,8 @@ suite "ifc.nim-types: checked codecs":
     k.l = @[0'u8]
     check encode(k).isErr
     k.l = @[]
-    k.g = DemoKGChoice(kind: DemoKGChoiceKind.arm2, arm2: DemoV(x: 4))
-    check DemoK.decode(encode(k).get).get.g.arm2.x == 4
+    k.g = DemoKGChoice(kind: DemoKGChoiceKind.demo_V, arm_demo_V: DemoV(x: 4))
+    check DemoK.decode(encode(k).get).get.g.arm_demo_V.x == 4
     let tree = DemoTree(
       kids: @[DemoTree()],
       left: Opt.some(boxed(DemoTree())),
@@ -169,17 +174,23 @@ suite "ifc.nim-types: checked codecs":
 suite "ifc.nim-types: the common schema (INTERFACE §5.1)":
   test "logos.invalid_params_detail agrees with the hand-written encoder":
     let d = InvalidParamsDetail(
-      reason: InvalidParamsReason(kind: InvalidParamsReasonKind.arm1),
+      reason: InvalidParamsReason(kind: InvalidParamsReasonKind.Schema_mismatch),
       path: Opt.some(
         @[
-          InvalidParamsPathSegment(kind: InvalidParamsPathSegmentKind.arm0, arm0: "x"),
-          InvalidParamsPathSegment(kind: InvalidParamsPathSegmentKind.arm1, arm1: 2),
+          InvalidParamsPathSegment(
+            kind: InvalidParamsPathSegmentKind.Tstr, arm_Tstr: "x"
+          ),
+          InvalidParamsPathSegment(
+            kind: InvalidParamsPathSegmentKind.Uint64, arm_Uint64: 2
+          ),
         ]
       ),
     )
     check encode(d).get ==
       oc.invalidParamsDetail(oc.iprSchemaMismatch, Opt.some(@[cbor("x"), cbor(2'u64)]))
-    for reason in [oc.iprMalformedCbor, oc.iprNonDeterministicCbor]:
+    for reason in [
+      oc.iprMalformedCbor, oc.iprNonDeterministicCbor, oc.iprConfigurationSchemaMismatch
+    ]:
       let back = InvalidParamsDetail.decode(oc.invalidParamsDetail(reason)).get
       check back.path.isNone
       check encode(back).get == oc.invalidParamsDetail(reason)

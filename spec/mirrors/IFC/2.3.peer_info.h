@@ -1,5 +1,5 @@
-typedef struct logos_map_storage_peer_info {
+typedef struct logos_storage_Peer_info_MAP {
     const char* id;
     bool        has_name;
     const char* name;       /* valid only if has_name == true */
-} logos_storage_peer_info_t;
+} logos_storage_Peer_info_t;

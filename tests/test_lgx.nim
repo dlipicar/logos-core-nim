@@ -135,17 +135,17 @@ proc signed(v: CborValue): (seq[byte], seq[byte]) =
   let m = decodeManifest(encodeCbor(v)).get
   (m.encoded, signManifest(m, kid, key).get)
 
-proc pack(
-    v = manifestValue(),
-    linux = linuxFiles,
-    darwin = darwinFiles,
-    json = Opt.none(seq[byte]),
-): seq[byte] =
+proc pack(v = manifestValue(), linux = linuxFiles, darwin = darwinFiles): seq[byte] =
   let (cbor, cose) = signed(v)
-  writeLgx(cbor, cose, @[("linux-x86_64", linux), ("darwin-aarch64", darwin)], json).get
+  writeLgx(cbor, cose, @[("linux-x86_64", linux), ("darwin-aarch64", darwin)]).get
 
-proc opened(data: seq[byte], host = linuxHost, limits = DefaultLgxLimits): string =
-  let r = openLgx(data, trust, host, limits)
+proc opened(
+    data: seq[byte],
+    host = linuxHost,
+    limits = DefaultLgxLimits,
+    rules = PathRules(), # exact comparison, whatever filesystem the tests run on
+): string =
+  let r = openLgx(data, trust, host, limits, rules)
   if r.isOk:
     "ok"
   else:
@@ -258,7 +258,7 @@ suite "pkg.lgx: writing and opening packages (PM §3, §7.1)":
     check pkg.artifacts[1].data == linuxFiles.content("schema/alpha.cddl")
     check pkg.modules.mapIt(it.module) == @["alpha_module", "beta_module"]
 
-  test "[PKG-0212] [PKG-0213] [PKG-0270] [PKG-0180] [PKG-0217] the first compatible variant is selected; modules without it are not":
+  test "[PKG-0494] [PKG-0213] [PKG-0497] [PKG-0180] [PKG-0217] the first compatible variant is selected; modules without it are not":
     let p = openLgx(archive, trust, darwinHost).get
     check p.variant.id == "darwin-aarch64"
     check p.modules.mapIt(it.module) == @["alpha_module"]
@@ -269,11 +269,17 @@ suite "pkg.lgx: writing and opening packages (PM §3, §7.1)":
       archive, Platform(os: "linux", architecture: "aarch64", abi: Opt.some("gnu"))
     ) == "incompatible-platform"
 
-  test "[IMPL-DECISION G73] platform fields match byte for byte; an absent field matches anything":
+  test "[PKG-0495] [IMPL-DECISION G73] defined platform values match byte for byte; others never match; an absent field matches anything":
     let c = PlatformConstraint(os: Opt.some("linux"))
     check c.compatible(linuxHost)
     check not c.compatible(Platform(os: "Linux", architecture: "x86_64"))
     check PlatformConstraint().compatible(windowsHost)
+    # A value our profile does not define never matches, even itself.
+    let plan9 = Platform(os: "plan9", architecture: "riscv64", abi: Opt.some("p9"))
+    check not PlatformConstraint(os: Opt.some("plan9")).compatible(plan9)
+    check not PlatformConstraint(architecture: Opt.some("riscv64")).compatible(plan9)
+    check not PlatformConstraint(abi: Opt.some("p9")).compatible(plan9)
+    check PlatformConstraint().compatible(plan9)
     let h = hostPlatform()
     check h.os in ["linux", "darwin", "windows", "android", "ios"]
     check h.architecture in ["x86_64", "aarch64"]
@@ -317,11 +323,7 @@ suite "pkg.lgx: writing and opening packages (PM §3, §7.1)":
     check archive[4 .. 7] == @[0'u8, 0, 0, 0]
     check archive[9] == 255
 
-  test "[PKG-0031] [PKG-0032] [PKG-0034] [PKG-0282] [IMPL-DECISION G45] manifest.json is allowed and never read":
-    let p = pack(json = Opt.some(b("""{"package": "something.else"}""")))
-    check openLgx(p, trust, linuxHost).get.verified.manifest.package == "logos.example"
-
-  test "[IMPL-DECISION G40] long paths use the USTAR prefix; longer ones are refused":
+  test "[PKG-0483] [PKG-0484] [IMPL-DECISION G40] long paths use the USTAR prefix; longer ones are refused":
     let deep = "d".repeat(90) & "/" & "f".repeat(60)
     var files = linuxFiles
     files.add(("res/" & deep, b("x")))
@@ -339,7 +341,7 @@ suite "pkg.lgx: writing and opening packages (PM §3, §7.1)":
     ).isErr
 
 suite "pkg.lgx: archive rules (PM §7.1, §8)":
-  test "[PKG-0201] [PKG-0202] [PKG-0269] links, special files and pax headers are invalid-package":
+  test "[PKG-0201] [PKG-0202] [PKG-0269] [PKG-0485] links, special files, pax and GNU long-name headers are invalid-package":
     for flag in ['1', '2', '3', '4', '6', '7', 'x', 'g', 'L']:
       let f = flag
       checkpoint "type " & $f
@@ -387,18 +389,85 @@ suite "pkg.lgx: archive rules (PM §7.1, §8)":
       )
     ) == "invalid-package"
 
-  test "[IMPL-DECISION G41] directory entries are optional for readers":
+  test "[PKG-0478] [PKG-0479] [PKG-0480] [IMPL-DECISION G41] directory entries: optional when descendants imply them, required for an empty variant, type 5 with size zero":
     check opened(
       variedArchive(
         proc(es: var seq[Raw]) =
           es.keepItIf(it.typeflag != '5')
       )
     ) == "ok"
+    # A variant with no descendant entry exists only through its directory entry.
+    # Artifacts are never empty (PM §5 l.766), so only a variant whose files are
+    # all missing has none: without the entry the archive is invalid-package,
+    # even on the variant's own platform; with it, the missing artifacts decide.
+    var bare = entriesOf(pack())
+    bare.keepItIf(not (it.prefix & it.name).startsWith("variants/darwin-aarch64/"))
+    check opened(gz(tar(bare))) == "invalid-package"
+    check opened(gz(tar(bare)), darwinHost) == "invalid-package"
+    var withDir = bare
+    withDir.add(raw("variants/darwin-aarch64", dir = true))
+    withDir.sort(
+      proc(a, b: Raw): int =
+        cmp(
+          a.prefix & a.name.strip(leading = false, chars = {'/'}),
+          b.prefix & b.name.strip(leading = false, chars = {'/'}),
+        )
+    )
+    check opened(gz(tar(withDir))) == "invalid-package"
+    check opened(gz(tar(withDir)), darwinHost) == "artifact-integrity-failed"
+    # An explicit directory entry carries no data.
+    check opened(
+      variedArchive(
+        proc(es: var seq[Raw]) =
+          for e in es.mitems:
+            if e.typeflag == '5':
+              e.data = b("x")
+              break
+      )
+    ) == "invalid-package"
 
-  test "[PKG-0193] [PKG-0194] [PKG-0195] [PKG-0196] [PKG-0197] [PKG-0198] the root and variants/ structure":
+  test "[PKG-0481] [PKG-0482] a directory path may end with one slash, removed before validation, duplicate detection and ordering; a file path may not":
+    # Without the slash, a directory entry means the same.
+    check opened(
+      variedArchive(
+        proc(es: var seq[Raw]) =
+          for e in es.mitems:
+            if e.typeflag == '5':
+              e.name = e.name.strip(leading = false, chars = {'/'})
+      )
+    ) == "ok"
+    # The same directory with and without the slash is a duplicate.
+    check opened(
+      variedArchive(
+        proc(es: var seq[Raw]) =
+          let i = es.indexOf("variants/linux-x86_64/")
+          var plain = es[i]
+          plain.name = "variants/linux-x86_64"
+          es.insert(plain, i + 1)
+      )
+    ) == "invalid-package"
+    # Only one slash is removed: a second leaves an empty segment.
+    check opened(
+      variedArchive(
+        proc(es: var seq[Raw]) =
+          es[es.indexOf("variants/linux-x86_64/")].name = "variants/linux-x86_64//"
+      )
+    ) == "invalid-package"
+    # A regular file named with a trailing slash.
+    check opened(
+      variedArchive(
+        proc(es: var seq[Raw]) =
+          let i = es.indexOf("variants/linux-x86_64/lib/libbeta.so")
+          es[i].name = es[i].name & "/"
+      )
+    ) == "invalid-package"
+
+  test "[PKG-0477] [PKG-0194] [PKG-0195] [PKG-0196] [PKG-0197] [PKG-0198] the root and variants/ structure":
     let cases = {
       "a root file": proc(es: var seq[Raw]) =
         es.add(raw("README", data = b("x"))),
+      "a root manifest.json": proc(es: var seq[Raw]) =
+        es.add(raw("manifest.json", data = b("""{"package": "logos.example"}"""))),
       "a root directory": proc(es: var seq[Raw]) =
         es.add(raw("docs", dir = true)),
       "a file in variants/": proc(es: var seq[Raw]) =
@@ -452,11 +521,14 @@ suite "pkg.lgx: archive rules (PM §7.1, §8)":
       checkpoint name
       check opened(variedArchive(f)) == "invalid-package"
 
-  test "[PKG-0269] truncation, bad checksums, padding and trailing data are invalid-package":
+  test "[PKG-0269] [PKG-0492] truncation, bad checksums, padding and trailing data are invalid-package":
     let good = tar(entriesOf(pack()))
     check opened(gz(good)) == "ok"
     check opened(gz(good[0 ..< good.len - 1024])) == "invalid-package" # no end blocks
     check opened(gz(good & newSeq[byte](9216))) == "ok" # zero record padding
+    check opened(gz(good & newSeq[byte](512))) == "ok" # one more zero block
+    check opened(gz(good & newSeq[byte](100))) == "invalid-package" # a partial block
+    check opened(gz(good & newSeq[byte](1000))) == "invalid-package"
     var trailing = good
     trailing.add(b("junk"))
     check opened(gz(trailing)) == "invalid-package"
@@ -467,7 +539,7 @@ suite "pkg.lgx: archive rules (PM §7.1, §8)":
     badPad[512 + entriesOf(pack())[0].data.len] = 1 # inside manifest.cbor's padding
     check opened(gz(badPad)) == "invalid-package"
 
-  test "[PKG-0209] [IMPL-DECISION G41] gzip headers and members":
+  test "[PKG-0209] [PKG-0490] [PKG-0491] [IMPL-DECISION G41] gzip headers and members: one member, CRC32 and ISIZE checked":
     let t = tar(entriesOf(pack()))
     let z = gz(t)
     check opened(z) == "ok"
@@ -485,6 +557,9 @@ suite "pkg.lgx: archive rules (PM §7.1, §8)":
     var crc = z
     crc[^8] = crc[^8] xor 1
     check opened(crc) == "invalid-package"
+    var isize = z
+    isize[^1] = isize[^1] xor 1
+    check opened(isize) == "invalid-package"
     check opened(z[0 ..< z.len - 9]) == "invalid-package"
     # A comment and a header CRC are allowed.
     var withComment =
@@ -564,7 +639,7 @@ suite "pkg.lgx: manifests, signatures and artifacts in the archive (PM §3, §7.
     check opened(pack(linux = tampered), darwinHost) == "ok"
       # only the selected variant is used
 
-  test "[PKG-0203] [IMPL-DECISION G73] paths that collide on the selected platform":
+  test "[PKG-0486] [IMPL-DECISION G73] paths that collide under the installation's rules":
     var v = manifestValue()
     var files = darwinFiles
     files.add(("res/Icon.png", b("1")))
@@ -573,10 +648,20 @@ suite "pkg.lgx: manifests, signatures and artifacts in the archive (PM §3, §7.
     arts.items.add(artifact("icon-a", "resource", "res/Icon.png", files))
     arts.items.add(artifact("icon-b", "resource", "res/icon.png", files))
     let p = pack(v, darwin = files)
-    check opened(p, darwinHost) == "invalid-package"
-    check checkPlatformPaths(["res/Icon.png", "res/icon.png"], "linux").isOk
-    check checkPlatformPaths(["Lib/a", "lib/b"], "darwin").isErr
-    check checkPlatformPaths(["lib/con.txt"], "windows").isErr
-    check checkPlatformPaths(["lib/a."], "windows").isErr
-    check checkPlatformPaths(["lib/a:b"], "windows").isErr
-    check checkPlatformPaths(["lib/con.txt"], "darwin").isOk
+    let folding = PathRules(ignoreCase: true)
+    let windows = PathRules(ignoreCase: true, windowsNames: true)
+    check opened(p, darwinHost, rules = folding) == "invalid-package"
+    check opened(p, darwinHost, rules = PathRules()) == "ok"
+      # the rules follow the installation, not the target platform
+    check checkInstallPaths(["res/Icon.png", "res/icon.png"], PathRules()).isOk
+    check checkInstallPaths(["Lib/a", "lib/b"], folding).isErr
+    check checkInstallPaths(["lib/con.txt"], windows).isErr
+    check checkInstallPaths(["lib/a."], windows).isErr
+    check checkInstallPaths(["lib/a:b"], windows).isErr
+    check checkInstallPaths(["lib/con.txt"], folding).isOk
+    when defined(windows):
+      check hostPathRules() == windows
+    elif defined(macosx) or defined(ios):
+      check hostPathRules() == folding
+    else:
+      check hostPathRules() == PathRules()

@@ -11,9 +11,10 @@ default = "deferred:tier-4"
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
-# Phase 3 (tier 3, sans-I/O): the envelope, framing, deterministic CBOR, Hello and
-# route tickets, requests and commitments, subscriptions, cancellation,
-# multiplexing, validation and evolution. Sockets, peer authentication and the
+# Phase 3 (tier 3, sans-I/O): the envelope, framing and the sender's size check,
+# deterministic CBOR and payload depth, Hello and route tickets, correlation,
+# requests and commitments, subscriptions, cancellation, multiplexing, route
+# termination, validation and evolution. Sockets, peer authentication and the
 # Runtime's route enforcement are tier 4; the Unix-stream, TLS and QUIC profiles
 # tier 5.
 "Abstract" = "claimed"
@@ -22,6 +23,7 @@ default = "deferred:tier-4"
 "§3.1" = "claimed"
 "§3.2" = "deferred:tier-4"
 "§3.3" = "claimed"
+"§3.4" = "claimed"
 "§4" = "claimed"
 "§5.1" = "claimed"
 "§5.2" = "deferred:tier-4"
@@ -29,6 +31,10 @@ default = "deferred:tier-4"
 "§6" = "claimed"
 "§7" = "claimed"
 "§8.1" = "claimed"
+# §8.1.2: system-service sessions over unix-stream. G48 keeps the Loader and the
+# Capability Authority direct, so no system service is hosted over Transport and
+# no purpose-typed ticket store is built (transport.md item 10).
+"§8.1.2" = "deferred:tier-4"
 "§8.2" = "deferred:tier-5"
 "§8.3" = "claimed"
 "§8.4" = "deferred:tier-5"
@@ -37,29 +43,42 @@ default = "deferred:tier-4"
 "§10" = "claimed"
 
 [units]
-# §3.1: the endpoint comes from the Runtime's invocation descriptor.
+# §2.1: a committed Event is never silently discarded: the output buffer (tier 4).
+"TRN-0267" = "deferred:tier-4"
+# §3.1: the endpoint comes from the Runtime's invocation descriptor; Hello
+# evaluation capacity is the Runtime evaluator's.
 "TRN-0069" = "deferred:tier-4"
+"TRN-0276" = "deferred:tier-4"
 # §3.2: no replay and no ticket reuse hold in the sans-I/O session.
 "TRN-0078" = "claimed"
 "TRN-0079" = "claimed"
+# §3.4: callbacks and released application state belong to the native binding.
+"TRN-0290" = "deferred:tier-4"
+# §6: execution slots and cancel capacity belong to the provider scheduler.
+"TRN-0314" = "deferred:tier-4"
+"TRN-0315" = "deferred:tier-4"
 # Requirements on module contracts, not on the transport.
 "TRN-0098" = "out-of-scope:a requirement on module contracts that disclose partially"
 "TRN-0117" = "out-of-scope:a requirement on contracts that promise state reconstruction"
 "TRN-0118" = "out-of-scope:a requirement on contracts that promise state reconstruction"
-"TRN-0119" = "out-of-scope:a requirement on contracts that promise state reconstruction"
-"TRN-0134" = "out-of-scope:a requirement on module contracts"
-# §5.1 and §8.1: the route's access scope and authority decision are the
-# Runtime's to enforce (tier 4); the transport resolves names under the
-# selected contract.
-"TRN-0111" = "deferred:tier-4"
-"TRN-0112" = "deferred:tier-4"
+"TRN-0308" = "out-of-scope:a requirement on contracts that promise state reconstruction"
+# §8.1: the route's authority decision, its expiry clock, ticket materialization,
+# event-publication access and bounded sends are the Runtime's (tier 4). The
+# transport resolves names under the selected contract and enforces the method
+# and subscription scope it is given (`Boundary.withAccess`).
 "TRN-0151" = "deferred:tier-4"
 "TRN-0153" = "deferred:tier-4"
 "TRN-0158" = "deferred:tier-4"
-"TRN-0159" = "deferred:tier-4"
 "TRN-0161" = "deferred:tier-4"
 "TRN-0162" = "deferred:tier-4"
-"TRN-0163" = "deferred:tier-4"
+"TRN-0317" = "deferred:tier-4"
+"TRN-0320" = "deferred:tier-4"
+"TRN-0325" = "deferred:tier-4"
 "TRN-0165" = "out-of-scope:a requirement on other security profiles"
+# §8.6: the per-connection limits of the session state machines; aggregate limits
+# and their documentation are tier 4.
+"TRN-0381" = "claimed"
+"TRN-0383" = "claimed"
+"TRN-0385" = "claimed"
 # §10: a requirement on a future transport profile.
 "TRN-0252" = "out-of-scope:a requirement on future transport profiles"

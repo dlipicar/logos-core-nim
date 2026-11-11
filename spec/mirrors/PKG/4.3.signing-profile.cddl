@@ -1,7 +1,12 @@
 logos.package_manager.package_signing_profile =
-  "logos.package-signing.cose-sign1-ed25519"
+  "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"
 
 logos.package_manager.package_signing_key_id = bstr .size (1..128)
+
+logos.package_manager.package_signer = {
+  profile: logos.package_manager.package_signing_profile,
+  public_key: bstr .size 48,
+}
 
 logos.package_manager.package_signature_claim = {
   profile: logos.package_manager.package_signing_profile,

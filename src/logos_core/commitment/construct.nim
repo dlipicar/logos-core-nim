@@ -36,7 +36,7 @@ type
     interfaces*: seq[SchemaModel] ## interface documents named by `_implements`
 
 const
-  MetadataNames* = ["_module", "_interface", "_implements"]
+  MetadataNames* = ["_module", "_interface", "_implements", "_sensitive"]
   PreludeAliases* = {skUint8 .. skInt64}
     ## [SPEC INTERFACE §1.3] the fixed-width integer aliases, named as their kinds.
 
@@ -89,9 +89,9 @@ func isPreludeBody(kind: ScalarKind, t: CddlType): bool =
 # Namespace and classification ----------------------------------------------------
 
 func namespaceOf*(names: openArray[string]): Result[string, string] =
-  ## [SPEC COMMITMENT §3.1 step 2] The longest common dot-segment prefix; at
-  ## least one segment, and a proper prefix of every name. [IMPL-DECISION G4]
-  ## Every name is that namespace plus exactly one segment.
+  ## [SPEC COMMITMENT §3.1 step 2] The longest dot-segment prefix that is a
+  ## proper prefix of every name, with at least one segment; every name is that
+  ## namespace plus exactly one identifier segment (settled G4, C-02).
   if names.len == 0:
     return err("the document declares nothing")
   var prefix = names[0].split('.')
@@ -107,7 +107,7 @@ func namespaceOf*(names: openArray[string]): Result[string, string] =
   let ns = prefix.join(".")
   for n in names:
     if n.split('.').len != prefix.len + 1:
-      return err(n & " is not one segment below the namespace " & ns & " (G4)")
+      return err(n & " is not one segment below the namespace " & ns)
   ok(ns)
 
 func classify(role: SchemaRole, name: string): DeclKind =
@@ -270,12 +270,32 @@ func implementedRoots(t: CddlType, ctx: SchemaContext): Result[seq[Digest], stri
     roots.add(d)
   ok(roots)
 
+func importsSupporting(role: SchemaRole): bool =
+  ## [SPEC COMMITMENT §3.1 step 6, §5] Concrete module and interface contract
+  ## schemas may import named types from supplied supporting schemas.
+  role in {srModule, srInterface}
+
+func sensitiveNames(t: CddlType): Result[seq[string], string] =
+  ## [SPEC INTERFACE §1.2.1] `_sensitive`: a nonempty fixed-content array of
+  ## direct text-string literals, distinct and in ascending ASCII order.
+  if t.kind != tkArray or t.members.len == 0:
+    return err("_sensitive is not a nonempty fixed array")
+  var names: seq[string]
+  for m in t.members:
+    if m.occurrence != occOne or m.typ.kind != tkLiteral or m.typ.literal.kind != lkTstr:
+      return err("_sensitive holds something other than text-string literals")
+    let name = m.typ.literal.text
+    if names.len > 0 and name <= names[^1]:
+      return err("_sensitive names are not distinct and in ascending ASCII order")
+    names.add(name)
+  ok(names)
+
 func schemaSetFor*(m: SchemaModel, ctx: SchemaContext): SchemaSet =
   ## `m` and the dependency documents its references may reach (§3.1 step 6).
   var set = schemaSet(m)
   if m.role != srCommon:
     set.addDocument(ctx.commonModel, ctx.commonRoot, ctx.common.mapIt((it[0], it[2])))
-  if m.role == srModule:
+  if m.role.importsSupporting:
     for doc in ctx.supporting:
       set.addDocument(
         doc,
@@ -309,6 +329,8 @@ proc buildSchema*(
       srSupporting
   if "_implements" in defined and theRole != srModule:
     return err("only a concrete module schema has _implements")
+  if "_sensitive" in defined and theRole notin {srModule, srInterface}:
+    return err("a supporting schema cannot declare _sensitive")
   for doc in ctx.supporting & ctx.interfaces:
     # [SPEC COMMITMENT §6] No compatibility profile is defined: a dependency built
     # under another commitment-model revision is not in this document's domain.
@@ -319,7 +341,7 @@ proc buildSchema*(
   for (name, kind, root) in ctx.common:
     if name notin defined and theRole != srCommon:
       b.imports[name] = ImportTarget(root: ctx.commonRoot, subtree: root, kind: kind)
-  if theRole == srModule:
+  if theRole.importsSupporting:
     for doc in ctx.supporting:
       if doc.role != srSupporting:
         return err("a supplied supporting schema has role " & $doc.role)
@@ -359,6 +381,14 @@ proc buildSchema*(
       return err("_interface does not name the namespace " & ns)
   for r in locals:
     b.local[r.name] = classify(theRole, r.name)
+  # [SPEC INTERFACE §1.2.1] Each `_sensitive` name is a local method request or
+  # response declaration.
+  var sensitive: HashSet[string]
+  if "_sensitive" in metadata:
+    for name in ?sensitiveNames(metadata.getOrDefault("_sensitive")):
+      if b.local.getOrDefault(name, dkType) notin {dkRequest, dkResponse}:
+        return err("_sensitive names " & name & ", not a local request or response")
+      sensitive.incl(name)
   # Steps 4-6: methods and bodies.
   var model = SchemaModel(modelId: CommitmentModelId, role: theRole, namespace: ns)
   if "_module" in metadata:
@@ -393,7 +423,14 @@ proc buildSchema*(
         if taken.containsOrIncl(base):
           return err("method " & base & " collides with another declaration")
         model.declarations.add(
-          Declaration(kind: dkMethod, name: base, request: r.name, response: other)
+          Declaration(
+            kind: dkMethod,
+            name: base,
+            request: r.name,
+            response: other,
+            sensitiveRequest: r.name in sensitive,
+            sensitiveResponse: other in sensitive,
+          )
         )
   # Step 7: implemented interfaces.
   if "_implements" in metadata:

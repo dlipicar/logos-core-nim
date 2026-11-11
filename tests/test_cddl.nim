@@ -152,7 +152,9 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
       "unsupported-group-choice", "unsupported-socket", "unsupported-unwrap",
       "unsupported-enumeration", "unsupported-tag", "unsupported-major-type",
       "unsupported-any-item", "unsupported-cut", "unsupported-arrow-key",
-      "unsupported-text-key", "unsupported-occurrence", "unsupported-exclusive-range",
+      "unsupported-bytes-key", "unsupported-uint-key", "unsupported-occurrence",
+      "unsupported-exclusive-range", "unsupported-range-reversed",
+      "unsupported-integer-too-large", "unsupported-named-range-bound",
       "unsupported-control", "unsupported-float",
     ]:
       checkpoint prefix
@@ -161,7 +163,7 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
       "syntax-empty", "decode-empty-document", "decode-empty-choice",
       "decode-one-alternative-choice", "resolution-duplicate-rule",
       "decode-duplicate-rule", "decode-reference-name-digit",
-      "decode-literal-uint-negative", "canonical-range-reversed",
+      "decode-literal-uint-negative", "unsupported-range-reversed",
       "decode-range-reversed", "decode-occurrence-upper-two", "decode-node-kind-2",
       "decode-unknown-field-rule", "decode-rules-out-of-order",
       "decode-map-members-out-of-order", "decode-cbor-non-shortest-key",
@@ -170,7 +172,7 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
       checkpoint name
       check name in names
 
-  test "[CDE-0004] [CDE-0017] [CDE-0018] [CDE-0019] [CDE-0020] [CDE-0021] [CDE-0022] [CDE-0059] [CDE-0060] [CDE-0061] [CDE-0153] [CDE-0157] [IMPL-DECISION G11] presentation does not change the model":
+  test "[CDE-0004] [CDE-0017] [CDE-0018] [CDE-0019] [CDE-0020] [CDE-0021] [CDE-0022] [CDE-0059] [CDE-0060] [CDE-0061] [CDE-0153] [CDE-0157] [CDE-0203] presentation does not change the model":
     runAll("presentation", 30)
     for group in [
       @[
@@ -183,6 +185,8 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
         "presentation-number-hex-upper", "presentation-number-binary",
       ],
       @["presentation-text-plain", "presentation-text-escaped"],
+      # RFC 9682 §2.1.1: a braced escape names the same scalar value
+      @["presentation-text-escaped-c1"],
       @[
         "presentation-bytes-hex", "presentation-bytes-hex-spaced",
         "presentation-bytes-hex-multiline", "presentation-bytes-base64",
@@ -193,6 +197,10 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
     ]:
       checkpoint $group
       check group.mapIt(hexOf(it)).deduplicate.len == 1
+    check hexOf("presentation-text-escaped-c1") == sourceHex("a = \"\\u{85}\"\n")
+    check sourceHex("a = \"\\u{E9}\"\n") == sourceHex("a = \"\\u00e9\"\n")
+    check sourceHex("a = \"\\u{0001F600}\"\n") == sourceHex("a = \"\\ud83d\\ude00\"\n")
+    check hexOf("presentation-bytes-quoted-braced") == sourceHex("a = h'62c3a9'\n")
 
   test "[CDE-0023] [CDE-0024] [CDE-0069] [CDE-0177] top-level rule order is not an identity input":
     runAll("rule-order", 3)
@@ -217,13 +225,22 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
   test "[CDE-0040] [CDE-0041] [CDE-0044] [CDE-0075] [CDE-0076] [CDE-0077] [CDE-0083] [CDE-0155] [CDE-0180] references stay references, including cycles":
     runAll("reference", 4)
 
-  test "[CDE-0005] [CDE-0042] [CDE-0150] [CDE-0030] [CDE-0031] [CDE-0032] [CDE-0033] [CDE-0034] [CDE-0036] [CDE-0037] [CDE-0039] [CDE-0043] [CDE-0045] [CDE-0046] [CDE-0047] [CDE-0048] [CDE-0049] [CDE-0051] [CDE-0052] [CDE-0053] [CDE-0070] [CDE-0081] [CDE-0082] [CDE-0084] [CDE-0085] [CDE-0086] [CDE-0087] [CDE-0088] [CDE-0090] [CDE-0091] [CDE-0095] [CDE-0096] [CDE-0151] [CDE-0156] every supported construct maps as §7.4 says":
+  test "[CDE-0005] [CDE-0042] [CDE-0150] [CDE-0030] [CDE-0031] [CDE-0032] [CDE-0033] [CDE-0034] [CDE-0036] [CDE-0037] [CDE-0039] [CDE-0043] [CDE-0045] [CDE-0046] [CDE-0047] [CDE-0048] [CDE-0049] [CDE-0051] [CDE-0052] [CDE-0053] [CDE-0070] [CDE-0081] [CDE-0082] [CDE-0084] [CDE-0085] [CDE-0086] [CDE-0087] [CDE-0088] [CDE-0090] [CDE-0091] [CDE-0095] [CDE-0096] [CDE-0151] [CDE-0156] [CDE-0207] every supported construct maps as §7.4 says":
     runAll("construct", 20)
+    # a text-string literal key is the bareword key with that text
+    for name in ["construct-text-key", "construct-text-key-escaped"]:
+      check hexOf(name) == sourceHex("a = {x: uint}\n")
 
-  test "[CDE-0012] [CDE-0015] [CDE-0016] [CDE-0152] [CDE-0181] [CDE-0188] [IMPL-DECISION G10] [IMPL-DECISION G12] constructs outside §5.1 are rejected as unsupported":
+  test "[CDE-0012] [CDE-0015] [CDE-0016] [CDE-0152] [CDE-0181] [CDE-0188] [CDE-0204] [CDE-0205] [CDE-0206] [CDE-0207] [CDE-0208] [IMPL-DECISION G10] [IMPL-DECISION G12] [IMPL-DECISION G157] constructs outside §5.1 are rejected as unsupported":
     runAll("unsupported", 50)
     check category("unsupported").anyIt(it.notes == "G10")
     check category("unsupported").anyIt(it.notes == "G12")
+    check category("unsupported").anyIt(it.notes == "G157")
+    for name in [
+      "unsupported-range-reversed", "unsupported-range-reversed-negative",
+      "unsupported-size-reversed-range",
+    ]:
+      check category("unsupported").anyIt(it.name == name)
 
   test "[CDE-0012] text that is not RFC 8610 CDDL is a syntax error":
     runAll("syntax", 20)
@@ -231,7 +248,7 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
   test "[CDE-0054] [CDE-0055] [CDE-0056] [CDE-0057] [CDE-0183] names must resolve, be unique and not redefine the prelude":
     runAll("resolution", 6)
 
-  test "[CDE-0094] [CDE-0128] [CDE-0129] canonicalization rejects reversed ranges, duplicate keys and invalid .size":
+  test "[CDE-0094] [CDE-0128] [CDE-0129] canonicalization rejects duplicate keys, also between a bareword and a text key, and invalid .size":
     runAll("canonical", 6)
 
   test "[CDE-0100] [CDE-0102] [CDE-0103] [CDE-0105] [CDE-0106] [CDE-0107] [CDE-0108] [CDE-0109] [CDE-0110] [CDE-0111] [CDE-0112] [CDE-0113] [CDE-0114] [CDE-0115] [CDE-0116] [CDE-0117] [CDE-0118] [CDE-0119] [CDE-0120] [CDE-0124] [CDE-0125] [CDE-0126] [CDE-0130] [CDE-0131] [CDE-0132] [CDE-0133] [CDE-0167] the decoder accepts and exposes canonical models":
@@ -240,7 +257,7 @@ suite "cddl: self vectors (tests/vectors/cddl/vectors.cbor)":
         run(v)
     check category("decode").countIt(it.expect == "valid") >= 3
 
-  test "[CDE-0099] [CDE-0101] [CDE-0104] [CDE-0121] [CDE-0122] [CDE-0123] [CDE-0127] [CDE-0144] [CDE-0145] [CDE-0146] [CDE-0147] [CDE-0148] [CDE-0163] [CDE-0164] [CDE-0165] [CDE-0166] [CDE-0182] [CDE-0184] [CDE-0185] [CDE-0186] [CDE-0189] [IMPL-DECISION G13] the decoder rejects everything else":
+  test "[CDE-0099] [CDE-0101] [CDE-0104] [CDE-0121] [CDE-0122] [CDE-0123] [CDE-0127] [CDE-0144] [CDE-0145] [CDE-0146] [CDE-0147] [CDE-0148] [CDE-0163] [CDE-0164] [CDE-0165] [CDE-0166] [CDE-0182] [CDE-0184] [CDE-0185] [CDE-0186] [CDE-0189] [CDE-0209] [IMPL-DECISION G13] the decoder rejects everything else":
     var n = 0
     for v in category("decode"):
       if v.expect == "invalid":

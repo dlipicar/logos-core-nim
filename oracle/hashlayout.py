@@ -10,13 +10,18 @@ Written from the spec text alone; it shares no code with src/.
 
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 from blake3 import blake3
 
 import dcbor
 
-PROFILE = "logos.hash-profile.2026-08.choice-index"
-SUITE = "logos.hash-suite.blake3-256"
-MODEL = "logos.commitment-model.2026-08"
+# The identifiers are pins (spec/pins.toml), like every other value the specs fix.
+_PINS = tomllib.loads((Path(__file__).resolve().parent.parent / "spec/pins.toml").read_text(encoding="utf-8"))
+PROFILE = _PINS["hash-profile-id"]["value"]
+SUITE = _PINS["hash-suite-id"]["value"]
+MODEL = _PINS["commitment-model-id"]["value"]
 
 FANOUT = 256
 LIST_CHUNK = 256

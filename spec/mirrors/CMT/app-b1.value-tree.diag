@@ -1,0 +1,12 @@
+{
+  0: "value-root",
+  1: "logos.commitment-model.2026-10",
+  2: h'...schema-root...',
+  3: h'...a.x-subtree-root...',
+  4: {
+    0: "scalar",
+    1: h'...a.z-subtree-root...',
+    2: "tstr",
+    3: "hello",
+  },
+}

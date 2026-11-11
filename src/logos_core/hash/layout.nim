@@ -271,8 +271,6 @@ func rootBelowReference*(n: ValueNode): Digest =
   doAssert n.kind == vkReference
   n.referencedRoot
 
-func layoutNode(root: Digest, n: ValueNode): PhysNode
-
 func wrap(
     kind: NodeKind, root, schema: Digest, extra: seq[CborEntry], child: PhysNode
 ): PhysNode =
@@ -307,18 +305,15 @@ func scalarPayloadNode(root: Digest, n: ValueNode): PhysNode =
       ),
     )
 
-func listNode(root: Digest, n: ValueNode): PhysNode =
+func listNode(root: Digest, n: ValueNode, elements: seq[PhysNode]): PhysNode =
   ## [SPEC HASH §4] At most 256 elements: index-labelled element records. Longer:
   ## 256-element chunks, packed when the list is a homogeneous packable scalar list.
+  ## `elements` are the laid-out element values, empty for a packed long list.
   let length = n.elements.len
   var records: seq[Record]
   if length <= ListChunk:
-    for e in n.elements:
-      records.add(
-        Record(
-          label: indexLabel(e.elementIndex), node: layoutNode(root, e.elementValue)
-        )
-      )
+    for i, e in n.elements:
+      records.add(Record(label: indexLabel(e.elementIndex), node: elements[i]))
   else:
     var start = 0
     while start < length:
@@ -346,11 +341,7 @@ func listNode(root: Digest, n: ValueNode): PhysNode =
         var inner: seq[Record]
         for i in start ..< start + count:
           let e = n.elements[i]
-          inner.add(
-            Record(
-              label: indexLabel(e.elementIndex), node: layoutNode(root, e.elementValue)
-            )
-          )
+          inner.add(Record(label: indexLabel(e.elementIndex), node: elements[i]))
         chunk = made(
           nkListChunk,
           n.schema,
@@ -384,92 +375,183 @@ func listNode(root: Digest, n: ValueNode): PhysNode =
     records,
   )
 
-func layoutNode(root: Digest, n: ValueNode): PhysNode =
+func choicePhys(root: Digest, n: ValueNode, arm: PhysNode): PhysNode =
+  let rec = Record(label: choiceLabel(n.armIndex), node: arm)
+  made(
+    nkChoice,
+    n.schema,
+    cborMap(
+      header("choice", root, n.schema) &
+        @[
+          entry(3, cbor(n.armIndex)),
+          entry(4, cbor(n.armSchema)),
+          entry(5, childRecord(rec)),
+        ]
+    ),
+    @[rec],
+  )
+
+type LayoutFrame = object ## A map, list or tuple whose children are being laid out.
+  root: Digest
+  n: ValueNode
+  wrappers: seq[(Digest, ValueNode)] ## the choice and reference nodes around `n`
+  next: int ## the next child to lay out
+  records: seq[Record] ## map and tuple: the records so far
+  elements: seq[PhysNode] ## list: the element objects so far
+
+func rewrap(node: PhysNode, wrappers: seq[(Digest, ValueNode)]): PhysNode =
+  ## `node` inside its choice and reference objects, innermost first.
+  result = node
+  for i in countdown(wrappers.high, 0):
+    let (r, w) = wrappers[i]
+    result =
+      if w.kind == vkChoice:
+        choicePhys(r, w, result)
+      else:
+        wrap(
+          nkReference,
+          r,
+          w.schema,
+          @[entry(3, cbor(w.referencedRoot)), entry(4, cbor(w.referencedSubtree))],
+          result,
+        )
+
+func enter(stack: var seq[LayoutFrame], root: Digest, n: ValueNode): PhysNode =
+  ## The object of `n` if it is a scalar; otherwise pushes its frame and gives nil.
+  ## Choice and reference nodes are followed here and wrapped when it finishes.
+  var
+    root = root
+    n = n
+    wrappers: seq[(Digest, ValueNode)]
+  while n.kind in {vkChoice, vkReference}:
+    wrappers.add((root, n))
+    if n.kind == vkChoice:
+      n = n.armValue
+    else:
+      root = rootBelowReference(n)
+      n = n.referencedValue
   case n.kind
-  of vkMap:
-    var records: seq[Record]
-    for f in n.fields:
-      let node =
+  of vkScalar:
+    rewrap(scalarPayloadNode(root, n), wrappers)
+  of vkMap, vkList, vkTuple:
+    stack.add(LayoutFrame(root: root, n: n, wrappers: wrappers))
+    nil
+  of vkChoice, vkReference, vkField, vkAbsent, vkListElement, vkTupleElement:
+    raiseAssert "checked trees have no " & $n.kind & " node here"
+
+func finish(f: LayoutFrame): PhysNode =
+  ## The object of a frame whose children are all laid out.
+  let (root, n) = (f.root, f.n)
+  let node =
+    case n.kind
+    of vkMap:
+      let records = branchUp(root, nkMap, n.schema, f.records)
+      made(
+        nkMap,
+        n.schema,
+        cborMap(
+          header("map", root, n.schema) &
+            @[entry(3, cbor(uint64(n.fields.len))), entry(4, childRecords(records))]
+        ),
+        records,
+      )
+    of vkList:
+      listNode(root, n, f.elements)
+    of vkTuple:
+      let records = branchUp(root, nkTuple, n.schema, f.records)
+      made(
+        nkTuple,
+        n.schema,
+        cborMap(
+          header("tuple", root, n.schema) &
+            @[entry(3, cbor(uint64(n.positions.len))), entry(4, childRecords(records))]
+        ),
+        records,
+      )
+    else:
+      raiseAssert "frames hold maps, lists and tuples"
+  rewrap(node, f.wrappers)
+
+func layoutNode(root: Digest, n: ValueNode): PhysNode =
+  ## The physical object of a checked value node. The walk keeps its frames on the
+  ## heap, so the native stack does not grow with the payload depth and every depth
+  ## up to `DefaultMaxDepth` is supported on any thread [SPEC INTERFACE §4.5.1]
+  ## (DECISIONS I51).
+  var
+    stack: seq[LayoutFrame]
+    produced = stack.enter(root, n)
+  while true:
+    if not produced.isNil:
+      # Hand the finished child to the frame that started it.
+      if stack.len == 0:
+        return produced
+      let t = stack.high
+      let (r, c) = (stack[t].root, stack[t].n)
+      case c.kind
+      of vkMap:
+        let f = c.fields[stack[t].next - 1]
+        stack[t].records.add(
+          Record(
+            label: fieldLabel(f.fieldName),
+            node: wrap(nkField, r, f.schema, @[entry(3, cbor(f.fieldName))], produced),
+          )
+        )
+      of vkList:
+        stack[t].elements.add(produced)
+      of vkTuple:
+        let e = c.positions[stack[t].next - 1]
+        stack[t].records.add(
+          Record(
+            label: tupleLabel(e.position),
+            node:
+              wrap(nkTupleElement, r, e.schema, @[entry(3, cbor(e.position))], produced),
+          )
+        )
+      else:
+        raiseAssert "frames hold maps, lists and tuples"
+      produced = nil
+    # Start the top frame's next child, or finish the frame.
+    let t = stack.high
+    let (r, c) = (stack[t].root, stack[t].n)
+    var started = false
+    case c.kind
+    of vkMap:
+      while not started and stack[t].next < c.fields.len:
+        let f = c.fields[stack[t].next]
+        inc stack[t].next
         if f.fieldValue.kind == vkAbsent:
           # [SPEC HASH §7.4] the map record carries the absent payload directly.
-          made(
-            nkAbsent,
-            f.schema,
-            cborMap(header("absent", root, f.schema) & @[entry(3, cbor(f.fieldName))]),
+          stack[t].records.add(
+            Record(
+              label: fieldLabel(f.fieldName),
+              node: made(
+                nkAbsent,
+                f.schema,
+                cborMap(header("absent", r, f.schema) & @[entry(3, cbor(f.fieldName))]),
+              ),
+            )
           )
         else:
-          wrap(
-            nkField,
-            root,
-            f.schema,
-            @[entry(3, cbor(f.fieldName))],
-            layoutNode(root, f.fieldValue),
-          )
-      records.add(Record(label: fieldLabel(f.fieldName), node: node))
-    records = branchUp(root, nkMap, n.schema, records)
-    made(
-      nkMap,
-      n.schema,
-      cborMap(
-        header("map", root, n.schema) &
-          @[entry(3, cbor(uint64(n.fields.len))), entry(4, childRecords(records))]
-      ),
-      records,
-    )
-  of vkList:
-    listNode(root, n)
-  of vkTuple:
-    var records: seq[Record]
-    for e in n.positions:
-      records.add(
-        Record(
-          label: tupleLabel(e.position),
-          node: wrap(
-            nkTupleElement,
-            root,
-            e.schema,
-            @[entry(3, cbor(e.position))],
-            layoutNode(root, e.positionValue),
-          ),
-        )
-      )
-    records = branchUp(root, nkTuple, n.schema, records)
-    made(
-      nkTuple,
-      n.schema,
-      cborMap(
-        header("tuple", root, n.schema) &
-          @[entry(3, cbor(uint64(n.positions.len))), entry(4, childRecords(records))]
-      ),
-      records,
-    )
-  of vkChoice:
-    let arm = Record(label: choiceLabel(n.armIndex), node: layoutNode(root, n.armValue))
-    made(
-      nkChoice,
-      n.schema,
-      cborMap(
-        header("choice", root, n.schema) &
-          @[
-            entry(3, cbor(n.armIndex)),
-            entry(4, cbor(n.armSchema)),
-            entry(5, childRecord(arm)),
-          ]
-      ),
-      @[arm],
-    )
-  of vkScalar:
-    scalarPayloadNode(root, n)
-  of vkReference:
-    wrap(
-      nkReference,
-      root,
-      n.schema,
-      @[entry(3, cbor(n.referencedRoot)), entry(4, cbor(n.referencedSubtree))],
-      layoutNode(rootBelowReference(n), n.referencedValue),
-    )
-  of vkField, vkAbsent, vkListElement, vkTupleElement:
-    raiseAssert "checked trees have no " & $n.kind & " node here"
+          started = true
+          produced = stack.enter(r, f.fieldValue)
+    of vkList:
+      # A packed long list lays its scalars out in its chunks: no element objects.
+      if (c.elements.len <= ListChunk or c.packKind.isNone) and
+          stack[t].next < c.elements.len:
+        let e = c.elements[stack[t].next]
+        inc stack[t].next
+        started = true
+        produced = stack.enter(r, e.elementValue)
+    of vkTuple:
+      if stack[t].next < c.positions.len:
+        let e = c.positions[stack[t].next]
+        inc stack[t].next
+        started = true
+        produced = stack.enter(r, e.positionValue)
+    else:
+      raiseAssert "frames hold maps, lists and tuples"
+    if not started:
+      produced = finish(stack.pop())
 
 func layoutValue*(root: Digest, n: ValueNode): Result[PhysNode, string] =
   ## The physical object of one value node whose payloads carry `root` in field 1

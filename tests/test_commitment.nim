@@ -214,11 +214,18 @@ suite "commitment: schema-model construction":
     check s.role == srSupporting
     check s.declarations.allIt(it.kind == dkType)
 
-  test "[CMT-0020] one namespace: the longest common dot-segment prefix, a proper prefix of every name":
+  test "[CMT-0209] one namespace: the longest proper dot-segment prefix, and every name one segment below it":
     check build(module("a.b.x = uint8\na.b.y = uint8")).namespace == "a.b"
     check buildErr(module("x = uint8")).contains("namespace")
     check buildErr(module("a.x = uint8\nb.y = uint8")).contains("namespace")
-    check buildErr(module("a.b.x = uint8\na.c.y = uint8")).contains("G4")
+    check buildErr(module("a.b.x = uint8\na.c.y = uint8")).contains("one segment")
+    check buildErr(module("a.b.x = uint8\na.b.c.y = uint8")).contains("one segment")
+    # _sensitive is metadata, outside the namespace derivation
+    check build(
+      module(
+        "_sensitive = [\"a.b.p_request\"]\na.b.p_request = {}\na.b.p_response = {}"
+      )
+    ).namespace == "a.b"
     check build("_interface = \"demo\"\ndemo.t = uint8").role == srInterface
     check buildErr("_interface = \"other\"\ndemo.t = uint8").contains("_interface")
     check buildErr("_interface = 5\ndemo.t = uint8").contains("_interface")
@@ -291,7 +298,20 @@ suite "commitment: schema-model construction":
     check leafHash(m, c, [fieldSeg("p")]).get == leafHash(m2, c2, [fieldSeg("p")]).get
     check schemaRoot(m) != schemaRoot(m2)
 
-  test "[CMT-0026] [CMT-0015] [CMT-0033] recursive and mutually recursive local types":
+  test "[CMT-0216] [CMT-0217] [CMT-0218] a document's cdCDDLe node holds only its own rules; prelude aliases and external names stay references":
+    let source = module("demo.t = {a: uint8, e: logos.error_code}\ndemo.u = [* demo.t]")
+    # The prelude and the common schema are scope names, never merged rules.
+    check parseCddl(source).isErr
+    let doc = parseCddl(source, ["uint8", "logos.error_code"]).get
+    check doc.rules.mapIt(it.name) == @["_module", "demo.t", "demo.u"]
+    let t = doc.rules[1].typ
+    check t.kind == tkMap
+    check t.members.mapIt(it.typ.kind) == @[tkReference, tkReference]
+    check t.members.mapIt(it.typ.name) == @["uint8", "logos.error_code"]
+    # The Logos model built from the same source declares only the document's types.
+    check build(source).declarations.mapIt(it.name) == @["demo.t", "demo.u"]
+
+  test "[CMT-0026] [CMT-0015] [CMT-0214] recursive and mutually recursive local types":
     let m = build(
       module(
         "demo.node = {value: uint8, ? next: demo.node}\ndemo.a = {? b: demo.b}\ndemo.b = {? a: demo.a}"
@@ -300,7 +320,7 @@ suite "commitment: schema-model construction":
     check m.body("demo.node").fields[0].node.target == "demo.node"
     check m.declarations.len == 3
 
-  test "[CMT-0042] references: local types, common types and supplied supporting types only":
+  test "[CMT-0215] [CMT-0219] references: local types, common types (qualified in logos) and supplied supporting types only":
     check buildErr(
       module("demo.x_request = {}\ndemo.x_response = {}\ndemo.t = {r: demo.x_request}")
     )
@@ -308,14 +328,20 @@ suite "commitment: schema-model construction":
     check buildErr(module("demo.t = {r: logos.schema_request}")).contains("G6")
     check buildErr(module("demo.t = {r: logos.schema}")).contains("G6")
     check buildErr(module("demo.t = {r: demo.missing}")).contains("undefined name")
-    # Interfaces and supporting schemas see only local and common definitions.
+    # Interface contracts may import supplied supporting types (COMMITMENT §5,
+    # ND-08); a supporting schema sees only local and common definitions.
     var ctx = pinnedContext()
     ctx.supporting = @[supporting.get]
-    check buildErr("_interface = \"demo\"\ndemo.t = {c: metrics_types.counter}", ctx)
-      .contains("undefined name")
+    let viaInterface =
+      build("_interface = \"demo\"\ndemo.t = {c: metrics_types.counter}", ctx)
+    check viaInterface.body("demo.t").fields[0].node.kind == snImportedRef
+    check viaInterface.body("demo.t").fields[0].node.imported.root ==
+      schemaRoot(supporting.get)
     check buildErr("other.t = {c: metrics_types.counter}", ctx).contains(
       "undefined name"
     )
+    # Common references are qualified (COMMITMENT §5).
+    check buildErr(module("demo.t = {c: error_code}")).contains("undefined name")
     check build("other.t = {c: logos.error_code}").role == srSupporting
     # A module cannot import an interface's types.
     check buildErr(
@@ -378,7 +404,7 @@ suite "commitment: schema-model construction":
     check one.implemented.len == 0 and supporting.get.implemented.len == 0
     check common.get.implemented.len == 0
 
-  test "[CMT-0011] [CMT-0018] [CMT-0030] [CMT-0044] [CMT-0045] [CMT-0046] [CMT-0092] identity ignores source order, layout, comments and directive-like comments":
+  test "[CMT-0208] [CMT-0018] [CMT-0030] [CMT-0044] [CMT-0045] [CMT-0046] [CMT-0092] identity ignores source order, layout, comments and directive-like comments":
     let a = build(
       module(
         "demo.b = {z: uint8, a: tstr}\ndemo.a = demo.b / tstr / {q: bool}\ndemo.c = [uint8, tstr]"
@@ -416,6 +442,83 @@ demo.b = {
     check m.body("demo.u").items.mapIt($it.scalar) == @["uint8", "tstr"]
     check declarationRoot(m, m.find("demo.u").get) !=
       declarationRoot(m, m.find("demo.v").get)
+
+suite "commitment: sensitivity":
+  const methodSrc = "demo.p_request = {a: uint8}\ndemo.p_response = {b: uint8}"
+
+  proc marked(
+      names: openArray[string], role = "_module = \"demo_module\""
+  ): SchemaModel =
+    var src = role & "\n" & methodSrc
+    if names.len > 0:
+      src.add("\n_sensitive = [" & names.mapIt("\"" & it & "\"").join(", ") & "]")
+    build(src)
+
+  test "[CMT-0021] [CMT-0114] [CMT-0227] [CMT-0228] [CMT-0231] [CMT-0232] [IFC-0562] [IFC-0566] sensitivity is part of method identity, in four distinct cases":
+    let cases = [
+      marked([]),
+      marked(["demo.p_request"]),
+      marked(["demo.p_response"]),
+      marked(["demo.p_request", "demo.p_response"]),
+    ]
+    let bodies = cases.mapIt(toDiag(bodyCbor(it.find("demo.p").get)))
+    check bodies[0] == """{0: "method", 1: "demo.p_request", 2: "demo.p_response"}"""
+    check bodies[1] ==
+      """{0: "method", 1: "demo.p_request", 2: "demo.p_response", 3: true}"""
+    check bodies[2] ==
+      """{0: "method", 1: "demo.p_request", 2: "demo.p_response", 4: true}"""
+    check bodies[3] ==
+      """{0: "method", 1: "demo.p_request", 2: "demo.p_response", 3: true, 4: true}"""
+    let
+      methodRoots = cases.mapIt(declarationRoot(it, it.find("demo.p").get))
+      schemaRoots = cases.mapIt(schemaRoot(it))
+    check methodRoots.deduplicate.len == 4
+    check schemaRoots.deduplicate.len == 4
+    # The payload declarations keep their roots: sensitivity annotates the method.
+    for name in ["demo.p_request", "demo.p_response"]:
+      check cases.mapIt(declarationRoot(it, it.find(name).get)).deduplicate.len == 1
+    # An interface contract may mark its methods too.
+    check marked(["demo.p_request"], "_interface = \"demo\"")
+      .find("demo.p").get.sensitiveRequest
+
+  test "[CMT-0229] [CMT-0233] the canonical method declaration agrees with _sensitive; false is never written":
+    for m in [marked([]), marked(["demo.p_request", "demo.p_response"])]:
+      let d = m.find("demo.p").get
+      let back = methodBodyOf(bodyCbor(d)).get
+      check back.request == d.request and back.response == d.response
+      check back.sensitiveRequest == d.sensitiveRequest
+      check back.sensitiveResponse == d.sensitiveResponse
+    let plain = bodyCbor(marked([]).find("demo.p").get)
+    for bad in [
+      cborMap(plain.entries & @[(cbor(3'u64), cbor(false))]),
+      cborMap(plain.entries & @[(cbor(4'u64), cbor(false))]),
+      cborMap(plain.entries & @[(cbor(3'u64), cbor(1'u64))]),
+      cborMap(plain.entries & @[(cbor(5'u64), cbor(true))]),
+      cborMap(plain.entries[0 .. 1]),
+    ]:
+      checkpoint toDiag(bad)
+      check methodBodyOf(bad).isErr
+    # Disagreement: a declaration built without `_sensitive` is not the one
+    # read back from a marked object.
+    let markedBody = bodyCbor(marked(["demo.p_request"]).find("demo.p").get)
+    check methodBodyOf(markedBody).get.sensitiveRequest !=
+      marked([]).find("demo.p").get.sensitiveRequest
+
+  test "[CMT-0209] [IFC-0563] [IFC-0564] [IFC-0565] _sensitive: nonempty, sorted, distinct local request or response names; never in a supporting schema":
+    for (src, why) in [
+      ("_sensitive = []", "nonempty"),
+      ("_sensitive = [\"demo.p_response\", \"demo.p_request\"]", "ascending"),
+      ("_sensitive = [\"demo.p_request\", \"demo.p_request\"]", "ascending"),
+      ("_sensitive = [\"demo.p\"]", "not a local request"),
+      ("_sensitive = [\"demo.t\"]", "not a local request"),
+      ("_sensitive = [\"demo.q_request\"]", "not a local request"),
+      ("_sensitive = [5]", "text-string"),
+      ("_sensitive = \"demo.p_request\"", "nonempty fixed array"),
+      ("_sensitive = [* tstr]", "text-string"),
+    ]:
+      checkpoint src
+      check buildErr(module(methodSrc & "\ndemo.t = uint8\n" & src)).contains(why)
+    check buildErr("demo.t = uint8\n_sensitive = [\"demo.t\"]").contains("supporting")
 
 suite "commitment: schema identities":
   test "[CMT-0037] [CMT-0143] [CMT-0038] [CMT-0061] structural roots, leaf hashes and subtree roots of every node":
@@ -460,7 +563,7 @@ suite "commitment: schema identities":
     check nodeIdentity(m, d, []).get == declarationRoot(m, d)
     check leafHash(m, d, []).get != declarationRoot(m, d)
 
-  test "[IMPL-DECISION G122] [CMT-0136] the reference hash is the schema import under logos.schema.reference":
+  test "[IMPL-DECISION G122] [CMT-0136] [HSH-0182] the reference hash is the schema import under logos.schema.reference, and never stands in for a root or an import":
     let i = SchemaImport(
       root: digestOfHex(pin("common-schema-root")),
       subtree: digestOfHex(pin("common-subtree-error-code")),
@@ -468,9 +571,17 @@ suite "commitment: schema identities":
     check referenceHash(i) == digestOf(dSchemaReference, toCbor(i))
     check shapes.conforms(toCbor(i), "schema-reference-payload")
     check referenceHash(i) != digestOf(dSchemaNode, toCbor(i))
+    # An imported reference carries the import pair itself, not its reference hash.
+    let n =
+      build(module("demo.t = {e: logos.error_code}")).body("demo.t").fields[0].node
+    check n.kind == snImportedRef
+    check n.imported.root == i.root and n.imported.subtree == i.subtree
+    check referenceHash(i) notin [i.root, i.subtree]
 
-  test "[CMT-0060] [CMT-0056] hash inputs commit to the domain tag and the commitment-model revision":
+  test "[CMT-0060] [CMT-0056] [CMT-0221] hash inputs commit to the domain tag and the commitment-model revision; a schema without _sensitive builds unchanged under this revision":
     let m = build(everyKind)
+    check "_sensitive" notin everyKind
+    check m.modelId == CommitmentModelId
     let input = hashInput(dSchemaRoot, toCbor(m))
     check input.lookup(0'u64).get == cbor("logos.schema.root")
     check input.lookup(3'u64).get == cbor(CommitmentModelId)
@@ -529,7 +640,7 @@ suite "commitment: canonical data shapes":
             structuralPayload(m.modelId, d, path, n), "schema-structural-node-payload"
           )
 
-  test "[CMT-0008] [CMT-0009] [CMT-0010] the Logos schema object is not cdCDDLe's canonical schema":
+  test "[CMT-0008] [CMT-0207] [CMT-0010] the Logos schema object is not cdCDDLe's canonical schema":
     let source = mirror("CMT/app-a.input.cddl")
     let m = build(source)
     let generic = encodeCddl(parseCddl(source).get).get
@@ -539,7 +650,6 @@ suite "commitment: canonical data shapes":
 suite "commitment: commitment-model revision":
   test "[CMT-0054] [CMT-0055] [CMT-0052] the revision identifier and its grammar":
     check isCommitmentModelRevision(CommitmentModelId)
-    check CommitmentModelId == "logos.commitment-model.2026-08"
     for good in [
       "logos.commitment-model.2026-08.r2", "logos.commitment-model.1999-12.a-b-0"
     ]:
@@ -551,8 +661,13 @@ suite "commitment: commitment-model revision":
     ]:
       check not isCommitmentModelRevision(bad)
 
-  test "[CMT-0053] [CMT-0057] [CMT-0062] [CMT-0063] [CMT-0064] [CMT-0066] [CMT-0068] a dependency under another revision is rejected, whatever its spelling suggests":
-    for id in ["logos.commitment-model.2026-09", "logos.commitment-model.2026-08.r1"]:
+  test "[CMT-0053] [CMT-0057] [CMT-0062] [CMT-0063] [CMT-0064] [CMT-0066] [CMT-0068] [CMT-0220] a dependency under another revision is rejected, whatever its spelling suggests":
+    # 2026-08 is the revision this one supersedes; its commitments are not
+    # accepted as 2026-10 ones (COMMITMENT §6).
+    for id in [
+      "logos.commitment-model.2026-08", "logos.commitment-model.2026-09",
+      "logos.commitment-model.2026-08.r1",
+    ]:
       var other = supporting.get
       other.modelId = id
       var ctx = pinnedContext()
@@ -566,9 +681,21 @@ proc planOf(src: string, name = "demo.t", ctx = pinnedContext()): SelectionPlan 
   schemaSetFor(m, ctx).selectionPlan(0, m.body(name)).get
 
 suite "commitment: choice selection plans":
-  test "[CMT-0029] [CMT-0031] [CMT-0032] the normative plan-construction examples":
+  test "[CMT-0029] [CMT-0031] [CMT-0032] [CMT-0210] [CMT-0211] [CMT-0212] [CMT-0213] the normative plan-construction examples":
     check planOf("demo.t = uint64 / tstr").test == ptMajorType
     check planOf("demo.t = [uint64] / [uint64, uint64]").test == ptTupleLength
+    # Literals inside equal-length tuples are not observed (COMMITMENT §3.1).
+    check buildErr(module("demo.t = [\"a\"] / [\"b\"]")).contains("selection plan")
+    # Disjoint literal choices in one field separate the arms.
+    let kinds = planOf("demo.t = { kind: \"a\" / \"b\" } / { kind: \"c\" / \"d\" }")
+    check kinds.test == ptFieldLiteral and kinds.field == "kind"
+    # Collection follows references and choices at the tested location only.
+    check planOf("demo.k = \"a\" / \"b\"\ndemo.t = { kind: demo.k } / { kind: \"c\" }").field ==
+      "kind"
+    check buildErr(
+      module("demo.t = { kind: { tag: \"a\" } } / { kind: { tag: \"b\" } }")
+    )
+      .contains("selection plan")
     for (src, field) in [
       (
         "demo.t = { status: \"failed\", error: bstr } / { status: \"failed\", realization: bstr }",

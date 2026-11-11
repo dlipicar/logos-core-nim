@@ -60,7 +60,7 @@ put(variants / "linux-x86_64" / "lib" / "libalpha.so", "ALPHA for linux")
 put(variants / "darwin-aarch64" / "lib" / "libalpha.dylib", "ALPHA for darwin")
 
 suite "pkg.cli: lcn-pkg producer commands":
-  test "[PKG-0108] keygen draws a fresh seed, readable only by its owner, and never overwrites one":
+  test "[IMPL-DECISION I41] keygen draws a fresh seed, readable only by its owner, and never overwrites one (Ed25519 interim until the PM-06 rewrite)":
     let other = work / "other.seed"
     check:
       keygen(seedPath) == 0
@@ -111,7 +111,7 @@ suite "pkg.cli: lcn-pkg producer commands":
     let key = keyFromSeed(seedOf(seedPath)).publicKey
     trustFile(trustPath, key, @["logos.example"])
     check:
-      lgxPack(manifestPath, cosePath, variants, "", packagePath) == 0
+      lgxPack(manifestPath, cosePath, variants, packagePath) == 0
       verifyCmd(packagePath, trustPath, "linux/x86_64/gnu") == 0
       verifyCmd(packagePath, trustPath, "darwin/aarch64") == 0
       verifyCmd(packagePath, trustPath, "windows/x86_64") == 1

@@ -1,0 +1,2 @@
+_module = "c"
+c.value = { amount: types.alias, z: uint64 }

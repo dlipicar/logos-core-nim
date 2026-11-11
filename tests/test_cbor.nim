@@ -7,6 +7,8 @@ import ./support/specdata
 
 type Vector = object
   hex, expect, note, diag: string
+  dataModel: string
+    ## the class in the generic data model (`allowFloats`), where it differs
 
 proc vectors(): seq[Vector] =
   let root = parseJson(readRepoFile("tests/vectors/cbor/decode.json"))
@@ -18,6 +20,7 @@ proc vectors(): seq[Vector] =
         expect: v["expect"].getStr,
         note: v["note"].getStr,
         diag: v{"diag"}.getStr,
+        dataModel: v{"data_model"}.getStr(v["expect"].getStr),
       )
     )
   output
@@ -51,7 +54,7 @@ suite "cbor: oracle vectors (tests/vectors/cbor/decode.json)":
           let parsed = parseDiag(v.diag)
           check parsed.isOk and enc(parsed.get) == v.hex
         inc n
-    check n > 70
+    check n > 50
 
   test "[IFC-0409] [IFC-0410] [IFC-0411] [IFC-0412] [IFC-0416] non-deterministic items are rejected as such":
     var n = 0
@@ -89,7 +92,24 @@ suite "cbor: oracle vectors (tests/vectors/cbor/decode.json)":
           check text.kind == ckText and not text.validUtf8
           check text.getText.isNone
 
-  test "[IMPL-DECISION G59] nesting is capped at 1024 containers":
+  test "[IFC-0919] a floating-point item is rejected at any depth; the generic data model decodes it":
+    var n = 0
+    for v in all:
+      if v.dataModel != v.expect:
+        checkpoint v.hex & " (" & v.note & ")"
+        let data = hexBytes(v.hex)
+        check classOf(decodeCbor(data)) == "non-deterministic"
+        var opts = defaultDecodeOptions()
+        opts.allowFloats = true
+        let generic = decodeCbor(data, opts)
+        check classOf(generic) == v.dataModel
+        if generic.isOk:
+          check enc(generic.get) == v.hex
+        inc n
+    check n >= 20
+
+  test "[IMPL-DECISION G59] [IFC-0923] [IFC-0926] arrays and maps nest at most 1024 deep by default; tags are bounded apart":
+    check DefaultMaxDepth >= MinMaxDepth
     for v in all:
       if v.expect == "too-deep" or v.note.contains("nested"):
         checkpoint v.note
@@ -100,6 +120,15 @@ suite "cbor: oracle vectors (tests/vectors/cbor/decode.json)":
     check classOf(decodeCbor(hexBytes("81818100"), opts)) == "too-deep"
     check classOf(decodeCbor(hexBytes("8180"), opts)) == "ok"
     check classOf(decodeCbor(hexBytes("818180"), opts)) == "too-deep"
+    # A root container is depth one; scalars and tags add none (§4.5.1).
+    check classOf(decodeCbor(hexBytes("81d917708100"), opts)) == "ok"
+    check classOf(decodeCbor(hexBytes("d91770d91770d9177000"), opts)) == "ok"
+    opts.maxDepth = 1
+    check classOf(decodeCbor(hexBytes("a1616100"), opts)) == "ok"
+    check classOf(decodeCbor(hexBytes("a1616180"), opts)) == "too-deep"
+    opts.maxTagDepth = 2
+    check classOf(decodeCbor(hexBytes("d91770d9177000"), opts)) == "ok"
+    check classOf(decodeCbor(hexBytes("d91770d91770d9177000"), opts)) == "too-deep"
 
 suite "cbor: encoder":
   test "[IFC-0410] [CDE-0138] heads use the shortest argument at every boundary":
@@ -149,7 +178,7 @@ suite "cbor: encoder":
     expect AssertionDefect:
       discard encodeCbor(cborMap((cbor(1), cbor(1)), (cbor(1), cbor(2))))
 
-  test "[IMPL-DECISION G38] [IFC-0413] floats are data-model values, encoded in the shortest width":
+  test "[IMPL] the generic data model encodes floats in the shortest width":
     check enc(cborFloat(0.0)) == "f90000"
     check enc(cborFloat(-0.0)) == "f98000"
     check enc(cborFloat(1.5)) == "f93e00"
@@ -160,11 +189,14 @@ suite "cbor: encoder":
     check enc(cborFloat(Inf)) == "f97c00"
     check enc(cborFloat(NegInf)) == "f9fc00"
     check enc(cborFloat(NaN)) == "f97e00"
+    var opts = defaultDecodeOptions()
+    opts.allowFloats = true
     for f in [0.1, 1e300, 3.4028234663852886e38, -4.1, 1.401298464324817e-45]:
       let v = cborFloat(f)
       check toFloat64(v) == f
-      let back = decodeCbor(encodeCbor(v))
+      let back = decodeCbor(encodeCbor(v), opts)
       check back.isOk and back.get == v
+      check classOf(decodeCbor(encodeCbor(v))) == "non-deterministic"
 
 suite "cbor: diagnostic notation and the spec's own blocks":
   test "[CDE-0198] [CDE-0199] [CDE-0137] cdCDDLe App A: the diagnostic block encodes to the 522 normative bytes":
@@ -268,10 +300,12 @@ suite "cbor: fuzz smoke (fixed seed)":
       else:
         cborFloat(rng.rand(1e6) - 5e5)
 
+    var opts = defaultDecodeOptions()
+    opts.allowFloats = true # the generator draws floats too
     for _ in 0 ..< 2_000:
       let v = gen(0)
       let bytes = encodeCbor(v)
-      let back = decodeCbor(bytes)
+      let back = decodeCbor(bytes, opts)
       check back.isOk
       if back.isOk:
         check back.get == v

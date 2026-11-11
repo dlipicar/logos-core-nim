@@ -21,7 +21,7 @@ value = "logos.hash-profile.2026-08.choice-index"
 file = "spec-module-commitment-model.md"
 section = "§6"
 code = "CommitmentModelId"
-value = "logos.commitment-model.2026-08"
+value = "logos.commitment-model.2026-10"
 
 [hash-suite-id]
 file = "spec-module-hash-profile.md"
@@ -44,14 +44,14 @@ value = "796"
 [hsh-app-a-root]
 file = "spec-module-hash-profile.md"
 section = "App A"
-value = "9befcab3f47617bacbfaa212f1dc8f4f4494678c4536162fb53c3acbcfeafd47"
+value = "2321d43e09fed8b6357300b505750b03ec0f9e392f4bbfb3b013c7078a7a2cca"
 
 [common-schema-root]
 file = "spec-module-commitment-model.md"
 section = "§5"
 declaration = "schema"
 code = "CommonSchemaRoot"
-value = "7e0236018aed522455dfbdba19f81fd67a050a61f2a05cb8d1027eda35107ca6"
+value = "fc3a3558912d474cdb37fbc4fedd5b11dd785d69e9c033c7f9dc077ac49040ca"
 
 [common-schema-document]
 file = "spec-module-interface.md"
@@ -65,7 +65,7 @@ section = "§5"
 registry = "common"
 definition = "logos.error_code"
 declaration = "type"
-value = "f0efecb7f5f270919523d00dd977e5c0ca04b429e022a1a66856353831fd76a7"
+value = "fd660f3e53876d042529d99206ad1fdcd689167a5e6c8d666bf2a3c97b31d6f4"
 
 [common-subtree-error-detail]
 file = "spec-module-commitment-model.md"
@@ -73,7 +73,7 @@ section = "§5"
 registry = "common"
 definition = "logos.error_detail"
 declaration = "type"
-value = "a6a0bed0a560ed0499a7e1d4708741e0b6dce32f379cdbbf29d74637cb0ea3ff"
+value = "da46a01173b4081b71771c7b6d5d72f6cc67561650127b17747e89a5be65a5b0"
 
 [common-subtree-invalid-params-detail]
 file = "spec-module-commitment-model.md"
@@ -81,7 +81,7 @@ section = "§5"
 registry = "common"
 definition = "logos.invalid_params_detail"
 declaration = "type"
-value = "4a8b55144d4f00f42c19ffd90cb9c4173388c1ec00bafcf71df79b32a14163d9"
+value = "662f60625d236e51e4ae9aec3496f4cb568b6f04eacef08f09932396e3a283ee"
 
 [common-subtree-invalid-params-path-segment]
 file = "spec-module-commitment-model.md"
@@ -89,7 +89,7 @@ section = "§5"
 registry = "common"
 definition = "logos.invalid_params_path_segment"
 declaration = "type"
-value = "6fc94679ad488099793d930fec7eaf2fb200a0e117c85c28188f8f2458b0d451"
+value = "cd5b0762c284802d68ae6d8176a94c903bab3b6ab33e70643888b7b1bb27e0b4"
 
 [common-subtree-invalid-params-reason]
 file = "spec-module-commitment-model.md"
@@ -97,7 +97,7 @@ section = "§5"
 registry = "common"
 definition = "logos.invalid_params_reason"
 declaration = "type"
-value = "c55a3c96f6306a438e357b35d7cedbeca054ceb68cc1188eb38b036da7ac6816"
+value = "1f89c04018feeb797028db37ee19555fc5608dee910bcc43fd3493b62d94e6cf"
 
 [common-subtree-schema]
 file = "spec-module-commitment-model.md"
@@ -105,7 +105,7 @@ section = "§5"
 registry = "common"
 definition = "logos.schema"
 declaration = "method"
-value = "8997083caebf86ede43a744e16ac7018eacc3a51e4e603af4ef0ed8bd14158c3"
+value = "67dde6945b248178e6ae08d34cc91a1eb37447165f6438d61bbb01ca1cc47fad"
 
 [common-subtree-schema-commitment]
 file = "spec-module-commitment-model.md"
@@ -113,7 +113,7 @@ section = "§5"
 registry = "common"
 definition = "logos.schema_commitment"
 declaration = "type"
-value = "b9adbab7aea835c64a3b89031c45d7868d21069be0943f0581d527234812d064"
+value = "ce8da763b8b3dd9df51e8f7f75fa8f3fafa666313027020a1d6c483b3477751a"
 
 [common-subtree-schema-request]
 file = "spec-module-commitment-model.md"
@@ -121,7 +121,7 @@ section = "§5"
 registry = "common"
 definition = "logos.schema_request"
 declaration = "method request"
-value = "b6f1788290d01092fba9e956e405ecd6bd5c5584f64ceeab8a60df92a52ae585"
+value = "85ca8745714c54142142b9d79e74d154652816f8811ad622350b1957f8dccc12"
 
 [common-subtree-schema-response]
 file = "spec-module-commitment-model.md"
@@ -129,75 +129,75 @@ section = "§5"
 registry = "common"
 definition = "logos.schema_response"
 declaration = "method response"
-value = "3fde7207bddb450e0a7583953b7db2cf393382cc971a67ca8394bfa6b1896e18"
+value = "2a95cf0bb9e2e222b3f61ea5505fbeea1f8bfc91324206ac99be13c74c9f6c37"
 
 [hsh-b1-first-chunk]
 file = "spec-module-hash-profile.md"
 section = "App B.1"
-value = "96ea377758aec5c446cec80b60088d129ff971b85bda591c6f77d7c99fb23eab"
+value = "564e7aebed309e0e972c1889dcd390844586e4e9431ee84cd47f485a8017ca97"
 
 [hsh-b1-final-chunk]
 file = "spec-module-hash-profile.md"
 section = "App B.1"
-value = "90ba0b2241f89f427a321b4a94cf250f1b65f048d3134834381694db174d671f"
+value = "4f9e220a7ff848b15af6f16d86706970fd287453b78ccf05df3913f859abc3e8"
 
 [hsh-b1-list]
 file = "spec-module-hash-profile.md"
 section = "App B.1"
-value = "f30f3f87a545f0095791f47933ceeea5c8ad51cf0aa820d9661481de71ff7c10"
+value = "56b8b8e7af2afba36b71f2c39f53187e587d57fcfb85f18d7e1457320c36b15c"
 
 [hsh-b1-value-root]
 file = "spec-module-hash-profile.md"
 section = "App B.1"
-value = "3a0b366ac7d16600d4f92fcdbfa0706c9e86c0be2e3286595cb2e832ab6efec2"
+value = "b4dfb5043f0ad9edcc6368b9a929534c27c2fc17628a0c50dcc50a2d6924c16f"
 
 [hsh-b2-first-chunk]
 file = "spec-module-hash-profile.md"
 section = "App B.2"
-value = "53e97f4a652ac68c6173c121d8d33d9cd72f99210d34d7d258b0c2c78658a6ac"
+value = "f378adc5640d24e0f35d18973285dfe7c79c3038194f2962ed9139cb225efd3c"
 
 [hsh-b2-final-chunk]
 file = "spec-module-hash-profile.md"
 section = "App B.2"
-value = "19e3901251b3fbe18522fad6fd70e54c5a33ffea704fb5edf3a07c5e51f31cd9"
+value = "b65c079c992e20f9ce1e454702871bebf7aebab36a549642258288e2e309baa2"
 
 [hsh-b2-aggregate]
 file = "spec-module-hash-profile.md"
 section = "App B.2"
-value = "189229d6d24ae83aa2b29293c4660ee4450758b33b4407c564bdb6290988c876"
+value = "4a4c19f9613c2540b87696879f622301709b8a7134cce4e68d0d9c65b906f206"
 
 [hsh-b2-value-root]
 file = "spec-module-hash-profile.md"
 section = "App B.2"
-value = "da2ce350cd03b669d6f53ba5fb4387b3fd23db92181a19d58475527ab83c7b74"
+value = "223a41867e3b21922714da7985214c2e5381b472b26a171f1b3b768a6e65d0c2"
 
 [hsh-b3-branch-0-255]
 file = "spec-module-hash-profile.md"
 section = "App B.3"
-value = "d0b8d2fd5fd40e5d5a9ee29e7f93a0423e8366a3b9f0307b0fc72585a0e12b46"
+value = "a0950d2273cdebc149a068abbcf5c6622c78437fe3b0c49d109c968f4aef324d"
 
 [hsh-b3-branch-256]
 file = "spec-module-hash-profile.md"
 section = "App B.3"
-value = "0da1c5d1cb53c679d3e7863a0b9856fab9513fa2408d6c181f1c2d402b9d0abd"
+value = "77a2a1cd2ab83b80d8681eaade31d29eab7ee042a4c1eebcaa8f3434e919668d"
 
 [ifc-3-9-2-interface-root]
 file = "spec-module-interface.md"
 section = "§3.9.2"
-value = "ca004a96bbbce568ab0e7f996020e12d0dca353603671d5d6d8d5e364b830d32"
+value = "6abd62efd7835d78114f988733977d9d766c9cce56aef7e8b117c45b2955fc22"
 
 [pkg-manifest-schema-root]
 file = "spec-module-package-manager.md"
 section = "§4"
 code = "PackageManifestSchemaRoot"
-value = "108b1bab1bf87dfed2ca431bf0591e33e937bb553a489df46b0a9023b9a98af1"
+value = "b3a53cea950337515b843333795c53c58288702e5bf72ad98930e02c7581e0eb"
 
 [pkg-manifest-subtree-root]
 file = "spec-module-package-manager.md"
 section = "§4"
 definition = "logos.package_manifest.manifest"
 code = "PackageManifestSubtreeRoot"
-value = "a06c0c06d9493e19ab96baabd23b6520645195188af062f858f95f6922a128a1"
+value = "fbee48aef4b669bd9e4dfec0126f56513f8c626da858121082e5f25b0e236879"
 
 [logos-types-header]
 file = "spec-module-interface.md"

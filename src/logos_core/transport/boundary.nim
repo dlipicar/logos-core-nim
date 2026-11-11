@@ -1,11 +1,13 @@
-## TRANSPORT §4.1, §8.3: the schema-aware sending and receiving boundaries of one
-## provider session. The sender validates a payload and computes its commitment;
-## the receiver resolves the target under the session's selected contract,
-## validates, recomputes and compares, before a Request is dispatched, a
-## `response-ok` accepted or an Event delivered.
+## TRANSPORT §4.1, §8.1, §8.3: the schema-aware sending and receiving boundaries
+## of one provider session. The sender validates a payload and computes its
+## commitment; the receiver resolves the target under the session's selected
+## contract, checks the route's access scope, then compares the subtree root,
+## validates, and recomputes and compares the value root, before a Request is
+## dispatched, a `response-ok` accepted or an Event delivered.
 
 {.push raises: [].}
 
+import std/sets
 import results
 import ../cbor
 import ../commitment
@@ -28,18 +30,34 @@ type
     sets: seq[SchemaSet] ## one per `contracts.documents` entry
     common: SchemaSet
     wellKnown: seq[string]
+    scoped: bool ## whether a route access scope restricts the selected contract
+    methodScope, eventScope: HashSet[string]
 
   RejectKind* = enum
     rjRespond ## answer with this failure (the call fails, the session stays)
-    rjClose ## ProtocolError INVALID_PARAMS and close the provider session (§4.1)
+    rjClose ## ProtocolError with `failure.code` and close the provider session
+
+  RejectCause* = enum
+    ## Which receiving check failed (§4.1, §8.1), in the order they run.
+    rcUnknownTarget ## the name is not in the selected contract
+    rcScope ## outside the route's access scope (§8.1)
+    rcSubtreeRoot ## `schema_subtree_root` differs from the declaration's
+    rcSchema ## the payload fails its declaration
+    rcValueRoot ## `value_root` differs from the recomputed one
+    rcResource
+      ## the commitment could not be recomputed within the commitment layer's
+      ## limits: no mismatch is established, so it is never reported as one
 
   Reject* = object
     kind*: RejectKind
+    cause*: RejectCause
     failure*: InvocationFailure
     msg*: string
 
-func reject(kind: RejectKind, code: ErrorCode, msg: string): Reject =
-  Reject(kind: kind, failure: InvocationFailure(code: code), msg: msg)
+func reject(
+    kind: RejectKind, cause: RejectCause, code: ErrorCode, msg: string
+): Reject =
+  Reject(kind: kind, cause: cause, failure: InvocationFailure(code: code), msg: msg)
 
 func boundary*(s: ContractSet, selected: Digest): Result[Boundary, string] =
   ## [SPEC TRANSPORT §3.1, §8.1] The session's selected contract: the primary
@@ -71,6 +89,26 @@ func boundary*(s: ContractSet, selected: Digest): Result[Boundary, string] =
       if e.contract == selected:
         b.surface.events.add(e)
   ok(b)
+
+func withAccess*(
+    b: Boundary, methods: openArray[string], events: openArray[string]
+): Boundary =
+  ## [SPEC TRANSPORT §5.1, §8.1, §8.1.2] The route's (or system-service
+  ## binding's) method-call and event-subscription access, as bare method names
+  ## (`schema` included when the route allows introspection) and exact event
+  ## names. Without it, the whole selected contract is in scope. Names are still
+  ## resolved under the selected contract first; the scope never widens it.
+  var r = b
+  r.scoped = true
+  r.methodScope = toHashSet(methods)
+  r.eventScope = toHashSet(events)
+  r
+
+func allowsMethod*(b: Boundary, methodName: string): bool =
+  not b.scoped or methodName in b.methodScope
+
+func allowsEvent*(b: Boundary, eventId: string): bool =
+  not b.scoped or eventId in b.eventScope
 
 func isWellKnown(b: Boundary, methodName: string): bool =
   methodName in b.wellKnown
@@ -116,33 +154,68 @@ func commit(t: Target, v: CborValue): Result[PayloadCommitment, string] =
   ok(PayloadCommitment(subtreeRoot: r.subtreeRoot, valueRoot: ?valueRoot(r)))
 
 # Sending ---------------------------------------------------------------------------
+#
+# A sending failure is a `Reject` too: `cause` says which check failed
+# (`rcUnknownTarget`, `rcSchema` with INVALID_PARAMS, `rcResource` with
+# MODULE_ERROR) and nothing is sent.
 
-func send(t: Target, v: CborValue): Result[PayloadCommitment, string] =
+func send(t: Target, v: CborValue): Result[PayloadCommitment, Reject] =
   ## [SPEC TRANSPORT §4.1] The sending boundary computes the commitment from the
   ## validated schema-typed value.
   t.validate(v).isOkOr:
-    return err("the value is not a " & t.declaration)
-  t.commit(v)
+    return err(
+      reject(
+        rjRespond, rcSchema, ecInvalidParams, "the value is not a " & t.declaration
+      )
+    )
+  let c = t.commit(v).valueOr:
+    return err(
+      reject(
+        rjRespond, rcResource, ecModule, "the commitment cannot be computed: " & error
+      )
+    )
+  ok(c)
 
 func commitRequest*(
     b: Boundary, methodName: string, params: CborValue
-): Result[PayloadCommitment, string] =
+): Result[PayloadCommitment, Reject] =
   let t = b.requestTarget(methodName, false).valueOr:
-    return err(methodName & " is not a method of the selected contract")
+    return err(
+      reject(
+        rjRespond,
+        rcUnknownTarget,
+        ecMethodNotFound,
+        methodName & " is not a method of the selected contract",
+      )
+    )
   t.send(params)
 
 func commitResponse*(
     b: Boundary, methodName: string, value: CborValue
-): Result[PayloadCommitment, string] =
+): Result[PayloadCommitment, Reject] =
   let t = b.requestTarget(methodName, true).valueOr:
-    return err(methodName & " is not a method of the selected contract")
+    return err(
+      reject(
+        rjRespond,
+        rcUnknownTarget,
+        ecModule,
+        methodName & " is not a method of the selected contract",
+      )
+    )
   t.send(value)
 
 func commitEvent*(
     b: Boundary, eventId: string, data: CborValue
-): Result[PayloadCommitment, string] =
+): Result[PayloadCommitment, Reject] =
   let t = b.eventTarget(eventId).valueOr:
-    return err(eventId & " is not an event of the selected contract")
+    return err(
+      reject(
+        rjRespond,
+        rcUnknownTarget,
+        ecNotAuthorised,
+        eventId & " is not an event of the selected contract",
+      )
+    )
   t.send(data)
 
 # Receiving -------------------------------------------------------------------------
@@ -150,15 +223,23 @@ func commitEvent*(
 func recheck(
     t: Target, v: CborValue, c: PayloadCommitment, onSchema: RejectKind
 ): Result[void, Reject] =
-  ## The receiving order: the subtree root first, then the schema, then the value
-  ## root [IMPL-DECISION G37]. A root that differs closes the session (§4.1); a
-  ## value outside the schema closes it for a response or event (G36) and fails
-  ## the call for a request, as it would in direct mode (INTERFACE §4.5).
+  ## [SPEC TRANSPORT §4.1] The receiving order: (1) the subtree root, whose
+  ## mismatch closes the session even when the payload also fails its schema;
+  ## (2) the schema: a Request fails its call as in direct mode (INTERFACE
+  ## §4.5) and the session stays, a response-ok or Event closes the session;
+  ## (3) the value root of the validated value, whose mismatch closes. No root is
+  ## computed for a schema-invalid payload. A commitment the commitment layer
+  ## cannot compute is a resource failure, not a mismatch [IMPL]: the call fails
+  ## with MODULE_ERROR, or a response-ok or Event closes the session with it.
   if c.subtreeRoot != t.subtreeRoot:
-    return err(reject(rjClose, ecInvalidParams, "schema_subtree_root differs"))
+    return err(
+      reject(rjClose, rcSubtreeRoot, ecInvalidParams, "schema_subtree_root differs")
+    )
   let path = t.validate(v)
   if path.isErr:
-    var r = reject(onSchema, ecInvalidParams, "the payload is not a " & t.declaration)
+    var r = reject(
+      onSchema, rcSchema, ecInvalidParams, "the payload is not a " & t.declaration
+    )
     if onSchema == rjRespond:
       r.failure = toFailure(
         PayloadError(
@@ -170,19 +251,36 @@ func recheck(
       )
     return err(r)
   let mine = t.commit(v).valueOr:
-    return err(reject(rjClose, ecInvalidParams, error))
+    return err(
+      reject(
+        onSchema, rcResource, ecModule, "the commitment cannot be computed: " & error
+      )
+    )
   if mine.valueRoot != c.valueRoot:
-    return err(reject(rjClose, ecInvalidParams, "value_root differs"))
+    return err(reject(rjClose, rcValueRoot, ecInvalidParams, "value_root differs"))
   ok()
 
 func acceptRequest*(b: Boundary, r: Request): Result[void, Reject] =
   ## [SPEC TRANSPORT §4.1, §8.1, §8.3] Before dispatch: the bare method name
-  ## resolved under the selected contract only (unknown: METHOD_NOT_FOUND, no
-  ## provider code runs), then the commitment and the schema.
+  ## resolved under the selected contract only (unknown: METHOD_NOT_FOUND), then
+  ## the route's method scope (outside: NOT_AUTHORISED), then the commitment and
+  ## schema checks of `recheck`. No provider code runs on any failure.
   let t = b.requestTarget(r.methodName, false).valueOr:
     return err(
       reject(
-        rjRespond, ecMethodNotFound, r.methodName & " is not in the selected contract"
+        rjRespond,
+        rcUnknownTarget,
+        ecMethodNotFound,
+        r.methodName & " is not in the selected contract",
+      )
+    )
+  if not b.allowsMethod(r.methodName):
+    return err(
+      reject(
+        rjRespond,
+        rcScope,
+        ecNotAuthorised,
+        r.methodName & " is outside the route scope",
       )
     )
   t.recheck(r.params, r.commitment, rjRespond)
@@ -191,17 +289,28 @@ func acceptResponse*(
     b: Boundary, methodName: string, r: Response
 ): Result[void, Reject] =
   ## [SPEC TRANSPORT §4.1] Before a `response-ok` is accepted. Every failure
-  ## closes the session; the waiting call gets TRANSPORT_ERROR [IMPL-DECISION G36].
+  ## closes the session, even when the invalid payload prevents recomputing its
+  ## commitment; the waiting call gets TRANSPORT_ERROR (§3.2).
   if not r.ok:
     return ok()
   let t = b.requestTarget(methodName, true).valueOr:
-    return err(reject(rjClose, ecInvalidParams, methodName & " is not a known method"))
+    return err(
+      reject(
+        rjClose, rcUnknownTarget, ecInvalidParams, methodName & " is not a known method"
+      )
+    )
   t.recheck(r.resultMap, r.commitment, rjClose)
 
 func acceptEvent*(b: Boundary, e: Event): Result[void, Reject] =
-  ## [SPEC TRANSPORT §4.1] Before an Event is delivered [IMPL-DECISION G36].
+  ## [SPEC TRANSPORT §4.1] Before an Event is delivered: a schema-invalid one
+  ## closes the session and never reaches a subscription handler.
   let t = b.eventTarget(e.event).valueOr:
     return err(
-      reject(rjClose, ecInvalidParams, e.event & " is not in the selected contract")
+      reject(
+        rjClose,
+        rcUnknownTarget,
+        ecInvalidParams,
+        e.event & " is not in the selected contract",
+      )
     )
   t.recheck(e.data, e.commitment, rjClose)

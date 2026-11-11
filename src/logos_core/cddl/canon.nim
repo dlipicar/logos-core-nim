@@ -109,7 +109,7 @@ proc build(c: Canon, n: SrcNode): Result[CddlType, CddlError] =
       order = cmpInteger(low, high)
     if order > 0:
       return
-        err(c.fail(n.pos, ecCanonical, "range lower bound exceeds its upper bound"))
+        err(c.fail(n.pos, ecUnsupported, "range lower bound exceeds its upper bound"))
     if order == 0:
       return ok(literalType(low))
     ok(CddlType(kind: tkRange, low: low, high: high))
@@ -135,8 +135,9 @@ proc build(c: Canon, n: SrcNode): Result[CddlType, CddlError] =
         )
       let order = cmpInteger(low, high)
       if order > 0:
-        return
-          err(c.fail(ctl.pos, ecCanonical, "range lower bound exceeds its upper bound"))
+        return err(
+          c.fail(ctl.pos, ecUnsupported, "range lower bound exceeds its upper bound")
+        )
       controller =
         if order == 0:
           literalType(low)

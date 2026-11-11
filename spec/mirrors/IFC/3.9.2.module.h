@@ -1,49 +1,53 @@
-#define LOGOS_SENSOR_MODULE_PRIMARY_NAMESPACE "sensor.control"
-#define LOGOS_SENSOR_MODULE_IMPLEMENTS_0 "metrics_provider"
-#define LOGOS_METRICS_PROVIDER_INTERFACE_NAMESPACE "metrics_provider"
-#define LOGOS_METRICS_TYPES_SUPPORTING_NAMESPACE "metrics_types"
-#define LOGOS_SENSOR_CONTROL_SETTINGS_KIND_LITERAL "sensor"
+#define LOGOS_PRIMARY_NAMESPACE_sensor_module "sensor.control"
+#define LOGOS_IMPLEMENTS_sensor_module_INDEX0 "metrics_provider"
+#define LOGOS_INTERFACE_NAMESPACE_metrics_provider "metrics_provider"
+#define LOGOS_SUPPORTING_NAMESPACE_metrics_types "metrics_types"
+#define LOGOS_LITERAL_sensor_NS_control_Settings_Kind "sensor"
 
-typedef uint64_t logos_metrics_types_counter_t;
+typedef uint64_t logos_metrics_types_Counter_t;
 
-typedef struct logos_map_sensor_control_settings {
+typedef struct logos_sensor_NS_control_Settings_MAP {
     const char*                  kind;
-    logos_metrics_types_counter_t limit;
-} logos_sensor_control_settings_t;
+    logos_metrics_types_Counter_t limit;
+} logos_sensor_NS_control_Settings_t;
 
-typedef logos_result_t (*logos_metrics_provider_call_snapshot_fn)(
+typedef logos_result_t (*logos_metrics_provider_Snapshot_FN_t)(
     logos_module_context_t* module,
+    logos_response_owner_t* response_owner,
     uint64_t*               out_count
 );
 
-logos_result_t logos_sensor_module_call_metrics_provider_snapshot(
+logos_result_t logos_sensor_module_CALL_metrics_provider_Snapshot(
     logos_module_context_t* module,
+    logos_response_owner_t* response_owner,
     uint64_t*               out_count
 );
 
-typedef logos_result_t (*logos_sensor_control_call_configure_fn)(
+typedef logos_result_t (*logos_sensor_NS_control_Configure_FN_t)(
     logos_module_context_t*                module,
-    const logos_sensor_control_settings_t* in_settings
+    logos_response_owner_t* response_owner,
+    const logos_sensor_NS_control_Settings_t* in_settings
 );
 
-logos_result_t logos_sensor_module_call_sensor_control_configure(
+logos_result_t logos_sensor_module_CALL_sensor_NS_control_Configure(
     logos_module_context_t*                module,
-    const logos_sensor_control_settings_t* in_settings
+    logos_response_owner_t* response_owner,
+    const logos_sensor_NS_control_Settings_t* in_settings
 );
 
-const char* logos_sensor_module_name(void);
+const char* logos_sensor_module_MODULE_name(void);
 
-logos_result_t logos_sensor_module_init(
+logos_result_t logos_sensor_module_MODULE_init(
     const logos_module_init_input_t* input,
     logos_module_context_t**         out_context
 );
 
-void logos_sensor_module_destroy(logos_module_context_t* module);
+void logos_sensor_module_MODULE_destroy(logos_module_context_t* module);
 
-const uint8_t* logos_sensor_module_call_surface(size_t* out_len);
-void logos_sensor_module_free(logos_module_context_t* module, void* ptr);
+const uint8_t* logos_sensor_module_MODULE_call_surface(size_t* out_len);
+void logos_sensor_module_MODULE_free(logos_module_context_t* module, void* ptr);
 
-logos_result_t logos_sensor_module_dispatch(
+logos_result_t logos_sensor_module_MODULE_dispatch(
     logos_module_context_t* module,
     const char*             method,
     const uint8_t*          params_cbor,

@@ -1,19 +1,30 @@
-## INTERFACE §2, §2.1-§2.3, §2.5, §5.2: the canonical C type mapping of an
-## accepted schema set.
+## INTERFACE §2, §2.1-§2.3, §2.5, §3.2, §5.2: the canonical C type mapping of an
+## accepted schema set, C mapping revision 3.
 ##
-## Derived here: document-role and implemented-interface constants, literal
-## macros, constrained string typedefs, named and inline aggregates (maps, byte
-## strings, lists, tuples, choices, events), recursive-edge pointers with their
-## forward typedefs, and `logos_types.h` (the fixed §5.2 and §2.3 blocks plus the
-## common schema's named types). Not derived yet: method signatures (§2.4),
-## lifecycle symbols (§2.6), concurrency (§2.8).
+## Derived here: semantic stems and their families (`_MAP`, `_BSTR`, `_LIST`,
+## `_TUPLE`, `_CHOICE`, `_EVENT`, `_KIND_t`), choice arm labels in symbolic or
+## indexed form with `uint32_t` discriminants, literal macros, constrained
+## string typedefs, recursive-edge pointers and forward typedefs, the document
+## role, implementation and sensitivity constants, the keyword escape, the
+## contract-header frame (mapping-revision and commitment-context checks,
+## document guards with their root macros, the C++ linkage wrapper), and
+## `logos_types.h` (the fixed §5.2 and §2.3 blocks plus the common schema's
+## named types). Not derived yet: method signatures (§2.4), lifecycle and
+## provider symbols (§2.6), response owners (§2.7), asynchronous calls (§2.9).
 ##
 ## Acceptance runs this mapping (`accept.nim`): an accepted set must be
 ## representable in C without two identical identifiers or a namespace-projection
 ## collision [SPEC INTERFACE §2, §2.1].
 ##
-## Every header is stamped PROVISIONAL ABI: open items (IF-03, IF-04, IF-06,
-## NX-04, G153, G154, G155) can still change the mapping.
+## Limits [SPEC INTERFACE §2.1; IMPL]: this mapping truncates no identifier and
+## has no identifier-length limit of its own. Its input is bounded by the §5.3
+## schema limits that acceptance enforces (documents, nodes, nesting), and the
+## work and memory it uses grow linearly with that input; a choice whose
+## largest discriminant would not fit `uint32_t` fails explicitly. Running out
+## of memory aborts the process; no partial header is ever returned.
+##
+## Every header is stamped PROVISIONAL ABI: the common-name projection (G158) and
+## G153 are open, and §2.4-§2.9 are not generated yet.
 
 {.push raises: [].}
 
@@ -24,7 +35,11 @@ import ../pins
 import ../commitment
 import ./names
 
-const ProvisionalStamp* = "PROVISIONAL ABI (spec " & SpecRevision[0 .. 7] & ")"
+const
+  ProvisionalStamp* = "PROVISIONAL ABI (spec " & SpecRevision[0 .. 7] & ")"
+  CMappingRevision* = 3
+    ## [SPEC INTERFACE §2] `LOGOS_C_MAPPING_REVISION` of this mapping (tests
+    ## compare it with the §2 and §5.2 mirrors)
 
 type
   CDocument* = object
@@ -32,16 +47,19 @@ type
     root*: Digest
 
   CSchemaSet* = object
-    ## The documents of one accepted construction input set (`accept.nim`).
-    primary*: CDocument
-    interfaces*: seq[CDocument] ## in `_implements` order: ascending raw root
+    ## The documents of one accepted construction input set or module binding
+    ## (`accept.nim`).
+    primary*: Opt[CDocument]
+      ## the subject document, or the binding's concrete module document
+    interfaces*: seq[CDocument] ## implemented interfaces: ascending raw root
     supporting*: seq[CDocument] ## by namespace, then root
+    module*: Opt[string]
+      ## [SPEC INTERFACE §2] the module binding's runtime module name, if any
 
   CMember = object
-    name: string
+    name: string ## the complete, escaped C identifier
     ctype: string ## the type spelled before the name
     arrayLen: uint64 ## > 0: `ctype name[N]`
-    arrayPtr: uint64 ## > 0: `ctype (*name)[N]`
     target: string ## the aggregate embedded by value, if any
     listTarget: string ## the aggregate a list member points into, if any
     recursive: bool ## a recursive by-value edge: `const ctype* name`
@@ -53,6 +71,7 @@ type
 
   CDef = object
     key: string ## the qualified name; `<owner>#<path>` for an inline type
+    doc: int ## the document whose group declares it
     typeName: string
     needs: seq[string] ## defs whose typedef names an alias spells
     forward: bool
@@ -62,12 +81,12 @@ type
     of dStruct, dChoice:
       tag: string
       members: seq[CMember] ## struct members, or the union's arms
-      enumName: string
-      enumerators: seq[string]
+      kindName: string ## a choice's discriminant typedef
+      cases: seq[(string, uint64)] ## a choice's arm constants, by value
 
   DocView = object
     model: SchemaModel
-    common: bool ## the pinned common document: one `logos_` prefix
+    common: bool ## the pinned common document (G158 names)
     external: bool ## declared by `logos_types.h`, not by this header
     cns: string ## the C namespace component
 
@@ -81,7 +100,7 @@ type
     byImport: Table[string, (int, string)]
     defs: Table[string, CDef]
     constraints: Table[string, string] ## typedef name -> declaration
-    macros: Table[string, string]
+    macros: Table[string, (int, string)] ## literal macro -> (document, value)
     errors: seq[string]
 
 func at[K, V](t: Table[K, V], k: K): V =
@@ -89,7 +108,12 @@ func at[K, V](t: Table[K, V], k: K): V =
   t.getOrDefault(k)
 
 func documents*(s: CSchemaSet): seq[CDocument] =
-  @[s.primary] & s.interfaces & s.supporting
+  ## The primary document, if any, then the interfaces, then the supporting
+  ## schemas.
+  var docs: seq[CDocument]
+  if s.primary.isSome:
+    docs.add(s.primary.get)
+  docs & s.interfaces & s.supporting
 
 # Spelling ------------------------------------------------------------------------
 
@@ -109,71 +133,90 @@ func scalarC(k: ScalarKind): string =
   of skBstr: "const uint8_t*"
 
 func cString*(s: string): string =
-  ## [IMPL-DECISION G65] A C string literal: printable ASCII as is, with `"`
-  ## and `\` escaped and a second `?` of a pair escaped (no trigraphs); every
-  ## other byte as `\xNN`. A hex digit right after an escape starts a new
-  ## adjacent literal so it is not read into the escape.
+  ## [SPEC INTERFACE §2.3] A generated text literal: one C string literal with
+  ## the exact bytes. Printable ASCII as is, except `\"`, `\\` and `\?`;
+  ## `\n`, `\r`, `\t`; every other byte as exactly three octal digits.
   var o = "\""
-  var afterHex = false
-  var prev = '\0'
   for c in s:
-    if afterHex and c in HexDigits:
-      o.add("\"\"")
-    afterHex = false
-    if c == '"' or c == '\\' or (c == '?' and prev == '?'):
-      o.add('\\')
-      o.add(c)
-    elif c >= ' ' and c <= '~':
+    case c
+    of '"':
+      o.add("\\\"")
+    of '\\':
+      o.add("\\\\")
+    of '?':
+      o.add("\\?")
+    of '\n':
+      o.add("\\n")
+    of '\r':
+      o.add("\\r")
+    of '\t':
+      o.add("\\t")
+    of ' ' .. '!', '#' .. '>', '@' .. '[', ']' .. '~':
       o.add(c)
     else:
-      o.add("\\x" & toHex(ord(c), 2).toLowerAscii)
-      afterHex = true
-    prev = c
+      let b = ord(c)
+      o.add('\\')
+      o.add(char(ord('0') + (b shr 6)))
+      o.add(char(ord('0') + ((b shr 3) and 7)))
+      o.add(char(ord('0') + (b and 7)))
   o & "\""
 
 func literalC(d: ScalarData): (string, string) =
-  ## The C type and [IMPL-DECISION G65] the exact C scalar literal.
+  ## [SPEC INTERFACE §2.3] The C type and the generated literal spelling.
   case d.kind
   of skBool:
     ("bool", if d.boolean: "true" else: "false")
   of UnsignedKinds:
     ("uint64_t", "UINT64_C(" & $d.unsigned & ")")
   of SignedKinds:
-    if d.signed == low(int64):
-      ("int64_t", "(-INT64_C(9223372036854775807) - 1)")
+    if d.signed >= 0:
+      ("int64_t", "UINT64_C(" & $d.signed & ")")
+    elif d.signed == low(int64):
+      ("int64_t", "(-INT64_C(9223372036854775807) - INT64_C(1))")
     else:
-      ("int64_t", "INT64_C(" & $d.signed & ")")
+      ("int64_t", "(-INT64_C(" & $(-d.signed) & "))")
   of skTstr:
     ("const char*", cString(d.text))
   of skBstr:
     ("const uint8_t*", "") # construction admits no byte-string literal
 
-func upper(s: string): string =
-  s.toUpperAscii
-
-func joinPath(stem: string, path: openArray[string]): string =
-  var s = stem
-  for p in path:
-    s.add("_" & p)
-  s
+func stemPath(stem: string, path: openArray[string]): string =
+  stem & path.join("")
 
 func inlineKey(o: Owner, path: openArray[string]): string =
-  o.name & "#" & path.join("/")
+  o.name & "#" & path.join("")
 
 func baseName(ctype: string): string =
   ## The type name a member spells, without `const` and pointers.
   ctype.replace("const ", "").replace("*", "").strip
 
+func hexLower(s: string): string =
+  for c in s:
+    result.add(toHex(ord(c), 2).toLowerAscii)
+
+func contextMarkers*(): seq[string] =
+  ## [SPEC INTERFACE §2] The commitment-context markers of the pinned model,
+  ## profile and suite: `LOGOS_C_CONTEXT_<KIND>_<hex of the identifier>`.
+  @[
+    "LOGOS_C_CONTEXT_MODEL_" & hexLower(CommitmentModelId),
+    "LOGOS_C_CONTEXT_PROFILE_" & hexLower(HashProfileId),
+    "LOGOS_C_CONTEXT_SUITE_" & hexLower(HashSuiteId),
+  ]
+
 # Resolution ----------------------------------------------------------------------
 
 func stemOf(g: Gen, doc: int, name: string): string =
-  ## [SPEC INTERFACE §2.1] The complete namespace projection, or one `logos_`
-  ## prefix for the pinned common document.
+  ## [SPEC INTERFACE §2.1] A named declaration's stem: the C namespace component,
+  ## one underscore and the capitalized local name.
+  ## [IMPL-DECISION G158, pending] The pinned common document's stem is its
+  ## local name unchanged, which gives the three names §2.1 fixes
+  ## (`logos_error_code_t`, `logos_error_detail_t`, `logos_schema_commitment_t`).
   let v = g.docs[doc]
+  let local = localName(name, v.model.namespace)
   if v.common:
-    localName(name, v.model.namespace)
+    local
   else:
-    v.cns & "_" & localName(name, v.model.namespace)
+    v.cns & "_" & capitalize(local)
 
 func typeNameOf(g: Gen, doc: int, name: string): string =
   "logos_" & g.stemOf(doc, name) & "_t"
@@ -208,6 +251,105 @@ func aggregateOf(g: Gen, doc: int, d: Declaration): string =
     else:
       return ""
 
+# Arm labels ------------------------------------------------------------------------
+
+func literalToken(d: ScalarData): Opt[string] =
+  ## [SPEC INTERFACE §2.3] `true`/`false`, `num<n>`, `neg<magnitude>`, or a text
+  ## literal with each hyphen as an underscore when that is a schema atom.
+  case d.kind
+  of skBool:
+    Opt.some(if d.boolean: "true" else: "false")
+  of UnsignedKinds:
+    Opt.some("num" & $d.unsigned)
+  of SignedKinds:
+    if d.signed >= 0:
+      Opt.some("num" & $d.signed)
+    else:
+      Opt.some("neg" & $(uint64(not d.signed) + 1))
+  of skTstr:
+    let t = d.text.replace('-', '_')
+    if t.isSchemaIdentifier:
+      Opt.some(t)
+    else:
+      Opt.none(string)
+  of skBstr:
+    Opt.none(string)
+
+func referenceLabel*(namespace, name: string): string =
+  ## [SPEC INTERFACE §2.3] The arm label of a named reference: the defining C
+  ## namespace component, `_`, and the capitalized local declaration name.
+  projectNamespace(namespace) & "_" & capitalize(localName(name, namespace))
+
+func armLabelOf*(n: SchemaNode, reference = ""): Opt[string] =
+  ## [SPEC INTERFACE §2.3] The candidate label of one canonical arm, without
+  ## following named references; `reference` is a reference arm's
+  ## `referenceLabel`.
+  case n.kind
+  of snPrimitive:
+    Opt.some(capitalize($n.scalar))
+  of snLiteral:
+    let t = literalToken(n.literal)
+    if t.isSome:
+      Opt.some(capitalize(t.get))
+    else:
+      Opt.none(string)
+  of snMap:
+    var tokens: seq[string]
+    var required: seq[string]
+    for f in n.fields: # canonical order: UTF-8 field-name bytes
+      if f.optional:
+        continue
+      required.add(f.name)
+      if f.node.kind == snLiteral:
+        let t = literalToken(f.node.literal)
+        if t.isNone:
+          return Opt.none(string) # never silently left out
+        tokens.add(t.get)
+    if tokens.len > 0:
+      Opt.some(capitalize(tokens.join("_")))
+    else:
+      Opt.some("Map" & required.mapIt("_" & it).join(""))
+  of snList:
+    Opt.some("List")
+  of snTuple:
+    Opt.some("Tuple" & $n.items.len)
+  of snLocalRef, snImportedRef:
+    Opt.some(reference)
+  of snChoice:
+    Opt.none(string)
+
+func choiceSteps*(labels: openArray[Opt[string]]): (bool, seq[string]) =
+  ## [SPEC INTERFACE §2.3] (symbolic, one label or decimal index per canonical
+  ## arm): symbolic when every arm has a label and the labels are distinct.
+  var res: seq[string]
+  var seen: HashSet[string]
+  for l in labels:
+    if l.isNone or seen.containsOrIncl(l.get):
+      return (false, toSeq(0 ..< labels.len).mapIt($it))
+    res.add(l.get)
+  (true, res)
+
+func discriminantOrder*(symbolic: bool, steps: seq[string]): seq[int] =
+  ## [SPEC INTERFACE §2.3] Canonical arm indices by C discriminant value: labels
+  ## in ascending ASCII order, or the canonical order itself.
+  var order = toSeq(0 ..< steps.len)
+  if symbolic:
+    order.sort(
+      proc(a, b: int): int =
+        cmp(steps[a], steps[b])
+    )
+  order
+
+func armSteps(g: Gen, doc: int, n: SchemaNode): (bool, seq[string]) =
+  var labels: seq[Opt[string]]
+  for a in n.arms:
+    if a.kind in {snLocalRef, snImportedRef}:
+      let (d, decl) = g.resolve(doc, a)
+      labels.add(armLabelOf(a, referenceLabel(g.docs[d].model.namespace, decl.name)))
+    else:
+      labels.add(armLabelOf(a))
+  choiceSteps(labels)
+
 # Constraint typedefs and macros --------------------------------------------------
 
 proc tstrType(g: var Gen, n: SchemaNode): string =
@@ -240,16 +382,20 @@ func exactBstr(n: SchemaNode): Opt[uint64] =
     Opt.none(uint64)
 
 proc literalMacro(g: var Gen, o: Owner, path: openArray[string], d: ScalarData) =
-  ## [SPEC INTERFACE §2.3] `LOGOS_<owner and path>_LITERAL`; inside a choice the
-  ## path holds `arm_<index>`, giving `<choice prefix>_ARM_<i>[_<FIELD>]_LITERAL`.
-  let name = "LOGOS_" & upper(joinPath(o.stem, path)) & "_LITERAL"
+  ## [SPEC INTERFACE §2.1, §2.3] `LOGOS_LITERAL_<stem>`, with the literal's
+  ## complete path.
+  let name = "LOGOS_LITERAL_" & stemPath(o.stem, path)
   if name in g.macros:
     g.errors.add("C identifier collision: " & name & " is derived twice")
-  g.macros[name] = literalC(d)[1]
+  g.macros[name] = (o.doc, literalC(d)[1])
 
 # Definitions ---------------------------------------------------------------------
 
 proc single(
+  g: var Gen, o: Owner, path: seq[string], n: SchemaNode, name: string
+): CMember
+
+proc position(
   g: var Gen, o: Owner, path: seq[string], n: SchemaNode, name: string
 ): CMember
 
@@ -259,60 +405,53 @@ proc addDef(g: var Gen, d: CDef) =
 proc listMembers(
     g: var Gen, o: Owner, path: seq[string], n: SchemaNode, items, count: string
 ): seq[CMember] =
-  ## [SPEC INTERFACE §2.3] `const T* items` + `size_t count`. A list element
-  ## adds no by-value edge.
-  let e = g.single(o, path & "list_item", n.element, items)
+  ## [SPEC INTERFACE §2.3] `const T* items` + `size_t count`, the element at
+  ## path step `_LI`. A list element adds no by-value edge.
+  let e = g.position(o, path & "_LI", n.element, items)
   var m = CMember(name: items, listTarget: e.target)
-  if e.arrayLen > 0:
-    m.ctype = "const uint8_t"
-    m.arrayPtr = e.arrayLen
-  elif e.ctype.endsWith("*"):
+  if e.ctype.endsWith("*"):
     m.ctype = e.ctype & " const*" # `[* tstr]`: `const char* const*`
   else:
     m.ctype = "const " & e.ctype & "*"
   @[m, CMember(name: count, ctype: "size_t")]
 
-proc bstrMembers(g: var Gen, n: SchemaNode, data, len: string): seq[CMember] =
-  ## [SPEC INTERFACE §2.2, §2.3] Pointer and length, `data[N]`, or the empty value.
-  let exact = exactBstr(n)
-  if exact.isSome:
-    if exact.get == 0:
-      @[CMember(name: data, ctype: "logos_bstr_size_0_t")]
-    else:
-      @[CMember(name: data, ctype: "uint8_t", arrayLen: exact.get)]
-  else:
-    @[CMember(name: data, ctype: g.bstrPtrType(n)), CMember(name: len, ctype: "size_t")]
-
 proc fieldMembers(
     g: var Gen, o: Owner, path: seq[string], name: string, n: SchemaNode
 ): seq[CMember] =
-  ## The members of one schema field named `name` (a map field or tuple
-  ## position): pairs and inline tuples expand in place.
+  ## [SPEC INTERFACE §2.2, §2.3] The members of the map field `name` at `path`:
+  ## a byte-string pair or array, a list pair, or an inline tuple's adjacent
+  ## `<name>_<i>` positions. Each complete identifier is escaped (§2.1).
   case n.kind
   of snPrimitive:
-    if n.scalar == skBstr and exactBstr(n).isNone:
-      return g.bstrMembers(n, name, name & "_len")
+    if n.scalar == skBstr:
+      let exact = exactBstr(n)
+      if exact.isNone:
+        return @[
+          CMember(name: escapeC(name), ctype: g.bstrPtrType(n)),
+          CMember(name: escapeC(name & "_len"), ctype: "size_t"),
+        ]
+      if exact.get > 0:
+        return @[CMember(name: escapeC(name), ctype: "uint8_t", arrayLen: exact.get)]
   of snList:
-    return g.listMembers(o, path, n, name, name & "_count")
+    return g.listMembers(o, path, n, escapeC(name), escapeC(name & "_count"))
   of snTuple:
     if n.items.len > 0:
-      # [SPEC INTERFACE §2.3] Inline tuple field `x`: members `x_0`, `x_1`, ...
       var ms: seq[CMember]
       for i, item in n.items:
-        ms.add(g.fieldMembers(o, path & ("tuple_" & $i), name & "_" & $i, item))
+        ms.add(g.position(o, path & ("_TU" & $i), item, escapeC(name & "_" & $i)))
       return ms
   else:
     discard
-  @[g.single(o, path, n, name)]
+  @[g.single(o, path, n, escapeC(name))]
 
 proc mapMembers(g: var Gen, o: Owner, path: seq[string], n: SchemaNode): seq[CMember] =
   ## [SPEC INTERFACE §2.3] Canonical field order; `bool has_<f>` right before the
-  ## first member of an optional field [IMPL-DECISION G66].
+  ## first member of an optional field, governing all of them.
   var ms: seq[CMember]
   for f in n.fields:
     if f.optional:
-      ms.add(CMember(name: "has_" & f.name, ctype: "bool"))
-    ms.add(g.fieldMembers(o, path & f.name, f.name, f.node))
+      ms.add(CMember(name: escapeC("has_" & f.name), ctype: "bool"))
+    ms.add(g.fieldMembers(o, path & ("_" & capitalize(f.name)), f.name, f.node))
   ms
 
 func emptied(ms: seq[CMember]): seq[CMember] =
@@ -323,13 +462,10 @@ func emptied(ms: seq[CMember]): seq[CMember] =
     ms
 
 proc structDef(
-    g: var Gen,
-    key, tagKind, stem, typeName: string,
-    o: Owner,
-    path: seq[string],
-    n: SchemaNode,
+    g: var Gen, key, family, stem: string, o: Owner, path: seq[string], n: SchemaNode
 ) =
-  ## A struct for a map, byte string, list or tuple node at (`o`, `path`).
+  ## The `logos_<stem>_<FAMILY>` struct of a map, byte string, list or tuple
+  ## node at (`o`, `path`), typedef `logos_<stem>_t`.
   var ms: seq[CMember]
   case n.kind
   of snMap:
@@ -338,74 +474,115 @@ proc structDef(
     ms = g.listMembers(o, path, n, "items", "count")
   of snTuple:
     for i, item in n.items:
-      ms.add(g.fieldMembers(o, path & ("tuple_" & $i), "item_" & $i, item))
+      ms.add(g.position(o, path & ("_TU" & $i), item, "item_" & $i))
   of snPrimitive: # bstr
-    # [SPEC INTERFACE §2.3] A named `bstr .size 0` is an empty value.
-    if exactBstr(n) != Opt.some(0'u64):
-      ms = g.bstrMembers(n, "data", "len")
+    let exact = exactBstr(n)
+    if exact.isNone:
+      ms = @[
+        CMember(name: "data", ctype: g.bstrPtrType(n)),
+        CMember(name: "len", ctype: "size_t"),
+      ]
+    elif exact.get > 0:
+      ms = @[CMember(name: "data", ctype: "uint8_t", arrayLen: exact.get)]
   else:
     discard
   g.addDef(
     CDef(
       kind: dStruct,
       key: key,
-      typeName: typeName,
-      tag: "logos_" & tagKind & "_" & stem,
+      doc: o.doc,
+      typeName: "logos_" & stem & "_t",
+      tag: "logos_" & stem & "_" & family,
       members: emptied(ms),
     )
   )
 
 proc choiceDef(
-    g: var Gen,
-    key, tagKind, stem, typeName, enumName: string,
-    o: Owner,
-    path: seq[string],
-    n: SchemaNode,
+    g: var Gen, key, stem: string, o: Owner, path: seq[string], n: SchemaNode
 ) =
-  ## [SPEC INTERFACE §2.3] Enum `LOGOS_<STEM>_ARM_<i>` and a struct with the
-  ## `kind` tag [IMPL-DECISION G64] and a `value` union of `arm_<i>`, in
-  ## canonical arm order.
+  ## [SPEC INTERFACE §2.3] `typedef uint32_t logos_<stem>_KIND_t`, one
+  ## `LOGOS_ARM_<stem>_CASE…` constant per arm, and `logos_<stem>_CHOICE` with the
+  ## `kind` member and, when any arm has payload storage, the `value` union.
+  ## Symbolic form numbers the labels in ASCII order; indexed form uses the
+  ## canonical arm index. A direct literal arm has a literal macro and no member.
+  if n.arms.len > 0 and uint64(n.arms.len - 1) > uint64(high(uint32)):
+    g.errors.add(
+      "mapping limit: the choice " & stem & " has more arms than a uint32_t " &
+        "discriminant numbers"
+    )
+    return
+  let (symbolic, steps) = g.armSteps(o.doc, n)
+  let order = discriminantOrder(symbolic, steps)
+  var cases: seq[(string, uint64)]
   var arms: seq[CMember]
-  var enumerators: seq[string]
-  for i, a in n.arms:
-    arms.add(g.single(o, path & ("arm_" & $i), a, "arm_" & $i))
-    enumerators.add("LOGOS_" & upper(stem) & "_ARM_" & $i)
+  for value, i in order:
+    let a = n.arms[i]
+    let (step, constant, member) =
+      if symbolic:
+        ("_AR_" & steps[i], "_CASE_" & steps[i], "arm_" & steps[i])
+      else:
+        ("_AR" & steps[i], "_CASE" & steps[i], "arm_" & steps[i])
+    cases.add(("LOGOS_ARM_" & stem & constant, uint64(value)))
+    if a.kind == snLiteral:
+      g.literalMacro(o, path & step, a.literal)
+    else:
+      arms.add(g.position(o, path & step, a, member))
   g.addDef(
     CDef(
       kind: dChoice,
       key: key,
-      typeName: typeName,
-      tag: "logos_" & tagKind & "_" & stem,
+      doc: o.doc,
+      typeName: "logos_" & stem & "_t",
+      tag: "logos_" & stem & "_CHOICE",
       members: arms,
-      enumName: enumName,
-      enumerators: enumerators,
+      kindName: "logos_" & stem & "_KIND_t",
+      cases: cases,
     )
   )
+
+proc position(
+    g: var Gen, o: Owner, path: seq[string], n: SchemaNode, name: string
+): CMember =
+  ## [SPEC INTERFACE §2.3] A tuple position, list element or choice arm: an
+  ## inline tuple, list or byte string is one aggregate value named by its path
+  ## (`_TUPLE`, `_LIST`, `_BSTR`, a positive exact size as `data[N]`); `[]` and
+  ## `bstr .size 0` are the shared empty values.
+  let stem = stemPath(o.stem, path)
+  case n.kind
+  of snPrimitive:
+    if n.scalar != skBstr:
+      return g.single(o, path, n, name)
+    if exactBstr(n) == Opt.some(0'u64):
+      return CMember(name: name, ctype: "logos_bstr_size_0_t")
+    let key = inlineKey(o, path)
+    g.structDef(key, "BSTR", stem, o, path, n)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
+  of snList:
+    let key = inlineKey(o, path)
+    g.structDef(key, "LIST", stem, o, path, n)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
+  of snTuple:
+    if n.items.len == 0:
+      return CMember(name: name, ctype: "logos_tuple_size_0_t")
+    let key = inlineKey(o, path)
+    g.structDef(key, "TUPLE", stem, o, path, n)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
+  else:
+    g.single(o, path, n, name)
 
 proc single(
     g: var Gen, o: Owner, path: seq[string], n: SchemaNode, name: string
 ): CMember =
-  ## A one-member representation: struct members that are not pairs, list
-  ## elements and union arms. [IMPL-DECISION G62] A list, nonempty tuple or
-  ## unbounded or ranged byte string in such a position is a path-named struct
-  ## (`logos_<stem>_list_t`, `_tuple_t`, `_bstr_t`).
-  let stem = joinPath(o.stem, path)
+  ## A one-member representation of a scalar, literal, inline map or choice, or
+  ## named reference at (`o`, `path`).
+  let stem = stemPath(o.stem, path)
   case n.kind
   of snPrimitive:
     case n.scalar
     of skTstr:
       CMember(name: name, ctype: g.tstrType(n))
     of skBstr:
-      let exact = exactBstr(n)
-      if exact.isSome:
-        if exact.get == 0:
-          CMember(name: name, ctype: "logos_bstr_size_0_t")
-        else:
-          CMember(name: name, ctype: "uint8_t", arrayLen: exact.get)
-      else:
-        let key = inlineKey(o, path)
-        g.structDef(key, "bstr", stem, "logos_" & stem & "_bstr_t", o, path, n)
-        CMember(name: name, ctype: "logos_" & stem & "_bstr_t", target: key)
+      g.position(o, path, n, name)
     else:
       CMember(name: name, ctype: scalarC(n.scalar))
   of snLiteral:
@@ -413,32 +590,14 @@ proc single(
     CMember(name: name, ctype: literalC(n.literal)[0])
   of snMap:
     let key = inlineKey(o, path)
-    g.structDef(key, "map", stem, "logos_" & stem & "_map_t", o, path, n)
-    CMember(name: name, ctype: "logos_" & stem & "_map_t", target: key)
+    g.structDef(key, "MAP", stem, o, path, n)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
   of snChoice:
     let key = inlineKey(o, path)
-    g.choiceDef(
-      key,
-      "choice",
-      stem,
-      "logos_" & stem & "_choice_t",
-      "logos_" & stem & "_choice_kind_t",
-      o,
-      path,
-      n,
-    )
-    CMember(name: name, ctype: "logos_" & stem & "_choice_t", target: key)
-  of snList:
-    let key = inlineKey(o, path)
-    g.structDef(key, "list", stem, "logos_" & stem & "_list_t", o, path, n)
-    CMember(name: name, ctype: "logos_" & stem & "_list_t", target: key)
-  of snTuple:
-    if n.items.len == 0:
-      CMember(name: name, ctype: "logos_tuple_size_0_t")
-    else:
-      let key = inlineKey(o, path)
-      g.structDef(key, "tuple", stem, "logos_" & stem & "_tuple_t", o, path, n)
-      CMember(name: name, ctype: "logos_" & stem & "_tuple_t", target: key)
+    g.choiceDef(key, stem, o, path, n)
+    CMember(name: name, ctype: "logos_" & stem & "_t", target: key)
+  of snList, snTuple:
+    g.position(o, path, n, name)
   of snLocalRef, snImportedRef:
     let (d, decl) = g.resolve(o.doc, n)
     CMember(
@@ -451,45 +610,53 @@ proc declaration(g: var Gen, doc: int, d: Declaration) =
   ## into parameters), but its inline composites and literals do.
   let o = Owner(doc: doc, name: d.name, stem: g.stemOf(doc, d.name))
   let typeName = g.typeNameOf(doc, d.name)
-  let kindName = "logos_" & o.stem & "_kind_t"
   case d.kind
   of dkMethod:
     discard
   of dkRequest, dkResponse:
     let n = d.body
     if n.kind == snChoice:
-      g.choiceDef(d.name, "choice", o.stem, typeName, kindName, o, @[], n)
+      g.choiceDef(d.name, o.stem, o, @[], n)
     else:
       discard g.mapMembers(o, @[], n)
   of dkEvent:
     let n = d.body
-    if n.kind == snChoice: # [IMPL-DECISION G63]
-      g.choiceDef(d.name, "event", o.stem, typeName, kindName, o, @[], n)
+    if n.kind == snChoice:
+      # [SPEC INTERFACE §2.5] The ordinary choice, no wrapper.
+      g.choiceDef(d.name, o.stem, o, @[], n)
     else:
-      g.structDef(d.name, "event", o.stem, typeName, o, @[], n)
+      g.structDef(d.name, "EVENT", o.stem, o, @[], n)
   of dkType:
     let n = d.body
     case n.kind
     of snMap:
-      g.structDef(d.name, "map", o.stem, typeName, o, @[], n)
+      g.structDef(d.name, "MAP", o.stem, o, @[], n)
     of snList:
-      g.structDef(d.name, "list", o.stem, typeName, o, @[], n)
+      g.structDef(d.name, "LIST", o.stem, o, @[], n)
     of snTuple:
-      g.structDef(d.name, "tuple", o.stem, typeName, o, @[], n)
+      g.structDef(d.name, "TUPLE", o.stem, o, @[], n)
     of snChoice:
-      g.choiceDef(d.name, "choice", o.stem, typeName, kindName, o, @[], n)
+      g.choiceDef(d.name, o.stem, o, @[], n)
     of snPrimitive:
       if n.scalar == skBstr:
-        g.structDef(d.name, "bstr", o.stem, typeName, o, @[], n)
+        g.structDef(d.name, "BSTR", o.stem, o, @[], n)
       else:
         # [SPEC INTERFACE §2.3] A named scalar or constrained string: a typedef.
         let m = g.single(o, @[], n, "")
-        g.addDef(CDef(kind: dAlias, key: d.name, typeName: typeName, aliased: m.ctype))
+        g.addDef(
+          CDef(
+            kind: dAlias, key: d.name, doc: doc, typeName: typeName, aliased: m.ctype
+          )
+        )
     of snLiteral:
       g.literalMacro(o, @[], n.literal)
       g.addDef(
         CDef(
-          kind: dAlias, key: d.name, typeName: typeName, aliased: literalC(n.literal)[0]
+          kind: dAlias,
+          key: d.name,
+          doc: doc,
+          typeName: typeName,
+          aliased: literalC(n.literal)[0],
         )
       )
     of snLocalRef, snImportedRef:
@@ -497,6 +664,7 @@ proc declaration(g: var Gen, doc: int, d: Declaration) =
       var a = CDef(
         kind: dAlias,
         key: d.name,
+        doc: doc,
         typeName: typeName,
         aliased: g.typeNameOf(rd, rdecl.name),
       )
@@ -552,9 +720,10 @@ func sccs*(nodes: seq[string], edges: Table[string, seq[string]]): Table[string,
 
 proc resolveGraph(g: var Gen) =
   ## [SPEC INTERFACE §2.3] Recursive by-value edges become `const T*` and their
-  ## targets get forward typedefs. [IMPL-DECISION G154] So does every aggregate
-  ## a list member points into from within its own reference cycle, whose
-  ## typedef name is needed before its definition is complete.
+  ## targets get forward typedefs. So does every aggregate a list member points
+  ## into from within its own reference cycle: its name is used before its
+  ## complete definition (§2.3 l.1077). Every other use waits for the
+  ## definition (`ordered`).
   var
     nodes = toSeq(g.defs.keys)
     byValue, all: Table[string, seq[string]]
@@ -593,13 +762,14 @@ proc resolveGraph(g: var Gen) =
     g.defs.withValue(k, d):
       d.forward = true
 
-proc ordered(g: Gen): seq[CDef] =
-  ## [SPEC INTERFACE §2.1, §3.9.3; IMPL-DECISION G155] Non-recursive
-  ## dependencies before dependents: each definition sorts by its dependency
-  ## depth (the longest chain of definitions it waits for), then by qualified
-  ## schema name. A definition waits for every aggregate it embeds by value
-  ## (complete types) and for every typedef name it spells that no forward
-  ## typedef supplies.
+proc ordered(g: Gen): Result[seq[CDef], string] =
+  ## [SPEC INTERFACE §2.1, §2.3] Every name declared before a use that needs
+  ## its declaration and every type defined before a use that needs its
+  ## complete definition. [IMPL] Placement is not canonical (§2.1): each
+  ## definition sorts by its dependency depth (the longest chain of definitions
+  ## it waits for), then by qualified schema name. A definition waits for every
+  ## aggregate it embeds by value and for every typedef name it spells that no
+  ## forward typedef supplies.
   var byType: Table[string, string]
   for k, d in g.defs:
     byType[d.typeName] = k
@@ -638,7 +808,9 @@ proc ordered(g: Gen): seq[CDef] =
         if left == 0:
           next.add(n)
     level = next
-  order
+  if order.len != g.defs.len:
+    return err("the declarations have no dependency order")
+  ok(order)
 
 # Rendering -----------------------------------------------------------------------
 
@@ -647,8 +819,6 @@ func render(m: CMember): string =
     "const " & m.ctype & "* " & m.name & ";"
   elif m.arrayLen > 0:
     m.ctype & " " & m.name & "[" & $m.arrayLen & "];"
-  elif m.arrayPtr > 0:
-    m.ctype & " (*" & m.name & ")[" & $m.arrayPtr & "];"
   else:
     m.ctype & " " & m.name & ";"
 
@@ -663,16 +833,17 @@ func render(d: CDef): string =
     else:
       "typedef struct " & d.tag & " {\n" & body & "\n} " & d.typeName & ";"
   of dChoice:
-    var e = "typedef enum {\n"
-    for i, x in d.enumerators:
-      e.add("    " & x & " = " & $i & ",\n")
-    e.add("} " & d.enumName & ";\n\n")
-    let arms = d.members.mapIt("        " & render(it)).join("\n")
-    let body = "    " & d.enumName & " kind;\n    union {\n" & arms & "\n    } value;"
+    var e = "typedef uint32_t " & d.kindName & ";\n"
+    for (name, value) in d.cases:
+      e.add("#define " & name & " " & $value & "u\n")
+    var body = "    " & d.kindName & " kind;"
+    if d.members.len > 0:
+      let arms = d.members.mapIt("        " & render(it)).join("\n")
+      body.add("\n    union {\n" & arms & "\n    } value;")
     if d.forward:
-      e & "struct " & d.tag & " {\n" & body & "\n};"
+      e & "\nstruct " & d.tag & " {\n" & body & "\n};"
     else:
-      e & "typedef struct " & d.tag & " {\n" & body & "\n} " & d.typeName & ";"
+      e & "\ntypedef struct " & d.tag & " {\n" & body & "\n} " & d.typeName & ";"
 
 func forwardTypedef(d: CDef): string =
   "typedef struct " & d.tag & " " & d.typeName & ";"
@@ -682,33 +853,46 @@ func identifiers(d: CDef): seq[string] =
   if d.kind != dAlias:
     ids.add(d.tag)
   if d.kind == dChoice:
-    ids.add(d.enumName)
-    ids.add(d.enumerators)
+    ids.add(d.kindName)
+    ids.add(d.cases.mapIt(it[0]))
   ids
 
-proc emit(
-    g: Gen, consts: openArray[(string, string)], skip: HashSet[string]
-): seq[string] =
-  ## [IMPL-DECISION G72] Metadata constants, then literal macros by name (as
-  ## §3.9.2 places them), constraint typedefs by name, forward typedefs by
-  ## qualified name, and type definitions in dependency order.
-  let order = g.ordered
-  var res: seq[string]
-  for (name, value) in consts:
-    res.add("#define " & name & " " & value)
+type DocGroup = object
+  ## One document's declarations: its constants, literal macros, forward
+  ## typedefs and definitions.
+  consts: seq[(string, string)]
+  macros: seq[(string, string)]
+  forwards: seq[string]
+  defs: seq[string]
+
+proc groups(g: Gen, consts: seq[seq[(string, string)]]): Result[seq[DocGroup], string] =
+  ## [IMPL] Within a group: constants, literal macros by name, forward typedefs
+  ## by qualified name, definitions in dependency order.
+  let order = ?g.ordered
+  var gs = newSeq[DocGroup](g.docs.len)
+  for i in 0 ..< consts.len:
+    gs[i].consts = consts[i]
   for name in toSeq(g.macros.keys).sorted:
-    res.add("#define " & name & " " & g.macros.at(name))
-  for name in toSeq(g.constraints.keys).sorted:
-    if name notin skip:
-      res.add(g.constraints.at(name))
+    let (doc, value) = g.macros.at(name)
+    gs[doc].macros.add((name, value))
   var forwards = order.filterIt(it.forward)
   forwards.sort(
     proc(a, b: CDef): int =
       cmp(a.key, b.key)
   )
-  res.add(forwards.mapIt(forwardTypedef(it)))
-  res.add(order.mapIt(render(it)))
-  res
+  for d in forwards:
+    gs[d.doc].forwards.add(forwardTypedef(d))
+  for d in order:
+    gs[d.doc].defs.add(render(d))
+  ok(gs)
+
+func flat(gr: DocGroup): seq[string] =
+  var res: seq[string]
+  for (name, value) in gr.consts:
+    res.add("#define " & name & " " & value)
+  for (name, value) in gr.macros:
+    res.add("#define " & name & " " & value)
+  res & gr.forwards & gr.defs
 
 # logos_types.h -------------------------------------------------------------------
 
@@ -720,27 +904,11 @@ proc newGen(views: seq[DocView], roots: seq[Digest]): Gen =
         g.byImport[importKey(roots[i], declarationRoot(v.model, d))] = (i, d.name)
   g
 
-func identifiersIn(text: string): HashSet[string] =
-  ## Every `logos_…` / `LOGOS_…` identifier a C text mentions.
-  var ids: HashSet[string]
-  var i = 0
-  while i < text.len:
-    if (text.continuesWith("logos_", i) or text.continuesWith("LOGOS_", i)) and
-        (i == 0 or text[i - 1] notin IdentChars):
-      var j = i
-      while j < text.len and text[j] in IdentChars:
-        inc j
-      ids.incl(text[i ..< j])
-      i = j
-    else:
-      inc i
-  ids
-
 proc commonGen(): Gen =
   ## The pinned common schema's named types, which `logos_types.h` declares.
   let ctx = pinnedContext()
   var g = newGen(
-    @[DocView(model: ctx.commonModel, common: true, external: false, cns: "")],
+    @[DocView(model: ctx.commonModel, common: true, external: false, cns: "logos")],
     @[ctx.commonRoot],
   )
   for d in ctx.commonModel.declarations:
@@ -750,95 +918,132 @@ proc commonGen(): Gen =
   g.resolveGraph()
   g
 
-func fixedBlock(): string =
-  ## [SPEC INTERFACE §5.2] The fixed C block without its `logos_<module>_free`
-  ## template (each module header declares its own), then the §2.3 empty types.
+proc commonDeclarations*(): seq[string] =
+  ## [SPEC INTERFACE §5.2] The canonical declarations of every named type in the
+  ## pinned common schema except `logos.error_code`, with their constraint and
+  ## inline support declarations. [IMPL-DECISION G158, pending] Their names use
+  ## the local name as the stem.
+  let g = commonGen()
+  doAssert g.errors.len == 0, "the pinned common schema maps to C"
+  var res: seq[string]
+  for name in toSeq(g.constraints.keys).sorted:
+    res.add(g.constraints.at(name))
+  let gs = g.groups(@[]).valueOr:
+    raiseAssert "the pinned common schema has a dependency order"
+  res & gs[0].flat
+
+func fixedBlock(): (string, string) =
+  ## [SPEC INTERFACE §5.2] The fixed C block without its per-module
+  ## `logos_<module-C>_MODULE_…` templates (each module header declares its
+  ## own), split before the closing C++ linkage wrapper.
   var lines: seq[string]
   for l in LogosTypesFixed.splitLines:
-    if "<module>" in l or l.strip == "/* -- Memory management -- */":
+    if "<module-C>" in l or
+        l.strip in [
+          "/* -- Memory management -- */",
+          "/* Optional provider completion capability. */",
+        ]:
       continue
     lines.add(l)
   while lines.len > 0 and lines[^1].strip.len == 0:
     discard lines.pop()
-  lines.join("\n") & "\n\n/* -- Empty values (INTERFACE §2.3) -- */\n\n" &
-    LogosTypesEmpty.strip & "\n"
-
-proc commonDeclarations*(): seq[string] =
-  ## [SPEC INTERFACE §5.2] The canonical declarations of every named type in the
-  ## pinned common schema except `logos.error_code`, with their constraint and
-  ## inline support declarations.
-  commonGen().emit([], initHashSet[string]())
+  var close = lines.high
+  while close > 0 and lines[close].strip != "#ifdef __cplusplus":
+    dec close
+  var head = lines[0 ..< close]
+  while head.len > 0 and head[^1].strip.len == 0:
+    discard head.pop()
+  (head.join("\n"), lines[close .. ^1].join("\n"))
 
 proc logosTypesHeader*(): string =
-  ## [SPEC INTERFACE §5.2] `logos_types.h`.
+  ## [SPEC INTERFACE §5.2] `logos_types.h`: the fixed block, the §2.3 empty
+  ## types and the common schema's types, inside the C++ linkage wrapper.
+  let (head, close) = fixedBlock()
   "/* logos_types.h: generated by lcn-gen from INTERFACE §2.3, §5.1 and §5.2.\n" &
     " * " & ProvisionalStamp & ". Do not edit. */\n" & "#ifndef LOGOS_TYPES_H\n" &
-    "#define LOGOS_TYPES_H\n\n" & fixedBlock() &
-    "\n/* -- Common schema types (INTERFACE §5.1) -- */\n\n" &
-    commonDeclarations().join("\n\n") & "\n\n#endif /* LOGOS_TYPES_H */\n"
-
-let logosTypesIds = identifiersIn(logosTypesHeader())
+    "#define LOGOS_TYPES_H\n\n" & head &
+    "\n\n/* -- Empty values (INTERFACE §2.3) -- */\n\n" & LogosTypesEmpty.strip & "\n\n" &
+    "/* -- Common schema types (INTERFACE §5.1; names: G158 interim) -- */\n\n" &
+    commonDeclarations().join("\n\n") & "\n\n" & close &
+    "\n\n#endif /* LOGOS_TYPES_H */\n"
 
 # Contract headers ----------------------------------------------------------------
 
-func methodCount(m: SchemaModel): int =
-  m.declarations.countIt(it.kind == dkMethod)
+func roleConstant(m: SchemaModel, module: Opt[string]): (string, string) =
+  ## [SPEC INTERFACE §2.1] The document-role namespace constant.
+  let name =
+    case m.role
+    of srModule:
+      "LOGOS_PRIMARY_NAMESPACE_" & projectModule(module.get(m.moduleName.get("")))
+    of srInterface:
+      "LOGOS_INTERFACE_NAMESPACE_" & projectNamespace(m.namespace)
+    else:
+      "LOGOS_SUPPORTING_NAMESPACE_" & projectNamespace(m.namespace)
+  (name, cString(m.namespace))
 
-func eventCount(m: SchemaModel): int =
-  m.declarations.countIt(it.kind == dkEvent)
-
-func roleConstants(s: CSchemaSet): seq[(string, string)] =
-  ## [SPEC INTERFACE §2.1, §3.2] Document-role namespace constants where the
-  ## declaration-only form cannot recover a document's namespace and role, and
-  ## one constant per implemented interface; in the order of the §2.1 example:
-  ## primary, implemented interfaces, interface roles, supporting roles.
-  let many = s.documents.len > 1
-  func needed(m: SchemaModel): bool =
-    let recoverable =
-      case m.role
-      of srInterface:
-        m.methodCount > 0 or m.eventCount > 0
-      else:
-        true # a module by its lifecycle symbols; supporting: no callables
-    many or not isSimpleNamespace(m.namespace) or not recoverable
-
-  func constant(m: SchemaModel): (string, string) =
-    let name =
-      case m.role
-      of srModule:
-        "LOGOS_" & upper(m.moduleName.get("")) & "_PRIMARY_NAMESPACE"
-      of srInterface:
-        "LOGOS_" & upper(projectNamespace(m.namespace)) & "_INTERFACE_NAMESPACE"
-      else:
-        "LOGOS_" & upper(projectNamespace(m.namespace)) & "_SUPPORTING_NAMESPACE"
-    (name, cString(m.namespace))
-
+func sensitiveConstants(m: SchemaModel): seq[(string, string)] =
+  ## [SPEC INTERFACE §2.1] `LOGOS_SENSITIVE_<namespace>_INDEX<i>`, in the ASCII
+  ## order of `_sensitive`; none for an unmarked contract.
+  var names: seq[string]
+  for d in m.declarations:
+    if d.kind == dkMethod:
+      if d.sensitiveRequest:
+        names.add(d.request)
+      if d.sensitiveResponse:
+        names.add(d.response)
+  names.sort()
   var cs: seq[(string, string)]
-  let p = s.primary.model
-  if p.needed:
-    cs.add(constant(p))
-  if p.role == srModule:
-    for i, c in s.interfaces:
-      cs.add(
-        (
-          "LOGOS_" & upper(p.moduleName.get("")) & "_IMPLEMENTS_" & $i,
-          cString(c.model.namespace),
-        )
-      )
-  for c in s.interfaces & s.supporting:
-    if c.model.needed:
-      cs.add(constant(c.model))
+  for i, n in names:
+    cs.add(
+      ("LOGOS_SENSITIVE_" & projectNamespace(m.namespace) & "_INDEX" & $i, cString(n))
+    )
   cs
 
-proc cDeclarations*(s: CSchemaSet): Result[seq[string], string] =
-  ## [SPEC INTERFACE §2, §2.1-§2.3, §2.5] The canonical C type declarations of
-  ## an accepted schema set, or why the set has none: a namespace-projection
-  ## collision, or two identical C identifiers. [NX-04 interim] An identifier
-  ## that `logos_types.h` already declares is a collision too.
+func moduleConstants(s: CSchemaSet): seq[(string, string)] =
+  ## [SPEC INTERFACE §2.1] The module binding's metadata: the primary
+  ## document's role constant and one `LOGOS_IMPLEMENTS_<module-C>_INDEX<i>` per
+  ## implemented interface, in ascending raw root order. Provider-specific: no
+  ## shared document guard suppresses them (§3.2).
+  if s.module.isNone:
+    return @[]
+  var cs: seq[(string, string)]
+  if s.primary.isSome:
+    cs.add(roleConstant(s.primary.get.model, s.module))
+  for i, c in s.interfaces:
+    cs.add(
+      (
+        "LOGOS_IMPLEMENTS_" & projectModule(s.module.get) & "_INDEX" & $i,
+        cString(c.model.namespace),
+      )
+    )
+  cs
+
+func documentGuard(cns: string): string =
+  "LOGOS_DOCUMENT_" & cns & "_DEFINED"
+
+func rootMacros(cns: string, root: Digest): seq[(string, string)] =
+  ## [SPEC INTERFACE §3.2] Root bytes 8*i .. 8*i+7, most significant first.
+  var ms: seq[(string, string)]
+  for i in 0 .. 3:
+    var h = "0x"
+    for b in root[8 * i ..< 8 * i + 8]:
+      h.add(toHex(int(b), 2).toLowerAscii)
+    ms.add(("LOGOS_DOCUMENT_" & cns & "_ROOT_" & $i, h & "ULL"))
+  ms
+
+type Generated = object
+  docs: seq[CDocument]
+  cns: seq[string]
+  constraints: seq[string]
+  groups: seq[DocGroup]
+  module: seq[(string, string)]
+
+proc generate(s: CSchemaSet): Result[Generated, string] =
   var views: seq[DocView]
   var roots: seq[Digest]
   var projections: Table[string, string]
-  for c in s.documents:
+  let docs = s.documents
+  for c in docs:
     let cns = projectNamespace(c.model.namespace)
     if cns in projections:
       return err(
@@ -849,27 +1054,38 @@ proc cDeclarations*(s: CSchemaSet): Result[seq[string], string] =
     views.add(DocView(model: c.model, cns: cns))
     roots.add(c.root)
   let ctx = pinnedContext()
-  views.add(DocView(model: ctx.commonModel, common: true, external: true))
+  views.add(DocView(model: ctx.commonModel, common: true, external: true, cns: "logos"))
   roots.add(ctx.commonRoot)
   var g = newGen(views, roots)
-  for i in 0 ..< views.len - 1:
+  for i in 0 ..< docs.len:
     for d in views[i].model.declarations:
       g.declaration(i, d)
   if g.errors.len > 0:
-    return err(g.errors[0] & " (INTERFACE §2.1)")
+    return err(g.errors[0] & " (INTERFACE §2.1, §2.3)")
   g.resolveGraph()
-  let consts = roleConstants(s)
+  var consts: seq[seq[(string, string)]]
+  for i, c in docs:
+    var cs: seq[(string, string)]
+    if c.model.role != srModule:
+      cs.add(roleConstant(c.model, s.module))
+    cs.add(sensitiveConstants(c.model))
+    consts.add(cs)
+  let module = moduleConstants(s)
+  # [SPEC INTERFACE §2.1] No two schema nodes derive one C identifier.
   var ids: seq[(string, string)]
   for k in toSeq(g.defs.keys).sorted:
     for id in g.defs.at(k).identifiers:
       ids.add((id, k))
-  for (name, _) in consts:
-    ids.add((name, "a schema-metadata constant"))
+  for i, cs in consts:
+    for (name, _) in cs:
+      ids.add((name, "a schema-metadata constant"))
+    ids.add((documentGuard(views[i].cns), "a document guard"))
+    for (name, _) in rootMacros(views[i].cns, roots[i]):
+      ids.add((name, "a document root macro"))
+  for (name, _) in module:
+    ids.add((name, "a module-binding constant"))
   for name in g.macros.keys:
     ids.add((name, "a literal macro"))
-  for name in g.constraints.keys:
-    if name notin logosTypesIds:
-      ids.add((name, "a constraint typedef"))
   var seen: Table[string, string]
   for (id, origin) in ids:
     if id in seen:
@@ -877,31 +1093,104 @@ proc cDeclarations*(s: CSchemaSet): Result[seq[string], string] =
         "C identifier collision: " & id & " derives from " & origin & " and " &
           seen.at(id) & " (INTERFACE §2.1)"
       )
-    if id in logosTypesIds:
-      return err(
-        "C identifier collision: " & id & " (from " & origin &
-          ") is declared by logos_types.h (NX-04)"
-      )
     seen[id] = origin
-  ok(g.emit(consts, logosTypesIds))
+  var res = Generated(docs: docs, module: module)
+  res.groups = ?g.groups(consts)
+  res.groups.setLen(docs.len)
+  for v in views[0 ..< docs.len]:
+    res.cns.add(v.cns)
+  # [SPEC INTERFACE §5.2] logos_types.h already declares the common schema's
+  # constraint typedefs; a contract header does not redeclare them.
+  let common = commonGen()
+  for name in toSeq(g.constraints.keys).sorted:
+    if name notin common.constraints:
+      res.constraints.add(g.constraints.at(name))
+  ok(res)
+
+proc cDeclarations*(s: CSchemaSet): Result[seq[string], string] =
+  ## [SPEC INTERFACE §2, §2.1-§2.3, §2.5] The canonical C type declarations and
+  ## constants of an accepted schema set or module binding, without the header
+  ## frame: constraint typedefs, then each document's role and sensitivity
+  ## constants, literal macros, forward typedefs and definitions, then the
+  ## module-binding constants. An error says why the set has none: a
+  ## namespace-projection collision, two identical C identifiers, or a mapping
+  ## limit.
+  let gen = ?generate(s)
+  var res = gen.constraints
+  for gr in gen.groups:
+    res.add(gr.flat)
+  for (name, value) in gen.module:
+    res.add("#define " & name & " " & value)
+  ok(res)
 
 func headerName*(s: CSchemaSet): string =
-  ## The runtime module name, or the primary document's C namespace component.
-  let p = s.primary.model
-  if p.role == srModule:
-    p.moduleName.get("")
+  ## The bound runtime module name, or the subject document's C namespace
+  ## component.
+  if s.module.isSome:
+    s.module.get
+  elif s.primary.isSome:
+    projectNamespace(s.primary.get.model.namespace)
   else:
-    projectNamespace(p.namespace)
+    ""
+
+func revisionCheck*(): string =
+  ## [SPEC INTERFACE §2] The mapping-generation check of revision 3u.
+  "#if !defined(LOGOS_C_MAPPING_REVISION) || LOGOS_C_MAPPING_REVISION != " &
+    $CMappingRevision & "u\n#error \"Incompatible Logos C mapping\"\n#endif"
 
 proc contractHeader*(s: CSchemaSet): Result[string, string] =
-  ## The types header of one accepted set; it includes `logos_types.h`.
-  let decls = ?cDeclarations(s)
+  ## [SPEC INTERFACE §2, §3.2] The types header of one accepted set or module
+  ## binding. It includes `logos_types.h`, then checks the mapping revision and
+  ## the commitment context; each non-common document's group is guarded by
+  ## `LOGOS_DOCUMENT_<namespace>_DEFINED` and its four root macros, checked
+  ## before a repeated group is suppressed. Nothing else is guarded, so every
+  ## check runs on every inclusion; the module-binding constants follow the
+  ## groups, outside them.
+  let gen = ?generate(s)
   let name = s.headerName
-  let guard = "LOGOS_" & upper(name) & "_TYPES_H"
-  ok(
+  var h =
     "/* " & name & "_types.h: generated by lcn-gen. " & ProvisionalStamp & ".\n" &
-      " * C types only (INTERFACE §2.1-§2.3, §2.5): method signatures and\n" &
-      " * lifecycle symbols are not generated yet. Do not edit. */\n" & "#ifndef " &
-      guard & "\n#define " & guard & "\n\n#include \"logos_types.h\"\n\n" &
-      decls.join("\n\n") & "\n\n#endif /* " & guard & " */\n"
-  )
+    " * C types only (INTERFACE §2.1-§2.3, §2.5, §3.2): method signatures and\n" &
+    " * lifecycle symbols are not generated yet. Do not edit. */\n\n" &
+    "#include \"logos_types.h\"\n" & revisionCheck() & "\n"
+  for m in contextMarkers():
+    h.add(
+      "#if !defined(" & m & ") || " & m & " != 1\n" &
+        "#error \"Incompatible Logos commitment context\"\n#endif\n"
+    )
+  h.add("\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n")
+  if gen.constraints.len > 0:
+    h.add("\n" & gen.constraints.join("\n") & "\n")
+  # Supporting groups first, then interfaces, then the primary document: each
+  # group uses only the ones before it.
+  var order = toSeq(0 ..< gen.docs.len)
+  order.reverse()
+  for i in order:
+    let c = gen.docs[i]
+    let cns = gen.cns[i]
+    let guard = documentGuard(cns)
+    let ms = rootMacros(cns, c.root)
+    h.add("\n/* " & $c.model.role & " document " & c.model.namespace & " */\n")
+    h.add("#ifdef " & guard & "\n#if ")
+    h.add(
+      ms.mapIt("!defined(" & it[0] & ") || " & it[0] & " != " & it[1]).join(
+        " || \\\n    "
+      )
+    )
+    h.add(
+      "\n#error \"Conflicting Logos schema document " & c.model.namespace &
+        "\"\n#endif\n#else\n"
+    )
+    h.add("#define " & guard & " 1\n")
+    for (n, v) in ms:
+      h.add("#define " & n & " " & v & "\n")
+    let items = gen.groups[i].flat
+    if items.len > 0:
+      h.add("\n" & items.join("\n\n") & "\n")
+    h.add("#endif /* " & guard & " */\n")
+  if gen.module.len > 0:
+    h.add("\n/* module binding " & name & " */\n")
+    for (n, v) in gen.module:
+      h.add("#define " & n & " " & v & "\n")
+  h.add("\n#ifdef __cplusplus\n}\n#endif\n")
+  ok(h)

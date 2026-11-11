@@ -1,4 +1,4 @@
-#define LOGOS_STORAGE_MODULE_PRIMARY_NAMESPACE "storage"
-#define LOGOS_STORAGE_MODULE_IMPLEMENTS_0 "metrics_provider"
-#define LOGOS_METRICS_PROVIDER_INTERFACE_NAMESPACE "metrics_provider"
-#define LOGOS_STORAGE_TYPES_SUPPORTING_NAMESPACE "storage_types"
+#define LOGOS_PRIMARY_NAMESPACE_storage_module "storage"
+#define LOGOS_IMPLEMENTS_storage_module_INDEX0 "metrics_provider"
+#define LOGOS_INTERFACE_NAMESPACE_metrics_provider "metrics_provider"
+#define LOGOS_SUPPORTING_NAMESPACE_storage_types "storage_types"

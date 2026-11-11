@@ -12,3 +12,7 @@ reason = "Addressed to schema authors: module CDDL should not carry layout hints
 [[item]]
 ids = ["HSH-0051", "HSH-0053"]
 reason = "Prefix-state hashing is optional. src/logos_core/hash/hashinput.nim does not use it: digestOf always hashes the full deterministic-CBOR hash input, and no hash state appears in any payload, proof or identifier."
+
+[[item]]
+ids = ["HSH-0190"]
+reason = "A permission. verifyView (src/logos_core/hash/view.nim) takes the schema as a ViewSchema, a SchemaSet its caller builds once from the construction input and may reuse for every view; verifyView first checks the view's hash profile, suite and commitment model against the profile it was given, so a reused set is only ever applied under the same three."

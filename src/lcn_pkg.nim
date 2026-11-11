@@ -25,7 +25,7 @@ Usage:
   lcn-pkg sign MANIFEST.cbor --kid:KID --emit-tbs:FILE
   lcn-pkg sign MANIFEST.cbor --kid:KID --attach-sig:FILE [--out:manifest.cose]
   lcn-pkg lgx pack --manifest:manifest.cbor --cose:manifest.cose --variants:DIR
-                   [--json:manifest.json] --out:PACKAGE.lgx
+                   --out:PACKAGE.lgx
   lcn-pkg verify PACKAGE.lgx --trust:TRUST.json [--platform:OS/ARCH[/ABI]]
 
 keygen         writes a fresh seed (operating-system CSPRNG, PM §4.3) readable
@@ -293,7 +293,7 @@ proc variantFiles(dir: string): Result[seq[(string, seq[byte])], string] =
   )
   ok(files)
 
-proc lgxPack*(manifest, cose, variants, json, output: string): int =
+proc lgxPack*(manifest, cose, variants, output: string): int =
   if manifest.len == 0 or cose.len == 0 or variants.len == 0 or output.len == 0:
     return fail("lgx pack needs --manifest, --cose, --variants and --out\n" & usage)
   let cbor = readBytes(manifest).valueOr:
@@ -307,12 +307,7 @@ proc lgxPack*(manifest, cose, variants, json, output: string): int =
     let files = variantFiles(variants / v.id).valueOr:
       return fail(error)
     content.add((v.id, files))
-  var extra = Opt.none(seq[byte])
-  if json.len > 0:
-    let j = readBytes(json).valueOr:
-      return fail(error)
-    extra = Opt.some(j)
-  let archive = writeLgx(cbor, signature, content, extra).valueOr:
+  let archive = writeLgx(cbor, signature, content).valueOr:
     return fail(error)
   readLgx(archive).isOkOr:
     return fail("the written archive does not read back: " & $error)
@@ -368,7 +363,7 @@ proc main(): int =
 
   const known = [
     "out", "variants", "kid", "key", "emit-tbs", "attach-sig", "manifest", "cose",
-    "json", "trust", "platform",
+    "trust", "platform",
   ]
   for (k, _) in opts:
     if k notin known:
@@ -409,7 +404,7 @@ proc main(): int =
   of "lgx":
     if args.len < 2 or args[1] != "pack":
       return fail(usage.strip)
-    lgxPack(opt("manifest"), opt("cose"), opt("variants"), opt("json"), opt("out"))
+    lgxPack(opt("manifest"), opt("cose"), opt("variants"), opt("out"))
   of "verify":
     verifyCmd(
       if args.len > 1:

@@ -8,6 +8,10 @@ tagged COSE_Sign1. The profile identifier is read from the mirrored PM §4.3
 CDDL and the commitment identifiers from spec/pins.toml. The claims' roots are
 arbitrary: this checks the container, not the manifest commitment.
 
+Since spec 6a4dfa28 the mirrored profile is SLH-DSA-SHA2-192s (PM-06) while the
+signature is still Ed25519: the interim of DECISIONS I50 until R4 picks an
+SLH-DSA implementation.
+
   python3 oracle/gen_cose_vectors.py           write the file
   python3 oracle/gen_cose_vectors.py --check   fail if the file is not what this writes
 """

@@ -610,6 +610,84 @@ func fieldValue(v: CborValue, name: string): CborValue =
       return x
   nil
 
+type ValidateFrame = object ## A map, list or tuple whose members are being validated.
+  doc: int
+  n: SchemaNode
+  v: CborValue
+  depth: int ## the maps and arrays above `v`
+  next: int ## the next schema field or array element
+  member: bool ## entered as a member: its segment is the last one on the path
+
+type Entered = enum
+  eFailed ## the value is invalid here
+  eValid ## a scalar that is valid
+  ePushed ## a container whose frame was pushed
+
+func enterValidate(
+    s: SchemaSet,
+    stack: var seq[ValidateFrame],
+    doc: int,
+    n: SchemaNode,
+    v: CborValue,
+    depth: int,
+    member: bool,
+    path: var seq[CborValue],
+): Entered =
+  ## Follows references and choice arms from `n`, then validates a scalar or
+  ## checks a container's own shape and pushes its frame.
+  if v.isNil:
+    return eFailed
+  var
+    doc = doc
+    n = n
+    followed: seq[SchemaNode] # since the last container, to refuse a cycle
+  while n.kind in {snChoice, snLocalRef, snImportedRef}:
+    if followed.anyIt(cast[pointer](it) == cast[pointer](n)):
+      return eFailed # references and arms that cycle without a container
+    followed.add(n)
+    if n.kind == snChoice:
+      let plan = s.selectionPlan(doc, n)
+      if plan.isNone:
+        return eFailed
+      let arm = plan.get.select(v)
+      if arm.isNone:
+        return eFailed
+      n = n.arms[arm.get]
+    else:
+      let t = s.resolve(doc, n)
+      if t.isNone:
+        return eFailed
+      doc = t.get[0]
+      n = t.get[1].body
+  if n.kind in {snMap, snList, snTuple} and depth >= DefaultMaxDepth:
+    return eFailed
+  case n.kind
+  of snPrimitive:
+    if n.primitiveAccepts(v): eValid else: eFailed
+  of snLiteral:
+    if v.isScalar and key(literalValue(n.literal)) == key(v): eValid else: eFailed
+  of snMap:
+    if v.kind != ckMap:
+      return eFailed
+    for (k, _) in v.entries:
+      if k.kind != ckText or not n.fields.anyIt(it.name == k.text):
+        path.add(k)
+        return eFailed
+    stack.add(ValidateFrame(doc: doc, n: n, v: v, depth: depth, member: member))
+    ePushed
+  of snList:
+    if v.kind != ckArray:
+      return eFailed
+    stack.add(ValidateFrame(doc: doc, n: n, v: v, depth: depth, member: member))
+    ePushed
+  of snTuple:
+    if v.kind != ckArray or v.items.len != n.items.len:
+      return eFailed
+    stack.add(ValidateFrame(doc: doc, n: n, v: v, depth: depth, member: member))
+    ePushed
+  of snChoice, snLocalRef, snImportedRef:
+    raiseAssert "followed above"
+
 func validateAt(
     s: SchemaSet,
     doc: int,
@@ -620,58 +698,63 @@ func validateAt(
 ): bool =
   ## As `validates`; on failure `path` locates the first offending item from the
   ## value's root: a text key for a map entry, an index for an array element.
-  if depth > DefaultMaxDepth or v.isNil:
+  ##
+  ## `depth` counts the maps and arrays above `v`; references and choice arms add
+  ## no level. Members are validated depth first in order, with the frames on the
+  ## heap, so the native stack does not grow with the payload depth and every
+  ## depth up to `DefaultMaxDepth` is supported on any thread
+  ## [SPEC INTERFACE §4.5.1] (DECISIONS I51).
+  var stack: seq[ValidateFrame]
+  if s.enterValidate(stack, doc, n, v, depth, false, path) == eFailed:
     return false
-  case n.kind
-  of snPrimitive:
-    n.primitiveAccepts(v)
-  of snLiteral:
-    v.isScalar and key(literalValue(n.literal)) == key(v)
-  of snMap:
-    if v.kind != ckMap:
-      return false
-    for (k, _) in v.entries:
-      if k.kind != ckText or not n.fields.anyIt(it.name == k.text):
-        path.add(k)
-        return false
-    for f in n.fields:
-      let x = v.fieldValue(f.name)
-      if x.isNil:
-        if not f.optional:
+  while stack.len > 0:
+    let t = stack.high
+    let (d, c, cv, i) = (stack[t].doc, stack[t].n, stack[t].v, stack[t].next)
+    var
+      found = false
+      child: SchemaNode
+      x: CborValue
+    case c.kind
+    of snMap:
+      # The next present field in schema order; a required one must be present.
+      var j = i
+      while j < c.fields.len and x.isNil:
+        x = cv.fieldValue(c.fields[j].name)
+        if x.isNil and not c.fields[j].optional:
           return false
-      else:
-        path.add(cbor(f.name))
-        if not s.validateAt(doc, f.node, x, depth + 1, path):
-          return false
+        inc j
+      stack[t].next = j
+      if not x.isNil:
+        found = true
+        child = c.fields[j - 1].node
+        path.add(cbor(c.fields[j - 1].name))
+    of snList:
+      if i < cv.items.len:
+        found = true
+        (child, x) = (c.element, cv.items[i])
+        path.add(cbor(uint64(i)))
+      stack[t].next = i + 1
+    of snTuple:
+      if i < cv.items.len:
+        found = true
+        (child, x) = (c.items[i], cv.items[i])
+        path.add(cbor(uint64(i)))
+      stack[t].next = i + 1
+    else:
+      raiseAssert "frames hold maps, lists and tuples"
+    if not found:
+      # Every member is valid: the container is, and its own segment goes.
+      if stack.pop().member:
         discard path.pop()
-    true
-  of snList:
-    if v.kind != ckArray:
+      continue
+    case s.enterValidate(stack, d, child, x, stack[t].depth + 1, true, path)
+    of eFailed:
       return false
-    for i, x in v.items:
-      path.add(cbor(uint64(i)))
-      if not s.validateAt(doc, n.element, x, depth + 1, path):
-        return false
+    of eValid:
       discard path.pop()
-    true
-  of snTuple:
-    if v.kind != ckArray or v.items.len != n.items.len:
-      return false
-    for i, x in v.items:
-      path.add(cbor(uint64(i)))
-      if not s.validateAt(doc, n.items[i], x, depth + 1, path):
-        return false
-      discard path.pop()
-    true
-  of snChoice:
-    let plan = s.selectionPlan(doc, n)
-    if plan.isNone:
-      return false
-    let arm = plan.get.select(v)
-    arm.isSome and s.validateAt(doc, n.arms[arm.get], v, depth + 1, path)
-  of snLocalRef, snImportedRef:
-    let t = s.resolve(doc, n)
-    t.isSome and s.validateAt(t.get[0], t.get[1].body, v, depth + 1, path)
+    of ePushed:
+      discard
+  true
 
 func validatePath*(
     s: SchemaSet, doc: int, n: SchemaNode, v: CborValue

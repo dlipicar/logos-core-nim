@@ -14,7 +14,7 @@ ids = ["CMT-0027", "CMT-0028"]
 reason = "Conditional on an expanded diagnostic view over local references, which this repository does not provide: SchemaNode keeps every local reference as a terminal local-reference node and no API expands it. The choice planner follows references only to answer structural questions, with cycle detection (choice.nim `follow`), and never builds an identity input from them."
 
 [[item]]
-ids = ["CMT-0058", "CMT-0059", "CMT-0065"]
+ids = ["CMT-0058", "CMT-0059", "CMT-0222"]
 reason = "Addressed to authors of future cdCDDLe updates, commitment-model revisions and compatibility profiles: what they must define. A changed model or identifier reaches this repository as a changed pin (spec/pins.toml) or mirror."
 
 [[item]]

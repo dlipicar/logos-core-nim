@@ -39,27 +39,7 @@ func cmpBytes*(a, b: openArray[byte]): int =
       return (if a[i] < b[i]: -1 else: 1)
   cmp(a.len, b.len)
 
-func encodeCbor*(v: CborValue, output: var seq[byte])
-
-func encodeEntries(entries: seq[CborEntry], output: var seq[byte]) =
-  var encoded = newSeqOfCap[tuple[key, value: seq[byte]]](entries.len)
-  for (k, x) in entries:
-    var kb, xb: seq[byte]
-    encodeCbor(k, kb)
-    encodeCbor(x, xb)
-    encoded.add((kb, xb))
-  encoded.sort(
-    proc(a, b: tuple[key, value: seq[byte]]): int =
-      cmpBytes(a.key, b.key)
-  )
-  for i in 1 ..< encoded.len:
-    doAssert encoded[i - 1].key != encoded[i].key, "duplicate CBOR map key"
-  writeHead(output, 5, uint64(encoded.len))
-  for (kb, xb) in encoded:
-    output.add(kb)
-    output.add(xb)
-
-func encodeCbor*(v: CborValue, output: var seq[byte]) =
+func encodeScalar(v: CborValue, output: var seq[byte]) =
   case v.kind
   of ckUint:
     writeHead(output, 0, v.uint)
@@ -71,15 +51,6 @@ func encodeCbor*(v: CborValue, output: var seq[byte]) =
   of ckText:
     writeHead(output, 3, uint64(v.text.len))
     output.add(v.text.toOpenArrayByte(0, v.text.high))
-  of ckArray:
-    writeHead(output, 4, uint64(v.items.len))
-    for item in v.items:
-      encodeCbor(item, output)
-  of ckMap:
-    encodeEntries(v.entries, output)
-  of ckTag:
-    writeHead(output, 6, v.tag)
-    encodeCbor(v.content, output)
   of ckSimple:
     if v.simple < 24:
       output.add(0xe0'u8 or v.simple)
@@ -96,6 +67,101 @@ func encodeCbor*(v: CborValue, output: var seq[byte]) =
     let bytes = int(ord(v.width))
     for i in countdown(bytes - 1, 0):
       output.add(uint8((v.floatBits shr (8 * i)) and 0xff))
+  of ckArray, ckMap, ckTag:
+    raiseAssert "not a scalar"
+
+type
+  EncodedEntry = tuple[key, value: seq[byte]]
+
+  Frame = object
+    node: CborValue ## the array, map or tag being written
+    next: int ## children finished: items, keys and values, or the tag content
+    buf: seq[byte] ## maps: the key or value being written
+    key: seq[byte] ## maps: the finished key waiting for its value
+    entries: seq[EncodedEntry] ## maps: finished entries, sorted at the end
+
+func encodeCbor*(v: CborValue, output: var seq[byte]) =
+  ## Iterative, like the decoder: nesting costs heap, not call stack (INTERFACE
+  ## §4.5.1). Arrays and tags write straight into their sink; a map collects
+  ## its encoded entries, sorts them by key bytes and then writes them into
+  ## its own sink. A sink is the innermost unfinished map's buffer, or `output`.
+  var
+    stack: seq[Frame]
+    maps: seq[int] ## indices of the map frames in `stack`
+    pending = v
+
+  template sink(): ptr seq[byte] =
+    # Taken fresh for every write: `stack.add` may move the buffers.
+    if maps.len == 0:
+      addr output
+    else:
+      addr stack[maps[^1]].buf
+
+  while true:
+    case pending.kind
+    of ckArray:
+      writeHead(sink()[], 4, uint64(pending.items.len))
+      if pending.items.len > 0:
+        stack.add(Frame(node: pending))
+        pending = pending.items[0]
+        continue
+    of ckTag:
+      writeHead(sink()[], 6, pending.tag)
+      stack.add(Frame(node: pending))
+      pending = pending.content
+      continue
+    of ckMap:
+      if pending.entries.len == 0:
+        writeHead(sink()[], 5, 0)
+      else:
+        stack.add(Frame(node: pending))
+        maps.add(stack.high)
+        pending = pending.entries[0].key
+        continue
+    else:
+      encodeScalar(pending, sink()[])
+    # `pending` is finished: close every container it completes.
+    while true:
+      if stack.len == 0:
+        return
+      let top = stack.high
+      case stack[top].node.kind
+      of ckArray:
+        inc stack[top].next
+        if stack[top].next < stack[top].node.items.len:
+          pending = stack[top].node.items[stack[top].next]
+          break
+        stack.setLen(top)
+      of ckTag:
+        stack.setLen(top)
+      else:
+        let child = move stack[top].buf
+        stack[top].buf = @[]
+        if stack[top].next mod 2 == 0:
+          stack[top].key = child
+        else:
+          stack[top].entries.add((move stack[top].key, child))
+          stack[top].key = @[]
+        inc stack[top].next
+        let n = stack[top].node.entries.len
+        if stack[top].next < 2 * n:
+          let e = stack[top].node.entries[stack[top].next div 2]
+          pending = if stack[top].next mod 2 == 0: e.key else: e.value
+          break
+        var entries = move stack[top].entries
+        stack.setLen(top)
+        maps.setLen(maps.len - 1)
+        entries.sort(
+          proc(a, b: EncodedEntry): int =
+            cmpBytes(a.key, b.key)
+        )
+        for i in 1 ..< entries.len:
+          doAssert entries[i - 1].key != entries[i].key, "duplicate CBOR map key"
+        let s = sink()
+        writeHead(s[], 5, uint64(n))
+        for (kb, xb) in entries:
+          s[].add(kb)
+          s[].add(xb)
 
 func encodeCbor*(v: CborValue): seq[byte] =
   var output: seq[byte]

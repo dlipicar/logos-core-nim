@@ -7,6 +7,11 @@
 ## types below are a view of those rules; loading this module checks that the
 ## view and the pinned CDDL agree, so a spec revision that changes a kind or the
 ## union fails here before any message is read.
+##
+## Logos deterministic CBOR (INTERFACE §4.4) covers the whole message, the
+## payload maps included: a floating-point item anywhere, or `params`, `result`
+## or `data` nested deeper than the payload-depth limit P, fails the envelope
+## (§2.3; INTERFACE §4.5, §4.5.1).
 
 {.push raises: [].}
 
@@ -16,7 +21,7 @@ import ../commitment
 import ../hash/hashinput
 import ../iface/[outcome, surface]
 import ../pins
-import ./protocddl
+import ./[framing, protocddl]
 
 export results, outcome, hashinput
 
@@ -100,8 +105,12 @@ type
       subscriptionResult*: SubscriptionResult
 
   EnvelopeErrorKind* = enum
-    eeMalformed ## not one well-formed CBOR item, or nested past the cap (G59)
-    eeNonDeterministic ## not Logos deterministic CBOR (INTERFACE §4.4)
+    eeMalformed ## not one well-formed CBOR item
+    eeNonDeterministic
+      ## not Logos deterministic CBOR (INTERFACE §4.4), a float anywhere included
+    eeTooDeep
+      ## nested deeper than the payload-depth limit plus the envelope's one
+      ## level (§2.3, INTERFACE §4.5.1), or tags past the decoder's tag bound
     eeNotMap ## the message is not a map
     eeFirstKey ## the first entry is not key 0 (§1)
     eeUnknownKind ## not an allocated message-kind value (§8.3, §10)
@@ -109,6 +118,8 @@ type
     eeField ## a required field is missing, or a field has the wrong type
     eeForm ## no form of a choice message matches (response, subscription result)
     eeRule ## a rule outside the CDDL: nonzero codes, detail (§1.3)
+    eeTooLarge
+      ## sending only: the body does not fit the peer-supported frame maximum (§2.1)
 
   EnvelopeError* = object
     kind*: EnvelopeErrorKind
@@ -375,26 +386,68 @@ proc checkMessage*(v: CborValue): Result[Message, EnvelopeError] =
   let mk = ?checkFields(v)
   typed(v, mk)
 
-func decodeValue*(data: openArray[byte]): Result[CborValue, EnvelopeError] =
+func decodeValue*(
+    data: openArray[byte], payloadDepth = DefaultMaxDepth
+): Result[CborValue, EnvelopeError] =
   ## [SPEC TRANSPORT §2.3, §8.3] One frame body as one Logos deterministic-CBOR
-  ## item (INTERFACE §4.4), nested at most `DefaultMaxDepth` deep (G59). Text
-  ## inside the payload maps may be invalid UTF-8: like a float or a tag there
-  ## (G38), that is a schema mismatch at the schema-aware boundary (INTERFACE
-  ## §4.5), as in direct mode [IMPL].
+  ## item (INTERFACE §4.4): no floating-point item at any depth, the payload maps
+  ## included (INTERFACE §4.5). The whole message nests at most
+  ## `payloadDepth + 1` arrays and maps: the envelope map adds exactly one level
+  ## above `params`, `result` and `data`, and its other fields nest two at most,
+  ## so this is the payload-depth check of INTERFACE §4.5.1, made before any
+  ## container beyond it is allocated. `payloadDepth` is P, at least 128
+  ## (`TransportLimits`). Text inside the payload maps may be invalid UTF-8: like
+  ## a tag or null there, that is a schema mismatch at the schema-aware boundary
+  ## (INTERFACE §4.5), as in direct mode [IMPL].
   var opts = defaultDecodeOptions()
   opts.allowInvalidUtf8 = true
+  opts.maxDepth = payloadDepth + 1
   let v = decodeCbor(data, opts).valueOr:
     return err(
-      if error.kind == cekNonDeterministic:
+      case error.kind
+      of cekNonDeterministic:
         fail(eeNonDeterministic, $error)
-      else:
+      of cekTooDeep:
+        fail(eeTooDeep, $error)
+      of cekMalformed, cekInvalidUtf8:
         fail(eeMalformed, $error)
     )
   ok(v)
 
-proc decodeMessage*(data: openArray[byte]): Result[Message, EnvelopeError] =
+proc decodeMessage*(
+    data: openArray[byte], payloadDepth = DefaultMaxDepth
+): Result[Message, EnvelopeError] =
   ## [SPEC TRANSPORT §2.3, §8.3] One frame body whose envelope is valid.
-  checkMessage(?decodeValue(data))
+  checkMessage(?decodeValue(data, payloadDepth))
+
+func checkPayload*(v: CborValue, payloadDepth: int): Result[void, EnvelopeError] =
+  ## [SPEC TRANSPORT §2.3; INTERFACE §4.4 item 5, §4.5.1] What a receiver's
+  ## envelope check asks of a `params`, `result` or `data` value about to be sent:
+  ## no floating-point item, and at most `payloadDepth` arrays and maps on any
+  ## path (the root map is depth one; tags and scalars add none). Iterative.
+  var stack: seq[(CborValue, int)] = @[(v, 1)]
+  while stack.len > 0:
+    let (x, depth) = stack.pop()
+    if x.isNil:
+      continue
+    case x.kind
+    of ckArray, ckMap:
+      if depth > payloadDepth:
+        return err(fail(eeTooDeep, "the payload nests deeper than " & $payloadDepth))
+      if x.kind == ckArray:
+        for item in x.items:
+          stack.add((item, depth + 1))
+      else:
+        for (k, val) in x.entries:
+          stack.add((k, depth + 1))
+          stack.add((val, depth + 1))
+    of ckTag:
+      stack.add((x.content, depth))
+    of ckFloat:
+      return err(fail(eeNonDeterministic, "a floating-point item in the payload"))
+    else:
+      discard
+  ok()
 
 func peekKind*(data: openArray[byte]): Opt[uint64] =
   ## [SPEC TRANSPORT §1] The kind from the map header and the first entry alone.
@@ -478,10 +531,35 @@ func toCbor*(m: Message): CborValue =
       e.add(entry("error", cborMap(failureEntries(r.failure.get))))
   cborMap(e)
 
-proc encodeMessage*(m: Message): Result[seq[byte], EnvelopeError] =
-  ## [SPEC TRANSPORT §2.3] The Logos deterministic-CBOR encoding of `m`, after
-  ## the receive-side envelope checks pass on it [IMPL]: no invalid envelope is
-  ## sent.
+func payloadOf(m: Message): CborValue =
+  case m.kind
+  of mkRequest:
+    m.request.params
+  of mkResponse:
+    if m.response.ok: m.response.resultMap else: nil
+  of mkEvent:
+    m.event.data
+  else:
+    nil
+
+proc encodeMessage*(
+    m: Message, payloadDepth = DefaultMaxDepth, peerLimit: uint32 = MinFrameLimit
+): Result[seq[byte], EnvelopeError] =
+  ## [SPEC TRANSPORT §2.1, §2.3] The Logos deterministic-CBOR encoding of `m`,
+  ## after the receive-side envelope checks pass on it [IMPL]: no invalid
+  ## envelope is sent. The body must fit the peer-supported maximum.
   let v = toCbor(m)
   discard ?checkMessage(v)
-  ok(encodeCbor(v))
+  let p = payloadOf(m)
+  if not p.isNil:
+    ?checkPayload(p, payloadDepth)
+  let bytes = encodeCbor(v)
+  if not fits(bytes.len, peerLimit):
+    return err(
+      fail(
+        eeTooLarge,
+        "a body of " & $bytes.len & " bytes over the peer's " & $peerLimit,
+        Opt.some(m.kind),
+      )
+    )
+  ok(bytes)

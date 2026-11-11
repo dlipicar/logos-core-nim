@@ -2,7 +2,7 @@
 ## (a value decoded under a schema), HASH §7.6, §8, §9 and App B.1/B.2 (views over
 ## its value root).
 
-import std/[sequtils, sets, strformat, strutils]
+import std/[sequtils, sets, strformat, strutils, tables]
 import unittest2
 import ../src/logos_core/[cbor, hash, commitment]
 import ../src/logos_core/base/hex
@@ -396,6 +396,22 @@ suite "commitment: App B":
     check accepted(wire(whole), viewSchema(appB))
     check accepted(wire(ok), viewSchema(appB))
 
+  test "[CMT-0224] [CMT-0225] [CMT-0226] [CMT-0234] [CMT-0235] [CMT-0236] [CMT-0237] [CMT-0238] [CMT-0239] App B.1: through a local reference chain the root keeps the referring identity and the value takes the terminal one":
+    let m = build(mirror("CMT/app-b1.input.cddl"))
+    check m.role == srSupporting
+    let r = m.typed("a.x", "\"hello\"")
+    let want = mirror("CMT/app-b1.value-tree.diag").multiReplace(
+        ("h'...schema-root...'", bytesLiteral(schemaRoot(m))),
+        ("h'...a.x-subtree-root...'", bytesLiteral(m.rootOf("a.x"))),
+        ("h'...a.z-subtree-root...'", bytesLiteral(m.rootOf("a.z"))),
+      )
+    check "..." notin want
+    check toCbor(r) == diag(want)
+    # The model keeps all three declarations and both local-reference nodes.
+    check m.declarations.len == 3
+    check m.find("a.x").get.body.kind == snLocalRef
+    check m.find("a.y").get.body.kind == snLocalRef
+
 # COMMITMENT §7-§10 --------------------------------------------------------------------
 
 suite "commitment: value trees":
@@ -460,7 +476,7 @@ suite "commitment: value trees":
       # indefinite
     check m.rejectsBytes("demo.t", "a4 6162 f5 6169 20 6178 01 6173 6161") # key order
 
-  test "[CMT-0086] [CMT-0074] an absent optional field is an explicit absent node, never omitted or defaulted":
+  test "[CMT-0086] [CMT-0223] an absent optional field is an explicit absent node, never omitted or defaulted":
     let m = build(module("demo.t = {? note: tstr, n: uint8}"))
     let r = m.typed("demo.t", """{"n": 1}""")
     check r.node.fields.mapIt(it.fieldName) == @["n", "note"]
@@ -918,7 +934,7 @@ suite "hash: verified views":
     check failure(wire(v).put([7, 1, 1], cbor(0'u64)), viewSchema(m)).isSome
     check viewOf(p, [fieldSegment("pair"), tuplePosition(2)]).isErr
 
-  test "[IMPL-DECISION G8] [HSH-0154] a path crosses a choice only through the choice-arm segment of the selected arm":
+  test "[IMPL-DECISION G8] [HSH-0154] [CMT-0230] a path crosses a choice only through the choice-arm segment of the selected arm":
     let m = build(module("demo.t = {v: {a: uint8} / {b: tstr}}"))
     let arms = m.find("demo.t").get.body.fields[0].node.arms
     let aArm = (if arms[0].fields[0].name == "a": 0 else: 1)
@@ -1101,3 +1117,264 @@ suite "hash: verified views":
         check shapes.conforms(s.payload, "value-hash-payload")
         check checkValuePayload(s.domain, s.payload).isOk
         check encodeCbor(decodeCbor(encodeCbor(s.payload)).get) == encodeCbor(s.payload)
+
+# HASH App B.4 -------------------------------------------------------------------------
+
+proc tableRows(rel: string): seq[seq[string]] =
+  ## The body rows of a mirrored Markdown table, each cell without its backticks.
+  let lines = mirror(rel).strip.splitLines()
+  for line in lines[2 ..^ 1]:
+    result.add(
+      line.strip(chars = {'|'}).split('|').mapIt(it.strip.strip(chars = {'`'}))
+    )
+
+proc kid(n: PhysNode, i = 0): PhysNode =
+  n.children[i].node
+
+proc swapBytes(v: CborValue, old, new: Digest): CborValue =
+  ## `v` with every byte string equal to `old` replaced by `new`.
+  case v.kind
+  of ckBytes:
+    if v.bytes == @old:
+      cbor(new)
+    else:
+      v
+  of ckArray:
+    cborArray(v.items.mapIt(swapBytes(it, old, new)))
+  of ckMap:
+    cborMap(v.entries.mapIt((it.key, swapBytes(it.value, old, new))))
+  else:
+    v
+
+proc withField(v: CborValue, k: uint64, x: CborValue): CborValue =
+  cborMap(v.entries.mapIt((if it.key == cbor(k): (it.key, x) else: it)))
+
+type Edit = tuple[target: Digest, field: uint64, value: Digest]
+
+proc remade(
+    n: PhysNode, edits: openArray[Edit], payloads: var seq[(Digest, CborValue)]
+): Digest =
+  ## [SPEC HASH App B.4] Rebuilds `n` after `edits`, recomputing every affected
+  ## digest and child record; records each payload under its original digest.
+  var payload = n.payload
+  for e in edits:
+    if e.target == n.digest:
+      payload = payload.withField(e.field, cbor(e.value))
+  for r in n.children:
+    let d = remade(r.node, edits, payloads)
+    if d != r.node.digest:
+      payload = swapBytes(payload, r.node.digest, d)
+  payloads.add((n.digest, payload))
+  digestOf(domainOf(n.kind), payload)
+
+suite "hash: App B.4 imported reference context":
+  let
+    types = build(mirror("HSH/app-b4.types.cddl"))
+    ctx = block:
+      var c = pinnedContext()
+      c.supporting = @[types]
+      c
+    a = build(mirror("HSH/app-b4.a.cddl"), ctx)
+    c = build(mirror("HSH/app-b4.c.cddl"), ctx)
+    value = diag(mirror("HSH/app-b4.value.diag"))
+    ra = setOf(a, ctx).normalize(0, "a.value", value).get
+    rc = setOf(c, ctx).normalize(0, "c.value", value).get
+    rb = setOf(types).normalize(0, "types.alias", value.lookup("amount").get).get
+    la = layout(ra).get
+    lc = layout(rc).get
+    lb = layout(rb).get
+  var docs, digests: seq[(string, string)]
+  for row in tableRows("HSH/app-b4.documents.md"):
+    docs.add((row[0], row[2]))
+  for row in tableRows("HSH/app-b4.payloads.md"):
+    digests.add((row[0], row[2]))
+
+  proc docRoot(sym: string): Digest =
+    for (k, v) in docs:
+      if k == sym:
+        return toDigest(cbor(hex.fromHex(v).get)).get
+    raiseAssert "no document " & sym
+
+  proc digestNamed(name: string): string =
+    for (k, v) in digests:
+      if k == name:
+        return v
+    raiseAssert "no payload " & name
+
+  test "[HSH-0195] [HSH-0196] [HSH-0197] [HSH-0198] [HSH-0199] [HSH-0200] [HSH-0201] [HSH-0202] [HSH-0203] [HSH-0204] [HSH-0205] [HSH-0206] [HSH-0183] [HSH-0184] [HSH-0185] [HSH-0186] App B.4: document roots and every payload digest":
+    check toHex(docRoot("A")) == toHex(schemaRoot(a))
+    check toHex(docRoot("B")) == toHex(schemaRoot(types))
+    check toHex(docRoot("C")) == toHex(schemaRoot(c))
+    check toHex(docRoot("L")) == CommonSchemaRoot
+    let
+      am = la.child
+      af = am.kid(0)
+      ar = af.kid
+      b = ar.kid
+      d = b.kid(0)
+      r = d.kid
+      e = r.kid
+      v = b.kid(1)
+      n = v.kid
+      aq = am.kid(1)
+      az = aq.kid
+      cm = lc.child
+      cf = cm.kid(0)
+      cr = cf.kid
+      cq = cm.kid(1)
+      cz = cq.kid
+    for (name, node) in [
+      ("e", e),
+      ("r", r),
+      ("d", d),
+      ("n", n),
+      ("v", v),
+      ("b", b),
+      ("ar", ar),
+      ("af", af),
+      ("az", az),
+      ("aq", aq),
+      ("am", am),
+      ("cr", cr),
+      ("cf", cf),
+      ("cz", cz),
+      ("cq", cq),
+      ("cm", cm),
+    ]:
+      checkpoint name
+      check toHex(node.digest) == digestNamed(name)
+    check toHex(la.digest) == digestNamed("a0")
+    check toHex(lc.digest) == digestNamed("c0")
+    check toHex(lb.digest) == digestNamed("b0")
+    # The imported subtree is the same under both importers and directly.
+    check cr.kid.digest == b.digest and lb.child.digest == b.digest
+    # Field 1 is the document context: A above the reference, B below it, L
+    # below the common reference; local aliases add nothing (HASH §7.4).
+    for (node, sym) in [(am, "A"), (ar, "A"), (b, "B"), (r, "B"), (e, "L"), (cr, "C")]:
+      check node.payload.lookup(1'u64).get == cbor(docRoot(sym))
+    check ar.schema == a.rootOf("a.import")
+    check b.schema == types.rootOf("types.record")
+
+  test "[HSH-0207] [HSH-0208] [HSH-0187] [HSH-0188] [HSH-0189] App B.4: complete and partial views validate, with the proof payloads in the given order":
+    let schema = viewSchema(a, ctx)
+    for (r, s) in [(ra, schema), (rc, viewSchema(c, ctx)), (rb, viewSchema(types))]:
+      let whole = viewAt(r, noPath)
+      check whole.proof.len == 0
+      check accepted(wire(whole), s)
+    for row in tableRows("HSH/app-b4.views.md"):
+      checkpoint row[0]
+      let path = diag(row[0]).items.mapIt(parseSegment(it).get)
+      let view = viewAt(ra, path)
+      check stepHashes(view) == row[2].split(", ").mapIt(digestNamed(it))
+      check accepted(wire(view), schema)
+
+  test "[HSH-0209] [HSH-0191] [HSH-0192] [HSH-0193] [HSH-0166] App B.4: a wrong document context is rejected even when every hash is consistent":
+    let
+      schema = viewSchema(a, ctx)
+      am = la.child
+      ar = am.kid(0).kid
+      b = ar.kid
+      d = b.kid(0)
+      r = d.kid
+      e = r.kid
+      v = b.kid(1)
+      n = v.kid
+      aq = am.kid(1)
+      recordRoot = types.rootOf("types.record")
+      views = tableRows("HSH/app-b4.views.md")
+      partial = {
+        "amount, value": views[0][0],
+        "amount, detail, range": views[2][0],
+        "z": views[3][0],
+      }
+    let cases: seq[(string, seq[Edit])] = @[
+      ("N1", @[(n.digest, 1'u64, docRoot("A"))]),
+      ("N2", @[(e.digest, 1'u64, docRoot("B"))]),
+      ("N3", @[(ar.digest, 1'u64, docRoot("B"))]),
+      ("N4", @[(r.digest, 1'u64, docRoot("L"))]),
+      ("N5", @[(ar.digest, 3'u64, docRoot("C"))]),
+      ("N6", @[(ar.digest, 4'u64, recordRoot)]),
+      ("N7", @[(aq.digest, 1'u64, docRoot("B"))]),
+      ("N8", [e, r, d, n, v, b].mapIt((it.digest, 1'u64, docRoot("A")))),
+    ]
+    let negative = tableRows("HSH/app-b4.negative.md")
+    check negative.len == cases.len
+    for (row, item) in zip(negative, cases):
+      let (name, edits) = item
+      checkpoint name
+      check row[0] == name
+      var payloads: seq[(Digest, CborValue)]
+      let child = remade(la.child, edits, payloads)
+      let root = digestOf(dValueRoot, swapBytes(la.payload, la.child.digest, child))
+      check toHex(root) == row[3]
+      var whole = viewAt(ra, noPath)
+      whole.valueRoot = root
+      check not accepted(wire(whole), schema)
+      var view =
+        viewAt(ra, diag(partial.toTable[row[2]]).items.mapIt(parseSegment(it).get))
+      for i in 0 ..< view.proof.len:
+        let old = digestOf(view.proof[i].domain, view.proof[i].payload)
+        for (k, x) in payloads:
+          if k == old:
+            view.proof[i].payload = x
+      view.valueRoot = root
+      check not accepted(wire(view), schema)
+
+suite "commitment: payload depth":
+  test "[IFC-0925] [IFC-0927] [IMPL-DECISION I51] validation, normalization and hashing support every payload depth up to the limit: references, choice arms, fields and elements add no level":
+    let m = build(
+      module(
+        """
+demo.list = [* demo.list]
+demo.either = [* demo.either] / uint64
+demo.chain = demo.either
+demo.record = { ? next: demo.record }
+demo.single = [demo.single] / uint64
+"""
+      )
+    )
+    let s = setOf(m)
+
+    proc arrays(levels: int, inner: CborValue): CborValue =
+      var v = inner
+      for _ in 0 ..< levels:
+        v = cborArray(v)
+      v
+
+    proc records(levels: int): CborValue =
+      var v = cborMap()
+      for _ in 1 ..< levels:
+        v = cborMap((cbor("next"), v))
+      v
+
+    proc at(decl: string, d: int): CborValue =
+      ## A value of `decl` with exactly `d` maps or arrays on its deepest path.
+      case decl
+      of "demo.list":
+        arrays(d - 1, cborArray())
+      of "demo.record":
+        records(d)
+      else:
+        arrays(d, cbor(1'u64))
+
+    for decl in ["demo.list", "demo.either", "demo.chain", "demo.record", "demo.single"]:
+      checkpoint decl
+      let body = m.find(decl).get.body
+      for d in [MinMaxDepth, 513, DefaultMaxDepth]:
+        let v = at(decl, d)
+        # The value survives the decoder at this depth too.
+        check decodeCbor(encodeCbor(v)).isOk
+        check s.validates(0, body, v)
+        let r = m.norm(decl, v)
+        check r.isOk
+        check valueRoot(r.get).isOk
+      # One container more is refused as too deep, never as a schema mismatch.
+      let over = at(decl, DefaultMaxDepth + 1)
+      check not s.validates(0, body, over)
+      check "deeper than" in m.norm(decl, over).error
+
+    # The value roots at the limit are deterministic and distinct per declaration.
+    check valueRoot(m.norm("demo.either", arrays(DefaultMaxDepth, cbor(1'u64))).get).get ==
+      valueRoot(m.norm("demo.either", arrays(DefaultMaxDepth, cbor(1'u64))).get).get
+    check valueRoot(m.norm("demo.either", arrays(DefaultMaxDepth, cbor(1'u64))).get).get !=
+      valueRoot(m.norm("demo.chain", arrays(DefaultMaxDepth, cbor(1'u64))).get).get

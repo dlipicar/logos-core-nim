@@ -18,5 +18,17 @@ ids = ["IFC-0085"]
 reason = "Addressed to contract authors: what events are for. Acceptance enforces their shape and naming (tests [IFC-0081]-[IFC-0084]); whether an event stands in for a method is a design judgement no tool can check."
 
 [[item]]
-ids = ["IFC-0536"]
-reason = "No cache in this repository is keyed by less than its whole input. The parsed models kept beyond one call are the pinned common schema (commitment/construct.nim `pinned`), built once from the document in spec/pins.toml under the compiled-in commitment model, hash profile and suite and checked against the pinned root, and each generated Nim module's set (codegen/nimrt.nim loadSchema), built once from the exact documents embedded in that module. Nothing is looked up by name, path or alias; choice plans are rebuilt per call or held inside one such set."
+ids = ["IFC-0953", "IFC-0954", "IFC-0955"]
+reason = "No cache in this repository is keyed by less than its whole input, and no cached validation result stands in for a check. The parsed models kept beyond one call are the pinned common schema (commitment/construct.nim `pinned`), built once from the document in spec/pins.toml under the compiled-in commitment model, hash profile and suite and checked against the pinned root, and each generated Nim module's set (codegen/nimrt.nim loadSchema), built once from the exact documents embedded in that module. Nothing is looked up by name, path or alias; choice plans are rebuilt per call or held inside one such set."
+
+[[item]]
+ids = ["IFC-0624", "IFC-0898", "IFC-0899"]
+reason = "lcn-gen documents its limits in its usage text (src/lcn_gen.nim, `Limits`) and iface/cmap.nim's module doc: no identifier-length limit (identifiers are never truncated, hashed or aliased), input bounded by the INTERFACE §5.3 limits, and a mapping-limit failure for a discriminant past UINT32_MAX. With no identifier-length limit documented, §3.9.7's longest-supported and over-limit identifier cases do not arise; long identifiers with a common prefix are tested ([IFC-0895]) and the §5.3 limits are tested at and past their bound ([IFC-0625])."
+
+[[item]]
+ids = ["IFC-0637"]
+reason = "Unreachable under the §5.3 limits this repository enforces: a choice has at most 65,536 arms (MaxSchemaNodes, iface/accept.nim), far below UINT32_MAX + 1. cmap.nim's choice mapping still checks the largest discriminant and fails with an explicit `mapping limit` error, and lcn-gen then writes nothing."
+
+[[item]]
+ids = ["IFC-0921", "IFC-0924"]
+reason = "Addressed to contract authors: value constraints a contract states outside its schema, and how deep its payloads may be. No contract in this repository states such constraints, and no tool can tell what depth an interface requires of its callers. The implementation side is tested: the payload depth limit is configurable, at least 128 and 1024 by default, and a rejection past it is INVALID_PARAMS without detail ([IFC-0923]-[IFC-0929])."

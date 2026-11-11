@@ -1,12 +1,27 @@
 # Spec status: what is built against which open item
 
-The specs are logos-lips `draft/logos-core-module-specs` at `f4f83471` (the `logos-lips` flake input).
-The spec owner is revising them after four reports in `docs/logos-core/discussion/` of logos-lips:
+The specs are logos-lips `draft/logos-core-module-specs` at `6a4dfa28` (the `logos-lips` flake input),
+since 2026-11-10; before that `f4f83471`. The spec owner revised them after four reports in
+`docs/logos-core/discussion/` of logos-lips:
 `claude-spec-comments.md` (C-, CM-, IF-, EC-, TR-, RT-, CA-, PM-, SO-), `human-spec-comments.md`
 (HC-), `claude-spec-comments-2.md` (NX-, NE-, NI-, NL-, NA-, NR-, ND-, NP-, NC-, NS-, NO-, NF-) and
-`module-port-gaps.md`. Work is ordered so the parts least likely to change are built first.
+`module-port-gaps.md`, and answered every item except the HC- items, the Fable 5.1 items (G151,
+G153–G156) and NP-11 to NP-14. Work is ordered so the parts least likely to change are built first.
+Line numbers in the rows below are those of the report that raised each item (`f4f83471`); the Status
+column is current.
 
-## Tiers
+## Tiers at 6a4dfa28
+
+| Tier | Area | State |
+|---|---|---|
+| 1 | Deterministic CBOR, BLAKE3, cdCDDLe, HASH, COMMITMENT | Built and adapted. Every risky interim the owner answered matched (G1, G2, G4, G6–G10, G12–G14, G119, G120, G122, G152); G11 moved to RFC 9682; floats and depth follow INTERFACE §4.4–§4.5.1 (I48). The commitment pipeline now counts containers, so it supports the full payload depth (I51). Open: G151, G153, G156 (Fable items, sent as ND-10, ND-12, NP-15) and G157; G154 is settled by spec text and G155 is moot. |
+| 2 | INTERFACE acceptance and the C mapping, types only | Rebuilt to C mapping revision 3: explicit bindings (`lcn-gen types --module`), per-document groups and root checks, interfaces importing supporting schemas, floats and depth in the payload decoder; IFC gate 317/317. Candidates to promote: §2.4 typedefs, `_CALL_`/`_MODULE_` names, §2.7 response owners. The common section of `logos_types.h` waits on G158. |
+| 3 | TRANSPORT sans-I/O; PM artifacts | TRANSPORT receiver and sender rules done, with §3.4 and the per-connection part of §8.6 now claimed; §8.1.2 system-service sessions move to Tier 4 (G48 keeps the Loader and CA direct); G165 is open for the Tier 4 publish adapter. LGX done (I49). Package signing waits on R4 (SLH-DSA). Candidates to promote: the PM §11 resolver (fully specified, sans-I/O), §6 source records and catalog entries. |
+| 4 | RUNTIME, RC, LOADER, CONFIG, CA; unix-stream transport with I/O | No spec item blocks it any more. Prerequisites: INTERFACE ABI v2 (async calls, `observe_end`, invocation context, init and vtable v2), R4, the redone rows (G27, G47, G49–G53, G55, G61, G82) and the G58 same-identity claim. Gaps G159–G164 have interims. |
+| 4b | logosctl, logosd, module host | After the Tier 4 engine, once D13 and D27 are re-decided. |
+| 5 | PM fetch, storage role, installation, methods; provenance; Nix profile; TLS and QUIC; Windows local transport; reverse mapper | Fetch is implementation-defined now (G5, G90, G91), after routes and R4. Installation needs the admission bound. Windows needs the §8.2.1 attribution spike. Still open: NP-11 to NP-14, HC follow-ups. |
+
+## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |
 |---|---|---|
@@ -66,245 +81,245 @@ Three spec facts drive the order:
 
 | ID | Report | Spec §§ | Milestones | Risk | Likely fix, interim choice | Code / test | Status |
 |---|---|---|---|---|---|---|---|
-| C-12 | claude-spec-comments | BCP §1 vs §5.3; RUNTIME §9 | M0,M3,M4 | MED | If audit/evidence types move namespace, their roots and evidence bytes change. | — | open |
-| GN-01 | claude-spec-comments | all | M0 (all) | LOW | Editorial. | — | open |
-| NX-05 | claude-spec-comments-2 | RUNTIME References; BCP §1 | M0, M3 | LOW | Additive: Y. Add normative references. The "move shared records into RUNTIME" option would rename them, changing their C names and roots. | — | open |
-| SO-10 | claude-spec-comments | mirrors; cdCDDLe §12 | M0,M1 | LOW | Published vectors would expose any CM-xx divergence. | — | open |
+| C-12 | claude-spec-comments | BCP §1 vs §5.3; RUNTIME §9 | M0,M3,M4 | MED | If audit/evidence types move namespace, their roots and evidence bytes change. | — | resolved in 6a4dfa28: upward dependencies listed (BCP §1.1); audit and evidence keep their namespace |
+| GN-01 | claude-spec-comments | all | M0 (all) | LOW | Editorial. | — | resolved in 6a4dfa28: every spec declares BCP 14 language |
+| NX-05 | claude-spec-comments-2 | RUNTIME References; BCP §1 | M0, M3 | LOW | Additive: Y. Add normative references. The "move shared records into RUNTIME" option would rename them, changing their C names and roots. | — | resolved in 6a4dfa28: references repaired; no records moved |
+| SO-10 | claude-spec-comments | mirrors; cdCDDLe §12 | M0,M1 | LOW | Published vectors would expose any CM-xx divergence. | — | resolved in 6a4dfa28 (no change); the owner points to mirrors and a corpus that logos-lips does not hold |
 
 ## Tier 1 — encoding, hashing, commitments
 
 | ID | Report | Spec §§ | Milestones | Risk | Likely fix, interim choice | Code / test | Status |
 |---|---|---|---|---|---|---|---|
-| NC-05 | claude-spec-comments-2 | HASH §5, §6.1 l.506-509; cdCDDLe §5.1; CA §4, §9, §13 | M1, M2, M4 | HIGH | Additive: P [REV]. `sensitive` marker with salted commitments and zeroization (touches the HASH algorithm and the model). The per-method no-retain option would be LOW. | — | open |
-| ND-01 | claude-spec-comments-2 | INTERFACE §1.7, §5.1; BCP §5.3 | M1, M2, M8 | HIGH | Additive: Y [CR]. `logos.uint256` or `logos.decimal_uint` common type. A native scalar kind would be [REV]. | — | open |
-| ND-04 | claude-spec-comments-2 | cdCDDLe §5.1, §9; COMMITMENT l.1295-1296 | M1, M2 | HIGH | Additive: Y [REV?]. Bounded arrays `[n*m T]`. The cdCDDLe occurrence node already carries min/max (cdCDDLe l.496-500). | — | open |
-| ND-05 | claude-spec-comments-2 | cdCDDLe l.171; COMMITMENT; HASH §5 | M1, M2, M10 | HIGH | Additive: Y [REV]. Typed `{*K=&gt;V}` maps: new model kind and a keyed HASH layout. The association-list option only adds a validator rule. | — | open |
-| ND-06 | claude-spec-comments-2 | INTERFACE l.425, §5.1; HASH §4 | M1, M2 | HIGH | Additive: Y [CR]/[REV]. `bstr .cbor T` and/or `logos.json_text`. | — | open |
-| ND-08 | claude-spec-comments-2 | INTERFACE l.97, l.111-112; COMMITMENT l.352-353 | M1, M2, M8, M10 | HIGH | Additive: Y [REV?]. New import forms between contracts; existing schemas are unchanged. COMMITMENT l.745 names "add import forms" as a revision trigger. | — | open |
-| NR-08 | claude-spec-comments-2 | TRANSPORT §2, §5, §7, §8.4.2; INTERFACE §5.1 l.2479-2484 | M1, M2, M5, M11 | HIGH | Additive: N [CR]. New value in the closed error-code set; overload rejection without closing the connection; limits; second QUIC stream. | — | open |
-| C-01 | claude-spec-comments | COMMITMENT §5 l.697 vs INTERFACE §1.1/§5.3, BCP §6.1 | M1,M2 | LOW | Only changes what the parser accepts; roots unaffected. =s | — | open, narrowed (NF-01) |
-| C-02 | claude-spec-comments | COMMITMENT §3.1 vs INTERFACE §2, §3.8 | M1,M2,M10 | LOW | Affects only names we already reject. =s | — | open |
-| CM-01 | claude-spec-comments | COMMITMENT §8, §9.2; HASH §7.3 | M1 | **HIGH** | Value roots through alias chains. poc2 does the opposite (outermost). cl l.183-188 | `commitment/normalize.nim` `throughLocal`; test `[IMPL-DECISION G1]` | open |
-| CM-02 | claude-spec-comments | COMMITMENT §8, §9.3; HASH §5, §7.4 | M1 (values in M3/M5) | **HIGH** | Field 1 under reference-value nodes, for every value with common or Runtime Control types. poc2 does the opposite. cl l.190-197 | `hash/layout.nim` `rootBelowReference`, `hash/view.nim` `verifyView` (reference step); tests `[IMPL-DECISION G2]` (layout and values); oracle vectors `reference value …` | settled for common-schema refs (NF-07); vector request open |
-| CM-03 | claude-spec-comments | INTERFACE §1.1/§1.7; COMMITMENT §5 | M1,M2 | LOW | Acceptance only. =s | — | open, interim supported (NF-08) |
-| CM-04 | claude-spec-comments | COMMITMENT §9.4; HASH §8 | M1,M4 | **HIGH-n** | What a view discloses; changes view and evidence bytes, not roots. cl l.205-209 | `hash/view.nim` `viewOf` / `verifyView` (field and tuple-position segments); test `[IMPL-DECISION G7]` | open |
-| CM-05 | claude-spec-comments | COMMITMENT §9.4 | M1,M4 | **HIGH-n** | Bytes of semantic paths in views and evidence. cl l.211-214 | `hash/view.nim` `verifyView` (choice step); test `[IMPL-DECISION G8]` | open |
-| CM-06 | claude-spec-comments | COMMITMENT §3.1 l.490-503 | M1 | MED | Changes which schemas are accepted, not the roots of accepted ones. | — | settled by spec text (NF-09) |
-| CM-07 | claude-spec-comments | HASH §4 l.162-165 | M1 | **HIGH-n** | Packing of literal-element lists, and so their value roots. cl l.223-227 | `commitment/normalize.nim` `packKindOf` (G119); test `[IMPL-DECISION G119] [IMPL-DECISION CM-07]` | open |
-| CM-08 | claude-spec-comments | HASH §8, §9 | M1 | LOW | An input of the verifier API. | `hash/view.nim` `ViewSchema`, `verifyView(schema)` (G120); test `[IMPL-DECISION G120]` | open |
-| CM-09 | claude-spec-comments | COMMITMENT §6; HASH §7.2 | M1 | MED | "Remove it" drops a domain tag → new profile id → every pinned root changes. | — | open |
-| CM-10 | claude-spec-comments | cdCDDLe §5.1 l.172 | M1 | LOW | Acceptance. =s | `cddl/syntax.nim` `parseMember`; test `[IMPL-DECISION G10]` | open (NF-10) |
-| CM-11 | claude-spec-comments | cdCDDLe §5 l.125/455 | M1 | LOW | Escape spelling is not kept in canonical form. | `cddl/syntax.nim` `readEscape`; test `[IMPL-DECISION G11]` | open |
-| CM-12 | claude-spec-comments | cdCDDLe §5.1 l.163 | M1 | LOW | Acceptance. | `cddl/syntax.nim` `checkRangeBound`; test `[IMPL-DECISION G12]` | settled by spec text (NF-11) |
-| CM-13 | claude-spec-comments | cdCDDLe §7.4 (doc says "§7.2 / l.332"), §10 | M1 | LOW | Decoder rejection list. =s | `cddl/codec.nim` `decodeType`; test `[IMPL-DECISION G13]` | open |
-| CM-14 | claude-spec-comments | cdCDDLe §8; COMMITMENT §5 | M1 | MED | Changes cdCDDLe document content only; no root or vector impact. | `cddl/canon.nim` `canonicalize(scope)`; test `[IMPL-DECISION G14]` | open |
-| HC-11 | human-spec-comments | INTERFACE §2.1/§2.3; COMMITMENT §9.1 l.1288 | M1,M2,M10 | **HIGH-c** | Only if fixing HC-04 needs an ordering that stays stable when fields are added: struct layout, `_ARM_&lt;i&gt;` values, choice-index hashing. hc l.239-252 | — | open |
-| IF-01 | claude-spec-comments | INTERFACE §4.4/§4.5; TRANSPORT §2.3 | M1,M5 | MED | Which layer rejects floats; the encoder is unchanged. | `cbor/decode.nim`; test `[IMPL-DECISION G38]` | open |
-| IF-02 | claude-spec-comments | INTERFACE §4.5/§5.1 | M1,M2 (+ripple) | **HIGH** | The suggested new reason value edits the common schema → every pinned root changes. cl l.284-290 | — | open |
-| NA-01 | claude-spec-comments-2 | CA §5, §7; INTERFACE §5.1 l.2503-2506; RUNTIME §9.3 | M1, M2, M3, M4 | MED | Additive: P [CR]. Detail allowed under NOT_AUTHORISED (N, changes the detail table) or a consumer-scoped pending event (Y). | — | open |
-| NC-03 | claude-spec-comments-2 | INTERFACE §5.1; CONFIG §5; RUNTIME §9.3 | M1, M2, M4 | MED | Additive: N [CR]. New value in the closed `invalid_params_reason` set, or typed failure arms. | — | open |
-| ND-02 | claude-spec-comments-2 | INTERFACE §5.1 | M1, M2, M3, M4 | LOW | Additive: Y [CR]. Timestamp and duration common types. | — | open |
-| ND-07 | claude-spec-comments-2 | INTERFACE §1.4, §5.1; PM §15; CA; LOADER | M1, M2, M4, M7, M8 | MED | Additive: P [CR]. `logos.domain_error`; PM, CA and LOADER switching to it changes their schemas and generated names. | — | open |
-| NX-02 | claude-spec-comments-2 | TRANSPORT §5.1; INTERFACE §2.6, §5.1 | M1, M2, M5 | LOW | Additive: Y [CR]. Restrict the snapshot-event model to Runtime contracts (editorial). Add `logos.revision`. Optional on-subscription hook. | — | open |
-| G151 | claude-spec-comments-2 (ND-10) | cdCDDLe §5.1 l.164 vs §8 l.530, l.537 | M1 | LOW | §5.1 allows `.size` on any target; the §8 node holds only a primitive. Interim: `x .size n` with `x` a rule name is rejected as unsupported, so no bytes are committed to. | `cddl/syntax.nim` `checkSize`; vector `unsupported-size-named-target` | reported as ND-10 (logos-lips `e7c53b7b`); open |
-| G152 | claude-spec-comments-2 (ND-11) | COMMITMENT §4 l.560-562 vs §8 l.1101 | M1 | **HIGH-n** | A leaf-bodied declaration's own node gets two identities (subtree root, leaf hash at `[]`); decides the schema identity in value nodes typed by it, so value roots. Interim: the subtree root. | `commitment/schema.nim` `nodeIdentity`, `commitment/normalize.nim` `identityOf`; tests `[IMPL-DECISION G152]` | reported as ND-11 (logos-lips `e7c53b7b`); open |
-| PM-06 | claude-spec-comments | PM §4.3; CA §9.1 | M1,M7 | MED | Signature edge cases; no byte change. | `crypto/ed25519.nim` `verify`, `checkPublicKey` (G135); `tests/test_ed25519.nim` (RFC 8032, Wycheproof, edge vectors from `oracle/gen_ed25519_vectors.py`); test `[IMPL-DECISION G42]` | open |
+| NC-05 | claude-spec-comments-2 | HASH §5, §6.1 l.506-509; cdCDDLe §5.1; CA §4, §9, §13 | M1, M2, M4 | HIGH | Additive: P [REV]. `sensitive` marker with salted commitments and zeroization (touches the HASH algorithm and the model). The per-method no-retain option would be LOW. | `commitment/schema.nim` `methodBodyOf`, `commitment/construct.nim` `sensitiveNames`; suite `commitment: sensitivity` | resolved in 6a4dfa28: `_sensitive` declarations, no hash change (CMT-0227..0233); built in `commitment/construct.nim` |
+| ND-01 | claude-spec-comments-2 | INTERFACE §1.7, §5.1; BCP §5.3 | M1, M2, M8 | HIGH | Additive: Y [CR]. `logos.uint256` or `logos.decimal_uint` common type. A native scalar kind would be [REV]. | — | resolved in 6a4dfa28 (declined) |
+| ND-04 | claude-spec-comments-2 | cdCDDLe §5.1, §9; COMMITMENT l.1295-1296 | M1, M2 | HIGH | Additive: Y [REV?]. Bounded arrays `[n*m T]`. The cdCDDLe occurrence node already carries min/max (cdCDDLe l.496-500). | — | resolved in 6a4dfa28 (declined) |
+| ND-05 | claude-spec-comments-2 | cdCDDLe l.171; COMMITMENT; HASH §5 | M1, M2, M10 | HIGH | Additive: Y [REV]. Typed `{*K=&gt;V}` maps: new model kind and a keyed HASH layout. The association-list option only adds a validator rule. | — | resolved in 6a4dfa28 (declined) |
+| ND-06 | claude-spec-comments-2 | INTERFACE l.425, §5.1; HASH §4 | M1, M2 | HIGH | Additive: Y [CR]/[REV]. `bstr .cbor T` and/or `logos.json_text`. | — | resolved in 6a4dfa28: embedded encodings are contract semantics |
+| ND-08 | claude-spec-comments-2 | INTERFACE l.97, l.111-112; COMMITMENT l.352-353 | M1, M2, M8, M10 | HIGH | Additive: Y [REV?]. New import forms between contracts; existing schemas are unchanged. COMMITMENT l.745 names "add import forms" as a revision trigger. | `iface/accept.nim` `supportingOf`, `iface/surface.nim`; tests `[IFC-0021] [IFC-0025] [IFC-0560]`, `[IFC-0930] [IFC-0931]` | changed in 6a4dfa28: interfaces may import leaf supporting schemas (I18 reversed): done |
+| NR-08 | claude-spec-comments-2 | TRANSPORT §2, §5, §7, §8.4.2; INTERFACE §5.1 l.2479-2484 | M1, M2, M5, M11 | HIGH | Additive: N [CR]. New value in the closed error-code set; overload rejection without closing the connection; limits; second QUIC stream. | `transport/limits.nim` `TransportLimits`; suite `trn.limits` | resolved in 6a4dfa28 (declined): existing aggregate bounds; no new error code; per-connection limits documented (I52) |
+| C-01 | claude-spec-comments | COMMITMENT §5 l.697 vs INTERFACE §1.1/§5.3, BCP §6.1 | M1,M2 | LOW | Only changes what the parser accepts; roots unaffected. =s | — | resolved in 6a4dfa28 (COMMITMENT §5); =s |
+| C-02 | claude-spec-comments | COMMITMENT §3.1 vs INTERFACE §2, §3.8 | M1,M2,M10 | LOW | Affects only names we already reject. =s | — | resolved in 6a4dfa28: one segment below the namespace (COMMITMENT §3.1); =s |
+| CM-01 | claude-spec-comments | COMMITMENT §8, §9.2; HASH §7.3 | M1 | **HIGH** | Value roots through alias chains. poc2 does the opposite (outermost). cl l.183-188 | `commitment/normalize.nim` `throughLocal`; tests `[CMT-0224…0226]` (App B.1), `[IMPL-DECISION G1]` | resolved in 6a4dfa28 (COMMITMENT §8, App B.1 vector passes); =s |
+| CM-02 | claude-spec-comments | COMMITMENT §8, §9.3; HASH §5, §7.4 | M1 (values in M3/M5) | **HIGH** | Field 1 under reference-value nodes, for every value with common or Runtime Control types. poc2 does the opposite. cl l.190-197 | `hash/layout.nim` `rootBelowReference`, `hash/view.nim` `verifyView`; tests `hash: App B.4 imported reference context` | resolved in 6a4dfa28 (HASH §8, App B.4 vectors pass); =s |
+| CM-03 | claude-spec-comments | INTERFACE §1.1/§1.7; COMMITMENT §5 | M1,M2 | LOW | Acceptance only. =s | — | resolved in 6a4dfa28 (COMMITMENT §5); =s |
+| CM-04 | claude-spec-comments | COMMITMENT §9.4; HASH §8 | M1,M4 | **HIGH-n** | What a view discloses; changes view and evidence bytes, not roots. cl l.205-209 | `hash/view.nim` `viewOf` / `verifyView` (field and tuple-position segments); test `[IMPL-DECISION G7]` | resolved in 6a4dfa28 (HASH §8); =s |
+| CM-05 | claude-spec-comments | COMMITMENT §9.4 | M1,M4 | **HIGH-n** | Bytes of semantic paths in views and evidence. cl l.211-214 | `hash/view.nim` `verifyView` (choice step); test `[IMPL-DECISION G8]` | resolved in 6a4dfa28 (COMMITMENT §9.4); =s |
+| CM-06 | claude-spec-comments | COMMITMENT §3.1 l.490-503 | M1 | MED | Changes which schemas are accepted, not the roots of accepted ones. | — | resolved in 6a4dfa28 (COMMITMENT §3.1, with examples) |
+| CM-07 | claude-spec-comments | HASH §4 l.162-165 | M1 | **HIGH-n** | Packing of literal-element lists, and so their value roots. cl l.223-227 | `commitment/normalize.nim` `packKindOf` (G119); test `[IMPL-DECISION G119] [IMPL-DECISION CM-07]` | resolved in 6a4dfa28 (HASH §4); =s |
+| CM-08 | claude-spec-comments | HASH §8, §9 | M1 | LOW | An input of the verifier API. | `hash/view.nim` `ViewSchema`, `verifyView(schema)` (G120); test `[IMPL-DECISION G120]` | resolved in 6a4dfa28 (HASH §8); =s |
+| CM-09 | claude-spec-comments | COMMITMENT §6; HASH §7.2 | M1 | MED | "Remove it" drops a domain tag → new profile id → every pinned root changes. | — | resolved in 6a4dfa28 (HASH §7.2: kept, unused); no root moved |
+| CM-10 | claude-spec-comments | cdCDDLe §5.1 l.172 | M1 | LOW | Acceptance. =s | `cddl/syntax.nim` `parseMember`; test `[IMPL-DECISION G10]` | resolved in 6a4dfa28 (cdCDDLe §5.1); =s |
+| CM-11 | claude-spec-comments | cdCDDLe §5 l.125/455 | M1 | LOW | Escape spelling is not kept in canonical form. | `cddl/syntax.nim` `readEscape`, `bracedScalar`, `isC1`; tests `[CDE-0203]…[CDE-0209]`, `[IMPL-DECISION G157]` | changed in 6a4dfa28: RFC 9682 §2 strings; done (G11); line breaks in byte strings are G157 |
+| CM-12 | claude-spec-comments | cdCDDLe §5.1 l.163 | M1 | LOW | Acceptance. | `cddl/syntax.nim` `checkRangeBound`; test `[IMPL-DECISION G12]` | resolved in 6a4dfa28 (cdCDDLe §5.1); =s |
+| CM-13 | claude-spec-comments | cdCDDLe §7.4 (doc says "§7.2 / l.332"), §10 | M1 | LOW | Decoder rejection list. =s | `cddl/codec.nim` `decodeType`; test `[IMPL-DECISION G13]` | resolved in 6a4dfa28 (cdCDDLe §10); =s |
+| CM-14 | claude-spec-comments | cdCDDLe §8; COMMITMENT §5 | M1 | MED | Changes cdCDDLe document content only; no root or vector impact. | `cddl/canon.nim` `canonicalize(scope)`; test `[IMPL-DECISION G14]` | resolved in 6a4dfa28 (COMMITMENT §5); =s |
+| HC-11 | human-spec-comments | INTERFACE §2.1/§2.3; COMMITMENT §9.1 l.1288 | M1,M2,M10 | **HIGH-c** | Only if fixing HC-04 needs an ordering that stays stable when fields are added: struct layout, `_ARM_&lt;i&gt;` values, choice-index hashing. hc l.239-252 | — | awaiting owner follow-up |
+| IF-01 | claude-spec-comments | INTERFACE §4.4/§4.5; TRANSPORT §2.3 | M1,M5 | MED | Which layer rejects floats; the encoder is unchanged. | `cbor/decode.nim` (`allowFloats`, I48), `transport/envelope.nim` `decodeValue`, `checkPayload` (I58); tests `[IFC-0919]`, `[IFC-0920]`, `[TRN-0203]` | changed in 6a4dfa28: floats rejected at any depth: decoder (I48) and transport close done |
+| IF-02 | claude-spec-comments | INTERFACE §4.5/§5.1 | M1,M2 (+ripple) | **HIGH** | The suggested new reason value edits the common schema → every pinned root changes. cl l.284-290 | `cbor/decode.nim` `maxDepth`/`maxTagDepth` (I48); `iface/payload.nim` `ContractValidator.maxDepth` (I61); `transport/limits.nim` (I52, I59); commitment pipeline counts containers (I51); tests `[IFC-0923] [IFC-0926] [IFC-0928] [IFC-0929]`, `[IFC-0925] [IFC-0927]`, `[TRN-0269]`..`[TRN-0271]` | resolved in 6a4dfa28 (INTERFACE §4.5.1): arrays and maps only, ≥ 128, configurable: done in every layer; one shared setting comes with Runtime configuration (Tier 4) |
+| NA-01 | claude-spec-comments-2 | CA §5, §7; INTERFACE §5.1 l.2503-2506; RUNTIME §9.3 | M1, M2, M3, M4 | MED | Additive: P [CR]. Detail allowed under NOT_AUTHORISED (N, changes the detail table) or a consumer-scoped pending event (Y). | — | resolved in 6a4dfa28 (declined) |
+| NC-03 | claude-spec-comments-2 | INTERFACE §5.1; CONFIG §5; RUNTIME §9.3 | M1, M2, M4 | MED | Additive: N [CR]. New value in the closed `invalid_params_reason` set, or typed failure arms. | `iface/outcome.nim` `toFailure`; common roots in `spec/pins.toml`; test `[IFC-0441]` | changed in 6a4dfa28: new reason `configuration-schema-mismatch`, common roots recomputed: done; produced only once CONFIG exists (Tier 4) |
+| ND-02 | claude-spec-comments-2 | INTERFACE §5.1 | M1, M2, M3, M4 | LOW | Additive: Y [CR]. Timestamp and duration common types. | — | resolved in 6a4dfa28 (declined) |
+| ND-07 | claude-spec-comments-2 | INTERFACE §1.4, §5.1; PM §15; CA; LOADER | M1, M2, M4, M7, M8 | MED | Additive: P [CR]. `logos.domain_error`; PM, CA and LOADER switching to it changes their schemas and generated names. | — | resolved in 6a4dfa28 (declined) |
+| NX-02 | claude-spec-comments-2 | TRANSPORT §5.1; INTERFACE §2.6, §5.1 | M1, M2, M5 | LOW | Additive: Y [CR]. Restrict the snapshot-event model to Runtime contracts (editorial). Add `logos.revision`. Optional on-subscription hook. | — | resolved in 6a4dfa28: no snapshot protocol; contracts define reconciliation |
+| G151 | claude-spec-comments-2 (ND-10) | cdCDDLe §5.1 l.164 vs §8 l.530, l.537 | M1 | LOW | §5.1 allows `.size` on any target; the §8 node holds only a primitive. Interim: `x .size n` with `x` a rule name is rejected as unsupported, so no bytes are committed to. | `cddl/syntax.nim` `checkSize`; vector `unsupported-size-named-target` | awaiting owner follow-up (ND-10) |
+| G152 | claude-spec-comments-2 (ND-11) | COMMITMENT §4 l.560-562 vs §8 l.1101 | M1 | **HIGH-n** | A leaf-bodied declaration's own node gets two identities (subtree root, leaf hash at `[]`); decides the schema identity in value nodes typed by it, so value roots. Interim: the subtree root. | `commitment/schema.nim` `nodeIdentity`, `commitment/normalize.nim` `identityOf`; tests `[IMPL-DECISION G152]` | settled by spec text (COMMITMENT §4 l.569-571); =s |
+| PM-06 | claude-spec-comments | PM §4.3; CA §9.1 | M1,M7 | MED | Signature edge cases; no byte change. | `crypto/ed25519.nim` (interim until R4); PKG §4.3 deferred | changed in 6a4dfa28: SLH-DSA-SHA2-192s replaces Ed25519; blocked on R4 (implementation choice) |
 
 ## Tier 2 — schema surface and C types
 
 | ID | Report | Spec §§ | Milestones | Risk | Likely fix, interim choice | Code / test | Status |
 |---|---|---|---|---|---|---|---|
-| NL-01 | claude-spec-comments-2 | RUNTIME §3.4, §10.2; INTERFACE §2.6, §2.8; LOADER §9; PM §4; BCP §5.4 | M2, M3, M4, M5, M7, M9 | HIGH | Additive: P. Declared stop budget [MR] plus a deadline handed to the module: either a `prepare_stop` hook (Y) or a `_destroy` parameter (N, changes the ABI). | — | open |
-| NL-02 | claude-spec-comments-2 | RUNTIME §3.4 l.592-600, §10.2 l.3253-3261, §3.7 | M2, M3, M4 | HIGH | Additive: N. Rewrites the stop sequence: consumer routes stay open during a pre-stop phase, and admission closes per instance in reverse order. | — | open |
-| NL-03 | claude-spec-comments-2 | INTERFACE §2.6; RUNTIME §3.4, §10.2 | M2, M3 | HIGH | Additive: P. `_destroy` returns `logos_result_t` (N) or a `report_cleanup` call is appended to the vtable (Y). | — | open |
-| NR-11 | claude-spec-comments-2 | INTERFACE §2.8, §5.2; RUNTIME §4.1 | M2, M3, M5 | HIGH | Additive: Y. Async call appended to the route vtable, or several handles sharing one session (the handle-to-session model goes N:1). | — | open |
-| AP-9 | claude-spec-comments | INTERFACE §1.1/§1.8 | M2 | LOW | Answered. | — | open |
-| C-04 | claude-spec-comments | INTERFACE §2.3 vs §2 intro | M2 | LOW | Both suggested fixes accept "always emit the tag". =s | G64: `iface/cmap.nim` `choiceDef` always emits `kind`; test `[IFC-0148]` (tagged map union) | open |
-| C-05 | claude-spec-comments | INTERFACE A.4/A.5 vs RUNTIME §4.1 | M2,M3 | LOW | Helper names that are never exported. =s | — | open |
-| C-06 | claude-spec-comments | RUNTIME §1.3 vs TRANSPORT §8.2 | M2,M5 | LOW | Socket path layout. =s | — | settled by spec text except the 4096-byte path vs sun_path residue (NF-03) |
-| C-11 | claude-spec-comments | INTERFACE A.3; SECURITY l.230/441 | M2,M9 | LOW | Editorial. | — | open |
-| HC-02 | human-spec-comments | LOADER §1/§3/§6; RUNTIME §5.2/5.3/7.5; TRANSPORT §1.3/§5 | M2,M5,M8 | **HIGH** | Subscribe `{0,id,event}` (l.193) gains a filter; one host per instance is broken. hc l.57-76 | — | open |
-| HC-03 | human-spec-comments | INTERFACE §2.4/§2.6; CA §2/§3.1; PM §15 | M2,M3,M4,M7,M8 | **HIGH** | Consumer passed into the unversioned `_dispatch` and typed signatures. hc l.80-98 | — | open |
-| HC-04 | human-spec-comments | INTERFACE §1.2/1.4; TRANSPORT §3.1/§8.3/§10; CA §3.1; PM §4 | M2,M4,M5,M7 | **HIGH** | Exact-root identity, Hello equality, bare-name rule. hc l.102-122 | — | partly settled; `_dispatch` ABI risk (NF-23) |
-| HC-05 | human-spec-comments | INTERFACE §2.8/§5.2; TRANSPORT §5.3 | M2,M3 | MED | An async op can be appended to the vtable. | — | open |
-| HC-06 | human-spec-comments | INTERFACE §5.1/§5.2; TRANSPORT §6 | M2,M3,M5 | MED | Cancel can be appended; HIGH if `call` gains a timeout parameter. | — | open |
-| HC-07 | human-spec-comments | INTERFACE §2.6/§2.8/A.3; BCP §6.1 | M2,M8 | **HIGH** | The mandatory export set would change. hc l.166-182 | — | open |
-| HC-10 | human-spec-comments | INTERFACE §5.2 l.2626, A.4; RUNTIME §7.3 | M2,M3,M8 | **HIGH** | `logos_publish_fn` return type and the publish helpers. hc l.221-237 | — | open |
-| IF-03 | claude-spec-comments | INTERFACE §2.3; RUNTIME l.1814; CA l.1001 | M2,M3,M4 | **HIGH** | C names and struct shape for tuple arms and list items. cl l.293-298 | G62: `iface/cmap.nim` synthetic `_list_t`/`_tuple_t`/`_bstr_t` aggregates; test `G62` | open |
-| IF-04 | claude-spec-comments | INTERFACE §1.5 vs §2.5 | M2 | **HIGH-n** | C form of choice-of-maps events. cl l.300-303 | G63: `iface/cmap.nim` `choiceDef` (event tag); test `G63` | open |
-| IF-05 | claude-spec-comments | INTERFACE §2.3, §3.5 | M2,M10 | LOW | Header text, not ABI. | — | open |
-| IF-06 | claude-spec-comments | INTERFACE §3.4 | M2,M10 | **HIGH-n** | Position of the `has_` flag is struct layout. =s. cl l.311-314 | G66: `iface/cmap.nim` `fieldMembers`; test `G66` | open |
-| IF-07 | claude-spec-comments | INTERFACE §2.7 | M2 | MED | Allocation unit and free order. | — | open |
-| IF-08 | claude-spec-comments | INTERFACE §2.7, A.5 | M2 | MED | Name of a non-exported free helper. | — | open |
-| IF-09 | claude-spec-comments | INTERFACE §1.3/§2.1; RUNTIME §1.3 | M2 | LOW | Name reservation; HIGH only if the symbol-derivation scheme changes. =s | — | open |
-| IF-10 | claude-spec-comments | INTERFACE §5.2; RUNTIME §4.2 | M2,M6 | LOW | Editorial. | — | open |
-| IF-11 | claude-spec-comments | INTERFACE §2.1 | M2 | LOW | Header order, not ABI. | G72 (revised), G155: `iface/cmap.nim` `emit`, `ordered`; tests `G72`, `[IFC-0384]` | open |
-| NA-06 | claude-spec-comments-2 | CA §3.5, §10, §12; INTERFACE §2.6 | M2, M4 | MED | Additive: P. Scoped CA check method for providers (Y), or the allowed scope delivered with each dispatch (N, changes `_dispatch`). Depends on HC-03. | — | open |
-| NC-01 | claude-spec-comments-2 | CONFIG §3, §4, §7; INTERFACE §2.6 | M2, M4, M7 | MED | Additive: Y. Optional migration hook; MAY→MUST on retaining configuration. | — | open |
-| ND-03 | claude-spec-comments-2 | TRANSPORT §2.1, §3.1; INTERFACE §4.6 | M2, M3, M5 | MED | Additive: N. Sender-side size check with a named reason (maybe [CR]); Hello maximum would be [W]. | — | open |
-| ND-09 | claude-spec-comments-2 | INTERFACE §1.2, §5.3; cdCDDLe §7 | M2 | LOW | Additive: Y. Doc-comment convention; comments are still stripped before hashing. | — | open |
-| NE-03 | claude-spec-comments-2 | INTERFACE §5.2; RUNTIME §4.4, §7.5, §9.3; CA §3 | M2, M3, M4 | MED | Additive: P. An ended-callback on subscribe is N if the `subscribe` signature changes and Y if it is appended. Default own-route observation plus a `consumers` scope selector is Y. | — | open |
-| NE-04 | claude-spec-comments-2 | INTERFACE §2.6; RUNTIME §9.3 | M2, M3 | LOW | Additive: Y. Provider session-end notification; `consumer` on `route_state_changed_event`. | — | open |
-| NI-01 | claude-spec-comments-2 | INTERFACE §5.2; RUNTIME §9.3 | M2, M3 | LOW | Additive: Y. Append the ids to `logos_module_init_input_t` (l.2769), or add `describe_self`. | — | open |
-| NL-05 | claude-spec-comments-2 | RUNTIME §3.4, §13; INTERFACE §2.6; SECURITY §11.5 | M2, M3, M12 | MED | Additive: Y. Suspend/resume host operations plus an optional hook; no new state proposed. The engine needs a quiesce-without-destroy path. | — | open |
-| NL-09 | claude-spec-comments-2 | INTERFACE (new profile); TRANSPORT §3.2, §5.1 | M2, M8 | LOW | Additive: Y. Long-running-operation conventions. | — | open |
-| NR-12 | claude-spec-comments-2 | INTERFACE §2.6; TRANSPORT §6 | M2, M5 | MED | Additive: P. Statement or optional `_cancel` (Y). Its token needs a `_dispatch` change (N) or an appended getter (Y). | — | open |
-| NX-04 | claude-spec-comments-2 | INTERFACE §2, §2.1, §3.9.5 | M2, M10 | MED | Additive: N (narrowing). Acceptance rule that rejects derived C names equal to `logos_types.h` names, or reserved namespaces. No accepted schema's generated name changes. It becomes HIGH only if the owner re-prefixes the common types instead. | `iface/cmap.nim` `cDeclarations` rejects identifiers `logos_types.h` declares, at acceptance (I23); test `[IFC-0475] NX-04 interim` | open |
-| PM-11 | claude-spec-comments | PM §10/§12; LOADER §3/§5; INTERFACE §2.6 | M2,M4,M7,M8 | MED | OPEN; the init input can grow compatibly. | — | open |
-| SO-07 | claude-spec-comments | INTERFACE §1.3 | M2,M7,M8 | MED | Renaming `lcn.` changes our own roots and C symbols. | — | open |
-| G153 | claude-spec-comments-2 (ND-12) | INTERFACE §2, §2.1, §5.3 | M2 | LOW | A cycle of local aliases (`a = b`, `b = a`) resolves and has a root but no value and no C form. Interim: rejected at acceptance; cycles through a structure are recursion and stay. Narrowing only. | `iface/accept.nim` `checkAliasCycles`; test `[IMPL-DECISION G153]` | reported as ND-12 (logos-lips `2f6cbcb0`); open |
-| G154 | claude-spec-comments-2 (ND-13) | INTERFACE §2.1, §2.3 | M2 | LOW | §2.3 forward-declares only targets of recursive by-value edges, so `{ kids: [* demo.node] }` inside `demo.node` does not compile. Interim: a list target on a cycle of by-value and list edges also gets a forward typedef. Header text only. | `iface/cmap.nim` `resolveGraph`; test `G154` | reported as ND-13 (logos-lips `2f6cbcb0`); open |
-| G155 | claude-spec-comments-2 (ND-14) | INTERFACE §2.1 l.676-679 vs §3.9.3 | M2 | LOW | CONTRA: least-name topological order gives `left, node, branch, right`; the required §3.9.3 header has `left, node, right, branch`. Interim: dependency depth, then qualified name, which reproduces §3.9.3. Header order only. | `iface/cmap.nim` `ordered`; test `[IFC-0384]` | reported as ND-14 (logos-lips `2f6cbcb0`); open |
+| NL-01 | claude-spec-comments-2 | RUNTIME §3.4, §10.2; INTERFACE §2.6, §2.8; LOADER §9; PM §4; BCP §5.4 | M2, M3, M4, M5, M7, M9 | HIGH | Additive: P. Declared stop budget [MR] plus a deadline handed to the module: either a `prepare_stop` hook (Y) or a `_destroy` parameter (N, changes the ABI). | — | resolved in 6a4dfa28 |
+| NL-02 | claude-spec-comments-2 | RUNTIME §3.4 l.592-600, §10.2 l.3253-3261, §3.7 | M2, M3, M4 | HIGH | Additive: N. Rewrites the stop sequence: consumer routes stay open during a pre-stop phase, and admission closes per instance in reverse order. | — | resolved in 6a4dfa28 (declined) |
+| NL-03 | claude-spec-comments-2 | INTERFACE §2.6; RUNTIME §3.4, §10.2 | M2, M3 | HIGH | Additive: P. `_destroy` returns `logos_result_t` (N) or a `report_cleanup` call is appended to the vtable (Y). | — | resolved in 6a4dfa28 (declined) |
+| NR-11 | claude-spec-comments-2 | INTERFACE §2.8, §5.2; RUNTIME §4.1 | M2, M3, M5 | HIGH | Additive: Y. Async call appended to the route vtable, or several handles sharing one session (the handle-to-session model goes N:1). | — | changed in 6a4dfa28: async calls with independently owned prepared handles (INTERFACE ABI v2); Tier 4 |
+| AP-9 | claude-spec-comments | INTERFACE §1.1/§1.8 | M2 | LOW | Answered. | — | resolved in 6a4dfa28 |
+| C-04 | claude-spec-comments | INTERFACE §2.3 vs §2 intro | M2 | LOW | Both suggested fixes accept "always emit the tag". =s | G64: `iface/cmap.nim` `choiceDef` always emits `kind`; test `[IFC-0148]` (tagged map union) | resolved in 6a4dfa28: tagged-map arms keep the literal tag; =s |
+| C-05 | claude-spec-comments | INTERFACE A.4/A.5 vs RUNTIME §4.1 | M2,M3 | LOW | Helper names that are never exported. =s | — | resolved in 6a4dfa28 |
+| C-06 | claude-spec-comments | RUNTIME §1.3 vs TRANSPORT §8.2 | M2,M5 | LOW | Socket path layout. =s | — | resolved in 6a4dfa28 |
+| C-11 | claude-spec-comments | INTERFACE A.3; SECURITY l.230/441 | M2,M9 | LOW | Editorial. | — | resolved in 6a4dfa28 (no change) |
+| HC-02 | human-spec-comments | LOADER §1/§3/§6; RUNTIME §5.2/5.3/7.5; TRANSPORT §1.3/§5 | M2,M5,M8 | **HIGH** | Subscribe `{0,id,event}` (l.193) gains a filter; one host per instance is broken. hc l.57-76 | — | awaiting owner follow-up |
+| HC-03 | human-spec-comments | INTERFACE §2.4/§2.6; CA §2/§3.1; PM §15 | M2,M3,M4,M7,M8 | **HIGH** | Consumer passed into the unversioned `_dispatch` and typed signatures. hc l.80-98 | — | awaiting owner follow-up |
+| HC-04 | human-spec-comments | INTERFACE §1.2/1.4; TRANSPORT §3.1/§8.3/§10; CA §3.1; PM §4 | M2,M4,M5,M7 | **HIGH** | Exact-root identity, Hello equality, bare-name rule. hc l.102-122 | — | awaiting owner follow-up |
+| HC-05 | human-spec-comments | INTERFACE §2.8/§5.2; TRANSPORT §5.3 | M2,M3 | MED | An async op can be appended to the vtable. | — | awaiting owner follow-up |
+| HC-06 | human-spec-comments | INTERFACE §5.1/§5.2; TRANSPORT §6 | M2,M3,M5 | MED | Cancel can be appended; HIGH if `call` gains a timeout parameter. | — | awaiting owner follow-up |
+| HC-07 | human-spec-comments | INTERFACE §2.6/§2.8/A.3; BCP §6.1 | M2,M8 | **HIGH** | The mandatory export set would change. hc l.166-182 | — | awaiting owner follow-up |
+| HC-10 | human-spec-comments | INTERFACE §5.2 l.2626, A.4; RUNTIME §7.3 | M2,M3,M8 | **HIGH** | `logos_publish_fn` return type and the publish helpers. hc l.221-237 | — | awaiting owner follow-up |
+| IF-03 | claude-spec-comments | INTERFACE §2.3; RUNTIME l.1814; CA l.1001 | M2,M3,M4 | **HIGH** | C names and struct shape for tuple arms and list items. cl l.293-298 | `iface/cmap.nim`: the `_LIST`, `_TUPLE` and `_BSTR` families and the `_LI`, `_TU<i>`, `_AR_<Label>`, `_AR<i>` steps; tests `[IFC-0632] [IFC-0914] [IFC-0915] [IFC-0916]` | changed in 6a4dfa28: shape =s, names per C mapping revision 3 (G62 retired): done |
+| IF-04 | claude-spec-comments | INTERFACE §1.5 vs §2.5 | M2 | **HIGH-n** | C form of choice-of-maps events. cl l.300-303 | `iface/cmap.nim` `choiceDef`; test `[IFC-0866] [IFC-0867]` | changed in 6a4dfa28: ordinary tagged union, `_event` stem kept (G63 retired): done |
+| IF-05 | claude-spec-comments | INTERFACE §2.3, §3.5 | M2,M10 | LOW | Header text, not ABI. | — | resolved in 6a4dfa28 |
+| IF-06 | claude-spec-comments | INTERFACE §3.4 | M2,M10 | **HIGH-n** | Position of the `has_` flag is struct layout. =s. cl l.311-314 | `iface/cmap.nim`; test `[IFC-0631]` | resolved in 6a4dfa28; =s (G66) |
+| IF-07 | claude-spec-comments | INTERFACE §2.7 | M2 | MED | Allocation unit and free order. | — | resolved in 6a4dfa28 |
+| IF-08 | claude-spec-comments | INTERFACE §2.7, A.5 | M2 | MED | Name of a non-exported free helper. | — | resolved in 6a4dfa28 |
+| IF-09 | claude-spec-comments | INTERFACE §1.3/§2.1; RUNTIME §1.3 | M2 | LOW | Name reservation; HIGH only if the symbol-derivation scheme changes. =s | `iface/names.nim` (the G69 checks removed) | resolved in 6a4dfa28: no extra reservation; G69 retired: done |
+| IF-10 | claude-spec-comments | INTERFACE §5.2; RUNTIME §4.2 | M2,M6 | LOW | Editorial. | — | resolved in 6a4dfa28 |
+| IF-11 | claude-spec-comments | INTERFACE §2.1 | M2 | LOW | Header order, not ABI. | `iface/cmap.nim` `emit`, `ordered`; test `[IFC-0882]` (§3.9.3 byte for byte) | resolved in 6a4dfa28: placement is not canonical; ours is I60 |
+| NA-06 | claude-spec-comments-2 | CA §3.5, §10, §12; INTERFACE §2.6 | M2, M4 | MED | Additive: P. Scoped CA check method for providers (Y), or the allowed scope delivered with each dispatch (N, changes `_dispatch`). Depends on HC-03. | — | resolved in 6a4dfa28: restricted integration, no `_dispatch` change |
+| NC-01 | claude-spec-comments-2 | CONFIG §3, §4, §7; INTERFACE §2.6 | M2, M4, M7 | MED | Additive: Y. Optional migration hook; MAY→MUST on retaining configuration. | — | resolved in 6a4dfa28 (declined) |
+| ND-03 | claude-spec-comments-2 | TRANSPORT §2.1, §3.1; INTERFACE §4.6 | M2, M3, M5 | MED | Additive: N. Sender-side size check with a named reason (maybe [CR]); Hello maximum would be [W]. | `transport/framing.nim` `fits`, `frame`; `transport/session.nim`; suite `trn.size` | resolved in 6a4dfa28: sender-side size checks, MODULE_ERROR, no Hello maximum: done (I53) |
+| ND-09 | claude-spec-comments-2 | INTERFACE §1.2, §5.3; cdCDDLe §7 | M2 | LOW | Additive: Y. Doc-comment convention; comments are still stripped before hashing. | — | resolved in 6a4dfa28 (declined) |
+| NE-03 | claude-spec-comments-2 | INTERFACE §5.2; RUNTIME §4.4, §7.5, §9.3; CA §3 | M2, M3, M4 | MED | Additive: P. An ended-callback on subscribe is N if the `subscribe` signature changes and Y if it is appended. Default own-route observation plus a `consumers` scope selector is Y. | — | changed in 6a4dfa28: required `observe_end` on the route binding; Tier 4 |
+| NE-04 | claude-spec-comments-2 | INTERFACE §2.6; RUNTIME §9.3 | M2, M3 | LOW | Additive: Y. Provider session-end notification; `consumer` on `route_state_changed_event`. | — | resolved in 6a4dfa28 (declined) |
+| NI-01 | claude-spec-comments-2 | INTERFACE §5.2; RUNTIME §9.3 | M2, M3 | LOW | Additive: Y. Append the ids to `logos_module_init_input_t` (l.2769), or add `describe_self`. | — | resolved in 6a4dfa28: `get_self` in Runtime Control; no ABI change |
+| NL-05 | claude-spec-comments-2 | RUNTIME §3.4, §13; INTERFACE §2.6; SECURITY §11.5 | M2, M3, M12 | MED | Additive: Y. Suspend/resume host operations plus an optional hook; no new state proposed. The engine needs a quiesce-without-destroy path. | — | resolved in 6a4dfa28 (declined) |
+| NL-09 | claude-spec-comments-2 | INTERFACE (new profile); TRANSPORT §3.2, §5.1 | M2, M8 | LOW | Additive: Y. Long-running-operation conventions. | — | resolved in 6a4dfa28 |
+| NR-12 | claude-spec-comments-2 | INTERFACE §2.6; TRANSPORT §6 | M2, M5 | MED | Additive: P. Statement or optional `_cancel` (Y). Its token needs a `_dispatch` change (N) or an appended getter (Y). | — | changed in 6a4dfa28: sticky cancellation in the invocation context, optional `request_cancel`; Tier 4 |
+| NX-04 | claude-spec-comments-2 | INTERFACE §2, §2.1, §3.9.5 | M2, M10 | MED | Additive: N (narrowing). Acceptance rule that rejects derived C names equal to `logos_types.h` names, or reserved namespaces. No accepted schema's generated name changes. It becomes HIGH only if the owner re-prefixes the common types instead. | `iface/cmap.nim` `cDeclarations` at acceptance (I23); test `[IFC-0123]` | resolved in 6a4dfa28: capitalized stems avoid the collision; the I23 interim is gone: done |
+| PM-11 | claude-spec-comments | PM §10/§12; LOADER §3/§5; INTERFACE §2.6 | M2,M4,M7,M8 | MED | OPEN; the init input can grow compatibly. | — | resolved in 6a4dfa28: documented deployment convention (G93) |
+| SO-07 | claude-spec-comments | INTERFACE §1.3 | M2,M7,M8 | MED | Renaming `lcn.` changes our own roots and C symbols. | — | resolved in 6a4dfa28 |
+| G153 | claude-spec-comments-2 (ND-12) | INTERFACE §2, §2.1, §5.3 | M2 | LOW | A cycle of local aliases (`a = b`, `b = a`) resolves and has a root but no value and no C form. Interim: rejected at acceptance; cycles through a structure are recursion and stay. Narrowing only. | `iface/accept.nim` `checkAliasCycles`; test `[IMPL-DECISION G153]` | awaiting owner follow-up (ND-12) |
+| G154 | claude-spec-comments-2 (ND-13) | INTERFACE §2.1, §2.3 | M2 | LOW | §2.3 forward-declares only targets of recursive by-value edges, so `{ kids: [* demo.node] }` inside `demo.node` does not compile. Interim: a list target on a cycle of by-value and list edges also gets a forward typedef. Header text only. | `iface/cmap.nim` `ordered`, `resolveGraph`; test `[IFC-0633]` | settled by spec text in 6a4dfa28 (INTERFACE §2.3 l.1077) |
+| G155 | claude-spec-comments-2 (ND-14) | INTERFACE §2.1 l.676-679 vs §3.9.3 | M2 | LOW | CONTRA: least-name topological order gives `left, node, branch, right`; the required §3.9.3 header has `left, node, right, branch`. Interim: dependency depth, then qualified name, which reproduces §3.9.3. Header order only. | `iface/cmap.nim` `ordered`; test `[IFC-0882]` | moot in 6a4dfa28: placement is not canonical (IF-11) |
 
 ## Tier 3 — sans-I/O transport codecs, PM artifacts
 
 | ID | Report | Spec §§ | Milestones | Risk | Likely fix, interim choice | Code / test | Status |
 |---|---|---|---|---|---|---|---|
-| NE-05 | claude-spec-comments-2 | TRANSPORT §5.2, §1.3; INTERFACE §2.8, §5.2; BCP §5.4 | M5 | HIGH | Additive: N [W]. Per-subscription buffering, a lag marker or closing one subscription, a coalesce hint on Subscribe. This replaces "close the connection" and needs new fields in closed envelope maps. | — | open |
-| NP-02 | claude-spec-comments-2 | PM §4, §7.1 l.837/846, §10; LOADER §3 | M5, M7, M12 | HIGH | Additive: Y [MR]. Executable artifact kind (0755, symlinks) plus a new realization strategy where the signed executable acts as the Module Host. | — | open |
-| NR-14 | claude-spec-comments-2 | TRANSPORT §8.2 l.951-967; SECURITY §11 | M5, M9 | HIGH | Additive: N. Security fix: a per-route socketpair or nonce instead of a socket path changes the endpoint model. Only MED if the owner picks uid+pid checks instead. | — | open |
-| AP-7 (G108) | claude-spec-comments | LOADER l.330 | M5 | LOW | Answered. | — | open |
-| C-07 | claude-spec-comments | PM §4 l.341/363 vs §8 | M7 | MED | Validation rule, error value, check precedence. =s | `package/manifest.nim` `checkManifest` (shared schema/default artifacts allowed, one implementation artifact per module), `package/lgx.nim` `openLgx` (G29 check order); tests `[PKG-0053] [PKG-0054]`, `[PKG-0267]` | error value settled (NF-04); rest open |
-| C-08 | claude-spec-comments | LOADER §6, §10 l.612 | M4,M5 | MED | Meaning of an error value; a new value would change the Loader root. =s | — | contradiction settled (NF-05); one code row open |
-| C-10 | claude-spec-comments | RUNTIME Abs vs LOADER §5, §5.4 | M4,M5 | LOW | An in-process Loader fits both suggested fixes. =s | — | open |
-| EC-05 | claude-spec-comments | RUNTIME §4.1; INTERFACE §5.2 | M3,M5 | MED | Error code. | — | open |
-| EC-06 | claude-spec-comments | RUNTIME §3.4 | M3,M5 | MED | Error code. | — | open |
-| HC-01 | human-spec-comments | INTERFACE §1.2/1.3; RUNTIME §9.3; PM §4.1; CA §3.1/3.3 | M4,M6,M7 | MED | Fields for publisher selection. | — | open |
-| NC-04 | claude-spec-comments-2 | RUNTIME §8, §9.3; PM §4 | M3, M4, M7 | LOW | Additive: Y [MR]. Persistent-state declaration. | — | open |
-| NC-06 | claude-spec-comments-2 | TRANSPORT §8.2; SECURITY §11 | M5, M12 | LOW | Additive: Y. Likely a "files travel as bytes" statement. | — | open |
-| NE-01 | claude-spec-comments-2 | TRANSPORT §5.2-5.3; INTERFACE §1.5, §5.2; RUNTIME §7.3 | M5, M8 | LOW | Additive: Y. State the notify-then-fetch rule; optional targeted publish. | — | open |
-| NE-02 | claude-spec-comments-2 | TRANSPORT §5.3, §6, §7; RUNTIME §6.4, §7.2; INTERFACE §2.8 | M3, M5 | MED | Additive: N. Events caused by a call are delivered after its Response, so publishing inside direct-mode dispatch must be deferred. HIGH [W] if a correlation field is added to Event instead. | — | open |
-| NI-04 | claude-spec-comments-2 | RUNTIME §9.3; PM §15 | M3, M4, M7 | MED | Additive: P. New `destroy_module` (Y). `remove_package` fails with `package-in-use` (N for PM). | — | open |
-| NI-06 | claude-spec-comments-2 | PM §5, §6, §12; CA §3.3 | M3, M4, M7 | LOW | Additive: Y. Add `signer` to PM records and the handoff; optional signer constraint in scopes. | — | open |
-| NL-04 | claude-spec-comments-2 | RUNTIME §6.2, §10.1; LOADER §6, §9, §11 | M4, M5 | MED | Additive: N. Source of the startup timeout, overrun behaviour, recovery carve-out. | — | open |
-| NL-07 | claude-spec-comments-2 | RUNTIME §9.3; LOADER §10; CONFIG §8 | M3, M4, M5, M6 | MED | Additive: P. `? failure` field (Y). A facade `unknown` state extends the closed `state` enum (N). | — | open |
-| NL-08 | claude-spec-comments-2 | LOADER §7; RUNTIME §10.1 | M4, M5 | LOW | Additive: Y. Optional liveness probe. | — | open |
-| NO-03 | claude-spec-comments-2 | RUNTIME §9.3; PM §4 | M3, M4, M7 | LOW | Additive: Y [MR]. Usage method; footprint field. | — | open |
-| NP-01 | claude-spec-comments-2 | PM §4, §6; RUNTIME §9.3 | M3, M7 | LOW | Additive: Y [MR]. Optional signed metadata; operator label. | — | open |
-| NP-03 | claude-spec-comments-2 | PM §4, §9; LOADER §3; BCP §5.3 | M3, M4, M7, M12 | MED | Additive: P [MR]. `module-binary` no longer mandatory (code that assumes a binary must handle its absence). | — | open |
-| NP-04 | claude-spec-comments-2 | PM §4, §12; RUNTIME §13.3 | M4, M7, M12 | MED | Additive: P [MR]. `runtime_handoff.artifact` becomes optional. | — | open |
-| NP-05 | claude-spec-comments-2 | PM §4, §10 | M7 | LOW | Additive: Y [MR]. Licence metadata. | — | open |
-| NP-06 | claude-spec-comments-2 | PM §4, §7.1 | M7 | LOW | Additive: Y [MR]. `requires_runtime`. | — | open |
-| NP-07 | claude-spec-comments-2 | PM §7.1; BCP §5.4 | M7, M9 | LOW | Additive: Y. Define the installation root. | — | open |
-| NP-08 | claude-spec-comments-2 | PM §15; RUNTIME §9.3 | M3, M7 | LOW | Additive: Y. PM events; record-created event. | — | open |
-| NP-09 | claude-spec-comments-2 | PM; CA §3.5; SECURITY | M7, M9, M12 | LOW | Additive: Y [MR]. Platform-integration artifact. | — | open |
-| NP-10 | claude-spec-comments-2 | PM §4.1; CA §8 | M4, M7 | MED | Additive: N. Anti-rollback for trust input; withdrawn-signer default. | — | open |
-| NP-11 | claude-spec-comments-2 | PM §7.1, §10 | M7 | MED | Additive: Y [MR]. LGX `common/` directory. | — | open |
-| NP-12 | claude-spec-comments-2 | PM §4.5, §5, §6 | M7, M11 | MED | Additive: P. Several manifests per identity, or a split distribution form. | — | open |
-| NR-06 | claude-spec-comments-2 | TRANSPORT §8.1 | M5, M6 | LOW | Additive: Y. Clarify that renewal rebinds live sessions. | — | open |
-| NR-13 | claude-spec-comments-2 | TRANSPORT §3.1, §8.2; RUNTIME App B.1 | M5, M6 | LOW | Additive: P. Define a local control profile or delete the unused variant. | — | open |
-| NS-01 | claude-spec-comments-2 | SECURITY §11; LOADER §1, §3 | M5, M9, M12 | LOW | Additive: Y. Statement plus placement profile. | — | open |
-| NS-02 | claude-spec-comments-2 | RUNTIME §4.2.1, §10.1; LOADER §7 | M5 | MED | Additive: N. Module Host stops and exits when it loses its Runtime connection. | — | open |
-| PM-01 | claude-spec-comments | PM §4.5/§5/§6/§13 | M7,M8 | **HIGH** | OPEN; locator encoding and fetch contract are undefined. cl l.546-553 | — | open |
-| PM-02 | claude-spec-comments | PM §5/§7/§13 | M7,M9 | MED | Additive source kind. | — | open |
-| PM-03 | claude-spec-comments | PM §15 | M7 | MED | Follows HC-03. | — | open |
-| PM-04 | claude-spec-comments | PM §4, §7.1 | M7 | MED | Pax touches only the reader; shrinking the path limit changes manifest roots. | `package/lgx.nim` `splitPath`; test `[IMPL-DECISION G40]` | open |
-| PM-05 | claude-spec-comments | PM §7.1 | M7 | MED | Archive acceptance. | `package/lgx.nim` `gunzip`, `writeLgx`, `checkStructure`; tests `[IMPL-DECISION G41]` | open |
-| PM-07 | claude-spec-comments | PM §11/§15 | M7 | MED | Tie-break. | — | open |
-| PM-08 | claude-spec-comments | PM §11 | M7 | MED | Error. | — | open |
-| PM-09 | claude-spec-comments | PM §3, §7.1 | M7 | LOW | Diagnostic file. | `package/lgx.nim` `openLgx` (path-checked, never read); test `[IMPL-DECISION G45]` | open |
-| PM-10 | claude-spec-comments | PM §10 l.1082 (doc says §7.1), §4 l.316 | M7,M9,M12 | MED | Platform strings; turning them into an enum would change manifest roots. | `package/lgx.nim` `compatible`, `checkPlatformPaths`, `hostPlatform`; tests `[IMPL-DECISION G73]` | open |
-| PM-15 | claude-spec-comments | PM Scope/§11 | M7 | MED | Manifest field → manifest roots change. | — | open |
-| RT-04 | claude-spec-comments | RUNTIME §9.3; PM §5/§11; CA §3.3 | M3,M4,M7 | MED | Possible new `create_module` field. | — | open |
-| RT-05 | claude-spec-comments | LOADER §7; RUNTIME §10 | M4,M5 | MED | Adopt-or-terminate rule. | — | open |
-| RT-06 | claude-spec-comments | RUNTIME §9.3 | M3,M4,M7 | MED | New Runtime Control op (additive). | — | open |
-| SO-01 | claude-spec-comments | PM §4.2/§4.4/§6/§11/§13/§15 | M7,M9,M13 | **HIGH** | Our catalog document would be replaced. cl l.657-670 | — | open |
-| SO-02 | claude-spec-comments | PM §4.5/§6/§13 | M7,M8 | **HIGH** | `lcn.storage_fetch` would become a spec contract. cl l.672-679 | — | open |
-| SO-05 | claude-spec-comments | CA §3.5; PM §4 | M4,M7,M8 | MED | Permission names. | — | open |
-| SO-09 | claude-spec-comments | RUNTIME §12; TRANSPORT §2.1 | M8 (M5) | MED | The spec calls streaming "future". | — | open, narrowed (NF-20) |
-| TR-01 | claude-spec-comments | TRANSPORT §1.2/§1.4/§2.3/§3.3 | M5 | MED | Receiver rule. | `transport/session.nim` `receive` (both sides), `transport/hello.nim`; tests `[IMPL-DECISION G30]` | open |
-| TR-02 | claude-spec-comments | §1.4, §5.1, §6 | M5 | MED | Receiver rule. | `transport/session.nim` `receive`; tests `[IMPL-DECISION G31]` | open |
-| TR-03 | claude-spec-comments | §5.1 | M5 | MED | Error code. | `transport/session.nim` `subscribe`, `unsubscribe`; test `[IMPL-DECISION G32]` | open |
-| TR-04 | claude-spec-comments | §3.1 | M5 | MED | Error code. | `transport/hello.nim` `acceptHelloResponse`; test `[TRN-0076] [TRN-0070]` (its `[IMPL-DECISION G33]` case) | open |
-| TR-05 | claude-spec-comments | §3.1/§3.2/§8.1.1; INTERFACE §4.6 | M5,M6 | MED | When the Hello happens. | `transport/hello.nim` `acceptHelloResponse` (the callee's ProtocolError code is the outcome); test `[TRN-0076] [TRN-0070]` (its `[IMPL-DECISION G34]` case). When the Hello runs is tier 4 | open |
-| TR-06 | claude-spec-comments | §8.1; CA §8 | M4,M5 | MED | HIGH only if a new message kind is added. | — | open |
-| TR-07 | claude-spec-comments | §4.1 | M5 | MED | Close vs error response. | `transport/boundary.nim` `acceptResponse`, `acceptEvent`; test `[IMPL-DECISION G36]` | open |
-| TR-08 | claude-spec-comments | §4.1 | M5 | MED | Check precedence. | `transport/boundary.nim` `acceptRequest`; test `[IMPL-DECISION G37]` | open |
-| TR-09 | claude-spec-comments | §8.2, §9.1 | M5,M12 | MED | Windows mechanism. | — | open |
-| G156 | claude-spec-comments-2 (NP-15) | PM §8 l.1000 vs §4 l.326 and §8 l.974 | M7 | LOW | An artifact without its `hash` is named `artifact-integrity-failed` by §8 l.1000, but the §4 CDDL requires the field, so the manifest fails validation, which l.974 makes `invalid-package`. Error code only; no bytes change. Interim: `invalid-package` (the schema check runs first, G29). | `package/manifest.nim` `decodeManifest`; test `[IMPL-DECISION G156]`; unit PKG-0275 deferred | reported as NP-15 (logos-lips `05b137a4`); open |
+| NE-05 | claude-spec-comments-2 | TRANSPORT §5.2, §1.3; INTERFACE §2.8, §5.2; BCP §5.4 | M5 | HIGH | Additive: N [W]. Per-subscription buffering, a lag marker or closing one subscription, a coalesce hint on Subscribe. This replaces "close the connection" and needs new fields in closed envelope maps. | — | resolved in 6a4dfa28 (declined): bounded admission, backpressure or close; no envelope field |
+| NP-02 | claude-spec-comments-2 | PM §4, §7.1 l.837/846, §10; LOADER §3 | M5, M7, M12 | HIGH | Additive: Y [MR]. Executable artifact kind (0755, symlinks) plus a new realization strategy where the signed executable acts as the Module Host. | — | resolved in 6a4dfa28 (declined) |
+| NR-14 | claude-spec-comments-2 | TRANSPORT §8.2 l.951-967; SECURITY §11 | M5, M9 | HIGH | Additive: N. Security fix: a per-route socketpair or nonce instead of a socket path changes the endpoint model. Only MED if the owner picks uid+pid checks instead. | — | resolved in 6a4dfa28: same-identity protection needs distinct OS identities or failing the placement; our G58 claim is ours to decide |
+| AP-7 (G108) | claude-spec-comments | LOADER l.330 | M5 | LOW | Answered. | — | resolved in 6a4dfa28 |
+| C-07 | claude-spec-comments | PM §4 l.341/363 vs §8 | M7 | MED | Validation rule, error value, check precedence. =s | `package/manifest.nim` `checkManifest` (shared schema/default artifacts allowed, one implementation artifact per module), `package/lgx.nim` `openLgx` (G29 check order); tests `[PKG-0053] [PKG-0054]`, `[PKG-0267]` | resolved in 6a4dfa28 (PM §4, §8 l.1070); =s |
+| C-08 | claude-spec-comments | LOADER §6, §10 l.612 | M4,M5 | MED | Meaning of an error value; a new value would change the Loader root. =s | — | resolved in 6a4dfa28 (no change) |
+| C-10 | claude-spec-comments | RUNTIME Abs vs LOADER §5, §5.4 | M4,M5 | LOW | An in-process Loader fits both suggested fixes. =s | — | resolved in 6a4dfa28: separate-process compositions provide implementation-defined handoffs |
+| EC-05 | claude-spec-comments | RUNTIME §4.1; INTERFACE §5.2 | M3,M5 | MED | Error code. | — | resolved in 6a4dfa28: NOT_AUTHORISED vs NOT_READY by enforcement cause |
+| EC-06 | claude-spec-comments | RUNTIME §3.4 | M3,M5 | MED | Error code. | — | resolved in 6a4dfa28: NOT_READY while stopping |
+| HC-01 | human-spec-comments | INTERFACE §1.2/1.3; RUNTIME §9.3; PM §4.1; CA §3.1/3.3 | M4,M6,M7 | MED | Fields for publisher selection. | — | awaiting owner follow-up |
+| NC-04 | claude-spec-comments-2 | RUNTIME §8, §9.3; PM §4 | M3, M4, M7 | LOW | Additive: Y [MR]. Persistent-state declaration. | — | resolved in 6a4dfa28 (declined) for PM; state carriers are a Runtime/profile matter |
+| NC-06 | claude-spec-comments-2 | TRANSPORT §8.2; SECURITY §11 | M5, M12 | LOW | Additive: Y. Likely a "files travel as bytes" statement. | — | resolved in 6a4dfa28: files through an ordinary broker contract |
+| NE-01 | claude-spec-comments-2 | TRANSPORT §5.2-5.3; INTERFACE §1.5, §5.2; RUNTIME §7.3 | M5, M8 | LOW | Additive: Y. State the notify-then-fetch rule; optional targeted publish. | — | resolved in 6a4dfa28 (adapted): one-shot deferred result, invocation-scoped events; Tier 4 |
+| NE-02 | claude-spec-comments-2 | TRANSPORT §5.3, §6, §7; RUNTIME §6.4, §7.2; INTERFACE §2.8 | M3, M5 | MED | Additive: N. Events caused by a call are delivered after its Response, so publishing inside direct-mode dispatch must be deferred. HIGH [W] if a correlation field is added to Event instead. | — | resolved in 6a4dfa28 (declined): no Response-before-Event barrier; never reorder |
+| NI-04 | claude-spec-comments-2 | RUNTIME §9.3; PM §15 | M3, M4, M7 | MED | Additive: P. New `destroy_module` (Y). `remove_package` fails with `package-in-use` (N for PM). | — | resolved in 6a4dfa28: `retire_module`; package removal retires nothing |
+| NI-06 | claude-spec-comments-2 | PM §5, §6, §12; CA §3.3 | M3, M4, M7 | LOW | Additive: Y. Add `signer` to PM records and the handoff; optional signer constraint in scopes. | — | resolved in 6a4dfa28 (adopted): the verified signer is kept with records and handoffs; `VerifiedPackage.signer` changes with R4 |
+| NL-04 | claude-spec-comments-2 | RUNTIME §6.2, §10.1; LOADER §6, §9, §11 | M4, M5 | MED | Additive: N. Source of the startup timeout, overrun behaviour, recovery carve-out. | — | resolved in 6a4dfa28: startup expiry prevents readiness; owner supplies deadlines |
+| NL-07 | claude-spec-comments-2 | RUNTIME §9.3; LOADER §10; CONFIG §8 | M3, M4, M5, M6 | MED | Additive: P. `? failure` field (Y). A facade `unknown` state extends the closed `state` enum (N). | — | resolved in 6a4dfa28: machine-readable classifications over open failure codes |
+| NL-08 | claude-spec-comments-2 | LOADER §7; RUNTIME §10.1 | M4, M5 | LOW | Additive: Y. Optional liveness probe. | — | resolved in 6a4dfa28 (declined) |
+| NO-03 | claude-spec-comments-2 | RUNTIME §9.3; PM §4 | M3, M4, M7 | LOW | Additive: Y [MR]. Usage method; footprint field. | — | resolved in 6a4dfa28 (declined) |
+| NP-01 | claude-spec-comments-2 | PM §4, §6; RUNTIME §9.3 | M3, M7 | LOW | Additive: Y [MR]. Optional signed metadata; operator label. | — | resolved in 6a4dfa28 (declined) |
+| NP-03 | claude-spec-comments-2 | PM §4, §9; LOADER §3; BCP §5.3 | M3, M4, M7, M12 | MED | Additive: P [MR]. `module-binary` no longer mandatory (code that assumes a binary must handle its absence). | — | resolved in 6a4dfa28 (declined) |
+| NP-04 | claude-spec-comments-2 | PM §4, §12; RUNTIME §13.3 | M4, M7, M12 | MED | Additive: P [MR]. `runtime_handoff.artifact` becomes optional. | — | resolved in 6a4dfa28 (declined) |
+| NP-05 | claude-spec-comments-2 | PM §4, §10 | M7 | LOW | Additive: Y [MR]. Licence metadata. | — | resolved in 6a4dfa28 (declined) |
+| NP-06 | claude-spec-comments-2 | PM §4, §7.1 | M7 | LOW | Additive: Y [MR]. `requires_runtime`. | — | resolved in 6a4dfa28 (declined): deployment-documented values; G73 is such a profile |
+| NP-07 | claude-spec-comments-2 | PM §7.1; BCP §5.4 | M7, M9 | LOW | Additive: Y. Define the installation root. | — | resolved in 6a4dfa28: installation root and inventory scope are documented deployment choices |
+| NP-08 | claude-spec-comments-2 | PM §15; RUNTIME §9.3 | M3, M7 | LOW | Additive: Y. PM events; record-created event. | — | resolved in 6a4dfa28 (adopted): `watch_installed_packages`, `progress_key`; Tier 5 |
+| NP-09 | claude-spec-comments-2 | PM; CA §3.5; SECURITY | M7, M9, M12 | LOW | Additive: Y [MR]. Platform-integration artifact. | — | resolved in 6a4dfa28 (declined) |
+| NP-10 | claude-spec-comments-2 | PM §4.1; CA §8 | M4, M7 | MED | Additive: N. Anti-rollback for trust input; withdrawn-signer default. | — | resolved in 6a4dfa28 (adopted): monotonic trust revision and high-water mark; G137 continuity design open |
+| NP-11 | claude-spec-comments-2 | PM §7.1, §10 | M7 | MED | Additive: Y [MR]. LGX `common/` directory. | — | open (not answered) |
+| NP-12 | claude-spec-comments-2 | PM §4.5, §5, §6 | M7, M11 | MED | Additive: P. Several manifests per identity, or a split distribution form. | — | open (not answered) |
+| NR-06 | claude-spec-comments-2 | TRANSPORT §8.1 | M5, M6 | LOW | Additive: Y. Clarify that renewal rebinds live sessions. | — | resolved in 6a4dfa28: renewal never rebinds a live session |
+| NR-13 | claude-spec-comments-2 | TRANSPORT §3.1, §8.2; RUNTIME App B.1 | M5, M6 | LOW | Additive: P. Define a local control profile or delete the unused variant. | — | resolved in 6a4dfa28: no general local Runtime Control profile |
+| NS-01 | claude-spec-comments-2 | SECURITY §11; LOADER §1, §3 | M5, M9, M12 | LOW | Additive: Y. Statement plus placement profile. | — | resolved in 6a4dfa28: profiles name the consent principal and bypass controls |
+| NS-02 | claude-spec-comments-2 | RUNTIME §4.2.1, §10.1; LOADER §7 | M5 | MED | Additive: N. Module Host stops and exits when it loses its Runtime connection. | — | resolved in 6a4dfa28: loss of owner control ends hosted admission |
+| PM-01 | claude-spec-comments | PM §4.5/§5/§6/§13 | M7,M8 | **HIGH** | OPEN; locator encoding and fetch contract are undefined. cl l.546-553 | — | resolved in 6a4dfa28: implementation-defined, documented locators (G5 closes) |
+| PM-02 | claude-spec-comments | PM §5/§7/§13 | M7,M9 | MED | Additive source kind. | — | resolved in 6a4dfa28; =s |
+| PM-03 | claude-spec-comments | PM §15 | M7 | MED | Follows HC-03. | — | changed in 6a4dfa28: observation policy, not method permission (G39); Tier 5 |
+| PM-04 | claude-spec-comments | PM §4, §7.1 | M7 | MED | Pax touches only the reader; shrinking the path limit changes manifest roots. | `package/lgx.nim` `splitPath`; test `[IMPL-DECISION G40]` | resolved in 6a4dfa28 (PM §7.1 l.920-924); =s |
+| PM-05 | claude-spec-comments | PM §7.1 | M7 | MED | Archive acceptance. | `package/lgx.nim` `gunzip`, `readTar`, `writeLgx`, `checkStructure`; tests `[IMPL-DECISION G41]`, `[PKG-0492]` | resolved in 6a4dfa28 (PM §7.1); =s, plus whole-block padding: done (I49) |
+| PM-07 | claude-spec-comments | PM §11/§15 | M7 | MED | Tie-break. | — | resolved in 6a4dfa28 (PM §11); =s |
+| PM-08 | claude-spec-comments | PM §11 | M7 | MED | Error. | — | resolved in 6a4dfa28 (PM §11); =s |
+| PM-09 | claude-spec-comments | PM §3, §7.1 | M7 | LOW | Diagnostic file. | `package/lgx.nim` `checkStructure`; test `[PKG-0477]` (a root `manifest.json`) | changed in 6a4dfa28: `manifest.json` removed; a root one is `invalid-package`; done (I49) |
+| PM-10 | claude-spec-comments | PM §10 l.1082 (doc says §7.1), §4 l.316 | M7,M9,M12 | MED | Platform strings; turning them into an enum would change manifest roots. | `package/lgx.nim` `compatible`, `checkInstallPaths`, `hostPathRules`, `hostPlatform`; tests `[PKG-0486]`, `[PKG-0495]` | changed in 6a4dfa28: deployment-defined values, undefined values never match, install-namespace collisions; done (I49) |
+| PM-15 | claude-spec-comments | PM Scope/§11 | M7 | MED | Manifest field → manifest roots change. | — | resolved in 6a4dfa28 (PM §11); =s |
+| RT-04 | claude-spec-comments | RUNTIME §9.3; PM §5/§11; CA §3.3 | M3,M4,M7 | MED | Possible new `create_module` field. | — | changed in 6a4dfa28: exact pinned package selection (G55); Tier 4 |
+| RT-05 | claude-spec-comments | LOADER §7; RUNTIME §10 | M4,M5 | MED | Adopt-or-terminate rule. | — | resolved in 6a4dfa28: Loader loss keeps custody; replacement waits for confirmed end |
+| RT-06 | claude-spec-comments | RUNTIME §9.3 | M3,M4,M7 | MED | New Runtime Control op (additive). | — | resolved in 6a4dfa28: explicit replacement instance and state migration |
+| SO-01 | claude-spec-comments | PM §4.2/§4.4/§6/§11/§13/§15 | M7,M9,M13 | **HIGH** | Our catalog document would be replaced. cl l.657-670 | — | resolved in 6a4dfa28: implementation-defined and documented (G90, G150, G74 stand) |
+| SO-02 | claude-spec-comments | PM §4.5/§6/§13 | M7,M8 | **HIGH** | `lcn.storage_fetch` would become a spec contract. cl l.672-679 | — | resolved in 6a4dfa28: no common fetch interface (`lcn.storage_fetch` stands) |
+| SO-05 | claude-spec-comments | CA §3.5; PM §4 | M4,M7,M8 | MED | Permission names. | — | resolved in 6a4dfa28 (declined): deployments document permissions (G110) |
+| SO-09 | claude-spec-comments | RUNTIME §12; TRANSPORT §2.1 | M8 (M5) | MED | The spec calls streaming "future". | — | resolved in 6a4dfa28: no streaming protocol; sender size checks only |
+| TR-01 | claude-spec-comments | TRANSPORT §1.2/§1.4/§2.3/§3.3 | M5 | MED | Receiver rule. | `transport/session.nim` `receive` (both sides), `transport/hello.nim` `acceptHello`; tests `[TRN-0272]`..`[TRN-0275]` (suites `trn.direction`, `trn.hello`) | resolved in 6a4dfa28 (TRANSPORT §2.3); =s, plus a first ProtocolError closes without a reply (G30): done |
+| TR-02 | claude-spec-comments | §1.4, §5.1, §6 | M5 | MED | Receiver rule. | `transport/session.nim` `abandon`, `abandonSubscription`, `onResponse`; tests `[TRN-0280]`..`[TRN-0289]` (suite `trn.correlation`) | changed in 6a4dfa28 (TRANSPORT §3.4): the first late reply to an abandoned call is validated, then discarded (G31): done |
+| TR-03 | claude-spec-comments | §5.1 | M5 | MED | Error code. | `transport/session.nim` `onSubscribe`, `onUnsubscribe`, `subscribe`, `unsubscribe`; tests `[TRN-0302]`..`[TRN-0306]` (suite `trn.subscribe`) | changed in 6a4dfa28 (TRANSPORT §5.1): overlapping operations close; failed and ended ids count as used (G32): done |
+| TR-04 | claude-spec-comments | §3.1 | M5 | MED | Error code. | `transport/hello.nim` `acceptHelloResponse`; test `[TRN-0277] [TRN-0070]` | resolved in 6a4dfa28 (TRANSPORT §3.1); =s |
+| TR-05 | claude-spec-comments | §3.1/§3.2/§8.1.1; INTERFACE §4.6 | M5,M6 | MED | When the Hello happens. | `transport/hello.nim` `acceptHelloResponse` (the callee's ProtocolError code is the outcome); suite `trn.hello`. When the Hello runs is tier 4 | resolved in 6a4dfa28 (RUNTIME §4.1); =s |
+| TR-06 | claude-spec-comments | §8.1; CA §8 | M4,M5 | MED | HIGH only if a new message kind is added. | `transport/session.nim` `beginTermination`, `finishTermination`; tests `[TRN-0321]`..`[TRN-0324]` (suite `trn.termination`) | resolved in 6a4dfa28 (TRANSPORT §8.1); =s (G35); termination mode done (I57) |
+| TR-07 | claude-spec-comments | §4.1 | M5 | MED | Close vs error response. | `transport/boundary.nim` `acceptResponse`, `acceptEvent`; test `[TRN-0097] [TRN-0300]` | resolved in 6a4dfa28 (TRANSPORT §4.1); =s |
+| TR-08 | claude-spec-comments | §4.1 | M5 | MED | Check precedence. | `transport/boundary.nim` `acceptRequest`; tests `[TRN-0292]`..`[TRN-0298]` | resolved in 6a4dfa28 (TRANSPORT §4.1 l.655-673): the code's order conforms; G37 restated |
+| TR-09 | claude-spec-comments | §8.2, §9.1 | M5,M12 | MED | Windows mechanism. | — | resolved in 6a4dfa28: conditional Windows applicability with stated requirements (G107 spike) |
+| G156 | claude-spec-comments-2 (NP-15) | PM §8 l.1000 vs §4 l.326 and §8 l.974 | M7 | LOW | An artifact without its `hash` is named `artifact-integrity-failed` by §8 l.1000, but the §4 CDDL requires the field, so the manifest fails validation, which l.974 makes `invalid-package`. Error code only; no bytes change. Interim: `invalid-package` (the schema check runs first, G29). | `package/manifest.nim` `decodeManifest`; test `[IMPL-DECISION G156]`; unit PKG-0275 deferred | awaiting owner follow-up (NP-15); PM §8 l.1070 makes the interim conformant |
 
 ## Tier 4 — runtime, Loader, CONFIG, CA
 
 | ID | Report | Spec §§ | Milestones | Risk | Likely fix, interim choice | Code / test | Status |
 |---|---|---|---|---|---|---|---|
-| NX-03 | claude-spec-comments-2 | CA §3, §3.1, §5, §8, §9, §9.1; RUNTIME §4.1, §4.3, §9; TRANSPORT §8.1 | M3, M4 | HIGH | Additive: P. Core rule: whether each call is an authorization decision point. Either per-call evaluation is added on the call path, or the CA `call` action is dropped. Call audit and evidence records change either way. | — | open |
-| AP-1 (G54) | claude-spec-comments | RUNTIME l.164 | M3 | LOW | Answered. | — | open |
-| AP-2 (G57) | claude-spec-comments | RUNTIME l.3060 | M4 | LOW | Answered. | — | open |
-| AP-4 (G60) | claude-spec-comments | RUNTIME §13.3/13.4 | M3 | LOW | Answered. | — | open |
-| AP-5 (G50) | claude-spec-comments | CA l.1049 | M4 | LOW | Answered. | — | open |
-| AP-8 | claude-spec-comments | RUNTIME §4.2 | M3,M8 | LOW | Answered. | — | open |
-| C-09 | claude-spec-comments | CA §2 vs RUNTIME §9 | M4,M6 | MED | Policy rule. =s | — | mostly settled (NF-06); "resolve" open |
-| CA-01 | claude-spec-comments | CA §3.3, §8 | M4 | MED | Rule. | — | open |
-| CA-02 | claude-spec-comments | CA §2 | M4 | MED | Possible new field on `evaluate`. | — | open |
-| CA-03 | claude-spec-comments | CA §3.1 | M4 | MED | OPEN; removing it changes a CA schema; tied to HC-02. | — | open |
-| CA-04 | claude-spec-comments | CA §9.1 | M4 | MED | Array order is bytes, but CA l.110-115 already points to our choice. | — | open |
-| CA-05 | claude-spec-comments | CA §6, §9 | M4 | MED | Ordering and cursors. | — | settled: drop the snapshot cursor (NF-14) |
-| CA-06 | claude-spec-comments | CA §9 | M3,M4 | MED | Which `decision_id`. | — | open |
-| CA-07 | claude-spec-comments | CA §9.1 | M4 | MED | Additive method. | — | open |
-| EC-01 | claude-spec-comments | RUNTIME §9.3 | M3 | MED | Error code. | — | open |
-| EC-02 | claude-spec-comments | RUNTIME §9.1/§9.3; CONFIG §3 | M3,M4 | MED | Error code. | — | open |
-| EC-03 | claude-spec-comments | RUNTIME §9.3 | M3 | MED | Error code. | — | open |
-| EC-04 | claude-spec-comments | CONFIG §8; RUNTIME §9.3 | M4 | MED | Error code; a failure arm would change the Runtime Control root. | — | open |
-| EC-07 | claude-spec-comments | RUNTIME Sys. Svc Availability | M3,M4 | MED | Error code. | — | open |
-| EC-08 | claude-spec-comments | INTERFACE §5.2 | M3,M6 | MED | Error code. | — | open |
-| EC-10 | claude-spec-comments | RUNTIME §9.3 | M3,M4,M6 | MED | Free text becomes an enum → Runtime Control root changes. | — | open |
-| EC-11 | claude-spec-comments | RUNTIME §13.3/§13.4 | M3 | MED | Error code. (For all EC items: allocating *new* codes instead would cause the common-schema ripple.) | — | settled: LOADER `abi-invalid` (NF-13) |
-| HC-08 | human-spec-comments | INTERFACE Invariance; RUNTIME §12; CONFIG §1/§6 | M3,M8 | MED | Affects our methods that take host paths (G99). | — | open |
-| HC-09 | human-spec-comments | CA §9; RUNTIME | M3,M4 | MED | Additive. | — | open |
-| HC-12 | human-spec-comments | RUNTIME §9.2/§9.3 | M3 | MED | Field (changes the Runtime Control root). | — | open |
-| HC-13 | human-spec-comments | CA §5/§8; RUNTIME §4.3/§9 | M4 | MED | Pending-decision state. | — | open |
-| NA-02 | claude-spec-comments-2 | CA §8, §9; RUNTIME §2.4 | M4 | LOW | Additive: Y. Pending-approval event; approver role. | — | open |
-| NA-03 | claude-spec-comments-2 | RUNTIME §9.3 | M3 | LOW | Additive: Y. Always set `expires_at`. | — | open |
-| NA-04 | claude-spec-comments-2 | RUNTIME §9.3 | M3, M4 | MED | Additive: N. `request_key` retains only successful results. | — | open |
-| NA-05 | claude-spec-comments-2 | CA §6, §9 | M4 | LOW | Additive: Y. `issuer`, `decision_id` on grants. | — | open |
-| NA-07 | claude-spec-comments-2 | CA §8; RUNTIME §4.4, §9.3 | M3, M4 | MED | Additive: N. Eager re-evaluation of live routes on policy change. | — | open |
-| NA-08 | claude-spec-comments-2 | CA §3, §5, §9 | M4 | LOW | Additive: Y. Unique `decision_id` (random 128-bit ids satisfy it now). | — | open |
-| NA-09 | claude-spec-comments-2 | RUNTIME §7.5; CA §5, §6; BCP §2 | M3, M4 | MED | Additive: Y. Optional `on_behalf_of`; the specs defer delegation by design. | — | open |
-| NA-10 | claude-spec-comments-2 | CA §9, §9.1 | M4 | LOW | Additive: Y. Redacted scope form. | — | open |
-| NA-11 | claude-spec-comments-2 | RUNTIME §9, §10.1; CA §1, §8 | M4 | MED | Additive: N. Bootstrap versus CA precedence rule. | — | open |
-| NC-02 | claude-spec-comments-2 | CONFIG §4; RUNTIME §9.3 | M4 | MED | Additive: P. Package-default acceptance MAY→MUST; reset action; refusal code. | — | open |
-| NE-06 | claude-spec-comments-2 | RUNTIME §3.4, §9.3, §10.2 | M3 | MED | Additive: N. One ordering rule within `stopping`. | — | open |
-| NI-02 | claude-spec-comments-2 | RUNTIME §9.3, §2.4, §10.1; CA §3.1 | M3, M4, M6 | MED | Additive: N. Provider id bound to the instance for its whole life, so it must be persisted. | — | open |
-| NI-03 | claude-spec-comments-2 | RUNTIME Term., §9.3; CONFIG §3; CA §6 | M3, M4 | MED | Additive: N. Persist both ids in every profile; define what happens to records that name a lost identity. | — | open |
-| NI-05 | claude-spec-comments-2 | RUNTIME §9.3 | M3 | MED | Additive: N. `instance` becomes mandatory on events and the stop response; ambiguity error code. | — | open |
-| NI-07 | claude-spec-comments-2 | CA §6; RUNTIME §9.3 | M3, M4 | MED | Additive: P. New `orphaned` grant status (the closed enum grows) or a stable-selector target. | — | open |
-| NL-06 | claude-spec-comments-2 | RUNTIME §3.4, §9.3 | M3, M4 | MED | Additive: N. `error` persists until an explicit start, recover or stop; align `start_module`. | — | open |
-| NL-10 | claude-spec-comments-2 | RUNTIME §10.1, §9.3 | M3, M4 | LOW | Additive: Y. MUST resume retained intent (matches the plan's decision D24); `restart_module`. | — | open |
-| NL-11 | claude-spec-comments-2 | CONFIG §8; RUNTIME §9.1 | M4 | MED | Additive: N. Mandatory deadline for `apply_configuration`. | — | open |
-| NO-01 | claude-spec-comments-2 | RUNTIME §9.3 | M3, M6 | LOW | Additive: Y. Cursors on list methods. | — | open |
-| NO-02 | claude-spec-comments-2 | RUNTIME §9.3 | M3, M6 | MED | Additive: P. New fields and events (Y); `instance` mandatory (N). | — | open |
-| NO-04 | claude-spec-comments-2 | RUNTIME §9.3 | M3 | LOW | Additive: Y. `describe_runtime`. | — | open |
-| NO-05 | claude-spec-comments-2 | RUNTIME §9.3 l.2243 | M3, M4 | MED | Additive: N. Initial permission-settings state. | — | open |
-| NO-06 | claude-spec-comments-2 | RUNTIME §9.3, §10.1 | M4 | MED | Additive: N. Effect of widening a running instance's permissions. | — | open |
-| NO-07 | claude-spec-comments-2 | CA §3.3; RUNTIME §9.3 | M3, M4 | MED | Additive: N. Table mapping lifecycle methods to CA actions; `load`/`unload` may be dropped. | — | open |
-| NR-04 | claude-spec-comments-2 | RUNTIME §9.3; INTERFACE §5.2 | M3, M6 | MED | Additive: P. Drop `continuations` from the module-facing response (N) or define a follow-up call (Y). | — | open |
-| NX-01 | claude-spec-comments-2 | CA §8, §10; RUNTIME §7.3, §9.3; INTERFACE §2.5 | M3, M4 | MED | Additive: P. Likely: `grant_changed` carries only a revision and subscribers fetch the grant (N for the CA contract). Alternatives: the Runtime filters by target (Y), or a provider admission hook plus targeted publish (Y, new ABI). | — | open |
-| NX-06 | claude-spec-comments-2 | RUNTIME §9.3 | M3 | LOW | Additive: Y. Content rule for `reason`; Runtime MAY withhold module text. | — | open |
-| RT-02 | claude-spec-comments | RUNTIME §9, §10.2 | M3,M4 | MED | Authority basis for engine calls. =s | — | open |
-| RT-03 | claude-spec-comments | RUNTIME §1.3 | M4 | LOW | A name. | — | open |
-| SO-03 | claude-spec-comments | RUNTIME §3.6/§3.7/§8/§9.3/§10.1/§13.3; PM; CONFIG §4; CA §9.1 | M4,M6,M9 | MED | Config file format. | — | open |
-| SO-04 | claude-spec-comments | RUNTIME §9; CA §1/§6 | M4 | MED | Policy format. | — | open |
-| SO-06 | claude-spec-comments | BCP §2; SECURITY §13/§14; CA §10 | M4,M6 | MED | HIGH if the CA gains a human principal. | — | open |
+| NX-03 | claude-spec-comments-2 | CA §3, §3.1, §5, §8, §9, §9.1; RUNTIME §4.1, §4.3, §9; TRANSPORT §8.1 | M3, M4 | HIGH | Additive: P. Core rule: whether each call is an authorization decision point. Either per-call evaluation is added on the call path, or the CA `call` action is dropped. Call audit and evidence records change either way. | — | changed in 6a4dfa28: every call is an authorization point; cached decisions allowed (G52) |
+| AP-1 (G54) | claude-spec-comments | RUNTIME l.164 | M3 | LOW | Answered. | — | resolved in 6a4dfa28 |
+| AP-2 (G57) | claude-spec-comments | RUNTIME l.3060 | M4 | LOW | Answered. | — | resolved in 6a4dfa28 |
+| AP-4 (G60) | claude-spec-comments | RUNTIME §13.3/13.4 | M3 | LOW | Answered. | — | resolved in 6a4dfa28 |
+| AP-5 (G50) | claude-spec-comments | CA l.1049 | M4 | LOW | Answered. | — | changed in 6a4dfa28: empty sides omitted |
+| AP-8 | claude-spec-comments | RUNTIME §4.2 | M3,M8 | LOW | Answered. | — | resolved in 6a4dfa28 |
+| C-09 | claude-spec-comments | CA §2 vs RUNTIME §9 | M4,M6 | MED | Policy rule. =s | — | resolved in 6a4dfa28: remote or historical addresses |
+| CA-01 | claude-spec-comments | CA §3.3, §8 | M4 | MED | Rule. | — | resolved in 6a4dfa28; =s (G46) |
+| CA-02 | claude-spec-comments | CA §2 | M4 | MED | Possible new field on `evaluate`. | — | changed in 6a4dfa28: protected attribute integration (G47) |
+| CA-03 | claude-spec-comments | CA §3.1 | M4 | MED | OPEN; removing it changes a CA schema; tied to HC-02. | — | changed in 6a4dfa28: `publish-event` enforced at publish and delivery (G49) |
+| CA-04 | claude-spec-comments | CA §9.1 | M4 | MED | Array order is bytes, but CA l.110-115 already points to our choice. | — | resolved in 6a4dfa28; =s |
+| CA-05 | claude-spec-comments | CA §6, §9 | M4 | MED | Ordering and cursors. | — | changed in 6a4dfa28: live `list_grants` continuation, timestamp-ordered audit (G51) |
+| CA-06 | claude-spec-comments | CA §9 | M3,M4 | MED | Which `decision_id`. | — | changed in 6a4dfa28: the actual call decision (G52) |
+| CA-07 | claude-spec-comments | CA §9.1 | M4 | MED | Additive method. | — | resolved in 6a4dfa28; =s (G115) |
+| EC-01 | claude-spec-comments | RUNTIME §9.3 | M3 | MED | Error code. | — | resolved in 6a4dfa28: precondition table |
+| EC-02 | claude-spec-comments | RUNTIME §9.1/§9.3; CONFIG §3 | M3,M4 | MED | Error code. | — | resolved in 6a4dfa28: precondition table |
+| EC-03 | claude-spec-comments | RUNTIME §9.3 | M3 | MED | Error code. | — | resolved in 6a4dfa28: precondition table |
+| EC-04 | claude-spec-comments | CONFIG §8; RUNTIME §9.3 | M4 | MED | Error code; a failure arm would change the Runtime Control root. | — | resolved in 6a4dfa28: CONFIG table with VERSION_MISMATCH and TRANSPORT_ERROR (G21) |
+| EC-07 | claude-spec-comments | RUNTIME Sys. Svc Availability | M3,M4 | MED | Error code. | — | resolved in 6a4dfa28: precondition table |
+| EC-08 | claude-spec-comments | INTERFACE §5.2 | M3,M6 | MED | Error code. | — | resolved in 6a4dfa28; =s (G25) |
+| EC-10 | claude-spec-comments | RUNTIME §9.3 | M3,M4,M6 | MED | Free text becomes an enum → Runtime Control root changes. | — | changed in 6a4dfa28: open failure codes with defined lists (G27) |
+| EC-11 | claude-spec-comments | RUNTIME §13.3/§13.4 | M3 | MED | Error code. (For all EC items: allocating *new* codes instead would cause the common-schema ripple.) | — | resolved in 6a4dfa28 |
+| HC-08 | human-spec-comments | INTERFACE Invariance; RUNTIME §12; CONFIG §1/§6 | M3,M8 | MED | Affects our methods that take host paths (G99). | — | awaiting owner follow-up |
+| HC-09 | human-spec-comments | CA §9; RUNTIME | M3,M4 | MED | Additive. | — | awaiting owner follow-up |
+| HC-12 | human-spec-comments | RUNTIME §9.2/§9.3 | M3 | MED | Field (changes the Runtime Control root). | — | awaiting owner follow-up |
+| HC-13 | human-spec-comments | CA §5/§8; RUNTIME §4.3/§9 | M4 | MED | Pending-decision state. | — | awaiting owner follow-up |
+| NA-02 | claude-spec-comments-2 | CA §8, §9; RUNTIME §2.4 | M4 | LOW | Additive: Y. Pending-approval event; approver role. | — | resolved in 6a4dfa28 (declined) |
+| NA-03 | claude-spec-comments-2 | RUNTIME §9.3 | M3 | LOW | Additive: Y. Always set `expires_at`. | — | resolved in 6a4dfa28 |
+| NA-04 | claude-spec-comments-2 | RUNTIME §9.3 | M3, M4 | MED | Additive: N. `request_key` retains only successful results. | — | resolved in 6a4dfa28: use the spec's replay rule |
+| NA-05 | claude-spec-comments-2 | CA §6, §9 | M4 | LOW | Additive: Y. `issuer`, `decision_id` on grants. | — | resolved in 6a4dfa28: `issuer` added |
+| NA-07 | claude-spec-comments-2 | CA §8; RUNTIME §4.4, §9.3 | M3, M4 | MED | Additive: N. Eager re-evaluation of live routes on policy change. | — | resolved in 6a4dfa28: re-evaluation at admission |
+| NA-08 | claude-spec-comments-2 | CA §3, §5, §9 | M4 | LOW | Additive: Y. Unique `decision_id` (random 128-bit ids satisfy it now). | — | resolved in 6a4dfa28 |
+| NA-09 | claude-spec-comments-2 | RUNTIME §7.5; CA §5, §6; BCP §2 | M3, M4 | MED | Additive: Y. Optional `on_behalf_of`; the specs defer delegation by design. | — | resolved in 6a4dfa28 (declined) |
+| NA-10 | claude-spec-comments-2 | CA §9, §9.1 | M4 | LOW | Additive: Y. Redacted scope form. | — | resolved in 6a4dfa28 (declined) |
+| NA-11 | claude-spec-comments-2 | RUNTIME §9, §10.1; CA §1, §8 | M4 | MED | Additive: N. Bootstrap versus CA precedence rule. | — | resolved in 6a4dfa28 |
+| NC-02 | claude-spec-comments-2 | CONFIG §4; RUNTIME §9.3 | M4 | MED | Additive: P. Package-default acceptance MAY→MUST; reset action; refusal code. | — | resolved in 6a4dfa28: NOT_READY keeps intent (gap G162) |
+| NE-06 | claude-spec-comments-2 | RUNTIME §3.4, §9.3, §10.2 | M3 | MED | Additive: N. One ordering rule within `stopping`. | — | resolved in 6a4dfa28 |
+| NI-02 | claude-spec-comments-2 | RUNTIME §9.3, §2.4, §10.1; CA §3.1 | M3, M4, M6 | MED | Additive: N. Provider id bound to the instance for its whole life, so it must be persisted. | — | resolved in 6a4dfa28 |
+| NI-03 | claude-spec-comments-2 | RUNTIME Term., §9.3; CONFIG §3; CA §6 | M3, M4 | MED | Additive: N. Persist both ids in every profile; define what happens to records that name a lost identity. | — | resolved in 6a4dfa28 |
+| NI-05 | claude-spec-comments-2 | RUNTIME §9.3 | M3 | MED | Additive: N. `instance` becomes mandatory on events and the stop response; ambiguity error code. | — | changed in 6a4dfa28: exactly one of `instance` or `provider` |
+| NI-07 | claude-spec-comments-2 | CA §6; RUNTIME §9.3 | M3, M4 | MED | Additive: P. New `orphaned` grant status (the closed enum grows) or a stable-selector target. | — | resolved in 6a4dfa28 (declined) |
+| NL-06 | claude-spec-comments-2 | RUNTIME §3.4, §9.3 | M3, M4 | MED | Additive: N. `error` persists until an explicit start, recover or stop; align `start_module`. | — | resolved in 6a4dfa28 |
+| NL-10 | claude-spec-comments-2 | RUNTIME §10.1, §9.3 | M3, M4 | LOW | Additive: Y. MUST resume retained intent (matches the plan's decision D24); `restart_module`. | — | resolved in 6a4dfa28 |
+| NL-11 | claude-spec-comments-2 | CONFIG §8; RUNTIME §9.1 | M4 | MED | Additive: N. Mandatory deadline for `apply_configuration`. | — | resolved in 6a4dfa28: mandatory application deadline (G61) |
+| NO-01 | claude-spec-comments-2 | RUNTIME §9.3 | M3, M6 | LOW | Additive: Y. Cursors on list methods. | — | resolved in 6a4dfa28 |
+| NO-02 | claude-spec-comments-2 | RUNTIME §9.3 | M3, M6 | MED | Additive: P. New fields and events (Y); `instance` mandatory (N). | — | resolved in 6a4dfa28: `inventory_changed` hint |
+| NO-04 | claude-spec-comments-2 | RUNTIME §9.3 | M3 | LOW | Additive: Y. `describe_runtime`. | — | resolved in 6a4dfa28 (declined) |
+| NO-05 | claude-spec-comments-2 | RUNTIME §9.3 l.2243 | M3, M4 | MED | Additive: N. Initial permission-settings state. | — | resolved in 6a4dfa28 |
+| NO-06 | claude-spec-comments-2 | RUNTIME §9.3, §10.1 | M4 | MED | Additive: N. Effect of widening a running instance's permissions. | — | resolved in 6a4dfa28 |
+| NO-07 | claude-spec-comments-2 | CA §3.3; RUNTIME §9.3 | M3, M4 | MED | Additive: N. Table mapping lifecycle methods to CA actions; `load`/`unload` may be dropped. | — | resolved in 6a4dfa28: CA actions `start` and `stop` |
+| NR-04 | claude-spec-comments-2 | RUNTIME §9.3; INTERFACE §5.2 | M3, M6 | MED | Additive: P. Drop `continuations` from the module-facing response (N) or define a follow-up call (Y). | — | resolved in 6a4dfa28 |
+| NX-01 | claude-spec-comments-2 | CA §8, §10; RUNTIME §7.3, §9.3; INTERFACE §2.5 | M3, M4 | MED | Additive: P. Likely: `grant_changed` carries only a revision and subscribers fetch the grant (N for the CA contract). Alternatives: the Runtime filters by target (Y), or a provider admission hook plus targeted publish (Y, new ABI). | — | changed in 6a4dfa28: `watch_changes`, restricted subscriptions (G82) |
+| NX-06 | claude-spec-comments-2 | RUNTIME §9.3 | M3 | LOW | Additive: Y. Content rule for `reason`; Runtime MAY withhold module text. | — | resolved in 6a4dfa28 |
+| RT-02 | claude-spec-comments | RUNTIME §9, §10.2 | M3,M4 | MED | Authority basis for engine calls. =s | — | resolved in 6a4dfa28; =s (G48) |
+| RT-03 | claude-spec-comments | RUNTIME §1.3 | M4 | LOW | A name. | — | changed in 6a4dfa28: no canonical name; `logos_` reserved (G53) |
+| SO-03 | claude-spec-comments | RUNTIME §3.6/§3.7/§8/§9.3/§10.1/§13.3; PM; CONFIG §4; CA §9.1 | M4,M6,M9 | MED | Config file format. | — | resolved in 6a4dfa28 (no change): deployment-documented |
+| SO-04 | claude-spec-comments | RUNTIME §9; CA §1/§6 | M4 | MED | Policy format. | — | resolved in 6a4dfa28 (no change): deployment-documented |
+| SO-06 | claude-spec-comments | BCP §2; SECURITY §13/§14; CA §10 | M4,M6 | MED | HIGH if the CA gains a human principal. | — | resolved in 6a4dfa28: no human principal in the CA |
 
 ## Tier 5 — blocked or later milestones
 
 | ID | Report | Spec §§ | Milestones | Risk | Likely fix, interim choice | Code / test | Status |
 |---|---|---|---|---|---|---|---|
-| NR-01 | claude-spec-comments-2 | TRANSPORT §3.1 l.422, §8.4; RUNTIME §9.3 | M6, M11, M12 | HIGH | Additive: Y. New provider-initiated or relayed carrier and address kind; reverses "caller opens the connection" for that profile only. Existing tls-tcp code is untouched. | — | open |
-| AP-3 (G26) | claude-spec-comments | RUNTIME l.433 | M6 | LOW | Answered. | — | open |
-| AP-6 (G83) | claude-spec-comments | RUNTIME l.35-38 | M6 | LOW | Answered. | — | open |
-| C-03 | claude-spec-comments | INTERFACE Abs/§3/§3.8/§3.9 vs BCP §6.1 | M10 | LOW | Wording about conformance classes; decides whether M10 is mandatory. | — | open, narrowed (NF-02) |
-| EC-09 | claude-spec-comments | RUNTIME §9.3 l.2991-3017 | M6 | MED | Error code. | — | enrollment part settled (NF-12) |
-| NP-13 | claude-spec-comments-2 | PM §4.5 | M11 | MED | Additive: P. Per-variant provenance. | — | open |
-| NR-02 | claude-spec-comments-2 | RUNTIME §9.3; CA §3.4 | M6 | LOW | Additive: Y. Pairing bundle plus provisioning method (large, but new). | — | open |
-| NR-03 | claude-spec-comments-2 | RUNTIME §9.3 | M6 | LOW | Additive: Y. Facade set/remove methods. | — | open |
-| NR-05 | claude-spec-comments-2 | RUNTIME §9.3; TRANSPORT §3.2 | M6 | MED | Additive: N. Define "remote runtime disconnect". | — | open |
-| NR-07 | claude-spec-comments-2 | TRANSPORT §8.4.1-2 | M6, M11 | LOW | Additive: Y. TCP keepalive / QUIC PING; no envelope change. | — | open |
-| NR-09 | claude-spec-comments-2 | RUNTIME §9.3; TRANSPORT §8.4.1 | M6 | MED | Additive: P. Provider's clock governs expiry, or a relative `expires_in_ms`. | — | open |
-| NR-10 | claude-spec-comments-2 | TRANSPORT §8.4.1 | M6 | LOW | Additive: Y. Clarify SPKI pinning, no host-name check, SNI only. | — | open |
-| NS-03 | claude-spec-comments-2 | SECURITY §11; BCP §5.4 | M9, M12 | LOW | Additive: Y. Checklist items. | — | open |
-| PM-12 | claude-spec-comments | PM §4.5 | M11 | MED | Profile. | — | open |
-| PM-13 | claude-spec-comments | PM §4.5/§14 | M11 | MED | Error mapping. | — | open |
-| PM-14 | claude-spec-comments | PM §4.5 | M11 | MED | Rule. | — | open |
-| RT-01 | claude-spec-comments | RUNTIME Term/§9/§9.3; BCP §2/§5.1/§7 | M6,M9 | **HIGH** | A local activation profile would replace the logosctl design (D13). cl l.441-452 | — | open |
-| SO-08 | claude-spec-comments | SECURITY §13 etc. | M9 | LOW | Additive. | — | open |
+| NR-01 | claude-spec-comments-2 | TRANSPORT §3.1 l.422, §8.4; RUNTIME §9.3 | M6, M11, M12 | HIGH | Additive: Y. New provider-initiated or relayed carrier and address kind; reverses "caller opens the connection" for that profile only. Existing tls-tcp code is untouched. | — | resolved in 6a4dfa28 (declined) |
+| AP-3 (G26) | claude-spec-comments | RUNTIME l.433 | M6 | LOW | Answered. | — | resolved in 6a4dfa28 |
+| AP-6 (G83) | claude-spec-comments | RUNTIME l.35-38 | M6 | LOW | Answered. | — | resolved in 6a4dfa28 |
+| C-03 | claude-spec-comments | INTERFACE Abs/§3/§3.8/§3.9 vs BCP §6.1 | M10 | LOW | Wording about conformance classes; decides whether M10 is mandatory. | — | resolved in 6a4dfa28: mapping conformance needs both directions (G139) |
+| EC-09 | claude-spec-comments | RUNTIME §9.3 l.2991-3017 | M6 | MED | Error code. | — | resolved in 6a4dfa28 |
+| NP-13 | claude-spec-comments-2 | PM §4.5 | M11 | MED | Additive: P. Per-variant provenance. | — | open (not answered) |
+| NR-02 | claude-spec-comments-2 | RUNTIME §9.3; CA §3.4 | M6 | LOW | Additive: Y. Pairing bundle plus provisioning method (large, but new). | — | resolved in 6a4dfa28 (declined) |
+| NR-03 | claude-spec-comments-2 | RUNTIME §9.3 | M6 | LOW | Additive: Y. Facade set/remove methods. | — | resolved in 6a4dfa28 (declined) |
+| NR-05 | claude-spec-comments-2 | RUNTIME §9.3; TRANSPORT §3.2 | M6 | MED | Additive: N. Define "remote runtime disconnect". | — | resolved in 6a4dfa28 |
+| NR-07 | claude-spec-comments-2 | TRANSPORT §8.4.1-2 | M6, M11 | LOW | Additive: Y. TCP keepalive / QUIC PING; no envelope change. | — | resolved in 6a4dfa28 |
+| NR-09 | claude-spec-comments-2 | RUNTIME §9.3; TRANSPORT §8.4.1 | M6 | MED | Additive: P. Provider's clock governs expiry, or a relative `expires_in_ms`. | — | resolved in 6a4dfa28 |
+| NR-10 | claude-spec-comments-2 | TRANSPORT §8.4.1 | M6 | LOW | Additive: Y. Clarify SPKI pinning, no host-name check, SNI only. | — | resolved in 6a4dfa28 |
+| NS-03 | claude-spec-comments-2 | SECURITY §11; BCP §5.4 | M9, M12 | LOW | Additive: Y. Checklist items. | — | resolved in 6a4dfa28 |
+| PM-12 | claude-spec-comments | PM §4.5 | M11 | MED | Profile. | — | changed in 6a4dfa28: spec DSSE SLH-DSA profile (G94) |
+| PM-13 | claude-spec-comments | PM §4.5/§14 | M11 | MED | Error mapping. | — | resolved in 6a4dfa28; =s (G113) |
+| PM-14 | claude-spec-comments | PM §4.5 | M11 | MED | Rule. | — | changed in 6a4dfa28: direct Nix root is `unsupported-source` (G114) |
+| RT-01 | claude-spec-comments | RUNTIME Term/§9/§9.3; BCP §2/§5.1/§7 | M6,M9 | **HIGH** | A local activation profile would replace the logosctl design (D13). cl l.441-452 | — | resolved in 6a4dfa28: activation deployment-defined; re-decide D13 |
+| SO-08 | claude-spec-comments | SECURITY §13 etc. | M9 | LOW | Additive. | — | changed in 6a4dfa28: build mode alone must not enable development trust; re-decide D27 |

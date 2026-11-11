@@ -39,6 +39,9 @@ type
     iprMalformedCbor = "malformed-cbor"
     iprNonDeterministicCbor = "non-deterministic-cbor"
     iprSchemaMismatch = "schema-mismatch"
+    iprConfigurationSchemaMismatch = "configuration-schema-mismatch"
+      ## a decoded deterministic configuration value fails the accepted
+      ## configuration schema (CONFIGURATION); its path starts at that value
 
   InvocationFailure* = object
     code*: ErrorCode
@@ -146,3 +149,15 @@ proc checkStatus*(
       return err("LOGOS_OK carries no message or detail")
     return ok()
   checkFailure(InvocationFailure(code: code, message: message, detail: detail))
+
+proc checkedProviderStatus*(
+    code: int64, message: Opt[string], detail: Opt[seq[byte]]
+): (ErrorCode, Opt[string], Opt[seq[byte]]) =
+  ## [SPEC INTERFACE §5.1] What an ABI caller forwards for a native provider's
+  ## status, message and detail: them unchanged when they are valid, else
+  ## `LOGOS_ERR_MODULE` with neither diagnostics nor detail. A caller that gets
+  ## MODULE_ERROR back for an `OK` status forwards no contract-response output.
+  let c = errorCode(code)
+  if c.isNone or checkStatus(c.get, message, detail).isErr:
+    return (ecModule, Opt.none(string), Opt.none(seq[byte]))
+  (c.get, message, detail)

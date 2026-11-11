@@ -141,6 +141,11 @@ VALID = [
     ("presentation-bytes-base64-classic", "a = b64'+/8='\n", one(bstr(b"\xfb\xff"))),
     ("presentation-bytes-base64url", "a = b64'-_8'\n", one(bstr(b"\xfb\xff"))),
     ("presentation-bytes-quoted", "a = 'A\\'b\\u00e9'\n", one(bstr(b"A'b\xc3\xa9"))),
+    # RFC 9682 §2.1.1 braced escapes (cdCDDLe §5), in text and in quoted bytes
+    ("presentation-text-braced-escapes", 'a = "\\u{e9}\\u{1F600}\\u{00041}\\u{0}"\n', one(text("\u00e9\U0001f600A\0"))),
+    ("presentation-text-braced-max", 'a = "\\u{10FFFF}"\n', one(text("\U0010ffff"))),
+    ("presentation-text-escaped-c1", 'a = "\\u0085"\n', one(text("\u0085"))),
+    ("presentation-bytes-quoted-braced", "a = 'b\\u{e9}'\n", one(bstr(b"b\xc3\xa9"))),
     ("presentation-bytes-quoted-as-hex", "a = h'412762c3a9'\n", one(bstr(b"A'b\xc3\xa9"))),
     ("presentation-parentheses", "a = ((uint))\n", one(UINT)),
     ("presentation-separators-commas", "a = [uint, tstr,]\n", one(array(member(UINT), member(TSTR)))),
@@ -229,6 +234,13 @@ VALID = [
     ),
     ("construct-unusual-names", "@a = uint\n_b = @a\n", doc(rule("@a", UINT), rule("_b", ref("@a")))),
     ("construct-literal-key-names", "a = {true: uint, uint: tstr}\n", one(cmap(member(UINT, "true"), member(TSTR, "uint")))),
+    # text-string literal keys (cdCDDLe §5.1, §7.4): the same member key as the bareword
+    ("construct-text-key", 'a = {"x": uint}\n', one(cmap(member(UINT, "x")))),
+    ("construct-text-key-mixed", 'a = {"b": uint, a: tstr}\n', one(cmap(member(TSTR, "a"), member(UINT, "b")))),
+    ("construct-text-key-optional", 'a = {? "x y": uint}\n', one(cmap(member(UINT, "x y", "?")))),
+    ("construct-text-key-escaped", 'a = {"\\u{78}": uint}\n', one(cmap(member(UINT, "x")))),
+    ("construct-integer-bounds", "a = -18446744073709551616..18446744073709551615\n",
+        one(rng(-18446744073709551616, 18446744073709551615))),
 ]
 
 INVALID = [
@@ -254,7 +266,7 @@ INVALID = [
     ("unsupported-cut", 'a = {"x" ^ => uint}\n'),
     ("unsupported-arrow-key", 'a = {"x" => uint}\n'),
     ("unsupported-arrow-key-type", "a = {* tstr => uint}\n"),
-    ("unsupported-text-key", 'a = {"x": uint}\n'),
+    ("unsupported-bytes-key", "a = {'x': uint}\n"),
     ("unsupported-uint-key", "a = {1: uint}\n"),
     ("unsupported-keyless-map-entry", "a = {uint}\n"),
     ("unsupported-occurrence-plus", "a = [+ uint]\n"),
@@ -287,7 +299,7 @@ INVALID = [
     ("unsupported-size-literal-target", 'a = "x" .size 1\n'),
     ("unsupported-size-named-controller", "a = tstr .size n\nn = 3\n"),
     ("unsupported-size-choice-controller", "a = tstr .size (1 / 2)\n"),
-    ("unsupported-bytes-quoted-line-break", "a = 'x\ny'\n"),
+    ("unsupported-bytes-quoted-line-break", "a = 'x\ny'\n", "G157"),
     # text that is not CDDL (RFC 8610 Appendix B)
     ("syntax-empty", ""),
     ("syntax-whitespace-only", "  \n\n"),
@@ -300,6 +312,14 @@ INVALID = [
     ("syntax-leading-zero", "a = 01\n"),
     ("syntax-missing-hex-digits", "a = 0x\n"),
     ("syntax-unknown-escape", 'a = "\\x41"\n'),
+    ("syntax-braced-escape-empty", 'a = "\\u{}"\n'),
+    ("syntax-braced-escape-too-large", 'a = "\\u{110000}"\n'),
+    ("syntax-braced-escape-surrogate", 'a = "\\u{D800}"\n'),
+    ("syntax-braced-escape-unterminated", 'a = "\\u{41"\n'),
+    ("syntax-braced-escape-not-hex", 'a = "\\u{4G}"\n'),
+    ("syntax-c1-control-in-text", 'a = "x\u0085"\n'),
+    ("syntax-c1-control-in-bytes", "a = 'x\u009f'\n"),
+    ("syntax-c1-control-in-comment", "a = uint ; x\u0080\n"),
     ("syntax-quote-escape-in-text", "a = \"\\'\"\n"),
     ("syntax-unpaired-surrogate", 'a = "\\ud800"\n'),
     ("syntax-unterminated-text", 'a = "abc\n'),
@@ -324,14 +344,15 @@ INVALID = [
     ("resolution-prelude-name", "int = uint\n"),
     ("resolution-prelude-name-true", "true = uint\n"),
     # canonical-model rules (§7.4, §8)
-    ("canonical-range-reversed", "a = 10..1\n"),
-    ("canonical-range-reversed-negative", "a = -1..-10\n"),
+    ("unsupported-range-reversed", "a = 10..1\n"),
+    ("unsupported-range-reversed-negative", "a = -1..-10\n"),
     ("canonical-duplicate-map-key", "a = {x: uint, x: tstr}\n"),
     ("canonical-duplicate-map-key-optional", "a = {x: uint, ? x: uint}\n"),
+    ("canonical-duplicate-map-key-text", 'a = {x: uint, "x": tstr}\n'),
     ("canonical-size-bool", "a = bool .size 1\n"),
     ("canonical-size-negative", "a = uint .size -1\n"),
     ("canonical-size-negative-range", "a = tstr .size (-1..4)\n"),
-    ("canonical-size-reversed-range", "a = tstr .size (8..1)\n"),
+    ("unsupported-size-reversed-range", "a = tstr .size (8..1)\n"),
 ]
 
 

@@ -1,0 +1,4 @@
+_module = "a"
+a.alias = a.import
+a.import = types.alias
+a.value = { amount: a.alias, z: uint64 }

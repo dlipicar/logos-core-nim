@@ -168,6 +168,41 @@ suite "iface: schema files and metadata (INTERFACE §1.1, §1.2)":
     check "has role supporting" in
       rejection(module(implementing(rootOf(sup)) & ping), [sup])
 
+  test "[IFC-0562] [IFC-0563] [IFC-0564] [IFC-0565] [IFC-0566] [IFC-0567] _sensitive marks local request and response payloads":
+    let vault =
+      "vault.get_request = {}\nvault.get_response = { secret: bstr }\n" &
+      "vault.store_request = { secret: bstr }\nvault.store_response = {}\n"
+    # The §1.2.1 example, on a concrete module and on an interface.
+    let m =
+      accepted(module(mirror("IFC/1.2.1.sensitive.cddl") & "\n" & vault)).primary.model
+    let store = m.methods.filterIt(it.name == "vault.store")[0]
+    check store.sensitiveRequest and not store.sensitiveResponse
+    let both = "_sensitive = [\"vault.get_response\", \"vault.store_request\"]\n"
+    let im = accepted(iface("vault", both & vault)).primary.model
+    check im.methods.filterIt(it.sensitiveRequest or it.sensitiveResponse).len == 2
+    # Sensitivity is part of the schema identity.
+    check rootOf(iface("vault", both & vault)) != rootOf(iface("vault", vault))
+    for bad in [
+      "_sensitive = []\n",
+      "_sensitive = [\"vault.store_request\", \"vault.get_response\"]\n",
+      "_sensitive = [\"vault.get_response\", \"vault.get_response\"]\n",
+      "_sensitive = [\"vault.secret\"]\n", "_sensitive = [\"vault.store\"]\n",
+      "_sensitive = [1]\n", "_sensitive = \"vault.get_response\"\n",
+    ]:
+      discard rejection(module(bad & vault))
+    check "supporting schema cannot declare _sensitive" in
+      rejection("_sensitive = [\"demo_types.x\"]\ndemo_types.x = uint64\n")
+    # A provider keeps its interface's marks and cannot restate or drop them.
+    let ir = rootOf(iface("vault", both & vault))
+    let p = accepted(module(implementing(ir) & ping), [iface("vault", both & vault)])
+    check p.interfaces[0].model.methods.filterIt(it.sensitiveResponse)[0].name ==
+      "vault.get"
+    check "not a local request or response" in
+      rejection(
+        module(implementing(ir) & "_sensitive = [\"vault.get_response\"]\n" & ping),
+        [iface("vault", both & vault)],
+      )
+
   test "[IFC-0022] [IFC-0023] the input set holds every required document and nothing unused":
     check "undefined name metrics_types.counter" in rejection(mod392, [ifc392])
     check "names no supplied interface" in rejection(mod392, [], [sup392])
@@ -180,23 +215,38 @@ suite "iface: schema files and metadata (INTERFACE §1.1, §1.2)":
     check "two supporting schemas declare namespace metrics_types" in
       rejection(mod392, [ifc392], [sup392, other])
 
-  test "[IFC-0019] [IFC-0021] interfaces see the common schema and nothing else":
+  test "[IFC-0021] [IFC-0025] [IFC-0560] interfaces use the common schema and supplied supporting schemas":
     let usesCommon = iface(
       "demo",
       "demo.ping_request = {}\ndemo.ping_response = { code: logos.error_code }\n",
     )
     discard accepted(usesCommon)
     let usesSupporting = iface(
-      "demo",
-      "demo.ping_request = {}\ndemo.ping_response = { n: metrics_types.counter }\n",
+      "probe",
+      "probe.read_request = {}\nprobe.read_response = { n: metrics_types.counter }\n",
     )
     check "undefined name metrics_types.counter" in rejection(usesSupporting)
-    check "undefined name metrics_types.counter" in
-      rejection(usesSupporting, [], [sup392])
-    check "uses no interface or supporting schema" in rejection(
-      usesCommon, [], [sup392]
+    let s = accepted(usesSupporting, [], [sup392])
+    check s.supporting.mapIt(it.root) == @[rootOf(sup392)]
+    let refs = s.primary.model.nodesOf.filterIt(it.kind == snImportedRef)
+    check refs.len == 1
+    check refs[0].imported.root == rootOf(sup392)
+    # Still nothing unused, and an interface implements no interface.
+    check "is unused" in rejection(usesCommon, [], [sup392])
+    check "implements no interface" in rejection(usesCommon, [ifc392])
+    # A module and the interface it implements share one supporting schema.
+    let shared = module(
+      implementing(s.primary.root) &
+        "demo.get_request = {}\ndemo.get_response = { n: metrics_types.counter }\n"
     )
-    check "uses no interface or supporting schema" in rejection(usesCommon, [ifc392])
+    let both = accepted(shared, [usesSupporting], [sup392])
+    check both.supporting.len == 1
+    # Supporting schemas an interface uses count as used by its provider.
+    let viaInterface =
+      accepted(module(implementing(s.primary.root) & ping), [usesSupporting], [sup392])
+    check viaInterface.supporting.mapIt(it.root) == @[rootOf(sup392)]
+    check viaInterface.supportingOf(viaInterface.primary).len == 0
+    check viaInterface.supportingOf(viaInterface.interfaces[0]).len == 1
 
   test "[IFC-0020] [IFC-0021] supporting schemas see the common schema and nothing else":
     discard accepted("demo_types.c = logos.schema_commitment\n")
@@ -217,7 +267,7 @@ suite "iface: schema files and metadata (INTERFACE §1.1, §1.2)":
         ";# import metrics_types.counter\ndemo_types.c = metrics_types.counter\n"
       )
 
-  test "[IFC-0025] an external reference resolves to exactly one supplied declaration":
+  test "[IFC-0025] [IFC-0560] an external reference resolves to exactly one supplied declaration":
     let s = accepted(mod392, [ifc392], [sup392])
     let refs = s.primary.model.nodesOf.filterIt(it.kind == snImportedRef)
     check refs.len == 1
@@ -293,11 +343,13 @@ suite "iface: prelude, names and reservations (INTERFACE §1.3)":
     discard
       accepted(module(ping, name = "logos_demo"), opts = AcceptOptions(system: true))
 
-  test "[IMPL-DECISION G69] module names ending in _call or _publish and the namespaces call and publish":
-    check "(G69)" in rejection(module(ping, name = "demo_call"))
-    check "(G69)" in rejection(module(ping, name = "demo_publish"))
-    check "(G69)" in rejection(module("call.t = uint8\n"))
-    check "(G69)" in rejection(module("publish.t = uint8\n"))
+  test "module names ending in _call or _publish and the namespaces call and publish are plain names":
+    # [SPEC INTERFACE §2.1] The MODULE and CALL components keep symbols apart;
+    # nothing beyond RUNTIME §1.3 constrains these names (G69 is retired).
+    discard accepted(module(ping, name = "demo_call"))
+    discard accepted(module(ping, name = "demo_publish"))
+    discard accepted(module("call.t = uint8\n"))
+    discard accepted(module("publish.t = uint8\n"))
 
   test "[IFC-0062] field names do not begin with has_":
     check "begins with has_" in rejection(module("demo.t = { has_name: tstr }\n"))
@@ -316,12 +368,13 @@ suite "iface: prelude, names and reservations (INTERFACE §1.3)":
       module("demo.t = { len: uint8, count: uint8, x0: uint8, a_b1: uint8 }\n")
     )
 
-  test "[IFC-0064] [IFC-0065] field names are not C17 keywords or <stdbool.h> names":
-    for f in C17Keywords:
-      check "C17 keyword" in rejection(module("demo.t = { " & f & ": uint8 }\n"))
-    for f in StdboolNames:
-      check "<stdbool.h>" in rejection(module("demo.t = { " & f & ": uint8 }\n"))
-    check C17Keywords.len == 34
+  test "[IFC-0568] field names may equal C and C++ keywords":
+    for f in CEscapedIdentifiers:
+      let m = accepted(module("demo.t = { " & f & ": uint8 }\n")).primary.model
+      check m.find("demo.t").get.body.fields.mapIt(it.name) == @[f]
+    # The other field-name rules still apply.
+    check "begins with has_" in rejection(module("demo.t = { has_class: uint8 }\n"))
+    check "reserved suffix" in rejection(module("demo.t = { class_len: uint8 }\n"))
 
   test "[IFC-0066] supporting schemas declare no callable suffixes":
     for n in ["ping_request", "ping_response", "tick_event"]:
@@ -383,9 +436,19 @@ suite "iface: methods, events and types (INTERFACE §1.4-§1.7)":
     check "two exposed methods have the bare name ping" in
       rejection(module(implementing(rootOf(a), rootOf(b)) & "demo.t = uint8\n"), [a, b])
 
-  test "[IFC-0079] map keys are bare identifiers":
-    check "map keys must be barewords" in
-      rejection(module("demo.t = { \"a\": uint8 }\n"))
+  test "[IFC-0570] [IFC-0571] [IFC-0572] bare and quoted text keys name the same field":
+    let bare = accepted(module("demo.t = { cid: tstr, class: uint8 }\n")).primary
+    let quoted =
+      accepted(module("demo.t = { \"cid\": tstr, \"class\": uint8 }\n")).primary
+    check quoted.root == bare.root
+    check quoted.model.find("demo.t").get.body.fields.mapIt(it.name) == @[
+      "cid", "class"
+    ]
+    # A quoted key meets the same field-name rules as a bare one.
+    for bad in ["\"has_x\"", "\"Cid\"", "\"a-b\"", "\"x_len\"", "\"\""]:
+      discard rejection(module("demo.t = { " & bad & ": uint8 }\n"))
+    check "duplicate" in rejection(module("demo.t = { cid: tstr, \"cid\": tstr }\n")) or
+      "twice" in rejection(module("demo.t = { cid: tstr, \"cid\": tstr }\n"))
 
   test "[IFC-0081] [IFC-0082] [IFC-0083] [IFC-0084] events are map-valued, at most 128 bytes":
     let m = accepted(module(mirror("IFC/1.5.events.cddl"))).primary.model
@@ -475,12 +538,23 @@ suite "iface: dynamic schema limits (INTERFACE §5.3)":
     check accepted(wide(32767)).primary.model.nodesOf.len == 65535
     check "more than 65,536" in rejection(wide(32768))
 
-  test "[IFC-0530] [IFC-0531] at most 128 levels of structural nesting":
+  test "[IFC-0530] [IFC-0531] at most 128 levels of schema-node nesting":
+    # A declaration body is level one; every child node adds one, leaves
+    # included: n lists around uint8 are n + 1 levels.
     proc nested(n: int): string =
       module("demo.t = " & "[* ".repeat(n) & "uint8" & "]".repeat(n) & "\n")
 
-    check accepted(nested(128)).primary.model.nestingOf == 128
-    check "deeper than 128 levels" in rejection(nested(129))
+    check accepted(module("demo.t = uint8\n")).primary.model.nestingOf == 1
+    check accepted(module("demo.t = { a: uint8 }\n")).primary.model.nestingOf == 2
+    check accepted(nested(127)).primary.model.nestingOf == 128
+    check "deeper than 128 levels" in rejection(nested(128))
+    # Named references are not expanded: a reference is one leaf level.
+    check accepted(
+      module(
+        "demo.u = [* demo.t]\n" & "demo.t = " & "[* ".repeat(127) & "uint8" &
+          "]".repeat(127) & "\n"
+      )
+    ).primary.model.nestingOf == 128
 
   test "[IFC-0532] [IMPL-DECISION G153] cyclic references and deep input are bounded":
     check "form a cycle (G153)" in
@@ -591,20 +665,42 @@ suite "iface: schema commitments and logos.schema (INTERFACE §5.1)":
     check back.documents.mapIt(it.root) == s.documents.mapIt(it.root)
     check "another contract" in acceptSchemaResponse(encoded(v), rootOf(ifc392)).error
 
-  test "[IFC-0449] [IFC-0450] [IFC-0458] [IFC-0459] an interface route exposes the interface alone":
+  test "[IFC-0449] [IFC-0458] [IFC-0459] [IFC-0930] [IFC-0931] an interface route exposes the interface and only its own supporting schemas":
     let s = accepted(mod392, [ifc392], [sup392])
     let ir = rootOf(ifc392)
     let v = s.schemaResponse(ir).get
     check v.lookup("schema").get.text == ifc392
     check v.lookup("interface_schemas").get.items.len == 0
+    # metrics_types is needed only by the primary contract.
     check v.lookup("supporting_schemas").get.items.len == 0
     check acceptSchemaResponse(encoded(v), ir).get.primary.root == ir
+    # An interface that uses a supporting schema carries it, and nothing else.
+    let usesTypes = iface(
+      "gauge",
+      "gauge.read_request = {}\ngauge.read_response = { n: gauge_types.level }\n",
+    )
+    let gaugeTypes = "gauge_types.level = uint32\n"
+    let gr = accepted(usesTypes, [], [gaugeTypes]).primary.root
+    let provider = accepted(
+      module(implementing(gr, ir) & "demo.t = { c: metrics_types.counter }\n" & ping),
+      [usesTypes, ifc392],
+      [sup392, gaugeTypes],
+    )
+    check provider.supporting.len == 2
+    let gv = provider.schemaResponse(gr).get
+    check gv.lookup("interface_schemas").get.items.len == 0
+    check gv.lookup("supporting_schemas").get.items.mapIt(
+      it.lookup("namespace").get.text
+    ) == @["gauge_types"]
+    let back = acceptSchemaResponse(encoded(gv), gr).get
+    check back.primary.root == gr
+    check back.supporting.mapIt(it.root) == @[rootOf(gaugeTypes)]
+    check provider.schemaResponse(ir).get.lookup("supporting_schemas").get.items.len == 0
     check "no contract with the selected root" in s.schemaResponse(rootOf(sup392)).error
     # An interface route that also carries the primary's documents is invalid.
     let leaky =
       response(ifc392, @[], @[entryOf("metrics_types", rootOf(sup392), sup392)])
-    check "uses no interface or supporting schema" in
-      acceptSchemaResponse(leaky, ir).error
+    check "metrics_types is unused" in acceptSchemaResponse(leaky, ir).error
 
   test "[IFC-0451] [IFC-0452] entries name valid documents with their own namespace and root":
     let
@@ -934,29 +1030,80 @@ suite "iface: payload validation (INTERFACE §4.4, §4.5)":
     check e.reason == Opt.some(iprSchemaMismatch)
     check e.path == @[cbor("cid")]
 
-  test "[IMPL-DECISION G38] floats, tags, null and undefined are schema mismatches":
+  test "[IFC-0919] [IFC-0920] a floating-point item at any depth is non-deterministic CBOR, never a schema question":
     let v = storage()
     for x in [
       cborFloatBits(fw16, 0x3c00),
-      cborTag(1, cbor(1'u64)),
-      cborNull(),
-      cborUndefined(),
-      cborSimple(16),
+      cborArray(cborArray(cborFloatBits(fw64, 0x3ff0000000000000'u64))),
     ]:
+      let e = v.paramsError("exists", encodeCbor(cborMap((cbor("cid"), x))))
+      check e.code == ecInvalidParams
+      check e.reason == Opt.some(iprNonDeterministicCbor)
+      check e.path.len == 0
+      check detailOf(e).lookup("reason").get.text == "non-deterministic-cbor"
+      check v.checkResult("exists", encodeCbor(cborMap((cbor("exists"), x)))).error.code ==
+        ecModule
+
+  test "[IMPL-DECISION G38] tags, null, undefined and other simple values are schema mismatches":
+    let v = storage()
+    for x in [cborTag(1, cbor(1'u64)), cborNull(), cborUndefined(), cborSimple(16)]:
       let e = v.paramsError("exists", encodeCbor(cborMap((cbor("cid"), x))))
       check e.reason == Opt.some(iprSchemaMismatch)
       check e.path == @[cbor("cid")]
 
-  test "[IMPL-DECISION G59] nesting past the decoder cap is INVALID_PARAMS without detail":
-    let v = storage()
+  test "[IFC-0923] [IFC-0926] [IFC-0928] [IFC-0929] the payload depth limit: configurable, at least 128, failing without detail":
+    let s = accepted(
+      module(
+        "demo.node = { ? next: demo.node }\n" &
+          "demo.put_request = { n: demo.node }\ndemo.put_response = { n: demo.node }\n" &
+          "demo.put_event = { n: demo.node }\n"
+      )
+    )
+    proc deep(levels: int): seq[byte] =
+      ## {n: {next: {next: ... {}}}}: `levels` maps in all.
+      var x = cborMap()
+      for _ in 2 ..< levels:
+        x = cborMap((cbor("next"), x))
+      encodeCbor(cborMap((cbor("n"), x)))
+
+    check validator(s, 127).isErr
+    check validator(s).maxDepth == DefaultMaxDepth
+    let v128 = validator(s, 128).get
+    check v128.checkParams("put", deep(128)).isOk
+    for (data, code) in [
+      (v128.checkParams("put", deep(129)), ecInvalidParams),
+      (v128.checkResult("put", deep(129)), ecModule),
+      (v128.checkEvent("demo.put_event", deep(129)), ecInvalidParams),
+    ]:
+      check data.isErr
+      check data.error.code == code
+      check data.error.reason.isNone
+      check data.error.toFailure.detail.isNone
+    # The limit is checked before descending: arrays nested past it never decode,
+    # whatever follows them.
     var b = newSeq[byte]()
     for _ in 0 .. DefaultMaxDepth:
       b.add(0x81)
     b.add(0x00)
-    let e = v.paramsError("exists", b)
+    let e = validator(s).paramsError("put", b)
     check e.code == ecInvalidParams
     check e.reason.isNone
     check e.toFailure.detail.isNone
+    check decodePayload(b, maxDepth = 2 * DefaultMaxDepth).isOk
+    check decodePayload(b, maxDepth = 1).error.code == ecInvalidParams # raised to 128
+
+  test "[IFC-0925] [IFC-0927] schema validation and commitments support every payload depth up to the limit":
+    let s = accepted(
+      module(
+        "demo.node = { ? next: demo.node }\n" &
+          "demo.put_request = { n: demo.node }\ndemo.put_response = {}\n"
+      )
+    )
+    var x = cborMap()
+    for _ in 2 .. DefaultMaxDepth - 1:
+      x = cborMap((cbor("next"), x))
+    let data = encodeCbor(cborMap((cbor("n"), x)))
+    check validator(s).checkParams("put", data).isOk
 
   test "event data is one map of the event's type":
     let v = storage()
@@ -1050,3 +1197,39 @@ suite "iface: shared error codes and invocation failures (INTERFACE §5.1)":
       check commonValidates(
         "logos.invalid_params_detail", detailValue(r, Opt.some(@[cbor("a")]))
       )
+
+  test "[IFC-0441] configuration-schema-mismatch: its path starts at the decoded configuration":
+    let f = toFailure(
+      PayloadError(
+        code: ecInvalidParams,
+        reason: Opt.some(iprConfigurationSchemaMismatch),
+        path: @[cbor("limits"), cbor(0'u64)],
+      )
+    )
+    check checkFailure(f).isOk
+    check decodeCbor(f.detail.get).get ==
+      cborMap(
+        (cbor("path"), cborArray(cbor("limits"), cbor(0'u64))),
+        (cbor("reason"), cbor("configuration-schema-mismatch")),
+      )
+
+  test "[IFC-0932] [IFC-0933] a native provider status that breaks the rules is MODULE_ERROR, without its diagnostics":
+    let detail = invalidParamsDetail(iprSchemaMismatch)
+    for (code, message, d) in [
+      (0'i64, Opt.none(string), Opt.none(seq[byte])),
+      (2'i64, Opt.some("bad cid"), Opt.some(detail)),
+      (6'i64, Opt.some("slow"), Opt.none(seq[byte])),
+    ]:
+      check checkedProviderStatus(code, message, d) == (ErrorCode(code), message, d)
+    for (code, message, d) in [
+      (10'i64, Opt.none(string), Opt.none(seq[byte])), # not allocated
+      (-1'i64, Opt.none(string), Opt.none(seq[byte])),
+      (0'i64, Opt.some("ok?"), Opt.none(seq[byte])), # OK carries no message
+      (0'i64, Opt.none(string), Opt.some(detail)),
+      (3'i64, Opt.none(string), Opt.some(detail)), # detail only with INVALID_PARAMS
+      (2'i64, Opt.none(string), Opt.some(@[0xff'u8])), # not a detail value
+      (2'i64, Opt.some("x".repeat(513)), Opt.none(seq[byte])),
+      (2'i64, Opt.some("\xff"), Opt.none(seq[byte])),
+    ]:
+      check checkedProviderStatus(code, message, d) ==
+        (ecModule, Opt.none(string), Opt.none(seq[byte]))

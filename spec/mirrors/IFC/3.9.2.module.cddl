@@ -1,7 +1,7 @@
 ; -- metadata --
 _module = "sensor_module"
 _implements = [
-  h'ca004a96bbbce568ab0e7f996020e12d0dca353603671d5d6d8d5e364b830d32',
+  h'6abd62efd7835d78114f988733977d9d766c9cce56aef7e8b117c45b2955fc22',
 ]
 
 sensor.control.settings = {

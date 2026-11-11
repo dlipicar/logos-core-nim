@@ -1,5 +1,5 @@
-typedef struct logos_event_storage_upload_progress_event {
+typedef struct logos_storage_Upload_progress_event_EVENT {
     uint64_t    bytes_sent;
     uint64_t    bytes_total;
     const char* session;
-} logos_storage_upload_progress_event_t;
+} logos_storage_Upload_progress_event_t;

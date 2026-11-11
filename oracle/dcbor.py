@@ -4,12 +4,15 @@ Written from RFC 8949 (§3, §4.2.1, Appendix C) and INTERFACE §4.4-4.5 without
 reusing the Nim code. Errors are classified like the Nim decoder:
 
   malformed          not one well-formed data item (checked over the whole input first)
-  non-deterministic  well-formed, but not the deterministic encoding (§4.4; G38 for floats)
+  non-deterministic  well-formed, but not the deterministic encoding (§4.4), which
+                     includes any floating-point item (§4.4 item 5)
   invalid-utf8       a text string that is not UTF-8 (§4.5 reports it as schema-mismatch)
-  too-deep           containers nested deeper than the cap (G59)
+  too-deep           arrays and maps nested deeper than the payload-depth limit
+                     (§4.5.1; G59), or tags deeper than their own bound
 
-Tags, floats and simple values decode (G38). Values: int, bytes, str, list,
-dict (insertion order = encoded order), Tag, Simple, Float.
+`allow_floats` decodes the generic CBOR data model instead, where floats are
+values in their shortest width. Tags and simple values decode. Values: int,
+bytes, str, list, dict (insertion order = encoded order), Tag, Simple, Float.
 """
 
 from __future__ import annotations
@@ -19,7 +22,8 @@ import sys
 from dataclasses import dataclass
 
 sys.setrecursionlimit(20000)
-MAX_DEPTH = 1024
+MAX_DEPTH = 1024  # arrays and maps (INTERFACE §4.5.1; G59)
+MAX_TAG_DEPTH = 1024  # tags, bounded apart [IMPL]
 
 
 class DcborError(ValueError):
@@ -93,7 +97,7 @@ def encode(v) -> bytes:
 # Well-formedness (RFC 8949 Appendix C) ---------------------------------------------
 
 
-def _well_formed(data: bytes, max_depth: int) -> None:
+def _well_formed(data: bytes, max_depth: int, max_tag_depth: int) -> None:
     pos = 0
 
     def take(n: int) -> bytes:
@@ -104,7 +108,7 @@ def _well_formed(data: bytes, max_depth: int) -> None:
         pos += n
         return out
 
-    def item(depth: int, breakable: bool) -> int:
+    def item(depth: int, tags: int, breakable: bool) -> int:
         """Returns the major type, or -1 for a break."""
         ib = take(1)[0]
         major, ai = ib >> 5, ib & 31
@@ -120,24 +124,27 @@ def _well_formed(data: bytes, max_depth: int) -> None:
         elif ai in (28, 29, 30):
             raise DcborError("malformed", "reserved additional information")
         elif ai == 31:
-            return indefinite(major, depth, breakable)
+            return indefinite(major, depth, tags, breakable)
         if major == 7 and ai == 24 and val < 32:
             raise DcborError("malformed", "two-byte simple value below 32")
         if major in (2, 3):
             take(val)
-        elif major in (4, 5, 6):
+        elif major == 6:
+            if tags + 1 > max_tag_depth:
+                raise DcborError("too-deep", "tags nested too deep")
+            if item(depth, tags + 1, False) == -1:
+                raise DcborError("malformed", "break as tag content")
+        elif major in (4, 5):
             if depth + 1 > max_depth:
-                raise DcborError("too-deep", "nesting too deep")
-            count = 1 if major == 6 else val * (2 if major == 5 else 1)
+                raise DcborError("too-deep", "arrays and maps nested too deep")
+            count = val * (2 if major == 5 else 1)
             for _ in range(count):
-                if item(depth + 1, False) == -1:
+                if item(depth + 1, tags, False) == -1:
                     raise DcborError("malformed", "break inside a definite container")
         return major
 
-    def indefinite(major: int, depth: int, breakable: bool) -> int:
+    def indefinite(major: int, depth: int, tags: int, breakable: bool) -> int:
         if major in (2, 3):
-            if depth + 1 > max_depth:
-                raise DcborError("too-deep", "nesting too deep")
             while True:
                 if pos >= len(data):
                     raise DcborError("malformed", "truncated")
@@ -147,12 +154,12 @@ def _well_formed(data: bytes, max_depth: int) -> None:
                     return major
                 if ib >> 5 != major or ib & 31 == 31:
                     raise DcborError("malformed", "invalid chunk")
-                item(depth + 1, False)
+                item(depth, tags, False)
         if major in (4, 5):
             if depth + 1 > max_depth:
-                raise DcborError("too-deep", "nesting too deep")
+                raise DcborError("too-deep", "arrays and maps nested too deep")
             n = 0
-            while item(depth + 1, True) != -1:
+            while item(depth + 1, tags, True) != -1:
                 n += 1
             if major == 5 and n % 2:
                 raise DcborError("malformed", "odd indefinite map")
@@ -163,7 +170,7 @@ def _well_formed(data: bytes, max_depth: int) -> None:
             return -1
         raise DcborError("malformed", "indefinite length on major type %d" % major)
 
-    if item(0, False) == -1:
+    if item(0, 0, False) == -1:
         raise DcborError("malformed", "unexpected break")
     if pos != len(data):
         raise DcborError("malformed", "trailing bytes")
@@ -213,7 +220,7 @@ def _valid_utf8(b: bytes) -> bool:
     return True
 
 
-def _decode(data: bytes, allow_invalid_utf8: bool):
+def _decode(data: bytes, allow_invalid_utf8: bool, allow_floats: bool):
     pos = 0
 
     def head():
@@ -267,6 +274,8 @@ def _decode(data: bytes, allow_invalid_utf8: bool):
         if major == 6:
             return Tag(val, item())
         if ai in (25, 26, 27):
+            if not allow_floats:
+                raise DcborError("non-deterministic", "floating-point data item")
             width = {25: 2, 26: 4, 27: 8}[ai]
             if not _float_shortest(width, val):
                 raise DcborError("non-deterministic", "float not in shortest form")
@@ -290,14 +299,20 @@ def _hashable(k):
     return k
 
 
-def decode(data: bytes, max_depth: int = MAX_DEPTH, allow_invalid_utf8: bool = False):
-    _well_formed(bytes(data), max_depth)
-    return _decode(bytes(data), allow_invalid_utf8)
+def decode(
+    data: bytes,
+    max_depth: int = MAX_DEPTH,
+    allow_invalid_utf8: bool = False,
+    allow_floats: bool = False,
+    max_tag_depth: int = MAX_TAG_DEPTH,
+):
+    _well_formed(bytes(data), max_depth, max_tag_depth)
+    return _decode(bytes(data), allow_invalid_utf8, allow_floats)
 
 
-def classify(data: bytes, max_depth: int = MAX_DEPTH) -> str:
+def classify(data: bytes, max_depth: int = MAX_DEPTH, allow_floats: bool = False) -> str:
     try:
-        decode(data, max_depth)
+        decode(data, max_depth, allow_floats=allow_floats)
     except DcborError as e:
         return e.kind
     return "ok"

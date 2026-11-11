@@ -7,8 +7,10 @@
 ##    violation is `non-deterministic-cbor`.
 ## Invalid UTF-8 text is reported separately: INTERFACE §4.5 rejects it as a
 ## schema mismatch, and the transport must forward it inside opaque payloads.
-## Tags, floats and simple values decode; whether a schema allows them is
-## decided above this layer (G38).
+## Floating-point items are not part of Logos deterministic CBOR (INTERFACE §4.4
+## item 5) and are rejected as non-deterministic unless `allowFloats` asks for
+## the generic CBOR data model. Tags and simple values decode; whether a schema
+## allows them is decided above this layer.
 
 {.push raises: [].}
 
@@ -21,7 +23,8 @@ type
     cekMalformed ## not a single well-formed CBOR data item
     cekNonDeterministic ## well-formed, but violates INTERFACE §4.4
     cekInvalidUtf8 ## a text string that is not UTF-8 (INTERFACE §4.5)
-    cekTooDeep ## nesting deeper than `maxDepth` (G59)
+    cekTooDeep
+      ## arrays and maps deeper than `maxDepth`, or tags deeper than `maxTagDepth`
 
   CborError* = object
     kind*: CborErrorKind
@@ -29,14 +32,28 @@ type
     msg*: string
 
   DecodeOptions* = object
-    maxDepth*: int ## containers (arrays, maps, tags) nested at most this deep
+    maxDepth*: int
+      ## [SPEC INTERFACE §4.5.1] arrays and maps on any path, at most this many;
+      ## a root container is depth one, and scalars and byte-string contents
+      ## add none
+    maxTagDepth*: int
+      ## [IMPL] tags on any path, bounded apart so they cannot nest without
+      ## limit while adding no payload depth
+    allowFloats*: bool
+      ## decode floating-point items: the generic CBOR data model, not
+      ## Logos deterministic CBOR (INTERFACE §4.4 item 5)
     allowInvalidUtf8*: bool
       ## keep invalid text with `validUtf8 = false` instead of failing
 
-const DefaultMaxDepth* = 1024
+const
+  DefaultMaxDepth* = 1024
+    ## [IMPL-DECISION G59] the payload-depth limit; configurable, and at least
+    ## the 128 INTERFACE §4.5.1 requires
+  MinMaxDepth* = 128 ## [SPEC INTERFACE §4.5.1]
+  DefaultMaxTagDepth* = 1024 ## [IMPL]
 
 func defaultDecodeOptions*(): DecodeOptions =
-  DecodeOptions(maxDepth: DefaultMaxDepth)
+  DecodeOptions(maxDepth: DefaultMaxDepth, maxTagDepth: DefaultMaxTagDepth)
 
 func cborError(kind: CborErrorKind, offset: int, msg: string): CborError =
   CborError(kind: kind, offset: offset, msg: msg)
@@ -85,15 +102,22 @@ type
 
   WfFrame = object
     kind: WfKind
+    tag: bool ## a tag frame, counted against `maxTagDepth`
     left: uint64 ## for wfDefinite
     count: uint64 ## items seen, for wfIndefinite maps
     isMap: bool
     major: uint8 ## for wfChunks
 
-func checkWellFormed(data: openArray[byte], maxDepth: int): Result[void, CborError] =
+func tooDeep(start: int, what: string, limit: int): CborError =
+  cborError(cekTooDeep, start, what & " nested deeper than " & $limit)
+
+func checkWellFormed(
+    data: openArray[byte], opts: DecodeOptions
+): Result[void, CborError] =
   var
     stack: seq[WfFrame]
     pos = 0
+    containers, tags = 0 ## arrays and maps, and tags, open on the stack
   while true:
     let start = pos
     let h = ?readHead(data, pos)
@@ -115,8 +139,7 @@ func checkWellFormed(data: openArray[byte], maxDepth: int): Result[void, CborErr
           return err(cborError(cekMalformed, start, "indefinite integer"))
       of 2, 3:
         if h.ai == 31:
-          if stack.len + 1 > maxDepth:
-            return err(cborError(cekTooDeep, start, "nesting deeper than " & $maxDepth))
+          # Chunks are definite strings, so this adds one frame at most.
           stack.add(WfFrame(kind: wfChunks, major: h.major))
           complete = false
         else:
@@ -125,10 +148,11 @@ func checkWellFormed(data: openArray[byte], maxDepth: int): Result[void, CborErr
           pos += int(h.arg)
       of 4, 5:
         let isMap = h.major == 5
-        if stack.len + 1 > maxDepth:
-          return err(cborError(cekTooDeep, start, "nesting deeper than " & $maxDepth))
+        if containers + 1 > opts.maxDepth:
+          return err(tooDeep(start, "arrays and maps", opts.maxDepth))
         if h.ai == 31:
           stack.add(WfFrame(kind: wfIndefinite, isMap: isMap))
+          inc containers
           complete = false
         else:
           let left =
@@ -142,13 +166,15 @@ func checkWellFormed(data: openArray[byte], maxDepth: int): Result[void, CborErr
             return err(cborError(cekMalformed, start, "truncated container"))
           if left > 0:
             stack.add(WfFrame(kind: wfDefinite, left: left, isMap: isMap))
+            inc containers
             complete = false
       of 6:
         if h.ai == 31:
           return err(cborError(cekMalformed, start, "indefinite tag"))
-        if stack.len + 1 > maxDepth:
-          return err(cborError(cekTooDeep, start, "nesting deeper than " & $maxDepth))
-        stack.add(WfFrame(kind: wfDefinite, left: 1))
+        if tags + 1 > opts.maxTagDepth:
+          return err(tooDeep(start, "tags", opts.maxTagDepth))
+        stack.add(WfFrame(kind: wfDefinite, left: 1, tag: true))
+        inc tags
         complete = false
       else:
         if h.ai == 31:
@@ -159,9 +185,12 @@ func checkWellFormed(data: openArray[byte], maxDepth: int): Result[void, CborErr
           return err(cborError(cekMalformed, start, "two-byte simple value below 32"))
     if breakHere:
       let frame = stack.pop()
-      if frame.kind == wfIndefinite and frame.isMap and frame.count mod 2 == 1:
-        return
-          err(cborError(cekMalformed, start, "indefinite map with a key and no value"))
+      if frame.kind == wfIndefinite:
+        dec containers
+        if frame.isMap and frame.count mod 2 == 1:
+          return err(
+            cborError(cekMalformed, start, "indefinite map with a key and no value")
+          )
       complete = true
     # Close every container this item completes.
     while complete and stack.len > 0:
@@ -169,7 +198,10 @@ func checkWellFormed(data: openArray[byte], maxDepth: int): Result[void, CborErr
       of wfDefinite:
         dec stack[^1].left
         if stack[^1].left == 0:
-          discard stack.pop()
+          if stack.pop().tag:
+            dec tags
+          else:
+            dec containers
         else:
           complete = false
       of wfIndefinite:
@@ -199,6 +231,7 @@ func decodeDeterministic(
   var
     stack: seq[Frame]
     pos = 0
+    containers, tags = 0 ## arrays and maps, and tags, open on the stack
   while true:
     let start = pos
     let h = ?readHead(data, pos)
@@ -219,8 +252,11 @@ func decodeDeterministic(
         true
     if h.major != 7 and not shortest:
       return err(cborError(cekNonDeterministic, start, "argument not in shortest form"))
-    if h.major in 4'u8 .. 6'u8 and stack.len + 1 > opts.maxDepth:
-      return err(cborError(cekTooDeep, start, "nesting deeper than " & $opts.maxDepth))
+    # Pass 1 already bounded both depths; these keep pass 2 safe on its own.
+    if h.major in 4'u8 .. 5'u8 and containers + 1 > opts.maxDepth:
+      return err(tooDeep(start, "arrays and maps", opts.maxDepth))
+    if h.major == 6 and tags + 1 > opts.maxTagDepth:
+      return err(tooDeep(start, "tags", opts.maxTagDepth))
     var item: CborValue = nil
     case h.major
     of 0:
@@ -249,6 +285,7 @@ func decodeDeterministic(
         item = node
       else:
         stack.add(Frame(node: node, start: start, left: h.arg))
+        inc containers
     of 5:
       let node = CborValue(
         kind: ckMap, entries: newSeqOfCap[CborEntry](int(min(h.arg, 1024'u64)))
@@ -257,11 +294,16 @@ func decodeDeterministic(
         item = node
       else:
         stack.add(Frame(node: node, start: start, left: h.arg * 2, prevKeyStart: -1))
+        inc containers
     of 6:
       stack.add(Frame(node: CborValue(kind: ckTag, tag: h.arg), start: start, left: 1))
+      inc tags
     else:
       case h.ai
       of 25, 26, 27:
+        if not opts.allowFloats:
+          # [SPEC INTERFACE §4.4 item 5] no floating-point item at any depth
+          return err(cborError(cekNonDeterministic, start, "floating-point data item"))
         let width =
           case h.ai
           of 25: fw16
@@ -310,6 +352,10 @@ func decodeDeterministic(
       dec stack[^1].left
       if stack[^1].left == 0:
         let frame = stack.pop()
+        if frame.node.kind == ckTag:
+          dec tags
+        else:
+          dec containers
         item = frame.node
         itemStart = frame.start
       else:
@@ -320,7 +366,7 @@ func decodeCbor*(
 ): Result[CborValue, CborError] =
   ## Decodes exactly one data item. Accepts only the unique deterministic
   ## encoding of the value, so `encodeCbor(decoded) == data` on success.
-  ?checkWellFormed(data, opts.maxDepth)
+  ?checkWellFormed(data, opts)
   decodeDeterministic(data, opts)
 
 func decodeCbor*(

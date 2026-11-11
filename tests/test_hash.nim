@@ -150,7 +150,7 @@ proc firstNode(p: PhysRoot, kind: NodeKind): PhysNode =
 # Tests -----------------------------------------------------------------------------
 
 suite "hash: hash input and suite":
-  test "[HSH-0169] [HSH-0170] [HSH-0044] [HSH-0086] App A: the mirrored hash input has the pinned length, ids and root":
+  test "[HSH-0169] [HSH-0194] [HSH-0044] [HSH-0086] App A: the mirrored hash input has the pinned length, ids and root":
     let bytes = mirrorHex("HSH/app-a.hash-input.hex")
     check bytes.len == parseInt(pin("hsh-app-a-input-length"))
     check digestOfInput(bytes).digestHex == pin("hsh-app-a-root")

@@ -21,7 +21,8 @@ logos.error_detail = bstr .size (1..4096)
 logos.invalid_params_reason =
     "malformed-cbor" /
     "non-deterministic-cbor" /
-    "schema-mismatch"
+    "schema-mismatch" /
+    "configuration-schema-mismatch"
 
 logos.invalid_params_path_segment = tstr / uint64
 
@@ -32,7 +33,7 @@ logos.invalid_params_detail = {
 
 ; -- exact schema commitment --
 logos.schema_commitment = {
-    commitment_model: "logos.commitment-model.2026-08",
+    commitment_model: "logos.commitment-model.2026-10",
     schema_root: bstr .size 32,
     hash_profile: "logos.hash-profile.2026-08.choice-index",
     hash_suite: "logos.hash-suite.blake3-256",

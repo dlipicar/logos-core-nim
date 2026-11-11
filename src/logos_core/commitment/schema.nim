@@ -68,6 +68,9 @@ type
     case kind*: DeclKind
     of dkMethod:
       request*, response*: string
+      sensitiveRequest*, sensitiveResponse*: bool
+        ## [SPEC COMMITMENT §9.1] fields `3` and `4`, set from `_sensitive`
+        ## (INTERFACE §1.2.1); part of the method's identity
     else:
       body*: SchemaNode
 
@@ -158,11 +161,52 @@ func toCbor*(n: SchemaNode): CborValue =
 func bodyCbor*(d: Declaration): CborValue =
   ## [SPEC COMMITMENT §9.1] `schema-declaration-body`.
   if d.kind == dkMethod:
-    cborMap(
-      entry(0, cbor("method")), entry(1, cbor(d.request)), entry(2, cbor(d.response))
-    )
+    var entries =
+      @[entry(0, cbor("method")), entry(1, cbor(d.request)), entry(2, cbor(d.response))]
+    # [SPEC COMMITMENT §9.1] A present sensitivity field is `true`; an unmarked
+    # direction omits its field.
+    if d.sensitiveRequest:
+      entries.add(entry(3, cbor(true)))
+    if d.sensitiveResponse:
+      entries.add(entry(4, cbor(true)))
+    cborMap(entries)
   else:
     toCbor(d.body)
+
+func methodBodyOf*(v: CborValue): Result[Declaration, string] =
+  ## [SPEC COMMITMENT §9.1, §10] A `method-declaration` object read back: exactly
+  ## the fields of the shape, sensitivity fields only as `true`. The result has
+  ## no name; compare it with the declaration built from the contract.
+  if v.isNil or v.kind != ckMap:
+    return err("a method declaration is a map")
+  var d = Declaration(kind: dkMethod)
+  var seen: set[0 .. 4]
+  for (k, x) in v.entries:
+    if k.kind != ckUint or k.uint > 4:
+      return err("unknown method-declaration field")
+    let key = int(k.uint)
+    seen.incl(key)
+    case key
+    of 0:
+      if x.kind != ckText or x.text != "method":
+        return err("field 0 of a method declaration is \"method\"")
+    of 1, 2:
+      if x.kind != ckText:
+        return err("a method declaration names its request and response")
+      if key == 1:
+        d.request = x.text
+      else:
+        d.response = x.text
+    else:
+      if x.kind != ckSimple or x.simple != SimpleTrue:
+        return err("a sensitivity field is present only as true")
+      if key == 3:
+        d.sensitiveRequest = true
+      else:
+        d.sensitiveResponse = true
+  if not (0 in seen and 1 in seen and 2 in seen):
+    return err("a method declaration needs fields 0, 1 and 2")
+  ok(d)
 
 func toCbor*(d: Declaration): CborValue =
   cborMap(entry(0, cbor($d.kind)), entry(1, cbor(d.name)), entry(2, bodyCbor(d)))

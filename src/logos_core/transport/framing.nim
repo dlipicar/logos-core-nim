@@ -1,6 +1,7 @@
 ## TRANSPORT §2.1: stream framing. Each message is a 4-byte big-endian length
 ## and that many bytes of CBOR. Sans-I/O: the reader takes whatever bytes the
-## carrier delivered and yields complete frame bodies.
+## carrier delivered and yields complete frame bodies; the writer checks that a
+## body fits the peer-supported maximum before any of it is written.
 
 {.push raises: [].}
 
@@ -10,30 +11,40 @@ export results
 
 const
   MinFrameLimit* = 16 * 1024 * 1024
-    ## [SPEC TRANSPORT §2.1] The smallest configured maximum a stream
-    ## implementation must support (`trn-max-frame-floor` in spec/pins.toml).
+    ## [SPEC TRANSPORT §2.1] The smallest active maximum accepted frame body a
+    ## stream binding may configure, and the peer-supported maximum a sender
+    ## assumes absent separately established support for a larger one
+    ## (`trn-max-frame-floor` in spec/pins.toml).
   FrameCeiling* = uint64(high(uint32)) ## what the length prefix can express
 
 type
   FrameErrorKind* = enum
-    feTooLarge ## a declared length over the configured maximum
+    feTooLarge ## a declared or sent length over the maximum
     feTruncated ## the stream ended inside a frame
 
   FrameError* = object
     kind*: FrameErrorKind
-    declared*: uint64 ## the declared body length
+    declared*: uint64 ## the declared (or, sending, the actual) body length
 
   FrameReader* = object
     ## Splits a byte stream into frame bodies. After an error it accepts nothing
-    ## more: the connection is to be closed (§2.1).
+    ## more: the connection is to be closed (§2.1). It holds at most the 4-byte
+    ## prefix and the body that prefix declared: `limit + 4` bytes [IMPL].
     limit: uint32
     pending: seq[byte] ## at most a header and the body declared by it
     want: int ## the body length being read; -1 while reading a header
     failed: bool
 
-func newFrameReader*(limit: uint32 = MinFrameLimit): FrameReader =
-  ## `limit` is the configured maximum accepted frame size [SPEC TRANSPORT §2.1].
-  FrameReader(limit: limit, want: -1)
+func newFrameReader*(): FrameReader =
+  ## A reader whose maximum accepted frame body is the 16 MiB floor.
+  FrameReader(limit: MinFrameLimit, want: -1)
+
+func newFrameReader*(limit: uint32): Result[FrameReader, string] =
+  ## [SPEC TRANSPORT §2.1] `limit` is the active configured maximum accepted
+  ## frame body; a conforming stream binding never configures one below 16 MiB.
+  if limit < MinFrameLimit:
+    return err("an active frame maximum below 16 MiB does not conform (§2.1)")
+  ok(FrameReader(limit: limit, want: -1))
 
 func limit*(r: FrameReader): uint32 =
   r.limit
@@ -45,10 +56,21 @@ func buffered*(r: FrameReader): int =
   ## Bytes held for an incomplete frame.
   r.pending.len
 
-func frame*(body: openArray[byte]): Result[seq[byte], string] =
-  ## [SPEC TRANSPORT §2.1] The length prefix and the body.
-  if uint64(body.len) > FrameCeiling:
-    return err("a frame body is at most 4,294,967,295 bytes")
+func fits*(bodyLen: int, peerLimit: uint32 = MinFrameLimit): bool =
+  ## [SPEC TRANSPORT §2.1] Whether a complete deterministic-CBOR body of
+  ## `bodyLen` bytes, envelope and commitments included and the prefix
+  ## excluded, fits the peer-supported maximum.
+  bodyLen >= 0 and uint64(bodyLen) <= uint64(peerLimit)
+
+func frame*(
+    body: openArray[byte], peerLimit: uint32 = MinFrameLimit
+): Result[seq[byte], FrameError] =
+  ## [SPEC TRANSPORT §2.1] The length prefix and the body, once the body is
+  ## known to fit the peer-supported maximum (16 MiB unless the peer
+  ## separately established a larger one). An oversized body yields nothing:
+  ## no part of it is to be written.
+  if not fits(body.len, peerLimit):
+    return err(FrameError(kind: feTooLarge, declared: uint64(body.len)))
   let n = uint32(body.len)
   var s = newSeqOfCap[byte](4 + body.len)
   s.add([byte(n shr 24), byte(n shr 16), byte(n shr 8), byte(n)])

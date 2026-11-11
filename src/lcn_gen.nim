@@ -1,7 +1,8 @@
-## lcn-gen: the canonical C type headers of an accepted Logos schema set
-## (INTERFACE §2.1-§2.3, §2.5) and `logos_types.h` (§5.2). Types only for now
-## (D29): method signatures, lifecycle symbols and vtables come later. Every
-## header is stamped PROVISIONAL ABI.
+## lcn-gen: the canonical C type headers of an accepted Logos schema set or
+## module binding (INTERFACE §2, §2.1-§2.3, §2.5, §3.2; C mapping revision 3)
+## and `logos_types.h` (§5.2). Types only for now (D29): method signatures,
+## lifecycle symbols and vtables come later. Every header is stamped
+## PROVISIONAL ABI.
 
 import std/[os, parseopt, strutils]
 import results
@@ -11,24 +12,37 @@ import ./logos_core/codegen/nimgen
 const usage = """
 Usage:
   lcn-gen logos-types [--out:DIR]
-  lcn-gen types [--out:DIR] [--system] PRIMARY.cddl
+  lcn-gen types [--out:DIR] [--system] [--module:NAME] [PRIMARY.cddl]
                 [--interface:FILE]... [--supporting:FILE]...
   lcn-gen nim-common [--out:DIR] [--import-prefix:P]
-  lcn-gen nim [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
+  lcn-gen nim [--out:DIR] [--import-prefix:P] [--system] [--module:NAME] PRIMARY.cddl
               [--interface:FILE]... [--supporting:FILE]...
 
 logos-types  writes DIR/logos_types.h
 types        accepts the construction input set (INTERFACE §1.1, §5.3) and
-             writes DIR/<module or namespace>_types.h
+             writes DIR/<module or namespace>_types.h; with --module, the
+             module binding (INTERFACE §2): PRIMARY may then be left out for
+             an interface-only provider, whose implemented interfaces are
+             the --interface documents
 nim-common   writes DIR/common_types.nim (the pinned common schema)
 nim          accepts the set and writes DIR/<module or namespace>_types.nim
 
 --import-prefix:P  how Nim output imports this library (default: logos_core/)
 
 --out:DIR          output directory (default: .)
+--module:NAME      the runtime module name of an explicit module binding; it
+                   must agree with PRIMARY's _module and _implements
 --system           the set is a Logos system contract (reserved logos names)
 --interface:FILE   an implemented interface document (repeatable)
 --supporting:FILE  a supporting schema document (repeatable)
+
+Limits (INTERFACE §2.1): no identifier-length limit; identifiers are never
+truncated, hashed or aliased. Input is bounded by the INTERFACE §5.3 schema
+limits (1 MiB per document, 8 MiB per input set, 65,536 schema nodes, 128
+nesting levels), and work and memory grow linearly with it. A choice whose
+largest C discriminant exceeds UINT32_MAX, and for nim output names that
+collide under Nim's identifier rules, fail with an error. On any failure
+nothing is written.
 """
 
 proc fail(msg: string): int =
@@ -52,6 +66,7 @@ proc main(): int =
   var
     command = ""
     primary = ""
+    module = ""
     outDir = "."
     prefix = "logos_core/"
     opts = AcceptOptions()
@@ -71,6 +86,8 @@ proc main(): int =
         outDir = val
       of "import-prefix":
         prefix = val
+      of "module":
+        module = val
       of "system":
         opts.system = true
       of "interface":
@@ -92,14 +109,31 @@ proc main(): int =
       return fail(error)
     write(outDir, "common_types.nim", module)
   of "types", "nim":
-    if primary.len == 0:
+    if primary.len == 0 and (module.len == 0 or command == "nim"):
       return fail("no primary document\n" & usage)
     var sources: seq[string]
     try:
-      for f in @[primary] & interfaces & supporting:
+      for f in (if primary.len > 0: @[primary] else: @[]) & interfaces & supporting:
         sources.add(readFile(f))
     except CatchableError as e:
       return fail(e.msg)
+    if module.len > 0:
+      let first = if primary.len > 0: 1 else: 0
+      let b = acceptBinding(
+        module,
+        if primary.len > 0:
+          Opt.some(sources[0])
+        else:
+          Opt.none(string),
+        sources[first ..< first + interfaces.len],
+        sources[first + interfaces.len .. ^1],
+        opts,
+      ).valueOr:
+        return fail("the module binding is not accepted: " & error)
+      if command == "types":
+        let header = contractHeader(b.cSchemaSet).valueOr:
+          return fail(error)
+        return write(outDir, b.cSchemaSet.headerName & "_types.h", header)
     let set = acceptContractSet(
       sources[0], sources[1 .. interfaces.len], sources[interfaces.len + 1 .. ^1], opts
     ).valueOr:

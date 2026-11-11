@@ -9,7 +9,7 @@
     nixpkgs-nph.url = "github:NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6";
     # The specs under implementation.
     logos-lips = {
-      url = "git+https://github.com/logos-co/logos-lips?ref=draft/logos-core-module-specs&rev=f4f83471bed90139901a4230299a66d1bc0cd9dd";
+      url = "git+https://github.com/logos-co/logos-lips?ref=draft/logos-core-module-specs&rev=6a4dfa2846ab9f1f679ad285f8caa848ee8544ad";
       flake = false;
     };
   };
@@ -145,7 +145,9 @@
             name: command:
             pkgs.runCommand name { nativeBuildInputs = [ spectrace python ]; } ''
               cd ${specSources}
-              ${command}
+              # A subshell: under `set -e` a failure before the last step of an
+              # `a && b` list would not stop the script, and the check would pass.
+              ( ${command} ) || exit 1
               touch $out
             '';
           specChecks = {

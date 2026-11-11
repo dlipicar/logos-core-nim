@@ -1,0 +1,3 @@
+types.alias = types.record
+types.count = uint64
+types.record = { detail: logos.error_detail, value: types.count }

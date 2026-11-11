@@ -5,6 +5,11 @@
 ## selected request, response or event declaration. Every rejection says which
 ## shared code applies and, for `INVALID_PARAMS`, the `logos.invalid_params_detail`
 ## reason and the path to the offending item.
+##
+## Payload depth [SPEC INTERFACE §4.5.1]: arrays and maps nest at most
+## `maxDepth` levels on any path, a documented, finite and configurable limit of
+## at least 128 (`MinMaxDepth`); the default is `DefaultMaxDepth` (1024)
+## [IMPL-DECISION G59]. The decoder checks it before descending into a container.
 
 {.push raises: [].}
 
@@ -19,33 +24,52 @@ type
     code*: ErrorCode
     reason*: Opt[InvalidParamsReason]
       ## none when no detail applies: an unknown method, or nesting past the
-      ## decoder cap (G59)
-    path*: seq[CborValue] ## from the payload's root to the offending item
+      ## payload depth limit (§4.5.1)
+    path*: seq[CborValue]
+      ## from the rejected value's root to the offending item: the request,
+      ## response or event value, or for `configuration-schema-mismatch` the
+      ## decoded configuration value
     msg*: string
 
   ContractValidator* = object
     ## Validates payloads for every callable of one accepted contract set.
     contracts*: ContractSet
     surface*: CallSurface
+    maxDepth*: int ## [SPEC INTERFACE §4.5.1] the payload depth limit, >= 128
     sets: seq[SchemaSet] ## one per `contracts.documents` entry
 
-func validator*(s: ContractSet): ContractValidator =
-  var v = ContractValidator(contracts: s, surface: s.callSurface)
+func newValidator(s: ContractSet, maxDepth: int): ContractValidator =
+  var v = ContractValidator(contracts: s, surface: s.callSurface, maxDepth: maxDepth)
   for c in s.documents:
     v.sets.add(schemaSetFor(c.model, s.context))
   v
+
+func validator*(s: ContractSet): ContractValidator =
+  ## A validator with the default payload depth limit, `DefaultMaxDepth`.
+  newValidator(s, DefaultMaxDepth)
+
+func validator*(s: ContractSet, maxDepth: int): Result[ContractValidator, string] =
+  ## [SPEC INTERFACE §4.5.1] A validator with a configured payload depth limit;
+  ## a limit below 128 is not a conforming configuration.
+  if maxDepth < MinMaxDepth:
+    return err("the payload depth limit is below " & $MinMaxDepth)
+  ok(newValidator(s, maxDepth))
 
 func failure(code: ErrorCode, reason: InvalidParamsReason, msg: string): PayloadError =
   PayloadError(code: code, reason: Opt.some(reason), msg: msg)
 
 func decodePayload*(
-    data: openArray[byte], code = ecInvalidParams
+    data: openArray[byte], code = ecInvalidParams, maxDepth = DefaultMaxDepth
 ): Result[CborValue, PayloadError] =
   ## [SPEC INTERFACE §4.4, §4.5] One complete Logos deterministic-CBOR item.
   ## Text that is not UTF-8 decodes, so the schema check can reject it as a
-  ## schema mismatch at its path (§4.5).
+  ## schema mismatch at its path (§4.5). A floating-point item at any depth is
+  ## non-deterministic CBOR and never reaches the schema check (§4.4, §4.5).
+  ## Containers nest at most `maxDepth` levels (§4.5.1); [IMPL] a value below
+  ## 128 is raised to 128.
   var opts = defaultDecodeOptions()
   opts.allowInvalidUtf8 = true
+  opts.maxDepth = max(maxDepth, MinMaxDepth)
   let v = decodeCbor(data, opts).valueOr:
     return
       case error.kind
@@ -56,7 +80,8 @@ func decodePayload*(
       of cekInvalidUtf8:
         err(failure(code, iprSchemaMismatch, $error))
       of cekTooDeep:
-        # [IMPL-DECISION G59] Over the depth cap: INVALID_PARAMS without detail.
+        # [SPEC INTERFACE §4.5.1] Over the depth limit: the payload is not
+        # dispatched, accepted or delivered, and the rejection has no detail.
         err(PayloadError(code: code, msg: $error))
   ok(v)
 
@@ -88,7 +113,7 @@ func checkParams*(
   let m = v.surface.findMethod(methodName).valueOr:
     return
       err(PayloadError(code: ecMethodNotFound, msg: "unknown method " & methodName))
-  let x = ?decodePayload(data)
+  let x = ?decodePayload(data, maxDepth = v.maxDepth)
   ?v.validateAgainst(m.doc, m.request, x, ecInvalidParams)
   ok(x)
 
@@ -101,7 +126,7 @@ func checkResult*(
   let m = v.surface.findMethod(methodName).valueOr:
     return
       err(PayloadError(code: ecMethodNotFound, msg: "unknown method " & methodName))
-  let x = ?decodePayload(data, ecModule)
+  let x = ?decodePayload(data, ecModule, v.maxDepth)
   ?v.validateAgainst(m.doc, m.response, x, ecModule)
   ok(x)
 
@@ -112,19 +137,19 @@ func checkEvent*(
   ## the selected event's type, for an event the contract declares.
   let e = v.surface.findEvent(eventId).valueOr:
     return err(PayloadError(code: ecInvalidParams, msg: "unknown event " & eventId))
-  let x = ?decodePayload(data)
+  let x = ?decodePayload(data, maxDepth = v.maxDepth)
   ?v.validateAgainst(e.doc, e.id, x, ecInvalidParams)
   ok(x)
 
 func toFailure*(e: PayloadError): InvocationFailure =
   ## The invocation failure a dispatcher returns for a rejected payload. Only
   ## INVALID_PARAMS carries detail; it describes the caller's own input.
-  ## A schema mismatch names the path to the offending item (empty: the value
-  ## itself).
+  ## A schema or configuration-schema mismatch names the path to the offending
+  ## item (empty: the rejected value itself).
   var f = InvocationFailure(code: e.code)
   if e.code == ecInvalidParams and e.reason.isSome:
     let path =
-      if e.reason.get == iprSchemaMismatch:
+      if e.reason.get in {iprSchemaMismatch, iprConfigurationSchemaMismatch}:
         Opt.some(e.path)
       else:
         Opt.none(seq[CborValue])

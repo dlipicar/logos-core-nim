@@ -1,7 +1,7 @@
 ## PM §2, §3, §7.1, §8: the LGX realization profile. An LGX package is a gzip
-## (RFC 1952) USTAR archive holding `manifest.cbor`, `manifest.cose`, an
-## optional `manifest.json`, and one directory per manifest variant under
-## `variants/`. This module writes such archives, reads them with every §7.1
+## (RFC 1952) USTAR archive holding `manifest.cbor`, `manifest.cose` and one
+## directory per manifest variant under `variants/`; nothing else may sit at
+## the root. This module writes such archives, reads them with every §7.1
 ## structure, path and encoding rule checked, verifies the signature, selects
 ## the first compatible variant and checks its artifacts. It extracts nothing:
 ## installation (§7.1 extraction, PKG-0204/0219) belongs to the Package Manager.
@@ -21,7 +21,6 @@ export results, errors, manifest, signing
 const
   ManifestCborPath* = "manifest.cbor" ## [SPEC PM §3]
   ManifestCosePath* = "manifest.cose" ## [SPEC PM §3]
-  ManifestJsonPath* = "manifest.json" ## [SPEC PM §3] diagnostic only (G45)
   VariantsDir* = "variants" ## [SPEC PM §7.1]
   FileMode* = 0o644 ## [SPEC PM §7.1]
   DirMode* = 0o755 ## [SPEC PM §7.1]
@@ -335,7 +334,7 @@ proc readTar(tar: openArray[byte], limits: LgxLimits): Result[seq[LgxEntry], str
   ## [SPEC PM §7.1] [IMPL-DECISION G40, G41] POSIX USTAR entries: regular files
   ## (mode 0644) and directories (mode 0755) only, zero ids and times, empty
   ## user and group names, no link names, zero padding, and two zero blocks at
-  ## the end followed by nothing but zeros.
+  ## the end followed only by complete zero-filled blocks.
   var entries: seq[LgxEntry]
   var pos = 0
   while true:
@@ -344,6 +343,9 @@ proc readTar(tar: openArray[byte], limits: LgxLimits): Result[seq[LgxEntry], str
     if isZeroBlock(tar, pos):
       if pos + 2 * BlockSize > tar.len or not isZeroBlock(tar, pos + BlockSize):
         return err("a zero block that is not the end of the archive")
+      # [SPEC PM §7.1] any further padding is complete zero-filled blocks
+      if (tar.len - pos - 2 * BlockSize) mod BlockSize != 0:
+        return err("archive padding that is not a whole number of 512-byte blocks")
       for i in pos + 2 * BlockSize ..< tar.len:
         if tar[i] != 0:
           return err("data after the end of the archive")
@@ -438,7 +440,7 @@ func checkStructure(entries: seq[LgxEntry]): Result[void, string] =
       )
     let segs = e.path.split('/')
     case segs[0]
-    of ManifestCborPath, ManifestCosePath, ManifestJsonPath:
+    of ManifestCborPath, ManifestCosePath:
       if segs.len != 1 or e.kind != lekFile:
         return err(segs[0] & " is not a regular file at the root")
     of VariantsDir:
@@ -478,15 +480,12 @@ func file*(a: LgxArchive, path: string): Opt[seq[byte]] =
 proc writeLgx*(
     manifestCbor, manifestCose: seq[byte],
     variants: seq[(string, seq[(string, seq[byte])])],
-    manifestJson = Opt.none(seq[byte]),
 ): Result[seq[byte], string] =
   ## [SPEC PM §7.1] [IMPL-DECISION G40, G41] An LGX archive: entries in path
   ## byte order, a 0755 directory entry for every directory, 0644 files, zero
   ## ids and times, empty names, no pax headers. `variants` maps each variant id
   ## to its files, by path relative to the variant directory.
   var files = @[(ManifestCborPath, manifestCbor), (ManifestCosePath, manifestCose)]
-  if manifestJson.isSome:
-    files.add((ManifestJsonPath, manifestJson.get))
   var dirs = initHashSet[string]()
   dirs.incl(VariantsDir)
   for (id, content) in variants:
@@ -513,6 +512,13 @@ proc writeLgx*(
 
 # Platforms -------------------------------------------------------------------------
 
+const
+  DefinedOs* = ["android", "darwin", "ios", "linux", "windows"]
+    ## [IMPL-DECISION G73] the `os` values our deployment profile defines
+    ## (PM §7.1, BCP §5.4)
+  DefinedArchitectures* = ["aarch64", "x86_64"] ## [IMPL-DECISION G73]
+  DefinedAbis* = ["gnu", "mingw", "msvc", "musl"] ## [IMPL-DECISION G73]
+
 func hostPlatform*(): Platform =
   ## [IMPL-DECISION G73] The platform this build runs on.
   let os =
@@ -536,12 +542,19 @@ func hostPlatform*(): Platform =
       Opt.none(string)
   Platform(os: os, architecture: arch, abi: abi)
 
+func matches(want: string, have: Opt[string], defined: openArray[string]): bool =
+  ## [SPEC PM §7.1] A value with no defined matching rule never matches.
+  ## [IMPL-DECISION G73] A defined value matches itself byte for byte.
+  want in defined and have.isSome and have.get == want
+
 func compatible*(c: PlatformConstraint, p: Platform): bool =
-  ## [SPEC PM §7.1] [IMPL-DECISION G73] Each present field equals the
-  ## platform's value byte for byte; an absent field constrains nothing.
-  (c.os.isNone or c.os.get == p.os) and
-    (c.architecture.isNone or c.architecture.get == p.architecture) and
-    (c.abi.isNone or (p.abi.isSome and c.abi.get == p.abi.get))
+  ## [SPEC PM §7.1] [IMPL-DECISION G73] Each present field matches the
+  ## platform's value under the profile's rules; an absent field constrains
+  ## nothing.
+  (c.os.isNone or c.os.get.matches(Opt.some(p.os), DefinedOs)) and (
+    c.architecture.isNone or
+    c.architecture.get.matches(Opt.some(p.architecture), DefinedArchitectures)
+  ) and (c.abi.isNone or c.abi.get.matches(p.abi, DefinedAbis))
 
 func selectVariant*(m: Manifest, p: Platform): Result[int, PackageError] =
   ## [SPEC PM §7.1] The first compatible variant in declared order.
@@ -561,24 +574,46 @@ const WindowsReserved = [
   "lpt7", "lpt8", "lpt9",
 ]
 
-func checkPlatformPaths*(paths: openArray[string], os: string): Result[void, string] =
-  ## [SPEC PM §7.1] [IMPL-DECISION G73] On darwin and windows, paths (and their
-  ## directories) that differ only in case collide; on windows, reserved device
-  ## names, `<>:"|?*`, control characters and segments ending in `.` or space
-  ## are refused.
-  if os notin ["darwin", "windows", "ios"]:
+type PathRules* = object
+  ## [SPEC PM §7.1] The path-comparison rules of the filesystem and namespace
+  ## used for installation, which the deployment documents (PKG-0486).
+  ignoreCase*: bool ## paths that differ only in case name one entry
+  windowsNames*: bool
+    ## reserved device names, `<>:"|?*`, control characters and segments
+    ## ending in `.` or space are refused
+
+func hostPathRules*(): PathRules =
+  ## [IMPL-DECISION G73] The conservative rules for this build's own default
+  ## filesystems: case-insensitive on darwin, ios and windows, plus the Windows
+  ## naming rules on windows. An installer passes its real root's rules.
+  when defined(windows):
+    PathRules(ignoreCase: true, windowsNames: true)
+  elif defined(macosx) or defined(ios):
+    PathRules(ignoreCase: true)
+  else:
+    PathRules()
+
+func checkInstallPaths*(
+    paths: openArray[string], rules: PathRules
+): Result[void, string] =
+  ## [SPEC PM §7.1] [IMPL-DECISION G73] The selected variant's paths, and their
+  ## directories, under the installation's rules: under `ignoreCase`, two that
+  ## differ only in case (`unicode.toLower` over every prefix) collide.
+  if not rules.ignoreCase and not rules.windowsNames:
     return ok()
   var seen = initTable[string, string]()
   for p in paths:
     let segs = p.split('/')
     for i in 1 .. segs.len:
+      if not rules.ignoreCase:
+        break
       let prefix = segs[0 ..< i].join("/")
       let folded = unicode.toLower(prefix)
       let other = seen.getOrDefault(folded, prefix)
       if other != prefix:
         return err("paths collide when case is ignored: " & other & " and " & prefix)
       seen[folded] = prefix
-    if os == "windows":
+    if rules.windowsNames:
       for seg in segs:
         let stem = unicode.toLower(seg.split('.')[0])
         if stem in WindowsReserved:
@@ -597,6 +632,7 @@ proc openLgx*(
     trust: TrustInput,
     platform = hostPlatform(),
     limits = DefaultLgxLimits,
+    pathRules = hostPathRules(),
 ): Result[LgxPackage, PackageError] =
   ## [SPEC PM §2, §3, §4, §7.1, §8] In order: the archive rules
   ## (`invalid-package`); `manifest.cbor` present (`invalid-package`) and
@@ -604,10 +640,10 @@ proc openLgx*(
   ## its signature (`verifyPackage`); one directory per manifest variant
   ## (`invalid-package`); each variant's files declared exactly once
   ## (`invalid-package`); the first compatible variant
-  ## (`incompatible-platform`); its paths under the platform's rules
+  ## (`incompatible-platform`); its paths under the installation's rules
   ## (`invalid-package`); its artifacts present, within the extracted-size
-  ## limit and matching their hashes (`artifact-integrity-failed`).
-  ## `manifest.json` is path-checked and otherwise ignored [IMPL-DECISION G45].
+  ## limit and matching their hashes (`artifact-integrity-failed`). The
+  ## target platform comes from protected deployment policy (PM §7.1).
   let a = ?readLgx(data, limits)
   let manifestCbor = a.file(ManifestCborPath).valueOr:
     return err(invalid("the package has no manifest.cbor"))
@@ -669,7 +705,7 @@ proc openLgx*(
   for p in subdirs.getOrDefault(v.id):
     paths.add(p)
   paths.sort()
-  checkPlatformPaths(paths, platform.os).isOkOr:
+  checkInstallPaths(paths, pathRules).isOkOr:
     return err(invalid("variant " & v.id & ": " & error))
 
   var pkg = LgxPackage(verified: verified, variant: v)

@@ -1,4 +1,5 @@
 logos.package_manager.installed_package_record = {
+  signer: logos.package_manager.package_signer,
   identity: logos.package_manager.package_identity,
   source: logos.package_manager.package_source,
   variant: logos.package_manifest.package_variant_id,
@@ -23,7 +24,7 @@ logos.package_manager.package_source =
   }
 
 logos.package_manager.manifest_commitment = {
-  commitment_model: "logos.commitment-model.2026-08",
+  commitment_model: "logos.commitment-model.2026-10",
   schema_root: bstr .size 32,
   schema_subtree_root: bstr .size 32,
   value_root: bstr .size 32,

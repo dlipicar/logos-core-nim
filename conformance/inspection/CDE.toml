@@ -2,10 +2,6 @@
 # Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
 
 [[item]]
-ids = ["CDE-0009"]
-reason = "BCP 14 boilerplate: defines how the other units are read; it has no behaviour of its own."
-
-[[item]]
 ids = ["CDE-0027"]
 reason = "Addressed to consumers. CddlDocument has no root field; the COMMITMENT layer selects rules by bound name (src/logos_core/cddl/model.nim)."
 

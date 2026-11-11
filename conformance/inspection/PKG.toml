@@ -1,0 +1,6 @@
+# Package Manager requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["PKG-0496"]
+reason = "A permission. openLgx (src/logos_core/package/lgx.nim) checks in the order its doc comment lists and returns the first failure it detects, with that check's assigned error; the tests in tests/test_lgx.nim each break one rule and expect that rule's error."

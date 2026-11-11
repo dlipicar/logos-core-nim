@@ -1,0 +1,3 @@
+a.x = a.y
+a.y = a.z
+a.z = tstr

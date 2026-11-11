@@ -1,20 +1,22 @@
 # logos-core-nim
 
 A Nim implementation of the Logos Core module specs: logos-lips, branch
-`draft/logos-core-module-specs`, files `docs/logos-core/raw/spec-*.md`, pinned at `f4f83471`.
+`draft/logos-core-module-specs`, files `docs/logos-core/raw/spec-*.md`, pinned at `6a4dfa28` (since 2026-11-10; the work
+before that was built against `f4f83471`).
 
 The specs are being revised, so the work is ordered by how settled each area is
 ([docs/SPEC-STATUS.md](docs/SPEC-STATUS.md)). Built so far:
 
 - Tier 1: deterministic CBOR, BLAKE3, cdCDDLe, the hash profile and the commitment model.
 - Tier 2: INTERFACE schema acceptance, call surfaces, payload validation and outcomes, the common
-  schema, and `lcn-gen`, which generates C types and Nim types with codecs. Generated C headers are
+  schema, and `lcn-gen`, which generates C types (C mapping revision 3) and Nim types with codecs. Generated C headers are
   stamped `PROVISIONAL ABI`. Method signatures, lifecycle symbols and vtables come later.
 - Tier 3, without I/O: the TRANSPORT envelope, framing, Hello and route tickets, payload
   commitments, cancellation and multiplexing as codecs and state machines; and the Package Manager's
-  package artifacts: the manifest and its commitment, package-signing trust input, COSE_Sign1 with
-  Ed25519 (BoringSSL plus the G42 checks), LGX archives, and `lcn-pkg`, the producer tools. Sockets,
-  fetch, catalogs, installation and the resolver come later.
+  package artifacts: the manifest and its commitment, package-signing trust input, COSE_Sign1, LGX
+  archives, and `lcn-pkg`, the producer tools. Sockets, fetch, catalogs, installation and the
+  resolver come later. At `6a4dfa28` package signing moved from Ed25519 to SLH-DSA-SHA2-192s (PM
+  §4.3); the code still signs with Ed25519 until the implementation is chosen (DECISIONS R4, I50).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 
@@ -118,7 +120,7 @@ Evaluation fails while the JSON and `nimble.lock` disagree.
 | `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator and its runtime; the `lcn-gen` CLI. |
 | `src/logos_core/transport/` | TRANSPORT without I/O: envelope codec, framing, Hello, tickets, sessions, the schema boundary. |
 | `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; the `lcn-pkg` CLI. |
-| `src/logos_core/crypto/ed25519.nim`, `src/logos_core/base/nfc.nim` | Ed25519 over BoringSSL with the G42 checks; Unicode NFC for LGX paths. |
+| `src/logos_core/crypto/ed25519.nim`, `src/logos_core/base/nfc.nim` | Ed25519 over BoringSSL with the G42 checks (interim signer until R4); Unicode NFC for LGX paths. |
 | `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. `tests/generated/` is `lcn-gen` output. |
 | `spec/mirrors/`, `spec/mirrors.toml` | Verbatim copies of the spec blocks the code and tests are built from. |
 | `spec/pins.toml` | Every identifier, root and digest the specs pin, with the section it comes from. |

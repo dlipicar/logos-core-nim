@@ -147,8 +147,10 @@ func byNamespace(cs: seq[Contract]): seq[Contract] =
 func schemaResponse*(s: ContractSet, selected: Digest): Result[CborValue, string] =
   ## [SPEC INTERFACE §5.1] The `logos.schema_response` of a route that selects
   ## the contract `selected` of this set: the primary concrete contract with
-  ## exactly its interfaces and supporting schemas, or one implemented interface
-  ## alone (never the primary schema or another interface).
+  ## exactly its interfaces and the supporting schemas validated for the set, or
+  ## one implemented interface with all and only the supporting schemas it uses
+  ## (never the primary schema, another interface, or a supporting schema only
+  ## they need).
   var v: CborValue
   if selected == s.primary.root:
     v = cborMap(
@@ -164,7 +166,7 @@ func schemaResponse*(s: ContractSet, selected: Digest): Result[CborValue, string
         v = cborMap(
           (cbor("interface_schemas"), cborArray()),
           (cbor("schema"), cbor(c.source)),
-          (cbor("supporting_schemas"), cborArray()),
+          (cbor("supporting_schemas"), cborArray(s.supportingOf(c).mapIt(entry(it)))),
         )
     if not found:
       return err("the set has no contract with the selected root")

@@ -26,6 +26,8 @@ method-declaration = {
     0: "method",
     1: qualified-name,       ; request declaration name
     2: qualified-name,       ; response declaration name
+    ? 3: true,               ; sensitive request
+    ? 4: true,               ; sensitive response
 }
 
 schema-node =

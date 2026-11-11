@@ -101,11 +101,17 @@ func at(s: string, i: int): char =
   else:
     '\0'
 
+func isC1(s: string, j: int): bool =
+  ## Whether a C1 control (U+0080 to U+009F, UTF-8 `C2 80` to `C2 9F`) starts
+  ## at `j`. RFC 9682 §2.1.2 excludes U+007F to U+009F from strings and comments.
+  s[j] == '\xC2' and s.at(j + 1) in {'\x80' .. '\x9F'}
+
 func skipComment(s: string, i: int): Result[int, Token] =
-  ## `COMMENT = ";" *PCHAR CRLF`; returns the index of the line break.
+  ## `COMMENT = ";" *PCHAR CRLF`, with RFC 9682's PCHAR; returns the index of
+  ## the line break.
   var j = i + 1
   while j < s.len and s[j] notin {'\n', '\r'}:
-    if s[j] < ' ' or s[j] == '\x7f':
+    if s[j] < ' ' or s[j] == '\x7f' or s.isC1(j):
       return err(errTok(j, "control character in a comment"))
     inc j
   if j >= s.len:
@@ -227,11 +233,33 @@ func hex4(s: string, at: int): int =
       )
   v
 
+func bracedScalar(s: string, j: var int): int =
+  ## `"{" (1*"0" [hexscalar] / hexscalar) "}"` (RFC 9682 §2.1.1) at `j`: one or
+  ## more hex digits naming a Unicode scalar value, leading zeros allowed.
+  ## Returns the code point and moves `j` past the `}`, or returns -1.
+  var
+    k = j + 1
+    code = 0
+  while k < s.len and s[k] in HexDigits:
+    let c = s[k]
+    code =
+      code * 16 +
+      (if c in Digits: ord(c) - ord('0')
+      else: (ord(c) or 0x20) - ord('a') + 10)
+    if code > 0x10ffff:
+      return -1
+    inc k
+  if k == j + 1 or s.at(k) != '}' or code in 0xd800 .. 0xdfff:
+    return -1
+  j = k + 1
+  code
+
 func readEscape(
     s: string, j: var int, output: var string, quote: char
 ): Result[void, Token] =
-  ## RFC 8610 §3.1: string escapes follow RFC 8259 §7 (G11). `s[j]` is the
-  ## backslash. A byte string may also escape its own quote character.
+  ## `SESC` of RFC 9682 §2.1.1 (cdCDDLe §5): the RFC 8259 §7 escapes plus
+  ## `\u{hex}` for any Unicode scalar value. `s[j]` is the backslash. A byte
+  ## string may also escape its own quote character (`BCHAR`'s `"\'"`).
   let e = s.at(j + 1)
   case e
   of '"', '\\', '/':
@@ -258,6 +286,14 @@ func readEscape(
     output.add('\t')
     j += 2
   of 'u':
+    if s.at(j + 2) == '{':
+      var k = j + 2
+      let code = bracedScalar(s, k)
+      if code < 0:
+        return err(errTok(j, "\\u{...} needs hex digits naming a Unicode scalar value"))
+      j = k
+      output.add($Rune(code))
+      return ok()
     var code = hex4(s, j + 2)
     if code < 0:
       return err(errTok(j, "\\u needs four hex digits"))
@@ -276,7 +312,7 @@ func readEscape(
       return err(errTok(j, "unpaired surrogate in a \\u escape"))
     output.add($Rune(code))
   else:
-    return err(errTok(j, "unknown escape (RFC 8259 §7 escapes only)"))
+    return err(errTok(j, "unknown escape (RFC 9682 §2.1.1 escapes only)"))
   ok()
 
 func lexQuoted(s: string, i: int, quote: char): Token =
@@ -295,11 +331,13 @@ func lexQuoted(s: string, i: int, quote: char): Token =
       if r.isErr:
         return r.error
     elif c in {'\n', '\r'} and quote == '\'':
+      # RFC 9682's BCHAR admits CRLF, but neither it nor cdCDDLe says which
+      # bytes a source line break contributes (G157).
       return errTok(
-        j, "a line break inside an unprefixed byte string is not supported",
+        j, "a line break inside an unprefixed byte string is not supported [G157]",
         ecUnsupported,
       )
-    elif c < ' ' or c == '\x7f':
+    elif c < ' ' or c == '\x7f' or s.isC1(j):
       return errTok(j, "control character in a string")
     else:
       output.add(c)
@@ -569,8 +607,17 @@ proc parseMember(p: var Parser, isMap: bool): Result[SrcMember, CddlError] =
       key = Opt.some(p.tok.text)
       p.advance()
       p.advance()
-    elif p.tok.kind in {tInt, tBigInt, tFloat, tText, tBytes}:
-      return err(p.unsupported(p.tok.pos, "map keys must be barewords"))
+    elif p.tok.kind == tText:
+      # cdCDDLe §5.1, §7.4: a text-string literal key is the same member key
+      # as the bareword with that text.
+      if not isMap:
+        return
+          err(p.unsupported(p.tok.pos, "array members cannot have keys (cdCDDLe §8)"))
+      key = Opt.some(p.tok.lit.text)
+      p.advance()
+      p.advance()
+    elif p.tok.kind in {tInt, tBigInt, tFloat, tBytes}:
+      return err(p.unsupported(p.tok.pos, "map keys must be barewords or text strings"))
   let first = ?p.parseType1()
   if p.isPunct("^"):
     return err(p.unsupported(p.tok.pos, "explicit cuts (^) are not supported"))
@@ -579,7 +626,7 @@ proc parseMember(p: var Parser, isMap: bool): Result[SrcMember, CddlError] =
   let typ = ?p.parseChoiceRest(first)
   if isMap:
     if key.isNone:
-      return err(p.unsupported(start, "map entries need a bareword key"))
+      return err(p.unsupported(start, "map entries need a bareword or text-string key"))
     if occurrence == occUnbounded:
       return
         err(p.unsupported(start, "the * occurrence is only supported on array members"))

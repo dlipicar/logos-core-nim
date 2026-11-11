@@ -1,15 +1,15 @@
-## TRANSPORT §3.1, §3.3, §8.1, §8.3, §10.1: the Hello exchange of an ordinary
-## protected provider session under the `logos.route-ticket.random-256`
+## TRANSPORT §2.1, §2.3, §3.1, §3.3, §8.1, §8.3, §10.1: the Hello exchange of an
+## ordinary protected provider session under the `logos.route-ticket.random-256`
 ## profile, for the callee (validate, redeem, answer) and the caller (send,
-## check the answer).
+## check the answer), and what each accepts before its part of it is done.
 
 {.push raises: [].}
 
 import results
 import ../cbor
-import ./[envelope, ticket]
+import ./[envelope, framing, limits, ticket]
 
-export results, envelope, ticket
+export results, envelope, limits, ticket
 
 type
   RouteBinding* = object
@@ -41,7 +41,8 @@ type
     hrSchema ## `schema` missing, malformed, another profile or suite, or differs
     hrTicket ## the route-ticket check
     hrRedeem ## the ticket was consumed concurrently
-    hrPeer ## the peer answered with ProtocolError
+    hrPeer ## the peer sent a well-formed ProtocolError: close, no reply
+    hrSend ## this side's Hello does not fit the peer's frame maximum (§2.1)
 
   HelloFailure* = object
     code*: ErrorCode
@@ -82,10 +83,12 @@ type FirstMessage = object
   message: Message
   schemaOk: bool
 
-proc readFirst(frame: openArray[byte]): Result[FirstMessage, HelloFailure] =
+proc readFirst(
+    frame: openArray[byte], payloadDepth: int
+): Result[FirstMessage, HelloFailure] =
   ## Framing, deterministic CBOR, the kind and unknown fields come first; then
   ## the Hello fields in the §3.1 order: module, token, schema (§8.3).
-  let v = decodeValue(frame).valueOr:
+  let v = decodeValue(frame, payloadDepth).valueOr:
     return err(failure(ecInvalidParams, hrEnvelope, $error))
   let m = checkMessage(v)
   if m.isOk:
@@ -102,6 +105,13 @@ proc readFirst(frame: openArray[byte]): Result[FirstMessage, HelloFailure] =
   )
   ok(FirstMessage(message: Message(kind: mkHello, hello: partial), schemaOk: false))
 
+func peerRefused(m: Message, msg: string): HelloFailure =
+  ## [SPEC TRANSPORT §2.3] A well-formed ProtocolError during establishment:
+  ## its code is the outcome, and the recipient closes without sending another.
+  var f = failure(m.protocolError.code, hrPeer, msg)
+  f.peer = true
+  f
+
 # Callee ----------------------------------------------------------------------------
 
 proc acceptHello*(
@@ -109,14 +119,21 @@ proc acceptHello*(
     tickets: var TicketStore[RouteBinding],
     frame: openArray[byte],
     now: Nanos,
+    limits = defaultLimits(),
 ): Result[Established, HelloFailure] =
   ## [SPEC TRANSPORT §3.1, §8.1, §8.1.1] The callee's Hello checks, in order:
   ## module, token (validated without consuming), schema, then the atomic
   ## redemption. A failure sends ProtocolError with `code` and closes; no
-  ## failure consumes a live ticket. A first message that is not a Hello
-  ## fails the same way [IMPL-DECISION G30].
-  let first = ?readFirst(frame)
-  if first.message.kind != mkHello:
+  ## failure consumes a live ticket. Before the Hello, only a Hello or a
+  ## well-formed ProtocolError is accepted (§2.3): any other message fails with
+  ## INVALID_PARAMS, and a ProtocolError closes the connection with no reply.
+  let first = ?readFirst(frame, limits.payloadDepth)
+  case first.message.kind
+  of mkHello:
+    discard
+  of mkProtocolError:
+    return err(peerRefused(first.message, "the caller sent ProtocolError"))
+  else:
     return err(failure(ecInvalidParams, hrEnvelope, "the first message is not a Hello"))
   let h = first.message.hello
   let denied = failure(ecNotAuthorised, hrTicket, NotAuthorisedMessage)
@@ -134,39 +151,52 @@ proc acceptHello*(
         ecVersionMismatch, hrSchema, "the Hello schema is not the selected contract"
       )
     )
-  let redeemed = tickets.redeem(h.token, now).valueOr:
-    return err(failure(ecNotAuthorised, hrRedeem, NotAuthorisedMessage))
   # [SPEC TRANSPORT §8.1] The response never echoes the ticket; this profile
-  # defines no response material, so the token is empty.
+  # defines no response material, so the token is empty. It is encoded, and
+  # checked to fit (§2.1), before the ticket is redeemed; it always fits (a
+  # module name, an empty token and a fixed-size schema commitment), and a
+  # failure would fail the establishment without consuming the ticket [IMPL].
   let response = encodeMessage(
     Message(
-      kind: mkHello,
-      hello: Hello(module: redeemed.provider, token: @[], schema: redeemed.contract),
-    )
+      kind: mkHello, hello: Hello(module: b.provider, token: @[], schema: b.contract)
+    ),
+    limits.payloadDepth,
+    limits.peerFrameLimit,
   ).valueOr:
-    return err(failure(ecInvalidParams, hrEnvelope, $error))
+    return err(failure(ecModule, hrSend, $error))
+  let redeemed = tickets.redeem(h.token, now).valueOr:
+    return err(failure(ecNotAuthorised, hrRedeem, NotAuthorisedMessage))
   ok(Established(response: response, binding: redeemed))
 
 # Caller ----------------------------------------------------------------------------
 
 proc helloRequest*(
-    module: string, ticket: openArray[byte], contract: Digest
+    module: string,
+    ticket: openArray[byte],
+    contract: Digest,
+    peerLimit: uint32 = MinFrameLimit,
 ): Result[seq[byte], EnvelopeError] =
-  ## [SPEC TRANSPORT §3.1, §8.1] The caller's Hello: the selected provider, the
-  ## one-time ticket, and the selected contract.
+  ## [SPEC TRANSPORT §2.1, §3.1, §8.1] The caller's Hello: the selected
+  ## provider, the one-time ticket, and the selected contract. A Hello that does
+  ## not fit the peer's frame maximum (16 MiB before any is established) fails
+  ## with `eeTooLarge`, and so does the establishment.
   encodeMessage(
     Message(
       kind: mkHello, hello: Hello(module: module, token: @ticket, schema: contract)
-    )
+    ),
+    peerLimit = peerLimit,
   )
 
 proc acceptHelloResponse*(
-    sent: Hello, frame: openArray[byte]
+    sent: Hello, frame: openArray[byte], limits = defaultLimits()
 ): Result[void, HelloFailure] =
-  ## [SPEC TRANSPORT §3.1, §10.1] The callee's answer: the same module, an empty
-  ## token [IMPL-DECISION G33], then the same contract. A ProtocolError is the
-  ## callee refusing the Hello; its code is the outcome [IMPL-DECISION G34].
-  let first = ?readFirst(frame)
+  ## [SPEC TRANSPORT §3.1, §10.1] After envelope validation, the callee's answer
+  ## in the order module, token, schema: the same module (INVALID_PARAMS), the
+  ## empty token this profile requires (NOT_AUTHORISED), the same contract
+  ## (VERSION_MISMATCH). A well-formed ProtocolError is the callee refusing the
+  ## Hello: its code is the outcome, and nothing is sent back (§2.3; RUNTIME §4.1
+  ## passes it through). Any other message is INVALID_PARAMS (§2.3).
+  let first = ?readFirst(frame, limits.payloadDepth)
   let m = first.message
   case m.kind
   of mkHello:
@@ -181,8 +211,6 @@ proc acceptHelloResponse*(
         err(failure(ecVersionMismatch, hrSchema, "the response names another contract"))
     ok()
   of mkProtocolError:
-    var f = failure(m.protocolError.code, hrPeer, "the callee refused the Hello")
-    f.peer = true
-    err(f)
+    err(peerRefused(m, "the callee refused the Hello"))
   else:
     err(failure(ecInvalidParams, hrEnvelope, "the first answer is not a Hello"))

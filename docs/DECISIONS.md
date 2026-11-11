@@ -3,8 +3,8 @@
 This is the repository copy of the decision record (the planning copy lived outside the repo and is
 now frozen). New decisions are added here.
 
-**Spec under implementation:** logos-lips, branch `draft/logos-core-module-specs`, commit `f4f83471`
-(2026-10-03; still the branch head on 2026-10-21), files `docs/logos-core/raw/spec-*.md`.
+**Spec under implementation:** logos-lips, branch `draft/logos-core-module-specs`, commit `6a4dfa28`
+since 2026-11-10 (before that `f4f83471`, 2026-10-03), files `docs/logos-core/raw/spec-*.md`.
 Short names used below:
 
 | Short | File |
@@ -22,7 +22,9 @@ Short names used below:
 | HASH | `spec-module-hash-profile.md` |
 | cdCDDLe | `spec-cdcddle.md` |
 
-Line numbers (`l.N`) refer to those files at `f4f83471`.
+Line numbers (`l.N`) in entries written before 2026-11-10 refer to those files at `f4f83471`. Lines
+cited in a *Revised/Settled 2026-11-10 (6a4dfa28)* note, in the 6a4dfa28 section below, in R4 and in
+G157 onward refer to `6a4dfa28`.
 
 **Date of decisions:** 2026-10-16 to 2026-10-21. **Decided by:** the project owner, from options
 prepared after a full read of the twelve specs and a skeptic pass that checked every question against
@@ -54,15 +56,44 @@ stops that work item until the owner answers; the answer is added here.
 
 | ID | Question | Blocks |
 |---|---|---|
-| G5 | What the LGX package source fields `storage` and `object` contain | PM fetch path, catalog locator shape, storage CID typing, every package install |
-| G49 | What CA `publish_events` / `publish-event` mean | the final form of one CA test |
-| G93 | How a module reaches its own non-binary artifacts and native libraries | general support; our modules are self-contained meanwhile |
+| R4 | Which SLH-DSA-SHA2-192s (FIPS 205) implementation replaces Ed25519 (PM-06), and whether to fetch the NIST ACVP vectors | PM §4.3 package signing, PM §4.5 provenance, CA §9.1 call evidence, `lcn-pkg` keygen/sign/verify; the code signs with Ed25519 meanwhile |
+| G157 | What a line break inside a single-quoted cdCDDLe byte string contributes | nothing: interim reject (`unsupported`) |
+| G158 | The "dedicated common-name projection" INTERFACE §5.2 names but never defines | the generated common section of `logos_types.h` (interim: stem = local name) |
+| G159–G164 | Gaps found reviewing RUNTIME, CONFIG and BCP at 6a4dfa28 | nothing yet: each has a conformant Tier 4 interim |
+| G165 | An oversized Event from the void `logos_publish_fn`: close the subscriber's connection (TRANSPORT §2.1) or drop it (RUNTIME §7.3) | the Tier 4 publish adapter only; Tier 3 returns a typed error |
+| G58 claim | Whether Module Hosts claim same-identity protection (distinct OS identities) or document that they do not (NR-14) | the unix-stream transport with I/O (Tier 4) |
+| D13, D27 | Re-decide after RT-01 (logosctl as an admitted local module) and SO-08 (build mode alone must not enable development trust) | logosctl and logosd (Tier 4b) |
+| G137 | Trust-input continuity: how compiled-in and operator anchors share one protected revision and where its high-water mark persists (PM §4.1, NP-10) | protected trust provisioning (Tier 4/5) |
 | G116 | Who provides the live-acceptance host and the persistent testnet seeder | the live testnet run |
-| G151–G155 | Gaps found while building Tiers 1–2: `.size` targets and leaf identity (reported as ND-10, ND-11); alias cycles, list forward typedefs and definition order (reported as ND-12 to ND-14) | nothing yet: each has an interim choice in one named proc with a test; G152 would move value roots |
-| G156 | Found while building Tier 3: which code an artifact without its hash gets (reported as NP-15) | nothing: interim `invalid-package`, an error code only |
+| G151, G153, G156 | Gaps found while building Tiers 1–3, sent as ND-10, ND-12 and NP-15; not answered in 6a4dfa28 | nothing yet: each has an interim choice in one named proc with a test |
+
+No longer open at 6a4dfa28: G5 (implementation-defined, PM-01), G49 (answered, CA-03), G93 (answered,
+PM-11), G152 (settled as our interim), G154 (settled by INTERFACE §2.3 l.1077), G155 (moot: placement is
+not canonical, IF-11).
 
 External dependencies (not spec questions): an org-owned package-signing key (and a provenance key),
 an org Apple Developer ID, and the storage mix bootstrap data (mix pool and SPRs) for testnet.
+
+## Spec revision 6a4dfa28 (2026-11-10)
+
+The owner answered `claude-spec-comments.md` and `claude-spec-comments-2.md` and published logos-lips
+`6a4dfa28`. The HC- items and the Fable 5.1 items (G151, G153–G156, ND-10..14, NP-15) await a follow-up.
+Each row below also carries a *Revised* or *Settled* note. Where the code changed, the note says so.
+
+| Outcome | Rows |
+|---|---|
+| Settled as we had chosen | G1, G2, G3, G4, G6, G7, G8, G9, G10, G12, G13, G14, G119, G120, G122, G152 (Tier 1); G29, G40, G41, G43, G44, G113, G142 (PM); G46, G48, G54, G56, G57, G60, G81, G115 (Runtime, CA); D17 |
+| Settled differently: code changed | G11 (RFC 9682 strings), G38 (floats rejected), G59 (depth counts arrays and maps), G45 (`manifest.json` invalid), G73 (defined values, install-namespace collisions) |
+| Settled differently: Tier 4/5 plans change | G27, G39, G47, G49, G50, G51, G52, G53, G55, G61, G82, G94, G114, G149 |
+| Superseded by PM-06 (SLH-DSA-SHA2-192s) | G42, G135, I33; D18 and G137 keep their shape with 48-byte keys; R4 asks which implementation |
+| Implementation-defined, to be documented | G5, G90, G91, G93 |
+| Re-decide | D13 (RT-01), D27 (SO-08) |
+| Transport, settled as chosen | G30 (plus a silent close on a first ProtocolError), G33, G34, G35, G36, G37 (order restated, no code change) |
+| Transport, settled differently: code changed | G31 (late replies validated), G32 (overlap closes, ids stay used); I51–I59 |
+| Transport, to decide before Tier 4 | G58 (the same-identity claim), G107 (direction confirmed, more requirements), G165 (new) |
+| INTERFACE, settled as chosen | G64, G66, G68, G70, G71 (helper names implementation-defined), G139 (both mapping directions); G154 by spec text (§2.3 l.1077) |
+| INTERFACE, superseded by C mapping revision 3: code changed | G62, G63, G65, G69, G72 (retired), G155 (moot); I18 reversed (ND-08); I23 loses the NX-04 interim; I25, I26, I27 rewritten; I60–I63 |
+| INTERFACE, superseded and not yet built | G67 (response owners, IF-07) |
 
 ## Contents
 
@@ -80,7 +111,7 @@ an org Apple Developer ID, and the storage mix bootstrap data (mix pool and SPRs
 12. Platforms, build, CI and tooling
 13. Implementation defaults chosen without a separate question
 14. Index
-15. Revisions and implementation choices since work started (R1–R3, I1–I47)
+15. Revisions and implementation choices since work started (R1–R4, I1–I63)
 
 ---
 
@@ -198,6 +229,7 @@ an org Apple Developer ID, and the storage mix bootstrap data (mix pool and SPRs
   embeds a minimal source Runtime and uses remote Runtime Control over loopback mTLS with enrollment
   (fully spec-defined; TLS 1.3 and certificate provisioning on the critical path).
 - **Decision:** (c) loopback mTLS remote Runtime Control. Follow-ups: G78–G87.
+- **Revised 2026-11-10 (6a4dfa28):** RT-01 answered: activation is deployment-defined (RUNTIME l.1606-1607, BCP l.384-390, BCP §7 l.485-532), and host-shell activation of logosctl as an admitted local module is what the spec now describes. (c) is not forbidden, but retained intent origins block `retire_module` (RUNTIME l.3556-3595, l.3632-3634), which favours a persistent logosctl instance. **Status:** to be re-decided before Tier 4b.
 
 ### D14 — Module Loader construction
 - **Kind:** CONTRA/FREE · **Specs:** BCP §5.1 (bootstrap Loader, then orchestration, then every module
@@ -241,6 +273,7 @@ an org Apple Developer ID, and the storage mix bootstrap data (mix pool and SPRs
 - **Decision:** (a). storage_module and the system services ship with logosd as protected bootstrap
   input; the catalog is a Storage object whose locator is in the daemon config (G90). The meaning of
   `storage`/`object` is open (G5).
+- **Settled 2026-11-10 (6a4dfa28):** PM-02: the first Storage and PM providers come from protected deployment input, with no source or installed record (PM §13 l.1440-1442). Matches.
 
 ### D18 — Who signs packages
 - **Kind:** FREE · **Specs:** PM §2, §4, §4.1 l.440-441 (a local development deployment MAY configure its
@@ -250,6 +283,7 @@ an org Apple Developer ID, and the storage mix bootstrap data (mix pool and SPRs
   pass spec verification, and there is no unsigned or legacy import path.
 - **Options offered:** (a) dev anchor now, org key later *(recommended)*; (b) org key before testnet.
 - **Decision:** (b). A dev anchor is used only for CI and local work. Provisioning: G137.
+- **Revised 2026-11-10 (6a4dfa28):** PM-06: package signatures are SLH-DSA-SHA2-192s with 48-byte public keys (PM §4.3 l.483-573). The org and dev anchors keep their roles; the key type changes with R4.
 
 ### D19 — Getting runtime and modules onto Android/iOS
 - **Kind:** FREE · **Specs:** RUNTIME §2.3, §5.2; SECURITY §11.4, §11.5.
@@ -318,6 +352,7 @@ an org Apple Developer ID, and the storage mix bootstrap data (mix pool and SPRs
 - **Options offered:** (a) runtime switch plus compiled-out test hooks; testnet = production
   *(recommended)*; (b) the same with testnet = development; (c) compile-time only.
 - **Decision:** (c) separate dev and release builds; verification code identical.
+- **Revised 2026-11-10 (6a4dfa28):** SO-08: "Build mode alone MUST NOT enable development trust or exemptions" (BCP l.398-401). (c) alone no longer conforms: a development deployment also needs explicit protected configuration. **Status:** to be re-decided ((a) or (b)) before Tier 4b.
 
 ### D28 — TLS and QUIC stack
 - **Kind:** FREE · **Specs:** TRANSPORT §8.4.1 (TLS 1.3 only, mutual TLS, RFC 9266 tls-exporter, no
@@ -326,6 +361,7 @@ an org Apple Developer ID, and the storage mix bootstrap data (mix pool and SPRs
 - **Options offered:** (a) BoringSSL + lsquic, as nim-libp2p and delivery use *(recommended)*;
   (b) OpenSSL 3.5 for both; (c) OpenSSL 3 + ngtcp2.
 - **Decision:** (a), statically linked with hidden symbols.
+- **Revised 2026-11-10 (6a4dfa28):** BoringSSL (nim-boringssl 0.0.14) implements only SLH-DSA-SHA2-128s and SHAKE-256f, and its SHA2 path is SHA-256 only, so it cannot provide the SLH-DSA-SHA2-192s PM-06 requires. BoringSSL stays the TLS stack; the signature implementation is R4.
 
 ### D29 — Code generator outputs
 - **Kind:** FREE · **Specs:** BCP §6.1 ("Code generation is an implementation technique rather than a
@@ -369,6 +405,7 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) the innermost declaration `a.y` — the one-hop rule applied at each step
   *(recommended)*; (b) the outermost declaration `a.x` (what poc2 does); (c) ask the spec author.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-01: local-reference chains create no intermediate node; the child uses the terminal declaration (COMMITMENT §8, normative chain vector in App B.1). Matches (a); the B.1 vector passes.
 
 ### G2 — Schema root of payloads below an imported reference
 - **Kind:** GAP · **Specs:** COMMITMENT §8, §9.3; HASH §5 ("needed to interpret the node"), §7.4
@@ -380,6 +417,7 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) the referenced schema root *(recommended)*; (b) the outer value's root (poc2);
   (c) ask the spec author.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-02: imported descendants use the referenced document's root (COMMITMENT §8, HASH §8, App B.4 positive and negative vectors). Matches; the B.4 vectors pass.
 
 ### G3 — Unqualified common names
 - **Kind:** CONTRA · **Specs:** COMMITMENT §5 l.697-698 (unqualified common names are "interpreted as
@@ -389,6 +427,7 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) reject, raise upstream *(recommended)*; (b) accept per COMMITMENT §5;
   (c) ask the spec author.
 - **Decision:** (a). Only `logos.`-qualified common names are accepted.
+- **Settled 2026-11-10 (6a4dfa28):** C-01: fixed in COMMITMENT §5 (imported definitions and prelude). Matches (a).
 
 ### G4 — Declarations nested deeper than the namespace
 - **Kind:** GAP · **Specs:** COMMITMENT §3.1 step 2 (the namespace must be a proper prefix of every name;
@@ -398,6 +437,7 @@ below would not break our own consistency, only interoperability with another im
   maps back to `storage.sub_thing`; a bare method name `sub.read` would contain a dot.
 - **Options offered:** (a) reject *(recommended)*; (b) accept; (c) ask the spec author.
 - **Decision:** (a), derived from the §3.8 round-trip requirement.
+- **Settled 2026-11-10 (6a4dfa28):** C-02: a declaration is one identifier segment below its schema namespace (COMMITMENT §3.1); dotted namespaces stay valid. Matches.
 
 ### G6 — Referencing a common callable declaration
 - **Kind:** GAP · **Specs:** INTERFACE §1.1, §1.7 (imply types only); COMMITMENT §5 (silent).
@@ -405,6 +445,7 @@ below would not break our own consistency, only interoperability with another im
   (callables) or only common named types.
 - **Options offered:** (a) named types only *(recommended)*; (b) callables too; (c) ask the spec author.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-03: imported references target named type declarations, which excludes `logos.schema_request` and `logos.schema_response` (COMMITMENT §5). Matches.
 
 ### G7 — What a verified-view path ending in a field or tuple position discloses
 - **Kind:** GAP · **Specs:** COMMITMENT §9.4 (semantic paths); HASH §8 (verified views), App B.1 (list
@@ -412,11 +453,13 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) the inner value node, as for list elements *(recommended)*; (b) the wrapper
   node (label + child record); (c) ask the spec author.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-04: a path ending at a present field, list element or tuple position discloses the contained normalized value (HASH §8). Matches.
 
 ### G8 — Choice-arm segment when crossing a choice
 - **Kind:** GAP · **Specs:** COMMITMENT §9.4 (defines `choice-arm-segment`; never states it is required).
 - **Options offered:** (a) required *(recommended)*; (b) optional (implied by the value).
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-05: continuing through a choice needs a `choice-arm` segment; a path may end at the choice (COMMITMENT §9.4). Matches.
 
 ### G9 — Literal outcomes in the choice selection plan
 - **Kind:** GAP · **Specs:** COMMITMENT §3.1 (choice selection plan; the normative plan table l.490-503
@@ -425,6 +468,7 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) only literal constraints on the arm's top-level observed value, following
   references and nested choices *(recommended)*; (b) every literal reachable in an arm; (c) ask.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-06: literal tests follow references and choice alternatives without descending into containers (COMMITMENT §3.1, with examples). Matches.
 
 ### G119 — Are literal-element lists packable?
 - **Kind:** GAP · **Specs:** HASH §4 l.162-165 (packable scalar kinds: bool, uint8..uint64, int8..int64;
@@ -434,41 +478,48 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) packable — a literal's scalar kind is bool/uint64 *(recommended)*; (b) not
   packable; (c) ask the spec author.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-07: Boolean and integer literal element schemas are packable (HASH §4). Matches.
 
 ### G120 — Where the verified-view verifier gets the schema
 - **Kind:** GAP · **Specs:** HASH §8, §9; INTERFACE §5.3 (schema text is untrusted input).
 - **Options offered:** (a) caller-supplied; the verifier recomputes its root and rejects a mismatch with
   the view's root *(recommended)*; (b) only schemas already known by root in a pinned registry.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-08: the verifier takes the schema construction input separately from the view (HASH §8). Matches.
 
 ### G122 — `logos.schema.reference`
 - **Kind:** GAP · **Specs:** COMMITMENT §6; HASH §7.2 (define the domain); no spec object produces it.
 - **Options offered:** (a) implement it, unit tests only *(recommended)*; (b) leave it unclaimed.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-09: `logos.schema.reference` hashes a standalone `schema-import` pair that nothing in this revision uses (HASH §7.2). Matches.
 
 ### G10 — `0*` and `*1` occurrence spellings
 - **Kind:** GAP · **Specs:** cdCDDLe §5.1 l.172 ("occurrences other than the supported `?` map-member and
   `*` array-member forms" are unsupported).
 - **Description:** `[0* T]` means `[* T]` and `*1` means `?`, but they are other spellings.
 - **Options offered:** (a) reject *(recommended)*; (b) normalize. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-10: explicit numeric occurrence bounds are rejected, including `0*` and `*1` (cdCDDLe §5.1). Matches (a).
 
 ### G11 — String-escape grammar
 - **Kind:** GAP · **Specs:** cdCDDLe §5 l.125 (parse and resolve follow RFC 8610), l.455 (escape spelling
   is not preserved). RFC 9682 later updated CDDL's escape syntax.
 - **Options offered:** (a) RFC 8610, as cited *(recommended)*; (b) RFC 9682 (documented deviation).
 - **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** CM-11: text and byte-string literals follow RFC 9682 §2 (cdCDDLe §5 l.127): braced `\u{…}` escapes, no C1 controls; RFC 8610 for the rest. The parser follows it (`cddl/syntax.nim` `readEscape`, `bracedScalar`, `isC1`). What a line break inside a single-quoted byte string contributes is G157.
 
 ### G12 — Named range bounds
 - **Kind:** GAP · **Specs:** cdCDDLe §5.1 l.163 ("inclusive integer ranges written with `..`"; RFC 8610
   allows value names as bounds).
 - **Options offered:** (a) reject; integer-literal bounds only *(recommended)*; (b) resolve names to
   literals. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-12: range bounds are integer literals in the source, `.size` included (cdCDDLe §5.1). Matches.
 
 ### G13 — Non-flattened nested choices
 - **Kind:** GAP · **Specs:** cdCDDLe §7.2 / l.332 (canonicalization MUST flatten nested type choices),
   §10 (decoder rejections; this case not named).
 - **Options offered:** (a) the decoder rejects it *(recommended)*; (b) only the checker flags it.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-13: decoders reject a choice directly inside a choice (cdCDDLe §10). Matches (a).
 
 ### G14 — Scope of the cdCDDLe document built for a Logos schema
 - **Kind:** GAP · **Specs:** cdCDDLe §8 (schema-as-data); COMMITMENT §5 (prelude, common and supporting
@@ -476,6 +527,7 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) authored rules only; prelude, common and supporting names stay type-reference
   nodes resolved against an explicit external scope *(recommended)*; (b) merge the resolved graph, then
   filter by origin. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CM-14: each cdCDDLe document holds only its own rules (COMMITMENT §5). Matches (a).
 
 ### G15 — Generic (non-Logos) cdCDDLe mode
 - **Kind:** FREE · **Specs:** cdCDDLe §2 (scope).
@@ -498,6 +550,7 @@ below would not break our own consistency, only interoperability with another im
   in the `.size` node; (c) state in §5.1 that the target is written as a primitive.
 - **Interim (D9):** (a). No mirrored schema uses it: every `.size` in the specs is on `uint`, `tstr` or
   `bstr` directly.
+- **6a4dfa28:** not answered (ND-10 awaits the owner's follow-up). Interim unchanged.
 
 ### G152 — Identity of a leaf-bodied declaration's own node
 - **Kind:** GAP, **OPEN** (found while building; reported as ND-11 in `claude-spec-comments-2.md`, logos-lips `e7c53b7b`) · **Specs:** COMMITMENT §4 l.560-562
@@ -511,6 +564,7 @@ below would not break our own consistency, only interoperability with another im
   `[]`; (c) ask the owner to state the precedence.
 - **Interim (D9):** (a), in `commitment/schema.nim` `nodeIdentity`, test `[IMPL-DECISION G152]`. It agrees
   with §8 l.1101. Only value roots depend on it, and none are built yet; schema roots do not.
+- **Settled 2026-11-10 (6a4dfa28):** COMMITMENT §4 l.569-571 now says an empty path always uses the declaration's subtree root, including when its body is a primitive, literal or reference node. Matches the interim (a); ND-11 itself has no separate answer yet.
 
 ### G17 — Independent oracle for self-written vectors
 - **Kind:** FREE · **Specs:** none (most specs ship no vectors; see the background above).
@@ -519,6 +573,15 @@ below would not break our own consistency, only interoperability with another im
 - **Decision:** (a). Disagreements block.
 
 ---
+
+### G157 — A line break inside a single-quoted byte string
+- **Kind:** GAP · **Specs:** cdCDDLe §5 l.127 (string literals follow RFC 9682 §2); RFC 9682 §2.1 (the
+  byte-string grammar admits CRLF in `BCHAR`).
+- **Description:** RFC 9682 lets a single-quoted byte string span lines, but neither it nor cdCDDLe says
+  which bytes the source line break contributes (LF, CRLF as written, or nothing), so two parsers can give
+  the same source different literal bytes and different schema roots.
+- **Interim:** reject it as `unsupported` (`cddl/syntax.nim`, vector
+  `unsupported-bytes-quoted-line-break`). **Status:** OPEN, found 2026-11-10; to be raised with the owner.
 
 ## 3. Interface: schemas, C mapping, code generation
 
@@ -545,6 +608,7 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) implement it, every spec piece tested, raise the contradiction
   *(recommended)*; (b) defer and mark unclaimed; (c) ask the spec author first.
 - **Decision:** (a) implemented and claimed (D30).
+- **Revised 2026-11-10 (6a4dfa28):** C-03: an implementation of the bidirectional mapping supports both directions; a module need not implement authoring tools (INTERFACE abstract l.23-24). (a) stands: the reverse mapper is mandatory because lcn-gen claims mapping conformance.
 
 ### G38 — Floats inside opaque payloads
 - **Kind:** GAP · **Specs:** INTERFACE §4.4 (Logos deterministic CBOR, preferred float serialization
@@ -556,6 +620,8 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) schema mismatch; a non-shortest float is `non-deterministic-cbor`
   *(recommended)*; (b) profile violation (`non-deterministic-cbor` at the envelope).
 - **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** IF-01: floating-point items MUST NOT appear at any depth (INTERFACE §4.4 item 5, l.3109), and one inside `params`, `result` or `data` is a Transport validation failure (INTERFACE §4.5 l.3138-3139; TRANSPORT §2.3). The decoder rejects floats as non-deterministic unless a caller asks for the generic data model (`allowFloats`, I48). (a) is withdrawn.
+- **Code 2026-11-10 (6a4dfa28):** `envelope.decodeValue` maps the decoder's float rejection to `eeNonDeterministic` (ProtocolError INVALID_PARAMS, then close), and the sender refuses to encode one (I58). Tags, null and invalid UTF-8 inside payloads still pass the envelope and fail as schema-mismatch at the boundary (I30 stands: INTERFACE l.3139 moves only floats). Tests `[IFC-0920]`, `[TRN-0203]`.
 
 ### G59 — Value nesting depth
 - **Kind:** GAP · **Specs:** INTERFACE §2.3, §3.9.3 and COMMITMENT l.427-428 (recursive types are legal);
@@ -566,6 +632,8 @@ below would not break our own consistency, only interoperability with another im
 - **Options offered:** (a) iterative processing plus a configurable cap (default 1024), over-cap =
   INVALID_PARAMS without detail, raised upstream *(recommended)*; (b) iterative, no cap.
 - **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** IF-02: INTERFACE §4.5.1 counts only arrays and maps (a root container is depth one; tags, scalars and byte-string contents add none), requires a documented, configurable limit of at least 128, and a depth-only rejection is `INVALID_PARAMS` without detail. Our default stays 1024; tags get their own bound (I48). TRANSPORT §2.3 allows one more level for the envelope.
+- **Code 2026-11-10 (6a4dfa28):** P is configurable from 128 to 1024 (`TransportLimits.payloadDepth`, default 1024; I59); the whole message may nest P + 1; a deeper payload is ProtocolError INVALID_PARAMS without detail, then close; the sender refuses one locally (I58). INTERFACE §4.5.1 l.3151 forbids internal structures that reduce P: validation, normalization, the value-tree check and the hash layout used to count recursion steps, so a recursive payload of 513 arrays failed as schema-mismatch. They now count maps and arrays (I51). Tests `[TRN-0269] [TRN-0270] [TRN-0271] [IFC-0923]`, `[IFC-0925] [IFC-0927]`.
 
 Background for G62-G72: INTERFACE §2 requires any two implementations to produce identical C header sets
 "modulo whitespace, comments, include layout, and include guards", and §2.4 makes the exported per-method
@@ -580,17 +648,20 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
   with `item_<i>` fields, a list/bstr becomes an adjacent ptr+len pair inside it; raised upstream
   *(recommended)*; (b) reject in the C mapping (no typed C bindings for Runtime Control and CA).
 - **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** superseded by IF-03 and C mapping revision 3: the `_LIST`, `_TUPLE` and `_BSTR` aggregate families and the `_LI`, `_TU<i>`, `_AR_<Label>` and `_AR<i>` path steps (§2.1 l.775-832, §2.3 l.931-957). Built in `iface/cmap.nim`. Tests `[IFC-0632] [IFC-0914] [IFC-0915] [IFC-0916]`. **Status:** retired.
 
 ### G63 — Choice-of-maps event bodies in C
 - **Kind:** GAP · **Specs:** INTERFACE §1.5 (allows choice-of-maps events) vs §2.5 (maps only map-bodied
   events).
 - **Options offered:** (a) mirror the method rule: a wrapper struct with a kind tag and a union of arm
   structs, as §2.4 rules 4-5 do for requests *(recommended)*; (b) reject them. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** superseded by IF-04: a choice-valued event body is an ordinary `_CHOICE` that keeps the `_event` stem and has no wrapper (§2.5 l.1394-1397). Built. Test `[IFC-0866] [IFC-0867]`. **Status:** retired.
 
 ### G64 — Tagged-choice tag member
 - **Kind:** CONTRA · **Specs:** INTERFACE §2.3 (a generator MAY omit the tag member) vs §2 (headers must
   be identical across implementations).
 - **Options offered:** (a) always emit it *(recommended)*; (b) always omit it. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** C-04 (§2.3 l.1215): arm maps keep their literal tag fields. Matches (a). Test `[IFC-0148] [IFC-0645] [IFC-0647]`.
 
 ### G65 — Literal macro spelling
 - **Kind:** GAP · **Specs:** INTERFACE §2.3 (macro holds "the exact C scalar literal"), §3.5 (reverse
@@ -598,24 +669,28 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
 - **Options offered:** (a) stdint macros: `UINT64_C(7)`, `INT64_C(-5)`, INT64_MIN as
   `(-INT64_C(9223372036854775807) - 1)`, `true`/`false`, C strings with `\xNN` escapes *(recommended)*;
   (b) plain suffixes (`7u`, `7ull`, `-5ll`, `1`/`0`). **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** superseded by IF-05 (§2.3 l.1085-1096): `UINT64_C(n)`, `(-INT64_C(n))`, the minimum as `(-INT64_C(9223372036854775807) - INT64_C(1))`, and text with `\"`, `\\`, `\?`, `\n`, `\r`, `\t` and a three-digit octal escape for every other byte. Built. Test `[IFC-0872]` (static asserts in five language modes). **Status:** retired.
 
 ### G66 — Optional inline tuple vs the `has_` adjacency rule
 - **Kind:** GAP · **Specs:** INTERFACE §3.4 (a `has_` flag sits adjacent to the member it guards); an
   inline tuple expands into several members.
 - **Options offered:** (a) `has_<f>` immediately before the first expanded member *(recommended)*;
   (b) reject optional inline tuples. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** IF-06 (§2.3 l.1014). Matches (a). Test `[IFC-0631]`.
 
 ### G67 — Allocation and free order of recursive typed outputs
 - **Kind:** GAP · **Specs:** INTERFACE §2.7 (callers free each dynamic output with `_free`; recursive
   `const B*` edges not addressed).
 - **Options offered:** (a) one provider allocation per node, freed children first *(recommended)*; (b) one
   block per output tree. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** superseded by IF-07: one response owner per typed response, and callers never free individual pointers (§2.7 l.1805-1854, §2.7.1 l.1856-1904). Not built (Tier 4, a promotion candidate). **Status:** retired.
 
 ### G68 — Freeing typed route-helper outputs
 - **Kind:** GAP · **Specs:** INTERFACE §2.7 ("the side that decodes … owns and frees its own decoded
   allocations"), App A.5; no API named.
 - **Options offered:** (a) generated consumer-side free helpers, never the provider's `_free`
   *(recommended)*; (b) helpers take an allocator parameter. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** IF-08: call helpers return a response owner plus typed cleanup (§2.7.2 l.1906-1926). Consistent with (a). Not built.
 
 ### G69 — Static-link symbol collisions
 - **Kind:** GAP · **Specs:** INTERFACE §1.3, §2.1 (a schema set deriving the same C identifier twice is
@@ -626,6 +701,7 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
 - **Options offered:** (a) reject module names ending `_call`/`_publish` and namespaces named
   `call`/`publish`, raised upstream *(recommended)*; (b) detect only at registration.
 - **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** IF-09: separate `_MODULE_` and `_CALL_` families and no further reservations (§2.1 l.703-747, l.769-773). The checks are gone from `iface/names.nim`: `demo_call`, `demo_publish` and the namespaces `call` and `publish` are accepted. RUNTIME §1.3's `_call_`/`_publish_` infix rule for module names is the Runtime's to enforce (Tier 4). **Status:** retired.
 
 ### G70 — Source of `schema_cbor` for `materialize_route`
 - **Kind:** GAP · **Specs:** INTERFACE §5.2 (one `logos.schema_response`, 1 B-8 MiB, validated against
@@ -633,6 +709,7 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
   construction"); `route_record` carries only the commitment.
 - **Options offered:** (a) generated bindings embed it at build; generic clients (logosctl) use
   `describe_provider` *(recommended)*; (b) always fetch at run time. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** IF-10 (§5.2 l.3870-3879): the route construction input may be embedded, supplied, a projected descriptor or an introspection response, and the same exact root is validated. Matches (a). Tier 4.
 
 ### G71 — Generated helper names
 - **Kind:** CONTRA (both informative) · **Specs:** INTERFACE App A.4/A.5 (`logos_<module>_publish_<ns>_<event>`,
@@ -640,6 +717,7 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
 - **Options offered:** (a) INTERFACE A.4/A.5 — matches the reserved `_publish_` infix and cannot collide
   with provider symbols *(recommended)*; (b) RUNTIME §4.1 style. **Decision:** (a); helpers are never
   exported from module artifacts (INTERFACE l.235-238).
+- **Settled 2026-11-10 (6a4dfa28):** C-05 (§2.1 l.886-889): helper names are implementation-defined, stay outside the header set used for reconstruction and do not affect identity. (a) stays our naming.
 
 ### G72 — Header declaration order
 - **Kind:** GAP · **Specs:** INTERFACE §2.1 (orders forward declarations, type definitions, fields, choice
@@ -652,6 +730,7 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
   role constants, literal macros by name, constrained-string typedefs by name, forward typedefs by
   qualified name, then definitions in dependency order (G155). Provider functions and lifecycle symbols
   come after them once §2.4 and §2.6 are built (Tier 4). `iface/cmap.nim` `emit`, test `G72`.
+- **Revised 2026-11-10 (6a4dfa28):** superseded by IF-11 (§2.1 l.891-897): the placement of independent declarations is not canonical. Our order is now an [IMPL] choice (I60). **Status:** retired.
 
 ### G153 — Local alias cycles
 - **Kind:** GAP, **OPEN** (found while building; reported as ND-12 in `claude-spec-comments-2.md`, logos-lips `2f6cbcb0`) · **Specs:** INTERFACE §2 (every
@@ -666,9 +745,10 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
 - **Interim (D9):** (a), in `iface/accept.nim` `checkAliasCycles`, test `[IMPL-DECISION G153]`. A cycle
   that passes through a map, tuple, list or choice is untouched (it is the recursion §2.3 maps to
   pointers). Narrowing only: no set the spec gives a C form for is rejected.
+- **6a4dfa28:** not answered (ND-12). Interim unchanged.
 
 ### G154 — Forward typedefs for list targets on a reference cycle
-- **Kind:** GAP, **OPEN** (found while building; reported as ND-13 in `claude-spec-comments-2.md`, logos-lips `2f6cbcb0`) · **Specs:** INTERFACE §2.1 (canonical
+- **Kind:** GAP, settled by spec text at 6a4dfa28 (found while building; reported as ND-13 in `claude-spec-comments-2.md`, logos-lips `2f6cbcb0`) · **Specs:** INTERFACE §2.1 (canonical
   order: forward declarations, then definitions with non-recursive dependencies first), §2.3 (recursive
   by-value edges become `const T*` and their targets get forward typedefs; a list member is a
   `const T*` plus a count).
@@ -681,9 +761,11 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
   graph of by-value and list edges; (b) forward-declare every list target; (c) ask the owner.
 - **Interim (D9):** (a), in `iface/cmap.nim` `resolveGraph`, test `G154`. Header text only: struct
   layouts and every identifier are unchanged.
+- **6a4dfa28:** not answered (ND-13). Interim unchanged.
+- **Settled 2026-11-10 (6a4dfa28) by spec text:** §2.3 l.1077: "The generator MUST also emit a forward typedef whenever an aggregate type name is used before its complete definition, including uses through variable-length lists." `cmap.ordered` makes each definition wait for every typedef it spells that no forward typedef supplies, so the only uses before a definition are recursive pointers and list members on a cycle, and both get forward typedefs. Now `[SPEC INTERFACE §2.3 l.1077]`; ND-13 needs no answer for us. Test `[IFC-0633]`.
 
 ### G155 — Tie-breaking among independent type definitions
-- **Kind:** CONTRA, **OPEN** (found while building; reported as ND-14 in `claude-spec-comments-2.md`, logos-lips `2f6cbcb0`) · **Specs:** INTERFACE §2.1 l.676-679
+- **Kind:** CONTRA, moot at 6a4dfa28 (found while building; reported as ND-14 in `claude-spec-comments-2.md`, logos-lips `2f6cbcb0`) · **Specs:** INTERFACE §2.1 l.676-679
   ("place non-recursive dependencies before dependents and break independent ties by qualified schema
   name") vs the required §3.9.3 output (l.2102-2152).
 - **Description:** A topological order that picks the least qualified name among the definitions ready
@@ -694,8 +776,25 @@ choice) and the CA (l.1001, `[* bstr]` in a list position) use shapes the C mapp
   contradicts §3.9.3; (c) ask the owner which text is meant.
 - **Interim (D9):** (a), in `iface/cmap.nim` `ordered`, test `[IFC-0384]` (§3.9.3 byte-for-byte). Header
   order only, not ABI.
+- **6a4dfa28:** not answered (ND-14). Interim unchanged.
+- **Moot 2026-11-10 (6a4dfa28):** IF-11 (§2.1 l.891-897) makes the placement of independent declarations non-canonical, so no tie-break is required. Depth-then-name stays as our placement (I60), and the §3.9.3 header is still reproduced byte for byte (`[IFC-0882]`).
 
 ---
+
+### G158 — The common-name projection
+- **Kind:** GAP · **Specs:** INTERFACE §5.2 l.3382-3383 ("derived by Sections 2.1 through 2.3, including
+  the dedicated common-name projection and the `logos.error_code` exception"); §2.1 l.834-843 names only
+  `logos_error_code_t`, `logos_error_detail_t` and `logos_schema_commitment_t`; §3.1 l.2248
+  ("Fixed `logos_<common-name>_t`").
+- **Description:** no section defines the projection, so the C names of `logos.invalid_params_detail`,
+  `logos.invalid_params_reason`, `logos.invalid_params_path_segment`, `logos.schema_request`,
+  `logos.schema_response`, their kind typedefs and arm macros, the inline `path` list and the
+  `schema_commitment` literal macros are undefined. They are ABI-visible: a reverse mapper must
+  recognize them.
+- **Interim:** stem = the local name, then the ordinary §2.1 families (for example
+  `logos_invalid_params_reason_KIND_t`), confined to the generated common section of `logos_types.h`,
+  which stays PROVISIONAL. **Status:** OPEN, found 2026-11-10 (reviewer item N1); blocks that section
+  under D9.
 
 ## 4. Error codes the specs require but do not assign
 
@@ -737,6 +836,7 @@ tests can assert exact values.
   G19 *(recommended)* vs keep.
 - **Decision:** readiness preconditions NOT_READY; no staged record or non-live binding INVALID_PARAMS;
   module rejection and indeterminate outcome MODULE_ERROR. **Status:** revised.
+- **Revised 2026-11-10 (6a4dfa28):** EC-04: CONFIG's precondition table (l.290-299, l.315-319) uses VERSION_MISMATCH and separates MODULE_ERROR from TRANSPORT_ERROR. Add both when CONFIG is built (Tier 4).
 
 ### G22 — Calls on a dead route handle
 - **Kind:** GAP · **Specs:** RUNTIME §4.1 (calls on closed, failed, revoked or expired handles MUST
@@ -778,6 +878,7 @@ tests can assert exact values.
   expiry, revocation, connection loss).
 - **Options offered:** (a) a fixed, documented kebab-case list with one value per class *(recommended)*;
   (b) free text. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** EC-10: failure codes are open text strings with defined lists, not a closed enum (RUNTIME `route_failure` l.2088, l.2493-2530; module failures l.3750-3762; `failure_code` l.1945). Use the spec's lists and accept unknown codes. The RC root changes with the CDDL.
 
 ### G28 — Loader values for weaker-substitute refusal and disallowed init results
 - **Kind:** CONTRA · **Specs:** LOADER §6 l.395-396, l.423, §10 l.612 (`unsupported-strategy` lets
@@ -814,6 +915,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   before Hello succeeds).
 - **Options offered:** (a) ProtocolError INVALID_PARAMS + close *(recommended)*; (b) drop and log.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** TRANSPORT §2.3 l.417-421 mandates (a) for wrong-direction messages and for ordinary messages before Hello. One code change: a well-formed ProtocolError sent as the first message closes with no reply and consumes no ticket (l.421); `acceptHello` returns `HelloFailure(peer: true, reason: hrPeer)`. Tests `[TRN-0272]`..`[TRN-0275]`.
 
 ### G31 — Uncorrelated Response, SubscriptionResult or Event
 - **Kind:** GAP · **Specs:** TRANSPORT §1.4 (exactly one Response per Request id), §6, §5.1; RUNTIME §9.3
@@ -822,6 +924,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) tombstones — replies to ids the caller abandoned are dropped silently;
   never-sent or duplicate ids get ProtocolError INVALID_PARAMS + close *(recommended)*; (b) always close;
   (c) always drop. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** §3.4 l.580-603 replaces the silent drop. An abandoned call keeps its response declaration; its first terminal Response is fully validated (envelope, schema, roots; an invalid one closes), then discarded, and the call is retired. A second Response is a duplicate: INVALID_PARAMS, then close. `abandonSubscription` suppresses only Event callbacks: events are still validated, and a late SubscriptionResult still updates state and is reported, since it is protocol state (l.596-597). Never-sent ids, duplicates and unsolicited messages close, as before. Correlation state is kept while the connection is open (l.601-602), bounded by I52. Tests `[TRN-0280]`..`[TRN-0289]`. (a)'s silent drop is withdrawn.
 
 ### G32 — Subscription id misuse
 - **Kind:** GAP · **Specs:** TRANSPORT §5.1 (caller ids unique per connection; at most one outstanding
@@ -830,12 +933,14 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) a failed SubscriptionResult with INVALID_PARAMS for reuse, unknown id and
   overlap, state unchanged *(recommended)*; (b) failed result for reuse/unknown, ProtocolError + close
   for overlap. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** §5.1 l.731, l.741-749 mandates (b) and widens "used". An operation over an id whose previous result is not yet committed gets ProtocolError INVALID_PARAMS and close, with no SubscriptionResult; this check comes first. A Subscribe reusing an id from any earlier valid Subscribe (successful, failed or ended) gets a failed result INVALID_PARAMS, and so does an Unsubscribe with no active subscription. The id counts as used before the event name is resolved, so a Subscribe that fails NOT_AUTHORISED still uses it ("state unchanged" in l.727, l.736 is the active state; the id history is l.747-748). The caller keeps its own used-id set and refuses reuse locally. Tests `[TRN-0302]`..`[TRN-0306]`.
 
 ### G33 — Non-empty Hello response token
 - **Kind:** GAP · **Specs:** TRANSPORT §3.1 (caller validates the token "under the profile's response
   rules", no code), §8.1, §8.2; RUNTIME §9 (every defined profile requires an empty response token).
 - **Options offered:** (a) ProtocolError NOT_AUTHORISED + close *(recommended)*; (b) INVALID_PARAMS.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** §3.1 l.518-534: the caller checks module, token and schema in that order, and a non-empty token is NOT_AUTHORISED. Matches (a). Test `[TRN-0277]`.
 
 ### G34 — When the provider Hello runs and what the consumer sees when it fails
 - **Kind:** GAP · **Specs:** TRANSPORT §3.1, §3.2 (synthetic TRANSPORT_ERROR on close), §8.1.1 (tickets
@@ -843,6 +948,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) the Hello runs inside `materialize_route`, which returns the peer's code
   (NOT_AUTHORISED, VERSION_MISMATCH) *(recommended)*; (b) lazy connect on first call, failures surface as
   TRANSPORT_ERROR. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** RUNTIME §4.1 l.783-793: `materialize_route` completes peer validation and Hello before it returns. Matches (a). Tier 3 returns the peer's code from `acceptHelloResponse`; `materialize_route` is Tier 4.
 
 ### G35 — Route expiry or revocation on a live session
 - **Kind:** GAP · **Specs:** TRANSPORT §8.1 (reject new operations, then end subscriptions and the
@@ -851,6 +957,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   on-wire signal is unspecified.
 - **Options offered:** (a) new Requests in the window get NOT_AUTHORISED; then ProtocolError
   NOT_AUTHORISED + close *(recommended)*; (b) silent close. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** §8.1 l.987-996. Matches (a), built as `CalleeConn.beginTermination` and `finishTermination`: new Requests get a committed response-err NOT_AUTHORISED without dispatch, subscriptions end and nothing more is published, then ProtocolError NOT_AUTHORISED with no message or detail, and close. Termination waits for no Request and reads no unread one. The choices the spec leaves open are I57. Tests `[TRN-0321]`..`[TRN-0324]`.
 
 ### G36 — Schema-invalid response-ok or Event
 - **Kind:** GAP · **Specs:** TRANSPORT §4.1 (receiver validates against the declared type and compares
@@ -858,6 +965,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) fail closed: ProtocolError INVALID_PARAMS, close the provider session, the
   waiting caller gets TRANSPORT_ERROR *(recommended)*; (b) reject only that message.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** §4.1 l.674-679: ProtocolError INVALID_PARAMS and close, even when no commitment can be recomputed; pending calls get TRANSPORT_ERROR. Matches (a). The test now covers an Event too: `[TRN-0097] [TRN-0300]`.
 
 ### G37 — Schema check vs commitment check on a Request
 - **Kind:** GAP · **Specs:** TRANSPORT §4.1 (sentence order: validate, recompute, compare; no explicit
@@ -866,6 +974,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   response-err INVALID_PARAMS (session kept) or ProtocolError + close.
 - **Options offered:** (a) schema first *(recommended)*; (b) commitment first.
 - **Decision:** (b) commitment first: any root mismatch closes the session.
+- **Settled 2026-11-10 (6a4dfa28), restated:** §4.1 l.655-673 fixes the order: (1) envelope, correlation, method resolution and the access scope; (2) the subtree root, where a mismatch closes; (3) the schema, where a Request gets response-err INVALID_PARAMS and the session stays while a response-ok or Event closes; (4) the value root of the validated value, where a mismatch closes. Untyped CBOR is never hashed. Only the subtree root precedes the schema check, so "any root mismatch closes first" overstated (b); the code already followed this order. Tests `[TRN-0292]`..`[TRN-0298]`.
 
 ### G58 — Socket layout
 - **Kind:** CONTRA · **Specs:** RUNTIME §1.3 (the module name drives `<runtime-dir>/logos_<name>.sock`) vs
@@ -876,6 +985,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   `<short base>/<8-hex>/logos_<name>.sock`, placement fails if the path doesn't fit, peer check by euid,
   Module Hosts run as the daemon's uid *(recommended)*; (b) RUNTIME §1.3 literally, one hosted instance per
   name. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** NR-14 (TRANSPORT §8.2 l.1107-1111): Module Hosts that run as the daemon's uid cannot claim protection from one another. Before Tier 4, decide whether we claim same-identity protection (a distinct OS identity per host, or the placement fails) or document that we do not. Unchanged for Tier 3.
 
 ### G107 — Local transport on Windows
 - **Kind:** GAP · **Specs:** TRANSPORT §8.2 l.947, §9.1 l.1135 (`logos.local.unix-stream` is mandatory
@@ -889,6 +999,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Owner's answer:** "let's use AF_UNIX on windows. We can adapt chronos (fork + upstream PR) to it if
   needed".
 - **Decision:** (a), via a chronos fork with an upstream PR if needed.
+- **Revised 2026-11-10 (6a4dfa28):** direction confirmed (§8.2.1 l.1148-1172; §9.1 l.1369), with more requirements: non-null DACLs with no permissive inheritance, an `IO_REPARSE_TAG_AF_UNIX` check, restricted handle inheritance or targeted Winsock sharing, and per-version qualification of `SIO_AF_UNIX_GETPEERPID` attribution (l.1170-1171) before support is claimed. Until then Windows local placements fail (l.1152). No Tier 3 code.
 
 ### G108 — Private channel between the daemon and a module host
 - **Kind:** FREE · **Specs:** LOADER §5.4 l.330 ("Channel setup and descriptor transfer are determined by
@@ -902,6 +1013,21 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 
 ---
 
+### G165 — Oversized Event from a publish callback with no result channel
+- **Kind:** CONTRA · **Specs:** TRANSPORT §2.1 l.389 (an Event too large for the peer: "Its publication
+  boundary MUST report failure where that boundary permits it; otherwise the sender MUST send
+  ProtocolError `TRANSPORT_ERROR` when writable and close the affected connection") vs RUNTIME §7.3
+  l.1226-1227 (`logos_publish_fn` has no result channel, so Runtime records the failure as a diagnostic
+  and drops the event).
+- **Description:** A module publishes, through the void `logos_publish_fn`, an Event too large for
+  one subscriber's peer maximum. TRANSPORT closes that subscriber's connection; RUNTIME drops the event.
+- **Options offered:** (a) the RUNTIME drop covers validation failures (l.1225); an oversized Event
+  closes that subscriber's connection with ProtocolError `TRANSPORT_ERROR` *(recommended)*; (b) drop
+  and log, and keep the connection.
+- **Decision:** open (6a4dfa28), for the owner. Tier 3 builds only the typed `PublishError(peTooLarge)`;
+  the Tier 4 `logos_publish_fn` adapter is the only code that depends on the answer, so nothing is
+  blocked now.
+
 ## 6. Runtime, lifecycle and system services
 
 ### G48 — Engine-originated calls that have no module consumer
@@ -914,12 +1040,14 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) the Loader and the CA always run direct in-process; the engine invokes them
   through its enforcement boundary under bootstrap policy, never over Transport *(recommended)*; (b) a
   synthetic engine consumer identity. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** RT-02: Runtime-owned system-service bindings (RUNTIME l.1652-1679); local system-service tickets last at most 60 s (TRANSPORT §8.1.2). Matches (a) in its direct-binding form.
 
 ### G53 — Names of the orchestration and CLI modules
 - **Kind:** GAP · **Specs:** RUNTIME §1.3, INTERFACE §1.3 (`logos_` reserved for Logos-defined runtime
   and system modules); BCP §5 (assigns names to PM, Loader, CA, Runtime Control only).
 - **Options offered:** (a) `orchestrator` + `logosctl`, asking the author whether orchestration should get
   a `logos_` name *(recommended)*; (b) `logos_orchestrator` + `logosctl`. **Decision:** (b).
+- **Revised 2026-11-10 (6a4dfa28):** RT-03: orchestration has no canonical name (RUNTIME l.190-192), and `logos_` is reserved for Logos-defined runtime and system modules (l.310). `logos_orchestrator` must be renamed outside the prefix or dropped. To be re-decided with D13.
 
 ### G54 — What `list_modules` shows
 - **Kind:** spec-resolved · **Specs:** RUNTIME l.164 (system services are ordinary records), l.2963-2964
@@ -936,6 +1064,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) highest installed normal release; two different packages declaring the module
   fail without disclosure; an explicit pin is a CA module_execution_scope grant *(recommended)*; (b) highest
   release, no pinning. **Decision:** (a). The bootstrap pin counts as one candidate (G92).
+- **Revised 2026-11-10 (6a4dfa28):** RT-04: package selection is protected deployment policy with exact package and version pinning; no substitution and no `create_module` selector (BCP l.367; RUNTIME §9.3, l.3616-3622); starting an instance uses its retained declaration (l.3637). (a) "highest installed release" is withdrawn.
 
 ### G56 — Module hosts orphaned by a failed Loader
 - **Kind:** GAP · **Specs:** LOADER §7 (realization ids are scoped to the issuing provider; no adoption
@@ -959,6 +1088,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   drain 10 s; shutdown grace 10 s per realization then force-release; Ctrl-C during start queued until start
   returns *(recommended)*; (b) the same without a default call timeout. **Decision:** (a), all in the
   deployment profile and overridable.
+- **Revised 2026-11-10 (6a4dfa28):** NL-11: CONFIG makes an application deadline mandatory (l.269-275). Add it to the timeout set.
 
 ### G77 — Thread model
 - **Kind:** FREE · **Specs:** RUNTIME §6, §13.2 (the Runtime progresses without the host running a loop);
@@ -995,6 +1125,48 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 
 ---
 
+### G159 — Credential Store references without a definition
+- **Kind:** GAP · **Specs:** BCP l.23, l.52, l.199-209, l.276, l.282-285; SECURITY l.528-529.
+- **Description:** BCP and SECURITY refer to an optional Credential Store that no spec defines.
+- **Interim:** none needed: it is optional and we build none. **Status:** OPEN, found 2026-11-10; ask the
+  owner to publish it or drop the references.
+
+### G160 — Static registration across a host binary upgrade
+- **Kind:** GAP · **Specs:** RUNTIME l.1395 (retained declarations bound to the linked implementation
+  through protected registration), l.3637 (start uses the retained declaration, never a replacement).
+- **Description:** relinking a host that statically links a module (D14) replaces the implementation;
+  the spec does not say whether the instance survives.
+- **Interim:** keep the instance only when the declaration facts are byte-identical; otherwise allocate a
+  fresh instance (l.2629-2635 allows a fresh address when continuity is lost). **Status:** OPEN (Tier 4).
+
+### G161 — The scope of "observation authority"
+- **Kind:** GAP · **Specs:** RUNTIME l.3665 (a request omitting both selectors needs observation
+  authority over the complete selection scope).
+- **Description:** no RC scope or action is named for it.
+- **Interim:** evaluate the requested method's RC scope with `modules: [name]` and no instances or
+  providers. **Status:** OPEN (Tier 4).
+
+### G162 — Lifecycle outcome of a start with missing configuration
+- **Kind:** GAP · **Specs:** CONFIG l.125-126 (missing eligible configuration prevents initialization,
+  gives `NOT_READY`, and does not cancel execution intent); RUNTIME l.3750-3762 (failure codes).
+- **Description:** the resulting lifecycle state and failure classification are not stated.
+- **Interim:** the instance stays unloaded, the intent stays requested, no `failure` is set, and the next
+  configuration `set` re-triggers reconciliation. **Status:** OPEN (Tier 4).
+
+### G163 — Which system service a caller view names
+- **Kind:** GAP · **Specs:** RUNTIME l.888 (an engine system-service binding identifies the invoking
+  Runtime and the protected system-service kind); INTERFACE `logos_caller_view_t` l.3505-3523 (only
+  `kind`, `runtime_instance_id`, `module_instance_id`).
+- **Description:** the C caller view has no field for the system-service kind.
+- **Interim:** `kind = LOGOS_CALLER_SYSTEM_SERVICE`, with the service identified by the binding the
+  provider received. **Status:** OPEN (Tier 4).
+
+### G164 — Session reuse
+- **Kind:** GAP · **Specs:** RUNTIME l.784 (materialization MAY reuse a live session bound to the same
+  consumer, route, provider and contract); the NR-11 answer (no implicit sharing).
+- **Description:** the two agree only if "same route" excludes sharing across routes.
+- **Interim:** never reuse a session, which always conforms. **Status:** OPEN (Tier 4).
+
 ## 7. Capability Authority
 
 ### G46 — A running module loses its execution authorization
@@ -1005,6 +1177,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) re-evaluate first; stop only on deny (intent preserved); on evaluation failure
   keep running but deny new decision-requiring operations *(recommended)*; (b) stop immediately.
 - **Decision:** (b). Intent is preserved per RUNTIME §10.1, so the module resumes when allowed again.
+- **Settled 2026-11-10 (6a4dfa28):** CA-01: when execution authorization ends, Runtime stops the instance (CA l.854-866). Matches (b).
 
 ### G47 — How an external CA learns consumer attributes
 - **Kind:** GAP · **Specs:** CA §2 (Runtime supplies authenticated consumer context; no wire field for
@@ -1012,6 +1185,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) the CA observes them through its own Runtime Control binding (`list_modules`,
   `get_execution_summary`) under bootstrap grants *(recommended)*; (b) add an attributes field to
   `evaluate` (deviation). **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** CA-02: attribute sources plug in through a protected integration with ordering and freshness rules, and recursion into `evaluate` is forbidden (CA l.101-115). (a), Runtime Control visibility for the CA, is withdrawn.
 
 ### G49 — Meaning of `publish_events` / `publish-event`
 - **Kind:** GAP · **Specs:** CA §3.1 (`route_access.publish_events`, provider-access action
@@ -1020,6 +1194,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) accept and commit them in grants, never enforce, ask the author
   *(recommended)*; (b) reject any grant or scope containing them.
 - **Decision:** (a). **Status:** OPEN — the owner is asking the spec author.
+- **Revised 2026-11-10 (6a4dfa28):** CA-03: `publish-event` is kept and enforced: delivery needs the publisher's authority and each subscriber's (CA l.242-246; RUNTIME l.1229-1230). **Status:** answered; no longer open.
 
 ### G50 — Call-evidence proof arrays
 - **Kind:** GAP (partly spec-resolved) · **Specs:** CA §9.1 (no rule on per-side ordering or duplicates),
@@ -1029,6 +1204,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   duplicates rejected *(recommended)*; (b) non-empty, in disclosure order.
 - **Decision:** (a), aligned with l.1049 at the final review: `proofs` is omitted when there are none;
   when present it holds at least one proof in total, and one side may be empty.
+- **Revised 2026-11-10 (6a4dfa28):** AP-5: an empty request or response side is omitted, never an empty array (CA l.1293). CA-04 confirms the order: deterministic-CBOR order of the semantic path (CA l.1295-1300).
 
 ### G51 — Ordering and cursors of `list_grants` and `query_audit`
 - **Kind:** GAP · **Specs:** CA §6 (limit default 100, range 1-1000), §9 (at most the 1000 most recent
@@ -1036,12 +1212,14 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) grants by grant-id bytes; audit newest first by record sequence; cursors pin a
   snapshot and expire after 10 minutes (then `invalid-request`); since inclusive, until exclusive
   *(recommended)*; (b) ask the spec author. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** CA-05: `list_grants` continues live after the last returned id; audit is ordered by timestamp descending, ties in reverse recording order, `since` inclusive and `until` exclusive (CA l.705-713, l.1130-1133). Our snapshot expiry and record-sequence order are withdrawn.
 
 ### G52 — Call audit records under a route-level decision
 - **Kind:** GAP · **Specs:** CA §9 (a call record requires `decision_id` and a scope); RUNTIME §9 (calls
   are authorized by their route's decision).
 - **Options offered:** (a) the decision_id and provider_access_scope of the decision that established or
   last renewed the route *(recommended)*; (b) ask the spec author. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** NX-03, CA-06: each provider-method call is an authorization point (RUNTIME l.1724, l.1732-1735); a cached call decision may satisfy it, and the audit record names the actual call decision (CA l.1176-1182). (a) is withdrawn.
 
 ### G81 — Remote consumers in the daemon's CA
 - **Kind:** GAP · **Specs:** CA §2 ("Every module-instance address named by this contract MUST resolve to
@@ -1056,6 +1234,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   remote consumer accepted through an enrolled Hello and treats it as Runtime-known *(recommended)*;
   (b) rules only, no grants naming remote instances; (c) ask the spec author.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** C-09: CA addresses may be remote or historical (CA l.77-81). Matches (a).
 
 ### G82 — Default authority of the logosctl consumer on the daemon
 - **Kind:** FREE · **Specs:** CA §5, §6, §10 l.1108-1110 (ordinary consumers MUST NOT gain direct
@@ -1065,6 +1244,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   *(recommended)*; (b) read-only by default.
 - **Decision:** (a). Made explicit at the final review: the rule names the host-ambient permission scope
   (otherwise no payload module could start, RUNTIME l.2240) and `evaluate` (for `logosctl authz check`).
+- **Revised 2026-11-10 (6a4dfa28):** NX-01: CA §8.1 adds `watch_changes` and `observed_change`; `grant_changed` and `policy_changed` subscriptions are restricted (CA l.925-991; RUNTIME l.1661-1663). The logosctl consumer's default cannot include the restricted events.
 
 ### G110 — The ambient permission's identifier and constraints
 - **Kind:** FREE · **Specs:** CA §3.5 l.345 (a permission identifier must unambiguously identify its
@@ -1080,6 +1260,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) containers stay in the daemon's audit store; `logosctl audit evidence export`
   is an owner-only host action, documented; evidence and retain-root off by default, enabled by audit
   policy *(recommended)*; (b) nothing exported. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** CA-07: no new method; export goes through a protected integration (CA l.1320-1325). Matches (a).
 
 ### G140 — Contents of the default CA policy
 - **Kind:** FREE · **Specs:** CA §3.1 (route decisions per provider and scope), §3.3 (execution decisions
@@ -1098,6 +1279,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Not offered as a question** (found at the final review; the shape follows from the spec):
   `logosctl init` generates a separate 0600 Ed25519 evidence key and kid mapped to logosd's runtime id;
   `trust evidence-keys ls|rotate`, applied at the next start.
+- **Revised 2026-11-10 (6a4dfa28):** PM-06: the call-evidence key is SLH-DSA-SHA2-192s (CA §9.1 l.1217-1287, l.1265-1273). The implementation is R4.
 
 ---
 
@@ -1131,6 +1313,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Owner's answer:** "Let's leave this open, I need to confirm with the specs author".
 - **Status:** OPEN. Blocks the PM fetch mapping, the catalog locator shape, storage CID typing and every
   install; tests run against a fake Storage provider meanwhile (`provisional-G5`).
+- **Revised 2026-11-10 (6a4dfa28):** PM-01, SO-02: `storage` selects a deployment-configured Storage binding; `object` and `provenance_object` are opaque byte locators read through that binding's documented retrieval API and encoding (PM §6 l.856-864, §13 l.1437-1438). No common fetch interface. **Status:** no longer open; we choose and document the locator encoding when fetch is built (Tier 5).
 
 ### G29 — Shared artifacts, ordering violations and check precedence
 - **Kind:** CONTRA · **Specs:** PM §4 l.341 (declarations "MAY reference the same schema or default
@@ -1140,6 +1323,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   implementation artifacts rejected; ordering violations `invalid-package`; precedence limits >
   structure > signature > commitment > schema > platform > artifact hashes *(recommended)*; (b) reject
   all sharing; (c) ask the spec author. **Decision:** (a); provenance inserted after commitment (G113).
+- **Settled 2026-11-10 (6a4dfa28):** C-07: only implementation artifacts must be unique per declaration; ordering violations are `invalid-package`, and the first detected error may be returned (PM §4 l.334-335, l.358; §8 l.1070, l.1088). Matches.
 
 ### G39 — Per-caller cursors without a caller identity
 - **Kind:** GAP · **Specs:** PM §15 (cursors bound to "the authenticated caller", records filtered per
@@ -1147,18 +1331,21 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   visibility.
 - **Options offered:** (a) cursors bound to the route/session by the host layer; anyone allowed the method
   sees all records; documented deviation *(recommended)*; (b) ask the spec author. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** PM-03: queries need protected invocation integration and an observation policy; method permission alone does not imply record visibility (PM §15 l.1620-1633, l.1704-1708). (a) becomes an explicit observation-policy grant when the methods are built (Tier 5).
 
 ### G40 — Paths longer than USTAR allows
 - **Kind:** GAP · **Specs:** PM §7.1 (gzip USTAR; pax not mentioned); PM §4 (artifact paths up to 4096
   bytes).
 - **Options offered:** (a) pax `path` records only, when needed *(recommended)*; (b) reject long paths.
 - **Decision:** (b): over-limit paths make the package invalid; no pax headers.
+- **Settled 2026-11-10 (6a4dfa28):** PM-04: full paths fit USTAR name/prefix at a slash split, in bytes, including the `variants/<id>/` prefix and a directory's trailing slash; no PAX or GNU long names (PM §7.1 l.920-924). Matches (b).
 
 ### G41 — Multi-member gzip and directory entries
 - **Kind:** GAP · **Specs:** PM §7.1 ("Directory modes MUST be 0755" implies but does not require
   directory entries; RFC 1952 multi-member streams not addressed).
 - **Options offered:** (a) reject multi-member; writer emits 0755 directory entries, reader accepts
   either *(recommended)*; (b) accept multi-member, require directory entries. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** PM-05: exactly one gzip member with CRC32 and ISIZE checked; directory entries optional, explicit ones type `5` with size zero (PM §7.1 l.909-911, l.916-917, l.943-945). Matches (a). New: padding after the end blocks must be whole zero blocks (I49).
 
 ### G42 — Ed25519 verification strictness
 - **Kind:** GAP · **Specs:** PM §4.3, CA §9.1 (RFC 8032; cofactored vs cofactorless and small-order or
@@ -1166,24 +1353,28 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) libsodium semantics: cofactorless, reject non-canonical encodings and
   small-order A/R; small-order keys rejected when trust is loaded *(recommended)*; (b) RFC 8032 cofactored.
 - **Decision:** (a). Implementation: G135.
+- **Revised 2026-11-10 (6a4dfa28):** Superseded by PM-06: Ed25519 is gone from every 6a4dfa28 spec; package signatures and call evidence are pure FIPS 205 SLH-DSA-SHA2-192s with exact 48-byte keys and 16,224-byte signatures and no repair (PM §4.3 l.483-573). The small-order and canonical-S checks remain only until R4.
 
 ### G43 — Equal identity and commitment from different sources
 - **Kind:** GAP · **Specs:** PM §11, §15 (list order: name bytes, descending SemVer, deterministic-CBOR
   bytes of the source).
 - **Options offered:** (a) record the first in list_packages order *(recommended)*; (b) first in catalog
   document order. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** PM-07: equivalent sources are ordered by ascending bytewise det-CBOR source-record encoding (PM §11 l.1313-1316). Matches (a).
 
 ### G44 — A candidate cannot be fetched during resolution
 - **Kind:** GAP · **Specs:** PM §11 (resolution deterministic; outcome must not depend on local resource
   thresholds).
 - **Options offered:** (a) abort with `package-unavailable` *(recommended)*; (b) skip the candidate.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** PM-08: unavailable material fails the root operation with `package-unavailable` and leaves state unchanged (PM §11 l.1294-1296). Matches (a).
 
 ### G45 — `manifest.json` inside a package
 - **Kind:** GAP · **Specs:** PM §3 (the JSON rendering is diagnostic and must not override), §7.1 (allowed
   at the archive root); no JSON mapping exists to check it against.
 - **Options offered:** (a) path-checked, never read or trusted *(recommended)*; (b) reject packages that
   contain it. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** PM-09: `manifest.json` is removed from LGX; `manifest.cbor` is the only manifest representation (PM §3 l.196-216, §7.1 l.897-906). A root `manifest.json` is now outside the permitted root names, so `invalid-package`. Code changed (I49).
 
 ### G73 — LGX platform values and matching
 - **Kind:** GAP · **Specs:** PM §7.1 l.1082 ("Platform profiles define the registered os, architecture,
@@ -1194,6 +1385,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   optional {gnu, musl, mingw, msvc}; exact byte match; case-insensitive path collisions on darwin/windows
   plus Windows reserved names; dev and release builds as separate packages *(recommended)*; (b) Rust target
   triples split into the three fields. **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** PM-10: platform values and matching rules come from the deployment profile for the target environment (PM §7.1 l.953-960; BCP §5.4); a value with no defined rule never matches; path collisions follow the installation filesystem and namespace, not the target OS (l.927). Our (a) values become that documented profile; code changed (I49).
 
 ### G74 — Protected catalog policy
 - **Kind:** FREE · **Specs:** PM §11 l.1182-1184 (same package@version with different commitments:
@@ -1215,6 +1407,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) the locator lives only in the daemon config; document = det-CBOR
   `{format, sequence: uint64, entries}`, unsigned; a lower sequence than the last seen is rejected
   *(recommended)*; (b) the same without the sequence. **Decision:** (a). Origin per D17.
+- **Settled 2026-11-10 (6a4dfa28):** SO-01: catalog format, acquisition, refresh and policy are implementation-defined and must be documented (PM §6 l.836-837). (a) stands.
 
 ### G91 — How the Package Manager reads package objects from storage
 - **Kind:** FREE · **Specs:** PM §13; INTERFACE §1.3 (reserved prefixes), §1.4 (`_implements`).
@@ -1222,6 +1415,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   implemented by storage_module: chunked `read_object{object, offset, length ≤ 1 MiB}` plus size; grants
   bind to its stable root *(recommended)*; (b) the PM calls storage's own download methods.
 - **Decision:** (a). Depends on G5.
+- **Settled 2026-11-10 (6a4dfa28):** SO-02: acquisition is an implementation choice with no common fetch interface (PM §6 l.856-860, §13 l.1437-1438). `lcn.storage_fetch` stands and must be documented.
 
 ### G93 — How a module reaches its non-binary artifacts and native libraries
 - **Kind:** GAP · **Specs:** PM §10, §12 (the handoff carries only the implementation artifact); LOADER §3,
@@ -1230,6 +1424,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   resource artifacts passed through a deployment-specific channel; (c) ask the spec author.
 - **Decision:** (c). **Status:** OPEN. Our payload modules are built self-contained meanwhile, which needs
   no answer.
+- **Revised 2026-11-10 (6a4dfa28):** PM-11: installed paths are not module-visible; access follows a documented deployment convention, and native libraries go through the Loader's dynamic-linker integration (PM §10 l.1189-1193). Self-contained modules are such a convention. **Status:** answered; document it.
 
 ### G94 — Provenance-signing profile
 - **Kind:** GAP · **Specs:** PM §4.5 l.611-615 (each provenance-signing profile must define its
@@ -1237,6 +1432,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Options offered:** (a) our own `logos-core-nim.provenance-signing.ed25519-dsse.v1`: Ed25519 keys in
   protected trust input, signer key id bound to builder ids *(recommended)*; (b) Sigstore keyless;
   (c) ask the spec author. **Decision:** (a), as deployment-profile material.
+- **Revised 2026-11-10 (6a4dfa28):** PM-12: the spec defines `logos.provenance-signing.dsse-slh-dsa-sha2-192s` (PM §4.5 l.651-676), which replaces our Ed25519 DSSE profile when provenance is built.
 
 ### G95 — Scope of the Nix package profile
 - **Kind:** FREE · **Specs:** PM §7.3 (package-controlled Nix evaluation only inside a pre-verification
@@ -1256,12 +1452,14 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   signer-builder pair, subject mismatch, buildType/source failure `signature-verification-failed`;
   precedence … commitment > provenance > schema … *(recommended)*; (b) ask the spec author.
 - **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** PM-13: PM §14 l.1487-1491 maps the failures as (a) did. Matches.
 
 ### G114 — A Nix source while provenance is selected
 - **Kind:** GAP · **Specs:** PM §4.5 l.582 (defines provenance for LGX sources only), l.680-689 (no
   weakening).
 - **Options offered:** (a) reject as missing evidence (`package-unavailable`) *(recommended)*; (b) ask.
 - **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** PM-14: a direct Nix root request under LGX-only provenance policy is `unsupported-source`, not `package-unavailable`; Nix-built LGX stays eligible (PM l.603-606, l.1475).
 
 ### G137 — Package-signing trust provisioning
 - **Kind:** FREE · **Specs:** PM §4.1 l.404-419 (trust input maps each kid to one key and binds each signer
@@ -1273,6 +1471,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Decision:** (b). Completed at the final review per PM §4.1: org anchor(s) authorized for exactly the
   six payload package names; operator anchors carry explicit name sets; release builds refuse the
   published dev key (an implementation default reconciling this with D18).
+- **Revised 2026-11-10 (6a4dfa28):** NP-10: signing trust needs protected continuity, a monotonic revision with a persistent high-water mark; withdrawal blocks new operations and handoffs (PM §4.1 l.395-405). Keys are 48-byte SLH-DSA keys. **Status:** the continuity design is open (how compiled-in anchors join the revision, where the mark persists).
 
 ### G150 — `catalog set` and `catalog refresh`
 - **Kind:** FREE · **Specs:** PM §15 (no refresh or catalog-configuration method); the PM receives its
@@ -1294,6 +1493,7 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   `artifact-integrity-failed`, by treating l.1000 as an exception to l.974; (c) ask the owner.
 - **Interim (D9):** (a), in `package/manifest.nim` `decodeManifest`, test `[IMPL-DECISION G156]`;
   requirement unit PKG-0275 stays deferred. Error code only.
+- **6a4dfa28:** not answered (NP-15). PM §8 l.1070 now lets an implementation stop at the first detected failure, so the interim `invalid-package` conforms.
 
 ---
 
@@ -1463,6 +1663,7 @@ Runtime, which connects to the daemon's Runtime as an enrolled remote Runtime.
   installed explicitly on Linux/macOS; the daemon config carries ordering constraints lez_rln -> rln ->
   delivery and libp2p -> delivery (startup, resume, reverse at shutdown) *(recommended)*; (b) separate
   delivery packages per platform. **Decision:** (a).
+- **Settled 2026-11-10 (6a4dfa28):** PM-15: dependencies are unconditional across variants (PM §11 l.1221-1223). Matches.
 
 ### G99 — Host paths in method arguments
 - **Kind:** FREE · **Specs:** CONFIG §6 l.197 (no implementation-specific configuration-file path at the
@@ -1607,6 +1808,7 @@ Runtime, which connects to the daemon's Runtime as an enrolled remote Runtime.
 - **Follow-up options:** (a) BoringSSL + those checks, validated with Wycheproof and the EdDSA edge-case
   suite, asserted equal to libsodium's verdicts *(recommended)*; (b) pinned libsodium compiled in.
 - **Decision:** (a).
+- **Revised 2026-11-10 (6a4dfa28):** Superseded by PM-06; nothing in 6a4dfa28 uses Ed25519. `crypto/ed25519.nim` stays only until R4 is decided, then goes with its tests, oracle files and the Android runner's vector push.
 
 ### G116 — Live-acceptance host and persistent testnet seeder
 - **Kind:** FREE · **Specs:** none (operational).
@@ -1653,7 +1855,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G2 | schema root below imported references | GAP | 2 |
 | G3 | unqualified common names | CONTRA | 2 |
 | G4 | declarations deeper than the namespace | GAP | 2 |
-| G5 | LGX `storage` / `object` | GAP, **OPEN** | 9 |
+| G5 | LGX `storage` / `object` | FREE (6a4dfa28) | 9 |
 | G6 | referencing common callables | GAP | 2 |
 | G7 | verified-view field/tuple disclosure | GAP | 2 |
 | G8 | choice-arm segment | GAP | 2 |
@@ -1667,7 +1869,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G39–G45 | Package Manager edge cases | GAP | 9 |
 | G46–G52 | Capability Authority | GAP | 7 |
 | G48 | engine-originated calls | GAP | 6 |
-| G49 | `publish_events` | GAP, **OPEN** | 7 |
+| G49 | `publish_events` | GAP (answered) | 7 |
 | G53–G57 | names, list_modules, selection, Loader failure | GAP / spec-resolved | 6 |
 | G58 | socket layout | CONTRA | 5 |
 | G59 | nesting depth | GAP | 3 |
@@ -1680,7 +1882,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G81, G82 | remote consumers; operator rule | GAP / FREE | 7 |
 | G90, G91 | catalog format; PM storage fetch | FREE | 9 |
 | G92 | storage pin vs installed package | GAP (revised) | 6 |
-| G93 | module artifacts and native deps | GAP, **OPEN** | 9 |
+| G93 | module artifacts and native deps | GAP (answered) | 9 |
 | G94–G96 | provenance and Nix profile | GAP / FREE | 9 |
 | G97–G104 | payload contracts and dependency modules | FREE | 11 |
 | G105, G106 | mobile composition and linking | FREE | 12 |
@@ -1703,11 +1905,15 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G145, G146 | release form; service management | FREE | 10 |
 | G150 | catalog set/refresh | FREE | 9 |
 | G151 | `.size` on a named target | GAP, **OPEN** | 2 |
-| G152 | leaf-bodied declaration identity | GAP, **OPEN** | 2 |
+| G152 | leaf-bodied declaration identity | GAP (settled) | 2 |
 | G153 | local alias cycles | GAP, **OPEN** | 3 |
-| G154 | forward typedefs for list targets on cycles | GAP, **OPEN** | 3 |
-| G155 | tie-breaking among type definitions | CONTRA, **OPEN** | 3 |
+| G154 | forward typedefs for list targets on cycles | GAP (settled by spec text) | 3 |
+| G155 | tie-breaking among type definitions | CONTRA (moot) | 3 |
 | G156 | an artifact without its hash | CONTRA, **OPEN** | 9 |
+| G157 | line break in a byte string | GAP, **OPEN** | 2 |
+| G158 | common-name projection | GAP, **OPEN** | 3 |
+| G159–G164 | Credential Store, static registration, observation scope, missing config, caller view, session reuse | GAP, **OPEN** | 6 |
+| G165 | oversized Event from the void publish callback | CONTRA, **OPEN** | 5 |
 
 ---
 
@@ -1738,21 +1944,21 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I15 | IMPL | Layout input (HASH §4, §7.4; COMMITMENT §9.3) | `hash/layout` takes the §9.3 value tree (`commitment/value.nim`) plus two values the commitment layer derives from the list schema: the element schema identity (`list-payload` field 3, which an empty list cannot supply) and, for a homogeneous packable scalar list, its scalar kind. A list whose element schema is a reference, local or imported, is not packed, even when the reference resolves to a packable scalar: HASH §4 excludes reference lists and forbids packing across referenced-schema boundaries. Literal elements follow G119. | 2026-11-09 |
 | I16 | IMPL | HASH verifier checks | `hash/check.nim` checks one payload at a time: exact key sets and types (HASH §7.3–§7.5), 32-byte digests, known node kinds and the kinds each parent may hold, labels, counts, chunk and byte ranges, and the one canonical branch tree (top-level branch size is the smallest 256^k leaving at most 256 branches). Errors are classed: malformed-cbor, non-canonical-cbor, malformed-hash-input, unknown profile/suite/model, domain-mismatch, digest-length, node-kind, layout-mismatch. Schema payloads (COMMITMENT §9.2) are the commitment layer's to check. A verifier policy that accepts another commitment-model revision is a `HashProfile` with that id. | 2026-11-09 |
 | I17 | IMPL | HASH vectors (G17) | `oracle/hashlayout.py` is an independent layout written from the spec text; `oracle/gen_hash_vectors.py` writes `tests/vectors/hash/layout.cbor` (value trees in the §9.3 shape plus the I15 list annotations as keys 100 and 101, with their value roots). Trees too large to store (branches over branches, 1 MiB strings) are named by generator and size, and both sides expand them by the same rule. The oracle also reproduces HASH App A and B.1–B.3 from the pins. Every payload the Nim layout makes is checked against the mirrored HASH §7 CDDL and domain tables (`spec/mirrors/HSH/*.md`). | 2026-11-09 |
-| I18 | IMPL | Schema-model construction (COMMITMENT §3.1, §5) | `commitment/construct.nim` builds one document's model from source text through cdCDDLe. A `SchemaContext` holds what a document may depend on: the pinned registry (`pins.nim`, the roots every common import carries), the pinned common document itself (`CommonSchemaDocument`, generated from its mirror; used only to follow references and checked at start-up to reproduce the registry), the supplied supporting schemas and the interface documents `_implements` names. Modules see common and supporting types; interfaces and supporting schemas see common types only. A dependency built under another commitment-model revision is rejected (no compatibility profile exists). INTERFACE §1.2's ascending `_implements` order and its unused-interface rule are enforced here; the rest of INTERFACE §1 waits for Tier 2. Errors are strings for now. | 2026-11-09 |
+| I18 | IMPL | Schema-model construction (COMMITMENT §3.1, §5) | `commitment/construct.nim` builds one document's model from source text through cdCDDLe. A `SchemaContext` holds what a document may depend on: the pinned registry (`pins.nim`, the roots every common import carries), the pinned common document itself (`CommonSchemaDocument`, generated from its mirror; used only to follow references and checked at start-up to reproduce the registry), the supplied supporting schemas and the interface documents `_implements` names. Modules see common and supporting types; interfaces and supporting schemas see common types only. A dependency built under another commitment-model revision is rejected (no compatibility profile exists). INTERFACE §1.2's ascending `_implements` order and its unused-interface rule are enforced here; the rest of INTERFACE §1 waits for Tier 2. Errors are strings for now. **Revised 2026-11-10 (6a4dfa28):** ND-08 reverses the interface rule: interfaces may reference leaf supporting schemas (INTERFACE §1.1 l.100-113); `accept.supportingOf` collects them, and schema responses list each interface's `supporting_schemas` (§5.1 l.3279-3286). Tests `[IFC-0021] [IFC-0025] [IFC-0560]`, `[IFC-0449] [IFC-0458] [IFC-0459] [IFC-0930] [IFC-0931]`. | 2026-11-09 |
 | I19 | IMPL | Choice selection plans (COMMITMENT §3.1) | `commitment/choice.nim`. An arm "proves" it rejects an outcome exactly for scalar values: bool, fixed-width integer ranges, and text (UTF-8, no NUL, `.size` byte length) or byte-string sizes; "any other value" counts what a primitive can hold (exact for bool, fixed-width integers and strings of at most one byte, unbounded otherwise). Scalar values are every CBOR item except arrays, maps and tags. References are followed with memoization keyed by (document, declaration, observation); one reached again for the same observation while it is being followed proves nothing (the arm stays a candidate). A plan node lists every outcome of its test, with no child where no arm remains; the same plans select arms when validating values (`validates`), which rebuilds them per call for now. | 2026-11-09 |
 | I20 | IMPL | Value normalization (COMMITMENT §7, §8) | `commitment/normalize.nim`. A `Site` (document, nearest named declaration, path, node) names each schema position; its identity is `identityOf` (G152 at the empty path, a leaf hash at a leaf node, a structural root otherwise), cached per site within one normalization, as are choice selection plans. A map value has text keys only; each schema field is looked up by name and any other entry rejects the value; an absent optional field becomes an absent node carrying the field's identity. Local references are followed by `throughLocal` (G1), bounded so a reference cycle is an error; imported ones become reference-value nodes resolved through the schema set's import table. A list node gets its element identity and packability from `packKindOf` (G119, I15). Input is decoded Logos deterministic CBOR (`normalizeBytes` decodes first), so floats, tags and non-shortest forms never reach it; scalars are accepted by `primitiveAccepts`, shared with choice plans. `parseValueNode` and `parseValueRoot` read §9.3 objects strictly (exact key sets, ordering and coverage) without the I15 annotations: a parsed list takes its element identity from its first element and is never packed, so a verifier with a schema re-normalizes the plain value (`plainValue`) to recover them. Errors are strings for now. Single implementation: the oracle does not normalize. | 2026-11-09 |
 | I21 | IMPL | Verified views (HASH §7.6, §8) | `hash/view.nim`. `viewOf` collects the complete payloads from the value root down the path and emits them disclosed-item first, value root last (App B.1/B.2's order); it refuses any path the verifier would reject. `verifyView` replays them from the value root down: each step must be in the domain of the record its parent selects, hash to that record's digest, repeat its schema identity and the current schema root in field 1 (the referenced root below a reference, G2), and every step must be used. Branches are entered by base-record index: the field's position in the schema map, the chunk, the tuple position or the byte chunk. A path crosses an imported reference without a segment and a choice only through its `choice-arm` segment (G8); a field or tuple position discloses the inner value (G7). An empty path discloses the `normalized-value-root` with no proof; any other path discloses a `value-node`, an absence marker or a string range. Seven error classes: `malformed-view`, `unknown-identifier`, `schema-mismatch`, `invalid-path`, `disclosed-mismatch`, `proof-mismatch`, `value-root-mismatch`. With a schema (G120) every node's identity is recomputed and the disclosed value re-normalized; without one only the physical proof is checked (enough for App B's synthetic identities), and a branched map cannot be descended because the field index comes from the schema. | 2026-11-09 |
 | I22 | IMPL | Schema acceptance (INTERFACE §1, §5.3) | `iface/accept.nim` `acceptContractSet(primary, interfaces, supporting, opts)` takes document text only: file names, labels and aliases never reach it. Each document is built through COMMITMENT construction (I18); then come the metadata block, prelude and reserved names, naming rules (`iface/names.nim`), method and event limits, the supporting-schema suffix rule, the §5.3 limits (1 MiB per document, 8 MiB per set, 65,536 schema nodes, 128 nesting levels), the input-set rules, G69, G153 and the C mapping (I23). `AcceptOptions.system` admits the reserved `logos` names, for Logos-defined contracts only. `_module` values follow the RUNTIME §1.3 grammar (at most 64 bytes). Errors are strings that cite the section. | 2026-11-10 |
-| I23 | IMPL | C mapping at acceptance; NX-04 interim | INTERFACE §2.1 says an accepted set never derives two identical C identifiers or a namespace-projection collision, so acceptance runs the whole forward C type mapping (`iface/cmap.nim` `cDeclarations`) and keeps only the verdict. Interim for NX-04: a derived identifier that `logos_types.h` declares (its fixed §5.2 block, the §2.3 empty types or a common type) is a collision too, so `module.context` and `schema.commitment` are rejected. Narrowing only: no accepted set's names change. | 2026-11-10 |
+| I23 | IMPL | C mapping at acceptance; NX-04 interim | INTERFACE §2.1 l.898 says an accepted set never derives two identical C identifiers or a namespace-projection collision, so acceptance runs the whole forward C type mapping (`iface/cmap.nim` `cDeclarations`) and keeps only the verdict [SPEC INTERFACE §2.1 l.898]. **Revised 2026-11-10 (6a4dfa28):** the NX-04 interim is withdrawn: capitalized stems already avoid the collision (`error.code` gives `logos_error_Code_t`), so `error.code`, `module.context` and `schema.commitment` are accepted and their headers compile next to `logos_types.h` (test `[IFC-0123]`, NX-04). | 2026-11-10 |
 | I24 | IMPL | Call surface and `logos.schema` (INTERFACE §1.4, §1.5, §5.1) | `iface/surface.nim`. `callSurface` lists each method by bare wire name with its defining contract and each event by its qualified event id; a bare name implemented twice is rejected at acceptance. `schemaCommitment` builds `logos.schema_commitment` from the pinned commitment model, hash profile and suite (`spec/pins.toml`). `schemaResponse` builds the response for a selected root (the primary contract with its interfaces and supporting schemas, or one interface alone); `acceptSchemaResponse` checks one against an expected root, rebuilding every entry. | 2026-11-10 |
-| I25 | IMPL | Payload validation and outcomes (INTERFACE §4.1–§4.5, §5.1) | `iface/payload.nim`: a `ContractValidator` from an accepted set checks params, results and event data: deterministic CBOR first (malformed and non-deterministic input are `INVALID_PARAMS` with that reason; text that is not UTF-8 is a `schema-mismatch`; nesting past the G59 cap has no detail), then an unknown bare method is `METHOD_NOT_FOUND`, then a schema mismatch carries the path to the first offending item. `iface/outcome.nim`: `ErrorCode` 0–9 named as in `logos_types.h`; any other status from a provider is a module failure; messages of at most 512 UTF-8 bytes, never with `LOGOS_OK`; detail is one valid `logos.invalid_params_detail` of 1–4096 bytes, only with `INVALID_PARAMS`. §4.6 is left to Tier 3: it binds the provider and the Transport adapter. | 2026-11-10 |
-| I26 | IMPL | lcn-gen, C types (D29, INTERFACE §2.1–§2.3, §2.5, §5.2) | `lcn-gen logos-types` writes `logos_types.h`: the §5.2 block without its `<module>` placeholder line and memory-management comment, the §2.3 empty types, and the common schema's named types except `logos.error_code` (the status enum). `lcn-gen types` accepts a construction input set and writes `<module or namespace>_types.h`. Document-role constants are emitted only where §2.1 needs them: several documents, a non-simple namespace, or a role nothing else shows. Every header is stamped `PROVISIONAL ABI (spec f4f83471)`. Tests compile every generated header with `cc -std=c11 -Wall -Wextra -Wpedantic -Werror`. Built by Nix (`packages.lcn-gen`) and by Nimble (`namedBin`; `nimble build --useSystemNim`, since on macOS nimble 0.20.1 otherwise crashes looking up the locked Nim). Verified on aarch64-darwin and x86_64-linux (2026-11-10). | 2026-11-10 |
-| I27 | IMPL | lcn-gen, Nim types (D29) | INTERFACE fixes only the C mapping; the Nim one follows it where Nim allows. Names are the PascalCase of the C stem (common types drop `logos`); inline maps and choices add the C path and `Map`/`Choice`. Choices are case objects over a pure `<Name>Kind` enum (`arm0`…, canonical arm order); scalars map to `bool`, `uint8`…`int64`, `string`, `seq[byte]`; lists to `seq`; tuples to anonymous tuples (`EmptyTuple` for `[]`); optional fields to `Opt`; `logos.error_code` to `ErrorCode`. A literal field defaults to its literal and is always encoded as it. A reference on a by-value cycle is a `ref`. Decoders take one deterministic-CBOR item, validate it against the embedded accepted schema (`codegen/nimrt.nim`), and only then convert; arms are picked by the selection plan. Names Nim's style-insensitive identifiers cannot tell apart are a generation error. `src/logos_core/iface/common_types.nim` and `tests/generated/` are committed output; `nimble regen` rewrites them and a test fails when they are stale. They start with `#!fmt: off`, because nph 0.7.0 ignores the `.nph.toml` exclusions and would otherwise reformat them. | 2026-11-10 |
+| I25 | IMPL | Payload validation and outcomes (INTERFACE §4.1–§4.5, §5.1) | `iface/payload.nim`: a `ContractValidator` from an accepted set checks params, results and event data: deterministic CBOR first (malformed and non-deterministic input are `INVALID_PARAMS` with that reason; text that is not UTF-8 is a `schema-mismatch`; nesting past the G59 cap has no detail), then an unknown bare method is `METHOD_NOT_FOUND`, then a schema mismatch carries the path to the first offending item. `iface/outcome.nim`: `ErrorCode` 0–9 named as in `logos_types.h`; any other status from a provider is a module failure; messages of at most 512 UTF-8 bytes, never with `LOGOS_OK`; detail is one valid `logos.invalid_params_detail` of 1–4096 bytes, only with `INVALID_PARAMS`. §4.6 is left to Tier 3: it binds the provider and the Transport adapter. **Revised 2026-11-10 (6a4dfa28):** a float at any depth is `non-deterministic-cbor` before the schema check (G38, `[IFC-0919] [IFC-0920]`); tags, null, undefined and simple values stay schema mismatches. Depth is `ContractValidator.maxDepth` (default 1024; `validator(s, maxDepth)` refuses a value below 128); past it, `PayloadError` has no reason, so the failure is INVALID_PARAMS without detail (`[IFC-0923] [IFC-0926] [IFC-0928] [IFC-0929]`). `outcome.checkedProviderStatus` passes a valid status through and turns any other into MODULE_ERROR with neither message nor detail (§5.1 l.3364, `[IFC-0932] [IFC-0933]`). `configuration-schema-mismatch` keeps its path, rooted at the decoded configuration (`[IFC-0441]`); nothing produces it before CONFIG (Tier 4). | 2026-11-10 |
+| I26 | IMPL | lcn-gen, C types (D29, INTERFACE §2.1–§2.3, §2.5, §5.2) | `lcn-gen logos-types` writes `logos_types.h`: the §5.2 fixed block (without its `<module-C>` placeholder lines), the §2.3 empty types and the common section (names per the G158 interim). **Revised 2026-11-10 (6a4dfa28), C mapping revision 3:** `lcn-gen types [--module:NAME] [PRIMARY]` writes `<module or ns-C>_types.h`. With `--module` it builds an explicit binding (§2 l.604-609): interface-only, an events-only interface, a types-only primary, or lifecycle-only with no documents (§3.9.2 l.2868-2875). The frame is: the include, the revision check `3u`, three context checks, the C++ linkage wrapper, shared constraint typedefs, then one group per document (supporting, interfaces, primary), each guarded by `LOGOS_DOCUMENT_<ns>_DEFINED` with its four ROOT macros checked before suppression, and the PRIMARY/IMPLEMENTS binding constants last and unguarded (§3.2 l.2300-2330). Every header is stamped `PROVISIONAL ABI (spec <revision>)`, taken from `pins.nim`. Tests compile every generated header with `cc -std=c11 -Wall -Wextra -Wpedantic -Werror` (and C++ and other modes for literals). Built by Nix (`packages.lcn-gen`) and by Nimble (`namedBin`; `nimble build --useSystemNim` on macOS). | 2026-11-10 |
+| I27 | IMPL | lcn-gen, Nim types (D29) | INTERFACE fixes only the C mapping; the Nim one follows it where Nim allows. **Revised 2026-11-10 (6a4dfa28):** names follow the revision-3 C stems and labels: type names are `pascal(stem)`; a choice's kind enum lists the C labels in C discriminant order (`Case<i>` in indexed form); arm fields are `arm_<label>`; the decoder maps the canonical arm index to that member (so `DemoEntryKind.Dir` = 0 and `.File` = 1 while the canonical arm order is file, dir). Unchanged: scalars map to `bool`, `uint8`…`int64`, `string`, `seq[byte]`; lists to `seq`; tuples to anonymous tuples; optional fields to `Opt`; a literal field defaults to its literal; a reference on a by-value cycle is a `ref`; decoders validate one deterministic-CBOR item against the embedded accepted schema (`codegen/nimrt.nim`) before converting; names Nim cannot tell apart are a generation error. `common_types.nim` and `tests/generated/` are committed output (`nimble regen`), starting with `#!fmt: off`. `lcn-gen nim` still needs a primary document; Nim output for interface-only and lifecycle-only bindings waits until something uses it. | 2026-11-10 |
 | I28 | IMPL | Per-unit claims | `conformance/claims/<SPEC>.toml` gains `[units]`: one requirement unit's status, overriding its section's, so a claimed section can defer the few units that belong to a later tier (e.g. §1.2's full-ABI rule waits for the export-set gate) and a deferred section can claim the units built now (§2.5's event struct, §3.9.5's projection collision, §5.2's `logos_types.h`). Units addressed to authors, or permissions, are covered by `conformance/inspection/<SPEC>.toml` items with a reason. | 2026-11-10 |
 | I29 | IMPL | Envelope CDDL reader (TRANSPORT §1.1, §1.3; G15) | `transport/protocddl.nim` reads the mirrored envelope blocks, which are outside the cdCDDLe subset, accepting exactly the constructs they use (integer map keys, `any`, an unsized `uint`, `lo..hi` ranges, `{ * tstr => any }`) and rejecting anything else, so a revision that adds a construct fails when the pinned documents load instead of being misread. Names outside the documents resolve to declarations of the pinned common schema, checked with the INTERFACE §5.1 model. `transport/envelope.nim` checks at load that its Nim view of the nine kinds equals the CDDL's kinds and closed field sets. | 2026-11-10 |
 | I30 | IMPL | Opaque text inside payloads (TRANSPORT §2.3, §8.3; INTERFACE §4.5) | A frame body is decoded with I11's `allowInvalidUtf8`: the envelope check of a payload map is only "a map with text keys", and whether its text is UTF-8 is the schema-aware boundary's to judge, as a schema mismatch, the same as in direct mode. The envelope's own text fields must be UTF-8. `encodeMessage` runs the receive-side envelope checks on what it emits, so no invalid envelope is sent. | 2026-11-10 |
 | I31 | IMPL | A provider result the envelope cannot carry (TRANSPORT §4.1, §6; INTERFACE §4.3) | `CalleeConn.respond`: a success response outside its schema, or a failure the envelope cannot carry (code 0, a message over 512 bytes, detail its code does not allow), is sent as `MODULE_ERROR`, as direct mode reports it. | 2026-11-10 |
-| I32 | IMPL | Sans-I/O transport shape (TRANSPORT §2.1, §3, §6–§8) | Framing is a 4-byte big-endian length; the reader yields whole bodies from any byte chunks and refuses frames over the configured maximum (default 16 MiB, the §2.1 minimum; G75). Each side's session is a state machine that turns a received frame into actions and a local operation into bytes, with no I/O and no clocks. The `random-256` ticket store takes the monotonic clock reading and, for tests, the random source (default `std/sysrand`); it is not thread-safe, and a Runtime serializes access, which makes `redeem` atomic. Sockets, peer authentication and route enforcement are tier 4. | 2026-11-10 |
+| I32 | IMPL | Sans-I/O transport shape (TRANSPORT §2.1, §3, §6–§8) | Framing is a 4-byte big-endian length. The reader yields whole bodies from any byte chunks, refuses a frame over its configured maximum, which is at least 16 MiB (§2.1; a smaller configured limit is refused), and holds at most limit + 4 bytes. The sender checks that each body fits the peer maximum, 16 MiB unless established otherwise, before writing (I53). Each side's session is a state machine that turns a received frame into actions and a local operation into bytes or a typed failure, with no I/O and no clocks. Per-connection limits are `TransportLimits` (I52). The callee has a termination mode (G35, I57) and invocation-scoped publication (`publishScoped`, §6). The `random-256` ticket store takes the monotonic clock reading and, for tests, the random source (default `std/sysrand`); it is not thread-safe, and a Runtime serializes access, which makes `redeem` atomic. Sockets, peer authentication, route enforcement and aggregate limits are Tier 4. Revised at 6a4dfa28. | 2026-11-10 |
 | I33 | IMPL | Ed25519 from BoringSSL (G42, G135) | `crypto/ed25519.nim` over nim-boringssl 0.0.14: `ED25519_verify` after our checks (S < L, A canonical and not small-order, R not small-order; cofactorless). The 7-encoding small-order blocklist is asserted equal to the one `oracle/ed25519.py` derives from the curve's torsion points. Tests: BoringSSL's own RFC 8032 and sign.input vectors, Wycheproof (150 cases), and 44 edge vectors from `oracle/gen_ed25519_vectors.py` with strict, lenient and cofactored verdicts (14 small-order keys and identity R separate strict from raw BoringSSL). nim-boringssl is not in the Nimble package list, so `logos_core.nimble` requires it by URL. | 2026-11-10 |
 | I34 | IMPL | Deflate and gzip framing (PM §7.1, G41) | nim-zlib 0.3.0 for raw deflate and CRC-32 only; the gzip member around it is ours: the writer emits `1f8b0800 00000000 02ff` (no name, mtime 0, OS 255) and level-9 deflate; the reader takes exactly one member, accepts FEXTRA, FCOMMENT and FHCRC, refuses FNAME, a non-zero mtime, another OS byte, trailing data and a second member, and stops at the decompressed-size limit. | 2026-11-10 |
 | I35 | IMPL | Dependency locks | New dependencies are locked with `nimble lock` on the Linux validation host (framework.lan) from a scratch git snapshot, so a dependency's NimScript never runs on the development machine; the lock is copied back and `nix run .#update-nimble-deps` regenerates `nix/nimble-deps.json`. Adding nim-boringssl and nim-zlib went this way. | 2026-11-10 |
@@ -1768,3 +1974,20 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I45 | IMPL | Windows builds (G126) | The Nimble path builds and tests natively on Windows x86_64 with MinGW-w64 gcc and nasm on `PATH`. nim-boringssl assembles its Windows x86_64 sources with nasm while compiling; Windows keeps that assembly rather than BoringSSL's portable C (`-d:BORINGSSL_USE_ASM=false`), so all three desktop platforms test the same code and the TLS/QUIC modules get AES-GCM assembly later (owner's answer). `.gitattributes` stores and checks out text as LF on every platform: Git for Windows sets `core.autocrlf=true`, and mirrors, vectors and expected C headers are compared byte for byte. Tests use no `std/re`, which loads PCRE at run time and is missing from a Nim built from source. The C11 header test compiles with `$CC`, else the first of `cc`, `gcc`, `clang`. Nix does not build for Windows; llvm-mingw is not evaluated yet. | 2026-11-10 |
 | I46 | IMPL | Android validation (G124) | The Android SDK is pinned in the flake from nixpkgs' androidenv; the owner chose this, which accepts the Android SDK license, and only `nix/android.nix` uses that package set: platform 35, NDK 29.0.14206865, emulator 36.3.10, the AOSP `default` x86_64 system image. Every suite is cross-compiled under orc, refc and orc+release for x86_64 and aarch64, for Android 10 (API 29) and later [IMPL]; each binary must be a PIE for its ABI that needs only libc, libm, libdl and liblog. `nix run .#test-android` (x86_64 Linux with KVM) boots a headless emulator, pushes the x86_64 suites, the repository and two nim-boringssl vector files, and runs each suite from the repository root; the aarch64 suites are built and checked, not run (G124). Nim's `linux` includes Android, so `crypto/ed25519.nim` links the NDK's libc++ statically (`-lc++_static -lc++abi`) there instead of I44's `-lstdc++`. Device runs need: tests that compile C report SKIPPED (no compiler on a device; their other checks run), `LCN_BORINGSSL_DIR` locates the Ed25519 vectors, and the PKG ownership scan reads `src/` relative to the repository root. Not part of `nix flake check`. | 2026-11-10 |
 | I47 | IMPL | iOS validation | `nix run .#test-ios` (Apple silicon with Xcode and an iOS simulator runtime) builds every suite with Xcode's clang under orc, refc and orc+release for the arm64 iOS simulator, and under orc for arm64 iOS devices, for iOS 15 and later [IMPL]. Each binary must carry the right platform (7 simulator, 2 device). It creates a simulator on the newest iOS runtime, runs the simulator suites from the repository root through a launcher that changes directory (`simctl spawn` has no working directory), and deletes the simulator; device builds are not run. Xcode is the one input Nix does not pin (D31), so the build happens when the app runs, not in a derivation. The device-run test changes are I46's. | 2026-11-10 |
+| R4 | SCOPE (revises D28, G135) | Spec revision 6a4dfa28 and the signature algorithm | The pin moved to `6a4dfa28` and every mirror, pin, vector and requirement ID was recomputed (pins as data: the new roots needed no code change beyond the model id). PM-06 replaced Ed25519 with SLH-DSA-SHA2-192s, which nim-boringssl 0.0.14 cannot provide. Options for the owner: (a) our own Nim FIPS 205 for SHA2-192s only, checked against NIST ACVP and a Python oracle; (b) vendor a portable C FIPS 205 implementation, as BLAKE3 is; (c) OpenSSL ≥ 3.5 beside BoringSSL; (d) liboqs. Fetching the ACVP vectors is a download. **Status:** OPEN. | 2026-11-10 |
+| I48 | IMPL | CBOR at 6a4dfa28 (G38, G59) | The decoder rejects floating-point items as `non-deterministic` unless `allowFloats` asks for the generic data model (diagnostics, the float encoder's tests). `maxDepth` counts arrays and maps only (INTERFACE §4.5.1: a root container is depth one); tags have their own `maxTagDepth` (default 1024) so they cannot nest without bound; indefinite strings add no level. `MinMaxDepth = 128`; the default stays 1024. The encoder is iterative, like the decoder, so encoding costs no call stack at any supported depth. The oracle and vectors record both classes (`expect` for Logos CBOR, `data_model` where floats differ). | 2026-11-10 |
+| I49 | IMPL | LGX at 6a4dfa28 (G41, G45, G73) | A root `manifest.json` is `invalid-package`; `writeLgx` and `lcn-pkg lgx pack` no longer take one. After the two end blocks only whole zero blocks may follow. Collisions are checked with `PathRules` (ignore case; Windows names) describing the installation filesystem: `openLgx` takes them, defaulting to `hostPathRules()` (case-insensitive on darwin, ios and windows, Windows names on windows), and an installer passes its root's rules. Platform values outside `DefinedOs`, `DefinedArchitectures` and `DefinedAbis` never match, even themselves. | 2026-11-10 |
+| I50 | IMPL | Package signing until R4 | The code still signs and verifies with Ed25519 (G42, G135) while `signingProfile()` reads the new SLH-DSA profile id from the mirror, so packages it makes conform to nothing. PKG §4.3 is claimed as `deferred:tier-3`; the Ed25519 tests are tagged as interim, without the retired requirement IDs. The oracle's COSE vectors (`tests/vectors/package/cose.json`) likewise carry the mirrored SLH-DSA profile id in the claim and an Ed25519 signature. | 2026-11-10 |
+| I51 | IMPL | Payload depth in the commitment pipeline (INTERFACE §4.5.1, G59) | Validation (`choice.nim` `validateAt`), normalization (`normalize.nim` `value`), the value-tree check (`value.nim` `checkNode`) and the hash layout (`layout.nim` `layoutNode`) count maps, lists and tuples against `DefaultMaxDepth` (1024), not schema or value-tree nodes, so they support every P a binding or transport may configure. References, choice arms, fields and list or tuple elements add no level, and a reference or choice cycle with no container fails instead of looping. Each walk keeps its frames in a heap stack, visiting members depth first in the order the recursive form did (same errors, same `invalid_params` path), so native stack use does not grow with the payload depth: at P = 1024 the walks run in 32 KB. Revised 2026-11-10 after the Windows run: the first version recursed once per container and overflowed Windows' 1 MB main-thread stack under orc (debug); on macOS it needed more than 1 MB under orc and 1-2 MB under refc, more than a macOS or iOS secondary thread's 512 KB. What still grows with depth is the Nim runtime freeing a deep tree: under ORC each node's destructor frees its children recursively, about 224 KB at P = 1024 for the deepest test shape (`demo.single`) on arm64, debug or release; refc frees without recursion. That fits every common thread stack with at least 2x margin. Value objects (`parseNode`, used only by verified views) nest several CBOR containers per payload container and stay bounded by the decoder's 1024, so views of very deep values are refused; no payload path uses them. Test `[IFC-0925] [IFC-0927]`. | 2026-11-10 |
+| I52 | IMPL | Per-connection transport limits (TRANSPORT §8.6, §3.4, §5.1) | `TransportLimits` is validated when made. `frameLimit` 16 MiB (over it: ProtocolError INVALID_PARAMS, close); `peerFrameLimit` 16 MiB (sender failures, I53); `payloadDepth` 1024 (I59; deeper: ProtocolError INVALID_PARAMS without detail, close); `maxInFlight` 1024 on the callee (`admitsInput` turns false for backpressure; a Request arriving anyway closes with ProtocolError TRANSPORT_ERROR, no new code per NR-08, as §8.6 l.1350 allows); `maxCalls` 1024 on the caller, abandoned calls included (a new call fails locally with MODULE_ERROR and nothing is sent, as INTERFACE l.2041 does for local capacity); `maxSubscriptionIds` 4096 on both sides (caller: local MODULE_ERROR; callee: closes with TRANSPORT_ERROR before it would forget an id). Retained correlation state is never dropped while the connection is open (§3.4 l.601-602). Documented in the `limits.nim` header. Aggregate limits are Tier 4. | 2026-11-10 |
+| I53 | IMPL | Sender size outcomes and scoped publication (TRANSPORT §2.1 l.383-393, §6) | A Request that does not fit the peer maximum is a `LocalFailure` MODULE_ERROR: no bytes are sent and no id is consumed. A success response that does not fit becomes response-err MODULE_ERROR without detail and the session stays. An Event that does not fit is not committed and `PublishError(peTooLarge)` is returned (what the void publish callback does is G165). Hello requests and responses must fit too; the callee encodes its Hello response before redeeming the ticket, so an unsendable response consumes nothing (`hrSend`, MODULE_ERROR). `publishScoped` (§6 l.882-889) goes, in subscription-id order, to every active subscription of the event on this connection, only while the request is in flight (refused once it is cancelled or its terminal Response is committed), and is all-or-none across one connection's subscriptions. | 2026-11-10 |
+| I54 | IMPL | Local failure codes (TRANSPORT §2.1, §5.1, §7; INTERFACE §2.9.3) | `CallerConn.request`, `subscribe` and `unsubscribe` return `LocalFailure{code, msg}`: connection closed NOT_READY (G22); a cap reached MODULE_ERROR; a payload failing `checkPayload` (float or depth) or the schema INVALID_PARAMS; a commitment that cannot be computed MODULE_ERROR; an event outside the contract NOT_AUTHORISED; a subscription id already used INVALID_PARAMS; no larger Request id TRANSPORT_ERROR, and the connection closes. `CalleeConn.publish` and `publishScoped` return `PublishError`: closed TRANSPORT_ERROR; ended (termination, or the request no longer in flight) NOT_AUTHORISED; no destination NOT_READY; outside the contract NOT_AUTHORISED; invalid INVALID_PARAMS; too large MODULE_ERROR. | 2026-11-10 |
+| I55 | IMPL | A commitment the receiver cannot compute (TRANSPORT §4.1, §8.3) | A failure inside the commitment layer is `RejectCause.rcResource`, never a root mismatch: a Request gets response-err MODULE_ERROR and the session stays; a response-ok or Event closes with ProtocolError MODULE_ERROR. Every `Reject` carries its cause: `rcUnknownTarget`, `rcScope`, `rcSubtreeRoot`, `rcSchema`, `rcValueRoot` or `rcResource`. Test `[TRN-0299]`. | 2026-11-10 |
+| I56 | IMPL | Route access-scope hook (TRANSPORT §4.1, §5.1, §8.1) | `Boundary.withAccess(methods, events)` limits the method and event-subscription scope after names are resolved under the selected contract. A method outside it gets response-err NOT_AUTHORISED before any payload check; an event outside it gets a failed SubscriptionResult NOT_AUTHORISED. The Runtime supplies the scope in Tier 4. Tests `[TRN-0204] [TRN-0111] [TRN-0112]`. | 2026-11-10 |
+| I57 | IMPL | Termination details (TRANSPORT §8.1 l.987-996, §5.1 l.725) | `beginTermination`: an outstanding Subscribe gets a failed result NOT_AUTHORISED and an outstanding Unsubscribe succeeds, so each operation still gets exactly one result; a new Subscribe gets a failed result NOT_AUTHORISED (l.989 names only Requests; the route's subscription access has ended, l.733-736) and its id is still recorded as used; in-flight Requests stay for the RUNTIME §9.3 policy and can still be answered or cancelled. `finishTermination` may be called at once; its ProtocolError carries neither message nor detail. | 2026-11-10 |
+| I58 | IMPL | Sender-side payload check (INTERFACE §4.4, §4.5.1) | Before encoding, `encodeMessage` runs `checkPayload` on `params`, `result` or `data`: an iterative walk that refuses floats and nesting deeper than P, so this implementation never sends what its peer must reject. It is a local failure, never on the wire. | 2026-11-10 |
+| I59 | IMPL | The P ceiling (INTERFACE §4.5.1) | `MaxPayloadDepth` = 1024 (`DefaultMaxDepth`), the depth the commitment pipeline supports without reduction (I51). P is configurable from 128 (`MinMaxDepth`) to that ceiling. | 2026-11-10 |
+| I60 | IMPL | C mapping revision 3 readings (INTERFACE §2.1, §2.3) | Readings the text allows but does not spell out: (1) a byte string in a list element, choice arm or tuple position is a `_BSTR` aggregate holding `data` plus `len`, or `uint8_t data[N]` for an exact size N > 0 (§2.3 l.1033-1038 with l.931-957); `bstr .size 0` is the shared `logos_bstr_size_0_t`. (2) In a field-expanded inline tuple, a position needing an aggregate is `<owner>_<Field>_TU<i>`. (3) Union members follow discriminant order (ASCII label order in symbolic form, canonical order in indexed form); direct literal arms have no member, and a choice of only literals has no union (§2.3 l.1152-1215). (4) Reference labels to common types use ns-C `logos` (`logos_Schema_commitment`). (5) Shared constraint typedefs (`logos_tstr_size_1_64_t`, …) are emitted once per header outside the document guards, as identical redeclarations valid in C11 and C++, and never where `logos_types.h` declares one (`[IFC-0475]`). (6) Placement (§2.1 l.893, not canonical): groups supporting, interfaces, primary; within a group role constants, literal macros by name, forward typedefs by qualified name, definitions by dependency depth then qualified name (former G72, G155); binding constants last. | 2026-11-10 |
+| I61 | IMPL | Payload depth in direct mode; §5.3 nesting (INTERFACE §4.5.1, §5.3) | `decodePayload(data, code, maxDepth)` raises a requested depth below 128 to 128; only `validator(s, maxDepth)` reports such a value as an error. Direct mode and transport mode (I52) take P from separate settings until Runtime configuration (Tier 4) supplies one. §5.3's schema nesting follows l.3946-3947 literally: a declaration body is level 1 and every contained child `schema-node` adds one, leaves included, so `[` × 127 around `uint64` is exactly 128 levels and is accepted, and one more list is rejected (`[IFC-0625] [IFC-0626]`); the earlier count left leaves out. | 2026-11-10 |
+| I62 | IMPL | A module and an interface with one namespace (INTERFACE §2.1 l.898, §3.2 l.2302-2303) | A module document and an implemented interface or supporting schema with the same exact namespace are rejected as a namespace-projection collision. Both would emit the guard `LOGOS_DOCUMENT_<ns>_DEFINED` and the ROOT macros under one name with different values (two identical C identifiers, l.898), and reconstruction rejects conflicting groups for one namespace (l.2302-2303), so no valid header set exists for them. COMMITMENT l.361 and INTERFACE l.1731, l.3291 already require distinct namespaces among interfaces and among supporting schemas. | 2026-11-10 |
+| I63 | IMPL | lcn-gen limits and reverse-mapper helpers (INTERFACE §3, §5.3) | Documented in lcn-gen's usage text and the `cmap.nim` module doc: no identifier-length limit, the §5.3 bounds, and a mapping-limit error past `UINT32_MAX` arms; on any failure nothing is written (inspection items IFC-0624, 0637, 0898, 0899). `names.decodeNamespace` (`_NS_` back to `.`) and `names.decodeModule` (`_U` back to `_`) require that re-projection reproduces the component, so `a_Ub` is rejected (`[IFC-0901]`); they exist for the Tier 5 reverse mapper. Link-time and `dlsym` checks of exported-function distinctions (IFC-0897) wait for generated functions (Tier 4). | 2026-11-10 |

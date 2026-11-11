@@ -1,5 +1,5 @@
-typedef struct logos_map_storage_space_info {
+typedef struct logos_storage_Space_info_MAP {
     uint64_t available;
     uint64_t quota;
     uint64_t used;
-} logos_storage_space_info_t;
+} logos_storage_Space_info_t;

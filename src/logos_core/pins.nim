@@ -4,15 +4,15 @@
 #!fmt: off
 const
   # conformance/requirements/*.jsonl: the spec revision
-  SpecRevision* = "f4f83471bed90139901a4230299a66d1bc0cd9dd"
+  SpecRevision* = "6a4dfa2846ab9f1f679ad285f8caa848ee8544ad"
   # spec-module-hash-profile.md §2
   HashProfileId* = "logos.hash-profile.2026-08.choice-index"
   # spec-module-commitment-model.md §6
-  CommitmentModelId* = "logos.commitment-model.2026-08"
+  CommitmentModelId* = "logos.commitment-model.2026-10"
   # spec-module-hash-profile.md §6.1
   HashSuiteId* = "logos.hash-suite.blake3-256"
   # spec-module-commitment-model.md §5
-  CommonSchemaRoot* = "7e0236018aed522455dfbdba19f81fd67a050a61f2a05cb8d1027eda35107ca6"
+  CommonSchemaRoot* = "fc3a3558912d474cdb37fbc4fedd5b11dd785d69e9c033c7f9dc077ac49040ca"
   # spec-module-interface.md §5.1, spec/mirrors/IFC/5.1.common-schema.cddl
   CommonSchemaDocument* = """
 ; Normative Logos prelude and common schema surface.
@@ -38,7 +38,8 @@ logos.error_detail = bstr .size (1..4096)
 logos.invalid_params_reason =
     "malformed-cbor" /
     "non-deterministic-cbor" /
-    "schema-mismatch"
+    "schema-mismatch" /
+    "configuration-schema-mismatch"
 
 logos.invalid_params_path_segment = tstr / uint64
 
@@ -49,7 +50,7 @@ logos.invalid_params_detail = {
 
 ; -- exact schema commitment --
 logos.schema_commitment = {
-    commitment_model: "logos.commitment-model.2026-08",
+    commitment_model: "logos.commitment-model.2026-10",
     schema_root: bstr .size 32,
     hash_profile: "logos.hash-profile.2026-08.choice-index",
     hash_suite: "logos.hash-suite.blake3-256",
@@ -75,14 +76,24 @@ logos.schema_response = {
 }
 """
   # spec-module-package-manager.md §4
-  PackageManifestSchemaRoot* = "108b1bab1bf87dfed2ca431bf0591e33e937bb553a489df46b0a9023b9a98af1"
+  PackageManifestSchemaRoot* = "b3a53cea950337515b843333795c53c58288702e5bf72ad98930e02c7581e0eb"
   # spec-module-package-manager.md §4
-  PackageManifestSubtreeRoot* = "a06c0c06d9493e19ab96baabd23b6520645195188af062f858f95f6922a128a1"
+  PackageManifestSubtreeRoot* = "fbee48aef4b669bd9e4dfec0126f56513f8c626da858121082e5f25b0e236879"
   # spec-module-interface.md §5.2, spec/mirrors/IFC/5.2.logos_types.h
   LogosTypesFixed* = """
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+
+#define LOGOS_C_MAPPING_REVISION 3u
+
+#define LOGOS_C_CONTEXT_MODEL_6c6f676f732e636f6d6d69746d656e742d6d6f64656c2e323032362d3130 1
+#define LOGOS_C_CONTEXT_PROFILE_6c6f676f732e686173682d70726f66696c652e323032362d30382e63686f6963652d696e646578 1
+#define LOGOS_C_CONTEXT_SUITE_6c6f676f732e686173682d73756974652e626c616b65332d323536 1
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* -- Error codes -- */
 
@@ -111,6 +122,23 @@ typedef struct {
     size_t              detail_len;
 } logos_result_t;
 
+/* -- Response ownership -- */
+
+typedef struct logos_response_owner {
+    void* state;
+    void (*release)(void* state);
+} logos_response_owner_t;
+
+static inline void logos_response_owner_clear(logos_response_owner_t* owner)
+{
+    logos_response_owner_t previous = *owner;
+    owner->state = 0;
+    owner->release = 0;
+    if (previous.release != 0) {
+        previous.release(previous.state);
+    }
+}
+
 /* -- Module initialization and per-instance context -- */
 
 /*
@@ -123,7 +151,121 @@ typedef struct logos_runtime_control_vtable logos_runtime_control_vtable_t;
 typedef struct logos_route_handle logos_route_handle_t;
 typedef struct logos_route_vtable logos_route_vtable_t;
 
-#define LOGOS_MODULE_INIT_ABI_VERSION 1u
+#define LOGOS_ASYNC_CALL_ABI_VERSION 1u
+#define LOGOS_ASYNC_PROVIDER_ABI_VERSION 1u
+#define LOGOS_INVOCATION_CONTEXT_ABI_VERSION 1u
+#define LOGOS_CALLER_MODULE 1u
+#define LOGOS_CALLER_SYSTEM_SERVICE 2u
+
+typedef struct logos_async_call logos_async_call_t;
+typedef struct logos_async_call_vtable logos_async_call_vtable_t;
+typedef struct logos_invocation_context logos_invocation_context_t;
+typedef struct logos_invocation_context_vtable logos_invocation_context_vtable_t;
+typedef struct logos_provider_invocation logos_provider_invocation_t;
+
+typedef struct {
+    const uint8_t* data;
+    size_t len;
+} logos_utf8_view_t;
+
+typedef struct {
+    uint32_t kind;
+    logos_utf8_view_t runtime_instance_id;
+    logos_utf8_view_t module_instance_id;
+} logos_caller_view_t;
+
+struct logos_invocation_context {
+    const logos_invocation_context_vtable_t* vtable;
+    void* state;
+};
+
+struct logos_invocation_context_vtable {
+    uint32_t abi_version;
+    size_t struct_size;
+    logos_result_t (*caller)(
+        const logos_invocation_context_t* invocation,
+        logos_caller_view_t* out_caller
+    );
+    bool (*is_cancelled)(const logos_invocation_context_t* invocation);
+    logos_result_t (*publish)(
+        const logos_invocation_context_t* invocation,
+        const char* event_name,
+        const uint8_t* cbor_data,
+        size_t cbor_data_len
+    );
+};
+
+typedef struct {
+    void* state;
+    const logos_invocation_context_t* (*current)(void* state);
+} logos_invocation_access_t;
+
+typedef void (*logos_async_complete_fn)(
+    void* user_data,
+    logos_result_t result,
+    const uint8_t* response_cbor,
+    size_t response_cbor_len,
+    logos_response_owner_t owner
+);
+
+typedef struct {
+    uint32_t abi_version;
+    size_t struct_size;
+    bool has_timeout;
+    uint64_t timeout_ms;
+} logos_async_options_t;
+
+typedef struct {
+    uint32_t abi_version;
+    size_t struct_size;
+    logos_async_complete_fn complete;
+    void* user_data;
+} logos_async_callbacks_t;
+
+struct logos_async_call {
+    const logos_async_call_vtable_t* vtable;
+    void* state;
+};
+
+struct logos_async_call_vtable {
+    uint32_t abi_version;
+    size_t struct_size;
+    void (*submit)(logos_async_call_t* call);
+    void (*cancel)(logos_async_call_t* call);
+    void (*release)(logos_async_call_t* call);
+};
+
+struct logos_provider_invocation {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char* method;
+    const uint8_t* params_cbor;
+    size_t params_cbor_len;
+    const logos_invocation_context_t* context;
+    void (*complete)(
+        logos_provider_invocation_t* invocation,
+        logos_result_t result,
+        const uint8_t* response_cbor,
+        size_t response_cbor_len,
+        logos_response_owner_t owner
+    );
+    void (*execution_release)(logos_provider_invocation_t* invocation);
+};
+
+typedef struct {
+    uint32_t abi_version;
+    size_t struct_size;
+    void (*submit)(
+        logos_module_context_t* module,
+        logos_provider_invocation_t* invocation
+    );
+    void (*request_cancel)(
+        logos_module_context_t* module,
+        logos_provider_invocation_t* invocation
+    );
+} logos_async_provider_api_t;
+
+#define LOGOS_MODULE_INIT_ABI_VERSION 2u
 
 typedef void (*logos_publish_fn)(
     void*          user_data,
@@ -141,12 +283,13 @@ typedef struct {
     const char*                            state_dir;
     const uint8_t*                         configuration_cbor;
     size_t                                 configuration_cbor_len;
+    logos_invocation_access_t              invocation_access;
 } logos_module_init_input_t;
 
 /* -- Runtime Control binding and route handle -- */
 
-#define LOGOS_RUNTIME_CONTROL_VTABLE_ABI_VERSION 1u
-#define LOGOS_ROUTE_VTABLE_ABI_VERSION 1u
+#define LOGOS_RUNTIME_CONTROL_VTABLE_ABI_VERSION 2u
+#define LOGOS_ROUTE_VTABLE_ABI_VERSION 2u
 
 typedef uint64_t logos_subscription_id_t;
 
@@ -155,6 +298,11 @@ typedef void (*logos_event_handler_t)(
     const uint8_t* cbor_data,
     size_t         cbor_data_len,
     void*          user_data
+);
+
+typedef void (*logos_route_end_handler_t)(
+    logos_error_code_t reason,
+    void* user_data
 );
 
 struct logos_runtime_control_binding {
@@ -219,6 +367,16 @@ struct logos_runtime_control_vtable {
     void (*release)(
         logos_runtime_control_binding_t* binding
     );
+
+    logos_result_t (*prepare_call)(
+        const logos_runtime_control_binding_t* binding,
+        const char* method,
+        const uint8_t* params_cbor,
+        size_t params_cbor_len,
+        const logos_async_options_t* options,
+        const logos_async_callbacks_t* callbacks,
+        logos_async_call_t* out_call
+    );
 };
 
 struct logos_route_vtable {
@@ -254,11 +412,34 @@ struct logos_route_vtable {
     );
 
     void (*release)(logos_route_handle_t* route);
+
+    logos_result_t (*prepare_call)(
+        logos_route_handle_t* route,
+        const char* method,
+        const uint8_t* params_cbor,
+        size_t params_cbor_len,
+        const logos_async_options_t* options,
+        const logos_async_callbacks_t* callbacks,
+        logos_async_call_t* out_call
+    );
+
+    logos_result_t (*observe_end)(
+        logos_route_handle_t* route,
+        logos_route_end_handler_t handler,
+        void* user_data
+    );
 };
+
+/* Optional provider completion capability. */
+const logos_async_provider_api_t* logos_<module-C>_MODULE_async_api(void);
 
 /* -- Memory management -- */
 
-void logos_<module>_free(logos_module_context_t* module, void* ptr);
+void logos_<module-C>_MODULE_free(logos_module_context_t* module, void* ptr);
+
+#ifdef __cplusplus
+}
+#endif
 """
   # spec-module-interface.md §2.3, spec/mirrors/IFC/2.3.empty.h
   LogosTypesEmpty* = """
@@ -543,9 +724,14 @@ logos.package_manifest.manifest_artifact = {
   # spec-module-package-manager.md §4.3, spec/mirrors/PKG/4.3.signing-profile.cddl
   PackageSigningProfileDocument* = """
 logos.package_manager.package_signing_profile =
-  "logos.package-signing.cose-sign1-ed25519"
+  "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"
 
 logos.package_manager.package_signing_key_id = bstr .size (1..128)
+
+logos.package_manager.package_signer = {
+  profile: logos.package_manager.package_signing_profile,
+  public_key: bstr .size 48,
+}
 
 logos.package_manager.package_signature_claim = {
   profile: logos.package_manager.package_signing_profile,
@@ -555,6 +741,7 @@ logos.package_manager.package_signature_claim = {
   # spec-module-package-manager.md §5, spec/mirrors/PKG/5.package-records.cddl
   PackageRecordsDocument* = """
 logos.package_manager.installed_package_record = {
+  signer: logos.package_manager.package_signer,
   identity: logos.package_manager.package_identity,
   source: logos.package_manager.package_source,
   variant: logos.package_manifest.package_variant_id,
@@ -579,7 +766,7 @@ logos.package_manager.package_source =
   }
 
 logos.package_manager.manifest_commitment = {
-  commitment_model: "logos.commitment-model.2026-08",
+  commitment_model: "logos.commitment-model.2026-10",
   schema_root: bstr .size 32,
   schema_subtree_root: bstr .size 32,
   value_root: bstr .size 32,
@@ -611,38 +798,38 @@ logos.package_manager.package_error_code =
   CommonRegistry* = [
     (
       "logos.error_code", "type",
-      "f0efecb7f5f270919523d00dd977e5c0ca04b429e022a1a66856353831fd76a7",
+      "fd660f3e53876d042529d99206ad1fdcd689167a5e6c8d666bf2a3c97b31d6f4",
     ),
     (
       "logos.error_detail", "type",
-      "a6a0bed0a560ed0499a7e1d4708741e0b6dce32f379cdbbf29d74637cb0ea3ff",
+      "da46a01173b4081b71771c7b6d5d72f6cc67561650127b17747e89a5be65a5b0",
     ),
     (
       "logos.invalid_params_detail", "type",
-      "4a8b55144d4f00f42c19ffd90cb9c4173388c1ec00bafcf71df79b32a14163d9",
+      "662f60625d236e51e4ae9aec3496f4cb568b6f04eacef08f09932396e3a283ee",
     ),
     (
       "logos.invalid_params_path_segment", "type",
-      "6fc94679ad488099793d930fec7eaf2fb200a0e117c85c28188f8f2458b0d451",
+      "cd5b0762c284802d68ae6d8176a94c903bab3b6ab33e70643888b7b1bb27e0b4",
     ),
     (
       "logos.invalid_params_reason", "type",
-      "c55a3c96f6306a438e357b35d7cedbeca054ceb68cc1188eb38b036da7ac6816",
+      "1f89c04018feeb797028db37ee19555fc5608dee910bcc43fd3493b62d94e6cf",
     ),
     (
       "logos.schema", "method",
-      "8997083caebf86ede43a744e16ac7018eacc3a51e4e603af4ef0ed8bd14158c3",
+      "67dde6945b248178e6ae08d34cc91a1eb37447165f6438d61bbb01ca1cc47fad",
     ),
     (
       "logos.schema_commitment", "type",
-      "b9adbab7aea835c64a3b89031c45d7868d21069be0943f0581d527234812d064",
+      "ce8da763b8b3dd9df51e8f7f75fa8f3fafa666313027020a1d6c483b3477751a",
     ),
     (
       "logos.schema_request", "method request",
-      "b6f1788290d01092fba9e956e405ecd6bd5c5584f64ceeab8a60df92a52ae585",
+      "85ca8745714c54142142b9d79e74d154652816f8811ad622350b1957f8dccc12",
     ),
     (
       "logos.schema_response", "method response",
-      "3fde7207bddb450e0a7583953b7db2cf393382cc971a67ca8394bfa6b1896e18",
+      "2a95cf0bb9e2e222b3f61ea5505fbeea1f8bfc91324206ac99be13c74c9f6c37",
     ),
   ]

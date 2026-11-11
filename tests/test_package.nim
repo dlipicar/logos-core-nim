@@ -520,7 +520,7 @@ suite "pkg.trust: package-signing trust input (PM §4.1, §4.3)":
   let a = keyFromSeed(seed(1)).publicKey
   let b = keyFromSeed(seed(2)).publicKey
 
-  test "[PKG-0071] [PKG-0072] [PKG-0097] [PKG-0106] [PKG-0107] each kid maps to one key; kids are unique; name sets are non-empty":
+  test "[PKG-0071] [PKG-0072] [PKG-0097] [PKG-0107] each kid maps to one key; kids are unique; name sets are non-empty":
     var t: TrustInput
     check t.addAnchor(bytesOf("org-1"), a, ["logos.storage"]).isOk
     check t.addAnchor(bytesOf("org-1"), b, ["logos.storage"]).isErr
@@ -586,10 +586,12 @@ suite "pkg.cose: the COSE_Sign1 Ed25519 profile (PM §4, §4.3)":
   let parsed = decodeCoseSign1(signed).get
 
   test "[PKG-0095] [PKG-0096] the profile identifier comes from the mirrored CDDL":
-    check signingProfile() == doc["profile"].getStr
-    check signingProfile() == "logos.package-signing.cose-sign1-ed25519"
+    check signingProfile().len > 0
+    check ("\"" & signingProfile() & "\"") in mirror("PKG/4.3.signing-profile.cddl")
+    # The oracle's vectors carry the same mirrored profile id but are still signed
+    # with Ed25519 (DECISIONS I50) until the SLH-DSA rewrite (R4) regenerates them.
 
-  test "[PKG-0099] [PKG-0100] [PKG-0101] [PKG-0102] [PKG-0103] [PKG-0104] the container matches the oracle's bytes":
+  test "[PKG-0099] [PKG-0103] [PKG-0104] [IMPL-DECISION G135] the container matches the oracle's bytes (Ed25519 interim until the PM-06 rewrite)":
     for v in doc["vectors"]:
       checkpoint v["name"].getStr
       let (cose, tbs) =
@@ -654,7 +656,7 @@ suite "pkg.cose: the COSE_Sign1 Ed25519 profile (PM §4, §4.3)":
       checkpoint name
       check outcome(bytes) == "signature-verification-failed"
 
-  test "[PKG-0101] [PKG-0102] [PKG-0109] protected headers other than alg -19 and kid fail, even when signed":
+  test "[PKG-0109] [IMPL-DECISION G135] protected headers other than alg -19 and kid fail, even when signed (Ed25519 interim until the PM-06 rewrite)":
     proc header(entries: varargs[CborEntry]): seq[byte] =
       encodeCbor(cborMap(entries))
 
