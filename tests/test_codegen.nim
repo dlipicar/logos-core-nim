@@ -193,9 +193,13 @@ proc compiles(name, header: string): string =
   writeFile(outDir / "logos_types.h", logosTypesHeader())
   writeFile(outDir / name & ".h", header)
   writeFile(outDir / name & ".c", "#include \"" & name & ".h\"\n")
-  let cc = findExe("cc")
+  # $CC, else the first of cc, gcc, clang on PATH: MinGW and MSYS2 have no `cc`.
+  var cc = getEnv("CC")
+  for name in ["cc", "gcc", "clang"]:
+    if cc.len == 0:
+      cc = findExe(name)
   if cc.len == 0:
-    return "no C compiler (cc) on PATH"
+    return "no C compiler ($CC, cc, gcc or clang) on PATH"
   # A wrapped clang (Nix) passes linker flags that -fsyntax-only leaves unused.
   let (version, _) = execCmdEx(quoteShell(cc) & " --version")
   let quiet = if "clang" in version: " -Qunused-arguments" else: ""
@@ -211,6 +215,17 @@ proc compilesSet(name: string, s: ContractSet): string =
   if h.isErr:
     return h.error
   compiles(name, h.get)
+
+const deviceTarget = defined(android) or defined(ios)
+  ## A suite cross-compiled for an emulator or simulator runs where there is no C
+  ## compiler. There a test that compiles headers reports SKIPPED and its other
+  ## checks still run; the host suites compile every header.
+
+template checkCompiles(call: untyped) =
+  when deviceTarget:
+    skip()
+  else:
+    check call == ""
 
 # Tests -----------------------------------------------------------------------------
 
@@ -257,7 +272,7 @@ storage.report_response =
     # The map-valued halves stay flattened (§2.4): no aggregate of their own.
     check "logos_storage_resolve_response_t" notin t
     check "logos_storage_report_request_t" notin t
-    check compilesSet("ifc394", accepted(source)) == ""
+    checkCompiles compilesSet("ifc394", accepted(source))
 
   test "[IFC-0119] the same accepted set always yields the same declarations":
     let a = decls(mod392, [ifc392], [sup392])
@@ -489,9 +504,9 @@ suite "ifc.c-types: recorded mapping decisions (G62-G66, G72, G154)":
         "typedef struct logos_map_demo_a{const logos_demo_b_t*bs;size_t bs_count;}logos_demo_a_t;",
         "struct logos_map_demo_b{logos_demo_a_t a;};",
       ]
-    check compilesSet(
+    checkCompiles compilesSet(
       "g154", accepted("demo.a = { bs: [* demo.b] }\ndemo.b = { a: demo.a }\n")
-    ) == ""
+    )
 
 suite "ifc.c-types: logos_types.h and compiled headers (INTERFACE §5.2)":
   test "[IFC-0481] logos_types.h holds the §5.2 block, the §2.3 empty types and the common types":
@@ -511,7 +526,7 @@ suite "ifc.c-types: logos_types.h and compiled headers (INTERFACE §5.2)":
     check "#define LOGOS_SCHEMA_COMMITMENT_HASH_SUITE_LITERAL \"logos.hash-suite.blake3-256\"" in
       t
     check ProvisionalStamp in logosTypesHeader()
-    check compiles("logos_types_only", "#include \"logos_types.h\"\n") == ""
+    checkCompiles compiles("logos_types_only", "#include \"logos_types.h\"\n")
 
   test "[IFC-0475] generated headers include logos_types.h, carry the stamp and compile as C11":
     let s = accepted(mod392, [ifc392], [sup392])
@@ -519,12 +534,12 @@ suite "ifc.c-types: logos_types.h and compiled headers (INTERFACE §5.2)":
     check "#include \"logos_types.h\"" in h
     check "PROVISIONAL ABI (spec f4f83471)" in h
     check s.cSchemaSet.headerName == "sensor_module"
-    check compilesSet("ifc392", s) == ""
-    check compilesSet("ifc391", accepted(mirror("IFC/3.9.1.module.cddl"))) == ""
-    check compilesSet("ifc393", accepted(mirror("IFC/3.9.3.module.cddl"))) == ""
-    check compilesSet("ifc23", accepted(mirror("IFC/2.3.entry.cddl"))) == ""
-    check compilesSet("storage", accepted(mirror("IFC/1.8.module.cddl"))) == ""
-    check compilesSet(
+    checkCompiles compilesSet("ifc392", s)
+    checkCompiles compilesSet("ifc391", accepted(mirror("IFC/3.9.1.module.cddl")))
+    checkCompiles compilesSet("ifc393", accepted(mirror("IFC/3.9.3.module.cddl")))
+    checkCompiles compilesSet("ifc23", accepted(mirror("IFC/2.3.entry.cddl")))
+    checkCompiles compilesSet("storage", accepted(mirror("IFC/1.8.module.cddl")))
+    checkCompiles compilesSet(
       "kitchen",
       accepted(
         """demo.k = {
@@ -537,4 +552,4 @@ demo.v = { x: uint64 }
 demo.tree = { ? left: demo.tree, kids: [* demo.tree] }
 """
       ),
-    ) == ""
+    )

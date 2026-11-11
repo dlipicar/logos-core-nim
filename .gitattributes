@@ -1,0 +1,6 @@
+# Text is stored with LF and checked out with LF on every platform, whatever
+# core.autocrlf says (Git for Windows sets it to true). Mirrors, vectors, CDDL and
+# the expected C headers are compared byte for byte, and CRLF would change them.
+* text=auto eol=lf
+
+*.cbor binary

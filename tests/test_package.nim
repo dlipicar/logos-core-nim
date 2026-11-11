@@ -759,7 +759,8 @@ suite "pkg.ownership: shared type ownership (PM §16)":
   test "[PKG-0413] the interface, transport, commitment and hash layers do not import the Package Manager code":
     # Contract identity and the commitment, hash and transport rules are defined
     # without the package layer: no module of theirs imports it.
-    let root = currentSourcePath().parentDir.parentDir / "src" / "logos_core"
+    # Relative to the repository root, where the suites run (readRepoFile).
+    let root = repoPath("src" / "logos_core")
     var checked = 0
     for layer in ["iface", "transport", "commitment", "hash", "cbor", "cddl"]:
       var files = @[root / layer & ".nim"]

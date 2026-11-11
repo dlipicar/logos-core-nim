@@ -20,7 +20,9 @@ const boringsslRoot = block:
   found
 
 proc depFile(rel: string): string =
-  readFile(boringsslRoot / "boringssl" / rel)
+  ## LCN_BORINGSSL_DIR replaces the compile-time directory where it does not
+  ## exist: a suite cross-compiled for an emulator or simulator.
+  readFile(getEnv("LCN_BORINGSSL_DIR", boringsslRoot) / "boringssl" / rel)
 
 proc bytes(s: string): seq[byte] =
   hexBytes(s)

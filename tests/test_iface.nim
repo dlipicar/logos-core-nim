@@ -1,6 +1,6 @@
 ## INTERFACE §1 schema acceptance and §5.3 dynamic schema validation.
 
-import std/[algorithm, re, sequtils, strutils]
+import std/[algorithm, sequtils, strutils]
 import unittest2
 import ../src/logos_core/[cbor, hash, commitment]
 import ../src/logos_core/iface/accept
@@ -17,6 +17,26 @@ proc accepted(
   if r.isErr:
     checkpoint r.error
   r.get
+
+proc rootLiterals(s: string): seq[string] =
+  ## The 64 hex digits of each `h'...'` 32-byte literal in `s`. A plain scan:
+  ## std/re loads PCRE at run time, which Windows builds of Nim may not ship.
+  var i = s.find("h'")
+  while i >= 0:
+    let body = i + 2
+    if body + 64 < s.len and s[body + 64] == '\'' and
+        s[body ..< body + 64].allIt(it in {'0' .. '9', 'a' .. 'f'}):
+      result.add s[body ..< body + 64]
+    i = s.find("h'", i + 1)
+
+proc cEnumerators(header: string): seq[(string, string)] =
+  ## The `NAME = value,` lines of a C header, as (NAME, value).
+  for line in header.splitLines:
+    let eq = line.find('=')
+    if eq > 0 and line.strip.endsWith(","):
+      result.add(
+        (line[0 ..< eq].strip, line[eq + 1 .. ^1].strip(chars = Whitespace + {','}))
+      )
 
 proc rejection(
     primary: string,
@@ -109,9 +129,9 @@ suite "iface: schema files and metadata (INTERFACE §1.1, §1.2)":
 
   test "[IFC-0033] [IFC-0037] [IFC-0038] [IFC-0039] [IFC-0040] [IFC-0370] [IFC-0371] [IFC-0372] [IFC-0373] [IFC-0374] [IFC-0375] [IFC-0376] [IFC-0377] [IFC-0378] [IFC-0380] §3.9.2: _implements names the interface's recomputed root":
     let s = accepted(mod392, [ifc392], [sup392])
-    let literal = mod392.findAll(re"h'([0-9a-f]{64})'")
+    let literal = rootLiterals(mod392)
     check literal.len == 1
-    check toHex(rootOf(ifc392)) == literal[0][2 .. ^2]
+    check toHex(rootOf(ifc392)) == literal[0]
     check s.primary.model.implemented == @[rootOf(ifc392)]
     check s.interfaces.mapIt(it.model.namespace) == @["metrics_provider"]
     check s.supporting.mapIt(it.model.namespace) == @["metrics_types"]
@@ -958,12 +978,13 @@ suite "iface: shared error codes and invocation failures (INTERFACE §5.1)":
     check arms == (0'u64 .. 9'u64).toSeq
     check ErrorCode.toSeq.mapIt(uint64(it.ord)) == arms
     let header = mirror("IFC/5.2.logos_types.h")
+    let enumerators = cEnumerators(header)
     for c in ErrorCode:
-      check header.contains(re("\\b" & c.cName & "\\s*=\\s*" & $c.ord & ","))
+      check (c.cName, $c.ord) in enumerators
     check $ecModule == "MODULE_ERROR"
     check $ecTransport == "TRANSPORT_ERROR"
-    check header.contains(re("LOGOS_ERROR_MESSAGE_MAX_LEN " & $MaxMessageBytes & "u"))
-    check header.contains(re("LOGOS_ERROR_DETAIL_MAX_LEN " & $MaxDetailBytes & "u"))
+    check ("#define LOGOS_ERROR_MESSAGE_MAX_LEN " & $MaxMessageBytes & "u") in header
+    check ("#define LOGOS_ERROR_DETAIL_MAX_LEN " & $MaxDetailBytes & "u") in header
 
   test "[IFC-0462] [IFC-0463] unknown codes are invalid; a provider's unknown status is a module failure":
     check parseErrorCode(cbor(9'u64)).get == ecCancelled

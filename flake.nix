@@ -188,6 +188,42 @@
             meta.mainProgram = "lcn-pkg";
           };
 
+          # Android suites, SDK and emulator runner (nix/android.nix); x86_64 Linux
+          # hosts only, where the emulator has KVM. Not part of `checks`.
+          android =
+            if system == "x86_64-linux" then
+              import ./nix/android.nix {
+                inherit
+                  lib
+                  pkgs
+                  nixpkgs
+                  system
+                  nimDerivation
+                  nimSources
+                  testFiles
+                  testVariants
+                  ;
+                boringsslSrc = deps.boringssl.src;
+              }
+            else
+              null;
+
+          # iOS simulator runner (nix/ios.nix); Apple silicon hosts with Xcode.
+          ios =
+            if system == "aarch64-darwin" then
+              import ./nix/ios.nix {
+                inherit
+                  lib
+                  pkgs
+                  nim
+                  nimSources
+                  testVariants
+                  deps
+                  ;
+              }
+            else
+              null;
+
           updateNimbleDeps = pkgs.writeShellApplication {
             name = "update-nimble-deps";
             runtimeInputs = [
@@ -211,6 +247,8 @@
             spectrace
             lcnGen
             lcnPkg
+            android
+            ios
             updateNimbleDeps
             ;
         };
@@ -218,11 +256,22 @@
       bySystem = forAllSystems perSystem;
     in
     {
-      packages = forAllSystems (system: {
-        inherit (bySystem.${system}) nim nph spectrace;
-        lcn-gen = bySystem.${system}.lcnGen;
-        lcn-pkg = bySystem.${system}.lcnPkg;
-      });
+      packages = forAllSystems (
+        system:
+        let
+          s = bySystem.${system};
+        in
+        {
+          inherit (s) nim nph spectrace;
+          lcn-gen = s.lcnGen;
+          lcn-pkg = s.lcnPkg;
+        }
+        // lib.optionalAttrs (s.android != null) {
+          android-sdk = s.android.sdk.androidsdk;
+          android-suites-x86_64 = s.android.suites-x86_64;
+          android-suites-arm64 = s.android.suites-arm64;
+        }
+      );
 
       apps = forAllSystems (system: {
         update-nimble-deps = {
@@ -240,6 +289,18 @@
         lcn-pkg = {
           type = "app";
           program = lib.getExe bySystem.${system}.lcnPkg;
+        };
+      }
+      // lib.optionalAttrs (bySystem.${system}.android != null) {
+        test-android = {
+          type = "app";
+          program = lib.getExe bySystem.${system}.android.testAndroid;
+        };
+      }
+      // lib.optionalAttrs (bySystem.${system}.ios != null) {
+        test-ios = {
+          type = "app";
+          program = lib.getExe bySystem.${system}.ios.testIos;
         };
       });
 
@@ -277,6 +338,18 @@
               s.pkgs.nix-prefetch-git
               s.spectrace
             ];
+          };
+        }
+        // lib.optionalAttrs (s.android != null) {
+          # adb, the emulator and the NDK, for working on a device by hand.
+          android = s.pkgs.mkShell {
+            packages = [
+              s.nim
+              s.pkgs.nimble
+              s.android.sdk.androidsdk
+            ];
+            ANDROID_SDK_ROOT = "${s.android.sdk.androidsdk}/libexec/android-sdk";
+            ANDROID_NDK_ROOT = "${s.android.sdk.ndk-bundle}/libexec/android-sdk/ndk-bundle";
           };
         }
       );

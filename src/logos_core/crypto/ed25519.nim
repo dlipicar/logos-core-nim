@@ -24,8 +24,12 @@ export results
 # BoringSSL is C++. Nim links a mixed C/C++ build through the C++ driver, which
 # brings the C++ runtime in, unless the configuration pins the linker: nixpkgs'
 # Nim sets `gcc.linkerexe = $CC`, so on Linux the C driver links and the runtime
-# must be named. macOS builds link without it.
-when defined(linux):
+# must be named. macOS builds link without it. Nim's `linux` includes Android,
+# whose NDK has only libc++; it is linked statically, so a binary needs no
+# libc++_shared.so beside it (DECISIONS I44, I46).
+when defined(android):
+  {.passl: "-lc++_static -lc++abi".}
+elif defined(linux):
   {.passl: "-lstdc++".}
 
 const

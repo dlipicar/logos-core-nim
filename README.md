@@ -39,6 +39,29 @@ while looking up the Nim that `nimble.lock` names; on Linux the flag changes not
 nimble build --useSystemNim
 ```
 
+On Windows (x86_64, MinGW-w64; DECISIONS G126, I45), the same two commands run from `cmd` or
+PowerShell. `PATH` needs Nim 2.2.14 with its MinGW gcc, Git, and `nasm`: nim-boringssl assembles
+its Windows sources with nasm while compiling. `.gitattributes` keeps every checkout LF, whatever
+`core.autocrlf` says, because the spec mirrors and test vectors are compared byte for byte. Nix
+does not build for Windows.
+
+On Android (DECISIONS I46), an x86_64 Linux host with KVM runs every suite on an emulator. The flake
+pins the SDK, NDK, emulator and system image, cross-compiles the suites for x86_64 and aarch64, boots
+a headless emulator and runs the x86_64 ones; the aarch64 ones are built and checked, not run. This
+is not part of `nix flake check`:
+
+```bash
+nix run .#test-android
+```
+
+On iOS (DECISIONS I47), a Mac with Xcode and an iOS simulator runtime builds every suite with Xcode's
+clang for the simulator and for devices, then runs the simulator ones on a simulator it creates and
+deletes. Xcode is not pinned by Nix, so this also runs outside `nix flake check`:
+
+```bash
+nix run .#test-ios
+```
+
 With Nix, which also runs nph and the spec checks:
 
 ```bash
@@ -102,7 +125,7 @@ Evaluation fails while the JSON and `nimble.lock` disagree.
 | `conformance/` | Requirement ledger and per-section claims; see [docs/CONFORMANCE.md](docs/CONFORMANCE.md). |
 | `tools/spectrace/` | Requirement extraction, mirror and pin checks, coverage gate. |
 | `oracle/` | An independent Python reference for deterministic CBOR, hashing, Ed25519 and COSE vectors, and the NFC tables. |
-| `nix/` | Nim overlay, Nimble dependency fetching, the shared derivation helper. |
+| `nix/` | Nim overlay, Nimble dependency fetching, the shared derivation helper, the Android and iOS runners. |
 
 ## Following the specs
 
