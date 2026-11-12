@@ -37,7 +37,7 @@ jobs:
           attic-token-public: ${{ secrets.ATTIC_TOKEN_PUBLIC }}
 
       - name: Flake checks
-        run: nix flake check -L
+        run: nix flake check -L --keep-going
 
   nimble:
     name: nimble (${{ matrix.os }})

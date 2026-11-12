@@ -120,6 +120,19 @@
               ];
               # The Nix Nim build takes its C compiler from CC, which stdenv sets to gcc.
               setup = "export CC=clang";
+              # On aarch64 a library loaded with dlopen reaches its thread-local variables
+              # through TLS descriptors, which bypass the `__tls_get_addr` interceptor that
+              # tells MemorySanitizer glibc initialized them: Nim's start-up in every such
+              # library reads as uninitialized. x86_64 runs these suites (DECISIONS I77).
+              skip =
+                file:
+                pkgs.stdenv.hostPlatform.isAarch64
+                && lib.elem file [
+                  "test_engine.nim"
+                  "test_kit_dylib.nim"
+                  "test_realizer.nim"
+                  "test_routes.nim"
+                ];
             }
           ];
           testChecks = lib.listToAttrs (
@@ -152,7 +165,7 @@
                     }
                   )
                 )
-              ) testVariants
+              ) (lib.filter (variant: !(variant.skip or (_: false)) file) testVariants)
             ) testFiles
           );
 
