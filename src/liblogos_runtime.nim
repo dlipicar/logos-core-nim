@@ -6,9 +6,15 @@
 ## starts in a load-time constructor, apart from the host's and from any module
 ## library's (`nimble build_runtime_lib`). Every entry registers a thread this
 ## runtime did not create (`bindingEnter`), so a host may call from any thread.
+##
+## [IMPL] Nim's own globals are not exported (`base/libvisibility`): a host
+## that links the library at load time puts its exports in the process's global
+## scope on ELF systems, where a module library the Runtime maps would
+## otherwise bind to this runtime's tables.
 
 {.push raises: [].}
 
+import ./logos_core/base/libvisibility
 import ./logos_core/abi/[host, types]
 import ./logos_core/runtime/host as hostApi
 

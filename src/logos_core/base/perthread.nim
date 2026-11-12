@@ -23,8 +23,11 @@
 ##   back. The hook also runs on Nim's threads, after Nim gave the region back,
 ##   where it only frees the handler list.
 ## - Under refc a C thread keeps them unless it calls `releasePerThread` last.
-## - The thread that ran this module's initialization keeps them: it may be the
-##   process's main thread, and its hook would run during process exit.
+## - The process's main thread keeps them when it ran this module's
+##   initialization: its hook would run during process exit. A library mapped
+##   on another thread (the Runtime maps module libraries on its workers)
+##   registers that thread like any other, so the tables its initialization
+##   loaded go when that thread ends.
 
 {.push raises: [].}
 
@@ -36,14 +39,16 @@ var
   releases {.threadvar.}: seq[Release]
   pending {.threadvar.}: int # `releases.len`, readable without the heap
   hooked {.threadvar.}: bool
-  initThread {.threadvar.}: bool
+  initThread {.threadvar.}: bool # the main thread, and it ran the initialization
   nimEnded {.threadvar.}: bool # Nim ran this thread's destruction handlers
-
-initThread = true
 
 proc lcnOnThreadExit(
   fn: proc() {.cdecl, gcsafe, raises: [].}
 ): cint {.importc: "lcn_on_thread_exit", cdecl.}
+
+proc lcnIsMainThread(): cint {.importc: "lcn_is_main_thread", cdecl.}
+
+initThread = lcnIsMainThread() != 0
 
 proc releasePerThread*() {.gcsafe.} =
   ## Frees this thread's tables. A later use loads them again. Under ORC it then

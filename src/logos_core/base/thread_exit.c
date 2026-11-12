@@ -8,7 +8,14 @@
  * (Windows), or else a POSIX thread-specific key's destructor.
  *
  * Returns 0 when the function is registered.
+ *
+ * Also says whether the calling thread is the process's main thread, whose
+ * exit hooks run during process exit (`lcn_is_main_thread`).
  */
+
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE /* syscall() and SYS_gettid */
+#endif
 
 typedef void (*lcn_thread_exit_fn)(void);
 
@@ -37,7 +44,11 @@ int lcn_on_thread_exit(lcn_thread_exit_fn fn) {
   return FlsSetValue(lcn_exit_slot, (PVOID)fn) ? 0 : -1;
 }
 
+/* Not determined on Windows: every caller is treated as the main thread. */
+int lcn_is_main_thread(void) { return 1; }
+
 #elif defined(__APPLE__)
+#include <pthread.h>
 
 extern void _tlv_atexit(void (*fn)(void *), void *arg);
 
@@ -46,8 +57,19 @@ int lcn_on_thread_exit(lcn_thread_exit_fn fn) {
   return 0;
 }
 
+int lcn_is_main_thread(void) { return pthread_main_np() == 1; }
+
 #else
 #include <pthread.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#include <unistd.h>
+
+int lcn_is_main_thread(void) { return syscall(SYS_gettid) == getpid(); }
+#else
+/* Elsewhere every caller is treated as the main thread. */
+int lcn_is_main_thread(void) { return 1; }
+#endif
 
 extern int __cxa_thread_atexit_impl(void (*fn)(void *), void *arg, void *dso)
     __attribute__((weak));

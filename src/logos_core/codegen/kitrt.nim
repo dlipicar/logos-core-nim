@@ -38,7 +38,7 @@ import results
 import ../cbor
 import ../iface/[accept, outcome, payload]
 import ../abi/[types, checks]
-import ../base/perthread
+import ../base/[libvisibility, perthread]
 
 export results, outcome, types, payload
 

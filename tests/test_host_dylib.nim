@@ -231,7 +231,7 @@ suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
     let bytes = c.encode.get
     writeFile(path, cast[string](bytes))
     let (output, code) = execCmdEx(quoteShellCommand([program, path]))
-    checkpoint output
+    checkpoint "embed_main exited with " & $code & ", output: " & output.escape
     check code == 0 and output.strip == "ok"
 
   test "[RUN-0725] [RUN-0746] start to destroy: a C static binding, a library's addresses from dlsym, a direct_dynamic record; a wait on a C thread":
