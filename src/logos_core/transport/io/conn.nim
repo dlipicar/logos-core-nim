@@ -27,10 +27,10 @@
 ## before the socket callbacks of the same turn, so after the I/O thread was
 ## busy past a deadline, the clock alone would blame a peer whose bytes
 ## arrived in time. `helloTimeout`, `admissionTimeout` and `writeStallTimeout`
-## therefore look first: a Hello or admission verdict waits one turn (the
-## sockets ready in the turn it expired in are served first) and handles the
-## owner's queued commands, and a write stall tries a write. None of them
-## moves the deadline.
+## therefore look first: the verdict waits one turn, so the sockets ready in
+## the turn the deadline expired in are served first. A Hello or admission
+## verdict also handles the commands the owner queued by then, and a write
+## stall tries a write before waiting. None of them moves the deadline.
 
 {.push raises: [], gcsafe.}
 
@@ -646,14 +646,37 @@ proc onWritable(arg: pointer) {.gcsafe, raises: [].} =
     return
   io.flush(c)
 
+proc stalled(io: Io, c: Conn): bool =
+  ## Output pending, and no byte written for `writeStallTimeout`.
+  c.phase != phDone and not c.writeFailed and c.outq.len > 0 and
+    Moment.now() - c.lastProgress >= nanoseconds(io.config.writeStallTimeout)
+
+proc stallVerdict(arg: pointer) {.gcsafe, raises: [].} =
+  ## [SPEC TRANSPORT §3.2, §5.2] Still no byte written: the peer is not
+  ## writable. Close without ProtocolError.
+  let io = theIo
+  if io.isNil:
+    return
+  let c = io.lookup(argKey(arg))
+  if c.isNil or not io.stalled(c):
+    return
+  io.flush(c)
+  if not io.stalled(c):
+    return
+  io.dropOutput(c)
+  if c.phase == phLinger:
+    io.finalClose(c)
+  else:
+    io.closeConn(c, ccNotWritable, ecTransport)
+
 proc onStall(arg: pointer) {.gcsafe, raises: [].} =
   ## [SPEC TRANSPORT §3.2, §5.2] Output pending and no byte written for
-  ## `writeStallTimeout`: the peer is not writable. Close without ProtocolError.
-  ## [IMPL] The verdict follows a write attempt. The dispatcher runs expired
-  ## timers before the writable callbacks of the same turn, so once the I/O
-  ## thread was busy past the deadline the clock alone would blame a peer that
-  ## was never offered the bytes. A socket that accepts a byte now is not
-  ## stalled; one that accepts none has not been read for the whole timeout.
+  ## `writeStallTimeout`. [IMPL] A write is tried first: the dispatcher runs
+  ## expired timers before the socket callbacks of the same turn, so once the
+  ## I/O thread was busy past the deadline the clock alone would blame a peer
+  ## that was never offered the bytes. If the socket accepts none, the verdict
+  ## waits one turn (`stallVerdict`): a reader on this thread that was ready in
+  ## the turn the deadline expired in reads first.
   let io = theIo
   if io.isNil:
     return
@@ -666,15 +689,9 @@ proc onStall(arg: pointer) {.gcsafe, raises: [].} =
   if Moment.now() - c.lastProgress < nanoseconds(io.config.writeStallTimeout):
     io.armStall(c)
     return
-  let before = c.lastProgress
   io.flush(c)
-  if c.phase == phDone or c.writeFailed or c.outq.len == 0 or c.lastProgress != before:
-    return
-  io.dropOutput(c)
-  if c.phase == phLinger:
-    io.finalClose(c)
-  else:
-    io.closeConn(c, ccNotWritable, ecTransport)
+  if io.stalled(c):
+    callSoon(stallVerdict, arg)
 
 proc dataRoom(io: Io, c: Conn): int =
   io.config.connOutputBytes - io.config.controlReserve - c.dataBytes
