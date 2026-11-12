@@ -72,15 +72,15 @@ stops that work item until the owner answers; the answer is added here.
 | G175 | Whether activating an event subscription needs a `subscribe-event` decision (TF-24); the delivery checks are decided, (a) | nothing: interim: decided at activation and at each delivery |
 | G176 | Delivery on the publishing thread and one thread at a time per subscription deadlock when two publishers deliver into each other's handlers (TF-21) | nothing: interim: the publisher waits; the wait ends when the awaited subscription is deactivated, with a diagnostic after 2 s |
 | G178 | On which thread, and when, a Runtime Control subscription's handler runs (TF-22) | Runtime Control subscriptions, a later step; until then they are MODULE_ERROR |
-| G180 | Whether the end of a cleanup that its stop deadline overran leaves `error` (RUNTIME l.611 against l.612 and l.3757); not reported | nothing: interim: it stays `error` with `cleanup-timeout`, and a later stop gives `unloaded` |
+| G180 | Whether the end of a cleanup that its stop deadline overran leaves `error` (RUNTIME l.611 against l.612 and l.3757) (TF-28) | nothing: interim: it stays `error` with `cleanup-timeout`, and a later stop gives `unloaded` |
 | G190–G192 | Where bootstrap ends and the codes `logos_runtime_start` returns when it does not; the intent of the bootstrap-realized instance; how a host accepts a Runtime-generated id (TF-25, TF-26, TF-27) | nothing: interims accepted by the owner and built in I81 (`ready`, NOT_AUTHORISED or MODULE_ERROR, CANCELLED first; `requested`; acceptance by choosing the format) |
 | G116 | Who provides the live-acceptance host and the persistent testnet seeder | the live testnet run |
 | G151, G153, G156 | Gaps found while building Tiers 1–3, sent as ND-10, ND-12 and NP-15; not answered in 6a4dfa28, restated in `claude-spec-comments-2.md` | nothing yet: each has an interim choice in one named proc with a test |
 
 IDs in parentheses are where each item was reported: `claude-spec-comments-3.md` at logos-lips `68628d95`
 (branch `draft/logos-core-module-specs-discussion`), except TF-12 (G167), added at `457527eb`, and
-TF-21 to TF-24 (G174 to G178), added at `a9fe9c66`, and TF-25 to TF-27 (G190 to G192), added at
-`bf9b325f`. That report
+TF-21 to TF-24 (G174 to G178), added at `a9fe9c66`, TF-25 to TF-27 (G190 to G192), added at
+`bf9b325f`, and TF-28 (G180), added at `235c22e6`. That report
 names no DECISIONS IDs. Review items (A3, B1, …) are those of the 2026-11-11 review of this file against
 the 6a4dfa28 text.
 
@@ -1602,14 +1602,14 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   `unloaded`, failure cleared.
 - **Interim:** (a) (owner, 2026-11-12: "Commit as G180 interim (Recommended)"). A stop while that cleanup still runs is a new explicit stop: it starts no second
   destruction, the instance re-enters `stopping` with a new deadline (as I75 does for any `error` with
-  cleanup pending), and the end of the cleanup within that deadline makes it `unloaded`. The Fable
-  session reads l.1835 as answering that stop with the current state instead; the specs say nothing
-  about it either way. Once the execution summary is built, its `realization` is `absent` when that
+  cleanup pending), and the end of the cleanup within that deadline makes it `unloaded`. TF-28's
+  reading answers that stop with the current state instead; the specs say nothing about it either
+  way (TF-28 point 3), and the interim differs from that reading only here. Once the execution summary is built, its `realization` is `absent` when that
   cleanup has ended while the state is still `error` (l.3530). `engine.checkDeadlines`,
   `engine.finishAttempt`, `engine.stopInstance`.
-- **Status:** OPEN; found 2026-11-12 building the step-3 leftovers; interim approved and built the
-  same day (I80). Not reported; whether it goes into the comments document is a separate question to
-  the owner.
+- **Status:** OPEN (TF-28, logos-lips `235c22e6`); found 2026-11-12 building the step-3 leftovers;
+  interim approved and built the same day (I80); reported by the Fable session at the owner's request.
+  TF-28 also asks when `cleanup-timeout` is set and whether a record in `stopping` may carry it.
 
 ### G190 — Where bootstrap ends, and what `logos_runtime_start` returns when it does not
 - **Kind:** GAP · **Specs:** RUNTIME l.3967 (Start: "Complete bootstrap, then return"), l.3972-3973
@@ -2682,7 +2682,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G176 | two publishers that deliver into each other's handlers | CONTRA, **OPEN** (TF-21) | 6 |
 | G177 | invocation paths of direct route handles | FREE | 6 |
 | G178 | the thread of a Runtime Control subscription's handler | GAP, **OPEN** (TF-22) | 6 |
-| G180 | the end of a cleanup that its stop deadline overran | GAP, **OPEN** | 6 |
+| G180 | the end of a cleanup that its stop deadline overran | GAP, **OPEN** (TF-28) | 6 |
 | G190 | where bootstrap ends; `logos_runtime_start`'s failure codes | GAP, **OPEN** (TF-25) | 6 |
 | G191 | the intent of the bootstrap-realized instance | GAP, **OPEN** (TF-26) | 6 |
 | G192 | host acceptance of a Runtime-generated identity | GAP (low), **OPEN** (TF-27) | 6 |
