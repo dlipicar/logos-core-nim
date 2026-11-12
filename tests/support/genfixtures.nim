@@ -215,5 +215,20 @@ proc generatedHostConfigTypes*(): Result[string, string] =
   except IOError as e:
     err(e.msg)
 
+const
+  storeTypesPath* = "src/logos_core/runtime/store_types.nim"
+  storePrimary* = "src/logos_core/runtime/store.cddl"
+
+proc generatedStoreTypes*(): Result[string, string] =
+  ## The Runtime state store's types (`logos-core-nim.runtime-state.v1`,
+  ## DECISIONS I82), for `runtime/store.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(storePrimary), [], [], AcceptOptions())
+    nimModule(
+      set, NimOptions(importPrefix: "../", schemaAccessor: "storeSchema"), false
+    )
+  except IOError as e:
+    err(e.msg)
+
 proc fixturePath*(f: NimFixture): string =
   "tests/generated" / f.module

@@ -361,7 +361,7 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
 # Realize --------------------------------------------------------------------------
 
 suite "run.realizer: realize (LOADER §6, §7, §10) [IMPL]":
-  test "[LDR-0074] [LDR-0075] [LDR-0076] [LDR-0077] [LDR-0078] [RUN-0073] the initialization input carries the services and the mapped state directory":
+  test "[LDR-0074] [LDR-0075] [LDR-0076] [LDR-0077] [LDR-0078] [LDR-0039] [LDR-0041] [RUN-0073] the initialization input carries the services and the mapped state directory":
     reset()
     let r = fresh()
     r.registerStatic("plain", plainTable()).tryGet

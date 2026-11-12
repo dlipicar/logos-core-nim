@@ -320,11 +320,16 @@ proc launch(h: ptr HostRuntime): LogosResult =
     privateDir(c.stateRoot.get).isOkOr:
       return answer(ecModule, "cannot create state_root: " & error)
   var cfg = EngineConfig(
-    # [IMPL-DECISION G192, interim] A fresh UUIDv4 per start; choosing this
-    # format is the host's acceptance of it (docs/HOST-CONFIG.md).
-    runtimeInstanceId: newRuntimeInstanceId(),
+    # [IMPL-DECISION G192, interim (TF-27)] Without a store, a fresh UUIDv4
+    # per start; with one, the configured identity or the one generated with
+    # the store. Choosing this format is the host's acceptance of it
+    # (docs/HOST-CONFIG.md).
+    runtimeInstanceId:
+      (if c.storeDir.isSome: c.runtimeInstanceId
+      else: newRuntimeInstanceId()),
     workDir: c.workDir,
     stateRoot: c.stateRoot,
+    storeDir: c.storeDir,
     statics: statics,
     policy: (if h.policyHook != nil: h.policyHook() else: c.policy),
     ordering: c.ordering,
@@ -341,7 +346,10 @@ proc launch(h: ptr HostRuntime): LogosResult =
       # [IMPL] R1: a request that overlapped `start` before the engine existed.
       return answer(ecCancelled, "shutdown was requested before bootstrap completed")
     # Bootstrap policy is the engine's from its first request (RUN-0305).
-    e = newEngine(cfg)
+    # [IMPL] A store the configuration names another identity for is
+    # INVALID_PARAMS; one that cannot be used is MODULE_ERROR (I82).
+    e = openEngine(cfg).valueOr:
+      return answer(error.code, error.message)
     h.engine = e
     broadcast(h.cond) # a waiter parked before the engine existed
   let r = e.bootstrap(instances, c.orchestration)

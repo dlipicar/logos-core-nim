@@ -16,6 +16,7 @@ import unittest2
 import ../src/logos_core/runtime/engine
 import ../src/logos_core/abi/types
 import ../src/logos_core/iface/[accept, names, outcome]
+import ../src/logos_core/crypto/blake3
 import ../src/logos_core/package/manifest
 import ../src/logos_core/pins
 import ./support/[kitbuild, kitruntime]
@@ -774,3 +775,49 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     check e.view("o").isOk # still open
     destroyGate.store(false)
     check e.close()
+
+suite "run.engine: persistent state (I82)":
+  test "[RUN-1030] [IMPL] after a restart a direct_dynamic instance is copied and verified again from its stored record":
+    let lib = buildKitLibrary("sensor_impl.nim", "engsensor")
+    let src = work / ("sensor-src" & LibraryExtension)
+    copyFile(lib, src)
+    proc digest(path: string): array[32, byte] =
+      var h: Blake3Hasher
+      h.init()
+      let bytes = readFile(path)
+      h.update(bytes.toOpenArrayByte(0, bytes.high))
+      h.finish()
+
+    let rec = ModuleRecord(
+      module: "sensor_module",
+      strategy: stDirectDynamic,
+      artifact: ArtifactRecord(
+        id: "sensor", localPath: src, hash: digest(src), hashSuite: HashSuiteId
+      ),
+    )
+    proc opened(): (Engine, string) =
+      var c = config()
+      c.runtimeInstanceId = ""
+      c.storeDir = Opt.some(work / "dyn-store")
+      (openEngine(c).tryGet, c.workDir)
+
+    var (e, _) = opened()
+    discard e.create(rec, "s1").tryGet
+    check e.start("s1").tryGet.state == msReady
+    e.finish()
+    # A new work directory: the artifact is copied there again and verified.
+    var (e2, dir) = opened()
+    check e2.start("s1").tryGet.state == msReady
+    var copies = 0
+    for f in walkDirRec(dir):
+      if f.endsWith(LibraryExtension):
+        inc copies
+    check copies == 1
+    e2.finish()
+    # The file changed since the record was accepted: it does not start.
+    let f = open(src, fmAppend)
+    f.write("x")
+    f.close()
+    var (e3, _) = opened()
+    check e3.start("s1").tryGet.failureOf == "loader-artifact-integrity-failed"
+    e3.finish()

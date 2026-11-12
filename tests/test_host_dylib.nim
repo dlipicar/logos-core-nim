@@ -16,7 +16,7 @@ import unittest2
 import ../src/logos_core/abi/host
 import ../src/logos_core/crypto/blake3
 import ../src/logos_core/iface/outcome
-import ../src/logos_core/runtime/host_config_types
+import ../src/logos_core/runtime/[host_config_types, store_types]
 import ./support/[hostbuild, kitbuild]
 
 {.compile: "host/host_harness.c".}
@@ -233,6 +233,42 @@ suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
     let (output, code) = execCmdEx(quoteShellCommand([program, path]))
     checkpoint "embed_main exited with " & $code & ", output: " & output.escape
     check code == 0 and output.strip == "ok"
+
+  test "[RUN-0631] [RUN-0632] [RUN-0927] [IMPL-DECISION G193] a Runtime that ends without shutdown leaves a whole store, and the next start resumes from it":
+    let program = buildEmbedMain(library)
+    var c = deployment()
+    c.modules = @[sensor()]
+    c.orchestration = "sensor-1"
+    let base = work / "crash"
+    c.runtime.store_dir = Opt.some(base / "store")
+    c.runtime.state_root = Opt.some(base / "state")
+    let path = work / "crash.cbor"
+    writeFile(path, cast[string](c.encode.get))
+    let (output, code) = execCmdEx(quoteShellCommand([program, path, "crash"]))
+    checkpoint "embed_main exited with " & $code & ", output: " & output.escape
+    check code == 3
+    proc stored(): LcnRsInstance =
+      let text = readFile(base / "store" / "runtime-state.cbor")
+      let s = LcnRsState.decode(text.toOpenArrayByte(0, text.high)).tryGet
+      check s.instances.len == 1
+      s.instances[0]
+
+    # What the child wrote before `start` returned: `ready`, never exposed
+    # before its write, and the whole file.
+    let crashed = stored()
+    check crashed.state.kind == LcnRsInstanceStateChoiceKind.Ready
+    check crashed.intent.kind == LcnRsInstanceIntentChoiceKind.Requested
+    # The lock shows the child is gone; the orchestration instance's retained
+    # intent is resumed from `error`/`other` through the recovery path.
+    let (rt, created) = create(c)
+    check created.ec == ecOk
+    check call(hhStart, rt).ec == ecOk
+    rt.finish()
+    let after = stored()
+    check after.state.kind == LcnRsInstanceStateChoiceKind.Unloaded
+    check after.intent_revision == crashed.intent_revision
+    check after.revision > crashed.revision
+    check after.failure.isNone
 
   test "[RUN-0725] [RUN-0746] start to destroy: a C static binding, a library's addresses from dlsym, a direct_dynamic record; a wait on a C thread":
     torReset(TorAutostart)

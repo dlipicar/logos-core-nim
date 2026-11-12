@@ -12,6 +12,8 @@ proc main() =
   echo rcTypesPath
   writeFile(hostConfigTypesPath, generatedHostConfigTypes().get)
   echo hostConfigTypesPath
+  writeFile(storeTypesPath, generatedStoreTypes().get)
+  echo storeTypesPath
   for f in nimFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath

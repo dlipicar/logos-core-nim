@@ -10,7 +10,7 @@ import ../iface/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.app-config.v1: the Host Embedding API configuration (RUNTIME\x0A; \xC2\xA713.3 configuration_format; decision G76). One Logos deterministic-CBOR\x0A; lcn.app_config value. docs/HOST-CONFIG.md documents each field.\x0A;\x0A; An array that is present is non-empty, and the checks the schema cannot\x0A; express (unique ids, ordering, the orchestration instance) are applied at\x0A; logos_runtime_create (runtime/host_config.nim).\x0A\x0Alcn.app_config = {\x0A  runtime: lcn.app_runtime,\x0A  policy: lcn.app_policy,\x0A  orchestration: lcn.app_instance_id,\x0A  modules: [* lcn.app_module],\x0A  ? ordering: [* lcn.app_ordering],\x0A}\x0A\x0Alcn.app_runtime = {\x0A  work_dir: lcn.app_path,\x0A  ? state_root: lcn.app_path,\x0A  ? startup_deadline_ms: uint32,\x0A  ? stop_deadline_ms: uint32,\x0A  ? shutdown_grace_ms: uint32,\x0A}\x0A\x0Alcn.app_path = tstr .size (1..4096)\x0A\x0Alcn.app_policy = { kind: \"allow-all\" }\x0A\x0A; logos.runtime.module_instance_id (RUNTIME \xC2\xA79.2)\x0Alcn.app_instance_id = tstr .size (1..128)\x0A\x0Alcn.app_module = {\x0A  instance: lcn.app_instance_id,\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A}\x0A\x0A; logos.module_loader.direct_static and direct_dynamic (LOADER \xC2\xA73)\x0Alcn.app_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.app_artifact }\x0A\x0A; logos.module_loader.artifact (LOADER \xC2\xA73)\x0Alcn.app_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.app_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0A; logos.package_manifest.provider_requirement (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0A; logos.package_manifest.requested_permission (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one lifecycle-ordering constraint (RUNTIME \xC2\xA73.7)\x0Alcn.app_ordering = {\x0A  prerequisite: lcn.app_instance_id,\x0A  dependent: lcn.app_instance_id,\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.app-config.v1: the Host Embedding API configuration (RUNTIME\x0A; \xC2\xA713.3 configuration_format; decision G76). One Logos deterministic-CBOR\x0A; lcn.app_config value. docs/HOST-CONFIG.md documents each field.\x0A;\x0A; An array that is present is non-empty, and the checks the schema cannot\x0A; express (unique ids, ordering, the orchestration instance) are applied at\x0A; logos_runtime_create (runtime/host_config.nim).\x0A\x0Alcn.app_config = {\x0A  runtime: lcn.app_runtime,\x0A  policy: lcn.app_policy,\x0A  orchestration: lcn.app_instance_id,\x0A  modules: [* lcn.app_module],\x0A  ? ordering: [* lcn.app_ordering],\x0A}\x0A\x0Alcn.app_runtime = {\x0A  work_dir: lcn.app_path,\x0A  ? state_root: lcn.app_path,\x0A  ? store_dir: lcn.app_path,\x0A  ? runtime_instance_id: tstr .size (1..128),\x0A  ? startup_deadline_ms: uint32,\x0A  ? stop_deadline_ms: uint32,\x0A  ? shutdown_grace_ms: uint32,\x0A}\x0A\x0Alcn.app_path = tstr .size (1..4096)\x0A\x0Alcn.app_policy = { kind: \"allow-all\" }\x0A\x0A; logos.runtime.module_instance_id (RUNTIME \xC2\xA79.2)\x0Alcn.app_instance_id = tstr .size (1..128)\x0A\x0Alcn.app_module = {\x0A  instance: lcn.app_instance_id,\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A}\x0A\x0A; logos.module_loader.direct_static and direct_dynamic (LOADER \xC2\xA73)\x0Alcn.app_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.app_artifact }\x0A\x0A; logos.module_loader.artifact (LOADER \xC2\xA73)\x0Alcn.app_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.app_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0A; logos.package_manifest.provider_requirement (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0A; logos.package_manifest.requested_permission (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one lifecycle-ordering constraint (RUNTIME \xC2\xA73.7)\x0Alcn.app_ordering = {\x0A  prerequisite: lcn.app_instance_id,\x0A  dependent: lcn.app_instance_id,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -100,10 +100,12 @@ type
     contract*: SchemaCommitment
 
   LcnAppRuntime* = object
+    runtime_instance_id*: Opt[string]
     shutdown_grace_ms*: Opt[uint32]
     startup_deadline_ms*: Opt[uint32]
     state_root*: Opt[LcnAppPath]
     stop_deadline_ms*: Opt[uint32]
+    store_dir*: Opt[LcnAppPath]
     work_dir*: LcnAppPath
 
 proc toCbor*(x: LcnAppArtifact): CborValue
@@ -577,6 +579,8 @@ proc fromChecked*(T: type LcnAppRequirement, v: CborValue): LcnAppRequirement =
 proc stepEncLcnAppRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnAppRuntime](src)
   var n = 1
+  if x.runtime_instance_id.isSome:
+    inc n
   if x.shutdown_grace_ms.isSome:
     inc n
   if x.startup_deadline_ms.isSome:
@@ -585,9 +589,15 @@ proc stepEncLcnAppRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc n
   if x.stop_deadline_ms.isSome:
     inc n
+  if x.store_dir.isSome:
+    inc n
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
   dst[] = node
   var k = 0
+  if x.runtime_instance_id.isSome:
+    node.entries[k].key = cbor("runtime_instance_id")
+    node.entries[k].value = cbor(x.runtime_instance_id.get)
+    inc k
   if x.shutdown_grace_ms.isSome:
     node.entries[k].key = cbor("shutdown_grace_ms")
     node.entries[k].value = cbor(uint64(x.shutdown_grace_ms.get))
@@ -604,6 +614,10 @@ proc stepEncLcnAppRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     node.entries[k].key = cbor("stop_deadline_ms")
     node.entries[k].value = cbor(uint64(x.stop_deadline_ms.get))
     inc k
+  if x.store_dir.isSome:
+    node.entries[k].key = cbor("store_dir")
+    node.entries[k].value = encLcnAppPath(x.store_dir.get)
+    inc k
   node.entries[k].key = cbor("work_dir")
   node.entries[k].value = encLcnAppPath(x.work_dir)
   inc k
@@ -611,18 +625,24 @@ proc stepEncLcnAppRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnAppRuntime*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAppRuntime](dst)
   r[] = LcnAppRuntime()
-  let f30 = v.lookup("shutdown_grace_ms")
+  let f30 = v.lookup("runtime_instance_id")
   if f30.isSome:
-    r.shutdown_grace_ms = Opt.some(uint32(f30.get.uint))
-  let f31 = v.lookup("startup_deadline_ms")
+    r.runtime_instance_id = Opt.some(f30.get.text)
+  let f31 = v.lookup("shutdown_grace_ms")
   if f31.isSome:
-    r.startup_deadline_ms = Opt.some(uint32(f31.get.uint))
-  let f32 = v.lookup("state_root")
+    r.shutdown_grace_ms = Opt.some(uint32(f31.get.uint))
+  let f32 = v.lookup("startup_deadline_ms")
   if f32.isSome:
-    r.state_root = Opt.some(decLcnAppPath(f32.get))
-  let f33 = v.lookup("stop_deadline_ms")
+    r.startup_deadline_ms = Opt.some(uint32(f32.get.uint))
+  let f33 = v.lookup("state_root")
   if f33.isSome:
-    r.stop_deadline_ms = Opt.some(uint32(f33.get.uint))
+    r.state_root = Opt.some(decLcnAppPath(f33.get))
+  let f34 = v.lookup("stop_deadline_ms")
+  if f34.isSome:
+    r.stop_deadline_ms = Opt.some(uint32(f34.get.uint))
+  let f35 = v.lookup("store_dir")
+  if f35.isSome:
+    r.store_dir = Opt.some(decLcnAppPath(f35.get))
   r.work_dir = decLcnAppPath(v.lookup("work_dir").get)
 
 proc toCbor*(x: LcnAppRuntime): CborValue =

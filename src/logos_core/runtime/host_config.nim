@@ -33,6 +33,8 @@ type
   HostConfig* = object ## A decoded and validated `lcn.app_config`.
     workDir*: string
     stateRoot*: Opt[string]
+    storeDir*: Opt[string] ## [IMPL] the persistent Runtime state (I82)
+    runtimeInstanceId*: string ## [G192 interim (TF-27)] empty: the store's own identity
     startupDeadline*: Duration
     stopDeadline*: Duration
     shutdownGrace*: Duration
@@ -65,6 +67,29 @@ func deadline(
   if v < MinDeadlineMs or v > MaxDeadlineMs:
     return err(configError(name & " must be 1 to 3600000 milliseconds"))
   ok(initDuration(milliseconds = int64(v)))
+
+func within(path, dir: string): bool =
+  ## `path` is `dir` or below it, lexically.
+  let p = normalizedPath(path)
+  let d = normalizedPath(dir)
+  p == d or p.startsWith(d.strip(leading = false, chars = {'/'}) & "/")
+
+func checkStore(c: HostConfig): Result[void, ConfigError] =
+  ## [IMPL] The store directory holds `runtime-state.cbor`, its side records
+  ## and `lock`, so no module state or artifact copy may land in it (I82).
+  ## Without one nothing persists, and a configured identity would repeat
+  ## addresses and revisions across starts (RUN-0632).
+  if c.storeDir.isNone:
+    if c.runtimeInstanceId.len > 0:
+      return err(configError("runtime_instance_id needs store_dir"))
+    return ok()
+  let s = c.storeDir.get
+  ?checkPath("store_dir", s)
+  if within(s, c.workDir) or within(c.workDir, s):
+    return err(configError("store_dir and work_dir must be apart"))
+  if c.stateRoot.isSome and (within(s, c.stateRoot.get) or within(c.stateRoot.get, s)):
+    return err(configError("store_dir and state_root must be apart"))
+  ok()
 
 func rootOf(c: SchemaCommitment): Digest =
   ## The schema checked `schema_root` as a 32-byte string.
@@ -199,12 +224,15 @@ proc parseHostConfig*(
   var c = HostConfig(
     workDir: cfg.runtime.work_dir,
     stateRoot: cfg.runtime.state_root,
+    storeDir: cfg.runtime.store_dir,
+    runtimeInstanceId: cfg.runtime.runtime_instance_id.get(""),
     policy: allowAll(),
     orchestration: cfg.orchestration,
   )
   ?checkPath("work_dir", c.workDir)
   if c.stateRoot.isSome:
     ?checkPath("state_root", c.stateRoot.get)
+  ?checkStore(c)
   c.startupDeadline = ?deadline(
     "startup_deadline_ms", cfg.runtime.startup_deadline_ms, DefaultStartupDeadline
   )
@@ -223,6 +251,14 @@ proc parseHostConfig*(
     if m.instance in ids:
       return err(configError("module instance " & m.instance & " is listed twice"))
     ids.incl(m.instance)
+    if isRuntimeForm(m.instance) or
+        (r.stateAssignment.isSome and isRuntimeForm(r.stateAssignment.get)):
+      # [IMPL] Names of this form are the Runtime's own (I82).
+      return err(
+        configError(
+          "module instance " & m.instance & " uses a Runtime-assigned name form"
+        )
+      )
     if r.stateAssignment.isSome:
       # [SPEC RUNTIME §8 l.1451] Distinct instances do not share one.
       if r.stateAssignment.get in assignments:

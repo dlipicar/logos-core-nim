@@ -10,7 +10,8 @@ import ../src/logos_core/cbor
 import ../src/logos_core/abi/[host, types]
 import ../src/logos_core/crypto/blake3
 import ../src/logos_core/iface/outcome
-import ../src/logos_core/runtime/[engine, host, host_config, host_config_types]
+import
+  ../src/logos_core/runtime/[engine, host, host_config, host_config_types, rc_types]
 import ./support/kitbuild
 import ./kit/meter_impl
 
@@ -226,6 +227,44 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
       ),
     )
     check parse(c).rejects("local_path must be an absolute path")
+
+  test "[RUN-0741] [IMPL] store_dir is absolute and apart from work_dir and state_root; an identity needs it":
+    var c = baseConfig()
+    c.runtime.store_dir = Opt.some(work / "store")
+    c.runtime.runtime_instance_id = Opt.some("rt-1")
+    let ok = parse(c).get
+    check ok.storeDir == Opt.some(work / "store")
+    check ok.runtimeInstanceId == "rt-1"
+    c.runtime.store_dir = Opt.some("relative/store")
+    check parse(c).rejects("store_dir must be an absolute path")
+    c.runtime.store_dir = Opt.some(work / "w")
+    check parse(c).rejects("store_dir and work_dir must be apart")
+    c.runtime.store_dir = Opt.some(work / "w" / "store")
+    check parse(c).rejects("store_dir and work_dir must be apart")
+    c.runtime.store_dir = Opt.some(work)
+    check parse(c).rejects("store_dir and work_dir must be apart")
+    c.runtime.store_dir = Opt.some(work / "s" / "store")
+    c.runtime.state_root = Opt.some(work / "s")
+    check parse(c).rejects("store_dir and state_root must be apart")
+    c = baseConfig()
+    c.runtime.runtime_instance_id = Opt.some("rt-1")
+    check parse(c).rejects("runtime_instance_id needs store_dir")
+
+  test "[IMPL] the names the Runtime assigns are refused in the configuration":
+    let form = "m-" & repeat("0a", 16) & "-1"
+    check isRuntimeForm(form)
+    check not isRuntimeForm("m-" & repeat("0A", 16) & "-1")
+    check not isRuntimeForm("m-" & repeat("0a", 16) & "-")
+    check not isRuntimeForm("meter-1")
+    var c = baseConfig()
+    c.modules[1].instance = form
+    check parse(c).rejects("Runtime-assigned name form")
+    c = baseConfig()
+    c.modules[1].state_assignment = Opt.some("s-" & repeat("0a", 16) & "-7")
+    check parse(c).rejects("Runtime-assigned name form")
+    c = baseConfig()
+    c.modules[1].instance = "p-" & repeat("0a", 16) & "-2"
+    check parse(c).rejects("Runtime-assigned name form")
 
   test "[RUN-0740] docs/HOST-CONFIG.md names the identifier and carries the schema verbatim":
     let root = currentSourcePath().parentDir.parentDir
@@ -940,6 +979,116 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
       check getFilePermissions(c.runtime.work_dir) ==
         {fpUserRead, fpUserWrite, fpUserExec}
     rt.finish()
+
+# Persistent Runtime state ---------------------------------------------------------------
+
+proc persistent(c: LcnAppConfig, base: string, id = Opt.none(string)): LcnAppConfig =
+  ## `c` with the store and state root under `base`, shared by every run.
+  result = c
+  result.runtime.store_dir = Opt.some(base / "store")
+  result.runtime.state_root = Opt.some(base / "state")
+  result.runtime.runtime_instance_id = id
+
+proc selfId(): string =
+  let rc = cast[ptr LogosRuntimeControlBinding](orchRc.load)
+  let (code, response) = rcCall(rc, "get_self", [0xA0'u8])
+  check code == ecOk
+  LogosNSRuntimeControlGetSelfResponse.decode(response).tryGet.consumer.runtime_instance_id
+
+suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
+  setup:
+    resetOrchestrator()
+
+  test "[RUN-0698] [RUN-0646] [RUN-0632] [IMPL-DECISION G191] a restart resumes orchestration; retained intent waits for it":
+    let base = work / "restart-1"
+    orchMode.store(ord(omAutostart))
+    var rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    check waitUntil(
+      proc(): bool =
+        orchThreadDone.load
+    )
+    check rt.state("meter-1") == msReady
+    let orch1 = engineOf(rt).view("orch").tryGet
+    let meter1 = engineOf(rt).view("meter-1").tryGet
+    check meter1.intentOrigin.instance == "orch"
+    rt.finish()
+    resetOrchestrator()
+    rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    let orch2 = engineOf(rt).view("orch").tryGet
+    check orch2.state == msReady
+    check orch2.intentOrigin.host
+    check orch2.execution.intentRevision == orch1.execution.intentRevision
+    check orch2.execution.revision > orch1.execution.revision
+    let meter2 = engineOf(rt).view("meter-1").tryGet
+    check meter2.state == msUnloaded
+    check meter2.execution.intent == inRequested
+    check meter2.intentOrigin.instance == "orch"
+    check meter2.execution.intentRevision == meter1.execution.intentRevision
+    rt.finish()
+
+  test "[RUN-0698] [IMPL-DECISION G191] orchestration stopped before shutdown is started again, with a diagnostic":
+    let base = work / "restart-2"
+    var rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    let before = engineOf(rt).view("orch").tryGet
+    check engineOf(rt).stop("orch").tryGet.state == msUnloaded
+    rt.finish()
+    rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    let after = engineOf(rt).view("orch").tryGet
+    check after.state == msReady and after.intentOrigin.host
+    check after.execution.intentRevision.get > before.execution.intentRevision.get
+    check engineOf(rt).diagnostics.anyIt("whose intent was stopped" in it)
+    rt.finish()
+
+  test "[IMPL-DECISION G192] the Runtime's identity is the store's, or the configured one":
+    let base = work / "restart-3"
+    var rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    let id = selfId()
+    check id.len == 36
+    rt.finish()
+    rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    check selfId() == id
+    rt.finish()
+    # Another configured identity for this store: refused before anything runs.
+    rt = registered(persistent(deployment(), base, Opt.some("rt-other")))
+    let r = runtimeStart(rt)
+    check r.ec == ecInvalidParams
+    check orchInits.load == 2
+    rt.finish()
+    # A new store takes the configured one.
+    rt = registered(persistent(deployment(), work / "restart-4", Opt.some("rt-named")))
+    check runtimeStart(rt).ec == ecOk
+    check selfId() == "rt-named"
+    rt.finish()
+
+  test "[IMPL-DECISION G160] a configured instance whose declaration changed is refused before anything runs":
+    let base = work / "restart-5"
+    var rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    rt.finish()
+    var c = persistent(deployment(), base)
+    c.modules[1].primary_contract = Opt.some(root(7))
+    rt = registered(c)
+    let r = runtimeStart(rt)
+    check r.ec == ecInvalidParams
+    check "meter-1" in r.text
+    check orchInits.load == 1
+    rt.finish()
+
+  test "[IMPL] two handles on one store: the second start is MODULE_ERROR":
+    let base = work / "restart-6"
+    let a = registered(persistent(deployment(), base))
+    check runtimeStart(a).ec == ecOk
+    let b = registered(persistent(deployment(), base))
+    let r = runtimeStart(b)
+    check r.ec == ecModule and "in use" in r.text
+    b.finish()
+    a.finish()
 
 # Shutdown and destruction -------------------------------------------------------------
 

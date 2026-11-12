@@ -1,0 +1,99 @@
+; logos-core-nim.runtime-state.v1: the Runtime's persistent state (DECISIONS
+; I82). One Logos deterministic-CBOR lcn.rs_state value in
+; <store_dir>/runtime-state.cbor, written by runtime/store.nim and nothing else.
+;
+; Arrays may be empty here. The checks the schema cannot express (unique ids,
+; intent fields, keys naming known instances, unshared state assignments) are
+; applied when the store is read; a failure leaves the file as it is.
+;
+; The lcn.rs_record rules repeat host_config.cddl's lcn.app_module rules
+; without `instance` (test_nimgen compares them), plus the configuration
+; commitment CONFIG will need; until then a record carrying one is refused.
+
+lcn.rs_state = {
+  format: "logos-core-nim.runtime-state.v1",
+  runtime_instance_id: tstr .size (1..128),
+  epoch: uint64,
+  instances: [* lcn.rs_instance],
+  retired: [* lcn.rs_retired],
+  create_keys: [* lcn.rs_create_key],
+}
+
+lcn.rs_instance = {
+  instance: tstr .size (1..128),
+  ? provider: tstr .size (1..128),
+  source: "host" / "create_module",
+  record: lcn.rs_record,
+  state: "unloaded" / "loaded" / "ready" / "stopping" / "error",
+  ? failure: lcn.rs_failure,
+  revision: uint64,
+  intent: "uninitialized" / "requested" / "stopped",
+  ? intent_revision: uint64,
+  ? origin: lcn.rs_origin,
+}
+
+; a classification as RUNTIME l.3753 spells it, loader-<code> included
+lcn.rs_failure = {
+  classification: tstr .size (1..64),
+  ? reason: tstr .size (1..512),
+}
+
+lcn.rs_origin =
+  { kind: "host" } /
+  { kind: "instance", instance: tstr .size (1..128) }
+
+; A retired host-assigned instance id, and the host-assigned state
+; assignment it keeps reserved. Runtime-assigned names need no tombstone.
+lcn.rs_retired = {
+  instance: tstr .size (1..128),
+  ? state_assignment: tstr .size (1..128),
+}
+
+; one create_module key association (RUNTIME l.3627-3628)
+lcn.rs_create_key = {
+  consumer: tstr .size (1..128),
+  key: tstr .size (1..128),
+  module: tstr .size (1..64),
+  instance: tstr .size (1..128),
+}
+
+lcn.rs_record = {
+  module: tstr .size (1..64),
+  implementation: lcn.rs_implementation,
+  ? primary_contract: logos.schema_commitment,
+  ? implements: [* logos.schema_commitment],
+  ? requires: [* lcn.rs_requirement],
+  ? requested_permissions: [* lcn.rs_permission],
+  ? state_assignment: tstr .size (1..128),
+  ? configuration_commitment: bstr .size 32,
+}
+
+lcn.rs_path = tstr .size (1..4096)
+
+lcn.rs_implementation =
+  { strategy: "direct_static", binding: tstr .size (1..128) } /
+  { strategy: "direct_dynamic", artifact: lcn.rs_artifact }
+
+lcn.rs_artifact = {
+  id: tstr .size (1..128),
+  local_path: lcn.rs_path,
+  hash: bstr .size 32,
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+
+lcn.rs_requirement = {
+  contract: logos.schema_commitment,
+  cardinality: "single" / "all-runtime-visible",
+}
+
+lcn.rs_permission = {
+  permission: tstr .size (1..128),
+  constraints: bstr .size (1..1048576),
+  ? reason: tstr .size (1..512),
+}
+
+; one side record (runtime/store.nim putSide): the instance it belongs to
+lcn.rs_side = {
+  instance: tstr .size (1..128),
+  value: bstr,
+}
