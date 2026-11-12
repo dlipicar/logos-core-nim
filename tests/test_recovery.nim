@@ -575,8 +575,12 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     e.finish()
 
   test "[RUN-1006] [RUN-1007] [RUN-1008] [RUN-1009] retirement waits until no realization, cleanup or call remains":
-    let e =
-      newEngine(rconfig(denying(deny(action = Opt.some(aaExecute), target = "denied"))))
+    var cfg = rconfig(denying(deny(action = Opt.some(aaExecute), target = "denied")))
+    # `w` stays `stopping` meanwhile: when the stop deadline passes, the instance
+    # is `error` at a new revision, and a retirement that read the old one is
+    # INVALID_PARAMS.
+    cfg.stopDeadline = initDuration(seconds = 30)
+    let e = newEngine(cfg)
     let (_, arc) = e.startClient("a")
     # `ready`
     discard e.create(counter(), "w").tryGet
@@ -603,28 +607,34 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     check arc.retire(e, "s").code == ecNotReady
     slowGate.store(false)
     joinThread(s)
-    # `error` whose cleanup has not finished: the state alone is not the evidence.
-    discard e.create(counter(), "v").tryGet
-    check e.start("v").tryGet.state == msReady
-    counterDestroyGate.store(true)
-    e.failed("v", cleaned = false)
-    check e.stop("v").tryGet.execution.intent == inStopped
-    check e.view("v").tryGet.state in {msError, msStopping}
-    check arc.retire(e, "v").code == ecNotReady
-    counterDestroyGate.store(false)
-    check waitUntil(
-      proc(): bool =
-        arc.retire(e, "v").code == ecOk
-    )
     # `unloaded` with `requested` intent: a start whose execution was denied.
     discard e.create(counter(), "denied").tryGet
     check e.start("denied").error.code == ecNotAuthorised
     check e.view("denied").tryGet.execution.intent == inRequested
     check arc.retire(e, "denied").code == ecNotReady
+    e.finish()
+    # `error` whose cleanup has not finished: the state alone is not the evidence.
+    # The stop of an `error` instance whose cleanup is pending waits in
+    # `stopping`; this engine's stop deadline (300 ms) ends it in `error` with
+    # intent stopped, and nothing changes the revision after that.
+    let f = newEngine(rconfig())
+    let (_, frc) = f.startClient("a")
+    discard f.create(counter(), "v").tryGet
+    check f.start("v").tryGet.state == msReady
+    counterDestroyGate.store(true)
+    f.failed("v", cleaned = false)
+    check f.stop("v").tryGet.execution.intent == inStopped
+    check f.view("v").tryGet.state in {msError, msStopping}
+    check frc.retire(f, "v").code == ecNotReady
+    counterDestroyGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        frc.retire(f, "v").code == ecOk
+    )
     # A call still in progress in a provider that failed.
-    let m = e.started(meter(), "m")
-    let route = arc.routeId("k")
-    var h = arc.handle(route)
+    let m = f.started(meter(), "m")
+    let route = frc.routeId("k")
+    var h = frc.handle(route)
     gate.store(true)
     bgDone.store(false)
     var b: Thread[ptr LogosRouteHandle]
@@ -633,18 +643,18 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
       proc(): bool =
         held.load == 1
     )
-    e.failed("m", cleaned = false)
-    check e.stop("m").tryGet.execution.intent == inStopped
-    check arc.retire(e, "m").code == ecNotReady
+    f.failed("m", cleaned = false)
+    check f.stop("m").tryGet.execution.intent == inStopped
+    check frc.retire(f, "m").code == ecNotReady
     gate.store(false)
     joinThread(b)
     h.release()
     check waitUntil(
       proc(): bool =
-        arc.retire(e, "m").code == ecOk
+        frc.retire(f, "m").code == ecOk
     )
     check m.instance == "m"
-    e.finish()
+    f.finish()
 
   test "[RUN-1010] [RUN-1013] an instance that is the origin of another's requested intent is not retired":
     let e = newEngine(rconfig())
