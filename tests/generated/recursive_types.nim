@@ -37,65 +37,136 @@ type
 
 proc toCbor*(x: RecursiveBranch): CborValue
 proc fromChecked*(T: type RecursiveBranch, v: CborValue): RecursiveBranch
+proc stepEncRecursiveBranch*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecRecursiveBranch*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: RecursiveLeft): CborValue
 proc fromChecked*(T: type RecursiveLeft, v: CborValue): RecursiveLeft
+proc stepEncRecursiveLeft*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecRecursiveLeft*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: RecursiveNode): CborValue
 proc fromChecked*(T: type RecursiveNode, v: CborValue): RecursiveNode
+proc stepEncRecursiveNode*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecRecursiveNode*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: RecursiveRight): CborValue
 proc fromChecked*(T: type RecursiveRight, v: CborValue): RecursiveRight
+proc stepEncRecursiveRight*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecRecursiveRight*(w: var DecWork, v: CborValue, dst: pointer)
+
+proc stepEncRecursiveBranch*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr RecursiveBranch](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("node")
+  w.later(stepEncRecursiveNode, addr x.node, addr node.entries[k].value)
+  inc k
+
+proc stepDecRecursiveBranch*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr RecursiveBranch](dst)
+  r[] = RecursiveBranch()
+  let f1 = v.lookup("node").get
+  w.later(stepDecRecursiveNode, f1, addr r.node)
 
 proc toCbor*(x: RecursiveBranch): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("node"), toCbor(x.node)))
-  cborMap(e)
+  runEnc(stepEncRecursiveBranch, addr x)
 
 proc fromChecked*(T: type RecursiveBranch, v: CborValue): RecursiveBranch =
-  var r = RecursiveBranch()
-  r.node = fromChecked(RecursiveNode, v.lookup("node").get)
+  var r: RecursiveBranch
+  runDec(stepDecRecursiveBranch, v, addr r)
   r
+
+proc stepEncRecursiveLeft*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr RecursiveLeft](src)
+  var n = 0
+  if x.right.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.right.isSome:
+    node.entries[k].key = cbor("right")
+    w.later(stepEncRecursiveRight, addr x.right.get[], addr node.entries[k].value)
+    inc k
+
+proc stepDecRecursiveLeft*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr RecursiveLeft](dst)
+  r[] = RecursiveLeft()
+  let f2 = v.lookup("right")
+  if f2.isSome:
+    r.right = Opt.some(default(ref RecursiveRight))
+    r.right.get = new(RecursiveRight)
+    w.later(stepDecRecursiveRight, f2.get, addr r.right.get[])
 
 proc toCbor*(x: RecursiveLeft): CborValue =
-  var e: seq[CborEntry]
-  if x.right.isSome:
-    e.add((cbor("right"), toCbor(x.right.get[])))
-  cborMap(e)
+  runEnc(stepEncRecursiveLeft, addr x)
 
 proc fromChecked*(T: type RecursiveLeft, v: CborValue): RecursiveLeft =
-  var r = RecursiveLeft()
-  block:
-    let f = v.lookup("right")
-    if f.isSome:
-      r.right = Opt.some(boxed(fromChecked(RecursiveRight, f.get)))
+  var r: RecursiveLeft
+  runDec(stepDecRecursiveLeft, v, addr r)
   r
+
+proc stepEncRecursiveNode*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr RecursiveNode](src)
+  var n = 1
+  if x.next.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.next.isSome:
+    node.entries[k].key = cbor("next")
+    w.later(stepEncRecursiveNode, addr x.next.get[], addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("value")
+  node.entries[k].value = cbor(uint64(x.value))
+  inc k
+
+proc stepDecRecursiveNode*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr RecursiveNode](dst)
+  r[] = RecursiveNode()
+  let f3 = v.lookup("next")
+  if f3.isSome:
+    r.next = Opt.some(default(ref RecursiveNode))
+    r.next.get = new(RecursiveNode)
+    w.later(stepDecRecursiveNode, f3.get, addr r.next.get[])
+  r.value = uint64(v.lookup("value").get.uint)
 
 proc toCbor*(x: RecursiveNode): CborValue =
-  var e: seq[CborEntry]
-  if x.next.isSome:
-    e.add((cbor("next"), toCbor(x.next.get[])))
-  e.add((cbor("value"), cbor(uint64(x.value))))
-  cborMap(e)
+  runEnc(stepEncRecursiveNode, addr x)
 
 proc fromChecked*(T: type RecursiveNode, v: CborValue): RecursiveNode =
-  var r = RecursiveNode()
-  block:
-    let f = v.lookup("next")
-    if f.isSome:
-      r.next = Opt.some(boxed(fromChecked(RecursiveNode, f.get)))
-  r.value = uint64(v.lookup("value").get.uint)
+  var r: RecursiveNode
+  runDec(stepDecRecursiveNode, v, addr r)
   r
 
-proc toCbor*(x: RecursiveRight): CborValue =
-  var e: seq[CborEntry]
+proc stepEncRecursiveRight*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr RecursiveRight](src)
+  var n = 0
   if x.left.isSome:
-    e.add((cbor("left"), toCbor(x.left.get[])))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.left.isSome:
+    node.entries[k].key = cbor("left")
+    w.later(stepEncRecursiveLeft, addr x.left.get[], addr node.entries[k].value)
+    inc k
+
+proc stepDecRecursiveRight*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr RecursiveRight](dst)
+  r[] = RecursiveRight()
+  let f4 = v.lookup("left")
+  if f4.isSome:
+    r.left = Opt.some(default(ref RecursiveLeft))
+    r.left.get = new(RecursiveLeft)
+    w.later(stepDecRecursiveLeft, f4.get, addr r.left.get[])
+
+proc toCbor*(x: RecursiveRight): CborValue =
+  runEnc(stepEncRecursiveRight, addr x)
 
 proc fromChecked*(T: type RecursiveRight, v: CborValue): RecursiveRight =
-  var r = RecursiveRight()
-  block:
-    let f = v.lookup("left")
-    if f.isSome:
-      r.left = Opt.some(boxed(fromChecked(RecursiveLeft, f.get)))
+  var r: RecursiveRight
+  runDec(stepDecRecursiveRight, v, addr r)
   r
 
 proc fromCbor*(T: type RecursiveBranch, v: CborValue): Result[RecursiveBranch, string] =

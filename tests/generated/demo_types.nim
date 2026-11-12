@@ -131,30 +131,56 @@ proc toCbor*(x: DemoEntry): CborValue
 proc fromChecked*(T: type DemoEntry, v: CborValue): DemoEntry
 proc toCbor*(x: DemoEntryARDirMap): CborValue
 proc fromChecked*(T: type DemoEntryARDirMap, v: CborValue): DemoEntryARDirMap
+proc stepEncDemoEntryARDirMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoEntryARDirMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: DemoEntryARFileMap): CborValue
 proc fromChecked*(T: type DemoEntryARFileMap, v: CborValue): DemoEntryARFileMap
+proc stepEncDemoEntryARFileMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoEntryARFileMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncDemoEntry*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoEntry*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: DemoK): CborValue
 proc fromChecked*(T: type DemoK, v: CborValue): DemoK
 proc toCbor*(x: DemoKGChoice): CborValue
 proc fromChecked*(T: type DemoKGChoice, v: CborValue): DemoKGChoice
+proc stepEncDemoKGChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoKGChoice*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncDemoK*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoK*(w: var DecWork, v: CborValue, dst: pointer)
 proc encDemoLeaf*(x: DemoLeaf): CborValue
 proc decDemoLeaf*(v: CborValue): DemoLeaf
 proc encDemoNames*(x: DemoNames): CborValue
 proc decDemoNames*(v: CborValue): DemoNames
+proc stepEncDemoNames*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoNames*(w: var DecWork, v: CborValue, dst: pointer)
 proc encDemoPair*(x: DemoPair): CborValue
 proc decDemoPair*(v: CborValue): DemoPair
+proc stepEncDemoPair*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoPair*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: DemoRecord): CborValue
 proc fromChecked*(T: type DemoRecord, v: CborValue): DemoRecord
 proc toCbor*(x: DemoRecordSubMap): CborValue
 proc fromChecked*(T: type DemoRecordSubMap, v: CborValue): DemoRecordSubMap
 proc toCbor*(x: DemoRecordSubInnerChoice): CborValue
 proc fromChecked*(T: type DemoRecordSubInnerChoice, v: CborValue): DemoRecordSubInnerChoice
+proc stepEncDemoRecordSubInnerChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoRecordSubInnerChoice*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncDemoRecordSubMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoRecordSubMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncDemoRecord*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoRecord*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: DemoTree): CborValue
 proc fromChecked*(T: type DemoTree, v: CborValue): DemoTree
+proc stepEncDemoTree*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoTree*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: DemoV): CborValue
 proc fromChecked*(T: type DemoV, v: CborValue): DemoV
+proc stepEncDemoV*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoV*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: DemoValue): CborValue
 proc fromChecked*(T: type DemoValue, v: CborValue): DemoValue
+proc stepEncDemoValue*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecDemoValue*(w: var DecWork, v: CborValue, dst: pointer)
 
 proc encDemoCounter*(x: DemoCounter): CborValue =
   cbor(uint64(x))
@@ -162,99 +188,228 @@ proc encDemoCounter*(x: DemoCounter): CborValue =
 proc decDemoCounter*(v: CborValue): DemoCounter =
   uint32(v.uint)
 
+proc stepEncDemoEntryARDirMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoEntryARDirMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("entries")
+  let a1 = newCborArray(x.entries.len)
+  node.entries[k].value = a1
+  for i2 in 0 ..< x.entries.len:
+    a1.items[i2] = cbor(x.entries[i2])
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("dir")
+  inc k
+  node.entries[k].key = cbor("path")
+  node.entries[k].value = cbor(x.path)
+  inc k
+
+proc stepDecDemoEntryARDirMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoEntryARDirMap](dst)
+  r[] = DemoEntryARDirMap()
+  let f3 = v.lookup("entries").get
+  r.entries.setLen(f3.items.len)
+  for i4 in 0 ..< f3.items.len:
+    r.entries[i4] = f3.items[i4].text
+  r.path = v.lookup("path").get.text
+
 proc toCbor*(x: DemoEntryARDirMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("entries"), cborArray(x.entries.mapIt(cbor(it)))))
-  e.add((cbor("kind"), cbor("dir")))
-  e.add((cbor("path"), cbor(x.path)))
-  cborMap(e)
+  runEnc(stepEncDemoEntryARDirMap, addr x)
 
 proc fromChecked*(T: type DemoEntryARDirMap, v: CborValue): DemoEntryARDirMap =
-  var r = DemoEntryARDirMap()
-  r.entries = v.lookup("entries").get.items.mapIt(it.text)
-  r.path = v.lookup("path").get.text
+  var r: DemoEntryARDirMap
+  runDec(stepDecDemoEntryARDirMap, v, addr r)
   r
+
+proc stepEncDemoEntryARFileMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoEntryARFileMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("file")
+  inc k
+  node.entries[k].key = cbor("path")
+  node.entries[k].value = cbor(x.path)
+  inc k
+
+proc stepDecDemoEntryARFileMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoEntryARFileMap](dst)
+  r[] = DemoEntryARFileMap()
+  r.path = v.lookup("path").get.text
 
 proc toCbor*(x: DemoEntryARFileMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("kind"), cbor("file")))
-  e.add((cbor("path"), cbor(x.path)))
-  cborMap(e)
+  runEnc(stepEncDemoEntryARFileMap, addr x)
 
 proc fromChecked*(T: type DemoEntryARFileMap, v: CborValue): DemoEntryARFileMap =
-  var r = DemoEntryARFileMap()
-  r.path = v.lookup("path").get.text
+  var r: DemoEntryARFileMap
+  runDec(stepDecDemoEntryARFileMap, v, addr r)
   r
 
-proc toCbor*(x: DemoEntry): CborValue =
+proc stepEncDemoEntry*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoEntry](src)
   case x.kind
   of DemoEntryKind.Dir:
-    toCbor(x.arm_Dir)
+    w.later(stepEncDemoEntryARDirMap, addr x.arm_Dir, addr dst[])
   of DemoEntryKind.File:
-    toCbor(x.arm_File)
+    w.later(stepEncDemoEntryARFileMap, addr x.arm_File, addr dst[])
 
-proc fromChecked*(T: type DemoEntry, v: CborValue): DemoEntry =
+proc stepDecDemoEntry*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoEntry](dst)
   case generatedSchema().arm("demo.entry#", v)
   of 0:
-    DemoEntry(kind: DemoEntryKind.File, arm_File: fromChecked(DemoEntryARFileMap, v))
+    r[] = DemoEntry(kind: DemoEntryKind.File)
+    w.later(stepDecDemoEntryARFileMap, v, addr r.arm_File)
   of 1:
-    DemoEntry(kind: DemoEntryKind.Dir, arm_Dir: fromChecked(DemoEntryARDirMap, v))
+    r[] = DemoEntry(kind: DemoEntryKind.Dir)
+    w.later(stepDecDemoEntryARDirMap, v, addr r.arm_Dir)
+  else:
+    raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: DemoEntry): CborValue =
+  runEnc(stepEncDemoEntry, addr x)
+
+proc fromChecked*(T: type DemoEntry, v: CborValue): DemoEntry =
+  var r: DemoEntry
+  runDec(stepDecDemoEntry, v, addr r)
+  r
+
+proc stepEncDemoKGChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoKGChoice](src)
+  case x.kind
+  of DemoKGChoiceKind.Tuple1:
+    let a14 = newCborArray(1)
+    dst[] = a14
+    a14.items[0] = cbor(uint64(x.arm_Tuple1[0]))
+  of DemoKGChoiceKind.Tuple2:
+    let a15 = newCborArray(2)
+    dst[] = a15
+    a15.items[0] = cbor(uint64(x.arm_Tuple2[0]))
+    a15.items[1] = cbor(uint64(x.arm_Tuple2[1]))
+  of DemoKGChoiceKind.demo_V:
+    w.later(stepEncDemoV, addr x.arm_demo_V, addr dst[])
+
+proc stepDecDemoKGChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoKGChoice](dst)
+  case generatedSchema().arm("demo.k#g", v)
+  of 0:
+    r[] = DemoKGChoice(kind: DemoKGChoiceKind.Tuple1)
+    r.arm_Tuple1[0] = uint64(v.items[0].uint)
+  of 1:
+    r[] = DemoKGChoice(kind: DemoKGChoiceKind.Tuple2)
+    r.arm_Tuple2[0] = uint64(v.items[0].uint)
+    r.arm_Tuple2[1] = uint64(v.items[1].uint)
+  of 2:
+    r[] = DemoKGChoice(kind: DemoKGChoiceKind.demo_V)
+    w.later(stepDecDemoV, v, addr r.arm_demo_V)
   else:
     raiseAssert "a checked value selects a known arm"
 
 proc toCbor*(x: DemoKGChoice): CborValue =
-  case x.kind
-  of DemoKGChoiceKind.Tuple1:
-    cborArray(cbor(uint64(x.arm_Tuple1[0])))
-  of DemoKGChoiceKind.Tuple2:
-    cborArray(cbor(uint64(x.arm_Tuple2[0])), cbor(uint64(x.arm_Tuple2[1])))
-  of DemoKGChoiceKind.demo_V:
-    toCbor(x.arm_demo_V)
+  runEnc(stepEncDemoKGChoice, addr x)
 
 proc fromChecked*(T: type DemoKGChoice, v: CborValue): DemoKGChoice =
-  case generatedSchema().arm("demo.k#g", v)
-  of 0:
-    DemoKGChoice(kind: DemoKGChoiceKind.Tuple1, arm_Tuple1: (uint64(v.items[0].uint),))
-  of 1:
-    DemoKGChoice(kind: DemoKGChoiceKind.Tuple2, arm_Tuple2: (uint64(v.items[0].uint), uint64(v.items[1].uint)))
-  of 2:
-    DemoKGChoice(kind: DemoKGChoiceKind.demo_V, arm_demo_V: fromChecked(DemoV, v))
-  else:
-    raiseAssert "a checked value selects a known arm"
+  var r: DemoKGChoice
+  runDec(stepDecDemoKGChoice, v, addr r)
+  r
 
-proc toCbor*(x: DemoK): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("a"), cbor(7'u64)))
-  e.add((cbor("b"), cbor(low(int64))))
-  e.add((cbor("c"), cbor("\xC3\xA91")))
-  e.add((cbor("d"), cbor(x.d)))
-  e.add((cbor("e"), cborArray(x.e.mapIt(cbor(it)))))
-  e.add((cbor("f"), cborArray(x.f.mapIt(cborArray(cbor(uint64(it[0])), cbor(it[1]))))))
-  e.add((cbor("g"), toCbor(x.g)))
+proc stepEncDemoK*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoK](src)
+  var n = 16
   if x.h.isSome:
-    e.add((cbor("h"), cborArray(cbor(uint64(x.h.get[0])), cbor(x.h.get[1]))))
-  e.add((cbor("i"), toCbor(x.i)))
-  e.add((cbor("j"), cborArray()))
-  e.add((cbor("l"), cbor(x.l)))
-  e.add((cbor("m"), cbor(int64(x.m))))
-  e.add((cbor("n"), cbor(uint64(x.n))))
-  e.add((cbor("o"), encDemoCounter(x.o)))
-  e.add((cbor("p"), cbor(uint64(ord(x.p)))))
-  e.add((cbor("q"), encErrorDetail(x.q)))
-  e.add((cbor("type"), encDemoNames(x.`type`)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("a")
+  node.entries[k].value = cbor(7'u64)
+  inc k
+  node.entries[k].key = cbor("b")
+  node.entries[k].value = cbor(low(int64))
+  inc k
+  node.entries[k].key = cbor("c")
+  node.entries[k].value = cbor("\xC3\xA91")
+  inc k
+  node.entries[k].key = cbor("d")
+  node.entries[k].value = cbor(x.d)
+  inc k
+  node.entries[k].key = cbor("e")
+  let a5 = newCborArray(x.e.len)
+  node.entries[k].value = a5
+  for i6 in 0 ..< x.e.len:
+    a5.items[i6] = cbor(x.e[i6])
+  inc k
+  node.entries[k].key = cbor("f")
+  let a9 = newCborArray(x.f.len)
+  node.entries[k].value = a9
+  for i10 in 0 ..< x.f.len:
+    let a11 = newCborArray(2)
+    a9.items[i10] = a11
+    a11.items[0] = cbor(uint64(x.f[i10][0]))
+    a11.items[1] = cbor(x.f[i10][1])
+  inc k
+  node.entries[k].key = cbor("g")
+  w.later(stepEncDemoKGChoice, addr x.g, addr node.entries[k].value)
+  inc k
+  if x.h.isSome:
+    node.entries[k].key = cbor("h")
+    let a17 = newCborArray(2)
+    node.entries[k].value = a17
+    a17.items[0] = cbor(uint64(x.h.get[0]))
+    a17.items[1] = cbor(x.h.get[1])
+    inc k
+  node.entries[k].key = cbor("i")
+  w.later(stepEncSchemaCommitment, addr x.i, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("j")
+  node.entries[k].value = cborArray()
+  inc k
+  node.entries[k].key = cbor("l")
+  node.entries[k].value = cbor(x.l)
+  inc k
+  node.entries[k].key = cbor("m")
+  node.entries[k].value = cbor(int64(x.m))
+  inc k
+  node.entries[k].key = cbor("n")
+  node.entries[k].value = cbor(uint64(x.n))
+  inc k
+  node.entries[k].key = cbor("o")
+  node.entries[k].value = encDemoCounter(x.o)
+  inc k
+  node.entries[k].key = cbor("p")
+  node.entries[k].value = cbor(uint64(ord(x.p)))
+  inc k
+  node.entries[k].key = cbor("q")
+  node.entries[k].value = encErrorDetail(x.q)
+  inc k
+  node.entries[k].key = cbor("type")
+  w.later(stepEncDemoNames, addr x.`type`, addr node.entries[k].value)
+  inc k
 
-proc fromChecked*(T: type DemoK, v: CborValue): DemoK =
-  var r = DemoK()
+proc stepDecDemoK*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoK](dst)
+  r[] = DemoK()
   r.d = v.lookup("d").get.bytes
-  r.e = v.lookup("e").get.items.mapIt(it.bytes)
-  r.f = v.lookup("f").get.items.mapIt((uint64(it.items[0].uint), it.items[1].text))
-  r.g = fromChecked(DemoKGChoice, v.lookup("g").get)
-  block:
-    let f = v.lookup("h")
-    if f.isSome:
-      r.h = Opt.some((uint64(f.get.items[0].uint), f.get.items[1].bytes))
-  r.i = fromChecked(SchemaCommitment, v.lookup("i").get)
+  let f7 = v.lookup("e").get
+  r.e.setLen(f7.items.len)
+  for i8 in 0 ..< f7.items.len:
+    r.e[i8] = f7.items[i8].bytes
+  let f12 = v.lookup("f").get
+  r.f.setLen(f12.items.len)
+  for i13 in 0 ..< f12.items.len:
+    r.f[i13][0] = uint64(f12.items[i13].items[0].uint)
+    r.f[i13][1] = f12.items[i13].items[1].text
+  let f16 = v.lookup("g").get
+  w.later(stepDecDemoKGChoice, f16, addr r.g)
+  let f18 = v.lookup("h")
+  if f18.isSome:
+    r.h = Opt.some(default((uint64, seq[byte])))
+    r.h.get[0] = uint64(f18.get.items[0].uint)
+    r.h.get[1] = f18.get.items[1].bytes
+  let f19 = v.lookup("i").get
+  w.later(stepDecSchemaCommitment, f19, addr r.i)
   r.j = EmptyTuple()
   r.l = v.lookup("l").get.bytes
   r.m = int8(asInt64(v.lookup("m").get))
@@ -262,7 +417,15 @@ proc fromChecked*(T: type DemoK, v: CborValue): DemoK =
   r.o = decDemoCounter(v.lookup("o").get)
   r.p = ErrorCode(v.lookup("p").get.uint)
   r.q = decErrorDetail(v.lookup("q").get)
-  r.`type` = decDemoNames(v.lookup("type").get)
+  let f20 = v.lookup("type").get
+  w.later(stepDecDemoNames, f20, addr r.`type`)
+
+proc toCbor*(x: DemoK): CborValue =
+  runEnc(stepEncDemoK, addr x)
+
+proc fromChecked*(T: type DemoK, v: CborValue): DemoK =
+  var r: DemoK
+  runDec(stepDecDemoK, v, addr r)
   r
 
 proc encDemoLeaf*(x: DemoLeaf): CborValue =
@@ -271,106 +434,225 @@ proc encDemoLeaf*(x: DemoLeaf): CborValue =
 proc decDemoLeaf*(v: CborValue): DemoLeaf =
   "leaf"
 
+proc stepEncDemoNames*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x = cast[ptr DemoNames](src)
+  let a21 = newCborArray(x[].len)
+  dst[] = a21
+  for i22 in 0 ..< x[].len:
+    a21.items[i22] = cbor(x[][i22])
+
+proc stepDecDemoNames*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoNames](dst)
+  r[].setLen(v.items.len)
+  for i23 in 0 ..< v.items.len:
+    r[][i23] = v.items[i23].text
+
 proc encDemoNames*(x: DemoNames): CborValue =
-  cborArray(x.mapIt(cbor(it)))
+  runEnc(stepEncDemoNames, addr x)
 
 proc decDemoNames*(v: CborValue): DemoNames =
-  v.items.mapIt(it.text)
+  var r: DemoNames
+  runDec(stepDecDemoNames, v, addr r)
+  r
+
+proc stepEncDemoPair*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x = cast[ptr DemoPair](src)
+  let a24 = newCborArray(2)
+  dst[] = a24
+  w.later(stepEncDemoTree, addr x[][0][], addr a24.items[0])
+  a24.items[1] = cbor(uint64(x[][1]))
+
+proc stepDecDemoPair*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoPair](dst)
+  r[][0] = new(DemoTree)
+  w.later(stepDecDemoTree, v.items[0], addr r[][0][])
+  r[][1] = uint64(v.items[1].uint)
 
 proc encDemoPair*(x: DemoPair): CborValue =
-  cborArray(toCbor(x[0][]), cbor(uint64(x[1])))
+  runEnc(stepEncDemoPair, addr x)
 
 proc decDemoPair*(v: CborValue): DemoPair =
-  (boxed(fromChecked(DemoTree, v.items[0])), uint64(v.items[1].uint))
+  var r: DemoPair
+  runDec(stepDecDemoPair, v, addr r)
+  r
 
-proc toCbor*(x: DemoRecordSubInnerChoice): CborValue =
+proc stepEncDemoRecordSubInnerChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoRecordSubInnerChoice](src)
   case x.kind
   of DemoRecordSubInnerChoiceKind.Tstr:
-    cbor(x.arm_Tstr)
+    dst[] = cbor(x.arm_Tstr)
   of DemoRecordSubInnerChoiceKind.Uint64:
-    cbor(uint64(x.arm_Uint64))
+    dst[] = cbor(uint64(x.arm_Uint64))
 
-proc fromChecked*(T: type DemoRecordSubInnerChoice, v: CborValue): DemoRecordSubInnerChoice =
+proc stepDecDemoRecordSubInnerChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoRecordSubInnerChoice](dst)
   case generatedSchema().arm("demo.record#sub/inner", v)
   of 0:
-    DemoRecordSubInnerChoice(kind: DemoRecordSubInnerChoiceKind.Tstr, arm_Tstr: v.text)
+    r[] = DemoRecordSubInnerChoice(kind: DemoRecordSubInnerChoiceKind.Tstr, arm_Tstr: v.text)
   of 1:
-    DemoRecordSubInnerChoice(kind: DemoRecordSubInnerChoiceKind.Uint64, arm_Uint64: uint64(v.uint))
+    r[] = DemoRecordSubInnerChoice(kind: DemoRecordSubInnerChoiceKind.Uint64, arm_Uint64: uint64(v.uint))
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: DemoRecordSubInnerChoice): CborValue =
+  runEnc(stepEncDemoRecordSubInnerChoice, addr x)
+
+proc fromChecked*(T: type DemoRecordSubInnerChoice, v: CborValue): DemoRecordSubInnerChoice =
+  var r: DemoRecordSubInnerChoice
+  runDec(stepDecDemoRecordSubInnerChoice, v, addr r)
+  r
+
+proc stepEncDemoRecordSubMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoRecordSubMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("inner")
+  w.later(stepEncDemoRecordSubInnerChoice, addr x.inner, addr node.entries[k].value)
+  inc k
+
+proc stepDecDemoRecordSubMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoRecordSubMap](dst)
+  r[] = DemoRecordSubMap()
+  let f25 = v.lookup("inner").get
+  w.later(stepDecDemoRecordSubInnerChoice, f25, addr r.inner)
 
 proc toCbor*(x: DemoRecordSubMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("inner"), toCbor(x.inner)))
-  cborMap(e)
+  runEnc(stepEncDemoRecordSubMap, addr x)
 
 proc fromChecked*(T: type DemoRecordSubMap, v: CborValue): DemoRecordSubMap =
-  var r = DemoRecordSubMap()
-  r.inner = fromChecked(DemoRecordSubInnerChoice, v.lookup("inner").get)
+  var r: DemoRecordSubMap
+  runDec(stepDecDemoRecordSubMap, v, addr r)
   r
+
+proc stepEncDemoRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoRecord](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("sub")
+  w.later(stepEncDemoRecordSubMap, addr x.sub, addr node.entries[k].value)
+  inc k
+
+proc stepDecDemoRecord*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoRecord](dst)
+  r[] = DemoRecord()
+  let f26 = v.lookup("sub").get
+  w.later(stepDecDemoRecordSubMap, f26, addr r.sub)
 
 proc toCbor*(x: DemoRecord): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("sub"), toCbor(x.sub)))
-  cborMap(e)
+  runEnc(stepEncDemoRecord, addr x)
 
 proc fromChecked*(T: type DemoRecord, v: CborValue): DemoRecord =
-  var r = DemoRecord()
-  r.sub = fromChecked(DemoRecordSubMap, v.lookup("sub").get)
+  var r: DemoRecord
+  runDec(stepDecDemoRecord, v, addr r)
   r
+
+proc stepEncDemoTree*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoTree](src)
+  var n = 2
+  if x.left.isSome:
+    inc n
+  if x.twin.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kids")
+  let a27 = newCborArray(x.kids.len)
+  node.entries[k].value = a27
+  for i28 in 0 ..< x.kids.len:
+    w.later(stepEncDemoTree, addr x.kids[i28], addr a27.items[i28])
+  inc k
+  if x.left.isSome:
+    node.entries[k].key = cbor("left")
+    w.later(stepEncDemoTree, addr x.left.get[], addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("tag")
+  node.entries[k].value = encDemoLeaf(x.tag)
+  inc k
+  if x.twin.isSome:
+    node.entries[k].key = cbor("twin")
+    w.later(stepEncDemoPair, addr x.twin.get[], addr node.entries[k].value)
+    inc k
+
+proc stepDecDemoTree*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoTree](dst)
+  r[] = DemoTree()
+  let f29 = v.lookup("kids").get
+  r.kids.setLen(f29.items.len)
+  for i30 in 0 ..< f29.items.len:
+    w.later(stepDecDemoTree, f29.items[i30], addr r.kids[i30])
+  let f31 = v.lookup("left")
+  if f31.isSome:
+    r.left = Opt.some(default(ref DemoTree))
+    r.left.get = new(DemoTree)
+    w.later(stepDecDemoTree, f31.get, addr r.left.get[])
+  let f32 = v.lookup("twin")
+  if f32.isSome:
+    r.twin = Opt.some(default(ref DemoPair))
+    r.twin.get = new(DemoPair)
+    w.later(stepDecDemoPair, f32.get, addr r.twin.get[])
 
 proc toCbor*(x: DemoTree): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("kids"), cborArray(x.kids.mapIt(toCbor(it)))))
-  if x.left.isSome:
-    e.add((cbor("left"), toCbor(x.left.get[])))
-  e.add((cbor("tag"), encDemoLeaf(x.tag)))
-  if x.twin.isSome:
-    e.add((cbor("twin"), encDemoPair(x.twin.get[])))
-  cborMap(e)
+  runEnc(stepEncDemoTree, addr x)
 
 proc fromChecked*(T: type DemoTree, v: CborValue): DemoTree =
-  var r = DemoTree()
-  r.kids = v.lookup("kids").get.items.mapIt(fromChecked(DemoTree, it))
-  block:
-    let f = v.lookup("left")
-    if f.isSome:
-      r.left = Opt.some(boxed(fromChecked(DemoTree, f.get)))
-  block:
-    let f = v.lookup("twin")
-    if f.isSome:
-      r.twin = Opt.some(boxed(decDemoPair(f.get)))
+  var r: DemoTree
+  runDec(stepDecDemoTree, v, addr r)
   r
+
+proc stepEncDemoV*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoV](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("x")
+  node.entries[k].value = cbor(uint64(x.x))
+  inc k
+
+proc stepDecDemoV*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoV](dst)
+  r[] = DemoV()
+  r.x = uint64(v.lookup("x").get.uint)
 
 proc toCbor*(x: DemoV): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("x"), cbor(uint64(x.x))))
-  cborMap(e)
+  runEnc(stepEncDemoV, addr x)
 
 proc fromChecked*(T: type DemoV, v: CborValue): DemoV =
-  var r = DemoV()
-  r.x = uint64(v.lookup("x").get.uint)
+  var r: DemoV
+  runDec(stepDecDemoV, v, addr r)
   r
 
-proc toCbor*(x: DemoValue): CborValue =
+proc stepEncDemoValue*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr DemoValue](src)
   case x.kind
   of DemoValueKind.Bool:
-    cbor(x.arm_Bool)
+    dst[] = cbor(x.arm_Bool)
   of DemoValueKind.Tstr:
-    cbor(x.arm_Tstr)
+    dst[] = cbor(x.arm_Tstr)
   of DemoValueKind.Uint64:
-    cbor(uint64(x.arm_Uint64))
+    dst[] = cbor(uint64(x.arm_Uint64))
 
-proc fromChecked*(T: type DemoValue, v: CborValue): DemoValue =
+proc stepDecDemoValue*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr DemoValue](dst)
   case generatedSchema().arm("demo.value#", v)
   of 0:
-    DemoValue(kind: DemoValueKind.Bool, arm_Bool: asBool(v))
+    r[] = DemoValue(kind: DemoValueKind.Bool, arm_Bool: asBool(v))
   of 1:
-    DemoValue(kind: DemoValueKind.Tstr, arm_Tstr: v.text)
+    r[] = DemoValue(kind: DemoValueKind.Tstr, arm_Tstr: v.text)
   of 2:
-    DemoValue(kind: DemoValueKind.Uint64, arm_Uint64: uint64(v.uint))
+    r[] = DemoValue(kind: DemoValueKind.Uint64, arm_Uint64: uint64(v.uint))
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: DemoValue): CborValue =
+  runEnc(stepEncDemoValue, addr x)
+
+proc fromChecked*(T: type DemoValue, v: CborValue): DemoValue =
+  var r: DemoValue
+  runDec(stepDecDemoValue, v, addr r)
+  r
 
 proc fromCbor*(T: type DemoEntry, v: CborValue): Result[DemoEntry, string] =
   ## A value checked against `demo.entry`.

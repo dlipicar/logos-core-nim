@@ -40,43 +40,77 @@ type
     m1*: cstring ## label
     m2*: uint64 ## value
 
+proc cOutStep_logos_meter_Changed_event_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_meter_Changed_event_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_meter_Changed_event_t*(a: var CallArena, v: CborValue, dst: var logos_meter_Changed_event_t, depth: int): Result[void, string]
 proc cIn_logos_meter_Changed_event_t*(src: logos_meter_Changed_event_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_meter_Reading_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_meter_Reading_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_meter_Reading_t*(a: var CallArena, v: CborValue, dst: var logos_meter_Reading_t, depth: int): Result[void, string]
 proc cIn_logos_meter_Reading_t*(src: logos_meter_Reading_t, depth: int): Result[CborValue, string]
 
+proc cOutStep_logos_meter_Changed_event_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_meter_Changed_event_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f1 = v.lookup("value").get
+    dst.m0 = uint64(f1.uint)
+  ok(false)
+
+proc cInStep_logos_meter_Changed_event_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_meter_Changed_event_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let value2 = cbor(uint64(src.m0))
+    f.dst[].entries.add((cbor("value"), value2))
+  ok(false)
+
 proc cOut_logos_meter_Changed_event_t*(a: var CallArena, v: CborValue, dst: var logos_meter_Changed_event_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f1 = v.lookup("value").get
-  dst.m0 = uint64(f1.uint)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_meter_Changed_event_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_meter_Changed_event_t*(src: logos_meter_Changed_event_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value2 = cbor(uint64(src.m0))
-  e.add((cbor("value"), value2))
-  ok(cborMap(e))
+  runIn(cInStep_logos_meter_Changed_event_t, addr src, depth)
+
+proc cOutStep_logos_meter_Reading_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_meter_Reading_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f3 = v.lookup("label")
+    if f3.isSome:
+      dst.m0 = true
+      dst.m1 = ?a.text(f3.get.text)
+    let f4 = v.lookup("value").get
+    dst.m2 = uint64(f4.uint)
+  ok(false)
+
+proc cInStep_logos_meter_Reading_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_meter_Reading_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    if src.m0:
+      let value5 = ?inText(src.m1)
+      f.dst[].entries.add((cbor("label"), value5))
+    let value6 = cbor(uint64(src.m2))
+    f.dst[].entries.add((cbor("value"), value6))
+  ok(false)
 
 proc cOut_logos_meter_Reading_t*(a: var CallArena, v: CborValue, dst: var logos_meter_Reading_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f3 = v.lookup("label")
-  if f3.isSome:
-    dst.m0 = true
-    dst.m1 = ?a.text(f3.get.text)
-  let f4 = v.lookup("value").get
-  dst.m2 = uint64(f4.uint)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_meter_Reading_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_meter_Reading_t*(src: logos_meter_Reading_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  if src.m0:
-    let value5 = ?inText(src.m1)
-    e.add((cbor("label"), value5))
-  let value6 = cbor(uint64(src.m2))
-  e.add((cbor("value"), value6))
-  ok(cborMap(e))
+  runIn(cInStep_logos_meter_Reading_t, addr src, depth)
 
 proc callRequest0(p2: uint32): Result[seq[byte], string] =
   ## `meter.read`'s request params from its typed inputs.

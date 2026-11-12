@@ -37,25 +37,42 @@ type
     m0*: cstring ## kind
     m1*: logos_metrics_types_Counter_t ## limit
 
+proc cOutStep_logos_sensor_NS_control_Settings_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_sensor_NS_control_Settings_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_sensor_NS_control_Settings_t*(a: var CallArena, v: CborValue, dst: var logos_sensor_NS_control_Settings_t, depth: int): Result[void, string]
 proc cIn_logos_sensor_NS_control_Settings_t*(src: logos_sensor_NS_control_Settings_t, depth: int): Result[CborValue, string]
 
+proc cOutStep_logos_sensor_NS_control_Settings_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_sensor_NS_control_Settings_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f1 = v.lookup("kind").get
+    dst.m0 = ?a.text(f1.text)
+    let f2 = v.lookup("limit").get
+    dst.m1 = logos_metrics_types_Counter_t(f2.uint)
+  ok(false)
+
+proc cInStep_logos_sensor_NS_control_Settings_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_sensor_NS_control_Settings_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let value3 = cbor("sensor")
+    f.dst[].entries.add((cbor("kind"), value3))
+    let value4 = cbor(uint64(src.m1))
+    f.dst[].entries.add((cbor("limit"), value4))
+  ok(false)
+
 proc cOut_logos_sensor_NS_control_Settings_t*(a: var CallArena, v: CborValue, dst: var logos_sensor_NS_control_Settings_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f1 = v.lookup("kind").get
-  dst.m0 = ?a.text(f1.text)
-  let f2 = v.lookup("limit").get
-  dst.m1 = logos_metrics_types_Counter_t(f2.uint)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_sensor_NS_control_Settings_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_sensor_NS_control_Settings_t*(src: logos_sensor_NS_control_Settings_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value3 = cbor("sensor")
-  e.add((cbor("kind"), value3))
-  let value4 = cbor(uint64(src.m1))
-  e.add((cbor("limit"), value4))
-  ok(cborMap(e))
+  runIn(cInStep_logos_sensor_NS_control_Settings_t, addr src, depth)
 
 proc callRequest0(p2: ptr logos_sensor_NS_control_Settings_t): Result[seq[byte], string] =
   ## `sensor.control.configure`'s request params from its typed inputs.

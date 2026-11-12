@@ -53,131 +53,237 @@ type
     m2*: cstring ## hash_suite
     m3*: array[32, uint8] ## schema_root
 
+proc cOutStep_logos_error_detail_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_error_detail_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_error_detail_t*(a: var CallArena, v: CborValue, dst: var logos_error_detail_t, depth: int): Result[void, string]
 proc cIn_logos_error_detail_t*(src: logos_error_detail_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_invalid_params_detail_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_invalid_params_detail_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_invalid_params_detail_t*(a: var CallArena, v: CborValue, dst: var logos_invalid_params_detail_t, depth: int): Result[void, string]
 proc cIn_logos_invalid_params_detail_t*(src: logos_invalid_params_detail_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_invalid_params_path_segment_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_invalid_params_path_segment_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_invalid_params_path_segment_t*(a: var CallArena, v: CborValue, dst: var logos_invalid_params_path_segment_t, depth: int): Result[void, string]
 proc cIn_logos_invalid_params_path_segment_t*(src: logos_invalid_params_path_segment_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_invalid_params_reason_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_invalid_params_reason_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_invalid_params_reason_t*(a: var CallArena, v: CborValue, dst: var logos_invalid_params_reason_t, depth: int): Result[void, string]
 proc cIn_logos_invalid_params_reason_t*(src: logos_invalid_params_reason_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_schema_commitment_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_schema_commitment_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_schema_commitment_t*(a: var CallArena, v: CborValue, dst: var logos_schema_commitment_t, depth: int): Result[void, string]
 proc cIn_logos_schema_commitment_t*(src: logos_schema_commitment_t, depth: int): Result[CborValue, string]
 
+proc cOutStep_logos_error_detail_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_error_detail_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    ?a.bytes(v.bytes, dst.m0, dst.m1)
+  ok(false)
+
+proc cInStep_logos_error_detail_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_error_detail_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = ?inBytes(src.m0, src.m1)
+  ok(false)
+
 proc cOut_logos_error_detail_t*(a: var CallArena, v: CborValue, dst: var logos_error_detail_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  ?a.bytes(v.bytes, dst.m0, dst.m1)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_error_detail_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_error_detail_t*(src: logos_error_detail_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(?inBytes(src.m0, src.m1))
+  runIn(cInStep_logos_error_detail_t, addr src, depth)
+
+proc cOutStep_logos_invalid_params_detail_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_invalid_params_detail_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f1 = v.lookup("path")
+    if f1.isSome:
+      dst.m0 = true
+      let items2 = f1.get.items
+      let arr3 = ?a.list(logos_invalid_params_path_segment_t, items2.len)
+      dst.m1 = arr3
+      dst.m2 = csize_t(items2.len)
+      f.cur = f1.get
+      f.i = 0
+  if f.pc == 1:
+    if f.cur != nil and f.i < f.cur.items.len:
+      child = OutFrame(step: cOutStep_logos_invalid_params_path_segment_t, v: f.cur.items[f.i], dst: addr dst.m1[f.i], depth: depth + 1)
+      inc f.i
+      return ok(true)
+    f.cur = nil
+    f.pc = 2
+  if f.pc == 2:
+    f.pc = 3
+    let f4 = v.lookup("reason").get
+    child = OutFrame(step: cOutStep_logos_invalid_params_reason_t, v: f4, dst: addr dst.m3, depth: depth + 1)
+    return ok(true)
+  ok(false)
+
+proc cInStep_logos_invalid_params_detail_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_invalid_params_detail_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    if src.m0:
+      let n5 = ?counted(src.m1, src.m2)
+      f.dst[].entries.add((cbor("path"), newCborArray(n5)))
+      f.cur = f.dst[].entries[^1].value
+      f.i = 0
+  if f.pc == 1:
+    if f.cur != nil and f.i < f.cur.items.len:
+      child = InFrame(step: cInStep_logos_invalid_params_path_segment_t, src: addr src.m1[f.i], dst: addr f.cur.items[f.i], depth: depth + 1)
+      inc f.i
+      return ok(true)
+    f.cur = nil
+    f.pc = 2
+  if f.pc == 2:
+    f.pc = 3
+    f.dst[].entries.add((cbor("reason"), CborValue(nil)))
+    child = InFrame(step: cInStep_logos_invalid_params_reason_t, src: addr src.m3, dst: addr f.dst[].entries[^1].value, depth: depth + 1)
+    return ok(true)
+  ok(false)
 
 proc cOut_logos_invalid_params_detail_t*(a: var CallArena, v: CborValue, dst: var logos_invalid_params_detail_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f1 = v.lookup("path")
-  if f1.isSome:
-    dst.m0 = true
-    let items2 = f1.get.items
-    let arr3 = ?a.list(logos_invalid_params_path_segment_t, items2.len)
-    for i, it in items2:
-      ?cOut_logos_invalid_params_path_segment_t(a, it, arr3[i], depth + 1)
-    dst.m1 = arr3
-    dst.m2 = csize_t(items2.len)
-  let f4 = v.lookup("reason").get
-  ?cOut_logos_invalid_params_reason_t(a, f4, dst.m3, depth + 1)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_invalid_params_detail_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_invalid_params_detail_t*(src: logos_invalid_params_detail_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  if src.m0:
-    let n5 = ?counted(src.m1, src.m2)
-    var items6 = newSeq[CborValue](n5)
-    for i in 0 ..< n5:
-      items6[i] = ?cIn_logos_invalid_params_path_segment_t(src.m1[i], depth + 1)
-    let value7 = cborArray(items6)
-    e.add((cbor("path"), value7))
-  let value8 = ?cIn_logos_invalid_params_reason_t(src.m3, depth + 1)
-  e.add((cbor("reason"), value8))
-  ok(cborMap(e))
+  runIn(cInStep_logos_invalid_params_detail_t, addr src, depth)
+
+proc cOutStep_logos_invalid_params_path_segment_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_invalid_params_path_segment_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case commonSchema().arm("logos.invalid_params_path_segment#", v)
+    of 0:
+      dst.kind = 0'u32
+      dst.value.m0 = ?a.text(v.text)
+    of 1:
+      dst.kind = 1'u32
+      dst.value.m1 = uint64(v.uint)
+    else:
+      return err("no arm of logos.invalid_params_path_segment")
+  ok(false)
+
+proc cInStep_logos_invalid_params_path_segment_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_invalid_params_path_segment_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case src.kind
+    of 0'u32:
+      f.dst[] = ?inText(src.value.m0)
+    of 1'u32:
+      f.dst[] = cbor(uint64(src.value.m1))
+    else:
+      return err("the discriminant " & $src.kind & " names no arm of logos.invalid_params_path_segment")
+  ok(false)
 
 proc cOut_logos_invalid_params_path_segment_t*(a: var CallArena, v: CborValue, dst: var logos_invalid_params_path_segment_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  case commonSchema().arm("logos.invalid_params_path_segment#", v)
-  of 0:
-    dst.kind = 0'u32
-    dst.value.m0 = ?a.text(v.text)
-  of 1:
-    dst.kind = 1'u32
-    dst.value.m1 = uint64(v.uint)
-  else:
-    return err("no arm of logos.invalid_params_path_segment")
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_invalid_params_path_segment_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_invalid_params_path_segment_t*(src: logos_invalid_params_path_segment_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  case src.kind
-  of 0'u32:
-    ok(?inText(src.value.m0))
-  of 1'u32:
-    ok(cbor(uint64(src.value.m1)))
-  else:
-    err("the discriminant " & $src.kind & " names no arm of logos.invalid_params_path_segment")
+  runIn(cInStep_logos_invalid_params_path_segment_t, addr src, depth)
+
+proc cOutStep_logos_invalid_params_reason_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_invalid_params_reason_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case commonSchema().arm("logos.invalid_params_reason#", v)
+    of 3:
+      dst.kind = 0'u32
+    of 0:
+      dst.kind = 1'u32
+    of 2:
+      dst.kind = 2'u32
+    of 1:
+      dst.kind = 3'u32
+    else:
+      return err("no arm of logos.invalid_params_reason")
+  ok(false)
+
+proc cInStep_logos_invalid_params_reason_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_invalid_params_reason_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case src.kind
+    of 0'u32:
+      f.dst[] = cbor("configuration-schema-mismatch")
+    of 1'u32:
+      f.dst[] = cbor("malformed-cbor")
+    of 2'u32:
+      f.dst[] = cbor("non-deterministic-cbor")
+    of 3'u32:
+      f.dst[] = cbor("schema-mismatch")
+    else:
+      return err("the discriminant " & $src.kind & " names no arm of logos.invalid_params_reason")
+  ok(false)
 
 proc cOut_logos_invalid_params_reason_t*(a: var CallArena, v: CborValue, dst: var logos_invalid_params_reason_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  case commonSchema().arm("logos.invalid_params_reason#", v)
-  of 3:
-    dst.kind = 0'u32
-  of 0:
-    dst.kind = 1'u32
-  of 2:
-    dst.kind = 2'u32
-  of 1:
-    dst.kind = 3'u32
-  else:
-    return err("no arm of logos.invalid_params_reason")
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_invalid_params_reason_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_invalid_params_reason_t*(src: logos_invalid_params_reason_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  case src.kind
-  of 0'u32:
-    ok(cbor("configuration-schema-mismatch"))
-  of 1'u32:
-    ok(cbor("malformed-cbor"))
-  of 2'u32:
-    ok(cbor("non-deterministic-cbor"))
-  of 3'u32:
-    ok(cbor("schema-mismatch"))
-  else:
-    err("the discriminant " & $src.kind & " names no arm of logos.invalid_params_reason")
+  runIn(cInStep_logos_invalid_params_reason_t, addr src, depth)
+
+proc cOutStep_logos_schema_commitment_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_schema_commitment_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f6 = v.lookup("commitment_model").get
+    dst.m0 = ?a.text(f6.text)
+    let f7 = v.lookup("hash_profile").get
+    dst.m1 = ?a.text(f7.text)
+    let f8 = v.lookup("hash_suite").get
+    dst.m2 = ?a.text(f8.text)
+    let f9 = v.lookup("schema_root").get
+    ?fill(f9.bytes, dst.m3)
+  ok(false)
+
+proc cInStep_logos_schema_commitment_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_schema_commitment_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let value10 = ?inText(src.m0)
+    f.dst[].entries.add((cbor("commitment_model"), value10))
+    let value11 = ?inText(src.m1)
+    f.dst[].entries.add((cbor("hash_profile"), value11))
+    let value12 = ?inText(src.m2)
+    f.dst[].entries.add((cbor("hash_suite"), value12))
+    let value13 = cbor(src.m3)
+    f.dst[].entries.add((cbor("schema_root"), value13))
+  ok(false)
 
 proc cOut_logos_schema_commitment_t*(a: var CallArena, v: CborValue, dst: var logos_schema_commitment_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f9 = v.lookup("commitment_model").get
-  dst.m0 = ?a.text(f9.text)
-  let f10 = v.lookup("hash_profile").get
-  dst.m1 = ?a.text(f10.text)
-  let f11 = v.lookup("hash_suite").get
-  dst.m2 = ?a.text(f11.text)
-  let f12 = v.lookup("schema_root").get
-  ?fill(f12.bytes, dst.m3)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_schema_commitment_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_schema_commitment_t*(src: logos_schema_commitment_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value13 = ?inText(src.m0)
-  e.add((cbor("commitment_model"), value13))
-  let value14 = ?inText(src.m1)
-  e.add((cbor("hash_profile"), value14))
-  let value15 = ?inText(src.m2)
-  e.add((cbor("hash_suite"), value15))
-  let value16 = cbor(src.m3)
-  e.add((cbor("schema_root"), value16))
-  ok(cborMap(e))
+  runIn(cInStep_logos_schema_commitment_t, addr src, depth)
 
 proc commonMirrorLayout*(): seq[(string, int)] =
   ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).

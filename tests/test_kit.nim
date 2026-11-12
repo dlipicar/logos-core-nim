@@ -480,16 +480,17 @@ suite "ifc.kit: typed provider functions (INTERFACE §2.3, §2.4, §2.7.1) [IMPL
     check shapesCalls(ctx) == 0
     shapesDestroy(ctx)
 
-  test "[IFC-0925] [IFC-0926] [IFC-0927] [IFC-0928] [IFC-0929] the payload depth limit holds for typed inputs, on a thread with 1 MiB of stack [IMPL]":
-    ## The converters, like the dispatch codecs, recurse once per nesting
-    ## level: a provider entry at the limit needs up to 1 MiB of stack (I72).
+  test "[IFC-0925] [IFC-0926] [IFC-0927] [IFC-0928] [IFC-0929] the payload depth limit holds for typed inputs, on a thread with 512 KiB of stack [IMPL]":
+    ## The converters and the dispatch codecs keep their frames on the heap, so
+    ## a provider entry at the limit fits in a macOS or iOS secondary thread's
+    ## default stack (I79).
     let ctx = newInstance(shapesInit)
     let base = arenaBlocks()
-    let deepest = typedReflectOnStack(linked, ctx, rvDeepest, 1 shl 20)
+    let deepest = typedReflectOnStack(linked, ctx, rvDeepest, 512 * 1024)
     check deepest.status.isOk and deepest.same
     check deepest.text.count("left=") == 1021
     for v in [rvTooDeep, rvCycle]:
-      let t = typedReflectOnStack(linked, ctx, v, 1 shl 20)
+      let t = typedReflectOnStack(linked, ctx, v, 512 * 1024)
       check t.code == ecInvalidParams and t.untouched
       check t.status.error.detail.isNone
     check shapesCalls(ctx) == 1

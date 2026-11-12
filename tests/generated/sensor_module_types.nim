@@ -40,62 +40,129 @@ type
 
 proc toCbor*(x: SensorNSControlConfigureRequest): CborValue
 proc fromChecked*(T: type SensorNSControlConfigureRequest, v: CborValue): SensorNSControlConfigureRequest
+proc stepEncSensorNSControlConfigureRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecSensorNSControlConfigureRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: SensorNSControlConfigureResponse): CborValue
 proc fromChecked*(T: type SensorNSControlConfigureResponse, v: CborValue): SensorNSControlConfigureResponse
+proc stepEncSensorNSControlConfigureResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecSensorNSControlConfigureResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: SensorNSControlSettings): CborValue
 proc fromChecked*(T: type SensorNSControlSettings, v: CborValue): SensorNSControlSettings
+proc stepEncSensorNSControlSettings*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecSensorNSControlSettings*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: MetricsProviderSnapshotRequest): CborValue
 proc fromChecked*(T: type MetricsProviderSnapshotRequest, v: CborValue): MetricsProviderSnapshotRequest
+proc stepEncMetricsProviderSnapshotRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecMetricsProviderSnapshotRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: MetricsProviderSnapshotResponse): CborValue
 proc fromChecked*(T: type MetricsProviderSnapshotResponse, v: CborValue): MetricsProviderSnapshotResponse
+proc stepEncMetricsProviderSnapshotResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecMetricsProviderSnapshotResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc encMetricsTypesCounter*(x: MetricsTypesCounter): CborValue
 proc decMetricsTypesCounter*(v: CborValue): MetricsTypesCounter
 
+proc stepEncSensorNSControlConfigureRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr SensorNSControlConfigureRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("settings")
+  w.later(stepEncSensorNSControlSettings, addr x.settings, addr node.entries[k].value)
+  inc k
+
+proc stepDecSensorNSControlConfigureRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr SensorNSControlConfigureRequest](dst)
+  r[] = SensorNSControlConfigureRequest()
+  let f1 = v.lookup("settings").get
+  w.later(stepDecSensorNSControlSettings, f1, addr r.settings)
+
 proc toCbor*(x: SensorNSControlConfigureRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("settings"), toCbor(x.settings)))
-  cborMap(e)
+  runEnc(stepEncSensorNSControlConfigureRequest, addr x)
 
 proc fromChecked*(T: type SensorNSControlConfigureRequest, v: CborValue): SensorNSControlConfigureRequest =
-  var r = SensorNSControlConfigureRequest()
-  r.settings = fromChecked(SensorNSControlSettings, v.lookup("settings").get)
+  var r: SensorNSControlConfigureRequest
+  runDec(stepDecSensorNSControlConfigureRequest, v, addr r)
   r
+
+proc stepEncSensorNSControlConfigureResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr SensorNSControlConfigureResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecSensorNSControlConfigureResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr SensorNSControlConfigureResponse](dst)
+  r[] = SensorNSControlConfigureResponse()
 
 proc toCbor*(x: SensorNSControlConfigureResponse): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncSensorNSControlConfigureResponse, addr x)
 
 proc fromChecked*(T: type SensorNSControlConfigureResponse, v: CborValue): SensorNSControlConfigureResponse =
-  var r = SensorNSControlConfigureResponse()
+  var r: SensorNSControlConfigureResponse
+  runDec(stepDecSensorNSControlConfigureResponse, v, addr r)
   r
+
+proc stepEncSensorNSControlSettings*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr SensorNSControlSettings](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("sensor")
+  inc k
+  node.entries[k].key = cbor("limit")
+  node.entries[k].value = encMetricsTypesCounter(x.limit)
+  inc k
+
+proc stepDecSensorNSControlSettings*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr SensorNSControlSettings](dst)
+  r[] = SensorNSControlSettings()
+  r.limit = decMetricsTypesCounter(v.lookup("limit").get)
 
 proc toCbor*(x: SensorNSControlSettings): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("kind"), cbor("sensor")))
-  e.add((cbor("limit"), encMetricsTypesCounter(x.limit)))
-  cborMap(e)
+  runEnc(stepEncSensorNSControlSettings, addr x)
 
 proc fromChecked*(T: type SensorNSControlSettings, v: CborValue): SensorNSControlSettings =
-  var r = SensorNSControlSettings()
-  r.limit = decMetricsTypesCounter(v.lookup("limit").get)
+  var r: SensorNSControlSettings
+  runDec(stepDecSensorNSControlSettings, v, addr r)
   r
+
+proc stepEncMetricsProviderSnapshotRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr MetricsProviderSnapshotRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecMetricsProviderSnapshotRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr MetricsProviderSnapshotRequest](dst)
+  r[] = MetricsProviderSnapshotRequest()
 
 proc toCbor*(x: MetricsProviderSnapshotRequest): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncMetricsProviderSnapshotRequest, addr x)
 
 proc fromChecked*(T: type MetricsProviderSnapshotRequest, v: CborValue): MetricsProviderSnapshotRequest =
-  var r = MetricsProviderSnapshotRequest()
+  var r: MetricsProviderSnapshotRequest
+  runDec(stepDecMetricsProviderSnapshotRequest, v, addr r)
   r
 
+proc stepEncMetricsProviderSnapshotResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr MetricsProviderSnapshotResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("count")
+  node.entries[k].value = cbor(uint64(x.count))
+  inc k
+
+proc stepDecMetricsProviderSnapshotResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr MetricsProviderSnapshotResponse](dst)
+  r[] = MetricsProviderSnapshotResponse()
+  r.count = uint64(v.lookup("count").get.uint)
+
 proc toCbor*(x: MetricsProviderSnapshotResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("count"), cbor(uint64(x.count))))
-  cborMap(e)
+  runEnc(stepEncMetricsProviderSnapshotResponse, addr x)
 
 proc fromChecked*(T: type MetricsProviderSnapshotResponse, v: CborValue): MetricsProviderSnapshotResponse =
-  var r = MetricsProviderSnapshotResponse()
-  r.count = uint64(v.lookup("count").get.uint)
+  var r: MetricsProviderSnapshotResponse
+  runDec(stepDecMetricsProviderSnapshotResponse, v, addr r)
   r
 
 proc encMetricsTypesCounter*(x: MetricsTypesCounter): CborValue =

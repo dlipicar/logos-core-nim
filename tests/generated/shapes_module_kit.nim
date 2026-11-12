@@ -357,554 +357,1139 @@ type
     kind*: logos_shapes_Value_KIND_t
     value*: logos_shapes_Value_t_value
 
+proc cOutStep_logos_shapes_Blob_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Blob_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Blob_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Blob_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Blob_t*(src: logos_shapes_Blob_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Digest_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Digest_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Digest_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Digest_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Digest_t*(src: logos_shapes_Digest_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Entry_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Entry_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Entry_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Entry_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Entry_t*(src: logos_shapes_Entry_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Entry_AR_Dir_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Entry_AR_Dir_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Entry_AR_Dir_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Entry_AR_Dir_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Entry_AR_Dir_t*(src: logos_shapes_Entry_AR_Dir_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Entry_AR_File_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Entry_AR_File_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Entry_AR_File_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Entry_AR_File_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Entry_AR_File_t*(src: logos_shapes_Entry_AR_File_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Names_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Names_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Names_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Names_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Names_t*(src: logos_shapes_Names_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Pair_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Pair_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Pair_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pair_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Pair_t*(src: logos_shapes_Pair_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Pick_request_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Pick_request_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Pick_request_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_request_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Pick_request_t*(src: logos_shapes_Pick_request_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Pick_request_AR_Id_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Pick_request_AR_Id_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Pick_request_AR_Id_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_request_AR_Id_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Pick_request_AR_Id_t*(src: logos_shapes_Pick_request_AR_Id_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Pick_request_AR_Name_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Pick_request_AR_Name_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Pick_request_AR_Name_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_request_AR_Name_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Pick_request_AR_Name_t*(src: logos_shapes_Pick_request_AR_Name_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Pick_response_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Pick_response_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Pick_response_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Pick_response_t*(src: logos_shapes_Pick_response_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Pick_response_AR_False_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Pick_response_AR_False_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Pick_response_AR_False_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_AR_False_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Pick_response_AR_False_t*(src: logos_shapes_Pick_response_AR_False_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Pick_response_AR_True_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Pick_response_AR_True_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Pick_response_AR_True_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_AR_True_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Pick_response_AR_True_t*(src: logos_shapes_Pick_response_AR_True_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Tree_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Tree_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Tree_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Tree_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Tree_t*(src: logos_shapes_Tree_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Value_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Value_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Value_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Value_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Value_t*(src: logos_shapes_Value_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_request_E_LI_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_request_E_LI_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_request_E_LI_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_E_LI_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_request_E_LI_t*(src: logos_shapes_Reflect_request_E_LI_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_request_F_LI_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_request_F_LI_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_request_F_LI_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_F_LI_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_request_F_LI_t*(src: logos_shapes_Reflect_request_F_LI_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_request_G_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_request_G_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_request_G_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_G_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_request_G_t*(src: logos_shapes_Reflect_request_G_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_request_G_AR_Tuple1_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_request_G_AR_Tuple1_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_request_G_AR_Tuple1_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_G_AR_Tuple1_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_request_G_AR_Tuple1_t*(src: logos_shapes_Reflect_request_G_AR_Tuple1_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_request_G_AR_Tuple2_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_request_G_AR_Tuple2_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_request_G_AR_Tuple2_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_G_AR_Tuple2_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_request_G_AR_Tuple2_t*(src: logos_shapes_Reflect_request_G_AR_Tuple2_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_request_H_TU1_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_request_H_TU1_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_request_H_TU1_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_H_TU1_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_request_H_TU1_t*(src: logos_shapes_Reflect_request_H_TU1_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_request_V_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_request_V_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_request_V_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_V_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_request_V_t*(src: logos_shapes_Reflect_request_V_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_response_E_LI_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_response_E_LI_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_response_E_LI_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_E_LI_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_response_E_LI_t*(src: logos_shapes_Reflect_response_E_LI_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_response_F_LI_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_response_F_LI_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_response_F_LI_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_F_LI_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_response_F_LI_t*(src: logos_shapes_Reflect_response_F_LI_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_response_G_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_response_G_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_response_G_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_G_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_response_G_t*(src: logos_shapes_Reflect_response_G_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_response_G_AR_Tuple1_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_response_G_AR_Tuple1_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_response_G_AR_Tuple1_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_G_AR_Tuple1_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_response_G_AR_Tuple1_t*(src: logos_shapes_Reflect_response_G_AR_Tuple1_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_response_G_AR_Tuple2_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_response_G_AR_Tuple2_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_response_G_AR_Tuple2_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_G_AR_Tuple2_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_response_G_AR_Tuple2_t*(src: logos_shapes_Reflect_response_G_AR_Tuple2_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_response_H_TU1_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_response_H_TU1_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_response_H_TU1_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_H_TU1_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_response_H_TU1_t*(src: logos_shapes_Reflect_response_H_TU1_t, depth: int): Result[CborValue, string]
+proc cOutStep_logos_shapes_Reflect_response_V_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]
+proc cInStep_logos_shapes_Reflect_response_V_t*(f: var InFrame, child: var InFrame): Result[bool, string]
 proc cOut_logos_shapes_Reflect_response_V_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_V_t, depth: int): Result[void, string]
 proc cIn_logos_shapes_Reflect_response_V_t*(src: logos_shapes_Reflect_response_V_t, depth: int): Result[CborValue, string]
 
+proc cOutStep_logos_shapes_Blob_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Blob_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    ?a.bytes(v.bytes, dst.m0, dst.m1)
+  ok(false)
+
+proc cInStep_logos_shapes_Blob_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Blob_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = ?inBytes(src.m0, src.m1)
+  ok(false)
+
 proc cOut_logos_shapes_Blob_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Blob_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  ?a.bytes(v.bytes, dst.m0, dst.m1)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Blob_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Blob_t*(src: logos_shapes_Blob_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(?inBytes(src.m0, src.m1))
+  runIn(cInStep_logos_shapes_Blob_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Digest_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Digest_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    ?fill(v.bytes, dst.m0)
+  ok(false)
+
+proc cInStep_logos_shapes_Digest_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Digest_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cbor(src.m0)
+  ok(false)
 
 proc cOut_logos_shapes_Digest_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Digest_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  ?fill(v.bytes, dst.m0)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Digest_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Digest_t*(src: logos_shapes_Digest_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cbor(src.m0))
+  runIn(cInStep_logos_shapes_Digest_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Entry_AR_Dir_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Entry_AR_Dir_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f1 = v.lookup("entries").get
+    let items2 = f1.items
+    let arr3 = ?a.list(cstring, items2.len)
+    dst.m0 = arr3
+    dst.m1 = csize_t(items2.len)
+    for i, it in items2:
+      arr3[i] = ?a.text(it.text)
+    let f4 = v.lookup("kind").get
+    dst.m2 = ?a.text(f4.text)
+    let f5 = v.lookup("path").get
+    dst.m3 = ?a.text(f5.text)
+  ok(false)
+
+proc cInStep_logos_shapes_Entry_AR_Dir_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Entry_AR_Dir_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let n6 = ?counted(src.m0, src.m1)
+    f.dst[].entries.add((cbor("entries"), newCborArray(n6)))
+    for i in 0 ..< n6:
+      f.dst[].entries[^1].value.items[i] = ?inText(src.m0[i])
+    let value7 = ?inText(src.m2)
+    f.dst[].entries.add((cbor("kind"), value7))
+    let value8 = ?inText(src.m3)
+    f.dst[].entries.add((cbor("path"), value8))
+  ok(false)
 
 proc cOut_logos_shapes_Entry_AR_Dir_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Entry_AR_Dir_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f1 = v.lookup("entries").get
-  let items2 = f1.items
-  let arr3 = ?a.list(cstring, items2.len)
-  for i, it in items2:
-    arr3[i] = ?a.text(it.text)
-  dst.m0 = arr3
-  dst.m1 = csize_t(items2.len)
-  let f4 = v.lookup("kind").get
-  dst.m2 = ?a.text(f4.text)
-  let f5 = v.lookup("path").get
-  dst.m3 = ?a.text(f5.text)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Entry_AR_Dir_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Entry_AR_Dir_t*(src: logos_shapes_Entry_AR_Dir_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let n6 = ?counted(src.m0, src.m1)
-  var items7 = newSeq[CborValue](n6)
-  for i in 0 ..< n6:
-    items7[i] = ?inText(src.m0[i])
-  let value8 = cborArray(items7)
-  e.add((cbor("entries"), value8))
-  let value9 = ?inText(src.m2)
-  e.add((cbor("kind"), value9))
-  let value10 = ?inText(src.m3)
-  e.add((cbor("path"), value10))
-  ok(cborMap(e))
+  runIn(cInStep_logos_shapes_Entry_AR_Dir_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Entry_AR_File_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Entry_AR_File_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f9 = v.lookup("kind").get
+    dst.m0 = ?a.text(f9.text)
+    let f10 = v.lookup("path").get
+    dst.m1 = ?a.text(f10.text)
+  ok(false)
+
+proc cInStep_logos_shapes_Entry_AR_File_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Entry_AR_File_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let value11 = ?inText(src.m0)
+    f.dst[].entries.add((cbor("kind"), value11))
+    let value12 = ?inText(src.m1)
+    f.dst[].entries.add((cbor("path"), value12))
+  ok(false)
 
 proc cOut_logos_shapes_Entry_AR_File_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Entry_AR_File_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f11 = v.lookup("kind").get
-  dst.m0 = ?a.text(f11.text)
-  let f12 = v.lookup("path").get
-  dst.m1 = ?a.text(f12.text)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Entry_AR_File_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Entry_AR_File_t*(src: logos_shapes_Entry_AR_File_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value13 = ?inText(src.m0)
-  e.add((cbor("kind"), value13))
-  let value14 = ?inText(src.m1)
-  e.add((cbor("path"), value14))
-  ok(cborMap(e))
+  runIn(cInStep_logos_shapes_Entry_AR_File_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Entry_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Entry_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case kitSchema().arm("shapes.entry#", v)
+    of 1:
+      dst.kind = 0'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Entry_AR_Dir_t, v: v, dst: addr dst.value.m0, depth: depth + 1)
+      return ok(true)
+    of 0:
+      dst.kind = 1'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Entry_AR_File_t, v: v, dst: addr dst.value.m1, depth: depth + 1)
+      return ok(true)
+    else:
+      return err("no arm of shapes.entry")
+  ok(false)
+
+proc cInStep_logos_shapes_Entry_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Entry_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case src.kind
+    of 0'u32:
+      child = InFrame(step: cInStep_logos_shapes_Entry_AR_Dir_t, src: addr src.value.m0, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    of 1'u32:
+      child = InFrame(step: cInStep_logos_shapes_Entry_AR_File_t, src: addr src.value.m1, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    else:
+      return err("the discriminant " & $src.kind & " names no arm of shapes.entry")
+  ok(false)
 
 proc cOut_logos_shapes_Entry_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Entry_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  case kitSchema().arm("shapes.entry#", v)
-  of 1:
-    dst.kind = 0'u32
-    ?cOut_logos_shapes_Entry_AR_Dir_t(a, v, dst.value.m0, depth + 1)
-  of 0:
-    dst.kind = 1'u32
-    ?cOut_logos_shapes_Entry_AR_File_t(a, v, dst.value.m1, depth + 1)
-  else:
-    return err("no arm of shapes.entry")
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Entry_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Entry_t*(src: logos_shapes_Entry_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  case src.kind
-  of 0'u32:
-    ok(?cIn_logos_shapes_Entry_AR_Dir_t(src.value.m0, depth + 1))
-  of 1'u32:
-    ok(?cIn_logos_shapes_Entry_AR_File_t(src.value.m1, depth + 1))
-  else:
-    err("the discriminant " & $src.kind & " names no arm of shapes.entry")
+  runIn(cInStep_logos_shapes_Entry_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Names_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Names_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let items13 = v.items
+    let arr14 = ?a.list(logos_tstr_size_1_8_t, items13.len)
+    dst.m0 = arr14
+    dst.m1 = csize_t(items13.len)
+    for i, it in items13:
+      arr14[i] = ?a.text(it.text)
+  ok(false)
+
+proc cInStep_logos_shapes_Names_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Names_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let n15 = ?counted(src.m0, src.m1)
+    f.dst[] = newCborArray(n15)
+    for i in 0 ..< n15:
+      f.dst[].items[i] = ?inText(src.m0[i])
+  ok(false)
 
 proc cOut_logos_shapes_Names_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Names_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let items15 = v.items
-  let arr16 = ?a.list(logos_tstr_size_1_8_t, items15.len)
-  for i, it in items15:
-    arr16[i] = ?a.text(it.text)
-  dst.m0 = arr16
-  dst.m1 = csize_t(items15.len)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Names_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Names_t*(src: logos_shapes_Names_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  let n17 = ?counted(src.m0, src.m1)
-  var items18 = newSeq[CborValue](n17)
-  for i in 0 ..< n17:
-    items18[i] = ?inText(src.m0[i])
-  ok(cborArray(items18))
+  runIn(cInStep_logos_shapes_Names_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Pair_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Pair_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let p16 = ?a.boxed(logos_shapes_Tree_t)
+    dst.m0 = p16
+    child = OutFrame(step: cOutStep_logos_shapes_Tree_t, v: v.items[0], dst: p16, depth: depth + 1)
+    return ok(true)
+  if f.pc == 1:
+    f.pc = 2
+    dst.m1 = uint64(v.items[1].uint)
+  ok(false)
+
+proc cInStep_logos_shapes_Pair_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Pair_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = newCborArray(2)
+    let p17 = ?present(src.m0)
+    child = InFrame(step: cInStep_logos_shapes_Tree_t, src: p17, dst: addr f.dst[].items[0], depth: depth + 1)
+    return ok(true)
+  if f.pc == 1:
+    f.pc = 2
+    f.dst[].items[1] = cbor(uint64(src.m1))
+  ok(false)
 
 proc cOut_logos_shapes_Pair_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pair_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let p19 = ?a.boxed(logos_shapes_Tree_t)
-  ?cOut_logos_shapes_Tree_t(a, v.items[0], p19[], depth + 1)
-  dst.m0 = p19
-  dst.m1 = uint64(v.items[1].uint)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Pair_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Pair_t*(src: logos_shapes_Pair_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cborArray(?cIn_logos_shapes_Tree_t((?present(src.m0))[], depth + 1), cbor(uint64(src.m1))))
+  runIn(cInStep_logos_shapes_Pair_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Pick_request_AR_Id_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Pick_request_AR_Id_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f18 = v.lookup("by").get
+    dst.m0 = ?a.text(f18.text)
+    let f19 = v.lookup("id").get
+    dst.m1 = uint64(f19.uint)
+  ok(false)
+
+proc cInStep_logos_shapes_Pick_request_AR_Id_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Pick_request_AR_Id_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let value20 = ?inText(src.m0)
+    f.dst[].entries.add((cbor("by"), value20))
+    let value21 = cbor(uint64(src.m1))
+    f.dst[].entries.add((cbor("id"), value21))
+  ok(false)
 
 proc cOut_logos_shapes_Pick_request_AR_Id_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_request_AR_Id_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f20 = v.lookup("by").get
-  dst.m0 = ?a.text(f20.text)
-  let f21 = v.lookup("id").get
-  dst.m1 = uint64(f21.uint)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Pick_request_AR_Id_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Pick_request_AR_Id_t*(src: logos_shapes_Pick_request_AR_Id_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value22 = ?inText(src.m0)
-  e.add((cbor("by"), value22))
-  let value23 = cbor(uint64(src.m1))
-  e.add((cbor("id"), value23))
-  ok(cborMap(e))
+  runIn(cInStep_logos_shapes_Pick_request_AR_Id_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Pick_request_AR_Name_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Pick_request_AR_Name_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f22 = v.lookup("by").get
+    dst.m0 = ?a.text(f22.text)
+    let f23 = v.lookup("name").get
+    dst.m1 = ?a.text(f23.text)
+  ok(false)
+
+proc cInStep_logos_shapes_Pick_request_AR_Name_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Pick_request_AR_Name_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let value24 = ?inText(src.m0)
+    f.dst[].entries.add((cbor("by"), value24))
+    let value25 = ?inText(src.m1)
+    f.dst[].entries.add((cbor("name"), value25))
+  ok(false)
 
 proc cOut_logos_shapes_Pick_request_AR_Name_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_request_AR_Name_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f24 = v.lookup("by").get
-  dst.m0 = ?a.text(f24.text)
-  let f25 = v.lookup("name").get
-  dst.m1 = ?a.text(f25.text)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Pick_request_AR_Name_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Pick_request_AR_Name_t*(src: logos_shapes_Pick_request_AR_Name_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value26 = ?inText(src.m0)
-  e.add((cbor("by"), value26))
-  let value27 = ?inText(src.m1)
-  e.add((cbor("name"), value27))
-  ok(cborMap(e))
+  runIn(cInStep_logos_shapes_Pick_request_AR_Name_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Pick_request_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Pick_request_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case kitSchema().arm("shapes.pick_request#", v)
+    of 0:
+      dst.kind = 0'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Pick_request_AR_Id_t, v: v, dst: addr dst.value.m0, depth: depth + 1)
+      return ok(true)
+    of 1:
+      dst.kind = 1'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Pick_request_AR_Name_t, v: v, dst: addr dst.value.m1, depth: depth + 1)
+      return ok(true)
+    else:
+      return err("no arm of shapes.pick_request")
+  ok(false)
+
+proc cInStep_logos_shapes_Pick_request_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Pick_request_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case src.kind
+    of 0'u32:
+      child = InFrame(step: cInStep_logos_shapes_Pick_request_AR_Id_t, src: addr src.value.m0, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    of 1'u32:
+      child = InFrame(step: cInStep_logos_shapes_Pick_request_AR_Name_t, src: addr src.value.m1, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    else:
+      return err("the discriminant " & $src.kind & " names no arm of shapes.pick_request")
+  ok(false)
 
 proc cOut_logos_shapes_Pick_request_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_request_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  case kitSchema().arm("shapes.pick_request#", v)
-  of 0:
-    dst.kind = 0'u32
-    ?cOut_logos_shapes_Pick_request_AR_Id_t(a, v, dst.value.m0, depth + 1)
-  of 1:
-    dst.kind = 1'u32
-    ?cOut_logos_shapes_Pick_request_AR_Name_t(a, v, dst.value.m1, depth + 1)
-  else:
-    return err("no arm of shapes.pick_request")
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Pick_request_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Pick_request_t*(src: logos_shapes_Pick_request_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  case src.kind
-  of 0'u32:
-    ok(?cIn_logos_shapes_Pick_request_AR_Id_t(src.value.m0, depth + 1))
-  of 1'u32:
-    ok(?cIn_logos_shapes_Pick_request_AR_Name_t(src.value.m1, depth + 1))
-  else:
-    err("the discriminant " & $src.kind & " names no arm of shapes.pick_request")
+  runIn(cInStep_logos_shapes_Pick_request_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Pick_response_AR_False_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Pick_response_AR_False_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f26 = v.lookup("found").get
+    dst.m0 = asBool(f26)
+  ok(false)
+
+proc cInStep_logos_shapes_Pick_response_AR_False_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Pick_response_AR_False_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let value27 = cbor(src.m0)
+    f.dst[].entries.add((cbor("found"), value27))
+  ok(false)
 
 proc cOut_logos_shapes_Pick_response_AR_False_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_AR_False_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f28 = v.lookup("found").get
-  dst.m0 = asBool(f28)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Pick_response_AR_False_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Pick_response_AR_False_t*(src: logos_shapes_Pick_response_AR_False_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value29 = cbor(src.m0)
-  e.add((cbor("found"), value29))
-  ok(cborMap(e))
+  runIn(cInStep_logos_shapes_Pick_response_AR_False_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Pick_response_AR_True_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Pick_response_AR_True_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f28 = v.lookup("entry").get
+    child = OutFrame(step: cOutStep_logos_shapes_Entry_t, v: f28, dst: addr dst.m0, depth: depth + 1)
+    return ok(true)
+  if f.pc == 1:
+    f.pc = 2
+    let f29 = v.lookup("found").get
+    dst.m1 = asBool(f29)
+  ok(false)
+
+proc cInStep_logos_shapes_Pick_response_AR_True_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Pick_response_AR_True_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    f.dst[].entries.add((cbor("entry"), CborValue(nil)))
+    child = InFrame(step: cInStep_logos_shapes_Entry_t, src: addr src.m0, dst: addr f.dst[].entries[^1].value, depth: depth + 1)
+    return ok(true)
+  if f.pc == 1:
+    f.pc = 2
+    let value30 = cbor(src.m1)
+    f.dst[].entries.add((cbor("found"), value30))
+  ok(false)
 
 proc cOut_logos_shapes_Pick_response_AR_True_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_AR_True_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f30 = v.lookup("entry").get
-  ?cOut_logos_shapes_Entry_t(a, f30, dst.m0, depth + 1)
-  let f31 = v.lookup("found").get
-  dst.m1 = asBool(f31)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Pick_response_AR_True_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Pick_response_AR_True_t*(src: logos_shapes_Pick_response_AR_True_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value32 = ?cIn_logos_shapes_Entry_t(src.m0, depth + 1)
-  e.add((cbor("entry"), value32))
-  let value33 = cbor(src.m1)
-  e.add((cbor("found"), value33))
-  ok(cborMap(e))
+  runIn(cInStep_logos_shapes_Pick_response_AR_True_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Pick_response_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Pick_response_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case kitSchema().arm("shapes.pick_response#", v)
+    of 0:
+      dst.kind = 0'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Pick_response_AR_False_t, v: v, dst: addr dst.value.m0, depth: depth + 1)
+      return ok(true)
+    of 1:
+      dst.kind = 1'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Pick_response_AR_True_t, v: v, dst: addr dst.value.m1, depth: depth + 1)
+      return ok(true)
+    else:
+      return err("no arm of shapes.pick_response")
+  ok(false)
+
+proc cInStep_logos_shapes_Pick_response_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Pick_response_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case src.kind
+    of 0'u32:
+      child = InFrame(step: cInStep_logos_shapes_Pick_response_AR_False_t, src: addr src.value.m0, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    of 1'u32:
+      child = InFrame(step: cInStep_logos_shapes_Pick_response_AR_True_t, src: addr src.value.m1, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    else:
+      return err("the discriminant " & $src.kind & " names no arm of shapes.pick_response")
+  ok(false)
 
 proc cOut_logos_shapes_Pick_response_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Pick_response_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  case kitSchema().arm("shapes.pick_response#", v)
-  of 0:
-    dst.kind = 0'u32
-    ?cOut_logos_shapes_Pick_response_AR_False_t(a, v, dst.value.m0, depth + 1)
-  of 1:
-    dst.kind = 1'u32
-    ?cOut_logos_shapes_Pick_response_AR_True_t(a, v, dst.value.m1, depth + 1)
-  else:
-    return err("no arm of shapes.pick_response")
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Pick_response_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Pick_response_t*(src: logos_shapes_Pick_response_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  case src.kind
-  of 0'u32:
-    ok(?cIn_logos_shapes_Pick_response_AR_False_t(src.value.m0, depth + 1))
-  of 1'u32:
-    ok(?cIn_logos_shapes_Pick_response_AR_True_t(src.value.m1, depth + 1))
-  else:
-    err("the discriminant " & $src.kind & " names no arm of shapes.pick_response")
+  runIn(cInStep_logos_shapes_Pick_response_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Tree_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Tree_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f31 = v.lookup("kids").get
+    let items32 = f31.items
+    let arr33 = ?a.list(logos_shapes_Tree_t, items32.len)
+    dst.m0 = arr33
+    dst.m1 = csize_t(items32.len)
+    f.cur = f31
+    f.i = 0
+  if f.pc == 1:
+    if f.cur != nil and f.i < f.cur.items.len:
+      child = OutFrame(step: cOutStep_logos_shapes_Tree_t, v: f.cur.items[f.i], dst: addr dst.m0[f.i], depth: depth + 1)
+      inc f.i
+      return ok(true)
+    f.cur = nil
+    f.pc = 2
+  if f.pc == 2:
+    f.pc = 3
+    let f34 = v.lookup("left")
+    if f34.isSome:
+      dst.m2 = true
+      let p35 = ?a.boxed(logos_shapes_Tree_t)
+      dst.m3 = p35
+      child = OutFrame(step: cOutStep_logos_shapes_Tree_t, v: f34.get, dst: p35, depth: depth + 1)
+      return ok(true)
+  if f.pc == 3:
+    f.pc = 4
+    let f36 = v.lookup("tag").get
+    dst.m4 = ?a.text(f36.text)
+    let f37 = v.lookup("twin")
+    if f37.isSome:
+      dst.m5 = true
+      let p38 = ?a.boxed(logos_shapes_Pair_t)
+      dst.m6 = p38
+      child = OutFrame(step: cOutStep_logos_shapes_Pair_t, v: f37.get, dst: p38, depth: depth + 1)
+      return ok(true)
+  ok(false)
+
+proc cInStep_logos_shapes_Tree_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Tree_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let n39 = ?counted(src.m0, src.m1)
+    f.dst[].entries.add((cbor("kids"), newCborArray(n39)))
+    f.cur = f.dst[].entries[^1].value
+    f.i = 0
+  if f.pc == 1:
+    if f.cur != nil and f.i < f.cur.items.len:
+      child = InFrame(step: cInStep_logos_shapes_Tree_t, src: addr src.m0[f.i], dst: addr f.cur.items[f.i], depth: depth + 1)
+      inc f.i
+      return ok(true)
+    f.cur = nil
+    f.pc = 2
+  if f.pc == 2:
+    f.pc = 3
+    if src.m2:
+      let p40 = ?present(src.m3)
+      f.dst[].entries.add((cbor("left"), CborValue(nil)))
+      child = InFrame(step: cInStep_logos_shapes_Tree_t, src: p40, dst: addr f.dst[].entries[^1].value, depth: depth + 1)
+      return ok(true)
+  if f.pc == 3:
+    f.pc = 4
+    let value41 = ?inText(src.m4)
+    f.dst[].entries.add((cbor("tag"), value41))
+    if src.m5:
+      let p42 = ?present(src.m6)
+      f.dst[].entries.add((cbor("twin"), CborValue(nil)))
+      child = InFrame(step: cInStep_logos_shapes_Pair_t, src: p42, dst: addr f.dst[].entries[^1].value, depth: depth + 1)
+      return ok(true)
+  ok(false)
 
 proc cOut_logos_shapes_Tree_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Tree_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f34 = v.lookup("kids").get
-  let items35 = f34.items
-  let arr36 = ?a.list(logos_shapes_Tree_t, items35.len)
-  for i, it in items35:
-    ?cOut_logos_shapes_Tree_t(a, it, arr36[i], depth + 1)
-  dst.m0 = arr36
-  dst.m1 = csize_t(items35.len)
-  let f37 = v.lookup("left")
-  if f37.isSome:
-    dst.m2 = true
-    let p38 = ?a.boxed(logos_shapes_Tree_t)
-    ?cOut_logos_shapes_Tree_t(a, f37.get, p38[], depth + 1)
-    dst.m3 = p38
-  let f39 = v.lookup("tag").get
-  dst.m4 = ?a.text(f39.text)
-  let f40 = v.lookup("twin")
-  if f40.isSome:
-    dst.m5 = true
-    let p41 = ?a.boxed(logos_shapes_Pair_t)
-    ?cOut_logos_shapes_Pair_t(a, f40.get, p41[], depth + 1)
-    dst.m6 = p41
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Tree_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Tree_t*(src: logos_shapes_Tree_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let n42 = ?counted(src.m0, src.m1)
-  var items43 = newSeq[CborValue](n42)
-  for i in 0 ..< n42:
-    items43[i] = ?cIn_logos_shapes_Tree_t(src.m0[i], depth + 1)
-  let value44 = cborArray(items43)
-  e.add((cbor("kids"), value44))
-  if src.m2:
-    let value45 = ?cIn_logos_shapes_Tree_t((?present(src.m3))[], depth + 1)
-    e.add((cbor("left"), value45))
-  let value46 = ?inText(src.m4)
-  e.add((cbor("tag"), value46))
-  if src.m5:
-    let value47 = ?cIn_logos_shapes_Pair_t((?present(src.m6))[], depth + 1)
-    e.add((cbor("twin"), value47))
-  ok(cborMap(e))
+  runIn(cInStep_logos_shapes_Tree_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Value_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Value_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case kitSchema().arm("shapes.value#", v)
+    of 0:
+      dst.kind = 0'u32
+      dst.value.m0 = asBool(v)
+    of 1:
+      dst.kind = 1'u32
+      dst.value.m1 = ?a.text(v.text)
+    of 2:
+      dst.kind = 2'u32
+      dst.value.m2 = uint64(v.uint)
+    else:
+      return err("no arm of shapes.value")
+  ok(false)
+
+proc cInStep_logos_shapes_Value_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Value_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case src.kind
+    of 0'u32:
+      f.dst[] = cbor(src.value.m0)
+    of 1'u32:
+      f.dst[] = ?inText(src.value.m1)
+    of 2'u32:
+      f.dst[] = cbor(uint64(src.value.m2))
+    else:
+      return err("the discriminant " & $src.kind & " names no arm of shapes.value")
+  ok(false)
 
 proc cOut_logos_shapes_Value_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Value_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  case kitSchema().arm("shapes.value#", v)
-  of 0:
-    dst.kind = 0'u32
-    dst.value.m0 = asBool(v)
-  of 1:
-    dst.kind = 1'u32
-    dst.value.m1 = ?a.text(v.text)
-  of 2:
-    dst.kind = 2'u32
-    dst.value.m2 = uint64(v.uint)
-  else:
-    return err("no arm of shapes.value")
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Value_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Value_t*(src: logos_shapes_Value_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  case src.kind
-  of 0'u32:
-    ok(cbor(src.value.m0))
-  of 1'u32:
-    ok(?inText(src.value.m1))
-  of 2'u32:
-    ok(cbor(uint64(src.value.m2)))
-  else:
-    err("the discriminant " & $src.kind & " names no arm of shapes.value")
+  runIn(cInStep_logos_shapes_Value_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_request_E_LI_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_request_E_LI_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    ?fill(v.bytes, dst.m0)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_request_E_LI_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_request_E_LI_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cbor(src.m0)
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_request_E_LI_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_E_LI_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  ?fill(v.bytes, dst.m0)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_request_E_LI_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_request_E_LI_t*(src: logos_shapes_Reflect_request_E_LI_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cbor(src.m0))
+  runIn(cInStep_logos_shapes_Reflect_request_E_LI_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_request_F_LI_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_request_F_LI_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    dst.m0 = uint64(v.items[0].uint)
+    dst.m1 = ?a.text(v.items[1].text)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_request_F_LI_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_request_F_LI_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = newCborArray(2)
+    f.dst[].items[0] = cbor(uint64(src.m0))
+    f.dst[].items[1] = ?inText(src.m1)
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_request_F_LI_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_F_LI_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  dst.m0 = uint64(v.items[0].uint)
-  dst.m1 = ?a.text(v.items[1].text)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_request_F_LI_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_request_F_LI_t*(src: logos_shapes_Reflect_request_F_LI_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cborArray(cbor(uint64(src.m0)), ?inText(src.m1)))
+  runIn(cInStep_logos_shapes_Reflect_request_F_LI_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_request_G_AR_Tuple1_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_request_G_AR_Tuple1_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    dst.m0 = uint64(v.items[0].uint)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_request_G_AR_Tuple1_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_request_G_AR_Tuple1_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = newCborArray(1)
+    f.dst[].items[0] = cbor(uint64(src.m0))
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_request_G_AR_Tuple1_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_G_AR_Tuple1_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  dst.m0 = uint64(v.items[0].uint)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_request_G_AR_Tuple1_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_request_G_AR_Tuple1_t*(src: logos_shapes_Reflect_request_G_AR_Tuple1_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cborArray(cbor(uint64(src.m0))))
+  runIn(cInStep_logos_shapes_Reflect_request_G_AR_Tuple1_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_request_G_AR_Tuple2_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_request_G_AR_Tuple2_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    dst.m0 = uint64(v.items[0].uint)
+    dst.m1 = uint64(v.items[1].uint)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_request_G_AR_Tuple2_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_request_G_AR_Tuple2_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = newCborArray(2)
+    f.dst[].items[0] = cbor(uint64(src.m0))
+    f.dst[].items[1] = cbor(uint64(src.m1))
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_request_G_AR_Tuple2_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_G_AR_Tuple2_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  dst.m0 = uint64(v.items[0].uint)
-  dst.m1 = uint64(v.items[1].uint)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_request_G_AR_Tuple2_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_request_G_AR_Tuple2_t*(src: logos_shapes_Reflect_request_G_AR_Tuple2_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cborArray(cbor(uint64(src.m0)), cbor(uint64(src.m1))))
+  runIn(cInStep_logos_shapes_Reflect_request_G_AR_Tuple2_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_request_G_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_request_G_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case kitSchema().arm("shapes.reflect_request#g", v)
+    of 0:
+      dst.kind = 0'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Reflect_request_G_AR_Tuple1_t, v: v, dst: addr dst.value.m0, depth: depth + 1)
+      return ok(true)
+    of 1:
+      dst.kind = 1'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Reflect_request_G_AR_Tuple2_t, v: v, dst: addr dst.value.m1, depth: depth + 1)
+      return ok(true)
+    of 2:
+      dst.kind = 2'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Value_t, v: v, dst: addr dst.value.m2, depth: depth + 1)
+      return ok(true)
+    else:
+      return err("no arm of shapes.reflect_request#_G")
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_request_G_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_request_G_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case src.kind
+    of 0'u32:
+      child = InFrame(step: cInStep_logos_shapes_Reflect_request_G_AR_Tuple1_t, src: addr src.value.m0, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    of 1'u32:
+      child = InFrame(step: cInStep_logos_shapes_Reflect_request_G_AR_Tuple2_t, src: addr src.value.m1, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    of 2'u32:
+      child = InFrame(step: cInStep_logos_shapes_Value_t, src: addr src.value.m2, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    else:
+      return err("the discriminant " & $src.kind & " names no arm of shapes.reflect_request#_G")
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_request_G_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_G_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  case kitSchema().arm("shapes.reflect_request#g", v)
-  of 0:
-    dst.kind = 0'u32
-    ?cOut_logos_shapes_Reflect_request_G_AR_Tuple1_t(a, v, dst.value.m0, depth + 1)
-  of 1:
-    dst.kind = 1'u32
-    ?cOut_logos_shapes_Reflect_request_G_AR_Tuple2_t(a, v, dst.value.m1, depth + 1)
-  of 2:
-    dst.kind = 2'u32
-    ?cOut_logos_shapes_Value_t(a, v, dst.value.m2, depth + 1)
-  else:
-    return err("no arm of shapes.reflect_request#_G")
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_request_G_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_request_G_t*(src: logos_shapes_Reflect_request_G_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  case src.kind
-  of 0'u32:
-    ok(?cIn_logos_shapes_Reflect_request_G_AR_Tuple1_t(src.value.m0, depth + 1))
-  of 1'u32:
-    ok(?cIn_logos_shapes_Reflect_request_G_AR_Tuple2_t(src.value.m1, depth + 1))
-  of 2'u32:
-    ok(?cIn_logos_shapes_Value_t(src.value.m2, depth + 1))
-  else:
-    err("the discriminant " & $src.kind & " names no arm of shapes.reflect_request#_G")
+  runIn(cInStep_logos_shapes_Reflect_request_G_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_request_H_TU1_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_request_H_TU1_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    ?a.bytes(v.bytes, dst.m0, dst.m1)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_request_H_TU1_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_request_H_TU1_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = ?inBytes(src.m0, src.m1)
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_request_H_TU1_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_H_TU1_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  ?a.bytes(v.bytes, dst.m0, dst.m1)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_request_H_TU1_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_request_H_TU1_t*(src: logos_shapes_Reflect_request_H_TU1_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(?inBytes(src.m0, src.m1))
+  runIn(cInStep_logos_shapes_Reflect_request_H_TU1_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_request_V_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_request_V_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f62 = v.lookup("w").get
+    dst.m0 = asBool(f62)
+    let f63 = v.lookup("x")
+    if f63.isSome:
+      dst.m1 = true
+      dst.m2 = ?a.text(f63.get.text)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_request_V_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_request_V_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let value64 = cbor(src.m0)
+    f.dst[].entries.add((cbor("w"), value64))
+    if src.m1:
+      let value65 = ?inText(src.m2)
+      f.dst[].entries.add((cbor("x"), value65))
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_request_V_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_request_V_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f74 = v.lookup("w").get
-  dst.m0 = asBool(f74)
-  let f75 = v.lookup("x")
-  if f75.isSome:
-    dst.m1 = true
-    dst.m2 = ?a.text(f75.get.text)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_request_V_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_request_V_t*(src: logos_shapes_Reflect_request_V_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value76 = cbor(src.m0)
-  e.add((cbor("w"), value76))
-  if src.m1:
-    let value77 = ?inText(src.m2)
-    e.add((cbor("x"), value77))
-  ok(cborMap(e))
+  runIn(cInStep_logos_shapes_Reflect_request_V_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_response_E_LI_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_response_E_LI_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    ?fill(v.bytes, dst.m0)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_response_E_LI_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_response_E_LI_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cbor(src.m0)
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_response_E_LI_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_E_LI_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  ?fill(v.bytes, dst.m0)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_response_E_LI_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_response_E_LI_t*(src: logos_shapes_Reflect_response_E_LI_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cbor(src.m0))
+  runIn(cInStep_logos_shapes_Reflect_response_E_LI_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_response_F_LI_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_response_F_LI_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    dst.m0 = uint64(v.items[0].uint)
+    dst.m1 = ?a.text(v.items[1].text)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_response_F_LI_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_response_F_LI_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = newCborArray(2)
+    f.dst[].items[0] = cbor(uint64(src.m0))
+    f.dst[].items[1] = ?inText(src.m1)
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_response_F_LI_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_F_LI_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  dst.m0 = uint64(v.items[0].uint)
-  dst.m1 = ?a.text(v.items[1].text)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_response_F_LI_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_response_F_LI_t*(src: logos_shapes_Reflect_response_F_LI_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cborArray(cbor(uint64(src.m0)), ?inText(src.m1)))
+  runIn(cInStep_logos_shapes_Reflect_response_F_LI_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_response_G_AR_Tuple1_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_response_G_AR_Tuple1_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    dst.m0 = uint64(v.items[0].uint)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_response_G_AR_Tuple1_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_response_G_AR_Tuple1_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = newCborArray(1)
+    f.dst[].items[0] = cbor(uint64(src.m0))
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_response_G_AR_Tuple1_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_G_AR_Tuple1_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  dst.m0 = uint64(v.items[0].uint)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_response_G_AR_Tuple1_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_response_G_AR_Tuple1_t*(src: logos_shapes_Reflect_response_G_AR_Tuple1_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cborArray(cbor(uint64(src.m0))))
+  runIn(cInStep_logos_shapes_Reflect_response_G_AR_Tuple1_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_response_G_AR_Tuple2_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_response_G_AR_Tuple2_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    dst.m0 = uint64(v.items[0].uint)
+    dst.m1 = uint64(v.items[1].uint)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_response_G_AR_Tuple2_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_response_G_AR_Tuple2_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = newCborArray(2)
+    f.dst[].items[0] = cbor(uint64(src.m0))
+    f.dst[].items[1] = cbor(uint64(src.m1))
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_response_G_AR_Tuple2_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_G_AR_Tuple2_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  dst.m0 = uint64(v.items[0].uint)
-  dst.m1 = uint64(v.items[1].uint)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_response_G_AR_Tuple2_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_response_G_AR_Tuple2_t*(src: logos_shapes_Reflect_response_G_AR_Tuple2_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(cborArray(cbor(uint64(src.m0)), cbor(uint64(src.m1))))
+  runIn(cInStep_logos_shapes_Reflect_response_G_AR_Tuple2_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_response_G_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_response_G_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case kitSchema().arm("shapes.reflect_response#g", v)
+    of 0:
+      dst.kind = 0'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Reflect_response_G_AR_Tuple1_t, v: v, dst: addr dst.value.m0, depth: depth + 1)
+      return ok(true)
+    of 1:
+      dst.kind = 1'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Reflect_response_G_AR_Tuple2_t, v: v, dst: addr dst.value.m1, depth: depth + 1)
+      return ok(true)
+    of 2:
+      dst.kind = 2'u32
+      child = OutFrame(step: cOutStep_logos_shapes_Value_t, v: v, dst: addr dst.value.m2, depth: depth + 1)
+      return ok(true)
+    else:
+      return err("no arm of shapes.reflect_response#_G")
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_response_G_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_response_G_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    case src.kind
+    of 0'u32:
+      child = InFrame(step: cInStep_logos_shapes_Reflect_response_G_AR_Tuple1_t, src: addr src.value.m0, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    of 1'u32:
+      child = InFrame(step: cInStep_logos_shapes_Reflect_response_G_AR_Tuple2_t, src: addr src.value.m1, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    of 2'u32:
+      child = InFrame(step: cInStep_logos_shapes_Value_t, src: addr src.value.m2, dst: addr f.dst[], depth: depth + 1)
+      return ok(true)
+    else:
+      return err("the discriminant " & $src.kind & " names no arm of shapes.reflect_response#_G")
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_response_G_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_G_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  case kitSchema().arm("shapes.reflect_response#g", v)
-  of 0:
-    dst.kind = 0'u32
-    ?cOut_logos_shapes_Reflect_response_G_AR_Tuple1_t(a, v, dst.value.m0, depth + 1)
-  of 1:
-    dst.kind = 1'u32
-    ?cOut_logos_shapes_Reflect_response_G_AR_Tuple2_t(a, v, dst.value.m1, depth + 1)
-  of 2:
-    dst.kind = 2'u32
-    ?cOut_logos_shapes_Value_t(a, v, dst.value.m2, depth + 1)
-  else:
-    return err("no arm of shapes.reflect_response#_G")
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_response_G_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_response_G_t*(src: logos_shapes_Reflect_response_G_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  case src.kind
-  of 0'u32:
-    ok(?cIn_logos_shapes_Reflect_response_G_AR_Tuple1_t(src.value.m0, depth + 1))
-  of 1'u32:
-    ok(?cIn_logos_shapes_Reflect_response_G_AR_Tuple2_t(src.value.m1, depth + 1))
-  of 2'u32:
-    ok(?cIn_logos_shapes_Value_t(src.value.m2, depth + 1))
-  else:
-    err("the discriminant " & $src.kind & " names no arm of shapes.reflect_response#_G")
+  runIn(cInStep_logos_shapes_Reflect_response_G_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_response_H_TU1_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_response_H_TU1_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    ?a.bytes(v.bytes, dst.m0, dst.m1)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_response_H_TU1_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_response_H_TU1_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = ?inBytes(src.m0, src.m1)
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_response_H_TU1_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_H_TU1_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  ?a.bytes(v.bytes, dst.m0, dst.m1)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_response_H_TU1_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_response_H_TU1_t*(src: logos_shapes_Reflect_response_H_TU1_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  ok(?inBytes(src.m0, src.m1))
+  runIn(cInStep_logos_shapes_Reflect_response_H_TU1_t, addr src, depth)
+
+proc cOutStep_logos_shapes_Reflect_response_V_t*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string] =
+  let v {.used.} = f.v
+  let dst {.used.} = cast[ptr logos_shapes_Reflect_response_V_t](f.dst)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    let f96 = v.lookup("w").get
+    dst.m0 = asBool(f96)
+    let f97 = v.lookup("x")
+    if f97.isSome:
+      dst.m1 = true
+      dst.m2 = ?a.text(f97.get.text)
+  ok(false)
+
+proc cInStep_logos_shapes_Reflect_response_V_t*(f: var InFrame, child: var InFrame): Result[bool, string] =
+  let src {.used.} = cast[ptr logos_shapes_Reflect_response_V_t](f.src)
+  let depth {.used.} = f.depth
+  if f.pc == 0:
+    f.pc = 1
+    ?depthCheck(depth)
+    f.dst[] = cborMap()
+    let value98 = cbor(src.m0)
+    f.dst[].entries.add((cbor("w"), value98))
+    if src.m1:
+      let value99 = ?inText(src.m2)
+      f.dst[].entries.add((cbor("x"), value99))
+  ok(false)
 
 proc cOut_logos_shapes_Reflect_response_V_t*(a: var CallArena, v: CborValue, dst: var logos_shapes_Reflect_response_V_t, depth: int): Result[void, string] =
-  ?depthCheck(depth)
-  let f108 = v.lookup("w").get
-  dst.m0 = asBool(f108)
-  let f109 = v.lookup("x")
-  if f109.isSome:
-    dst.m1 = true
-    dst.m2 = ?a.text(f109.get.text)
-  ok()
+  a.runOut(OutFrame(step: cOutStep_logos_shapes_Reflect_response_V_t, v: v, dst: addr dst, depth: depth))
 
 proc cIn_logos_shapes_Reflect_response_V_t*(src: logos_shapes_Reflect_response_V_t, depth: int): Result[CborValue, string] =
-  ?depthCheck(depth)
-  var e: seq[CborEntry]
-  let value110 = cbor(src.m0)
-  e.add((cbor("w"), value110))
-  if src.m1:
-    let value111 = ?inText(src.m2)
-    e.add((cbor("x"), value111))
-  ok(cborMap(e))
+  runIn(cInStep_logos_shapes_Reflect_response_V_t, addr src, depth)
 
 proc kitRequest0(p2: ptr logos_shapes_Pick_request_t): Result[seq[byte], string] =
   ## `shapes.pick`'s request params from its typed inputs.
@@ -967,135 +1552,130 @@ proc kitRequest2(p2: uint64, p3: int64, p4: cstring, p5: ptr array[32, uint8], p
   ## `shapes.reflect`'s request params from its typed inputs.
   let depth {.used.} = 1
   var e: seq[CborEntry]
-  let value48 = cbor(uint64(p2))
-  e.add((cbor("a"), value48))
-  let value49 = cbor(int64(p3))
-  e.add((cbor("b"), value49))
-  let value50 = ?inText(p4)
-  e.add((cbor("c"), value50))
-  let value51 = cbor((?present(p5))[])
-  e.add((cbor("d"), value51))
-  let n52 = ?counted(p6, p7)
-  var items53 = newSeq[CborValue](n52)
-  for i in 0 ..< n52:
-    items53[i] = ?cIn_logos_shapes_Reflect_request_E_LI_t(p6[i], depth + 1)
-  let value54 = cborArray(items53)
-  e.add((cbor("e"), value54))
-  let n55 = ?counted(p8, p9)
-  var items56 = newSeq[CborValue](n55)
-  for i in 0 ..< n55:
-    items56[i] = ?cIn_logos_shapes_Reflect_request_F_LI_t(p8[i], depth + 1)
-  let value57 = cborArray(items56)
-  e.add((cbor("f"), value57))
-  let value58 = ?cIn_logos_shapes_Reflect_request_G_t((?present(p10))[], depth + 1)
-  e.add((cbor("g"), value58))
+  let value43 = cbor(uint64(p2))
+  e.add((cbor("a"), value43))
+  let value44 = cbor(int64(p3))
+  e.add((cbor("b"), value44))
+  let value45 = ?inText(p4)
+  e.add((cbor("c"), value45))
+  let value46 = cbor((?present(p5))[])
+  e.add((cbor("d"), value46))
+  let n47 = ?counted(p6, p7)
+  e.add((cbor("e"), newCborArray(n47)))
+  for i in 0 ..< n47:
+    e[^1].value.items[i] = ?cIn_logos_shapes_Reflect_request_E_LI_t(p6[i], depth + 1)
+  let n48 = ?counted(p8, p9)
+  e.add((cbor("f"), newCborArray(n48)))
+  for i in 0 ..< n48:
+    e[^1].value.items[i] = ?cIn_logos_shapes_Reflect_request_F_LI_t(p8[i], depth + 1)
+  let value49 = ?cIn_logos_shapes_Reflect_request_G_t((?present(p10))[], depth + 1)
+  e.add((cbor("g"), value49))
   if p11:
-    let value59 = cborArray(cbor(uint64(p12)), ?cIn_logos_shapes_Reflect_request_H_TU1_t((?present(p13))[], depth + 1))
-    e.add((cbor("h"), value59))
-  let value60 = ?cIn_logos_schema_commitment_t((?present(p14))[], depth + 1)
-  e.add((cbor("i"), value60))
-  let value61 = cborArray()
-  e.add((cbor("j"), value61))
-  let value62 = cbor(newSeq[byte]())
-  e.add((cbor("l"), value62))
-  let value63 = cbor(int64(p17))
-  e.add((cbor("m"), value63))
-  let value64 = cbor(uint64(p18))
-  e.add((cbor("n"), value64))
-  let value65 = cbor(uint64(p19))
-  e.add((cbor("o"), value65))
-  let value66 = cbor(int64(p20))
-  e.add((cbor("p"), value66))
+    e.add((cbor("h"), newCborArray(2)))
+    e[^1].value.items[0] = cbor(uint64(p12))
+    e[^1].value.items[1] = ?cIn_logos_shapes_Reflect_request_H_TU1_t((?present(p13))[], depth + 1)
+  let value50 = ?cIn_logos_schema_commitment_t((?present(p14))[], depth + 1)
+  e.add((cbor("i"), value50))
+  let value51 = cborArray()
+  e.add((cbor("j"), value51))
+  let value52 = cbor(newSeq[byte]())
+  e.add((cbor("l"), value52))
+  let value53 = cbor(int64(p17))
+  e.add((cbor("m"), value53))
+  let value54 = cbor(uint64(p18))
+  e.add((cbor("n"), value54))
+  let value55 = cbor(uint64(p19))
+  e.add((cbor("o"), value55))
+  let value56 = cbor(int64(p20))
+  e.add((cbor("p"), value56))
   if p21:
-    let value67 = ?cIn_logos_error_detail_t((?present(p22))[], depth + 1)
-    e.add((cbor("q"), value67))
-  let value68 = ?cIn_logos_shapes_Names_t((?present(p23))[], depth + 1)
-  e.add((cbor("r"), value68))
-  let value69 = ?inBytes(p24, p25)
-  e.add((cbor("s"), value69))
-  let n70 = ?counted(p26, p27)
-  var items71 = newSeq[CborValue](n70)
-  for i in 0 ..< n70:
-    items71[i] = ?cIn_logos_shapes_Entry_t(p26[i], depth + 1)
-  let value72 = cborArray(items71)
-  e.add((cbor("t"), value72))
-  let value73 = ?cIn_logos_shapes_Tree_t((?present(p28))[], depth + 1)
-  e.add((cbor("u"), value73))
-  let value78 = ?cIn_logos_shapes_Reflect_request_V_t((?present(p29))[], depth + 1)
-  e.add((cbor("v"), value78))
-  let value79 = ?cIn_logos_shapes_Blob_t((?present(p30))[], depth + 1)
-  e.add((cbor("y"), value79))
-  let value80 = ?cIn_logos_shapes_Digest_t((?present(p31))[], depth + 1)
-  e.add((cbor("z"), value80))
+    let value57 = ?cIn_logos_error_detail_t((?present(p22))[], depth + 1)
+    e.add((cbor("q"), value57))
+  let value58 = ?cIn_logos_shapes_Names_t((?present(p23))[], depth + 1)
+  e.add((cbor("r"), value58))
+  let value59 = ?inBytes(p24, p25)
+  e.add((cbor("s"), value59))
+  let n60 = ?counted(p26, p27)
+  e.add((cbor("t"), newCborArray(n60)))
+  for i in 0 ..< n60:
+    e[^1].value.items[i] = ?cIn_logos_shapes_Entry_t(p26[i], depth + 1)
+  let value61 = ?cIn_logos_shapes_Tree_t((?present(p28))[], depth + 1)
+  e.add((cbor("u"), value61))
+  let value66 = ?cIn_logos_shapes_Reflect_request_V_t((?present(p29))[], depth + 1)
+  e.add((cbor("v"), value66))
+  let value67 = ?cIn_logos_shapes_Blob_t((?present(p30))[], depth + 1)
+  e.add((cbor("y"), value67))
+  let value68 = ?cIn_logos_shapes_Digest_t((?present(p31))[], depth + 1)
+  e.add((cbor("z"), value68))
   ok(encodeCbor(cborMap(e)))
 
 proc kitRespond2(a: var CallArena, v: CborValue, o32: var uint64, o33: var int64, o34: var cstring, o35: var array[32, uint8], o36: var ptr UncheckedArray[logos_shapes_Reflect_response_E_LI_t], o37: var csize_t, o38: var ptr UncheckedArray[logos_shapes_Reflect_response_F_LI_t], o39: var csize_t, o40: var logos_shapes_Reflect_response_G_t, o41: var bool, o42: var uint64, o43: var logos_shapes_Reflect_response_H_TU1_t, o44: var logos_schema_commitment_t, o45: var logos_tuple_size_0_t, o46: var logos_bstr_size_0_t, o47: var int8, o48: var uint16, o49: var logos_shapes_Counter_t, o50: var CErrorCode, o51: var bool, o52: var logos_error_detail_t, o53: var logos_shapes_Names_t, o54: var ptr UncheckedArray[uint8], o55: var csize_t, o56: var ptr UncheckedArray[logos_shapes_Entry_t], o57: var csize_t, o58: var logos_shapes_Tree_t, o59: var logos_shapes_Reflect_response_V_t, o60: var logos_shapes_Blob_t, o61: var logos_shapes_Digest_t): Result[void, string] =
   ## `shapes.reflect`'s outputs from its checked response.
   let depth {.used.} = 1
-  let f81 = v.lookup("a").get
-  o32 = uint64(f81.uint)
-  let f82 = v.lookup("b").get
-  o33 = int64(asInt64(f82))
-  let f83 = v.lookup("c").get
-  o34 = ?a.text(f83.text)
-  let f84 = v.lookup("d").get
-  ?fill(f84.bytes, o35)
-  let f85 = v.lookup("e").get
-  let items86 = f85.items
-  let arr87 = ?a.list(logos_shapes_Reflect_response_E_LI_t, items86.len)
-  for i, it in items86:
-    ?cOut_logos_shapes_Reflect_response_E_LI_t(a, it, arr87[i], depth + 1)
-  o36 = arr87
-  o37 = csize_t(items86.len)
-  let f88 = v.lookup("f").get
-  let items89 = f88.items
-  let arr90 = ?a.list(logos_shapes_Reflect_response_F_LI_t, items89.len)
-  for i, it in items89:
-    ?cOut_logos_shapes_Reflect_response_F_LI_t(a, it, arr90[i], depth + 1)
-  o38 = arr90
-  o39 = csize_t(items89.len)
-  let f91 = v.lookup("g").get
-  ?cOut_logos_shapes_Reflect_response_G_t(a, f91, o40, depth + 1)
-  let f92 = v.lookup("h")
-  if f92.isSome:
+  let f69 = v.lookup("a").get
+  o32 = uint64(f69.uint)
+  let f70 = v.lookup("b").get
+  o33 = int64(asInt64(f70))
+  let f71 = v.lookup("c").get
+  o34 = ?a.text(f71.text)
+  let f72 = v.lookup("d").get
+  ?fill(f72.bytes, o35)
+  let f73 = v.lookup("e").get
+  let items74 = f73.items
+  let arr75 = ?a.list(logos_shapes_Reflect_response_E_LI_t, items74.len)
+  o36 = arr75
+  o37 = csize_t(items74.len)
+  for i, it in items74:
+    ?cOut_logos_shapes_Reflect_response_E_LI_t(a, it, arr75[i], depth + 1)
+  let f76 = v.lookup("f").get
+  let items77 = f76.items
+  let arr78 = ?a.list(logos_shapes_Reflect_response_F_LI_t, items77.len)
+  o38 = arr78
+  o39 = csize_t(items77.len)
+  for i, it in items77:
+    ?cOut_logos_shapes_Reflect_response_F_LI_t(a, it, arr78[i], depth + 1)
+  let f79 = v.lookup("g").get
+  ?cOut_logos_shapes_Reflect_response_G_t(a, f79, o40, depth + 1)
+  let f80 = v.lookup("h")
+  if f80.isSome:
     o41 = true
-    o42 = uint64(f92.get.items[0].uint)
-    ?cOut_logos_shapes_Reflect_response_H_TU1_t(a, f92.get.items[1], o43, depth + 1)
-  let f93 = v.lookup("i").get
-  ?cOut_logos_schema_commitment_t(a, f93, o44, depth + 1)
-  let f94 = v.lookup("j").get
-  let f95 = v.lookup("l").get
-  let f96 = v.lookup("m").get
-  o47 = int8(asInt64(f96))
-  let f97 = v.lookup("n").get
-  o48 = uint16(f97.uint)
-  let f98 = v.lookup("o").get
-  o49 = logos_shapes_Counter_t(f98.uint)
-  let f99 = v.lookup("p").get
-  o50 = CErrorCode(f99.uint)
-  let f100 = v.lookup("q")
-  if f100.isSome:
+    o42 = uint64(f80.get.items[0].uint)
+    ?cOut_logos_shapes_Reflect_response_H_TU1_t(a, f80.get.items[1], o43, depth + 1)
+  let f81 = v.lookup("i").get
+  ?cOut_logos_schema_commitment_t(a, f81, o44, depth + 1)
+  let f82 = v.lookup("j").get
+  let f83 = v.lookup("l").get
+  let f84 = v.lookup("m").get
+  o47 = int8(asInt64(f84))
+  let f85 = v.lookup("n").get
+  o48 = uint16(f85.uint)
+  let f86 = v.lookup("o").get
+  o49 = logos_shapes_Counter_t(f86.uint)
+  let f87 = v.lookup("p").get
+  o50 = CErrorCode(f87.uint)
+  let f88 = v.lookup("q")
+  if f88.isSome:
     o51 = true
-    ?cOut_logos_error_detail_t(a, f100.get, o52, depth + 1)
-  let f101 = v.lookup("r").get
-  ?cOut_logos_shapes_Names_t(a, f101, o53, depth + 1)
-  let f102 = v.lookup("s").get
-  ?a.bytes(f102.bytes, o54, o55)
-  let f103 = v.lookup("t").get
-  let items104 = f103.items
-  let arr105 = ?a.list(logos_shapes_Entry_t, items104.len)
-  for i, it in items104:
-    ?cOut_logos_shapes_Entry_t(a, it, arr105[i], depth + 1)
-  o56 = arr105
-  o57 = csize_t(items104.len)
-  let f106 = v.lookup("u").get
-  ?cOut_logos_shapes_Tree_t(a, f106, o58, depth + 1)
-  let f107 = v.lookup("v").get
-  ?cOut_logos_shapes_Reflect_response_V_t(a, f107, o59, depth + 1)
-  let f112 = v.lookup("y").get
-  ?cOut_logos_shapes_Blob_t(a, f112, o60, depth + 1)
-  let f113 = v.lookup("z").get
-  ?cOut_logos_shapes_Digest_t(a, f113, o61, depth + 1)
+    ?cOut_logos_error_detail_t(a, f88.get, o52, depth + 1)
+  let f89 = v.lookup("r").get
+  ?cOut_logos_shapes_Names_t(a, f89, o53, depth + 1)
+  let f90 = v.lookup("s").get
+  ?a.bytes(f90.bytes, o54, o55)
+  let f91 = v.lookup("t").get
+  let items92 = f91.items
+  let arr93 = ?a.list(logos_shapes_Entry_t, items92.len)
+  o56 = arr93
+  o57 = csize_t(items92.len)
+  for i, it in items92:
+    ?cOut_logos_shapes_Entry_t(a, it, arr93[i], depth + 1)
+  let f94 = v.lookup("u").get
+  ?cOut_logos_shapes_Tree_t(a, f94, o58, depth + 1)
+  let f95 = v.lookup("v").get
+  ?cOut_logos_shapes_Reflect_response_V_t(a, f95, o59, depth + 1)
+  let f100 = v.lookup("y").get
+  ?cOut_logos_shapes_Blob_t(a, f100, o60, depth + 1)
+  let f101 = v.lookup("z").get
+  ?cOut_logos_shapes_Digest_t(a, f101, o61, depth + 1)
   ok()
 
 proc kitCall2[T](p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: uint64, p3: int64, p4: cstring, p5: ptr array[32, uint8], p6: ptr UncheckedArray[logos_shapes_Reflect_request_E_LI_t], p7: csize_t, p8: ptr UncheckedArray[logos_shapes_Reflect_request_F_LI_t], p9: csize_t, p10: ptr logos_shapes_Reflect_request_G_t, p11: bool, p12: uint64, p13: ptr logos_shapes_Reflect_request_H_TU1_t, p14: ptr logos_schema_commitment_t, p15: ptr logos_tuple_size_0_t, p16: ptr logos_bstr_size_0_t, p17: int8, p18: uint16, p19: logos_shapes_Counter_t, p20: CErrorCode, p21: bool, p22: ptr logos_error_detail_t, p23: ptr logos_shapes_Names_t, p24: ptr UncheckedArray[uint8], p25: csize_t, p26: ptr UncheckedArray[logos_shapes_Entry_t], p27: csize_t, p28: ptr logos_shapes_Tree_t, p29: ptr logos_shapes_Reflect_request_V_t, p30: ptr logos_shapes_Blob_t, p31: ptr logos_shapes_Digest_t, p32: ptr uint64, p33: ptr int64, p34: ptr cstring, p35: ptr array[32, uint8], p36: ptr ptr UncheckedArray[logos_shapes_Reflect_response_E_LI_t], p37: ptr csize_t, p38: ptr ptr UncheckedArray[logos_shapes_Reflect_response_F_LI_t], p39: ptr csize_t, p40: ptr logos_shapes_Reflect_response_G_t, p41: ptr bool, p42: ptr uint64, p43: ptr logos_shapes_Reflect_response_H_TU1_t, p44: ptr logos_schema_commitment_t, p45: ptr logos_tuple_size_0_t, p46: ptr logos_bstr_size_0_t, p47: ptr int8, p48: ptr uint16, p49: ptr logos_shapes_Counter_t, p50: ptr CErrorCode, p51: ptr bool, p52: ptr logos_error_detail_t, p53: ptr logos_shapes_Names_t, p54: ptr ptr UncheckedArray[uint8], p55: ptr csize_t, p56: ptr ptr UncheckedArray[logos_shapes_Entry_t], p57: ptr csize_t, p58: ptr logos_shapes_Tree_t, p59: ptr logos_shapes_Reflect_response_V_t, p60: ptr logos_shapes_Blob_t, p61: ptr logos_shapes_Digest_t): LogosResult =

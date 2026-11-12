@@ -249,6 +249,10 @@ proc runCThread(
   fn: proc() {.cdecl, gcsafe, raises: [].}
 ): cint {.importc: "lcn_test_run_c_thread", cdecl.}
 
+proc runCThreadOn(
+  fn: proc() {.cdecl, gcsafe, raises: [].}, stack: csize_t
+): cint {.importc: "lcn_test_run_c_thread_on", cdecl.}
+
 var released: Atomic[int]
 
 proc countRelease() {.nimcall, gcsafe, raises: [].} =
@@ -289,3 +293,61 @@ suite "ifc.nim-types: concurrent use [IMPL]":
     check runCThread(cThreadBody) == 0
     check released.load == 2
     check concurrentFailures.load == 0
+
+# Payload depth -------------------------------------------------------------------------
+
+const codecStack =
+  # [IMPL] A macOS or iOS secondary thread's default stack (I79); instrumented
+  # frames are larger, as in tests/support/typedharness.
+  when defined(asan) or defined(tsan) or defined(msan):
+    2048 * 1024
+  else:
+    512 * 1024
+
+var deepChecks: Atomic[int]
+
+proc chain(levels: int): RecursiveNode =
+  ## `levels` nested `recursive.node` maps, numbered from the innermost.
+  ## The boxed copy is a separate temporary: under refc, `n = T(f: Opt.some(g(n)))`
+  ## builds `n` in place before `g` reads it (upstream draft 20).
+  result = RecursiveNode(value: 0)
+  for i in 1 ..< levels:
+    let inner = boxed(result)
+    result = RecursiveNode(next: Opt.some(inner), value: uint64(i))
+
+proc deepCodecs() {.cdecl, gcsafe, raises: [].} =
+  ## Each check that holds adds its bit to `deepChecks`.
+  setupForeignThreadGc()
+  enterThread()
+  block:
+    let bytes = encode(chain(DefaultMaxDepth))
+    if bytes.isOk:
+      deepChecks += 1
+      let back = RecursiveNode.decode(bytes.get)
+      if back.isOk:
+        # Every level came back, walked without recursion.
+        var levels = 1
+        var same = back.get.value == uint64(DefaultMaxDepth - 1)
+        var next = back.get.next
+        while next.isSome:
+          let node = next.get
+          inc levels
+          same = same and node.value == uint64(DefaultMaxDepth - levels)
+          next = node.next
+        if same and levels == DefaultMaxDepth and encode(back.get) == bytes:
+          deepChecks += 2
+    # One map more: the checked encoder and the decoder refuse it.
+    let over = chain(DefaultMaxDepth + 1)
+    if encode(over).isErr:
+      deepChecks += 4
+    if RecursiveNode.decode(encodeCbor(toCbor(over))).isErr:
+      deepChecks += 8
+  when not defined(gcDestructors):
+    releasePerThread()
+    tearDownForeignThreadGc()
+
+suite "ifc.nim-types: payload depth [IMPL]":
+  test "[IFC-0925] [IFC-0927] generated codecs convert values at the payload depth limit on a thread with 512 KiB of stack (I79)":
+    deepChecks.store(0)
+    check runCThreadOn(deepCodecs, csize_t(codecStack)) == 0
+    check deepChecks.load == 15

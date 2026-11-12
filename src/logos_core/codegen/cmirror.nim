@@ -16,6 +16,10 @@
 ##
 ##   A C discriminant maps to its canonical arm through the layout, never by
 ##   equality (§2.3).
+##
+##   Each is an entry proc over a step, `cOutStep_<typedef>` or
+##   `cInStep_<typedef>`, which the `callrt` driver resumes after each nested
+##   aggregate, so nesting costs heap frames, not native stack (I79).
 ## - For each provider function:
 ##   - a request builder, from the typed inputs to deterministic-CBOR params;
 ##   - a response writer, from the checked response to the outputs;
@@ -226,8 +230,115 @@ proc defOf(g: var MGen, doc: int, key: string): CDef =
 
 # Code ----------------------------------------------------------------------------
 
-proc line(c: var seq[string], ind: int, s: string) =
-  c.add(spaces(ind) & s)
+type
+  Context = object
+    text: string
+    opens: bool ## an `if …:`: the lines after it are its body
+
+  Emit = object
+    ## Code under construction, in one of two forms (DECISIONS I79):
+    ##
+    ## - A converter's step (`callrt.OutStep`, `InStep`): blocks that run in
+    ##   order, each guarded by `f.pc`. Where the converter reaches a nested
+    ##   aggregate, it sets `child` to that aggregate's frame and returns; the
+    ##   driver runs the child and calls the step again, which resumes in the next
+    ##   block. A resumed block repeats the context lines (bindings, presence
+    ##   tests) its first line needs. A list of aggregates has a block of its own
+    ##   that hands the driver one element per run (`f.i`, `f.cur`).
+    ## - A method half's builder: straight code that calls the converters' entry
+    ##   procs, each of which runs its own driver.
+    step: bool
+    base: int ## the indentation of the code
+    blocks: seq[(bool, seq[string])] ## step: (a list block?, lines) per block
+    lines: seq[string] ## the block (or builder) in progress
+    ind: int ## where the next line goes, past `base`
+    context: seq[Context] ## what the next line depends on
+    entered: int ## how much of `context` the block in progress has repeated
+
+proc enter(e: var Emit) =
+  ## Repeats the context the block in progress has not seen yet.
+  var ind = 0
+  for k, c in e.context:
+    if k >= e.entered:
+      e.lines.add(spaces(e.base + ind) & c.text)
+    if c.opens:
+      ind += 2
+  e.entered = e.context.len
+
+proc line(e: var Emit, s: string) =
+  e.enter()
+  e.lines.add(spaces(e.base + e.ind) & s)
+
+proc bindLine(e: var Emit, s: string, opens = false) =
+  ## A line the code after it depends on, repeated in every block that resumes
+  ## inside it.
+  e.line(s)
+  e.context.add(Context(text: s, opens: opens))
+  e.entered = e.context.len
+  if opens:
+    e.ind += 2
+
+proc leave(e: var Emit, n: int) =
+  ## Ends the last `n` context lines.
+  for _ in 0 ..< n:
+    if e.context.pop().opens:
+      e.ind -= 2
+  e.entered = min(e.entered, e.context.len)
+
+proc newBlock(e: var Emit) =
+  if e.lines.len > 0:
+    e.blocks.add((false, e.lines))
+  e.lines = @[]
+  e.entered = 0
+
+proc handOver(g: var MGen, e: var Emit, child: string, last: bool) =
+  ## A step hands `child` to the driver. Unless it is the `last` thing the step
+  ## does, the step resumes in a new block, which must not start inside a loop
+  ## or a `case` (only context lines are repeated).
+  var opens = 0
+  for c in e.context:
+    if c.opens:
+      inc opens
+  if not last and e.ind != 2 * opens:
+    g.errors.add("a converter resumes inside a loop or case")
+  e.line("child = " & child)
+  e.line("return ok(true)")
+  if not last:
+    e.newBlock()
+
+proc listBlock(e: var Emit, child: string) =
+  ## A step's block that hands the driver `child` for each element `f.i` of the
+  ## list `f.cur`, then clears `f.cur`.
+  e.newBlock()
+  e.blocks.add(
+    (
+      true,
+      @[
+        "if f.cur != nil and f.i < f.cur.items.len:",
+        "  child = " & child,
+        "  inc f.i",
+        "  return ok(true)",
+        "f.cur = nil",
+      ],
+    )
+  )
+
+proc stepBody(e: Emit): seq[string] =
+  ## The step's blocks, each entered at its `f.pc`.
+  var blocks = e.blocks
+  if e.lines.len > 0:
+    blocks.add((false, e.lines))
+  var body: seq[string]
+  for k, (list, lines) in blocks:
+    body.add("  if f.pc == " & $k & ":")
+    if not list:
+      body.add("    f.pc = " & $(k + 1))
+    for l in lines:
+      body.add("    " & l)
+    if list:
+      body.add("    f.pc = " & $(k + 1))
+  body.add("  ok(false)")
+  body
 
 proc fresh(g: var MGen, base: string): string =
   inc g.tmp
@@ -251,6 +362,26 @@ proc literalCbor(d: ScalarData): string =
 
 proc aggregate(g: var MGen, o: Owner, path: seq[Step], n: SchemaNode)
 
+proc aggregateAt(g: var MGen, o: Owner, path: seq[Step], n: SchemaNode): Opt[string] =
+  ## The mirror of the position at (`o`, `path`) when it is an aggregate with
+  ## converters of its own, emitted on the way.
+  case n.kind
+  of snPrimitive:
+    if n.scalar != skBstr or exactBstr(n) == Opt.some(0'u64):
+      return Opt.none(string)
+  of snLiteral:
+    return Opt.none(string)
+  of snMap, snChoice, snList, snTuple:
+    if n.kind == snTuple and n.items.len == 0:
+      return Opt.none(string)
+  of snLocalRef, snImportedRef:
+    let f = g.final(o.doc, n)
+    if f.errorCode or not f.decl.body.isAggregate:
+      return Opt.none(string)
+    return Opt.some(g.defOf(f.doc, f.decl.name).typeName)
+  g.aggregate(o, path, n)
+  Opt.some(g.defOf(o.doc, defKey(o, path)).typeName)
+
 # CBOR to C -------------------------------------------------------------------------
 
 proc outScalar(k: ScalarKind, t, v: string): string =
@@ -268,64 +399,70 @@ proc outScalar(k: ScalarKind, t, v: string): string =
 
 proc outAggregate(
     g: var MGen,
-    c: var seq[string],
-    ind: int,
+    e: var Emit,
     typeName: string,
     recursive: bool,
     v, dst: string,
+    last = false,
 ) =
+  if not e.step:
+    if recursive:
+      let p = g.fresh("p")
+      e.line("let " & p & " = ?a.boxed(" & typeName & ")")
+      e.line("?cOut_" & typeName & "(a, " & v & ", " & p & "[], depth + 1)")
+      e.line(dst & " = " & p)
+    else:
+      e.line("?cOut_" & typeName & "(a, " & v & ", " & dst & ", depth + 1)")
+    return
+  var target = "addr " & dst
   if recursive:
-    let p = g.fresh("p")
-    c.line(ind, "let " & p & " = ?a.boxed(" & typeName & ")")
-    c.line(ind, "?cOut_" & typeName & "(a, " & v & ", " & p & "[], depth + 1)")
-    c.line(ind, dst & " = " & p)
-  else:
-    c.line(ind, "?cOut_" & typeName & "(a, " & v & ", " & dst & ", depth + 1)")
+    target = g.fresh("p")
+    e.line("let " & target & " = ?a.boxed(" & typeName & ")")
+    e.line(dst & " = " & target)
+  g.handOver(
+    e,
+    "OutFrame(step: cOutStep_" & typeName & ", v: " & v & ", dst: " & target &
+      ", depth: depth + 1)",
+    last,
+  )
 
 proc outPos(
     g: var MGen,
-    c: var seq[string],
-    ind: int,
+    e: var Emit,
     o: Owner,
     path: seq[Step],
     n: SchemaNode,
     m: CMember,
     v, dst: string,
+    last = false,
 ) =
   ## Writes the checked value `v` of a one-member position: a scalar, text,
   ## literal, inline aggregate or reference.
+  let agg = g.aggregateAt(o, path, n)
+  if agg.isSome:
+    g.outAggregate(e, agg.get, m.recursive, v, dst, last)
+    return
   case n.kind
   of snPrimitive:
     if n.scalar != skBstr:
-      c.line(ind, dst & " = " & outScalar(n.scalar, nimOf(m.ctype), v))
-    elif exactBstr(n) != Opt.some(0'u64): # else the shared empty value
-      g.aggregate(o, path, n)
-      let d = g.defOf(o.doc, defKey(o, path))
-      g.outAggregate(c, ind, d.typeName, m.recursive, v, dst)
+      e.line(dst & " = " & outScalar(n.scalar, nimOf(m.ctype), v))
+    # else the shared empty value
   of snLiteral:
-    c.line(ind, dst & " = " & outScalar(n.literal.kind, nimOf(m.ctype), v))
+    e.line(dst & " = " & outScalar(n.literal.kind, nimOf(m.ctype), v))
   of snMap, snChoice, snList, snTuple:
-    if n.kind == snTuple and n.items.len == 0:
-      return # the shared empty value
-    g.aggregate(o, path, n)
-    let d = g.defOf(o.doc, defKey(o, path))
-    g.outAggregate(c, ind, d.typeName, m.recursive, v, dst)
+    discard # the shared empty value
   of snLocalRef, snImportedRef:
     let f = g.final(o.doc, n)
     if f.errorCode:
-      c.line(ind, dst & " = CErrorCode(" & v & ".uint)")
-    elif f.decl.body.isAggregate:
-      let d = g.defOf(f.doc, f.decl.name)
-      g.outAggregate(c, ind, d.typeName, m.recursive, v, dst)
+      e.line(dst & " = CErrorCode(" & v & ".uint)")
     elif f.decl.body.kind == snLiteral:
-      c.line(ind, dst & " = " & outScalar(f.decl.body.literal.kind, nimOf(m.ctype), v))
+      e.line(dst & " = " & outScalar(f.decl.body.literal.kind, nimOf(m.ctype), v))
     else:
-      c.line(ind, dst & " = " & outScalar(f.decl.body.scalar, nimOf(m.ctype), v))
+      e.line(dst & " = " & outScalar(f.decl.body.scalar, nimOf(m.ctype), v))
 
 proc outField(
     g: var MGen,
-    c: var seq[string],
-    ind: int,
+    e: var Emit,
     o: Owner,
     path: seq[Step],
     n: SchemaNode,
@@ -339,38 +476,47 @@ proc outField(
     if n.scalar == skBstr:
       let exact = exactBstr(n)
       if exact.isNone:
-        c.line(ind, "?a.bytes(" & v & ".bytes, " & dsts[0] & ", " & dsts[1] & ")")
+        e.line("?a.bytes(" & v & ".bytes, " & dsts[0] & ", " & dsts[1] & ")")
       elif exact.get > 0:
-        c.line(ind, "?fill(" & v & ".bytes, " & dsts[0] & ")")
+        e.line("?fill(" & v & ".bytes, " & dsts[0] & ")")
       return
   of snList:
     let items = g.fresh("items")
     let arr = g.fresh("arr")
-    c.line(ind, "let " & items & " = " & v & ".items")
-    c.line(
-      ind, "let " & arr & " = ?a.list(" & nimOf(ms[0].element) & ", " & items & ".len)"
-    )
-    c.line(ind, "for i, it in " & items & ":")
-    let e = CMember(ctype: ms[0].element, target: ms[0].listTarget)
-    g.outPos(c, ind + 2, o, path & listStep(), n.element, e, "it", arr & "[i]")
-    c.line(ind, dsts[0] & " = " & arr)
-    c.line(ind, dsts[1] & " = csize_t(" & items & ".len)")
+    e.line("let " & items & " = " & v & ".items")
+    e.line("let " & arr & " = ?a.list(" & nimOf(ms[0].element) & ", " & items & ".len)")
+    e.line(dsts[0] & " = " & arr)
+    e.line(dsts[1] & " = csize_t(" & items & ".len)")
+    let element = path & listStep()
+    let agg = g.aggregateAt(o, element, n.element)
+    if e.step and agg.isSome:
+      e.line("f.cur = " & v)
+      e.line("f.i = 0")
+      e.listBlock(
+        "OutFrame(step: cOutStep_" & agg.get & ", v: f.cur.items[f.i], dst: addr " &
+          dsts[0] & "[f.i], depth: depth + 1)"
+      )
+    else:
+      e.line("for i, it in " & items & ":")
+      e.ind += 2
+      let m = CMember(ctype: ms[0].element, target: ms[0].listTarget)
+      g.outPos(e, o, element, n.element, m, "it", arr & "[i]")
+      e.ind -= 2
     return
   of snTuple:
     if n.items.len > 0:
       for i, item in n.items:
         g.outPos(
-          c, ind, o, path & tupleStep(i), item, ms[i], v & ".items[" & $i & "]", dsts[i]
+          e, o, path & tupleStep(i), item, ms[i], v & ".items[" & $i & "]", dsts[i]
         )
     return
   else:
     discard
-  g.outPos(c, ind, o, path, n, ms[0], v, dsts[0])
+  g.outPos(e, o, path, n, ms[0], v, dsts[0])
 
 proc outMap(
     g: var MGen,
-    c: var seq[string],
-    ind: int,
+    e: var Emit,
     o: Owner,
     path: seq[Step],
     n: SchemaNode,
@@ -399,17 +545,59 @@ proc outMap(
     mi += k
     let fv = g.fresh("f")
     if f.optional:
-      c.line(ind, "let " & fv & " = " & v & ".lookup(" & escape(f.name) & ")")
-      c.line(ind, "if " & fv & ".isSome:")
-      c.line(ind + 2, dst[presence] & " = true")
-      g.outField(c, ind + 2, o, fpath, f.node, ms, dsts, fv & ".get")
+      e.bindLine("let " & fv & " = " & v & ".lookup(" & escape(f.name) & ")")
+      e.bindLine("if " & fv & ".isSome:", opens = true)
+      e.line(dst[presence] & " = true")
+      g.outField(e, o, fpath, f.node, ms, dsts, fv & ".get")
+      e.leave(2)
     else:
-      c.line(ind, "let " & fv & " = " & v & ".lookup(" & escape(f.name) & ").get")
-      g.outField(c, ind, o, fpath, f.node, ms, dsts, fv)
+      e.bindLine("let " & fv & " = " & v & ".lookup(" & escape(f.name) & ").get")
+      g.outField(e, o, fpath, f.node, ms, dsts, fv)
+      e.leave(1)
   if mi != members.len and not (n.fields.len == 0 and members.len == 1):
     g.errors.add("the C layout of " & defKey(o, path) & " has extra members")
 
 # C to CBOR -------------------------------------------------------------------------
+
+type Sink = object
+  ## Where a position's CBOR value goes: a new entry of the map `entries` under
+  ## `key`, or else the slot `slot`.
+  entries, key, slot: string
+
+func entrySink(entries, key: string): Sink =
+  Sink(entries: entries, key: key)
+
+func slotSink(slot: string): Sink =
+  Sink(slot: slot)
+
+proc put(g: var MGen, e: var Emit, s: Sink, x: string) =
+  ## Stores the value `x`.
+  if s.entries.len == 0:
+    e.line(s.slot & " = " & x)
+  else:
+    # [IMPL] The value is bound before the pair is built: a `?` inside the
+    # tuple would leak its key on the early return (tools/lint/ctortry.py).
+    let value = g.fresh("value")
+    e.line("let " & value & " = " & x)
+    e.line(s.entries & ".add((" & s.key & ", " & value & "))")
+
+proc holder(e: var Emit, s: Sink, x: string): string =
+  ## Stores the container `x`, whose items are filled later, and gives an
+  ## expression for it that holds in every later block of the step.
+  if s.entries.len == 0:
+    e.line(s.slot & " = " & x)
+    s.slot
+  else:
+    e.line(s.entries & ".add((" & s.key & ", " & x & "))")
+    s.entries & "[^1].value"
+
+proc slotOf(e: var Emit, s: Sink): string =
+  ## A slot for a value a nested converter stores later.
+  if s.entries.len == 0:
+    s.slot
+  else:
+    e.line(s.entries & ".add((" & s.key & ", CborValue(nil)))")
+    s.entries & "[^1].value"
 
 proc inScalar(k: ScalarKind, src: string): string =
   case k
@@ -424,92 +612,139 @@ proc inScalar(k: ScalarKind, src: string): string =
   of skBstr:
     ""
 
-proc inAggregate(typeName: string, recursive: bool, src: string): string =
+proc inAggregate(
+    g: var MGen,
+    e: var Emit,
+    typeName: string,
+    recursive: bool,
+    src: string,
+    s: Sink,
+    last = false,
+) =
+  if not e.step:
+    if recursive:
+      g.put(e, s, "?cIn_" & typeName & "((?present(" & src & "))[], depth + 1)")
+    else:
+      g.put(e, s, "?cIn_" & typeName & "(" & src & ", depth + 1)")
+    return
+  var p = "addr " & src
   if recursive:
-    "?cIn_" & typeName & "((?present(" & src & "))[], depth + 1)"
-  else:
-    "?cIn_" & typeName & "(" & src & ", depth + 1)"
+    p = g.fresh("p")
+    e.line("let " & p & " = ?present(" & src & ")")
+  let slot = e.slotOf(s)
+  g.handOver(
+    e,
+    "InFrame(step: cInStep_" & typeName & ", src: " & p & ", dst: addr " & slot &
+      ", depth: depth + 1)",
+    last,
+  )
 
 proc inPos(
-    g: var MGen, o: Owner, path: seq[Step], n: SchemaNode, m: CMember, src: string
-): string =
-  ## The CBOR value of a one-member position read from `src`.
-  case n.kind
-  of snPrimitive:
-    if n.scalar != skBstr:
-      return inScalar(n.scalar, src)
-    if exactBstr(n) == Opt.some(0'u64):
-      return "cbor(newSeq[byte]())"
-    g.aggregate(o, path, n)
-    inAggregate(g.defOf(o.doc, defKey(o, path)).typeName, m.recursive, src)
-  of snLiteral:
-    if g.emitLiterals:
-      literalCbor(n.literal)
-    else:
-      inScalar(n.literal.kind, src)
-  of snMap, snChoice, snList, snTuple:
-    if n.kind == snTuple and n.items.len == 0:
-      return "cborArray()"
-    g.aggregate(o, path, n)
-    inAggregate(g.defOf(o.doc, defKey(o, path)).typeName, m.recursive, src)
-  of snLocalRef, snImportedRef:
-    let f = g.final(o.doc, n)
-    if f.errorCode:
-      "cbor(int64(" & src & "))"
-    elif f.decl.body.isAggregate:
-      inAggregate(g.defOf(f.doc, f.decl.name).typeName, m.recursive, src)
-    elif f.decl.body.kind == snLiteral:
-      if g.emitLiterals:
-        literalCbor(f.decl.body.literal)
+    g: var MGen,
+    e: var Emit,
+    o: Owner,
+    path: seq[Step],
+    n: SchemaNode,
+    m: CMember,
+    src: string,
+    s: Sink,
+    last = false,
+) =
+  ## Stores the CBOR value of a one-member position read from `src`.
+  let agg = g.aggregateAt(o, path, n)
+  if agg.isSome:
+    g.inAggregate(e, agg.get, m.recursive, src, s, last)
+    return
+  let x =
+    case n.kind
+    of snPrimitive:
+      if n.scalar != skBstr:
+        inScalar(n.scalar, src)
       else:
-        inScalar(f.decl.body.literal.kind, src)
-    else:
-      inScalar(f.decl.body.scalar, src)
+        "cbor(newSeq[byte]())"
+    of snLiteral:
+      if g.emitLiterals:
+        literalCbor(n.literal)
+      else:
+        inScalar(n.literal.kind, src)
+    of snMap, snChoice, snList, snTuple:
+      "cborArray()" # the empty tuple
+    of snLocalRef, snImportedRef:
+      let f = g.final(o.doc, n)
+      if f.errorCode:
+        "cbor(int64(" & src & "))"
+      elif f.decl.body.kind == snLiteral:
+        if g.emitLiterals:
+          literalCbor(f.decl.body.literal)
+        else:
+          inScalar(f.decl.body.literal.kind, src)
+      else:
+        inScalar(f.decl.body.scalar, src)
+  g.put(e, s, x)
 
 proc inField(
     g: var MGen,
-    c: var seq[string],
-    ind: int,
+    e: var Emit,
     o: Owner,
     path: seq[Step],
     n: SchemaNode,
     ms: seq[CMember],
     srcs: seq[string],
-): string =
-  ## The CBOR value of one field (or one aggregate) read from its members.
+    s: Sink,
+) =
+  ## Stores the CBOR value of one field (or one aggregate) read from its members.
   case n.kind
   of snPrimitive:
     if n.scalar == skBstr:
       let exact = exactBstr(n)
       if exact.isNone:
-        return "?inBytes(" & srcs[0] & ", " & srcs[1] & ")"
-      if exact.get > 0:
-        return "cbor(" & srcs[0] & ")"
-      return "cbor(newSeq[byte]())"
+        g.put(e, s, "?inBytes(" & srcs[0] & ", " & srcs[1] & ")")
+      elif exact.get > 0:
+        g.put(e, s, "cbor(" & srcs[0] & ")")
+      else:
+        g.put(e, s, "cbor(newSeq[byte]())")
+      return
   of snList:
     let count = g.fresh("n")
-    let items = g.fresh("items")
-    c.line(ind, "let " & count & " = ?counted(" & srcs[0] & ", " & srcs[1] & ")")
-    c.line(ind, "var " & items & " = newSeq[CborValue](" & count & ")")
-    c.line(ind, "for i in 0 ..< " & count & ":")
-    let e = CMember(ctype: ms[0].element, target: ms[0].listTarget)
-    let x = g.inPos(o, path & listStep(), n.element, e, srcs[0] & "[i]")
-    c.line(ind + 2, items & "[i] = " & x)
-    return "cborArray(" & items & ")"
+    e.line("let " & count & " = ?counted(" & srcs[0] & ", " & srcs[1] & ")")
+    let arr = e.holder(s, "newCborArray(" & count & ")")
+    let element = path & listStep()
+    let agg = g.aggregateAt(o, element, n.element)
+    if e.step and agg.isSome:
+      e.line("f.cur = " & arr)
+      e.line("f.i = 0")
+      e.listBlock(
+        "InFrame(step: cInStep_" & agg.get & ", src: addr " & srcs[0] &
+          "[f.i], dst: addr f.cur.items[f.i], depth: depth + 1)"
+      )
+    else:
+      e.line("for i in 0 ..< " & count & ":")
+      e.ind += 2
+      let m = CMember(ctype: ms[0].element, target: ms[0].listTarget)
+      g.inPos(e, o, element, n.element, m, srcs[0] & "[i]", slotSink(arr & ".items[i]"))
+      e.ind -= 2
+    return
   of snTuple:
     if n.items.len > 0:
-      var xs: seq[string]
+      let tup = e.holder(s, "newCborArray(" & $n.items.len & ")")
       for i, item in n.items:
-        xs.add(g.inPos(o, path & tupleStep(i), item, ms[i], srcs[i]))
-      return "cborArray(" & xs.join(", ") & ")"
+        g.inPos(
+          e,
+          o,
+          path & tupleStep(i),
+          item,
+          ms[i],
+          srcs[i],
+          slotSink(tup & ".items[" & $i & "]"),
+        )
+      return
   else:
     discard
-  g.inPos(o, path, n, ms[0], srcs[0])
+  g.inPos(e, o, path, n, ms[0], srcs[0], s)
 
 proc inMap(
     g: var MGen,
-    c: var seq[string],
-    ind: int,
+    e: var Emit,
     o: Owner,
     path: seq[Step],
     n: SchemaNode,
@@ -530,25 +765,19 @@ proc inMap(
     let ms = members[mi ..< mi + k]
     let srcs = src[mi ..< mi + k]
     mi += k
-    let key = "cbor(" & escape(f.name) & ")"
-    # [IMPL] The value is bound before the pair is built: a `?` inside the tuple
-    # would leak its key on the early return (tools/lint/ctortry.py).
-    let at =
-      if f.optional:
-        ind + 2
-      else:
-        ind
     if f.optional:
-      c.line(ind, "if " & src[presence] & ":")
-    let x = g.inField(c, at, o, fpath, f.node, ms, srcs)
-    let value = g.fresh("value")
-    c.line(at, "let " & value & " = " & x)
-    c.line(at, entries & ".add((" & key & ", " & value & "))")
+      e.bindLine("if " & src[presence] & ":", opens = true)
+    g.inField(
+      e, o, fpath, f.node, ms, srcs, entrySink(entries, "cbor(" & escape(f.name) & ")")
+    )
+    if f.optional:
+      e.leave(1)
 
 # Converters ------------------------------------------------------------------------
 
 proc aggregate(g: var MGen, o: Owner, path: seq[Step], n: SchemaNode) =
-  ## Emits `cOut_<T>` and `cIn_<T>` for the aggregate at (`o`, `path`), once.
+  ## Emits the steps `cOutStep_<T>` and `cInStep_<T>` for the aggregate at
+  ## (`o`, `path`), once, with their entry procs `cOut_<T>` and `cIn_<T>`.
   let key = defKey(o, path)
   if key in g.visited or g.docs[o.doc].external:
     return
@@ -563,25 +792,30 @@ proc aggregate(g: var MGen, o: Owner, path: seq[Step], n: SchemaNode) =
     ", depth: int): Result[void, string]"
   let inSig =
     "proc cIn_" & t & "*(src: " & t & ", depth: int): Result[CborValue, string]"
-  g.forwards.add(outSig)
-  g.forwards.add(inSig)
-  var oc = @[outSig & " =", "  ?depthCheck(depth)"]
-  var ic = @[inSig & " =", "  ?depthCheck(depth)"]
+  let outStepSig =
+    "proc cOutStep_" & t &
+    "*(a: var CallArena, f: var OutFrame, child: var OutFrame): Result[bool, string]"
+  let inStepSig =
+    "proc cInStep_" & t & "*(f: var InFrame, child: var InFrame): Result[bool, string]"
+  g.forwards.add([outStepSig, inStepSig, outSig, inSig])
+  var oe = Emit(step: true)
+  var ie = Emit(step: true)
+  oe.line("?depthCheck(depth)")
+  ie.line("?depthCheck(depth)")
   let member = toSeq(0 ..< d.members.len).mapIt("dst.m" & $it)
   let source = toSeq(0 ..< d.members.len).mapIt("src.m" & $it)
   case n.kind
   of snMap:
-    g.outMap(oc, 2, o, path, n, d.members, member, "v")
-    ic.line(2, "var e: seq[CborEntry]")
-    g.inMap(ic, 2, o, path, n, d.members, source, "e")
-    ic.line(2, "ok(cborMap(e))")
+    g.outMap(oe, o, path, n, d.members, member, "v")
+    ie.line("f.dst[] = cborMap()")
+    g.inMap(ie, o, path, n, d.members, source, "f.dst[].entries")
   of snChoice:
     let (symbolic, steps) = g.armSteps(o.doc, n)
     if d.cases.len != n.arms.len or d.caseArms.len != n.arms.len:
       g.errors.add("the C layout of " & key & " has other arms")
       return
-    oc.line(2, "case " & g.schema & ".arm(" & escape(planKey(o, path)) & ", v)")
-    ic.line(2, "case src.kind")
+    oe.line("case " & g.schema & ".arm(" & escape(planKey(o, path)) & ", v)")
+    ie.line("case src.kind")
     var mi = 0
     for ci, (_, value) in d.cases:
       let i = d.caseArms[ci]
@@ -589,11 +823,13 @@ proc aggregate(g: var MGen, o: Owner, path: seq[Step], n: SchemaNode) =
       let apath =
         path & (("arm_" & $i), (if symbolic: "_AR_" & steps[i]
           else: "_AR" & steps[i]))
-      oc.line(2, "of " & $i & ":")
-      oc.line(4, "dst.kind = " & $value & "'u32")
-      ic.line(2, "of " & $value & "'u32:")
+      oe.line("of " & $i & ":")
+      ie.line("of " & $value & "'u32:")
+      oe.ind += 2
+      ie.ind += 2
+      oe.line("dst.kind = " & $value & "'u32")
       if a.kind == snLiteral:
-        ic.line(4, "ok(" & literalCbor(a.literal) & ")")
+        ie.line("f.dst[] = " & literalCbor(a.literal))
       else:
         if mi >= d.members.len:
           g.errors.add("the C layout of " & key & " lacks an arm member")
@@ -601,40 +837,55 @@ proc aggregate(g: var MGen, o: Owner, path: seq[Step], n: SchemaNode) =
         let m = d.members[mi]
         let arm = "value.m" & $mi
         inc mi
-        g.outPos(oc, 4, o, apath, a, m, "v", "dst." & arm)
-        ic.line(4, "ok(" & g.inPos(o, apath, a, m, "src." & arm) & ")")
-    oc.line(2, "else:")
-    oc.line(4, "return err(" & escape("no arm of " & key) & ")")
-    ic.line(2, "else:")
-    ic.line(
-      4,
-      "err(\"the discriminant \" & $src.kind & " & escape(" names no arm of " & key) &
-        ")",
+        g.outPos(oe, o, apath, a, m, "v", "dst." & arm, last = true)
+        g.inPos(ie, o, apath, a, m, "src." & arm, slotSink("f.dst[]"), last = true)
+      oe.ind -= 2
+      ie.ind -= 2
+    oe.line("else:")
+    oe.line("  return err(" & escape("no arm of " & key) & ")")
+    ie.line("else:")
+    ie.line(
+      "  return err(\"the discriminant \" & $src.kind & " &
+        escape(" names no arm of " & key) & ")"
     )
-  of snList:
-    g.outField(oc, 2, o, path, n, d.members, @["dst.m0", "dst.m1"], "v")
-    ic.line(
-      2, "ok(" & g.inField(ic, 2, o, path, n, d.members, @["src.m0", "src.m1"]) & ")"
-    )
+  of snList, snPrimitive: # a list or a byte string
+    g.outField(oe, o, path, n, d.members, @["dst.m0", "dst.m1"], "v")
+    g.inField(ie, o, path, n, d.members, @["src.m0", "src.m1"], slotSink("f.dst[]"))
   of snTuple:
     let names = toSeq(0 ..< max(n.items.len, 1)).mapIt("dst.m" & $it)
     let srcs = toSeq(0 ..< max(n.items.len, 1)).mapIt("src.m" & $it)
-    g.outField(oc, 2, o, path, n, d.members, names, "v")
+    g.outField(oe, o, path, n, d.members, names, "v")
     if n.items.len == 0:
-      ic.line(2, "ok(cborArray())")
+      ie.line("f.dst[] = cborArray()")
     else:
-      ic.line(2, "ok(" & g.inField(ic, 2, o, path, n, d.members, srcs) & ")")
-  of snPrimitive: # bstr
-    g.outField(oc, 2, o, path, n, d.members, @["dst.m0", "dst.m1"], "v")
-    ic.line(
-      2, "ok(" & g.inField(ic, 2, o, path, n, d.members, @["src.m0", "src.m1"]) & ")"
-    )
+      g.inField(ie, o, path, n, d.members, srcs, slotSink("f.dst[]"))
   else:
     g.errors.add("no aggregate at " & key)
     return
-  oc.line(2, "ok()")
-  g.procs.add(oc.join("\n"))
-  g.procs.add(ic.join("\n"))
+  g.procs.add(
+    (
+      @[
+        outStepSig & " =",
+        "  let v {.used.} = f.v",
+        "  let dst {.used.} = cast[ptr " & t & "](f.dst)",
+        "  let depth {.used.} = f.depth",
+      ] & oe.stepBody
+    ).join("\n")
+  )
+  g.procs.add(
+    (
+      @[
+        inStepSig & " =",
+        "  let src {.used.} = cast[ptr " & t & "](f.src)",
+        "  let depth {.used.} = f.depth",
+      ] & ie.stepBody
+    ).join("\n")
+  )
+  g.procs.add(
+    outSig & " =\n  a.runOut(OutFrame(step: cOutStep_" & t &
+      ", v: v, dst: addr dst, depth: depth))"
+  )
+  g.procs.add(inSig & " =\n  runIn(cInStep_" & t & ", addr src, depth)")
 
 proc declarations(g: var MGen) =
   ## Converters for every aggregate the non-external documents declare, inline
@@ -826,7 +1077,8 @@ proc methodPieces(
   ## after its first two) and its builders, named `<prefix>Request<k>` and
   ## `<prefix>Respond<k>`.
   var r = MethodPieces()
-  var reqLines, resLines: seq[string]
+  var req = Emit(base: 2)
+  var res = Emit(base: 2)
   var reqParams, resParams: seq[string]
   template next(): string =
     "p" & $(r.params.len + 2)
@@ -841,7 +1093,7 @@ proc methodPieces(
     r.params.add(p & ": ptr " & t)
     reqParams.add(p & ": ptr " & t)
     r.ins.add(p)
-    reqLines.line(2, "ok(encodeCbor(?cIn_" & t & "((?present(" & p & "))[], depth)))")
+    req.line("ok(encodeCbor(?cIn_" & t & "((?present(" & p & "))[], depth)))")
   else:
     let members = g.layout.halves.getOrDefault(request)
     var srcs: seq[string]
@@ -857,9 +1109,9 @@ proc methodPieces(
         else:
           p
       )
-    reqLines.line(2, "var e: seq[CborEntry]")
-    g.inMap(reqLines, 2, rqOwner, @[], rq.body, members, srcs, "e")
-    reqLines.line(2, "ok(encodeCbor(cborMap(e)))")
+    req.line("var e: seq[CborEntry]")
+    g.inMap(req, rqOwner, @[], rq.body, members, srcs, "e")
+    req.line("ok(encodeCbor(cborMap(e)))")
   # The response.
   let (rsDoc, rs) = findHalf(docs, response)
   let rsOwner = Owner(doc: rsDoc, name: response)
@@ -872,7 +1124,7 @@ proc methodPieces(
     r.outs.add(p)
     r.staged.add((o, t))
     resParams.add(o & ": var " & t)
-    resLines.line(2, "?cOut_" & t & "(a, v, " & o & ", depth)")
+    res.line("?cOut_" & t & "(a, v, " & o & ", depth)")
   else:
     let members = g.layout.halves.getOrDefault(response)
     var targets: seq[string]
@@ -885,8 +1137,8 @@ proc methodPieces(
       r.staged.add((o, st))
       resParams.add(o & ": var " & st)
       targets.add(o)
-    g.outMap(resLines, 2, rsOwner, @[], rs.body, members, targets, "v")
-  resLines.line(2, "ok()")
+    g.outMap(res, rsOwner, @[], rs.body, members, targets, "v")
+  res.line("ok()")
   # The builders.
   let reqSig = "proc " & prefix & "Request" & $k & "("
   if rq.body.kind != snChoice and g.layout.halves.getOrDefault(request).len == 0:
@@ -898,14 +1150,14 @@ proc methodPieces(
     r.builders.add(
       reqSig & reqParams.join(", ") & "): Result[seq[byte], string] =\n" & "  ## `" &
         methodName & "`'s request params from its typed inputs.\n" &
-        "  let depth {.used.} = 1\n" & reqLines.join("\n")
+        "  let depth {.used.} = 1\n" & req.lines.join("\n")
     )
   if r.staged.len > 0:
     r.builders.add(
       "proc " & prefix & "Respond" & $k & "(a: var CallArena, v: CborValue, " &
         resParams.join(", ") & "): Result[void, string] =\n  ## `" & methodName &
         "`'s outputs from its checked response.\n  let depth {.used.} = 1\n" &
-        resLines.join("\n")
+        res.lines.join("\n")
     )
   r
 

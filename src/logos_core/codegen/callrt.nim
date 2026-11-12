@@ -32,9 +32,13 @@
 ## struct or array passed by pointer, a byte string or list with a nonzero
 ## length, and a required recursive pointer (§2.3).
 ##
-## Stack [IMPL]: the converters recurse once per nesting level, as the Nim
-## codecs do, so a call at the payload depth limit (`MaxConvertDepth`) needs up
-## to 1 MiB of stack on the calling thread (I72).
+## Stack [IMPL] (DECISIONS I79): a converter is a step over a frame
+## (`OutFrame`, `InFrame`) that runs until it reaches a nested aggregate, hands
+## that aggregate's frame to the driver (`runOut`, `runIn`) and resumes where it
+## stopped once the nested one is done. The frames are a heap stack, so the
+## native stack does not grow with the payload depth, and every member is still
+## visited depth first in declaration order: the first failure is the one the
+## recursive converters met.
 
 {.push raises: [], gcsafe.}
 
@@ -207,3 +211,58 @@ proc present*[T](p: ptr T): Result[ptr T, string] =
   if p == nil:
     return err("a null pointer")
   ok(p)
+
+# Frames --------------------------------------------------------------------------
+
+type
+  OutStep* = proc(
+    a: var CallArena, f: var OutFrame, child: var OutFrame
+  ): Result[bool, string] {.nimcall, gcsafe, raises: [].}
+    ## Runs `f` until it is done (false) or until it has set `child` to a nested
+    ## aggregate to write first (true); `f.pc` says where it resumes.
+
+  OutFrame* = object ## One `cOut` converter writing a checked value into its mirror.
+    step*: OutStep
+    v*: CborValue ## the checked value
+    dst*: pointer ## the mirror
+    depth*: int
+    pc*: int ## the block the step resumes at
+    i*: int ## the next element of the list in progress
+    cur*: CborValue ## the list in progress, if any
+
+  InStep* = proc(f: var InFrame, child: var InFrame): Result[bool, string] {.
+    nimcall, gcsafe, raises: []
+  .} ## As `OutStep`, for a `cIn` converter.
+
+  InFrame* = object ## One `cIn` converter reading a mirror into a CBOR value.
+    step*: InStep
+    src*: pointer ## the mirror
+    dst*: ptr CborValue ## where its value goes: a slot its parent made
+    depth*: int
+    pc*: int
+    i*: int
+    cur*: CborValue ## the array in progress, if any
+
+proc runOut*(a: var CallArena, root: OutFrame): Result[void, string] =
+  ## Runs a converter and every converter it starts, depth first, on a heap
+  ## stack; the first failure ends them all.
+  var stack = @[root]
+  while stack.len > 0:
+    var child: OutFrame
+    if ?stack[^1].step(a, stack[^1], child):
+      stack.add(move child)
+    else:
+      stack.setLen(stack.len - 1)
+  ok()
+
+proc runIn*(step: InStep, src: pointer, depth: int): Result[CborValue, string] =
+  ## As `runOut`: the value of the mirror at `src`.
+  var root: CborValue
+  var stack = @[InFrame(step: step, src: src, dst: addr root, depth: depth)]
+  while stack.len > 0:
+    var child: InFrame
+    if ?stack[^1].step(stack[^1], child):
+      stack.add(move child)
+    else:
+      stack.setLen(stack.len - 1)
+  ok(root)
