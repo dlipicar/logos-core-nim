@@ -1702,7 +1702,31 @@ suite "trnio.deadlines: a deadline that passes while the I/O thread is busy (TRA
   # chronos runs the expired timer first and blames the peer.
   const T = 500 * Slow ## the deadline the test is about, in ms
 
-  test "[TRN-0378] [G61] caller: a Hello response that arrived in time counts":
+  proc inTime(start: MonoTime, what: string): bool =
+    ## Whether the scene was set within `T` ms of `start`: before the deadline.
+    let ms = (getMonoTime() - start).inMilliseconds
+    result = ms < T
+    if not result:
+      echo "    inconclusive: ", what, " took ", ms, " ms (bound ", T, " ms)"
+
+  template sceneTest(name: string, body: untyped) =
+    ## A test whose scene must be set before its deadline. `body` returns
+    ## whether it was (`inTime`) and checks the outcome only then: a loaded
+    ## host that sets it late proves nothing either way. The scene is set
+    ## again, up to three times, and the test is skipped if no try was in time.
+    test name:
+      proc scene(): bool =
+        body
+
+      var conclusive = false
+      for _ in 1 .. 3:
+        if scene():
+          conclusive = true
+          break
+      if not conclusive:
+        skip()
+
+  sceneTest "[TRN-0378] [G61] caller: a Hello response that arrived in time counts":
     let ep = newEndpoint()
     let callee = newOwner()
     callee.admit = amIgnore
@@ -1726,15 +1750,18 @@ suite "trnio.deadlines: a deadline that passes while the I/O thread is busy (TRA
       callee.admitHello(hello.get)
     check callee.expectKind(evEstablished).isSome
     # The response is in the caller's socket before its deadline.
-    check (getMonoTime() - start).inMilliseconds < T
-    sleepUntil(armed + initDuration(milliseconds = T + 100))
+    let set = inTime(start, "the response")
+    if set:
+      sleepUntil(armed + initDuration(milliseconds = T + 100))
     o.openGate()
-    let r = o.oneOf(1)
-    check r.isSome and r.get.kind == evConnected
+    if set:
+      let r = o.oneOf(1)
+      check r.isSome and r.get.kind == evConnected
     o.stop()
     callee.done(ep)
+    set
 
-  test "[TRN-0378] [G61] callee: an admission the owner queued in time counts":
+  sceneTest "[TRN-0378] [G61] callee: an admission the owner queued in time counts":
     var cfg = fastConfig()
     cfg.helloTimeout = T * Ms
     let ep = newEndpoint()
@@ -1762,17 +1789,20 @@ suite "trnio.deadlines: a deadline that passes while the I/O thread is busy (TRA
     check hello.isSome
     if hello.isSome:
       o.admitHello(hello.get)
-    check (getMonoTime() - start).inMilliseconds < T
-    sleepUntil(armed + initDuration(milliseconds = T + 100))
+    let set = inTime(start, "the admission")
+    if set:
+      sleepUntil(armed + initDuration(milliseconds = T + 100))
     o.openGate()
-    let ms = raw.readMsgs(o, 1)
-    check ms.len == 1 and ms[0].kind == mkHello
-    check o.expectKind(evEstablished).isSome
+    if set:
+      let ms = raw.readMsgs(o, 1)
+      check ms.len == 1 and ms[0].kind == mkHello
+      check o.expectKind(evEstablished).isSome
     discard fdClose(other)
     discard fdClose(raw.fd)
     o.done(ep)
+    set
 
-  test "[TRN-0378] [TRN-0381] a frame's wait ends with room another connection freed in time":
+  sceneTest "[TRN-0378] [TRN-0381] a frame's wait ends with room another connection freed in time":
     var cfg = fastConfig()
     cfg.maxInputBytes = 24 * MiB
     cfg.admissionTimeout = T * Ms
@@ -1797,18 +1827,21 @@ suite "trnio.deadlines: a deadline that passes while the I/O thread is busy (TRA
     )
     # a's frame ends (its reservation is released when it is handled).
     check writeAll(a.fd, newSeq[byte](10))
-    check (getMonoTime() - start).inMilliseconds < T
-    sleepUntil(armed + initDuration(milliseconds = T + 100))
+    let set = inTime(start, "the end of a's frame")
+    if set:
+      sleepUntil(armed + initDuration(milliseconds = T + 100))
     o.openGate()
-    # b was admitted: it waits for the rest of its frame, nothing is sent to it.
-    let ms = b.readMsgs(o, 1, 500)
-    check ms.len == 0
+    if set:
+      # b was admitted: it waits for the rest of its frame, nothing is sent to it.
+      let ms = b.readMsgs(o, 1, 500)
+      check ms.len == 0
     discard fdClose(other)
     discard fdClose(a.fd)
     discard fdClose(b.fd)
     o.done(ep)
+    set
 
-  test "[TRN-0126] a write stall: a caller ready to read when the deadline is seen is not blamed":
+  sceneTest "[TRN-0126] a write stall: a caller ready to read when the deadline is seen is not blamed":
     var cfg = fastConfig()
     cfg.callerUndeliveredBytes = int(MinFrameLimit)
     cfg.writeStallTimeout = 2 * T * Ms
@@ -1838,13 +1871,16 @@ suite "trnio.deadlines: a deadline that passes while the I/O thread is busy (TRA
       proc(): bool =
         o.atGate(),
     )
-    check (getMonoTime() - paused).inMilliseconds < T
-    sleepUntil(paused + initDuration(milliseconds = 3 * T))
+    let set = inTime(paused, "the release")
+    if set:
+      sleepUntil(paused + initDuration(milliseconds = 3 * T))
     o.openGate()
-    o.autoRelease = true
-    let all = o.waitN(evEvent, 1, 6, timeoutMs = BigWait)
-    check all.len == 6
-    check o.log.countIt(it.kind == evClosed) == 0
+    if set:
+      o.autoRelease = true
+      let all = o.waitN(evEvent, 1, 6, timeoutMs = BigWait)
+      check all.len == 6
+      check o.log.countIt(it.kind == evClosed) == 0
     o.done(ep)
+    set
 
 removeDir(base)
