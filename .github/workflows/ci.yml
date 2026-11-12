@@ -46,6 +46,19 @@ jobs:
           attic-token-ci: ${{ secrets.ATTIC_TOKEN_CI }}
           attic-token-public: ${{ secrets.ATTIC_TOKEN_PUBLIC }}
 
+      # The action adds cache.nix.logos.co as a substituter. When it does not answer (it timed
+      # out from every runner on 2026-11-12), each nix command spends about two minutes on
+      # retries before building without it. One probe decides for the whole job: if the cache
+      # is down, later steps read from cache.nixos.org only (the runner user is a trusted Nix
+      # user, so the daemon takes this override).
+      - name: Skip the Logos cache when it does not answer
+        run: |
+          if ! curl -sf --retry 2 --connect-timeout 5 --max-time 10 -o /dev/null \
+              https://cache.nix.logos.co/public/nix-cache-info; then
+            echo "::warning::cache.nix.logos.co does not answer; reading from cache.nixos.org only"
+            echo "NIX_CONFIG=substituters = https://cache.nixos.org/" >> "$GITHUB_ENV"
+          fi
+
       - name: Flake checks
         if: matrix.group == 'all'
         run: nix flake check -L --keep-going
@@ -73,6 +86,15 @@ jobs:
         uses: logos-co/setup-nix-cache-action@v1
         with:
           attic-token-ci: ${{ secrets.ATTIC_TOKEN_CI }}
+
+      # As in the nix job.
+      - name: Skip the Logos cache when it does not answer
+        run: |
+          if ! curl -sf --retry 2 --connect-timeout 5 --max-time 10 -o /dev/null \
+              https://cache.nix.logos.co/public/nix-cache-info; then
+            echo "::warning::cache.nix.logos.co does not answer; reading from cache.nixos.org only"
+            echo "NIX_CONFIG=substituters = https://cache.nixos.org/" >> "$GITHUB_ENV"
+          fi
 
       # nimble 0.20.1 from the dev shell segfaults on macOS when it downloads the package list
       # itself (reproduced locally; Linux is unaffected), so the runner's curl fetches it: into
