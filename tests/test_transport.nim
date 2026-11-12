@@ -3,7 +3,7 @@
 ## tickets, correlation, requests, cancellation, multiplexing, subscriptions,
 ## route termination, per-connection limits and protocol evolution.
 
-import std/[importutils, sequtils, strutils]
+import std/[importutils, sequtils, sets, strutils]
 import unittest2
 import ../src/logos_core/[cbor, hash, commitment, transport]
 import ../src/logos_core/iface/[accept, surface, outcome, payload]
@@ -787,6 +787,24 @@ suite "trn.hello: Hello and route tickets (TRANSPORT §3.1, §3.3, §8.1)":
     let sent = decodeMessage(req).get.hello
     check acceptHelloResponse(sent, est.response).isOk
 
+  test "[CAP-0253] [CAP-0254] the redeemed binding carries the route's access, decision and end, and never the ticket":
+    var store: TicketStore[RouteBinding]
+    var b = routeBinding()
+    b.access = RouteAccess(
+      methods: Opt.some(@[subtreeOf("storage.exists")]),
+      publishEvents: Opt.some(newSeq[Digest]()),
+    )
+    b.decision = "decision-42"
+    b.expires = Opt.some(90 * Second)
+    b.validUntil = Opt.some(1_800_000_000_000'i64)
+    let t = store.issue(b, 0, 100 * Second).get
+    let est = acceptHello(
+      endpoint, store, helloRequest("storage_module", t, root).get, Second
+    ).get
+    check est.binding == b
+    check est.binding.access.subscribeEvents.isNone
+    check decodeMessage(est.response).get.hello.token.len == 0
+
   test "[TRN-0072] [TRN-0318] a missing or malformed module is INVALID_PARAMS and consumes nothing; another module is NOT_AUTHORISED":
     var store: TicketStore[RouteBinding]
     let t = store.issue(routeBinding(), 0, 100 * Second).get
@@ -1354,6 +1372,50 @@ suite "trn.cancel: cancellation (TRANSPORT §6)":
     # Cancel ids are not Request ids: 9 did not move the sequence.
     check dispatched(callee.receive(requestFor(5))).len == 1
 
+  test "[TRN-0314] [TRN-0316] [TRN-0382] Cancel needs no free slot; the cancelled request keeps its slot until its work ends":
+    let l = transportLimits(maxInFlight = 1).get
+    var caller = callerConn(storageBoundary)
+    var callee = calleeConn(storageBoundary, l)
+    let (a, ra) = caller.request("exists", params()).get
+    check dispatched(callee.receive(ra)).len == 1
+    check callee.executing == 1
+    # At the cap the Cancel is still read, and CANCELLED committed at once.
+    let acts = callee.receive(caller.cancel(a).get)
+    check sent(acts).len == 1 and sent(acts)[0].response.failure.code == ecCancelled
+    check acts.anyIt(it.kind == caStop and it.id == a)
+    check callee.inFlight == 0
+    # The provider has not stopped: its slot stays held, and the next Request
+    # waits for it.
+    check callee.executing == 1 and callee.isExecuting(a)
+    let (b, rb) = caller.request("exists", params()).get
+    check callee.receive(rb).len == 0
+    check callee.delayedRequests == 1 and callee.isInFlight(b)
+    # The work ends: the slot frees and the queued Request is dispatched.
+    check dispatched(callee.workEnded(a)).mapIt(it.id) == @[b]
+    check callee.executingIds == @[b] and callee.delayedRequests == 0
+    check callee.workEnded(a).len == 0
+
+  test "[TRN-0384] [TRN-0130] a queued Request observes Cancel: CANCELLED without dispatch, stop or slot":
+    let l = transportLimits(maxInFlight = 1).get
+    var caller = callerConn(storageBoundary)
+    var callee = calleeConn(storageBoundary, l)
+    let (a, ra) = caller.request("exists", params()).get
+    discard callee.receive(ra)
+    let (b, rb) = caller.request("exists", params("queued")).get
+    check callee.receive(rb).len == 0
+    check callee.delayedBytes == rb.len
+    let acts = callee.receive(caller.cancel(b).get)
+    check acts.len == 1 and not acts.anyIt(it.kind == caStop)
+    let r = sent(acts)[0].response
+    check r.id == b and r.failure.code == ecCancelled
+    check caller.receive(acts[0].bytes)[0].outcome.failure.code == ecCancelled
+    check callee.delayedRequests == 0 and callee.delayedBytes == 0
+    # Never dispatched or answered, even once a slot frees.
+    check callee.respond(b, okExists()).isNone
+    check caller.receive(callee.respond(a, okExists()).get)[0].outcome.ok
+    check callee.workEnded(a).len == 0
+    check callee.executing == 0 and caller.pendingCalls == 0
+
   test "[TRN-0313] invocation-scoped Events stop once Cancel is processed or the terminal Response is committed":
     var (caller, callee) = pair()
     active(caller, callee, 1, "storage.upload_progress_event")
@@ -1890,36 +1952,229 @@ suite "trn.termination: route expiry or revocation on a live session (TRANSPORT 
     check callee2.finishTermination().len == 0
     check callee2.beginTermination().len == 0
 
-suite "trn.limits: per-connection resource limits (TRANSPORT §8.6)":
-  test "[TRN-0381] [TRN-0383] [TRN-0385] admission comes before the resource; at the limit input waits or the connection closes, and nothing accepted is dropped":
-    let l = transportLimits(maxInFlight = 2).get
-    check l.maxInFlight == 2
+  test "[TRN-0384] [TRN-0321] queued Requests are never dispatched once termination begins":
+    let l = transportLimits(maxInFlight = 1).get
+    var caller = callerConn(storageBoundary)
     var callee = calleeConn(storageBoundary, l)
+    let (a, ra) = caller.request("exists", params()).get
+    discard callee.receive(ra)
+    let (b, rb) = caller.request("exists", params("b")).get
+    let (c, rc) = caller.request("exists", params("c")).get
+    check callee.receive(rb).len == 0 and callee.receive(rc).len == 0
+    # Admission stopped before they were dispatched: each gets NOT_AUTHORISED,
+    # in order, without dispatch or diagnostic.
+    let begun = sent(callee.beginTermination())
+    check begun.mapIt((it.response.id, it.response.failure.code)) ==
+      @[(b, ecNotAuthorised), (c, ecNotAuthorised)]
+    check begun.allIt(it.response.failure.message.isNone)
+    check callee.delayedRequests == 0 and callee.delayedBytes == 0
+    # The in-flight one may still finish; its slot frees, and nothing is
+    # dispatched while terminating.
+    check caller.receive(callee.respond(a, okExists()).get)[0].outcome.ok
+    check callee.workEnded(a).len == 0 and callee.admitDelayed().len == 0
+    check callee.executing == 0
+
+suite "trn.limits: per-connection resource limits (TRANSPORT §6, §8.6)":
+  test "[TRN-0381] [TRN-0383] [TRN-0385] [TRN-0386] admission comes before the resource; at the cap a Request waits in a bounded queue; a full queue closes, and nothing accepted is dropped":
+    let l = transportLimits(maxInFlight = 2, maxDelayedRequests = 2).get
+    check l.maxInFlight == 2 and l.maxDelayedRequests == 2
+    var caller = callerConn(storageBoundary)
+    var callee = calleeConn(storageBoundary.withAccess(["exists"], []), l)
+    var ids: seq[uint64]
+    for _ in 0 ..< 2:
+      let (id, req) = caller.request("exists", params()).get
+      ids.add(id)
+      check dispatched(callee.receive(req)).len == 1
+    check callee.executing == 2
+    # At the cap reading continues; the next Requests wait, in flight, in the
+    # delayed-admission queue.
     check callee.admitsInput
+    for _ in 0 ..< 2:
+      let (id, req) = caller.request("exists", params()).get
+      ids.add(id)
+      check callee.receive(req).len == 0
+    check callee.delayedRequests == 2 and callee.isInFlight(ids[3])
+    # A rejection needs no slot: it is committed at once, even at the cap.
+    let (sp, rs) = caller.request("space", cborMap()).get
+    let rej = callee.receive(rs)
+    check sent(rej)[0].response.id == sp
+    check sent(rej)[0].response.failure.code == ecNotAuthorised
+    check callee.delayedRequests == 2
+    discard caller.receive(rej[0].bytes)
+    # A committed Response does not free the slot; the work's end does, and
+    # the oldest queued Request is dispatched.
+    check caller.receive(callee.respond(ids[0], okExists()).get)[0].outcome.ok
+    check callee.executing == 2 and callee.delayedRequests == 2
+    check dispatched(callee.workEnded(ids[0])).mapIt(it.id) == @[ids[2]]
+    let (r5, req5) = caller.request("exists", params()).get
+    ids.add(r5)
+    check callee.receive(req5).len == 0
+    # The queue is full: the connection closes with TRANSPORT_ERROR. There is
+    # no overload response (§8.6).
+    let (_, over) = caller.request("exists", params()).get
+    let acts = callee.receive(over)
+    check dispatched(acts).len == 0 and closeCode(acts) == Opt.some(ecTransport)
+    check not callee.admitsInput
+    # Nothing accepted is dropped silently: every pending call, queued ones
+    # included, fails at the caller with TRANSPORT_ERROR (§3.2) ...
+    let evs = caller.receive(acts[^1].close.send.get)
+    let failed = evs.filterIt(it.kind == ceResponse)
+    check failed.len == 5 and failed.allIt(it.outcome.failure.code == ecTransport)
+    # ... and the slots stay held until the work ends.
+    check callee.executingIds == @[ids[1], ids[2]]
+    check callee.workEnded(ids[1]).len == 0 and callee.executing == 1
+
+  test "[TRN-0383] [TRN-0384] the delayed queue and the past-cap reading are bounded in bytes too":
+    let big = params("x".repeat(9 * 1024 * 1024))
+    block:
+      let l = transportLimits(maxInFlight = 1, maxDelayedBytes = 16 * 1024 * 1024).get
+      var caller = callerConn(storageBoundary)
+      var callee = calleeConn(storageBoundary, l)
+      discard callee.receive(caller.request("exists", params()).get[1])
+      let (_, r1) = caller.request("exists", big).get
+      check callee.receive(r1).len == 0 and callee.delayedBytes == r1.len
+      let (_, r2) = caller.request("exists", big).get
+      check closeCode(callee.receive(r2)) == Opt.some(ecTransport)
+      check callee.delayedBytes == 0
+    block:
+      let l = transportLimits(maxInFlight = 1, maxPastCapBytes = 16 * 1024 * 1024).get
+      var caller = callerConn(storageBoundary)
+      var callee = calleeConn(storageBoundary, l)
+      discard callee.receive(caller.request("exists", params()).get[1])
+      check callee.receive(caller.request("exists", big).get[1]).len == 0
+      let acts = callee.receive(caller.request("exists", big).get[1])
+      check closeMessage(acts).get.code == ecTransport
+
+  test "[TRN-0314] [TRN-0315] at the cap every frame read counts against a bounded budget; exhausting it closes":
+    let l = transportLimits(maxInFlight = 1, maxPastCapFrames = 3).get
+    let cancel = encodeMessage(Message(kind: mkCancel, cancel: Cancel(id: 9))).get
+    var callee = calleeConn(storageBoundary, l)
     check dispatched(callee.receive(requestFor(0))).len == 1
-    check dispatched(callee.receive(requestFor(1))).len == 1
-    # Backpressure: the carrier stops reading.
-    check not callee.admitsInput
-    # A committed Response frees the slot.
-    discard callee.respond(0, okExists()).get
-    check callee.admitsInput
-    check dispatched(callee.receive(requestFor(2))).len == 1
-    # Fed past the limit anyway: the connection closes; the Request was never
-    # accepted, and the accepted ones fail at the caller with TRANSPORT_ERROR.
-    let acts = callee.receive(requestFor(3))
-    check dispatched(acts).len == 0
-    check closeCode(acts) == Opt.some(ecTransport)
-    check not callee.admitsInput
-    # Limits are finite and positive.
+    # Frames that need no slot (here ignored Cancels) are read and counted.
+    for _ in 0 ..< 3:
+      check callee.receive(cancel).len == 0
+    check closeCode(callee.receive(cancel)) == Opt.some(ecTransport)
+    check callee.executingIds == @[0'u64]
+    # Below the cap again, the count starts over.
+    var other = calleeConn(storageBoundary, l)
+    discard other.receive(requestFor(0))
+    for _ in 0 ..< 3:
+      discard other.receive(cancel)
+    discard other.respond(0, okExists()).get
+    discard other.workEnded(0)
+    check dispatched(other.receive(requestFor(1))).len == 1
+    for _ in 0 ..< 3:
+      check other.receive(cancel).len == 0
+    check other.state == csOpen
+
+  test "[TRN-0378] limits are finite and positive, and the byte budgets hold a maximal frame":
     for bad in [
       transportLimits(maxInFlight = 0),
       transportLimits(maxCalls = 0),
       transportLimits(maxSubscriptionIds = -1),
+      transportLimits(maxDelayedRequests = 0),
+      transportLimits(maxPastCapFrames = 0),
+      transportLimits(maxDelayedBytes = 1024),
+      transportLimits(maxPastCapBytes = 16 * 1024 * 1024 - 1),
     ]:
       check bad.isErr
     let d = defaultLimits()
     check d.maxInFlight == DefaultMaxInFlight and d.maxCalls == DefaultMaxCalls
     check d.maxSubscriptionIds == DefaultMaxSubscriptionIds
+    check d.maxDelayedRequests == DefaultMaxDelayedRequests
+    check d.maxDelayedBytes == DefaultMaxDelayedBytes
+    check d.maxPastCapFrames == DefaultMaxPastCapFrames
+    check d.maxPastCapBytes == DefaultMaxPastCapBytes
+
+suite "trn.access: the route's access scope (TRANSPORT §8.1; RUNTIME §9.3)":
+  proc eventRoot(name: string): Digest =
+    subtreeOf(name)
+
+  let
+    existsRoot = subtreeOf("storage.exists")
+    schemaRoot = block:
+      let common = pinnedContext().commonModel
+      declarationRoot(common, common.find("logos.schema").get)
+
+  test "[TRN-0158] [CAP-0253] method roots become the method scope; logos.schema needs its own root":
+    let s = storageBoundary.applyAccess(RouteAccess(methods: Opt.some(@[existsRoot])))
+    check s.unknown.len == 0 and s.publishScope.isNone
+    check s.boundary.allowsMethod("exists") and not s.boundary.allowsMethod("space")
+    check not s.boundary.allowsMethod("schema")
+    # An absent subscription list keeps every event of the contract.
+    check s.boundary.allowsEvent("storage.started_event")
+    var callee = calleeConn(s.boundary)
+    var caller = callerConn(storageBoundary)
+    check dispatched(callee.receive(caller.request("exists", params()).get[1])).len == 1
+    for m in ["space", "schema"]:
+      let acts = callee.receive(caller.request(m, cborMap()).get[1])
+      check dispatched(acts).len == 0
+      check sent(acts)[0].response.failure.code == ecNotAuthorised
+    let withSchema = storageBoundary.applyAccess(
+      RouteAccess(methods: Opt.some(@[existsRoot, schemaRoot]))
+    )
+    check withSchema.boundary.allowsMethod("schema")
+
+  test "[TRN-0158] absent lists are the whole contract, empty ones nothing":
+    let all = storageBoundary.applyAccess(RouteAccess())
+    check all.boundary.allowsMethod("space") and all.boundary.allowsMethod("schema")
+    check all.boundary.allowsEvent("storage.upload_done_event")
+    check all.publishScope.isNone
+    let none = storageBoundary.applyAccess(
+      RouteAccess(
+        methods: Opt.some(newSeq[Digest]()),
+        subscribeEvents: Opt.some(newSeq[Digest]()),
+        publishEvents: Opt.some(newSeq[Digest]()),
+      )
+    )
+    check not none.boundary.allowsMethod("exists")
+    check not none.boundary.allowsMethod("schema")
+    check not none.boundary.allowsEvent("storage.started_event")
+    check none.publishScope.get.len == 0
+    # Only events: every method stays, introspection included.
+    let events = storageBoundary.applyAccess(
+      RouteAccess(subscribeEvents: Opt.some(@[eventRoot("storage.started_event")]))
+    )
+    check events.boundary.allowsMethod("exists") and
+      events.boundary.allowsMethod("schema")
+    check events.boundary.allowsEvent("storage.started_event")
+    check not events.boundary.allowsEvent("storage.upload_done_event")
+
+  test "[TRN-0158] a root that names nothing under the selected contract narrows the scope and is reported":
+    let stray = sensor.primary.root
+    let s =
+      storageBoundary.applyAccess(RouteAccess(methods: Opt.some(@[existsRoot, stray])))
+    check s.unknown == @[stray]
+    check s.boundary.allowsMethod("exists") and not s.boundary.allowsMethod("space")
+
+  test "[TRN-0158] [TRN-0313] publication outside the route's publish scope is never committed":
+    let s = storageBoundary.applyAccess(
+      RouteAccess(
+        publishEvents: Opt.some(@[eventRoot("storage.upload_progress_event")])
+      )
+    )
+    check s.publishScope.get == toHashSet(["storage.upload_progress_event"])
+    var caller = callerConn(storageBoundary)
+    var callee = calleeConn(s.boundary, publishScope = s.publishScope)
+    # Subscription access is separate: started_event may be subscribed to ...
+    active(caller, callee, 1, "storage.started_event")
+    active(caller, callee, 2, "storage.upload_progress_event")
+    check callee.subscribersOf("storage.started_event") == @[1'u64]
+    # ... but not published.
+    let p = callee.publish(1, cborMap())
+    check p.error.kind == peNotInContract and p.error.code == ecNotAuthorised
+    check "publish scope" in p.error.msg
+    let progress = cborMap(
+      (cbor("session"), cbor("s")),
+      (cbor("bytes_sent"), cbor(1'u64)),
+      (cbor("bytes_total"), cbor(2'u64)),
+    )
+    check callee.publish(2, progress).isOk
+    let (a, ra) = caller.request("exists", params()).get
+    discard callee.receive(ra)
+    check callee.publishScoped(a, "storage.started_event", cborMap()).error.kind ==
+      peNotInContract
+    check callee.publishScoped(a, "storage.upload_progress_event", progress).get.len == 1
 
 suite "trn.evolution: protocol evolution (TRANSPORT §10, §10.1)":
   test "[TRN-0251] unknown fields and kinds are INVALID_PARAMS, then close":

@@ -12,10 +12,17 @@ import ./[envelope, framing, limits, ticket]
 export results, envelope, limits, ticket
 
 type
+  RouteAccess* = object
+    ## [SPEC RUNTIME §9.3 l.3013-3029; TRANSPORT §8.1] The route's scope, as
+    ## `route_access` gives it: declaration subtree roots under the selected
+    ## contract. none: the whole selected contract (and `logos.schema` for
+    ## methods); some(@[]): nothing.
+    methods*, publishEvents*, subscribeEvents*: Opt[seq[Digest]]
+
   RouteBinding* = object
-    ## [SPEC TRANSPORT §8.1] What a route ticket binds a session to, as far as
-    ## the transport can check it. The Runtime (tier 4) adds the route access
-    ## and the authority decision, and enforces them after redemption.
+    ## [SPEC TRANSPORT §8.1] What a route ticket binds a session to: the route
+    ## constraints the callee checks at the Hello, and the access and decision
+    ## it enforces for the session's life.
     consumer*: string
     sourceRuntime*: Opt[string]
       ## a remote consumer's `runtime_instance_id`; none for a local route
@@ -23,6 +30,14 @@ type
     contract*: Digest ## the selected contract
     endpoint*: string ## the target endpoint
     route*: string ## the Runtime route
+    access*: RouteAccess ## [SPEC TRANSPORT §8.1 l.969-979; CA §11]
+    decision*: string
+      ## the authority decision id: a correlation value, never a credential
+      ## (CAPABILITY-AUTHORITY l.1396)
+    expires*: Opt[Nanos]
+      ## the route's end on the issuer's monotonic clock (§8.1 l.987); the
+      ## owner turns it into the session's end timer at admission
+    validUntil*: Opt[int64] ## the decision's `valid_until`, Unix milliseconds (F12)
 
   CalleeEndpoint* = object ## One connection at an ordinary provider endpoint.
     endpoint*: string

@@ -119,12 +119,33 @@ type
     kind*: PublishErrorKind
     msg*: string
 
+  SlotPool* = ref object
+    ## [SPEC TRANSPORT §8.6] The execution slots shared by the connections of
+    ## one transport I/O thread (`maxTotalExecuting`). Used on that thread only.
+    cap*, used*: int
+
+  Delayed = object
+    request: Request
+    bytes: int ## the Request's frame body
+
   CalleeConn* = object ## The callee side of one established provider session.
     boundary*: Boundary
     state*: ConnState
     limits: TransportLimits
     highestId: Opt[uint64] ## the highest Request id received (§7)
-    inFlight: Table[uint64, string] ## Request id -> method, until committed
+    inFlight: Table[uint64, string]
+      ## Request id -> method, until its terminal Response or CANCELLED is
+      ## committed; queued Requests included (A21)
+    executing: HashSet[uint64]
+      ## [SPEC TRANSPORT §6, §8.6] execution slots: held from dispatch until
+      ## `workEnded`, even after CANCELLED or close (I52 as revised by A21)
+    delayed: seq[Delayed] ## the delayed-admission queue, in arrival order
+    delayedBytes: int
+    pastCapFrames, pastCapBytes: int ## frames read while at the cap
+    pool: SlotPool ## nil: no aggregate (sans-I/O use)
+    publishScope: Opt[HashSet[string]]
+      ## [SPEC TRANSPORT §8.1] the route's `publish_events`, as event names;
+      ## none: every event of the selected contract
     subs: Table[uint64, CalleeSub]
     usedSubIds: HashSet[uint64]
       ## every id of a valid Subscribe on this connection (§5.1)
@@ -146,14 +167,55 @@ func code*(e: PublishError): ErrorCode =
 func publishError(kind: PublishErrorKind, msg: string): PublishError =
   PublishError(kind: kind, msg: msg)
 
-func calleeConn*(b: Boundary, limits = defaultLimits()): CalleeConn =
-  CalleeConn(boundary: b, state: csOpen, limits: limits)
+func calleeConn*(
+    b: Boundary,
+    limits = defaultLimits(),
+    publishScope = Opt.none(HashSet[string]),
+    pool: SlotPool = nil,
+): CalleeConn =
+  ## `b` carries the route's method and subscription scope (`withAccess`),
+  ## `publishScope` its publication scope; `pool` the loop's execution slots.
+  CalleeConn(
+    boundary: b, state: csOpen, limits: limits, publishScope: publishScope, pool: pool
+  )
 
 func limits*(c: CalleeConn): TransportLimits =
   c.limits
 
 func inFlight*(c: CalleeConn): int =
   c.inFlight.len
+
+func isInFlight*(c: CalleeConn, id: uint64): bool =
+  ## Whether request `id` was accepted (dispatched or queued) and its terminal
+  ## Response (or CANCELLED) is not committed yet.
+  id in c.inFlight
+
+func executing*(c: CalleeConn): int =
+  ## Execution slots held: Requests dispatched whose work has not ended.
+  c.executing.len
+
+func isExecuting*(c: CalleeConn, id: uint64): bool =
+  id in c.executing
+
+func executingIds*(c: CalleeConn): seq[uint64] =
+  ## The slots held, in id order (the work a closed connection still owns).
+  for id in c.executing:
+    result.add(id)
+  result.sort()
+
+func delayedRequests*(c: CalleeConn): int =
+  c.delayed.len
+
+func delayedBytes*(c: CalleeConn): int =
+  ## The frame bytes of the queued Requests (held by the carrier until dispatch).
+  c.delayedBytes
+
+func subscribersOf*(c: CalleeConn, event: string): seq[uint64] =
+  ## The active subscriptions to `event`, in id order.
+  for id, s in c.subs:
+    if s.active and s.event == event:
+      result.add(id)
+  result.sort()
 
 func subscriptions*(c: CalleeConn): int =
   ## Subscriptions held: active, or with a Subscribe outstanding.
@@ -163,22 +225,49 @@ func usedSubscriptionIds*(c: CalleeConn): int =
   c.usedSubIds.len
 
 func admitsInput*(c: CalleeConn): bool =
-  ## [SPEC TRANSPORT §8.6] Whether the carrier should read the next frame. False
-  ## once closed, and while `maxInFlight` Requests are admitted and unanswered:
-  ## the carrier then stops reading (backpressure) until a Response is
-  ## committed. Input is never read and dropped.
-  c.state != csClosed and c.inFlight.len < c.limits.maxInFlight
+  ## [SPEC TRANSPORT §6, §8.6] Whether the carrier should read the next frame:
+  ## until the connection closes. At `maxInFlight` reading continues under the
+  ## past-cap budget, so a Cancel never needs the cancelled request's slot
+  ## (A21); the carrier's input pools pause reading instead.
+  c.state != csClosed
+
+func slotFree(c: CalleeConn): bool =
+  c.executing.len < c.limits.maxInFlight and (c.pool.isNil or c.pool.used < c.pool.cap)
+
+func atCap(c: CalleeConn): bool =
+  c.delayed.len > 0 or not c.slotFree
+
+proc take(c: var CalleeConn, id: uint64) =
+  c.executing.incl(id)
+  if not c.pool.isNil:
+    inc c.pool.used
+
+func dispatch(c: CalleeConn, r: Request): CalleeAction =
+  CalleeAction(
+    kind: caDispatch,
+    request: r,
+    introspection: c.boundary.isIntrospection(r.methodName),
+  )
 
 func send(bytes: seq[byte]): CalleeAction =
   CalleeAction(kind: caSend, bytes: bytes)
 
 proc close(c: var CalleeConn, r: CloseReason): seq[CalleeAction] =
-  ## [SPEC TRANSPORT §3.2] Closing ends every subscription; in-flight requests
-  ## are abandoned (their callers see TRANSPORT_ERROR).
+  ## [SPEC TRANSPORT §3.2] Closing ends every subscription; in-flight and
+  ## queued requests are abandoned (their callers see TRANSPORT_ERROR). The
+  ## execution slots stay held until `workEnded` (§6, §8.6).
   c.state = csClosed
   c.inFlight.clear()
   c.subs.clear()
+  c.delayed = @[]
+  c.delayedBytes = 0
   @[CalleeAction(kind: caClose, close: r)]
+
+proc lose*(c: var CalleeConn) =
+  ## The carrier closed the connection (loss, a stall, a local close): as
+  ## `close`, with nothing to send.
+  if c.state != csClosed:
+    discard c.close(peerClosed(ecTransport, "the connection closed"))
 
 func pendingOp(c: CalleeConn, id: uint64): bool =
   var p = false
@@ -186,7 +275,7 @@ func pendingOp(c: CalleeConn, id: uint64): bool =
     p = s.pending.isSome
   p
 
-proc onRequest(c: var CalleeConn, r: Request): seq[CalleeAction] =
+proc onRequest(c: var CalleeConn, r: Request, size: int): seq[CalleeAction] =
   # [SPEC TRANSPORT §7] Request ids strictly increase on a connection.
   if c.highestId.isSome and r.id <= c.highestId.get:
     return c.close(closing(ecInvalidParams, "a Request id did not increase"))
@@ -195,10 +284,6 @@ proc onRequest(c: var CalleeConn, r: Request): seq[CalleeAction] =
     # [SPEC TRANSPORT §8.1] Committed now, without dispatch, and with nothing
     # that discloses the authorization condition.
     return @[send(responseErr(r.id, failureOf(ecNotAuthorised)))]
-  if c.inFlight.len >= c.limits.maxInFlight:
-    # [SPEC TRANSPORT §8.6] Read past `admitsInput`: refuse the connection
-    # rather than drop an accepted Request [IMPL].
-    return c.close(closing(ecTransport, "more Requests in flight than maxInFlight"))
   let checked = c.boundary.acceptRequest(r)
   if checked.isErr:
     let rj = checked.error
@@ -206,26 +291,66 @@ proc onRequest(c: var CalleeConn, r: Request): seq[CalleeAction] =
     of rjClose:
       return c.close(closing(rj.failure.code, rj.msg))
     of rjRespond:
-      # Committed now: the call fails as it would in direct mode; nothing runs.
+      # Committed now: the call fails as it would in direct mode; nothing runs
+      # and no slot is needed.
       return @[send(responseErr(r.id, rj.failure))]
+  if c.delayed.len == 0 and c.slotFree:
+    c.inFlight[r.id] = r.methodName
+    c.take(r.id)
+    return @[c.dispatch(r)]
+  # [SPEC TRANSPORT §8.6 l.1350-1351; I52 as revised by A21] No slot: the
+  # Request waits, in flight, in the bounded delayed-admission queue. A full
+  # queue closes the connection; there is no overload response (l.1357).
+  if c.delayed.len >= c.limits.maxDelayedRequests or
+      c.delayedBytes + size > c.limits.maxDelayedBytes:
+    return c.close(closing(ecTransport, "the delayed-admission queue is full"))
   c.inFlight[r.id] = r.methodName
-  @[
-    CalleeAction(
-      kind: caDispatch,
-      request: r,
-      introspection: c.boundary.isIntrospection(r.methodName),
-    )
-  ]
+  c.delayed.add(Delayed(request: r, bytes: size))
+  c.delayedBytes += size
+  @[]
 
 proc onCancel(c: var CalleeConn, id: uint64): seq[CalleeAction] =
   ## [SPEC TRANSPORT §6] Before the terminal Response: commit exactly one
   ## CANCELLED Response at once, without waiting for the provider to stop, and
-  ## try to stop the operation; its scoped publication ends. Otherwise ignore
-  ## it, with no reply and no state change.
+  ## try to stop the operation; its scoped publication ends. A queued Request
+  ## is never dispatched and holds no slot (§8.6 l.1351); a dispatched one
+  ## keeps its slot until `workEnded` (l.889). Otherwise ignore it, with no
+  ## reply and no state change.
   if id notin c.inFlight:
     return @[]
   c.inFlight.del(id)
+  for i, d in c.delayed:
+    if d.request.id == id:
+      c.delayedBytes -= d.bytes
+      c.delayed.delete(i)
+      return @[send(responseErr(id, failureOf(ecCancelled)))]
   @[send(responseErr(id, failureOf(ecCancelled))), CalleeAction(kind: caStop, id: id)]
+
+proc admitDelayed*(c: var CalleeConn, max = high(int)): seq[CalleeAction] =
+  ## [SPEC TRANSPORT §8.6] Dispatches up to `max` queued Requests, in order,
+  ## while slots are free; never while terminating or closed (F2). The carrier
+  ## calls it, round-robin over its connections, when a slot of the loop's
+  ## pool frees.
+  while c.state == csOpen and c.delayed.len > 0 and c.slotFree and result.len < max:
+    let d = c.delayed[0]
+    c.delayed.delete(0)
+    c.delayedBytes -= d.bytes
+    c.take(d.request.id)
+    result.add(c.dispatch(d.request))
+
+proc workEnded*(c: var CalleeConn, id: uint64): seq[CalleeAction] =
+  ## [SPEC TRANSPORT §6, §8.6] The provider's work for request `id` ended:
+  ## its slot is released and, while the connection is open, the next queued
+  ## Requests are dispatched; with a shared pool the carrier does that instead,
+  ## round-robin (`admitDelayed`). Works after close, when only the slot is
+  ## left.
+  if id notin c.executing:
+    return @[]
+  c.executing.excl(id)
+  if not c.pool.isNil:
+    dec c.pool.used
+    return @[]
+  c.admitDelayed()
 
 proc onSubscribe(c: var CalleeConn, s: Subscribe): seq[CalleeAction] =
   ## [SPEC TRANSPORT §5.1] The overlap check, then the identifier check, before
@@ -275,13 +400,25 @@ proc receive*(c: var CalleeConn, frame: openArray[byte]): seq[CalleeAction] =
   ## One frame body from the caller.
   if c.state == csClosed:
     return @[]
+  if c.atCap:
+    # [SPEC TRANSPORT §6, §8.6; A21] Every frame read while at the cap counts,
+    # in number and in bytes (a Request can be 16 MiB), until the connection
+    # is below the cap again.
+    inc c.pastCapFrames
+    c.pastCapBytes += frame.len
+    if c.pastCapFrames > c.limits.maxPastCapFrames or
+        c.pastCapBytes > c.limits.maxPastCapBytes:
+      return c.close(closing(ecTransport, "the past-cap input budget is exhausted"))
+  else:
+    c.pastCapFrames = 0
+    c.pastCapBytes = 0
   let m = decodeMessage(frame, c.limits.payloadDepth).valueOr:
     # [SPEC TRANSPORT §2.3, §8.3, §10] A float anywhere and a payload deeper
     # than P included; the ProtocolError carries no detail.
     return c.close(closing(ecInvalidParams, $error))
   case m.kind
   of mkRequest:
-    c.onRequest(m.request)
+    c.onRequest(m.request, frame.len)
   of mkCancel:
     c.onCancel(m.cancel.id)
   of mkSubscribe:
@@ -307,8 +444,10 @@ proc respond*(c: var CalleeConn, id: uint64, outcome: Outcome): Opt[seq[byte]] =
   ## maximum is replaced by response-err MODULE_ERROR without detail and the
   ## session stays; an error Response always fits (a code, at most 512 bytes of
   ## message and 4096 of detail). During termination in-flight Requests can
-  ## still be answered (§8.1, RUNTIME §9.3).
-  if c.state == csClosed:
+  ## still be answered (§8.1, RUNTIME §9.3). The slot stays held until
+  ## `workEnded`; a queued Request was never dispatched, so nothing can answer
+  ## it yet.
+  if c.state == csClosed or id notin c.executing:
     return Opt.none(seq[byte])
   var methodName: string
   if not c.inFlight.pop(id, methodName):
@@ -396,6 +535,14 @@ func checkOpen(c: CalleeConn): Result[void, PublishError] =
   of csOpen:
     ok()
 
+func checkScope(c: CalleeConn, event: string): Result[void, PublishError] =
+  ## [SPEC TRANSPORT §8.1; RUNTIME §9.3 l.3014] The route's `publish_events`.
+  if c.publishScope.isSome and event notin c.publishScope.get:
+    return err(
+      publishError(peNotInContract, event & " is outside the route's publish scope")
+    )
+  ok()
+
 proc publish*(
     c: var CalleeConn, id: uint64, data: CborValue
 ): Result[seq[byte], PublishError] =
@@ -403,7 +550,8 @@ proc publish*(
   ## with its payload commitment. Nothing is committed before the successful
   ## result, after a successful Unsubscribe or once the route's access ended,
   ## and an Event that does not fit the peer's frame maximum is not committed
-  ## (`peTooLarge`).
+  ## (`peTooLarge`). An event outside the route's publish scope is never
+  ## committed (`peNotInContract`).
   ?c.checkOpen()
   var event = ""
   var active = false
@@ -412,6 +560,7 @@ proc publish*(
     event = s.event
   if not active:
     return err(publishError(peNoDestination, "no active subscription " & $id))
+  ?c.checkScope(event)
   let cm = ?c.commitData(event, data)
   c.eventBytes(id, event, data, cm)
 
@@ -425,12 +574,14 @@ proc publishScoped*(
   ## request's terminal Response or CANCELLED is committed: later publications
   ## fail (`peNoDestination`), and earlier Events stay committed. The Events
   ## carry no request id. Every Event must fit, or none is committed on this
-  ## connection (`peTooLarge`).
+  ## connection (`peTooLarge`). An event outside the route's publish scope is
+  ## never committed (`peNotInContract`).
   ?c.checkOpen()
-  if reqId notin c.inFlight:
+  if reqId notin c.inFlight or reqId notin c.executing:
     return err(
       publishError(peNoDestination, "request " & $reqId & " is no longer in flight")
     )
+  ?c.checkScope(event)
   let cm = ?c.commitData(event, data)
   var ids: seq[uint64]
   for id, s in c.subs:
@@ -451,16 +602,23 @@ proc beginTermination*(c: var CalleeConn): seq[CalleeAction] =
   ## and an outstanding Unsubscribe succeeds [IMPL], so each operation still
   ## gets its one result (§5.1). In-flight Requests stay for the Runtime's
   ## in-flight policy (RUNTIME §9.3): they can still be answered or cancelled.
+  ## Queued Requests had not been dispatched when admission stopped: each gets
+  ## response-err NOT_AUTHORISED and is never dispatched (F2).
   ## `finishTermination` then closes; it waits for no further input.
   if c.state != csOpen:
     return @[]
   c.state = csTerminating
+  var acts: seq[CalleeAction]
+  for d in c.delayed:
+    c.inFlight.del(d.request.id)
+    acts.add(send(responseErr(d.request.id, failureOf(ecNotAuthorised))))
+  c.delayed = @[]
+  c.delayedBytes = 0
   var ops: seq[(uint64, MessageKind)]
   for id, s in c.subs:
     if s.pending.isSome:
       ops.add((id, s.pending.get))
   ops.sort()
-  var acts: seq[CalleeAction]
   for (id, op) in ops:
     acts.add(
       send(
@@ -542,6 +700,10 @@ func outstandingCalls*(c: CallerConn): int =
   ## Transmitted Requests with no terminal Response received, abandoned ones
   ## included: the correlation state `maxCalls` bounds.
   c.pending.len + c.abandoned.len
+
+func usedSubscriptionIds*(c: CallerConn): int =
+  ## The subscription-id history `maxSubscriptionIds` bounds (§5.1).
+  c.usedSubIds.len
 
 proc shut(c: var CallerConn, r: CloseReason): seq[CallerEvent] =
   ## [SPEC TRANSPORT §3.2] Every pending call fails with a synthetic

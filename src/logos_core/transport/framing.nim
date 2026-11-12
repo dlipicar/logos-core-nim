@@ -77,6 +77,23 @@ func frame*(
   s.add(body)
   ok(s)
 
+func parsePrefix*(prefix: array[4, byte], limit: uint32): Result[uint32, FrameError] =
+  ## [SPEC TRANSPORT §2.1, §8.3] The body length a 4-byte prefix declares, for a
+  ## carrier that reserves the body's bytes before it reads them: a length over
+  ## `limit` fails here, so the body is neither allocated nor read.
+  let n =
+    (uint32(prefix[0]) shl 24) or (uint32(prefix[1]) shl 16) or (
+      uint32(prefix[2]) shl 8
+    ) or uint32(prefix[3])
+  if n > limit:
+    return err(FrameError(kind: feTooLarge, declared: uint64(n)))
+  ok(n)
+
+func prefixOf*(n: int): array[4, byte] =
+  ## The big-endian length prefix of an `n`-byte body (`n` fits 32 bits).
+  let u = uint32(n)
+  [byte(u shr 24), byte(u shr 16), byte(u shr 8), byte(u)]
+
 func feed*(
     r: var FrameReader, data: openArray[byte]
 ): Result[seq[seq[byte]], FrameError] =

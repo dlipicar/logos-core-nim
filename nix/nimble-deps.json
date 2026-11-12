@@ -1,13 +1,33 @@
 {
+  "bearssl": {
+    "hash": "sha256-1RFWgFNGfwS03GVwZzpG2St7l/LYjuL9wyfNG6h4ZDM=",
+    "rev": "b6c9a38964a574f6bc51f69efaf8fb2fedea905e",
+    "url": "https://github.com/status-im/nim-bearssl"
+  },
   "boringssl": {
     "hash": "sha256-ETqSceUxZhDCw1N5rhsd5HdrT4KnmXmuGyJ8UuY2wHY=",
     "rev": "a57b97f5ba45353a1a38c81b4f5e6f537469a63e",
     "url": "https://github.com/vacp2p/nim-boringssl"
   },
+  "chronos": {
+    "hash": "sha256-N+5LFmxaOctBPNwy+JIuJy217hntJxbHouY6oyCgNm8=",
+    "rev": "40f8087c815403d64e3dd4044411022cc4bedd5b",
+    "url": "https://github.com/status-im/nim-chronos"
+  },
+  "httputils": {
+    "hash": "sha256-XMmeqfMUWLafXM67bQElYgAOaPz9hhIM/bZOUB5Ql2g=",
+    "rev": "7d771ca337bd3bf563f6834569d2a06085ac21f1",
+    "url": "https://github.com/status-im/nim-http-utils"
+  },
   "results": {
     "hash": "sha256-KbNqt0FMuzDF4X+XM6JEaZJBypLDnvVPpnBpE7Sq6sA=",
     "rev": "df8113dda4c2d74d460a8fa98252b0b771bf1f27",
     "url": "https://github.com/arnetheduck/nim-results"
+  },
+  "stew": {
+    "hash": "sha256-ZHZTLxTkjAhcEWK68kuchZgAbo+yfqz4hZdD1uDTe4M=",
+    "rev": "c75502ceedb5ed2a37b7b5e4744fc71313682859",
+    "url": "https://github.com/status-im/nim-stew"
   },
   "unittest2": {
     "hash": "sha256-LnG+BTHvT+eDIUQUKB9/wywMygp0KkuWde0UPuogYcw=",
