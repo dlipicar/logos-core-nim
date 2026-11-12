@@ -155,6 +155,11 @@ func limits*(c: CalleeConn): TransportLimits =
 func inFlight*(c: CalleeConn): int =
   c.inFlight.len
 
+func isInFlight*(c: CalleeConn, id: uint64): bool =
+  ## Whether request `id` was dispatched and its terminal Response (or
+  ## CANCELLED) is not committed yet.
+  id in c.inFlight
+
 func subscriptions*(c: CalleeConn): int =
   ## Subscriptions held: active, or with a Subscribe outstanding.
   c.subs.len

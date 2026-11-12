@@ -35,20 +35,20 @@ default = "deferred:tier-4"
 # Capability Authority direct, so no system service is hosted over Transport and
 # no purpose-typed ticket store is built (transport.md item 10).
 "§8.1.2" = "deferred:tier-4"
-"§8.2" = "deferred:tier-5"
+# §8.2 (tier 4, transport I/O): endpoints, peer credentials checked before any
+# byte, and the Hello over sockets (DECISIONS I82). §8.2.1 (Windows) waits for the
+# G107 spike.
+"§8.2" = "claimed"
+"§8.2.1" = "deferred:tier-5"
 "§8.3" = "claimed"
 "§8.4" = "deferred:tier-5"
 "§8.5" = "deferred:tier-4"
-"§9" = "deferred:tier-4"
+"§9" = "claimed"
 "§10" = "claimed"
 
 [units]
 # §2.1: a committed Event is never silently discarded: the output buffer (tier 4).
 "TRN-0267" = "deferred:tier-4"
-# §3.1: the endpoint comes from the Runtime's invocation descriptor; Hello
-# evaluation capacity is the Runtime evaluator's.
-"TRN-0069" = "deferred:tier-4"
-"TRN-0276" = "deferred:tier-4"
 # §3.2: no replay and no ticket reuse hold in the sans-I/O session.
 "TRN-0078" = "claimed"
 "TRN-0079" = "claimed"
@@ -75,6 +75,19 @@ default = "deferred:tier-4"
 "TRN-0320" = "deferred:tier-4"
 "TRN-0325" = "deferred:tier-4"
 "TRN-0165" = "out-of-scope:a requirement on other security profiles"
+# §8.2: built and tagged by the transport I/O tests; what triggers them is the
+# Module Host (TRN-0184, 0185, 0186: the listener transfer and readiness) or the
+# Runtime's route handling (TRN-0187: where the expected identity comes from;
+# TRN-0191: failing the route; TRN-0195: ticket delivery). Claimed with 10b/4b.
+"TRN-0184" = "deferred:tier-4"
+"TRN-0185" = "deferred:tier-4"
+"TRN-0186" = "deferred:tier-4"
+"TRN-0187" = "deferred:tier-4"
+"TRN-0191" = "deferred:tier-4"
+"TRN-0195" = "deferred:tier-4"
+# G58: no claim of protection from same-identity processes.
+"TRN-0346" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
+"TRN-0347" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
 # §8.6: the per-connection limits of the session state machines; aggregate limits
 # and their documentation are tier 4.
 "TRN-0381" = "claimed"

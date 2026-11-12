@@ -62,6 +62,38 @@ heading under a numbered one.
   impersonate an endpoint. Deployments that need that protection must run hosts under distinct OS
   identities, which this implementation does not set up (DECISIONS G58).
 
+## Unix-stream endpoints and peer checks
+
+TRANSPORT §8.2 and §9.1 as built in `src/logos_core/transport/io/` (DECISIONS G58, I82):
+
+- **Layout.** `<base>/<8 hex>/logos_<module>.sock`. The base is a real directory that only the
+  effective uid can write to, or a root-owned sticky directory such as `/tmp` `[IMPL]`. The
+  per-instance directory is new (a random name, never reused), owned by the effective uid and set
+  to 0700 with `fchmod` whatever the umask. `bind` never follows, removes or replaces an existing
+  object; the socket is set to 0600 and listens before any handoff. A path that does not fit
+  `sun_path` fails the placement; nothing is shortened.
+- **macOS `bind`.** Darwin's `bind` follows a dangling symbolic link at the socket name and creates
+  the socket at its target. `bindEndpoint` therefore looks at the name with
+  `fstatat(AT_SYMLINK_NOFOLLOW)` first and refuses anything there (TRN-0182). The name is inside
+  the Runtime's fresh 0700 directory, so only processes of the Runtime's own identity can race that
+  check, which the non-claim above already covers.
+- **Listener validation** (`validateEndpoint`): socket type and domain, the listening state, the
+  bound name, and the directory's and socket's dev/ino against those recorded at creation. Linux
+  reads the listening state with `SO_ACCEPTCONN`. macOS does not answer that `getsockopt`, so it
+  reads `soi_options` from `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)`. Other Apple systems have
+  neither, so validation reports the state as unsupported and fails.
+- **Peer check.** `SO_PEERCRED` on Linux and Android; `getpeereid` with `LOCAL_PEERPID` on Darwin
+  and iOS. The caller compares the peer's effective uid with the expected identity before it writes
+  any byte, and credentials it cannot read count as a mismatch. On a mismatch it closes without
+  sending anything, so the ticket is neither disclosed nor consumed, and reports `TRANSPORT_ERROR`.
+  The uid is what is checked; a pid is diagnostic only. What a caller sees names the process that
+  created and bound the listener (the Runtime, under §8.2), not a Module Host serving the
+  transferred descriptor.
+- **Paths.** `connect` uses the exact path it is given and derives nothing from a module name.
+- **Other-identity test (G129).** A listener created by a different OS user is tested in CI, where
+  the job creates a throwaway user (`LCN_PEER_USER`); elsewhere that test is skipped, and a test that
+  expects a different uid from a same-uid listener covers the same path.
+
 ## Tagging tests
 
 A test covers a unit by carrying its ID in brackets anywhere in the test file, normally in the test

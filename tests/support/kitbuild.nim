@@ -18,7 +18,7 @@ const
       {.error: "kitbuild: unknown memory manager".}
   # The library is built under the host's sanitizer: MemorySanitizer takes what
   # uninstrumented code writes for uninitialized (DECISIONS I77).
-  kitSanitizer =
+  kitSanitizer* =
     when defined(asan):
       "asan"
     elif defined(tsan):
