@@ -75,6 +75,8 @@
               ./spec
               # test_host checks the documented schema is the one in src.
               ./docs/HOST-CONFIG.md
+              # test_authority loads the documented example policy and format.
+              ./docs/AUTHORITY-POLICY.md
             ];
           };
 

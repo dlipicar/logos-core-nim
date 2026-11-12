@@ -25,6 +25,11 @@ template rcSchema*(): GeneratedSchema =
   ## This set's schema, loaded once per thread.
   generatedSchema()
 
+template rcDocuments*(): (string, seq[string], seq[string]) =
+  ## The documents this module was generated from: primary, interfaces,
+  ## supporting.
+  (primaryDocument, @interfaceDocuments, @supportingDocuments)
+
 type
   LogosNSRuntimeControlAddressProfile* = string
 

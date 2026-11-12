@@ -1,0 +1,71 @@
+logos.capability_authority.grant_status = "active" / "expired" / "revoked"
+
+logos.capability_authority.grant_issuer =
+    {
+        kind: "module",
+        module: logos.runtime.module_instance_address,
+    } /
+    {
+        kind: "protected-policy",
+        source: tstr .size (1..128),
+    }
+
+logos.capability_authority.grant = {
+    grant_id: logos.capability_authority.grant_id,
+    issuer: logos.capability_authority.grant_issuer,
+    target: logos.runtime.module_instance_address,
+    scopes: [* logos.capability_authority.scope],
+    issued_at: logos.capability_authority.timestamp,
+    ? expires_at: logos.capability_authority.timestamp,
+    status: logos.capability_authority.grant_status,
+    ? commitment: logos.capability_authority.commitment_requirements,
+    ? revoked_at: logos.capability_authority.timestamp,
+    ? revocation_reason: tstr .size (0..512),
+}
+
+logos.capability_authority.issue_grant_request = {
+    consumer: logos.runtime.module_instance_address,
+    target: logos.runtime.module_instance_address,
+    scopes: [* logos.capability_authority.scope],
+    ? expires_at: logos.capability_authority.timestamp,
+    ? commitment: logos.capability_authority.commitment_requirements,
+}
+
+logos.capability_authority.issue_grant_response =
+    { grant: logos.capability_authority.grant } /
+    { denial: logos.capability_authority.denial } /
+    { error: logos.capability_authority.error }
+
+logos.capability_authority.revoke_grant_request = {
+    consumer: logos.runtime.module_instance_address,
+    grant_id: logos.capability_authority.grant_id,
+    ? reason: tstr .size (0..512),
+}
+
+logos.capability_authority.revoke_grant_response =
+    { grant: logos.capability_authority.grant } /
+    { error: logos.capability_authority.error }
+
+logos.capability_authority.get_grant_request = {
+    consumer: logos.runtime.module_instance_address,
+    grant_id: logos.capability_authority.grant_id,
+}
+
+logos.capability_authority.get_grant_response =
+    { grant: logos.capability_authority.grant } /
+    { error: logos.capability_authority.error }
+
+logos.capability_authority.list_grants_request = {
+    consumer: logos.runtime.module_instance_address,
+    ? target: logos.runtime.module_instance_address,
+    ? status: logos.capability_authority.grant_status,
+    ? cursor: logos.capability_authority.cursor,
+    ? limit: uint16,
+}
+
+logos.capability_authority.list_grants_response =
+    {
+        grants: [* logos.capability_authority.grant],
+        ? next_cursor: logos.capability_authority.cursor,
+    } /
+    { error: logos.capability_authority.error }

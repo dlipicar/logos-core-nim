@@ -1,0 +1,15 @@
+logos.capability_authority.error_code =
+    "invalid-request" /
+    "not-authorised" /
+    "unsupported-scope" /
+    "unknown-permission" /
+    "invalid-constraints" /
+    "grant-not-found" /
+    "grant-not-active" /
+    "authority-unavailable" /
+    "internal-error"
+
+logos.capability_authority.error = {
+    code: logos.capability_authority.error_code,
+    ? message: tstr .size (0..512),
+}

@@ -1,0 +1,111 @@
+; logos-core-nim.authority-policy.v1: the Capability Authority's policy input
+; (BCP l.360; DECISIONS I84). One Logos deterministic-CBOR lcn.authority_policy
+; value. docs/AUTHORITY-POLICY.md documents each rule.
+;
+; Every array is a set: strictly ascending by its elements' deterministic-CBOR
+; bytes, with no duplicates (CA l.130-138 applied to this input), and non-empty,
+; except a method or event list, which permits none of that kind when empty
+; (CA l.126). The checks the schema cannot express (order, non-empty arrays, the
+; source pattern, bounds, names that resolve, restricted declarations) are
+; applied when the policy is loaded (authority/policy.nim).
+
+lcn.authority_policy = {
+  format: "logos-core-nim.authority-policy.v1",
+  source: tstr .size (1..128),
+  ? decision_validity_ms: uint64,
+  ? audit: { ? records: uint64 },
+  rules: [* lcn.ap_rule],
+}
+
+lcn.ap_rule = lcn.ap_allow / lcn.ap_deny / lcn.ap_issue / lcn.ap_revoke / lcn.ap_inspect
+
+lcn.ap_allow = {
+  kind: "allow",
+  subject: lcn.ap_subject,
+  scopes: [* lcn.ap_scope],
+  ? commitment: lcn.ap_commitment,
+}
+
+lcn.ap_deny = {
+  kind: "deny",
+  subject: lcn.ap_subject,
+  scopes: [* lcn.ap_scope],
+  ? code: "scope-denied" / "consumer-denied" / "target-denied",
+}
+
+lcn.ap_issue = {
+  kind: "issue",
+  subject: lcn.ap_subject,
+  targets: lcn.ap_target,
+  scopes: [* lcn.ap_scope],
+  ? max_validity_ms: uint64,
+}
+
+lcn.ap_revoke = {
+  kind: "revoke",
+  subject: lcn.ap_subject,
+  targets: lcn.ap_target,
+}
+
+lcn.ap_inspect = {
+  kind: "inspect",
+  subject: lcn.ap_subject,
+  ? grants: lcn.ap_target,
+  ? audit: lcn.ap_target,
+  ? policy_changes: true,
+}
+
+; G47 facts. Fields AND, list entries OR; {} matches any Runtime-known instance.
+lcn.ap_subject = {
+  ? instances: [* tstr .size (1..128)],
+  ? modules: [* tstr .size (1..64)],
+  ? signers: [* bstr .size 48],
+  ? packages: [* tstr .size (1..128)],
+}
+
+lcn.ap_target = lcn.ap_subject / "self" / "issued"
+
+lcn.ap_scope = lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution
+
+lcn.ap_provider_access = {
+  kind: "provider-access",
+  contract: logos.schema_commitment / "capability-authority" / "runtime-control",
+  actions: [* lcn.ap_action],
+  ? providers: lcn.ap_subject,
+  ? access: lcn.ap_access,
+}
+
+lcn.ap_action =
+  "discover" / "establish-route" / "renew-route" / "call" / "publish-event" /
+  "subscribe-event"
+
+lcn.ap_access = {
+  ? methods: [* lcn.ap_decl],
+  ? publish_events: [* lcn.ap_decl],
+  ? subscribe_events: [* lcn.ap_decl],
+}
+
+lcn.ap_runtime_control = {
+  kind: "runtime-control",
+  ? methods: [* lcn.ap_decl],
+  ? events: [* lcn.ap_decl],
+  ? targets: lcn.ap_subject,
+}
+
+lcn.ap_module_execution = {
+  kind: "module-execution",
+  targets: lcn.ap_subject,
+  actions: [* ("start" / "stop")],
+  ? modes: [* ("direct" / "local-transport")],
+  ? placements: [* ("process" / "sandbox" / "container")],
+}
+
+; a declaration root, or a name the contract's pinned schema resolves (only with
+; "capability-authority" or "runtime-control")
+lcn.ap_decl = bstr .size 32 / tstr .size (1..128)
+
+; logos.capability_authority.commitment_requirements, repeated (test_nimgen)
+lcn.ap_commitment = {
+  ? request: "retain-root",
+  ? response: "retain-root",
+}

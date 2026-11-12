@@ -184,7 +184,7 @@ type
   ShapesTree* = object
     kids*: seq[ShapesTree]
     left*: Opt[ref ShapesTree]
-    tag*: ShapesLeaf = "leaf"
+    tag*: string = "leaf"
     twin*: Opt[ref ShapesPair]
 
   ShapesValueKind* {.pure.} = enum

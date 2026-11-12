@@ -1,0 +1,44 @@
+logos.capability_authority.timestamp = uint64
+logos.capability_authority.grant_id = tstr .size (1..128)
+logos.capability_authority.cursor = tstr .size (1..512)
+
+logos.capability_authority.decision_result = "allow" / "deny"
+
+logos.capability_authority.denial_code =
+    "not-granted" /
+    "scope-denied" /
+    "consumer-denied" /
+    "target-denied" /
+    "approval-required" /
+    "grant-expired" /
+    "grant-revoked"
+
+logos.capability_authority.denial = {
+    code: logos.capability_authority.denial_code,
+    ? message: tstr .size (0..512),
+}
+
+logos.capability_authority.evaluate_request = {
+    consumer: logos.runtime.module_instance_address,
+    scopes: [* logos.capability_authority.scope],
+    ? execution_renewal: true,
+    ? commitment: logos.capability_authority.commitment_requirements,
+}
+
+logos.capability_authority.decision = {
+    decision_id: logos.capability_authority.decision_id,
+    policy_revision: uint64,
+    result: logos.capability_authority.decision_result,
+    consumer: logos.runtime.module_instance_address,
+    requested_scopes: [* logos.capability_authority.scope],
+    ? allowed_scopes: [* logos.capability_authority.scope],
+    issued_at: logos.capability_authority.timestamp,
+    ? valid_until: logos.capability_authority.timestamp,
+    ? grant_ids: [* logos.capability_authority.grant_id],
+    ? commitment: logos.capability_authority.commitment_requirements,
+    ? denial: logos.capability_authority.denial,
+}
+
+logos.capability_authority.evaluate_response =
+    { decision: logos.capability_authority.decision } /
+    { error: logos.capability_authority.error }

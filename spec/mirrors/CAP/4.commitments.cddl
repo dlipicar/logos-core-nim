@@ -1,0 +1,6 @@
+logos.capability_authority.commitment_retention = "retain-root"
+
+logos.capability_authority.commitment_requirements = {
+    ? request: logos.capability_authority.commitment_retention,
+    ? response: logos.capability_authority.commitment_retention,
+}

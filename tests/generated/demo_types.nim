@@ -103,7 +103,7 @@ type
   DemoTree* = object
     kids*: seq[DemoTree]
     left*: Opt[ref DemoTree]
-    tag*: DemoLeaf = "leaf"
+    tag*: string = "leaf"
     twin*: Opt[ref DemoPair]
 
   DemoV* = object

@@ -196,7 +196,15 @@ proc generatedRcTypes*(): Result[string, string] =
       rcSupporting.mapIt(readFile(it)),
       AcceptOptions(system: true),
     )
-    nimModule(set, NimOptions(importPrefix: "../", schemaAccessor: "rcSchema"), true)
+    nimModule(
+      set,
+      NimOptions(
+        importPrefix: "../",
+        schemaAccessor: "rcSchema",
+        documentsAccessor: "rcDocuments",
+      ),
+      true,
+    )
   except IOError as e:
     err(e.msg)
 
@@ -232,3 +240,73 @@ proc generatedStoreTypes*(): Result[string, string] =
 
 proc fixturePath*(f: NimFixture): string =
   "tests/generated" / f.module
+
+const
+  caTypesPath* = "src/logos_core/authority/logos_capability_authority_types.nim"
+  caKitPath* = "src/logos_core/authority/logos_capability_authority_kit.nim"
+  caParts* = [
+    "spec/mirrors/CAP/3.scopes.cddl", "spec/mirrors/CAP/4.commitments.cddl",
+    "spec/mirrors/CAP/5.evaluate.cddl", "spec/mirrors/CAP/6.grants.cddl",
+    "spec/mirrors/CAP/7.errors.cddl", "spec/mirrors/CAP/8.events.cddl",
+    "spec/mirrors/CAP/8.1.watch.cddl", "spec/mirrors/CAP/9.audit.cddl",
+    "spec/mirrors/CAP/9.1.evidence.cddl",
+  ] ## CA §3 to §9.1, in spec order: the contract's one primary document
+  caSupporting* = ["spec/mirrors/RNT/9.2.runtime-types.cddl"]
+
+proc caPrimary*(): string {.raises: [IOError].} =
+  ## The Capability Authority contract (CA l.143 to l.1244), its nine blocks
+  ## joined with a blank line between them.
+  for i, p in caParts:
+    if i > 0:
+      result.add("\n")
+    result.add(readFile(p))
+
+proc caSet(): Result[ContractSet, string] =
+  try:
+    acceptContractSet(
+      caPrimary(), [], caSupporting.mapIt(readFile(it)), AcceptOptions(system: true)
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedCaTypes*(): Result[string, string] =
+  ## The Capability Authority contract's types (CA §3-§9.1), for `authority/`.
+  nimModule(
+    ?caSet(),
+    NimOptions(
+      importPrefix: "../", schemaAccessor: "caSchema", documentsAccessor: "caDocuments"
+    ),
+    true,
+  )
+
+proc generatedCaKit*(): Result[string, string] =
+  ## The Capability Authority module kit: provider dispatch and event publishers.
+  kitModule(?caSet(), KitOptions(importPrefix: "../"), true)
+
+const
+  policyTypesPath* = "src/logos_core/authority/policy_types.nim"
+  policyPrimary* = "src/logos_core/authority/policy.cddl"
+  stateTypesPath* = "src/logos_core/authority/state_types.nim"
+  statePrimary* = "src/logos_core/authority/state.cddl"
+
+proc generatedPolicyTypes*(): Result[string, string] =
+  ## The authority policy format's types (`logos-core-nim.authority-policy.v1`,
+  ## DECISIONS I84), for `authority/policy.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(policyPrimary), [], [], AcceptOptions())
+    nimModule(
+      set, NimOptions(importPrefix: "../", schemaAccessor: "policySchema"), false
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedStateTypes*(): Result[string, string] =
+  ## The authority state files' types (`logos-core-nim.authority-state.v1`,
+  ## DECISIONS I84), for `authority/persist.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(statePrimary), [], [], AcceptOptions())
+    nimModule(
+      set, NimOptions(importPrefix: "../", schemaAccessor: "stateSchema"), false
+    )
+  except IOError as e:
+    err(e.msg)

@@ -680,3 +680,50 @@ lang = "c"
 out = "CFG/9.configuration-types.cddl"
 file = "spec-module-configuration.md"
 section = "§9"
+
+# CAPABILITY AUTHORITY ------------------------------------------------------------
+
+[[mirror]]
+out = "CAP/3.scopes.cddl"
+file = "spec-module-capability-authority.md"
+section = "§3"
+
+[[mirror]]
+out = "CAP/4.commitments.cddl"
+file = "spec-module-capability-authority.md"
+section = "§4"
+
+[[mirror]]
+out = "CAP/5.evaluate.cddl"
+file = "spec-module-capability-authority.md"
+section = "§5"
+
+[[mirror]]
+out = "CAP/6.grants.cddl"
+file = "spec-module-capability-authority.md"
+section = "§6"
+
+[[mirror]]
+out = "CAP/7.errors.cddl"
+file = "spec-module-capability-authority.md"
+section = "§7"
+
+[[mirror]]
+out = "CAP/8.events.cddl"
+file = "spec-module-capability-authority.md"
+section = "§8"
+
+[[mirror]]
+out = "CAP/8.1.watch.cddl"
+file = "spec-module-capability-authority.md"
+section = "§8.1"
+
+[[mirror]]
+out = "CAP/9.audit.cddl"
+file = "spec-module-capability-authority.md"
+section = "§9"
+
+[[mirror]]
+out = "CAP/9.1.evidence.cddl"
+file = "spec-module-capability-authority.md"
+section = "§9.1"
