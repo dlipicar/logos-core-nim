@@ -21,7 +21,8 @@ The specs are being revised, so the work is ordered by how settled each area is
 - Tier 4, started: the direct-mode Runtime slice. An in-process Module Loader for `direct_static` and
   `direct_dynamic` code, the module-instance lifecycle, Runtime Control, direct routes, events and
   asynchronous calls (I74–I78), the Host Embedding API, `liblogos_runtime` (RUNTIME §13; I81), and
-  persistent Runtime state across restarts (I82).
+  persistent Runtime state across restarts, with `recover_module`, `retire_module` and
+  `create_module` (I82).
 - Tier 3, without I/O: the TRANSPORT envelope, framing, Hello and route tickets, payload
   commitments, cancellation and multiplexing as codecs and state machines; and the Package Manager's
   package artifacts: the manifest and its commitment, package-signing trust input, COSE_Sign1, LGX

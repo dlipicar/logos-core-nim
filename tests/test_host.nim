@@ -250,6 +250,41 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.runtime.runtime_instance_id = Opt.some("rt-1")
     check parse(c).rejects("runtime_instance_id needs store_dir")
 
+  test "[RUN-0741] [IMPL-DECISION G55] declarations: one per module name, each a valid record":
+    proc declaration(module, binding: string): LcnAppDeclaration =
+      LcnAppDeclaration(
+        module: module,
+        implementation: LcnAppImplementation(
+          kind: LcnAppImplementationKind.Direct_static,
+          arm_Direct_static: LcnAppImplementationARDirectStaticMap(binding: binding),
+        ),
+      )
+
+    var c = baseConfig()
+    c.runtime.state_root = Opt.some(work / "state")
+    var keep = declaration("meter_module", "meter")
+    keep.persistent_state = Opt.some(true)
+    c.declarations = Opt.some(@[keep, declaration("other_module", "other")])
+    let ok = parse(c).get
+    check ok.declarations.len == 2
+    check ok.declarations[0].record.module == "meter_module"
+    check ok.declarations[0].record.binding == "meter"
+    check ok.declarations[0].persistentState
+    check not ok.declarations[1].persistentState
+    c.declarations = Opt.some(newSeq[LcnAppDeclaration]())
+    check parse(c).rejects("declarations is present but empty")
+    c.declarations = Opt.some(
+      @[declaration("meter_module", "meter"), declaration("meter_module", "x")]
+    )
+    check parse(c).rejects("module meter_module is declared twice")
+    var empty = declaration("meter_module", "meter")
+    empty.implements = Opt.some(newSeq[SchemaCommitment]())
+    c.declarations = Opt.some(@[empty])
+    check parse(c).rejects("declaration meter_module: implements is present but empty")
+    c.declarations = Opt.some(@[keep])
+    c.runtime.state_root = Opt.none(string)
+    check parse(c).rejects("persistent_state needs state_root")
+
   test "[IMPL] the names the Runtime assigns are refused in the configuration":
     let form = "m-" & repeat("0a", 16) & "-1"
     check isRuntimeForm(form)
@@ -970,6 +1005,28 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check runtimeWaitForShutdown(rt).ec == ecOk
     check runtimeDestroy(rt).ec == ecOk
 
+  test "[IMPL-DECISION S4] [IMPL-DECISION G55] a declaration naming a static binding never registered fails start too":
+    var c = deployment()
+    c.declarations = Opt.some(
+      @[
+        LcnAppDeclaration(
+          module: "spare_module",
+          implementation: LcnAppImplementation(
+            kind: LcnAppImplementationKind.Direct_static,
+            arm_Direct_static: LcnAppImplementationARDirectStaticMap(binding: "spare"),
+          ),
+        )
+      ]
+    )
+    let rt = registered(c)
+    let r = runtimeStart(rt)
+    check r.ec == ecInvalidParams
+    check "spare_module" in r.text and "spare" in r.text
+    check engineOf(rt) == nil and orchNames.load == 0
+    check runtimeRequestShutdown(rt).ec == ecOk
+    check runtimeWaitForShutdown(rt).ec == ecOk
+    check runtimeDestroy(rt).ec == ecOk
+
   test "[IMPL] the work directory and state root are made private when missing":
     let c = deployment()
     let rt = registered(c)
@@ -988,6 +1045,18 @@ proc persistent(c: LcnAppConfig, base: string, id = Opt.none(string)): LcnAppCon
   result.runtime.store_dir = Opt.some(base / "store")
   result.runtime.state_root = Opt.some(base / "state")
   result.runtime.runtime_instance_id = id
+
+proc orchBinding(): ptr LogosRuntimeControlBinding =
+  cast[ptr LogosRuntimeControlBinding](orchRc.load)
+
+proc recoverRequest(instance: string, v: InstanceView): seq[byte] =
+  encode(
+    LogosNSRuntimeControlRecoverModuleRequest(
+      module: v.module,
+      instance: instance,
+      expected_execution_revision: v.execution.revision,
+    )
+  ).tryGet
 
 proc selfId(): string =
   let rc = cast[ptr LogosRuntimeControlBinding](orchRc.load)
@@ -1026,6 +1095,13 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check meter2.execution.intent == inRequested
     check meter2.intentOrigin.instance == "orch"
     check meter2.execution.intentRevision == meter1.execution.intentRevision
+    # The orchestrator resumes it, keeping its origin and intent revision.
+    check rcCall(orchBinding(), "recover_module", recoverRequest("meter-1", meter2))[0] ==
+      ecOk
+    let meter3 = engineOf(rt).view("meter-1").tryGet
+    check meter3.state == msReady
+    check meter3.intentOrigin.instance == "orch"
+    check meter3.execution.intentRevision == meter1.execution.intentRevision
     rt.finish()
 
   test "[RUN-0698] [IMPL-DECISION G191] orchestration stopped before shutdown is started again, with a diagnostic":
@@ -1078,6 +1154,34 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check r.ec == ecInvalidParams
     check "meter-1" in r.text
     check orchInits.load == 1
+    rt.finish()
+
+  test "[IMPL] a retained instance whose static binding is no longer registered: start is OK, its recovery fails in the loader":
+    let base = work / "restart-unbound"
+    orchMode.store(ord(omAutostart))
+    var rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    check waitUntil(
+      proc(): bool =
+        orchThreadDone.load
+    )
+    check rt.state("meter-1") == msReady
+    rt.finish()
+    resetOrchestrator()
+    # The next configuration drops meter-1, and its binding is not registered.
+    var c = persistent(deployment(), base)
+    c.modules = c.modules.filterIt(it.instance != "meter-1")
+    rt = create(c)
+    check rt.register("orchestrator", orchTable()).ec == ecOk
+    check runtimeStart(rt).ec == ecOk
+    let v = engineOf(rt).view("meter-1").tryGet
+    check v.state == msUnloaded and v.execution.intent == inRequested
+    let (code, response) =
+      rcCall(orchBinding(), "recover_module", recoverRequest("meter-1", v))
+    check code == ecOk
+    check LogosNSRuntimeControlRecoverModuleResponse.decode(response).tryGet.state.kind ==
+      LogosNSRuntimeControlStateKind.Error
+    check rt.failureOf("meter-1").startsWith("loader-")
     rt.finish()
 
   test "[IMPL] two handles on one store: the second start is MODULE_ERROR":

@@ -125,6 +125,15 @@ type
     instance*: string
     record*: ModuleRecord
 
+  ModuleDeclaration* = object
+    ## [G55] The one accepted declaration for a module name that
+    ## `create_module` selects: protected deployment input (BCP l.367; RUNTIME
+    ## l.3614-3621), a direct record.
+    record*: ModuleRecord ## with no state assignment
+    persistentState*: bool
+      ## [IMPL] each created instance gets a fresh state assignment
+      ## (RUNTIME §8 l.1451)
+
   EngineConfig* = object
     runtimeInstanceId*: string
       ## [SPEC RUNTIME §9.2 l.2665-2672] this Runtime's identity, assigned by
@@ -147,6 +156,9 @@ type
     ordering*: seq[(string, string)]
       ## [SPEC RUNTIME §3.7] accepted lifecycle-ordering constraints as
       ## (prerequisite instance, dependent instance)
+    declarations*: seq[ModuleDeclaration]
+      ## [G55] what `create_module` may create, one per module name; a change
+      ## affects only later creations (RUNTIME l.3621)
     startupDeadline*: Duration
     stopDeadline*: Duration
     shutdownGrace*: Duration
@@ -200,6 +212,9 @@ type
     rmShutdownRuntime = "shutdown_runtime"
     rmGetExecutionPermissions = "get_execution_permissions"
     rmGetReadiness = "get_readiness"
+    rmRecoverModule = "recover_module"
+    rmRetireModule = "retire_module"
+    rmCreateModule = "create_module"
 
   RcCall* = object ## One checked Runtime Control request.
     request*: seq[byte] ## its deterministic CBOR, for `request_key` replay
@@ -218,6 +233,12 @@ type
       report*: LogosNSRuntimeControlReportFailureRequest
     of rmGetReadiness:
       readiness*: LogosNSRuntimeControlGetReadinessRequest
+    of rmRecoverModule:
+      recover*: LogosNSRuntimeControlRecoverModuleRequest
+    of rmRetireModule:
+      retire*: LogosNSRuntimeControlRetireModuleRequest
+    of rmCreateModule:
+      createModule*: LogosNSRuntimeControlCreateModuleRequest
     of rmGetSelf, rmShutdownRuntime, rmGetExecutionPermissions:
       discard
 

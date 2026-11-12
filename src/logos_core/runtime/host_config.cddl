@@ -12,6 +12,7 @@ lcn.app_config = {
   orchestration: lcn.app_instance_id,
   modules: [* lcn.app_module],
   ? ordering: [* lcn.app_ordering],
+  ? declarations: [* lcn.app_declaration],
 }
 
 lcn.app_runtime = {
@@ -72,4 +73,17 @@ lcn.app_permission = {
 lcn.app_ordering = {
   prerequisite: lcn.app_instance_id,
   dependent: lcn.app_instance_id,
+}
+
+; One accepted declaration per module name, for create_module (decision G55;
+; RUNTIME l.3614-3621): lcn.app_module without instance and state_assignment.
+; With persistent_state, each created instance gets a fresh state assignment.
+lcn.app_declaration = {
+  module: tstr .size (1..64),
+  implementation: lcn.app_implementation,
+  ? primary_contract: logos.schema_commitment,
+  ? implements: [* logos.schema_commitment],
+  ? requires: [* lcn.app_requirement],
+  ? requested_permissions: [* lcn.app_permission],
+  ? persistent_state: true,
 }

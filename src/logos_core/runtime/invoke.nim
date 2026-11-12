@@ -338,6 +338,18 @@ proc rcRequest(
     var c = call(rmGetReadiness)
     c.readiness = fromChecked(LogosNSRuntimeControlGetReadinessRequest, v)
     ok(c)
+  of $rmRecoverModule:
+    var c = call(rmRecoverModule)
+    c.recover = fromChecked(LogosNSRuntimeControlRecoverModuleRequest, v)
+    ok(c)
+  of $rmRetireModule:
+    var c = call(rmRetireModule)
+    c.retire = fromChecked(LogosNSRuntimeControlRetireModuleRequest, v)
+    ok(c)
+  of $rmCreateModule:
+    var c = call(rmCreateModule)
+    c.createModule = fromChecked(LogosNSRuntimeControlCreateModuleRequest, v)
+    ok(c)
   else:
     err(
       InvocationFailure(
@@ -362,6 +374,12 @@ proc lifecycleResponse(m: RcMethod, v: InstanceView): Result[seq[byte], string] 
     encode(
       LogosNSRuntimeControlStartModuleResponse(
         module: v.module, instance: Opt.some(v.instance), state: state
+      )
+    )
+  elif m == rmRecoverModule:
+    encode(
+      LogosNSRuntimeControlRecoverModuleResponse(
+        module: v.module, instance: v.instance, state: state
       )
     )
   else:
@@ -406,7 +424,7 @@ proc rcInvoke*(
   if reply.error.isSome:
     return err(failureOf(reply.error.get))
   let encoded =
-    if m in {rmStartModule, rmStopModule}:
+    if m in {rmStartModule, rmStopModule, rmRecoverModule}:
       lifecycleResponse(m, reply.view)
     else:
       Result[seq[byte], string].ok(reply.bytes)

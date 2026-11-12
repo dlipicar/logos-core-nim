@@ -101,7 +101,7 @@
 
 import
   std/[
-    atomics, deques, locks, monotimes, sets, strutils, sysrand, tables, times,
+    atomics, deques, locks, monotimes, sequtils, sets, strutils, sysrand, tables, times,
     typedthreads,
   ]
 from std/os import sleep
@@ -260,6 +260,7 @@ type
       ## retired host-assigned instance ids, with the state assignment each
       ## keeps reserved (RUNTIME l.3582, l.3587)
     createKeys: seq[CreateKey] ## `create_module` key associations
+    assignments: int ## state assignments `create_module` gave (`s-<prefix>-<n>`)
 
 const
   NotPersisted = "the execution state could not be persisted"
@@ -1267,11 +1268,17 @@ proc assignmentInUse(st: State, assignment: string, skip = ""): Opt[string] =
   Opt.none(string)
 
 proc createInst(
-    st: State, record: ModuleRecord, instance: string, origin: Origin, created = false
+    st: State,
+    record: ModuleRecord,
+    instance: string,
+    origin: Origin,
+    created = false,
+    key = Opt.none(CreateKey),
 ): Result[Inst, EngineError] =
   ## A local module-instance record: `unloaded`, intent `uninitialized`
   ## (§9.3 l.3623), written before it is exposed. Records come from the host
-  ## or, through `create_module`, from its declarations (G55).
+  ## or, through `create_module`, from its declarations (G55); `key` is that
+  ## request's key association, written with the record (l.3627-3628).
   if st.shuttingDown:
     return err(engineError(ecNotReady, "the Runtime is shutting down"))
   if not origin.host and not created:
@@ -1316,9 +1323,15 @@ proc createInst(
       if y.providerId == x.providerId:
         return err(engineError(ecModule, "a fresh provider id collided"))
   st.instances[id] = x
+  if key.isSome:
+    var k = key.get
+    k.instance = id
+    st.createKeys.add(k)
   let refused = st.accept(x, x.save)
   if refused.isSome:
     st.instances.del(id)
+    if key.isSome:
+      st.createKeys.setLen(st.createKeys.len - 1)
     return err(refused.get)
   ok(x)
 
@@ -1611,6 +1624,180 @@ proc readiness(st: State, q: Request, x: Inst) =
       response.reason = Opt.some(reasonText(v.failure.get.reason))
   q.reply.answerEncoded(encode(response))
 
+proc rcRecover(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 recover_module] Through Runtime Control: `x` requests,
+  ## the retained origin's execution authority decides (`recover`).
+  let req = q.rc.recover
+  var r = q
+  r.instance = req.instance
+  r.module = req.module
+  r.expectedRevision = Opt.some(req.expected_execution_revision)
+  st.recover(r)
+
+proc retireInst(st: State, y: Inst): Result[void, string] =
+  ## [SPEC RUNTIME l.3585-3588, l.3595] One durable write before the answer:
+  ## the instance and its provider record leave the inventory, a host-assigned
+  ## id is kept as a tombstone with the state assignment it reserves, and its
+  ## `create_module` keys are dropped (RUN-1028). On a failed write nothing
+  ## changes. The state directory, packages, grants and history stay; nothing
+  ## is transferred.
+  let instances = st.instances
+  let keys = st.createKeys
+  st.instances.del(y.id)
+  let tombstone = not isRuntimeForm(y.id)
+  if tombstone:
+    # [IMPL] A Runtime-assigned name never comes back anyway (I82, C-3).
+    st.tombstones[y.id] = y.record.stateAssignment
+  st.createKeys.keepItIf(it.instance != y.id)
+  let w = st.persist()
+  if w.isErr:
+    st.instances = instances
+    st.createKeys = keys
+    if tombstone:
+      st.tombstones.del(y.id)
+    return err(w.error)
+  # [SPEC RUNTIME l.3576] Nothing later publishes a change of the retired
+  # record (RUN-1012).
+  st.changes.keepItIf(it.view.instance != y.id)
+  st.written(nil)
+  ok()
+
+proc retire(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 retire_module, l.3556-3595] Removes a stopped
+  ## instance's record for good. The check order is G171's: the target's
+  ## Runtime, this method's own authority (l.3557), the revision, readiness,
+  ## then the absence of every realization, cleanup, call and dependency.
+  let req = q.rc.retire
+  if req.target.runtime_instance_id != st.runtimeId:
+    # [G194 interim (TF-30 point 1)] INVALID_PARAMS without detail, as l.3659
+    # answers a provider address on another Runtime.
+    q.reply.answerError(ecInvalidParams, "the target names another Runtime")
+    return
+  let id = req.target.module_instance_id
+  let y = st.instances.getOrDefault(id)
+  # [SPEC RUNTIME l.3557, l.3561] Authorized on its own; an unknown target
+  # and a refused one are the same.
+  let refused = st.denied(
+    AuthzRequest(
+      action: aaLifecycle,
+      operation: $rmRetireModule,
+      consumer: x.id,
+      target: id,
+      module: (if y.isNil: "" else: y.record.module),
+    )
+  )
+  if refused or y.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if req.expected_execution_revision != y.revision:
+    # [SPEC RUNTIME l.3559-3560] no mutation
+    q.reply.answerError(ecInvalidParams, "execution revision mismatch")
+    return
+  st.requireReady(q)
+  # [SPEC RUNTIME l.3563-3566] What the Runtime owns, not the state alone:
+  # no attempt, realization or destroy job, no call or deferred invocation
+  # in it, no stop waiting on it.
+  var live =
+    y.state notin {msUnloaded, msError} or y.attempt != nil or y.teardown != 0 or
+    y.realization != nil or y.inflight > 0 or y.stopWaiters.len > 0
+  for a in st.asyncCalls.values:
+    if a.provider == y.id or a.consumer == y.id:
+      live = true
+  if live:
+    q.reply.answerError(ecNotReady, "the module instance still has a realization")
+    return
+  if y.intent == inRequested:
+    q.reply.answerError(ecNotReady, "the execution intent is requested")
+    return
+  for z in st.instances.values:
+    # [SPEC RUNTIME l.3568-3570] Retained intent that names it as origin;
+    # stopped or replaced intent does not count (l.3578).
+    if z != y and z.intent == inRequested and not z.intentOrigin.host and
+        z.intentOrigin.instance == y.id:
+      q.reply.answerError(
+        ecNotReady, "the module instance is the origin of retained execution intent"
+      )
+      return
+  if y.configured:
+    # [SPEC RUNTIME l.3581-3582] The host configuration still names it.
+    q.reply.answerError(ecNotReady, "the host configuration names the module instance")
+    return
+  st.retireInst(y).isOkOr:
+    st.storeFailure(error)
+    q.reply.answerError(ecModule, NotPersisted)
+    return
+  # [SPEC RUNTIME l.3591] The retirement stands whether or not the answer
+  # arrives.
+  q.reply.answerEncoded(encode(LogosNSRuntimeControlRetireModuleResponse()))
+
+proc createModule(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 create_module, l.3613-3634] A fresh instance from the
+  ## one accepted declaration for `module` (G55), once per request key.
+  let req = q.rc.createModule
+  if st.denied(
+    AuthzRequest(
+      action: aaLifecycle,
+      operation: $rmCreateModule,
+      consumer: x.id,
+      module: req.module,
+    )
+  ):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  st.requireReady(q)
+  # [SPEC RUNTIME l.3627-3631] The key's scope is this method, this consumer
+  # and this Runtime; the Runtime thread serializes requests, so one key
+  # creates one instance (RUN-0663).
+  for k in st.createKeys:
+    if k.consumer == x.id and k.key == req.request_key:
+      if k.module != req.module:
+        q.reply.answerError(
+          ecInvalidParams, "the request key was used for another module"
+        )
+      else:
+        q.reply.answerEncoded(
+          encode(
+            LogosNSRuntimeControlCreateModuleResponse(
+              module: k.module, instance: k.instance
+            )
+          )
+        )
+      return
+  var found = false
+  var d: ModuleDeclaration
+  for c in st.cfg.declarations:
+    if c.record.module == req.module:
+      d = c
+      found = true
+  if not found:
+    # [G195 interim (TF-30 point 2)] No accepted declaration: the answer a
+    # denial gives, and nothing created (l.3619).
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if st.instances.len >= MaxInstances:
+    # [SPEC RUNTIME l.3442-3443; BCP l.369] a resource bound, not readiness
+    q.reply.answerError(ecModule, "the Runtime holds as many instances as it can")
+    return
+  var record = d.record
+  if d.persistentState:
+    # [SPEC RUNTIME §8 l.1451] its own fresh state assignment
+    inc st.assignments
+    record.stateAssignment = Opt.some("s-" & st.prefix & "-" & $st.assignments)
+  let y = st.createInst(
+    record,
+    "",
+    q.origin,
+    created = true,
+    key = Opt.some(CreateKey(consumer: x.id, key: req.request_key, module: req.module)),
+  ).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  q.reply.answerEncoded(
+    encode(
+      LogosNSRuntimeControlCreateModuleResponse(module: y.record.module, instance: y.id)
+    )
+  )
+
 proc newRouteId(st: State): string =
   ## [IMPL] Never reused by this engine; the random prefix keeps engines apart
   ## (§9.3 l.3172-3175).
@@ -1895,6 +2082,12 @@ proc rc(st: State, q: Request) =
     st.lifecycleCall(q, x)
   of rmGetReadiness:
     st.readiness(q, x)
+  of rmRecoverModule:
+    st.rcRecover(q, x)
+  of rmRetireModule:
+    st.retire(q, x)
+  of rmCreateModule:
+    st.createModule(q, x)
   of rmEstablishRoute:
     st.establish(q, x)
   of rmRenewRoute:

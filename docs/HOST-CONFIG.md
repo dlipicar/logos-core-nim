@@ -49,6 +49,7 @@ lcn.app_config = {
   orchestration: lcn.app_instance_id,
   modules: [* lcn.app_module],
   ? ordering: [* lcn.app_ordering],
+  ? declarations: [* lcn.app_declaration],
 }
 
 lcn.app_runtime = {
@@ -109,6 +110,19 @@ lcn.app_permission = {
 lcn.app_ordering = {
   prerequisite: lcn.app_instance_id,
   dependent: lcn.app_instance_id,
+}
+
+; One accepted declaration per module name, for create_module (decision G55;
+; RUNTIME l.3614-3621): lcn.app_module without instance and state_assignment.
+; With persistent_state, each created instance gets a fresh state assignment.
+lcn.app_declaration = {
+  module: tstr .size (1..64),
+  implementation: lcn.app_implementation,
+  ? primary_contract: logos.schema_commitment,
+  ? implements: [* logos.schema_commitment],
+  ? requires: [* lcn.app_requirement],
+  ? requested_permissions: [* lcn.app_permission],
+  ? persistent_state: true,
 }
 ```
 
@@ -177,6 +191,25 @@ expressed in v1.
 Lifecycle-ordering constraints (RUNTIME §3.7): a `dependent` starts only once its `prerequisite` is
 `ready`. Both must be listed instances; a constraint may not name one instance twice, and the
 constraints may not form a cycle.
+
+### `declarations`
+
+What a module may create at run time with Runtime Control `create_module` (RUNTIME l.3613-3634;
+DECISIONS G55): for each module name, the one accepted declaration, with the fields of a `modules`
+entry except `instance` and `state_assignment`. No two declarations name one module. A
+`direct_static` declaration names a binding the host registers, or `start` returns
+`LOGOS_ERR_INVALID_PARAMS`. With `persistent_state: true` each created instance gets a fresh state
+assignment of its own (`s-…`), which needs `state_root`.
+
+- `create_module` for a module with no declaration is refused exactly as a denied request is
+  (`LOGOS_ERR_NOT_AUTHORISED`), and creates nothing (DECISIONS G195, interim).
+- A created instance is new each time: a fresh id (`m-…`), `unloaded`, intent `uninitialized`. It
+  keeps the declaration it was created from. Changing a declaration in a later configuration changes
+  later creations only (RUNTIME l.3621).
+- The request key belongs to the requesting module: the same key and module give the same instance
+  again, for as long as that instance is known (across restarts too); the same key with another
+  module is `LOGOS_ERR_INVALID_PARAMS`. Retiring the instance frees the key.
+- Creating grants nothing: the new instance is started with its own `start_module` authorization.
 
 ## What the host can expect
 
@@ -293,6 +326,18 @@ identity, and every configured instance is new.
   system clock has not gone back: the Runtime takes its revision epoch from the clock, so restore no
   sooner than a second after the newest run started.
 - **Protection at rest.** The state is not encrypted; the operating-system user is the boundary.
+- **Recovery and retirement** (RUNTIME §9.3). `recover_module` starts a new attempt for an instance
+  whose intent is still `requested` and that is `unloaded` or `error` with its cleanup complete,
+  given the `expected_execution_revision` the caller read. It keeps the intent, its origin and the
+  record, and execution is authorized for that retained origin, not for the caller (l.3540). One
+  revision value admits at most one attempt: a repeated or concurrent recovery with it is
+  `LOGOS_ERR_INVALID_PARAMS`, so a restart policy counts the recoveries it was answered, or reads
+  `get_readiness` when an answer was lost. After an explicit stop, and during shutdown, recovery is
+  `LOGOS_ERR_NOT_READY`. `retire_module` removes an instance for good once it is `unloaded` or
+  `error`, its intent is not `requested`, nothing of a realization or its cleanup is left, no other
+  instance's `requested` intent names it as origin, and the configuration no longer lists it
+  (`LOGOS_ERR_NOT_READY` otherwise). A target on another Runtime is `LOGOS_ERR_INVALID_PARAMS`
+  (DECISIONS G194, interim). The removal is written before the answer.
 - **Retention.** Retiring an instance keeps its state directory and reserves its state assignment:
   retirement is not deletion (BCP l.395). No deletion operation exists yet (DECISIONS G143).
 - **Bounds.** At most `MaxInstances` (1024) known instances, retained ones included, for

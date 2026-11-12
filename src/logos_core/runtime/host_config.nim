@@ -42,6 +42,7 @@ type
     orchestration*: string ## [G53] the instance holding the orchestration role
     modules*: seq[HostModule] ## in configuration order
     ordering*: seq[(string, string)] ## (prerequisite, dependent), RUNTIME §3.7
+    declarations*: seq[ModuleDeclaration] ## [G55] what `create_module` may create
 
   ConfigError* = object
     message*: string
@@ -98,9 +99,12 @@ func rootOf(c: SchemaCommitment): Digest =
     d[i] = c.schema_root[i]
   d
 
-func record(m: LcnAppModule): Result[ModuleRecord, ConfigError] =
-  ## The resolved module record a configured module stands for (RUNTIME §8).
-  var r = ModuleRecord(module: m.module, stateAssignment: m.state_assignment)
+func record(m: LcnAppModule | LcnAppDeclaration): Result[ModuleRecord, ConfigError] =
+  ## The resolved module record a configured module or a declaration stands
+  ## for (RUNTIME §8).
+  var r = ModuleRecord(module: m.module)
+  when m is LcnAppModule:
+    r.stateAssignment = m.state_assignment
   case m.implementation.kind
   of LcnAppImplementationKind.Direct_static:
     r.strategy = stDirectStatic
@@ -285,4 +289,21 @@ proc parseHostConfig*(
     for o in cfg.ordering.get:
       c.ordering.add((o.prerequisite, o.dependent))
   ?checkOrdering(c, ids)
+  if cfg.declarations.isSome:
+    # [G55] One accepted declaration per module name (RUNTIME l.3614).
+    if cfg.declarations.get.len == 0:
+      return err(configError("declarations is present but empty"))
+    var modules = initHashSet[string]()
+    for d in cfg.declarations.get:
+      let r = record(d).valueOr:
+        return err(configError("declaration " & d.module & ": " & error.message))
+      if d.module in modules:
+        return err(configError("module " & d.module & " is declared twice"))
+      modules.incl(d.module)
+      let persistent = d.persistent_state.get(false)
+      if persistent and c.stateRoot.isNone:
+        return err(
+          configError("declaration " & d.module & ": persistent_state needs state_root")
+        )
+      c.declarations.add(ModuleDeclaration(record: r, persistentState: persistent))
   ok(c)

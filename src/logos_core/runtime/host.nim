@@ -314,6 +314,14 @@ proc launch(h: ptr HostRuntime): LogosResult =
         "module instance " & m.instance & " names static binding " & m.record.binding &
           ", which is not registered",
       )
+  for d in c.declarations:
+    # The same for what `create_module` may create (G55).
+    if d.record.strategy == stDirectStatic and d.record.binding notin ids:
+      return answer(
+        ecInvalidParams,
+        "the declaration of " & d.record.module & " names static binding " &
+          d.record.binding & ", which is not registered",
+      )
   privateDir(c.workDir).isOkOr:
     return answer(ecModule, "cannot create work_dir: " & error)
   if c.stateRoot.isSome:
@@ -333,6 +341,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
     statics: statics,
     policy: (if h.policyHook != nil: h.policyHook() else: c.policy),
     ordering: c.ordering,
+    declarations: c.declarations,
     startupDeadline: c.startupDeadline,
     stopDeadline: c.stopDeadline,
     shutdownGrace: c.shutdownGrace,
