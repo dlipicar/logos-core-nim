@@ -17,6 +17,15 @@ export core, policy_types, results
 const
   Rt* = "rt-1"
   Source* = "test-policy"
+  Slow* =
+    when defined(tsan):
+      10
+    elif defined(asan) or defined(msan):
+      3
+    else:
+      1
+    ## [IMPL] How much slower a sanitizer build runs (as in `trnowner.nim`). A
+    ## bound that only limits how long a test waits is multiplied by it.
 
 # Facts --------------------------------------------------------------------------
 

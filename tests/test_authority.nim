@@ -1,8 +1,10 @@
-## The Capability Authority's core (step 8a.1; DECISIONS I84, G205-G207):
-## scopes, policy, evaluate, ids, grants, lists, audit, notification and
-## persistence. No engine and no dlopen: the CA thread and its state only.
+## The Capability Authority (step 8a; DECISIONS I84, G205-G207): scopes,
+## policy, evaluate, ids, grants, lists, audit, notification, persistence and
+## watches on the CA thread, and the provider module through a stand-in
+## Runtime (`support/cafake.nim`). No engine and no dlopen: the engine suite
+## is `test_authority_module`.
 
-import std/[atomics, os, sets, strutils, tables]
+import std/[atomics, monotimes, os, sets, strutils, tables, times]
 import unittest2
 import ../src/logos_core/cbor
 import
@@ -12,7 +14,7 @@ import ../src/logos_core/iface/accept
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/names
 from ../src/logos_core/runtime/rc_types import rcDocuments
-import ./support/[authfixture, kitbuild]
+import ./support/[authfixture, cafake, kitbuild]
 
 let
   repo = currentSourcePath().parentDir.parentDir
@@ -1673,3 +1675,571 @@ suite "cap.persist: state across restarts and failures":
     e.a = openTest(e.dir, p, e.facts, e.clock, e.sink.sink, limits)
     check e.query("m-a").len == 1_000
     e.close()
+
+# cap.watch ------------------------------------------------------------------------------
+
+type ObservedChange = LogosNSCapabilityAuthorityObservedChangeEvent
+
+const
+  GrantChanged = "logos.capability_authority.grant_changed_event"
+  PolicyChanged = "logos.capability_authority.policy_changed_event"
+  Observed = "logos.capability_authority.observed_change_event"
+
+proc grantChange(g: Grant): seq[byte] =
+  ## The one payload a watcher gets for a change of `g`: the grant alone.
+  encode(
+    ObservedChange(
+      kind: LogosNSCapabilityAuthorityObservedChangeEventKind.Map_grant,
+      arm_Map_grant:
+        LogosNSCapabilityAuthorityObservedChangeEventARMapGrantMap(grant: g),
+    )
+  ).get
+
+proc policyChange(at: uint64, previous, current: uint64): seq[byte] =
+  ## The one payload a `policy_changes` watcher gets: no `affected_executions`.
+  encode(
+    ObservedChange(
+      kind:
+        LogosNSCapabilityAuthorityObservedChangeEventKind.Map_changed_at_policy_revision_previous_policy_revision,
+      arm_Map_changed_at_policy_revision_previous_policy_revision: LogosNSCapabilityAuthorityObservedChangeEventARMapChangedAtPolicyRevisionPreviousPolicyRevisionMap(
+        changed_at: at, previous_policy_revision: previous, policy_revision: current
+      ),
+    )
+  ).get
+
+proc watchOf(e: Env, instance: string): Watch =
+  e.a.watch(moduleCaller(instance), address(instance)).expect("a watch")
+
+proc changes(w: Watch): seq[seq[byte]] =
+  while true:
+    let c = w.nextChange()
+    if c.isNone:
+      break
+    result.add c.get
+
+proc eventually(cond: proc(): bool {.closure.}, seconds = 10): bool =
+  ## Whether `cond` holds within `seconds` (times `Slow`), by the clock.
+  let until = getMonoTime() + initDuration(seconds = seconds * Slow)
+  while getMonoTime() < until:
+    if cond():
+      return true
+    sleep(1)
+  cond()
+
+type ModuleIssueJob = object
+  a: Authority
+
+proc moduleIssue(j: ptr ModuleIssueJob) {.thread.} =
+  discard j.a.issueGrant(
+    moduleCaller("m-b"),
+    IssueGrantRequest(
+      consumer: address("m-b"), target: address("m-a"), scopes: @[callScope(root(M1))]
+    ),
+  )
+
+type EngineEvalJob = object
+  a: Authority
+  done: Atomic[bool]
+
+proc engineEval(j: ptr EngineEvalJob) {.thread.} =
+  discard j.a.evaluateEngine(evalRequest("m-a", @[callScope(root(M1))]))
+  j.done.store(true)
+
+suite "cap.watch: ordinary change observation on the CA thread":
+  test "[CAP-0364] [CAP-0145] a watch is a module caller's, as itself":
+    var e = open(policyBytes(everythingFor(@["beta"])))
+    check e.a.watch(systemCaller(), address("m-a")).error == CaCode.Not_authorised
+    check e.a.watch(moduleCaller("m-a"), address("m-b")).error == CaCode.Not_authorised
+    check e.a.watchCount == 0
+    e.close()
+
+  test "[CAP-0372] [CAP-0373] [CAP-0374] [CAP-0377] [CAP-0378] a watcher gets the changes it may see, whole, under the policy of each change":
+    var e = open(policyBytes(everythingFor(@["beta"])))
+    let w = e.watchOf("m-a")
+    let g = e.issue("m-b", "m-a", @[callM1()]).grantOf
+    discard e.issue("m-b", "m-c", @[callM1()]).grantOf # not m-a's to see
+    check w.changes == @[grantChange(g)]
+    let r = e.revoke("m-b", g.grant_id).grantOf
+    check w.changes == @[grantChange(r)]
+    # Without its inspect rule, m-a sees no further change of its own grants.
+    check e.a.replacePolicy(policyBytes(everythingFor(@["beta"])[0 .. 1])).get == 2
+    discard e.issue("m-b", "m-a", @[callM1()]).grantOf
+    check w.changes.len == 0
+    e.a.unwatch(w)
+    check e.a.watchCount == 0
+    e.close()
+
+  test "[CAP-0379] a policy change goes only to policy_changes inspectors, without affected_executions":
+    let rules =
+      everythingFor(@["beta"]) &
+      @[inspectRule(subject(modules = @["gamma"]), policyChanges = true)]
+    var e = open(policyBytes(rules))
+    let wa = e.watchOf("m-a")
+    let wc = e.watchOf("m-c")
+    check e.a.replacePolicy(policyBytes(rules & @[alphaCalls()])).get == 2
+    check wa.changes.len == 0
+    check wc.changes == @[policyChange(e.now, 1, 2)]
+    e.a.unwatch(wa)
+    e.a.unwatch(wc)
+    e.close()
+
+  test "[CAP-0370] [CAP-0371] equivalent watches get identical payloads, with no watch id":
+    var e = open(policyBytes(everythingFor(@["beta"])))
+    let w1 = e.watchOf("m-a")
+    let w2 = e.watchOf("m-a")
+    let g = e.issue("m-b", "m-a", @[callM1()]).grantOf
+    let one = w1.changes
+    check one == @[grantChange(g)]
+    check w2.changes == one
+    e.a.unwatch(w1)
+    e.a.unwatch(w2)
+    e.close()
+
+  test "[CAP-0380] [CAP-0383] 64 watches in all and 8 per consumer; past either, authority-unavailable":
+    check AuthorityLimits().maxWatches == 64
+    check AuthorityLimits().watchesPerConsumer == 8
+    check AuthorityLimits().watchQueue == 256
+    let facts = fakeFacts()
+    for i in 0 .. 8:
+      check facts.putInstance("w" & $i, InstanceFacts(module: "alpha")).isOk
+    var e = open(policyBytes(everythingFor(@["beta"])), facts = facts)
+    var ws: seq[Watch]
+    for i in 0 .. 7:
+      for k in 0 .. 7:
+        ws.add e.watchOf("w" & $i)
+    check e.a.watchCount == 64
+    check e.a.watch(moduleCaller("w8"), address("w8")).error ==
+      CaCode.Authority_unavailable
+    e.a.unwatch(ws.pop())
+    check e.a.watch(moduleCaller("w0"), address("w0")).error ==
+      CaCode.Authority_unavailable
+    ws.add e.watchOf("w8")
+    check e.a.watchCount == 64
+    for w in ws:
+      e.a.unwatch(w)
+    check e.a.watchCount == 0
+    e.close()
+
+  test "[CAP-0382] [CAP-0383] [CAP-0385] a change that does not fit overflows the watch without blocking; the sink still gets every event":
+    var limits = AuthorityLimits()
+    limits.watchQueue = 2
+    var e = open(policyBytes(everythingFor(@["beta"])), limits)
+    let w1 = e.watchOf("m-a")
+    let w2 = e.watchOf("m-a")
+    for i in 0 .. 2:
+      discard e.issue("m-b", "m-a", @[callM1()]).grantOf
+    check w1.overflowed and w2.overflowed
+    check e.sink.drain().len == 3
+    discard e.issue("m-b", "m-a", @[callM1()]).grantOf
+    check e.sink.drain().len == 1
+    check w1.changes.len == 2
+    e.a.unwatch(w1)
+    e.a.unwatch(w2)
+    e.close()
+
+  test "[CAP-0382] with the module inbox full and a watch overflowing, engine evaluation is taken first":
+    var limits = AuthorityLimits()
+    limits.watchQueue = 1
+    limits.moduleQueue = 2
+    var e = open(
+      policyBytes(
+        everythingFor(@["beta"]) &
+          @[
+            alphaCalls(),
+            inspectRule(
+              subject(modules = @["gamma"]), audit = Opt.some(targetSubject(anyone()))
+            ),
+          ]
+      ),
+      limits,
+    )
+    let w = e.watchOf("m-a")
+    for i in 0 .. 1:
+      discard e.issue("m-b", "m-a", @[callM1()]).grantOf
+    check w.overflowed
+    # The CA thread is held inside the sink of a protected issuance.
+    gate.store(false)
+    inSink.store(false)
+    e.sink.hook = blockSink
+    var pjob = ProtectedJob(a: e.a)
+    var pth: Thread[ptr ProtectedJob]
+    createThread(pth, protectedIssue, addr pjob)
+    while not inSink.load:
+      sleep(1)
+    # Two module requests fill the module inbox; a third is refused at once.
+    var mjob = ModuleIssueJob(a: e.a)
+    var mth: array[2, Thread[ptr ModuleIssueJob]]
+    for t in mth.mitems:
+      createThread(t, moduleIssue, addr mjob)
+    check eventually(
+      proc(): bool =
+        e.a.queuedRequests.module == 2
+    )
+    check e.issue("m-b", "m-a", @[callM1()]).issueErrorOf == CaCode.Authority_unavailable
+    var ejob = EngineEvalJob(a: e.a)
+    var eth: Thread[ptr EngineEvalJob]
+    createThread(eth, engineEval, addr ejob)
+    check eventually(
+      proc(): bool =
+        e.a.queuedRequests.engine == 1
+    )
+    gate.store(true)
+    joinThread(pth)
+    joinThread(eth)
+    for t in mth.mitems:
+      joinThread(t)
+    e.sink.hook = nil
+    # Newest first: the module issuances were recorded after the evaluation.
+    var kinds: seq[LogosNSCapabilityAuthorityAuditRecordKind]
+    for r in e.query("m-c"):
+      kinds.add r.kind
+    check kinds[0 .. 3] ==
+      @[
+        LogosNSCapabilityAuthorityAuditRecordKind.Issue_grant_success,
+        LogosNSCapabilityAuthorityAuditRecordKind.Issue_grant_success,
+        LogosNSCapabilityAuthorityAuditRecordKind.Evaluate_allow,
+        LogosNSCapabilityAuthorityAuditRecordKind.Issue_grant_success,
+      ]
+    e.a.unwatch(w)
+    e.close()
+
+  test "[IMPL] closing the authority ends every watch; the watch is then freed without it":
+    var e = open(policyBytes(everythingFor(@["beta"])))
+    let w = e.watchOf("m-a")
+    check not w.isEnded
+    closeAuthority(e.a)
+    check w.isEnded
+    e.a.unwatch(w)
+    freeChannelSink(e.sink)
+    freeClock(e.clock)
+    freeSharedFacts(e.facts)
+
+# cap.provider ---------------------------------------------------------------------------
+
+type CaEnv = object
+  dir: string
+  facts: SharedFacts
+  clock: Clock
+  ctx: ptr LogosModuleContext
+
+proc wiring(c: CaEnv, policy: seq[byte], limits = AuthorityLimits()): AuthorityWiring =
+  AuthorityWiring(
+    policy: policy, runtimeId: Rt, facts: c.facts, clock: c.clock, limits: limits
+  )
+
+proc openCa(policy: seq[byte], limits = AuthorityLimits(), publish = true): CaEnv =
+  result.dir = freshDir()
+  result.facts = fakeFacts()
+  result.clock = newTestClock()
+  doAssert wireAuthority(result.dir, result.wiring(policy, limits)).isOk
+  let r = newCa(result.dir, publish)
+  doAssert r.isOk, "the CA starts: " & r.error.message.get(r.error.reason)
+  result.ctx = r.get
+
+proc close(c: var CaEnv) =
+  caDestroy(c.ctx)
+  unwireAuthority(c.dir)
+  freeClock(c.clock)
+  freeSharedFacts(c.facts)
+
+proc call[Q, T](c: CaEnv, bare: string, request: Q, _: typedesc[T]): T =
+  ## One call on this thread, as whoever `actAs` last named.
+  T.decode(callCa(c.ctx, bare, encode(request).get)).get
+
+proc issue(c: CaEnv, issuer, target: string, scopes: seq[Scope]): IssueGrantResponse =
+  actAs(issuer)
+  c.call(
+    "issue_grant",
+    IssueGrantRequest(
+      consumer: address(issuer), target: address(target), scopes: scopes
+    ),
+    IssueGrantResponse,
+  )
+
+proc revoke(c: CaEnv, caller, gid: string): RevokeGrantResponse =
+  actAs(caller)
+  c.call(
+    "revoke_grant",
+    RevokeGrantRequest(consumer: address(caller), grant_id: gid),
+    RevokeGrantResponse,
+  )
+
+proc evaluate(c: CaEnv, consumer: string, scopes: seq[Scope]): EvaluateResponse =
+  actAs("", system = true)
+  c.call("evaluate", evalRequest(consumer, scopes), EvaluateResponse)
+
+proc watchOutcome(bytes: openArray[byte]): Opt[CaCode] =
+  ## none for `{}`, else the error's code.
+  let r = WatchChangesResponse.decode(bytes).get
+  if r.kind == LogosNSCapabilityAuthorityWatchChangesResponseKind.Map:
+    Opt.none(CaCode)
+  else:
+    Opt.some(r.arm_Map_error.error.code.kind)
+
+# A watch_changes body on its own thread, as an asynchronous call runs it.
+
+const Watchers = ["m-a", "m-b", "m-c"]
+
+type WatchJob = object
+  ctx: ptr LogosModuleContext
+  who: int
+  hook: ScopedHook
+  cancel: Atomic[bool]
+  done: Atomic[bool]
+  response: array[256, byte]
+  responseLen: int
+
+var
+  hookCtx: ptr LogosModuleContext
+  hookHold: Atomic[bool] ## `holdHook` waits while it is true
+  hookHeld: Atomic[int]
+  reentered: Atomic[int] ## `get_grant` successes from inside a publication
+
+proc reenter() {.nimcall, gcsafe, raises: [].} =
+  ## [CAP-0375] Calls `get_grant` for the change being published, from inside
+  ## the publication.
+  var gid = ""
+  for p in publications():
+    if p.scoped:
+      let c = ObservedChange.decode(p.payload)
+      if c.isOk and
+          c.get.kind == LogosNSCapabilityAuthorityObservedChangeEventKind.Map_grant:
+        gid = c.get.arm_Map_grant.grant.grant_id
+  if gid.len == 0:
+    return
+  let r = GetGrantResponse.decode(
+    callCa(
+      hookCtx,
+      "get_grant",
+      encode(GetGrantRequest(consumer: address("m-a"), grant_id: gid)).get,
+    )
+  )
+  if r.isOk and r.get.kind == LogosNSCapabilityAuthorityGetGrantResponseKind.Map_grant:
+    reentered += 1
+
+proc holdHook() {.nimcall, gcsafe, raises: [].} =
+  hookHeld += 1
+  while hookHold.load:
+    sleep(1)
+
+proc watchBody(j: ptr WatchJob) {.thread.} =
+  actAs(
+    Watchers[j.who],
+    label = "route-" & Watchers[j.who],
+    cancel = addr j.cancel,
+    scoped = j.hook,
+  )
+  let r = callCa(
+    j.ctx,
+    "watch_changes",
+    encode(WatchChangesRequest(consumer: address(Watchers[j.who]))).get,
+  )
+  j.responseLen = min(r.len, j.response.len)
+  for i in 0 ..< j.responseLen:
+    j.response[i] = r[i]
+  j.done.store(true)
+
+proc startWatch(
+    c: CaEnv,
+    j: var WatchJob,
+    t: var Thread[ptr WatchJob],
+    who: int,
+    hook: ScopedHook = nil,
+) =
+  let a = authorityFor(c.dir).get
+  let before = a.watchCount
+  j.ctx = c.ctx
+  j.who = who
+  j.hook = hook
+  j.cancel.store(false)
+  j.done.store(false)
+  createThread(t, watchBody, addr j)
+  check eventually(
+    proc(): bool =
+      a.watchCount == before + 1
+  )
+
+proc outcome(j: var WatchJob): Opt[CaCode] =
+  watchOutcome(j.response.toOpenArray(0, j.responseLen - 1))
+
+suite "cap.provider: the module through its services":
+  setup:
+    clearPublications()
+
+  test "[IMPL] the instance starts only when wired; one wiring per directory; a recovered instance starts again":
+    let facts = fakeFacts()
+    var clock = newTestClock()
+    let p = policyBytes(everythingFor(@["beta"]))
+    let w = AuthorityWiring(policy: p, runtimeId: Rt, facts: facts, clock: clock)
+    check newCa("").error.code == ecModule
+    let dir = freshDir()
+    check newCa(dir).error.code == ecModule
+    check wireAuthority("", w).isErr
+    var nofacts = w
+    nofacts.facts = nil
+    check wireAuthority(dir, nofacts).isErr
+    var noid = w
+    noid.runtimeId = ""
+    check wireAuthority(dir, noid).isErr
+    check wireAuthority(dir, w).isOk
+    check wireAuthority(dir, w).isErr
+    let first = newCa(dir).get
+    check authorityFor(dir).isSome
+    check newCa(dir).error.code == ecModule # G111: one instance per state directory
+    caDestroy(first)
+    check authorityFor(dir).isNone
+    let again = newCa(dir).get
+    caDestroy(again)
+    unwireAuthority(dir)
+    check newCa(dir).error.code == ecModule
+    freeClock(clock)
+    freeSharedFacts(facts)
+
+  test "[CAP-0358] [CAP-0366] [CAP-0367] grant_changed and policy_changed go through the publish callback once per transition, holding only their fields; observed_change never does":
+    let rules = everythingFor(@["beta"])
+    var c = openCa(policyBytes(rules))
+    clearPublications()
+    let g = c.issue("m-b", "m-a", @[callM1()]).grantOf
+    var ps = publications()
+    check ps.len == 1
+    check ps[0].event == GrantChanged and not ps[0].scoped
+    check ps[0].payload ==
+      encode(LogosNSCapabilityAuthorityGrantChangedEvent(grant: g)).get
+    clearPublications()
+    let a = authorityFor(c.dir).get
+    check a.replacePolicy(policyBytes(rules & @[alphaCalls()])).get == 2
+    ps = publications()
+    check ps.len == 1
+    check ps[0].event == PolicyChanged and not ps[0].scoped
+    check ps[0].payload ==
+      encode(
+        PolicyChangedEvent(
+          changed_at: uint64(c.clock.wallMs),
+          previous_policy_revision: 1,
+          policy_revision: 2,
+        )
+      ).get
+    # With a watch running, the change also goes to the watch's scope, and
+    # only there as observed_change.
+    var j: WatchJob
+    var t: Thread[ptr WatchJob]
+    c.startWatch(j, t, 0)
+    clearPublications()
+    let r = c.revoke("m-b", g.grant_id).grantOf
+    check eventually(
+      proc(): bool =
+        publications().len == 2
+    )
+    ps = publications()
+    var plain, scoped: seq[string]
+    for p in ps:
+      if p.scoped:
+        scoped.add p.event
+        check p.payload == grantChange(r)
+        check p.label == "route-m-a"
+      else:
+        plain.add p.event
+    check plain == @[GrantChanged]
+    check scoped == @[Observed]
+    j.cancel.store(true)
+    joinThread(t)
+    check j.outcome.isNone
+    c.close()
+
+  test "[IMPL] an instance without a publish callback does not start: the engine path always exists":
+    let facts = fakeFacts()
+    var clock = newTestClock()
+    let dir = freshDir()
+    check wireAuthority(
+      dir,
+      AuthorityWiring(
+        policy: policyBytes(everythingFor(@["beta"])),
+        runtimeId: Rt,
+        facts: facts,
+        clock: clock,
+      ),
+    ).isOk
+    check newCa(dir, publish = false).error.code == ecModule
+    check authorityFor(dir).isNone
+    unwireAuthority(dir)
+    freeClock(clock)
+    freeSharedFacts(facts)
+
+  test "[CAP-0248] [CAP-0364] [CAP-0146] the caller is the context's: a SYSTEM_SERVICE evaluates and cannot watch; a module cannot evaluate":
+    var c = openCa(policyBytes(everythingFor(@["beta"]) & @[alphaCalls()]))
+    check c.evaluate("m-a", @[callM1()]).decisionOf.allowed
+    actAs("", system = true)
+    check watchOutcome(
+      callCa(
+        c.ctx,
+        "watch_changes",
+        encode(WatchChangesRequest(consumer: address("m-a"))).get,
+      )
+    ) == Opt.some(CaCode.Not_authorised)
+    actAs("m-a")
+    check c.call("evaluate", evalRequest("m-a", @[callM1()]), EvaluateResponse).errorOf ==
+      CaCode.Not_authorised
+    # A payload naming another consumer is refused: the caller is m-a.
+    check c.call(
+      "issue_grant",
+      IssueGrantRequest(
+        consumer: address("m-b"), target: address("m-a"), scopes: @[callM1()]
+      ),
+      IssueGrantResponse,
+    ).issueErrorOf == CaCode.Not_authorised
+    c.close()
+
+  test "[CAP-0375] [CAP-0384] [CAP-0368] [CAP-0369] [CAP-0381] a watch publishes with no CA lock held, and cancellation ends it with {} and no state change":
+    var c = openCa(policyBytes(everythingFor(@["beta"])))
+    hookCtx = c.ctx
+    reentered.store(0)
+    var j: WatchJob
+    var t: Thread[ptr WatchJob]
+    c.startWatch(j, t, 0, reenter)
+    let g = c.issue("m-b", "m-a", @[callM1()]).grantOf
+    check eventually(
+      proc(): bool =
+        reentered.load == 1
+    )
+    # Cancellation with nothing changing is seen by the next poll.
+    let before = getMonoTime()
+    j.cancel.store(true)
+    joinThread(t)
+    check getMonoTime() - before < initDuration(seconds = 2 * Slow)
+    check j.outcome.isNone
+    check authorityFor(c.dir).get.watchCount == 0
+    actAs("m-a")
+    let now = c.call(
+      "get_grant",
+      GetGrantRequest(consumer: address("m-a"), grant_id: g.grant_id),
+      GetGrantResponse,
+    )
+    check same(now.grantOf, g)
+    c.close()
+
+  test "[CAP-0383] a watch that cannot keep up ends with authority-unavailable; the changes it took stay delivered":
+    var limits = AuthorityLimits()
+    limits.watchQueue = 1
+    var c = openCa(policyBytes(everythingFor(@["beta"])), limits)
+    hookHold.store(true)
+    hookHeld.store(0)
+    var j: WatchJob
+    var t: Thread[ptr WatchJob]
+    c.startWatch(j, t, 0, holdHook)
+    discard c.issue("m-b", "m-a", @[callM1()]).grantOf
+    check eventually(
+      proc(): bool =
+        hookHeld.load == 1
+    )
+    for i in 0 .. 1:
+      discard c.issue("m-b", "m-a", @[callM1()]).grantOf
+    hookHold.store(false)
+    joinThread(t)
+    check j.outcome == Opt.some(CaCode.Authority_unavailable)
+    var scoped = 0
+    for p in publications():
+      if p.scoped:
+        inc scoped
+    check scoped == 1
+    check authorityFor(c.dir).get.watchCount == 0
+    c.close()

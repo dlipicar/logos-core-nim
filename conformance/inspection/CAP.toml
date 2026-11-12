@@ -1,0 +1,22 @@
+# CAPABILITY AUTHORITY requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["CAP-0195"]
+reason = "A negative over the whole authority: it reaches no Runtime state. Under src/logos_core/authority/ the only runtime/ imports are rc_types (generated types and the mirrored Runtime Control text), bell (a wake-up primitive) and native (the static symbol table check, in provider.nim): `grep -rnE 'runtime/' src/logos_core/authority/` shows nothing else. Its inputs are the wiring's facts table and clock, and its outputs the publish callback and its own state directory (DECISIONS I84)."
+
+[[item]]
+ids = ["CAP-0161", "CAP-0162", "CAP-0164", "CAP-0165"]
+reason = "Rules for a policy_changed affected_executions set, a field this authority never produces: every policy_changed it emits is built without it (authority/core.nim), and observed_change has no such field. Tests [CAP-0179] and [CAP-0379] check its absence; with no set there is no completeness claim to verify, order or filter (DECISIONS I84)."
+
+[[item]]
+ids = ["CAP-0337", "CAP-0338", "CAP-0339", "CAP-0340"]
+reason = "Contract replacement is a deployment rule: docs/AUTHORITY-POLICY.md (State, Contract replacement) says the state carries the contract root it was written under, a different contract refuses to start with every file unchanged (test [IMPL] 'the start is refused ... another contract' in cap.persist), and the old directory keeps its records. No record is rewritten, so none claims another contract's attribution or coverage (DECISIONS I84)."
+
+[[item]]
+ids = ["CAP-0092"]
+reason = "The policy bytes from the protected wiring (wireAuthority) and the facts table the Runtime feeds are the authority's only trust inputs: no request type carries a key, signer root or certificate the authority would accept, and authority/policy.nim resolves names against roots recomputed from the mirrors. Test [CAP-0092] shows a request cannot add one (DECISIONS I84)."
+
+[[item]]
+ids = ["CAP-0262"]
+reason = "Least privilege is the policy's shape: every issue, revoke and inspect right comes from an explicit rule, and the one implied right is that a revoke rule lets its holder inspect the grants it may revoke (docs/AUTHORITY-POLICY.md, Rules; authority/policy.nim). Tests [CAP-0262] and [CAP-0263] show a caller without a rule learns nothing (DECISIONS I84)."

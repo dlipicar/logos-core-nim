@@ -156,8 +156,9 @@ and observation requests, including those of the bootstrap. v1 has one kind:
   configured module is code the host trusts with the whole Runtime. It must be written explicitly;
   nothing is allowed by default (RUNTIME l.1674, l.1682).
 
-Other kinds are rejected with "this policy kind is not supported yet". An external
-`logos_capability_authority` provider arrives with the Capability Authority module.
+Other kinds are rejected with "this policy kind is not supported yet". The Capability Authority
+module is built (DECISIONS I84) and its policy format is `docs/AUTHORITY-POLICY.md`; the host
+configuration kind that selects it comes with step 8b.
 
 ### `orchestration`
 

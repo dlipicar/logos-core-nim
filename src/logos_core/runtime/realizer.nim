@@ -33,7 +33,7 @@ import std/[os, strutils, sysrand, tables]
 import results
 import ../abi/[checks, types]
 import ../cbor/utf8
-import ../iface/[names, outcome]
+import ../iface/[accept, names, outcome]
 import ../pins
 import ./[artifact, native]
 
@@ -132,6 +132,7 @@ type
     case kind*: CodeKind
     of codeStatic:
       symbols*: Table[string, pointer]
+      system*: bool ## a Logos-defined system module (`StaticRegistration`)
     of codeDynamic:
       artifact*: ArtifactRecord
       dir*: string ## the private artifact directory
@@ -145,6 +146,7 @@ type
     code*: ModuleCode
     probe*: Result[NativeProbe, LoaderError]
     cache*: bool ## a final outcome: the code was found or mapped
+    system*: bool ## the call surface may use the reserved `logos` names
 
   StepKind* = enum
     skLive ## the instance already has this realization
@@ -306,7 +308,11 @@ proc staticSpec(r: Realizer, d: RealizationDescriptor): Result[BindSpec, LoaderE
     return fail(lecAbiInvalid, "the registration holds another module's ABI symbols")
   ok(
     BindSpec(
-      key: "s:" & d.binding, module: d.module, kind: codeStatic, symbols: reg.symbols
+      key: "s:" & d.binding,
+      module: d.module,
+      kind: codeStatic,
+      symbols: reg.symbols,
+      system: reg.system,
     )
   )
 
@@ -337,6 +343,7 @@ proc runBind*(spec: BindSpec): BindResult {.gcsafe.} =
   let code =
     case spec.kind
     of codeStatic:
+      result.system = spec.system
       ModuleCode(kind: codeStatic, table: spec.symbols)
     of codeDynamic:
       let path = stage(spec.artifact, spec.dir, spec.name).valueOr:
@@ -379,7 +386,7 @@ proc storeBinding*(
     if res.probe.isErr:
       Result[ref NativeBinding, LoaderError].err(res.probe.error)
     else:
-      let c = completeNative(res.code, res.probe.get)
+      let c = completeNative(res.code, res.probe.get, AcceptOptions(system: res.system))
       if c.isOk:
         let b = new NativeBinding
         b[] = c.get

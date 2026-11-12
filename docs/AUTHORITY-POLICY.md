@@ -466,8 +466,31 @@ returns only the authority's records. Step 8b says where call records are read.
 
 ## `watch_changes`
 
-- Call it asynchronously, and cancel it to end it: a synchronous call blocks the calling thread until
-  the watch ends.
-- Activate the `observed_change` subscription first. A change before it is active is not delivered.
-- There is no snapshot and no readiness signal: read the current state with `list_grants` and
+- **Who.** A module, watching as itself: `consumer` is its own address. A `SYSTEM_SERVICE` caller, or
+  a `consumer` naming another instance, is `not-authorised`. A watch is not audited: it changes
+  nothing.
+- **How to call it.** Asynchronously, and cancel it to end it: a synchronous call blocks the calling
+  thread until the watch ends. Activate the `observed_change` subscription on the same route first. A
+  change before the watch is registered is not delivered.
+- **What arrives.** One `observed_change` per change the watcher may see under the policy and facts at
+  that change: a grant it may inspect (an `inspect.grants` rule, or a `revoke` rule for the grants it
+  issued), whole; a policy change only with `inspect.policy_changes`, with `changed_at` and both
+  revisions and never `affected_executions`. It is published in the watch's invocation scope, so only
+  the route the watch was called through receives it. Two equivalent watches get the same bytes; there
+  is no watch id.
+- **No snapshot.** There is no readiness signal: read the current state with `list_grants` and
   `query_audit` after the watch starts.
+- **How it ends.** Cancellation (seen within 50 ms, with or without changes), the authority stopping,
+  or its route ending gives `{}`. A watch that falls 256 changes behind ends with
+  `authority-unavailable`; what it already delivered stays delivered. Ending a watch revokes nothing.
+- **Limits.** 64 watches, 8 per consumer: past either, `watch_changes` answers `authority-unavailable`
+  at once. A watch never holds up evaluation or the engine's notifications.
+
+## Running the authority
+
+The module is `logos_capability_authority`, a `direct_static` binding of the same name
+(`caStaticRegistration()`), with a state assignment. The embedding host wires each instance before
+starting it (RUNTIME l.1681, l.3075-3077): `wireAuthority(stateDir, wiring)` with the policy bytes, the
+Runtime id, the facts table, the clock and the limits, keyed by the instance's state directory. An
+instance without wiring does not start (MODULE_ERROR). The wiring stays until `unwireAuthority`, so a
+stopped instance starts again on the same state. Step 8b does this from the host configuration.

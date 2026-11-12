@@ -87,6 +87,18 @@ type
 
   CancelFn* = proc(): bool {.nimcall, gcsafe, raises: [].}
 
+  WatchShared* = object
+    ## One `watch_changes` (G82): the changes admitted for its consumer, as
+    ## encoded `observed_change` payloads, sent by the CA thread and taken by
+    ## the watch body on the invocation's thread. Freed by `unwatch` once the
+    ## CA thread has let go of it.
+    ch: Channel[seq[byte]]
+    bell: Bell
+    overflow: Atomic[bool] ## a change did not fit (CAP-0382, CAP-0383)
+    ended: Atomic[bool] ## the authority closed; the CA thread let go
+
+  Watch* = ptr WatchShared
+
   AuthorityConfig* = object
     stateDir*: string
     policy*: seq[byte] ## an `lcn.authority_policy` value
@@ -109,6 +121,8 @@ type
   ListGrantsResponse* = LogosNSCapabilityAuthorityListGrantsResponse
   QueryAuditRequest* = LogosNSCapabilityAuthorityQueryAuditRequest
   QueryAuditResponse* = LogosNSCapabilityAuthorityQueryAuditResponse
+  WatchChangesRequest* = LogosNSCapabilityAuthorityWatchChangesRequest
+  WatchChangesResponse* = LogosNSCapabilityAuthorityWatchChangesResponse
 
   RequestKind = enum
     rqEvaluate
@@ -123,6 +137,8 @@ type
     rqTick
     rqFlush
     rqInject
+    rqWatch
+    rqUnwatch
 
   Request = object
     slot: ptr ReplySlot
@@ -157,6 +173,10 @@ type
     of rqInject:
       failNext: int
       failAll: bool
+    of rqWatch:
+      watchConsumer: Address
+    of rqUnwatch:
+      watch: Watch
 
   Reply = object
     case kind: RequestKind
@@ -176,7 +196,9 @@ type
       protected: Result[Grant, CaError]
     of rqReplacePolicy:
       replaced: Result[uint64, string]
-    of rqTick, rqFlush, rqInject:
+    of rqWatch:
+      watched: Result[Watch, CaCode]
+    of rqTick, rqFlush, rqInject, rqUnwatch:
       discard
 
   ReplySlot = object
@@ -202,6 +224,7 @@ type
     start: Channel[AuthorityConfig]
     started: Channel[string]
     revision: Atomic[uint64]
+    watching: Atomic[int] ## live watches, for tests
     moduleTimeoutMs: int
     stateDir: cstring
     nextOpen: ptr AuthorityShared ## the registry of open authorities
@@ -403,6 +426,10 @@ proc toAs(rs: openArray[StoredRecord]): seq[LcnAsRecord] =
 
 # The CA thread's state --------------------------------------------------------------
 
+type WatchEntry = object
+  w: Watch
+  consumer: Address
+
 type Ca = object
   sh: ptr AuthorityShared
   cfg: AuthorityConfig
@@ -424,6 +451,7 @@ type Ca = object
   pendingRemovals: OrderedSet[string] ## grant documents to remove
   metaPending: bool
   flushDue: Opt[int64] ## monotonic ns
+  watches: seq[WatchEntry]
 
 proc now(ca: Ca): uint64 =
   let ms = ca.cfg.clock.wallMs
@@ -548,9 +576,7 @@ proc writable(ca: var Ca): bool =
 
 # Events -----------------------------------------------------------------------------
 
-proc serveWatchers(ca: var Ca, ev: AuthorityEvent) =
-  ## The ordinary notification path (`watch_changes`): step 8a.2.
-  discard
+proc serveWatchers(ca: var Ca, ev: AuthorityEvent) {.gcsafe.}
 
 proc emit(ca: var Ca, ev: AuthorityEvent) =
   ## [§2.11] The engine path first, then the watchers.
@@ -1187,6 +1213,102 @@ proc visible(ca: Ca, caller: Address, callerFacts: FactsSnapshot, e: GrantEntry)
     caller, callerFacts, e.grant.target, e.targetFacts, e.grant.issuerModule
   )
 
+# Watches ----------------------------------------------------------------------------
+
+proc offer(w: Watch, payload: seq[byte]) =
+  ## [CAP-0382] Never blocks the CA thread: a change that does not fit marks
+  ## the watch overflowed, and its body ends it (CAP-0383).
+  if not w.overflow.load(moAcquire):
+    var sent = false
+    try:
+      sent = w.ch.trySend(payload)
+    except Exception:
+      sent = false
+    if not sent:
+      w.overflow.store(true, moRelease)
+  w.bell.ring()
+
+proc serveWatchers(ca: var Ca, ev: AuthorityEvent) {.gcsafe.} =
+  ## [SPEC CA §8.1; CAP-0372 to CAP-0374, CAP-0377 to CAP-0379] Each change, on
+  ## the CA thread inside its transition, to every watch whose consumer may see
+  ## it under the current policy and facts. One payload, encoded once, goes to
+  ## all of them: equivalent watches get identical bytes and no watch id
+  ## (CAP-0370, CAP-0371). A consumer the facts no longer know gets nothing.
+  if ca.watches.len == 0:
+    return
+  ca.refreshFacts()
+  case ev.kind
+  of aeGrantChanged:
+    if ev.grant.grant_id notin ca.grants:
+      return
+    let e = ca.grants.byId.getOrDefault(ev.grant.grant_id)
+    let payload = encode(
+      LogosNSCapabilityAuthorityObservedChangeEvent(
+        kind: LogosNSCapabilityAuthorityObservedChangeEventKind.Map_grant,
+        arm_Map_grant:
+          LogosNSCapabilityAuthorityObservedChangeEventARMapGrantMap(grant: ev.grant),
+      )
+    ).valueOr:
+      return
+    for x in ca.watches:
+      let f = ca.lookupAddress(x.consumer)
+      if f.kind == flFound and ca.visible(x.consumer, snapshot(f.instance, f.facts), e):
+        x.w.offer(payload)
+  of aePolicyChanged:
+    # [CAP-0379; l.841] Only to `policy_changes` inspectors, and never with
+    # `affected_executions`.
+    let payload = encode(
+      LogosNSCapabilityAuthorityObservedChangeEvent(
+        kind:
+          LogosNSCapabilityAuthorityObservedChangeEventKind.Map_changed_at_policy_revision_previous_policy_revision,
+        arm_Map_changed_at_policy_revision_previous_policy_revision: LogosNSCapabilityAuthorityObservedChangeEventARMapChangedAtPolicyRevisionPreviousPolicyRevisionMap(
+          changed_at: ev.policy.changed_at,
+          previous_policy_revision: ev.policy.previous_policy_revision,
+          policy_revision: ev.policy.policy_revision,
+        ),
+      )
+    ).valueOr:
+      return
+    for x in ca.watches:
+      let f = ca.lookupAddress(x.consumer)
+      if f.kind == flFound and
+          ca.policy.inspectsPolicyChanges(snapshot(f.instance, f.facts)):
+        x.w.offer(payload)
+
+proc doWatch(ca: var Ca, caller: CallerInfo, consumer: Address): Result[Watch, CaCode] =
+  ## [SPEC CA §8.1] A module caller watching as itself (CAP-0364), within
+  ## 64 watches and 8 per consumer [IMPL] (CAP-0380, CAP-0383). Not audited:
+  ## a watch changes nothing.
+  discard ?ca.readerFacts(caller, consumer)
+  var mine = 0
+  for x in ca.watches:
+    if x.consumer == consumer:
+      inc mine
+  if ca.watches.len >= ca.limits.maxWatches or mine >= ca.limits.watchesPerConsumer:
+    return err(CaCode.Authority_unavailable)
+  let w = createShared(WatchShared)
+  w.ch.open(ca.limits.watchQueue)
+  w.bell = newBell()
+  ca.watches.add WatchEntry(w: w, consumer: consumer)
+  ca.sh.watching.store(ca.watches.len, moRelease)
+  ok(w)
+
+proc doUnwatch(ca: var Ca, w: Watch) =
+  for i in 0 ..< ca.watches.len:
+    if ca.watches[i].w == w:
+      ca.watches.delete(i)
+      break
+  ca.sh.watching.store(ca.watches.len, moRelease)
+
+proc endWatches(ca: var Ca) =
+  ## At close: every watch body returns `{}`. The CA thread lets go of each
+  ## watch when it sets `ended`, after its last ring.
+  for x in ca.watches:
+    x.w.bell.ring()
+    x.w.ended.store(true, moRelease)
+  ca.watches.setLen(0)
+  ca.sh.watching.store(0, moRelease)
+
 proc doGet(ca: var Ca, caller: CallerInfo, req: GetGrantRequest): GetGrantResponse =
   let cf = ca.readerFacts(caller, req.consumer).valueOr:
     return getError(error)
@@ -1563,6 +1685,11 @@ proc handle(ca: var Ca, q: sink Request) =
       ca.store.failNext = q.failNext
       ca.store.failAll = q.failAll
       Reply(kind: rqInject)
+    of rqWatch:
+      Reply(kind: rqWatch, watched: ca.doWatch(q.caller, q.watchConsumer))
+    of rqUnwatch:
+      ca.doUnwatch(q.watch)
+      Reply(kind: rqUnwatch)
   q.slot.answer(r)
 
 proc tryTake(ch: var Channel[Request]): Opt[Request] =
@@ -1608,6 +1735,7 @@ proc run(ca: var Ca) =
     sh.bell.wait(ca.nextWake)
 
 proc shutdown(ca: var Ca) =
+  ca.endWatches()
   discard ca.flush()
   if ca.degraded:
     discard ca.retryPending()
@@ -1926,6 +2054,77 @@ proc replacePolicy*(a: Authority, policy: openArray[byte]): Result[uint64, strin
   if r.isNone:
     return err("authority-unavailable")
   r.get.replaced
+
+func watchEnded*(): WatchChangesResponse =
+  ## `{}`: the watch ended by cancellation or close (CAP-0368).
+  WatchChangesResponse(kind: LogosNSCapabilityAuthorityWatchChangesResponseKind.Map)
+
+func watchError*(c: CaCode): WatchChangesResponse =
+  WatchChangesResponse(
+    kind: LogosNSCapabilityAuthorityWatchChangesResponseKind.Map_error,
+    arm_Map_error:
+      LogosNSCapabilityAuthorityWatchChangesResponseARMapErrorMap(error: errorValue(c)),
+  )
+
+proc watch*(
+    a: Authority, caller: CallerInfo, consumer: Address
+): Result[Watch, CaCode] =
+  ## [SPEC CA §8.1] Registers a watch for `consumer`; the caller then takes
+  ## its changes and must `unwatch` it.
+  let r = a.submit(
+    Request(kind: rqWatch, caller: caller, watchConsumer: consumer),
+    caller.isEngine,
+    nil,
+  )
+  if r.isNone:
+    return err(CaCode.Authority_unavailable)
+  r.get.watched
+
+proc freeWatch(w: Watch) =
+  w.ch.drainClose()
+  freeBell(w.bell)
+  deallocShared(w)
+
+proc unwatch*(a: Authority, w: Watch) =
+  ## Ends `w` and frees it, once the CA thread has let go: at once when the
+  ## authority is open, else when its close reaches the watch. A watch the
+  ## close already ended is freed without touching `a`, which may be gone; an
+  ## `unwatch` never runs concurrently with `closeAuthority` (the provider's
+  ## destroy follows every invocation).
+  if not w.ended.load(moAcquire):
+    let r = a.submit(Request(kind: rqUnwatch, watch: w), true, nil)
+    if r.isNone:
+      while not w.ended.load(moAcquire):
+        w.bell.wait(Opt.some(getMonoTime() + initDuration(milliseconds = 50)))
+  freeWatch(w)
+
+proc watchCount*(a: Authority): int =
+  ## Tests: the live watches.
+  a.watching.load(moAcquire)
+
+proc queuedRequests*(a: Authority): tuple[engine, module: int] =
+  ## Tests: requests admitted and not yet taken by the CA thread.
+  (a.engineInbox.peek(), a.moduleInbox.peek())
+
+proc isEnded*(w: Watch): bool =
+  w.ended.load(moAcquire)
+
+proc overflowed*(w: Watch): bool =
+  w.overflow.load(moAcquire)
+
+proc nextChange*(w: Watch): Opt[seq[byte]] =
+  ## The next admitted change's `observed_change` payload, if one is queued.
+  try:
+    let (ok, payload) = w.ch.tryRecv()
+    if ok:
+      return Opt.some(payload)
+  except Exception:
+    discard
+  Opt.none(seq[byte])
+
+proc waitChange*(w: Watch, deadline: MonoTime) =
+  ## Until a change is offered, the watch ends, or `deadline`.
+  w.bell.wait(Opt.some(deadline))
 
 proc policyRevision*(a: Authority): uint64 =
   a.revision.load(moAcquire)
