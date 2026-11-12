@@ -9,7 +9,7 @@
 ## session end for admitted sessions. `gate` makes the sink wait on the I/O
 ## thread, so a test can hold that thread still.
 
-import std/[atomics, monotimes, os, tables]
+import std/[atomics, monotimes, os, tables, times]
 import results
 import ../../src/logos_core/cbor
 import ../../src/logos_core/hash/hashinput
@@ -175,9 +175,14 @@ proc handle(o: Owner, ev: IoEvent) =
   else:
     discard
 
+proc deadlineIn(ms: int): MonoTime =
+  ## Waits are bounded by the clock, not by counting `sleep(1)`s: a loaded
+  ## host may sleep far longer than asked.
+  getMonoTime() + initDuration(milliseconds = ms)
+
 proc pump*(o: Owner, waitMs = 0): bool =
   ## Handles the events available, waiting up to `waitMs` for the first.
-  var waited = 0
+  let deadline = deadlineIn(waitMs)
   while true:
     let (got, ev) = o.box.chan.tryRecv()
     if got:
@@ -185,23 +190,21 @@ proc pump*(o: Owner, waitMs = 0): bool =
       o.handle(ev)
       result = true
       continue
-    if result or waited >= waitMs:
+    if result or getMonoTime() >= deadline:
       return
     sleep(1)
-    inc waited
 
 proc expect*(o: Owner, pred: proc(ev: IoEvent): bool, timeoutMs = 5000): Opt[IoEvent] =
   ## The first event after the cursor that matches; the cursor moves past it.
-  var waited = 0
+  let deadline = deadlineIn(timeoutMs)
   while true:
     for i in o.cursor ..< o.log.len:
       if pred(o.log[i]):
         o.cursor = i + 1
         return Opt.some(o.log[i])
-    if waited >= timeoutMs:
+    if getMonoTime() >= deadline:
       return Opt.none(IoEvent)
     discard o.pump(10)
-    waited += 10
 
 proc expectKind*(
     o: Owner, kind: IoEventKind, conn = high(uint64), timeoutMs = 5000
@@ -214,10 +217,9 @@ proc expectKind*(
 
 proc settle*(o: Owner, ms: int) =
   ## Keeps handling events for `ms` milliseconds.
-  var waited = 0
-  while waited < ms:
+  let deadline = deadlineIn(ms)
+  while getMonoTime() < deadline:
     discard o.pump(10)
-    waited += 10
 
 proc stop*(o: Owner) =
   ## Stops the loop; the events it reported meanwhile end up in `log`.
