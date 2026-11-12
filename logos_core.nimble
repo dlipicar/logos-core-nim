@@ -55,6 +55,20 @@ task test_tsan, "Run every test suite under ThreadSanitizer":
 task test_msan, "Run every test suite under MemorySanitizer (clang on Linux)":
   runSuites("--mm:orc -d:msan", "msan")
 
+task build_runtime_lib,
+  "Build liblogos_runtime and logos_runtime.h under build/lib/ (RUNTIME §13)":
+  let dir = "build/lib/orc" & (if defined(release): "-release" else: "")
+  mkDir(dir)
+  exec "nim c --hints:off --mm:orc --app:lib --nimMainPrefix:liblogos_runtime" &
+    (if defined(release): " -d:release" else: "") & " --nimcache:" & dir &
+    "/nimcache-logos_runtime -o:" & dir & "/" & (
+    when defined(macosx): "liblogos_runtime.dylib"
+    elif defined(windows): "logos_runtime.dll"
+    else: "liblogos_runtime.so"
+  ) & " src/liblogos_runtime.nim"
+  exec "nim r --hints:off --outdir:build/tools src/lcn_gen.nim logos-runtime --out:" &
+    dir
+
 task regen,
   "Rewrite the committed lcn-gen outputs (common types and mirrors, test fixtures)":
   exec "nim r --hints:off --outdir:build/tools tools/regen_nim.nim"

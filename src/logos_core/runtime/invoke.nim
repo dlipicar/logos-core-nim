@@ -334,6 +334,10 @@ proc rcRequest(
     var c = call(rmReportFailure)
     c.report = fromChecked(LogosNSRuntimeControlReportFailureRequest, v)
     ok(c)
+  of $rmGetReadiness:
+    var c = call(rmGetReadiness)
+    c.readiness = fromChecked(LogosNSRuntimeControlGetReadinessRequest, v)
+    ok(c)
   else:
     err(
       InvocationFailure(

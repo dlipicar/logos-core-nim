@@ -304,7 +304,21 @@ proc nextGeneration*(): uint64 =
 
 # The invocation-context stack ---------------------------------------------------------
 
-var active {.threadvar.}: ptr Frame
+var
+  active {.threadvar.}: ptr Frame
+  runtimeOwned {.threadvar.}: bool
+
+proc markRuntimeThread*() =
+  ## The engine's own threads: the Runtime thread and its lifecycle and call
+  ## workers, where module initialization, destruction and completion
+  ## callbacks run.
+  runtimeOwned = true
+
+proc inRuntimeCallback*(): bool =
+  ## [SPEC RUNTIME l.4083] Whether this thread is one the Runtime owns, or is
+  ## inside a provider entry or a consumer callback: module code whose
+  ## completion shutdown may require.
+  runtimeOwned or active != nil
 
 proc push*(f: var Frame) =
   f.previous = active

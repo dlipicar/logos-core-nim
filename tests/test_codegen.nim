@@ -8,6 +8,8 @@ import ../src/logos_core/[hash, pins]
 import ../src/logos_core/iface/accept
 import ../src/logos_core/base/hex
 import ./support/specdata
+from ../src/logos_core/codegen/hostgen import logosRuntimeHeader
+from ../src/logos_core/abi/host import AppConfigFormat
 
 # Accepting sets ------------------------------------------------------------------
 
@@ -1115,6 +1117,30 @@ proc fnItem(text: string): string =
   let items = cItems(text)
   doAssert items.len == 1, text
   items[0]
+
+suite "run.host-header: logos_runtime.h (RUNTIME §13, §13.3)":
+  test "[RUN-0716] [RUN-0739] logos_runtime.h holds the §13 handle and version and the §13.3 structures and functions verbatim":
+    let h = logosRuntimeHeader()
+    let items = cItems(h)
+    for m in ["RNT/13.host-handle.h", "RNT/13.3.host-api.h"]:
+      for item in cItems(mirror(m)):
+        checkpoint item
+        check item in items
+    check "#include \"logos_types.h\"" in h
+    check ("PROVISIONAL ABI (spec " & SpecRevision[0 .. 7] & ")") in h
+    # [G76] The one configuration format this implementation documents.
+    check ("#define LCN_RUNTIME_CONFIG_FORMAT_APP_V1 \"" & AppConfigFormat & "\"") in h
+
+  test "logos_runtime.h compiles as C17, C23, C++17, C++20 and C++23":
+    createDir(outDir)
+    writeFile(outDir / "logos_runtime.h", logosRuntimeHeader())
+    checkCompiles compileUnit(
+      "logos_runtime_only",
+      "#include \"logos_runtime.h\"\n" &
+        "static const logos_runtime_config_t c = { LOGOS_RUNTIME_HOST_ABI_VERSION, sizeof c,\n" &
+        "  LCN_RUNTIME_CONFIG_FORMAT_APP_V1, 0, 0 };\n" &
+        "const logos_runtime_config_t* runtime_config_ref(void) { return &c; }\n",
+    )
 
 suite "ifc.c-abi: method typedefs, provider functions and module symbols (INTERFACE §2.4, §2.6, §3.9.4, §3.9.8)":
   test "[IFC-0154] [IFC-0155] [IFC-0156] [IFC-0164] §2.4: the storage.exists typedef and provider function":

@@ -11,7 +11,7 @@
 ## running. Module code runs on the engine's worker threads, so the test
 ## module keeps its state in atomics.
 
-import std/[atomics, monotimes, os, times, typedthreads]
+import std/[atomics, monotimes, os, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
 import ../src/logos_core/abi/types
@@ -563,3 +563,132 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
         c.view.execution.intentRevision.isSome
       check (c.view.state == msError) == c.view.failure.isSome
     e.finish()
+
+# The host's bootstrap and shutdown -------------------------------------------------
+
+var
+  bootstrapCode: Atomic[int] ## the bootstrap's error code, 0 for OK, -1 while it runs
+  awaitCode: Atomic[int] ## the same for an await
+
+proc bootstrapOn(arg: (Engine, seq[BootstrapInstance])) {.thread.} =
+  let r = arg[0].bootstrap(arg[1], "o")
+  bootstrapCode.store(
+    if r.isOk:
+      0
+    else:
+      ord(r.error.code)
+  )
+
+proc awaitOn(e: Engine) {.thread.} =
+  let r = e.awaitShutdown()
+  awaitCode.store(
+    if r.isOk:
+      0
+    else:
+      ord(r.error.code)
+  )
+
+func deployment(): seq[BootstrapInstance] =
+  @[
+    BootstrapInstance(instance: "o", record: gated()),
+    BootstrapInstance(instance: "m", record: meter()),
+  ]
+
+suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G190] [G60]":
+  setup:
+    reset()
+
+  test "[RUN-0309] [RUN-0023] [RUN-0784] [IMPL-DECISION G191] bootstrap creates every instance in order and realizes only the orchestration instance":
+    let e = newEngine(config())
+    let v = e.bootstrap(deployment(), "o").tryGet
+    check v.instance == "o" and v.state == msReady and v.orchestration
+    let all = e.list()
+    check all.len == 2 and all[0].instance == "o" and all[1].instance == "m"
+    check all[1].state == msUnloaded and all[1].execution.intent == inUninitialized
+    check not all[1].orchestration
+    # G191 interim: `requested`, with its revision and the host's origin.
+    check all[0].execution.intent == inRequested
+    check all[0].execution.intentRevision.isSome and all[0].intentOrigin.host
+    check e.bootstrap(deployment(), "o").error.code == ecNotReady
+    e.finish()
+
+  test "[IMPL-DECISION G190] a failed bootstrap: NOT_AUTHORISED for a denial, MODULE_ERROR for an init failure or the startup deadline; nothing is stopped":
+    var e = newEngine(
+      config(
+        denying(AuthzRule(action: Opt.some(aaExecute), target: "o", outcome: azDeny))
+      )
+    )
+    var r = e.bootstrap(deployment(), "o")
+    check r.error.code == ecNotAuthorised
+    e.finish()
+    mode.store(ord(gmFail))
+    e = newEngine(config())
+    r = e.bootstrap(deployment(), "o")
+    check r.error.code == ecModule and "initialization-failed" in r.error.message
+    check e.view("o").tryGet.state == msError
+    e.finish()
+    reset()
+    var cfg = config()
+    cfg.startupDeadline = initDuration(milliseconds = 50)
+    e = newEngine(cfg)
+    initGate.store(true)
+    r = e.bootstrap(deployment(), "o")
+    check r.error.code == ecModule and "startup-timeout" in r.error.message
+    # [RUN-0737] The engine keeps running: other instances can still start.
+    check e.start("m").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-0759] [IMPL-DECISION G190] a shutdown accepted before ready gives CANCELLED, and it stays CANCELLED":
+    let e = newEngine(config())
+    initGate.store(true)
+    bootstrapCode.store(-1)
+    var t: Thread[(Engine, seq[BootstrapInstance])]
+    createThread(t, bootstrapOn, (e, deployment()))
+    check waitUntil(
+      proc(): bool =
+        inits.load == 1
+    )
+    e.requestShutdown()
+    check waitUntil(
+      proc(): bool =
+        bootstrapCode.load != -1
+    )
+    check bootstrapCode.load == ord(ecCancelled)
+    initGate.store(false) # init now succeeds; the answer was given
+    joinThread(t)
+    check e.awaitShutdown().isOk
+    check e.close()
+
+  test "[RUN-0726] [RUN-0727] [RUN-0728] [RUN-0760] a request accepts at once, a wait never initiates, every wait gets the one result":
+    let e = newEngine(config())
+    discard e.bootstrap(deployment(), "o").tryGet
+    awaitCode.store(-1)
+    var t: Thread[Engine]
+    createThread(t, awaitOn, e)
+    sleep(50)
+    check awaitCode.load == -1 # waiting alone starts nothing
+    check e.view("o").tryGet.state == msReady
+    e.requestShutdown()
+    e.requestShutdown()
+    joinThread(t)
+    check awaitCode.load == 0
+    check e.awaitShutdown().isOk and e.awaitShutdown().isOk
+    check e.view("o").tryGet.execution.intent == inRequested # kept (§10.2)
+    check e.close()
+
+  test "[IMPL-DECISION G60] cleanup left unresolved is MODULE_ERROR for every waiter; close refuses while module code runs and can be retried":
+    var cfg = config()
+    cfg.shutdownGrace = initDuration(milliseconds = 100)
+    let e = newEngine(cfg)
+    discard e.bootstrap(deployment(), "o").tryGet
+    check e.tryClose().error.code == ecNotReady # not shut down
+    destroyGate.store(true)
+    e.requestShutdown()
+    let r = e.awaitShutdown()
+    check r.error.code == ecModule and "o" in r.error.message
+    check e.awaitShutdown().error.code == ecModule
+    let refused = e.tryClose()
+    check refused.error.code == ecNotReady and "still running" in refused.error.message
+    check e.view("o").isOk # still open
+    destroyGate.store(false)
+    check e.close()

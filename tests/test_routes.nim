@@ -780,3 +780,104 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
       check v.state == msUnloaded
       check v.execution.intent == inRequested # shutdown preserves intent
     check e.close()
+
+suite "run.rc: get_readiness (RUNTIME §9.3 l.3494-3496, l.3656-3675, l.3702-3712)":
+  test "[RUN-0627] [RUN-0991] a local instance's state and execution from one snapshot, with its exact instance and no provider":
+    let e = newEngine(config())
+    discard e.create(meter(), "m1").tryGet
+    let (_, rc) = e.startClient()
+    var r = rc.readiness("meter_module", Opt.some("m1"))
+    check r.code == ecOk
+    var g = LogosNSRuntimeControlGetReadinessResponse.decode(r.response).tryGet
+    check g.instance == Opt.some("m1") and g.provider.isNone
+    check g.state.kind == LogosNSRuntimeControlStateKind.Unloaded
+    check g.execution.get.intent.kind ==
+      LogosNSRuntimeControlExecutionStateIntentChoiceKind.Uninitialized
+    check g.execution.get.intent_revision.isNone and g.failure.isNone
+    let rev = g.execution.get.revision
+    check rev == e.view("m1").tryGet.execution.revision
+    # [RUN-0025] The conditional start an orchestrator makes from it.
+    check rc.lifecycle(
+      "start_module", "meter_module", Opt.some("m1"), expected = Opt.some(rev)
+    ).code == ecOk
+    r = rc.readiness("meter_module") # by name: the one instance
+    g = LogosNSRuntimeControlGetReadinessResponse.decode(r.response).tryGet
+    let v = e.view("m1").tryGet
+    check g.state.kind == LogosNSRuntimeControlStateKind.Ready
+    check g.execution.get.revision == v.execution.revision
+    check g.execution.get.intent.kind ==
+      LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested
+    check g.execution.get.intent_revision == v.execution.intentRevision
+    # A stale revision no longer starts it.
+    check rc.lifecycle(
+      "start_module", "meter_module", Opt.some("m1"), expected = Opt.some(rev)
+    ).code == ecInvalidParams
+    e.finish()
+
+  test "a failed instance reports its classification and reason":
+    let e = newEngine(config())
+    discard e.create(
+      ModuleRecord(
+        module: "meter_module",
+        strategy: stDirectStatic,
+        binding: "meter",
+        primaryContract: Opt.some(default(Digest)),
+      ),
+      "bad",
+    ).tryGet
+    check e.start("bad").tryGet.state == msError
+    let (_, rc) = e.startClient()
+    let g = LogosNSRuntimeControlGetReadinessResponse.decode(
+      rc.readiness("meter_module", Opt.some("bad")).response
+    ).tryGet
+    check g.state.kind == LogosNSRuntimeControlStateKind.Error
+    check g.failure == Opt.some("initialization-failed")
+    check g.reason.isSome
+    e.finish()
+
+  test "[RUN-1031] [RUN-1033] [RUN-1034] [RUN-1035] [RUN-1036] [RUN-1042] selectors as for start and stop":
+    let e = newEngine(config())
+    let m = e.create(meter(), "m1").tryGet
+    let (_, rc) = e.startClient()
+    let prov = Opt.some(providerAddress(m.providerId))
+    check rc.readiness("meter_module", Opt.some("m1"), prov).code == ecInvalidParams
+    check rc.readiness("meter_module", provider = prov).code == ecInvalidParams
+    check rc.readiness(
+      "meter_module",
+      provider = Opt.some(providerAddress(m.providerId, Opt.some("elsewhere"))),
+    ).code == ecInvalidParams
+    check rc.readiness(
+      "meter_module", provider = Opt.some(providerAddress("p-unknown"))
+    ).code == ecNotAuthorised
+    check rc.readiness("meter_module", Opt.some("nobody")).code == ecNotAuthorised
+    check rc.readiness("other_module", Opt.some("m1")).code == ecInvalidParams
+    discard e.create(meter(), "m2").tryGet
+    check rc.readiness("meter_module").code == ecInvalidParams
+    check rc.readiness("nothing_module").code == ecInvalidParams
+    e.finish()
+
+  test "[RUN-1038] [RUN-1039] [IMPL-DECISION G161] observation authority: over the name scope first, then over the exact record":
+    block:
+      let e =
+        newEngine(config(denying(deny(action = Opt.some(aaObserve), target = ""))))
+      discard e.create(meter(), "m1").tryGet
+      let (_, rc) = e.startClient()
+      check rc.readiness("meter_module").code == ecNotAuthorised
+      check rc.readiness("nothing_module").code == ecNotAuthorised
+      check rc.readiness("meter_module", Opt.some("m1")).code == ecNotAuthorised
+      e.finish()
+    let e = newEngine(
+      config(
+        denying(
+          deny(action = Opt.some(aaObserve), operation = "get_readiness", target = "m1")
+        )
+      )
+    )
+    discard e.create(meter(), "m1").tryGet
+    let (_, rc) = e.startClient()
+    # The exact record is refused like an unknown one, and a record selected
+    # by name still needs its own authority.
+    check rc.readiness("meter_module", Opt.some("m1")).code == ecNotAuthorised
+    check rc.readiness("other_module", Opt.some("m1")).code == ecNotAuthorised
+    check rc.readiness("meter_module").code == ecNotAuthorised
+    e.finish()

@@ -10,3 +10,5 @@ default = "deferred:tier-4"
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
+# Host Embedding API (Runtime slice step 5, DECISIONS I81): liblogos_runtime and runtime/host.nim.
+"§13" = "claimed"

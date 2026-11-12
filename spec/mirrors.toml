@@ -665,6 +665,18 @@ file = "spec-module-runtime.md"
 section = "§9.3"
 
 [[mirror]]
+out = "RNT/13.host-handle.h"
+file = "spec-module-runtime.md"
+section = "§13"
+lang = "c"
+
+[[mirror]]
+out = "RNT/13.3.host-api.h"
+file = "spec-module-runtime.md"
+section = "§13.3"
+lang = "c"
+
+[[mirror]]
 out = "CFG/9.configuration-types.cddl"
 file = "spec-module-configuration.md"
 section = "§9"

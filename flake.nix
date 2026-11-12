@@ -73,6 +73,8 @@
               ./src
               ./tests
               ./spec
+              # test_host checks the documented schema is the one in src.
+              ./docs/HOST-CONFIG.md
             ];
           };
 
@@ -129,6 +131,8 @@
                 pkgs.stdenv.hostPlatform.isAarch64
                 && lib.elem file [
                   "test_engine.nim"
+                  "test_host.nim"
+                  "test_host_dylib.nim"
                   "test_kit_dylib.nim"
                   "test_realizer.nim"
                   "test_routes.nim"

@@ -6,6 +6,8 @@ import std/[os, osproc, strutils]
 import unittest2
 import ../src/logos_core/abi/checks
 from ../src/logos_core/iface/cmap import logosTypesHeader
+from ../src/logos_core/codegen/hostgen import logosRuntimeHeader
+import ../src/logos_core/abi/host
 
 const deviceTarget = defined(android) or defined(ios)
   ## No C compiler where a cross-compiled suite runs; the layout test is SKIPPED
@@ -162,15 +164,18 @@ proc cCompiler(): string =
     if result.len == 0:
       result = findExe(name)
 
-proc cLayout(facts: seq[(string, string)]): Result[seq[string], string] =
-  ## What the C compiler says about each fact, from the generated header.
+proc cLayout(
+    facts: seq[(string, string)], header = "logos_types.h"
+): Result[seq[string], string] =
+  ## What the C compiler says about each fact, from the generated `header`.
   let cc = cCompiler()
   if cc.len == 0:
     return err("no C compiler on PATH")
   createDir(outDir)
   writeFile(outDir / "logos_types.h", logosTypesHeader())
+  writeFile(outDir / "logos_runtime.h", logosRuntimeHeader())
   var src =
-    "#include <stdio.h>\n#include <stddef.h>\n#include \"logos_types.h\"\n" &
+    "#include <stdio.h>\n#include <stddef.h>\n#include \"" & header & "\"\n" &
     "int main(void) {\n"
   for (stmt, _) in facts:
     src.add "  " & stmt & "\n"
@@ -215,6 +220,46 @@ suite "ifc.abi-types: the §5.2 structs in Nim (INTERFACE §5.2)":
     check RouteVtableV2Extent - sizeof(pointer) == offsetOf(
       LogosRouteVtable, observeEnd
     )
+
+proc hostLayoutFacts(): seq[(string, string)] =
+  result.add describe("logos_runtime_config_t", LogosRuntimeConfig())
+  result.add describe("logos_runtime_native_symbol_t", LogosRuntimeNativeSymbol())
+  result.add describe("logos_runtime_native_binding_t", LogosRuntimeNativeBinding())
+  for (t, n) in [
+    ("logos_runtime_symbol_address_t", sizeof(LogosRuntimeSymbolAddress)),
+    ("logos_runtime_t*", sizeof(ptr LogosRuntimeHandle)),
+  ]:
+    result.add (
+      "printf(\"" & t & " size %zu\\n\", sizeof(" & t & "));", t & " size " & $n
+    )
+  const m = "LOGOS_RUNTIME_HOST_ABI_VERSION"
+  result.add (
+    "printf(\"" & m & " %u\\n\", (unsigned)" & m & ");",
+    m & " " & $RuntimeHostAbiVersion,
+  )
+
+suite "run.host-abi: the §13.3 structures in Nim (RUNTIME §13, §13.3)":
+  test "[RUN-0716] [RUN-0739] every host struct, field, size, alignment and the version constant matches logos_runtime.h":
+    let facts = hostLayoutFacts()
+    when deviceTarget:
+      skip()
+    else:
+      let got = cLayout(facts, "logos_runtime.h")
+      if got.isErr:
+        checkpoint got.error
+        fail()
+      else:
+        check got.get.len == facts.len
+        for i, (_, want) in facts:
+          if i < got.get.len and got.get[i] != want:
+            checkpoint "C: " & got.get[i] & "  Nim: " & want
+            fail()
+
+  test "each host struct's version-1 minimum struct_size is its last field's end":
+    check RuntimeConfigV1Extent ==
+      offsetOf(LogosRuntimeConfig, configurationLen) + sizeof(csize_t)
+    check NativeBindingV1Extent ==
+      offsetOf(LogosRuntimeNativeBinding, symbolCount) + sizeof(csize_t)
 
 # Bindings ----------------------------------------------------------------------------
 

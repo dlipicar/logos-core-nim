@@ -1,0 +1,22 @@
+# RUNTIME requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["RUN-0718", "RUN-0752", "RUN-0754"]
+reason = "Host Embedding API caller duties (§13.1, §13.4): valid memory for the common prefix, non-null NUL-terminated UTF-8 strings, memory valid for the call, live handles. What the library can check it does, in the order runtime/host.nim documents: null pointers first (test [RUN-0753]), then abi_version and struct_size before any other field (test [RUN-0719]); the one accepted configuration_format is an exact ASCII identifier, binding identifiers are checked as UTF-8 and symbol names as canonical ASCII names (native.checkStaticRegistration; test [RUN-1084]). A forged or stale handle is not detected (l.4065 permits that)."
+
+[[item]]
+ids = ["RUN-0722"]
+reason = "A rule for later revisions of the §13 structures. logos_runtime.h carries the §13 and §13.3 text unchanged (lcn-gen logos-runtime from the mirrors RNT/13.host-handle.h and RNT/13.3.host-api.h; test [RUN-0716]), abi/host.nim has its exact layout (tests/test_abi.nim run.host-abi), and the library reads nothing past version 1's fields (test [RUN-0721])."
+
+[[item]]
+ids = ["RUN-0731", "RUN-0732", "RUN-0762"]
+reason = "Host duties: serializing construction, registration, startup and destruction, and every call except request and wait. docs/HOST-CONFIG.md states them. runtime/host.nim stays safe when a host breaks the rule for request against start (reading R1, test [IMPL] R1) and keeps all handle state under one lock; destroy overlapping another call is not made safe."
+
+[[item]]
+ids = ["RUN-0735", "RUN-0743", "RUN-0750"]
+reason = "Host duties: functions of the INTERFACE signature at the registered addresses, kept callable until successful destruction (l.4043, l.4058, and l.4054: 'signature correctness and code lifetime remain host preconditions'). docs/HOST-CONFIG.md states them. The library copies every table it keeps (test [RUN-0749]), so no borrowed binding memory is retained. The C module the tests register (tests/host/test_orchestrator.c) defines each symbol with the logos_types.h signature."
+
+[[item]]
+ids = ["RUN-0744"]
+reason = "runtime/native.nim probeNative converts every resolved address to its INTERFACE signature (ModuleNameFn, ModuleInitFn, ModuleDestroyFn and the provider and per-method function types) before any call; the generic logos_runtime_symbol_address_t is kept only as an untyped pointer in the static table (StaticRegistration.symbols) and never called."

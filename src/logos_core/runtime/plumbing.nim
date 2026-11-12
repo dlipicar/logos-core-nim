@@ -99,6 +99,9 @@ type
     attempt*: string
       ## the current execution attempt; Runtime Control bindings for this
       ## realization are associated with it (report_failure)
+    orchestration*: bool
+      ## [SPEC RUNTIME l.187-192; G53] the instance holds the orchestration
+      ## role; observation only, it grants nothing (RUN-0785)
 
   StateChange* = object ## one committed transition, in commit order
     serial*: uint64
@@ -107,6 +110,12 @@ type
   EngineError* = object
     code*: ErrorCode
     message*: string
+
+  BootstrapInstance* = object
+    ## [SPEC RUNTIME §8, §13.2] One module instance of the protected bootstrap
+    ## input, with its protected instance identity.
+    instance*: string
+    record*: ModuleRecord
 
   EngineConfig* = object
     runtimeInstanceId*: string
@@ -153,6 +162,11 @@ type
     rqScoped ## the subscriptions an invocation-scoped publication may reach
     rqDeliver ## the admission of one event handler invocation
     rqDiagnostics ## the retained diagnostics
+    rqBootstrap
+      ## [SPEC RUNTIME l.1640, §13.2] the configured instances, then the
+      ## orchestration instance realized to `ready` (G190)
+    rqRequestShutdown ## [SPEC RUNTIME §13.2] accept shutdown and answer at once
+    rqAwaitShutdown ## wait for shutdown without initiating it (RUN-0728)
 
   RcMethod* = enum
     ## The Runtime Control methods this Runtime performs (RUNTIME §9.3).
@@ -165,6 +179,7 @@ type
     rmReportFailure = "report_failure"
     rmShutdownRuntime = "shutdown_runtime"
     rmGetExecutionPermissions = "get_execution_permissions"
+    rmGetReadiness = "get_readiness"
 
   RcCall* = object ## One checked Runtime Control request.
     request*: seq[byte] ## its deterministic CBOR, for `request_key` replay
@@ -181,6 +196,8 @@ type
       stop*: LogosNSRuntimeControlStopModuleRequest
     of rmReportFailure:
       report*: LogosNSRuntimeControlReportFailureRequest
+    of rmGetReadiness:
+      readiness*: LogosNSRuntimeControlGetReadinessRequest
     of rmGetSelf, rmShutdownRuntime, rmGetExecutionPermissions:
       discard
 
@@ -217,7 +234,6 @@ type
 
   Reply* = object
     error*: Opt[EngineError]
-    busy*: int ## rqTerminate: jobs still running
     view*: InstanceView
     views*: seq[InstanceView]
     answers*: seq[AuthzAnswer]
@@ -245,6 +261,7 @@ type
     attempt*: string ## the attempt token of the binding a module called through
     reason*: string
     config*: EngineConfig
+    bootstrap*: seq[BootstrapInstance] ## rqBootstrap; `instance` names orchestration
     rc*: RcCall
     route*: string
     root*: Digest ## rqMaterialize: `expected_contract_root`

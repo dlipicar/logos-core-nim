@@ -57,8 +57,15 @@
 ## results is G174's policy. A realization that ends suppresses the completion
 ## callbacks of its calls that have not begun.
 ##
+## [IMPL] The host (step 5, `host.nim`). `bootstrap` creates the configured
+## instances and answers once the orchestration instance is `ready` or its
+## start failed (`checkBootstrap`, G190). Shutdown can be accepted without
+## waiting and waited for without initiating it; every waiter gets the one
+## result (G60). `tryClose` refuses while module code runs on a worker and
+## leaves the Runtime thread running, so it can be tried again.
+##
 ## Not yet built: the other Runtime Control methods, Runtime Control
-## subscriptions (G178), remote Runtimes, the host API, `recover_module` and
+## subscriptions (G178), remote Runtimes, `recover_module` and
 ## `retire_module`, and persistence of execution state and routes.
 
 {.push raises: [].}
@@ -68,6 +75,7 @@ import
     atomics, deques, locks, monotimes, sets, strutils, sysrand, tables, times,
     typedthreads,
   ]
+from std/os import sleep
 import results
 import ../abi/types
 import ../base/perthread
@@ -134,6 +142,7 @@ type
       ## route calls admitted into `realization` and not yet left, deferred
       ## invocations included until they are idle (INTERFACE l.2155-2158)
     releasePending: bool ## `realization` is released once `inflight` is zero
+    orchestration: bool ## [G53] the instance the bootstrap input names
 
   AsyncRec = ref object
     ## One submitted asynchronous call, from submission until nothing of it
@@ -170,6 +179,10 @@ type
     shutdownDeadline: MonoTime
     shutdownWaiters: seq[ReplyChannel]
     shutdownDone: bool
+    shutdownResult: Opt[EngineError] ## [G60] set when shutdown completes
+    bootstrapped: bool ## a bootstrap was requested
+    bootstrapReply: ReplyChannel ## the bootstrap waiting for its outcome
+    orchestrator: Inst ## the orchestration instance, once bootstrapped
     done: bool ## `close` asked the Runtime thread to leave
     runtimeId: string
     ctx: SchemaContext ## the pinned context, for the well-known methods
@@ -213,6 +226,7 @@ proc workerLoop(s: ptr Shared) =
       s.post(Msg(kind: mkJobDone, job: job.id))
 
 proc workerMain(s: ptr Shared) {.thread.} =
+  markRuntimeThread()
   workerLoop(s)
   releasePerThread() # after the loop's locals are gone
 
@@ -231,6 +245,7 @@ proc callWorkerLoop(s: ptr Shared) =
       s.post(Msg(kind: mkCallJobDone, target: job.call))
 
 proc callWorkerMain(s: ptr Shared) {.thread.} =
+  markRuntimeThread()
   callWorkerLoop(s)
   releasePerThread()
 
@@ -288,6 +303,7 @@ func view(x: Inst): InstanceView =
     provider: x.provider,
     providerId: x.providerId,
     attempt: x.current,
+    orchestration: x.orchestration,
   )
   if x.intent == inRequested:
     result.execution.intentRevision = Opt.some(x.intentRevision)
@@ -891,44 +907,45 @@ proc reportFailure(st: State, q: Request, success = Reply()) =
     st.releaseRealization(x)
   q.reply.answer(success)
 
-proc create(st: State, q: Request) =
+proc createInst(
+    st: State, record: ModuleRecord, instance: string, origin: Origin
+): Result[Inst, EngineError] =
   ## A local module-instance record: `unloaded`, intent `uninitialized`
   ## (§9.3 l.3623). The slice takes records from the host only (G55).
   if st.shuttingDown:
-    q.reply.answerError(ecNotReady, "the Runtime is shutting down")
-    return
-  if not q.origin.host:
-    q.reply.answerError(ecNotAuthorised, "not authorised")
-    return
-  checkRecord(q.record).isOkOr:
-    q.reply.answerError(ecInvalidParams, error)
-    return
-  var id = q.instance
+    return err(engineError(ecNotReady, "the Runtime is shutting down"))
+  if not origin.host:
+    return err(engineError(ecNotAuthorised, "not authorised"))
+  checkRecord(record).isOkOr:
+    return err(engineError(ecInvalidParams, error))
+  var id = instance
   if id.len == 0:
     inc st.created
     id = "m-" & st.prefix & "-" & $st.created
   elif id.len > MaxInstanceIdBytes or not isValidUtf8(id):
-    q.reply.answerError(
-      ecInvalidParams, "an instance id must have 1 to 128 UTF-8 bytes"
-    )
     return
+      err(engineError(ecInvalidParams, "an instance id must have 1 to 128 UTF-8 bytes"))
   if id in st.instances:
-    q.reply.answerError(ecInvalidParams, "the instance id is already in use")
-    return
-  if q.record.stateAssignment.isSome:
+    return err(engineError(ecInvalidParams, "the instance id is already in use"))
+  if record.stateAssignment.isSome:
     for y in st.instances.values:
-      if y.record.stateAssignment == q.record.stateAssignment:
+      if y.record.stateAssignment == record.stateAssignment:
         # [SPEC RUNTIME §8 l.1468] no shared state assignment by default
-        q.reply.answerError(ecInvalidParams, "the state assignment is in use")
-        return
-  let x = Inst(id: id, record: q.record, state: msUnloaded, intent: inUninitialized)
-  if q.record.primaryContract.isSome or q.record.implements.len > 0:
+        return err(engineError(ecInvalidParams, "the state assignment is in use"))
+  let x = Inst(id: id, record: record, state: msUnloaded, intent: inUninitialized)
+  if record.primaryContract.isSome or record.implements.len > 0:
     # [SPEC RUNTIME §9.3 l.2862-2871] Its provider record, kept across stop
     # and start [IMPL: one per instance].
     inc st.providerCount
     x.providerId = "p-" & st.prefix & "-" & $st.providerCount
   st.instances[id] = x
   st.commit(x)
+  ok(x)
+
+proc create(st: State, q: Request) =
+  let x = st.createInst(q.record, q.instance, q.origin).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
   q.reply.answerView(x)
 
 # Shutdown -----------------------------------------------------------------------
@@ -964,14 +981,36 @@ proc shutdownComplete(st: State): bool =
       return false
   true
 
+proc shutdownOutcome(st: State): Opt[EngineError] =
+  ## [G60, made precise] Shutdown completed with every realization released,
+  ## or with some cleanup unresolved or failed: an attempt or a release still
+  ## outstanding, `cleanup-timeout` or `cleanup-failed`. The second is
+  ## MODULE_ERROR, naming the instances.
+  var unresolved: seq[string]
+  for x in st.instances.values:
+    let failed =
+      x.failure.isSome and x.failure.get.kind in {fkCleanupTimeout, fkCleanupFailed}
+    if failed or x.attempt != nil or x.teardown != 0 or x.realization != nil:
+      unresolved.add(x.id)
+  if unresolved.len == 0:
+    Opt.none(EngineError)
+  else:
+    Opt.some(
+      engineError(
+        ecModule,
+        "shutdown completed with cleanup unresolved or failed: " & unresolved.join(", "),
+      )
+    )
+
 proc finishShutdown(st: State) =
   ## [IMPL] The Runtime thread keeps running after shutdown: it refuses new
   ## lifecycle requests and still cleans contexts that module code returns
-  ## late, until `close`.
-  for w in st.shutdownWaiters:
-    w.answer(Reply())
-  st.shutdownWaiters.setLen(0)
+  ## late, until `close`. Every waiter gets the one stored result (RUN-0760).
+  st.shutdownResult = st.shutdownOutcome()
   st.shutdownDone = true
+  for w in st.shutdownWaiters:
+    w.answer(Reply(error: st.shutdownResult))
+  st.shutdownWaiters.setLen(0)
 
 proc beginShutdown(st: State) =
   ## [SPEC RUNTIME §10.2] Admission closes first; one sequence for every
@@ -1104,6 +1143,85 @@ proc lifecycleCall(st: State, q: Request, x: Inst) =
     st.start(r)
   else:
     st.stop(r)
+
+func rcState(s: ModuleState): LogosNSRuntimeControlState =
+  LogosNSRuntimeControlState(
+    kind:
+      case s
+      of msUnloaded: LogosNSRuntimeControlStateKind.Unloaded
+      of msLoaded: LogosNSRuntimeControlStateKind.Loaded
+      of msReady: LogosNSRuntimeControlStateKind.Ready
+      of msStopping: LogosNSRuntimeControlStateKind.Stopping
+      of msError: LogosNSRuntimeControlStateKind.Error
+  )
+
+func rcExecution(v: InstanceView): LogosNSRuntimeControlExecutionState =
+  LogosNSRuntimeControlExecutionState(
+    revision: v.execution.revision,
+    intent: LogosNSRuntimeControlExecutionStateIntentChoice(
+      kind:
+        case v.execution.intent
+        of inUninitialized:
+          LogosNSRuntimeControlExecutionStateIntentChoiceKind.Uninitialized
+        of inRequested:
+          LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested
+        of inStopped:
+          LogosNSRuntimeControlExecutionStateIntentChoiceKind.Stopped
+    ),
+    intent_revision: v.execution.intentRevision,
+  )
+
+func reasonText(s: string): string =
+  ## `logos.runtime_control.reason`: at most 512 bytes, cut at a character
+  ## boundary.
+  if s.len <= 512:
+    return s
+  var n = 512
+  while n > 0 and (uint8(s[n]) and 0xC0'u8) == 0x80'u8:
+    dec n
+  s[0 ..< n]
+
+proc readiness(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 get_readiness, l.3656-3675, l.3494-3496] The
+  ## selected local instance's lifecycle and execution state from one
+  ## committed snapshot. Selection as for start and stop; the selected record
+  ## needs observation authority (aaObserve; G161 interim for name-only
+  ## selection).
+  let req = q.rc.readiness
+  let target = st.selectLifecycle(
+    x, $rmGetReadiness, req.module, req.instance, req.provider, Opt.none(uint64)
+  ).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  let y = st.instances.getOrDefault(target)
+  let refused = st.denied(
+    AuthzRequest(
+      action: aaObserve,
+      operation: $rmGetReadiness,
+      consumer: x.id,
+      target: target,
+      module: (if y.isNil: "" else: y.record.module),
+    )
+  )
+  if refused or y.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if req.module != y.record.module:
+    q.reply.answerError(ecInvalidParams, "the module name does not match")
+    return
+  st.requireReady(q)
+  let v = y.view
+  var response = LogosNSRuntimeControlGetReadinessResponse(
+    module: v.module,
+    instance: Opt.some(v.instance),
+    execution: Opt.some(rcExecution(v)),
+    state: rcState(v.state),
+  )
+  if v.failure.isSome:
+    response.failure = Opt.some(v.failure.get.classification)
+    if v.failure.get.reason.len > 0:
+      response.reason = Opt.some(reasonText(v.failure.get.reason))
+  q.reply.answerEncoded(encode(response))
 
 proc newRouteId(st: State): string =
   ## [IMPL] Never reused by this engine; the random prefix keeps engines apart
@@ -1387,6 +1505,8 @@ proc rc(st: State, q: Request) =
     st.reportFailure(r, Reply(bytes: response))
   of rmStartModule, rmStopModule:
     st.lifecycleCall(q, x)
+  of rmGetReadiness:
+    st.readiness(q, x)
   of rmEstablishRoute:
     st.establish(q, x)
   of rmRenewRoute:
@@ -1406,6 +1526,84 @@ proc rc(st: State, q: Request) =
     st.requireReady(q)
     q.reply.answerEncoded(encode(LogosNSRuntimeControlShutdownRuntimeResponse()))
     st.beginShutdown()
+
+# Bootstrap ----------------------------------------------------------------------
+
+proc checkBootstrap(st: State) =
+  ## [IMPL-DECISION G190, interim] Answers the bootstrap once its outcome is
+  ## decided, in this one place. A shutdown accepted before the orchestration
+  ## instance's `ready` was committed is CANCELLED (RUN-0759), and stays so
+  ## whatever the attempt does next; `ready` is OK; a refused execution is
+  ## NOT_AUTHORISED; any other failure, `startup-timeout` included, is
+  ## MODULE_ERROR with the classification in the message. Never the code
+  ## `_MODULE_init` returned, and never VERSION_MISMATCH, which §13 keeps for
+  ## its own structures (l.3952). A failed bootstrap stops nothing.
+  if st.bootstrapReply == nil:
+    return
+  let x = st.orchestrator
+  var outcome: Opt[Reply]
+  if st.shuttingDown:
+    outcome = Opt.some(
+      Reply(
+        error: Opt.some(
+          engineError(ecCancelled, "shutdown was requested before bootstrap completed")
+        )
+      )
+    )
+  elif x.state == msReady:
+    outcome = Opt.some(Reply(view: x.view))
+  elif x.state == msError or (x.state == msUnloaded and x.failure.isSome):
+    let f = x.failure.get(Failure(kind: fkOther))
+    if f.kind in {fkAuthorityDenied, fkAuthorityEvaluationFailed}:
+      outcome = Opt.some(
+        Reply(
+          error: Opt.some(
+            engineError(
+              ecNotAuthorised, "starting the orchestration instance is not authorised"
+            )
+          )
+        )
+      )
+    else:
+      var message = "the orchestration instance failed to start: " & f.classification
+      if f.reason.len > 0:
+        message.add(": " & f.reason)
+      outcome = Opt.some(Reply(error: Opt.some(engineError(ecModule, message))))
+  if outcome.isSome:
+    st.bootstrapReply.answer(outcome.get)
+    st.bootstrapReply = nil
+
+proc bootstrap(st: State, q: Request) =
+  ## [SPEC RUNTIME l.187-192, l.1640, §13.2] Bootstrap policy is in place (the
+  ## authorizer exists before this request). Creates every configured instance
+  ## in configuration order, with its protected identity and the host's
+  ## origin, records the orchestration role, and starts that one instance
+  ## through the ordinary start path: execution authorization, the startup
+  ## deadline, binding, `_MODULE_init` with its Runtime Control binding and
+  ## the contract checks. Its intent becomes `requested` with the host's
+  ## protected-input origin (G191 interim).
+  if st.bootstrapped:
+    q.reply.answerError(ecNotReady, "the Runtime has already been bootstrapped")
+    return
+  st.bootstrapped = true
+  if st.shuttingDown:
+    q.reply.answerError(
+      ecCancelled, "shutdown was requested before bootstrap completed"
+    )
+    return
+  for b in q.bootstrap:
+    let x = st.createInst(b.record, b.instance, hostOrigin()).valueOr:
+      q.reply.answerError(error.code, error.message)
+      return
+    if b.instance == q.instance:
+      x.orchestration = true
+      st.orchestrator = x
+  if st.orchestrator.isNil:
+    q.reply.answerError(ecInvalidParams, "no orchestration instance was configured")
+    return
+  st.bootstrapReply = q.reply
+  st.start(Request(kind: rqStart, instance: q.instance, origin: hostOrigin()))
+  st.checkBootstrap()
 
 # Route handles ------------------------------------------------------------------
 
@@ -1773,18 +1971,36 @@ proc handle(st: State, q: Request) =
   of rqShutdown:
     # [SPEC RUNTIME §10.2] One engine-owned sequence; admission closes first.
     if st.shutdownDone:
-      q.reply.answer(Reply())
+      q.reply.answer(Reply(error: st.shutdownResult))
       return
     st.shutdownWaiters.add(q.reply)
     st.beginShutdown()
+  of rqRequestShutdown:
+    # [SPEC RUNTIME §13.2] Accepted here; the sequence continues on the
+    # Runtime thread, whoever waits (RUN-0726). A repeat joins it (RUN-0727).
+    q.reply.answer(Reply())
+    if not st.shuttingDown:
+      st.beginShutdown()
+  of rqAwaitShutdown:
+    # [SPEC RUNTIME §13.2] Never initiates shutdown (RUN-0728).
+    if st.shutdownDone:
+      q.reply.answer(Reply(error: st.shutdownResult))
+    else:
+      st.shutdownWaiters.add(q.reply)
+  of rqBootstrap:
+    st.bootstrap(q)
   of rqTerminate:
-    # `close`: only after shutdown. The reply says whether module code is
-    # still running on a worker.
+    # `close`: only after shutdown, and only while no worker or call worker is
+    # inside module code that may still report here. A refusal leaves the
+    # Runtime thread running, so `close` can be tried again.
     if not st.shutdownDone:
       q.reply.answerError(ecNotReady, "the Runtime has not shut down")
       return
+    if st.busy + st.callBusy > 0:
+      q.reply.answerError(ecNotReady, "module code is still running")
+      return
     st.done = true
-    q.reply.answer(Reply(busy: st.busy + st.callBusy))
+    q.reply.answer(Reply())
   of rqRcPrecheck:
     st.rcPrecheck(q)
   of rqRc:
@@ -1894,10 +2110,21 @@ proc asyncEvent(st: State, m: Msg) =
   of aeHook:
     st.dispatch(Job(id: st.nextJobId(), kind: jkRequestCancel, deferred: m.extra))
 
+proc settle(st: State) =
+  ## After every message and deadline: shutdown progress, then the bootstrap's
+  ## outcome, so a `ready` committed by one message is answered before a
+  ## shutdown accepted by the next.
+  if st.shuttingDown and not st.shutdownDone:
+    st.shutdownStep()
+    if st.shutdownComplete():
+      st.finishShutdown()
+  st.checkBootstrap()
+
 proc handle(st: State, m: sink Msg) =
   case m.kind
   of mkRequest:
     st.handle(m.request)
+    st.checkBootstrap()
     return
   of mkBound, mkInitialized, mkDestroyed, mkJobDone, mkCompleted:
     dec st.busy
@@ -1943,10 +2170,7 @@ proc handle(st: State, m: sink Msg) =
       st.maybeForget(owner)
   of mkRequest, mkJobDone:
     discard
-  if st.shuttingDown and not st.shutdownDone:
-    st.shutdownStep()
-    if st.shutdownComplete():
-      st.finishShutdown()
+  st.settle()
 
 proc checkDeadlines(st: State) =
   let now = getMonoTime()
@@ -2046,6 +2270,7 @@ proc runtimeLoop(s: ptr Shared) =
     if st.done:
       break
     st.checkDeadlines()
+    st.checkBootstrap()
     if st.done:
       break
     s.bell.wait(st.nextDeadline())
@@ -2063,6 +2288,7 @@ proc runtimeLoop(s: ptr Shared) =
   s.finished = true
 
 proc runtimeMain(s: ptr Shared) {.thread.} =
+  markRuntimeThread()
   runtimeLoop(s)
   releasePerThread() # after the loop's locals are gone
 
@@ -2174,21 +2400,42 @@ proc diagnostics*(e: Engine): seq[string] =
   ## publications, ignored provider completions, long delivery waits.
   e.call(Request(kind: rqDiagnostics)).diagnostics
 
+proc bootstrap*(
+    e: Engine, instances: seq[BootstrapInstance], orchestration: string
+): Result[InstanceView, EngineError] =
+  ## [SPEC RUNTIME l.1640, §13.2; G190 interim] Creates `instances` and starts
+  ## `orchestration`, one of them; returns once it is `ready`, or with the
+  ## code its failure maps to (`checkBootstrap`).
+  let r =
+    e.call(Request(kind: rqBootstrap, bootstrap: instances, instance: orchestration))
+  r.toResult(r.view)
+
 proc shutdown*(e: Engine) =
   ## [SPEC RUNTIME §10.2] Host-initiated graceful shutdown; returns once every
   ## realization is released or its cleanup failure is recorded.
   discard e.call(Request(kind: rqShutdown))
 
-proc close*(e: Engine): bool =
-  ## Stops the Runtime thread after `shutdown` and frees the engine. Returns
-  ## false, and keeps the engine allocated for good, when a worker is still
-  ## inside module code that may yet report to it.
+proc requestShutdown*(e: Engine) =
+  ## [SPEC RUNTIME §13.2] Accepts shutdown and returns without waiting.
+  discard e.call(Request(kind: rqRequestShutdown))
+
+proc awaitShutdown*(e: Engine): Result[void, EngineError] =
+  ## [SPEC RUNTIME §13.2; G60] Waits for shutdown, initiated by anyone, without
+  ## initiating it; the one stored result.
+  let r = e.call(Request(kind: rqAwaitShutdown))
+  if r.error.isSome:
+    err(r.error.get)
+  else:
+    ok()
+
+proc tryClose*(e: Engine): Result[void, EngineError] =
+  ## Stops the Runtime thread after shutdown and frees the engine. NOT_READY,
+  ## with the engine intact and running, before shutdown completed or while a
+  ## worker is inside module code that may still report to it.
   let r = e.call(Request(kind: rqTerminate))
   if r.error.isSome:
-    return false
+    return err(r.error.get)
   joinThread(e.runtime)
-  if r.busy > 0:
-    return false
   for i in 0 ..< e.spawned:
     joinThread(e.workers[i])
   for i in 0 ..< e.callSpawned:
@@ -2201,4 +2448,16 @@ proc close*(e: Engine): bool =
   deinitLock(e.slotLock)
   freeBell(e.bell)
   deallocShared(e)
-  true
+  ok()
+
+proc close*(e: Engine, patience = initDuration(seconds = 10)): bool =
+  ## `tryClose`, tried again while module code is still running, for up to
+  ## `patience`. False when the engine is still open.
+  let until = getMonoTime() + patience
+  while true:
+    let r = e.tryClose()
+    if r.isOk:
+      return true
+    if r.error.message != "module code is still running" or getMonoTime() >= until:
+      return false
+    sleep(1)

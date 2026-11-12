@@ -353,6 +353,22 @@ proc lifecycle(
       ).tryGet
   rcCall(rc, name, bytes)
 
+proc readiness(
+    rc: ptr LogosRuntimeControlBinding,
+    module: string,
+    instance = Opt.none(string),
+    provider = Opt.none(LogosNSRuntimeModuleProviderAddress),
+): RcResult =
+  rcCall(
+    rc,
+    "get_readiness",
+    encode(
+      LogosNSRuntimeControlGetReadinessRequest(
+        module: module, instance: instance, provider: provider
+      )
+    ).tryGet,
+  )
+
 type EndSeen = object
   count: Atomic[int]
   code: Atomic[int]

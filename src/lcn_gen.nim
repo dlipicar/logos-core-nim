@@ -1,17 +1,18 @@
 ## lcn-gen: the canonical C type headers of an accepted Logos schema set or
-## module binding (INTERFACE §2, §2.1-§2.3, §2.5, §3.2; C mapping revision 3)
-## and `logos_types.h` (§5.2): C types, method typedefs and, for a module
-## binding, its provider functions and module symbols (§2.4, §2.6). Every
-## header is stamped PROVISIONAL ABI.
+## module binding (INTERFACE §2, §2.1-§2.3, §2.5, §3.2; C mapping revision 3),
+## `logos_types.h` (§5.2) and `logos_runtime.h` (RUNTIME §13): C types, method
+## typedefs and, for a module binding, its provider functions and module
+## symbols (§2.4, §2.6). Every header is stamped PROVISIONAL ABI.
 
 import std/[os, parseopt, strutils]
 import results
 import ./logos_core/iface/accept
-import ./logos_core/codegen/[callsgen, kitgen, nimgen]
+import ./logos_core/codegen/[callsgen, hostgen, kitgen, nimgen]
 
 const usage = """
 Usage:
   lcn-gen logos-types [--out:DIR]
+  lcn-gen logos-runtime [--out:DIR]
   lcn-gen types [--out:DIR] [--system] [--module:NAME] [PRIMARY.cddl]
                 [--interface:FILE]... [--supporting:FILE]...
   lcn-gen nim-common [--out:DIR] [--import-prefix:P]
@@ -23,6 +24,8 @@ Usage:
                 [--interface:FILE]... [--supporting:FILE]...
 
 logos-types  writes DIR/logos_types.h
+logos-runtime
+             writes DIR/logos_runtime.h, the Host Embedding API (RUNTIME §13)
 types        accepts the construction input set (INTERFACE §1.1, §5.3) and
              writes DIR/<module or namespace>_types.h; with --module, the
              module binding (INTERFACE §2): PRIMARY may then be left out for
@@ -117,6 +120,8 @@ proc main(): int =
   case command
   of "logos-types":
     write(outDir, "logos_types.h", logosTypesHeader())
+  of "logos-runtime":
+    write(outDir, "logos_runtime.h", logosRuntimeHeader())
   of "nim-common":
     let module = commonNimModule(NimOptions(importPrefix: prefix)).valueOr:
       return fail(error)

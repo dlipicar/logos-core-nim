@@ -1,0 +1,73 @@
+; logos-core-nim.app-config.v1: the Host Embedding API configuration (RUNTIME
+; §13.3 configuration_format; decision G76). One Logos deterministic-CBOR
+; lcn.app_config value. docs/HOST-CONFIG.md documents each field.
+;
+; An array that is present is non-empty, and the checks the schema cannot
+; express (unique ids, ordering, the orchestration instance) are applied at
+; logos_runtime_create (runtime/host_config.nim).
+
+lcn.app_config = {
+  runtime: lcn.app_runtime,
+  policy: lcn.app_policy,
+  orchestration: lcn.app_instance_id,
+  modules: [* lcn.app_module],
+  ? ordering: [* lcn.app_ordering],
+}
+
+lcn.app_runtime = {
+  work_dir: lcn.app_path,
+  ? state_root: lcn.app_path,
+  ? startup_deadline_ms: uint32,
+  ? stop_deadline_ms: uint32,
+  ? shutdown_grace_ms: uint32,
+}
+
+lcn.app_path = tstr .size (1..4096)
+
+lcn.app_policy = { kind: "allow-all" }
+
+; logos.runtime.module_instance_id (RUNTIME §9.2)
+lcn.app_instance_id = tstr .size (1..128)
+
+lcn.app_module = {
+  instance: lcn.app_instance_id,
+  module: tstr .size (1..64),
+  implementation: lcn.app_implementation,
+  ? primary_contract: logos.schema_commitment,
+  ? implements: [* logos.schema_commitment],
+  ? requires: [* lcn.app_requirement],
+  ? requested_permissions: [* lcn.app_permission],
+  ? state_assignment: tstr .size (1..128),
+}
+
+; logos.module_loader.direct_static and direct_dynamic (LOADER §3)
+lcn.app_implementation =
+  { strategy: "direct_static", binding: tstr .size (1..128) } /
+  { strategy: "direct_dynamic", artifact: lcn.app_artifact }
+
+; logos.module_loader.artifact (LOADER §3)
+lcn.app_artifact = {
+  id: tstr .size (1..128),
+  local_path: lcn.app_path,
+  hash: bstr .size 32,
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+
+; logos.package_manifest.provider_requirement (PACKAGE MANAGER §4)
+lcn.app_requirement = {
+  contract: logos.schema_commitment,
+  cardinality: "single" / "all-runtime-visible",
+}
+
+; logos.package_manifest.requested_permission (PACKAGE MANAGER §4)
+lcn.app_permission = {
+  permission: tstr .size (1..128),
+  constraints: bstr .size (1..1048576),
+  ? reason: tstr .size (1..512),
+}
+
+; one lifecycle-ordering constraint (RUNTIME §3.7)
+lcn.app_ordering = {
+  prerequisite: lcn.app_instance_id,
+  dependent: lcn.app_instance_id,
+}

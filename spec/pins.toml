@@ -284,3 +284,17 @@ code = "PackageErrorsDocument"
 file = "spec-module-package-manager.md"
 section = "§3"
 value = "4 MiB"
+
+# Tier 4 documents -------------------------------------------------------------
+
+[runtime-host-handle]
+file = "spec-module-runtime.md"
+section = "§13"
+code = "RuntimeHostHandle"
+mirror = "RNT/13.host-handle.h"
+
+[runtime-host-api]
+file = "spec-module-runtime.md"
+section = "§13.3"
+code = "RuntimeHostApi"
+mirror = "RNT/13.3.host-api.h"

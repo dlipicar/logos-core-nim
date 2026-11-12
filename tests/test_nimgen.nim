@@ -24,6 +24,7 @@ suite "ifc.nim-types: generated modules (D29)":
     check generatedCommon().get == readFile(commonTypesPath)
     check generatedCommonMirrors().get == readFile(commonMirrorsPath)
     check generatedRcTypes().get == readFile(rcTypesPath)
+    check generatedHostConfigTypes().get == readFile(hostConfigTypesPath)
     for f in nimFixtures:
       checkpoint f.module
       check f.generated.get == readFile(f.fixturePath)
@@ -36,6 +37,7 @@ suite "ifc.nim-types: generated modules (D29)":
     check stamp in readFile(commonTypesPath)
     check stamp in readFile(commonMirrorsPath)
     check stamp in readFile(rcTypesPath)
+    check stamp in readFile(hostConfigTypesPath)
     for f in nimFixtures:
       check stamp in readFile(f.fixturePath)
 

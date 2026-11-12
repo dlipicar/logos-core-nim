@@ -6,7 +6,7 @@
 import std/[os, sequtils]
 import results
 import ../../src/logos_core/iface/[accept, cmap]
-import ../../src/logos_core/codegen/[callsgen, cmirror, kitgen, nimgen]
+import ../../src/logos_core/codegen/[callsgen, cmirror, hostgen, kitgen, nimgen]
 
 type NimFixture* = object
   module*: string ## the file under tests/generated/
@@ -103,9 +103,11 @@ type HeaderFixture* = object
   primary*: string ## none: `logos_types.h`
   interfaces*, supporting*: seq[string]
   calls*: bool ## the call helpers' header (`callsHeader`)
+  runtime*: bool ## `logos_runtime.h` (RUNTIME §13)
 
 const headerFixtures* = [
   HeaderFixture(header: "logos_types.h"),
+  HeaderFixture(header: "logos_runtime.h", runtime: true),
   HeaderFixture(
     header: "meter_module_types.h", primary: "spec/mirrors/IFC/3.9.1.module.cddl"
   ),
@@ -147,6 +149,8 @@ const headerFixtures* = [
 
 proc generated*(f: HeaderFixture): Result[string, string] =
   ## The header lcn-gen makes for `f` now.
+  if f.runtime:
+    return ok(logosRuntimeHeader())
   if f.primary.len == 0:
     return ok(logosTypesHeader())
   try:
@@ -193,6 +197,21 @@ proc generatedRcTypes*(): Result[string, string] =
       AcceptOptions(system: true),
     )
     nimModule(set, NimOptions(importPrefix: "../", schemaAccessor: "rcSchema"), true)
+  except IOError as e:
+    err(e.msg)
+
+const
+  hostConfigTypesPath* = "src/logos_core/runtime/host_config_types.nim"
+  hostConfigPrimary* = "src/logos_core/runtime/host_config.cddl"
+
+proc generatedHostConfigTypes*(): Result[string, string] =
+  ## The host configuration format's types (`logos-core-nim.app-config.v1`,
+  ## G76), for the host layer.
+  try:
+    let set = ?acceptContractSet(readFile(hostConfigPrimary), [], [], AcceptOptions())
+    nimModule(
+      set, NimOptions(importPrefix: "../", schemaAccessor: "hostConfigSchema"), false
+    )
   except IOError as e:
     err(e.msg)
 
