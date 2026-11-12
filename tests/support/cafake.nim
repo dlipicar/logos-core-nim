@@ -125,11 +125,30 @@ proc publishOp(
 type ScopedHook* = proc() {.nimcall, gcsafe, raises: [].}
   ## Runs inside each scoped publication, on the publishing thread.
 
+const MaxText = 128
+
+type Text = object
+  ## A thread's caller text in plain memory: under ARC/ORC a `{.threadvar.}`
+  ## string is never destroyed when its thread ends (upstream draft 52).
+  chars: array[MaxText, char]
+  len: int
+
+proc assign(t: var Text, s: string) =
+  doAssert s.len <= MaxText
+  for i in 0 ..< s.len:
+    t.chars[i] = s[i]
+  t.len = s.len
+
+proc view(t: var Text): LogosUtf8View =
+  LogosUtf8View(
+    data: cast[ptr UncheckedArray[uint8]](addr t.chars[0]), len: csize_t(t.len)
+  )
+
 var
   callerSystem {.threadvar.}: bool
-  callerRuntime {.threadvar.}: string
-  callerInstance {.threadvar.}: string
-  routeLabel {.threadvar.}: string
+  callerRuntime {.threadvar.}: Text
+  callerInstance {.threadvar.}: Text
+  routeLabel {.threadvar.}: Text
   cancelFlag {.threadvar.}: ptr Atomic[bool]
   onScoped {.threadvar.}: ScopedHook
   activeContext {.threadvar.}: ptr LogosInvocationContext
@@ -139,16 +158,10 @@ proc callerOp(
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
   outCaller[] = LogosCallerView(
     kind: (if callerSystem: CallerSystemService else: CallerModule),
-    runtimeInstanceId: LogosUtf8View(
-      data: cast[ptr UncheckedArray[uint8]](cstring(callerRuntime)),
-      len: csize_t(callerRuntime.len),
-    ),
+    runtimeInstanceId: callerRuntime.view,
   )
   if not callerSystem:
-    outCaller.moduleInstanceId = LogosUtf8View(
-      data: cast[ptr UncheckedArray[uint8]](cstring(callerInstance)),
-      len: csize_t(callerInstance.len),
-    )
+    outCaller.moduleInstanceId = callerInstance.view
   LogosResult()
 
 proc cancelledOp(
@@ -162,7 +175,13 @@ proc scopedPublishOp(
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
-  record(eventName, cborData, cborDataLen, true, routeLabel)
+  record(
+    eventName,
+    cborData,
+    cborDataLen,
+    true,
+    routeLabel.chars.toOpenArray(0, routeLabel.len - 1),
+  )
   if onScoped != nil:
     onScoped()
   LogosResult()
@@ -197,9 +216,10 @@ proc actAs*(
   ## Makes this thread's calls come from `instance` (or the system service),
   ## through a route labelled `label`, cancelled when `cancel` is set.
   callerSystem = system
-  callerRuntime = runtime
-  callerInstance = instance
-  routeLabel = label
+  callerRuntime.assign(runtime)
+  callerInstance.assign(instance)
+  doAssert label.len <= MaxLabel
+  routeLabel.assign(label)
   cancelFlag = cancel
   onScoped = scoped
   activeContext = addr theContext
