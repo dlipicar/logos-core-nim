@@ -384,6 +384,48 @@
         }
       );
 
+      # Every check in exactly one group, so CI can run each Linux leg as parallel jobs
+      # (.github/workflows/ci.yml): one runner took over two hours for all of them on x86_64.
+      # A check whose name ends in no known variant goes to `orc-spec`, so a new variant is
+      # still built. `nix build .#ciGroups.asan` builds one group locally.
+      legacyPackages = forAllSystems (
+        system:
+        let
+          checks = self.checks.${system};
+          variant =
+            name:
+            lib.findFirst (v: lib.hasSuffix "-${v}" name) null [
+              "asan"
+              "tsan"
+              "msan"
+              "refc"
+              "orc-release"
+            ];
+          groupOf =
+            name:
+            let
+              v = variant name;
+            in
+            if v == null then
+              "orc-spec"
+            else if v == "refc" || v == "orc-release" then
+              "refc-release"
+            else
+              v;
+        in
+        {
+          ciGroups = lib.mapAttrs (
+            group: names:
+            bySystem.${system}.pkgs.linkFarm "ci-${group}" (
+              map (name: {
+                inherit name;
+                path = checks.${name};
+              }) names
+            )
+          ) (lib.groupBy groupOf (builtins.attrNames checks));
+        }
+      );
+
       devShells = forAllSystems (
         system:
         let

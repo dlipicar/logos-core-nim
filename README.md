@@ -97,6 +97,14 @@ With Nix, which also runs nph and the spec checks:
 nix flake check -L
 ```
 
+CI splits the checks into groups and builds each Linux group in its own job: `orc-spec` (orc,
+nph, lint and the spec checks), `refc-release`, `asan`, `tsan` and `msan`. One group builds alone
+with:
+
+```bash
+nix build -L --keep-going .#ciGroups.asan
+```
+
 ```bash
 nix develop
 ```
