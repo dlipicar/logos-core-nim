@@ -24,10 +24,14 @@
 ## can no longer make it ready (§3.4 l.664-668). Module code still running is
 ## never interrupted, destroyed or unloaded: a valid context it returns later
 ## is destroyed through the realizer, and until then cleanup is unresolved, so
-## `start` is NOT_READY (l.585-587). A stop waits up to the stop deadline
-## (10 s) for `unloaded` and otherwise reports `stopping`; shutdown waits up to
-## the shutdown grace (10 s) and then records `cleanup-timeout` (§10.2). A
-## direct realization is never force-released (§10.2 l.3838).
+## `start` is NOT_READY (l.585-587). An explicit stop has a stop deadline
+## (10 s) from the moment the instance enters `stopping`, and shutdown a
+## shutdown grace (10 s); past either, the cleanup failure is recorded: the
+## instance enters `error` with `cleanup-timeout` (§10.2 l.3835-3838,
+## l.3873-3874). A direct realization is never force-released (l.3838): its
+## cleanup goes on and `start` is NOT_READY until it ends (§3.4 l.613). Its
+## end does not by itself leave `error` (l.611), and the classification stays
+## (§9.3 l.3757); a later stop then makes the instance `unloaded` at once.
 ##
 ## [IMPL] Runtime Control and direct routes (step 3). Each execution attempt
 ## gets its own Runtime Control binding and invocation access
@@ -39,6 +43,16 @@
 ## and its `_MODULE_destroy` waits until its in-flight count is zero. A
 ## consumer's routes close when it is stopped and fail when it fails (§3.4
 ## l.624-626).
+##
+## [IMPL] Route retention (§9.3 l.3180, l.3249: a deployment concern). An
+## ended route keeps its record while anything can still reach it by its id:
+## an unreleased handle of a live consumer attempt (§7.5 l.1346), an admitted
+## call, or a submitted asynchronous call. After that it is droppable, and
+## each consumer keeps its newest `endedRoutes` droppable records (4096 by
+## default), dropping the oldest first. A dropped id is unknown: renew, close
+## and materialize get NOT_AUTHORISED, as for an id that never existed
+## (l.3157-3159, l.3188); a `request_key` replay still returns its retained
+## result (l.3175-3176).
 ##
 ## [G171 interim (TF-18)] The order of checks for a Runtime Control request:
 ## the caller's association (NOT_AUTHORISED), the method's own authority where
@@ -109,7 +123,6 @@ type
   StopWaiter = object
     reply: ReplyChannel
     origin: string
-    deadline: MonoTime
 
   Inst = ref object
     id: string
@@ -128,6 +141,9 @@ type
     provider: bool
     keepIntent: bool ## the stop in progress is a shutdown stop
     stopWaiters: seq[StopWaiter]
+    stopDeadline: Opt[MonoTime]
+      ## [G61] while `stopping` after an explicit stop: when its cleanup failure
+      ## is recorded
     providerId: string ## its provider record, when its record expects a contract
     services: ptr AttemptServices ## those of `realization`
     inflight: int
@@ -173,7 +189,11 @@ type
     done: bool ## `close` asked the Runtime thread to leave
     runtimeId: string
     ctx: SchemaContext ## the pinned context, for the well-known methods
-    routes: OrderedTable[string, Route] ## every route, in creation order [IMPL]
+    routes: OrderedTable[string, Route]
+      ## every route not yet compacted away, in creation order [IMPL]
+    ended: Table[string, Deque[string]]
+      ## per consumer: its droppable route records, oldest first
+    dropped: int ## dropped records still in `routes`
     keys: RequestKeys
     routeCount: int
     providerCount: int
@@ -327,12 +347,48 @@ proc cancelInvocation(st: State, a: AsyncRec) =
   if a.deferred != nil and cancelKnown(a.deferred):
     st.dispatch(Job(id: st.nextJobId(), kind: jkRequestCancel, deferred: a.deferred))
 
+proc route(st: State, id: string): Route =
+  ## The record of route `id`, or nil when it is unknown or dropped.
+  result = st.routes.getOrDefault(id)
+  if result != nil and result.dropped:
+    result = nil
+
+proc settle(st: State, r: Route) =
+  ## [IMPL] An ended route that nothing reaches any more joins its consumer's
+  ## droppable records; past `endedRoutes` of them, the oldest is dropped.
+  if r == nil or r.droppable or not r.isTerminal or r.reachable:
+    return
+  r.droppable = true
+  let q = addr st.ended.mgetOrPut(r.consumer, initDeque[string]())
+  q[].addLast(r.id)
+  while q[].len > max(st.cfg.endedRoutes, 0):
+    let old = st.routes.getOrDefault(q[].popFirst())
+    if old != nil and not old.dropped:
+      old.dropped = true
+      inc st.dropped
+
+proc compactRoutes(st: State) =
+  ## Dropped records leave the creation-ordered table in batches, once they
+  ## are an eighth of it, so each drop costs amortized constant time.
+  if st.dropped > 0 and st.dropped * 8 >= st.routes.len:
+    var kept = initOrderedTable[string, Route]()
+    for id, r in st.routes:
+      if not r.dropped:
+        kept[id] = r
+    st.routes = move kept
+    st.dropped = 0
+
 proc maybeForget(st: State, a: AsyncRec) =
   ## The record goes, with its reference to the call, once nothing of the
   ## call runs any more.
   if a.terminal and not a.executing and not a.completing and a.deferred == nil:
     st.asyncCalls.del(a.call)
     dropCall(asyncOf(a.call))
+    if not a.rc:
+      let r = st.route(a.route)
+      if r != nil:
+        dec r.pending
+        st.settle(r)
 
 proc asyncTerminal(st: State, a: AsyncRec) =
   ## The call's terminal outcome is decided: its invocation-scoped destination
@@ -374,6 +430,15 @@ proc endServices(st: State, s: ptr AttemptServices, instance: string) =
     return
   let token = attemptOf(s)
   st.liveAttempts.excl(token)
+  # [SPEC INTERFACE l.2004-2006] None of the attempt's handles remains valid.
+  for r in st.routes.values:
+    if r.consumer == instance and r.pins.len > 0:
+      var kept: seq[Pin]
+      for p in r.pins:
+        if p.attempt != token:
+          kept.add(p)
+      r.pins = kept
+      st.settle(r)
   for a in st.records:
     if a.attempt == token:
       st.cancelInvocation(a)
@@ -411,6 +476,7 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
     scheduleEnd(h, r.endCode)
     st.dispatch(Job(id: st.nextJobId(), kind: jkObserveEnd, handle: h))
   r.handles.setLen(0)
+  st.settle(r)
 
 proc routesFollow(st: State, x: Inst) =
   ## [SPEC RUNTIME §3.4 l.620-626, §9.3 l.3225] A provider that is no longer
@@ -454,6 +520,8 @@ proc commit(st: State, x: Inst) =
   ## routes that depend on the instance follow it in the same step.
   inc x.revision
   inc st.serial
+  if x.state != msStopping:
+    x.stopDeadline = Opt.none(MonoTime)
   if st.changes.len >= MaxRetainedChanges:
     st.changes.delete(0)
   st.changes.add(StateChange(serial: st.serial, view: x.view))
@@ -482,8 +550,10 @@ proc finishAttempt(st: State, a: Attempt) =
   a.waiters.setLen(0)
   if x.attempt == a:
     x.attempt = nil
-  if a.cancelled:
-    # [SPEC RUNTIME §3.4] A completed explicit stop: `unloaded`, failure cleared.
+  if a.cancelled and x.state == msStopping:
+    # [SPEC RUNTIME §3.4] A completed explicit stop: `unloaded`, failure
+    # cleared. A stop whose deadline passed already left `error`, which the end
+    # of its cleanup does not change (l.611).
     x.state = msUnloaded
     x.failure = Opt.none(Failure)
     x.current = ""
@@ -791,7 +861,8 @@ proc stopInstance(
     st: State, x: Inst, reply: ReplyChannel, keepIntent: bool, origin = ""
 ) =
   ## [SPEC RUNTIME §3.4, §9.1, §10.2] Moves `x` toward `unloaded`; replies
-  ## once it is there or once the stop deadline passes.
+  ## once it is there, or once the stop deadline passes and the instance is
+  ## `error` with `cleanup-timeout` [G61].
   if not keepIntent and x.intent != inStopped:
     # [SPEC RUNTIME §9.1 l.1839] An explicit stop cancels retained intent.
     x.intent = inStopped
@@ -837,12 +908,13 @@ proc stopInstance(
     st.commit(x)
   if x.state == msUnloaded:
     reply.answerView(x)
-  elif reply != nil:
-    x.stopWaiters.add(
-      StopWaiter(
-        reply: reply, origin: origin, deadline: getMonoTime() + st.cfg.stopDeadline
-      )
-    )
+    return
+  if not keepIntent:
+    # [G61, revised by A18] The drain deadline of an explicit stop starts
+    # when the instance enters `stopping`; shutdown has its own grace.
+    x.stopDeadline = Opt.some(getMonoTime() + st.cfg.stopDeadline)
+  if reply != nil:
+    x.stopWaiters.add(StopWaiter(reply: reply, origin: origin))
 
 proc callsInto(st: State, consumer, provider: string): bool =
   ## Whether `consumer` has an admitted call in progress through a route to
@@ -1270,7 +1342,7 @@ proc renew(st: State, q: Request, x: Inst) =
     st.requireReady(q)
     q.reply.answer(Reply(bytes: replayed.get))
     return
-  let r = st.routes.getOrDefault(req.route)
+  let r = st.route(req.route)
   if r.isNil or r.consumer != x.id:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
@@ -1332,7 +1404,7 @@ proc closeRoute(st: State, q: Request, x: Inst) =
   ):
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
-  let r = st.routes.getOrDefault(req.route)
+  let r = st.route(req.route)
   if r.isNil:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
@@ -1416,7 +1488,7 @@ proc materialize(st: State, q: Request) =
   let x = st.caller(q).valueOr:
     q.reply.answerError(error.code, error.message)
     return
-  let r = st.routes.getOrDefault(q.route)
+  let r = st.route(q.route)
   if r.isNil or r.consumer != x.id:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
@@ -1446,13 +1518,14 @@ proc materialize(st: State, q: Request) =
       ecVersionMismatch, "the expected contract root is not the route's contract"
     )
     return
+  r.pins.add(Pin(handle: q.handle, attempt: q.attempt))
   q.reply.answer(Reply())
 
 proc admit(st: State, q: Request) =
   ## [SPEC RUNTIME §4.1, §6.4, §7.5, l.1732] Step 1 of a direct route call
   ## (`bindings.nim`): the method and its scope, then authorization, then
   ## readiness, so a known authorization failure takes precedence (l.1347).
-  let r = st.routes.getOrDefault(q.route)
+  let r = st.route(q.route)
   if r.isNil or r.consumer != q.origin.instance:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
@@ -1525,7 +1598,7 @@ proc admit(st: State, q: Request) =
 
 proc observeEnd(st: State, q: Request) =
   ## [SPEC INTERFACE §2.5 l.1477-1491] Installed in order with termination.
-  let r = st.routes.getOrDefault(q.route)
+  let r = st.route(q.route)
   if r.isNil:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
@@ -1543,12 +1616,16 @@ proc releaseHandle(st: State, q: Request) =
   ## No terminal callback is scheduled for the handle after this, and its
   ## subscriptions are inactive; they go back to the releasing thread, which
   ## waits for their handlers (INTERFACE l.1465, l.3895-3897).
-  let r = st.routes.getOrDefault(q.route)
+  let r = st.route(q.route)
   var gone: seq[pointer]
   if not r.isNil:
     let i = r.handles.find(q.handle)
     if i >= 0:
       r.handles.del(i)
+    for j, p in r.pins:
+      if p.handle == q.handle:
+        r.pins.delete(j)
+        break
     var kept: seq[pointer]
     for p in r.subs:
       if subOf(p).generation == q.generation:
@@ -1557,6 +1634,7 @@ proc releaseHandle(st: State, q: Request) =
       else:
         kept.add(p)
     r.subs = kept
+    st.settle(r)
   q.reply.answer(Reply(subs: gone))
 
 # Events -----------------------------------------------------------------------------
@@ -1566,7 +1644,7 @@ proc subscribe(st: State, q: Request) =
   ## Ownership, then the event under the selected contract and the route's
   ## subscribe scope, a revoked route and the subscribe-event decision
   ## (NOT_AUTHORISED), then readiness. The id is written before activation.
-  let r = st.routes.getOrDefault(q.route)
+  let r = st.route(q.route)
   if r.isNil or r.consumer != q.origin.instance:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
@@ -1614,7 +1692,7 @@ proc unsubscribe(st: State, q: Request) =
   ## route answers with its code first; an id that names no active
   ## subscription of this handle is INVALID_PARAMS (TRANSPORT l.748 through
   ## RUNTIME l.1012-1016) and changes nothing.
-  let r = st.routes.getOrDefault(q.route)
+  let r = st.route(q.route)
   if r.isNil or r.consumer != q.origin.instance:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
@@ -1654,7 +1732,7 @@ proc scoped(st: State, q: Request) =
   ## of one invocation: the active subscriptions to `q.bare` on its route and
   ## path generation. An event outside `publish_events` or a revoked route is
   ## NOT_AUTHORISED; `ready` says whether the destination is open.
-  let r = st.routes.getOrDefault(q.route)
+  let r = st.route(q.route)
   if r.isNil:
     q.reply.answerError(ecNotReady, "the invocation's destination is closed")
     return
@@ -1686,7 +1764,7 @@ proc deliver(st: State, q: Request) =
   ## route or a denied publish-event decision (NOT_AUTHORISED) or a closed
   ## destination (NOT_READY), and skips what only concerns the subscriber.
   let s = subOf(q.handle)
-  let r = st.routes.getOrDefault(s.routeId)
+  let r = st.route(s.routeId)
   let name = q.bare
   template skip() =
     q.reply.answer(Reply())
@@ -1817,7 +1895,8 @@ proc handle(st: State, q: Request) =
   of rqRoutes:
     var r = Reply()
     for x in st.routes.values:
-      r.routes.add(x.record(st.runtimeId))
+      if not x.dropped:
+        r.routes.add(x.record(st.runtimeId))
     q.reply.answer(r)
 
 proc destroyed(st: State, job: int) =
@@ -1847,11 +1926,12 @@ proc destroyed(st: State, job: int) =
 proc callLeft(st: State, provider, route: string, ticket: ptr CallTicket) =
   ## An admitted call has left its provider: its ticket goes, and a provider
   ## being stopped is released once none is left.
-  let r = st.routes.getOrDefault(route)
+  let r = st.route(route)
   if r != nil:
     let i = r.calls.find(ticket)
     if i >= 0:
       r.calls.del(i)
+    st.settle(r)
   for a in st.asyncCalls.values:
     if a.ticket == ticket:
       a.ticket = nil
@@ -1876,6 +1956,10 @@ proc asyncEvent(st: State, m: Msg) =
       deadline: c.deadline,
     )
     st.asyncCalls[m.target] = a
+    if not a.rc:
+      let r = st.route(a.route)
+      if r != nil:
+        inc r.pending
     if c.isTerminal:
       st.asyncTerminal(a)
     else:
@@ -1964,13 +2048,14 @@ proc checkDeadlines(st: State) =
         a, Failure(kind: fkStartupTimeout, reason: "the startup deadline passed")
       )
       a.expired = true
-    var kept: seq[StopWaiter]
-    for w in x.stopWaiters:
-      if now >= w.deadline:
-        w.reply.answerView(x)
-      else:
-        kept.add(w)
-    x.stopWaiters = kept
+    if x.state == msStopping and x.stopDeadline.isSome and now >= x.stopDeadline.get:
+      # [G61, revised by A18; SPEC RUNTIME §10.2 l.3835-3838, l.3873-3874]
+      # The cleanup failure is recorded; nothing still in use is released.
+      x.state = msError
+      x.failure =
+        Opt.some(Failure(kind: fkCleanupTimeout, reason: "the stop deadline passed"))
+      st.commit(x)
+      st.releaseWaiters(x)
   if st.shuttingDown and not st.shutdownDone and now >= st.shutdownDeadline:
     # [SPEC RUNTIME §10.2 step 6] The cleanup failure is recorded and shutdown
     # continues; nothing still in use is released.
@@ -1997,8 +2082,8 @@ proc nextDeadline(st: State): Opt[MonoTime] =
     if a != nil and a.phase in {apBind, apInit} and not a.expired and not a.cancelled and
         not a.failed:
       consider(a.deadline)
-    for w in x.stopWaiters:
-      consider(w.deadline)
+    if x.state == msStopping and x.stopDeadline.isSome:
+      consider(x.stopDeadline.get)
   if st.shuttingDown and not st.shutdownDone:
     consider(st.shutdownDeadline)
   for a in st.asyncCalls.values:
@@ -2048,6 +2133,7 @@ proc runtimeLoop(s: ptr Shared) =
     st.checkDeadlines()
     if st.done:
       break
+    st.compactRoutes()
     s.bell.wait(st.nextDeadline())
   # Idle workers leave; one still inside module code keeps its thread.
   for i in 0 ..< s.spawned:
@@ -2166,7 +2252,8 @@ proc runtimeInstanceId*(e: Engine): string =
   e.call(Request(kind: rqIdentity)).id
 
 proc routes*(e: Engine): seq[LogosNSRuntimeControlRouteRecord] =
-  ## Every route record, in creation order (host and test observation).
+  ## The route records not dropped, in creation order (host and test
+  ## observation).
   e.call(Request(kind: rqRoutes)).routes
 
 proc diagnostics*(e: Engine): seq[string] =

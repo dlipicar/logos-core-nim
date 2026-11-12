@@ -130,35 +130,36 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     e.finish()
 
   test "[RUN-0794] [RUN-0900] a binding that is stopping is NOT_READY (§3.4 l.629-631)":
-    let e = newEngine(config())
+    var cfg = config()
+    cfg.stopDeadline = initDuration(seconds = 30) # stays `stopping` meanwhile
+    let e = newEngine(cfg)
     let (c, rc) = e.startClient()
     clientDestroyGate.store(true)
-    check e.stop(c.instance).tryGet.state == msStopping
+    var t: Thread[(Engine, string)]
+    check e.stopping(c.instance, t)
     check rcCall(rc, "get_self", [0xA0'u8]).code == ecNotReady
     clientDestroyGate.store(false)
-    check waitUntil(
-      proc(): bool =
-        e.view(c.instance).tryGet.state == msUnloaded
-    )
+    joinThread(t)
+    check stopReply.load == ord(msUnloaded)
     e.finish()
 
   test "[IMPL-DECISION G171] [RUN-0039] [RUN-0850] [RUN-0874] what needs no payload is authorized first, readiness last [IMPL-DECISION G171] (TF-18)":
-    let e = newEngine(
-      config(
-        denying(
-          deny(
-            action = Opt.some(aaRuntimeControl),
-            operation = "establish_route",
-            consumer = "c2",
-          ),
-          deny(
-            action = Opt.some(aaRuntimeControl),
-            operation = "renew_route",
-            consumer = "c2",
-          ),
-        )
+    var cfg = config(
+      denying(
+        deny(
+          action = Opt.some(aaRuntimeControl),
+          operation = "establish_route",
+          consumer = "c2",
+        ),
+        deny(
+          action = Opt.some(aaRuntimeControl),
+          operation = "renew_route",
+          consumer = "c2",
+        ),
       )
     )
+    cfg.stopDeadline = initDuration(seconds = 30) # stays `stopping` meanwhile
+    let e = newEngine(cfg)
     discard e.started(meter())
     let (_, rc) = e.startClient("c1")
     let (c2, refused) = e.startClient("c2")
@@ -170,15 +171,14 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check rcCall(refused, "shutdown_runtime", [0x01'u8]).code == ecInvalidParams
     # An invalidated binding: authorization, then readiness.
     clientDestroyGate.store(true)
-    check e.stop(c2.instance).tryGet.state == msStopping
+    var t: Thread[(Engine, string)]
+    check e.stopping(c2.instance, t)
     check refused.establish("k").code == ecNotAuthorised
     check refused.renew("r", "route-unknown").code == ecNotAuthorised
     check rcCall(refused, "get_self", [0xA0'u8]).code == ecNotReady
     clientDestroyGate.store(false)
-    check waitUntil(
-      proc(): bool =
-        e.view(c2.instance).tryGet.state == msUnloaded
-    )
+    joinThread(t)
+    check stopReply.load == ord(msUnloaded)
     e.finish()
 
   test "[RUN-0113] [RUN-0794] a caller waiting in start_module is released when its binding ends (§3.4)":
@@ -639,8 +639,11 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
       proc(): bool =
         held.load == 1
     )
-    # The stop deadline passes with the call still inside the provider.
-    check e.stop(m.instance).tryGet.state == msStopping
+    # The stop deadline passes with the call still inside the provider: the
+    # cleanup failure is recorded and the provider is not released [G61].
+    let s = e.stop(m.instance).tryGet
+    check s.state == msError
+    check s.failure.isSome and s.failure.get.classification == "cleanup-timeout"
     check destroyed.load == before
     check e.routes()[0].state.kind == LogosNSRuntimeControlRouteStateKind.Failed
     gate.store(false)
@@ -649,10 +652,86 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     check bgValue.load == 1 # INTERFACE l.2101-2102: marked cancelled
     check waitUntil(
       proc(): bool =
-        e.view(m.instance).tryGet.state == msUnloaded
+        destroyed.load == before + 1
     )
-    check destroyed.load == before + 1
+    # [SPEC RUNTIME l.611] The release that followed does not leave `error`; a
+    # later stop does.
+    check e.view(m.instance).tryGet.state == msError
+    check e.stop(m.instance).tryGet.state == msUnloaded
     h.release()
+    e.finish()
+
+suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
+  test "[RUN-0584] [RUN-0570] [RUN-0564] [RUN-0946] [IMPL] each consumer keeps its newest ended records; a dropped id is unknown (l.3180, l.3249)":
+    var cfg = config()
+    cfg.endedRoutes = 2
+    let e = newEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient("c1")
+    let (_, other) = e.startClient("c2")
+    let theirs = other.routeId("t")
+    check other.close(theirs).code == ecOk
+    let first = rc.establish("k1")
+    var ids = @[first.routesOf.routes[0].route]
+    check rc.close(ids[0]).code == ecOk
+    for i in 2 .. 4:
+      ids.add(rc.routeId("k" & $i))
+      check rc.close(ids[^1]).code == ecOk
+    # One consumer's ended routes do not evict another's.
+    check e.routes().mapIt(it.route) == @[theirs, ids[2], ids[3]]
+    # A dropped id answers as one that never existed (l.3157-3159, l.3188).
+    let unknown = rc.renew("u", "route-unknown")
+    for r in [rc.renew("r1", ids[0]), rc.close(ids[1])]:
+      check r.code == ecNotAuthorised
+      check r.message == unknown.message
+    check rc.materialize(ids[0])[0] == ecNotAuthorised
+    # A kept one still answers by its state.
+    check rc.renew("r3", ids[3]).code == ecNotReady
+    check rc.close(ids[3]).code == ecOk
+    # [SPEC RUNTIME l.3175-3176] A replay returns the retained result; its use
+    # stays subject to the current checks.
+    let again = rc.establish("k1")
+    check again.code == ecOk
+    check again.response == first.response
+    check e.routes().len == 3
+    e.finish()
+
+  test "[RUN-0838] [IMPL] a record that a live handle reaches is kept and not counted (§7.5 l.1346)":
+    var cfg = config()
+    cfg.endedRoutes = 1
+    let e = newEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let held = rc.routeId("a")
+    var h = rc.handle(held)
+    check rc.close(held).code == ecOk
+    let b = rc.routeId("b")
+    check rc.close(b).code == ecOk
+    let c = rc.routeId("c")
+    check rc.close(c).code == ecOk
+    check e.routes().mapIt(it.route) == @[held, c]
+    # The handle still gets its route's end cause.
+    check h.read(1).error.code == ecNotReady
+    check rc.renew("r", held).code == ecNotReady
+    check rc.renew("r", b).code == ecNotAuthorised
+    # Released, the record joins the ended ones as the newest.
+    h.release()
+    check e.routes().mapIt(it.route) == @[held]
+    check rc.renew("r", c).code == ecNotAuthorised
+    e.finish()
+
+  test "[RUN-0838] [IMPL] a handle stops reaching its record once its attempt's context is destroyed (INTERFACE l.2004-2006)":
+    var cfg = config()
+    cfg.endedRoutes = 0
+    let e = newEngine(cfg)
+    discard e.started(meter())
+    let (c, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("a"))
+    check rc.close(rc.routeId("b")).code == ecOk
+    check e.routes().len == 1
+    check e.stop(c.instance).tryGet.state == msUnloaded
+    check e.routes().len == 0
+    h.release() # nothing reaches it any more; releasing finds no record
     e.finish()
 
 suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)":
@@ -742,7 +821,9 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     e.finish()
 
   test "[IMPL-DECISION G173] a module stopping itself gets the state at once (TF-20)":
-    let e = newEngine(config())
+    var cfg = config()
+    cfg.stopDeadline = initDuration(seconds = 30) # the destroy ends well before
+    let e = newEngine(cfg)
     let (c, rc) = e.startClient()
     clientDestroyGate.store(true)
     let r = rc.lifecycle("stop_module", "client_module", Opt.some(c.instance))

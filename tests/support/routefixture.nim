@@ -188,6 +188,27 @@ proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10): bool =
     sleep(2)
   cond()
 
+var stopReply: Atomic[int] ## the state `stopOn` got, or -1; -2 while it waits
+
+proc stopOn(arg: (Engine, string)) {.thread.} =
+  let r = arg[0].stop(arg[1])
+  stopReply.store(
+    if r.isOk:
+      ord(r.get.state)
+    else:
+      -1
+  )
+
+proc stopping(e: Engine, instance: string, t: var Thread[(Engine, string)]): bool =
+  ## Stops `instance` from `t`, with its destroy held, and waits until it is
+  ## `stopping`. The engine's stop deadline must outlast the caller's checks.
+  stopReply.store(-2)
+  createThread(t, stopOn, (e, instance))
+  waitUntil(
+    proc(): bool =
+      e.view(instance).tryGet.state == msStopping
+  )
+
 proc finish(e: Engine) =
   clientDestroyGate.store(false)
   slowGate.store(false)
