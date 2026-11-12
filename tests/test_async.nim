@@ -620,6 +620,7 @@ suite "run.async: Runtime Control calls (INTERFACE §2.9; RUNTIME §7.5)":
       proc(): bool =
         held.load == before + 1
     )
+    h.release() # the module's own duty; the call outlives it (IFC-0720)
     discard e.stop(c.instance)
     check waitUntil(
       proc(): bool =
