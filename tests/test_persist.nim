@@ -353,9 +353,11 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
       joinThread(t)
       check startReply.load == -1 # MODULE_ERROR: the failure is not written
       setMode(storeOf(base), 0o700)
+      # `error` comes before the abandoned attempt's cleanup ends; a start
+      # until then is NOT_READY.
       check waitUntil(
         proc(): bool =
-          e.view("s").tryGet.state == msError
+          e.view("s").tryGet.state == msError and not e.cleanupPending("s")
       )
       check e.view("s").tryGet.failure.get.kind == fkStartupTimeout
       check e.start("s").tryGet.state == msReady

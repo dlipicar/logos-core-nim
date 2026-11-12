@@ -116,7 +116,7 @@ admitted, and `connOutputBytes` at least `peerFrameLimit` plus `controlReserve`.
 | `maxOutputBytes` (committed output) | loop | 256 MiB | as `connOutputBytes` |
 | `connOutputBytes` | conn | 2 × `peerFrameLimit` + `controlReserve` | Event: overflow (below); success Response: waits, not committed; control frame: the reserve, then ProtocolError `TRANSPORT_ERROR`, close |
 | `controlReserve` (error Responses, SubscriptionResults, the Hello response) | conn | 64 KiB | ProtocolError `TRANSPORT_ERROR` from the final slot, close |
-| `writeStallTimeout` (output pending, no byte written) | conn | 30 s | close without ProtocolError |
+| `writeStallTimeout` (output pending, no byte written; at the deadline a write is tried first, and only a socket that accepts nothing is stalled) | conn | 30 s | close without ProtocolError |
 | `closeLinger` (flushing a final ProtocolError) | conn | 1 s | close without finishing the flush |
 | `terminationDrain` (in-flight work after a session's authorization ends) | conn | 0 s | — |
 | `maxInFlight` (execution slots) | conn | 1024 | the Request waits in the delayed-admission queue |

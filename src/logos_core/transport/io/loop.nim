@@ -3,9 +3,11 @@
 ## and talks to its owner only through values (`api.nim`).
 ##
 ## - `submit` (any thread, never blocks): a `Channel` send, then a
-##   `ThreadSignalPtr` fire. Commands are handled in channel order. Response
-##   and Event payloads count against `maxPendingOutputBytes` from `submit`
-##   until committed or discarded (F8): a full budget is `sbBusy`.
+##   `ThreadSignalPtr` fire. Commands are handled in channel order, in slices
+##   of `DrainSlice`: the I/O that became ready meanwhile (sockets, timers) is
+##   served between slices, so a burst of commands does not hold it back.
+##   Response and Event payloads count against `maxPendingOutputBytes` from
+##   `submit` until committed or discarded (F8): a full budget is `sbBusy`.
 ## - `submitWait` (not on the I/O thread or an owner thread): `submit`,
 ##   waiting while the budget is full, up to an optional bound.
 ## - The sink is called on the I/O thread, in order.
@@ -46,12 +48,16 @@ type
 
   Loop* = ptr LoopObj ## A running transport I/O thread.
 
-const StopTick = 5_000_000'i64 ## [IMPL] 5 ms: polling for the end while stopping
+const
+  StopTick = 5_000_000'i64 ## [IMPL] 5 ms: polling for the end while stopping
+  DrainSlice = 5_000_000'i64
+    ## [IMPL] 5 ms of commands (at least one) per turn of the dispatcher
 
 var
   current {.threadvar.}: Loop
   onIoThread {.threadvar.}: bool
   ownerOf {.threadvar.}: Loop
+  morePending {.threadvar.}: bool ## a `callSoon(onMore)` is queued
 
 proc isIoThread*(): bool =
   ## Whether the calling thread is a transport I/O thread.
@@ -218,12 +224,34 @@ else:
     else:
       discard
 
-proc drain(lp: Loop, io: Io) =
+proc drain(lp: Loop, io: Io, slice = high(int64)): bool =
+  ## Handles queued commands in channel order for about `slice` nanoseconds,
+  ## at least one; true when it stopped with commands possibly left.
+  let start = getMonoTime()
   while true:
     var got = lp.chan.tryRecv()
     if not got.dataAvailable:
-      return
+      return false
     io.handle(move got.msg)
+    if (getMonoTime() - start).inNanoseconds >= slice:
+      return true
+
+proc onMore(arg: pointer) {.gcsafe, raises: [].}
+
+proc drainSlice(lp: Loop, io: Io) =
+  ## [IMPL] One slice; the rest waits for the dispatcher's next turn, after the
+  ## timers and the sockets that became ready meanwhile.
+  if lp.drain(io, DrainSlice) and not io.stopping and not morePending:
+    morePending = true
+    callSoon(onMore, nil)
+
+proc onMore(arg: pointer) {.gcsafe, raises: [].} =
+  morePending = false
+  let lp = current
+  let io = theIo
+  if lp.isNil or io.isNil:
+    return
+  lp.drainSlice(io)
 
 proc onSignal(arg: pointer) {.gcsafe, raises: [].}
 
@@ -235,7 +263,7 @@ proc onSignal(arg: pointer) {.gcsafe, raises: [].} =
   let io = theIo
   if lp.isNil or io.isNil:
     return
-  lp.drain(io)
+  lp.drainSlice(io)
   # While stopping, the tick drains instead, so no wait is left pending on the
   # signal when it is closed.
   if not io.stopping:
@@ -246,7 +274,7 @@ proc onStopTick(arg: pointer) {.gcsafe, raises: [].} =
   let io = theIo
   if lp.isNil or io.isNil:
     return
-  lp.drain(io)
+  discard lp.drain(io)
   discard setTimer(Moment.fromNow(nanoseconds(StopTick)), onStopTick)
 
 proc finished(lp: Loop, io: Io): bool =
@@ -275,7 +303,7 @@ proc run(lp: Loop) =
       discard setTimer(Moment.fromNow(nanoseconds(StopTick)), onStopTick)
   # Commands sent before the last `submit` returned: handled in stopping mode,
   # so each still gets its failure event.
-  lp.drain(io)
+  discard lp.drain(io)
   io.emit(IoEvent(kind: evStopped))
   theIo = nil
   current = nil
