@@ -712,7 +712,10 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     e.finish()
     reset()
     var cfg = config()
-    cfg.startupDeadline = initDuration(milliseconds = 50)
+    # The deadline bounds `m`'s start below too: about 45 ms under
+    # ThreadSanitizer on macOS, past 50 ms under load. `o` never finishes while
+    # the gate is closed, so only the wait grows.
+    cfg.startupDeadline = initDuration(milliseconds = 1000)
     e = newEngine(cfg)
     initGate.store(true)
     r = e.bootstrap(deployment(), "o")
