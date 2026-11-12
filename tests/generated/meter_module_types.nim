@@ -38,59 +38,122 @@ type
 
 proc toCbor*(x: MeterChangedEvent): CborValue
 proc fromChecked*(T: type MeterChangedEvent, v: CborValue): MeterChangedEvent
+proc stepEncMeterChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecMeterChangedEvent*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: MeterReadRequest): CborValue
 proc fromChecked*(T: type MeterReadRequest, v: CborValue): MeterReadRequest
+proc stepEncMeterReadRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecMeterReadRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: MeterReadResponse): CborValue
 proc fromChecked*(T: type MeterReadResponse, v: CborValue): MeterReadResponse
+proc stepEncMeterReadResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecMeterReadResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: MeterReading): CborValue
 proc fromChecked*(T: type MeterReading, v: CborValue): MeterReading
+proc stepEncMeterReading*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecMeterReading*(w: var DecWork, v: CborValue, dst: pointer)
+
+proc stepEncMeterChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr MeterChangedEvent](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("value")
+  node.entries[k].value = cbor(uint64(x.value))
+  inc k
+
+proc stepDecMeterChangedEvent*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr MeterChangedEvent](dst)
+  r[] = MeterChangedEvent()
+  r.value = uint64(v.lookup("value").get.uint)
 
 proc toCbor*(x: MeterChangedEvent): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("value"), cbor(uint64(x.value))))
-  cborMap(e)
+  runEnc(stepEncMeterChangedEvent, addr x)
 
 proc fromChecked*(T: type MeterChangedEvent, v: CborValue): MeterChangedEvent =
-  var r = MeterChangedEvent()
-  r.value = uint64(v.lookup("value").get.uint)
+  var r: MeterChangedEvent
+  runDec(stepDecMeterChangedEvent, v, addr r)
   r
+
+proc stepEncMeterReadRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr MeterReadRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("channel")
+  node.entries[k].value = cbor(uint64(x.channel))
+  inc k
+
+proc stepDecMeterReadRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr MeterReadRequest](dst)
+  r[] = MeterReadRequest()
+  r.channel = uint32(v.lookup("channel").get.uint)
 
 proc toCbor*(x: MeterReadRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("channel"), cbor(uint64(x.channel))))
-  cborMap(e)
+  runEnc(stepEncMeterReadRequest, addr x)
 
 proc fromChecked*(T: type MeterReadRequest, v: CborValue): MeterReadRequest =
-  var r = MeterReadRequest()
-  r.channel = uint32(v.lookup("channel").get.uint)
+  var r: MeterReadRequest
+  runDec(stepDecMeterReadRequest, v, addr r)
   r
+
+proc stepEncMeterReadResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr MeterReadResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("label")
+  node.entries[k].value = cbor(x.label)
+  inc k
+  node.entries[k].key = cbor("reading")
+  w.later(stepEncMeterReading, addr x.reading, addr node.entries[k].value)
+  inc k
+
+proc stepDecMeterReadResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr MeterReadResponse](dst)
+  r[] = MeterReadResponse()
+  r.label = v.lookup("label").get.text
+  let f1 = v.lookup("reading").get
+  w.later(stepDecMeterReading, f1, addr r.reading)
 
 proc toCbor*(x: MeterReadResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("label"), cbor(x.label)))
-  e.add((cbor("reading"), toCbor(x.reading)))
-  cborMap(e)
+  runEnc(stepEncMeterReadResponse, addr x)
 
 proc fromChecked*(T: type MeterReadResponse, v: CborValue): MeterReadResponse =
-  var r = MeterReadResponse()
-  r.label = v.lookup("label").get.text
-  r.reading = fromChecked(MeterReading, v.lookup("reading").get)
+  var r: MeterReadResponse
+  runDec(stepDecMeterReadResponse, v, addr r)
   r
 
-proc toCbor*(x: MeterReading): CborValue =
-  var e: seq[CborEntry]
+proc stepEncMeterReading*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr MeterReading](src)
+  var n = 1
   if x.label.isSome:
-    e.add((cbor("label"), cbor(x.label.get)))
-  e.add((cbor("value"), cbor(uint64(x.value))))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.label.isSome:
+    node.entries[k].key = cbor("label")
+    node.entries[k].value = cbor(x.label.get)
+    inc k
+  node.entries[k].key = cbor("value")
+  node.entries[k].value = cbor(uint64(x.value))
+  inc k
+
+proc stepDecMeterReading*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr MeterReading](dst)
+  r[] = MeterReading()
+  let f2 = v.lookup("label")
+  if f2.isSome:
+    r.label = Opt.some(f2.get.text)
+  r.value = uint64(v.lookup("value").get.uint)
+
+proc toCbor*(x: MeterReading): CborValue =
+  runEnc(stepEncMeterReading, addr x)
 
 proc fromChecked*(T: type MeterReading, v: CborValue): MeterReading =
-  var r = MeterReading()
-  block:
-    let f = v.lookup("label")
-    if f.isSome:
-      r.label = Opt.some(f.get.text)
-  r.value = uint64(v.lookup("value").get.uint)
+  var r: MeterReading
+  runDec(stepDecMeterReading, v, addr r)
   r
 
 proc fromCbor*(T: type MeterChangedEvent, v: CborValue): Result[MeterChangedEvent, string] =

@@ -133,11 +133,22 @@ proc failureOf(v: InstanceView): string =
 
 # Calls on other threads -------------------------------------------------------------
 
-var started: Atomic[int] ## the resulting state's ordinal, or -1 for an error
+var
+  started: Atomic[int] ## the resulting state's ordinal, or -1 for an error
+  stopped: Atomic[int] ## the same, for `stopOn`
 
 proc startOn(arg: (Engine, string)) {.thread.} =
   let r = arg[0].start(arg[1])
   started.store(
+    if r.isOk:
+      ord(r.get.state)
+    else:
+      -1
+  )
+
+proc stopOn(arg: (Engine, string)) {.thread.} =
+  let r = arg[0].stop(arg[1])
+  stopped.store(
     if r.isOk:
       ord(r.get.state)
     else:
@@ -261,35 +272,106 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
       proc(): bool =
         inits.load == 1
     )
+    # [G61] `_MODULE_init` outlives the stop deadline: the cleanup failure is
+    # recorded and nothing is interrupted.
     let s = e.stop("g").tryGet
-    check s.state == msStopping and s.execution.intent == inStopped
+    check s.state == msError and s.failureOf == "cleanup-timeout"
+    check s.execution.intent == inStopped
     joinThread(t)
     check started.load == ord(msStopping)
     initGate.store(false)
     check waitUntil(
       proc(): bool =
-        e.view("g").tryGet.state == msUnloaded
+        destroys.load == 1 and live.load == 0
     )
-    check destroys.load == 1 and live.load == 0
-    check e.view("g").tryGet.failure.isNone
+    # [SPEC RUNTIME l.611] The end of the cleanup does not leave `error`.
+    let after = e.view("g").tryGet
+    check after.state == msError and after.failureOf == "cleanup-timeout"
+    let again = e.stop("g").tryGet
+    check again.state == msUnloaded and again.failure.isNone
     e.finish()
 
   test "[RUN-0359] a start ordered while the instance is stopping fails":
+    var cfg = config()
+    cfg.stopDeadline = initDuration(seconds = 30) # the stop never waits this long
+    let e = newEngine(cfg)
+    discard e.create(gated(), "g").tryGet
+    discard e.start("g").tryGet
+    destroyGate.store(true)
+    var t: Thread[(Engine, string)]
+    stopped.store(-2)
+    createThread(t, stopOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msStopping
+    )
+    let r = e.start("g")
+    check r.isErr and r.error.code == ecNotReady
+    destroyGate.store(false)
+    joinThread(t)
+    check stopped.load == ord(msUnloaded)
+    check inits.load == 1
+    e.finish()
+
+  test "[RUN-0791] [RUN-0792] [RUN-0793] [RUN-1056] [RUN-1072] [RUN-1073] a stop past its deadline records cleanup-timeout and releases nothing [IMPL-DECISION G61] [IMPL-DECISION G180]":
     var cfg = config()
     cfg.stopDeadline = initDuration(milliseconds = 100)
     let e = newEngine(cfg)
     discard e.create(gated(), "g").tryGet
     discard e.start("g").tryGet
+    let before = e.changes()[^1].serial
     destroyGate.store(true)
-    check e.stop("g").tryGet.state == msStopping
+    let s = e.stop("g").tryGet
+    check s.state == msError and s.failureOf == "cleanup-timeout"
+    check s.execution.intent == inStopped
+    check live.load == 1 # destroy is still running; nothing was forced
+    # While the cleanup is unresolved a start is NOT_READY and keeps the
+    # stopped intent.
     let r = e.start("g")
     check r.isErr and r.error.code == ecNotReady
+    check e.view("g").tryGet.execution.intent == inStopped
     destroyGate.store(false)
     check waitUntil(
       proc(): bool =
-        e.view("g").tryGet.state == msUnloaded
+        destroys.load == 1 and live.load == 0
     )
-    check inits.load == 1
+    # The end of the cleanup leaves the instance in `error` with its cause.
+    let v = e.view("g").tryGet
+    check v.state == msError and v.failureOf == "cleanup-timeout"
+    var states: seq[ModuleState]
+    for c in e.changes():
+      if c.serial > before and c.view.instance == "g":
+        states.add(c.view.state)
+    check states.len >= 2 and states[^2] == msStopping and states[^1] == msError
+    # A later stop finds nothing left to clean: `unloaded`, failure cleared.
+    let again = e.stop("g").tryGet
+    check again.state == msUnloaded and again.failure.isNone
+    # And a start is accepted again.
+    check e.start("g").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-0791] [RUN-0793] [IMPL-DECISION G180] a stop during the cleanup a deadline overran completes at its end":
+    var cfg = config()
+    cfg.stopDeadline = initDuration(seconds = 1)
+    let e = newEngine(cfg)
+    discard e.create(gated(), "g").tryGet
+    discard e.start("g").tryGet
+    destroyGate.store(true)
+    check e.stop("g").tryGet.failureOf == "cleanup-timeout"
+    # A new explicit stop starts no second destruction: it waits for the
+    # running one, and its completion makes the instance `unloaded` (l.612).
+    var t: Thread[(Engine, string)]
+    stopped.store(-2)
+    createThread(t, stopOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msStopping
+    )
+    destroyGate.store(false)
+    joinThread(t)
+    check stopped.load == ord(msUnloaded)
+    check destroys.load == 1
+    check e.view("g").tryGet.failure.isNone
     e.finish()
 
   test "[RUN-0352] [RUN-0353] an expected execution revision is compared with acceptance":

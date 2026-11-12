@@ -213,46 +213,88 @@ proc toCbor*(x: ShapesEntry): CborValue
 proc fromChecked*(T: type ShapesEntry, v: CborValue): ShapesEntry
 proc toCbor*(x: ShapesEntryARDirMap): CborValue
 proc fromChecked*(T: type ShapesEntryARDirMap, v: CborValue): ShapesEntryARDirMap
+proc stepEncShapesEntryARDirMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesEntryARDirMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesEntryARFileMap): CborValue
 proc fromChecked*(T: type ShapesEntryARFileMap, v: CborValue): ShapesEntryARFileMap
+proc stepEncShapesEntryARFileMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesEntryARFileMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncShapesEntry*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesEntry*(w: var DecWork, v: CborValue, dst: pointer)
 proc encShapesLeaf*(x: ShapesLeaf): CborValue
 proc decShapesLeaf*(v: CborValue): ShapesLeaf
 proc encShapesNames*(x: ShapesNames): CborValue
 proc decShapesNames*(v: CborValue): ShapesNames
+proc stepEncShapesNames*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesNames*(w: var DecWork, v: CborValue, dst: pointer)
 proc encShapesPair*(x: ShapesPair): CborValue
 proc decShapesPair*(v: CborValue): ShapesPair
+proc stepEncShapesPair*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesPair*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesPickRequest): CborValue
 proc fromChecked*(T: type ShapesPickRequest, v: CborValue): ShapesPickRequest
 proc toCbor*(x: ShapesPickRequestARIdMap): CborValue
 proc fromChecked*(T: type ShapesPickRequestARIdMap, v: CborValue): ShapesPickRequestARIdMap
+proc stepEncShapesPickRequestARIdMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesPickRequestARIdMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesPickRequestARNameMap): CborValue
 proc fromChecked*(T: type ShapesPickRequestARNameMap, v: CborValue): ShapesPickRequestARNameMap
+proc stepEncShapesPickRequestARNameMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesPickRequestARNameMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncShapesPickRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesPickRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesPickResponse): CborValue
 proc fromChecked*(T: type ShapesPickResponse, v: CborValue): ShapesPickResponse
 proc toCbor*(x: ShapesPickResponseARFalseMap): CborValue
 proc fromChecked*(T: type ShapesPickResponseARFalseMap, v: CborValue): ShapesPickResponseARFalseMap
+proc stepEncShapesPickResponseARFalseMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesPickResponseARFalseMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesPickResponseARTrueMap): CborValue
 proc fromChecked*(T: type ShapesPickResponseARTrueMap, v: CborValue): ShapesPickResponseARTrueMap
+proc stepEncShapesPickResponseARTrueMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesPickResponseARTrueMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncShapesPickResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesPickResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesPingRequest): CborValue
 proc fromChecked*(T: type ShapesPingRequest, v: CborValue): ShapesPingRequest
+proc stepEncShapesPingRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesPingRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesPingResponse): CborValue
 proc fromChecked*(T: type ShapesPingResponse, v: CborValue): ShapesPingResponse
+proc stepEncShapesPingResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesPingResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesReflectRequest): CborValue
 proc fromChecked*(T: type ShapesReflectRequest, v: CborValue): ShapesReflectRequest
 proc toCbor*(x: ShapesReflectRequestGChoice): CborValue
 proc fromChecked*(T: type ShapesReflectRequestGChoice, v: CborValue): ShapesReflectRequestGChoice
+proc stepEncShapesReflectRequestGChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesReflectRequestGChoice*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesReflectRequestVMap): CborValue
 proc fromChecked*(T: type ShapesReflectRequestVMap, v: CborValue): ShapesReflectRequestVMap
+proc stepEncShapesReflectRequestVMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesReflectRequestVMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncShapesReflectRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesReflectRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesReflectResponse): CborValue
 proc fromChecked*(T: type ShapesReflectResponse, v: CborValue): ShapesReflectResponse
 proc toCbor*(x: ShapesReflectResponseGChoice): CborValue
 proc fromChecked*(T: type ShapesReflectResponseGChoice, v: CborValue): ShapesReflectResponseGChoice
+proc stepEncShapesReflectResponseGChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesReflectResponseGChoice*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesReflectResponseVMap): CborValue
 proc fromChecked*(T: type ShapesReflectResponseVMap, v: CborValue): ShapesReflectResponseVMap
+proc stepEncShapesReflectResponseVMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesReflectResponseVMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncShapesReflectResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesReflectResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesTree): CborValue
 proc fromChecked*(T: type ShapesTree, v: CborValue): ShapesTree
+proc stepEncShapesTree*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesTree*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: ShapesValue): CborValue
 proc fromChecked*(T: type ShapesValue, v: CborValue): ShapesValue
+proc stepEncShapesValue*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecShapesValue*(w: var DecWork, v: CborValue, dst: pointer)
 
 proc encShapesBlob*(x: ShapesBlob): CborValue =
   cbor(x)
@@ -272,45 +314,93 @@ proc encShapesDigest*(x: ShapesDigest): CborValue =
 proc decShapesDigest*(v: CborValue): ShapesDigest =
   v.bytes
 
+proc stepEncShapesEntryARDirMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesEntryARDirMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("entries")
+  let a1 = newCborArray(x.entries.len)
+  node.entries[k].value = a1
+  for i2 in 0 ..< x.entries.len:
+    a1.items[i2] = cbor(x.entries[i2])
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("dir")
+  inc k
+  node.entries[k].key = cbor("path")
+  node.entries[k].value = cbor(x.path)
+  inc k
+
+proc stepDecShapesEntryARDirMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesEntryARDirMap](dst)
+  r[] = ShapesEntryARDirMap()
+  let f3 = v.lookup("entries").get
+  r.entries.setLen(f3.items.len)
+  for i4 in 0 ..< f3.items.len:
+    r.entries[i4] = f3.items[i4].text
+  r.path = v.lookup("path").get.text
+
 proc toCbor*(x: ShapesEntryARDirMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("entries"), cborArray(x.entries.mapIt(cbor(it)))))
-  e.add((cbor("kind"), cbor("dir")))
-  e.add((cbor("path"), cbor(x.path)))
-  cborMap(e)
+  runEnc(stepEncShapesEntryARDirMap, addr x)
 
 proc fromChecked*(T: type ShapesEntryARDirMap, v: CborValue): ShapesEntryARDirMap =
-  var r = ShapesEntryARDirMap()
-  r.entries = v.lookup("entries").get.items.mapIt(it.text)
-  r.path = v.lookup("path").get.text
+  var r: ShapesEntryARDirMap
+  runDec(stepDecShapesEntryARDirMap, v, addr r)
   r
+
+proc stepEncShapesEntryARFileMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesEntryARFileMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("file")
+  inc k
+  node.entries[k].key = cbor("path")
+  node.entries[k].value = cbor(x.path)
+  inc k
+
+proc stepDecShapesEntryARFileMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesEntryARFileMap](dst)
+  r[] = ShapesEntryARFileMap()
+  r.path = v.lookup("path").get.text
 
 proc toCbor*(x: ShapesEntryARFileMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("kind"), cbor("file")))
-  e.add((cbor("path"), cbor(x.path)))
-  cborMap(e)
+  runEnc(stepEncShapesEntryARFileMap, addr x)
 
 proc fromChecked*(T: type ShapesEntryARFileMap, v: CborValue): ShapesEntryARFileMap =
-  var r = ShapesEntryARFileMap()
-  r.path = v.lookup("path").get.text
+  var r: ShapesEntryARFileMap
+  runDec(stepDecShapesEntryARFileMap, v, addr r)
   r
 
-proc toCbor*(x: ShapesEntry): CborValue =
+proc stepEncShapesEntry*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesEntry](src)
   case x.kind
   of ShapesEntryKind.Dir:
-    toCbor(x.arm_Dir)
+    w.later(stepEncShapesEntryARDirMap, addr x.arm_Dir, addr dst[])
   of ShapesEntryKind.File:
-    toCbor(x.arm_File)
+    w.later(stepEncShapesEntryARFileMap, addr x.arm_File, addr dst[])
 
-proc fromChecked*(T: type ShapesEntry, v: CborValue): ShapesEntry =
+proc stepDecShapesEntry*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesEntry](dst)
   case generatedSchema().arm("shapes.entry#", v)
   of 0:
-    ShapesEntry(kind: ShapesEntryKind.File, arm_File: fromChecked(ShapesEntryARFileMap, v))
+    r[] = ShapesEntry(kind: ShapesEntryKind.File)
+    w.later(stepDecShapesEntryARFileMap, v, addr r.arm_File)
   of 1:
-    ShapesEntry(kind: ShapesEntryKind.Dir, arm_Dir: fromChecked(ShapesEntryARDirMap, v))
+    r[] = ShapesEntry(kind: ShapesEntryKind.Dir)
+    w.later(stepDecShapesEntryARDirMap, v, addr r.arm_Dir)
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: ShapesEntry): CborValue =
+  runEnc(stepEncShapesEntry, addr x)
+
+proc fromChecked*(T: type ShapesEntry, v: CborValue): ShapesEntry =
+  var r: ShapesEntry
+  runDec(stepDecShapesEntry, v, addr r)
+  r
 
 proc encShapesLeaf*(x: ShapesLeaf): CborValue =
   cbor("leaf")
@@ -318,344 +408,764 @@ proc encShapesLeaf*(x: ShapesLeaf): CborValue =
 proc decShapesLeaf*(v: CborValue): ShapesLeaf =
   "leaf"
 
+proc stepEncShapesNames*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x = cast[ptr ShapesNames](src)
+  let a5 = newCborArray(x[].len)
+  dst[] = a5
+  for i6 in 0 ..< x[].len:
+    a5.items[i6] = cbor(x[][i6])
+
+proc stepDecShapesNames*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesNames](dst)
+  r[].setLen(v.items.len)
+  for i7 in 0 ..< v.items.len:
+    r[][i7] = v.items[i7].text
+
 proc encShapesNames*(x: ShapesNames): CborValue =
-  cborArray(x.mapIt(cbor(it)))
+  runEnc(stepEncShapesNames, addr x)
 
 proc decShapesNames*(v: CborValue): ShapesNames =
-  v.items.mapIt(it.text)
+  var r: ShapesNames
+  runDec(stepDecShapesNames, v, addr r)
+  r
+
+proc stepEncShapesPair*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x = cast[ptr ShapesPair](src)
+  let a8 = newCborArray(2)
+  dst[] = a8
+  w.later(stepEncShapesTree, addr x[][0][], addr a8.items[0])
+  a8.items[1] = cbor(uint64(x[][1]))
+
+proc stepDecShapesPair*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesPair](dst)
+  r[][0] = new(ShapesTree)
+  w.later(stepDecShapesTree, v.items[0], addr r[][0][])
+  r[][1] = uint64(v.items[1].uint)
 
 proc encShapesPair*(x: ShapesPair): CborValue =
-  cborArray(toCbor(x[0][]), cbor(uint64(x[1])))
+  runEnc(stepEncShapesPair, addr x)
 
 proc decShapesPair*(v: CborValue): ShapesPair =
-  (boxed(fromChecked(ShapesTree, v.items[0])), uint64(v.items[1].uint))
+  var r: ShapesPair
+  runDec(stepDecShapesPair, v, addr r)
+  r
+
+proc stepEncShapesPickRequestARIdMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesPickRequestARIdMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("by")
+  node.entries[k].value = cbor("id")
+  inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+
+proc stepDecShapesPickRequestARIdMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesPickRequestARIdMap](dst)
+  r[] = ShapesPickRequestARIdMap()
+  r.id = uint64(v.lookup("id").get.uint)
 
 proc toCbor*(x: ShapesPickRequestARIdMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("by"), cbor("id")))
-  e.add((cbor("id"), cbor(uint64(x.id))))
-  cborMap(e)
+  runEnc(stepEncShapesPickRequestARIdMap, addr x)
 
 proc fromChecked*(T: type ShapesPickRequestARIdMap, v: CborValue): ShapesPickRequestARIdMap =
-  var r = ShapesPickRequestARIdMap()
-  r.id = uint64(v.lookup("id").get.uint)
+  var r: ShapesPickRequestARIdMap
+  runDec(stepDecShapesPickRequestARIdMap, v, addr r)
   r
+
+proc stepEncShapesPickRequestARNameMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesPickRequestARNameMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("by")
+  node.entries[k].value = cbor("name")
+  inc k
+  node.entries[k].key = cbor("name")
+  node.entries[k].value = cbor(x.name)
+  inc k
+
+proc stepDecShapesPickRequestARNameMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesPickRequestARNameMap](dst)
+  r[] = ShapesPickRequestARNameMap()
+  r.name = v.lookup("name").get.text
 
 proc toCbor*(x: ShapesPickRequestARNameMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("by"), cbor("name")))
-  e.add((cbor("name"), cbor(x.name)))
-  cborMap(e)
+  runEnc(stepEncShapesPickRequestARNameMap, addr x)
 
 proc fromChecked*(T: type ShapesPickRequestARNameMap, v: CborValue): ShapesPickRequestARNameMap =
-  var r = ShapesPickRequestARNameMap()
-  r.name = v.lookup("name").get.text
+  var r: ShapesPickRequestARNameMap
+  runDec(stepDecShapesPickRequestARNameMap, v, addr r)
   r
 
-proc toCbor*(x: ShapesPickRequest): CborValue =
+proc stepEncShapesPickRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesPickRequest](src)
   case x.kind
   of ShapesPickRequestKind.Id:
-    toCbor(x.arm_Id)
+    w.later(stepEncShapesPickRequestARIdMap, addr x.arm_Id, addr dst[])
   of ShapesPickRequestKind.Name:
-    toCbor(x.arm_Name)
+    w.later(stepEncShapesPickRequestARNameMap, addr x.arm_Name, addr dst[])
 
-proc fromChecked*(T: type ShapesPickRequest, v: CborValue): ShapesPickRequest =
+proc stepDecShapesPickRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesPickRequest](dst)
   case generatedSchema().arm("shapes.pick_request#", v)
   of 0:
-    ShapesPickRequest(kind: ShapesPickRequestKind.Id, arm_Id: fromChecked(ShapesPickRequestARIdMap, v))
+    r[] = ShapesPickRequest(kind: ShapesPickRequestKind.Id)
+    w.later(stepDecShapesPickRequestARIdMap, v, addr r.arm_Id)
   of 1:
-    ShapesPickRequest(kind: ShapesPickRequestKind.Name, arm_Name: fromChecked(ShapesPickRequestARNameMap, v))
+    r[] = ShapesPickRequest(kind: ShapesPickRequestKind.Name)
+    w.later(stepDecShapesPickRequestARNameMap, v, addr r.arm_Name)
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: ShapesPickRequest): CborValue =
+  runEnc(stepEncShapesPickRequest, addr x)
+
+proc fromChecked*(T: type ShapesPickRequest, v: CborValue): ShapesPickRequest =
+  var r: ShapesPickRequest
+  runDec(stepDecShapesPickRequest, v, addr r)
+  r
+
+proc stepEncShapesPickResponseARFalseMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesPickResponseARFalseMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("found")
+  node.entries[k].value = cbor(false)
+  inc k
+
+proc stepDecShapesPickResponseARFalseMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesPickResponseARFalseMap](dst)
+  r[] = ShapesPickResponseARFalseMap()
 
 proc toCbor*(x: ShapesPickResponseARFalseMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("found"), cbor(false)))
-  cborMap(e)
+  runEnc(stepEncShapesPickResponseARFalseMap, addr x)
 
 proc fromChecked*(T: type ShapesPickResponseARFalseMap, v: CborValue): ShapesPickResponseARFalseMap =
-  var r = ShapesPickResponseARFalseMap()
+  var r: ShapesPickResponseARFalseMap
+  runDec(stepDecShapesPickResponseARFalseMap, v, addr r)
   r
+
+proc stepEncShapesPickResponseARTrueMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesPickResponseARTrueMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("entry")
+  w.later(stepEncShapesEntry, addr x.entry, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("found")
+  node.entries[k].value = cbor(true)
+  inc k
+
+proc stepDecShapesPickResponseARTrueMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesPickResponseARTrueMap](dst)
+  r[] = ShapesPickResponseARTrueMap()
+  let f9 = v.lookup("entry").get
+  w.later(stepDecShapesEntry, f9, addr r.entry)
 
 proc toCbor*(x: ShapesPickResponseARTrueMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("entry"), toCbor(x.entry)))
-  e.add((cbor("found"), cbor(true)))
-  cborMap(e)
+  runEnc(stepEncShapesPickResponseARTrueMap, addr x)
 
 proc fromChecked*(T: type ShapesPickResponseARTrueMap, v: CborValue): ShapesPickResponseARTrueMap =
-  var r = ShapesPickResponseARTrueMap()
-  r.entry = fromChecked(ShapesEntry, v.lookup("entry").get)
+  var r: ShapesPickResponseARTrueMap
+  runDec(stepDecShapesPickResponseARTrueMap, v, addr r)
   r
 
-proc toCbor*(x: ShapesPickResponse): CborValue =
+proc stepEncShapesPickResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesPickResponse](src)
   case x.kind
   of ShapesPickResponseKind.False:
-    toCbor(x.arm_False)
+    w.later(stepEncShapesPickResponseARFalseMap, addr x.arm_False, addr dst[])
   of ShapesPickResponseKind.True:
-    toCbor(x.arm_True)
+    w.later(stepEncShapesPickResponseARTrueMap, addr x.arm_True, addr dst[])
 
-proc fromChecked*(T: type ShapesPickResponse, v: CborValue): ShapesPickResponse =
+proc stepDecShapesPickResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesPickResponse](dst)
   case generatedSchema().arm("shapes.pick_response#", v)
   of 0:
-    ShapesPickResponse(kind: ShapesPickResponseKind.False, arm_False: fromChecked(ShapesPickResponseARFalseMap, v))
+    r[] = ShapesPickResponse(kind: ShapesPickResponseKind.False)
+    w.later(stepDecShapesPickResponseARFalseMap, v, addr r.arm_False)
   of 1:
-    ShapesPickResponse(kind: ShapesPickResponseKind.True, arm_True: fromChecked(ShapesPickResponseARTrueMap, v))
+    r[] = ShapesPickResponse(kind: ShapesPickResponseKind.True)
+    w.later(stepDecShapesPickResponseARTrueMap, v, addr r.arm_True)
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: ShapesPickResponse): CborValue =
+  runEnc(stepEncShapesPickResponse, addr x)
+
+proc fromChecked*(T: type ShapesPickResponse, v: CborValue): ShapesPickResponse =
+  var r: ShapesPickResponse
+  runDec(stepDecShapesPickResponse, v, addr r)
+  r
+
+proc stepEncShapesPingRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesPingRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecShapesPingRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesPingRequest](dst)
+  r[] = ShapesPingRequest()
 
 proc toCbor*(x: ShapesPingRequest): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncShapesPingRequest, addr x)
 
 proc fromChecked*(T: type ShapesPingRequest, v: CborValue): ShapesPingRequest =
-  var r = ShapesPingRequest()
+  var r: ShapesPingRequest
+  runDec(stepDecShapesPingRequest, v, addr r)
   r
+
+proc stepEncShapesPingResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesPingResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecShapesPingResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesPingResponse](dst)
+  r[] = ShapesPingResponse()
 
 proc toCbor*(x: ShapesPingResponse): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncShapesPingResponse, addr x)
 
 proc fromChecked*(T: type ShapesPingResponse, v: CborValue): ShapesPingResponse =
-  var r = ShapesPingResponse()
+  var r: ShapesPingResponse
+  runDec(stepDecShapesPingResponse, v, addr r)
   r
 
-proc toCbor*(x: ShapesReflectRequestGChoice): CborValue =
+proc stepEncShapesReflectRequestGChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesReflectRequestGChoice](src)
   case x.kind
   of ShapesReflectRequestGChoiceKind.Tuple1:
-    cborArray(cbor(uint64(x.arm_Tuple1[0])))
+    let a19 = newCborArray(1)
+    dst[] = a19
+    a19.items[0] = cbor(uint64(x.arm_Tuple1[0]))
   of ShapesReflectRequestGChoiceKind.Tuple2:
-    cborArray(cbor(uint64(x.arm_Tuple2[0])), cbor(uint64(x.arm_Tuple2[1])))
+    let a20 = newCborArray(2)
+    dst[] = a20
+    a20.items[0] = cbor(uint64(x.arm_Tuple2[0]))
+    a20.items[1] = cbor(uint64(x.arm_Tuple2[1]))
   of ShapesReflectRequestGChoiceKind.shapes_Value:
-    toCbor(x.arm_shapes_Value)
+    w.later(stepEncShapesValue, addr x.arm_shapes_Value, addr dst[])
 
-proc fromChecked*(T: type ShapesReflectRequestGChoice, v: CborValue): ShapesReflectRequestGChoice =
+proc stepDecShapesReflectRequestGChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesReflectRequestGChoice](dst)
   case generatedSchema().arm("shapes.reflect_request#g", v)
   of 0:
-    ShapesReflectRequestGChoice(kind: ShapesReflectRequestGChoiceKind.Tuple1, arm_Tuple1: (uint64(v.items[0].uint),))
+    r[] = ShapesReflectRequestGChoice(kind: ShapesReflectRequestGChoiceKind.Tuple1)
+    r.arm_Tuple1[0] = uint64(v.items[0].uint)
   of 1:
-    ShapesReflectRequestGChoice(kind: ShapesReflectRequestGChoiceKind.Tuple2, arm_Tuple2: (uint64(v.items[0].uint), uint64(v.items[1].uint)))
+    r[] = ShapesReflectRequestGChoice(kind: ShapesReflectRequestGChoiceKind.Tuple2)
+    r.arm_Tuple2[0] = uint64(v.items[0].uint)
+    r.arm_Tuple2[1] = uint64(v.items[1].uint)
   of 2:
-    ShapesReflectRequestGChoice(kind: ShapesReflectRequestGChoiceKind.shapes_Value, arm_shapes_Value: fromChecked(ShapesValue, v))
+    r[] = ShapesReflectRequestGChoice(kind: ShapesReflectRequestGChoiceKind.shapes_Value)
+    w.later(stepDecShapesValue, v, addr r.arm_shapes_Value)
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: ShapesReflectRequestGChoice): CborValue =
+  runEnc(stepEncShapesReflectRequestGChoice, addr x)
+
+proc fromChecked*(T: type ShapesReflectRequestGChoice, v: CborValue): ShapesReflectRequestGChoice =
+  var r: ShapesReflectRequestGChoice
+  runDec(stepDecShapesReflectRequestGChoice, v, addr r)
+  r
+
+proc stepEncShapesReflectRequestVMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesReflectRequestVMap](src)
+  var n = 1
+  if x.x.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("w")
+  node.entries[k].value = cbor(x.w)
+  inc k
+  if x.x.isSome:
+    node.entries[k].key = cbor("x")
+    node.entries[k].value = cbor(x.x.get)
+    inc k
+
+proc stepDecShapesReflectRequestVMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesReflectRequestVMap](dst)
+  r[] = ShapesReflectRequestVMap()
+  r.w = asBool(v.lookup("w").get)
+  let f32 = v.lookup("x")
+  if f32.isSome:
+    r.x = Opt.some(f32.get.text)
 
 proc toCbor*(x: ShapesReflectRequestVMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("w"), cbor(x.w)))
-  if x.x.isSome:
-    e.add((cbor("x"), cbor(x.x.get)))
-  cborMap(e)
+  runEnc(stepEncShapesReflectRequestVMap, addr x)
 
 proc fromChecked*(T: type ShapesReflectRequestVMap, v: CborValue): ShapesReflectRequestVMap =
-  var r = ShapesReflectRequestVMap()
-  r.w = asBool(v.lookup("w").get)
-  block:
-    let f = v.lookup("x")
-    if f.isSome:
-      r.x = Opt.some(f.get.text)
+  var r: ShapesReflectRequestVMap
+  runDec(stepDecShapesReflectRequestVMap, v, addr r)
   r
+
+proc stepEncShapesReflectRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesReflectRequest](src)
+  var n = 21
+  if x.h.isSome:
+    inc n
+  if x.q.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("a")
+  node.entries[k].value = cbor(7'u64)
+  inc k
+  node.entries[k].key = cbor("b")
+  node.entries[k].value = cbor(int64(x.b))
+  inc k
+  node.entries[k].key = cbor("c")
+  node.entries[k].value = cbor(x.c)
+  inc k
+  node.entries[k].key = cbor("d")
+  node.entries[k].value = cbor(x.d)
+  inc k
+  node.entries[k].key = cbor("e")
+  let a10 = newCborArray(x.e.len)
+  node.entries[k].value = a10
+  for i11 in 0 ..< x.e.len:
+    a10.items[i11] = cbor(x.e[i11])
+  inc k
+  node.entries[k].key = cbor("f")
+  let a14 = newCborArray(x.f.len)
+  node.entries[k].value = a14
+  for i15 in 0 ..< x.f.len:
+    let a16 = newCborArray(2)
+    a14.items[i15] = a16
+    a16.items[0] = cbor(uint64(x.f[i15][0]))
+    a16.items[1] = cbor(x.f[i15][1])
+  inc k
+  node.entries[k].key = cbor("g")
+  w.later(stepEncShapesReflectRequestGChoice, addr x.g, addr node.entries[k].value)
+  inc k
+  if x.h.isSome:
+    node.entries[k].key = cbor("h")
+    let a22 = newCborArray(2)
+    node.entries[k].value = a22
+    a22.items[0] = cbor(uint64(x.h.get[0]))
+    a22.items[1] = cbor(x.h.get[1])
+    inc k
+  node.entries[k].key = cbor("i")
+  w.later(stepEncSchemaCommitment, addr x.i, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("j")
+  node.entries[k].value = cborArray()
+  inc k
+  node.entries[k].key = cbor("l")
+  node.entries[k].value = cbor(x.l)
+  inc k
+  node.entries[k].key = cbor("m")
+  node.entries[k].value = cbor(int64(x.m))
+  inc k
+  node.entries[k].key = cbor("n")
+  node.entries[k].value = cbor(uint64(x.n))
+  inc k
+  node.entries[k].key = cbor("o")
+  node.entries[k].value = encShapesCounter(x.o)
+  inc k
+  node.entries[k].key = cbor("p")
+  node.entries[k].value = cbor(uint64(ord(x.p)))
+  inc k
+  if x.q.isSome:
+    node.entries[k].key = cbor("q")
+    node.entries[k].value = encErrorDetail(x.q.get)
+    inc k
+  node.entries[k].key = cbor("r")
+  w.later(stepEncShapesNames, addr x.r, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("s")
+  node.entries[k].value = cbor(x.s)
+  inc k
+  node.entries[k].key = cbor("t")
+  let a27 = newCborArray(x.t.len)
+  node.entries[k].value = a27
+  for i28 in 0 ..< x.t.len:
+    w.later(stepEncShapesEntry, addr x.t[i28], addr a27.items[i28])
+  inc k
+  node.entries[k].key = cbor("u")
+  w.later(stepEncShapesTree, addr x.u, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("v")
+  w.later(stepEncShapesReflectRequestVMap, addr x.v, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("y")
+  node.entries[k].value = encShapesBlob(x.y)
+  inc k
+  node.entries[k].key = cbor("z")
+  node.entries[k].value = encShapesDigest(x.z)
+  inc k
+
+proc stepDecShapesReflectRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesReflectRequest](dst)
+  r[] = ShapesReflectRequest()
+  r.b = int64(asInt64(v.lookup("b").get))
+  r.c = v.lookup("c").get.text
+  r.d = v.lookup("d").get.bytes
+  let f12 = v.lookup("e").get
+  r.e.setLen(f12.items.len)
+  for i13 in 0 ..< f12.items.len:
+    r.e[i13] = f12.items[i13].bytes
+  let f17 = v.lookup("f").get
+  r.f.setLen(f17.items.len)
+  for i18 in 0 ..< f17.items.len:
+    r.f[i18][0] = uint64(f17.items[i18].items[0].uint)
+    r.f[i18][1] = f17.items[i18].items[1].text
+  let f21 = v.lookup("g").get
+  w.later(stepDecShapesReflectRequestGChoice, f21, addr r.g)
+  let f23 = v.lookup("h")
+  if f23.isSome:
+    r.h = Opt.some(default((uint64, seq[byte])))
+    r.h.get[0] = uint64(f23.get.items[0].uint)
+    r.h.get[1] = f23.get.items[1].bytes
+  let f24 = v.lookup("i").get
+  w.later(stepDecSchemaCommitment, f24, addr r.i)
+  r.j = EmptyTuple()
+  r.l = v.lookup("l").get.bytes
+  r.m = int8(asInt64(v.lookup("m").get))
+  r.n = uint16(v.lookup("n").get.uint)
+  r.o = decShapesCounter(v.lookup("o").get)
+  r.p = ErrorCode(v.lookup("p").get.uint)
+  let f25 = v.lookup("q")
+  if f25.isSome:
+    r.q = Opt.some(decErrorDetail(f25.get))
+  let f26 = v.lookup("r").get
+  w.later(stepDecShapesNames, f26, addr r.r)
+  r.s = v.lookup("s").get.bytes
+  let f29 = v.lookup("t").get
+  r.t.setLen(f29.items.len)
+  for i30 in 0 ..< f29.items.len:
+    w.later(stepDecShapesEntry, f29.items[i30], addr r.t[i30])
+  let f31 = v.lookup("u").get
+  w.later(stepDecShapesTree, f31, addr r.u)
+  let f33 = v.lookup("v").get
+  w.later(stepDecShapesReflectRequestVMap, f33, addr r.v)
+  r.y = decShapesBlob(v.lookup("y").get)
+  r.z = decShapesDigest(v.lookup("z").get)
 
 proc toCbor*(x: ShapesReflectRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("a"), cbor(7'u64)))
-  e.add((cbor("b"), cbor(int64(x.b))))
-  e.add((cbor("c"), cbor(x.c)))
-  e.add((cbor("d"), cbor(x.d)))
-  e.add((cbor("e"), cborArray(x.e.mapIt(cbor(it)))))
-  e.add((cbor("f"), cborArray(x.f.mapIt(cborArray(cbor(uint64(it[0])), cbor(it[1]))))))
-  e.add((cbor("g"), toCbor(x.g)))
-  if x.h.isSome:
-    e.add((cbor("h"), cborArray(cbor(uint64(x.h.get[0])), cbor(x.h.get[1]))))
-  e.add((cbor("i"), toCbor(x.i)))
-  e.add((cbor("j"), cborArray()))
-  e.add((cbor("l"), cbor(x.l)))
-  e.add((cbor("m"), cbor(int64(x.m))))
-  e.add((cbor("n"), cbor(uint64(x.n))))
-  e.add((cbor("o"), encShapesCounter(x.o)))
-  e.add((cbor("p"), cbor(uint64(ord(x.p)))))
-  if x.q.isSome:
-    e.add((cbor("q"), encErrorDetail(x.q.get)))
-  e.add((cbor("r"), encShapesNames(x.r)))
-  e.add((cbor("s"), cbor(x.s)))
-  e.add((cbor("t"), cborArray(x.t.mapIt(toCbor(it)))))
-  e.add((cbor("u"), toCbor(x.u)))
-  e.add((cbor("v"), toCbor(x.v)))
-  e.add((cbor("y"), encShapesBlob(x.y)))
-  e.add((cbor("z"), encShapesDigest(x.z)))
-  cborMap(e)
+  runEnc(stepEncShapesReflectRequest, addr x)
 
 proc fromChecked*(T: type ShapesReflectRequest, v: CborValue): ShapesReflectRequest =
-  var r = ShapesReflectRequest()
-  r.b = int64(asInt64(v.lookup("b").get))
-  r.c = v.lookup("c").get.text
-  r.d = v.lookup("d").get.bytes
-  r.e = v.lookup("e").get.items.mapIt(it.bytes)
-  r.f = v.lookup("f").get.items.mapIt((uint64(it.items[0].uint), it.items[1].text))
-  r.g = fromChecked(ShapesReflectRequestGChoice, v.lookup("g").get)
-  block:
-    let f = v.lookup("h")
-    if f.isSome:
-      r.h = Opt.some((uint64(f.get.items[0].uint), f.get.items[1].bytes))
-  r.i = fromChecked(SchemaCommitment, v.lookup("i").get)
-  r.j = EmptyTuple()
-  r.l = v.lookup("l").get.bytes
-  r.m = int8(asInt64(v.lookup("m").get))
-  r.n = uint16(v.lookup("n").get.uint)
-  r.o = decShapesCounter(v.lookup("o").get)
-  r.p = ErrorCode(v.lookup("p").get.uint)
-  block:
-    let f = v.lookup("q")
-    if f.isSome:
-      r.q = Opt.some(decErrorDetail(f.get))
-  r.r = decShapesNames(v.lookup("r").get)
-  r.s = v.lookup("s").get.bytes
-  r.t = v.lookup("t").get.items.mapIt(fromChecked(ShapesEntry, it))
-  r.u = fromChecked(ShapesTree, v.lookup("u").get)
-  r.v = fromChecked(ShapesReflectRequestVMap, v.lookup("v").get)
-  r.y = decShapesBlob(v.lookup("y").get)
-  r.z = decShapesDigest(v.lookup("z").get)
+  var r: ShapesReflectRequest
+  runDec(stepDecShapesReflectRequest, v, addr r)
   r
 
-proc toCbor*(x: ShapesReflectResponseGChoice): CborValue =
+proc stepEncShapesReflectResponseGChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesReflectResponseGChoice](src)
   case x.kind
   of ShapesReflectResponseGChoiceKind.Tuple1:
-    cborArray(cbor(uint64(x.arm_Tuple1[0])))
+    let a43 = newCborArray(1)
+    dst[] = a43
+    a43.items[0] = cbor(uint64(x.arm_Tuple1[0]))
   of ShapesReflectResponseGChoiceKind.Tuple2:
-    cborArray(cbor(uint64(x.arm_Tuple2[0])), cbor(uint64(x.arm_Tuple2[1])))
+    let a44 = newCborArray(2)
+    dst[] = a44
+    a44.items[0] = cbor(uint64(x.arm_Tuple2[0]))
+    a44.items[1] = cbor(uint64(x.arm_Tuple2[1]))
   of ShapesReflectResponseGChoiceKind.shapes_Value:
-    toCbor(x.arm_shapes_Value)
+    w.later(stepEncShapesValue, addr x.arm_shapes_Value, addr dst[])
 
-proc fromChecked*(T: type ShapesReflectResponseGChoice, v: CborValue): ShapesReflectResponseGChoice =
+proc stepDecShapesReflectResponseGChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesReflectResponseGChoice](dst)
   case generatedSchema().arm("shapes.reflect_response#g", v)
   of 0:
-    ShapesReflectResponseGChoice(kind: ShapesReflectResponseGChoiceKind.Tuple1, arm_Tuple1: (uint64(v.items[0].uint),))
+    r[] = ShapesReflectResponseGChoice(kind: ShapesReflectResponseGChoiceKind.Tuple1)
+    r.arm_Tuple1[0] = uint64(v.items[0].uint)
   of 1:
-    ShapesReflectResponseGChoice(kind: ShapesReflectResponseGChoiceKind.Tuple2, arm_Tuple2: (uint64(v.items[0].uint), uint64(v.items[1].uint)))
+    r[] = ShapesReflectResponseGChoice(kind: ShapesReflectResponseGChoiceKind.Tuple2)
+    r.arm_Tuple2[0] = uint64(v.items[0].uint)
+    r.arm_Tuple2[1] = uint64(v.items[1].uint)
   of 2:
-    ShapesReflectResponseGChoice(kind: ShapesReflectResponseGChoiceKind.shapes_Value, arm_shapes_Value: fromChecked(ShapesValue, v))
+    r[] = ShapesReflectResponseGChoice(kind: ShapesReflectResponseGChoiceKind.shapes_Value)
+    w.later(stepDecShapesValue, v, addr r.arm_shapes_Value)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: ShapesReflectResponseVMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("w"), cbor(x.w)))
-  if x.x.isSome:
-    e.add((cbor("x"), cbor(x.x.get)))
-  cborMap(e)
+proc toCbor*(x: ShapesReflectResponseGChoice): CborValue =
+  runEnc(stepEncShapesReflectResponseGChoice, addr x)
 
-proc fromChecked*(T: type ShapesReflectResponseVMap, v: CborValue): ShapesReflectResponseVMap =
-  var r = ShapesReflectResponseVMap()
-  r.w = asBool(v.lookup("w").get)
-  block:
-    let f = v.lookup("x")
-    if f.isSome:
-      r.x = Opt.some(f.get.text)
+proc fromChecked*(T: type ShapesReflectResponseGChoice, v: CborValue): ShapesReflectResponseGChoice =
+  var r: ShapesReflectResponseGChoice
+  runDec(stepDecShapesReflectResponseGChoice, v, addr r)
   r
 
-proc toCbor*(x: ShapesReflectResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("a"), cbor(7'u64)))
-  e.add((cbor("b"), cbor(int64(x.b))))
-  e.add((cbor("c"), cbor(x.c)))
-  e.add((cbor("d"), cbor(x.d)))
-  e.add((cbor("e"), cborArray(x.e.mapIt(cbor(it)))))
-  e.add((cbor("f"), cborArray(x.f.mapIt(cborArray(cbor(uint64(it[0])), cbor(it[1]))))))
-  e.add((cbor("g"), toCbor(x.g)))
-  if x.h.isSome:
-    e.add((cbor("h"), cborArray(cbor(uint64(x.h.get[0])), cbor(x.h.get[1]))))
-  e.add((cbor("i"), toCbor(x.i)))
-  e.add((cbor("j"), cborArray()))
-  e.add((cbor("l"), cbor(x.l)))
-  e.add((cbor("m"), cbor(int64(x.m))))
-  e.add((cbor("n"), cbor(uint64(x.n))))
-  e.add((cbor("o"), encShapesCounter(x.o)))
-  e.add((cbor("p"), cbor(uint64(ord(x.p)))))
-  if x.q.isSome:
-    e.add((cbor("q"), encErrorDetail(x.q.get)))
-  e.add((cbor("r"), encShapesNames(x.r)))
-  e.add((cbor("s"), cbor(x.s)))
-  e.add((cbor("t"), cborArray(x.t.mapIt(toCbor(it)))))
-  e.add((cbor("u"), toCbor(x.u)))
-  e.add((cbor("v"), toCbor(x.v)))
-  e.add((cbor("y"), encShapesBlob(x.y)))
-  e.add((cbor("z"), encShapesDigest(x.z)))
-  cborMap(e)
+proc stepEncShapesReflectResponseVMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesReflectResponseVMap](src)
+  var n = 1
+  if x.x.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("w")
+  node.entries[k].value = cbor(x.w)
+  inc k
+  if x.x.isSome:
+    node.entries[k].key = cbor("x")
+    node.entries[k].value = cbor(x.x.get)
+    inc k
 
-proc fromChecked*(T: type ShapesReflectResponse, v: CborValue): ShapesReflectResponse =
-  var r = ShapesReflectResponse()
+proc stepDecShapesReflectResponseVMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesReflectResponseVMap](dst)
+  r[] = ShapesReflectResponseVMap()
+  r.w = asBool(v.lookup("w").get)
+  let f56 = v.lookup("x")
+  if f56.isSome:
+    r.x = Opt.some(f56.get.text)
+
+proc toCbor*(x: ShapesReflectResponseVMap): CborValue =
+  runEnc(stepEncShapesReflectResponseVMap, addr x)
+
+proc fromChecked*(T: type ShapesReflectResponseVMap, v: CborValue): ShapesReflectResponseVMap =
+  var r: ShapesReflectResponseVMap
+  runDec(stepDecShapesReflectResponseVMap, v, addr r)
+  r
+
+proc stepEncShapesReflectResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesReflectResponse](src)
+  var n = 21
+  if x.h.isSome:
+    inc n
+  if x.q.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("a")
+  node.entries[k].value = cbor(7'u64)
+  inc k
+  node.entries[k].key = cbor("b")
+  node.entries[k].value = cbor(int64(x.b))
+  inc k
+  node.entries[k].key = cbor("c")
+  node.entries[k].value = cbor(x.c)
+  inc k
+  node.entries[k].key = cbor("d")
+  node.entries[k].value = cbor(x.d)
+  inc k
+  node.entries[k].key = cbor("e")
+  let a34 = newCborArray(x.e.len)
+  node.entries[k].value = a34
+  for i35 in 0 ..< x.e.len:
+    a34.items[i35] = cbor(x.e[i35])
+  inc k
+  node.entries[k].key = cbor("f")
+  let a38 = newCborArray(x.f.len)
+  node.entries[k].value = a38
+  for i39 in 0 ..< x.f.len:
+    let a40 = newCborArray(2)
+    a38.items[i39] = a40
+    a40.items[0] = cbor(uint64(x.f[i39][0]))
+    a40.items[1] = cbor(x.f[i39][1])
+  inc k
+  node.entries[k].key = cbor("g")
+  w.later(stepEncShapesReflectResponseGChoice, addr x.g, addr node.entries[k].value)
+  inc k
+  if x.h.isSome:
+    node.entries[k].key = cbor("h")
+    let a46 = newCborArray(2)
+    node.entries[k].value = a46
+    a46.items[0] = cbor(uint64(x.h.get[0]))
+    a46.items[1] = cbor(x.h.get[1])
+    inc k
+  node.entries[k].key = cbor("i")
+  w.later(stepEncSchemaCommitment, addr x.i, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("j")
+  node.entries[k].value = cborArray()
+  inc k
+  node.entries[k].key = cbor("l")
+  node.entries[k].value = cbor(x.l)
+  inc k
+  node.entries[k].key = cbor("m")
+  node.entries[k].value = cbor(int64(x.m))
+  inc k
+  node.entries[k].key = cbor("n")
+  node.entries[k].value = cbor(uint64(x.n))
+  inc k
+  node.entries[k].key = cbor("o")
+  node.entries[k].value = encShapesCounter(x.o)
+  inc k
+  node.entries[k].key = cbor("p")
+  node.entries[k].value = cbor(uint64(ord(x.p)))
+  inc k
+  if x.q.isSome:
+    node.entries[k].key = cbor("q")
+    node.entries[k].value = encErrorDetail(x.q.get)
+    inc k
+  node.entries[k].key = cbor("r")
+  w.later(stepEncShapesNames, addr x.r, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("s")
+  node.entries[k].value = cbor(x.s)
+  inc k
+  node.entries[k].key = cbor("t")
+  let a51 = newCborArray(x.t.len)
+  node.entries[k].value = a51
+  for i52 in 0 ..< x.t.len:
+    w.later(stepEncShapesEntry, addr x.t[i52], addr a51.items[i52])
+  inc k
+  node.entries[k].key = cbor("u")
+  w.later(stepEncShapesTree, addr x.u, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("v")
+  w.later(stepEncShapesReflectResponseVMap, addr x.v, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("y")
+  node.entries[k].value = encShapesBlob(x.y)
+  inc k
+  node.entries[k].key = cbor("z")
+  node.entries[k].value = encShapesDigest(x.z)
+  inc k
+
+proc stepDecShapesReflectResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesReflectResponse](dst)
+  r[] = ShapesReflectResponse()
   r.b = int64(asInt64(v.lookup("b").get))
   r.c = v.lookup("c").get.text
   r.d = v.lookup("d").get.bytes
-  r.e = v.lookup("e").get.items.mapIt(it.bytes)
-  r.f = v.lookup("f").get.items.mapIt((uint64(it.items[0].uint), it.items[1].text))
-  r.g = fromChecked(ShapesReflectResponseGChoice, v.lookup("g").get)
-  block:
-    let f = v.lookup("h")
-    if f.isSome:
-      r.h = Opt.some((uint64(f.get.items[0].uint), f.get.items[1].bytes))
-  r.i = fromChecked(SchemaCommitment, v.lookup("i").get)
+  let f36 = v.lookup("e").get
+  r.e.setLen(f36.items.len)
+  for i37 in 0 ..< f36.items.len:
+    r.e[i37] = f36.items[i37].bytes
+  let f41 = v.lookup("f").get
+  r.f.setLen(f41.items.len)
+  for i42 in 0 ..< f41.items.len:
+    r.f[i42][0] = uint64(f41.items[i42].items[0].uint)
+    r.f[i42][1] = f41.items[i42].items[1].text
+  let f45 = v.lookup("g").get
+  w.later(stepDecShapesReflectResponseGChoice, f45, addr r.g)
+  let f47 = v.lookup("h")
+  if f47.isSome:
+    r.h = Opt.some(default((uint64, seq[byte])))
+    r.h.get[0] = uint64(f47.get.items[0].uint)
+    r.h.get[1] = f47.get.items[1].bytes
+  let f48 = v.lookup("i").get
+  w.later(stepDecSchemaCommitment, f48, addr r.i)
   r.j = EmptyTuple()
   r.l = v.lookup("l").get.bytes
   r.m = int8(asInt64(v.lookup("m").get))
   r.n = uint16(v.lookup("n").get.uint)
   r.o = decShapesCounter(v.lookup("o").get)
   r.p = ErrorCode(v.lookup("p").get.uint)
-  block:
-    let f = v.lookup("q")
-    if f.isSome:
-      r.q = Opt.some(decErrorDetail(f.get))
-  r.r = decShapesNames(v.lookup("r").get)
+  let f49 = v.lookup("q")
+  if f49.isSome:
+    r.q = Opt.some(decErrorDetail(f49.get))
+  let f50 = v.lookup("r").get
+  w.later(stepDecShapesNames, f50, addr r.r)
   r.s = v.lookup("s").get.bytes
-  r.t = v.lookup("t").get.items.mapIt(fromChecked(ShapesEntry, it))
-  r.u = fromChecked(ShapesTree, v.lookup("u").get)
-  r.v = fromChecked(ShapesReflectResponseVMap, v.lookup("v").get)
+  let f53 = v.lookup("t").get
+  r.t.setLen(f53.items.len)
+  for i54 in 0 ..< f53.items.len:
+    w.later(stepDecShapesEntry, f53.items[i54], addr r.t[i54])
+  let f55 = v.lookup("u").get
+  w.later(stepDecShapesTree, f55, addr r.u)
+  let f57 = v.lookup("v").get
+  w.later(stepDecShapesReflectResponseVMap, f57, addr r.v)
   r.y = decShapesBlob(v.lookup("y").get)
   r.z = decShapesDigest(v.lookup("z").get)
+
+proc toCbor*(x: ShapesReflectResponse): CborValue =
+  runEnc(stepEncShapesReflectResponse, addr x)
+
+proc fromChecked*(T: type ShapesReflectResponse, v: CborValue): ShapesReflectResponse =
+  var r: ShapesReflectResponse
+  runDec(stepDecShapesReflectResponse, v, addr r)
   r
+
+proc stepEncShapesTree*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesTree](src)
+  var n = 2
+  if x.left.isSome:
+    inc n
+  if x.twin.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kids")
+  let a58 = newCborArray(x.kids.len)
+  node.entries[k].value = a58
+  for i59 in 0 ..< x.kids.len:
+    w.later(stepEncShapesTree, addr x.kids[i59], addr a58.items[i59])
+  inc k
+  if x.left.isSome:
+    node.entries[k].key = cbor("left")
+    w.later(stepEncShapesTree, addr x.left.get[], addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("tag")
+  node.entries[k].value = encShapesLeaf(x.tag)
+  inc k
+  if x.twin.isSome:
+    node.entries[k].key = cbor("twin")
+    w.later(stepEncShapesPair, addr x.twin.get[], addr node.entries[k].value)
+    inc k
+
+proc stepDecShapesTree*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesTree](dst)
+  r[] = ShapesTree()
+  let f60 = v.lookup("kids").get
+  r.kids.setLen(f60.items.len)
+  for i61 in 0 ..< f60.items.len:
+    w.later(stepDecShapesTree, f60.items[i61], addr r.kids[i61])
+  let f62 = v.lookup("left")
+  if f62.isSome:
+    r.left = Opt.some(default(ref ShapesTree))
+    r.left.get = new(ShapesTree)
+    w.later(stepDecShapesTree, f62.get, addr r.left.get[])
+  let f63 = v.lookup("twin")
+  if f63.isSome:
+    r.twin = Opt.some(default(ref ShapesPair))
+    r.twin.get = new(ShapesPair)
+    w.later(stepDecShapesPair, f63.get, addr r.twin.get[])
 
 proc toCbor*(x: ShapesTree): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("kids"), cborArray(x.kids.mapIt(toCbor(it)))))
-  if x.left.isSome:
-    e.add((cbor("left"), toCbor(x.left.get[])))
-  e.add((cbor("tag"), encShapesLeaf(x.tag)))
-  if x.twin.isSome:
-    e.add((cbor("twin"), encShapesPair(x.twin.get[])))
-  cborMap(e)
+  runEnc(stepEncShapesTree, addr x)
 
 proc fromChecked*(T: type ShapesTree, v: CborValue): ShapesTree =
-  var r = ShapesTree()
-  r.kids = v.lookup("kids").get.items.mapIt(fromChecked(ShapesTree, it))
-  block:
-    let f = v.lookup("left")
-    if f.isSome:
-      r.left = Opt.some(boxed(fromChecked(ShapesTree, f.get)))
-  block:
-    let f = v.lookup("twin")
-    if f.isSome:
-      r.twin = Opt.some(boxed(decShapesPair(f.get)))
+  var r: ShapesTree
+  runDec(stepDecShapesTree, v, addr r)
   r
 
-proc toCbor*(x: ShapesValue): CborValue =
+proc stepEncShapesValue*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr ShapesValue](src)
   case x.kind
   of ShapesValueKind.Bool:
-    cbor(x.arm_Bool)
+    dst[] = cbor(x.arm_Bool)
   of ShapesValueKind.Tstr:
-    cbor(x.arm_Tstr)
+    dst[] = cbor(x.arm_Tstr)
   of ShapesValueKind.Uint64:
-    cbor(uint64(x.arm_Uint64))
+    dst[] = cbor(uint64(x.arm_Uint64))
 
-proc fromChecked*(T: type ShapesValue, v: CborValue): ShapesValue =
+proc stepDecShapesValue*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr ShapesValue](dst)
   case generatedSchema().arm("shapes.value#", v)
   of 0:
-    ShapesValue(kind: ShapesValueKind.Bool, arm_Bool: asBool(v))
+    r[] = ShapesValue(kind: ShapesValueKind.Bool, arm_Bool: asBool(v))
   of 1:
-    ShapesValue(kind: ShapesValueKind.Tstr, arm_Tstr: v.text)
+    r[] = ShapesValue(kind: ShapesValueKind.Tstr, arm_Tstr: v.text)
   of 2:
-    ShapesValue(kind: ShapesValueKind.Uint64, arm_Uint64: uint64(v.uint))
+    r[] = ShapesValue(kind: ShapesValueKind.Uint64, arm_Uint64: uint64(v.uint))
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: ShapesValue): CborValue =
+  runEnc(stepEncShapesValue, addr x)
+
+proc fromChecked*(T: type ShapesValue, v: CborValue): ShapesValue =
+  var r: ShapesValue
+  runDec(stepDecShapesValue, v, addr r)
+  r
 
 proc fromCbor*(T: type ShapesEntry, v: CborValue): Result[ShapesEntry, string] =
   ## A value checked against `shapes.entry`.

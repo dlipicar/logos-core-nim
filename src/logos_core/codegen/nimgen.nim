@@ -76,6 +76,7 @@ type
     api: seq[string]
     idents: Table[string, string] ## Nim-normalized identifier -> origin
     errors: seq[string]
+    tmp: int
 
 const
   NimKeywords = [
@@ -183,6 +184,26 @@ func literalOf(g: NGen, doc: int, n: SchemaNode): Opt[ScalarData] =
       (cd, cur) = (d, decl.body)
     else:
       return Opt.none(ScalarData)
+
+func scalarRef(g: NGen, doc: int, n: SchemaNode): bool =
+  ## The reference names a scalar: through aliases, a primitive, a literal or
+  ## `logos.error_code`.
+  var (cd, cur) = (doc, n)
+  while true:
+    case cur.kind
+    of snPrimitive, snLiteral:
+      return true
+    of snLocalRef, snImportedRef:
+      let (d, decl) = g.resolve(cd, cur)
+      if g.isErrorCode(d, decl.name):
+        return true
+      (cd, cur) = (d, decl.body)
+    else:
+      return false
+
+proc fresh(g: var NGen, base: string): string =
+  inc g.tmp
+  base & $g.tmp
 
 # Nim spelling ----------------------------------------------------------------------
 
@@ -378,6 +399,169 @@ proc dec(g: NGen, o: Owner, path: seq[Step], n: SchemaNode, v: string): string =
   of snLocalRef, snImportedRef:
     g.refDec(o, path, n, v)
 
+# Steps -----------------------------------------------------------------------------
+#
+# [IMPL] (DECISIONS I79) Each object, and each alias whose body is not a
+# scalar, has an encoding and a decoding step (`nimrt.EncStep`, `DecStep`):
+# `stepEnc<Name>` and `stepDec<Name>`. A step stores scalars at once, sizes
+# every list, tuple and map it makes before filling it, and hands each nested
+# object or container alias to a task with the address of its slot. `toCbor`,
+# `fromChecked` and a container alias's `enc` / `dec` run a step's tasks from a
+# heap list, so their native stack does not grow with the nesting.
+
+func simple(g: NGen, o: Owner, path: seq[Step], n: SchemaNode): bool =
+  ## The node at (`o`, `path`) converts in one expression (`enc`, `dec`), with
+  ## no object or container below it.
+  case n.kind
+  of snPrimitive, snLiteral:
+    true
+  of snTuple:
+    n.items.len == 0
+  of snLocalRef, snImportedRef:
+    choiceKey(o.name, path.keys) notin g.boxed and g.scalarRef(o.doc, n)
+  else:
+    false
+
+proc encInto(
+    g: var NGen,
+    c: var seq[string],
+    ind: int,
+    o: Owner,
+    path: seq[Step],
+    n: SchemaNode,
+    x, slot: string,
+) =
+  ## Statements storing the CBOR value of `x`, an addressable value of the node
+  ## at (`o`, `path`), into `slot`, which stays where it is.
+  template line(s: string) =
+    c.add(spaces(ind) & s)
+
+  if g.simple(o, path, n):
+    line(slot & " = " & g.enc(o, path, n, x))
+    return
+  case n.kind
+  of snMap, snChoice:
+    let name = inlineName(o, path, (if n.kind == snMap: "Map" else: "Choice"))
+    line("w.later(stepEnc" & name & ", addr " & x & ", addr " & slot & ")")
+  of snList:
+    let a = g.fresh("a")
+    let i = g.fresh("i")
+    line("let " & a & " = newCborArray(" & x & ".len)")
+    line(slot & " = " & a)
+    line("for " & i & " in 0 ..< " & x & ".len:")
+    g.encInto(
+      c,
+      ind + 2,
+      o,
+      path & listStep(),
+      n.element,
+      x & "[" & i & "]",
+      a & ".items[" & i & "]",
+    )
+  of snTuple:
+    let a = g.fresh("a")
+    line("let " & a & " = newCborArray(" & $n.items.len & ")")
+    line(slot & " = " & a)
+    for i, item in n.items:
+      g.encInto(
+        c,
+        ind,
+        o,
+        path & tupleStep(i),
+        item,
+        x & "[" & $i & "]",
+        a & ".items[" & $i & "]",
+      )
+  of snLocalRef, snImportedRef:
+    let (d, decl) = g.resolve(o.doc, n)
+    let y =
+      if choiceKey(o.name, path.keys) in g.boxed:
+        x & "[]"
+      else:
+        x
+    line(
+      "w.later(stepEnc" & g.typeNameOf(d, decl.name) & ", addr " & y & ", addr " & slot &
+        ")"
+    )
+  of snPrimitive, snLiteral:
+    discard # simple
+
+proc decInto(
+    g: var NGen,
+    c: var seq[string],
+    ind: int,
+    o: Owner,
+    path: seq[Step],
+    n: SchemaNode,
+    v, dst: string,
+) =
+  ## Statements storing the Nim value of the checked value `v` of the node at
+  ## (`o`, `path`) into `dst`, which stays where it is.
+  template line(s: string) =
+    c.add(spaces(ind) & s)
+
+  if g.simple(o, path, n):
+    line(dst & " = " & g.dec(o, path, n, v))
+    return
+  case n.kind
+  of snMap, snChoice:
+    let name = inlineName(o, path, (if n.kind == snMap: "Map" else: "Choice"))
+    line("w.later(stepDec" & name & ", " & v & ", addr " & dst & ")")
+  of snList:
+    let i = g.fresh("i")
+    line(dst & ".setLen(" & v & ".items.len)")
+    line("for " & i & " in 0 ..< " & v & ".items.len:")
+    g.decInto(
+      c,
+      ind + 2,
+      o,
+      path & listStep(),
+      n.element,
+      v & ".items[" & i & "]",
+      dst & "[" & i & "]",
+    )
+  of snTuple:
+    for i, item in n.items:
+      g.decInto(
+        c,
+        ind,
+        o,
+        path & tupleStep(i),
+        item,
+        v & ".items[" & $i & "]",
+        dst & "[" & $i & "]",
+      )
+  of snLocalRef, snImportedRef:
+    let (d, decl) = g.resolve(o.doc, n)
+    let name = g.typeNameOf(d, decl.name)
+    var target = dst
+    if choiceKey(o.name, path.keys) in g.boxed:
+      line(dst & " = new(" & name & ")")
+      target = dst & "[]"
+    if g.scalarRef(o.doc, n):
+      line(
+        target & " = " & (
+          if g.isErrorCode(d, decl.name): "ErrorCode(" & v & ".uint)"
+          else: "dec" & name & "(" & v & ")"
+        )
+      )
+    else:
+      line("w.later(stepDec" & name & ", " & v & ", addr " & target & ")")
+  of snPrimitive, snLiteral:
+    discard # simple
+
+proc steps(g: var NGen, name, origin: string, enc, dec: seq[string]) =
+  ## The steps of `name` (`enc` and `dec`, their bodies), declared ahead.
+  g.claim("stepEnc" & name, origin)
+  g.claim("stepDec" & name, origin)
+  let encSig =
+    "proc stepEnc" & name & "*(w: var EncWork, src: pointer, dst: ptr CborValue)"
+  let decSig = "proc stepDec" & name & "*(w: var DecWork, v: CborValue, dst: pointer)"
+  g.forwards.add(encSig)
+  g.forwards.add(decSig)
+  g.procs.add(encSig & " =\n" & enc.join("\n"))
+  g.procs.add(decSig & " =\n" & dec.join("\n"))
+
 # Types -----------------------------------------------------------------------------
 
 proc genObject(g: var NGen, o: Owner, path: seq[Step], n: SchemaNode, name: string)
@@ -423,13 +607,14 @@ proc genObject(g: var NGen, o: Owner, path: seq[Step], n: SchemaNode, name: stri
   let key = choiceKey(o.name, path.keys)
   g.forwards.add("proc toCbor*(x: " & name & "): CborValue")
   g.forwards.add("proc fromChecked*(T: type " & name & ", v: CborValue): " & name)
+  var enc = @["  let x {.used.} = cast[ptr " & name & "](src)"]
+  var dec = @["  let r = cast[ptr " & name & "](dst)"]
   if n.kind == snMap:
     var decl = "  " & name & "* = object"
-    var encBody =
-      "proc toCbor*(x: " & name & "): CborValue =\n  var e: seq[CborEntry]\n"
-    var decBody =
-      "proc fromChecked*(T: type " & name & ", v: CborValue): " & name & " =\n  var r = " &
-      name & "()\n"
+    var count = 0
+    var counts: seq[string]
+    var fills: seq[string]
+    dec.add("  r[] = " & name & "()")
     var seen: Table[string, string]
     for f in n.fields:
       let fname = field(f.name)
@@ -442,36 +627,59 @@ proc genObject(g: var NGen, o: Owner, path: seq[Step], n: SchemaNode, name: stri
       let fpath = path & fieldStep(f.name)
       let t = g.typeExpr(o, fpath, f.node)
       let lit = g.literalOf(o.doc, f.node)
+      let entry = "node.entries[k]"
       if f.optional:
         decl.add("\n    " & fname & "*: Opt[" & t & "]")
-        encBody.add(
-          "  if x." & fname & ".isSome:\n    e.add((cbor(" & escape(f.name) & "), " &
-            g.enc(o, fpath, f.node, "x." & fname & ".get") & "))\n"
-        )
-        decBody.add(
-          "  block:\n    let f = v.lookup(" & escape(f.name) &
-            ")\n    if f.isSome:\n      r." & fname & " = Opt.some(" &
-            g.dec(o, fpath, f.node, "f.get") & ")\n"
-        )
+        counts.add("  if x." & fname & ".isSome:\n    inc n")
+        fills.add("  if x." & fname & ".isSome:")
+        fills.add("    " & entry & ".key = cbor(" & escape(f.name) & ")")
+        g.encInto(fills, 4, o, fpath, f.node, "x." & fname & ".get", entry & ".value")
+        fills.add("    inc k")
+        let fv = g.fresh("f")
+        dec.add("  let " & fv & " = v.lookup(" & escape(f.name) & ")")
+        dec.add("  if " & fv & ".isSome:")
+        if g.simple(o, fpath, f.node):
+          dec.add(
+            "    r." & fname & " = Opt.some(" & g.dec(o, fpath, f.node, fv & ".get") &
+              ")"
+          )
+        else:
+          dec.add("    r." & fname & " = Opt.some(default(" & t & "))")
+          g.decInto(dec, 4, o, fpath, f.node, fv & ".get", "r." & fname & ".get")
       else:
+        inc count
         let default =
           if lit.isSome:
             " = " & literalNim(lit.get)
           else:
             ""
         decl.add("\n    " & fname & "*: " & t & default)
-        encBody.add(
-          "  e.add((cbor(" & escape(f.name) & "), " &
-            g.enc(o, fpath, f.node, "x." & fname) & "))\n"
-        )
+        fills.add("  " & entry & ".key = cbor(" & escape(f.name) & ")")
+        g.encInto(fills, 2, o, fpath, f.node, "x." & fname, entry & ".value")
+        fills.add("  inc k")
         if lit.isNone:
-          decBody.add(
-            "  r." & fname & " = " &
-              g.dec(o, fpath, f.node, "v.lookup(" & escape(f.name) & ").get") & "\n"
-          )
+          if g.simple(o, fpath, f.node):
+            dec.add(
+              "  r." & fname & " = " &
+                g.dec(o, fpath, f.node, "v.lookup(" & escape(f.name) & ").get")
+            )
+          else:
+            let fv = g.fresh("f")
+            dec.add("  let " & fv & " = v.lookup(" & escape(f.name) & ").get")
+            g.decInto(dec, 2, o, fpath, f.node, fv, "r." & fname)
     g.types.add(decl)
-    g.procs.add(encBody & "  cborMap(e)")
-    g.procs.add(decBody & "  r")
+    if counts.len > 0:
+      enc.add("  var n = " & $count)
+      enc.add(counts)
+      enc.add("  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))")
+    else:
+      enc.add(
+        "  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](" & $count & "))"
+      )
+    enc.add("  dst[] = node")
+    if fills.len > 0:
+      enc.add("  var k = 0")
+      enc.add(fills)
   else: # choice
     let kind = name & "Kind"
     g.claim(kind, key)
@@ -500,36 +708,46 @@ proc genObject(g: var NGen, o: Owner, path: seq[Step], n: SchemaNode, name: stri
 
     var enumDecl = "  " & kind & "* {.pure.} = enum"
     var decl = "  " & name & "* = object\n    case kind*: " & kind
-    var encBody = "proc toCbor*(x: " & name & "): CborValue =\n  case x.kind\n"
-    var decBody =
-      "proc fromChecked*(T: type " & name & ", v: CborValue): " & name &
-      " =\n  case generatedSchema().arm(" & escape(key) & ", v)\n"
+    enc.add("  case x.kind")
+    dec.add("  case generatedSchema().arm(" & escape(key) & ", v)")
     for i in discriminantOrder(symbolic, steps):
       let a = n.arms[i]
       let m = members[i]
       let field = "arm_" & steps[i]
       enumDecl.add("\n    " & m)
       decl.add("\n    of " & kind & "." & m & ":")
-      encBody.add("  of " & kind & "." & m & ":\n    ")
+      enc.add("  of " & kind & "." & m & ":")
       if a.kind == snLiteral:
         decl.add("\n      discard")
-        encBody.add(g.enc(o, armPath(i), a, "") & "\n")
+        enc.add("    dst[] = " & g.enc(o, armPath(i), a, ""))
       else:
         decl.add("\n      " & field & "*: " & g.typeExpr(o, armPath(i), a))
-        encBody.add(g.enc(o, armPath(i), a, "x." & field) & "\n")
+        g.encInto(enc, 4, o, armPath(i), a, "x." & field, "dst[]")
     for i, a in n.arms:
       let field = "arm_" & steps[i]
-      decBody.add("  of " & $i & ":\n    " & name & "(kind: " & kind & "." & members[i])
+      let made = name & "(kind: " & kind & "." & members[i]
+      dec.add("  of " & $i & ":")
       if a.kind == snLiteral:
-        decBody.add(")\n")
+        dec.add("    r[] = " & made & ")")
+      elif g.simple(o, armPath(i), a):
+        dec.add(
+          "    r[] = " & made & ", " & field & ": " & g.dec(o, armPath(i), a, "v") & ")"
+        )
       else:
-        decBody.add(", " & field & ": " & g.dec(o, armPath(i), a, "v") & ")\n")
+        dec.add("    r[] = " & made & ")")
+        g.decInto(dec, 4, o, armPath(i), a, "v", "r." & field)
+    dec.add("  else:")
+    dec.add("    raiseAssert \"a checked value selects a known arm\"")
     g.types.add(enumDecl)
     g.types.add(decl)
-    g.procs.add(encBody.strip(leading = false))
-    g.procs.add(
-      decBody & "  else:\n    raiseAssert \"a checked value selects a known arm\""
-    )
+  g.steps(name, key, enc, dec)
+  g.procs.add(
+    "proc toCbor*(x: " & name & "): CborValue =\n  runEnc(stepEnc" & name & ", addr x)"
+  )
+  g.procs.add(
+    "proc fromChecked*(T: type " & name & ", v: CborValue): " & name & " =\n  var r: " &
+      name & "\n  runDec(stepDec" & name & ", v, addr r)\n  r"
+  )
 
 proc genDeclaration(g: var NGen, doc: int, d: Declaration) =
   if d.kind == dkMethod or g.isErrorCode(doc, d.name):
@@ -569,14 +787,29 @@ proc genDeclaration(g: var NGen, doc: int, d: Declaration) =
       )
     g.forwards.add("proc enc" & name & "*(x: " & name & "): CborValue")
     g.forwards.add("proc dec" & name & "*(v: CborValue): " & name)
-    g.procs.add(
-      "proc enc" & name & "*(x: " & name & "): CborValue =\n  " &
-        g.enc(o, @[], d.body, "x")
-    )
-    g.procs.add(
-      "proc dec" & name & "*(v: CborValue): " & name & " =\n  " &
-        g.dec(o, @[], d.body, "v")
-    )
+    if g.simple(o, @[], d.body):
+      g.procs.add(
+        "proc enc" & name & "*(x: " & name & "): CborValue =\n  " &
+          g.enc(o, @[], d.body, "x")
+      )
+      g.procs.add(
+        "proc dec" & name & "*(v: CborValue): " & name & " =\n  " &
+          g.dec(o, @[], d.body, "v")
+      )
+    else:
+      var enc = @["  let x = cast[ptr " & name & "](src)"]
+      var dec = @["  let r = cast[ptr " & name & "](dst)"]
+      g.encInto(enc, 2, o, @[], d.body, "x[]", "dst[]")
+      g.decInto(dec, 2, o, @[], d.body, "v", "r[]")
+      g.steps(name, d.name, enc, dec)
+      g.procs.add(
+        "proc enc" & name & "*(x: " & name & "): CborValue =\n  runEnc(stepEnc" & name &
+          ", addr x)"
+      )
+      g.procs.add(
+        "proc dec" & name & "*(v: CborValue): " & name & " =\n  var r: " & name &
+          "\n  runDec(stepDec" & name & ", v, addr r)\n  r"
+      )
 
 # Modules ---------------------------------------------------------------------------
 

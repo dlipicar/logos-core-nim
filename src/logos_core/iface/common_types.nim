@@ -75,20 +75,36 @@ proc encErrorDetail*(x: ErrorDetail): CborValue
 proc decErrorDetail*(v: CborValue): ErrorDetail
 proc toCbor*(x: InvalidParamsDetail): CborValue
 proc fromChecked*(T: type InvalidParamsDetail, v: CborValue): InvalidParamsDetail
+proc stepEncInvalidParamsDetail*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecInvalidParamsDetail*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: InvalidParamsPathSegment): CborValue
 proc fromChecked*(T: type InvalidParamsPathSegment, v: CborValue): InvalidParamsPathSegment
+proc stepEncInvalidParamsPathSegment*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecInvalidParamsPathSegment*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: InvalidParamsReason): CborValue
 proc fromChecked*(T: type InvalidParamsReason, v: CborValue): InvalidParamsReason
+proc stepEncInvalidParamsReason*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecInvalidParamsReason*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: SchemaCommitment): CborValue
 proc fromChecked*(T: type SchemaCommitment, v: CborValue): SchemaCommitment
+proc stepEncSchemaCommitment*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecSchemaCommitment*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: SchemaRequest): CborValue
 proc fromChecked*(T: type SchemaRequest, v: CborValue): SchemaRequest
+proc stepEncSchemaRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecSchemaRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: SchemaResponse): CborValue
 proc fromChecked*(T: type SchemaResponse, v: CborValue): SchemaResponse
 proc toCbor*(x: SchemaResponseInterfaceSchemasLIMap): CborValue
 proc fromChecked*(T: type SchemaResponseInterfaceSchemasLIMap, v: CborValue): SchemaResponseInterfaceSchemasLIMap
+proc stepEncSchemaResponseInterfaceSchemasLIMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecSchemaResponseInterfaceSchemasLIMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: SchemaResponseSupportingSchemasLIMap): CborValue
 proc fromChecked*(T: type SchemaResponseSupportingSchemasLIMap, v: CborValue): SchemaResponseSupportingSchemasLIMap
+proc stepEncSchemaResponseSupportingSchemasLIMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecSchemaResponseSupportingSchemasLIMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncSchemaResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecSchemaResponse*(w: var DecWork, v: CborValue, dst: pointer)
 
 proc encErrorDetail*(x: ErrorDetail): CborValue =
   cbor(x)
@@ -96,123 +112,255 @@ proc encErrorDetail*(x: ErrorDetail): CborValue =
 proc decErrorDetail*(v: CborValue): ErrorDetail =
   v.bytes
 
-proc toCbor*(x: InvalidParamsDetail): CborValue =
-  var e: seq[CborEntry]
+proc stepEncInvalidParamsDetail*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr InvalidParamsDetail](src)
+  var n = 1
   if x.path.isSome:
-    e.add((cbor("path"), cborArray(x.path.get.mapIt(toCbor(it)))))
-  e.add((cbor("reason"), toCbor(x.reason)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.path.isSome:
+    node.entries[k].key = cbor("path")
+    let a1 = newCborArray(x.path.get.len)
+    node.entries[k].value = a1
+    for i2 in 0 ..< x.path.get.len:
+      w.later(stepEncInvalidParamsPathSegment, addr x.path.get[i2], addr a1.items[i2])
+    inc k
+  node.entries[k].key = cbor("reason")
+  w.later(stepEncInvalidParamsReason, addr x.reason, addr node.entries[k].value)
+  inc k
+
+proc stepDecInvalidParamsDetail*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr InvalidParamsDetail](dst)
+  r[] = InvalidParamsDetail()
+  let f3 = v.lookup("path")
+  if f3.isSome:
+    r.path = Opt.some(default(seq[InvalidParamsPathSegment]))
+    r.path.get.setLen(f3.get.items.len)
+    for i4 in 0 ..< f3.get.items.len:
+      w.later(stepDecInvalidParamsPathSegment, f3.get.items[i4], addr r.path.get[i4])
+  let f5 = v.lookup("reason").get
+  w.later(stepDecInvalidParamsReason, f5, addr r.reason)
+
+proc toCbor*(x: InvalidParamsDetail): CborValue =
+  runEnc(stepEncInvalidParamsDetail, addr x)
 
 proc fromChecked*(T: type InvalidParamsDetail, v: CborValue): InvalidParamsDetail =
-  var r = InvalidParamsDetail()
-  block:
-    let f = v.lookup("path")
-    if f.isSome:
-      r.path = Opt.some(f.get.items.mapIt(fromChecked(InvalidParamsPathSegment, it)))
-  r.reason = fromChecked(InvalidParamsReason, v.lookup("reason").get)
+  var r: InvalidParamsDetail
+  runDec(stepDecInvalidParamsDetail, v, addr r)
   r
 
-proc toCbor*(x: InvalidParamsPathSegment): CborValue =
+proc stepEncInvalidParamsPathSegment*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr InvalidParamsPathSegment](src)
   case x.kind
   of InvalidParamsPathSegmentKind.Tstr:
-    cbor(x.arm_Tstr)
+    dst[] = cbor(x.arm_Tstr)
   of InvalidParamsPathSegmentKind.Uint64:
-    cbor(uint64(x.arm_Uint64))
+    dst[] = cbor(uint64(x.arm_Uint64))
 
-proc fromChecked*(T: type InvalidParamsPathSegment, v: CborValue): InvalidParamsPathSegment =
+proc stepDecInvalidParamsPathSegment*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr InvalidParamsPathSegment](dst)
   case generatedSchema().arm("logos.invalid_params_path_segment#", v)
   of 0:
-    InvalidParamsPathSegment(kind: InvalidParamsPathSegmentKind.Tstr, arm_Tstr: v.text)
+    r[] = InvalidParamsPathSegment(kind: InvalidParamsPathSegmentKind.Tstr, arm_Tstr: v.text)
   of 1:
-    InvalidParamsPathSegment(kind: InvalidParamsPathSegmentKind.Uint64, arm_Uint64: uint64(v.uint))
+    r[] = InvalidParamsPathSegment(kind: InvalidParamsPathSegmentKind.Uint64, arm_Uint64: uint64(v.uint))
+  else:
+    raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: InvalidParamsPathSegment): CborValue =
+  runEnc(stepEncInvalidParamsPathSegment, addr x)
+
+proc fromChecked*(T: type InvalidParamsPathSegment, v: CborValue): InvalidParamsPathSegment =
+  var r: InvalidParamsPathSegment
+  runDec(stepDecInvalidParamsPathSegment, v, addr r)
+  r
+
+proc stepEncInvalidParamsReason*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr InvalidParamsReason](src)
+  case x.kind
+  of InvalidParamsReasonKind.Configuration_schema_mismatch:
+    dst[] = cbor("configuration-schema-mismatch")
+  of InvalidParamsReasonKind.Malformed_cbor:
+    dst[] = cbor("malformed-cbor")
+  of InvalidParamsReasonKind.Non_deterministic_cbor:
+    dst[] = cbor("non-deterministic-cbor")
+  of InvalidParamsReasonKind.Schema_mismatch:
+    dst[] = cbor("schema-mismatch")
+
+proc stepDecInvalidParamsReason*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr InvalidParamsReason](dst)
+  case generatedSchema().arm("logos.invalid_params_reason#", v)
+  of 0:
+    r[] = InvalidParamsReason(kind: InvalidParamsReasonKind.Malformed_cbor)
+  of 1:
+    r[] = InvalidParamsReason(kind: InvalidParamsReasonKind.Schema_mismatch)
+  of 2:
+    r[] = InvalidParamsReason(kind: InvalidParamsReasonKind.Non_deterministic_cbor)
+  of 3:
+    r[] = InvalidParamsReason(kind: InvalidParamsReasonKind.Configuration_schema_mismatch)
   else:
     raiseAssert "a checked value selects a known arm"
 
 proc toCbor*(x: InvalidParamsReason): CborValue =
-  case x.kind
-  of InvalidParamsReasonKind.Configuration_schema_mismatch:
-    cbor("configuration-schema-mismatch")
-  of InvalidParamsReasonKind.Malformed_cbor:
-    cbor("malformed-cbor")
-  of InvalidParamsReasonKind.Non_deterministic_cbor:
-    cbor("non-deterministic-cbor")
-  of InvalidParamsReasonKind.Schema_mismatch:
-    cbor("schema-mismatch")
+  runEnc(stepEncInvalidParamsReason, addr x)
 
 proc fromChecked*(T: type InvalidParamsReason, v: CborValue): InvalidParamsReason =
-  case generatedSchema().arm("logos.invalid_params_reason#", v)
-  of 0:
-    InvalidParamsReason(kind: InvalidParamsReasonKind.Malformed_cbor)
-  of 1:
-    InvalidParamsReason(kind: InvalidParamsReasonKind.Schema_mismatch)
-  of 2:
-    InvalidParamsReason(kind: InvalidParamsReasonKind.Non_deterministic_cbor)
-  of 3:
-    InvalidParamsReason(kind: InvalidParamsReasonKind.Configuration_schema_mismatch)
-  else:
-    raiseAssert "a checked value selects a known arm"
+  var r: InvalidParamsReason
+  runDec(stepDecInvalidParamsReason, v, addr r)
+  r
+
+proc stepEncSchemaCommitment*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr SchemaCommitment](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("commitment_model")
+  node.entries[k].value = cbor("logos.commitment-model.2026-10")
+  inc k
+  node.entries[k].key = cbor("hash_profile")
+  node.entries[k].value = cbor("logos.hash-profile.2026-08.choice-index")
+  inc k
+  node.entries[k].key = cbor("hash_suite")
+  node.entries[k].value = cbor("logos.hash-suite.blake3-256")
+  inc k
+  node.entries[k].key = cbor("schema_root")
+  node.entries[k].value = cbor(x.schema_root)
+  inc k
+
+proc stepDecSchemaCommitment*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr SchemaCommitment](dst)
+  r[] = SchemaCommitment()
+  r.schema_root = v.lookup("schema_root").get.bytes
 
 proc toCbor*(x: SchemaCommitment): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("commitment_model"), cbor("logos.commitment-model.2026-10")))
-  e.add((cbor("hash_profile"), cbor("logos.hash-profile.2026-08.choice-index")))
-  e.add((cbor("hash_suite"), cbor("logos.hash-suite.blake3-256")))
-  e.add((cbor("schema_root"), cbor(x.schema_root)))
-  cborMap(e)
+  runEnc(stepEncSchemaCommitment, addr x)
 
 proc fromChecked*(T: type SchemaCommitment, v: CborValue): SchemaCommitment =
-  var r = SchemaCommitment()
-  r.schema_root = v.lookup("schema_root").get.bytes
+  var r: SchemaCommitment
+  runDec(stepDecSchemaCommitment, v, addr r)
   r
+
+proc stepEncSchemaRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr SchemaRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecSchemaRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr SchemaRequest](dst)
+  r[] = SchemaRequest()
 
 proc toCbor*(x: SchemaRequest): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncSchemaRequest, addr x)
 
 proc fromChecked*(T: type SchemaRequest, v: CborValue): SchemaRequest =
-  var r = SchemaRequest()
+  var r: SchemaRequest
+  runDec(stepDecSchemaRequest, v, addr r)
   r
+
+proc stepEncSchemaResponseInterfaceSchemasLIMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr SchemaResponseInterfaceSchemasLIMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("commitment")
+  w.later(stepEncSchemaCommitment, addr x.commitment, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("document")
+  node.entries[k].value = cbor(x.document)
+  inc k
+  node.entries[k].key = cbor("namespace")
+  node.entries[k].value = cbor(x.namespace)
+  inc k
+
+proc stepDecSchemaResponseInterfaceSchemasLIMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr SchemaResponseInterfaceSchemasLIMap](dst)
+  r[] = SchemaResponseInterfaceSchemasLIMap()
+  let f6 = v.lookup("commitment").get
+  w.later(stepDecSchemaCommitment, f6, addr r.commitment)
+  r.document = v.lookup("document").get.text
+  r.namespace = v.lookup("namespace").get.text
 
 proc toCbor*(x: SchemaResponseInterfaceSchemasLIMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("commitment"), toCbor(x.commitment)))
-  e.add((cbor("document"), cbor(x.document)))
-  e.add((cbor("namespace"), cbor(x.namespace)))
-  cborMap(e)
+  runEnc(stepEncSchemaResponseInterfaceSchemasLIMap, addr x)
 
 proc fromChecked*(T: type SchemaResponseInterfaceSchemasLIMap, v: CborValue): SchemaResponseInterfaceSchemasLIMap =
-  var r = SchemaResponseInterfaceSchemasLIMap()
-  r.commitment = fromChecked(SchemaCommitment, v.lookup("commitment").get)
+  var r: SchemaResponseInterfaceSchemasLIMap
+  runDec(stepDecSchemaResponseInterfaceSchemasLIMap, v, addr r)
+  r
+
+proc stepEncSchemaResponseSupportingSchemasLIMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr SchemaResponseSupportingSchemasLIMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("commitment")
+  w.later(stepEncSchemaCommitment, addr x.commitment, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("document")
+  node.entries[k].value = cbor(x.document)
+  inc k
+  node.entries[k].key = cbor("namespace")
+  node.entries[k].value = cbor(x.namespace)
+  inc k
+
+proc stepDecSchemaResponseSupportingSchemasLIMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr SchemaResponseSupportingSchemasLIMap](dst)
+  r[] = SchemaResponseSupportingSchemasLIMap()
+  let f11 = v.lookup("commitment").get
+  w.later(stepDecSchemaCommitment, f11, addr r.commitment)
   r.document = v.lookup("document").get.text
   r.namespace = v.lookup("namespace").get.text
-  r
 
 proc toCbor*(x: SchemaResponseSupportingSchemasLIMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("commitment"), toCbor(x.commitment)))
-  e.add((cbor("document"), cbor(x.document)))
-  e.add((cbor("namespace"), cbor(x.namespace)))
-  cborMap(e)
+  runEnc(stepEncSchemaResponseSupportingSchemasLIMap, addr x)
 
 proc fromChecked*(T: type SchemaResponseSupportingSchemasLIMap, v: CborValue): SchemaResponseSupportingSchemasLIMap =
-  var r = SchemaResponseSupportingSchemasLIMap()
-  r.commitment = fromChecked(SchemaCommitment, v.lookup("commitment").get)
-  r.document = v.lookup("document").get.text
-  r.namespace = v.lookup("namespace").get.text
+  var r: SchemaResponseSupportingSchemasLIMap
+  runDec(stepDecSchemaResponseSupportingSchemasLIMap, v, addr r)
   r
 
+proc stepEncSchemaResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr SchemaResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("interface_schemas")
+  let a7 = newCborArray(x.interface_schemas.len)
+  node.entries[k].value = a7
+  for i8 in 0 ..< x.interface_schemas.len:
+    w.later(stepEncSchemaResponseInterfaceSchemasLIMap, addr x.interface_schemas[i8], addr a7.items[i8])
+  inc k
+  node.entries[k].key = cbor("schema")
+  node.entries[k].value = cbor(x.schema)
+  inc k
+  node.entries[k].key = cbor("supporting_schemas")
+  let a12 = newCborArray(x.supporting_schemas.len)
+  node.entries[k].value = a12
+  for i13 in 0 ..< x.supporting_schemas.len:
+    w.later(stepEncSchemaResponseSupportingSchemasLIMap, addr x.supporting_schemas[i13], addr a12.items[i13])
+  inc k
+
+proc stepDecSchemaResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr SchemaResponse](dst)
+  r[] = SchemaResponse()
+  let f9 = v.lookup("interface_schemas").get
+  r.interface_schemas.setLen(f9.items.len)
+  for i10 in 0 ..< f9.items.len:
+    w.later(stepDecSchemaResponseInterfaceSchemasLIMap, f9.items[i10], addr r.interface_schemas[i10])
+  r.schema = v.lookup("schema").get.text
+  let f14 = v.lookup("supporting_schemas").get
+  r.supporting_schemas.setLen(f14.items.len)
+  for i15 in 0 ..< f14.items.len:
+    w.later(stepDecSchemaResponseSupportingSchemasLIMap, f14.items[i15], addr r.supporting_schemas[i15])
+
 proc toCbor*(x: SchemaResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("interface_schemas"), cborArray(x.interface_schemas.mapIt(toCbor(it)))))
-  e.add((cbor("schema"), cbor(x.schema)))
-  e.add((cbor("supporting_schemas"), cborArray(x.supporting_schemas.mapIt(toCbor(it)))))
-  cborMap(e)
+  runEnc(stepEncSchemaResponse, addr x)
 
 proc fromChecked*(T: type SchemaResponse, v: CborValue): SchemaResponse =
-  var r = SchemaResponse()
-  r.interface_schemas = v.lookup("interface_schemas").get.items.mapIt(fromChecked(SchemaResponseInterfaceSchemasLIMap, it))
-  r.schema = v.lookup("schema").get.text
-  r.supporting_schemas = v.lookup("supporting_schemas").get.items.mapIt(fromChecked(SchemaResponseSupportingSchemasLIMap, it))
+  var r: SchemaResponse
+  runDec(stepDecSchemaResponse, v, addr r)
   r
 
 proc fromCbor*(T: type InvalidParamsDetail, v: CborValue): Result[InvalidParamsDetail, string] =

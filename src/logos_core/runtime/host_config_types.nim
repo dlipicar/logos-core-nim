@@ -108,107 +108,226 @@ type
 
 proc toCbor*(x: LcnAppArtifact): CborValue
 proc fromChecked*(T: type LcnAppArtifact, v: CborValue): LcnAppArtifact
+proc stepEncLcnAppArtifact*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppArtifact*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnAppConfig): CborValue
 proc fromChecked*(T: type LcnAppConfig, v: CborValue): LcnAppConfig
+proc stepEncLcnAppConfig*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppConfig*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnAppImplementation): CborValue
 proc fromChecked*(T: type LcnAppImplementation, v: CborValue): LcnAppImplementation
 proc toCbor*(x: LcnAppImplementationARDirectDynamicMap): CborValue
 proc fromChecked*(T: type LcnAppImplementationARDirectDynamicMap, v: CborValue): LcnAppImplementationARDirectDynamicMap
+proc stepEncLcnAppImplementationARDirectDynamicMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppImplementationARDirectDynamicMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnAppImplementationARDirectStaticMap): CborValue
 proc fromChecked*(T: type LcnAppImplementationARDirectStaticMap, v: CborValue): LcnAppImplementationARDirectStaticMap
+proc stepEncLcnAppImplementationARDirectStaticMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppImplementationARDirectStaticMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLcnAppImplementation*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppImplementation*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLcnAppInstanceId*(x: LcnAppInstanceId): CborValue
 proc decLcnAppInstanceId*(v: CborValue): LcnAppInstanceId
 proc toCbor*(x: LcnAppModule): CborValue
 proc fromChecked*(T: type LcnAppModule, v: CborValue): LcnAppModule
+proc stepEncLcnAppModule*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppModule*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnAppOrdering): CborValue
 proc fromChecked*(T: type LcnAppOrdering, v: CborValue): LcnAppOrdering
+proc stepEncLcnAppOrdering*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppOrdering*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLcnAppPath*(x: LcnAppPath): CborValue
 proc decLcnAppPath*(v: CborValue): LcnAppPath
 proc toCbor*(x: LcnAppPermission): CborValue
 proc fromChecked*(T: type LcnAppPermission, v: CborValue): LcnAppPermission
+proc stepEncLcnAppPermission*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppPermission*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnAppPolicy): CborValue
 proc fromChecked*(T: type LcnAppPolicy, v: CborValue): LcnAppPolicy
+proc stepEncLcnAppPolicy*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppPolicy*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnAppRequirement): CborValue
 proc fromChecked*(T: type LcnAppRequirement, v: CborValue): LcnAppRequirement
 proc toCbor*(x: LcnAppRequirementCardinalityChoice): CborValue
 proc fromChecked*(T: type LcnAppRequirementCardinalityChoice, v: CborValue): LcnAppRequirementCardinalityChoice
+proc stepEncLcnAppRequirementCardinalityChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppRequirementCardinalityChoice*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLcnAppRequirement*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppRequirement*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnAppRuntime): CborValue
 proc fromChecked*(T: type LcnAppRuntime, v: CborValue): LcnAppRuntime
+proc stepEncLcnAppRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppRuntime*(w: var DecWork, v: CborValue, dst: pointer)
 
-proc toCbor*(x: LcnAppArtifact): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("hash"), cbor(x.hash)))
-  e.add((cbor("hash_suite"), cbor("logos.hash-suite.blake3-256")))
-  e.add((cbor("id"), cbor(x.id)))
-  e.add((cbor("local_path"), encLcnAppPath(x.local_path)))
-  cborMap(e)
+proc stepEncLcnAppArtifact*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppArtifact](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("hash")
+  node.entries[k].value = cbor(x.hash)
+  inc k
+  node.entries[k].key = cbor("hash_suite")
+  node.entries[k].value = cbor("logos.hash-suite.blake3-256")
+  inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(x.id)
+  inc k
+  node.entries[k].key = cbor("local_path")
+  node.entries[k].value = encLcnAppPath(x.local_path)
+  inc k
 
-proc fromChecked*(T: type LcnAppArtifact, v: CborValue): LcnAppArtifact =
-  var r = LcnAppArtifact()
+proc stepDecLcnAppArtifact*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppArtifact](dst)
+  r[] = LcnAppArtifact()
   r.hash = v.lookup("hash").get.bytes
   r.id = v.lookup("id").get.text
   r.local_path = decLcnAppPath(v.lookup("local_path").get)
+
+proc toCbor*(x: LcnAppArtifact): CborValue =
+  runEnc(stepEncLcnAppArtifact, addr x)
+
+proc fromChecked*(T: type LcnAppArtifact, v: CborValue): LcnAppArtifact =
+  var r: LcnAppArtifact
+  runDec(stepDecLcnAppArtifact, v, addr r)
   r
+
+proc stepEncLcnAppConfig*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppConfig](src)
+  var n = 4
+  if x.ordering.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("modules")
+  let a1 = newCborArray(x.modules.len)
+  node.entries[k].value = a1
+  for i2 in 0 ..< x.modules.len:
+    w.later(stepEncLcnAppModule, addr x.modules[i2], addr a1.items[i2])
+  inc k
+  node.entries[k].key = cbor("orchestration")
+  node.entries[k].value = encLcnAppInstanceId(x.orchestration)
+  inc k
+  if x.ordering.isSome:
+    node.entries[k].key = cbor("ordering")
+    let a5 = newCborArray(x.ordering.get.len)
+    node.entries[k].value = a5
+    for i6 in 0 ..< x.ordering.get.len:
+      w.later(stepEncLcnAppOrdering, addr x.ordering.get[i6], addr a5.items[i6])
+    inc k
+  node.entries[k].key = cbor("policy")
+  w.later(stepEncLcnAppPolicy, addr x.policy, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("runtime")
+  w.later(stepEncLcnAppRuntime, addr x.runtime, addr node.entries[k].value)
+  inc k
+
+proc stepDecLcnAppConfig*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppConfig](dst)
+  r[] = LcnAppConfig()
+  let f3 = v.lookup("modules").get
+  r.modules.setLen(f3.items.len)
+  for i4 in 0 ..< f3.items.len:
+    w.later(stepDecLcnAppModule, f3.items[i4], addr r.modules[i4])
+  r.orchestration = decLcnAppInstanceId(v.lookup("orchestration").get)
+  let f7 = v.lookup("ordering")
+  if f7.isSome:
+    r.ordering = Opt.some(default(seq[LcnAppOrdering]))
+    r.ordering.get.setLen(f7.get.items.len)
+    for i8 in 0 ..< f7.get.items.len:
+      w.later(stepDecLcnAppOrdering, f7.get.items[i8], addr r.ordering.get[i8])
+  let f9 = v.lookup("policy").get
+  w.later(stepDecLcnAppPolicy, f9, addr r.policy)
+  let f10 = v.lookup("runtime").get
+  w.later(stepDecLcnAppRuntime, f10, addr r.runtime)
 
 proc toCbor*(x: LcnAppConfig): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("modules"), cborArray(x.modules.mapIt(toCbor(it)))))
-  e.add((cbor("orchestration"), encLcnAppInstanceId(x.orchestration)))
-  if x.ordering.isSome:
-    e.add((cbor("ordering"), cborArray(x.ordering.get.mapIt(toCbor(it)))))
-  e.add((cbor("policy"), toCbor(x.policy)))
-  e.add((cbor("runtime"), toCbor(x.runtime)))
-  cborMap(e)
+  runEnc(stepEncLcnAppConfig, addr x)
 
 proc fromChecked*(T: type LcnAppConfig, v: CborValue): LcnAppConfig =
-  var r = LcnAppConfig()
-  r.modules = v.lookup("modules").get.items.mapIt(fromChecked(LcnAppModule, it))
-  r.orchestration = decLcnAppInstanceId(v.lookup("orchestration").get)
-  block:
-    let f = v.lookup("ordering")
-    if f.isSome:
-      r.ordering = Opt.some(f.get.items.mapIt(fromChecked(LcnAppOrdering, it)))
-  r.policy = fromChecked(LcnAppPolicy, v.lookup("policy").get)
-  r.runtime = fromChecked(LcnAppRuntime, v.lookup("runtime").get)
+  var r: LcnAppConfig
+  runDec(stepDecLcnAppConfig, v, addr r)
   r
+
+proc stepEncLcnAppImplementationARDirectDynamicMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppImplementationARDirectDynamicMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("artifact")
+  w.later(stepEncLcnAppArtifact, addr x.artifact, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("strategy")
+  node.entries[k].value = cbor("direct_dynamic")
+  inc k
+
+proc stepDecLcnAppImplementationARDirectDynamicMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppImplementationARDirectDynamicMap](dst)
+  r[] = LcnAppImplementationARDirectDynamicMap()
+  let f11 = v.lookup("artifact").get
+  w.later(stepDecLcnAppArtifact, f11, addr r.artifact)
 
 proc toCbor*(x: LcnAppImplementationARDirectDynamicMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("artifact"), toCbor(x.artifact)))
-  e.add((cbor("strategy"), cbor("direct_dynamic")))
-  cborMap(e)
+  runEnc(stepEncLcnAppImplementationARDirectDynamicMap, addr x)
 
 proc fromChecked*(T: type LcnAppImplementationARDirectDynamicMap, v: CborValue): LcnAppImplementationARDirectDynamicMap =
-  var r = LcnAppImplementationARDirectDynamicMap()
-  r.artifact = fromChecked(LcnAppArtifact, v.lookup("artifact").get)
+  var r: LcnAppImplementationARDirectDynamicMap
+  runDec(stepDecLcnAppImplementationARDirectDynamicMap, v, addr r)
   r
+
+proc stepEncLcnAppImplementationARDirectStaticMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppImplementationARDirectStaticMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("binding")
+  node.entries[k].value = cbor(x.binding)
+  inc k
+  node.entries[k].key = cbor("strategy")
+  node.entries[k].value = cbor("direct_static")
+  inc k
+
+proc stepDecLcnAppImplementationARDirectStaticMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppImplementationARDirectStaticMap](dst)
+  r[] = LcnAppImplementationARDirectStaticMap()
+  r.binding = v.lookup("binding").get.text
 
 proc toCbor*(x: LcnAppImplementationARDirectStaticMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("binding"), cbor(x.binding)))
-  e.add((cbor("strategy"), cbor("direct_static")))
-  cborMap(e)
+  runEnc(stepEncLcnAppImplementationARDirectStaticMap, addr x)
 
 proc fromChecked*(T: type LcnAppImplementationARDirectStaticMap, v: CborValue): LcnAppImplementationARDirectStaticMap =
-  var r = LcnAppImplementationARDirectStaticMap()
-  r.binding = v.lookup("binding").get.text
+  var r: LcnAppImplementationARDirectStaticMap
+  runDec(stepDecLcnAppImplementationARDirectStaticMap, v, addr r)
   r
 
-proc toCbor*(x: LcnAppImplementation): CborValue =
+proc stepEncLcnAppImplementation*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppImplementation](src)
   case x.kind
   of LcnAppImplementationKind.Direct_dynamic:
-    toCbor(x.arm_Direct_dynamic)
+    w.later(stepEncLcnAppImplementationARDirectDynamicMap, addr x.arm_Direct_dynamic, addr dst[])
   of LcnAppImplementationKind.Direct_static:
-    toCbor(x.arm_Direct_static)
+    w.later(stepEncLcnAppImplementationARDirectStaticMap, addr x.arm_Direct_static, addr dst[])
 
-proc fromChecked*(T: type LcnAppImplementation, v: CborValue): LcnAppImplementation =
+proc stepDecLcnAppImplementation*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppImplementation](dst)
   case generatedSchema().arm("lcn.app_implementation#", v)
   of 0:
-    LcnAppImplementation(kind: LcnAppImplementationKind.Direct_static, arm_Direct_static: fromChecked(LcnAppImplementationARDirectStaticMap, v))
+    r[] = LcnAppImplementation(kind: LcnAppImplementationKind.Direct_static)
+    w.later(stepDecLcnAppImplementationARDirectStaticMap, v, addr r.arm_Direct_static)
   of 1:
-    LcnAppImplementation(kind: LcnAppImplementationKind.Direct_dynamic, arm_Direct_dynamic: fromChecked(LcnAppImplementationARDirectDynamicMap, v))
+    r[] = LcnAppImplementation(kind: LcnAppImplementationKind.Direct_dynamic)
+    w.later(stepDecLcnAppImplementationARDirectDynamicMap, v, addr r.arm_Direct_dynamic)
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: LcnAppImplementation): CborValue =
+  runEnc(stepEncLcnAppImplementation, addr x)
+
+proc fromChecked*(T: type LcnAppImplementation, v: CborValue): LcnAppImplementation =
+  var r: LcnAppImplementation
+  runDec(stepDecLcnAppImplementation, v, addr r)
+  r
 
 proc encLcnAppInstanceId*(x: LcnAppInstanceId): CborValue =
   cbor(x)
@@ -216,60 +335,126 @@ proc encLcnAppInstanceId*(x: LcnAppInstanceId): CborValue =
 proc decLcnAppInstanceId*(v: CborValue): LcnAppInstanceId =
   v.text
 
-proc toCbor*(x: LcnAppModule): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("implementation"), toCbor(x.implementation)))
+proc stepEncLcnAppModule*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppModule](src)
+  var n = 3
   if x.implements.isSome:
-    e.add((cbor("implements"), cborArray(x.implements.get.mapIt(toCbor(it)))))
-  e.add((cbor("instance"), encLcnAppInstanceId(x.instance)))
-  e.add((cbor("module"), cbor(x.module)))
+    inc n
   if x.primary_contract.isSome:
-    e.add((cbor("primary_contract"), toCbor(x.primary_contract.get)))
+    inc n
   if x.requested_permissions.isSome:
-    e.add((cbor("requested_permissions"), cborArray(x.requested_permissions.get.mapIt(toCbor(it)))))
+    inc n
   if x.requires.isSome:
-    e.add((cbor("requires"), cborArray(x.requires.get.mapIt(toCbor(it)))))
+    inc n
   if x.state_assignment.isSome:
-    e.add((cbor("state_assignment"), cbor(x.state_assignment.get)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("implementation")
+  w.later(stepEncLcnAppImplementation, addr x.implementation, addr node.entries[k].value)
+  inc k
+  if x.implements.isSome:
+    node.entries[k].key = cbor("implements")
+    let a13 = newCborArray(x.implements.get.len)
+    node.entries[k].value = a13
+    for i14 in 0 ..< x.implements.get.len:
+      w.later(stepEncSchemaCommitment, addr x.implements.get[i14], addr a13.items[i14])
+    inc k
+  node.entries[k].key = cbor("instance")
+  node.entries[k].value = encLcnAppInstanceId(x.instance)
+  inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = cbor(x.module)
+  inc k
+  if x.primary_contract.isSome:
+    node.entries[k].key = cbor("primary_contract")
+    w.later(stepEncSchemaCommitment, addr x.primary_contract.get, addr node.entries[k].value)
+    inc k
+  if x.requested_permissions.isSome:
+    node.entries[k].key = cbor("requested_permissions")
+    let a18 = newCborArray(x.requested_permissions.get.len)
+    node.entries[k].value = a18
+    for i19 in 0 ..< x.requested_permissions.get.len:
+      w.later(stepEncLcnAppPermission, addr x.requested_permissions.get[i19], addr a18.items[i19])
+    inc k
+  if x.requires.isSome:
+    node.entries[k].key = cbor("requires")
+    let a22 = newCborArray(x.requires.get.len)
+    node.entries[k].value = a22
+    for i23 in 0 ..< x.requires.get.len:
+      w.later(stepEncLcnAppRequirement, addr x.requires.get[i23], addr a22.items[i23])
+    inc k
+  if x.state_assignment.isSome:
+    node.entries[k].key = cbor("state_assignment")
+    node.entries[k].value = cbor(x.state_assignment.get)
+    inc k
 
-proc fromChecked*(T: type LcnAppModule, v: CborValue): LcnAppModule =
-  var r = LcnAppModule()
-  r.implementation = fromChecked(LcnAppImplementation, v.lookup("implementation").get)
-  block:
-    let f = v.lookup("implements")
-    if f.isSome:
-      r.implements = Opt.some(f.get.items.mapIt(fromChecked(SchemaCommitment, it)))
+proc stepDecLcnAppModule*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppModule](dst)
+  r[] = LcnAppModule()
+  let f12 = v.lookup("implementation").get
+  w.later(stepDecLcnAppImplementation, f12, addr r.implementation)
+  let f15 = v.lookup("implements")
+  if f15.isSome:
+    r.implements = Opt.some(default(seq[SchemaCommitment]))
+    r.implements.get.setLen(f15.get.items.len)
+    for i16 in 0 ..< f15.get.items.len:
+      w.later(stepDecSchemaCommitment, f15.get.items[i16], addr r.implements.get[i16])
   r.instance = decLcnAppInstanceId(v.lookup("instance").get)
   r.module = v.lookup("module").get.text
-  block:
-    let f = v.lookup("primary_contract")
-    if f.isSome:
-      r.primary_contract = Opt.some(fromChecked(SchemaCommitment, f.get))
-  block:
-    let f = v.lookup("requested_permissions")
-    if f.isSome:
-      r.requested_permissions = Opt.some(f.get.items.mapIt(fromChecked(LcnAppPermission, it)))
-  block:
-    let f = v.lookup("requires")
-    if f.isSome:
-      r.requires = Opt.some(f.get.items.mapIt(fromChecked(LcnAppRequirement, it)))
-  block:
-    let f = v.lookup("state_assignment")
-    if f.isSome:
-      r.state_assignment = Opt.some(f.get.text)
+  let f17 = v.lookup("primary_contract")
+  if f17.isSome:
+    r.primary_contract = Opt.some(default(SchemaCommitment))
+    w.later(stepDecSchemaCommitment, f17.get, addr r.primary_contract.get)
+  let f20 = v.lookup("requested_permissions")
+  if f20.isSome:
+    r.requested_permissions = Opt.some(default(seq[LcnAppPermission]))
+    r.requested_permissions.get.setLen(f20.get.items.len)
+    for i21 in 0 ..< f20.get.items.len:
+      w.later(stepDecLcnAppPermission, f20.get.items[i21], addr r.requested_permissions.get[i21])
+  let f24 = v.lookup("requires")
+  if f24.isSome:
+    r.requires = Opt.some(default(seq[LcnAppRequirement]))
+    r.requires.get.setLen(f24.get.items.len)
+    for i25 in 0 ..< f24.get.items.len:
+      w.later(stepDecLcnAppRequirement, f24.get.items[i25], addr r.requires.get[i25])
+  let f26 = v.lookup("state_assignment")
+  if f26.isSome:
+    r.state_assignment = Opt.some(f26.get.text)
+
+proc toCbor*(x: LcnAppModule): CborValue =
+  runEnc(stepEncLcnAppModule, addr x)
+
+proc fromChecked*(T: type LcnAppModule, v: CborValue): LcnAppModule =
+  var r: LcnAppModule
+  runDec(stepDecLcnAppModule, v, addr r)
   r
 
-proc toCbor*(x: LcnAppOrdering): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("dependent"), encLcnAppInstanceId(x.dependent)))
-  e.add((cbor("prerequisite"), encLcnAppInstanceId(x.prerequisite)))
-  cborMap(e)
+proc stepEncLcnAppOrdering*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppOrdering](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("dependent")
+  node.entries[k].value = encLcnAppInstanceId(x.dependent)
+  inc k
+  node.entries[k].key = cbor("prerequisite")
+  node.entries[k].value = encLcnAppInstanceId(x.prerequisite)
+  inc k
 
-proc fromChecked*(T: type LcnAppOrdering, v: CborValue): LcnAppOrdering =
-  var r = LcnAppOrdering()
+proc stepDecLcnAppOrdering*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppOrdering](dst)
+  r[] = LcnAppOrdering()
   r.dependent = decLcnAppInstanceId(v.lookup("dependent").get)
   r.prerequisite = decLcnAppInstanceId(v.lookup("prerequisite").get)
+
+proc toCbor*(x: LcnAppOrdering): CborValue =
+  runEnc(stepEncLcnAppOrdering, addr x)
+
+proc fromChecked*(T: type LcnAppOrdering, v: CborValue): LcnAppOrdering =
+  var r: LcnAppOrdering
+  runDec(stepDecLcnAppOrdering, v, addr r)
   r
 
 proc encLcnAppPath*(x: LcnAppPath): CborValue =
@@ -278,93 +463,174 @@ proc encLcnAppPath*(x: LcnAppPath): CborValue =
 proc decLcnAppPath*(v: CborValue): LcnAppPath =
   v.text
 
-proc toCbor*(x: LcnAppPermission): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("constraints"), cbor(x.constraints)))
-  e.add((cbor("permission"), cbor(x.permission)))
+proc stepEncLcnAppPermission*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppPermission](src)
+  var n = 2
   if x.reason.isSome:
-    e.add((cbor("reason"), cbor(x.reason.get)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("constraints")
+  node.entries[k].value = cbor(x.constraints)
+  inc k
+  node.entries[k].key = cbor("permission")
+  node.entries[k].value = cbor(x.permission)
+  inc k
+  if x.reason.isSome:
+    node.entries[k].key = cbor("reason")
+    node.entries[k].value = cbor(x.reason.get)
+    inc k
 
-proc fromChecked*(T: type LcnAppPermission, v: CborValue): LcnAppPermission =
-  var r = LcnAppPermission()
+proc stepDecLcnAppPermission*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppPermission](dst)
+  r[] = LcnAppPermission()
   r.constraints = v.lookup("constraints").get.bytes
   r.permission = v.lookup("permission").get.text
-  block:
-    let f = v.lookup("reason")
-    if f.isSome:
-      r.reason = Opt.some(f.get.text)
+  let f27 = v.lookup("reason")
+  if f27.isSome:
+    r.reason = Opt.some(f27.get.text)
+
+proc toCbor*(x: LcnAppPermission): CborValue =
+  runEnc(stepEncLcnAppPermission, addr x)
+
+proc fromChecked*(T: type LcnAppPermission, v: CborValue): LcnAppPermission =
+  var r: LcnAppPermission
+  runDec(stepDecLcnAppPermission, v, addr r)
   r
+
+proc stepEncLcnAppPolicy*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppPolicy](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("allow-all")
+  inc k
+
+proc stepDecLcnAppPolicy*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppPolicy](dst)
+  r[] = LcnAppPolicy()
 
 proc toCbor*(x: LcnAppPolicy): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("kind"), cbor("allow-all")))
-  cborMap(e)
+  runEnc(stepEncLcnAppPolicy, addr x)
 
 proc fromChecked*(T: type LcnAppPolicy, v: CborValue): LcnAppPolicy =
-  var r = LcnAppPolicy()
+  var r: LcnAppPolicy
+  runDec(stepDecLcnAppPolicy, v, addr r)
   r
 
-proc toCbor*(x: LcnAppRequirementCardinalityChoice): CborValue =
+proc stepEncLcnAppRequirementCardinalityChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppRequirementCardinalityChoice](src)
   case x.kind
   of LcnAppRequirementCardinalityChoiceKind.All_runtime_visible:
-    cbor("all-runtime-visible")
+    dst[] = cbor("all-runtime-visible")
   of LcnAppRequirementCardinalityChoiceKind.Single:
-    cbor("single")
+    dst[] = cbor("single")
 
-proc fromChecked*(T: type LcnAppRequirementCardinalityChoice, v: CborValue): LcnAppRequirementCardinalityChoice =
+proc stepDecLcnAppRequirementCardinalityChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppRequirementCardinalityChoice](dst)
   case generatedSchema().arm("lcn.app_requirement#cardinality", v)
   of 0:
-    LcnAppRequirementCardinalityChoice(kind: LcnAppRequirementCardinalityChoiceKind.Single)
+    r[] = LcnAppRequirementCardinalityChoice(kind: LcnAppRequirementCardinalityChoiceKind.Single)
   of 1:
-    LcnAppRequirementCardinalityChoice(kind: LcnAppRequirementCardinalityChoiceKind.All_runtime_visible)
+    r[] = LcnAppRequirementCardinalityChoice(kind: LcnAppRequirementCardinalityChoiceKind.All_runtime_visible)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LcnAppRequirement): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("cardinality"), toCbor(x.cardinality)))
-  e.add((cbor("contract"), toCbor(x.contract)))
-  cborMap(e)
+proc toCbor*(x: LcnAppRequirementCardinalityChoice): CborValue =
+  runEnc(stepEncLcnAppRequirementCardinalityChoice, addr x)
 
-proc fromChecked*(T: type LcnAppRequirement, v: CborValue): LcnAppRequirement =
-  var r = LcnAppRequirement()
-  r.cardinality = fromChecked(LcnAppRequirementCardinalityChoice, v.lookup("cardinality").get)
-  r.contract = fromChecked(SchemaCommitment, v.lookup("contract").get)
+proc fromChecked*(T: type LcnAppRequirementCardinalityChoice, v: CborValue): LcnAppRequirementCardinalityChoice =
+  var r: LcnAppRequirementCardinalityChoice
+  runDec(stepDecLcnAppRequirementCardinalityChoice, v, addr r)
   r
 
-proc toCbor*(x: LcnAppRuntime): CborValue =
-  var e: seq[CborEntry]
+proc stepEncLcnAppRequirement*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppRequirement](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("cardinality")
+  w.later(stepEncLcnAppRequirementCardinalityChoice, addr x.cardinality, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("contract")
+  w.later(stepEncSchemaCommitment, addr x.contract, addr node.entries[k].value)
+  inc k
+
+proc stepDecLcnAppRequirement*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppRequirement](dst)
+  r[] = LcnAppRequirement()
+  let f28 = v.lookup("cardinality").get
+  w.later(stepDecLcnAppRequirementCardinalityChoice, f28, addr r.cardinality)
+  let f29 = v.lookup("contract").get
+  w.later(stepDecSchemaCommitment, f29, addr r.contract)
+
+proc toCbor*(x: LcnAppRequirement): CborValue =
+  runEnc(stepEncLcnAppRequirement, addr x)
+
+proc fromChecked*(T: type LcnAppRequirement, v: CborValue): LcnAppRequirement =
+  var r: LcnAppRequirement
+  runDec(stepDecLcnAppRequirement, v, addr r)
+  r
+
+proc stepEncLcnAppRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppRuntime](src)
+  var n = 1
   if x.shutdown_grace_ms.isSome:
-    e.add((cbor("shutdown_grace_ms"), cbor(uint64(x.shutdown_grace_ms.get))))
+    inc n
   if x.startup_deadline_ms.isSome:
-    e.add((cbor("startup_deadline_ms"), cbor(uint64(x.startup_deadline_ms.get))))
+    inc n
   if x.state_root.isSome:
-    e.add((cbor("state_root"), encLcnAppPath(x.state_root.get)))
+    inc n
   if x.stop_deadline_ms.isSome:
-    e.add((cbor("stop_deadline_ms"), cbor(uint64(x.stop_deadline_ms.get))))
-  e.add((cbor("work_dir"), encLcnAppPath(x.work_dir)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.shutdown_grace_ms.isSome:
+    node.entries[k].key = cbor("shutdown_grace_ms")
+    node.entries[k].value = cbor(uint64(x.shutdown_grace_ms.get))
+    inc k
+  if x.startup_deadline_ms.isSome:
+    node.entries[k].key = cbor("startup_deadline_ms")
+    node.entries[k].value = cbor(uint64(x.startup_deadline_ms.get))
+    inc k
+  if x.state_root.isSome:
+    node.entries[k].key = cbor("state_root")
+    node.entries[k].value = encLcnAppPath(x.state_root.get)
+    inc k
+  if x.stop_deadline_ms.isSome:
+    node.entries[k].key = cbor("stop_deadline_ms")
+    node.entries[k].value = cbor(uint64(x.stop_deadline_ms.get))
+    inc k
+  node.entries[k].key = cbor("work_dir")
+  node.entries[k].value = encLcnAppPath(x.work_dir)
+  inc k
+
+proc stepDecLcnAppRuntime*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppRuntime](dst)
+  r[] = LcnAppRuntime()
+  let f30 = v.lookup("shutdown_grace_ms")
+  if f30.isSome:
+    r.shutdown_grace_ms = Opt.some(uint32(f30.get.uint))
+  let f31 = v.lookup("startup_deadline_ms")
+  if f31.isSome:
+    r.startup_deadline_ms = Opt.some(uint32(f31.get.uint))
+  let f32 = v.lookup("state_root")
+  if f32.isSome:
+    r.state_root = Opt.some(decLcnAppPath(f32.get))
+  let f33 = v.lookup("stop_deadline_ms")
+  if f33.isSome:
+    r.stop_deadline_ms = Opt.some(uint32(f33.get.uint))
+  r.work_dir = decLcnAppPath(v.lookup("work_dir").get)
+
+proc toCbor*(x: LcnAppRuntime): CborValue =
+  runEnc(stepEncLcnAppRuntime, addr x)
 
 proc fromChecked*(T: type LcnAppRuntime, v: CborValue): LcnAppRuntime =
-  var r = LcnAppRuntime()
-  block:
-    let f = v.lookup("shutdown_grace_ms")
-    if f.isSome:
-      r.shutdown_grace_ms = Opt.some(uint32(f.get.uint))
-  block:
-    let f = v.lookup("startup_deadline_ms")
-    if f.isSome:
-      r.startup_deadline_ms = Opt.some(uint32(f.get.uint))
-  block:
-    let f = v.lookup("state_root")
-    if f.isSome:
-      r.state_root = Opt.some(decLcnAppPath(f.get))
-  block:
-    let f = v.lookup("stop_deadline_ms")
-    if f.isSome:
-      r.stop_deadline_ms = Opt.some(uint32(f.get.uint))
-  r.work_dir = decLcnAppPath(v.lookup("work_dir").get)
+  var r: LcnAppRuntime
+  runDec(stepDecLcnAppRuntime, v, addr r)
   r
 
 proc fromCbor*(T: type LcnAppArtifact, v: CborValue): Result[LcnAppArtifact, string] =

@@ -72,6 +72,10 @@ type
     rfRouteTimeout = "route-timeout"
     rfOther = "other"
 
+  Pin* = object ## One unreleased handle of a route.
+    handle*: pointer
+    attempt*: string ## the execution attempt that materialized it
+
   Route* = ref object ## One route, owned by the Runtime thread.
     id*: string
     consumer*: string ## the consumer module instance
@@ -92,6 +96,12 @@ type
       ## the subscriptions of its unreleased handles, active or not, in
       ## creation order (INTERFACE §2.5); `events.nim` keeps their state
     nextSub*: uint64 ## the last subscription id issued on it
+    pins*: seq[Pin]
+      ## its unreleased handles; one whose attempt's context is destroyed no
+      ## longer counts (INTERFACE l.2004-2006)
+    pending*: int ## asynchronous calls submitted through it and still recorded
+    droppable*: bool ## ended and reachable through nothing: its record may be dropped
+    dropped*: bool ## [IMPL] dropped: its id is unknown from then on
 
   KeyEntry = object
     operation: string
@@ -261,6 +271,12 @@ func allowsSubscribe*(r: Route, eventId: string): bool =
 
 func isTerminal*(r: Route): bool =
   r.state != rtReady
+
+func reachable*(r: Route): bool =
+  ## [SPEC RUNTIME §7.5 l.1346] Whether something can still reach the record
+  ## by its route: an unreleased handle, a handle observing its end, an
+  ## admitted call, or a submitted call. A handle's subscriptions go with it.
+  r.pins.len > 0 or r.handles.len > 0 or r.calls.len > 0 or r.pending > 0
 
 func terminate*(r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229] The route takes no new calls. Only

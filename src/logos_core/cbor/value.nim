@@ -91,6 +91,11 @@ func cborNint*(n: uint64): CborValue =
 func cborArray*(items: varargs[CborValue]): CborValue =
   CborValue(kind: ckArray, items: @items)
 
+func newCborArray*(n: int): CborValue =
+  ## An array of `n` nil items, for a converter to fill in place before anything
+  ## reads it (DECISIONS I79).
+  CborValue(kind: ckArray, items: newSeq[CborValue](n))
+
 func cborMap*(entries: varargs[CborEntry]): CborValue =
   CborValue(kind: ckMap, entries: @entries)
 

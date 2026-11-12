@@ -294,14 +294,14 @@ suite "ifc.calls: typed call helpers from C (INTERFACE §2.4, §2.7.2, App A.5) 
       check c == n and released == n
       check arenaBlocks() == base
 
-  test "[IFC-0925] [IFC-0929] the payload depth limit, on a thread with 1 MiB of stack [IMPL]":
+  test "[IFC-0925] [IFC-0929] the payload depth limit, on a thread with 512 KiB of stack [IMPL]":
     withRoute(shapesModule, r):
       let base = arenaBlocks()
-      let deepest = typedReflectOnStack(calls, r.asModule, rvDeepest, 1 shl 20)
+      let deepest = typedReflectOnStack(calls, r.asModule, rvDeepest, 512 * 1024)
       check deepest.status.isOk and deepest.same
       check deepest.text.count("left=") == 1021
       for v in [rvTooDeep, rvCycle]:
-        let t = typedReflectOnStack(calls, r.asModule, v, 1 shl 20)
+        let t = typedReflectOnStack(calls, r.asModule, v, 512 * 1024)
         check t.code == ecInvalidParams and t.untouched
         check t.status.error.detail.isNone
       check r.counts == (1, 1, 0)

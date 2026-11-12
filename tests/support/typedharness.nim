@@ -214,7 +214,7 @@ proc typedReflect*(
     thShapesReflect(addr f, m, cint(ord(v)), rep)
 
 # Instrumented frames are larger, so the sanitizer builds (config.nims) check the
-# depth limits on a larger stack; the plain builds check the budget (I72).
+# depth limits on a larger stack; the plain builds check the budget (I79).
 const sanitizerStackScale =
   when defined(asan) or defined(tsan) or defined(msan): 4 else: 1
 

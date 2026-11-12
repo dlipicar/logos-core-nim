@@ -22,6 +22,8 @@ const
   DefaultStartupDeadline* = initDuration(seconds = 120)
   DefaultStopDeadline* = initDuration(seconds = 10)
   DefaultShutdownGrace* = initDuration(seconds = 10)
+  DefaultEndedRoutes* = 4096
+    ## [IMPL] ended route records kept per consumer once nothing reaches them
   MaxWorkers* = 64 ## [IMPL] worker threads; more jobs wait in the queue
   MaxCallWorkers* = 64
     ## [IMPL] threads that run asynchronous calls (INTERFACE §2.9), apart from
@@ -134,6 +136,9 @@ type
     startupDeadline*: Duration
     stopDeadline*: Duration
     shutdownGrace*: Duration
+    endedRoutes*: int
+      ## [SPEC RUNTIME §9.3 l.3249] retention selection: how many ended route
+      ## records each consumer keeps once nothing reaches them (`engine.nim`)
 
   # Messages ---------------------------------------------------------------------
   RequestKind* = enum
@@ -429,6 +434,7 @@ proc defaultConfig*(workDir: string): EngineConfig =
     startupDeadline: DefaultStartupDeadline,
     stopDeadline: DefaultStopDeadline,
     shutdownGrace: DefaultShutdownGrace,
+    endedRoutes: DefaultEndedRoutes,
   )
 
 func hostOrigin*(): Origin =

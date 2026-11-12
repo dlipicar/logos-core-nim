@@ -278,11 +278,11 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
       check ownerEmpty(o)
     shapes.destroy(ctx)
 
-  test "[IFC-0927] a typed call at the payload depth limit on a thread with 1 MiB of stack [IMPL]":
+  test "[IFC-0927] a typed call at the payload depth limit on a thread with 512 KiB of stack [IMPL]":
     let ctx = shapes.start(publish = false)
-    let deepest = typedReflectOnStack(typed, ctx, rvDeepest, 1 shl 20)
+    let deepest = typedReflectOnStack(typed, ctx, rvDeepest, 512 * 1024)
     check deepest.status.isOk and deepest.same
-    let tooDeep = typedReflectOnStack(typed, ctx, rvTooDeep, 1 shl 20)
+    let tooDeep = typedReflectOnStack(typed, ctx, rvTooDeep, 512 * 1024)
     check tooDeep.code == ecInvalidParams and tooDeep.untouched
     shapes.destroy(ctx)
 

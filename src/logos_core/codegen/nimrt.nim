@@ -152,6 +152,54 @@ func boxed*[T](x: T): ref T =
   r[] = x
   r
 
+# Codec steps (DECISIONS I79) -------------------------------------------------------
+#
+# A generated codec converts one object (or one alias with a container body) per
+# step. It stores what it can at once and makes room for each nested object: an
+# entry, item or field it hands to a later step as a task. Every container is
+# allocated at its final size before any task points into it, and nothing a task
+# points to moves, so tasks may run in any order; the drivers run them from a
+# heap list, and the native stack does not grow with the nesting.
+
+type
+  EncStep* = proc(w: var EncWork, src: pointer, dst: ptr CborValue) {.
+    nimcall, gcsafe, raises: []
+  .} ## Stores the CBOR value of the Nim value at `src` into `dst`.
+
+  EncWork* = object ## The encoding tasks not run yet.
+    tasks: seq[(EncStep, pointer, ptr CborValue)]
+
+  DecStep* =
+    proc(w: var DecWork, v: CborValue, dst: pointer) {.nimcall, gcsafe, raises: [].}
+    ## Stores the Nim value of the checked value `v` into `dst`.
+
+  DecWork* = object ## The decoding tasks not run yet.
+    tasks: seq[(DecStep, CborValue, pointer)]
+
+proc later*(w: var EncWork, step: EncStep, src: pointer, dst: ptr CborValue) =
+  w.tasks.add((step, src, dst))
+
+proc later*(w: var DecWork, step: DecStep, v: CborValue, dst: pointer) =
+  w.tasks.add((step, v, dst))
+
+proc runEnc*(step: EncStep, src: pointer): CborValue =
+  ## The CBOR value of the Nim value at `src`.
+  var w: EncWork
+  var root: CborValue
+  step(w, src, addr root)
+  while w.tasks.len > 0:
+    let (s, x, d) = w.tasks.pop()
+    s(w, x, d)
+  root
+
+proc runDec*(step: DecStep, v: CborValue, dst: pointer) =
+  ## Stores the Nim value of the checked value `v` into `dst`.
+  var w: DecWork
+  step(w, v, dst)
+  while w.tasks.len > 0:
+    let (s, x, d) = w.tasks.pop()
+    s(w, x, d)
+
 func asInt64*(v: CborValue): int64 =
   ## A checked signed integer.
   v.getInt64.get

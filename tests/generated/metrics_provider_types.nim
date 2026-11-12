@@ -29,25 +29,50 @@ type
 
 proc toCbor*(x: MetricsProviderSnapshotRequest): CborValue
 proc fromChecked*(T: type MetricsProviderSnapshotRequest, v: CborValue): MetricsProviderSnapshotRequest
+proc stepEncMetricsProviderSnapshotRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecMetricsProviderSnapshotRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: MetricsProviderSnapshotResponse): CborValue
 proc fromChecked*(T: type MetricsProviderSnapshotResponse, v: CborValue): MetricsProviderSnapshotResponse
+proc stepEncMetricsProviderSnapshotResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecMetricsProviderSnapshotResponse*(w: var DecWork, v: CborValue, dst: pointer)
+
+proc stepEncMetricsProviderSnapshotRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr MetricsProviderSnapshotRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecMetricsProviderSnapshotRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr MetricsProviderSnapshotRequest](dst)
+  r[] = MetricsProviderSnapshotRequest()
 
 proc toCbor*(x: MetricsProviderSnapshotRequest): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncMetricsProviderSnapshotRequest, addr x)
 
 proc fromChecked*(T: type MetricsProviderSnapshotRequest, v: CborValue): MetricsProviderSnapshotRequest =
-  var r = MetricsProviderSnapshotRequest()
+  var r: MetricsProviderSnapshotRequest
+  runDec(stepDecMetricsProviderSnapshotRequest, v, addr r)
   r
 
+proc stepEncMetricsProviderSnapshotResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr MetricsProviderSnapshotResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("count")
+  node.entries[k].value = cbor(uint64(x.count))
+  inc k
+
+proc stepDecMetricsProviderSnapshotResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr MetricsProviderSnapshotResponse](dst)
+  r[] = MetricsProviderSnapshotResponse()
+  r.count = uint64(v.lookup("count").get.uint)
+
 proc toCbor*(x: MetricsProviderSnapshotResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("count"), cbor(uint64(x.count))))
-  cborMap(e)
+  runEnc(stepEncMetricsProviderSnapshotResponse, addr x)
 
 proc fromChecked*(T: type MetricsProviderSnapshotResponse, v: CborValue): MetricsProviderSnapshotResponse =
-  var r = MetricsProviderSnapshotResponse()
-  r.count = uint64(v.lookup("count").get.uint)
+  var r: MetricsProviderSnapshotResponse
+  runDec(stepDecMetricsProviderSnapshotResponse, v, addr r)
   r
 
 proc fromCbor*(T: type MetricsProviderSnapshotRequest, v: CborValue): Result[MetricsProviderSnapshotRequest, string] =

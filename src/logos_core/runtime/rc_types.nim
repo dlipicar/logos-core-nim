@@ -818,270 +818,510 @@ proc encLogosNSRuntimeControlAlpn*(x: LogosNSRuntimeControlAlpn): CborValue
 proc decLogosNSRuntimeControlAlpn*(v: CborValue): LogosNSRuntimeControlAlpn
 proc toCbor*(x: LogosNSRuntimeControlApplyConfigurationRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlApplyConfigurationRequest, v: CborValue): LogosNSRuntimeControlApplyConfigurationRequest
+proc stepEncLogosNSRuntimeControlApplyConfigurationRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlApplyConfigurationRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlApplyConfigurationResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlApplyConfigurationResponse, v: CborValue): LogosNSRuntimeControlApplyConfigurationResponse
+proc stepEncLogosNSRuntimeControlApplyConfigurationResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlApplyConfigurationResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlCloseRouteRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlCloseRouteRequest, v: CborValue): LogosNSRuntimeControlCloseRouteRequest
+proc stepEncLogosNSRuntimeControlCloseRouteRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlCloseRouteRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlCloseRouteResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlCloseRouteResponse, v: CborValue): LogosNSRuntimeControlCloseRouteResponse
+proc stepEncLogosNSRuntimeControlCloseRouteResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlCloseRouteResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlConfigurationStateChangedEvent): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlConfigurationStateChangedEvent, v: CborValue): LogosNSRuntimeControlConfigurationStateChangedEvent
+proc stepEncLogosNSRuntimeControlConfigurationStateChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlConfigurationStateChangedEvent*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlCreateModuleRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlCreateModuleRequest, v: CborValue): LogosNSRuntimeControlCreateModuleRequest
+proc stepEncLogosNSRuntimeControlCreateModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlCreateModuleRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlCreateModuleResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlCreateModuleResponse, v: CborValue): LogosNSRuntimeControlCreateModuleResponse
+proc stepEncLogosNSRuntimeControlCreateModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlCreateModuleResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeControlCursor*(x: LogosNSRuntimeControlCursor): CborValue
 proc decLogosNSRuntimeControlCursor*(v: CborValue): LogosNSRuntimeControlCursor
 proc encLogosNSRuntimeControlDecisionId*(x: LogosNSRuntimeControlDecisionId): CborValue
 proc decLogosNSRuntimeControlDecisionId*(v: CborValue): LogosNSRuntimeControlDecisionId
 proc toCbor*(x: LogosNSRuntimeControlDescribeProviderRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlDescribeProviderRequest, v: CborValue): LogosNSRuntimeControlDescribeProviderRequest
+proc stepEncLogosNSRuntimeControlDescribeProviderRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlDescribeProviderRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlDescribeProviderResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlDescribeProviderResponse, v: CborValue): LogosNSRuntimeControlDescribeProviderResponse
+proc stepEncLogosNSRuntimeControlDescribeProviderResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlDescribeProviderResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlEstablishRouteRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlEstablishRouteRequest, v: CborValue): LogosNSRuntimeControlEstablishRouteRequest
+proc stepEncLogosNSRuntimeControlEstablishRouteRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlEstablishRouteRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlEstablishRouteResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlEstablishRouteResponse, v: CborValue): LogosNSRuntimeControlEstablishRouteResponse
+proc stepEncLogosNSRuntimeControlEstablishRouteResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlEstablishRouteResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelection): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelection, v: CborValue): LogosNSRuntimeControlExecutionSelection
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationChoice): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationChoice, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationChoice
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationChoice*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionPackageMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionPackageMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionPackageMap
+proc stepEncLogosNSRuntimeControlExecutionSelectionPackageMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionSelectionPackageMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionSignerMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionSignerMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionSignerMap
+proc stepEncLogosNSRuntimeControlExecutionSelectionSignerMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionSelectionSignerMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlExecutionSelection*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionSelection*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlExecutionState): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionState, v: CborValue): LogosNSRuntimeControlExecutionState
 proc toCbor*(x: LogosNSRuntimeControlExecutionStateIntentChoice): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionStateIntentChoice, v: CborValue): LogosNSRuntimeControlExecutionStateIntentChoice
+proc stepEncLogosNSRuntimeControlExecutionStateIntentChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionStateIntentChoice*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlExecutionState*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionState*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlExecutionStateChangedEvent): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionStateChangedEvent, v: CborValue): LogosNSRuntimeControlExecutionStateChangedEvent
+proc stepEncLogosNSRuntimeControlExecutionStateChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlExecutionStateChangedEvent*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeControlFailureCode*(x: LogosNSRuntimeControlFailureCode): CborValue
 proc decLogosNSRuntimeControlFailureCode*(v: CborValue): LogosNSRuntimeControlFailureCode
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationRequest, v: CborValue): LogosNSRuntimeControlGetConfigurationRequest
+proc stepEncLogosNSRuntimeControlGetConfigurationRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetConfigurationRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationResponse, v: CborValue): LogosNSRuntimeControlGetConfigurationResponse
+proc stepEncLogosNSRuntimeControlGetConfigurationResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetConfigurationResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationSchemaRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationSchemaRequest, v: CborValue): LogosNSRuntimeControlGetConfigurationSchemaRequest
+proc stepEncLogosNSRuntimeControlGetConfigurationSchemaRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetConfigurationSchemaRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationSchemaResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationSchemaResponse, v: CborValue): LogosNSRuntimeControlGetConfigurationSchemaResponse
+proc stepEncLogosNSRuntimeControlGetConfigurationSchemaResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetConfigurationSchemaResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationSummaryRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationSummaryRequest, v: CborValue): LogosNSRuntimeControlGetConfigurationSummaryRequest
+proc stepEncLogosNSRuntimeControlGetConfigurationSummaryRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetConfigurationSummaryRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationSummaryResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationSummaryResponse, v: CborValue): LogosNSRuntimeControlGetConfigurationSummaryResponse
+proc stepEncLogosNSRuntimeControlGetConfigurationSummaryResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetConfigurationSummaryResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionPermissionsRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionPermissionsRequest, v: CborValue): LogosNSRuntimeControlGetExecutionPermissionsRequest
+proc stepEncLogosNSRuntimeControlGetExecutionPermissionsRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetExecutionPermissionsRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionPermissionsResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionPermissionsResponse, v: CborValue): LogosNSRuntimeControlGetExecutionPermissionsResponse
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap, v: CborValue): LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap
+proc stepEncLogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap, v: CborValue): LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap
+proc stepEncLogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlGetExecutionPermissionsResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetExecutionPermissionsResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionSummaryRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionSummaryRequest, v: CborValue): LogosNSRuntimeControlGetExecutionSummaryRequest
+proc stepEncLogosNSRuntimeControlGetExecutionSummaryRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetExecutionSummaryRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionSummaryResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionSummaryResponse, v: CborValue): LogosNSRuntimeControlGetExecutionSummaryResponse
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice, v: CborValue): LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice
+proc stepEncLogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlGetExecutionSummaryResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetExecutionSummaryResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetPermissionSettingsRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetPermissionSettingsRequest, v: CborValue): LogosNSRuntimeControlGetPermissionSettingsRequest
+proc stepEncLogosNSRuntimeControlGetPermissionSettingsRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetPermissionSettingsRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetPermissionSettingsResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetPermissionSettingsResponse, v: CborValue): LogosNSRuntimeControlGetPermissionSettingsResponse
+proc stepEncLogosNSRuntimeControlGetPermissionSettingsResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetPermissionSettingsResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetReadinessRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetReadinessRequest, v: CborValue): LogosNSRuntimeControlGetReadinessRequest
+proc stepEncLogosNSRuntimeControlGetReadinessRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetReadinessRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetReadinessResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetReadinessResponse, v: CborValue): LogosNSRuntimeControlGetReadinessResponse
+proc stepEncLogosNSRuntimeControlGetReadinessResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetReadinessResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetSelfRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetSelfRequest, v: CborValue): LogosNSRuntimeControlGetSelfRequest
+proc stepEncLogosNSRuntimeControlGetSelfRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetSelfRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlGetSelfResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlGetSelfResponse, v: CborValue): LogosNSRuntimeControlGetSelfResponse
+proc stepEncLogosNSRuntimeControlGetSelfResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlGetSelfResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeControlHostName*(x: LogosNSRuntimeControlHostName): CborValue
 proc decLogosNSRuntimeControlHostName*(v: CborValue): LogosNSRuntimeControlHostName
 proc toCbor*(x: LogosNSRuntimeControlInventoryChangedEvent): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlInventoryChangedEvent, v: CborValue): LogosNSRuntimeControlInventoryChangedEvent
+proc stepEncLogosNSRuntimeControlInventoryChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlInventoryChangedEvent*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlInventoryCollection): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlInventoryCollection, v: CborValue): LogosNSRuntimeControlInventoryCollection
+proc stepEncLogosNSRuntimeControlInventoryCollection*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlInventoryCollection*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlInvocationDescriptor): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlInvocationDescriptor, v: CborValue): LogosNSRuntimeControlInvocationDescriptor
 proc toCbor*(x: LogosNSRuntimeControlInvocationDescriptorAR0Map): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlInvocationDescriptorAR0Map, v: CborValue): LogosNSRuntimeControlInvocationDescriptorAR0Map
+proc stepEncLogosNSRuntimeControlInvocationDescriptorAR0Map*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlInvocationDescriptorAR0Map*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlInvocationDescriptorAR1Map): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlInvocationDescriptorAR1Map, v: CborValue): LogosNSRuntimeControlInvocationDescriptorAR1Map
+proc stepEncLogosNSRuntimeControlInvocationDescriptorAR1Map*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlInvocationDescriptorAR1Map*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlInvocationDescriptor*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlInvocationDescriptor*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlListModulesRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlListModulesRequest, v: CborValue): LogosNSRuntimeControlListModulesRequest
+proc stepEncLogosNSRuntimeControlListModulesRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlListModulesRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlListModulesResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlListModulesResponse, v: CborValue): LogosNSRuntimeControlListModulesResponse
+proc stepEncLogosNSRuntimeControlListModulesResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlListModulesResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlListProviderExportsRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlListProviderExportsRequest, v: CborValue): LogosNSRuntimeControlListProviderExportsRequest
+proc stepEncLogosNSRuntimeControlListProviderExportsRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlListProviderExportsRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlListProviderExportsResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlListProviderExportsResponse, v: CborValue): LogosNSRuntimeControlListProviderExportsResponse
+proc stepEncLogosNSRuntimeControlListProviderExportsResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlListProviderExportsResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlListRemoteListenersRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlListRemoteListenersRequest, v: CborValue): LogosNSRuntimeControlListRemoteListenersRequest
+proc stepEncLogosNSRuntimeControlListRemoteListenersRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlListRemoteListenersRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlListRemoteListenersResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlListRemoteListenersResponse, v: CborValue): LogosNSRuntimeControlListRemoteListenersResponse
+proc stepEncLogosNSRuntimeControlListRemoteListenersResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlListRemoteListenersResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlListRoutesRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlListRoutesRequest, v: CborValue): LogosNSRuntimeControlListRoutesRequest
+proc stepEncLogosNSRuntimeControlListRoutesRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlListRoutesRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlListRoutesResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlListRoutesResponse, v: CborValue): LogosNSRuntimeControlListRoutesResponse
+proc stepEncLogosNSRuntimeControlListRoutesResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlListRoutesResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlMode): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlMode, v: CborValue): LogosNSRuntimeControlMode
+proc stepEncLogosNSRuntimeControlMode*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlMode*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlModuleRecord): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlModuleRecord, v: CborValue): LogosNSRuntimeControlModuleRecord
+proc stepEncLogosNSRuntimeControlModuleRecord*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlModuleRecord*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlModuleStateChangedEvent): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlModuleStateChangedEvent, v: CborValue): LogosNSRuntimeControlModuleStateChangedEvent
+proc stepEncLogosNSRuntimeControlModuleStateChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlModuleStateChangedEvent*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeControlPath*(x: LogosNSRuntimeControlPath): CborValue
 proc decLogosNSRuntimeControlPath*(v: CborValue): LogosNSRuntimeControlPath
 proc toCbor*(x: LogosNSRuntimeControlPermissionSetting): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlPermissionSetting, v: CborValue): LogosNSRuntimeControlPermissionSetting
+proc stepEncLogosNSRuntimeControlPermissionSetting*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlPermissionSetting*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlPermissionSettingsChangedEvent): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlPermissionSettingsChangedEvent, v: CborValue): LogosNSRuntimeControlPermissionSettingsChangedEvent
+proc stepEncLogosNSRuntimeControlPermissionSettingsChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlPermissionSettingsChangedEvent*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlPermissionSettingsState): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlPermissionSettingsState, v: CborValue): LogosNSRuntimeControlPermissionSettingsState
 proc toCbor*(x: LogosNSRuntimeControlPermissionSettingsStateApplicationChoice): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlPermissionSettingsStateApplicationChoice, v: CborValue): LogosNSRuntimeControlPermissionSettingsStateApplicationChoice
+proc stepEncLogosNSRuntimeControlPermissionSettingsStateApplicationChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlPermissionSettingsStateApplicationChoice*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlPermissionSettingsState*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlPermissionSettingsState*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeControlPort*(x: LogosNSRuntimeControlPort): CborValue
 proc decLogosNSRuntimeControlPort*(v: CborValue): LogosNSRuntimeControlPort
 proc toCbor*(x: LogosNSRuntimeControlProviderExportRecord): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlProviderExportRecord, v: CborValue): LogosNSRuntimeControlProviderExportRecord
+proc stepEncLogosNSRuntimeControlProviderExportRecord*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlProviderExportRecord*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlProviderRequirementCardinality): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlProviderRequirementCardinality, v: CborValue): LogosNSRuntimeControlProviderRequirementCardinality
+proc stepEncLogosNSRuntimeControlProviderRequirementCardinality*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlProviderRequirementCardinality*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlQuicRuntimeAddress): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlQuicRuntimeAddress, v: CborValue): LogosNSRuntimeControlQuicRuntimeAddress
+proc stepEncLogosNSRuntimeControlQuicRuntimeAddress*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlQuicRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeControlReason*(x: LogosNSRuntimeControlReason): CborValue
 proc decLogosNSRuntimeControlReason*(v: CborValue): LogosNSRuntimeControlReason
 proc toCbor*(x: LogosNSRuntimeControlRecoverModuleRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRecoverModuleRequest, v: CborValue): LogosNSRuntimeControlRecoverModuleRequest
+proc stepEncLogosNSRuntimeControlRecoverModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRecoverModuleRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRecoverModuleResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRecoverModuleResponse, v: CborValue): LogosNSRuntimeControlRecoverModuleResponse
+proc stepEncLogosNSRuntimeControlRecoverModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRecoverModuleResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRemoteIdentityProfile): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteIdentityProfile, v: CborValue): LogosNSRuntimeControlRemoteIdentityProfile
+proc stepEncLogosNSRuntimeControlRemoteIdentityProfile*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRemoteIdentityProfile*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRemoteListenerAddress): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteListenerAddress, v: CborValue): LogosNSRuntimeControlRemoteListenerAddress
+proc stepEncLogosNSRuntimeControlRemoteListenerAddress*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRemoteListenerAddress*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRemoteListenerRecord): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteListenerRecord, v: CborValue): LogosNSRuntimeControlRemoteListenerRecord
+proc stepEncLogosNSRuntimeControlRemoteListenerRecord*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRemoteListenerRecord*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRemoteProviderTarget): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteProviderTarget, v: CborValue): LogosNSRuntimeControlRemoteProviderTarget
+proc stepEncLogosNSRuntimeControlRemoteProviderTarget*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRemoteProviderTarget*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollment): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollment, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollment
 proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap
 proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice
+proc stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap
+proc stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlRemoteRuntimeEnrollment*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRemoteRuntimeEnrollment*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRenewRouteRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRenewRouteRequest, v: CborValue): LogosNSRuntimeControlRenewRouteRequest
+proc stepEncLogosNSRuntimeControlRenewRouteRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRenewRouteRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRenewRouteResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRenewRouteResponse, v: CborValue): LogosNSRuntimeControlRenewRouteResponse
+proc stepEncLogosNSRuntimeControlRenewRouteResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRenewRouteResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlReportFailureRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlReportFailureRequest, v: CborValue): LogosNSRuntimeControlReportFailureRequest
+proc stepEncLogosNSRuntimeControlReportFailureRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlReportFailureRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlReportFailureResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlReportFailureResponse, v: CborValue): LogosNSRuntimeControlReportFailureResponse
+proc stepEncLogosNSRuntimeControlReportFailureResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlReportFailureResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRetireModuleRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRetireModuleRequest, v: CborValue): LogosNSRuntimeControlRetireModuleRequest
+proc stepEncLogosNSRuntimeControlRetireModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRetireModuleRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRetireModuleResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRetireModuleResponse, v: CborValue): LogosNSRuntimeControlRetireModuleResponse
+proc stepEncLogosNSRuntimeControlRetireModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRetireModuleResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRouteAccess): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRouteAccess, v: CborValue): LogosNSRuntimeControlRouteAccess
+proc stepEncLogosNSRuntimeControlRouteAccess*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRouteAccess*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRouteContinuation): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRouteContinuation, v: CborValue): LogosNSRuntimeControlRouteContinuation
+proc stepEncLogosNSRuntimeControlRouteContinuation*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRouteContinuation*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRouteFailure): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRouteFailure, v: CborValue): LogosNSRuntimeControlRouteFailure
+proc stepEncLogosNSRuntimeControlRouteFailure*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRouteFailure*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRouteRecord): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRouteRecord, v: CborValue): LogosNSRuntimeControlRouteRecord
+proc stepEncLogosNSRuntimeControlRouteRecord*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRouteRecord*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRouteState): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRouteState, v: CborValue): LogosNSRuntimeControlRouteState
+proc stepEncLogosNSRuntimeControlRouteState*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRouteState*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRouteStateChangedEvent): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRouteStateChangedEvent, v: CborValue): LogosNSRuntimeControlRouteStateChangedEvent
+proc stepEncLogosNSRuntimeControlRouteStateChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRouteStateChangedEvent*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRuntimeAddress): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRuntimeAddress, v: CborValue): LogosNSRuntimeControlRuntimeAddress
+proc stepEncLogosNSRuntimeControlRuntimeAddress*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlRuntimeEndpoint): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlRuntimeEndpoint, v: CborValue): LogosNSRuntimeControlRuntimeEndpoint
+proc stepEncLogosNSRuntimeControlRuntimeEndpoint*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlRuntimeEndpoint*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeControlServerName*(x: LogosNSRuntimeControlServerName): CborValue
 proc decLogosNSRuntimeControlServerName*(v: CborValue): LogosNSRuntimeControlServerName
 proc toCbor*(x: LogosNSRuntimeControlSetProviderExportRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlSetProviderExportRequest, v: CborValue): LogosNSRuntimeControlSetProviderExportRequest
+proc stepEncLogosNSRuntimeControlSetProviderExportRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlSetProviderExportRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlSetProviderExportResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlSetProviderExportResponse, v: CborValue): LogosNSRuntimeControlSetProviderExportResponse
+proc stepEncLogosNSRuntimeControlSetProviderExportResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlSetProviderExportResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlSetRemoteListenerRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlSetRemoteListenerRequest, v: CborValue): LogosNSRuntimeControlSetRemoteListenerRequest
+proc stepEncLogosNSRuntimeControlSetRemoteListenerRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlSetRemoteListenerRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlSetRemoteListenerResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlSetRemoteListenerResponse, v: CborValue): LogosNSRuntimeControlSetRemoteListenerResponse
+proc stepEncLogosNSRuntimeControlSetRemoteListenerResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlSetRemoteListenerResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlShutdownRuntimeRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlShutdownRuntimeRequest, v: CborValue): LogosNSRuntimeControlShutdownRuntimeRequest
+proc stepEncLogosNSRuntimeControlShutdownRuntimeRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlShutdownRuntimeRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlShutdownRuntimeResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlShutdownRuntimeResponse, v: CborValue): LogosNSRuntimeControlShutdownRuntimeResponse
+proc stepEncLogosNSRuntimeControlShutdownRuntimeResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlShutdownRuntimeResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlStartModuleRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlStartModuleRequest, v: CborValue): LogosNSRuntimeControlStartModuleRequest
+proc stepEncLogosNSRuntimeControlStartModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlStartModuleRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlStartModuleResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlStartModuleResponse, v: CborValue): LogosNSRuntimeControlStartModuleResponse
+proc stepEncLogosNSRuntimeControlStartModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlStartModuleResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlState): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlState, v: CborValue): LogosNSRuntimeControlState
+proc stepEncLogosNSRuntimeControlState*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlState*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlStopModuleRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlStopModuleRequest, v: CborValue): LogosNSRuntimeControlStopModuleRequest
+proc stepEncLogosNSRuntimeControlStopModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlStopModuleRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlStopModuleResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlStopModuleResponse, v: CborValue): LogosNSRuntimeControlStopModuleResponse
+proc stepEncLogosNSRuntimeControlStopModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlStopModuleResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeControlSubjectPublicKeyInfo*(x: LogosNSRuntimeControlSubjectPublicKeyInfo): CborValue
 proc decLogosNSRuntimeControlSubjectPublicKeyInfo*(v: CborValue): LogosNSRuntimeControlSubjectPublicKeyInfo
 proc toCbor*(x: LogosNSRuntimeControlTlsTcpRuntimeAddress): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlTlsTcpRuntimeAddress, v: CborValue): LogosNSRuntimeControlTlsTcpRuntimeAddress
+proc stepEncLogosNSRuntimeControlTlsTcpRuntimeAddress*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlTlsTcpRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeControlTrustAnchorId*(x: LogosNSRuntimeControlTrustAnchorId): CborValue
 proc decLogosNSRuntimeControlTrustAnchorId*(v: CborValue): LogosNSRuntimeControlTrustAnchorId
 proc toCbor*(x: LogosNSRuntimeControlUnixStreamRuntimeAddress): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlUnixStreamRuntimeAddress, v: CborValue): LogosNSRuntimeControlUnixStreamRuntimeAddress
+proc stepEncLogosNSRuntimeControlUnixStreamRuntimeAddress*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlUnixStreamRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlUpdateConfigurationRequest, v: CborValue): LogosNSRuntimeControlUpdateConfigurationRequest
 proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap, v: CborValue): LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap
+proc stepEncLogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationRequestARStageMap): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlUpdateConfigurationRequestARStageMap, v: CborValue): LogosNSRuntimeControlUpdateConfigurationRequestARStageMap
+proc stepEncLogosNSRuntimeControlUpdateConfigurationRequestARStageMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlUpdateConfigurationRequestARStageMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLogosNSRuntimeControlUpdateConfigurationRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlUpdateConfigurationRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlUpdateConfigurationResponse, v: CborValue): LogosNSRuntimeControlUpdateConfigurationResponse
+proc stepEncLogosNSRuntimeControlUpdateConfigurationResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlUpdateConfigurationResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlUpdatePermissionSettingsRequest): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlUpdatePermissionSettingsRequest, v: CborValue): LogosNSRuntimeControlUpdatePermissionSettingsRequest
+proc stepEncLogosNSRuntimeControlUpdatePermissionSettingsRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlUpdatePermissionSettingsRequest*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeControlUpdatePermissionSettingsResponse): CborValue
 proc fromChecked*(T: type LogosNSRuntimeControlUpdatePermissionSettingsResponse, v: CborValue): LogosNSRuntimeControlUpdatePermissionSettingsResponse
+proc stepEncLogosNSRuntimeControlUpdatePermissionSettingsResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeControlUpdatePermissionSettingsResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSModuleConfigurationConfigurationDeclaration): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationConfigurationDeclaration, v: CborValue): LogosNSModuleConfigurationConfigurationDeclaration
+proc stepEncLogosNSModuleConfigurationConfigurationDeclaration*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationConfigurationDeclaration*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSModuleConfigurationConfigurationInput): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationConfigurationInput, v: CborValue): LogosNSModuleConfigurationConfigurationInput
+proc stepEncLogosNSModuleConfigurationConfigurationInput*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationConfigurationInput*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSModuleConfigurationConfigurationState): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationConfigurationState, v: CborValue): LogosNSModuleConfigurationConfigurationState
+proc stepEncLogosNSModuleConfigurationConfigurationState*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationConfigurationState*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSModuleConfigurationConfigurationStateSummary): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationConfigurationStateSummary, v: CborValue): LogosNSModuleConfigurationConfigurationStateSummary
+proc stepEncLogosNSModuleConfigurationConfigurationStateSummary*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationConfigurationStateSummary*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSModuleConfigurationConfigurationValue*(x: LogosNSModuleConfigurationConfigurationValue): CborValue
 proc decLogosNSModuleConfigurationConfigurationValue*(v: CborValue): LogosNSModuleConfigurationConfigurationValue
 proc toCbor*(x: LogosNSModuleConfigurationProvenance): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationProvenance, v: CborValue): LogosNSModuleConfigurationProvenance
+proc stepEncLogosNSModuleConfigurationProvenance*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationProvenance*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSModuleConfigurationSchemaBinding): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationSchemaBinding, v: CborValue): LogosNSModuleConfigurationSchemaBinding
+proc stepEncLogosNSModuleConfigurationSchemaBinding*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationSchemaBinding*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSModuleConfigurationSchemaCommitment): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationSchemaCommitment, v: CborValue): LogosNSModuleConfigurationSchemaCommitment
+proc stepEncLogosNSModuleConfigurationSchemaCommitment*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationSchemaCommitment*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSModuleConfigurationValueCommitment): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationValueCommitment, v: CborValue): LogosNSModuleConfigurationValueCommitment
+proc stepEncLogosNSModuleConfigurationValueCommitment*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationValueCommitment*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSModuleConfigurationValueRecord): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationValueRecord, v: CborValue): LogosNSModuleConfigurationValueRecord
+proc stepEncLogosNSModuleConfigurationValueRecord*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationValueRecord*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSModuleConfigurationValueRecordMetadata): CborValue
 proc fromChecked*(T: type LogosNSModuleConfigurationValueRecordMetadata, v: CborValue): LogosNSModuleConfigurationValueRecordMetadata
+proc stepEncLogosNSModuleConfigurationValueRecordMetadata*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSModuleConfigurationValueRecordMetadata*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LogosNSRuntimeModuleInstanceAddress): CborValue
 proc fromChecked*(T: type LogosNSRuntimeModuleInstanceAddress, v: CborValue): LogosNSRuntimeModuleInstanceAddress
+proc stepEncLogosNSRuntimeModuleInstanceAddress*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeModuleInstanceAddress*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeModuleInstanceId*(x: LogosNSRuntimeModuleInstanceId): CborValue
 proc decLogosNSRuntimeModuleInstanceId*(v: CborValue): LogosNSRuntimeModuleInstanceId
 proc encLogosNSRuntimeModuleName*(x: LogosNSRuntimeModuleName): CborValue
 proc decLogosNSRuntimeModuleName*(v: CborValue): LogosNSRuntimeModuleName
 proc toCbor*(x: LogosNSRuntimeModuleProviderAddress): CborValue
 proc fromChecked*(T: type LogosNSRuntimeModuleProviderAddress, v: CborValue): LogosNSRuntimeModuleProviderAddress
+proc stepEncLogosNSRuntimeModuleProviderAddress*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLogosNSRuntimeModuleProviderAddress*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLogosNSRuntimeModuleProviderId*(x: LogosNSRuntimeModuleProviderId): CborValue
 proc decLogosNSRuntimeModuleProviderId*(v: CborValue): LogosNSRuntimeModuleProviderId
 proc encLogosNSRuntimeModuleStateAssignmentId*(x: LogosNSRuntimeModuleStateAssignmentId): CborValue
@@ -1103,94 +1343,201 @@ proc encLogosNSRuntimeControlAlpn*(x: LogosNSRuntimeControlAlpn): CborValue =
 proc decLogosNSRuntimeControlAlpn*(v: CborValue): LogosNSRuntimeControlAlpn =
   v.text
 
+proc stepEncLogosNSRuntimeControlApplyConfigurationRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlApplyConfigurationRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("expected_state_revision")
+  node.entries[k].value = cbor(uint64(x.expected_state_revision))
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlApplyConfigurationRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlApplyConfigurationRequest](dst)
+  r[] = LogosNSRuntimeControlApplyConfigurationRequest()
+  r.expected_state_revision = uint64(v.lookup("expected_state_revision").get.uint)
+  let f1 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f1, addr r.target)
+
 proc toCbor*(x: LogosNSRuntimeControlApplyConfigurationRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("expected_state_revision"), cbor(uint64(x.expected_state_revision))))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlApplyConfigurationRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlApplyConfigurationRequest, v: CborValue): LogosNSRuntimeControlApplyConfigurationRequest =
-  var r = LogosNSRuntimeControlApplyConfigurationRequest()
-  r.expected_state_revision = uint64(v.lookup("expected_state_revision").get.uint)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlApplyConfigurationRequest
+  runDec(stepDecLogosNSRuntimeControlApplyConfigurationRequest, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlApplyConfigurationResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("applied_value_revision"), cbor(uint64(x.applied_value_revision))))
-  e.add((cbor("state_revision"), cbor(uint64(x.state_revision))))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeControlApplyConfigurationResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlApplyConfigurationResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("applied_value_revision")
+  node.entries[k].value = cbor(uint64(x.applied_value_revision))
+  inc k
+  node.entries[k].key = cbor("state_revision")
+  node.entries[k].value = cbor(uint64(x.state_revision))
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlApplyConfigurationResponse, v: CborValue): LogosNSRuntimeControlApplyConfigurationResponse =
-  var r = LogosNSRuntimeControlApplyConfigurationResponse()
+proc stepDecLogosNSRuntimeControlApplyConfigurationResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlApplyConfigurationResponse](dst)
+  r[] = LogosNSRuntimeControlApplyConfigurationResponse()
   r.applied_value_revision = uint64(v.lookup("applied_value_revision").get.uint)
   r.state_revision = uint64(v.lookup("state_revision").get.uint)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  let f2 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f2, addr r.target)
+
+proc toCbor*(x: LogosNSRuntimeControlApplyConfigurationResponse): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlApplyConfigurationResponse, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlApplyConfigurationResponse, v: CborValue): LogosNSRuntimeControlApplyConfigurationResponse =
+  var r: LogosNSRuntimeControlApplyConfigurationResponse
+  runDec(stepDecLogosNSRuntimeControlApplyConfigurationResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlCloseRouteRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlCloseRouteRequest](src)
+  var n = 1
+  if x.reason.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.reason.isSome:
+    node.entries[k].key = cbor("reason")
+    node.entries[k].value = encLogosNSRuntimeControlReason(x.reason.get)
+    inc k
+  node.entries[k].key = cbor("route")
+  node.entries[k].value = encLogosNSRuntimeRouteId(x.route)
+  inc k
+
+proc stepDecLogosNSRuntimeControlCloseRouteRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlCloseRouteRequest](dst)
+  r[] = LogosNSRuntimeControlCloseRouteRequest()
+  let f3 = v.lookup("reason")
+  if f3.isSome:
+    r.reason = Opt.some(decLogosNSRuntimeControlReason(f3.get))
+  r.route = decLogosNSRuntimeRouteId(v.lookup("route").get)
 
 proc toCbor*(x: LogosNSRuntimeControlCloseRouteRequest): CborValue =
-  var e: seq[CborEntry]
-  if x.reason.isSome:
-    e.add((cbor("reason"), encLogosNSRuntimeControlReason(x.reason.get)))
-  e.add((cbor("route"), encLogosNSRuntimeRouteId(x.route)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlCloseRouteRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlCloseRouteRequest, v: CborValue): LogosNSRuntimeControlCloseRouteRequest =
-  var r = LogosNSRuntimeControlCloseRouteRequest()
-  block:
-    let f = v.lookup("reason")
-    if f.isSome:
-      r.reason = Opt.some(decLogosNSRuntimeControlReason(f.get))
-  r.route = decLogosNSRuntimeRouteId(v.lookup("route").get)
+  var r: LogosNSRuntimeControlCloseRouteRequest
+  runDec(stepDecLogosNSRuntimeControlCloseRouteRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlCloseRouteResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlCloseRouteResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("route")
+  node.entries[k].value = encLogosNSRuntimeRouteId(x.route)
+  inc k
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlRouteState, addr x.state, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlCloseRouteResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlCloseRouteResponse](dst)
+  r[] = LogosNSRuntimeControlCloseRouteResponse()
+  r.route = decLogosNSRuntimeRouteId(v.lookup("route").get)
+  let f4 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlRouteState, f4, addr r.state)
 
 proc toCbor*(x: LogosNSRuntimeControlCloseRouteResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("route"), encLogosNSRuntimeRouteId(x.route)))
-  e.add((cbor("state"), toCbor(x.state)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlCloseRouteResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlCloseRouteResponse, v: CborValue): LogosNSRuntimeControlCloseRouteResponse =
-  var r = LogosNSRuntimeControlCloseRouteResponse()
-  r.route = decLogosNSRuntimeRouteId(v.lookup("route").get)
-  r.state = fromChecked(LogosNSRuntimeControlRouteState, v.lookup("state").get)
+  var r: LogosNSRuntimeControlCloseRouteResponse
+  runDec(stepDecLogosNSRuntimeControlCloseRouteResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlConfigurationStateChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlConfigurationStateChangedEvent](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSModuleConfigurationConfigurationStateSummary, addr x.state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlConfigurationStateChangedEvent*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlConfigurationStateChangedEvent](dst)
+  r[] = LogosNSRuntimeControlConfigurationStateChangedEvent()
+  let f5 = v.lookup("state").get
+  w.later(stepDecLogosNSModuleConfigurationConfigurationStateSummary, f5, addr r.state)
+  let f6 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f6, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlConfigurationStateChangedEvent): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("state"), toCbor(x.state)))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlConfigurationStateChangedEvent, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlConfigurationStateChangedEvent, v: CborValue): LogosNSRuntimeControlConfigurationStateChangedEvent =
-  var r = LogosNSRuntimeControlConfigurationStateChangedEvent()
-  r.state = fromChecked(LogosNSModuleConfigurationConfigurationStateSummary, v.lookup("state").get)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlConfigurationStateChangedEvent
+  runDec(stepDecLogosNSRuntimeControlConfigurationStateChangedEvent, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlCreateModuleRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  e.add((cbor("request_key"), cbor(x.request_key)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeControlCreateModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlCreateModuleRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  node.entries[k].key = cbor("request_key")
+  node.entries[k].value = cbor(x.request_key)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlCreateModuleRequest, v: CborValue): LogosNSRuntimeControlCreateModuleRequest =
-  var r = LogosNSRuntimeControlCreateModuleRequest()
+proc stepDecLogosNSRuntimeControlCreateModuleRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlCreateModuleRequest](dst)
+  r[] = LogosNSRuntimeControlCreateModuleRequest()
   r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
   r.request_key = v.lookup("request_key").get.text
+
+proc toCbor*(x: LogosNSRuntimeControlCreateModuleRequest): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlCreateModuleRequest, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlCreateModuleRequest, v: CborValue): LogosNSRuntimeControlCreateModuleRequest =
+  var r: LogosNSRuntimeControlCreateModuleRequest
+  runDec(stepDecLogosNSRuntimeControlCreateModuleRequest, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlCreateModuleResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeControlCreateModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlCreateModuleResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("instance")
+  node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance)
+  inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlCreateModuleResponse, v: CborValue): LogosNSRuntimeControlCreateModuleResponse =
-  var r = LogosNSRuntimeControlCreateModuleResponse()
+proc stepDecLogosNSRuntimeControlCreateModuleResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlCreateModuleResponse](dst)
+  r[] = LogosNSRuntimeControlCreateModuleResponse()
   r.instance = decLogosNSRuntimeModuleInstanceId(v.lookup("instance").get)
   r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+
+proc toCbor*(x: LogosNSRuntimeControlCreateModuleResponse): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlCreateModuleResponse, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlCreateModuleResponse, v: CborValue): LogosNSRuntimeControlCreateModuleResponse =
+  var r: LogosNSRuntimeControlCreateModuleResponse
+  runDec(stepDecLogosNSRuntimeControlCreateModuleResponse, v, addr r)
   r
 
 proc encLogosNSRuntimeControlCursor*(x: LogosNSRuntimeControlCursor): CborValue =
@@ -1205,241 +1552,494 @@ proc encLogosNSRuntimeControlDecisionId*(x: LogosNSRuntimeControlDecisionId): Cb
 proc decLogosNSRuntimeControlDecisionId*(v: CborValue): LogosNSRuntimeControlDecisionId =
   v.text
 
+proc stepEncLogosNSRuntimeControlDescribeProviderRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlDescribeProviderRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("provider")
+  w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlDescribeProviderRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlDescribeProviderRequest](dst)
+  r[] = LogosNSRuntimeControlDescribeProviderRequest()
+  let f7 = v.lookup("provider").get
+  w.later(stepDecLogosNSRuntimeModuleProviderAddress, f7, addr r.provider)
+
 proc toCbor*(x: LogosNSRuntimeControlDescribeProviderRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("provider"), toCbor(x.provider)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlDescribeProviderRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlDescribeProviderRequest, v: CborValue): LogosNSRuntimeControlDescribeProviderRequest =
-  var r = LogosNSRuntimeControlDescribeProviderRequest()
-  r.provider = fromChecked(LogosNSRuntimeModuleProviderAddress, v.lookup("provider").get)
+  var r: LogosNSRuntimeControlDescribeProviderRequest
+  runDec(stepDecLogosNSRuntimeControlDescribeProviderRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlDescribeProviderResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlDescribeProviderResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("provider")
+  w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("surface")
+  node.entries[k].value = cbor(x.surface)
+  inc k
+
+proc stepDecLogosNSRuntimeControlDescribeProviderResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlDescribeProviderResponse](dst)
+  r[] = LogosNSRuntimeControlDescribeProviderResponse()
+  let f8 = v.lookup("provider").get
+  w.later(stepDecLogosNSRuntimeModuleProviderAddress, f8, addr r.provider)
+  r.surface = v.lookup("surface").get.bytes
 
 proc toCbor*(x: LogosNSRuntimeControlDescribeProviderResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("provider"), toCbor(x.provider)))
-  e.add((cbor("surface"), cbor(x.surface)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlDescribeProviderResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlDescribeProviderResponse, v: CborValue): LogosNSRuntimeControlDescribeProviderResponse =
-  var r = LogosNSRuntimeControlDescribeProviderResponse()
-  r.provider = fromChecked(LogosNSRuntimeModuleProviderAddress, v.lookup("provider").get)
-  r.surface = v.lookup("surface").get.bytes
+  var r: LogosNSRuntimeControlDescribeProviderResponse
+  runDec(stepDecLogosNSRuntimeControlDescribeProviderResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlEstablishRouteRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlEstablishRouteRequest](src)
+  var n = 4
+  if x.provider.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("access")
+  w.later(stepEncLogosNSRuntimeControlRouteAccess, addr x.access, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("cardinality")
+  w.later(stepEncLogosNSRuntimeControlProviderRequirementCardinality, addr x.cardinality, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("contract")
+  w.later(stepEncSchemaCommitment, addr x.contract, addr node.entries[k].value)
+  inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("request_key")
+  node.entries[k].value = cbor(x.request_key)
+  inc k
+
+proc stepDecLogosNSRuntimeControlEstablishRouteRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlEstablishRouteRequest](dst)
+  r[] = LogosNSRuntimeControlEstablishRouteRequest()
+  let f9 = v.lookup("access").get
+  w.later(stepDecLogosNSRuntimeControlRouteAccess, f9, addr r.access)
+  let f10 = v.lookup("cardinality").get
+  w.later(stepDecLogosNSRuntimeControlProviderRequirementCardinality, f10, addr r.cardinality)
+  let f11 = v.lookup("contract").get
+  w.later(stepDecSchemaCommitment, f11, addr r.contract)
+  let f12 = v.lookup("provider")
+  if f12.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f12.get, addr r.provider.get)
+  r.request_key = v.lookup("request_key").get.text
 
 proc toCbor*(x: LogosNSRuntimeControlEstablishRouteRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("access"), toCbor(x.access)))
-  e.add((cbor("cardinality"), toCbor(x.cardinality)))
-  e.add((cbor("contract"), toCbor(x.contract)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  e.add((cbor("request_key"), cbor(x.request_key)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlEstablishRouteRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlEstablishRouteRequest, v: CborValue): LogosNSRuntimeControlEstablishRouteRequest =
-  var r = LogosNSRuntimeControlEstablishRouteRequest()
-  r.access = fromChecked(LogosNSRuntimeControlRouteAccess, v.lookup("access").get)
-  r.cardinality = fromChecked(LogosNSRuntimeControlProviderRequirementCardinality, v.lookup("cardinality").get)
-  r.contract = fromChecked(SchemaCommitment, v.lookup("contract").get)
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
-  r.request_key = v.lookup("request_key").get.text
+  var r: LogosNSRuntimeControlEstablishRouteRequest
+  runDec(stepDecLogosNSRuntimeControlEstablishRouteRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlEstablishRouteResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlEstablishRouteResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("continuations")
+  let a13 = newCborArray(x.continuations.len)
+  node.entries[k].value = a13
+  for i14 in 0 ..< x.continuations.len:
+    w.later(stepEncLogosNSRuntimeControlRouteContinuation, addr x.continuations[i14], addr a13.items[i14])
+  inc k
+  node.entries[k].key = cbor("partial")
+  node.entries[k].value = cbor(x.partial)
+  inc k
+  node.entries[k].key = cbor("routes")
+  let a17 = newCborArray(x.routes.len)
+  node.entries[k].value = a17
+  for i18 in 0 ..< x.routes.len:
+    w.later(stepEncLogosNSRuntimeControlRouteRecord, addr x.routes[i18], addr a17.items[i18])
+  inc k
+
+proc stepDecLogosNSRuntimeControlEstablishRouteResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlEstablishRouteResponse](dst)
+  r[] = LogosNSRuntimeControlEstablishRouteResponse()
+  let f15 = v.lookup("continuations").get
+  r.continuations.setLen(f15.items.len)
+  for i16 in 0 ..< f15.items.len:
+    w.later(stepDecLogosNSRuntimeControlRouteContinuation, f15.items[i16], addr r.continuations[i16])
+  r.partial = asBool(v.lookup("partial").get)
+  let f19 = v.lookup("routes").get
+  r.routes.setLen(f19.items.len)
+  for i20 in 0 ..< f19.items.len:
+    w.later(stepDecLogosNSRuntimeControlRouteRecord, f19.items[i20], addr r.routes[i20])
 
 proc toCbor*(x: LogosNSRuntimeControlEstablishRouteResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("continuations"), cborArray(x.continuations.mapIt(toCbor(it)))))
-  e.add((cbor("partial"), cbor(x.partial)))
-  e.add((cbor("routes"), cborArray(x.routes.mapIt(toCbor(it)))))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlEstablishRouteResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlEstablishRouteResponse, v: CborValue): LogosNSRuntimeControlEstablishRouteResponse =
-  var r = LogosNSRuntimeControlEstablishRouteResponse()
-  r.continuations = v.lookup("continuations").get.items.mapIt(fromChecked(LogosNSRuntimeControlRouteContinuation, it))
-  r.partial = asBool(v.lookup("partial").get)
-  r.routes = v.lookup("routes").get.items.mapIt(fromChecked(LogosNSRuntimeControlRouteRecord, it))
+  var r: LogosNSRuntimeControlEstablishRouteResponse
+  runDec(stepDecLogosNSRuntimeControlEstablishRouteResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("strategy")
+  node.entries[k].value = cbor("direct_dynamic")
+  inc k
+
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap](dst)
+  r[] = LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap()
 
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("strategy"), cbor("direct_dynamic")))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap =
-  var r = LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap()
+  var r: LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap
+  runDec(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("strategy")
+  node.entries[k].value = cbor("direct_static")
+  inc k
+
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap](dst)
+  r[] = LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap()
 
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("strategy"), cbor("direct_static")))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap =
-  var r = LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap()
+  var r: LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap
+  runDec(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice): CborValue =
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice](src)
   case x.kind
   of LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind.Container:
-    cbor("container")
+    dst[] = cbor("container")
   of LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind.Process:
-    cbor("process")
+    dst[] = cbor("process")
   of LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind.Sandbox:
-    cbor("sandbox")
+    dst[] = cbor("sandbox")
 
-proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice =
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice](dst)
   case generatedSchema().arm("logos.runtime_control.execution_selection#implementation/arm_3/placement", v)
   of 0:
-    LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind.Process)
+    r[] = LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind.Process)
   of 1:
-    LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind.Sandbox)
+    r[] = LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind.Sandbox)
   of 2:
-    LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind.Container)
+    r[] = LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind.Container)
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice =
+  var r: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice
+  runDec(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("placement")
+  w.later(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice, addr x.placement, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("strategy")
+  node.entries[k].value = cbor("hosted_dynamic")
+  inc k
+
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap](dst)
+  r[] = LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap()
+  let f21 = v.lookup("placement").get
+  w.later(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice, f21, addr r.placement)
 
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("placement"), toCbor(x.placement)))
-  e.add((cbor("strategy"), cbor("hosted_dynamic")))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap =
-  var r = LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap()
-  r.placement = fromChecked(LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice, v.lookup("placement").get)
+  var r: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap
+  runDec(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("strategy")
+  node.entries[k].value = cbor("implementation-specific")
+  inc k
+
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap](dst)
+  r[] = LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap()
 
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("strategy"), cbor("implementation-specific")))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap =
-  var r = LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap()
+  var r: LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap
+  runDec(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationChoice): CborValue =
+proc stepEncLogosNSRuntimeControlExecutionSelectionImplementationChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationChoice](src)
   case x.kind
   of LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Direct_dynamic:
-    toCbor(x.arm_Direct_dynamic)
+    w.later(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap, addr x.arm_Direct_dynamic, addr dst[])
   of LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Direct_static:
-    toCbor(x.arm_Direct_static)
+    w.later(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap, addr x.arm_Direct_static, addr dst[])
   of LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Hosted_dynamic:
-    toCbor(x.arm_Hosted_dynamic)
+    w.later(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap, addr x.arm_Hosted_dynamic, addr dst[])
   of LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Implementation_specific:
-    toCbor(x.arm_Implementation_specific)
+    w.later(stepEncLogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap, addr x.arm_Implementation_specific, addr dst[])
 
-proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationChoice, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationChoice =
+proc stepDecLogosNSRuntimeControlExecutionSelectionImplementationChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionSelectionImplementationChoice](dst)
   case generatedSchema().arm("logos.runtime_control.execution_selection#implementation", v)
   of 0:
-    LogosNSRuntimeControlExecutionSelectionImplementationChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Direct_static, arm_Direct_static: fromChecked(LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap, v))
+    r[] = LogosNSRuntimeControlExecutionSelectionImplementationChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Direct_static)
+    w.later(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap, v, addr r.arm_Direct_static)
   of 1:
-    LogosNSRuntimeControlExecutionSelectionImplementationChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Direct_dynamic, arm_Direct_dynamic: fromChecked(LogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap, v))
+    r[] = LogosNSRuntimeControlExecutionSelectionImplementationChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Direct_dynamic)
+    w.later(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARDirectDynamicMap, v, addr r.arm_Direct_dynamic)
   of 2:
-    LogosNSRuntimeControlExecutionSelectionImplementationChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Implementation_specific, arm_Implementation_specific: fromChecked(LogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap, v))
+    r[] = LogosNSRuntimeControlExecutionSelectionImplementationChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Implementation_specific)
+    w.later(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARImplementationSpecificMap, v, addr r.arm_Implementation_specific)
   of 3:
-    LogosNSRuntimeControlExecutionSelectionImplementationChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Hosted_dynamic, arm_Hosted_dynamic: fromChecked(LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap, v))
+    r[] = LogosNSRuntimeControlExecutionSelectionImplementationChoice(kind: LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Hosted_dynamic)
+    w.later(stepDecLogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap, v, addr r.arm_Hosted_dynamic)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionPackageMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("package"), cbor(x.package)))
-  e.add((cbor("version"), cbor(x.version)))
-  cborMap(e)
+proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionImplementationChoice): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlExecutionSelectionImplementationChoice, addr x)
 
-proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionPackageMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionPackageMap =
-  var r = LogosNSRuntimeControlExecutionSelectionPackageMap()
+proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionImplementationChoice, v: CborValue): LogosNSRuntimeControlExecutionSelectionImplementationChoice =
+  var r: LogosNSRuntimeControlExecutionSelectionImplementationChoice
+  runDec(stepDecLogosNSRuntimeControlExecutionSelectionImplementationChoice, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlExecutionSelectionPackageMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionSelectionPackageMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("package")
+  node.entries[k].value = cbor(x.package)
+  inc k
+  node.entries[k].key = cbor("version")
+  node.entries[k].value = cbor(x.version)
+  inc k
+
+proc stepDecLogosNSRuntimeControlExecutionSelectionPackageMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionSelectionPackageMap](dst)
+  r[] = LogosNSRuntimeControlExecutionSelectionPackageMap()
   r.package = v.lookup("package").get.text
   r.version = v.lookup("version").get.text
+
+proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionPackageMap): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlExecutionSelectionPackageMap, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionPackageMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionPackageMap =
+  var r: LogosNSRuntimeControlExecutionSelectionPackageMap
+  runDec(stepDecLogosNSRuntimeControlExecutionSelectionPackageMap, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlExecutionSelectionSignerMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionSelectionSignerMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("profile")
+  node.entries[k].value = cbor("logos.package-signing.cose-sign1-slh-dsa-sha2-192s")
+  inc k
+  node.entries[k].key = cbor("public_key")
+  node.entries[k].value = cbor(x.public_key)
+  inc k
+
+proc stepDecLogosNSRuntimeControlExecutionSelectionSignerMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionSelectionSignerMap](dst)
+  r[] = LogosNSRuntimeControlExecutionSelectionSignerMap()
+  r.public_key = v.lookup("public_key").get.bytes
 
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelectionSignerMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("profile"), cbor("logos.package-signing.cose-sign1-slh-dsa-sha2-192s")))
-  e.add((cbor("public_key"), cbor(x.public_key)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlExecutionSelectionSignerMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelectionSignerMap, v: CborValue): LogosNSRuntimeControlExecutionSelectionSignerMap =
-  var r = LogosNSRuntimeControlExecutionSelectionSignerMap()
-  r.public_key = v.lookup("public_key").get.bytes
+  var r: LogosNSRuntimeControlExecutionSelectionSignerMap
+  runDec(stepDecLogosNSRuntimeControlExecutionSelectionSignerMap, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlExecutionSelection*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionSelection](src)
+  var n = 1
+  if x.package.isSome:
+    inc n
+  if x.signer.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("implementation")
+  w.later(stepEncLogosNSRuntimeControlExecutionSelectionImplementationChoice, addr x.implementation, addr node.entries[k].value)
+  inc k
+  if x.package.isSome:
+    node.entries[k].key = cbor("package")
+    w.later(stepEncLogosNSRuntimeControlExecutionSelectionPackageMap, addr x.package.get, addr node.entries[k].value)
+    inc k
+  if x.signer.isSome:
+    node.entries[k].key = cbor("signer")
+    w.later(stepEncLogosNSRuntimeControlExecutionSelectionSignerMap, addr x.signer.get, addr node.entries[k].value)
+    inc k
+
+proc stepDecLogosNSRuntimeControlExecutionSelection*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionSelection](dst)
+  r[] = LogosNSRuntimeControlExecutionSelection()
+  let f22 = v.lookup("implementation").get
+  w.later(stepDecLogosNSRuntimeControlExecutionSelectionImplementationChoice, f22, addr r.implementation)
+  let f23 = v.lookup("package")
+  if f23.isSome:
+    r.package = Opt.some(default(LogosNSRuntimeControlExecutionSelectionPackageMap))
+    w.later(stepDecLogosNSRuntimeControlExecutionSelectionPackageMap, f23.get, addr r.package.get)
+  let f24 = v.lookup("signer")
+  if f24.isSome:
+    r.signer = Opt.some(default(LogosNSRuntimeControlExecutionSelectionSignerMap))
+    w.later(stepDecLogosNSRuntimeControlExecutionSelectionSignerMap, f24.get, addr r.signer.get)
 
 proc toCbor*(x: LogosNSRuntimeControlExecutionSelection): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("implementation"), toCbor(x.implementation)))
-  if x.package.isSome:
-    e.add((cbor("package"), toCbor(x.package.get)))
-  if x.signer.isSome:
-    e.add((cbor("signer"), toCbor(x.signer.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlExecutionSelection, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlExecutionSelection, v: CborValue): LogosNSRuntimeControlExecutionSelection =
-  var r = LogosNSRuntimeControlExecutionSelection()
-  r.implementation = fromChecked(LogosNSRuntimeControlExecutionSelectionImplementationChoice, v.lookup("implementation").get)
-  block:
-    let f = v.lookup("package")
-    if f.isSome:
-      r.package = Opt.some(fromChecked(LogosNSRuntimeControlExecutionSelectionPackageMap, f.get))
-  block:
-    let f = v.lookup("signer")
-    if f.isSome:
-      r.signer = Opt.some(fromChecked(LogosNSRuntimeControlExecutionSelectionSignerMap, f.get))
+  var r: LogosNSRuntimeControlExecutionSelection
+  runDec(stepDecLogosNSRuntimeControlExecutionSelection, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlExecutionStateIntentChoice): CborValue =
+proc stepEncLogosNSRuntimeControlExecutionStateIntentChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionStateIntentChoice](src)
   case x.kind
   of LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested:
-    cbor("requested")
+    dst[] = cbor("requested")
   of LogosNSRuntimeControlExecutionStateIntentChoiceKind.Stopped:
-    cbor("stopped")
+    dst[] = cbor("stopped")
   of LogosNSRuntimeControlExecutionStateIntentChoiceKind.Uninitialized:
-    cbor("uninitialized")
+    dst[] = cbor("uninitialized")
 
-proc fromChecked*(T: type LogosNSRuntimeControlExecutionStateIntentChoice, v: CborValue): LogosNSRuntimeControlExecutionStateIntentChoice =
+proc stepDecLogosNSRuntimeControlExecutionStateIntentChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionStateIntentChoice](dst)
   case generatedSchema().arm("logos.runtime_control.execution_state#intent", v)
   of 0:
-    LogosNSRuntimeControlExecutionStateIntentChoice(kind: LogosNSRuntimeControlExecutionStateIntentChoiceKind.Stopped)
+    r[] = LogosNSRuntimeControlExecutionStateIntentChoice(kind: LogosNSRuntimeControlExecutionStateIntentChoiceKind.Stopped)
   of 1:
-    LogosNSRuntimeControlExecutionStateIntentChoice(kind: LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested)
+    r[] = LogosNSRuntimeControlExecutionStateIntentChoice(kind: LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested)
   of 2:
-    LogosNSRuntimeControlExecutionStateIntentChoice(kind: LogosNSRuntimeControlExecutionStateIntentChoiceKind.Uninitialized)
+    r[] = LogosNSRuntimeControlExecutionStateIntentChoice(kind: LogosNSRuntimeControlExecutionStateIntentChoiceKind.Uninitialized)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlExecutionState): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("intent"), toCbor(x.intent)))
-  if x.intent_revision.isSome:
-    e.add((cbor("intent_revision"), cbor(uint64(x.intent_revision.get))))
-  e.add((cbor("revision"), cbor(uint64(x.revision))))
-  cborMap(e)
+proc toCbor*(x: LogosNSRuntimeControlExecutionStateIntentChoice): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlExecutionStateIntentChoice, addr x)
 
-proc fromChecked*(T: type LogosNSRuntimeControlExecutionState, v: CborValue): LogosNSRuntimeControlExecutionState =
-  var r = LogosNSRuntimeControlExecutionState()
-  r.intent = fromChecked(LogosNSRuntimeControlExecutionStateIntentChoice, v.lookup("intent").get)
-  block:
-    let f = v.lookup("intent_revision")
-    if f.isSome:
-      r.intent_revision = Opt.some(uint64(f.get.uint))
-  r.revision = uint64(v.lookup("revision").get.uint)
+proc fromChecked*(T: type LogosNSRuntimeControlExecutionStateIntentChoice, v: CborValue): LogosNSRuntimeControlExecutionStateIntentChoice =
+  var r: LogosNSRuntimeControlExecutionStateIntentChoice
+  runDec(stepDecLogosNSRuntimeControlExecutionStateIntentChoice, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlExecutionStateChangedEvent): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("execution"), toCbor(x.execution)))
-  e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeControlExecutionState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionState](src)
+  var n = 2
+  if x.intent_revision.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("intent")
+  w.later(stepEncLogosNSRuntimeControlExecutionStateIntentChoice, addr x.intent, addr node.entries[k].value)
+  inc k
+  if x.intent_revision.isSome:
+    node.entries[k].key = cbor("intent_revision")
+    node.entries[k].value = cbor(uint64(x.intent_revision.get))
+    inc k
+  node.entries[k].key = cbor("revision")
+  node.entries[k].value = cbor(uint64(x.revision))
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlExecutionStateChangedEvent, v: CborValue): LogosNSRuntimeControlExecutionStateChangedEvent =
-  var r = LogosNSRuntimeControlExecutionStateChangedEvent()
-  r.execution = fromChecked(LogosNSRuntimeControlExecutionState, v.lookup("execution").get)
+proc stepDecLogosNSRuntimeControlExecutionState*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionState](dst)
+  r[] = LogosNSRuntimeControlExecutionState()
+  let f25 = v.lookup("intent").get
+  w.later(stepDecLogosNSRuntimeControlExecutionStateIntentChoice, f25, addr r.intent)
+  let f26 = v.lookup("intent_revision")
+  if f26.isSome:
+    r.intent_revision = Opt.some(uint64(f26.get.uint))
+  r.revision = uint64(v.lookup("revision").get.uint)
+
+proc toCbor*(x: LogosNSRuntimeControlExecutionState): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlExecutionState, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlExecutionState, v: CborValue): LogosNSRuntimeControlExecutionState =
+  var r: LogosNSRuntimeControlExecutionState
+  runDec(stepDecLogosNSRuntimeControlExecutionState, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlExecutionStateChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlExecutionStateChangedEvent](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("execution")
+  w.later(stepEncLogosNSRuntimeControlExecutionState, addr x.execution, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("instance")
+  node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance)
+  inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+
+proc stepDecLogosNSRuntimeControlExecutionStateChangedEvent*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlExecutionStateChangedEvent](dst)
+  r[] = LogosNSRuntimeControlExecutionStateChangedEvent()
+  let f27 = v.lookup("execution").get
+  w.later(stepDecLogosNSRuntimeControlExecutionState, f27, addr r.execution)
   r.instance = decLogosNSRuntimeModuleInstanceId(v.lookup("instance").get)
   r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+
+proc toCbor*(x: LogosNSRuntimeControlExecutionStateChangedEvent): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlExecutionStateChangedEvent, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlExecutionStateChangedEvent, v: CborValue): LogosNSRuntimeControlExecutionStateChangedEvent =
+  var r: LogosNSRuntimeControlExecutionStateChangedEvent
+  runDec(stepDecLogosNSRuntimeControlExecutionStateChangedEvent, v, addr r)
   r
 
 proc encLogosNSRuntimeControlFailureCode*(x: LogosNSRuntimeControlFailureCode): CborValue =
@@ -1448,278 +2048,577 @@ proc encLogosNSRuntimeControlFailureCode*(x: LogosNSRuntimeControlFailureCode): 
 proc decLogosNSRuntimeControlFailureCode*(v: CborValue): LogosNSRuntimeControlFailureCode =
   v.text
 
+proc stepEncLogosNSRuntimeControlGetConfigurationRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetConfigurationRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetConfigurationRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetConfigurationRequest](dst)
+  r[] = LogosNSRuntimeControlGetConfigurationRequest()
+  let f28 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f28, addr r.target)
+
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetConfigurationRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationRequest, v: CborValue): LogosNSRuntimeControlGetConfigurationRequest =
-  var r = LogosNSRuntimeControlGetConfigurationRequest()
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetConfigurationRequest
+  runDec(stepDecLogosNSRuntimeControlGetConfigurationRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetConfigurationResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetConfigurationResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSModuleConfigurationConfigurationState, addr x.state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetConfigurationResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetConfigurationResponse](dst)
+  r[] = LogosNSRuntimeControlGetConfigurationResponse()
+  let f29 = v.lookup("state").get
+  w.later(stepDecLogosNSModuleConfigurationConfigurationState, f29, addr r.state)
+  let f30 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f30, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("state"), toCbor(x.state)))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetConfigurationResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationResponse, v: CborValue): LogosNSRuntimeControlGetConfigurationResponse =
-  var r = LogosNSRuntimeControlGetConfigurationResponse()
-  r.state = fromChecked(LogosNSModuleConfigurationConfigurationState, v.lookup("state").get)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetConfigurationResponse
+  runDec(stepDecLogosNSRuntimeControlGetConfigurationResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetConfigurationSchemaRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetConfigurationSchemaRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetConfigurationSchemaRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetConfigurationSchemaRequest](dst)
+  r[] = LogosNSRuntimeControlGetConfigurationSchemaRequest()
+  let f31 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f31, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationSchemaRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetConfigurationSchemaRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationSchemaRequest, v: CborValue): LogosNSRuntimeControlGetConfigurationSchemaRequest =
-  var r = LogosNSRuntimeControlGetConfigurationSchemaRequest()
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetConfigurationSchemaRequest
+  runDec(stepDecLogosNSRuntimeControlGetConfigurationSchemaRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetConfigurationSchemaResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetConfigurationSchemaResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("schema")
+  w.later(stepEncLogosNSModuleConfigurationSchemaBinding, addr x.schema, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("state_revision")
+  node.entries[k].value = cbor(uint64(x.state_revision))
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetConfigurationSchemaResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetConfigurationSchemaResponse](dst)
+  r[] = LogosNSRuntimeControlGetConfigurationSchemaResponse()
+  let f32 = v.lookup("schema").get
+  w.later(stepDecLogosNSModuleConfigurationSchemaBinding, f32, addr r.schema)
+  r.state_revision = uint64(v.lookup("state_revision").get.uint)
+  let f33 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f33, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationSchemaResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("schema"), toCbor(x.schema)))
-  e.add((cbor("state_revision"), cbor(uint64(x.state_revision))))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetConfigurationSchemaResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationSchemaResponse, v: CborValue): LogosNSRuntimeControlGetConfigurationSchemaResponse =
-  var r = LogosNSRuntimeControlGetConfigurationSchemaResponse()
-  r.schema = fromChecked(LogosNSModuleConfigurationSchemaBinding, v.lookup("schema").get)
-  r.state_revision = uint64(v.lookup("state_revision").get.uint)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetConfigurationSchemaResponse
+  runDec(stepDecLogosNSRuntimeControlGetConfigurationSchemaResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetConfigurationSummaryRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetConfigurationSummaryRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetConfigurationSummaryRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetConfigurationSummaryRequest](dst)
+  r[] = LogosNSRuntimeControlGetConfigurationSummaryRequest()
+  let f34 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f34, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationSummaryRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetConfigurationSummaryRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationSummaryRequest, v: CborValue): LogosNSRuntimeControlGetConfigurationSummaryRequest =
-  var r = LogosNSRuntimeControlGetConfigurationSummaryRequest()
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetConfigurationSummaryRequest
+  runDec(stepDecLogosNSRuntimeControlGetConfigurationSummaryRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetConfigurationSummaryResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetConfigurationSummaryResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSModuleConfigurationConfigurationStateSummary, addr x.state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetConfigurationSummaryResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetConfigurationSummaryResponse](dst)
+  r[] = LogosNSRuntimeControlGetConfigurationSummaryResponse()
+  let f35 = v.lookup("state").get
+  w.later(stepDecLogosNSModuleConfigurationConfigurationStateSummary, f35, addr r.state)
+  let f36 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f36, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlGetConfigurationSummaryResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("state"), toCbor(x.state)))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetConfigurationSummaryResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetConfigurationSummaryResponse, v: CborValue): LogosNSRuntimeControlGetConfigurationSummaryResponse =
-  var r = LogosNSRuntimeControlGetConfigurationSummaryResponse()
-  r.state = fromChecked(LogosNSModuleConfigurationConfigurationStateSummary, v.lookup("state").get)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetConfigurationSummaryResponse
+  runDec(stepDecLogosNSRuntimeControlGetConfigurationSummaryResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetExecutionPermissionsRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetExecutionPermissionsRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecLogosNSRuntimeControlGetExecutionPermissionsRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetExecutionPermissionsRequest](dst)
+  r[] = LogosNSRuntimeControlGetExecutionPermissionsRequest()
 
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionPermissionsRequest): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetExecutionPermissionsRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionPermissionsRequest, v: CborValue): LogosNSRuntimeControlGetExecutionPermissionsRequest =
-  var r = LogosNSRuntimeControlGetExecutionPermissionsRequest()
+  var r: LogosNSRuntimeControlGetExecutionPermissionsRequest
+  runDec(stepDecLogosNSRuntimeControlGetExecutionPermissionsRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("permissions")
+  let a37 = newCborArray(x.permissions.len)
+  node.entries[k].value = a37
+  for i38 in 0 ..< x.permissions.len:
+    w.later(stepEncLogosNSRuntimeControlPermissionSetting, addr x.permissions[i38], addr a37.items[i38])
+  inc k
+  node.entries[k].key = cbor("status")
+  node.entries[k].value = cbor("available")
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap](dst)
+  r[] = LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap()
+  let f39 = v.lookup("permissions").get
+  r.permissions.setLen(f39.items.len)
+  for i40 in 0 ..< f39.items.len:
+    w.later(stepDecLogosNSRuntimeControlPermissionSetting, f39.items[i40], addr r.permissions[i40])
 
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("permissions"), cborArray(x.permissions.mapIt(toCbor(it)))))
-  e.add((cbor("status"), cbor("available")))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap, v: CborValue): LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap =
-  var r = LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap()
-  r.permissions = v.lookup("permissions").get.items.mapIt(fromChecked(LogosNSRuntimeControlPermissionSetting, it))
+  var r: LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap
+  runDec(stepDecLogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("status")
+  node.entries[k].value = cbor("unavailable")
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap](dst)
+  r[] = LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap()
 
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("status"), cbor("unavailable")))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap, v: CborValue): LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap =
-  var r = LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap()
+  var r: LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap
+  runDec(stepDecLogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlGetExecutionPermissionsResponse): CborValue =
+proc stepEncLogosNSRuntimeControlGetExecutionPermissionsResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetExecutionPermissionsResponse](src)
   case x.kind
   of LogosNSRuntimeControlGetExecutionPermissionsResponseKind.Available:
-    toCbor(x.arm_Available)
+    w.later(stepEncLogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap, addr x.arm_Available, addr dst[])
   of LogosNSRuntimeControlGetExecutionPermissionsResponseKind.Unavailable:
-    toCbor(x.arm_Unavailable)
+    w.later(stepEncLogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap, addr x.arm_Unavailable, addr dst[])
 
-proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionPermissionsResponse, v: CborValue): LogosNSRuntimeControlGetExecutionPermissionsResponse =
+proc stepDecLogosNSRuntimeControlGetExecutionPermissionsResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetExecutionPermissionsResponse](dst)
   case generatedSchema().arm("logos.runtime_control.get_execution_permissions_response#", v)
   of 0:
-    LogosNSRuntimeControlGetExecutionPermissionsResponse(kind: LogosNSRuntimeControlGetExecutionPermissionsResponseKind.Unavailable, arm_Unavailable: fromChecked(LogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap, v))
+    r[] = LogosNSRuntimeControlGetExecutionPermissionsResponse(kind: LogosNSRuntimeControlGetExecutionPermissionsResponseKind.Unavailable)
+    w.later(stepDecLogosNSRuntimeControlGetExecutionPermissionsResponseARUnavailableMap, v, addr r.arm_Unavailable)
   of 1:
-    LogosNSRuntimeControlGetExecutionPermissionsResponse(kind: LogosNSRuntimeControlGetExecutionPermissionsResponseKind.Available, arm_Available: fromChecked(LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap, v))
+    r[] = LogosNSRuntimeControlGetExecutionPermissionsResponse(kind: LogosNSRuntimeControlGetExecutionPermissionsResponseKind.Available)
+    w.later(stepDecLogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap, v, addr r.arm_Available)
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: LogosNSRuntimeControlGetExecutionPermissionsResponse): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlGetExecutionPermissionsResponse, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionPermissionsResponse, v: CborValue): LogosNSRuntimeControlGetExecutionPermissionsResponse =
+  var r: LogosNSRuntimeControlGetExecutionPermissionsResponse
+  runDec(stepDecLogosNSRuntimeControlGetExecutionPermissionsResponse, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlGetExecutionSummaryRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetExecutionSummaryRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetExecutionSummaryRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetExecutionSummaryRequest](dst)
+  r[] = LogosNSRuntimeControlGetExecutionSummaryRequest()
+  let f41 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f41, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlGetExecutionSummaryRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetExecutionSummaryRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionSummaryRequest, v: CborValue): LogosNSRuntimeControlGetExecutionSummaryRequest =
-  var r = LogosNSRuntimeControlGetExecutionSummaryRequest()
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetExecutionSummaryRequest
+  runDec(stepDecLogosNSRuntimeControlGetExecutionSummaryRequest, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice): CborValue =
+proc stepEncLogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice](src)
   case x.kind
   of LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Absent:
-    cbor("absent")
+    dst[] = cbor("absent")
   of LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Current:
-    cbor("current")
+    dst[] = cbor("current")
   of LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown:
-    cbor("unknown")
+    dst[] = cbor("unknown")
 
-proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice, v: CborValue): LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice =
+proc stepDecLogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice](dst)
   case generatedSchema().arm("logos.runtime_control.get_execution_summary_response#realization", v)
   of 0:
-    LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice(kind: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Absent)
+    r[] = LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice(kind: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Absent)
   of 1:
-    LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice(kind: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Current)
+    r[] = LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice(kind: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Current)
   of 2:
-    LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice(kind: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown)
+    r[] = LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice(kind: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlGetExecutionSummaryResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("execution"), toCbor(x.execution)))
+proc toCbor*(x: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice, v: CborValue): LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice =
+  var r: LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice
+  runDec(stepDecLogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlGetExecutionSummaryResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetExecutionSummaryResponse](src)
+  var n = 4
   if x.failure.isSome:
-    e.add((cbor("failure"), encLogosNSRuntimeControlFailureCode(x.failure.get)))
-  e.add((cbor("realization"), toCbor(x.realization)))
+    inc n
   if x.selection.isSome:
-    e.add((cbor("selection"), toCbor(x.selection.get)))
-  e.add((cbor("state"), toCbor(x.state)))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("execution")
+  w.later(stepEncLogosNSRuntimeControlExecutionState, addr x.execution, addr node.entries[k].value)
+  inc k
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    node.entries[k].value = encLogosNSRuntimeControlFailureCode(x.failure.get)
+    inc k
+  node.entries[k].key = cbor("realization")
+  w.later(stepEncLogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice, addr x.realization, addr node.entries[k].value)
+  inc k
+  if x.selection.isSome:
+    node.entries[k].key = cbor("selection")
+    w.later(stepEncLogosNSRuntimeControlExecutionSelection, addr x.selection.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlState, addr x.state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetExecutionSummaryResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetExecutionSummaryResponse](dst)
+  r[] = LogosNSRuntimeControlGetExecutionSummaryResponse()
+  let f42 = v.lookup("execution").get
+  w.later(stepDecLogosNSRuntimeControlExecutionState, f42, addr r.execution)
+  let f43 = v.lookup("failure")
+  if f43.isSome:
+    r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f43.get))
+  let f44 = v.lookup("realization").get
+  w.later(stepDecLogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice, f44, addr r.realization)
+  let f45 = v.lookup("selection")
+  if f45.isSome:
+    r.selection = Opt.some(default(LogosNSRuntimeControlExecutionSelection))
+    w.later(stepDecLogosNSRuntimeControlExecutionSelection, f45.get, addr r.selection.get)
+  let f46 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlState, f46, addr r.state)
+  let f47 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f47, addr r.target)
+
+proc toCbor*(x: LogosNSRuntimeControlGetExecutionSummaryResponse): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlGetExecutionSummaryResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetExecutionSummaryResponse, v: CborValue): LogosNSRuntimeControlGetExecutionSummaryResponse =
-  var r = LogosNSRuntimeControlGetExecutionSummaryResponse()
-  r.execution = fromChecked(LogosNSRuntimeControlExecutionState, v.lookup("execution").get)
-  block:
-    let f = v.lookup("failure")
-    if f.isSome:
-      r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f.get))
-  r.realization = fromChecked(LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice, v.lookup("realization").get)
-  block:
-    let f = v.lookup("selection")
-    if f.isSome:
-      r.selection = Opt.some(fromChecked(LogosNSRuntimeControlExecutionSelection, f.get))
-  r.state = fromChecked(LogosNSRuntimeControlState, v.lookup("state").get)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetExecutionSummaryResponse
+  runDec(stepDecLogosNSRuntimeControlGetExecutionSummaryResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetPermissionSettingsRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetPermissionSettingsRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetPermissionSettingsRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetPermissionSettingsRequest](dst)
+  r[] = LogosNSRuntimeControlGetPermissionSettingsRequest()
+  let f48 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f48, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlGetPermissionSettingsRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetPermissionSettingsRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetPermissionSettingsRequest, v: CborValue): LogosNSRuntimeControlGetPermissionSettingsRequest =
-  var r = LogosNSRuntimeControlGetPermissionSettingsRequest()
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetPermissionSettingsRequest
+  runDec(stepDecLogosNSRuntimeControlGetPermissionSettingsRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetPermissionSettingsResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetPermissionSettingsResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlPermissionSettingsState, addr x.state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetPermissionSettingsResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetPermissionSettingsResponse](dst)
+  r[] = LogosNSRuntimeControlGetPermissionSettingsResponse()
+  let f49 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlPermissionSettingsState, f49, addr r.state)
+  let f50 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f50, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlGetPermissionSettingsResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("state"), toCbor(x.state)))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetPermissionSettingsResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetPermissionSettingsResponse, v: CborValue): LogosNSRuntimeControlGetPermissionSettingsResponse =
-  var r = LogosNSRuntimeControlGetPermissionSettingsResponse()
-  r.state = fromChecked(LogosNSRuntimeControlPermissionSettingsState, v.lookup("state").get)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlGetPermissionSettingsResponse
+  runDec(stepDecLogosNSRuntimeControlGetPermissionSettingsResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetReadinessRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetReadinessRequest](src)
+  var n = 1
+  if x.instance.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+
+proc stepDecLogosNSRuntimeControlGetReadinessRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetReadinessRequest](dst)
+  r[] = LogosNSRuntimeControlGetReadinessRequest()
+  let f51 = v.lookup("instance")
+  if f51.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f51.get))
+  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+  let f52 = v.lookup("provider")
+  if f52.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f52.get, addr r.provider.get)
 
 proc toCbor*(x: LogosNSRuntimeControlGetReadinessRequest): CborValue =
-  var e: seq[CborEntry]
-  if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetReadinessRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetReadinessRequest, v: CborValue): LogosNSRuntimeControlGetReadinessRequest =
-  var r = LogosNSRuntimeControlGetReadinessRequest()
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
+  var r: LogosNSRuntimeControlGetReadinessRequest
+  runDec(stepDecLogosNSRuntimeControlGetReadinessRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetReadinessResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetReadinessResponse](src)
+  var n = 2
+  if x.execution.isSome:
+    inc n
+  if x.failure.isSome:
+    inc n
+  if x.instance.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  if x.reason.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.execution.isSome:
+    node.entries[k].key = cbor("execution")
+    w.later(stepEncLogosNSRuntimeControlExecutionState, addr x.execution.get, addr node.entries[k].value)
+    inc k
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    node.entries[k].value = encLogosNSRuntimeControlFailureCode(x.failure.get)
+    inc k
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+  if x.reason.isSome:
+    node.entries[k].key = cbor("reason")
+    node.entries[k].value = encLogosNSRuntimeControlReason(x.reason.get)
+    inc k
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlState, addr x.state, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetReadinessResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetReadinessResponse](dst)
+  r[] = LogosNSRuntimeControlGetReadinessResponse()
+  let f53 = v.lookup("execution")
+  if f53.isSome:
+    r.execution = Opt.some(default(LogosNSRuntimeControlExecutionState))
+    w.later(stepDecLogosNSRuntimeControlExecutionState, f53.get, addr r.execution.get)
+  let f54 = v.lookup("failure")
+  if f54.isSome:
+    r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f54.get))
+  let f55 = v.lookup("instance")
+  if f55.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f55.get))
+  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+  let f56 = v.lookup("provider")
+  if f56.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f56.get, addr r.provider.get)
+  let f57 = v.lookup("reason")
+  if f57.isSome:
+    r.reason = Opt.some(decLogosNSRuntimeControlReason(f57.get))
+  let f58 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlState, f58, addr r.state)
 
 proc toCbor*(x: LogosNSRuntimeControlGetReadinessResponse): CborValue =
-  var e: seq[CborEntry]
-  if x.execution.isSome:
-    e.add((cbor("execution"), toCbor(x.execution.get)))
-  if x.failure.isSome:
-    e.add((cbor("failure"), encLogosNSRuntimeControlFailureCode(x.failure.get)))
-  if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  if x.reason.isSome:
-    e.add((cbor("reason"), encLogosNSRuntimeControlReason(x.reason.get)))
-  e.add((cbor("state"), toCbor(x.state)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetReadinessResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetReadinessResponse, v: CborValue): LogosNSRuntimeControlGetReadinessResponse =
-  var r = LogosNSRuntimeControlGetReadinessResponse()
-  block:
-    let f = v.lookup("execution")
-    if f.isSome:
-      r.execution = Opt.some(fromChecked(LogosNSRuntimeControlExecutionState, f.get))
-  block:
-    let f = v.lookup("failure")
-    if f.isSome:
-      r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f.get))
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
-  block:
-    let f = v.lookup("reason")
-    if f.isSome:
-      r.reason = Opt.some(decLogosNSRuntimeControlReason(f.get))
-  r.state = fromChecked(LogosNSRuntimeControlState, v.lookup("state").get)
+  var r: LogosNSRuntimeControlGetReadinessResponse
+  runDec(stepDecLogosNSRuntimeControlGetReadinessResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlGetSelfRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetSelfRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecLogosNSRuntimeControlGetSelfRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetSelfRequest](dst)
+  r[] = LogosNSRuntimeControlGetSelfRequest()
 
 proc toCbor*(x: LogosNSRuntimeControlGetSelfRequest): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetSelfRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetSelfRequest, v: CborValue): LogosNSRuntimeControlGetSelfRequest =
-  var r = LogosNSRuntimeControlGetSelfRequest()
+  var r: LogosNSRuntimeControlGetSelfRequest
+  runDec(stepDecLogosNSRuntimeControlGetSelfRequest, v, addr r)
   r
 
+proc stepEncLogosNSRuntimeControlGetSelfResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlGetSelfResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("consumer")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.consumer, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlGetSelfResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlGetSelfResponse](dst)
+  r[] = LogosNSRuntimeControlGetSelfResponse()
+  let f59 = v.lookup("consumer").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f59, addr r.consumer)
+
 proc toCbor*(x: LogosNSRuntimeControlGetSelfResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("consumer"), toCbor(x.consumer)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlGetSelfResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlGetSelfResponse, v: CborValue): LogosNSRuntimeControlGetSelfResponse =
-  var r = LogosNSRuntimeControlGetSelfResponse()
-  r.consumer = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("consumer").get)
+  var r: LogosNSRuntimeControlGetSelfResponse
+  runDec(stepDecLogosNSRuntimeControlGetSelfResponse, v, addr r)
   r
 
 proc encLogosNSRuntimeControlHostName*(x: LogosNSRuntimeControlHostName): CborValue =
@@ -1728,391 +2627,740 @@ proc encLogosNSRuntimeControlHostName*(x: LogosNSRuntimeControlHostName): CborVa
 proc decLogosNSRuntimeControlHostName*(v: CborValue): LogosNSRuntimeControlHostName =
   v.text
 
+proc stepEncLogosNSRuntimeControlInventoryChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlInventoryChangedEvent](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("collection")
+  w.later(stepEncLogosNSRuntimeControlInventoryCollection, addr x.collection, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlInventoryChangedEvent*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlInventoryChangedEvent](dst)
+  r[] = LogosNSRuntimeControlInventoryChangedEvent()
+  let f60 = v.lookup("collection").get
+  w.later(stepDecLogosNSRuntimeControlInventoryCollection, f60, addr r.collection)
+
 proc toCbor*(x: LogosNSRuntimeControlInventoryChangedEvent): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("collection"), toCbor(x.collection)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlInventoryChangedEvent, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlInventoryChangedEvent, v: CborValue): LogosNSRuntimeControlInventoryChangedEvent =
-  var r = LogosNSRuntimeControlInventoryChangedEvent()
-  r.collection = fromChecked(LogosNSRuntimeControlInventoryCollection, v.lookup("collection").get)
+  var r: LogosNSRuntimeControlInventoryChangedEvent
+  runDec(stepDecLogosNSRuntimeControlInventoryChangedEvent, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlInventoryCollection): CborValue =
+proc stepEncLogosNSRuntimeControlInventoryCollection*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlInventoryCollection](src)
   case x.kind
   of LogosNSRuntimeControlInventoryCollectionKind.Modules:
-    cbor("modules")
+    dst[] = cbor("modules")
   of LogosNSRuntimeControlInventoryCollectionKind.Provider_exports:
-    cbor("provider-exports")
+    dst[] = cbor("provider-exports")
   of LogosNSRuntimeControlInventoryCollectionKind.Remote_listeners:
-    cbor("remote-listeners")
+    dst[] = cbor("remote-listeners")
   of LogosNSRuntimeControlInventoryCollectionKind.Routes:
-    cbor("routes")
+    dst[] = cbor("routes")
 
-proc fromChecked*(T: type LogosNSRuntimeControlInventoryCollection, v: CborValue): LogosNSRuntimeControlInventoryCollection =
+proc stepDecLogosNSRuntimeControlInventoryCollection*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlInventoryCollection](dst)
   case generatedSchema().arm("logos.runtime_control.inventory_collection#", v)
   of 0:
-    LogosNSRuntimeControlInventoryCollection(kind: LogosNSRuntimeControlInventoryCollectionKind.Routes)
+    r[] = LogosNSRuntimeControlInventoryCollection(kind: LogosNSRuntimeControlInventoryCollectionKind.Routes)
   of 1:
-    LogosNSRuntimeControlInventoryCollection(kind: LogosNSRuntimeControlInventoryCollectionKind.Modules)
+    r[] = LogosNSRuntimeControlInventoryCollection(kind: LogosNSRuntimeControlInventoryCollectionKind.Modules)
   of 2:
-    LogosNSRuntimeControlInventoryCollection(kind: LogosNSRuntimeControlInventoryCollectionKind.Provider_exports)
+    r[] = LogosNSRuntimeControlInventoryCollection(kind: LogosNSRuntimeControlInventoryCollectionKind.Provider_exports)
   of 3:
-    LogosNSRuntimeControlInventoryCollection(kind: LogosNSRuntimeControlInventoryCollectionKind.Remote_listeners)
+    r[] = LogosNSRuntimeControlInventoryCollection(kind: LogosNSRuntimeControlInventoryCollectionKind.Remote_listeners)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlInvocationDescriptorAR0Map): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("kind"), cbor("local-transport")))
-  e.add((cbor("path"), encLogosNSRuntimeControlPath(x.path)))
-  e.add((cbor("profile"), cbor("logos.local.unix-stream")))
-  e.add((cbor("ticket"), cbor(x.ticket)))
-  cborMap(e)
+proc toCbor*(x: LogosNSRuntimeControlInventoryCollection): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlInventoryCollection, addr x)
 
-proc fromChecked*(T: type LogosNSRuntimeControlInvocationDescriptorAR0Map, v: CborValue): LogosNSRuntimeControlInvocationDescriptorAR0Map =
-  var r = LogosNSRuntimeControlInvocationDescriptorAR0Map()
-  r.path = decLogosNSRuntimeControlPath(v.lookup("path").get)
-  r.ticket = v.lookup("ticket").get.bytes
+proc fromChecked*(T: type LogosNSRuntimeControlInventoryCollection, v: CborValue): LogosNSRuntimeControlInventoryCollection =
+  var r: LogosNSRuntimeControlInventoryCollection
+  runDec(stepDecLogosNSRuntimeControlInventoryCollection, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlInvocationDescriptorAR1Map): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("endpoint"), toCbor(x.endpoint)))
-  e.add((cbor("kind"), cbor("remote-transport")))
-  e.add((cbor("provider"), encLogosNSRuntimeModuleProviderId(x.provider)))
-  e.add((cbor("runtime"), encLogosNSRuntimeRuntimeInstanceId(x.runtime)))
-  e.add((cbor("ticket"), cbor(x.ticket)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeControlInvocationDescriptorAR0Map*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlInvocationDescriptorAR0Map](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("local-transport")
+  inc k
+  node.entries[k].key = cbor("path")
+  node.entries[k].value = encLogosNSRuntimeControlPath(x.path)
+  inc k
+  node.entries[k].key = cbor("profile")
+  node.entries[k].value = cbor("logos.local.unix-stream")
+  inc k
+  node.entries[k].key = cbor("ticket")
+  node.entries[k].value = cbor(x.ticket)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlInvocationDescriptorAR1Map, v: CborValue): LogosNSRuntimeControlInvocationDescriptorAR1Map =
-  var r = LogosNSRuntimeControlInvocationDescriptorAR1Map()
-  r.endpoint = fromChecked(LogosNSRuntimeControlRemoteListenerAddress, v.lookup("endpoint").get)
+proc stepDecLogosNSRuntimeControlInvocationDescriptorAR0Map*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlInvocationDescriptorAR0Map](dst)
+  r[] = LogosNSRuntimeControlInvocationDescriptorAR0Map()
+  r.path = decLogosNSRuntimeControlPath(v.lookup("path").get)
+  r.ticket = v.lookup("ticket").get.bytes
+
+proc toCbor*(x: LogosNSRuntimeControlInvocationDescriptorAR0Map): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlInvocationDescriptorAR0Map, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlInvocationDescriptorAR0Map, v: CborValue): LogosNSRuntimeControlInvocationDescriptorAR0Map =
+  var r: LogosNSRuntimeControlInvocationDescriptorAR0Map
+  runDec(stepDecLogosNSRuntimeControlInvocationDescriptorAR0Map, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlInvocationDescriptorAR1Map*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlInvocationDescriptorAR1Map](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](5))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("endpoint")
+  w.later(stepEncLogosNSRuntimeControlRemoteListenerAddress, addr x.endpoint, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("remote-transport")
+  inc k
+  node.entries[k].key = cbor("provider")
+  node.entries[k].value = encLogosNSRuntimeModuleProviderId(x.provider)
+  inc k
+  node.entries[k].key = cbor("runtime")
+  node.entries[k].value = encLogosNSRuntimeRuntimeInstanceId(x.runtime)
+  inc k
+  node.entries[k].key = cbor("ticket")
+  node.entries[k].value = cbor(x.ticket)
+  inc k
+
+proc stepDecLogosNSRuntimeControlInvocationDescriptorAR1Map*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlInvocationDescriptorAR1Map](dst)
+  r[] = LogosNSRuntimeControlInvocationDescriptorAR1Map()
+  let f61 = v.lookup("endpoint").get
+  w.later(stepDecLogosNSRuntimeControlRemoteListenerAddress, f61, addr r.endpoint)
   r.provider = decLogosNSRuntimeModuleProviderId(v.lookup("provider").get)
   r.runtime = decLogosNSRuntimeRuntimeInstanceId(v.lookup("runtime").get)
   r.ticket = v.lookup("ticket").get.bytes
+
+proc toCbor*(x: LogosNSRuntimeControlInvocationDescriptorAR1Map): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlInvocationDescriptorAR1Map, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlInvocationDescriptorAR1Map, v: CborValue): LogosNSRuntimeControlInvocationDescriptorAR1Map =
+  var r: LogosNSRuntimeControlInvocationDescriptorAR1Map
+  runDec(stepDecLogosNSRuntimeControlInvocationDescriptorAR1Map, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlInvocationDescriptor): CborValue =
+proc stepEncLogosNSRuntimeControlInvocationDescriptor*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlInvocationDescriptor](src)
   case x.kind
   of LogosNSRuntimeControlInvocationDescriptorKind.Case0:
-    toCbor(x.arm_0)
+    w.later(stepEncLogosNSRuntimeControlInvocationDescriptorAR0Map, addr x.arm_0, addr dst[])
   of LogosNSRuntimeControlInvocationDescriptorKind.Case1:
-    toCbor(x.arm_1)
+    w.later(stepEncLogosNSRuntimeControlInvocationDescriptorAR1Map, addr x.arm_1, addr dst[])
 
-proc fromChecked*(T: type LogosNSRuntimeControlInvocationDescriptor, v: CborValue): LogosNSRuntimeControlInvocationDescriptor =
+proc stepDecLogosNSRuntimeControlInvocationDescriptor*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlInvocationDescriptor](dst)
   case generatedSchema().arm("logos.runtime_control.invocation_descriptor#", v)
   of 0:
-    LogosNSRuntimeControlInvocationDescriptor(kind: LogosNSRuntimeControlInvocationDescriptorKind.Case0, arm_0: fromChecked(LogosNSRuntimeControlInvocationDescriptorAR0Map, v))
+    r[] = LogosNSRuntimeControlInvocationDescriptor(kind: LogosNSRuntimeControlInvocationDescriptorKind.Case0)
+    w.later(stepDecLogosNSRuntimeControlInvocationDescriptorAR0Map, v, addr r.arm_0)
   of 1:
-    LogosNSRuntimeControlInvocationDescriptor(kind: LogosNSRuntimeControlInvocationDescriptorKind.Case1, arm_1: fromChecked(LogosNSRuntimeControlInvocationDescriptorAR1Map, v))
+    r[] = LogosNSRuntimeControlInvocationDescriptor(kind: LogosNSRuntimeControlInvocationDescriptorKind.Case1)
+    w.later(stepDecLogosNSRuntimeControlInvocationDescriptorAR1Map, v, addr r.arm_1)
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: LogosNSRuntimeControlInvocationDescriptor): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlInvocationDescriptor, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlInvocationDescriptor, v: CborValue): LogosNSRuntimeControlInvocationDescriptor =
+  var r: LogosNSRuntimeControlInvocationDescriptor
+  runDec(stepDecLogosNSRuntimeControlInvocationDescriptor, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlListModulesRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlListModulesRequest](src)
+  var n = 0
+  if x.cursor.isSome:
+    inc n
+  if x.instance.isSome:
+    inc n
+  if x.limit.isSome:
+    inc n
+  if x.module.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.cursor.isSome:
+    node.entries[k].key = cbor("cursor")
+    node.entries[k].value = encLogosNSRuntimeControlCursor(x.cursor.get)
+    inc k
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  if x.limit.isSome:
+    node.entries[k].key = cbor("limit")
+    node.entries[k].value = cbor(uint64(x.limit.get))
+    inc k
+  if x.module.isSome:
+    node.entries[k].key = cbor("module")
+    node.entries[k].value = encLogosNSRuntimeModuleName(x.module.get)
+    inc k
+
+proc stepDecLogosNSRuntimeControlListModulesRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlListModulesRequest](dst)
+  r[] = LogosNSRuntimeControlListModulesRequest()
+  let f62 = v.lookup("cursor")
+  if f62.isSome:
+    r.cursor = Opt.some(decLogosNSRuntimeControlCursor(f62.get))
+  let f63 = v.lookup("instance")
+  if f63.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f63.get))
+  let f64 = v.lookup("limit")
+  if f64.isSome:
+    r.limit = Opt.some(uint16(f64.get.uint))
+  let f65 = v.lookup("module")
+  if f65.isSome:
+    r.module = Opt.some(decLogosNSRuntimeModuleName(f65.get))
 
 proc toCbor*(x: LogosNSRuntimeControlListModulesRequest): CborValue =
-  var e: seq[CborEntry]
-  if x.cursor.isSome:
-    e.add((cbor("cursor"), encLogosNSRuntimeControlCursor(x.cursor.get)))
-  if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
-  if x.limit.isSome:
-    e.add((cbor("limit"), cbor(uint64(x.limit.get))))
-  if x.module.isSome:
-    e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlListModulesRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlListModulesRequest, v: CborValue): LogosNSRuntimeControlListModulesRequest =
-  var r = LogosNSRuntimeControlListModulesRequest()
-  block:
-    let f = v.lookup("cursor")
-    if f.isSome:
-      r.cursor = Opt.some(decLogosNSRuntimeControlCursor(f.get))
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  block:
-    let f = v.lookup("limit")
-    if f.isSome:
-      r.limit = Opt.some(uint16(f.get.uint))
-  block:
-    let f = v.lookup("module")
-    if f.isSome:
-      r.module = Opt.some(decLogosNSRuntimeModuleName(f.get))
+  var r: LogosNSRuntimeControlListModulesRequest
+  runDec(stepDecLogosNSRuntimeControlListModulesRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlListModulesResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlListModulesResponse](src)
+  var n = 1
+  if x.next_cursor.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("modules")
+  let a66 = newCborArray(x.modules.len)
+  node.entries[k].value = a66
+  for i67 in 0 ..< x.modules.len:
+    w.later(stepEncLogosNSRuntimeControlModuleRecord, addr x.modules[i67], addr a66.items[i67])
+  inc k
+  if x.next_cursor.isSome:
+    node.entries[k].key = cbor("next_cursor")
+    node.entries[k].value = encLogosNSRuntimeControlCursor(x.next_cursor.get)
+    inc k
+
+proc stepDecLogosNSRuntimeControlListModulesResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlListModulesResponse](dst)
+  r[] = LogosNSRuntimeControlListModulesResponse()
+  let f68 = v.lookup("modules").get
+  r.modules.setLen(f68.items.len)
+  for i69 in 0 ..< f68.items.len:
+    w.later(stepDecLogosNSRuntimeControlModuleRecord, f68.items[i69], addr r.modules[i69])
+  let f70 = v.lookup("next_cursor")
+  if f70.isSome:
+    r.next_cursor = Opt.some(decLogosNSRuntimeControlCursor(f70.get))
 
 proc toCbor*(x: LogosNSRuntimeControlListModulesResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("modules"), cborArray(x.modules.mapIt(toCbor(it)))))
-  if x.next_cursor.isSome:
-    e.add((cbor("next_cursor"), encLogosNSRuntimeControlCursor(x.next_cursor.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlListModulesResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlListModulesResponse, v: CborValue): LogosNSRuntimeControlListModulesResponse =
-  var r = LogosNSRuntimeControlListModulesResponse()
-  r.modules = v.lookup("modules").get.items.mapIt(fromChecked(LogosNSRuntimeControlModuleRecord, it))
-  block:
-    let f = v.lookup("next_cursor")
-    if f.isSome:
-      r.next_cursor = Opt.some(decLogosNSRuntimeControlCursor(f.get))
+  var r: LogosNSRuntimeControlListModulesResponse
+  runDec(stepDecLogosNSRuntimeControlListModulesResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlListProviderExportsRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlListProviderExportsRequest](src)
+  var n = 0
+  if x.cursor.isSome:
+    inc n
+  if x.limit.isSome:
+    inc n
+  if x.listener.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.cursor.isSome:
+    node.entries[k].key = cbor("cursor")
+    node.entries[k].value = encLogosNSRuntimeControlCursor(x.cursor.get)
+    inc k
+  if x.limit.isSome:
+    node.entries[k].key = cbor("limit")
+    node.entries[k].value = cbor(uint64(x.limit.get))
+    inc k
+  if x.listener.isSome:
+    node.entries[k].key = cbor("listener")
+    w.later(stepEncLogosNSRuntimeControlRemoteListenerAddress, addr x.listener.get, addr node.entries[k].value)
+    inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+
+proc stepDecLogosNSRuntimeControlListProviderExportsRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlListProviderExportsRequest](dst)
+  r[] = LogosNSRuntimeControlListProviderExportsRequest()
+  let f71 = v.lookup("cursor")
+  if f71.isSome:
+    r.cursor = Opt.some(decLogosNSRuntimeControlCursor(f71.get))
+  let f72 = v.lookup("limit")
+  if f72.isSome:
+    r.limit = Opt.some(uint16(f72.get.uint))
+  let f73 = v.lookup("listener")
+  if f73.isSome:
+    r.listener = Opt.some(default(LogosNSRuntimeControlRemoteListenerAddress))
+    w.later(stepDecLogosNSRuntimeControlRemoteListenerAddress, f73.get, addr r.listener.get)
+  let f74 = v.lookup("provider")
+  if f74.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f74.get, addr r.provider.get)
 
 proc toCbor*(x: LogosNSRuntimeControlListProviderExportsRequest): CborValue =
-  var e: seq[CborEntry]
-  if x.cursor.isSome:
-    e.add((cbor("cursor"), encLogosNSRuntimeControlCursor(x.cursor.get)))
-  if x.limit.isSome:
-    e.add((cbor("limit"), cbor(uint64(x.limit.get))))
-  if x.listener.isSome:
-    e.add((cbor("listener"), toCbor(x.listener.get)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlListProviderExportsRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlListProviderExportsRequest, v: CborValue): LogosNSRuntimeControlListProviderExportsRequest =
-  var r = LogosNSRuntimeControlListProviderExportsRequest()
-  block:
-    let f = v.lookup("cursor")
-    if f.isSome:
-      r.cursor = Opt.some(decLogosNSRuntimeControlCursor(f.get))
-  block:
-    let f = v.lookup("limit")
-    if f.isSome:
-      r.limit = Opt.some(uint16(f.get.uint))
-  block:
-    let f = v.lookup("listener")
-    if f.isSome:
-      r.listener = Opt.some(fromChecked(LogosNSRuntimeControlRemoteListenerAddress, f.get))
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
+  var r: LogosNSRuntimeControlListProviderExportsRequest
+  runDec(stepDecLogosNSRuntimeControlListProviderExportsRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlListProviderExportsResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlListProviderExportsResponse](src)
+  var n = 1
+  if x.next_cursor.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("exports")
+  let a75 = newCborArray(x.exports.len)
+  node.entries[k].value = a75
+  for i76 in 0 ..< x.exports.len:
+    w.later(stepEncLogosNSRuntimeControlProviderExportRecord, addr x.exports[i76], addr a75.items[i76])
+  inc k
+  if x.next_cursor.isSome:
+    node.entries[k].key = cbor("next_cursor")
+    node.entries[k].value = encLogosNSRuntimeControlCursor(x.next_cursor.get)
+    inc k
+
+proc stepDecLogosNSRuntimeControlListProviderExportsResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlListProviderExportsResponse](dst)
+  r[] = LogosNSRuntimeControlListProviderExportsResponse()
+  let f77 = v.lookup("exports").get
+  r.exports.setLen(f77.items.len)
+  for i78 in 0 ..< f77.items.len:
+    w.later(stepDecLogosNSRuntimeControlProviderExportRecord, f77.items[i78], addr r.exports[i78])
+  let f79 = v.lookup("next_cursor")
+  if f79.isSome:
+    r.next_cursor = Opt.some(decLogosNSRuntimeControlCursor(f79.get))
 
 proc toCbor*(x: LogosNSRuntimeControlListProviderExportsResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("exports"), cborArray(x.exports.mapIt(toCbor(it)))))
-  if x.next_cursor.isSome:
-    e.add((cbor("next_cursor"), encLogosNSRuntimeControlCursor(x.next_cursor.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlListProviderExportsResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlListProviderExportsResponse, v: CborValue): LogosNSRuntimeControlListProviderExportsResponse =
-  var r = LogosNSRuntimeControlListProviderExportsResponse()
-  r.exports = v.lookup("exports").get.items.mapIt(fromChecked(LogosNSRuntimeControlProviderExportRecord, it))
-  block:
-    let f = v.lookup("next_cursor")
-    if f.isSome:
-      r.next_cursor = Opt.some(decLogosNSRuntimeControlCursor(f.get))
+  var r: LogosNSRuntimeControlListProviderExportsResponse
+  runDec(stepDecLogosNSRuntimeControlListProviderExportsResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlListRemoteListenersRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlListRemoteListenersRequest](src)
+  var n = 0
+  if x.cursor.isSome:
+    inc n
+  if x.limit.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.cursor.isSome:
+    node.entries[k].key = cbor("cursor")
+    node.entries[k].value = encLogosNSRuntimeControlCursor(x.cursor.get)
+    inc k
+  if x.limit.isSome:
+    node.entries[k].key = cbor("limit")
+    node.entries[k].value = cbor(uint64(x.limit.get))
+    inc k
+
+proc stepDecLogosNSRuntimeControlListRemoteListenersRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlListRemoteListenersRequest](dst)
+  r[] = LogosNSRuntimeControlListRemoteListenersRequest()
+  let f80 = v.lookup("cursor")
+  if f80.isSome:
+    r.cursor = Opt.some(decLogosNSRuntimeControlCursor(f80.get))
+  let f81 = v.lookup("limit")
+  if f81.isSome:
+    r.limit = Opt.some(uint16(f81.get.uint))
 
 proc toCbor*(x: LogosNSRuntimeControlListRemoteListenersRequest): CborValue =
-  var e: seq[CborEntry]
-  if x.cursor.isSome:
-    e.add((cbor("cursor"), encLogosNSRuntimeControlCursor(x.cursor.get)))
-  if x.limit.isSome:
-    e.add((cbor("limit"), cbor(uint64(x.limit.get))))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlListRemoteListenersRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlListRemoteListenersRequest, v: CborValue): LogosNSRuntimeControlListRemoteListenersRequest =
-  var r = LogosNSRuntimeControlListRemoteListenersRequest()
-  block:
-    let f = v.lookup("cursor")
-    if f.isSome:
-      r.cursor = Opt.some(decLogosNSRuntimeControlCursor(f.get))
-  block:
-    let f = v.lookup("limit")
-    if f.isSome:
-      r.limit = Opt.some(uint16(f.get.uint))
+  var r: LogosNSRuntimeControlListRemoteListenersRequest
+  runDec(stepDecLogosNSRuntimeControlListRemoteListenersRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlListRemoteListenersResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlListRemoteListenersResponse](src)
+  var n = 1
+  if x.next_cursor.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("listeners")
+  let a82 = newCborArray(x.listeners.len)
+  node.entries[k].value = a82
+  for i83 in 0 ..< x.listeners.len:
+    w.later(stepEncLogosNSRuntimeControlRemoteListenerRecord, addr x.listeners[i83], addr a82.items[i83])
+  inc k
+  if x.next_cursor.isSome:
+    node.entries[k].key = cbor("next_cursor")
+    node.entries[k].value = encLogosNSRuntimeControlCursor(x.next_cursor.get)
+    inc k
+
+proc stepDecLogosNSRuntimeControlListRemoteListenersResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlListRemoteListenersResponse](dst)
+  r[] = LogosNSRuntimeControlListRemoteListenersResponse()
+  let f84 = v.lookup("listeners").get
+  r.listeners.setLen(f84.items.len)
+  for i85 in 0 ..< f84.items.len:
+    w.later(stepDecLogosNSRuntimeControlRemoteListenerRecord, f84.items[i85], addr r.listeners[i85])
+  let f86 = v.lookup("next_cursor")
+  if f86.isSome:
+    r.next_cursor = Opt.some(decLogosNSRuntimeControlCursor(f86.get))
 
 proc toCbor*(x: LogosNSRuntimeControlListRemoteListenersResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("listeners"), cborArray(x.listeners.mapIt(toCbor(it)))))
-  if x.next_cursor.isSome:
-    e.add((cbor("next_cursor"), encLogosNSRuntimeControlCursor(x.next_cursor.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlListRemoteListenersResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlListRemoteListenersResponse, v: CborValue): LogosNSRuntimeControlListRemoteListenersResponse =
-  var r = LogosNSRuntimeControlListRemoteListenersResponse()
-  r.listeners = v.lookup("listeners").get.items.mapIt(fromChecked(LogosNSRuntimeControlRemoteListenerRecord, it))
-  block:
-    let f = v.lookup("next_cursor")
-    if f.isSome:
-      r.next_cursor = Opt.some(decLogosNSRuntimeControlCursor(f.get))
+  var r: LogosNSRuntimeControlListRemoteListenersResponse
+  runDec(stepDecLogosNSRuntimeControlListRemoteListenersResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlListRoutesRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlListRoutesRequest](src)
+  var n = 0
+  if x.cursor.isSome:
+    inc n
+  if x.limit.isSome:
+    inc n
+  if x.module.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.cursor.isSome:
+    node.entries[k].key = cbor("cursor")
+    node.entries[k].value = encLogosNSRuntimeControlCursor(x.cursor.get)
+    inc k
+  if x.limit.isSome:
+    node.entries[k].key = cbor("limit")
+    node.entries[k].value = cbor(uint64(x.limit.get))
+    inc k
+  if x.module.isSome:
+    node.entries[k].key = cbor("module")
+    node.entries[k].value = encLogosNSRuntimeModuleName(x.module.get)
+    inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+
+proc stepDecLogosNSRuntimeControlListRoutesRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlListRoutesRequest](dst)
+  r[] = LogosNSRuntimeControlListRoutesRequest()
+  let f87 = v.lookup("cursor")
+  if f87.isSome:
+    r.cursor = Opt.some(decLogosNSRuntimeControlCursor(f87.get))
+  let f88 = v.lookup("limit")
+  if f88.isSome:
+    r.limit = Opt.some(uint16(f88.get.uint))
+  let f89 = v.lookup("module")
+  if f89.isSome:
+    r.module = Opt.some(decLogosNSRuntimeModuleName(f89.get))
+  let f90 = v.lookup("provider")
+  if f90.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f90.get, addr r.provider.get)
 
 proc toCbor*(x: LogosNSRuntimeControlListRoutesRequest): CborValue =
-  var e: seq[CborEntry]
-  if x.cursor.isSome:
-    e.add((cbor("cursor"), encLogosNSRuntimeControlCursor(x.cursor.get)))
-  if x.limit.isSome:
-    e.add((cbor("limit"), cbor(uint64(x.limit.get))))
-  if x.module.isSome:
-    e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module.get)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlListRoutesRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlListRoutesRequest, v: CborValue): LogosNSRuntimeControlListRoutesRequest =
-  var r = LogosNSRuntimeControlListRoutesRequest()
-  block:
-    let f = v.lookup("cursor")
-    if f.isSome:
-      r.cursor = Opt.some(decLogosNSRuntimeControlCursor(f.get))
-  block:
-    let f = v.lookup("limit")
-    if f.isSome:
-      r.limit = Opt.some(uint16(f.get.uint))
-  block:
-    let f = v.lookup("module")
-    if f.isSome:
-      r.module = Opt.some(decLogosNSRuntimeModuleName(f.get))
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
+  var r: LogosNSRuntimeControlListRoutesRequest
+  runDec(stepDecLogosNSRuntimeControlListRoutesRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlListRoutesResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlListRoutesResponse](src)
+  var n = 1
+  if x.next_cursor.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.next_cursor.isSome:
+    node.entries[k].key = cbor("next_cursor")
+    node.entries[k].value = encLogosNSRuntimeControlCursor(x.next_cursor.get)
+    inc k
+  node.entries[k].key = cbor("routes")
+  let a92 = newCborArray(x.routes.len)
+  node.entries[k].value = a92
+  for i93 in 0 ..< x.routes.len:
+    w.later(stepEncLogosNSRuntimeControlRouteRecord, addr x.routes[i93], addr a92.items[i93])
+  inc k
+
+proc stepDecLogosNSRuntimeControlListRoutesResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlListRoutesResponse](dst)
+  r[] = LogosNSRuntimeControlListRoutesResponse()
+  let f91 = v.lookup("next_cursor")
+  if f91.isSome:
+    r.next_cursor = Opt.some(decLogosNSRuntimeControlCursor(f91.get))
+  let f94 = v.lookup("routes").get
+  r.routes.setLen(f94.items.len)
+  for i95 in 0 ..< f94.items.len:
+    w.later(stepDecLogosNSRuntimeControlRouteRecord, f94.items[i95], addr r.routes[i95])
 
 proc toCbor*(x: LogosNSRuntimeControlListRoutesResponse): CborValue =
-  var e: seq[CborEntry]
-  if x.next_cursor.isSome:
-    e.add((cbor("next_cursor"), encLogosNSRuntimeControlCursor(x.next_cursor.get)))
-  e.add((cbor("routes"), cborArray(x.routes.mapIt(toCbor(it)))))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlListRoutesResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlListRoutesResponse, v: CborValue): LogosNSRuntimeControlListRoutesResponse =
-  var r = LogosNSRuntimeControlListRoutesResponse()
-  block:
-    let f = v.lookup("next_cursor")
-    if f.isSome:
-      r.next_cursor = Opt.some(decLogosNSRuntimeControlCursor(f.get))
-  r.routes = v.lookup("routes").get.items.mapIt(fromChecked(LogosNSRuntimeControlRouteRecord, it))
+  var r: LogosNSRuntimeControlListRoutesResponse
+  runDec(stepDecLogosNSRuntimeControlListRoutesResponse, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlMode): CborValue =
+proc stepEncLogosNSRuntimeControlMode*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlMode](src)
   case x.kind
   of LogosNSRuntimeControlModeKind.Direct:
-    cbor("direct")
+    dst[] = cbor("direct")
   of LogosNSRuntimeControlModeKind.Local_transport:
-    cbor("local-transport")
+    dst[] = cbor("local-transport")
   of LogosNSRuntimeControlModeKind.Remote_transport:
-    cbor("remote-transport")
+    dst[] = cbor("remote-transport")
 
-proc fromChecked*(T: type LogosNSRuntimeControlMode, v: CborValue): LogosNSRuntimeControlMode =
+proc stepDecLogosNSRuntimeControlMode*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlMode](dst)
   case generatedSchema().arm("logos.runtime_control.mode#", v)
   of 0:
-    LogosNSRuntimeControlMode(kind: LogosNSRuntimeControlModeKind.Direct)
+    r[] = LogosNSRuntimeControlMode(kind: LogosNSRuntimeControlModeKind.Direct)
   of 1:
-    LogosNSRuntimeControlMode(kind: LogosNSRuntimeControlModeKind.Local_transport)
+    r[] = LogosNSRuntimeControlMode(kind: LogosNSRuntimeControlModeKind.Local_transport)
   of 2:
-    LogosNSRuntimeControlMode(kind: LogosNSRuntimeControlModeKind.Remote_transport)
+    r[] = LogosNSRuntimeControlMode(kind: LogosNSRuntimeControlModeKind.Remote_transport)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlModuleRecord): CborValue =
-  var e: seq[CborEntry]
-  if x.execution.isSome:
-    e.add((cbor("execution"), toCbor(x.execution.get)))
-  if x.failure.isSome:
-    e.add((cbor("failure"), encLogosNSRuntimeControlFailureCode(x.failure.get)))
-  if x.implements.isSome:
-    e.add((cbor("implements"), cborArray(x.implements.get.mapIt(toCbor(it)))))
-  if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
-  e.add((cbor("mode"), toCbor(x.mode)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  if x.primary_contract.isSome:
-    e.add((cbor("primary_contract"), toCbor(x.primary_contract.get)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  if x.reason.isSome:
-    e.add((cbor("reason"), encLogosNSRuntimeControlReason(x.reason.get)))
-  if x.remote.isSome:
-    e.add((cbor("remote"), toCbor(x.remote.get)))
-  e.add((cbor("state"), toCbor(x.state)))
-  if x.state_assignment.isSome:
-    e.add((cbor("state_assignment"), encLogosNSRuntimeModuleStateAssignmentId(x.state_assignment.get)))
-  cborMap(e)
+proc toCbor*(x: LogosNSRuntimeControlMode): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlMode, addr x)
 
-proc fromChecked*(T: type LogosNSRuntimeControlModuleRecord, v: CborValue): LogosNSRuntimeControlModuleRecord =
-  var r = LogosNSRuntimeControlModuleRecord()
-  block:
-    let f = v.lookup("execution")
-    if f.isSome:
-      r.execution = Opt.some(fromChecked(LogosNSRuntimeControlExecutionState, f.get))
-  block:
-    let f = v.lookup("failure")
-    if f.isSome:
-      r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f.get))
-  block:
-    let f = v.lookup("implements")
-    if f.isSome:
-      r.implements = Opt.some(f.get.items.mapIt(fromChecked(SchemaCommitment, it)))
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  r.mode = fromChecked(LogosNSRuntimeControlMode, v.lookup("mode").get)
-  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
-  block:
-    let f = v.lookup("primary_contract")
-    if f.isSome:
-      r.primary_contract = Opt.some(fromChecked(SchemaCommitment, f.get))
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
-  block:
-    let f = v.lookup("reason")
-    if f.isSome:
-      r.reason = Opt.some(decLogosNSRuntimeControlReason(f.get))
-  block:
-    let f = v.lookup("remote")
-    if f.isSome:
-      r.remote = Opt.some(fromChecked(LogosNSRuntimeControlRemoteProviderTarget, f.get))
-  r.state = fromChecked(LogosNSRuntimeControlState, v.lookup("state").get)
-  block:
-    let f = v.lookup("state_assignment")
-    if f.isSome:
-      r.state_assignment = Opt.some(decLogosNSRuntimeModuleStateAssignmentId(f.get))
+proc fromChecked*(T: type LogosNSRuntimeControlMode, v: CborValue): LogosNSRuntimeControlMode =
+  var r: LogosNSRuntimeControlMode
+  runDec(stepDecLogosNSRuntimeControlMode, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlModuleStateChangedEvent): CborValue =
-  var e: seq[CborEntry]
+proc stepEncLogosNSRuntimeControlModuleRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlModuleRecord](src)
+  var n = 3
+  if x.execution.isSome:
+    inc n
   if x.failure.isSome:
-    e.add((cbor("failure"), encLogosNSRuntimeControlFailureCode(x.failure.get)))
+    inc n
+  if x.implements.isSome:
+    inc n
   if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  e.add((cbor("new_state"), toCbor(x.new_state)))
-  e.add((cbor("old_state"), toCbor(x.old_state)))
+    inc n
+  if x.primary_contract.isSome:
+    inc n
   if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
+    inc n
   if x.reason.isSome:
-    e.add((cbor("reason"), encLogosNSRuntimeControlReason(x.reason.get)))
-  cborMap(e)
+    inc n
+  if x.remote.isSome:
+    inc n
+  if x.state_assignment.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.execution.isSome:
+    node.entries[k].key = cbor("execution")
+    w.later(stepEncLogosNSRuntimeControlExecutionState, addr x.execution.get, addr node.entries[k].value)
+    inc k
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    node.entries[k].value = encLogosNSRuntimeControlFailureCode(x.failure.get)
+    inc k
+  if x.implements.isSome:
+    node.entries[k].key = cbor("implements")
+    let a98 = newCborArray(x.implements.get.len)
+    node.entries[k].value = a98
+    for i99 in 0 ..< x.implements.get.len:
+      w.later(stepEncSchemaCommitment, addr x.implements.get[i99], addr a98.items[i99])
+    inc k
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  node.entries[k].key = cbor("mode")
+  w.later(stepEncLogosNSRuntimeControlMode, addr x.mode, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  if x.primary_contract.isSome:
+    node.entries[k].key = cbor("primary_contract")
+    w.later(stepEncSchemaCommitment, addr x.primary_contract.get, addr node.entries[k].value)
+    inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+  if x.reason.isSome:
+    node.entries[k].key = cbor("reason")
+    node.entries[k].value = encLogosNSRuntimeControlReason(x.reason.get)
+    inc k
+  if x.remote.isSome:
+    node.entries[k].key = cbor("remote")
+    w.later(stepEncLogosNSRuntimeControlRemoteProviderTarget, addr x.remote.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlState, addr x.state, addr node.entries[k].value)
+  inc k
+  if x.state_assignment.isSome:
+    node.entries[k].key = cbor("state_assignment")
+    node.entries[k].value = encLogosNSRuntimeModuleStateAssignmentId(x.state_assignment.get)
+    inc k
+
+proc stepDecLogosNSRuntimeControlModuleRecord*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlModuleRecord](dst)
+  r[] = LogosNSRuntimeControlModuleRecord()
+  let f96 = v.lookup("execution")
+  if f96.isSome:
+    r.execution = Opt.some(default(LogosNSRuntimeControlExecutionState))
+    w.later(stepDecLogosNSRuntimeControlExecutionState, f96.get, addr r.execution.get)
+  let f97 = v.lookup("failure")
+  if f97.isSome:
+    r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f97.get))
+  let f100 = v.lookup("implements")
+  if f100.isSome:
+    r.implements = Opt.some(default(seq[SchemaCommitment]))
+    r.implements.get.setLen(f100.get.items.len)
+    for i101 in 0 ..< f100.get.items.len:
+      w.later(stepDecSchemaCommitment, f100.get.items[i101], addr r.implements.get[i101])
+  let f102 = v.lookup("instance")
+  if f102.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f102.get))
+  let f103 = v.lookup("mode").get
+  w.later(stepDecLogosNSRuntimeControlMode, f103, addr r.mode)
+  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+  let f104 = v.lookup("primary_contract")
+  if f104.isSome:
+    r.primary_contract = Opt.some(default(SchemaCommitment))
+    w.later(stepDecSchemaCommitment, f104.get, addr r.primary_contract.get)
+  let f105 = v.lookup("provider")
+  if f105.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f105.get, addr r.provider.get)
+  let f106 = v.lookup("reason")
+  if f106.isSome:
+    r.reason = Opt.some(decLogosNSRuntimeControlReason(f106.get))
+  let f107 = v.lookup("remote")
+  if f107.isSome:
+    r.remote = Opt.some(default(LogosNSRuntimeControlRemoteProviderTarget))
+    w.later(stepDecLogosNSRuntimeControlRemoteProviderTarget, f107.get, addr r.remote.get)
+  let f108 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlState, f108, addr r.state)
+  let f109 = v.lookup("state_assignment")
+  if f109.isSome:
+    r.state_assignment = Opt.some(decLogosNSRuntimeModuleStateAssignmentId(f109.get))
+
+proc toCbor*(x: LogosNSRuntimeControlModuleRecord): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlModuleRecord, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlModuleRecord, v: CborValue): LogosNSRuntimeControlModuleRecord =
+  var r: LogosNSRuntimeControlModuleRecord
+  runDec(stepDecLogosNSRuntimeControlModuleRecord, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlModuleStateChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlModuleStateChangedEvent](src)
+  var n = 3
+  if x.failure.isSome:
+    inc n
+  if x.instance.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  if x.reason.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    node.entries[k].value = encLogosNSRuntimeControlFailureCode(x.failure.get)
+    inc k
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  node.entries[k].key = cbor("new_state")
+  w.later(stepEncLogosNSRuntimeControlState, addr x.new_state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("old_state")
+  w.later(stepEncLogosNSRuntimeControlState, addr x.old_state, addr node.entries[k].value)
+  inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+  if x.reason.isSome:
+    node.entries[k].key = cbor("reason")
+    node.entries[k].value = encLogosNSRuntimeControlReason(x.reason.get)
+    inc k
+
+proc stepDecLogosNSRuntimeControlModuleStateChangedEvent*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlModuleStateChangedEvent](dst)
+  r[] = LogosNSRuntimeControlModuleStateChangedEvent()
+  let f110 = v.lookup("failure")
+  if f110.isSome:
+    r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f110.get))
+  let f111 = v.lookup("instance")
+  if f111.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f111.get))
+  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+  let f112 = v.lookup("new_state").get
+  w.later(stepDecLogosNSRuntimeControlState, f112, addr r.new_state)
+  let f113 = v.lookup("old_state").get
+  w.later(stepDecLogosNSRuntimeControlState, f113, addr r.old_state)
+  let f114 = v.lookup("provider")
+  if f114.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f114.get, addr r.provider.get)
+  let f115 = v.lookup("reason")
+  if f115.isSome:
+    r.reason = Opt.some(decLogosNSRuntimeControlReason(f115.get))
+
+proc toCbor*(x: LogosNSRuntimeControlModuleStateChangedEvent): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlModuleStateChangedEvent, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlModuleStateChangedEvent, v: CborValue): LogosNSRuntimeControlModuleStateChangedEvent =
-  var r = LogosNSRuntimeControlModuleStateChangedEvent()
-  block:
-    let f = v.lookup("failure")
-    if f.isSome:
-      r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f.get))
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
-  r.new_state = fromChecked(LogosNSRuntimeControlState, v.lookup("new_state").get)
-  r.old_state = fromChecked(LogosNSRuntimeControlState, v.lookup("old_state").get)
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
-  block:
-    let f = v.lookup("reason")
-    if f.isSome:
-      r.reason = Opt.some(decLogosNSRuntimeControlReason(f.get))
+  var r: LogosNSRuntimeControlModuleStateChangedEvent
+  runDec(stepDecLogosNSRuntimeControlModuleStateChangedEvent, v, addr r)
   r
 
 proc encLogosNSRuntimeControlPath*(x: LogosNSRuntimeControlPath): CborValue =
@@ -2121,68 +3369,135 @@ proc encLogosNSRuntimeControlPath*(x: LogosNSRuntimeControlPath): CborValue =
 proc decLogosNSRuntimeControlPath*(v: CborValue): LogosNSRuntimeControlPath =
   v.text
 
-proc toCbor*(x: LogosNSRuntimeControlPermissionSetting): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("constraints"), cbor(x.constraints)))
-  e.add((cbor("permission"), cbor(x.permission)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeControlPermissionSetting*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlPermissionSetting](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("constraints")
+  node.entries[k].value = cbor(x.constraints)
+  inc k
+  node.entries[k].key = cbor("permission")
+  node.entries[k].value = cbor(x.permission)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlPermissionSetting, v: CborValue): LogosNSRuntimeControlPermissionSetting =
-  var r = LogosNSRuntimeControlPermissionSetting()
+proc stepDecLogosNSRuntimeControlPermissionSetting*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlPermissionSetting](dst)
+  r[] = LogosNSRuntimeControlPermissionSetting()
   r.constraints = v.lookup("constraints").get.bytes
   r.permission = v.lookup("permission").get.text
+
+proc toCbor*(x: LogosNSRuntimeControlPermissionSetting): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlPermissionSetting, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlPermissionSetting, v: CborValue): LogosNSRuntimeControlPermissionSetting =
+  var r: LogosNSRuntimeControlPermissionSetting
+  runDec(stepDecLogosNSRuntimeControlPermissionSetting, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlPermissionSettingsChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlPermissionSettingsChangedEvent](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlPermissionSettingsState, addr x.state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlPermissionSettingsChangedEvent*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlPermissionSettingsChangedEvent](dst)
+  r[] = LogosNSRuntimeControlPermissionSettingsChangedEvent()
+  let f116 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlPermissionSettingsState, f116, addr r.state)
+  let f117 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f117, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlPermissionSettingsChangedEvent): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("state"), toCbor(x.state)))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlPermissionSettingsChangedEvent, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlPermissionSettingsChangedEvent, v: CborValue): LogosNSRuntimeControlPermissionSettingsChangedEvent =
-  var r = LogosNSRuntimeControlPermissionSettingsChangedEvent()
-  r.state = fromChecked(LogosNSRuntimeControlPermissionSettingsState, v.lookup("state").get)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlPermissionSettingsChangedEvent
+  runDec(stepDecLogosNSRuntimeControlPermissionSettingsChangedEvent, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlPermissionSettingsStateApplicationChoice): CborValue =
+proc stepEncLogosNSRuntimeControlPermissionSettingsStateApplicationChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlPermissionSettingsStateApplicationChoice](src)
   case x.kind
   of LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Applied:
-    cbor("applied")
+    dst[] = cbor("applied")
   of LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Failed:
-    cbor("failed")
+    dst[] = cbor("failed")
   of LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Pending:
-    cbor("pending")
+    dst[] = cbor("pending")
 
-proc fromChecked*(T: type LogosNSRuntimeControlPermissionSettingsStateApplicationChoice, v: CborValue): LogosNSRuntimeControlPermissionSettingsStateApplicationChoice =
+proc stepDecLogosNSRuntimeControlPermissionSettingsStateApplicationChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlPermissionSettingsStateApplicationChoice](dst)
   case generatedSchema().arm("logos.runtime_control.permission_settings_state#application", v)
   of 0:
-    LogosNSRuntimeControlPermissionSettingsStateApplicationChoice(kind: LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Failed)
+    r[] = LogosNSRuntimeControlPermissionSettingsStateApplicationChoice(kind: LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Failed)
   of 1:
-    LogosNSRuntimeControlPermissionSettingsStateApplicationChoice(kind: LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Applied)
+    r[] = LogosNSRuntimeControlPermissionSettingsStateApplicationChoice(kind: LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Applied)
   of 2:
-    LogosNSRuntimeControlPermissionSettingsStateApplicationChoice(kind: LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Pending)
+    r[] = LogosNSRuntimeControlPermissionSettingsStateApplicationChoice(kind: LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Pending)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlPermissionSettingsState): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("application"), toCbor(x.application)))
+proc toCbor*(x: LogosNSRuntimeControlPermissionSettingsStateApplicationChoice): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlPermissionSettingsStateApplicationChoice, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlPermissionSettingsStateApplicationChoice, v: CborValue): LogosNSRuntimeControlPermissionSettingsStateApplicationChoice =
+  var r: LogosNSRuntimeControlPermissionSettingsStateApplicationChoice
+  runDec(stepDecLogosNSRuntimeControlPermissionSettingsStateApplicationChoice, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlPermissionSettingsState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlPermissionSettingsState](src)
+  var n = 3
   if x.failure.isSome:
-    e.add((cbor("failure"), encLogosNSRuntimeControlFailureCode(x.failure.get)))
-  e.add((cbor("permissions"), cborArray(x.permissions.mapIt(toCbor(it)))))
-  e.add((cbor("revision"), cbor(uint64(x.revision))))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("application")
+  w.later(stepEncLogosNSRuntimeControlPermissionSettingsStateApplicationChoice, addr x.application, addr node.entries[k].value)
+  inc k
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    node.entries[k].value = encLogosNSRuntimeControlFailureCode(x.failure.get)
+    inc k
+  node.entries[k].key = cbor("permissions")
+  let a120 = newCborArray(x.permissions.len)
+  node.entries[k].value = a120
+  for i121 in 0 ..< x.permissions.len:
+    w.later(stepEncLogosNSRuntimeControlPermissionSetting, addr x.permissions[i121], addr a120.items[i121])
+  inc k
+  node.entries[k].key = cbor("revision")
+  node.entries[k].value = cbor(uint64(x.revision))
+  inc k
+
+proc stepDecLogosNSRuntimeControlPermissionSettingsState*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlPermissionSettingsState](dst)
+  r[] = LogosNSRuntimeControlPermissionSettingsState()
+  let f118 = v.lookup("application").get
+  w.later(stepDecLogosNSRuntimeControlPermissionSettingsStateApplicationChoice, f118, addr r.application)
+  let f119 = v.lookup("failure")
+  if f119.isSome:
+    r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f119.get))
+  let f122 = v.lookup("permissions").get
+  r.permissions.setLen(f122.items.len)
+  for i123 in 0 ..< f122.items.len:
+    w.later(stepDecLogosNSRuntimeControlPermissionSetting, f122.items[i123], addr r.permissions[i123])
+  r.revision = uint64(v.lookup("revision").get.uint)
+
+proc toCbor*(x: LogosNSRuntimeControlPermissionSettingsState): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlPermissionSettingsState, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlPermissionSettingsState, v: CborValue): LogosNSRuntimeControlPermissionSettingsState =
-  var r = LogosNSRuntimeControlPermissionSettingsState()
-  r.application = fromChecked(LogosNSRuntimeControlPermissionSettingsStateApplicationChoice, v.lookup("application").get)
-  block:
-    let f = v.lookup("failure")
-    if f.isSome:
-      r.failure = Opt.some(decLogosNSRuntimeControlFailureCode(f.get))
-  r.permissions = v.lookup("permissions").get.items.mapIt(fromChecked(LogosNSRuntimeControlPermissionSetting, it))
-  r.revision = uint64(v.lookup("revision").get.uint)
+  var r: LogosNSRuntimeControlPermissionSettingsState
+  runDec(stepDecLogosNSRuntimeControlPermissionSettingsState, v, addr r)
   r
 
 proc encLogosNSRuntimeControlPort*(x: LogosNSRuntimeControlPort): CborValue =
@@ -2191,65 +3506,119 @@ proc encLogosNSRuntimeControlPort*(x: LogosNSRuntimeControlPort): CborValue =
 proc decLogosNSRuntimeControlPort*(v: CborValue): LogosNSRuntimeControlPort =
   uint16(v.uint)
 
+proc stepEncLogosNSRuntimeControlProviderExportRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlProviderExportRecord](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("enabled")
+  node.entries[k].value = cbor(x.enabled)
+  inc k
+  node.entries[k].key = cbor("listener")
+  w.later(stepEncLogosNSRuntimeControlRemoteListenerAddress, addr x.listener, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("provider")
+  w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlProviderExportRecord*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlProviderExportRecord](dst)
+  r[] = LogosNSRuntimeControlProviderExportRecord()
+  r.enabled = asBool(v.lookup("enabled").get)
+  let f124 = v.lookup("listener").get
+  w.later(stepDecLogosNSRuntimeControlRemoteListenerAddress, f124, addr r.listener)
+  let f125 = v.lookup("provider").get
+  w.later(stepDecLogosNSRuntimeModuleProviderAddress, f125, addr r.provider)
+
 proc toCbor*(x: LogosNSRuntimeControlProviderExportRecord): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("enabled"), cbor(x.enabled)))
-  e.add((cbor("listener"), toCbor(x.listener)))
-  e.add((cbor("provider"), toCbor(x.provider)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlProviderExportRecord, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlProviderExportRecord, v: CborValue): LogosNSRuntimeControlProviderExportRecord =
-  var r = LogosNSRuntimeControlProviderExportRecord()
-  r.enabled = asBool(v.lookup("enabled").get)
-  r.listener = fromChecked(LogosNSRuntimeControlRemoteListenerAddress, v.lookup("listener").get)
-  r.provider = fromChecked(LogosNSRuntimeModuleProviderAddress, v.lookup("provider").get)
+  var r: LogosNSRuntimeControlProviderExportRecord
+  runDec(stepDecLogosNSRuntimeControlProviderExportRecord, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlProviderRequirementCardinality): CborValue =
+proc stepEncLogosNSRuntimeControlProviderRequirementCardinality*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlProviderRequirementCardinality](src)
   case x.kind
   of LogosNSRuntimeControlProviderRequirementCardinalityKind.All_runtime_visible:
-    cbor("all-runtime-visible")
+    dst[] = cbor("all-runtime-visible")
   of LogosNSRuntimeControlProviderRequirementCardinalityKind.Single:
-    cbor("single")
+    dst[] = cbor("single")
 
-proc fromChecked*(T: type LogosNSRuntimeControlProviderRequirementCardinality, v: CborValue): LogosNSRuntimeControlProviderRequirementCardinality =
+proc stepDecLogosNSRuntimeControlProviderRequirementCardinality*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlProviderRequirementCardinality](dst)
   case generatedSchema().arm("logos.runtime_control.provider_requirement_cardinality#", v)
   of 0:
-    LogosNSRuntimeControlProviderRequirementCardinality(kind: LogosNSRuntimeControlProviderRequirementCardinalityKind.Single)
+    r[] = LogosNSRuntimeControlProviderRequirementCardinality(kind: LogosNSRuntimeControlProviderRequirementCardinalityKind.Single)
   of 1:
-    LogosNSRuntimeControlProviderRequirementCardinality(kind: LogosNSRuntimeControlProviderRequirementCardinalityKind.All_runtime_visible)
+    r[] = LogosNSRuntimeControlProviderRequirementCardinality(kind: LogosNSRuntimeControlProviderRequirementCardinalityKind.All_runtime_visible)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlQuicRuntimeAddress): CborValue =
-  var e: seq[CborEntry]
-  if x.alpn.isSome:
-    e.add((cbor("alpn"), encLogosNSRuntimeControlAlpn(x.alpn.get)))
-  e.add((cbor("host"), encLogosNSRuntimeControlHostName(x.host)))
-  e.add((cbor("port"), encLogosNSRuntimeControlPort(x.port)))
-  if x.profile.isSome:
-    e.add((cbor("profile"), encLogosNSRuntimeControlAddressProfile(x.profile.get)))
-  if x.server_name.isSome:
-    e.add((cbor("server_name"), encLogosNSRuntimeControlServerName(x.server_name.get)))
-  e.add((cbor("transport"), cbor("quic")))
-  cborMap(e)
+proc toCbor*(x: LogosNSRuntimeControlProviderRequirementCardinality): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlProviderRequirementCardinality, addr x)
 
-proc fromChecked*(T: type LogosNSRuntimeControlQuicRuntimeAddress, v: CborValue): LogosNSRuntimeControlQuicRuntimeAddress =
-  var r = LogosNSRuntimeControlQuicRuntimeAddress()
-  block:
-    let f = v.lookup("alpn")
-    if f.isSome:
-      r.alpn = Opt.some(decLogosNSRuntimeControlAlpn(f.get))
+proc fromChecked*(T: type LogosNSRuntimeControlProviderRequirementCardinality, v: CborValue): LogosNSRuntimeControlProviderRequirementCardinality =
+  var r: LogosNSRuntimeControlProviderRequirementCardinality
+  runDec(stepDecLogosNSRuntimeControlProviderRequirementCardinality, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlQuicRuntimeAddress*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlQuicRuntimeAddress](src)
+  var n = 3
+  if x.alpn.isSome:
+    inc n
+  if x.profile.isSome:
+    inc n
+  if x.server_name.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.alpn.isSome:
+    node.entries[k].key = cbor("alpn")
+    node.entries[k].value = encLogosNSRuntimeControlAlpn(x.alpn.get)
+    inc k
+  node.entries[k].key = cbor("host")
+  node.entries[k].value = encLogosNSRuntimeControlHostName(x.host)
+  inc k
+  node.entries[k].key = cbor("port")
+  node.entries[k].value = encLogosNSRuntimeControlPort(x.port)
+  inc k
+  if x.profile.isSome:
+    node.entries[k].key = cbor("profile")
+    node.entries[k].value = encLogosNSRuntimeControlAddressProfile(x.profile.get)
+    inc k
+  if x.server_name.isSome:
+    node.entries[k].key = cbor("server_name")
+    node.entries[k].value = encLogosNSRuntimeControlServerName(x.server_name.get)
+    inc k
+  node.entries[k].key = cbor("transport")
+  node.entries[k].value = cbor("quic")
+  inc k
+
+proc stepDecLogosNSRuntimeControlQuicRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlQuicRuntimeAddress](dst)
+  r[] = LogosNSRuntimeControlQuicRuntimeAddress()
+  let f126 = v.lookup("alpn")
+  if f126.isSome:
+    r.alpn = Opt.some(decLogosNSRuntimeControlAlpn(f126.get))
   r.host = decLogosNSRuntimeControlHostName(v.lookup("host").get)
   r.port = decLogosNSRuntimeControlPort(v.lookup("port").get)
-  block:
-    let f = v.lookup("profile")
-    if f.isSome:
-      r.profile = Opt.some(decLogosNSRuntimeControlAddressProfile(f.get))
-  block:
-    let f = v.lookup("server_name")
-    if f.isSome:
-      r.server_name = Opt.some(decLogosNSRuntimeControlServerName(f.get))
+  let f127 = v.lookup("profile")
+  if f127.isSome:
+    r.profile = Opt.some(decLogosNSRuntimeControlAddressProfile(f127.get))
+  let f128 = v.lookup("server_name")
+  if f128.isSome:
+    r.server_name = Opt.some(decLogosNSRuntimeControlServerName(f128.get))
+
+proc toCbor*(x: LogosNSRuntimeControlQuicRuntimeAddress): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlQuicRuntimeAddress, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlQuicRuntimeAddress, v: CborValue): LogosNSRuntimeControlQuicRuntimeAddress =
+  var r: LogosNSRuntimeControlQuicRuntimeAddress
+  runDec(stepDecLogosNSRuntimeControlQuicRuntimeAddress, v, addr r)
   r
 
 proc encLogosNSRuntimeControlReason*(x: LogosNSRuntimeControlReason): CborValue =
@@ -2258,440 +3627,866 @@ proc encLogosNSRuntimeControlReason*(x: LogosNSRuntimeControlReason): CborValue 
 proc decLogosNSRuntimeControlReason*(v: CborValue): LogosNSRuntimeControlReason =
   v.text
 
-proc toCbor*(x: LogosNSRuntimeControlRecoverModuleRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("expected_execution_revision"), cbor(uint64(x.expected_execution_revision))))
-  e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeControlRecoverModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRecoverModuleRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("expected_execution_revision")
+  node.entries[k].value = cbor(uint64(x.expected_execution_revision))
+  inc k
+  node.entries[k].key = cbor("instance")
+  node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance)
+  inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlRecoverModuleRequest, v: CborValue): LogosNSRuntimeControlRecoverModuleRequest =
-  var r = LogosNSRuntimeControlRecoverModuleRequest()
+proc stepDecLogosNSRuntimeControlRecoverModuleRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRecoverModuleRequest](dst)
+  r[] = LogosNSRuntimeControlRecoverModuleRequest()
   r.expected_execution_revision = uint64(v.lookup("expected_execution_revision").get.uint)
   r.instance = decLogosNSRuntimeModuleInstanceId(v.lookup("instance").get)
   r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+
+proc toCbor*(x: LogosNSRuntimeControlRecoverModuleRequest): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRecoverModuleRequest, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlRecoverModuleRequest, v: CborValue): LogosNSRuntimeControlRecoverModuleRequest =
+  var r: LogosNSRuntimeControlRecoverModuleRequest
+  runDec(stepDecLogosNSRuntimeControlRecoverModuleRequest, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlRecoverModuleResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  e.add((cbor("state"), toCbor(x.state)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeControlRecoverModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRecoverModuleResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("instance")
+  node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance)
+  inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlState, addr x.state, addr node.entries[k].value)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlRecoverModuleResponse, v: CborValue): LogosNSRuntimeControlRecoverModuleResponse =
-  var r = LogosNSRuntimeControlRecoverModuleResponse()
+proc stepDecLogosNSRuntimeControlRecoverModuleResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRecoverModuleResponse](dst)
+  r[] = LogosNSRuntimeControlRecoverModuleResponse()
   r.instance = decLogosNSRuntimeModuleInstanceId(v.lookup("instance").get)
   r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
-  r.state = fromChecked(LogosNSRuntimeControlState, v.lookup("state").get)
+  let f129 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlState, f129, addr r.state)
+
+proc toCbor*(x: LogosNSRuntimeControlRecoverModuleResponse): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRecoverModuleResponse, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlRecoverModuleResponse, v: CborValue): LogosNSRuntimeControlRecoverModuleResponse =
+  var r: LogosNSRuntimeControlRecoverModuleResponse
+  runDec(stepDecLogosNSRuntimeControlRecoverModuleResponse, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlRemoteIdentityProfile): CborValue =
+proc stepEncLogosNSRuntimeControlRemoteIdentityProfile*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRemoteIdentityProfile](src)
   case x.kind
   of LogosNSRuntimeControlRemoteIdentityProfileKind.Case0:
-    cbor("logos.remote.quic")
+    dst[] = cbor("logos.remote.quic")
   of LogosNSRuntimeControlRemoteIdentityProfileKind.Case1:
-    cbor("logos.remote.tls-tcp")
+    dst[] = cbor("logos.remote.tls-tcp")
 
-proc fromChecked*(T: type LogosNSRuntimeControlRemoteIdentityProfile, v: CborValue): LogosNSRuntimeControlRemoteIdentityProfile =
+proc stepDecLogosNSRuntimeControlRemoteIdentityProfile*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRemoteIdentityProfile](dst)
   case generatedSchema().arm("logos.runtime_control.remote_identity_profile#", v)
   of 0:
-    LogosNSRuntimeControlRemoteIdentityProfile(kind: LogosNSRuntimeControlRemoteIdentityProfileKind.Case0)
+    r[] = LogosNSRuntimeControlRemoteIdentityProfile(kind: LogosNSRuntimeControlRemoteIdentityProfileKind.Case0)
   of 1:
-    LogosNSRuntimeControlRemoteIdentityProfile(kind: LogosNSRuntimeControlRemoteIdentityProfileKind.Case1)
+    r[] = LogosNSRuntimeControlRemoteIdentityProfile(kind: LogosNSRuntimeControlRemoteIdentityProfileKind.Case1)
+  else:
+    raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: LogosNSRuntimeControlRemoteIdentityProfile): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRemoteIdentityProfile, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlRemoteIdentityProfile, v: CborValue): LogosNSRuntimeControlRemoteIdentityProfile =
+  var r: LogosNSRuntimeControlRemoteIdentityProfile
+  runDec(stepDecLogosNSRuntimeControlRemoteIdentityProfile, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlRemoteListenerAddress*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRemoteListenerAddress](src)
+  case x.kind
+  of LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Quic_runtime_address:
+    w.later(stepEncLogosNSRuntimeControlQuicRuntimeAddress, addr x.arm_logos_NS_runtime_control_Quic_runtime_address, addr dst[])
+  of LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Tls_tcp_runtime_address:
+    w.later(stepEncLogosNSRuntimeControlTlsTcpRuntimeAddress, addr x.arm_logos_NS_runtime_control_Tls_tcp_runtime_address, addr dst[])
+
+proc stepDecLogosNSRuntimeControlRemoteListenerAddress*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRemoteListenerAddress](dst)
+  case generatedSchema().arm("logos.runtime_control.remote_listener_address#", v)
+  of 0:
+    r[] = LogosNSRuntimeControlRemoteListenerAddress(kind: LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Quic_runtime_address)
+    w.later(stepDecLogosNSRuntimeControlQuicRuntimeAddress, v, addr r.arm_logos_NS_runtime_control_Quic_runtime_address)
+  of 1:
+    r[] = LogosNSRuntimeControlRemoteListenerAddress(kind: LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Tls_tcp_runtime_address)
+    w.later(stepDecLogosNSRuntimeControlTlsTcpRuntimeAddress, v, addr r.arm_logos_NS_runtime_control_Tls_tcp_runtime_address)
   else:
     raiseAssert "a checked value selects a known arm"
 
 proc toCbor*(x: LogosNSRuntimeControlRemoteListenerAddress): CborValue =
-  case x.kind
-  of LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Quic_runtime_address:
-    toCbor(x.arm_logos_NS_runtime_control_Quic_runtime_address)
-  of LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Tls_tcp_runtime_address:
-    toCbor(x.arm_logos_NS_runtime_control_Tls_tcp_runtime_address)
+  runEnc(stepEncLogosNSRuntimeControlRemoteListenerAddress, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteListenerAddress, v: CborValue): LogosNSRuntimeControlRemoteListenerAddress =
-  case generatedSchema().arm("logos.runtime_control.remote_listener_address#", v)
-  of 0:
-    LogosNSRuntimeControlRemoteListenerAddress(kind: LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Quic_runtime_address, arm_logos_NS_runtime_control_Quic_runtime_address: fromChecked(LogosNSRuntimeControlQuicRuntimeAddress, v))
-  of 1:
-    LogosNSRuntimeControlRemoteListenerAddress(kind: LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Tls_tcp_runtime_address, arm_logos_NS_runtime_control_Tls_tcp_runtime_address: fromChecked(LogosNSRuntimeControlTlsTcpRuntimeAddress, v))
-  else:
-    raiseAssert "a checked value selects a known arm"
+  var r: LogosNSRuntimeControlRemoteListenerAddress
+  runDec(stepDecLogosNSRuntimeControlRemoteListenerAddress, v, addr r)
+  r
 
-proc toCbor*(x: LogosNSRuntimeControlRemoteListenerRecord): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("address"), toCbor(x.address)))
-  e.add((cbor("enabled"), cbor(x.enabled)))
-  e.add((cbor("runtime_control_enabled"), cbor(x.runtime_control_enabled)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeControlRemoteListenerRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRemoteListenerRecord](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("address")
+  w.later(stepEncLogosNSRuntimeControlRemoteListenerAddress, addr x.address, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("enabled")
+  node.entries[k].value = cbor(x.enabled)
+  inc k
+  node.entries[k].key = cbor("runtime_control_enabled")
+  node.entries[k].value = cbor(x.runtime_control_enabled)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlRemoteListenerRecord, v: CborValue): LogosNSRuntimeControlRemoteListenerRecord =
-  var r = LogosNSRuntimeControlRemoteListenerRecord()
-  r.address = fromChecked(LogosNSRuntimeControlRemoteListenerAddress, v.lookup("address").get)
+proc stepDecLogosNSRuntimeControlRemoteListenerRecord*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRemoteListenerRecord](dst)
+  r[] = LogosNSRuntimeControlRemoteListenerRecord()
+  let f130 = v.lookup("address").get
+  w.later(stepDecLogosNSRuntimeControlRemoteListenerAddress, f130, addr r.address)
   r.enabled = asBool(v.lookup("enabled").get)
   r.runtime_control_enabled = asBool(v.lookup("runtime_control_enabled").get)
+
+proc toCbor*(x: LogosNSRuntimeControlRemoteListenerRecord): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRemoteListenerRecord, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlRemoteListenerRecord, v: CborValue): LogosNSRuntimeControlRemoteListenerRecord =
+  var r: LogosNSRuntimeControlRemoteListenerRecord
+  runDec(stepDecLogosNSRuntimeControlRemoteListenerRecord, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlRemoteProviderTarget*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRemoteProviderTarget](src)
+  var n = 1
+  if x.module.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.module.isSome:
+    node.entries[k].key = cbor("module")
+    node.entries[k].value = encLogosNSRuntimeModuleName(x.module.get)
+    inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    node.entries[k].value = encLogosNSRuntimeModuleProviderId(x.provider.get)
+    inc k
+  node.entries[k].key = cbor("runtime")
+  w.later(stepEncLogosNSRuntimeControlRuntimeEndpoint, addr x.runtime, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlRemoteProviderTarget*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRemoteProviderTarget](dst)
+  r[] = LogosNSRuntimeControlRemoteProviderTarget()
+  let f131 = v.lookup("module")
+  if f131.isSome:
+    r.module = Opt.some(decLogosNSRuntimeModuleName(f131.get))
+  let f132 = v.lookup("provider")
+  if f132.isSome:
+    r.provider = Opt.some(decLogosNSRuntimeModuleProviderId(f132.get))
+  let f133 = v.lookup("runtime").get
+  w.later(stepDecLogosNSRuntimeControlRuntimeEndpoint, f133, addr r.runtime)
 
 proc toCbor*(x: LogosNSRuntimeControlRemoteProviderTarget): CborValue =
-  var e: seq[CborEntry]
-  if x.module.isSome:
-    e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module.get)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), encLogosNSRuntimeModuleProviderId(x.provider.get)))
-  e.add((cbor("runtime"), toCbor(x.runtime)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlRemoteProviderTarget, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteProviderTarget, v: CborValue): LogosNSRuntimeControlRemoteProviderTarget =
-  var r = LogosNSRuntimeControlRemoteProviderTarget()
-  block:
-    let f = v.lookup("module")
-    if f.isSome:
-      r.module = Opt.some(decLogosNSRuntimeModuleName(f.get))
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(decLogosNSRuntimeModuleProviderId(f.get))
-  r.runtime = fromChecked(LogosNSRuntimeControlRuntimeEndpoint, v.lookup("runtime").get)
+  var r: LogosNSRuntimeControlRemoteProviderTarget
+  runDec(stepDecLogosNSRuntimeControlRemoteProviderTarget, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice): CborValue =
+proc stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice](src)
   case x.kind
   of LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoiceKind.Tuple1:
-    cborArray(encLogosNSRuntimeControlSubjectPublicKeyInfo(x.arm_Tuple1[0]))
+    let a135 = newCborArray(1)
+    dst[] = a135
+    a135.items[0] = encLogosNSRuntimeControlSubjectPublicKeyInfo(x.arm_Tuple1[0])
   of LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoiceKind.Tuple2:
-    cborArray(encLogosNSRuntimeControlSubjectPublicKeyInfo(x.arm_Tuple2[0]), encLogosNSRuntimeControlSubjectPublicKeyInfo(x.arm_Tuple2[1]))
+    let a136 = newCborArray(2)
+    dst[] = a136
+    a136.items[0] = encLogosNSRuntimeControlSubjectPublicKeyInfo(x.arm_Tuple2[0])
+    a136.items[1] = encLogosNSRuntimeControlSubjectPublicKeyInfo(x.arm_Tuple2[1])
 
-proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice =
+proc stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice](dst)
   case generatedSchema().arm("logos.runtime_control.remote_runtime_enrollment#arm_1/subject_public_keys", v)
   of 0:
-    LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice(kind: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoiceKind.Tuple1, arm_Tuple1: (decLogosNSRuntimeControlSubjectPublicKeyInfo(v.items[0]),))
+    r[] = LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice(kind: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoiceKind.Tuple1)
+    r.arm_Tuple1[0] = decLogosNSRuntimeControlSubjectPublicKeyInfo(v.items[0])
   of 1:
-    LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice(kind: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoiceKind.Tuple2, arm_Tuple2: (decLogosNSRuntimeControlSubjectPublicKeyInfo(v.items[0]), decLogosNSRuntimeControlSubjectPublicKeyInfo(v.items[1])))
+    r[] = LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice(kind: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoiceKind.Tuple2)
+    r.arm_Tuple2[0] = decLogosNSRuntimeControlSubjectPublicKeyInfo(v.items[0])
+    r.arm_Tuple2[1] = decLogosNSRuntimeControlSubjectPublicKeyInfo(v.items[1])
   else:
     raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice =
+  var r: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice
+  runDec(stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](6))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("profile")
+  w.later(stepEncLogosNSRuntimeControlRemoteIdentityProfile, addr x.profile, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("revision")
+  node.entries[k].value = cbor(uint64(x.revision))
+  inc k
+  node.entries[k].key = cbor("runtime_instance_id")
+  node.entries[k].value = encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id)
+  inc k
+  node.entries[k].key = cbor("status")
+  node.entries[k].value = cbor("active")
+  inc k
+  node.entries[k].key = cbor("subject_public_keys")
+  w.later(stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice, addr x.subject_public_keys, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("trust_anchor")
+  node.entries[k].value = encLogosNSRuntimeControlTrustAnchorId(x.trust_anchor)
+  inc k
+
+proc stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap](dst)
+  r[] = LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap()
+  let f134 = v.lookup("profile").get
+  w.later(stepDecLogosNSRuntimeControlRemoteIdentityProfile, f134, addr r.profile)
+  r.revision = uint64(v.lookup("revision").get.uint)
+  r.runtime_instance_id = decLogosNSRuntimeRuntimeInstanceId(v.lookup("runtime_instance_id").get)
+  let f137 = v.lookup("subject_public_keys").get
+  w.later(stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice, f137, addr r.subject_public_keys)
+  r.trust_anchor = decLogosNSRuntimeControlTrustAnchorId(v.lookup("trust_anchor").get)
 
 proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("profile"), toCbor(x.profile)))
-  e.add((cbor("revision"), cbor(uint64(x.revision))))
-  e.add((cbor("runtime_instance_id"), encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id)))
-  e.add((cbor("status"), cbor("active")))
-  e.add((cbor("subject_public_keys"), toCbor(x.subject_public_keys)))
-  e.add((cbor("trust_anchor"), encLogosNSRuntimeControlTrustAnchorId(x.trust_anchor)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap =
-  var r = LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap()
-  r.profile = fromChecked(LogosNSRuntimeControlRemoteIdentityProfile, v.lookup("profile").get)
+  var r: LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap
+  runDec(stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("profile")
+  w.later(stepEncLogosNSRuntimeControlRemoteIdentityProfile, addr x.profile, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("revision")
+  node.entries[k].value = cbor(uint64(x.revision))
+  inc k
+  node.entries[k].key = cbor("runtime_instance_id")
+  node.entries[k].value = encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id)
+  inc k
+  node.entries[k].key = cbor("status")
+  node.entries[k].value = cbor("revoked")
+  inc k
+
+proc stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap](dst)
+  r[] = LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap()
+  let f138 = v.lookup("profile").get
+  w.later(stepDecLogosNSRuntimeControlRemoteIdentityProfile, f138, addr r.profile)
   r.revision = uint64(v.lookup("revision").get.uint)
   r.runtime_instance_id = decLogosNSRuntimeRuntimeInstanceId(v.lookup("runtime_instance_id").get)
-  r.subject_public_keys = fromChecked(LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveSubjectPublicKeysChoice, v.lookup("subject_public_keys").get)
-  r.trust_anchor = decLogosNSRuntimeControlTrustAnchorId(v.lookup("trust_anchor").get)
-  r
 
 proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("profile"), toCbor(x.profile)))
-  e.add((cbor("revision"), cbor(uint64(x.revision))))
-  e.add((cbor("runtime_instance_id"), encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id)))
-  e.add((cbor("status"), cbor("revoked")))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap =
-  var r = LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap()
-  r.profile = fromChecked(LogosNSRuntimeControlRemoteIdentityProfile, v.lookup("profile").get)
-  r.revision = uint64(v.lookup("revision").get.uint)
-  r.runtime_instance_id = decLogosNSRuntimeRuntimeInstanceId(v.lookup("runtime_instance_id").get)
+  var r: LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap
+  runDec(stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollment): CborValue =
+proc stepEncLogosNSRuntimeControlRemoteRuntimeEnrollment*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRemoteRuntimeEnrollment](src)
   case x.kind
   of LogosNSRuntimeControlRemoteRuntimeEnrollmentKind.Active:
-    toCbor(x.arm_Active)
+    w.later(stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap, addr x.arm_Active, addr dst[])
   of LogosNSRuntimeControlRemoteRuntimeEnrollmentKind.Revoked:
-    toCbor(x.arm_Revoked)
+    w.later(stepEncLogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap, addr x.arm_Revoked, addr dst[])
 
-proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollment, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollment =
+proc stepDecLogosNSRuntimeControlRemoteRuntimeEnrollment*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRemoteRuntimeEnrollment](dst)
   case generatedSchema().arm("logos.runtime_control.remote_runtime_enrollment#", v)
   of 0:
-    LogosNSRuntimeControlRemoteRuntimeEnrollment(kind: LogosNSRuntimeControlRemoteRuntimeEnrollmentKind.Revoked, arm_Revoked: fromChecked(LogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap, v))
+    r[] = LogosNSRuntimeControlRemoteRuntimeEnrollment(kind: LogosNSRuntimeControlRemoteRuntimeEnrollmentKind.Revoked)
+    w.later(stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARRevokedMap, v, addr r.arm_Revoked)
   of 1:
-    LogosNSRuntimeControlRemoteRuntimeEnrollment(kind: LogosNSRuntimeControlRemoteRuntimeEnrollmentKind.Active, arm_Active: fromChecked(LogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap, v))
+    r[] = LogosNSRuntimeControlRemoteRuntimeEnrollment(kind: LogosNSRuntimeControlRemoteRuntimeEnrollmentKind.Active)
+    w.later(stepDecLogosNSRuntimeControlRemoteRuntimeEnrollmentARActiveMap, v, addr r.arm_Active)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlRenewRouteRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("request_key"), cbor(x.request_key)))
-  e.add((cbor("route"), encLogosNSRuntimeRouteId(x.route)))
-  cborMap(e)
+proc toCbor*(x: LogosNSRuntimeControlRemoteRuntimeEnrollment): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRemoteRuntimeEnrollment, addr x)
 
-proc fromChecked*(T: type LogosNSRuntimeControlRenewRouteRequest, v: CborValue): LogosNSRuntimeControlRenewRouteRequest =
-  var r = LogosNSRuntimeControlRenewRouteRequest()
+proc fromChecked*(T: type LogosNSRuntimeControlRemoteRuntimeEnrollment, v: CborValue): LogosNSRuntimeControlRemoteRuntimeEnrollment =
+  var r: LogosNSRuntimeControlRemoteRuntimeEnrollment
+  runDec(stepDecLogosNSRuntimeControlRemoteRuntimeEnrollment, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlRenewRouteRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRenewRouteRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("request_key")
+  node.entries[k].value = cbor(x.request_key)
+  inc k
+  node.entries[k].key = cbor("route")
+  node.entries[k].value = encLogosNSRuntimeRouteId(x.route)
+  inc k
+
+proc stepDecLogosNSRuntimeControlRenewRouteRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRenewRouteRequest](dst)
+  r[] = LogosNSRuntimeControlRenewRouteRequest()
   r.request_key = v.lookup("request_key").get.text
   r.route = decLogosNSRuntimeRouteId(v.lookup("route").get)
+
+proc toCbor*(x: LogosNSRuntimeControlRenewRouteRequest): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRenewRouteRequest, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlRenewRouteRequest, v: CborValue): LogosNSRuntimeControlRenewRouteRequest =
+  var r: LogosNSRuntimeControlRenewRouteRequest
+  runDec(stepDecLogosNSRuntimeControlRenewRouteRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlRenewRouteResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRenewRouteResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("route")
+  w.later(stepEncLogosNSRuntimeControlRouteRecord, addr x.route, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlRenewRouteResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRenewRouteResponse](dst)
+  r[] = LogosNSRuntimeControlRenewRouteResponse()
+  let f139 = v.lookup("route").get
+  w.later(stepDecLogosNSRuntimeControlRouteRecord, f139, addr r.route)
 
 proc toCbor*(x: LogosNSRuntimeControlRenewRouteResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("route"), toCbor(x.route)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlRenewRouteResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRenewRouteResponse, v: CborValue): LogosNSRuntimeControlRenewRouteResponse =
-  var r = LogosNSRuntimeControlRenewRouteResponse()
-  r.route = fromChecked(LogosNSRuntimeControlRouteRecord, v.lookup("route").get)
+  var r: LogosNSRuntimeControlRenewRouteResponse
+  runDec(stepDecLogosNSRuntimeControlRenewRouteResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlReportFailureRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlReportFailureRequest](src)
+  var n = 0
+  if x.reason.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.reason.isSome:
+    node.entries[k].key = cbor("reason")
+    node.entries[k].value = encLogosNSRuntimeControlReason(x.reason.get)
+    inc k
+
+proc stepDecLogosNSRuntimeControlReportFailureRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlReportFailureRequest](dst)
+  r[] = LogosNSRuntimeControlReportFailureRequest()
+  let f140 = v.lookup("reason")
+  if f140.isSome:
+    r.reason = Opt.some(decLogosNSRuntimeControlReason(f140.get))
 
 proc toCbor*(x: LogosNSRuntimeControlReportFailureRequest): CborValue =
-  var e: seq[CborEntry]
-  if x.reason.isSome:
-    e.add((cbor("reason"), encLogosNSRuntimeControlReason(x.reason.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlReportFailureRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlReportFailureRequest, v: CborValue): LogosNSRuntimeControlReportFailureRequest =
-  var r = LogosNSRuntimeControlReportFailureRequest()
-  block:
-    let f = v.lookup("reason")
-    if f.isSome:
-      r.reason = Opt.some(decLogosNSRuntimeControlReason(f.get))
+  var r: LogosNSRuntimeControlReportFailureRequest
+  runDec(stepDecLogosNSRuntimeControlReportFailureRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlReportFailureResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlReportFailureResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecLogosNSRuntimeControlReportFailureResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlReportFailureResponse](dst)
+  r[] = LogosNSRuntimeControlReportFailureResponse()
 
 proc toCbor*(x: LogosNSRuntimeControlReportFailureResponse): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlReportFailureResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlReportFailureResponse, v: CborValue): LogosNSRuntimeControlReportFailureResponse =
-  var r = LogosNSRuntimeControlReportFailureResponse()
+  var r: LogosNSRuntimeControlReportFailureResponse
+  runDec(stepDecLogosNSRuntimeControlReportFailureResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlRetireModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRetireModuleRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("expected_execution_revision")
+  node.entries[k].value = cbor(uint64(x.expected_execution_revision))
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlRetireModuleRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRetireModuleRequest](dst)
+  r[] = LogosNSRuntimeControlRetireModuleRequest()
+  r.expected_execution_revision = uint64(v.lookup("expected_execution_revision").get.uint)
+  let f141 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f141, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlRetireModuleRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("expected_execution_revision"), cbor(uint64(x.expected_execution_revision))))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlRetireModuleRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRetireModuleRequest, v: CborValue): LogosNSRuntimeControlRetireModuleRequest =
-  var r = LogosNSRuntimeControlRetireModuleRequest()
-  r.expected_execution_revision = uint64(v.lookup("expected_execution_revision").get.uint)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlRetireModuleRequest
+  runDec(stepDecLogosNSRuntimeControlRetireModuleRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlRetireModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRetireModuleResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecLogosNSRuntimeControlRetireModuleResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRetireModuleResponse](dst)
+  r[] = LogosNSRuntimeControlRetireModuleResponse()
 
 proc toCbor*(x: LogosNSRuntimeControlRetireModuleResponse): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlRetireModuleResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRetireModuleResponse, v: CborValue): LogosNSRuntimeControlRetireModuleResponse =
-  var r = LogosNSRuntimeControlRetireModuleResponse()
+  var r: LogosNSRuntimeControlRetireModuleResponse
+  runDec(stepDecLogosNSRuntimeControlRetireModuleResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlRouteAccess*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRouteAccess](src)
+  var n = 0
+  if x.methods.isSome:
+    inc n
+  if x.publish_events.isSome:
+    inc n
+  if x.subscribe_events.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.methods.isSome:
+    node.entries[k].key = cbor("methods")
+    let a142 = newCborArray(x.methods.get.len)
+    node.entries[k].value = a142
+    for i143 in 0 ..< x.methods.get.len:
+      a142.items[i143] = cbor(x.methods.get[i143])
+    inc k
+  if x.publish_events.isSome:
+    node.entries[k].key = cbor("publish_events")
+    let a146 = newCborArray(x.publish_events.get.len)
+    node.entries[k].value = a146
+    for i147 in 0 ..< x.publish_events.get.len:
+      a146.items[i147] = cbor(x.publish_events.get[i147])
+    inc k
+  if x.subscribe_events.isSome:
+    node.entries[k].key = cbor("subscribe_events")
+    let a150 = newCborArray(x.subscribe_events.get.len)
+    node.entries[k].value = a150
+    for i151 in 0 ..< x.subscribe_events.get.len:
+      a150.items[i151] = cbor(x.subscribe_events.get[i151])
+    inc k
+
+proc stepDecLogosNSRuntimeControlRouteAccess*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRouteAccess](dst)
+  r[] = LogosNSRuntimeControlRouteAccess()
+  let f144 = v.lookup("methods")
+  if f144.isSome:
+    r.methods = Opt.some(default(seq[seq[byte]]))
+    r.methods.get.setLen(f144.get.items.len)
+    for i145 in 0 ..< f144.get.items.len:
+      r.methods.get[i145] = f144.get.items[i145].bytes
+  let f148 = v.lookup("publish_events")
+  if f148.isSome:
+    r.publish_events = Opt.some(default(seq[seq[byte]]))
+    r.publish_events.get.setLen(f148.get.items.len)
+    for i149 in 0 ..< f148.get.items.len:
+      r.publish_events.get[i149] = f148.get.items[i149].bytes
+  let f152 = v.lookup("subscribe_events")
+  if f152.isSome:
+    r.subscribe_events = Opt.some(default(seq[seq[byte]]))
+    r.subscribe_events.get.setLen(f152.get.items.len)
+    for i153 in 0 ..< f152.get.items.len:
+      r.subscribe_events.get[i153] = f152.get.items[i153].bytes
 
 proc toCbor*(x: LogosNSRuntimeControlRouteAccess): CborValue =
-  var e: seq[CborEntry]
-  if x.methods.isSome:
-    e.add((cbor("methods"), cborArray(x.methods.get.mapIt(cbor(it)))))
-  if x.publish_events.isSome:
-    e.add((cbor("publish_events"), cborArray(x.publish_events.get.mapIt(cbor(it)))))
-  if x.subscribe_events.isSome:
-    e.add((cbor("subscribe_events"), cborArray(x.subscribe_events.get.mapIt(cbor(it)))))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlRouteAccess, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRouteAccess, v: CborValue): LogosNSRuntimeControlRouteAccess =
-  var r = LogosNSRuntimeControlRouteAccess()
-  block:
-    let f = v.lookup("methods")
-    if f.isSome:
-      r.methods = Opt.some(f.get.items.mapIt(it.bytes))
-  block:
-    let f = v.lookup("publish_events")
-    if f.isSome:
-      r.publish_events = Opt.some(f.get.items.mapIt(it.bytes))
-  block:
-    let f = v.lookup("subscribe_events")
-    if f.isSome:
-      r.subscribe_events = Opt.some(f.get.items.mapIt(it.bytes))
+  var r: LogosNSRuntimeControlRouteAccess
+  runDec(stepDecLogosNSRuntimeControlRouteAccess, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlRouteContinuation*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRouteContinuation](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("provider")
+  w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeControlRemoteProviderTarget, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlRouteContinuation*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRouteContinuation](dst)
+  r[] = LogosNSRuntimeControlRouteContinuation()
+  let f154 = v.lookup("provider").get
+  w.later(stepDecLogosNSRuntimeModuleProviderAddress, f154, addr r.provider)
+  let f155 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeControlRemoteProviderTarget, f155, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlRouteContinuation): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("provider"), toCbor(x.provider)))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlRouteContinuation, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRouteContinuation, v: CborValue): LogosNSRuntimeControlRouteContinuation =
-  var r = LogosNSRuntimeControlRouteContinuation()
-  r.provider = fromChecked(LogosNSRuntimeModuleProviderAddress, v.lookup("provider").get)
-  r.target = fromChecked(LogosNSRuntimeControlRemoteProviderTarget, v.lookup("target").get)
+  var r: LogosNSRuntimeControlRouteContinuation
+  runDec(stepDecLogosNSRuntimeControlRouteContinuation, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlRouteFailure*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRouteFailure](src)
+  var n = 1
+  if x.message.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("code")
+  node.entries[k].value = encLogosNSRuntimeControlFailureCode(x.code)
+  inc k
+  if x.message.isSome:
+    node.entries[k].key = cbor("message")
+    node.entries[k].value = encLogosNSRuntimeControlReason(x.message.get)
+    inc k
+
+proc stepDecLogosNSRuntimeControlRouteFailure*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRouteFailure](dst)
+  r[] = LogosNSRuntimeControlRouteFailure()
+  r.code = decLogosNSRuntimeControlFailureCode(v.lookup("code").get)
+  let f156 = v.lookup("message")
+  if f156.isSome:
+    r.message = Opt.some(decLogosNSRuntimeControlReason(f156.get))
 
 proc toCbor*(x: LogosNSRuntimeControlRouteFailure): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("code"), encLogosNSRuntimeControlFailureCode(x.code)))
-  if x.message.isSome:
-    e.add((cbor("message"), encLogosNSRuntimeControlReason(x.message.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlRouteFailure, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRouteFailure, v: CborValue): LogosNSRuntimeControlRouteFailure =
-  var r = LogosNSRuntimeControlRouteFailure()
-  r.code = decLogosNSRuntimeControlFailureCode(v.lookup("code").get)
-  block:
-    let f = v.lookup("message")
-    if f.isSome:
-      r.message = Opt.some(decLogosNSRuntimeControlReason(f.get))
+  var r: LogosNSRuntimeControlRouteFailure
+  runDec(stepDecLogosNSRuntimeControlRouteFailure, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlRouteRecord): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("access"), toCbor(x.access)))
-  e.add((cbor("consumer"), toCbor(x.consumer)))
+proc stepEncLogosNSRuntimeControlRouteRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRouteRecord](src)
+  var n = 6
   if x.decision_id.isSome:
-    e.add((cbor("decision_id"), encLogosNSRuntimeControlDecisionId(x.decision_id.get)))
+    inc n
   if x.expected_contract.isSome:
-    e.add((cbor("expected_contract"), toCbor(x.expected_contract.get)))
+    inc n
   if x.expires_at.isSome:
-    e.add((cbor("expires_at"), cbor(uint64(x.expires_at.get))))
+    inc n
   if x.failure.isSome:
-    e.add((cbor("failure"), toCbor(x.failure.get)))
+    inc n
   if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
+    inc n
   if x.invocation.isSome:
-    e.add((cbor("invocation"), toCbor(x.invocation.get)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  e.add((cbor("route"), encLogosNSRuntimeRouteId(x.route)))
-  e.add((cbor("state"), toCbor(x.state)))
-  e.add((cbor("target_provider"), toCbor(x.target_provider)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("access")
+  w.later(stepEncLogosNSRuntimeControlRouteAccess, addr x.access, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("consumer")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.consumer, addr node.entries[k].value)
+  inc k
+  if x.decision_id.isSome:
+    node.entries[k].key = cbor("decision_id")
+    node.entries[k].value = encLogosNSRuntimeControlDecisionId(x.decision_id.get)
+    inc k
+  if x.expected_contract.isSome:
+    node.entries[k].key = cbor("expected_contract")
+    w.later(stepEncSchemaCommitment, addr x.expected_contract.get, addr node.entries[k].value)
+    inc k
+  if x.expires_at.isSome:
+    node.entries[k].key = cbor("expires_at")
+    node.entries[k].value = cbor(uint64(x.expires_at.get))
+    inc k
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    w.later(stepEncLogosNSRuntimeControlRouteFailure, addr x.failure.get, addr node.entries[k].value)
+    inc k
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  if x.invocation.isSome:
+    node.entries[k].key = cbor("invocation")
+    w.later(stepEncLogosNSRuntimeControlInvocationDescriptor, addr x.invocation.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  node.entries[k].key = cbor("route")
+  node.entries[k].value = encLogosNSRuntimeRouteId(x.route)
+  inc k
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlRouteState, addr x.state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("target_provider")
+  w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.target_provider, addr node.entries[k].value)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlRouteRecord, v: CborValue): LogosNSRuntimeControlRouteRecord =
-  var r = LogosNSRuntimeControlRouteRecord()
-  r.access = fromChecked(LogosNSRuntimeControlRouteAccess, v.lookup("access").get)
-  r.consumer = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("consumer").get)
-  block:
-    let f = v.lookup("decision_id")
-    if f.isSome:
-      r.decision_id = Opt.some(decLogosNSRuntimeControlDecisionId(f.get))
-  block:
-    let f = v.lookup("expected_contract")
-    if f.isSome:
-      r.expected_contract = Opt.some(fromChecked(SchemaCommitment, f.get))
-  block:
-    let f = v.lookup("expires_at")
-    if f.isSome:
-      r.expires_at = Opt.some(uint64(f.get.uint))
-  block:
-    let f = v.lookup("failure")
-    if f.isSome:
-      r.failure = Opt.some(fromChecked(LogosNSRuntimeControlRouteFailure, f.get))
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  block:
-    let f = v.lookup("invocation")
-    if f.isSome:
-      r.invocation = Opt.some(fromChecked(LogosNSRuntimeControlInvocationDescriptor, f.get))
+proc stepDecLogosNSRuntimeControlRouteRecord*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRouteRecord](dst)
+  r[] = LogosNSRuntimeControlRouteRecord()
+  let f157 = v.lookup("access").get
+  w.later(stepDecLogosNSRuntimeControlRouteAccess, f157, addr r.access)
+  let f158 = v.lookup("consumer").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f158, addr r.consumer)
+  let f159 = v.lookup("decision_id")
+  if f159.isSome:
+    r.decision_id = Opt.some(decLogosNSRuntimeControlDecisionId(f159.get))
+  let f160 = v.lookup("expected_contract")
+  if f160.isSome:
+    r.expected_contract = Opt.some(default(SchemaCommitment))
+    w.later(stepDecSchemaCommitment, f160.get, addr r.expected_contract.get)
+  let f161 = v.lookup("expires_at")
+  if f161.isSome:
+    r.expires_at = Opt.some(uint64(f161.get.uint))
+  let f162 = v.lookup("failure")
+  if f162.isSome:
+    r.failure = Opt.some(default(LogosNSRuntimeControlRouteFailure))
+    w.later(stepDecLogosNSRuntimeControlRouteFailure, f162.get, addr r.failure.get)
+  let f163 = v.lookup("instance")
+  if f163.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f163.get))
+  let f164 = v.lookup("invocation")
+  if f164.isSome:
+    r.invocation = Opt.some(default(LogosNSRuntimeControlInvocationDescriptor))
+    w.later(stepDecLogosNSRuntimeControlInvocationDescriptor, f164.get, addr r.invocation.get)
   r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
   r.route = decLogosNSRuntimeRouteId(v.lookup("route").get)
-  r.state = fromChecked(LogosNSRuntimeControlRouteState, v.lookup("state").get)
-  r.target_provider = fromChecked(LogosNSRuntimeModuleProviderAddress, v.lookup("target_provider").get)
+  let f165 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlRouteState, f165, addr r.state)
+  let f166 = v.lookup("target_provider").get
+  w.later(stepDecLogosNSRuntimeModuleProviderAddress, f166, addr r.target_provider)
+
+proc toCbor*(x: LogosNSRuntimeControlRouteRecord): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRouteRecord, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlRouteRecord, v: CborValue): LogosNSRuntimeControlRouteRecord =
+  var r: LogosNSRuntimeControlRouteRecord
+  runDec(stepDecLogosNSRuntimeControlRouteRecord, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlRouteState): CborValue =
+proc stepEncLogosNSRuntimeControlRouteState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRouteState](src)
   case x.kind
   of LogosNSRuntimeControlRouteStateKind.Closed:
-    cbor("closed")
+    dst[] = cbor("closed")
   of LogosNSRuntimeControlRouteStateKind.Draining:
-    cbor("draining")
+    dst[] = cbor("draining")
   of LogosNSRuntimeControlRouteStateKind.Establishing:
-    cbor("establishing")
+    dst[] = cbor("establishing")
   of LogosNSRuntimeControlRouteStateKind.Failed:
-    cbor("failed")
+    dst[] = cbor("failed")
   of LogosNSRuntimeControlRouteStateKind.Ready:
-    cbor("ready")
+    dst[] = cbor("ready")
   of LogosNSRuntimeControlRouteStateKind.Revoked:
-    cbor("revoked")
+    dst[] = cbor("revoked")
 
-proc fromChecked*(T: type LogosNSRuntimeControlRouteState, v: CborValue): LogosNSRuntimeControlRouteState =
+proc stepDecLogosNSRuntimeControlRouteState*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRouteState](dst)
   case generatedSchema().arm("logos.runtime_control.route_state#", v)
   of 0:
-    LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Ready)
+    r[] = LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Ready)
   of 1:
-    LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Closed)
+    r[] = LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Closed)
   of 2:
-    LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Failed)
+    r[] = LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Failed)
   of 3:
-    LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Revoked)
+    r[] = LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Revoked)
   of 4:
-    LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Draining)
+    r[] = LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Draining)
   of 5:
-    LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Establishing)
+    r[] = LogosNSRuntimeControlRouteState(kind: LogosNSRuntimeControlRouteStateKind.Establishing)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlRouteStateChangedEvent): CborValue =
-  var e: seq[CborEntry]
-  if x.module.isSome:
-    e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module.get)))
-  e.add((cbor("new_state"), toCbor(x.new_state)))
-  e.add((cbor("old_state"), toCbor(x.old_state)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  if x.reason.isSome:
-    e.add((cbor("reason"), encLogosNSRuntimeControlReason(x.reason.get)))
-  e.add((cbor("route"), encLogosNSRuntimeRouteId(x.route)))
-  cborMap(e)
+proc toCbor*(x: LogosNSRuntimeControlRouteState): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRouteState, addr x)
 
-proc fromChecked*(T: type LogosNSRuntimeControlRouteStateChangedEvent, v: CborValue): LogosNSRuntimeControlRouteStateChangedEvent =
-  var r = LogosNSRuntimeControlRouteStateChangedEvent()
-  block:
-    let f = v.lookup("module")
-    if f.isSome:
-      r.module = Opt.some(decLogosNSRuntimeModuleName(f.get))
-  r.new_state = fromChecked(LogosNSRuntimeControlRouteState, v.lookup("new_state").get)
-  r.old_state = fromChecked(LogosNSRuntimeControlRouteState, v.lookup("old_state").get)
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
-  block:
-    let f = v.lookup("reason")
-    if f.isSome:
-      r.reason = Opt.some(decLogosNSRuntimeControlReason(f.get))
-  r.route = decLogosNSRuntimeRouteId(v.lookup("route").get)
+proc fromChecked*(T: type LogosNSRuntimeControlRouteState, v: CborValue): LogosNSRuntimeControlRouteState =
+  var r: LogosNSRuntimeControlRouteState
+  runDec(stepDecLogosNSRuntimeControlRouteState, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlRuntimeAddress): CborValue =
+proc stepEncLogosNSRuntimeControlRouteStateChangedEvent*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRouteStateChangedEvent](src)
+  var n = 3
+  if x.module.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  if x.reason.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.module.isSome:
+    node.entries[k].key = cbor("module")
+    node.entries[k].value = encLogosNSRuntimeModuleName(x.module.get)
+    inc k
+  node.entries[k].key = cbor("new_state")
+  w.later(stepEncLogosNSRuntimeControlRouteState, addr x.new_state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("old_state")
+  w.later(stepEncLogosNSRuntimeControlRouteState, addr x.old_state, addr node.entries[k].value)
+  inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+  if x.reason.isSome:
+    node.entries[k].key = cbor("reason")
+    node.entries[k].value = encLogosNSRuntimeControlReason(x.reason.get)
+    inc k
+  node.entries[k].key = cbor("route")
+  node.entries[k].value = encLogosNSRuntimeRouteId(x.route)
+  inc k
+
+proc stepDecLogosNSRuntimeControlRouteStateChangedEvent*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRouteStateChangedEvent](dst)
+  r[] = LogosNSRuntimeControlRouteStateChangedEvent()
+  let f167 = v.lookup("module")
+  if f167.isSome:
+    r.module = Opt.some(decLogosNSRuntimeModuleName(f167.get))
+  let f168 = v.lookup("new_state").get
+  w.later(stepDecLogosNSRuntimeControlRouteState, f168, addr r.new_state)
+  let f169 = v.lookup("old_state").get
+  w.later(stepDecLogosNSRuntimeControlRouteState, f169, addr r.old_state)
+  let f170 = v.lookup("provider")
+  if f170.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f170.get, addr r.provider.get)
+  let f171 = v.lookup("reason")
+  if f171.isSome:
+    r.reason = Opt.some(decLogosNSRuntimeControlReason(f171.get))
+  r.route = decLogosNSRuntimeRouteId(v.lookup("route").get)
+
+proc toCbor*(x: LogosNSRuntimeControlRouteStateChangedEvent): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRouteStateChangedEvent, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlRouteStateChangedEvent, v: CborValue): LogosNSRuntimeControlRouteStateChangedEvent =
+  var r: LogosNSRuntimeControlRouteStateChangedEvent
+  runDec(stepDecLogosNSRuntimeControlRouteStateChangedEvent, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlRuntimeAddress*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRuntimeAddress](src)
   case x.kind
   of LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Quic_runtime_address:
-    toCbor(x.arm_logos_NS_runtime_control_Quic_runtime_address)
+    w.later(stepEncLogosNSRuntimeControlQuicRuntimeAddress, addr x.arm_logos_NS_runtime_control_Quic_runtime_address, addr dst[])
   of LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Tls_tcp_runtime_address:
-    toCbor(x.arm_logos_NS_runtime_control_Tls_tcp_runtime_address)
+    w.later(stepEncLogosNSRuntimeControlTlsTcpRuntimeAddress, addr x.arm_logos_NS_runtime_control_Tls_tcp_runtime_address, addr dst[])
   of LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Unix_stream_runtime_address:
-    toCbor(x.arm_logos_NS_runtime_control_Unix_stream_runtime_address)
+    w.later(stepEncLogosNSRuntimeControlUnixStreamRuntimeAddress, addr x.arm_logos_NS_runtime_control_Unix_stream_runtime_address, addr dst[])
 
-proc fromChecked*(T: type LogosNSRuntimeControlRuntimeAddress, v: CborValue): LogosNSRuntimeControlRuntimeAddress =
+proc stepDecLogosNSRuntimeControlRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRuntimeAddress](dst)
   case generatedSchema().arm("logos.runtime_control.runtime_address#", v)
   of 0:
-    LogosNSRuntimeControlRuntimeAddress(kind: LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Quic_runtime_address, arm_logos_NS_runtime_control_Quic_runtime_address: fromChecked(LogosNSRuntimeControlQuicRuntimeAddress, v))
+    r[] = LogosNSRuntimeControlRuntimeAddress(kind: LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Quic_runtime_address)
+    w.later(stepDecLogosNSRuntimeControlQuicRuntimeAddress, v, addr r.arm_logos_NS_runtime_control_Quic_runtime_address)
   of 1:
-    LogosNSRuntimeControlRuntimeAddress(kind: LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Tls_tcp_runtime_address, arm_logos_NS_runtime_control_Tls_tcp_runtime_address: fromChecked(LogosNSRuntimeControlTlsTcpRuntimeAddress, v))
+    r[] = LogosNSRuntimeControlRuntimeAddress(kind: LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Tls_tcp_runtime_address)
+    w.later(stepDecLogosNSRuntimeControlTlsTcpRuntimeAddress, v, addr r.arm_logos_NS_runtime_control_Tls_tcp_runtime_address)
   of 2:
-    LogosNSRuntimeControlRuntimeAddress(kind: LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Unix_stream_runtime_address, arm_logos_NS_runtime_control_Unix_stream_runtime_address: fromChecked(LogosNSRuntimeControlUnixStreamRuntimeAddress, v))
+    r[] = LogosNSRuntimeControlRuntimeAddress(kind: LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Unix_stream_runtime_address)
+    w.later(stepDecLogosNSRuntimeControlUnixStreamRuntimeAddress, v, addr r.arm_logos_NS_runtime_control_Unix_stream_runtime_address)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlRuntimeEndpoint): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("address"), toCbor(x.address)))
+proc toCbor*(x: LogosNSRuntimeControlRuntimeAddress): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRuntimeAddress, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlRuntimeAddress, v: CborValue): LogosNSRuntimeControlRuntimeAddress =
+  var r: LogosNSRuntimeControlRuntimeAddress
+  runDec(stepDecLogosNSRuntimeControlRuntimeAddress, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlRuntimeEndpoint*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlRuntimeEndpoint](src)
+  var n = 1
   if x.runtime_instance_id.isSome:
-    e.add((cbor("runtime_instance_id"), encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id.get)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("address")
+  w.later(stepEncLogosNSRuntimeControlRuntimeAddress, addr x.address, addr node.entries[k].value)
+  inc k
+  if x.runtime_instance_id.isSome:
+    node.entries[k].key = cbor("runtime_instance_id")
+    node.entries[k].value = encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id.get)
+    inc k
+
+proc stepDecLogosNSRuntimeControlRuntimeEndpoint*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlRuntimeEndpoint](dst)
+  r[] = LogosNSRuntimeControlRuntimeEndpoint()
+  let f172 = v.lookup("address").get
+  w.later(stepDecLogosNSRuntimeControlRuntimeAddress, f172, addr r.address)
+  let f173 = v.lookup("runtime_instance_id")
+  if f173.isSome:
+    r.runtime_instance_id = Opt.some(decLogosNSRuntimeRuntimeInstanceId(f173.get))
+
+proc toCbor*(x: LogosNSRuntimeControlRuntimeEndpoint): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlRuntimeEndpoint, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlRuntimeEndpoint, v: CborValue): LogosNSRuntimeControlRuntimeEndpoint =
-  var r = LogosNSRuntimeControlRuntimeEndpoint()
-  r.address = fromChecked(LogosNSRuntimeControlRuntimeAddress, v.lookup("address").get)
-  block:
-    let f = v.lookup("runtime_instance_id")
-    if f.isSome:
-      r.runtime_instance_id = Opt.some(decLogosNSRuntimeRuntimeInstanceId(f.get))
+  var r: LogosNSRuntimeControlRuntimeEndpoint
+  runDec(stepDecLogosNSRuntimeControlRuntimeEndpoint, v, addr r)
   r
 
 proc encLogosNSRuntimeControlServerName*(x: LogosNSRuntimeControlServerName): CborValue =
@@ -2700,192 +4495,364 @@ proc encLogosNSRuntimeControlServerName*(x: LogosNSRuntimeControlServerName): Cb
 proc decLogosNSRuntimeControlServerName*(v: CborValue): LogosNSRuntimeControlServerName =
   v.text
 
+proc stepEncLogosNSRuntimeControlSetProviderExportRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlSetProviderExportRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("export")
+  w.later(stepEncLogosNSRuntimeControlProviderExportRecord, addr x.`export`, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlSetProviderExportRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlSetProviderExportRequest](dst)
+  r[] = LogosNSRuntimeControlSetProviderExportRequest()
+  let f174 = v.lookup("export").get
+  w.later(stepDecLogosNSRuntimeControlProviderExportRecord, f174, addr r.`export`)
+
 proc toCbor*(x: LogosNSRuntimeControlSetProviderExportRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("export"), toCbor(x.`export`)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlSetProviderExportRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlSetProviderExportRequest, v: CborValue): LogosNSRuntimeControlSetProviderExportRequest =
-  var r = LogosNSRuntimeControlSetProviderExportRequest()
-  r.`export` = fromChecked(LogosNSRuntimeControlProviderExportRecord, v.lookup("export").get)
+  var r: LogosNSRuntimeControlSetProviderExportRequest
+  runDec(stepDecLogosNSRuntimeControlSetProviderExportRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlSetProviderExportResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlSetProviderExportResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("export")
+  w.later(stepEncLogosNSRuntimeControlProviderExportRecord, addr x.`export`, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlSetProviderExportResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlSetProviderExportResponse](dst)
+  r[] = LogosNSRuntimeControlSetProviderExportResponse()
+  let f175 = v.lookup("export").get
+  w.later(stepDecLogosNSRuntimeControlProviderExportRecord, f175, addr r.`export`)
 
 proc toCbor*(x: LogosNSRuntimeControlSetProviderExportResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("export"), toCbor(x.`export`)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlSetProviderExportResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlSetProviderExportResponse, v: CborValue): LogosNSRuntimeControlSetProviderExportResponse =
-  var r = LogosNSRuntimeControlSetProviderExportResponse()
-  r.`export` = fromChecked(LogosNSRuntimeControlProviderExportRecord, v.lookup("export").get)
+  var r: LogosNSRuntimeControlSetProviderExportResponse
+  runDec(stepDecLogosNSRuntimeControlSetProviderExportResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlSetRemoteListenerRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlSetRemoteListenerRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("listener")
+  w.later(stepEncLogosNSRuntimeControlRemoteListenerRecord, addr x.listener, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlSetRemoteListenerRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlSetRemoteListenerRequest](dst)
+  r[] = LogosNSRuntimeControlSetRemoteListenerRequest()
+  let f176 = v.lookup("listener").get
+  w.later(stepDecLogosNSRuntimeControlRemoteListenerRecord, f176, addr r.listener)
 
 proc toCbor*(x: LogosNSRuntimeControlSetRemoteListenerRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("listener"), toCbor(x.listener)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlSetRemoteListenerRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlSetRemoteListenerRequest, v: CborValue): LogosNSRuntimeControlSetRemoteListenerRequest =
-  var r = LogosNSRuntimeControlSetRemoteListenerRequest()
-  r.listener = fromChecked(LogosNSRuntimeControlRemoteListenerRecord, v.lookup("listener").get)
+  var r: LogosNSRuntimeControlSetRemoteListenerRequest
+  runDec(stepDecLogosNSRuntimeControlSetRemoteListenerRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlSetRemoteListenerResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlSetRemoteListenerResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("listener")
+  w.later(stepEncLogosNSRuntimeControlRemoteListenerRecord, addr x.listener, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlSetRemoteListenerResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlSetRemoteListenerResponse](dst)
+  r[] = LogosNSRuntimeControlSetRemoteListenerResponse()
+  let f177 = v.lookup("listener").get
+  w.later(stepDecLogosNSRuntimeControlRemoteListenerRecord, f177, addr r.listener)
 
 proc toCbor*(x: LogosNSRuntimeControlSetRemoteListenerResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("listener"), toCbor(x.listener)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlSetRemoteListenerResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlSetRemoteListenerResponse, v: CborValue): LogosNSRuntimeControlSetRemoteListenerResponse =
-  var r = LogosNSRuntimeControlSetRemoteListenerResponse()
-  r.listener = fromChecked(LogosNSRuntimeControlRemoteListenerRecord, v.lookup("listener").get)
+  var r: LogosNSRuntimeControlSetRemoteListenerResponse
+  runDec(stepDecLogosNSRuntimeControlSetRemoteListenerResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlShutdownRuntimeRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlShutdownRuntimeRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecLogosNSRuntimeControlShutdownRuntimeRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlShutdownRuntimeRequest](dst)
+  r[] = LogosNSRuntimeControlShutdownRuntimeRequest()
 
 proc toCbor*(x: LogosNSRuntimeControlShutdownRuntimeRequest): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlShutdownRuntimeRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlShutdownRuntimeRequest, v: CborValue): LogosNSRuntimeControlShutdownRuntimeRequest =
-  var r = LogosNSRuntimeControlShutdownRuntimeRequest()
+  var r: LogosNSRuntimeControlShutdownRuntimeRequest
+  runDec(stepDecLogosNSRuntimeControlShutdownRuntimeRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlShutdownRuntimeResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlShutdownRuntimeResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](0))
+  dst[] = node
+
+proc stepDecLogosNSRuntimeControlShutdownRuntimeResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlShutdownRuntimeResponse](dst)
+  r[] = LogosNSRuntimeControlShutdownRuntimeResponse()
 
 proc toCbor*(x: LogosNSRuntimeControlShutdownRuntimeResponse): CborValue =
-  var e: seq[CborEntry]
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlShutdownRuntimeResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlShutdownRuntimeResponse, v: CborValue): LogosNSRuntimeControlShutdownRuntimeResponse =
-  var r = LogosNSRuntimeControlShutdownRuntimeResponse()
+  var r: LogosNSRuntimeControlShutdownRuntimeResponse
+  runDec(stepDecLogosNSRuntimeControlShutdownRuntimeResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlStartModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlStartModuleRequest](src)
+  var n = 1
+  if x.expected_execution_revision.isSome:
+    inc n
+  if x.instance.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.expected_execution_revision.isSome:
+    node.entries[k].key = cbor("expected_execution_revision")
+    node.entries[k].value = cbor(uint64(x.expected_execution_revision.get))
+    inc k
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+
+proc stepDecLogosNSRuntimeControlStartModuleRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlStartModuleRequest](dst)
+  r[] = LogosNSRuntimeControlStartModuleRequest()
+  let f178 = v.lookup("expected_execution_revision")
+  if f178.isSome:
+    r.expected_execution_revision = Opt.some(uint64(f178.get.uint))
+  let f179 = v.lookup("instance")
+  if f179.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f179.get))
+  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+  let f180 = v.lookup("provider")
+  if f180.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f180.get, addr r.provider.get)
 
 proc toCbor*(x: LogosNSRuntimeControlStartModuleRequest): CborValue =
-  var e: seq[CborEntry]
-  if x.expected_execution_revision.isSome:
-    e.add((cbor("expected_execution_revision"), cbor(uint64(x.expected_execution_revision.get))))
-  if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlStartModuleRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlStartModuleRequest, v: CborValue): LogosNSRuntimeControlStartModuleRequest =
-  var r = LogosNSRuntimeControlStartModuleRequest()
-  block:
-    let f = v.lookup("expected_execution_revision")
-    if f.isSome:
-      r.expected_execution_revision = Opt.some(uint64(f.get.uint))
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
+  var r: LogosNSRuntimeControlStartModuleRequest
+  runDec(stepDecLogosNSRuntimeControlStartModuleRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlStartModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlStartModuleResponse](src)
+  var n = 2
+  if x.instance.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlState, addr x.state, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlStartModuleResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlStartModuleResponse](dst)
+  r[] = LogosNSRuntimeControlStartModuleResponse()
+  let f181 = v.lookup("instance")
+  if f181.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f181.get))
+  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+  let f182 = v.lookup("provider")
+  if f182.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f182.get, addr r.provider.get)
+  let f183 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlState, f183, addr r.state)
 
 proc toCbor*(x: LogosNSRuntimeControlStartModuleResponse): CborValue =
-  var e: seq[CborEntry]
-  if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  e.add((cbor("state"), toCbor(x.state)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlStartModuleResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlStartModuleResponse, v: CborValue): LogosNSRuntimeControlStartModuleResponse =
-  var r = LogosNSRuntimeControlStartModuleResponse()
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
-  r.state = fromChecked(LogosNSRuntimeControlState, v.lookup("state").get)
+  var r: LogosNSRuntimeControlStartModuleResponse
+  runDec(stepDecLogosNSRuntimeControlStartModuleResponse, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlState): CborValue =
+proc stepEncLogosNSRuntimeControlState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlState](src)
   case x.kind
   of LogosNSRuntimeControlStateKind.Error:
-    cbor("error")
+    dst[] = cbor("error")
   of LogosNSRuntimeControlStateKind.Loaded:
-    cbor("loaded")
+    dst[] = cbor("loaded")
   of LogosNSRuntimeControlStateKind.Ready:
-    cbor("ready")
+    dst[] = cbor("ready")
   of LogosNSRuntimeControlStateKind.Stopping:
-    cbor("stopping")
+    dst[] = cbor("stopping")
   of LogosNSRuntimeControlStateKind.Unloaded:
-    cbor("unloaded")
+    dst[] = cbor("unloaded")
 
-proc fromChecked*(T: type LogosNSRuntimeControlState, v: CborValue): LogosNSRuntimeControlState =
+proc stepDecLogosNSRuntimeControlState*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlState](dst)
   case generatedSchema().arm("logos.runtime_control.state#", v)
   of 0:
-    LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Error)
+    r[] = LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Error)
   of 1:
-    LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Ready)
+    r[] = LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Ready)
   of 2:
-    LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Loaded)
+    r[] = LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Loaded)
   of 3:
-    LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Stopping)
+    r[] = LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Stopping)
   of 4:
-    LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Unloaded)
+    r[] = LogosNSRuntimeControlState(kind: LogosNSRuntimeControlStateKind.Unloaded)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlStopModuleRequest): CborValue =
-  var e: seq[CborEntry]
-  if x.expected_execution_revision.isSome:
-    e.add((cbor("expected_execution_revision"), cbor(uint64(x.expected_execution_revision.get))))
-  if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
-  if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  cborMap(e)
+proc toCbor*(x: LogosNSRuntimeControlState): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlState, addr x)
 
-proc fromChecked*(T: type LogosNSRuntimeControlStopModuleRequest, v: CborValue): LogosNSRuntimeControlStopModuleRequest =
-  var r = LogosNSRuntimeControlStopModuleRequest()
-  block:
-    let f = v.lookup("expected_execution_revision")
-    if f.isSome:
-      r.expected_execution_revision = Opt.some(uint64(f.get.uint))
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
+proc fromChecked*(T: type LogosNSRuntimeControlState, v: CborValue): LogosNSRuntimeControlState =
+  var r: LogosNSRuntimeControlState
+  runDec(stepDecLogosNSRuntimeControlState, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlStopModuleResponse): CborValue =
-  var e: seq[CborEntry]
+proc stepEncLogosNSRuntimeControlStopModuleRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlStopModuleRequest](src)
+  var n = 1
+  if x.expected_execution_revision.isSome:
+    inc n
   if x.instance.isSome:
-    e.add((cbor("instance"), encLogosNSRuntimeModuleInstanceId(x.instance.get)))
-  e.add((cbor("module"), encLogosNSRuntimeModuleName(x.module)))
+    inc n
   if x.provider.isSome:
-    e.add((cbor("provider"), toCbor(x.provider.get)))
-  e.add((cbor("state"), toCbor(x.state)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.expected_execution_revision.isSome:
+    node.entries[k].key = cbor("expected_execution_revision")
+    node.entries[k].value = cbor(uint64(x.expected_execution_revision.get))
+    inc k
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+
+proc stepDecLogosNSRuntimeControlStopModuleRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlStopModuleRequest](dst)
+  r[] = LogosNSRuntimeControlStopModuleRequest()
+  let f184 = v.lookup("expected_execution_revision")
+  if f184.isSome:
+    r.expected_execution_revision = Opt.some(uint64(f184.get.uint))
+  let f185 = v.lookup("instance")
+  if f185.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f185.get))
+  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+  let f186 = v.lookup("provider")
+  if f186.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f186.get, addr r.provider.get)
+
+proc toCbor*(x: LogosNSRuntimeControlStopModuleRequest): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlStopModuleRequest, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlStopModuleRequest, v: CborValue): LogosNSRuntimeControlStopModuleRequest =
+  var r: LogosNSRuntimeControlStopModuleRequest
+  runDec(stepDecLogosNSRuntimeControlStopModuleRequest, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlStopModuleResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlStopModuleResponse](src)
+  var n = 2
+  if x.instance.isSome:
+    inc n
+  if x.provider.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.instance.isSome:
+    node.entries[k].key = cbor("instance")
+    node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.instance.get)
+    inc k
+  node.entries[k].key = cbor("module")
+  node.entries[k].value = encLogosNSRuntimeModuleName(x.module)
+  inc k
+  if x.provider.isSome:
+    node.entries[k].key = cbor("provider")
+    w.later(stepEncLogosNSRuntimeModuleProviderAddress, addr x.provider.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlState, addr x.state, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlStopModuleResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlStopModuleResponse](dst)
+  r[] = LogosNSRuntimeControlStopModuleResponse()
+  let f187 = v.lookup("instance")
+  if f187.isSome:
+    r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f187.get))
+  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
+  let f188 = v.lookup("provider")
+  if f188.isSome:
+    r.provider = Opt.some(default(LogosNSRuntimeModuleProviderAddress))
+    w.later(stepDecLogosNSRuntimeModuleProviderAddress, f188.get, addr r.provider.get)
+  let f189 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlState, f189, addr r.state)
+
+proc toCbor*(x: LogosNSRuntimeControlStopModuleResponse): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlStopModuleResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlStopModuleResponse, v: CborValue): LogosNSRuntimeControlStopModuleResponse =
-  var r = LogosNSRuntimeControlStopModuleResponse()
-  block:
-    let f = v.lookup("instance")
-    if f.isSome:
-      r.instance = Opt.some(decLogosNSRuntimeModuleInstanceId(f.get))
-  r.module = decLogosNSRuntimeModuleName(v.lookup("module").get)
-  block:
-    let f = v.lookup("provider")
-    if f.isSome:
-      r.provider = Opt.some(fromChecked(LogosNSRuntimeModuleProviderAddress, f.get))
-  r.state = fromChecked(LogosNSRuntimeControlState, v.lookup("state").get)
+  var r: LogosNSRuntimeControlStopModuleResponse
+  runDec(stepDecLogosNSRuntimeControlStopModuleResponse, v, addr r)
   r
 
 proc encLogosNSRuntimeControlSubjectPublicKeyInfo*(x: LogosNSRuntimeControlSubjectPublicKeyInfo): CborValue =
@@ -2894,29 +4861,52 @@ proc encLogosNSRuntimeControlSubjectPublicKeyInfo*(x: LogosNSRuntimeControlSubje
 proc decLogosNSRuntimeControlSubjectPublicKeyInfo*(v: CborValue): LogosNSRuntimeControlSubjectPublicKeyInfo =
   v.bytes
 
-proc toCbor*(x: LogosNSRuntimeControlTlsTcpRuntimeAddress): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("host"), encLogosNSRuntimeControlHostName(x.host)))
-  e.add((cbor("port"), encLogosNSRuntimeControlPort(x.port)))
+proc stepEncLogosNSRuntimeControlTlsTcpRuntimeAddress*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlTlsTcpRuntimeAddress](src)
+  var n = 3
   if x.profile.isSome:
-    e.add((cbor("profile"), encLogosNSRuntimeControlAddressProfile(x.profile.get)))
+    inc n
   if x.server_name.isSome:
-    e.add((cbor("server_name"), encLogosNSRuntimeControlServerName(x.server_name.get)))
-  e.add((cbor("transport"), cbor("tls-tcp")))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("host")
+  node.entries[k].value = encLogosNSRuntimeControlHostName(x.host)
+  inc k
+  node.entries[k].key = cbor("port")
+  node.entries[k].value = encLogosNSRuntimeControlPort(x.port)
+  inc k
+  if x.profile.isSome:
+    node.entries[k].key = cbor("profile")
+    node.entries[k].value = encLogosNSRuntimeControlAddressProfile(x.profile.get)
+    inc k
+  if x.server_name.isSome:
+    node.entries[k].key = cbor("server_name")
+    node.entries[k].value = encLogosNSRuntimeControlServerName(x.server_name.get)
+    inc k
+  node.entries[k].key = cbor("transport")
+  node.entries[k].value = cbor("tls-tcp")
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeControlTlsTcpRuntimeAddress, v: CborValue): LogosNSRuntimeControlTlsTcpRuntimeAddress =
-  var r = LogosNSRuntimeControlTlsTcpRuntimeAddress()
+proc stepDecLogosNSRuntimeControlTlsTcpRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlTlsTcpRuntimeAddress](dst)
+  r[] = LogosNSRuntimeControlTlsTcpRuntimeAddress()
   r.host = decLogosNSRuntimeControlHostName(v.lookup("host").get)
   r.port = decLogosNSRuntimeControlPort(v.lookup("port").get)
-  block:
-    let f = v.lookup("profile")
-    if f.isSome:
-      r.profile = Opt.some(decLogosNSRuntimeControlAddressProfile(f.get))
-  block:
-    let f = v.lookup("server_name")
-    if f.isSome:
-      r.server_name = Opt.some(decLogosNSRuntimeControlServerName(f.get))
+  let f190 = v.lookup("profile")
+  if f190.isSome:
+    r.profile = Opt.some(decLogosNSRuntimeControlAddressProfile(f190.get))
+  let f191 = v.lookup("server_name")
+  if f191.isSome:
+    r.server_name = Opt.some(decLogosNSRuntimeControlServerName(f191.get))
+
+proc toCbor*(x: LogosNSRuntimeControlTlsTcpRuntimeAddress): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlTlsTcpRuntimeAddress, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlTlsTcpRuntimeAddress, v: CborValue): LogosNSRuntimeControlTlsTcpRuntimeAddress =
+  var r: LogosNSRuntimeControlTlsTcpRuntimeAddress
+  runDec(stepDecLogosNSRuntimeControlTlsTcpRuntimeAddress, v, addr r)
   r
 
 proc encLogosNSRuntimeControlTrustAnchorId*(x: LogosNSRuntimeControlTrustAnchorId): CborValue =
@@ -2925,195 +4915,409 @@ proc encLogosNSRuntimeControlTrustAnchorId*(x: LogosNSRuntimeControlTrustAnchorI
 proc decLogosNSRuntimeControlTrustAnchorId*(v: CborValue): LogosNSRuntimeControlTrustAnchorId =
   v.bytes
 
-proc toCbor*(x: LogosNSRuntimeControlUnixStreamRuntimeAddress): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("path"), encLogosNSRuntimeControlPath(x.path)))
+proc stepEncLogosNSRuntimeControlUnixStreamRuntimeAddress*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlUnixStreamRuntimeAddress](src)
+  var n = 2
   if x.profile.isSome:
-    e.add((cbor("profile"), encLogosNSRuntimeControlAddressProfile(x.profile.get)))
-  e.add((cbor("transport"), cbor("unix-stream")))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("path")
+  node.entries[k].value = encLogosNSRuntimeControlPath(x.path)
+  inc k
+  if x.profile.isSome:
+    node.entries[k].key = cbor("profile")
+    node.entries[k].value = encLogosNSRuntimeControlAddressProfile(x.profile.get)
+    inc k
+  node.entries[k].key = cbor("transport")
+  node.entries[k].value = cbor("unix-stream")
+  inc k
+
+proc stepDecLogosNSRuntimeControlUnixStreamRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlUnixStreamRuntimeAddress](dst)
+  r[] = LogosNSRuntimeControlUnixStreamRuntimeAddress()
+  r.path = decLogosNSRuntimeControlPath(v.lookup("path").get)
+  let f192 = v.lookup("profile")
+  if f192.isSome:
+    r.profile = Opt.some(decLogosNSRuntimeControlAddressProfile(f192.get))
+
+proc toCbor*(x: LogosNSRuntimeControlUnixStreamRuntimeAddress): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlUnixStreamRuntimeAddress, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlUnixStreamRuntimeAddress, v: CborValue): LogosNSRuntimeControlUnixStreamRuntimeAddress =
-  var r = LogosNSRuntimeControlUnixStreamRuntimeAddress()
-  r.path = decLogosNSRuntimeControlPath(v.lookup("path").get)
-  block:
-    let f = v.lookup("profile")
-    if f.isSome:
-      r.profile = Opt.some(decLogosNSRuntimeControlAddressProfile(f.get))
+  var r: LogosNSRuntimeControlUnixStreamRuntimeAddress
+  runDec(stepDecLogosNSRuntimeControlUnixStreamRuntimeAddress, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("action")
+  node.entries[k].value = cbor("discard")
+  inc k
+  node.entries[k].key = cbor("expected_schema_commitment")
+  w.later(stepEncLogosNSModuleConfigurationSchemaCommitment, addr x.expected_schema_commitment, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("expected_state_revision")
+  node.entries[k].value = cbor(uint64(x.expected_state_revision))
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap](dst)
+  r[] = LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap()
+  let f193 = v.lookup("expected_schema_commitment").get
+  w.later(stepDecLogosNSModuleConfigurationSchemaCommitment, f193, addr r.expected_schema_commitment)
+  r.expected_state_revision = uint64(v.lookup("expected_state_revision").get.uint)
+  let f194 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f194, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("action"), cbor("discard")))
-  e.add((cbor("expected_schema_commitment"), toCbor(x.expected_schema_commitment)))
-  e.add((cbor("expected_state_revision"), cbor(uint64(x.expected_state_revision))))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap, v: CborValue): LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap =
-  var r = LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap()
-  r.expected_schema_commitment = fromChecked(LogosNSModuleConfigurationSchemaCommitment, v.lookup("expected_schema_commitment").get)
-  r.expected_state_revision = uint64(v.lookup("expected_state_revision").get.uint)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap
+  runDec(stepDecLogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlUpdateConfigurationRequestARStageMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlUpdateConfigurationRequestARStageMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](5))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("action")
+  node.entries[k].value = cbor("stage")
+  inc k
+  node.entries[k].key = cbor("expected_schema_commitment")
+  w.later(stepEncLogosNSModuleConfigurationSchemaCommitment, addr x.expected_schema_commitment, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("expected_state_revision")
+  node.entries[k].value = cbor(uint64(x.expected_state_revision))
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("value")
+  node.entries[k].value = encLogosNSModuleConfigurationConfigurationValue(x.value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlUpdateConfigurationRequestARStageMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlUpdateConfigurationRequestARStageMap](dst)
+  r[] = LogosNSRuntimeControlUpdateConfigurationRequestARStageMap()
+  let f195 = v.lookup("expected_schema_commitment").get
+  w.later(stepDecLogosNSModuleConfigurationSchemaCommitment, f195, addr r.expected_schema_commitment)
+  r.expected_state_revision = uint64(v.lookup("expected_state_revision").get.uint)
+  let f196 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f196, addr r.target)
+  r.value = decLogosNSModuleConfigurationConfigurationValue(v.lookup("value").get)
 
 proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationRequestARStageMap): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("action"), cbor("stage")))
-  e.add((cbor("expected_schema_commitment"), toCbor(x.expected_schema_commitment)))
-  e.add((cbor("expected_state_revision"), cbor(uint64(x.expected_state_revision))))
-  e.add((cbor("target"), toCbor(x.target)))
-  e.add((cbor("value"), encLogosNSModuleConfigurationConfigurationValue(x.value)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlUpdateConfigurationRequestARStageMap, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlUpdateConfigurationRequestARStageMap, v: CborValue): LogosNSRuntimeControlUpdateConfigurationRequestARStageMap =
-  var r = LogosNSRuntimeControlUpdateConfigurationRequestARStageMap()
-  r.expected_schema_commitment = fromChecked(LogosNSModuleConfigurationSchemaCommitment, v.lookup("expected_schema_commitment").get)
-  r.expected_state_revision = uint64(v.lookup("expected_state_revision").get.uint)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
-  r.value = decLogosNSModuleConfigurationConfigurationValue(v.lookup("value").get)
+  var r: LogosNSRuntimeControlUpdateConfigurationRequestARStageMap
+  runDec(stepDecLogosNSRuntimeControlUpdateConfigurationRequestARStageMap, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationRequest): CborValue =
+proc stepEncLogosNSRuntimeControlUpdateConfigurationRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlUpdateConfigurationRequest](src)
   case x.kind
   of LogosNSRuntimeControlUpdateConfigurationRequestKind.Discard:
-    toCbor(x.arm_Discard)
+    w.later(stepEncLogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap, addr x.arm_Discard, addr dst[])
   of LogosNSRuntimeControlUpdateConfigurationRequestKind.Stage:
-    toCbor(x.arm_Stage)
+    w.later(stepEncLogosNSRuntimeControlUpdateConfigurationRequestARStageMap, addr x.arm_Stage, addr dst[])
 
-proc fromChecked*(T: type LogosNSRuntimeControlUpdateConfigurationRequest, v: CborValue): LogosNSRuntimeControlUpdateConfigurationRequest =
+proc stepDecLogosNSRuntimeControlUpdateConfigurationRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlUpdateConfigurationRequest](dst)
   case generatedSchema().arm("logos.runtime_control.update_configuration_request#", v)
   of 0:
-    LogosNSRuntimeControlUpdateConfigurationRequest(kind: LogosNSRuntimeControlUpdateConfigurationRequestKind.Discard, arm_Discard: fromChecked(LogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap, v))
+    r[] = LogosNSRuntimeControlUpdateConfigurationRequest(kind: LogosNSRuntimeControlUpdateConfigurationRequestKind.Discard)
+    w.later(stepDecLogosNSRuntimeControlUpdateConfigurationRequestARDiscardMap, v, addr r.arm_Discard)
   of 1:
-    LogosNSRuntimeControlUpdateConfigurationRequest(kind: LogosNSRuntimeControlUpdateConfigurationRequestKind.Stage, arm_Stage: fromChecked(LogosNSRuntimeControlUpdateConfigurationRequestARStageMap, v))
+    r[] = LogosNSRuntimeControlUpdateConfigurationRequest(kind: LogosNSRuntimeControlUpdateConfigurationRequestKind.Stage)
+    w.later(stepDecLogosNSRuntimeControlUpdateConfigurationRequestARStageMap, v, addr r.arm_Stage)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationResponse): CborValue =
-  var e: seq[CborEntry]
+proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationRequest): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlUpdateConfigurationRequest, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeControlUpdateConfigurationRequest, v: CborValue): LogosNSRuntimeControlUpdateConfigurationRequest =
+  var r: LogosNSRuntimeControlUpdateConfigurationRequest
+  runDec(stepDecLogosNSRuntimeControlUpdateConfigurationRequest, v, addr r)
+  r
+
+proc stepEncLogosNSRuntimeControlUpdateConfigurationResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlUpdateConfigurationResponse](src)
+  var n = 2
   if x.staged.isSome:
-    e.add((cbor("staged"), toCbor(x.staged.get)))
-  e.add((cbor("state_revision"), cbor(uint64(x.state_revision))))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.staged.isSome:
+    node.entries[k].key = cbor("staged")
+    w.later(stepEncLogosNSModuleConfigurationValueRecord, addr x.staged.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("state_revision")
+  node.entries[k].value = cbor(uint64(x.state_revision))
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlUpdateConfigurationResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlUpdateConfigurationResponse](dst)
+  r[] = LogosNSRuntimeControlUpdateConfigurationResponse()
+  let f197 = v.lookup("staged")
+  if f197.isSome:
+    r.staged = Opt.some(default(LogosNSModuleConfigurationValueRecord))
+    w.later(stepDecLogosNSModuleConfigurationValueRecord, f197.get, addr r.staged.get)
+  r.state_revision = uint64(v.lookup("state_revision").get.uint)
+  let f198 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f198, addr r.target)
+
+proc toCbor*(x: LogosNSRuntimeControlUpdateConfigurationResponse): CborValue =
+  runEnc(stepEncLogosNSRuntimeControlUpdateConfigurationResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlUpdateConfigurationResponse, v: CborValue): LogosNSRuntimeControlUpdateConfigurationResponse =
-  var r = LogosNSRuntimeControlUpdateConfigurationResponse()
-  block:
-    let f = v.lookup("staged")
-    if f.isSome:
-      r.staged = Opt.some(fromChecked(LogosNSModuleConfigurationValueRecord, f.get))
-  r.state_revision = uint64(v.lookup("state_revision").get.uint)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlUpdateConfigurationResponse
+  runDec(stepDecLogosNSRuntimeControlUpdateConfigurationResponse, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlUpdatePermissionSettingsRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlUpdatePermissionSettingsRequest](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("expected_revision")
+  node.entries[k].value = cbor(uint64(x.expected_revision))
+  inc k
+  node.entries[k].key = cbor("permissions")
+  let a199 = newCborArray(x.permissions.len)
+  node.entries[k].value = a199
+  for i200 in 0 ..< x.permissions.len:
+    w.later(stepEncLogosNSRuntimeControlPermissionSetting, addr x.permissions[i200], addr a199.items[i200])
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlUpdatePermissionSettingsRequest*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlUpdatePermissionSettingsRequest](dst)
+  r[] = LogosNSRuntimeControlUpdatePermissionSettingsRequest()
+  r.expected_revision = uint64(v.lookup("expected_revision").get.uint)
+  let f201 = v.lookup("permissions").get
+  r.permissions.setLen(f201.items.len)
+  for i202 in 0 ..< f201.items.len:
+    w.later(stepDecLogosNSRuntimeControlPermissionSetting, f201.items[i202], addr r.permissions[i202])
+  let f203 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f203, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlUpdatePermissionSettingsRequest): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("expected_revision"), cbor(uint64(x.expected_revision))))
-  e.add((cbor("permissions"), cborArray(x.permissions.mapIt(toCbor(it)))))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlUpdatePermissionSettingsRequest, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlUpdatePermissionSettingsRequest, v: CborValue): LogosNSRuntimeControlUpdatePermissionSettingsRequest =
-  var r = LogosNSRuntimeControlUpdatePermissionSettingsRequest()
-  r.expected_revision = uint64(v.lookup("expected_revision").get.uint)
-  r.permissions = v.lookup("permissions").get.items.mapIt(fromChecked(LogosNSRuntimeControlPermissionSetting, it))
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlUpdatePermissionSettingsRequest
+  runDec(stepDecLogosNSRuntimeControlUpdatePermissionSettingsRequest, v, addr r)
   r
+
+proc stepEncLogosNSRuntimeControlUpdatePermissionSettingsResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeControlUpdatePermissionSettingsResponse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("state")
+  w.later(stepEncLogosNSRuntimeControlPermissionSettingsState, addr x.state, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("target")
+  w.later(stepEncLogosNSRuntimeModuleInstanceAddress, addr x.target, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSRuntimeControlUpdatePermissionSettingsResponse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeControlUpdatePermissionSettingsResponse](dst)
+  r[] = LogosNSRuntimeControlUpdatePermissionSettingsResponse()
+  let f204 = v.lookup("state").get
+  w.later(stepDecLogosNSRuntimeControlPermissionSettingsState, f204, addr r.state)
+  let f205 = v.lookup("target").get
+  w.later(stepDecLogosNSRuntimeModuleInstanceAddress, f205, addr r.target)
 
 proc toCbor*(x: LogosNSRuntimeControlUpdatePermissionSettingsResponse): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("state"), toCbor(x.state)))
-  e.add((cbor("target"), toCbor(x.target)))
-  cborMap(e)
+  runEnc(stepEncLogosNSRuntimeControlUpdatePermissionSettingsResponse, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeControlUpdatePermissionSettingsResponse, v: CborValue): LogosNSRuntimeControlUpdatePermissionSettingsResponse =
-  var r = LogosNSRuntimeControlUpdatePermissionSettingsResponse()
-  r.state = fromChecked(LogosNSRuntimeControlPermissionSettingsState, v.lookup("state").get)
-  r.target = fromChecked(LogosNSRuntimeModuleInstanceAddress, v.lookup("target").get)
+  var r: LogosNSRuntimeControlUpdatePermissionSettingsResponse
+  runDec(stepDecLogosNSRuntimeControlUpdatePermissionSettingsResponse, v, addr r)
   r
+
+proc stepEncLogosNSModuleConfigurationConfigurationDeclaration*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationConfigurationDeclaration](src)
+  var n = 1
+  if x.default_value.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.default_value.isSome:
+    node.entries[k].key = cbor("default_value")
+    node.entries[k].value = encLogosNSModuleConfigurationConfigurationValue(x.default_value.get)
+    inc k
+  node.entries[k].key = cbor("schema")
+  w.later(stepEncLogosNSModuleConfigurationSchemaBinding, addr x.schema, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSModuleConfigurationConfigurationDeclaration*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationConfigurationDeclaration](dst)
+  r[] = LogosNSModuleConfigurationConfigurationDeclaration()
+  let f206 = v.lookup("default_value")
+  if f206.isSome:
+    r.default_value = Opt.some(decLogosNSModuleConfigurationConfigurationValue(f206.get))
+  let f207 = v.lookup("schema").get
+  w.later(stepDecLogosNSModuleConfigurationSchemaBinding, f207, addr r.schema)
 
 proc toCbor*(x: LogosNSModuleConfigurationConfigurationDeclaration): CborValue =
-  var e: seq[CborEntry]
-  if x.default_value.isSome:
-    e.add((cbor("default_value"), encLogosNSModuleConfigurationConfigurationValue(x.default_value.get)))
-  e.add((cbor("schema"), toCbor(x.schema)))
-  cborMap(e)
+  runEnc(stepEncLogosNSModuleConfigurationConfigurationDeclaration, addr x)
 
 proc fromChecked*(T: type LogosNSModuleConfigurationConfigurationDeclaration, v: CborValue): LogosNSModuleConfigurationConfigurationDeclaration =
-  var r = LogosNSModuleConfigurationConfigurationDeclaration()
-  block:
-    let f = v.lookup("default_value")
-    if f.isSome:
-      r.default_value = Opt.some(decLogosNSModuleConfigurationConfigurationValue(f.get))
-  r.schema = fromChecked(LogosNSModuleConfigurationSchemaBinding, v.lookup("schema").get)
+  var r: LogosNSModuleConfigurationConfigurationDeclaration
+  runDec(stepDecLogosNSModuleConfigurationConfigurationDeclaration, v, addr r)
   r
 
-proc toCbor*(x: LogosNSModuleConfigurationConfigurationInput): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("schema_commitment"), toCbor(x.schema_commitment)))
-  e.add((cbor("value"), encLogosNSModuleConfigurationConfigurationValue(x.value)))
-  e.add((cbor("value_revision"), cbor(uint64(x.value_revision))))
-  cborMap(e)
+proc stepEncLogosNSModuleConfigurationConfigurationInput*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationConfigurationInput](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("schema_commitment")
+  w.later(stepEncLogosNSModuleConfigurationSchemaCommitment, addr x.schema_commitment, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("value")
+  node.entries[k].value = encLogosNSModuleConfigurationConfigurationValue(x.value)
+  inc k
+  node.entries[k].key = cbor("value_revision")
+  node.entries[k].value = cbor(uint64(x.value_revision))
+  inc k
 
-proc fromChecked*(T: type LogosNSModuleConfigurationConfigurationInput, v: CborValue): LogosNSModuleConfigurationConfigurationInput =
-  var r = LogosNSModuleConfigurationConfigurationInput()
-  r.schema_commitment = fromChecked(LogosNSModuleConfigurationSchemaCommitment, v.lookup("schema_commitment").get)
+proc stepDecLogosNSModuleConfigurationConfigurationInput*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationConfigurationInput](dst)
+  r[] = LogosNSModuleConfigurationConfigurationInput()
+  let f208 = v.lookup("schema_commitment").get
+  w.later(stepDecLogosNSModuleConfigurationSchemaCommitment, f208, addr r.schema_commitment)
   r.value = decLogosNSModuleConfigurationConfigurationValue(v.lookup("value").get)
   r.value_revision = uint64(v.lookup("value_revision").get.uint)
+
+proc toCbor*(x: LogosNSModuleConfigurationConfigurationInput): CborValue =
+  runEnc(stepEncLogosNSModuleConfigurationConfigurationInput, addr x)
+
+proc fromChecked*(T: type LogosNSModuleConfigurationConfigurationInput, v: CborValue): LogosNSModuleConfigurationConfigurationInput =
+  var r: LogosNSModuleConfigurationConfigurationInput
+  runDec(stepDecLogosNSModuleConfigurationConfigurationInput, v, addr r)
   r
+
+proc stepEncLogosNSModuleConfigurationConfigurationState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationConfigurationState](src)
+  var n = 2
+  if x.current.isSome:
+    inc n
+  if x.staged.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.current.isSome:
+    node.entries[k].key = cbor("current")
+    w.later(stepEncLogosNSModuleConfigurationValueRecord, addr x.current.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("schema_commitment")
+  w.later(stepEncLogosNSModuleConfigurationSchemaCommitment, addr x.schema_commitment, addr node.entries[k].value)
+  inc k
+  if x.staged.isSome:
+    node.entries[k].key = cbor("staged")
+    w.later(stepEncLogosNSModuleConfigurationValueRecord, addr x.staged.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("state_revision")
+  node.entries[k].value = cbor(uint64(x.state_revision))
+  inc k
+
+proc stepDecLogosNSModuleConfigurationConfigurationState*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationConfigurationState](dst)
+  r[] = LogosNSModuleConfigurationConfigurationState()
+  let f209 = v.lookup("current")
+  if f209.isSome:
+    r.current = Opt.some(default(LogosNSModuleConfigurationValueRecord))
+    w.later(stepDecLogosNSModuleConfigurationValueRecord, f209.get, addr r.current.get)
+  let f210 = v.lookup("schema_commitment").get
+  w.later(stepDecLogosNSModuleConfigurationSchemaCommitment, f210, addr r.schema_commitment)
+  let f211 = v.lookup("staged")
+  if f211.isSome:
+    r.staged = Opt.some(default(LogosNSModuleConfigurationValueRecord))
+    w.later(stepDecLogosNSModuleConfigurationValueRecord, f211.get, addr r.staged.get)
+  r.state_revision = uint64(v.lookup("state_revision").get.uint)
 
 proc toCbor*(x: LogosNSModuleConfigurationConfigurationState): CborValue =
-  var e: seq[CborEntry]
-  if x.current.isSome:
-    e.add((cbor("current"), toCbor(x.current.get)))
-  e.add((cbor("schema_commitment"), toCbor(x.schema_commitment)))
-  if x.staged.isSome:
-    e.add((cbor("staged"), toCbor(x.staged.get)))
-  e.add((cbor("state_revision"), cbor(uint64(x.state_revision))))
-  cborMap(e)
+  runEnc(stepEncLogosNSModuleConfigurationConfigurationState, addr x)
 
 proc fromChecked*(T: type LogosNSModuleConfigurationConfigurationState, v: CborValue): LogosNSModuleConfigurationConfigurationState =
-  var r = LogosNSModuleConfigurationConfigurationState()
-  block:
-    let f = v.lookup("current")
-    if f.isSome:
-      r.current = Opt.some(fromChecked(LogosNSModuleConfigurationValueRecord, f.get))
-  r.schema_commitment = fromChecked(LogosNSModuleConfigurationSchemaCommitment, v.lookup("schema_commitment").get)
-  block:
-    let f = v.lookup("staged")
-    if f.isSome:
-      r.staged = Opt.some(fromChecked(LogosNSModuleConfigurationValueRecord, f.get))
-  r.state_revision = uint64(v.lookup("state_revision").get.uint)
+  var r: LogosNSModuleConfigurationConfigurationState
+  runDec(stepDecLogosNSModuleConfigurationConfigurationState, v, addr r)
   r
 
-proc toCbor*(x: LogosNSModuleConfigurationConfigurationStateSummary): CborValue =
-  var e: seq[CborEntry]
+proc stepEncLogosNSModuleConfigurationConfigurationStateSummary*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationConfigurationStateSummary](src)
+  var n = 1
   if x.current.isSome:
-    e.add((cbor("current"), toCbor(x.current.get)))
+    inc n
   if x.schema_commitment.isSome:
-    e.add((cbor("schema_commitment"), toCbor(x.schema_commitment.get)))
+    inc n
   if x.staged.isSome:
-    e.add((cbor("staged"), toCbor(x.staged.get)))
-  e.add((cbor("state_revision"), cbor(uint64(x.state_revision))))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.current.isSome:
+    node.entries[k].key = cbor("current")
+    w.later(stepEncLogosNSModuleConfigurationValueRecordMetadata, addr x.current.get, addr node.entries[k].value)
+    inc k
+  if x.schema_commitment.isSome:
+    node.entries[k].key = cbor("schema_commitment")
+    w.later(stepEncLogosNSModuleConfigurationSchemaCommitment, addr x.schema_commitment.get, addr node.entries[k].value)
+    inc k
+  if x.staged.isSome:
+    node.entries[k].key = cbor("staged")
+    w.later(stepEncLogosNSModuleConfigurationValueRecordMetadata, addr x.staged.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("state_revision")
+  node.entries[k].value = cbor(uint64(x.state_revision))
+  inc k
+
+proc stepDecLogosNSModuleConfigurationConfigurationStateSummary*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationConfigurationStateSummary](dst)
+  r[] = LogosNSModuleConfigurationConfigurationStateSummary()
+  let f212 = v.lookup("current")
+  if f212.isSome:
+    r.current = Opt.some(default(LogosNSModuleConfigurationValueRecordMetadata))
+    w.later(stepDecLogosNSModuleConfigurationValueRecordMetadata, f212.get, addr r.current.get)
+  let f213 = v.lookup("schema_commitment")
+  if f213.isSome:
+    r.schema_commitment = Opt.some(default(LogosNSModuleConfigurationSchemaCommitment))
+    w.later(stepDecLogosNSModuleConfigurationSchemaCommitment, f213.get, addr r.schema_commitment.get)
+  let f214 = v.lookup("staged")
+  if f214.isSome:
+    r.staged = Opt.some(default(LogosNSModuleConfigurationValueRecordMetadata))
+    w.later(stepDecLogosNSModuleConfigurationValueRecordMetadata, f214.get, addr r.staged.get)
+  r.state_revision = uint64(v.lookup("state_revision").get.uint)
+
+proc toCbor*(x: LogosNSModuleConfigurationConfigurationStateSummary): CborValue =
+  runEnc(stepEncLogosNSModuleConfigurationConfigurationStateSummary, addr x)
 
 proc fromChecked*(T: type LogosNSModuleConfigurationConfigurationStateSummary, v: CborValue): LogosNSModuleConfigurationConfigurationStateSummary =
-  var r = LogosNSModuleConfigurationConfigurationStateSummary()
-  block:
-    let f = v.lookup("current")
-    if f.isSome:
-      r.current = Opt.some(fromChecked(LogosNSModuleConfigurationValueRecordMetadata, f.get))
-  block:
-    let f = v.lookup("schema_commitment")
-    if f.isSome:
-      r.schema_commitment = Opt.some(fromChecked(LogosNSModuleConfigurationSchemaCommitment, f.get))
-  block:
-    let f = v.lookup("staged")
-    if f.isSome:
-      r.staged = Opt.some(fromChecked(LogosNSModuleConfigurationValueRecordMetadata, f.get))
-  r.state_revision = uint64(v.lookup("state_revision").get.uint)
+  var r: LogosNSModuleConfigurationConfigurationStateSummary
+  runDec(stepDecLogosNSModuleConfigurationConfigurationStateSummary, v, addr r)
   r
 
 proc encLogosNSModuleConfigurationConfigurationValue*(x: LogosNSModuleConfigurationConfigurationValue): CborValue =
@@ -3122,117 +5326,240 @@ proc encLogosNSModuleConfigurationConfigurationValue*(x: LogosNSModuleConfigurat
 proc decLogosNSModuleConfigurationConfigurationValue*(v: CborValue): LogosNSModuleConfigurationConfigurationValue =
   v.bytes
 
-proc toCbor*(x: LogosNSModuleConfigurationProvenance): CborValue =
+proc stepEncLogosNSModuleConfigurationProvenance*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationProvenance](src)
   case x.kind
   of LogosNSModuleConfigurationProvenanceKind.Package_default:
-    cbor("package-default")
+    dst[] = cbor("package-default")
   of LogosNSModuleConfigurationProvenanceKind.Protected_provisioning:
-    cbor("protected-provisioning")
+    dst[] = cbor("protected-provisioning")
   of LogosNSModuleConfigurationProvenanceKind.Runtime_control_update:
-    cbor("runtime-control-update")
+    dst[] = cbor("runtime-control-update")
 
-proc fromChecked*(T: type LogosNSModuleConfigurationProvenance, v: CborValue): LogosNSModuleConfigurationProvenance =
+proc stepDecLogosNSModuleConfigurationProvenance*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationProvenance](dst)
   case generatedSchema().arm("logos.module_configuration.provenance#", v)
   of 0:
-    LogosNSModuleConfigurationProvenance(kind: LogosNSModuleConfigurationProvenanceKind.Package_default)
+    r[] = LogosNSModuleConfigurationProvenance(kind: LogosNSModuleConfigurationProvenanceKind.Package_default)
   of 1:
-    LogosNSModuleConfigurationProvenance(kind: LogosNSModuleConfigurationProvenanceKind.Protected_provisioning)
+    r[] = LogosNSModuleConfigurationProvenance(kind: LogosNSModuleConfigurationProvenanceKind.Protected_provisioning)
   of 2:
-    LogosNSModuleConfigurationProvenance(kind: LogosNSModuleConfigurationProvenanceKind.Runtime_control_update)
+    r[] = LogosNSModuleConfigurationProvenance(kind: LogosNSModuleConfigurationProvenanceKind.Runtime_control_update)
   else:
     raiseAssert "a checked value selects a known arm"
 
-proc toCbor*(x: LogosNSModuleConfigurationSchemaBinding): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("document"), cbor(x.document)))
+proc toCbor*(x: LogosNSModuleConfigurationProvenance): CborValue =
+  runEnc(stepEncLogosNSModuleConfigurationProvenance, addr x)
+
+proc fromChecked*(T: type LogosNSModuleConfigurationProvenance, v: CborValue): LogosNSModuleConfigurationProvenance =
+  var r: LogosNSModuleConfigurationProvenance
+  runDec(stepDecLogosNSModuleConfigurationProvenance, v, addr r)
+  r
+
+proc stepEncLogosNSModuleConfigurationSchemaBinding*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationSchemaBinding](src)
+  var n = 3
   if x.live_reconfiguration.isSome:
-    e.add((cbor("live_reconfiguration"), cbor(true)))
-  e.add((cbor("root"), cbor(x.root)))
-  e.add((cbor("schema_commitment"), toCbor(x.schema_commitment)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("document")
+  node.entries[k].value = cbor(x.document)
+  inc k
+  if x.live_reconfiguration.isSome:
+    node.entries[k].key = cbor("live_reconfiguration")
+    node.entries[k].value = cbor(true)
+    inc k
+  node.entries[k].key = cbor("root")
+  node.entries[k].value = cbor(x.root)
+  inc k
+  node.entries[k].key = cbor("schema_commitment")
+  w.later(stepEncLogosNSModuleConfigurationSchemaCommitment, addr x.schema_commitment, addr node.entries[k].value)
+  inc k
+
+proc stepDecLogosNSModuleConfigurationSchemaBinding*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationSchemaBinding](dst)
+  r[] = LogosNSModuleConfigurationSchemaBinding()
+  r.document = v.lookup("document").get.text
+  let f215 = v.lookup("live_reconfiguration")
+  if f215.isSome:
+    r.live_reconfiguration = Opt.some(true)
+  r.root = v.lookup("root").get.text
+  let f216 = v.lookup("schema_commitment").get
+  w.later(stepDecLogosNSModuleConfigurationSchemaCommitment, f216, addr r.schema_commitment)
+
+proc toCbor*(x: LogosNSModuleConfigurationSchemaBinding): CborValue =
+  runEnc(stepEncLogosNSModuleConfigurationSchemaBinding, addr x)
 
 proc fromChecked*(T: type LogosNSModuleConfigurationSchemaBinding, v: CborValue): LogosNSModuleConfigurationSchemaBinding =
-  var r = LogosNSModuleConfigurationSchemaBinding()
-  r.document = v.lookup("document").get.text
-  block:
-    let f = v.lookup("live_reconfiguration")
-    if f.isSome:
-      r.live_reconfiguration = Opt.some(true)
-  r.root = v.lookup("root").get.text
-  r.schema_commitment = fromChecked(LogosNSModuleConfigurationSchemaCommitment, v.lookup("schema_commitment").get)
+  var r: LogosNSModuleConfigurationSchemaBinding
+  runDec(stepDecLogosNSModuleConfigurationSchemaBinding, v, addr r)
   r
 
-proc toCbor*(x: LogosNSModuleConfigurationSchemaCommitment): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("commitment_model"), cbor("logos.commitment-model.2026-10")))
-  e.add((cbor("hash_profile"), cbor("logos.hash-profile.2026-08.choice-index")))
-  e.add((cbor("hash_suite"), cbor("logos.hash-suite.blake3-256")))
-  e.add((cbor("schema_root"), cbor(x.schema_root)))
-  e.add((cbor("schema_subtree_root"), cbor(x.schema_subtree_root)))
-  cborMap(e)
+proc stepEncLogosNSModuleConfigurationSchemaCommitment*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationSchemaCommitment](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](5))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("commitment_model")
+  node.entries[k].value = cbor("logos.commitment-model.2026-10")
+  inc k
+  node.entries[k].key = cbor("hash_profile")
+  node.entries[k].value = cbor("logos.hash-profile.2026-08.choice-index")
+  inc k
+  node.entries[k].key = cbor("hash_suite")
+  node.entries[k].value = cbor("logos.hash-suite.blake3-256")
+  inc k
+  node.entries[k].key = cbor("schema_root")
+  node.entries[k].value = cbor(x.schema_root)
+  inc k
+  node.entries[k].key = cbor("schema_subtree_root")
+  node.entries[k].value = cbor(x.schema_subtree_root)
+  inc k
 
-proc fromChecked*(T: type LogosNSModuleConfigurationSchemaCommitment, v: CborValue): LogosNSModuleConfigurationSchemaCommitment =
-  var r = LogosNSModuleConfigurationSchemaCommitment()
+proc stepDecLogosNSModuleConfigurationSchemaCommitment*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationSchemaCommitment](dst)
+  r[] = LogosNSModuleConfigurationSchemaCommitment()
   r.schema_root = v.lookup("schema_root").get.bytes
   r.schema_subtree_root = v.lookup("schema_subtree_root").get.bytes
+
+proc toCbor*(x: LogosNSModuleConfigurationSchemaCommitment): CborValue =
+  runEnc(stepEncLogosNSModuleConfigurationSchemaCommitment, addr x)
+
+proc fromChecked*(T: type LogosNSModuleConfigurationSchemaCommitment, v: CborValue): LogosNSModuleConfigurationSchemaCommitment =
+  var r: LogosNSModuleConfigurationSchemaCommitment
+  runDec(stepDecLogosNSModuleConfigurationSchemaCommitment, v, addr r)
   r
 
-proc toCbor*(x: LogosNSModuleConfigurationValueCommitment): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("schema_subtree_root"), cbor(x.schema_subtree_root)))
-  e.add((cbor("value_root"), cbor(x.value_root)))
-  cborMap(e)
+proc stepEncLogosNSModuleConfigurationValueCommitment*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationValueCommitment](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("schema_subtree_root")
+  node.entries[k].value = cbor(x.schema_subtree_root)
+  inc k
+  node.entries[k].key = cbor("value_root")
+  node.entries[k].value = cbor(x.value_root)
+  inc k
 
-proc fromChecked*(T: type LogosNSModuleConfigurationValueCommitment, v: CborValue): LogosNSModuleConfigurationValueCommitment =
-  var r = LogosNSModuleConfigurationValueCommitment()
+proc stepDecLogosNSModuleConfigurationValueCommitment*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationValueCommitment](dst)
+  r[] = LogosNSModuleConfigurationValueCommitment()
   r.schema_subtree_root = v.lookup("schema_subtree_root").get.bytes
   r.value_root = v.lookup("value_root").get.bytes
+
+proc toCbor*(x: LogosNSModuleConfigurationValueCommitment): CborValue =
+  runEnc(stepEncLogosNSModuleConfigurationValueCommitment, addr x)
+
+proc fromChecked*(T: type LogosNSModuleConfigurationValueCommitment, v: CborValue): LogosNSModuleConfigurationValueCommitment =
+  var r: LogosNSModuleConfigurationValueCommitment
+  runDec(stepDecLogosNSModuleConfigurationValueCommitment, v, addr r)
   r
+
+proc stepEncLogosNSModuleConfigurationValueRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationValueRecord](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](5))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("provenance")
+  w.later(stepEncLogosNSModuleConfigurationProvenance, addr x.provenance, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("schema_commitment")
+  w.later(stepEncLogosNSModuleConfigurationSchemaCommitment, addr x.schema_commitment, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("value")
+  node.entries[k].value = encLogosNSModuleConfigurationConfigurationValue(x.value)
+  inc k
+  node.entries[k].key = cbor("value_commitment")
+  w.later(stepEncLogosNSModuleConfigurationValueCommitment, addr x.value_commitment, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("value_revision")
+  node.entries[k].value = cbor(uint64(x.value_revision))
+  inc k
+
+proc stepDecLogosNSModuleConfigurationValueRecord*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationValueRecord](dst)
+  r[] = LogosNSModuleConfigurationValueRecord()
+  let f217 = v.lookup("provenance").get
+  w.later(stepDecLogosNSModuleConfigurationProvenance, f217, addr r.provenance)
+  let f218 = v.lookup("schema_commitment").get
+  w.later(stepDecLogosNSModuleConfigurationSchemaCommitment, f218, addr r.schema_commitment)
+  r.value = decLogosNSModuleConfigurationConfigurationValue(v.lookup("value").get)
+  let f219 = v.lookup("value_commitment").get
+  w.later(stepDecLogosNSModuleConfigurationValueCommitment, f219, addr r.value_commitment)
+  r.value_revision = uint64(v.lookup("value_revision").get.uint)
 
 proc toCbor*(x: LogosNSModuleConfigurationValueRecord): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("provenance"), toCbor(x.provenance)))
-  e.add((cbor("schema_commitment"), toCbor(x.schema_commitment)))
-  e.add((cbor("value"), encLogosNSModuleConfigurationConfigurationValue(x.value)))
-  e.add((cbor("value_commitment"), toCbor(x.value_commitment)))
-  e.add((cbor("value_revision"), cbor(uint64(x.value_revision))))
-  cborMap(e)
+  runEnc(stepEncLogosNSModuleConfigurationValueRecord, addr x)
 
 proc fromChecked*(T: type LogosNSModuleConfigurationValueRecord, v: CborValue): LogosNSModuleConfigurationValueRecord =
-  var r = LogosNSModuleConfigurationValueRecord()
-  r.provenance = fromChecked(LogosNSModuleConfigurationProvenance, v.lookup("provenance").get)
-  r.schema_commitment = fromChecked(LogosNSModuleConfigurationSchemaCommitment, v.lookup("schema_commitment").get)
-  r.value = decLogosNSModuleConfigurationConfigurationValue(v.lookup("value").get)
-  r.value_commitment = fromChecked(LogosNSModuleConfigurationValueCommitment, v.lookup("value_commitment").get)
-  r.value_revision = uint64(v.lookup("value_revision").get.uint)
+  var r: LogosNSModuleConfigurationValueRecord
+  runDec(stepDecLogosNSModuleConfigurationValueRecord, v, addr r)
   r
+
+proc stepEncLogosNSModuleConfigurationValueRecordMetadata*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSModuleConfigurationValueRecordMetadata](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("provenance")
+  w.later(stepEncLogosNSModuleConfigurationProvenance, addr x.provenance, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("schema_commitment")
+  w.later(stepEncLogosNSModuleConfigurationSchemaCommitment, addr x.schema_commitment, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("value_commitment")
+  w.later(stepEncLogosNSModuleConfigurationValueCommitment, addr x.value_commitment, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("value_revision")
+  node.entries[k].value = cbor(uint64(x.value_revision))
+  inc k
+
+proc stepDecLogosNSModuleConfigurationValueRecordMetadata*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSModuleConfigurationValueRecordMetadata](dst)
+  r[] = LogosNSModuleConfigurationValueRecordMetadata()
+  let f220 = v.lookup("provenance").get
+  w.later(stepDecLogosNSModuleConfigurationProvenance, f220, addr r.provenance)
+  let f221 = v.lookup("schema_commitment").get
+  w.later(stepDecLogosNSModuleConfigurationSchemaCommitment, f221, addr r.schema_commitment)
+  let f222 = v.lookup("value_commitment").get
+  w.later(stepDecLogosNSModuleConfigurationValueCommitment, f222, addr r.value_commitment)
+  r.value_revision = uint64(v.lookup("value_revision").get.uint)
 
 proc toCbor*(x: LogosNSModuleConfigurationValueRecordMetadata): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("provenance"), toCbor(x.provenance)))
-  e.add((cbor("schema_commitment"), toCbor(x.schema_commitment)))
-  e.add((cbor("value_commitment"), toCbor(x.value_commitment)))
-  e.add((cbor("value_revision"), cbor(uint64(x.value_revision))))
-  cborMap(e)
+  runEnc(stepEncLogosNSModuleConfigurationValueRecordMetadata, addr x)
 
 proc fromChecked*(T: type LogosNSModuleConfigurationValueRecordMetadata, v: CborValue): LogosNSModuleConfigurationValueRecordMetadata =
-  var r = LogosNSModuleConfigurationValueRecordMetadata()
-  r.provenance = fromChecked(LogosNSModuleConfigurationProvenance, v.lookup("provenance").get)
-  r.schema_commitment = fromChecked(LogosNSModuleConfigurationSchemaCommitment, v.lookup("schema_commitment").get)
-  r.value_commitment = fromChecked(LogosNSModuleConfigurationValueCommitment, v.lookup("value_commitment").get)
-  r.value_revision = uint64(v.lookup("value_revision").get.uint)
+  var r: LogosNSModuleConfigurationValueRecordMetadata
+  runDec(stepDecLogosNSModuleConfigurationValueRecordMetadata, v, addr r)
   r
 
-proc toCbor*(x: LogosNSRuntimeModuleInstanceAddress): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("module_instance_id"), encLogosNSRuntimeModuleInstanceId(x.module_instance_id)))
-  e.add((cbor("runtime_instance_id"), encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id)))
-  cborMap(e)
+proc stepEncLogosNSRuntimeModuleInstanceAddress*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeModuleInstanceAddress](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("module_instance_id")
+  node.entries[k].value = encLogosNSRuntimeModuleInstanceId(x.module_instance_id)
+  inc k
+  node.entries[k].key = cbor("runtime_instance_id")
+  node.entries[k].value = encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id)
+  inc k
 
-proc fromChecked*(T: type LogosNSRuntimeModuleInstanceAddress, v: CborValue): LogosNSRuntimeModuleInstanceAddress =
-  var r = LogosNSRuntimeModuleInstanceAddress()
+proc stepDecLogosNSRuntimeModuleInstanceAddress*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeModuleInstanceAddress](dst)
+  r[] = LogosNSRuntimeModuleInstanceAddress()
   r.module_instance_id = decLogosNSRuntimeModuleInstanceId(v.lookup("module_instance_id").get)
   r.runtime_instance_id = decLogosNSRuntimeRuntimeInstanceId(v.lookup("runtime_instance_id").get)
+
+proc toCbor*(x: LogosNSRuntimeModuleInstanceAddress): CborValue =
+  runEnc(stepEncLogosNSRuntimeModuleInstanceAddress, addr x)
+
+proc fromChecked*(T: type LogosNSRuntimeModuleInstanceAddress, v: CborValue): LogosNSRuntimeModuleInstanceAddress =
+  var r: LogosNSRuntimeModuleInstanceAddress
+  runDec(stepDecLogosNSRuntimeModuleInstanceAddress, v, addr r)
   r
 
 proc encLogosNSRuntimeModuleInstanceId*(x: LogosNSRuntimeModuleInstanceId): CborValue =
@@ -3247,20 +5574,36 @@ proc encLogosNSRuntimeModuleName*(x: LogosNSRuntimeModuleName): CborValue =
 proc decLogosNSRuntimeModuleName*(v: CborValue): LogosNSRuntimeModuleName =
   v.text
 
-proc toCbor*(x: LogosNSRuntimeModuleProviderAddress): CborValue =
-  var e: seq[CborEntry]
-  e.add((cbor("provider"), encLogosNSRuntimeModuleProviderId(x.provider)))
+proc stepEncLogosNSRuntimeModuleProviderAddress*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LogosNSRuntimeModuleProviderAddress](src)
+  var n = 1
   if x.runtime_instance_id.isSome:
-    e.add((cbor("runtime_instance_id"), encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id.get)))
-  cborMap(e)
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("provider")
+  node.entries[k].value = encLogosNSRuntimeModuleProviderId(x.provider)
+  inc k
+  if x.runtime_instance_id.isSome:
+    node.entries[k].key = cbor("runtime_instance_id")
+    node.entries[k].value = encLogosNSRuntimeRuntimeInstanceId(x.runtime_instance_id.get)
+    inc k
+
+proc stepDecLogosNSRuntimeModuleProviderAddress*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LogosNSRuntimeModuleProviderAddress](dst)
+  r[] = LogosNSRuntimeModuleProviderAddress()
+  r.provider = decLogosNSRuntimeModuleProviderId(v.lookup("provider").get)
+  let f223 = v.lookup("runtime_instance_id")
+  if f223.isSome:
+    r.runtime_instance_id = Opt.some(decLogosNSRuntimeRuntimeInstanceId(f223.get))
+
+proc toCbor*(x: LogosNSRuntimeModuleProviderAddress): CborValue =
+  runEnc(stepEncLogosNSRuntimeModuleProviderAddress, addr x)
 
 proc fromChecked*(T: type LogosNSRuntimeModuleProviderAddress, v: CborValue): LogosNSRuntimeModuleProviderAddress =
-  var r = LogosNSRuntimeModuleProviderAddress()
-  r.provider = decLogosNSRuntimeModuleProviderId(v.lookup("provider").get)
-  block:
-    let f = v.lookup("runtime_instance_id")
-    if f.isSome:
-      r.runtime_instance_id = Opt.some(decLogosNSRuntimeRuntimeInstanceId(f.get))
+  var r: LogosNSRuntimeModuleProviderAddress
+  runDec(stepDecLogosNSRuntimeModuleProviderAddress, v, addr r)
   r
 
 proc encLogosNSRuntimeModuleProviderId*(x: LogosNSRuntimeModuleProviderId): CborValue =
