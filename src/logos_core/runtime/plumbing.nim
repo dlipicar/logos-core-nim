@@ -12,11 +12,14 @@
 import std/[atomics, locks, sysrand, times, typedthreads]
 import results
 import ../abi/types
+import ../base/clock
 import ../hash/hashinput
 import ../iface/outcome
+import ../authority/facts
 import ./[authz, bell, records, realizer, routes]
 
-export authz, records, realizer, routes, outcome.ErrorCode, hashinput.Digest
+export
+  authz, clock, facts, records, realizer, routes, outcome.ErrorCode, hashinput.Digest
 
 const
   DefaultStartupDeadline* = initDuration(seconds = 120)
@@ -40,6 +43,16 @@ const
   MaxInstances* = 1024
     ## [IMPL] Runtime-known instances, retained ones included, past which
     ## `create_module` is MODULE_ERROR (BCP l.369; I82)
+  EvalWorkers* = 4
+    ## [IMPL] threads of the ordinary evaluation lane (I85): they call the
+    ## Capability Authority's `evaluate`, apart from the lifecycle and call
+    ## workers, so a CA `watch_changes` holding a call worker never delays an
+    ## evaluation (CAP-0382)
+  EvalQueue* = 256
+    ## [IMPL] evaluations waiting for an ordinary-lane worker; one more is an
+    ## admission failure, answered as an evaluation failure at once
+  DefaultEvaluationDeadline* = initDuration(seconds = 5)
+    ## [IMPL] how long an operation waits for its decisions (I85)
 
 type
   ModuleState* = enum
@@ -125,6 +138,18 @@ type
     instance*: string
     record*: ModuleRecord
 
+  AuthorityPolicy* = object
+    ## [SPEC RUNTIME §9; plan §2.3, §2.13] The `capability-authority` policy:
+    ## protected input names the instance whose Capability Authority binding
+    ## decides every module operation (DECISIONS I85).
+    instance*: string ## the `logos_capability_authority` instance to bind
+    evaluationDeadline*: Duration
+      ## [IMPL] how long an operation waits for its decisions; 0 is
+      ## `DefaultEvaluationDeadline`
+    recovery*: bool
+      ## [SPEC RUNTIME l.1674-1680] the derived rules also apply after a
+      ## binding loss, so orchestration can recover the authority
+
   ModuleDeclaration* = object
     ## [G55] The one accepted declaration for a module name that
     ## `create_module` selects: protected deployment input (BCP l.367; RUNTIME
@@ -153,6 +178,17 @@ type
       ## `DefaultRevisionBudget`
     statics*: seq[StaticRegistration] ## protected static bindings (§2.3, §13.3)
     policy*: AuthzPolicy
+      ## the internal policy (`allow-all`, with the test rules); unused under
+      ## `authority`
+    authority*: Opt[AuthorityPolicy]
+      ## [IMPL] the `capability-authority` policy; none: the internal policy
+    clock*: Clock
+      ## [IMPL] the wall clock of decision validity (8a's `base/clock.nim`);
+      ## nil: the system clock. Evaluation deadlines use the monotonic clock.
+    facts*: SharedFacts
+      ## [IMPL] the Capability Authority's attribute source, which the engine
+      ## keeps current (8a's `authority/facts.nim`); nil: none. The host owns
+      ## it.
     ordering*: seq[(string, string)]
       ## [SPEC RUNTIME §3.7] accepted lifecycle-ordering constraints as
       ## (prerequisite instance, dependent instance)
@@ -202,6 +238,10 @@ type
     rqRequestShutdown ## [SPEC RUNTIME §13.2] accept shutdown and answer at once
     rqAwaitShutdown ## wait for shutdown without initiating it (RUN-0728)
     rqRecover ## [SPEC RUNTIME §9.3 recover_module] from the host or a test
+    rqAuthorityNotice
+      ## [SPEC CA §8; plan §2.8] a `grant_changed` or `policy_changed`
+      ## publication, from the publishing thread (`events.publishOp`)
+    rqAuthorityState ## the binding (observation for the host and tests)
 
   RcMethod* = enum
     ## The Runtime Control methods this Runtime performs (RUNTIME §9.3).
@@ -293,6 +333,8 @@ type
     admitted*: bool ## rqDeliver: the handler may run
     diagnostics*: seq[string]
     pending*: bool ## rqCleanup
+    bound*: bool ## rqAuthorityState: a Capability Authority is bound
+    generation*: uint64 ## rqAuthorityState: the binding generation
 
   ReplyChannel* = ptr Channel[Reply]
 
@@ -322,6 +364,9 @@ type
     call*: pointer ## rqAdmit: the asynchronous call being admitted, if any
     ticket*: ptr CallTicket ## rqScoped, rqDeliver: the invocation's ticket
     scoped*: bool ## rqDeliver: an invocation-scoped publication
+    payload*: seq[byte]
+      ## rqAuthorityNotice: the event payload; empty when the publication was
+      ## dropped before it was read (a malformed notice)
     reply*: ReplyChannel
 
   JobKind* = enum
@@ -351,6 +396,26 @@ type
     of jkRequestCancel:
       deferred*: pointer
     of jkQuit:
+      discard
+
+  EvalJobKind* = enum
+    ejQuit ## first and without fields, as `MsgKind`
+    ejRun
+
+  EvalJob* = object
+    ## One `evaluate` for an evaluation worker (`authbinding.nim`): the bound
+    ## Capability Authority's realization, read when it was dispatched.
+    case kind*: EvalJobKind
+    of ejRun:
+      id*: int
+      request*: seq[byte] ## the encoded `evaluate_request`
+      dispatch*: ModuleDispatchFn
+      free*: ModuleFreeFn
+      context*: ptr LogosModuleContext
+      access*: pointer ## the authority's invocation-access state
+      ticket*: ptr CallTicket ## marked cancelled when the deadline passes
+      runtimeId*: string
+    of ejQuit:
       discard
 
   CallJobKind* = enum
@@ -390,6 +455,7 @@ type
     mkCallJobDone ## a call worker finished with a call
     mkCompleted ## a completion callback job returned
     mkDeferredIdle ## a deferred invocation has no execution or entry left
+    mkEvaluated ## an evaluation worker finished one `evaluate` (`job`)
 
   Msg* = object
     job*: int
@@ -413,6 +479,8 @@ type
       event*: AsyncEvent
       target*: pointer ## the asynchronous call, or the deferred invocation
       extra*: pointer
+    of mkEvaluated:
+      evaluated*: EvalResult
 
   ReplySlot = object
     ## One reply channel, reused by one call after another [IMPL]. A sender
@@ -439,6 +507,9 @@ type
     calls*: Channel[CallJob]
     callWorkers*: array[MaxCallWorkers, Thread[ptr Shared]]
     callSpawned*: int ## written by the Runtime thread only
+    evals*: Channel[EvalJob] ## the ordinary evaluation lane
+    evalWorkers*: array[EvalWorkers, Thread[ptr Shared]]
+    evalSpawned*: int ## written by the Runtime thread only
     outstanding*: Atomic[int] ## asynchronous calls prepared and not yet freed
     finished*: bool ## the Runtime thread has left its loop
 

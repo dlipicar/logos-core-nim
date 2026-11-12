@@ -90,6 +90,14 @@ type
       ## gets once it is terminal: NOT_AUTHORISED for withdrawn or expired
       ## authority, otherwise NOT_READY; the first cause is kept
     decisionId*: string ## the provider-access decision (§9.3 `decision_id`)
+    expiresAt*: Opt[uint64]
+      ## [SPEC RUNTIME l.3157-3166; I85] a Capability Authority route allow's
+      ## `valid_until`, wall-clock milliseconds; none under internal policy
+    monoDeadline*: Opt[int64]
+      ## [RUN-0939] the engine clock's monotonic nanoseconds at which it
+      ## expires, fixed when `expiresAt` was set
+    grants*: seq[string] ## the grants its decision used
+    authority*: bool ## its decision came from the Capability Authority
     handles*: seq[pointer] ## handles observing its end (`observe_end`)
     calls*: seq[pointer] ## the tickets of calls admitted through it
     subs*: seq[pointer]
@@ -307,8 +315,9 @@ func schemaCommitmentOf*(root: Digest): SchemaCommitment =
 
 func record*(r: Route, runtimeId: string): LogosNSRuntimeControlRouteRecord =
   ## [SPEC RUNTIME §9.3] The route as Runtime Control exposes it. A direct
-  ## route never carries `invocation` (l.3469); internal policy has no
-  ## validity end, so there is no `expires_at` (l.2954-2955).
+  ## route never carries `invocation` (l.3469). Internal policy has no
+  ## validity end, so no `expires_at` (l.2954-2955); a Capability Authority
+  ## route carries its allow's `valid_until` (l.3157-3166; RUN-0938).
   result = LogosNSRuntimeControlRouteRecord(
     route: r.id,
     consumer: LogosNSRuntimeModuleInstanceAddress(
@@ -325,6 +334,7 @@ func record*(r: Route, runtimeId: string): LogosNSRuntimeControlRouteRecord =
   )
   if r.decisionId.len > 0:
     result.decision_id = Opt.some(r.decisionId)
+  result.expires_at = r.expiresAt
   if r.state in {rtFailed, rtRevoked} and r.failure.isSome:
     # [SPEC RUNTIME §9.3 l.2520, l.2524] `failed` and `revoked` carry
     # `failure`; an explicit closure has none.

@@ -18,17 +18,29 @@ import ../iface/outcome
 import ../abi/host
 import ./[artifact, plumbing]
 import ./host_config_types
+from ../authority/policy import loadPolicy
+from ./authscopes import AuthorityModule, caRoots
 
 export results
 
 const
   MinDeadlineMs* = 1'u32 ## [IMPL] the shortest deadline the format accepts
   MaxDeadlineMs* = 3_600_000'u32 ## [IMPL] the longest: one hour
+  MaxEvaluationDeadlineMs* = 60_000'u32
+    ## [IMPL] the longest evaluation deadline: one minute (DECISIONS I85)
+  DefaultCallRecords* = 4096 ## [IMPL] the call-record ring's default capacity
+  MaxCallRecords* = 1_000_000'u32 ## [IMPL] its largest
 
 type
   HostModule* = object
     instance*: string ## the protected module instance identity
     record*: ModuleRecord
+
+  EvidenceKeySetting* = object
+    ## [SPEC CA §9.1] The call-evidence signing key's configuration; the file
+    ## is read when audit is built (step 8b-3).
+    kid*: seq[byte] ## `logos.capability_authority.evidence_key_id`
+    secretKeyFile*: string
 
   HostConfig* = object ## A decoded and validated `lcn.app_config`.
     workDir*: string
@@ -38,7 +50,15 @@ type
     startupDeadline*: Duration
     stopDeadline*: Duration
     shutdownGrace*: Duration
-    policy*: AuthzPolicy ## [S5] allow-all only, for now
+    policy*: AuthzPolicy ## the internal policy: allow-all
+    authority*: Opt[AuthorityPolicy]
+      ## [I85] `capability-authority`: the instance whose binding decides
+    authorityPolicy*: seq[byte]
+      ## [I85; C9] its `lcn.authority_policy`, as deterministic CBOR, for the
+      ## authority's wiring
+    callRecords*: int ## [I85] the call-record ring's capacity
+    callAudit*: bool ## [I85] `call_audit` is configured
+    evidence*: Opt[EvidenceKeySetting]
     orchestration*: string ## [G53] the instance holding the orchestration role
     modules*: seq[HostModule] ## in configuration order
     ordering*: seq[(string, string)] ## (prerequisite, dependent), RUNTIME §3.7
@@ -208,20 +228,97 @@ func cborFailure(e: CborError): ConfigError =
         Opt.none(seq[byte]),
   )
 
-proc parseHostConfig*(
+proc checkAuthority(
+    c: var HostConfig, p: LcnAppPolicyARCapabilityAuthorityMap
+): Result[void, ConfigError] =
+  ## [I85; plan §3.2] The `capability-authority` policy's checks at `create`.
+  var found = false
+  var r: ModuleRecord
+  for m in c.modules:
+    if m.instance == p.authority:
+      found = true
+      r = m.record
+  if not found:
+    return err(configError("policy.authority names no instance in modules"))
+  # [SPEC CA l.143] The Capability Authority's module. A configured module is
+  # direct_static or direct_dynamic, so a local module instance (CAP-0003,
+  # CAP-0006).
+  if r.module != AuthorityModule:
+    return err(configError("policy.authority's module is not " & AuthorityModule))
+  # [SPEC RUNTIME l.1652-1655; RUN-0316] Otherwise checked at binding.
+  if r.primaryContract.isSome and @(r.primaryContract.get) != caRoots().contract:
+    return err(
+      configError(
+        "policy.authority's primary_contract is not the pinned Capability Authority contract"
+      )
+    )
+  # [SPEC RUNTIME l.1637] A candidate does not bind or authorize itself: the
+  # authority is never the orchestration instance, whose module name is outside
+  # the reserved prefix (checked above).
+  # [C8] The authority keeps grants and audit in its state; the Runtime keeps
+  # its identity, so decisions and grants name the same Runtime across starts.
+  if c.storeDir.isNone:
+    return err(configError("capability-authority needs store_dir"))
+  if r.stateAssignment.isNone:
+    return err(configError("the authority instance needs a state_assignment"))
+  var deadline = DefaultEvaluationDeadline
+  if p.evaluation_deadline_ms.isSome:
+    let v = p.evaluation_deadline_ms.get
+    if v < MinDeadlineMs or v > MaxEvaluationDeadlineMs:
+      return err(configError("evaluation_deadline_ms must be 1 to 60000 milliseconds"))
+    deadline = initDuration(milliseconds = int64(v))
+  # [C34(a)] An evaluation never outlasts the start it decides.
+  if deadline >= c.startupDeadline:
+    return err(configError("evaluation_deadline_ms must be below startup_deadline_ms"))
+  # [C9] 8a's policy format, checked as the authority will load it.
+  let bytes = encodeCbor(toCbor(p.policy))
+  discard loadPolicy(bytes).valueOr:
+    return err(configError(error))
+  c.authority = Opt.some(
+    AuthorityPolicy(
+      instance: p.authority,
+      evaluationDeadline: deadline,
+      recovery: p.recovery.get(false),
+    )
+  )
+  c.authorityPolicy = bytes
+  ok()
+
+proc checkCallAudit(c: var HostConfig, a: LcnAppCallAudit): Result[void, ConfigError] =
+  ## [I85; plan §3.2] `call_audit` (CA §9, §9.1).
+  c.callAudit = true
+  if a.call_records.isSome:
+    let v = a.call_records.get
+    if v < 1 or v > MaxCallRecords:
+      return err(configError("call_audit.call_records must be 1 to 1000000"))
+    c.callRecords = int(v)
+  if a.evidence.isSome:
+    let k = a.evidence.get
+    ?checkPath("call_audit.evidence.secret_key_file", k.secret_key_file)
+    # [C8] Evidence names this Runtime, so its identity persists.
+    if c.storeDir.isNone:
+      return err(configError("call_audit.evidence needs store_dir"))
+    c.evidence =
+      Opt.some(EvidenceKeySetting(kid: k.kid, secretKeyFile: k.secret_key_file))
+  ok()
+
+proc decodeHostConfig*(
     format: string, data: openArray[byte]
 ): Result[HostConfig, ConfigError] =
   ## [SPEC RUNTIME §13.3] Decodes and validates one configuration; RUN-0741.
+  ## Every check, without `parseHostConfig`'s refusal of what is not built
+  ## yet: for tests of the checks themselves.
   if format != AppConfigFormat:
     return err(configError("unsupported configuration format"))
   # [SPEC RUNTIME §8 l.1410-1411] One deterministic-CBOR value, nothing after it.
   let v = decodeCbor(data).valueOr:
     return err(cborFailure(error))
-  # [S5] Name the unsupported policy before the schema's generic answer.
+  # [S5] Name an unknown policy kind before the schema's generic answer.
   let policy = v.lookup("policy")
   if policy.isSome:
     let kind = policy.get.lookup("kind")
-    if kind.isSome and kind.get.kind == ckText and kind.get.text != "allow-all":
+    if kind.isSome and kind.get.kind == ckText and
+        kind.get.text notin ["allow-all", "capability-authority"]:
       return err(configError("this policy kind is not supported yet"))
   let cfg = LcnAppConfig.fromCbor(v).valueOr:
     return err(configError("the configuration does not match lcn.app_config: " & error))
@@ -232,6 +329,7 @@ proc parseHostConfig*(
     runtimeInstanceId: cfg.runtime.runtime_instance_id.get(""),
     policy: allowAll(),
     orchestration: cfg.orchestration,
+    callRecords: DefaultCallRecords,
   )
   ?checkPath("work_dir", c.workDir)
   if c.stateRoot.isSome:
@@ -306,4 +404,26 @@ proc parseHostConfig*(
           configError("declaration " & d.module & ": persistent_state needs state_root")
         )
       c.declarations.add(ModuleDeclaration(record: r, persistentState: persistent))
+  case cfg.policy.kind
+  of LcnAppPolicyKind.Allow_all:
+    discard
+  of LcnAppPolicyKind.Capability_authority:
+    ?checkAuthority(c, cfg.policy.arm_Capability_authority)
+  if cfg.call_audit.isSome:
+    ?checkCallAudit(c, cfg.call_audit.get)
+  ok(c)
+
+proc parseHostConfig*(
+    format: string, data: openArray[byte]
+): Result[HostConfig, ConfigError] =
+  ## [SPEC RUNTIME §13.3] Decodes and validates one configuration; RUN-0741.
+  ## [I85] A configuration that passes every check but asks for what is not
+  ## built yet is refused rather than half honoured: the Capability Authority
+  ## policy until its enforcement over time is (step 8b-2), call audit until
+  ## its records are (8b-3).
+  let c = ?decodeHostConfig(format, data)
+  if c.authority.isSome:
+    return err(configError("this policy kind is not supported yet"))
+  if c.callAudit:
+    return err(configError("call_audit is not supported yet"))
   ok(c)

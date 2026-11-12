@@ -40,8 +40,10 @@ from a source only the host's owner can change.
 ; lcn.app_config value. docs/HOST-CONFIG.md documents each field.
 ;
 ; An array that is present is non-empty, and the checks the schema cannot
-; express (unique ids, ordering, the orchestration instance) are applied at
-; logos_runtime_create (runtime/host_config.nim).
+; express (unique ids, ordering, the orchestration instance, the authority
+; instance) are applied at logos_runtime_create (runtime/host_config.nim).
+; lcn.authority_policy is the Capability Authority's policy input,
+; authority/policy.cddl (docs/AUTHORITY-POLICY.md).
 
 lcn.app_config = {
   runtime: lcn.app_runtime,
@@ -50,6 +52,7 @@ lcn.app_config = {
   modules: [* lcn.app_module],
   ? ordering: [* lcn.app_ordering],
   ? declarations: [* lcn.app_declaration],
+  ? call_audit: lcn.app_call_audit,
 }
 
 lcn.app_runtime = {
@@ -64,7 +67,33 @@ lcn.app_runtime = {
 
 lcn.app_path = tstr .size (1..4096)
 
-lcn.app_policy = { kind: "allow-all" }
+; allow-all: every operation is allowed (RUNTIME l.1633-1634).
+; capability-authority: the named logos_capability_authority instance decides
+; (RUNTIME §9; DECISIONS I85). evaluation_deadline_ms: 1..60000, default 5000;
+; recovery: the derived rules also apply after a binding loss (RUN-0860).
+lcn.app_policy =
+  { kind: "allow-all" } /
+  {
+    kind: "capability-authority",
+    authority: lcn.app_instance_id,
+    policy: lcn.authority_policy,
+    ? evaluation_deadline_ms: uint32,
+    ? recovery: bool,
+  }
+
+; Call audit (CA §9, §9.1): call_records is the in-memory ring's capacity,
+; 1..1000000, default 4096; evidence the call-evidence signing key.
+lcn.app_call_audit = {
+  ? call_records: uint32,
+  ? evidence: lcn.app_evidence_key,
+}
+
+; kid: the logos.capability_authority.evidence_key_id verifiers map to this
+; Runtime; secret_key_file: a 96-byte SLH-DSA-SHA2-192s secret key, mode 0600.
+lcn.app_evidence_key = {
+  kid: bstr .size (1..128),
+  secret_key_file: lcn.app_path,
+}
 
 ; logos.runtime.module_instance_id (RUNTIME §9.2)
 lcn.app_instance_id = tstr .size (1..128)
@@ -149,16 +178,31 @@ on the host's working directory.
 ### `policy`
 
 The Runtime's authority policy (RUNTIME §9 l.1629-1633): it decides Runtime Control, lifecycle, route
-and observation requests, including those of the bootstrap. v1 has one kind:
+and observation requests, including those of the bootstrap. Two kinds:
 
 - `allow-all`: every request a module makes through its Runtime Control binding is allowed. This is
   the internal policy RUNTIME l.1633 permits "for local trusted deployments": use it only when every
   configured module is code the host trusts with the whole Runtime. It must be written explicitly;
   nothing is allowed by default (RUNTIME l.1674, l.1682).
+- `capability-authority`: the listed instance `authority` of the Capability Authority module decides
+  (RUNTIME §9; CA; DECISIONS I85), from `policy`, an `lcn.authority_policy` value
+  (`docs/AUTHORITY-POLICY.md`). `evaluation_deadline_ms` bounds how long a request waits for its
+  decisions, from when it is queued for evaluation: 1 to 60000, default 5000, and below
+  `startup_deadline_ms`. With `recovery: true` the bootstrap rules apply again after the authority is
+  lost, so the orchestration instance can recover it (RUNTIME l.1674-1680); default false.
 
-Other kinds are rejected with "this policy kind is not supported yet". The Capability Authority
-module is built (DECISIONS I84) and its policy format is `docs/AUTHORITY-POLICY.md`; the host
-configuration kind that selects it comes with step 8b.
+  Checked at `create`: `authority` names a listed instance whose `module` is
+  `logos_capability_authority`; its `primary_contract`, when given, is the pinned Capability Authority
+  contract (otherwise it is checked when the instance is bound); it has a `state_assignment`;
+  `runtime.store_dir` is set; and `policy` loads as the authority will load it. The orchestration
+  instance cannot be the authority, since its module name is outside the reserved prefix.
+
+  **Not yet accepted.** A configuration that passes these checks is still rejected with "this policy
+  kind is not supported yet" until enforcement over time (renewal and ending of execution
+  authorizations, route re-authorization) is built in step 8b-2, so no configuration runs with half the
+  enforcement.
+
+Any other kind is rejected with "this policy kind is not supported yet".
 
 ### `orchestration`
 
@@ -211,6 +255,16 @@ assignment of its own (`s-…`), which needs `state_root`.
   again, for as long as that instance is known (across restarts too); the same key with another
   module is `LOGOS_ERR_INVALID_PARAMS`. Retiring the instance frees the key.
 - Creating grants nothing: the new instance is started with its own `start_module` authorization.
+
+### `call_audit`
+
+Call audit (CA §9, §9.1; DECISIONS I85): `call_records` is the capacity of the in-memory ring of call
+records, 1 to 1000000, default 4096; `evidence` names the call-evidence signing key, a `kid` of 1 to
+128 bytes and the absolute path of its secret key file. `evidence` needs `runtime.store_dir`, so the
+evidence names the same Runtime across starts.
+
+**Not yet accepted.** A configuration with `call_audit` is rejected with "call_audit is not supported
+yet" until call records and evidence are built in step 8b-3, which also adds the key file's checks.
 
 ## What the host can expect
 

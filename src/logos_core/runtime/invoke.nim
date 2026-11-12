@@ -56,11 +56,18 @@ proc callerOp(
   let s = cast[ptr InvocationState](invocation.state)
   if not s.enterGuard():
     return status(ecModule, "the invocation was released")
-  outCaller[] = LogosCallerView(
-    kind: CallerModule,
-    runtimeInstanceId: s.runtimeId.utf8View,
-    moduleInstanceId: s.consumer.utf8View,
-  )
+  if s.system:
+    outCaller[] = LogosCallerView(
+      kind: CallerSystemService,
+      runtimeInstanceId: s.runtimeId.utf8View,
+      moduleInstanceId: LogosUtf8View(data: nil, len: 0),
+    )
+  else:
+    outCaller[] = LogosCallerView(
+      kind: CallerModule,
+      runtimeInstanceId: s.runtimeId.utf8View,
+      moduleInstanceId: s.consumer.utf8View,
+    )
   s.leaveGuard()
   LogosResult()
 
@@ -222,6 +229,55 @@ proc callProvider*(
   if bytes.len == 0:
     return err(failure(ecModule, "the provider's response is too long"))
   ?checkResponse(sel, bare, bytes)
+  ok(bytes)
+
+proc systemCall*(
+    engine: Engine,
+    dispatch: ModuleDispatchFn,
+    free: ModuleFreeFn,
+    context: ptr LogosModuleContext,
+    access: pointer,
+    ticket: ptr CallTicket,
+    runtimeId: string,
+    bare: string,
+    params: openArray[byte],
+): Result[seq[byte], InvocationFailure] =
+  ## [SPEC RUNTIME l.1652-1667; CA l.88; plan §2.4] One call of a system
+  ## service's method by the Runtime itself, on this thread, through the
+  ## provider's generic dispatch, with a SYSTEM_SERVICE invocation context
+  ## current (step 8b: the Capability Authority's `evaluate`). The caller
+  ## checks the response.
+  var inv = InvocationState(
+    engine: engine,
+    access: access,
+    ticket: ticket,
+    runtimeId: fixed(runtimeId),
+    system: true,
+  )
+  initContext(inv)
+  var buf: ptr UncheckedArray[uint8] = nil
+  var len: csize_t = 0
+  var f = Frame(context: addr inv.context, access: access)
+  push(f)
+  let r = dispatch(
+    context,
+    cstring(bare),
+    cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]),
+    csize_t(params.len),
+    addr buf,
+    addr len,
+  )
+  pop(f)
+  checkOutcome(r, bufferShape(buf, len)).isOkOr:
+    if transfersBuffer(r, buf):
+      free(context, buf)
+    return err(failureOf(error))
+  var bytes: seq[byte]
+  if len <= csize_t(high(int)):
+    bytes = view(buf, len)
+  free(context, buf)
+  if bytes.len == 0:
+    return err(failure(ecModule, "the response is empty or too long"))
   ok(bytes)
 
 proc revokedResult*(): InvocationFailure =

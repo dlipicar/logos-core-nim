@@ -144,6 +144,15 @@ proc slowTable(): seq[(string, pointer)] =
 
 var engines = 0
 
+when declared(caParity):
+  # The parity pass (step 8b-1; DECISIONS I85): `test_routes_ca` and
+  # `test_events_ca` run these cases with a Capability Authority bound, the
+  # fake one allowing everything for ten minutes, instead of the internal
+  # policy. A case that scripts the internal policy's denials keeps it.
+  import ./fakeca
+
+  const ParityCa = "parity-ca"
+
 proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineConfig =
   inc engines
   result = defaultConfig(work / ("e" & $engines))
@@ -155,6 +164,20 @@ proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineCo
     checkStaticRegistration("meter", meterModuleStaticSymbols()).tryGet,
   ]
   result.statics.add(extra)
+  when declared(caParity):
+    result.statics.add(fakeCaRegistration())
+    if policy.rules.len == 0:
+      result.authority = Opt.some(AuthorityPolicy(instance: ParityCa))
+
+proc fixtureEngine(cfg: EngineConfig): Engine =
+  ## A new engine; in the parity pass, with the authority bound.
+  result = newEngine(cfg)
+  when declared(caParity):
+    if cfg.authority.isSome:
+      resetFake()
+      discard result.create(fakeCaRecord(), ParityCa).tryGet
+      doAssert result.start(ParityCa).tryGet.state == msReady
+      doAssert result.authorityBound()[0], "the parity authority is not bound"
 
 let
   meterSet =

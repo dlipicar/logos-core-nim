@@ -187,7 +187,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     clearAll()
 
   test "[IFC-0174] [IFC-0175] [RUN-0191] [RUN-0549] subscribe resolves the event under the selected contract and the route's subscribe scope":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var all = rc.handle(rc.routeId("all"))
@@ -214,7 +214,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     e.finish()
 
   test "[IFC-0176] [IFC-0180] [IFC-0179] [IFC-0178] the id is written on success only, and subscribe runs no handler on its thread":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -233,7 +233,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     e.finish()
 
   test "[IFC-0186] [IFC-0187] [IFC-0652] [IFC-0653] [IFC-0654] unsubscribe waits for a handler on another thread, returns at once from its own handler, and a failure changes nothing":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
@@ -287,7 +287,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     e.finish()
 
   test "[IFC-0188] [IFC-0189] [RUN-0193] [IFC-0669] a route that ends deactivates its subscriptions; handle release waits for an active handler":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let first = rc.routeId("k1")
@@ -326,7 +326,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     e.finish()
 
   test "[RUN-0256] [RUN-0836] [RUN-0837] subscribe and unsubscribe through a revoked route are NOT_AUTHORISED, through a closed one NOT_READY":
-    let e = newEngine(
+    let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
     discard e.started(meter())
@@ -357,7 +357,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     clearAll()
 
   test "[RUN-0249] [IFC-0210] every initialization gets the engine's non-null publish callback":
-    let e = newEngine(config(extra = @[dmeterStatic]))
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
     resetDeferred()
     let before = clientPublishes.load
     discard e.started(dmeter())
@@ -368,7 +368,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     e.finish()
 
   test "[IFC-0279] [IFC-0280] [RUN-0233] [IFC-0775] the handler runs on the publishing thread before publish returns, with no invocation context":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -386,7 +386,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     e.finish()
 
   test "[RUN-0244] [RUN-0245] [IFC-0184] a publication that cannot be validated is dropped with a diagnostic; a valid one arrives byte for byte":
-    let e = newEngine(config(extra = @[dmeterStatic]))
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
     resetDeferred()
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -411,7 +411,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     e.finish()
 
   test "[RUN-0819] [CAP-0288] [CAP-0289] [IMPL-DECISION G175] delivery is authorized for each subscriber route: publish-event and subscribe-event, and both event lists":
-    let e = newEngine(config(extra = @[dmeterStatic]))
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
     resetDeferred()
     let m = e.started(dmeter())
     let (c1, rc1) = e.startClient()
@@ -447,7 +447,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     e.finish()
     # A denied publish-event skips that subscriber only.
     clearAll()
-    let e3 = newEngine(
+    let e3 = fixtureEngine(
       config(
         denying(deny(action = Opt.some(aaPublishEvent), target = "second")),
         extra = @[dmeterStatic],
@@ -467,7 +467,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     k2.release()
     e3.finish()
     # A denied subscribe-event refuses the subscription itself.
-    let e4 = newEngine(
+    let e4 = fixtureEngine(
       config(
         denying(deny(action = Opt.some(aaSubscribeEvent), consumer = "second")),
         extra = @[dmeterStatic],
@@ -485,7 +485,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     e4.finish()
 
   test "[IFC-0181] [IFC-0182] [IFC-0183] one subscription's handler never overlaps across publishing threads; distinct subscriptions all receive":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
@@ -515,7 +515,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     e.finish()
 
   test "[IFC-0281] [IFC-0181] a handler may call the publishing provider again and publish again on the same thread":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
@@ -542,7 +542,7 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     clearAll()
 
   test "[RUN-0821] [RUN-0825] [RUN-0826] [IFC-0782] only subscriptions on the calling handle receive a scoped event, each before publish returns":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k1")
@@ -570,7 +570,7 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     e.finish()
 
   test "[RUN-0824] [RUN-0549] [IMPL-DECISION G175] an event outside the route's publish_events is NOT_AUTHORISED and reaches no one":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let r = rc.establish("k", scope = access(publish = Opt.some(newSeq[seq[byte]]())))
@@ -584,7 +584,7 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     e.finish()
 
   test "[RUN-0831] [RUN-0830] a handler that closes the destination stops later admissions, and publish reports NOT_READY":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
