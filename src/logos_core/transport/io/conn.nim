@@ -22,6 +22,15 @@
 ## controlReserve`) and in `maxOutputBytes`; control frames use that room when
 ## there is some, else the connection's control reserve. A final ProtocolError
 ## is never refused.
+##
+## Deadlines that judge the peer [IMPL]: chronos runs the timers that expired
+## before the socket callbacks of the same turn, so after the I/O thread was
+## busy past a deadline, the clock alone would blame a peer whose bytes
+## arrived in time. `helloTimeout`, `admissionTimeout` and `writeStallTimeout`
+## therefore look first: a Hello or admission verdict waits one turn (the
+## sockets ready in the turn it expired in are served first) and handles the
+## owner's queued commands, and a write stall tries a write. None of them
+## moves the deadline.
 
 {.push raises: [], gcsafe.}
 
@@ -154,6 +163,8 @@ type
   FrameHandler* =
     proc(io: Io, c: Conn, body: sink seq[byte]) {.nimcall, gcsafe, raises: [].}
 
+  CommandPump* = proc(io: Io) {.nimcall, gcsafe, raises: [].}
+
   Io* = ref object
     config*: TransportConfig
     limits*: TransportLimits
@@ -180,6 +191,8 @@ type
     pendingOut*: ptr Atomic[int]
       ## the loop's `maxPendingOutputBytes` count (`loop.nim`); nil in tests
     onFrame*: FrameHandler
+    pumpCommands*: CommandPump
+      ## handles the owner's queued commands at once (`loop.nim`); nil in tests
     responseOverhead: int
     requestOverhead*: int
       ## an upper bound of a Request's frame less its method name and params
@@ -340,8 +353,31 @@ proc releaseInput(io: Io, n: int, hello: bool) =
     io.pool(hello).release(n)
     io.wakeWaiters(hello)
 
+proc serviceCommands(io: Io) =
+  if not io.pumpCommands.isNil:
+    io.pumpCommands(io)
+
+proc admitVerdict(arg: pointer) {.gcsafe, raises: [].} =
+  ## [SPEC TRANSPORT §8.6] The frame still finds no room: ProtocolError
+  ## TRANSPORT_ERROR, close. Room freed by a queued command counts. A later
+  ## wait of the connection has its own timer.
+  let io = theIo
+  if io.isNil:
+    return
+  let c = io.lookup(argKey(arg))
+  if c.isNil or c.closed or hBytes notin c.holds or not c.admitTimer.isNil:
+    return
+  io.serviceCommands()
+  if c.closed or hBytes notin c.holds or not c.admitTimer.isNil:
+    return
+  io.closeConn(c, ccProtocol, ecTransport, Opt.some(protocolErrorBody(ecTransport)))
+
 proc onAdmitTimeout(arg: pointer) {.gcsafe, raises: [].} =
   ## [SPEC TRANSPORT §8.6] A frame waited `admissionTimeout` for input bytes.
+  ## [IMPL] The verdict waits one turn of the dispatcher (`admitVerdict`):
+  ## chronos runs expired timers before the socket callbacks of the same turn,
+  ## so once the I/O thread was busy past the deadline, room that another
+  ## connection's input freed before it would not be seen yet.
   let io = theIo
   if io.isNil:
     return
@@ -349,7 +385,7 @@ proc onAdmitTimeout(arg: pointer) {.gcsafe, raises: [].} =
   if c.isNil or c.closed or hBytes notin c.holds:
     return
   c.admitTimer = nil
-  io.closeConn(c, ccProtocol, ecTransport, Opt.some(protocolErrorBody(ecTransport)))
+  callSoon(admitVerdict, arg)
 
 proc reserveInput(io: Io, c: Conn): bool =
   ## Reserves the declared body before it is allocated; false when the frame
@@ -923,10 +959,27 @@ proc closeConn*(
 
 # Timers for the Hello exchange -----------------------------------------------------
 
+proc helloVerdict(arg: pointer) {.gcsafe, raises: [].} =
+  ## [SPEC TRANSPORT §8.6; G61] Still not established: a callee closes without
+  ## a ProtocolError [IMPL]; a caller reports TRANSPORT_ERROR (RUNTIME §4.1). A
+  ## Hello that arrived in time, or the owner's answer queued in time, counts.
+  let io = theIo
+  if io.isNil:
+    return
+  let c = io.lookup(argKey(arg))
+  if c.isNil or c.closed or c.established:
+    return
+  io.serviceCommands()
+  if c.closed or c.established:
+    return
+  io.closeConn(c, ccHelloTimeout, ecTransport)
+
 proc onHelloTimeout(arg: pointer) {.gcsafe, raises: [].} =
-  ## [SPEC TRANSPORT §8.6; G61] The Hello exchange did not finish in time. A
-  ## callee closes without a ProtocolError [IMPL]; a caller reports
-  ## TRANSPORT_ERROR (RUNTIME §4.1).
+  ## [SPEC TRANSPORT §8.6; G61] The Hello exchange did not finish in time.
+  ## [IMPL] The verdict waits one turn of the dispatcher (`helloVerdict`), so
+  ## that the socket callbacks of the turn the deadline expired in run first:
+  ## chronos runs expired timers before them, and a busy I/O thread would
+  ## otherwise take a reply that arrived in time for a late one.
   let io = theIo
   if io.isNil:
     return
@@ -934,7 +987,7 @@ proc onHelloTimeout(arg: pointer) {.gcsafe, raises: [].} =
   if c.isNil or c.closed or c.established:
     return
   c.helloTimer = nil
-  io.closeConn(c, ccHelloTimeout, ecTransport)
+  callSoon(helloVerdict, arg)
 
 proc armHello*(io: Io, c: Conn) =
   c.deadline = fromNow(io.config.helloTimeout)

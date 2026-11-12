@@ -236,6 +236,20 @@ proc drain(lp: Loop, io: Io, slice = high(int64)): bool =
     if (getMonoTime() - start).inNanoseconds >= slice:
       return true
 
+when unixStream:
+  proc pumpNow(io: Io) {.nimcall, gcsafe, raises: [].} =
+    ## [IMPL] Before a deadline judges a peer (`helloVerdict`, `admitVerdict`):
+    ## the commands queued by then are handled, and only those, so an owner
+    ## that keeps submitting cannot hold the thread here.
+    let lp = current
+    if lp.isNil:
+      return
+    for _ in 0 ..< lp.chan.peek():
+      var got = lp.chan.tryRecv()
+      if not got.dataAvailable:
+        return
+      io.handle(move got.msg)
+
 proc onMore(arg: pointer) {.gcsafe, raises: [].}
 
 proc drainSlice(lp: Loop, io: Io) =
@@ -289,6 +303,7 @@ proc run(lp: Loop) =
   when unixStream:
     let io = newIo(lp.config, lp.limits, lp.sink, lp.ctx)
     io.onFrame = onFrame
+    io.pumpCommands = pumpNow
   else:
     let io = Io(sink: lp.sink, ctx: lp.ctx)
   io.pendingOut = addr lp.pendingOut

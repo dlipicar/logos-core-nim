@@ -1436,16 +1436,24 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     o.subscribe(1, 1, Progress)
     check o.waitN(evSubscription, 1).len == 1
     o.autoRelease = false
+    # Reading pauses after the Event that brings the undelivered bytes to the
+    # limit [IMPL]: the 4th of these. The last two are small, so they would
+    # arrive at once if reading went on.
     let big = "x".repeat(4 * MiB)
     for i in 0'u64 ..< 6:
-      o.publish(1, Progress, progress(i, big))
-    let first = o.waitN(evEvent, 1, 4, timeoutMs = BigWait)
+      o.publish(1, Progress, progress(i, if i < 4: big else: "s"))
+    # 16 MiB before the pause, four times what `BigWait` is sized for (a loaded
+    # CI runner took up to 20 s per 4 MiB Event under msan).
+    let first = o.waitN(evEvent, 1, 4, timeoutMs = 4 * BigWait)
     check first.len == 4
-    o.settle(200)
-    check o.events(evEvent, 1).len == 4
     var credit = 0
     for e in first:
       credit += e.credit
+    if first.len == 4:
+      check credit - first[3].credit < cfg.callerUndeliveredBytes
+      check credit >= cfg.callerUndeliveredBytes
+    o.settle(200 * Slow)
+    check o.events(evEvent, 1).len == 4
     o.release(1, credit)
     let all = o.waitN(evEvent, 1, 6, timeoutMs = BigWait)
     check all.len == 6
@@ -1673,5 +1681,122 @@ suite "trnio.thread: submitWait (TRANSPORT §5.2; F8)":
     probe.loop.stopTransport()
     check probe.res.load == ord(sbRefused) + 1
     deallocShared(probe)
+
+proc sleepUntil(t: MonoTime) =
+  let left = (t - getMonoTime()).inMilliseconds
+  if left > 0:
+    sleep(int(left))
+
+suite "trnio.deadlines: a deadline that passes while the I/O thread is busy (TRANSPORT §8.6) [IMPL]":
+  # The gate holds the I/O thread still across a deadline while the peer's
+  # bytes, or the owner's answer, arrive in time. Without the verdict turn,
+  # chronos runs the expired timer first and blames the peer.
+  const T = 500 * Slow ## the deadline the test is about, in ms
+
+  test "[TRN-0378] [G61] caller: a Hello response that arrived in time counts":
+    let ep = newEndpoint()
+    let callee = newOwner()
+    callee.admit = amIgnore
+    check callee.serve(1, dupCloexec(ep.listener))
+    var cfg = fastConfig()
+    cfg.helloTimeout = T * Ms
+    let o = newOwner(cfg)
+    let start = getMonoTime()
+    o.connect(1, ep.path, callee.issue())
+    let hello = callee.expectKind(evHello)
+    let armed = getMonoTime() # the caller's deadline was armed before this
+    o.closeGate()
+    o.callExists(99, 1) # an event: the I/O thread now waits in the sink
+    check pumpUntil(
+      [o],
+      proc(): bool =
+        o.atGate(),
+    )
+    check hello.isSome
+    if hello.isSome:
+      callee.admitHello(hello.get)
+    check callee.expectKind(evEstablished).isSome
+    # The response is in the caller's socket before its deadline.
+    check (getMonoTime() - start).inMilliseconds < T
+    sleepUntil(armed + initDuration(milliseconds = T + 100))
+    o.openGate()
+    let r = o.oneOf(1)
+    check r.isSome and r.get.kind == evConnected
+    o.stop()
+    callee.done(ep)
+
+  test "[TRN-0378] [G61] callee: an admission the owner queued in time counts":
+    var cfg = fastConfig()
+    cfg.helloTimeout = T * Ms
+    let ep = newEndpoint()
+    let o = newOwner(cfg)
+    o.admit = amIgnore
+    check o.serve(1, dupCloexec(ep.listener))
+    let start = getMonoTime()
+    var raw = Raw(
+      fd: rawConnect(ep.path),
+      caller: callerConn(storageBoundary),
+      reader: newFrameReader(),
+    )
+    check writeAll(raw.fd, helloBytes(o.issue()))
+    let hello = o.expectKind(evHello)
+    let armed = getMonoTime() # the callee's deadline was armed before this
+    # Held inside a socket callback: the owner's answer waits in the channel.
+    o.closeGate()
+    let other = rawConnect(ep.path)
+    check writeAll(other, helloBytes(o.issue()))
+    check pumpUntil(
+      [o],
+      proc(): bool =
+        o.atGate(),
+    )
+    check hello.isSome
+    if hello.isSome:
+      o.admitHello(hello.get)
+    check (getMonoTime() - start).inMilliseconds < T
+    sleepUntil(armed + initDuration(milliseconds = T + 100))
+    o.openGate()
+    let ms = raw.readMsgs(o, 1)
+    check ms.len == 1 and ms[0].kind == mkHello
+    check o.expectKind(evEstablished).isSome
+    discard fdClose(other)
+    discard fdClose(raw.fd)
+    o.done(ep)
+
+  test "[TRN-0378] [TRN-0381] a frame's wait ends with room another connection freed in time":
+    var cfg = fastConfig()
+    cfg.maxInputBytes = 24 * MiB
+    cfg.admissionTimeout = T * Ms
+    let (o, ep) = served(cfg)
+    var a = o.rawSession(ep)
+    var b = o.rawSession(ep)
+    # a holds 9 MiB being read; b's 16 MiB do not fit beside them.
+    let held = 9 * MiB
+    check writeAll(a.fd, @(prefixOf(held)) & newSeq[byte](held - 10))
+    o.settle(50)
+    let start = getMonoTime()
+    check writeAll(b.fd, @(prefixOf(int(MinFrameLimit))) & newSeq[byte](1000))
+    o.settle(50)
+    let armed = getMonoTime() # b's wait began before this
+    o.closeGate()
+    let other = rawConnect(ep.path)
+    check writeAll(other, helloBytes(o.issue()))
+    check pumpUntil(
+      [o],
+      proc(): bool =
+        o.atGate(),
+    )
+    # a's frame ends (its reservation is released when it is handled).
+    check writeAll(a.fd, newSeq[byte](10))
+    check (getMonoTime() - start).inMilliseconds < T
+    sleepUntil(armed + initDuration(milliseconds = T + 100))
+    o.openGate()
+    # b was admitted: it waits for the rest of its frame, nothing is sent to it.
+    let ms = b.readMsgs(o, 1, 500)
+    check ms.len == 0
+    discard fdClose(other)
+    discard fdClose(a.fd)
+    discard fdClose(b.fd)
+    o.done(ep)
 
 removeDir(base)

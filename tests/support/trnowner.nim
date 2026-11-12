@@ -127,6 +127,22 @@ proc atGate*(o: Owner): bool =
 proc send*(o: Owner, cmd: sink IoCommand) =
   doAssert o.loop.submit(cmd) == sbOk
 
+proc admitHello*(o: Owner, ev: IoEvent) =
+  ## Answers an `evHello` with `acceptHello`'s verdict (what `amAccept` does).
+  let ep = o.served.getOrDefault(ev.helloEndpoint)
+  let r = acceptHello(ep, o.store, ev.frame, now())
+  let v =
+    if r.isOk:
+      AdmitVerdict(
+        kind: avEstablished,
+        response: r.get.response,
+        binding: r.get.binding,
+        endsIn: o.endsIn,
+      )
+    else:
+      AdmitVerdict(kind: avFailed, code: r.error.code, peer: r.error.peer)
+  o.send(IoCommand(conn: ev.conn, kind: cmdAdmit, verdict: v))
+
 proc handle(o: Owner, ev: IoEvent) =
   case ev.kind
   of evHello:
@@ -140,19 +156,7 @@ proc handle(o: Owner, ev: IoEvent) =
         )
       )
     of amAccept:
-      let ep = o.served.getOrDefault(ev.helloEndpoint)
-      let r = acceptHello(ep, o.store, ev.frame, now())
-      let v =
-        if r.isOk:
-          AdmitVerdict(
-            kind: avEstablished,
-            response: r.get.response,
-            binding: r.get.binding,
-            endsIn: o.endsIn,
-          )
-        else:
-          AdmitVerdict(kind: avFailed, code: r.error.code, peer: r.error.peer)
-      o.send(IoCommand(conn: ev.conn, kind: cmdAdmit, verdict: v))
+      o.admitHello(ev)
   of evDispatch:
     if o.respond:
       o.send(
