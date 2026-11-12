@@ -1,0 +1,413 @@
+## INTERFACE §2.9.3, §4, §5.2; RUNTIME §4.1, §6.4, §7.5, §9.3: the call paths a
+## synchronous call and an asynchronous one share, and the invocation context.
+##
+## [IMPL] A direct route call (RUNTIME §4.1, §6.4, §7.5):
+## 1. The Runtime thread admits it, in the order of G171's interim (TF-18):
+##    the method resolves under the selected contract (METHOD_NOT_FOUND), it
+##    is inside the route's method scope and the per-call decision allows it
+##    (NOT_AUTHORISED, RUNTIME l.1732, G52; a route revoked for its authority
+##    is NOT_AUTHORISED too), then the route is ready, its consumer live and
+##    the provider ready (NOT_READY, after the request has been validated as
+##    in step 2), and the call joins the provider's in-flight count.
+## 2. The request is validated and its payload commitment computed: a failure
+##    is INVALID_PARAMS before any provider code runs.
+## 3. The provider runs with an invocation context current that names the
+##    consumer (§2.9.3): `_MODULE_dispatch` on the calling thread for a
+##    synchronous call or a call worker for an asynchronous one, or the
+##    deferred surface's `submit` (`asynccall.nim`).
+## 4. The result and outputs are checked together; a success is validated and
+##    its commitment computed (MODULE_ERROR otherwise), copied into a buffer
+##    the Runtime owns, and the provider's buffer is released at once with its
+##    `_MODULE_free` (response copy), so a provider never waits on a
+##    consumer's buffers to stop (RUNTIME l.1581-1583).
+## 5. [G174] The result is committed only after the route's end cause is read
+##    under the ticket's lock, the lock the Runtime thread takes to record it:
+##    a route revoked while the provider ran turns the result into
+##    NOT_AUTHORISED; a closed or failed route lets it complete.
+## 6. The call leaves the in-flight count; a provider being stopped is
+##    destroyed only once its count is zero.
+##
+## The well-known `logos.schema` method is answered by the boundary itself
+## from the selected contract (TRANSPORT §8.1 does the same for a session); no
+## provider code runs for it.
+
+{.push raises: [], gcsafe.}
+
+import std/[atomics, locks]
+import results
+import ../cbor
+import ../abi/[checks, types]
+import ../iface/[accept, outcome, payload, surface]
+import ../transport/boundary
+import ./[callside, events, plumbing]
+
+const RcNamespace = "logos.runtime_control."
+
+# The invocation context --------------------------------------------------------------
+
+proc callerOp(
+    invocation: ptr LogosInvocationContext, outCaller: ptr LogosCallerView
+): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE §2.9.3; RUNTIME §4.1 l.869-873] The consumer of the route
+  ## the invocation came through: a module caller.
+  bindingEnter()
+  if invocation == nil or outCaller == nil:
+    return status(ecInvalidParams, "null caller output")
+  let s = cast[ptr InvocationState](invocation.state)
+  if not s.enterGuard():
+    return status(ecModule, "the invocation was released")
+  outCaller[] = LogosCallerView(
+    kind: CallerModule,
+    runtimeInstanceId: s.runtimeId.utf8View,
+    moduleInstanceId: s.consumer.utf8View,
+  )
+  s.leaveGuard()
+  LogosResult()
+
+proc isCancelledOp(invocation: ptr LogosInvocationContext): bool {.cdecl.} =
+  ## [SPEC INTERFACE §2.9.3 l.2101-2102, l.2143] Sticky: set by the Runtime
+  ## thread once the call's route or consumer has ended, or the asynchronous
+  ## call was cancelled or timed out.
+  bindingEnter()
+  if invocation == nil:
+    return false
+  let s = cast[ptr InvocationState](invocation.state)
+  if not s.enterGuard():
+    return true
+  result = s.ticket != nil and s.ticket.cancelled.load
+  s.leaveGuard()
+
+proc publishOp(
+    invocation: ptr LogosInvocationContext,
+    eventName: cstring,
+    data: ptr UncheckedArray[uint8],
+    dataLen: csize_t,
+): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE §2.9.3 l.2187-2199; RUNTIME §7.3.1]
+  bindingEnter()
+  if invocation == nil:
+    return status(ecInvalidParams, "a null invocation context")
+  let s = cast[ptr InvocationState](invocation.state)
+  if not s.enterGuard():
+    return status(ecNotReady, "the invocation was released")
+  result = scopedPublish(s, eventName, data, dataLen)
+  s.leaveGuard()
+
+var contextVtable = LogosInvocationContextVtable(
+  abiVersion: InvocationContextAbiVersion,
+  structSize: csize_t(sizeof(LogosInvocationContextVtable)),
+  caller: callerOp,
+  isCancelled: isCancelledOp,
+  publish: publishOp,
+)
+
+proc initContext*(s: var InvocationState) =
+  ## `s` must stay where it is while its context is in use.
+  s.context = LogosInvocationContext(vtable: addr contextVtable, state: addr s)
+
+# Route calls ---------------------------------------------------------------------------
+
+proc checkRequest*(
+    sel: Selected, bare: string, params: openArray[byte]
+): Result[CborValue, InvocationFailure] =
+  ## [SPEC RUNTIME §4.1 l.833-841, l.852-853] A request is validated and
+  ## committed before provider code runs; `logos.schema` is the boundary's.
+  let request =
+    if sel.validator.surface.findMethod(bare).isSome:
+      sel.validator.checkParams(bare, params).valueOr:
+        return err(toFailure(error))
+    else:
+      decodePayload(params).valueOr:
+        return err(toFailure(error))
+  sel.boundary.commitRequest(bare, request).isOkOr:
+    return err(error.failure)
+  ok(request)
+
+proc notReadyAfter*(
+    b: ptr SchemaBlob, bare: string, params: openArray[byte], e: EngineError
+): InvocationFailure =
+  ## [G171 interim (TF-18)] A call the Runtime thread answered NOT_READY is
+  ## authorized; its payload is validated before readiness is reported.
+  if e.code == ecNotReady:
+    let sel = selectedOf(b)
+    if sel.isOk:
+      let r = checkRequest(sel.get, bare, params)
+      if r.isErr:
+        return r.error
+  failureOf(e)
+
+proc introspect*(
+    b: ptr SchemaBlob, bare: string, params: openArray[byte]
+): Result[seq[byte], InvocationFailure] =
+  ## [SPEC INTERFACE §5.1; RUNTIME §9.3 l.2990-2992] `logos.schema`: the
+  ## selected contract's `logos.schema_response`, from the boundary.
+  let sel = selectedOf(b).valueOr:
+    return err(failure(ecModule, "the selected contract cannot be loaded"))
+  discard ?checkRequest(sel, bare, params)
+  let v = schemaResponse(sel.boundary.contracts, b.root).valueOr:
+    return err(failure(ecModule, "the schema response cannot be built"))
+  sel.boundary.commitResponse(bare, v).isOkOr:
+    return err(failure(ecModule, "the schema response cannot be committed"))
+  ok(encodeCbor(v))
+
+proc invocationFor*(
+    adm: Admission,
+    consumer, route: FixedText,
+    generation: uint64,
+    blob: ptr SchemaBlob,
+    engine: Engine,
+): InvocationState =
+  ## The state of an admitted call's invocation context; `initContext` once it
+  ## is where it stays.
+  InvocationState(
+    engine: engine,
+    access: adm.access,
+    ticket: adm.ticket,
+    runtimeId: fixed(adm.runtimeId),
+    consumer: consumer,
+    provider: fixed(adm.provider),
+    route: route,
+    generation: generation,
+    blob: blob,
+  )
+
+proc checkResponse*(
+    sel: Selected, bare: string, bytes: openArray[byte]
+): Result[void, InvocationFailure] =
+  ## [SPEC RUNTIME §4.1 l.838-840] A response that does not validate or commit
+  ## is not returned as a success.
+  let response = sel.validator.checkResult(bare, bytes).valueOr:
+    return err(failure(ecModule, "the provider's response does not match its schema"))
+  sel.boundary.commitResponse(bare, response).isOkOr:
+    return err(failure(ecModule, "the provider's response cannot be committed"))
+  ok()
+
+proc callProvider*(
+    adm: Admission,
+    engine: Engine,
+    consumer, route: FixedText,
+    generation: uint64,
+    blob: ptr SchemaBlob,
+    bare: string,
+    params: openArray[byte],
+): Result[seq[byte], InvocationFailure] =
+  ## Steps 2-4 for an admitted call through `_MODULE_dispatch`, on this
+  ## thread; the caller commits the result and leaves the in-flight count.
+  let sel = selectedOf(blob).valueOr:
+    return err(failure(ecModule, "the selected contract cannot be loaded"))
+  discard ?checkRequest(sel, bare, params)
+  var inv = invocationFor(adm, consumer, route, generation, blob, engine)
+  initContext(inv)
+  var buf: ptr UncheckedArray[uint8] = nil
+  var len: csize_t = 0
+  var f = Frame(context: addr inv.context, access: adm.access)
+  push(f)
+  let r = adm.dispatch(
+    adm.context,
+    cstring(bare),
+    cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]),
+    csize_t(params.len),
+    addr buf,
+    addr len,
+  )
+  pop(f)
+  checkOutcome(r, bufferShape(buf, len)).isOkOr:
+    if transfersBuffer(r, buf):
+      adm.free(adm.context, buf)
+    return err(failureOf(error))
+  var bytes: seq[byte]
+  if len <= csize_t(high(int)):
+    bytes = view(buf, len)
+  adm.free(adm.context, buf)
+  if bytes.len == 0:
+    return err(failure(ecModule, "the provider's response is too long"))
+  ?checkResponse(sel, bare, bytes)
+  ok(bytes)
+
+proc revokedResult*(): InvocationFailure =
+  ## [G174] X1 interim: a route revoked while the call ran ends it with the
+  ## handle's retained termination code.
+  failure(ecNotAuthorised, "the route was revoked")
+
+proc commitSync*(
+    t: ptr CallTicket, r: sink Result[seq[byte], InvocationFailure]
+): Result[seq[byte], InvocationFailure] =
+  ## [G174] Step 5: the commit decision, ordered with the route's revocation.
+  withLock t.lock:
+    if t.endCode == ord(ecNotAuthorised):
+      return err(revokedResult())
+  r
+
+proc leave*(e: Engine, adm: Admission) =
+  ## Step 6: the call has left the provider.
+  e.post(
+    Msg(kind: mkCallDone, provider: adm.provider, route: adm.route, ticket: adm.ticket)
+  )
+
+proc routeCall*(
+    h: ptr HandleState, bare: string, params: seq[byte]
+): Result[seq[byte], InvocationFailure] =
+  ## [SPEC INTERFACE §5.2; RUNTIME §4.1, §6.4, §7.5] A synchronous route call,
+  ## on the calling thread.
+  let reply = h.engine.call(
+    Request(
+      kind: rqAdmit,
+      origin: moduleOrigin($h.consumer),
+      attempt: $h.attempt,
+      route: $h.route,
+      bare: bare,
+    )
+  )
+  if reply.error.isSome:
+    return err(notReadyAfter(h.blob, bare, params, reply.error.get))
+  let adm = reply.admission
+  if adm.introspection:
+    return introspect(h.blob, bare, params)
+  result = commitSync(
+    adm.ticket,
+    callProvider(adm, h.engine, h.consumer, h.route, h.generation, h.blob, bare, params),
+  )
+  leave(h.engine, adm)
+
+# Runtime Control requests ----------------------------------------------------------------
+
+proc rcRequest(
+    bare: string, params: openArray[byte]
+): Result[RcCall, InvocationFailure] =
+  ## [SPEC INTERFACE §4.3, §4.5, §5.2] The checked request of a Runtime Control
+  ## method: METHOD_NOT_FOUND for a name the contract does not declare,
+  ## INVALID_PARAMS with its detail for bytes that are not a value of the
+  ## method's request schema. A method this Runtime does not perform yet is
+  ## MODULE_ERROR [IMPL].
+  let declaration = RcNamespace & bare & "_request"
+  if bare.len == 0 or not rcSchema().declares(declaration) or
+      not rcSchema().declares(RcNamespace & bare & "_response"):
+    return err(InvocationFailure(code: ecMethodNotFound))
+  let v = decodePayload(params).valueOr:
+    return err(toFailure(error))
+  rcSchema().checkPath(declaration, v).isOkOr:
+    return err(
+      InvocationFailure(
+        code: ecInvalidParams,
+        detail: Opt.some(invalidParamsDetail(iprSchemaMismatch, Opt.some(error))),
+      )
+    )
+  # [SPEC RUNTIME l.225-230] The binding keeps the commitment semantics.
+  discard rcSchema().commitment(declaration, v).valueOr:
+      return err(
+        InvocationFailure(
+          code: ecModule, message: Opt.some("the request commitment cannot be computed")
+        )
+      )
+  let request = @params
+  template call(which: RcMethod): RcCall =
+    RcCall(m: which, request: request)
+
+  case bare
+  of $rmGetSelf:
+    ok(call(rmGetSelf))
+  of $rmShutdownRuntime:
+    ok(call(rmShutdownRuntime))
+  of $rmGetExecutionPermissions:
+    ok(call(rmGetExecutionPermissions))
+  of $rmEstablishRoute:
+    var c = call(rmEstablishRoute)
+    c.establish = fromChecked(LogosNSRuntimeControlEstablishRouteRequest, v)
+    ok(c)
+  of $rmRenewRoute:
+    var c = call(rmRenewRoute)
+    c.renew = fromChecked(LogosNSRuntimeControlRenewRouteRequest, v)
+    ok(c)
+  of $rmCloseRoute:
+    var c = call(rmCloseRoute)
+    c.close = fromChecked(LogosNSRuntimeControlCloseRouteRequest, v)
+    ok(c)
+  of $rmStartModule:
+    var c = call(rmStartModule)
+    c.start = fromChecked(LogosNSRuntimeControlStartModuleRequest, v)
+    ok(c)
+  of $rmStopModule:
+    var c = call(rmStopModule)
+    c.stop = fromChecked(LogosNSRuntimeControlStopModuleRequest, v)
+    ok(c)
+  of $rmReportFailure:
+    var c = call(rmReportFailure)
+    c.report = fromChecked(LogosNSRuntimeControlReportFailureRequest, v)
+    ok(c)
+  else:
+    err(
+      InvocationFailure(
+        code: ecModule,
+        message: Opt.some(bare & " is not supported by this Runtime yet"),
+      )
+    )
+
+proc lifecycleResponse(m: RcMethod, v: InstanceView): Result[seq[byte], string] =
+  ## [SPEC RUNTIME §9.3 l.3496-3497] A local instance: its exact `instance`,
+  ## no `provider`.
+  let state = LogosNSRuntimeControlState(
+    kind:
+      case v.state
+      of msUnloaded: LogosNSRuntimeControlStateKind.Unloaded
+      of msLoaded: LogosNSRuntimeControlStateKind.Loaded
+      of msReady: LogosNSRuntimeControlStateKind.Ready
+      of msStopping: LogosNSRuntimeControlStateKind.Stopping
+      of msError: LogosNSRuntimeControlStateKind.Error
+  )
+  if m == rmStartModule:
+    encode(
+      LogosNSRuntimeControlStartModuleResponse(
+        module: v.module, instance: Opt.some(v.instance), state: state
+      )
+    )
+  else:
+    encode(
+      LogosNSRuntimeControlStopModuleResponse(
+        module: v.module, instance: Opt.some(v.instance), state: state
+      )
+    )
+
+proc checkedResponse(bare: string, bytes: seq[byte]): Result[seq[byte], string] =
+  ## [SPEC RUNTIME l.229, l.3747] A successful Runtime Control response is a
+  ## value of the method's response schema, and its commitment is computed.
+  let declaration = RcNamespace & bare & "_response"
+  let v = ?rcSchema().decodeChecked(declaration, bytes)
+  discard ?rcSchema().commitment(declaration, v)
+  ok(bytes)
+
+proc rcInvoke*(
+    e: Engine, instance, attempt, bare: string, params: seq[byte]
+): Result[seq[byte], InvocationFailure] =
+  ## [SPEC INTERFACE §5.2; RUNTIME §9, §9.3] One Runtime Control method through
+  ## the binding of `attempt`, synchronous or on a call worker.
+  let rc = rcRequest(bare, params).valueOr:
+    if error.code == ecInvalidParams:
+      # [G171 interim (TF-18)] What is authorized without the payload comes
+      # before its validation.
+      let pre = e.call(
+        Request(
+          kind: rqRcPrecheck,
+          origin: moduleOrigin(instance),
+          attempt: attempt,
+          bare: bare,
+        )
+      )
+      if pre.error.isSome:
+        return err(failureOf(pre.error.get))
+    return err(error)
+  let m = rc.m
+  let reply = e.call(
+    Request(kind: rqRc, origin: moduleOrigin(instance), attempt: attempt, rc: rc)
+  )
+  if reply.error.isSome:
+    return err(failureOf(reply.error.get))
+  let encoded =
+    if m in {rmStartModule, rmStopModule}:
+      lifecycleResponse(m, reply.view)
+    else:
+      Result[seq[byte], string].ok(reply.bytes)
+  let body = encoded.valueOr:
+    return err(failure(ecModule, "the response does not match its schema"))
+  let response = checkedResponse($m, body).valueOr:
+    return err(failure(ecModule, "the response does not match its schema"))
+  ok(response)

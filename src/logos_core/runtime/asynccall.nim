@@ -1,0 +1,656 @@
+## INTERFACE §2.9, §2.9.1, §2.9.2, §2.9.3, §5.2; RUNTIME §4.1, §6.4, §7.3.1:
+## asynchronous calls through Runtime Control and route bindings, and deferred
+## provider completion.
+##
+## A prepared call (`AsyncCall`) lives on the shared heap with copies of what
+## it needs (RUNTIME l.880-884): its consumer and attempt, its route and path
+## generation, the selected contract, the method and request. The consumer
+## holds one reference until `release` returns; the Runtime thread holds one
+## from submission until nothing of the call runs any more.
+##
+## [IMPL] Execution. `submit` only posts: the Runtime thread registers the
+## call and its deadline and hands it to a call worker (INTERFACE l.2016-2017),
+## which admits it as a synchronous call is admitted (`invoke.nim`) and then
+## either runs `_MODULE_dispatch` or, when the provider exports a valid
+## deferred surface, builds one provider invocation (`Deferred`) and calls its
+## `submit` with that invocation's context current (l.2166-2167).
+##
+## [IMPL] Terminal decisions. Under the call's lock the first terminal decision
+## wins (l.2065-2071): a result (from a call worker or a deferred `complete`),
+## a local rejection, `cancel`, `release`, the timeout (the Runtime thread),
+## or the end of its route or consumer [G174]. Each completion callback runs on
+## a lifecycle worker, never inline in `submit` or in a provider's `complete`;
+## it is suppressed once the consumer's realization has ended. Its response
+## owner frees a Runtime copy, so it outlives the call and the handle
+## (l.2089-2097).
+##
+## [IMPL] A deferred invocation counts its admitted entries (`submit`, the
+## `request_cancel` hook, context operations) under one entry guard
+## (`callside.enterGuard`); once `execution_release` came and the last entry
+## returned, the Runtime thread is told it is idle, and only then does it leave
+## its provider's in-flight count, which `_MODULE_destroy` waits for
+## (l.2155-2158). A cancellation, a timeout or the end of the route or consumer
+## marks it cancelled and arranges one `request_cancel` after `submit`
+## returned, unless execution was already released (l.2143-2153).
+
+{.push raises: [], gcsafe.}
+
+import std/[atomics, locks, monotimes, times]
+import results
+import ../abi/[checks, types]
+import ../iface/outcome
+import ./[callside, invoke, plumbing]
+
+type
+  CallPhase* = enum
+    cpPrepared
+    cpSubmitted
+    cpTerminal ## decided; the completion callback has not begun
+    cpCompleting ## the completion callback is running
+    cpDone ## the callback returned or was suppressed, or the call was discarded
+
+  CallEnd* = enum
+    okResult ## the call's own result or failure
+    okCancelled ## `cancel` or `release`
+    okTimeout
+    okEnded ## its route or its consumer's realization ended [G174]
+
+  Owned = object ## What one completion's response owner frees (INTERFACE l.2091-2093).
+    message: cstring
+    detail: ptr UncheckedArray[uint8]
+    detailLen: int
+    response: ptr UncheckedArray[uint8]
+    responseLen: int
+
+  AsyncCall* = object
+    engine: Engine
+    refs: Atomic[int]
+    lock: Lock
+    cond: Cond
+    rc*: bool ## a Runtime Control call; otherwise a route call
+    consumer*, attempt*, route*: FixedText
+    generation*: uint64
+    blob: ptr SchemaBlob ## route calls: the selected contract, retained
+    methodName: cstring
+    params: ptr UncheckedArray[byte]
+    paramsLen: int
+    hasTimeout*: bool
+    timeoutMs*: uint64
+    submittedAt*: MonoTime
+    complete: LogosAsyncCompleteFn
+    userData: pointer
+    phase: CallPhase
+    cancelledEarly: bool ## cancelled before submission
+    code: ErrorCode
+    kind: CallEnd
+    owned: ptr Owned ## the outcome until the callback takes it
+    completer: int ## the thread running the completion callback
+
+  Deferred = object
+    ## One provider invocation of the deferred surface (INTERFACE §2.9.2).
+    inv: LogosProviderInvocation ## first: the provider passes its address back
+    state: InvocationState
+    call: ptr AsyncCall
+    api: ptr LogosAsyncProviderApi
+    module: ptr LogosModuleContext
+    methodName: cstring
+    params: ptr UncheckedArray[byte]
+    paramsLen: int
+    completed: bool ## under `state.glock`
+    submitReturned: bool
+    cancelKnown: bool
+    cancelNotified: bool
+
+proc copyText(s: string): cstring =
+  let p = cast[ptr UncheckedArray[char]](allocShared(s.len + 1))
+  for i, c in s:
+    p[i] = c
+  p[s.len] = '\0'
+  cast[cstring](p)
+
+proc copyBytes(p: ptr UncheckedArray[uint8], n: int): ptr UncheckedArray[byte] =
+  result = cast[ptr UncheckedArray[byte]](allocShared(max(n, 1)))
+  for i in 0 ..< n:
+    result[i] = p[i]
+
+func failed(f: InvocationFailure): Result[seq[byte], InvocationFailure] =
+  Result[seq[byte], InvocationFailure].err(f)
+
+func bytesOf(p: ptr UncheckedArray[byte], n: int): seq[byte] =
+  result = newSeq[byte](n)
+  for i in 0 ..< n:
+    result[i] = p[i]
+
+# Outcomes ------------------------------------------------------------------------------
+
+proc ownedRelease(state: pointer) {.cdecl.} =
+  ## The response owner's release: any thread, once.
+  bindingEnter()
+  let o = cast[ptr Owned](state)
+  if o == nil:
+    return
+  if o.message != nil:
+    deallocShared(o.message)
+  if o.detail != nil:
+    deallocShared(o.detail)
+  if o.response != nil:
+    deallocShared(o.response)
+  freeShared(o)
+
+proc ownedOf(r: Result[seq[byte], InvocationFailure]): (ErrorCode, ptr Owned) =
+  ## A Runtime copy of an outcome: a success's response, or a failure's
+  ## message and (INVALID_PARAMS only) detail.
+  let o = createShared(Owned)
+  if r.isOk:
+    let b = r.get
+    o.response = copyBytes(cast[ptr UncheckedArray[uint8]](unsafeAddr b[0]), b.len)
+    o.responseLen = b.len
+    return (ecOk, o)
+  let f = r.error
+  if f.message.isSome:
+    o.message = copyText(clip(f.message.get))
+  if f.code == ecInvalidParams and f.detail.isSome and f.detail.get.len > 0 and
+      f.detail.get.len <= MaxDetailBytes:
+    let d = f.detail.get
+    o.detail = copyBytes(cast[ptr UncheckedArray[uint8]](unsafeAddr d[0]), d.len)
+    o.detailLen = d.len
+  (f.code, o)
+
+proc decideLocked(
+    c: ptr AsyncCall, r: Result[seq[byte], InvocationFailure], kind: CallEnd
+) =
+  let (code, o) = ownedOf(r)
+  c.code = code
+  c.owned = o
+  c.kind = kind
+  c.phase = cpTerminal
+
+proc decide*(
+    c: ptr AsyncCall, r: Result[seq[byte], InvocationFailure], kind: CallEnd
+): bool =
+  ## [SPEC INTERFACE l.2065-2071] The first terminal decision wins; true when
+  ## this one did. The caller then lets the Runtime thread schedule the
+  ## completion (`aeTerminal`), unless it is the Runtime thread.
+  withLock c.lock:
+    if c.phase == cpSubmitted:
+      c.decideLocked(r, kind)
+      return true
+  false
+
+proc decide*(c: ptr AsyncCall, f: InvocationFailure, kind: CallEnd): bool =
+  c.decide(failed(f), kind)
+
+proc offer(c: ptr AsyncCall, r: Result[seq[byte], InvocationFailure]) =
+  ## A decision off the Runtime thread.
+  if c.decide(r, okResult):
+    c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
+
+proc offerCommitted(
+    c: ptr AsyncCall, t: ptr CallTicket, r: Result[seq[byte], InvocationFailure]
+) =
+  ## [G174] A provider's result, decided under the ticket's lock so the commit
+  ## is ordered with the route's revocation (RUNTIME l.1292-1293).
+  var won = false
+  withLock t.lock:
+    if t.endCode == ord(ecNotAuthorised):
+      won = c.decide(failed(revokedResult()), okEnded)
+    else:
+      won = c.decide(r, okResult)
+  if won:
+    c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
+
+# What the Runtime thread reads ----------------------------------------------------------
+
+proc asyncOf*(p: pointer): ptr AsyncCall =
+  cast[ptr AsyncCall](p)
+
+proc isTerminal*(c: ptr AsyncCall): bool =
+  withLock c.lock:
+    result = c.phase >= cpTerminal
+
+proc callEnd*(c: ptr AsyncCall): CallEnd =
+  withLock c.lock:
+    result = c.kind
+
+proc deadline*(c: ptr AsyncCall): Opt[MonoTime] =
+  ## [SPEC INTERFACE l.2059-2063] Measured from submission, monotonic.
+  if not c.hasTimeout:
+    return Opt.none(MonoTime)
+  let ms = int64(min(c.timeoutMs, uint64(high(int64) div 2_000_000)))
+  Opt.some(c.submittedAt + initDuration(milliseconds = ms))
+
+proc suppress*(c: ptr AsyncCall) =
+  ## [IMPL] The consumer's realization ended: a completion callback that has
+  ## not begun never will.
+  withLock c.lock:
+    if c.phase == cpTerminal:
+      c.phase = cpDone
+      if c.owned != nil:
+        ownedRelease(c.owned)
+        c.owned = nil
+      broadcast(c.cond)
+
+proc freeCall(c: ptr AsyncCall) =
+  if c.owned != nil:
+    ownedRelease(c.owned)
+  drop(c.blob)
+  deallocShared(c.methodName)
+  deallocShared(c.params)
+  deinitCond(c.cond)
+  deinitLock(c.lock)
+  discard c.engine.outstanding.fetchSub(1)
+  freeShared(c)
+
+proc dropCall*(c: ptr AsyncCall) =
+  if c.refs.fetchSub(1) == 1:
+    freeCall(c)
+
+# The completion callback ----------------------------------------------------------------
+
+proc runComplete*(p: pointer) =
+  ## Lifecycle worker: the call's one completion callback, unless it was
+  ## suppressed. The callback takes the response owner.
+  let c = asyncOf(p)
+  var run = false
+  var o: ptr Owned
+  var code: ErrorCode
+  withLock c.lock:
+    if c.phase == cpTerminal:
+      c.phase = cpCompleting
+      c.completer = getThreadId()
+      o = c.owned
+      c.owned = nil
+      code = c.code
+      run = true
+  if not run:
+    return
+  var res = LogosResult(code: CErrorCode(ord(code)))
+  var response: ptr UncheckedArray[uint8] = nil
+  var len: csize_t = 0
+  if code == ecOk:
+    response = o.response
+    len = csize_t(o.responseLen)
+  else:
+    res.message = o.message
+    if o.detail != nil:
+      res.detail = o.detail
+      res.detailLen = csize_t(o.detailLen)
+  c.complete(
+    c.userData, res, response, len, LogosResponseOwner(state: o, release: ownedRelease)
+  )
+  withLock c.lock:
+    c.phase = cpDone
+    c.completer = 0
+    broadcast(c.cond)
+
+# Deferred provider invocations ----------------------------------------------------------
+
+proc releaseOwner(o: LogosResponseOwner) =
+  ## [SPEC INTERFACE l.2128] `complete` consumes the owner on every path.
+  if not o.release.isNil:
+    o.release(o.state)
+
+proc hookDueLocked(d: ptr Deferred): bool =
+  ## [SPEC INTERFACE l.2143-2150] One `request_cancel` once cancellation is
+  ## known and `submit` returned, unless execution was released; its entry
+  ## guard is claimed here.
+  if d.cancelKnown and d.submitReturned and not d.cancelNotified and not d.state.released and
+      not d.api.requestCancel.isNil:
+    d.cancelNotified = true
+    inc d.state.entries
+    return true
+  false
+
+proc completionOf(
+    d: ptr Deferred,
+    res: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+): Result[seq[byte], InvocationFailure] =
+  ## [SPEC INTERFACE l.2126-2135] The provider's completion as the ordinary
+  ## boundary checks a result, copied before its owner is released.
+  let shape = completionShape(response, len, owner)
+  let checked = checkOutcome(res, shape)
+  if checked.isErr:
+    if ownerValid(owner):
+      releaseOwner(owner)
+    return err(failureOf(checked.error))
+  var bytes: seq[byte]
+  if len <= csize_t(high(int)):
+    bytes = view(response, len)
+  releaseOwner(owner)
+  if bytes.len == 0:
+    return err(failure(ecModule, "the provider's response is too long"))
+  let sel = selectedOf(d.state.blob).valueOr:
+    return err(failure(ecModule, "the selected contract cannot be loaded"))
+  ?checkResponse(sel, $d.methodName, bytes)
+  ok(bytes)
+
+proc completeOp(
+    inv: ptr LogosProviderInvocation,
+    result: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+) {.cdecl.} =
+  ## [SPEC INTERFACE §2.9.2] The provider's one completion, from any thread.
+  bindingEnter()
+  if inv == nil:
+    return
+  let d = cast[ptr Deferred](inv)
+  let s = addr d.state
+  if not s.enterGuard():
+    releaseOwner(owner)
+    return
+  var first = false
+  withLock s.glock:
+    if not d.completed:
+      d.completed = true
+      first = true
+  if first:
+    d.call.offerCommitted(s.ticket, d.completionOf(result, response, len, owner))
+  else:
+    releaseOwner(owner)
+    s.engine.diagnose(
+      "a second completion of " & $d.methodName & " from " & $s.provider & " was ignored"
+    )
+  s.leaveGuard()
+
+proc executionReleaseOp(inv: ptr LogosProviderInvocation) {.cdecl.} =
+  ## [SPEC INTERFACE l.2137-2141] Closes admission through the invocation; it
+  ## never waits for admitted entries, which keep the state until they return.
+  bindingEnter()
+  if inv == nil:
+    return
+  let d = cast[ptr Deferred](inv)
+  let s = addr d.state
+  var again, early = false
+  withLock s.glock:
+    if s.released or s.finished:
+      again = true
+    else:
+      s.released = true
+      early = not d.completed
+      d.completed = true
+      inc s.entries # this entry, until the outcome below is decided
+  if again:
+    return
+  if early:
+    s.engine.diagnose(
+      "the provider " & $s.provider & " released " & $d.methodName &
+        " without completing it"
+    )
+    d.call.offerCommitted(
+      s.ticket,
+      failed(
+        failure(ecModule, "the provider released the invocation without completing it")
+      ),
+    )
+  s.leaveGuard()
+
+proc submitDeferred(c: ptr AsyncCall, adm: Admission, bare: string, params: seq[byte]) =
+  ## Call worker: one provider invocation through the deferred surface.
+  let d = createShared(Deferred)
+  d.call = c
+  d.api = adm.asyncApi
+  d.module = adm.context
+  d.methodName = copyText(bare)
+  d.params =
+    copyBytes(cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]), params.len)
+  d.paramsLen = params.len
+  d.state =
+    invocationFor(adm, c.consumer, c.route, c.generation, retain(c.blob), c.engine)
+  d.state.guarded = true
+  d.state.owner = d
+  d.state.entries = 1 # `submit`
+  initLock(d.state.glock)
+  initContext(d.state)
+  d.inv = LogosProviderInvocation(
+    abiVersion: AsyncProviderAbiVersion,
+    structSize: csize_t(sizeof(LogosProviderInvocation)),
+    `method`: d.methodName,
+    paramsCbor: cast[ptr UncheckedArray[uint8]](d.params),
+    paramsCborLen: csize_t(d.paramsLen),
+    context: addr d.state.context,
+    complete: completeOp,
+    executionRelease: executionReleaseOp,
+  )
+  c.engine.post(Msg(kind: mkAsync, event: aeDeferred, target: c, extra: d))
+  # [SPEC INTERFACE l.2166-2167] `current` returns its context during `submit`.
+  var f = Frame(context: addr d.state.context, access: adm.access)
+  push(f)
+  d.api.submit(d.module, addr d.inv)
+  pop(f)
+  var hook = false
+  withLock d.state.glock:
+    d.submitReturned = true
+    hook = d.hookDueLocked()
+  if hook:
+    c.engine.post(Msg(kind: mkAsync, event: aeHook, target: c, extra: d))
+  leaveGuard(addr d.state)
+
+proc cancelKnown*(p: pointer): bool =
+  ## Runtime thread: the deferred invocation is cancelled; true when its
+  ## `request_cancel` is due now (its entry guard is claimed).
+  let d = cast[ptr Deferred](p)
+  withLock d.state.glock:
+    if d.state.finished:
+      return false
+    d.cancelKnown = true
+    result = d.hookDueLocked()
+
+proc runRequestCancel*(p: pointer) =
+  ## Lifecycle worker: the hook, outside every lock, with the invocation's
+  ## context current (INTERFACE l.2151-2152, l.2166-2167).
+  let d = cast[ptr Deferred](p)
+  var f = Frame(context: addr d.state.context, access: d.state.access)
+  push(f)
+  d.api.requestCancel(d.module, addr d.inv)
+  pop(f)
+  leaveGuard(addr d.state)
+
+proc finishDeferred*(p: pointer): (string, string, ptr CallTicket) =
+  ## Runtime thread, once the invocation is idle: frees it and returns its
+  ## provider, route and ticket, which leave the in-flight count.
+  let d = cast[ptr Deferred](p)
+  result = ($d.state.provider, $d.state.route, d.state.ticket)
+  drop(d.state.blob)
+  deallocShared(d.methodName)
+  deallocShared(d.params)
+  deinitLock(d.state.glock)
+  freeShared(d)
+
+# The call worker ----------------------------------------------------------------------------
+
+proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
+  let e = c.engine
+  let reply = e.call(
+    Request(
+      kind: rqAdmit,
+      origin: moduleOrigin($c.consumer),
+      attempt: $c.attempt,
+      route: $c.route,
+      bare: bare,
+      call: c,
+    )
+  )
+  if reply.error.isSome:
+    c.offer(failed(notReadyAfter(c.blob, bare, params, reply.error.get)))
+    return
+  let adm = reply.admission
+  if adm.introspection:
+    c.offer(introspect(c.blob, bare, params))
+    return
+  if c.isTerminal:
+    # Decided while it was admitted: nothing is dispatched.
+    leave(e, adm)
+    return
+  if adm.asyncApi == nil:
+    # [SPEC INTERFACE l.2013-2017] Over the synchronous provider ABI.
+    c.offerCommitted(
+      adm.ticket,
+      callProvider(adm, e, c.consumer, c.route, c.generation, c.blob, bare, params),
+    )
+    leave(e, adm)
+  else:
+    c.submitDeferred(adm, bare, params)
+
+proc runCall*(p: pointer) =
+  ## Call worker: one submitted call, unless it is already terminal. The
+  ## engine posts `mkCallJobDone` after this returns.
+  let c = asyncOf(p)
+  if c.isTerminal:
+    return
+  let bare = $c.methodName
+  let params = bytesOf(c.params, c.paramsLen)
+  if c.rc:
+    c.offer(rcInvoke(c.engine, $c.consumer, $c.attempt, bare, params))
+  else:
+    c.runRoute(bare, params)
+
+# The async call vtable -------------------------------------------------------------------
+
+proc callOf(call: ptr LogosAsyncCall): ptr AsyncCall =
+  if call == nil:
+    return nil
+  cast[ptr AsyncCall](call.state)
+
+proc submitOp(call: ptr LogosAsyncCall) {.cdecl.} =
+  ## [SPEC INTERFACE l.2050-2063] Once; no result channel. The Runtime thread
+  ## takes a reference before anything else can run the call.
+  bindingEnter()
+  let c = callOf(call)
+  if c == nil:
+    return
+  var submitted = false
+  withLock c.lock:
+    if c.phase == cpPrepared:
+      submitted = true
+      c.phase = cpSubmitted
+      c.submittedAt = getMonoTime()
+      if c.cancelledEarly:
+        c.decideLocked(
+          failed(failure(ecCancelled, "the call was cancelled")), okCancelled
+        )
+      elif c.hasTimeout and c.timeoutMs == 0:
+        # [SPEC INTERFACE l.2061] Expires at once, without dispatch.
+        c.decideLocked(failed(failure(ecTimeout, "the call timed out")), okTimeout)
+  if not submitted:
+    c.engine.diagnose("a second submit of an asynchronous call was ignored")
+    return
+  discard c.refs.fetchAdd(1)
+  c.engine.post(Msg(kind: mkAsync, event: aeSubmit, target: c))
+
+proc cancelOp(call: ptr LogosAsyncCall) {.cdecl.} =
+  ## [SPEC INTERFACE l.2065-2071] CANCELLED unless a terminal outcome exists;
+  ## before submission it is recorded.
+  bindingEnter()
+  let c = callOf(call)
+  if c == nil:
+    return
+  var won = false
+  withLock c.lock:
+    case c.phase
+    of cpPrepared:
+      c.cancelledEarly = true
+    of cpSubmitted:
+      c.decideLocked(
+        failed(failure(ecCancelled, "the call was cancelled")), okCancelled
+      )
+      won = true
+    else:
+      discard
+  if won:
+    c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
+
+proc releaseOp(call: ptr LogosAsyncCall) {.cdecl.} =
+  ## [SPEC INTERFACE l.2079-2087] An unsubmitted call is discarded; a submitted
+  ## one is cancelled if it has no terminal outcome, and its completion
+  ## callback is waited for, never the provider.
+  bindingEnter()
+  let c = callOf(call)
+  if c == nil:
+    return
+  let me = getThreadId()
+  var won = false
+  withLock c.lock:
+    case c.phase
+    of cpPrepared:
+      c.phase = cpDone
+    of cpSubmitted:
+      c.decideLocked(failed(failure(ecCancelled, "the call was released")), okCancelled)
+      won = true
+    else:
+      discard
+  if won:
+    c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
+  withLock c.lock:
+    # [IMPL] Never from the call's own callback (l.2085); if it is, that
+    # callback is not waited for.
+    while c.phase in {cpTerminal, cpCompleting} and c.completer != me:
+      wait(c.cond, c.lock)
+  dropCall(c)
+
+var asyncVtable = LogosAsyncCallVtable(
+  abiVersion: AsyncCallAbiVersion,
+  structSize: csize_t(sizeof(LogosAsyncCallVtable)),
+  submit: submitOp,
+  cancel: cancelOp,
+  release: releaseOp,
+)
+
+proc prepare*(
+    e: Engine,
+    rc: bool,
+    consumer, attempt, route: FixedText,
+    generation: uint64,
+    blob: ptr SchemaBlob,
+    methodName: cstring,
+    params: ptr UncheckedArray[uint8],
+    paramsLen: csize_t,
+    options: ptr LogosAsyncOptions,
+    callbacks: ptr LogosAsyncCallbacks,
+    outCall: ptr LogosAsyncCall,
+): LogosResult =
+  ## [SPEC INTERFACE §2.9.1 l.2035-2048, §5.2 l.3901-3911] Copies what the call
+  ## keeps; runs no provider code and no callback; reserves no authority. The
+  ## route, admission and authority checks run at submission. A failure leaves
+  ## the outputs null.
+  if outCall == nil:
+    return status(ecInvalidParams, "a null call output")
+  if methodName == nil:
+    return status(ecInvalidParams, "a null method")
+  if rc:
+    if params == nil and paramsLen != 0:
+      return status(ecInvalidParams, "a null request")
+  elif params == nil or paramsLen == 0:
+    return status(ecInvalidParams, "a null or empty request")
+  checkAsyncOptions(options).isOkOr:
+    return status(error)
+  checkAsyncCallbacks(callbacks).isOkOr:
+    return status(error)
+  if e.outstanding.fetchAdd(1) >= MaxAsyncCalls:
+    discard e.outstanding.fetchSub(1)
+    return status(ecModule, "no capacity for another asynchronous call")
+  let c = createShared(AsyncCall)
+  c.engine = e
+  c.rc = rc
+  c.consumer = consumer
+  c.attempt = attempt
+  c.route = route
+  c.generation = generation
+  c.blob = (if blob == nil: nil else: retain(blob))
+  c.methodName = copyText($methodName)
+  c.params = copyBytes(params, int(paramsLen))
+  c.paramsLen = int(paramsLen)
+  c.hasTimeout = options.hasTimeout
+  c.timeoutMs = options.timeoutMs
+  c.complete = callbacks.complete
+  c.userData = callbacks.userData
+  initLock(c.lock)
+  initCond(c.cond)
+  c.refs.store(1)
+  outCall.vtable = addr asyncVtable
+  outCall.state = c
+  LogosResult()

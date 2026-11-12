@@ -80,25 +80,12 @@ proc reset() =
 
 # Engine set-up ----------------------------------------------------------------------
 
-proc services(
-    instance, attempt: cstring
-): InitServices {.nimcall, gcsafe, raises: [].} =
-  {.cast(gcsafe).}:
-    InitServices(
-      runtimeControl: addr rcBinding,
-      publish: publishOp,
-      publishUserData: addr publishState,
-      invocationAccess:
-        LogosInvocationAccess(state: addr accessState, current: currentOp),
-    )
-
 var engines = 0
 
 proc config(policy = allowAll()): EngineConfig =
   inc engines
   result = defaultConfig(work / ("e" & $engines))
   result.stateRoot = Opt.some(work / ("e" & $engines) / "state")
-  result.services = services
   result.policy = policy
   result.statics = @[
     checkStaticRegistration("gated", gatedTable()).tryGet,

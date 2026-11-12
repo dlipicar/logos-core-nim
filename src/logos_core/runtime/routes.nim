@@ -88,6 +88,10 @@ type
     decisionId*: string ## the provider-access decision (§9.3 `decision_id`)
     handles*: seq[pointer] ## handles observing its end (`observe_end`)
     calls*: seq[pointer] ## the tickets of calls admitted through it
+    subs*: seq[pointer]
+      ## the subscriptions of its unreleased handles, active or not, in
+      ## creation order (INTERFACE §2.5); `events.nim` keeps their state
+    nextSub*: uint64 ## the last subscription id issued on it
 
   KeyEntry = object
     operation: string
@@ -158,6 +162,12 @@ func methodRoot*(s: SelectedContract, bare: string): Opt[Digest] =
 func isWellKnown*(s: SelectedContract, bare: string): bool =
   bare notin s.methods and bare in s.wellKnown
 
+func eventRoot*(s: SelectedContract, eventId: string): Opt[Digest] =
+  ## The declaration root of an event the contract exposes.
+  if eventId in s.events:
+    return Opt.some(s.events.getOrDefault(eventId))
+  Opt.none(Digest)
+
 # Access scope ----------------------------------------------------------------------
 
 func toDigest*(b: openArray[byte]): Opt[Digest] =
@@ -225,6 +235,27 @@ func allowsMethod*(r: Route, bare: string): bool =
     if toDigest(item) == root:
       return true
   false
+
+func listed(list: Opt[seq[seq[byte]]], root: Digest): bool =
+  if list.isNone:
+    return true
+  for item in list.get:
+    if toDigest(item) == Opt.some(root):
+      return true
+  false
+
+func allowsPublish*(r: Route, eventId: string): bool =
+  ## [SPEC RUNTIME §9.3 l.3014-3016] `publish_events` restricts what the
+  ## provider may deliver on the route: absent permits every event of the
+  ## selected contract, empty none.
+  let root = r.selected.eventRoot(eventId)
+  root.isSome and listed(r.access.publish_events, root.get)
+
+func allowsSubscribe*(r: Route, eventId: string): bool =
+  ## [SPEC RUNTIME §9.3 l.3027-3030] `subscribe_events` restricts what the
+  ## consumer may subscribe to and receive.
+  let root = r.selected.eventRoot(eventId)
+  root.isSome and listed(r.access.subscribe_events, root.get)
 
 # Route state -----------------------------------------------------------------------
 

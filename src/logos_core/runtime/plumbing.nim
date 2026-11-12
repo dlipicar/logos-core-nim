@@ -1,7 +1,8 @@
 ## The engine's messages and the channels that carry them: what callers on any
 ## thread send to the Runtime thread (`call`, `post`) and what it answers.
-## Shared by `engine.nim` (the Runtime thread) and `bindings.nim` (the native
-## bindings modules call through).
+## Shared by `engine.nim` (the Runtime thread) and the native bindings modules
+## call through (`bindings.nim`, `callside.nim`, `invoke.nim`, `events.nim`,
+## `asynccall.nim`).
 ##
 ## Messages carry values only (no `ref`), so they move between threads under
 ## ORC and are deep-copied under refc.
@@ -22,7 +23,15 @@ const
   DefaultStopDeadline* = initDuration(seconds = 10)
   DefaultShutdownGrace* = initDuration(seconds = 10)
   MaxWorkers* = 64 ## [IMPL] worker threads; more jobs wait in the queue
+  MaxCallWorkers* = 64
+    ## [IMPL] threads that run asynchronous calls (INTERFACE §2.9), apart from
+    ## the lifecycle workers so long provider calls never hold bind, init or
+    ## destroy jobs; more calls wait in their queue
+  MaxAsyncCalls* = 4096
+    ## [IMPL] asynchronous calls prepared and not yet released, per engine;
+    ## preparing another is MODULE_ERROR (INTERFACE l.2040-2041)
   MaxRetainedChanges* = 4096 ## [IMPL] committed state changes kept for observation
+  MaxDiagnostics* = 4096 ## [IMPL] diagnostics kept for observation, oldest dropped
 
 type
   ModuleState* = enum
@@ -99,13 +108,6 @@ type
     code*: ErrorCode
     message*: string
 
-  ServicesFn* =
-    proc(instance, attempt: cstring): InitServices {.nimcall, gcsafe, raises: [].}
-    ## The publish callback for one execution attempt (events are step 4):
-    ## it must stay valid until that context's `_MODULE_destroy` returns. The
-    ## engine supplies the Runtime Control binding and invocation access itself
-    ## and ignores those fields.
-
   EngineConfig* = object
     runtimeInstanceId*: string
       ## [SPEC RUNTIME §9.2 l.2665-2672] this Runtime's identity, assigned by
@@ -117,7 +119,6 @@ type
     stateRoot*: Opt[string] ## module state directories [G143]
     statics*: seq[StaticRegistration] ## protected static bindings (§2.3, §13.3)
     policy*: AuthzPolicy
-    services*: ServicesFn ## nil: no publish callback
     ordering*: seq[(string, string)]
       ## [SPEC RUNTIME §3.7] accepted lifecycle-ordering constraints as
       ## (prerequisite instance, dependent instance)
@@ -146,6 +147,12 @@ type
     rqReleaseHandle ## a route handle's `release`
     rqRoutes ## every route record (observation for the host and tests)
     rqIdentity ## this Runtime's identity
+    rqSubscribe ## a route handle's `subscribe`
+    rqUnsubscribe ## a route handle's `unsubscribe`
+    rqCandidates ## the subscriptions an ordinary publication may reach
+    rqScoped ## the subscriptions an invocation-scoped publication may reach
+    rqDeliver ## the admission of one event handler invocation
+    rqDiagnostics ## the retained diagnostics
 
   RcMethod* = enum
     ## The Runtime Control methods this Runtime performs (RUNTIME §9.3).
@@ -179,9 +186,18 @@ type
 
   CallTicket* = object
     ## One admitted route call, on the shared heap: the Runtime thread marks
-    ## it cancelled when its route or consumer ends (INTERFACE l.2101-2102),
-    ## and frees it when the call has left.
+    ## it cancelled when its route or consumer ends, or the asynchronous call
+    ## is cancelled or times out (INTERFACE l.2101-2102), and frees it when the
+    ## call has left the provider.
     cancelled*: Atomic[bool]
+    closed*: Atomic[bool]
+      ## its invocation-scoped destination is closed: a terminal outcome was
+      ## decided (RUNTIME l.1275-1283)
+    lock*: Lock
+    endCode*: int
+      ## [G174] under `lock`: the termination code of the route the call came
+      ## through, once it ended (0 while it is ready); a result is committed
+      ## only after reading it under the same lock (RUNTIME l.1292-1293)
 
   Admission* = object
     ## What a route call needs once the Runtime thread admitted it: the
@@ -196,6 +212,8 @@ type
     route*: string
     ticket*: ptr CallTicket
     runtimeId*: string
+    asyncApi*: ptr LogosAsyncProviderApi
+      ## the provider's deferred surface (INTERFACE §2.9.2); nil: synchronous
 
   Reply* = object
     error*: Opt[EngineError]
@@ -208,6 +226,12 @@ type
     admission*: Admission
     routes*: seq[LogosNSRuntimeControlRouteRecord]
     id*: string ## rqIdentity
+    subs*: seq[pointer]
+      ## rqUnsubscribe, rqReleaseHandle, rqCandidates, rqScoped: subscriptions,
+      ## each with a reference the receiver drops
+    ready*: bool ## rqScoped: the invocation's destination is open
+    admitted*: bool ## rqDeliver: the handler may run
+    diagnostics*: seq[string]
 
   ReplyChannel* = ptr Channel[Reply]
 
@@ -229,6 +253,13 @@ type
     bare*: string ## rqAdmit: the method name
     handler*: LogosRouteEndHandler
     userData*: pointer
+    generation*: uint64 ## a route handle's or an invocation's path generation
+    subId*: LogosSubscriptionId ## rqUnsubscribe
+    outId*: ptr LogosSubscriptionId
+      ## rqSubscribe: written before the subscription becomes active
+    call*: pointer ## rqAdmit: the asynchronous call being admitted, if any
+    ticket*: ptr CallTicket ## rqScoped, rqDeliver: the invocation's ticket
+    scoped*: bool ## rqDeliver: an invocation-scoped publication
     reply*: ReplyChannel
 
   JobKind* = enum
@@ -237,6 +268,8 @@ type
     jkInit
     jkDestroy
     jkObserveEnd ## a route handle's terminal callback
+    jkComplete ## an asynchronous call's completion callback
+    jkRequestCancel ## a deferred invocation's `request_cancel` hook
 
   Job* = object
     id*: int
@@ -251,8 +284,29 @@ type
       context*: ptr LogosModuleContext
     of jkObserveEnd:
       handle*: pointer
+    of jkComplete:
+      call*: pointer
+    of jkRequestCancel:
+      deferred*: pointer
     of jkQuit:
       discard
+
+  CallJobKind* = enum
+    cjQuit ## first and without fields, as `MsgKind`
+    cjRun
+
+  CallJob* = object ## What a call worker runs (`asynccall.runCall`).
+    case kind*: CallJobKind
+    of cjRun:
+      call*: pointer
+    of cjQuit:
+      discard
+
+  AsyncEvent* = enum
+    aeSubmit ## an asynchronous call was submitted
+    aeTerminal ## its terminal outcome was decided off the Runtime thread
+    aeDeferred ## it was handed to a deferred provider (`extra`)
+    aeHook ## a deferred invocation's `request_cancel` is due (`extra`)
 
   MsgKind* = enum
     ## [IMPL] The first kind carries no fields. Nim 2.2.14's `=wasMoved` for a
@@ -269,6 +323,11 @@ type
     mkInitialized
     mkDestroyed
     mkCallDone ## a route call admitted into a provider has left it
+    mkDiagnostic ## a diagnostic recorded off the Runtime thread
+    mkAsync ## an asynchronous call's event (`AsyncEvent`)
+    mkCallJobDone ## a call worker finished with a call
+    mkCompleted ## a completion callback job returned
+    mkDeferredIdle ## a deferred invocation has no execution or entry left
 
   Msg* = object
     job*: int
@@ -286,6 +345,12 @@ type
       provider*: string
       route*: string
       ticket*: ptr CallTicket
+    of mkDiagnostic:
+      text*: string
+    of mkAsync, mkCallJobDone, mkCompleted, mkDeferredIdle:
+      event*: AsyncEvent
+      target*: pointer ## the asynchronous call, or the deferred invocation
+      extra*: pointer
 
   ReplySlot = object
     ## One reply channel, reused by one call after another [IMPL]. A sender
@@ -309,6 +374,10 @@ type
     runtime*: Thread[ptr Shared]
     workers*: array[MaxWorkers, Thread[ptr Shared]]
     spawned*: int ## written by the Runtime thread only
+    calls*: Channel[CallJob]
+    callWorkers*: array[MaxCallWorkers, Thread[ptr Shared]]
+    callSpawned*: int ## written by the Runtime thread only
+    outstanding*: Atomic[int] ## asynchronous calls prepared and not yet freed
     finished*: bool ## the Runtime thread has left its loop
 
   Engine* = ptr Shared
@@ -362,6 +431,10 @@ proc post*(s: ptr Shared, m: sink Msg) =
   except Exception:
     discard # [IMPL] cannot happen for these value-only messages
   s.bell.ring()
+
+proc diagnose*(s: ptr Shared, text: string) =
+  ## [SPEC RUNTIME l.1227] Records a diagnostic from any thread.
+  s.post(Msg(kind: mkDiagnostic, text: text))
 
 proc takeSlot(e: Engine): ptr ReplySlot =
   withLock e.slotLock:

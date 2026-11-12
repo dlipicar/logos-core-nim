@@ -46,21 +46,35 @@
 ## target's authority, then readiness, including whether the caller's binding
 ## is still current (`originReady`), and last the contract root.
 ##
-## Not yet built: the other Runtime Control methods, events and subscriptions,
-## asynchronous calls, remote Runtimes, the host API, `recover_module` and
+## [IMPL] Events and asynchronous calls (step 4). Subscriptions are activated,
+## deactivated and admitted here, one handler invocation at a time; the
+## handlers run on the publishing thread (`events.nim`). An asynchronous call
+## is registered here at submission, with its deadline, and runs on a pool of
+## call workers apart from the lifecycle workers (`asynccall.nim`); its
+## completion callback, and a deferred provider's `request_cancel`, run on a
+## lifecycle worker. A route that ends deactivates its subscriptions and marks
+## the invocations admitted through it cancelled; what becomes of their
+## results is G174's policy. A realization that ends suppresses the completion
+## callbacks of its calls that have not begun.
+##
+## Not yet built: the other Runtime Control methods, Runtime Control
+## subscriptions (G178), remote Runtimes, the host API, `recover_module` and
 ## `retire_module`, and persistence of execution state and routes.
 
 {.push raises: [].}
 
 import
-  std/[atomics, locks, monotimes, sets, strutils, sysrand, tables, times, typedthreads]
+  std/[
+    atomics, deques, locks, monotimes, sets, strutils, sysrand, tables, times,
+    typedthreads,
+  ]
 import results
 import ../abi/types
 import ../base/perthread
 import ../cbor/utf8
 import ../commitment
 import ../iface/[accept, outcome]
-import ./[bell, bindings, plumbing]
+import ./[asynccall, bell, bindings, callside, events, invoke, plumbing]
 
 export plumbing
 
@@ -116,8 +130,27 @@ type
     stopWaiters: seq[StopWaiter]
     providerId: string ## its provider record, when its record expects a contract
     services: ptr AttemptServices ## those of `realization`
-    inflight: int ## route calls admitted into `realization` and not yet left
+    inflight: int
+      ## route calls admitted into `realization` and not yet left, deferred
+      ## invocations included until they are idle (INTERFACE l.2155-2158)
     releasePending: bool ## `realization` is released once `inflight` is zero
+
+  AsyncRec = ref object
+    ## One submitted asynchronous call, from submission until nothing of it
+    ## runs any more; it holds one reference to the call.
+    call: pointer
+    rc: bool
+    consumer: string
+    attempt: string
+    route: string
+    deadline: Opt[MonoTime]
+    ticket: ptr CallTicket ## once admitted into a provider
+    provider: string ## the provider instance it was admitted into
+    deferred: pointer ## the deferred invocation, until it is idle
+    cancelled: bool ## its invocation was marked cancelled
+    terminal: bool ## the Runtime thread knows its terminal outcome
+    executing: bool ## a call worker has it
+    completing: bool ## its completion job is dispatched
 
   State = ref object
     shared: ptr Shared
@@ -144,6 +177,12 @@ type
     keys: RequestKeys
     routeCount: int
     providerCount: int
+    asyncCalls: Table[pointer, AsyncRec] ## by call
+    callBusy: int ## call jobs dispatched and not yet answered
+    liveAttempts: HashSet[string]
+      ## attempt tokens whose bindings are valid: from acceptance until the
+      ## context they made is destroyed, or their outcome is final
+    diagnostics: Deque[string]
 
 proc workerLoop(s: ptr Shared) =
   while true:
@@ -166,10 +205,34 @@ proc workerLoop(s: ptr Shared) =
     of jkObserveEnd:
       runEnd(job.handle)
       s.post(Msg(kind: mkJobDone, job: job.id))
+    of jkComplete:
+      runComplete(job.call)
+      s.post(Msg(kind: mkCompleted, job: job.id, target: job.call))
+    of jkRequestCancel:
+      runRequestCancel(job.deferred)
+      s.post(Msg(kind: mkJobDone, job: job.id))
 
 proc workerMain(s: ptr Shared) {.thread.} =
   workerLoop(s)
   releasePerThread() # after the loop's locals are gone
+
+proc callWorkerLoop(s: ptr Shared) =
+  while true:
+    var job: CallJob
+    try:
+      job = s.calls.recv()
+    except Exception:
+      return
+    case job.kind
+    of cjQuit:
+      return
+    of cjRun:
+      runCall(job.call)
+      s.post(Msg(kind: mkCallJobDone, target: job.call))
+
+proc callWorkerMain(s: ptr Shared) {.thread.} =
+  callWorkerLoop(s)
+  releasePerThread()
 
 proc dispatch(st: State, job: sink Job) =
   inc st.busy
@@ -188,6 +251,27 @@ proc dispatch(st: State, job: sink Job) =
 proc nextJobId(st: State): int =
   inc st.nextJob
   st.nextJob
+
+proc dispatchCall(st: State, call: pointer) =
+  ## A call worker for one submitted call; spawned on demand.
+  inc st.callBusy
+  let s = st.shared
+  if st.callBusy > s.callSpawned and s.callSpawned < MaxCallWorkers:
+    try:
+      createThread(s.callWorkers[s.callSpawned], callWorkerMain, s)
+      inc s.callSpawned
+    except ResourceExhaustedError:
+      discard # the call waits for a busy call worker
+  try:
+    s.calls.send(CallJob(kind: cjRun, call: call))
+  except Exception:
+    discard
+
+proc diagnose(st: State, text: string) =
+  ## [SPEC RUNTIME l.1227] Kept for observation, the oldest dropped first.
+  if st.diagnostics.len >= MaxDiagnostics:
+    st.diagnostics.popFirst()
+  st.diagnostics.addLast(text)
 
 # Observation --------------------------------------------------------------------
 
@@ -222,15 +306,107 @@ proc answerView(r: ReplyChannel, x: Inst) =
 proc answerError(r: ReplyChannel, code: ErrorCode, message: string) =
   r.answer(Reply(error: Opt.some(engineError(code, message))))
 
+# Asynchronous calls ---------------------------------------------------------------
+
+proc newTicket(): ptr CallTicket =
+  result = createShared(CallTicket)
+  initLock(result.lock)
+
+proc freeTicket(t: ptr CallTicket) =
+  deinitLock(t.lock)
+  freeShared(t)
+
+proc cancelInvocation(st: State, a: AsyncRec) =
+  ## [SPEC INTERFACE l.2101-2102, l.2143-2150] Sticky; a deferred invocation
+  ## gets its `request_cancel` once that is due.
+  if a.cancelled:
+    return
+  a.cancelled = true
+  if a.ticket != nil:
+    a.ticket.cancelled.store(true)
+  if a.deferred != nil and cancelKnown(a.deferred):
+    st.dispatch(Job(id: st.nextJobId(), kind: jkRequestCancel, deferred: a.deferred))
+
+proc maybeForget(st: State, a: AsyncRec) =
+  ## The record goes, with its reference to the call, once nothing of the
+  ## call runs any more.
+  if a.terminal and not a.executing and not a.completing and a.deferred == nil:
+    st.asyncCalls.del(a.call)
+    dropCall(asyncOf(a.call))
+
+proc asyncTerminal(st: State, a: AsyncRec) =
+  ## The call's terminal outcome is decided: its invocation-scoped destination
+  ## closes (RUNTIME l.1281); a cancellation, a timeout or an end also cancels
+  ## the invocation; the completion callback runs on a worker while the
+  ## consumer's realization lasts, and is suppressed after it [IMPL].
+  if a.terminal:
+    return
+  a.terminal = true
+  a.deadline = Opt.none(MonoTime)
+  let c = asyncOf(a.call)
+  if a.ticket != nil:
+    a.ticket.closed.store(true)
+  if c.callEnd != okResult:
+    st.cancelInvocation(a)
+  if a.attempt in st.liveAttempts:
+    a.completing = true
+    st.dispatch(Job(id: st.nextJobId(), kind: jkComplete, call: a.call))
+  else:
+    c.suppress()
+  st.maybeForget(a)
+
+proc endCall(st: State, a: AsyncRec, f: InvocationFailure, kind: CallEnd) =
+  ## A terminal decision the Runtime thread makes: a timeout, or the end of
+  ## the call's route or of a realization [G174].
+  if not a.terminal and asyncOf(a.call).decide(f, kind):
+    st.asyncTerminal(a)
+
+proc records(st: State): seq[AsyncRec] =
+  for a in st.asyncCalls.values:
+    result.add(a)
+
+proc endServices(st: State, s: ptr AttemptServices, instance: string) =
+  ## The realization an attempt made is gone, or the attempt made none: its
+  ## bindings are invalid. Its calls are cancelled and their completions not
+  ## yet begun suppressed; calls admitted into it as a provider and still
+  ## without an outcome end NOT_READY, the bound of G174.
+  if s == nil:
+    return
+  let token = attemptOf(s)
+  st.liveAttempts.excl(token)
+  for a in st.records:
+    if a.attempt == token:
+      st.cancelInvocation(a)
+      if a.terminal:
+        asyncOf(a.call).suppress()
+      else:
+        st.endCall(a, failure(ecNotReady, "the consumer's realization ended"), okEnded)
+    elif a.provider == instance and not a.terminal:
+      st.endCall(a, failure(ecNotReady, "the provider's realization ended"), okEnded)
+
 proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229; INTERFACE §2.5] The route takes no
-  ## new calls, and each handle observing it gets its terminal callback once,
-  ## on a worker.
+  ## new calls, its subscriptions are deactivated, and each handle observing
+  ## it gets its terminal callback once, on a worker. [G174] The invocations
+  ## admitted through it are marked cancelled (INTERFACE l.2101-2102) and
+  ## learn its end cause under their ticket's lock; a revoked route ends its
+  ## asynchronous calls NOT_AUTHORISED at once, a closed or failed one lets
+  ## them complete.
   if r.isTerminal:
     return
   r.terminate(state, failure)
   for t in r.calls:
-    cast[ptr CallTicket](t).cancelled.store(true)
+    let ticket = cast[ptr CallTicket](t)
+    withLock ticket.lock:
+      ticket.endCode = ord(r.endCode)
+    ticket.cancelled.store(true)
+  for p in r.subs:
+    deactivate(subOf(p))
+  for a in st.records:
+    if not a.rc and a.route == r.id:
+      st.cancelInvocation(a)
+      if r.state == rtRevoked:
+        st.endCall(a, revokedResult(), okEnded)
   for h in r.handles:
     scheduleEnd(h, r.endCode)
     st.dispatch(Job(id: st.nextJobId(), kind: jkObserveEnd, handle: h))
@@ -298,6 +474,7 @@ proc finishAttempt(st: State, a: Attempt) =
   ## The attempt has nothing left to clean: its outcome is final.
   let x = a.inst
   a.phase = apDone
+  st.endServices(a.services, x.id)
   freeAttemptServices(a.services)
   a.services = nil
   for w in a.waiters:
@@ -580,13 +757,10 @@ proc start(st: State, q: Request) =
   )
   x.tokens.incl(a.token)
   x.current = a.token
-  var services =
-    if st.cfg.services.isNil:
-      InitServices()
-    else:
-      st.cfg.services(cstring(x.id), cstring(a.token))
+  var services = InitServices()
   a.services = newAttemptServices(st.shared, x.id, a.token)
   services.fill(a.services)
+  st.liveAttempts.incl(a.token)
   a.request = RealizeRequest(
     moduleInstance: x.id,
     descriptor: x.record.descriptor,
@@ -1321,8 +1495,17 @@ proc admit(st: State, q: Request) =
     q.reply.answerError(ecNotReady, "the provider is not ready")
     return
   inc p.inflight
-  let ticket = createShared(CallTicket)
+  let ticket = newTicket()
   r.calls.add(ticket)
+  if q.call != nil:
+    let a = st.asyncCalls.getOrDefault(q.call)
+    if a != nil:
+      a.ticket = ticket
+      a.provider = p.id
+      if a.cancelled:
+        ticket.cancelled.store(true)
+      if a.terminal:
+        ticket.closed.store(true)
   let b = p.realization.binding
   q.reply.answer(
     Reply(
@@ -1335,6 +1518,7 @@ proc admit(st: State, q: Request) =
         route: r.id,
         ticket: ticket,
         runtimeId: st.runtimeId,
+        asyncApi: b.asyncApi,
       )
     )
   )
@@ -1356,13 +1540,206 @@ proc observeEnd(st: State, q: Request) =
   q.reply.answer(Reply())
 
 proc releaseHandle(st: State, q: Request) =
-  ## No terminal callback is scheduled for the handle after this.
+  ## No terminal callback is scheduled for the handle after this, and its
+  ## subscriptions are inactive; they go back to the releasing thread, which
+  ## waits for their handlers (INTERFACE l.1465, l.3895-3897).
   let r = st.routes.getOrDefault(q.route)
+  var gone: seq[pointer]
   if not r.isNil:
     let i = r.handles.find(q.handle)
     if i >= 0:
       r.handles.del(i)
+    var kept: seq[pointer]
+    for p in r.subs:
+      if subOf(p).generation == q.generation:
+        deactivate(subOf(p))
+        gone.add(p)
+      else:
+        kept.add(p)
+    r.subs = kept
+  q.reply.answer(Reply(subs: gone))
+
+# Events -----------------------------------------------------------------------------
+
+proc subscribe(st: State, q: Request) =
+  ## [SPEC INTERFACE §2.5 l.1417-1432; RUNTIME §4.4 l.1018-1021, §7.5; G175]
+  ## Ownership, then the event under the selected contract and the route's
+  ## subscribe scope, a revoked route and the subscribe-event decision
+  ## (NOT_AUTHORISED), then readiness. The id is written before activation.
+  let r = st.routes.getOrDefault(q.route)
+  if r.isNil or r.consumer != q.origin.instance:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if r.selected.eventRoot(q.bare).isNone:
+    q.reply.answerError(
+      ecNotAuthorised, q.bare & " is not an event of the selected contract"
+    )
+    return
+  if not r.allowsSubscribe(q.bare):
+    q.reply.answerError(ecNotAuthorised, "the event is outside the route's access")
+    return
+  if r.isTerminal and r.endCode == ecNotAuthorised:
+    q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
+    return
+  if st.denied(
+    AuthzRequest(
+      action: aaSubscribeEvent,
+      operation: q.bare,
+      consumer: r.consumer,
+      target: r.provider,
+      route: r.id,
+      module: r.selected.module,
+    )
+  ):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
+  let x = st.instances.getOrDefault(r.consumer)
+  if x.isNil or q.attempt != x.current or x.state notin {msLoaded, msReady} or
+      st.shuttingDown:
+    q.reply.answerError(ecNotReady, "the consumer is not live")
+    return
+  inc r.nextSub
+  q.outId[] = r.nextSub
+  let s = subOf(q.handle)
+  retain(s)
+  activate(s, r.nextSub)
+  r.subs.add(q.handle)
   q.reply.answer(Reply())
+
+proc unsubscribe(st: State, q: Request) =
+  ## [SPEC INTERFACE §2.5 l.1446-1459; RUNTIME §7.5 l.1341-1347] An ended
+  ## route answers with its code first; an id that names no active
+  ## subscription of this handle is INVALID_PARAMS (TRANSPORT l.748 through
+  ## RUNTIME l.1012-1016) and changes nothing.
+  let r = st.routes.getOrDefault(q.route)
+  if r.isNil or r.consumer != q.origin.instance:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
+  for i, p in r.subs:
+    let s = subOf(p)
+    if s.id == q.subId and s.generation == q.generation and s.isActive:
+      deactivate(s)
+      r.subs.delete(i)
+      q.reply.answer(Reply(subs: @[p]))
+      return
+  q.reply.answerError(
+    ecInvalidParams, "no active subscription of this handle has that id"
+  )
+
+proc candidates(st: State, q: Request) =
+  ## [SPEC RUNTIME §7.3] The active subscriptions to `q.bare` on the ready
+  ## routes of a ready publisher's current realization, in route and then
+  ## subscription creation order [IMPL].
+  var r = Reply()
+  let x = st.instances.getOrDefault(q.origin.instance)
+  if not x.isNil and q.attempt == x.current and x.state == msReady:
+    for route in st.routes.values:
+      if route.providerInstance != x.id or route.isTerminal:
+        continue
+      for p in route.subs:
+        let s = subOf(p)
+        if s.eventName == q.bare and s.isActive:
+          retain(s)
+          r.subs.add(p)
+  q.reply.answer(r)
+
+proc scoped(st: State, q: Request) =
+  ## [SPEC RUNTIME §7.3.1 l.1254-1273; INTERFACE l.2193-2196] The destination
+  ## of one invocation: the active subscriptions to `q.bare` on its route and
+  ## path generation. An event outside `publish_events` or a revoked route is
+  ## NOT_AUTHORISED; `ready` says whether the destination is open.
+  let r = st.routes.getOrDefault(q.route)
+  if r.isNil:
+    q.reply.answerError(ecNotReady, "the invocation's destination is closed")
+    return
+  if not r.allowsPublish(q.bare):
+    q.reply.answerError(ecNotAuthorised, "the event is outside the route's access")
+    return
+  if r.isTerminal and r.endCode == ecNotAuthorised:
+    q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
+    return
+  var reply = Reply(
+    ready:
+      not r.isTerminal and q.ticket != nil and not q.ticket.cancelled.load and
+      not q.ticket.closed.load
+  )
+  if reply.ready:
+    for p in r.subs:
+      let s = subOf(p)
+      if s.generation == q.generation and s.eventName == q.bare and s.isActive:
+        retain(s)
+        reply.subs.add(p)
+  q.reply.answer(reply)
+
+proc deliver(st: State, q: Request) =
+  ## [SPEC RUNTIME l.1229-1231, l.1275-1283; CA l.973-975; G175] The admission
+  ## of one handler invocation, decided afresh for each: the subscription is
+  ## active, the route ready, the consumer live, both access scopes hold, and
+  ## the publish-event and subscribe-event decisions allow it. An ordinary
+  ## publication skips what fails; an invocation-scoped one stops on a revoked
+  ## route or a denied publish-event decision (NOT_AUTHORISED) or a closed
+  ## destination (NOT_READY), and skips what only concerns the subscriber.
+  let s = subOf(q.handle)
+  let r = st.routes.getOrDefault(s.routeId)
+  let name = q.bare
+  template skip() =
+    q.reply.answer(Reply())
+    return
+
+  template stop(code: ErrorCode, message: string) =
+    q.reply.answerError(code, message)
+    return
+
+  if r.isNil:
+    skip()
+  if q.scoped:
+    if r.isTerminal and r.endCode == ecNotAuthorised:
+      stop(ecNotAuthorised, "the route is " & $r.state)
+    if r.isTerminal or q.ticket == nil or q.ticket.cancelled.load or q.ticket.closed.load:
+      stop(ecNotReady, "the invocation's destination is closed")
+    if not r.allowsPublish(name):
+      stop(ecNotAuthorised, "the event is outside the route's access")
+  else:
+    let x = st.instances.getOrDefault(q.origin.instance)
+    if x.isNil or q.attempt != x.current or x.state != msReady or
+        r.providerInstance != x.id or r.isTerminal or not r.allowsPublish(name):
+      skip()
+  if not s.isActive:
+    skip()
+  let c = st.instances.getOrDefault(r.consumer)
+  if c.isNil or c.state notin {msLoaded, msReady} or not r.allowsSubscribe(name):
+    skip()
+  if st.denied(
+    AuthzRequest(
+      action: aaPublishEvent,
+      operation: name,
+      consumer: r.providerInstance,
+      target: r.consumer,
+      route: r.id,
+      module: r.selected.module,
+    )
+  ):
+    if q.scoped:
+      stop(ecNotAuthorised, "the publication is not authorised")
+    skip()
+  if st.denied(
+    AuthzRequest(
+      action: aaSubscribeEvent,
+      operation: name,
+      consumer: r.consumer,
+      target: r.provider,
+      route: r.id,
+      module: r.selected.module,
+    )
+  ):
+    skip()
+  q.reply.answer(Reply(admitted: true))
 
 # The Runtime thread ---------------------------------------------------------------
 
@@ -1407,7 +1784,7 @@ proc handle(st: State, q: Request) =
       q.reply.answerError(ecNotReady, "the Runtime has not shut down")
       return
     st.done = true
-    q.reply.answer(Reply(busy: st.busy))
+    q.reply.answer(Reply(busy: st.busy + st.callBusy))
   of rqRcPrecheck:
     st.rcPrecheck(q)
   of rqRc:
@@ -1422,6 +1799,21 @@ proc handle(st: State, q: Request) =
     st.releaseHandle(q)
   of rqIdentity:
     q.reply.answer(Reply(id: st.runtimeId))
+  of rqSubscribe:
+    st.subscribe(q)
+  of rqUnsubscribe:
+    st.unsubscribe(q)
+  of rqCandidates:
+    st.candidates(q)
+  of rqScoped:
+    st.scoped(q)
+  of rqDeliver:
+    st.deliver(q)
+  of rqDiagnostics:
+    var r = Reply()
+    for d in st.diagnostics:
+      r.diagnostics.add(d)
+    q.reply.answer(r)
   of rqRoutes:
     var r = Reply()
     for x in st.routes.values:
@@ -1435,6 +1827,7 @@ proc destroyed(st: State, job: int) =
     x.teardown = 0
     st.realizer.finishRelease(x.id)
     x.realization = nil
+    st.endServices(x.services, x.id)
     freeAttemptServices(x.services)
     x.services = nil
     let a = x.attempt
@@ -1451,14 +1844,64 @@ proc destroyed(st: State, job: int) =
     discard st.attempts.pop(job, a)
     st.finishAttempt(a)
 
+proc callLeft(st: State, provider, route: string, ticket: ptr CallTicket) =
+  ## An admitted call has left its provider: its ticket goes, and a provider
+  ## being stopped is released once none is left.
+  let r = st.routes.getOrDefault(route)
+  if r != nil:
+    let i = r.calls.find(ticket)
+    if i >= 0:
+      r.calls.del(i)
+  for a in st.asyncCalls.values:
+    if a.ticket == ticket:
+      a.ticket = nil
+  if ticket != nil:
+    freeTicket(ticket)
+  let p = st.instances.getOrDefault(provider)
+  if p != nil:
+    dec p.inflight
+    if p.inflight == 0 and p.releasePending:
+      st.releaseRealization(p)
+
+proc asyncEvent(st: State, m: Msg) =
+  case m.event
+  of aeSubmit:
+    let c = asyncOf(m.target)
+    let a = AsyncRec(
+      call: m.target,
+      rc: c.rc,
+      consumer: $c.consumer,
+      attempt: $c.attempt,
+      route: $c.route,
+      deadline: c.deadline,
+    )
+    st.asyncCalls[m.target] = a
+    if c.isTerminal:
+      st.asyncTerminal(a)
+    else:
+      a.executing = true
+      st.dispatchCall(m.target)
+  of aeTerminal:
+    let a = st.asyncCalls.getOrDefault(m.target)
+    if a != nil:
+      st.asyncTerminal(a)
+  of aeDeferred:
+    let a = st.asyncCalls.getOrDefault(m.target)
+    if a != nil:
+      a.deferred = m.extra
+      if a.cancelled and cancelKnown(m.extra):
+        st.dispatch(Job(id: st.nextJobId(), kind: jkRequestCancel, deferred: m.extra))
+  of aeHook:
+    st.dispatch(Job(id: st.nextJobId(), kind: jkRequestCancel, deferred: m.extra))
+
 proc handle(st: State, m: sink Msg) =
   case m.kind
   of mkRequest:
     st.handle(m.request)
     return
-  of mkBound, mkInitialized, mkDestroyed, mkJobDone:
+  of mkBound, mkInitialized, mkDestroyed, mkJobDone, mkCompleted:
     dec st.busy
-  of mkCallDone:
+  of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle:
     discard
   case m.kind
   of mkBound:
@@ -1472,18 +1915,32 @@ proc handle(st: State, m: sink Msg) =
   of mkDestroyed:
     st.destroyed(m.job)
   of mkCallDone:
-    let r = st.routes.getOrDefault(m.route)
-    if r != nil:
-      let i = r.calls.find(m.ticket)
-      if i >= 0:
-        r.calls.del(i)
-    if m.ticket != nil:
-      freeShared(m.ticket)
-    let p = st.instances.getOrDefault(m.provider)
-    if p != nil:
-      dec p.inflight
-      if p.inflight == 0 and p.releasePending:
-        st.releaseRealization(p)
+    st.callLeft(m.provider, m.route, m.ticket)
+  of mkDiagnostic:
+    st.diagnose(m.text)
+  of mkAsync:
+    st.asyncEvent(m)
+  of mkCallJobDone:
+    dec st.callBusy
+    let a = st.asyncCalls.getOrDefault(m.target)
+    if a != nil:
+      a.executing = false
+      st.maybeForget(a)
+  of mkCompleted:
+    let a = st.asyncCalls.getOrDefault(m.target)
+    if a != nil:
+      a.completing = false
+      st.maybeForget(a)
+  of mkDeferredIdle:
+    var owner: AsyncRec
+    for a in st.asyncCalls.values:
+      if a.deferred == m.target:
+        owner = a
+    let (provider, route, ticket) = finishDeferred(m.target)
+    st.callLeft(provider, route, ticket)
+    if owner != nil:
+      owner.deferred = nil
+      st.maybeForget(owner)
   of mkRequest, mkJobDone:
     discard
   if st.shuttingDown and not st.shutdownDone:
@@ -1493,6 +1950,10 @@ proc handle(st: State, m: sink Msg) =
 
 proc checkDeadlines(st: State) =
   let now = getMonoTime()
+  for a in st.records:
+    if not a.terminal and a.deadline.isSome and now >= a.deadline.get:
+      # [SPEC INTERFACE l.2059-2068] TIMEOUT, without waiting for the provider.
+      st.endCall(a, failure(ecTimeout, "the call timed out"), okTimeout)
   for x in st.instances.values:
     let a = x.attempt
     if a != nil and a.phase in {apBind, apInit} and not a.expired and not a.cancelled and
@@ -1540,6 +2001,9 @@ proc nextDeadline(st: State): Opt[MonoTime] =
       consider(w.deadline)
   if st.shuttingDown and not st.shutdownDone:
     consider(st.shutdownDeadline)
+  for a in st.asyncCalls.values:
+    if not a.terminal and a.deadline.isSome:
+      consider(a.deadline.get)
   t
 
 proc runtimeLoop(s: ptr Shared) =
@@ -1591,6 +2055,11 @@ proc runtimeLoop(s: ptr Shared) =
       s.jobs.send(Job(kind: jkQuit))
     except Exception:
       discard
+  for i in 0 ..< s.callSpawned:
+    try:
+      s.calls.send(CallJob(kind: cjQuit))
+    except Exception:
+      discard
   s.finished = true
 
 proc runtimeMain(s: ptr Shared) {.thread.} =
@@ -1608,6 +2077,7 @@ proc newEngine*(cfg: EngineConfig): Engine =
   result = createShared(Shared)
   result.inbox.open()
   result.jobs.open()
+  result.calls.open()
   result.bell = newBell()
   initLock(result.slotLock)
   try:
@@ -1699,6 +2169,11 @@ proc routes*(e: Engine): seq[LogosNSRuntimeControlRouteRecord] =
   ## Every route record, in creation order (host and test observation).
   e.call(Request(kind: rqRoutes)).routes
 
+proc diagnostics*(e: Engine): seq[string] =
+  ## [SPEC RUNTIME l.1227] The retained diagnostics, oldest first: dropped
+  ## publications, ignored provider completions, long delivery waits.
+  e.call(Request(kind: rqDiagnostics)).diagnostics
+
 proc shutdown*(e: Engine) =
   ## [SPEC RUNTIME §10.2] Host-initiated graceful shutdown; returns once every
   ## realization is released or its cleanup failure is recorded.
@@ -1716,9 +2191,12 @@ proc close*(e: Engine): bool =
     return false
   for i in 0 ..< e.spawned:
     joinThread(e.workers[i])
+  for i in 0 ..< e.callSpawned:
+    joinThread(e.callWorkers[i])
   # No thread sends to any channel or rings the bell any more.
   e.inbox.close()
   e.jobs.close()
+  e.calls.close()
   e.closeSlots()
   deinitLock(e.slotLock)
   freeBell(e.bell)

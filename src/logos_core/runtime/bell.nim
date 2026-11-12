@@ -10,10 +10,13 @@
 ## and its wait is not lost. It lives in malloc'd memory, so it never moves and
 ## holds no garbage-collected value: any thread may ring it under either memory
 ## manager.
+##
+## `timedWait` is the same timed wait for a `std/locks` condition variable,
+## which the event delivery gates use to check a long wait (G176).
 
 {.push raises: [].}
 
-import std/[monotimes, times]
+import std/[locks, monotimes, times]
 import results
 when defined(windows):
   type
@@ -147,6 +150,35 @@ proc waitSlice(b: Bell, ms: int64) =
     at.tv_sec = posix.Time(sec)
     at.tv_nsec = typeof(at.tv_nsec)(nsec)
     discard pthread_cond_timedwait(b.cond, b.lock, addr at)
+
+proc timedWait*(c: var Cond, l: var Lock, ms: int) =
+  ## [IMPL] One wait of at most `ms` milliseconds on a `std/locks` condition
+  ## variable whose lock `l` is held (`std/locks` has none). The caller
+  ## rechecks its condition: the wait may also end early.
+  when defined(windows):
+    discard sleepConditionVariableCS(
+      cast[ptr ConditionVariable](addr c), cast[ptr CriticalSection](addr l), uint32(ms)
+    )
+  else:
+    var now: Timespec
+    discard clock_gettime(CLOCK_REALTIME, now)
+    var sec = int64(now.tv_sec) + ms div 1000
+    var nsec = int64(now.tv_nsec) + (ms mod 1000) * 1_000_000
+    if nsec >= 1_000_000_000:
+      inc sec
+      nsec -= 1_000_000_000
+    var at: Timespec
+    at.tv_sec = posix.Time(sec)
+    at.tv_nsec = typeof(at.tv_nsec)(nsec)
+    when defined(ios):
+      # `std/locks` allocates the C objects separately on iOS.
+      discard pthread_cond_timedwait(
+        cast[ptr Pthread_cond](c), cast[ptr Pthread_mutex](l), addr at
+      )
+    else:
+      discard pthread_cond_timedwait(
+        cast[ptr Pthread_cond](addr c), cast[ptr Pthread_mutex](addr l), addr at
+      )
 
 proc wait*(b: Bell, deadline = Opt.none(MonoTime)) =
   ## Returns once `b` has been rung since the previous return, or once

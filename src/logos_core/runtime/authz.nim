@@ -31,7 +31,11 @@ type
     aaExecute = "execute" ## execution authorization before realization (§3.6)
     aaRoute = "route" ## establishing, renewing or revoking a route
     aaCall = "call" ## an ordinary provider method call
-    aaEvent = "event" ## delivering an event to a subscriber
+    aaPublishEvent = "publish-event"
+      ## [G175] delivering a publisher's event on one subscriber route: the
+      ## consumer is the publisher, the target the subscriber (CA l.236-245)
+    aaSubscribeEvent = "subscribe-event"
+      ## [G175] a subscriber activating or receiving an event on its route
     aaDiscover = "discover" ## disclosing a provider set
     aaObserve = "observe" ## observing Runtime-owned state
 
