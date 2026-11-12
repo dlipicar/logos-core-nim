@@ -885,6 +885,11 @@ proc events(o: Owner, kind: IoEventKind, conn = high(uint64), start = 0): seq[Io
     if ev.kind == kind and (conn == high(uint64) or ev.conn == conn):
       result.add(ev)
 
+const BigWait = 20_000 * Slow
+  ## A wait on multi-MiB payloads. One I/O thread serves both ends, and a debug
+  ## or sanitizer build on a shared runner encodes, checks and copies each MiB
+  ## several times slower than the default waits allow.
+
 proc pumpUntil(
     owners: openArray[Owner], cond: proc(): bool, timeoutMs = 5000 * Slow
 ): bool =
@@ -1108,12 +1113,13 @@ suite "trnio.calls: calls over sockets (TRANSPORT §4, §6, §7, §8.1, §8.6; A
     for tag in 1'u64 .. 4:
       o.callExists(1, tag)
     let closed = o.waitN(evClosed, callee)
-    check closed.len == 1
-    check closed[0].cause == ccProtocol and closed[0].code == ecTransport
+    check closed.len == 1 and closed[0].cause == ccProtocol and
+      closed[0].code == ecTransport
     let rs = o.waitN(evResponse, 1, 4)
     check rs.len == 4 and rs.allIt(it.outcome.failure.code == ecTransport)
     check o.events(evDispatch, callee).len == 1
-    check closed[0].ids == o.events(evDispatch, callee).mapIt(it.requestId)
+    check closed.len == 1 and
+      closed[0].ids == o.events(evDispatch, callee).mapIt(it.requestId)
     let cc = o.waitN(evClosed, 1)
     check cc.len == 1 and cc[0].cause == ccPeerError and cc[0].code == ecTransport
     o.done(ep)
@@ -1140,8 +1146,8 @@ suite "trnio.calls: calls over sockets (TRANSPORT §4, §6, §7, §8.1, §8.6; A
     for id in ids:
       raw.put(raw.caller.cancel(id).get)
     let closed = o.waitN(evClosed, high(uint64))
-    check closed.len == 1
-    check closed[0].cause == ccProtocol and closed[0].code == ecTransport
+    check closed.len == 1 and closed[0].cause == ccProtocol and
+      closed[0].code == ecTransport
     # It closed before every CANCELLED was committed.
     check o.events(evStop).len < 1000
     discard fdClose(raw.fd)
@@ -1236,7 +1242,7 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     o.publish(1, Started, cborMap())
     let e = o.waitN(evEvent, 1)
     check e.len == 1 and e[0].eventSub == 7 and e[0].eventName == Started
-    check e[0].eventData == encodeCbor(cborMap())
+    check e.len == 1 and e[0].eventData == encodeCbor(cborMap())
     o.unsubscribe(1, 7)
     let u = o.waitN(evSubscription, 1, 2)
     check u.len == 2 and u[1].subscriptionOp == mkUnsubscribe
@@ -1285,7 +1291,7 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     o.publish(1, Started, cborMap())
     let f = o.waitN(evPublishFailed, callee)
     check f.len == 1 and f[0].pubFailKind == peNotInContract
-    check f[0].pubFailCode == ecNotAuthorised
+    check f.len == 1 and f[0].pubFailCode == ecNotAuthorised
     o.publish(1, Progress, progress(1))
     let e = o.waitN(evEvent, 1)
     check e.len == 1 and e[0].eventName == Progress
@@ -1318,16 +1324,16 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     let big = "x".repeat(4 * MiB)
     for i in 0'u64 ..< 12:
       o.publish(1, Progress, progress(i, big))
-    let closed = o.waitN(evClosed, callee, timeoutMs = 10_000 * Slow)
+    let closed = o.waitN(evClosed, callee, timeoutMs = BigWait)
     check closed.len == 1 and closed[0].cause == ccOverflow
-    check closed[0].code == ecTransport
+    check closed.len == 1 and closed[0].code == ecTransport
     # The caller reads on: the committed Events in order, then the ProtocolError.
     o.autoRelease = true
     var credit = 0
     for e in o.events(evEvent, 1):
       credit += e.credit
     o.release(1, credit)
-    let cc = o.waitN(evClosed, 1, timeoutMs = 10_000 * Slow)
+    let cc = o.waitN(evClosed, 1, timeoutMs = BigWait)
     check cc.len == 1 and cc[0].cause == ccPeerError and cc[0].code == ecTransport
     let es = o.events(evEvent, 1)
     check es.len < 12
@@ -1343,8 +1349,9 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     raw.put(raw.caller.subscribe(1, Progress).get)
     check o.waitN(evSubscribe, high(uint64)).len == 1
     o.settle(20)
-    o.publish(1, Progress, progress(0, "x".repeat(8 * MiB)))
-    let closed = o.waitN(evClosed, high(uint64), timeoutMs = 3000 * Slow)
+    # Far more than the socket's send buffer (no SO_SNDBUF is set).
+    o.publish(1, Progress, progress(0, "x".repeat(2 * MiB)))
+    let closed = o.waitN(evClosed, high(uint64), timeoutMs = BigWait)
     check closed.len == 1 and closed[0].cause == ccNotWritable
     discard fdClose(raw.fd)
     o.done(ep)
@@ -1389,7 +1396,7 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     o.publishScoped(callee, a, Progress, progress(2))
     let f = o.waitN(evPublishFailed, callee)
     check f.len == 1 and f[0].pubFailKind == peNoDestination
-    check f[0].pubFailRequest == Opt.some(a)
+    check f.len == 1 and f[0].pubFailRequest == Opt.some(a)
     o.callExists(1, 2)
     let b = o.waitN(evDispatch, callee, 2)[1].requestId
     o.cancel(1, 2)
@@ -1407,14 +1414,14 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     check o.waitN(evSubscription, 1).len == 1
     let huge = progress(0, "x".repeat(int(MinFrameLimit)))
     o.publish(1, Progress, huge, tlReport)
-    let f = o.waitN(evPublishFailed, callee)
+    let f = o.waitN(evPublishFailed, callee, timeoutMs = BigWait)
     check f.len == 1 and f[0].pubFailKind == peTooLarge and f[0].pubFailCode == ecModule
     o.callExists(1, 1)
-    check o.response(1, 1).code == ecOk
+    check o.response(1, 1, BigWait).code == ecOk
     o.publish(1, Progress, huge, tlClose)
-    let closed = o.waitN(evClosed, callee)
+    let closed = o.waitN(evClosed, callee, timeoutMs = BigWait)
     check closed.len == 1 and closed[0].cause == ccProtocol
-    check closed[0].code == ecTransport
+    check closed.len == 1 and closed[0].code == ecTransport
     check o.events(evEvent, 1).len == 0
     o.done(ep)
 
@@ -1432,7 +1439,7 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     let big = "x".repeat(4 * MiB)
     for i in 0'u64 ..< 6:
       o.publish(1, Progress, progress(i, big))
-    let first = o.waitN(evEvent, 1, 4)
+    let first = o.waitN(evEvent, 1, 4, timeoutMs = BigWait)
     check first.len == 4
     o.settle(200)
     check o.events(evEvent, 1).len == 4
@@ -1440,7 +1447,7 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     for e in first:
       credit += e.credit
     o.release(1, credit)
-    let all = o.waitN(evEvent, 1, 6)
+    let all = o.waitN(evEvent, 1, 6, timeoutMs = BigWait)
     check all.len == 6
     for i, e in all:
       check decodeValue(e.eventData).get.field("bytes_sent") == cbor(uint64(i))
@@ -1470,7 +1477,7 @@ suite "trnio.termination: the session's end (TRANSPORT §8.1)":
     check o.response(1, 1).code == ecOk
     let closed = o.waitN(evClosed, callee, timeoutMs = 6000 * Slow)
     check closed.len == 1 and closed[0].cause == ccTerminated
-    check closed[0].code == ecNotAuthorised
+    check closed.len == 1 and closed[0].code == ecNotAuthorised
     let cc = o.waitN(evClosed, 1)
     check cc.len == 1 and cc[0].cause == ccPeerError and cc[0].code == ecNotAuthorised
     check o.events(evEvent, 1).len == 0
@@ -1504,11 +1511,16 @@ suite "trnio.termination: the session's end (TRANSPORT §8.1)":
     raw.put(raw.caller.subscribe(1, Progress).get)
     check o.waitN(evSubscribe, high(uint64)).len == 1
     o.settle(20)
-    o.publish(1, Progress, progress(0, "x".repeat(8 * MiB)))
+    # Far more than the socket's send buffer (no SO_SNDBUF is set).
+    o.publish(1, Progress, progress(0, "x".repeat(2 * MiB)))
     # Unread Requests stay unread.
     for _ in 0 ..< 3:
       raw.put(raw.caller.request("exists", existsParams()).get[1])
     let callee = o.events(evSubscribe)[0].conn
+    # Commands are handled in order: once call 1 on the unknown connection 99
+    # fails, the Event is committed, and the clock starts.
+    o.callExists(99, 1)
+    check o.waitN(evLocalFailure, 99, timeoutMs = BigWait).len == 1
     let start = getMonoTime()
     o.terminate(callee)
     let closed = o.waitN(evClosed, callee)
@@ -1533,7 +1545,7 @@ suite "trnio.limits: aggregate limits (TRANSPORT §8.6)":
     check writeAll(b.fd, @(prefixOf(int(MinFrameLimit))) & newSeq[byte](1000))
     let ms = b.readMsgs(o, 1, 3000)
     check ms.len == 1 and ms[0].kind == mkProtocolError
-    check ms[0].protocolError.code == ecTransport
+    check ms.len == 1 and ms[0].protocolError.code == ecTransport
     discard fdClose(a.fd)
     discard fdClose(b.fd)
     o.done(ep)
@@ -1641,9 +1653,8 @@ suite "trnio.hello: pipelined frames (TRANSPORT §2.3, §3.1)":
     check writeAll(fd, helloBytes(o.issue()) & req)
     var raw = Raw(fd: fd, caller: caller, reader: newFrameReader())
     let ms = raw.readMsgs(o, 2)
-    check ms.len == 2
-    check ms[0].kind == mkHello
-    check ms[1].kind == mkResponse and ms[1].response.ok
+    check ms.len == 2 and ms[0].kind == mkHello
+    check ms.len == 2 and ms[1].kind == mkResponse and ms[1].response.ok
     let est = o.events(evEstablished)
     check est.len == 1 and o.events(evDispatch, est[0].conn).len == 1
     discard fdClose(fd)

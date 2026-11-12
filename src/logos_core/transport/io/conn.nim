@@ -613,6 +613,11 @@ proc onWritable(arg: pointer) {.gcsafe, raises: [].} =
 proc onStall(arg: pointer) {.gcsafe, raises: [].} =
   ## [SPEC TRANSPORT §3.2, §5.2] Output pending and no byte written for
   ## `writeStallTimeout`: the peer is not writable. Close without ProtocolError.
+  ## [IMPL] The verdict follows a write attempt. The dispatcher runs expired
+  ## timers before the writable callbacks of the same turn, so once the I/O
+  ## thread was busy past the deadline the clock alone would blame a peer that
+  ## was never offered the bytes. A socket that accepts a byte now is not
+  ## stalled; one that accepts none has not been read for the whole timeout.
   let io = theIo
   if io.isNil:
     return
@@ -624,6 +629,10 @@ proc onStall(arg: pointer) {.gcsafe, raises: [].} =
     return
   if Moment.now() - c.lastProgress < nanoseconds(io.config.writeStallTimeout):
     io.armStall(c)
+    return
+  let before = c.lastProgress
+  io.flush(c)
+  if c.phase == phDone or c.writeFailed or c.outq.len == 0 or c.lastProgress != before:
     return
   io.dropOutput(c)
   if c.phase == phLinger:
