@@ -14,7 +14,7 @@ default = "deferred:tier-4"
 # Phase 3 (tier 3, sans-I/O): the envelope, framing and the sender's size check,
 # deterministic CBOR and payload depth, Hello and route tickets, correlation,
 # requests and commitments, subscriptions, cancellation, multiplexing, route
-# termination, validation and evolution. Tier 4 step 10a (DECISIONS I82): the
+# termination, validation and evolution. Tier 4 step 10a (DECISIONS I83): the
 # unix-stream I/O layer, event output, execution slots, route access, test hooks
 # and the aggregate limits. The Runtime's side of routes is 10b; Windows and the
 # remote profiles tier 5.
@@ -36,7 +36,7 @@ default = "deferred:tier-4"
 # keeps the Loader and the Capability Authority direct, so nothing uses it.
 "§8.1.2" = "out-of-scope:a MAY profile left unused: G48(a) binds the Loader and Capability Authority directly"
 # §8.2 (tier 4, transport I/O): endpoints, peer credentials checked before any
-# byte, and the Hello over sockets (DECISIONS I82). §8.2.1 (Windows) waits for the
+# byte, and the Hello over sockets (DECISIONS I83). §8.2.1 (Windows) waits for the
 # G107 spike.
 "§8.2" = "claimed"
 "§8.2.1" = "deferred:tier-5"
@@ -44,7 +44,7 @@ default = "deferred:tier-4"
 "§8.4" = "deferred:tier-5"
 # §8.5: the test hooks, by inspection (conformance/inspection/TRN.toml).
 "§8.5" = "claimed"
-# §8.6: per-connection and aggregate limits (DECISIONS I52, I82; docs/CONFORMANCE.md).
+# §8.6: per-connection and aggregate limits (DECISIONS I52, I83; docs/CONFORMANCE.md).
 "§8.6" = "claimed"
 "§9" = "claimed"
 "§10" = "claimed"

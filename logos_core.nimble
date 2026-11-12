@@ -24,7 +24,7 @@ requires "unittest2 == 0.3.0"
 requires "https://github.com/vacp2p/nim-boringssl == 0.0.14"
 # Raw deflate and CRC-32 for LGX's gzip layer (PM §7.1).
 requires "zlib == 0.3.0"
-# The transport I/O thread's event loop (G77(a); DECISIONS I82). Only
+# The transport I/O thread's event loop (G77(a); DECISIONS I83). Only
 # chronos/[asyncloop, timer, threadsync] are imported; stew is compiled with them, and
 # httputils and bearssl (chronos's HTTP and TLS layers) are locked but never compiled.
 # Every transitive package is pinned exactly, and before chronos: nimble 0.20.1 caches a

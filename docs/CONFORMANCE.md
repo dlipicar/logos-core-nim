@@ -64,7 +64,7 @@ heading under a numbered one.
 
 ## Unix-stream endpoints and peer checks
 
-TRANSPORT §8.2 and §9.1 as built in `src/logos_core/transport/io/` (DECISIONS G58, I82):
+TRANSPORT §8.2 and §9.1 as built in `src/logos_core/transport/io/` (DECISIONS G58, I83):
 
 - **Layout.** `<base>/<8 hex>/logos_<module>.sock`. The base is a real directory that only the
   effective uid can write to, or a root-owned sticky directory such as `/tmp` `[IMPL]`. The
@@ -96,7 +96,7 @@ TRANSPORT §8.2 and §9.1 as built in `src/logos_core/transport/io/` (DECISIONS 
 
 ## Transport limits
 
-TRANSPORT §8.6 (TRN-0378, TRN-0380) as built in `src/logos_core/transport/` (DECISIONS I52, I82).
+TRANSPORT §8.6 (TRN-0378, TRN-0380) as built in `src/logos_core/transport/` (DECISIONS I52, I83).
 Every value is a field of `TransportConfig` (`io/api.nim`), checked before a transport I/O thread
 starts: finite and positive, every input pool at least `frameLimit` so a maximal frame can always be
 admitted, and `connOutputBytes` at least `peerFrameLimit` plus `controlReserve`. The defaults are
