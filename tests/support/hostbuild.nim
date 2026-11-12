@@ -79,10 +79,13 @@ proc buildEmbedMain*(library: string): string =
     "-o",
     result,
     root / "tests" / "host" / "embed_main.c",
-    "-L" & dir,
-    "-llogos_runtime",
-    "-Wl,-rpath," & dir,
   ]
+  when sanitizerFlags.len > 0:
+    # The runtimes' defaults and suppressions, as every Nim test program has them
+    # (config.nims). The program needs its own: the library's copy comes after the
+    # runtime's weak defaults in symbol lookup order, so the runtime never sees it.
+    args.add(root / "tests" / "support" / "sanitizers.c")
+  args.add(["-L" & dir, "-llogos_runtime", "-Wl,-rpath," & dir])
   args.add(sanitizerFlags)
   let (output, code) = execCmdEx(quoteShellCommand(args))
   doAssert code == 0, "building embed_main failed:\n" & output
