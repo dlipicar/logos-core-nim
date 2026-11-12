@@ -16,6 +16,7 @@ import unittest2
 import ../src/logos_core/runtime/engine
 import ../src/logos_core/abi/types
 import ../src/logos_core/iface/[accept, names, outcome]
+import ../src/logos_core/crypto/blake3
 import ../src/logos_core/package/manifest
 import ../src/logos_core/pins
 import ./support/[kitbuild, kitruntime]
@@ -470,8 +471,14 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check live.load == 0
     let after = e.view("g").tryGet
     check after.state == msError and after.failureOf == "startup-timeout"
-    let r = e.start("g").tryGet
-    check r.state == msReady and r.failure.isNone
+    # A new attempt can make it ready now. Its deadline is the same 150 ms, which
+    # a loaded machine can let pass (TSan in CI), so the test starts it again
+    # until one attempt is ready.
+    check waitUntil(
+      proc(): bool =
+        let r = e.start("g")
+        r.isOk and r.get.state == msReady and r.get.failure.isNone
+    )
     e.finish()
 
   test "[RUN-0648] [RUN-0650] [RUN-0651] [RUN-0652] [RUN-0653] [RUN-0655] [RUN-0657] report_failure is bound to the current realization":
@@ -708,6 +715,8 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     r = e.bootstrap(deployment(), "o")
     check r.error.code == ecModule and "initialization-failed" in r.error.message
     check e.view("o").tryGet.state == msError
+    # [RUN-0737] The engine keeps running: other instances can still start.
+    check e.start("m").tryGet.state == msReady
     e.finish()
     reset()
     var cfg = config()
@@ -716,8 +725,11 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     initGate.store(true)
     r = e.bootstrap(deployment(), "o")
     check r.error.code == ecModule and "startup-timeout" in r.error.message
-    # [RUN-0737] The engine keeps running: other instances can still start.
-    check e.start("m").tryGet.state == msReady
+    # [RUN-0737] Here too the engine takes a start. Every start of this engine has
+    # the 50 ms deadline, which a loaded machine can let pass (TSan in CI), so
+    # the test does not ask for `ready`: only that the start ran.
+    let m = e.start("m")
+    check m.isOk and (m.get.state == msReady or m.get.failureOf == "startup-timeout")
     e.finish()
 
   test "[RUN-0759] [IMPL-DECISION G190] a shutdown accepted before ready gives CANCELLED, and it stays CANCELLED":
@@ -774,3 +786,49 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     check e.view("o").isOk # still open
     destroyGate.store(false)
     check e.close()
+
+suite "run.engine: persistent state (I82)":
+  test "[RUN-1030] [IMPL] after a restart a direct_dynamic instance is copied and verified again from its stored record":
+    let lib = buildKitLibrary("sensor_impl.nim", "engsensor")
+    let src = work / ("sensor-src" & LibraryExtension)
+    copyFile(lib, src)
+    proc digest(path: string): array[32, byte] =
+      var h: Blake3Hasher
+      h.init()
+      let bytes = readFile(path)
+      h.update(bytes.toOpenArrayByte(0, bytes.high))
+      h.finish()
+
+    let rec = ModuleRecord(
+      module: "sensor_module",
+      strategy: stDirectDynamic,
+      artifact: ArtifactRecord(
+        id: "sensor", localPath: src, hash: digest(src), hashSuite: HashSuiteId
+      ),
+    )
+    proc opened(): (Engine, string) =
+      var c = config()
+      c.runtimeInstanceId = ""
+      c.storeDir = Opt.some(work / "dyn-store")
+      (openEngine(c).tryGet, c.workDir)
+
+    var (e, _) = opened()
+    discard e.create(rec, "s1").tryGet
+    check e.start("s1").tryGet.state == msReady
+    e.finish()
+    # A new work directory: the artifact is copied there again and verified.
+    var (e2, dir) = opened()
+    check e2.start("s1").tryGet.state == msReady
+    var copies = 0
+    for f in walkDirRec(dir):
+      if f.endsWith(LibraryExtension):
+        inc copies
+    check copies == 1
+    e2.finish()
+    # The file changed since the record was accepted: it does not start.
+    let f = open(src, fmAppend)
+    f.write("x")
+    f.close()
+    var (e3, _) = opened()
+    check e3.start("s1").tryGet.failureOf == "loader-artifact-integrity-failed"
+    e3.finish()

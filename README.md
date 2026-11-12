@@ -20,7 +20,9 @@ The specs are being revised, so the work is ordered by how settled each area is
   for C callers (INTERFACE §2.7.2, App A.5; I73).
 - Tier 4, started: the direct-mode Runtime slice. An in-process Module Loader for `direct_static` and
   `direct_dynamic` code, the module-instance lifecycle, Runtime Control, direct routes, events and
-  asynchronous calls (I74–I78), and the Host Embedding API, `liblogos_runtime` (RUNTIME §13; I81).
+  asynchronous calls (I74–I78), the Host Embedding API, `liblogos_runtime` (RUNTIME §13; I81), and
+  persistent Runtime state across restarts, with `recover_module`, `retire_module` and
+  `create_module` (I82).
 - Tier 3, without I/O: the TRANSPORT envelope, framing, Hello and route tickets, payload
   commitments, cancellation and multiplexing as codecs and state machines; and the Package Manager's
   package artifacts: the manifest and its commitment, package-signing trust input, COSE_Sign1, LGX
@@ -93,6 +95,14 @@ With Nix, which also runs nph and the spec checks:
 
 ```bash
 nix flake check -L
+```
+
+CI splits the checks into groups and builds each Linux group in its own job: `orc-spec` (orc,
+nph, lint and the spec checks), `refc-release`, `asan`, `tsan` and `msan`. One group builds alone
+with:
+
+```bash
+nix build -L --keep-going .#ciGroups.asan
 ```
 
 ```bash

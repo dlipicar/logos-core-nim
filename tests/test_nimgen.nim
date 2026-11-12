@@ -25,6 +25,7 @@ suite "ifc.nim-types: generated modules (D29)":
     check generatedCommonMirrors().get == readFile(commonMirrorsPath)
     check generatedRcTypes().get == readFile(rcTypesPath)
     check generatedHostConfigTypes().get == readFile(hostConfigTypesPath)
+    check generatedStoreTypes().get == readFile(storeTypesPath)
     for f in nimFixtures:
       checkpoint f.module
       check f.generated.get == readFile(f.fixturePath)
@@ -38,8 +39,56 @@ suite "ifc.nim-types: generated modules (D29)":
     check stamp in readFile(commonMirrorsPath)
     check stamp in readFile(rcTypesPath)
     check stamp in readFile(hostConfigTypesPath)
+    check stamp in readFile(storeTypesPath)
     for f in nimFixtures:
       check stamp in readFile(f.fixturePath)
+
+  test "[IMPL] the stored module record repeats the host configuration's rules":
+    # store.cddl's lcn.rs_record is lcn.app_module without `instance`, plus
+    # the configuration commitment CONFIG will need (DECISIONS I82).
+    proc rules(path: string): seq[(string, string)] =
+      var name, body: string
+      for line in readFile(path).splitLines & @[""]:
+        if line.startsWith(";"):
+          continue
+        if line.len == 0:
+          if name.len > 0:
+            result.add((name, body))
+          name = ""
+          body = ""
+        elif name.len == 0 and " =" in line:
+          name = line.split(" =")[0]
+          body = line.split(" =", 1)[1] & "\n"
+        else:
+          body.add(line & "\n")
+
+    proc normal(body: string): string =
+      for line in body.splitLines:
+        let t = line.strip
+        if t.startsWith("instance:") or t.startsWith("? configuration_commitment:"):
+          continue
+        result.add(t.replace("lcn.app_", "lcn.rs_") & "\n")
+
+    var app, rs: seq[(string, string)]
+    for (n, b) in rules(hostConfigPrimary):
+      app.add(
+        (n.replace("lcn.app_module", "lcn.rs_record").replace("lcn.app_", "lcn.rs_"), b)
+      )
+    rs = rules(storePrimary)
+    for name in [
+      "lcn.rs_record", "lcn.rs_path", "lcn.rs_implementation", "lcn.rs_artifact",
+      "lcn.rs_requirement", "lcn.rs_permission",
+    ]:
+      checkpoint name
+      var a, r: string
+      for (n, b) in app:
+        if n == name:
+          a = normal(b)
+      for (n, b) in rs:
+        if n == name:
+          r = normal(b)
+      check a.len > 0
+      check a == r
 
   test "names Nim cannot tell apart are refused":
     # C keeps `logos_demo_A_b_t` and `logos_demo_Ab_t` apart; Nim's identifier

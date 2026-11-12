@@ -20,3 +20,7 @@ reason = "Host duties: functions of the INTERFACE signature at the registered ad
 [[item]]
 ids = ["RUN-0744"]
 reason = "runtime/native.nim probeNative converts every resolved address to its INTERFACE signature (ModuleNameFn, ModuleInitFn, ModuleDestroyFn and the provider and per-method function types) before any call; the generic logos_runtime_symbol_address_t is kept only as an untyped pointer in the static table (StaticRegistration.symbols) and never called."
+
+[[item]]
+ids = ["RUN-1011", "RUN-1021"]
+reason = "Negatives over runtime/engine.nim (DECISIONS I82). RUN-1011: execution for a retained origin is decided by a current authorization request at every attempt (execute: aaExecute with the origin as consumer; test [RUN-0692] in tests/test_recovery.nim), never inferred from the origin record being kept or its instance still being known, and retirement does not change that for anyone; this Runtime holds no intents for other Runtimes. RUN-1021: retireInst removes the instance record, keeps a tombstone and drops the instance's create_module keys, and nothing on that path uninstalls a package, revokes a grant, erases history, moves a state directory or hands an assignment or authority to another instance; the state directory surviving retirement is tested ([RUN-1020] in tests/test_recovery.nim)."

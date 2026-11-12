@@ -1,0 +1,6 @@
+# MODULE LOADER requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["LDR-0042"]
+reason = "A negative over the whole realizer: per-instance state reaches the module only through logos_module_init_input_t.state_dir, which runtime/realizer.nim fills from the realization request's mapped assignment (tests [LDR-0039], [LDR-0041] and [RUN-0275]). No code under src/ mutates the process environment: `grep -rnE 'putEnv|putenv|setenv|unsetenv|delEnv' src/` finds nothing (DECISIONS I82)."

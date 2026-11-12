@@ -78,15 +78,30 @@
 ## result (G60). `tryClose` refuses while module code runs on a worker and
 ## leaves the Runtime thread running, so it can be tried again.
 ##
+## [IMPL] Persistent Runtime state (step 6, `store.nim`; DECISIONS I82). With
+## a `storeDir` the engine keeps one snapshot of the Runtime-owned persistent
+## state, rewritten on the Runtime thread at every commit before the change is
+## exposed (RUNTIME l.3505). A commit that accepts an operation (`accept`:
+## intent, an attempt, a creation, a retirement, a refreshed record) is written
+## first and rolled back, MODULE_ERROR, when the write fails. `ready` is
+## written first too; while its write fails the instance stays `loaded` and
+## the write is retried every second until the startup deadline. Any other
+## commit (`commit`: stopping, unloaded, error, a refused execution, a stop's
+## intent cancellation) withdraws at once, then writes, then exposes; when the
+## write fails nothing is exposed: observers keep the last written view, and a
+## reply that would carry the view is MODULE_ERROR. The write is retried every
+## second, at every commit and before every lifecycle request; the first that
+## succeeds exposes every change held back (U6 option (b); l.3507). Without a
+## `storeDir` nothing is written and every commit is exposed at once.
+##
 ## Not yet built: the other Runtime Control methods, Runtime Control
-## subscriptions (G178), remote Runtimes, `recover_module` and
-## `retire_module`, and persistence of execution state and routes.
+## subscriptions (G178), remote Runtimes, and persistence of routes.
 
 {.push raises: [].}
 
 import
   std/[
-    atomics, deques, locks, monotimes, sets, strutils, sysrand, tables, times,
+    atomics, deques, locks, monotimes, sequtils, sets, strutils, sysrand, tables, times,
     typedthreads,
   ]
 from std/os import sleep
@@ -96,7 +111,7 @@ import ../base/perthread
 import ../cbor/utf8
 import ../commitment
 import ../iface/[accept, outcome]
-import ./[asynccall, bell, bindings, callside, events, invoke, plumbing]
+import ./[asynccall, bell, bindings, callside, events, invoke, plumbing, store]
 
 export plumbing
 
@@ -105,6 +120,9 @@ type
   AttemptPhase = enum
     apBind
     apInit
+    apReadyPending
+      ## [IMPL] the realization is made and checked; `ready` waits for its
+      ## write (I82)
     apCleanup ## the context made by the attempt is being destroyed
     apDone
 
@@ -119,6 +137,7 @@ type
     cancelled: bool ## an explicit stop or shutdown was ordered after it
     expired: bool ## the startup deadline passed
     failed: bool ## the attempt failed or a failure was reported
+    provides: bool ## its realization exposes a provider view once `ready`
     waiters: seq[Waiter]
     services: ptr AttemptServices
       ## its Runtime Control binding and invocation access, until the
@@ -159,6 +178,22 @@ type
       ## invocations included until they are idle (INTERFACE l.2155-2158)
     releasePending: bool ## `realization` is released once `inflight` is zero
     orchestration: bool ## [G53] the instance the bootstrap input names
+    created: bool ## made by `create_module`, not named by the host
+    configured: bool ## named by the host configuration at bootstrap
+    pending: bool ## [IMPL] a committed change not yet written, so not yet exposed (I82)
+    shown: InstanceView ## the view last exposed, which observers see while `pending`
+
+  Saved = object ## What an accepting commit rolls back when its write fails.
+    record: ModuleRecord
+    state: ModuleState
+    failure: Opt[Failure]
+    revision: uint64
+    intent: Intent
+    intentRevision: uint64
+    intentOrigin: Origin
+    current: string
+    provider: bool
+    pending: bool
 
   AsyncRec = ref object
     ## One submitted asynchronous call, from submission until nothing of it
@@ -216,6 +251,21 @@ type
       ## attempt tokens whose bindings are valid: from acceptance until the
       ## context they made is destroyed, or their outcome is final
     diagnostics: Deque[string]
+    store: Store ## [IMPL] the persistent state; in memory without `storeDir`
+    epoch: uint64 ## the revision epoch of this start (I82)
+    budget: uint64 ## `revisionBudget`
+    storeFailed: bool ## the last write failed: changes are held back
+    nextStoreTry: MonoTime
+    tombstones: OrderedTable[string, Opt[string]]
+      ## retired host-assigned instance ids, with the state assignment each
+      ## keeps reserved (RUNTIME l.3582, l.3587)
+    createKeys: seq[CreateKey] ## `create_module` key associations
+    assignments: int ## state assignments `create_module` gave (`s-<prefix>-<n>`)
+
+const
+  NotPersisted = "the execution state could not be persisted"
+  StoreRetry = initDuration(seconds = 1)
+  RevisionMask = 0xFFFF_FFFF'u64
 
 proc workerLoop(s: ptr Shared) =
   while true:
@@ -329,6 +379,11 @@ func view(x: Inst): InstanceView =
     result.execution.intentRevision = Opt.some(x.intentRevision)
     result.intentOrigin = x.intentOrigin
 
+func exposed(x: Inst): InstanceView =
+  ## [IMPL] What observers see: the last view written to the store while a
+  ## later change is held back (I82).
+  if x.pending: x.shown else: x.view
+
 proc answer(r: ReplyChannel, reply: sink Reply) =
   if r != nil:
     try:
@@ -336,11 +391,16 @@ proc answer(r: ReplyChannel, reply: sink Reply) =
     except Exception:
       discard
 
-proc answerView(r: ReplyChannel, x: Inst) =
-  r.answer(Reply(view: x.view))
-
 proc answerError(r: ReplyChannel, code: ErrorCode, message: string) =
   r.answer(Reply(error: Opt.some(engineError(code, message))))
+
+proc answerView(r: ReplyChannel, x: Inst) =
+  ## The state an operation reached; MODULE_ERROR while that state is not
+  ## written (I82; RUNTIME l.3442).
+  if x.pending:
+    r.answerError(ecModule, NotPersisted)
+  else:
+    r.answer(Reply(view: x.view))
 
 # Asynchronous calls ---------------------------------------------------------------
 
@@ -530,20 +590,148 @@ proc releaseCallers(st: State, x: Inst) =
         kept.add(w)
     y.stopWaiters = kept
 
-proc commit(st: State, x: Inst) =
-  ## Records one committed change: the execution revision advances (§9.3
-  ## l.3504-3505) and the change joins the ordered log (§9.1 l.1851). The
-  ## routes that depend on the instance follow it in the same step.
-  inc x.revision
+# Commits --------------------------------------------------------------------------
+
+proc snapshot(st: State): Snapshot =
+  ## The persistent state as it is now (store.cddl).
+  result = Snapshot(runtimeInstanceId: st.runtimeId, epoch: st.epoch)
+  for x in st.instances.values:
+    var s = StoredInstance(
+      instance: x.id,
+      providerId: x.providerId,
+      created: x.created,
+      record: x.record,
+      state: x.state,
+      failure: x.failure,
+      revision: x.revision,
+      intent: x.intent,
+    )
+    if x.intent == inRequested:
+      s.intentRevision = x.intentRevision
+      s.origin = x.intentOrigin
+    result.instances.add(s)
+  for id, assignment in st.tombstones:
+    result.retired.add(RetiredId(instance: id, stateAssignment: assignment))
+  result.createKeys = st.createKeys
+
+proc persist(st: State): Result[void, string] =
+  if not st.store.isPersistent:
+    return ok()
+  st.store.write(st.snapshot())
+
+proc storeFailure(st: State, error: string) =
+  ## [IMPL] Changes are held back until a write succeeds (I82).
+  if not st.storeFailed:
+    st.diagnose(NotPersisted & ": " & error)
+  st.storeFailed = true
+  st.nextStoreTry = getMonoTime() + StoreRetry
+
+proc expose(st: State, x: Inst) =
+  ## The change joins the ordered log (§9.1 l.1851).
+  x.pending = false
+  if st.store.isPersistent:
+    x.shown = x.view
   inc st.serial
-  if x.state != msStopping:
-    x.stopDeadline = Opt.none(MonoTime)
   if st.changes.len >= MaxRetainedChanges:
     st.changes.delete(0)
   st.changes.add(StateChange(serial: st.serial, view: x.view))
+
+proc written(st: State, x: Inst) =
+  ## A write succeeded: every change held back is exposed, one entry per
+  ## instance, then `x`'s own (nil: none).
+  if st.storeFailed:
+    st.storeFailed = false
+    st.diagnose("the execution state is persisted again")
+    for y in st.instances.values:
+      if y.pending and y != x:
+        st.expose(y)
+  if x != nil and x.pending:
+    st.expose(x)
+
+proc retryStore(st: State) =
+  ## [IMPL] While writes fail: every second, and before every lifecycle
+  ## request.
+  if not st.storeFailed:
+    return
+  let w = st.persist()
+  if w.isErr:
+    st.storeFailure(w.error)
+  else:
+    st.written(nil)
+
+proc commit(st: State, x: Inst) =
+  ## Records one committed change that follows from an operation, a failure
+  ## or cleanup: the execution revision advances (§9.3 l.3504-3505), the
+  ## routes that depend on the instance follow it and its callers are
+  ## released, at once (withdrawal never waits for a write, l.3507); then the
+  ## store is written, then the change is exposed. When the write fails the
+  ## change is held back (I82).
+  inc x.revision
+  if x.state != msStopping:
+    x.stopDeadline = Opt.none(MonoTime)
+  x.pending = true
   st.routesFollow(x)
   if x.state notin {msLoaded, msReady}:
     st.releaseCallers(x)
+  let w = st.persist()
+  if w.isErr:
+    st.storeFailure(w.error)
+    return
+  st.written(x)
+
+func save(x: Inst): Saved =
+  Saved(
+    record: x.record,
+    state: x.state,
+    failure: x.failure,
+    revision: x.revision,
+    intent: x.intent,
+    intentRevision: x.intentRevision,
+    intentOrigin: x.intentOrigin,
+    current: x.current,
+    provider: x.provider,
+    pending: x.pending,
+  )
+
+proc restore(x: Inst, s: Saved) =
+  x.record = s.record
+  x.state = s.state
+  x.failure = s.failure
+  x.revision = s.revision
+  x.intent = s.intent
+  x.intentRevision = s.intentRevision
+  x.intentOrigin = s.intentOrigin
+  x.current = s.current
+  x.provider = s.provider
+  x.pending = s.pending
+
+func exhausted(st: State, revision: uint64): bool =
+  ## [SPEC RUNTIME l.3507; IMPL] This start's accepting commits for the
+  ## instance reached the budget (I82).
+  (revision and RevisionMask) >= st.budget
+
+proc accept(st: State, x: Inst, saved: Saved, exempt = false): Opt[EngineError] =
+  ## [SPEC RUNTIME §9.3 l.3505, l.3507; IMPL] Records a change that accepts an
+  ## operation: written before it is exposed and before anything it permits
+  ## happens. When the revision is exhausted (unless `exempt`) or the write
+  ## fails, `x` is as it was (`saved`) and the error is returned (I82).
+  if not exempt and st.exhausted(saved.revision):
+    x.restore(saved)
+    return Opt.some(engineError(ecModule, "the execution revision is exhausted"))
+  inc x.revision
+  x.pending = true
+  let w = st.persist()
+  if w.isErr:
+    x.restore(saved)
+    st.storeFailure(w.error)
+    return Opt.some(engineError(ecModule, NotPersisted))
+  if x.state != msStopping:
+    x.stopDeadline = Opt.none(MonoTime)
+  st.written(x)
+  st.routesFollow(x)
+  if x.state notin {msLoaded, msReady}:
+    st.releaseCallers(x)
+  Opt.none(EngineError)
 
 # Lifecycle ----------------------------------------------------------------------
 
@@ -658,6 +846,8 @@ proc checkContracts(x: Inst, r: Realization): Result[bool, string] =
       return err("an expected interface contract is not implemented")
   ok(true)
 
+proc promote(st: State, a: Attempt) {.gcsafe.}
+
 proc initialized(st: State, a: Attempt, res: LogosResult, ctx: ptr LogosModuleContext) =
   let x = a.inst
   var orphan: ptr LogosModuleContext
@@ -683,12 +873,33 @@ proc initialized(st: State, a: Attempt, res: LogosResult, ctx: ptr LogosModuleCo
     st.releaseRealization(x)
     return
   # [SPEC RUNTIME §3.4] Every lifecycle and realization check succeeded.
+  a.provides = provider
+  st.promote(a)
+
+proc promote(st: State, a: Attempt) {.gcsafe.} =
+  ## [SPEC RUNTIME §3.4, l.3505; IMPL] `ready`, written before it is exposed.
+  ## While the write fails the instance stays `loaded`, its realization made,
+  ## and the write is tried again every second until the startup deadline
+  ## (`checkDeadlines`; I82).
+  let x = a.inst
+  let saved = x.save
+  x.provider = a.provides
+  x.state = msReady
+  if st.accept(x, saved, exempt = true).isSome:
+    a.phase = apReadyPending
+    return
   x.services = a.services
   a.services = nil
-  x.provider = provider
-  x.state = msReady
-  st.commit(x)
   st.finishAttempt(a)
+
+proc abandon(st: State, a: Attempt) =
+  ## [IMPL] An attempt whose `ready` was never written can no longer make the
+  ## instance ready (a stop, a reported failure, its deadline): the
+  ## realization it made is released through the realizer, as one made after
+  ## the deadline (§3.4 l.668).
+  if a.phase == apReadyPending:
+    a.phase = apCleanup
+    st.releaseRealization(a.inst)
 
 proc beginInit(st: State, a: Attempt, b: ref NativeBinding) =
   if a.cancelled or a.expired or a.failed:
@@ -777,6 +988,9 @@ template requireReady(st: State, q: Request) =
     q.reply.answerError(notReady.get.code, notReady.get.message)
     return
 
+proc execute(st: State, x: Inst, reply: ReplyChannel, origin: string) {.gcsafe.}
+proc beginAttempt(st: State, a: Attempt) {.gcsafe.}
+
 proc start(st: State, q: Request) =
   ## [SPEC RUNTIME §9.1, §9.3 start_module; §3.6] Replies once the attempt
   ## is ready or failed, or once its deadline passed.
@@ -800,13 +1014,24 @@ proc start(st: State, q: Request) =
     discard
   # [SPEC RUNTIME §9.3 l.3644-3647] Acceptance establishes `requested` intent
   # with this origin, before execution authorization or startup.
+  let saved = x.save
   x.intent = inRequested
   x.intentOrigin = q.origin
   x.intentRevision = x.revision + 1
-  st.commit(x)
+  let refused = st.accept(x, saved)
+  if refused.isSome:
+    q.reply.answerError(refused.get.code, refused.get.message)
+    return
+  st.execute(x, q.reply, q.origin.instance)
+
+proc execute(st: State, x: Inst, reply: ReplyChannel, origin: string) {.gcsafe.} =
+  ## [SPEC RUNTIME §3.6, §9.3] What `start` and `recover` share once intent is
+  ## `requested`: prerequisites, execution authorization for the retained
+  ## origin, the accepting commit, then the attempt (`beginAttempt`). Step 8
+  ## puts its pending execution decision between the first two.
   if not st.prerequisitesReady(x):
     # [SPEC RUNTIME §3.7, §10.1] A dependent waits for every prerequisite.
-    q.reply.answerError(ecNotReady, "a lifecycle prerequisite is not ready")
+    reply.answerError(ecNotReady, "a lifecycle prerequisite is not ready")
     return
   # [SPEC RUNTIME §3.6 step 3] Execution authorization, for the retained
   # origin, before any artifact code runs.
@@ -830,19 +1055,36 @@ proc start(st: State, q: Request) =
       )
     )
     st.commit(x)
-    q.reply.answerError(ecNotAuthorised, "execution is not authorised")
+    reply.answerError(ecNotAuthorised, "execution is not authorised")
     return
-  # The attempt is accepted: `loaded`, failure cleared (§9.3 l.3758-3759).
+  # The attempt is accepted: `loaded`, failure cleared (§9.3 l.3758-3759),
+  # written before the attempt begins (l.3505).
+  let saved = x.save
   let id = st.nextJobId()
   let a = Attempt(
     id: id,
     token: "a-" & st.prefix & "-" & $id,
     inst: x,
     deadline: getMonoTime() + st.cfg.startupDeadline,
-    waiters: @[Waiter(reply: q.reply, origin: q.origin.instance)],
+    waiters: @[Waiter(reply: reply, origin: origin)],
   )
-  x.tokens.incl(a.token)
   x.current = a.token
+  x.state = msLoaded
+  x.failure = Opt.none(Failure)
+  x.provider = false
+  let refused = st.accept(x, saved)
+  if refused.isSome:
+    reply.answerError(refused.get.code, refused.get.message)
+    return
+  st.beginAttempt(a)
+
+proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
+  ## [SPEC RUNTIME §3.6 steps 4-6] An accepted attempt: its token becomes
+  ## live, its Runtime Control binding and invocation access are made, and
+  ## the realizer begins. Step 9 puts its selection here.
+  let x = a.inst
+  let id = a.id
+  x.tokens.incl(a.token)
   var services = InitServices()
   a.services = newAttemptServices(st.shared, x.id, a.token)
   services.fill(a.services)
@@ -854,10 +1096,6 @@ proc start(st: State, q: Request) =
     services: services,
   )
   x.attempt = a
-  x.state = msLoaded
-  x.failure = Opt.none(Failure)
-  x.provider = false
-  st.commit(x)
   let step = st.realizer.begin(a.request).valueOr:
     st.failAttempt(a, loaderFailure(error))
     st.finishAttempt(a)
@@ -890,12 +1128,14 @@ proc stopInstance(
   of msLoaded:
     # [SPEC RUNTIME §9.1 l.1840-1841] The incomplete start can no longer make
     # the instance ready; its outcome is cleaned, then `unloaded`.
-    x.attempt.cancelled = true
+    let a = x.attempt
+    a.cancelled = true
     x.state = msStopping
     st.commit(x)
-    for w in x.attempt.waiters:
+    for w in a.waiters:
       w.reply.answerView(x)
-    x.attempt.waiters.setLen(0)
+    a.waiters.setLen(0)
+    st.abandon(a)
   of msReady:
     x.state = msStopping
     x.provider = false
@@ -956,6 +1196,37 @@ proc stop(st: State, q: Request) =
     return
   st.stopInstance(x, q.reply, keepIntent = false, q.origin.instance)
 
+proc recover(st: State, q: Request) =
+  ## [SPEC RUNTIME §9.3 recover_module, l.3537-3544; §10.1] A new attempt for
+  ## retained `requested` intent, its origin and its record unchanged, once
+  ## the earlier realization is cleaned. Execution is authorized for the
+  ## retained origin, not the requester (l.3540). Answers as `start` does
+  ## [G173 interim (TF-20)]. The check order is G171's: authority, then the
+  ## module name and revision (`lookup`), then readiness.
+  if q.expectedRevision.isNone:
+    q.reply.answerError(ecInvalidParams, "an expected execution revision is required")
+    return
+  let x = st.lookup(q, "recover_module").valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  st.requireReady(q)
+  if x.intent != inRequested:
+    # [SPEC RUNTIME l.3538, l.1914] after an explicit stop (l.3790) or before
+    # any start
+    q.reply.answerError(ecNotReady, "the execution intent is not requested")
+    return
+  if x.state notin {msUnloaded, msError}:
+    q.reply.answerError(ecNotReady, "the module instance is " & $x.state)
+    return
+  if x.attempt != nil or x.teardown != 0 or x.realization != nil:
+    # [SPEC RUNTIME l.3538; G20] cleanup of the earlier realization first
+    q.reply.answerError(ecNotReady, "cleanup of the previous realization is pending")
+    return
+  if st.exhausted(x.revision):
+    q.reply.answerError(ecModule, "the execution revision is exhausted")
+    return
+  st.execute(x, q.reply, q.origin.instance)
+
 proc reportFailure(st: State, q: Request, success = Reply()) =
   ## [SPEC RUNTIME §9.3 report_failure] Authorized by the realization-bound
   ## association alone; the reply does not wait for cleanup.
@@ -970,7 +1241,9 @@ proc reportFailure(st: State, q: Request, success = Reply()) =
   if x.state == msLoaded:
     # [SPEC RUNTIME §9.3 l.3604] A report during initialization keeps that
     # realization from becoming ready.
-    st.failAttempt(x.attempt, f)
+    let a = x.attempt
+    st.failAttempt(a, f)
+    st.abandon(a)
   else:
     x.state = msError
     x.failure = Opt.some(f)
@@ -979,39 +1252,87 @@ proc reportFailure(st: State, q: Request, success = Reply()) =
     st.releaseRealization(x)
   q.reply.answer(success)
 
+proc known(st: State, id: string): bool =
+  ## [SPEC RUNTIME §9.2 l.2632-2633] An address that is or was in use here.
+  id in st.instances or id in st.tombstones
+
+proc assignmentInUse(st: State, assignment: string, skip = ""): Opt[string] =
+  ## [SPEC RUNTIME §8 l.1468, §9.3 l.3587] The instance, live or retired, that
+  ## holds `assignment`.
+  for y in st.instances.values:
+    if y.id != skip and y.record.stateAssignment == Opt.some(assignment):
+      return Opt.some(y.id)
+  for id, a in st.tombstones:
+    if a == Opt.some(assignment):
+      return Opt.some(id)
+  Opt.none(string)
+
 proc createInst(
-    st: State, record: ModuleRecord, instance: string, origin: Origin
+    st: State,
+    record: ModuleRecord,
+    instance: string,
+    origin: Origin,
+    created = false,
+    key = Opt.none(CreateKey),
 ): Result[Inst, EngineError] =
   ## A local module-instance record: `unloaded`, intent `uninitialized`
-  ## (§9.3 l.3623). The slice takes records from the host only (G55).
+  ## (§9.3 l.3623), written before it is exposed. Records come from the host
+  ## or, through `create_module`, from its declarations (G55); `key` is that
+  ## request's key association, written with the record (l.3627-3628).
   if st.shuttingDown:
     return err(engineError(ecNotReady, "the Runtime is shutting down"))
-  if not origin.host:
+  if not origin.host and not created:
     return err(engineError(ecNotAuthorised, "not authorised"))
   checkRecord(record).isOkOr:
     return err(engineError(ecInvalidParams, error))
   var id = instance
   if id.len == 0:
+    # [SPEC RUNTIME §9.2 l.2630-2633; IMPL] The random prefix keeps a fresh
+    # address apart from every earlier one; a collision fails closed.
     inc st.created
     id = "m-" & st.prefix & "-" & $st.created
+    if st.known(id):
+      return err(engineError(ecModule, "a fresh instance id collided"))
   elif id.len > MaxInstanceIdBytes or not isValidUtf8(id):
     return
       err(engineError(ecInvalidParams, "an instance id must have 1 to 128 UTF-8 bytes"))
+  elif id in st.tombstones:
+    # [SPEC RUNTIME §9.3 l.3582] A retired address never comes back.
+    return err(engineError(ecInvalidParams, "the instance id was retired"))
   if id in st.instances:
     return err(engineError(ecInvalidParams, "the instance id is already in use"))
   if record.stateAssignment.isSome:
-    for y in st.instances.values:
-      if y.record.stateAssignment == record.stateAssignment:
-        # [SPEC RUNTIME §8 l.1468] no shared state assignment by default
-        return err(engineError(ecInvalidParams, "the state assignment is in use"))
-  let x = Inst(id: id, record: record, state: msUnloaded, intent: inUninitialized)
+    # [SPEC RUNTIME §8 l.1468] no shared state assignment by default; a
+    # retired instance keeps its own reserved (l.3587)
+    if st.assignmentInUse(record.stateAssignment.get).isSome:
+      return err(engineError(ecInvalidParams, "the state assignment is in use"))
+  let x = Inst(
+    id: id,
+    record: record,
+    state: msUnloaded,
+    intent: inUninitialized,
+    revision: st.epoch shl 32,
+    created: created,
+  )
   if record.primaryContract.isSome or record.implements.len > 0:
-    # [SPEC RUNTIME §9.3 l.2862-2871] Its provider record, kept across stop
-    # and start [IMPL: one per instance].
+    # [SPEC RUNTIME §9.3 l.2862-2871] Its provider record, kept across stop,
+    # start and restart [IMPL: one per instance].
     inc st.providerCount
     x.providerId = "p-" & st.prefix & "-" & $st.providerCount
+    for y in st.instances.values:
+      if y.providerId == x.providerId:
+        return err(engineError(ecModule, "a fresh provider id collided"))
   st.instances[id] = x
-  st.commit(x)
+  if key.isSome:
+    var k = key.get
+    k.instance = id
+    st.createKeys.add(k)
+  let refused = st.accept(x, x.save)
+  if refused.isSome:
+    st.instances.del(id)
+    if key.isSome:
+      st.createKeys.setLen(st.createKeys.len - 1)
+    return err(refused.get)
   ok(x)
 
 proc create(st: State, q: Request) =
@@ -1078,7 +1399,15 @@ proc finishShutdown(st: State) =
   ## [IMPL] The Runtime thread keeps running after shutdown: it refuses new
   ## lifecycle requests and still cleans contexts that module code returns
   ## late, until `close`. Every waiter gets the one stored result (RUN-0760).
+  ## [IMPL] A state that could not be written is tried once more; if it still
+  ## fails the result is MODULE_ERROR (G60 extended; I82).
   st.shutdownResult = st.shutdownOutcome()
+  st.retryStore()
+  if st.storeFailed:
+    var message = NotPersisted
+    if st.shutdownResult.isSome:
+      message = st.shutdownResult.get.message & "; " & message
+    st.shutdownResult = Opt.some(engineError(ecModule, message))
   st.shutdownDone = true
   for w in st.shutdownWaiters:
     w.answer(Reply(error: st.shutdownResult))
@@ -1282,7 +1611,7 @@ proc readiness(st: State, q: Request, x: Inst) =
     q.reply.answerError(ecInvalidParams, "the module name does not match")
     return
   st.requireReady(q)
-  let v = y.view
+  let v = y.exposed
   var response = LogosNSRuntimeControlGetReadinessResponse(
     module: v.module,
     instance: Opt.some(v.instance),
@@ -1294,6 +1623,180 @@ proc readiness(st: State, q: Request, x: Inst) =
     if v.failure.get.reason.len > 0:
       response.reason = Opt.some(reasonText(v.failure.get.reason))
   q.reply.answerEncoded(encode(response))
+
+proc rcRecover(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 recover_module] Through Runtime Control: `x` requests,
+  ## the retained origin's execution authority decides (`recover`).
+  let req = q.rc.recover
+  var r = q
+  r.instance = req.instance
+  r.module = req.module
+  r.expectedRevision = Opt.some(req.expected_execution_revision)
+  st.recover(r)
+
+proc retireInst(st: State, y: Inst): Result[void, string] =
+  ## [SPEC RUNTIME l.3585-3588, l.3595] One durable write before the answer:
+  ## the instance and its provider record leave the inventory, a host-assigned
+  ## id is kept as a tombstone with the state assignment it reserves, and its
+  ## `create_module` keys are dropped (RUN-1028). On a failed write nothing
+  ## changes. The state directory, packages, grants and history stay; nothing
+  ## is transferred.
+  let instances = st.instances
+  let keys = st.createKeys
+  st.instances.del(y.id)
+  let tombstone = not isRuntimeForm(y.id)
+  if tombstone:
+    # [IMPL] A Runtime-assigned name never comes back anyway (I82, C-3).
+    st.tombstones[y.id] = y.record.stateAssignment
+  st.createKeys.keepItIf(it.instance != y.id)
+  let w = st.persist()
+  if w.isErr:
+    st.instances = instances
+    st.createKeys = keys
+    if tombstone:
+      st.tombstones.del(y.id)
+    return err(w.error)
+  # [SPEC RUNTIME l.3576] Nothing later publishes a change of the retired
+  # record (RUN-1012).
+  st.changes.keepItIf(it.view.instance != y.id)
+  st.written(nil)
+  ok()
+
+proc retire(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 retire_module, l.3556-3595] Removes a stopped
+  ## instance's record for good. The check order is G171's: the target's
+  ## Runtime, this method's own authority (l.3557), the revision, readiness,
+  ## then the absence of every realization, cleanup, call and dependency.
+  let req = q.rc.retire
+  if req.target.runtime_instance_id != st.runtimeId:
+    # [G194 interim (TF-30 point 1)] INVALID_PARAMS without detail, as l.3659
+    # answers a provider address on another Runtime.
+    q.reply.answerError(ecInvalidParams, "the target names another Runtime")
+    return
+  let id = req.target.module_instance_id
+  let y = st.instances.getOrDefault(id)
+  # [SPEC RUNTIME l.3557, l.3561] Authorized on its own; an unknown target
+  # and a refused one are the same.
+  let refused = st.denied(
+    AuthzRequest(
+      action: aaLifecycle,
+      operation: $rmRetireModule,
+      consumer: x.id,
+      target: id,
+      module: (if y.isNil: "" else: y.record.module),
+    )
+  )
+  if refused or y.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if req.expected_execution_revision != y.revision:
+    # [SPEC RUNTIME l.3559-3560] no mutation
+    q.reply.answerError(ecInvalidParams, "execution revision mismatch")
+    return
+  st.requireReady(q)
+  # [SPEC RUNTIME l.3563-3566] What the Runtime owns, not the state alone:
+  # no attempt, realization or destroy job, no call or deferred invocation
+  # in it, no stop waiting on it.
+  var live =
+    y.state notin {msUnloaded, msError} or y.attempt != nil or y.teardown != 0 or
+    y.realization != nil or y.inflight > 0 or y.stopWaiters.len > 0
+  for a in st.asyncCalls.values:
+    if a.provider == y.id or a.consumer == y.id:
+      live = true
+  if live:
+    q.reply.answerError(ecNotReady, "the module instance still has a realization")
+    return
+  if y.intent == inRequested:
+    q.reply.answerError(ecNotReady, "the execution intent is requested")
+    return
+  for z in st.instances.values:
+    # [SPEC RUNTIME l.3568-3570] Retained intent that names it as origin;
+    # stopped or replaced intent does not count (l.3578).
+    if z != y and z.intent == inRequested and not z.intentOrigin.host and
+        z.intentOrigin.instance == y.id:
+      q.reply.answerError(
+        ecNotReady, "the module instance is the origin of retained execution intent"
+      )
+      return
+  if y.configured:
+    # [SPEC RUNTIME l.3581-3582] The host configuration still names it.
+    q.reply.answerError(ecNotReady, "the host configuration names the module instance")
+    return
+  st.retireInst(y).isOkOr:
+    st.storeFailure(error)
+    q.reply.answerError(ecModule, NotPersisted)
+    return
+  # [SPEC RUNTIME l.3591] The retirement stands whether or not the answer
+  # arrives.
+  q.reply.answerEncoded(encode(LogosNSRuntimeControlRetireModuleResponse()))
+
+proc createModule(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 create_module, l.3613-3634] A fresh instance from the
+  ## one accepted declaration for `module` (G55), once per request key.
+  let req = q.rc.createModule
+  if st.denied(
+    AuthzRequest(
+      action: aaLifecycle,
+      operation: $rmCreateModule,
+      consumer: x.id,
+      module: req.module,
+    )
+  ):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  st.requireReady(q)
+  # [SPEC RUNTIME l.3627-3631] The key's scope is this method, this consumer
+  # and this Runtime; the Runtime thread serializes requests, so one key
+  # creates one instance (RUN-0663).
+  for k in st.createKeys:
+    if k.consumer == x.id and k.key == req.request_key:
+      if k.module != req.module:
+        q.reply.answerError(
+          ecInvalidParams, "the request key was used for another module"
+        )
+      else:
+        q.reply.answerEncoded(
+          encode(
+            LogosNSRuntimeControlCreateModuleResponse(
+              module: k.module, instance: k.instance
+            )
+          )
+        )
+      return
+  var found = false
+  var d: ModuleDeclaration
+  for c in st.cfg.declarations:
+    if c.record.module == req.module:
+      d = c
+      found = true
+  if not found:
+    # [G195 interim (TF-30 point 2)] No accepted declaration: the answer a
+    # denial gives, and nothing created (l.3619).
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if st.instances.len >= MaxInstances:
+    # [SPEC RUNTIME l.3442-3443; BCP l.369] a resource bound, not readiness
+    q.reply.answerError(ecModule, "the Runtime holds as many instances as it can")
+    return
+  var record = d.record
+  if d.persistentState:
+    # [SPEC RUNTIME §8 l.1451] its own fresh state assignment
+    inc st.assignments
+    record.stateAssignment = Opt.some("s-" & st.prefix & "-" & $st.assignments)
+  let y = st.createInst(
+    record,
+    "",
+    q.origin,
+    created = true,
+    key = Opt.some(CreateKey(consumer: x.id, key: req.request_key, module: req.module)),
+  ).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  q.reply.answerEncoded(
+    encode(
+      LogosNSRuntimeControlCreateModuleResponse(module: y.record.module, instance: y.id)
+    )
+  )
 
 proc newRouteId(st: State): string =
   ## [IMPL] Never reused by this engine; the random prefix keeps engines apart
@@ -1579,6 +2082,12 @@ proc rc(st: State, q: Request) =
     st.lifecycleCall(q, x)
   of rmGetReadiness:
     st.readiness(q, x)
+  of rmRecoverModule:
+    st.rcRecover(q, x)
+  of rmRetireModule:
+    st.retire(q, x)
+  of rmCreateModule:
+    st.createModule(q, x)
   of rmEstablishRoute:
     st.establish(q, x)
   of rmRenewRoute:
@@ -1623,7 +2132,12 @@ proc checkBootstrap(st: State) =
       )
     )
   elif x.state == msReady:
-    outcome = Opt.some(Reply(view: x.view))
+    outcome = Opt.some(
+      if x.pending:
+        Reply(error: Opt.some(engineError(ecModule, NotPersisted)))
+      else:
+        Reply(view: x.view)
+    )
   elif x.state == msError or (x.state == msUnloaded and x.failure.isSome):
     let f = x.failure.get(Failure(kind: fkOther))
     if f.kind in {fkAuthorityDenied, fkAuthorityEvaluationFailed}:
@@ -1645,15 +2159,54 @@ proc checkBootstrap(st: State) =
     st.bootstrapReply.answer(outcome.get)
     st.bootstrapReply = nil
 
+proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] =
+  ## [IMPL-DECISION G160 interim (TF-08)] The configured instances against the
+  ## retained ones, all checked before any is changed. A retired id is
+  ## refused (l.3582); a retained id is the same logical instance while its
+  ## declaration facts are equal (the record without `local_path` and
+  ## permission reasons, `store.factBytes`), and refused, naming it, when
+  ## they differ: the host names a new id. A configured state assignment that
+  ## another instance, live or retired, holds is refused (l.1468, l.3587).
+  for b in configured:
+    if b.instance in st.tombstones:
+      return Opt.some(
+        engineError(ecInvalidParams, "instance " & b.instance & " was retired")
+      )
+    let x = st.instances.getOrDefault(b.instance)
+    if x != nil and factBytes(x.record) != factBytes(b.record):
+      return Opt.some(
+        engineError(
+          ecInvalidParams,
+          "the configured declaration of instance " & b.instance &
+            " differs from the retained one",
+        )
+      )
+    if b.record.stateAssignment.isSome:
+      let holder = st.assignmentInUse(b.record.stateAssignment.get, b.instance)
+      if holder.isSome:
+        return Opt.some(
+          engineError(
+            ecInvalidParams,
+            "the state assignment of instance " & b.instance & " is held by " &
+              holder.get,
+          )
+        )
+  Opt.none(EngineError)
+
 proc bootstrap(st: State, q: Request) =
   ## [SPEC RUNTIME l.187-192, l.1640, §13.2] Bootstrap policy is in place (the
-  ## authorizer exists before this request). Creates every configured instance
-  ## in configuration order, with its protected identity and the host's
-  ## origin, records the orchestration role, and starts that one instance
-  ## through the ordinary start path: execution authorization, the startup
-  ## deadline, binding, `_MODULE_init` with its Runtime Control binding and
-  ## the contract checks. Its intent becomes `requested` with the host's
-  ## protected-input origin (G191 interim).
+  ## authorizer exists before this request). Reconciles the configured
+  ## instances with the retained ones (`reconcile`), creates the new ones in
+  ## configuration order with their protected identity and the host's origin,
+  ## records the orchestration role, and re-establishes that one instance
+  ## [G191 interim (TF-26)]: retained `requested` intent with the host's
+  ## origin is resumed through the recovery path, intent, origin and intent
+  ## revision kept (l.3539); otherwise the ordinary start path establishes
+  ## `requested` intent with the host's protected-input origin, with a
+  ## diagnostic when it replaces retained intent (l.1640, l.3808). Either
+  ## path authorizes execution, applies the startup deadline, binds, runs
+  ## `_MODULE_init` with its Runtime Control binding and checks the
+  ## contracts. No other instance is started (l.3774).
   if st.bootstrapped:
     q.reply.answerError(ecNotReady, "the Runtime has already been bootstrapped")
     return
@@ -1663,18 +2216,61 @@ proc bootstrap(st: State, q: Request) =
       ecCancelled, "shutdown was requested before bootstrap completed"
     )
     return
+  var named = false
   for b in q.bootstrap:
-    let x = st.createInst(b.record, b.instance, hostOrigin()).valueOr:
-      q.reply.answerError(error.code, error.message)
-      return
+    if b.instance == q.instance:
+      named = true
+  if not named:
+    q.reply.answerError(ecInvalidParams, "no orchestration instance was configured")
+    return
+  let refused = st.reconcile(q.bootstrap)
+  if refused.isSome:
+    q.reply.answerError(refused.get.code, refused.get.message)
+    return
+  for b in q.bootstrap:
+    var x = st.instances.getOrDefault(b.instance)
+    if x.isNil:
+      x = st.createInst(b.record, b.instance, hostOrigin()).valueOr:
+        q.reply.answerError(error.code, error.message)
+        return
+    elif recordBytes(x.record) != recordBytes(b.record):
+      # [IMPL-DECISION G160] Equal facts: the retained record takes the
+      # configured artifact path and permission reasons.
+      let saved = x.save
+      x.record = b.record
+      let failed = st.accept(x, saved, exempt = true)
+      if failed.isSome:
+        q.reply.answerError(failed.get.code, failed.get.message)
+        return
+    x.configured = true
     if b.instance == q.instance:
       x.orchestration = true
       st.orchestrator = x
-  if st.orchestrator.isNil:
-    q.reply.answerError(ecInvalidParams, "no orchestration instance was configured")
-    return
+  let x = st.orchestrator
   st.bootstrapReply = q.reply
-  st.start(Request(kind: rqStart, instance: q.instance, origin: hostOrigin()))
+  if x.intent == inRequested and x.intentOrigin.host:
+    st.recover(
+      Request(
+        kind: rqRecover,
+        instance: x.id,
+        origin: hostOrigin(),
+        expectedRevision: Opt.some(x.revision),
+      )
+    )
+  else:
+    if x.intent == inStopped:
+      st.diagnose("startup re-established orchestration whose intent was stopped")
+    elif x.intent == inRequested:
+      st.diagnose(
+        "startup re-established orchestration whose intent was requested by " &
+          x.intentOrigin.instance
+      )
+    st.start(Request(kind: rqStart, instance: x.id, origin: hostOrigin()))
+  if st.storeFailed and x.attempt.isNil and x.state notin {msLoaded, msReady} and
+      st.bootstrapReply != nil:
+    # [IMPL] The accepting write failed (I82).
+    st.bootstrapReply.answerError(ecModule, NotPersisted)
+    st.bootstrapReply = nil
   st.checkBootstrap()
 
 # Route handles ------------------------------------------------------------------
@@ -2020,6 +2616,11 @@ proc deliver(st: State, q: Request) =
 # The Runtime thread ---------------------------------------------------------------
 
 proc handle(st: State, q: Request) =
+  if q.kind in {
+    rqCreate, rqStart, rqStop, rqReportFailure, rqRecover, rqBootstrap, rqRc
+  }:
+    # [IMPL] A lifecycle request first tries a write that failed (I82).
+    st.retryStore()
   case q.kind
   of rqConfigure:
     discard
@@ -2027,6 +2628,8 @@ proc handle(st: State, q: Request) =
     st.create(q)
   of rqStart:
     st.start(q)
+  of rqRecover:
+    st.recover(q)
   of rqStop:
     st.stop(q)
   of rqReportFailure:
@@ -2036,11 +2639,11 @@ proc handle(st: State, q: Request) =
     if x.isNil:
       q.reply.answerError(ecInvalidParams, "unknown module instance")
     else:
-      q.reply.answerView(x)
+      q.reply.answer(Reply(view: x.exposed))
   of rqList:
     var r = Reply()
     for x in st.instances.values:
-      r.views.add(x.view)
+      r.views.add(x.exposed)
     q.reply.answer(r)
   of rqAnswers:
     q.reply.answer(Reply(answers: st.authorizer.answers))
@@ -2093,6 +2696,15 @@ proc handle(st: State, q: Request) =
     st.releaseHandle(q)
   of rqIdentity:
     q.reply.answer(Reply(id: st.runtimeId))
+  of rqCleanup:
+    let x = st.instances.getOrDefault(q.instance)
+    q.reply.answer(
+      Reply(
+        pending:
+          not x.isNil and x.state in {msUnloaded, msError} and
+          (x.attempt != nil or x.teardown != 0 or x.realization != nil)
+      )
+    )
   of rqSubscribe:
     st.subscribe(q)
   of rqUnsubscribe:
@@ -2257,7 +2869,10 @@ proc handle(st: State, m: sink Msg) =
   st.settle()
 
 proc checkDeadlines(st: State) =
-  let now = getMonoTime()
+  var now = getMonoTime()
+  if st.storeFailed and now >= st.nextStoreTry:
+    st.retryStore()
+    now = getMonoTime()
   for a in st.records:
     if not a.terminal and a.deadline.isSome and now >= a.deadline.get:
       # [SPEC INTERFACE l.2059-2068] TIMEOUT, without waiting for the provider.
@@ -2272,6 +2887,16 @@ proc checkDeadlines(st: State) =
         a, Failure(kind: fkStartupTimeout, reason: "the startup deadline passed")
       )
       a.expired = true
+    if a != nil and a.phase == apReadyPending:
+      if now >= a.deadline:
+        st.failAttempt(
+          a, Failure(kind: fkStartupTimeout, reason: "the startup deadline passed")
+        )
+        a.expired = true
+        st.abandon(a)
+      elif not st.storeFailed or now >= st.nextStoreTry:
+        # [IMPL] `ready` is written again (I82).
+        st.promote(a)
     if x.state == msStopping and x.stopDeadline.isSome and now >= x.stopDeadline.get:
       # [G61, revised by A18; SPEC RUNTIME §10.2 l.3835-3838, l.3873-3874]
       # The cleanup failure is recorded; nothing still in use is released.
@@ -2306,14 +2931,106 @@ proc nextDeadline(st: State): Opt[MonoTime] =
     if a != nil and a.phase in {apBind, apInit} and not a.expired and not a.cancelled and
         not a.failed:
       consider(a.deadline)
+    if a != nil and a.phase == apReadyPending:
+      consider(a.deadline)
+      consider(
+        if st.storeFailed:
+          st.nextStoreTry
+        else:
+          getMonoTime()
+      )
     if x.state == msStopping and x.stopDeadline.isSome:
       consider(x.stopDeadline.get)
+  if st.storeFailed:
+    consider(st.nextStoreTry)
   if st.shuttingDown and not st.shutdownDone:
     consider(st.shutdownDeadline)
   for a in st.asyncCalls.values:
     if not a.terminal and a.deadline.isSome:
       consider(a.deadline.get)
   t
+
+# Opening ------------------------------------------------------------------------
+
+const UncleanEnd = "the Runtime ended without completing shutdown"
+
+proc restore(st: State, snap: Snapshot) =
+  ## [SPEC RUNTIME §9.3 l.3500-3506; IMPL] The retained instances, each with
+  ## its id, provider id, record, intent, intent revision, origin and failure
+  ## (RUN-0646), and a revision past every value exposed before (l.3506): the
+  ## epoch's first. No realization survives the previous process (the store
+  ## lock is the evidence), so cleanup is complete for every one of them.
+  for s in snap.instances:
+    let x = Inst(
+      id: s.instance,
+      record: s.record,
+      providerId: s.providerId,
+      created: s.created,
+      state: s.state,
+      failure: s.failure,
+      revision: (st.epoch shl 32) + 1,
+      intent: s.intent,
+    )
+    if s.intent == inRequested:
+      x.intentRevision = s.intentRevision
+      x.intentOrigin = s.origin
+    if s.state in {msLoaded, msReady, msStopping}:
+      # [IMPL-DECISION G193 (TF-29)] A completed shutdown leaves only
+      # `unloaded` and `error` (G180), so the Runtime ended uncleanly: `error`
+      # with `other`, intent kept. Resuming it is not a retry after failure.
+      x.state = msError
+      x.failure = Opt.some(Failure(kind: fkOther, reason: UncleanEnd))
+    st.instances[x.id] = x
+  for r in snap.retired:
+    st.tombstones[r.instance] = r.stateAssignment
+  st.createKeys = snap.createKeys
+
+proc load(st: State): Opt[EngineError] =
+  ## [IMPL] Before any request (DECISIONS I82): the store is locked and read,
+  ## the identity checked [G192 interim (TF-27)], the instances restored, a
+  ## new revision epoch computed and everything written back. Without
+  ## `storeDir` only the identity is set.
+  if st.cfg.storeDir.isNone:
+    st.runtimeId = st.cfg.runtimeInstanceId
+    return Opt.none(EngineError)
+  let (store, snap) = openStore(st.cfg.storeDir.get).valueOr:
+    return Opt.some(engineError(ecModule, "the state store cannot be opened: " & error))
+  st.store = store
+  template fail(code: ErrorCode, message: string) =
+    st.store.close()
+    return Opt.some(engineError(code, message))
+
+  var stored = 0'u64
+  if snap.isSome:
+    if st.cfg.runtimeInstanceId.len > 0 and
+        st.cfg.runtimeInstanceId != snap.get.runtimeInstanceId:
+      fail(
+        ecInvalidParams, "the configuration names another Runtime than its state store"
+      )
+    st.runtimeId = snap.get.runtimeInstanceId
+    stored = snap.get.epoch
+  elif st.cfg.runtimeInstanceId.len > 0:
+    st.runtimeId = st.cfg.runtimeInstanceId
+  else:
+    st.runtimeId = newRuntimeInstanceId()
+  # [IMPL] The epoch passes the stored one and the wall clock, so a revision
+  # of this start exceeds any exposed before, even from a run whose last
+  # writes were lost or a store restored from a backup (RUN-0632).
+  st.epoch = max(stored + 1, uint64(max(getTime().toUnix, 0)))
+  if st.epoch > RevisionMask:
+    fail(ecModule, "the revision epoch is exhausted")
+  if snap.isSome:
+    st.restore(snap.get)
+  var known = initHashSet[string]()
+  for id in st.instances.keys:
+    known.incl(id)
+  let reaped = st.store.reapSides(known).valueOr:
+    fail(ecModule, "the state store cannot be read: " & error)
+  for id in reaped:
+    st.diagnose("removed the side records of unknown instance " & id)
+  st.store.write(st.snapshot()).isOkOr:
+    fail(ecModule, NotPersisted & ": " & error)
+  Opt.none(EngineError)
 
 proc runtimeLoop(s: ptr Shared) =
   var first: Msg
@@ -2323,7 +3040,9 @@ proc runtimeLoop(s: ptr Shared) =
     return
   doAssert first.kind == mkRequest and first.request.kind == rqConfigure
   let cfg = first.request.config
-  var rnd: array[8, byte]
+  # [IMPL] 128 random bits per start keep every name this engine makes apart
+  # from every earlier one (RUNTIME l.2633, l.3172-3175; I82).
+  var rnd: array[16, byte]
   doAssert urandom(rnd), "no system randomness"
   var prefix = ""
   for b in rnd:
@@ -2332,11 +3051,16 @@ proc runtimeLoop(s: ptr Shared) =
     shared: s,
     cfg: cfg,
     realizer: newRealizer(cfg.workDir, cfg.stateRoot),
-    authorizer: initAuthorizer(cfg.policy),
+    authorizer: initAuthorizer(cfg.policy, prefix),
     prefix: prefix,
-    runtimeId: cfg.runtimeInstanceId,
     ctx: pinnedContext(),
+    budget: (if cfg.revisionBudget == 0: DefaultRevisionBudget else: cfg.revisionBudget),
   )
+  let failed = st.load()
+  if failed.isSome:
+    first.request.reply.answer(Reply(error: failed))
+    s.finished = true
+    return
   for reg in cfg.statics:
     discard st.realizer.registerStatic(reg)
   first.request.reply.answer(Reply())
@@ -2371,6 +3095,7 @@ proc runtimeLoop(s: ptr Shared) =
       s.calls.send(CallJob(kind: cjQuit))
     except Exception:
       discard
+  st.store.close()
   s.finished = true
 
 proc runtimeMain(s: ptr Shared) {.thread.} =
@@ -2380,23 +3105,50 @@ proc runtimeMain(s: ptr Shared) {.thread.} =
 
 # The engine handle ------------------------------------------------------------------
 
-proc newEngine*(cfg: EngineConfig): Engine =
-  ## Starts the Runtime thread with `cfg`. Static registrations whose table
-  ## is invalid were rejected by `checkStaticRegistration` before this, and a
-  ## Runtime identity has 1 to 128 UTF-8 bytes (§9.2).
-  doAssert cfg.runtimeInstanceId.len in 1 .. 128 and isValidUtf8(cfg.runtimeInstanceId),
-    "invalid runtime instance id"
-  result = createShared(Shared)
-  result.inbox.open()
-  result.jobs.open()
-  result.calls.open()
-  result.bell = newBell()
-  initLock(result.slotLock)
+proc freeEngine(e: Engine) =
+  ## Every thread has left; nothing sends to any channel or rings the bell.
+  e.inbox.close()
+  e.jobs.close()
+  e.calls.close()
+  e.closeSlots()
+  deinitLock(e.slotLock)
+  freeBell(e.bell)
+  deallocShared(e)
+
+proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
+  ## Starts the Runtime thread with `cfg`; with `storeDir`, opens and restores
+  ## the persistent state first (`load`). Static registrations whose table is
+  ## invalid were rejected by `checkStaticRegistration` before this. A Runtime
+  ## identity has 1 to 128 UTF-8 bytes (§9.2) and may be left empty only with
+  ## a store. INVALID_PARAMS for a configuration the store refuses, MODULE_ERROR
+  ## for a store that cannot be used; nothing is left running.
+  let id = cfg.runtimeInstanceId
+  if not (id.len in 1 .. 128 and isValidUtf8(id)) and
+      not (id.len == 0 and cfg.storeDir.isSome):
+    return err(engineError(ecInvalidParams, "invalid runtime instance id"))
+  let e = createShared(Shared)
+  e.inbox.open()
+  e.jobs.open()
+  e.calls.open()
+  e.bell = newBell()
+  initLock(e.slotLock)
   try:
-    createThread(result.runtime, runtimeMain, result)
+    createThread(e.runtime, runtimeMain, e)
   except ResourceExhaustedError:
     doAssert false, "cannot start the Runtime thread"
-  discard result.call(Request(kind: rqConfigure, config: cfg))
+  let r = e.call(Request(kind: rqConfigure, config: cfg))
+  if r.error.isSome:
+    joinThread(e.runtime)
+    e.freeEngine()
+    return err(r.error.get)
+  ok(e)
+
+proc newEngine*(cfg: EngineConfig): Engine =
+  ## `openEngine` for a configuration without a store, which cannot fail.
+  doAssert cfg.storeDir.isNone, "a persistent engine is opened with openEngine"
+  let e = openEngine(cfg)
+  doAssert e.isOk, "invalid runtime instance id"
+  e.get
 
 template toResult(r: Reply, body: untyped): untyped =
   if r.error.isSome:
@@ -2447,6 +3199,21 @@ proc stop*(
   )
   r.toResult(r.view)
 
+proc recover*(
+    e: Engine, instance: string, expectedRevision: uint64, origin = hostOrigin()
+): Result[InstanceView, EngineError] =
+  ## [SPEC RUNTIME §9.3 recover_module] Returns the resulting state, as
+  ## `start` does.
+  let r = e.call(
+    Request(
+      kind: rqRecover,
+      instance: instance,
+      origin: origin,
+      expectedRevision: Opt.some(expectedRevision),
+    )
+  )
+  r.toResult(r.view)
+
 proc reportFailure*(
     e: Engine, instance, attempt: string, reason = ""
 ): Result[void, EngineError] =
@@ -2476,6 +3243,14 @@ proc changes*(e: Engine): seq[StateChange] =
 
 proc runtimeInstanceId*(e: Engine): string =
   e.call(Request(kind: rqIdentity)).id
+
+proc cleanupPending*(e: Engine, instance: string): bool =
+  ## [IMPL] Host and test observation: `instance` is `unloaded` or `error` and
+  ## the cleanup of its previous realization has not completed, so a start or
+  ## a recovery answers NOT_READY (RUNTIME §3.4 l.587-588, l.3538; G20). The
+  ## view does not show it: an instance reaches `error` before its cleanup
+  ## ends. False for an unknown instance.
+  e.call(Request(kind: rqCleanup, instance: instance)).pending
 
 proc routes*(e: Engine): seq[LogosNSRuntimeControlRouteRecord] =
   ## The route records not dropped, in creation order (host and test
@@ -2527,14 +3302,7 @@ proc tryClose*(e: Engine): Result[void, EngineError] =
     joinThread(e.workers[i])
   for i in 0 ..< e.callSpawned:
     joinThread(e.callWorkers[i])
-  # No thread sends to any channel or rings the bell any more.
-  e.inbox.close()
-  e.jobs.close()
-  e.calls.close()
-  e.closeSlots()
-  deinitLock(e.slotLock)
-  freeBell(e.bell)
-  deallocShared(e)
+  e.freeEngine()
   ok()
 
 proc close*(e: Engine, patience = initDuration(seconds = 10)): bool =

@@ -74,6 +74,7 @@ type
 
   Authorizer* = object
     policy: AuthzPolicy
+    prefix: string
     issued: uint64
     answers: Deque[AuthzAnswer]
 
@@ -103,8 +104,10 @@ func deny*(
     outcome: outcome,
   )
 
-func initAuthorizer*(policy: AuthzPolicy): Authorizer =
-  Authorizer(policy: policy)
+func initAuthorizer*(policy: AuthzPolicy, prefix: string): Authorizer =
+  ## [IMPL] Decision ids are `d-<prefix>-<n>`: the engine's random prefix keeps
+  ## every run's ids apart from every earlier run's (CA l.548-550; I82).
+  Authorizer(policy: policy, prefix: prefix)
 
 func matches(r: AuthzRule, q: AuthzRequest): bool =
   (r.action.isNone or r.action.get == q.action) and
@@ -126,7 +129,10 @@ proc decide*(a: var Authorizer, q: AuthzRequest): AuthzAnswer =
       outcome = r.outcome
       break
   result = AuthzAnswer(
-    decisionId: "d-" & $a.issued, outcome: outcome, scope: q.scopeOf, request: q
+    decisionId: "d-" & a.prefix & "-" & $a.issued,
+    outcome: outcome,
+    scope: q.scopeOf,
+    request: q,
   )
   if a.answers.len >= MaxRetainedAnswers:
     a.answers.popFirst()

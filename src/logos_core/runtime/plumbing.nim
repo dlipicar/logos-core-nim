@@ -34,6 +34,12 @@ const
     ## preparing another is MODULE_ERROR (INTERFACE l.2040-2041)
   MaxRetainedChanges* = 4096 ## [IMPL] committed state changes kept for observation
   MaxDiagnostics* = 4096 ## [IMPL] diagnostics kept for observation, oldest dropped
+  DefaultRevisionBudget* = (1'u64 shl 32) - (1'u64 shl 16)
+    ## [IMPL] accepting commits per instance and start; the 2^16 left over is
+    ## for the commits that follow them, which must still advance (I82)
+  MaxInstances* = 1024
+    ## [IMPL] Runtime-known instances, retained ones included, past which
+    ## `create_module` is MODULE_ERROR (BCP l.369; I82)
 
 type
   ModuleState* = enum
@@ -119,20 +125,40 @@ type
     instance*: string
     record*: ModuleRecord
 
+  ModuleDeclaration* = object
+    ## [G55] The one accepted declaration for a module name that
+    ## `create_module` selects: protected deployment input (BCP l.367; RUNTIME
+    ## l.3614-3621), a direct record.
+    record*: ModuleRecord ## with no state assignment
+    persistentState*: bool
+      ## [IMPL] each created instance gets a fresh state assignment
+      ## (RUNTIME §8 l.1451)
+
   EngineConfig* = object
     runtimeInstanceId*: string
       ## [SPEC RUNTIME §9.2 l.2665-2672] this Runtime's identity, assigned by
-      ## the host (`newRuntimeInstanceId`). Until execution state and routes
-      ## persist, a host gives each engine start a fresh one, so instance
+      ## the host (`newRuntimeInstanceId`). Without `storeDir` nothing
+      ## persists, so a host gives each engine start a fresh one and instance
       ## addresses and execution revisions never repeat under one identity
-      ## [IMPL].
+      ## [IMPL]. With `storeDir` it may be empty: the store's identity is
+      ## used, generated when the store was created [G192 interim (TF-27)].
     workDir*: string ## private copies of dynamic artifacts
     stateRoot*: Opt[string] ## module state directories [G143]
+    storeDir*: Opt[string]
+      ## [IMPL] the persistent Runtime state (`store.nim`; DECISIONS I82);
+      ## none: nothing persists
+    revisionBudget*: uint64
+      ## [IMPL] accepting commits per instance and engine start before the
+      ## execution revision counts as exhausted (RUNTIME l.3507); 0 is
+      ## `DefaultRevisionBudget`
     statics*: seq[StaticRegistration] ## protected static bindings (§2.3, §13.3)
     policy*: AuthzPolicy
     ordering*: seq[(string, string)]
       ## [SPEC RUNTIME §3.7] accepted lifecycle-ordering constraints as
       ## (prerequisite instance, dependent instance)
+    declarations*: seq[ModuleDeclaration]
+      ## [G55] what `create_module` may create, one per module name; a change
+      ## affects only later creations (RUNTIME l.3621)
     startupDeadline*: Duration
     stopDeadline*: Duration
     shutdownGrace*: Duration
@@ -161,6 +187,9 @@ type
     rqReleaseHandle ## a route handle's `release`
     rqRoutes ## every route record (observation for the host and tests)
     rqIdentity ## this Runtime's identity
+    rqCleanup
+      ## whether an instance's previous realization still has cleanup to
+      ## complete (observation for the host and tests)
     rqSubscribe ## a route handle's `subscribe`
     rqUnsubscribe ## a route handle's `unsubscribe`
     rqCandidates ## the subscriptions an ordinary publication may reach
@@ -172,6 +201,7 @@ type
       ## orchestration instance realized to `ready` (G190)
     rqRequestShutdown ## [SPEC RUNTIME §13.2] accept shutdown and answer at once
     rqAwaitShutdown ## wait for shutdown without initiating it (RUN-0728)
+    rqRecover ## [SPEC RUNTIME §9.3 recover_module] from the host or a test
 
   RcMethod* = enum
     ## The Runtime Control methods this Runtime performs (RUNTIME §9.3).
@@ -185,6 +215,9 @@ type
     rmShutdownRuntime = "shutdown_runtime"
     rmGetExecutionPermissions = "get_execution_permissions"
     rmGetReadiness = "get_readiness"
+    rmRecoverModule = "recover_module"
+    rmRetireModule = "retire_module"
+    rmCreateModule = "create_module"
 
   RcCall* = object ## One checked Runtime Control request.
     request*: seq[byte] ## its deterministic CBOR, for `request_key` replay
@@ -203,6 +236,12 @@ type
       report*: LogosNSRuntimeControlReportFailureRequest
     of rmGetReadiness:
       readiness*: LogosNSRuntimeControlGetReadinessRequest
+    of rmRecoverModule:
+      recover*: LogosNSRuntimeControlRecoverModuleRequest
+    of rmRetireModule:
+      retire*: LogosNSRuntimeControlRetireModuleRequest
+    of rmCreateModule:
+      createModule*: LogosNSRuntimeControlCreateModuleRequest
     of rmGetSelf, rmShutdownRuntime, rmGetExecutionPermissions:
       discard
 
@@ -253,6 +292,7 @@ type
     ready*: bool ## rqScoped: the invocation's destination is open
     admitted*: bool ## rqDeliver: the handler may run
     diagnostics*: seq[string]
+    pending*: bool ## rqCleanup
 
   ReplyChannel* = ptr Channel[Reply]
 
@@ -436,6 +476,22 @@ proc defaultConfig*(workDir: string): EngineConfig =
     shutdownGrace: DefaultShutdownGrace,
     endedRoutes: DefaultEndedRoutes,
   )
+
+func isRuntimeForm*(name: string): bool =
+  ## [IMPL] A name of the form this Runtime gives what it creates:
+  ## `m-` (instance), `s-` (state assignment) or `p-` (provider), 32 lowercase
+  ## hex digits, `-` and a decimal number. The host configuration may not use
+  ## one, so a retired Runtime-assigned name needs no tombstone: the random
+  ## prefix keeps every later one apart from it (I82).
+  if name.len < 36 or name[0] notin {'m', 's', 'p'} or name[1] != '-' or name[34] != '-':
+    return false
+  for i in 2 .. 33:
+    if name[i] notin {'0' .. '9', 'a' .. 'f'}:
+      return false
+  for i in 35 ..< name.len:
+    if name[i] notin {'0' .. '9'}:
+      return false
+  true
 
 func hostOrigin*(): Origin =
   Origin(host: true)
