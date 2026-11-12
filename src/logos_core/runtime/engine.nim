@@ -2696,6 +2696,15 @@ proc handle(st: State, q: Request) =
     st.releaseHandle(q)
   of rqIdentity:
     q.reply.answer(Reply(id: st.runtimeId))
+  of rqCleanup:
+    let x = st.instances.getOrDefault(q.instance)
+    q.reply.answer(
+      Reply(
+        pending:
+          not x.isNil and x.state in {msUnloaded, msError} and
+          (x.attempt != nil or x.teardown != 0 or x.realization != nil)
+      )
+    )
   of rqSubscribe:
     st.subscribe(q)
   of rqUnsubscribe:
@@ -3234,6 +3243,14 @@ proc changes*(e: Engine): seq[StateChange] =
 
 proc runtimeInstanceId*(e: Engine): string =
   e.call(Request(kind: rqIdentity)).id
+
+proc cleanupPending*(e: Engine, instance: string): bool =
+  ## [IMPL] Host and test observation: `instance` is `unloaded` or `error` and
+  ## the cleanup of its previous realization has not completed, so a start or
+  ## a recovery answers NOT_READY (RUNTIME §3.4 l.587-588, l.3538; G20). The
+  ## view does not show it: an instance reaches `error` before its cleanup
+  ## ends. False for an unknown instance.
+  e.call(Request(kind: rqCleanup, instance: instance)).pending
 
 proc routes*(e: Engine): seq[LogosNSRuntimeControlRouteRecord] =
   ## The route records not dropped, in creation order (host and test

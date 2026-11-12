@@ -187,6 +187,9 @@ type
     rqReleaseHandle ## a route handle's `release`
     rqRoutes ## every route record (observation for the host and tests)
     rqIdentity ## this Runtime's identity
+    rqCleanup
+      ## whether an instance's previous realization still has cleanup to
+      ## complete (observation for the host and tests)
     rqSubscribe ## a route handle's `subscribe`
     rqUnsubscribe ## a route handle's `unsubscribe`
     rqCandidates ## the subscriptions an ordinary publication may reach
@@ -289,6 +292,7 @@ type
     ready*: bool ## rqScoped: the invocation's destination is open
     admitted*: bool ## rqDeliver: the handler may run
     diagnostics*: seq[string]
+    pending*: bool ## rqCleanup
 
   ReplyChannel* = ptr Channel[Reply]
 

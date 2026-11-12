@@ -486,7 +486,7 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check e.reportFailure("m", v.attempt).isOk
     check waitUntil(
       proc(): bool =
-        e.view("m").tryGet.state == msError
+        e.view("m").tryGet.state == msError and not e.cleanupPending("m")
     )
     let r = e.recover("m", e.view("m").tryGet.execution.revision).tryGet
     check r.state == msReady and r.providerId == p

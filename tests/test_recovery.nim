@@ -182,26 +182,20 @@ proc stateIn(r: RcResult): LogosNSRuntimeControlStateKind =
 proc rev(e: Engine, instance: string): uint64 =
   e.view(instance).tryGet.execution.revision
 
-proc failed(e: Engine, instance: string) =
-  ## The instance reports failure through its current realization.
+proc failed(e: Engine, instance: string, cleaned = true) =
+  ## The instance reports failure through its current realization. With
+  ## `cleaned`, this waits until the realization's cleanup is complete too: the
+  ## instance is `error` before it is, and until then a recovery is NOT_READY.
   let v = e.view(instance).tryGet
   check e.reportFailure(instance, v.attempt).isOk
   check waitUntil(
     proc(): bool =
       e.view(instance).tryGet.state == msError
   )
-
-proc cleaned(e: Engine, instance: string, destroys: int): bool =
-  ## Waits until `counter_module` has been destroyed `destroys` times and the
-  ## engine has seen it.
-  waitUntil(
-    proc(): bool =
-      counterDestroys.load >= destroys
-  ) and
-    waitUntil(
+  if cleaned:
+    check waitUntil(
       proc(): bool =
-        e.view(instance).tryGet.attempt.len == 0 or
-          e.view(instance).tryGet.state == msError
+        not e.cleanupPending(instance)
     )
 
 var startReply: Atomic[int] ## the state `startOn` got, or -1; -2 while it waits
@@ -285,7 +279,8 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     check startReply.load == ord(msReady)
     # `error` whose destruction has not returned: cleanup is pending.
     counterDestroyGate.store(true)
-    e.failed("w")
+    e.failed("w", cleaned = false)
+    check e.cleanupPending("w")
     let r = e.rev("w")
     check arc.recoverOn("w", r).code == ecNotReady
     # What comes before readiness (G171): authority, the module name, the revision.
@@ -612,7 +607,7 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     discard e.create(counter(), "v").tryGet
     check e.start("v").tryGet.state == msReady
     counterDestroyGate.store(true)
-    e.failed("v")
+    e.failed("v", cleaned = false)
     check e.stop("v").tryGet.execution.intent == inStopped
     check e.view("v").tryGet.state in {msError, msStopping}
     check arc.retire(e, "v").code == ecNotReady
@@ -638,7 +633,7 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
       proc(): bool =
         held.load == 1
     )
-    e.failed("m")
+    e.failed("m", cleaned = false)
     check e.stop("m").tryGet.execution.intent == inStopped
     check arc.retire(e, "m").code == ecNotReady
     gate.store(false)
