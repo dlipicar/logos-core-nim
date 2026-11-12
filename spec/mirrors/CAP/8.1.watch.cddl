@@ -1,0 +1,16 @@
+logos.capability_authority.watch_changes_request = {
+    consumer: logos.runtime.module_instance_address,
+}
+
+logos.capability_authority.watch_changes_response =
+    {} /
+    { error: logos.capability_authority.error }
+
+logos.capability_authority.observed_change_event =
+    { grant: logos.capability_authority.grant } /
+    {
+        changed_at: logos.capability_authority.timestamp,
+        previous_policy_revision: uint64,
+        policy_revision: uint64,
+        ? affected_executions: [* logos.runtime.module_instance_address],
+    }

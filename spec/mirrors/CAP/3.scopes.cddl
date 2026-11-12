@@ -1,0 +1,81 @@
+_module = "logos_capability_authority"
+
+logos.capability_authority.decision_id = tstr .size (1..128)
+
+logos.capability_authority.route_access = {
+    ? methods: [* bstr .size 32],
+    ? publish_events: [* bstr .size 32],
+    ? subscribe_events: [* bstr .size 32],
+}
+
+logos.capability_authority.execution_mode =
+    "direct" /
+    "local-transport"
+
+logos.capability_authority.hosted_placement =
+    "process" /
+    "sandbox" /
+    "container"
+
+logos.capability_authority.artifact_id = tstr .size (1..128)
+
+logos.capability_authority.provider_access_scope = {
+    kind: "provider-access",
+    contract: logos.schema_commitment,
+    actions: [* (
+        "discover" /
+        "establish-route" /
+        "renew-route" /
+        "call" /
+        "publish-event" /
+        "subscribe-event"
+    )],
+    ? providers: [* logos.runtime.module_provider_address],
+    ? routes: [* logos.runtime.route_id],
+    ? access: logos.capability_authority.route_access,
+}
+
+logos.capability_authority.runtime_control_scope = {
+    kind: "runtime-control",
+    runtime: logos.runtime.runtime_instance_id,
+    contract: logos.schema_commitment,
+    ? methods: [* bstr .size 32],
+    ? events: [* bstr .size 32],
+    ? modules: [* logos.runtime.module_name],
+    ? instances: [* logos.runtime.module_instance_id],
+    ? providers: [* logos.runtime.module_provider_address],
+    ? routes: [* logos.runtime.route_id],
+}
+
+logos.capability_authority.module_execution_scope = {
+    kind: "module-execution",
+    runtime: logos.runtime.runtime_instance_id,
+    module: logos.runtime.module_name,
+    ? instance: logos.runtime.module_instance_id,
+    actions: [* ("start" / "stop")],
+    ? modes: [* logos.capability_authority.execution_mode],
+    ? placements: [* logos.capability_authority.hosted_placement],
+    ? package: tstr .size (1..128),
+    ? version: tstr .size (1..128),
+    ? artifact: logos.capability_authority.artifact_id,
+}
+
+logos.capability_authority.remote_enrollment_scope = {
+    kind: "remote-enrollment",
+    remote_runtime: logos.runtime.runtime_instance_id,
+    actions: [* ("enroll" / "refresh" / "remove")],
+    uses: [* ("runtime-control" / "provider-access")],
+}
+
+logos.capability_authority.permission_scope = {
+    kind: "permission",
+    permission: tstr .size (1..128),
+    constraints: bstr .size (1..1048576),
+}
+
+logos.capability_authority.scope =
+    logos.capability_authority.provider_access_scope /
+    logos.capability_authority.runtime_control_scope /
+    logos.capability_authority.module_execution_scope /
+    logos.capability_authority.remote_enrollment_scope /
+    logos.capability_authority.permission_scope

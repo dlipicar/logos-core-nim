@@ -1,0 +1,10 @@
+logos.capability_authority.grant_changed_event = {
+    grant: logos.capability_authority.grant,
+}
+
+logos.capability_authority.policy_changed_event = {
+    changed_at: logos.capability_authority.timestamp,
+    previous_policy_revision: uint64,
+    policy_revision: uint64,
+    ? affected_executions: [* logos.runtime.module_instance_address],
+}

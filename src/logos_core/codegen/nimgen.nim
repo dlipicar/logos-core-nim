@@ -48,6 +48,11 @@ type
       ## When set, the module also exports a template of this name that returns
       ## its per-thread `GeneratedSchema`, for code that validates payloads of
       ## the set itself (the engine's Runtime Control binding) [IMPL].
+    documentsAccessor*: string
+      ## When set, the module also exports a template of this name that returns
+      ## the documents it was generated from (primary, interfaces, supporting),
+      ## for code that recomputes the set's commitments from them (the
+      ## Capability Authority's pinned contract roots, DECISIONS I84) [IMPL].
 
   Doc = object
     model: SchemaModel
@@ -648,12 +653,16 @@ proc genObject(g: var NGen, o: Owner, path: seq[Step], n: SchemaNode, name: stri
           g.decInto(dec, 4, o, fpath, f.node, fv & ".get", "r." & fname & ".get")
       else:
         inc count
-        let default =
+        # A defaulted field is declared with the literal's own type, not an
+        # alias of it: Nim 2.2.14 rejects a default whose alias is declared
+        # later in the same type section ("expected 'B = Forward'",
+        # build/scratch/upstream/ISSUES.md draft 50).
+        let (declType, default) =
           if lit.isSome:
-            " = " & literalNim(lit.get)
+            (literalType(lit.get), " = " & literalNim(lit.get))
           else:
-            ""
-        decl.add("\n    " & fname & "*: " & t & default)
+            (t, "")
+        decl.add("\n    " & fname & "*: " & declType & default)
         fills.add("  " & entry & ".key = cbor(" & escape(f.name) & ")")
         g.encInto(fills, 2, o, fpath, f.node, "x." & fname, entry & ".value")
         fills.add("  inc k")
@@ -916,6 +925,12 @@ proc nimModule*(
       if opts.schemaAccessor.len > 0:
         "\n\ntemplate " & opts.schemaAccessor &
           "*(): GeneratedSchema =\n  ## This set's schema, loaded once per thread.\n  generatedSchema()"
+      else:
+        ""
+    ) & (
+      if opts.documentsAccessor.len > 0:
+        "\n\ntemplate " & opts.documentsAccessor &
+          "*(): (string, seq[string], seq[string]) =\n  ## The documents this module was generated from: primary, interfaces,\n  ## supporting.\n  (primaryDocument, @interfaceDocuments, @supportingDocuments)"
       else:
         ""
     )

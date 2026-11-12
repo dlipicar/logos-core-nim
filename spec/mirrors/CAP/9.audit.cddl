@@ -1,0 +1,128 @@
+logos.capability_authority.audit_value_commitment = {
+    schema_subtree_root: bstr .size 32,
+    value_root: bstr .size 32,
+}
+
+logos.capability_authority.call_commitments = {
+    request: logos.capability_authority.audit_value_commitment,
+    ? response: logos.capability_authority.audit_value_commitment,
+} / {
+    response: logos.capability_authority.audit_value_commitment,
+}
+
+logos.capability_authority.audit_record =
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "evaluate",
+        outcome: "allow",
+        consumer: logos.runtime.module_instance_address,
+        decision_id: logos.capability_authority.decision_id,
+        scopes: [* logos.capability_authority.scope],
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "evaluate",
+        outcome: "deny",
+        consumer: logos.runtime.module_instance_address,
+        decision_id: logos.capability_authority.decision_id,
+        scopes: [* logos.capability_authority.scope],
+        denial: logos.capability_authority.denial,
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "evaluate",
+        outcome: "failure",
+        consumer: logos.runtime.module_instance_address,
+        ? scopes: [* logos.capability_authority.scope],
+        error: logos.capability_authority.error_code,
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "call",
+        outcome: "success",
+        consumer: logos.runtime.module_instance_address,
+        decision_id: logos.capability_authority.decision_id,
+        scopes: [logos.capability_authority.scope],
+        commitments: logos.capability_authority.call_commitments,
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "call",
+        outcome: "failure",
+        consumer: logos.runtime.module_instance_address,
+        decision_id: logos.capability_authority.decision_id,
+        scopes: [logos.capability_authority.scope],
+        ? commitments: logos.capability_authority.call_commitments,
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "issue-grant",
+        outcome: "success",
+        ? consumer: logos.runtime.module_instance_address,
+        target: logos.runtime.module_instance_address,
+        grant_id: logos.capability_authority.grant_id,
+        scopes: [* logos.capability_authority.scope],
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "issue-grant",
+        outcome: "deny",
+        consumer: logos.runtime.module_instance_address,
+        target: logos.runtime.module_instance_address,
+        scopes: [* logos.capability_authority.scope],
+        denial: logos.capability_authority.denial,
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "issue-grant",
+        outcome: "failure",
+        consumer: logos.runtime.module_instance_address,
+        target: logos.runtime.module_instance_address,
+        ? scopes: [* logos.capability_authority.scope],
+        error: logos.capability_authority.error_code,
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "revoke-grant",
+        outcome: "success",
+        ? consumer: logos.runtime.module_instance_address,
+        target: logos.runtime.module_instance_address,
+        grant_id: logos.capability_authority.grant_id,
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "revoke-grant",
+        outcome: "failure",
+        consumer: logos.runtime.module_instance_address,
+        ? target: logos.runtime.module_instance_address,
+        grant_id: logos.capability_authority.grant_id,
+        error: logos.capability_authority.error_code,
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "grant-expired",
+        outcome: "success",
+        target: logos.runtime.module_instance_address,
+        grant_id: logos.capability_authority.grant_id,
+    } /
+    {
+        timestamp: logos.capability_authority.timestamp,
+        operation: "policy-change",
+        outcome: "success",
+    }
+
+logos.capability_authority.query_audit_request = {
+    consumer: logos.runtime.module_instance_address,
+    ? record_consumer: logos.runtime.module_instance_address,
+    ? target: logos.runtime.module_instance_address,
+    ? decision_id: logos.capability_authority.decision_id,
+    ? grant_id: logos.capability_authority.grant_id,
+    ? since: logos.capability_authority.timestamp,
+    ? until: logos.capability_authority.timestamp,
+}
+
+logos.capability_authority.query_audit_response =
+    {
+        records: [* logos.capability_authority.audit_record],
+    } /
+    { error: logos.capability_authority.error }

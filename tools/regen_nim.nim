@@ -14,6 +14,14 @@ proc main() =
   echo hostConfigTypesPath
   writeFile(storeTypesPath, generatedStoreTypes().get)
   echo storeTypesPath
+  writeFile(caTypesPath, generatedCaTypes().get)
+  echo caTypesPath
+  writeFile(caKitPath, generatedCaKit().get)
+  echo caKitPath
+  writeFile(policyTypesPath, generatedPolicyTypes().get)
+  echo policyTypesPath
+  writeFile(stateTypesPath, generatedStateTypes().get)
+  echo stateTypesPath
   for f in nimFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath

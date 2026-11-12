@@ -9,6 +9,7 @@ import ../src/logos_core/iface/surface
 import ../src/logos_core/base/perthread
 import ../src/logos_core/codegen/nimgen
 from ../src/logos_core/iface/outcome as oc import nil
+import ../src/logos_core/authority/[policy_types, logos_capability_authority_types]
 import ./support/[specdata, genfixtures]
 import
   ./generated/[meter_module_types, sensor_module_types, recursive_types, demo_types]
@@ -26,6 +27,10 @@ suite "ifc.nim-types: generated modules (D29)":
     check generatedRcTypes().get == readFile(rcTypesPath)
     check generatedHostConfigTypes().get == readFile(hostConfigTypesPath)
     check generatedStoreTypes().get == readFile(storeTypesPath)
+    check generatedCaTypes().get == readFile(caTypesPath)
+    check generatedCaKit().get == readFile(caKitPath)
+    check generatedPolicyTypes().get == readFile(policyTypesPath)
+    check generatedStateTypes().get == readFile(stateTypesPath)
     for f in nimFixtures:
       checkpoint f.module
       check f.generated.get == readFile(f.fixturePath)
@@ -40,8 +45,30 @@ suite "ifc.nim-types: generated modules (D29)":
     check stamp in readFile(rcTypesPath)
     check stamp in readFile(hostConfigTypesPath)
     check stamp in readFile(storeTypesPath)
+    for path in [caTypesPath, caKitPath, policyTypesPath, stateTypesPath]:
+      checkpoint path
+      check stamp in readFile(path)
     for f in nimFixtures:
       check stamp in readFile(f.fixturePath)
+
+  test "[IMPL] the policy's lcn.ap_commitment repeats logos.capability_authority.commitment_requirements":
+    # policy.cddl names no CA type (DECISIONS I84): its commitment map is a
+    # copy, and both must take and make the same bytes.
+    check "logos.capability_authority.commitment_retention = \"retain-root\"" in
+      readFile("spec/mirrors/CAP/4.commitments.cddl")
+    for value in [
+      "{}", "{\"request\": \"retain-root\"}", "{\"response\": \"retain-root\"}",
+      "{\"request\": \"retain-root\", \"response\": \"retain-root\"}",
+      "{\"request\": \"keep\"}", "{\"other\": 1}",
+    ]:
+      checkpoint value
+      let bytes = diag(value)
+      let a = decode(LcnApCommitment, bytes)
+      let b = decode(LogosNSCapabilityAuthorityCommitmentRequirements, bytes)
+      check a.isOk == b.isOk
+      if a.isOk and b.isOk:
+        check encode(a.get).get == bytes
+        check encode(b.get).get == bytes
 
   test "[IMPL] the stored module record repeats the host configuration's rules":
     # store.cddl's lcn.rs_record is lcn.app_module without `instance`, plus

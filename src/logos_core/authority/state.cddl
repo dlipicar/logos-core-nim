@@ -1,0 +1,52 @@
+; logos-core-nim.authority-state.v1: the Capability Authority's state, in its
+; own state assignment (DECISIONS I84; docs/AUTHORITY-POLICY.md). Each file is
+; one Logos deterministic-CBOR value: meta.cbor an lcn.as_meta,
+; grants/<grant id>.cbor an lcn.as_grant, audit/<16 hex digits>.cbor an
+; lcn.as_segment. A grant and an audit record are embedded as the bytes the
+; generated Capability Authority codecs make, so this schema names no CA type.
+
+lcn.as_meta = {
+  format: "logos-core-nim.authority-state.v1",
+  runtime_instance_id: tstr .size (1..128),
+  contract: bstr .size 32,
+  policy: lcn.as_policy,
+  audit_floor: uint64,
+  policy_records: [* lcn.as_record],
+}
+
+; the active policy: its digest, revision and when it became active
+lcn.as_policy = {
+  digest: bstr .size 32,
+  revision: uint64,
+  changed_at: uint64,
+}
+
+; one audit record, its recording sequence number, and the facts of its
+; consumer (else its target) when it was recorded: local detail (CA l.1349)
+lcn.as_record = {
+  seq: uint64,
+  record: bstr,
+  ? subject: lcn.as_facts,
+}
+
+; module is absent when the facts could not be read: the instance id alone
+lcn.as_facts = {
+  instance: tstr .size (1..128),
+  ? module: tstr .size (1..64),
+  ? signer: bstr .size 48,
+  ? package: tstr .size (1..128),
+}
+
+; a grant as issued or as its last transition left it, the facts of its target
+; at issuance, and its issue, revoke and expiry records
+lcn.as_grant = {
+  grant: bstr,
+  target: lcn.as_facts,
+  records: [* lcn.as_record],
+}
+
+; up to 256 records written behind, from `first` on
+lcn.as_segment = {
+  first: uint64,
+  records: [* lcn.as_record],
+}

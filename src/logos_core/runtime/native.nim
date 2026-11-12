@@ -52,6 +52,12 @@ type
     binding*: string ## the deployment-local `static_binding.binding`
     module*: string ## the one module whose symbol family the table holds
     symbols*: Table[string, pointer]
+    system*: bool
+      ## [SPEC INTERFACE §1.3; BCP §5] [IMPL] A Logos-defined system module
+      ## linked into this host (the Capability Authority): its call surface
+      ## may use the reserved `logos` names. Set only by this repository's
+      ## system providers (`caStaticRegistration`), never by
+      ## `checkStaticRegistration`.
 
   CodeKind* = enum
     codeStatic

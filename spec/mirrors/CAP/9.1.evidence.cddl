@@ -1,0 +1,16 @@
+logos.capability_authority.call_evidence_profile =
+    "logos.call-evidence.cose-sign1-slh-dsa-sha2-192s"
+
+logos.capability_authority.evidence_key_id = bstr .size (1..128)
+
+logos.capability_authority.call_evidence_proofs = {
+    ? request: [* bstr],
+    ? response: [* bstr],
+}
+
+logos.capability_authority.call_evidence_claim = {
+    profile: logos.capability_authority.call_evidence_profile,
+    producer: logos.runtime.runtime_instance_id,
+    record: logos.capability_authority.audit_record,
+    ? proofs: logos.capability_authority.call_evidence_proofs,
+}
