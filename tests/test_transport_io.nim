@@ -1,16 +1,20 @@
-## TRANSPORT §2.1, §2.3, §3.1, §8.1, §8.2, §8.6, §9.1; G58, G61, G77: the
-## unix-stream transport I/O layer over real sockets, against in-process raw
-## sockets and a child-process peer (`tests/support/trnpeer.nim`). Step 10a-1:
-## the I/O thread, endpoints, the peer check and the Hello exchange.
+## TRANSPORT §2.1, §2.3, §3.1, §4, §5, §6, §8.1, §8.2, §8.6, §9.1; G58, G61, G77:
+## the unix-stream transport I/O layer over real sockets, against in-process raw
+## sockets and a child-process peer (`tests/support/trnpeer.nim`): the I/O
+## thread, endpoints, the peer check and the Hello exchange (step 10a-1); calls,
+## execution slots and the delayed queue (A21), subscriptions and Events, the
+## session's end, and the aggregate limits (step 10a-2).
 
 import std/[atomics, base64, monotimes, os, posix, sequtils, strutils, times]
 import unittest2
 import results
 import ../src/logos_core/cbor
 import ../src/logos_core/base/hex
-import ../src/logos_core/transport/[envelope, framing]
+import ../src/logos_core/commitment
+import ../src/logos_core/iface/[accept, surface]
+import ../src/logos_core/transport/[access, boundary, envelope, framing, session]
 import ../src/logos_core/transport/io/sock
-import ./support/[ctl, peerbuild, peerproc, trnowner]
+import ./support/[ctl, peerbuild, peerproc, specdata, trnowner]
 
 # Sockets go under a short private base: TMPDIR when the deepest path fits
 # `sun_path` and its filesystem holds sockets, else /tmp (plan §5.1).
@@ -654,18 +658,22 @@ suite "trnio.hello: the Hello exchange over sockets (TRANSPORT §3.1, §8.1, §8
 
   test "[TRN-0381] stalled 16 MiB Hellos are bounded by the pre-Hello pool":
     let ep = newEndpoint()
-    let o = newOwner() # maxHelloInputBytes: 32 MiB; Hello deadline 300 ms
+    # maxHelloInputBytes: 32 MiB. The stalled Hellos' deadlines end 500 ms
+    # before the caller's, whatever the load: it waits behind them, then fits.
+    var cfg = fastConfig()
+    cfg.helloTimeout = 1500 * Ms
+    let o = newOwner(cfg)
     check o.serve(1, dupCloexec(ep.listener))
     var evil: seq[cint]
     for _ in 0 ..< 8:
       let fd = rawConnect(ep.path)
       check writeAll(fd, @(prefixOf(MinFrameLimit)) & newSeq[byte](100))
       evil.add(fd)
-    sleep(150)
+    sleep(500)
     o.connect(1, ep.path, o.issue())
     # Waiting behind the stalled frames: not admitted while they hold the pool.
     check o.oneOf(1, 100).isNone
-    let c = o.oneOf(1, 3000)
+    let c = o.oneOf(1, 5000)
     check c.isSome and c.get.kind == evConnected
     for fd in evil:
       let (data, ended) = readUntilEnd(fd, o, 2000)
@@ -845,5 +853,814 @@ suite "trnio.close: closing during the Hello exchange (TRANSPORT §3.2, §8.6)":
     discard fdClose(raw)
     o.stop()
     check removeEndpoint(ep).isOk
+
+# Sessions (step 10a-2) ----------------------------------------------------------------
+
+let storageBoundary = boundary(storageSet, storageRoot).get
+const MiB = 1024 * 1024
+
+proc waitSink(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].} =
+  ## On the I/O thread: `submitWait` must refuse rather than wait.
+  let p = cast[ptr Probe](ctx)
+  if ev.kind == evLocalFailure and p.res.load == 0:
+    p.res.store(ord(p.loop.submitWait(IoCommand(kind: cmdClose, conn: 1))) + 1)
+
+proc openLater(g: ptr Atomic[bool]) {.thread.} =
+  sleep(100)
+  g[].store(false)
+
+proc served(cfg = fastConfig()): (Owner, Endpoint) =
+  let ep = newEndpoint()
+  let o = newOwner(cfg)
+  doAssert o.serve(1, dupCloexec(ep.listener))
+  (o, ep)
+
+proc done(o: Owner, ep: Endpoint) =
+  o.stop()
+  doAssert removeEndpoint(ep).isOk
+
+proc events(o: Owner, kind: IoEventKind, conn = high(uint64), start = 0): seq[IoEvent] =
+  for i in start ..< o.log.len:
+    let ev = o.log[i]
+    if ev.kind == kind and (conn == high(uint64) or ev.conn == conn):
+      result.add(ev)
+
+proc pumpUntil(
+    owners: openArray[Owner], cond: proc(): bool, timeoutMs = 5000 * Slow
+): bool =
+  let deadline = getMonoTime() + initDuration(milliseconds = timeoutMs)
+  while getMonoTime() < deadline:
+    if cond():
+      return true
+    for o in owners:
+      discard o.pump()
+    sleep(1)
+  cond()
+
+proc waitN(
+    o: Owner,
+    kind: IoEventKind,
+    conn: ConnId,
+    n = 1,
+    start = 0,
+    timeoutMs = 5000 * Slow,
+    others: seq[Owner] = @[],
+): seq[IoEvent] =
+  ## The events of `kind` on `conn` from `start`, once there are `n` of them
+  ## (or at the deadline).
+  discard pumpUntil(
+    @[o] & others,
+    proc(): bool =
+      o.events(kind, conn, start).len >= n,
+    timeoutMs,
+  )
+  o.events(kind, conn, start)
+
+proc attach(
+    o: Owner, ep: Endpoint, conn: ConnId, b = binding(), caller: Owner = nil
+): ConnId =
+  ## Connects `conn` (from `caller`, else `o`) to `ep`, served by `o`; the
+  ## callee's connection id.
+  let c = if caller.isNil: o else: caller
+  let start = o.log.len
+  let cstart = c.log.len
+  c.connect(conn, ep.path, o.issue(b))
+  doAssert pumpUntil(
+    [o, c],
+    proc(): bool =
+      c.events(evConnected, conn, cstart).len == 1 and
+        o.events(evEstablished, high(uint64), start).len == 1,
+  )
+  o.cursor = o.log.len
+  c.cursor = c.log.len
+  o.events(evEstablished, high(uint64), start)[0].conn
+
+proc response(
+    o: Owner, conn: ConnId, tag: uint64, timeoutMs = 5000 * Slow
+): Opt[IoEvent] =
+  ## The outcome of call `tag` on `conn`, once it arrives.
+  discard pumpUntil(
+    [o],
+    proc(): bool =
+      o.events(evResponse, conn).anyIt(it.tag == tag),
+    timeoutMs,
+  )
+  for r in o.events(evResponse, conn):
+    if r.tag == tag:
+      return Opt.some(r)
+  Opt.none(IoEvent)
+
+proc code(r: Opt[IoEvent]): ErrorCode =
+  if r.isNone:
+    return ecOk
+  if r.get.outcome.ok:
+    return ecOk
+  r.get.outcome.failure.code
+
+type Raw = object
+  ## A caller outside the transport, for peers that misbehave or do not read.
+  fd: cint
+  caller: CallerConn
+  reader: FrameReader
+  got: seq[Message]
+
+proc readMsgs(r: var Raw, o: Owner, n: int, timeoutMs = 3000 * Slow): seq[Message] =
+  ## Reads until `n` more messages arrived or the deadline; the owner keeps
+  ## handling its events meanwhile.
+  let start = r.got.len
+  var buf: array[65536, byte]
+  let deadline = getMonoTime() + initDuration(milliseconds = timeoutMs)
+  while r.got.len - start < n and getMonoTime() < deadline:
+    discard o.pump()
+    if not waitReadable(r.fd, 5):
+      continue
+    let k = posix.read(r.fd, addr buf[0], buf.len)
+    if k <= 0:
+      break
+    for body in r.reader.feed(buf.toOpenArray(0, k - 1)).get:
+      r.got.add(decodeMessage(body).get)
+  r.got[start ..^ 1]
+
+proc rawSession(o: Owner, ep: Endpoint, b = binding()): Raw =
+  result.fd = rawConnect(ep.path)
+  result.caller = callerConn(storageBoundary)
+  result.reader = newFrameReader()
+  doAssert writeAll(result.fd, helloBytes(o.issue(b)))
+  let hello = result.readMsgs(o, 1)
+  doAssert hello.len == 1 and hello[0].kind == mkHello
+
+proc sendAll(fd: cint, data: openArray[byte]): bool =
+  ## A blocking write that never raises SIGPIPE (`sockSend`).
+  var off = 0
+  while off < data.len:
+    let n = sockSend(fd, unsafeAddr data[off], csize_t(data.len - off))
+    if n < 0:
+      return false
+    off += int(n)
+  true
+
+proc put(r: Raw, body: seq[byte]): bool {.discardable.} =
+  sendAll(r.fd, frame(body).get)
+
+proc existsParams(cid = "bafy"): CborValue =
+  cborMap((cbor("cid"), cbor(cid)))
+
+proc rootOf(set: ContractSet, declaration: string): Digest =
+  for c in set.documents:
+    let d = c.model.find(declaration)
+    if d.isSome:
+      return declarationRoot(c.model, d.get)
+  doAssert false, declaration
+
+const
+  Progress = "storage.upload_progress_event"
+  Started = "storage.started_event"
+  Done = "storage.upload_done_event"
+
+suite "trnio.calls: calls over sockets (TRANSPORT §4, §6, §7, §8.1, §8.6; A21)":
+  test "[TRN-0141] [TRN-0136] responses may come out of order; each reaches its call":
+    let (o, ep) = served()
+    o.respond = false
+    let callee = o.attach(ep, 1)
+    o.callExists(1, 10)
+    o.callExists(1, 11)
+    let ds = o.waitN(evDispatch, callee, 2)
+    check ds.len == 2
+    o.respondTo(callee, ds[1].requestId)
+    check o.response(1, 11).code == ecOk
+    check o.events(evResponse, 1).mapIt(it.tag) == @[11'u64]
+    o.respondTo(callee, ds[0].requestId)
+    check o.response(1, 10).code == ecOk
+    o.done(ep)
+
+  test "[TRN-0314] [TRN-0316] [TRN-0130] [TRN-0382] maxInFlight 1: Cancel of the executing request commits CANCELLED at once; its slot is held until the work ends":
+    var cfg = fastConfig()
+    cfg.maxInFlight = 1
+    let (o, ep) = served(cfg)
+    o.respond = false
+    let callee = o.attach(ep, 1)
+    o.callExists(1, 1)
+    let a = o.waitN(evDispatch, callee)[0].requestId
+    o.callExists(1, 2)
+    o.cancel(1, 1)
+    check o.response(1, 1).code == ecCancelled
+    check o.waitN(evStop, callee).mapIt(it.stopId) == @[a]
+    # The provider has not stopped: the second Request waits for the slot.
+    o.settle(100)
+    check o.events(evDispatch, callee).len == 1
+    o.workEnded(callee, a)
+    let ds = o.waitN(evDispatch, callee, 2)
+    check ds.len == 2
+    o.respondTo(callee, ds[1].requestId)
+    check o.response(1, 2).code == ecOk
+    o.done(ep)
+
+  test "[TRN-0384] a queued Request observes Cancel: CANCELLED, never dispatched":
+    var cfg = fastConfig()
+    cfg.maxInFlight = 1
+    let (o, ep) = served(cfg)
+    o.respond = false
+    let callee = o.attach(ep, 1)
+    o.callExists(1, 1)
+    let a = o.waitN(evDispatch, callee)[0].requestId
+    o.callExists(1, 2)
+    o.settle(50)
+    o.cancel(1, 2)
+    check o.response(1, 2).code == ecCancelled
+    o.respondTo(callee, a)
+    check o.response(1, 1).code == ecOk
+    o.settle(100)
+    check o.events(evDispatch, callee).len == 1
+    check o.events(evStop, callee).len == 0
+    o.done(ep)
+
+  test "[TRN-0382] the loop's slots stay held after CANCELLED and after close (a zombie) until the work ends":
+    var cfg = fastConfig()
+    cfg.maxTotalExecuting = 1
+    let (o, ep) = served(cfg)
+    o.respond = false
+    let c1 = o.attach(ep, 1)
+    let c2 = o.attach(ep, 2)
+    o.callExists(1, 1)
+    let a = o.waitN(evDispatch, c1)[0].requestId
+    # Cancelled: still executing, so the other connection's Request waits.
+    o.cancel(1, 1)
+    check o.response(1, 1).code == ecCancelled
+    o.callExists(2, 1)
+    o.settle(100)
+    check o.events(evDispatch, c2).len == 0
+    # Closed: the work still runs and still holds the loop's slot.
+    o.send(IoCommand(conn: 1, kind: cmdClose))
+    check o.waitN(evClosed, c1).len == 1
+    o.settle(100)
+    check o.events(evDispatch, c2).len == 0
+    o.workEnded(c1, a)
+    check o.waitN(evDispatch, c2).len == 1
+    o.done(ep)
+
+  test "[TRN-0383] [TRN-0385] [TRN-0386] the delayed queue overflows: TRANSPORT_ERROR; every accepted Request was dispatched or failed with TRANSPORT_ERROR":
+    var cfg = fastConfig()
+    cfg.maxInFlight = 1
+    cfg.maxDelayedRequests = 2
+    let (o, ep) = served(cfg)
+    o.respond = false
+    let callee = o.attach(ep, 1)
+    for tag in 1'u64 .. 4:
+      o.callExists(1, tag)
+    let closed = o.waitN(evClosed, callee)
+    check closed.len == 1
+    check closed[0].cause == ccProtocol and closed[0].code == ecTransport
+    let rs = o.waitN(evResponse, 1, 4)
+    check rs.len == 4 and rs.allIt(it.outcome.failure.code == ecTransport)
+    check o.events(evDispatch, callee).len == 1
+    check closed[0].ids == o.events(evDispatch, callee).mapIt(it.requestId)
+    let cc = o.waitN(evClosed, 1)
+    check cc.len == 1 and cc[0].cause == ccPeerError and cc[0].code == ecTransport
+    o.done(ep)
+
+  test "[TRN-0315] Cancels while the caller reads nothing exhaust the control reserve: the session terminates":
+    var cfg = fastConfig()
+    cfg.controlReserve = 4096
+    cfg.connOutputBytes = int(MinFrameLimit) + 4096 + 4
+    cfg.writeStallTimeout = 10_000 * Ms * Slow
+    let (o, ep) = served(cfg)
+    o.respond = false
+    var raw = o.rawSession(ep)
+    raw.put(raw.caller.subscribe(1, Progress).get)
+    check o.waitN(evSubscribe, high(uint64)).len == 1
+    o.settle(20)
+    # One Event fills the data budget; the caller does not read it.
+    o.publish(1, Progress, progress(0, "x".repeat(int(MinFrameLimit) - 2048)))
+    o.settle(100)
+    var ids: seq[uint64]
+    for _ in 0 ..< 1000:
+      let (id, bytes) = raw.caller.request("exists", existsParams()).get
+      ids.add(id)
+      raw.put(bytes)
+    for id in ids:
+      raw.put(raw.caller.cancel(id).get)
+    let closed = o.waitN(evClosed, high(uint64))
+    check closed.len == 1
+    check closed[0].cause == ccProtocol and closed[0].code == ecTransport
+    # It closed before every CANCELLED was committed.
+    check o.events(evStop).len < 1000
+    discard fdClose(raw.fd)
+    o.done(ep)
+
+  test "[TRN-0078] connection loss fails in-flight calls with TRANSPORT_ERROR; nothing is replayed":
+    let (o, ep) = served()
+    o.respond = false
+    let callee = o.attach(ep, 1)
+    o.callExists(1, 1)
+    check o.waitN(evDispatch, callee).len == 1
+    o.send(IoCommand(conn: callee, kind: cmdClose))
+    check o.response(1, 1).code == ecTransport
+    let c2 = o.attach(ep, 2)
+    o.settle(100)
+    check o.events(evDispatch).len == 1
+    check o.events(evDispatch, c2).len == 0
+    o.done(ep)
+
+  test "[TRN-0161] [TRN-0162] logos.schema is answered by the transport with the selected contract only":
+    let (o, ep) = served()
+    let callee = o.attach(ep, 1)
+    o.call(1, 1, "schema")
+    let r = o.response(1, 1)
+    check r.isSome and r.get.outcome.ok
+    check r.get.outcome.result == encodeCbor(
+      schemaResponse(storageSet, storageRoot).get
+    )
+    check o.events(evDispatch, callee).len == 0
+    o.done(ep)
+
+  test "[TRN-0162] a route that selects an implemented interface discloses only that interface":
+    let sensor = acceptContractSet(
+      mirror("IFC/3.9.2.module.cddl"),
+      [mirror("IFC/3.9.2.interface.cddl")],
+      [mirror("IFC/3.9.2.supporting.cddl")],
+    ).get
+    let iface = sensor.interfaces[0].root
+    let ep = newEndpoint("sensor_module")
+    let o = newOwner()
+    check o.serve(
+      1,
+      dupCloexec(ep.listener),
+      provider = "sensor_module",
+      contract = ContractInput(
+        root: sensor.primary.root,
+        schema: encodeCbor(schemaResponse(sensor, sensor.primary.root).get),
+      ),
+      contracts = @[sensor.primary.root, iface],
+    )
+    let selected =
+      ContractInput(root: iface, schema: encodeCbor(schemaResponse(sensor, iface).get))
+    let start = o.log.len
+    o.connect(
+      1,
+      ep.path,
+      o.issue(binding(provider = "sensor_module", contract = iface)),
+      module = "sensor_module",
+      selected = selected,
+    )
+    check o.waitN(evConnected, 1, start = start).len == 1
+    o.call(1, 1, "schema")
+    let r = o.response(1, 1)
+    check r.isSome and r.get.outcome.ok
+    check r.get.outcome.result == selected.schema
+    check r.get.outcome.result !=
+      encodeCbor(schemaResponse(sensor, sensor.primary.root).get)
+    check o.events(evDispatch).len == 0
+    o.done(ep)
+
+  test "[TRN-0151] [TRN-0158] [CAP-0253] a method outside the route's access is NOT_AUTHORISED, without dispatch":
+    let (o, ep) = served()
+    let access = RouteAccess(methods: Opt.some(@[storageSet.rootOf("storage.exists")]))
+    let callee = o.attach(ep, 1, binding(access = access))
+    o.call(1, 1, "space")
+    check o.response(1, 1).code == ecNotAuthorised
+    o.call(1, 2, "schema")
+    check o.response(1, 2).code == ecNotAuthorised
+    o.callExists(1, 3)
+    check o.response(1, 3).code == ecOk
+    check o.events(evDispatch, callee).len == 1
+    o.done(ep)
+
+suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5.2, §6)":
+  test "[TRN-0106] [TRN-0121] subscribe, publish and unsubscribe":
+    let (o, ep) = served()
+    let callee = o.attach(ep, 1)
+    o.subscribe(1, 7, Started)
+    let s = o.waitN(evSubscription, 1)
+    check s.len == 1 and s[0].subscriptionId == 7 and s[0].subscriptionFailure.isNone
+    check o.events(evSubscribe, callee).mapIt(it.subscribeEvent) == @[Started]
+    o.publish(1, Started, cborMap())
+    let e = o.waitN(evEvent, 1)
+    check e.len == 1 and e[0].eventSub == 7 and e[0].eventName == Started
+    check e[0].eventData == encodeCbor(cborMap())
+    o.unsubscribe(1, 7)
+    let u = o.waitN(evSubscription, 1, 2)
+    check u.len == 2 and u[1].subscriptionOp == mkUnsubscribe
+    check o.events(evUnsubscribe, callee).len == 1
+    o.publish(1, Started, cborMap())
+    o.settle(100)
+    check o.events(evEvent, 1).len == 1
+    o.done(ep)
+
+  peerTest "[TRN-0106] [TRN-0121] Events cross processes":
+    let ep = newEndpoint()
+    var p = spawnPeer(peerProgram(), ["owner", "serve"], ep.listener)
+    let t = p.childTicket()
+    let o = newOwner()
+    o.connect(1, ep.path, t)
+    check o.oneOf(1).map(
+      proc(e: IoEvent): IoEventKind =
+        e.kind
+    ) == Opt.some(evConnected)
+    o.subscribe(1, 1, Started)
+    check o.waitN(evSubscription, 1).len == 1
+    discard p.ask(op("publish", ("event", cbor(Started)), ("data", cborMap())), o)
+    let e = o.waitN(evEvent, 1)
+    check e.len == 1 and e[0].eventName == Started
+    check p.childEvents().countIt(it.text("kind") == "evSubscribe") == 1
+    o.stop()
+    check p.finish() == 0
+    check removeEndpoint(ep).isOk
+
+  test "[TRN-0158] the route's subscription and publication scopes":
+    let (o, ep) = served()
+    let access = RouteAccess(
+      subscribeEvents:
+        Opt.some(@[storageSet.rootOf(Started), storageSet.rootOf(Progress)]),
+      publishEvents: Opt.some(@[storageSet.rootOf(Progress)]),
+    )
+    let callee = o.attach(ep, 1, binding(access = access))
+    o.subscribe(1, 1, Done)
+    let denied = o.waitN(evSubscription, 1)
+    check denied.len == 1 and denied[0].subscriptionFailure.get.code == ecNotAuthorised
+    check o.events(evSubscribe, callee).len == 0
+    o.subscribe(1, 2, Started)
+    o.subscribe(1, 3, Progress)
+    check o.waitN(evSubscription, 1, 3).len == 3
+    # Started may be subscribed to, but not published.
+    o.publish(1, Started, cborMap())
+    let f = o.waitN(evPublishFailed, callee)
+    check f.len == 1 and f[0].pubFailKind == peNotInContract
+    check f[0].pubFailCode == ecNotAuthorised
+    o.publish(1, Progress, progress(1))
+    let e = o.waitN(evEvent, 1)
+    check e.len == 1 and e[0].eventName == Progress
+    o.done(ep)
+
+  test "[TRN-0121] [TRN-0122] [TRN-0267] buffered Events arrive in order, none lost while open":
+    let (o, ep) = served()
+    discard o.attach(ep, 1)
+    o.subscribe(1, 1, Progress)
+    check o.waitN(evSubscription, 1).len == 1
+    for i in 0'u64 ..< 300:
+      o.publish(1, Progress, progress(i))
+    let es = o.waitN(evEvent, 1, 300)
+    check es.len == 300
+    check es.mapIt(decodeValue(it.eventData).get) ==
+      toSeq(0'u64 ..< 300'u64).mapIt(progress(it))
+    o.done(ep)
+
+  test "[TRN-0123] [TRN-0125] output overflow: ProtocolError TRANSPORT_ERROR and close; the caller's subscriptions end":
+    var cfg = fastConfig()
+    cfg.connOutputBytes = int(MinFrameLimit) + 64 * 1024 + 4
+    cfg.callerUndeliveredBytes = int(MinFrameLimit)
+    cfg.closeLinger = 5000 * Ms * Slow
+    cfg.writeStallTimeout = 10_000 * Ms * Slow
+    let (o, ep) = served(cfg)
+    let callee = o.attach(ep, 1)
+    o.subscribe(1, 1, Progress)
+    check o.waitN(evSubscription, 1).len == 1
+    o.autoRelease = false # the caller stops reading at 16 MiB
+    let big = "x".repeat(4 * MiB)
+    for i in 0'u64 ..< 12:
+      o.publish(1, Progress, progress(i, big))
+    let closed = o.waitN(evClosed, callee, timeoutMs = 10_000 * Slow)
+    check closed.len == 1 and closed[0].cause == ccOverflow
+    check closed[0].code == ecTransport
+    # The caller reads on: the committed Events in order, then the ProtocolError.
+    o.autoRelease = true
+    var credit = 0
+    for e in o.events(evEvent, 1):
+      credit += e.credit
+    o.release(1, credit)
+    let cc = o.waitN(evClosed, 1, timeoutMs = 10_000 * Slow)
+    check cc.len == 1 and cc[0].cause == ccPeerError and cc[0].code == ecTransport
+    let es = o.events(evEvent, 1)
+    check es.len < 12
+    for i, e in es:
+      check decodeValue(e.eventData).get.field("bytes_sent") == cbor(uint64(i))
+    o.done(ep)
+
+  test "[TRN-0126] a caller that stops reading is closed at the write stall, without ProtocolError":
+    var cfg = fastConfig()
+    cfg.writeStallTimeout = 300 * Ms
+    let (o, ep) = served(cfg)
+    var raw = o.rawSession(ep)
+    raw.put(raw.caller.subscribe(1, Progress).get)
+    check o.waitN(evSubscribe, high(uint64)).len == 1
+    o.settle(20)
+    o.publish(1, Progress, progress(0, "x".repeat(8 * MiB)))
+    let closed = o.waitN(evClosed, high(uint64), timeoutMs = 3000 * Slow)
+    check closed.len == 1 and closed[0].cause == ccNotWritable
+    discard fdClose(raw.fd)
+    o.done(ep)
+
+  test "[TRN-0124] submit is sbBusy at maxPendingOutputBytes; submitWait waits until the I/O thread takes it":
+    var cfg = fastConfig()
+    cfg.maxPendingOutputBytes = MiB
+    let o = newOwner(cfg)
+    let data = progress(0, "x".repeat(600_000))
+    o.closeGate()
+    o.callExists(99, 1) # an event: the I/O thread now waits in the sink
+    check pumpUntil(
+      [o],
+      proc(): bool =
+        o.atGate(),
+    )
+    check o.loop.submit(publishCmd(9, Progress, data)) == sbOk
+    check o.loop.submit(publishCmd(9, Progress, data)) == sbBusy
+    check o.loop.submitWait(publishCmd(9, Progress, data), Opt.some(50 * Ms)) == sbBusy
+    var opener: Thread[ptr Atomic[bool]]
+    createThread(opener, openLater, o.gate)
+    check o.loop.submitWait(publishCmd(9, Progress, data)) == sbOk
+    joinThread(opener)
+    # Never on a thread the I/O thread's events wait for.
+    registerOwnerThread(o.loop)
+    check o.loop.submitWait(publishCmd(9, Progress, data)) == sbRefused
+    unregisterOwnerThread()
+    o.stop()
+
+  test "[TRN-0313] scoped publication stops at the terminal Response and at Cancel":
+    let (o, ep) = served()
+    o.respond = false
+    let callee = o.attach(ep, 1)
+    o.subscribe(1, 1, Progress)
+    check o.waitN(evSubscription, 1).len == 1
+    o.callExists(1, 1)
+    let a = o.waitN(evDispatch, callee)[0].requestId
+    o.publishScoped(callee, a, Progress, progress(1))
+    check o.waitN(evEvent, 1).len == 1
+    o.respondTo(callee, a)
+    check o.response(1, 1).code == ecOk
+    o.publishScoped(callee, a, Progress, progress(2))
+    let f = o.waitN(evPublishFailed, callee)
+    check f.len == 1 and f[0].pubFailKind == peNoDestination
+    check f[0].pubFailRequest == Opt.some(a)
+    o.callExists(1, 2)
+    let b = o.waitN(evDispatch, callee, 2)[1].requestId
+    o.cancel(1, 2)
+    check o.response(1, 2).code == ecCancelled
+    o.settle(20)
+    o.publishScoped(callee, b, Progress, progress(3))
+    check o.waitN(evPublishFailed, callee, 2).len == 2
+    check o.events(evEvent, 1).len == 1
+    o.done(ep)
+
+  test "[TRN-0265] [TRN-0266] [IMPL-DECISION G165] an oversized Event is never committed: tlReport keeps the connection, tlClose closes":
+    let (o, ep) = served()
+    let callee = o.attach(ep, 1)
+    o.subscribe(1, 1, Progress)
+    check o.waitN(evSubscription, 1).len == 1
+    let huge = progress(0, "x".repeat(int(MinFrameLimit)))
+    o.publish(1, Progress, huge, tlReport)
+    let f = o.waitN(evPublishFailed, callee)
+    check f.len == 1 and f[0].pubFailKind == peTooLarge and f[0].pubFailCode == ecModule
+    o.callExists(1, 1)
+    check o.response(1, 1).code == ecOk
+    o.publish(1, Progress, huge, tlClose)
+    let closed = o.waitN(evClosed, callee)
+    check closed.len == 1 and closed[0].cause == ccProtocol
+    check closed[0].code == ecTransport
+    check o.events(evEvent, 1).len == 0
+    o.done(ep)
+
+  test "caller credits: reading pauses at callerUndeliveredBytes and resumes on release":
+    var cfg = fastConfig()
+    cfg.callerUndeliveredBytes = int(MinFrameLimit)
+    # One I/O thread serves both ends: hashing a 4 MiB Event in a debug or
+    # sanitizer build must not count as the peer's write stall.
+    cfg.writeStallTimeout = 10_000 * Ms * Slow
+    let (o, ep) = served(cfg)
+    discard o.attach(ep, 1)
+    o.subscribe(1, 1, Progress)
+    check o.waitN(evSubscription, 1).len == 1
+    o.autoRelease = false
+    let big = "x".repeat(4 * MiB)
+    for i in 0'u64 ..< 6:
+      o.publish(1, Progress, progress(i, big))
+    let first = o.waitN(evEvent, 1, 4)
+    check first.len == 4
+    o.settle(200)
+    check o.events(evEvent, 1).len == 4
+    var credit = 0
+    for e in first:
+      credit += e.credit
+    o.release(1, credit)
+    let all = o.waitN(evEvent, 1, 6)
+    check all.len == 6
+    for i, e in all:
+      check decodeValue(e.eventData).get.field("bytes_sent") == cbor(uint64(i))
+    o.done(ep)
+
+suite "trnio.termination: the session's end (TRANSPORT §8.1)":
+  test "[TRN-0317] [TRN-0153] [TRN-0163] [CAP-0254] the session ends at endsIn: admission stops, subscriptions end, then ProtocolError NOT_AUTHORISED":
+    var cfg = fastConfig()
+    cfg.terminationDrain = 1500 * Ms
+    let (o, ep) = served(cfg)
+    o.respond = false
+    o.endsIn = Opt.some(300 * Ms)
+    let start = o.log.len
+    let callee = o.attach(ep, 1, binding(decision = "decision-42"))
+    check o.events(evEstablished, callee, start)[0].binding.decision == "decision-42"
+    o.subscribe(1, 1, Started)
+    check o.waitN(evSubscription, 1).len == 1
+    o.callExists(1, 1)
+    let a = o.waitN(evDispatch, callee)[0].requestId
+    sleep(350)
+    # Terminating: a new Request is refused without dispatch; no Event goes out.
+    o.callExists(1, 2)
+    check o.response(1, 2).code == ecNotAuthorised
+    o.publish(1, Started, cborMap())
+    # In-flight work may still finish during the drain.
+    o.respondTo(callee, a)
+    check o.response(1, 1).code == ecOk
+    let closed = o.waitN(evClosed, callee, timeoutMs = 6000 * Slow)
+    check closed.len == 1 and closed[0].cause == ccTerminated
+    check closed[0].code == ecNotAuthorised
+    let cc = o.waitN(evClosed, 1)
+    check cc.len == 1 and cc[0].cause == ccPeerError and cc[0].code == ecNotAuthorised
+    check o.events(evEvent, 1).len == 0
+    check o.events(evDispatch, callee).len == 1
+    o.done(ep)
+
+  test "[TRN-0384] [TRN-0321] revocation (cmdTerminate): queued Requests get NOT_AUTHORISED and are never dispatched, even when a slot frees":
+    var cfg = fastConfig()
+    cfg.maxInFlight = 1
+    cfg.terminationDrain = 1500 * Ms
+    let (o, ep) = served(cfg)
+    o.respond = false
+    let callee = o.attach(ep, 1)
+    o.callExists(1, 1)
+    let a = o.waitN(evDispatch, callee)[0].requestId
+    o.callExists(1, 2)
+    o.settle(50)
+    o.terminate(callee)
+    check o.response(1, 2).code == ecNotAuthorised
+    o.respondTo(callee, a) # its work ends: a slot frees
+    check o.response(1, 1).code == ecOk
+    check o.waitN(evClosed, callee, timeoutMs = 6000 * Slow).len == 1
+    check o.events(evDispatch, callee).len == 1
+    o.done(ep)
+
+  test "[TRN-0325] [TRN-0322] termination with a caller that reads nothing finishes within closeLinger":
+    var cfg = fastConfig()
+    cfg.writeStallTimeout = 10_000 * Ms * Slow
+    let (o, ep) = served(cfg)
+    var raw = o.rawSession(ep)
+    raw.put(raw.caller.subscribe(1, Progress).get)
+    check o.waitN(evSubscribe, high(uint64)).len == 1
+    o.settle(20)
+    o.publish(1, Progress, progress(0, "x".repeat(8 * MiB)))
+    # Unread Requests stay unread.
+    for _ in 0 ..< 3:
+      raw.put(raw.caller.request("exists", existsParams()).get[1])
+    let callee = o.events(evSubscribe)[0].conn
+    let start = getMonoTime()
+    o.terminate(callee)
+    let closed = o.waitN(evClosed, callee)
+    check closed.len == 1 and closed[0].cause == ccTerminated
+    # The fd closes once closeLinger passed, the flush unfinished.
+    sleep(300)
+    let (_, ended) = readUntilEnd(raw.fd, o, 3000 * Slow)
+    check ended
+    check (getMonoTime() - start).inMilliseconds < 5000 * Slow
+    discard fdClose(raw.fd)
+    o.done(ep)
+
+suite "trnio.limits: aggregate limits (TRANSPORT §8.6)":
+  test "[TRN-0378] [TRN-0379] [TRN-0381] a frame that finds no room in maxInputBytes waits, then closes at admissionTimeout":
+    var cfg = fastConfig()
+    cfg.maxInputBytes = 24 * MiB
+    let (o, ep) = served(cfg)
+    var a = o.rawSession(ep)
+    var b = o.rawSession(ep)
+    check writeAll(a.fd, @(prefixOf(int(MinFrameLimit))) & newSeq[byte](1000))
+    o.settle(50)
+    check writeAll(b.fd, @(prefixOf(int(MinFrameLimit))) & newSeq[byte](1000))
+    let ms = b.readMsgs(o, 1, 3000)
+    check ms.len == 1 and ms[0].kind == mkProtocolError
+    check ms[0].protocolError.code == ecTransport
+    discard fdClose(a.fd)
+    discard fdClose(b.fd)
+    o.done(ep)
+
+  test "[TRN-0378] maxOutbound: local MODULE_ERROR, nothing opened":
+    var cfg = fastConfig()
+    cfg.maxOutbound = 1
+    let (o, ep) = served(cfg)
+    discard o.attach(ep, 1)
+    o.connect(2, ep.path, o.issue())
+    let f = o.oneOf(2)
+    check f.isSome and f.get.kind == evConnectFailed
+    check f.get.failCode == ecModule and f.get.failCause == cfCapacity
+    o.done(ep)
+
+  test "[TRN-0378] [TRN-0379] maxTotalCalls: local MODULE_ERROR":
+    var cfg = fastConfig()
+    cfg.maxTotalCalls = 2
+    let (o, ep) = served(cfg)
+    o.respond = false
+    discard o.attach(ep, 1)
+    discard o.attach(ep, 2)
+    o.callExists(1, 1)
+    o.callExists(2, 1)
+    o.callExists(2, 2)
+    let f = o.waitN(evLocalFailure, 2)
+    check f.len == 1 and f[0].localTag == 2 and f[0].localCode == ecModule
+    o.done(ep)
+
+  test "[TRN-0378] [TRN-0379] maxTotalSubscriptions: subscription-result-err MODULE_ERROR":
+    var cfg = fastConfig()
+    cfg.maxTotalSubscriptions = 1
+    let (o, ep) = served(cfg)
+    discard o.attach(ep, 1)
+    discard o.attach(ep, 2)
+    o.subscribe(1, 1, Started)
+    check o.waitN(evSubscription, 1)[0].subscriptionFailure.isNone
+    o.subscribe(2, 1, Started)
+    let s = o.waitN(evSubscription, 2)
+    check s.len == 1 and s[0].subscriptionFailure.get.code == ecModule
+    o.done(ep)
+
+  test "[TRN-0378] [TRN-0379] maxTotalSubscriptionIds: the callee closes; the caller fails locally":
+    var cfg = fastConfig()
+    cfg.maxTotalSubscriptionIds = 1
+    let (o, ep) = served(cfg)
+    var raw = o.rawSession(ep)
+    raw.put(raw.caller.subscribe(1, Started).get)
+    check o.waitN(evSubscribe, high(uint64)).len == 1
+    raw.put(raw.caller.subscribe(2, Started).get)
+    let closed = o.waitN(evClosed, high(uint64))
+    check closed.len == 1 and closed[0].code == ecTransport
+    discard fdClose(raw.fd)
+    o.done(ep)
+    # The caller side, on its own loop.
+    let (a, ep2) = served()
+    let b = newOwner(cfg)
+    discard a.attach(ep2, 1, caller = b)
+    b.subscribe(1, 1, Started)
+    check b.waitN(evSubscription, 1, others = @[a]).len == 1
+    b.subscribe(1, 2, Started)
+    let f = b.waitN(evLocalFailure, 1, others = @[a])
+    check f.len == 1 and f[0].localTag == 2 and f[0].localCode == ecModule
+    b.stop()
+    a.done(ep2)
+
+  test "[TRN-0378] every limit is finite and positive, and the pools hold a maximal frame":
+    check defaultTransportConfig().validate().isOk
+    for edit in [
+      proc(c: var TransportConfig) =
+        c.maxTotalExecuting = 0,
+      proc(c: var TransportConfig) =
+        c.maxTotalCalls = 0,
+      proc(c: var TransportConfig) =
+        c.maxTotalSubscriptions = 0,
+      proc(c: var TransportConfig) =
+        c.maxTotalSubscriptionIds = 0,
+      proc(c: var TransportConfig) =
+        c.maxPendingOutputBytes = 0,
+      proc(c: var TransportConfig) =
+        c.maxDelayedRequests = 0,
+      proc(c: var TransportConfig) =
+        c.maxPastCapFrames = 0,
+      proc(c: var TransportConfig) =
+        c.maxDelayedBytes = MiB,
+      proc(c: var TransportConfig) =
+        c.callerUndeliveredBytes = MiB,
+      proc(c: var TransportConfig) =
+        c.maxInputBytes = MiB,
+      proc(c: var TransportConfig) =
+        c.terminationDrain = -1,
+      proc(c: var TransportConfig) =
+        c.connOutputBytes = int(MinFrameLimit),
+    ]:
+      var c = defaultTransportConfig()
+      edit(c)
+      check c.validate().isErr
+
+suite "trnio.hello: pipelined frames (TRANSPORT §2.3, §3.1)":
+  test "[TRN-0273] [TRN-0274] [IMPL] a Hello and a Request in one write: the Request is dispatched after establishment (S10a-1)":
+    let (o, ep) = served()
+    let fd = rawConnect(ep.path)
+    var caller = callerConn(storageBoundary)
+    let req = frame(caller.request("exists", existsParams()).get[1]).get
+    check writeAll(fd, helloBytes(o.issue()) & req)
+    var raw = Raw(fd: fd, caller: caller, reader: newFrameReader())
+    let ms = raw.readMsgs(o, 2)
+    check ms.len == 2
+    check ms[0].kind == mkHello
+    check ms[1].kind == mkResponse and ms[1].response.ok
+    let est = o.events(evEstablished)
+    check est.len == 1 and o.events(evDispatch, est[0].conn).len == 1
+    discard fdClose(fd)
+    o.done(ep)
+
+suite "trnio.thread: submitWait (TRANSPORT §5.2; F8)":
+  test "submitWait refuses to run on the I/O thread":
+    let probe = createShared(Probe)
+    probe.loop = startTransport(fastConfig(), waitSink, probe).get
+    discard probe.loop.submit(IoCommand(kind: cmdClose, conn: 1)) # no event
+    discard
+      probe.loop.submit(IoCommand(conn: 5, kind: cmdCall, tag: 1, methodName: "exists"))
+    let deadline = getMonoTime() + initDuration(seconds = 5)
+    while probe.res.load == 0 and getMonoTime() < deadline:
+      sleep(1)
+    probe.loop.stopTransport()
+    check probe.res.load == ord(sbRefused) + 1
+    deallocShared(probe)
 
 removeDir(base)

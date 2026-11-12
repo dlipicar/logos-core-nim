@@ -1,7 +1,14 @@
-## TRANSPORT §3.1, §3.2, §3.4, §4, §6, §8.2, §9.1; RUNTIME §4.1: the caller side
-## on the I/O thread. Connect to exactly the path given, check the peer's
-## identity before writing any byte, send the Hello with the one-time ticket,
-## check the answer, then run the established `CallerConn`.
+## TRANSPORT §3.1, §3.2, §3.4, §4, §5.1, §6, §8.2, §8.6, §9.1; RUNTIME §4.1: the
+## caller side on the I/O thread. Connect to exactly the path given, check the
+## peer's identity before writing any byte, send the Hello with the one-time
+## ticket, check the answer, then run the established `CallerConn`: calls,
+## subscriptions, and Events handed to the owner under credits.
+##
+## Credits [IMPL]: an Event's frame stays reserved in the input pool, and
+## counts against the connection's `callerUndeliveredBytes`, from `evEvent`
+## until the owner's `cmdRelease`. At the budget reading pauses; it never
+## drops. Responses are bounded by the calls the owner made (`maxCalls`,
+## `maxTotalCalls`) and need no credit.
 
 {.push raises: [], gcsafe.}
 
@@ -194,7 +201,8 @@ proc callOutcome(o: Outcome): CallOutcome =
   else:
     CallOutcome(ok: false, failure: o.failure)
 
-proc callerEvents(io: Io, c: Conn, evs: seq[CallerEvent]) =
+proc callerEvents(io: Io, c: Conn, evs: seq[CallerEvent], size: int) =
+  ## `size`: the frame's body length, an Event's credit.
   var tags: seq[uint64]
   for ev in evs:
     case ev.kind
@@ -208,14 +216,38 @@ proc callerEvents(io: Io, c: Conn, evs: seq[CallerEvent]) =
             conn: c.id, kind: evResponse, tag: tag, outcome: callOutcome(ev.outcome)
           )
         )
-    of ceEvent, ceSubscription:
-      # Never subscribed before step 10a-2: `CallerConn` closes on either.
-      discard
+    of ceEvent:
+      c.keep(size)
+      c.undelivered += size
+      io.emit(
+        IoEvent(
+          conn: c.id,
+          kind: evEvent,
+          eventSub: ev.id,
+          eventName: ev.event,
+          eventData: encodeCbor(ev.data),
+          credit: size,
+        )
+      )
+      if c.undelivered >= io.config.callerUndeliveredBytes:
+        io.hold(c, hCredit)
+    of ceSubscription:
+      io.emit(
+        IoEvent(
+          conn: c.id,
+          kind: evSubscription,
+          subscriptionId: ev.id,
+          subscriptionOp: ev.op,
+          subscriptionFailure: ev.failure,
+        )
+      )
     of ceClose:
       # The responses before it in this batch are the synthetic TRANSPORT_ERRORs
       # of the closing (§3.2).
       let cause = if ev.close.send.isSome: ccProtocol else: ccPeerError
       io.closeConn(c, cause, ev.close.code, ev.close.send, ids = tags)
+  if not c.closed:
+    io.account(c)
 
 proc callerFrame*(io: Io, c: Conn, body: sink seq[byte]) =
   case c.phase
@@ -248,7 +280,8 @@ proc callerFrame*(io: Io, c: Conn, body: sink seq[byte]) =
     c.connected = true
     io.emit(IoEvent(conn: c.id, kind: evConnected, connectedPeer: c.peer.get))
   of phOpen:
-    io.callerEvents(c, c.caller.receive(body))
+    let size = body.len
+    io.callerEvents(c, c.caller.receive(body), size)
   else:
     discard
 
@@ -268,6 +301,10 @@ proc call*(io: Io, c: Conn, cmd: IoCommand) =
   if cmd.tag in c.toWire:
     io.localFailure(cmd.conn, cmd.tag, ecInvalidParams, "the call tag is in use")
     return
+  if io.totalCalls >= io.config.maxTotalCalls:
+    # [SPEC TRANSPORT §8.6] Local capacity (I54).
+    io.localFailure(cmd.conn, cmd.tag, ecModule, "maxTotalCalls calls are outstanding")
+    return
   let params = decodeValue(cmd.params, io.config.maxPayloadDepth).valueOr:
     io.localFailure(cmd.conn, cmd.tag, ecInvalidParams, $error)
     return
@@ -281,6 +318,7 @@ proc call*(io: Io, c: Conn, cmd: IoCommand) =
     return
   c.toWire[cmd.tag] = id
   c.toTag[id] = cmd.tag
+  io.account(c)
   if not io.commit(c, bytes, fcData):
     io.closeConn(c, ccProtocol, ecTransport, Opt.some(protocolErrorBody(ecTransport)))
 
@@ -304,3 +342,51 @@ proc abandon*(io: Io, c: Conn, tag: uint64) =
   if c.toWire.pop(tag, id):
     c.toTag.del(id)
     discard c.caller.abandon(id)
+    io.account(c)
+
+proc subscribe*(io: Io, c: Conn, cmd: IoCommand) =
+  ## [SPEC TRANSPORT §5.1, §8.6] `cmdSubscribe`: a Subscribe, or a local
+  ## failure with nothing sent (I54's codes).
+  if c.isNil or c.role != roCaller or not c.established:
+    io.localFailure(
+      cmd.conn, cmd.subId, ecNotReady, "the connection is not established"
+    )
+    return
+  if io.totalSubIds >= io.config.maxTotalSubscriptionIds:
+    io.localFailure(
+      cmd.conn, cmd.subId, ecModule, "the loop's subscription-id history is full"
+    )
+    return
+  let bytes = c.caller.subscribe(cmd.subId, cmd.subEvent).valueOr:
+    io.localFailure(cmd.conn, cmd.subId, error.code, error.msg)
+    return
+  io.account(c)
+  io.commitControl(c, bytes)
+
+proc unsubscribe*(io: Io, c: Conn, cmd: IoCommand) =
+  if c.isNil or c.role != roCaller or not c.established:
+    io.localFailure(
+      cmd.conn, cmd.subId, ecNotReady, "the connection is not established"
+    )
+    return
+  let bytes = c.caller.unsubscribe(cmd.subId).valueOr:
+    io.localFailure(cmd.conn, cmd.subId, error.code, error.msg)
+    return
+  io.commitControl(c, bytes)
+
+proc abandonSubscription*(io: Io, c: Conn, id: uint64) =
+  ## [SPEC TRANSPORT §3.4] Its later Events are validated and not delivered.
+  if c.isNil or c.role != roCaller or not c.established:
+    return
+  discard c.caller.abandonSubscription(id)
+
+proc release*(io: Io, c: Conn, n: int) =
+  ## Credits: the owner is done with `n` bytes of `evEvent`s; reading resumes
+  ## below `callerUndeliveredBytes`.
+  if c.isNil or c.role != roCaller or n <= 0:
+    return
+  let r = min(n, c.undelivered)
+  c.undelivered -= r
+  io.unkeep(c, r)
+  if hCredit in c.holds and c.undelivered < io.config.callerUndeliveredBytes:
+    io.unhold(c, hCredit)

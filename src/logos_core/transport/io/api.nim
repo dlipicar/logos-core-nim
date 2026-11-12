@@ -13,9 +13,9 @@ import results
 import ../../cbor
 import ../../hash/hashinput
 import ../../iface/outcome
-import ../[framing, hello, limits, ticket]
+import ../[envelope, framing, hello, limits, session, ticket]
 
-export results, hashinput, outcome, hello, limits, ticket
+export results, hashinput, outcome, hello, limits, ticket, PublishErrorKind, MessageKind
 
 type
   ConnId* = uint64
@@ -55,6 +55,19 @@ type
     frameLimit*, peerFrameLimit*: uint32 ## per connection (§2.1, I52)
     maxPayloadDepth*: int ## P for every decoder (INTERFACE §4.5.1; C36)
     maxInFlight*, maxCalls*, maxSubscriptionIds*: int ## per connection (I52)
+    maxDelayedRequests*, maxDelayedBytes*: int ## per connection (A21)
+    maxPastCapFrames*, maxPastCapBytes*: int ## per connection (A21)
+    maxTotalExecuting*: int ## execution slots, all connections
+    maxTotalCalls*: int ## outstanding outbound calls, all connections
+    maxTotalSubscriptions*: int ## callee subscriptions held, all connections
+    maxTotalSubscriptionIds*: int ## subscription-id history, all connections
+    callerUndeliveredBytes*: int
+      ## per connection: Event frames handed to the owner and not released
+    maxPendingOutputBytes*: int
+      ## Response and Event payloads submitted and not yet committed (F8)
+    terminationDrain*: int64
+      ## after `beginTermination`, how long in-flight work may finish before
+      ## `finishTermination`; 0: at once
     helloTimeout*: int64 ## the whole Hello exchange (G61)
     admissionTimeout*: int64 ## how long a frame waits for input bytes
     writeStallTimeout*: int64 ## pending output and no byte written
@@ -71,8 +84,19 @@ type
 
   SubmitResult* = enum
     sbOk ## queued for the I/O thread
-    sbBusy ## not queued: an output budget is full; submit again later
+    sbBusy
+      ## not queued: `maxPendingOutputBytes` is full; submit again later, or
+      ## use `submitWait`
     sbStopped ## not queued: the loop has stopped
+    sbRefused
+      ## `submitWait` was called on the I/O thread or an owner thread, where
+      ## waiting could deadlock; nothing was queued
+
+  TooLargeAction* = enum
+    ## What a publication does with an Event that does not fit the peer's
+    ## frame maximum (TRANSPORT §2.1; G165): it is never committed.
+    tlReport ## report `evPublishFailed` and keep the connection
+    tlClose ## ProtocolError TRANSPORT_ERROR and close (G165(a))
 
   AdmitVerdictKind* = enum
     ## [IMPL] The first kind carries no fields, as `IoCommandKind`.
@@ -120,11 +144,20 @@ type
     cmdCancel ## send Cancel for a call
     cmdAbandon ## stop awaiting a call (§3.4)
     cmdClose ## close a connection
+    cmdTerminate ## callee: the route was revoked; terminate the session (§8.1)
+    cmdWorkEnded ## callee: the provider's work for a Request ended
+    cmdSubscriptionResult ## callee: the result of an `evSubscribe` or `evUnsubscribe`
+    cmdPublish ## callee: an Event to every subscriber at an endpoint
+    cmdPublishScoped ## callee: an invocation-scoped Event (§5.2, §6)
+    cmdSubscribe ## caller: a Subscribe
+    cmdUnsubscribe ## caller: an Unsubscribe
+    cmdAbandonSubscription ## caller: stop delivering a subscription's Events (§3.4)
+    cmdRelease ## caller: the owner is done with `evEvent` bytes (credits)
 
   IoCommand* = object
     conn*: ConnId
     case kind*: IoCommandKind
-    of cmdShutdown, cmdClose:
+    of cmdShutdown, cmdClose, cmdTerminate:
       discard
     of cmdServe:
       endpoint*: EndpointId
@@ -138,6 +171,7 @@ type
     of cmdRespond:
       requestId*: uint64
       outcome*: CallOutcome
+      workEnded*: bool ## also `cmdWorkEnded`: the common case
     of cmdConnect:
       path*: string ## the exact endpoint path (§9.1)
       expected*: PeerIdentity
@@ -151,6 +185,21 @@ type
       params*: seq[byte] ## the encoded params map
     of cmdCancel, cmdAbandon:
       callTag*: uint64
+    of cmdWorkEnded:
+      endedId*: uint64
+    of cmdSubscriptionResult, cmdSubscribe, cmdUnsubscribe, cmdAbandonSubscription:
+      subId*: uint64
+      subEvent*: string ## cmdSubscribe: the event
+      subFailure*: Opt[InvocationFailure]
+        ## cmdSubscriptionResult: none commits the successful result
+    of cmdPublish, cmdPublishScoped:
+      pubEndpoint*: EndpointId ## cmdPublish: every established connection there
+      pubRequest*: uint64 ## cmdPublishScoped: the invocation (on `conn`)
+      event*: string
+      data*: seq[byte] ## the encoded data
+      tooLarge*: TooLargeAction
+    of cmdRelease:
+      releaseBytes*: int
 
   CloseCause* = enum
     ccPeerClosed ## end of input or a reset from the peer
@@ -160,6 +209,8 @@ type
     ccHelloTimeout ## no complete Hello exchange within `helloTimeout`
     ccOwner ## `cmdClose`
     ccShutdown ## `stopTransport`
+    ccOverflow ## Event output overflow: ProtocolError TRANSPORT_ERROR (§5.2)
+    ccTerminated ## the route ended: ProtocolError NOT_AUTHORISED (§8.1)
 
   ConnectFailure* = enum
     cfCapacity ## `maxOutbound` connections are open: nothing was opened
@@ -184,6 +235,11 @@ type
     evLocalFailure ## a command refused locally; nothing was sent
     evClosed ## the connection closed
     evStopped ## the loop has stopped; the last event
+    evSubscribe ## callee: a Subscribe; answer with `cmdSubscriptionResult`
+    evUnsubscribe ## callee: an Unsubscribe; answer with `cmdSubscriptionResult`
+    evPublishFailed ## callee: a publication was not committed on `conn`
+    evEvent ## caller: an Event; release its `credit` with `cmdRelease`
+    evSubscription ## caller: a Subscribe or Unsubscribe completed
 
   IoEvent* = object
     conn*: ConnId
@@ -230,6 +286,24 @@ type
         ## as an `evResponse`)
     of evStopped:
       discard
+    of evSubscribe, evUnsubscribe:
+      subscribeId*: uint64
+      subscribeEvent*: string ## evSubscribe: the event
+    of evPublishFailed:
+      pubFailKind*: PublishErrorKind
+      pubFailCode*: ErrorCode ## I54's mapping (`PublishError.code`)
+      pubFailEvent*: string
+      pubFailRequest*: Opt[uint64] ## the invocation, for a scoped publication
+      pubFailMsg*: string
+    of evEvent:
+      eventSub*: uint64
+      eventName*: string
+      eventData*: seq[byte] ## the encoded, validated data
+      credit*: int ## bytes held until `cmdRelease`
+    of evSubscription:
+      subscriptionId*: uint64
+      subscriptionOp*: MessageKind ## mkSubscribe or mkUnsubscribe
+      subscriptionFailure*: Opt[InvocationFailure]
 
   IoSink* = proc(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].}
     ## Called on the I/O thread with every event, in order (per connection, the
@@ -323,6 +397,17 @@ func defaultTransportConfig*(): TransportConfig =
     maxInFlight: DefaultMaxInFlight,
     maxCalls: DefaultMaxCalls,
     maxSubscriptionIds: DefaultMaxSubscriptionIds,
+    maxDelayedRequests: DefaultMaxDelayedRequests,
+    maxDelayedBytes: DefaultMaxDelayedBytes,
+    maxPastCapFrames: DefaultMaxPastCapFrames,
+    maxPastCapBytes: DefaultMaxPastCapBytes,
+    maxTotalExecuting: 4096,
+    maxTotalCalls: 16384,
+    maxTotalSubscriptions: 16384,
+    maxTotalSubscriptionIds: 65536,
+    callerUndeliveredBytes: 32 * MiB,
+    maxPendingOutputBytes: 64 * MiB,
+    terminationDrain: 0,
     helloTimeout: 10 * Second,
     admissionTimeout: 10 * Second,
     writeStallTimeout: 30 * Second,
@@ -342,7 +427,8 @@ func connLimits*(c: TransportConfig): Result[TransportLimits, string] =
   ## The per-connection limits (I52) the session state machines run under.
   transportLimits(
     c.frameLimit, c.peerFrameLimit, c.maxPayloadDepth, c.maxInFlight, c.maxCalls,
-    c.maxSubscriptionIds,
+    c.maxSubscriptionIds, c.maxDelayedRequests, c.maxDelayedBytes, c.maxPastCapFrames,
+    c.maxPastCapBytes,
   )
 
 func validate*(c: TransportConfig): Result[void, string] =
@@ -359,7 +445,15 @@ func validate*(c: TransportConfig): Result[void, string] =
   ]:
     if v <= 0:
       return err(name & " is not positive (TRANSPORT §8.6)")
+  if c.terminationDrain < 0:
+    return err("terminationDrain is negative")
   for (name, v) in [
+    ("maxTotalExecuting", c.maxTotalExecuting),
+    ("maxTotalCalls", c.maxTotalCalls),
+    ("maxTotalSubscriptions", c.maxTotalSubscriptions),
+    ("maxTotalSubscriptionIds", c.maxTotalSubscriptionIds),
+    ("callerUndeliveredBytes", c.callerUndeliveredBytes),
+    ("maxPendingOutputBytes", c.maxPendingOutputBytes),
     ("connOutputBytes", c.connOutputBytes),
     ("controlReserve", c.controlReserve),
     ("maxInbound", c.maxInbound),
@@ -379,7 +473,9 @@ func validate*(c: TransportConfig): Result[void, string] =
   if c.maxOutputBytes < c.connOutputBytes:
     return err("maxOutputBytes is below connOutputBytes")
   for (name, v) in [
-    ("maxHelloInputBytes", c.maxHelloInputBytes), ("maxInputBytes", c.maxInputBytes)
+    ("maxHelloInputBytes", c.maxHelloInputBytes),
+    ("maxInputBytes", c.maxInputBytes),
+    ("callerUndeliveredBytes", c.callerUndeliveredBytes),
   ]:
     if int64(v) < int64(c.frameLimit):
       return err(

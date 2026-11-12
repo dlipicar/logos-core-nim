@@ -1,0 +1,22 @@
+# TRANSPORT requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["TRN-0241", "TRN-0242", "TRN-0243", "TRN-0244"]
+reason = "Test hooks (§8.5). The hooks that inject or observe framed messages are the sans-I/O session state machines driven directly by tests/test_transport.nim, raw sockets writing crafted frames in tests/test_transport_io.nim, and the child-process peer tests/support/trnpeer.nim. All are under tests/; nothing under src/ imports, advertises or falls back to them, and they run only with the test tickets of tests/support/trnowner.nim and test data. No claim depends on another implementation recognizing them. docs/CONFORMANCE.md 'Test hooks' states this."
+
+[[item]]
+ids = ["TRN-0309", "TRN-0310"]
+reason = "Documentation duties (§5.2). docs/CONFORMANCE.md 'Event output overflow' names both actions and what selects them (backpressure on maxPendingOutputBytes before commitment; ProtocolError TRANSPORT_ERROR and close when an Event does not fit the connection's output), the bounds (submitWait's deadline or no finite bound, closeLinger, writeStallTimeout), and that closing a connection ends every subscription on it. The behaviour is tested under [TRN-0123], [TRN-0125] and [TRN-0126]."
+
+[[item]]
+ids = ["TRN-0380"]
+reason = "Documentation duty (§8.6). docs/CONFORMANCE.md 'Transport limits' and the io/aggregate.nim header give every TransportConfig limit with its scope (connection or I/O thread), its default and its behaviour on exhaustion; transport/limits.nim documents the per-connection ones. The limits themselves are tested under [TRN-0378] to [TRN-0386]."
+
+[[item]]
+ids = ["TRN-0387"]
+reason = "A rule about promises (§8.6 l.1357). No API, comment or document makes that promise; docs/CONFORMANCE.md 'Transport limits' states the opposite: a Cancel acts only on a Request whose Response is not yet committed, and frames are written in commit order (io/conn.nim, one ordered output queue per connection)."
+
+[[item]]
+ids = ["TRN-0127"]
+reason = "A rule about reply paths (§5.2 l.831). The only way the callee's owner answers a call is cmdRespond (io/api.nim), which commits a Response; the caller's owner learns a call's outcome only from evResponse or evLocalFailure. An Event carries no Request identifier (the envelope has none, and publishScoped adds none), so no API can treat an Event as a call's reply."

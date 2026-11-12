@@ -14,10 +14,18 @@
 ## - `payloadDepth` P: arrays and maps in `params`, `result` or `data`; the whole
 ##   message may nest P + 1. Deeper: ProtocolError INVALID_PARAMS without
 ##   detail, close (§2.3). Sending deeper fails locally.
-## - `maxInFlight` (callee): Requests admitted and not yet answered. At the cap
-##   the connection stops admitting input (`admitsInput`, backpressure); a
-##   Request that arrives anyway closes the connection with ProtocolError
-##   TRANSPORT_ERROR.
+## - `maxInFlight` (callee): execution slots, each held from dispatch until
+##   the provider's work ends (`workEnded`), even after its Response or
+##   CANCELLED is committed or the connection closed (I52 as revised by A21).
+##   At the cap reading continues, so Cancel and Unsubscribe are processed
+##   (§6): a further Request waits in the delayed-admission queue, where it is
+##   in flight and a Cancel commits CANCELLED without dispatch.
+## - `maxDelayedRequests`, `maxDelayedBytes` (callee): that queue. Full:
+##   ProtocolError TRANSPORT_ERROR, close; a queued Request is never answered
+##   with an error for capacity (there is no overload code).
+## - `maxPastCapFrames`, `maxPastCapBytes` (callee): every frame read while the
+##   connection is at its cap, in number and in bytes, until a slot frees.
+##   Exhausted: ProtocolError TRANSPORT_ERROR, close.
 ## - `maxCalls` (caller): Requests transmitted with no terminal Response
 ##   received, abandoned ones included. At the cap a new call fails locally with
 ##   MODULE_ERROR and nothing is sent; no correlation state is dropped (§3.4).
@@ -25,7 +33,8 @@
 ##   which also bounds its subscriptions. At the cap the caller refuses a new
 ##   Subscribe locally (MODULE_ERROR); the callee closes the connection with
 ##   ProtocolError TRANSPORT_ERROR before it would forget an id (§5.1).
-## Aggregate limits across connections are the Runtime's (tier 4).
+## Aggregate limits across the connections of one transport I/O thread are in
+## `io/aggregate.nim`.
 
 {.push raises: [].}
 
@@ -45,10 +54,15 @@ const
   DefaultMaxInFlight* = 1024 ## [IMPL]
   DefaultMaxCalls* = 1024 ## [IMPL]
   DefaultMaxSubscriptionIds* = 4096 ## [IMPL]
+  DefaultMaxDelayedRequests* = 64 ## [IMPL]
+  DefaultMaxDelayedBytes* = 32 * 1024 * 1024 ## [IMPL]
+  DefaultMaxPastCapFrames* = 4096 ## [IMPL]
+  DefaultMaxPastCapBytes* = 64 * 1024 * 1024 ## [IMPL]
 
 type TransportLimits* = object
   frameLimit, peerFrameLimit: uint32
   payloadDepth, maxInFlight, maxCalls, maxSubscriptionIds: int
+  maxDelayedRequests, maxDelayedBytes, maxPastCapFrames, maxPastCapBytes: int
 
 func transportLimits*(
     frameLimit: uint32 = MinFrameLimit,
@@ -57,11 +71,16 @@ func transportLimits*(
     maxInFlight = DefaultMaxInFlight,
     maxCalls = DefaultMaxCalls,
     maxSubscriptionIds = DefaultMaxSubscriptionIds,
+    maxDelayedRequests = DefaultMaxDelayedRequests,
+    maxDelayedBytes = DefaultMaxDelayedBytes,
+    maxPastCapFrames = DefaultMaxPastCapFrames,
+    maxPastCapBytes = DefaultMaxPastCapBytes,
 ): Result[TransportLimits, string] =
   ## [SPEC TRANSPORT §2.1, §2.3, §8.6; INTERFACE §4.5.1] Both frame maxima at
   ## least 16 MiB (`peerFrameLimit` above it only when the peer separately
   ## established support), P from 128 to `MaxPayloadDepth`, every cap finite and
-  ## positive.
+  ## positive, and the delayed and past-cap byte budgets at least `frameLimit`,
+  ## so a maximal Request can always wait (A21).
   if frameLimit < MinFrameLimit:
     return err("the active frame maximum is below 16 MiB (TRANSPORT §2.1)")
   if peerFrameLimit < MinFrameLimit:
@@ -71,8 +90,12 @@ func transportLimits*(
       "the payload depth is outside " & $MinMaxDepth & ".." & $MaxPayloadDepth &
         " (INTERFACE §4.5.1)"
     )
-  if maxInFlight < 1 or maxCalls < 1 or maxSubscriptionIds < 1:
+  if maxInFlight < 1 or maxCalls < 1 or maxSubscriptionIds < 1 or maxDelayedRequests < 1 or
+      maxPastCapFrames < 1:
     return err("a per-connection cap is not positive (TRANSPORT §8.6)")
+  if int64(maxDelayedBytes) < int64(frameLimit) or
+      int64(maxPastCapBytes) < int64(frameLimit):
+    return err("a delayed or past-cap byte budget is below the frame maximum")
   ok(
     TransportLimits(
       frameLimit: frameLimit,
@@ -81,6 +104,10 @@ func transportLimits*(
       maxInFlight: maxInFlight,
       maxCalls: maxCalls,
       maxSubscriptionIds: maxSubscriptionIds,
+      maxDelayedRequests: maxDelayedRequests,
+      maxDelayedBytes: maxDelayedBytes,
+      maxPastCapFrames: maxPastCapFrames,
+      maxPastCapBytes: maxPastCapBytes,
     )
   )
 
@@ -93,6 +120,10 @@ func defaultLimits*(): TransportLimits =
     maxInFlight: DefaultMaxInFlight,
     maxCalls: DefaultMaxCalls,
     maxSubscriptionIds: DefaultMaxSubscriptionIds,
+    maxDelayedRequests: DefaultMaxDelayedRequests,
+    maxDelayedBytes: DefaultMaxDelayedBytes,
+    maxPastCapFrames: DefaultMaxPastCapFrames,
+    maxPastCapBytes: DefaultMaxPastCapBytes,
   )
 
 func frameLimit*(l: TransportLimits): uint32 =
@@ -112,6 +143,18 @@ func maxCalls*(l: TransportLimits): int =
 
 func maxSubscriptionIds*(l: TransportLimits): int =
   l.maxSubscriptionIds
+
+func maxDelayedRequests*(l: TransportLimits): int =
+  l.maxDelayedRequests
+
+func maxDelayedBytes*(l: TransportLimits): int =
+  l.maxDelayedBytes
+
+func maxPastCapFrames*(l: TransportLimits): int =
+  l.maxPastCapFrames
+
+func maxPastCapBytes*(l: TransportLimits): int =
+  l.maxPastCapBytes
 
 func frameReader*(l: TransportLimits): FrameReader =
   ## The reader for `frameLimit`, already known to be at least 16 MiB.

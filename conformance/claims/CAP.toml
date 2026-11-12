@@ -10,3 +10,11 @@ default = "deferred:tier-4"
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
+
+[units]
+# §11, transport step 10a (DECISIONS I82): the route ticket binds the consumer, provider, contract and
+# route access; bad material gives no session and no dispatch; a COSE object is not a Hello token.
+# CAP-0254 (decision, freshness, revocation) is tagged and claimed with 10b, which supplies them.
+"CAP-0253" = "claimed"
+"CAP-0255" = "claimed"
+"CAP-0256" = "claimed"

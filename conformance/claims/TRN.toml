@@ -14,9 +14,10 @@ default = "deferred:tier-4"
 # Phase 3 (tier 3, sans-I/O): the envelope, framing and the sender's size check,
 # deterministic CBOR and payload depth, Hello and route tickets, correlation,
 # requests and commitments, subscriptions, cancellation, multiplexing, route
-# termination, validation and evolution. Sockets, peer authentication and the
-# Runtime's route enforcement are tier 4; the Unix-stream, TLS and QUIC profiles
-# tier 5.
+# termination, validation and evolution. Tier 4 step 10a (DECISIONS I82): the
+# unix-stream I/O layer, event output, execution slots, route access, test hooks
+# and the aggregate limits. The Runtime's side of routes is 10b; Windows and the
+# remote profiles tier 5.
 "Abstract" = "claimed"
 "§1" = "claimed"
 "§2" = "claimed"
@@ -26,15 +27,14 @@ default = "deferred:tier-4"
 "§3.4" = "claimed"
 "§4" = "claimed"
 "§5.1" = "claimed"
-"§5.2" = "deferred:tier-4"
+"§5.2" = "claimed"
 "§5.3" = "deferred:tier-4"
 "§6" = "claimed"
 "§7" = "claimed"
 "§8.1" = "claimed"
-# §8.1.2: system-service sessions over unix-stream. G48 keeps the Loader and the
-# Capability Authority direct, so no system service is hosted over Transport and
-# no purpose-typed ticket store is built (transport.md item 10).
-"§8.1.2" = "deferred:tier-4"
+# §8.1.2: system-service sessions over unix-stream, a MAY profile (l.1075). G48(a)
+# keeps the Loader and the Capability Authority direct, so nothing uses it.
+"§8.1.2" = "out-of-scope:a MAY profile left unused: G48(a) binds the Loader and Capability Authority directly"
 # §8.2 (tier 4, transport I/O): endpoints, peer credentials checked before any
 # byte, and the Hello over sockets (DECISIONS I82). §8.2.1 (Windows) waits for the
 # G107 spike.
@@ -42,38 +42,29 @@ default = "deferred:tier-4"
 "§8.2.1" = "deferred:tier-5"
 "§8.3" = "claimed"
 "§8.4" = "deferred:tier-5"
-"§8.5" = "deferred:tier-4"
+# §8.5: the test hooks, by inspection (conformance/inspection/TRN.toml).
+"§8.5" = "claimed"
+# §8.6: per-connection and aggregate limits (DECISIONS I52, I82; docs/CONFORMANCE.md).
+"§8.6" = "claimed"
 "§9" = "claimed"
 "§10" = "claimed"
 
 [units]
-# §2.1: a committed Event is never silently discarded: the output buffer (tier 4).
-"TRN-0267" = "deferred:tier-4"
 # §3.2: no replay and no ticket reuse hold in the sans-I/O session.
 "TRN-0078" = "claimed"
 "TRN-0079" = "claimed"
-# §3.4: callbacks and released application state belong to the native binding.
+# §3.4: callbacks and released application state belong to the native binding (10b).
 "TRN-0290" = "deferred:tier-4"
-# §6: execution slots and cancel capacity belong to the provider scheduler.
-"TRN-0314" = "deferred:tier-4"
-"TRN-0315" = "deferred:tier-4"
 # Requirements on module contracts, not on the transport.
 "TRN-0098" = "out-of-scope:a requirement on module contracts that disclose partially"
 "TRN-0117" = "out-of-scope:a requirement on contracts that promise state reconstruction"
 "TRN-0118" = "out-of-scope:a requirement on contracts that promise state reconstruction"
 "TRN-0308" = "out-of-scope:a requirement on contracts that promise state reconstruction"
-# §8.1: the route's authority decision, its expiry clock, ticket materialization,
-# event-publication access and bounded sends are the Runtime's (tier 4). The
-# transport resolves names under the selected contract and enforces the method
-# and subscription scope it is given (`Boundary.withAccess`).
-"TRN-0151" = "deferred:tier-4"
+# §8.1: the binding carries the authority decision and its expiry, and the
+# session ends with it, but the decision, its expiry and revocation come from a
+# test owner until the Runtime supplies them (10b; step10a plan F3).
 "TRN-0153" = "deferred:tier-4"
-"TRN-0158" = "deferred:tier-4"
-"TRN-0161" = "deferred:tier-4"
-"TRN-0162" = "deferred:tier-4"
 "TRN-0317" = "deferred:tier-4"
-"TRN-0320" = "deferred:tier-4"
-"TRN-0325" = "deferred:tier-4"
 "TRN-0165" = "out-of-scope:a requirement on other security profiles"
 # §8.2: built and tagged by the transport I/O tests; what triggers them is the
 # Module Host (TRN-0184, 0185, 0186: the listener transfer and readiness) or the
@@ -88,10 +79,7 @@ default = "deferred:tier-4"
 # G58: no claim of protection from same-identity processes.
 "TRN-0346" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
 "TRN-0347" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
-# §8.6: the per-connection limits of the session state machines; aggregate limits
-# and their documentation are tier 4.
-"TRN-0381" = "claimed"
-"TRN-0383" = "claimed"
-"TRN-0385" = "claimed"
+# §5.3: a requirement on module contracts.
+"TRN-0312" = "out-of-scope:a requirement on module contracts"
 # §10: a requirement on a future transport profile.
 "TRN-0252" = "out-of-scope:a requirement on future transport profiles"

@@ -5,7 +5,7 @@
 ## Modes:
 ## - `owner [serve]`: a transport loop with `trnowner`; with `serve` it serves
 ##   the inherited listener on fd 4. Commands arrive on the control channel
-##   (fd 3): issue, live, admit, events, connect, call, exit.
+##   (fd 3): issue, live, admit, events, connect, call, publish, exit.
 ## - `raw`: accepts one connection on fd 4 with plain syscalls, reads until
 ##   end of input, and reports how many bytes arrived.
 ## - `squat <base>`: binds its own listener in a fresh 0755 directory under
@@ -51,6 +51,10 @@ proc summary(ev: IoEvent): CborValue =
       e.add((cbor("code"), cbor(uint64(ord(ev.outcome.failure.code)))))
   of evLocalFailure:
     e.add((cbor("code"), cbor(uint64(ord(ev.localCode)))))
+  of evSubscribe, evUnsubscribe:
+    e.add((cbor("sub"), cbor(ev.subscribeId)))
+  of evPublishFailed:
+    e.add((cbor("code"), cbor(uint64(ord(ev.pubFailCode)))))
   else:
     discard
   cborMap(e)
@@ -108,6 +112,11 @@ proc ownerMode(serve: bool) =
     of "call":
       o.callExists(1, req.num("tag"))
       reply(o.waitFor({evResponse, evLocalFailure}, 1))
+    of "publish":
+      # On the served endpoint: every subscriber gets the Event.
+      o.publish(1, req.text("event"), req.field("data"))
+      discard o.pump(20)
+      reply(cborMap())
     of "exit":
       o.stop()
       reply(cborMap((cbor("ok"), cbor(true))))

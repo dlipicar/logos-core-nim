@@ -11,17 +11,21 @@
 ## limit, then the body's bytes are reserved from an input pool (the pre-Hello
 ## pool until establishment) before the body is allocated and read (TRANSPORT
 ## §8.6). Frames are handled one at a time, in order (§2.1): the next is read
-## only after the previous one's handler returned and no hold remains.
+## only after the previous one's handler returned and no hold remains. A
+## frame's bytes stay reserved past its handler while the transport still holds
+## it: a callee's queued Request (A21), a caller's Event until the owner
+## releases it (credits).
 ##
 ## Writing [IMPL]: one ordered queue per connection. A frame is committed when
-## it is appended (§2.1, §5.2). Data frames (ok-Responses, Requests) need room
-## in the connection's data budget (`connOutputBytes - controlReserve`) and in
-## `maxOutputBytes`; control frames use that room when there is some, else the
-## connection's control reserve. A final ProtocolError is never refused.
+## it is appended (§2.1, §5.2). Data and Event frames (ok-Responses, Requests,
+## Events) need room in the connection's data budget (`connOutputBytes -
+## controlReserve`) and in `maxOutputBytes`; control frames use that room when
+## there is some, else the connection's control reserve. A final ProtocolError
+## is never refused.
 
 {.push raises: [], gcsafe.}
 
-import std/[algorithm, deques, sets, tables]
+import std/[algorithm, atomics, deques, sets, tables]
 import chronos/[asyncloop, timer]
 import results
 import ../../cbor
@@ -52,11 +56,12 @@ type
     ## Why reading is paused. Input is never read and dropped (§8.6).
     hAdmit ## callee: the admission verdict is awaited (one frame at a time)
     hBytes ## a frame waits for room in an input pool
-    hSession ## the session admits no input now (`maxInFlight`)
+    hCredit ## caller: `callerUndeliveredBytes` of Events await `cmdRelease`
 
   FrameClass* = enum
     fcControl ## error Responses, SubscriptionResults, Cancel, the Hello frames
     fcData ## ok-Responses and Requests
+    fcEvent ## Events: never the control reserve; overflow closes (§5.2)
 
   OutFrame = object
     data: seq[byte] ## prefix and body
@@ -72,6 +77,7 @@ type
     id: uint64
     response: CborValue
     size: int ## an upper bound of its frame, prefix included
+    charge: int ## its payload, counted in `maxPendingOutputBytes`
 
   Conn* = ref object
     key*: uint64
@@ -90,6 +96,10 @@ type
     want: int ## the body length being read; -1 while reading a prefix
     reserved: int ## input-pool bytes held for `body`
     helloPool: bool ## `reserved` came from the pre-Hello pool
+    kept: int
+      ## input-pool bytes held past their frame: queued Requests (callee),
+      ## Events not released by the owner (caller)
+    keepIn*: int ## of the frame being handled, the bytes to keep
     # output
     outq: Deque[OutFrame]
     outOff: int ## bytes of the first frame already written
@@ -100,7 +110,10 @@ type
     writeFailed*: bool
     lastProgress: Moment
     stallTimer, helloTimer, admitTimer, lingerTimer*, retryTimer*: TimerCallback
+    endTimer*, drainTimer*: TimerCallback ## callee: the session's end (§8.1)
     deadline*: Moment ## the end of the Hello exchange
+    # aggregate counts last charged for this connection
+    callsCounted, subsCounted, idsCounted: int
     # callee
     endpoint*: EndpointId
     peer*: Opt[PeerCred]
@@ -109,6 +122,7 @@ type
       ## Requests handed to the owner with no Response or CANCELLED committed
     pendingHello*: bool ## counted in `pendingHellos`
     inbound*: bool ## counted in `inbound`
+    slotQueued*: bool ## in `slotWaiters`
     # caller
     caller*: CallerConn
     outboundCounted*: bool
@@ -121,6 +135,7 @@ type
     toWire*: Table[uint64, uint64] ## call tag -> Request id
     toTag*: Table[uint64, uint64] ## Request id -> call tag
     connected*: bool ## `evConnected` was sent
+    undelivered*: int ## Event bytes handed to the owner and not released
 
   Serve* = ref object
     key*: uint64
@@ -155,6 +170,15 @@ type
     helloWaiters, inputWaiters: Deque[uint64] ## connection keys, FIFO
     outWaiters: Deque[uint64] ## connections with ok-Responses waiting for the pool
     inbound*, pendingHellos*, outbound*: int
+    slots*: SlotPool ## `maxTotalExecuting`
+    slotWaiters*: Deque[uint64] ## callee connections with queued Requests, FIFO
+    zombies*: Table[ConnId, Conn]
+      ## closed callee connections whose dispatched work has not ended: their
+      ## execution slots stay held until `cmdWorkEnded` (§6, §8.6; A21)
+    totalCalls*, totalSubs*, totalSubIds*: int
+    admitting*, admitAgain*: bool ## `admitWaiting` is running; run it once more
+    pendingOut*: ptr Atomic[int]
+      ## the loop's `maxPendingOutputBytes` count (`loop.nim`); nil in tests
     onFrame*: FrameHandler
     responseOverhead: int
     requestOverhead*: int
@@ -190,6 +214,7 @@ proc newIo*(
     helloPool: bytePool(config.maxHelloInputBytes),
     inputPool: bytePool(config.maxInputBytes),
     outputPool: bytePool(config.maxOutputBytes),
+    slots: SlotPool(cap: config.maxTotalExecuting),
     responseOverhead: encodeCbor(toCbor(probe)).len - 1 + 4,
     requestOverhead: encodeCbor(toCbor(req)).len - 1 + 4 + 8,
   )
@@ -207,10 +232,10 @@ func keyArg*(key: uint64): pointer =
 func argKey*(arg: pointer): uint64 =
   cast[uint64](arg)
 
-proc fromNow(ns: int64): Moment =
+proc fromNow*(ns: int64): Moment =
   Moment.fromNow(nanoseconds(ns))
 
-proc cancelTimer(t: var TimerCallback) =
+proc cancelTimer*(t: var TimerCallback) =
   if not t.isNil:
     clearTimer(t)
     t = nil
@@ -245,6 +270,11 @@ proc lookup*(io: Io, key: uint64): Conn =
 
 proc established*(c: Conn): bool =
   c.phase == phOpen
+
+proc uncharge*(io: Io, n: int) =
+  ## Payload bytes leave `maxPendingOutputBytes`: committed or discarded.
+  if n > 0 and not io.pendingOut.isNil:
+    discard io.pendingOut[].fetchSub(n)
 
 proc closed*(c: Conn): bool =
   c.phase in {phLinger, phDone}
@@ -405,8 +435,12 @@ proc readSome(io: Io, c: Conn) =
     let held = c.reserved
     let hello = c.helloPool
     c.reserved = 0
+    c.keepIn = 0
     io.onFrame(io, c, move body)
-    io.releaseInput(held, hello)
+    # What the transport still holds of this frame stays reserved (`kept`).
+    let keep = min(held, c.keepIn)
+    c.keepIn = 0
+    io.releaseInput(held - keep, hello)
   io.updateReading(c)
 
 proc onReadable(arg: pointer) {.gcsafe, raises: [].} =
@@ -426,6 +460,49 @@ proc unhold*(io: Io, c: Conn, h: Hold) =
   ## Resumes reading; bytes already buffered by the kernel make the reader fire.
   c.holds.excl(h)
   io.updateReading(c)
+
+proc keep*(c: Conn, n: int) =
+  ## Keeps `n` bytes of the frame being handled reserved after its handler.
+  c.kept += n
+  c.keepIn += n
+
+proc unkeep*(io: Io, c: Conn, n: int) =
+  ## Releases `n` kept bytes to the input pool.
+  let r = min(n, c.kept)
+  if r > 0:
+    c.kept -= r
+    io.releaseInput(r, false)
+
+proc syncDelayed*(io: Io, c: Conn) =
+  ## [SPEC TRANSPORT §8.6; A21] A callee's kept bytes follow its delayed queue:
+  ## a queued Request keeps its frame's reservation until it is dispatched,
+  ## cancelled, refused by termination or dropped by close.
+  if c.role != roCallee:
+    return
+  let want = c.callee.delayedBytes
+  if want > c.kept:
+    c.keep(want - c.kept)
+  elif want < c.kept:
+    io.unkeep(c, c.kept - want)
+
+proc account*(io: Io, c: Conn) =
+  ## Charges the connection's correlation and subscription state to the
+  ## loop's aggregates (§8.6); a closed connection holds none.
+  var calls, subs, ids = 0
+  if c.phase == phOpen:
+    case c.role
+    of roCallee:
+      subs = c.callee.subscriptions
+      ids = c.callee.usedSubscriptionIds
+    of roCaller:
+      calls = c.caller.outstandingCalls
+      ids = c.caller.usedSubscriptionIds
+  io.totalCalls += calls - c.callsCounted
+  io.totalSubs += subs - c.subsCounted
+  io.totalSubIds += ids - c.idsCounted
+  c.callsCounted = calls
+  c.subsCounted = subs
+  c.idsCounted = ids
 
 # Writing ---------------------------------------------------------------------------
 
@@ -562,7 +639,8 @@ proc commit*(
 ): bool =
   ## Appends one frame to the connection's ordered output: it is committed.
   ## False, and nothing committed, when there is no room: a data frame then
-  ## waits or fails; a control frame has exhausted the control reserve.
+  ## waits or fails; an Event overflows (§5.2); a control frame has exhausted
+  ## the control reserve.
   if c.closed or c.writeFailed or c.phase == phConnecting:
     return false
   let n = body.len + 4
@@ -591,15 +669,6 @@ proc commitControl*(io: Io, c: Conn, body: openArray[byte]) =
 
 # ok-Responses ----------------------------------------------------------------------
 
-proc refreshSession*(io: Io, c: Conn) =
-  ## Reading follows the session's admission (`maxInFlight`, §8.6).
-  if c.role == roCallee and c.established:
-    if c.callee.admitsInput:
-      if hSession in c.holds:
-        io.unhold(c, hSession)
-    elif hSession notin c.holds:
-      io.hold(c, hSession)
-
 proc commitResponse(io: Io, c: Conn, id: uint64, outcome: Outcome) =
   let bytes = c.callee.respond(id, outcome)
   if bytes.isSome:
@@ -607,8 +676,6 @@ proc commitResponse(io: Io, c: Conn, id: uint64, outcome: Outcome) =
     let cls = if outcome.ok: fcData else: fcControl
     if not io.commit(c, bytes.get, cls) and cls == fcControl and not c.closed:
       io.closeConn(c, ccProtocol, ecTransport, Opt.some(protocolErrorBody(ecTransport)))
-  if not c.closed:
-    io.refreshSession(c)
 
 proc fitsNow*(io: Io, c: Conn, size: int): bool =
   ## Whether a data frame of `size` bytes, prefix included, can be committed now.
@@ -620,7 +687,7 @@ proc drainPending(io: Io, c: Conn) =
   while c.pending.len > 0 and c.established:
     let p = addr c.pending[0]
     if not c.callee.isInFlight(p.id):
-      discard c.pending.popFirst
+      io.uncharge(c.pending.popFirst.charge)
       continue
     if not io.fitsNow(c, p.size):
       if p.size <= io.dataRoom(c) and not c.outWaiting:
@@ -629,6 +696,7 @@ proc drainPending(io: Io, c: Conn) =
         io.outWaiters.addLast(c.key)
       return
     let r = c.pending.popFirst
+    io.uncharge(r.charge)
     io.commitResponse(c, r.id, Outcome(ok: true, response: r.response))
 
 func okFrameSize*(io: Io, resultLen: int): int =
@@ -636,22 +704,33 @@ func okFrameSize*(io: Io, resultLen: int): int =
   ## has `resultLen` bytes, prefix included.
   io.responseOverhead + resultLen
 
-proc respondOutcome*(io: Io, c: Conn, id: uint64, outcome: Outcome, resultLen = 0) =
+proc respondOutcome*(
+    io: Io, c: Conn, id: uint64, outcome: Outcome, resultLen = 0, charge = 0
+) =
   ## [SPEC TRANSPORT §4.1, §6] The terminal Response of request `id`
-  ## (`resultLen`: the encoded result map's length, for an ok one). An
-  ## ok-Response that does not fit the output budgets now waits, uncommitted;
-  ## it is never dropped for capacity, and the write-stall timer bounds the wait.
+  ## (`resultLen`: the encoded result map's length, for an ok one; `charge`:
+  ## its bytes counted in `maxPendingOutputBytes`). An ok-Response that does
+  ## not fit the output budgets now waits, uncommitted and still counted; it is
+  ## never dropped for capacity, and the write-stall timer bounds the wait.
   if not c.established or not c.callee.isInFlight(id):
+    io.uncharge(charge)
     return
   if outcome.ok:
     let size = io.okFrameSize(resultLen)
     if c.pending.len > 0 or not io.fitsNow(c, size):
-      c.pending.addLast(PendingResponse(id: id, response: outcome.response, size: size))
+      c.pending.addLast(
+        PendingResponse(id: id, response: outcome.response, size: size, charge: charge)
+      )
       io.drainPending(c)
       return
+  io.uncharge(charge)
   io.commitResponse(c, id, outcome)
 
 # Closing ---------------------------------------------------------------------------
+
+proc dropPending(io: Io, c: Conn) =
+  while c.pending.len > 0:
+    io.uncharge(c.pending.popFirst.charge)
 
 proc onLinger(arg: pointer) {.gcsafe, raises: [].} =
   let io = theIo
@@ -674,6 +753,8 @@ proc finalClose*(io: Io, c: Conn) =
     addr c.admitTimer,
     addr c.lingerTimer,
     addr c.retryTimer,
+    addr c.endTimer,
+    addr c.drainTimer,
   ]:
     cancelTimer(t[])
   if c.reading:
@@ -696,7 +777,7 @@ proc finalClose*(io: Io, c: Conn) =
     c.reserved = 0
     io.releaseInput(n, c.helloPool)
   c.body = @[]
-  c.pending.clear()
+  io.dropPending(c)
   io.byKey.del(c.key)
   if io.conns.getOrDefault(c.id) == c:
     io.conns.del(c.id)
@@ -716,7 +797,7 @@ proc report(
       all.add(id)
     c.dispatched.clear()
     if c.established:
-      c.callee.state = csClosed
+      c.callee.lose()
     all.sort()
     io.emit(IoEvent(conn: c.id, kind: evClosed, cause: cause, code: code, ids: all))
   of roCaller:
@@ -793,15 +874,31 @@ proc closeConn*(
     c.outboundCounted = false
   let wasConnecting = c.phase == phConnecting
   c.phase = phLinger
-  for t in [addr c.helloTimer, addr c.admitTimer, addr c.retryTimer]:
+  for t in [
+    addr c.helloTimer,
+    addr c.admitTimer,
+    addr c.retryTimer,
+    addr c.endTimer,
+    addr c.drainTimer,
+  ]:
     cancelTimer(t[])
   io.updateReading(c)
   if c.reserved > 0:
     let n = c.reserved
     c.reserved = 0
     io.releaseInput(n, c.helloPool)
+  # Kept bytes of the frame being handled are released by `readSome`.
+  let kept = c.kept - c.keepIn
+  c.kept = 0
+  c.keepIn = 0
+  c.undelivered = 0
+  if kept > 0:
+    io.releaseInput(kept, false)
   c.body = @[]
-  c.pending.clear()
+  io.dropPending(c)
+  io.account(c)
+  if c.role == roCallee and c.callee.executing > 0:
+    io.zombies[c.id] = c
   if io.conns.getOrDefault(c.id) == c:
     io.conns.del(c.id)
   if final.isSome and not c.writeFailed and not wasConnecting and c.registered:

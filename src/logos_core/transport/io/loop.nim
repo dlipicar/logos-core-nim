@@ -3,7 +3,11 @@
 ## and talks to its owner only through values (`api.nim`).
 ##
 ## - `submit` (any thread, never blocks): a `Channel` send, then a
-##   `ThreadSignalPtr` fire. Commands are handled in channel order.
+##   `ThreadSignalPtr` fire. Commands are handled in channel order. Response
+##   and Event payloads count against `maxPendingOutputBytes` from `submit`
+##   until committed or discarded (F8): a full budget is `sbBusy`.
+## - `submitWait` (not on the I/O thread or an owner thread): `submit`,
+##   waiting while the budget is full, up to an optional bound.
 ## - The sink is called on the I/O thread, in order.
 ## - `stopTransport` (exactly once, not from the sink): every connection is
 ##   closed and reported, committed output gets at most `closeLinger`, then
@@ -16,7 +20,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[algorithm, atomics]
+import std/[algorithm, atomics, monotimes, os, times]
 import chronos/[asyncloop, threadsync]
 import ../../base/perthread
 import ./[api, sock]
@@ -33,6 +37,7 @@ type
     signal: ThreadSignalPtr
     stopping: Atomic[bool]
     users: Atomic[int]
+    pendingOut: Atomic[int] ## payload bytes submitted and not yet committed
     thread: Thread[ptr LoopObj]
     config: TransportConfig
     limits: TransportLimits
@@ -46,10 +51,29 @@ const StopTick = 5_000_000'i64 ## [IMPL] 5 ms: polling for the end while stoppin
 var
   current {.threadvar.}: Loop
   onIoThread {.threadvar.}: bool
+  ownerOf {.threadvar.}: Loop
 
 proc isIoThread*(): bool =
   ## Whether the calling thread is a transport I/O thread.
   onIoThread
+
+proc registerOwnerThread*(lp: Loop) =
+  ## Marks the calling thread as one the I/O thread's events wait for (the
+  ## Runtime thread): `submitWait` refuses to block on it.
+  ownerOf = lp
+
+proc unregisterOwnerThread*() =
+  ownerOf = nil
+
+func charge(cmd: IoCommand): int =
+  ## The payload bytes `cmd` adds to `maxPendingOutputBytes` (F8).
+  case cmd.kind
+  of cmdRespond:
+    if cmd.outcome.ok: cmd.outcome.result.len else: 0
+  of cmdPublish, cmdPublishScoped:
+    cmd.data.len
+  else:
+    0
 
 when unixStream:
   proc onFrame(io: Io, c: Conn, body: sink seq[byte]) {.nimcall, gcsafe, raises: [].} =
@@ -75,9 +99,17 @@ when unixStream:
     )
     for c in conns:
       io.closeConn(c, ccShutdown, ecTransport)
+    io.zombies.clear()
+    io.slotWaiters.clear()
 
   proc handle(io: Io, cmd: sink IoCommand) =
     let c = io.conns.getOrDefault(cmd.conn)
+    # A closed callee connection whose work has not ended (A21).
+    let z =
+      if c.isNil:
+        io.zombies.getOrDefault(cmd.conn)
+      else:
+        c
     case cmd.kind
     of cmdServe:
       io.serve(cmd)
@@ -87,8 +119,33 @@ when unixStream:
       if not c.isNil and c.role == roCallee:
         io.admit(c, cmd.verdict)
     of cmdRespond:
+      if z.isNil:
+        io.uncharge(charge(cmd))
+      else:
+        io.respond(z, cmd.requestId, cmd.outcome, cmd.workEnded, charge(cmd))
+    of cmdWorkEnded:
+      if not z.isNil:
+        io.workEnded(z, cmd.endedId)
+    of cmdSubscriptionResult:
       if not c.isNil:
-        io.respond(c, cmd.requestId, cmd.outcome)
+        io.subscriptionResult(c, cmd.subId, cmd.subFailure)
+    of cmdPublish:
+      io.publish(cmd)
+      io.uncharge(charge(cmd))
+    of cmdPublishScoped:
+      io.publishScoped(c, cmd)
+      io.uncharge(charge(cmd))
+    of cmdTerminate:
+      if not c.isNil:
+        io.terminate(c)
+    of cmdSubscribe:
+      io.subscribe(c, cmd)
+    of cmdUnsubscribe:
+      io.unsubscribe(c, cmd)
+    of cmdAbandonSubscription:
+      io.abandonSubscription(c, cmd.subId)
+    of cmdRelease:
+      io.release(c, cmd.releaseBytes)
     of cmdConnect:
       var cmd = cmd
       io.connect(cmd)
@@ -110,15 +167,21 @@ else:
     sink: IoSink
     ctx: pointer
     stopping: bool
+    pendingOut: ptr Atomic[int]
 
   var theIo {.threadvar.}: Io
 
   proc emit(io: Io, ev: sink IoEvent) =
     io.sink(ev, io.ctx)
 
+  proc uncharge(io: Io, n: int) =
+    if n > 0 and not io.pendingOut.isNil:
+      discard io.pendingOut[].fetchSub(n)
+
   proc handle(io: Io, cmd: sink IoCommand) =
     ## [SPEC TRANSPORT §8.2.1] No unix-stream profile here (G107): every
     ## placement and connect fails closed, and no fd is opened.
+    io.uncharge(charge(cmd))
     case cmd.kind
     of cmdServe:
       discard fdClose(cmd.listener)
@@ -200,6 +263,7 @@ proc run(lp: Loop) =
     io.onFrame = onFrame
   else:
     let io = Io(sink: lp.sink, ctx: lp.ctx)
+  io.pendingOut = addr lp.pendingOut
   theIo = io
   current = lp
   lp.armPump()
@@ -254,19 +318,61 @@ proc startTransport*(
     return err("the transport I/O thread could not start: " & e.msg)
   ok(lp)
 
-proc submit*(lp: Loop, cmd: sink IoCommand): SubmitResult =
-  ## Queues `cmd` for the I/O thread. Never blocks. `sbStopped` once
-  ## `stopTransport` began; `cmdShutdown` is internal.
+proc reserveOutput(lp: Loop, n: int): bool =
+  ## [SPEC TRANSPORT §5.2, §8.6] Counts `n` payload bytes against
+  ## `maxPendingOutputBytes`. A payload larger than the whole budget passes
+  ## when nothing else is pending, so it is never refused forever [IMPL].
+  if n <= 0:
+    return true
+  var cur = lp.pendingOut.load
+  while true:
+    if cur > 0 and cur + n > lp.config.maxPendingOutputBytes:
+      return false
+    if lp.pendingOut.compareExchange(cur, cur + n):
+      return true
+
+proc trySubmit(lp: Loop, cmd: var IoCommand): SubmitResult =
   if cmd.kind == cmdShutdown:
     return sbStopped
   discard lp.users.fetchAdd(1)
   if lp.stopping.load:
     discard lp.users.fetchSub(1)
     return sbStopped
-  lp.chan.send(cmd)
+  let n = charge(cmd)
+  if not lp.reserveOutput(n):
+    discard lp.users.fetchSub(1)
+    return sbBusy
+  lp.chan.send(move cmd)
   discard lp.signal.fireSync()
   discard lp.users.fetchSub(1)
   sbOk
+
+proc submit*(lp: Loop, cmd: sink IoCommand): SubmitResult =
+  ## Queues `cmd` for the I/O thread. Never blocks. `sbBusy` when its payload
+  ## does not fit `maxPendingOutputBytes`; `sbStopped` once `stopTransport`
+  ## began. `cmdShutdown` is internal.
+  var cmd = cmd
+  lp.trySubmit(cmd)
+
+proc submitWait*(
+    lp: Loop, cmd: sink IoCommand, timeout = Opt.none(int64)
+): SubmitResult =
+  ## [SPEC TRANSPORT §5.2 l.806-807] `submit`, waiting while
+  ## `maxPendingOutputBytes` is full: up to `timeout` nanoseconds, then
+  ## `sbBusy`; without a timeout the wait has no finite bound. `sbRefused` on
+  ## the I/O thread or a registered owner thread, whose waiting could keep the
+  ## budget from draining.
+  if onIoThread or (not ownerOf.isNil and ownerOf == lp):
+    return sbRefused
+  var cmd = cmd
+  let start = getMonoTime()
+  while true:
+    let r = lp.trySubmit(cmd)
+    if r != sbBusy:
+      return r
+    if timeout.isSome and (getMonoTime() - start).inNanoseconds >= timeout.get:
+      return sbBusy
+    sleep(1) # [IMPL] 1 ms between attempts
 
 proc stopTransport*(lp: Loop) =
   ## Stops the I/O thread, waits for `evStopped`, joins it and frees the loop.
