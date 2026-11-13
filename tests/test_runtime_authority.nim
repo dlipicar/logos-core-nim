@@ -44,11 +44,14 @@ const
   Orch = "orch"
   Ca = "ca"
   Meter = "meter"
+  NoDeadlineMs = 60_000
+    ## [IMPL] The evaluation deadline of every case but the one that tests it:
+    ## the 5 s default fails closed on a loaded host running a sanitizer build.
 
 let clk = newTestClock()
 useClock(clk)
 
-proc caConfig(recovery = false, deadlineMs = 0): EngineConfig =
+proc caConfig(recovery = false, deadlineMs = NoDeadlineMs): EngineConfig =
   result = config(extra = @[fakeCaRegistration()])
   result.authority = Opt.some(
     AuthorityPolicy(
@@ -154,10 +157,11 @@ proc park(
     ParkArgs(rc: rc, name: name, params: params, slot: slot),
   )
 
-proc parkedCode(slot = 0): ErrorCode =
+proc parkedCode(slot = 0, seconds = 10 * Slow): ErrorCode =
   check waitUntil(
     proc(): bool =
-      parkDone[slot].load
+      parkDone[slot].load,
+    seconds,
   )
   joinThread(parkThreads[slot])
   ErrorCode(parkCode[slot].load)
@@ -644,7 +648,8 @@ suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
 suite "run.authority: parked operations (CA §8; I75)":
   test "[CAP-0260] a hanging evaluate leaves the Runtime thread serving; the deadline fails closed and marks the invocation cancelled":
     fresh()
-    let e = newEngine(caConfig(deadlineMs = 300))
+    # Long enough for the evaluation to reach the authority on a loaded host.
+    let e = newEngine(caConfig(deadlineMs = 1_000 * Slow))
     let orch = e.boot()
     e.startCa(orch)
     check e.start(Meter).isOk
@@ -899,6 +904,17 @@ proc counted(e: Engine, what: string, n: int): bool =
       count(what) >= n
   )
 
+proc failedRenewals(e: Engine, n: int): bool =
+  ## `n` execution renewals have failed and the Runtime has applied their
+  ## answers: retaining an answer and applying it are one Runtime-thread step,
+  ## so the retry is already scheduled from the test clock's time. Counting
+  ## what the authority received is not enough: a slow build may apply the
+  ## answer after the clock moves on.
+  waitUntil(
+    proc(): bool =
+      e.answers().countIt(it.request.renewal and it.outcome == azEvaluationFailed) >= n
+  )
+
 proc routeState(e: Engine, route: string): LogosNSRuntimeControlRouteRecord =
   e.routes().filterIt(it.route == route)[0]
 
@@ -964,10 +980,12 @@ suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10
     orch.startBy("m2")
     clk.advance(41_000)
     check e.counted("renew-execution", 1)
+    check e.failedRenewals(1)
     check e.view("m2").tryGet.state == msReady
     # Asked again within min(5 s, half of what is left).
     clk.advance(5_000)
     check e.counted("renew-execution", 2)
+    check e.failedRenewals(2)
     clk.advance(13_999)
     discard e.list()
     check e.view("m2").tryGet.state == msReady
