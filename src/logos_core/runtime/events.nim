@@ -255,6 +255,26 @@ proc publishOp*(
   let name = checkEventName(eventName).valueOr:
     e.diagnose("a publication from " & $a.instance & " was dropped: " & describe(error))
     return
+  if name in [GrantChangedName, PolicyChangedName]:
+    # [SPEC CA §8; RUNTIME l.1660-1667; I85] Under the Capability Authority
+    # policy the authority's notices go to the Runtime thread on the
+    # protected path, in order with every admission, and to no subscriber; a
+    # dropped one (no payload) is notification-path loss there. Under
+    # internal policy they are ordinary publications.
+    var payload: seq[byte]
+    if cborData != nil:
+      payload = view(cborData, cborDataLen)
+    let consumed = e.call(
+      Request(
+        kind: rqAuthorityNotice,
+        origin: moduleOrigin($a.instance),
+        attempt: $a.attempt,
+        bare: name,
+        payload: payload,
+      )
+    )
+    if consumed.admitted:
+      return
   if cborData == nil or cborDataLen == 0:
     e.diagnose(
       "a publication of " & name & " from " & $a.instance & " was dropped: no payload"

@@ -95,6 +95,10 @@ type
     released*: bool ## `execution_release` came
     finished*: bool ## the Runtime was told the invocation is idle
     owner*: pointer ## the deferred invocation this state belongs to
+    system*: bool
+      ## [SPEC INTERFACE l.2183; RUNTIME l.1652-1667; G163] the caller is the
+      ## Runtime's protected path (an engine `evaluate`): a SYSTEM_SERVICE
+      ## caller view with the Runtime id and no module view (I85)
 
   Frame* = object
     ## One provider entry active on this thread, or a barrier (`context` nil)

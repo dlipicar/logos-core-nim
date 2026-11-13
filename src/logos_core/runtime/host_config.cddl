@@ -3,8 +3,10 @@
 ; lcn.app_config value. docs/HOST-CONFIG.md documents each field.
 ;
 ; An array that is present is non-empty, and the checks the schema cannot
-; express (unique ids, ordering, the orchestration instance) are applied at
-; logos_runtime_create (runtime/host_config.nim).
+; express (unique ids, ordering, the orchestration instance, the authority
+; instance) are applied at logos_runtime_create (runtime/host_config.nim).
+; lcn.authority_policy is the Capability Authority's policy input,
+; authority/policy.cddl (docs/AUTHORITY-POLICY.md).
 
 lcn.app_config = {
   runtime: lcn.app_runtime,
@@ -13,6 +15,7 @@ lcn.app_config = {
   modules: [* lcn.app_module],
   ? ordering: [* lcn.app_ordering],
   ? declarations: [* lcn.app_declaration],
+  ? call_audit: lcn.app_call_audit,
 }
 
 lcn.app_runtime = {
@@ -27,7 +30,33 @@ lcn.app_runtime = {
 
 lcn.app_path = tstr .size (1..4096)
 
-lcn.app_policy = { kind: "allow-all" }
+; allow-all: every operation is allowed (RUNTIME l.1633-1634).
+; capability-authority: the named logos_capability_authority instance decides
+; (RUNTIME §9; DECISIONS I85). evaluation_deadline_ms: 1..60000, default 5000;
+; recovery: the derived rules also apply after a binding loss (RUN-0860).
+lcn.app_policy =
+  { kind: "allow-all" } /
+  {
+    kind: "capability-authority",
+    authority: lcn.app_instance_id,
+    policy: lcn.authority_policy,
+    ? evaluation_deadline_ms: uint32,
+    ? recovery: bool,
+  }
+
+; Call audit (CA §9, §9.1): call_records is the in-memory ring's capacity,
+; 1..1000000, default 4096; evidence the call-evidence signing key.
+lcn.app_call_audit = {
+  ? call_records: uint32,
+  ? evidence: lcn.app_evidence_key,
+}
+
+; kid: the logos.capability_authority.evidence_key_id verifiers map to this
+; Runtime; secret_key_file: a 96-byte SLH-DSA-SHA2-192s secret key, mode 0600.
+lcn.app_evidence_key = {
+  kid: bstr .size (1..128),
+  secret_key_file: lcn.app_path,
+}
 
 ; logos.runtime.module_instance_id (RUNTIME §9.2)
 lcn.app_instance_id = tstr .size (1..128)

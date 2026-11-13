@@ -42,7 +42,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check newRuntimeInstanceId() != id
 
   test "[RUN-0896] [RUN-0901] [RUN-0902] [RUN-0908] [RUN-0909] get_self and get_execution_permissions are caller-bound (§9.3 l.2553, l.2562)":
-    let e = newEngine(config(denying(deny(action = Opt.some(aaRuntimeControl)))))
+    let e = fixtureEngine(config(denying(deny(action = Opt.some(aaRuntimeControl)))))
     let (c, rc) = e.startClient()
     let r = rcCall(rc, "get_self", [0xA0'u8])
     check r.code == ecOk
@@ -60,14 +60,14 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
   test "[RUN-0897] [RUN-0905] get_self is callable during initialization (§9.3 l.2557)":
     initProbe.store(true)
     initSelfCode.store(-1)
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.startClient()
     initProbe.store(false)
     check initSelfCode.load == ord(ecOk)
     e.finish()
 
   test "[RUN-0042] [IFC-0416] [IFC-0418] [IFC-0419] method names and requests are checked before anything else (INTERFACE §4.5)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let (_, rc) = e.startClient()
     check rcCall(rc, "no_such_method", [0xA0'u8]).code == ecMethodNotFound
     check rcCall(rc, "", [0xA0'u8]).code == ecMethodNotFound
@@ -93,7 +93,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     e.finish()
 
   test "[RUN-0043] [RUN-0044] [IFC-0501] connect_remote: a valid endpoint names no enrolled Runtime (§4.4)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let (_, rc) = e.startClient()
     var acquired = LogosRuntimeControlBinding()
     var root: ContractRoot
@@ -132,7 +132,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
   test "[RUN-0794] [RUN-0900] a binding that is stopping is NOT_READY (§3.4 l.629-631)":
     var cfg = config()
     cfg.stopDeadline = initDuration(seconds = 30) # stays `stopping` meanwhile
-    let e = newEngine(cfg)
+    let e = fixtureEngine(cfg)
     let (c, rc) = e.startClient()
     clientDestroyGate.store(true)
     var t: Thread[(Engine, string)]
@@ -159,7 +159,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
       )
     )
     cfg.stopDeadline = initDuration(seconds = 30) # stays `stopping` meanwhile
-    let e = newEngine(cfg)
+    let e = fixtureEngine(cfg)
     discard e.started(meter())
     let (_, rc) = e.startClient("c1")
     let (c2, refused) = e.startClient("c2")
@@ -182,7 +182,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     e.finish()
 
   test "[RUN-0113] [RUN-0794] a caller waiting in start_module is released when its binding ends (§3.4)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let s = e.create(slow()).tryGet
     let (c, rc) = e.startClient()
     slowGate.store(true)
@@ -213,7 +213,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
 
 suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
   test "[RUN-0557] [RUN-0943] [RUN-0542] [RUN-0624] [RUN-0184] a single route to a ready provider (§9.3 l.3135-3146)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let m = e.started(meter())
     let (c, rc) = e.startClient()
     let r = rc.establish("k1")
@@ -238,7 +238,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     e.finish()
 
   test "[IMPL-DECISION G169] [RUN-0556] [RUN-0188] [RUN-0121] establishment failures":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let idle = e.create(meter()).tryGet
     let (_, rc) = e.startClient()
     var zero: Digest
@@ -278,14 +278,14 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
       deny(action = Opt.some(aaRuntimeControl), operation = "establish_route"),
       deny(action = Opt.some(aaRoute)),
     ]:
-      let e = newEngine(config(denying(rule)))
+      let e = fixtureEngine(config(denying(rule)))
       discard e.started(meter())
       let (_, rc) = e.startClient()
       check rc.establish("k").code == ecNotAuthorised
       check rc.establish("a", all = true).code == ecNotAuthorised
       check e.routes().len == 0
       e.finish()
-    let e = newEngine(config(denying(deny(action = Opt.some(aaDiscover)))))
+    let e = fixtureEngine(config(denying(deny(action = Opt.some(aaDiscover)))))
     discard e.started(meter())
     let (_, rc) = e.startClient()
     check rc.establish("k", all = true).code == ecNotAuthorised
@@ -296,7 +296,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     e.finish()
 
   test "[RUN-0947] request_key replay (§9.3 l.3176-3183)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let m = e.create(meter()).tryGet
     let (_, rc) = e.startClient()
     check rc.establish("k2").code == ecNotReady # failures are not retained
@@ -314,7 +314,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     e.finish()
 
   test "[RUN-0556] [RUN-0557] [RUN-0558] [RUN-0280] all-runtime-visible and single selection (§9.3 l.3140-3146)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let a = e.started(meter())
     let b = e.create(meter()).tryGet
     let (_, rc) = e.startClient()
@@ -336,7 +336,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     e.finish()
 
   test "[RUN-0570] [RUN-0625] [RUN-0360] renew_route (§9.3 l.3183-3190, l.3471-3484)":
-    let e = newEngine(
+    let e = fixtureEngine(
       config(
         denying(
           deny(action = Opt.some(aaRoute), operation = "renew_route", route = "route-x")
@@ -359,7 +359,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     e.finish()
 
   test "[IMPL-DECISION G170] [RUN-0887] [RUN-0836] [RUN-0990] [RUN-0580] a denied renewal revokes the route [IMPL-DECISION G170] (TF-17)":
-    let e = newEngine(
+    let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
     discard e.started(meter())
@@ -389,7 +389,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     e.finish()
 
   test "[IMPL-DECISION G170] [RUN-0626] close_route (§9.3 l.3486-3492)":
-    let e = newEngine(
+    let e = fixtureEngine(
       config(
         denying(
           deny(
@@ -423,7 +423,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
 
 suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)":
   test "[IFC-0510] [IFC-0491] [RUN-0866] [RUN-0152] materialize a route and call the provider through it":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (c, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -439,7 +439,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     e.finish()
 
   test "[IFC-0448] [IFC-0930] logos.schema is answered by the boundary (INTERFACE l.3275-3277)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -451,7 +451,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     e.finish()
 
   test "[IMPL-DECISION G172] [RUN-0152] [RUN-0153] [IFC-0932] provider failures, bad requests and bad responses":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -470,8 +470,9 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     e.finish()
 
   test "[RUN-0866] [RUN-0188] the access scope and the per-call decision (§9.3 l.3003-3004; l.1732)":
-    let e =
-      newEngine(config(denying(deny(action = Opt.some(aaCall), consumer = "denied"))))
+    let e = fixtureEngine(
+      config(denying(deny(action = Opt.some(aaCall), consumer = "denied")))
+    )
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let empty =
@@ -493,7 +494,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     e.finish()
 
   test "[IFC-0943] [IFC-0945] [IFC-0946] [IFC-0947] [RUN-0184] materialize_route failures (INTERFACE §5.2 l.3884-3890)":
-    let e = newEngine(
+    let e = fixtureEngine(
       config(
         denying(
           deny(
@@ -527,7 +528,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     e.finish()
 
   test "[IFC-0656] [IFC-0657] [IFC-0659] [IFC-0661] [IFC-0663] [IFC-0664] [RUN-0256] [RUN-0837] observe_end and closure (INTERFACE §2.5 l.1474-1497)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
@@ -553,7 +554,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     e.finish()
 
   test "[IFC-0516] a released handle gets no terminal callback (INTERFACE §5.2 l.3912-3916)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
@@ -568,7 +569,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
 
 suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9.3)":
   test "[IMPL-DECISION G171] [RUN-0579] [RUN-0580] [RUN-0360] [RUN-0887] [IFC-0665] a stopped provider fails its routes":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let m = e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
@@ -599,7 +600,7 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     e.finish()
 
   test "[RUN-0111] [RUN-0112] a stopped consumer closes its routes; a failed one fails them (l.624-626)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (c1, rc1) = e.startClient()
     discard rc1.routeId("k")
@@ -626,7 +627,7 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     e.finish()
 
   test "[IFC-0740] [IFC-0287] an admitted call holds its provider's release and sees cancellation (§3.4 l.623)":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let m = e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -665,7 +666,7 @@ suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
   test "[RUN-0584] [RUN-0570] [RUN-0564] [RUN-0946] [IMPL] each consumer keeps its newest ended records; a dropped id is unknown (l.3180, l.3249)":
     var cfg = config()
     cfg.endedRoutes = 2
-    let e = newEngine(cfg)
+    let e = fixtureEngine(cfg)
     discard e.started(meter())
     let (_, rc) = e.startClient("c1")
     let (_, other) = e.startClient("c2")
@@ -699,7 +700,7 @@ suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
   test "[RUN-0838] [IMPL] a record that a live handle reaches is kept and not counted (§7.5 l.1346)":
     var cfg = config()
     cfg.endedRoutes = 1
-    let e = newEngine(cfg)
+    let e = fixtureEngine(cfg)
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let held = rc.routeId("a")
@@ -723,7 +724,7 @@ suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
   test "[RUN-0838] [IMPL] a handle stops reaching its record once its attempt's context is destroyed (INTERFACE l.2004-2006)":
     var cfg = config()
     cfg.endedRoutes = 0
-    let e = newEngine(cfg)
+    let e = fixtureEngine(cfg)
     discard e.started(meter())
     let (c, rc) = e.startClient()
     var h = rc.handle(rc.routeId("a"))
@@ -736,7 +737,7 @@ suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
 
 suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)":
   test "[RUN-1031] [RUN-1032] [RUN-1033] [RUN-1034] [RUN-1035] [RUN-1036] [RUN-1037] [RUN-1042] selection by instance, by name and by provider":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let m = e.create(meter(), "m1").tryGet
     let (c, rc) = e.startClient()
     let s = rc.lifecycle("start_module", "meter_module", Opt.some("m1"))
@@ -780,7 +781,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     e.finish()
 
   test "[RUN-1038] [RUN-1039] [RUN-1040] name-only selection needs observation authority first (l.3666-3670)":
-    let e = newEngine(config(denying(deny(action = Opt.some(aaObserve)))))
+    let e = fixtureEngine(config(denying(deny(action = Opt.some(aaObserve)))))
     discard e.create(meter(), "m1").tryGet
     let (_, rc) = e.startClient()
     check rc.lifecycle("start_module", "meter_module").code == ecNotAuthorised
@@ -791,7 +792,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
   test "[IMPL-DECISION G173] a caller with a call in progress in the target gets the state at once (TF-20)":
     var cfg = config()
     cfg.stopDeadline = initDuration(seconds = 30) # waiting would take this long
-    let e = newEngine(cfg)
+    let e = fixtureEngine(cfg)
     let m = e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -823,7 +824,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
   test "[IMPL-DECISION G173] a module stopping itself gets the state at once (TF-20)":
     var cfg = config()
     cfg.stopDeadline = initDuration(seconds = 30) # the destroy ends well before
-    let e = newEngine(cfg)
+    let e = fixtureEngine(cfg)
     let (c, rc) = e.startClient()
     clientDestroyGate.store(true)
     let r = rc.lifecycle("stop_module", "client_module", Opt.some(c.instance))
@@ -839,7 +840,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
 
   test "[RUN-0671] [RUN-0673] [RUN-0674] [RUN-1051] shutdown_runtime is Runtime-wide and acknowledges acceptance (l.3695-3700)":
     block:
-      let e = newEngine(
+      let e = fixtureEngine(
         config(
           denying(
             deny(action = Opt.some(aaRuntimeControl), operation = "shutdown_runtime")
@@ -849,7 +850,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
       let (_, rc) = e.startClient()
       check rcCall(rc, "shutdown_runtime", [0xA0'u8]).code == ecNotAuthorised
       e.finish()
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let m = e.started(meter())
     let (c, rc) = e.startClient()
     let r = rcCall(rc, "shutdown_runtime", [0xA0'u8])
@@ -864,7 +865,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
 
 suite "run.rc: get_readiness (RUNTIME §9.3 l.3494-3496, l.3656-3675, l.3702-3712)":
   test "[RUN-0627] [RUN-0991] a local instance's state and execution from one snapshot, with its exact instance and no provider":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.create(meter(), "m1").tryGet
     let (_, rc) = e.startClient()
     var r = rc.readiness("meter_module", Opt.some("m1"))
@@ -896,7 +897,7 @@ suite "run.rc: get_readiness (RUNTIME §9.3 l.3494-3496, l.3656-3675, l.3702-371
     e.finish()
 
   test "a failed instance reports its classification and reason":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.create(
       ModuleRecord(
         module: "meter_module",
@@ -917,7 +918,7 @@ suite "run.rc: get_readiness (RUNTIME §9.3 l.3494-3496, l.3656-3675, l.3702-371
     e.finish()
 
   test "[RUN-1031] [RUN-1033] [RUN-1034] [RUN-1035] [RUN-1036] [RUN-1042] selectors as for start and stop":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let m = e.create(meter(), "m1").tryGet
     let (_, rc) = e.startClient()
     let prov = Opt.some(providerAddress(m.providerId))
@@ -940,14 +941,14 @@ suite "run.rc: get_readiness (RUNTIME §9.3 l.3494-3496, l.3656-3675, l.3702-371
   test "[RUN-1038] [RUN-1039] [IMPL-DECISION G161] observation authority: over the name scope first, then over the exact record":
     block:
       let e =
-        newEngine(config(denying(deny(action = Opt.some(aaObserve), target = ""))))
+        fixtureEngine(config(denying(deny(action = Opt.some(aaObserve), target = ""))))
       discard e.create(meter(), "m1").tryGet
       let (_, rc) = e.startClient()
       check rc.readiness("meter_module").code == ecNotAuthorised
       check rc.readiness("nothing_module").code == ecNotAuthorised
       check rc.readiness("meter_module", Opt.some("m1")).code == ecNotAuthorised
       e.finish()
-    let e = newEngine(
+    let e = fixtureEngine(
       config(
         denying(
           deny(action = Opt.some(aaObserve), operation = "get_readiness", target = "m1")

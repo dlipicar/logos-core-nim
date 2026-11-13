@@ -12,6 +12,9 @@ import ../src/logos_core/crypto/blake3
 import ../src/logos_core/iface/outcome
 import
   ../src/logos_core/runtime/[engine, host, host_config, host_config_types, rc_types]
+from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
+from ../src/logos_core/crypto/slhdsa import Seed, keyPairFromSeeds
+from std/posix import Mode, chmod
 import ./support/kitbuild
 import ./kit/meter_impl
 
@@ -64,6 +67,49 @@ proc withEntry(v: CborValue, key: string, x: CborValue): CborValue =
 
 proc root(b: byte): SchemaCommitment =
   SchemaCommitment(schema_root: newSeqWith(32, b))
+
+proc authorityPolicy(source = "test"): LcnAuthorityPolicy =
+  ## The smallest policy 8a loads: anyone may observe.
+  LcnAuthorityPolicy.fromCbor(
+    cborMap(
+      (cbor("format"), cbor("logos-core-nim.authority-policy.v1")),
+      (cbor("source"), cbor(source)),
+      (
+        cbor("rules"),
+        cborArray(
+          cborMap(
+            (cbor("kind"), cbor("allow")),
+            (cbor("subject"), cborMap()),
+            (
+              cbor("scopes"),
+              cborArray(cborMap((cbor("kind"), cbor("runtime-control")))),
+            ),
+          )
+        ),
+      ),
+    )
+  ).tryGet
+
+proc caConfig(): LcnAppConfig =
+  ## `baseConfig` with a Capability Authority instance `ca` deciding.
+  result = baseConfig()
+  result.runtime.store_dir = Opt.some(work / "store")
+  result.runtime.state_root = Opt.some(work / "state")
+  var ca = staticModule("ca", AuthorityModule, "logos_capability_authority")
+  ca.state_assignment = Opt.some("ca-state")
+  result.modules.add(ca)
+  result.policy = LcnAppPolicy(
+    kind: LcnAppPolicyKind.Capability_authority,
+    arm_Capability_authority:
+      LcnAppPolicyARCapabilityAuthorityMap(authority: "ca", policy: authorityPolicy()),
+  )
+
+template authorityArm(c: LcnAppConfig): untyped =
+  c.policy.arm_Capability_authority
+
+proc decoded(c: LcnAppConfig): Result[HostConfig, ConfigError] =
+  ## Every check, without the refusal of what is not built yet.
+  decodeHostConfig(AppConfigFormat, encodeCbor(toCbor(c)))
 
 suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
   test "[RUN-0741] a valid configuration decodes into records, in order, with the default deadlines":
@@ -145,6 +191,107 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
       if e[0].text == "policy":
         e[1] = cborMap(@[(cbor("kind"), cbor("deny-all"))])
     check parseValue(cv).rejects("policy kind is not supported yet")
+
+  test "[RUN-0304] [RUN-0305] [CAP-0003] [CAP-0006] [I85] a capability-authority policy names this library's Capability Authority instance and 8a's policy":
+    let ok = caConfig().decoded
+    check ok.isOk
+    let a = ok.get.authority.get
+    check a.instance == "ca"
+    check a.evaluationDeadline == DefaultEvaluationDeadline
+    check not a.recovery
+    check ok.get.authorityPolicy == encodeCbor(toCbor(authorityPolicy()))
+    check parse(caConfig()).isOk
+    var c = caConfig()
+    c.authorityArm.authority = "nobody"
+    check c.decoded.rejects("policy.authority names no instance in modules")
+    c = caConfig()
+    c.authorityArm.authority = "meter-1"
+    check c.decoded.rejects(
+      "policy.authority's module is not logos_capability_authority"
+    )
+    # [IMPL] The library's own binding, wired in process.
+    c = caConfig()
+    c.modules[2] = staticModule("ca", AuthorityModule, "my_authority")
+    c.modules[2].state_assignment = Opt.some("ca-state")
+    check c.decoded.rejects(
+      "policy.authority must be the direct_static binding logos_capability_authority"
+    )
+    c.modules[2].implementation = LcnAppImplementation(
+      kind: LcnAppImplementationKind.Direct_dynamic,
+      arm_Direct_dynamic: LcnAppImplementationARDirectDynamicMap(
+        artifact: LcnAppArtifact(
+          id: "ca", local_path: work / "libca.so", hash: newSeq[byte](32)
+        )
+      ),
+    )
+    check c.decoded.rejects(
+      "policy.authority must be the direct_static binding logos_capability_authority"
+    )
+    c = caConfig()
+    c.modules[2].primary_contract = Opt.some(root(7))
+    check c.decoded.rejects("is not the pinned Capability Authority contract")
+    c.modules[2].primary_contract =
+      Opt.some(SchemaCommitment(schema_root: caRoots().contract))
+    check c.decoded.isOk
+    # [RUNTIME l.1637] The orchestration instance is never the authority.
+    c = caConfig()
+    c.orchestration = "ca"
+    check c.decoded.rejects("reserved logos_ prefix")
+    # [C8]
+    c = caConfig()
+    c.runtime.store_dir = Opt.none(string)
+    check c.decoded.rejects("capability-authority needs store_dir")
+    c = caConfig()
+    c.modules[2].state_assignment = Opt.none(string)
+    check c.decoded.rejects("the authority instance needs a state_assignment")
+    c = caConfig()
+    c.runtime.state_root = Opt.none(string)
+    check c.decoded.rejects("capability-authority needs state_root")
+    # The evaluation deadline: 1..60000, below the startup deadline (C34(a)).
+    for ms in [0'u32, 60_001]:
+      c = caConfig()
+      c.authorityArm.evaluation_deadline_ms = Opt.some(ms)
+      check c.decoded.rejects("evaluation_deadline_ms must be 1 to 60000 milliseconds")
+    c = caConfig()
+    c.runtime.startup_deadline_ms = Opt.some(5000'u32)
+    check c.decoded.rejects("evaluation_deadline_ms must be below startup_deadline_ms")
+    c.authorityArm.evaluation_deadline_ms = Opt.some(4999'u32)
+    c.authorityArm.recovery = Opt.some(true)
+    let short = c.decoded.get.authority.get
+    check short.evaluationDeadline == initDuration(milliseconds = 4999)
+    check short.recovery
+    # The policy is checked as the authority will load it.
+    c = caConfig()
+    c.authorityArm.policy = authorityPolicy("Not A Source")
+    check c.decoded.rejects("policy: source does not match")
+
+  test "[I85] call_audit sets the record ring and the evidence key":
+    var c = baseConfig()
+    c.call_audit = Opt.some(LcnAppCallAudit())
+    let ok = c.decoded
+    check ok.isOk
+    check ok.get.callAudit
+    check ok.get.callRecords == DefaultCallRecords
+    check ok.get.evidence.isNone
+    check parse(c).isOk
+    check baseConfig().decoded.get.callRecords == DefaultCallRecords
+    check not baseConfig().decoded.get.callAudit
+    for n in [0'u32, 1_000_001]:
+      c.call_audit = Opt.some(LcnAppCallAudit(call_records: Opt.some(n)))
+      check c.decoded.rejects("call_audit.call_records must be 1 to 1000000")
+    c.call_audit = Opt.some(LcnAppCallAudit(call_records: Opt.some(7'u32)))
+    check c.decoded.get.callRecords == 7
+    let key = LcnAppEvidenceKey(kid: @[1'u8, 2], secret_key_file: "key")
+    c.call_audit = Opt.some(LcnAppCallAudit(evidence: Opt.some(key)))
+    check c.decoded.rejects(
+      "call_audit.evidence.secret_key_file must be an absolute path"
+    )
+    c.call_audit.get.evidence.get.secret_key_file = work / "key"
+    check c.decoded.rejects("call_audit.evidence needs store_dir")
+    c.runtime.store_dir = Opt.some(work / "store")
+    let e = c.decoded.get.evidence.get
+    check e.kid == @[1'u8, 2]
+    check e.secretKeyFile == work / "key"
 
   test "[RUN-0784] [RUN-0785] [G53] orchestration names a listed instance outside the logos_ prefix":
     var c = baseConfig()
@@ -732,6 +879,43 @@ suite "run.host-api: structures and results (RUNTIME §13.1, §13.2, §13.4)":
     rt = create(c)
     check not dirExists(c.runtime.work_dir)
     check runtimeDestroy(rt).ec == ecOk
+
+  test "[CAP-0230] [I85] create reads the call-evidence key file: one it cannot use fails INVALID_PARAMS naming call_audit.evidence and creates nothing; no evidence is exported before start":
+    createDir(work)
+    var seed: Seed
+    let (sk, _) = keyPairFromSeeds(seed, seed, seed)
+    let path = work / "evidence.key"
+    proc put(mode: int) =
+      removeFile(path)
+      writeFile(path, cast[string](@sk))
+      check chmod(cstring(path), Mode(mode)) == 0
+
+    var c = deployment()
+    c.runtime.store_dir = Opt.some(work / "evidence-store")
+    c.call_audit = Opt.some(
+      LcnAppCallAudit(
+        evidence: Opt.some(LcnAppEvidenceKey(kid: @[1'u8], secret_key_file: path))
+      )
+    )
+    let bytes = c.encode.get
+    var rt = cast[ptr LogosRuntimeHandle](1)
+    proc refused(fragment: string): bool =
+      var cfg = runtimeConfig(bytes)
+      let r = runtimeCreate(addr cfg, addr rt)
+      checkpoint r.text
+      r.ec == ecInvalidParams and "call_audit.evidence" in r.text and fragment in r.text and
+        rt == nil
+
+    removeFile(path)
+    check refused("cannot be read")
+    put(0o644)
+    check refused("0600")
+    put(0o600)
+    rt = create(c)
+    check rt.auditRecords.len == 0
+    check rt.exportCallEvidence(0).isErr
+    check runtimeDestroy(rt).ec == ecOk
+    removeFile(path)
 
   test "[RUN-0764] a result's message lives in its thread until that thread's next call; OK has none; 512 bytes at most":
     var rt: ptr LogosRuntimeHandle

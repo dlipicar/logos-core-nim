@@ -148,8 +148,9 @@ refused otherwise ("not a set").
 
 **`allow`.** A consumer matching `subject` may do what any of `scopes` covers. An `evaluate` the rule
 covers is allowed with `requested_scopes` as `allowed_scopes` and `valid_until` = now +
-`decision_validity_ms`. `commitment` adds call-evidence requirements to the decision; the decision's
-commitment is the union of the request's, every covering rule's and every supporting grant's.
+`decision_validity_ms`. `commitment` adds call-record retention requirements to the decision (the
+Runtime's call records, `docs/HOST-CONFIG.md` `call_audit`); the decision's commitment is the union of
+the request's, every covering rule's and every supporting grant's.
 
 **`deny`.** A consumer matching `subject` is refused what any of `scopes` covers, with `code` (default
 `scope-denied`). Deny overrides allow and every grant: rules have no order, and one matching deny

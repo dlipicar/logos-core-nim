@@ -4,14 +4,12 @@
 ## holds exactly `kid`. The algorithm is implicit and fixed (RFC 9052 App. A):
 ## pure SLH-DSA-SHA2-192s (FIPS 205) with the zero-length context over the
 ## `Sig_structure`, whose `external_aad` is the profile identifier. Nothing in
-## the received object selects the algorithm, the profile or the context.
+## the received object selects the algorithm, the profile or the context. The
+## structure is `crypto/cose.nim`'s, shared with call evidence (I85).
 ##
 ## The claim schema is the mirrored PM §4.3 block plus the
 ## `logos.package_manager.manifest_commitment` rule cut from the mirrored PM §5
-## block, accepted as one supporting schema. The outer COSE structure and the
-## protected header use RFC 8949 §4.2.1 core deterministic encoding, which
-## imposes the same bytes as the Logos profile here, so the one encoder and
-## strict decoder serve both (I9).
+## block, accepted as one supporting schema.
 
 {.push raises: [].}
 
@@ -23,32 +21,24 @@ import ../cddl/syntax
 import ../commitment
 import ../hash
 import ../iface/accept
-import ../crypto/slhdsa
+import ../crypto/[cose, slhdsa]
 import ./[errors, manifest, trust]
 
 export results, errors, manifest, trust
+export
+  CoseSign1, CoseSign1Tag, CoseHeaderAlg, CoseHeaderKid, SignatureContext,
+  protectedHeader, encodeCoseSign1
 
 const
-  CoseSign1Tag* = 18'u64 ## [SPEC PM §4.3] RFC 9052 tagged COSE_Sign1
-  CoseHeaderAlg* = 1'u64 ## RFC 9052 `alg`: refused here [SPEC PM §4.3]
-  CoseHeaderKid* = 4'u64 ## RFC 9052 `kid`
-  SignatureContext* = "Signature1" ## RFC 9052 §4.4
   ClaimType* = "logos.package_manager.package_signature_claim"
   ProfileType* = "logos.package_manager.package_signing_profile"
   CommitmentType* = "logos.package_manager.manifest_commitment"
   SignerType* = "logos.package_manager.package_signer"
 
-type
-  CoseSign1* = object
-    protectedBytes*: seq[byte] ## the serialized protected header map
-    kid*: seq[byte]
-    payload*: seq[byte] ## the embedded claim bytes
-    signature*: seq[byte] ## 16,224 bytes once decoded or signed
-
-  VerifiedPackage* = object ## A manifest whose signature PM §4.1 and §4.3 accept.
-    manifest*: Manifest
-    commitment*: ManifestCommitment
-    signer*: TrustAnchor
+type VerifiedPackage* = object ## A manifest whose signature PM §4.1 and §4.3 accept.
+  manifest*: Manifest
+  commitment*: ManifestCommitment
+  signer*: TrustAnchor
 
 # The claim schema ------------------------------------------------------------------
 
@@ -135,35 +125,15 @@ func claimPayload*(c: ManifestCommitment): Result[seq[byte], string] =
 
 # COSE_Sign1 ------------------------------------------------------------------------
 
-func protectedHeader*(kid: openArray[byte]): seq[byte] =
-  ## [SPEC PM §4.3] Exactly `kid`, core deterministic.
-  encodeCbor(cborMap((cbor(CoseHeaderKid), cbor(@kid))))
-
 func sigStructure*(protectedBytes, payload: openArray[byte]): seq[byte] =
-  ## [SPEC PM §4.3] RFC 9052 §4.4 `Sig_structure` for `Signature1`: the
-  ## protected header bytes, the profile identifier as `external_aad`, the
-  ## payload bytes. This is the exact FIPS 205 message; the pure-mode prefix
-  ## is the signing and verifying functions' to add.
-  encodeCbor(
-    cborArray(
-      cbor(SignatureContext), cbor(@protectedBytes), cbor(externalAad()), cbor(@payload)
-    )
-  )
-
-func encodeCoseSign1*(c: CoseSign1): seq[byte] =
-  encodeCbor(
-    cborTag(
-      CoseSign1Tag,
-      cborArray(cbor(c.protectedBytes), cborMap(), cbor(c.payload), cbor(c.signature)),
-    )
-  )
+  ## [SPEC PM §4.3] RFC 9052 §4.4 `Sig_structure` for `Signature1` with the
+  ## profile identifier as `external_aad`.
+  cose.sigStructure(protectedBytes, payload, externalAad())
 
 func unsignedCose*(kid, payload: openArray[byte]): (CoseSign1, seq[byte]) =
   ## The COSE_Sign1 for `payload` under `kid` before its signature, and the
   ## `Sig_structure` bytes to sign.
-  let cose =
-    CoseSign1(protectedBytes: protectedHeader(kid), kid: @kid, payload: @payload)
-  (cose, sigStructure(cose.protectedBytes, cose.payload))
+  cose.unsignedCose(kid, payload, externalAad())
 
 func toBeSigned*(
     m: Manifest, kid: openArray[byte]
@@ -210,47 +180,45 @@ func attachSignature*(
 func refuse(msg: string): PackageError =
   packageError(pecSignature, msg)
 
-func decodeCoseSign1*(data: openArray[byte]): Result[CoseSign1, PackageError] =
-  ## [SPEC PM §4.3] The structural checks: deterministic CBOR, tag 18, four
-  ## elements, a protected header of exactly a 1..128-byte `kid` (an explicit
-  ## `alg` is refused, whatever it names), an empty unprotected header, an
-  ## embedded payload, and a 16,224-byte signature. Every failure is
-  ## `signature-verification-failed`.
-  let v = decodeCbor(data).valueOr:
-    return err(refuse("manifest.cose is not deterministic CBOR: " & $error))
-  if v.kind != ckTag or v.tag != CoseSign1Tag:
-    return err(refuse("manifest.cose is not a tagged COSE_Sign1"))
-  let a = v.content
-  if a.kind != ckArray or a.items.len != 4:
-    return err(refuse("a COSE_Sign1 is an array of four elements"))
-  let protectedBytes = a.items[0].getBytes.valueOr:
-    return err(refuse("the protected header is not a byte string"))
-  let h = decodeCbor(protectedBytes).valueOr:
-    return err(refuse("the protected header is not deterministic CBOR: " & $error))
-  if h.kind != ckMap:
-    return err(refuse("the protected header is not a map"))
-  if h.lookup(CoseHeaderAlg).isSome:
-    return err(refuse("an explicit alg header is refused: the algorithm is fixed"))
-  let kidValue = h.lookup(CoseHeaderKid)
-  if h.entries.len != 1 or kidValue.isNone:
-    return err(refuse("the protected header holds exactly kid"))
-  let kid = kidValue.get.getBytes.valueOr:
-    return err(refuse("the kid is not a byte string"))
-  if kid.len < MinKidBytes or kid.len > MaxKidBytes:
-    return err(refuse("the kid is not 1 to 128 bytes"))
-  if a.items[1].kind != ckMap or a.items[1].entries.len != 0:
-    return err(refuse("the unprotected header is not an empty map"))
-  let payload = a.items[2].getBytes.valueOr:
-    return err(refuse("the payload is missing or detached"))
-  let sig = a.items[3].getBytes.valueOr:
-    return err(refuse("the signature is not a byte string"))
-  if sig.len != SignatureBytes:
-    return err(refuse("the signature is not 16224 bytes"))
-  ok(
-    CoseSign1(
-      protectedBytes: protectedBytes, kid: kid, payload: payload, signature: sig
-    )
+func packageRefusal(f: CoseFailure): PackageError =
+  refuse(
+    case f.kind
+    of ceNotCbor:
+      "manifest.cose is not deterministic CBOR: " & f.detail
+    of ceNotTagged:
+      "manifest.cose is not a tagged COSE_Sign1"
+    of ceNotFour:
+      "a COSE_Sign1 is an array of four elements"
+    of ceProtectedNotBytes:
+      "the protected header is not a byte string"
+    of ceProtectedNotCbor:
+      "the protected header is not deterministic CBOR: " & f.detail
+    of ceProtectedNotMap:
+      "the protected header is not a map"
+    of ceAlgPresent:
+      "an explicit alg header is refused: the algorithm is fixed"
+    of ceNotOnlyKid:
+      "the protected header holds exactly kid"
+    of ceKidNotBytes:
+      "the kid is not a byte string"
+    of ceKidSize:
+      "the kid is not 1 to 128 bytes"
+    of ceUnprotectedNotEmpty:
+      "the unprotected header is not an empty map"
+    of cePayloadDetached:
+      "the payload is missing or detached"
+    of ceSignatureNotBytes:
+      "the signature is not a byte string"
+    of ceSignatureSize:
+      "the signature is not 16224 bytes"
   )
+
+func decodeCoseSign1*(data: openArray[byte]): Result[CoseSign1, PackageError] =
+  ## [SPEC PM §4.3] The structural checks (`decodeCoseSign1Structure`): every
+  ## failure is `signature-verification-failed`.
+  let c = decodeCoseSign1Structure(data).valueOr:
+    return err(packageRefusal(error))
+  ok(c)
 
 proc verifyPackage*(
     manifestCbor, manifestCose: openArray[byte], trust: TrustInput

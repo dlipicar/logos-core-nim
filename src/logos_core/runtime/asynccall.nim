@@ -38,7 +38,7 @@
 import std/[atomics, locks, monotimes, times]
 import results
 import ../abi/[checks, types]
-import ../iface/outcome
+import ../iface/[outcome, payload]
 import ./[callside, invoke, plumbing]
 
 type
@@ -100,6 +100,9 @@ type
     submitReturned: bool
     cancelKnown: bool
     cancelNotified: bool
+    audit: ptr SharedCapture
+      ## [I85] the call's capture and request commitment, taken by its one
+      ## completion (or early release), which records the call
 
 proc copyText(s: string): cstring =
   let p = cast[ptr UncheckedArray[char]](allocShared(s.len + 1))
@@ -180,22 +183,32 @@ proc decide*(
 proc decide*(c: ptr AsyncCall, f: InvocationFailure, kind: CallEnd): bool =
   c.decide(failed(f), kind)
 
-proc offer(c: ptr AsyncCall, r: Result[seq[byte], InvocationFailure]) =
-  ## A decision off the Runtime thread.
+proc offer(
+    c: ptr AsyncCall, r: Result[seq[byte], InvocationFailure]
+): bool {.discardable.} =
+  ## A decision off the Runtime thread; true when `r` is the call's outcome
+  ## and a success.
+  let ok = r.isOk
   if c.decide(r, okResult):
     c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
+    return ok
+  false
 
 proc offerCommitted(
     c: ptr AsyncCall, t: ptr CallTicket, r: Result[seq[byte], InvocationFailure]
-) =
+): bool {.discardable.} =
   ## [G174] A provider's result, decided under the ticket's lock so the commit
-  ## is ordered with the route's revocation (RUNTIME l.1292-1293).
+  ## is ordered with the route's revocation (RUNTIME l.1292-1293); true when
+  ## it is the call's outcome and a success.
+  let ok = r.isOk
   var won = false
   withLock t.lock:
     if t.endCode == ord(ecNotAuthorised):
       won = c.decide(failed(revokedResult()), okEnded)
+      result = false
     else:
       won = c.decide(r, okResult)
+      result = won and ok
   if won:
     c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
 
@@ -307,6 +320,7 @@ proc completionOf(
     response: ptr UncheckedArray[uint8],
     len: csize_t,
     owner: LogosResponseOwner,
+    trail: var CallTrail,
 ): Result[seq[byte], InvocationFailure] =
   ## [SPEC INTERFACE l.2126-2135] The provider's completion as the ordinary
   ## boundary checks a result, copied before its owner is released.
@@ -324,8 +338,19 @@ proc completionOf(
     return err(failure(ecModule, "the provider's response is too long"))
   let sel = selectedOf(d.state.blob).valueOr:
     return err(failure(ecModule, "the selected contract cannot be loaded"))
-  ?checkResponse(sel, $d.methodName, bytes)
+  ?checkResponse(sel, $d.methodName, bytes, trail)
   ok(bytes)
+
+proc recordDeferred(
+    s: ptr InvocationState, audit: ptr SharedCapture, trail: CallTrail
+) =
+  ## [SPEC CA l.1172-1174; I85] The deferred call's record after its outcome.
+  if audit == nil:
+    return
+  var (capture, t) = unshare(audit)
+  t.response = trail.response
+  t.succeeded = trail.succeeded
+  s.engine.record(capture, t)
 
 proc completeOp(
     inv: ptr LogosProviderInvocation,
@@ -344,12 +369,18 @@ proc completeOp(
     releaseOwner(owner)
     return
   var first = false
+  var audit: ptr SharedCapture = nil
   withLock s.glock:
     if not d.completed:
       d.completed = true
       first = true
+      swap(audit, d.audit)
   if first:
-    d.call.offerCommitted(s.ticket, d.completionOf(result, response, len, owner))
+    var trail: CallTrail
+    trail.succeeded = d.call.offerCommitted(
+      s.ticket, d.completionOf(result, response, len, owner, trail)
+    )
+    recordDeferred(s, audit, trail)
   else:
     releaseOwner(owner)
     s.engine.diagnose(
@@ -366,12 +397,15 @@ proc executionReleaseOp(inv: ptr LogosProviderInvocation) {.cdecl.} =
   let d = cast[ptr Deferred](inv)
   let s = addr d.state
   var again, early = false
+  var audit: ptr SharedCapture = nil
   withLock s.glock:
     if s.released or s.finished:
       again = true
     else:
       s.released = true
       early = not d.completed
+      if early:
+        swap(audit, d.audit)
       d.completed = true
       inc s.entries # this entry, until the outcome below is decided
   if again:
@@ -387,12 +421,20 @@ proc executionReleaseOp(inv: ptr LogosProviderInvocation) {.cdecl.} =
         failure(ecModule, "the provider released the invocation without completing it")
       ),
     )
+    recordDeferred(s, audit, CallTrail())
   s.leaveGuard()
 
-proc submitDeferred(c: ptr AsyncCall, adm: Admission, bare: string, params: seq[byte]) =
+proc submitDeferred(
+    c: ptr AsyncCall,
+    adm: Admission,
+    bare: string,
+    params: seq[byte],
+    audit: ptr SharedCapture,
+) =
   ## Call worker: one provider invocation through the deferred surface.
   let d = createShared(Deferred)
   d.call = c
+  d.audit = audit
   d.api = adm.asyncApi
   d.module = adm.context
   d.methodName = copyText(bare)
@@ -455,6 +497,10 @@ proc finishDeferred*(p: pointer): (string, string, ptr CallTicket) =
   ## provider, route and ticket, which leave the in-flight count.
   let d = cast[ptr Deferred](p)
   result = ($d.state.provider, $d.state.route, d.state.ticket)
+  if d.audit != nil:
+    # [IMPL] Never reached: its completion or release took it.
+    recordDeferred(addr d.state, d.audit, CallTrail())
+    d.audit = nil
   drop(d.state.blob)
   deallocShared(d.methodName)
   deallocShared(d.params)
@@ -479,22 +525,50 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
     c.offer(failed(notReadyAfter(c.blob, bare, params, reply.error.get)))
     return
   let adm = reply.admission
+  var trail: CallTrail
   if adm.introspection:
-    c.offer(introspect(c.blob, bare, params))
+    trail.succeeded = c.offer(introspect(c.blob, bare, params, trail))
+    e.record(adm.capture, trail)
     return
   if c.isTerminal:
     # Decided while it was admitted: nothing is dispatched.
+    e.record(adm.capture, trail)
     leave(e, adm)
     return
   if adm.asyncApi == nil:
     # [SPEC INTERFACE l.2013-2017] Over the synchronous provider ABI.
-    c.offerCommitted(
+    trail.succeeded = c.offerCommitted(
       adm.ticket,
-      callProvider(adm, e, c.consumer, c.route, c.generation, c.blob, bare, params),
+      callProvider(
+        adm, e, c.consumer, c.route, c.generation, c.blob, bare, params, trail
+      ),
     )
+    e.record(adm.capture, trail)
     leave(e, adm)
   else:
-    c.submitDeferred(adm, bare, params)
+    # [SPEC RUNTIME §4.1 l.833-841; RUN-0332] The request is validated and
+    # committed before `submit`, as on the synchronous path; then the same
+    # check as `callProvider` [S8b-1 interim].
+    let refused = block:
+      let sel = selectedOf(c.blob)
+      if sel.isErr:
+        Result[void, InvocationFailure].err(
+          failure(ecModule, "the selected contract cannot be loaded")
+        )
+      else:
+        let v = checkRequest(sel.get, bare, params, trail)
+        if v.isErr:
+          Result[void, InvocationFailure].err(v.error)
+        else:
+          authorityRefusal(adm, e, $c.consumer, $c.route, bare, v.get)
+    if refused.isErr:
+      c.offerCommitted(
+        adm.ticket, Result[seq[byte], InvocationFailure].err(refused.error)
+      )
+      e.record(adm.capture, trail)
+      leave(e, adm)
+      return
+    c.submitDeferred(adm, bare, params, share(adm.capture, trail))
 
 proc runCall*(p: pointer) =
   ## Call worker: one submitted call, unless it is already terminal. The

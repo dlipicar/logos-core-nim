@@ -1,17 +1,27 @@
 ## RUNTIME §9 authority policy: one authorizer interface at every check point
 ## the spec names [G52].
 ##
-## Every check asks `decide` with the operation, the authenticated consumer and
-## the target, and gets an allow or deny answer with a decision identifier and
-## the scope it covered. The engine keeps the most recent answers, so allow and
-## deny enforcement can be explained (RUNTIME l.1756-1760), and keeps an
-## evaluation failure apart from an explicit deny (l.1740-1744).
+## Every check builds an `AuthzRequest` with the operation, the authenticated
+## consumer and the target, and gets an allow or deny answer with a decision
+## identifier and the scope it covered. The engine keeps the most recent
+## answers, so allow and deny enforcement can be explained (RUNTIME
+## l.1756-1760), and keeps an evaluation failure apart from an explicit deny
+## (l.1740-1744).
 ##
-## Until the Capability Authority is integrated the policy is internal, which
-## RUNTIME permits for a local trusted deployment (l.1633-1634): allow-all,
-## optionally with rules that deny or fail matching requests, so the tests
-## reach every NOT_AUTHORISED path. A policy is data, not code: it is handed to
-## the Runtime thread like any other input.
+## Where an answer comes from is its `PolicySource` (step 8b, DECISIONS I85):
+## - `psInternal`: the host configuration's `allow-all`, which RUNTIME permits
+##   for a local trusted deployment (l.1633-1634), optionally with rules that
+##   deny or fail matching requests, so the tests reach every NOT_AUTHORISED
+##   path. A policy is data, not code: it is handed to the Runtime thread like
+##   any other input.
+## - `psBootstrap`, `psRecovery`: the derived rules of protected input while
+##   no Capability Authority binding exists (`engine.nim`, RUNTIME l.1635-1650,
+##   l.1674-1680).
+## - `psAuthority`: a Capability Authority decision (`authbinding.nim`). Its
+##   denial and error codes are retained and never branched on (TL-04).
+##
+## This module holds the values and the internal authorizer. The engine
+## decides which source answers a request.
 
 {.push raises: [].}
 
@@ -20,8 +30,12 @@ import results
 
 export results
 
-const MaxRetainedAnswers* = 4096
-  ## [IMPL] answers kept for observation; older ones are dropped first
+const
+  MaxRetainedAnswers* = 4096
+    ## [IMPL] answers kept for observation; older ones are dropped first
+  GrantChangedName* = "logos.capability_authority.grant_changed_event"
+    ## [SPEC CA §8] the notices the Runtime receives on its protected path
+  PolicyChangedName* = "logos.capability_authority.policy_changed_event"
 
 type
   AuthzAction* = enum
@@ -38,25 +52,90 @@ type
       ## [G175] a subscriber activating or receiving an event on its route
     aaDiscover = "discover" ## disclosing a provider set
     aaObserve = "observe" ## observing Runtime-owned state
+    aaStop = "stop"
+      ## [SPEC CA l.335] the `module_execution` `stop` constraint of a
+      ## `stop_module`, decided with that request's `aaLifecycle`
+
+  PolicySource* = enum
+    psInternal = "internal" ## host config `allow-all`, or the test rules
+    psBootstrap = "bootstrap"
+      ## the derived rules of protected input before the first binding
+    psRecovery = "recovery" ## the same rules after a binding loss, when enabled
+    psAuthority = "authority" ## a Capability Authority decision
+    psBoundary = "boundary"
+      ## [S8b-1 interim (TF-31)] the Runtime's own check of a routed call to a
+      ## Capability Authority method, after the call was authorized
 
   AuthzRequest* = object
     action*: AuthzAction
-    operation*: string ## the method or operation name, such as `start_module`
+    operation*: string
+      ## the Runtime Control method, or the method or event name, such as
+      ## `start_module`
     consumer*: string ## the authenticated consumer instance; empty for the host
     target*: string ## the target instance, provider or route
     module*: string ## the target's module name, when known
     route*: string ## the route the request concerns, when there is one
+    instance*: string
+      ## the target module instance, when the target is one (lifecycle,
+      ## observation, execution)
+    provider*: string ## the provider record, when the request concerns one
+    contract*: seq[byte] ## the selected or requested contract root, when any
+    declaration*: seq[byte] ## the method or event declaration root, when any
+    access*: seq[byte]
+      ## the requested route access as deterministic CBOR
+      ## (`logos.runtime_control.route_access`); empty when unconstrained
+    providerSelector*: bool
+      ## a lifecycle or observation request that selects by provider address
+    renewal*: bool
+      ## [SPEC CA §5.1 l.577-578] an execution decision asked again for an
+      ## execution that is already running (`execution_renewal`)
 
   AuthzOutcome* = enum
     azAllow = "allow"
     azDeny = "deny" ## an explicit deny result from policy
     azEvaluationFailed = "evaluation-failed" ## no valid decision was obtained
+    azRefused = "refused"
+      ## [S8b-1 interim (TF-31)] refused at the invocation boundary: neither a
+      ## deny nor an evaluation failure (RUNTIME l.1745-1748)
 
   AuthzAnswer* = object
     decisionId*: string
     outcome*: AuthzOutcome
+    source*: PolicySource
     scope*: string ## what the decision covered
     request*: AuthzRequest
+    policyRevision*: uint64 ## psAuthority only
+    issuedAt*: uint64 ## psAuthority only: wall-clock milliseconds
+    validUntil*: Opt[uint64] ## psAuthority only: wall-clock milliseconds
+    grants*: seq[string] ## psAuthority only: the grants the decision used
+    retainRequest*, retainResponse*: bool ## the decision's `commitment`
+    allowed*: seq[seq[byte]]
+      ## psAuthority allows: each of `allowed_scopes` as deterministic CBOR,
+      ## for enforcement and call records
+    narrowed*: bool
+      ## [IMPL] an allow whose narrowing excludes the operation: refused as
+      ## NOT_AUTHORISED, neither a deny nor an evaluation failure (CAP-0115)
+    denialCode*: string ## retained only (TL-04)
+    errorCode*: string ## retained only (TL-04)
+    reason*: string ## why an evaluation failed, for diagnostics only
+
+  EvalVerdict* = enum
+    evFailed ## no valid decision (`error` arm, dispatch failure, malformed)
+    evAllow
+    evDeny
+
+  EvalResult* = object
+    ## What an evaluation worker read from one `evaluate` and checked against
+    ## its request (`authbinding.nim`); plain values only.
+    verdict*: EvalVerdict
+    decisionId*: string
+    policyRevision*: uint64
+    issuedAt*: uint64
+    validUntil*: Opt[uint64]
+    grants*: seq[string]
+    retainRequest*, retainResponse*: bool
+    allowed*: seq[seq[byte]]
+    denialCode*, errorCode*, reason*: string
 
   AuthzRule* = object
     ## Matches a request when every non-empty field is equal; `action` matches
@@ -117,27 +196,68 @@ func matches(r: AuthzRule, q: AuthzRequest): bool =
     (r.module.len == 0 or r.module == q.module) and
     (r.route.len == 0 or r.route == q.route)
 
-func scopeOf(q: AuthzRequest): string =
+func scopeOf*(q: AuthzRequest): string =
   ## [IMPL] An internal decision covers exactly the one request it answered.
   $q.action & ":" & q.operation & ":" & q.consumer & ">" & q.target
 
-proc decide*(a: var Authorizer, q: AuthzRequest): AuthzAnswer =
+func hexOf(b: openArray[byte]): string =
+  const digits = "0123456789abcdef"
+  for x in b:
+    result.add(digits[int(x shr 4)])
+    result.add(digits[int(x and 0x0F)])
+
+func key*(q: AuthzRequest): string =
+  ## [IMPL] One operation's decisions are matched again by this key when its
+  ## handler runs another pass (`engine.decide`).
+  $q.action & "\x1F" & q.operation & "\x1F" & q.consumer & "\x1F" & q.target & "\x1F" &
+    q.module & "\x1F" & q.route & "\x1F" & q.instance & "\x1F" & q.provider & "\x1F" &
+    hexOf(q.contract) & "\x1F" & hexOf(q.declaration) & "\x1F" & hexOf(q.access) & "\x1F" &
+    $q.providerSelector & "\x1F" & $q.renewal
+
+proc retain*(a: var Authorizer, answer: AuthzAnswer) =
+  ## Keeps one answer for observation, the oldest dropped first.
+  if a.answers.len >= MaxRetainedAnswers:
+    a.answers.popFirst()
+  a.answers.addLast(answer)
+
+proc nextId*(a: var Authorizer): string =
+  ## A fresh internal decision id.
   inc a.issued
+  "d-" & a.prefix & "-" & $a.issued
+
+proc issue*(
+    a: var Authorizer,
+    q: AuthzRequest,
+    outcome: AuthzOutcome,
+    source: PolicySource,
+    reason = "",
+): AuthzAnswer =
+  ## An answer the Runtime makes itself (internal, bootstrap or recovery
+  ## policy, or an evaluation that could not take place), with an internal
+  ## decision id, retained.
+  result = AuthzAnswer(
+    decisionId: a.nextId(),
+    outcome: outcome,
+    source: source,
+    scope: q.scopeOf,
+    request: q,
+    reason: reason,
+  )
+  a.retain(result)
+
+proc decide*(a: var Authorizer, q: AuthzRequest): AuthzAnswer =
+  ## The internal policy's answer: allow, unless a rule matches.
   var outcome = azAllow
   for r in a.policy.rules:
     if r.matches(q):
       outcome = r.outcome
       break
-  result = AuthzAnswer(
-    decisionId: "d-" & a.prefix & "-" & $a.issued,
-    outcome: outcome,
-    scope: q.scopeOf,
-    request: q,
-  )
-  if a.answers.len >= MaxRetainedAnswers:
-    a.answers.popFirst()
-  a.answers.addLast(result)
+  a.issue(q, outcome, psInternal)
 
 func answers*(a: Authorizer): seq[AuthzAnswer] =
   for x in a.answers:
     result.add(x)
+
+func allows*(x: AuthzAnswer): bool =
+  ## The operation may proceed: an allow that does not exclude it.
+  x.outcome == azAllow and not x.narrowed

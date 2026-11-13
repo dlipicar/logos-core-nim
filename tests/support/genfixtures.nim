@@ -211,12 +211,19 @@ proc generatedRcTypes*(): Result[string, string] =
 const
   hostConfigTypesPath* = "src/logos_core/runtime/host_config_types.nim"
   hostConfigPrimary* = "src/logos_core/runtime/host_config.cddl"
+  policyPrimary* = "src/logos_core/authority/policy.cddl"
+
+proc hostConfigDocument*(): string {.raises: [IOError].} =
+  ## The host configuration schema, then the authority policy schema its
+  ## `capability-authority` arm holds (DECISIONS I85): one primary document,
+  ## since both use the `lcn` namespace.
+  readFile(hostConfigPrimary) & "\n" & readFile(policyPrimary)
 
 proc generatedHostConfigTypes*(): Result[string, string] =
   ## The host configuration format's types (`logos-core-nim.app-config.v1`,
   ## G76), for the host layer.
   try:
-    let set = ?acceptContractSet(readFile(hostConfigPrimary), [], [], AcceptOptions())
+    let set = ?acceptContractSet(hostConfigDocument(), [], [], AcceptOptions())
     nimModule(
       set, NimOptions(importPrefix: "../", schemaAccessor: "hostConfigSchema"), false
     )
@@ -285,7 +292,6 @@ proc generatedCaKit*(): Result[string, string] =
 
 const
   policyTypesPath* = "src/logos_core/authority/policy_types.nim"
-  policyPrimary* = "src/logos_core/authority/policy.cddl"
   stateTypesPath* = "src/logos_core/authority/state_types.nim"
   statePrimary* = "src/logos_core/authority/state.cddl"
 
