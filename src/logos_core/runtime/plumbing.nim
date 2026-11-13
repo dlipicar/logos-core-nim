@@ -55,6 +55,10 @@ const
   DefaultEvaluationDeadline* = initDuration(seconds = 5)
     ## [IMPL] how long an operation waits for its decisions (I85)
   DefaultListLimit* = 100 ## [SPEC RUNTIME l.3379] a list page without `limit`
+  MaxEventWorkers* = 64
+    ## [IMPL-DECISION G178] threads that run Runtime Control event handlers,
+    ## apart from the lifecycle, call and evaluation workers, so a slow
+    ## handler never delays a start or a call; more drains wait in their queue
   MaxListLimit* = 1000 ## [SPEC RUNTIME l.3379]
 
 type
@@ -179,6 +183,26 @@ type
       ## `observe_end` registrations per consumer instance (INTERFACE l.1483);
       ## default 1024
     endRegsTotal*: int ## `observe_end` registrations in all; default 16384
+    rcQueue*: int
+      ## [G178, G225] judged Runtime Control events waiting for one
+      ## subscription's handler; one more loses the subscription; default 256,
+      ## at least 2
+    rcUnjudged*: int
+      ## [G178] events waiting for a decision before they can join one
+      ## subscription's queue; one more loses the subscription; default 256
+    rcHintFacts*: int
+      ## [G178] distinct affected subjects one pending `inventory_changed`
+      ## hint retains; past it the hint is marked overflowed; default 1024
+    rcSubsPerSubscriber*: int
+      ## Runtime Control subscriptions one module instance holds (until it
+      ## unsubscribes them or its attempt ends); default 32
+    rcSubsTotal*: int ## Runtime Control subscriptions in all; default 1024
+    rcWorkersPerSubscriber*: int
+      ## [G178] event workers running one subscriber's handlers at once;
+      ## default 4
+    rcDrainQuota*: int
+      ## [G178] entries one drain of a subscription delivers before it goes
+      ## behind the others; default 16
 
   EngineConfig* = object
     runtimeInstanceId*: string
@@ -271,6 +295,11 @@ type
     rqRefusal
       ## [S8b-1 interim] a routed Capability Authority call refused at the
       ## invocation boundary, to be retained (`invoke.authorityRefusal`)
+    rqRcSubscribe ## [G178] a Runtime Control binding's `subscribe`
+    rqRcUnsubscribe ## [G178] a Runtime Control binding's `unsubscribe`
+    rqRcDeliver
+      ## [G178] an event worker asks for the next entry of a subscription it
+      ## drains, admitted for one handler invocation
       ## [SPEC RUNTIME §10.1 l.3801-3804] an execution authorization ended
       ## outside the Runtime's own checks (`engine.stopForAuthority`)
 
@@ -394,6 +423,10 @@ type
     capture*: CallCapture
       ## rqRc, rqRcPrecheck: what the applied Runtime Control decision
       ## requires the caller to record (`callaudit.nim`); empty: nothing
+    name*: string ## rqRcDeliver: the admitted event's name (its bytes in `bytes`)
+    drained*: bool
+      ## rqRcDeliver: the drain ends here (no entry left, the subscription
+      ## inactive, or its quota used); the worker leaves it
 
   ReplyChannel* = ptr Channel[Reply]
 
@@ -427,6 +460,9 @@ type
       ## rqAuthorityNotice: the event payload; empty when the publication was
       ## dropped before it was read (a malformed notice)
     ending*: FailureKind ## rqStopForAuthority: the classification
+    gated*: bool
+      ## rqRcDeliver: the worker holds the subscription's gate, so an entry
+      ## may be admitted
     reply*: ReplyChannel
 
   JobKind* = enum
@@ -489,6 +525,19 @@ type
     of cjQuit:
       discard
 
+  RcJobKind* = enum
+    rjQuit ## first and without fields, as `MsgKind`
+    rjDrain
+
+  RcJob* = object
+    ## [G178] What an event worker runs: one drain of one Runtime Control
+    ## subscription (`rcevents.drain`), holding one reference to it.
+    case kind*: RcJobKind
+    of rjDrain:
+      sub*: pointer
+    of rjQuit:
+      discard
+
   AsyncEvent* = enum
     aeSubmit ## an asynchronous call was submitted
     aeTerminal ## its terminal outcome was decided off the Runtime thread
@@ -516,6 +565,7 @@ type
     mkCompleted ## a completion callback job returned
     mkDeferredIdle ## a deferred invocation has no execution or entry left
     mkEvaluated ## an evaluation worker finished one `evaluate` (`job`)
+    mkRcHandled ## [G178] a Runtime Control event handler returned (`target`)
 
   Msg* = object
     job*: int
@@ -535,7 +585,7 @@ type
       ticket*: ptr CallTicket
     of mkDiagnostic:
       text*: string
-    of mkAsync, mkCallJobDone, mkCompleted, mkDeferredIdle:
+    of mkAsync, mkCallJobDone, mkCompleted, mkDeferredIdle, mkRcHandled:
       event*: AsyncEvent
       target*: pointer ## the asynchronous call, or the deferred invocation
       extra*: pointer
@@ -574,6 +624,9 @@ type
       ## [SPEC CA §5.1] the renewal lane: execution renewals only
     renewWorker*: Thread[ptr Shared]
     renewSpawned*: bool ## written by the Runtime thread only
+    rcJobs*: Channel[RcJob] ## [G178] drains for the event workers
+    rcWorkers*: array[MaxEventWorkers, Thread[ptr Shared]]
+    rcSpawned*: int ## written by the Runtime thread only
     outstanding*: Atomic[int] ## asynchronous calls prepared and not yet freed
     finished*: bool ## the Runtime thread has left its loop
     audit*: AuditLog ## [SPEC CA l.1169, l.1330] the retained call records
@@ -608,6 +661,16 @@ func effective*(l: EngineLimits): EngineLimits =
   fill(snapshotLifetime, initDuration(hours = 1))
   fill(endRegsPerConsumer, 1024)
   fill(endRegsTotal, 16384)
+  fill(rcQueue, 256)
+  fill(rcUnjudged, 256)
+  fill(rcHintFacts, 1024)
+  fill(rcSubsPerSubscriber, 32)
+  fill(rcSubsTotal, 1024)
+  fill(rcWorkersPerSubscriber, 4)
+  fill(rcDrainQuota, 16)
+  # [G178 (D2)] Room for one pending hint of each collection: a stalled
+  # `inventory_changed` handler never loses its subscription.
+  result.rcQueue = max(result.rcQueue, 2)
 
 proc newRuntimeInstanceId*(): string =
   ## A lowercase canonical UUID version 4 (RFC 9562), the form the remote

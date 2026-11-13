@@ -542,3 +542,59 @@ them to be documented).
   nothing (DECISIONS G229). `applied` with `[]` claims no containment: direct modules are trusted
   in-process code (SECURITY l.204; RUNTIME l.1622, l.2545). A target on another Runtime is
   `LOGOS_ERR_INVALID_PARAMS` (DECISIONS G228, interim).
+
+### Runtime Control subscriptions
+
+A module subscribes to the Runtime Control events through the binding it received at initialization
+(INTERFACE §2.5, applied by l.3837; DECISIONS I86, part 7b). The six event names are accepted;
+`permission_settings_changed_event` and `configuration_state_changed_event` are never produced yet
+(direct mode has constant permission settings, DECISIONS G229; configuration is a later step).
+
+- **Activation.** `subscribe` asks the event's own decision first, without a subject: a denial is
+  `LOGOS_ERR_NOT_AUTHORISED`, as is a name that is not a Runtime Control event. A narrowed allow
+  activates the subscription and filters what it receives.
+- **What is delivered** (RUNTIME l.3498, l.3732-3735; DECISIONS G161, G226). An event reaches a
+  subscriber only while the subscriber may observe its exact subject: an instance event's module and
+  instance, a route event's route, provider module and provider. An `inventory_changed` hint also
+  needs the matching list method's authority for at least one affected record (l.3419), and carries
+  only the collection. Each event is judged when the change is committed and again just before its
+  handler runs if the decisions changed meanwhile (a new policy, a revocation, an expiry), so a
+  revoked subscriber gets nothing more. Under an authority that issues only single-use decisions, each
+  delivery costs an evaluation.
+- **When and where handlers run** (DECISIONS G178, interim). After the change is committed and
+  persisted, never inside the operation that made it and never on the Runtime thread, so a handler may
+  call Runtime Control. The Runtime runs handlers on its own pool of event workers (up to 64 threads,
+  started on demand), one handler at a time per subscription, in commit order. Several hints of one
+  collection waiting for a busy handler become one.
+- **A handler that falls behind loses its subscription** (DECISIONS G225, interim). Each subscription
+  queues at most 256 events for its handler (and 256 waiting for an authority's decision); one more
+  ends the subscription: its queued events are discarded, nothing more is delivered, and the Runtime
+  records the diagnostic "Runtime Control subscription *id* of *instance* lost: its handler fell
+  behind (G225)". The subscriber gets no signal: `unsubscribe` of it is `LOGOS_OK`. An observer that
+  cannot be sure it saw every event must query (`list_modules`, `list_routes`,
+  `get_execution_summary`) and resubscribe, periodically when it cannot rule out a loss (RUNTIME
+  l.3425-3428). An `inventory_changed` subscription holds at most one pending hint per collection, so a
+  slow handler alone never loses it; past 1024 distinct affected records behind one pending hint the
+  hint is still delivered while one of them stays visible, and the subscription is lost when none is.
+- **Limits.**
+
+  | Limit | Value |
+  |---|---|
+  | subscriptions per module instance | 32 |
+  | subscriptions in all | 1024 |
+  | events queued for one subscription's handler | 256 |
+  | events of one subscription waiting for a decision | 256 |
+  | distinct affected records behind one pending hint | 1024 |
+  | event workers in all | 64 |
+  | event workers running one subscriber's handlers at once | 4 |
+  | events one subscription delivers before others get a turn | 16 |
+
+  Past a subscription limit `subscribe` is `LOGOS_ERR_MODULE`; a subscription the Runtime ended still
+  counts until it is unsubscribed or its subscriber's execution attempt ends.
+- **Lifetime.** A subscription ends when its subscriber leaves `loaded` or `ready`, before that change
+  is observable, so a module never receives the event of its own stop; `unsubscribe` of it stays
+  `LOGOS_OK`, also inside `_MODULE_destroy`. The Runtime waits for a running handler before it calls
+  the subscriber's `_MODULE_destroy` and before it shuts down; that wait counts toward the stop's
+  deadline, so a handler that does not return in time ends the stop in `error` with
+  `cleanup-timeout`, as a call still running does (DECISIONS G180). A subscription never
+  unsubscribed is freed when its subscriber's execution attempt ends. Nothing here is persisted.

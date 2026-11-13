@@ -52,6 +52,10 @@ type
       ## [G175] a subscriber activating or receiving an event on its route
     aaDiscover = "discover" ## disclosing a provider set
     aaObserve = "observe" ## observing Runtime-owned state
+    aaObserveEvent = "observe-event"
+      ## [G161 extension (TF-09); I86] observing Runtime-owned state through
+      ## a Runtime Control event: `operation` is its bare name without
+      ## `_event`, the consumer the subscriber
     aaStop = "stop"
       ## [SPEC CA l.335] the `module_execution` `stop` constraint of a
       ## `stop_module`, decided with that request's `aaLifecycle`

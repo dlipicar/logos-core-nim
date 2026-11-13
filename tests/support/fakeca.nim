@@ -68,8 +68,9 @@ type
     what*: string
       ## what the request asks; empty: anything. `call`, `establish-route`,
       ## `renew-route`, `discover`, `publish-event`, `subscribe-event`,
-      ## `rc:<method>`, `execute`, `stop`, `renew-execution` (an `execute`
-      ## with `execution_renewal`)
+      ## `rc:<method>`, `rcev:<event>` (a Runtime Control event, bare name),
+      ## `execute`, `stop`, `renew-execution` (an `execute` with
+      ## `execution_renewal`)
     verdict*: Verdict
     validMs*: int64 ## allow: `valid_until` this far after `issued_at`
     grants*: seq[string]
@@ -411,6 +412,11 @@ proc whatOf(s: Scope): string =
       for name, root in rcContractInfo().methods:
         if root == s.rc.methods.get[0]:
           return "rc:" & name
+    if s.rc.events.isSome and s.rc.events.get.len == 1:
+      # [I86] A Runtime Control event observation: `rcev:<bare name>`.
+      for name, root in rcContractInfo().events:
+        if root == s.rc.events.get[0]:
+          return "rcev:" & name
     "rc:?"
   of skExecution:
     if s.me.actions.len == 1 and s.me.actions[0].kind == MeActionKind.Stop:

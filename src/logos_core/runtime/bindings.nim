@@ -14,8 +14,9 @@
 ## payload commitments, copies) stays on the caller's thread, which loads its
 ## own copy of the schemas it needs (`base/perthread`).
 ##
-## The call paths are in `invoke.nim`, events in `events.nim`, asynchronous
-## calls in `asynccall.nim`; this module wires them into the vtables.
+## The call paths are in `invoke.nim`, events in `events.nim`, Runtime
+## Control subscriptions in `rcevents.nim`, asynchronous calls in
+## `asynccall.nim`; this module wires them into the vtables.
 
 {.push raises: [], gcsafe.}
 
@@ -25,7 +26,7 @@ import ../abi/[checks, types]
 import ../cbor/utf8
 import ../hash/hashinput
 import ../iface/[accept, outcome, payload, surface]
-import ./[asynccall, callside, events, invoke, plumbing]
+import ./[asynccall, callside, events, invoke, plumbing, rcevents]
 
 export callside.AttemptServices
 
@@ -75,15 +76,18 @@ proc rcSubscribeOp(
     userData: pointer,
     outId: ptr LogosSubscriptionId,
 ): LogosResult {.cdecl.} =
-  ## [I78] Runtime Control subscriptions are a later step (G178).
+  ## [SPEC INTERFACE l.3837; G178] `rcevents.rcSubscribe`.
   bindingEnter()
-  status(ecModule, "Runtime Control events are not supported by this Runtime yet")
+  let s = servicesOf(binding)
+  rcSubscribe(s.engine, $s.instance, $s.attempt, eventName, handler, userData, outId)
 
 proc rcUnsubscribeOp(
     binding: ptr LogosRuntimeControlBinding, id: LogosSubscriptionId
 ): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE l.3837; G178] `rcevents.rcUnsubscribe`.
   bindingEnter()
-  status(ecModule, "Runtime Control events are not supported by this Runtime yet")
+  let s = servicesOf(binding)
+  rcUnsubscribe(s.engine, $s.instance, $s.attempt, id)
 
 proc rcConnectRemoteOp(
     binding: ptr LogosRuntimeControlBinding,

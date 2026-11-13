@@ -114,7 +114,7 @@ import ../iface/[accept, outcome]
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
-    execauth, inventory, invoke, observe, plumbing, store,
+    execauth, inventory, invoke, observe, plumbing, rcevents, store,
   ]
 
 export plumbing
@@ -208,6 +208,19 @@ type
     realized: RealizationStatus
       ## [IMPL-DECISION G227 (TL-08)] the realization status as of its last
       ## commit
+    rcSubs: seq[RcRec]
+      ## [G178] the Runtime Control subscriptions it holds, until it
+      ## unsubscribes them or the binding they were made through ends
+    rcAttempt: string ## [G178] the binding its subscription ids count for
+    rcNext: uint64 ## [G178] the last subscription id that binding gave
+    rcHandlers: int
+      ## [G178] handlers of its subscriptions admitted and not yet returned:
+      ## its realization is released, and a context it made destroyed, only
+      ## once none is left (INTERFACE l.1465, l.1999)
+    heldAttempt: Attempt ## [G178] an attempt whose context waits for `rcHandlers`
+    heldContext: ptr LogosModuleContext
+    seen: bool ## [G178] its creation was exposed to observers
+    seenState: ModuleState ## [G178] the state last exposed to observers
 
   Saved = object ## What an accepting commit rolls back when its write fails.
     record: ModuleRecord
@@ -220,6 +233,45 @@ type
     current: string
     provider: bool
     pending: bool
+
+  InvKind = LogosNSRuntimeControlInventoryCollectionKind
+
+  RcBlob = ref object
+    ## [G178] One event value, encoded once for every subscription it reaches.
+    name: string ## the fully qualified event name
+    bytes: seq[byte]
+
+  RcEntry = ref object
+    ## [G178] One event, or one inventory hint, on its way to one subscription.
+    blob: RcBlob
+    subject: Subject ## what the event, or the hint's one affected record, concerns
+    hint: bool
+    collection: InvKind
+    facts: seq[Subject]
+      ## a pending hint: the affected subjects its decisions admitted (RUNTIME
+      ## l.3419-3421), retained so a removal can still be judged (l.3420)
+    keys: HashSet[string]
+    overflowed: bool ## [G178 (D2)] an admitted subject was not retained
+    gen, invalidations: uint64 ## the binding and invalidations it was judged under
+    validUntil: Opt[uint64] ## the earliest end of the decisions it was judged by
+    stale: bool ## a pending hint holds subjects judged under other conditions
+
+  RcRec = ref object
+    ## [G178] The Runtime thread's record of one Runtime Control subscription.
+    sub: pointer ## its `rcevents.RcSub`, with the reference this record holds
+    id: uint64
+    attempt: string ## the binding it was made through
+    subscriber: string
+    event: RcEvent
+    active: bool
+    queue: Deque[RcEntry] ## judged and admitted, in committed order
+    unjudged: Deque[RcEntry] ## waiting for their decisions, in committed order
+    judging: bool ## the head of `unjudged` waits for an evaluation
+    hints: array[InvKind, RcEntry] ## the pending hint per collection, while queued
+    scheduled: bool ## waiting for a worker slot, or being drained
+    running: bool ## a drain of it is dispatched
+    served: int ## the entries this drain has served
+    gone: bool ## unsubscribed or its binding ended: freed once no drain holds it
 
   AsyncRec = ref object
     ## One submitted asynchronous call, from submission until nothing of it
@@ -368,6 +420,15 @@ type
     endRegsTotal: int
     stepCommitted: HashSet[string]
       ## [IMPL-DECISION G227] the instances committed during the current step
+    rcSubs: OrderedTable[pointer, RcRec]
+      ## [G178] every Runtime Control subscription held, by its shared state
+    rcByEvent: array[RcEvent, seq[RcRec]] ## [G178] the active ones, in creation order
+    rcReady: Deque[RcRec]
+      ## [G178] subscriptions with entries, waiting for a worker slot of their
+      ## subscriber
+    rcRunning: CountTable[string] ## [G178] per subscriber: its drains dispatched
+    rcBusy: int ## [G178] drains dispatched and not yet ended
+    rcHints: array[InvKind, RcBlob] ## [G178] the hint values, encoded once
 
 const
   MaxPasses = 8 ## [IMPL] handler passes per operation; more is an evaluation failure
@@ -538,6 +599,211 @@ proc answerView(r: ReplyChannel, x: Inst) =
   else:
     r.answer(Reply(view: x.view))
 
+# Runtime Control events (step 7b; DECISIONS I86) ----------------------------------
+#
+# [IMPL-DECISION G178 (TF-22)] The Runtime thread's side of `rcevents.nim`.
+# Each committed change is fanned out where it becomes observable (`expose`,
+# `endRoute`, route membership and record changes, `retireInst`), one entry
+# per active subscription to its event. Entries are judged against the
+# subscriber's authority in committed order (`judgeRc`): at once when no
+# evaluation is needed, otherwise one evaluation at a time, through
+# `decideDetached`. An admitted entry joins the subscription's queue and a
+# refused one is dropped, so only what the subscriber may observe counts
+# toward its bound (D3). An `inventory_changed` subscription keeps one pending
+# hint per collection with the affected subjects its decisions admitted (D2).
+# Event workers drain the queues, at most `rcWorkersPerSubscriber` per
+# subscriber at a time (C1); each entry is admitted again just before its
+# handler runs (`deliverRc`), with fresh decisions when the ones it was judged
+# by may have changed (G161).
+
+proc offerRc(st: State, rec: RcRec, e: RcEntry) {.gcsafe.}
+proc observedRc(st: State, x: Inst) {.gcsafe.}
+
+proc deactivateRc(st: State, rec: RcRec) =
+  ## Nothing is judged, queued or admitted for it again.
+  if not rec.active:
+    return
+  rec.active = false
+  deactivate(rcSubOf(rec.sub))
+  rec.queue.clear()
+  rec.unjudged.clear()
+  for k in InvKind:
+    rec.hints[k] = nil
+  let i = st.rcByEvent[rec.event].find(rec)
+  if i >= 0:
+    st.rcByEvent[rec.event].delete(i)
+
+proc loseRc(st: State, rec: RcRec, why: string) =
+  ## [IMPL-DECISION G225 (TF-35)] The Runtime ends the subscription without a
+  ## signal to its subscriber: its entries are discarded and a diagnostic
+  ## records it; `unsubscribe` of it is LOGOS_OK, and the subscriber
+  ## resynchronizes by query (RUNTIME l.3426, l.3428).
+  if rec.active:
+    st.diagnose(
+      "Runtime Control subscription " & $rec.id & " of " & rec.subscriber & " lost: " &
+        why & " (G225)"
+    )
+    st.deactivateRc(rec)
+
+proc freeRc(st: State, rec: RcRec) =
+  st.rcSubs.del(rec.sub)
+  drop(rcSubOf(rec.sub))
+
+proc removeRc(st: State, rec: RcRec) =
+  ## Unsubscribed, or its binding ended: the record goes once no drain holds
+  ## it.
+  st.deactivateRc(rec)
+  if rec.gone:
+    return
+  rec.gone = true
+  let x = st.instances.getOrDefault(rec.subscriber)
+  if x != nil:
+    let i = x.rcSubs.find(rec)
+    if i >= 0:
+      x.rcSubs.delete(i)
+  if not rec.running:
+    st.freeRc(rec)
+
+proc endRcSubs(st: State, x: Inst) =
+  ## [G178] The commit that takes `x` out of `loaded`/`ready` ends every
+  ## subscription it holds before that commit is exposed, so `x` never
+  ## receives the event of its own `stopping`. The records stay until
+  ## `unsubscribe` or the end of their binding.
+  for rec in x.rcSubs:
+    st.deactivateRc(rec)
+
+proc freeRcAttempt(st: State, x: Inst, token: string) =
+  ## [IMPL] The subscriptions a binding's module never unsubscribed go with
+  ## the binding.
+  if x.isNil:
+    return
+  var gone: seq[RcRec]
+  for rec in x.rcSubs:
+    if rec.attempt == token:
+      gone.add(rec)
+  for rec in gone:
+    st.removeRc(rec)
+
+proc dispatchRc(st: State, rec: RcRec) =
+  ## One drain of `rec` for an event worker; spawned on demand.
+  inc st.rcBusy
+  let s = st.shared
+  if st.rcBusy > s.rcSpawned and s.rcSpawned < MaxEventWorkers:
+    try:
+      createThread(s.rcWorkers[s.rcSpawned], rcWorkerMain, s)
+      inc s.rcSpawned
+    except ResourceExhaustedError:
+      discard # the drain waits for a busy event worker
+  retain(rcSubOf(rec.sub))
+  try:
+    s.rcJobs.send(RcJob(kind: rjDrain, sub: rec.sub))
+  except Exception:
+    discard
+
+proc pumpRc(st: State) =
+  ## [G178 (C1 point 3)] A subscription with entries gets a drain while its
+  ## subscriber has fewer than `rcWorkersPerSubscriber`; the others wait in
+  ## order, so two blocked subscribers cannot hold the whole pool.
+  var waiting: Deque[RcRec]
+  while st.rcReady.len > 0:
+    let rec = st.rcReady.popFirst()
+    if not rec.active or rec.gone or rec.queue.len == 0:
+      rec.scheduled = false
+    elif st.rcRunning.getOrDefault(rec.subscriber) >= st.limits.rcWorkersPerSubscriber:
+      waiting.addLast(rec)
+    else:
+      st.rcRunning.inc(rec.subscriber)
+      rec.running = true
+      rec.served = 0
+      st.dispatchRc(rec)
+  st.rcReady = move waiting
+
+proc scheduleRc(st: State, rec: RcRec) =
+  if not rec.scheduled and rec.active and rec.queue.len > 0:
+    rec.scheduled = true
+    st.rcReady.addLast(rec)
+    st.pumpRc()
+
+proc enqueueRc(st: State, rec: RcRec, e: RcEntry) =
+  ## [G178, G225] An admitted entry; one more than `rcQueue` loses the
+  ## subscription.
+  if rec.queue.len >= st.limits.rcQueue:
+    st.loseRc(rec, "its handler fell behind")
+    return
+  rec.queue.addLast(e)
+  st.scheduleRc(rec)
+
+proc publishRc(st: State, event: RcEvent, subject: Subject, bytes: seq[byte]) =
+  ## [C29; G178] One committed change, `subject` its observed facts (G226),
+  ## to every active subscription of `event`.
+  if st.rcByEvent[event].len == 0:
+    return
+  let blob = RcBlob(name: event.qualified, bytes: bytes)
+  # A copy: refc shares a `let` seq, and a loss in the loop removes from it.
+  var subs = st.rcByEvent[event]
+  for rec in subs:
+    st.offerRc(rec, RcEntry(blob: blob, subject: subject))
+
+proc hintRc(st: State, collection: InvKind, subject: Subject) =
+  ## [SPEC RUNTIME l.3415-3421; G178 (D2)] A membership or record change of
+  ## one record in `collection`, `subject` the facts its list method judges.
+  if st.rcByEvent[reInventory].len == 0:
+    return
+  if st.rcHints[collection].isNil:
+    st.rcHints[collection] = RcBlob(
+      name: reInventory.qualified,
+      bytes: encode(
+          LogosNSRuntimeControlInventoryChangedEvent(
+            collection: LogosNSRuntimeControlInventoryCollection(kind: collection)
+          )
+        )
+        .get(newSeq[byte]()),
+    )
+  let blob = st.rcHints[collection]
+  # A copy: refc shares a `let` seq, and a loss in the loop removes from it.
+  var subs = st.rcByEvent[reInventory]
+  for rec in subs:
+    st.offerRc(
+      rec, RcEntry(blob: blob, subject: subject, hint: true, collection: collection)
+    )
+
+func recordSubject(r: Route): Subject =
+  ## [G226] What a route record exposes: its route, provider module, provider
+  ## instance and target provider; never its consumer.
+  routeSubject(r.id, r.selected.module, r.providerInstance, r.provider)
+
+proc routeEndedRc(st: State, r: Route, before: RouteState) =
+  ## [SPEC RUNTIME l.3226-3229, l.3717; G226] A route's end: its
+  ## `route_state_changed` with the target's module and provider, no
+  ## `reason` (route, module and provider are its facts), then a `routes`
+  ## hint.
+  if st.rcByEvent[reRouteState].len > 0:
+    let provider = LogosNSRuntimeModuleProviderAddress(
+      provider: r.provider, runtime_instance_id: Opt.some(st.runtimeId)
+    )
+    st.publishRc(
+      reRouteState,
+      routeSubject(r.id, r.selected.module, "", r.provider),
+      encode(
+        LogosNSRuntimeControlRouteStateChangedEvent(
+          route: r.id,
+          module: Opt.some(r.selected.module),
+          provider: Opt.some(provider),
+          old_state: routeState(before),
+          new_state: routeState(r.state),
+        )
+      )
+        .get(newSeq[byte]()),
+    )
+  st.hintRc(InvKind.Routes, recordSubject(r))
+
+proc routeChangedRc(st: State, r: Route, decision: string, expires: Opt[uint64]) =
+  ## [SPEC RUNTIME l.3417-3418] A renewal or re-authorization that changed
+  ## the record's `decision_id` or `expires_at` is a record change; one that
+  ## changed neither produces no hint (RUN-0978).
+  if r.decisionId != decision or r.expiresAt != expires:
+    st.hintRc(InvKind.Routes, recordSubject(r))
+
 # Asynchronous calls ---------------------------------------------------------------
 
 proc newTicket(): ptr CallTicket =
@@ -578,6 +844,9 @@ proc settle(st: State, r: Route) =
     if old != nil and not old.dropped:
       old.dropped = true
       inc st.dropped
+      # [SPEC RUNTIME l.3417, l.3420] A membership change, judged by the facts
+      # retained with it.
+      st.hintRc(InvKind.Routes, recordSubject(old))
 
 proc compactRoutes(st: State) =
   ## Dropped records leave the creation-ordered table in batches, once they
@@ -642,8 +911,10 @@ proc endServices(st: State, s: ptr AttemptServices, instance: string) =
     return
   let token = attemptOf(s)
   st.liveAttempts.excl(token)
-  # [SPEC RUNTIME l.629; I86] Its list snapshots go with its binding.
+  # [SPEC RUNTIME l.629; I86] Its list snapshots go with its binding, and so
+  # do the Runtime Control subscriptions its module never unsubscribed.
   st.snapshots.endAttempt(token)
+  st.freeRcAttempt(st.instances.getOrDefault(instance), token)
   # [SPEC INTERFACE l.2004-2006] None of the attempt's handles remains valid.
   for r in st.routes.values:
     if r.consumer == instance and r.pins.len > 0:
@@ -685,7 +956,9 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
   ## them complete.
   if r.isTerminal:
     return
+  let before = r.state
   r.terminate(state, failure)
+  st.routeEndedRc(r, before)
   if state == rtRevoked and r.calls.len > 0:
     # [SPEC CA l.917-918; CAP-0193, CAP-0194; I85] Provider code already
     # running cannot be interrupted: its invocation is marked cancelled, no
@@ -813,6 +1086,8 @@ proc expose(st: State, x: Inst) =
   if st.changes.len >= MaxRetainedChanges:
     st.changes.delete(0)
   st.changes.add(StateChange(serial: st.serial, view: x.view))
+  # [C19; G178] The one point where a committed change becomes observable.
+  st.observedRc(x)
 
 proc written(st: State, x: Inst) =
   ## A write succeeded: every change held back is exposed, one entry per
@@ -852,6 +1127,7 @@ proc commit(st: State, x: Inst) =
   st.routesFollow(x)
   if x.state notin {msLoaded, msReady}:
     st.releaseCallers(x)
+    st.endRcSubs(x)
   let w = st.persist()
   if w.isErr:
     st.storeFailure(w.error)
@@ -907,6 +1183,8 @@ proc accept(st: State, x: Inst, saved: Saved, exempt = false): Opt[EngineError] 
   st.stepCommitted.incl(x.id)
   if x.state != msStopping:
     x.stopDeadline = Opt.none(MonoTime)
+  if x.state notin {msLoaded, msReady}:
+    st.endRcSubs(x) # [G178] before the change is exposed
   st.written(x)
   st.routesFollow(x)
   if x.state notin {msLoaded, msReady}:
@@ -972,6 +1250,12 @@ proc failAttempt(st: State, a: Attempt, f: Failure) =
 proc destroyContext(st: State, a: Attempt, ctx: ptr LogosModuleContext) =
   ## A context the attempt made that must not become ready.
   a.phase = apCleanup
+  let x = a.inst
+  if x.rcHandlers > 0:
+    # [G178; INTERFACE l.1999] Its Runtime Control handlers return first.
+    x.heldAttempt = a
+    x.heldContext = ctx
+    return
   let id = st.nextJobId()
   st.attempts[id] = a
   st.dispatch(
@@ -984,8 +1268,9 @@ proc releaseRealization(st: State, x: Inst) =
   let r = x.realization
   if r.isNil or x.teardown != 0:
     return
-  if x.inflight > 0:
-    # [IMPL] Calls already inside the provider finish first (§3.4 l.623).
+  if x.inflight > 0 or x.rcHandlers > 0:
+    # [IMPL] Calls already inside the provider finish first (§3.4 l.623), and
+    # so do its Runtime Control handlers [G178] (INTERFACE l.1465, l.1999).
     x.releasePending = true
     return
   x.releasePending = false
@@ -1375,6 +1660,147 @@ proc decideDetached(
 
 type DecideCtx = ref object
   sync, completed, aborted: bool
+
+# Judging Runtime Control events (G161 extension, G178) ------------------------------
+
+proc admits(st: State, a: AuthzAnswer, operation: string, s: Subject): bool {.gcsafe.}
+
+func listOperation(k: InvKind): string =
+  if k == InvKind.Routes:
+    $rmListRoutes
+  else:
+    $rmListModules
+
+func subjectKey(s: Subject): string =
+  s.module & "\x1F" & s.instance & "\x1F" & s.provider & "\x1F" & s.route
+
+func rcRequests(rec: RcRec, e: RcEntry): seq[AuthzRequest] =
+  ## [G161 extension (TF-09)] The event's own decision, asked without a
+  ## subject (its allow is applied to each); a hint also needs the list
+  ## method's (RUNTIME l.3419), the one that method itself asks.
+  result.add(
+    AuthzRequest(
+      action: aaObserveEvent,
+      operation: $rec.event,
+      consumer: rec.subscriber,
+      filters: true,
+    )
+  )
+  if e.hint:
+    result.add(
+      AuthzRequest(
+        action: aaObserve,
+        operation: listOperation(e.collection),
+        consumer: rec.subscriber,
+        filters: true,
+      )
+    )
+
+proc rcAdmits(st: State, s: Subject, answers: seq[AuthzAnswer]): bool =
+  ## Every decision admits the subject `s` (CA l.565-567; G226).
+  for a in answers:
+    if not st.admits(a, a.request.operation, s):
+      return false
+  true
+
+proc judgedBy(st: State, e: RcEntry, answers: seq[AuthzAnswer]) =
+  e.gen = st.gen
+  e.invalidations = st.invalidations
+  e.validUntil = Opt.none(uint64)
+  for a in answers:
+    if a.validUntil.isSome and
+        (e.validUntil.isNone or a.validUntil.get < e.validUntil.get):
+      e.validUntil = a.validUntil
+
+proc addFact(st: State, rec: RcRec, e: RcEntry) =
+  ## [G178 (D2)] An admitted subject joins its collection's pending hint; the
+  ## first one makes the hint, one queue entry. Past `rcHintFacts` distinct
+  ## subjects the hint is marked overflowed instead.
+  var p = rec.hints[e.collection]
+  if p.isNil:
+    p = RcEntry(
+      blob: e.blob,
+      hint: true,
+      collection: e.collection,
+      gen: e.gen,
+      invalidations: e.invalidations,
+      validUntil: e.validUntil,
+    )
+    st.enqueueRc(rec, p)
+    if not rec.active:
+      return
+    rec.hints[e.collection] = p
+  else:
+    if p.gen != e.gen or p.invalidations != e.invalidations:
+      p.stale = true
+    if e.validUntil.isSome and
+        (p.validUntil.isNone or e.validUntil.get < p.validUntil.get):
+      p.validUntil = e.validUntil
+  let key = subjectKey(e.subject)
+  if key notin p.keys:
+    if p.keys.len >= st.limits.rcHintFacts:
+      p.overflowed = true
+    else:
+      p.keys.incl(key)
+      p.facts.add(e.subject)
+
+proc judged(st: State, rec: RcRec, e: RcEntry, answers: seq[AuthzAnswer]) =
+  ## [G178 (D3)] Admitted, the entry joins the queue or its pending hint;
+  ## refused, it is dropped.
+  if not rec.active:
+    return
+  st.judgedBy(e, answers)
+  if not st.rcAdmits(e.subject, answers):
+    return
+  if e.hint:
+    st.addFact(rec, e)
+  else:
+    st.enqueueRc(rec, e)
+
+proc judgeRc(st: State, rec: RcRec) {.gcsafe.} =
+  ## [G178 (D3); C21] The unjudged entries in order, one decision at a time:
+  ## an answer that needs no evaluation is used at once, so the list only
+  ## holds entries behind an evaluation, and a later entry never overtakes
+  ## one parked on its decision.
+  while rec.active and not rec.judging and rec.unjudged.len > 0:
+    let e = rec.unjudged.peekFirst()
+    rec.judging = true
+    let ctx = DecideCtx(sync: true)
+    st.decideDetached(
+      rcRequests(rec, e),
+      proc(answers: seq[AuthzAnswer]) =
+        rec.judging = false
+        ctx.completed = true
+        if rec.unjudged.len > 0 and rec.unjudged.peekFirst() == e:
+          discard rec.unjudged.popFirst()
+          st.judged(rec, e, answers)
+        if not ctx.sync:
+          st.judgeRc(rec)
+      ,
+      proc() =
+        # [I85] Shutdown: no evaluation begins; the entry is dropped.
+        rec.judging = false
+        ctx.completed = true
+        if rec.unjudged.len > 0 and rec.unjudged.peekFirst() == e:
+          discard rec.unjudged.popFirst()
+        if not ctx.sync:
+          st.judgeRc(rec)
+      ,
+    )
+    ctx.sync = false
+    if not ctx.completed:
+      return
+
+proc offerRc(st: State, rec: RcRec, e: RcEntry) {.gcsafe.} =
+  ## [G178 (D3), G225] One fanned-out entry; one more than `rcUnjudged`
+  ## waiting for decisions loses the subscription.
+  if not rec.active:
+    return
+  if rec.unjudged.len >= st.limits.rcUnjudged:
+    st.loseRc(rec, "the decisions on its events fell behind")
+    return
+  rec.unjudged.addLast(e)
+  st.judgeRc(rec)
 
 proc rerun(st: State, op: OpCtx) =
   ## The parked operation's handler again, with the decisions it has.
@@ -2729,6 +3155,42 @@ func rcExecution(v: InstanceView): LogosNSRuntimeControlExecutionState =
     intent_revision: v.execution.intentRevision,
   )
 
+proc observedRc(st: State, x: Inst) {.gcsafe.} =
+  ## [SPEC RUNTIME l.3509, l.3715-3717, l.3417; G178] What one exposure of
+  ## `x` produces, in this order: `module_state_changed` from the state last
+  ## exposed to the new one, with the new state's failure and never
+  ## `provider` (l.3496); `execution_state_changed`; a `modules` hint. Changes
+  ## held back by a failed write collapse into this one exposure. The first
+  ## exposure, the instance's creation, produces only the hint (C7).
+  let v = x.view
+  let subject = instanceSubject(v.module, v.instance)
+  if x.seen:
+    if v.state != x.seenState and st.rcByEvent[reModuleState].len > 0:
+      var ev = LogosNSRuntimeControlModuleStateChangedEvent(
+        module: v.module,
+        instance: Opt.some(v.instance),
+        old_state: rcState(x.seenState),
+        new_state: rcState(v.state),
+      )
+      if v.failure.isSome:
+        ev.failure = Opt.some(v.failure.get.classification)
+        ev.reason = disclosedReason(v.failure.get)
+      st.publishRc(reModuleState, subject, encode(ev).get(newSeq[byte]()))
+    if st.rcByEvent[reExecutionState].len > 0:
+      st.publishRc(
+        reExecutionState,
+        subject,
+        encode(
+          LogosNSRuntimeControlExecutionStateChangedEvent(
+            execution: rcExecution(v), instance: v.instance, module: v.module
+          )
+        )
+          .get(newSeq[byte]()),
+      )
+  x.seen = true
+  x.seenState = v.state
+  st.hintRc(InvKind.Modules, instanceSubject(v.module, v.instance, x.providerId))
+
 proc readiness(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §9.3 get_readiness, l.3656-3675, l.3494-3496] The
   ## selected local instance's lifecycle and execution state from one
@@ -2811,6 +3273,9 @@ proc retireInst(st: State, y: Inst): Result[void, string] =
   # record (RUN-1012).
   st.changes.keepItIf(it.view.instance != y.id)
   st.written(nil)
+  # [SPEC RUNTIME l.3417, l.3420] A membership change, judged by the retained
+  # facts of the record that left.
+  st.hintRc(InvKind.Modules, instanceSubject(y.record.module, y.id, y.providerId))
   ok()
 
 proc retire(st: State, q: Request, x: Inst) =
@@ -3133,6 +3598,7 @@ proc establish(st: State, q: Request, x: Inst) =
     st.routes[r.id] = r
     st.setValidity(r, ans)
     response.routes.add(r.record(st.runtimeId))
+    st.hintRc(InvKind.Routes, recordSubject(r)) # [SPEC RUNTIME l.3417]
   let bytes = encode(response).valueOr:
     q.reply.answerError(ecModule, "the response cannot be encoded")
     return
@@ -3187,10 +3653,12 @@ proc reauthorized(st: State, r: Route, attempt: int, a: AuthzAnswer) =
   dec st.reauthBusy
   if r.reauthTry == attempt and r.reauth == raPending and not r.isTerminal:
     if a.allows:
+      let (decision, expires) = (r.decisionId, r.expiresAt)
       r.decisionId = a.decisionId
       r.grants = a.grants
       st.shorten(r, a)
       r.reauth = raNone
+      st.routeChangedRc(r, decision, expires)
     else:
       case a.outcome
       of azAllow:
@@ -3365,7 +3833,9 @@ proc renew(st: State, q: Request, x: Inst) =
       (if r.state == rtRevoked: r.endCode else: ecNotReady), "the route is " & $r.state
     )
     return
+  let (decision, expires) = (r.decisionId, r.expiresAt)
   st.setValidity(r, ans)
+  st.routeChangedRc(r, decision, expires)
   if r.reauth != raNone:
     inc r.reauthTry # a re-authorization still out no longer applies
     r.reauth = raNone
@@ -3456,14 +3926,19 @@ func rcRealization(
         LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown
   )
 
-proc admits(st: State, a: AuthzAnswer, operation: string, s: Subject): bool =
+proc admits(st: State, a: AuthzAnswer, operation: string, s: Subject): bool {.gcsafe.} =
   ## [G161 extension, G226 interim (TF-09, TF-34)] Whether the allow of an
   ## observation without a subject admits the subject `s`.
   if not a.allows:
     return false
   case a.source
   of psAuthority:
-    a.admitsScope(methodScope(operation, s, st.runtimeId), st.runtimeId)
+    let exact =
+      if a.request.action == aaObserveEvent:
+        eventScope(a.request.operation, s, st.runtimeId)
+      else:
+        methodScope(operation, s, st.runtimeId)
+    a.admitsScope(exact, st.runtimeId)
   of psInternal:
     st.authorizer.permits(subjectRequest(a.request, s))
   of psBootstrap, psRecovery:
@@ -4591,6 +5066,184 @@ proc deliver(st: State, q: Request) =
     skip()
   q.reply.answer(Reply(admitted: true))
 
+# Runtime Control subscriptions (step 7b; DECISIONS I86) --------------------------------
+
+proc subscribeRc(st: State, q: Request) =
+  ## [SPEC INTERFACE §2.5 l.1417-1432, l.3837; G178; G175 extended (TF-24)]
+  ## Association, then the name (not a Runtime Control event: NOT_AUTHORISED,
+  ## TRANSPORT l.735-736 by analogy), then the event's decision without a
+  ## subject (a denial is NOT_AUTHORISED; a narrowed allow filters what is
+  ## delivered), then readiness (NOT_READY), then capacity (MODULE_ERROR).
+  ## The id is written, then the subscription is active.
+  let x = st.caller(q).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  let event = rcEventOf(q.bare).valueOr:
+    q.reply.answerError(ecNotAuthorised, q.bare & " is not a Runtime Control event")
+    return
+  st.require(
+    q,
+    AuthzRequest(
+      action: aaObserveEvent, operation: $event, consumer: x.id, filters: true
+    ),
+  )
+  st.requireReady(q)
+  if x.rcSubs.len >= st.limits.rcSubsPerSubscriber or
+      st.rcSubs.len >= st.limits.rcSubsTotal:
+    q.reply.answerError(ecModule, "no Runtime Control subscription capacity")
+    return
+  if x.rcAttempt != q.attempt:
+    x.rcAttempt = q.attempt
+    x.rcNext = 0
+  inc x.rcNext
+  q.outId[] = x.rcNext
+  let s = rcSubOf(q.handle)
+  retain(s)
+  activate(s, x.rcNext)
+  let rec = RcRec(
+    sub: q.handle,
+    id: x.rcNext,
+    attempt: q.attempt,
+    subscriber: x.id,
+    event: event,
+    active: true,
+  )
+  st.rcSubs[q.handle] = rec
+  x.rcSubs.add(rec)
+  st.rcByEvent[event].add(rec)
+  q.reply.answer(Reply())
+
+proc unsubscribeRc(st: State, q: Request) =
+  ## [SPEC INTERFACE §2.5 l.1446-1459, l.2004; RUNTIME l.622; G178, G225]
+  ## Ownership discharge: no authority or readiness check, so it works while
+  ## stopping and inside `_MODULE_destroy`. A subscription of this binding the
+  ## Runtime already ended is LOGOS_OK too; an id it never gave, or one
+  ## already unsubscribed, is INVALID_PARAMS and changes nothing.
+  let x = st.caller(q).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  var found: RcRec
+  for rec in x.rcSubs:
+    if rec.attempt == q.attempt and rec.id == q.subId:
+      found = rec
+      break
+  if found.isNil:
+    q.reply.answerError(ecInvalidParams, "no subscription of this binding has that id")
+    return
+  let p = found.sub
+  retain(rcSubOf(p)) # the caller's, for its wait
+  st.removeRc(found)
+  q.reply.answer(Reply(subs: @[p]))
+
+proc rcLive(st: State, rec: RcRec): Inst =
+  ## The subscriber, while the subscription is active and the binding it was
+  ## made through current and `loaded` or `ready`; nil otherwise.
+  let x = st.instances.getOrDefault(rec.subscriber)
+  if rec.active and x != nil and x.current == rec.attempt and
+      x.state in {msLoaded, msReady}: x else: nil
+
+proc endDrain(st: State, rec: RcRec) =
+  ## The drain is over: the subscription goes behind the others when it has
+  ## more, and a waiting one may take the slot.
+  rec.running = false
+  rec.scheduled = false
+  dec st.rcBusy
+  let left = st.rcRunning.getOrDefault(rec.subscriber) - 1
+  if left > 0:
+    st.rcRunning[rec.subscriber] = left
+  else:
+    st.rcRunning.del(rec.subscriber)
+  if rec.gone:
+    st.freeRc(rec)
+  else:
+    st.scheduleRc(rec)
+  st.pumpRc()
+
+proc fresh(st: State, e: RcEntry): bool =
+  ## [G161] The decisions `e` was judged by still hold: the same binding, no
+  ## invalidation since, none past its `valid_until`.
+  not e.stale and e.gen == st.gen and e.invalidations == st.invalidations and
+    (e.validUntil.isNone or st.wallNow < e.validUntil.get)
+
+proc deliverable(st: State, rec: RcRec, e: RcEntry, answers: seq[AuthzAnswer]): bool =
+  ## [SPEC RUNTIME l.3498, l.3419-3421] An event: current authority admits
+  ## its subject. A hint: it admits at least one retained subject. A hint
+  ## with none admitted that did not retain every subject may be owed for one
+  ## it dropped: the subscription is lost instead of silent [G178 (D2), G225].
+  if not e.hint:
+    return st.rcAdmits(e.subject, answers)
+  for s in e.facts:
+    if st.rcAdmits(s, answers):
+      return true
+  if e.overflowed:
+    st.loseRc(rec, "a hint it may be owed names only subjects it did not retain")
+  false
+
+proc handOver(x: Inst, e: RcEntry, reply: ReplyChannel) =
+  ## Admitted: the handler counts toward its subscriber until it returns.
+  inc x.rcHandlers
+  reply.answer(Reply(admitted: true, name: e.blob.name, bytes: e.blob.bytes))
+
+proc deliverRc(st: State, q: Request) =
+  ## [G178; SPEC RUNTIME l.3498, l.3419] An event worker draining a
+  ## subscription asks for its next entry. It is admitted when the
+  ## subscription is active, its binding current and live, and current
+  ## authority admits it: judged again when the decisions it was judged by may
+  ## have changed (G161). An entry not admitted is dropped and the worker asks
+  ## again; the drain ends with the queue, the subscription or its quota
+  ## (`rcDrainQuota`).
+  let rec = st.rcSubs.getOrDefault(q.handle)
+  if rec.isNil:
+    q.reply.answer(Reply(drained: true))
+    return
+  if not q.gated or not rec.active or rec.queue.len == 0 or
+      rec.served >= st.limits.rcDrainQuota:
+    st.endDrain(rec)
+    q.reply.answer(Reply(drained: true))
+    return
+  inc rec.served
+  let e = rec.queue.popFirst()
+  if e.hint and rec.hints[e.collection] == e:
+    rec.hints[e.collection] = nil
+  let x = st.rcLive(rec)
+  if x.isNil:
+    q.reply.answer(Reply())
+    return
+  if st.fresh(e):
+    handOver(x, e, q.reply)
+    return
+  let reply = q.reply
+  st.decideDetached(
+    rcRequests(rec, e),
+    proc(answers: seq[AuthzAnswer]) =
+      let y = st.rcLive(rec)
+      if y != nil and st.deliverable(rec, e, answers):
+        handOver(y, e, reply)
+      else:
+        reply.answer(Reply()),
+    proc() =
+      reply.answer(Reply()),
+  )
+
+proc rcHandled(st: State, p: pointer) =
+  ## [G178] A handler returned: a release or destroy of its subscriber's
+  ## realization waiting for it may go on.
+  let rec = st.rcSubs.getOrDefault(p)
+  if rec.isNil:
+    return
+  let x = st.instances.getOrDefault(rec.subscriber)
+  if x.isNil or x.rcHandlers == 0:
+    return
+  dec x.rcHandlers
+  if x.rcHandlers == 0:
+    if x.heldAttempt != nil:
+      let (a, ctx) = (x.heldAttempt, x.heldContext)
+      x.heldAttempt = nil
+      x.heldContext = nil
+      st.destroyContext(a, ctx)
+    if x.releasePending and x.inflight == 0:
+      st.releaseRealization(x)
+
 # The Runtime thread ---------------------------------------------------------------
 
 proc handle(st: State, q: Request) {.gcsafe.} =
@@ -4666,7 +5319,7 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     if not st.shutdownDone:
       q.reply.answerError(ecNotReady, "the Runtime has not shut down")
       return
-    if st.busy + st.callBusy + st.evalBusy + st.renewBusy > 0:
+    if st.busy + st.callBusy + st.evalBusy + st.renewBusy + st.rcBusy > 0:
       q.reply.answerError(ecNotReady, "module code is still running")
       return
     st.done = true
@@ -4704,6 +5357,12 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.scoped(q)
   of rqDeliver:
     st.deliver(q)
+  of rqRcSubscribe:
+    st.subscribeRc(q)
+  of rqRcUnsubscribe:
+    st.unsubscribeRc(q)
+  of rqRcDeliver:
+    st.deliverRc(q)
   of rqDiagnostics:
     var r = Reply()
     for d in st.diagnostics:
@@ -4824,7 +5483,8 @@ proc handle(st: State, m: sink Msg) =
     return
   of mkBound, mkInitialized, mkDestroyed, mkJobDone, mkCompleted:
     dec st.busy
-  of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle, mkEvaluated:
+  of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle, mkEvaluated,
+      mkRcHandled:
     discard
   case m.kind
   of mkBound:
@@ -4866,6 +5526,8 @@ proc handle(st: State, m: sink Msg) =
       st.maybeForget(owner)
   of mkEvaluated:
     st.evaluated(m.job, m.evaluated)
+  of mkRcHandled:
+    st.rcHandled(m.target)
   of mkRequest, mkJobDone:
     discard
   st.settle()
@@ -5001,6 +5663,9 @@ proc restore(st: State, snap: Snapshot) =
       # with `other`, intent kept. Resuming it is not a retry after failure.
       x.state = msError
       x.failure = Opt.some(Failure(kind: fkOther, reason: UncleanEnd))
+    # [G178] Created in an earlier process: its next exposure is a change.
+    x.seen = true
+    x.seenState = x.state
     st.instances[x.id] = x
     st.putFacts(x)
   for r in snap.retired:
@@ -5135,6 +5800,11 @@ proc runtimeLoop(s: ptr Shared) =
       s.renewals.send(EvalJob(kind: ejQuit))
     except Exception:
       discard
+  for i in 0 ..< s.rcSpawned:
+    try:
+      s.rcJobs.send(RcJob(kind: rjQuit))
+    except Exception:
+      discard
   st.store.close()
   s.finished = true
 
@@ -5152,6 +5822,7 @@ proc freeEngine(e: Engine) =
   e.calls.close()
   e.evals.close()
   e.renewals.close()
+  e.rcJobs.close()
   e.closeSlots()
   deinitLock(e.slotLock)
   freeBell(e.bell)
@@ -5179,6 +5850,7 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   e.calls.open()
   e.evals.open()
   e.renewals.open()
+  e.rcJobs.open()
   e.bell = newBell()
   initLock(e.slotLock)
   try:
@@ -5374,6 +6046,8 @@ proc tryClose*(e: Engine): Result[void, EngineError] =
     joinThread(e.renewWorker)
   for i in 0 ..< e.callSpawned:
     joinThread(e.callWorkers[i])
+  for i in 0 ..< e.rcSpawned:
+    joinThread(e.rcWorkers[i])
   e.freeEngine()
   ok()
 

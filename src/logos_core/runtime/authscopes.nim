@@ -74,13 +74,27 @@ proc routeAccess(bytes: openArray[byte]): Result[Opt[RouteAccess], string] =
   )
 
 proc controlScope(q: AuthzRequest, runtimeId: string): Result[Scope, string] =
-  if q.operation notin rcContractInfo().methods:
-    return err("no Runtime Control method " & q.operation)
-  var s = RuntimeControlScope(
-    runtime: runtimeId,
-    contract: rcContract(),
-    methods: Opt.some(@[rcMethodRoot(q.operation)]),
-  )
+  var s: RuntimeControlScope
+  if q.action == aaObserveEvent:
+    # [G161 extension (TF-09); I86] The event's own entry and no method (an
+    # empty method list permits none, CA l.126); a subscription asks without
+    # selectors and the allow is applied to each subject (`observe.admits`).
+    if q.operation notin rcContractInfo().events:
+      return err("no Runtime Control event " & q.operation)
+    s = RuntimeControlScope(
+      runtime: runtimeId,
+      contract: rcContract(),
+      methods: Opt.some(newSeq[Root]()),
+      events: Opt.some(@[rcEventRoot(q.operation)]),
+    )
+  else:
+    if q.operation notin rcContractInfo().methods:
+      return err("no Runtime Control method " & q.operation)
+    s = RuntimeControlScope(
+      runtime: runtimeId,
+      contract: rcContract(),
+      methods: Opt.some(@[rcMethodRoot(q.operation)]),
+    )
   case q.action
   of aaRuntimeControl:
     if q.route.len > 0:
@@ -167,7 +181,7 @@ proc evaluateRequest*(
     return err("the host is never a consumer")
   var scope =
     case q.action
-    of aaRuntimeControl, aaLifecycle, aaObserve:
+    of aaRuntimeControl, aaLifecycle, aaObserve, aaObserveEvent:
       ?controlScope(q, runtimeId)
     of aaExecute:
       ?executionScope(q, runtimeId, MeActionKind.Start)
