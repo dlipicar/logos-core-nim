@@ -98,7 +98,7 @@ nix flake check -L
 ```
 
 CI splits the checks into groups and builds each Linux group in its own job: `orc-spec` (orc,
-nph, lint and the spec checks), `refc-release`, `asan`, `tsan` and `msan`. One group builds alone
+nph, lint and the spec checks), `refc`, `orc-release`, `asan`, `tsan` and `msan`. One group builds alone
 with:
 
 ```bash

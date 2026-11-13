@@ -2,10 +2,10 @@ name: CI
 
 # `nix flake check` on each leg: every test suite under orc and refc, nph, and the spec checks
 # (mirrors, pins, requirement ledger, coverage gate, oracle selftest) against the pinned specs.
-# A second job runs the Nimble path from the same checkout so it cannot rot (R2), once per OS and
-# memory manager.
+# A second job runs the Nimble path from the same checkout so it cannot rot (R2), once per OS,
+# memory manager and shard.
 # Legs per R1: Linux x86_64, Linux aarch64, macOS arm64 until Tier 4 work starts.
-# Each Linux leg runs as five parallel jobs, one per check group (flake.nix `ciGroups`): a single
+# Each Linux leg runs as six parallel jobs, one per check group (flake.nix `ciGroups`): a single
 # runner took over two hours for every check on x86_64. Each check is in exactly one group, and
 # the orc-spec job also evaluates every flake output. macOS has no sanitizer checks and runs
 # `nix flake check` in one job.
@@ -30,7 +30,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
-        group: [orc-spec, refc-release, asan, tsan, msan]
+        group: [orc-spec, refc, orc-release, asan, tsan, msan]
         include:
           - os: macos-latest
             group: all
@@ -72,20 +72,23 @@ jobs:
         if: matrix.group != 'all'
         run: nix build -L --keep-going --no-link ".#ciGroups.$GROUP"
 
-  # One job per OS and Nimble test task. Both tasks in one Linux job passed 60 minutes on 2026-11-13
-  # (orc 27 min, then refc), almost all of it compiling suites. Split, the Linux jobs took 49 and 51
-  # minutes on 18b7867, so the limit matches the nix job's 90.
+  # One job per OS, Nimble test task and shard of the suites (`LCN_SHARD`, logos_core.nimble). Both
+  # tasks in one Linux job passed 60 minutes on 2026-11-13 (orc 27 min, then refc); one job per task
+  # took 49 and 51 minutes on 18b7867, almost all of it compiling suites one after another.
   nimble:
-    name: nimble (${{ matrix.os }}, ${{ matrix.task }})
+    name: nimble (${{ matrix.os }}, ${{ matrix.task }}, ${{ matrix.shard }}/2)
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         task: [test, test_refc]
+        shard: [1, 2]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
       TASK: ${{ matrix.task }}
+      # The 2 is the number of entries in `shard`.
+      LCN_SHARD: ${{ matrix.shard }}/2
     steps:
       - uses: actions/checkout@v4
 
@@ -116,7 +119,7 @@ jobs:
       # Regenerated from scratch and before `nimble setup`: nimble 0.20.1 empties an existing lock
       # when run over it, and crashed when local deps were already installed. Once per OS.
       - name: nimble.lock matches logos_core.nimble
-        if: matrix.task == 'test'
+        if: matrix.task == 'test' && matrix.shard == 1
         run: |
           mv nimble.lock "$RUNNER_TEMP/nimble.lock"
           nix develop -c nimble -y lock
@@ -135,7 +138,7 @@ jobs:
       # elsewhere the test is skipped. In this job because the nix job's dev shell has no Nim
       # dependencies.
       - name: Peer check against another user's listener (G129)
-        if: runner.os == 'Linux' && matrix.task == 'test'
+        if: runner.os == 'Linux' && matrix.task == 'test' && matrix.shard == 1
         run: |
           sudo useradd --system --no-create-home lcnpeer
           echo "$USER ALL=(lcnpeer) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/lcnpeer
