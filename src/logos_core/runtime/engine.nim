@@ -475,10 +475,25 @@ func exposed(x: Inst): InstanceView =
   ## later change is held back (I82).
   if x.pending: x.shown else: x.view
 
-var rcCaptures {.threadvar.}: Table[pointer, CallCapture]
-  ## [SPEC CA l.1176-1177; I85] Runtime thread: the applied Runtime Control
-  ## call decisions that require a call record, by their call's reply channel,
-  ## until that call is answered (`captureRc`).
+var
+  rcCaptures {.threadvar.}: Table[pointer, CallCapture]
+    ## [SPEC CA l.1176-1177; I85] Runtime thread: the applied Runtime Control
+    ## call decisions that require a call record, by their call's reply
+    ## channel, until that call is answered (`captureRc`).
+  rcCapturesHooked {.threadvar.}: bool
+
+proc dropRcCaptures() {.nimcall, gcsafe, raises: [].} =
+  ## [IMPL] Nim never destroys thread-local storage: the table's storage stays
+  ## allocated after its last entry is answered, so the thread's release
+  ## frees it (`base/perthread`).
+  rcCaptures = default(Table[pointer, CallCapture])
+  rcCapturesHooked = false
+
+proc keepCapture(reply: pointer, c: CallCapture) =
+  if not rcCapturesHooked:
+    rcCapturesHooked = true
+    onThreadRelease(dropRcCaptures)
+  rcCaptures[reply] = c
 
 proc answer(r: ReplyChannel, reply: sink Reply) =
   if r != nil:
@@ -1350,7 +1365,7 @@ proc captureRc(st: State, reqs: openArray[AuthzRequest], answers: seq[AuthzAnswe
     if r.action in {aaRuntimeControl, aaLifecycle, aaObserve} and r.operation == bare:
       let c = st.captureOf(r, answers[i])
       if c.retains:
-        rcCaptures[cast[pointer](q.reply)] = c
+        keepCapture(cast[pointer](q.reply), c)
 
 proc shuttingDownReply(q: Request) =
   q.reply.answerError(ecNotReady, "the Runtime is shutting down")
