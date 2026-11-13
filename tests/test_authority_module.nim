@@ -38,6 +38,11 @@ createDir(work)
 
 include ./support/routefixture
 
+proc eventually(cond: proc(): bool {.closure.}): bool =
+  ## The route fixture's `waitUntil`, with its 10 s scaled by `Slow` for
+  ## sanitizer builds.
+  waitUntil(cond, 10 * Slow)
+
 # The CA instance ------------------------------------------------------------------------
 
 const
@@ -348,7 +353,7 @@ suite "cap.module: the Capability Authority as a direct-mode module":
     discard r.listen(GrantChanged, 0)
     let g =
       h.authority.issueProtected(Source, address("c1"), @[callScope(root(M1))]).get
-    check waitUntil(
+    check eventually(
       proc(): bool =
         heard[0].count.load == 1
     )
@@ -374,13 +379,13 @@ suite "cap.module: the Capability Authority as a direct-mode module":
     var call = r1.startAsync(
       "watch_changes", encode(WatchChangesRequest(consumer: address("c1"))).get
     )
-    check waitUntil(
+    check eventually(
       proc(): bool =
         h.authority.watchCount == 1
     )
     let g =
       h.authority.issueProtected(Source, address("c1"), @[callScope(root(M1))]).get
-    check waitUntil(
+    check eventually(
       proc(): bool =
         heard[0].count.load == 1
     )
@@ -389,12 +394,12 @@ suite "cap.module: the Capability Authority as a direct-mode module":
     check heard[0].count.load == 1
     check heard[1].count.load == 0
     call.vtable.cancel(addr call)
-    check waitUntil(
+    check eventually(
       proc(): bool =
         done.count.load == 1
     )
     check done.code.load == ord(ecCancelled)
-    check waitUntil(
+    check eventually(
       proc(): bool =
         h.authority.watchCount == 0
     )
@@ -414,13 +419,13 @@ suite "cap.module: the Capability Authority as a direct-mode module":
     var call = r.startAsync(
       "watch_changes", encode(WatchChangesRequest(consumer: address("c1"))).get
     )
-    check waitUntil(
+    check eventually(
       proc(): bool =
         h.authority.watchCount == 1
     )
     check e.stop("ca").tryGet.state == msUnloaded
     check authorityFor(h.caDir).isNone
-    check waitUntil(
+    check eventually(
       proc(): bool =
         done.count.load == 1
     )
