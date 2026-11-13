@@ -55,6 +55,9 @@ proc summary(ev: IoEvent): CborValue =
     e.add((cbor("sub"), cbor(ev.subscribeId)))
   of evPublishFailed:
     e.add((cbor("code"), cbor(uint64(ord(ev.pubFailCode)))))
+  of evPublishResult:
+    if ev.pubResultFailure.isSome:
+      e.add((cbor("code"), cbor(uint64(ord(ev.pubResultFailure.get.code)))))
   else:
     discard
   cborMap(e)

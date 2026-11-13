@@ -34,7 +34,11 @@ The specs are being revised, so the work is ordered by how settled each area is
   releases and configures every other instance through its contract; lost Loader answers are
   resolved with `get_status`, and a failed Loader leaves its instances `error` and asks the host to
   end its process (I89). LOADER is claimed for the direct strategies.
-- Not yet: the rest of Tier 4b (the Module Host and the hosted strategy, transported routes, `logosd`
+- Tier 4b, step 4b-2 (in progress): transported local routes. A host routing rule selects
+  `local-transport` for a route; the Runtime runs the transport I/O thread, issues one-time tickets at
+  establish and renew, and serves a direct provider at an endpoint of its own (part 4b-2a, I90). The
+  consumer's transported handle and transported events follow (4b-2b, 4b-2c).
+- Not yet: the rest of Tier 4b (the Module Host and the hosted strategy, the rest of transported routes, `logosd`
   and `logosctl`, the default orchestration module, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
@@ -173,8 +177,8 @@ nimble build_runtime_lib
 | `src/logos_core/iface/` | INTERFACE: acceptance, names, the C type mapping, call surfaces and the provider call-surface descriptor, payloads, outcomes. |
 | `src/logos_core/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
 | `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
-| `src/logos_core/runtime/`, `src/liblogos_runtime.nim` | The direct-mode Runtime: the Loader, the engine (instances, lifecycle, Runtime Control, routes, events, asynchronous calls), the host configuration and the Host Embedding API; the `liblogos_runtime` exports. |
-| `src/logos_core/transport/` | TRANSPORT without I/O: envelope codec, framing, Hello, tickets, sessions, the schema boundary. |
+| `src/logos_core/runtime/`, `src/liblogos_runtime.nim` | The Runtime: the Loader, the engine (instances, lifecycle, Runtime Control, routes, events, asynchronous calls), transported routes (`routing`, `tport`, `sessionauth`, `served`, `ports`), the host configuration and the Host Embedding API; the `liblogos_runtime` exports. |
+| `src/logos_core/transport/` | TRANSPORT: envelope codec, framing, Hello, tickets, sessions, the schema boundary; `io/`, the unix-stream I/O thread. |
 | `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; catalog and inspection records (`records.nim`) and the sans-I/O dependency resolver (`resolver.nim`); the `lcn-pkg` CLI. |
 | `src/logos_core/crypto/slhdsa.nim`, `src/logos_core/base/nfc.nim` | SLH-DSA-SHA2-192s over slhdsa-c (pure and internal functions only); Unicode NFC for LGX paths. |
 | `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. `tests/generated/` is `lcn-gen` output; `tests/kit/` holds three modules written with the kit, which `test_kit_dylib` also builds as shared libraries, and the C harness that calls their typed functions directly or through the typed call helpers (`test_calls`). `tests/host/` drives `liblogos_runtime` from C (`test_host_dylib`). |

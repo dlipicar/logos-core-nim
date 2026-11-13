@@ -114,11 +114,22 @@ import ../iface/[accept, outcome, surface]
 import ../loader/contract
 from ../loader/provider import
   LoaderWiring, wireLoader, unwireLoader, loaderStaticRegistration
+from ../transport/io/api import
+  IoEvent, IoEventKind, IoSink, IoCommand, IoCommandKind, TransportConfig,
+  defaultTransportConfig, ContractInput, EndpointId, ConnId, CallOutcome
+from ../transport/hello import
+  acceptHello, HelloCheck, HelloFailure, HelloReason, RouteBinding, NotAuthorisedMessage
+from ../transport/io/endpoint import checkEndpointBase
+from ../transport/io/sock import unixStream
+from std/os import `/`, createDir, dirExists, setFilePermissions, FilePermission
+from ./tport import
+  newTransportPorts, freeTransportPorts, ensureStarted, closeTransport, releaseOwner,
+  closing, submitOwner, newConnId, started
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
-    execauth, inventory, invoke, loaderbinding, observe, plumbing, rcevents, sidetable,
-    store,
+    execauth, inventory, invoke, loaderbinding, observe, plumbing, rcevents, served,
+    sessionauth, sidetable, store,
   ]
 
 export plumbing
@@ -331,6 +342,11 @@ type
     executing: bool ## a call worker has it
     order: int ## [I88] its place among dispatched calls
     completing: bool ## its completion job is dispatched
+    session: bool
+      ## [I90] a served invocation of a transported route: its outcome is a
+      ## Response on `conn`, never a completion callback
+    conn: uint64
+    requestId: uint64
 
   OpCtx = ref object
     ## [IMPL] One request while its handler obtains its decisions (I85). A
@@ -484,6 +500,9 @@ type
     assignments: int ## state assignments `create_module` gave (`s-<prefix>-<n>`)
     clock: Clock ## [I85] decision validity
     timed: HashSet[string] ## ready routes with an `expires_at`
+    tickets: TicketStore[RouteBinding]
+      ## [SPEC TRANSPORT §8.1.1; I90] the live route tickets, in memory only
+    sv: Served ## [G257; I90] the provider half of transported routes
     caRoot: Opt[Digest] ## the pinned Capability Authority contract root
     op: OpCtx ## the request being handled
     pendings: Table[int, Pending]
@@ -1039,6 +1058,9 @@ proc maybeForget(st: State, a: AsyncRec) =
   if a.terminal and not a.executing and not a.completing and a.deferred == nil:
     st.asyncCalls.del(a.call)
     dropCall(asyncOf(a.call))
+    if a.session:
+      # [SPEC TRANSPORT §6, §8.6] Nothing of it runs any more: its slot goes.
+      st.sv.callEnded(a.conn, a.requestId)
     if not a.rc:
       let r = st.route(a.route)
       if r != nil:
@@ -1059,7 +1081,22 @@ proc asyncTerminal(st: State, a: AsyncRec) =
     a.ticket.closed.store(true)
   if c.callEnd != okResult:
     st.cancelInvocation(a)
-  if a.attempt in st.liveAttempts:
+  if a.session:
+    # [I90; plan §2.5] No callback: a decision no worker answered is the
+    # Runtime's to answer (an end, a refused queue).
+    let f = c.unsentFailure()
+    if f.isSome:
+      discard st.shared.tport.submitOwner(
+        IoCommand(
+          conn: a.conn,
+          kind: IoCommandKind.cmdRespond,
+          requestId: a.requestId,
+          outcome: f.get,
+          workEnded: false,
+        )
+      )
+    c.suppress()
+  elif a.attempt in st.liveAttempts:
     a.completing = true
     st.dispatch(Job(id: st.nextJobId(), kind: jkComplete, call: a.call))
   else:
@@ -1177,6 +1214,39 @@ proc endRegsGone(st: State, consumer: string, n: int) =
     st.endRegs.del(consumer)
   st.endRegsTotal = max(st.endRegsTotal - n, 0)
 
+proc drainDeadline(st: State, r: Route): MonoTime =
+  ## [Rev R1; plan §2.8] How long a session of `r` may still answer what it
+  ## admitted after a readiness end: the shutdown grace at shutdown, the
+  ## provider's stop deadline while it stops, else the stop deadline from now
+  ## (close_route, a consumer end, a provider failure) [IMPL].
+  if st.shuttingDown:
+    return st.shutdownDeadline
+  let p = st.instances.getOrDefault(r.providerInstance)
+  if p != nil and p.state == msStopping and p.stopDeadline.isSome:
+    return p.stopDeadline.get
+  getMonoTime() + st.cfg.stopDeadline
+
+proc endTransported(st: State, r: Route) =
+  ## [plan §2.8 steps 1 and 4; owner batch B 7] A transported route ended:
+  ## its tickets are revoked, then each of its sessions is ordered by the
+  ## cause. An authority end terminates: the in-flight Requests are answered
+  ## NOT_AUTHORISED, then ProtocolError NOT_AUTHORISED and close (TRANSPORT
+  ## l.987-991). A failure of the transport closes at once. Any other end
+  ## drains: no new admission, what was admitted answers, then close (K13).
+  discard st.tickets.revokeRoute(r.id)
+  for conn in r.sessions:
+    let s = st.sv.session(conn)
+    if s.isNil:
+      continue
+    case sessionOrder(r.endCode, r.failure)
+    of soTerminate:
+      for c in st.sv.terminate(s):
+        markSent(asyncOf(c))
+    of soClose:
+      st.sv.close(s)
+    of soDrain:
+      st.sv.drain(s, st.drainDeadline(r))
+
 proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229; INTERFACE §2.5] The route takes no
   ## new calls, its subscriptions are deactivated, and each handle observing
@@ -1211,6 +1281,8 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
       st.cancelInvocation(a)
       if r.state == rtRevoked:
         st.endCall(a, revokedResult(), okEnded)
+  if r.mode == rmLocalTransport:
+    st.endTransported(r)
   for h in r.handles:
     scheduleEnd(h, r.endCode)
     st.dispatch(Job(id: st.nextJobId(), kind: jkObserveEnd, handle: h))
@@ -1222,6 +1294,9 @@ proc routesFollow(st: State, x: Inst) =
   ## [SPEC RUNTIME §3.4 l.620-626, §9.3 l.3225] A provider that is no longer
   ## `ready` fails its routes; a consumer that is no longer live closes its
   ## routes after an authorized stop and fails them after a failure.
+  if x.state != msReady:
+    # [plan §2.5] Its endpoints take no new connection (L3).
+    st.sv.stopServingRealization(x.id)
   for r in st.routes.values:
     if r.isTerminal:
       continue
@@ -3879,6 +3954,9 @@ proc beginShutdown(st: State) =
     # lost by it.
     st.failOutstanding("the Runtime is shutting down", shutdown = true)
     st.cache.clear()
+    # [SPEC RUNTIME l.3846-3849; plan §2.9] No endpoint takes a new
+    # connection; established sessions drain as their routes end.
+    st.sv.stopServingAll()
   st.shutdownStep()
   if st.shutdownComplete():
     st.finishShutdown()
@@ -4337,6 +4415,49 @@ proc accessBytes(a: LogosNSRuntimeControlRouteAccess): seq[byte] =
     return @[]
   encode(a).get(newSeq[byte]())
 
+proc servedEndpoint(st: State, y: Inst): Result[ServedEndpoint, string] =
+  ## [G257; plan §2.5] The endpoint serving provider `y`'s current
+  ## realization, created on first need.
+  let key = y.id & "/" & y.current
+  let e = st.sv.endpointOf(key)
+  if e != nil:
+    return ok(e)
+  if not st.shared.tport.started:
+    return err("the transport is not running")
+  let b = y.realization.contracts
+  var roots: seq[Digest]
+  if b.primary.isSome:
+    roots.add(b.primary.get.root)
+  for i in b.interfaces:
+    roots.add(i.root)
+  if roots.len == 0:
+    return err("the provider has no contract")
+  let primary = roots[0]
+  let schema = y.schemas.getOrDefault(primary)
+  if schema.len == 0:
+    return err("the provider's schema response is missing")
+  st.sv.openEndpoint(
+    key,
+    y.id,
+    y.providerId,
+    y.record.module,
+    roots,
+    ContractInput(
+      root: primary, schema: schema, system: y.record.module.startsWith("logos_")
+    ),
+  )
+
+proc issueTicket(
+    st: State, r: Route
+): Result[tuple[path: string, ticket: RouteTicket], string] =
+  ## [SPEC TRANSPORT §8.1.1; plan §2.4] A fresh ticket for transported route
+  ## `r`, bound to its endpoint.
+  let e = st.sv.endpoints.getOrDefault(r.endpoint.get(0))
+  if e.isNil or e.state != esServing:
+    return err("the route's endpoint no longer serves")
+  let t = ?st.tickets.issueFor(r, e.callee.endpoint, e.module, st.monoNow)
+  ok((path: e.ep.path, ticket: t))
+
 proc establish(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §4.2, §9.3 l.3086-3183] Local direct routes for consumer `x`.
   const op = "establish_route"
@@ -4491,6 +4612,25 @@ proc establish(st: State, q: Request, x: Inst) =
       let narrowed = routeAccessOf(ans, st.requestBytes(rq), st.runtimeId)
       if narrowed.isSome:
         routeAccess = narrowed.get
+    # [IMPL-DECISION G254; I90] The mode, once per selected provider.
+    let mode = selectMode(
+      st.cfg.routing,
+      RouteEnds(consumerModule: x.record.module, providerModule: y.record.module),
+    )
+    var endpoint = Opt.none(uint64)
+    if mode == rmLocalTransport:
+      let ep = st.servedEndpoint(y)
+      if ep.isErr:
+        # [IMPL; plan §2.5] An internal processing failure: no route.
+        st.diagnose(
+          "no transported route to " & y.providerId & " was made: " & ep.error
+        )
+        if all:
+          omitted = true
+          continue
+        q.reply.answerError(ecModule, "the provider's endpoint cannot be served")
+        return
+      endpoint = Opt.some(ep.get.id)
     made.add(
       (
         Route(
@@ -4501,6 +4641,9 @@ proc establish(st: State, q: Request, x: Inst) =
           selected: sel.get,
           access: routeAccess,
           state: rtReady,
+          mode: mode,
+          consumerAttempt: x.current,
+          endpoint: endpoint,
         ),
         ans,
       )
@@ -4510,16 +4653,38 @@ proc establish(st: State, q: Request, x: Inst) =
     # a `discover` allow and no provider offers the contract.
     q.reply.answerError(ecNotReady, "no selected provider is ready")
     return
+  # [plan §2.4] The live answer carries each transported route's ticket; the
+  # redacted one, retained for replay (G255), carries none.
   var response = LogosNSRuntimeControlEstablishRouteResponse(partial: all and omitted)
+  var redacted = response
+  var issueFailed = false
   for (r, ans) in made:
     st.routes[r.id] = r
     st.setValidity(r, ans)
-    response.routes.add(r.record(st.runtimeId))
+    let rec = r.record(st.runtimeId)
+    redacted.routes.add(rec)
+    if r.mode == rmLocalTransport:
+      let t = st.issueTicket(r)
+      if t.isErr:
+        st.diagnose("no ticket was issued for route " & r.id & ": " & t.error)
+        issueFailed = true
+      else:
+        response.routes.add(rec.live(t.get.path, t.get.ticket))
+    else:
+      response.routes.add(rec)
     st.hintRc(InvKind.Routes, recordSubject(r)) # [SPEC RUNTIME l.3417]
+  if issueFailed:
+    for (r, _) in made:
+      st.endRoute(r, rtFailed, Opt.some(rfOther))
+    q.reply.answerError(ecModule, "a route ticket cannot be issued")
+    return
   let bytes = encode(response).valueOr:
     q.reply.answerError(ecModule, "the response cannot be encoded")
     return
-  st.keys.retain(x.id, req.request_key, op, q.rc.request, bytes)
+  let kept = encode(redacted).valueOr:
+    q.reply.answerError(ecModule, "the response cannot be encoded")
+    return
+  st.keys.retain(x.id, req.request_key, op, q.rc.request, kept)
   q.reply.answer(Reply(bytes: bytes))
 
 # Route re-authorization (CA l.869-873, l.906-914; S8b-2 interim, TF-33) ----------------
@@ -4757,12 +4922,23 @@ proc renew(st: State, q: Request, x: Inst) =
     inc r.reauthTry # a re-authorization still out no longer applies
     r.reauth = raNone
     st.releaseReauthWaiters(r)
-  let bytes = encode(
-    LogosNSRuntimeControlRenewRouteResponse(route: r.record(st.runtimeId))
-  ).valueOr:
+  let rec = r.record(st.runtimeId)
+  var answer = rec
+  if r.mode == rmLocalTransport:
+    # [SPEC RUNTIME l.3481; plan §2.4] A fresh ticket; the earlier unused one
+    # expires on its own [IMPL].
+    let t = st.issueTicket(r).valueOr:
+      st.diagnose("no ticket was issued for route " & r.id & ": " & error)
+      q.reply.answerError(ecModule, "a route ticket cannot be issued")
+      return
+    answer = rec.live(t.path, t.ticket)
+  let bytes = encode(LogosNSRuntimeControlRenewRouteResponse(route: answer)).valueOr:
     q.reply.answerError(ecModule, "the response cannot be encoded")
     return
-  st.keys.retain(x.id, req.request_key, op, q.rc.request, bytes)
+  let kept = encode(LogosNSRuntimeControlRenewRouteResponse(route: rec)).valueOr:
+    q.reply.answerError(ecModule, "the response cannot be encoded")
+    return
+  st.keys.retain(x.id, req.request_key, op, q.rc.request, kept)
   q.reply.answer(Reply(bytes: bytes))
 
 proc closeRoute(st: State, q: Request, x: Inst) =
@@ -6189,6 +6365,11 @@ proc materialize(st: State, q: Request) =
       ecVersionMismatch, "the expected contract root is not the route's contract"
     )
     return
+  if r.mode == rmLocalTransport:
+    # [plan §7.1] Step 4b-2a: the consumer side of a transported route is
+    # built in 4b-2b.
+    q.reply.answerError(ecModule, "local transport handles are not built yet")
+    return
   r.pins.add(Pin(handle: q.handle, attempt: q.attempt))
   q.reply.answer(Reply())
 
@@ -7379,6 +7560,198 @@ proc settle(st: State) =
       st.finishShutdown()
   st.checkBootstrap()
 
+proc hello(st: State, ev: IoEvent) =
+  ## [SPEC TRANSPORT §3.1, §8.1; plan §2.5] `SessionAuthority.hello`: the
+  ## Hello checks against the endpoint, then [Rev R9 (e)] the state behind
+  ## the binding, then the atomic redemption. The state checks should never
+  ## fail, since every route end revokes its tickets first; a failure is
+  ## NOT_AUTHORISED (TRANSPORT l.1013-1014) and consumes nothing.
+  let e = st.sv.endpoints.getOrDefault(ev.helloEndpoint)
+  if e.isNil:
+    st.sv.refused(
+      ev.conn,
+      HelloFailure(
+        code: ecNotAuthorised, reason: HelloReason.hrTicket, msg: NotAuthorisedMessage
+      ),
+    )
+    return
+  var attempt = ""
+  let check: HelloCheck = proc(b: RouteBinding): Result[void, HelloFailure] =
+    let r = st.route(b.route)
+    var ok =
+      r != nil and r.state == rtReady and r.mode == rmLocalTransport and
+      r.endpoint == Opt.some(e.id)
+    if ok:
+      let p = st.instances.getOrDefault(r.providerInstance)
+      ok = p != nil and p.state == msReady and p.id & "/" & p.current == e.realization
+    if ok:
+      let x = st.instances.getOrDefault(r.consumer)
+      ok =
+        x != nil and x.current == r.consumerAttempt and x.state in {msLoaded, msReady}
+    if not ok:
+      st.diagnose(
+        "a Hello with a live ticket for route " & b.route &
+          " failed the Runtime's state checks"
+      )
+      return err(
+        HelloFailure(
+          code: ecNotAuthorised, reason: HelloReason.hrState, msg: NotAuthorisedMessage
+        )
+      )
+    attempt = r.consumerAttempt
+    ok()
+  let est = acceptHello(e.callee, st.tickets, ev.frame, st.monoNow, st.sv.limits, check)
+  if est.isErr:
+    st.sv.refused(ev.conn, est.error)
+    return
+  let r = st.route(est.get.binding.route)
+  discard st.sv.admitted(ev.conn, e, est.get, attempt)
+  r.sessions.add(ev.conn)
+
+proc schemaBlob(st: State, r: Route): ptr SchemaBlob =
+  ## [plan §2.5] The provider's construction input for the route's selected
+  ## contract (its validated surface), for a served invocation's checks.
+  let p = st.instances.getOrDefault(r.providerInstance)
+  let schema =
+    if p.isNil:
+      newSeq[byte]()
+    else:
+      p.schemas.getOrDefault(r.selected.root)
+  newBlob(
+    r.selected.root,
+    cast[ptr UncheckedArray[uint8]](if schema.len > 0:
+      unsafeAddr schema[0]
+    else:
+      nil),
+    schema.len,
+    st.shared.payloadDepth,
+  )
+
+proc servedDispatch(st: State, ev: IoEvent) =
+  ## [plan §2.5] One served invocation per dispatched Request, admitted and
+  ## run on a call worker as a direct asynchronous call is (`asynccall.nim`).
+  let s = st.sv.session(ev.conn)
+  let r = (if s.isNil: nil else: st.route(s.route))
+  if s.isNil or r.isNil or s.ended:
+    st.sv.respondFailure(ev.conn, ev.requestId, ecNotReady)
+    return
+  let c = newSessionCall(
+    st.shared,
+    fixed(s.consumer),
+    fixed(s.consumerAttempt),
+    fixed(s.route),
+    s.generation,
+    st.schemaBlob(r),
+    ev.methodName,
+    ev.params,
+    ev.conn,
+    ev.requestId,
+  )
+  let a = AsyncRec(
+    call: c,
+    consumer: s.consumer,
+    route: s.route,
+    session: true,
+    conn: ev.conn,
+    requestId: ev.requestId,
+  )
+  st.asyncCalls[c] = a
+  inc r.pending
+  s.addCall(ev.requestId, c)
+  st.dispatchCall(a)
+
+proc servedStop(st: State, conn: ConnId, id: uint64) =
+  ## [SPEC TRANSPORT l.869-871, l.887-889] The session committed CANCELLED:
+  ## the served invocation is cancelled and answers nothing more.
+  let s = st.sv.session(conn)
+  if s.isNil:
+    return
+  let c = s.calls.getOrDefault(id)
+  let a = st.asyncCalls.getOrDefault(c)
+  if a.isNil:
+    return
+  markSent(asyncOf(c))
+  st.cancelInvocation(a)
+  st.endCall(a, failure(ecCancelled, "the call was cancelled"), okCancelled)
+
+proc servedClosed(st: State, conn: ConnId) =
+  ## [plan §2.5] `SessionAuthority.sessionEnded`: each served invocation still
+  ## listed is cancelled and answers nothing; its work leaves the in-flight
+  ## count as it ends, and its worker writes its record (CA l.1193). The
+  ## route stays as it is (RUNTIME l.3475).
+  let s = st.sv.closed(conn)
+  if s.isNil:
+    return
+  for c in s.calls.values:
+    let a = st.asyncCalls.getOrDefault(c)
+    if a.isNil:
+      continue
+    markSent(asyncOf(c))
+    st.cancelInvocation(a)
+    st.endCall(a, failure(ecCancelled, "the session closed"), okCancelled)
+  let r = st.routes.getOrDefault(s.route)
+  if r != nil:
+    let i = r.sessions.find(conn)
+    if i >= 0:
+      r.sessions.del(i)
+    st.settle(r)
+
+proc endpointFailed(st: State, id: EndpointId, why: string) =
+  ## [SPEC RUNTIME l.2516; plan §2.5] The I/O thread could not serve the
+  ## endpoint: every transported route to it fails with `transport-error`.
+  let e = st.sv.serveFailed(id)
+  if e.isNil:
+    return
+  st.diagnose("the endpoint of " & e.provider & " cannot be served: " & why)
+  for r in st.routes.values:
+    if not r.isTerminal and r.endpoint == Opt.some(id):
+      st.endRoute(r, rtFailed, Opt.some(rfTransportError))
+
+proc ioEvent(st: State, ev: sink IoEvent) =
+  ## [I90; plan §2.1] An event of the transport I/O thread. Accepted
+  ## connections are the provider half's; outbound ones are links (4b-2b).
+  case ev.kind
+  of IoEventKind.evListening:
+    st.sv.listening(ev.listening)
+  of IoEventKind.evServeFailed:
+    st.endpointFailed(ev.failedEndpoint, ev.serveError)
+  of IoEventKind.evHello:
+    st.hello(ev)
+  of IoEventKind.evEstablished:
+    st.sv.established(ev.conn)
+  of IoEventKind.evDispatch:
+    st.servedDispatch(ev)
+  of IoEventKind.evStop:
+    st.servedStop(ev.conn, ev.stopId)
+  of IoEventKind.evClosed:
+    if isServed(ev.conn):
+      st.servedClosed(ev.conn)
+  of IoEventKind.evSubscribe:
+    # [plan §7.1] Provider-side subscriptions are step 4b-2c's.
+    discard st.shared.tport.submitOwner(
+      IoCommand(
+        conn: ev.conn,
+        kind: IoCommandKind.cmdSubscriptionResult,
+        subId: ev.subscribeId,
+        subFailure: Opt.some(
+          InvocationFailure(
+            code: ecModule,
+            message: Opt.some("subscriptions over local transport are not built yet"),
+          )
+        ),
+      )
+    )
+  of IoEventKind.evUnsubscribe:
+    discard st.shared.tport.submitOwner(
+      IoCommand(
+        conn: ev.conn, kind: IoCommandKind.cmdSubscriptionResult, subId: ev.subscribeId
+      )
+    )
+  of IoEventKind.evLocalFailure:
+    st.diagnose("transport: " & ev.localMsg)
+  else:
+    discard
+
 proc handle(st: State, m: sink Msg) =
   case m.kind
   of mkRequest:
@@ -7395,7 +7768,7 @@ proc handle(st: State, m: sink Msg) =
     dec st.busy
     st.jobClock = getMonoTime()
   of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle, mkEvaluated,
-      mkRcHandled:
+      mkRcHandled, mkIo:
     discard
   case m.kind
   of mkBound:
@@ -7444,9 +7817,63 @@ proc handle(st: State, m: sink Msg) =
     st.applied(m.job, m.res)
   of mkLoaderReply:
     st.loaderReplied(m.job, move m.loaderReply)
+  of mkIo:
+    st.ioEvent(move m.io)
   of mkRequest, mkJobDone:
     discard
   st.settle()
+
+proc sessionExpired(st: State, s: Session) =
+  ## [Rev R1; TRN-0317; TRANSPORT l.929-930] A session ends with the decision
+  ## it was bound to, also after its route was renewed: its in-flight served
+  ## invocations end NOT_AUTHORISED and it terminates; the route stays as it
+  ## is, and a later session gets the renewed decision.
+  var calls: seq[CallRef] # ending one may drop it from the session
+  for c in s.calls.values:
+    calls.add(c)
+  for c in calls:
+    let a = st.asyncCalls.getOrDefault(c)
+    if a.isNil:
+      continue
+    if a.ticket != nil:
+      withLock a.ticket.lock:
+        a.ticket.endCode = ord(ecNotAuthorised)
+      a.ticket.cancelled.store(true)
+    st.cancelInvocation(a)
+    st.endCall(a, revokedResult(), okEnded)
+  for c in st.sv.terminate(s):
+    markSent(asyncOf(c))
+
+proc checkTransported(st: State, now: MonoTime) =
+  ## [Rev R17] Expired tickets are deleted (TRANSPORT l.963, l.1062); sessions
+  ## past their decision terminate; draining sessions past their deadline
+  ## close.
+  let mono = st.monoNow
+  st.tickets.sweep(mono)
+  var due: seq[Session]
+  for s in st.sv.sessions.values:
+    if not s.ended and s.endsAt.isSome and mono >= s.endsAt.get:
+      due.add(s)
+  for s in due:
+    st.sessionExpired(s)
+  st.sv.checkDrains(now)
+
+proc nextTransported(st: State): Opt[MonoTime] =
+  ## The next of those, on the real monotonic clock.
+  var t = st.sv.nextDrain()
+  template monoAt(ns: int64): MonoTime =
+    getMonoTime() + initDuration(nanoseconds = max(ns - st.monoNow, 0))
+
+  var first = st.tickets.nextExpiry()
+  for s in st.sv.sessions.values:
+    if not s.ended and s.endsAt.isSome:
+      if first.isNone or s.endsAt.get < first.get:
+        first = s.endsAt
+  if first.isSome:
+    let d = monoAt(first.get)
+    if t.isNone or d < t.get:
+      t = Opt.some(d)
+  t
 
 proc checkDeadlines(st: State) =
   var now = getMonoTime()
@@ -7457,6 +7884,7 @@ proc checkDeadlines(st: State) =
   st.checkStarvation(now)
   st.snapshots.reclaim(now)
   st.expireRoutes()
+  st.checkTransported(now)
   st.checkExecutions()
   for a in st.records:
     if not a.terminal and a.deadline.isSome and now >= a.deadline.get:
@@ -7567,6 +7995,9 @@ proc nextDeadline(st: State): Opt[MonoTime] =
   let x = st.nextExecution()
   if x.isSome:
     consider(x.get)
+  let tr = st.nextTransported()
+  if tr.isSome:
+    consider(tr.get)
   t
 
 # Opening ------------------------------------------------------------------------
@@ -7680,6 +8111,43 @@ proc load(st: State): Opt[EngineError] =
     fail(ecModule, NotPersisted & ": " & error)
   Opt.none(EngineError)
 
+proc ioSink(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].} =
+  ## [I90; plan §2.1] Every event of the transport I/O thread goes to the
+  ## Runtime thread's inbox, in order; never blocks. Dropped once the port
+  ## closes (`freeEngine`).
+  let s = cast[ptr Shared](ctx)
+  if not s.tport.closing:
+    s.post(Msg(kind: mkIo, io: ev))
+
+func endpointBase(cfg: EngineConfig): string =
+  ## [C36] `runtime.endpoint_dir`, by default `<work_dir>/endpoints`.
+  if cfg.endpointDir.len > 0:
+    cfg.endpointDir
+  else:
+    cfg.workDir / "endpoints"
+
+proc startTransportFor(s: ptr Shared, cfg: EngineConfig): Opt[EngineError] =
+  ## [I90; plan §2.3] On the Runtime thread at open, when some routing rule
+  ## selects local transport: the endpoint directory (made 0700 when missing,
+  ## and it must pass the endpoint base check), then the I/O thread. A failure
+  ## fails the open.
+  let base = endpointBase(cfg)
+  try:
+    if not dirExists(base):
+      createDir(base)
+      setFilePermissions(base, {fpUserRead, fpUserWrite, fpUserExec})
+  except OSError, IOError:
+    return Opt.some(
+      engineError(
+        ecModule, "the endpoint directory cannot be made: " & getCurrentExceptionMsg()
+      )
+    )
+  checkEndpointBase(base).isOkOr:
+    return Opt.some(engineError(ecModule, "the endpoint directory: " & error.msg))
+  s.tport.ensureStarted(ioSink, s).isOkOr:
+    return Opt.some(engineError(ecModule, "the transport cannot start: " & error))
+  Opt.none(EngineError)
+
 proc runtimeLoop(s: ptr Shared) =
   var first: Msg
   try:
@@ -7706,6 +8174,7 @@ proc runtimeLoop(s: ptr Shared) =
     budget: (if cfg.revisionBudget == 0: DefaultRevisionBudget else: cfg.revisionBudget),
     limits: cfg.limits.effective,
     snapshots: initSnapshots(cfg.limits.effective),
+    sv: newServed(s.tport, endpointBase(cfg)),
   )
   for reg in cfg.statics:
     if reg.binding == LoaderBindingId or reg.module == LoaderModuleName:
@@ -7721,6 +8190,12 @@ proc runtimeLoop(s: ptr Shared) =
           )
         )
       )
+      s.finished = true
+      return
+  if anyTransported(cfg.routing):
+    let failed = startTransportFor(s, cfg)
+    if failed.isSome:
+      first.request.reply.answer(Reply(error: failed))
       s.finished = true
       return
   let failed = st.load()
@@ -7789,17 +8264,23 @@ proc runtimeLoop(s: ptr Shared) =
   st.releaseConfigs()
   st.unwire()
   st.store.close()
+  st.sv.removeAll() # [plan §2.9] what is still present
   s.finished = true
 
 proc runtimeMain(s: ptr Shared) {.thread.} =
   markRuntimeThread()
   runtimeLoop(s)
+  releaseOwner() # [I90] the transport's owner thread is leaving
   releasePerThread() # after the loop's locals are gone
 
 # The engine handle ------------------------------------------------------------------
 
 proc freeEngine(e: Engine) =
-  ## Every thread has left; nothing sends to any channel or rings the bell.
+  ## Every thread but the transport I/O thread has left. [I90; plan §2.9] That
+  ## one stops first, once no port call is inside; the sink drops what it
+  ## reports after that, so nothing then sends to any channel or rings the bell.
+  closeTransport(e.tport)
+  freeTransportPorts(e.tport)
   e.inbox.close()
   e.jobs.close()
   e.calls.close()
@@ -7851,7 +8332,16 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
         "the payload depth is outside " & $MinMaxDepth & ".." & $DefaultMaxDepth,
       )
     )
+  # [IMPL-DECISION G254; I90] Rules built in code get the decode checks.
+  checkRules(cfg.routing, unixStream).isOkOr:
+    return err(engineError(ecInvalidParams, "routing: " & error))
+  var tcfg = cfg.transport.get(defaultTransportConfig())
+  tcfg.maxPayloadDepth = depth # [G241] one payload depth for every decoder
+  tcfg.terminationDrain = 0 # [plan §2.8] the Runtime answers before terminating
+  let tp = newTransportPorts(tcfg).valueOr:
+    return err(engineError(ecInvalidParams, "transport: " & error))
   let e = createShared(Shared)
+  e.tport = tp
   e.audit = newAuditLog(cfg.callRecords)
   e.clock = cfg.clock
   e.payloadDepth = depth

@@ -58,6 +58,9 @@ type
     hrRedeem ## the ticket was consumed concurrently
     hrPeer ## the peer sent a well-formed ProtocolError: close, no reply
     hrSend ## this side's Hello does not fit the peer's frame maximum (§2.1)
+    hrState
+      ## [E4; DECISIONS I90] the owner's current-state check refused the
+      ## binding before redemption (route, realization, consumer)
 
   HelloFailure* = object
     code*: ErrorCode
@@ -69,11 +72,16 @@ type
     response*: seq[byte] ## the encoded Hello response to send
     binding*: RouteBinding ## the redeemed route constraints
 
+  HelloCheck* = proc(b: RouteBinding): Result[void, HelloFailure] {.gcsafe, raises: [].}
+    ## [E4; DECISIONS I90] The owner's checks of the current state behind a
+    ## valid binding, run after every Hello check and before redemption, so a
+    ## refusal consumes nothing (TRANSPORT l.945-946).
+
 const NotAuthorisedMessage* = "not authorised"
   ## [SPEC TRANSPORT §8.1] The one diagnostic for every NOT_AUTHORISED Hello
   ## outcome: it does not reveal which condition occurred.
 
-func failure(code: ErrorCode, reason: HelloReason, msg: string): HelloFailure =
+func failure*(code: ErrorCode, reason: HelloReason, msg: string): HelloFailure =
   HelloFailure(code: code, reason: reason, msg: msg)
 
 func helloFieldCode*(field: string): ErrorCode =
@@ -135,10 +143,11 @@ proc acceptHello*(
     frame: openArray[byte],
     now: Nanos,
     limits = defaultLimits(),
+    check: HelloCheck = nil,
 ): Result[Established, HelloFailure] =
   ## [SPEC TRANSPORT §3.1, §8.1, §8.1.1] The callee's Hello checks, in order:
-  ## module, token (validated without consuming), schema, then the atomic
-  ## redemption. A failure sends ProtocolError with `code` and closes; no
+  ## module, token (validated without consuming), schema, the owner's `check`
+  ## of the current state (E4), then the atomic redemption. A failure sends ProtocolError with `code` and closes; no
   ## failure consumes a live ticket. Before the Hello, only a Hello or a
   ## well-formed ProtocolError is accepted (§2.3): any other message fails with
   ## INVALID_PARAMS, and a ProtocolError closes the connection with no reply.
@@ -166,6 +175,8 @@ proc acceptHello*(
         ecVersionMismatch, hrSchema, "the Hello schema is not the selected contract"
       )
     )
+  if check != nil:
+    ?check(b)
   # [SPEC TRANSPORT §8.1] The response never echoes the ticket; this profile
   # defines no response material, so the token is empty. It is encoded, and
   # checked to fit (§2.1), before the ticket is redeemed; it always fits (a

@@ -76,7 +76,7 @@ func charge(cmd: IoCommand): int =
   case cmd.kind
   of cmdRespond:
     if cmd.outcome.ok: cmd.outcome.result.len else: 0
-  of cmdPublish, cmdPublishScoped:
+  of cmdPublish, cmdPublishScoped, cmdPublishConn:
     cmd.data.len
   else:
     0
@@ -141,6 +141,12 @@ when unixStream:
     of cmdPublishScoped:
       io.publishScoped(c, cmd)
       io.uncharge(charge(cmd))
+    of cmdPublishConn:
+      io.publishConn(c, cmd)
+      io.uncharge(charge(cmd))
+    of cmdIntrospect:
+      if not z.isNil:
+        io.introspect(z, cmd.introspectId)
     of cmdTerminate:
       if not c.isNil:
         io.terminate(c)
@@ -374,7 +380,9 @@ proc reserveOutput(lp: Loop, n: int): bool =
     if lp.pendingOut.compareExchange(cur, cur + n):
       return true
 
-proc trySubmit(lp: Loop, cmd: var IoCommand): SubmitResult =
+proc trySubmit*(lp: Loop, cmd: var IoCommand): SubmitResult =
+  ## `submit` that takes `cmd` only when it is queued: a busy command stays
+  ## with the caller, to be offered again without a copy.
   if cmd.kind == cmdShutdown:
     return sbStopped
   discard lp.users.fetchAdd(1)

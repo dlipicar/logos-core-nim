@@ -20,29 +20,32 @@ default = "claimed"
 # "Appendix A. Implementation Notes (Informative)", l.4092.
 "App A" = "informative"
 # Local transport mode, a permission (l.49): the hosted process-local boundary (§4.2.1) and
-# provider-side local Transport scheduling (§6.2) come with the Module Host and 10b.
+# provider-side local Transport scheduling (§6.2) come with the Module Host (step 4b-3). The
+# Runtime-served endpoint of a direct provider (step 4b-2, DECISIONS I90, G257) claims the §6.2
+# units it builds below.
 "§4.2.1" = "deferred:tier-4b"
 "§6.2" = "deferred:tier-4b"
 # A MAY convenience mode not provided (l.1094); l.1122 steers multi-instance code to handles.
 "§5.2.1" = "out-of-scope:a MAY convenience mode not provided (singleton direct calls, l.1094)"
 
 [units]
-# Hosted and transported paths (local transport mode, l.49): the Module Host and 10b.
+# Hosted and transported paths (local transport mode, l.49): the consumer's transported handle
+# (step 4b-2b, 4b-2c) and the Module Host (4b-3).
 "RUN-0007" = "deferred:tier-4b"
 "RUN-0008" = "deferred:tier-4b"
 "RUN-0014" = "deferred:tier-4b"
-"RUN-0045" = "deferred:tier-4b"
+# Remote only (fable-scope §7): `connect_remote` (l.234-241) and the rule that a local route never
+# crosses Runtimes (TRANSPORT l.1136); with the remote profiles.
+"RUN-0045" = "deferred:tier-5"
 "RUN-0192" = "deferred:tier-4b"
 "RUN-0200" = "deferred:tier-4b"
 "RUN-0234" = "deferred:tier-4b"
 "RUN-0246" = "deferred:tier-4b"
 "RUN-0284" = "deferred:tier-4b"
-"RUN-0501" = "deferred:tier-4b"
-"RUN-0541" = "deferred:tier-4b"
-"RUN-0543" = "deferred:tier-4b"
-"RUN-0544" = "deferred:tier-4b"
-"RUN-0552" = "deferred:tier-4b"
-"RUN-0623" = "deferred:tier-4b"
+# RUN-0501 (l.2741), RUN-0541, RUN-0543, RUN-0544 and RUN-0623 are claimed with step 4b-2a
+# (DECISIONS I90). RUN-0541: a replayed establish or renew answer carries no `invocation`, so its
+# retained bytes hold no ticket (the NA-04 interim, G255); the consumer renews.
+"RUN-0552" = "deferred:tier-5"
 "RUN-0800" = "deferred:tier-4b"
 "RUN-0801" = "deferred:tier-4b"
 "RUN-0802" = "deferred:tier-4b"
@@ -51,6 +54,13 @@ default = "claimed"
 "RUN-0805" = "deferred:tier-4b"
 "RUN-0806" = "deferred:tier-4b"
 "RUN-0832" = "deferred:tier-4b"
+# §6.2 units the Runtime-served endpoint builds (step 4b-2a, G257): scheduling on the engine's
+# call workers, checks before any ordinary message, independent dispatches, correlation. RUN-0231
+# and RUN-0815 (the hosted context) stay with the section for 4b-3.
+"RUN-0220" = "claimed"
+"RUN-0226" = "claimed"
+"RUN-0229" = "claimed"
+"RUN-0230" = "claimed"
 # Package-backed selection: the Package Manager handoff (Tier 4b).
 "RUN-0844" = "deferred:tier-4b"
 "RUN-0995" = "deferred:tier-4b"

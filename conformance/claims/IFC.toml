@@ -15,7 +15,8 @@ default = "claimed"
 [sections]
 "Abstract" = "claimed"
 # The same interface across direct, local transport and remote transport realizations: testable
-# once a second boundary exists (10b and the Module Host), with RUNTIME's RUN-0007, RUN-0008.
+# with the consumer's transported handle (step 4b-2b), with RUNTIME's RUN-0007, RUN-0008. IFC-0010
+# (the remote transport bullet, l.58) waits for the remote profiles (units below).
 "Abstract/Execution-Boundary Invariance" = "deferred:tier-4b"
 "References" = "informative"
 "Copyright" = "informative"
@@ -53,6 +54,9 @@ default = "claimed"
 
 
 [units]
+# The remote transport mode bullet of the invariance list (l.58): with the remote profiles
+# (fable-scope §7; 4b-2 plan §1.3).
+"IFC-0010" = "deferred:tier-5"
 # §2.5: the event struct is claimed; subscription and handler rules are runtime (tier 4).
 "IFC-0172" = "claimed"
 "IFC-0173" = "claimed"

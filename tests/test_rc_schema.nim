@@ -462,3 +462,32 @@ suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
       check model.g.check("logos.runtime_control.route_failure", v).isOk
       check LogosNSRuntimeControlRouteFailure.fromChecked(v).code == code
     check model.g.check("logos.runtime_control.failure_code", cbor("x".repeat(65))).isErr
+
+  test "[RUN-0501] a unix-stream address carries path and none of host, port, server_name or alpn, under both rules and in the codec (§9.3 l.2741; I81)":
+    # [4b-2 plan §1.3] Each map of the contract is closed, so each forbidden key
+    # is refused by the unix-stream rule and by the address choice.
+    let rules = [
+      "logos.runtime_control.unix_stream_runtime_address",
+      "logos.runtime_control.runtime_address",
+    ]
+    let transport = (cbor("transport"), cbor("unix-stream"))
+    let path = (cbor("path"), cbor("/run/logos/x/logos_meter_module.sock"))
+    let good = cborMap(transport, path)
+    for rule in rules:
+      check model.g.check(rule, good).isOk
+    check LogosNSRuntimeControlUnixStreamRuntimeAddress.decode(encodeCbor(good)).isOk
+    check LogosNSRuntimeControlRuntimeAddress.decode(encodeCbor(good)).isOk
+    var bad = @[cborMap(transport)]
+    for extra in [
+      (cbor("host"), cbor("example.org")),
+      (cbor("port"), cbor(443'u64)),
+      (cbor("server_name"), cbor("example.org")),
+      (cbor("alpn"), cbor("h3")),
+    ]:
+      bad.add(cborMap(transport, path, extra))
+    for i, v in bad:
+      checkpoint "case " & $i
+      for rule in rules:
+        check model.g.check(rule, v).isErr
+      check LogosNSRuntimeControlUnixStreamRuntimeAddress.decode(encodeCbor(v)).isErr
+      check LogosNSRuntimeControlRuntimeAddress.decode(encodeCbor(v)).isErr

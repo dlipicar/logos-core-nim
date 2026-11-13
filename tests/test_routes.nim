@@ -1160,7 +1160,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     )
     let begun = getMonoTime()
     let r = rc.lifecycle("stop_module", "meter_module", Opt.some(m.instance))
-    check getMonoTime() - begun < initDuration(seconds = 5)
+    check getMonoTime() - begun < initDuration(seconds = 5 * Slow)
     check r.code == ecOk
     check LogosNSRuntimeControlStopModuleResponse.decode(r.response).tryGet.state.kind ==
       LogosNSRuntimeControlStateKind.Stopping

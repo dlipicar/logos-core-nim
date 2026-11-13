@@ -60,24 +60,20 @@ default = "claimed"
 "TRN-0117" = "out-of-scope:a requirement on contracts that promise state reconstruction"
 "TRN-0118" = "out-of-scope:a requirement on contracts that promise state reconstruction"
 "TRN-0308" = "out-of-scope:a requirement on contracts that promise state reconstruction"
-# §8.1: the binding carries the authority decision and its expiry, and the
-# session ends with it, but the decision, its expiry and revocation come from a
-# test owner until the Runtime supplies them (10b; step10a plan F3): tagged, not
-# claimed (fable-review §7.5).
-"TRN-0153" = "deferred:tier-4b"
-"TRN-0317" = "deferred:tier-4b"
+# §8.1: TRN-0153 and TRN-0317 (the session bound to the authority decision, ending with it) are
+# claimed with step 4b-2a, now that the Runtime supplies the decision, its expiry and revocation
+# (DECISIONS I90).
 "TRN-0165" = "out-of-scope:a requirement on other security profiles"
 # §8.2: built and tagged by the transport I/O tests; what triggers them is the
 # Module Host (TRN-0184, 0185, 0186: the listener transfer and readiness) or the
 # Runtime's route handling (TRN-0187: where the expected identity comes from;
-# TRN-0191: failing the route; TRN-0195: ticket delivery). Claimed with 10b and
-# the Module Host (Tier 4b).
+# TRN-0191: failing the route): the consumer's transported handle, step 4b-2b.
+# TRN-0195 (ticket delivery) is claimed with step 4b-2a (DECISIONS I90).
 "TRN-0184" = "deferred:tier-4b"
 "TRN-0185" = "deferred:tier-4b"
 "TRN-0186" = "deferred:tier-4b"
 "TRN-0187" = "deferred:tier-4b"
 "TRN-0191" = "deferred:tier-4b"
-"TRN-0195" = "deferred:tier-4b"
 # G58: no claim of protection from same-identity processes.
 "TRN-0346" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
 "TRN-0347" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"

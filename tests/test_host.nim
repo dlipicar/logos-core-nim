@@ -15,6 +15,8 @@ import
 from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
 from ../src/logos_core/crypto/slhdsa import Seed, keyPairFromSeeds
 from std/posix import Mode, chmod
+from ../src/logos_core/transport/io/sock import unixStream
+from ../src/logos_core/transport/framing import MinFrameLimit
 import ./support/[kitbuild, slowdown, tunerconfig, withoutloader]
 import ./kit/meter_impl
 
@@ -380,6 +382,118 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
         check parse(c).get.maxPayloadDepth == int(d)
       else:
         check parse(c).rejects("max_payload_depth must be 128 to 1024")
+
+  test "[RUN-0741] [IMPL-DECISION G254] routing: one rule per caller and callee, none for the Loader or as Runtime Control, local-transport only with unix-stream":
+    proc rule(
+        callee: string, direct = false, caller = Opt.none(string)
+    ): LcnAppRoutingRule =
+      LcnAppRoutingRule(
+        callee: callee,
+        caller: caller,
+        mode: LcnAppRoutingRuleModeChoice(
+          kind: (
+            if direct: LcnAppRoutingRuleModeChoiceKind.Direct
+            else: LcnAppRoutingRuleModeChoiceKind.Local_transport
+          )
+        ),
+      )
+
+    check parse(baseConfig()).get.routing.len == 0
+    var c = baseConfig()
+    c.routing = Opt.some(newSeq[LcnAppRoutingRule]())
+    check parse(c).rejects("routing is present but empty")
+    c.routing = Opt.some(
+      @[
+        rule("meter_module"),
+        rule("meter_module", direct = true, Opt.some("test_orchestrator")),
+      ]
+    )
+    when unixStream:
+      let h = parse(c).get
+      check h.routing.len == 2
+      # The rule naming the caller wins; then the rule for any caller; else direct.
+      check selectMode(
+        h.routing,
+        RouteEnds(consumerModule: "test_orchestrator", providerModule: "meter_module"),
+      ) == rmDirect
+      check selectMode(
+        h.routing, RouteEnds(consumerModule: "other", providerModule: "meter_module")
+      ) == rmLocalTransport
+      check selectMode(
+        h.routing, RouteEnds(consumerModule: "other", providerModule: "other_module")
+      ) == rmDirect
+      c.routing = Opt.some(@[rule(AuthorityModule)]) # an ordinary consumer's route
+      check parse(c).isOk
+    else:
+      check parse(c).rejects("local-transport is not supported on this platform")
+    c.routing = Opt.some(@[rule("meter_module", direct = true), rule("meter_module")])
+    check parse(c).rejects("two routing rules name the same caller and callee")
+    c.routing = Opt.some(@[rule(LoaderModuleName, direct = true)])
+    check parse(c).rejects("names the reserved Module Loader")
+    c.routing =
+      Opt.some(@[rule("meter_module", direct = true, Opt.some(LoaderModuleName))])
+    check parse(c).rejects("names the reserved Module Loader")
+    c.routing = Opt.some(@[rule("logos_runtime_control", direct = true)])
+    check parse(c).rejects("logos_runtime_control as a callee")
+    c.routing = Opt.some(@[rule("", direct = true)]) # the schema's .size (1..64)
+    check parse(c).isErr
+
+  test "[RUN-0741] [I90] transport: defaults, the one payload depth, frame_limit with what it raises, refusals naming the limit":
+    let d = parse(baseConfig()).get.transport
+    check int(d.frameLimit) == MinFrameLimit and int(d.peerFrameLimit) == MinFrameLimit
+    check d.maxPayloadDepth == DefaultMaxDepth
+    check d.terminationDrain == 0
+    var c = baseConfig()
+    c.runtime.max_payload_depth = Opt.some(200'u16)
+    check parse(c).get.transport.maxPayloadDepth == 200 # [G241]
+    c = baseConfig()
+    c.transport =
+      Opt.some(LcnAppTransport(frame_limit: Opt.some(uint32(MinFrameLimit) - 1)))
+    check parse(c).rejects("transport.frame_limit must be at least 16777216")
+    let big = 2'u32 * uint32(MinFrameLimit)
+    c.transport = Opt.some(LcnAppTransport(frame_limit: Opt.some(big)))
+    let t = parse(c).get.transport
+    check t.frameLimit == big and t.peerFrameLimit == big
+    check t.connOutputBytes >= 2 * int(big) and t.maxOutputBytes >= t.connOutputBytes
+    check t.maxInputBytes >= int(big) and t.maxHelloInputBytes >= int(big)
+    check t.callerUndeliveredBytes >= int(big)
+    c.transport = Opt.some(LcnAppTransport(hello_timeout_ms: Opt.some(0'u32)))
+    check parse(c).rejects("transport.hello_timeout_ms must be 1 to 3600000")
+    c.transport =
+      Opt.some(LcnAppTransport(write_stall_timeout_ms: Opt.some(3_600_001'u32)))
+    check parse(c).rejects("transport.write_stall_timeout_ms must be 1 to 3600000")
+    c.transport = Opt.some(LcnAppTransport(write_stall_timeout_ms: Opt.some(250'u32)))
+    check parse(c).get.transport.writeStallTimeout == 250_000_000
+    c.transport = Opt.some(LcnAppTransport(max_pending_output_bytes: Opt.some(0'u64)))
+    check parse(c).rejects("transport.max_pending_output_bytes is out of range")
+    c.transport = Opt.some(LcnAppTransport(conn_output_bytes: Opt.some(1024'u32)))
+    check parse(c).rejects("transport: connOutputBytes cannot hold a maximal frame")
+    c.transport =
+      Opt.some(LcnAppTransport(caller_undelivered_bytes: Opt.some(1024'u32)))
+    check parse(c).rejects("transport: callerUndeliveredBytes is below frameLimit")
+    c.transport = Opt.some(LcnAppTransport(max_inbound: Opt.some(0'u16)))
+    check parse(c).rejects("transport: ")
+    c.transport = Opt.some(LcnAppTransport(max_in_flight: Opt.some(0'u32)))
+    check parse(c).rejects("transport: ")
+    c.transport = Opt.some(
+      LcnAppTransport(
+        max_inbound: Opt.some(8'u16),
+        max_outbound: Opt.some(4'u16),
+        max_calls: Opt.some(16'u32),
+        max_in_flight: Opt.some(32'u32),
+      )
+    )
+    let u = parse(c).get.transport
+    check u.maxInbound == 8 and u.maxPendingHellos <= 8 and u.maxOutbound == 4
+    check u.maxCalls == 16 and u.maxInFlight == 32
+
+  test "[I90] [IMPL] endpoint_dir is an absolute path, <work_dir>/endpoints when absent":
+    check parse(baseConfig()).get.endpointDir == work / "w" / "endpoints"
+    var c = baseConfig()
+    c.runtime.endpoint_dir = Opt.some("relative/e")
+    check parse(c).rejects("endpoint_dir must be an absolute path")
+    c.runtime.endpoint_dir = Opt.some(work / "e")
+    check parse(c).get.endpointDir == work / "e"
 
   test "deadlines are 1 ms to 1 h and paths are absolute [IMPL]":
     var c = baseConfig()
@@ -1346,6 +1460,43 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
       check getFilePermissions(c.runtime.work_dir) ==
         {fpUserRead, fpUserWrite, fpUserExec}
     rt.finish()
+
+  test "[I90] [IMPL] with a local-transport rule, the endpoint directory is made private at start; an unsafe one fails start":
+    when unixStream:
+      let rule = LcnAppRoutingRule(
+        callee: "meter_module",
+        mode: LcnAppRoutingRuleModeChoice(
+          kind: LcnAppRoutingRuleModeChoiceKind.Local_transport
+        ),
+      )
+      var c = deployment()
+      c.routing = Opt.some(@[rule])
+      let rt = registered(c)
+      check runtimeStart(rt).ec == ecOk
+      let dir = c.runtime.work_dir / "endpoints"
+      check dirExists(dir)
+      check getFilePermissions(dir) == {fpUserRead, fpUserWrite, fpUserExec}
+      rt.finish()
+      # Without a rule, no endpoint directory is made.
+      let plain = deployment()
+      let rt2 = registered(plain)
+      check runtimeStart(rt2).ec == ecOk
+      check not dirExists(plain.runtime.work_dir / "endpoints")
+      rt2.finish()
+      # One that others can write to is refused: the start fails, nothing runs.
+      var u = deployment()
+      u.routing = Opt.some(@[rule])
+      let open = u.runtime.work_dir / "open"
+      createDir(open)
+      check chmod(cstring(open), Mode(0o777)) == 0
+      u.runtime.endpoint_dir = Opt.some(open)
+      let rt3 = registered(u)
+      let r = runtimeStart(rt3)
+      checkpoint r.text
+      check r.ec == ecModule and "the endpoint directory" in r.text
+      rt3.finish()
+    else:
+      skip()
 
 # Persistent Runtime state ---------------------------------------------------------------
 

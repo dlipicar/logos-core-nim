@@ -17,12 +17,15 @@ import ../hash/hashinput
 import ../iface/outcome
 import ../authority/facts
 import ./[authz, bell, callaudit, configcheck, loaderbinding, records, realizer, routes]
+import ./routing
+from ../transport/io/api import TransportConfig, IoEvent
+from ./tport import TransportPorts
 from ./sidetable import SideTable
 from ../loader/contract import LoaderInstanceId, LoaderModuleName, LoaderBindingId
 
 export
   authz, callaudit, clock, configcheck, facts, loaderbinding, records, realizer, routes,
-  outcome.ErrorCode, hashinput.Digest, LoaderInstanceId, LoaderModuleName,
+  routing, outcome.ErrorCode, hashinput.Digest, LoaderInstanceId, LoaderModuleName,
   LoaderBindingId
 
 const
@@ -390,6 +393,17 @@ type
       ## notice that it must end its process; nil: none. A C host learns it
       ## from `logos_runtime_wait_for_shutdown`.
     terminationData*: pointer ## passed to `onTerminationRequired`
+    routing*: seq[RoutingRule]
+      ## [IMPL-DECISION G254; I90] the routing-selection input; empty:
+      ## every route is direct (`routing.nim`)
+    transport*: Opt[TransportConfig]
+      ## [SPEC TRANSPORT §8.6; I90] the transport I/O thread's limits; none:
+      ## `defaultTransportConfig()`. Its payload depth is always
+      ## `maxPayloadDepth` (G241), and the I/O layer's `terminationDrain` stays
+      ## 0: a readiness end's drain is the Runtime's (§2.8 of the 4b-2 plan)
+    endpointDir*: string
+      ## [SPEC TRANSPORT §8.2; G58; I90] where the Runtime makes the endpoints
+      ## it serves; empty: `<workDir>/endpoints`
 
   # Messages ---------------------------------------------------------------------
   RequestKind* = enum
@@ -789,6 +803,7 @@ type
     mkRcHandled ## [G178] a Runtime Control event handler returned (`target`)
     mkApplied ## [I87] `_MODULE_apply_configuration` returned (`res`)
     mkLoaderReply ## [I89] a Module Loader call returned (`loaderReply`)
+    mkIo ## [I90] an event of the transport I/O thread (`io`)
 
   Msg* = object
     job*: int
@@ -816,6 +831,8 @@ type
       evaluated*: EvalResult
     of mkLoaderReply:
       loaderReply*: LoaderReply
+    of mkIo:
+      io*: IoEvent
 
   ReplySlot = object
     ## One reply channel, reused by one call after another [IMPL]. A sender
@@ -867,6 +884,9 @@ type
       ## [SPEC RUNTIME l.1657; plan §2.11 step 1] the Module Loader has
       ## failed: a queued Loader job is answered as an invocation failure
       ## without a call
+    tport*: TransportPorts
+      ## [I90] the port to the transport I/O thread (`tport.nim`); made at
+      ## open, started only when needed, closed after every worker has left
     when defined(lcnTestHooks):
       faults*: LoaderFaultBox ## [D27 revised; plan §2.12] the injected faults
 

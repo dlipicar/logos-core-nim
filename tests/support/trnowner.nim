@@ -39,6 +39,9 @@ type
     served*: Table[EndpointId, CalleeEndpoint]
     admit*: AdmitMode
     respond*: bool ## answer every dispatched Request with `answer`
+    introspect*: bool
+      ## [E3] answer every dispatched `logos.schema` with `cmdIntrospect`
+      ## (default); false: leave it to the test
     endWork*: bool ## with `respond`, the work ends with the Response
     answer*: CborValue ## the result map dispatched Requests get
     acceptSubs*: bool ## answer every evSubscribe and evUnsubscribe with success
@@ -96,6 +99,7 @@ proc newOwner*(config = fastConfig()): Owner =
     loop: loop.get,
     box: box,
     respond: true,
+    introspect: true,
     endWork: true,
     answer: cborMap((cbor("exists"), cbor(true))),
     acceptSubs: true,
@@ -157,7 +161,12 @@ proc handle(o: Owner, ev: IoEvent) =
     of amAccept:
       o.admitHello(ev)
   of evDispatch:
-    if o.respond:
+    if ev.introspection:
+      if o.introspect:
+        o.send(
+          IoCommand(conn: ev.conn, kind: cmdIntrospect, introspectId: ev.requestId)
+        )
+    elif o.respond:
       o.send(
         IoCommand(
           conn: ev.conn,
@@ -395,12 +404,29 @@ proc publishScoped*(
     event: string,
     data: CborValue,
     tooLarge = tlReport,
+    tag = 0'u64,
 ) =
+  ## Answered by an `evPublishResult` carrying `tag` (E2).
   o.send(
     IoCommand(
       conn: conn,
       kind: cmdPublishScoped,
       pubRequest: request,
+      pubTag: tag,
+      event: event,
+      data: encodeCbor(data),
+      tooLarge: tooLarge,
+    )
+  )
+
+proc publishConn*(
+    o: Owner, conn: ConnId, event: string, data: CborValue, tooLarge = tlReport
+) =
+  ## An ordinary Event to one connection's subscriptions (E1).
+  o.send(
+    IoCommand(
+      conn: conn,
+      kind: cmdPublishConn,
       event: event,
       data: encodeCbor(data),
       tooLarge: tooLarge,

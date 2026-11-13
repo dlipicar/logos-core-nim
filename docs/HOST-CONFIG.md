@@ -53,6 +53,8 @@ lcn.app_config = {
   ? ordering: [* lcn.app_ordering],
   ? declarations: [* lcn.app_declaration],
   ? call_audit: lcn.app_call_audit,
+  ? routing: [* lcn.app_routing_rule],
+  ? transport: lcn.app_transport,
 }
 
 lcn.app_runtime = {
@@ -65,6 +67,7 @@ lcn.app_runtime = {
   ? shutdown_grace_ms: uint32,
   ? apply_deadline_ms: uint32,
   ? max_payload_depth: uint16,
+  ? endpoint_dir: lcn.app_path,
 }
 
 lcn.app_path = tstr .size (1..4096)
@@ -95,6 +98,34 @@ lcn.app_call_audit = {
 lcn.app_evidence_key = {
   kid: bstr .size (1..128),
   secret_key_file: lcn.app_path,
+}
+
+; Routing selection (RUNTIME l.901-911; DECISIONS I90, G254): a route
+; from a module named caller (absent: any) to the module named callee is
+; direct or uses local transport. The rule naming the caller wins; with no
+; rule a route is direct. No rule names logos_module_loader, no callee is
+; logos_runtime_control, and local-transport is refused where the platform
+; has no unix-stream profile (TRANSPORT §8.2.1).
+lcn.app_routing_rule = {
+  ? caller: tstr .size (1..64),
+  callee: tstr .size (1..64),
+  mode: "direct" / "local-transport",
+}
+
+; The transport I/O thread's limits (TRANSPORT §5.2, §8.6; DECISIONS I90);
+; an absent field keeps its default. docs/HOST-CONFIG.md lists every limit.
+; frame_limit is at least 16 MiB (TRANSPORT l.380).
+lcn.app_transport = {
+  ? frame_limit: uint32,
+  ? hello_timeout_ms: uint32,
+  ? write_stall_timeout_ms: uint32,
+  ? max_pending_output_bytes: uint64,
+  ? conn_output_bytes: uint32,
+  ? caller_undelivered_bytes: uint32,
+  ? max_inbound: uint16,
+  ? max_outbound: uint16,
+  ? max_calls: uint32,
+  ? max_in_flight: uint32,
 }
 
 ; logos.runtime.module_instance_id (RUNTIME §9.2)
@@ -187,6 +218,7 @@ Maps are closed: an unknown key anywhere is rejected. An array that is present m
 | `shutdown_grace_ms` | How long shutdown waits for in-flight work before cleanup is left unresolved (RUNTIME §10.2). Default 10000. |
 | `apply_deadline_ms` | How long a live configuration application (`apply_configuration`) may take, from its acceptance to the module's answer (CONFIG §8; DECISIONS G61, I87). When it passes, the outcome is unknown and the instance enters `error` with `configuration-indeterminate`, so the default is long: 120000. |
 | `max_payload_depth` | The Runtime's one payload depth limit (INTERFACE §4.5.1 l.3150; DECISIONS G241, I88): how many arrays and maps may nest on any path of a payload, counted from the payload's own root (the root map is depth 1; byte-string contents are not traversed). It applies to every payload the Runtime decodes or validates: route call requests and responses, asynchronous calls, events, Runtime Control requests and responses, and configuration values (defaults, provisioned and updated). A payload one level deeper is refused before it is dispatched, accepted or delivered, with `LOGOS_ERR_INVALID_PARAMS` and no detail for a request (a provider's too-deep response or event is a `LOGOS_ERR_MODULE` failure or a dropped publication). 128 to 1024; default 1024. A transported route (Tier 4b) gives its frame decoder this limit plus the envelope's own levels. Modules built with lcn-gen's kit check their own inputs at 1024. |
+| `endpoint_dir` | Absolute path of the directory under which the Runtime creates the endpoints of transported routes (TRANSPORT §8.2; DECISIONS G58, I90): one fresh `<8 hex>` directory of mode 0700 per served provider, holding the socket `logos_<module>.sock`. Default `<work_dir>/endpoints`. Used only when a `routing` rule selects `local-transport`: then it is created with mode 0700 at `start` if missing, and it must be a real directory of the Runtime's user that no one else can write to, or a root-owned sticky directory such as `/tmp`. Keep it short: a socket path longer than the platform's `sun_path` (104 bytes on macOS, 108 on Linux) cannot be created, and the route that needed it fails with `LOGOS_ERR_MODULE`. Directories a crashed Runtime left behind are not removed. |
 
 Each deadline is 1 to 3600000 milliseconds. Paths must be absolute, so their meaning does not depend
 on the host's working directory.
@@ -316,6 +348,59 @@ evidence names the same Runtime across starts.
   `call_audit.evidence` and restart. Containers already exported verify while a verifier keeps the
   old kid; revoking it there rejects all of them (CAP-0231).
 
+### `routing`
+
+Routing selection (RUNTIME §4.2 l.895-946; DECISIONS I90, G254): whether a route between two
+modules of this Runtime is direct or uses local transport. Each rule names a `callee` (the provider's
+module name), a `mode` (`direct` or `local-transport`), and optionally a `caller` (the consumer's module
+name; absent: any consumer). For a route, the rule naming both its consumer and its provider wins, then
+the rule for any consumer; with no matching rule the route is direct, as in every configuration without
+`routing`. The mode is fixed when the route is established: `renew_route` keeps it, and routes already
+established are never moved (RUNTIME l.940).
+
+- Two rules for the same `caller` and `callee` are refused, as is a rule naming the Module Loader
+  (`logos_module_loader`) as caller or callee (every route to the Loader is refused, G251) and a rule
+  whose callee is `logos_runtime_control`, which is not a provider.
+- A `local-transport` rule whose callee is `logos_capability_authority` is allowed: an ordinary
+  consumer's route to the authority is then served over a socket like any provider's. The Runtime's own
+  policy evaluations stay direct.
+- `local-transport` is refused on platforms without the `logos.local.unix-stream` profile (Windows,
+  TRANSPORT §8.2.1).
+- A transported route to a provider has the Runtime serve that provider at an endpoint under
+  `runtime.endpoint_dir`, created when the first such route to its realization is established; the
+  provider's code still runs in the Runtime's process (DECISIONS G257). The consumer's
+  `establish_route` and `renew_route` answers carry the route's `invocation` descriptor with a one-time
+  ticket; no other answer, list, event, record or diagnostic does. A replay of the same request key
+  returns the route without `invocation`: renew it for a new ticket (DECISIONS G255).
+- When such a route ends, its unused tickets die with it, and its sessions end by cause (DECISIONS
+  G260): a revocation or expiry answers each call in flight `NOT_AUTHORISED`; `close_route`, a
+  provider stop or shutdown lets calls in flight finish within `stop_deadline_ms` (or the shutdown
+  grace), then closes.
+- **Built so far (step 4b-2a).** Transported routes are established, renewed and served, but the
+  consumer side is not built yet: `materialize` of a transported route fails with `LOGOS_ERR_MODULE`
+  ("local transport handles are not built yet"). Use transported routes only for testing until 4b-2b.
+
+### `transport`
+
+The limits of the transport I/O thread (TRANSPORT §5.2, §8.6; DECISIONS I90), which runs only when a
+`routing` rule selects `local-transport`. Every field is optional; an absent one keeps its default.
+
+| Field | Meaning | Default |
+|---|---|---|
+| `frame_limit` | The largest frame this side accepts and the largest it assumes the peer accepts, in bytes; at least 16777216 (TRANSPORT l.380). Raising it raises the buffers below that must hold one maximal frame, unless they are given too. | 16777216 |
+| `hello_timeout_ms` | How long a whole Hello exchange may take (1 to 3600000). | 10000 |
+| `write_stall_timeout_ms` | How long a connection may have output pending with no byte written before it is closed (1 to 3600000). | 30000 |
+| `max_pending_output_bytes` | Response and Event payload bytes submitted by provider code and not yet written, across all connections: a publisher past it waits (TRANSPORT §5.2). | 67108864 |
+| `conn_output_bytes` | One connection's committed output, in bytes. | 2 × `frame_limit` + 65536 |
+| `caller_undelivered_bytes` | Per connection, Event bytes received and not yet delivered to the subscriber. | 33554432 |
+| `max_inbound` | Accepted connections, pending Hellos included. | 1024 |
+| `max_outbound` | Outbound connections. | 1024 |
+| `max_calls` | Per connection, calls a consumer may have outstanding. | 1024 |
+| `max_in_flight` | Per connection, Requests a provider may be executing. | 1024 |
+
+A value the I/O thread cannot run with is refused with `LOGOS_ERR_INVALID_PARAMS` and "transport: …"
+naming the limit. The payload depth is `runtime.max_payload_depth`; there is no separate one.
+
 ## Module configuration
 
 A module that takes configuration declares it (CONFIG; DECISIONS I87): in `configuration`, a schema
@@ -427,6 +512,13 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   module code is still running on a Runtime thread; otherwise it returns `LOGOS_ERR_NOT_READY` and
   the handle stays valid, so the host retries. After a `start` that failed, shutdown is requested
   and waited for first.
+- **SIGPIPE.** The transport code (chronos 4.4.1, `asyncengine.globalInit`) sets `SIGPIPE` to ignored,
+  process-wide, in its module initializer: `liblogos_runtime` runs it in its load-time constructor,
+  whether or not any route is ever transported, so every host that loads the library gets it. The
+  Runtime's own socket writes never raise `SIGPIPE` either way (`MSG_NOSIGNAL`, `SO_NOSIGPIPE`). A host
+  that relies on `SIGPIPE` for its own pipes restores its disposition after loading the library.
+- **Threads.** With a `local-transport` rule, the Runtime starts one more thread at `start`, the
+  transport I/O thread, and stops it at `destroy`. Without one, no such thread exists.
 - **Results.** A result's message and detail stay in the calling thread's storage until that
   thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
   is silent); `LOGOS_OK` carries neither.

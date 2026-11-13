@@ -16,6 +16,8 @@ lcn.app_config = {
   ? ordering: [* lcn.app_ordering],
   ? declarations: [* lcn.app_declaration],
   ? call_audit: lcn.app_call_audit,
+  ? routing: [* lcn.app_routing_rule],
+  ? transport: lcn.app_transport,
 }
 
 lcn.app_runtime = {
@@ -28,6 +30,7 @@ lcn.app_runtime = {
   ? shutdown_grace_ms: uint32,
   ? apply_deadline_ms: uint32,
   ? max_payload_depth: uint16,
+  ? endpoint_dir: lcn.app_path,
 }
 
 lcn.app_path = tstr .size (1..4096)
@@ -58,6 +61,34 @@ lcn.app_call_audit = {
 lcn.app_evidence_key = {
   kid: bstr .size (1..128),
   secret_key_file: lcn.app_path,
+}
+
+; Routing selection (RUNTIME l.901-911; DECISIONS I90, G254): a route
+; from a module named caller (absent: any) to the module named callee is
+; direct or uses local transport. The rule naming the caller wins; with no
+; rule a route is direct. No rule names logos_module_loader, no callee is
+; logos_runtime_control, and local-transport is refused where the platform
+; has no unix-stream profile (TRANSPORT §8.2.1).
+lcn.app_routing_rule = {
+  ? caller: tstr .size (1..64),
+  callee: tstr .size (1..64),
+  mode: "direct" / "local-transport",
+}
+
+; The transport I/O thread's limits (TRANSPORT §5.2, §8.6; DECISIONS I90);
+; an absent field keeps its default. docs/HOST-CONFIG.md lists every limit.
+; frame_limit is at least 16 MiB (TRANSPORT l.380).
+lcn.app_transport = {
+  ? frame_limit: uint32,
+  ? hello_timeout_ms: uint32,
+  ? write_stall_timeout_ms: uint32,
+  ? max_pending_output_bytes: uint64,
+  ? conn_output_bytes: uint32,
+  ? caller_undelivered_bytes: uint32,
+  ? max_inbound: uint16,
+  ? max_outbound: uint16,
+  ? max_calls: uint32,
+  ? max_in_flight: uint32,
 }
 
 ; logos.runtime.module_instance_id (RUNTIME §9.2)
