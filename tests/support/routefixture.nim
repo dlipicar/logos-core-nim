@@ -5,7 +5,9 @@
 ## Control as that module; a module whose initialization waits at a gate; the
 ## meter kit module as provider; and request and route-handle helpers. Module
 ## code runs on the engine's workers, so the test modules keep their state in
-## atomics.
+## atomics. Bounds that only limit a wait scale with `Slow`.
+
+import ./slowdown
 
 # The consumer module --------------------------------------------------------------
 
@@ -157,7 +159,7 @@ proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineCo
   inc engines
   result = defaultConfig(work / ("e" & $engines))
   result.policy = policy
-  result.stopDeadline = initDuration(milliseconds = 300)
+  result.stopDeadline = initDuration(milliseconds = 300 * Slow)
   result.statics = @[
     checkStaticRegistration("client", clientTable()).tryGet,
     checkStaticRegistration("slow", slowTable()).tryGet,
@@ -175,9 +177,13 @@ proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineCo
         )
       )
 
+var live: Engine ## the test's engine from `fixtureEngine` until `finish`
+
 proc fixtureEngine(cfg: EngineConfig): Engine =
-  ## A new engine; in the parity pass, with the authority bound.
+  ## A new engine, remembered so `leftover` can close it; in the parity pass,
+  ## with the authority bound.
   result = newEngine(cfg)
+  live = result
   when declared(caParity):
     if cfg.authority.isSome:
       resetFake()
@@ -209,7 +215,7 @@ proc meter(): ModuleRecord =
     primaryContract: Opt.some(meterRoot),
   )
 
-proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10): bool =
+proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10 * Slow): bool =
   let until = getMonoTime() + initDuration(seconds = seconds)
   while getMonoTime() < until:
     if cond():
@@ -239,11 +245,21 @@ proc stopping(e: Engine, instance: string, t: var Thread[(Engine, string)]): boo
   )
 
 proc finish(e: Engine) =
+  if live == e:
+    live = nil
   clientDestroyGate.store(false)
   slowGate.store(false)
   gate.store(false)
   e.shutdown()
-  check e.close()
+  check e.close(initDuration(seconds = 10 * Slow))
+
+proc leftover() =
+  ## [IMPL] For a suite's `teardown`: a test that ended before its `finish`,
+  ## such as one whose failed wait was followed by a defect, closes its engine
+  ## here. `close` joins every worker, so nothing of that engine, such as a
+  ## late completion callback, reaches the next test.
+  if live != nil:
+    live.finish()
 
 proc started(e: Engine, r: ModuleRecord, instance = ""): InstanceView =
   let v = e.create(r, instance).tryGet
