@@ -408,12 +408,7 @@
             let
               v = variant name;
             in
-            if v == null then
-              "orc-spec"
-            else if v == "refc" || v == "orc-release" then
-              "refc-release"
-            else
-              v;
+            if v == null then "orc-spec" else v;
         in
         {
           ciGroups = lib.mapAttrs (

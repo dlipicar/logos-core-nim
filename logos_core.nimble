@@ -37,12 +37,38 @@ requires "chronos == 4.4.1"
 
 # Tasks
 
-import std/[os, strutils]
+import std/[algorithm, os, strutils]
+
+# `LCN_SHARD=k/n` runs every n-th suite of the sorted list, starting at the k-th (1-based), so CI
+# can split one task across n jobs (.github/workflows/ci.yml). Unset, every suite runs.
+proc shardOf(spec: string): (int, int) =
+  if spec.len == 0:
+    return (1, 1)
+  let parts = spec.split('/')
+  var k, n = 0
+  if parts.len == 2:
+    try:
+      k = parseInt(parts[0])
+      n = parseInt(parts[1])
+    except ValueError:
+      discard
+  if n < 1 or k < 1 or k > n:
+    echo "LCN_SHARD must be k/n with 1 <= k <= n, got '" & spec & "'"
+    quit(QuitFailure)
+  (k, n)
 
 proc runSuites(flags, outDir: string) =
+  var suites: seq[string]
   for file in listFiles("tests"):
     let name = file.extractFilename
     if name.startsWith("test_") and name.endsWith(".nim"):
+      suites.add file
+  suites.sort()
+  let (k, n) = shardOf(getEnv("LCN_SHARD"))
+  if n > 1:
+    echo "Shard " & $k & "/" & $n & " of " & $suites.len & " suites"
+  for i, file in suites:
+    if i mod n == k - 1:
       exec "nim c -r " & flags & " --outdir:build/tests/" & outDir & " " & file
 
 task test, "Run every test suite under --mm:orc":
