@@ -151,9 +151,22 @@ moves it (4b-3):
 - **INTERFACE**: a cancelled or timed-out asynchronous call sends Cancel (IFC-0729); IFC-0480 and
   IFC-0948 move from inspection to tests.
 
-The parity suites `test_routes_lt`, `test_async_lt` and `test_routes_ca_lt` rerun the route and
-asynchronous-call suites with every route to the test providers over local transport. What a
-consumer sees differently, and why:
+Part 4b-2c builds events over local transport:
+
+- **RUNTIME**: `subscribe` through a transported handle returns `LOGOS_OK` only after the matching
+  successful `SubscriptionResult` (RUN-0192); handlers of transported subscriptions run on the event
+  workers in commitment order, one at a time per subscription (RUN-0234); an ordinary publication
+  sends each subscriber connection one Event for its own matching subscriptions (RUN-0246); a new
+  connection never inherits an old invocation's destination (RUN-0832). The activation and each
+  delivery are decided as on a direct route (G175); an oversized Event closes that subscriber's
+  connection (G165 (a)); a connection whose output overflows is closed and the publisher waits for
+  the shared output budget with no finite bound (G261, D3 (a); HOST-CONFIG).
+- **TRANSPORT**: the end of a route or a release discards queued Events and releases their
+  credits; no handler starts afterwards and none touches released state (TRN-0290).
+
+The parity suites `test_routes_lt`, `test_async_lt`, `test_routes_ca_lt`, `test_events_lt` and
+`test_events_ca_lt` rerun the route, asynchronous-call and event suites with every route to the test
+providers over local transport. What a consumer sees differently, and why:
 
 - A transported route's live `establish_route` or `renew_route` answer carries `invocation`; its
   replay does not (G255).
@@ -164,8 +177,14 @@ consumer sees differently, and why:
   Request through it, also those a direct caller made synchronously.
 - A call still running when its provider's stop deadline passes reaches its caller as
   TRANSPORT_ERROR (TRANSPORT l.543; G260), where a direct caller waits for its result.
-- Subscriptions through a transported handle are `MODULE_ERROR` until part 4b-2c; the four event
-  cases of `test_async_lt` are skipped until then.
+- A handler runs on an event worker once its Event arrives, after the publication returned, not on
+  the publishing thread before it returns (INTERFACE l.1961 against l.1975-1977 for a direct route).
+  The suites wait for deliveries; the cases about what a handler does inside the publication are
+  skipped (a nested provider entry on the publishing thread, a handler that closes the destination
+  of that publication, a publication still in its handler when its invocation is released).
+- An explicit `subscribe-event` deny at delivery skips that Event and keeps the subscription: the
+  provider side cannot end one subscription of a session (K40), where a direct route's subscription
+  ends (CA l.913-915).
 
 ## Properties not claimed
 

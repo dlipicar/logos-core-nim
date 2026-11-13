@@ -52,9 +52,8 @@ default = "claimed"
 
 [units]
 # §3.2, §3.4: the native binding of a transported route. TRN-0278 (connection loss ends the
-# handle's invocation path for its observer) is claimed with step 4b-2b; TRN-0290 (abandonment and
-# released application state) comes with the subscriptions of step 4b-2c.
-"TRN-0290" = "deferred:tier-4b"
+# handle's invocation path for its observer) is claimed with step 4b-2b, TRN-0290 (abandonment and
+# released application state) with the subscriptions of step 4b-2c.
 # Requirements on module contracts, not on the transport.
 "TRN-0098" = "out-of-scope:a requirement on module contracts that disclose partially"
 "TRN-0117" = "out-of-scope:a requirement on contracts that promise state reconstruction"

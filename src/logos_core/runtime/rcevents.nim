@@ -29,7 +29,7 @@ import results
 import ../abi/types
 import ../base/perthread
 import ../iface/outcome
-import ./[callside, plumbing]
+import ./[callside, events, plumbing]
 
 const
   RcPrefix = "logos.runtime_control."
@@ -227,6 +227,8 @@ proc rcWorkerLoop(e: Engine) =
       return
     of rjDrain:
       drain(e, rcSubOf(job.sub))
+    of rjLinkDrain:
+      linkDrain(e, job.sub)
 
 proc rcWorkerMain*(e: Engine) {.thread.} =
   ## A Runtime-owned thread: `wait_for_shutdown` from a handler is NOT_READY,

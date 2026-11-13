@@ -91,6 +91,9 @@ type
     ticket*: ptr CallTicket
     runtimeId*, consumer*, provider*, route*: FixedText
     generation*: uint64 ## the invocation path's generation (scoped events)
+    conn*, requestId*: uint64
+      ## [I90] a served invocation's session and Request: its scoped
+      ## publications go to that connection (`events.scopedPublish`); 0: none
     blob*: ptr SchemaBlob ## borrowed: the selected contract
     guarded*: bool
     glock*: Lock

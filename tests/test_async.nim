@@ -614,7 +614,6 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[RUN-0821] [RUN-0825] [RUN-0843] [IFC-0721] events an asynchronous call publishes in its scope reach the preparing handle's subscriptions":
-    eventsCase()
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -628,6 +627,11 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     var call = h.started(req(17), addr done[0])
     check done[0].finished
     check done[0].codeOf == ecOk
+    check arrives(
+      proc(): bool =
+        heard[0].load == 1
+    )
+    settled()
     check heard[0].load == 1
     check heard[1].load == 0
     call.release()
@@ -877,7 +881,6 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0782] [IFC-0742] [RUN-0824] [RUN-0829] [RUN-0835] scoped publication through a deferred invocation's context, before and after its terminal outcome":
-    eventsCase()
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -910,12 +913,16 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     check publish("", valid) == ecInvalidParams
     check heard[0].load == 0
     check publish("meter.changed_event", valid) == ecOk
-    check heard[0].load == 1
+    check arrives(
+      proc(): bool =
+        heard[0].load == 1
+    )
     check not ctx.vtable.isCancelled(ctx)
     settle(module, inv, release = false)
     check done[0].finished
     check done[0].codeOf == ecOk
     check publish("meter.changed_event", valid) == ecNotReady
+    settled()
     check heard[0].load == 1
     inv.executionRelease(inv)
     call.release()
@@ -923,7 +930,10 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0778] a publication whose handler completes and releases its own invocation keeps the invocation until it returns; stopping the provider waits for it (INTERFACE §2.9.3 l.2175)":
-    eventsCase()
+    # [plan §2.13, difference 5] Over local transport the handler runs on the
+    # consumer's event worker after the publication returned: no publication
+    # is still in its handler.
+    directOnly()
     var cfg = config(extra = @[dmeterStatic])
     cfg.stopDeadline = PassingStop
     let e = fixtureEngine(cfg)
@@ -964,7 +974,9 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0780] execution release from another thread closes admission and returns while a publication through the invocation is in its handler; the provider is destroyed only once the publication returns (INTERFACE §2.9.3 l.2175-2177)":
-    eventsCase()
+    # [plan §2.13, difference 5] As above: the handler does not run inside
+    # the publication over local transport.
+    directOnly()
     var cfg = config(extra = @[dmeterStatic])
     cfg.stopDeadline = PassingStop
     let e = fixtureEngine(cfg)

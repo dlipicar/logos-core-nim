@@ -125,6 +125,14 @@ proc onEvent(
   s.inside -= 1
   s.count += 1
 
+proc reaches(s: ptr Seen, n: int): bool =
+  ## The handler has returned `n` times, once it has run (`arrives`).
+  discard arrives(
+    proc(): bool =
+      s.count.load >= n
+  )
+  s.count.load == n
+
 proc payloadOf(s: var Seen): seq[byte] =
   s.payload[0 ..< s.payloadLen.load]
 
@@ -255,7 +263,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     check second != id # scoped to the route: distinct
     check seen[0].count.load == 0 and seen[1].count.load == 0
     check h.read(15).isOk
-    check seen[0].count.load == 1 and seen[1].count.load == 1
+    check reaches(addr seen[0], 1) and reaches(addr seen[1], 1)
     h.release()
     e.finish()
 
@@ -275,7 +283,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     check h.unsubscribe(a + b + 100) == ecInvalidParams
     check other.unsubscribe(a) == ecInvalidParams
     check h.read(15).isOk
-    check seen[0].count.load == 1
+    check reaches(addr seen[0], 1)
     # A handler held on another thread: unsubscribe waits for it.
     seen[0].hold.store(true)
     var pub = Job(route: addr publisher, channel: 15, times: 1)
@@ -296,6 +304,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     check pub.code.load == 0
     check seen[0].count.load == 2
     check h.read(15).isOk
+    check reaches(addr seen[1], 3) # the same Event would carry both
     check seen[0].count.load == 2 # inactive
     check h.unsubscribe(a) == ecInvalidParams # already inactive
     # From its own handler, through the same handle: deactivated at once.
@@ -304,9 +313,10 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     seen[1].armed.store(true)
     let before = seen[1].count.load
     check h.read(15).isOk
+    check reaches(addr seen[1], before + 1)
     check seen[1].selfCode.load == ord(ecOk)
-    check seen[1].count.load == before + 1
     check h.read(15).isOk
+    settled()
     check seen[1].count.load == before + 1
     publisher.release()
     other.release()
@@ -327,8 +337,8 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     check h2.subscribe(addr seen[1], b) == ecOk
     check rc.close(first).code == ecOk
     check driver.read(15).isOk
+    check reaches(addr seen[1], 1)
     check seen[0].count.load == 0
-    check seen[1].count.load == 1
     # Release waits for a handler running on another thread.
     seen[1].hold.store(true)
     var pub = Job(route: addr driver, channel: 15, times: 1)
@@ -347,6 +357,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     joinThread(t1)
     check seen[1].count.load == 2
     check driver.read(15).isOk
+    settled()
     check seen[1].count.load == 2 # released with its handle
     driver.release()
     h1.release()
@@ -403,8 +414,15 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     check h.subscribe(addr seen[0], id) == ecOk
     let r = h.read(15)
     check r.isOk
-    check seen[0].count.load == 1
-    check seen[0].thread.load == getThreadId()
+    when declared(transportParity):
+      # [plan §2.13, difference 5] Over local transport the handler runs on an
+      # event worker once the Event arrives: after publish returned, and not
+      # on this thread (IF l.1975-1977 hold for direct delivery).
+      check reaches(addr seen[0], 1)
+      check seen[0].thread.load != getThreadId()
+    else:
+      check seen[0].count.load == 1
+      check seen[0].thread.load == getThreadId()
     # The meter published from inside its provider entry on this thread; the
     # handler does not inherit it.
     check seen[0].sawContext.load == 0
@@ -422,7 +440,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     check h.subscribe(addr seen[0], id) == ecOk
     let valid = encodeCbor(parseDiag("{\"value\": 7}").get)
     publishRaw(cstring(Changed), valid)
-    check seen[0].count.load == 1
+    check reaches(addr seen[0], 1)
     check seen[0].payloadOf == valid
     publishRaw(cstring(Changed), encodeCbor(parseDiag("{\"value\": \"seven\"}").get))
     publishRaw(cstring(Changed), encodeCbor(parseDiag("[7]").get))
@@ -430,6 +448,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     publishRaw(cstring(Changed), [])
     publishRaw(cstring(""), valid)
     publishRaw(nil, valid)
+    settled()
     check seen[0].count.load == 1
     check e.published("no payload")
     check e.published("was not delivered on route")
@@ -454,8 +473,9 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     check h2.subscribe(addr seen[1], b) == ecOk
     check h3.subscribe(addr seen[2], c) == ecOk
     publishRaw(cstring(Changed), encodeCbor(parseDiag("{\"value\": 1}").get))
-    check seen[0].count.load == 1
-    check seen[1].count.load == 1
+    check reaches(addr seen[0], 1)
+    check reaches(addr seen[1], 1)
+    settled()
     check seen[2].count.load == 0
     # Both decisions were asked for each delivery, with the publisher as the
     # consumer of publish-event and the subscriber's route.
@@ -488,7 +508,8 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     check k1.subscribe(addr seen[0], a) == ecOk
     check k2.subscribe(addr seen[1], b) == ecOk
     publishRaw(cstring(Changed), encodeCbor(parseDiag("{\"value\": 2}").get))
-    check seen[0].count.load == 1
+    check reaches(addr seen[0], 1)
+    settled()
     check seen[1].count.load == 0
     k1.release()
     k2.release()
@@ -534,8 +555,8 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     for i in 0 ..< Threads:
       check jobs[i].code.load == 0
       handles[i].release()
-    check seen[0].count.load == Threads * Times
-    check seen[1].count.load == Threads * Times
+    check reaches(addr seen[0], Threads * Times)
+    check reaches(addr seen[1], Threads * Times)
     check seen[0].overlaps.load == 0
     check seen[1].overlaps.load == 0
     h.release()
@@ -556,15 +577,19 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     seen[1].callRoute = addr again
     seen[1].callChannel = 15 # a nested publication re-enters both subscriptions
     check h.read(15).isOk
+    check reaches(addr seen[0], 2)
+    check reaches(addr seen[1], 2)
     check seen[0].callCode.load == 0
     check seen[1].callCode.load == 0
-    check seen[0].count.load == 2
-    check seen[1].count.load == 2
     again.release()
     h.release()
     e.finish()
 
   test "[IFC-0774] a nested provider entry restores the caller's context when it returns (INTERFACE §2.9.3 l.2162)":
+    # [plan §2.13, difference 5] Over local transport the handler runs on an
+    # event worker after the publication returned: no provider entry nests
+    # on the publishing thread.
+    directOnly()
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (c1, rc1) = e.startClient("c1")
@@ -606,8 +631,11 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     check sibling.subscribe(addr seen[1], b) == ecOk
     check elsewhere.subscribe(addr seen[2], c) == ecOk
     check h.read(17).isOk
-    check seen[0].count.load == 1
-    check seen[3].count.load == 1
+    # Over local transport each arrives after publish returned (plan §2.13,
+    # difference 5).
+    check reaches(addr seen[0], 1)
+    check reaches(addr seen[3], 1)
+    settled()
     check seen[1].count.load == 0
     check seen[2].count.load == 0
     check seen[0].payloadOf == encodeCbor(parseDiag("{\"value\": 170}").get)
@@ -627,11 +655,16 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     check h.subscribe(addr seen[0], a) == ecOk
     # The meter returns the publish failure as its own.
     check h.read(17).error.code == ecNotAuthorised
+    settled()
     check seen[0].count.load == 0
     h.release()
     e.finish()
 
   test "[RUN-0831] [RUN-0830] [RUN-0834] a handler that closes the destination stops later admissions, and publish reports NOT_READY":
+    # [plan §2.13, difference 5] Over local transport the handler runs after
+    # the scoped publication was committed and returned: there is no later
+    # admission in that publication for it to stop.
+    directOnly()
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -672,7 +705,7 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     let (pub0, sub0) = e.decisions()
     check h.read(17).isOk
     check h.read(17).isOk
-    check seen[0].count.load == 2
+    check reaches(addr seen[0], 2)
     when not declared(caParity):
       # Two deliveries, two of each decision: none is carried from activation.
       # Under the Capability Authority each delivery is decided through its
@@ -690,6 +723,7 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     check k.subscribe(addr seen[1], a) == ecOk
     # The meter returns the publication's NOT_AUTHORISED as its own.
     check k.read(17).error.code == ecNotAuthorised
+    settled()
     check seen[1].count.load == 0
     k.release()
     d.finish()
@@ -715,31 +749,36 @@ when declared(caParity):
       let payload = encodeCbor(parseDiag("{\"value\": 7}").get)
       publishRaw(cstring(Changed), payload)
       publishRaw(cstring(Changed), payload)
-      check seen[0].count.load == 2
+      check reaches(addr seen[0], 2)
       # The activation decision is the delivery's too, while it is valid.
       check evaluations("subscribe-event") == 1
       check evaluations("publish-event") == 1
       check publish(PolicyChangedName, policyChanged(0, 1))
       publishRaw(cstring(Changed), payload)
-      check seen[0].count.load == 3
+      check reaches(addr seen[0], 3)
       check evaluations("subscribe-event") == 2
       check evaluations("publish-event") == 2
-      # Denied for the subscriber: skipped, and the subscription ends.
+      # Denied for the subscriber: skipped, and on a direct route the
+      # subscription ends. Over local transport the provider side cannot end
+      # one subscription of a session (K40; plan Rev R9 (a)): the Event is
+      # skipped with no signal and the subscription stays.
+      const ended = not declared(transportParity)
       setScript(rule(vDeny, "subscribe-event"))
       check publish(PolicyChangedName, policyChanged(1, 2))
       publishRaw(cstring(Changed), payload)
+      settled()
       check seen[0].count.load == 3
       check evaluations("subscribe-event") == 3
       setScript()
       check publish(PolicyChangedName, policyChanged(2, 3))
       publishRaw(cstring(Changed), payload)
-      check seen[0].count.load == 3
-      check evaluations("subscribe-event") == 3
+      check reaches(addr seen[0], (if ended: 3 else: 4))
+      check evaluations("subscribe-event") == (if ended: 3 else: 4)
       # A new subscription, allowed again, delivers.
       var id2: LogosSubscriptionId
       check h.subscribe(addr seen[1], id2) == ecOk
       publishRaw(cstring(Changed), payload)
-      check seen[1].count.load == 1
-      check seen[0].count.load == 3
+      check reaches(addr seen[1], 1)
+      check reaches(addr seen[0], (if ended: 3 else: 5))
       h.release()
       e.finish()

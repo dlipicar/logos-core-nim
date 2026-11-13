@@ -104,7 +104,7 @@ import
     algorithm, atomics, deques, locks, monotimes, sequtils, sets, strutils, sysrand,
     tables, times, typedthreads,
   ]
-from std/os import sleep
+from std/os import sleep, `/`, createDir, dirExists, setFilePermissions, FilePermission
 import results
 import ../abi/types
 import ../base/[perthread, testhooks]
@@ -117,16 +117,17 @@ from ../loader/provider import
 from ../transport/io/api import
   IoEvent, IoEventKind, IoSink, IoCommand, IoCommandKind, TransportConfig,
   defaultTransportConfig, ContractInput, EndpointId, ConnId, CallOutcome,
-  ConnectFailure, PeerIdentity, SubmitResult
+  ConnectFailure, PeerIdentity, SubmitResult, PublishFailure
+from ../transport/envelope import MessageKind
+from ../transport/session import PublishErrorKind
 from ../transport/ticket import MaxTicketLifetime, RouteTicket
 from ../transport/hello import
   acceptHello, HelloCheck, HelloFailure, HelloReason, RouteBinding, NotAuthorisedMessage
 from ../transport/io/endpoint import checkEndpointBase
 from ../transport/io/sock import unixStream
-from std/os import `/`, createDir, dirExists, setFilePermissions, FilePermission
 from ./tport import
   newTransportPorts, freeTransportPorts, ensureStarted, closeTransport, releaseOwner,
-  closing, submitOwner, newConnId, started
+  closing, submit, submitOwner, newConnId, started
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
@@ -448,6 +449,15 @@ type
       confirmSent: bool ## its releases were sent
       confirming: int ## its releases in flight
 
+  PubWait = ref object
+    ## [I90; plan §2.7, E2] One invocation-scoped publication on a session,
+    ## from its admission until its publisher has the verdict.
+    conn: ConnId
+    route: string
+    done: bool ## the verdict came (`evPublishResult`, or the session closed)
+    failure: Opt[InvocationFailure] ## the verdict; none: committed
+    reply: ReplyChannel ## the publisher, once it waits
+
   State = ref object
     shared: ptr Shared
     cfg: EngineConfig
@@ -512,6 +522,14 @@ type
       ## [I90] the caller half: one link per transported handle, by `ConnId`
     material: Table[string, Material]
       ## [I90; plan §2.4] by route: the latest live answer's unused material
+    linkSubs: Table[pointer, (ConnId, uint64)]
+      ## [I90; plan §2.7] a transported subscription's `SubState`: its link and
+      ## id, while the link holds it
+    linkHandling: Table[pointer, string]
+      ## [I90] a transported subscription whose handler was handed an Event and
+      ## has not returned: the consumer instance it counts in (`rcHandlers`)
+    pubWaits: Table[uint64, PubWait] ## [I90; E2] by `pubTag`
+    nextPubTag: uint64
     when defined(lcnTestHooks):
       connectFault: Opt[ConnectFailure]
         ## [plan §4.1] the next materialization fails with this cause
@@ -660,6 +678,25 @@ proc workerMain(s: ptr Shared) {.thread.} =
   workerLoop(s)
   releasePerThread() # after the loop's locals are gone
 
+proc activation(s: ptr Shared, job: CallJob) =
+  ## [plan §2.7, Rev R7] Call worker: a Subscribe a session received is
+  ## decided on the Runtime thread (`servedActivate`), which records it on the
+  ## session before it answers; only then is its SubscriptionResult sent, so a
+  ## publication that follows the caller's LOGOS_OK finds it.
+  let r =
+    s.call(Request(kind: rqActivate, conn: job.conn, subId: job.subId, bare: job.event))
+  var f = Opt.none(InvocationFailure)
+  if r.error.isSome:
+    f = Opt.some(failureOf(r.error.get))
+  discard s.tport.submit(
+    IoCommand(
+      conn: job.conn,
+      kind: IoCommandKind.cmdSubscriptionResult,
+      subId: job.subId,
+      subFailure: f,
+    )
+  )
+
 proc callWorkerLoop(s: ptr Shared) =
   while true:
     var job: CallJob
@@ -673,6 +710,9 @@ proc callWorkerLoop(s: ptr Shared) =
     of cjRun:
       runCall(job.call)
       s.post(Msg(kind: mkCallJobDone, target: job.call))
+    of cjActivate:
+      activation(s, job)
+      s.post(Msg(kind: mkCallJobDone, target: nil))
 
 proc callWorkerMain(s: ptr Shared) {.thread.} =
   markRuntimeThread()
@@ -699,25 +739,29 @@ proc nextJobId(st: State): int =
   inc st.nextJob
   st.nextJob
 
-proc dispatchCall(st: State, a: AsyncRec) =
-  ## A call worker for one submitted call; spawned on demand.
+proc sendCallJob(st: State, job: sink CallJob) =
+  ## A call worker for one job; spawned on demand.
   inc st.callBusy
-  inc st.callOrder
-  a.order = st.callOrder
-  a.executing = true
   let s = st.shared
   if st.callBusy > s.callSpawned and s.callSpawned < MaxCallWorkers:
     try:
       createThread(s.callWorkers[s.callSpawned], callWorkerMain, s)
       inc s.callSpawned
     except ResourceExhaustedError:
-      discard # the call waits for a busy call worker
+      discard # the job waits for a busy call worker
   if st.callBusy == s.callSpawned + 1:
     st.callClock = getMonoTime() # [I88] the queue was empty until now
   try:
-    s.calls.send(CallJob(kind: cjRun, call: a.call))
+    s.calls.send(job)
   except Exception:
     discard
+
+proc dispatchCall(st: State, a: AsyncRec) =
+  ## A call worker for one submitted call.
+  inc st.callOrder
+  a.order = st.callOrder
+  a.executing = true
+  st.sendCallJob(CallJob(kind: cjRun, call: a.call))
 
 proc overflow(st: State, calls: bool) =
   ## [IMPL; I88, deviation 5] One more worker beyond the pool's first 64.
@@ -1196,6 +1240,7 @@ proc records(st: State): seq[AsyncRec] =
 proc linksEnded(st: State, r: Route) {.gcsafe.}
 proc keepMaterial(st: State, r: Route, path: string, t: RouteTicket) {.gcsafe.}
 proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.}
+proc schemaBlob(st: State, r: Route): ptr SchemaBlob {.gcsafe.}
 
 proc endServices(st: State, s: ptr AttemptServices, instance: string) =
   ## The realization an attempt made is gone, or the attempt made none: its
@@ -1242,38 +1287,80 @@ proc endRegsGone(st: State, consumer: string, n: int) =
     st.endRegs.del(consumer)
   st.endRegsTotal = max(st.endRegsTotal - n, 0)
 
-proc drainDeadline(st: State, r: Route): MonoTime =
-  ## [Rev R1; plan §2.8] How long a session of `r` may still answer what it
-  ## admitted after a readiness end: the shutdown grace at shutdown, the
-  ## provider's stop deadline while it stops, else the stop deadline from now
-  ## (close_route, a consumer end, a provider failure) [IMPL].
-  if st.shuttingDown:
-    return st.shutdownDeadline
-  let p = st.instances.getOrDefault(r.providerInstance)
-  if p != nil and p.state == msStopping and p.stopDeadline.isSome:
-    return p.stopDeadline.get
+proc newStopDeadline(st: State): MonoTime =
+  ## [G61, revised by A18] The stop deadline of a stop that starts now.
   getMonoTime() + st.cfg.stopDeadline
 
+proc stopDeadlineOf(st: State, instance: string): MonoTime =
+  ## The stop deadline of `instance`. The route's end runs inside the commit
+  ## that made it `stopping`, before `stopInstance` sets the deadline, so the
+  ## deadline is the one it is about to get.
+  let x = st.instances.getOrDefault(instance)
+  if x != nil and x.stopDeadline.isSome:
+    x.stopDeadline.get
+  else:
+    st.newStopDeadline()
+
+proc routeEnd(st: State, r: Route): RouteEnd =
+  ## [G260] Which row of `ports.EndPolicies` the end of `r` is. Called inside
+  ## the commit that ended it, while the instance that caused the end is in
+  ## the state it entered.
+  if r.endCode == ecNotAuthorised:
+    return if r.failure == Opt.some(rfAuthorityExpired): reExpired else: reRevoked
+  if r.failure == Opt.some(rfTransportError):
+    return reTransport
+  if r.failure == Opt.some(rfOther):
+    return reNoSession # [I90] no ticket could be issued at its establishment
+  if st.shuttingDown:
+    return reShutdown
+  if r.failure == Opt.some(rfProviderUnavailable):
+    let p = st.instances.getOrDefault(r.providerInstance)
+    return if p != nil and p.state == msError: reProviderFailure else: reProviderStop
+  if r.failure == Opt.some(rfConsumerUnavailable):
+    return reConsumerFailure
+  let c = st.instances.getOrDefault(r.consumer)
+  if c != nil and c.state in {msLoaded, msReady}: reCloseRoute else: reConsumerStop
+
+proc drainDeadline(st: State, r: Route, bound: DrainBound): MonoTime =
+  ## [G260; Rev R1] How long a session of `r` may still answer what it
+  ## admitted (`ports.DrainBound`).
+  case bound
+  of dbNone:
+    getMonoTime()
+  of dbProviderStop:
+    st.stopDeadlineOf(r.providerInstance)
+  of dbConsumerStop:
+    st.stopDeadlineOf(r.consumer)
+  of dbShutdownGrace:
+    st.shutdownDeadline
+  of dbFromEnd, dbCleanup:
+    st.newStopDeadline()
+
 proc endTransported(st: State, r: Route) =
-  ## [plan §2.8 steps 1 and 4; owner batch B 7] A transported route ended:
-  ## its tickets are revoked, then each of its sessions is ordered by the
-  ## cause. An authority end terminates: the in-flight Requests are answered
-  ## NOT_AUTHORISED, then ProtocolError NOT_AUTHORISED and close (TRANSPORT
-  ## l.987-991). A failure of the transport closes at once. Any other end
-  ## drains: no new admission, what was admitted answers, then close (K13).
+  ## [plan §2.8 steps 1 and 4; owner batch B 7; G260] A transported route
+  ## ended: its tickets are revoked, then each of its sessions is ordered as
+  ## the end's row of `ports.EndPolicies` says. An authority end terminates:
+  ## the in-flight Requests are answered NOT_AUTHORISED, then ProtocolError
+  ## NOT_AUTHORISED and close (TRANSPORT l.987-991). An end that leaves no
+  ## usable session closes at once. A readiness end drains: no new admission,
+  ## what was admitted answers until the bound, then close (K13).
   discard st.tickets.revokeRoute(r.id)
+  if r.sessions.len == 0:
+    return
+  let policy = EndPolicies[st.routeEnd(r)]
+  let deadline = st.drainDeadline(r, policy.bound)
   for conn in r.sessions:
     let s = st.sv.session(conn)
     if s.isNil:
       continue
-    case sessionOrder(r.endCode, r.failure)
+    case policy.order
     of soTerminate:
       for c in st.sv.terminate(s):
         markSent(asyncOf(c))
     of soClose:
       st.sv.close(s)
     of soDrain:
-      st.sv.drain(s, st.drainDeadline(r))
+      st.sv.drain(s, deadline)
 
 proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229; INTERFACE §2.5] The route takes no
@@ -3650,7 +3737,7 @@ proc stopInstance(
   if not keepIntent or enforcement:
     # [G61, revised by A18] The drain deadline of an explicit stop starts
     # when the instance enters `stopping`; shutdown has its own grace.
-    x.stopDeadline = Opt.some(getMonoTime() + st.cfg.stopDeadline)
+    x.stopDeadline = Opt.some(st.newStopDeadline())
   if reply != nil:
     x.stopWaiters.add(StopWaiter(reply: reply, origin: origin))
 
@@ -6371,6 +6458,53 @@ proc keepMaterial(st: State, r: Route, path: string, t: RouteTicket) {.gcsafe.} 
     expires: min(r.monoDeadline.get(high(int64)), st.monoNow + MaxTicketLifetime),
   )
 
+proc releaseCredit(st: State, l: Link, credit: int) =
+  ## [SPEC TRANSPORT l.721-725] The I/O thread holds an Event's bytes until
+  ## the owner is done with them; a closed connection's go with it.
+  if credit > 0 and l.state == lkOpen and not l.closeSent:
+    discard st.shared.tport.submitOwner(
+      IoCommand(conn: l.conn, kind: IoCommandKind.cmdRelease, releaseBytes: credit)
+    )
+
+proc dropLinkSub(st: State, l: Link, ls: LinkSub) =
+  ## The link's reference to a subscription goes, with its queued Events.
+  while ls.queue.len > 0:
+    st.releaseCredit(l, ls.queue.popFirst().credit)
+  st.linkSubs.del(ls.sub)
+  drop(subOf(ls.sub))
+
+proc dropLinkSubs(st: State, l: Link) =
+  ## [plan §2.9] Every subscription the link still holds: inactive already.
+  for ls in l.subs.values:
+    deactivate(subOf(ls.sub))
+    st.dropLinkSub(l, ls)
+  l.subs.clear()
+
+proc endLinkSubs(st: State, l: Link, code: ErrorCode) =
+  ## [SPEC INTERFACE l.1462-1465; TRANSPORT l.596-599; plan §2.7] The handle's
+  ## path ended (its route, its connection or its consumer): no handler begins
+  ## from now on and undelivered Events go. A Subscribe still waiting fails
+  ## with `code`; an Unsubscribe still waiting gets `code` and its
+  ## subscription stays, inactive, until the handle is released, which waits
+  ## for a handler still running (TRN-0290).
+  var failed: seq[uint64]
+  for ls in l.subs.values:
+    deactivate(subOf(ls.sub))
+    ls.active = false
+    while ls.queue.len > 0:
+      st.releaseCredit(l, ls.queue.popFirst().credit)
+    if ls.subscribing != nil:
+      ls.subscribing.answerError(code, "the handle's path ended")
+      ls.subscribing = nil
+      failed.add(ls.id)
+    if ls.unsubscribing != nil:
+      ls.unsubscribing.answerError(code, "the handle's path ended")
+      ls.unsubscribing = nil
+  for id in failed:
+    var ls: LinkSub
+    if l.subs.pop(id, ls):
+      st.dropLinkSub(l, ls)
+
 proc closeLink(st: State, l: Link) =
   ## [Rev R5] The link's connection goes: `cmdClose`, once.
   if l.state != lkClosed and not l.closeSent:
@@ -6382,6 +6516,7 @@ proc settleLink(st: State, l: Link) =
   ## [Rev R5] A link nothing keeps closes; a closed one nothing keeps goes.
   if l.idle:
     if l.state == lkClosed:
+      st.dropLinkSubs(l)
       st.links.del(l.conn)
     else:
       st.closeLink(l)
@@ -6686,6 +6821,8 @@ proc linkClosed(st: State, ev: IoEvent) =
         failure(ecTransport, "the connection closed")
       ),
     )
+  # [SPEC TRANSPORT l.596-599, §3.2] Its subscriptions end with it.
+  st.endLinkSubs(l, l.routeCause.get(closedCode(ev.cause, ev.code)))
   if l.held and l.observe(closedCode(ev.cause, ev.code)):
     st.linkObserved(l)
   st.settleLink(l)
@@ -6700,6 +6837,7 @@ proc linksEnded(st: State, r: Route) {.gcsafe.} =
     if l.route == r.id:
       l.routeCause = Opt.some(r.endCode)
       discard l.observe(r.endCode)
+      st.endLinkSubs(l, r.endCode)
 
 proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.} =
   ## [SPEC INTERFACE l.2004-2006] None of the attempt's handles remains valid:
@@ -6712,6 +6850,7 @@ proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.} =
     if l.connecting != nil:
       l.connecting.answerError(ecNotReady, "the consumer's realization ended")
       l.connecting = nil
+    st.endLinkSubs(l, ecNotReady)
     l.held = false
     st.closeLink(l)
 
@@ -6725,7 +6864,18 @@ proc linksStopped(st: State) =
       reply.answerError(ecNotReady, "the Runtime stopped")
     for p in l.asyncs.values:
       dropCall(asyncOf(p))
+    for ls in l.subs.values:
+      if ls.subscribing != nil:
+        ls.subscribing.answerError(ecNotReady, "the Runtime stopped")
+      if ls.unsubscribing != nil:
+        ls.unsubscribing.answerError(ecNotReady, "the Runtime stopped")
+    l.state = lkClosed
+    st.dropLinkSubs(l)
   st.links.clear()
+  for w in st.pubWaits.values:
+    if w.reply != nil:
+      w.reply.answerError(ecNotReady, "the Runtime stopped")
+  st.pubWaits.clear()
   for m in st.material.mvalues:
     m.burn()
   st.material.clear()
@@ -6972,6 +7122,28 @@ proc releaseHandle(st: State, q: Request) =
     st.settle(r)
   let l = st.links.getOrDefault(linkOf(q.handle))
   if l != nil:
+    # [SPEC TRANSPORT l.596-599; TRN-0290] Its subscriptions are abandoned:
+    # their Events are no longer delivered, and they go back to the releasing
+    # thread, which waits for a handler still running.
+    for ls in l.subs.values:
+      deactivate(subOf(ls.sub))
+      while ls.queue.len > 0:
+        st.releaseCredit(l, ls.queue.popFirst().credit)
+      st.linkSubs.del(ls.sub)
+      if ls.active and l.state == lkOpen and not l.closeSent:
+        discard st.shared.tport.submitOwner(
+          IoCommand(
+            conn: l.conn, kind: IoCommandKind.cmdAbandonSubscription, subId: ls.id
+          )
+        )
+      if ls.subscribing != nil:
+        ls.subscribing.answerError(ecNotReady, "the handle was released")
+        drop(subOf(ls.sub))
+        continue
+      if ls.unsubscribing != nil:
+        ls.unsubscribing.answerError(ecNotReady, "the handle was released")
+      gone.add(ls.sub)
+    l.subs.clear()
     # [Rev R5] The handle's reference goes; the connection closes once no
     # asynchronous call prepared on it awaits its Response (IF l.1506).
     l.held = false
@@ -7079,6 +7251,15 @@ proc candidates(st: State, q: Request) =
         if s.eventName == q.bare and s.isActive:
           retain(s)
           r.subs.add(p)
+      if route.mode == rmLocalTransport:
+        # [SPEC RUNTIME l.1236-1237; plan §2.7] Each session with an active
+        # subscription to the event gets its own Event (E1).
+        for conn in route.sessions:
+          let s = st.sv.session(conn)
+          if s != nil and not s.ended and not s.draining and s.subscribed(q.bare):
+            r.targets.add(
+              PublishTarget(conn: conn, route: route.id, blob: st.schemaBlob(route))
+            )
   q.reply.answer(r)
 
 proc scoped(st: State, q: Request) =
@@ -7202,6 +7383,524 @@ proc deliver(st: State, q: Request) =
       deactivate(s)
     skip()
   q.reply.answer(Reply(admitted: true))
+
+# Transported events (4b-2c; DECISIONS I90) ------------------------------------------
+
+proc dispatchLinkDrain(st: State, ls: LinkSub) =
+  ## [plan §2.7; G178] One drain of a transported subscription on an event
+  ## worker, spawned on demand; the job holds its own reference.
+  ls.draining = true
+  ls.served = 0
+  inc st.rcBusy
+  let s = st.shared
+  if st.rcBusy > s.rcSpawned and s.rcSpawned < MaxEventWorkers:
+    try:
+      createThread(s.rcWorkers[s.rcSpawned], rcWorkerMain, s)
+      inc s.rcSpawned
+    except ResourceExhaustedError:
+      discard # the drain waits for a busy event worker
+  retain(subOf(ls.sub))
+  try:
+    s.rcJobs.send(RcJob(kind: rjLinkDrain, sub: ls.sub))
+  except Exception:
+    discard
+
+func deliverable(ls: LinkSub): bool =
+  ls.active and not ls.paused and ls.queue.len > 0
+
+proc linkConsumer(st: State, l: Link): Inst =
+  ## The consumer instance a transported Event's handler may run in, if live.
+  let x = st.instances.getOrDefault(l.consumer)
+  if x != nil and x.current == l.attempt and x.state in {msLoaded, msReady}: x else: nil
+
+proc linkSubscribe(st: State, q: Request) =
+  ## [SPEC INTERFACE §2.5 l.1417-1432; RUNTIME §4.4 l.1018-1024; plan §2.7] A
+  ## transported handle's `subscribe`: a direct one's local checks (ownership,
+  ## the event under the selected contract and the route's subscribe scope,
+  ## the route's end), then the handle's code and the consumer's liveness,
+  ## with no wire traffic when one fails; the provider decides the activation
+  ## (G175). The reply waits for the SubscriptionResult [Rev R6] (RUN-0192).
+  let l = st.links.getOrDefault(q.conn)
+  let r = st.route(q.route)
+  if l.isNil or r.isNil or r.consumer != q.origin.instance or l.route != r.id:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  st.expireIfDue(r)
+  if r.selected.eventRoot(q.bare).isNone:
+    q.reply.answerError(
+      ecNotAuthorised, q.bare & " is not an event of the selected contract"
+    )
+    return
+  if q.bare in [GrantChangedName, PolicyChangedName] and
+      st.isAuthorityContract(r.selected):
+    q.reply.answerError(ecNotAuthorised, "the authority's notices are protected")
+    return
+  if not r.allowsSubscribe(q.bare):
+    q.reply.answerError(ecNotAuthorised, "the event is outside the route's access")
+    return
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
+  let code = l.newCallCode
+  if code.isSome:
+    q.reply.answerError(code.get, "the handle's connection has ended")
+    return
+  let x = st.instances.getOrDefault(r.consumer)
+  if x.isNil or q.attempt != x.current or x.state notin {msLoaded, msReady} or
+      st.shuttingDown:
+    q.reply.answerError(ecNotReady, "the consumer is not live")
+    return
+  inc l.nextSub
+  let ls = LinkSub(
+    id: l.nextSub, sub: q.handle, event: q.bare, subscribing: q.reply, outId: q.outId
+  )
+  retain(subOf(q.handle))
+  l.subs[ls.id] = ls
+  st.linkSubs[q.handle] = (l.conn, ls.id)
+  let sent = st.shared.tport.submitOwner(
+    IoCommand(
+      conn: l.conn, kind: IoCommandKind.cmdSubscribe, subId: ls.id, subEvent: q.bare
+    )
+  )
+  if sent != SubmitResult.sbOk:
+    l.subs.del(ls.id)
+    st.dropLinkSub(l, ls)
+    q.reply.answerError(ecNotReady, "the transport is stopping")
+
+proc linkUnsubscribe(st: State, q: Request) =
+  ## [SPEC INTERFACE §2.5 l.1446-1459; plan §2.7] An ended route answers with
+  ## its code first, as on a direct handle, then an ended connection with the
+  ## handle's (G22); an id that names no active subscription of the handle is
+  ## INVALID_PARAMS. Otherwise no handler of it begins from now on, and the
+  ## reply waits for the provider's result: on success the subscription goes
+  ## back to the caller, which waits for a handler still running on another
+  ## thread (not its own, for a handler that unsubscribes itself); on failure
+  ## it resumes, unchanged.
+  let l = st.links.getOrDefault(q.conn)
+  let r = st.route(q.route)
+  if l.isNil or r.isNil or r.consumer != q.origin.instance or l.route != r.id:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
+  let code = l.newCallCode
+  if code.isSome:
+    q.reply.answerError(code.get, "the handle's connection has ended")
+    return
+  let ls = l.subs.getOrDefault(q.subId)
+  if ls.isNil or not ls.active or ls.paused:
+    q.reply.answerError(
+      ecInvalidParams, "no active subscription of this handle has that id"
+    )
+    return
+  ls.paused = true
+  ls.unsubscribing = q.reply
+  let sent = st.shared.tport.submitOwner(
+    IoCommand(conn: l.conn, kind: IoCommandKind.cmdUnsubscribe, subId: ls.id)
+  )
+  if sent != SubmitResult.sbOk:
+    ls.paused = false
+    ls.unsubscribing = nil
+    q.reply.answerError(ecNotReady, "the transport is stopping")
+
+proc linkSubscription(st: State, ev: IoEvent) =
+  ## [SPEC TRANSPORT §5.1; plan §2.7, Rev R6, R7] The provider's result for a
+  ## Subscribe or an Unsubscribe of a link.
+  let l = st.links.getOrDefault(ev.conn)
+  if l.isNil:
+    return
+  let ls = l.subs.getOrDefault(ev.subscriptionId)
+  if ls.isNil:
+    return
+  let f = ev.subscriptionFailure
+  if ev.subscriptionOp == MessageKind.mkSubscribe:
+    let reply = ls.subscribing
+    if reply.isNil:
+      return
+    ls.subscribing = nil
+    if f.isNone and l.routeCause.isNone and l.state == lkOpen:
+      # [SPEC INTERFACE l.1427-1429; Rev R7] The id is written, then the
+      # subscription is active, before the subscriber returns: an Event that
+      # follows on the wire is queued, not dropped.
+      ls.outId[] = ls.id
+      activate(subOf(ls.sub), ls.id)
+      ls.active = true
+      reply.answer(Reply())
+      return
+    l.subs.del(ls.id)
+    st.dropLinkSub(l, ls)
+    if f.isSome:
+      reply.answerError(f.get.code, f.get.message.get("the subscription was refused"))
+    else:
+      reply.answerError(l.routeCause.get(ecTransport), "the handle's path ended")
+  else:
+    let reply = ls.unsubscribing
+    if reply.isNil:
+      return
+    ls.unsubscribing = nil
+    if f.isNone:
+      deactivate(subOf(ls.sub))
+      ls.active = false
+      l.subs.del(ls.id)
+      while ls.queue.len > 0:
+        st.releaseCredit(l, ls.queue.popFirst().credit)
+      st.linkSubs.del(ls.sub)
+      # The link's reference goes to the caller, which drops it once no
+      # handler of the subscription runs on another thread.
+      reply.answer(Reply(subs: @[ls.sub]))
+      return
+    ls.paused = false
+    reply.answerError(f.get.code, f.get.message.get("the unsubscription was refused"))
+    if ls.deliverable and not ls.draining:
+      st.dispatchLinkDrain(ls)
+
+proc linkEvent(st: State, ev: sink IoEvent) =
+  ## [SPEC RUNTIME l.1184; TRANSPORT §5.2, l.721-725; plan §2.7] An Event for
+  ## a subscription of a link: queued, in commitment order, while the
+  ## subscription is active (also while an Unsubscribe is pending, in case it
+  ## fails); otherwise its bytes are released at once.
+  let l = st.links.getOrDefault(ev.conn)
+  if l.isNil:
+    return
+  let ls = l.subs.getOrDefault(ev.eventSub)
+  if ls.isNil or not ls.active:
+    st.releaseCredit(l, ev.credit)
+    return
+  ls.queue.addLast(
+    QueuedEvent(name: move ev.eventName, data: move ev.eventData, credit: ev.credit)
+  )
+  if not ls.paused and not ls.draining:
+    st.dispatchLinkDrain(ls)
+
+proc linkNext(st: State, q: Request) =
+  ## [G178; plan §2.7] An event worker draining a transported subscription
+  ## releases the credit of the Event its handler finished and asks for the
+  ## next. One is admitted while the subscription is active and not paused,
+  ## its path open and its consumer live; the handler then counts toward the
+  ## consumer until it returns (`rcHandled`). The drain ends with the queue,
+  ## the subscription or its quota (`rcDrainQuota`), and starts again behind
+  ## the others when Events are left.
+  let key = st.linkSubs.getOrDefault(q.handle, (ConnId(0), 0'u64))
+  let l = st.links.getOrDefault(key[0])
+  let ls = (if l.isNil: nil else: l.subs.getOrDefault(key[1]))
+  if l != nil:
+    st.releaseCredit(l, q.credit)
+  let x = (if l.isNil: nil else: st.linkConsumer(l))
+  if ls.isNil or ls.sub != q.handle or not q.gated or not ls.deliverable or
+      ls.served >= st.limits.rcDrainQuota or x.isNil or l.routeCause.isSome:
+    dec st.rcBusy
+    q.reply.answer(Reply(drained: true))
+    if ls != nil and ls.sub == q.handle:
+      ls.draining = false
+      ls.served = 0
+      if q.gated and ls.deliverable and x != nil and l.routeCause.isNone:
+        st.dispatchLinkDrain(ls)
+    return
+  inc ls.served
+  let e = ls.queue.popFirst()
+  inc x.rcHandlers
+  st.linkHandling[q.handle] = l.consumer
+  q.reply.answer(Reply(admitted: true, name: e.name, bytes: e.data, credit: e.credit))
+
+proc subscriptionResult(
+    st: State, conn: ConnId, id: uint64, f: Opt[InvocationFailure]
+) =
+  discard st.shared.tport.submitOwner(
+    IoCommand(
+      conn: conn, kind: IoCommandKind.cmdSubscriptionResult, subId: id, subFailure: f
+    )
+  )
+
+proc servedSubscribe(st: State, ev: IoEvent) =
+  ## [plan §2.7; G175] A Subscribe a session received, after the session's
+  ## own checks (the selected contract, the route's subscribe scope): its
+  ## activation is decided on a call worker (`activation`), which may wait for
+  ## an evaluation.
+  let s = st.sv.session(ev.conn)
+  if s.isNil or s.ended or s.draining:
+    let r = (if s.isNil: nil else: st.route(s.route))
+    st.subscriptionResult(
+      ev.conn,
+      ev.subscribeId,
+      Opt.some(
+        failure(
+          (if r != nil and r.isTerminal: r.endCode else: ecNotReady),
+          "the session is closing",
+        )
+      ),
+    )
+    return
+  st.sendCallJob(
+    CallJob(
+      kind: cjActivate, conn: ev.conn, subId: ev.subscribeId, event: ev.subscribeEvent
+    )
+  )
+
+proc servedActivate(st: State, q: Request) =
+  ## [SPEC RUNTIME §4.4 l.1018-1024, §7.5; G175 (TF-24); plan §2.7, Rev R7,
+  ## R9 (a)] The activation of a Subscribe on a session, in a direct
+  ## subscription's order: the event under the selected contract and the
+  ## route's subscribe scope, the route's end, its re-authorization and the
+  ## subscribe-event decision (an explicit deny is NOT_AUTHORISED), then the
+  ## provider and the consumer live. Recorded on the session before the
+  ## answer, so the SubscriptionResult is sent only once a publication finds
+  ## it.
+  let s = st.sv.session(q.conn)
+  let r = (if s.isNil: nil else: st.route(s.route))
+  if s.isNil or r.isNil or s.ended or s.draining:
+    q.reply.answerError(
+      (if r != nil and r.isTerminal: r.endCode else: ecNotReady),
+      "the session is closing",
+    )
+    return
+  st.expireIfDue(r)
+  let declaration = r.selected.eventRoot(q.bare)
+  if declaration.isNone:
+    q.reply.answerError(
+      ecNotAuthorised, q.bare & " is not an event of the selected contract"
+    )
+    return
+  if q.bare in [GrantChangedName, PolicyChangedName] and
+      st.isAuthorityContract(r.selected):
+    q.reply.answerError(ecNotAuthorised, "the authority's notices are protected")
+    return
+  if not r.allowsSubscribe(q.bare):
+    q.reply.answerError(ecNotAuthorised, "the event is outside the route's access")
+    return
+  if r.isTerminal and r.endCode == ecNotAuthorised:
+    q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
+    return
+  st.requireRoute(q, r)
+  st.require(
+    q,
+    AuthzRequest(
+      action: aaSubscribeEvent,
+      operation: q.bare,
+      consumer: r.consumer,
+      target: r.provider,
+      provider: r.provider,
+      route: r.id,
+      module: r.selected.module,
+      contract: @(r.selected.root),
+      declaration: @(declaration.get),
+    ),
+  )
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
+  let p = st.instances.getOrDefault(r.providerInstance)
+  let c = st.instances.getOrDefault(r.consumer)
+  if p.isNil or p.state != msReady or c.isNil or c.current != s.consumerAttempt or
+      c.state notin {msLoaded, msReady} or st.shuttingDown or s.ended or s.draining:
+    q.reply.answerError(ecNotReady, "the provider or the consumer is not live")
+    return
+  s.subs[q.subId] = q.bare
+  q.reply.answer(Reply())
+
+proc servedUnsubscribe(st: State, ev: IoEvent) =
+  ## [SPEC TRANSPORT §5.1] The session checked the id: the subscription ends.
+  let s = st.sv.session(ev.conn)
+  if s != nil:
+    s.subs.del(ev.subscribeId)
+  st.subscriptionResult(ev.conn, ev.subscribeId, Opt.none(InvocationFailure))
+
+proc deliverConn(st: State, q: Request) =
+  ## [SPEC RUNTIME l.1229-1231, l.1275-1283; G175; plan §2.7] The admission
+  ## of one Event to one transported subscriber connection, decided afresh
+  ## as a direct handler invocation is (`deliver`): the session open, the
+  ## route ready, both access scopes, the consumer live, the route's
+  ## re-authorization and both event decisions. [K40, Rev R9 (a)] A
+  ## subscriber's deny skips this Event only: the provider side cannot end
+  ## one subscription of a session. A scoped publication stops on an
+  ## authority end or a denied publish-event decision (NOT_AUTHORISED) and on
+  ## a closed destination (NOT_READY); once admitted, its verdict is awaited
+  ## by tag (E2).
+  let r = st.route(q.route)
+  let s = st.sv.session(q.conn)
+  let name = q.bare
+  template skip() =
+    q.reply.answer(Reply())
+    return
+
+  template stop(code: ErrorCode, message: string) =
+    q.reply.answerError(code, message)
+    return
+
+  if r.isNil:
+    if q.scoped:
+      stop(ecNotReady, "the invocation's destination is closed")
+    skip()
+  st.expireIfDue(r)
+  if q.scoped:
+    if r.isTerminal and r.endCode == ecNotAuthorised:
+      stop(ecNotAuthorised, "the route is " & $r.state)
+    if r.isTerminal or s.isNil or s.ended or q.ticket == nil or q.ticket.cancelled.load or
+        q.ticket.closed.load:
+      stop(ecNotReady, "the invocation's destination is closed")
+    if not r.allowsPublish(name):
+      stop(ecNotAuthorised, "the event is outside the route's access")
+  else:
+    let x = st.instances.getOrDefault(q.origin.instance)
+    if x.isNil or q.attempt != x.current or x.state != msReady or
+        r.providerInstance != x.id or r.isTerminal or not r.allowsPublish(name) or
+        s.isNil or s.ended or s.draining or not s.subscribed(name):
+      skip()
+  let c = st.instances.getOrDefault(r.consumer)
+  if c.isNil or c.state notin {msLoaded, msReady} or not r.allowsSubscribe(name):
+    skip()
+  let refused = st.routeAuthorized(r)
+  if refused.isSome:
+    if refused.get.parked:
+      return
+    if q.scoped:
+      stop(ecNotAuthorised, "the route is not authorised")
+    skip()
+  let contract = @(r.selected.root)
+  let declaration = @(r.selected.eventRoot(name).get)
+  let published = st.decide(
+    [
+      AuthzRequest(
+        action: aaPublishEvent,
+        operation: name,
+        consumer: r.providerInstance,
+        target: r.consumer,
+        provider: r.provider,
+        route: r.id,
+        module: r.selected.module,
+        contract: contract,
+        declaration: declaration,
+      )
+    ]
+  ).valueOr:
+    return
+  if not published[0].allows:
+    if q.scoped:
+      stop(ecNotAuthorised, "the publication is not authorised")
+    skip()
+  let received = st.decide(
+    [
+      AuthzRequest(
+        action: aaSubscribeEvent,
+        operation: name,
+        consumer: r.consumer,
+        target: r.provider,
+        provider: r.provider,
+        route: r.id,
+        module: r.selected.module,
+        contract: contract,
+        declaration: declaration,
+      )
+    ]
+  ).valueOr:
+    return
+  if not received[0].allows:
+    skip()
+  var reply = Reply(admitted: true)
+  if q.scoped:
+    inc st.nextPubTag
+    reply.pubTag = st.nextPubTag
+    st.pubWaits[reply.pubTag] = PubWait(conn: q.conn, route: r.id)
+  q.reply.answer(reply)
+
+proc scopedConn(st: State, q: Request) =
+  ## [SPEC RUNTIME §7.3.1 l.1254-1273; INTERFACE l.2193-2196] A served
+  ## invocation's destination, before its payload is validated, as `scoped`
+  ## judges a direct one's: an event outside `publish_events` or a revoked
+  ## route is NOT_AUTHORISED; `ready` says whether the session and the
+  ## invocation's destination are open.
+  let r = st.route(q.route)
+  if r.isNil:
+    q.reply.answerError(ecNotReady, "the invocation's destination is closed")
+    return
+  if not r.allowsPublish(q.bare):
+    q.reply.answerError(ecNotAuthorised, "the event is outside the route's access")
+    return
+  if r.isTerminal and r.endCode == ecNotAuthorised:
+    q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
+    return
+  let s = st.sv.session(q.conn)
+  q.reply.answer(
+    Reply(
+      ready:
+        not r.isTerminal and s != nil and not s.ended and q.ticket != nil and
+        not q.ticket.cancelled.load and not q.ticket.closed.load
+    )
+  )
+
+proc publishFailure(st: State, route: string, f: PublishFailure): InvocationFailure =
+  ## [SPEC INTERFACE l.2189-2196; plan §2.7, Rev R17] The code of a scoped
+  ## publication the session did not commit: a closed destination or
+  ## connection is NOT_READY, or NOT_AUTHORISED after an authority end; an
+  ## oversized Event MODULE_ERROR; the others I54's mapping.
+  let r = st.route(route)
+  let authorityEnd = r != nil and r.isTerminal and r.endCode == ecNotAuthorised
+  case f.kind
+  of peNoDestination, peClosed:
+    failure(
+      (if authorityEnd: ecNotAuthorised else: ecNotReady),
+      "the invocation's destination is closed",
+    )
+  of peEnded:
+    failure(ecNotAuthorised, "the route's access ended")
+  else:
+    InvocationFailure(code: f.code, message: Opt.some(f.msg))
+
+proc verdict(w: PubWait): Reply =
+  if w.failure.isNone:
+    Reply()
+  else:
+    Reply(
+      error: Opt.some(
+        engineError(w.failure.get.code, w.failure.get.message.get("not published"))
+      )
+    )
+
+proc publishResult(st: State, ev: IoEvent) =
+  ## [E2; plan §2.7] The session's verdict on a scoped publication.
+  let w = st.pubWaits.getOrDefault(ev.pubResultTag)
+  if w.isNil or w.done:
+    return
+  w.done = true
+  if ev.pubResultFailure.isSome:
+    w.failure = Opt.some(st.publishFailure(w.route, ev.pubResultFailure.get))
+  if w.reply != nil:
+    w.reply.answer(w.verdict)
+    st.pubWaits.del(ev.pubResultTag)
+
+proc publishVerdict(st: State, q: Request) =
+  ## [E2] The publisher waits for its verdict, which may have come already.
+  let w = st.pubWaits.getOrDefault(q.pubTag)
+  if w.isNil:
+    q.reply.answerError(ecNotReady, "the invocation's destination is closed")
+    return
+  if q.abandon:
+    st.pubWaits.del(q.pubTag)
+    q.reply.answerError(ecNotReady, "the transport is stopping")
+    return
+  if w.done:
+    q.reply.answer(w.verdict)
+    st.pubWaits.del(q.pubTag)
+    return
+  w.reply = q.reply
+
+proc publicationsClosed(st: State, conn: ConnId) =
+  ## [Rev R17] A session closed with scoped publications awaiting their
+  ## verdict: each is a closed destination.
+  var done: seq[uint64]
+  for tag, w in st.pubWaits:
+    if w.conn == conn and not w.done:
+      w.done = true
+      w.failure = Opt.some(
+        st.publishFailure(
+          w.route, PublishFailure(kind: peClosed, code: ecNotReady, msg: "")
+        )
+      )
+      if w.reply != nil:
+        w.reply.answer(w.verdict)
+        done.add(tag)
+  for tag in done:
+    st.pubWaits.del(tag)
 
 # Runtime Control subscriptions (step 7b; DECISIONS I86) --------------------------------
 
@@ -7364,11 +8063,15 @@ proc deliverRc(st: State, q: Request) =
 
 proc rcHandled(st: State, p: pointer) =
   ## [G178] A handler returned: a release or destroy of its subscriber's
-  ## realization waiting for it may go on.
+  ## realization waiting for it may go on. [I90] So for a transported
+  ## subscription's handler (`linkNext`).
+  var subscriber: string
   let rec = st.rcSubs.getOrDefault(p)
-  if rec.isNil:
+  if rec != nil:
+    subscriber = rec.subscriber
+  elif not st.linkHandling.pop(p, subscriber):
     return
-  let x = st.instances.getOrDefault(rec.subscriber)
+  let x = st.instances.getOrDefault(subscriber)
   if x.isNil or x.rcHandlers == 0:
     return
   dec x.rcHandlers
@@ -7430,6 +8133,20 @@ proc handle(st: State, q: Request) {.gcsafe.} =
       st.transportHook(q)
     else:
       q.reply.answerError(ecInvalidParams, "not a test build")
+  of rqActivate:
+    st.servedActivate(q)
+  of rqLinkSubscribe:
+    st.linkSubscribe(q)
+  of rqLinkUnsubscribe:
+    st.linkUnsubscribe(q)
+  of rqLinkNext:
+    st.linkNext(q)
+  of rqDeliverConn:
+    st.deliverConn(q)
+  of rqScopedConn:
+    st.scopedConn(q)
+  of rqPublishVerdict:
+    st.publishVerdict(q)
   of rqCreate:
     st.create(q)
   of rqStart:
@@ -8075,7 +8792,7 @@ proc hello(st: State, ev: IoEvent) =
   discard st.sv.admitted(ev.conn, e, est.get, attempt)
   r.sessions.add(ev.conn)
 
-proc schemaBlob(st: State, r: Route): ptr SchemaBlob =
+proc schemaBlob(st: State, r: Route): ptr SchemaBlob {.gcsafe.} =
   ## [plan §2.5] The provider's construction input for the route's selected
   ## contract (its validated surface), for a served invocation's checks.
   let p = st.instances.getOrDefault(r.providerInstance)
@@ -8146,9 +8863,11 @@ proc servedClosed(st: State, conn: ConnId) =
   ## listed is cancelled and answers nothing; its work leaves the in-flight
   ## count as it ends, and its worker writes its record (CA l.1193). The
   ## route stays as it is (RUNTIME l.3475).
+  st.publicationsClosed(conn)
   let s = st.sv.closed(conn)
   if s.isNil:
     return
+  s.subs.clear()
   for c in s.calls.values:
     let a = st.asyncCalls.getOrDefault(c)
     if a.isNil:
@@ -8202,25 +8921,22 @@ proc ioEvent(st: State, ev: sink IoEvent) =
   of IoEventKind.evResponse:
     st.linkResponse(ev.conn, ev.tag, move ev.outcome)
   of IoEventKind.evSubscribe:
-    # [plan §7.1] Provider-side subscriptions are step 4b-2c's.
-    discard st.shared.tport.submitOwner(
-      IoCommand(
-        conn: ev.conn,
-        kind: IoCommandKind.cmdSubscriptionResult,
-        subId: ev.subscribeId,
-        subFailure: Opt.some(
-          InvocationFailure(
-            code: ecModule,
-            message: Opt.some("subscriptions over local transport are not built yet"),
-          )
-        ),
-      )
-    )
+    st.servedSubscribe(ev)
   of IoEventKind.evUnsubscribe:
-    discard st.shared.tport.submitOwner(
-      IoCommand(
-        conn: ev.conn, kind: IoCommandKind.cmdSubscriptionResult, subId: ev.subscribeId
-      )
+    st.servedUnsubscribe(ev)
+  of IoEventKind.evSubscription:
+    st.linkSubscription(ev)
+  of IoEventKind.evEvent:
+    st.linkEvent(ev)
+  of IoEventKind.evPublishResult:
+    st.publishResult(ev)
+  of IoEventKind.evPublishFailed:
+    # [SPEC RUNTIME l.1227] An ordinary publication has no result: one not
+    # committed on a connection is recorded (G165: an oversized one closed
+    # that connection).
+    st.diagnose(
+      "a publication of " & ev.pubFailEvent & " was not delivered on connection " &
+        $ev.conn & ": " & ev.pubFailMsg
     )
   of IoEventKind.evLocalFailure:
     if isServed(ev.conn):

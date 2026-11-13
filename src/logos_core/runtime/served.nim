@@ -67,6 +67,9 @@ type
     ended*: bool ## terminate or close was ordered
     calls*: OrderedTable[uint64, CallRef]
       ## dispatched Requests not yet ended, by id: the served invocations
+    subs*: OrderedTable[uint64, string]
+      ## [plan §2.7, Rev R7] the active subscriptions, by id: recorded on the
+      ## Runtime thread before the successful SubscriptionResult is sent
 
   Served* = ref object
     tport: TransportPorts
@@ -273,6 +276,14 @@ proc established*(sv: Served, conn: ConnId) =
 
 proc session*(sv: Served, conn: ConnId): Session =
   sv.sessions.getOrDefault(conn)
+
+func subscribed*(s: Session, event: string): bool =
+  ## [SPEC RUNTIME l.1236-1237] The session has an active subscription to
+  ## `event`: an ordinary publication of it is one Event to this connection.
+  for e in s.subs.values:
+    if e == event:
+      return true
+  false
 
 proc addCall*(s: Session, requestId: uint64, call: CallRef) =
   s.calls[requestId] = call

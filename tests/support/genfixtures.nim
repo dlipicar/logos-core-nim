@@ -115,6 +115,15 @@ const
       primary: "tests/kit/beacon_module.cddl",
       kit: true,
     ),
+    NimFixture(module: "bulk_module_types.nim", primary: "tests/kit/bulk_module.cddl"),
+    NimFixture(
+      module: "bulk_module_kit.nim", primary: "tests/kit/bulk_module.cddl", kit: true
+    ),
+    NimFixture(
+      module: "bulk_module_calls.nim",
+      primary: "tests/kit/bulk_module.cddl",
+      calls: true,
+    ),
     NimFixture(
       module: "metrics_provider_types.nim",
       primary: "spec/mirrors/IFC/3.9.2.interface.cddl",

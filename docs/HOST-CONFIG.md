@@ -381,9 +381,27 @@ established are never moved (RUNTIME l.940).
   same route needs `renew_route` first, and a handle whose connection failed is not retried
   (DECISIONS G258). A handle whose connection is lost while its route lives gives `LOGOS_ERR_TRANSPORT`
   until it is released (G256); the route stays ready.
-- **Built so far (steps 4b-2a, 4b-2b).** Transported routes are established, renewed, served and
-  called. Subscriptions through a transported handle fail with `LOGOS_ERR_MODULE` ("subscriptions over
-  local transport are not built yet") until 4b-2c.
+- Events through such a handle (DECISIONS I90, part 4b-2c): `subscribe` returns once the provider's
+  Runtime activated the subscription, and a handler runs on one of the Runtime's event workers after
+  its Event arrives, not on the publishing thread, one at a time per subscription and in the order
+  the Events were published. A provider's `publish` returns once each subscriber connection has its
+  Event, not once the handlers ran. What happens when a subscriber does not keep up, or an Event is
+  too large for it, is under "Event output" below.
+
+#### Event output
+
+A provider publishes through a callback with no result (RUNTIME §7.3), so a transported subscriber
+that cannot take an Event is handled at its connection (TRANSPORT §5.2 l.804-817, §2.1 l.388-391;
+DECISIONS D3 (a), G165, G261):
+
+| Condition | Action |
+|---|---|
+| The Runtime's pending output, Response and Event payloads not yet written across all connections, is at `transport.max_pending_output_bytes` | The publishing thread waits until there is room, with no finite bound and no lock held. A payload larger than the whole budget passes once the budget is empty. |
+| One subscriber connection's output is at `transport.conn_output_bytes` because its subscriber does not read: its handlers hold `transport.caller_undelivered_bytes` of Events undelivered, so its Runtime stops reading | That connection is closed with ProtocolError `TRANSPORT_ERROR`. Every subscription on it ends; the handle reports `LOGOS_ERR_TRANSPORT` and its route stays ready (renew it for a new handle). Other subscribers still get every Event. |
+| An Event is larger than the subscriber's frame limit (`transport.frame_limit`) | Nothing of it is written there; that connection is closed with ProtocolError `TRANSPORT_ERROR`, as above. Other subscribers, direct or transported, get it. Through an invocation's scoped `publish`, which has a result, it is `LOGOS_ERR_MODULE` instead and the connection stays. |
+
+No committed Event is discarded silently: an Event is either written to the connection or the
+connection is closed.
 
 ### `transport`
 
@@ -632,6 +650,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | the Capability Authority's audit records (`audit.records`) | docs/AUTHORITY-POLICY.md | in the policy |
 | deadlines | `runtime` (Fields) | here |
 | transport aggregates | docs/CONFORMANCE.md, "Transport limits"; set by the Runtime with 10b | fixed |
+| transported routes: I/O thread limits and Event output | `transport` (Fields) and "Event output" under `routing` | here |
 
 ## Loaded code
 

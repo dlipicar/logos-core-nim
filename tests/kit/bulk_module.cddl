@@ -1,0 +1,18 @@
+; -- metadata --
+_module = "bulk_module"
+
+; Input for tests/generated/bulk_module_*: a provider whose `send` publishes an
+; event of the requested size (step 4b-2c; DECISIONS G165), so an Event can be
+; larger than a peer's frame limit over local transport.
+
+bulk.carried_event = {
+  data: bstr,
+}
+
+bulk.send_request = {
+  size: uint32,
+}
+
+bulk.send_response = {
+  size: uint32,
+}

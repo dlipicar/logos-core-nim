@@ -16,6 +16,14 @@
 ## event decisions allow it [G175]), and runs the handler behind a barrier that
 ## hides any provider entry below it (INTERFACE l.2170).
 ##
+## [I90; plan §2.7] Over local transport the same `SubState` stands behind a
+## subscription made through a transported handle, but its Events arrive on
+## the wire: the Runtime thread queues them, and an event worker drains them
+## (`linkDrain`) through the same gate. A publication reaches each transported
+## subscriber connection as one Event (`cmdPublishConn`) once the Runtime
+## thread admits it, and an invocation-scoped one on a served invocation goes
+## to its session with its verdict (E2).
+##
 ## [IMPL] The gate. One thread at a time may be inside a subscription's handler
 ## or admitting one; the same thread may re-enter it through nested direct
 ## publication (INTERFACE l.1434-1439). `unsubscribe` and handle release
@@ -35,7 +43,9 @@ import ../abi/types
 import ../hash/hashinput
 import ../iface/[outcome, payload]
 import ../transport/boundary
+from ../transport/io/api import IoCommand, IoCommandKind, SubmitResult, TooLargeAction
 import ./[bell, callside, plumbing]
+from ./tport import submitWait
 
 const
   GateSlice = 200 ## milliseconds between checks of a long gate wait
@@ -215,6 +225,93 @@ proc unsubscribe*(h: ptr HandleState, id: LogosSubscriptionId): LogosResult =
   quiesce(reply.subs)
   LogosResult()
 
+proc linkSubscribe*(
+    h: ptr HandleState,
+    eventName: cstring,
+    handler: LogosEventHandler,
+    userData: pointer,
+    outId: ptr LogosSubscriptionId,
+): LogosResult =
+  ## [SPEC INTERFACE §2.5 l.1417-1432; RUNTIME l.1018-1024; plan §2.7] A
+  ## subscription through a transported handle: LOGOS_OK only after the
+  ## provider's successful SubscriptionResult (RUN-0192), with `*outId`
+  ## written and the subscription active before this returns [Rev R6, R7].
+  if handler.isNil or outId == nil:
+    return status(ecInvalidParams, "a null handler or subscription output")
+  let name = checkEventName(eventName).valueOr:
+    return status(error)
+  let s = createShared(SubState)
+  s.engine = h.engine
+  s.route = h.route
+  s.generation = h.generation
+  s.event = fixed(name)
+  s.blob = retain(h.blob)
+  s.handler = handler
+  s.userData = userData
+  initLock(s.lock)
+  initCond(s.cond)
+  s.refs.store(1)
+  let reply = h.engine.call(
+    Request(
+      kind: rqLinkSubscribe,
+      origin: moduleOrigin($h.consumer),
+      attempt: $h.attempt,
+      route: $h.route,
+      conn: h.conn,
+      bare: name,
+      handle: s,
+      generation: h.generation,
+      outId: outId,
+    )
+  )
+  drop(s) # the Runtime thread holds its own reference while it lasts
+  if reply.error.isSome:
+    return status(reply.error.get)
+  LogosResult()
+
+proc linkUnsubscribe*(h: ptr HandleState, id: LogosSubscriptionId): LogosResult =
+  ## [SPEC INTERFACE §2.5 l.1446-1459; plan §2.7] LOGOS_OK once the provider
+  ## confirmed it, the subscription is inactive and no handler of it runs on
+  ## another thread.
+  let reply = h.engine.call(
+    Request(
+      kind: rqLinkUnsubscribe,
+      origin: moduleOrigin($h.consumer),
+      attempt: $h.attempt,
+      route: $h.route,
+      conn: h.conn,
+      generation: h.generation,
+      subId: id,
+    )
+  )
+  if reply.error.isSome:
+    return status(reply.error.get)
+  quiesce(reply.subs)
+  LogosResult()
+
+proc linkDrain*(e: Engine, p: pointer) =
+  ## [G178; plan §2.7] Event worker: one drain of a transported subscription.
+  ## Each Event the Runtime thread admits runs its handler here, in order,
+  ## behind the subscription's gate; its credit goes back with the next ask,
+  ## once the handler returned (TRANSPORT l.721-725), and the handler's return
+  ## is reported before the gate opens, so release and destroy, which wait for
+  ## it, never overtake it.
+  let s = subOf(p)
+  var credit = 0
+  while true:
+    let gated = s.enterGate()
+    let r = e.call(Request(kind: rqLinkNext, handle: p, gated: gated, credit: credit))
+    credit = 0
+    if r.admitted:
+      s.run(r.name, r.bytes)
+      credit = r.credit
+      e.post(Msg(kind: mkRcHandled, target: p))
+    if gated:
+      s.leaveGate()
+    if r.drained or r.error.isSome:
+      break
+  drop(s)
+
 # Publication -----------------------------------------------------------------------------
 
 proc checkPublication(
@@ -315,6 +412,113 @@ proc publishOp*(
         s.run(name, bytes)
       s.leaveGate()
     drop(s)
+  # [plan §2.7; E1] Then each transported subscriber connection: one Event,
+  # admitted per route by the Runtime thread (G175), committed by the I/O
+  # thread. The publication waits for the shared output budget with no finite
+  # bound (D3 (a), G261); an Event over the subscriber's frame maximum closes
+  # that connection (G165 (a)). [IMPL] Direct subscribers come first.
+  var stopped = false
+  for t in reply.targets:
+    let blob = cast[ptr SchemaBlob](t.blob)
+    let root = blob.root
+    if root notin checked:
+      let c = checkPublication(blob, name, bytes)
+      checked[root] = c.isOk
+      if c.isErr:
+        e.diagnose(
+          "a publication of " & name & " from " & $a.instance &
+            " was not delivered on route " & t.route & ": " & describe(c.error)
+        )
+    if not stopped and checked.getOrDefault(root, false):
+      let r = e.call(
+        Request(
+          kind: rqDeliverConn,
+          origin: moduleOrigin($a.instance),
+          attempt: $a.attempt,
+          conn: t.conn,
+          route: t.route,
+          bare: name,
+        )
+      )
+      if r.admitted:
+        let sent = e.tport.submitWait(
+          IoCommand(
+            conn: t.conn,
+            kind: IoCommandKind.cmdPublishConn,
+            event: name,
+            data: bytes,
+            tooLarge: tlClose,
+          )
+        )
+        stopped = sent == SubmitResult.sbStopped
+    drop(blob)
+
+proc scopedOverSession(
+    inv: ptr InvocationState, sel: Selected, name: string, bytes: seq[byte]
+): LogosResult =
+  ## [SPEC RUNTIME §7.3.1; INTERFACE l.2187-2199; plan §2.7, E2] A served
+  ## invocation's scoped publication goes to its session, checked in a direct
+  ## one's order: the scope and an authority end (NOT_AUTHORISED), the
+  ## payload (INVALID_PARAMS), a closed destination (NOT_READY), then the
+  ## per-delivery decisions; the session commits one Event per subscription
+  ## to it on that connection, or reports why it did not, and that verdict is
+  ## the result.
+  let e = inv.engine
+  let first = e.call(
+    Request(
+      kind: rqScopedConn,
+      origin: moduleOrigin($inv.provider),
+      route: $inv.route,
+      conn: inv.conn,
+      bare: name,
+      ticket: inv.ticket,
+    )
+  )
+  if first.error.isSome:
+    return status(first.error.get)
+  let v = sel.validator.checkEvent(name, bytes)
+  if v.isErr:
+    return status(toFailure(v.error))
+  let c = sel.boundary.commitEvent(name, v.get)
+  if c.isErr:
+    return status(c.error.failure)
+  if not first.ready:
+    return status(ecNotReady, "the invocation's destination is closed")
+  let d = e.call(
+    Request(
+      kind: rqDeliverConn,
+      scoped: true,
+      origin: moduleOrigin($inv.provider),
+      route: $inv.route,
+      conn: inv.conn,
+      bare: name,
+      ticket: inv.ticket,
+      generation: inv.generation,
+    )
+  )
+  if d.error.isSome:
+    return status(d.error.get)
+  if not d.admitted:
+    return LogosResult() # the subscriber's own decisions skipped it
+  let sent = e.tport.submitWait(
+    IoCommand(
+      conn: inv.conn,
+      kind: IoCommandKind.cmdPublishScoped,
+      pubRequest: inv.requestId,
+      pubTag: d.pubTag,
+      event: name,
+      data: bytes,
+      tooLarge: tlReport,
+    )
+  )
+  let w = e.call(
+    Request(
+      kind: rqPublishVerdict, pubTag: d.pubTag, abandon: sent != SubmitResult.sbOk
+    )
+  )
+  if w.error.isSome:
+    return status(w.error.get)
+  LogosResult()
 
 proc scopedPublish*(
     inv: ptr InvocationState,
@@ -340,6 +544,8 @@ proc scopedPublish*(
     return status(ecModule, "the selected contract cannot be loaded")
   if not sel.boundary.knowsEvent(name):
     return status(ecNotAuthorised, name & " is not an event of the selected contract")
+  if inv.conn != 0:
+    return scopedOverSession(inv, sel, name, view(cborData, cborDataLen))
   let e = inv.engine
   let reply = e.call(
     Request(

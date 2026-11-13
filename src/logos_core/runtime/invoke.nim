@@ -191,10 +191,14 @@ proc invocationFor*(
     generation: uint64,
     blob: ptr SchemaBlob,
     engine: Engine,
+    conn = 0'u64,
+    requestId = 0'u64,
 ): InvocationState =
   ## The state of an admitted call's invocation context; `initContext` once it
-  ## is where it stays.
+  ## is where it stays. `conn` and `requestId`: a served invocation's session.
   InvocationState(
+    conn: conn,
+    requestId: requestId,
     engine: engine,
     access: adm.access,
     ticket: adm.ticket,
@@ -267,15 +271,18 @@ proc callProvider*(
     bare: string,
     params: openArray[byte],
     trail: var CallTrail,
+    conn = 0'u64,
+    requestId = 0'u64,
 ): Result[seq[byte], InvocationFailure] =
   ## Steps 2-4 for an admitted call through `_MODULE_dispatch`, on this
   ## thread; the caller commits the result, records the call and leaves the
-  ## in-flight count.
+  ## in-flight count. `conn`, `requestId`: a served invocation's session.
   let sel = selectedOf(blob).valueOr:
     return err(failure(ecModule, "the selected contract cannot be loaded"))
   let request = ?checkRequest(sel, bare, params, trail)
   ?authorityRefusal(adm, engine, $consumer, $route, bare, request)
-  var inv = invocationFor(adm, consumer, route, generation, blob, engine)
+  var inv =
+    invocationFor(adm, consumer, route, generation, blob, engine, conn, requestId)
   initContext(inv)
   var buf: ptr UncheckedArray[uint8] = nil
   var len: csize_t = 0

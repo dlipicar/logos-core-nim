@@ -34,11 +34,12 @@ The specs are being revised, so the work is ordered by how settled each area is
   releases and configures every other instance through its contract; lost Loader answers are
   resolved with `get_status`, and a failed Loader leaves its instances `error` and asks the host to
   end its process (I89). LOADER is claimed for the direct strategies.
-- Tier 4b, step 4b-2 (in progress): transported local routes. A host routing rule selects
-  `local-transport` for a route; the Runtime runs the transport I/O thread, issues one-time tickets at
-  establish and renew, and serves a direct provider at an endpoint of its own (part 4b-2a, I90); a
-  consumer's handle on such a route calls its provider over a socket (part 4b-2b), and the route and
-  asynchronous-call suites rerun over local transport. Transported events follow (4b-2c).
+- Tier 4b, step 4b-2: transported local routes. A host routing rule selects `local-transport` for a
+  route; the Runtime runs the transport I/O thread, issues one-time tickets at establish and renew,
+  and serves a direct provider at an endpoint of its own (part 4b-2a, I90); a consumer's handle on
+  such a route calls its provider over a socket (part 4b-2b) and subscribes to its events, which
+  reach the handlers on the Runtime's event workers (part 4b-2c). The route, asynchronous-call and
+  event suites rerun over local transport.
 - Not yet: the rest of Tier 4b (the Module Host and the hosted strategy, the rest of transported routes, `logosd`
   and `logosctl`, the default orchestration module, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 

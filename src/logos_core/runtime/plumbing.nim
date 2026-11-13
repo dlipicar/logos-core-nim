@@ -449,6 +449,8 @@ type
       ## publication, from the publishing thread (`events.publishOp`)
     rqAuthorityState ## the binding (observation for the host and tests)
     rqStopForAuthority
+      ## [SPEC RUNTIME §10.1 l.3801-3804] an execution authorization ended
+      ## outside the Runtime's own checks (`engine.stopForAuthority`)
     rqRefusal
       ## [S8b-1 interim] a routed Capability Authority call refused at the
       ## invocation boundary, to be retained (`invoke.authorityRefusal`)
@@ -466,8 +468,24 @@ type
     rqTransportHook
       ## [I90; 4b-2 plan §4.1] `closeSessionsForTests`, `failNextConnectForTests`:
       ## served only in a build with `lcnTestHooks`
-      ## [SPEC RUNTIME §10.1 l.3801-3804] an execution authorization ended
-      ## outside the Runtime's own checks (`engine.stopForAuthority`)
+    rqActivate
+      ## [I90; plan §2.7] a call worker asks for the activation of a
+      ## Subscribe a session received (`conn`, `subId`, `bare`); the Runtime
+      ## thread records it on the session before it answers [Rev R7]
+    rqLinkSubscribe
+      ## [I90] a transported handle's `subscribe`: answered when the
+      ## SubscriptionResult comes
+    rqLinkUnsubscribe ## [I90] a transported handle's `unsubscribe`
+    rqLinkNext
+      ## [I90] an event worker draining a transported subscription asks for
+      ## its next Event; `credit` is the one it is done with
+    rqDeliverConn
+      ## [I90; plan §2.7] the admission of one Event to one transported
+      ## subscriber connection (`conn`, `route`): ordinary, or `scoped`
+    rqScopedConn
+      ## [I90] the checks of an invocation-scoped publication on a session
+      ## (`conn`) before its payload is validated
+    rqPublishVerdict ## [I90; E2] wait for the verdict on scoped publication `pubTag`
 
   RcMethod* = enum
     ## The Runtime Control methods this Runtime performs (RUNTIME §9.3).
@@ -644,6 +662,18 @@ type
     recheck*: bool
       ## [I90] rqLinkCall: the session refused the request locally as
       ## INVALID_PARAMS; the caller's thread rebuilds the detail
+    targets*: seq[PublishTarget]
+      ## [I90] rqCandidates: the transported subscriber connections, each
+      ## with a retained selected contract the receiver drops
+    credit*: int ## [I90] rqLinkNext: the admitted Event's credit
+    pubTag*: uint64 ## [I90] rqDeliverConn (scoped): the publication's tag
+
+  PublishTarget* = object
+    ## [I90; plan §2.7] One transported subscriber connection of an ordinary
+    ## publication.
+    conn*: uint64
+    route*: string
+    blob*: pointer ## its selected contract (`ptr SchemaBlob`), retained
 
   ReplyChannel* = ptr Channel[Reply]
 
@@ -673,7 +703,12 @@ type
       ## rqSubscribe: written before the subscription becomes active
     call*: pointer ## rqAdmit: the asynchronous call being admitted, if any
     ticket*: ptr CallTicket ## rqScoped, rqDeliver: the invocation's ticket
-    scoped*: bool ## rqDeliver: an invocation-scoped publication
+    scoped*: bool ## rqDeliver, rqDeliverConn: an invocation-scoped publication
+    credit*: int ## [I90] rqLinkNext: the credit of the Event its handler finished
+    pubTag*: uint64 ## [I90] rqPublishVerdict
+    abandon*: bool
+      ## [I90] rqPublishVerdict: the publication was not sent (the loop is
+      ## stopping); forget it
     payload*: seq[byte]
       ## rqAuthorityNotice: the event payload; empty when the publication was
       ## dropped before it was read (a malformed notice)
@@ -766,23 +801,34 @@ type
   CallJobKind* = enum
     cjQuit ## first and without fields, as `MsgKind`
     cjRun
+    cjActivate
+      ## [I90; plan §2.7] a Subscribe a session received: `rqActivate`, then
+      ## the SubscriptionResult
 
-  CallJob* = object ## What a call worker runs (`asynccall.runCall`).
+  CallJob* = object
+    ## What a call worker runs (`asynccall.runCall`, `engine.activation`).
     case kind*: CallJobKind
     of cjRun:
       call*: pointer
+    of cjActivate:
+      conn*: uint64
+      subId*: uint64
+      event*: string
     of cjQuit:
       discard
 
   RcJobKind* = enum
     rjQuit ## first and without fields, as `MsgKind`
     rjDrain
+    rjLinkDrain
+      ## [I90] one drain of a transported subscription (`events.linkDrain`),
+      ## holding one reference to its `SubState`
 
   RcJob* = object
     ## [G178] What an event worker runs: one drain of one Runtime Control
     ## subscription (`rcevents.drain`), holding one reference to it.
     case kind*: RcJobKind
-    of rjDrain:
+    of rjDrain, rjLinkDrain:
       sub*: pointer
     of rjQuit:
       discard

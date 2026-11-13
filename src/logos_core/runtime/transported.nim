@@ -25,14 +25,24 @@
 ## (INTERFACE l.1486-1490): the route's end or the connection's, whichever came
 ## first. A connection lost with no known cause is TRANSPORT_ERROR (TF-15, G256);
 ## NOT_READY is never inferred from it.
+##
+## [plan §2.7; I90 part 4b-2c] A subscription through a transported handle is
+## a `LinkSub`: the consumer's `subscribe` waits until the provider's
+## SubscriptionResult [Rev R6]; the Runtime thread activates the subscription
+## when it processes the successful result, before the subscriber returns, so
+## an Event that follows on the wire is queued, not dropped [Rev R7]. Events
+## are queued on the Runtime thread and drained on the G178 event workers, at
+## most one drain per subscription, each Event's credit released once its
+## handler returned (TRANSPORT l.721-725).
 
 {.push raises: [], gcsafe.}
 
-import std/tables
+import std/[deques, tables]
 import results
 import ../iface/outcome
 import ../transport/ticket
 from ../transport/io/api import ConnId, ConnectFailure, CloseCause, CallOutcome
+import ../abi/types
 import ./[callside, invoke, plumbing]
 
 export results
@@ -49,6 +59,25 @@ type
     path*: string
     ticket*: RouteTicket
     expires*: int64 ## the ticket's own expiry, on the engine's monotonic clock
+
+  QueuedEvent* = object ## [plan §2.7] An Event waiting for its handler.
+    name*: string
+    data*: seq[byte]
+    credit*: int ## held by the I/O thread until `cmdRelease`
+
+  LinkSub* = ref object
+    ## [plan §2.7] One subscription made through a transported handle.
+    id*: uint64 ## its subscription id, on the wire and for the consumer
+    sub*: pointer ## its `events.SubState`, with one reference held here
+    event*: string
+    active*: bool ## the successful SubscriptionResult came; not unsubscribed
+    paused*: bool ## [IF l.1446-1449] an Unsubscribe is pending: no handler begins
+    subscribing*: ReplyChannel ## the subscriber, until the SubscriptionResult
+    outId*: ptr LogosSubscriptionId ## written before the subscriber returns
+    unsubscribing*: ReplyChannel ## the unsubscriber, until its result
+    queue*: Deque[QueuedEvent]
+    draining*: bool ## an event worker drains it
+    served*: int ## Events its current drain was handed (`rcDrainQuota`)
 
   Link* = ref object
     ## One transported route handle's connection, on the Runtime thread.
@@ -70,6 +99,8 @@ type
     prepared*: int
       ## [Rev R5] asynchronous calls prepared on the handle and not yet
       ## submitted or released: each keeps the link
+    subs*: OrderedTable[uint64, LinkSub] ## [plan §2.7] by subscription id
+    nextSub*: uint64
 
 proc burn*(m: var Material) =
   ## [SPEC TRANSPORT l.1038] The raw ticket exists only transiently.

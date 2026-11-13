@@ -169,11 +169,16 @@ when declared(transportParity):
   import ../../src/logos_core/runtime/routing
   import ./shortdir
 
+  proc removeAtExit(dir: string) =
+    ## The closure keeps its own copy: the main module's globals are destroyed
+    ## before exit procedures run.
+    addExitProc(
+      proc() =
+        removeDir(dir)
+    )
+
   let parityBase = makeShortBase("lcnlt", "/e999/12345678/logos_sensor_module.sock")
-  addExitProc(
-    proc() =
-      removeDir(parityBase)
-  )
+  removeAtExit(parityBase)
 
 proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineConfig =
   inc engines
@@ -207,17 +212,6 @@ proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineCo
           instance: ParityCa, evaluationDeadline: initDuration(seconds = 60)
         )
       )
-
-let eventsOverTransport = not declared(transportParity)
-  ## [plan §7.1] false until step 4b-2c builds subscriptions over local transport
-
-template eventsCase() =
-  ## A case that subscribes through a route handle: under the local-transport
-  ## parity pass it is skipped until step 4b-2c. It leaves the test body's
-  ## block, so the case reports SKIPPED.
-  if not eventsOverTransport:
-    skip()
-    break
 
 var live: Engine ## the test's engine from `fixtureEngine` until `finish`
 
@@ -264,6 +258,32 @@ proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10 * Slow): bool =
       return true
     sleep(2)
   cond()
+
+let overTransport = declared(transportParity) ## the local-transport parity pass
+
+template directOnly() =
+  ## A case with no transported counterpart (plan §2.13): skipped in the
+  ## local-transport parity pass, with the reason beside the call. It leaves
+  ## the test body's block, so the case reports SKIPPED.
+  if overTransport:
+    skip()
+    break
+
+proc arrives(cond: proc(): bool {.closure.}): bool =
+  ## `cond` holds once a handler has run. Direct delivery runs before publish
+  ## returns, so it is checked at once. Over local transport handlers run on
+  ## event workers after the Event arrives (plan §2.13, difference 5), so the
+  ## parity pass waits for it first, within a bound.
+  when declared(transportParity):
+    waitUntil(cond)
+  else:
+    cond()
+
+proc settled() =
+  ## Before a check that an Event was not delivered: over local transport,
+  ## time for one that should not have been sent to arrive anyway.
+  when declared(transportParity):
+    sleep(50 * Slow)
 
 var stopReply: Atomic[int] ## the state `stopOn` got, or -1; -2 while it waits
 

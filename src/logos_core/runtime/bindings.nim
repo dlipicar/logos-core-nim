@@ -193,20 +193,22 @@ proc routeSubscribeOp(
     userData: pointer,
     outId: ptr LogosSubscriptionId,
 ): LogosResult {.cdecl.} =
-  ## [SPEC INTERFACE §2.5; RUNTIME §4.4] (`events.nim`)
+  ## [SPEC INTERFACE §2.5; RUNTIME §4.4] (`events.nim`); [I90] through the
+  ## handle's link when it is transported.
   bindingEnter()
   let h = handleOf(route)
   if h.conn != 0:
-    # [plan §7.1] Subscriptions over local transport are step 4b-2c's.
-    if outId != nil and handler != nil and eventName != nil:
-      return status(ecModule, "subscriptions over local transport are not built yet")
+    return linkSubscribe(h, eventName, handler, userData, outId)
   subscribe(h, eventName, handler, userData, outId)
 
 proc routeUnsubscribeOp(
     route: ptr LogosRouteHandle, id: LogosSubscriptionId
 ): LogosResult {.cdecl.} =
   bindingEnter()
-  unsubscribe(handleOf(route), id)
+  let h = handleOf(route)
+  if h.conn != 0:
+    return linkUnsubscribe(h, id)
+  unsubscribe(h, id)
 
 proc routePrepareCallOp(
     route: ptr LogosRouteHandle,

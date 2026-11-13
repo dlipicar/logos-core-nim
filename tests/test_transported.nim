@@ -25,8 +25,10 @@ import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, surface]
 import ../src/logos_core/iface/common_types
 import ./support/[fakeca, kitbuild, kitruntime, shortdir]
-import ./kit/[deferred_adapter, meter_impl]
-import ./generated/[meter_module_calls, meter_module_types]
+import ./kit/[bulk_impl, deferred_adapter, meter_impl]
+import
+  ./generated/
+    [bulk_module_calls, bulk_module_types, meter_module_calls, meter_module_types]
 import ./support/trnowner except Provider, now, binding, issue, live, release, gate
 
 let
@@ -535,6 +537,85 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
       proc(): bool =
         destroyed.load == gone + 1
     )
+    e.finish()
+
+  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] a consumer stop and a provider failure drain: an admitted Request answers, marked cancelled; a new one is NOT_READY; then the session closes":
+    let e = fixtureEngine(transported())
+    let meterView = e.started(meter())
+    let o = newOwner()
+    defer:
+      gate.store(false)
+      o.stop()
+    proc heldCall(o: Owner, key: string): (InstanceView, ConnId, uint64) =
+      ## A fresh consumer's route `key`, a session on it, and a call held at
+      ## the gate.
+      let (v, rc) = e.startClient()
+      let conn = o.session(rc.establish(key).recordOf.invocationOf.get)
+      check heldAt(0)
+      gate.store(true)
+      let tag = o.send(conn, 19)
+      check heldAt(1)
+      (v, conn, tag)
+
+    # The consumer stops: the session drains to the consumer's stop deadline.
+    block:
+      let (v, conn, tag) = o.heldCall("stop")
+      check e.stop(v.instance).tryGet.state == msUnloaded
+      check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecNotReady)
+      check o.closedOf(conn, 50 * Slow).isNone # still draining
+      gate.store(false)
+      let got = o.outcome(conn, tag)
+      check got.codeOf == Opt.some(ecOk)
+      if got.codeOf == Opt.some(ecOk):
+        check got.reading.reading.value == 1 # marked cancelled at the route's end
+      let closed = o.closedOf(conn)
+      check closed.isSome and closed.get.cause == ccPeerClosed
+
+    # The provider fails: the session drains; its result is delivered, then
+    # the session closes and the release follows the call's return.
+    block:
+      let (_, conn, tag) = o.heldCall("provider")
+      let gone = destroyed.load
+      check e.reportFailure(
+        meterView.instance, e.view(meterView.instance).tryGet.attempt, "broken"
+      ).isOk
+      check e.view(meterView.instance).tryGet.state == msError
+      check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecNotReady)
+      check o.closedOf(conn, 50 * Slow).isNone # still draining
+      check destroyed.load == gone
+      gate.store(false)
+      check o.outcome(conn, tag).codeOf == Opt.some(ecOk)
+      let closed = o.closedOf(conn)
+      check closed.isSome and closed.get.cause == ccPeerClosed
+      check waitUntil(
+        proc(): bool =
+          destroyed.load == gone + 1
+      )
+    e.finish()
+
+  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] a consumer failure drains to its bound: a call that outlives it fails TRANSPORT_ERROR (TRANSPORT l.543)":
+    var cfg = transported()
+    cfg.stopDeadline = PassingStop
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let o = newOwner()
+    defer:
+      gate.store(false)
+      o.stop()
+    let (v, rc) = e.startClient()
+    let conn = o.session(rc.establish("k").recordOf.invocationOf.get)
+    gate.store(true)
+    let before = held.load
+    let tag = o.send(conn, 19)
+    check heldAt(before + 1)
+    check e.reportFailure(v.instance, e.view(v.instance).tryGet.attempt, "broken").isOk
+    check e.view(v.instance).tryGet.state == msError
+    check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecNotReady)
+    # The bound (`stop_deadline` from the route's end, `PassingStop`) passes
+    # with the call held: the session closes.
+    check o.outcome(conn, tag, 3 * Wait).codeOf == Opt.some(ecTransport)
+    check o.closedOf(conn).isSome
+    gate.store(false)
     e.finish()
 
   ltTest "[TRN-0317] [CAP-0254] [IMPL-DECISION G174] under the Capability Authority a session ends with the decision its ticket carried, also after renewal moved the route's end; its in-flight Request is answered NOT_AUTHORISED first":
@@ -1090,6 +1171,558 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
     check rc.close(route).code == ecOk
     sleep(50)
     check seen.count.load == 0
+    e.finish()
+
+# Part 4b-2c: events ------------------------------------------------------------------------
+
+const Changed = "meter.changed_event"
+
+type Heard = object ## One subscription's deliveries, recorded by `onHeard`.
+  count: Atomic[int] ## handler invocations that returned
+  inside: Atomic[int]
+  overlaps: Atomic[int] ## invocations begun while another one ran
+  last: Atomic[int] ## the last `value` delivered, or the payload's size
+  disorder: Atomic[int] ## deliveries whose value was not above the last one
+  hold: Atomic[bool] ## the handler waits while it is true
+
+var heard: array[4, Heard]
+
+proc clearHeard() =
+  for h in heard.mitems:
+    h.count.store(0)
+    h.inside.store(0)
+    h.overlaps.store(0)
+    h.last.store(0)
+    h.disorder.store(0)
+    h.hold.store(false)
+
+proc onHeard(
+    name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  let s = cast[ptr Heard](userData)
+  if s.inside.fetchAdd(1) > 0:
+    s.overlaps += 1
+  while s.hold.load:
+    sleep(1)
+  var value = int(len)
+  if len > 0 and len < 64:
+    let ev = MeterChangedEvent.decode(toOpenArray(data, 0, int(len) - 1))
+    if ev.isOk:
+      value = int(ev.get.value)
+  if value <= s.last.load:
+    s.disorder += 1
+  s.last.store(value)
+  s.inside -= 1
+  s.count += 1
+
+proc hear(
+    h: var LogosRouteHandle, slot: int, id: var LogosSubscriptionId, event = Changed
+): ErrorCode =
+  toResult(
+    h.vtable.subscribe(addr h, cstring(event), onHeard, addr heard[slot], addr id)
+  ).code
+
+proc unhear(h: var LogosRouteHandle, id: LogosSubscriptionId): ErrorCode =
+  toResult(h.vtable.unsubscribe(addr h, id)).code
+
+proc heardAt(slot, n: int, seconds = 10 * Slow): bool =
+  waitUntil(
+    proc(): bool =
+      heard[slot].count.load >= n,
+    seconds,
+  )
+
+proc changed(value: int): seq[byte] =
+  encodeCbor(cborMap((cbor("value"), cbor(uint64(value)))))
+
+type SubJob = object
+  route: ptr LogosRouteHandle
+  id: LogosSubscriptionId
+  code: Atomic[int]
+  done: Atomic[bool]
+
+proc subscribing(j: ptr SubJob) {.thread.} =
+  let r = j.route.vtable.subscribe(
+    j.route, cstring(Changed), onHeard, addr heard[0], addr j.id
+  )
+  j.code.store(ord(toResult(r).code))
+  j.done.store(true)
+
+# A consumer module whose routes stay direct (no routing rule names it), beside
+# `client_module`'s transported ones: the same entry points under another name.
+
+proc twinName(): cstring {.cdecl.} =
+  "twin_module"
+
+let twinStatic = checkStaticRegistration(
+  "twin",
+  @[
+    ("logos_twin_module_MODULE_name", cast[pointer](twinName)),
+    ("logos_twin_module_MODULE_init", cast[pointer](clientInit)),
+    ("logos_twin_module_MODULE_destroy", cast[pointer](clientDestroy)),
+  ],
+).tryGet
+
+proc startTwin(e: Engine): ptr LogosRuntimeControlBinding =
+  discard e.started(
+    ModuleRecord(module: "twin_module", strategy: stDirectStatic, binding: "twin")
+  )
+  cast[ptr LogosRuntimeControlBinding](clients[(clientInits.load - 1) mod MaxClients].load)
+
+# `bulk_module` publishes an Event of any size (G165).
+
+let
+  bulkStatic = checkStaticRegistration("bulk", bulkModuleStaticSymbols()).tryGet
+  bulkSet = acceptContractSet(readFile(repo / "tests/kit/bulk_module.cddl")).tryGet
+  bulkRoot = bulkSet.primary.root
+  bulkSchema = encodeCbor(schemaResponse(bulkSet, bulkRoot).tryGet)
+
+proc bulk(): ModuleRecord =
+  ModuleRecord(
+    module: "bulk_module",
+    strategy: stDirectStatic,
+    binding: "bulk",
+    primaryContract: Opt.some(bulkRoot),
+  )
+
+proc bulkEngine(): (
+  Engine, ptr LogosRuntimeControlBinding, ptr LogosRuntimeControlBinding
+) =
+  ## The bulk provider, `client_module` routed to it over local transport and
+  ## `twin_module` directly.
+  var cfg = transported(extra = @[bulkStatic, twinStatic])
+  cfg.routing = @[
+    RoutingRule(
+      caller: Opt.some("client_module"), callee: "bulk_module", mode: rmLocalTransport
+    )
+  ]
+  let e = fixtureEngine(cfg)
+  discard e.started(bulk())
+  let (_, rc) = e.startClient()
+  let twin = e.startTwin()
+  (e, rc, twin)
+
+proc bulkHandle(
+    rc: ptr LogosRuntimeControlBinding, key: string
+): (string, LogosRouteHandle) =
+  let r = rc.establish(key, root = bulkRoot)
+  check r.code == ecOk
+  let route = r.recordOf.route
+  var (code, h) = rc.materialize(route, bulkRoot, bulkSchema)
+  check code == ecOk
+  (route, h)
+
+proc ctxPublish(
+    inv: ptr LogosProviderInvocation, name: string, payload: seq[byte]
+): ErrorCode =
+  ## Invocation-scoped publication through a held invocation's context.
+  let ctx = inv.context
+  toResult(
+    ctx.vtable.publish(
+      ctx,
+      cstring(name),
+      (
+        if payload.len == 0: nil
+        else: cast[ptr UncheckedArray[uint8]](unsafeAddr payload[0])
+      ),
+      csize_t(payload.len),
+    )
+  ).code
+
+type RelJob = object
+  route: ptr LogosRouteHandle
+  done: Atomic[bool]
+
+proc releasing(j: ptr RelJob) {.thread.} =
+  j.route.vtable.release(j.route)
+  j.done.store(true)
+
+type DestroySeen = object
+  count: Atomic[int]
+  code: Atomic[int]
+  destroyed: Atomic[int] ## the meter's `_MODULE_destroy` count when it ran
+
+proc onEndBeforeDestroy(
+    reason: CErrorCode, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  let s = cast[ptr DestroySeen](userData)
+  s.destroyed.store(destroyed.load)
+  s.code.store(int(reason))
+  s.count += 1
+
+suite "run.transported: events (I90 part 4b-2c)":
+  setup:
+    clearHeard()
+    for d in done.mitems:
+      d.reset()
+    resetDeferred()
+  teardown:
+    gate.store(false)
+    for h in heard.mitems:
+      h.hold.store(false)
+    release() # the fake authority's gate
+    leftover()
+
+  ltTest "[RUN-0192] subscribe returns LOGOS_OK only after the provider's activation answered, and writes the id then; a refusal leaves it unwritten":
+    let e = underAuthority()
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.establish("k").recordOf.route)
+    forget()
+    setScript(rule(vHang, "subscribe-event"))
+    hold()
+    var job = SubJob(route: addr h, id: LogosSubscriptionId(77))
+    var t: Thread[ptr SubJob]
+    createThread(t, subscribing, addr job)
+    # The activation's subscribe-event decision waits at the authority.
+    check waitUntil(
+      proc(): bool =
+        hanging.load == 1
+    )
+    sleep(50)
+    check not job.done.load
+    check job.id == 77
+    release()
+    joinThread(t)
+    check ErrorCode(job.code.load) == ecOk
+    check job.id != 77
+    # [IMPL-DECISION G175] An explicit deny at activation is the
+    # SubscriptionResult's NOT_AUTHORISED (decided afresh: a new policy).
+    setScript(rule(vDeny, "subscribe-event"))
+    check publish(PolicyChangedName, policyChanged(0, 1))
+    var refused = LogosSubscriptionId(5)
+    check h.hear(1, refused) == ecNotAuthorised
+    check refused == 5
+    setScript()
+    h.release()
+    e.finish()
+
+  ltTest "[RUN-0192] [RUN-0234] an Event published at once after subscribe returned is delivered, 200 times in a row":
+    let e = fixtureEngine(transported(extra = @[dmeterStatic]))
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.establish("k").recordOf.route)
+    var missed = -1
+    for i in 1 .. 200:
+      var id: LogosSubscriptionId
+      check h.hear(0, id) == ecOk
+      publishRaw(cstring(Changed), changed(i))
+      if not heardAt(0, i, seconds = 2 * Slow):
+        missed = i
+        break
+      check h.unhear(id) == ecOk
+    check missed == -1
+    check heard[0].count.load == 200
+    check heard[0].disorder.load == 0
+    h.release()
+    e.finish()
+
+  ltTest "[RUN-0246] [RUN-0234] [IMPL-DECISION G175] each connection gets its own Event for its subscriptions, in commitment order, one handler at a time per subscription and concurrently across them; a per-delivery deny skips only that subscriber":
+    let e = fixtureEngine(transported(extra = @[dmeterStatic]))
+    discard e.started(dmeter())
+    let (_, rc1) = e.startClient("c1")
+    let (_, rc2) = e.startClient("c2")
+    var h1 = rc1.handle(rc1.establish("k").recordOf.route)
+    var h2 = rc2.handle(rc2.establish("k").recordOf.route)
+    var a, b, c: LogosSubscriptionId
+    check h1.hear(0, a) == ecOk
+    check h1.hear(1, b) == ecOk
+    check h2.hear(2, c) == ecOk
+    const N = 50
+    for i in 1 .. N:
+      publishRaw(cstring(Changed), changed(i))
+    for slot in 0 .. 2:
+      checkpoint("slot " & $slot)
+      check heardAt(slot, N)
+      check heard[slot].disorder.load == 0
+      check heard[slot].overlaps.load == 0
+    # One subscription's handler held: the others go on.
+    heard[0].hold.store(true)
+    publishRaw(cstring(Changed), changed(N + 1))
+    publishRaw(cstring(Changed), changed(N + 2))
+    check heardAt(1, N + 2)
+    check heardAt(2, N + 2)
+    check heard[0].inside.load == 1
+    check heard[0].count.load == N
+    heard[0].hold.store(false)
+    check heardAt(0, N + 2)
+    check heard[0].overlaps.load == 0
+    check heard[0].disorder.load == 0
+    h1.release()
+    h2.release()
+    e.finish()
+    clearHeard()
+    let d = fixtureEngine(
+      transported(
+        denying(deny(action = Opt.some(aaPublishEvent), target = "second")),
+        extra = @[dmeterStatic],
+      )
+    )
+    discard d.started(dmeter())
+    let (_, rf) = d.startClient("first")
+    let (_, rs) = d.startClient("second")
+    var k1 = rf.handle(rf.establish("k").recordOf.route)
+    var k2 = rs.handle(rs.establish("k").recordOf.route)
+    check k1.hear(0, a) == ecOk
+    check k2.hear(1, b) == ecOk
+    publishRaw(cstring(Changed), changed(1))
+    check heardAt(0, 1)
+    settled()
+    check heard[1].count.load == 0
+    check k2.read(4).isOk # skipped, with no signal: the session goes on
+    k1.release()
+    k2.release()
+    d.finish()
+
+  ltTest "[IMPL-DECISION G165] [TRN-0278] an Event larger than the subscriber's frame limit: a direct subscriber gets it; the transported subscriber's connection closes TRANSPORT_ERROR, its route stays ready, and renew_route gives a working handle":
+    let (e, rc, twin) = bulkEngine()
+    var (route, far) = rc.bulkHandle("far")
+    let near = twin.establish("near", root = bulkRoot).recordOf.route
+    var (nc, direct) = twin.materialize(near, bulkRoot, bulkSchema)
+    check nc == ecOk
+    var a, b: LogosSubscriptionId
+    const Carried = "bulk.carried_event"
+    check far.hear(0, a, Carried) == ecOk
+    check direct.hear(1, b, Carried) == ecOk
+    var seen: EndSeen
+    check far.observe(addr seen) == ecOk
+    const Size = 17 * 1024 * 1024 ## above every peer's 16 MiB frame limit
+    let r = invoke(addr direct, BulkSendRequest(size: Size))
+    check r.isOk
+    # `last` is the payload's length: the CBOR map around the bytes.
+    check heard[1].count.load == 1 and heard[1].last.load > Size
+    # [TF-15] The provider closed that connection; the route stays ready.
+    check ended(addr seen)
+    check seen.code.load == ord(ecTransport)
+    check heard[0].count.load == 0
+    check e.routes().anyIt(
+      it.route == route and it.state.kind == LogosNSRuntimeControlRouteStateKind.Ready
+    )
+    check invoke(addr far, BulkSendRequest(size: 1)).error.code == ecTransport
+    check rc.renew("r", route).code == ecOk
+    var (code, again) = rc.materialize(route, bulkRoot, bulkSchema)
+    check code == ecOk
+    check again.hear(2, a, Carried) == ecOk
+    check invoke(addr direct, BulkSendRequest(size: 3)).isOk
+    check heardAt(2, 1)
+    far.release()
+    again.release()
+    direct.release()
+    e.finish()
+
+  ltTest "[IMPL-DECISION D3] [RUN-0234] a transported subscriber that does not keep up: its connection closes TRANSPORT_ERROR; a direct subscriber gets every Event and the publisher is not held":
+    let (e, rc, twin) = bulkEngine()
+    var (_, far) = rc.bulkHandle("far")
+    let near = twin.establish("near", root = bulkRoot).recordOf.route
+    var (nc, direct) = twin.materialize(near, bulkRoot, bulkSchema)
+    check nc == ecOk
+    var a, b: LogosSubscriptionId
+    const Carried = "bulk.carried_event"
+    check far.hear(0, a, Carried) == ecOk
+    check direct.hear(1, b, Carried) == ecOk
+    var seen: EndSeen
+    check far.observe(addr seen) == ecOk
+    heard[0].hold.store(true)
+    # 2 MiB Events: the held subscriber's undelivered allowance, then its
+    # connection's output, fill well before the last of them.
+    const Size = 2 * 1024 * 1024
+    const Count = 60
+    let started = getMonoTime()
+    var failed = 0
+    for i in 1 .. Count:
+      if invoke(addr direct, BulkSendRequest(size: Size)).isErr:
+        inc failed
+    let took = getMonoTime() - started
+    check failed == 0
+    check took < initDuration(seconds = 20 * Slow)
+    check heard[1].count.load == Count
+    heard[0].hold.store(false)
+    check ended(addr seen)
+    check seen.code.load == ord(ecTransport)
+    check heard[0].count.load < Count
+    far.release()
+    direct.release()
+    e.finish()
+
+  ltTest "[RUN-0832] [IMPL-DECISION G175] scoped publication over a session: only that connection's subscriptions; after Cancel NOT_READY; through a revoked route NOT_AUTHORISED; after the connection closed NOT_READY, and a new connection does not inherit the destination":
+    let valid = changed(3)
+    block cutoff:
+      let e = fixtureEngine(transported(extra = @[dmeterStatic]))
+      discard e.started(dmeter())
+      let (_, rc) = e.startClient()
+      let route = rc.establish("k").recordOf.route
+      var h1 = rc.handle(route)
+      check rc.renew("r", route).code == ecOk
+      var h2 = rc.handle(route)
+      var a, b: LogosSubscriptionId
+      check h1.hear(0, a) == ecOk
+      check h2.hear(1, b) == ecOk
+      mode.store(ord(dmHold))
+      var call = h1.submitted(readReq(5), addr done[0])
+      let (module, inv) = takeHeld()
+      check inv != nil
+      check ctxPublish(inv, "meter.unknown_event", valid) == ecNotAuthorised
+      check ctxPublish(inv, Changed, changed(3)[0 .. 2]) == ecInvalidParams
+      check ctxPublish(inv, Changed, valid) == ecOk
+      check heardAt(0, 1)
+      settled()
+      check heard[1].count.load == 0
+      call.vtable.cancel(addr call)
+      check done[0].finished
+      check done[0].codeOf == ecCancelled
+      check waitUntil(
+        proc(): bool =
+          hooks.load == 1
+      )
+      check ctxPublish(inv, Changed, valid) == ecNotReady
+      settled()
+      check heard[0].count.load == 1
+      settle(module, inv)
+      call.vtable.release(addr call)
+      h1.release()
+      h2.release()
+      e.finish()
+    block revoked:
+      clearHeard()
+      resetDeferred()
+      done[0].reset()
+      let e = fixtureEngine(transported(denyRenew(), extra = @[dmeterStatic]))
+      discard e.started(dmeter())
+      let (_, rc) = e.startClient()
+      let route = rc.establish("k").recordOf.route
+      var h = rc.handle(route)
+      var a: LogosSubscriptionId
+      check h.hear(0, a) == ecOk
+      mode.store(ord(dmHold))
+      var call = h.submitted(readReq(5), addr done[0])
+      let (module, inv) = takeHeld()
+      check inv != nil
+      check rc.renew("r", route).code == ecNotAuthorised
+      check done[0].finished
+      check done[0].codeOf == ecNotAuthorised
+      check ctxPublish(inv, Changed, valid) == ecNotAuthorised
+      settled()
+      check heard[0].count.load == 0
+      settle(module, inv)
+      call.vtable.release(addr call)
+      h.release()
+      e.finish()
+    block closed:
+      clearHeard()
+      resetDeferred()
+      done[0].reset()
+      let e = fixtureEngine(transported(extra = @[dmeterStatic]))
+      discard e.started(dmeter())
+      let (_, rc) = e.startClient()
+      let route = rc.establish("k").recordOf.route
+      var h1 = rc.handle(route)
+      var seen: EndSeen
+      check h1.observe(addr seen) == ecOk
+      mode.store(ord(dmHold))
+      var call = h1.submitted(readReq(5), addr done[0])
+      let (module, inv) = takeHeld()
+      check inv != nil
+      check e.closeSessionsForTests(route).isOk
+      check ended(addr seen)
+      check done[0].finished
+      check done[0].codeOf == ecTransport
+      check rc.renew("r", route).code == ecOk
+      var h2 = rc.handle(route)
+      var b: LogosSubscriptionId
+      check h2.hear(1, b) == ecOk
+      check ctxPublish(inv, Changed, valid) == ecNotReady
+      settled()
+      check heard[1].count.load == 0
+      mode.store(ord(dmInline))
+      check h2.read(4).isOk
+      settle(module, inv)
+      call.vtable.release(addr call)
+      h1.release()
+      h2.release()
+      e.finish()
+
+  ltTest "[RUN-0243] an ordinary publication that cannot be validated is dropped with a diagnostic and leaves the connections as they were":
+    let e = fixtureEngine(transported(extra = @[dmeterStatic]))
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.establish("k").recordOf.route)
+    var seen: EndSeen
+    check h.observe(addr seen) == ecOk
+    var a: LogosSubscriptionId
+    check h.hear(0, a) == ecOk
+    publishRaw(cstring(Changed), encodeCbor(cborMap((cbor("value"), cbor("seven")))))
+    publishRaw(cstring(Changed), [0xA1'u8, 0x65])
+    check e.diagnostics().anyIt("was not delivered on route" in it)
+    check h.read(4).isOk
+    publishRaw(cstring(Changed), changed(7))
+    check heardAt(0, 1)
+    check heard[0].last.load == 7
+    check seen.count.load == 0
+    h.release()
+    e.finish()
+
+  ltTest "[TRN-0290] a released handle's queued Events are discarded: release waits for the handler that runs, and no handler starts afterwards":
+    let e = fixtureEngine(transported(extra = @[dmeterStatic]))
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.establish("k").recordOf.route)
+    var a: LogosSubscriptionId
+    check h.hear(0, a) == ecOk
+    heard[0].hold.store(true)
+    for i in 1 .. 5:
+      publishRaw(cstring(Changed), changed(i))
+    check waitUntil(
+      proc(): bool =
+        heard[0].inside.load == 1
+    )
+    var job = RelJob(route: addr h)
+    var t: Thread[ptr RelJob]
+    createThread(t, releasing, addr job)
+    sleep(100)
+    check not job.done.load # the handler that runs holds the release
+    heard[0].hold.store(false)
+    joinThread(t)
+    check heard[0].count.load == 1
+    settled()
+    check heard[0].count.load == 1 # the four queued Events never ran
+    check heard[0].inside.load == 0
+    e.finish()
+
+  ltTest "[RUN-1074] shutdown: the transported handle observes NOT_READY before any provider is destroyed, a call in flight gets its result, then the provider is released":
+    let e = fixtureEngine(transported())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.establish("k").recordOf.route)
+    var seen: DestroySeen
+    check toResult(h.vtable.observeEnd(addr h, onEndBeforeDestroy, addr seen)).code ==
+      ecOk
+    let gone = destroyed.load
+    gate.store(true)
+    bgDone.store(false)
+    let before = held.load
+    var t: Thread[ptr LogosRouteHandle]
+    createThread(t, background, addr h)
+    check heldAt(before + 1)
+    # The consumer's destroy waits for its own thread's call, as a module
+    # joins its threads before its `_MODULE_destroy` returns.
+    clientDestroyGate.store(true)
+    e.requestShutdown()
+    check waitUntil(
+      proc(): bool =
+        seen.count.load == 1
+    )
+    check seen.code.load == ord(ecNotReady)
+    check seen.destroyed.load == gone
+    check destroyed.load == gone # the call is still in flight
+    gate.store(false)
+    joinThread(t)
+    check bgCode.load == 0
+    clientDestroyGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        destroyed.load == gone + 1
+    )
+    h.release()
     e.finish()
 
 removeDir(shortBase)

@@ -585,8 +585,16 @@ proc submitDeferred(
   d.params =
     copyBytes(cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]), params.len)
   d.paramsLen = params.len
-  d.state =
-    invocationFor(adm, c.consumer, c.route, c.generation, retain(c.blob), c.engine)
+  d.state = invocationFor(
+    adm,
+    c.consumer,
+    c.route,
+    c.generation,
+    retain(c.blob),
+    c.engine,
+    (if c.session: c.conn else: 0'u64),
+    (if c.session: c.requestId else: 0'u64),
+  )
   d.state.guarded = true
   d.state.owner = d
   d.state.entries = 1 # `submit`
@@ -689,7 +697,17 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
     trail.succeeded = c.offerCommitted(
       adm.ticket,
       callProvider(
-        adm, e, c.consumer, c.route, c.generation, c.blob, bare, params, trail
+        adm,
+        e,
+        c.consumer,
+        c.route,
+        c.generation,
+        c.blob,
+        bare,
+        params,
+        trail,
+        (if c.session: c.conn else: 0'u64),
+        (if c.session: c.requestId else: 0'u64),
       ),
       workEnded = true,
     )
