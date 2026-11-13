@@ -1025,7 +1025,14 @@ suite "run.rc: delivery (G178) [IMPL-DECISION G178]":
     check rc.subscribe(ExecutionState, addr watches[0], id) == ecOk
     watches[0].hold.store(true)
     e.slows("s")
-    for i in 0 ..< 4:
+    check e.start("s").tryGet.state == msReady
+    # The first entry's handler runs, held, before the queue overflows behind it.
+    check waitUntil(
+      proc(): bool =
+        watches[0].held.load == 1
+    )
+    check e.stop("s").tryGet.state == msUnloaded
+    for i in 1 ..< 4:
       check e.start("s").tryGet.state == msReady
       check e.stop("s").tryGet.state == msUnloaded
     check waitUntil(
