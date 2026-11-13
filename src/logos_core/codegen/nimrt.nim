@@ -65,6 +65,14 @@ proc add(g: var GeneratedSchema, set: SchemaSet) =
       g.bodies[d.name] = (doc, d.body)
       g.addPlans(doc, d.name, @[], d.body)
 
+proc loadSchemaSet*(s: ContractSet): GeneratedSchema =
+  ## The declarations of an accepted set, for value work (a module's
+  ## configuration schema, DECISIONS I87).
+  var g = GeneratedSchema()
+  for c in s.documents:
+    g.add(schemaSetFor(c.model, s.context))
+  g
+
 proc loadSchema*(
     primary: string, interfaces, supporting: openArray[string], system = false
 ): GeneratedSchema =
@@ -73,10 +81,7 @@ proc loadSchema*(
   let s =
     acceptContractSet(primary, interfaces, supporting, AcceptOptions(system: system))
   doAssert s.isOk, "generated module: its schema set is not accepted: " & s.error
-  var g = GeneratedSchema()
-  for c in s.get.documents:
-    g.add(schemaSetFor(c.model, s.get.context))
-  g
+  loadSchemaSet(s.get)
 
 proc loadCommonSchema*(): GeneratedSchema =
   ## The pinned common schema (INTERFACE §5.1).

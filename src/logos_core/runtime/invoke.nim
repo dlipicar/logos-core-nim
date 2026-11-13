@@ -399,13 +399,15 @@ proc routeCall*(
 # Runtime Control requests ----------------------------------------------------------------
 
 proc rcRequest(
-    bare: string, params: openArray[byte], trail: var CallTrail
+    bare: string, params: openArray[byte], trail: var CallTrail, value: var seq[byte]
 ): Result[RcCall, InvocationFailure] =
   ## [SPEC INTERFACE §4.3, §4.5, §5.2] The checked request of a Runtime Control
   ## method: METHOD_NOT_FOUND for a name the contract does not declare,
   ## INVALID_PARAMS with its detail for bytes that are not a value of the
-  ## method's request schema. A method this Runtime does not perform yet is
-  ## MODULE_ERROR [IMPL].
+  ## method's request schema (a configuration value over 8 MiB included,
+  ## CFG-0025). A method this Runtime does not perform yet is MODULE_ERROR
+  ## [IMPL]. A staged configuration value is taken out into `value`: it stays
+  ## on this thread (I87).
   let declaration = RcNamespace & bare & "_request"
   if bare.len == 0 or not rcSchema().declares(declaration) or
       not rcSchema().declares(RcNamespace & bare & "_response"):
@@ -427,7 +429,9 @@ proc rcRequest(
         )
       )
   trail.request = Opt.some(PayloadCommitment(subtreeRoot: subtree, valueRoot: root))
-  let request = @params
+  # Kept for `request_key` replay; an update, which has none, may be 8 MiB.
+  let request = (if bare == $rmUpdateConfiguration: newSeq[byte]()
+  else: @params)
   template call(which: RcMethod): RcCall =
     RcCall(m: which, request: request)
 
@@ -503,6 +507,41 @@ proc rcRequest(
     c.updateSettings =
       fromChecked(LogosNSRuntimeControlUpdatePermissionSettingsRequest, v)
     ok(c)
+  of $rmGetConfigurationSchema:
+    var c = call(rmGetConfigurationSchema)
+    c.cfgTarget =
+      fromChecked(LogosNSRuntimeControlGetConfigurationSchemaRequest, v).target
+    ok(c)
+  of $rmGetConfigurationSummary:
+    var c = call(rmGetConfigurationSummary)
+    c.cfgTarget =
+      fromChecked(LogosNSRuntimeControlGetConfigurationSummaryRequest, v).target
+    ok(c)
+  of $rmGetConfiguration:
+    var c = call(rmGetConfiguration)
+    c.cfgTarget = fromChecked(LogosNSRuntimeControlGetConfigurationRequest, v).target
+    ok(c)
+  of $rmUpdateConfiguration:
+    var r = fromChecked(LogosNSRuntimeControlUpdateConfigurationRequest, v)
+    var c = call(rmUpdateConfiguration)
+    case r.kind
+    of LogosNSRuntimeControlUpdateConfigurationRequestKind.Stage:
+      let a = addr r.arm_Stage
+      c.cfgUpdate = ConfigUpdate(
+        target: a.target,
+        expectedRevision: a.expected_state_revision,
+        expectedCommitment: a.expected_schema_commitment,
+        stage: true,
+      )
+      value = move a.value
+    of LogosNSRuntimeControlUpdateConfigurationRequestKind.Discard:
+      let a = r.arm_Discard
+      c.cfgUpdate = ConfigUpdate(
+        target: a.target,
+        expectedRevision: a.expected_state_revision,
+        expectedCommitment: a.expected_schema_commitment,
+      )
+    ok(c)
   else:
     err(
       InvocationFailure(
@@ -542,6 +581,31 @@ proc lifecycleResponse(m: RcMethod, v: InstanceView): Result[seq[byte], string] 
       )
     )
 
+proc configResponse(
+    m: RcMethod, target: LogosNSRuntimeModuleInstanceAddress, s: ConfigState
+): Result[seq[byte], string] =
+  ## [SPEC CONFIG §5; I87] A configuration response, encoded here from the
+  ## state the Runtime thread retained, so no value is copied there.
+  case m
+  of rmGetConfigurationSchema:
+    encode(
+      LogosNSRuntimeControlGetConfigurationSchemaResponse(
+        target: target, state_revision: s.revision, schema: bindingOf(s.binding)
+      )
+    )
+  of rmGetConfiguration:
+    encode(
+      LogosNSRuntimeControlGetConfigurationResponse(target: target, state: stateOf(s))
+    )
+  else:
+    # [SPEC CONFIG l.208] the complete staged record, if any
+    var r = LogosNSRuntimeControlUpdateConfigurationResponse(
+      target: target, state_revision: s.revision
+    )
+    if s.staged.isSome:
+      r.staged = Opt.some(toRc(s.staged.get))
+    encode(r)
+
 proc checkedResponse(
     bare: string, bytes: seq[byte], trail: var CallTrail
 ): Result[seq[byte], string] =
@@ -554,6 +618,68 @@ proc checkedResponse(
   trail.response = Opt.some(PayloadCommitment(subtreeRoot: subtree, valueRoot: root))
   ok(bytes)
 
+proc stage(
+    e: Engine,
+    instance, attempt: string,
+    update: ConfigUpdate,
+    phase1: Reply,
+    value: seq[byte],
+    trail: var CallTrail,
+): Result[Reply, InvocationFailure] =
+  ## [SPEC CONFIG §5 l.197-200; I87 §2.7 step 2] Phase 2 of a `stage`, on
+  ## this thread: the value decoded, validated and its value root computed
+  ## against the binding phase 1 returned, then committed by the Runtime
+  ## thread (`rqConfigCommit`). Malformed or too deep is INVALID_PARAMS
+  ## without detail, answered here (row 4 follows rows 1-3, which phase 1
+  ## checked); a value not of the root goes to the Runtime thread, which
+  ## decides whether its detail may be disclosed.
+  let b = phase1.config.binding
+  var u = update
+  var path: seq[CborValue]
+  let checked =
+    checkValue(b.digest, b.document, b.root, b.commitment.subtreeRoot, value)
+  if checked.isErr:
+    if checked.error.fault != vfMismatch:
+      e.record(phase1.capture, trail)
+      return err(
+        failure(
+          ecInvalidParams, "the configuration value is not one deterministic-CBOR value"
+        )
+      )
+    u.mismatch = true
+    path = checked.error.path
+  else:
+    u.value = newBlob(value)
+    u.valueRoot = checked.get
+  u.answers = phase1.answers
+  u.gen = phase1.generation
+  u.invalidations = phase1.invalidations
+  let reply = e.call(
+    Request(
+      kind: rqConfigCommit,
+      origin: moduleOrigin(instance),
+      attempt: attempt,
+      rc: RcCall(m: rmUpdateConfiguration, cfgUpdate: u),
+    )
+  )
+  drop(u.value) # the Runtime thread took its own reference when it staged
+  if reply.error.isSome:
+    var held = reply.config
+    held.release()
+    e.record(reply.capture, trail)
+    if u.mismatch and reply.schemaAllowed:
+      return err(
+        InvocationFailure(
+          code: ecInvalidParams,
+          message: Opt.some(reply.error.get.message),
+          detail: Opt.some(
+            invalidParamsDetail(iprConfigurationSchemaMismatch, Opt.some(path))
+          ),
+        )
+      )
+    return err(failureOf(reply.error.get))
+  ok(reply)
+
 proc rcInvoke*(
     e: Engine, instance, attempt, bare: string, params: seq[byte]
 ): Result[seq[byte], InvocationFailure] =
@@ -562,7 +688,8 @@ proc rcInvoke*(
   ## 1174; I85] A call whose applied decision requires retention is recorded
   ## after its outcome, here.
   var trail: CallTrail
-  let rc = rcRequest(bare, params, trail).valueOr:
+  var value: seq[byte]
+  let rc = rcRequest(bare, params, trail, value).valueOr:
     if error.code == ecInvalidParams:
       # [G171 interim (TF-18)] What is authorized without the payload comes
       # before its validation.
@@ -579,15 +706,26 @@ proc rcInvoke*(
         return err(failureOf(pre.error.get))
     return err(error)
   let m = rc.m
-  let reply = e.call(
+  var reply = e.call(
     Request(kind: rqRc, origin: moduleOrigin(instance), attempt: attempt, rc: rc)
   )
+  var held = reply.config # [I87] references this thread releases
+  defer:
+    held.release()
   if reply.error.isSome:
     e.record(reply.capture, trail)
     return err(failureOf(reply.error.get))
+  if m == rmUpdateConfiguration and rc.cfgUpdate.stage:
+    reply = e.stage(instance, attempt, rc.cfgUpdate, reply, value, trail).valueOr:
+      return err(error)
+    held.release()
+    held = reply.config
   let encoded =
     if m in {rmStartModule, rmStopModule, rmRecoverModule}:
       lifecycleResponse(m, reply.view)
+    elif m in {rmGetConfigurationSchema, rmGetConfiguration, rmUpdateConfiguration}:
+      let target = if m == rmUpdateConfiguration: rc.cfgUpdate.target else: rc.cfgTarget
+      configResponse(m, target, held)
     else:
       Result[seq[byte], string].ok(reply.bytes)
   let response = block:

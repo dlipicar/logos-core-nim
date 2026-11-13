@@ -25,8 +25,8 @@ var
   held*: Atomic[int] ## calls waiting at `gate`
 
 proc initModule(_: type Meter, init: ModuleInit): Result[Meter, InvocationFailure] =
-  if init.configuration == Opt.some(@[0xF4'u8]): # CBOR `false`: refuse to start
-    return err(failure(ecModule, "configuration says no"))
+  if init.stateDir == Opt.some("/refuse"): # refuse to start
+    return err(failure(ecModule, "the state directory says no"))
   ok(
     Meter(
       services: init.services,

@@ -10,7 +10,7 @@ import ../iface/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.runtime-state.v1: the Runtime\'s persistent state (DECISIONS\x0A; I82). One Logos deterministic-CBOR lcn.rs_state value in\x0A; <store_dir>/runtime-state.cbor, written by runtime/store.nim and nothing else.\x0A;\x0A; Arrays may be empty here. The checks the schema cannot express (unique ids,\x0A; intent fields, keys naming known instances, unshared state assignments) are\x0A; applied when the store is read; a failure leaves the file as it is.\x0A;\x0A; The lcn.rs_record rules repeat host_config.cddl\'s lcn.app_module rules\x0A; without `instance` (test_nimgen compares them), plus the configuration\x0A; commitment CONFIG will need; until then a record carrying one is refused.\x0A\x0Alcn.rs_state = {\x0A  format: \"logos-core-nim.runtime-state.v1\",\x0A  runtime_instance_id: tstr .size (1..128),\x0A  epoch: uint64,\x0A  instances: [* lcn.rs_instance],\x0A  retired: [* lcn.rs_retired],\x0A  create_keys: [* lcn.rs_create_key],\x0A}\x0A\x0Alcn.rs_instance = {\x0A  instance: tstr .size (1..128),\x0A  ? provider: tstr .size (1..128),\x0A  source: \"host\" / \"create_module\",\x0A  record: lcn.rs_record,\x0A  state: \"unloaded\" / \"loaded\" / \"ready\" / \"stopping\" / \"error\",\x0A  ? failure: lcn.rs_failure,\x0A  revision: uint64,\x0A  intent: \"uninitialized\" / \"requested\" / \"stopped\",\x0A  ? intent_revision: uint64,\x0A  ? origin: lcn.rs_origin,\x0A}\x0A\x0A; a classification as RUNTIME l.3753 spells it, loader-<code> included\x0Alcn.rs_failure = {\x0A  classification: tstr .size (1..64),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0Alcn.rs_origin =\x0A  { kind: \"host\" } /\x0A  { kind: \"instance\", instance: tstr .size (1..128) }\x0A\x0A; A retired host-assigned instance id, and the host-assigned state\x0A; assignment it keeps reserved. Runtime-assigned names need no tombstone.\x0Alcn.rs_retired = {\x0A  instance: tstr .size (1..128),\x0A  ? state_assignment: tstr .size (1..128),\x0A}\x0A\x0A; one create_module key association (RUNTIME l.3627-3628)\x0Alcn.rs_create_key = {\x0A  consumer: tstr .size (1..128),\x0A  key: tstr .size (1..128),\x0A  module: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0Alcn.rs_record = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.rs_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.rs_requirement],\x0A  ? requested_permissions: [* lcn.rs_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration_commitment: bstr .size 32,\x0A}\x0A\x0Alcn.rs_path = tstr .size (1..4096)\x0A\x0Alcn.rs_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.rs_artifact }\x0A\x0Alcn.rs_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.rs_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0Alcn.rs_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0Alcn.rs_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one side record (runtime/store.nim putSide): the instance it belongs to\x0Alcn.rs_side = {\x0A  instance: tstr .size (1..128),\x0A  value: bstr,\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.runtime-state.v1: the Runtime\'s persistent state (DECISIONS\x0A; I82). One Logos deterministic-CBOR lcn.rs_state value in\x0A; <store_dir>/runtime-state.cbor, written by runtime/store.nim and nothing else.\x0A;\x0A; Arrays may be empty here. The checks the schema cannot express (unique ids,\x0A; intent fields, keys naming known instances, unshared state assignments) are\x0A; applied when the store is read; a failure leaves the file as it is.\x0A;\x0A; The lcn.rs_record rules repeat host_config.cddl\'s lcn.app_module rules\x0A; without `instance` and the configuration inputs (test_nimgen compares\x0A; them), plus the accepted configuration binding\'s digest (DECISIONS I87).\x0A\x0Alcn.rs_state = {\x0A  format: \"logos-core-nim.runtime-state.v1\",\x0A  runtime_instance_id: tstr .size (1..128),\x0A  epoch: uint64,\x0A  instances: [* lcn.rs_instance],\x0A  retired: [* lcn.rs_retired],\x0A  create_keys: [* lcn.rs_create_key],\x0A}\x0A\x0Alcn.rs_instance = {\x0A  instance: tstr .size (1..128),\x0A  ? provider: tstr .size (1..128),\x0A  source: \"host\" / \"create_module\",\x0A  record: lcn.rs_record,\x0A  state: \"unloaded\" / \"loaded\" / \"ready\" / \"stopping\" / \"error\",\x0A  ? failure: lcn.rs_failure,\x0A  revision: uint64,\x0A  intent: \"uninitialized\" / \"requested\" / \"stopped\",\x0A  ? intent_revision: uint64,\x0A  ? origin: lcn.rs_origin,\x0A}\x0A\x0A; a classification as RUNTIME l.3753 spells it, loader-<code> included\x0Alcn.rs_failure = {\x0A  classification: tstr .size (1..64),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0Alcn.rs_origin =\x0A  { kind: \"host\" } /\x0A  { kind: \"instance\", instance: tstr .size (1..128) }\x0A\x0A; A retired host-assigned instance id, and the host-assigned state\x0A; assignment it keeps reserved. Runtime-assigned names need no tombstone.\x0Alcn.rs_retired = {\x0A  instance: tstr .size (1..128),\x0A  ? state_assignment: tstr .size (1..128),\x0A}\x0A\x0A; one create_module key association (RUNTIME l.3627-3628)\x0Alcn.rs_create_key = {\x0A  consumer: tstr .size (1..128),\x0A  key: tstr .size (1..128),\x0A  module: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0Alcn.rs_record = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.rs_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.rs_requirement],\x0A  ? requested_permissions: [* lcn.rs_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration_commitment: bstr .size 32,\x0A}\x0A\x0Alcn.rs_path = tstr .size (1..4096)\x0A\x0Alcn.rs_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.rs_artifact }\x0A\x0Alcn.rs_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.rs_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0Alcn.rs_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0Alcn.rs_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one side record (runtime/store.nim putSide): the instance it belongs to\x0Alcn.rs_side = {\x0A  instance: tstr .size (1..128),\x0A  value: bstr,\x0A}\x0A\x0A; [IMPL-DECISION I87] one configurable instance\'s configuration (side record\x0A; kind `cfg`): the whole accepted binding, so an instance restores from its\x0A; side record alone, and its state. Both are deterministic-CBOR CONFIG\x0A; values (logos.module_configuration.schema_binding and\x0A; .configuration_state), never the in-flight attempted record. The binding\'s\x0A; blake3 digest is the instance record\'s configuration_commitment.\x0Alcn.cfg_record = {\x0A  binding: bstr,\x0A  state: bstr,\x0A  ? last_provisioned: bstr .size 32,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -26,6 +26,11 @@ template storeSchema*(): GeneratedSchema =
   generatedSchema()
 
 type
+  LcnCfgRecord* = object
+    binding*: seq[byte]
+    last_provisioned*: Opt[seq[byte]]
+    state*: seq[byte]
+
   LcnRsArtifact* = object
     hash*: seq[byte]
     hash_suite*: string = "logos.hash-suite.blake3-256"
@@ -184,6 +189,10 @@ type
     retired*: seq[LcnRsRetired]
     runtime_instance_id*: string
 
+proc toCbor*(x: LcnCfgRecord): CborValue
+proc fromChecked*(T: type LcnCfgRecord, v: CborValue): LcnCfgRecord
+proc stepEncLcnCfgRecord*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCfgRecord*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnRsArtifact): CborValue
 proc fromChecked*(T: type LcnRsArtifact, v: CborValue): LcnRsArtifact
 proc stepEncLcnRsArtifact*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -266,6 +275,42 @@ proc toCbor*(x: LcnRsState): CborValue
 proc fromChecked*(T: type LcnRsState, v: CborValue): LcnRsState
 proc stepEncLcnRsState*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnRsState*(w: var DecWork, v: CborValue, dst: pointer)
+
+proc stepEncLcnCfgRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCfgRecord](src)
+  var n = 2
+  if x.last_provisioned.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("binding")
+  node.entries[k].value = cbor(x.binding)
+  inc k
+  if x.last_provisioned.isSome:
+    node.entries[k].key = cbor("last_provisioned")
+    node.entries[k].value = cbor(x.last_provisioned.get)
+    inc k
+  node.entries[k].key = cbor("state")
+  node.entries[k].value = cbor(x.state)
+  inc k
+
+proc stepDecLcnCfgRecord*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCfgRecord](dst)
+  r[] = LcnCfgRecord()
+  r.binding = v.lookup("binding").get.bytes
+  let f1 = v.lookup("last_provisioned")
+  if f1.isSome:
+    r.last_provisioned = Opt.some(f1.get.bytes)
+  r.state = v.lookup("state").get.bytes
+
+proc toCbor*(x: LcnCfgRecord): CborValue =
+  runEnc(stepEncLcnCfgRecord, addr x)
+
+proc fromChecked*(T: type LcnCfgRecord, v: CborValue): LcnCfgRecord =
+  var r: LcnCfgRecord
+  runDec(stepDecLcnCfgRecord, v, addr r)
+  r
 
 proc stepEncLcnRsArtifact*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnRsArtifact](src)
@@ -354,9 +399,9 @@ proc stepDecLcnRsFailure*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsFailure](dst)
   r[] = LcnRsFailure()
   r.classification = v.lookup("classification").get.text
-  let f1 = v.lookup("reason")
-  if f1.isSome:
-    r.reason = Opt.some(f1.get.text)
+  let f2 = v.lookup("reason")
+  if f2.isSome:
+    r.reason = Opt.some(f2.get.text)
 
 proc toCbor*(x: LcnRsFailure): CborValue =
   runEnc(stepEncLcnRsFailure, addr x)
@@ -381,8 +426,8 @@ proc stepEncLcnRsImplementationARDirectDynamicMap*(w: var EncWork, src: pointer,
 proc stepDecLcnRsImplementationARDirectDynamicMap*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsImplementationARDirectDynamicMap](dst)
   r[] = LcnRsImplementationARDirectDynamicMap()
-  let f2 = v.lookup("artifact").get
-  w.later(stepDecLcnRsArtifact, f2, addr r.artifact)
+  let f3 = v.lookup("artifact").get
+  w.later(stepDecLcnRsArtifact, f3, addr r.artifact)
 
 proc toCbor*(x: LcnRsImplementationARDirectDynamicMap): CborValue =
   runEnc(stepEncLcnRsImplementationARDirectDynamicMap, addr x)
@@ -591,30 +636,30 @@ proc stepEncLcnRsInstance*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnRsInstance*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsInstance](dst)
   r[] = LcnRsInstance()
-  let f3 = v.lookup("failure")
-  if f3.isSome:
+  let f4 = v.lookup("failure")
+  if f4.isSome:
     r.failure = Opt.some(default(LcnRsFailure))
-    w.later(stepDecLcnRsFailure, f3.get, addr r.failure.get)
+    w.later(stepDecLcnRsFailure, f4.get, addr r.failure.get)
   r.instance = v.lookup("instance").get.text
-  let f4 = v.lookup("intent").get
-  w.later(stepDecLcnRsInstanceIntentChoice, f4, addr r.intent)
-  let f5 = v.lookup("intent_revision")
-  if f5.isSome:
-    r.intent_revision = Opt.some(uint64(f5.get.uint))
-  let f6 = v.lookup("origin")
+  let f5 = v.lookup("intent").get
+  w.later(stepDecLcnRsInstanceIntentChoice, f5, addr r.intent)
+  let f6 = v.lookup("intent_revision")
   if f6.isSome:
-    r.origin = Opt.some(default(LcnRsOrigin))
-    w.later(stepDecLcnRsOrigin, f6.get, addr r.origin.get)
-  let f7 = v.lookup("provider")
+    r.intent_revision = Opt.some(uint64(f6.get.uint))
+  let f7 = v.lookup("origin")
   if f7.isSome:
-    r.provider = Opt.some(f7.get.text)
-  let f8 = v.lookup("record").get
-  w.later(stepDecLcnRsRecord, f8, addr r.record)
+    r.origin = Opt.some(default(LcnRsOrigin))
+    w.later(stepDecLcnRsOrigin, f7.get, addr r.origin.get)
+  let f8 = v.lookup("provider")
+  if f8.isSome:
+    r.provider = Opt.some(f8.get.text)
+  let f9 = v.lookup("record").get
+  w.later(stepDecLcnRsRecord, f9, addr r.record)
   r.revision = uint64(v.lookup("revision").get.uint)
-  let f9 = v.lookup("source").get
-  w.later(stepDecLcnRsInstanceSourceChoice, f9, addr r.source)
-  let f10 = v.lookup("state").get
-  w.later(stepDecLcnRsInstanceStateChoice, f10, addr r.state)
+  let f10 = v.lookup("source").get
+  w.later(stepDecLcnRsInstanceSourceChoice, f10, addr r.source)
+  let f11 = v.lookup("state").get
+  w.later(stepDecLcnRsInstanceStateChoice, f11, addr r.state)
 
 proc toCbor*(x: LcnRsInstance): CborValue =
   runEnc(stepEncLcnRsInstance, addr x)
@@ -728,9 +773,9 @@ proc stepDecLcnRsPermission*(w: var DecWork, v: CborValue, dst: pointer) =
   r[] = LcnRsPermission()
   r.constraints = v.lookup("constraints").get.bytes
   r.permission = v.lookup("permission").get.text
-  let f11 = v.lookup("reason")
-  if f11.isSome:
-    r.reason = Opt.some(f11.get.text)
+  let f12 = v.lookup("reason")
+  if f12.isSome:
+    r.reason = Opt.some(f12.get.text)
 
 proc toCbor*(x: LcnRsPermission): CborValue =
   runEnc(stepEncLcnRsPermission, addr x)
@@ -767,10 +812,10 @@ proc stepEncLcnRsRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   inc k
   if x.implements.isSome:
     node.entries[k].key = cbor("implements")
-    let a14 = newCborArray(x.implements.get.len)
-    node.entries[k].value = a14
-    for i15 in 0 ..< x.implements.get.len:
-      w.later(stepEncSchemaCommitment, addr x.implements.get[i15], addr a14.items[i15])
+    let a15 = newCborArray(x.implements.get.len)
+    node.entries[k].value = a15
+    for i16 in 0 ..< x.implements.get.len:
+      w.later(stepEncSchemaCommitment, addr x.implements.get[i16], addr a15.items[i16])
     inc k
   node.entries[k].key = cbor("module")
   node.entries[k].value = cbor(x.module)
@@ -781,17 +826,17 @@ proc stepEncLcnRsRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc k
   if x.requested_permissions.isSome:
     node.entries[k].key = cbor("requested_permissions")
-    let a19 = newCborArray(x.requested_permissions.get.len)
-    node.entries[k].value = a19
-    for i20 in 0 ..< x.requested_permissions.get.len:
-      w.later(stepEncLcnRsPermission, addr x.requested_permissions.get[i20], addr a19.items[i20])
+    let a20 = newCborArray(x.requested_permissions.get.len)
+    node.entries[k].value = a20
+    for i21 in 0 ..< x.requested_permissions.get.len:
+      w.later(stepEncLcnRsPermission, addr x.requested_permissions.get[i21], addr a20.items[i21])
     inc k
   if x.requires.isSome:
     node.entries[k].key = cbor("requires")
-    let a23 = newCborArray(x.requires.get.len)
-    node.entries[k].value = a23
-    for i24 in 0 ..< x.requires.get.len:
-      w.later(stepEncLcnRsRequirement, addr x.requires.get[i24], addr a23.items[i24])
+    let a24 = newCborArray(x.requires.get.len)
+    node.entries[k].value = a24
+    for i25 in 0 ..< x.requires.get.len:
+      w.later(stepEncLcnRsRequirement, addr x.requires.get[i25], addr a24.items[i25])
     inc k
   if x.state_assignment.isSome:
     node.entries[k].key = cbor("state_assignment")
@@ -801,37 +846,37 @@ proc stepEncLcnRsRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnRsRecord*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsRecord](dst)
   r[] = LcnRsRecord()
-  let f12 = v.lookup("configuration_commitment")
-  if f12.isSome:
-    r.configuration_commitment = Opt.some(f12.get.bytes)
-  let f13 = v.lookup("implementation").get
-  w.later(stepDecLcnRsImplementation, f13, addr r.implementation)
-  let f16 = v.lookup("implements")
-  if f16.isSome:
+  let f13 = v.lookup("configuration_commitment")
+  if f13.isSome:
+    r.configuration_commitment = Opt.some(f13.get.bytes)
+  let f14 = v.lookup("implementation").get
+  w.later(stepDecLcnRsImplementation, f14, addr r.implementation)
+  let f17 = v.lookup("implements")
+  if f17.isSome:
     r.implements = Opt.some(default(seq[SchemaCommitment]))
-    r.implements.get.setLen(f16.get.items.len)
-    for i17 in 0 ..< f16.get.items.len:
-      w.later(stepDecSchemaCommitment, f16.get.items[i17], addr r.implements.get[i17])
+    r.implements.get.setLen(f17.get.items.len)
+    for i18 in 0 ..< f17.get.items.len:
+      w.later(stepDecSchemaCommitment, f17.get.items[i18], addr r.implements.get[i18])
   r.module = v.lookup("module").get.text
-  let f18 = v.lookup("primary_contract")
-  if f18.isSome:
+  let f19 = v.lookup("primary_contract")
+  if f19.isSome:
     r.primary_contract = Opt.some(default(SchemaCommitment))
-    w.later(stepDecSchemaCommitment, f18.get, addr r.primary_contract.get)
-  let f21 = v.lookup("requested_permissions")
-  if f21.isSome:
+    w.later(stepDecSchemaCommitment, f19.get, addr r.primary_contract.get)
+  let f22 = v.lookup("requested_permissions")
+  if f22.isSome:
     r.requested_permissions = Opt.some(default(seq[LcnRsPermission]))
-    r.requested_permissions.get.setLen(f21.get.items.len)
-    for i22 in 0 ..< f21.get.items.len:
-      w.later(stepDecLcnRsPermission, f21.get.items[i22], addr r.requested_permissions.get[i22])
-  let f25 = v.lookup("requires")
-  if f25.isSome:
+    r.requested_permissions.get.setLen(f22.get.items.len)
+    for i23 in 0 ..< f22.get.items.len:
+      w.later(stepDecLcnRsPermission, f22.get.items[i23], addr r.requested_permissions.get[i23])
+  let f26 = v.lookup("requires")
+  if f26.isSome:
     r.requires = Opt.some(default(seq[LcnRsRequirement]))
-    r.requires.get.setLen(f25.get.items.len)
-    for i26 in 0 ..< f25.get.items.len:
-      w.later(stepDecLcnRsRequirement, f25.get.items[i26], addr r.requires.get[i26])
-  let f27 = v.lookup("state_assignment")
-  if f27.isSome:
-    r.state_assignment = Opt.some(f27.get.text)
+    r.requires.get.setLen(f26.get.items.len)
+    for i27 in 0 ..< f26.get.items.len:
+      w.later(stepDecLcnRsRequirement, f26.get.items[i27], addr r.requires.get[i27])
+  let f28 = v.lookup("state_assignment")
+  if f28.isSome:
+    r.state_assignment = Opt.some(f28.get.text)
 
 proc toCbor*(x: LcnRsRecord): CborValue =
   runEnc(stepEncLcnRsRecord, addr x)
@@ -882,10 +927,10 @@ proc stepEncLcnRsRequirement*(w: var EncWork, src: pointer, dst: ptr CborValue) 
 proc stepDecLcnRsRequirement*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsRequirement](dst)
   r[] = LcnRsRequirement()
-  let f28 = v.lookup("cardinality").get
-  w.later(stepDecLcnRsRequirementCardinalityChoice, f28, addr r.cardinality)
-  let f29 = v.lookup("contract").get
-  w.later(stepDecSchemaCommitment, f29, addr r.contract)
+  let f29 = v.lookup("cardinality").get
+  w.later(stepDecLcnRsRequirementCardinalityChoice, f29, addr r.cardinality)
+  let f30 = v.lookup("contract").get
+  w.later(stepDecSchemaCommitment, f30, addr r.contract)
 
 proc toCbor*(x: LcnRsRequirement): CborValue =
   runEnc(stepEncLcnRsRequirement, addr x)
@@ -915,9 +960,9 @@ proc stepDecLcnRsRetired*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsRetired](dst)
   r[] = LcnRsRetired()
   r.instance = v.lookup("instance").get.text
-  let f30 = v.lookup("state_assignment")
-  if f30.isSome:
-    r.state_assignment = Opt.some(f30.get.text)
+  let f31 = v.lookup("state_assignment")
+  if f31.isSome:
+    r.state_assignment = Opt.some(f31.get.text)
 
 proc toCbor*(x: LcnRsRetired): CborValue =
   runEnc(stepEncLcnRsRetired, addr x)
@@ -959,10 +1004,10 @@ proc stepEncLcnRsState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   dst[] = node
   var k = 0
   node.entries[k].key = cbor("create_keys")
-  let a31 = newCborArray(x.create_keys.len)
-  node.entries[k].value = a31
-  for i32 in 0 ..< x.create_keys.len:
-    w.later(stepEncLcnRsCreateKey, addr x.create_keys[i32], addr a31.items[i32])
+  let a32 = newCborArray(x.create_keys.len)
+  node.entries[k].value = a32
+  for i33 in 0 ..< x.create_keys.len:
+    w.later(stepEncLcnRsCreateKey, addr x.create_keys[i33], addr a32.items[i33])
   inc k
   node.entries[k].key = cbor("epoch")
   node.entries[k].value = cbor(uint64(x.epoch))
@@ -971,16 +1016,16 @@ proc stepEncLcnRsState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   node.entries[k].value = cbor("logos-core-nim.runtime-state.v1")
   inc k
   node.entries[k].key = cbor("instances")
-  let a35 = newCborArray(x.instances.len)
-  node.entries[k].value = a35
-  for i36 in 0 ..< x.instances.len:
-    w.later(stepEncLcnRsInstance, addr x.instances[i36], addr a35.items[i36])
+  let a36 = newCborArray(x.instances.len)
+  node.entries[k].value = a36
+  for i37 in 0 ..< x.instances.len:
+    w.later(stepEncLcnRsInstance, addr x.instances[i37], addr a36.items[i37])
   inc k
   node.entries[k].key = cbor("retired")
-  let a39 = newCborArray(x.retired.len)
-  node.entries[k].value = a39
-  for i40 in 0 ..< x.retired.len:
-    w.later(stepEncLcnRsRetired, addr x.retired[i40], addr a39.items[i40])
+  let a40 = newCborArray(x.retired.len)
+  node.entries[k].value = a40
+  for i41 in 0 ..< x.retired.len:
+    w.later(stepEncLcnRsRetired, addr x.retired[i41], addr a40.items[i41])
   inc k
   node.entries[k].key = cbor("runtime_instance_id")
   node.entries[k].value = cbor(x.runtime_instance_id)
@@ -989,19 +1034,19 @@ proc stepEncLcnRsState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnRsState*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsState](dst)
   r[] = LcnRsState()
-  let f33 = v.lookup("create_keys").get
-  r.create_keys.setLen(f33.items.len)
-  for i34 in 0 ..< f33.items.len:
-    w.later(stepDecLcnRsCreateKey, f33.items[i34], addr r.create_keys[i34])
+  let f34 = v.lookup("create_keys").get
+  r.create_keys.setLen(f34.items.len)
+  for i35 in 0 ..< f34.items.len:
+    w.later(stepDecLcnRsCreateKey, f34.items[i35], addr r.create_keys[i35])
   r.epoch = uint64(v.lookup("epoch").get.uint)
-  let f37 = v.lookup("instances").get
-  r.instances.setLen(f37.items.len)
-  for i38 in 0 ..< f37.items.len:
-    w.later(stepDecLcnRsInstance, f37.items[i38], addr r.instances[i38])
-  let f41 = v.lookup("retired").get
-  r.retired.setLen(f41.items.len)
-  for i42 in 0 ..< f41.items.len:
-    w.later(stepDecLcnRsRetired, f41.items[i42], addr r.retired[i42])
+  let f38 = v.lookup("instances").get
+  r.instances.setLen(f38.items.len)
+  for i39 in 0 ..< f38.items.len:
+    w.later(stepDecLcnRsInstance, f38.items[i39], addr r.instances[i39])
+  let f42 = v.lookup("retired").get
+  r.retired.setLen(f42.items.len)
+  for i43 in 0 ..< f42.items.len:
+    w.later(stepDecLcnRsRetired, f42.items[i43], addr r.retired[i43])
   r.runtime_instance_id = v.lookup("runtime_instance_id").get.text
 
 proc toCbor*(x: LcnRsState): CborValue =
@@ -1011,6 +1056,20 @@ proc fromChecked*(T: type LcnRsState, v: CborValue): LcnRsState =
   var r: LcnRsState
   runDec(stepDecLcnRsState, v, addr r)
   r
+
+proc fromCbor*(T: type LcnCfgRecord, v: CborValue): Result[LcnCfgRecord, string] =
+  ## A value checked against `lcn.cfg_record`.
+  ?generatedSchema().check("lcn.cfg_record", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCfgRecord): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.cfg_record`.
+  generatedSchema().encodeChecked("lcn.cfg_record", toCbor(x))
+
+proc decode*(T: type LcnCfgRecord, data: openArray[byte]): Result[LcnCfgRecord, string] =
+  ## One deterministic-CBOR `lcn.cfg_record` value.
+  let v = ?generatedSchema().decodeChecked("lcn.cfg_record", data)
+  ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnRsArtifact, v: CborValue): Result[LcnRsArtifact, string] =
   ## A value checked against `lcn.rs_artifact`.

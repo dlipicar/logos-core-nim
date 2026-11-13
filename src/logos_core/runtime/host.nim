@@ -400,7 +400,11 @@ proc launch(h: ptr HostRuntime): LogosResult =
     cfg.facts = h.facts
   var instances: seq[BootstrapInstance]
   for m in c.modules:
-    instances.add(BootstrapInstance(instance: m.instance, record: m.record))
+    instances.add(
+      BootstrapInstance(
+        instance: m.instance, record: m.record, configuration: m.configuration
+      )
+    )
   var e: Engine
   withLock h.lock:
     if h.shutdownRequested:

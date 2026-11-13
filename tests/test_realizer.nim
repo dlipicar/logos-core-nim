@@ -15,7 +15,8 @@ import ../src/logos_core/runtime/realizer
 import ../src/logos_core/crypto/blake3
 import ../src/logos_core/iface/[accept, names]
 import ../src/logos_core/pins
-import ./support/[kitbuild, kitruntime]
+import ../src/logos_core/runtime/config
+import ./support/[kitbuild, kitruntime, tunerconfig]
 import ./kit/[meter_impl, sensor_impl, shapes_impl]
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "realizer" / kitVariant
@@ -428,6 +429,39 @@ suite "run.realizer: realize (LOADER §6, §7, §10) [IMPL]":
     check r.release(a.id, "c1").isOk
     let b = r.realize(staticRequest("c1", "plain_consumer", "plain")).tryGet
     check b.id != a.id and inits == 2 and destroys == 1
+
+  test "[LDR-0045] [LDR-0149] [LDR-0062] [LDR-0065] the configuration handoff reaches _MODULE_init; another handoff is instance-conflict; a live one needs apply_configuration":
+    reset()
+    let blobs = liveConfigBlobs()
+    let r = fresh()
+    r.registerStatic("plain", plainTable()).tryGet
+    let bytes = tunerInput(tunerValue("handoff-station"), 3)
+    let input = newBlob(bytes)
+    let roots = fromRc(tunerCommitment()).tryGet
+    proc request(revision: uint64, live = false): RealizeRequest =
+      result = staticRequest("c1", "plain_consumer", "plain")
+      result.configuration = Opt.some(
+        ConfigurationHandoff(
+          input: input, live: live, commitment: roots, valueRevision: revision
+        )
+      )
+
+    let a = r.realize(request(3)).tryGet
+    check seenInput.configurationCborLen == csize_t(bytes.len)
+    check @(seenInput.configurationCbor.toOpenArray(0, bytes.high)) == bytes
+    check r.realize(request(3)).tryGet == a and inits == 1
+    let conflict = r.realize(request(4))
+    check conflict.error.code == lecInstanceConflict
+    check "handoff-station" notin conflict.error.message
+    let status = r.getStatus("c1").tryGet
+    check "handoff-station" notin $status
+    check r.release(a.id, "c1").isOk
+    # [SPEC LOADER §5.2; CONFIG §8] A live declaration without the hook.
+    let live = r.realize(request(3, live = true))
+    check live.error.code == lecAbiInvalid and inits == 1
+    check "handoff-station" notin live.error.message
+    drop(input)
+    check liveConfigBlobs() == blobs
 
   test "[LDR-0018] [LDR-0024] [LDR-0130] semantically invalid requests are invalid-request":
     reset()

@@ -54,8 +54,11 @@ type
     requires*: seq[ProviderRequirement]
     requestedPermissions*: seq[RequestedPermission]
     stateAssignment*: Opt[string] ## Runtime's state assignment for the instance
-    declaresConfiguration*: bool
-      ## the input carried a configuration declaration (CONFIG is not built)
+    configuration*: Opt[Digest]
+      ## [SPEC RUNTIME §8 l.1384-1387; CONFIG §2] the accepted configuration
+      ## binding's digest (`config.bindingDigest`, DECISIONS I87 C4), when the
+      ## module declares configuration. Only an accepted declaration supplies
+      ## it; the binding itself travels beside the record.
 
 func sized(s: string, lo, hi: int): bool =
   s.len >= lo and s.len <= hi and isValidUtf8(s)
@@ -105,10 +108,6 @@ func checkRecord*(r: ModuleRecord): Result[void, string] =
     let s = r.stateAssignment.get
     if not s.sized(1, MaxAssignmentIdBytes) or not s.pathSafe:
       return err("a state assignment must be 1 to 128 bytes of [A-Za-z0-9._-]")
-  if r.declaresConfiguration:
-    # [IMPL] I71, I74: no CONFIG handoff yet, so no record that declares
-    # configuration is accepted (§8 l.1384-1386 requires validating it first).
-    return err("module configuration is not supported yet")
   ok()
 
 func descriptor*(r: ModuleRecord): RealizationDescriptor =

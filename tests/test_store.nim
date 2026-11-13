@@ -228,9 +228,6 @@ suite "run.store: the Runtime state store [IMPL]":
     var errNoFailure = LcnRsState.decode(good).tryGet
     errNoFailure.instances[1].failure = Opt.none(LcnRsFailure)
     cases.add(("error without a failure", encodeCbor(toCbor(errNoFailure))))
-    var config = LcnRsState.decode(good).tryGet
-    config.instances[0].record.configuration_commitment = Opt.some(newSeq[byte](32))
-    cases.add(("a configuration declaration", encodeCbor(toCbor(config))))
     let expected = {
       "truncated": "malformed-cbor",
       "non-deterministic": "non-deterministic-cbor",
@@ -243,7 +240,6 @@ suite "run.store: the Runtime state store [IMPL]":
       "a key naming an unknown instance": "unknown instance",
       "an intent revision without requested intent": "without requested intent",
       "error without a failure": "error without a failure",
-      "a configuration declaration": "not supported",
     }.toTable
     check expected.len == cases.len
     for (name, bytes) in cases:

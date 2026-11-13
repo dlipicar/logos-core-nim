@@ -20,6 +20,8 @@ Usage:
               [--interface:FILE]... [--supporting:FILE]...
   lcn-gen kit [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
               [--interface:FILE]... [--supporting:FILE]...
+              [--configuration:FILE --configuration-root:NAME
+               [--live-reconfiguration]]
   lcn-gen calls [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
                 [--interface:FILE]... [--supporting:FILE]...
 
@@ -36,7 +38,9 @@ nim          accepts the set and writes DIR/<module or namespace>_types.nim
 kit          accepts a concrete module document's set and writes the Nim
              types and DIR/<module>_kit.nim: the module's exported ABI
              symbols, typed _CALL_ provider functions included, over
-             handlers its author writes in Nim (PROVISIONAL)
+             handlers its author writes in Nim (PROVISIONAL); with
+             --configuration, also DIR/<module>_configuration_types.nim, and
+             the kit checks and delivers the configuration (CONFIG §6, §8)
 calls        accepts a provider's set (a concrete module document, or an
              interface document) and writes DIR/<stem>_types.h,
              <stem>_types.nim, <stem>_calls.nim and <stem>_calls.h: typed
@@ -51,6 +55,14 @@ calls        accepts a provider's set (a concrete module document, or an
 --system           the set is a Logos system contract (reserved logos names)
 --interface:FILE   an implemented interface document (repeatable)
 --supporting:FILE  a supporting schema document (repeatable)
+--configuration:FILE
+                   kit: the module's configuration schema (CONFIG §2), a
+                   supporting schema resolved against the common schema only
+--configuration-root:NAME
+                   kit: the configuration value's type in that schema
+--live-reconfiguration
+                   kit: the module declares live reconfiguration and exports
+                   _MODULE_apply_configuration (CONFIG §8)
 
 Limits (INTERFACE §2.1): no identifier-length limit; identifiers are never
 truncated, hashed or aliased. Input is bounded by the INTERFACE §5.3 schema
@@ -87,6 +99,8 @@ proc main(): int =
     prefix = "logos_core/"
     opts = AcceptOptions()
     interfaces, supporting: seq[string]
+    configuration, configurationRoot = ""
+    live = false
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
@@ -110,6 +124,12 @@ proc main(): int =
         interfaces.add(val)
       of "supporting":
         supporting.add(val)
+      of "configuration":
+        configuration = val
+      of "configuration-root":
+        configurationRoot = val
+      of "live-reconfiguration":
+        live = true
       of "help", "h":
         echo usage
         return 0
@@ -117,6 +137,14 @@ proc main(): int =
         return fail("unknown option " & key & "\n" & usage)
     of cmdEnd:
       discard
+  if (configuration.len > 0 or configurationRoot.len > 0 or live) and command != "kit":
+    return fail("--configuration options apply to kit only\n" & usage)
+  if (configuration.len > 0) != (configurationRoot.len > 0) or
+      (live and configuration.len == 0):
+    return fail(
+      "--configuration and --configuration-root go together, and " &
+        "--live-reconfiguration needs them\n" & usage
+    )
   case command
   of "logos-types":
     write(outDir, "logos_types.h", logosTypesHeader())
@@ -180,12 +208,31 @@ proc main(): int =
       let module = nimModule(set, NimOptions(importPrefix: prefix), opts.system).valueOr:
         return fail(error)
       if command == "kit":
-        let kit = kitModule(set, KitOptions(importPrefix: prefix), opts.system).valueOr:
+        var kopts = KitOptions(importPrefix: prefix)
+        var configTypes = ""
+        if configuration.len > 0:
+          let text =
+            try:
+              readFile(configuration)
+            except CatchableError as e:
+              return fail(e.msg)
+          let cset = configurationSet(text).valueOr:
+            return fail(error)
+          let c = KitConfiguration(set: cset, root: configurationRoot, live: live)
+          kopts.configuration = Opt.some(c)
+          configTypes = configurationTypesModule(set, c, kopts).valueOr:
+            return fail(error)
+        let kit = kitModule(set, kopts, opts.system).valueOr:
           return fail(error)
-        let r = write(outDir, set.cSchemaSet.headerName & "_types.nim", module)
-        if r != 0:
-          return r
-        return write(outDir, set.cSchemaSet.headerName & "_kit.nim", kit)
+        var outputs = @[(set.cSchemaSet.headerName & "_types.nim", module)]
+        if configTypes.len > 0:
+          outputs.add((configurationTypesName(set) & ".nim", configTypes))
+        outputs.add((set.cSchemaSet.headerName & "_kit.nim", kit))
+        for (name, text) in outputs:
+          let r = write(outDir, name, text)
+          if r != 0:
+            return r
+        return 0
       return write(outDir, set.cSchemaSet.headerName & "_types.nim", module)
     let header = contractHeader(set.cSchemaSet).valueOr:
       return fail(error)

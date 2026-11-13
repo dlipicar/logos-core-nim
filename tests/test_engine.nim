@@ -187,7 +187,8 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
       @[RequestedPermission(permission: "p", constraints: @[0x18'u8, 0x01])]
     bad.add(cbor)
     var configured = gated()
-    configured.declaresConfiguration = true
+    # [RUN-0259] A binding no accepted declaration came with.
+    configured.configuration = Opt.some(default(Digest))
     bad.add(configured)
     for r in bad:
       let x = e.create(r)

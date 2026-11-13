@@ -1,0 +1,12 @@
+; The configuration schema of the test tuner module (CONFIG §2; DECISIONS I87):
+; a supporting schema, resolved against itself and the common schema only.
+; `pad` lets a test make a value of any size up to the 8 MiB limit.
+
+tuner.config = {
+  station: tuner.station,
+  volume: uint32,
+  ? presets: [* tuner.station],
+  ? pad: bstr,
+}
+
+tuner.station = tstr .size (1..64)

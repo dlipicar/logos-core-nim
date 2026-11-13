@@ -16,11 +16,11 @@ import ../base/clock
 import ../hash/hashinput
 import ../iface/outcome
 import ../authority/facts
-import ./[authz, bell, callaudit, records, realizer, routes]
+import ./[authz, bell, callaudit, configcheck, records, realizer, routes]
 
 export
-  authz, callaudit, clock, facts, records, realizer, routes, outcome.ErrorCode,
-  hashinput.Digest
+  authz, callaudit, clock, configcheck, facts, records, realizer, routes,
+  outcome.ErrorCode, hashinput.Digest
 
 const
   DefaultStartupDeadline* = initDuration(seconds = 120)
@@ -144,6 +144,9 @@ type
     ## input, with its protected instance identity.
     instance*: string
     record*: ModuleRecord
+    configuration*: Opt[AcceptedConfiguration]
+      ## [SPEC CONFIG §2, §4] the accepted declaration, with this instance's
+      ## provisioned value if any (G141); its digest is `record.configuration`
 
   AuthorityPolicy* = object
     ## [SPEC RUNTIME §9; plan §2.3, §2.13] The `capability-authority` policy:
@@ -162,6 +165,9 @@ type
     ## `create_module` selects: protected deployment input (BCP l.367; RUNTIME
     ## l.3614-3621), a direct record.
     record*: ModuleRecord ## with no state assignment
+    configuration*: Opt[AcceptedConfiguration]
+      ## [SPEC CONFIG §2] the accepted declaration, never a provisioned value
+      ## (RUN-0923); its digest is `record.configuration`
     persistentState*: bool
       ## [IMPL] each created instance gets a fresh state assignment
       ## (RUNTIME §8 l.1451)
@@ -300,6 +306,9 @@ type
     rqRcDeliver
       ## [G178] an event worker asks for the next entry of a subscription it
       ## drains, admitted for one handler invocation
+    rqConfigCommit
+      ## [I87] phase 2 of a staging `update_configuration`: the value the
+      ## caller's thread validated, committed if phase 1's checks still hold
       ## [SPEC RUNTIME §10.1 l.3801-3804] an execution authorization ended
       ## outside the Runtime's own checks (`engine.stopForAuthority`)
 
@@ -324,6 +333,31 @@ type
     rmGetExecutionSummary = "get_execution_summary"
     rmGetPermissionSettings = "get_permission_settings"
     rmUpdatePermissionSettings = "update_permission_settings"
+    rmGetConfigurationSchema = "get_configuration_schema"
+    rmGetConfigurationSummary = "get_configuration_summary"
+    rmGetConfiguration = "get_configuration"
+    rmUpdateConfiguration = "update_configuration"
+    rmApplyConfiguration = "apply_configuration"
+
+  ConfigUpdate* = object
+    ## [SPEC CONFIG §5; I87] `update_configuration` as the Runtime thread
+    ## sees it: a staged value stays on the caller's thread until it is
+    ## validated (`configcheck.checkValue`), then crosses as a retained blob.
+    target*: LogosNSRuntimeModuleInstanceAddress
+    expectedRevision*: uint64
+    expectedCommitment*: LogosNSModuleConfigurationSchemaCommitment
+    stage*: bool ## `stage`; else `discard`
+    value*: Blob
+      ## rqConfigCommit: the validated value, borrowed: the caller's thread
+      ## keeps its reference until the reply, and staging takes its own
+    valueRoot*: Digest ## rqConfigCommit: its value root
+    mismatch*: bool
+      ## rqConfigCommit: the value is not one of the root
+      ## (`configuration-schema-mismatch`); `value` is nil
+    answers*: seq[AuthzAnswer] ## rqConfigCommit: phase 1's decisions
+    gen*, invalidations*: uint64
+      ## rqConfigCommit: the binding generation and invalidations phase 1
+      ## was decided under (`fresh`)
 
   RcCall* = object ## One checked Runtime Control request.
     request*: seq[byte] ## its deterministic CBOR, for `request_key` replay
@@ -360,6 +394,12 @@ type
       getSettings*: LogosNSRuntimeControlGetPermissionSettingsRequest
     of rmUpdatePermissionSettings:
       updateSettings*: LogosNSRuntimeControlUpdatePermissionSettingsRequest
+    of rmGetConfigurationSchema, rmGetConfigurationSummary, rmGetConfiguration:
+      cfgTarget*: LogosNSRuntimeModuleInstanceAddress
+    of rmUpdateConfiguration:
+      cfgUpdate*: ConfigUpdate
+    of rmApplyConfiguration:
+      cfgApply*: LogosNSRuntimeControlApplyConfigurationRequest
     of rmGetSelf, rmShutdownRuntime, rmGetExecutionPermissions:
       discard
 
@@ -427,6 +467,15 @@ type
     drained*: bool
       ## rqRcDeliver: the drain ends here (no entry left, the subscription
       ## inactive, or its quota used); the worker leaves it
+    config*: ConfigState
+      ## [I87] rqRc, rqConfigCommit: the target's configuration state for the
+      ## response, with references the receiver releases (`config.release`)
+    invalidations*: uint64
+      ## [I87] rqRc phase 1 of a staging update: the invalidations its
+      ## decisions (`answers`) were made under, with `generation`
+    schemaAllowed*: bool
+      ## [I87] rqConfigCommit: a `configuration-schema-mismatch` may carry its
+      ## detail (the caller holds `get_configuration_schema` authority)
 
   ReplyChannel* = ptr Channel[Reply]
 
@@ -436,6 +485,7 @@ type
     instance*: string
     module*: string ## rqStart, rqStop: the expected module name, when given
     record*: ModuleRecord
+    configuration*: Opt[AcceptedConfiguration] ## rqCreate: `record`'s declaration
     expectedRevision*: Opt[uint64]
     attempt*: string ## the attempt token of the binding a module called through
     reason*: string

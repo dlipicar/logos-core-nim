@@ -249,6 +249,7 @@ proc sensorModuleLayout*(): seq[(string, int)] =
 template exportSensorModule*(T: typedesc) =
   ## Defines `sensor_module`'s exported symbols over the handlers of `T`.
   proc sensorModuleKitCreate(init: ModuleInit): Result[pointer, InvocationFailure] {.nimcall, gcsafe, raises: [].} =
+    ?kitNoConfiguration(init)
     let r = initModule(T, init)
     if r.isErr:
       return err(r.error)

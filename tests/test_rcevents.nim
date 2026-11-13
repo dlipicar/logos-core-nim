@@ -20,7 +20,7 @@ import ../src/logos_core/codegen/nimrt
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, payload, surface]
 import ../src/logos_core/iface/common_types
-import ./support/[kitbuild, kitruntime]
+import ./support/[kitbuild, kitruntime, tunerconfig]
 import ./kit/meter_impl
 import ./generated/meter_module_calls
 
@@ -33,6 +33,7 @@ removeDir(work)
 createDir(work)
 
 include ./support/routefixture
+include ./support/configrc
 
 const
   ModuleState = "logos.runtime_control.module_state_changed_event"
@@ -42,7 +43,7 @@ const
   PermissionSettings = "logos.runtime_control.permission_settings_changed_event"
   ConfigurationState = "logos.runtime_control.configuration_state_changed_event"
   LogCap = 640 ## entries a watch records
-  EntryBytes = 384
+  EntryBytes = 1024 ## a configuration summary with two records fits
   NameBytes = 96
 
 # Handlers -----------------------------------------------------------------------------
@@ -707,7 +708,46 @@ suite "run.rc: the events (RUNTIME §9.3 l.3496-3511, l.3715-3735)":
           check rcSchema().commitment(name, v.get).isOk
     e.finish()
 
-# Authority ------------------------------------------------------------------------------
+  # Authority ------------------------------------------------------------------------------
+  test "[RUN-0462] [CFG-0104] [CFG-0105] [CFG-0106] [CFG-0108] `configuration_state_changed` after each revision change, in revision order, with the summary and never a value":
+    let e = fixtureEngine(rcConfig())
+    let (_, rc) = e.startClient("c")
+    var id: LogosSubscriptionId
+    check rc.subscribe(ConfigurationState, addr watches[0], id) == ecOk
+    let a = tunerAccepted(default = Opt.some(tunerValue()))
+    var configured = meter()
+    configured.configuration = Opt.some(a.digest)
+    discard e.create(configured, "m", configuration = Opt.some(a)).tryGet
+    discard e.create(meter(), "plain").tryGet
+    let t = e.target("m")
+    check rc.stage(t, 1, tunerValue("b")).updated.state_revision == 2
+    check rc.discardStaged(t, 2).updated.state_revision == 3
+    # A refused update changes nothing, and is not reported.
+    check rc.stage(t, 1, tunerValue("c")).code == ecInvalidParams
+    check watches[0].reached(3)
+    check watches[0].quiet() == 3
+    var evs: seq[LogosNSRuntimeControlConfigurationStateChangedEvent]
+    for i in 0 ..< 3:
+      check watches[0].nameAt(i) == ConfigurationState
+      let raw = watches[0].bytesAt(i)
+      check watches[0].lens[i] < EntryBytes
+      var text = newString(raw.len)
+      for j, b in raw:
+        text[j] = char(b)
+      check "radio-1" notin text and "station" notin text
+      evs.add(LogosNSRuntimeControlConfigurationStateChangedEvent.decode(raw).tryGet)
+    check evs.mapIt(it.state.state_revision) == @[1'u64, 2, 3]
+    for ev in evs:
+      check ev.target == t
+      check ev.state.schema_commitment == Opt.some(tunerCommitment())
+      check ev.state.current.isNone
+    check evs[0].state.staged.get.provenance.kind ==
+      LogosNSModuleConfigurationProvenanceKind.Package_default
+    check evs[1].state.staged.get.provenance.kind ==
+      LogosNSModuleConfigurationProvenanceKind.Runtime_control_update
+    check evs[1].state.staged.get.schema_commitment == tunerCommitment()
+    check evs[2].state.staged.isNone
+    e.finish()
 
 suite "run.rc: event authority (RUNTIME l.3498, l.3732-3735) [IMPL-DECISION G161] [IMPL-DECISION G226]":
   setup:

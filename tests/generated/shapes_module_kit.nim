@@ -1893,6 +1893,7 @@ proc shapesModuleLayout*(): seq[(string, int)] =
 template exportShapesModule*(T: typedesc) =
   ## Defines `shapes_module`'s exported symbols over the handlers of `T`.
   proc shapesModuleKitCreate(init: ModuleInit): Result[pointer, InvocationFailure] {.nimcall, gcsafe, raises: [].} =
+    ?kitNoConfiguration(init)
     let r = initModule(T, init)
     if r.isErr:
       return err(r.error)

@@ -35,7 +35,7 @@ import ../abi/[checks, types]
 import ../cbor/utf8
 import ../iface/[accept, names, outcome]
 import ../pins
-import ./[artifact, native]
+import ./[artifact, config, native]
 
 export artifact, native
 
@@ -88,12 +88,24 @@ type
     publishUserData*: pointer
     invocationAccess*: LogosInvocationAccess
 
-  RealizeRequest* = object
-    ## [SPEC LOADER §6] `logos.module_loader.realize_request` (no configuration)
+  ConfigurationHandoff* = object
+    ## [SPEC LOADER §5.2, §6; CONFIG §6] The attempt's configuration snapshot:
+    ## one deterministic `configuration_input` and what the binding must
+    ## provide for it. Never copied into a realization record or a Loader
+    ## error (LDR-0045, LDR-0149).
+    input*: Blob
+      ## the encoded input, owned by the attempt (the engine drops it once
+      ## `_MODULE_init` has returned); borrowed here
+    live*: bool ## the binding declares live reconfiguration
+    commitment*: SchemaRoots
+    valueRevision*: uint64
+
+  RealizeRequest* = object ## [SPEC LOADER §6] `logos.module_loader.realize_request`
     moduleInstance*: string
     descriptor*: RealizationDescriptor
     state*: Opt[string] ## `state.assignment`
     services*: InitServices
+    configuration*: Opt[ConfigurationHandoff]
 
   RealizationStatus* = enum
     rsActive = "active"
@@ -287,6 +299,13 @@ func keyOf(req: RealizeRequest): string =
         d.placement
     )
   result.add("\0" & req.state.get("-"))
+  if req.configuration.isSome:
+    # [SPEC LOADER §6] A retry with another snapshot is another request.
+    let c = req.configuration.get
+    result.add(
+      "\0" & hexOf(c.commitment.schemaRoot) & hexOf(c.commitment.subtreeRoot) & "\0" &
+        $c.valueRevision & "\0" & $c.live
+    )
 
 func dynamicKey(d: RealizationDescriptor): string =
   "d:" & d.artifact.hashSuite & ":" & hexOf(d.artifact.hash) & "/" & d.module
@@ -446,6 +465,15 @@ proc prepareInit*(
 ): Result[InitHandoff, LoaderError] =
   ## [SPEC LOADER §6 steps 4-7] The state directory and the initialization
   ## input, which stay where they are until `_MODULE_init` has returned.
+  if req.configuration.isSome and req.configuration.get.live and
+      b.applyConfiguration.isNil:
+    # [SPEC RUNTIME l.1386-1392 (RUN-1086); CONFIG l.264 (CFG-0091)] A live
+    # declaration needs the apply hook; checked per instance, since bindings
+    # are shared.
+    return fail(
+      lecAbiInvalid,
+      "the module declares live reconfiguration but exports no apply_configuration",
+    )
   let h = InitHandoff(request: req, binding: b)
   if req.state.isSome:
     h.stateDir = Opt.some(?r.stateDirFor(req.state.get))
@@ -459,6 +487,12 @@ proc prepareInit*(
     stateDir: (if h.stateDir.isSome: cstring(h.stateDirText) else: nil),
     invocationAccess: req.services.invocationAccess,
   )
+  if req.configuration.isSome:
+    # [SPEC CONFIG l.224-226 (CFG-0066, CFG-0067); RUNTIME RUN-0291] The
+    # snapshot's bytes, borrowed for the call; absent stays NULL and 0.
+    let input = req.configuration.get.input
+    h.input.configurationCbor = cast[ptr UncheckedArray[uint8]](input.address)
+    h.input.configurationCborLen = csize_t(input.len)
   checkInitInput(addr h.input, b.declaresEvents).isOkOr:
     return fail(
       lecRealizationFailed,

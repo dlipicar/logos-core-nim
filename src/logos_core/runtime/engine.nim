@@ -152,6 +152,10 @@ type
     services: ptr AttemptServices
       ## its Runtime Control binding and invocation access, until the
       ## realization it made takes them over or its outcome is final
+    selected: Opt[ValueRecord]
+      ## [I87] the configuration record selected before the attempt was
+      ## accepted, borrowed from the instance's state until `beginAttempt`
+      ## snapshots it
 
   Waiter = object
     reply: ReplyChannel
@@ -221,6 +225,9 @@ type
     heldContext: ptr LogosModuleContext
     seen: bool ## [G178] its creation was exposed to observers
     seenState: ModuleState ## [G178] the state last exposed to observers
+    config: ConfigState
+      ## [I87] its configuration state, while `record.configuration` names a
+      ## binding (`configurable`); owned here
 
   Saved = object ## What an accepting commit rolls back when its write fails.
     record: ModuleRecord
@@ -436,6 +443,7 @@ const
     ## [IMPL; S8b-2 interim] route re-authorizations evaluated at once after
     ## a notice, the rest queued, so they never fill the ordinary lane's queue
   NotPersisted = "the execution state could not be persisted"
+  ConfigNotPersisted = "the configuration state could not be persisted"
   StoreRetry = initDuration(seconds = 1)
   RevisionMask = 0xFFFF_FFFF'u64
 
@@ -1191,6 +1199,57 @@ proc accept(st: State, x: Inst, saved: Saved, exempt = false): Opt[EngineError] 
     st.releaseCallers(x)
   Opt.none(EngineError)
 
+# Module configuration (step 9; DECISIONS I87) --------------------------------------
+
+func configurable(x: Inst): bool =
+  ## [SPEC CONFIG §2] Its declaration has a configuration-schema binding.
+  x.record.configuration.isSome
+
+func addressOf(st: State, id: string): LogosNSRuntimeModuleInstanceAddress =
+  LogosNSRuntimeModuleInstanceAddress(
+    runtime_instance_id: st.runtimeId, module_instance_id: id
+  )
+
+proc publishConfig(st: State, x: Inst) =
+  ## [SPEC CONFIG l.324-331; C29] After every committed revision change, in
+  ## revision order: the summary, never a value (CFG-0106, CFG-0108).
+  if st.rcByEvent[reConfigurationState].len == 0:
+    return
+  st.publishRc(
+    reConfigurationState,
+    instanceSubject(x.record.module, x.id),
+    encode(
+      LogosNSRuntimeControlConfigurationStateChangedEvent(
+        target: st.addressOf(x.id), state: summary(x.config)
+      )
+    )
+      .get(newSeq[byte]()),
+  )
+
+proc persistConfig(st: State, x: Inst, next: ConfigState): Opt[EngineError] =
+  ## [SPEC CONFIG §3 l.93; I87] A revision change of `x`'s configuration:
+  ## written to its `cfg` side record before it is exposed, then taken and
+  ## published. On a failed write nothing changes: MODULE_ERROR.
+  let bytes = configBytes(next).valueOr:
+    return Opt.some(engineError(ecModule, "the configuration state cannot be encoded"))
+  st.store.putSide(ConfigSide, x.id, bytes).isOkOr:
+    st.diagnose("the configuration of " & x.id & " was not written: " & error)
+    return Opt.some(engineError(ecModule, ConfigNotPersisted))
+  x.config.adopt(next)
+  st.publishConfig(x)
+  Opt.none(EngineError)
+
+proc endAttempted(x: Inst) =
+  ## [SPEC CONFIG §6 l.238-242 (CFG-0074, CFG-0075)] The attempt can no
+  ## longer promote its snapshot: it is dropped and nothing else changes.
+  if x.configurable and x.config.attempted.isSome:
+    x.config.adopt(x.config.withoutAttempt)
+
+proc releaseConfigs(st: State) =
+  ## The engine ends: every configuration state's blobs are dropped.
+  for x in st.instances.values:
+    x.config.release()
+
 # Lifecycle ----------------------------------------------------------------------
 
 proc releaseWaiters(st: State, x: Inst) =
@@ -1211,6 +1270,12 @@ proc finishAttempt(st: State, a: Attempt) =
   ## The attempt has nothing left to clean: its outcome is final.
   let x = a.inst
   a.phase = apDone
+  if x.attempt == a or x.attempt.isNil:
+    x.endAttempted()
+  if a.request.configuration.isSome:
+    # [I87] `_MODULE_init` has returned, or was never called.
+    drop(a.request.configuration.get.input)
+    a.request.configuration = Opt.none(ConfigurationHandoff)
   st.endServices(a.services, x.id)
   freeAttemptServices(a.services)
   a.services = nil
@@ -1237,6 +1302,7 @@ proc failAttempt(st: State, a: Attempt, f: Failure) =
   if a.cancelled or a.expired or a.failed:
     return
   a.failed = true
+  x.endAttempted()
   x.state = msError
   x.failure = Opt.some(f)
   x.exec = Opt.none(ExecAuth)
@@ -1358,6 +1424,20 @@ proc promote(st: State, a: Attempt) {.gcsafe.} =
   ## and the write is tried again every second until the startup deadline
   ## (`checkDeadlines`; I82).
   let x = a.inst
+  if x.configurable and x.config.attempted.isSome:
+    # [SPEC CONFIG §6 l.233-236 (CFG-0072, CFG-0073); I87 C3] The snapshot
+    # becomes current, written before `ready` is: a separate accepting write.
+    # When it fails nothing changes and the attempt fails with `other`.
+    let next = x.config.promoted
+    if next.revision == x.config.revision:
+      x.config.adopt(next)
+    else:
+      let refused = st.persistConfig(x, next)
+      if refused.isSome:
+        st.failAttempt(a, Failure(kind: fkOther, reason: ConfigNotPersisted))
+        a.phase = apCleanup
+        st.releaseRealization(x)
+        return
   let saved = x.save
   x.provider = a.provides
   x.state = msReady
@@ -1833,7 +1913,8 @@ proc captureRc(st: State, reqs: openArray[AuthzRequest], answers: seq[AuthzAnswe
   ## execution decision is not); its capture goes back with the call's reply
   ## (`answer`), and the caller records the call after its outcome.
   let q = st.op.q
-  let bare = (if q.kind == rqRc: $q.rc.m else: q.bare)
+  let bare = (if q.kind in {rqRc, rqConfigCommit}: $q.rc.m
+  else: q.bare)
   for i, r in reqs:
     if r.action in {aaRuntimeControl, aaLifecycle, aaObserve} and r.operation == bare:
       let c = st.captureOf(r, answers[i])
@@ -1891,7 +1972,7 @@ proc decide(st: State, reqs: openArray[AuthzRequest]): Opt[seq[AuthzAnswer]] =
   var answers: seq[AuthzAnswer]
   for q in reqs:
     answers.add(op.decided.getOrDefault(q.key))
-  if st.op != nil and st.op.q.kind in {rqRc, rqRcPrecheck}:
+  if st.op != nil and st.op.q.kind in {rqRc, rqRcPrecheck, rqConfigCommit}:
     st.captureRc(reqs, answers)
   Opt.some(answers)
 
@@ -2409,6 +2490,41 @@ proc cancelExec(st: State, x: Inst, pe: PendingExec) =
     x.pendingExec = nil
   pe.answerExec(ecNotReady, "the Runtime is shutting down")
 
+proc selectConfig(st: State, x: Inst, pe: PendingExec): Opt[Opt[ValueRecord]] =
+  ## [SPEC CONFIG §3 l.123-126, §4 l.142-145; I87 C6, C17] For an otherwise
+  ## authorized startup attempt, before it is accepted: the staged record,
+  ## else the current one. None, or an ineligible one, is NOT_READY [G162
+  ## interim (TF-10)]: intent stays `requested`, nothing is accepted, and a
+  ## retained execution refusal (G168) is cleared, since the decision now
+  ## allows. A staged record whose promotion could not advance the revision
+  ## is MODULE_ERROR [G234]. For the orchestration instance at bootstrap
+  ## either fails the bootstrap with MODULE_ERROR [G190 (TF-25 point 4)].
+  ## Returns none once the start is answered.
+  if not x.configurable:
+    return Opt.some(Opt.none(ValueRecord))
+  var refusal: EngineError
+  case x.config.select
+  of selStaged:
+    if x.config.canAdvance:
+      return Opt.some(x.config.staged)
+    refusal = engineError(ecModule, "the configuration revision is exhausted")
+  of selCurrent:
+    return Opt.some(x.config.current)
+  of selNone, selIneligible:
+    refusal =
+      engineError(ecNotReady, "the module instance has no eligible configuration value")
+    if x.failure.isSome and
+        x.failure.get.kind in {fkAuthorityDenied, fkAuthorityEvaluationFailed}:
+      x.failure = Opt.none(Failure)
+      st.commit(x)
+  if x.orchestration and st.bootstrapReply != nil:
+    st.bootstrapReply.answerError(
+      ecModule, "the orchestration instance cannot start: " & refusal.message
+    )
+    st.bootstrapReply = nil
+  pe.answerExec(refusal.code, refusal.message)
+  Opt.none(Opt[ValueRecord])
+
 proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
   ## [SPEC RUNTIME §3.6, §9.3; C17] The execution decision for an accepted
   ## start or recovery.
@@ -2440,6 +2556,8 @@ proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
       x.realization != nil or x.intent != inRequested or not st.prerequisitesReady(x):
     pe.answerExec(ecNotReady, "the module instance can no longer start")
     return
+  let selected = st.selectConfig(x, pe).valueOr:
+    return
   # The attempt is accepted: `loaded`, failure cleared (§9.3 l.3758-3759),
   # written before the attempt begins (l.3505).
   var waiters = pe.waiters
@@ -2453,6 +2571,7 @@ proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
     inst: x,
     deadline: getMonoTime() + st.cfg.startupDeadline,
     waiters: waiters,
+    selected: selected,
   )
   x.current = at.token
   x.state = msLoaded
@@ -2612,8 +2731,9 @@ proc start(st: State, q: Request) =
 
 proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
   ## [SPEC RUNTIME §3.6 steps 4-6] An accepted attempt: its token becomes
-  ## live, its Runtime Control binding and invocation access are made, and
-  ## the realizer begins. Step 9 puts its selection here.
+  ## live, its Runtime Control binding and invocation access are made, the
+  ## configuration record selected before acceptance is snapshotted, and the
+  ## realizer begins.
   let x = a.inst
   let id = a.id
   x.tokens.incl(a.token)
@@ -2627,6 +2747,20 @@ proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
     state: x.record.stateAssignment,
     services: services,
   )
+  if a.selected.isSome:
+    # [SPEC CONFIG §6 l.220-224 (CFG-0063, CFG-0064); LOADER l.300-302] The
+    # attempt's immutable snapshot, delivered as one `configuration_input`.
+    let r = a.selected.get
+    a.selected = Opt.none(ValueRecord)
+    x.config.adopt(x.config.withAttempt(r))
+    a.request.configuration = Opt.some(
+      ConfigurationHandoff(
+        input: newBlob(encodeInput(r)),
+        live: x.config.binding.live,
+        commitment: r.commitment,
+        valueRevision: r.valueRevision,
+      )
+    )
   x.attempt = a
   let step = st.realizer.begin(a.request).valueOr:
     st.failAttempt(a, loaderFailure(error))
@@ -2694,6 +2828,7 @@ proc stopInstance(
     # the instance ready; its outcome is cleaned, then `unloaded`.
     let a = x.attempt
     a.cancelled = true
+    x.endAttempted()
     x.state = msStopping
     st.commit(x)
     for w in a.waiters:
@@ -2840,17 +2975,30 @@ proc createInst(
     origin: Origin,
     created = false,
     key = Opt.none(CreateKey),
+    configuration = Opt.none(AcceptedConfiguration),
 ): Result[Inst, EngineError] =
   ## A local module-instance record: `unloaded`, intent `uninitialized`
   ## (§9.3 l.3623), written before it is exposed. Records come from the host
   ## or, through `create_module`, from its declarations (G55); `key` is that
-  ## request's key association, written with the record (l.3627-3628).
+  ## request's key association, written with the record (l.3627-3628). A
+  ## configurable record comes with its accepted declaration, whose state
+  ## (`initialState`) is written to its side record first (I87 C2).
   if st.shuttingDown:
     return err(engineError(ecNotReady, "the Runtime is shutting down"))
   if not origin.host and not created:
     return err(engineError(ecNotAuthorised, "not authorised"))
   checkRecord(record).isOkOr:
     return err(engineError(ecInvalidParams, error))
+  if record.configuration.isSome != configuration.isSome or
+      (configuration.isSome and configuration.get.digest != record.configuration.get):
+    # [SPEC RUNTIME §8 l.1386-1387 (RUN-0259)] Only an accepted declaration
+    # gives a record its binding.
+    return err(
+      engineError(
+        ecInvalidParams,
+        "the record does not name the accepted configuration declaration",
+      )
+    )
   var id = instance
   if id.len == 0:
     # [SPEC RUNTIME §9.2 l.2630-2633; IMPL] The random prefix keeps a fresh
@@ -2888,6 +3036,25 @@ proc createInst(
     for y in st.instances.values:
       if y.providerId == x.providerId:
         return err(engineError(ecModule, "a fresh provider id collided"))
+  if configuration.isSome:
+    # [SPEC CONFIG §4 l.139-142; G141] Its state, with the provisioned value
+    # or the default staged; the side record before the snapshot names it
+    # (C2: a crash in between leaves a record `reapSides` removes).
+    x.config = initialState(configuration.get)
+    if not x.config.admissible:
+      x.config.release()
+      return err(
+        engineError(
+          ecModule, "the configuration state would not fit a get_configuration response"
+        )
+      )
+    let bytes = configBytes(x.config).valueOr:
+      x.config.release()
+      return err(engineError(ecModule, "the configuration state cannot be encoded"))
+    st.store.putSide(ConfigSide, id, bytes).isOkOr:
+      st.diagnose("the configuration of " & id & " was not written: " & error)
+      x.config.release()
+      return err(engineError(ecModule, ConfigNotPersisted))
   st.instances[id] = x
   if key.isSome:
     var k = key.get
@@ -2901,11 +3068,17 @@ proc createInst(
     st.dropFacts(x)
     if key.isSome:
       st.createKeys.setLen(st.createKeys.len - 1)
+    if x.configurable:
+      discard st.store.deleteSide(ConfigSide, id)
+      x.config.release()
     return err(refused.get)
+  if x.configurable and x.config.revision > 0:
+    # [SPEC CONFIG l.324-325] The source's staging, after the creation.
+    st.publishConfig(x)
   ok(x)
 
 proc create(st: State, q: Request) =
-  let x = st.createInst(q.record, q.instance, q.origin).valueOr:
+  let x = st.createInst(q.record, q.instance, q.origin, configuration = q.configuration).valueOr:
     q.reply.answerError(error.code, error.message)
     return
   q.reply.answerView(x)
@@ -3273,6 +3446,12 @@ proc retireInst(st: State, y: Inst): Result[void, string] =
   # record (RUN-1012).
   st.changes.keepItIf(it.view.instance != y.id)
   st.written(nil)
+  if y.configurable:
+    # [I87 C7] After the commit point; a crash before this leaves a record
+    # `reapSides` removes at the next open.
+    st.store.deleteSide(ConfigSide, y.id).isOkOr:
+      st.diagnose("the configuration of retired " & y.id & " was not removed: " & error)
+    y.config.release()
   # [SPEC RUNTIME l.3417, l.3420] A membership change, judged by the retained
   # facts of the record that left.
   st.hintRc(InvKind.Modules, instanceSubject(y.record.module, y.id, y.providerId))
@@ -3411,6 +3590,7 @@ proc createModule(st: State, q: Request, x: Inst) =
     q.origin,
     created = true,
     key = Opt.some(CreateKey(consumer: x.id, key: req.request_key, module: req.module)),
+    configuration = d.configuration,
   ).valueOr:
     q.reply.answerError(error.code, error.message)
     return
@@ -4372,6 +4552,184 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
       )
     )
 
+# Module configuration operations (CONFIG §5; DECISIONS I87) ------------------------
+#
+# [G171 interim (TF-18), extended (TF-18 point 5)] Each operation checks, in
+# order: the caller's association; a target on another Runtime (INVALID_PARAMS,
+# G228 extended, TF-30 point 1); the method's own authority over the exact
+# target, an unknown target answered as a refused one (CFG-0057); readiness;
+# then CONFIG's table rows in their order; then, for a mutation, frame size
+# [G233], revision headroom [G234] and the write.
+
+proc configTarget(
+    st: State,
+    q: Request,
+    x: Inst,
+    target: LogosNSRuntimeModuleInstanceAddress,
+    action: AuthzAction,
+): Opt[Inst] =
+  let y = st.localTarget(q, x, target, action, $q.rc.m).valueOr:
+    return Opt.none(Inst)
+  let notReady = st.originReady(q)
+  if notReady.isSome:
+    q.reply.answerError(notReady.get.code, notReady.get.message)
+    return Opt.none(Inst)
+  Opt.some(y)
+
+func noBinding(): EngineError =
+  ## [SPEC CONFIG §5 l.194 (CFG-0006)] without detail
+  engineError(ecInvalidParams, "the module instance has no configuration binding")
+
+proc updateRefusal(
+    y: Inst,
+    expectedRevision: uint64,
+    expected: LogosNSModuleConfigurationSchemaCommitment,
+): Opt[EngineError] =
+  ## [SPEC CONFIG §5 l.192-196] Rows 1-3, in order, without detail.
+  if not y.configurable:
+    return Opt.some(noBinding())
+  if expectedRevision != y.config.revision:
+    # [G19; CFG-0059]
+    return Opt.some(
+      engineError(
+        ecInvalidParams, "the configuration state revision is not the current one"
+      )
+    )
+  let c = fromRc(expected)
+  if c.isErr or c.get != y.config.binding.commitment:
+    # [G21, revised B2]
+    return Opt.some(
+      engineError(
+        ecVersionMismatch, "the expected schema commitment is not the accepted one"
+      )
+    )
+  Opt.none(EngineError)
+
+proc commitConfig(st: State, q: Request, y: Inst, next: ConfigState) =
+  ## A Runtime Control mutation: frame size [G233], headroom [G234], the
+  ## write, then the commit and its event; answered with the state.
+  if not next.admissible:
+    q.reply.answerError(
+      ecModule, "the configuration state would not fit a get_configuration response"
+    )
+    return
+  if not y.config.canMutate:
+    q.reply.answerError(ecModule, "the configuration revision is exhausted")
+    return
+  let refused = st.persistConfig(y, next)
+  if refused.isSome:
+    q.reply.answerError(refused.get.code, refused.get.message)
+    return
+  q.reply.answer(Reply(config: retained(y.config)))
+
+proc configSummary(st: State, q: Request, x: Inst) =
+  ## [SPEC CONFIG §5 l.176-177] Metadata only (CFG-0058); without a binding,
+  ## `{state_revision: 0}` [G235 interim (TL-09)].
+  let y = st.configTarget(q, x, q.rc.cfgTarget, aaObserve).valueOr:
+    return
+  let state = (if y.configurable: summary(y.config) else: summaryWithout())
+  q.reply.answerEncoded(
+    encode(
+      LogosNSRuntimeControlGetConfigurationSummaryResponse(
+        target: st.addressOf(y.id), state: state
+      )
+    )
+  )
+
+proc configRead(st: State, q: Request, x: Inst) =
+  ## [SPEC CONFIG §5 l.174-175, l.178-179] `get_configuration_schema` and
+  ## `get_configuration`: one snapshot, whose blobs the caller's thread
+  ## encodes and drops (CFG-0061).
+  let y = st.configTarget(q, x, q.rc.cfgTarget, aaObserve).valueOr:
+    return
+  if not y.configurable:
+    q.reply.answerError(noBinding().code, noBinding().message)
+    return
+  q.reply.answer(Reply(config: retained(y.config)))
+
+proc configUpdate(st: State, q: Request, x: Inst) =
+  ## [SPEC CONFIG §5 l.180-213] Rows 1-3 here. A `stage` ends phase 1 with
+  ## the binding and the decisions' conditions: its value is validated on
+  ## the caller's thread, then committed by `configCommit` (I87 §2.7). A
+  ## `discard` is one step; with nothing staged it changes nothing (l.207).
+  let u = q.rc.cfgUpdate
+  let y = st.configTarget(q, x, u.target, aaLifecycle).valueOr:
+    return
+  let refused = y.updateRefusal(u.expectedRevision, u.expectedCommitment)
+  if refused.isSome:
+    q.reply.answerError(refused.get.code, refused.get.message)
+    return
+  if u.stage:
+    var r = Reply(
+      config: retained(y.config), generation: st.gen, invalidations: st.invalidations
+    )
+    if st.op != nil:
+      for a in st.op.decided.values:
+        r.answers.add(a)
+    q.reply.answer(r)
+    return
+  if y.config.staged.isNone:
+    q.reply.answer(Reply(config: retained(y.config)))
+    return
+  st.commitConfig(q, y, y.config.discarded)
+
+proc configCommit(st: State, q: Request) =
+  ## [SPEC CONFIG §5; I87 §2.7 step 3; C31] Phase 2 of a `stage`. Phase 1's
+  ## decisions are used again while they hold (same binding, no
+  ## invalidation since, none past its end), else decided again; then every
+  ## check runs again, so a mutation ordered in between makes this request
+  ## stale. A value that is not one of the root carries its detail only to a
+  ## caller that also holds `get_configuration_schema` authority over the
+  ## target (CONFIG l.172, l.202).
+  let x = st.caller(q).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  let u = q.rc.cfgUpdate
+  if st.op != nil and st.op.passes == 0 and u.gen == st.gen and
+      u.invalidations == st.invalidations:
+    let now = st.wallNow
+    var held = true
+    for a in u.answers:
+      if a.validUntil.isSome and now >= a.validUntil.get:
+        held = false
+    if held:
+      for a in u.answers:
+        st.op.decided[a.request.key] = a
+  let y = st.configTarget(q, x, u.target, aaLifecycle).valueOr:
+    return
+  let refused = y.updateRefusal(u.expectedRevision, u.expectedCommitment)
+  if refused.isSome:
+    q.reply.answerError(refused.get.code, refused.get.message)
+    return
+  if u.mismatch:
+    let d = st.decide(
+      @[
+        AuthzRequest(
+          action: aaObserve,
+          operation: $rmGetConfigurationSchema,
+          consumer: x.id,
+          target: y.id,
+          instance: y.id,
+          module: y.record.module,
+        )
+      ]
+    ).valueOr:
+      return
+    q.reply.answer(
+      Reply(
+        error: Opt.some(
+          engineError(
+            ecInvalidParams, "the configuration value is not one of its schema"
+          )
+        ),
+        schemaAllowed: d[0].allows,
+      )
+    )
+    return
+  st.commitConfig(
+    q, y, y.config.withStaged(u.value, u.valueRoot, pvRuntimeControlUpdate)
+  )
+
 proc rc(st: State, q: Request) =
   ## [SPEC RUNTIME §9, §9.3] One Runtime Control method through a module's
   ## binding.
@@ -4437,6 +4795,17 @@ proc rc(st: State, q: Request) =
     st.renew(q, x)
   of rmCloseRoute:
     st.closeRoute(q, x)
+  of rmGetConfigurationSummary:
+    st.configSummary(q, x)
+  of rmGetConfigurationSchema, rmGetConfiguration:
+    st.configRead(q, x)
+  of rmUpdateConfiguration:
+    st.configUpdate(q, x)
+  of rmApplyConfiguration:
+    # [I87] built in step 9b
+    q.reply.answerError(
+      ecModule, "apply_configuration is not supported by this Runtime yet"
+    )
   of rmShutdownRuntime:
     # [SPEC RUNTIME §9.3 l.3695-3700] Runtime-wide; the response acknowledges
     # acceptance and is attempted before teardown.
@@ -4500,6 +4869,52 @@ proc checkBootstrap(st: State) =
   if outcome.isSome:
     st.bootstrapReply.answer(outcome.get)
     st.bootstrapReply = nil
+
+proc reprovision(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] =
+  ## [SPEC CONFIG §4 l.142; G141] A retained instance's provisioned value is
+  ## staged again, as `protected-provisioning`, only when its value root
+  ## differs from the last one accepted for it; a value removed from the
+  ## host configuration leaves that root as it was. Every one is checked
+  ## (frame size [G233], revision headroom [G234]: MODULE_ERROR naming the
+  ## instance) before any is staged.
+  var todo: seq[(Inst, ConfigState, Blob)]
+  template unwind() =
+    for (_, _, blob) in todo:
+      drop(blob)
+
+  for b in configured:
+    let x = st.instances.getOrDefault(b.instance)
+    if x.isNil or not x.configurable or b.configuration.isNone:
+      continue
+    let p = b.configuration.get.provisioned
+    if p.isNone or x.config.lastProvisioned == Opt.some(p.get.valueRoot):
+      continue
+    if not x.config.canMutate:
+      unwind()
+      return Opt.some(
+        engineError(
+          ecModule, "the configuration revision of instance " & x.id & " is exhausted"
+        )
+      )
+    let blob = newBlob(p.get.bytes)
+    var next = x.config.withStaged(blob, p.get.valueRoot, pvProtectedProvisioning)
+    next.lastProvisioned = Opt.some(p.get.valueRoot)
+    todo.add((x, next, blob))
+    if not next.admissible:
+      unwind()
+      return Opt.some(
+        engineError(
+          ecModule,
+          "the provisioned configuration of instance " & x.id &
+            " would not fit a get_configuration response",
+        )
+      )
+  var failed = Opt.none(EngineError)
+  for (x, next, blob) in todo:
+    if failed.isNone:
+      failed = st.persistConfig(x, next)
+    drop(blob)
+  failed
 
 proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] =
   ## [IMPL-DECISION G160 interim (TF-08)] The configured instances against the
@@ -4576,10 +4991,16 @@ proc bootstrap(st: State, q: Request) =
   if refused.isSome:
     q.reply.answerError(refused.get.code, refused.get.message)
     return
+  let unprovisioned = st.reprovision(q.bootstrap)
+  if unprovisioned.isSome:
+    q.reply.answerError(unprovisioned.get.code, unprovisioned.get.message)
+    return
   for b in q.bootstrap:
     var x = st.instances.getOrDefault(b.instance)
     if x.isNil:
-      x = st.createInst(b.record, b.instance, hostOrigin()).valueOr:
+      x = st.createInst(
+        b.record, b.instance, hostOrigin(), configuration = b.configuration
+      ).valueOr:
         q.reply.answerError(error.code, error.message)
         return
     elif recordBytes(x.record) != recordBytes(b.record):
@@ -5248,7 +5669,8 @@ proc rcHandled(st: State, p: pointer) =
 
 proc handle(st: State, q: Request) {.gcsafe.} =
   if q.kind in {
-    rqCreate, rqStart, rqStop, rqReportFailure, rqRecover, rqBootstrap, rqRc
+    rqCreate, rqStart, rqStop, rqReportFailure, rqRecover, rqBootstrap, rqRc,
+    rqConfigCommit,
   }:
     # [IMPL] A lifecycle request first tries a write that failed (I82).
     st.retryStore()
@@ -5328,6 +5750,8 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.rcPrecheck(q)
   of rqRc:
     st.rc(q)
+  of rqConfigCommit:
+    st.configCommit(q)
   of rqMaterialize:
     st.materialize(q)
   of rqAdmit:
@@ -5672,6 +6096,26 @@ proc restore(st: State, snap: Snapshot) =
     st.tombstones[r.instance] = r.stateAssignment
   st.createKeys = snap.createKeys
 
+proc restoreConfigs(st: State): Opt[string] =
+  ## [SPEC CONFIG §7 l.249-254; I87] Each configurable instance's state from
+  ## its side record, nothing re-accepted or re-validated (CFG-0048,
+  ## CFG-0131). A missing record, or one that does not hold the binding its
+  ## instance record names, refuses the open, naming the instance: the
+  ## instance cannot keep its identity without it (CFG-0029).
+  for x in st.instances.values:
+    if not x.configurable:
+      continue
+    let data = st.store.getSide(ConfigSide, x.id).valueOr:
+      return
+        Opt.some("the configuration of instance " & x.id & " cannot be read: " & error)
+    if data.isNone:
+      return Opt.some("the configuration of instance " & x.id & " is missing")
+    x.config = configOf(data.get, x.record.configuration.get).valueOr:
+      return Opt.some(
+        "the configuration of instance " & x.id & " cannot be restored: " & error
+      )
+  Opt.none(string)
+
 proc load(st: State): Opt[EngineError] =
   ## [IMPL] Before any request (DECISIONS I82): the store is locked and read,
   ## the identity checked [G192 interim (TF-27)], the instances restored, a
@@ -5715,7 +6159,12 @@ proc load(st: State): Opt[EngineError] =
     fail(ecModule, "the state store cannot be read: " & error)
   for id in reaped:
     st.diagnose("removed the side records of unknown instance " & id)
+  let lost = st.restoreConfigs()
+  if lost.isSome:
+    st.releaseConfigs()
+    fail(ecModule, lost.get)
   st.store.write(st.snapshot()).isOkOr:
+    st.releaseConfigs()
     fail(ecModule, NotPersisted & ": " & error)
   Opt.none(EngineError)
 
@@ -5805,6 +6254,7 @@ proc runtimeLoop(s: ptr Shared) =
       s.rcJobs.send(RcJob(kind: rjQuit))
     except Exception:
       discard
+  st.releaseConfigs()
   st.store.close()
   s.finished = true
 
@@ -5878,12 +6328,24 @@ template toResult(r: Reply, body: untyped): untyped =
     ok(body)
 
 proc create*(
-    e: Engine, record: ModuleRecord, instance = "", origin = hostOrigin()
+    e: Engine,
+    record: ModuleRecord,
+    instance = "",
+    origin = hostOrigin(),
+    configuration = Opt.none(AcceptedConfiguration),
 ): Result[InstanceView, EngineError] =
   ## Creates a module instance from a resolved record; `instance` is a
-  ## protected input's instance identity, or empty for a fresh one.
-  let r =
-    e.call(Request(kind: rqCreate, record: record, instance: instance, origin: origin))
+  ## protected input's instance identity, or empty for a fresh one. A record
+  ## that names a configuration binding comes with its accepted declaration.
+  let r = e.call(
+    Request(
+      kind: rqCreate,
+      record: record,
+      instance: instance,
+      origin: origin,
+      configuration: configuration,
+    )
+  )
   r.toResult(r.view)
 
 proc start*(

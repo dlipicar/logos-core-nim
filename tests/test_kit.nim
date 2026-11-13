@@ -11,11 +11,16 @@ import ../src/logos_core/iface/[accept, provider]
 from ../src/logos_core/codegen/callrt import
   arenaBlocks, failArenaAllocation, CallArena, text, release
 from ../src/logos_core/codegen/common_mirrors import commonMirrorLayout
-import ./support/[kitruntime, specdata, typedharness]
+import ./support/[kitruntime, specdata, typedharness, tunerconfig]
 import ./generated/meter_module_kit
 from ./generated/sensor_module_kit import sensorModuleLayout
 from ./generated/shapes_module_kit import shapesModuleLayout
-import ./kit/[meter_impl, sensor_impl, shapes_impl]
+from ./generated/tuner_module_kit import nil
+from ./generated/quiet_module_kit import nil
+import ./kit/[meter_impl, sensor_impl, shapes_impl, tuner_impl, quiet_impl]
+import ../src/logos_core/pins
+from ../src/logos_core/codegen/kitgen import
+  KitConfiguration, KitOptions, configurationSet, kitModule
 
 {.compile("kit/typed_linked.c", "-Werror=incompatible-pointer-types").}
 
@@ -87,6 +92,28 @@ proc shapesDestroy(
   module: ptr LogosModuleContext
 ) {.importc: "logos_shapes_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
 
+proc tunerInit(
+  input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+): LogosResult {.importc: "logos_tuner_module_MODULE_init", cdecl, gcsafe, raises: [].}
+
+proc tunerApply(
+  module: ptr LogosModuleContext, configuration: ptr UncheckedArray[uint8], len: csize_t
+): LogosResult {.
+  importc: "logos_tuner_module_MODULE_apply_configuration", cdecl, gcsafe, raises: []
+.}
+
+proc tunerDestroy(
+  module: ptr LogosModuleContext
+) {.importc: "logos_tuner_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
+
+proc quietInit(
+  input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+): LogosResult {.importc: "logos_quiet_module_MODULE_init", cdecl, gcsafe, raises: [].}
+
+proc quietDestroy(
+  module: ptr LogosModuleContext
+) {.importc: "logos_quiet_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
+
 proc thLinked(f: ptr ThFns) {.importc: "th_linked", cdecl, gcsafe, raises: [].}
   ## The typed provider functions of the modules linked in, by their header
   ## names (`tests/kit/typed_linked.c`).
@@ -128,6 +155,62 @@ template withInstance(ctx: ptr LogosModuleContext, T: typedesc, name, body: unty
     let name {.cursor.} = cast[T](instanceOf(ctx))
     body
 
+proc configInput(
+    value: seq[byte],
+    revision = 1'u64,
+    schemaRoot = tuner_module_kit.configurationRoots.schemaRoot,
+    model = CommitmentModelId,
+): seq[byte] =
+  ## One `logos.module_configuration.configuration_input` for the tuner kits.
+  encodeCbor(
+    cborMap(
+      (cbor("value"), cbor(value)),
+      (
+        cbor("schema_commitment"),
+        cborMap(
+          (cbor("commitment_model"), cbor(model)),
+          (cbor("schema_root"), cbor(schemaRoot)),
+          (
+            cbor("schema_subtree_root"),
+            cbor(tuner_module_kit.configurationRoots.subtreeRoot),
+          ),
+          (cbor("hash_profile"), cbor(HashProfileId)),
+          (cbor("hash_suite"), cbor(HashSuiteId)),
+        ),
+      ),
+      (cbor("value_revision"), cbor(revision)),
+    )
+  )
+
+proc initWith(
+    init: proc(
+      input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+    ): LogosResult {.cdecl, gcsafe, raises: [].},
+    configuration: seq[byte],
+    ctx: var ptr LogosModuleContext,
+): AbiCheck =
+  ## `_MODULE_init` with `configuration` (none when empty), as the ABI caller
+  ## reads its result.
+  var i = input(configuration = configuration)
+  ctx = nil
+  checkOutcome(init(addr i, addr ctx), contextShape(ctx))
+
+proc applyWith(ctx: ptr LogosModuleContext, configuration: seq[byte]): AbiCheck =
+  let r =
+    if configuration.len == 0:
+      tunerApply(ctx, nil, 0)
+    else:
+      tunerApply(
+        ctx,
+        cast[ptr UncheckedArray[uint8]](unsafeAddr configuration[0]),
+        csize_t(configuration.len),
+      )
+  readStatus(r)
+
+func names(table: seq[(string, pointer)]): seq[string] =
+  for (n, _) in table:
+    result.add(n)
+
 # Tests ------------------------------------------------------------------------------------
 
 suite "ifc.kit: module identity and the call surface (INTERFACE §2.6) [IMPL]":
@@ -167,26 +250,35 @@ suite "ifc.kit: lifecycle (INTERFACE §2.6) [IMPL]":
 
   test "[IFC-0217] [IFC-0218] [IFC-0219] the state directory and configuration are copied, not retained":
     var dir = "/var/lib/meter"
-    var config = diag("{\"rate\": 5}")
-    let ctx = newMeter(input(stateDir = cstring(dir), configuration = config))
+    let ctx = newMeter(input(stateDir = cstring(dir)))
     dir[1] = 'X'
-    config[0] = 0
     withInstance(ctx, Meter, m):
       check m.stateDir == Opt.some("/var/lib/meter")
-      check m.configuration == Opt.some(diag("{\"rate\": 5}"))
+      check m.configuration.isNone
     meterDestroy(ctx)
+    # A configured kit copies the configuration it checked (DECISIONS I87).
+    var config = configInput(tunerValue("radio-3"))
+    var expected = config # a refc `let` would share the buffer (I87)
+    var i = input(configuration = config)
+    var t: ptr LogosModuleContext
+    check checkOutcome(tunerInit(addr i, addr t), contextShape(t)).isOk
+    config[^1] = config[^1] xor 1
+    withInstance(t, Tuner, m):
+      check m.station == "radio-3"
+    tunerDestroy(t)
+    check expected != config
 
   test "[IFC-0222] a failed initialization returns a nonzero code and a null context":
-    let refusing = @[0xF4'u8] # the author refuses CBOR `false`
     let notOneValue = @[0xFF'u8] # a break code: not one CBOR value
-    # `input` borrows the configuration bytes, so they outlive each call.
-    var i = input(configuration = refusing)
+    # `input` borrows the state directory, so it outlives each call.
+    var refusing = "/refuse" # the author refuses this state directory
+    var i = input(stateDir = cstring(refusing))
     var ctx = cast[ptr LogosModuleContext](addr rcState) # not null on purpose
     var r = meterInit(addr i, addr ctx)
     check ctx == nil
     let st = checkOutcome(r, contextShape(ctx))
     check st.isErr and st.error.code == ecModule
-    check st.error.message == Opt.some("configuration says no")
+    check st.error.message == Opt.some("the state directory says no")
     i = input()
     i.abiVersion = 1 # [SPEC INTERFACE §5.2] an older input
     r = meterInit(addr i, addr ctx)
@@ -199,6 +291,129 @@ suite "ifc.kit: lifecycle (INTERFACE §2.6) [IMPL]":
     i = input(configuration = notOneValue)
     r = meterInit(addr i, addr ctx)
     check ctx == nil and checkOutcome(r, contextShape(ctx)).error.code == ecInvalidParams
+
+suite "ifc.kit: configuration (CONFIG §2, §6, §8; DECISIONS I87) [IMPL]":
+  test "[CFG-0017] [CFG-0068] [CFG-0069] [CFG-0070] the kit embeds the commitment recomputed from its document; init gives the author the typed value and its revision":
+    let (schemaRoot, subtreeRoot) = rootsOf(tunerDocument, TunerRoot)
+    for roots in [
+      tuner_module_kit.configurationRoots, quiet_module_kit.configurationRoots
+    ]:
+      check @(roots.schemaRoot) == schemaRoot
+      check @(roots.subtreeRoot) == subtreeRoot
+    check tuner_module_kit.configurationRoot == TunerRoot
+    check tuner_module_kit.liveReconfiguration
+    check not quiet_module_kit.liveReconfiguration
+    var ctx: ptr LogosModuleContext
+    check initWith(tunerInit, configInput(tunerValue("radio-7", 9), 4), ctx).isOk
+    withInstance(ctx, Tuner, t):
+      check t.station == "radio-7" and t.volume == 9'u32 and t.revision == 4
+    tunerDestroy(ctx)
+    let before = quietInits.load
+    check initWith(quietInit, configInput(tunerValue("q", 3), 1), ctx).isOk
+    check quietInits.load == before + 1
+    withInstance(ctx, Quiet, q):
+      check q.volume == 3'u32 and q.revision == 1
+    quietDestroy(ctx)
+
+  test "[CFG-0068] [CFG-0069] [CFG-0070] another commitment is VERSION_MISMATCH before the value is read; input that is not a configuration_input, or a value outside the schema, is INVALID_PARAMS; no author code runs":
+    let before = quietInits.load
+    var ctx: ptr LogosModuleContext
+    var other = tuner_module_kit.configurationRoots.schemaRoot
+    other[0] = other[0] xor 1
+    for bad in [
+      configInput(tunerValue(), schemaRoot = other),
+      configInput(tunerValue(), model = "logos.commitment-model.2026-09"),
+      # The commitment is checked first: the value is never read.
+      configInput(@[0xFF'u8], schemaRoot = other),
+    ]:
+      let st = initWith(quietInit, bad, ctx)
+      check st.isErr and st.error.code == ecVersionMismatch and ctx == nil
+    for bad in [
+      configInput(encodeCbor(cbor(1'u64))), # not a tuner.config
+      configInput(encodeCbor(cborMap((cbor("station"), cbor("x"))))),
+      configInput(@[0x18'u8, 0x01]), # not deterministic
+      tunerValue(), # a value, not a configuration_input
+      encodeCbor(cborMap((cbor("value"), cbor(tunerValue())))),
+    ]:
+      let st = initWith(quietInit, bad, ctx)
+      check st.isErr and st.error.code == ecInvalidParams and ctx == nil
+    check quietInits.load == before
+    # The author's own refusal comes after the checks.
+    let st = initWith(tunerInit, configInput(tunerValue("broken")), ctx)
+    check st.isErr and st.error.code == ecModule and ctx == nil
+    check st.error.message == Opt.some("the tuner is broken")
+
+  test "[CFG-0063] [IMPL] a configured kit given no configuration, and an unconfigured kit given one, are INVALID_PARAMS before any author code":
+    let before = quietInits.load
+    var ctx: ptr LogosModuleContext
+    var st = initWith(quietInit, @[], ctx)
+    check st.isErr and st.error.code == ecInvalidParams and ctx == nil
+    check quietInits.load == before
+    st = initWith(meterInit, configInput(tunerValue()), ctx)
+    check st.isErr and st.error.code == ecInvalidParams and ctx == nil
+
+  test "[CFG-0096] [CFG-0097] [CFG-0098] apply_configuration runs the same checks, then the author's hook: OK once the new value governs, the author's failure with the old value in force":
+    var ctx: ptr LogosModuleContext
+    check initWith(tunerInit, configInput(tunerValue("a"), 1), ctx).isOk
+    check applyWith(ctx, configInput(tunerValue("b", 7), 2)).isOk
+    withInstance(ctx, Tuner, t):
+      check t.station == "b" and t.volume == 7'u32 and t.applied.load == 1
+    let refused = applyWith(ctx, configInput(tunerValue("refuse"), 3))
+    check refused.isErr and refused.error.code == ecModule
+    check refused.error.message == Opt.some("the tuner refuses")
+    var other = tuner_module_kit.configurationRoots.schemaRoot
+    other[0] = other[0] xor 1
+    let mismatch = applyWith(ctx, configInput(tunerValue("c"), 3, schemaRoot = other))
+    check mismatch.isErr and mismatch.error.code == ecVersionMismatch
+    let invalid = applyWith(ctx, configInput(encodeCbor(cbor(1'u64)), 3))
+    check invalid.isErr and invalid.error.code == ecInvalidParams
+    let absent = applyWith(ctx, @[])
+    check absent.isErr and absent.error.code == ecInvalidParams
+    withInstance(ctx, Tuner, t):
+      check t.station == "b" and t.applied.load == 1
+    tunerDestroy(ctx)
+    # [SPEC RUNTIME §2.3, §13.3] Only a live kit registers the hook.
+    check "logos_tuner_module_MODULE_apply_configuration" in
+      tunerModuleStaticSymbols().names
+    check "logos_quiet_module_MODULE_apply_configuration" notin
+      quietModuleStaticSymbols().names
+    check quietModuleStaticSymbols().names.len == 3
+
+  test "[CFG-0071] checkConfigurationInput gives a handwritten module the same checks":
+    let schema = loadSchema(tunerDocument, [], [])
+    let roots = tuner_module_kit.configurationRoots
+    let (v, revision) = checkConfigurationInput(
+      configInput(tunerValue("hand", 2), 9), roots, schema, TunerRoot
+    ).tryGet
+    check revision == 9
+    check v.lookup("station").get.getText == Opt.some("hand")
+    var other = roots
+    other.subtreeRoot[31] = other.subtreeRoot[31] xor 1
+    check checkConfigurationInput(configInput(tunerValue()), other, schema, TunerRoot).error.code ==
+      ecVersionMismatch
+    check checkConfigurationInput(
+      configInput(tunerValue()), roots, schema, "tuner.station"
+    ).error.code == ecInvalidParams
+
+  test "[CFG-0019] [IMPL] generation: a root that is not a type of its schema, a schema that is not supporting and a Nim name shared with the module are errors":
+    let module = acceptContractSet(readFile("tests/kit/tuner_module.cddl")).tryGet
+    let config = configurationSet(tunerDocument).tryGet
+    proc kit(c: ContractSet, root: string): Result[string, string] =
+      kitModule(
+        module,
+        KitOptions(
+          importPrefix: "logos_core/",
+          configuration: Opt.some(KitConfiguration(set: c, root: root)),
+        ),
+      )
+
+    check kit(config, TunerRoot).isOk
+    check kit(config, "tuner.nothing").error ==
+      "the configuration root tuner.nothing is not a type of its schema"
+    check configurationSet(readFile("tests/kit/tuner_module.cddl")).error ==
+      "the configuration schema is not a supporting schema"
+    let clash = configurationSet("radio.band = { x: uint32 }\n").tryGet
+    check "have one Nim name, RadioBand" in kit(clash, "radio.band").error
 
 suite "ifc.kit: dispatch (INTERFACE §2.6, §2.7, §4.5, App A.3) [IMPL]":
   test "[IFC-0201] [IFC-0672] [IFC-0256] [IFC-0263] a call returns one response map that the instance's free releases":

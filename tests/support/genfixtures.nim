@@ -15,6 +15,12 @@ type NimFixture* = object
   system*: bool
   kit*: bool ## the module kit (`kitgen`) rather than the types
   calls*: bool ## the typed call helpers (`callsgen`) rather than the types
+  configuration*: string ## the kit's configuration schema (DECISIONS I87)
+  configurationRoot*: string
+  live*: bool ## the kit declares live reconfiguration
+  configurationTypes*: bool
+    ## the kit's configuration types (`configurationTypesModule`) rather than
+    ## the kit
 
 const
   fixturePrefix* = "../../src/logos_core/"
@@ -69,6 +75,38 @@ const
       primary: "tests/kit/shapes_module.cddl",
       calls: true,
     ),
+    NimFixture(module: "tuner_module_types.nim", primary: "tests/kit/tuner_module.cddl"),
+    NimFixture(
+      module: "tuner_module_configuration_types.nim",
+      primary: "tests/kit/tuner_module.cddl",
+      configuration: "tests/kit/tuner_config.cddl",
+      configurationRoot: "tuner.config",
+      live: true,
+      configurationTypes: true,
+    ),
+    NimFixture(
+      module: "tuner_module_kit.nim",
+      primary: "tests/kit/tuner_module.cddl",
+      kit: true,
+      configuration: "tests/kit/tuner_config.cddl",
+      configurationRoot: "tuner.config",
+      live: true,
+    ),
+    NimFixture(module: "quiet_module_types.nim", primary: "tests/kit/quiet_module.cddl"),
+    NimFixture(
+      module: "quiet_module_configuration_types.nim",
+      primary: "tests/kit/quiet_module.cddl",
+      configuration: "tests/kit/tuner_config.cddl",
+      configurationRoot: "tuner.config",
+      configurationTypes: true,
+    ),
+    NimFixture(
+      module: "quiet_module_kit.nim",
+      primary: "tests/kit/quiet_module.cddl",
+      kit: true,
+      configuration: "tests/kit/tuner_config.cddl",
+      configurationRoot: "tuner.config",
+    ),
     NimFixture(
       module: "metrics_provider_types.nim",
       primary: "spec/mirrors/IFC/3.9.2.interface.cddl",
@@ -89,8 +127,15 @@ proc generated*(f: NimFixture): Result[string, string] =
       f.supporting.mapIt(readFile(it)),
       AcceptOptions(system: f.system),
     )
-    if f.kit:
-      kitModule(set, KitOptions(importPrefix: fixturePrefix), f.system)
+    var opts = KitOptions(importPrefix: fixturePrefix)
+    if f.configuration.len > 0:
+      let cfgSet = ?configurationSet(readFile(f.configuration))
+      opts.configuration =
+        Opt.some(KitConfiguration(set: cfgSet, root: f.configurationRoot, live: f.live))
+    if f.configurationTypes:
+      configurationTypesModule(set, opts.configuration.get, opts)
+    elif f.kit:
+      kitModule(set, opts, f.system)
     elif f.calls:
       callsModule(set, CallsOptions(importPrefix: fixturePrefix), f.system)
     else:

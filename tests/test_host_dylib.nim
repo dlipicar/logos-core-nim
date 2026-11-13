@@ -17,7 +17,7 @@ import ../src/logos_core/abi/host
 import ../src/logos_core/crypto/blake3
 import ../src/logos_core/iface/outcome
 import ../src/logos_core/runtime/[host_config_types, store_types]
-import ./support/[hostbuild, kitbuild]
+import ./support/[hostbuild, kitbuild, tunerconfig]
 
 {.compile: "host/host_harness.c".}
 {.compile: "host/test_orchestrator.c".}
@@ -98,6 +98,7 @@ let
   library = buildRuntimeLibrary()
   meterLib = buildKitLibrary("meter_impl.nim", "hdmeter")
   sensorLib = buildKitLibrary("sensor_impl.nim", "hdsensor")
+  tunerLib = buildKitLibrary("tuner_impl.nim", "hdtuner")
 removeDir(work)
 createDir(work)
 doAssert hhLoad(cstring(library)) == 0, "cannot load " & library
@@ -152,6 +153,23 @@ proc sensor(): LcnAppModule =
         )
       ),
     ),
+  )
+
+proc tunerModule(provisioned: Opt[seq[byte]]): LcnAppModule =
+  ## The configured tuner kit library as a `direct_dynamic` record.
+  LcnAppModule(
+    instance: "tuner-1",
+    module: "tuner_module",
+    implementation: LcnAppImplementation(
+      kind: LcnAppImplementationKind.Direct_dynamic,
+      arm_Direct_dynamic: LcnAppImplementationARDirectDynamicMap(
+        artifact: LcnAppArtifact(
+          id: "tuner", local_path: tunerLib, hash: digestOfFile(tunerLib)
+        )
+      ),
+    ),
+    configuration: Opt.some(tunerDeclBytes(live = true)),
+    provisioned_configuration: provisioned,
   )
 
 var handles = 0
@@ -300,6 +318,24 @@ suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
     hhWaitEnd(r)
     check r.ec == ecOk
     check call(hhDestroy, rt).ec == ecOk
+
+  test "[CFG-0063] [CFG-0068] [G141] [IMPL-DECISION G190] a provisioned value reaches a direct_dynamic configured kit as the orchestration instance starts":
+    var c = deployment()
+    c.orchestration = "tuner-1"
+    for (provisioned, code) in [
+      (Opt.some(tunerValue("host-1")), ecOk),
+      # The kit refuses this station after its checks: the value reached it.
+      (Opt.some(tunerValue("broken")), ecModule),
+      # No value, and the orchestration instance cannot start.
+      (Opt.none(seq[byte]), ecModule),
+    ]:
+      c.modules = @[tunerModule(provisioned)]
+      let (rt, created) = create(c)
+      check created.ec == ecOk
+      let r = call(hhStart, rt)
+      checkpoint r.text
+      check r.ec == code
+      rt.finish()
 
   test "[RUN-0764] a result's message lives in its own C thread until that thread's next call":
     check hhDiagnosticsCheck() == 0

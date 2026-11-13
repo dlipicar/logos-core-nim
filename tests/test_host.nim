@@ -15,7 +15,7 @@ import
 from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
 from ../src/logos_core/crypto/slhdsa import Seed, keyPairFromSeeds
 from std/posix import Mode, chmod
-import ./support/kitbuild
+import ./support/[kitbuild, tunerconfig]
 import ./kit/meter_impl
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "host" / kitVariant
@@ -431,6 +431,76 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.declarations = Opt.some(@[keep])
     c.runtime.state_root = Opt.none(string)
     check parse(c).rejects("persistent_state needs state_root")
+
+  test "[RUN-0259] [RUN-0741] [CFG-0016] [CFG-0017] [CFG-0018] [CFG-0019] [I87] a configuration declaration is accepted before any record names it, with the instance's provisioned value":
+    var c = baseConfig()
+    c.runtime.state_root = Opt.some(work / "state")
+    c.modules[1].configuration =
+      Opt.some(tunerDeclBytes(default = Opt.some(tunerValue())))
+    c.modules[1].provisioned_configuration = Opt.some(tunerValue("p"))
+    let h = parse(c).get
+    let m = h.modules[1]
+    check m.configuration.isSome
+    check m.record.configuration == Opt.some(m.configuration.get.digest)
+    check m.configuration.get.defaultValue.get.bytes == tunerValue()
+    check m.configuration.get.provisioned.get.bytes == tunerValue("p")
+    check not m.configuration.get.live
+    check h.modules[0].configuration.isNone and h.modules[0].record.configuration.isNone
+    # [G141] A provisioned value belongs to an instance whose module declares
+    # a configuration.
+    c.modules[1].configuration = Opt.none(seq[byte])
+    check parse(c).rejects(
+      "module instance meter-1: provisioned_configuration needs configuration"
+    )
+    c.modules[1].configuration = Opt.some(@[0x01'u8])
+    check parse(c).rejects(
+      "module instance meter-1: the configuration declaration is not one"
+    )
+    c.modules[1].configuration = Opt.some(tunerDeclBytes())
+    c.modules[1].provisioned_configuration =
+      Opt.some(encodeCbor(cborMap((cbor("station"), cbor("x")))))
+    check parse(c).rejects(
+      "module instance meter-1: the provisioned configuration is not a complete value of " &
+        TunerRoot
+    )
+    c.modules[1].provisioned_configuration = Opt.none(seq[byte])
+    c.modules[1].configuration =
+      Opt.some(tunerDeclBytes(default = Opt.some(encodeCbor(cbor(1'u64)))))
+    check parse(c).rejects("the default value is not a complete value of " & TunerRoot)
+    var d = tunerDecl()
+    d.schema.schema_commitment.schema_root[0] =
+      d.schema.schema_commitment.schema_root[0] xor 1
+    c.modules[1].configuration = Opt.some(encode(d).tryGet)
+    check parse(c).rejects("the configuration schema root is not the declared one")
+    d = tunerDecl()
+    d.schema.root = "tuner.missing"
+    c.modules[1].configuration = Opt.some(encode(d).tryGet)
+    check parse(c).rejects(
+      "the configuration root tuner.missing is not a type of its schema"
+    )
+    # A declaration carries the binding for instances created later; a
+    # provisioned value is never given to a module name (RUN-0923).
+    c = baseConfig()
+    c.declarations = Opt.some(
+      @[
+        LcnAppDeclaration(
+          module: "tuner_module",
+          implementation: LcnAppImplementation(
+            kind: LcnAppImplementationKind.Direct_static,
+            arm_Direct_static: LcnAppImplementationARDirectStaticMap(binding: "tuner"),
+          ),
+          configuration: Opt.some(tunerDeclBytes(live = true)),
+        )
+      ]
+    )
+    let declared = parse(c).get.declarations[0]
+    check declared.configuration.get.live
+    check declared.record.configuration == Opt.some(declared.configuration.get.digest)
+    check declared.configuration.get.provisioned.isNone
+    c.declarations.get[0].configuration = Opt.some(@[0xa0'u8])
+    check parse(c).rejects(
+      "declaration tuner_module: the configuration declaration is not one"
+    )
 
   test "[IMPL] the names the Runtime assigns are refused in the configuration":
     let form = "m-" & repeat("0a", 16) & "-1"

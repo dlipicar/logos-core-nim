@@ -174,7 +174,7 @@ func resolve(g: NGen, doc: int, n: SchemaNode): (int, Declaration) =
     )
     (d, g.docs[d].model.find(name).get)
 
-func isObject(n: SchemaNode): bool =
+func isObject*(n: SchemaNode): bool =
   n.kind in {snMap, snChoice}
 
 func literalOf(g: NGen, doc: int, n: SchemaNode): Opt[ScalarData] =

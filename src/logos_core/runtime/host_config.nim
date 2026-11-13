@@ -16,7 +16,7 @@ import results
 import ../cbor
 import ../iface/outcome
 import ../abi/host
-import ./[artifact, plumbing]
+import ./[artifact, configcheck, plumbing]
 import ./host_config_types
 from ../authority/policy import loadPolicy
 from ./authscopes import AuthorityModule, caRoots
@@ -33,6 +33,8 @@ type
   HostModule* = object
     instance*: string ## the protected module instance identity
     record*: ModuleRecord
+    configuration*: Opt[AcceptedConfiguration]
+      ## [SPEC CONFIG §2; G141] its accepted declaration and provisioned value
 
   EvidenceKeySetting* = object
     ## [SPEC CA §9.1] The call-evidence signing key's configuration; `create`
@@ -208,6 +210,21 @@ func checkOrdering(c: HostConfig, ids: HashSet[string]): Result[void, ConfigErro
     return err(configError("the ordering constraints form a cycle"))
   ok()
 
+proc configurationOf(
+    what: string, declaration, provisioned: Opt[seq[byte]]
+): Result[Opt[AcceptedConfiguration], ConfigError] =
+  ## [SPEC RUNTIME §8 l.1386-1387 (RUN-0259); CONFIG §2] A configuration
+  ## declaration, accepted before any record names it, with the instance's
+  ## protected value (CONFIG l.142; G141). An invalid declaration, default or
+  ## provisioned value is INVALID_PARAMS at create (RUN-0741).
+  if declaration.isNone:
+    if provisioned.isSome:
+      return err(configError(what & ": provisioned_configuration needs configuration"))
+    return ok(Opt.none(AcceptedConfiguration))
+  let a = acceptConfiguration(declaration.get, provisioned).valueOr:
+    return err(configError(what & ": " & error))
+  ok(Opt.some(a))
+
 func cborFailure(e: CborError): ConfigError =
   let reason =
     case e.kind
@@ -359,7 +376,7 @@ proc decodeHostConfig*(
     ids = initHashSet[string]()
     assignments = initHashSet[string]()
   for m in cfg.modules:
-    let r = record(m).valueOr:
+    var r = record(m).valueOr:
       return err(configError("module instance " & m.instance & ": " & error.message))
     if m.instance in ids:
       return err(configError("module instance " & m.instance & " is listed twice"))
@@ -377,7 +394,12 @@ proc decodeHostConfig*(
       if r.stateAssignment.get in assignments:
         return err(configError("two module instances share a state assignment"))
       assignments.incl(r.stateAssignment.get)
-    c.modules.add(HostModule(instance: m.instance, record: r))
+    let accepted = ?configurationOf(
+      "module instance " & m.instance, m.configuration, m.provisioned_configuration
+    )
+    if accepted.isSome:
+      r.configuration = Opt.some(accepted.get.digest)
+    c.modules.add(HostModule(instance: m.instance, record: r, configuration: accepted))
   # [G53] The role is named explicitly, on a listed instance whose module name
   # is outside the reserved prefix; no name confers it (RUN-0784, RUN-0785).
   var orchestrationModule = ""
@@ -404,7 +426,7 @@ proc decodeHostConfig*(
       return err(configError("declarations is present but empty"))
     var modules = initHashSet[string]()
     for d in cfg.declarations.get:
-      let r = record(d).valueOr:
+      var r = record(d).valueOr:
         return err(configError("declaration " & d.module & ": " & error.message))
       if d.module in modules:
         return err(configError("module " & d.module & " is declared twice"))
@@ -414,7 +436,16 @@ proc decodeHostConfig*(
         return err(
           configError("declaration " & d.module & ": persistent_state needs state_root")
         )
-      c.declarations.add(ModuleDeclaration(record: r, persistentState: persistent))
+      let accepted = ?configurationOf(
+        "declaration " & d.module, d.configuration, Opt.none(seq[byte])
+      )
+      if accepted.isSome:
+        r.configuration = Opt.some(accepted.get.digest)
+      c.declarations.add(
+        ModuleDeclaration(
+          record: r, configuration: accepted, persistentState: persistent
+        )
+      )
   case cfg.policy.kind
   of LcnAppPolicyKind.Allow_all:
     discard

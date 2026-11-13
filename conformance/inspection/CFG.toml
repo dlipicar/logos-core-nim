@@ -1,0 +1,14 @@
+# MODULE CONFIGURATION requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+[[item]]
+ids = ["CFG-0010"]
+reason = "A rule on what a value means, which the Runtime cannot see: it checks a value's shape against the accepted schema (runtime/configcheck.nim) and never interprets it, and no configuration field reaches the Capability Authority or the trust input (runtime/config.nim has no authority import). docs/HOST-CONFIG.md, Module configuration, 'What a value must not hold', puts the rule on the module author and deployer and sends credentials to the state directory (D21) and authority to the policy (DECISIONS I87)."
+
+[[item]]
+ids = ["CFG-0129"]
+reason = "A documentation requirement: docs/HOST-CONFIG.md, Module configuration, states that app-config v1 accepts package defaults ('The first value', 'Package defaults and reset') and names the reset path (the package's declaration, checked against get_configuration_schema's commitment, staged with update_configuration, which validates it). Tests [CFG-0046] show a default staged as package-default (DECISIONS I87)."
+
+[[item]]
+ids = ["CFG-0134"]
+reason = "A documentation requirement on a deployment workflow: docs/HOST-CONFIG.md, Module configuration, 'Keeping a configuration across an upgrade', names it (get_configuration on the old instance, a transformation outside Core, then provisioned_configuration or update_configuration on the new instance id before its first start). The Runtime steps it uses are tested under their own units (DECISIONS I87)."

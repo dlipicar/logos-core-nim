@@ -17,8 +17,10 @@
 import std/[dynlib, typedthreads]
 import unittest2
 import ../src/logos_core/iface/[accept, provider]
-import ./support/[kitbuild, kitruntime, specdata, testroute, typedharness]
-import ./generated/[meter_module_types, sensor_module_types]
+from ../src/logos_core/runtime/rc_types import
+  LogosNSModuleConfigurationConfigurationInput, encode
+import ./support/[kitbuild, kitruntime, specdata, testroute, typedharness, tunerconfig]
+import ./generated/[meter_module_types, sensor_module_types, tuner_module_types]
 
 type
   NameFn = proc(): cstring {.cdecl, gcsafe, raises: [].}
@@ -27,6 +29,9 @@ type
   ): LogosResult {.cdecl, gcsafe, raises: [].}
   DestroyFn = proc(module: ptr LogosModuleContext) {.cdecl, gcsafe, raises: [].}
   CallSurfaceFn = proc(outLen: ptr csize_t): ptr uint8 {.cdecl, gcsafe, raises: [].}
+  ApplyFn = proc(
+    module: ptr LogosModuleContext, cbor: ptr UncheckedArray[uint8], len: csize_t
+  ): LogosResult {.cdecl, gcsafe, raises: [].}
 
   Library = object ## One kit module's exported symbols, as `dlsym` finds them.
     handle: LibHandle
@@ -59,6 +64,9 @@ let
   meter = load(buildKitLibrary("meter_impl.nim", "kitmeter"), "meter_module")
   sensor = load(buildKitLibrary("sensor_impl.nim", "kitsensor"), "sensor_module")
   shapes = load(buildKitLibrary("shapes_impl.nim", "kitshapes"), "shapes_module")
+  tuner = load(buildKitLibrary("tuner_impl.nim", "kittuner"), "tuner_module")
+  tunerApply =
+    cast[ApplyFn](tuner.handle.symAddr("logos_tuner_module_MODULE_apply_configuration"))
 
 proc typedSymbol(lib: Library, name: string): pointer =
   ## A typed provider function (INTERFACE §2.4) the library exports.
@@ -121,7 +129,45 @@ proc reading(channel: uint32): seq[byte] =
     )
   ).get
 
+proc now(ctx: ptr LogosModuleContext): RadioNowResponse =
+  let c = call(tuner.dispatch, tuner.free, ctx, "now", encode(RadioNowRequest()).get)
+  doAssert c.status.isOk
+  RadioNowResponse.decode(c.response).get
+
+proc applied(ctx: ptr LogosModuleContext, input: seq[byte]): AbiCheck =
+  readStatus(
+    tunerApply(
+      ctx, cast[ptr UncheckedArray[uint8]](unsafeAddr input[0]), csize_t(input.len)
+    )
+  )
+
 suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]":
+  test "[CFG-0068] [CFG-0070] [CFG-0096] [CFG-0097] a configured, live kit library: init with the typed value, apply, and an input for another schema":
+    check tunerApply != nil
+    let config = tunerInput(tunerValue("dyn", 2), 5)
+    var i = input(configuration = config)
+    var ctx: ptr LogosModuleContext
+    check checkOutcome(tuner.init(addr i, addr ctx), contextShape(ctx)).isOk
+    var n = ctx.now
+    check n.station == "dyn" and n.volume == 2 and n.revision == 5 and n.applied == 0
+    check ctx.applied(tunerInput(tunerValue("dyn-2", 3), 6)).isOk
+    n = ctx.now
+    check n.station == "dyn-2" and n.volume == 3 and n.applied == 1
+    var other = tunerCommitment()
+    other.schema_root[0] = other.schema_root[0] xor 1
+    let foreign = encode(
+      LogosNSModuleConfigurationConfigurationInput(
+        schema_commitment: other, value: tunerValue("x"), value_revision: 7
+      )
+    ).tryGet
+    let refused = ctx.applied(foreign)
+    check refused.isErr and refused.error.code == ecVersionMismatch
+    check ctx.now.station == "dyn-2"
+    tuner.destroy(ctx)
+    var bare = input()
+    let st = checkOutcome(tuner.init(addr bare, addr ctx), contextShape(ctx))
+    check st.isErr and st.error.code == ecInvalidParams and ctx == nil
+
   test "two libraries load side by side and report their identity and call surface":
     check $meter.name() == "meter_module"
     check $sensor.name() == "sensor_module"

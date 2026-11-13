@@ -148,6 +148,8 @@ func toRs*(r: ModuleRecord): LcnRsRecord =
         )
       )
     result.requested_permissions = Opt.some(s)
+  if r.configuration.isSome:
+    result.configuration_commitment = Opt.some(@(r.configuration.get))
 
 func fromRs*(r: LcnRsRecord): Result[ModuleRecord, string] =
   ## A record read back; it must pass `checkRecord`, and a present array is
@@ -200,9 +202,16 @@ func fromRs*(r: LcnRsRecord): Result[ModuleRecord, string] =
           permission: p.permission, constraints: p.constraints, reason: p.reason
         )
       )
-  # [IMPL] I71, I74: a configuration declaration is not accepted before CONFIG
-  # is built (`checkRecord` refuses it).
-  m.declaresConfiguration = r.configuration_commitment.isSome
+  if r.configuration_commitment.isSome:
+    # [IMPL-DECISION I87] the accepted binding's digest; the binding and the
+    # state are the instance's `cfg` side record.
+    let c = r.configuration_commitment.get
+    if c.len != 32:
+      return err("a configuration commitment is not 32 bytes")
+    var d: Digest
+    for i in 0 ..< 32:
+      d[i] = c[i]
+    m.configuration = Opt.some(d)
   ?checkRecord(m)
   ok(m)
 
@@ -219,6 +228,29 @@ proc factBytes*(r: ModuleRecord): seq[byte] =
   for p in x.requestedPermissions.mitems:
     p.reason = Opt.none(string)
   recordBytes(x)
+
+const ConfigSide* = "cfg" ## [I87] the side-record kind of an instance's configuration
+
+proc configBytes*(s: ConfigState): Result[seq[byte], string] =
+  ## [IMPL-DECISION I87] The `cfg` side record of one configurable instance:
+  ## its whole binding and its state, never the in-flight attempt.
+  let (binding, state) = encodeStored(s)
+  var r = LcnCfgRecord(binding: binding, state: state)
+  if s.lastProvisioned.isSome:
+    r.last_provisioned = Opt.some(@(s.lastProvisioned.get))
+  encode(r)
+
+proc configOf*(data: openArray[byte], digest: Digest): Result[ConfigState, string] =
+  ## A `cfg` side record read back, for an instance whose record names the
+  ## binding `digest`; the result owns new blobs.
+  let r = ?LcnCfgRecord.decode(data)
+  var last: Opt[Digest]
+  if r.last_provisioned.isSome:
+    var d: Digest
+    for i in 0 ..< 32:
+      d[i] = r.last_provisioned.get[i]
+    last = Opt.some(d)
+  decodeStored(r.binding, r.state, digest, last)
 
 func classificationOf*(text: string): Result[Failure, string] =
   ## The failure a stored classification names (RUNTIME l.3753).

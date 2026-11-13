@@ -8,6 +8,8 @@ import ../src/logos_core/abi/checks
 from ../src/logos_core/iface/cmap import logosTypesHeader
 from ../src/logos_core/codegen/hostgen import logosRuntimeHeader
 import ../src/logos_core/abi/host
+from ../src/logos_core/runtime/config import
+  ValueRecord, SchemaRoots, Provenance, newBlob, drop, encodeInput
 
 const deviceTarget = defined(android) or defined(ios)
   ## No C compiler where a cross-compiled suite runs; the layout test is SKIPPED
@@ -414,6 +416,21 @@ suite "ifc.abi-init: the module initialization input (INTERFACE §2.6, §5.2)":
       check checkInitInput(addr input, false).code == ecInvalidParams
     check checkConfigurationBytes(nil, 0, required = true).code == ecInvalidParams
     check checkConfigurationBytes(dataOf(good), csize_t(good.len), required = true).isOk
+    # [SPEC CONFIG §6 l.226] What a Runtime delivers: one configuration_input
+    # (DECISIONS I87).
+    let value = newBlob(good)
+    let delivered = encodeInput(
+      ValueRecord(
+        value: value,
+        commitment: SchemaRoots(),
+        valueRevision: 1,
+        provenance: pvPackageDefault,
+      )
+    )
+    drop(value)
+    input.configurationCbor = dataOf(delivered)
+    input.configurationCborLen = csize_t(delivered.len)
+    check checkInitInput(addr input, false).isOk
 
   test "state_dir, when present, is UTF-8":
     input.stateDir = "/var/lib/logos/ëx"

@@ -7122,6 +7122,7 @@ proc logosCapabilityAuthorityLayout*(): seq[(string, int)] =
 template exportLogosCapabilityAuthority*(T: typedesc) =
   ## Defines `logos_capability_authority`'s exported symbols over the handlers of `T`.
   proc logosCapabilityAuthorityKitCreate(init: ModuleInit): Result[pointer, InvocationFailure] {.nimcall, gcsafe, raises: [].} =
+    ?kitNoConfiguration(init)
     let r = initModule(T, init)
     if r.isErr:
       return err(r.error)

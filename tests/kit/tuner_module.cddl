@@ -1,0 +1,21 @@
+; -- metadata --
+_module = "tuner_module"
+
+; Input for tests/generated/tuner_module_*: a provider module with a
+; configuration (tests/kit/tuner_config.cddl), live-reconfigurable
+; (CONFIG §2, §6, §8; DECISIONS I87). `now` reports the configuration in
+; force and how it came.
+
+radio.now_request = {
+  ? verbose: bool,
+}
+
+radio.band = "am" / "fm"
+
+radio.now_response = {
+  ? band: radio.band,
+  station: tstr,
+  volume: uint32,
+  revision: uint64,
+  applied: uint64,
+}

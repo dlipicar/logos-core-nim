@@ -107,7 +107,16 @@ lcn.app_module = {
   ? requires: [* lcn.app_requirement],
   ? requested_permissions: [* lcn.app_permission],
   ? state_assignment: tstr .size (1..128),
+  ? configuration: lcn.app_configuration,
+  ? provisioned_configuration: bstr .size (1..8388608),
 }
+
+; One deterministic-CBOR logos.module_configuration.configuration_declaration
+; (CONFIG §2): the module's schema binding and its optional package default.
+; provisioned_configuration is this instance's protected value (CONFIG l.142;
+; decision G141), a complete value of the binding's root; it needs
+; configuration. docs/HOST-CONFIG.md says when a changed value takes effect.
+lcn.app_configuration = bstr .size (1..16777216)
 
 ; logos.module_loader.direct_static and direct_dynamic (LOADER §3)
 lcn.app_implementation =
@@ -142,8 +151,10 @@ lcn.app_ordering = {
 }
 
 ; One accepted declaration per module name, for create_module (decision G55;
-; RUNTIME l.3614-3621): lcn.app_module without instance and state_assignment.
-; With persistent_state, each created instance gets a fresh state assignment.
+; RUNTIME l.3614-3621): lcn.app_module without instance, state_assignment and
+; provisioned_configuration (a provisioned value belongs to an instance, never
+; to a module name: RUN-0923). With persistent_state, each created instance
+; gets a fresh state assignment.
 lcn.app_declaration = {
   module: tstr .size (1..64),
   implementation: lcn.app_implementation,
@@ -152,6 +163,7 @@ lcn.app_declaration = {
   ? requires: [* lcn.app_requirement],
   ? requested_permissions: [* lcn.app_permission],
   ? persistent_state: true,
+  ? configuration: lcn.app_configuration,
 }
 ```
 
@@ -225,9 +237,10 @@ holds is not created again: it keeps its state and intent (below).
 | `requires` | Provider requirements: a contract and a cardinality. They select and grant nothing. |
 | `requested_permissions` | Module-declared policy inputs, as in a package manifest (PM §4): names unique, `constraints` one deterministic-CBOR value. They grant nothing. |
 | `state_assignment` | The instance's state assignment id, `[A-Za-z0-9._-]`; no two instances share one (RUNTIME §8 l.1451). |
+| `configuration` | The module's configuration declaration (CONFIG §2): one deterministic-CBOR `logos.module_configuration.configuration_declaration`, its schema binding and an optional package default. See *Module configuration* below. |
+| `provisioned_configuration` | This instance's protected configuration value (CONFIG l.142; DECISIONS G141): one complete value of the binding's root, at most 8 MiB. It needs `configuration`. |
 
-`hosted_dynamic` realization and records that declare module configuration (CONFIG) cannot be
-expressed in v1.
+`hosted_dynamic` realization cannot be expressed in v1.
 
 ### `ordering`
 
@@ -239,7 +252,8 @@ constraints may not form a cycle.
 
 What a module may create at run time with Runtime Control `create_module` (RUNTIME l.3613-3634;
 DECISIONS G55): for each module name, the one accepted declaration, with the fields of a `modules`
-entry except `instance` and `state_assignment`. No two declarations name one module. A
+entry except `instance`, `state_assignment` and `provisioned_configuration` (a provisioned value
+belongs to one instance, never to a module name: RUN-0923). No two declarations name one module. A
 `direct_static` declaration names a binding the host registers, or `start` returns
 `LOGOS_ERR_INVALID_PARAMS`. With `persistent_state: true` each created instance gets a fresh state
 assignment of its own (`s-…`), which needs `state_root`.
@@ -294,6 +308,66 @@ evidence names the same Runtime across starts.
 - **Rotation.** Generate a key under a new `kid`, give verifiers the new mapping, change
   `call_audit.evidence` and restart. Containers already exported verify while a verifier keeps the
   old kid; revoking it there rejects all of them (CAP-0231).
+
+## Module configuration
+
+A module that takes configuration declares it (CONFIG; DECISIONS I87): in `configuration`, a schema
+binding (`document`, a supporting CDDL schema of at most 1 MiB; `root`, a type it declares; the
+`schema_commitment` of both; and `live_reconfiguration`, present and `true` only for a module that
+can apply a new value while it runs) and, optionally, a package `default_value`.
+
+- **Acceptance at `create`.** The schema is accepted on its own against the pinned common schema
+  (nothing is fetched or read), its root must be a type it declares, and both roots of the declared
+  commitment are computed again and must match. The default and the provisioned value must each be a
+  complete value of the root. Any failure is `LOGOS_ERR_INVALID_PARAMS` naming the module instance
+  or declaration (RUN-0741). Generate the declaration with `lcn-gen` from the module's
+  configuration schema rather than by hand: the commitment is data computed from the text.
+- **The first value.** A new instance starts at state revision 1 with the provisioned value staged
+  (`protected-provisioning`), else the default staged (`package-default`; app-config v1 accepts
+  package defaults), else at revision 0 with nothing: such a module cannot start until a value is
+  staged through Runtime Control `update_configuration`. Its first start promotes the staged value to
+  current.
+- **Starting without a value.** `start_module`, `recover_module`, and the bootstrap start of the
+  orchestration instance, need an eligible value. Without one the start is `LOGOS_ERR_NOT_READY`, the
+  intent stays `requested`, nothing runs, and a later update does not start the module: start it
+  again (DECISIONS G162, interim). For the orchestration instance, `start` returns `LOGOS_ERR_MODULE`
+  (DECISIONS G190, interim).
+- **Replacing the provisioned value.** On each `start` with a `store_dir`, a provisioned value whose
+  value root differs from the last one accepted for that instance is staged again as
+  `protected-provisioning`; an equal one is not. Removing `provisioned_configuration` leaves the last
+  accepted root as it is, so adding the same value back later stages nothing. To force a value back,
+  stage it through Runtime Control. A staged value takes effect at the module's next start or live
+  apply. Provisioning is per instance and is not turned off by anything else in this format
+  (DECISIONS G141).
+- **A changed declaration.** The binding is fixed for an instance's life (CONFIG §7): a retained
+  instance whose configured declaration differs from its stored one, live flag included, makes
+  `start` return `LOGOS_ERR_INVALID_PARAMS` naming it, before anything runs. Give the module a new
+  instance id.
+- **Size.** A state whose maximal `get_configuration` response would not fit a 16 MiB frame is refused
+  with `LOGOS_ERR_MODULE` and nothing changes: two values near 8 MiB cannot both be kept (DECISIONS
+  G233, interim). The state revision never wraps; one step is kept free while a start's promotion is
+  pending (DECISIONS G234, interim).
+- **Persistence.** Each configurable instance's binding and state are kept in their own record in
+  `store_dir` (below), written before any change is visible. A configuration write that fails is
+  `LOGOS_ERR_MODULE` and changes nothing; at a start, the attempt fails with `other`.
+- **What a value must not hold.** Configuration is not a channel for authority or secrets
+  (CONFIG §1): no requested permissions, grants, authority state, credentials or protected trust
+  input. The Runtime checks a value's shape, never its meaning, so this rule is the module author's
+  and the deployer's. Credentials and keys a module needs live in its state directory (DECISIONS
+  D21); authority comes from the `capability-authority` policy.
+- **Package defaults and reset.** This format accepts package defaults: a declaration's
+  `default_value` is staged for a new instance that has no provisioned value. No Runtime Control
+  method returns the default. An application that offers a reset takes the default from the same
+  declaration the host configured (the package's own), checks that its `schema_commitment` is the one
+  `get_configuration_schema` reports for the instance, and stages it with `update_configuration`; the
+  Runtime validates it as a complete value under the accepted schema before it changes anything, and
+  the value takes effect at the next start or live apply.
+- **Keeping a configuration across an upgrade.** The binding is fixed for an instance, so an upgrade
+  that keeps the configuration is a new instance id (CONFIG §7). The workflow is: read the old
+  instance's value with Runtime Control `get_configuration`; turn it into a complete value under the
+  new instance's schema outside Core (Core never transforms a value); then either provision it for
+  the new instance (`provisioned_configuration`) or stage it with `update_configuration` before the
+  new instance's first start. Retire the old instance afterwards.
 
 ## What the host can expect
 
@@ -403,7 +477,8 @@ l.3500-3507, l.3775). Without it nothing persists: every `start` is a new Runtim
 identity, and every configured instance is new.
 
 - **Where it is.** `store_dir` holds `runtime-state.cbor` (one deterministic-CBOR value, format
-  `logos-core-nim.runtime-state.v1`), side records later steps add, and `lock`. The directory is
+  `logos-core-nim.runtime-state.v1`), one `cfg-<hash>.cbor` side record per configurable instance
+  (its configuration binding and state, up to about 17 MiB), and `lock`. The directory is
   created with mode 0700 and refused at `start` (`LOGOS_ERR_MODULE`) if group or other may access it
   or another user owns it; the files are created 0600. Each change is written to a temporary file,
   flushed to the medium (`F_FULLFSYNC` on macOS), renamed over the old file and the directory flushed,
@@ -421,8 +496,11 @@ identity, and every configured instance is new.
   revisions under the old one may already be known elsewhere (DECISIONS G192, interim).
 - **What survives a restart.** For each instance: its id, its provider id, the record it was created
   from, its lifecycle state, its failure classification and reason, its execution intent, the
-  intent's revision and its origin. Also the ids of retired instances with the state assignments they
-  keep, and `create_module` keys. Not kept: routes and their keys (a route id from an earlier run is
+  intent's revision and its origin; for a configurable instance, its configuration binding, state
+  revision, current and staged values and their provenance. Also the ids of retired instances with
+  the state assignments they keep, and `create_module` keys. A configurable instance whose side
+  record is missing or does not hold the binding its record names makes `start` return
+  `LOGOS_ERR_MODULE` naming it, and nothing is written. Not kept: routes and their keys (a route id from an earlier run is
   unknown), realizations, authorization answers and the change log. Every execution revision after a
   restart is larger than any the Runtime exposed before (RUNTIME l.3506).
 - **Instances and the configuration** (DECISIONS G160, interim).
@@ -547,8 +625,9 @@ them to be documented).
 
 A module subscribes to the Runtime Control events through the binding it received at initialization
 (INTERFACE §2.5, applied by l.3837; DECISIONS I86, part 7b). The six event names are accepted;
-`permission_settings_changed_event` and `configuration_state_changed_event` are never produced yet
-(direct mode has constant permission settings, DECISIONS G229; configuration is a later step).
+`permission_settings_changed_event` is never produced (direct mode has constant permission settings,
+DECISIONS G229). `configuration_state_changed_event` follows every committed configuration revision,
+with the state's summary and never a value.
 
 - **Activation.** `subscribe` asks the event's own decision first, without a subject: a denial is
   `LOGOS_ERR_NOT_AUTHORISED`, as is a name that is not a Runtime Control event. A narrowed allow

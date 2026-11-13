@@ -1,0 +1,8 @@
+; -- metadata --
+_module = "quiet_module"
+
+; Input for tests/generated/quiet_module_*: a module that exposes no method,
+; configured with tests/kit/tuner_config.cddl at startup only (CONFIG §6;
+; DECISIONS I87).
+
+hush.level = uint32

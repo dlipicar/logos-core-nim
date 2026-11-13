@@ -2,7 +2,7 @@
 ## generated codecs round-trip, check every value against the schema, and agree
 ## with the hand-written INTERFACE §5.1 encoders.
 
-import std/[atomics, strutils, typedthreads]
+import std/[atomics, os, osproc, strutils, typedthreads]
 import unittest2
 import ../src/logos_core/[cbor, hash, pins]
 import ../src/logos_core/iface/surface
@@ -92,7 +92,11 @@ suite "ifc.nim-types: generated modules (D29)":
     proc normal(body: string): string =
       for line in body.splitLines:
         let t = line.strip
-        if t.startsWith("instance:") or t.startsWith("? configuration_commitment:"):
+        # The record keeps the accepted binding's digest; the host config
+        # carries the declaration and the instance's provisioned value.
+        if t.startsWith("instance:") or t.startsWith("? configuration_commitment:") or
+            t.startsWith("? configuration:") or
+            t.startsWith("? provisioned_configuration:"):
           continue
         result.add(t.replace("lcn.app_", "lcn.rs_") & "\n")
 
@@ -429,3 +433,68 @@ suite "ifc.nim-types: payload depth [IMPL]":
     deepChecks.store(0)
     check runCThreadOn(deepCodecs, csize_t(codecStack)) == 0
     check deepChecks.load == 15
+
+suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
+  test "[CFG-0068] the command line writes the committed types, configuration types and kit; its configuration options go together":
+    let exe = "build/tools/lcn_gen_cli"
+    let (built, code) = execCmdEx(
+      quoteShellCommand(
+        [
+          getCurrentCompilerExe(),
+          "c",
+          "--hints:off",
+          "--nimcache:build/nimcache/lcn_gen_cli",
+          "-o:" & exe,
+          "src/lcn_gen.nim",
+        ]
+      )
+    )
+    checkpoint built
+    check code == 0
+    let dir = "build/lcn_gen_cli"
+    removeDir(dir)
+    proc run(args: openArray[string]): int =
+      let (output, code) =
+        execCmdEx(quoteShellCommand(@[exe] & @args), options = {poStdErrToStdOut})
+      checkpoint output
+      code
+
+    check run(
+      [
+        "kit",
+        "--out:" & dir,
+        "--import-prefix:" & fixturePrefix,
+        "tests/kit/tuner_module.cddl",
+        "--configuration:tests/kit/tuner_config.cddl",
+        "--configuration-root:tuner.config",
+        "--live-reconfiguration",
+      ]
+    ) == 0
+    for name in [
+      "tuner_module_types.nim", "tuner_module_configuration_types.nim",
+      "tuner_module_kit.nim",
+    ]:
+      checkpoint name
+      check readFile(dir / name) == readFile("tests/generated" / name)
+    for bad in [
+      @[
+        "kit", "tests/kit/tuner_module.cddl",
+        "--configuration:tests/kit/tuner_config.cddl",
+      ],
+      @["kit", "tests/kit/tuner_module.cddl", "--configuration-root:tuner.config"],
+      @["kit", "tests/kit/tuner_module.cddl", "--live-reconfiguration"],
+      @[
+        "nim", "tests/kit/tuner_module.cddl",
+        "--configuration:tests/kit/tuner_config.cddl",
+        "--configuration-root:tuner.config",
+      ],
+      @[
+        "kit",
+        "--out:" & dir / "x",
+        "tests/kit/tuner_module.cddl",
+        "--configuration:tests/kit/tuner_config.cddl",
+        "--configuration-root:tuner.nothing",
+      ],
+    ]:
+      check run(bad) == 1
+    check not dirExists(dir / "x")

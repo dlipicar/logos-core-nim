@@ -7,8 +7,8 @@
 ; applied when the store is read; a failure leaves the file as it is.
 ;
 ; The lcn.rs_record rules repeat host_config.cddl's lcn.app_module rules
-; without `instance` (test_nimgen compares them), plus the configuration
-; commitment CONFIG will need; until then a record carrying one is refused.
+; without `instance` and the configuration inputs (test_nimgen compares
+; them), plus the accepted configuration binding's digest (DECISIONS I87).
 
 lcn.rs_state = {
   format: "logos-core-nim.runtime-state.v1",
@@ -96,4 +96,16 @@ lcn.rs_permission = {
 lcn.rs_side = {
   instance: tstr .size (1..128),
   value: bstr,
+}
+
+; [IMPL-DECISION I87] one configurable instance's configuration (side record
+; kind `cfg`): the whole accepted binding, so an instance restores from its
+; side record alone, and its state. Both are deterministic-CBOR CONFIG
+; values (logos.module_configuration.schema_binding and
+; .configuration_state), never the in-flight attempted record. The binding's
+; blake3 digest is the instance record's configuration_commitment.
+lcn.cfg_record = {
+  binding: bstr,
+  state: bstr,
+  ? last_provisioned: bstr .size 32,
 }

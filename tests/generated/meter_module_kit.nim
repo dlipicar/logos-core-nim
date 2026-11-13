@@ -237,6 +237,7 @@ proc meterModuleLayout*(): seq[(string, int)] =
 template exportMeterModule*(T: typedesc) =
   ## Defines `meter_module`'s exported symbols over the handlers of `T`.
   proc meterModuleKitCreate(init: ModuleInit): Result[pointer, InvocationFailure] {.nimcall, gcsafe, raises: [].} =
+    ?kitNoConfiguration(init)
     let r = initModule(T, init)
     if r.isErr:
       return err(r.error)

@@ -9,6 +9,9 @@
 ## - `_MODULE_init` checks the initialization input (`abi/checks`), copies what
 ##   it borrows, calls the author's `initModule` and returns a fresh context.
 ## - `_MODULE_destroy` calls the optional `destroyModule` and frees the context.
+## - For a kit generated with a configuration (DECISIONS I87),
+##   `_MODULE_init` and `_MODULE_apply_configuration` check the
+##   `configuration_input` (`checkConfigurationInput`) before any author code.
 ## - `_MODULE_dispatch` validates the request against the method's request
 ##   schema (INTERFACE §4.4, §4.5), calls the author's handler, checks the
 ##   response against the response schema, and returns it in a buffer that
@@ -36,11 +39,13 @@
 
 import results
 import ../cbor
+import ../pins
 import ../iface/[accept, outcome, payload]
 import ../abi/[types, checks]
 import ../base/[libvisibility, perthread]
+import ./nimrt
 
-export results, outcome, types, payload
+export results, outcome, types, payload, nimrt
 
 proc cMalloc(size: csize_t): pointer {.importc: "malloc", header: "<stdlib.h>".}
 proc cFree(p: pointer) {.importc: "free", header: "<stdlib.h>".}
@@ -61,7 +66,18 @@ type
     ## copies: the input itself is borrowed only for `_MODULE_init` (§2.6).
     services*: ModuleServices
     stateDir*: Opt[string]
-    configuration*: Opt[seq[byte]] ## one deterministic-CBOR value, unvalidated
+    configuration*: Opt[seq[byte]]
+      ## the `configuration_input` as received: in a configured kit, checked
+      ## and also given to `initModule` as its typed value
+    configurationRevision*: Opt[uint64]
+      ## [SPEC CONFIG §6 l.226] in a configured kit, the delivered value's
+      ## revision
+
+  ConfigurationRoots* = object
+    ## [SPEC CONFIG §2, §6 l.228-231] The configuration-schema commitment a
+    ## module was built against: the schema root and its root type's subtree
+    ## root. The other commitment fields are the pinned identifiers.
+    schemaRoot*, subtreeRoot*: array[32, byte]
 
   CallerKind* = enum
     ckModule ## `LOGOS_CALLER_MODULE`
@@ -89,6 +105,12 @@ type
     instance: pointer, bare: string, params: openArray[byte]
   ): Result[seq[byte], InvocationFailure] {.nimcall, gcsafe, raises: [].}
     ## The generated dispatch table: request bytes to response bytes.
+
+  ApplyFn* = proc(
+    instance: pointer, input: openArray[byte]
+  ): Result[void, InvocationFailure] {.nimcall, gcsafe, raises: [].}
+    ## Checks one `configuration_input` and runs the author's
+    ## `applyConfiguration` with its typed value.
 
 template kitEnter*() =
   ## [IMPL] The first statement of every exported entry, in the entry's own
@@ -272,6 +294,106 @@ proc kitDispatch*(
   outResponse[] = buffer
   outResponseLen[] = csize_t(bytes.len)
   okResult()
+
+proc kitApply*(
+    module: ptr LogosModuleContext,
+    configuration: ptr UncheckedArray[uint8],
+    len: csize_t,
+    apply: ApplyFn,
+): LogosResult =
+  ## [SPEC INTERFACE §2.6; CONFIG §8 l.258-266] `_MODULE_apply_configuration`:
+  ## one complete `configuration_input`, always present (INTERFACE §5.2);
+  ## `LOGOS_OK` once the author reports that the new value governs.
+  if module == nil:
+    return failureResult(moduleError("null module context"))
+  checkConfigurationBytes(configuration, len, required = true).isOkOr:
+    return failureResult(failure(error.code, error.reason))
+  let r = apply(module.context.instance, configuration.toOpenArray(0, int(len) - 1))
+  if r.isErr:
+    return failureResult(r.error)
+  okResult()
+
+# Configuration (DECISIONS I87) -----------------------------------------------------
+
+proc sameCommitment(v: CborValue, expected: ConfigurationRoots): bool =
+  ## [SPEC CONFIG l.228-231] Field by field, against the pinned identifiers
+  ## and the module's own roots.
+  if v.entries.len != 5:
+    return false
+  template field(name: string, want: CborValue): bool =
+    let f = v.lookup(name)
+    f.isSome and f.get == want
+
+  field("commitment_model", cbor(CommitmentModelId)) and
+    field("schema_root", cbor(expected.schemaRoot)) and
+    field("schema_subtree_root", cbor(expected.subtreeRoot)) and
+    field("hash_profile", cbor(HashProfileId)) and field(
+    "hash_suite", cbor(HashSuiteId)
+  )
+
+proc checkConfigurationInput*(
+    bytes: openArray[byte],
+    expected: ConfigurationRoots,
+    schema: GeneratedSchema,
+    root: string,
+): Result[(CborValue, uint64), InvocationFailure] =
+  ## [SPEC CONFIG §6 l.226-231 (CFG-0068..0071)] One
+  ## `logos.module_configuration.configuration_input` as `_MODULE_init` or
+  ## `_MODULE_apply_configuration` receives it, for a handwritten Nim module
+  ## as for the generated glue: its value, checked against `root` of
+  ## `schema`, and its value revision. [IMPL] Bytes that are not a
+  ## `configuration_input` are INVALID_PARAMS; a schema commitment other than
+  ## `expected` is VERSION_MISMATCH before the value is read (as CONFIG l.196
+  ## answers a stale commitment); a value that is not a deterministic-CBOR
+  ## value of `root` is INVALID_PARAMS.
+  let input = decodePayload(bytes).valueOr:
+    return err(failure(ecInvalidParams, "the configuration input is not one value"))
+  let
+    commitment = input.lookup("schema_commitment")
+    value = input.lookup("value")
+    revision = input.lookup("value_revision")
+  if input.kind != ckMap or input.entries.len != 3 or commitment.isNone or value.isNone or
+      revision.isNone or commitment.get.kind != ckMap or value.get.kind != ckBytes or
+      revision.get.kind != ckUint:
+    return err(failure(ecInvalidParams, "the configuration input is not one"))
+  if not sameCommitment(commitment.get, expected):
+    return err(
+      failure(
+        ecVersionMismatch, "the configuration is for another configuration schema"
+      )
+    )
+  let data = value.get.bytes
+  if data.len < 1 or data.len > 8_388_608:
+    return
+      err(failure(ecInvalidParams, "the configuration value has 1 to 8388608 bytes"))
+  let v = decodePayload(data).valueOr:
+    return err(failure(ecInvalidParams, "the configuration value is not one value"))
+  schema.check(root, v).isOkOr:
+    return err(failure(ecInvalidParams, "the configuration value is not a " & root))
+  ok((v, revision.get.uint))
+
+proc kitConfiguration*(
+    init: var ModuleInit,
+    expected: ConfigurationRoots,
+    schema: GeneratedSchema,
+    root: string,
+): Result[CborValue, InvocationFailure] =
+  ## [SPEC CONFIG §6 l.222-231] A configured kit's `_MODULE_init`: the input
+  ## carries a configuration (else INVALID_PARAMS [IMPL]) that
+  ## `checkConfigurationInput` accepts. Sets `configurationRevision`.
+  if init.configuration.isNone:
+    return err(failure(ecInvalidParams, "the module declares a configuration"))
+  let (v, revision) =
+    ?checkConfigurationInput(init.configuration.get, expected, schema, root)
+  init.configurationRevision = Opt.some(revision)
+  ok(v)
+
+proc kitNoConfiguration*(init: ModuleInit): Result[void, InvocationFailure] =
+  ## [SPEC CONFIG §6 l.222] A kit generated without a configuration receives
+  ## none: INVALID_PARAMS before any author code [IMPL].
+  if init.configuration.isSome:
+    return err(failure(ecInvalidParams, "the module declares no configuration"))
+  ok()
 
 # Dispatch helpers ------------------------------------------------------------------
 

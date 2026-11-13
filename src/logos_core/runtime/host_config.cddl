@@ -70,7 +70,16 @@ lcn.app_module = {
   ? requires: [* lcn.app_requirement],
   ? requested_permissions: [* lcn.app_permission],
   ? state_assignment: tstr .size (1..128),
+  ? configuration: lcn.app_configuration,
+  ? provisioned_configuration: bstr .size (1..8388608),
 }
+
+; One deterministic-CBOR logos.module_configuration.configuration_declaration
+; (CONFIG §2): the module's schema binding and its optional package default.
+; provisioned_configuration is this instance's protected value (CONFIG l.142;
+; decision G141), a complete value of the binding's root; it needs
+; configuration. docs/HOST-CONFIG.md says when a changed value takes effect.
+lcn.app_configuration = bstr .size (1..16777216)
 
 ; logos.module_loader.direct_static and direct_dynamic (LOADER §3)
 lcn.app_implementation =
@@ -105,8 +114,10 @@ lcn.app_ordering = {
 }
 
 ; One accepted declaration per module name, for create_module (decision G55;
-; RUNTIME l.3614-3621): lcn.app_module without instance and state_assignment.
-; With persistent_state, each created instance gets a fresh state assignment.
+; RUNTIME l.3614-3621): lcn.app_module without instance, state_assignment and
+; provisioned_configuration (a provisioned value belongs to an instance, never
+; to a module name: RUN-0923). With persistent_state, each created instance
+; gets a fresh state assignment.
 lcn.app_declaration = {
   module: tstr .size (1..64),
   implementation: lcn.app_implementation,
@@ -115,4 +126,5 @@ lcn.app_declaration = {
   ? requires: [* lcn.app_requirement],
   ? requested_permissions: [* lcn.app_permission],
   ? persistent_state: true,
+  ? configuration: lcn.app_configuration,
 }
