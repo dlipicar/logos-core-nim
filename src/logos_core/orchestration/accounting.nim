@@ -121,8 +121,11 @@ proc openAccounting*(
   if bytes.isNone:
     return ok((Accounting(dir: dir), lock))
   var a = decodeState(bytes.get).valueOr:
+    # [I94] Fail closed: an unreadable count could restart past max_attempts.
     lock.release()
-    return err(path & ": " & error)
+    return err(
+      path & ": " & error & " (remove the file to start again with no open episode)"
+    )
   a.dir = dir
   ok((a, lock))
 

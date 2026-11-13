@@ -19,23 +19,29 @@ type OrchestratorInstance* = ref object
   sh: ptr Shared
   lock: DurableLock
 
+proc fail(message: string): Result[OrchestratorInstance, InvocationFailure] =
+  ## [I94] A failed start is also a diagnostic: the Runtime does not disclose
+  ## the module's failure text (RUNTIME l.1901-1904), and the operator needs
+  ## it, a broken state file's name above all.
+  diag("cannot start: " & message)
+  err(failure(ecModule, message))
+
 proc initModule(
     _: type OrchestratorInstance, init: ModuleInit, config: LcnOrchestratorConfig
 ): Result[OrchestratorInstance, InvocationFailure] =
   let s = settingsOf(config).valueOr:
-    return
-      err(failure(ecModule, "the orchestration configuration is invalid: " & error))
+    return fail("the orchestration configuration is invalid: " & error)
   checkBinding(init.services.runtimeControl).isOkOr:
-    return err(failure(ecModule, "the Runtime Control binding: " & $error))
+    return fail("the Runtime Control binding: " & $error)
   let bytes = encode(config).valueOr:
-    return err(failure(ecModule, "the orchestration configuration: " & error))
+    return fail("the orchestration configuration: " & error)
   var (acc, lock) = openAccounting(init.stateDir, s).valueOr:
-    return err(failure(ecModule, error))
+    return fail(error)
   let sh = newShared(init.services.runtimeControl, bytes, acc.dir)
   startWorker(sh).isOkOr:
     freeShared(sh)
     lock.release()
-    return err(failure(ecModule, error))
+    return fail(error)
   ok(OrchestratorInstance(sh: sh, lock: lock))
 
 proc destroyModule(m: OrchestratorInstance) =

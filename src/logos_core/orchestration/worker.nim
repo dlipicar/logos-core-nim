@@ -137,7 +137,8 @@ proc setOrchestratorDiagnostics*(sink: DiagnosticsSink) =
   ## [I94] P6: where the module's diagnostic lines go; nil for nowhere.
   sinkPtr.store(cast[pointer](sink))
 
-proc diag(line: string) =
+proc diag*(line: string) =
+  ## One diagnostic line, prefixed with the module's name.
   let p = sinkPtr.load
   if p != nil:
     cast[DiagnosticsSink](p)("lcn_orchestrator: " & line)
@@ -480,14 +481,14 @@ proc decideOne(w: var Worker, view: View) =
     monoMs(),
     firstPass,
   )
-  if d.note.len > 0:
-    diag(v.instance & ": " & d.note)
   if entry.isSome:
     w.acc.entries[v.instance] = entry.get
   else:
     w.acc.entries.del(v.instance)
   if d.entryChanged:
     discard w.save()
+  if d.note.len > 0:
+    diag(v.instance & ": " & d.note) # after the write it reports
   if d.dueAt.isSome:
     w.timers[v.instance] = d.dueAt.get
   var consumed = true

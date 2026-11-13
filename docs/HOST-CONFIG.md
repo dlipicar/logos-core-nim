@@ -433,10 +433,11 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
 
 ## Orchestration duties
 
-RUNTIME l.72 defines a Runtime instance as the Runtime engine plus an orchestration module. This
-implementation claims RUNTIME for the engine (DECISIONS I88; docs/CONFORMANCE.md); until the default
-orchestration module of Tier 4b, the module the host names in `orchestration` carries these duties,
-and the engine does not do them for it:
+RUNTIME l.72 defines a Runtime instance as the Runtime engine plus an orchestration module. RUNTIME
+is claimed for the engine with the reference orchestration module, `lcn_orchestrator`, wherever a
+host names it (logosd will, from Tier 4b step 4b-6; "The reference orchestration module" below;
+DECISIONS I94, docs/CONFORMANCE.md). A host that names another module in `orchestration` carries
+these duties itself, and the engine does not do them for it:
 
 - **Startup defaults** (RUNTIME l.194). Apply deployment startup defaults only while an instance's
   intent is `uninitialized`, by conditional `start_module` or `stop_module` requests carrying the
@@ -459,6 +460,165 @@ and the engine does not do them for it:
   unspecified failure, and never derive a restart policy from its spelling.
 
 Stopping or failure of the orchestration module pauses automatic startup and recovery (l.3806).
+
+## The reference orchestration module
+
+`lcn_orchestrator` (`src/logos_core/orchestration/`; DECISIONS I94) is a consumer-only module, linked
+into the host, that carries the duties above. Holding the role is the host configuration's doing: its
+name confers nothing (RUNTIME l.189-192, DECISIONS G53). It calls only through the Runtime Control
+binding it receives at initialization (l.184), never the Module Loader, and runs one thread of its
+own per instance.
+
+- **Registration.** The host registers the static binding `lcn_orchestrator` with
+  `logos_runtime_register_binding` (in Nim: `orchestratorStaticSymbols()`), and lists one instance:
+  `{instance, module: "lcn_orchestrator", implementation: {strategy: "direct_static", binding:
+  "lcn_orchestrator"}, state_assignment, configuration, provisioned_configuration}`, with
+  `orchestration` naming that instance. `configuration` is the module's declaration
+  (`orchestratorDeclaration()`: the schema below, with the package default as its `default_value`);
+  `provisioned_configuration` is the deployment's value (`encodeSettings`), and without one the
+  package default applies. The value is read only at the module's start (`_MODULE_init`); a change
+  takes effect at the next start. With `ordering` in its value, give the host configuration's
+  `ordering` the same pairs (DECISIONS G287).
+- **Schema** (`src/logos_core/orchestration/config.cddl`):
+
+```cddl
+; lcn_orchestrator configuration (DECISIONS I94): the reference orchestration
+; module's start list, lifecycle ordering and restart policy (RUNTIME l.183,
+; l.194, l.746-751, l.3786-3790). A supporting schema, resolved against itself
+; and the common schema only.
+
+lcn_orchestrator.config = {
+  ? authority: lcn_orchestrator.target,
+  ? defaults: [* lcn_orchestrator.default],
+  ? ordering: [* lcn_orchestrator.order],
+  ? restart: lcn_orchestrator.restart,
+  ? overrides: [* lcn_orchestrator.override],
+  ? resync_ms: uint32,
+}
+
+lcn_orchestrator.instance = tstr .size (1..128)
+lcn_orchestrator.module = tstr .size (1..64)
+
+lcn_orchestrator.target = {
+  module: lcn_orchestrator.module,
+  instance: lcn_orchestrator.instance,
+}
+
+lcn_orchestrator.default = {
+  module: lcn_orchestrator.module,
+  instance: lcn_orchestrator.instance,
+  ? action: "start" / "stop",
+}
+
+lcn_orchestrator.order = {
+  dependent: lcn_orchestrator.instance,
+  prerequisite: lcn_orchestrator.instance,
+}
+
+lcn_orchestrator.restart =
+  { kind: "disabled" } /
+  {
+    kind: "backoff",
+    initial_delay_ms: uint32,
+    max_delay_ms: uint32,
+    multiplier: uint32,
+    ? max_attempts: uint32,
+    stable_ms: uint32,
+  }
+
+lcn_orchestrator.override = {
+  instance: lcn_orchestrator.instance,
+  restart: lcn_orchestrator.restart,
+}
+```
+
+- **Fields.** Every array is a set of distinct entries; an instance id is 1 to 128 bytes, a module name
+  1 to 64.
+  - `authority`: the Capability Authority instance under `capability-authority`, which the module
+    starts itself under the derived rules ("Under `capability-authority`") before anything else. Not
+    the module's own instance, and not the Module Loader.
+  - `defaults` (at most 4096): startup defaults, `start` when `action` is absent. Applied only while
+    the instance's intent is `uninitialized`, by a conditional request carrying the revision it just
+    read (RUNTIME l.194, l.2247, l.2261): an operator's `stop` between the read and the request wins
+    (`LOGOS_ERR_INVALID_PARAMS`, and the module reads again). A default that contradicts `authority`
+    is refused. An instance not listed is never started by the module.
+  - `ordering` (at most 16384 pairs): a dependent's start, by default or by recovery, is issued only
+    once every prerequisite is `ready` (DECISIONS G287); no cycle, no self-pair, no duplicate.
+  - `restart`: `disabled`, or `backoff` with `initial_delay_ms` (1 to 3,600,000), `max_delay_ms`
+    (`initial_delay_ms` to 86,400,000), `multiplier` (1 to 16), `max_attempts` (1 to 1,000,000; absent:
+    no limit) and `stable_ms` (0 to 86,400,000). An episode's first recovery comes `initial_delay_ms`
+    after the failure was seen; after its *k*-th the next waits `min(initial × multiplier^(k−1),
+    max)`. Absent: the package default, 1 s doubling to 60 s, 8 attempts, stable after 60 s.
+  - `overrides` (at most 4096): a `restart` for one instance.
+  - `resync_ms` (10 to 3,600,000; default 30,000): the full re-read (below).
+  An invalid value fails the module's start with `LOGOS_ERR_MODULE`, and the diagnostic says which
+  field.
+- **What it decides from.** Each instance's lifecycle state and intent, read with `list_modules` and
+  `get_readiness`; from a failure classification only `cleanup-timeout` (DECISIONS G291), so every
+  other classification, known or not, decides alike (RUNTIME l.3756). Its own instance and the Module
+  Loader are always left out; every other instance with `requested` intent is the module's, whoever
+  its origin is, and keeps that origin (l.3774).
+- **Events are hints.** It subscribes to the module-state, execution-state, inventory and
+  configuration-state events and re-reads what they name before it decides (l.3427). Every
+  `resync_ms` it subscribes anew, drops the old subscriptions and re-reads every instance (l.3428;
+  DECISIONS G225), so a lost event delays a decision by at most that long.
+- **Recovery and its accounting** (l.3786-3790). A failure seen while the module runs (`error` with
+  `requested` intent) starts an episode: recoveries on the backoff, each charged, up to
+  `max_attempts`, then the diagnostic "restart attempts exhausted after *n* of *m*" and no more. The
+  episode closes once the instance has been `ready` for `stable_ms`, or when its intent changes (a
+  stop, a new start). A refused recovery is not an attempt (the next is still spaced); a recovery whose
+  answer never arrived is one, counted once, and the module reads before it decides again. Under
+  `disabled` a failure is never recovered, and the diagnostic says so once.
+- **Resumption is not a retry** (l.3775; DECISIONS G289, amending G193). The module's first decision
+  on an instance after it starts resumes it once, uncharged, when it finds it `unloaded`, or `error`
+  with no open episode: after a Runtime restart, clean or not, or after a failure while the
+  orchestration module was down. An episode still open continues charged, across any restart. Under
+  `disabled` every `requested` instance in `error`, the authority included, is resumed once after the
+  module starts, and not again.
+- **Probes** (l.3801-3804; DECISIONS G288). An instance with `requested` intent that is `unloaded`
+  (its start was refused for authority, or a configuration is missing, or a prerequisite was not
+  ready) or `error` with `cleanup-timeout` (an enforcement stop that overran its deadline, G291), and a
+  start or stop default that was refused, is retried by uncharged probes on the policy's spacing
+  (`delay(n)` after the last probe; the package default's under `disabled`), never exhausted. The
+  authority's return to `ready` and a `configuration_state_changed` event for the instance bring the
+  next probe forward, never closer than `initial_delay_ms` after the last.
+- **Under `capability-authority`.** With `authority` set, the module first brings the authority up
+  under the derived rules (polling it from 100 ms, doubling to 5 s), then waits for the binding, which
+  it infers from the first `list_modules` that succeeds (probing from 50 ms, doubling to 2 s;
+  DECISIONS G290), then subscribes and reconciles. If `list_modules` is refused later, the binding was
+  lost: with `recovery: true` it brings the authority back the same way, and the instances the loss
+  stopped are then resumed by probes, intent and origin kept. It never routes to the authority's
+  `watch_changes`.
+- **The state file.** The retry accounting is `orchestrator-state.cbor` in the module's state
+  directory (format `logos-core-nim.orchestrator-state.v1`, at most 1 MiB, at most 4096 open episodes),
+  locked while the instance runs. Each charged recovery is written before it is made; a write that
+  fails makes no call. Under any enabled policy a state directory is required: without
+  `state_assignment` the start fails with `LOGOS_ERR_MODULE`. A file that cannot be read fails the
+  start too, and is left as it is: the diagnostic names it; removing it starts again with no open
+  episode. A file another Runtime instance wrote is discarded.
+- **What it never does.** It never sequences or requests a shutdown (DECISIONS G292): logosd's signals
+  use the Host API, and `shutdown_runtime` is the one defined means. At shutdown it cancels the calls
+  it has in flight and calls nothing more. It never stops an instance except by a `stop` default, and
+  has no list of excluded instances.
+- **Diagnostics.** Lines start with `lcn_orchestrator:` and go where the host points them
+  (`setOrchestratorDiagnostics` in Nim): each recovery and its attempt, each answer, a refused or
+  invalid value, a failed start's reason, exhausted attempts. Repeated conditions are written at most
+  every 30 s.
+- **What its instance needs from the policy** (`orchestratorNeeds`). `list_modules`,
+  `get_readiness` and `recover_module` on every instance, the four events above, and `start_module`
+  or `stop_module` with the module as origin for the authority and each default, with those
+  instances' execution. `get_self` needs nothing (RUNTIME l.2555).
+- **Limits.**
+  | Limit | Value |
+  |---|---|
+  | lifecycle calls in flight | 16, one per instance |
+  | hints waiting for the module's thread | 64 events of at most 1 KiB; past either, a full re-read |
+  | instances per `list_modules` page | 256 |
+  | open episodes | 4096; past it no new one is opened, with a diagnostic |
+  | the state file | 1 MiB |
+  | authority bring-up polls | 100 ms doubling to 5 s |
+  | binding probes | 50 ms doubling to 2 s |
+  | a repeated diagnostic | once per 30 s |
 
 ## The Module Loader
 
@@ -535,6 +695,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | the Capability Authority's audit records (`audit.records`) | docs/AUTHORITY-POLICY.md | in the policy |
 | deadlines | `runtime` (Fields) | here |
 | transport aggregates | docs/CONFORMANCE.md, "Transport limits"; set by the Runtime with 10b | fixed |
+| the reference orchestration module | "The reference orchestration module", Limits; `resync_ms` in its value | fixed |
 
 ## Loaded code
 
@@ -567,7 +728,9 @@ Runtime's life: a host that cycles many distinct artifacts through one Runtime s
 
   Nothing else is allowed before the binding. Once the authority is `ready` and passes the binding
   checks (RUNTIME l.1652-1667), every module operation is decided by it, and the derived rules lapse:
-  the two never decide the same operation. The authority does not start itself.
+  the two never decide the same operation. The authority does not start itself: the reference
+  orchestration module starts it when its value names it in `authority` ("The reference
+  orchestration module").
 - **Fail closed.** While no binding exists, every operation the authority would decide is refused
   with `LOGOS_ERR_NOT_AUTHORISED`, classified as an evaluation failure; nothing falls back to a less
   constrained policy (RUNTIME l.1737-1748, RUN-0050). An evaluation that takes longer than
@@ -658,9 +821,11 @@ identity, and every configured instance is new.
     `error` keeps its classification.
   - *Resuming is not a retry.* Bringing an instance back after a restart, clean or not, is a
     resumption: it counts as no restart attempt against any restart policy. A restart policy counts
-    the `recover_module` calls made after the instance failed while the Runtime was running.
-  - *No policy in the Runtime.* The Runtime itself never restarts anything, and logos-core-nim ships
-    no orchestration module that does yet.
+    the `recover_module` calls made after the instance failed while the Runtime was running, and an
+    episode of them still open when the Runtime ended continues, charged, after the restart
+    (DECISIONS G193 as amended, G289).
+  - *No policy in the Runtime.* The Runtime itself never restarts anything. The reference
+    orchestration module does: "The reference orchestration module", above.
 - **Persistence failures.** When the state cannot be written, nothing new starts: `start_module`,
   `recover_module`, `create_module` and `retire_module` return `LOGOS_ERR_MODULE`. Stops and failures
   still take effect at once (routes end, realizations are released), but observers keep seeing the
