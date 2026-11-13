@@ -13,6 +13,8 @@ import ../src/logos_core/iface/outcome
 import
   ../src/logos_core/runtime/[engine, host, host_config, host_config_types, rc_types]
 from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
+from ../src/logos_core/crypto/slhdsa import Seed, keyPairFromSeeds
+from std/posix import Mode, chmod
 import ./support/kitbuild
 import ./kit/meter_impl
 
@@ -263,7 +265,7 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.authorityArm.policy = authorityPolicy("Not A Source")
     check c.decoded.rejects("policy: source does not match")
 
-  test "[I85] call_audit sets the record ring and the evidence key, and is refused until step 8b-3":
+  test "[I85] call_audit sets the record ring and the evidence key":
     var c = baseConfig()
     c.call_audit = Opt.some(LcnAppCallAudit())
     let ok = c.decoded
@@ -271,7 +273,7 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     check ok.get.callAudit
     check ok.get.callRecords == DefaultCallRecords
     check ok.get.evidence.isNone
-    check parse(c).rejects("call_audit is not supported yet")
+    check parse(c).isOk
     check baseConfig().decoded.get.callRecords == DefaultCallRecords
     check not baseConfig().decoded.get.callAudit
     for n in [0'u32, 1_000_001]:
@@ -877,6 +879,43 @@ suite "run.host-api: structures and results (RUNTIME §13.1, §13.2, §13.4)":
     rt = create(c)
     check not dirExists(c.runtime.work_dir)
     check runtimeDestroy(rt).ec == ecOk
+
+  test "[CAP-0230] [I85] create reads the call-evidence key file: one it cannot use fails INVALID_PARAMS naming call_audit.evidence and creates nothing; no evidence is exported before start":
+    createDir(work)
+    var seed: Seed
+    let (sk, _) = keyPairFromSeeds(seed, seed, seed)
+    let path = work / "evidence.key"
+    proc put(mode: int) =
+      removeFile(path)
+      writeFile(path, cast[string](@sk))
+      check chmod(cstring(path), Mode(mode)) == 0
+
+    var c = deployment()
+    c.runtime.store_dir = Opt.some(work / "evidence-store")
+    c.call_audit = Opt.some(
+      LcnAppCallAudit(
+        evidence: Opt.some(LcnAppEvidenceKey(kid: @[1'u8], secret_key_file: path))
+      )
+    )
+    let bytes = c.encode.get
+    var rt = cast[ptr LogosRuntimeHandle](1)
+    proc refused(fragment: string): bool =
+      var cfg = runtimeConfig(bytes)
+      let r = runtimeCreate(addr cfg, addr rt)
+      checkpoint r.text
+      r.ec == ecInvalidParams and "call_audit.evidence" in r.text and fragment in r.text and
+        rt == nil
+
+    removeFile(path)
+    check refused("cannot be read")
+    put(0o644)
+    check refused("0600")
+    put(0o600)
+    rt = create(c)
+    check rt.auditRecords.len == 0
+    check rt.exportCallEvidence(0).isErr
+    check runtimeDestroy(rt).ec == ecOk
+    removeFile(path)
 
   test "[RUN-0764] a result's message lives in its thread until that thread's next call; OK has none; 512 bytes at most":
     var rt: ptr LogosRuntimeHandle

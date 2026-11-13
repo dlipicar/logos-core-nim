@@ -4,7 +4,9 @@
 ## its state directory (C9) and deciding every module operation. The
 ## orchestration instance is routefixture's client module, the provider the
 ## meter kit module; the host issues and revokes grants through 8a's protected
-## path (`issueProtected`, `revokeProtected`).
+## path (`issueProtected`, `revokeProtected`). Case H5 (step 8b-3): call records
+## from a policy allow that retains commitments, read and exported as call
+## evidence through the host (plan case E7).
 
 import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 import unittest2
@@ -29,6 +31,9 @@ import ./support/authfixture except
   LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
 import ./kit/meter_impl
 import ./generated/meter_module_calls
+import ../src/logos_core/runtime/evidence
+from ../src/logos_core/crypto/slhdsa import generateKeyPair
+from std/posix import Mode, chmod
 
 let
   repo = currentSourcePath().parentDir.parentDir
@@ -231,3 +236,99 @@ suite "run.host-api: under 8a's Capability Authority (I85; C9)":
     ).isOk
     unwireAuthority(dir / "state" / CaAssignment)
     freeSharedFacts(f)
+
+# H5 -------------------------------------------------------------------------------------
+
+proc retainBoth(): Opt[policy_types.LcnApCommitment] =
+  Opt.some(
+    policy_types.LcnApCommitment(
+      request: Opt.some("retain-root"), response: Opt.some("retain-root")
+    )
+  )
+
+proc h5Config(dir, keyFile: string, kid: seq[byte]): LcnAppConfig =
+  ## The orchestrator may start the meter and reach it; its calls to the
+  ## meter retain both commitments. Two records are kept.
+  let contract = SchemaCommitment(schema_root: @meterRoot)
+  let orch = subject(modules = @["client_module"])
+  let bytes = policyBytes(
+    @[
+      allowRule(
+        orch,
+        @[
+          rcPattern(),
+          mePattern(
+            subject(instances = @[Meter]),
+            @[policy_types.LcnApModuleExecutionActionsLIChoiceKind.Start],
+          ),
+          paPattern(
+            @[
+              policy_types.LcnApActionKind.Establish_route,
+              policy_types.LcnApActionKind.Renew_route,
+            ],
+            exact = contract,
+          ),
+        ],
+      ),
+      allowRule(
+        orch,
+        @[paPattern(@[policy_types.LcnApActionKind.Call], exact = contract)],
+        retainBoth(),
+      ),
+    ]
+  )
+  result = h4Config(dir)
+  result.policy.arm_Capability_authority.policy =
+    host_config_types.LcnAuthorityPolicy.fromCbor(decodeCbor(bytes).tryGet).tryGet
+  result.call_audit = Opt.some(
+    LcnAppCallAudit(
+      call_records: Opt.some(2'u32),
+      evidence: Opt.some(LcnAppEvidenceKey(kid: kid, secret_key_file: keyFile)),
+    )
+  )
+
+suite "run.host-api: call records and call evidence (I85; CA §9, §9.1)":
+  test "[RUN-0334] [CAP-0205] [CAP-0415] [CAP-0416] [CAP-0417] [CAP-0418] a policy allow that retains commitments leaves call records the host reads, newest kept; the host exports one as call evidence under its configured key with this Runtime as producer, and a record no longer kept is not exported":
+    let dir = work / "h5"
+    createDir(dir)
+    let keyFile = dir / "evidence.key"
+    let kid = @[0x68'u8, 0x35]
+    var (key, pub) = generateKeyPair().tryGet
+    removeFile(keyFile)
+    writeFile(keyFile, cast[string](@key))
+    key.clear()
+    check chmod(cstring(keyFile), Mode(0o600)) == 0
+    let rt = create(h5Config(dir, keyFile, kid))
+    check rt.register("client", clientTable()) == ecOk
+    check rt.register("meter", meterModuleStaticSymbols()) == ecOk
+    check runtimeStart(rt).ec == ecOk
+    let e = engineOf(rt)
+    let orch = latestClient()
+    check orch.lifecycle("start_module", "logos_capability_authority", Opt.some(Ca)).code ==
+      ecOk
+    check e.authorityBound()[0]
+    check orch.lifecycle("start_module", "meter_module", Opt.some(Meter)).code == ecOk
+    check e.reaches(Meter, msReady)
+    let r = orch.establish("h5")
+    check r.code == ecOk
+    var h = orch.handle(r.routesOf.routes[0].route)
+    for channel in 1'u32 .. 3:
+      check h.read(channel).isOk
+    h.release()
+    # Only calls retain; the newest two of three are kept.
+    let kept = rt.auditRecords
+    check kept.mapIt(it.index) == @[1'u64, 2]
+    check rt.exportCallEvidence(0).isErr
+    let container = rt.exportCallEvidence(2)
+    check container.isOk
+    var ctx = newEvidenceContext()
+    check ctx.accept(kid, RtId, pub).isOk
+    let v = verifyEvidence(container.get, ctx)
+    check v.isOk
+    check v.get.producer == RtId
+    check encode(v.get.record).tryGet == kept[1].bytes
+    check v.get.record.kind == AuditKind.Call_success
+    check v.get.record.arm_Call_success.consumer == address(Orch, RtId)
+    check v.get.proofs.isNone
+    rt.shutDown()
+    removeFile(keyFile)

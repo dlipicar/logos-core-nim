@@ -115,10 +115,11 @@ proc initContext*(s: var InvocationState) =
 # Route calls ---------------------------------------------------------------------------
 
 proc checkRequest*(
-    sel: Selected, bare: string, params: openArray[byte]
+    sel: Selected, bare: string, params: openArray[byte], trail: var CallTrail
 ): Result[CborValue, InvocationFailure] =
   ## [SPEC RUNTIME §4.1 l.833-841, l.852-853] A request is validated and
   ## committed before provider code runs; `logos.schema` is the boundary's.
+  ## [RUN-0332; I85] The commitment is kept in `trail`.
   let request =
     if sel.validator.surface.findMethod(bare).isSome:
       sel.validator.checkParams(bare, params).valueOr:
@@ -126,9 +127,25 @@ proc checkRequest*(
     else:
       decodePayload(params).valueOr:
         return err(toFailure(error))
-  sel.boundary.commitRequest(bare, request).isOkOr:
+  let c = sel.boundary.commitRequest(bare, request).valueOr:
     return err(error.failure)
+  trail.request = Opt.some(c)
   ok(request)
+
+proc checkRequest*(
+    sel: Selected, bare: string, params: openArray[byte]
+): Result[CborValue, InvocationFailure] =
+  var trail: CallTrail
+  checkRequest(sel, bare, params, trail)
+
+proc record*(e: Engine, c: CallCapture, trail: CallTrail) =
+  ## [SPEC CA l.1172-1174; I85] The call's record after its outcome, when the
+  ## decision applied to it requires one (`callaudit.nim`).
+  if not c.retains:
+    return
+  let kept = e.audit.keep(c, trail, uint64(max(e.clock.wallMs, 0'i64)))
+  if kept.isErr:
+    e.diagnose("a call record could not be kept: " & kept.error)
 
 proc notReadyAfter*(
     b: ptr SchemaBlob, bare: string, params: openArray[byte], e: EngineError
@@ -144,17 +161,19 @@ proc notReadyAfter*(
   failureOf(e)
 
 proc introspect*(
-    b: ptr SchemaBlob, bare: string, params: openArray[byte]
+    b: ptr SchemaBlob, bare: string, params: openArray[byte], trail: var CallTrail
 ): Result[seq[byte], InvocationFailure] =
   ## [SPEC INTERFACE §5.1; RUNTIME §9.3 l.2990-2992] `logos.schema`: the
-  ## selected contract's `logos.schema_response`, from the boundary.
+  ## selected contract's `logos.schema_response`, from the boundary, whose
+  ## commitments are under the common schema (CA l.1203-1204).
   let sel = selectedOf(b).valueOr:
     return err(failure(ecModule, "the selected contract cannot be loaded"))
-  discard ?checkRequest(sel, bare, params)
+  discard ?checkRequest(sel, bare, params, trail)
   let v = schemaResponse(sel.boundary.contracts, b.root).valueOr:
     return err(failure(ecModule, "the schema response cannot be built"))
-  sel.boundary.commitResponse(bare, v).isOkOr:
+  let c = sel.boundary.commitResponse(bare, v).valueOr:
     return err(failure(ecModule, "the schema response cannot be committed"))
+  trail.response = Opt.some(c)
   ok(encodeCbor(v))
 
 proc invocationFor*(
@@ -179,14 +198,16 @@ proc invocationFor*(
   )
 
 proc checkResponse*(
-    sel: Selected, bare: string, bytes: openArray[byte]
+    sel: Selected, bare: string, bytes: openArray[byte], trail: var CallTrail
 ): Result[void, InvocationFailure] =
   ## [SPEC RUNTIME §4.1 l.838-840] A response that does not validate or commit
-  ## is not returned as a success.
+  ## is not returned as a success. [RUN-0332; I85] Its commitment is kept in
+  ## `trail`.
   let response = sel.validator.checkResult(bare, bytes).valueOr:
     return err(failure(ecModule, "the provider's response does not match its schema"))
-  sel.boundary.commitResponse(bare, response).isOkOr:
+  let c = sel.boundary.commitResponse(bare, response).valueOr:
     return err(failure(ecModule, "the provider's response cannot be committed"))
+  trail.response = Opt.some(c)
   ok()
 
 func sameAddress(v: CborValue, runtimeId, instance: string): bool =
@@ -236,12 +257,14 @@ proc callProvider*(
     blob: ptr SchemaBlob,
     bare: string,
     params: openArray[byte],
+    trail: var CallTrail,
 ): Result[seq[byte], InvocationFailure] =
   ## Steps 2-4 for an admitted call through `_MODULE_dispatch`, on this
-  ## thread; the caller commits the result and leaves the in-flight count.
+  ## thread; the caller commits the result, records the call and leaves the
+  ## in-flight count.
   let sel = selectedOf(blob).valueOr:
     return err(failure(ecModule, "the selected contract cannot be loaded"))
-  let request = ?checkRequest(sel, bare, params)
+  let request = ?checkRequest(sel, bare, params, trail)
   ?authorityRefusal(adm, engine, $consumer, $route, bare, request)
   var inv = invocationFor(adm, consumer, route, generation, blob, engine)
   initContext(inv)
@@ -268,7 +291,7 @@ proc callProvider*(
   adm.free(adm.context, buf)
   if bytes.len == 0:
     return err(failure(ecModule, "the provider's response is too long"))
-  ?checkResponse(sel, bare, bytes)
+  ?checkResponse(sel, bare, bytes, trail)
   ok(bytes)
 
 proc systemCall*(
@@ -357,18 +380,26 @@ proc routeCall*(
   if reply.error.isSome:
     return err(notReadyAfter(h.blob, bare, params, reply.error.get))
   let adm = reply.admission
+  var trail: CallTrail
   if adm.introspection:
-    return introspect(h.blob, bare, params)
+    result = introspect(h.blob, bare, params, trail)
+    trail.succeeded = result.isOk
+    h.engine.record(adm.capture, trail)
+    return
   result = commitSync(
     adm.ticket,
-    callProvider(adm, h.engine, h.consumer, h.route, h.generation, h.blob, bare, params),
+    callProvider(
+      adm, h.engine, h.consumer, h.route, h.generation, h.blob, bare, params, trail
+    ),
   )
+  trail.succeeded = result.isOk
+  h.engine.record(adm.capture, trail)
   leave(h.engine, adm)
 
 # Runtime Control requests ----------------------------------------------------------------
 
 proc rcRequest(
-    bare: string, params: openArray[byte]
+    bare: string, params: openArray[byte], trail: var CallTrail
 ): Result[RcCall, InvocationFailure] =
   ## [SPEC INTERFACE §4.3, §4.5, §5.2] The checked request of a Runtime Control
   ## method: METHOD_NOT_FOUND for a name the contract does not declare,
@@ -389,12 +420,13 @@ proc rcRequest(
       )
     )
   # [SPEC RUNTIME l.225-230] The binding keeps the commitment semantics.
-  discard rcSchema().commitment(declaration, v).valueOr:
+  let (subtree, root) = rcSchema().commitment(declaration, v).valueOr:
       return err(
         InvocationFailure(
           code: ecModule, message: Opt.some("the request commitment cannot be computed")
         )
       )
+  trail.request = Opt.some(PayloadCommitment(subtreeRoot: subtree, valueRoot: root))
   let request = @params
   template call(which: RcMethod): RcCall =
     RcCall(m: which, request: request)
@@ -485,20 +517,27 @@ proc lifecycleResponse(m: RcMethod, v: InstanceView): Result[seq[byte], string] 
       )
     )
 
-proc checkedResponse(bare: string, bytes: seq[byte]): Result[seq[byte], string] =
+proc checkedResponse(
+    bare: string, bytes: seq[byte], trail: var CallTrail
+): Result[seq[byte], string] =
   ## [SPEC RUNTIME l.229, l.3747] A successful Runtime Control response is a
-  ## value of the method's response schema, and its commitment is computed.
+  ## value of the method's response schema, and its commitment is computed
+  ## and kept (RUN-0332).
   let declaration = RcNamespace & bare & "_response"
   let v = ?rcSchema().decodeChecked(declaration, bytes)
-  discard ?rcSchema().commitment(declaration, v)
+  let (subtree, root) = ?rcSchema().commitment(declaration, v)
+  trail.response = Opt.some(PayloadCommitment(subtreeRoot: subtree, valueRoot: root))
   ok(bytes)
 
 proc rcInvoke*(
     e: Engine, instance, attempt, bare: string, params: seq[byte]
 ): Result[seq[byte], InvocationFailure] =
   ## [SPEC INTERFACE §5.2; RUNTIME §9, §9.3] One Runtime Control method through
-  ## the binding of `attempt`, synchronous or on a call worker.
-  let rc = rcRequest(bare, params).valueOr:
+  ## the binding of `attempt`, synchronous or on a call worker. [CA l.1172-
+  ## 1174; I85] A call whose applied decision requires retention is recorded
+  ## after its outcome, here.
+  var trail: CallTrail
+  let rc = rcRequest(bare, params, trail).valueOr:
     if error.code == ecInvalidParams:
       # [G171 interim (TF-18)] What is authorized without the payload comes
       # before its validation.
@@ -510,6 +549,7 @@ proc rcInvoke*(
           bare: bare,
         )
       )
+      e.record(pre.capture, trail)
       if pre.error.isSome:
         return err(failureOf(pre.error.get))
     return err(error)
@@ -518,14 +558,20 @@ proc rcInvoke*(
     Request(kind: rqRc, origin: moduleOrigin(instance), attempt: attempt, rc: rc)
   )
   if reply.error.isSome:
+    e.record(reply.capture, trail)
     return err(failureOf(reply.error.get))
   let encoded =
     if m in {rmStartModule, rmStopModule, rmRecoverModule}:
       lifecycleResponse(m, reply.view)
     else:
       Result[seq[byte], string].ok(reply.bytes)
-  let body = encoded.valueOr:
-    return err(failure(ecModule, "the response does not match its schema"))
-  let response = checkedResponse($m, body).valueOr:
-    return err(failure(ecModule, "the response does not match its schema"))
+  let response = block:
+    let body = encoded.valueOr:
+      e.record(reply.capture, trail)
+      return err(failure(ecModule, "the response does not match its schema"))
+    checkedResponse($m, body, trail).valueOr:
+      e.record(reply.capture, trail)
+      return err(failure(ecModule, "the response does not match its schema"))
+  trail.succeeded = true
+  e.record(reply.capture, trail)
   ok(response)

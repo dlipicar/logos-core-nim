@@ -261,8 +261,39 @@ records, 1 to 1000000, default 4096; `evidence` names the call-evidence signing 
 128 bytes and the absolute path of its secret key file. `evidence` needs `runtime.store_dir`, so the
 evidence names the same Runtime across starts.
 
-**Not yet accepted.** A configuration with `call_audit` is rejected with "call_audit is not supported
-yet" until call records and evidence are built in step 8b-3, which also adds the key file's checks.
+- **What is recorded.** Under `capability-authority`, a policy `allow` with `commitment`
+  (`docs/AUTHORITY-POLICY.md`) makes each call it authorizes leave one `call` record after its
+  outcome: the decision applied to that call, the consumer, the call scope and the retained request
+  and response commitments, computed by the Runtime from the typed values (CA §9). The other policy
+  kinds retain nothing, so they leave no records.
+- **Retention.** The newest `call_records` records, in memory, the oldest dropped first, lost at
+  exit; the authority's own audit is separate. An in-process host reads them with `auditRecords(rt)`,
+  each with its index, which counts the records appended since `start`, from 0.
+- **Marked payloads.** A `_sensitive` payload is never retained: a call whose decision would retain one
+  is refused with `LOGOS_ERR_NOT_AUTHORISED` before dispatch (INTERFACE l.397). Write `commitment`
+  rules that do not cover such methods, or that retain only their unmarked side.
+- **Exporting evidence.** `exportCallEvidence(rt, index)` signs one retained record as a
+  `logos.call-evidence.cose-sign1-slh-dsa-sha2-192s` container (CA §9.1): the complete record, no
+  proofs, this Runtime's `runtime_instance_id` as producer. It is the protected export integration
+  (CA l.1316-1328): calling it is the host's decision to disclose that complete record to whoever
+  receives the container, and which records, how many and to whom are the host's to decide. A record
+  no longer retained cannot be exported. A container is a signed statement, never authorization
+  (CAP-0256). There is no C export yet.
+- **The key.** `nim c -r tools/evidence_keygen.nim /abs/path/evidence.key` writes a fresh key (FIPS
+  205 key generation): a new 96-byte file of the current user, mode 0600 before the key is written,
+  never overwriting one; it prints the 48-byte public key in hex. `create` reads the key file: an
+  absolute path to a regular file (not a symbolic link) owned by the process user with mode 0600,
+  exactly 96 bytes, whose public half its seeds derive (owner and mode are not checked on Windows);
+  otherwise `LOGOS_ERR_INVALID_PARAMS` with "call_audit.evidence: …". The key is held in memory until
+  `destroy` overwrites it and is never logged. Use it for call evidence only, never as a package
+  signing key (`lcn-pkg keygen` makes those), a TLS key or a key of another algorithm (CAP-0401).
+- **Verifiers.** Give each verifier the `kid`, this Runtime's `runtime_instance_id` and the public key
+  as protected trust input: a kid names one Runtime and one key, and two keys never share a kid
+  (CAP-0226 to CAP-0229). In process, `verifyEvidence` with an `EvidenceContext`
+  (`runtime/evidence.nim`) verifies a container.
+- **Rotation.** Generate a key under a new `kid`, give verifiers the new mapping, change
+  `call_audit.evidence` and restart. Containers already exported verify while a verifier keeps the
+  old kid; revoking it there rejects all of them (CAP-0231).
 
 ## What the host can expect
 

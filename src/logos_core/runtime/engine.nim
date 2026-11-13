@@ -475,8 +475,18 @@ func exposed(x: Inst): InstanceView =
   ## later change is held back (I82).
   if x.pending: x.shown else: x.view
 
+var rcCaptures {.threadvar.}: Table[pointer, CallCapture]
+  ## [SPEC CA l.1176-1177; I85] Runtime thread: the applied Runtime Control
+  ## call decisions that require a call record, by their call's reply channel,
+  ## until that call is answered (`captureRc`).
+
 proc answer(r: ReplyChannel, reply: sink Reply) =
   if r != nil:
+    var reply = reply
+    if rcCaptures.len > 0:
+      var c: CallCapture
+      if rcCaptures.pop(cast[pointer](r), c):
+        reply.capture = c
     try:
       r[].send(reply)
     except Exception:
@@ -1312,6 +1322,36 @@ proc rerun(st: State, op: OpCtx) =
   st.handle(op.q)
   st.op = saved
 
+proc captureOf(st: State, q: AuthzRequest, a: AuthzAnswer): CallCapture =
+  ## [SPEC CA l.1176-1180; CAP-0389 to CAP-0392] The snapshot of an applied
+  ## call decision: its own id (a cached decision's too), the enforced call
+  ## scope and its retention; empty when it requires no record.
+  if not a.allows or not (a.retainRequest or a.retainResponse):
+    return CallCapture()
+  let scope = enforcedScope(q, st.runtimeId).valueOr:
+    return CallCapture()
+  CallCapture(
+    decisionId: a.decisionId,
+    scope: scope,
+    retainRequest: a.retainRequest,
+    retainResponse: a.retainResponse,
+    runtimeId: st.runtimeId,
+    consumer: q.consumer,
+  )
+
+proc captureRc(st: State, reqs: openArray[AuthzRequest], answers: seq[AuthzAnswer]) =
+  ## [SPEC CA l.1184-1188; CAP-0209] The decision applied to a Runtime Control
+  ## call is the one over its Runtime Control scope (a `stop_module`'s
+  ## execution decision is not); its capture goes back with the call's reply
+  ## (`answer`), and the caller records the call after its outcome.
+  let q = st.op.q
+  let bare = (if q.kind == rqRc: $q.rc.m else: q.bare)
+  for i, r in reqs:
+    if r.action in {aaRuntimeControl, aaLifecycle, aaObserve} and r.operation == bare:
+      let c = st.captureOf(r, answers[i])
+      if c.retains:
+        rcCaptures[cast[pointer](q.reply)] = c
+
 proc shuttingDownReply(q: Request) =
   q.reply.answerError(ecNotReady, "the Runtime is shutting down")
 
@@ -1363,6 +1403,8 @@ proc decide(st: State, reqs: openArray[AuthzRequest]): Opt[seq[AuthzAnswer]] =
   var answers: seq[AuthzAnswer]
   for q in reqs:
     answers.add(op.decided.getOrDefault(q.key))
+  if st.op != nil and st.op.q.kind in {rqRc, rqRcPrecheck}:
+    st.captureRc(reqs, answers)
   Opt.some(answers)
 
 const Parked = EngineError(code: ecOk, message: "parked")
@@ -3643,22 +3685,32 @@ proc admit(st: State, q: Request) =
     q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
     return
   st.requireRoute(q, r)
-  st.require(
-    q,
-    AuthzRequest(
-      action: aaCall,
-      operation: q.bare,
-      consumer: r.consumer,
-      target: r.provider,
-      provider: r.provider,
-      route: r.id,
-      module: r.selected.module,
-      contract: @(r.selected.root),
-      declaration: @(declaration.get),
-    ),
+  let callReq = AuthzRequest(
+    action: aaCall,
+    operation: q.bare,
+    consumer: r.consumer,
+    target: r.provider,
+    provider: r.provider,
+    route: r.id,
+    module: r.selected.module,
+    contract: @(r.selected.root),
+    declaration: @(declaration.get),
   )
+  st.require(q, callReq)
   if r.isTerminal:
     q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
+  # [SPEC CA l.1176-1177] The applied call decision, captured with its
+  # retention at admission.
+  let capture = st.captureOf(callReq, st.op.decided.getOrDefault(callReq.key))
+  let marked = r.selected.marked(q.bare)
+  if (capture.retainRequest and marked.request) or
+      (capture.retainResponse and marked.response):
+    # [SPEC INTERFACE l.395-397; CA l.479] A retention requirement on a
+    # marked payload refuses the call before dispatch, per side: an
+    # enforcement failure, retained as a refusal [IMPL].
+    discard st.authorizer.issue(callReq, azRefused, psBoundary, "sensitive-retention")
+    q.reply.answerError(ecNotAuthorised, "not authorised")
     return
   let x = st.instances.getOrDefault(r.consumer)
   if x.isNil or q.attempt != x.current or x.state notin {msLoaded, msReady} or
@@ -3668,7 +3720,7 @@ proc admit(st: State, q: Request) =
   if r.selected.isWellKnown(q.bare):
     # [SPEC INTERFACE l.3275-3277; RUNTIME l.429-431] The boundary answers;
     # no provider code runs and no invocation context is made current.
-    q.reply.answer(Reply(admission: Admission(introspection: true)))
+    q.reply.answer(Reply(admission: Admission(introspection: true, capture: capture)))
     return
   let p = st.instances.getOrDefault(r.providerInstance)
   if p.isNil or p.state != msReady or p.realization.isNil or p.services.isNil:
@@ -3700,6 +3752,7 @@ proc admit(st: State, q: Request) =
         runtimeId: st.runtimeId,
         asyncApi: b.asyncApi,
         authority: st.isAuthorityContract(r.selected),
+        capture: capture,
       )
     )
   )
@@ -4526,6 +4579,7 @@ proc freeEngine(e: Engine) =
   e.closeSlots()
   deinitLock(e.slotLock)
   freeBell(e.bell)
+  freeAuditLog(e.audit)
   deallocShared(e)
 
 proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
@@ -4542,6 +4596,8 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   if cfg.authority.isSome and cfg.authority.get.instance.len == 0:
     return err(engineError(ecInvalidParams, "the authority policy names no instance"))
   let e = createShared(Shared)
+  e.audit = newAuditLog(cfg.callRecords)
+  e.clock = cfg.clock
   e.inbox.open()
   e.jobs.open()
   e.calls.open()

@@ -32,7 +32,8 @@ when defined(posix):
 import results
 import ../abi/[host, types]
 import ../iface/outcome
-import ./[callside, engine, host_config, native]
+import ./[callside, engine, evidence, host_config, native]
+from ../crypto/cose import MaxCoseKidBytes
 from ../authority/facts import SharedFacts, newSharedFacts, freeSharedFacts
 from ../authority/provider import
   AuthorityWiring, caStaticRegistration, unwireAuthority, wireAuthority
@@ -55,6 +56,13 @@ type
     symbols: ptr UncheckedArray[SymbolCopy]
     count: int
     next: ptr BindingCopy
+
+  EvidenceKeyBox = object
+    ## [SPEC CA l.1272-1276; CAP-0230] The call-evidence key, read at
+    ## `create`; overwritten at `destroy`.
+    key: SecretKey
+    kid: array[MaxCoseKidBytes, byte]
+    kidLen: int
 
   PolicyHook* = proc(): AuthzPolicy {.nimcall, gcsafe, raises: [].}
     ## In-process tests only: the authority policy `start` gives the engine in
@@ -79,6 +87,9 @@ type
       ## feeds and the authority reads; freed at `destroy`
     wired: cstring
       ## [I85] the authority's state directory while it is wired; nil otherwise
+    evidence: ptr EvidenceKeyBox ## [I85] `call_audit.evidence`; nil: none
+    producer: cstring
+      ## [I85] the Runtime identity the engine settled: the evidence producer
 
 # Per-thread results ---------------------------------------------------------------
 
@@ -157,7 +168,8 @@ proc runtimeCreate*(
     config: ptr LogosRuntimeConfig, outRuntime: ptr ptr LogosRuntimeHandle
 ): LogosResult =
   ## [SPEC RUNTIME §13.2, §13.3] Validates the configuration and makes a handle;
-  ## starts no thread, opens no file and runs no module code.
+  ## starts no thread and runs no module code. [I85] The one file it opens is
+  ## `call_audit.evidence`'s key, whose checks are part of the configuration's.
   entry()
   if outRuntime == nil:
     return answer(ecInvalidParams, "out_runtime is null")
@@ -186,9 +198,21 @@ proc runtimeCreate*(
   var bytes = newSeq[byte](n)
   for i in 0 ..< n:
     bytes[i] = config.configuration[i]
-  discard parseHostConfig(format, bytes).valueOr:
+  let c = parseHostConfig(format, bytes).valueOr:
     return answer(ecInvalidParams, error.message, error.detail)
+  var box: ptr EvidenceKeyBox = nil
+  if c.evidence.isSome:
+    let setting = c.evidence.get
+    var key = loadEvidenceKey(setting.secretKeyFile).valueOr:
+      return answer(ecInvalidParams, "call_audit.evidence: " & error)
+    box = createShared(EvidenceKeyBox)
+    box.key = key
+    clear(key)
+    for i, b in setting.kid:
+      box.kid[i] = b
+    box.kidLen = setting.kid.len
   let h = createShared(HostRuntime)
+  h.evidence = box
   initLock(h.lock)
   initCond(h.cond)
   if n > 0:
@@ -366,6 +390,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
     stopDeadline: c.stopDeadline,
     shutdownGrace: c.shutdownGrace,
     authority: c.authority,
+    callRecords: c.callRecords,
   )
   if c.authority.isSome:
     # [I85; G47] The attribute source exists before the engine opens, since
@@ -388,6 +413,8 @@ proc launch(h: ptr HostRuntime): LogosResult =
       return answer(error.code, error.message)
     h.engine = e
     broadcast(h.cond) # a waiter parked before the engine existed
+  let runtimeId = e.runtimeInstanceId()
+  h.producer = copyText(runtimeId)
   if c.authority.isSome:
     # [C9] Wired before bootstrap initializes the authority, at the directory
     # the realizer gives its state assignment, with the identity the engine
@@ -400,9 +427,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
         dir = c.stateRoot.get / m.record.stateAssignment.get
     wireAuthority(
       dir,
-      AuthorityWiring(
-        policy: c.authorityPolicy, runtimeId: e.runtimeInstanceId(), facts: h.facts
-      ),
+      AuthorityWiring(policy: c.authorityPolicy, runtimeId: runtimeId, facts: h.facts),
     ).isOkOr:
       return answer(ecModule, "cannot wire the Capability Authority: " & error)
     h.wired = cast[cstring](allocShared0(dir.len + 1))
@@ -511,6 +536,11 @@ proc runtimeDestroy*(rt: ptr LogosRuntimeHandle): LogosResult =
     unwireAuthority($h.wired)
     deallocShared(h.wired)
   freeSharedFacts(h.facts)
+  if h.evidence != nil:
+    clear(h.evidence.key)
+    freeShared(h.evidence)
+  if h.producer != nil:
+    deallocShared(h.producer)
   freeBindings(h.bindings)
   if h.config != nil:
     deallocShared(h.config)
@@ -518,3 +548,41 @@ proc runtimeDestroy*(rt: ptr LogosRuntimeHandle): LogosResult =
   deinitLock(h.lock)
   deallocShared(h)
   answer(ecOk)
+
+# Call audit (in-process hosts) ----------------------------------------------------------
+
+proc auditRecords*(rt: ptr LogosRuntimeHandle): seq[RetainedRecord] =
+  ## [SPEC CA l.1169, l.1330; I85] The retained call records, oldest first,
+  ## each with its index; none before `start`. In-process only: Tier 4 has no
+  ## C export.
+  let e = engineOf(rt)
+  if e == nil:
+    return
+  e.audit.records
+
+proc exportCallEvidence*(
+    rt: ptr LogosRuntimeHandle, recordIndex: uint64
+): Result[seq[byte], string] =
+  ## [SPEC CA l.1316-1328; CAP-0415 to CAP-0418; I85] The protected export
+  ## integration (docs/HOST-CONFIG.md): a container for the retained record
+  ## `recordIndex`, complete and with no proofs, signed with the configured
+  ## evidence key; its producer is this Runtime's identity. Calling it is the
+  ## host's authorization to disclose the complete record; a record no longer
+  ## retained cannot be exported. The container never authorizes anything
+  ## (CAP-0256).
+  if rt == nil:
+    return err("runtime is null")
+  let h = hostOf(rt)
+  if h.evidence == nil:
+    return err("call_audit.evidence is not configured")
+  let e = engineOf(rt)
+  if e == nil or h.producer == nil:
+    return err("the Runtime has not started")
+  let bytes = e.audit.recordAt(recordIndex).valueOr:
+    return err("no retained call record has index " & $recordIndex)
+  var signer = newEvidenceSigner(
+    h.evidence.kid.toOpenArray(0, h.evidence.kidLen - 1), $h.producer, h.evidence.key
+  ).valueOr:
+    return err(error)
+  result = signer.exportRecord(bytes)
+  clear(signer)

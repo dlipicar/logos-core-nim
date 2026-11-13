@@ -43,6 +43,9 @@ type
     events*: Table[string, Digest] ## event identifier -> declaration root
     wellKnown*: Table[string, Digest]
       ## the common schema's well-known methods (`schema`) -> declaration root
+    sensitive*: Table[string, tuple[request, response: bool]]
+      ## [SPEC INTERFACE §1.2.1] bare method name -> the payloads `_sensitive`
+      ## marks; only methods with a marked payload
 
   RouteState* = enum
     ## [SPEC RUNTIME §9.3] `route_state`, the values a direct route takes:
@@ -149,7 +152,10 @@ func wellKnownRoots*(ctx: SchemaContext): Table[string, Digest] =
 
 func addContract(s: var SelectedContract, c: Contract) =
   for m in c.model.methods:
-    s.methods[bareMethodName(m.name, c.model.namespace)] = declarationRoot(c.model, m)
+    let bare = bareMethodName(m.name, c.model.namespace)
+    s.methods[bare] = declarationRoot(c.model, m)
+    if m.sensitiveRequest or m.sensitiveResponse:
+      s.sensitive[bare] = (m.sensitiveRequest, m.sensitiveResponse)
   for e in c.model.events:
     s.events[e.name] = declarationRoot(c.model, e)
 
@@ -189,6 +195,10 @@ func methodRoot*(s: SelectedContract, bare: string): Opt[Digest] =
   if bare in s.wellKnown:
     return Opt.some(s.wellKnown.getOrDefault(bare))
   Opt.none(Digest)
+
+func marked*(s: SelectedContract, bare: string): tuple[request, response: bool] =
+  ## [SPEC INTERFACE §1.2.1] Which payloads of method `bare` are marked.
+  s.sensitive.getOrDefault(bare)
 
 func isWellKnown*(s: SelectedContract, bare: string): bool =
   bare notin s.methods and bare in s.wellKnown

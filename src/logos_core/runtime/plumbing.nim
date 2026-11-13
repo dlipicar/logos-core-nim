@@ -16,10 +16,11 @@ import ../base/clock
 import ../hash/hashinput
 import ../iface/outcome
 import ../authority/facts
-import ./[authz, bell, records, realizer, routes]
+import ./[authz, bell, callaudit, records, realizer, routes]
 
 export
-  authz, clock, facts, records, realizer, routes, outcome.ErrorCode, hashinput.Digest
+  authz, callaudit, clock, facts, records, realizer, routes, outcome.ErrorCode,
+  hashinput.Digest
 
 const
   DefaultStartupDeadline* = initDuration(seconds = 120)
@@ -201,6 +202,9 @@ type
     endedRoutes*: int
       ## [SPEC RUNTIME §9.3 l.3249] retention selection: how many ended route
       ## records each consumer keeps once nothing reaches them (`engine.nim`)
+    callRecords*: int
+      ## [IMPL] how many call audit records are retained (`callaudit.nim`); 0
+      ## is `DefaultCallRecords`
 
   # Messages ---------------------------------------------------------------------
   RequestKind* = enum
@@ -325,6 +329,9 @@ type
       ## [SPEC CA l.88-91, l.579] the route selects the Capability Authority
       ## contract: the caller checks the request before dispatch
       ## (`invoke.authorityRefusal`)
+    capture*: CallCapture
+      ## [SPEC CA l.1176-1177] what the applied call decision requires the
+      ## boundary to record (`callaudit.nim`); empty: nothing
 
   Reply* = object
     error*: Opt[EngineError]
@@ -345,6 +352,9 @@ type
     pending*: bool ## rqCleanup
     bound*: bool ## rqAuthorityState: a Capability Authority is bound
     generation*: uint64 ## rqAuthorityState: the binding generation
+    capture*: CallCapture
+      ## rqRc, rqRcPrecheck: what the applied Runtime Control decision
+      ## requires the caller to record (`callaudit.nim`); empty: nothing
 
   ReplyChannel* = ptr Channel[Reply]
 
@@ -527,6 +537,8 @@ type
     renewSpawned*: bool ## written by the Runtime thread only
     outstanding*: Atomic[int] ## asynchronous calls prepared and not yet freed
     finished*: bool ## the Runtime thread has left its loop
+    audit*: AuditLog ## [SPEC CA l.1169, l.1330] the retained call records
+    clock*: Clock ## the configured clock, for call-record timestamps
 
   Engine* = ptr Shared
 

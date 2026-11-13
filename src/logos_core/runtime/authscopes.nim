@@ -192,6 +192,18 @@ proc evaluateRequest*(
 proc encodeRequest*(q: AuthzRequest, runtimeId: string): Result[seq[byte], string] =
   encode(?evaluateRequest(q, runtimeId))
 
+proc enforcedScope*(q: AuthzRequest, runtimeId: string): Result[seq[byte], string] =
+  ## [SPEC CA l.1176-1188; I85] The enforced scope of a call `q` authorizes, as
+  ## deterministic CBOR: its one request scope, which already names one route,
+  ## one provider, the selected contract and one method (a Runtime Control
+  ## call: the Runtime, the contract, one method and the selectors the
+  ## operation determines, no `events`), so the allowed scope that admitted it
+  ## covers it whole and adds no narrowing (`fits`, CAP-0115).
+  let r = ?evaluateRequest(q, runtimeId)
+  if r.scopes.len != 1:
+    return err("a call has exactly one scope")
+  ok(enc(r.scopes[0]))
+
 # Decisions ----------------------------------------------------------------------------
 
 func failed(reason: string, errorCode = ""): EvalResult =

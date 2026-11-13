@@ -28,8 +28,6 @@ const
   MaxDeadlineMs* = 3_600_000'u32 ## [IMPL] the longest: one hour
   MaxEvaluationDeadlineMs* = 60_000'u32
     ## [IMPL] the longest evaluation deadline: one minute (DECISIONS I85)
-  DefaultCallRecords* = 4096 ## [IMPL] the call-record ring's default capacity
-  MaxCallRecords* = 1_000_000'u32 ## [IMPL] its largest
 
 type
   HostModule* = object
@@ -37,8 +35,8 @@ type
     record*: ModuleRecord
 
   EvidenceKeySetting* = object
-    ## [SPEC CA §9.1] The call-evidence signing key's configuration; the file
-    ## is read when audit is built (step 8b-3).
+    ## [SPEC CA §9.1] The call-evidence signing key's configuration; `create`
+    ## reads the file (`host.nim`, `evidence.loadEvidenceKey`).
     kid*: seq[byte] ## `logos.capability_authority.evidence_key_id`
     secretKeyFile*: string
 
@@ -302,7 +300,7 @@ proc checkCallAudit(c: var HostConfig, a: LcnAppCallAudit): Result[void, ConfigE
   c.callAudit = true
   if a.call_records.isSome:
     let v = a.call_records.get
-    if v < 1 or v > MaxCallRecords:
+    if v < 1 or v > uint32(MaxCallRecords):
       return err(configError("call_audit.call_records must be 1 to 1000000"))
     c.callRecords = int(v)
   if a.evidence.isSome:
@@ -430,10 +428,6 @@ proc parseHostConfig*(
     format: string, data: openArray[byte]
 ): Result[HostConfig, ConfigError] =
   ## [SPEC RUNTIME §13.3] Decodes and validates one configuration; RUN-0741.
-  ## [I85] A configuration that passes every check but asks for what is not
-  ## built yet is refused rather than half honoured: call audit until its
-  ## records are (step 8b-3).
-  let c = ?decodeHostConfig(format, data)
-  if c.callAudit:
-    return err(configError("call_audit is not supported yet"))
-  ok(c)
+  ## [I85] Every kind the format has is built (8b-3), so nothing is refused
+  ## beyond `decodeHostConfig`'s checks.
+  decodeHostConfig(format, data)
