@@ -57,6 +57,10 @@ proc text(r: Recorded): string =
 var
   initMode = imOk
   inits, destroys, applies: Atomic[int]
+  orphans: array[16, Atomic[pointer]]
+    ## contexts returned with a failure, which nothing may destroy (G250);
+    ## plain memory, as the hooks run on other threads
+  orphanCount: Atomic[int]
   outWasNull: bool
   seenInput: LogosModuleInitInput
   seenStateDir: Recorded
@@ -107,6 +111,7 @@ proc plainInit(
   of imFailContext:
     outContext[] = ctx
     result.code = CErrorCode(ord(ecModule))
+    orphans[orphanCount.fetchAdd(1)].store(ctx)
   of imOkMessage:
     outContext[] = ctx
     result.message = "fine"
@@ -789,3 +794,9 @@ suite "ldr.module: wiring (LOADER l.676-677; BCP l.287)":
       LoaderWiring(statics: @[loaderStaticRegistration()], workDir: work, side: side),
     ).isErr
     freeSideTable(side)
+
+# One fake returns a context with MODULE_ERROR that nothing may destroy (G250; I88
+# deviation 2). Those contexts are freed here, after every suite has run, so
+# LeakSanitizer reports only leaks of the code under test.
+for i in 0 ..< orphanCount.load:
+  deallocShared(orphans[i].load)

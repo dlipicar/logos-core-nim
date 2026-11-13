@@ -31,6 +31,7 @@
 import std/[atomics, deques, locks, tables]
 import results
 import ../abi/[checks, types]
+import ../base/perthread
 import ../runtime/[bell, config, realizer, sidetable]
 
 export realizer, sidetable
@@ -472,7 +473,7 @@ proc run(c: var Core) =
       break
     sh.bell.wait()
 
-proc coreMain(sh: ptr CoreShared) {.thread.} =
+proc coreLoop(sh: ptr CoreShared) =
   var cfg: CoreConfig
   try:
     cfg = sh.start.recv()
@@ -489,6 +490,12 @@ proc coreMain(sh: ptr CoreShared) {.thread.} =
     discard
   c.run()
   c.r = nil
+
+proc coreMain(sh: ptr CoreShared) {.thread.} =
+  coreLoop(sh)
+  # [IMPL] After the loop's locals are gone: this thread's tables and, under
+  # ORC, the cycle collector's root buffer (`base/perthread`).
+  releasePerThread()
 
 # The API ------------------------------------------------------------------------------
 
