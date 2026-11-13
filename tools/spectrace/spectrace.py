@@ -590,7 +590,7 @@ TEST_ID_RE = re.compile(r"\[([A-Z]{3}-\d{4})\]")
 GATED_KINDS = {"kw", "cddl", "block"}
 
 
-STATUS_RE = re.compile(r"claimed|deferred:tier-[1-5]|informative|out-of-scope:.+")
+STATUS_RE = re.compile(r"claimed|deferred:tier-(?:[1-5]|4b)|informative|out-of-scope:.+")
 
 
 def section_status(claims: dict, section: str) -> str:
@@ -607,19 +607,30 @@ def unit_status(claims: dict, unit) -> str:
     return claims.get("units", {}).get(unit.id) or section_status(claims, unit.section)
 
 
+def statuses(claims: dict):
+    """(key, status) for the default, each section and each unit entry."""
+    yield "default", claims.get("default", "")
+    for key, value in claims.get("sections", {}).items():
+        yield key, value
+    for key, value in claims.get("units", {}).items():
+        yield key, value
+
+
 def cmd_gate(args) -> int:
-    """Every live unit in a claimed section is referenced by a test or an inspection item."""
+    """Every live unit in a claimed section is referenced by a test or an inspection
+    item; no status defers to a closed tier."""
     root = Path(args.root)
     referenced: set[str] = set()
     for test in (root / "tests").rglob("*.nim"):
         referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
     failures = 0
-    for extra in (root / "conformance" / "inspection").glob("*.toml"):
+    for extra in sorted((root / "conformance" / "inspection").glob("*.toml")):
         for item in load_toml(extra).get("item", []):
             if not str(item.get("reason", "")).strip():
                 print(f"{extra.name}: inspection item {item.get('ids')} has no reason")
                 failures += 1
             referenced.update(item.get("ids", []))
+    closed = {f"deferred:tier-{t}" for t in args.closed_tier}
     live_ids: set[str] = set()
     for fname, prefix in SPECS.items():
         claims = load_toml(root / "conformance" / "claims" / f"{prefix}.toml")
@@ -633,6 +644,11 @@ def cmd_gate(args) -> int:
         if not claims or bad_status:
             print(f"{prefix}: missing claims file or invalid status {bad_status}")
             failures += 1
+        # [W1] A closed tier has nothing deferred to it.
+        for key, value in statuses(claims):
+            if value in closed:
+                print(f"{prefix}: {key} is {value}, a closed tier")
+                failures += 1
         _, units = load_ledger(ledger_path(root, prefix))
         if not units:
             print(f"{prefix}: empty ledger; run `spectrace sync`")
@@ -644,13 +660,19 @@ def cmd_gate(args) -> int:
             print(f"{prefix}: [units] names {uid}, which is not a live gated requirement")
             failures += 1
         by_status: dict[str, int] = {}
+        by_label: dict[str, int] = {}
         for u in live:
-            st = unit_status(claims, u).split(":")[0]
+            full = unit_status(claims, u)
+            st = full.split(":")[0]
             by_status[st] = by_status.get(st, 0) + 1
+            if st == "deferred":
+                by_label[full] = by_label.get(full, 0) + 1
         claimed = [u for u in live if unit_status(claims, u) == "claimed"]
         missing = [u for u in claimed if u.id not in referenced]
         summary = ", ".join(f"{v} {k}" for k, v in sorted(by_status.items()))
         print(f"{prefix}: {len(claimed) - len(missing)}/{len(claimed)} claimed units tested ({summary})")
+        if by_label:
+            print("  " + ", ".join(f"{k} {v}" for k, v in sorted(by_label.items())))
         for u in missing[: args.show]:
             print(f"  untested {u.id} ({u.section} l.{u.line}): {u.text[:100]!r}")
         failures += len(missing)
@@ -684,6 +706,13 @@ def main() -> int:
             p.add_argument("--write", action="store_true")
     g = sub.add_parser("gate")
     g.add_argument("--show", type=int, default=20, help="missing units listed per spec")
+    g.add_argument(
+        "--closed-tier",
+        action="append",
+        default=[],
+        metavar="N",
+        help="fail on any status deferred:tier-N (repeatable)",
+    )
     args = ap.parse_args()
     return {
         "sync": cmd_sync,
