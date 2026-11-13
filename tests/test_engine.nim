@@ -314,7 +314,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     check inits.load == 1
     e.finish()
 
-  test "[RUN-0791] [RUN-0792] [RUN-0793] [RUN-1056] [RUN-1072] [RUN-1073] a stop past its deadline records cleanup-timeout and releases nothing [IMPL-DECISION G61] [IMPL-DECISION G180]":
+  test "[RUN-0791] [RUN-0792] [RUN-0793] [RUN-1056] [RUN-1072] [RUN-1073] a stop past its deadline records cleanup-timeout and releases nothing [IMPL-DECISION G61] [IMPL-DECISION G180] [IMPL-DECISION G227]":
     var cfg = config()
     cfg.stopDeadline = initDuration(milliseconds = 100)
     let e = newEngine(cfg)
@@ -343,7 +343,10 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     for c in e.changes():
       if c.serial > before and c.view.instance == "g":
         states.add(c.view.state)
-    check states.len >= 2 and states[^2] == msStopping and states[^1] == msError
+    # [G227] The end of the cleanup moves the realization from `unknown` to
+    # `absent`: one more commit, still `error`.
+    check states.len >= 3 and states[^3] == msStopping and states[^2] == msError and
+      states[^1] == msError
     # A later stop finds nothing left to clean: `unloaded`, failure cleared.
     let again = e.stop("g").tryGet
     check again.state == msUnloaded and again.failure.isNone

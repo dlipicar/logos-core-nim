@@ -54,6 +54,8 @@ const
     ## admission failure, answered as an evaluation failure at once
   DefaultEvaluationDeadline* = initDuration(seconds = 5)
     ## [IMPL] how long an operation waits for its decisions (I85)
+  DefaultListLimit* = 100 ## [SPEC RUNTIME l.3379] a list page without `limit`
+  MaxListLimit* = 1000 ## [SPEC RUNTIME l.3379]
 
 type
   ModuleState* = enum
@@ -160,6 +162,24 @@ type
       ## [IMPL] each created instance gets a fresh state assignment
       ## (RUNTIME §8 l.1451)
 
+  EngineLimits* = object
+    ## [IMPL; I86] The engine's limits that are not host-tunable, documented
+    ## in docs/HOST-CONFIG.md; 0 is the default (`effective`). Tests set them
+    ## small.
+    listResponseBytes*: int
+      ## the records of one list page (RUNTIME l.3381); default 4 MiB
+    snapshotsPerConsumer*: int ## retained list snapshots per consumer; default 8
+    snapshotBytesPerConsumer*: int ## their storage per consumer; default 8 MiB
+    snapshotsTotal*: int ## retained list snapshots in all; default 256
+    snapshotBytesTotal*: int ## their storage in all; default 64 MiB
+    snapshotIdle*: Duration ## a snapshot without a page expires; default 10 min
+    snapshotLifetime*: Duration
+      ## a snapshot expires this long after it was made; default 1 h
+    endRegsPerConsumer*: int
+      ## `observe_end` registrations per consumer instance (INTERFACE l.1483);
+      ## default 1024
+    endRegsTotal*: int ## `observe_end` registrations in all; default 16384
+
   EngineConfig* = object
     runtimeInstanceId*: string
       ## [SPEC RUNTIME §9.2 l.2665-2672] this Runtime's identity, assigned by
@@ -205,6 +225,7 @@ type
     callRecords*: int
       ## [IMPL] how many call audit records are retained (`callaudit.nim`); 0
       ## is `DefaultCallRecords`
+    limits*: EngineLimits ## [IMPL; I86]
 
   # Messages ---------------------------------------------------------------------
   RequestKind* = enum
@@ -268,6 +289,12 @@ type
     rmRecoverModule = "recover_module"
     rmRetireModule = "retire_module"
     rmCreateModule = "create_module"
+    rmDescribeProvider = "describe_provider"
+    rmListModules = "list_modules"
+    rmListRoutes = "list_routes"
+    rmGetExecutionSummary = "get_execution_summary"
+    rmGetPermissionSettings = "get_permission_settings"
+    rmUpdatePermissionSettings = "update_permission_settings"
 
   RcCall* = object ## One checked Runtime Control request.
     request*: seq[byte] ## its deterministic CBOR, for `request_key` replay
@@ -292,6 +319,18 @@ type
       retire*: LogosNSRuntimeControlRetireModuleRequest
     of rmCreateModule:
       createModule*: LogosNSRuntimeControlCreateModuleRequest
+    of rmDescribeProvider:
+      describe*: LogosNSRuntimeControlDescribeProviderRequest
+    of rmListModules:
+      listModules*: LogosNSRuntimeControlListModulesRequest
+    of rmListRoutes:
+      listRoutes*: LogosNSRuntimeControlListRoutesRequest
+    of rmGetExecutionSummary:
+      summary*: LogosNSRuntimeControlGetExecutionSummaryRequest
+    of rmGetPermissionSettings:
+      getSettings*: LogosNSRuntimeControlGetPermissionSettingsRequest
+    of rmUpdatePermissionSettings:
+      updateSettings*: LogosNSRuntimeControlUpdatePermissionSettingsRequest
     of rmGetSelf, rmShutdownRuntime, rmGetExecutionPermissions:
       discard
 
@@ -552,6 +591,23 @@ func classification*(f: Failure): string =
     "loader-" & $f.loader
   else:
     $f.kind
+
+func effective*(l: EngineLimits): EngineLimits =
+  ## The limits with every 0 replaced by its default.
+  result = l
+  template fill(field, value: untyped) =
+    if result.field <= default(typeof(result.field)):
+      result.field = value
+
+  fill(listResponseBytes, 4 * 1024 * 1024)
+  fill(snapshotsPerConsumer, 8)
+  fill(snapshotBytesPerConsumer, 8 * 1024 * 1024)
+  fill(snapshotsTotal, 256)
+  fill(snapshotBytesTotal, 64 * 1024 * 1024)
+  fill(snapshotIdle, initDuration(minutes = 10))
+  fill(snapshotLifetime, initDuration(hours = 1))
+  fill(endRegsPerConsumer, 1024)
+  fill(endRegsTotal, 16384)
 
 proc newRuntimeInstanceId*(): string =
   ## A lowercase canonical UUID version 4 (RFC 9562), the form the remote

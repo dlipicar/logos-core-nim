@@ -58,6 +58,11 @@ type
     vBadCbor
     vNoValidity ## an allow without `valid_until`
 
+  RcNarrow* = object
+    ## [I86] One allowed Runtime Control scope: the requested one with these
+    ## subject selectors; several are alternatives (CA l.565-567).
+    modules*, instances*, providers*, routes*: Opt[seq[string]]
+
   Rule* = object
     consumer*: string ## the consumer module instance; empty: any
     what*: string
@@ -72,6 +77,8 @@ type
     narrowMethods*: Opt[seq[seq[byte]]]
       ## allow: the allowed provider-access scope's `access.methods`
     narrowProviders*: Opt[seq[string]] ## allow: the allowed scope's providers
+    narrowControl*: seq[RcNarrow]
+      ## allow: the allowed Runtime Control scopes, one per alternative
     retainRequest*, retainResponse*: bool ## allow: `commitment`
     code*: int ## deny: the denial code; error: the error code (enum ordinal)
 
@@ -171,6 +178,46 @@ func split1(s: string): seq[string] =
   else:
     s.split(',')
 
+func optList(v: Opt[seq[string]]): string =
+  if v.isSome:
+    "=" & v.get.joined
+  else:
+    "-"
+
+func listOpt(s: string): Opt[seq[string]] =
+  if s.len > 0 and s[0] == '=':
+    Opt.some(split1(s[1 ..^ 1]))
+  else:
+    Opt.none(seq[string])
+
+func encodeNarrows(ns: seq[RcNarrow]): string =
+  var alts: seq[string]
+  for n in ns:
+    alts.add(
+      [
+        optList(n.modules),
+        optList(n.instances),
+        optList(n.providers),
+        optList(n.routes),
+      ].join("|")
+    )
+  alts.join(";")
+
+func decodeNarrows(s: string): seq[RcNarrow] =
+  if s.len == 0:
+    return
+  for alt in s.split(';'):
+    let f = alt.split('|')
+    if f.len == 4:
+      result.add(
+        RcNarrow(
+          modules: listOpt(f[0]),
+          instances: listOpt(f[1]),
+          providers: listOpt(f[2]),
+          routes: listOpt(f[3]),
+        )
+      )
+
 proc encodeRule(r: Rule): string =
   var methods = "-"
   if r.narrowMethods.isSome:
@@ -194,6 +241,7 @@ proc encodeRule(r: Rule): string =
     providers,
     (if r.retainRequest: "q" else: "") & (if r.retainResponse: "s" else: ""),
     $r.code,
+    encodeNarrows(r.narrowControl),
   ].join("\x1F")
 
 proc decodeRule(s: string): Rule =
@@ -219,6 +267,8 @@ proc decodeRule(s: string): Rule =
     result.narrowMethods = Opt.some(ms)
   if f[7] != "-":
     result.narrowProviders = Opt.some(split1(f[7][1 ..^ 1]))
+  if f.len > 10:
+    result.narrowControl = decodeNarrows(f[10])
 
 # Test controls -------------------------------------------------------------------------
 
@@ -454,6 +504,30 @@ proc decision(
               )
             )
           s.pa.providers = Opt.some(ps)
+  if r.narrowControl.len > 0:
+    var alts: seq[Scope]
+    for s in allowed:
+      if s.kind != skControl:
+        alts.add(s)
+        continue
+      for n in r.narrowControl:
+        var a = s
+        a.rc.modules = n.modules
+        a.rc.instances = n.instances
+        a.rc.routes = n.routes
+        if n.providers.isSome:
+          var ps: seq[ProviderAddress]
+          for p in n.providers.get:
+            ps.add(
+              ProviderAddress(
+                provider: p,
+                runtime_instance_id: Opt.some(req.consumer.runtime_instance_id),
+              )
+            )
+          a.rc.providers = Opt.some(ps)
+        alts.add(a)
+    canonicalOrder(alts)
+    allowed = alts
   case r.verdict
   of vDeny, vDenyWithAllowed:
     result.result = LogosNSCapabilityAuthorityDecisionResult(

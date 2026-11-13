@@ -24,3 +24,7 @@ reason = "runtime/native.nim probeNative converts every resolved address to its 
 [[item]]
 ids = ["RUN-1011", "RUN-1021"]
 reason = "Negatives over runtime/engine.nim (DECISIONS I82). RUN-1011: execution for a retained origin is decided by a current authorization request at every attempt (execute: aaExecute with the origin as consumer; test [RUN-0692] in tests/test_recovery.nim), never inferred from the origin record being kept or its instance still being known, and retirement does not change that for anyone; this Runtime holds no intents for other Runtimes. RUN-1021: retireInst removes the instance record, keeps a tombstone and drops the instance's create_module keys, and nothing on that path uninstalls a package, revokes a grant, erases history, moves a state directory or hands an assignment or authority to another instance; the state directory surviving retirement is tested ([RUN-1020] in tests/test_recovery.nim)."
+
+[[item]]
+ids = ["RUN-0965", "RUN-0967"]
+reason = "Documentation duties for list snapshots (DECISIONS I86). docs/HOST-CONFIG.md \"Observation\" states the finite capacity and retention limits (per consumer and in all, idle and absolute expiry, the page byte bound), the reclamation (expiry, the deadline timer, the end of the consumer's attempt, the consumer's own least recently used snapshot first) and the overload behavior (MODULE_ERROR, no other consumer's snapshot evicted). The values are runtime/plumbing.nim EngineLimits.effective; tests/test_observe.nim exercises each of them."

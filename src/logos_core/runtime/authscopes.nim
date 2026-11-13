@@ -419,6 +419,11 @@ proc narrowedFor*(
   ## candidates; any other narrowing excludes it.
   if x.outcome != azAllow:
     return false
+  if x.request.filters:
+    # [I86] An observation of many subjects: the narrowing filters them
+    # (`observe.admits`); every allowed scope is already covered by the
+    # requested one (`checkDecision`).
+    return false
   let r = EvaluateRequest.decode(request).valueOr:
     return true
   case x.request.action

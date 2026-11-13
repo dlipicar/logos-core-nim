@@ -89,6 +89,11 @@ type
     renewal*: bool
       ## [SPEC CA §5.1 l.577-578] an execution decision asked again for an
       ## execution that is already running (`execution_renewal`)
+    filters*: bool
+      ## [IMPL; G161 extension, I86] an observation of many subjects (a list
+      ## method, a Runtime Control event): it names no subject, and a
+      ## narrowed allow filters the subjects it observes instead of excluding
+      ## the operation (RUNTIME l.3373, CA l.565-567)
 
   AuthzOutcome* = enum
     azAllow = "allow"
@@ -212,7 +217,7 @@ func key*(q: AuthzRequest): string =
   $q.action & "\x1F" & q.operation & "\x1F" & q.consumer & "\x1F" & q.target & "\x1F" &
     q.module & "\x1F" & q.route & "\x1F" & q.instance & "\x1F" & q.provider & "\x1F" &
     hexOf(q.contract) & "\x1F" & hexOf(q.declaration) & "\x1F" & hexOf(q.access) & "\x1F" &
-    $q.providerSelector & "\x1F" & $q.renewal
+    $q.providerSelector & "\x1F" & $q.renewal & "\x1F" & $q.filters
 
 proc retain*(a: var Authorizer, answer: AuthzAnswer) =
   ## Keeps one answer for observation, the oldest dropped first.
@@ -253,6 +258,15 @@ proc decide*(a: var Authorizer, q: AuthzRequest): AuthzAnswer =
       outcome = r.outcome
       break
   a.issue(q, outcome, psInternal)
+
+func permits*(a: Authorizer, q: AuthzRequest): bool =
+  ## [IMPL; I86] What the internal policy would answer `q`, without issuing
+  ## or retaining an answer: how an internal allow of an observation without
+  ## a subject is applied to each subject it observes.
+  for r in a.policy.rules:
+    if r.matches(q):
+      return r.outcome == azAllow
+  true
 
 func answers*(a: Authorizer): seq[AuthzAnswer] =
   for x in a.answers:

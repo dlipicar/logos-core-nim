@@ -253,7 +253,7 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
   setup:
     reset()
 
-  test "[RUN-0643] [RUN-0874] recovery needs requested intent, a failed or unloaded instance and its cleanup complete":
+  test "[RUN-0643] [RUN-0874] recovery needs requested intent, a failed or unloaded instance and its cleanup complete [IMPL-DECISION G227]":
     let e =
       newEngine(rconfig(denying(deny(operation = "recover_module", consumer = "d"))))
     let (_, arc) = e.startClient("a")
@@ -304,9 +304,12 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     check absent.detail.len > 0
     check e.rev("w") == r
     counterDestroyGate.store(false)
+    # [G227] The end of the cleanup is a commit of its own (the realization
+    # becomes `absent`): a revision read before it is stale, so the test
+    # retries until a recovery is accepted.
     check waitUntil(
       proc(): bool =
-        arc.recoverOn("w", e.rev("w")).code != ecNotReady
+        arc.recoverOn("w", e.rev("w")).code == ecOk
     )
     check e.view("w").tryGet.state == msReady
     e.finish()

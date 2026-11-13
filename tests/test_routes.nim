@@ -78,7 +78,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check broken.code == ecInvalidParams
     check rcCall(rc, "start_module", [0xA0'u8]).code == ecInvalidParams
     # A method of the contract this Runtime does not perform yet [IMPL].
-    check rcCall(rc, "list_modules", [0xA0'u8]).code == ecModule
+    check rcCall(rc, "list_remote_listeners", [0xA0'u8]).code == ecModule
     var len: csize_t
     let empty = [0xA0'u8]
     let r = rc.vtable.call(
@@ -551,6 +551,41 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     check lateSeen.count.load == 0
     h.release()
     late.release()
+    e.finish()
+
+  test "[IFC-0660] [SPEC INTERFACE l.1483] observe_end past the local registration capacity is MODULE_ERROR and changes no registration (DECISIONS I86)":
+    var cfg = config()
+    cfg.limits.endRegsPerConsumer = 2
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var routes: array[3, string]
+    var hs: array[3, LogosRouteHandle]
+    var seen: array[3, EndSeen]
+    for i in 0 ..< 3:
+      routes[i] = rc.routeId("k" & $i)
+      hs[i] = rc.handle(routes[i])
+    check hs[0].observe(addr seen[0]) == ecOk
+    check hs[1].observe(addr seen[1]) == ecOk
+    check hs[2].observe(addr seen[2]) == ecModule
+    # The refused one retained nothing: its route's end does not reach it.
+    check rc.close(routes[2]).code == ecOk
+    sleep(20)
+    check seen[2].count.load == 0
+    # A released handle frees its place; the others still fire.
+    hs[0].release()
+    var again = rc.handle(rc.routeId("k3"))
+    var againSeen: EndSeen
+    check again.observe(addr againSeen) == ecOk
+    check rc.close(routes[1]).code == ecOk
+    check waitUntil(
+      proc(): bool =
+        seen[1].count.load == 1
+    )
+    check seen[0].count.load == 0
+    hs[1].release()
+    hs[2].release()
+    again.release()
     e.finish()
 
   test "[IFC-0516] a released handle gets no terminal callback (INTERFACE §5.2 l.3912-3916)":

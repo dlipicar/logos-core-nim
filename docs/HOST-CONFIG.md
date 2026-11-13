@@ -481,3 +481,64 @@ identity, and every configured instance is new.
   retirement is not deletion (BCP l.395). No deletion operation exists yet (DECISIONS G143).
 - **Bounds.** At most `MaxInstances` (1024) known instances, retained ones included, for
   `create_module`.
+
+## Observation
+
+What a module sees through Runtime Control's observation methods (DECISIONS I86; RUNTIME §9.3). None
+of it is configurable in this file; the limits below are the Runtime's (RUNTIME l.3394-3396 asks for
+them to be documented).
+
+- **Lists.** `list_modules` and `list_routes` answer from one snapshot made when the first page is
+  asked for, after the method's authority, the filters and each record's visibility; later pages
+  come from that snapshot, so an instance created after it does not appear and nothing is reordered
+  (l.3404-3413). Every page applies the caller's current authority again: a record it may no longer
+  observe is left out, and a continuation is given only while a record it may observe remains. A
+  route is listed while its record is kept, its ended state included.
+- **Cursors.** A `next_cursor` is a random 43-character token that continues only the query that
+  made it: the same consumer instance, method, filters and limit (a `provider` filter without
+  `runtime_instance_id` is the same as one naming this Runtime). Anything else, an expired cursor
+  and one whose snapshot was reclaimed are `LOGOS_ERR_INVALID_PARAMS` without detail.
+- **Limits.**
+
+  | Limit | Value |
+  |---|---|
+  | records per page, when `limit` is absent | 100 (1 to 1000 when present) |
+  | bytes of records in one page | 4 MiB |
+  | retained snapshots per consumer instance | 8, and 8 MiB |
+  | retained snapshots in all | 256, and 64 MiB |
+  | a snapshot not paged for | 10 minutes, then it expires |
+  | a snapshot's life | 1 hour, then it expires |
+  | `observe_end` registrations per consumer instance | 1024 |
+  | `observe_end` registrations in all | 16384 |
+
+  A first page that needs a continuation is retained; past a consumer's own allowance its least
+  recently used snapshot is dropped to make room (its cursors become invalid); past the allowance in
+  all, after expired snapshots are reclaimed, the request is `LOGOS_ERR_MODULE` and no other
+  consumer's snapshot is touched. A page whose first record alone exceeds the page bytes is
+  `LOGOS_ERR_MODULE`. A consumer's snapshots end with its execution attempt (a stop, a failure, a
+  restart). Past an `observe_end` limit the registration is `LOGOS_ERR_MODULE` and changes nothing
+  (INTERFACE l.1483-1484). Nothing here is persisted.
+- **Execution summary.** `get_execution_summary` reports `selection.implementation` as
+  `implementation-specific`: the in-process realizer is not a Module Loader instance (RUNTIME
+  l.3527-3528; DECISIONS G230, interim), and no selection carries `package` or `signer` yet.
+  `realization` is `current` while the Runtime owns a realization for the instance, a cleanup still
+  within its deadline included; `unknown` while a Module Loader bind is unresolved or a bind,
+  initialization or cleanup has outlived its deadline (DECISIONS G180); `absent` otherwise.
+- **A realization change is a commit.** When `realization` changes without a lifecycle transition (a
+  late cleanup ending, a dynamic bind returning), the instance's execution revision advances and the
+  change is persisted (DECISIONS G227, interim). A guarded `start_module`, `recover_module` or
+  `retire_module` prepared with the revision read before it is `LOGOS_ERR_INVALID_PARAMS`: read the
+  revision again (`get_readiness`, `get_execution_summary`) and retry.
+- **Failure text.** A module record carries the failure classification. Its `reason` is the
+  Runtime's or the module's own text, cut to 512 bytes; a Module Loader failure carries none, since
+  its message may name host paths (RUNTIME l.1901-1904).
+- **`describe_provider`** returns the call surface validated when the provider was last bound, kept
+  after it stops (RUNTIME l.540-541); before any bind it is `LOGOS_ERR_NOT_READY`, once the caller
+  holds a `discover` allow for each contract the record expects (otherwise `LOGOS_ERR_NOT_AUTHORISED`,
+  which does not say whether it was bound).
+- **Permission settings in direct mode.** Every instance has permission settings at revision 1, with
+  no permission, `applied` (RUNTIME l.2541): no permission profile is selected, so a replacement that
+  names a permission is `LOGOS_ERR_INVALID_PARAMS` (l.2536) and one with `[]` at revision 1 changes
+  nothing (DECISIONS G229). `applied` with `[]` claims no containment: direct modules are trusted
+  in-process code (SECURITY l.204; RUNTIME l.1622, l.2545). A target on another Runtime is
+  `LOGOS_ERR_INVALID_PARAMS` (DECISIONS G228, interim).

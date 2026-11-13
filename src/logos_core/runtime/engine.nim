@@ -101,8 +101,8 @@
 
 import
   std/[
-    atomics, deques, locks, monotimes, sequtils, sets, strutils, sysrand, tables, times,
-    typedthreads,
+    algorithm, atomics, deques, locks, monotimes, sequtils, sets, strutils, sysrand,
+    tables, times, typedthreads,
   ]
 from std/os import sleep
 import results
@@ -114,7 +114,7 @@ import ../iface/[accept, outcome]
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
-    execauth, invoke, plumbing, store,
+    execauth, inventory, invoke, observe, plumbing, store,
   ]
 
 export plumbing
@@ -129,6 +129,12 @@ type
       ## write (I82)
     apCleanup ## the context made by the attempt is being destroyed
     apDone
+
+  RealizationStatus = enum
+    ## [SPEC RUNTIME l.3530-3534] `get_execution_summary`'s `realization`
+    rsAbsent
+    rsCurrent
+    rsUnknown
 
   Attempt = ref object
     id: int
@@ -195,6 +201,13 @@ type
     enforced: Opt[Failure]
       ## [G168 extended] the classification an authority stop in progress
       ## leaves on `unloaded`
+    surface: seq[byte]
+      ## [SPEC RUNTIME l.540-541; I86] the call surface validated at its last
+      ## bind, kept for `describe_provider` after the realization ends
+    surfaceContracts: seq[Digest] ## the exact contracts of `surface`
+    realized: RealizationStatus
+      ## [IMPL-DECISION G227 (TL-08)] the realization status as of its last
+      ## commit
 
   Saved = object ## What an accepting commit rolls back when its write fails.
     record: ModuleRecord
@@ -348,6 +361,13 @@ type
     reauthBusy: int ## route re-authorizations being evaluated
     reauthWaiters: Table[string, seq[OpCtx]]
       ## by route: operations parked on its re-authorization
+    limits: EngineLimits ## [I86] `cfg.limits` with the defaults filled in
+    snapshots: Snapshots ## [I86] the list snapshots (`inventory.nim`)
+    endRegs: CountTable[string]
+      ## [I86] per consumer instance: its `observe_end` registrations
+    endRegsTotal: int
+    stepCommitted: HashSet[string]
+      ## [IMPL-DECISION G227] the instances committed during the current step
 
 const
   MaxPasses = 8 ## [IMPL] handler passes per operation; more is an evaluation failure
@@ -607,6 +627,8 @@ proc endServices(st: State, s: ptr AttemptServices, instance: string) =
     return
   let token = attemptOf(s)
   st.liveAttempts.excl(token)
+  # [SPEC RUNTIME l.629; I86] Its list snapshots go with its binding.
+  st.snapshots.endAttempt(token)
   # [SPEC INTERFACE l.2004-2006] None of the attempt's handles remains valid.
   for r in st.routes.values:
     if r.consumer == instance and r.pins.len > 0:
@@ -625,6 +647,18 @@ proc endServices(st: State, s: ptr AttemptServices, instance: string) =
         st.endCall(a, failure(ecNotReady, "the consumer's realization ended"), okEnded)
     elif a.provider == instance and not a.terminal:
       st.endCall(a, failure(ecNotReady, "the provider's realization ended"), okEnded)
+
+proc endRegsGone(st: State, consumer: string, n: int) =
+  ## [I86] `n` of the consumer's `observe_end` registrations fired or were
+  ## released.
+  if n <= 0:
+    return
+  let left = st.endRegs.getOrDefault(consumer) - n
+  if left > 0:
+    st.endRegs[consumer] = left
+  else:
+    st.endRegs.del(consumer)
+  st.endRegsTotal = max(st.endRegsTotal - n, 0)
 
 proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229; INTERFACE §2.5] The route takes no
@@ -661,6 +695,7 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
   for h in r.handles:
     scheduleEnd(h, r.endCode)
     st.dispatch(Job(id: st.nextJobId(), kind: jkObserveEnd, handle: h))
+  st.endRegsGone(r.consumer, r.handles.len)
   r.handles.setLen(0)
   st.settle(r)
 
@@ -795,6 +830,7 @@ proc commit(st: State, x: Inst) =
   ## store is written, then the change is exposed. When the write fails the
   ## change is held back (I82).
   inc x.revision
+  st.stepCommitted.incl(x.id)
   if x.state != msStopping:
     x.stopDeadline = Opt.none(MonoTime)
   x.pending = true
@@ -853,6 +889,7 @@ proc accept(st: State, x: Inst, saved: Saved, exempt = false): Opt[EngineError] 
     x.restore(saved)
     st.storeFailure(w.error)
     return Opt.some(engineError(ecModule, NotPersisted))
+  st.stepCommitted.incl(x.id)
   if x.state != msStopping:
     x.stopDeadline = Opt.none(MonoTime)
   st.written(x)
@@ -1053,6 +1090,16 @@ proc beginInit(st: State, a: Attempt, b: ref NativeBinding) =
     return
   a.handoff = h
   a.phase = apInit
+  if b.provider:
+    # [SPEC RUNTIME l.540-541; I86] The validated surface, for
+    # `describe_provider`, from now on and after the realization ends.
+    let x = a.inst
+    x.surface = b.callSurface
+    x.surfaceContracts.setLen(0)
+    if b.contracts.primary.isSome:
+      x.surfaceContracts.add(b.contracts.primary.get.root)
+    for c in b.contracts.interfaces:
+      x.surfaceContracts.add(c.root)
   let id = st.nextJobId()
   st.attempts[id] = a
   st.dispatch(Job(id: id, kind: jkInit, init: b.init, input: addr h.input))
@@ -2526,6 +2573,11 @@ proc caller(st: State, q: Request): Result[Inst, EngineError] =
     return err(engineError(ecNotAuthorised, "no authenticated module consumer"))
   ok(x)
 
+func listRequest(st: State, x: Inst, operation: string): AuthzRequest =
+  ## [G161 extension (TF-09); I86] A list method is authorized once, without
+  ## a subject; the allow is applied to each record (`admits`).
+  AuthzRequest(action: aaObserve, operation: operation, consumer: x.id, filters: true)
+
 proc rcPrecheck(st: State, q: Request) =
   ## [G171 interim (TF-18)] Before a Runtime Control request whose payload
   ## failed validation is answered INVALID_PARAMS: the caller's association,
@@ -2537,6 +2589,8 @@ proc rcPrecheck(st: State, q: Request) =
     st.require(
       q, AuthzRequest(action: aaRuntimeControl, operation: q.bare, consumer: x.id)
     )
+  elif q.bare in [$rmListModules, $rmListRoutes]:
+    st.require(q, st.listRequest(x, q.bare))
   q.reply.answer(Reply())
 
 proc selectLifecycle(
@@ -2660,16 +2714,6 @@ func rcExecution(v: InstanceView): LogosNSRuntimeControlExecutionState =
     intent_revision: v.execution.intentRevision,
   )
 
-func reasonText(s: string): string =
-  ## `logos.runtime_control.reason`: at most 512 bytes, cut at a character
-  ## boundary.
-  if s.len <= 512:
-    return s
-  var n = 512
-  while n > 0 and (uint8(s[n]) and 0xC0'u8) == 0x80'u8:
-    dec n
-  s[0 ..< n]
-
 proc readiness(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §9.3 get_readiness, l.3656-3675, l.3494-3496] The
   ## selected local instance's lifecycle and execution state from one
@@ -2713,8 +2757,7 @@ proc readiness(st: State, q: Request, x: Inst) =
   )
   if v.failure.isSome:
     response.failure = Opt.some(v.failure.get.classification)
-    if v.failure.get.reason.len > 0:
-      response.reason = Opt.some(reasonText(v.failure.get.reason))
+    response.reason = disclosedReason(v.failure.get)
   q.reply.answerEncoded(encode(response))
 
 proc rcRecover(st: State, q: Request, x: Inst) =
@@ -3348,6 +3391,497 @@ proc closeRoute(st: State, q: Request, x: Inst) =
     )
   )
 
+# Observation (step 7; DECISIONS I86) ----------------------------------------------
+
+proc realizationStatus(x: Inst): RealizationStatus =
+  ## [SPEC RUNTIME l.3530-3534] `current` while the Runtime owns a realization
+  ## for the instance, one retained for cleanup within its deadline included;
+  ## `unknown` while a Loader bind is unresolved (static bindings resolve
+  ## inside the accepting step) or a bind, `_MODULE_init` or cleanup has
+  ## outlived its deadline (G180); `absent` otherwise, after a restart too.
+  let a = x.attempt
+  if a != nil and a.phase in {apBind, apInit}:
+    if a.phase == apBind or a.expired:
+      return rsUnknown
+    return rsCurrent
+  if x.realization != nil or x.teardown != 0 or
+      (a != nil and a.phase in {apReadyPending, apCleanup}):
+    if x.state == msError and x.failure.isSome and x.failure.get.kind == fkCleanupTimeout:
+      return rsUnknown
+    return rsCurrent
+  rsAbsent
+
+proc followRealizations(st: State) =
+  ## [IMPL-DECISION G227 (TL-08)] After every step on the Runtime thread: an
+  ## instance whose realization status moved without a commit of its own in
+  ## that step is committed (its revision advances, it is written and
+  ## exposed), so the change is observable (RUNTIME l.3504, l.3509). A guarded
+  ## request prepared before it then carries a stale revision (l.1833,
+  ## l.1913).
+  for x in st.instances.values:
+    let now = x.realizationStatus
+    if x.id in st.stepCommitted:
+      x.realized = now
+    elif now != x.realized:
+      x.realized = now
+      st.commit(x)
+  st.stepCommitted.clear()
+
+func rcRealization(
+    s: RealizationStatus
+): LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice =
+  LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoice(
+    kind:
+      case s
+      of rsAbsent:
+        LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Absent
+      of rsCurrent:
+        LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Current
+      of rsUnknown:
+        LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown
+  )
+
+proc admits(st: State, a: AuthzAnswer, operation: string, s: Subject): bool =
+  ## [G161 extension, G226 interim (TF-09, TF-34)] Whether the allow of an
+  ## observation without a subject admits the subject `s`.
+  if not a.allows:
+    return false
+  case a.source
+  of psAuthority:
+    a.admitsScope(methodScope(operation, s, st.runtimeId), st.runtimeId)
+  of psInternal:
+    st.authorizer.permits(subjectRequest(a.request, s))
+  of psBootstrap, psRecovery:
+    true
+  of psBoundary:
+    false
+
+func providerOf(st: State, provider: string): LogosNSRuntimeModuleProviderAddress =
+  LogosNSRuntimeModuleProviderAddress(
+    provider: provider, runtime_instance_id: Opt.some(st.runtimeId)
+  )
+
+proc moduleRecord(st: State, y: Inst): (LogosNSRuntimeControlModuleRecord, Subject) =
+  ## [SPEC RUNTIME l.3494, l.3406-3413; RUN-0627] A local instance's record:
+  ## its state, execution and failure from one committed view; `provider`
+  ## when it has a provider record (keyed by it); never `remote`.
+  let v = y.exposed
+  var r = LogosNSRuntimeControlModuleRecord(
+    module: v.module,
+    instance: Opt.some(v.instance),
+    execution: Opt.some(rcExecution(v)),
+    state: rcState(v.state),
+    mode: LogosNSRuntimeControlMode(kind: LogosNSRuntimeControlModeKind.Direct),
+    state_assignment: v.stateAssignment,
+  )
+  if y.providerId.len > 0:
+    r.provider = Opt.some(st.providerOf(y.providerId))
+  if v.primaryContract.isSome:
+    r.primary_contract = Opt.some(schemaCommitmentOf(v.primaryContract.get))
+  if v.implements.len > 0:
+    var cs: seq[SchemaCommitment]
+    for c in v.implements:
+      cs.add(schemaCommitmentOf(c))
+    r.implements = Opt.some(cs)
+  if v.failure.isSome:
+    r.failure = Opt.some(v.failure.get.classification)
+    r.reason = disclosedReason(v.failure.get)
+  (r, instanceSubject(v.module, v.instance, y.providerId))
+
+proc listAuthority(
+    st: State, q: Request, x: Inst, operation: string
+): Opt[AuthzAnswer] =
+  ## The list method's own decision; none when the request was parked or
+  ## answered NOT_AUTHORISED.
+  let d = st.decide([st.listRequest(x, operation)]).valueOr:
+    return Opt.none(AuthzAnswer)
+  if not d[0].allows:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return Opt.none(AuthzAnswer)
+  Opt.some(d[0])
+
+proc listLimit(q: Request, limit: Opt[uint16]): Opt[int] =
+  ## [SPEC RUNTIME l.3379-3380; RUN-0954, RUN-0955]
+  if limit.isNone:
+    return Opt.some(DefaultListLimit)
+  let n = int(limit.get)
+  if n < 1 or n > MaxListLimit:
+    q.reply.answerError(ecInvalidParams, "the limit is out of range")
+    return Opt.none(int)
+  Opt.some(n)
+
+const BadCursor = "the cursor is not valid"
+  ## [SPEC RUNTIME l.3391] one message for every refused cursor
+
+proc answerPage(
+    st: State,
+    q: Request,
+    snap: ListSnapshot,
+    first: int,
+    a: AuthzAnswer,
+    retained: bool,
+) =
+  ## [SPEC RUNTIME l.3379-3402] One page of `snap` under the current decision
+  ## `a`. A first page that continues retains its snapshot, or fails
+  ## MODULE_ERROR rather than return a page without a continuation.
+  let operation = $snap.kind
+  let p = snap.page(
+    first,
+    st.limits.listResponseBytes,
+    proc(s: Subject): bool =
+      st.admits(a, operation, s),
+  ).valueOr:
+    if retained:
+      st.snapshots.drop(snap)
+    q.reply.answerError(ecModule, "a visible record does not fit in a response")
+    return
+  var next = Opt.none(string)
+  if p.next.isSome:
+    if not retained:
+      st.snapshots.retain(snap, getMonoTime()).isOkOr:
+        q.reply.answerError(ecModule, "the list snapshot cannot be retained: " & error)
+        return
+    next = Opt.some(st.snapshots.issue(snap, p.next.get))
+  case snap.kind
+  of lkModules:
+    var r = LogosNSRuntimeControlListModulesResponse(next_cursor: next)
+    for i in p.picked:
+      r.modules.add(snap.modules[i])
+    q.reply.answerEncoded(encode(r))
+  of lkRoutes:
+    var r = LogosNSRuntimeControlListRoutesResponse(next_cursor: next)
+    for i in p.picked:
+      r.routes.add(snap.routes[i])
+    q.reply.answerEncoded(encode(r))
+
+proc continueList(
+    st: State,
+    q: Request,
+    x: Inst,
+    kind: ListKind,
+    filters: string,
+    limit: int,
+    cursor: string,
+    a: AuthzAnswer,
+) =
+  ## [SPEC RUNTIME l.3386-3392] After the method's authority: the cursor
+  ## (INVALID_PARAMS without detail, one message), readiness, the page.
+  let found = st.snapshots.resolve(cursor, x.id, kind, filters, limit, getMonoTime())
+  if found.isNone:
+    q.reply.answerError(ecInvalidParams, BadCursor)
+    return
+  st.requireReady(q)
+  let (snap, position) = found.get
+  st.answerPage(q, snap, position, a, retained = true)
+
+func optKey(v: Opt[string]): string =
+  if v.isSome:
+    "1" & v.get
+  else:
+    "0"
+
+proc listModules(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 l.3350-3357, l.3372-3413] Every local instance the
+  ## caller may observe, instance-keyed records first, from one snapshot.
+  let req = q.rc.listModules
+  let a = st.listAuthority(q, x, $rmListModules).valueOr:
+    return
+  let limit = listLimit(q, req.limit).valueOr:
+    return
+  let filters = optKey(req.module) & "\x1F" & optKey(req.instance)
+  if req.cursor.isSome:
+    st.continueList(q, x, lkModules, filters, limit, req.cursor.get, a)
+    return
+  st.requireReady(q)
+  var keyed: seq[(int, string, LogosNSRuntimeControlModuleRecord, Subject)]
+  for y in st.instances.values:
+    # [SPEC RUNTIME l.3376; RUN-0953] Both filters match; they grant nothing.
+    if req.module.isSome and y.record.module != req.module.get:
+      continue
+    if req.instance.isSome and y.id != req.instance.get:
+      continue
+    let (r, subject) = st.moduleRecord(y)
+    if not st.admits(a, $rmListModules, subject):
+      continue
+    # [SPEC RUNTIME l.3407-3411] Instance keys before provider keys, each by
+    # its identifier's bytes; every provider key names this Runtime.
+    if y.providerId.len > 0:
+      keyed.add((1, y.providerId, r, subject))
+    else:
+      keyed.add((0, y.id, r, subject))
+  keyed.sort(
+    proc(p, o: (int, string, LogosNSRuntimeControlModuleRecord, Subject)): int =
+      result = cmp(p[0], o[0])
+      if result == 0:
+        result = cmp(p[1], o[1])
+  )
+  let snap = ListSnapshot(
+    consumer: x.id, attempt: q.attempt, kind: lkModules, filters: filters, limit: limit
+  )
+  for (_, _, r, subject) in keyed:
+    let size = encode(r).get(newSeq[byte]()).len
+    snap.modules.add(r)
+    snap.subjects.add(subject)
+    snap.sizes.add(size)
+    snap.bytes += size + subject.factBytes
+  st.answerPage(q, snap, 0, a, retained = false)
+
+proc listRoutes(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 l.3359-3365, l.3372-3413] Every route record the
+  ## caller may observe, ended ones still kept included, by route id, without
+  ## `invocation`.
+  let req = q.rc.listRoutes
+  let a = st.listAuthority(q, x, $rmListRoutes).valueOr:
+    return
+  let limit = listLimit(q, req.limit).valueOr:
+    return
+  # [IMPL; D4] The provider filter is compared after normalization: an
+  # omitted Runtime id is this Runtime; another Runtime's matches nothing.
+  var provider = Opt.none(string)
+  var foreign = false
+  if req.provider.isSome:
+    let p = req.provider.get
+    let runtime = p.runtime_instance_id.get(st.runtimeId)
+    foreign = runtime != st.runtimeId
+    provider = Opt.some(runtime & "\x1F" & p.provider)
+  let filters = optKey(req.module) & "\x1F" & optKey(provider)
+  if req.cursor.isSome:
+    st.continueList(q, x, lkRoutes, filters, limit, req.cursor.get, a)
+    return
+  st.requireReady(q)
+  var picked: seq[Route]
+  if not foreign:
+    for r in st.routes.values:
+      if r.dropped:
+        continue
+      if req.module.isSome and r.selected.module != req.module.get:
+        continue
+      if req.provider.isSome and r.provider != req.provider.get.provider:
+        continue
+      if not st.admits(
+        a,
+        $rmListRoutes,
+        routeSubject(r.id, r.selected.module, r.providerInstance, r.provider),
+      ):
+        continue
+      picked.add(r)
+  picked.sort(
+    proc(p, o: Route): int =
+      cmp(p.id, o.id)
+  )
+  let snap = ListSnapshot(
+    consumer: x.id, attempt: q.attempt, kind: lkRoutes, filters: filters, limit: limit
+  )
+  for r in picked:
+    let rec = r.record(st.runtimeId)
+    let subject = routeSubject(r.id, r.selected.module, r.providerInstance, r.provider)
+    let size = encode(rec).get(newSeq[byte]()).len
+    snap.routes.add(rec)
+    snap.subjects.add(subject)
+    snap.sizes.add(size)
+    snap.bytes += size + subject.factBytes
+  st.answerPage(q, snap, 0, a, retained = false)
+
+proc localTarget(
+    st: State,
+    q: Request,
+    x: Inst,
+    target: LogosNSRuntimeModuleInstanceAddress,
+    action: AuthzAction,
+    operation: string,
+): Opt[Inst] =
+  ## [G194 order; IMPL-DECISION G228 (TF-30 point 1)] A target instance on
+  ## another Runtime is INVALID_PARAMS without detail; an unknown and a
+  ## refused target are the same NOT_AUTHORISED; then readiness.
+  if target.runtime_instance_id != st.runtimeId:
+    q.reply.answerError(ecInvalidParams, "the target names another Runtime")
+    return Opt.none(Inst)
+  let id = target.module_instance_id
+  let y = st.instances.getOrDefault(id)
+  if y.isNil and st.authorityMode:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return Opt.none(Inst)
+  let refused = st.check(
+    AuthzRequest(
+      action: action,
+      operation: operation,
+      consumer: x.id,
+      target: id,
+      instance: id,
+      module: y.moduleOf,
+    )
+  )
+  if refused.isSome:
+    q.answerFailure(refused.get)
+    return Opt.none(Inst)
+  if y.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return Opt.none(Inst)
+  Opt.some(y)
+
+proc summary(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 get_execution_summary, l.3513-3535] Authorized for
+  ## the target on its own; state, execution and failure from one committed
+  ## view; the realization as the Runtime owns it now.
+  let y = st.localTarget(q, x, q.rc.summary.target, aaObserve, $rmGetExecutionSummary).valueOr:
+    return
+  st.requireReady(q)
+  let v = y.exposed
+  var r = LogosNSRuntimeControlGetExecutionSummaryResponse(
+    target: LogosNSRuntimeModuleInstanceAddress(
+      runtime_instance_id: st.runtimeId, module_instance_id: y.id
+    ),
+    state: rcState(v.state),
+    execution: rcExecution(v),
+    realization: rcRealization(y.realizationStatus),
+    # [IMPL-DECISION G230 (TF-36)] The in-process realizer is not a Module
+    # Loader instance: "Other realization mechanisms MUST use
+    # `implementation-specific`" (l.3527-3528). No selection is
+    # package-backed, so no `package` or `signer` (RUN-0637, RUN-0994); no
+    # path, configuration, credential or invocation descriptor (RUN-0642).
+    selection: Opt.some(
+      LogosNSRuntimeControlExecutionSelection(
+        implementation: LogosNSRuntimeControlExecutionSelectionImplementationChoice(
+          kind:
+            LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Implementation_specific
+        )
+      )
+    ),
+  )
+  if v.failure.isSome:
+    r.failure = Opt.some(v.failure.get.classification)
+  q.reply.answerEncoded(encode(r))
+
+proc describeProvider(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §2.4 l.448-458; CA l.250-257] The exact call surface
+  ## validated at the provider's last bind. Order: a foreign Runtime id
+  ## (INVALID_PARAMS, RUN-0091); the provider and the method's authority over
+  ## it (one non-revealing NOT_AUTHORISED, RUN-0093); a `discover` decision
+  ## for each exact contract (CAP-0042, CAP-0043), asked before readiness so a
+  ## caller without them never learns whether it was bound (RUNTIME
+  ## l.1347-1348); then readiness: never bound is NOT_READY (l.660).
+  let p = q.rc.describe.provider
+  if p.runtime_instance_id.isSome and p.runtime_instance_id.get != st.runtimeId:
+    q.reply.answerError(ecInvalidParams, "the provider names another Runtime")
+    return
+  var owner: Inst
+  for y in st.instances.values:
+    if y.providerId.len > 0 and y.providerId == p.provider:
+      owner = y
+  if owner.isNil and st.authorityMode:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  st.require(
+    q,
+    AuthzRequest(
+      action: aaObserve,
+      operation: $rmDescribeProvider,
+      consumer: x.id,
+      target: p.provider,
+      provider: p.provider,
+      providerSelector: true,
+      module: owner.moduleOf,
+    ),
+  )
+  if owner.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  # Before any bind, the contracts its record expects (the surface it can be
+  # bound with); after, the exact contracts of the validated surface.
+  var contracts = owner.surfaceContracts
+  if owner.surface.len == 0:
+    contracts.setLen(0)
+    if owner.record.primaryContract.isSome:
+      contracts.add(owner.record.primaryContract.get)
+    for c in owner.record.implements:
+      contracts.add(c)
+  var reqs: seq[AuthzRequest]
+  for c in contracts:
+    reqs.add(
+      AuthzRequest(
+        action: aaDiscover,
+        operation: $rmDescribeProvider,
+        consumer: x.id,
+        target: p.provider,
+        provider: p.provider,
+        module: owner.record.module,
+        contract: @c,
+      )
+    )
+  let d = st.decide(reqs).valueOr:
+    return
+  for i, a in d:
+    if not a.allows:
+      q.reply.answerError(ecNotAuthorised, "not authorised")
+      return
+    if a.source == psAuthority:
+      # [SPEC CA l.247-248] A discover allow may disclose fewer providers.
+      let shown = providersOf(a, st.requestBytes(reqs[i]), st.runtimeId)
+      if shown.isSome and p.provider notin shown.get:
+        q.reply.answerError(ecNotAuthorised, "not authorised")
+        return
+  st.requireReady(q)
+  if owner.surface.len == 0:
+    q.reply.answerError(ecNotReady, "the provider has not been bound")
+    return
+  q.reply.answerEncoded(
+    encode(
+      LogosNSRuntimeControlDescribeProviderResponse(
+        provider: st.providerOf(p.provider), surface: owner.surface
+      )
+    )
+  )
+
+proc permissionSettings(st: State, q: Request, x: Inst) =
+  ## [IMPL-DECISION G229] The constant form RUNTIME l.2536 and l.2541 give
+  ## when no permission profile is selected: every local instance has
+  ## revision 1, no permission and `applied` (l.2545: it grants nothing); a
+  ## replacement naming any permission names an unknown definition
+  ## (INVALID_PARAMS without detail, l.2536); an empty replacement at revision
+  ## 1 gives the existing state (l.2584). Nothing is stored.
+  let update = q.rc.m == rmUpdatePermissionSettings
+  let target = if update: q.rc.updateSettings.target else: q.rc.getSettings.target
+  let y = st.localTarget(
+    q, x, target, (if update: aaLifecycle else: aaObserve), $q.rc.m
+  ).valueOr:
+    return
+  if update:
+    let req = q.rc.updateSettings
+    if req.permissions.len > 0:
+      q.reply.answerError(
+        ecInvalidParams, "no permission definition is known to this Runtime"
+      )
+      return
+    if req.expected_revision != 1:
+      q.reply.answerError(ecInvalidParams, "permission settings revision mismatch")
+      return
+  st.requireReady(q)
+  let state = LogosNSRuntimeControlPermissionSettingsState(
+    revision: 1,
+    application: LogosNSRuntimeControlPermissionSettingsStateApplicationChoice(
+      kind: LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Applied
+    ),
+  )
+  let address = LogosNSRuntimeModuleInstanceAddress(
+    runtime_instance_id: st.runtimeId, module_instance_id: y.id
+  )
+  if update:
+    q.reply.answerEncoded(
+      encode(
+        LogosNSRuntimeControlUpdatePermissionSettingsResponse(
+          target: address, state: state
+        )
+      )
+    )
+  else:
+    q.reply.answerEncoded(
+      encode(
+        LogosNSRuntimeControlGetPermissionSettingsResponse(
+          target: address, state: state
+        )
+      )
+    )
+
 proc rc(st: State, q: Request) =
   ## [SPEC RUNTIME §9, §9.3] One Runtime Control method through a module's
   ## binding.
@@ -3397,6 +3931,16 @@ proc rc(st: State, q: Request) =
     st.retire(q, x)
   of rmCreateModule:
     st.createModule(q, x)
+  of rmListModules:
+    st.listModules(q, x)
+  of rmListRoutes:
+    st.listRoutes(q, x)
+  of rmGetExecutionSummary:
+    st.summary(q, x)
+  of rmDescribeProvider:
+    st.describeProvider(q, x)
+  of rmGetPermissionSettings, rmUpdatePermissionSettings:
+    st.permissionSettings(q, x)
   of rmEstablishRoute:
     st.establish(q, x)
   of rmRenewRoute:
@@ -3769,8 +4313,16 @@ proc observeEnd(st: State, q: Request) =
   if q.handle in r.handles:
     q.reply.answerError(ecInvalidParams, "an observer is already installed")
     return
+  if st.endRegs.getOrDefault(r.consumer) >= st.limits.endRegsPerConsumer or
+      st.endRegsTotal >= st.limits.endRegsTotal:
+    # [SPEC INTERFACE l.1483-1484; IFC-0660; I86] Nothing is installed or
+    # retained, and the existing registrations stay as they are.
+    q.reply.answerError(ecModule, "no local registration capacity")
+    return
   installEnd(q.handle, q.handler, q.userData)
   r.handles.add(q.handle)
+  st.endRegs.inc(r.consumer)
+  inc st.endRegsTotal
   q.reply.answer(Reply())
 
 proc releaseHandle(st: State, q: Request) =
@@ -3783,6 +4335,7 @@ proc releaseHandle(st: State, q: Request) =
     let i = r.handles.find(q.handle)
     if i >= 0:
       r.handles.del(i)
+      st.endRegsGone(r.consumer, 1)
     for j, p in r.pins:
       if p.handle == q.handle:
         r.pins.delete(j)
@@ -4308,6 +4861,7 @@ proc checkDeadlines(st: State) =
     st.retryStore()
     now = getMonoTime()
   st.checkEvaluations(now)
+  st.snapshots.reclaim(now)
   st.expireRoutes()
   st.checkExecutions()
   for a in st.records:
@@ -4394,6 +4948,9 @@ proc nextDeadline(st: State): Opt[MonoTime] =
   let e = st.nextExpiry()
   if e.isSome:
     consider(e.get)
+  let r = st.snapshots.nextReclaim()
+  if r.isSome:
+    consider(r.get)
   let x = st.nextExecution()
   if x.isSome:
     consider(x.get)
@@ -4506,6 +5063,8 @@ proc runtimeLoop(s: ptr Shared) =
     ctx: pinnedContext(),
     clock: cfg.clock,
     budget: (if cfg.revisionBudget == 0: DefaultRevisionBudget else: cfg.revisionBudget),
+    limits: cfg.limits.effective,
+    snapshots: initSnapshots(cfg.limits.effective),
   )
   let failed = st.load()
   if failed.isSome:
@@ -4527,11 +5086,13 @@ proc runtimeLoop(s: ptr Shared) =
       if not got.dataAvailable:
         break
       st.handle(move got.msg)
+      st.followRealizations()
       if st.done:
         break
     if st.done:
       break
     st.checkDeadlines()
+    st.followRealizations()
     st.checkBinding()
     st.checkBootstrap()
     if st.done:

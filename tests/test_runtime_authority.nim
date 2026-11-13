@@ -564,7 +564,7 @@ suite "run.authority: notices (CA §8 l.884-903)":
     e.finish()
 
 suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
-  test "[CAP-0344] [CAP-0345] [CAP-0346] [CAP-0347] [CAP-0348] [CAP-0172] [CAP-0173] [RUN-0854] a lost authority answers parked evaluations and closes admission; neither its late results nor its cache reach the next binding, whatever revision it reports":
+  test "[CAP-0344] [CAP-0345] [CAP-0346] [CAP-0347] [CAP-0348] [CAP-0172] [CAP-0173] [RUN-0854] a lost authority answers parked evaluations and closes admission; neither its late results nor its cache reach the next binding, whatever revision it reports [IMPL-DECISION G227]":
     fresh()
     let e = newEngine(caConfig(recovery = true))
     let orch = e.boot()
@@ -614,8 +614,22 @@ suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
     )
     sleep(100)
     check e.answers()[before ..^ 1].allIt(it.request.action != aaObserve)
+    # [G227] Releasing the old realization is a commit of its own: the request
+    # prepared before it carries a stale revision.
+    check waitUntil(
+      proc(): bool =
+        e.view(Ca).tryGet.execution.revision > failed.execution.revision
+    )
+    check orch.rcCall("recover_module", recover).code == ecInvalidParams
+    let current = encode(
+      LogosNSRuntimeControlRecoverModuleRequest(
+        module: CaModuleName,
+        instance: Ca,
+        expected_execution_revision: e.view(Ca).tryGet.execution.revision,
+      )
+    ).tryGet
     # Recovered under the derived rules: a new generation.
-    check orch.rcCall("recover_module", recover).code == ecOk
+    check orch.rcCall("recover_module", current).code == ecOk
     check e.bound
     check e.generation > g
     # The new binding reports the same revision; the old cached call decision

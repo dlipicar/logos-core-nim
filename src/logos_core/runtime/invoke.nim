@@ -478,6 +478,31 @@ proc rcRequest(
     var c = call(rmCreateModule)
     c.createModule = fromChecked(LogosNSRuntimeControlCreateModuleRequest, v)
     ok(c)
+  of $rmDescribeProvider:
+    var c = call(rmDescribeProvider)
+    c.describe = fromChecked(LogosNSRuntimeControlDescribeProviderRequest, v)
+    ok(c)
+  of $rmListModules:
+    var c = call(rmListModules)
+    c.listModules = fromChecked(LogosNSRuntimeControlListModulesRequest, v)
+    ok(c)
+  of $rmListRoutes:
+    var c = call(rmListRoutes)
+    c.listRoutes = fromChecked(LogosNSRuntimeControlListRoutesRequest, v)
+    ok(c)
+  of $rmGetExecutionSummary:
+    var c = call(rmGetExecutionSummary)
+    c.summary = fromChecked(LogosNSRuntimeControlGetExecutionSummaryRequest, v)
+    ok(c)
+  of $rmGetPermissionSettings:
+    var c = call(rmGetPermissionSettings)
+    c.getSettings = fromChecked(LogosNSRuntimeControlGetPermissionSettingsRequest, v)
+    ok(c)
+  of $rmUpdatePermissionSettings:
+    var c = call(rmUpdatePermissionSettings)
+    c.updateSettings =
+      fromChecked(LogosNSRuntimeControlUpdatePermissionSettingsRequest, v)
+    ok(c)
   else:
     err(
       InvocationFailure(
