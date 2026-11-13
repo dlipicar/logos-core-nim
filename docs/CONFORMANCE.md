@@ -52,8 +52,52 @@ heading under a numbered one.
 |---|---|
 | `claimed` | Built. Every live `kw`, `cddl` and `block` unit in the section must be referenced by a test. |
 | `deferred:tier-N` | Not built yet; N is the tier in `docs/SPEC-STATUS.md`. |
-| `informative` | Nothing to test (only References and Copyright). |
-| `out-of-scope:<why>` | Normative, but not this repository's to implement. |
+| `deferred:tier-4b` | Not built yet: `logosctl`, `logosd`, the Module Host and what they bring (SPEC-STATUS's Tier 4b). |
+| `informative` | Nothing to test (References, Copyright, and appendices the spec marks informative). |
+| `out-of-scope:<why>` | Normative, but not this repository's to implement: a requirement on another party (modules, contracts, applications, specifications, deployments) or a MAY not taken. |
+
+"Deferred" means not built. Behaviour that is built and differs from the text is a deviation: it is
+recorded in `docs/DECISIONS.md`, and its unit is deferred only when the text's behaviour is not built.
+
+### What is claimed at the end of Tier 4
+
+Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --closed-tier 3
+--closed-tier 4` (the flake's `spec-gate` check) fails on any status that still defers to one of them
+(DECISIONS I88).
+
+- **RUNTIME** is claimed for the **Runtime engine** in direct mode. RUNTIME l.72 defines a Runtime
+  instance as the engine plus an orchestration module; until Tier 4b the host supplies the
+  orchestration module, and `docs/HOST-CONFIG.md` ("Orchestration duties") lists what it must do. The
+  in-process realizer is an implementation-local realization mechanism (l.212), not a Module Loader,
+  so the Loader-conditional rules are not triggered. Deferred to Tier 4b: local transport mode
+  (§4.2.1, §6.2 and the hosted and transported units), the orchestration module's duties, Loader
+  loss, package-backed selection, upgrade transfer, and the stops caused by permission
+  reconciliation; to Tier 5: remote Runtimes, facades, enrollment, listeners and exports. Out of
+  scope: §5.2.1 singleton mode (a MAY not taken, l.1094), the Runtime side of system-service sessions
+  over unix-stream (a MAY profile left unused under G48(a)), and requirements on modules,
+  applications, specifications and deployments.
+- **LOADER** is not claimed: it is `deferred:tier-4b` as a whole. The realizer follows LOADER's
+  direct strategies, records and error codes ("a LOADER-shaped internal realizer"), but LOADER's
+  subject is a Module Loader provider backed by a local module instance (LOADER l.23-26), and a
+  Runtime may conform without one (RUNTIME l.27; BCP l.281). Its tests keep their `[LDR-…]` tags as
+  evidence; representing the realizer as a `logos_module_loader` instance is the first item of Tier 4b
+  (TF-36).
+- **CONFIGURATION** is claimed in full for direct mode.
+- **CAPABILITY AUTHORITY** is claimed for the local Authority and the Runtime's side of authority.
+  Deferred: §3.5 permission profiles, enforcers and definitions (G110; Tier 4b), hosted placements, OS
+  permission revocation (Tier 5), and the route ticket's decision, expiry and revocation, which the
+  Runtime supplies in 10b.
+- **TRANSPORT** is claimed for the sans-I/O protocol and the unix-stream I/O layer. Deferred: what the
+  Runtime and the Module Host trigger (10b, Tier 4b), Windows and the remote profiles (Tier 5). Out of
+  scope: §8.1.2 (a MAY profile left unused, l.1075) and requirements on contracts and deployments.
+- **INTERFACE** adds the Runtime as ABI caller, route and Runtime Control binding, asynchronous calls
+  and the invocation context. Deferred: the boundary-invariance units until a second boundary exists,
+  marked-payload erasure (Tier 4b; until then no route is made to a contract that marks a payload,
+  G244), the reverse mapper and remote bindings (Tier 5).
+- **PACKAGE MANAGER**, **SYSTEM BCP** and **SECURITY CONSIDERATIONS** keep the parts built; the
+  Package Manager handoff and complete-system composition are Tier 4b, installation and platform
+  profiles Tier 5 (with the BCP's QUIC and Package Manager realization profiles, §5.3). The BCP's
+  duties of specification authors (§5.2, §5.5) are out of scope.
 
 ## Properties not claimed
 
@@ -196,7 +240,9 @@ reason = "Statement about what a profile document must contain; satisfied by HAS
 ```
 
 `spectrace gate` (a flake check) fails when a claimed unit has no test or inspection item, when a
-test names an unknown or retired ID, or when a claims file has an invalid status.
+test names an unknown or retired ID, when a claims file has an invalid status, when an inspection item
+names a unit that is not claimed (inspection stands for a test, so it covers claimed units only), or,
+with `--closed-tier N`, when any status defers to tier N. It prints the deferred units per label.
 
 ## Mirrors and pins
 

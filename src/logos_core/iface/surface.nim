@@ -184,6 +184,16 @@ func schemaResponse*(s: ContractSet, selected: Digest): Result[CborValue, string
     return err("the schema response is larger than 8 MiB")
   ok(v)
 
+func schemaResponse*(b: ModuleBinding, selected: Digest): Result[CborValue, string] =
+  ## [SPEC RUNTIME §2.4 l.432-434, §3.3 l.513-514] The same, from a provider's
+  ## validated call surface: the exact documents the provider supplied.
+  var s = ContractSet(interfaces: b.interfaces, supporting: b.supporting)
+  if b.primary.isSome:
+    s.primary = b.primary.get
+  elif s.interfaces.allIt(it.root != selected):
+    return err("the set has no contract with the selected root")
+  schemaResponse(s, selected)
+
 func entries(v: CborValue, key: string): Result[seq[Contract], string] =
   ## The (namespace, root, document) of each entry; their documents are accepted
   ## later, with the whole set.

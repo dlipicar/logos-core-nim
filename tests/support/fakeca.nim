@@ -117,6 +117,10 @@ var
   failInit*: Atomic[bool]
   publishFn: Atomic[pointer]
   publishData: Atomic[pointer]
+  dispatchEntries*: Atomic[int] ## `dispatch` calls
+  dirtyEntries*: Atomic[int]
+    ## `dispatch` calls entered with a response output not null or not zero
+    ## (INTERFACE §2.6 l.1754)
 
 initLock(lock)
 
@@ -607,6 +611,9 @@ proc fakeDispatch(
     outResp: ptr ptr UncheckedArray[uint8],
     outLen: ptr csize_t,
 ): LogosResult {.cdecl, gcsafe.} =
+  dispatchEntries += 1
+  if outResp == nil or outLen == nil or outResp[] != nil or outLen[] != 0:
+    dirtyEntries += 1
   {.cast(gcsafe).}:
     if $methodName != "evaluate":
       return LogosResult(code: CErrorCode(ord(ecModule)))

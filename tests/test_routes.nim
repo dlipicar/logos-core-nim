@@ -9,13 +9,14 @@
 ## calls Runtime Control as that module. Module code runs on the engine's
 ## workers, so the test modules keep their state in atomics.
 
-import std/[atomics, monotimes, os, sequtils, times, typedthreads]
+import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
-import ../src/logos_core/abi/types
+import ../src/logos_core/abi/[checks, types]
+import ../src/logos_core/runtime/invoke
 import ../src/logos_core/cbor
 import ../src/logos_core/commitment
-import ../src/logos_core/iface/[accept, outcome, surface]
+import ../src/logos_core/iface/[accept, outcome, provider, surface]
 import ../src/logos_core/iface/common_types
 import ./support/[kitbuild, kitruntime]
 import ./kit/[meter_impl, sensor_impl]
@@ -29,6 +30,36 @@ createDir(work)
 
 include ./support/routefixture
 
+let
+  sensorReg = checkStaticRegistration("sensor", sensorModuleStaticSymbols()).tryGet
+  sensorSet = block:
+    # The contracts the sensor provider's call surface resolves to.
+    let b = bindNative(
+      ModuleCode(kind: codeStatic, table: sensorReg.symbols), "sensor_module"
+    ).tryGet.contracts
+    acceptContractSet(
+      b.primary.get.source, b.interfaces.mapIt(it.source), b.supporting.mapIt(it.source)
+    ).tryGet
+
+proc sensor(): ModuleRecord =
+  ModuleRecord(
+    module: "sensor_module",
+    strategy: stDirectStatic,
+    binding: "sensor",
+    primaryContract: Opt.some(sensorSet.primary.root),
+    implements: @[sensorSet.interfaces[0].root],
+  )
+
+func responseOf(schema: string, ifaces, supporting: seq[Contract]): seq[byte] =
+  ## A `logos.schema_response` of these documents, as given.
+  encodeCbor(
+    cborMap(
+      (cbor("interface_schemas"), cborArray(ifaces.mapIt(supportingEntry(it)))),
+      (cbor("schema"), cbor(schema)),
+      (cbor("supporting_schemas"), cborArray(supporting.mapIt(supportingEntry(it)))),
+    )
+  )
+
 # Tests --------------------------------------------------------------------------------
 
 suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)":
@@ -41,7 +72,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
       check c in {'0' .. '9', 'a' .. 'f', '-'}
     check newRuntimeInstanceId() != id
 
-  test "[RUN-0896] [RUN-0901] [RUN-0902] [RUN-0908] [RUN-0909] get_self and get_execution_permissions are caller-bound (§9.3 l.2553, l.2562)":
+  test "[RUN-0292] [RUN-0783] [RUN-0896] [RUN-0901] [RUN-0902] [RUN-0908] [RUN-0909] get_self and get_execution_permissions are caller-bound (§9.3 l.2553, l.2562)":
     let e = fixtureEngine(config(denying(deny(action = Opt.some(aaRuntimeControl)))))
     let (c, rc) = e.startClient()
     let r = rcCall(rc, "get_self", [0xA0'u8])
@@ -57,13 +88,37 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check rcCall(rc, "shutdown_runtime", [0xA0'u8]).code == ecNotAuthorised
     e.finish()
 
-  test "[RUN-0897] [RUN-0905] get_self is callable during initialization (§9.3 l.2557)":
+  test "[RUN-0897] [RUN-0905] [IFC-0521] get_self is callable during initialization (§9.3 l.2557)":
     initProbe.store(true)
     initSelfCode.store(-1)
     let e = fixtureEngine(config())
     discard e.startClient()
     initProbe.store(false)
     check initSelfCode.load == ord(ecOk)
+    e.finish()
+
+  test "[RUN-0293] the binding a module receives at initialization is the complete version-2 table (§8.1 l.1556)":
+    let e = fixtureEngine(config())
+    let (_, rc) = e.startClient()
+    check checkRuntimeControl(rc).isOk
+    check rc.state != nil
+    check rc.vtable.abiVersion == RuntimeControlVtableAbiVersion
+    check rc.vtable.structSize == csize_t(sizeof(LogosRuntimeControlVtable))
+    e.finish()
+
+  test "[RUN-0899] [RUN-0903] a call without an authenticated, realization-bound association is NOT_AUTHORISED (§9.3 l.2553, l.2563)":
+    let e = fixtureEngine(config())
+    let (c, rc) = e.startClient()
+    for bare in ["get_self", "get_execution_permissions"]:
+      # An attempt token the Runtime never issued, and an unknown instance.
+      for (instance, attempt) in [
+        (c.instance, "attempt-never-issued"), ("m-unknown", "a")
+      ]:
+        let r = rcInvoke(e, instance, attempt, bare, @[0xA0'u8])
+        check r.isErr
+        check r.error.code == ecNotAuthorised
+      # The binding the instance received still answers.
+      check rcCall(rc, bare, [0xA0'u8]).code == ecOk
     e.finish()
 
   test "[RUN-0042] [IFC-0416] [IFC-0418] [IFC-0419] method names and requests are checked before anything else (INTERFACE §4.5)":
@@ -212,7 +267,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     e.finish()
 
 suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
-  test "[RUN-0557] [RUN-0943] [RUN-0542] [RUN-0624] [RUN-0184] a single route to a ready provider (§9.3 l.3135-3146)":
+  test "[RUN-0557] [RUN-0943] [RUN-0542] [RUN-0624] [RUN-0184] [RUN-0536] [RUN-0593] [RUN-0782] [RUN-0942] a single route to a ready provider (§9.3 l.3135-3146)":
     let e = fixtureEngine(config())
     let m = e.started(meter())
     let (c, rc) = e.startClient()
@@ -237,7 +292,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check e.routes().mapIt(encode(it).tryGet) == @[encode(rec).tryGet]
     e.finish()
 
-  test "[IMPL-DECISION G169] [RUN-0556] [RUN-0188] [RUN-0121] establishment failures":
+  test "[IMPL-DECISION G169] [RUN-0556] [RUN-0188] [RUN-0121] [RUN-0546] establishment failures":
     let e = fixtureEngine(config())
     let idle = e.create(meter()).tryGet
     let (_, rc) = e.startClient()
@@ -273,7 +328,40 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check e.routes().len == 2
     e.finish()
 
-  test "[IMPL-DECISION G52] [IMPL-DECISION G169] [RUN-0850] [RUN-0186] [RUN-0563] [RUN-0564] authorization at establishment (§9 l.1626, l.3138; G52)":
+  test "[RUN-0547] [RUN-0548] access lists must be strictly ascending without duplicates; nothing is sorted or deduplicated (§9.3 l.3024-3025)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let common = meterSet.context.commonModel
+    let read = declRoot("meter.read")
+    let schema = @(declarationRoot(common, common.find("logos.schema").get))
+    let event = declRoot("meter.changed_event")
+    proc below(a, b: seq[byte]): bool =
+      for i in 0 ..< min(a.len, b.len):
+        if a[i] != b[i]:
+          return a[i] < b[i]
+      a.len < b.len
+
+    let (lo, hi) =
+      if below(read, schema):
+        (read, schema)
+      else:
+        (schema, read)
+    let before = e.routes().len
+    for (key, scope) in [
+      ("down", access(methods = Opt.some(@[hi, lo]))),
+      ("twice", access(methods = Opt.some(@[read, read]))),
+      ("events", access(subscribe = Opt.some(@[event, event]))),
+    ]:
+      check rc.establish(key, scope = scope).code == ecInvalidParams
+      check e.routes().len == before
+    let scope = access(methods = Opt.some(@[lo, hi]), subscribe = Opt.some(@[event]))
+    let up = rc.establish("up", scope = scope)
+    check up.code == ecOk
+    check up.routesOf.routes[0].access == scope
+    e.finish()
+
+  test "[IMPL-DECISION G52] [IMPL-DECISION G169] [RUN-0162] [RUN-0850] [RUN-0186] [RUN-0278] [RUN-0553] [RUN-0563] [RUN-0564] [RUN-0573] [CAP-0041] authorization at establishment (§9 l.1626, l.3138; G52)":
     for rule in [
       deny(action = Opt.some(aaRuntimeControl), operation = "establish_route"),
       deny(action = Opt.some(aaRoute)),
@@ -295,7 +383,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check rc.establish("k").code == ecOk
     e.finish()
 
-  test "[RUN-0947] request_key replay (§9.3 l.3176-3183)":
+  test "[RUN-0568] [RUN-0944] [RUN-0945] [RUN-0947] request_key replay (§9.3 l.3176-3183)":
     let e = fixtureEngine(config())
     let m = e.create(meter()).tryGet
     let (_, rc) = e.startClient()
@@ -313,7 +401,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check e.routes().len == 2
     e.finish()
 
-  test "[RUN-0556] [RUN-0557] [RUN-0558] [RUN-0280] all-runtime-visible and single selection (§9.3 l.3140-3146)":
+  test "[RUN-0277] [RUN-0279] [RUN-0556] [RUN-0557] [RUN-0558] [RUN-0280] all-runtime-visible and single selection (§9.3 l.3140-3146)":
     let e = fixtureEngine(config())
     let a = e.started(meter())
     let b = e.create(meter()).tryGet
@@ -358,7 +446,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check rc.renew("r3", first.route).code == ecNotReady
     e.finish()
 
-  test "[IMPL-DECISION G170] [RUN-0887] [RUN-0836] [RUN-0990] [RUN-0580] a denied renewal revokes the route [IMPL-DECISION G170] (TF-17)":
+  test "[IMPL-DECISION G170] [RUN-0887] [RUN-0836] [RUN-0990] [RUN-0580] [IFC-0662] a denied renewal revokes the route [IMPL-DECISION G170] (TF-17)":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
@@ -422,7 +510,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     e.finish()
 
 suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)":
-  test "[IFC-0510] [IFC-0491] [RUN-0866] [RUN-0152] materialize a route and call the provider through it":
+  test "[IFC-0510] [IFC-0491] [IFC-0517] [RUN-0145] [RUN-0866] [RUN-0152] [RUN-0810] materialize a route and call the provider through it":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (c, rc) = e.startClient()
@@ -438,7 +526,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     h.release()
     e.finish()
 
-  test "[IFC-0448] [IFC-0930] logos.schema is answered by the boundary (INTERFACE l.3275-3277)":
+  test "[IFC-0448] [IFC-0930] [RUN-0086] logos.schema is answered by the boundary (INTERFACE l.3275-3277)":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -450,7 +538,34 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     h.release()
     e.finish()
 
-  test "[IMPL-DECISION G172] [RUN-0152] [RUN-0153] [IFC-0932] provider failures, bad requests and bad responses":
+  test "[CAP-0044] [IFC-0537] narrowed access never narrows the contract logos.schema returns (CA §3.1 l.268)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let common = meterSet.context.commonModel
+    let schemaMethod = @(declarationRoot(common, common.find("logos.schema").get))
+    let narrowed =
+      rc.establish("n", scope = access(methods = Opt.some(@[schemaMethod])))
+    check narrowed.code == ecOk
+    check narrowed.routesOf.routes[0].expected_contract.get.schema_root == @meterRoot
+    var n = rc.handle(narrowed.routesOf.routes[0].route)
+    var w = rc.handle(rc.routeId("w"))
+    let fromNarrowed = n.raw("schema", [0xA0'u8])
+    let fromWhole = w.raw("schema", [0xA0'u8])
+    check fromNarrowed.code == ecOk
+    check fromWhole.code == ecOk
+    # The same bytes: the whole selected contract, `meter.read` (outside the
+    # access) included, never a subset made for the route.
+    check fromNarrowed.response == fromWhole.response
+    check fromNarrowed.response == meterSchema
+    check acceptSchemaResponse(fromNarrowed.response, meterRoot).isOk
+    check n.read(5).error.code == ecNotAuthorised
+    check w.read(5).isOk
+    n.release()
+    w.release()
+    e.finish()
+
+  test "[IMPL-DECISION G172] [RUN-0152] [RUN-0153] [RUN-0551] [RUN-0689] [IFC-0932] provider failures, bad requests and bad responses":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -469,7 +584,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     h.release()
     e.finish()
 
-  test "[RUN-0866] [RUN-0188] the access scope and the per-call decision (§9.3 l.3003-3004; l.1732)":
+  test "[RUN-0154] [RUN-0866] [RUN-0188] the access scope and the per-call decision (§9.3 l.3003-3004; l.1732)":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaCall), consumer = "denied")))
     )
@@ -493,7 +608,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     d.release()
     e.finish()
 
-  test "[IFC-0943] [IFC-0945] [IFC-0946] [IFC-0947] [RUN-0184] materialize_route failures (INTERFACE §5.2 l.3884-3890)":
+  test "[IFC-0512] [IFC-0513] [IFC-0514] [IFC-0515] [IFC-0943] [IFC-0945] [IFC-0946] [IFC-0947] [RUN-0146] [RUN-0147] [RUN-0184] [RUN-0531] materialize_route failures (INTERFACE §5.2 l.3884-3890)":
     let e = fixtureEngine(
       config(
         denying(
@@ -527,7 +642,153 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     check rc.materialize(route)[0] == ecNotReady
     e.finish()
 
-  test "[IFC-0656] [IFC-0657] [IFC-0659] [IFC-0661] [IFC-0663] [IFC-0664] [RUN-0256] [RUN-0837] observe_end and closure (INTERFACE §2.5 l.1474-1497)":
+  test "[IFC-0942] describe_provider's descriptor bytes are not construction input; projected to the selected contract as one logos.schema_response they are (INTERFACE §5.2 l.3870)":
+    let e = fixtureEngine(config())
+    let m = e.started(meter())
+    let (_, rc) = e.startClient()
+    let route = rc.routeId("k")
+    let d = rcCall(
+      rc,
+      "describe_provider",
+      encode(
+        LogosNSRuntimeControlDescribeProviderRequest(
+          provider: providerAddress(m.providerId)
+        )
+      ).tryGet,
+    )
+    check d.code == ecOk
+    let surface =
+      LogosNSRuntimeControlDescribeProviderResponse.decode(d.response).tryGet.surface
+    let (code, h) = rc.materialize(route, meterRoot, surface)
+    check code == ecInvalidParams
+    check h.vtable == nil and h.state == nil
+    let b = acceptCallSurfaceDescriptor(surface, "meter_module").tryGet
+    let projected = encodeCbor(
+      schemaResponse(
+        acceptContractSet(
+          b.primary.get.source,
+          b.interfaces.mapIt(it.source),
+          b.supporting.mapIt(it.source),
+        ).tryGet,
+        meterRoot,
+      ).tryGet
+    )
+    check projected == meterSchema
+    let (madeCode, made) = rc.materialize(route, meterRoot, projected)
+    check madeCode == ecOk
+    var p = made
+    check p.read(5).isOk
+    p.release()
+    e.finish()
+
+  test "[IFC-0944] semantic CDDL, document-set and resource-limit failures of the construction input are INVALID_PARAMS without validation detail (INTERFACE §5.2 l.3886)":
+    let e = fixtureEngine(config(extra = @[sensorReg]))
+    discard e.started(meter())
+    discard e.started(sensor(), "s1")
+    let (_, rc) = e.startClient()
+    let meterRoute = rc.routeId("m")
+    let primary = sensorSet.primary.root
+    let sensorRoute = rc.establish("s", primary).routesOf.routes[0].route
+    # Deterministic CBOR and a logos.schema_response value each: the document
+    # refers to a rule it does not define; the interface `_implements` names
+    # is missing.
+    let undefined =
+      responseOf(meterSet.primary.source & "meter.broken = meter.missing\n", @[], @[])
+    let incomplete = responseOf(sensorSet.primary.source, @[], sensorSet.supporting)
+    check "undefined name" in acceptSchemaResponse(undefined).error
+    check "names no supplied interface" in acceptSchemaResponse(incomplete).error
+    let oversized = newSeq[byte](MaxSchemaResponseBytes + 1)
+    for (route, root, bytes) in [
+      (meterRoute, meterRoot, undefined),
+      (sensorRoute, primary, incomplete),
+      (meterRoute, meterRoot, oversized),
+    ]:
+      let r = rc.materializeStatus(route, root, bytes)
+      check r.code == ecInvalidParams
+      check r.detailNull and r.detailLen == 0
+      check r.handle.vtable == nil and r.handle.state == nil
+    # The same routes materialize from valid construction input.
+    var good = rc.materializeStatus(
+      sensorRoute, primary, encodeCbor(schemaResponse(sensorSet, primary).tryGet)
+    )
+    check good.code == ecOk
+    good.handle.release()
+    var h = rc.handle(meterRoute)
+    h.release()
+    e.finish()
+
+  test "[RUN-0087] an interface route's logos.schema is the provider's validated interface contract, never a consumer's construction input or the primary contract (RUNTIME §2.4 l.432-434)":
+    let e = fixtureEngine(config(extra = @[sensorReg]))
+    discard e.started(sensor(), "s1")
+    let (_, rc) = e.startClient()
+    let iface = sensorSet.interfaces[0]
+    let ifaceSchema = encodeCbor(schemaResponse(sensorSet, iface.root).tryGet)
+    let route = rc.establish("i", iface.root).routesOf.routes[0].route
+    # A consumer's copy of the interface document that differs only in a
+    # comment reconstructs the same root. It is materialized first, so it is
+    # the construction input this thread validated first.
+    let copy = acceptContractSet(iface.source & "; the consumer's copy\n").tryGet
+    check copy.primary.root == iface.root
+    let copySchema = encodeCbor(schemaResponse(copy, iface.root).tryGet)
+    check copySchema != ifaceSchema
+    let (copyCode, copyMade) = rc.materialize(route, iface.root, copySchema)
+    check copyCode == ecOk
+    var c = copyMade
+    let (code, made) = rc.materialize(route, iface.root, ifaceSchema)
+    check code == ecOk
+    var h = made
+    let fromCopy = c.raw("schema", [0xA0'u8])
+    check fromCopy.code == ecOk
+    check fromCopy.response == ifaceSchema
+    let fromExact = h.raw("schema", [0xA0'u8])
+    check fromExact.code == ecOk
+    check fromExact.response == ifaceSchema
+    # The interface document alone: not the primary contract, and not
+    # metrics_types, which only the primary contract uses.
+    check sensorSet.supporting.len == 1
+    let v = decodeCbor(fromExact.response).tryGet
+    check v.lookup("schema").get.text == iface.source
+    check v.lookup("interface_schemas").get.items.len == 0
+    check v.lookup("supporting_schemas").get.items.len == 0
+    c.release()
+    h.release()
+    e.finish()
+
+  test "[RUN-0155] each direct route reaches the context of its own selected instance, never another initialization of the binding (RUNTIME §4.1 l.858)":
+    var cfg = config()
+    cfg.stateRoot = Opt.some(cfg.workDir / "state")
+    let e = fixtureEngine(cfg)
+    var ra = meter()
+    ra.stateAssignment = Opt.some("sa")
+    var rb = meter()
+    rb.stateAssignment = Opt.some("sb")
+    # Two initializations of the one static binding `meter`.
+    let a = e.started(ra, "m1")
+    let b = e.started(rb, "m2")
+    let (_, rc) = e.startClient()
+    var routes: seq[string]
+    for (key, v) in [("a", a), ("b", b)]:
+      let r = rc.establish(key, provider = Opt.some(providerAddress(v.providerId)))
+      check r.code == ecOk
+      check r.routesOf.routes[0].target_provider.provider == v.providerId
+      routes.add(r.routesOf.routes[0].route)
+    var ha = rc.handle(routes[0])
+    var hb = rc.handle(routes[1])
+    for (h, state, reads) in [
+      (addr ha, "sa", 1'u64),
+      (addr ha, "sa", 2'u64),
+      (addr hb, "sb", 1'u64),
+      (addr ha, "sa", 3'u64),
+      (addr hb, "sb", 2'u64),
+    ]:
+      let r = h[].read(20).tryGet
+      check r.label == state
+      check r.reading.value == reads
+    ha.release()
+    hb.release()
+    e.finish()
+
+  test "[IFC-0656] [IFC-0657] [IFC-0659] [IFC-0661] [IFC-0663] [IFC-0664] [RUN-0256] [RUN-0837] [RUN-0839] [RUN-0840] observe_end and closure (INTERFACE §2.5 l.1474-1497)":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -603,7 +864,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     e.finish()
 
 suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9.3)":
-  test "[IMPL-DECISION G171] [RUN-0579] [RUN-0580] [RUN-0360] [RUN-0887] [IFC-0665] a stopped provider fails its routes":
+  test "[IMPL-DECISION G171] [RUN-0165] [RUN-0579] [RUN-0580] [RUN-0360] [RUN-0574] [RUN-0841] [RUN-0887] [IFC-0665] a stopped provider fails its routes":
     let e = fixtureEngine(config())
     let m = e.started(meter())
     let (_, rc) = e.startClient()
@@ -661,7 +922,7 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     check failed.failure.get.code == "consumer-unavailable"
     e.finish()
 
-  test "[IFC-0740] [IFC-0287] an admitted call holds its provider's release and sees cancellation (§3.4 l.623)":
+  test "[IFC-0740] [IFC-0287] [IFC-0288] [RUN-0299] [RUN-0300] an admitted call holds its provider's release and sees cancellation (§3.4 l.623)":
     let e = fixtureEngine(config())
     let m = e.started(meter())
     let (_, rc) = e.startClient()
@@ -771,7 +1032,7 @@ suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
     e.finish()
 
 suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)":
-  test "[RUN-1031] [RUN-1032] [RUN-1033] [RUN-1034] [RUN-1035] [RUN-1036] [RUN-1037] [RUN-1042] selection by instance, by name and by provider":
+  test "[RUN-0664] [RUN-1031] [RUN-1032] [RUN-1033] [RUN-1034] [RUN-1035] [RUN-1036] [RUN-1037] [RUN-1042] selection by instance, by name and by provider":
     let e = fixtureEngine(config())
     let m = e.create(meter(), "m1").tryGet
     let (c, rc) = e.startClient()
@@ -847,7 +1108,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
       Opt.some("s1")
     e.finish()
 
-  test "[RUN-1038] [RUN-1039] [RUN-1040] name-only selection needs observation authority first (l.3666-3670)":
+  test "[RUN-0665] [RUN-1038] [RUN-1039] [RUN-1040] name-only selection needs observation authority first (l.3666-3670)":
     let e = fixtureEngine(config(denying(deny(action = Opt.some(aaObserve)))))
     discard e.create(meter(), "m1").tryGet
     let (_, rc) = e.startClient()

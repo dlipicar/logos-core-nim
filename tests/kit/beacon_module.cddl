@@ -1,0 +1,9 @@
+; -- metadata --
+_module = "beacon_module"
+
+; Input for tests/generated/beacon_module_*: a provider whose contract set
+; declares one event and no method (INTERFACE §2.6).
+
+beacon.flashed_event = {
+  count: uint64,
+}

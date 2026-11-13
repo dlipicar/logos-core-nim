@@ -421,7 +421,7 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     check e.view("w").tryGet.state == msReady
     e.finish()
 
-  test "[RUN-0699] routes that failed with the previous realization stay failed":
+  test "[RUN-0583] [RUN-0699] routes that failed with the previous realization stay failed":
     let e = newEngine(rconfig())
     let (_, arc) = e.startClient("a")
     let m = e.started(meter(), "m")
@@ -713,7 +713,7 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     check e.view("c").isOk
     e.finish()
 
-  test "[RUN-1018] [RUN-1022] [RUN-1012] [RUN-1017] [RUN-1019] [RUN-1014] retirement removes the instance durably before it answers, and nothing else":
+  test "[RUN-0926] [RUN-1018] [RUN-1022] [RUN-1012] [RUN-1017] [RUN-1019] [RUN-1014] retirement removes the instance durably before it answers, and nothing else":
     let base = freshBase()
     let e = openEngine(pconfig(base)).tryGet
     let (a, arc) = e.startClient("a")
@@ -789,7 +789,7 @@ suite "run.rc: create_module (RUNTIME §9.3 l.3613-3634)":
   setup:
     reset()
 
-  test "[RUN-0658] [RUN-1026] [IMPL-DECISION G195] a module with no declaration is refused as a denial is":
+  test "[IMPL-DECISION G195] [RUN-0658] [RUN-1026] [IFC-0472] a module with no declaration is refused as a denial is":
     let e = newEngine(
       rconfig(
         denying(deny(operation = "create_module", consumer = "d")),
@@ -810,7 +810,7 @@ suite "run.rc: create_module (RUNTIME §9.3 l.3613-3634)":
     check arc.createOn("counter_module", "k").code == ecOk
     e.finish()
 
-  test "[RUN-0659] a created instance is fresh, unloaded and uninitialized, and its start is authorized apart":
+  test "[RUN-0659] [CAP-0064] a created instance is fresh, unloaded and uninitialized, and its start is authorized apart":
     let e = newEngine(
       rconfig(
         denying(deny(operation = "start_module", consumer = "a")),

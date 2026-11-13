@@ -2,19 +2,38 @@
 # The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
 #   claimed               every requirement unit in it needs a test tagged [CAP-NNNN]
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   deferred:tier-4b      not built yet: logosctl, logosd, the Module Host and what they bring
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
 
-default = "deferred:tier-4"
+# The local Capability Authority (Tier 4 steps 8a and 8b, DECISIONS I84, I85) and the route ticket
+# (10a, I83); claimed with Tier 4 (I88).
+default = "claimed"
 
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
+# Permission profiles, enforcers and permission definitions: no profile is selected (CA l.392, l.394,
+# l.406), so these are duties of a profile or a definition; G110's host-ambient definition is Tier 4b,
+# per-module OS enforcement Tier 5. The one duty that applies with no definition is claimed below.
+"§3.5" = "deferred:tier-4b"
 
 [units]
+# Tested by 8a and 8b inside §3.5: an unknown permission or invalid constraints are rejected, and the
+# rules that hold with no definition.
+"CAP-0072" = "claimed"
+"CAP-0073" = "claimed"
+"CAP-0074" = "claimed"
+"CAP-0084" = "claimed"
+# Permission definitions (G110) and hosted placements in execution decisions: the Module Host.
+"CAP-0021" = "deferred:tier-4b"
+"CAP-0065" = "deferred:tier-4b"
+"CAP-0066" = "deferred:tier-4b"
+# Operating-system permission revocation: per-module OS enforcement.
+"CAP-0192" = "deferred:tier-5"
 # §11, transport step 10a (DECISIONS I83): the route ticket binds the consumer, provider, contract and
-# route access; bad material gives no session and no dispatch; a COSE object is not a Hello token.
-# CAP-0254 (decision, freshness, revocation) is tagged and claimed with 10b, which supplies them.
-"CAP-0253" = "claimed"
-"CAP-0255" = "claimed"
-"CAP-0256" = "claimed"
+# route access; bad material gives no session and no dispatch; a COSE object is not a Hello token
+# (CAP-0253, CAP-0255, CAP-0256, claimed by default). The binding carries the decision, its expiry
+# and revocation, but they come from a test owner until the Runtime supplies them in 10b: tagged, not
+# claimed (fable-review §7.5).
+"CAP-0254" = "deferred:tier-4b"

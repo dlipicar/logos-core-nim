@@ -186,7 +186,7 @@ proc slows(e: Engine, names: varargs[string]) =
 # list_modules -------------------------------------------------------------------------
 
 suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
-  test "[RUN-0401] [RUN-0414] [RUN-0415] [RUN-0627] [RUN-0972] [RUN-0973] [RUN-0975] every local instance, instance keys before provider keys, each as one committed view":
+  test "[RUN-0282] [RUN-0283] [RUN-0401] [RUN-0414] [RUN-0415] [RUN-0627] [RUN-0972] [RUN-0973] [RUN-0975] every local instance, instance keys before provider keys, each as one committed view":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     e.slows("s")
@@ -447,7 +447,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     t.finish()
     e.finish()
 
-  test "[RUN-0850] [RUN-0950] [RUN-0951] [RUN-0957] [RUN-0964] [IMPL-DECISION G161] a record the caller may not observe is omitted, and counts toward no page or continuation":
+  test "[IMPL-DECISION G161] [RUN-0850] [RUN-0950] [RUN-0951] [RUN-0957] [RUN-0964] [RUN-0974] a record the caller may not observe is omitted, and counts toward no page or continuation":
     let e = fixtureEngine(
       config(
         denying(
@@ -488,7 +488,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     check rc.routeList(limit = some16(0)).code == ecNotAuthorised
     e.finish()
 
-  test "[RUN-0870] [RUN-0871] [RUN-0872] [RUN-0873] [RUN-1052] [RUN-1057] [RUN-1060] a failure carries its classification; a realizer message is never disclosed, other text is cut at 512 bytes":
+  test "[RUN-0870] [RUN-0871] [RUN-0872] [RUN-0873] [RUN-0952] [RUN-1052] [RUN-1057] [RUN-1060] a failure carries its classification; a realizer message is never disclosed, other text is cut at 512 bytes":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")
@@ -521,7 +521,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
 # list_routes --------------------------------------------------------------------------
 
 suite "run.rc: list_routes (RUNTIME §9.3 l.3359-3365, l.3372-3413)":
-  test "[RUN-0406] [RUN-0416] [RUN-0417] [RUN-0612] every route record by route id, ended ones included, without invocation":
+  test "[RUN-0406] [RUN-0416] [RUN-0417] [RUN-0545] [RUN-0612] every route record by route id, ended ones included, without invocation":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")
@@ -774,7 +774,7 @@ suite "run.rc: describe_provider (RUNTIME §2.4 l.448-458)":
       want
     e.finish()
 
-  test "[RUN-0091] [RUN-0093] [CAP-0042] [CAP-0043] another Runtime is INVALID_PARAMS; an unknown or refused provider and a refused discover are NOT_AUTHORISED; never bound is NOT_READY":
+  test "[RUN-0091] [RUN-0093] [CAP-0042] [CAP-0043] [CAP-0156] [IFC-0471] another Runtime is INVALID_PARAMS; an unknown or refused provider and a refused discover are NOT_AUTHORISED; never bound is NOT_READY":
     block:
       let e = fixtureEngine(config())
       discard e.started(meter(), "m")
@@ -842,7 +842,7 @@ suite "run.rc: describe_provider (RUNTIME §2.4 l.448-458)":
 # Permission settings ------------------------------------------------------------------
 
 suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DECISION G229]":
-  test "[RUN-0893] [RUN-0910] [RUN-0469] every local instance has its settings at revision 1, empty and applied":
+  test "[RUN-0893] [RUN-0910] [RUN-0469] [RUN-0471] every local instance has its settings at revision 1, empty and applied":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     e.slows("s")
@@ -860,7 +860,7 @@ suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DE
         LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Applied
     e.finish()
 
-  test "[RUN-0474] [RUN-0475] [RUN-0892] [RUN-0875] an empty replacement at revision 1 returns that state; a permission or another revision is INVALID_PARAMS without detail":
+  test "[RUN-0468] [RUN-0470] [RUN-0474] [RUN-0475] [RUN-0481] [RUN-0892] [RUN-0875] an empty replacement at revision 1 returns that state; a permission or another revision is INVALID_PARAMS without detail":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")

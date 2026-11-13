@@ -213,7 +213,7 @@
             spec-mirrors = specCheck "spec-mirrors" "spectrace mirror";
             spec-pins = specCheck "spec-pins" "spectrace pins";
             spec-ledger = specCheck "spec-ledger" "spectrace check";
-            spec-gate = specCheck "spec-gate" "spectrace gate";
+            spec-gate = specCheck "spec-gate" "spectrace gate --closed-tier 1 --closed-tier 2 --closed-tier 3 --closed-tier 4";
             oracle-selftest = specCheck "oracle-selftest" "python3 oracle/selftest.py && python3 oracle/gen_cddl_vectors.py --check && python3 oracle/gen_hash_vectors.py --check && python3 oracle/gen_cose_vectors.py --check && python3 oracle/gen_nfc_tables.py --check";
           };
 

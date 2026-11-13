@@ -221,6 +221,72 @@ proc listen(h: var LogosRouteHandle, slot: int): LogosSubscriptionId =
     )
   ).code == ecOk
 
+# A publication through a held invocation's context, from a thread of its own, whose
+# handler waits at a gate (INTERFACE §2.9.3 l.2175-2178).
+
+const changed = [0xA1'u8, 0x65, 0x76, 0x61, 0x6C, 0x75, 0x65, 0x03] ## {"value": 3}
+
+type Reentry = object
+  module: ptr LogosModuleContext
+  inv: ptr LogosProviderInvocation
+  ctx: ptr LogosInvocationContext
+  settleInside: bool ## the handler completes, then releases, the invocation
+  entered, inside, settled: Atomic[int]
+  gate: Atomic[bool] ## the handler waits while it is true
+  code: Atomic[int] ## what the publication returned
+  returned: Atomic[bool] ## the publication returned
+  released: Atomic[bool] ## `execution_release` returned (`releasing`)
+
+var reentry: Reentry
+
+proc arm(
+    module: ptr LogosModuleContext, inv: ptr LogosProviderInvocation, settleInside: bool
+) =
+  reentry.module = module
+  reentry.inv = inv
+  reentry.ctx = inv.context
+  reentry.settleInside = settleInside
+  reentry.entered.store(0)
+  reentry.inside.store(0)
+  reentry.settled.store(0)
+  reentry.gate.store(true)
+  reentry.code.store(-1)
+  reentry.returned.store(false)
+  reentry.released.store(false)
+
+proc onReentry(
+    name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  let r = cast[ptr Reentry](userData)
+  r.entered += 1
+  r.inside += 1
+  if r.settleInside:
+    settle(r.module, r.inv) # `complete`, then `execution_release`
+    r.settled += 1
+  while r.gate.load:
+    sleep(1)
+  r.inside -= 1
+
+proc listenHeld(h: var LogosRouteHandle) =
+  var id: LogosSubscriptionId
+  check toResult(
+    h.vtable.subscribe(addr h, "meter.changed_event", onReentry, addr reentry, addr id)
+  ).code == ecOk
+
+proc publishing(r: ptr Reentry) {.thread.} =
+  let c = r.ctx.vtable.publish(
+    r.ctx,
+    "meter.changed_event",
+    cast[ptr UncheckedArray[uint8]](unsafeAddr changed[0]),
+    csize_t(changed.len),
+  )
+  r.code.store(int(c.code))
+  r.returned.store(true)
+
+proc releasing(r: ptr Reentry) {.thread.} =
+  r.inv.executionRelease(r.inv)
+  r.released.store(true)
+
 # Tests ------------------------------------------------------------------------------------
 
 suite "run.async: route calls (INTERFACE §2.9.1)":
@@ -370,7 +436,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     h.release()
     e.finish()
 
-  test "[IFC-0731] [IFC-0733] [IFC-0735] cancel before submit, cancel after completion, release unsubmitted; release waits for the callback, not the provider":
+  test "[IFC-0730] [IFC-0731] [IFC-0733] [IFC-0735] cancel before submit, cancel after completion, release unsubmitted; release waits for the callback, not the provider":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -452,7 +518,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     done[0].owner.release(done[0].owner.state)
     e.finish()
 
-  test "[IFC-0720] [RUN-0807] [RUN-0808] [RUN-0809] the call outlives its handle; an ended route gives its code without dispatch; a restarted provider is never substituted":
+  test "[IFC-0720] [IFC-0722] [RUN-0807] [RUN-0808] [RUN-0809] the call outlives its handle; an ended route gives its code without dispatch; a restarted provider is never substituted":
     let e = fixtureEngine(config())
     let m = e.started(meter())
     let (_, rc) = e.startClient()
@@ -507,7 +573,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     h.release()
     e.finish()
 
-  test "[RUN-0829] [IFC-0740] [IMPL-DECISION G174] a route that ends cancels the invocation; closed, it completes with its result; revoked, NOT_AUTHORISED at once":
+  test "[IMPL-DECISION G174] [RUN-0829] [IFC-0740] [IFC-0741] a route that ends cancels the invocation; closed, it completes with its result; revoked, NOT_AUTHORISED at once":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
@@ -547,7 +613,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     h2.release()
     e.finish()
 
-  test "[RUN-0821] [RUN-0825] events an asynchronous call publishes in its scope reach the preparing handle's subscriptions":
+  test "[RUN-0821] [RUN-0825] [RUN-0843] [IFC-0721] events an asynchronous call publishes in its scope reach the preparing handle's subscriptions":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -654,9 +720,10 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
   teardown:
     for d in done.mitems:
       d.hold.store(false) # a held callback would keep `close` waiting
+    reentry.gate.store(false)
     leftover()
 
-  test "[IFC-0753] [IFC-0755] [IFC-0773] [IFC-0749] submit, then complete inline or from another thread; current is the invocation's context; synchronous calls still dispatch":
+  test "[IFC-0738] [IFC-0753] [IFC-0755] [IFC-0773] [IFC-0749] submit, then complete inline or from another thread; current is the invocation's context; synchronous calls still dispatch":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -747,7 +814,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     h.release()
     e.finish()
 
-  test "[IFC-0768] [IFC-0287] [IFC-0757] stopping the provider waits for execution release before destroy":
+  test "[IFC-0768] [IFC-0287] [IFC-0756] [IFC-0757] stopping the provider waits for execution release before destroy":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     let m = e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -797,7 +864,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     h.release()
     e.finish()
 
-  test "[IFC-0782] [IFC-0742] [RUN-0824] [RUN-0829] scoped publication through a deferred invocation's context, before and after its terminal outcome":
+  test "[IFC-0782] [IFC-0742] [RUN-0824] [RUN-0829] [RUN-0835] scoped publication through a deferred invocation's context, before and after its terminal outcome":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -838,6 +905,124 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     check publish("meter.changed_event", valid) == ecNotReady
     check heard[0].load == 1
     inv.executionRelease(inv)
+    call.release()
+    h.release()
+    e.finish()
+
+  test "[IFC-0778] a publication whose handler completes and releases its own invocation keeps the invocation until it returns; stopping the provider waits for it (INTERFACE §2.9.3 l.2175)":
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    let m = e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    mode.store(ord(dmHold))
+    var call = h.started(req(5), addr done[0])
+    let (module, inv) = takeHeld()
+    arm(module, inv, settleInside = true)
+    h.listenHeld()
+    var t: Thread[ptr Reentry]
+    createThread(t, publishing, addr reentry)
+    check waitUntil(
+      proc(): bool =
+        reentry.settled.load == 1
+    )
+    check done[0].finished
+    check done[0].codeOf == ecOk
+    # Completed and released, the invocation's publication is still running.
+    check not reentry.returned.load
+    let gone = destroyed.load
+    discard e.stop(m.instance) # answers at its deadline; the destroy waits
+    check destroyed.load == gone
+    check not reentry.returned.load
+    reentry.gate.store(false)
+    joinThread(t)
+    check ErrorCode(reentry.code.load) == ecOk
+    check waitUntil(
+      proc(): bool =
+        destroyed.load == gone + 1
+    )
+    check reentry.entered.load == 1
+    check done[0].count.load == 1
+    check ownerReleases.load == 1
+    call.release()
+    h.release()
+    e.finish()
+
+  test "[IFC-0780] execution release from another thread closes admission and returns while a publication through the invocation is in its handler; the provider is destroyed only once the publication returns (INTERFACE §2.9.3 l.2175-2177)":
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    let m = e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    mode.store(ord(dmHold))
+    var call = h.started(req(5), addr done[0])
+    let (module, inv) = takeHeld()
+    arm(module, inv, settleInside = false)
+    h.listenHeld()
+    var t, r: Thread[ptr Reentry]
+    createThread(t, publishing, addr reentry)
+    check waitUntil(
+      proc(): bool =
+        reentry.inside.load == 1
+    )
+    settle(module, inv, release = false)
+    check done[0].finished
+    check done[0].codeOf == ecOk
+    createThread(r, releasing, addr reentry)
+    check waitUntil(
+      proc(): bool =
+        reentry.released.load
+    )
+    check reentry.inside.load == 1 # the handler still holds the publication
+    check not reentry.returned.load
+    # Release closed admission: a new context operation is refused, while the
+    # publication admitted before it keeps the state.
+    let ctx = inv.context
+    var view: LogosCallerView
+    check toResult(ctx.vtable.caller(ctx, addr view)).code == ecModule
+    check ctx.vtable.isCancelled(ctx)
+    let gone = destroyed.load
+    discard e.stop(m.instance) # answers at its deadline; the destroy waits
+    check destroyed.load == gone
+    check not reentry.returned.load
+    reentry.gate.store(false)
+    joinThread(t)
+    joinThread(r)
+    check ErrorCode(reentry.code.load) == ecOk
+    check waitUntil(
+      proc(): bool =
+        destroyed.load == gone + 1
+    )
+    check done[0].count.load == 1
+    call.release()
+    h.release()
+    e.finish()
+
+  test "[IFC-0952] a failed caller query leaves the output view as it was, padding included (INTERFACE §5.2 l.3901)":
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    mode.store(ord(dmHold))
+    var call = h.started(req(5), addr done[0])
+    let (module, inv) = takeHeld()
+    let ctx = inv.context
+    var marker = [0x5A'u8]
+    var view: LogosCallerView
+    let bytes = cast[ptr array[sizeof(LogosCallerView), byte]](addr view)
+    for b in bytes[].mitems:
+      b = 0xA5
+    view.kind = 7
+    view.runtimeInstanceId =
+      LogosUtf8View(data: cast[ptr UncheckedArray[uint8]](addr marker[0]), len: 99)
+    view.moduleInstanceId = view.runtimeInstanceId
+    let before = bytes[]
+    check toResult(ctx.vtable.caller(nil, addr view)).code == ecInvalidParams
+    check bytes[] == before
+    # The same view, queried through the invocation, is written.
+    check toResult(ctx.vtable.caller(ctx, addr view)).code == ecOk
+    check view.kind == CallerModule
+    check bytes[] != before
+    settle(module, inv)
+    check done[0].finished
     call.release()
     h.release()
     e.finish()
@@ -937,7 +1122,7 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
     gate.store(false)
     leftover()
 
-  test "[IFC-0712] [IMPL-DECISION G242] calls queued behind 64 busy call workers get overflow workers, whichever thread submitted them":
+  test "[IMPL-DECISION G242] [IFC-0712] [IFC-0771] [RUN-0217] calls queued behind 64 busy call workers get overflow workers, whichever thread submitted them":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()

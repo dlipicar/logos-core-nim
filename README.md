@@ -12,23 +12,26 @@ The specs are being revised, so the work is ordered by how settled each area is
   schema, and `lcn-gen`, which generates C headers (C mapping revision 3: types, method typedefs and, for a module
   binding, its provider functions and module symbols) and Nim types with codecs. Generated C headers are stamped
   `PROVISIONAL ABI`.
-- Tier 4, started: the Nim module kit. `lcn-gen kit` generates, for a module document, the exported identity,
-  lifecycle and provider symbols (`_MODULE_name`, `_init`, `_destroy`, `_call_surface`, `_free`, `_dispatch`)
-  over handlers the module author writes in Nim (I71), and the typed `_CALL_` provider functions with C
-  converters and arena response owners (I72). `lcn-gen calls` generates, for a provider's set, typed call
-  helpers over a route handle: `invoke` for Nim callers, and `lcn_invoke_*` / `lcn_clear_*` with a C header
-  for C callers (INTERFACE §2.7.2, App A.5; I73).
-- Tier 4, started: the direct-mode Runtime slice. An in-process Module Loader for `direct_static` and
-  `direct_dynamic` code, the module-instance lifecycle, Runtime Control, direct routes, events and
-  asynchronous calls (I74–I78), the Host Embedding API, `liblogos_runtime` (RUNTIME §13; I81), and
-  persistent Runtime state across restarts, with `recover_module`, `retire_module` and
-  `create_module` (I82).
 - Tier 3, without I/O: the TRANSPORT envelope, framing, Hello and route tickets, payload
   commitments, cancellation and multiplexing as codecs and state machines; and the Package Manager's
   package artifacts: the manifest and its commitment, package-signing trust input, COSE_Sign1, LGX
   archives, and `lcn-pkg`, the producer tools. Sockets, fetch, catalogs, installation and the
   resolver come later. Packages are signed with SLH-DSA-SHA2-192s (PM §4.3, FIPS 205) over the
   vendored slhdsa-c, checked against the NIST ACVP vectors (DECISIONS R4, I68).
+- Tier 4: the direct-mode Runtime engine. The Nim module kit (`lcn-gen kit` and `lcn-gen calls`:
+  exported module symbols and typed provider functions over handlers written in Nim, and typed call
+  helpers over a route handle; I70–I73); a LOADER-shaped internal realizer for `direct_static` and
+  `direct_dynamic` code; the module-instance lifecycle with persistent state and recovery; Runtime
+  Control (observation, lifecycle and configuration methods, and events); direct routes, events and
+  asynchronous calls; the Capability Authority as a `direct_static` module with its policy format
+  (`docs/AUTHORITY-POLICY.md`), and the Runtime's authorization, call records and evidence; module
+  configuration; the unix-stream transport I/O layer; and the Host Embedding API, `liblogos_runtime`
+  (I74–I88). RUNTIME (for the engine; the host supplies the orchestration module), CONFIG, the
+  Capability Authority and TRANSPORT are claimed in `conformance/claims/`; LOADER is not, since the
+  realizer is not a Module Loader instance yet ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
+- Not yet: Tier 4b (the Module Host, transported routes, `logosd` and `logosctl`, the default
+  orchestration module, the realizer as a Module Loader instance, package installation into the
+  Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 

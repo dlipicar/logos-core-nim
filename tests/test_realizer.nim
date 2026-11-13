@@ -1,8 +1,9 @@
-## The Runtime's internal Module Loader for the direct strategies
-## (`runtime/realizer.nim`): static registrations (RUNTIME §2.3, §13.3), symbol
-## resolution and call-surface validation (§1.2, §2.2, §2.4), verified dynamic
-## libraries (§3.6; LOADER §3, §12), and realize, release and get_status
-## (LOADER §6, §7, §9, §10).
+## The Runtime's in-process realizer for the direct strategies
+## (`runtime/realizer.nim`; LOADER-shaped, not a Module Loader: S11-1 (b)):
+## static registrations (RUNTIME §2.3, §13.3), symbol resolution and
+## call-surface validation (§1.2, §2.2, §2.4), verified dynamic libraries
+## (§3.6; LOADER §3, §12), and realize, release and get_status (LOADER §6, §7,
+## §9, §10).
 ##
 ## Static modules are the kit modules of `tests/kit/` linked into this suite and
 ## registered through the tables their export templates generate, and small
@@ -289,7 +290,7 @@ suite "run.realizer: static registration (RUNTIME §2.3, §13.3) [IMPL]":
 # Binding --------------------------------------------------------------------------
 
 suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER §6) [IMPL]":
-  test "[RUN-0055] [RUN-0058] [RUN-0069] [LDR-0160] a missing mandatory symbol is abi-invalid":
+  test "[RUN-0055] [RUN-0058] [RUN-0069] [RUN-0078] [LDR-0160] a missing mandatory symbol is abi-invalid":
     let r = fresh()
     for s in ["name", "init", "destroy"]:
       checkpoint s
@@ -304,7 +305,7 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
       "no-dispatch", meterModuleStaticSymbols().without(meterDispatchSym)
     ).code == lecAbiInvalid
 
-  test "[RUN-0057] [LDR-0100] a consumer-only module needs no provider symbol and has no call surface":
+  test "[RUN-0057] [RUN-0196] [LDR-0100] a consumer-only module needs no provider symbol and has no call surface":
     reset()
     let r = fresh()
     r.registerStatic("plain", plainTable()).tryGet
@@ -325,7 +326,7 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
     let x = r.realize(staticRequest("s1", "sensor_module", "meter"))
     check x.error.code == lecAbiInvalid
 
-  test "[RUN-0056] [RUN-0071] [LDR-0073] [RUN-1086] the call surface is validated and every per-method function required":
+  test "[RUN-0056] [RUN-0071] [RUN-0085] [LDR-0073] [RUN-1086] [IFC-0232] the call surface is validated and every per-method function required":
     let r = fresh()
     let t = meterModuleStaticSymbols()
     check r.realizeFails(
@@ -345,7 +346,7 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
     )
     check extra.code == lecAbiInvalid
 
-  test "[RUN-0787] [RUN-0788] [RUN-0789] [RUN-0790] the optional _MODULE_async_api descriptor is probed and validated":
+  test "[RUN-0787] [RUN-0788] [RUN-0789] [RUN-0790] [IFC-0747] the optional _MODULE_async_api descriptor is probed and validated":
     let r = fresh()
     let t = meterModuleStaticSymbols()
     check r.realizeFails("bad-async", t & @[(meterAsync, cast[pointer](badAsyncApi))]).code ==
@@ -359,7 +360,7 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
     check b.binding.asyncApi == addr goodAsync
     check r.release(b.id, "g1").isOk
 
-  test "[RUN-0072] [RUN-0082] [LDR-0080] one binding serves every instance; each call gets its own context":
+  test "[RUN-0072] [RUN-0082] [RUN-0199] [LDR-0080] one binding serves every instance; each call gets its own context":
     asyncCalls = 0
     let r = fresh()
     r.registerStatic(
@@ -378,7 +379,7 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
 # Realize --------------------------------------------------------------------------
 
 suite "run.realizer: realize (LOADER §6, §7, §10) [IMPL]":
-  test "[LDR-0074] [LDR-0075] [LDR-0076] [LDR-0077] [LDR-0078] [LDR-0039] [LDR-0041] [RUN-0073] the initialization input carries the services and the mapped state directory":
+  test "[LDR-0074] [LDR-0075] [LDR-0076] [LDR-0077] [LDR-0078] [LDR-0039] [LDR-0041] [RUN-0073] [RUN-0198] [CFG-0067] [IFC-0221] [IFC-0484] the initialization input carries the services and the mapped state directory":
     reset()
     let r = fresh()
     r.registerStatic("plain", plainTable()).tryGet
@@ -408,7 +409,7 @@ suite "run.realizer: realize (LOADER §6, §7, §10) [IMPL]":
     check x.error.code == lecRealizationFailed
     check r.liveCount == 0
 
-  test "[LDR-0079] [LDR-0086] every result and context combination INTERFACE forbids fails, cleaned":
+  test "[LDR-0079] [LDR-0086] [RUN-0298] every result and context combination INTERFACE forbids fails, cleaned":
     let r = fresh()
     r.registerStatic("plain", plainTable()).tryGet
     for (mode, destroyed) in [
@@ -534,7 +535,7 @@ suite "run.realizer: realize (LOADER §6, §7, §10) [IMPL]":
     )
     check x.error.code == lecUnsupportedStrategy
 
-  test "[LDR-0165] [LDR-0089] a state mapping it cannot establish is realization-failed":
+  test "[LDR-0165] [LDR-0089] [RUN-0847] a state mapping it cannot establish is realization-failed":
     reset()
     let r = newRealizer(work) # no state root
     r.registerStatic("plain", plainTable()).tryGet
@@ -544,7 +545,7 @@ suite "run.realizer: realize (LOADER §6, §7, §10) [IMPL]":
 # Release and status ---------------------------------------------------------------
 
 suite "run.realizer: live configuration (LOADER §8, §11) [IMPL]":
-  test "[LDR-0113] [LDR-0135] [LDR-0136] apply runs the hook once through the retained context, excluded from release; a refusal invokes nothing":
+  test "[LDR-0113] [LDR-0135] [LDR-0136] [IFC-0213] apply runs the hook once through the retained context, excluded from release; a refusal invokes nothing":
     reset()
     let blobs = liveConfigBlobs()
     let r = fresh()
@@ -612,7 +613,7 @@ suite "run.realizer: live configuration (LOADER §8, §11) [IMPL]":
     check liveConfigBlobs() == blobs
 
 suite "run.realizer: release and status (LOADER §7, §9, §11) [IMPL]":
-  test "[LDR-0117] [LDR-0119] [LDR-0138] [LDR-0124] release destroys the context exactly once":
+  test "[LDR-0117] [LDR-0119] [LDR-0138] [LDR-0124] [IFC-0214] release destroys the context exactly once":
     reset()
     let r = fresh()
     r.registerStatic("plain", plainTable()).tryGet
@@ -682,7 +683,7 @@ proc dynamicRequest(
   )
 
 suite "run.realizer: verified dynamic libraries (RUNTIME §2.1, §3.6; LOADER §3, §12) [IMPL]":
-  test "[LDR-0025] [LDR-0026] [LDR-0141] [RUN-0133] [RUN-0068] a verified copy in a private directory is mapped and bound":
+  test "[LDR-0025] [LDR-0026] [LDR-0141] [RUN-0133] [RUN-0068] [RUN-0197] [RUN-0263] a verified copy in a private directory is mapped and bound":
     let r = fresh()
     let x = r.realize(
       dynamicRequest("d1", "meter_module", meterLib, digestOfFile(meterLib))
@@ -706,7 +707,7 @@ suite "run.realizer: verified dynamic libraries (RUNTIME §2.1, §3.6; LOADER §
     check toSeq(walkFiles(dirs[0] / "*")).len == 1
     check r.release(x.id, "d1").isOk and r.release(y.id, "d2").isOk
 
-  test "[LDR-0025] [LDR-0141] [RUN-0131] bytes that do not match the digest are never mapped":
+  test "[LDR-0025] [LDR-0141] [RUN-0064] [RUN-0065] [RUN-0127] [RUN-0129] [RUN-0131] bytes that do not match the digest are never mapped":
     let marker = work / "marker"
     removeFile(marker)
     putEnv("LCN_LOAD_MARKER", marker)

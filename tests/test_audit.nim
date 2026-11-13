@@ -116,9 +116,42 @@ proc vaultTable(): seq[(string, pointer)] =
   for c in cLayout(cSchemaSet(vaultBinding)).tryGet.calls:
     result.add((c.symbol, cast[pointer](vaultDispatch)))
 
+# The meter kit module behind a `_MODULE_dispatch` that records how the
+# Runtime left the response outputs on entry (INTERFACE §2.6 l.1754).
+
+var recordedEntries, recordedDirty: Atomic[int]
+
+let meterKitDispatch = block:
+  var f: ModuleDispatchFn
+  for (name, p) in meterModuleStaticSymbols():
+    if name == "logos_meter_module_MODULE_dispatch":
+      f = cast[ModuleDispatchFn](p)
+  f
+
+proc recordingDispatch(
+    module: ptr LogosModuleContext,
+    methodName: cstring,
+    params: ptr UncheckedArray[uint8],
+    paramsLen: csize_t,
+    outResp: ptr ptr UncheckedArray[uint8],
+    outLen: ptr csize_t,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  recordedEntries += 1
+  if outResp == nil or outLen == nil or outResp[] != nil or outLen[] != 0:
+    recordedDirty += 1
+  meterKitDispatch(module, methodName, params, paramsLen, outResp, outLen)
+
+proc recordingTable(): seq[(string, pointer)] =
+  for (name, p) in meterModuleStaticSymbols():
+    if name == "logos_meter_module_MODULE_dispatch":
+      result.add((name, cast[pointer](recordingDispatch)))
+    else:
+      result.add((name, p))
+
 let
   vaultStatic = checkStaticRegistration("vault", vaultTable()).tryGet
   dmeterStatic = checkStaticRegistration("dmeter", deferredMeterSymbols()).tryGet
+  rmeterStatic = checkStaticRegistration("rmeter", recordingTable()).tryGet
 
 proc vault(): ModuleRecord =
   ModuleRecord(
@@ -136,6 +169,14 @@ proc dmeter(): ModuleRecord =
     primaryContract: Opt.some(meterRoot),
   )
 
+proc rmeter(): ModuleRecord =
+  ModuleRecord(
+    module: "meter_module",
+    strategy: stDirectStatic,
+    binding: "rmeter",
+    primaryContract: Opt.some(meterRoot),
+  )
+
 # Set-up -----------------------------------------------------------------------------------
 
 const
@@ -144,12 +185,14 @@ const
   Meter = "meter"
   Deferred = "dmeter"
   Vault = "vault"
+  Recorder = "rmeter"
 
 let clk = newTestClock()
 useClock(clk)
 
 proc auditConfig(records: int): EngineConfig =
-  result = config(extra = @[fakeCaRegistration(), vaultStatic, dmeterStatic])
+  result =
+    config(extra = @[fakeCaRegistration(), vaultStatic, dmeterStatic, rmeterStatic])
   result.authority = Opt.some(
     AuthorityPolicy(instance: Ca, evaluationDeadline: initDuration(seconds = 60))
   )
@@ -333,7 +376,7 @@ proc callAsync(h: var LogosRouteHandle, params: seq[byte]): ErrorCode =
 # C1-C4: route calls ---------------------------------------------------------------------
 
 suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-1772)":
-  test "[RUN-0332] [RUN-0333] [CAP-0210] every call commits its request and successful response at the boundary, retained or not; a record holds the sides its decision retains, beside the call scope that binds them":
+  test "[RUN-0332] [RUN-0333] [CAP-0210] [CAP-0393] [IFC-0209] every call commits its request and successful response at the boundary, retained or not; a record holds the sides its decision retains, beside the call scope that binds them":
     let (e, orch) = ready()
     let route = orch.routeTo(e, Meter, "k")
     var h = orch.handle(route)
@@ -369,7 +412,7 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     h.release()
     e.finish()
 
-  test "[RUN-0334] [RUN-0335] [CAP-0205] [CAP-0207] [CAP-0212] [CAP-0388] [CAP-0389] [CAP-0390] with both sides retained, a synchronous, an asynchronous and a deferred call each leave a success record naming the applied decision, its consumer and the enforced scope, with commitments recomputed from the typed values":
+  test "[RUN-0334] [RUN-0335] [RUN-0592] [CAP-0205] [CAP-0207] [CAP-0212] [CAP-0388] [CAP-0389] [CAP-0390] with both sides retained, a synchronous, an asynchronous and a deferred call each leave a success record naming the applied decision, its consumer and the enforced scope, with commitments recomputed from the typed values":
     let (e, orch) = ready()
     setScript(retaining("call"))
     var h = orch.handle(orch.routeTo(e, Meter, "k"))
@@ -493,7 +536,7 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
 # C5-C7 ---------------------------------------------------------------------------------------
 
 suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (CA §9; INTERFACE l.395-397)":
-  test "[CAP-0209] a Runtime Control call record has a runtime_control_scope with its one method, the selectors the operation determines and no events; a malformed request is a failure without commitments":
+  test "[CAP-0209] [RUN-0678] a Runtime Control call record has a runtime_control_scope with its one method, the selectors the operation determines and no events; a malformed request is a failure without commitments":
     let (e, orch) = ready()
     setScript(retaining("rc:get_readiness"))
     let params = encode(
@@ -584,5 +627,29 @@ suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (
     for k, r in records:
       check AuditRecord.decode(r.bytes).tryGet.view.request ==
         Opt.some(meterRoots("meter.read_request", readReq(k + 3)))
+    h.release()
+    e.finish()
+
+# The Runtime as an ABI caller -----------------------------------------------------------------
+
+suite "run.audit: the Runtime calling _MODULE_dispatch (INTERFACE §2.6)":
+  test "[IFC-0249] the Runtime enters _MODULE_dispatch with the response outputs null and zero: a routed synchronous call, an asynchronous one and an authority evaluate (INTERFACE §2.6 l.1754)":
+    let (e, orch) = ready()
+    let dirty = dirtyEntries.load
+    let evaluations = dispatchEntries.load
+    discard e.started(rmeter(), Recorder)
+    var h = orch.handle(orch.routeTo(e, Recorder, "r"))
+    setScript(allow("call", validMs = 0)) # each call evaluated afresh
+    forget()
+    let entries = recordedEntries.load
+    check h.raw("read", readReq(5)).code == ecOk
+    check recordedEntries.load == entries + 1
+    check h.callAsync(readReq(5)) == ecOk # through a call worker
+    check recordedEntries.load == entries + 2
+    check recordedDirty.load == 0
+    # Each call's `evaluate`, besides those for starting and routing.
+    check received().countIt(it.what == "call") == 2
+    check dispatchEntries.load >= evaluations + 2
+    check dirtyEntries.load == dirty
     h.release()
     e.finish()

@@ -290,7 +290,7 @@ suite "cfg.declaration: accepting a configuration declaration (CONFIG §2; RUN-0
       d.schema.schema_commitment.schema_subtree_root[0] xor 1
     check acceptConfiguration(d).isErr
 
-  test "[CFG-0022] [CFG-0023] [CFG-0024] [CFG-0025] [CFG-0045] [CFG-0048] [CFG-0049] [CFG-0150] a default or provisioned value must be one complete deterministic value of the root":
+  test "[CFG-0007] [CFG-0022] [CFG-0023] [CFG-0024] [CFG-0025] [CFG-0045] [CFG-0048] [CFG-0049] [CFG-0150] a default or provisioned value must be one complete deterministic value of the root":
     # Not a value of the root.
     let missing = encodeCbor(cborMap((cbor("station"), cbor("radio-1"))))
     check acceptConfiguration(tunerDecl(Opt.some(missing))).isErr
@@ -819,6 +819,36 @@ suite "cfg.startup: sources, selection, delivery and promotion (CONFIG §4, §6;
       ecInvalidParams
     e.finish()
 
+  test "[CFG-0133] [CFG-0135] a new instance of the same module inherits no configuration, under a changed declaration or the same one; the old instance is unchanged (CONFIG §7 l.251, l.261)":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let a = tunerAccepted(default = Opt.some(tunerValue()))
+    discard e.createTuner("t1", a)
+    let t1 = e.target("t1")
+    check rc.stage(t1, 1, tunerValue("radio-2", 9)).updated.state_revision == 2
+    check e.start("t1").tryGet.state == msReady
+    let before = rc.state(t1)
+    check before.current.get.value == tunerValue("radio-2", 9)
+    # A replacement under a changed declaration (live, another binding): no
+    # record at all, so its start is NOT_READY (G162).
+    discard e.createTuner("t2", tunerAccepted(live = true), binding = "tuner_live")
+    let s2 = rc.state(e.target("t2"))
+    check s2.state_revision == 0 and s2.current.isNone and s2.staged.isNone
+    let r = e.start("t2")
+    check r.isErr and r.error.code == ecNotReady
+    # Another instance under the same declaration: its own package default,
+    # never t1's current value.
+    discard e.createTuner("t3", a)
+    let s3 = rc.state(e.target("t3"))
+    check s3.state_revision == 1 and s3.current.isNone
+    check s3.staged.get.value == tunerValue()
+    check provenanceOf(s3.staged.get.provenance) == pvPackageDefault
+    check e.start("t3").tryGet.state == msReady
+    check lastInput() == Opt.some(inputFor(tunerValue(), 1))
+    check encode(rc.state(t1)).tryGet == encode(before).tryGet
+    check e.view("t1").tryGet.state == msReady
+    e.finish()
+
   test "[CFG-0063] [CFG-0068] [CFG-0069] [CFG-0070] [CFG-0072] a generated kit, bound statically, is started with the typed value and its revision, then with the next staged one":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
@@ -865,7 +895,7 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     check rc.discardStaged(t, 0).code == ecInvalidParams
     e.finish()
 
-  test "[CFG-0020] [CFG-0056] [CFG-0057] [G228] a target on another Runtime is INVALID_PARAMS; an unknown or refused one NOT_AUTHORISED":
+  test "[G228] [CFG-0020] [CFG-0056] [CFG-0057] [RUN-0484] [RUN-0485] a target on another Runtime is INVALID_PARAMS; an unknown or refused one NOT_AUTHORISED":
     let e = tunerEngine(denying(deny(operation = "get_configuration")))
     let (_, rc) = e.startClient()
     discard e.createTuner("t1", tunerAccepted(default = Opt.some(tunerValue())))
@@ -899,7 +929,7 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     check st.staged.get.value == tunerValue()
     e.finish()
 
-  test "[CFG-0030] [CFG-0034] [CFG-0036] [CFG-0053] [CFG-0059] [CFG-0060] stage and discard advance the revision; a stale revision or commitment is refused without detail":
+  test "[CFG-0030] [CFG-0034] [CFG-0036] [CFG-0053] [CFG-0059] [CFG-0060] [RUN-0918] stage and discard advance the revision; a stale revision or commitment is refused without detail":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     discard e.createTuner("t1", tunerAccepted())
@@ -1302,6 +1332,57 @@ proc liveEngine(applyMs = 0, stopMs = 0): Engine =
     cfg.stopDeadline = initDuration(milliseconds = stopMs * Slow)
   fixtureEngine(cfg)
 
+var
+  asyncCode: Atomic[int] ## the code the latest asynchronous apply completed with
+  asyncDone: Atomic[int] ## asynchronous applies completed
+
+proc onApplied(
+    userData: pointer,
+    r: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+) {.cdecl, gcsafe, raises: [].} =
+  if not owner.release.isNil:
+    owner.release(owner.state)
+  asyncCode.store(int(r.code))
+  asyncDone += 1
+
+proc applyAsync(
+    rc: ptr LogosRuntimeControlBinding,
+    t: LogosNSRuntimeModuleInstanceAddress,
+    revision: uint64,
+    timeoutMs = -1,
+): LogosAsyncCall =
+  ## `apply_configuration` as an asynchronous Runtime Control call, submitted.
+  let params = encode(
+    LogosNSRuntimeControlApplyConfigurationRequest(
+      target: t, expected_state_revision: revision
+    )
+  ).tryGet
+  var o = LogosAsyncOptions(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncOptions)),
+    hasTimeout: timeoutMs >= 0,
+    timeoutMs: uint64(max(timeoutMs, 0)),
+  )
+  var cb = LogosAsyncCallbacks(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncCallbacks)),
+    complete: onApplied,
+  )
+  let r = rc.vtable.prepareCall(
+    rc,
+    "apply_configuration",
+    cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]),
+    csize_t(params.len),
+    addr o,
+    addr cb,
+    addr result,
+  )
+  doAssert r.code == 0
+  result.vtable.submit(addr result)
+
 suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
   setup:
     resetTuner()
@@ -1403,6 +1484,39 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.applyOf(t, 3).applied.state_revision == 4
     e.finish()
 
+  test "[CFG-0149] a caller's timeout or cancellation does not decide the application; the hook's outcome does (CONFIG §8 l.315)":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    for (id, timeoutMs) in [("t1", 50), ("t2", -1)]:
+      let t = e.readyLive(rc, id)
+      let (entered, completed) = (applyEntered.load, asyncDone.load)
+      applyHold.store(true)
+      var call = rc.applyAsync(t, 3, timeoutMs)
+      check waitUntil(
+        proc(): bool =
+          applyEntered.load > entered
+      )
+      if timeoutMs < 0:
+        call.vtable.cancel(addr call)
+      check waitUntil(
+        proc(): bool =
+          asyncDone.load > completed
+      )
+      check asyncCode.load == ord(if timeoutMs < 0: ecCancelled else: ecTimeout)
+      # The caller has its outcome; the application has none yet.
+      check rc.summary(t).state_revision == 3
+      applyHold.store(false)
+      check waitUntil(
+        proc(): bool =
+          rc.summary(t).state_revision == 4
+      )
+      let s = rc.summary(t)
+      check s.current.get.value_revision == 3 and s.staged.isNone
+      check provenanceOf(s.current.get.provenance) == pvRuntimeControlUpdate
+      check e.view(id).tryGet.state == msReady
+      call.vtable.release(addr call)
+    e.finish()
+
   test "[CFG-0101] [CFG-0147] [CFG-0148] [RUN-1052] an invalid hook result is indeterminate: MODULE_ERROR, `error` with configuration-indeterminate, the realization released and nothing promoted":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
@@ -1496,7 +1610,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.summary(t).current.get.value_revision == 3
     e.finish()
 
-  test "[RUN-0690] [CFG-0103] [CFG-0140] a failure the module reports during an application: `error` at once, the hook's valid result still made current without restoring readiness, the realization released once it returns [IMPL]":
+  test "[RUN-0656] [RUN-0690] [CFG-0103] [CFG-0140] a failure the module reports during an application: `error` at once, the hook's valid result still made current without restoring readiness, the realization released once it returns [IMPL]":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")

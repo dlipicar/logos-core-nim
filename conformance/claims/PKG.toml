@@ -2,6 +2,7 @@
 # The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
 #   claimed               every requirement unit in it needs a test tagged [PKG-NNNN]
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   deferred:tier-4b      not built yet: logosctl, logosd, the Module Host and what they bring
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
 # A `[units]` entry gives one requirement unit its own status, overriding its section's.
@@ -17,8 +18,8 @@ default = "deferred:tier-5"
 # (§4.3), built over the vendored slhdsa-c (DECISIONS R4, I68). Promoted from tier
 # 5 as sans-I/O: §6 catalog entries and inspection records, and §11 resolution
 # (I69, G167). Fetch, catalog documents, the storage role, installation, Runtime
-# handoffs and the methods are tier 5; configuration schema validation is tier 4
-# with CONFIG.
+# handoffs and the methods are tier 5. The Package Manager handoff to the Runtime and
+# the protected trust-input path come with logosd (Tier 4b; DECISIONS I88).
 "§2" = "claimed"
 "§3" = "claimed"
 "§4" = "claimed"
@@ -36,7 +37,7 @@ default = "deferred:tier-5"
 "§11" = "claimed"
 "§14" = "deferred:tier-5"
 "§16" = "claimed"
-"§17" = "deferred:tier-4"
+"§17" = "deferred:tier-4b"
 
 [units]
 # §2: the Nix profile, and the catalog, Storage and backend metadata a manifest
@@ -44,8 +45,9 @@ default = "deferred:tier-5"
 "PKG-0017" = "deferred:tier-5"
 "PKG-0019" = "deferred:tier-5"
 "PKG-0021" = "deferred:tier-5"
-# §4: configuration schema and default artifacts are parsed and validated with CONFIG.
-"PKG-0060" = "deferred:tier-4"
+# §4: configuration schema and default artifacts reach CONFIG through the Package
+# Manager handoff (Tier 4b); app-config v1 carries declarations directly (I87).
+"PKG-0060" = "deferred:tier-4b"
 "PKG-0069" = "deferred:tier-5"
 # §4.1: verification caching, rotation and revocation act on resolution and the
 # installed set; catalog trust and the protected trust-input path come with the
@@ -71,14 +73,14 @@ default = "deferred:tier-5"
 "PKG-0440" = "deferred:tier-5"
 "PKG-0441" = "deferred:tier-5"
 # §4.1: trust-input continuity, withdrawal and their CA integration need the
-# protected trust-input path (G137 continuity design, an open decision).
-"PKG-0418" = "deferred:tier-4"
-"PKG-0419" = "deferred:tier-4"
-"PKG-0420" = "deferred:tier-4"
-"PKG-0421" = "deferred:tier-4"
-"PKG-0422" = "deferred:tier-4"
-"PKG-0423" = "deferred:tier-4"
-"PKG-0424" = "deferred:tier-4"
+# protected trust-input path (G137 continuity design), which comes with logosd.
+"PKG-0418" = "deferred:tier-4b"
+"PKG-0419" = "deferred:tier-4b"
+"PKG-0420" = "deferred:tier-4b"
+"PKG-0421" = "deferred:tier-4b"
+"PKG-0422" = "deferred:tier-4b"
+"PKG-0423" = "deferred:tier-4b"
+"PKG-0424" = "deferred:tier-4b"
 # §5: package identity, installed records, sources and retention; the
 # admission bound needs the Runtime handoff and exact Transport overheads.
 "PKG-0172" = "deferred:tier-5"
@@ -94,7 +96,8 @@ default = "deferred:tier-5"
 "PKG-0192" = "deferred:tier-5"
 "PKG-0204" = "deferred:tier-5"
 "PKG-0219" = "deferred:tier-5"
-"PKG-0220" = "deferred:tier-4"
+# PKG-0220 (only a verified private copy is mapped) is the realizer's staging,
+# tested with C-08 (I88): claimed with §7.1.
 # §7.1: shared installation state and the deployment profile's documentation.
 "PKG-0487" = "deferred:tier-5"
 "PKG-0488" = "deferred:tier-5"
@@ -104,13 +107,16 @@ default = "deferred:tier-5"
 "PKG-0271" = "deferred:tier-5"
 # §8: G156 is open (reported as NP-15): the §4 CDDL requires `hash`, so a manifest
 # artifact without one is invalid-package (tested as [IMPL-DECISION G156]), not
-# the artifact-integrity-failed this unit names.
-"PKG-0275" = "deferred:tier-3"
+# the artifact-integrity-failed this unit names. The unit's behaviour is not built;
+# it waits for the owner's answer, and PM validation next changes with installation
+# (Tier 5). Tier 3 is closed, so it no longer names tier 3 (DECISIONS I88).
+"PKG-0275" = "deferred:tier-5"
 # §9: checking `implements` against a contract's own commitments, and provider
-# validation, happen where the executable's call surface is known.
-"PKG-0287" = "deferred:tier-4"
-"PKG-0288" = "deferred:tier-4"
-"PKG-0289" = "deferred:tier-4"
+# validation, happen where the executable's call surface is known: the Package
+# Manager handoff (Tier 4b).
+"PKG-0287" = "deferred:tier-4b"
+"PKG-0288" = "deferred:tier-4b"
+"PKG-0289" = "deferred:tier-4b"
 # §6: catalog documents, their acquisition and the storage locators are fetch's
 # (G90, G91); presentation contracts belong to applications.
 "PKG-0472" = "deferred:tier-5"
@@ -118,8 +124,9 @@ default = "deferred:tier-5"
 "PKG-0474" = "deferred:tier-5"
 "PKG-0475" = "out-of-scope:a requirement on application catalog contracts"
 # §11: a permission package producers have; how a permission's reason leaves its
-# Capability Authority scope unchanged is CA's mapping (tier 4).
+# Capability Authority scope unchanged comes with permission definitions (G110,
+# Tier 4b).
 "PKG-0502" = "out-of-scope:a permission for package producers"
-"PKG-0335" = "deferred:tier-4"
+"PKG-0335" = "deferred:tier-4b"
 # §14: the error codes are built; method results are not.
 "PKG-0358" = "claimed"

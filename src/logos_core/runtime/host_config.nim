@@ -275,13 +275,23 @@ proc checkAuthority(
         "policy.authority must be the direct_static binding " & AuthorityModule
       )
     )
-  # [SPEC RUNTIME l.1652-1655; RUN-0316] Otherwise checked at binding.
+  # [SPEC RUNTIME l.1652-1655; RUN-0316] The realized contract is checked
+  # again at binding.
   if r.primaryContract.isSome and @(r.primaryContract.get) != caRoots().contract:
     return err(
       configError(
         "policy.authority's primary_contract is not the pinned Capability Authority contract"
       )
     )
+  # [SPEC RUNTIME l.165-173, l.1647; DECISIONS I88] A system service provider
+  # is a provider backed by its instance, and a record that declares no
+  # contract gets no provider record (l.1420-1421): an authority record
+  # without `primary_contract` declares the pinned contract.
+  if r.primaryContract.isNone:
+    for m in c.modules.mitems:
+      if m.instance == p.authority:
+        m.record.primaryContract =
+          Opt.some(rootOf(SchemaCommitment(schema_root: caRoots().contract)))
   # [SPEC RUNTIME l.1637] A candidate does not bind or authorize itself: the
   # authority is never the orchestration instance, whose module name is outside
   # the reserved prefix (checked above).

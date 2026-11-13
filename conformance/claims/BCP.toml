@@ -2,12 +2,38 @@
 # The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
 #   claimed               every requirement unit in it needs a test tagged [BCP-NNNN]
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   deferred:tier-4b      not built yet: logosctl, logosd, the Module Host and what they bring
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
 
-default = "deferred:tier-4"
+# A complete Logos module system (the composition this BCP defines, its §5 profiles and deployment
+# documentation) is logosd's: Tier 4b (DECISIONS I88). What a Tier 4 component already meets is
+# claimed by unit.
+default = "deferred:tier-4b"
 
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
-"§5" = "deferred:tier-1"
+
+[units]
+# The layer diagram, the consumer binding (Tier 4 step 8b) and audit that optional logging never waives.
+"BCP-0004" = "claimed"
+"BCP-0073" = "claimed"
+"BCP-0098" = "claimed"
+# §5.2 and §5.5: duties of a specification and its owner when defining a profile.
+"BCP-0026" = "out-of-scope:a requirement on specification authors"
+"BCP-0029" = "out-of-scope:a requirement on specification authors"
+"BCP-0052" = "out-of-scope:a requirement on specification authors"
+"BCP-0053" = "out-of-scope:a requirement on specification authors"
+"BCP-0054" = "out-of-scope:a requirement on specification authors"
+"BCP-0055" = "out-of-scope:a requirement on specification authors"
+"BCP-0056" = "out-of-scope:a requirement on specification authors"
+"BCP-0057" = "out-of-scope:a requirement on specification authors"
+"BCP-0058" = "out-of-scope:a requirement on specification authors"
+"BCP-0059" = "out-of-scope:a requirement on specification authors"
+"BCP-0060" = "out-of-scope:a requirement on specification authors"
+# §5.3: the QUIC remote transport and the Package Manager realization profiles are Tier 5.
+"BCP-0032" = "deferred:tier-5"
+"BCP-0033" = "deferred:tier-5"
+"BCP-0034" = "deferred:tier-5"
+"BCP-0035" = "deferred:tier-5"

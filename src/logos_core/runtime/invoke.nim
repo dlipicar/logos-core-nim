@@ -161,20 +161,29 @@ proc notReadyAfter*(
   failureOf(e)
 
 proc introspect*(
-    b: ptr SchemaBlob, bare: string, params: openArray[byte], trail: var CallTrail
+    b: ptr SchemaBlob,
+    bare: string,
+    params: openArray[byte],
+    schema: openArray[byte],
+    trail: var CallTrail,
 ): Result[seq[byte], InvocationFailure] =
   ## [SPEC INTERFACE §5.1; RUNTIME §9.3 l.2990-2992] `logos.schema`: the
   ## selected contract's `logos.schema_response`, from the boundary, whose
-  ## commitments are under the common schema (CA l.1203-1204).
+  ## commitments are under the common schema (CA l.1203-1204). [SPEC RUNTIME
+  ## l.432-434] `schema` is that response built from the provider's validated
+  ## surface at admission; the consumer's construction input only checks the
+  ## request (DECISIONS I88).
   let sel = selectedOf(b).valueOr:
     return err(failure(ecModule, "the selected contract cannot be loaded"))
   discard ?checkRequest(sel, bare, params, trail)
-  let v = schemaResponse(sel.boundary.contracts, b.root).valueOr:
+  if schema.len == 0:
+    return err(failure(ecModule, "the schema response cannot be built"))
+  let v = decodeCbor(schema).valueOr:
     return err(failure(ecModule, "the schema response cannot be built"))
   let c = sel.boundary.commitResponse(bare, v).valueOr:
     return err(failure(ecModule, "the schema response cannot be committed"))
   trail.response = Opt.some(c)
-  ok(encodeCbor(v))
+  ok(@schema)
 
 proc invocationFor*(
     adm: Admission,
@@ -382,7 +391,7 @@ proc routeCall*(
   let adm = reply.admission
   var trail: CallTrail
   if adm.introspection:
-    result = introspect(h.blob, bare, params, trail)
+    result = introspect(h.blob, bare, params, adm.schema, trail)
     trail.succeeded = result.isOk
     h.engine.record(adm.capture, trail)
     return

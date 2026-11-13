@@ -2,10 +2,16 @@
 # The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
 #   claimed               every requirement unit in it needs a test tagged [LDR-NNNN]
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   deferred:tier-4b      not built yet: logosctl, logosd, the Module Host and what they bring
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
 
-default = "deferred:tier-4"
+# LOADER as a whole is Tier 4b (DECISIONS I88, S11-1 option (b)). The in-process realizer follows
+# LOADER's direct strategies but is an implementation-local realization mechanism (RUNTIME l.212),
+# not a Module Loader provider backed by a local module instance (LOADER l.23-26), so nothing of
+# LOADER is claimed (RUNTIME l.27; BCP l.281). The [LDR-NNNN] tags on its tests stay as evidence.
+# Representing the realizer as a logos_module_loader instance is the first item of Tier 4b (TF-36).
+default = "deferred:tier-4b"
 
 [sections]
 "References" = "informative"

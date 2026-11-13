@@ -210,7 +210,10 @@ and observation requests, including those of the bootstrap. Two kinds:
   Checked at `create`: `authority` names a listed instance whose `module` is
   `logos_capability_authority` and whose implementation is the `direct_static` binding
   `logos_capability_authority`; its `primary_contract`, when given, is the pinned Capability Authority
-  contract (otherwise the realized one is checked when the instance is bound); it has a
+  contract, and when absent it is set to that contract, so the authority instance has a provider
+  record like any provider (RUNTIME l.165-173, l.1420-1421, l.1647; DECISIONS I88; the realized
+  contract is checked again when the instance is bound, and the Runtime never binds an authority
+  instance without a provider record); it has a
   `state_assignment`; `runtime.store_dir` and `runtime.state_root` are set; and `policy` loads as the
   authority will load it. The orchestration instance cannot be the authority, since its module name
   is outside the reserved prefix. What the host can expect under this kind is below ("Under
@@ -428,6 +431,72 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
   is silent); `LOGOS_OK` carries neither.
 
+## Orchestration duties
+
+RUNTIME l.72 defines a Runtime instance as the Runtime engine plus an orchestration module. This
+implementation claims RUNTIME for the engine (DECISIONS I88; docs/CONFORMANCE.md); until the default
+orchestration module of Tier 4b, the module the host names in `orchestration` carries these duties,
+and the engine does not do them for it:
+
+- **Startup defaults** (RUNTIME l.194). Apply deployment startup defaults only while an instance's
+  intent is `uninitialized`, by conditional `start_module` or `stop_module` requests carrying the
+  `expected_execution_revision` that `get_readiness` reports.
+- **Reconciliation** (l.3774-3776). When it becomes operational, including after a Runtime restart,
+  reconcile the retained `requested` intents and schedule the recoveries active policy permits,
+  preserving retained origin, retry accounting, lifecycle ordering, current authority and unresolved
+  cleanup obligations. The engine resumes nothing on its own ("Persistent Runtime state",
+  Resumption).
+- **Restart policy** (l.3786-3790). Evaluate the active restart policy and schedule permitted
+  recovery through `recover_module`. Disabling automatic restart is a valid policy; an enabled policy
+  bounds retry frequency, and its retry accounting survives an orchestration restart and lost
+  responses (a lost `recover_module` answer is settled by reading `get_readiness`). An explicit stop
+  or a shutdown cancels pending automatic recovery; the engine refuses a recovery prepared before
+  either, by the revision guard.
+- **Resumption after a permission or authority stop** (l.3801-3804). When required permissions or
+  authority become available again, request resumption of the retained intent through
+  `recover_module`; a failed resumption is subject to the restart policy.
+- **Failure classifications** (l.3756). Treat a classification it does not recognize as an
+  unspecified failure, and never derive a restart policy from its spelling.
+
+Stopping or failure of the orchestration module pauses automatic startup and recovery (l.3806).
+
+## Runtime limits
+
+Every limit of the engine in one place (RUNTIME l.3394-3396 and BCP l.369-370 ask for them to be
+documented; DECISIONS I88). Only the ones marked "here" are set in
+this file; the others are fixed (tests set the engine limits smaller).
+
+| Limit | Value | Set |
+|---|---|---|
+| known module instances, retained ones included (`MaxInstances`) | 1024; past it `create_module` is `LOGOS_ERR_MODULE` | fixed |
+| the persistent store's snapshot (`MaxStoreBytes`) | 64 MiB | fixed |
+| lifecycle workers (`MaxWorkers`): bind, init, destroy, completion callbacks, `observe_end` handlers, apply hooks | 64, started on demand | fixed |
+| overflow lifecycle workers (`MaxNestedWorkers`) | 64 more, one per `starvationDelay` (50 ms) while jobs wait behind 64 busy workers and none finishes; nothing is ever refused (DECISIONS G242) | fixed |
+| call workers for asynchronous calls (`MaxCallWorkers`) | 64, started on demand | fixed |
+| overflow call workers (`MaxNestedCallWorkers`) | 64 more, the same way; when calls still wait for `refuseDelay` (1 s) with all 128 busy, the oldest call that has not started completes `LOGOS_ERR_MODULE` "no call worker is available" through its callback (G242) | fixed |
+| asynchronous calls prepared and not released (`MaxAsyncCalls`) | 4096; one more is `LOGOS_ERR_MODULE` (INTERFACE l.2041) | fixed |
+| evaluation workers and queue (`EvalWorkers`, `EvalQueue`) | 4 threads, 256 waiting | fixed |
+| handler passes per operation (`MaxPasses`) | 8; more is an evaluation failure | fixed |
+| Runtime Control event workers (`MaxEventWorkers`) | 64 | fixed |
+| observation: pages, snapshots, `observe_end` registrations | "Observation", Limits | fixed |
+| Runtime Control subscriptions and their queues | "Runtime Control subscriptions", Limits | fixed |
+| ended route records kept per consumer | 4096 | fixed |
+| committed changes and diagnostics kept for observation | 4096 each | fixed |
+| payload depth (`max_payload_depth`) | 128 to 1024, default 1024 | here |
+| call records in memory (`call_audit.call_records`) | 1 to 1,000,000, default 4096 | here |
+| the Capability Authority's audit records (`audit.records`) | docs/AUTHORITY-POLICY.md | in the policy |
+| deadlines | `runtime` (Fields) | here |
+| transport aggregates | docs/CONFORMANCE.md, "Transport limits"; set by the Runtime with 10b | fixed |
+
+## Loaded code
+
+A `direct_dynamic` library, once mapped, stays mapped for the Runtime's life, and a static binding
+stays registered until `logos_runtime_destroy`: bindings are never unloaded (DECISIONS I88, deviation
+1; TF-03). RUNTIME l.387 requires only that a binding be kept until every context made from it has
+been destroyed, and unloading code that a module's own threads or registrations may still reach
+would crash the process (l.3838). The cost is one mapping per (hash suite, digest, module) for the
+Runtime's life: a host that cycles many distinct artifacts through one Runtime should restart it.
+
 ## Under `capability-authority`
 
 - **The authority is part of the library.** `liblogos_runtime` links the Capability Authority (CA
@@ -610,8 +679,9 @@ them to be documented).
   restart). Past an `observe_end` limit the registration is `LOGOS_ERR_MODULE` and changes nothing
   (INTERFACE l.1483-1484). Nothing here is persisted.
 - **Execution summary.** `get_execution_summary` reports `selection.implementation` as
-  `implementation-specific`: the in-process realizer is not a Module Loader instance (RUNTIME
-  l.3527-3528; DECISIONS G230, interim), and no selection carries `package` or `signer` yet.
+  `implementation-specific`: the in-process realizer is an implementation-local mechanism, not a
+  Module Loader instance (RUNTIME l.212, l.3527-3528; DECISIONS G230), and no selection carries
+  `package` or `signer` yet.
   `realization` is `current` while the Runtime owns a realization for the instance, a cleanup still
   within its deadline included; `unknown` while a Module Loader bind is unresolved or a bind,
   initialization or cleanup has outlived its deadline (DECISIONS G180); `absent` otherwise.
@@ -625,7 +695,10 @@ them to be documented).
   than a failed `_MODULE_init` (which is `initialization-failed`) is classified `other` and carries
   no `reason`, since the realizer's message may name host paths (RUNTIME l.1901-1904); the realizer
   is not a Module Loader, so there are no `loader-<code>` classifications (RUNTIME l.3754; DECISIONS
-  I88, S11-1). The message stays in the Runtime's diagnostics and is not persisted.
+  I88, S11-1). The message stays in the Runtime's diagnostics and is not persisted. A consumer of
+  module records, readiness results, module-state events or execution summaries must treat a
+  classification it does not recognize as an unspecified failure and never derive a restart policy
+  from its spelling (RUNTIME l.3756): later specs and Tier 4b add classifications.
 - **`describe_provider`** returns the call surface validated when the provider was last bound, kept
   after it stops (RUNTIME l.540-541); before any bind it is `LOGOS_ERR_NOT_READY`, once the caller
   holds a `discover` allow for each contract the record expects (otherwise `LOGOS_ERR_NOT_AUTHORISED`,

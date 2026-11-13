@@ -2,33 +2,40 @@
 # The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
 #   claimed               every requirement unit in it needs a test tagged [IFC-NNNN]
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   deferred:tier-4b      not built yet: logosctl, logosd, the Module Host and what they bring
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
 # A `[units]` entry gives one requirement unit its own status, overriding its section's.
 
-default = "deferred:tier-4"
+# Claimed with Tier 4 (DECISIONS I88): the Runtime as ABI caller, route and Runtime Control
+# binding and invocation context, besides Phases 2 and 3 and the module kit.
+default = "claimed"
 
 
 [sections]
-"Abstract" = "deferred:tier-4"
+"Abstract" = "claimed"
+# The same interface across direct, local transport and remote transport realizations: testable
+# once a second boundary exists (10b and the Module Host), with RUNTIME's RUN-0007, RUN-0008.
+"Abstract/Execution-Boundary Invariance" = "deferred:tier-4b"
 "References" = "informative"
 "Copyright" = "informative"
 # Phase 2: schema acceptance, the C type mapping (forward), encodings, validation,
 # the common schema and its limits.
 "§1" = "claimed"
-# Sensitive-payload handling (erasure, no logs, no downgrade) is runtime and
-# dispatch work; `_sensitive` acceptance and its C constants are claimed.
-"§1.4.1" = "deferred:tier-4"
+# Marked payloads (DECISIONS I88, D-c, G244): `_sensitive` acceptance and its C constants are
+# claimed, and so is the refusal to establish a path for a contract that marks a payload
+# (IFC-0578, IFC-0579). Erasure, no logs and the retention refusal are deferred below.
+"§1.4.1" = "claimed"
 "§2" = "claimed"
-"§2.4" = "deferred:tier-4"
-"§2.5" = "deferred:tier-4"
-"§2.6" = "deferred:tier-4"
-"§2.7" = "deferred:tier-4"
+"§2.4" = "claimed"
+"§2.5" = "claimed"
+"§2.6" = "claimed"
+"§2.7" = "claimed"
 # lcn-gen's typed call helpers and their cleanup helpers (part C, I73).
 "§2.7.2" = "claimed"
-"§2.8" = "deferred:tier-4"
-# The asynchronous call ABI and the protected invocation context.
-"§2.9" = "deferred:tier-4"
+"§2.8" = "claimed"
+# The asynchronous call ABI and the protected invocation context (I78, I88).
+"§2.9" = "claimed"
 # The C-to-CDDL reverse mapper (D30, G139) is tier 5; the §3.9 cases are claimed
 # in the forward direction, and their reverse-mapper units are deferred below.
 "§3" = "deferred:tier-5"
@@ -36,9 +43,10 @@ default = "deferred:tier-4"
 "§4" = "claimed"
 "§4.6" = "claimed"
 "§5.1" = "claimed"
-"§5.2" = "deferred:tier-4"
+"§5.2" = "claimed"
 "§5.3" = "claimed"
-"App A" = "deferred:tier-4"
+# "Appendix A. Generated Artifacts (Informative)", l.3980.
+"App A" = "informative"
 # Examples only, with implementation-defined names; lcn-gen's helpers follow
 # its shape as `lcn_invoke_` and `lcn_clear_` (part C, I73).
 "App A.5" = "informative"
@@ -161,12 +169,9 @@ default = "deferred:tier-4"
 # §2, §2.1, §2.3, §3.9: the ABI calling convention, C values and the reverse
 # direction of §3.9.8 come with the module kit and runtime. The derived typed
 # call helpers stay outside the header set and identity (part C, I73).
-"IFC-0587" = "deferred:tier-4"
-"IFC-0602" = "deferred:tier-4"
 "IFC-0627" = "claimed"
 "IFC-0628" = "claimed"
 "IFC-0636" = "claimed"
-"IFC-0904" = "deferred:tier-4"
 "IFC-0910" = "claimed"
 # C values and their converters: the module kit's typed provider functions
 # (part B, I72).
@@ -183,17 +188,14 @@ default = "deferred:tier-4"
 # contracts (part B, I72); handwritten modules and the exported-symbol rule wait
 # for the export-set gate.
 "IFC-0045" = "claimed"
-"IFC-0046" = "deferred:tier-4"
-"IFC-0057" = "deferred:tier-4"
+"IFC-0046" = "out-of-scope:a requirement on module authors"
+"IFC-0057" = "out-of-scope:a requirement on module authors"
+# §2.4: a duty of a hand-written module (l.1569); the repository ships none.
+"IFC-0207" = "out-of-scope:a requirement on module authors"
 # §1.4: a recommendation to contract authors on naming their namespace.
 "IFC-0071" = "out-of-scope:a recommendation to contract authors"
 # §4.6: a schema-defined outcome through a typed provider function (part B, I72).
 "IFC-0425" = "claimed"
-# §5.3: routes, access, dispatch and providers exist only with RUNTIME.
-"IFC-0537" = "deferred:tier-4"
-# What a failure may disclose depends on authorization (RUNTIME, tier 4).
-"IFC-0471" = "deferred:tier-4"
-"IFC-0472" = "deferred:tier-4"
 # §2.4 and §2.6: the method typedefs, provider functions and module symbols
 # lcn-gen declares (ABI v2, part A). What a module or ABI caller does at run
 # time stays tier 4.
@@ -333,3 +335,79 @@ default = "deferred:tier-4"
 "IFC-0260" = "claimed"
 "IFC-0489" = "claimed"
 "IFC-0491" = "claimed"
+# Tier 4 residuals (DECISIONS I88).
+# Both directions of the authoring mapping (the reverse mapper, D30, G139).
+"IFC-0003" = "deferred:tier-5"
+"IFC-0004" = "deferred:tier-5"
+# §1.4.1 (D-c): erasure of Runtime-owned and generated copies, no marked value in logs, audit or
+# diagnostics, and the retention refusal on an established path come together in Tier 4b; until
+# then no path is made for a marked payload (G244), so IFC-0581's second guard in `admit` is never
+# reached.
+"IFC-0575" = "deferred:tier-4b"
+"IFC-0576" = "deferred:tier-4b"
+"IFC-0577" = "deferred:tier-4b"
+"IFC-0580" = "deferred:tier-4b"
+"IFC-0581" = "deferred:tier-4b"
+# §2.5: duties of the module that subscribes or holds a route handle.
+"IFC-0177" = "out-of-scope:a requirement on calling modules"
+"IFC-0185" = "out-of-scope:a requirement on calling modules"
+"IFC-0655" = "out-of-scope:a requirement on calling modules"
+"IFC-0658" = "out-of-scope:a requirement on calling modules"
+"IFC-0667" = "out-of-scope:a requirement on calling modules"
+"IFC-0668" = "out-of-scope:a requirement on calling modules"
+"IFC-0670" = "out-of-scope:a requirement on calling modules"
+# §2.8: duties of the module that publishes, calls through route handles or is destroyed (the Nim
+# kit meets them for its modules).
+"IFC-0281" = "out-of-scope:a requirement on modules"
+"IFC-0282" = "out-of-scope:a requirement on modules"
+"IFC-0283" = "out-of-scope:a requirement on modules"
+"IFC-0284" = "out-of-scope:a requirement on modules"
+"IFC-0285" = "out-of-scope:a requirement on modules"
+"IFC-0289" = "out-of-scope:a requirement on modules"
+"IFC-0290" = "out-of-scope:a requirement on modules"
+"IFC-0291" = "out-of-scope:a requirement on modules"
+# §2.9.1: a Transport Cancel for an admitted request needs a live session (10b).
+"IFC-0729" = "deferred:tier-4b"
+# §2.9.2: duties of a provider that exports _MODULE_async_api; the Nim kit does not export it in
+# Tier 4. The Runtime's own duties in §2.9.2 (IFC-0756, 0764, 0765, 0768) are claimed.
+"IFC-0743" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0746" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0748" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0750" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0751" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0752" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0754" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0758" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0762" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0763" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0766" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0767" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+"IFC-0769" = "out-of-scope:a requirement on providers that export _MODULE_async_api"
+# §2.9.1, §2.9.3: duties of the calling module and of the provider holding execution ownership.
+"IFC-0723" = "out-of-scope:a requirement on calling modules"
+"IFC-0732" = "out-of-scope:a requirement on calling modules"
+"IFC-0734" = "out-of-scope:a requirement on calling modules"
+"IFC-0772" = "out-of-scope:a requirement on calling modules"
+"IFC-0779" = "out-of-scope:a requirement on calling modules"
+# §5.2: connect_remote and acquired remote bindings (Tier 5).
+"IFC-0493" = "deferred:tier-5"
+"IFC-0494" = "deferred:tier-5"
+"IFC-0495" = "deferred:tier-5"
+"IFC-0496" = "deferred:tier-5"
+"IFC-0497" = "deferred:tier-5"
+"IFC-0498" = "deferred:tier-5"
+"IFC-0499" = "deferred:tier-5"
+"IFC-0500" = "deferred:tier-5"
+"IFC-0501" = "deferred:tier-5"
+"IFC-0502" = "deferred:tier-5"
+"IFC-0503" = "deferred:tier-5"
+"IFC-0504" = "deferred:tier-5"
+"IFC-0505" = "deferred:tier-5"
+"IFC-0506" = "deferred:tier-5"
+"IFC-0507" = "deferred:tier-5"
+"IFC-0508" = "deferred:tier-5"
+"IFC-0939" = "deferred:tier-5"
+"IFC-0940" = "deferred:tier-5"
+"IFC-0941" = "deferred:tier-5"
+# §5.2: the borrowed Runtime Control binding is never released by the module.
+"IFC-0509" = "out-of-scope:a requirement on modules"

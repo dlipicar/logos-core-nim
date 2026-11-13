@@ -6,8 +6,10 @@
 ## outside its schema, 15 publishes `meter.changed_event`, 16 returns a failure
 ## that is not a valid status, 17 reads the caller and publishes in the
 ## invocation's scope, 18 reads the caller and whether the invocation is
-## cancelled, 19 does what 18 does once `gate` opens; any other channel `c`
-## reads `ch<c>` with value `10 c`.
+## cancelled, 19 does what 18 does once `gate` opens, 20 reads this
+## instance's own state (the last part of its state directory, or `none`, and
+## its count of reads), 21 publishes `meter.changed_event` and then reads the
+## caller; any other channel `c` reads `ch<c>` with value `10 c`.
 
 {.used.} # imported by the tests for the C symbols it exports
 import std/[atomics, os]
@@ -79,6 +81,21 @@ proc `read`(
           label: Opt.some(who.runtimeInstance),
           value: (if m.services.isCancelled: 1'u64 else: 0'u64),
         ),
+      )
+    )
+  of 20:
+    ok(
+      MeterReadResponse(
+        label: lastPathPart(m.stateDir.get("none")),
+        reading: MeterReading(value: uint64(m.reads.load)),
+      )
+    )
+  of 21:
+    ?m.services.publish(MeterChangedEvent(value: 210))
+    let who = ?m.services.caller() # after the handlers' nested entries returned
+    ok(
+      MeterReadResponse(
+        label: who.moduleInstance.get("system"), reading: MeterReading(value: 21)
       )
     )
   else:

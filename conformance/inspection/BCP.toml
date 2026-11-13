@@ -1,0 +1,12 @@
+# LOGOS-MODULE-SYSTEM-BCP requirement units checked by inspection rather than by a test.
+# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
+
+# bcp-diagram (DECISIONS I88)
+[[item]]
+ids = ["BCP-0004"]
+reason = "An illustrative block: the layer diagram of the specification set and its dependency direction (BCP §1). It states no behaviour a test could check. What this repository claims of each named spec is in conformance/claims/ and docs/CONFORMANCE.md ('What is claimed at the end of Tier 4'): the layer 1 and 2 specs for direct mode, the Capability Authority from layer 3, LOADER deferred as a whole (S11-1 (b)), the Package Manager's Tier 4b parts deferred, and the Credential Store undefined by any spec (G159)."
+
+# bcp-logging (DECISIONS I88)
+[[item]]
+ids = ["BCP-0098"]
+reason = "No optional logging exists to fail. The Runtime's diagnostics are a bounded in-memory list (engine.diagnose, plumbing.MaxDiagnostics, the oldest dropped first), which cannot fail and which no audit or enforcement step reads or waits on; no logging module contract or deployment log sink is built. Required audit is separate from it: call records are produced at the invocation boundary (runtime/callaudit.nim; tests [CAP-0205] [CAP-0210]) and the authority keeps its own audit in its state (authority/audit.nim; test [CAP-0244] [CAP-0264]); enforcement never depends on a diagnostic being kept."

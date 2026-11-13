@@ -173,7 +173,7 @@ proc recoverReq(e: Engine, instance: string): seq[byte] =
 # H4 -------------------------------------------------------------------------------------
 
 suite "run.host-api: under 8a's Capability Authority (I85; C9)":
-  test "[RUN-0185] [RUN-1066] [BCP-0073] start binds the library's authority; grants let orchestration start a module and reach it over a route; revoking them revokes the route and stops the module; a new grant lets recover_module start it again":
+  test "[RUN-0185] [RUN-0321] [RUN-1066] [BCP-0073] start binds the library's authority; grants let orchestration start a module and reach it over a route; revoking them revokes the route and stops the module; a new grant lets recover_module start it again":
     let dir = work / "h4"
     let rt = create(h4Config(dir))
     check rt.register("client", clientTable()) == ecOk

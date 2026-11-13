@@ -538,7 +538,7 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
   let adm = reply.admission
   var trail: CallTrail
   if adm.introspection:
-    trail.succeeded = c.offer(introspect(c.blob, bare, params, trail))
+    trail.succeeded = c.offer(introspect(c.blob, bare, params, adm.schema, trail))
     e.record(adm.capture, trail)
     return
   if c.isTerminal:

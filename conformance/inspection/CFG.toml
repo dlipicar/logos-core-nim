@@ -12,3 +12,18 @@ reason = "A documentation requirement: docs/HOST-CONFIG.md, Module configuration
 [[item]]
 ids = ["CFG-0134"]
 reason = "A documentation requirement on a deployment workflow: docs/HOST-CONFIG.md, Module configuration, 'Keeping a configuration across an upgrade', names it (get_configuration on the old instance, a transformation outside Core, then provisioned_configuration or update_configuration on the new instance id before its first start). The Runtime steps it uses are tested under their own units (DECISIONS I87)."
+
+# cfg-authority (DECISIONS I88)
+[[item]]
+ids = ["CFG-0008"]
+reason = "A negative over the configuration path, on the same footing as the CFG-0010 item (it can join it). A configuration mutation changes only the target's ConfigState, its side record and configuration_state_changed (runtime/config.nim imports no authority or policy module; engine.nim persistConfig, configApply, applied). The facts the Capability Authority evaluates are each instance's module name and selection and each provider's instance (engine.putFacts; authority/facts.nim InstanceFacts), never configuration, and the policy comes only from the protected wiring, so no value, revision or application can add or widen a scope. Each configuration method is itself authorized on its own target (tests [CFG-0020] [CFG-0057]) and an update starts nothing (test [CFG-0009]) (DECISIONS I87)."
+
+# cfg-boundary (DECISIONS I88)
+[[item]]
+ids = ["CFG-0065"]
+reason = "A negative over the delivery path. The module configuration boundary is the encoded configuration_input in logos_module_init_input_t.configuration_cbor (realizer.prepareInit, from the snapshot engine.beginAttempt takes) and the same encoding handed to _MODULE_apply_configuration (engine.configApply); neither carries a path, and no module configuration file exists: the host configuration gives the declaration and the provisioned value as CBOR byte strings (runtime/host_config.cddl, lcn.app_configuration and provisioned_configuration), which the Runtime keeps in its own store side records. The one path in the initialization input is state_dir, the instance's state directory (D21), not configuration. Tests [CFG-0066] (the delivered bytes are exactly one configuration_input) and [LDR-0074] in tests/test_realizer.nim (every field of the input) show the neighbouring behaviour."
+
+# cfg-upgrade (DECISIONS I88)
+[[item]]
+ids = ["CFG-0087"]
+reason = "A MAY for an authorized module instance, which the Runtime leaves open without adding anything (it can join the CFG-0134 item). get_configuration on the old instance and update_configuration on the replacement are ordinary Runtime Control methods, each authorized on its own target (engine configRead and the update path; tests [CFG-0020] [CFG-0057], [CFG-0061]); update_configuration accepts any complete value valid under the target's own accepted schema whatever its origin and validates it before anything changes (tests [CFG-0059] [CFG-0060]); Core transforms nothing. docs/HOST-CONFIG.md, Module configuration, 'Keeping a configuration across an upgrade', names this workflow (DECISIONS I87)."

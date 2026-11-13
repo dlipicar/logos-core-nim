@@ -266,7 +266,7 @@ suite "run.host-abi: the §13.3 structures in Nim (RUNTIME §13, §13.3)":
 # Bindings ----------------------------------------------------------------------------
 
 suite "ifc.abi-bindings: Runtime Control, route and call bindings (INTERFACE §5.2, §2.9.1)":
-  test "[IFC-0486] [IFC-0937] a valid Runtime Control binding passes; null vtable, state or any operation is MODULE_ERROR, and nothing is called":
+  test "[IFC-0486] [IFC-0937] [IFC-0938] a valid Runtime Control binding passes; null vtable, state or any operation is MODULE_ERROR, and nothing is called":
     calls = 0
     var vt = rcVtable()
     var b = LogosRuntimeControlBinding(vtable: addr vt, state: somewhere)
@@ -518,7 +518,7 @@ suite "ifc.abi-outcomes: result and output combinations (INTERFACE §2.4, §2.6,
     check ownerValid(LogosResponseOwner(state: somewhere, release: rel))
     check not ownerValid(LogosResponseOwner(state: somewhere, release: nil))
 
-  test "[IFC-0163] typed calls: success needs a valid owner; failure leaves owner and outputs at zero, and no release is called":
+  test "[IFC-0163] [IFC-0651] typed calls: success needs a valid owner; failure leaves owner and outputs at zero, and no release is called":
     calls = 0
     let rel = cast[ReleaseFn](stubAddr)
     let owned = LogosResponseOwner(state: somewhere, release: rel)
@@ -686,7 +686,7 @@ suite "ifc.abi-async: options, callbacks, provider descriptor, invocation and co
 # Runtime-side input shapes -----------------------------------------------------------
 
 suite "ifc.abi-inputs: materialize_route and connect_remote input shapes (INTERFACE §5.2)":
-  test "materialize_route needs a route id, a root and 1 to 8,388,608 schema bytes":
+  test "[IFC-0511] materialize_route needs a route id, a root and 1 to 8,388,608 schema bytes":
     var root: ContractRoot
     let one = @[0xA0'u8]
     check checkMaterializeInput("r1", addr root, dataOf(one), 1).isOk

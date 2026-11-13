@@ -32,3 +32,68 @@ reason = "Unreachable under the §5.3 limits this repository enforces: a choice 
 [[item]]
 ids = ["IFC-0921", "IFC-0924"]
 reason = "Addressed to contract authors: value constraints a contract states outside its schema, and how deep its payloads may be. No contract in this repository states such constraints, and no tool can tell what depth an interface requires of its callers. The implementation side is tested: the payload depth limit is configurable, at least 128 and 1024 by default, and a rejection past it is INVALID_PARAMS without detail ([IFC-0923]-[IFC-0929])."
+
+# I-abstract (DECISIONS I88)
+[[item]]
+ids = ["IFC-0005", "IFC-0558"]
+reason = "IFC-0005 is a rule for reading this specification's CBOR references, and IFC-0558 says a module need not implement the authoring mappings while its contract artifacts and encoding must conform; neither is behaviour of its own that a test can carry. What they require is tested where it applies: every value at a contract boundary is encoded and checked as Logos deterministic CBOR, and non-deterministic CBOR is refused (tests [IFC-0409], [IFC-0415], [IFC-0417]); the kit's contract artifacts are the documents lcn-gen accepted, embedded with their recomputed roots, its call-surface descriptor round-trips (tests [IFC-0229], [IFC-0233]) and its C layouts match logos_types.h ([IFC-0934]). The reverse authoring mapping is deferred with IFC-0003 and IFC-0004 (deferred:tier-5)."
+
+# I-2.5-may (DECISIONS I88)
+[[item]]
+ids = ["IFC-0192", "IFC-0666", "IFC-0671"]
+reason = "IFC-0671 is a permission for generators and IFC-0192 its example block (a typed event handler typedef and subscribe helper with implementation-defined names); IFC-0666 permits a terminal callback on the thread that detects the end. Neither permission is taken. lcn-gen generates typed publish helpers in the kit (test [IFC-0220]) and a typed invoke and clear helper per method in <stem>_calls.h (test [IFC-0057]), but no typed subscription helper: consumers subscribe through the route vtable's subscribe with the event name and a CBOR handler. The Runtime never runs an observe_end callback on the detecting thread: engine.nim schedules a jkObserveEnd job and a lifecycle worker runs it (bindings.runEnd), never inside another binding operation (test [IFC-0656])."
+
+# I-forced-termination (DECISIONS I88)
+[[item]]
+ids = ["IFC-0215"]
+reason = "A permission about forced termination of an execution envelope. Direct mode has no envelope to terminate (no Module Host, no process or sandbox placement): the Runtime never forces termination, and a _MODULE_destroy that outlives its deadline is recorded as cleanup-timeout and left to return, never interrupted (engine.nim stop and shutdown paths; test [RUN-1072]). Forced termination comes with hosted execution in Tier 4b."
+
+# I-opaque (DECISIONS I88)
+[[item]]
+ids = ["IFC-0234", "IFC-0257", "IFC-0478", "IFC-0479", "IFC-0683"]
+reason = "Negatives on an ABI caller holding module- or Runtime-owned opaque objects; no test can show that something is never done. IFC-0234: native.probeNative copies the _MODULE_call_surface() bytes into its own seq right after the call and never writes or frees the module's storage (test [IFC-0233] shows the same bytes every call). IFC-0257, IFC-0478: LogosModuleContext is an {.incompleteStruct.} with no fields (abi/types.nim), so Runtime code cannot dereference it; the realizer keeps each context only in its realization record and passes it back to that binding's own entries; instances are identified by instance-id strings in the engine and the store, and route handles are separate HandleState objects, so a context is never serialized, used as an identity or used as a routing handle. IFC-0479: route state is a HandleState cast only inside runtime/bindings.nim (handleOf); lcn-gen's call helpers and the kit reach a route only through its vtable operations after checkRoute (test [IFC-0489]). IFC-0683: logos_response_owner_t is an ABI-only type (logos_types.h; abi/types.nim LogosResponseOwner); iface/cmap.nim adds the response_owner parameter to typed signatures only, never to a schema, a commitment or a CBOR value (tests [IFC-0934], [IFC-0057])."
+
+# I-dispatch (DECISIONS I88)
+[[item]]
+ids = ["IFC-0247", "IFC-0248", "IFC-0492"]
+reason = "MAYs on which provider entry an ABI caller uses. The Runtime always calls _MODULE_dispatch: invoke.callProvider for every routed call, synchronous or asynchronous (asynccall runs it on a call worker), and invoke.systemCall for the Capability Authority's evaluate (G48(a)). IFC-0248's permission is therefore taken on the deterministic-CBOR path, the only one in direct mode, and IFC-0247's and IFC-0492's are not: native.completeNative resolves and requires a provider binding's typed provider functions (test [RUN-0056]) but the Runtime never calls them. Only the test harness (tests/kit/typed_harness.c) calls typed provider functions (tests [IFC-0164], [IFC-0162])."
+
+# I-app-setup (DECISIONS I88)
+[[item]]
+ids = ["IFC-0252", "IFC-0253", "IFC-0254"]
+reason = "IFC-0252 is a permission and IFC-0253, IFC-0254 bind the author of a method that needs application-level setup: what its response schema says and which code its handler returns. No test can show that for an arbitrary module. What this repository controls: lcn-gen keeps a schema method named init distinct from the lifecycle symbol (its own typedef and CALL_..._Init beside MODULE_init, test [IFC-0903]); the kit forwards a handler's own failure as given, and its own NOT_READY arises only from a missing Runtime service, never application state (codegen/kitrt.nim: no publish callback, no active provider entry on the thread); the one module the repository ships, the Capability Authority (authority/logos_capability_authority_kit.nim), has no setup method and never returns NOT_READY (authority/core.nim)."
+
+# I-no-transport (DECISIONS I88)
+[[item]]
+ids = ["IFC-0480", "IFC-0524", "IFC-0948"]
+reason = "Rules about execution modes and Transport boundaries that do not exist in Tier 4: only direct mode is built (no local or remote transport route, no Module Host, no Hello). IFC-0480: every route handle is the one HandleState with the one routeVtable (runtime/bindings.nim) whatever the provider, so callers see one contract; invariance across modes becomes testable with a second boundary and is deferred with IFC-0007 to IFC-0015 (deferred:tier-4b). IFC-0524: the Runtime Control binding, the publish callback and their state (AttemptServices) live on the process's shared heap and are handed only to _MODULE_init in that process (bindings.fill); no transport exists to carry them. IFC-0948: only a local or remote transport route needs provider-session establishment; direct routes have none, so no Hello rejection or establishment failure arises (rcMaterializeOp reaches only the engine's materialize checks, test [IFC-0943])."
+
+# I-released-handle (DECISIONS I88)
+[[item]]
+ids = ["IFC-0518"]
+reason = "A negative on the consumer of a route handle; no test can show a use that never happens. The Runtime never holds a route handle (its own calls to the Capability Authority go through invoke.systemCall), and lcn-gen's call helpers and the kit keep none; the test fixtures release a handle last. The Runtime side makes a released handle unusable: routeReleaseOp (runtime/bindings.nim) deactivates the handle's subscriptions, waits for a running callback and frees the HandleState (dropHandle), and a released handle gets no terminal callback (test [IFC-0516])."
+
+# I-marked-may (DECISIONS I88)
+[[item]]
+ids = ["IFC-0574", "IFC-0582"]
+reason = "A SHOULD and a MAY about buffers that hold a marked payload. No Tier 4 path carries one: establish_route refuses a contract that marks any payload with MODULE_ERROR before readiness, so no route is made ready and no handle, call or buffer ever holds a marked payload (engine.nim, the establish_route path on sel.sensitive; DECISIONS G244, I88 D-c; test [IFC-0578]). Erasure and the other marked-payload duties are deferred to Tier 4b with IFC-0575 to IFC-0577 and IFC-0580."
+
+# I-build (DECISIONS I88)
+[[item]]
+ids = ["IFC-0587", "IFC-0602"]
+reason = "Build-level rules no runtime test can observe. IFC-0587: every native participant here is built by one toolchain in one build (the Nim compiler and its C backend for the Runtime, the kit modules and the Capability Authority; the same C compiler for tests/kit/typed_harness.c), and every exchanged function type, export and callback is cdecl (abi/types.nim, the kit's exportc procs in codegen/kitgen.nim, the generated headers); every exchanged struct's size, alignment and offsets are checked against logos_types.h ([IFC-0934]). IFC-0602: LOGOS_C_MAPPING_REVISION appears only in logos_types.h and in the compile-time check generated headers carry (iface/cmap.nim; test [IFC-0597]); no Runtime, realizer or kit code reads, compares or hashes it, and schema identity is computed from the documents alone."
+
+# I-typed-caller (DECISIONS I88)
+[[item]]
+ids = ["IFC-0679", "IFC-0691", "IFC-0693", "IFC-0697"]
+reason = "Duties and negatives of an ABI caller of typed provider functions. The Runtime is never one: it always calls _MODULE_dispatch (invoke.callProvider, invoke.systemCall; see I-dispatch), so no Runtime path can show them. The only such caller is the test harness (tests/kit/typed_harness.c, driven by tests/support/typedharness.nim `run`): it copies what it reports (status text and outputs) before checking the outcome, then clears the owner once with logos_response_owner_clear whatever checkOutcome found, on the thread that read the outputs and after reading them, frees no storage the owner governs, and reads no output after clearing (tests [IFC-0685], [IFC-0694]). That these things never happen is a negative no test can carry."
+
+# I-alias-may (DECISIONS I88)
+[[item]]
+ids = ["IFC-0687"]
+reason = "A permission for a provider's response storage, taken by the kit: typed outputs point into the call's CallArena blocks (codegen/callrt.nim), and every empty text, bytes or array output points at the one static emptyStorage, so several outputs may alias it. Callers treat outputs as borrowed and free none of them (tests [IFC-0689]: an empty response's empty owner; [IFC-0685]: the owner frees only its own storage)."
+
+# I-ctx-concurrent-may (DECISIONS I88)
+[[item]]
+ids = ["IFC-0777"]
+reason = "A permission for the module: it may run caller, is_cancelled and publish on one context concurrently while it holds the borrow. The Runtime's operations allow it: each admits itself through the invocation's entry guard (callside.enterGuard, leaveGuard), whose lock is held only to count the entry; callerOp reads identity fixed at the invocation's creation and isCancelledOp an atomic flag (invoke.nim), and publishOp delivers outside that lock. Whether a module uses the permission is its choice; current and caller from many threads at once are tested ([IFC-0771])."

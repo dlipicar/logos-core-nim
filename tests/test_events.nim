@@ -149,6 +149,33 @@ proc closeFrom(s: var Seen, rc: ptr LogosRuntimeControlBinding, route: string) =
 proc published(e: Engine, fragment: string): bool =
   e.diagnostics().anyIt(fragment in it)
 
+var
+  nestedRoute: ptr LogosRouteHandle ## where `onNested` calls the provider again
+  nestedWho: array[64, char] ## the caller its nested entry saw (channel 18)
+  nestedWhoLen: Atomic[int] ## its length; -1 before the call, -2 if it failed
+
+proc onNested(
+    name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  ## Enters the publishing provider again through `nestedRoute`: a nested
+  ## provider entry on the publishing thread, with that route's consumer.
+  {.cast(gcsafe).}:
+    try:
+      let r = invoke(nestedRoute, MeterReadRequest(channel: 18))
+      if r.isOk:
+        let who = r.get.label
+        for i, c in who:
+          nestedWho[i] = c
+        nestedWhoLen.store(who.len)
+      else:
+        nestedWhoLen.store(-2)
+    except CatchableError:
+      nestedWhoLen.store(-2)
+
+proc nestedCaller(): string =
+  for i in 0 ..< max(nestedWhoLen.load, 0):
+    result.add(nestedWho[i])
+
 # Threads ------------------------------------------------------------------------------
 
 type Job = object
@@ -385,7 +412,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     h.release()
     e.finish()
 
-  test "[RUN-0244] [RUN-0245] [IFC-0184] a publication that cannot be validated is dropped with a diagnostic; a valid one arrives byte for byte":
+  test "[RUN-0243] [RUN-0244] [RUN-0245] [IFC-0184] a publication that cannot be validated is dropped with a diagnostic; a valid one arrives byte for byte":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     resetDeferred()
     discard e.started(dmeter())
@@ -484,7 +511,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     f2.release()
     e4.finish()
 
-  test "[IFC-0181] [IFC-0182] [IFC-0183] one subscription's handler never overlaps across publishing threads; distinct subscriptions all receive":
+  test "[IFC-0181] [IFC-0182] [IFC-0183] [IFC-0277] [IFC-0278] one subscription's handler never overlaps across publishing threads; distinct subscriptions all receive":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -537,6 +564,27 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     h.release()
     e.finish()
 
+  test "[IFC-0774] a nested provider entry restores the caller's context when it returns (INTERFACE §2.9.3 l.2162)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (c1, rc1) = e.startClient("c1")
+    let (c2, rc2) = e.startClient("c2")
+    var h1 = rc1.handle(rc1.routeId("k1"))
+    var h2 = rc2.handle(rc2.routeId("k2"))
+    var id: LogosSubscriptionId
+    check h1.subscribe(nil, id, handler = onNested) == ecOk
+    nestedRoute = addr h2
+    nestedWhoLen.store(-1)
+    # Channel 21 publishes, so the handler enters the meter again as c2 on this
+    # thread, and then reads its own caller once that nested entry returned.
+    let r = h1.read(21)
+    check r.isOk
+    check nestedCaller() == c2.instance
+    check r.get.label == c1.instance
+    h1.release()
+    h2.release()
+    e.finish()
+
 suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2.9.3)":
   setup:
     clearAll()
@@ -583,7 +631,7 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     h.release()
     e.finish()
 
-  test "[RUN-0831] [RUN-0830] a handler that closes the destination stops later admissions, and publish reports NOT_READY":
+  test "[RUN-0831] [RUN-0830] [RUN-0834] a handler that closes the destination stops later admissions, and publish reports NOT_READY":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -599,6 +647,52 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     check seen[1].count.load == 0
     h.release()
     e.finish()
+
+  test "[CAP-0376] each scoped delivery commitment asks publish-event and subscribe-event; a denied publish-event reaches no handler (CA §8.1 l.969)":
+    let e = fixtureEngine(config())
+    let m = e.started(meter())
+    let (c, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var a: LogosSubscriptionId
+    check h.subscribe(addr seen[0], a) == ecOk
+    let (provider, consumer) = (m.instance, c.instance)
+    proc decisions(e: Engine): (int, int) =
+      let asked = e.answers()
+      (
+        asked.countIt(
+          it.request.action == aaPublishEvent and it.request.consumer == provider and
+            it.request.target == consumer
+        ),
+        asked.countIt(
+          it.request.action == aaSubscribeEvent and it.request.consumer == consumer and
+            it.request.route.len > 0
+        ),
+      )
+
+    let (pub0, sub0) = e.decisions()
+    check h.read(17).isOk
+    check h.read(17).isOk
+    check seen[0].count.load == 2
+    when not declared(caParity):
+      # Two deliveries, two of each decision: none is carried from activation.
+      # Under the Capability Authority each delivery is decided through its
+      # cache instead (the suite below counts what reaches the authority).
+      check e.decisions() == (pub0 + 2, sub0 + 2)
+    h.release()
+    e.finish()
+    clearAll()
+    let d = fixtureEngine(
+      config(denying(deny(action = Opt.some(aaPublishEvent), target = "denied")))
+    )
+    discard d.started(meter())
+    let (_, rd) = d.startClient("denied")
+    var k = rd.handle(rd.routeId("k"))
+    check k.subscribe(addr seen[1], a) == ecOk
+    # The meter returns the publication's NOT_AUTHORISED as its own.
+    check k.read(17).error.code == ecNotAuthorised
+    check seen[1].count.load == 0
+    k.release()
+    d.finish()
 
 when declared(caParity):
   proc evaluations(what: string): int =

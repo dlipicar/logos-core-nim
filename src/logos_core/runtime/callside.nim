@@ -363,12 +363,13 @@ proc currentOp*(state: pointer): ptr LogosInvocationContext {.cdecl.} =
 
 proc enterGuard*(s: ptr InvocationState): bool =
   ## [SPEC INTERFACE l.2137-2141, l.2175-2177] Admits one entry using a
-  ## deferred invocation's state; false once the invocation is idle (a use
-  ## after its release, which the provider ABI forbids).
+  ## deferred invocation's state; false once `execution_release` came, which
+  ## closes admission (l.2177; I88), even while entries admitted before it
+  ## still hold the state.
   if not s.guarded:
     return true
   withLock s.glock:
-    if s.finished:
+    if s.released or s.finished:
       return false
     inc s.entries
   true

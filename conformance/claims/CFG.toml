@@ -2,10 +2,12 @@
 # The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
 #   claimed               every requirement unit in it needs a test tagged [CFG-NNNN]
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   deferred:tier-4b      not built yet: logosctl, logosd, the Module Host and what they bring
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
 
-default = "deferred:tier-4"
+# CONFIG for direct mode, Tier 4 step 9 (DECISIONS I87); claimed with Tier 4 (I88).
+default = "claimed"
 
 [sections]
 "References" = "informative"

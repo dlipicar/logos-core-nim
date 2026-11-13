@@ -193,7 +193,7 @@ proc waitHanging(n = 1): bool =
 # Tests --------------------------------------------------------------------------------
 
 suite "run.authority: the binding (RUNTIME l.1652-1680; CA §1)":
-  test "[RUN-0313] [RUN-0314] [RUN-0315] [RUN-0316] [RUN-0317] [RUN-0319] [CAP-0003] [CAP-0005] [CAP-0006] [CAP-0008] the configured authority is bound once ready, before its start is answered, under a fresh generation":
+  test "[RUN-0313] [RUN-0314] [RUN-0315] [RUN-0316] [RUN-0317] [RUN-0319] [RUN-0851] [CAP-0003] [CAP-0005] [CAP-0006] [CAP-0008] the configured authority is bound once ready, before its start is answered, under a fresh generation":
     fresh()
     let e = newEngine(caConfig())
     let orch = e.boot()
@@ -224,6 +224,21 @@ suite "run.authority: the binding (RUNTIME l.1652-1680; CA §1)":
     check e.last.outcome == azEvaluationFailed
     e.finish()
 
+  test "[RUN-0015] [RUN-0016] an authority whose record declares no contract has no provider record and is never bound (l.165-169, l.1420-1421, l.1647; DECISIONS I88)":
+    fresh()
+    let e = newEngine(caConfig())
+    var record = fakeCaRecord()
+    record.primaryContract = Opt.none(Digest)
+    let orch = e.boot(caRecord = record)
+    check orch.lifecycle("start_module", CaModuleName, Opt.some(Ca)).code == ecOk
+    let v = e.view(Ca).tryGet
+    check v.state == msReady
+    check v.providerId.len == 0
+    check not e.bound
+    check e.diagnostics().anyIt("is not bound: it has no provider record" in it)
+    check orch.observe().code == ecNotAuthorised
+    e.finish()
+
   test "[IMPL] [RUN-0701] the orchestration instance cannot be the authority (C8)":
     fresh()
     let e = newEngine(caConfig())
@@ -232,7 +247,7 @@ suite "run.authority: the binding (RUNTIME l.1652-1680; CA §1)":
     e.finish()
 
 suite "run.authority: bootstrap and recovery rules (RUNTIME l.1635-1650, l.1674-1680)":
-  test "[RUN-0305] [RUN-0306] [RUN-0311] [RUN-0312] [RUN-0050] [RUN-0051] [RUN-0859] [CAP-0062] before the binding, orchestration starts the authority without an evaluation; everything else fails closed as an evaluation failure":
+  test "[RUN-0022] [RUN-0305] [RUN-0306] [RUN-0311] [RUN-0312] [RUN-0050] [RUN-0051] [RUN-0859] [CAP-0062] before the binding, orchestration starts the authority without an evaluation; everything else fails closed as an evaluation failure":
     fresh()
     let e = newEngine(caConfig())
     let orch = e.boot()
@@ -314,7 +329,7 @@ suite "run.authority: bootstrap and recovery rules (RUNTIME l.1635-1650, l.1674-
     e.finish()
 
 suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
-  test "[CAP-0011] [CAP-0012] [CAP-0013] [CAP-0014] [CAP-0428] [RUN-0322] [RUN-0324] [RUN-0858] [RUN-0823] evaluate runs off the Runtime thread with a system-service caller; the consumer is the module, never the engine":
+  test "[CAP-0011] [CAP-0012] [CAP-0013] [CAP-0014] [CAP-0428] [RUN-0322] [RUN-0324] [RUN-0811] [RUN-0858] [RUN-0823] [IFC-0781] evaluate runs off the Runtime thread with a system-service caller; the consumer is the module, never the engine":
     let (e, orch) = ready()
     check orch.observe().code == ecOk
     let got = received()
@@ -366,7 +381,7 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
         check false
     e.finish()
 
-  test "[CAP-0025] [CAP-0098] [CAP-0108] [CAP-0109] [CAP-0110] [CAP-0111] [CAP-0112] [CAP-0113] [CAP-0114] [CAP-0118] [CAP-0153] [CAP-0260] [CAP-0261] [CAP-0084] [CAP-0068] [RUN-0325] [RUN-0327] [RUN-0329] a malformed decision, an error arm or a failed dispatch is an evaluation failure, never a deny":
+  test "[CAP-0025] [CAP-0098] [CAP-0108] [CAP-0109] [CAP-0110] [CAP-0111] [CAP-0112] [CAP-0113] [CAP-0114] [CAP-0118] [CAP-0153] [CAP-0260] [CAP-0261] [CAP-0084] [CAP-0068] [RUN-0038] [RUN-0325] [RUN-0327] [RUN-0329] a malformed decision, an error arm or a failed dispatch is an evaluation failure, never a deny":
     let (e, orch) = ready()
     for v in [
       vError, vStatus, vWrongConsumer, vOtherScopes, vBroadened, vUncovered, vUnordered,
@@ -397,7 +412,7 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
     check v.failure.get.kind == fkAuthorityEvaluationFailed
     e.finish()
 
-  test "[RUN-0326] [RUN-0328] [RUN-0330] [RUN-0331] [CAP-0153] a deny is NOT_AUTHORISED; the retained answer keeps its consumer, operation, target, decision id and denial code":
+  test "[RUN-0326] [RUN-0328] [RUN-0330] [RUN-0331] [CAP-0153] [CAP-0265] a deny is NOT_AUTHORISED; the retained answer keeps its consumer, operation, target, decision id and denial code":
     let (e, orch) = ready()
     setScript(
       rule(
@@ -417,7 +432,7 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
     check a.request.target == Meter
     e.finish()
 
-  test "[CAP-0115] [CAP-0116] [CAP-0117] [CAP-0051] [RUN-0567] a narrowed route allow gives the route its access; an allow that excludes the operation is refused and marked narrowed":
+  test "[CAP-0115] [CAP-0116] [CAP-0117] [CAP-0051] [CAP-0052] [RUN-0567] a narrowed route allow gives the route its access; an allow that excludes the operation is refused and marked narrowed":
     let (e, orch) = ready()
     let readRoot = declRoot("meter.read")
     var narrowed = allow("establish-route")
@@ -439,7 +454,7 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
     e.finish()
 
 suite "run.authority: the decision cache (CA §8 l.857-867)":
-  test "[CAP-0119] [CAP-0120] [RUN-0867] [RUN-0571] [RUN-0572] an allow with a validity is reused until it ends; one without is asked each time":
+  test "[CAP-0119] [CAP-0120] [RUN-0867] [RUN-0571] [RUN-0572] [RUN-0799] an allow with a validity is reused until it ends; one without is asked each time":
     let (e, orch) = ready()
     setScript(allow("call", validMs = 1000))
     var h = orch.handle(orch.routeId("k"))
@@ -549,7 +564,7 @@ suite "run.authority: notices (CA §8 l.884-903)":
     hh.release()
     e.finish()
 
-  test "[CAP-0353] [CAP-0354] [CAP-0355] [CAP-0177] [CAP-0183] a notice that does not read is notification-path loss: a new generation, nothing carried over":
+  test "[CAP-0176] [CAP-0353] [CAP-0354] [CAP-0355] [CAP-0177] [CAP-0183] a notice that does not read is notification-path loss: a new generation, nothing carried over":
     let (e, orch) = ready()
     setScript(allow("call"))
     var h = orch.handle(orch.routeId("k"))
@@ -568,7 +583,7 @@ suite "run.authority: notices (CA §8 l.884-903)":
     e.finish()
 
 suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
-  test "[CAP-0344] [CAP-0345] [CAP-0346] [CAP-0347] [CAP-0348] [CAP-0172] [CAP-0173] [RUN-0854] a lost authority answers parked evaluations and closes admission; neither its late results nor its cache reach the next binding, whatever revision it reports [IMPL-DECISION G227]":
+  test "[CAP-0344] [CAP-0345] [CAP-0346] [CAP-0347] [CAP-0348] [CAP-0172] [CAP-0173] [RUN-0853] [RUN-0854] a lost authority answers parked evaluations and closes admission; neither its late results nor its cache reach the next binding, whatever revision it reports [IMPL-DECISION G227]":
     fresh()
     let e = newEngine(caConfig(recovery = true))
     let orch = e.boot()
@@ -642,6 +657,63 @@ suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
     check h.read(1).isOk
     check count("call") == 1
     check e.lastFor(aaCall).policyRevision == 7
+    h.release()
+    e.finish()
+
+  test "[RUN-0855] once binding authority ends, the old realization's notices no longer act; the recovered binding's are consumed (RUNTIME §9 l.1652)":
+    fresh()
+    let e = newEngine(caConfig(recovery = true))
+    let orch = e.boot()
+    e.startCa(orch)
+    check e.start(Meter).tryGet.state == msReady
+    var h = orch.handle(orch.routeId("k"))
+    check h.read(1).isOk
+    # The old realization stays while an evaluation of it hangs, so its
+    # publish callback is still live after the binding is lost.
+    hold()
+    setScript(rule(vHang, "rc:get_readiness"))
+    park(orch, "get_readiness", observeReq("meter_module", Meter))
+    check waitHanging()
+    check e.reportFailure(Ca, e.view(Ca).tryGet.attempt).isOk
+    check parkedCode() == ecNotAuthorised
+    check not e.bound
+    let failed = e.view(Ca).tryGet
+    let g = e.generation
+    let answered = e.answers().len
+    const Ignored = "which is not the bound authority, was ignored"
+    # Consumed, policy_changed would re-authorize the route at once, and a
+    # notice that does not read would be notification-path loss.
+    check publish(PolicyChangedName, policyChanged(0, 9))
+    check publish(GrantChangedName, @[0xFF'u8])
+    check e.diagnostics().countIt(Ignored in it) == 2
+    check not e.diagnostics().anyIt("notification path is lost" in it)
+    check e.generation == g
+    check e.answers().len == answered
+    release()
+    check waitUntil(
+      proc(): bool =
+        e.view(Ca).tryGet.execution.revision > failed.execution.revision
+    )
+    let recover = encode(
+      LogosNSRuntimeControlRecoverModuleRequest(
+        module: CaModuleName,
+        instance: Ca,
+        expected_execution_revision: e.view(Ca).tryGet.execution.revision,
+      )
+    ).tryGet
+    check orch.rcCall("recover_module", recover).code == ecOk
+    check e.bound
+    # The new realization's notice is consumed: the cached call decision is
+    # cleared, so the next call is evaluated again.
+    setScript()
+    forget()
+    check h.read(1).isOk
+    check h.read(1).isOk
+    check count("call") == 1
+    check publish(PolicyChangedName, policyChanged(9, 10))
+    check e.diagnostics().countIt(Ignored in it) == 2
+    check h.read(1).isOk
+    check count("call") == 2
     h.release()
     e.finish()
 
@@ -1290,7 +1362,7 @@ proc evalReq(e: Engine, consumer: string, renewal = false): seq[byte] =
   ).tryGet
 
 suite "run.authority: routed calls to the authority (CA l.88-91, l.579; S8b-1 interim)":
-  test "[CAP-0013] [CAP-0305] [CAP-0248] [RUN-0324] a routed call naming another consumer, or an evaluate carrying execution_renewal, is NOT_AUTHORISED without dispatch and kept as a refusal; a matching call reaches the authority with a module caller":
+  test "[CAP-0013] [CAP-0305] [CAP-0248] [CAP-0306] [RUN-0324] [RUN-0852] a routed call naming another consumer, or an evaluate carrying execution_renewal, is NOT_AUTHORISED without dispatch and kept as a refusal; a matching call reaches the authority with a module caller":
     let (e, orch) = ready()
     let caSet = block:
       let d = caDocuments()

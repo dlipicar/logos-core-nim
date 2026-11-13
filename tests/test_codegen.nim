@@ -1024,7 +1024,7 @@ suite "ifc.c-types: paths and aggregates (INTERFACE §2.1, §2.3, §3.9.10)":
     )
 
 suite "ifc.c-types: logos_types.h and compiled headers (INTERFACE §3.9.6, §5.2)":
-  test "[IFC-0603] [IFC-0934] logos_types.h holds the §5.2 block, the §2.3 empty types and the common types":
+  test "[IFC-0603] [IFC-0681] [IFC-0682] [IFC-0695] [IFC-0696] [IFC-0934] [RUN-0242] logos_types.h holds the §5.2 block, the §2.3 empty types and the common types":
     let h = logosTypesHeader()
     let fixed = cItems(h)
     for item in cItems(mirror("IFC/5.2.logos_types.h")):
@@ -1310,7 +1310,7 @@ storage.report_response =
     check "in_class_" notin got.text and "out_class_" notin got.text
     checkCompiles compilesSet("abiforms", accepted(source))
 
-  test "[IFC-0903] §3.9.8: methods init, destroy and upload_url beside the lifecycle symbols":
+  test "[IFC-0903] [IFC-0904] §3.9.8: methods init, destroy and upload_url beside the lifecycle symbols":
     let source = module(
       "demo.init_request = {}\ndemo.init_response = {}\n" &
         "demo.destroy_request = {}\ndemo.destroy_response = {}\n" &
@@ -1392,7 +1392,7 @@ proc declaredName(item: string): string =
   item[0 ..< paren].strip.splitWhitespace[^1].strip(chars = {'*'})
 
 suite "ifc.c-abi: the typed call helpers' header (INTERFACE §2.1, §2.7.2, App A.5) [IMPL]":
-  test "[IFC-0057] [IFC-0627] [IFC-0628] [IFC-0706] <stem>_calls.h: an invoke and a clear helper per exposed method, outside the header set and with no logos_ symbol":
+  test "[IFC-0057] [IFC-0208] [IFC-0627] [IFC-0628] [IFC-0706] <stem>_calls.h: an invoke and a clear helper per exposed method, outside the header set and with no logos_ symbol":
     let kitShapes =
       readFile(currentSourcePath().parentDir / "kit" / "shapes_module.cddl")
     for (stem, s) in [

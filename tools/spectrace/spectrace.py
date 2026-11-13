@@ -618,18 +618,21 @@ def statuses(claims: dict):
 
 def cmd_gate(args) -> int:
     """Every live unit in a claimed section is referenced by a test or an inspection
-    item; no status defers to a closed tier."""
+    item; an inspected unit is claimed; no status defers to a closed tier."""
     root = Path(args.root)
     referenced: set[str] = set()
     for test in (root / "tests").rglob("*.nim"):
         referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
     failures = 0
+    inspected: dict[str, str] = {}
     for extra in sorted((root / "conformance" / "inspection").glob("*.toml")):
         for item in load_toml(extra).get("item", []):
             if not str(item.get("reason", "")).strip():
                 print(f"{extra.name}: inspection item {item.get('ids')} has no reason")
                 failures += 1
             referenced.update(item.get("ids", []))
+            for i in item.get("ids", []):
+                inspected.setdefault(i, extra.name)
     closed = {f"deferred:tier-{t}" for t in args.closed_tier}
     live_ids: set[str] = set()
     for fname, prefix in SPECS.items():
@@ -667,6 +670,10 @@ def cmd_gate(args) -> int:
             by_status[st] = by_status.get(st, 0) + 1
             if st == "deferred":
                 by_label[full] = by_label.get(full, 0) + 1
+            # [W1] Inspection stands for a test, so it covers claimed units only.
+            if u.id in inspected and full != "claimed":
+                print(f"{prefix}: {u.id} is inspected ({inspected[u.id]}) but not claimed ({full})")
+                failures += 1
         claimed = [u for u in live if unit_status(claims, u) == "claimed"]
         missing = [u for u in claimed if u.id not in referenced]
         summary = ", ".join(f"{v} {k}" for k, v in sorted(by_status.items()))

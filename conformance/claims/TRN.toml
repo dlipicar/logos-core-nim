@@ -2,11 +2,12 @@
 # The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
 #   claimed               every requirement unit in it needs a test tagged [TRN-NNNN]
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   deferred:tier-4b      not built yet: logosctl, logosd, the Module Host and what they bring
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
 # A `[units]` entry gives one requirement unit its own status, overriding its section's.
 
-default = "deferred:tier-4"
+default = "claimed"
 
 [sections]
 "References" = "informative"
@@ -16,19 +17,19 @@ default = "deferred:tier-4"
 # requests and commitments, subscriptions, cancellation, multiplexing, route
 # termination, validation and evolution. Tier 4 step 10a (DECISIONS I83): the
 # unix-stream I/O layer, event output, execution slots, route access, test hooks
-# and the aggregate limits. The Runtime's side of routes is 10b; Windows and the
-# remote profiles tier 5.
+# and the aggregate limits. The Runtime's side of routes is 10b (Tier 4b); Windows
+# and the remote profiles tier 5. Claimed by default with Tier 4 (DECISIONS I88).
 "Abstract" = "claimed"
 "§1" = "claimed"
 "§2" = "claimed"
 "§3.1" = "claimed"
-"§3.2" = "deferred:tier-4"
+"§3.2" = "claimed"
 "§3.3" = "claimed"
 "§3.4" = "claimed"
 "§4" = "claimed"
 "§5.1" = "claimed"
 "§5.2" = "claimed"
-"§5.3" = "deferred:tier-4"
+"§5.3" = "out-of-scope:a requirement on module contracts"
 "§6" = "claimed"
 "§7" = "claimed"
 "§8.1" = "claimed"
@@ -50,11 +51,10 @@ default = "deferred:tier-4"
 "§10" = "claimed"
 
 [units]
-# §3.2: no replay and no ticket reuse hold in the sans-I/O session.
-"TRN-0078" = "claimed"
-"TRN-0079" = "claimed"
-# §3.4: callbacks and released application state belong to the native binding (10b).
-"TRN-0290" = "deferred:tier-4"
+# §3.2, §3.4: the route-handle observer and the native handle's callbacks and released application
+# state belong to the native binding of a transported route (10b).
+"TRN-0278" = "deferred:tier-4b"
+"TRN-0290" = "deferred:tier-4b"
 # Requirements on module contracts, not on the transport.
 "TRN-0098" = "out-of-scope:a requirement on module contracts that disclose partially"
 "TRN-0117" = "out-of-scope:a requirement on contracts that promise state reconstruction"
@@ -62,24 +62,24 @@ default = "deferred:tier-4"
 "TRN-0308" = "out-of-scope:a requirement on contracts that promise state reconstruction"
 # §8.1: the binding carries the authority decision and its expiry, and the
 # session ends with it, but the decision, its expiry and revocation come from a
-# test owner until the Runtime supplies them (10b; step10a plan F3).
-"TRN-0153" = "deferred:tier-4"
-"TRN-0317" = "deferred:tier-4"
+# test owner until the Runtime supplies them (10b; step10a plan F3): tagged, not
+# claimed (fable-review §7.5).
+"TRN-0153" = "deferred:tier-4b"
+"TRN-0317" = "deferred:tier-4b"
 "TRN-0165" = "out-of-scope:a requirement on other security profiles"
 # §8.2: built and tagged by the transport I/O tests; what triggers them is the
 # Module Host (TRN-0184, 0185, 0186: the listener transfer and readiness) or the
 # Runtime's route handling (TRN-0187: where the expected identity comes from;
-# TRN-0191: failing the route; TRN-0195: ticket delivery). Claimed with 10b/4b.
-"TRN-0184" = "deferred:tier-4"
-"TRN-0185" = "deferred:tier-4"
-"TRN-0186" = "deferred:tier-4"
-"TRN-0187" = "deferred:tier-4"
-"TRN-0191" = "deferred:tier-4"
-"TRN-0195" = "deferred:tier-4"
+# TRN-0191: failing the route; TRN-0195: ticket delivery). Claimed with 10b and
+# the Module Host (Tier 4b).
+"TRN-0184" = "deferred:tier-4b"
+"TRN-0185" = "deferred:tier-4b"
+"TRN-0186" = "deferred:tier-4b"
+"TRN-0187" = "deferred:tier-4b"
+"TRN-0191" = "deferred:tier-4b"
+"TRN-0195" = "deferred:tier-4b"
 # G58: no claim of protection from same-identity processes.
 "TRN-0346" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
 "TRN-0347" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
-# §5.3: a requirement on module contracts.
-"TRN-0312" = "out-of-scope:a requirement on module contracts"
 # §10: a requirement on a future transport profile.
 "TRN-0252" = "out-of-scope:a requirement on future transport profiles"

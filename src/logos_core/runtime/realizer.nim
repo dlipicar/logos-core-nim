@@ -1,9 +1,11 @@
-## LOADER §3-§7, §9-§11 for the two direct strategies: the Runtime's internal
-## Module Loader [IMPL].
+## The Runtime's in-process realizer for the two direct strategies, shaped
+## after LOADER §3-§7, §9-§11 [IMPL]. It is an implementation-local realization
+## mechanism (RUNTIME l.212), not a Module Loader instance (S11-1 option (b);
+## DECISIONS G230, I88): LOADER is not claimed until Tier 4b.
 ##
 ## The realizer is shaped like the Loader contract (realize, release, get_status,
 ## its descriptors, records and error codes), so the Runtime calls it the way it
-## will call a Loader provider, but it is an in-process object, not a module.
+## would call a Loader provider, but it is an in-process object, not a module.
 ## It advertises `direct_static` and `direct_dynamic`; `hosted_dynamic` is
 ## refused with `unsupported-strategy` before any artifact code is loaded, and
 ## `force` with `invalid-request` (§4, §9).
@@ -17,9 +19,9 @@
 ## [IMPL] Every direct realization failure is cleaned up before `realize`
 ## returns, so no failed realization is ever retained: what a module that broke
 ## the init contract left behind cannot be cleaned by the Loader at all.
-## [IMPL] Configuration handoffs are not supported yet (CONFIG is not built):
-## the Runtime rejects records that declare configuration, and the ABI caller
-## always supplies the absent representation.
+## The configuration handoff (CONFIG §6; I87) carries the encoded
+## `configuration_input` into `_MODULE_init`; a request without one gets the
+## absent representation (INTERFACE l.3914).
 ## [IMPL] A realizer is owned by one thread, the Runtime's; calls on it are
 ## serialized, which gives LOADER §11's per-instance total order. Module code
 ## runs in separate phases (`runBind`, `initModule`, a `Teardown`) that take

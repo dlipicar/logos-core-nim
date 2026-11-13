@@ -801,6 +801,37 @@ suite "run.rc: event authority (RUNTIME l.3498, l.3732-3735) [IMPL-DECISION G161
       check watches[1].execEv(i).module == "meter_module"
     e.finish()
 
+  test "[CFG-0109] `configuration_state_changed` is delivered only for a target the subscriber may observe (CONFIG §8 l.324)":
+    when declared(caParity):
+      let e = fixtureEngine(rcConfig())
+      setScript(
+        narrowing("rcev:configuration_state_changed", RcNarrow(instances: only("a")))
+      )
+    else:
+      let e = fixtureEngine(
+        rcConfig(denying(deny(action = Opt.some(aaObserveEvent), target = "b")))
+      )
+    let (_, rc) = e.startClient("c")
+    var id: LogosSubscriptionId
+    check rc.subscribe(ConfigurationState, addr watches[0], id) == ecOk
+    let acc = tunerAccepted(default = Opt.some(tunerValue()))
+    var configured = meter()
+    configured.configuration = Opt.some(acc.digest)
+    discard e.create(configured, "b", configuration = Opt.some(acc)).tryGet
+    discard e.create(configured, "a", configuration = Opt.some(acc)).tryGet
+    check rc.stage(e.target("b"), 1, tunerValue("x")).updated.state_revision == 2
+    check rc.stage(e.target("a"), 1, tunerValue("y")).updated.state_revision == 2
+    # Revisions 1 and 2 of `a`; nothing of `b`.
+    check watches[0].reached(2)
+    check watches[0].quiet() == 2
+    for i in 0 ..< 2:
+      let ev = LogosNSRuntimeControlConfigurationStateChangedEvent.decode(
+        watches[0].bytesAt(i)
+      ).tryGet
+      check ev.target == e.target("a")
+      check ev.state.state_revision == uint64(i + 1)
+    e.finish()
+
   test "[RUN-0979] [RUN-0981] a hint needs the list method's authority for an affected record too":
     when declared(caParity):
       let e = fixtureEngine(rcConfig())

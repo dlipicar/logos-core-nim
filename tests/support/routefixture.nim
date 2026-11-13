@@ -362,6 +362,32 @@ proc materialize(
   )
   (toResult(res).code, h)
 
+type Materialized = object
+  code: ErrorCode
+  detailNull: bool ## the status's `detail` pointer was null
+  detailLen: int ## the status's `detail_len`
+  handle: LogosRouteHandle
+
+proc materializeStatus(
+    rc: ptr LogosRuntimeControlBinding,
+    route: string,
+    root = meterRoot,
+    schema = meterSchema,
+): Materialized =
+  ## `materialize`, with the returned status's validation detail as given.
+  var r: ContractRoot = root
+  let res = rc.vtable.materializeRoute(
+    rc,
+    cstring(route),
+    addr r,
+    cast[ptr UncheckedArray[uint8]](unsafeAddr schema[0]),
+    csize_t(schema.len),
+    addr result.handle,
+  )
+  result.code = errorCode(int64(res.code)).get
+  result.detailNull = res.detail == nil
+  result.detailLen = int(res.detailLen)
+
 proc handle(rc: ptr LogosRuntimeControlBinding, route: string): LogosRouteHandle =
   let (code, h) = rc.materialize(route)
   check code == ecOk

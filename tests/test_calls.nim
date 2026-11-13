@@ -403,7 +403,7 @@ suite "ifc.calls: what a helper rejects from its route (INTERFACE §2.7.2, §5.2
     check read.counts == (1, 1, 0)
     read.dispose()
 
-  test "a route handle that fails its consumer's checks is never called":
+  test "[IFC-0216] a route handle that fails its consumer's checks is never called":
     let base = newRoute(rmGive, response = diag("{}"))
     let good = base.handle.vtable[]
     var bad: LogosRouteVtable

@@ -17,7 +17,7 @@ from ./generated/sensor_module_kit import sensorModuleLayout
 from ./generated/shapes_module_kit import shapesModuleLayout
 from ./generated/tuner_module_kit import nil
 from ./generated/quiet_module_kit import nil
-import ./kit/[meter_impl, sensor_impl, shapes_impl, tuner_impl, quiet_impl]
+import ./kit/[meter_impl, sensor_impl, shapes_impl, tuner_impl, quiet_impl, beacon_impl]
 import ../src/logos_core/pins
 from ../src/logos_core/codegen/kitgen import
   KitConfiguration, KitOptions, configurationSet, kitModule
@@ -113,6 +113,25 @@ proc quietInit(
 proc quietDestroy(
   module: ptr LogosModuleContext
 ) {.importc: "logos_quiet_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
+
+proc beaconInit(
+  input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+): LogosResult {.importc: "logos_beacon_module_MODULE_init", cdecl, gcsafe, raises: [].}
+
+proc beaconDestroy(
+  module: ptr LogosModuleContext
+) {.importc: "logos_beacon_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
+
+proc beaconDispatch(
+  module: ptr LogosModuleContext,
+  methodName: cstring,
+  params: ptr UncheckedArray[uint8],
+  paramsLen: csize_t,
+  outResponse: ptr ptr UncheckedArray[uint8],
+  outResponseLen: ptr csize_t,
+): LogosResult {.
+  importc: "logos_beacon_module_MODULE_dispatch", cdecl, gcsafe, raises: []
+.}
 
 proc thLinked(f: ptr ThFns) {.importc: "th_linked", cdecl, gcsafe, raises: [].}
   ## The typed provider functions of the modules linked in, by their header
@@ -492,8 +511,35 @@ suite "ifc.kit: dispatch (INTERFACE §2.6, §2.7, §4.5, App A.3) [IMPL]":
       check sensor.limit.load == 9
     sensorDestroy(ctx)
 
+  test "[IFC-0204] a provider with one event and no method answers every dispatch METHOD_NOT_FOUND, its outputs null and zero (INTERFACE §2.6 l.1557)":
+    var i = input()
+    var ctx: ptr LogosModuleContext = nil
+    check checkOutcome(beaconInit(addr i, addr ctx), contextShape(ctx)).isOk
+    let names = [
+      cstring("beacon.flashed_event"), # the event, by its identifier
+      cstring("flashed"),
+      cstring("schema"), # App A.3: never the kit's
+      cstring(""),
+      cstring("read"),
+      nil,
+    ]
+    var payloads = @[newSeq[byte](), diag("{}"), diag("{\"count\": 1}"), @[0xFF'u8]]
+    for name in names:
+      for p in payloads.mitems:
+        var buf: ptr UncheckedArray[uint8] = nil
+        var len: csize_t = 0
+        let params =
+          if p.len == 0:
+            nil
+          else:
+            cast[ptr UncheckedArray[uint8]](addr p[0])
+        let r = beaconDispatch(ctx, name, params, csize_t(p.len), addr buf, addr len)
+        check buf == nil and len == 0
+        check checkOutcome(r, bufferShape(buf, len)).error.code == ecMethodNotFound
+    beaconDestroy(ctx)
+
 suite "ifc.kit: events and the invocation context (INTERFACE §2.5, §2.9.3, App A.4) [IMPL]":
-  test "[IFC-0220] a typed publish helper encodes the event; a null callback is never called":
+  test "[IFC-0220] [IFC-0522] a typed publish helper encodes the event; a null callback is never called":
     ## A module whose call surface declares events refuses a null callback at
     ## `_MODULE_init` (`checkInitInput`), so the kit never holds one it could
     ## call; a module without events has no publish helper at all.
@@ -596,7 +642,7 @@ suite "ifc.kit: typed provider functions (INTERFACE §2.3, §2.4, §2.7.1) [IMPL
   test "the harness's Nim mirrors have its C structs' sizes":
     check harnessMatches()
 
-  test "[IFC-0164] [IFC-0648] a typed call reads C inputs and writes complete C outputs its owner holds":
+  test "[IFC-0164] [IFC-0203] [IFC-0648] [IFC-0676] [IFC-0677] [IFC-0690] a typed call reads C inputs and writes complete C outputs its owner holds":
     let ctx = newMeter(input())
     let base = arenaBlocks()
     var t = typedRead(linked, ctx, 4, keep = true)
@@ -611,7 +657,7 @@ suite "ifc.kit: typed provider functions (INTERFACE §2.3, §2.4, §2.7.1) [IMPL
       check m.reads.load == 2
     meterDestroy(ctx)
 
-  test "[IFC-0162] a failure leaves the owner and every output as the caller set them":
+  test "[IFC-0161] [IFC-0162] a failure leaves the owner and every output as the caller set them":
     let ctx = newMeter(input())
     let base = arenaBlocks()
     let failed = typedRead(linked, ctx, 13)
@@ -772,7 +818,7 @@ suite "ifc.kit: typed provider functions (INTERFACE §2.3, §2.4, §2.7.1) [IMPL
     check a.text("ab").isOk
     a.release()
 
-  test "[IFC-0685] [IFC-0686] [IFC-0688] [IFC-0692] the owner keeps the response readable until cleared and frees only its own storage":
+  test "[IFC-0675] [IFC-0678] [IFC-0685] [IFC-0686] [IFC-0688] [IFC-0692] the owner keeps the response readable until cleared and frees only its own storage":
     let ctx = newInstance(shapesInit)
     let base = arenaBlocks()
     let t = typedReflectCleared(linked, ctx)
@@ -781,7 +827,7 @@ suite "ifc.kit: typed provider functions (INTERFACE §2.3, §2.4, §2.7.1) [IMPL
     check arenaBlocks() == base
     shapesDestroy(ctx)
 
-  test "[IFC-0694] distinct owners are released concurrently on threads other than the call's":
+  test "[IFC-0649] [IFC-0694] distinct owners are released concurrently on threads other than the call's":
     const owners = 40
     let ctx = newInstance(shapesInit)
     let base = arenaBlocks()

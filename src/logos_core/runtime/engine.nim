@@ -110,7 +110,7 @@ import ../abi/types
 import ../base/perthread
 import ../cbor/[decode, utf8]
 import ../commitment
-import ../iface/[accept, outcome]
+import ../iface/[accept, outcome, surface]
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
@@ -221,6 +221,10 @@ type
       ## [SPEC RUNTIME l.540-541; I86] the call surface validated at its last
       ## bind, kept for `describe_provider` after the realization ends
     surfaceContracts: seq[Digest] ## the exact contracts of `surface`
+    schemas: Table[Digest, seq[byte]]
+      ## [SPEC RUNTIME §2.4 l.432-434] by contract root: the deterministic
+      ## `logos.schema_response` of each contract of `surface`, built from its
+      ## exact documents (DECISIONS I88)
     realized: RealizationStatus
       ## [IMPL-DECISION G227 (TL-08)] the realization status as of its last
       ## commit
@@ -1596,6 +1600,13 @@ proc beginInit(st: State, a: Attempt, b: ref NativeBinding) =
       x.surfaceContracts.add(b.contracts.primary.get.root)
     for c in b.contracts.interfaces:
       x.surfaceContracts.add(c.root)
+    # [SPEC RUNTIME §2.4 l.432-434] `logos.schema` answers from these, never
+    # from a consumer's construction input.
+    x.schemas.clear()
+    for root in x.surfaceContracts:
+      let v = schemaResponse(b.contracts, root)
+      if v.isOk:
+        x.schemas[root] = encodeCbor(v.get)
   let id = st.nextJobId()
   st.attempts[id] = a
   st.dispatch(Job(id: id, kind: jkInit, init: b.init, input: addr h.input))
@@ -2238,6 +2249,11 @@ proc bindingRefusal(st: State, x: Inst): string =
   ## bindable.
   if x.realization.isNil or x.services.isNil:
     return "it has no realization"
+  if x.providerId.len == 0:
+    # [SPEC RUNTIME l.165-173, l.1647; I88] A system service provider is a
+    # provider backed by its instance: a record that declares no contract
+    # has no provider record (l.1420-1421), so it is not bound.
+    return "it has no provider record"
   let roots = caRoots()
   let root = toDigest(roots.contract)
   let b = x.realization.binding
@@ -5489,8 +5505,23 @@ proc admit(st: State, q: Request) =
     return
   if r.selected.isWellKnown(q.bare):
     # [SPEC INTERFACE l.3275-3277; RUNTIME l.429-431] The boundary answers;
-    # no provider code runs and no invocation context is made current.
-    q.reply.answer(Reply(admission: Admission(introspection: true, capture: capture)))
+    # no provider code runs and no invocation context is made current. [SPEC
+    # RUNTIME l.432-434, l.513-514] It answers from the provider's validated
+    # surface; a provider never bound has none [IMPL: NOT_READY, as
+    # `describe_provider` (l.660)] (DECISIONS I88).
+    let p = st.instances.getOrDefault(r.providerInstance)
+    if p.isNil or p.surface.len == 0:
+      q.reply.answerError(ecNotReady, "the provider has not been bound")
+      return
+    q.reply.answer(
+      Reply(
+        admission: Admission(
+          introspection: true,
+          capture: capture,
+          schema: p.schemas.getOrDefault(r.selected.root),
+        )
+      )
+    )
     return
   let p = st.instances.getOrDefault(r.providerInstance)
   if p.isNil or p.state != msReady or p.realization.isNil or p.services.isNil:

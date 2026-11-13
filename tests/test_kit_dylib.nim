@@ -253,7 +253,7 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
     else:
       meter.destroy(ctx)
 
-  test "[IFC-0164] [IFC-0162] typed provider functions through the libraries' exports":
+  test "[IFC-0164] [IFC-0162] [IFC-0202] typed provider functions through the libraries' exports":
     let m = meter.start()
     let r4 = typedRead(typed, m, 4)
     check r4.status.isOk and r4.owned

@@ -179,7 +179,7 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
   setup:
     reset()
 
-  test "[RUN-0261] [RUN-0262] [RUN-0267] [RUN-0268] [RUN-0845] a malformed record creates nothing":
+  test "[RUN-0128] [RUN-0261] [RUN-0262] [RUN-0267] [RUN-0268] [RUN-0281] [RUN-0287] [RUN-0289] [RUN-0845] a malformed record creates nothing":
     let e = newEngine(config())
     let d = default(Digest)
     var bad = @[
@@ -215,7 +215,7 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
     check e.list().len == 0
     e.finish()
 
-  test "[RUN-0659] [RUN-0270] [RUN-0272] a new instance is unloaded, with intent uninitialized and its own state assignment":
+  test "[RUN-0010] [RUN-0659] [RUN-0270] [RUN-0272] [RUN-0487] a new instance is unloaded, with intent uninitialized and its own state assignment":
     let e = newEngine(config())
     let v = e.create(gated(Opt.some("s1")), "g1").tryGet
     check v.instance == "g1" and v.module == "gated_consumer"
@@ -412,7 +412,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
   setup:
     reset()
 
-  test "[RUN-0104] [RUN-0105] [RUN-0106] [RUN-0134] [RUN-0266] the call surface is compared with the expected contracts":
+  test "[RUN-0104] [RUN-0105] [RUN-0106] [RUN-0114] [RUN-0134] [RUN-0265] [RUN-0266] [RUN-0288] [RUN-0795] the call surface is compared with the expected contracts":
     let e = newEngine(config())
     let root = meterRoot()
     var wrong = root
@@ -442,7 +442,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check live.load == 0
     e.finish()
 
-  test "[RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [IMPL-DECISION G230] a failed start is classified (a realizer error is `other`), cleaned, and leaves other instances running":
+  test "[IMPL-DECISION G230] [RUN-0296] [RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [RUN-0885] a failed start is classified (a realizer error is `other`), cleaned, and leaves other instances running":
     let e = newEngine(config())
     discard e.create(meter(), "m").tryGet
     check e.start("m").tryGet.state == msReady
@@ -524,7 +524,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     )
     e.finish()
 
-  test "[RUN-0648] [RUN-0650] [RUN-0651] [RUN-0652] [RUN-0653] [RUN-0655] [RUN-0657] report_failure is bound to the current realization":
+  test "[RUN-0302] [RUN-0648] [RUN-0649] [RUN-0650] [RUN-0651] [RUN-0652] [RUN-0653] [RUN-0655] [RUN-0657] report_failure is bound to the current realization":
     let e = newEngine(config())
     discard e.create(gated(), "g").tryGet
     let v = e.start("g").tryGet
@@ -679,7 +679,7 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     )
     check e.close()
 
-  test "[RUN-0361] [RUN-0362] [RUN-0363] committed changes are ordered, and each is one snapshot":
+  test "[RUN-0348] [RUN-0350] [RUN-0361] [RUN-0362] [RUN-0363] committed changes are ordered, and each is one snapshot":
     let e = newEngine(config())
     discard e.create(gated(), "g").tryGet
     discard e.start("g").tryGet

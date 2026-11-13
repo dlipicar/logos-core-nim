@@ -377,7 +377,7 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check e.start("k").tryGet.state == msReady
     e.finish()
 
-  test "[RUN-0486] [RUN-0919] [RUN-0920] [RUN-0921] [RUN-0924] [IMPL-DECISION G160] a configured instance keeps its id while its declaration facts are equal":
+  test "[IMPL-DECISION G160] [RUN-0258] [RUN-0486] [RUN-0919] [RUN-0920] [RUN-0921] [RUN-0924] a configured instance keeps its id while its declaration facts are equal":
     let base = freshBase()
     var old = keeper(Opt.some("gone-state"))
     var k1 = keeper()
@@ -435,7 +435,7 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
       Opt.some("another reason")
     check stored(base).runtimeInstanceId == "rt-g160"
 
-  test "[RUN-0922] [RUN-0947] [RUN-0949] names made after a restart never repeat earlier ones":
+  test "[RUN-0922] [RUN-0947] [RUN-0948] [RUN-0949] names made after a restart never repeat earlier ones":
     let base = freshBase()
     var e = openAt(base)
     var earlier: seq[string]

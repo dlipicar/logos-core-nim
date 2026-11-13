@@ -450,6 +450,10 @@ type
     ## selected provider's binding and context, read at admission.
     introspection*: bool
       ## a well-known method the boundary answers itself: no provider code runs
+    schema*: seq[byte]
+      ## introspection: the selected contract's deterministic
+      ## `logos.schema_response`, from the provider's validated surface
+      ## (RUNTIME l.432-434); empty: it has no such contract
     dispatch*: ModuleDispatchFn
     free*: ModuleFreeFn
     context*: ptr LogosModuleContext

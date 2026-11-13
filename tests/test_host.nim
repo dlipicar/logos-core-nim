@@ -112,7 +112,7 @@ proc decoded(c: LcnAppConfig): Result[HostConfig, ConfigError] =
   decodeHostConfig(AppConfigFormat, encodeCbor(toCbor(c)))
 
 suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
-  test "[RUN-0741] a valid configuration decodes into records, in order, with the default deadlines":
+  test "[RUN-0260] [RUN-0741] a valid configuration decodes into records, in order, with the default deadlines":
     var c = baseConfig()
     c.modules[1].primary_contract = Opt.some(root(7))
     c.ordering = Opt.some(@[LcnAppOrdering(prerequisite: "orch", dependent: "meter-1")])
@@ -138,7 +138,7 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     for f in ["logos-core-nim.daemon-config.v1", "logos-core-nim.app-config.v2", "x"]:
       check parseHostConfig(f, bytes).rejects("unsupported configuration format")
 
-  test "[RUN-0741] malformed and non-deterministic CBOR are rejected with their detail":
+  test "[RUN-0264] [RUN-0741] malformed and non-deterministic CBOR are rejected with their detail":
     let bad = parseHostConfig(AppConfigFormat, [0xff'u8])
     check bad.rejects("deterministic-CBOR")
     check bad.error.detail == Opt.some(invalidParamsDetail(iprMalformedCbor))
@@ -193,11 +193,17 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
         e[1] = cborMap(@[(cbor("kind"), cbor("deny-all"))])
     check parseValue(cv).rejects("policy kind is not supported yet")
 
-  test "[RUN-0304] [RUN-0305] [CAP-0003] [CAP-0006] [I85] a capability-authority policy names this library's Capability Authority instance and 8a's policy":
+  test "[RUN-0304] [RUN-0305] [RUN-0018] [CAP-0003] [CAP-0006] [I85] a capability-authority policy names this library's Capability Authority instance and 8a's policy":
     let ok = caConfig().decoded
     check ok.isOk
     let a = ok.get.authority.get
     check a.instance == "ca"
+    # [I88] The statically linked authority is a direct-mode instance whose
+    # record declares the pinned contract, so it has a provider record.
+    for m in ok.get.modules:
+      if m.instance == "ca":
+        check m.record.primaryContract.isSome
+        check @(m.record.primaryContract.get) == caRoots().contract
     check a.evaluationDeadline == DefaultEvaluationDeadline
     check not a.recovery
     check ok.get.authorityPolicy == encodeCbor(toCbor(authorityPolicy()))

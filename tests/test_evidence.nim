@@ -213,7 +213,7 @@ func swapped(container: openArray[byte], f: proc(a: var CborValue)): seq[byte] =
 # E1-E4 ------------------------------------------------------------------------------
 
 suite "run.evidence: the container (CA §9.1 l.1219-1287)":
-  test "[CAP-0216] [CAP-0222] [CAP-0223] [CAP-0225] [CAP-0394] [CAP-0396] [CAP-0403] [CAP-0404] [CAP-0406] [CAP-0407] a hedged and a deterministic container each verify: tag 18, a protected header of exactly kid, an empty unprotected header, the claim embedded, pure SLH-DSA-SHA2-192s with the empty context over the profile's external_aad":
+  test "[CAP-0216] [CAP-0222] [CAP-0223] [CAP-0225] [CAP-0394] [CAP-0396] [CAP-0403] [CAP-0404] [CAP-0405] [CAP-0406] [CAP-0407] a hedged and a deterministic container each verify: tag 18, a protected header of exactly kid, an empty unprotected header, the claim embedded, pure SLH-DSA-SHA2-192s with the empty context over the profile's external_aad":
     for c in [plain, withProofs]:
       let v = verifyEvidence(c, context())
       check v.isOk

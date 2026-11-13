@@ -2,11 +2,22 @@
 # The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
 #   claimed               every requirement unit in it needs a test tagged [SEC-NNNN]
 #   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   deferred:tier-4b      not built yet: logosctl, logosd, the Module Host and what they bring
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
 
-default = "deferred:tier-4"
+# Security considerations are claimed through the specifications that state them; the units this
+# file adds come with the profiles they name: platform isolation and the iOS profile are Tier 5
+# (DECISIONS I88).
+default = "deferred:tier-5"
 
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
+
+[units]
+# Fail closed when a profile's control cannot be established (the C-08 staging test).
+"SEC-0021" = "claimed"
+# Sensitive-payload restrictions on value-derived identifiers: with INTERFACE §1.4.1's erasure,
+# Tier 4b (G244: until then no route is made to a contract that marks a payload).
+"SEC-0057" = "deferred:tier-4b"
