@@ -2,7 +2,8 @@ name: CI
 
 # `nix flake check` on each leg: every test suite under orc and refc, nph, and the spec checks
 # (mirrors, pins, requirement ledger, coverage gate, oracle selftest) against the pinned specs.
-# A second job runs the Nimble path from the same checkout so it cannot rot (R2).
+# A second job runs the Nimble path from the same checkout so it cannot rot (R2), once per OS and
+# memory manager.
 # Legs per R1: Linux x86_64, Linux aarch64, macOS arm64 until Tier 4 work starts.
 # Each Linux leg runs as five parallel jobs, one per check group (flake.nix `ciGroups`): a single
 # runner took over two hours for every check on x86_64. Each check is in exactly one group, and
@@ -71,14 +72,19 @@ jobs:
         if: matrix.group != 'all'
         run: nix build -L --keep-going --no-link ".#ciGroups.$GROUP"
 
+  # One job per OS and Nimble test task. Both tasks in one Linux job passed 60 minutes on 2026-11-13
+  # (orc 27 min, then refc), almost all of it compiling suites.
   nimble:
-    name: nimble (${{ matrix.os }})
+    name: nimble (${{ matrix.os }}, ${{ matrix.task }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        task: [test, test_refc]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      TASK: ${{ matrix.task }}
     steps:
       - uses: actions/checkout@v4
 
@@ -107,28 +113,28 @@ jobs:
           cp "$RUNNER_TEMP/packages_official.json" ~/.nimble/
 
       # Regenerated from scratch and before `nimble setup`: nimble 0.20.1 empties an existing lock
-      # when run over it, and crashed when local deps were already installed.
+      # when run over it, and crashed when local deps were already installed. Once per OS.
       - name: nimble.lock matches logos_core.nimble
+        if: matrix.task == 'test'
         run: |
           mv nimble.lock "$RUNNER_TEMP/nimble.lock"
           nix develop -c nimble -y lock
           diff -u "$RUNNER_TEMP/nimble.lock" nimble.lock
 
       # Nix only supplies nim and nimble here; Nimble resolves and fetches the dependencies.
-      - name: nimble setup and test
+      - name: nimble setup and ${{ matrix.task }}
         run: |
           mkdir -p nimbledeps
           cp "$RUNNER_TEMP/packages_official.json" nimbledeps/
           nix develop -c nimble setup -l
-          nix develop -c nimble test
-          nix develop -c nimble test_refc
+          nix develop -c nimble "$TASK"
 
       # G129: the caller's peer check against a listener another OS user created (TRANSPORT §8.2,
       # TRN-0190). It needs a throwaway user and passwordless sudo to it, so it runs only here;
       # elsewhere the test is skipped. In this job because the nix job's dev shell has no Nim
       # dependencies.
       - name: Peer check against another user's listener (G129)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.task == 'test'
         run: |
           sudo useradd --system --no-create-home lcnpeer
           echo "$USER ALL=(lcnpeer) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/lcnpeer
