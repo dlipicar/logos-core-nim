@@ -1,0 +1,15 @@
+logos.module_loader.error = {
+  code: logos.module_loader.error_code,
+  ? message: tstr .size (0..512),
+}
+
+logos.module_loader.error_code =
+  "invalid-request" /
+  "unsupported-strategy" /
+  "artifact-unavailable" /
+  "artifact-integrity-failed" /
+  "abi-invalid" /
+  "realization-failed" /
+  "instance-conflict" /
+  "realization-not-found" /
+  "configuration-rejected"

@@ -1,0 +1,20 @@
+logos.module_loader.realize_request = {
+  module_instance: logos.runtime.module_instance_id,
+  descriptor: logos.module_loader.realization_descriptor,
+  ? state: logos.module_loader.state_context,
+  ? configuration: logos.module_loader.configuration_handoff,
+}
+
+logos.module_loader.realize_response =
+  {
+    status: "succeeded",
+    realization: logos.module_loader.active_realization,
+  } /
+  {
+    status: "failed",
+    error: logos.module_loader.error,
+  } /
+  {
+    status: "failed",
+    realization: logos.module_loader.failed_realization,
+  }

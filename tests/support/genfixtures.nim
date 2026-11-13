@@ -344,6 +344,54 @@ proc generatedCaKit*(): Result[string, string] =
   kitModule(?caSet(), KitOptions(importPrefix: "../"), true)
 
 const
+  ldrTypesPath* = "src/logos_core/loader/logos_module_loader_types.nim"
+  ldrKitPath* = "src/logos_core/loader/logos_module_loader_kit.nim"
+  ldrParts* = [
+    "spec/mirrors/LDR/0.module.cddl", "spec/mirrors/LDR/3.descriptors.cddl",
+    "spec/mirrors/LDR/4.capabilities.cddl", "spec/mirrors/LDR/5.1.state.cddl",
+    "spec/mirrors/LDR/5.2.configuration.cddl", "spec/mirrors/LDR/5.3.endpoint.cddl",
+    "spec/mirrors/LDR/6.realize.cddl", "spec/mirrors/LDR/7.records.cddl",
+    "spec/mirrors/LDR/8.live.cddl", "spec/mirrors/LDR/9.release.cddl",
+    "spec/mirrors/LDR/10.errors.cddl",
+  ] ## LOADER's `_module` (Abstract) and §3 to §10, in spec order: one primary document
+  ldrSupporting* = [
+    "spec/mirrors/RNT/9.2.runtime-types.cddl",
+    "spec/mirrors/CFG/9.configuration-types.cddl",
+  ] ## [SPEC LOADER l.45] Runtime Types and Module Configuration Types
+
+proc ldrPrimary*(): string {.raises: [IOError].} =
+  ## The Module Loader contract (LOADER l.41-43, l.146-614), its eleven
+  ## blocks joined with a blank line between them.
+  for i, p in ldrParts:
+    if i > 0:
+      result.add("\n")
+    result.add(readFile(p))
+
+proc ldrSet*(): Result[ContractSet, string] =
+  try:
+    acceptContractSet(
+      ldrPrimary(), [], ldrSupporting.mapIt(readFile(it)), AcceptOptions(system: true)
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedLdrTypes*(): Result[string, string] =
+  ## The Module Loader contract's types (LOADER §3-§10), for `loader/`.
+  nimModule(
+    ?ldrSet(),
+    NimOptions(
+      importPrefix: "../",
+      schemaAccessor: "ldrSchema",
+      documentsAccessor: "ldrDocuments",
+    ),
+    true,
+  )
+
+proc generatedLdrKit*(): Result[string, string] =
+  ## The Module Loader module kit: provider dispatch (it publishes no event).
+  kitModule(?ldrSet(), KitOptions(importPrefix: "../"), true)
+
+const
   policyTypesPath* = "src/logos_core/authority/policy_types.nim"
   stateTypesPath* = "src/logos_core/authority/state_types.nim"
   statePrimary* = "src/logos_core/authority/state.cddl"

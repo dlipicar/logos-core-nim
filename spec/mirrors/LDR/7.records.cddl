@@ -1,0 +1,35 @@
+logos.module_loader.realization =
+  logos.module_loader.active_realization /
+  logos.module_loader.failed_realization
+
+logos.module_loader.active_realization = {
+  realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+  status: "active",
+  ? call_surface: bstr .size (1..8388608),
+  ? provider_endpoint: logos.module_loader.provider_endpoint,
+}
+
+logos.module_loader.failed_realization = {
+  realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+  status: "failed",
+  failure: logos.module_loader.error,
+}
+
+logos.module_loader.realization_id = tstr .size (1..128)
+
+logos.module_loader.get_status_request = {
+  ? realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+}
+
+logos.module_loader.get_status_response =
+  {
+    status: "succeeded",
+    realization: logos.module_loader.realization,
+  } /
+  {
+    status: "failed",
+    error: logos.module_loader.error,
+  }

@@ -18,6 +18,10 @@ proc main() =
   echo caTypesPath
   writeFile(caKitPath, generatedCaKit().get)
   echo caKitPath
+  writeFile(ldrTypesPath, generatedLdrTypes().get)
+  echo ldrTypesPath
+  writeFile(ldrKitPath, generatedLdrKit().get)
+  echo ldrKitPath
   writeFile(policyTypesPath, generatedPolicyTypes().get)
   echo policyTypesPath
   writeFile(stateTypesPath, generatedStateTypes().get)

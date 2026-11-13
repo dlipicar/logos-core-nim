@@ -1,0 +1,3 @@
+logos.module_loader.state_context = {
+  assignment: logos.runtime.module_state_assignment_id,
+}

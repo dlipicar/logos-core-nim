@@ -1,0 +1,16 @@
+logos.module_loader.apply_configuration_request = {
+  realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+  configuration: logos.module_configuration.configuration_input,
+}
+
+logos.module_loader.apply_configuration_response =
+  { status: "succeeded" } /
+  {
+    status: "failed",
+    error: logos.module_loader.error,
+  } /
+  {
+    status: "failed",
+    realization: logos.module_loader.failed_realization,
+  }

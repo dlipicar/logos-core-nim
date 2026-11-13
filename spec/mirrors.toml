@@ -727,3 +727,62 @@ section = "§9"
 out = "CAP/9.1.evidence.cddl"
 file = "spec-module-capability-authority.md"
 section = "§9.1"
+
+# MODULE LOADER (Tier 4b step 4b-1; DECISIONS I89) ----------------------------------
+# The contract's CDDL blocks in spec order: `_module` (Abstract), then §3 to §10. The
+# generated types and kit join them as one primary document (tests/support/genfixtures.nim).
+
+[[mirror]]
+out = "LDR/0.module.cddl"
+file = "spec-module-loader.md"
+section = "Abstract"
+
+[[mirror]]
+out = "LDR/3.descriptors.cddl"
+file = "spec-module-loader.md"
+section = "§3"
+
+[[mirror]]
+out = "LDR/4.capabilities.cddl"
+file = "spec-module-loader.md"
+section = "§4"
+
+[[mirror]]
+out = "LDR/5.1.state.cddl"
+file = "spec-module-loader.md"
+section = "§5.1"
+
+[[mirror]]
+out = "LDR/5.2.configuration.cddl"
+file = "spec-module-loader.md"
+section = "§5.2"
+
+[[mirror]]
+out = "LDR/5.3.endpoint.cddl"
+file = "spec-module-loader.md"
+section = "§5.3"
+
+[[mirror]]
+out = "LDR/6.realize.cddl"
+file = "spec-module-loader.md"
+section = "§6"
+
+[[mirror]]
+out = "LDR/7.records.cddl"
+file = "spec-module-loader.md"
+section = "§7"
+
+[[mirror]]
+out = "LDR/8.live.cddl"
+file = "spec-module-loader.md"
+section = "§8"
+
+[[mirror]]
+out = "LDR/9.release.cddl"
+file = "spec-module-loader.md"
+section = "§9"
+
+[[mirror]]
+out = "LDR/10.errors.cddl"
+file = "spec-module-loader.md"
+section = "§10"

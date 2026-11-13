@@ -1,0 +1,33 @@
+logos.module_loader.realization_descriptor =
+  {
+    strategy: "direct_static",
+    module: logos.runtime.module_name,
+    static_binding: logos.module_loader.static_binding,
+  } /
+  {
+    strategy: "direct_dynamic",
+    module: logos.runtime.module_name,
+    artifact: logos.module_loader.artifact,
+  } /
+  {
+    strategy: "hosted_dynamic",
+    module: logos.runtime.module_name,
+    artifact: logos.module_loader.artifact,
+    placement: logos.module_loader.hosted_placement,
+  }
+
+logos.module_loader.hosted_placement =
+  "process" /
+  "sandbox" /
+  "container"
+
+logos.module_loader.artifact = {
+  id: tstr .size (1..128),
+  local_path: tstr .size (1..4096),
+  hash: bstr .size 32,
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+
+logos.module_loader.static_binding = {
+  binding: tstr .size (1..128),
+}

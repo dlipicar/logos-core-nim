@@ -29,6 +29,8 @@ suite "ifc.nim-types: generated modules (D29)":
     check generatedStoreTypes().get == readFile(storeTypesPath)
     check generatedCaTypes().get == readFile(caTypesPath)
     check generatedCaKit().get == readFile(caKitPath)
+    check generatedLdrTypes().get == readFile(ldrTypesPath)
+    check generatedLdrKit().get == readFile(ldrKitPath)
     check generatedPolicyTypes().get == readFile(policyTypesPath)
     check generatedStateTypes().get == readFile(stateTypesPath)
     for f in nimFixtures:
@@ -45,7 +47,9 @@ suite "ifc.nim-types: generated modules (D29)":
     check stamp in readFile(rcTypesPath)
     check stamp in readFile(hostConfigTypesPath)
     check stamp in readFile(storeTypesPath)
-    for path in [caTypesPath, caKitPath, policyTypesPath, stateTypesPath]:
+    for path in [
+      caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath
+    ]:
       checkpoint path
       check stamp in readFile(path)
     for f in nimFixtures:

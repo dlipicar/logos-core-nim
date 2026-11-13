@@ -1,0 +1,16 @@
+logos.module_loader.capabilities = {
+  ? direct_static: true,
+  ? direct_dynamic: true,
+  ? hosted_dynamic: {
+    ? process: true,
+    ? sandbox: true,
+    ? container: true,
+  },
+  ? force_release: true,
+}
+
+logos.module_loader.list_capabilities_request = {}
+
+logos.module_loader.list_capabilities_response = {
+  capabilities: logos.module_loader.capabilities,
+}

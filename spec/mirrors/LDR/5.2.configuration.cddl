@@ -1,0 +1,4 @@
+logos.module_loader.configuration_handoff = {
+  input: logos.module_configuration.configuration_input,
+  ? live_reconfiguration: true,
+}

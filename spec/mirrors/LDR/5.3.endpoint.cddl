@@ -1,0 +1,4 @@
+logos.module_loader.provider_endpoint = {
+  profile: "logos.local.unix-stream",
+  address: tstr .size (1..4096),
+}

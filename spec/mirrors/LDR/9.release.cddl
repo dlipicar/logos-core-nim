@@ -1,0 +1,16 @@
+logos.module_loader.release_request = {
+  realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+  ? force: true,
+}
+
+logos.module_loader.release_response =
+  { status: "succeeded" } /
+  {
+    status: "failed",
+    error: logos.module_loader.error,
+  } /
+  {
+    status: "failed",
+    realization: logos.module_loader.failed_realization,
+  }
