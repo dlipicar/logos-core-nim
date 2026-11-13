@@ -885,6 +885,17 @@ proc counted(e: Engine, what: string, n: int): bool =
       count(what) >= n
   )
 
+proc failedRenewals(e: Engine, n: int): bool =
+  ## `n` execution renewals have failed and the Runtime has applied their
+  ## answers: retaining an answer and applying it are one Runtime-thread step,
+  ## so the retry is already scheduled from the test clock's time. Counting
+  ## what the authority received is not enough: a slow build may apply the
+  ## answer after the clock moves on.
+  waitUntil(
+    proc(): bool =
+      e.answers().countIt(it.request.renewal and it.outcome == azEvaluationFailed) >= n
+  )
+
 proc routeState(e: Engine, route: string): LogosNSRuntimeControlRouteRecord =
   e.routes().filterIt(it.route == route)[0]
 
@@ -950,10 +961,12 @@ suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10
     orch.startBy("m2")
     clk.advance(41_000)
     check e.counted("renew-execution", 1)
+    check e.failedRenewals(1)
     check e.view("m2").tryGet.state == msReady
     # Asked again within min(5 s, half of what is left).
     clk.advance(5_000)
     check e.counted("renew-execution", 2)
+    check e.failedRenewals(2)
     clk.advance(13_999)
     discard e.list()
     check e.view("m2").tryGet.state == msReady
