@@ -1,6 +1,7 @@
 ## Runtime Control configuration requests for a test that includes the route
 ## fixture and imports `support/tunerconfig` (DECISIONS I87): the target
-## address, the reads and `update_configuration`'s stage and discard.
+## address, the reads, `update_configuration`'s stage and discard, and
+## `apply_configuration`.
 
 proc target(e: Engine, id: string): LogosNSRuntimeModuleInstanceAddress =
   LogosNSRuntimeModuleInstanceAddress(
@@ -90,6 +91,25 @@ proc discardStaged(
       )
     ).tryGet,
   )
+
+proc applyOf(
+    rc: ptr LogosRuntimeControlBinding,
+    t: LogosNSRuntimeModuleInstanceAddress,
+    revision: uint64,
+): RcResult {.gcsafe.} =
+  rcCall(
+    rc,
+    "apply_configuration",
+    encode(
+      LogosNSRuntimeControlApplyConfigurationRequest(
+        target: t, expected_state_revision: revision
+      )
+    ).tryGet,
+  )
+
+proc applied(r: RcResult): LogosNSRuntimeControlApplyConfigurationResponse =
+  doAssert r.code == ecOk, r.message
+  LogosNSRuntimeControlApplyConfigurationResponse.decode(r.response).tryGet
 
 proc updated(r: RcResult): LogosNSRuntimeControlUpdateConfigurationResponse =
   doAssert r.code == ecOk, r.message

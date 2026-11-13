@@ -206,6 +206,12 @@ func promotes*(s: ConfigState, r: ValueRecord): bool =
   ## Making `r` current changes the state: it is not the current record.
   s.current.isNone or s.current.get.valueRevision != r.valueRevision
 
+func commitmentsAgree*(binding, staged, initialized: SchemaRoots): bool =
+  ## [SPEC CONFIG §8 l.296] A live application needs the accepted binding's
+  ## commitment, the staged record's and the one the realization was
+  ## initialized under to be one commitment; otherwise VERSION_MISMATCH.
+  binding == staged and staged == initialized
+
 func canAdvance*(s: ConfigState): bool =
   ## [SPEC CONFIG §3 l.99-100] The revision never wraps (CFG-0031, CFG-0032).
   s.revision < high(uint64)

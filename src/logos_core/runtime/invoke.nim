@@ -542,6 +542,10 @@ proc rcRequest(
         expectedCommitment: a.expected_schema_commitment,
       )
     ok(c)
+  of $rmApplyConfiguration:
+    var c = call(rmApplyConfiguration)
+    c.cfgApply = fromChecked(LogosNSRuntimeControlApplyConfigurationRequest, v)
+    ok(c)
   else:
     err(
       InvocationFailure(

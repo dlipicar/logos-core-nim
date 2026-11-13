@@ -70,6 +70,9 @@ var
   seenInput: LogosModuleInitInput
   seenStateDir: string
   contexts: seq[pointer]
+  applyResult: LogosResult ## what `plainApply` answers
+  applies: int
+  seenApply: seq[byte]
 
 proc plainName(): cstring {.cdecl.} =
   "plain_consumer"
@@ -112,10 +115,21 @@ proc plainDestroy(module: ptr LogosModuleContext) {.cdecl.} =
   contexts.keepItIf(it != cast[pointer](module))
   deallocShared(module)
 
+proc plainApply(
+    module: ptr LogosModuleContext, cbor: ptr UncheckedArray[uint8], len: csize_t
+): LogosResult {.cdecl.} =
+  inc applies
+  doAssert cast[pointer](module) in contexts
+  seenApply = @(cbor.toOpenArray(0, int(len) - 1))
+  applyResult
+
 proc reset() =
   initMode = imOk
   inits = 0
   destroys = 0
+  applyResult = LogosResult()
+  applies = 0
+  seenApply = @[]
   outWasNull = false
   seenInput = default(LogosModuleInitInput)
   seenStateDir = ""
@@ -526,6 +540,74 @@ suite "run.realizer: realize (LOADER §6, §7, §10) [IMPL]":
     check x.error.code == lecRealizationFailed and inits == 0
 
 # Release and status ---------------------------------------------------------------
+
+suite "run.realizer: live configuration (LOADER §8, §11) [IMPL]":
+  test "[LDR-0113] [LDR-0135] [LDR-0136] apply runs the hook once through the retained context, excluded from release; a refusal invokes nothing":
+    reset()
+    let blobs = liveConfigBlobs()
+    let r = fresh()
+    r.registerStatic(
+      "plain",
+      plainTable() &
+        @[
+          ("logos_plain_consumer_MODULE_apply_configuration", cast[pointer](plainApply))
+        ],
+    ).tryGet
+    let bytes = tunerInput(tunerValue("applied-station"), 5)
+    let input = newBlob(bytes)
+    let roots = fromRc(tunerCommitment()).tryGet
+    proc request(instance: string, live: bool): RealizeRequest =
+      result = staticRequest(instance, "plain_consumer", "plain")
+      result.configuration = Opt.some(
+        ConfigurationHandoff(
+          input: input, live: live, commitment: roots, valueRevision: 4
+        )
+      )
+
+    let x = r.realize(request("c1", live = true)).tryGet
+    check x.live and x.initCommitment == Opt.some(roots)
+    check r.applyConfiguration("r-unknown", "c1", input).error.code ==
+      lecRealizationNotFound
+    check r.applyConfiguration(x.id, "c2", input).error.code == lecRealizationNotFound
+    check applies == 0
+    check r.applyConfiguration(x.id, "c1", input).isOk
+    check applies == 1 and seenApply == bytes
+    # A valid rejection leaves the realization active; its status stays with
+    # the Loader's error, for the Runtime's diagnostics only.
+    applyResult = LogosResult(code: CErrorCode(ord(ecNotReady)), message: "not now")
+    let rejected = r.applyConfiguration(x.id, "c1", input)
+    check rejected.error.code == lecConfigurationRejected
+    check rejected.error.cause.get.code == ecNotReady
+    check "applied-station" notin rejected.error.message
+    check r.getStatus("c1").tryGet.status == rsActive
+    # While the hook runs: no second application, no release.
+    check r.beginApply(x.id, "c1").isOk
+    check r.beginApply(x.id, "c1").error.code == lecInvalidRequest
+    check r.release(x.id, "c1").error.code == lecInvalidRequest
+    check destroys == 0
+    # An invalid result: realization-failed, the realization failed and still
+    # owned until its release.
+    applyResult = LogosResult(message: "fine")
+    check r.completeApply("c1", applyResult).error.code == lecRealizationFailed
+    let status = r.getStatus("c1").tryGet
+    check status.status == rsFailed
+    check status.failure.get.code == lecRealizationFailed
+    check r.beginApply(x.id, "c1").error.code == lecInvalidRequest
+    check r.release(x.id, "c1").isOk and destroys == 1
+    # A result the Runtime no longer waits for is realization-failed too.
+    let y = r.realize(request("c1", live = true)).tryGet
+    check r.beginApply(y.id, "c1").isOk
+    check r.completeApply("c1", LogosResult(), established = false).error.code ==
+      lecRealizationFailed
+    check r.release(y.id, "c1").isOk
+    # A realization whose handoff did not declare live reconfiguration.
+    let z = r.realize(request("c2", live = false)).tryGet
+    check not z.live
+    check r.applyConfiguration(z.id, "c2", input).error.code == lecInvalidRequest
+    check applies == 2
+    check r.release(z.id, "c2").isOk
+    drop(input)
+    check liveConfigBlobs() == blobs
 
 suite "run.realizer: release and status (LOADER §7, §9, §11) [IMPL]":
   test "[LDR-0117] [LDR-0119] [LDR-0138] [LDR-0124] release destroys the context exactly once":

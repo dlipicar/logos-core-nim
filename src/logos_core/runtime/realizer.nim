@@ -121,8 +121,15 @@ type
     binding*: ref NativeBinding
     context*: ptr LogosModuleContext ## nil once destruction has begun
     stateDir*: Opt[string]
+    live*: bool ## [SPEC LOADER §8] its startup handoff declared live reconfiguration
+    initCommitment*: Opt[SchemaRoots]
+      ## [SPEC CONFIG §8 l.296] the schema commitment of the configuration it
+      ## was initialized with; none without a configuration
     key: string
     releasing: bool ## `_MODULE_destroy` has been handed out
+    applying: bool
+      ## [SPEC LOADER §11] `_MODULE_apply_configuration` has been handed out
+      ## and has not returned
 
   RealizationRecord* = object
     ## [SPEC LOADER §7] The public record: no descriptor, handoff or path.
@@ -185,6 +192,12 @@ type
 
   Teardown* = object ## The one `_MODULE_destroy(context)` call a release hands out.
     destroy*: ModuleDestroyFn
+    context*: ptr LogosModuleContext
+
+  ApplyHook* = object
+    ## [SPEC LOADER §8] The one `_MODULE_apply_configuration` call an apply
+    ## hands out, through the retained context.
+    apply*: ModuleApplyConfigurationFn
     context*: ptr LogosModuleContext
 
   Realizer* = ref object
@@ -550,6 +563,10 @@ proc completeInit*(
     stateDir: h.stateDir,
     key: keyOf(h.request),
   )
+  if h.request.configuration.isSome:
+    let c = h.request.configuration.get
+    x.live = c.live
+    x.initCommitment = Opt.some(c.commitment)
   r.live[h.request.moduleInstance] = x
   ok(x)
 
@@ -590,6 +607,9 @@ proc beginRelease*(
     return ok(Opt.none(Teardown)) # idempotent; touches no other realization
   if found.moduleInstance != moduleInstance:
     return fail(lecRealizationNotFound, "no realization matches both identifiers")
+  if found.applying:
+    # [SPEC LOADER §11 (LDR-0136)] Application is excluded from release.
+    return fail(lecInvalidRequest, "a configuration is being applied")
   found.releasing = true
   if found.context == nil:
     return ok(Opt.none(Teardown))
@@ -614,6 +634,74 @@ proc release*(
     t.get.destroy(t.get.context)
   r.finishRelease(moduleInstance)
   ok()
+
+proc beginApply*(
+    r: Realizer, realization, moduleInstance: string
+): Result[ApplyHook, LoaderError] =
+  ## [SPEC LOADER §8, §11] Live application, first phase: the hook to call
+  ## once on the retained context. An unknown or nonmatching realization is
+  ## `realization-not-found`; one whose startup handoff declared no live
+  ## reconfiguration, or one not active, releasing or already applying, is
+  ## `invalid-request` [IMPL for the last three]. Neither invokes module
+  ## behavior (LDR-0113). Release is refused until `completeApply`.
+  let x = r.live.getOrDefault(moduleInstance)
+  if x.isNil or x.id != realization:
+    return fail(lecRealizationNotFound, "no realization matches both identifiers")
+  if not x.live or x.binding.applyConfiguration.isNil:
+    return
+      fail(lecInvalidRequest, "the realization did not declare live reconfiguration")
+  if x.status != rsActive or x.releasing or x.context == nil:
+    return fail(lecInvalidRequest, "the realization is not active")
+  if x.applying:
+    return fail(lecInvalidRequest, "a configuration is already being applied")
+  x.applying = true
+  ok(ApplyHook(apply: x.binding.applyConfiguration, context: x.context))
+
+proc completeApply*(
+    r: Realizer, moduleInstance: string, res: LogosResult, established = true
+): Result[void, LoaderError] =
+  ## [SPEC LOADER §8] The hook has returned: release may go on. LOGOS_OK is
+  ## `succeeded`; a valid failure status, `configuration-rejected`, the
+  ## realization still active; anything else, or a result the Runtime no
+  ## longer accepts (`established` false: its deadline passed), is
+  ## `realization-failed` and the realization becomes `failed`, owned until
+  ## its release. The hook's own diagnostics stay in `cause`, never
+  ## forwarded (CFG-0146).
+  let x = r.live.getOrDefault(moduleInstance)
+  if x.isNil or not x.applying:
+    return fail(lecRealizationNotFound, "no application is in progress")
+  x.applying = false
+  let status = readStatus(res)
+  if established and status.isOk:
+    return ok()
+  if established and status.error.reason.len == 0:
+    return err(
+      loaderError(
+        lecConfigurationRejected,
+        "the module rejected the configuration",
+        Opt.some(status.error),
+      )
+    )
+  let e = loaderError(
+    lecRealizationFailed,
+    (
+      if established: "_MODULE_apply_configuration() returned an invalid result"
+      else: "the application outcome was not established in time"
+    ),
+  )
+  x.status = rsFailed
+  x.failure = e
+  err(e)
+
+proc applyConfiguration*(
+    r: Realizer, realization, moduleInstance: string, input: Blob
+): Result[void, LoaderError] =
+  ## [SPEC LOADER §8] Both phases on the calling thread.
+  let h = ?r.beginApply(realization, moduleInstance)
+  let res = h.apply(
+    h.context, cast[ptr UncheckedArray[uint8]](input.address), csize_t(input.len)
+  )
+  r.completeApply(moduleInstance, res)
 
 func record*(x: Realization): RealizationRecord =
   ## [SPEC LOADER §7] A provider's active record carries its exact call surface.

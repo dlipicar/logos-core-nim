@@ -63,6 +63,7 @@ lcn.app_runtime = {
   ? startup_deadline_ms: uint32,
   ? stop_deadline_ms: uint32,
   ? shutdown_grace_ms: uint32,
+  ? apply_deadline_ms: uint32,
 }
 
 lcn.app_path = tstr .size (1..4096)
@@ -183,6 +184,7 @@ Maps are closed: an unknown key anywhere is rejected. An array that is present m
 | `startup_deadline_ms` | How long one module realization may take from authorization to `ready`, including its `_MODULE_init` (RUNTIME §3.4; G61). Default 120000. |
 | `stop_deadline_ms` | How long a stop may take before the realization is abandoned. Default 10000. |
 | `shutdown_grace_ms` | How long shutdown waits for in-flight work before cleanup is left unresolved (RUNTIME §10.2). Default 10000. |
+| `apply_deadline_ms` | How long a live configuration application (`apply_configuration`) may take, from its acceptance to the module's answer (CONFIG §8; DECISIONS G61, I87). When it passes, the outcome is unknown and the instance enters `error` with `configuration-indeterminate`, so the default is long: 120000. |
 
 Each deadline is 1 to 3600000 milliseconds. Paths must be absolute, so their meaning does not depend
 on the host's working directory.
@@ -343,10 +345,19 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   instance whose configured declaration differs from its stored one, live flag included, makes
   `start` return `LOGOS_ERR_INVALID_PARAMS` naming it, before anything runs. Give the module a new
   instance id.
+- **Applying a staged value live.** For a module whose binding declares `live_reconfiguration`,
+  Runtime Control `apply_configuration` hands the staged value to the running module's
+  `_MODULE_apply_configuration` while it stays `ready`. The call returns once the module has answered:
+  on success the value is current; a refusal changes nothing and is `LOGOS_ERR_MODULE`. If the module
+  gives no valid answer within `apply_deadline_ms` (above; 120 s by default), its configuration is
+  unknown: the call returns `LOGOS_ERR_MODULE` and the instance enters `error` with
+  `configuration-indeterminate`, and is released once the module's hook returns. Start it again to
+  continue; the staged value is still there. A stop or shutdown during an application waits for the
+  module's answer. One application runs per instance at a time.
 - **Size.** A state whose maximal `get_configuration` response would not fit a 16 MiB frame is refused
   with `LOGOS_ERR_MODULE` and nothing changes: two values near 8 MiB cannot both be kept (DECISIONS
-  G233, interim). The state revision never wraps; one step is kept free while a start's promotion is
-  pending (DECISIONS G234, interim).
+  G233, interim). The state revision never wraps; one step is kept free while a start's or an
+  application's promotion is pending (DECISIONS G234, interim).
 - **Persistence.** Each configurable instance's binding and state are kept in their own record in
   `store_dir` (below), written before any change is visible. A configuration write that fails is
   `LOGOS_ERR_MODULE` and changes nothing; at a start, the attempt fails with `other`.

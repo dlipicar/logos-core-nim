@@ -22,7 +22,7 @@ import ../src/logos_core/transport/envelope
 import ../src/logos_core/transport/framing
 import ./support/[kitbuild, kitruntime, tunerconfig]
 import ./kit/[meter_impl, tuner_impl]
-import ./generated/meter_module_calls
+import ./generated/[meter_module_calls, tuner_module_types]
 
 let
   repo = currentSourcePath().parentDir.parentDir
@@ -557,7 +557,8 @@ suite "cfg.state: configuration state and its transitions (CONFIG §3, §4, §6)
 # A hand-written configurable module: its `_MODULE_init` keeps a copy of the
 # `configuration_input` it was given (on the shared heap: module code runs on
 # the engine's workers) and can be made to fail. `tuner_live` also exports
-# `_MODULE_apply_configuration`.
+# `_MODULE_apply_configuration`, which keeps its input too and answers as
+# `applyMode` says, after waiting while `applyHold` is set.
 
 var
   tunerLock: Lock
@@ -566,6 +567,16 @@ var
   tunerPresent: bool
   tunerInits: Atomic[int]
   tunerFail: Atomic[bool]
+  tunerDestroys: Atomic[int]
+  applyBuf: ptr UncheckedArray[byte]
+  applyLen: int
+  applyMode: Atomic[int]
+    ## 0: LOGOS_OK; 1: a valid rejection (NOT_AUTHORISED with a message);
+    ## 2: an invalid result (LOGOS_OK with a message)
+  applyHold: Atomic[bool] ## the hook waits while it is set
+  applyEntered: Atomic[int] ## hook calls begun
+  applyCalls: Atomic[int] ## hook calls past the hold
+  tunerRc: Atomic[pointer] ## the latest instance's own Runtime Control binding
 initLock(tunerLock)
 
 proc tunerName(): cstring {.cdecl.} =
@@ -575,6 +586,7 @@ proc tunerInit(
     input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
 ): LogosResult {.cdecl.} =
   tunerInits += 1
+  tunerRc.store(input.runtimeControl)
   withLock tunerLock:
     if tunerBuf != nil:
       deallocShared(tunerBuf)
@@ -591,12 +603,30 @@ proc tunerInit(
   outContext[] = cast[ptr LogosModuleContext](allocShared0(16))
 
 proc tunerDestroy(module: ptr LogosModuleContext) {.cdecl.} =
+  tunerDestroys += 1
   deallocShared(module)
 
 proc tunerApply(
     module: ptr LogosModuleContext, cbor: ptr UncheckedArray[uint8], len: csize_t
 ): LogosResult {.cdecl.} =
-  discard
+  applyEntered += 1
+  while applyHold.load:
+    sleep(1)
+  withLock tunerLock:
+    if applyBuf != nil:
+      deallocShared(applyBuf)
+    applyLen = int(len)
+    applyBuf = cast[ptr UncheckedArray[byte]](allocShared(max(applyLen, 1)))
+    copyMem(applyBuf, cbor, applyLen)
+  applyCalls += 1
+  case applyMode.load
+  of 1:
+    result.code = CErrorCode(ord(ecNotAuthorised))
+    result.message = "the tuner says the secret word is wrong"
+  of 2:
+    result.message = "fine, mostly"
+  else:
+    discard
 
 proc tunerTable(live: bool): seq[(string, pointer)] =
   result = @[
@@ -627,11 +657,25 @@ proc lastInput(): Opt[seq[byte]] =
         b[i] = tunerBuf[i]
       result = Opt.some(b)
 
+proc lastApplied(): seq[byte] =
+  ## The configuration input the latest `_MODULE_apply_configuration` was given.
+  withLock tunerLock:
+    result = newSeq[byte](applyLen)
+    for i in 0 ..< applyLen:
+      result[i] = applyBuf[i]
+
 proc resetTuner() =
   tunerInits.store(0)
   tunerFail.store(false)
+  tunerDestroys.store(0)
+  applyMode.store(0)
+  applyHold.store(false)
+  applyEntered.store(0)
+  applyCalls.store(0)
+  tunerRc.store(nil)
   withLock tunerLock:
     tunerPresent = false
+    applyLen = 0
 
 func tuner(a: AcceptedConfiguration, binding = "tuner"): ModuleRecord =
   ModuleRecord(
@@ -1154,3 +1198,433 @@ suite "cfg.sources: configuration state across restarts (CONFIG §4, §7; G141; 
       check e.view("t1").isErr
       check sideFiles(dir).len == 0
       e.finish()
+
+# Live reconfiguration -----------------------------------------------------------------------
+
+type ApplyArg =
+  (ptr LogosRuntimeControlBinding, LogosNSRuntimeModuleInstanceAddress, uint64)
+
+var
+  applyReply: Atomic[int] ## the code `applyOn` got, or -2 while it waits
+  applyRevision: Atomic[int] ## and on success the applied value revision
+
+proc applyOn(arg: ApplyArg) {.thread.} =
+  let r = arg[0].applyOf(arg[1], arg[2])
+  if r.code == ecOk:
+    let a = LogosNSRuntimeControlApplyConfigurationResponse.decode(r.response)
+    applyRevision.store(int(a.get.applied_value_revision))
+  applyReply.store(ord(r.code))
+
+proc applying(
+    rc: ptr LogosRuntimeControlBinding,
+    t: LogosNSRuntimeModuleInstanceAddress,
+    revision: uint64,
+    th: var Thread[ApplyArg],
+): bool =
+  ## Applies from `th` with the hook held, and waits until the hook is entered.
+  applyReply.store(-2)
+  applyRevision.store(0)
+  let entered = applyEntered.load
+  applyHold.store(true)
+  createThread(th, applyOn, (rc, t, revision))
+  waitUntil(
+    proc(): bool =
+      applyEntered.load > entered
+  )
+
+proc shutdownOn(e: Engine) {.thread.} =
+  e.shutdown()
+
+proc readyLive(
+    e: Engine, rc: ptr LogosRuntimeControlBinding, id: string
+): LogosNSRuntimeModuleInstanceAddress =
+  ## A live tuner `id`, started with its default (state revision 2 once that
+  ## is current), with `radio-2` then staged at revision 3.
+  let a = tunerAccepted(default = Opt.some(tunerValue()), live = true)
+  discard e.createTuner(id, a, binding = "tuner_live")
+  doAssert e.start(id).tryGet.state == msReady
+  result = e.target(id)
+  doAssert rc.stage(result, 2, tunerValue("radio-2", 9)).updated.state_revision == 3
+
+let
+  tunerSet = acceptContractSet(readFile(repo / "tests/kit/tuner_module.cddl")).tryGet
+  tunerRoot = tunerSet.primary.root
+  tunerSchema = encodeCbor(schemaResponse(tunerSet, tunerRoot).tryGet)
+
+proc nowOf(h: var LogosRouteHandle): RadioNowResponse =
+  ## `radio.now` of the generated kit tuner, through `h`.
+  let r = h.raw("now", encodeCbor(toCbor(RadioNowRequest())))
+  doAssert r.code == ecOk, $r.code
+  fromChecked(RadioNowResponse, decodeCbor(r.response).tryGet)
+
+proc liveEngine(applyMs = 0, stopMs = 0): Engine =
+  var cfg = config(extra = tunerRegs())
+  if applyMs > 0:
+    cfg.applyDeadline = initDuration(milliseconds = applyMs * Slow)
+  if stopMs > 0:
+    cfg.stopDeadline = initDuration(milliseconds = stopMs * Slow)
+  fixtureEngine(cfg)
+
+suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
+  setup:
+    resetTuner()
+    let blobs = liveConfigBlobs()
+
+  teardown:
+    applyHold.store(false)
+    tunerGate.store(false)
+    leftover()
+    check liveConfigBlobs() == blobs
+
+  test "[CFG-0089] [CFG-0092] [CFG-0094] [CFG-0102] [CFG-0103] [CFG-0144] [G236] apply hands the staged record to the hook as one configuration_input, makes it current and answers its value revision; the lifecycle does not change":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    let before = e.view("t1").tryGet
+    let r = rc.applyOf(t, 3).applied
+    check r.target == t
+    check r.state_revision == 4
+    check r.applied_value_revision == 3
+    check lastApplied() == inputFor(tunerValue("radio-2", 9), 3)
+    let s = rc.summary(t)
+    check s.state_revision == 4
+    check s.current.get.value_revision == 3 and s.staged.isNone
+    check provenanceOf(s.current.get.provenance) == pvRuntimeControlUpdate
+    let after = e.view("t1").tryGet
+    check after.state == msReady
+    check after.execution.revision == before.execution.revision
+    check tunerInits.load == 1 and tunerDestroys.load == 0
+    # Nothing is staged now.
+    check rc.applyOf(t, 4).code == ecInvalidParams
+    e.finish()
+
+  test "[CFG-0093] [CFG-0141] [CFG-0142] [CFG-0143] [CFG-0090] [CFG-0006] [G171] [G228] the preconditions, in their row order, refuse without invoking the hook or changing anything":
+    let e = tunerEngine()
+    let (c, rc) = e.startClient("c")
+    var r = rc.applyOf(e.target(c.instance), 0)
+    check r.code == ecInvalidParams and r.detail.len == 0
+    var away = e.target("t1")
+    away.runtime_instance_id = "another-runtime"
+    check rc.applyOf(away, 3).code == ecInvalidParams
+    let t = e.readyLive(rc, "t1")
+    r = rc.applyOf(t, 2)
+    check r.code == ecInvalidParams and r.detail.len == 0
+    check rc.discardStaged(t, 3).updated.state_revision == 4
+    r = rc.applyOf(t, 4)
+    check r.code == ecInvalidParams and r.detail.len == 0
+    # A startup-only binding.
+    discard e.createTuner("t2", tunerAccepted(default = Opt.some(tunerValue())))
+    check e.start("t2").tryGet.state == msReady
+    let t2 = e.target("t2")
+    check rc.stage(t2, 2, tunerValue("radio-2")).code == ecOk
+    r = rc.applyOf(t2, 3)
+    check r.code == ecInvalidParams and r.detail.len == 0
+    # Not ready: after the request's own rows.
+    let a = tunerAccepted(default = Opt.some(tunerValue()), live = true)
+    discard e.createTuner("t3", a, binding = "tuner_live")
+    let t3 = e.target("t3")
+    check rc.applyOf(t3, 0).code == ecInvalidParams
+    check rc.applyOf(t3, 1).code == ecNotReady
+    check applyEntered.load == 0
+    check rc.summary(t).state_revision == 4
+    check rc.summary(t2).state_revision == 3
+    check rc.summary(t3).state_revision == 1
+    e.finish()
+
+  test "[CFG-0141] the binding's, the staged record's and the realization's commitments must agree (the VERSION_MISMATCH row)":
+    let c = tunerAccepted().roots
+    var d = c
+    d.subtreeRoot[0] = d.subtreeRoot[0] xor 1
+    check commitmentsAgree(c, c, c)
+    check not commitmentsAgree(d, c, c)
+    check not commitmentsAgree(c, d, c)
+    check not commitmentsAgree(c, c, d)
+
+  test "[CFG-0057] apply_configuration is authorized on its own; a refusal invokes nothing":
+    let e = tunerEngine(denying(deny(operation = "apply_configuration")))
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    check rc.applyOf(t, 3).code == ecNotAuthorised
+    check applyEntered.load == 0
+    check rc.summary(t).state_revision == 3
+    e.finish()
+
+  test "[CFG-0145] [CFG-0146] a valid rejection is MODULE_ERROR without the hook's status; nothing changes and the instance stays ready":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    applyMode.store(1)
+    let r = rc.applyOf(t, 3)
+    check r.code == ecModule
+    check "secret" notin r.message and r.detail.len == 0
+    check applyCalls.load == 1
+    let s = rc.summary(t)
+    check s.state_revision == 3 and s.current.get.value_revision == 1
+    check s.staged.get.value_revision == 3
+    check e.view("t1").tryGet.state == msReady
+    applyMode.store(0)
+    check rc.applyOf(t, 3).applied.state_revision == 4
+    e.finish()
+
+  test "[CFG-0101] [CFG-0147] [CFG-0148] [RUN-1052] an invalid hook result is indeterminate: MODULE_ERROR, `error` with configuration-indeterminate, the realization released and nothing promoted":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    applyMode.store(2)
+    check rc.applyOf(t, 3).code == ecModule
+    let v = e.view("t1").tryGet
+    check v.state == msError
+    check v.failure.get.kind == fkConfigurationIndeterminate
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("t1")
+    )
+    check tunerDestroys.load == 1
+    let s = rc.summary(t)
+    check s.state_revision == 3 and s.current.get.value_revision == 1
+    check s.staged.get.value_revision == 3
+    # A new start delivers the staged record.
+    applyMode.store(0)
+    check e.start("t1").tryGet.state == msReady
+    check lastInput() == Opt.some(inputFor(tunerValue("radio-2", 9), 3))
+    e.finish()
+
+  test "[CFG-0095] [CFG-0100] [CFG-0040] one application at a time; an update during it is admitted and stays staged when the promotion does not clear it":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    var th: Thread[ApplyArg]
+    check rc.applying(t, 3, th)
+    check rc.applyOf(t, 3).code == ecNotReady
+    check rc.stage(t, 3, tunerValue("radio-3", 2)).updated.state_revision == 4
+    applyHold.store(false)
+    joinThread(th)
+    check applyReply.load == ord(ecOk)
+    check applyRevision.load == 3
+    let s = rc.summary(t)
+    check s.state_revision == 5
+    check s.current.get.value_revision == 3
+    check s.staged.get.value_revision == 4
+    check applyEntered.load == 1
+    e.finish()
+
+  test "[CFG-0136] [CFG-0137] [CFG-0139] [G61] past the apply deadline the outcome is indeterminate: MODULE_ERROR at once, the context kept until the hook returns, its late success ignored":
+    let e = liveEngine(applyMs = 100)
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    var th: Thread[ApplyArg]
+    check rc.applying(t, 3, th)
+    check waitUntil(
+      proc(): bool =
+        applyReply.load != -2
+    )
+    check applyReply.load == ord(ecModule)
+    joinThread(th)
+    let v = e.view("t1").tryGet
+    check v.state == msError
+    check v.failure.get.kind == fkConfigurationIndeterminate
+    check applyCalls.load == 0 and tunerDestroys.load == 0
+    check e.cleanupPending("t1")
+    applyHold.store(false)
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("t1")
+    )
+    check tunerDestroys.load == 1 and applyCalls.load == 1
+    let s = rc.summary(t)
+    check s.state_revision == 3 and s.current.get.value_revision == 1
+    check s.staged.get.value_revision == 3
+    check e.view("t1").tryGet.state == msError
+    e.finish()
+
+  test "[CFG-0138] [CFG-0140] a stop during an application waits for the hook; a valid result is still made current, and the stop then completes":
+    let e = liveEngine(stopMs = 10_000)
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    var th: Thread[ApplyArg]
+    check rc.applying(t, 3, th)
+    var st: Thread[(Engine, string)]
+    check e.stopping("t1", st)
+    check tunerDestroys.load == 0
+    check stopReply.load == -2
+    applyHold.store(false)
+    joinThread(th)
+    check applyReply.load == ord(ecOk) and applyRevision.load == 3
+    joinThread(st)
+    check stopReply.load == ord(msUnloaded)
+    check tunerDestroys.load == 1
+    let v = e.view("t1").tryGet
+    check v.state == msUnloaded and v.failure.isNone
+    check v.execution.intent == inStopped
+    check rc.summary(t).current.get.value_revision == 3
+    e.finish()
+
+  test "[RUN-0690] [CFG-0103] [CFG-0140] a failure the module reports during an application: `error` at once, the hook's valid result still made current without restoring readiness, the realization released once it returns [IMPL]":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    let own = cast[ptr LogosRuntimeControlBinding](tunerRc.load)
+    var th: Thread[ApplyArg]
+    check rc.applying(t, 3, th)
+    let r = rcCall(
+      own,
+      "report_failure",
+      encode(LogosNSRuntimeControlReportFailureRequest(reason: Opt.some("lost"))).tryGet,
+    )
+    check r.code == ecOk
+    check waitUntil(
+      proc(): bool =
+        e.view("t1").tryGet.state == msError
+    )
+    check tunerDestroys.load == 0
+    check applyReply.load == -2
+    applyHold.store(false)
+    joinThread(th)
+    check applyReply.load == ord(ecOk)
+    check applyRevision.load == 3
+    check waitUntil(
+      proc(): bool =
+        tunerDestroys.load == 1
+    )
+    let v = e.view("t1").tryGet
+    check v.state == msError
+    let s = rc.summary(t)
+    check s.current.get.value_revision == 3 and s.staged.isNone
+    e.finish()
+
+  test "[G237] [CFG-0136] [CFG-0138] past the apply deadline during a stop: `error` with configuration-indeterminate, then `unloaded` once the stop completes in time":
+    let e = liveEngine(applyMs = 1000, stopMs = 10_000)
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    var th: Thread[ApplyArg]
+    check rc.applying(t, 3, th)
+    var st: Thread[(Engine, string)]
+    check e.stopping("t1", st)
+    check waitUntil(
+      proc(): bool =
+        applyReply.load != -2
+    )
+    check applyReply.load == ord(ecModule)
+    var v = e.view("t1").tryGet
+    check v.state == msError
+    check v.failure.get.kind == fkConfigurationIndeterminate
+    check stopReply.load == -2
+    # A second stop is answered with the state at once, as during `stopping`.
+    check e.stop("t1").tryGet.state == msError
+    applyHold.store(false)
+    joinThread(th)
+    joinThread(st)
+    check stopReply.load == ord(msUnloaded)
+    v = e.view("t1").tryGet
+    check v.state == msUnloaded and v.failure.isNone
+    check tunerDestroys.load == 1
+    check rc.summary(t).current.get.value_revision == 1
+    e.finish()
+
+  test "[G237] [G180] past the stop deadline as well, the stop answers with cleanup-timeout and the instance stays `error` when the hook returns":
+    let e = liveEngine(applyMs = 500, stopMs = 1500)
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    var th: Thread[ApplyArg]
+    check rc.applying(t, 3, th)
+    var st: Thread[(Engine, string)]
+    check e.stopping("t1", st)
+    check waitUntil(
+      proc(): bool =
+        applyReply.load != -2
+    )
+    check e.view("t1").tryGet.failure.get.kind == fkConfigurationIndeterminate
+    check waitUntil(
+      proc(): bool =
+        stopReply.load != -2
+    )
+    joinThread(st)
+    check stopReply.load == ord(msError)
+    check e.view("t1").tryGet.failure.get.kind == fkCleanupTimeout
+    applyHold.store(false)
+    joinThread(th)
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("t1")
+    )
+    let v = e.view("t1").tryGet
+    check v.state == msError and v.failure.get.kind == fkCleanupTimeout
+    check rc.summary(t).current.get.value_revision == 1
+    e.finish()
+
+  test "[CFG-0138] [CFG-0140] shutdown waits for an application in flight, whose valid result is still made current":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    var th: Thread[ApplyArg]
+    check rc.applying(t, 3, th)
+    var sh: Thread[Engine]
+    createThread(sh, shutdownOn, e)
+    check waitUntil(
+      proc(): bool =
+        e.view("t1").tryGet.state == msStopping
+    )
+    check tunerDestroys.load == 0
+    applyHold.store(false)
+    joinThread(th)
+    check applyReply.load == ord(ecOk) and applyRevision.load == 3
+    joinThread(sh)
+    check tunerDestroys.load == 1
+    check e.view("t1").tryGet.state == msUnloaded
+    e.finish()
+
+  test "[CFG-0092] [CFG-0096] [CFG-0097] [CFG-0098] [CFG-0145] a generated kit applies the typed value; its refusal leaves the value in force":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let a = tunerAccepted(default = Opt.some(tunerValue("kit-1", 4)), live = true)
+    discard e.createTuner("k", a, "tuner_kit")
+    check e.start("k").tryGet.state == msReady
+    let t = e.target("k")
+    check rc.stage(t, 2, tunerValue("kit-2", 6)).code == ecOk
+    check rc.applyOf(t, 3).applied.applied_value_revision == 3
+    check tunerAppliedVolume.load == 6'u32
+    check rc.stage(t, 4, tunerValue("refuse", 8)).code == ecOk
+    check rc.applyOf(t, 5).code == ecModule
+    check tunerAppliedVolume.load == 6'u32
+    check e.view("k").tryGet.state == msReady
+    let s = rc.summary(t)
+    check s.current.get.value_revision == 3 and s.staged.get.value_revision == 5
+    e.finish()
+
+  test "[IFC-0270] provider calls keep running while a configuration is applied, and see the value in force until it is promoted":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let a = tunerAccepted(default = Opt.some(tunerValue("kit-1", 4)), live = true)
+    var rec = tuner(a, "tuner_kit")
+    rec.primaryContract = Opt.some(tunerRoot)
+    discard e.create(rec, "k", configuration = Opt.some(a)).tryGet
+    check e.start("k").tryGet.state == msReady
+    let t = e.target("k")
+    check rc.stage(t, 2, tunerValue("hold", 6)).code == ecOk
+    let route = rc.establish("now", root = tunerRoot)
+    check route.code == ecOk
+    var (code, h) =
+      rc.materialize(route.routesOf.routes[0].route, tunerRoot, tunerSchema)
+    check code == ecOk
+    check h.nowOf().station == "kit-1"
+    tunerGate.store(true)
+    applyReply.store(-2)
+    var th: Thread[ApplyArg]
+    createThread(th, applyOn, (rc, t, 3'u64))
+    check waitUntil(
+      proc(): bool =
+        tunerHeld.load > 0
+    )
+    # The hook is held: calls are still answered, from the value in force.
+    for _ in 0 ..< 3:
+      let now = h.nowOf()
+      check now.station == "kit-1" and now.volume == 4'u32 and now.applied == 0
+    check applyReply.load == -2
+    check e.view("k").tryGet.state == msReady
+    tunerGate.store(false)
+    joinThread(th)
+    check applyReply.load == ord(ecOk)
+    let now = h.nowOf()
+    check now.station == "hold" and now.volume == 6'u32 and now.applied == 1
+    h.release()
+    e.finish()

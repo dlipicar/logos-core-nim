@@ -26,6 +26,9 @@ const
   DefaultStartupDeadline* = initDuration(seconds = 120)
   DefaultStopDeadline* = initDuration(seconds = 10)
   DefaultShutdownGrace* = initDuration(seconds = 10)
+  DefaultApplyDeadline* = initDuration(seconds = 120)
+    ## [IMPL-DECISION G61, fourth deadline; I87] how long a live
+    ## configuration application may take: expiry is destructive
   DefaultEndedRoutes* = 4096
     ## [IMPL] ended route records kept per consumer once nothing reaches them
   MaxWorkers* = 64 ## [IMPL] worker threads; more jobs wait in the queue
@@ -249,6 +252,9 @@ type
     startupDeadline*: Duration
     stopDeadline*: Duration
     shutdownGrace*: Duration
+    applyDeadline*: Duration
+      ## [G61, fourth deadline; I87] `apply_configuration`, from acceptance
+      ## to the hook's result; zero is `DefaultApplyDeadline`
     endedRoutes*: int
       ## [SPEC RUNTIME §9.3 l.3249] retention selection: how many ended route
       ## records each consumer keeps once nothing reaches them (`engine.nim`)
@@ -523,6 +529,7 @@ type
     jkObserveEnd ## a route handle's terminal callback
     jkComplete ## an asynchronous call's completion callback
     jkRequestCancel ## a deferred invocation's `request_cancel` hook
+    jkApply ## [I87] `_MODULE_apply_configuration` on a live context
 
   Job* = object
     id*: int
@@ -541,6 +548,13 @@ type
       call*: pointer
     of jkRequestCancel:
       deferred*: pointer
+    of jkApply:
+      apply*: ModuleApplyConfigurationFn
+      applyContext*: ptr LogosModuleContext
+      applyData*: ptr UncheckedArray[uint8]
+        ## the `configuration_input`, which the engine keeps until the hook
+        ## has returned
+      applyLen*: int
     of jkQuit:
       discard
 
@@ -616,6 +630,7 @@ type
     mkDeferredIdle ## a deferred invocation has no execution or entry left
     mkEvaluated ## an evaluation worker finished one `evaluate` (`job`)
     mkRcHandled ## [G178] a Runtime Control event handler returned (`target`)
+    mkApplied ## [I87] `_MODULE_apply_configuration` returned (`res`)
 
   Msg* = object
     job*: int
@@ -624,9 +639,9 @@ type
       request*: Request
     of mkBound:
       bound*: BindResult
-    of mkInitialized:
+    of mkInitialized, mkApplied:
       res*: LogosResult
-      context*: ptr LogosModuleContext
+      context*: ptr LogosModuleContext ## mkInitialized
     of mkDestroyed, mkJobDone:
       discard
     of mkCallDone:
@@ -745,6 +760,7 @@ proc defaultConfig*(workDir: string): EngineConfig =
     startupDeadline: DefaultStartupDeadline,
     stopDeadline: DefaultStopDeadline,
     shutdownGrace: DefaultShutdownGrace,
+    applyDeadline: DefaultApplyDeadline,
     endedRoutes: DefaultEndedRoutes,
   )
 

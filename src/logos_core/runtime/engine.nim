@@ -161,6 +161,18 @@ type
     reply: ReplyChannel
     origin: string ## the module instance waiting, empty for the host
 
+  ApplyRun = ref object
+    ## [SPEC CONFIG §8; LOADER §8, §11; I87] One live configuration
+    ## application in flight, until its hook has returned.
+    job: int
+    reply: ReplyChannel ## answered once the outcome is established
+    valueRevision: uint64 ## the attempted record's (G236)
+    input: Blob ## its `configuration_input`, kept until the hook returns
+    deadline: MonoTime ## [G61, fourth deadline]
+    expired: bool
+      ## the deadline passed first: the outcome is indeterminate and already
+      ## answered, and the hook's result is ignored (CFG-0139)
+
   StopWaiter = object
     reply: ReplyChannel
     origin: string
@@ -228,6 +240,14 @@ type
     config: ConfigState
       ## [I87] its configuration state, while `record.configuration` names a
       ## binding (`configurable`); owned here
+    apply: ApplyRun
+      ## [I87] the live configuration application in flight; its realization
+      ## is not released before the hook returns (LDR-0136, CFG-0138)
+    indeterminateStop: bool
+      ## [IMPL-DECISION G237 interim (TF-28)] an explicit or shutdown stop is
+      ## in progress although the instance is `error`: an application's
+      ## outcome became indeterminate while it was `stopping`. The stop still
+      ## completes it, to `unloaded`, within its stop deadline.
 
   Saved = object ## What an accepting commit rolls back when its write fails.
     record: ModuleRecord
@@ -354,6 +374,7 @@ type
     instances: OrderedTable[string, Inst]
     attempts: Table[int, Attempt] ## by job id (bind and init jobs)
     teardowns: Table[int, Inst] ## by job id (destroy jobs)
+    applies: Table[int, Inst] ## [I87] by job id (apply jobs)
     nextJob: int
     busy: int ## jobs dispatched and not yet answered
     serial: uint64
@@ -474,6 +495,11 @@ proc workerLoop(s: ptr Shared) =
     of jkRequestCancel:
       runRequestCancel(job.deferred)
       s.post(Msg(kind: mkJobDone, job: job.id))
+    of jkApply:
+      # [SPEC LOADER §8; INTERFACE §2.6] The one hook call; provider calls
+      # keep running on the call workers (IFC-0270).
+      let res = job.apply(job.applyContext, job.applyData, csize_t(job.applyLen))
+      s.post(Msg(kind: mkApplied, job: job.id, res: res))
 
 proc workerMain(s: ptr Shared) {.thread.} =
   markRuntimeThread()
@@ -1129,7 +1155,7 @@ proc commit(st: State, x: Inst) =
   ## change is held back (I82).
   inc x.revision
   st.stepCommitted.incl(x.id)
-  if x.state != msStopping:
+  if x.state != msStopping and not x.indeterminateStop:
     x.stopDeadline = Opt.none(MonoTime)
   x.pending = true
   st.routesFollow(x)
@@ -1241,8 +1267,9 @@ proc persistConfig(st: State, x: Inst, next: ConfigState): Opt[EngineError] =
 
 proc endAttempted(x: Inst) =
   ## [SPEC CONFIG §6 l.238-242 (CFG-0074, CFG-0075)] The attempt can no
-  ## longer promote its snapshot: it is dropped and nothing else changes.
-  if x.configurable and x.config.attempted.isSome:
+  ## longer promote its snapshot: it is dropped and nothing else changes. A
+  ## live application's snapshot ends with its own outcome.
+  if x.configurable and x.config.attempted.isSome and x.apply.isNil:
     x.config.adopt(x.config.withoutAttempt)
 
 proc releaseConfigs(st: State) =
@@ -1334,9 +1361,11 @@ proc releaseRealization(st: State, x: Inst) =
   let r = x.realization
   if r.isNil or x.teardown != 0:
     return
-  if x.inflight > 0 or x.rcHandlers > 0:
+  if x.inflight > 0 or x.rcHandlers > 0 or x.apply != nil:
     # [IMPL] Calls already inside the provider finish first (§3.4 l.623), and
-    # so do its Runtime Control handlers [G178] (INTERFACE l.1465, l.1999).
+    # so do its Runtime Control handlers [G178] (INTERFACE l.1465, l.1999)
+    # and a live configuration application [I87] (LOADER §11 (LDR-0136);
+    # CONFIG l.272 (CFG-0137, CFG-0138)).
     x.releasePending = true
     return
   x.releasePending = false
@@ -2819,6 +2848,10 @@ proc stopInstance(
     # classification an authority refusal or stop left is cleared.
     x.failure = Opt.none(Failure)
     st.commit(x)
+  if x.indeterminateStop:
+    # [G237 interim] The stop in progress completes it, as `stopping` would.
+    reply.answerView(x)
+    return
   case x.state
   of msUnloaded, msStopping:
     reply.answerView(x)
@@ -3095,7 +3128,7 @@ proc shutdownStep(st: State) =
     for x in st.instances.values:
       order.insert(x, 0)
     for x in order:
-      if x.state in {msUnloaded, msStopping}:
+      if x.state in {msUnloaded, msStopping} or x.indeterminateStop:
         continue
       if x.state == msError and x.attempt.isNil and x.teardown == 0 and
           x.realization.isNil:
@@ -3112,7 +3145,9 @@ proc shutdownStep(st: State) =
 
 proc shutdownComplete(st: State): bool =
   for x in st.instances.values:
-    if x.state in {msLoaded, msReady, msStopping}:
+    if x.state in {msLoaded, msReady, msStopping} or x.indeterminateStop or
+        x.apply != nil:
+      # [I87] An application in flight is waited for as a call is.
       return false
   true
 
@@ -4730,6 +4765,192 @@ proc configCommit(st: State, q: Request) =
     q, y, y.config.withStaged(u.value, u.valueRoot, pvRuntimeControlUpdate)
   )
 
+# Live reconfiguration (CONFIG §8; I87 step 9b) -----------------------------------
+
+func applyDeadline(st: State): Duration =
+  ## [IMPL-DECISION G61, fourth deadline]
+  if st.cfg.applyDeadline == default(Duration):
+    DefaultApplyDeadline
+  else:
+    st.cfg.applyDeadline
+
+proc applyRefusal(y: Inst, expectedRevision: uint64): Opt[EngineError] =
+  ## [SPEC CONFIG §8 l.290-298 (CFG-0093, CFG-0141)] The preconditions, in the
+  ## table's row order [G171 extended (TF-18 point 5)], with the absent
+  ## realization binding placed after NOT_READY, so an instance that is not
+  ## `ready` is NOT_READY. INVALID_PARAMS carries no detail (CFG-0143).
+  ## Nothing is invoked or changed on a refusal (CFG-0142).
+  template refuse(code: ErrorCode, text: string) =
+    return Opt.some(engineError(code, text))
+
+  if not y.configurable:
+    return Opt.some(noBinding())
+  if expectedRevision != y.config.revision:
+    refuse(ecInvalidParams, "the configuration state revision is not the current one")
+  if y.config.staged.isNone:
+    refuse(ecInvalidParams, "no configuration value is staged")
+  if not y.config.binding.live:
+    # [CFG-0090] a startup-only instance
+    refuse(
+      ecInvalidParams, "the configuration binding does not declare live reconfiguration"
+    )
+  if y.state != msReady:
+    refuse(ecNotReady, "the module instance is not ready")
+  if y.apply != nil:
+    # [CFG-0095] at most one attempt per instance
+    refuse(ecNotReady, "a configuration is already being applied")
+  let r = y.realization
+  if r.isNil or not r.live or r.initCommitment.isNone:
+    refuse(ecInvalidParams, "the realization has no live configuration binding")
+  if not commitmentsAgree(
+    y.config.binding.commitment, y.config.staged.get.commitment, r.initCommitment.get
+  ):
+    # [SPEC CONFIG l.296] Unreachable while a binding is fixed for its
+    # instance (CONFIG §7); kept for the rule.
+    refuse(ecVersionMismatch, "the configuration schema commitments differ")
+  if not y.config.canAdvance:
+    # [IMPL-DECISION G234 (S9-2)] its promotion could not advance the revision
+    refuse(ecModule, "the configuration revision is exhausted")
+  Opt.none(EngineError)
+
+proc configApply(st: State, q: Request, x: Inst) =
+  ## [SPEC CONFIG §8 l.276-319; LOADER §8, §11] `apply_configuration`: the
+  ## staged record is snapshotted as the attempted one (l.301-302) and its
+  ## `configuration_input` handed to `_MODULE_apply_configuration` on a
+  ## lifecycle worker (CFG-0092), under the apply deadline. The caller is
+  ## answered once the outcome is established (`applied`, `applyExpired`).
+  let r = q.rc.cfgApply
+  let y = st.configTarget(q, x, r.target, aaLifecycle).valueOr:
+    return
+  let refused = y.applyRefusal(r.expected_state_revision)
+  if refused.isSome:
+    q.reply.answerError(refused.get.code, refused.get.message)
+    return
+  let staged = y.config.staged.get
+  let hook = st.realizer.beginApply(y.realization.id, y.id).valueOr:
+    # [IMPL] The preconditions make the Loader's refusals unreachable.
+    q.reply.answerError(ecModule, "the configuration cannot be applied")
+    return
+  y.config.adopt(y.config.withAttempt(staged))
+  let input = newBlob(encodeInput(staged))
+  let id = st.nextJobId()
+  y.apply = ApplyRun(
+    job: id,
+    reply: q.reply,
+    valueRevision: staged.valueRevision,
+    input: input,
+    deadline: getMonoTime() + st.applyDeadline,
+  )
+  st.applies[id] = y
+  st.dispatch(
+    Job(
+      id: id,
+      kind: jkApply,
+      apply: hook.apply,
+      applyContext: hook.context,
+      applyData: cast[ptr UncheckedArray[uint8]](input.address),
+      applyLen: input.len,
+    )
+  )
+
+proc applyFailed(st: State, x: Inst, f: Failure) =
+  ## [SPEC CONFIG §8 l.311-313 (CFG-0101, CFG-0148)] An application whose
+  ## outcome is indeterminate, or whose success could not be recorded:
+  ## `error`, no further provider work, the realization released once the
+  ## hook has returned. A later cause replaces an earlier one (RUNTIME
+  ## l.3757). [IMPL-DECISION G237 interim (TF-28)] During a stop the
+  ## instance enters `error` too, and the stop still completes it.
+  case x.state
+  of msReady:
+    x.state = msError
+    x.failure = Opt.some(f)
+    x.provider = false
+    st.commit(x)
+    st.releaseRealization(x)
+  of msStopping:
+    x.indeterminateStop = true
+    x.state = msError
+    x.failure = Opt.some(f)
+    st.commit(x)
+  of msError:
+    x.failure = Opt.some(f)
+    st.commit(x)
+  of msUnloaded, msLoaded:
+    discard
+
+proc applyExpired(st: State, x: Inst) =
+  ## [SPEC CONFIG §8 l.269-272 (CFG-0136, CFG-0137)] No valid result before
+  ## the apply deadline: the outcome is indeterminate, not a rejection. The
+  ## caller gets MODULE_ERROR now, nothing is promoted, the hook's result is
+  ## ignored when it comes (CFG-0139), and the context stays owned until then.
+  let run = x.apply
+  run.expired = true
+  x.config.adopt(x.config.withoutAttempt)
+  run.reply.answerError(
+    ecModule, "the configuration was not applied in time: its outcome is unknown"
+  )
+  st.applyFailed(
+    x, Failure(kind: fkConfigurationIndeterminate, reason: "the apply deadline passed")
+  )
+
+proc applied(st: State, job: int, res: LogosResult) =
+  ## [SPEC CONFIG §8 l.305-319; LOADER §8] The hook returned. Unless its
+  ## deadline already passed: success promotes the attempted record, written
+  ## before it is exposed, and answers its value revision [G236 interim
+  ## (TL-10)], without any lifecycle change (CFG-0103), whatever the
+  ## instance's state, a stop included (CFG-0140); a valid rejection changes
+  ## nothing and is MODULE_ERROR, its status not forwarded (CFG-0145,
+  ## CFG-0146); an invalid result is indeterminate (CFG-0147, direct mode).
+  ## Then a release waiting for the hook goes on.
+  var x: Inst
+  if not st.applies.pop(job, x):
+    return
+  let run = x.apply
+  x.apply = nil
+  let outcome = st.realizer.completeApply(x.id, res, established = not run.expired)
+  drop(run.input)
+  if not run.expired:
+    if outcome.isOk:
+      let next = x.config.promoted
+      let refused =
+        if next.revision == x.config.revision:
+          x.config.adopt(next)
+          Opt.none(EngineError)
+        else:
+          st.persistConfig(x, next)
+      if refused.isSome:
+        # [I87] The module runs a value the Runtime could not record.
+        x.config.adopt(x.config.withoutAttempt)
+        run.reply.answerError(ecModule, ConfigNotPersisted)
+        st.applyFailed(x, Failure(kind: fkOther, reason: ConfigNotPersisted))
+      else:
+        run.reply.answerEncoded(
+          encode(
+            LogosNSRuntimeControlApplyConfigurationResponse(
+              target: st.addressOf(x.id),
+              state_revision: x.config.revision,
+              applied_value_revision: run.valueRevision,
+            )
+          )
+        )
+    elif outcome.error.code == lecConfigurationRejected:
+      x.config.adopt(x.config.withoutAttempt)
+      run.reply.answerError(ecModule, "the module rejected the configuration")
+    else:
+      x.config.adopt(x.config.withoutAttempt)
+      run.reply.answerError(
+        ecModule, "the configuration application failed: its outcome is unknown"
+      )
+      st.applyFailed(
+        x,
+        Failure(
+          kind: fkConfigurationIndeterminate,
+          reason: "apply_configuration returned an invalid result",
+        ),
+      )
+  if x.releasePending and x.inflight == 0 and x.rcHandlers == 0:
+    st.releaseRealization(x)
+
 proc rc(st: State, q: Request) =
   ## [SPEC RUNTIME §9, §9.3] One Runtime Control method through a module's
   ## binding.
@@ -4802,10 +5023,7 @@ proc rc(st: State, q: Request) =
   of rmUpdateConfiguration:
     st.configUpdate(q, x)
   of rmApplyConfiguration:
-    # [I87] built in step 9b
-    q.reply.answerError(
-      ecModule, "apply_configuration is not supported by this Runtime yet"
-    )
+    st.configApply(q, x)
   of rmShutdownRuntime:
     # [SPEC RUNTIME §9.3 l.3695-3700] Runtime-wide; the response acknowledges
     # acceptance and is attempted before teardown.
@@ -5817,7 +6035,10 @@ proc destroyed(st: State, job: int) =
     let a = x.attempt
     if a != nil and a.phase == apCleanup:
       st.finishAttempt(a)
-    elif x.state == msStopping:
+    elif x.state == msStopping or x.indeterminateStop:
+      # [G237 interim] A stop during which an application's outcome became
+      # indeterminate completes as any stop does.
+      x.indeterminateStop = false
       x.state = msUnloaded
       x.failure = x.takeEnforced()
       x.current = ""
@@ -5905,7 +6126,7 @@ proc handle(st: State, m: sink Msg) =
     st.checkBinding()
     st.checkBootstrap()
     return
-  of mkBound, mkInitialized, mkDestroyed, mkJobDone, mkCompleted:
+  of mkBound, mkInitialized, mkDestroyed, mkJobDone, mkCompleted, mkApplied:
     dec st.busy
   of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle, mkEvaluated,
       mkRcHandled:
@@ -5952,6 +6173,8 @@ proc handle(st: State, m: sink Msg) =
     st.evaluated(m.job, m.evaluated)
   of mkRcHandled:
     st.rcHandled(m.target)
+  of mkApplied:
+    st.applied(m.job, m.res)
   of mkRequest, mkJobDone:
     discard
   st.settle()
@@ -5989,10 +6212,16 @@ proc checkDeadlines(st: State) =
       elif not st.storeFailed or now >= st.nextStoreTry:
         # [IMPL] `ready` is written again (I82).
         st.promote(a)
-    if x.state == msStopping and x.stopDeadline.isSome and now >= x.stopDeadline.get:
+    let run = x.apply
+    if run != nil and not run.expired and now >= run.deadline:
+      st.applyExpired(x)
+    if (x.state == msStopping or x.indeterminateStop) and x.stopDeadline.isSome and
+        now >= x.stopDeadline.get:
       # [G61, revised by A18; SPEC RUNTIME §10.2 l.3835-3838, l.3873-3874]
       # The cleanup failure is recorded; nothing still in use is released.
       # [G168 extended] It replaces an authority stop's classification.
+      # [G237] So it does an indeterminate application's.
+      x.indeterminateStop = false
       x.state = msError
       x.failure =
         Opt.some(Failure(kind: fkCleanupTimeout, reason: "the stop deadline passed"))
@@ -6003,7 +6232,8 @@ proc checkDeadlines(st: State) =
     # [SPEC RUNTIME §10.2 step 6] The cleanup failure is recorded and shutdown
     # continues; nothing still in use is released.
     for x in st.instances.values:
-      if x.state in {msLoaded, msReady, msStopping}:
+      if x.state in {msLoaded, msReady, msStopping} or x.indeterminateStop:
+        x.indeterminateStop = false
         x.state = msError
         x.failure = Opt.some(
           Failure(kind: fkCleanupTimeout, reason: "the shutdown grace period passed")
@@ -6034,8 +6264,10 @@ proc nextDeadline(st: State): Opt[MonoTime] =
         else:
           getMonoTime()
       )
-    if x.state == msStopping and x.stopDeadline.isSome:
+    if (x.state == msStopping or x.indeterminateStop) and x.stopDeadline.isSome:
       consider(x.stopDeadline.get)
+    if x.apply != nil and not x.apply.expired:
+      consider(x.apply.deadline)
   if st.storeFailed:
     consider(st.nextStoreTry)
   if st.shuttingDown and not st.shutdownDone:

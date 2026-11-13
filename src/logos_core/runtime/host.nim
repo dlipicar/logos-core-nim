@@ -389,6 +389,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
     startupDeadline: c.startupDeadline,
     stopDeadline: c.stopDeadline,
     shutdownGrace: c.shutdownGrace,
+    applyDeadline: c.applyDeadline,
     authority: c.authority,
     callRecords: c.callRecords,
   )

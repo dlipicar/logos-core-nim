@@ -32,6 +32,7 @@ var
   tunerStarts*: Atomic[int] ## instances `initModule` created
   tunerLastRevision*: Atomic[uint64] ## the revision the latest one was given
   tunerLastVolume*: Atomic[uint32] ## and its volume
+  tunerAppliedVolume*: Atomic[uint32] ## the volume the latest application put in force
 
 proc keep(t: Tuner, c: TunerConfig) =
   withLock t.lock:
@@ -83,6 +84,7 @@ proc applyConfiguration(
     return err(failure(ecModule, "the tuner refuses"))
   t.keep(config)
   t.applied += 1
+  tunerAppliedVolume.store(config.volume)
   ok()
 
 proc `now`(

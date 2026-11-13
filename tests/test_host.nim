@@ -131,6 +131,7 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     check h.startupDeadline == DefaultStartupDeadline
     check h.stopDeadline == DefaultStopDeadline
     check h.shutdownGrace == DefaultShutdownGrace
+    check h.applyDeadline == DefaultApplyDeadline
 
   test "[RUN-0741] an unsupported configuration format identifier is rejected":
     let bytes = baseConfig().encode.get
@@ -358,6 +359,14 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c = baseConfig()
     c.runtime.shutdown_grace_ms = Opt.some(250'u32)
     check parse(c).get.shutdownGrace.inMilliseconds == 250
+    # [G61, fourth deadline; I87] live configuration application
+    c = baseConfig()
+    c.runtime.apply_deadline_ms = Opt.some(0'u32)
+    check parse(c).rejects("apply_deadline_ms")
+    c.runtime.apply_deadline_ms = Opt.some(3_600_001'u32)
+    check parse(c).rejects("apply_deadline_ms")
+    c.runtime.apply_deadline_ms = Opt.some(1500'u32)
+    check parse(c).get.applyDeadline.inMilliseconds == 1500
     c = baseConfig()
     c.runtime.work_dir = "relative/w"
     check parse(c).rejects("work_dir must be an absolute path")

@@ -50,6 +50,7 @@ type
     startupDeadline*: Duration
     stopDeadline*: Duration
     shutdownGrace*: Duration
+    applyDeadline*: Duration ## [G61, fourth deadline; I87] `apply_configuration`
     policy*: AuthzPolicy ## the internal policy: allow-all
     authority*: Opt[AuthorityPolicy]
       ## [I85] `capability-authority`: the instance whose binding decides
@@ -370,6 +371,8 @@ proc decodeHostConfig*(
     ?deadline("stop_deadline_ms", cfg.runtime.stop_deadline_ms, DefaultStopDeadline)
   c.shutdownGrace =
     ?deadline("shutdown_grace_ms", cfg.runtime.shutdown_grace_ms, DefaultShutdownGrace)
+  c.applyDeadline =
+    ?deadline("apply_deadline_ms", cfg.runtime.apply_deadline_ms, DefaultApplyDeadline)
   if cfg.modules.len == 0:
     return err(configError("modules is empty"))
   var
