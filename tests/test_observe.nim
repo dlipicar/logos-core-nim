@@ -32,16 +32,6 @@ createDir(work)
 
 include ./support/routefixture
 
-const SlowBy =
-  when defined(tsan):
-    10
-  elif defined(asan) or defined(msan):
-    3
-  else:
-    1
-  ## How much slower a sanitizer build runs: a bound that only limits how long
-  ## a test waits is multiplied by it.
-
 # Requests -----------------------------------------------------------------------------
 
 proc modules(
@@ -498,7 +488,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     check rc.routeList(limit = some16(0)).code == ecNotAuthorised
     e.finish()
 
-  test "[RUN-0870] [RUN-0871] [RUN-0872] [RUN-0873] [RUN-1052] [RUN-1057] [RUN-1060] a failure carries its classification; a Module Loader message is never disclosed, other text is cut at 512 bytes":
+  test "[RUN-0870] [RUN-0871] [RUN-0872] [RUN-0873] [RUN-1052] [RUN-1057] [RUN-1060] a failure carries its classification; a realizer message is never disclosed, other text is cut at 512 bytes":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")
@@ -511,7 +501,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     let x = rc.modules(instance = someText("x")).listed.modules
     check x.len == 1
     check x[0].state.kind == LogosNSRuntimeControlStateKind.Error
-    check x[0].failure == Opt.some("loader-artifact-unavailable")
+    check x[0].failure == Opt.some("other")
     check x[0].reason.isNone
     # A reported failure's own text, cut at a character boundary.
     let text = "é".repeat(300) # 600 bytes
@@ -654,7 +644,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     check e.start("x").tryGet.state == msError
     let x = rc.summaryOf(e.address("x")).summarized
     check x.state.kind == LogosNSRuntimeControlStateKind.Error
-    check x.failure == Opt.some("loader-artifact-unavailable")
+    check x.failure == Opt.some("other")
     check x.realization.kind == Absent
     check x.selection.get.implementation.kind ==
       LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Implementation_specific
@@ -703,7 +693,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     check waitUntil(
       proc(): bool =
         rc.realizationOf(e, "w") == Absent,
-      10 * SlowBy,
+      10 * Slow,
     )
     let after = rc.summaryOf(e.address("w")).summarized
     check after.execution.revision > during.execution.revision
@@ -730,7 +720,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
 
   test "[RUN-0640] [IMPL-DECISION G227] a reported failure keeps the realization current while it is released, then absent at a new revision":
     var cfg = config()
-    cfg.stopDeadline = initDuration(seconds = 10 * SlowBy) # the release stays in time
+    cfg.stopDeadline = initDuration(seconds = 10 * Slow) # the release stays in time
     let e = fixtureEngine(cfg)
     let (_, rc) = e.startClient("c")
     discard e.started(client(), "w")
@@ -750,7 +740,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     check waitUntil(
       proc(): bool =
         rc.realizationOf(e, "w") == Absent,
-      10 * SlowBy,
+      10 * Slow,
     )
     let after = rc.summaryOf(e.address("w")).summarized
     check after.execution.revision > during.execution.revision

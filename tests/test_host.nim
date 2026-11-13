@@ -349,6 +349,18 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     check parse(ordered([("meter-1", "orch")])).rejects("orchestration instance")
     check parse(ordered([("meter-1", "meter-2"), ("orch", "meter-2")])).isOk
 
+  test "[IFC-0923] [IMPL-DECISION G241] max_payload_depth is 128 to 1024, 1024 when absent":
+    check parse(baseConfig()).get.maxPayloadDepth == DefaultMaxDepth
+    var c = baseConfig()
+    for (d, ok) in [
+      (127'u16, false), (128'u16, true), (1024'u16, true), (1025'u16, false)
+    ]:
+      c.runtime.max_payload_depth = Opt.some(d)
+      if ok:
+        check parse(c).get.maxPayloadDepth == int(d)
+      else:
+        check parse(c).rejects("max_payload_depth must be 128 to 1024")
+
   test "deadlines are 1 ms to 1 h and paths are absolute [IMPL]":
     var c = baseConfig()
     c.runtime.startup_deadline_ms = Opt.some(0'u32)
@@ -1127,7 +1139,7 @@ suite "run.host-api: registration (RUNTIME §13.3)":
     check rt.register("meter", kept).ec == ecOk
     check runtimeStart(rt).ec == ecOk
     check engineOf(rt).start("meter-1").tryGet.state == msError
-    check rt.failureOf("meter-1") == "loader-abi-invalid"
+    check rt.failureOf("meter-1") == "other" # the realizer's abi-invalid (S11-1)
     rt.finish()
 
 # Startup ------------------------------------------------------------------------------
@@ -1253,7 +1265,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check rt.state("orch") == msReady
     rt.finish()
 
-  test "[IMPL-DECISION S4] [IMPL] R2: a static binding never registered fails start before anything runs":
+  test "[IMPL-DECISION G243] [IMPL] R2: a static binding never registered fails start before anything runs":
     let rt = create(deployment())
     check rt.register("orchestrator", orchTable()).ec == ecOk
     let r = runtimeStart(rt)
@@ -1268,7 +1280,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check runtimeWaitForShutdown(rt).ec == ecOk
     check runtimeDestroy(rt).ec == ecOk
 
-  test "[IMPL-DECISION S4] [IMPL-DECISION G55] a declaration naming a static binding never registered fails start too":
+  test "[IMPL-DECISION G243] [IMPL-DECISION G55] a declaration naming a static binding never registered fails start too":
     var c = deployment()
     c.declarations = Opt.some(
       @[
@@ -1444,7 +1456,7 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check code == ecOk
     check LogosNSRuntimeControlRecoverModuleResponse.decode(response).tryGet.state.kind ==
       LogosNSRuntimeControlStateKind.Error
-    check rt.failureOf("meter-1").startsWith("loader-")
+    check rt.failureOf("meter-1") == "other"
     rt.finish()
 
   test "[IMPL] two handles on one store: the second start is MODULE_ERROR":

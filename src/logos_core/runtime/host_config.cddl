@@ -27,6 +27,7 @@ lcn.app_runtime = {
   ? stop_deadline_ms: uint32,
   ? shutdown_grace_ms: uint32,
   ? apply_deadline_ms: uint32,
+  ? max_payload_depth: uint16,
 }
 
 lcn.app_path = tstr .size (1..4096)

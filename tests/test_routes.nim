@@ -18,7 +18,7 @@ import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, surface]
 import ../src/logos_core/iface/common_types
 import ./support/[kitbuild, kitruntime]
-import ./kit/meter_impl
+import ./kit/[meter_impl, sensor_impl]
 import ./generated/meter_module_calls
 
 let
@@ -813,6 +813,38 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     discard e.create(meter(), "m2").tryGet
     check rc.lifecycle("start_module", "meter_module").code == ecInvalidParams
     check rc.lifecycle("start_module", "nothing_module").code == ecInvalidParams
+    e.finish()
+
+  test "[RUN-1041] one instance that provides a primary contract and an interface is one lifecycle target":
+    let reg = checkStaticRegistration("sensor", sensorModuleStaticSymbols()).tryGet
+    let b =
+      bindNative(ModuleCode(kind: codeStatic, table: reg.symbols), "sensor_module")
+    let primary = b.tryGet.contracts.primary.get.root
+    let iface = b.tryGet.contracts.interfaces[0].root
+    let e = fixtureEngine(config(extra = @[reg]))
+    discard e.create(
+      ModuleRecord(
+        module: "sensor_module",
+        strategy: stDirectStatic,
+        binding: "sensor",
+        primaryContract: Opt.some(primary),
+        implements: @[iface],
+      ),
+      "s1",
+    ).tryGet
+    let (_, rc) = e.startClient()
+    let s = rc.lifecycle("start_module", "sensor_module")
+    check s.code == ecOk
+    check LogosNSRuntimeControlStartModuleResponse.decode(s.response).tryGet.instance ==
+      Opt.some("s1")
+    # Both contracts route to the one provider.
+    let a = rc.establish("p", primary).routesOf.routes[0]
+    let i = rc.establish("i", iface).routesOf.routes[0]
+    check a.target_provider == i.target_provider and a.instance == i.instance
+    let stop = rc.lifecycle("stop_module", "sensor_module")
+    check stop.code == ecOk
+    check LogosNSRuntimeControlStopModuleResponse.decode(stop.response).tryGet.instance ==
+      Opt.some("s1")
     e.finish()
 
   test "[RUN-1038] [RUN-1039] [RUN-1040] name-only selection needs observation authority first (l.3666-3670)":

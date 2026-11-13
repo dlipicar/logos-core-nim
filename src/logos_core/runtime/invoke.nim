@@ -125,7 +125,7 @@ proc checkRequest*(
       sel.validator.checkParams(bare, params).valueOr:
         return err(toFailure(error))
     else:
-      decodePayload(params).valueOr:
+      decodePayload(params, maxDepth = sel.validator.maxDepth).valueOr:
         return err(toFailure(error))
   let c = sel.boundary.commitRequest(bare, request).valueOr:
     return err(error.failure)
@@ -399,7 +399,11 @@ proc routeCall*(
 # Runtime Control requests ----------------------------------------------------------------
 
 proc rcRequest(
-    bare: string, params: openArray[byte], trail: var CallTrail, value: var seq[byte]
+    bare: string,
+    params: openArray[byte],
+    depth: int,
+    trail: var CallTrail,
+    value: var seq[byte],
 ): Result[RcCall, InvocationFailure] =
   ## [SPEC INTERFACE §4.3, §4.5, §5.2] The checked request of a Runtime Control
   ## method: METHOD_NOT_FOUND for a name the contract does not declare,
@@ -412,7 +416,8 @@ proc rcRequest(
   if bare.len == 0 or not rcSchema().declares(declaration) or
       not rcSchema().declares(RcNamespace & bare & "_response"):
     return err(InvocationFailure(code: ecMethodNotFound))
-  let v = decodePayload(params).valueOr:
+  # [IF-02, I88] Counted from the request's root, under the engine's setting.
+  let v = decodePayload(params, maxDepth = depth).valueOr:
     return err(toFailure(error))
   rcSchema().checkPath(declaration, v).isOkOr:
     return err(
@@ -611,13 +616,15 @@ proc configResponse(
     encode(r)
 
 proc checkedResponse(
-    bare: string, bytes: seq[byte], trail: var CallTrail
+    bare: string, bytes: seq[byte], depth: int, trail: var CallTrail
 ): Result[seq[byte], string] =
   ## [SPEC RUNTIME l.229, l.3747] A successful Runtime Control response is a
   ## value of the method's response schema, and its commitment is computed
   ## and kept (RUN-0332).
   let declaration = RcNamespace & bare & "_response"
-  let v = ?rcSchema().decodeChecked(declaration, bytes)
+  let v = decodePayload(bytes, ecModule, depth).valueOr:
+    return err(error.msg)
+  ?rcSchema().check(declaration, v)
   let (subtree, root) = ?rcSchema().commitment(declaration, v)
   trail.response = Opt.some(PayloadCommitment(subtreeRoot: subtree, valueRoot: root))
   ok(bytes)
@@ -640,8 +647,9 @@ proc stage(
   let b = phase1.config.binding
   var u = update
   var path: seq[CborValue]
-  let checked =
-    checkValue(b.digest, b.document, b.root, b.commitment.subtreeRoot, value)
+  let checked = checkValue(
+    b.digest, b.document, b.root, b.commitment.subtreeRoot, value, e.payloadDepth
+  )
   if checked.isErr:
     if checked.error.fault != vfMismatch:
       e.record(phase1.capture, trail)
@@ -693,7 +701,7 @@ proc rcInvoke*(
   ## after its outcome, here.
   var trail: CallTrail
   var value: seq[byte]
-  let rc = rcRequest(bare, params, trail, value).valueOr:
+  let rc = rcRequest(bare, params, e.payloadDepth, trail, value).valueOr:
     if error.code == ecInvalidParams:
       # [G171 interim (TF-18)] What is authorized without the payload comes
       # before its validation.
@@ -736,7 +744,7 @@ proc rcInvoke*(
     let body = encoded.valueOr:
       e.record(reply.capture, trail)
       return err(failure(ecModule, "the response does not match its schema"))
-    checkedResponse($m, body, trail).valueOr:
+    checkedResponse($m, body, e.payloadDepth, trail).valueOr:
       e.record(reply.capture, trail)
       return err(failure(ecModule, "the response does not match its schema"))
   trail.succeeded = true

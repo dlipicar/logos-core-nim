@@ -18,7 +18,7 @@ import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, surface]
 import ../src/logos_core/iface/common_types
 import ./support/[kitbuild, kitruntime]
-import ./kit/[deferred_adapter, meter_impl]
+import ./kit/[deferred_adapter, meter_impl, shapes_impl]
 import ./generated/[meter_module_calls, meter_module_types]
 
 let
@@ -841,3 +841,347 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     call.release()
     h.release()
     e.finish()
+
+# Starvation (DECISIONS I88, deviation 5) ---------------------------------------------------
+
+const Chain = MaxWorkers + 6 ## one past each pool's first workers, and some
+
+var
+  many: array[MaxCallWorkers + MaxNestedCallWorkers + 2, Done]
+  chain: array[Chain, Done]
+  chainRoute: ptr LogosRouteHandle
+  chainFailed: Atomic[int] ## links that could not submit or saw no completion
+
+proc onChain(
+    userData: pointer,
+    r: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+) {.cdecl, gcsafe, raises: [].} =
+  ## A completion callback (a lifecycle worker) that submits the next link and
+  ## waits for its completion before it returns.
+  onComplete(userData, r, response, len, owner)
+  let d = cast[ptr Done](userData)
+  let i = (cast[int](d) - cast[int](addr chain[0])) div sizeof(Done)
+  if i + 1 >= Chain:
+    return
+  let next = addr chain[i + 1]
+  var o = options()
+  var cb = LogosAsyncCallbacks(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncCallbacks)),
+    complete: onChain,
+    userData: next,
+  )
+  var c = LogosAsyncCall()
+  const params = [0xA1'u8, 0x67, 0x63, 0x68, 0x61, 0x6E, 0x6E, 0x65, 0x6C, 0x05]
+    ## {"channel": 5}
+  let rr = chainRoute.vtable.prepareCall(
+    chainRoute,
+    "read",
+    cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]),
+    csize_t(params.len),
+    addr o,
+    addr cb,
+    addr c,
+  )
+  if rr.code != 0:
+    chainFailed += 1
+    return
+  c.vtable.submit(addr c)
+  let until = getMonoTime() + initDuration(seconds = 30 * Slow)
+  while next.count.load == 0 and getMonoTime() < until:
+    sleep(1)
+  if next.count.load == 0:
+    chainFailed += 1
+  c.vtable.release(addr c)
+
+type Submitter = object
+  route: ptr LogosRouteHandle
+  first, n: int
+  calls: seq[LogosAsyncCall]
+  code: Atomic[int] ## the first refused prepare, or 0
+
+proc submits(j: ptr Submitter) {.thread.} =
+  ## Submits `n` channel-19 calls from a thread the engine does not own.
+  for i in j.first ..< j.first + j.n:
+    var o = options()
+    var cb = callbacks(addr many[i])
+    var c = LogosAsyncCall()
+    let params = req(19)
+    let r = j.route.vtable.prepareCall(
+      j.route,
+      "read",
+      cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]),
+      csize_t(params.len),
+      addr o,
+      addr cb,
+      addr c,
+    )
+    if r.code != 0:
+      j.code.store(int(r.code))
+      return
+    c.vtable.submit(addr c)
+    j.calls[i - j.first] = c
+
+suite "run.async: starvation (DECISIONS I88, deviation 5)":
+  setup:
+    for d in many.mitems:
+      d.clear()
+    for d in chain.mitems:
+      d.clear()
+    chainFailed.store(0)
+    gate.store(false)
+  teardown:
+    gate.store(false)
+    leftover()
+
+  test "[IFC-0712] [IMPL-DECISION G242] calls queued behind 64 busy call workers get overflow workers, whichever thread submitted them":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    gate.store(true)
+    let before = held.load
+    var j = Submitter(route: addr h, first: 0, n: Chain)
+    j.calls = newSeq[LogosAsyncCall](Chain)
+    var t: Thread[ptr Submitter]
+    createThread(t, submits, addr j)
+    joinThread(t)
+    check j.code.load == 0
+    # Each call waits for all of them to be running, as a chain of nested
+    # calls waits for the next link.
+    check waitUntil(
+      proc(): bool =
+        held.load == before + Chain
+    )
+    gate.store(false)
+    for i in 0 ..< Chain:
+      check many[i].finished
+      check many[i].codeOf == ecOk
+      j.calls[i].vtable.release(addr j.calls[i])
+    h.release()
+    e.finish()
+
+  test "[IMPL-DECISION G242] past 128 busy call workers the oldest queued call is MODULE_ERROR; the rest complete":
+    var cfg = config()
+    cfg.limits.refuseDelay = initDuration(milliseconds = 100 * Slow)
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    gate.store(true)
+    let before = held.load
+    const N = MaxCallWorkers + MaxNestedCallWorkers + 2
+    var calls: seq[LogosAsyncCall]
+    for i in 0 ..< N:
+      calls.add(h.started(req(19), addr many[i]))
+    check waitUntil(
+      proc(): bool =
+        held.load == before + MaxCallWorkers + MaxNestedCallWorkers
+    )
+    for i in N - 2 ..< N:
+      check many[i].finished
+      check many[i].codeOf == ecModule
+      check many[i].messageOf == "no call worker is available"
+    check e.diagnostics().anyIt("every call worker is busy" in it)
+    gate.store(false)
+    for i in 0 ..< N - 2:
+      check many[i].finished
+      check many[i].codeOf == ecOk
+    for c in calls.mitems:
+      c.release()
+    h.release()
+    e.finish()
+
+  test "[IFC-0725] [IMPL-DECISION G242] completion callbacks that each wait for the next completion, deeper than 64, all complete":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    chainRoute = addr h
+    var first = LogosAsyncCall()
+    block:
+      var o = options()
+      var cb = LogosAsyncCallbacks(
+        abiVersion: AsyncCallAbiVersion,
+        structSize: csize_t(sizeof(LogosAsyncCallbacks)),
+        complete: onChain,
+        userData: addr chain[0],
+      )
+      let params = req(5)
+      check toResult(
+        h.vtable.prepareCall(
+          addr h,
+          "read",
+          cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]),
+          csize_t(params.len),
+          addr o,
+          addr cb,
+          addr first,
+        )
+      ).code == ecOk
+    first.submit()
+    for i in 0 ..< Chain:
+      check chain[i].finished(seconds = 60 * Slow)
+      check chain[i].codeOf == ecOk
+    check chainFailed.load == 0
+    first.release()
+    h.release()
+    e.finish()
+
+# One payload depth setting ----------------------------------------------------------------
+
+let
+  shapesSet = acceptContractSet(readFile(repo / "tests/kit/shapes_module.cddl")).tryGet
+  shapesRoot = shapesSet.primary.root
+  shapesSchema = encodeCbor(schemaResponse(shapesSet, shapesRoot).tryGet)
+  shapesStatic = checkStaticRegistration("shapes", shapesModuleStaticSymbols()).tryGet
+
+proc shapes(): ModuleRecord =
+  ModuleRecord(
+    module: "shapes_module",
+    strategy: stDirectStatic,
+    binding: "shapes",
+    primaryContract: Opt.some(shapesRoot),
+  )
+
+proc reflectReq(b: int, levels: int): seq[byte] =
+  ## A valid `reflect` request whose deepest container is at `levels`, the
+  ## root map being 1: `u` chains `levels - 2` tree maps through `left`, and
+  ## the innermost one's empty `kids` is one level deeper.
+  var u = cborMap((cbor("kids"), cborArray()), (cbor("tag"), cbor("leaf")))
+  for _ in 1 ..< levels - 2:
+    u = cborMap(
+      (cbor("kids"), cborArray()), (cbor("left"), u), (cbor("tag"), cbor("leaf"))
+    )
+  let zero32 = cbor(newSeq[byte](32))
+  encodeCbor(
+    cborMap(
+      (cbor("a"), cbor(7'u64)),
+      (cbor("b"), cbor(int64(b))),
+      (cbor("c"), cbor("")),
+      (cbor("d"), zero32),
+      (cbor("e"), cborArray()),
+      (cbor("f"), cborArray()),
+      (cbor("g"), cbor(1'u64)),
+      (
+        cbor("i"),
+        cborMap(
+          (cbor("commitment_model"), cbor("logos.commitment-model.2026-10")),
+          (cbor("schema_root"), zero32),
+          (cbor("hash_profile"), cbor("logos.hash-profile.2026-08.choice-index")),
+          (cbor("hash_suite"), cbor("logos.hash-suite.blake3-256")),
+        ),
+      ),
+      (cbor("j"), cborArray()),
+      (cbor("l"), cbor(newSeq[byte]())),
+      (cbor("m"), cbor(0'u64)),
+      (cbor("n"), cbor(0'u64)),
+      (cbor("o"), cbor(0'u64)),
+      (cbor("p"), cbor(0'u64)),
+      (cbor("r"), cborArray()),
+      (cbor("s"), cbor(newSeq[byte]())),
+      (cbor("t"), cborArray()),
+      (cbor("u"), u),
+      (cbor("v"), cborMap((cbor("w"), cbor(true)))),
+      (cbor("y"), cbor(@[1'u8])),
+      (cbor("z"), cbor(newSeq[byte](4))),
+    )
+  )
+
+proc nestedIn(key: string, levels: int): seq[byte] =
+  ## {key: [[...[]...]]}: `levels` containers in all, the root map counted.
+  var x = cborArray()
+  for _ in 3 .. levels:
+    x = cborArray(x)
+  encodeCbor(cborMap((cbor(key), x)))
+
+suite "run.depth: one payload depth setting (INTERFACE §4.5.1; DECISIONS I88)":
+  setup:
+    for d in done.mitems:
+      d.clear()
+    resetDeferred()
+  teardown:
+    leftover()
+
+  test "[IFC-0923] [IFC-0926] [IFC-0928] [IFC-0929] [IMPL-DECISION G241] the configured depth, counted from the payload root, on every path the Runtime checks":
+    check openEngine(
+      block:
+        var c = config()
+        c.maxPayloadDepth = MinMaxDepth - 1
+        c
+    ).isErr
+    check openEngine(
+      block:
+        var c = config()
+        c.maxPayloadDepth = DefaultMaxDepth + 1
+        c
+    ).isErr
+    for depth in [MinMaxDepth, 0]:
+      let p = (if depth == 0: DefaultMaxDepth else: depth)
+      checkpoint "max_payload_depth " & $depth
+      var cfg = config(extra = @[dmeterStatic, shapesStatic])
+      cfg.maxPayloadDepth = depth
+      let e = fixtureEngine(cfg)
+      discard e.started(shapes())
+      discard e.started(dmeter())
+      let (_, rc) = e.startClient()
+      let route = rc.establish("s", shapesRoot).routesOf.routes[0].route
+      let (code, made) = rc.materialize(route, shapesRoot, shapesSchema)
+      check code == ecOk
+      var h = made
+      # A call: the request and the response at P pass; one deeper fails, the
+      # request as INVALID_PARAMS without detail, the response as MODULE_ERROR.
+      let atLimit = h.raw("reflect", reflectReq(1, p))
+      check atLimit.code == ecOk
+      check atLimit.response == reflectReq(1, p)
+      let over = h.raw("reflect", reflectReq(1, p + 1))
+      check over.code == ecInvalidParams
+      check over.detail.len == 0
+      check h.raw("reflect", reflectReq(15, p - 1)).code == ecOk
+      let deeper = h.raw("reflect", reflectReq(15, p))
+      check deeper.code == ecModule
+      if p < DefaultMaxDepth:
+        # At 1024 the kit's own limit refuses the response inside the module.
+        check deeper.message == "the provider's response does not match its schema"
+      # An asynchronous call: the same checks, answered by its completion.
+      for (levels, expected) in [(p, ecOk), (p + 1, ecInvalidParams)]:
+        done[0].clear()
+        var (c, call) = h.prepare(reflectReq(1, levels), addr done[0], name = "reflect")
+        check c == ecOk
+        call.submit()
+        check done[0].finished
+        check done[0].codeOf == expected
+        call.release()
+      h.release()
+      # Event data: a value of the wrong type at P is a schema mismatch with
+      # detail; one level deeper never decodes, so it has none.
+      var m = rc.handle(rc.routeId("m"))
+      mode.store(ord(dmHold))
+      var parked = m.started(req(5), addr done[1])
+      let (module, inv) = takeHeld()
+      let ctx = inv.context
+      for (levels, detailed) in [(p, true), (p + 1, false)]:
+        let data = nestedIn("value", levels)
+        let r = toResult(
+          ctx.vtable.publish(
+            ctx,
+            "meter.changed_event",
+            cast[ptr UncheckedArray[uint8]](unsafeAddr data[0]),
+            csize_t(data.len),
+          )
+        )
+        check r.code == ecInvalidParams
+        check (r.detail.len > 0) == detailed
+      settle(module, inv)
+      check done[1].finished
+      parked.release()
+      m.release()
+      # A Runtime Control request: the same.
+      for (levels, detailed) in [(p, true), (p + 1, false)]:
+        let r = rcCall(rc, "get_self", nestedIn("x", levels))
+        check r.code == ecInvalidParams
+        check (r.detail.len > 0) == detailed
+      e.finish()

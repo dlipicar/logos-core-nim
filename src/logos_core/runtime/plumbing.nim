@@ -36,6 +36,12 @@ const
     ## [IMPL] threads that run asynchronous calls (INTERFACE §2.9), apart from
     ## the lifecycle workers so long provider calls never hold bind, init or
     ## destroy jobs; more calls wait in their queue
+  MaxNestedWorkers* = 64
+    ## [IMPL; I88 D-d] overflow lifecycle workers, spawned one at a time while
+    ## queued jobs starve behind 64 busy ones (`EngineLimits.starvationDelay`)
+  MaxNestedCallWorkers* = 64
+    ## [IMPL; I88 D-d] overflow call workers, the same; past them the oldest
+    ## queued call is refused (`EngineLimits.refuseDelay`)
   MaxAsyncCalls* = 4096
     ## [IMPL] asynchronous calls prepared and not yet released, per engine;
     ## preparing another is MODULE_ERROR (INTERFACE l.2040-2041)
@@ -79,8 +85,9 @@ type
     inStopped = "stopped"
 
   FailureKind* = enum
-    ## [SPEC RUNTIME §9.3 l.3750-3756] The initial classifications; fkLoader
-    ## is `loader-` followed by a typed Module Loader error code.
+    ## [SPEC RUNTIME §9.3 l.3750-3756] The initial classifications. No
+    ## `loader-<code>`: l.3754 needs a typed Module Loader error, and the
+    ## internal realizer is no Module Loader (RUNTIME l.212; S11-1 (b), I88).
     fkStartupTimeout = "startup-timeout"
     fkInitializationFailed = "initialization-failed"
     fkReportedByModule = "reported-by-module"
@@ -95,12 +102,13 @@ type
     fkCleanupTimeout = "cleanup-timeout"
     fkRemoteStateUnknown = "remote-state-unknown"
     fkOther = "other"
-    fkLoader = "loader"
 
   Failure* = object
     kind*: FailureKind
-    loader*: LoaderErrorCode ## for fkLoader
     reason*: string ## diagnostics only; never replaces the classification
+    internal*: bool
+      ## [IMPL] `reason` is the realizer's text, which may name host paths:
+      ## kept for diagnostics, never disclosed or stored
 
   Origin* = object
     ## The authenticated requester: the host's protected input, or a module
@@ -212,6 +220,13 @@ type
     rcDrainQuota*: int
       ## [G178] entries one drain of a subscription delivers before it goes
       ## behind the others; default 16
+    starvationDelay*: Duration
+      ## [IMPL; I88] how long queued lifecycle jobs or calls wait behind busy
+      ## workers, none finishing, before one overflow worker is spawned;
+      ## default 50 ms
+    refuseDelay*: Duration
+      ## [IMPL; I88] how long queued calls wait so with every call worker,
+      ## overflow ones included, busy before the oldest is refused; default 1 s
 
   EngineConfig* = object
     runtimeInstanceId*: string
@@ -261,6 +276,12 @@ type
     callRecords*: int
       ## [IMPL] how many call audit records are retained (`callaudit.nim`); 0
       ## is `DefaultCallRecords`
+    maxPayloadDepth*: int
+      ## [SPEC INTERFACE §4.5.1 l.3150; IF-02, I88] the one payload depth
+      ## setting: arrays and maps counted from each payload's root, for every
+      ## validator and decoder the engine builds (route calls, events,
+      ## asynchronous calls, Runtime Control, configuration values); 128 to
+      ## `DefaultMaxDepth`, and 0 is `DefaultMaxDepth`
     limits*: EngineLimits ## [IMPL; I86]
 
   # Messages ---------------------------------------------------------------------
@@ -677,10 +698,10 @@ type
     freeSlots: ptr ReplySlot
     allSlots: ptr ReplySlot
     runtime*: Thread[ptr Shared]
-    workers*: array[MaxWorkers, Thread[ptr Shared]]
+    workers*: array[MaxWorkers + MaxNestedWorkers, Thread[ptr Shared]]
     spawned*: int ## written by the Runtime thread only
     calls*: Channel[CallJob]
-    callWorkers*: array[MaxCallWorkers, Thread[ptr Shared]]
+    callWorkers*: array[MaxCallWorkers + MaxNestedCallWorkers, Thread[ptr Shared]]
     callSpawned*: int ## written by the Runtime thread only
     evals*: Channel[EvalJob] ## the ordinary evaluation lane
     evalWorkers*: array[EvalWorkers, Thread[ptr Shared]]
@@ -696,6 +717,9 @@ type
     finished*: bool ## the Runtime thread has left its loop
     audit*: AuditLog ## [SPEC CA l.1169, l.1330] the retained call records
     clock*: Clock ## the configured clock, for call-record timestamps
+    payloadDepth*: int
+      ## [IF-02, I88] `EngineConfig.maxPayloadDepth`, filled in; written before
+      ## any thread starts
 
   Engine* = ptr Shared
 
@@ -705,10 +729,7 @@ const AuthorityEndings* = {
 
 func classification*(f: Failure): string =
   ## [SPEC RUNTIME §9.3] The failure code reported for `f`.
-  if f.kind == fkLoader:
-    "loader-" & $f.loader
-  else:
-    $f.kind
+  $f.kind
 
 func effective*(l: EngineLimits): EngineLimits =
   ## The limits with every 0 replaced by its default.
@@ -733,6 +754,8 @@ func effective*(l: EngineLimits): EngineLimits =
   fill(rcSubsTotal, 1024)
   fill(rcWorkersPerSubscriber, 4)
   fill(rcDrainQuota, 16)
+  fill(starvationDelay, initDuration(milliseconds = 50))
+  fill(refuseDelay, initDuration(seconds = 1))
   # [G178 (D2)] Room for one pending hint of each collection: a stalled
   # `inventory_changed` handler never loses its subscription.
   result.rcQueue = max(result.rcQueue, 2)

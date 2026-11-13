@@ -238,7 +238,7 @@ suite "ifc.kit: module identity and the call surface (INTERFACE §2.6) [IMPL]":
     check accepted.isOk
 
 suite "ifc.kit: lifecycle (INTERFACE §2.6) [IMPL]":
-  test "[IFC-0196] [IFC-0197] [IFC-0211] [IFC-0212] each initialization returns a distinct context; destroy runs the author's hook":
+  test "[IFC-0196] [IFC-0197] [IFC-0211] [IFC-0212] [RUN-0074] each initialization returns a distinct context; destroy runs the author's hook":
     let before = destroyed.load
     let a = newMeter(input())
     let b = newMeter(input())

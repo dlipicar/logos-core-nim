@@ -108,7 +108,7 @@ from std/os import sleep
 import results
 import ../abi/types
 import ../base/perthread
-import ../cbor/utf8
+import ../cbor/[decode, utf8]
 import ../commitment
 import ../iface/[accept, outcome]
 import
@@ -315,6 +315,7 @@ type
     cancelled: bool ## its invocation was marked cancelled
     terminal: bool ## the Runtime thread knows its terminal outcome
     executing: bool ## a call worker has it
+    order: int ## [I88] its place among dispatched calls
     completing: bool ## its completion job is dispatched
 
   OpCtx = ref object
@@ -377,6 +378,9 @@ type
     applies: Table[int, Inst] ## [I87] by job id (apply jobs)
     nextJob: int
     busy: int ## jobs dispatched and not yet answered
+    jobClock: MonoTime
+      ## [I88] the last time a lifecycle job finished, a worker was spawned or
+      ## the queue stopped being empty
     serial: uint64
     changes: seq[StateChange]
     prefix: string
@@ -402,6 +406,8 @@ type
     providerCount: int
     asyncCalls: Table[pointer, AsyncRec] ## by call
     callBusy: int ## call jobs dispatched and not yet answered
+    callClock: MonoTime ## [I88] the same for the call pool
+    callOrder: int ## [I88] calls dispatched so far
     liveAttempts: HashSet[string]
       ## attempt tokens whose bindings are valid: from acceptance until the
       ## context they made is destroyed, or their outcome is final
@@ -534,6 +540,8 @@ proc dispatch(st: State, job: sink Job) =
       inc s.spawned
     except ResourceExhaustedError:
       discard # the job waits for a busy worker
+  if st.busy == s.spawned + 1:
+    st.jobClock = getMonoTime() # [I88] the queue was empty until now
   try:
     s.jobs.send(job)
   except Exception:
@@ -543,9 +551,12 @@ proc nextJobId(st: State): int =
   inc st.nextJob
   st.nextJob
 
-proc dispatchCall(st: State, call: pointer) =
+proc dispatchCall(st: State, a: AsyncRec) =
   ## A call worker for one submitted call; spawned on demand.
   inc st.callBusy
+  inc st.callOrder
+  a.order = st.callOrder
+  a.executing = true
   let s = st.shared
   if st.callBusy > s.callSpawned and s.callSpawned < MaxCallWorkers:
     try:
@@ -553,10 +564,25 @@ proc dispatchCall(st: State, call: pointer) =
       inc s.callSpawned
     except ResourceExhaustedError:
       discard # the call waits for a busy call worker
+  if st.callBusy == s.callSpawned + 1:
+    st.callClock = getMonoTime() # [I88] the queue was empty until now
   try:
-    s.calls.send(CallJob(kind: cjRun, call: call))
+    s.calls.send(CallJob(kind: cjRun, call: a.call))
   except Exception:
     discard
+
+proc overflow(st: State, calls: bool) =
+  ## [IMPL; I88, deviation 5] One more worker beyond the pool's first 64.
+  let s = st.shared
+  try:
+    if calls:
+      createThread(s.callWorkers[s.callSpawned], callWorkerMain, s)
+      inc s.callSpawned
+    else:
+      createThread(s.workers[s.spawned], workerMain, s)
+      inc s.spawned
+  except ResourceExhaustedError:
+    discard # tried again after the next delay
 
 proc diagnose(st: State, text: string) =
   ## [SPEC RUNTIME l.1227] Kept for observation, the oldest dropped first.
@@ -931,6 +957,63 @@ proc endCall(st: State, a: AsyncRec, f: InvocationFailure, kind: CallEnd) =
   ## the call's route or of a realization [G174].
   if not a.terminal and asyncOf(a.call).decide(f, kind):
     st.asyncTerminal(a)
+
+proc refuseQueuedCall(st: State) =
+  ## [IMPL; I88, deviation 5] The oldest call no call worker has begun is
+  ## decided MODULE_ERROR (INTERFACE l.2041, a capacity limit, by analogy);
+  ## its completion is an ordinary completion job (l.2053).
+  var waiting: seq[AsyncRec]
+  for a in st.asyncCalls.values:
+    if a.executing and not a.terminal:
+      waiting.add(a)
+  waiting.sort(
+    proc(x, y: AsyncRec): int =
+      cmp(x.order, y.order)
+  )
+  for a in waiting:
+    if asyncOf(a.call).refuseQueued(failure(ecModule, "no call worker is available")):
+      st.diagnose("a queued call was refused: every call worker is busy")
+      st.asyncTerminal(a)
+      return
+
+proc checkStarvation(st: State, now: MonoTime) =
+  ## [IMPL; I88, deviation 5] A pool whose queue is not empty while every
+  ## worker is busy and none has finished for `starvationDelay` gets one more
+  ## worker, up to 64 beyond its first 64: nested calls and completions that
+  ## each wait for the next one, from any thread, keep moving. Past the call
+  ## pool's bound, after `refuseDelay`, the oldest queued call is refused;
+  ## lifecycle jobs are never refused, so 128 that each wait for work queued
+  ## behind them can still stall.
+  let s = st.shared
+  if st.busy > s.spawned and s.spawned < MaxWorkers + MaxNestedWorkers and
+      now - st.jobClock >= st.limits.starvationDelay:
+    st.overflow(calls = false)
+    st.jobClock = now
+  if st.callBusy > s.callSpawned:
+    if s.callSpawned < MaxCallWorkers + MaxNestedCallWorkers:
+      if now - st.callClock >= st.limits.starvationDelay:
+        st.overflow(calls = true)
+        st.callClock = now
+    elif now - st.callClock >= st.limits.refuseDelay:
+      st.refuseQueuedCall()
+      st.callClock = now
+
+proc starvationDeadline(st: State): Opt[MonoTime] =
+  let s = st.shared
+  var t = Opt.none(MonoTime)
+  if st.busy > s.spawned and s.spawned < MaxWorkers + MaxNestedWorkers:
+    t = Opt.some(st.jobClock + st.limits.starvationDelay)
+  if st.callBusy > s.callSpawned:
+    let d =
+      st.callClock + (
+        if s.callSpawned < MaxCallWorkers + MaxNestedCallWorkers:
+          st.limits.starvationDelay
+        else:
+          st.limits.refuseDelay
+      )
+    if t.isNone or d < t.get:
+      t = Opt.some(d)
+  t
 
 proc records(st: State): seq[AsyncRec] =
   for a in st.asyncCalls.values:
@@ -1384,13 +1467,17 @@ proc releaseRealization(st: State, x: Inst) =
   )
 
 proc loaderFailure(e: LoaderError): Failure =
-  ## [SPEC RUNTIME §9.3 l.3753-3754] `_MODULE_init()` failing is the more
-  ## specific `initialization-failed`; any other Loader error is
-  ## `loader-<code>`.
+  ## [SPEC RUNTIME §9.3 l.3753-3757] `_MODULE_init()` failing is
+  ## `initialization-failed`. The realizer is an implementation-local
+  ## mechanism, not a Module Loader (RUNTIME l.212), so its other errors are
+  ## no "typed Module Loader error" (l.3754): they are `other`, with the
+  ## realizer's code and message kept for diagnostics only (S11-1 (b), I88).
   if e.code == lecRealizationFailed and e.cause.isSome:
     Failure(kind: fkInitializationFailed, reason: e.message)
   else:
-    Failure(kind: fkLoader, loader: e.code, reason: e.message)
+    Failure(
+      kind: fkOther, reason: "realizer " & $e.code & ": " & e.message, internal: true
+    )
 
 proc checkContracts(x: Inst, r: Realization): Result[bool, string] =
   ## [SPEC RUNTIME §3.3, §3.6] The expected contracts against the validated
@@ -3782,6 +3869,16 @@ proc establish(st: State, q: Request, x: Inst) =
     checkAccessRoots(req.access, sel.get).isOkOr:
       q.reply.answerError(ecInvalidParams, error)
       return
+    if sel.get.sensitive.len > 0:
+      # [SPEC INTERFACE l.388; I88 D-c, deferred:tier-4b] The erasure marked
+      # payloads need (l.381-386) is not built, so no route to a contract
+      # that marks one is made ready and no handle is ever returned (RUNTIME
+      # l.3197). The request is valid and authorized: the internal-capability
+      # failure (l.3442, by analogy).
+      q.reply.answerError(
+        ecModule, "marked payloads are not supported on this path (INTERFACE §1.4.1)"
+      )
+      return
     var routeAccess = req.access
     if ans.source == psAuthority:
       # [SPEC RUNTIME l.3164-3166; RUN-0567, CAP-0051] A narrowed allow's
@@ -6089,8 +6186,7 @@ proc asyncEvent(st: State, m: Msg) =
     if c.isTerminal:
       st.asyncTerminal(a)
     else:
-      a.executing = true
-      st.dispatchCall(m.target)
+      st.dispatchCall(a)
   of aeTerminal:
     let a = st.asyncCalls.getOrDefault(m.target)
     if a != nil:
@@ -6128,6 +6224,7 @@ proc handle(st: State, m: sink Msg) =
     return
   of mkBound, mkInitialized, mkDestroyed, mkJobDone, mkCompleted, mkApplied:
     dec st.busy
+    st.jobClock = getMonoTime()
   of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle, mkEvaluated,
       mkRcHandled:
     discard
@@ -6150,6 +6247,7 @@ proc handle(st: State, m: sink Msg) =
     st.asyncEvent(m)
   of mkCallJobDone:
     dec st.callBusy
+    st.callClock = getMonoTime()
     let a = st.asyncCalls.getOrDefault(m.target)
     if a != nil:
       a.executing = false
@@ -6185,6 +6283,7 @@ proc checkDeadlines(st: State) =
     st.retryStore()
     now = getMonoTime()
   st.checkEvaluations(now)
+  st.checkStarvation(now)
   st.snapshots.reclaim(now)
   st.expireRoutes()
   st.checkExecutions()
@@ -6275,6 +6374,9 @@ proc nextDeadline(st: State): Opt[MonoTime] =
   for a in st.asyncCalls.values:
     if not a.terminal and a.deadline.isSome:
       consider(a.deadline.get)
+  let starving = st.starvationDeadline()
+  if starving.isSome:
+    consider(starving.get)
   for p in st.pendings.values:
     if not p.done:
       consider(p.deadline)
@@ -6524,9 +6626,19 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
     return err(engineError(ecInvalidParams, "invalid runtime instance id"))
   if cfg.authority.isSome and cfg.authority.get.instance.len == 0:
     return err(engineError(ecInvalidParams, "the authority policy names no instance"))
+  # [SPEC INTERFACE §4.5.1 l.3150; IF-02, I88] one setting, at least 128.
+  let depth = (if cfg.maxPayloadDepth == 0: DefaultMaxDepth else: cfg.maxPayloadDepth)
+  if depth < MinMaxDepth or depth > DefaultMaxDepth:
+    return err(
+      engineError(
+        ecInvalidParams,
+        "the payload depth is outside " & $MinMaxDepth & ".." & $DefaultMaxDepth,
+      )
+    )
   let e = createShared(Shared)
   e.audit = newAuditLog(cfg.callRecords)
   e.clock = cfg.clock
+  e.payloadDepth = depth
   e.inbox.open()
   e.jobs.open()
   e.calls.open()
@@ -6550,7 +6662,7 @@ proc newEngine*(cfg: EngineConfig): Engine =
   ## `openEngine` for a configuration without a store, which cannot fail.
   doAssert cfg.storeDir.isNone, "a persistent engine is opened with openEngine"
   let e = openEngine(cfg)
-  doAssert e.isOk, "invalid runtime instance id"
+  doAssert e.isOk, "invalid runtime instance id or payload depth"
   e.get
 
 template toResult(r: Reply, body: untyped): untyped =

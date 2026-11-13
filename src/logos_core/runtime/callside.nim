@@ -16,7 +16,7 @@ import std/[atomics, locks, tables]
 import results
 import ../abi/[checks, types]
 import ../base/perthread
-import ../cbor/utf8
+import ../cbor/[decode, utf8]
 import ../hash/hashinput
 import ../iface/[accept, outcome, payload, surface]
 import ../transport/boundary
@@ -39,6 +39,7 @@ type
     root*: Digest
     len*: int
     data*: ptr UncheckedArray[byte]
+    depth*: int ## [IF-02, I88] the engine's payload depth setting
 
   Selected* = object ## One selected contract, as this thread loaded it.
     boundary*: Boundary
@@ -230,11 +231,12 @@ proc checkEventName*(name: cstring): Result[string, InvocationFailure] =
 # Construction input and the selected contract ---------------------------------------
 
 proc newBlob*(
-    root: Digest, bytes: ptr UncheckedArray[uint8], len: int
+    root: Digest, bytes: ptr UncheckedArray[uint8], len: int, depth = DefaultMaxDepth
 ): ptr SchemaBlob =
   result = createShared(SchemaBlob)
   result.root = root
   result.len = len
+  result.depth = depth
   result.data = cast[ptr UncheckedArray[byte]](allocShared(max(len, 1)))
   for i in 0 ..< len:
     result.data[i] = bytes[i]
@@ -250,11 +252,12 @@ proc drop*(b: ptr SchemaBlob) =
     freeShared(b)
 
 var
-  selectedCache {.threadvar.}: Table[Digest, Selected]
+  selectedCache {.threadvar.}: Table[(Digest, int), Selected]
+    ## by root and payload depth: one thread may serve engines set apart
   selectedHooked {.threadvar.}: bool
 
 proc dropSelected() {.nimcall, gcsafe, raises: [].} =
-  selectedCache = default(Table[Digest, Selected])
+  selectedCache = default(Table[(Digest, int), Selected])
   selectedHooked = false
 
 proc hookSelected() =
@@ -267,26 +270,29 @@ proc selectedOf*(b: ptr SchemaBlob): Result[Selected, string] =
   ## construction input `materialize_route` validated. Released with the
   ## thread's tables.
   hookSelected()
-  if b.root in selectedCache:
+  let key = (b.root, b.depth)
+  if key in selectedCache:
     try:
-      return ok(selectedCache[b.root])
+      return ok(selectedCache[key])
     except KeyError:
       discard
   let set = ?acceptSchemaResponse(
     b.data.toOpenArray(0, b.len - 1), b.root, AcceptOptions(system: true)
   )
   let bd = ?boundary(set, b.root)
-  let s = Selected(boundary: bd, validator: validator(set))
-  selectedCache[b.root] = s
+  let v = ?validator(set, b.depth)
+  let s = Selected(boundary: bd, validator: v)
+  selectedCache[key] = s
   ok(s)
 
-proc cacheSelected*(root: Digest, set: ContractSet) =
+proc cacheSelected*(root: Digest, set: ContractSet, depth: int) =
   ## Keeps the set `materialize_route` just validated for this thread.
   hookSelected()
-  if root notin selectedCache:
+  if (root, depth) notin selectedCache:
     let b = boundary(set, root)
-    if b.isOk:
-      selectedCache[root] = Selected(boundary: b.get, validator: validator(set))
+    let v = validator(set, depth)
+    if b.isOk and v.isOk:
+      selectedCache[(root, depth)] = Selected(boundary: b.get, validator: v.get)
 
 # Route handles ------------------------------------------------------------------------
 

@@ -379,13 +379,16 @@ proc runBind*(spec: BindSpec): BindResult {.gcsafe.} =
       ModuleCode(kind: codeStatic, table: spec.symbols)
     of codeDynamic:
       let path = stage(spec.artifact, spec.dir, spec.name).valueOr:
-        # Not cached: a later request may find the artifact readable.
+        # Not cached: a later request may find the artifact readable. A
+        # staging control that cannot be established is `realization-failed`
+        # [SPEC LOADER l.628; C-08].
         result.probe.err(
           loaderError(
             (
               case error.kind
               of sfUnavailable: lecArtifactUnavailable
               of sfIntegrity: lecArtifactIntegrityFailed
+              of sfControls: lecRealizationFailed
             ),
             error.msg,
           )

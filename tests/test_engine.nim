@@ -32,11 +32,13 @@ type GateMode = enum
   gmOk ## LOGOS_OK and a context
   gmOkNull ## LOGOS_OK without a context
   gmFail ## MODULE_ERROR with no context
+  gmFailContext ## MODULE_ERROR, and `failedContext` written out (INTERFACE l.1631)
 
 var
   mode: Atomic[int]
   initGate, destroyGate: Atomic[bool] ## true while closed
   inits, destroys, live: Atomic[int]
+  failedContext: int ## its address is the context a failing init writes out
 
 proc gatedName(): cstring {.cdecl.} =
   "gated_consumer"
@@ -56,8 +58,16 @@ proc gatedInit(
   of gmFail:
     result.code = CErrorCode(ord(ecModule))
     result.message = "cannot start"
+  of gmFailContext:
+    outContext[] = cast[ptr LogosModuleContext](addr failedContext)
+    result.code = CErrorCode(ord(ecModule))
+    result.message = "cannot start"
 
 proc gatedDestroy(module: ptr LogosModuleContext) {.cdecl.} =
+  if module == cast[ptr LogosModuleContext](addr failedContext):
+    inc failedContext # never freed: the module owns it
+    destroys.atomicInc
+    return
   while destroyGate.load:
     sleep(1)
   deallocShared(module)
@@ -131,6 +141,15 @@ proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10): bool =
 
 proc failureOf(v: InstanceView): string =
   if v.failure.isSome: v.failure.get.classification else: ""
+
+proc realizerError(v: InstanceView): string =
+  ## [S11-1 (b), I88] A realizer error is `other`; its code stays in the
+  ## undisclosed diagnostic text.
+  if v.failure.isSome and v.failure.get.internal and
+      v.failure.get.reason.startsWith("realizer "):
+    v.failure.get.reason[9 ..^ 1].split(':')[0]
+  else:
+    ""
 
 # Calls on other threads -------------------------------------------------------------
 
@@ -423,7 +442,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check live.load == 0
     e.finish()
 
-  test "[RUN-0708] [RUN-0709] [RUN-1052] [RUN-1053] [RUN-1057] [RUN-0681] [RUN-0682] a failed start is classified, cleaned, and leaves other instances running":
+  test "[RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [IMPL-DECISION G230] a failed start is classified (a realizer error is `other`), cleaned, and leaves other instances running":
     let e = newEngine(config())
     discard e.create(meter(), "m").tryGet
     check e.start("m").tryGet.state == msReady
@@ -439,19 +458,39 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
       ModuleRecord(module: "gated_consumer", strategy: stDirectStatic, binding: "nope"),
       "unbound",
     ).tryGet
-    check e.start("unbound").tryGet.failureOf == "loader-invalid-request"
+    let u = e.start("unbound").tryGet
+    check u.failureOf == "other" and u.realizerError == "invalid-request"
     var missing = ModuleRecord(module: "gated_consumer", strategy: stDirectDynamic)
     missing.artifact = ArtifactRecord(
       id: "a", localPath: work / "missing" & LibraryExtension, hashSuite: HashSuiteId
     )
     discard e.create(missing, "missing").tryGet
-    check e.start("missing").tryGet.failureOf == "loader-artifact-unavailable"
+    let m = e.start("missing").tryGet
+    check m.failureOf == "other" and m.realizerError == "artifact-unavailable"
     check e.view("m").tryGet.state == msReady
     check live.load == 0
     # A failed instance starts again once its cleanup is complete.
     mode.store(ord(gmOk))
     check e.start("fail").tryGet.state == msReady
     e.finish()
+
+  test "[RUN-0295] [RUN-0297] an init that fails and still writes a context is initialization-failed, never ready, and that context is never destroyed (DECISIONS I88, deviation 2)":
+    # [SPEC INTERFACE l.1631-1635, l.1662] A failure has a null context and
+    # the module released its partial state; `_MODULE_destroy` is defined for
+    # a successfully initialized instance only.
+    let e = newEngine(config())
+    failedContext = 0
+    mode.store(ord(gmFailContext))
+    discard e.create(gated(), "ctx").tryGet
+    let v = e.start("ctx").tryGet
+    check v.state == msError and v.failureOf == "initialization-failed"
+    check e.view("ctx").tryGet.state == msError
+    check destroys.load == 0 and failedContext == 0
+    mode.store(ord(gmOk))
+    check e.start("ctx").tryGet.state == msReady
+    check destroys.load == 0 and failedContext == 0
+    e.finish()
+    check failedContext == 0
 
   test "[RUN-0796] [RUN-0797] [RUN-0792] [RUN-0793] [RUN-0791] the startup deadline: error, then the late context is destroyed":
     var cfg = config()
@@ -834,5 +873,6 @@ suite "run.engine: persistent state (I82)":
     f.write("x")
     f.close()
     var (e3, _) = opened()
-    check e3.start("s1").tryGet.failureOf == "loader-artifact-integrity-failed"
+    let s1 = e3.start("s1").tryGet
+    check s1.failureOf == "other" and s1.realizerError == "artifact-integrity-failed"
     e3.finish()

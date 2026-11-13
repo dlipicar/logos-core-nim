@@ -64,6 +64,7 @@ lcn.app_runtime = {
   ? stop_deadline_ms: uint32,
   ? shutdown_grace_ms: uint32,
   ? apply_deadline_ms: uint32,
+  ? max_payload_depth: uint16,
 }
 
 lcn.app_path = tstr .size (1..4096)
@@ -185,6 +186,7 @@ Maps are closed: an unknown key anywhere is rejected. An array that is present m
 | `stop_deadline_ms` | How long a stop may take before the realization is abandoned. Default 10000. |
 | `shutdown_grace_ms` | How long shutdown waits for in-flight work before cleanup is left unresolved (RUNTIME §10.2). Default 10000. |
 | `apply_deadline_ms` | How long a live configuration application (`apply_configuration`) may take, from its acceptance to the module's answer (CONFIG §8; DECISIONS G61, I87). When it passes, the outcome is unknown and the instance enters `error` with `configuration-indeterminate`, so the default is long: 120000. |
+| `max_payload_depth` | The Runtime's one payload depth limit (INTERFACE §4.5.1 l.3150; DECISIONS G241, I88): how many arrays and maps may nest on any path of a payload, counted from the payload's own root (the root map is depth 1; byte-string contents are not traversed). It applies to every payload the Runtime decodes or validates: route call requests and responses, asynchronous calls, events, Runtime Control requests and responses, and configuration values (defaults, provisioned and updated). A payload one level deeper is refused before it is dispatched, accepted or delivered, with `LOGOS_ERR_INVALID_PARAMS` and no detail for a request (a provider's too-deep response or event is a `LOGOS_ERR_MODULE` failure or a dropped publication). 128 to 1024; default 1024. A transported route (Tier 4b) gives its frame decoder this limit plus the envelope's own levels. Modules built with lcn-gen's kit check their own inputs at 1024. |
 
 Each deadline is 1 to 3600000 milliseconds. Paths must be absolute, so their meaning does not depend
 on the host's working directory.
@@ -619,8 +621,11 @@ them to be documented).
   `retire_module` prepared with the revision read before it is `LOGOS_ERR_INVALID_PARAMS`: read the
   revision again (`get_readiness`, `get_execution_summary`) and retry.
 - **Failure text.** A module record carries the failure classification. Its `reason` is the
-  Runtime's or the module's own text, cut to 512 bytes; a Module Loader failure carries none, since
-  its message may name host paths (RUNTIME l.1901-1904).
+  Runtime's or the module's own text, cut to 512 bytes. A failure of the in-process realizer other
+  than a failed `_MODULE_init` (which is `initialization-failed`) is classified `other` and carries
+  no `reason`, since the realizer's message may name host paths (RUNTIME l.1901-1904); the realizer
+  is not a Module Loader, so there are no `loader-<code>` classifications (RUNTIME l.3754; DECISIONS
+  I88, S11-1). The message stays in the Runtime's diagnostics and is not persisted.
 - **`describe_provider`** returns the call surface validated when the provider was last bound, kept
   after it stops (RUNTIME l.540-541); before any bind it is `LOGOS_ERR_NOT_READY`, once the caller
   holds a `discover` allow for each contract the record expects (otherwise `LOGOS_ERR_NOT_AUTHORISED`,

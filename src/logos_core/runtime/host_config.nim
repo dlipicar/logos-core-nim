@@ -51,6 +51,9 @@ type
     stopDeadline*: Duration
     shutdownGrace*: Duration
     applyDeadline*: Duration ## [G61, fourth deadline; I87] `apply_configuration`
+    maxPayloadDepth*: int
+      ## [SPEC INTERFACE §4.5.1 l.3150; IF-02, I88] `max_payload_depth`: 128 to
+      ## 1024, default 1024
     policy*: AuthzPolicy ## the internal policy: allow-all
     authority*: Opt[AuthorityPolicy]
       ## [I85] `capability-authority`: the instance whose binding decides
@@ -212,7 +215,7 @@ func checkOrdering(c: HostConfig, ids: HashSet[string]): Result[void, ConfigErro
   ok()
 
 proc configurationOf(
-    what: string, declaration, provisioned: Opt[seq[byte]]
+    what: string, declaration, provisioned: Opt[seq[byte]], depth: int
 ): Result[Opt[AcceptedConfiguration], ConfigError] =
   ## [SPEC RUNTIME §8 l.1386-1387 (RUN-0259); CONFIG §2] A configuration
   ## declaration, accepted before any record names it, with the instance's
@@ -222,7 +225,7 @@ proc configurationOf(
     if provisioned.isSome:
       return err(configError(what & ": provisioned_configuration needs configuration"))
     return ok(Opt.none(AcceptedConfiguration))
-  let a = acceptConfiguration(declaration.get, provisioned).valueOr:
+  let a = acceptConfiguration(declaration.get, provisioned, depth).valueOr:
     return err(configError(what & ": " & error))
   ok(Opt.some(a))
 
@@ -373,6 +376,14 @@ proc decodeHostConfig*(
     ?deadline("shutdown_grace_ms", cfg.runtime.shutdown_grace_ms, DefaultShutdownGrace)
   c.applyDeadline =
     ?deadline("apply_deadline_ms", cfg.runtime.apply_deadline_ms, DefaultApplyDeadline)
+  # [SPEC INTERFACE §4.5.1 l.3150; IF-02, I88] The one payload depth setting.
+  c.maxPayloadDepth = int(cfg.runtime.max_payload_depth.get(uint16(DefaultMaxDepth)))
+  if c.maxPayloadDepth < MinMaxDepth or c.maxPayloadDepth > DefaultMaxDepth:
+    return err(
+      configError(
+        "max_payload_depth must be " & $MinMaxDepth & " to " & $DefaultMaxDepth
+      )
+    )
   if cfg.modules.len == 0:
     return err(configError("modules is empty"))
   var
@@ -398,7 +409,10 @@ proc decodeHostConfig*(
         return err(configError("two module instances share a state assignment"))
       assignments.incl(r.stateAssignment.get)
     let accepted = ?configurationOf(
-      "module instance " & m.instance, m.configuration, m.provisioned_configuration
+      "module instance " & m.instance,
+      m.configuration,
+      m.provisioned_configuration,
+      c.maxPayloadDepth,
     )
     if accepted.isSome:
       r.configuration = Opt.some(accepted.get.digest)
@@ -440,7 +454,10 @@ proc decodeHostConfig*(
           configError("declaration " & d.module & ": persistent_state needs state_root")
         )
       let accepted = ?configurationOf(
-        "declaration " & d.module, d.configuration, Opt.none(seq[byte])
+        "declaration " & d.module,
+        d.configuration,
+        Opt.none(seq[byte]),
+        c.maxPayloadDepth,
       )
       if accepted.isSome:
         r.configuration = Opt.some(accepted.get.digest)

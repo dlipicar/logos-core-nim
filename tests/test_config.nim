@@ -704,8 +704,10 @@ proc reasonOf(detail: seq[byte]): string =
   let v = decodeCbor(detail).tryGet
   v.lookup("reason").get.text
 
-proc tunerEngine(policy = allowAll()): Engine =
-  fixtureEngine(config(policy, extra = tunerRegs()))
+proc tunerEngine(policy = allowAll(), depth = 0): Engine =
+  var cfg = config(policy, extra = tunerRegs())
+  cfg.maxPayloadDepth = depth
+  fixtureEngine(cfg)
 
 # Sources and startup ----------------------------------------------------------------------
 
@@ -792,14 +794,15 @@ suite "cfg.startup: sources, selection, delivery and promotion (CONFIG §4, §6;
     check s.state_revision == 2 and s.current.get.value_revision == 1
     e.finish()
 
-  test "[RUN-1086] [CFG-0091] a live declaration on a binding without apply_configuration fails as loader-abi-invalid":
+  test "[RUN-1086] [CFG-0091] a live declaration on a binding without apply_configuration fails binding (realizer abi-invalid)":
     let e = tunerEngine()
     discard e.startClient()
     let a = tunerAccepted(default = Opt.some(tunerValue()), live = true)
     discard e.createTuner("t1", a)
     let v = e.start("t1").tryGet
     check v.state == msError
-    check v.failure.get.kind == fkLoader and v.failure.get.loader == lecAbiInvalid
+    check v.failure.get.kind == fkOther and v.failure.get.internal and
+      v.failure.get.reason.startsWith("realizer abi-invalid:")
     check tunerInits.load == 0
     discard e.createTuner("t2", a, binding = "tuner_live")
     check e.start("t2").tryGet.state == msReady
@@ -943,6 +946,40 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     check path.items.len == 1 and path.items[0].text == "station"
     check rc.summary(t).state_revision == 0
     e.finish()
+
+  test "[IFC-0923] [IFC-0926] [IMPL-DECISION G241] a configuration value is checked at the Runtime's payload depth, counted from the value's root":
+    proc nested(levels: int): seq[byte] =
+      ## {station: [[...[]...]]}: `levels` containers in all.
+      var x = cborArray()
+      for _ in 3 .. levels:
+        x = cborArray(x)
+      encodeCbor(cborMap((cbor("station"), x)))
+
+    for depth in [MinMaxDepth, 0]:
+      let p = (if depth == 0: DefaultMaxDepth else: depth)
+      checkpoint "max_payload_depth " & $depth
+      let e = tunerEngine(depth = depth)
+      let (_, rc) = e.startClient()
+      discard e.createTuner("t1", tunerAccepted())
+      let t = e.target("t1")
+      let at = rc.stage(t, 0, nested(p))
+      check at.code == ecInvalidParams
+      check reasonOf(at.detail) == "configuration-schema-mismatch"
+      let over = rc.stage(t, 0, nested(p + 1))
+      check over.code == ecInvalidParams and over.detail.len == 0
+      check rc.summary(t).state_revision == 0
+      e.finish()
+    # A provisioned value (host config) is checked the same way.
+    let b = runtimeBinding(tunerAccepted())
+    proc fault(levels, depth: int): ValueFault =
+      checkValue(
+        b.digest, b.document, b.root, b.commitment.subtreeRoot, nested(levels), depth
+      ).error.fault
+
+    check fault(MinMaxDepth, MinMaxDepth) == vfMismatch
+    check fault(MinMaxDepth + 1, MinMaxDepth) == vfTooDeep
+    check fault(MinMaxDepth + 1, DefaultMaxDepth) == vfMismatch
+    drop(b.document)
 
   test "[CFG-0057] the schema-mismatch detail needs get_configuration_schema authority":
     let e = tunerEngine(denying(deny(operation = "get_configuration_schema")))

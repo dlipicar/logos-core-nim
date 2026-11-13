@@ -254,14 +254,8 @@ proc configOf*(data: openArray[byte], digest: Digest): Result[ConfigState, strin
 
 func classificationOf*(text: string): Result[Failure, string] =
   ## The failure a stored classification names (RUNTIME l.3753).
-  if text.startsWith("loader-"):
-    let code = text[7 ..^ 1]
-    for c in LoaderErrorCode:
-      if $c == code:
-        return ok(Failure(kind: fkLoader, loader: c))
-    return err("unknown failure classification " & text)
   for k in FailureKind:
-    if k != fkLoader and $k == text:
+    if $k == text:
       return ok(Failure(kind: k))
   err("unknown failure classification " & text)
 
@@ -297,7 +291,8 @@ func toRs(x: StoredInstance): LcnRsInstance =
     result.provider = Opt.some(x.providerId)
   if x.failure.isSome:
     let f = x.failure.get
-    var reason = f.reason
+    # [IMPL] A realizer's text may name host paths: it is not stored.
+    var reason = (if f.internal: "" else: f.reason)
     if reason.len > 512:
       # `lcn.rs_failure.reason`: cut at a character boundary.
       var n = 512
@@ -552,10 +547,23 @@ proc deleteSide*(s: var Store, kind, instance: string): Result[void, string] =
     return ok()
   removeDurably(s.dir, name)
 
+func isSideName(name: string): bool =
+  ## [IMPL] Exactly the names `sideName` writes: `<kind>-<64 hex>.cbor`.
+  ## Anything else in the directory (an AppleDouble `._*` file an exFAT or
+  ## network volume adds, an editor's backup) is not ours and is left alone.
+  if not name.endsWith(SideSuffix):
+    return false
+  let dash = name.find('-')
+  if dash < 0:
+    return false
+  let hex = name[dash + 1 ..< name.len - SideSuffix.len]
+  name[0 ..< dash].validKind and hex.len == 64 and
+    hex.allCharsInSet({'0' .. '9', 'a' .. 'f'})
+
 proc sideNames(s: Store): seq[string] =
   if s.isPersistent:
     for name in fileNames(s.dir):
-      if name.endsWith(SideSuffix) and name != SnapshotName and '-' in name:
+      if name != SnapshotName and name.isSideName:
         result.add(name)
   else:
     for name in s.memory.keys:

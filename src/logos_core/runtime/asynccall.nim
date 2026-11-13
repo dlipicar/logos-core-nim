@@ -81,6 +81,7 @@ type
     userData: pointer
     phase: CallPhase
     cancelledEarly: bool ## cancelled before submission
+    started: bool ## a call worker began it (under `lock`) [I88]
     code: ErrorCode
     kind: CallEnd
     owned: ptr Owned ## the outcome until the callback takes it
@@ -182,6 +183,16 @@ proc decide*(
 
 proc decide*(c: ptr AsyncCall, f: InvocationFailure, kind: CallEnd): bool =
   c.decide(failed(f), kind)
+
+proc refuseQueued*(c: ptr AsyncCall, f: InvocationFailure): bool =
+  ## [IMPL; I88, deviation 5] A submitted call no call worker has begun is
+  ## decided with `f`, as its own outcome; true when it was. The worker that
+  ## later takes it finds it terminal.
+  withLock c.lock:
+    if c.phase == cpSubmitted and not c.started:
+      c.decideLocked(failed(f), okResult)
+      return true
+  false
 
 proc offer(
     c: ptr AsyncCall, r: Result[seq[byte], InvocationFailure]
@@ -574,7 +585,12 @@ proc runCall*(p: pointer) =
   ## Call worker: one submitted call, unless it is already terminal. The
   ## engine posts `mkCallJobDone` after this returns.
   let c = asyncOf(p)
-  if c.isTerminal:
+  var begun = false
+  withLock c.lock:
+    if c.phase == cpSubmitted:
+      c.started = true
+      begun = true
+  if not begun:
     return
   let bare = $c.methodName
   let params = bytesOf(c.params, c.paramsLen)

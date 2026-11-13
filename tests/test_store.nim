@@ -69,7 +69,7 @@ proc sample(): Snapshot =
         instance: "sensor-1",
         record: dynRecord("/opt/sensor.so"),
         state: msError,
-        failure: Opt.some(Failure(kind: fkLoader, loader: lecAbiInvalid, reason: "why")),
+        failure: Opt.some(Failure(kind: fkOther, reason: "why")),
         revision: 3,
         intent: inRequested,
         intentRevision: 2,
@@ -117,7 +117,7 @@ suite "run.store: the Runtime state store [IMPL]":
     check b.instances.len == 3
     check b.instances[0].origin.host
     check b.instances[1].origin.instance == "meter-1"
-    check b.instances[1].failure.get.classification == "loader-abi-invalid"
+    check b.instances[1].failure.get.classification == "other"
     check b.instances[1].failure.get.reason == "why"
     check b.instances[2].created
     check b.instances[2].intent == inStopped
@@ -133,15 +133,19 @@ suite "run.store: the Runtime state store [IMPL]":
 
   test "every classification RUNTIME l.3753 lists is stored and read back":
     for k in FailureKind:
-      if k == fkLoader:
-        for c in LoaderErrorCode:
-          let f = Failure(kind: k, loader: c)
-          check classificationOf(f.classification).tryGet.classification ==
-            f.classification
-      else:
-        check classificationOf($k).tryGet.kind == k
-    check classificationOf("loader-nope").isErr
+      check classificationOf($k).tryGet.kind == k
+    # [S11-1 (b), I88] No Module Loader, so no `loader-<code>` (l.3754).
+    check classificationOf("loader-abi-invalid").isErr
     check classificationOf("crashed").isErr
+
+  test "[IMPL] a realizer's failure text, which may name host paths, is not stored":
+    var a = sample()
+    a.instances[1].failure = Opt.some(
+      Failure(kind: fkOther, reason: "realizer abi-invalid: /opt/x", internal: true)
+    )
+    let b = decodeSnapshot(encodeSnapshot(a).tryGet).tryGet
+    check b.instances[1].failure.get.classification == "other"
+    check b.instances[1].failure.get.reason == ""
 
   test "a leftover temporary file is removed and the earlier snapshot read":
     let dir = freshDir()
@@ -357,8 +361,40 @@ suite "run.store: the Runtime state store [IMPL]":
           a = name
         else:
           b = name
-    moveFile(dir / a, dir / "cfg-0000.cbor")
+    # Each record now sits under the other instance's name.
+    moveFile(dir / a, dir / "swap")
+    moveFile(dir / b, dir / a)
+    moveFile(dir / "swap", dir / b)
     check s.listSide("cfg").isErr
+    s.close()
+
+  test "[IMPL] names the store did not write are neither read nor reaped":
+    # An exFAT or network volume adds AppleDouble `._<name>` files beside each
+    # file; they are not side records, whatever they hold (I88).
+    let dir = freshDir()
+    var (s, _) = openStore(dir).tryGet
+    s.putSide("cfg", "a", [1'u8]).tryGet
+    var a: string
+    for name in fileNames(dir):
+      if name.startsWith("cfg-"):
+        a = name
+    let strangers = [
+      "._" & a,
+      "._runtime-state.cbor",
+      "cfg-0000.cbor",
+      "cfg-.cbor",
+      a[0 ..^ 7] & ".cbor",
+      "notes.txt",
+    ]
+    for name in strangers:
+      writeFile(dir / name, "\x00\x05\x16\x07not cbor")
+    var names: seq[string]
+    for (i, _) in s.listSide("cfg").tryGet:
+      names.add(i)
+    check names == @["a"]
+    check s.reapSides(initHashSet[string]()).tryGet == @["a"]
+    for name in strangers:
+      check fileExists(dir / name)
     s.close()
 
   test "[IMPL-DECISION G160] declaration facts leave out local_path and reason text":

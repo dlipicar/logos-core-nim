@@ -4,7 +4,9 @@
 ##
 ## - `reflect` returns its request as its response, except for `b`:
 ##   - 13 fails with a message;
-##   - 14 returns a response outside its schema (a name over 8 bytes).
+##   - 14 returns a response outside its schema (a name over 8 bytes);
+##   - 15 returns `u` one tree map deeper than its request (the payload depth
+##     tests).
 ## - `pick` finds an entry by id or by name. Id 0 is not found, any other id is
 ##   the file `/id/<id>`, and a name is a directory listing that name twice.
 ## - `ping` counts its calls in `pings`, the others in `calls`.
@@ -30,6 +32,12 @@ proc reflect(
   of 14:
     var r = fromChecked(ShapesReflectResponse, toCbor(request))
     r.r = @["much too long"]
+    ok(r)
+  of 15:
+    var r = fromChecked(ShapesReflectResponse, toCbor(request))
+    let inner = new ShapesTree
+    inner[] = r.u
+    r.u = ShapesTree(left: Opt.some(inner))
     ok(r)
   else:
     ok(fromChecked(ShapesReflectResponse, toCbor(request)))

@@ -323,7 +323,7 @@ proc rcMaterializeOp(
   h.attempt = s.attempt
   h.route = fixed(id)
   h.root = root
-  h.blob = newBlob(root, schema, int(schemaLen))
+  h.blob = newBlob(root, schema, int(schemaLen), s.engine.payloadDepth)
   h.generation = nextGeneration()
   h.refs.store(1)
   initLock(h.lock)
@@ -343,7 +343,7 @@ proc rcMaterializeOp(
     freeHandle(h)
     return status(reply.error.get)
   if set.primary.root == root:
-    cacheSelected(root, set)
+    cacheSelected(root, set, s.engine.payloadDepth)
   outRoute.vtable = addr routeVtable
   outRoute.state = h
   LogosResult()

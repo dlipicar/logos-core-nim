@@ -10,6 +10,8 @@
 ## kit module and a marker library, built as shared libraries.
 
 import std/[os, sequtils, strutils, tables]
+when defined(posix):
+  import std/posix
 import unittest2
 import ../src/logos_core/runtime/realizer
 import ../src/logos_core/crypto/blake3
@@ -724,6 +726,20 @@ suite "run.realizer: verified dynamic libraries (RUNTIME §2.1, §3.6; LOADER §
     check fileExists(marker)
     delEnv("LCN_LOAD_MARKER")
 
+  test "[RUN-0137] [RUN-0131] a changed digest pin is a fresh acceptance: the binding cached under the old pin is not used for it":
+    let r = fresh()
+    let pin = digestOfFile(meterLib)
+    let x = r.realize(dynamicRequest("p1", "meter_module", meterLib, pin)).tryGet
+    var changed = pin
+    changed[0] = changed[0] xor 1
+    let refused = r.realize(dynamicRequest("p2", "meter_module", meterLib, changed))
+    check refused.error.code == lecArtifactIntegrityFailed
+    check r.liveCount == 1
+    # The old pin is still accepted, and its binding reused.
+    let y = r.realize(dynamicRequest("p2", "meter_module", meterLib, pin)).tryGet
+    check y.binding == x.binding
+    check r.release(x.id, "p1").isOk and r.release(y.id, "p2").isOk
+
   test "[LDR-0132] a missing artifact is artifact-unavailable and the message names no path":
     let r = fresh()
     let path = work / "missing" / "libnothing.so"
@@ -731,6 +747,54 @@ suite "run.realizer: verified dynamic libraries (RUNTIME §2.1, §3.6; LOADER §
       r.realize(dynamicRequest("u1", "meter_module", path, digestOfFile(meterLib)))
     check x.error.code == lecArtifactUnavailable
     check path notin x.error.message and work notin x.error.message
+
+  test "[LDR-0144] [SEC-0021] [PKG-0220] a staging control it cannot establish is realization-failed; an unreadable source stays artifact-unavailable":
+    # [SPEC LOADER l.628, l.622; C-08, I88] The private copy is the control that
+    # maps the verified bytes without a path-replacement gap (l.214). Code runs
+    # only from that verified copy, never from the source path (PKG-0220).
+    when defined(posix):
+      if geteuid() == 0:
+        skip() # root writes through 0500
+      else:
+        let r = fresh()
+        let before = toSeq(walkDirs(work / "lcn-artifacts-*"))
+        let first = r.realize(
+          dynamicRequest("c1", "meter_module", meterLib, digestOfFile(meterLib))
+        ).tryGet
+        var dir = ""
+        for d in walkDirs(work / "lcn-artifacts-*"):
+          if d notin before:
+            dir = d
+        check dir.len > 0
+        # Another library needs another staged copy, which cannot be written.
+        setFilePermissions(dir, {fpUserRead, fpUserExec})
+        let refused = r.realize(
+          dynamicRequest("c2", "marker_module", markerLib, digestOfFile(markerLib))
+        )
+        setFilePermissions(dir, {fpUserRead, fpUserWrite, fpUserExec})
+        check refused.isErr
+        check refused.error.code == lecRealizationFailed
+        check markerLib notin refused.error.message and work notin refused.error.message
+        # A source that cannot be read is still artifact-unavailable.
+        let gone = r.realize(
+          dynamicRequest(
+            "c3",
+            "marker_module",
+            work / "gone" & LibraryExtension,
+            digestOfFile(markerLib),
+          )
+        )
+        check gone.error.code == lecArtifactUnavailable
+        # The staging failure is not cached: once the control can be
+        # established the library is staged and mapped, and refused only for
+        # exporting no module ABI.
+        let again = r.realize(
+          dynamicRequest("c2", "marker_module", markerLib, digestOfFile(markerLib))
+        )
+        check again.error.code == lecAbiInvalid
+        check r.release(first.id, "c1").isOk
+    else:
+      skip()
 
 # Tests leave realizations active, and one fake returns a context with MODULE_ERROR
 # that nothing may destroy. Their contexts are freed here, after every suite has run,

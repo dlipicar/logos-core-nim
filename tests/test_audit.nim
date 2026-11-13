@@ -529,7 +529,7 @@ suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (
     check w.scope.rc.methods == Opt.some(@[rcMethodRoot("establish_route")])
     e.finish()
 
-  test "[CAP-0207] [IFC-0581] logos.schema is recorded under the common schema with the selected contract in its scope; retaining a marked payload refuses the call before dispatch, per side, as an enforcement failure":
+  test "[CAP-0207] [IFC-0578] [IFC-0579] logos.schema is recorded under the common schema with the selected contract in its scope; no route is made to a contract that marks a payload (DECISIONS I88, D-c)":
     let (e, orch) = ready()
     setScript(retaining("call"))
     var h = orch.handle(orch.routeTo(e, Meter, "k"))
@@ -545,30 +545,23 @@ suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (
     check v.response.get ==
       schemaSet(common).rootsOf("logos.schema_response", r.response)
     h.release()
-    # The vault marks `store`'s request and `get`'s response.
-    var (code, w) = orch.materialize(
-      orch.routeTo(e, Vault, "v", root = vaultRoot), vaultRoot, vaultSchema
-    )
-    check code == ecOk
-    let store = encodeCbor(parseDiag("{\"secret\": h'01'}").get)
-    let get = encodeCbor(parseDiag("{\"slot\": 1}").get)
-    let before = e.kept.len
-    check w.raw("store", store).code == ecNotAuthorised
-    let refused = e.answers()[^1]
-    check refused.outcome == azRefused
-    check refused.source == psBoundary
-    check refused.reason == "sensitive-retention"
-    check w.raw("get", get).code == ecNotAuthorised
-    check e.kept.len == before
-    # Retaining only the unmarked side is allowed.
-    setScript(retaining("call", response = false))
-    check w.raw("get", get).code == ecOk
-    check e.kept[^1].view.request.isSome and e.kept[^1].view.response.isNone
-    check w.raw("store", store).code == ecNotAuthorised
-    setScript(retaining("call", request = false))
-    check w.raw("store", store).code == ecOk
-    check e.kept[^1].view.response.isSome and e.kept[^1].view.request.isNone
-    w.release()
+    # The vault marks `store`'s request and `get`'s response. Erasure is not
+    # built (deferred:tier-4b), so the route is refused after its authority
+    # and contract checks, whatever the policy retains, and nothing is
+    # downgraded to ordinary handling (INTERFACE l.386-388).
+    for rule in [
+      retaining("call"), retaining("call", request = false, response = false)
+    ]:
+      setScript(rule)
+      let refused = orch.establish(
+        "v",
+        root = vaultRoot,
+        provider = Opt.some(providerAddress(e.view(Vault).tryGet.providerId)),
+      )
+      check refused.code == ecModule
+      check refused.message ==
+        "marked payloads are not supported on this path (INTERFACE §1.4.1)"
+    check e.view(Vault).tryGet.state == msReady
     e.finish()
 
   test "[CAP-0244] [CAP-0257] [CAP-0264] a record holds only its CDDL fields, no ticket, key or secret; the newest call_records records are kept, in order":

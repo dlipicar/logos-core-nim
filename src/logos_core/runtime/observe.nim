@@ -113,9 +113,9 @@ func reasonText*(s: string): string =
 
 func disclosedReason*(f: Failure): Opt[string] =
   ## [SPEC RUNTIME l.1901-1904; RUN-0870 to RUN-0873; IMPL] The `reason` an
-  ## observation discloses with a failure: none for a Module Loader error,
-  ## whose message may name host paths (the classification carries the
-  ## cause); otherwise the Runtime's or the module's text, cut at 512 bytes.
-  if f.kind == fkLoader or f.reason.len == 0:
+  ## observation discloses with a failure: none for a realizer error, whose
+  ## message may name host paths; otherwise the Runtime's or the module's
+  ## text, cut at 512 bytes.
+  if f.internal or f.reason.len == 0:
     return Opt.none(string)
   Opt.some(reasonText(f.reason))

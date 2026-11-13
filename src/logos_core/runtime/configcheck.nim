@@ -79,11 +79,16 @@ func provisioned*(a: AcceptedConfiguration): Opt[AcceptedValue] =
 # Values -----------------------------------------------------------------------------
 
 proc checkWith(
-    g: GeneratedSchema, root: string, subtree: Digest, bytes: openArray[byte]
+    g: GeneratedSchema,
+    root: string,
+    subtree: Digest,
+    bytes: openArray[byte],
+    depth: int,
 ): Result[Digest, ValueRejection] =
   if bytes.len < 1 or bytes.len > MaxValueBytes:
     return err(ValueRejection(fault: vfMalformed))
-  let v = decodePayload(bytes).valueOr:
+  # [IF-02, I88] counted from the value's root, under the engine's setting
+  let v = decodePayload(bytes, maxDepth = depth).valueOr:
     if error.reason.isNone:
       return err(ValueRejection(fault: vfTooDeep))
     if error.reason.get == iprSchemaMismatch:
@@ -124,6 +129,7 @@ proc checkValue*(
     root: string,
     subtree: Digest,
     bytes: openArray[byte],
+    depth = DefaultMaxDepth,
 ): Result[Digest, ValueRejection] =
   ## [SPEC CONFIG §5 l.197-200, l.204] The value root of `bytes`, a complete
   ## value under the binding `digest` (document, root, subtree root); or why
@@ -144,7 +150,7 @@ proc checkValue*(
       validators.del(first)
     validators[digest] = g
   try:
-    checkWith(validators[digest], root, subtree, bytes)
+    checkWith(validators[digest], root, subtree, bytes, depth)
   except KeyError:
     err(ValueRejection(fault: vfMismatch))
 
@@ -157,6 +163,7 @@ proc cachedValidators*(): int =
 proc acceptConfiguration*(
     decl: LogosNSModuleConfigurationConfigurationDeclaration,
     provisioned = Opt.none(seq[byte]),
+    depth = DefaultMaxDepth,
 ): Result[AcceptedConfiguration, string] =
   ## [SPEC CONFIG §2; RUNTIME l.1386-1387 (RUN-0259)] Accepts a declaration
   ## and the protected value provisioned for one instance (G141), if any:
@@ -191,7 +198,7 @@ proc acceptConfiguration*(
     return err("the configuration root's subtree root is not the declared one")
   var a = AcceptedConfiguration(binding: b, roots: roots, digest: bindingDigest(b))
   template checked(data: seq[byte], what: string): AcceptedValue =
-    let root = checkWith(g, b.root, roots.subtreeRoot, data).valueOr:
+    let root = checkWith(g, b.root, roots.subtreeRoot, data, depth).valueOr:
       return err("the " & what & " is not a complete value of " & b.root)
     AcceptedValue(bytes: data, valueRoot: root)
 
@@ -202,13 +209,15 @@ proc acceptConfiguration*(
   ok(a)
 
 proc acceptConfiguration*(
-    declaration: openArray[byte], provisioned = Opt.none(seq[byte])
+    declaration: openArray[byte],
+    provisioned = Opt.none(seq[byte]),
+    depth = DefaultMaxDepth,
 ): Result[AcceptedConfiguration, string] =
   ## The same, from one deterministic-CBOR
   ## `logos.module_configuration.configuration_declaration` (host config).
   let decl = LogosNSModuleConfigurationConfigurationDeclaration.decode(declaration).valueOr:
     return err("the configuration declaration is not one: " & error)
-  acceptConfiguration(decl, provisioned)
+  acceptConfiguration(decl, provisioned, depth)
 
 proc runtimeBinding*(a: AcceptedConfiguration): Binding =
   ## The binding a new configuration state is created with; the document

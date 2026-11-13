@@ -37,8 +37,12 @@ type
     hashSuite*: string
 
   StageFailure* = enum
-    sfUnavailable ## `artifact-unavailable`
+    sfUnavailable ## `artifact-unavailable`: the source cannot be read
     sfIntegrity ## `artifact-integrity-failed`
+    sfControls
+      ## [SPEC LOADER l.628; C-08, I88] `realization-failed`: the private copy,
+      ## the control that maps the verified bytes without a path-replacement
+      ## gap (l.214), cannot be created, written, protected or hashed
 
   StageError* = object
     kind*: StageFailure
@@ -98,7 +102,9 @@ proc stage*(a: ArtifactRecord, dir, name: string): Result[string, StageError] =
   ## [SPEC LOADER §3 l.203-209] Copies `a.localPath` to `dir/name` (read-only)
   ## and checks the copy against `a.hash` under `a.hashSuite`, which the caller
   ## has already checked is the pinned BLAKE3-256 suite. Returns the copy's
-  ## path; a mismatching copy is removed.
+  ## path; a mismatching copy is removed. A source that cannot be read is
+  ## `sfUnavailable` (LOADER l.622); a copy that cannot be made, written,
+  ## protected or hashed is `sfControls` (l.628).
   doAssert a.hashSuite == HashSuiteId
   let dest = dir / (name & LibraryExtension)
   var src, dst: File
@@ -107,35 +113,48 @@ proc stage*(a: ArtifactRecord, dir, name: string): Result[string, StageError] =
   try:
     if fileExists(dest) or not open(dst, dest, fmWrite):
       close(src)
-      return fail(sfUnavailable, "cannot create the staged copy")
+      return fail(sfControls, "cannot create the staged copy")
   except OSError, IOError:
     close(src)
-    return fail(sfUnavailable, "cannot create the staged copy")
-  var copied = true
+    return fail(sfControls, "cannot create the staged copy")
+  var failed = Opt.none(StageFailure)
   var buf = newSeq[byte](1 shl 16)
-  try:
-    while true:
-      let n = src.readBuffer(addr buf[0], buf.len)
-      if n <= 0:
-        break
+  while failed.isNone:
+    var n = 0
+    try:
+      n = src.readBuffer(addr buf[0], buf.len)
+    except IOError:
+      failed = Opt.some(sfUnavailable)
+      break
+    if n <= 0:
+      break
+    try:
       if dst.writeBuffer(addr buf[0], n) != n:
-        copied = false
-        break
-  except IOError:
-    copied = false
+        failed = Opt.some(sfControls)
+    except IOError:
+      failed = Opt.some(sfControls)
   close(src)
+  try:
+    flushFile(dst)
+  except IOError:
+    if failed.isNone:
+      failed = Opt.some(sfControls)
   close(dst)
-  if not copied:
+  if failed.isSome:
     discard tryRemoveFile(dest)
-    return fail(sfUnavailable, "the artifact cannot be copied")
+    return
+      if failed.get == sfUnavailable:
+        fail(sfUnavailable, "the artifact cannot be read")
+      else:
+        fail(sfControls, "cannot write the staged copy")
   try:
     setFilePermissions(dest, {fpUserRead, fpUserExec})
   except OSError:
     discard tryRemoveFile(dest)
-    return fail(sfUnavailable, "cannot protect the staged copy")
+    return fail(sfControls, "cannot protect the staged copy")
   let d = digestOf(dest).valueOr:
     discard tryRemoveFile(dest)
-    return fail(sfUnavailable, error)
+    return fail(sfControls, error)
   if d != a.hash:
     discard tryRemoveFile(dest)
     return fail(sfIntegrity, "the artifact bytes do not match the accepted digest")
