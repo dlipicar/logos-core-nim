@@ -61,6 +61,12 @@ proc caConfig(recovery = false, deadlineMs = NoDeadlineMs): EngineConfig =
     )
   )
   result.clock = clk
+  # [IMPL] No case here is about the stop deadline: it only bounds the
+  # authority stops the cases wait for. Those stops release through the Module
+  # Loader on a lifecycle worker, and a worker's first Loader call loads that
+  # thread's contract tables (about 40 ms under refc on an idle Mac), which a
+  # loaded host pushed past the fixture's 300 ms (CI, 2026-11-13).
+  result.stopDeadline = initDuration(seconds = 10 * Slow)
 
 proc fresh() =
   resetFake()
@@ -963,9 +969,11 @@ proc reaches(e: Engine, instance: string, state: ModuleState): bool =
 proc stoppedFor(e: Engine, instance: string, kind: FailureKind): bool =
   ## [G168 extended] `unloaded` with the classification, intent and origin
   ## kept.
-  if not e.reaches(instance, msUnloaded):
-    return false
+  let reached = e.reaches(instance, msUnloaded)
   let v = e.view(instance).tryGet
+  if not reached:
+    checkpoint(instance & " is " & $v.state & " with failure " & $v.failure)
+    return false
   v.failure.isSome and v.failure.get.kind == kind and v.execution.intent == inRequested and
     v.intentOrigin.instance == Orch
 
