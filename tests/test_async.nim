@@ -114,7 +114,7 @@ proc responseOf(d: var Done): seq[byte] =
 proc messageOf(d: var Done): string =
   $cast[cstring](addr d.message[0])
 
-proc finished(d: var Done, n = 1, seconds = 10): bool =
+proc finished(d: var Done, n = 1, seconds = 10 * Slow): bool =
   let p = addr d
   waitUntil(
     proc(): bool =
@@ -228,9 +228,13 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     for d in done.mitems:
       d.clear()
     gate.store(false)
+  teardown:
+    for d in done.mitems:
+      d.hold.store(false) # a held callback would keep `close` waiting
+    leftover()
 
   test "[IFC-0712] [IFC-0713] [IFC-0714] a call over the synchronous provider ABI completes on another thread; submit returns before the provider runs":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (c, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -261,7 +265,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[IFC-0717] [IFC-0718] [IFC-0719] preparation copies its inputs and runs nothing; bad options or callbacks leave the outputs null":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -313,7 +317,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[IFC-0724] [IFC-0726] [IFC-0728] exactly one completion when a result, a cancellation and a timeout race":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -335,7 +339,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[IFC-0726] a zero timeout expires without dispatch; a held provider times out and its late result is discarded":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -347,7 +351,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     sleep(30)
     check held.load == before
     zero.release()
-    var late = h.started(req(19), addr done[1], timeoutMs = 80)
+    var late = h.started(req(19), addr done[1], timeoutMs = 300 * Slow)
     check waitUntil(
       proc(): bool =
         held.load == before + 1
@@ -367,7 +371,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[IFC-0731] [IFC-0733] [IFC-0735] cancel before submit, cancel after completion, release unsubmitted; release waits for the callback, not the provider":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -428,7 +432,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[IFC-0736] [IFC-0737] the response owner outlives the call and the handle; releasing it frees the copy":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -449,7 +453,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[IFC-0720] [RUN-0807] [RUN-0808] [RUN-0809] the call outlives its handle; an ended route gives its code without dispatch; a restarted provider is never substituted":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let m = e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
@@ -488,8 +492,9 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[IFC-0727] [IMPL-DECISION G52] submission repeats admission: a call the per-call decision denies":
-    let e =
-      newEngine(config(denying(deny(action = Opt.some(aaCall), operation = "read"))))
+    let e = fixtureEngine(
+      config(denying(deny(action = Opt.some(aaCall), operation = "read")))
+    )
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -503,7 +508,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[RUN-0829] [IFC-0740] [IMPL-DECISION G174] a route that ends cancels the invocation; closed, it completes with its result; revoked, NOT_AUTHORISED at once":
-    let e = newEngine(
+    let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
     discard e.started(meter())
@@ -543,7 +548,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[RUN-0821] [RUN-0825] events an asynchronous call publishes in its scope reach the preparing handle's subscriptions":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
@@ -567,9 +572,13 @@ suite "run.async: Runtime Control calls (INTERFACE §2.9; RUNTIME §7.5)":
   setup:
     for d in done.mitems:
       d.clear()
+  teardown:
+    for d in done.mitems:
+      d.hold.store(false) # a held callback would keep `close` waiting
+    leftover()
 
   test "[IFC-0712] get_self and establish_route complete asynchronously; start_module completes at ready":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     let (c, rc) = e.startClient()
     var (code, me) = rc.rcPrepare("get_self", [0xA0'u8], addr done[0])
     check code == ecOk
@@ -609,7 +618,7 @@ suite "run.async: Runtime Control calls (INTERFACE §2.9; RUNTIME §7.5)":
     e.finish()
 
   test "[IMPL] a completion decided after the consumer's realization ended is suppressed":
-    let e = newEngine(config())
+    let e = fixtureEngine(config())
     discard e.started(meter())
     let (c, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -642,9 +651,13 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     for d in done.mitems:
       d.clear()
     resetDeferred()
+  teardown:
+    for d in done.mitems:
+      d.hold.store(false) # a held callback would keep `close` waiting
+    leftover()
 
   test "[IFC-0753] [IFC-0755] [IFC-0773] [IFC-0749] submit, then complete inline or from another thread; current is the invocation's context; synchronous calls still dispatch":
-    let e = newEngine(config(extra = @[dmeterStatic]))
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -672,7 +685,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0759] [IFC-0760] [IFC-0761] [IFC-0776] one request_cancel once submit returned, with the context current; none after execution release":
-    let e = newEngine(config(extra = @[dmeterStatic]))
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
     let route = rc.routeId("k")
@@ -710,7 +723,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0764] [IFC-0765] release does not wait for an admitted request_cancel":
-    let e = newEngine(config(extra = @[dmeterStatic]))
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -735,7 +748,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0768] [IFC-0287] [IFC-0757] stopping the provider waits for execution release before destroy":
-    let e = newEngine(config(extra = @[dmeterStatic]))
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
     let m = e.started(dmeter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -760,7 +773,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0757] an invalid completion is MODULE_ERROR and consumes its owner; a second completion is ignored with a diagnostic":
-    let e = newEngine(config(extra = @[dmeterStatic]))
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -785,7 +798,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0782] [IFC-0742] [RUN-0824] [RUN-0829] scoped publication through a deferred invocation's context, before and after its terminal outcome":
-    let e = newEngine(config(extra = @[dmeterStatic]))
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))

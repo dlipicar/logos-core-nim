@@ -16,9 +16,9 @@ import ../../src/logos_core/hash/hashinput
 import ../../src/logos_core/iface/[accept, surface]
 import ../../src/logos_core/transport/[hello, ticket]
 import ../../src/logos_core/transport/io
-import ./specdata
+import ./[slowdown, specdata]
 
-export io, hello, ticket
+export io, hello, ticket, slowdown
 
 type
   AdmitMode* = enum
@@ -61,18 +61,6 @@ proc storageInput*(): ContractInput =
     schema: encodeCbor(schemaResponse(storageSet, storageRoot).get),
     system: false,
   )
-
-const Slow* =
-  when defined(tsan):
-    10
-  elif defined(asan) or defined(msan):
-    3
-  else:
-    1
-  ## [IMPL] How much slower a sanitizer build moves multi-MiB payloads (the
-  ## Nim code copies and checks them byte by byte, instrumented). A deadline
-  ## that only bounds how long a test waits, or how long a flush may take, is
-  ## multiplied by it; a deadline a test is about is not.
 
 proc fastConfig*(): TransportConfig =
   ## Small deadlines for tests (`test_transport_io` §5.1 of the plan). The Hello
