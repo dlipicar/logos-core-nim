@@ -1,14 +1,20 @@
-## The Runtime's in-process realizer for the two direct strategies, shaped
-## after LOADER §3-§7, §9-§11 [IMPL]. It is an implementation-local realization
-## mechanism (RUNTIME l.212), not a Module Loader instance (S11-1 option (b);
-## DECISIONS G230, I88): LOADER is not claimed until Tier 4b.
+## The realizer: the in-process ABI caller for the two direct strategies
+## (LOADER §3-§7, §9-§11; DECISIONS I89). Since Tier 4b step 4b-1 it serves two
+## mechanisms:
 ##
-## The realizer is shaped like the Loader contract (realize, release, get_status,
-## its descriptors, records and error codes), so the Runtime calls it the way it
-## would call a Loader provider, but it is an in-process object, not a module.
-## It advertises `direct_static` and `direct_dynamic`; `hosted_dynamic` is
-## refused with `unsupported-strategy` before any artifact code is loaded, and
-## `force` with `invalid-request` (§4, §9).
+## - the Module Loader instance `logos_module_loader` keeps one, on its own
+##   thread (`loader/core.nim`), and realizes every other module instance
+##   through it when the Runtime calls the Loader's contract;
+## - the Runtime's bootstrap mechanism keeps one whose only static
+##   registration is the Loader's own, and realizes the Loader instance
+##   through it (RUNTIME l.212, l.1641; BCP l.287; G57).
+##
+## A realizer is shaped like the Loader contract (realize, release,
+## get_status, its descriptors, records and error codes). Its strategy
+## drivers say what it can realize (`StrategyDriver`, §4): the two direct
+## strategies by default; a strategy without a driver, `hosted_dynamic` in
+## 4b-1, is refused with `unsupported-strategy` before any artifact code is
+## loaded, and `force` with `invalid-request` (§4, §9).
 ##
 ## Direct realization is the ABI caller (§6): it binds the module code once per
 ## static registration or per verified artifact (`native.nim`, `artifact.nim`),
@@ -16,18 +22,21 @@
 ## exactly once on release. Bindings and libraries are kept for the realizer's
 ## lifetime (RUNTIME §2.2; TF-03).
 ##
-## [IMPL] Every direct realization failure is cleaned up before `realize`
-## returns, so no failed realization is ever retained: what a module that broke
-## the init contract left behind cannot be cleaned by the Loader at all.
+## [IMPL-DECISION G250] No failed realization is retained at `realize`: every
+## direct realization failure is cleaned up before `realize` returns, and what
+## a module that broke the init contract left behind (a failure status with a
+## context) cannot be cleaned by the Loader at all, so it is never destroyed
+## (I88). The one failed realization retained is an indeterminate live
+## configuration (§8): it stays, failed, until it is released.
 ## The configuration handoff (CONFIG §6; I87) carries the encoded
 ## `configuration_input` into `_MODULE_init`; a request without one gets the
 ## absent representation (INTERFACE l.3914).
-## [IMPL] A realizer is owned by one thread, the Runtime's; calls on it are
-## serialized, which gives LOADER §11's per-instance total order. Module code
-## runs in separate phases (`runBind`, `initModule`, a `Teardown`) that take
-## plain values only, so the Runtime can run them on worker threads under its
-## deadlines while its own thread keeps serving requests; `realize` and
-## `release` run every phase on the calling thread.
+## [IMPL] A realizer is owned by one thread; calls on it are serialized, which
+## gives LOADER §11's per-instance total order. Module code runs in separate
+## phases (`runBind`, `initModule`, a `Teardown`, an `ApplyHook`) that take
+## plain values only, so the owner can run them on other threads while its
+## own keeps serving requests; `realize` and `release` run every phase on the
+## calling thread.
 
 {.push raises: [].}
 
@@ -147,6 +156,20 @@ type
     hostedPlacements*: seq[string]
     forceRelease*: bool
 
+  DriverKind* = enum
+    dkInProcess
+      ## bound and initialized in this process (the direct strategies): the
+      ## phases below
+    # 4b-3 adds a hosted driver kind, whose start and release run elsewhere.
+
+  StrategyDriver* = object
+    ## [SPEC LOADER §4; plan §2.15] One strategy this realizer can satisfy in
+    ## full. `capabilities` is computed from the registered drivers, so a
+    ## strategy is advertised exactly when a driver serves it.
+    strategy*: Strategy
+    kind*: DriverKind
+    placements*: seq[string] ## the hosted placements served (hosted only)
+
   BindSpec* = object ## What binding module code needs, as plain values (`runBind`).
     key*: string
     module*: string
@@ -203,6 +226,7 @@ type
     context*: ptr LogosModuleContext
 
   Realizer* = ref object
+    drivers: array[Strategy, Opt[StrategyDriver]]
     statics: Table[string, StaticRegistration] ## by binding identifier
     bindings: Table[string, Result[ref NativeBinding, LoaderError]]
       ## final binding outcomes: `s:` and the static binding identifier, or
@@ -239,13 +263,33 @@ template fail(code: LoaderErrorCode, message: string): untyped =
 proc newRealizer*(workDir: string, stateRoot = Opt.none(string)): Realizer =
   ## `workDir` holds the private directory for verified library copies;
   ## `stateRoot` the module state directories, one per assignment [G143].
+  ## The two direct drivers are registered (K7, K10).
   var rnd: array[8, byte]
   doAssert urandom(rnd), "no system randomness"
-  Realizer(prefix: hexOf(rnd), workDir: workDir, stateRoot: stateRoot)
+  result = Realizer(prefix: hexOf(rnd), workDir: workDir, stateRoot: stateRoot)
+  for s in [stDirectStatic, stDirectDynamic]:
+    result.drivers[s] = Opt.some(StrategyDriver(strategy: s, kind: dkInProcess))
+
+proc registerDriver*(r: Realizer, d: StrategyDriver): Result[void, string] =
+  ## Adds the driver of a strategy no driver serves yet.
+  if r.drivers[d.strategy].isSome:
+    return err("the strategy " & $d.strategy & " already has a driver")
+  if d.strategy == stHostedDynamic:
+    for p in d.placements:
+      if p notin HostedPlacements:
+        return err("unknown hosted placement " & p)
+  elif d.placements.len > 0:
+    return err("only hosted_dynamic has placements")
+  r.drivers[d.strategy] = Opt.some(d)
+  ok()
 
 func capabilities*(r: Realizer): Capabilities =
-  ## [SPEC LOADER §4] Only what this Loader can satisfy in full.
-  Capabilities(directStatic: true, directDynamic: true)
+  ## [SPEC LOADER §4] Only what this Loader can satisfy in full: the strategies
+  ## of its drivers. `force_release` is never advertised (K7).
+  result.directStatic = r.drivers[stDirectStatic].isSome
+  result.directDynamic = r.drivers[stDirectDynamic].isSome
+  if r.drivers[stHostedDynamic].isSome:
+    result.hostedPlacements = r.drivers[stHostedDynamic].get.placements
 
 proc registerStatic*(r: Realizer, reg: StaticRegistration): Result[void, string] =
   ## [SPEC RUNTIME §13.3] A duplicate binding identifier leaves the existing
@@ -301,10 +345,19 @@ func checkRequest(req: RealizeRequest): Result[void, LoaderError] =
       )
   ok()
 
+func addressText(p: pointer): string =
+  toHex(cast[uint](p).BiggestInt, 2 * sizeof(pointer))
+
 func keyOf(req: RealizeRequest): string =
-  ## The descriptor and private handoffs that make two requests the same (§6).
+  ## The descriptor and private handoffs that make two requests the same (§6):
+  ## the initialization services are part of the request (LOADER l.370-372).
   let d = req.descriptor
-  result = $d.strategy & "\0" & d.module & "\0"
+  let s = req.services
+  result =
+    addressText(s.runtimeControl) & addressText(cast[pointer](s.publish)) &
+    addressText(s.publishUserData) & addressText(s.invocationAccess.state) &
+    addressText(cast[pointer](s.invocationAccess.current)) & "\0"
+  result.add($d.strategy & "\0" & d.module & "\0")
   case d.strategy
   of stDirectStatic:
     result.add(d.binding)
@@ -449,6 +502,15 @@ proc stateDirFor(r: Realizer, assignment: string): Result[string, LoaderError] =
     return fail(lecRealizationFailed, "the state directory cannot be established")
   ok(dir)
 
+proc admissible*(r: Realizer, req: RealizeRequest): Result[void, LoaderError] =
+  ## [SPEC LOADER §3, §4, §6] The checks of a request that touch nothing: its
+  ## form, then whether a driver serves its strategy (`unsupported-strategy`
+  ## before any artifact is read, l.364).
+  ?checkRequest(req)
+  if r.drivers[req.descriptor.strategy].isNone:
+    return fail(lecUnsupportedStrategy, $req.descriptor.strategy & " is not advertised")
+  ok()
+
 proc begin*(r: Realizer, req: RealizeRequest): Result[Step, LoaderError] =
   ## [SPEC LOADER §6] The first phase of `realize`: the request checks, then
   ## the instance's current realization, a cached binding, or the binding work
@@ -461,10 +523,14 @@ proc begin*(r: Realizer, req: RealizeRequest): Result[Step, LoaderError] =
       return ok(Step(kind: skLive, realization: x)) # §6: already realized
     return fail(lecInstanceConflict, "the instance has another realization")
   let d = req.descriptor
+  if r.drivers[d.strategy].isNone:
+    # [SPEC LOADER l.364 (LDR-0067)] Before any artifact is read.
+    return fail(lecUnsupportedStrategy, $d.strategy & " is not advertised")
   let spec =
     case d.strategy
     of stHostedDynamic:
-      return fail(lecUnsupportedStrategy, "hosted_dynamic is not advertised")
+      # 4b-3's hosted driver starts the module elsewhere.
+      return fail(lecUnsupportedStrategy, $d.strategy & " is not advertised")
     of stDirectStatic:
       ?r.staticSpec(d)
     of stDirectDynamic:
@@ -537,21 +603,23 @@ proc nextId(r: Realizer): string =
   inc r.issued
   "r-" & r.prefix & "-" & $r.issued
 
-proc completeInit*(
+proc completeInitChecked*(
     r: Realizer,
     h: InitHandoff,
-    res: LogosResult,
+    outcome: Result[void, AbiFailure],
+    returnedOk: bool,
     ctx: ptr LogosModuleContext,
     orphan: var ptr LogosModuleContext,
 ): Result[Realization, LoaderError] =
-  ## [SPEC LOADER §6, §7] Checks what `_MODULE_init` returned. A failure is
-  ## not retained (§7 allows it; nothing about it can be cleaned later).
-  ## [IMPL] LOGOS_OK with a context but an invalid status: the instance exists,
-  ## so `orphan` names the context the caller must destroy exactly once.
+  ## [SPEC LOADER §6, §7] Applies what `_MODULE_init` returned, checked where
+  ## it ran (`checkInit`): `outcome` and whether its code was LOGOS_OK. A
+  ## failure is not retained (§7 allows it; nothing about it can be cleaned
+  ## later). [IMPL] LOGOS_OK with a context but an invalid status: the
+  ## instance exists, so `orphan` names the context the caller must destroy
+  ## exactly once.
   orphan = nil
-  let outcome = checkOutcome(res, contextShape(ctx))
   if outcome.isErr:
-    if int64(res.code) == 0 and ctx != nil:
+    if returnedOk and ctx != nil:
       orphan = ctx
     let f = outcome.error
     return err(
@@ -574,6 +642,25 @@ proc completeInit*(
     x.initCommitment = Opt.some(c.commitment)
   r.live[h.request.moduleInstance] = x
   ok(x)
+
+proc checkInit*(
+    res: LogosResult, ctx: ptr LogosModuleContext
+): (Result[void, AbiFailure], bool) =
+  ## [SPEC INTERFACE §2.6, §2.7] What `_MODULE_init` returned, checked on the
+  ## thread that called it (its message lives in that thread's storage), as
+  ## plain values for `completeInitChecked`.
+  (checkOutcome(res, contextShape(ctx)), int64(res.code) == 0)
+
+proc completeInit*(
+    r: Realizer,
+    h: InitHandoff,
+    res: LogosResult,
+    ctx: ptr LogosModuleContext,
+    orphan: var ptr LogosModuleContext,
+): Result[Realization, LoaderError] =
+  ## `completeInitChecked` with the result checked here.
+  let (outcome, returnedOk) = checkInit(res, ctx)
+  r.completeInitChecked(h, outcome, returnedOk, ctx, orphan)
 
 proc realize*(r: Realizer, req: RealizeRequest): Result[Realization, LoaderError] =
   ## [SPEC LOADER §6] Every phase on the calling thread. Returns the active
@@ -662,21 +749,23 @@ proc beginApply*(
   x.applying = true
   ok(ApplyHook(apply: x.binding.applyConfiguration, context: x.context))
 
-proc completeApply*(
-    r: Realizer, moduleInstance: string, res: LogosResult, established = true
+proc completeApplyChecked*(
+    r: Realizer,
+    moduleInstance: string,
+    status: Result[void, AbiFailure],
+    established = true,
 ): Result[void, LoaderError] =
-  ## [SPEC LOADER §8] The hook has returned: release may go on. LOGOS_OK is
-  ## `succeeded`; a valid failure status, `configuration-rejected`, the
-  ## realization still active; anything else, or a result the Runtime no
-  ## longer accepts (`established` false: its deadline passed), is
-  ## `realization-failed` and the realization becomes `failed`, owned until
-  ## its release. The hook's own diagnostics stay in `cause`, never
-  ## forwarded (CFG-0146).
+  ## [SPEC LOADER §8] The hook has returned, its status read where it ran
+  ## (`readStatus`): release may go on. LOGOS_OK is `succeeded`; a valid
+  ## failure status, `configuration-rejected`, the realization still active;
+  ## anything else, or a result the caller no longer accepts (`established`
+  ## false: its deadline passed), is `realization-failed` and the realization
+  ## becomes `failed`, owned until its release. The hook's own diagnostics
+  ## stay in `cause`, never forwarded (CFG-0146).
   let x = r.live.getOrDefault(moduleInstance)
   if x.isNil or not x.applying:
     return fail(lecRealizationNotFound, "no application is in progress")
   x.applying = false
-  let status = readStatus(res)
   if established and status.isOk:
     return ok()
   if established and status.error.reason.len == 0:
@@ -697,6 +786,12 @@ proc completeApply*(
   x.status = rsFailed
   x.failure = e
   err(e)
+
+proc completeApply*(
+    r: Realizer, moduleInstance: string, res: LogosResult, established = true
+): Result[void, LoaderError] =
+  ## `completeApplyChecked` with the status read here.
+  r.completeApplyChecked(moduleInstance, readStatus(res), established)
 
 proc applyConfiguration*(
     r: Realizer, realization, moduleInstance: string, input: Blob
