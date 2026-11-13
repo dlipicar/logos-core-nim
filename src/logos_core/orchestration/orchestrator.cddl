@@ -1,0 +1,11 @@
+; -- metadata --
+_module = "lcn_orchestrator"
+
+; The reference orchestration module (DECISIONS I94): a consumer-only module
+; with no method and no event. It requests and observes through its Runtime
+; Control binding only (RUNTIME l.182-184); the host's `orchestration` field,
+; not this name, gives it the role (l.187-192, G53). Its configuration is
+; config.cddl, its retry accounting state.cddl.
+
+; A module document declares at least one type: the module's name.
+lcn_orchestrator.name = "lcn_orchestrator"

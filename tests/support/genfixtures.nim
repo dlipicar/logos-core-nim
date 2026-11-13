@@ -124,6 +124,10 @@ const
       primary: "spec/mirrors/IFC/3.9.2.interface.cddl",
       calls: true,
     ),
+    NimFixture(module: "flaky_module_types.nim", primary: "tests/kit/flaky_module.cddl"),
+    NimFixture(
+      module: "flaky_module_kit.nim", primary: "tests/kit/flaky_module.cddl", kit: true
+    ),
   ]
 
 proc generated*(f: NimFixture): Result[string, string] =
@@ -414,6 +418,61 @@ proc generatedStateTypes*(): Result[string, string] =
     let set = ?acceptContractSet(readFile(statePrimary), [], [], AcceptOptions())
     nimModule(
       set, NimOptions(importPrefix: "../", schemaAccessor: "stateSchema"), false
+    )
+  except IOError as e:
+    err(e.msg)
+
+const
+  orchPrimary* = "src/logos_core/orchestration/orchestrator.cddl"
+  orchConfig* = "src/logos_core/orchestration/config.cddl"
+  orchConfigRoot* = "lcn_orchestrator.config"
+  orchStatePrimary* = "src/logos_core/orchestration/state.cddl"
+  orchTypesPath* = "src/logos_core/orchestration/lcn_orchestrator_types.nim"
+  orchKitPath* = "src/logos_core/orchestration/lcn_orchestrator_kit.nim"
+  orchConfigTypesPath* =
+    "src/logos_core/orchestration/lcn_orchestrator_configuration_types.nim"
+  orchStateTypesPath* = "src/logos_core/orchestration/state_types.nim"
+
+proc orchKitParts(): Result[(ContractSet, KitOptions), string] =
+  try:
+    let set = ?acceptContractSet(readFile(orchPrimary), [], [], AcceptOptions())
+    let cfg = ?configurationSet(readFile(orchConfig))
+    ok(
+      (
+        set,
+        KitOptions(
+          importPrefix: "../",
+          configuration:
+            Opt.some(KitConfiguration(set: cfg, root: orchConfigRoot, live: false)),
+        ),
+      )
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedOrchTypes*(): Result[string, string] =
+  ## The reference orchestration module's types (DECISIONS I94), for
+  ## `orchestration/`.
+  let (set, _) = ?orchKitParts()
+  nimModule(set, NimOptions(importPrefix: "../"), false)
+
+proc generatedOrchConfigTypes*(): Result[string, string] =
+  ## Its configuration types, `lcn_orchestrator.config` (DECISIONS I94).
+  let (set, opts) = ?orchKitParts()
+  configurationTypesModule(set, opts.configuration.get, opts)
+
+proc generatedOrchKit*(): Result[string, string] =
+  ## Its module kit: no method, no event, a startup-only configuration.
+  let (set, opts) = ?orchKitParts()
+  kitModule(set, opts, false)
+
+proc generatedOrchStateTypes*(): Result[string, string] =
+  ## Its state file's types (`logos-core-nim.orchestrator-state.v1`, DECISIONS
+  ## I94), for `orchestration/accounting.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(orchStatePrimary), [], [], AcceptOptions())
+    nimModule(
+      set, NimOptions(importPrefix: "../", schemaAccessor: "orchStateSchema"), false
     )
   except IOError as e:
     err(e.msg)

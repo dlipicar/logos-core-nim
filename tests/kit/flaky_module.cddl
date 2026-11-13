@@ -1,0 +1,8 @@
+; -- metadata --
+_module = "flaky_module"
+
+; Input for tests/generated/flaky_module_*: a module with no method whose
+; initialization and cleanup the orchestration tests steer per instance
+; (tests/kit/flaky_impl.nim; DECISIONS I94).
+
+flaky.slot = uint32

@@ -33,6 +33,10 @@ suite "ifc.nim-types: generated modules (D29)":
     check generatedLdrKit().get == readFile(ldrKitPath)
     check generatedPolicyTypes().get == readFile(policyTypesPath)
     check generatedStateTypes().get == readFile(stateTypesPath)
+    check generatedOrchTypes().get == readFile(orchTypesPath)
+    check generatedOrchConfigTypes().get == readFile(orchConfigTypesPath)
+    check generatedOrchKit().get == readFile(orchKitPath)
+    check generatedOrchStateTypes().get == readFile(orchStateTypesPath)
     for f in nimFixtures:
       checkpoint f.module
       check f.generated.get == readFile(f.fixturePath)
@@ -48,7 +52,8 @@ suite "ifc.nim-types: generated modules (D29)":
     check stamp in readFile(hostConfigTypesPath)
     check stamp in readFile(storeTypesPath)
     for path in [
-      caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath
+      caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath,
+      orchTypesPath, orchConfigTypesPath, orchKitPath, orchStateTypesPath,
     ]:
       checkpoint path
       check stamp in readFile(path)

@@ -26,6 +26,14 @@ proc main() =
   echo policyTypesPath
   writeFile(stateTypesPath, generatedStateTypes().get)
   echo stateTypesPath
+  writeFile(orchTypesPath, generatedOrchTypes().get)
+  echo orchTypesPath
+  writeFile(orchConfigTypesPath, generatedOrchConfigTypes().get)
+  echo orchConfigTypesPath
+  writeFile(orchKitPath, generatedOrchKit().get)
+  echo orchKitPath
+  writeFile(orchStateTypesPath, generatedOrchStateTypes().get)
+  echo orchStateTypesPath
   for f in nimFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath

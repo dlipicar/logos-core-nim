@@ -1,0 +1,48 @@
+; lcn_orchestrator configuration (DECISIONS I94): the reference orchestration
+; module's start list, lifecycle ordering and restart policy (RUNTIME l.183,
+; l.194, l.746-751, l.3786-3790). A supporting schema, resolved against itself
+; and the common schema only.
+
+lcn_orchestrator.config = {
+  ? authority: lcn_orchestrator.target,
+  ? defaults: [* lcn_orchestrator.default],
+  ? ordering: [* lcn_orchestrator.order],
+  ? restart: lcn_orchestrator.restart,
+  ? overrides: [* lcn_orchestrator.override],
+  ? resync_ms: uint32,
+}
+
+lcn_orchestrator.instance = tstr .size (1..128)
+lcn_orchestrator.module = tstr .size (1..64)
+
+lcn_orchestrator.target = {
+  module: lcn_orchestrator.module,
+  instance: lcn_orchestrator.instance,
+}
+
+lcn_orchestrator.default = {
+  module: lcn_orchestrator.module,
+  instance: lcn_orchestrator.instance,
+  ? action: "start" / "stop",
+}
+
+lcn_orchestrator.order = {
+  dependent: lcn_orchestrator.instance,
+  prerequisite: lcn_orchestrator.instance,
+}
+
+lcn_orchestrator.restart =
+  { kind: "disabled" } /
+  {
+    kind: "backoff",
+    initial_delay_ms: uint32,
+    max_delay_ms: uint32,
+    multiplier: uint32,
+    ? max_attempts: uint32,
+    stable_ms: uint32,
+  }
+
+lcn_orchestrator.override = {
+  instance: lcn_orchestrator.instance,
+  restart: lcn_orchestrator.restart,
+}
