@@ -229,6 +229,8 @@ proc callerEvents(io: Io, c: Conn, evs: seq[CallerEvent], size: int) =
           credit: size,
         )
       )
+      # [IMPL] Reading pauses after the Event that reaches the limit, so the
+      # undelivered bytes exceed it by less than one frame.
       if c.undelivered >= io.config.callerUndeliveredBytes:
         io.hold(c, hCredit)
     of ceSubscription:

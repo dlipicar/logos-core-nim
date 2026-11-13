@@ -658,10 +658,13 @@ suite "trnio.hello: the Hello exchange over sockets (TRANSPORT §3.1, §8.1, §8
 
   test "[TRN-0381] stalled 16 MiB Hellos are bounded by the pre-Hello pool":
     let ep = newEndpoint()
-    # maxHelloInputBytes: 32 MiB. The stalled Hellos' deadlines end 500 ms
-    # before the caller's, whatever the load: it waits behind them, then fits.
+    # maxHelloInputBytes: 32 MiB. The stalled Hellos' deadlines end `margin`
+    # before the caller's: it waits behind them, then has `margin` to be read,
+    # admitted by the owner and answered (a loaded msan runner took over
+    # 500 ms).
+    let margin = 1000 * Slow
     var cfg = fastConfig()
-    cfg.helloTimeout = 1500 * Ms
+    cfg.helloTimeout = 2 * margin * Ms
     let o = newOwner(cfg)
     check o.serve(1, dupCloexec(ep.listener))
     var evil: seq[cint]
@@ -669,11 +672,11 @@ suite "trnio.hello: the Hello exchange over sockets (TRANSPORT §3.1, §8.1, §8
       let fd = rawConnect(ep.path)
       check writeAll(fd, @(prefixOf(MinFrameLimit)) & newSeq[byte](100))
       evil.add(fd)
-    sleep(500)
+    sleep(margin)
     o.connect(1, ep.path, o.issue())
     # Waiting behind the stalled frames: not admitted while they hold the pool.
     check o.oneOf(1, 100).isNone
-    let c = o.oneOf(1, 5000)
+    let c = o.oneOf(1, 5 * margin)
     check c.isSome and c.get.kind == evConnected
     for fd in evil:
       let (data, ended) = readUntilEnd(fd, o, 2000)
@@ -1304,8 +1307,11 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     check o.waitN(evSubscription, 1).len == 1
     for i in 0'u64 ..< 300:
       o.publish(1, Progress, progress(i))
-    let es = o.waitN(evEvent, 1, 300)
+    # 1.7 s under asan alone; a host loaded sevenfold needs more than 5 s x Slow.
+    let es = o.waitN(evEvent, 1, 300, timeoutMs = BigWait)
     check es.len == 300
+    # None lost: had either end closed, the missing Events would be gone.
+    check o.log.countIt(it.kind == evClosed) == 0
     check es.mapIt(decodeValue(it.eventData).get) ==
       toSeq(0'u64 ..< 300'u64).mapIt(progress(it))
     o.done(ep)
@@ -1314,8 +1320,11 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     var cfg = fastConfig()
     cfg.connOutputBytes = int(MinFrameLimit) + 64 * 1024 + 4
     cfg.callerUndeliveredBytes = int(MinFrameLimit)
-    cfg.closeLinger = 5000 * Ms * Slow
-    cfg.writeStallTimeout = 10_000 * Ms * Slow
+    # The callee's flush after the overflow lasts until the caller, paused at
+    # 16 MiB until the test releases its credit, has read 16 MiB: neither it
+    # nor the pause may reach a deadline (each ends early when done).
+    cfg.closeLinger = 2 * BigWait * Ms
+    cfg.writeStallTimeout = 2 * BigWait * Ms
     let (o, ep) = served(cfg)
     let callee = o.attach(ep, 1)
     o.subscribe(1, 1, Progress)
@@ -1333,7 +1342,7 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     for e in o.events(evEvent, 1):
       credit += e.credit
     o.release(1, credit)
-    let cc = o.waitN(evClosed, 1, timeoutMs = BigWait)
+    let cc = o.waitN(evClosed, 1, timeoutMs = 2 * BigWait)
     check cc.len == 1 and cc[0].cause == ccPeerError and cc[0].code == ecTransport
     let es = o.events(evEvent, 1)
     check es.len < 12
@@ -1436,16 +1445,24 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     o.subscribe(1, 1, Progress)
     check o.waitN(evSubscription, 1).len == 1
     o.autoRelease = false
+    # Reading pauses after the Event that brings the undelivered bytes to the
+    # limit [IMPL]: the 4th of these. The last two are small, so they would
+    # arrive at once if reading went on.
     let big = "x".repeat(4 * MiB)
     for i in 0'u64 ..< 6:
-      o.publish(1, Progress, progress(i, big))
-    let first = o.waitN(evEvent, 1, 4, timeoutMs = BigWait)
+      o.publish(1, Progress, progress(i, if i < 4: big else: "s"))
+    # 16 MiB before the pause, four times what `BigWait` is sized for (a loaded
+    # CI runner took up to 20 s per 4 MiB Event under msan).
+    let first = o.waitN(evEvent, 1, 4, timeoutMs = 4 * BigWait)
     check first.len == 4
-    o.settle(200)
-    check o.events(evEvent, 1).len == 4
     var credit = 0
     for e in first:
       credit += e.credit
+    if first.len == 4:
+      check credit - first[3].credit < cfg.callerUndeliveredBytes
+      check credit >= cfg.callerUndeliveredBytes
+    o.settle(200 * Slow)
+    check o.events(evEvent, 1).len == 4
     o.release(1, credit)
     let all = o.waitN(evEvent, 1, 6, timeoutMs = BigWait)
     check all.len == 6
@@ -1673,5 +1690,201 @@ suite "trnio.thread: submitWait (TRANSPORT §5.2; F8)":
     probe.loop.stopTransport()
     check probe.res.load == ord(sbRefused) + 1
     deallocShared(probe)
+
+proc sleepUntil(t: MonoTime) =
+  let left = (t - getMonoTime()).inMilliseconds
+  if left > 0:
+    sleep(int(left))
+
+suite "trnio.deadlines: a deadline that passes while the I/O thread is busy (TRANSPORT §8.6) [IMPL]":
+  # The gate holds the I/O thread still across a deadline while the peer's
+  # bytes, or the owner's answer, arrive in time. Without the verdict turn,
+  # chronos runs the expired timer first and blames the peer.
+  const T = 500 * Slow ## the deadline the test is about, in ms
+
+  proc inTime(start: MonoTime, what: string): bool =
+    ## Whether the scene was set within `T` ms of `start`: before the deadline.
+    let ms = (getMonoTime() - start).inMilliseconds
+    result = ms < T
+    if not result:
+      echo "    inconclusive: ", what, " took ", ms, " ms (bound ", T, " ms)"
+
+  template sceneTest(name: string, body: untyped) =
+    ## A test whose scene must be set before its deadline. `body` returns
+    ## whether it was (`inTime`) and checks the outcome only then: a loaded
+    ## host that sets it late proves nothing either way. The scene is set
+    ## again, up to three times, and the test is skipped if no try was in time.
+    test name:
+      proc scene(): bool =
+        body
+
+      var conclusive = false
+      for _ in 1 .. 3:
+        if scene():
+          conclusive = true
+          break
+      if not conclusive:
+        skip()
+
+  sceneTest "[TRN-0378] [G61] caller: a Hello response that arrived in time counts":
+    let ep = newEndpoint()
+    let callee = newOwner()
+    callee.admit = amIgnore
+    check callee.serve(1, dupCloexec(ep.listener))
+    var cfg = fastConfig()
+    cfg.helloTimeout = T * Ms
+    let o = newOwner(cfg)
+    let start = getMonoTime()
+    o.connect(1, ep.path, callee.issue())
+    let hello = callee.expectKind(evHello)
+    let armed = getMonoTime() # the caller's deadline was armed before this
+    o.closeGate()
+    o.callExists(99, 1) # an event: the I/O thread now waits in the sink
+    check pumpUntil(
+      [o],
+      proc(): bool =
+        o.atGate(),
+    )
+    check hello.isSome
+    if hello.isSome:
+      callee.admitHello(hello.get)
+    check callee.expectKind(evEstablished).isSome
+    # The response is in the caller's socket before its deadline.
+    let set = inTime(start, "the response")
+    if set:
+      sleepUntil(armed + initDuration(milliseconds = T + 100))
+    o.openGate()
+    if set:
+      let r = o.oneOf(1)
+      check r.isSome and r.get.kind == evConnected
+    o.stop()
+    callee.done(ep)
+    set
+
+  sceneTest "[TRN-0378] [G61] callee: an admission the owner queued in time counts":
+    var cfg = fastConfig()
+    cfg.helloTimeout = T * Ms
+    let ep = newEndpoint()
+    let o = newOwner(cfg)
+    o.admit = amIgnore
+    check o.serve(1, dupCloexec(ep.listener))
+    let start = getMonoTime()
+    var raw = Raw(
+      fd: rawConnect(ep.path),
+      caller: callerConn(storageBoundary),
+      reader: newFrameReader(),
+    )
+    check writeAll(raw.fd, helloBytes(o.issue()))
+    let hello = o.expectKind(evHello)
+    let armed = getMonoTime() # the callee's deadline was armed before this
+    # Held inside a socket callback: the owner's answer waits in the channel.
+    o.closeGate()
+    let other = rawConnect(ep.path)
+    check writeAll(other, helloBytes(o.issue()))
+    check pumpUntil(
+      [o],
+      proc(): bool =
+        o.atGate(),
+    )
+    check hello.isSome
+    if hello.isSome:
+      o.admitHello(hello.get)
+    let set = inTime(start, "the admission")
+    if set:
+      sleepUntil(armed + initDuration(milliseconds = T + 100))
+    o.openGate()
+    if set:
+      let ms = raw.readMsgs(o, 1)
+      check ms.len == 1 and ms[0].kind == mkHello
+      check o.expectKind(evEstablished).isSome
+    discard fdClose(other)
+    discard fdClose(raw.fd)
+    o.done(ep)
+    set
+
+  sceneTest "[TRN-0378] [TRN-0381] a frame's wait ends with room another connection freed in time":
+    var cfg = fastConfig()
+    cfg.maxInputBytes = 24 * MiB
+    cfg.admissionTimeout = T * Ms
+    let (o, ep) = served(cfg)
+    var a = o.rawSession(ep)
+    var b = o.rawSession(ep)
+    # a holds 9 MiB being read; b's 16 MiB do not fit beside them.
+    let held = 9 * MiB
+    check writeAll(a.fd, @(prefixOf(held)) & newSeq[byte](held - 10))
+    o.settle(50)
+    let start = getMonoTime()
+    check writeAll(b.fd, @(prefixOf(int(MinFrameLimit))) & newSeq[byte](1000))
+    o.settle(50)
+    let armed = getMonoTime() # b's wait began before this
+    o.closeGate()
+    let other = rawConnect(ep.path)
+    check writeAll(other, helloBytes(o.issue()))
+    check pumpUntil(
+      [o],
+      proc(): bool =
+        o.atGate(),
+    )
+    # a's frame ends (its reservation is released when it is handled).
+    check writeAll(a.fd, newSeq[byte](10))
+    let set = inTime(start, "the end of a's frame")
+    if set:
+      sleepUntil(armed + initDuration(milliseconds = T + 100))
+    o.openGate()
+    if set:
+      # b was admitted: it waits for the rest of its frame, nothing is sent to it.
+      let ms = b.readMsgs(o, 1, 500)
+      check ms.len == 0
+    discard fdClose(other)
+    discard fdClose(a.fd)
+    discard fdClose(b.fd)
+    o.done(ep)
+    set
+
+  sceneTest "[TRN-0126] a write stall: a caller ready to read when the deadline is seen is not blamed":
+    var cfg = fastConfig()
+    cfg.callerUndeliveredBytes = int(MinFrameLimit)
+    cfg.writeStallTimeout = 2 * T * Ms
+    let (o, ep) = served(cfg)
+    discard o.attach(ep, 1)
+    o.subscribe(1, 1, Progress)
+    check o.waitN(evSubscription, 1).len == 1
+    o.autoRelease = false
+    # The caller pauses after 16 MiB, the 4th Event; the last two stay in the
+    # callee's output, whose stall deadline runs from about then.
+    let big = "x".repeat(4 * MiB)
+    for i in 0'u64 ..< 6:
+      o.publish(1, Progress, progress(i, big))
+    let first = o.waitN(evEvent, 1, 4, timeoutMs = 4 * BigWait)
+    check first.len == 4
+    # The callee's last write came after the 4th Event left the I/O thread,
+    # which may be long before this thread received it.
+    let paused = o.lastEventAt()
+    var credit = 0
+    for e in first:
+      credit += e.credit
+    # The release is handled, then the I/O thread is held before the caller
+    # reads again, across the callee's stall deadline.
+    o.closeGate()
+    o.release(1, credit)
+    o.callExists(99, 1)
+    check pumpUntil(
+      [o],
+      proc(): bool =
+        o.atGate(),
+    )
+    let set = inTime(paused, "the release")
+    if set:
+      # The callee wrote nothing since the I/O thread stopped here, so its
+      # deadline passes before this.
+      sleepUntil(getMonoTime() + initDuration(milliseconds = 2 * T + T div 2))
+    o.openGate()
+    if set:
+      o.autoRelease = true
+      let all = o.waitN(evEvent, 1, 6, timeoutMs = BigWait)
+      check all.len == 6
+      check o.log.countIt(it.kind == evClosed) == 0
+    o.done(ep)
+    set
 
 removeDir(base)
