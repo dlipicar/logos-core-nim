@@ -9,9 +9,8 @@
 #
 # The claim is for the Runtime engine (DECISIONS I88): RUNTIME l.72 defines a Runtime instance as the
 # engine plus an orchestration module, and until Tier 4b the host supplies the orchestration module
-# (docs/HOST-CONFIG.md lists its duties). The in-process realizer is an implementation-local
-# realization mechanism (l.212), not a Module Loader, so the Loader-conditional rules (l.1641, l.3754,
-# l.3820-3825, l.3863) are not triggered (S11-1 (b); LOADER is deferred:tier-4b as a whole).
+# (docs/HOST-CONFIG.md lists its duties). The Runtime binds a `logos_module_loader` instance (I89), so
+# the Loader-conditional rules (l.1641, l.3754, l.3820-3825, l.3863) are claimed with it.
 
 default = "claimed"
 
@@ -52,13 +51,6 @@ default = "claimed"
 "RUN-0805" = "deferred:tier-4b"
 "RUN-0806" = "deferred:tier-4b"
 "RUN-0832" = "deferred:tier-4b"
-# Loss of a Module Loader provider (l.3820-3825): no Module Loader is used until the realizer is a
-# logos_module_loader instance, the first item of Tier 4b.
-"RUN-1067" = "deferred:tier-4b"
-"RUN-1068" = "deferred:tier-4b"
-"RUN-1069" = "deferred:tier-4b"
-"RUN-1070" = "deferred:tier-4b"
-"RUN-1071" = "deferred:tier-4b"
 # Package-backed selection: the Package Manager handoff (Tier 4b).
 "RUN-0844" = "deferred:tier-4b"
 "RUN-0995" = "deferred:tier-4b"
@@ -67,12 +59,11 @@ default = "claimed"
 "RUN-1023" = "deferred:tier-4b"
 "RUN-1024" = "deferred:tier-4b"
 "RUN-1025" = "deferred:tier-4b"
-# Upgrade and transfer of a state assignment (G92, G143).
+# Upgrade and transfer of a state assignment (G92, G143). RUN-0999 and RUN-1001 need no transfer:
+# claimed by tests (I89, 4b-1d).
 "RUN-0925" = "deferred:tier-4b"
 "RUN-0998" = "deferred:tier-4b"
-"RUN-0999" = "deferred:tier-4b"
 "RUN-1000" = "deferred:tier-4b"
-"RUN-1001" = "deferred:tier-4b"
 # Requirements on the orchestration module (TIER4-PLAN decision 5; RUNTIME l.72, l.187, l.194, l.3774,
 # l.3786, l.3803), which the host supplies until the default orchestration module of Tier 4b.
 "RUN-0021" = "deferred:tier-4b"

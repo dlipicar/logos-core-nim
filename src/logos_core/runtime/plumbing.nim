@@ -12,7 +12,7 @@
 import std/[atomics, locks, sysrand, times, typedthreads]
 import results
 import ../abi/types
-import ../base/clock
+import ../base/[clock, testhooks]
 import ../hash/hashinput
 import ../iface/outcome
 import ../authority/facts
@@ -79,6 +79,88 @@ func namesLoader*(id: string, rec: ModuleRecord): bool =
   ## them (host configuration, `create_module` and declarations cannot).
   id == LoaderInstanceId or rec.module == LoaderModuleName or
     (rec.strategy == stDirectStatic and rec.binding == LoaderBindingId)
+
+testHooksMarker("plumbing")
+
+when defined(lcnTestHooks):
+  type
+    LoaderFaults* = object
+      ## [D27 revised 2026-11-13; plan §2.12] Faults for the next Module Loader
+      ## call of each method, each taken once by the call it hits.
+      reportFailure*: bool ## the Loader reports its own failure now
+      garble*: set[LoaderMethod]
+        ## the response is replaced by bytes that do not decode: an invalid
+        ## response, the Loader's work done
+      failInvocation*: set[LoaderMethod] ## MODULE_ERROR before any work
+      loseReply*: set[LoaderMethod]
+        ## the Loader's work done, its reply lost: MODULE_ERROR instead
+      stall*: set[LoaderMethod]
+        ## the Loader's work done, its reply held until `releaseStall`
+
+    LoaderFaultBoxObj = object
+      lock: Lock
+      cond: Cond
+      faults: LoaderFaults
+      stalled: int ## calls holding their reply
+      releases: int ## `releaseStall` calls so far
+
+    LoaderFaultBox* = ptr LoaderFaultBoxObj
+
+  proc newLoaderFaultBox*(): LoaderFaultBox =
+    result = createShared(LoaderFaultBoxObj)
+    initLock(result.lock)
+    initCond(result.cond)
+
+  proc freeLoaderFaultBox*(b: LoaderFaultBox) =
+    if b != nil:
+      deinitCond(b.cond)
+      deinitLock(b.lock)
+      deallocShared(b)
+
+  proc setFaults*(b: LoaderFaultBox, f: LoaderFaults) =
+    withLock b.lock:
+      b.faults.garble = b.faults.garble + f.garble
+      b.faults.failInvocation = b.faults.failInvocation + f.failInvocation
+      b.faults.loseReply = b.faults.loseReply + f.loseReply
+      b.faults.stall = b.faults.stall + f.stall
+
+  proc takeFaults*(b: LoaderFaultBox, m: LoaderMethod): LoaderFaults =
+    ## The faults for one call of `m`, each taken; `reportFailure` unused.
+    withLock b.lock:
+      for (have, take) in [
+        (addr b.faults.garble, addr result.garble),
+        (addr b.faults.failInvocation, addr result.failInvocation),
+        (addr b.faults.loseReply, addr result.loseReply),
+        (addr b.faults.stall, addr result.stall),
+      ]:
+        if m in have[]:
+          take[].incl(m)
+          have[].excl(m)
+
+  proc clearFaults*(b: LoaderFaultBox) =
+    ## Every armed fault is dropped and every held call replies.
+    withLock b.lock:
+      b.faults = LoaderFaults()
+      inc b.releases
+      broadcast(b.cond)
+
+  proc stallHere*(b: LoaderFaultBox) =
+    ## Holds the calling worker until the next `releaseStall`.
+    withLock b.lock:
+      let gen = b.releases
+      inc b.stalled
+      while b.releases == gen:
+        wait(b.cond, b.lock)
+      dec b.stalled
+
+  proc releaseStall*(b: LoaderFaultBox) =
+    withLock b.lock:
+      inc b.releases
+      broadcast(b.cond)
+
+  proc stalledCalls*(b: LoaderFaultBox): int =
+    withLock b.lock:
+      result = b.stalled
 
 type
   ModuleState* = enum
@@ -241,6 +323,13 @@ type
       ## [IMPL; I88] how long queued calls wait so with every call worker,
       ## overflow ones included, busy before the oldest is refused; default 1 s
 
+  TerminationHook* =
+    proc(data: pointer, unresolved: seq[string]) {.nimcall, gcsafe, raises: [].}
+    ## [IMPL-DECISION G249; plan §2.11 step 6] Called once, on the Runtime
+    ## thread, when the Module Loader failed owning realizations the process
+    ## must end to clean (RUNTIME l.3823): their instance ids. It must not
+    ## call into the engine.
+
   EngineConfig* = object
     runtimeInstanceId*: string
       ## [SPEC RUNTIME §9.2 l.2665-2672] this Runtime's identity, assigned by
@@ -296,6 +385,11 @@ type
       ## asynchronous calls, Runtime Control, configuration values); 128 to
       ## `DefaultMaxDepth`, and 0 is `DefaultMaxDepth`
     limits*: EngineLimits ## [IMPL; I86]
+    onTerminationRequired*: TerminationHook
+      ## [IMPL-DECISION G249 (S4b1-1 (a))] an in-process host's (logosd's)
+      ## notice that it must end its process; nil: none. A C host learns it
+      ## from `logos_runtime_wait_for_shutdown`.
+    terminationData*: pointer ## passed to `onTerminationRequired`
 
   # Messages ---------------------------------------------------------------------
   RequestKind* = enum
@@ -349,6 +443,9 @@ type
     rqConfigCommit
       ## [I87] phase 2 of a staging `update_configuration`: the value the
       ## caller's thread validated, committed if phase 1's checks still hold
+    rqConfirmTermination
+      ## [D27 revised; plan §2.12] `confirmTerminationForTests`: served only
+      ## in a build with `lcnTestHooks`
       ## [SPEC RUNTIME §10.1 l.3801-3804] an execution authorization ended
       ## outside the Runtime's own checks (`engine.stopForAuthority`)
 
@@ -613,6 +710,10 @@ type
     access*: pointer ## the Loader instance's invocation-access state
     ticket*: ptr CallTicket ## cancelled when the attempt is cancelled or expires
     runtimeId*: string
+    confirming*: bool
+      ## [plan §2.11 step 4, §2.12] a release made for the protected
+      ## mechanism's confirmation, after the Loader was lost; every other job
+      ## is answered as an invocation failure without a call once it is
 
   EvalJobKind* = enum
     ejQuit ## first and without fields, as `MsgKind`
@@ -762,6 +863,12 @@ type
       ## [I89] the private handoffs with the Module Loader; made before any
       ## thread starts and freed after every thread has left, so a Loader
       ## thread still running never reads a freed table
+    loaderLost*: Atomic[bool]
+      ## [SPEC RUNTIME l.1657; plan §2.11 step 1] the Module Loader has
+      ## failed: a queued Loader job is answered as an invocation failure
+      ## without a call
+    when defined(lcnTestHooks):
+      faults*: LoaderFaultBox ## [D27 revised; plan §2.12] the injected faults
 
   Engine* = ptr Shared
 

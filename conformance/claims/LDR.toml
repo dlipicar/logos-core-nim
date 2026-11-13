@@ -5,14 +5,39 @@
 #   deferred:tier-4b      not built yet: logosctl, logosd, the Module Host and what they bring
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
-
-# LOADER as a whole is Tier 4b (DECISIONS I88, S11-1 option (b)). The in-process realizer follows
-# LOADER's direct strategies but is an implementation-local realization mechanism (RUNTIME l.212),
-# not a Module Loader provider backed by a local module instance (LOADER l.23-26), so nothing of
-# LOADER is claimed (RUNTIME l.27; BCP l.281). The [LDR-NNNN] tags on its tests stay as evidence.
-# Representing the realizer as a logos_module_loader instance is the first item of Tier 4b (TF-36).
-default = "deferred:tier-4b"
+# A `[units]` entry gives one requirement unit its own status, overriding its section's.
+#
+# The Runtime binds a `logos_module_loader` instance (DECISIONS I89, Tier 4b step 4b-1): a module
+# that advertises the direct strategies only (K10, decision 10), established by the Runtime's
+# bootstrap and called through its contract. LOADER is claimed for the direct strategies; the hosted
+# strategy (the Module Host, 4b-3) is deferred, as a direct-only Loader advertises none (l.252-259).
+default = "claimed"
 
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
+# The hosted provider endpoint and the trusted transport adapter handoff: hosted realizations only.
+"§5.3" = "deferred:tier-4b"
+"§5.4" = "deferred:tier-4b"
+
+[units]
+# Rules of §5.3 that hold for every realization: a direct one has no endpoint.
+"LDR-0047" = "claimed"
+"LDR-0052" = "claimed"
+"LDR-0053" = "claimed"
+# The hosted strategy (4b-3); a direct-only Loader advertises no hosted strategy (K10, decision 10).
+"LDR-0034" = "deferred:tier-4b"
+"LDR-0040" = "deferred:tier-4b"
+"LDR-0081" = "deferred:tier-4b"
+"LDR-0082" = "deferred:tier-4b"
+"LDR-0083" = "deferred:tier-4b"
+"LDR-0101" = "deferred:tier-4b"
+"LDR-0145" = "deferred:tier-4b"
+"LDR-0146" = "deferred:tier-4b"
+"LDR-0147" = "deferred:tier-4b"
+# `force_release` is never advertised (K7); 4b-3 labels them `out-of-scope`.
+"LDR-0163" = "deferred:tier-4b"
+"LDR-0164" = "deferred:tier-4b"
+# Absence not established: the hosted strategy, 4b-3 (an init that fails and writes a context
+# leaves no record here, K35).
+"LDR-0125" = "deferred:tier-4b"

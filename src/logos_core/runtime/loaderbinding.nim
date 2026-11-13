@@ -80,6 +80,10 @@ type
       ## [SPEC RUNTIME l.3823-3828] its cleanup ownership is kept after its
       ## Loader was lost or its answer could not be resolved: never used,
       ## never released in this process
+    lost*: bool
+      ## [plan §2.9 (R5), §2.11 (R4)] unresolved because its Loader failed or
+      ## the Loader's answer about it was lost: a stop is accepted and keeps
+      ## `error`. The id is empty while a `realize` lost with it is unanswered.
     endpoint*: Opt[string]
       ## [SPEC LOADER §7] a hosted realization's endpoint; never set by the
       ## direct strategies (4b-3)

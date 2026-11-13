@@ -393,8 +393,8 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   store. RUNTIME l.2666-2667 require the host to accept a Runtime-generated id before it is used:
   choosing this format, or a store without `runtime_instance_id`, is that acceptance (DECISIONS G192,
   interim).
-- **What `start` waits for.** `start` returns once the orchestration instance is `ready` (DECISIONS
-  G190, interim). Other modules need not be ready (RUNTIME l.3973-3974), and their later failures do
+- **What `start` waits for.** `start` returns once the Module Loader is bound and then the
+  orchestration instance is `ready` (DECISIONS G190, interim; "The Module Loader"). Other modules need not be ready (RUNTIME l.3973-3974), and their later failures do
   not affect it. `start` returns `LOGOS_ERR_NOT_AUTHORISED` if the policy denies starting the
   orchestration instance, `LOGOS_ERR_CANCELLED` if a Runtime Control `shutdown_runtime` was accepted
   first (RUN-0759), and `LOGOS_ERR_MODULE` for any other failure, the startup deadline included, with
@@ -460,6 +460,53 @@ and the engine does not do them for it:
 
 Stopping or failure of the orchestration module pauses automatic startup and recovery (l.3806).
 
+## The Module Loader
+
+Every module instance but one is realized and released through a Module Loader that the Runtime
+binds as a system service (RUNTIME l.1635-1667; DECISIONS I89). The Loader is the module
+`logos_module_loader`, built into the library as a `direct_static` binding. It advertises the two
+direct strategies only; a `hosted_dynamic` record is refused with `unsupported-strategy` until the
+Module Host exists.
+
+- **Built in, never configured** (BOOTSTRAP l.287; DECISIONS G246, G253). The Runtime's construction
+  always establishes, authorizes and binds the Loader, before anything else. Its instance id, module
+  name and static binding are all `logos_module_loader`, and they are reserved: a `modules` entry,
+  a declaration or `orchestration` that names them makes `create` return `LOGOS_ERR_INVALID_PARAMS`, and so does
+  `logos_runtime_register_binding` with that binding id. No configuration, registration or module can
+  replace or configure the Loader. The policy is not asked about it: no execution decision and no
+  `execute` check is made for it (CAPABILITY AUTHORITY l.343), and its permission settings are the
+  constant form every instance has until permission profiles exist.
+- **Established first at `start`.** `start` realizes the Loader, checks that its primary contract is
+  the pinned Module Loader contract and binds it, and only then realizes the orchestration instance
+  through it. A Loader that cannot be established makes `start` return `LOGOS_ERR_MODULE` "the Module
+  Loader cannot start: …", after whatever it started has been released.
+- **Its own lifecycle** (DECISIONS G246). `stop_module` of the Loader is `LOGOS_ERR_NOT_READY` while
+  it owns a realization; owning none, it stops, and every later start of any instance is
+  `LOGOS_ERR_NOT_READY`. `recover_module` and `retire_module` of the Loader are `LOGOS_ERR_NOT_READY`.
+  Every route to it is `LOGOS_ERR_NOT_AUTHORISED`, and the Loader serves only the Runtime's own call
+  (DECISIONS G251), so no module can call it.
+- **Answers that are lost** (DECISIONS G252). When a `realize` or `release` call fails or its answer
+  is lost, the Runtime asks the Loader's `get_status` whether the realization exists, and releases it
+  or completes the stop accordingly. If that answer is lost too, the instance becomes `error`
+  (`other`, "the Module Loader's answer was lost and could not be resolved") with its realization
+  `unknown`; a stop of it is accepted. An answer that breaks the contract fails the Loader.
+- **Loader loss** (RUNTIME l.3813-3825; DECISIONS G249). When the Loader fails (it reports its own
+  failure, or answers invalidly), every instance it realized becomes `error` with the classification
+  `other` and the reason "its Module Loader failed", its realization `unknown` and its routes failed;
+  execution intent is kept, and a `stop_module` of such an instance is accepted (intent cancelled,
+  still `error`). Nothing starts again in this Runtime: every start and recovery is
+  `LOGOS_ERR_NOT_READY`. The Runtime cannot release what the failed Loader owns, so when it owned
+  anything **the host must end its process**: the Runtime writes a diagnostic "termination
+  required…", `logos_runtime_wait_for_shutdown` returns `LOGOS_ERR_MODULE` with a message ending "the
+  Module Loader failed: the host process must end", and `logos_runtime_destroy` returns
+  `LOGOS_ERR_NOT_READY` with the same text. A Loader that fails owning nothing is released, and only
+  starts are refused.
+- **Shutdown** (RUNTIME l.3847-3864). Every instance the Loader realized is released before the
+  Loader. A release still running when the shutdown grace ends makes shutdown complete with
+  `LOGOS_ERR_MODULE`; the Loader stays, asked only to release, until that release returns, and
+  `destroy` is `LOGOS_ERR_NOT_READY` until then. Keeping the Loader delays no withdrawal: each
+  instance's routes and Runtime Control binding end when its stop begins.
+
 ## Runtime limits
 
 Every limit of the engine in one place (RUNTIME l.3394-3396 and BCP l.369-370 ask for them to be
@@ -468,7 +515,8 @@ this file; the others are fixed (tests set the engine limits smaller).
 
 | Limit | Value | Set |
 |---|---|---|
-| known module instances, retained ones included (`MaxInstances`) | 1024; past it `create_module` is `LOGOS_ERR_MODULE` | fixed |
+| known module instances, retained ones included (`MaxInstances`) | 1024, the Module Loader instance among them; past it `create_module` is `LOGOS_ERR_MODULE` | fixed |
+| the Module Loader | one instance, with one thread of its own; its calls run on the lifecycle workers | fixed |
 | the persistent store's snapshot (`MaxStoreBytes`) | 64 MiB | fixed |
 | lifecycle workers (`MaxWorkers`): bind, init, destroy, completion callbacks, `observe_end` handlers, apply hooks | 64, started on demand | fixed |
 | overflow lifecycle workers (`MaxNestedWorkers`) | 64 more, one per `starvationDelay` (50 ms) while jobs wait behind 64 busy workers and none finishes; nothing is ever refused (DECISIONS G242) | fixed |
@@ -490,6 +538,8 @@ this file; the others are fixed (tests set the engine limits smaller).
 
 ## Loaded code
 
+The Module Loader is the ABI caller for every instance but its own: it binds, initializes and
+destroys module code (LOADER §6), and the Runtime's bootstrap mechanism does so only for the Loader.
 A `direct_dynamic` library, once mapped, stays mapped for the Runtime's life, and a static binding
 stays registered until `logos_runtime_destroy`: bindings are never unloaded (DECISIONS I88, deviation
 1; TF-03). RUNTIME l.387 requires only that a binding be kept until every context made from it has
@@ -595,11 +645,11 @@ identity, and every configured instance is new.
     keeps cannot be given to another instance (`LOGOS_ERR_INVALID_PARAMS`).
   - An instance dropped from the configuration stays known, with its state, until it is retired.
 - **Resumption after a restart, and retries after a failure** (RUNTIME l.3775).
-  - *Resumption.* At every `start`, the Runtime re-establishes the orchestration instance: a retained
-    `requested` intent whose origin is the host is resumed, with its revision and origin kept;
-    otherwise (never started, explicitly stopped, or requested by a module) the orchestration
-    instance is started anew with the host as origin, and a diagnostic says so (DECISIONS G191,
-    interim). The Runtime starts nothing else. Any other instance's retained `requested` intent is
+  - *Resumption.* At every `start`, the Runtime re-establishes the Module Loader instance and then
+    the orchestration instance, each the same way: a retained `requested` intent whose origin is the
+    host is resumed, with its revision and origin kept; otherwise (never started, explicitly
+    stopped, or requested by a module) the instance is started anew with the host as origin, and a
+    diagnostic says so (DECISIONS G191, interim; I89). The Runtime starts nothing else. Any other instance's retained `requested` intent is
     acted on only if the orchestration module resumes it, by `recover_module` (RUNTIME l.3774).
   - *How instances come back.* An instance that was running when the Runtime ended cleanly comes back
     `unloaded`, with its intent. One that was running when the Runtime ended without completing
@@ -678,24 +728,27 @@ them to be documented).
   `LOGOS_ERR_MODULE`. A consumer's snapshots end with its execution attempt (a stop, a failure, a
   restart). Past an `observe_end` limit the registration is `LOGOS_ERR_MODULE` and changes nothing
   (INTERFACE l.1483-1484). Nothing here is persisted.
-- **Execution summary.** `get_execution_summary` reports `selection.implementation` as
-  `implementation-specific`: the in-process realizer is an implementation-local mechanism, not a
-  Module Loader instance (RUNTIME l.212, l.3527-3528; DECISIONS G230), and no selection carries
+- **Execution summary.** `get_execution_summary` reports `selection.implementation` as the
+  strategy the Module Loader realizes the instance with, `direct_static` or `direct_dynamic`. The
+  Loader instance itself, which the Runtime's bootstrap mechanism realizes, reports
+  `implementation-specific` (RUNTIME l.212, l.3523-3528; DECISIONS G57, I89). No selection carries
   `package` or `signer` yet.
   `realization` is `current` while the Runtime owns a realization for the instance, a cleanup still
-  within its deadline included; `unknown` while a Module Loader bind is unresolved or a bind,
-  initialization or cleanup has outlived its deadline (DECISIONS G180); `absent` otherwise.
+  within its deadline included; `unknown` while a `realize` has not been answered, a bind,
+  initialization or cleanup has outlived its deadline (DECISIONS G180), or the Loader's answer about
+  the realization was lost or its Loader failed (DECISIONS G246, G252); `absent` otherwise.
 - **A realization change is a commit.** When `realization` changes without a lifecycle transition (a
   late cleanup ending, a dynamic bind returning), the instance's execution revision advances and the
   change is persisted (DECISIONS G227, interim). A guarded `start_module`, `recover_module` or
   `retire_module` prepared with the revision read before it is `LOGOS_ERR_INVALID_PARAMS`: read the
   revision again (`get_readiness`, `get_execution_summary`) and retry.
 - **Failure text.** A module record carries the failure classification. Its `reason` is the
-  Runtime's or the module's own text, cut to 512 bytes. A failure of the in-process realizer other
-  than a failed `_MODULE_init` (which is `initialization-failed`) is classified `other` and carries
-  no `reason`, since the realizer's message may name host paths (RUNTIME l.1901-1904); the realizer
-  is not a Module Loader, so there are no `loader-<code>` classifications (RUNTIME l.3754; DECISIONS
-  I88, S11-1). The message stays in the Runtime's diagnostics and is not persisted. A consumer of
+  Runtime's or the module's own text, cut to 512 bytes. A typed Module Loader error is classified
+  `loader-<code>`, `loader-artifact-unavailable` for instance (RUNTIME l.3754), except a failed
+  `_MODULE_init`, which is `initialization-failed`; neither carries a `reason`, since the Loader's
+  message may name host paths (RUNTIME l.1901-1904). The message stays in the Runtime's diagnostics
+  and is not persisted. A failure of the bootstrap mechanism while it realizes the Loader itself is
+  `other` (DECISIONS G57). A consumer of
   module records, readiness results, module-state events or execution summaries must treat a
   classification it does not recognize as an unspecified failure and never derive a restart policy
   from its spelling (RUNTIME l.3756): later specs and Tier 4b add classifications.

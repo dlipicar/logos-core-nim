@@ -27,11 +27,15 @@ The specs are being revised, so the work is ordered by how settled each area is
   (`docs/AUTHORITY-POLICY.md`), and the Runtime's authorization, call records and evidence; module
   configuration; the unix-stream transport I/O layer; and the Host Embedding API, `liblogos_runtime`
   (I74–I88). RUNTIME (for the engine; the host supplies the orchestration module), CONFIG, the
-  Capability Authority and TRANSPORT are claimed in `conformance/claims/`; LOADER is not, since the
-  realizer is not a Module Loader instance yet ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
-- Not yet: Tier 4b (the Module Host, transported routes, `logosd` and `logosctl`, the default
-  orchestration module, the realizer as a Module Loader instance, package installation into the
-  Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
+  Capability Authority and TRANSPORT are claimed in `conformance/claims/`
+  ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
+- Tier 4b, step 4b-1: the Module Loader as a module. `logos_module_loader`, a `direct_static` module
+  built into the library, is established and bound at every `start`, and the Runtime realizes,
+  releases and configures every other instance through its contract; lost Loader answers are
+  resolved with `get_status`, and a failed Loader leaves its instances `error` and asks the host to
+  end its process (I89). LOADER is claimed for the direct strategies.
+- Not yet: the rest of Tier 4b (the Module Host and the hosted strategy, transported routes, `logosd`
+  and `logosctl`, the default orchestration module, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 

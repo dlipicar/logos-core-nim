@@ -243,7 +243,7 @@ suite "ldr.module: realize (LOADER §6, §7, §10)":
   teardown:
     h.close()
 
-  test "[LDR-0059] [LDR-0060] [LDR-0074] [LDR-0075] [LDR-0076] [LDR-0077] [LDR-0078] [LDR-0039] [LDR-0041] [RUN-0073] [RUN-0198] [CFG-0067] [IFC-0221] [IFC-0484] the initialization input carries the private handoff and the mapped state directory":
+  test "[LDR-0059] [LDR-0060] [LDR-0069] [LDR-0070] [LDR-0084] [LDR-0074] [LDR-0075] [LDR-0076] [LDR-0077] [LDR-0078] [LDR-0039] [LDR-0041] [RUN-0073] [RUN-0198] [CFG-0067] [IFC-0221] [IFC-0484] the initialization input carries the private handoff and the mapped state directory":
     h = open()
     let x = h.realize("c1", "plain_consumer", "plain", state = Opt.some("c1"))
     check x.response.get.active.isSome
@@ -264,7 +264,7 @@ suite "ldr.module: realize (LOADER §6, §7, §10)":
     check h.realize("c2", "plain_consumer", "plain").response.get.active.isSome
     check seenStateDir.len == 0
 
-  test "[LDR-0098] [LDR-0099] [LDR-0100] [LDR-0020] [LDR-0052] [LDR-0053] [LDR-0102] a provider's record carries its exact call surface, a consumer's none; no direct record has an endpoint":
+  test "[LDR-0098] [LDR-0099] [LDR-0100] [LDR-0020] [LDR-0052] [LDR-0053] [LDR-0102] [LDR-0061] a provider's record carries its exact call surface, a consumer's none; no direct record has an endpoint":
     h = open()
     let m = h.realize("m1", "meter_module", "meter").response.get.active.get
     var n: csize_t
@@ -273,9 +273,13 @@ suite "ldr.module: realize (LOADER §6, §7, §10)":
     )[0][1])(addr n)
     check m.call_surface ==
       Opt.some(@(cast[ptr UncheckedArray[uint8]](p).toOpenArray(0, int(n) - 1)))
+    # [LDR-0061] The record names the requested instance, never the static
+    # binding's id or the realization id.
     check m.provider_endpoint.isNone and m.module_instance == "m1"
+    check m.realization != "m1" and m.realization != "meter"
     let c = h.realize("c1", "plain_consumer", "plain").response.get.active.get
     check c.call_surface.isNone and c.provider_endpoint.isNone
+    check c.module_instance == "c1"
 
   test "[LDR-0152] [IMPL-DECISION G250] the outbound handoff of an active realization is in the side table until its destroy has returned":
     h = open()
@@ -570,7 +574,7 @@ suite "ldr.module: status (LOADER §7, §11)":
     check h.status("m9", Opt.some(id)).statusError == Opt.some(lecRealizationNotFound)
     check h.liveCount == 1
 
-  test "[LDR-0137] [LDR-0139] status during a realize held in its init is the record before; another instance completes meanwhile":
+  test "[LDR-0137] [LDR-0139] [LDR-0085] status during a realize held in its init is the record before; another instance completes meanwhile":
     h = open()
     holdInit.store(true)
     doAssert h.side.putInbound("c1", targetServices()).isOk

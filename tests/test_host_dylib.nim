@@ -11,7 +11,7 @@
 ## `host/embed_main.c` is a program that includes only `logos_runtime.h` and
 ## links against the library.
 
-import std/[monotimes, os, osproc, strutils, times]
+import std/[monotimes, os, osproc, sequtils, strutils, times]
 import unittest2
 import ../src/logos_core/abi/host
 import ../src/logos_core/crypto/blake3
@@ -288,6 +288,38 @@ suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
     check after.intent_revision == crashed.intent_revision
     check after.revision > crashed.revision
     check after.failure.isNone
+
+  test "[RUN-0999] a configured direct_dynamic instance with the artifact of a retained one gets none of its state":
+    let base = work / "run0999"
+    removeDir(base)
+    proc deploymentOf(instance: string): LcnAppConfig =
+      var m = sensor()
+      m.instance = instance
+      m.state_assignment = Opt.some(instance & "-state")
+      result = deployment()
+      result.modules = @[m]
+      result.orchestration = instance
+      result.runtime.store_dir = Opt.some(base / "store")
+      result.runtime.state_root = Opt.some(base / "state")
+
+    proc run(c: LcnAppConfig) =
+      let (rt, created) = create(c)
+      check created.ec == ecOk
+      check call(hhStart, rt).ec == ecOk
+      rt.finish()
+
+    run(deploymentOf("a"))
+    let aDir = base / "state" / "a-state"
+    check dirExists(aDir)
+    writeFile(aDir / "data", "a's state")
+    # `a` stays retained; `b` has the same module name and artifact (its hash
+    # is the version of a host-configured declaration) and its own assignment.
+    run(deploymentOf("b"))
+    let bDir = base / "state" / "b-state"
+    check dirExists(bDir)
+    check toSeq(walkDirRec(bDir)).len == 0
+    check toSeq(walkDirRec(aDir, relative = true)) == @["data"]
+    check readFile(aDir / "data") == "a's state"
 
   test "[RUN-0725] [RUN-0746] start to destroy: a C static binding, a library's addresses from dlsym, a direct_dynamic record; a wait on a C thread":
     torReset(TorAutostart)

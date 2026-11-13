@@ -67,21 +67,21 @@ Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --close
 
 - **RUNTIME** is claimed for the **Runtime engine** in direct mode. RUNTIME l.72 defines a Runtime
   instance as the engine plus an orchestration module; until Tier 4b the host supplies the
-  orchestration module, and `docs/HOST-CONFIG.md` ("Orchestration duties") lists what it must do. The
-  in-process realizer is an implementation-local realization mechanism (l.212), not a Module Loader,
-  so the Loader-conditional rules are not triggered. Deferred to Tier 4b: local transport mode
-  (§4.2.1, §6.2 and the hosted and transported units), the orchestration module's duties, Loader
-  loss, package-backed selection, upgrade transfer, and the stops caused by permission
-  reconciliation; to Tier 5: remote Runtimes, facades, enrollment, listeners and exports. Out of
-  scope: §5.2.1 singleton mode (a MAY not taken, l.1094), the Runtime side of system-service sessions
-  over unix-stream (a MAY profile left unused under G48(a)), and requirements on modules,
-  applications, specifications and deployments.
-- **LOADER** is not claimed: it is `deferred:tier-4b` as a whole. The realizer follows LOADER's
-  direct strategies, records and error codes ("a LOADER-shaped internal realizer"), but LOADER's
-  subject is a Module Loader provider backed by a local module instance (LOADER l.23-26), and a
-  Runtime may conform without one (RUNTIME l.27; BCP l.281). Its tests keep their `[LDR-…]` tags as
-  evidence; representing the realizer as a `logos_module_loader` instance is the first item of Tier 4b
-  (TF-36).
+  orchestration module, and `docs/HOST-CONFIG.md` ("Orchestration duties") lists what it must do.
+  The in-process realizer is an implementation-local realization mechanism (l.212), not a Module
+  Loader, so the Loader-conditional rules are not triggered (until Tier 4b step 4b-1, below).
+  Deferred to Tier 4b: local transport mode (§4.2.1, §6.2 and the hosted and transported units), the
+  orchestration module's duties, Loader loss, package-backed selection, upgrade transfer, and the
+  stops caused by permission reconciliation; to Tier 5: remote Runtimes, facades, enrollment,
+  listeners and exports. Out of scope: §5.2.1 singleton mode (a MAY not taken, l.1094), the Runtime
+  side of system-service sessions over unix-stream (a MAY profile left unused under G48(a)), and
+  requirements on modules, applications, specifications and deployments.
+- **LOADER** is not claimed (until Tier 4b step 4b-1, below): it is `deferred:tier-4b` as a whole.
+  The realizer follows LOADER's direct strategies, records and error codes ("a LOADER-shaped
+  internal realizer"), but LOADER's subject is a Module Loader provider backed by a local module
+  instance (LOADER l.23-26), and a Runtime may conform without one (RUNTIME l.27; BCP l.281). Its
+  tests keep their `[LDR-…]` tags as evidence; representing the realizer as a `logos_module_loader`
+  instance is the first item of Tier 4b (TF-36).
 - **CONFIGURATION** is claimed in full for direct mode.
 - **CAPABILITY AUTHORITY** is claimed for the local Authority and the Runtime's side of authority.
   Deferred: §3.5 permission profiles, enforcers and definitions (G110; Tier 4b), hosted placements, OS
@@ -98,6 +98,24 @@ Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --close
   Package Manager handoff and complete-system composition are Tier 4b, installation and platform
   profiles Tier 5 (with the BCP's QUIC and Package Manager realization profiles, §5.3). The BCP's
   duties of specification authors (§5.2, §5.5) are out of scope.
+
+### What Tier 4b step 4b-1 changes
+
+Tier 4b step 4b-1 (DECISIONS I89) binds a `logos_module_loader` instance, so three entries above
+change:
+
+- **RUNTIME**: the Runtime's bootstrap mechanism realizes only the Module Loader instance (l.212;
+  G57), and every other instance is realized and released through the bound Loader's contract
+  (l.1641). The Loader-conditional rules are claimed with it: `loader-<code>` classifications
+  (l.3754), lost Loader answers (l.3793; G252), Loader loss (l.3813-3825; the host must end its
+  process, G249) and the shutdown order (l.3847-3864). The rest of the Tier 4b list above stays
+  deferred.
+- **LOADER** is claimed for the direct strategies. The Loader advertises `direct_static` and
+  `direct_dynamic` only (plan K10), so the hosted strategy, the hosted provider endpoint and the
+  trusted transport adapter handoff (§5.3, §5.4) wait for the Module Host (step 4b-3), and
+  `force_release` is never advertised (K7). `conformance/claims/LDR.toml` lists the deferred units.
+- **SYSTEM BCP**: bootstrap's Loader step (BCP l.287-290, BCP-0021 to BCP-0024) is tagged by tests,
+  and its units keep the BCP's `deferred:tier-4b` default until logosd composes the system (4b-8).
 
 ## Properties not claimed
 
@@ -230,9 +248,19 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
 4. A hook does nothing until the Runtime's host selects it. In an in-process suite, that is a call by the
    test.
 
-The hooks so far: `host.setPolicyForTests` (the authority policy the next `start` installs) and the
-Module Loader's request journal (`engine.loaderJournalForTests`, kept in the engine's side table). No
-deployment binary contains them.
+The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable` and `loader`):
+
+- `host.setPolicyForTests`: the authority policy the next `start` installs.
+- `engine.loaderJournalForTests`: the Module Loader's request journal, kept in the engine's side table.
+- `engine.setLoaderFaultsForTests`, `releaseLoaderStallForTests`, `clearLoaderFaultsForTests` and
+  `stalledLoaderCallsForTests`: faults injected into the next Module Loader call of a method (an
+  invocation that fails before any work, a reply lost or garbled after the work, a reply held), or
+  the Loader's report of its own failure (DECISIONS I89 part 4b-1d).
+- `engine.confirmTerminationForTests`: stands in for the protected mechanism that confirms a lost
+  Loader's realizations are gone (RUNTIME l.3825; G249), which a deployment does by ending the host
+  process.
+
+No deployment binary contains them.
 
 ## Tagging tests
 

@@ -895,6 +895,32 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     h.release()
     e.finish()
 
+  test "[RUN-1001] a route stays bound to the provider it selected: when that provider stops it ends, and a new route selects another":
+    let e = fixtureEngine(config())
+    let a = e.started(meter(), "a")
+    let b = e.started(meter(), "b")
+    let (_, rc) = e.startClient("c")
+    let first = rc.establish("k", provider = Opt.some(providerAddress(a.providerId)))
+    check first.code == ecOk
+    let route = first.routesOf.routes[0].route
+    check first.routesOf.routes[0].target_provider.provider == a.providerId
+    check e.stop("a").tryGet.state == msUnloaded
+    let rec = e.routes().filterIt(it.route == route)
+    check rec.len == 1
+    check rec[0].state.kind == LogosNSRuntimeControlRouteStateKind.Failed
+    # [SPEC RUNTIME l.3482, l.3553] Never retargeted: it still names `a`, a
+    # renewal does not revive it and it cannot be materialized.
+    check rec[0].target_provider.provider == a.providerId
+    check rc.renew("r", route).code == ecNotReady
+    let (code, h) = rc.materialize(route)
+    check code != ecOk and h.vtable == nil
+    # Consumers acquire new routes: a new key selects `b`.
+    let next = rc.establish("k2")
+    check next.code == ecOk
+    check next.routesOf.routes[0].route != route
+    check next.routesOf.routes[0].target_provider.provider == b.providerId
+    e.finish()
+
   test "[RUN-0111] [RUN-0112] a stopped consumer closes its routes; a failed one fails them (l.624-626)":
     let e = fixtureEngine(config())
     discard e.started(meter())

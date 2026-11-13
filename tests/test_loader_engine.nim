@@ -12,17 +12,17 @@
 ## module as provider. Module code runs on the engine's workers and inside the
 ## Loader's calls, so the test modules keep their state in atomics.
 
-import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
+import std/[algorithm, atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
 import ../src/logos_core/abi/[checks, types]
-import ../src/logos_core/runtime/invoke
 import ../src/logos_core/cbor
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, provider, surface]
 import ../src/logos_core/iface/common_types
 import ../src/logos_core/loader/contract
 import ../src/logos_core/pins
+from ../src/logos_core/runtime/artifact import ArtifactRecord
 import ./support/[kitbuild, kitruntime, withoutloader]
 import ./kit/meter_impl
 import ./generated/meter_module_calls
@@ -73,6 +73,9 @@ proc retireOf(
 
 proc loaderOf(e: Engine): InstanceView =
   e.view(LoaderInstanceId).tryGet
+
+proc failureOf(v: InstanceView): string =
+  if v.failure.isSome: v.failure.get.classification else: ""
 
 const
   StaticKind =
@@ -131,6 +134,21 @@ suite "run.loader: the Loader instance (LOADER §1-§2; RUNTIME l.1635-1650) [IM
     let b = openEngine(cfg)
     check b.isErr and b.error.code == ecInvalidParams
 
+  test "[IMPL-DECISION G190] a Loader that cannot be established fails the open with MODULE_ERROR, leaving nothing running":
+    # The startup deadline bounds the Loader's own start; one that passes at
+    # once cannot be met.
+    var cfg = config()
+    cfg.startupDeadline = initDuration(nanoseconds = 1)
+    let r = openEngine(cfg)
+    check r.isErr and r.error.code == ecModule
+    check r.error.message.startsWith("the Module Loader cannot start: startup-timeout")
+    # The open released what it started: a new engine opens on the same
+    # directories.
+    cfg.startupDeadline = DefaultStartupDeadline
+    let e = fixtureEngine(cfg)
+    check e.loaderOf.state == msReady
+    e.finish()
+
   test "[RUN-0639] [IMPL-DECISION G57] its summary is implementation-specific; what it realizes reports the strategy":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient("c")
@@ -164,7 +182,7 @@ suite "run.loader: realization through the bound Loader (RUNTIME l.1641; BOOTSTR
     check e.view("m").tryGet.state == msUnloaded
     e.finish()
 
-  test "[BCP-0023] [BCP-0024] [LDR-0097] [RUN-1071] [RUN-0814] each start is a realize with the accepted record, each stop a release of that realization, and every realization id is fresh":
+  test "[BCP-0023] [BCP-0024] [LDR-0097] [LDR-0162] [RUN-1071] [RUN-0814] each start is a realize with the accepted record, each stop a release of that realization, and every realization id is fresh":
     var ids: seq[string]
     for round in 0 ..< 2:
       let e = fixtureEngine(config())
@@ -185,10 +203,51 @@ suite "run.loader: realization through the bound Loader (RUNTIME l.1641; BOOTSTR
         check r.instance == "m" and r.realization.len > 0
         ids.add(r.realization)
       e.finish()
-    # Two realizations per engine, and a new engine's Loader issues new ids.
+    # Two realizations per engine, and a new engine's Loader issues new ids:
+    # no id of an earlier Loader reaches a later one (LDR-0162).
     check ids.len == 4 and ids.deduplicate.len == 4
 
-  test "[LDR-0027] [LDR-0087] a start the policy denies sends nothing to the Loader":
+  test "[LDR-0023] [LDR-0028] the realize request carries the accepted record's descriptor and nothing else":
+    # What `realizeThroughLoader` sends: `realizeBytes` of the attempt's
+    # request, whose descriptor is the accepted record's (`descriptor`).
+    var digest: array[32, byte]
+    for i in 0 ..< 32:
+      digest[i] = byte(i + 1)
+    let artifact = ArtifactRecord(
+      id: "meter", localPath: work / "meter.so", hash: digest, hashSuite: HashSuiteId
+    )
+    let dynamic = ModuleRecord(
+      module: "meter_module", strategy: stDirectDynamic, artifact: artifact
+    )
+    proc keys(v: CborValue): seq[string] =
+      v.entries.mapIt(it.key.getText.get).sorted
+
+    let q = decodeCbor(
+      realizeBytes(
+        RealizeRequest(
+          moduleInstance: "d", descriptor: dynamic.descriptor, state: Opt.some("s1")
+        )
+      ).tryGet
+    ).tryGet
+    check q.keys == @["descriptor", "module_instance", "state"]
+    let d = q.lookup("descriptor").get
+    check d.keys == @["artifact", "module", "strategy"]
+    let a = d.lookup("artifact").get
+    check a.keys == @["hash", "hash_suite", "id", "local_path"]
+    check a.lookup("id").get.getText.get == artifact.id
+    check a.lookup("hash").get.getBytes.get == @(artifact.hash)
+    check a.lookup("hash_suite").get.getText.get == artifact.hashSuite
+    check a.lookup("local_path").get.getText.get == artifact.localPath
+    check q.lookup("state").get.keys == @["assignment"]
+    let direct =
+      ModuleRecord(module: "meter_module", strategy: stDirectStatic, binding: "meter")
+    let s = decodeCbor(
+      realizeBytes(RealizeRequest(moduleInstance: "m", descriptor: direct.descriptor)).tryGet
+    ).tryGet
+    check s.keys == @["descriptor", "module_instance"]
+    check s.lookup("descriptor").get.keys == @["module", "static_binding", "strategy"]
+
+  test "[LDR-0027] [LDR-0087] [LDR-0143] a start the policy denies sends nothing to the Loader":
     let e =
       fixtureEngine(config(denying(deny(action = Opt.some(aaExecute), target = "m"))))
     discard e.create(meter(), "m").tryGet
@@ -303,11 +362,36 @@ suite "run.loader: lifecycle and routes of the Loader instance (RUNTIME l.3563-3
     check e.journal(lmRealize).len == 1 # the client's own
     e.finish()
 
+# Injected faults --------------------------------------------------------------------
+
+var startReply: Atomic[int] ## the state `startOn` got, or -1; -2 while it waits
+
+proc startOn(arg: (Engine, string)) {.thread.} =
+  let r = arg[0].start(arg[1])
+  startReply.store(
+    if r.isOk:
+      ord(r.get.state)
+    else:
+      -1
+  )
+
+proc faults(e: Engine, f: LoaderFaults) =
+  check e.setLoaderFaultsForTests(f).isOk
+
+proc unhooked() =
+  ## A suite's `teardown` after injected faults: held calls reply, the
+  ## protected mechanism confirms what nothing else can clean, then the
+  ## engine closes.
+  if live != nil:
+    live.clearLoaderFaultsForTests()
+    live.confirmTerminationForTests()
+  leftover()
+
 # Shutdown -------------------------------------------------------------------------------
 
 suite "run.loader: shutdown (RUNTIME §10.2 l.3847-3864)":
   teardown:
-    leftover()
+    unhooked()
 
   test "[RUN-1075] every Loader-owned realization is released before the Loader":
     var cfg = config()
@@ -329,3 +413,307 @@ suite "run.loader: shutdown (RUNTIME §10.2 l.3847-3864)":
       check v.state == msUnloaded and v.execution.intent == inRequested
     live = nil
     check e.close()
+
+  test "[R3] a release held past the shutdown grace: shutdown completes with MODULE_ERROR and the Loader stays until the release returns":
+    var cfg = config()
+    cfg.shutdownGrace = initDuration(milliseconds = 200)
+    let e = fixtureEngine(cfg)
+    discard e.started(meter(), "m")
+    check e.setLoaderFaultsForTests(LoaderFaults(stall: {lmRelease})).isOk
+    e.shutdown()
+    let r = e.awaitShutdown()
+    check r.isErr and r.error.code == ecModule
+    check ("failed: " & LoaderInstanceId & ", m") in r.error.message
+    check e.stalledLoaderCallsForTests() == 1
+    # [SPEC RUNTIME l.3863; IF l.1997, l.1999] The Loader stays ready and
+    # bound while its call runs; the engine cannot close.
+    check e.loaderOf.state == msReady
+    check e.view("m").tryGet.failureOf == "cleanup-timeout"
+    check e.tryClose().error.code == ecNotReady
+    e.releaseLoaderStallForTests()
+    # The late reply establishes absence; then the Loader is released.
+    check waitUntil(
+      proc(): bool =
+        e.loaderOf.state == msUnloaded
+    )
+    check not e.cleanupPending("m")
+    # The stored result does not change (RUN-0760).
+    check e.awaitShutdown().error.message == r.error.message
+    live = nil
+    check e.close(initDuration(seconds = 10 * Slow))
+
+  test "[RUN-1076] a release held at shutdown extends no authority: the consumer's route and binding end at once, and the Loader is asked only to release":
+    var cfg = config()
+    cfg.ordering = @[("m", "c")]
+    let e = fixtureEngine(cfg)
+    discard e.started(meter(), "m")
+    let (_, rc) = e.startClient("c")
+    let route = rc.routeId("k")
+    var h = rc.handle(route)
+    check h.read(5).isOk
+    let journaled = e.loaderJournalForTests().len
+    e.faults(LoaderFaults(stall: {lmRelease}))
+    e.requestShutdown()
+    check waitUntil(
+      proc(): bool =
+        e.stalledLoaderCallsForTests() == 1
+    )
+    # c's release is held; m waits for it (the ordering), the Loader for both.
+    check e.view("c").tryGet.state == msStopping
+    check e.view("m").tryGet.state == msReady
+    check e.loaderOf.state == msReady
+    # [SPEC RUNTIME l.3863] The held release delays no withdrawal and keeps
+    # no authority: the route has ended, its handle and c's binding are
+    # NOT_READY.
+    let rec = e.routes().filterIt(it.route == route)
+    check rec.len == 1 and
+      rec[0].state.kind in {
+        LogosNSRuntimeControlRouteStateKind.Closed,
+        LogosNSRuntimeControlRouteStateKind.Failed,
+      }
+    check h.read(5).error.code == ecNotReady
+    check rc.establish("k2").code == ecNotReady
+    h.release()
+    e.releaseLoaderStallForTests()
+    check e.awaitShutdown().isOk
+    # [plan §2.10] Only releases reached the Loader once shutdown began.
+    check e.loaderJournalForTests()[journaled ..^ 1].mapIt(it.meth) ==
+      @[$lmRelease, $lmRelease]
+    check e.journal(lmRelease).mapIt(it.instance) == @["c", "m"]
+    check e.loaderOf.state == msUnloaded
+    live = nil
+    check e.close()
+
+# Lost answers ---------------------------------------------------------------------------
+
+suite "run.loader: resolving a lost Loader answer (RUNTIME l.3793; plan §2.9) [IMPL-DECISION G252]":
+  teardown:
+    unhooked()
+
+  test "[RUN-0689] a realize whose invocation failed and that made nothing fails that start alone; the Loader stays bound":
+    let e = fixtureEngine(config())
+    discard e.create(meter(), "m").tryGet
+    e.faults(LoaderFaults(failInvocation: {lmRealize}))
+    let v = e.start("m").tryGet
+    check v.state == msError and v.failureOf == "other"
+    check v.failure.get.reason == "the realize call failed"
+    # Nothing reached the Loader's realize; get_status found nothing.
+    check e.journal(lmRealize).len == 0
+    check e.journal(lmGetStatus).mapIt(it.instance) == @["m"]
+    check not e.cleanupPending("m") and e.loaderOf.state == msReady
+    check e.start("m").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-0689] a realize whose reply was lost after it realized: get_status finds the realization and it is released":
+    let e = fixtureEngine(config())
+    discard e.create(meter(), "m").tryGet
+    e.faults(LoaderFaults(loseReply: {lmRealize}))
+    let v = e.start("m").tryGet
+    check v.state == msError and v.failure.get.reason == "the realize call failed"
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("m")
+    )
+    check e.journal(lmRealize).len == 1
+    check e.journal(lmGetStatus).len == 1
+    let released = e.journal(lmRelease)
+    check released.len == 1 and released[0].instance == "m"
+    check e.loaderOf.state == msReady
+    check e.start("m").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-0689] a release whose reply was lost after it released: get_status finds nothing, and the stop completes":
+    let e = fixtureEngine(config())
+    discard e.started(meter(), "m")
+    e.faults(LoaderFaults(loseReply: {lmRelease}))
+    check e.stop("m").tryGet.state == msUnloaded
+    let asked = e.journal(lmGetStatus)
+    check asked.len == 1 and asked[0].instance == "m" and asked[0].realization.len > 0
+    check not e.cleanupPending("m") and e.loaderOf.state == msReady
+    e.finish()
+
+  test "[RUN-0689] a release whose invocation failed before it released: get_status finds the realization, cleanup-failed":
+    let e = fixtureEngine(config())
+    discard e.started(meter(), "m")
+    e.faults(LoaderFaults(failInvocation: {lmRelease}))
+    let v = e.stop("m").tryGet
+    check v.state == msError and v.failureOf == "cleanup-failed"
+    check e.cleanupPending("m")
+    check e.start("m").error.code == ecNotReady
+    # Not a Loader failure: it stays bound and realizes others.
+    check e.loaderOf.state == msReady
+    discard e.started(meter(), "n")
+    e.clearLoaderFaultsForTests()
+    e.confirmTerminationForTests()
+    e.finish()
+
+  test "[RUN-1067] [IMPL-DECISION G252] a realize whose answer and status answer are both lost stays with its instance: error, unknown, a stop accepted; the Loader stays bound":
+    let e = fixtureEngine(config())
+    let (_, rc) = e.startClient("c")
+    discard e.create(meter(), "m").tryGet
+    e.faults(LoaderFaults(failInvocation: {lmRealize, lmGetStatus}))
+    let v = e.start("m").tryGet
+    check v.state == msError and v.failureOf == "other"
+    check v.failure.get.reason ==
+      "the Module Loader's answer was lost and could not be resolved"
+    check v.execution.intent == inRequested
+    let s = rc.summaryOf(e, "m")
+    check s.realization.kind ==
+      LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown
+    check s.failure == Opt.some("other")
+    # [SPEC RUNTIME l.613] Start and recovery are NOT_READY, and so is retirement.
+    check e.start("m").error.code == ecNotReady
+    check e.recover("m", e.view("m").tryGet.execution.revision).error.code == ecNotReady
+    check rc.retireOf(e, "m").code == ecNotReady
+    # [R4] A stop is accepted: the intent is cancelled, nothing is released.
+    let stopped = e.stop("m").tryGet
+    check stopped.state == msError and stopped.execution.intent == inStopped
+    check e.journal(lmRelease).len == 0
+    # The Loader stays bound: it owns that realization, and realizes others.
+    check e.loaderOf.state == msReady
+    check e.stop(LoaderInstanceId).error.code == ecNotReady
+    discard e.started(meter(), "n")
+    e.confirmTerminationForTests()
+    check not e.cleanupPending("m")
+    e.finish()
+
+# Loader loss ----------------------------------------------------------------------------
+
+var
+  terminations: Atomic[int] ## `onTerminationRequired` calls
+  terminationNames: Atomic[int] ## how many instances the last one named
+
+proc onTermination(
+    data: pointer, unresolved: seq[string]
+) {.nimcall, gcsafe, raises: [].} =
+  discard terminations.fetchAdd(1)
+  terminationNames.store(unresolved.len)
+
+proc lossConfig(): EngineConfig =
+  result = config()
+  result.onTerminationRequired = onTermination
+  terminations.store(0)
+  terminationNames.store(0)
+
+suite "run.loader: Loader loss (RUNTIME l.3813-3825; plan §2.11) [IMPL-DECISION G246] [IMPL-DECISION G249]":
+  teardown:
+    unhooked()
+
+  test "[RUN-1067] [RUN-1068] [RUN-1069] [RUN-1070] [RUN-1072] [LDR-0161] [LDR-0162] [RUN-0690] [RUN-0701] the Loader reports its failure: what it realized is error, its routes fail, intent stays, nothing is released or started, and the host must end its process":
+    let e = fixtureEngine(lossConfig())
+    discard e.started(meter(), "m")
+    let (_, rc) = e.startClient("c")
+    let route = rc.routeId("k")
+    discard e.create(meter(), "u").tryGet
+    let realizes = e.journal(lmRealize).len
+    e.faults(LoaderFaults(reportFailure: true))
+    let l = e.loaderOf
+    check l.state == msError and l.failureOf == "reported-by-module"
+    for id in ["m", "c"]:
+      let v = e.view(id).tryGet
+      check v.state == msError and v.failureOf == "other"
+      check v.failure.get.reason == "its Module Loader failed"
+      check v.execution.intent == inRequested and v.intentOrigin.host
+      check e.cleanupPending(id)
+    check e.view("u").tryGet.state == msUnloaded
+    let rec = e.routes().filterIt(it.route == route)
+    check rec.len == 1 and
+      rec[0].state.kind == LogosNSRuntimeControlRouteStateKind.Failed
+    # [RUN-1070] No start reaches the Loader.
+    for id in ["m", "c", "u"]:
+      check e.start(id).error.code == ecNotReady
+    check e.recover("m", e.view("m").tryGet.execution.revision).error.code == ecNotReady
+    check e.journal(lmRealize).len == realizes
+    # The Loader still owns them; nothing released them.
+    check e.stop(LoaderInstanceId).error.code == ecNotReady
+    check e.journal(lmRelease).len == 0
+    # [IMPL-DECISION G249] Termination required, once, in the diagnostics too.
+    check terminations.load == 1 and terminationNames.load == 2
+    check e.diagnostics().anyIt("termination required" in it)
+    e.requestShutdown()
+    let r = e.awaitShutdown()
+    check r.isErr and r.error.code == ecModule
+    check ("failed: " & LoaderInstanceId & ", m, c;") in r.error.message
+    check "the host process must end" in r.error.message
+    let refused = e.tryClose()
+    check refused.isErr and refused.error.code == ecNotReady
+    check "the host process must end" in refused.error.message
+    check terminations.load == 1
+    # The protected mechanism confirms the end: absence, still `error`.
+    e.confirmTerminationForTests()
+    check e.journal(lmRelease).mapIt(it.instance).sorted == @["c", "m"]
+    check e.view("m").tryGet.state == msError and not e.cleanupPending("m")
+    live = nil
+    check e.close(initDuration(seconds = 10 * Slow))
+
+  test "[R4] a stop of an instance the lost Loader owned is accepted: intent cancelled, still error, nothing released":
+    let e = fixtureEngine(lossConfig())
+    discard e.started(meter(), "m")
+    e.faults(LoaderFaults(reportFailure: true))
+    let v = e.stop("m").tryGet
+    check v.state == msError and v.execution.intent == inStopped
+    check v.failure.get.reason == "its Module Loader failed"
+    check e.journal(lmRelease).len == 0 and e.cleanupPending("m")
+    e.confirmTerminationForTests()
+    e.finish()
+
+  test "[IMPL-DECISION G252] an invalid realize response fails the Loader; the realization it made is orphaned, never used":
+    let e = fixtureEngine(lossConfig())
+    discard e.create(meter(), "m").tryGet
+    e.faults(LoaderFaults(garble: {lmRealize}))
+    let v = e.start("m").tryGet
+    check v.state == msError and v.failure.get.reason == "its Module Loader failed"
+    let l = e.loaderOf
+    check l.state == msError and l.failureOf == "other"
+    check l.failure.get.reason == "the Module Loader gave an invalid response"
+    check e.diagnostics().anyIt("invalid response" in it)
+    check e.journal(lmRealize).len == 1 and e.journal(lmRelease).len == 0
+    check terminations.load == 1
+    e.confirmTerminationForTests()
+    check e.journal(lmRelease).mapIt(it.instance) == @["m"]
+    e.finish()
+
+  test "[RUN-1068] a Loader that fails while a realize is held: the late realization is recorded unresolved, never used":
+    let e = fixtureEngine(lossConfig())
+    discard e.create(meter(), "m").tryGet
+    e.faults(LoaderFaults(stall: {lmRealize}))
+    startReply.store(-2)
+    var t: Thread[(Engine, string)]
+    createThread(t, startOn, (e, "m"))
+    check waitUntil(
+      proc(): bool =
+        e.stalledLoaderCallsForTests() == 1
+    )
+    e.faults(LoaderFaults(reportFailure: true))
+    joinThread(t)
+    check startReply.load == ord(msError)
+    check e.view("m").tryGet.failure.get.reason == "its Module Loader failed"
+    e.releaseLoaderStallForTests()
+    check waitUntil(
+      proc(): bool =
+        e.stalledLoaderCallsForTests() == 0
+    )
+    check e.view("m").tryGet.state == msError and e.cleanupPending("m")
+    check e.journal(lmRelease).len == 0
+    # Its id was recorded: the confirmation releases it.
+    e.confirmTerminationForTests()
+    check e.journal(lmRelease).mapIt(it.instance) == @["m"]
+    e.finish()
+
+  test "[RUN-0702] [IMPL-DECISION G246] a Loader that fails owning nothing is released; every later start is NOT_READY":
+    let e = fixtureEngine(lossConfig())
+    discard e.create(meter(), "m").tryGet
+    e.faults(LoaderFaults(reportFailure: true))
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending(LoaderInstanceId)
+    )
+    check e.loaderOf.state == msError
+    let refused = e.start("m")
+    check refused.error.code == ecNotReady and "has failed" in refused.error.message
+    check e.journal(lmRealize).len == 0
+    check terminations.load == 0
+    e.requestShutdown()
+    check e.awaitShutdown().isOk
+    live = nil
+    check e.close(initDuration(seconds = 10 * Slow))

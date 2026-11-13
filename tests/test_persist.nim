@@ -7,7 +7,7 @@
 ## plus `keeper_module`, which records the state directory it is given and
 ## what the store shows when it starts.
 
-import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
+import std/[algorithm, atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 when defined(posix):
   import std/posix
 import unittest2
@@ -515,6 +515,40 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check lastDir() == ""
     let shared = e.create(keeper(Opt.some("k1-state")), "k3")
     check shared.isErr and shared.error.code == ecInvalidParams
+    e.finish()
+
+  test "[RUN-0999] [RUN-0924] a configured instance with the module name, binding and contract of a retained one gets none of its state":
+    let base = freshBase()
+    let orch = BootstrapInstance(instance: "orch", record: client())
+    var e = openAt(base)
+    check e.bootstrap(
+      @[orch, BootstrapInstance(instance: "a", record: keeper(Opt.some("a-state")))],
+      "orch",
+    ).isOk
+    check e.start("a").tryGet.state == msReady
+    let aDir = lastDir()
+    check aDir == base / "state" / "a-state"
+    writeFile(aDir / "data", "a's state")
+    proc contents(dir: string): seq[(string, string)] =
+      for f in walkDirRec(dir, relative = true):
+        result.add((f, readFile(dir / f)))
+      result.sort()
+
+    let before = contents(aDir)
+    e.restart(base)
+    # `a` is no longer configured (it stays retained); `b` is, with the same
+    # module name, binding and (absent) primary contract and its own assignment.
+    check e.bootstrap(
+      @[orch, BootstrapInstance(instance: "b", record: keeper(Opt.some("b-state")))],
+      "orch",
+    ).isOk
+    check e.start("b").tryGet.state == msReady
+    let bDir = lastDir()
+    check bDir == base / "state" / "b-state"
+    # Empty when `b` was initialized: only its own first write is there.
+    check contents(bDir) == @[("inits", "init\n")]
+    check contents(aDir) == before
+    check e.view("a").tryGet.state == msUnloaded
     e.finish()
 
   test "[RUN-0646] intent, its revision and its origin survive a restart (RUN-0923)":

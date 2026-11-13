@@ -386,11 +386,18 @@ type
     lcRealize
     lcRelease
     lcApply
+    lcStatus
+      ## [plan §2.9] `get_status` after a `realize` (`attempt`) or a `release`
+      ## (`realization`) whose invocation failed
+    lcConfirm
+      ## [plan §2.12] for the protected mechanism's confirmation: a release
+      ## (`realization`), or `get_status` when the id was never learnt
 
   LoaderCall = object ## What one Module Loader call in flight is for.
     kind: LoaderCallKind
     inst: Inst ## the instance it acts on (not lcCapabilities)
-    attempt: Attempt ## lcRealize
+    attempt: Attempt ## lcRealize, and lcStatus after a `realize`
+    realization: string ## lcStatus after a `release`, lcConfirm
     ticket: ptr CallTicket
 
   LoaderLink = object
@@ -408,6 +415,17 @@ type
     cannotStart: Opt[string] ## why the open fails, once known
     calls: Table[int, LoaderCall] ## by job id
     issued: HashSet[string] ## [plan §2.8] every realization id this Loader gave
+    lost: bool
+      ## [SPEC RUNTIME l.3813-3825; plan §2.11 (G246, RT-05 interim)] its
+      ## record is `error`: it reported its failure or gave an invalid
+      ## response. Never undone in this process.
+    termination: seq[string]
+      ## [IMPL-DECISION G249] the instances whose cleanup needs the host
+      ## process to end; empty unless the Loader was lost owning them
+    when defined(lcnTestHooks):
+      confirm: ReplyChannel ## [plan §2.12] `confirmTerminationForTests`, waiting
+      confirmSent: bool ## its releases were sent
+      confirming: int ## its releases in flight
 
   State = ref object
     shared: ptr Shared
@@ -554,17 +572,52 @@ proc workerLoop(s: ptr Shared) =
       # [SPEC RUNTIME l.1652-1667; plan §2.6, §2.8] One Loader method with a
       # SYSTEM_SERVICE context; the response is read and checked here.
       let j = job.loader
-      let res = systemCall(
-        s,
-        j.dispatch,
-        j.free,
-        j.context,
-        j.access,
-        j.ticket,
-        j.runtimeId,
-        $j.meth,
-        j.request,
-      )
+      if s.loaderLost.load(moAcquire) and not j.confirming:
+        # [SPEC RUNTIME l.1657; plan §2.11 step 1] The binding is invalid: a
+        # queued call is answered without reaching the Loader.
+        let failure = InvocationFailure(
+          code: ecModule, message: Opt.some("the Module Loader has failed")
+        )
+        s.post(
+          Msg(
+            kind: mkLoaderReply,
+            job: job.id,
+            loaderReply: LoaderReply(kind: lrFailed, invocation: failure),
+          )
+        )
+        continue
+      var fail, lose, garble, stall = false
+      when defined(lcnTestHooks):
+        # [D27 revised; plan §2.12] The faults a test selected for this method.
+        let f = s.faults.takeFaults(j.meth)
+        fail = j.meth in f.failInvocation
+        lose = j.meth in f.loseReply
+        garble = j.meth in f.garble
+        stall = j.meth in f.stall
+      const injected =
+        InvocationFailure(code: ecModule, message: Opt.some("an injected failure"))
+      var res =
+        if fail:
+          Result[seq[byte], InvocationFailure].err(injected)
+        else:
+          systemCall(
+            s,
+            j.dispatch,
+            j.free,
+            j.context,
+            j.access,
+            j.ticket,
+            j.runtimeId,
+            $j.meth,
+            j.request,
+          )
+      if lose:
+        res = Result[seq[byte], InvocationFailure].err(injected)
+      elif garble and res.isOk:
+        res = Result[seq[byte], InvocationFailure].ok(@[0xff'u8])
+      when defined(lcnTestHooks):
+        if stall:
+          s.faults.stallHere()
       let reply = readReply(j.meth, j.instance, j.realization, res)
       s.post(Msg(kind: mkLoaderReply, job: job.id, loaderReply: reply))
 
@@ -1538,12 +1591,14 @@ proc callLoader(
     request: sink seq[byte],
     instance = "",
     realization = Opt.none(string),
+    confirming = false,
 ): int =
   ## [SPEC RUNTIME l.1652-1667; plan §2.6] One Loader method on a lifecycle
   ## worker through the Loader realization's generic dispatch, with a
   ## SYSTEM_SERVICE context; no module consumer is fabricated (RUN-0858).
   ## The Loader's in-flight count holds its realization until the reply.
-  ## Returns the job id.
+  ## Returns the job id. `confirming`: a release for the confirmation after
+  ## loss (plan §2.12), which a lost binding does not stop.
   let l = st.ldr.inst
   let r = l.realization
   var c = call
@@ -1567,6 +1622,7 @@ proc callLoader(
         access: l.services,
         ticket: c.ticket,
         runtimeId: st.runtimeId,
+        confirming: confirming,
       ),
     )
   )
@@ -1591,11 +1647,16 @@ func classify(e: LoaderError, phase: Opt[FailedPhase]): Failure =
   else:
     Failure(kind: fkLoader, loader: e.code, reason: e.message, internal: true)
 
+proc loaderLost(st: State, f: Failure) {.gcsafe.}
+
 proc loaderInvalid(st: State, reason: string) =
-  ## [SPEC RUNTIME l.3823; plan §2.8, §2.9] A response that breaks the
-  ## contract or the engine's checks: continued realization control cannot
-  ## be maintained.
+  ## [SPEC RUNTIME l.3823; plan §2.8, §2.9; IMPL-DECISION G252] A response
+  ## that breaks the contract or the engine's checks, on any call: continued
+  ## realization control cannot be maintained, so the Loader has failed.
   st.diagnose("the Module Loader gave an invalid response: " & reason)
+  st.loaderLost(
+    Failure(kind: fkOther, reason: "the Module Loader gave an invalid response")
+  )
 
 func ownedBy(x: Inst, st: State): bool =
   ## The instance has a realization, or one being made, by the Loader.
@@ -1616,6 +1677,9 @@ proc loaderMissing(st: State, x: Inst): Opt[string] =
   ## itself, which only the Runtime's bootstrap establishes.
   if st.isLoader(x):
     return Opt.some("the Module Loader is established only by the Runtime's bootstrap")
+  if st.ldr.lost:
+    # [SPEC RUNTIME l.3814 (K4); plan §2.11 step 7] Until a host restart.
+    return Opt.some("the Module Loader has failed")
   if not st.ldr.bound:
     return Opt.some("the Module Loader is not available")
   Opt.none(string)
@@ -1666,12 +1730,209 @@ proc releaseRealization(st: State, x: Inst) =
     Job(id: id, kind: jkDestroy, destroy: t.get.destroy, context: t.get.context)
   )
 
-proc loaderFailure(e: LoaderError): Failure =
-  ## [SPEC RUNTIME §9.3 l.3753-3757] `_MODULE_init()` failing is
-  ## `initialization-failed`. The realizer is an implementation-local
-  ## mechanism, not a Module Loader (RUNTIME l.212), so its other errors are
-  ## no "typed Module Loader error" (l.3754): they are `other`, with the
-  ## realizer's code and message kept for diagnostics only (S11-1 (b), I88).
+# Loader loss and lost answers ------------------------------------------------------
+
+const LostAnswer = "the Module Loader's answer was lost and could not be resolved"
+
+proc teardownDone(st: State, x: Inst) {.gcsafe.}
+proc cleanupFailed(st: State, x: Inst, reason: string) {.gcsafe.}
+when defined(lcnTestHooks):
+  proc confirmStep(st: State) {.gcsafe.}
+
+func lostView(st: State, id: string): RealizationView =
+  RealizationView(
+    mechanism: mLoader, id: id, issuer: st.ldr.token, unresolved: true, lost: true
+  )
+
+proc orphan(st: State, x: Inst, reason: string) =
+  ## [SPEC RUNTIME l.613, l.3820-3825 (RUN-1067-RUN-1069); plan §2.9 (R5),
+  ## §2.11 step 3] Nobody can say whether `x`'s realization, or the one its
+  ## attempt was making, still exists: `error` with `other`, cleanup
+  ## ownership kept (summary `unknown`, RUN-1067), intent and origin kept,
+  ## nothing released by anyone (RUN-1068), and the bindings its module code
+  ## may still use kept.
+  if x.realization.isNil:
+    x.realization = st.lostView("")
+  x.realization.unresolved = true
+  x.realization.lost = true
+  x.teardown = 0
+  x.releasePending = false
+  x.indeterminateStop = false
+  x.state = msError
+  x.failure = Opt.some(Failure(kind: fkOther, reason: reason))
+  x.enforced = Opt.none(Failure)
+  x.exec = Opt.none(ExecAuth)
+  inc x.execSerial
+  x.provider = false
+  let run = x.apply
+  if run != nil:
+    # [SPEC CONFIG §8 l.269-272] Its outcome is unknown; the request bytes
+    # are the Loader's own copy, so the input goes now.
+    x.apply = nil
+    st.applies.del(run.job)
+    drop(run.input)
+    if not run.expired:
+      x.config.adopt(x.config.withoutAttempt)
+      run.reply.answerError(
+        ecModule, "the configuration application failed: its outcome is unknown"
+      )
+  let a = x.attempt
+  if a != nil:
+    a.failed = true
+    if a.services != nil and x.services.isNil:
+      x.services = a.services
+      a.services = nil
+    st.finishAttempt(a)
+  st.commit(x)
+  st.releaseWaiters(x)
+
+proc loaderLost(st: State, f: Failure) =
+  ## [SPEC RUNTIME l.1657, l.3813-3825; plan §2.11 (RT-05 interim;
+  ## IMPL-DECISION G246, G249)] The Module Loader has failed, in one step:
+  ## its record is `error` and the binding invalid, so queued calls get an
+  ## invocation failure. Owning nothing, it is released as any failed
+  ## instance and the Runtime realizes nothing more until a host restart
+  ## (K4). Otherwise every realization it owns, or was making, is orphaned,
+  ## neither it nor they are released, and the host must end its process
+  ## (S4b1-1 (a), owner batch A 6).
+  let l = st.ldr.inst
+  if l.isNil or st.ldr.lost:
+    return
+  st.ldr.lost = true
+  st.ldr.bound = false
+  st.shared.loaderLost.store(true, moRelease)
+  var why = f.classification
+  if f.reason.len > 0:
+    why.add(": " & f.reason)
+  st.diagnose("the Module Loader has failed: " & why)
+  l.state = msError
+  l.failure = Opt.some(f)
+  l.enforced = Opt.none(Failure)
+  l.exec = Opt.none(ExecAuth)
+  inc l.execSerial
+  l.provider = false
+  st.commit(l)
+  st.releaseWaiters(l)
+  var owned: seq[Inst]
+  var affected: seq[string]
+  for x in st.instances.values:
+    if not st.isLoader(x) and x.ownedBy(st):
+      owned.add(x)
+      affected.add(x.id)
+  for x in owned:
+    st.orphan(x, "its Module Loader failed")
+  if affected.len == 0:
+    # [plan §2.11 step 2] After the calls in flight return.
+    st.releaseRealization(l)
+    return
+  # [SPEC RUNTIME l.3823; IMPL-DECISION G249 (R19)] Termination required.
+  st.ldr.termination = affected
+  st.diagnose(
+    "termination required: the host process must end to clean " & affected.join(", ")
+  )
+  if st.cfg.onTerminationRequired != nil:
+    st.cfg.onTerminationRequired(st.cfg.terminationData, affected)
+
+proc resolve(st: State, c: LoaderCall) =
+  ## [SPEC RUNTIME l.3793; plan §2.9] A `realize` or `release` whose
+  ## invocation failed: `get_status` says whether its realization exists.
+  ## While it is out the instance still counts as owned by the Loader.
+  let x = c.inst
+  let refused = st.loaderRefusal(lmGetStatus)
+  if refused.isSome:
+    st.diagnose("the realization of " & x.id & " cannot be resolved: " & refused.get)
+    st.orphan(x, LostAnswer)
+    return
+  let id = st.callLoader(
+    c,
+    lmGetStatus,
+    statusBytes(
+      x.id,
+      if c.attempt.isNil:
+        Opt.some(c.realization)
+      else:
+        Opt.none(string),
+    ),
+    instance = x.id,
+    realization =
+      if c.attempt.isNil:
+        Opt.some(c.realization)
+      else:
+        Opt.none(string),
+  )
+  if c.attempt.isNil:
+    x.teardown = id
+
+proc resolved(st: State, c: LoaderCall, reply: LoaderReply) =
+  ## [SPEC RUNTIME l.3793; plan §2.9; IMPL-DECISION G252] What `get_status`
+  ## answered. Not found: nothing was made (`realize`) or absence
+  ## (`release`). Found: the engine owns it, so it is released (`realize`)
+  ## or kept `current` with `cleanup-failed` (`release`). Another invocation
+  ## failure: the question stays with this one instance (R5). Anything else
+  ## is an invalid response.
+  let x = c.inst
+  let notFound = reply.kind == lrError and reply.error.code == lecRealizationNotFound
+  let found = reply.kind in {lrActive, lrFailedRecord}
+  if not (notFound or found or reply.kind == lrFailed):
+    st.loaderInvalid(
+      if reply.kind == lrInvalid:
+        reply.reason
+      else:
+        "get_status answered " & $reply.kind
+    )
+    return
+  if reply.kind == lrFailed:
+    st.diagnose(
+      "the status call for " & x.id & " failed with " & $reply.invocation.code
+    )
+    st.orphan(x, LostAnswer)
+    return
+  let a = c.attempt
+  if a.isNil:
+    if notFound:
+      st.teardownDone(x)
+    else:
+      st.cleanupFailed(x, "the release call failed")
+    return
+  if notFound:
+    st.failAttempt(a, Failure(kind: fkOther, reason: "the realize call failed"))
+    st.finishAttempt(a)
+    return
+  let rec = reply.record
+  if rec.realization in st.ldr.issued:
+    st.loaderInvalid("a realization id was given twice")
+    return
+  st.ldr.issued.incl(rec.realization)
+  x.realization = RealizationView(
+    mechanism: mLoader,
+    id: rec.realization,
+    issuer: st.ldr.token,
+    failed: reply.kind == lrFailedRecord,
+    failure: rec.failure,
+  )
+  st.failAttempt(a, Failure(kind: fkOther, reason: "the realize call failed"))
+  a.phase = apCleanup
+  st.releaseRealization(x)
+
+proc lateReply(st: State, c: LoaderCall, reply: LoaderReply) =
+  ## [plan §2.11 step 3] A reply after the Loader was lost changes nothing it
+  ## orphaned: a `realize` that made something gives the unresolved
+  ## realization its id, never used.
+  if c.kind == lcRealize:
+    let x = c.inst
+    discard st.side.withdrawInbound(x.id)
+    c.attempt.ticket = nil
+    if reply.kind in {lrActive, lrFailedRecord} and x.realization != nil and
+        x.realization.lost and x.realization.id.len == 0:
+      x.realization.id = reply.record.realization
+
+proc bootstrapFailure(e: LoaderError): Failure =
+  ## [SPEC RUNTIME §9.3 l.3753-3757] The bootstrap mechanism's errors while
+  ## it realizes the Module Loader instance: `_MODULE_init()` failing is
+  ## `initialization-failed`. The mechanism is implementation-local, not a
+  ## Module Loader (RUNTIME l.212; G57), so its other errors are no "typed
+  ## Module Loader error" (l.3754): they are `other`, with the realizer's code
+  ## and message kept for diagnostics only (I88).
   if e.code == lecRealizationFailed and e.cause.isSome:
     Failure(kind: fkInitializationFailed, reason: e.message)
   else:
@@ -1726,6 +1987,14 @@ proc adoptRealization(st: State, a: Attempt, r: RealizationView) =
       let v = schemaResponse(r.contracts, root)
       if v.isOk:
         x.schemas[root] = encodeCbor(v.get)
+  if not (a.cancelled or a.expired or a.failed) and getMonoTime() >= a.deadline:
+    # [SPEC RUNTIME §3.4 l.664-669] The deadline passed before the Runtime
+    # thread's next check: the attempt can no longer make the instance ready,
+    # however soon after it the realization arrived.
+    st.failAttempt(
+      a, Failure(kind: fkStartupTimeout, reason: "the startup deadline passed")
+    )
+    a.expired = true
   if a.cancelled or a.expired or a.failed:
     # [SPEC RUNTIME §3.4 l.668] A valid context after expiry, a stop or a
     # reported failure is cleaned through the mechanism that made it.
@@ -1746,7 +2015,7 @@ proc initialized(st: State, a: Attempt, res: LogosResult, ctx: ptr LogosModuleCo
   var orphan: ptr LogosModuleContext
   let made = st.realizer.completeInit(a.handoff, res, ctx, orphan)
   if made.isErr:
-    st.failAttempt(a, loaderFailure(made.error))
+    st.failAttempt(a, bootstrapFailure(made.error))
     if orphan != nil:
       st.destroyContext(a, orphan)
     else:
@@ -1801,7 +2070,7 @@ proc beginInit(st: State, a: Attempt, b: ref NativeBinding) =
     st.finishAttempt(a)
     return
   let h = st.realizer.prepareInit(a.request, b).valueOr:
-    st.failAttempt(a, loaderFailure(error))
+    st.failAttempt(a, bootstrapFailure(error))
     st.finishAttempt(a)
     return
   a.handoff = h
@@ -1813,7 +2082,7 @@ proc beginInit(st: State, a: Attempt, b: ref NativeBinding) =
 proc bound(st: State, a: Attempt, res: sink BindResult) =
   let b = st.realizer.storeBinding(res)
   if b.isErr:
-    st.failAttempt(a, loaderFailure(b.error))
+    st.failAttempt(a, bootstrapFailure(b.error))
     st.finishAttempt(a)
     return
   st.beginInit(a, b.get)
@@ -3160,7 +3429,7 @@ proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
     return
   st.ldr.wired = key
   let step = st.realizer.begin(a.request).valueOr:
-    st.failAttempt(a, loaderFailure(error))
+    st.failAttempt(a, bootstrapFailure(error))
     st.finishAttempt(a)
     return
   case step.kind
@@ -3244,6 +3513,11 @@ proc stopInstance(
     st.commit(x)
     st.releaseRealization(x)
   of msError:
+    if x.realization != nil and x.realization.lost:
+      # [plan §2.11 step 5 (R4)] Accepted: the intent is cancelled (l.1838);
+      # nothing can be released, so it stays `error`.
+      reply.answerView(x)
+      return
     if x.attempt != nil:
       x.attempt.cancelled = true
       if x.attempt.ticket != nil:
@@ -3354,6 +3628,12 @@ proc reportFailure(st: State, q: Request, success = Reply()) =
     q.reply.answerError(ecNotReady, "the realization is not current")
     return
   let f = Failure(kind: fkReportedByModule, reason: q.reason)
+  if st.isLoader(x) and x.state == msReady:
+    # [SPEC RUNTIME l.3813-3825; plan §2.11] The Loader's own report: it has
+    # failed (RT-05 interim).
+    st.loaderLost(f)
+    q.reply.answer(success)
+    return
   if x.state == msLoaded:
     # [SPEC RUNTIME §9.3 l.3604] A report during initialization keeps that
     # realization from becoming ready.
@@ -3516,9 +3796,13 @@ proc shutdownStep(st: State) =
     for x in order:
       if x.state in {msUnloaded, msStopping} or x.indeterminateStop:
         continue
-      if st.isLoader(x) and (st.loaderOwns() or x.inflight > 0):
+      if st.isLoader(x) and (st.loaderOwns() or x.inflight > 0 or st.ldr.lost):
         # [SPEC RUNTIME l.3847-3849, l.3863; plan §2.10 (R3)] The Loader is
-        # released last, once it owns no realization and runs no call.
+        # released last, once it owns no realization and runs no call; a
+        # lost one only as §2.11 says.
+        continue
+      if x.realization != nil and x.realization.lost:
+        # [plan §2.11 step 4] Nothing releases an orphaned realization.
         continue
       if x.state == msError and x.attempt.isNil and x.teardown == 0 and
           x.realization.isNil:
@@ -3558,14 +3842,13 @@ proc shutdownOutcome(st: State): Opt[EngineError] =
     if failed or x.attempt != nil or x.teardown != 0 or x.realization != nil:
       unresolved.add(x.id)
   if unresolved.len == 0:
-    Opt.none(EngineError)
-  else:
-    Opt.some(
-      engineError(
-        ecModule,
-        "shutdown completed with cleanup unresolved or failed: " & unresolved.join(", "),
-      )
-    )
+    return Opt.none(EngineError)
+  var message =
+    "shutdown completed with cleanup unresolved or failed: " & unresolved.join(", ")
+  if st.ldr.termination.len > 0:
+    # [IMPL-DECISION G249; plan §2.11 step 6] S4b1-1 (a): a C host learns here.
+    message.add("; the Module Loader failed: the host process must end")
+  Opt.some(engineError(ecModule, message))
 
 proc finishShutdown(st: State) =
   ## [IMPL] The Runtime thread keeps running after shutdown: it refuses new
@@ -5406,13 +5689,21 @@ proc appliedThroughLoader(st: State, job: int, reply: LoaderReply) =
   of lrFailed:
     outcome.err(loaderError(lecRealizationFailed, "the apply call failed"))
   of lrInvalid, lrActive, lrCapabilities, lrNone:
+    # [plan §2.9] The Loader has failed: `x` is orphaned with the rest, and
+    # the application's outcome is unknown.
+    drop(run.input)
+    if not run.expired:
+      x.config.adopt(x.config.withoutAttempt)
+      run.reply.answerError(
+        ecModule, "the configuration application failed: its outcome is unknown"
+      )
     st.loaderInvalid(
       if reply.kind == lrInvalid:
         reply.reason
       else:
         "apply_configuration answered " & $reply.kind
     )
-    outcome.err(loaderError(lecRealizationFailed, "an invalid response"))
+    return
   st.applyDone(x, run, outcome)
 
 proc applyDone(
@@ -6504,6 +6795,12 @@ proc handle(st: State, q: Request) {.gcsafe.} =
   case q.kind
   of rqConfigure:
     discard
+  of rqConfirmTermination:
+    when defined(lcnTestHooks):
+      st.ldr.confirm = q.reply
+      st.confirmStep()
+    else:
+      q.reply.answerError(ecInvalidParams, "not a test build")
   of rqCreate:
     st.create(q)
   of rqStart:
@@ -6570,6 +6867,13 @@ proc handle(st: State, q: Request) {.gcsafe.} =
       return
     if st.busy + st.callBusy + st.evalBusy + st.renewBusy + st.rcBusy > 0:
       q.reply.answerError(ecNotReady, "module code is still running")
+      return
+    if st.ldr.termination.len > 0:
+      # [SPEC RUNTIME l.3837, l.4079 (RUN-1072); IMPL-DECISION G249] Module
+      # code of the orphaned realizations may still reach what `close` frees.
+      q.reply.answerError(
+        ecNotReady, "the Module Loader failed: the host process must end"
+      )
       return
     if st.ldr.inst != nil and st.ldr.inst.realization != nil:
       # [SPEC RUNTIME l.4079; plan §2.10 (R3)] The Loader is released only
@@ -6690,16 +6994,21 @@ proc cleanupFailed(st: State, x: Inst, reason: string) =
 
 proc releasedThroughLoader(st: State, x: Inst, reply: LoaderReply) =
   ## [SPEC LOADER §9; plan §2.6] `release` returned. `succeeded` is absence;
-  ## a failed record is a cleanup failure; `realization-not-found` cannot
-  ## happen for a pair the engine holds (idempotent success is `succeeded`,
-  ## l.591), so it is an invalid response.
+  ## a failed record is a cleanup failure; an invocation failure is resolved
+  ## by `get_status` (§2.9); `realization-not-found` cannot happen for a pair
+  ## the engine holds (idempotent success is `succeeded`, l.591), so it is an
+  ## invalid response, and the Loader has failed.
   case reply.kind
   of lrSucceeded:
     st.teardownDone(x)
   of lrFailedRecord:
     st.cleanupFailed(x, "the Module Loader could not establish absence")
   of lrFailed:
-    st.cleanupFailed(x, "the release call failed")
+    st.diagnose(
+      "the release call for " & x.id & " failed with " & $reply.invocation.code
+    )
+    let r = x.realization
+    st.resolve(LoaderCall(kind: lcStatus, inst: x, realization: r.id))
   of lrError, lrInvalid, lrActive, lrCapabilities, lrNone:
     st.loaderInvalid(
       if reply.kind == lrInvalid:
@@ -6707,7 +7016,6 @@ proc releasedThroughLoader(st: State, x: Inst, reply: LoaderReply) =
       else:
         "release answered " & $reply.kind
     )
-    st.cleanupFailed(x, "the Module Loader gave an invalid response")
 
 proc realized(st: State, a: Attempt, reply: LoaderReply) =
   ## [SPEC LOADER §6, §7; RUNTIME §3.4; plan §2.6-§2.8] `realize` returned:
@@ -6717,35 +7025,32 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
   let x = a.inst
   let phase = st.side.withdrawInbound(x.id)
   a.ticket = nil
+  template invalid(why: string, made: string) =
+    # [plan §2.9, §2.11 step 3] The Loader has failed; what it made for this
+    # attempt is orphaned with the rest, never used or released.
+    if made.len > 0 and x.realization.isNil:
+      x.realization = st.lostView(made)
+    st.loaderInvalid(why)
+    return
+
   case reply.kind
   of lrActive:
     let rec = reply.record
     let handoff = st.side.outbound(rec.realization)
-    if rec.realization in st.ldr.issued or handoff.isNone:
-      st.loaderInvalid(
-        if handoff.isNone:
-          "an active realization has no handoff"
-        else:
-          "a realization id was given twice"
-      )
-      st.failAttempt(
-        a, Failure(kind: fkOther, reason: "the Module Loader gave an invalid response")
-      )
-      st.finishAttempt(a)
-      return
+    if rec.realization in st.ldr.issued:
+      invalid("a realization id was given twice", "")
+    if handoff.isNone:
+      invalid("an active realization has no handoff", rec.realization)
     st.ldr.issued.incl(rec.realization)
     var contracts: ModuleBinding
     if rec.callSurface.isSome:
       contracts = acceptSurface(
         rec.callSurface.get, x.record.module, st.systemBinding(x.record)
       ).valueOr:
-        st.loaderInvalid("the call surface of " & x.id & " is not acceptable: " & error)
-        st.failAttempt(
-          a,
-          Failure(kind: fkOther, reason: "the Module Loader gave an invalid response"),
+        invalid(
+          "the call surface of " & x.id & " is not acceptable: " & error,
+          rec.realization,
         )
-        st.finishAttempt(a)
-        return
     let h = handoff.get
     let v = RealizationView(
       mechanism: mLoader,
@@ -6772,6 +7077,8 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
     # [plan §2.5] Defensive: the engine never sends `realize` for an instance
     # whose realization it holds. The record is kept `current` and released.
     let rec = reply.record
+    if rec.realization in st.ldr.issued:
+      invalid("a realization id was given twice", "")
     st.ldr.issued.incl(rec.realization)
     x.realization = RealizationView(
       mechanism: mLoader,
@@ -6789,25 +7096,21 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
     a.phase = apCleanup
     st.releaseRealization(x)
   of lrFailed:
-    # [SPEC LOADER l.633-634; RUNTIME l.3793] An invocation failure is not a
-    # Loader error: nothing was made before `_MODULE_init` (a cancelled
-    # realize abandons its attempt first).
+    # [SPEC LOADER l.633-634; RUNTIME l.3793; plan §2.9] An invocation
+    # failure is not a Loader error: `get_status` says whether anything was
+    # made.
     st.diagnose(
       "the realize call for " & x.id & " failed with " & $reply.invocation.code
     )
-    st.failAttempt(a, Failure(kind: fkOther, reason: "the realize call failed"))
-    st.finishAttempt(a)
+    st.resolve(LoaderCall(kind: lcStatus, inst: x, attempt: a))
   of lrInvalid, lrSucceeded, lrCapabilities, lrNone:
-    st.loaderInvalid(
+    invalid(
       if reply.kind == lrInvalid:
         reply.reason
       else:
-        "realize answered " & $reply.kind
+        "realize answered " & $reply.kind,
+      "",
     )
-    st.failAttempt(
-      a, Failure(kind: fkOther, reason: "the Module Loader gave an invalid response")
-    )
-    st.finishAttempt(a)
 
 proc answerConfigure(st: State) =
   ## [plan §2.6 step 6] The open is answered once the Loader is bound, or
@@ -6909,6 +7212,66 @@ proc checkLoader(st: State) =
       # [plan §2.10 (R3)] A late reply left the Loader owning nothing.
       st.stopInstance(l, nil, keepIntent = true)
 
+when defined(lcnTestHooks):
+  proc confirmCall(st: State, x: Inst, realization: string) =
+    ## One call of the confirmation: a release, or `get_status` without an id.
+    inc st.ldr.confirming
+    if realization.len > 0:
+      discard st.callLoader(
+        LoaderCall(kind: lcConfirm, inst: x, realization: realization),
+        lmRelease,
+        releaseBytes(x.id, realization),
+        instance = x.id,
+        realization = Opt.some(realization),
+        confirming = true,
+      )
+    else:
+      discard st.callLoader(
+        LoaderCall(kind: lcConfirm, inst: x),
+        lmGetStatus,
+        statusBytes(x.id),
+        instance = x.id,
+        confirming = true,
+      )
+
+  proc confirmStep(st: State) =
+    ## [D27 revised; plan §2.12] The protected mechanism's confirmation in a
+    ## test process. Once no Loader call is in flight, every unresolved
+    ## realization (orphaned, or left by a cleanup failure) is released
+    ## through the Loader directly (an injected failure left it working),
+    ## found by `get_status` when its id was never learnt; once those
+    ## returned they are absent (their instances stay `error`, R l.611) and a
+    ## lost Loader is released, so the engine can close.
+    let q = st.ldr.confirm
+    if q.isNil:
+      return
+    let l = st.ldr.inst
+    if not st.ldr.confirmSent:
+      if l.inflight > 0:
+        return
+      st.ldr.confirmSent = true
+      var pending: seq[(Inst, string)]
+      for x in st.instances.values:
+        let r = x.realization
+        if not st.isLoader(x) and r != nil and r.unresolved:
+          pending.add((x, r.id))
+      for (x, id) in pending:
+        st.confirmCall(x, id)
+    if st.ldr.confirming > 0:
+      return
+    var gone: seq[Inst]
+    for x in st.instances.values:
+      if not st.isLoader(x) and x.realization != nil and x.realization.unresolved:
+        gone.add(x)
+    for x in gone:
+      st.teardownDone(x)
+    st.ldr.termination.setLen(0)
+    st.ldr.confirm = nil
+    st.ldr.confirmSent = false
+    if st.ldr.lost and l.realization != nil:
+      st.releaseRealization(l)
+    q.answer(Reply())
+
 proc loaderReplied(st: State, job: int, reply: sink LoaderReply) =
   ## A Module Loader call returned; its in-flight count is given back.
   var call: LoaderCall
@@ -6917,17 +7280,37 @@ proc loaderReplied(st: State, job: int, reply: sink LoaderReply) =
   freeTicket(call.ticket)
   let l = st.ldr.inst
   dec l.inflight
-  case call.kind
-  of lcCapabilities:
-    st.loaderChecked(reply)
-  of lcRealize:
-    st.realized(call.attempt, reply)
-  of lcRelease:
-    st.releasedThroughLoader(call.inst, reply)
-  of lcApply:
-    st.appliedThroughLoader(job, reply)
+  if st.ldr.lost and call.kind in {lcRealize, lcRelease, lcApply, lcStatus}:
+    if call.kind == lcApply:
+      var x: Inst
+      discard st.applies.pop(job, x) # orphaned: already answered
+    st.lateReply(call, reply)
+  else:
+    case call.kind
+    of lcCapabilities:
+      st.loaderChecked(reply)
+    of lcRealize:
+      st.realized(call.attempt, reply)
+    of lcRelease:
+      st.releasedThroughLoader(call.inst, reply)
+    of lcApply:
+      st.appliedThroughLoader(job, reply)
+    of lcStatus:
+      st.resolved(call, reply)
+    of lcConfirm:
+      when defined(lcnTestHooks):
+        dec st.ldr.confirming
+        if call.realization.len == 0:
+          if reply.kind in {lrActive, lrFailedRecord}:
+            st.confirmCall(call.inst, reply.record.realization)
+        elif reply.kind != lrSucceeded:
+          st.diagnose(
+            "the confirmation could not release " & call.realization & ": " & $reply.kind
+          )
   if l.releasePending and l.inflight == 0 and l.rcHandlers == 0:
     st.releaseRealization(l)
+  when defined(lcnTestHooks):
+    st.confirmStep()
 
 proc callLeft(st: State, provider, route: string, ticket: ptr CallTicket) =
   ## An admitted call has left its provider: its ticket goes, and a provider
@@ -7428,6 +7811,8 @@ proc freeEngine(e: Engine) =
   freeBell(e.bell)
   freeAuditLog(e.audit)
   freeSideTable(e.side)
+  when defined(lcnTestHooks):
+    freeLoaderFaultBox(e.faults)
   deallocShared(e)
 
 proc joinAll(e: Engine) =
@@ -7478,6 +7863,8 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   e.rcJobs.open()
   e.bell = newBell()
   e.side = newSideTable()
+  when defined(lcnTestHooks):
+    e.faults = newLoaderFaultBox()
   initLock(e.slotLock)
   try:
     createThread(e.runtime, runtimeMain, e)
@@ -7497,6 +7884,46 @@ when defined(lcnTestHooks):
     ## A test hook (plan §2.12): each request the Module Loader served, in
     ## order, as plain values. [Rev R14] 4b-6's BCP-0021-0024 evidence.
     e.side.journalOf()
+
+  proc setLoaderFaultsForTests*(e: Engine, f: LoaderFaults): Result[void, EngineError] =
+    ## A test hook (plan §2.12): faults for the next Module Loader call of
+    ## each method; with `reportFailure`, the Loader reports its own failure
+    ## through its realization-bound association now.
+    e.faults.setFaults(f)
+    if f.reportFailure:
+      let v = e.call(Request(kind: rqView, instance: LoaderInstanceId))
+      if v.error.isSome:
+        return err(v.error.get)
+      let r = e.call(
+        Request(
+          kind: rqReportFailure,
+          instance: LoaderInstanceId,
+          attempt: v.view.attempt,
+          reason: "a failure injected by the test",
+        )
+      )
+      if r.error.isSome:
+        return err(r.error.get)
+    ok()
+
+  proc releaseLoaderStallForTests*(e: Engine) =
+    ## A test hook: every Loader call held by `stall` replies.
+    e.faults.releaseStall()
+
+  proc clearLoaderFaultsForTests*(e: Engine) =
+    ## A test hook for teardown: every armed fault is dropped and every held
+    ## call replies.
+    e.faults.clearFaults()
+
+  proc stalledLoaderCallsForTests*(e: Engine): int =
+    ## A test hook: how many Loader calls are held by `stall` now.
+    e.faults.stalledCalls()
+
+  proc confirmTerminationForTests*(e: Engine) =
+    ## A test hook (plan §2.12): the protected mechanism's confirmation that
+    ## the realizations a lost Loader owned are gone. Returns once they are
+    ## absent and a lost Loader's release has begun.
+    discard e.call(Request(kind: rqConfirmTermination))
 
 proc newEngine*(cfg: EngineConfig): Engine =
   ## `openEngine` for a configuration without a store, which cannot fail.

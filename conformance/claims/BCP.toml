@@ -10,6 +10,8 @@
 # documentation) is logosd's: Tier 4b (DECISIONS I88). What a Tier 4 component already meets is
 # claimed by unit.
 default = "deferred:tier-4b"
+# BCP-0021 to BCP-0024 (the Module Loader in the composition) are tagged by Tier 4b step 4b-1's tests
+# (I89) and keep this default until the BCP's status changes with logosd (4b-8).
 
 [sections]
 "References" = "informative"
