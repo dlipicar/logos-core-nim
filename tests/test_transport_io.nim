@@ -1857,7 +1857,9 @@ suite "trnio.deadlines: a deadline that passes while the I/O thread is busy (TRA
       o.publish(1, Progress, progress(i, big))
     let first = o.waitN(evEvent, 1, 4, timeoutMs = 4 * BigWait)
     check first.len == 4
-    let paused = getMonoTime()
+    # The callee's last write came after the 4th Event left the I/O thread,
+    # which may be long before this thread received it.
+    let paused = o.lastEventAt()
     var credit = 0
     for e in first:
       credit += e.credit
@@ -1873,7 +1875,9 @@ suite "trnio.deadlines: a deadline that passes while the I/O thread is busy (TRA
     )
     let set = inTime(paused, "the release")
     if set:
-      sleepUntil(paused + initDuration(milliseconds = 3 * T))
+      # The callee wrote nothing since the I/O thread stopped here, so its
+      # deadline passes before this.
+      sleepUntil(getMonoTime() + initDuration(milliseconds = 2 * T + T div 2))
     o.openGate()
     if set:
       o.autoRelease = true
