@@ -182,10 +182,10 @@ proc stateIn(r: RcResult): LogosNSRuntimeControlStateKind =
 proc rev(e: Engine, instance: string): uint64 =
   e.view(instance).tryGet.execution.revision
 
-proc bound(rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string): bool =
-  ## Whether `instance`'s bind has finished: its realization is `current`, not
-  ## `unknown` as during the bind. That change commits a revision of its own
-  ## (G227), so a guarded request must read the revision after it.
+proc realizing(rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string): bool =
+  ## Whether `instance`'s `realize` is with the Module Loader: its realization
+  ## is `unknown` until the call returns (I89; plan §2.6), so no revision is
+  ## committed meanwhile (G227) and a guarded request reads a stable one.
   let r = rcCall(
     rc,
     "get_execution_summary",
@@ -202,7 +202,7 @@ proc bound(rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string): boo
   let s = LogosNSRuntimeControlGetExecutionSummaryResponse.decode(r.response).valueOr:
     return false
   s.realization.kind ==
-    LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Current
+    LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown
 
 proc failed(e: Engine, instance: string, cleaned = true) =
   ## The instance reports failure through its current realization. With
@@ -291,10 +291,11 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     var t: Thread[(Engine, string)]
     startReply.store(-2)
     createThread(t, startOn, (e, "s"))
-    # `_MODULE_init` waits; the revision read is the one after the bind.
+    # `_MODULE_init` waits inside the Loader's `realize`; the revision read
+    # stays current until it returns.
     check waitUntil(
       proc(): bool =
-        e.view("s").tryGet.state == msLoaded and arc.bound(e, "s")
+        e.view("s").tryGet.state == msLoaded and arc.realizing(e, "s")
     )
     check arc.recoverOn("s", e.rev("s"), "slow_module").code == ecNotReady
     slowGate.store(false)
@@ -626,10 +627,11 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     var s: Thread[(Engine, string)]
     startReply.store(-2)
     createThread(s, startOn, (e, "s"))
-    # `_MODULE_init` waits; the revision read is the one after the bind.
+    # `_MODULE_init` waits inside the Loader's `realize`; the revision read
+    # stays current until it returns.
     check waitUntil(
       proc(): bool =
-        e.view("s").tryGet.state == msLoaded and arc.bound(e, "s")
+        e.view("s").tryGet.state == msLoaded and arc.realizing(e, "s")
     )
     check arc.retire(e, "s").code == ecNotReady
     slowGate.store(false)

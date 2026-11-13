@@ -219,6 +219,21 @@ sockets that write crafted frames (`tests/test_transport_io.nim`), and the child
 them. They use only the test tickets of `tests/support/trnowner.nim` and test data. No claim depends on
 another implementation recognizing them.
 
+Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
+
+1. Their code exists only inside `when defined(lcnTestHooks)`.
+2. Only test builds set the define: `tests/config.nims` sets it for every suite, nimble's and the flake's
+   alike. No flake package or app, nimble `bin` or `build_*` task sets it.
+3. Each module that holds hooks puts a marker constant in the binary under the define
+   (`src/logos_core/base/testhooks.nim`). The flake check `no-test-hooks` fails when any deployment
+   package or app of the system holds it, and requires it in a probe built with the define.
+4. A hook does nothing until the Runtime's host selects it. In an in-process suite, that is a call by the
+   test.
+
+The hooks so far: `host.setPolicyForTests` (the authority policy the next `start` installs) and the
+Module Loader's request journal (`engine.loaderJournalForTests`, kept in the engine's side table). No
+deployment binary contains them.
+
 ## Tagging tests
 
 A test covers a unit by carrying its ID in brackets anywhere in the test file, normally in the test

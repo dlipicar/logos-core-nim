@@ -38,8 +38,11 @@ import ../runtime/[config, native]
 from ../runtime/callside import barrier, push, pop, Frame
 import ../hash/hashinput
 import ./[contract, core, logos_module_loader_kit]
+import ../base/testhooks
 
 export core, native, contract
+
+testHooksMarker("loader")
 
 # Wiring -------------------------------------------------------------------------------
 
@@ -223,6 +226,32 @@ template served(m: LoaderModule) =
   if refused.isSome:
     return err(refused.get)
 
+when defined(lcnTestHooks):
+  proc journal(m: LoaderModule, meth: LoaderMethod, instance = "", realization = "") =
+    ## A test hook (plan §2.12): a request served, in the side table's journal.
+    m.side.journal(
+      JournalEntry(meth: $meth, instance: instance, realization: realization)
+    )
+
+  proc journal(m: LoaderModule, request: LogosNSModuleLoaderRealizeRequest) =
+    type K = LogosNSModuleLoaderRealizationDescriptorKind
+    let d = request.descriptor
+    var e = JournalEntry(meth: $lmRealize, instance: request.module_instance)
+    case d.kind
+    of K.Direct_static:
+      e.strategy = "direct_static"
+      e.module = d.arm_Direct_static.module
+      e.source = d.arm_Direct_static.static_binding.binding
+    of K.Direct_dynamic:
+      e.strategy = "direct_dynamic"
+      e.module = d.arm_Direct_dynamic.module
+      e.source = d.arm_Direct_dynamic.artifact.id
+    of K.Hosted_dynamic:
+      e.strategy = "hosted_dynamic"
+      e.module = d.arm_Hosted_dynamic.module
+      e.source = d.arm_Hosted_dynamic.artifact.id
+    m.side.journal(e)
+
 # Values -------------------------------------------------------------------------------
 
 func codeOf(c: LoaderErrorCode): LogosNSModuleLoaderErrorCode =
@@ -387,6 +416,8 @@ proc `list_capabilities`(
   ## [SPEC LOADER §4] The strategies of its drivers; `force_release` never
   ## (K7, K10).
   m.served()
+  when defined(lcnTestHooks):
+    m.journal(lmListCapabilities)
   let c = m.core.capabilities().valueOr:
     return err(moduleError(ClosingText))
   var caps = LogosNSModuleLoaderCapabilities()
@@ -434,6 +465,8 @@ proc `realize`(
   ## [SPEC LOADER §6] Every phase that runs module code runs here; the
   ## Loader's thread keeps the state between them.
   m.served()
+  when defined(lcnTestHooks):
+    m.journal(request)
   let instance = request.module_instance
   let descriptor = descriptorOf(request.descriptor).valueOr:
     return ok(realizeResponse(RecordResult.err(error)))
@@ -477,6 +510,8 @@ proc `get_status`(
 ): Result[LogosNSModuleLoaderGetStatusResponse, InvocationFailure] =
   ## [SPEC LOADER §7] `realization-not-found` discloses nothing (l.505).
   m.served()
+  when defined(lcnTestHooks):
+    m.journal(lmGetStatus, request.module_instance, request.realization.get(""))
   type K = LogosNSModuleLoaderGetStatusResponseKind
   let r = m.core.status(request.module_instance, request.realization)
   if r.isErr:
@@ -503,6 +538,8 @@ proc `apply_configuration`(
   ## excluded from release. An indeterminate outcome leaves the realization
   ## failed, owned until its release.
   m.served()
+  when defined(lcnTestHooks):
+    m.journal(lmApplyConfiguration, request.module_instance, request.realization)
   type K = LogosNSModuleLoaderApplyConfigurationResponseKind
   template failed(e: LoaderError): untyped =
     LogosNSModuleLoaderApplyConfigurationResponse(
@@ -551,6 +588,8 @@ proc `release`(
   ## [SPEC LOADER §9] `_MODULE_destroy` exactly once, on this thread; `force`
   ## is refused before anything changes (l.577-580).
   m.served()
+  when defined(lcnTestHooks):
+    m.journal(lmRelease, request.module_instance, request.realization)
   type K = LogosNSModuleLoaderReleaseResponseKind
   let instance = request.module_instance
   let t = m.core.beginRelease(request.realization, instance, request.force.get(false)).valueOr:

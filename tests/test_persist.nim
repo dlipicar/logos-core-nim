@@ -17,7 +17,7 @@ import ../src/logos_core/cbor
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, surface]
 import ../src/logos_core/iface/common_types
-import ./support/[kitbuild, kitruntime]
+import ./support/[kitbuild, kitruntime, withoutloader]
 import ./kit/meter_impl
 import ./generated/meter_module_calls
 
@@ -202,10 +202,10 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check storedOf(base, "k1").state == msUnloaded
     check storedOf(base, "k1").revision == t.execution.revision
     check storedOf(base, "k1").intent == inStopped
-    # Every exposed change: positive revisions, none past the store's.
+    # Every exposed change of k1: positive revisions, none past the store's.
     let last = storedOf(base, "k1").revision
     var previous = 0'u64
-    for c in e.changes:
+    for c in e.changes.withoutLoader:
       check c.view.execution.revision > previous
       check c.view.execution.revision <= last
       previous = c.view.execution.revision

@@ -38,13 +38,22 @@ from ../authority/facts import SharedFacts, newSharedFacts, freeSharedFacts
 from ../authority/provider import
   AuthorityWiring, caStaticRegistration, unwireAuthority, wireAuthority
 from ./authscopes import AuthorityModule
+import ../base/testhooks
 
 export host, outcome.ErrorCode
+
+testHooksMarker("host")
 
 const
   MaxConfigurationBytes* = 64 * 1024 * 1024
     ## [IMPL] the largest configuration `create` reads
   MaxSymbols* = 65_536 ## [IMPL] the most entries one binding table may have
+
+when defined(lcnTestHooks):
+  type PolicyHook* = proc(): AuthzPolicy {.nimcall, gcsafe, raises: [].}
+    ## A test hook (D27 revised; I89): the authority policy `start` gives the
+    ## engine in place of the configured one. Neither the C API nor the
+    ## configuration can reach it (SECURITY l.532).
 
 type
   SymbolCopy = object
@@ -64,11 +73,6 @@ type
     kid: array[MaxCoseKidBytes, byte]
     kidLen: int
 
-  PolicyHook* = proc(): AuthzPolicy {.nimcall, gcsafe, raises: [].}
-    ## In-process tests only: the authority policy `start` gives the engine in
-    ## place of the configured one. Neither the C API nor the configuration can
-    ## reach it (D27; SECURITY l.532).
-
   HostRuntime = object
     lock: Lock
     cond: Cond
@@ -81,7 +85,8 @@ type
     resultCode: ErrorCode
     resultMessage: array[MaxMessageBytes + 1, char]
     engine: Engine
-    policyHook: PolicyHook
+    when defined(lcnTestHooks):
+      policyHook: PolicyHook
     facts: SharedFacts
       ## [I85] under `capability-authority`, the attribute source the engine
       ## feeds and the authority reads; freed at `destroy`
@@ -222,10 +227,18 @@ proc runtimeCreate*(
   outRuntime[] = cast[ptr LogosRuntimeHandle](h)
   answer(ecOk)
 
-proc setPolicyForTests*(rt: ptr LogosRuntimeHandle, hook: PolicyHook) =
-  ## In-process tests: the policy the next `start` installs (`PolicyHook`).
-  if rt != nil:
-    hostOf(rt).policyHook = hook
+when defined(lcnTestHooks):
+  proc setPolicyForTests*(rt: ptr LogosRuntimeHandle, hook: PolicyHook) =
+    ## A test hook: the policy the next `start` installs (`PolicyHook`).
+    if rt != nil:
+      hostOf(rt).policyHook = hook
+
+proc policyOf(h: ptr HostRuntime, c: HostConfig): AuthzPolicy =
+  ## The configured policy, or a test's (`setPolicyForTests`).
+  when defined(lcnTestHooks):
+    if h.policyHook != nil:
+      return h.policyHook()
+  c.policy
 
 proc engineOf*(rt: ptr LogosRuntimeHandle): Engine =
   ## In-process hosts and tests: the engine, for observation; nil before
@@ -277,6 +290,11 @@ proc runtimeRegisterBinding*(
       return answer(ecInvalidParams, "a symbol name is null")
     table.add(($s.name, cast[pointer](s.address)))
   let id = $binding.binding
+  if id == LoaderBindingId:
+    # [IMPL-DECISION G246] Only the Runtime's bootstrap holds the Module
+    # Loader's registration (BOOTSTRAP l.287, K4; LDR-0006).
+    return
+      answer(ecInvalidParams, "binding " & id & " is reserved for the Module Loader")
   # [SPEC RUNTIME §13.3] RUN-0748, RUN-1084: checked on the copy.
   discard checkStaticRegistration(id, table).valueOr:
     return answer(ecInvalidParams, error)
@@ -383,7 +401,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
     stateRoot: c.stateRoot,
     storeDir: c.storeDir,
     statics: statics,
-    policy: (if h.policyHook != nil: h.policyHook() else: c.policy),
+    policy: h.policyOf(c),
     ordering: c.ordering,
     declarations: c.declarations,
     startupDeadline: c.startupDeadline,

@@ -405,6 +405,13 @@ proc decodeHostConfig*(
     if m.instance in ids:
       return err(configError("module instance " & m.instance & " is listed twice"))
     ids.incl(m.instance)
+    if namesLoader(m.instance, r):
+      # [IMPL-DECISION G246] The Loader's names are the Runtime's own (LDR-0006).
+      return err(
+        configError(
+          "module instance " & m.instance & " names the reserved Module Loader"
+        )
+      )
     if isRuntimeForm(m.instance) or
         (r.stateAssignment.isSome and isRuntimeForm(r.stateAssignment.get)):
       # [IMPL] Names of this form are the Runtime's own (I82).
@@ -429,6 +436,9 @@ proc decodeHostConfig*(
     c.modules.add(HostModule(instance: m.instance, record: r, configuration: accepted))
   # [G53] The role is named explicitly, on a listed instance whose module name
   # is outside the reserved prefix; no name confers it (RUN-0784, RUN-0785).
+  if c.orchestration == LoaderInstanceId:
+    # [IMPL-DECISION G246]
+    return err(configError("orchestration names the reserved Module Loader instance"))
   var orchestrationModule = ""
   for m in c.modules:
     if m.instance == c.orchestration:
@@ -455,6 +465,11 @@ proc decodeHostConfig*(
     for d in cfg.declarations.get:
       var r = record(d).valueOr:
         return err(configError("declaration " & d.module & ": " & error.message))
+      if namesLoader("", r):
+        # [IMPL-DECISION G246]
+        return err(
+          configError("declaration " & d.module & " names the reserved Module Loader")
+        )
       if d.module in modules:
         return err(configError("module " & d.module & " is declared twice"))
       modules.incl(d.module)

@@ -469,11 +469,10 @@ suite "cap.module: the Capability Authority as a direct-mode module":
     discard e.start("ca")
     let v = e.view("ca").tryGet
     check v.state == msError
-    # [S11-1 (b), I88] A realizer error is `other`; its code and message stay
-    # in the undisclosed reason.
-    check v.failure.get.kind == fkOther and v.failure.get.internal
-    check v.failure.get.reason.startsWith("realizer " & $lecAbiInvalid)
-    check "reserved" in v.failure.get.reason
+    # [I89] A typed Loader error is `loader-<code>`; its message stays in the
+    # undisclosed reason.
+    check v.failure.get.kind == fkLoader and v.failure.get.loader == lecAbiInvalid
+    check v.failure.get.internal and "reserved" in v.failure.get.reason
     check authorityFor(h.caDir).isNone
     e.finish()
     h.free()

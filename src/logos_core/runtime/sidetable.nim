@@ -20,17 +20,41 @@
 ##   asynchronous entries, its context, whether it declares events). The
 ##   Loader writes it when a realization becomes active and withdraws it once
 ##   `_MODULE_destroy` has returned (LDR-0152).
+## - **Journal** (a test hook, only under `lcnTestHooks`; plan §2.12): each
+##   request the Loader served, as plain values, in order.
 
 {.push raises: [], gcsafe.}
 
 import std/locks
 import results
 import ../abi/types
+import ../base/testhooks
 
 export results
 
+testHooksMarker("sidetable")
+
 const MaxKeyBytes = 128
   ## [SPEC RUNTIME §8; LOADER §7] module instance and realization ids
+
+type Key = object
+  bytes: array[MaxKeyBytes, char]
+  len: int
+
+when defined(lcnTestHooks):
+  type
+    JournalEntry* = object
+      ## [plan §2.12] One request the Loader served, as plain values.
+      meth*: string ## the method's name
+      instance*: string ## the module instance it names
+      realization*: string ## the realization id it names; empty: none
+      module*: string ## `realize`: the descriptor's module name
+      strategy*: string ## `realize`: the descriptor's implementation strategy
+      source*: string ## `realize`: the static binding id or the artifact id
+
+    JournalSlot = object
+      fields: array[6, Key]
+      next: ptr JournalSlot
 
 type
   FailedPhase* = enum
@@ -57,10 +81,6 @@ type
     context*: ptr LogosModuleContext
     declaresEvents*: bool
 
-  Key = object
-    bytes: array[MaxKeyBytes, char]
-    len: int
-
   InEntry = object
     key: Key
     handoff: InboundHandoff
@@ -76,6 +96,9 @@ type
     lock: Lock
     inbound: ptr InEntry
     outbound: ptr OutEntry
+    when defined(lcnTestHooks):
+      journal: ptr JournalSlot
+      journalTail: ptr JournalSlot
 
   SideTable* = ptr SideTableObj
 
@@ -112,6 +135,12 @@ proc freeSideTable*(t: SideTable) =
     let n = o.next
     freeShared(o)
     o = n
+  when defined(lcnTestHooks):
+    var j = t.journal
+    while j != nil:
+      let n = j.next
+      freeShared(j)
+      j = n
   deinitLock(t.lock)
   freeShared(t)
 
@@ -255,3 +284,52 @@ proc counts*(t: SideTable): (int, int) =
     while o != nil:
       inc result[1]
       o = o.next
+
+# Journal (test hook) ------------------------------------------------------------------
+
+when defined(lcnTestHooks):
+  proc textKey(s: string): Key =
+    ## `s`, cut at `MaxKeyBytes`.
+    result.len = min(s.len, MaxKeyBytes)
+    if result.len > 0:
+      copyMem(addr result.bytes[0], unsafeAddr s[0], result.len)
+
+  proc text(k: Key): string =
+    result = newString(k.len)
+    if k.len > 0:
+      copyMem(addr result[0], unsafeAddr k.bytes[0], k.len)
+
+  proc journal*(t: SideTable, e: JournalEntry) =
+    ## Appends `e`; the Loader calls it for each request it serves.
+    let slot = createShared(JournalSlot)
+    slot.fields = [
+      textKey(e.meth),
+      textKey(e.instance),
+      textKey(e.realization),
+      textKey(e.module),
+      textKey(e.strategy),
+      textKey(e.source),
+    ]
+    withLock t.lock:
+      if t.journalTail == nil:
+        t.journal = slot
+      else:
+        t.journalTail.next = slot
+      t.journalTail = slot
+
+  proc journalOf*(t: SideTable): seq[JournalEntry] =
+    ## Every entry so far, copied onto the calling thread's heap.
+    withLock t.lock:
+      var p = t.journal
+      while p != nil:
+        result.add(
+          JournalEntry(
+            meth: p.fields[0].text,
+            instance: p.fields[1].text,
+            realization: p.fields[2].text,
+            module: p.fields[3].text,
+            strategy: p.fields[4].text,
+            source: p.fields[5].text,
+          )
+        )
+        p = p.next

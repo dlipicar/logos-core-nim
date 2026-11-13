@@ -15,7 +15,7 @@ import
 from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
 from ../src/logos_core/crypto/slhdsa import Seed, keyPairFromSeeds
 from std/posix import Mode, chmod
-import ./support/[kitbuild, tunerconfig]
+import ./support/[kitbuild, slowdown, tunerconfig, withoutloader]
 import ./kit/meter_impl
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "host" / kitVariant
@@ -311,6 +311,20 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c = baseConfig()
     c.orchestration = "meter-1"
     check parse(c).get.orchestration == "meter-1"
+
+  test "[LDR-0006] [IMPL-DECISION G246] no configuration names the Module Loader's instance, module or binding":
+    var c = baseConfig()
+    c.modules[1].instance = LoaderInstanceId
+    check parse(c).rejects("names the reserved Module Loader")
+    c = baseConfig()
+    c.modules[1].module = LoaderModuleName
+    check parse(c).rejects("names the reserved Module Loader")
+    c = baseConfig()
+    c.modules[1] = staticModule("meter-1", "meter_module", LoaderBindingId)
+    check parse(c).rejects("names the reserved Module Loader")
+    c = baseConfig()
+    c.orchestration = LoaderInstanceId
+    check parse(c).rejects("orchestration names the reserved Module Loader instance")
 
   test "records: each passes the RUNTIME §8 checks; ids and state assignments are unique":
     var c = baseConfig()
@@ -1084,6 +1098,13 @@ suite "run.host-api: registration (RUNTIME §13.3)":
     check rt.register("orch-bad", t).text.contains("already registered")
     check runtimeDestroy(rt).ec == ecOk
 
+  test "[LDR-0006] [IMPL-DECISION G246] the Module Loader's binding id cannot be registered":
+    let rt = create(deployment())
+    let r = rt.register(LoaderBindingId, orchTable())
+    check r.ec == ecInvalidParams and "reserved for the Module Loader" in r.text
+    check rt.register("orchestrator", orchTable()).ec == ecOk
+    check runtimeDestroy(rt).ec == ecOk
+
   test "[RUN-1085] [RUN-0747] registering runs no module code and creates no instance":
     var c = deployment()
     let rt = registered(c)
@@ -1092,7 +1113,8 @@ suite "run.host-api: registration (RUNTIME §13.3)":
     check engineOf(rt) == nil
     check runtimeStart(rt).ec == ecOk
     let ids = engineOf(rt).list().mapIt(it.instance)
-    check ids == @["orch", "meter-1"]
+    # [I89] The Module Loader, established first, is the only other instance.
+    check ids == @[LoaderInstanceId, "orch", "meter-1"]
     rt.finish()
 
   test "[RUN-0749] the table is copied: the caller's storage may change once the call returns":
@@ -1145,7 +1167,7 @@ suite "run.host-api: registration (RUNTIME §13.3)":
     check rt.register("meter", kept).ec == ecOk
     check runtimeStart(rt).ec == ecOk
     check engineOf(rt).start("meter-1").tryGet.state == msError
-    check rt.failureOf("meter-1") == "other" # the realizer's abi-invalid (S11-1)
+    check rt.failureOf("meter-1") == "loader-abi-invalid" # a typed Loader error (I89)
     rt.finish()
 
 # Startup ------------------------------------------------------------------------------
@@ -1157,7 +1179,11 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
   test "[RUN-0309] [RUN-0023] [RUN-0784] [RUN-0724] [RUN-0746] [IMPL-DECISION G191] start realizes the orchestration instance only, with intent requested":
     let rt = registered(deployment())
     check runtimeStart(rt).ec == ecOk
-    let all = engineOf(rt).list()
+    # [I89] The Module Loader is established and ready before orchestration.
+    let loader = engineOf(rt).list()[0]
+    check loader.instance == LoaderInstanceId and loader.state == msReady
+    check loader.intentOrigin.host and not loader.orchestration
+    let all = engineOf(rt).list().withoutLoader
     check all.len == 2
     check all[0].instance == "orch" and all[0].state == msReady and all[0].orchestration
     check all[0].intentOrigin.host
@@ -1247,7 +1273,10 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     resetOrchestrator()
     orchGate.store(true)
     var c = deployment()
-    c.runtime.startup_deadline_ms = Opt.some(50'u32)
+    # [I89] The deadline also bounds the Module Loader's own start, which this
+    # test is not about: scaled by `Slow`. The gated init passes it whatever
+    # its length.
+    c.runtime.startup_deadline_ms = Opt.some(uint32(250 * Slow))
     rt = registered(c)
     r = runtimeStart(rt)
     check r.ec == ecModule and "startup-timeout" in r.text
@@ -1462,7 +1491,8 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check code == ecOk
     check LogosNSRuntimeControlRecoverModuleResponse.decode(response).tryGet.state.kind ==
       LogosNSRuntimeControlStateKind.Error
-    check rt.failureOf("meter-1") == "other"
+    # [I89] The Loader knows no registration with that binding.
+    check rt.failureOf("meter-1") == "loader-invalid-request"
     rt.finish()
 
   test "[IMPL] two handles on one store: the second start is MODULE_ERROR":

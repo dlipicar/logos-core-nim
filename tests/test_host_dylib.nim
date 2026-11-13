@@ -17,7 +17,7 @@ import ../src/logos_core/abi/host
 import ../src/logos_core/crypto/blake3
 import ../src/logos_core/iface/outcome
 import ../src/logos_core/runtime/[host_config_types, store_types]
-import ./support/[hostbuild, kitbuild, tunerconfig]
+import ./support/[hostbuild, kitbuild, tunerconfig, withoutloader]
 
 {.compile: "host/host_harness.c".}
 {.compile: "host/test_orchestrator.c".}
@@ -268,8 +268,9 @@ suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
     proc stored(): LcnRsInstance =
       let text = readFile(base / "store" / "runtime-state.cbor")
       let s = LcnRsState.decode(text.toOpenArrayByte(0, text.high)).tryGet
-      check s.instances.len == 1
-      s.instances[0]
+      let mine = s.instances.withoutLoader # [I89] the Loader's record too
+      check mine.len == 1
+      mine[0]
 
     # What the child wrote before `start` returned: `ready`, never exposed
     # before its write, and the whole file.

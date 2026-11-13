@@ -794,15 +794,15 @@ suite "cfg.startup: sources, selection, delivery and promotion (CONFIG §4, §6;
     check s.state_revision == 2 and s.current.get.value_revision == 1
     e.finish()
 
-  test "[RUN-1086] [CFG-0091] a live declaration on a binding without apply_configuration fails binding (realizer abi-invalid)":
+  test "[RUN-1086] [CFG-0091] a live declaration on a binding without apply_configuration fails binding (the Loader's abi-invalid)":
     let e = tunerEngine()
     discard e.startClient()
     let a = tunerAccepted(default = Opt.some(tunerValue()), live = true)
     discard e.createTuner("t1", a)
     let v = e.start("t1").tryGet
     check v.state == msError
-    check v.failure.get.kind == fkOther and v.failure.get.internal and
-      v.failure.get.reason.startsWith("realizer abi-invalid:")
+    check v.failure.get.kind == fkLoader and v.failure.get.loader == lecAbiInvalid and
+      v.failure.get.internal
     check tunerInits.load == 0
     discard e.createTuner("t2", a, binding = "tuner_live")
     check e.start("t2").tryGet.state == msReady

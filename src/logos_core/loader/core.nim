@@ -479,17 +479,15 @@ proc coreMain(sh: ptr CoreShared) {.thread.} =
   except Exception:
     return
   var c = Core(sh: sh, side: cfg.side, r: newRealizer(cfg.workDir, cfg.stateRoot))
-  var problem = ""
   for reg in cfg.statics:
-    c.r.registerStatic(reg).isOkOr:
-      problem = "a static registration is refused: " & error
-      break
+    # [SPEC RUNTIME §13.3] A duplicate binding identifier leaves the first
+    # registration unchanged, as the engine's own realizer did before I89.
+    discard c.r.registerStatic(reg)
   try:
-    sh.started.send(problem)
+    sh.started.send("") # started
   except Exception:
     discard
-  if problem.len == 0:
-    c.run()
+  c.run()
   c.r = nil
 
 # The API ------------------------------------------------------------------------------

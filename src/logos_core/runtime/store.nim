@@ -254,8 +254,14 @@ proc configOf*(data: openArray[byte], digest: Digest): Result[ConfigState, strin
 
 func classificationOf*(text: string): Result[Failure, string] =
   ## The failure a stored classification names (RUNTIME l.3753).
+  if text.startsWith("loader-"):
+    let code = text[7 ..^ 1]
+    for c in LoaderErrorCode:
+      if $c == code:
+        return ok(Failure(kind: fkLoader, loader: c))
+    return err("unknown failure classification " & text)
   for k in FailureKind:
-    if $k == text:
+    if k != fkLoader and $k == text:
       return ok(Failure(kind: k))
   err("unknown failure classification " & text)
 

@@ -26,7 +26,7 @@ import ../src/logos_core/authority/scopes except
   LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
   LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
   LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
-import ./support/[fakeca, kitbuild, kitruntime]
+import ./support/[fakeca, kitbuild, kitruntime, withoutloader]
 import ./kit/meter_impl
 import ./generated/meter_module_calls
 
@@ -730,7 +730,7 @@ suite "run.authority: parked operations (CA §8; I75)":
     park(orch, "get_readiness", observeReq("meter_module", Meter))
     check waitHanging()
     # The Runtime thread is free.
-    check e.list().len == 3
+    check e.list().withoutLoader.len == 3
     check parkedCode() == ecNotAuthorised
     check e.lastFor(aaObserve).outcome == azEvaluationFailed
     check waitUntil(

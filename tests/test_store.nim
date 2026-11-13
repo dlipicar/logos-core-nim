@@ -133,18 +133,24 @@ suite "run.store: the Runtime state store [IMPL]":
 
   test "every classification RUNTIME l.3753 lists is stored and read back":
     for k in FailureKind:
-      check classificationOf($k).tryGet.kind == k
-    # [S11-1 (b), I88] No Module Loader, so no `loader-<code>` (l.3754).
-    check classificationOf("loader-abi-invalid").isErr
+      if k != fkLoader:
+        check classificationOf($k).tryGet.kind == k
+    # [I89] `loader-<code>` for each typed Module Loader error (l.3754).
+    for c in LoaderErrorCode:
+      let f = classificationOf("loader-" & $c).tryGet
+      check f.kind == fkLoader and f.loader == c
+    check classificationOf($fkLoader).isErr
+    check classificationOf("loader-").isErr
+    check classificationOf("loader-crashed").isErr
     check classificationOf("crashed").isErr
 
-  test "[IMPL] a realizer's failure text, which may name host paths, is not stored":
+  test "[IMPL] a Module Loader's failure text, which may name host paths, is not stored":
     var a = sample()
     a.instances[1].failure = Opt.some(
-      Failure(kind: fkOther, reason: "realizer abi-invalid: /opt/x", internal: true)
+      Failure(kind: fkLoader, loader: lecAbiInvalid, reason: "/opt/x", internal: true)
     )
     let b = decodeSnapshot(encodeSnapshot(a).tryGet).tryGet
-    check b.instances[1].failure.get.classification == "other"
+    check b.instances[1].failure.get.classification == "loader-abi-invalid"
     check b.instances[1].failure.get.reason == ""
 
   test "a leftover temporary file is removed and the earlier snapshot read":

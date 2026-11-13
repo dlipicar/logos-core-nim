@@ -19,7 +19,7 @@ import ../src/logos_core/iface/[accept, names, outcome]
 import ../src/logos_core/crypto/blake3
 import ../src/logos_core/package/manifest
 import ../src/logos_core/pins
-import ./support/[kitbuild, kitruntime]
+import ./support/[kitbuild, kitruntime, slowdown, withoutloader]
 import ./kit/meter_impl
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "engine" / kitVariant
@@ -142,15 +142,6 @@ proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10): bool =
 proc failureOf(v: InstanceView): string =
   if v.failure.isSome: v.failure.get.classification else: ""
 
-proc realizerError(v: InstanceView): string =
-  ## [S11-1 (b), I88] A realizer error is `other`; its code stays in the
-  ## undisclosed diagnostic text.
-  if v.failure.isSome and v.failure.get.internal and
-      v.failure.get.reason.startsWith("realizer "):
-    v.failure.get.reason[9 ..^ 1].split(':')[0]
-  else:
-    ""
-
 # Calls on other threads -------------------------------------------------------------
 
 var
@@ -212,7 +203,7 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
     for r in bad:
       let x = e.create(r)
       check x.isErr and x.error.code == ecInvalidParams
-    check e.list().len == 0
+    check e.list().withoutLoader.len == 0
     e.finish()
 
   test "[RUN-0010] [RUN-0659] [RUN-0270] [RUN-0272] [RUN-0487] a new instance is unloaded, with intent uninitialized and its own state assignment":
@@ -226,7 +217,7 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
     check e.create(gated(), "g1").error.code == ecInvalidParams
     let fresh = e.create(gated()).tryGet
     check fresh.instance.len > 0 and fresh.instance != "g1"
-    check e.list().len == 2
+    check e.list().withoutLoader.len == 2
     e.finish()
 
 suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
@@ -442,7 +433,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check live.load == 0
     e.finish()
 
-  test "[IMPL-DECISION G230] [RUN-0296] [RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [RUN-0885] a failed start is classified (a realizer error is `other`), cleaned, and leaves other instances running":
+  test "[RUN-0296] [RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [RUN-0885] a failed start is classified (a Loader error is `loader-<code>`), cleaned, and leaves other instances running":
     let e = newEngine(config())
     discard e.create(meter(), "m").tryGet
     check e.start("m").tryGet.state == msReady
@@ -459,14 +450,14 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
       "unbound",
     ).tryGet
     let u = e.start("unbound").tryGet
-    check u.failureOf == "other" and u.realizerError == "invalid-request"
+    check u.failureOf == "loader-invalid-request"
     var missing = ModuleRecord(module: "gated_consumer", strategy: stDirectDynamic)
     missing.artifact = ArtifactRecord(
       id: "a", localPath: work / "missing" & LibraryExtension, hashSuite: HashSuiteId
     )
     discard e.create(missing, "missing").tryGet
     let m = e.start("missing").tryGet
-    check m.failureOf == "other" and m.realizerError == "artifact-unavailable"
+    check m.failureOf == "loader-artifact-unavailable"
     check e.view("m").tryGet.state == msReady
     check live.load == 0
     # A failed instance starts again once its cleanup is complete.
@@ -494,7 +485,10 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
 
   test "[RUN-0796] [RUN-0797] [RUN-0792] [RUN-0793] [RUN-0791] the startup deadline: error, then the late context is destroyed":
     var cfg = config()
-    cfg.startupDeadline = initDuration(milliseconds = 150)
+    # [I89] The deadline also bounds the Module Loader's own start at open,
+    # which this test is not about: scaled by `Slow`. The gated init passes it
+    # whatever its length.
+    cfg.startupDeadline = initDuration(milliseconds = 150 * Slow)
     let e = newEngine(cfg)
     discard e.create(gated(), "g").tryGet
     initGate.store(true)
@@ -514,7 +508,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check live.load == 0
     let after = e.view("g").tryGet
     check after.state == msError and after.failureOf == "startup-timeout"
-    # A new attempt can make it ready now. Its deadline is the same 150 ms, which
+    # A new attempt can make it ready now. Its deadline is the same short one, which
     # a loaded machine can let pass (TSan in CI), so the test starts it again
     # until one attempt is ready.
     check waitUntil(
@@ -536,9 +530,11 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check f.failure.get.reason == "disk gone"
     check f.execution.intent == inRequested
     check e.reportFailure("g", v.attempt).error.code == ecNotReady
+    # [I89] The release's reply comes back through the Module Loader after
+    # `_MODULE_destroy` returned; until then the cleanup is pending.
     check waitUntil(
       proc(): bool =
-        destroys.load == 1
+        destroys.load == 1 and not e.cleanupPending("g")
     )
     let r = e.start("g").tryGet
     check r.state == msReady and r.attempt != v.attempt
@@ -658,7 +654,9 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     for c in e.changes():
       if c.serial > before and c.view.state == msUnloaded:
         unloadedAt.add((c.view.instance, c.serial))
-    check unloadedAt.len == 2 and unloadedAt[0][0] == "b"
+    # [I89] The Module Loader is released last.
+    check unloadedAt.len == 3 and unloadedAt[0][0] == "b" and unloadedAt[1][0] == "a"
+    check unloadedAt[2][0] == LoaderInstanceId
     check e.close()
 
   test "[RUN-1072] [RUN-1073] a destroy that outlives the shutdown grace is recorded, not forced":
@@ -685,7 +683,7 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     discard e.start("g").tryGet
     discard e.stop("g").tryGet
     discard e.start("g").tryGet
-    let cs = e.changes()
+    let cs = e.changes().withoutLoader
     check cs.len >= 6
     for i in 1 ..< cs.len:
       check cs[i].serial > cs[i - 1].serial
@@ -734,7 +732,7 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     let e = newEngine(config())
     let v = e.bootstrap(deployment(), "o").tryGet
     check v.instance == "o" and v.state == msReady and v.orchestration
-    let all = e.list()
+    let all = e.list().withoutLoader
     check all.len == 2 and all[0].instance == "o" and all[1].instance == "m"
     check all[1].state == msUnloaded and all[1].execution.intent == inUninitialized
     check not all[1].orchestration
@@ -763,13 +761,16 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     e.finish()
     reset()
     var cfg = config()
-    cfg.startupDeadline = initDuration(milliseconds = 50)
+    # [I89] The deadline also bounds the Module Loader's own start at open,
+    # which this test is not about: scaled by `Slow`. The gated init passes it
+    # whatever its length.
+    cfg.startupDeadline = initDuration(milliseconds = 250 * Slow)
     e = newEngine(cfg)
     initGate.store(true)
     r = e.bootstrap(deployment(), "o")
     check r.error.code == ecModule and "startup-timeout" in r.error.message
     # [RUN-0737] Here too the engine takes a start. Every start of this engine has
-    # the 50 ms deadline, which a loaded machine can let pass (TSan in CI), so
+    # the short deadline, which a loaded machine can let pass (TSan in CI), so
     # the test does not ask for `ready`: only that the start ran.
     let m = e.start("m")
     check m.isOk and (m.get.state == msReady or m.get.failureOf == "startup-timeout")
@@ -874,5 +875,5 @@ suite "run.engine: persistent state (I82)":
     f.close()
     var (e3, _) = opened()
     let s1 = e3.start("s1").tryGet
-    check s1.failureOf == "other" and s1.realizerError == "artifact-integrity-failed"
+    check s1.failureOf == "loader-artifact-integrity-failed"
     e3.finish()

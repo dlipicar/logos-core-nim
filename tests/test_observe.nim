@@ -488,7 +488,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     check rc.routeList(limit = some16(0)).code == ecNotAuthorised
     e.finish()
 
-  test "[RUN-0870] [RUN-0871] [RUN-0872] [RUN-0873] [RUN-0952] [RUN-1052] [RUN-1057] [RUN-1060] a failure carries its classification; a realizer message is never disclosed, other text is cut at 512 bytes":
+  test "[RUN-0870] [RUN-0871] [RUN-0872] [RUN-0873] [RUN-0952] [RUN-1052] [RUN-1057] [RUN-1060] a failure carries its classification; a Loader message is never disclosed, other text is cut at 512 bytes":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")
@@ -501,7 +501,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     let x = rc.modules(instance = someText("x")).listed.modules
     check x.len == 1
     check x[0].state.kind == LogosNSRuntimeControlStateKind.Error
-    check x[0].failure == Opt.some("other")
+    check x[0].failure == Opt.some("loader-artifact-unavailable")
     check x[0].reason.isNone
     # A reported failure's own text, cut at a character boundary.
     let text = "é".repeat(300) # 600 bytes
@@ -608,7 +608,7 @@ suite "run.rc: list_routes (RUNTIME §9.3 l.3359-3365, l.3372-3413)":
 # get_execution_summary ----------------------------------------------------------------
 
 suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
-  test "[RUN-0441] [RUN-0442] [RUN-0440] [RUN-0634] [RUN-0636] [RUN-0637] [RUN-0639] [RUN-0642] [RUN-0994] a ready instance: one committed view, a current realization, an implementation-specific selection [IMPL-DECISION G230]":
+  test "[RUN-0441] [RUN-0442] [RUN-0440] [RUN-0634] [RUN-0636] [RUN-0637] [RUN-0639] [RUN-0642] [RUN-0994] a ready instance: one committed view, a current realization, its strategy as the selection":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")
@@ -622,11 +622,15 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
       LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Current
     check s.selection.isSome
     check s.selection.get.implementation.kind ==
-      LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Implementation_specific
+      LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Direct_static
     check s.selection.get.package.isNone and s.selection.get.signer.isNone
+    # [I89; G57] The Module Loader itself, realized by the bootstrap mechanism.
+    let l = rc.summaryOf(e.address(LoaderInstanceId)).summarized
+    check l.selection.get.implementation.kind ==
+      LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Implementation_specific
     e.finish()
 
-  test "[RUN-0640] [RUN-0641] [RUN-1057] [IMPL-DECISION G230] no realization before a start, after a failed bind and after a stop":
+  test "[RUN-0640] [RUN-0641] [RUN-1057] no realization before a start, after a failed bind and after a stop":
     let e = fixtureEngine(config())
     discard e.create(meter(), "m").tryGet
     let (_, rc) = e.startClient("c")
@@ -644,10 +648,10 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     check e.start("x").tryGet.state == msError
     let x = rc.summaryOf(e.address("x")).summarized
     check x.state.kind == LogosNSRuntimeControlStateKind.Error
-    check x.failure == Opt.some("other")
+    check x.failure == Opt.some("loader-artifact-unavailable")
     check x.realization.kind == Absent
     check x.selection.get.implementation.kind ==
-      LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Implementation_specific
+      LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Direct_dynamic
     e.finish()
 
   test "[RUN-0634] [RUN-0635] [RUN-0875] [IMPL-DECISION G228] a target on another Runtime is INVALID_PARAMS without detail; an unknown or refused target is NOT_AUTHORISED":

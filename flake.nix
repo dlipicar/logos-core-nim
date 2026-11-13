@@ -310,6 +310,7 @@
             android
             ios
             updateNimbleDeps
+            nimDerivation
             ;
         };
 
@@ -377,6 +378,46 @@
             nph --check src tests logos_core.nimble config.nims
             touch $out
           '';
+          # The test-hook rule (src/logos_core/base/testhooks.nim; D27 revised 2026-11-13, I89):
+          # no deployment output holds the marker, and a probe built with the define does, so
+          # the search is not vacuous. Deployment outputs are this system's packages and apps
+          # except the toolchain (nim, nph), the Android SDK and the test-suite builds and
+          # runners, which are test builds.
+          no-test-hooks =
+            let
+              notDeployed = [
+                "nim"
+                "nph"
+                "android-sdk"
+                "android-suites-x86_64"
+                "android-suites-arm64"
+                "test-android"
+                "test-ios"
+              ];
+              deployed =
+                lib.attrValues (removeAttrs self.packages.${system} notDeployed)
+                ++ map (a: a.program) (lib.attrValues (removeAttrs self.apps.${system} notDeployed));
+            in
+            s.nimDerivation {
+              name = "no-test-hooks";
+              src = s.nimSources;
+              buildPhase = ''
+                runHook preBuild
+                marker=LCN_TEST_HOOKS_BUILD
+                for p in ${lib.escapeShellArgs (map toString deployed)}; do
+                  if grep -rlaF "$marker" "$p"; then
+                    echo "a deployment output holds test hooks: $p"
+                    exit 1
+                  fi
+                done
+                nim c --hints:off -d:lcnTestHooks --outdir:build tests/support/hookprobe.nim
+                if ! grep -qaF "$marker" build/hookprobe; then
+                  echo "the probe built with the define holds no marker"
+                  exit 1
+                fi
+                runHook postBuild
+              '';
+            };
           # No `?` inside a half-built constructor: it leaks on Nim 2.2.14 (I77).
           lint-ctor-try = s.pkgs.runCommand "lint-ctor-try" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}

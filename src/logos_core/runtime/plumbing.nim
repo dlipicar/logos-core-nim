@@ -16,11 +16,14 @@ import ../base/clock
 import ../hash/hashinput
 import ../iface/outcome
 import ../authority/facts
-import ./[authz, bell, callaudit, configcheck, records, realizer, routes]
+import ./[authz, bell, callaudit, configcheck, loaderbinding, records, realizer, routes]
+from ./sidetable import SideTable
+from ../loader/contract import LoaderInstanceId, LoaderModuleName, LoaderBindingId
 
 export
-  authz, callaudit, clock, configcheck, facts, records, realizer, routes,
-  outcome.ErrorCode, hashinput.Digest
+  authz, callaudit, clock, configcheck, facts, loaderbinding, records, realizer, routes,
+  outcome.ErrorCode, hashinput.Digest, LoaderInstanceId, LoaderModuleName,
+  LoaderBindingId
 
 const
   DefaultStartupDeadline* = initDuration(seconds = 120)
@@ -70,6 +73,13 @@ const
     ## handler never delays a start or a call; more drains wait in their queue
   MaxListLimit* = 1000 ## [SPEC RUNTIME l.3379]
 
+func namesLoader*(id: string, rec: ModuleRecord): bool =
+  ## [IMPL-DECISION G246; LOADER l.80] The Module Loader's reserved instance
+  ## id, module name or static binding id: only the Runtime's bootstrap names
+  ## them (host configuration, `create_module` and declarations cannot).
+  id == LoaderInstanceId or rec.module == LoaderModuleName or
+    (rec.strategy == stDirectStatic and rec.binding == LoaderBindingId)
+
 type
   ModuleState* = enum
     ## [SPEC RUNTIME §3.4] `logos.runtime_control.state` for a local instance
@@ -85,9 +95,10 @@ type
     inStopped = "stopped"
 
   FailureKind* = enum
-    ## [SPEC RUNTIME §9.3 l.3750-3756] The initial classifications. No
-    ## `loader-<code>`: l.3754 needs a typed Module Loader error, and the
-    ## internal realizer is no Module Loader (RUNTIME l.212; S11-1 (b), I88).
+    ## [SPEC RUNTIME §9.3 l.3750-3756] The initial classifications;
+    ## `fkLoader` is `loader-` followed by the typed Module Loader error code
+    ## (l.3754; I89: the bound Module Loader realizes every instance but its
+    ## own).
     fkStartupTimeout = "startup-timeout"
     fkInitializationFailed = "initialization-failed"
     fkReportedByModule = "reported-by-module"
@@ -102,10 +113,12 @@ type
     fkCleanupTimeout = "cleanup-timeout"
     fkRemoteStateUnknown = "remote-state-unknown"
     fkOther = "other"
+    fkLoader = "loader"
 
   Failure* = object
     kind*: FailureKind
     reason*: string ## diagnostics only; never replaces the classification
+    loader*: LoaderErrorCode ## for `fkLoader`
     internal*: bool
       ## [IMPL] `reason` is the realizer's text, which may name host paths:
       ## kept for diagnostics, never disclosed or stored
@@ -555,6 +568,7 @@ type
     jkComplete ## an asynchronous call's completion callback
     jkRequestCancel ## a deferred invocation's `request_cancel` hook
     jkApply ## [I87] `_MODULE_apply_configuration` on a live context
+    jkLoader ## [I89] one call of the bound Module Loader (`LoaderJob`)
 
   Job* = object
     id*: int
@@ -580,8 +594,25 @@ type
         ## the `configuration_input`, which the engine keeps until the hook
         ## has returned
       applyLen*: int
+    of jkLoader:
+      loader*: LoaderJob
     of jkQuit:
       discard
+
+  LoaderJob* = object
+    ## [SPEC RUNTIME l.1652-1667; plan §2.6] One Module Loader method called by
+    ## the Runtime with a SYSTEM_SERVICE context on a lifecycle worker, which
+    ## then reads and checks the response (`loaderbinding.readReply`).
+    meth*: LoaderMethod
+    request*: seq[byte] ## the encoded request
+    instance*: string ## the request's module instance (none for list_capabilities)
+    realization*: Opt[string] ## the request's realization id, if it names one
+    dispatch*: ModuleDispatchFn ## the Loader realization's
+    free*: ModuleFreeFn
+    context*: ptr LogosModuleContext
+    access*: pointer ## the Loader instance's invocation-access state
+    ticket*: ptr CallTicket ## cancelled when the attempt is cancelled or expires
+    runtimeId*: string
 
   EvalJobKind* = enum
     ejQuit ## first and without fields, as `MsgKind`
@@ -656,6 +687,7 @@ type
     mkEvaluated ## an evaluation worker finished one `evaluate` (`job`)
     mkRcHandled ## [G178] a Runtime Control event handler returned (`target`)
     mkApplied ## [I87] `_MODULE_apply_configuration` returned (`res`)
+    mkLoaderReply ## [I89] a Module Loader call returned (`loaderReply`)
 
   Msg* = object
     job*: int
@@ -681,6 +713,8 @@ type
       extra*: pointer
     of mkEvaluated:
       evaluated*: EvalResult
+    of mkLoaderReply:
+      loaderReply*: LoaderReply
 
   ReplySlot = object
     ## One reply channel, reused by one call after another [IMPL]. A sender
@@ -724,6 +758,10 @@ type
     payloadDepth*: int
       ## [IF-02, I88] `EngineConfig.maxPayloadDepth`, filled in; written before
       ## any thread starts
+    side*: SideTable
+      ## [I89] the private handoffs with the Module Loader; made before any
+      ## thread starts and freed after every thread has left, so a Loader
+      ## thread still running never reads a freed table
 
   Engine* = ptr Shared
 
@@ -733,7 +771,10 @@ const AuthorityEndings* = {
 
 func classification*(f: Failure): string =
   ## [SPEC RUNTIME §9.3] The failure code reported for `f`.
-  $f.kind
+  if f.kind == fkLoader:
+    "loader-" & $f.loader
+  else:
+    $f.kind
 
 func effective*(l: EngineLimits): EngineLimits =
   ## The limits with every 0 replaced by its default.
