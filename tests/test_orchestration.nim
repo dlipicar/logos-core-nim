@@ -701,6 +701,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
 
   test "[RUN-1063] [IMPL-DECISION G290] until active policy answers list_modules nothing is started, and the probes are spaced":
     setScript(rule(vDeny, what = "rc:list_modules", consumer = Orch))
+    let t0 = getMonoTime()
     let e = boot(value(defaults = starts(0), authority = true))
     check waitUntil(
       proc(): bool =
@@ -709,8 +710,19 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     sleep(int(ms(600)))
     check e.view(flakyInstance(0)).tryGet.execution.intent == inUninitialized
     let probes = callsForTests("list_modules")
-    # 50 ms doubling: at most 50, 100, 200, 400 in 600 ms, plus slack.
-    check probes >= 2 and probes <= 6
+    let elapsed = (getMonoTime() - t0).inMilliseconds
+    # The schedule is not scaled by Slow; the time since boot bounds how many
+    # probes it allows (50 ms doubling to 2 s), plus one for slack.
+    var allowed = 1
+    var at = 0'i64
+    var gap = 50'i64
+    while at + gap <= elapsed:
+      at += gap
+      inc allowed
+      gap = min(gap * 2, 2000)
+    checkpoint "probes " & $probes & " in " & $elapsed & " ms, schedule allows " &
+      $allowed
+    check probes >= 2 and probes <= allowed + 1
     setScript()
     check waitUntil(e.isReady(flakyInstance(0)))
     e.finish()
