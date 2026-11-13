@@ -70,6 +70,8 @@ type
     blob*: ptr SchemaBlob
     generation*: uint64
       ## [G177] its own invocation-path generation (one per materialization)
+    conn*: uint64
+      ## [I90] a transported handle's link (`transported.nim`); 0: a direct one
     refs*: Atomic[int]
     lock*: Lock
     cond*: Cond

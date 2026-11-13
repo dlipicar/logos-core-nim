@@ -116,7 +116,9 @@ from ../loader/provider import
   LoaderWiring, wireLoader, unwireLoader, loaderStaticRegistration
 from ../transport/io/api import
   IoEvent, IoEventKind, IoSink, IoCommand, IoCommandKind, TransportConfig,
-  defaultTransportConfig, ContractInput, EndpointId, ConnId, CallOutcome
+  defaultTransportConfig, ContractInput, EndpointId, ConnId, CallOutcome,
+  ConnectFailure, PeerIdentity, SubmitResult
+from ../transport/ticket import MaxTicketLifetime, RouteTicket
 from ../transport/hello import
   acceptHello, HelloCheck, HelloFailure, HelloReason, RouteBinding, NotAuthorisedMessage
 from ../transport/io/endpoint import checkEndpointBase
@@ -129,7 +131,7 @@ import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
     execauth, inventory, invoke, loaderbinding, observe, plumbing, rcevents, served,
-    sessionauth, sidetable, store,
+    sessionauth, sidetable, store, transported,
   ]
 
 export plumbing
@@ -347,6 +349,9 @@ type
       ## Response on `conn`, never a completion callback
     conn: uint64
     requestId: uint64
+    linkTag: uint64
+      ## [I90] a call through a transported handle: its tag on the link, once
+      ## sent
 
   OpCtx = ref object
     ## [IMPL] One request while its handler obtains its decisions (I85). A
@@ -503,6 +508,16 @@ type
     tickets: TicketStore[RouteBinding]
       ## [SPEC TRANSPORT §8.1.1; I90] the live route tickets, in memory only
     sv: Served ## [G257; I90] the provider half of transported routes
+    links: Table[uint64, Link]
+      ## [I90] the caller half: one link per transported handle, by `ConnId`
+    material: Table[string, Material]
+      ## [I90; plan §2.4] by route: the latest live answer's unused material
+    when defined(lcnTestHooks):
+      connectFault: Opt[ConnectFailure]
+        ## [plan §4.1] the next materialization fails with this cause
+      spoilTicket: bool
+        ## [plan §4.1] the next materialization's Hello carries a ticket the
+        ## provider never issued
     caRoot: Opt[Digest] ## the pinned Capability Authority contract root
     op: OpCtx ## the request being handled
     pendings: Table[int, Pending]
@@ -1081,6 +1096,14 @@ proc asyncTerminal(st: State, a: AsyncRec) =
     a.ticket.closed.store(true)
   if c.callEnd != okResult:
     st.cancelInvocation(a)
+    if a.linkTag != 0 and c.callEnd in {okCancelled, okTimeout}:
+      # [IFC-0729; TRANSPORT §3.4] A sent call cancelled or timed out: Cancel
+      # on its link; its late Response is discarded (`linkResponse`).
+      let l = st.links.getOrDefault(c.link)
+      if l != nil and l.state == lkOpen and a.linkTag in l.asyncs:
+        discard st.shared.tport.submitOwner(
+          IoCommand(conn: l.conn, kind: IoCommandKind.cmdCancel, callTag: a.linkTag)
+        )
   if a.session:
     # [I90; plan §2.5] No callback: a decision no worker answered is the
     # Runtime's to answer (an end, a refused queue).
@@ -1170,6 +1193,10 @@ proc records(st: State): seq[AsyncRec] =
   for a in st.asyncCalls.values:
     result.add(a)
 
+proc linksEnded(st: State, r: Route) {.gcsafe.}
+proc keepMaterial(st: State, r: Route, path: string, t: RouteTicket) {.gcsafe.}
+proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.}
+
 proc endServices(st: State, s: ptr AttemptServices, instance: string) =
   ## The realization an attempt made is gone, or the attempt made none: its
   ## bindings are invalid. Its calls are cancelled and their completions not
@@ -1179,6 +1206,7 @@ proc endServices(st: State, s: ptr AttemptServices, instance: string) =
     return
   let token = attemptOf(s)
   st.liveAttempts.excl(token)
+  st.linksOfAttemptEnded(token)
   # [SPEC RUNTIME l.629; I86] Its list snapshots go with its binding, and so
   # do the Runtime Control subscriptions its module never unsubscribed.
   st.snapshots.endAttempt(token)
@@ -1260,6 +1288,7 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
   let before = r.state
   r.terminate(state, failure)
   st.routeEndedRc(r, before)
+  st.linksEnded(r)
   if state == rtRevoked and r.calls.len > 0:
     # [SPEC CA l.917-918; CAP-0193, CAP-0194; I85] Provider code already
     # running cannot be interrupted: its invocation is marked cancelled, no
@@ -4670,6 +4699,7 @@ proc establish(st: State, q: Request, x: Inst) =
         issueFailed = true
       else:
         response.routes.add(rec.live(t.get.path, t.get.ticket))
+        st.keepMaterial(r, t.get.path, t.get.ticket)
     else:
       response.routes.add(rec)
     st.hintRc(InvKind.Routes, recordSubject(r)) # [SPEC RUNTIME l.3417]
@@ -4932,6 +4962,7 @@ proc renew(st: State, q: Request, x: Inst) =
       q.reply.answerError(ecModule, "a route ticket cannot be issued")
       return
     answer = rec.live(t.path, t.ticket)
+    st.keepMaterial(r, t.path, t.ticket)
   let bytes = encode(LogosNSRuntimeControlRenewRouteResponse(route: answer)).valueOr:
     q.reply.answerError(ecModule, "the response cannot be encoded")
     return
@@ -6322,6 +6353,383 @@ proc establishLoader(st: State) =
     return
   st.beginAttempt(at)
 
+# Transported route handles: the caller half (4b-2b; DECISIONS I90) ---------------
+
+proc dropMaterial(st: State, route: string) =
+  ## [plan §2.4, Rev R9 (c)] The consumer's material for `route`, zeroed.
+  var m: Material
+  if st.material.pop(route, m):
+    m.burn()
+
+proc keepMaterial(st: State, r: Route, path: string, t: RouteTicket) {.gcsafe.} =
+  ## [plan §2.4] A live answer's material; it replaces an older one, whose
+  ## ticket is left to expire [IMPL].
+  st.dropMaterial(r.id)
+  st.material[r.id] = Material(
+    path: path,
+    ticket: t,
+    expires: min(r.monoDeadline.get(high(int64)), st.monoNow + MaxTicketLifetime),
+  )
+
+proc closeLink(st: State, l: Link) =
+  ## [Rev R5] The link's connection goes: `cmdClose`, once.
+  if l.state != lkClosed and not l.closeSent:
+    l.closeSent = true
+    discard
+      st.shared.tport.submitOwner(IoCommand(conn: l.conn, kind: IoCommandKind.cmdClose))
+
+proc settleLink(st: State, l: Link) =
+  ## [Rev R5] A link nothing keeps closes; a closed one nothing keeps goes.
+  if l.idle:
+    if l.state == lkClosed:
+      st.links.del(l.conn)
+    else:
+      st.closeLink(l)
+
+proc linkObserved(st: State, l: Link) =
+  ## [Rev R4; INTERFACE l.1486-1490] The handle's path ended before its route:
+  ## its observer, if one is installed, gets the first cause once.
+  let r = st.route(l.route)
+  if r.isNil:
+    return
+  let i = r.handles.find(l.handle)
+  if i < 0:
+    return
+  r.handles.del(i)
+  scheduleEnd(l.handle, l.observed.get)
+  st.dispatch(Job(id: st.nextJobId(), kind: jkObserveEnd, handle: l.handle))
+  st.endRegsGone(r.consumer, 1)
+
+proc linkConnectFailed(st: State, ev: IoEvent) =
+  ## [plan §2.6 step 8; G259] No handle: the materialization's code, from the
+  ## cause (`connectOutcome`), or the route's own if it ended meanwhile (K42).
+  ## [K12, Rev R2] A peer that is not the expected identity fails the route
+  ## with `transport-error`, which revokes its tickets, before the
+  ## materialization is answered.
+  let l = st.links.getOrDefault(ev.conn)
+  if l.isNil:
+    return
+  st.links.del(ev.conn)
+  l.state = lkClosed
+  let cause = l.routeCause
+  let (code, failed) = connectOutcome(ev.failCause, ev.failCode)
+  let r = st.route(l.route)
+  if failed and r != nil and not r.isTerminal:
+    st.diagnose(
+      "route " & r.id &
+        ": peer identity mismatch: the peer at its endpoint is not the expected identity; the route fails with transport-error"
+    )
+    st.endRoute(r, rtFailed, Opt.some(rfTransportError))
+  if l.connecting != nil:
+    let reply = l.connecting
+    l.connecting = nil
+    reply.answerError(cause.get(code), "the route's handle could not be connected")
+
+proc connectLink(st: State, q: Request, r: Route) =
+  ## [plan §2.6 steps 2-6; G258] A transported handle: the route's material,
+  ## taken by move, opens one connection whose Hello redeems its ticket, and
+  ## the reply waits for the outcome (`linkConnected`, `linkConnectFailed`),
+  ## bounded by the Hello deadline. Without material, because the ticket was
+  ## used or the answer was a replay, which carries none (G255), the handle is
+  ## NOT_AUTHORISED and nothing is connected: `renew_route` issues a fresh
+  ## ticket (K11).
+  var m: Material
+  if not st.material.pop(r.id, m):
+    q.reply.answerError(
+      ecNotAuthorised, "the route has no unused ticket; renew_route issues one"
+    )
+    return
+  let e = st.sv.endpoints.getOrDefault(r.endpoint.get(0))
+  if e.isNil:
+    m.burn()
+    q.reply.answerError(ecNotReady, "the provider's endpoint is gone")
+    return
+  let h = cast[ptr HandleState](q.handle)
+  var schema = newSeq[byte](h.blob.len)
+  for i in 0 ..< h.blob.len:
+    schema[i] = h.blob.data[i]
+  let conn = st.shared.tport.newConnId()
+  let l = Link(
+    conn: conn,
+    route: r.id,
+    consumer: r.consumer,
+    attempt: q.attempt,
+    handle: q.handle,
+    generation: h.generation,
+    state: lkConnecting,
+    connecting: q.reply,
+  )
+  st.links[conn] = l
+  when defined(lcnTestHooks):
+    if st.connectFault.isSome:
+      m.burn()
+      let cause = st.connectFault.get
+      st.connectFault = Opt.none(ConnectFailure)
+      st.linkConnectFailed(
+        IoEvent(
+          conn: conn,
+          kind: IoEventKind.evConnectFailed,
+          failCode: ecTransport,
+          failCause: cause,
+          failMsg: "injected by the test",
+        )
+      )
+      return
+  var cmd = IoCommand(
+    conn: conn,
+    kind: IoCommandKind.cmdConnect,
+    path: m.path,
+    expected: PeerIdentity(uid: st.shared.tport.euid),
+    module: e.module,
+    ticket: m.ticket,
+    selected: ContractInput(root: h.root, schema: schema, system: true),
+    firstId: 0,
+  )
+  m.burn()
+  when defined(lcnTestHooks):
+    if st.spoilTicket:
+      st.spoilTicket = false
+      cmd.ticket[0] = cmd.ticket[0] xor 0xFF
+  let sent = st.shared.tport.submitOwner(cmd)
+  zeroMem(addr cmd.ticket[0], cmd.ticket.len)
+  if sent != SubmitResult.sbOk:
+    st.links.del(conn)
+    q.reply.answerError(ecNotReady, "the transport is stopping")
+
+proc linkConnected(st: State, conn: ConnId) =
+  ## [plan §2.6 step 7; RUN-0800, RUN-0802] The provider holds the session
+  ## before the handle is returned. [Rev R4; K42] A route that ended while
+  ## the link connected gives its cause, and the connection closes.
+  let l = st.links.getOrDefault(conn)
+  if l.isNil or l.state != lkConnecting:
+    return
+  l.state = lkOpen
+  let reply = l.connecting
+  l.connecting = nil
+  let r = st.route(l.route)
+  if l.routeCause.isSome or r.isNil or r.isTerminal:
+    let code = l.routeCause.get(if r.isNil: ecNotAuthorised else: r.endCode)
+    reply.answerError(code, "the route ended while its handle connected")
+    st.closeLink(l)
+    return
+  l.held = true
+  r.pins.add(Pin(handle: l.handle, attempt: l.attempt))
+  reply.answer(Reply(conn: conn))
+
+proc linkAdmits(
+    st: State, l: Link, r: Route, consumer, attempt, bare: string
+): Opt[EngineError] =
+  ## [SPEC RUNTIME §4.1, l.1343-1347; plan §2.6 step 1] A new call through a
+  ## transported handle, in the order of a direct call's admission up to the
+  ## per-call decision, which the provider side makes (l.1732): the method
+  ## and the route's scope, then the route's end cause or the closed
+  ## connection's, then the consumer's liveness.
+  template refuse(code: ErrorCode, message: string): untyped =
+    return Opt.some(engineError(code, message))
+
+  if l.isNil or r.isNil or r.consumer != consumer or l.route != r.id:
+    refuse(ecNotAuthorised, "not authorised")
+  st.expireIfDue(r)
+  if r.selected.methodRoot(bare).isNone:
+    refuse(ecMethodNotFound, "unknown method " & bare)
+  if not r.allowsMethod(bare):
+    refuse(ecNotAuthorised, "the method is outside the route's access")
+  if r.isTerminal:
+    refuse(r.endCode, "the route is " & $r.state)
+  let code = l.newCallCode
+  if code.isSome:
+    refuse(code.get, "the handle's connection has ended")
+  let x = st.instances.getOrDefault(r.consumer)
+  if x.isNil or attempt != x.current or x.state notin {msLoaded, msReady} or
+      st.shuttingDown:
+    refuse(ecNotReady, "the consumer is not live")
+  Opt.none(EngineError)
+
+proc linkCall(st: State, q: Request) =
+  ## [plan §2.6; I90] A synchronous call through a transported handle: sent on
+  ## its link once admitted; the reply waits for the Response.
+  let l = st.links.getOrDefault(q.conn)
+  let refused =
+    st.linkAdmits(l, st.route(q.route), q.origin.instance, q.attempt, q.bare)
+  if refused.isSome:
+    q.reply.answerError(refused.get.code, refused.get.message)
+    return
+  let tag = l.takeTag()
+  l.calls[tag] = q.reply
+  let sent = st.shared.tport.submitOwner(
+    IoCommand(
+      conn: l.conn,
+      kind: IoCommandKind.cmdCall,
+      tag: tag,
+      methodName: q.bare,
+      params: q.payload,
+    )
+  )
+  if sent != SubmitResult.sbOk:
+    l.calls.del(tag)
+    q.reply.answerError(ecNotReady, "the transport is stopping")
+
+proc linkSubmit(st: State, a: AsyncRec, c: ptr AsyncCall) =
+  ## [plan §2.6; I90] An asynchronous call through a transported handle: the
+  ## Runtime thread admits it as `linkCall` does and sends it itself; no call
+  ## worker is involved. Its Response decides it (`linkResponse`); until then
+  ## it holds its link (IF l.1506, l.2044-2047).
+  let bare = c.methodOf
+  let l = st.links.getOrDefault(c.link)
+  let refused = st.linkAdmits(l, st.route(a.route), a.consumer, a.attempt, bare)
+  if refused.isSome:
+    st.endCall(a, notReadyAfter(c.blobOf, bare, c.paramsOf, refused.get), okResult)
+    if l != nil:
+      st.settleLink(l)
+    return
+  let tag = l.takeTag()
+  retainCall(c)
+  l.asyncs[tag] = a.call
+  a.linkTag = tag
+  let sent = st.shared.tport.submitOwner(
+    IoCommand(
+      conn: l.conn,
+      kind: IoCommandKind.cmdCall,
+      tag: tag,
+      methodName: bare,
+      params: c.paramsOf,
+    )
+  )
+  if sent != SubmitResult.sbOk:
+    l.asyncs.del(tag)
+    dropCall(c)
+    st.endCall(a, failure(ecNotReady, "the transport is stopping"), okResult)
+
+proc linkDecide(st: State, p: pointer, r: Result[seq[byte], InvocationFailure]) =
+  ## An asynchronous call's Response, or its failure: its outcome unless one
+  ## was decided (a cancellation, a timeout); the link's reference goes.
+  let c = asyncOf(p)
+  if c.decide(r, okResult):
+    let a = st.asyncCalls.getOrDefault(p)
+    if a != nil:
+      st.asyncTerminal(a)
+  dropCall(c)
+
+proc linkResponse(st: State, conn: ConnId, tag: uint64, o: sink CallOutcome) =
+  ## [SPEC TRANSPORT §3.2, §3.4] A call's terminal outcome on a link,
+  ## including the synthetic TRANSPORT_ERROR of a lost connection (l.543). A
+  ## late Response after Cancel finds its call decided and is discarded.
+  let l = st.links.getOrDefault(conn)
+  if l.isNil:
+    return
+  var reply: ReplyChannel
+  var p: pointer
+  if l.calls.pop(tag, reply):
+    if o.ok:
+      reply.answer(Reply(bytes: move o.result))
+    else:
+      reply.answer(Reply(failure: Opt.some(o.failure)))
+  elif l.asyncs.pop(tag, p):
+    if o.ok:
+      st.linkDecide(p, Result[seq[byte], InvocationFailure].ok(move o.result))
+    else:
+      st.linkDecide(p, Result[seq[byte], InvocationFailure].err(o.failure))
+  st.settleLink(l)
+
+proc linkLocalFailure(st: State, ev: IoEvent) =
+  ## [plan §2.6 step 3] A Request the caller session refused: nothing was
+  ## sent. [G22] A connection already gone gives the handle's code. An
+  ## INVALID_PARAMS gets its validation detail from the selected contract.
+  let l = st.links.getOrDefault(ev.conn)
+  if l.isNil:
+    st.diagnose("transport: " & ev.localMsg)
+    return
+  var code = ev.localCode
+  if code == ecNotReady:
+    code = l.routeCause.get(l.observed.get(ecTransport))
+  let f = InvocationFailure(code: code, message: Opt.some(ev.localMsg))
+  var reply: ReplyChannel
+  var p: pointer
+  if l.calls.pop(ev.localTag, reply):
+    reply.answer(Reply(failure: Opt.some(f), recheck: code == ecInvalidParams))
+  elif l.asyncs.pop(ev.localTag, p):
+    let c = asyncOf(p)
+    var g = f
+    if code == ecInvalidParams:
+      let sel = selectedOf(c.blobOf)
+      if sel.isOk:
+        let v = checkRequest(sel.get, c.methodOf, c.paramsOf)
+        if v.isErr:
+          g = v.error
+    st.linkDecide(p, Result[seq[byte], InvocationFailure].err(g))
+  else:
+    st.diagnose("transport: " & ev.localMsg)
+  st.settleLink(l)
+
+proc linkClosed(st: State, ev: IoEvent) =
+  ## [plan §2.6, §2.8 step 5; Rev R4] The link's connection ended. Calls still
+  ## awaiting it were answered TRANSPORT_ERROR by the I/O thread first (T
+  ## l.543). Unless the route ended first, the handle's first cause is the
+  ## connection's (`closedCode`: TF-15, G256); the route stays as it is (R
+  ## l.3475), and `renew_route` with a new materialization gives a working
+  ## handle.
+  let l = st.links.getOrDefault(ev.conn)
+  if l.isNil:
+    return
+  l.state = lkClosed
+  for reply in l.calls.values:
+    reply.answer(Reply(failure: Opt.some(InvocationFailure(code: ecTransport))))
+  l.calls.clear()
+  var held: seq[pointer]
+  for p in l.asyncs.values:
+    held.add(p)
+  l.asyncs.clear()
+  for p in held:
+    st.linkDecide(
+      p,
+      Result[seq[byte], InvocationFailure].err(
+        failure(ecTransport, "the connection closed")
+      ),
+    )
+  if l.held and l.observe(closedCode(ev.cause, ev.code)):
+    st.linkObserved(l)
+  st.settleLink(l)
+
+proc linksEnded(st: State, r: Route) {.gcsafe.} =
+  ## [plan §2.8 steps 1-2; K13] The caller half first: each of the route's
+  ## links learns the route's cause, which new operations report from now on,
+  ## and takes it as its first cause unless the connection ended before; the
+  ## route's unused material goes with its tickets.
+  st.dropMaterial(r.id)
+  for l in st.links.values:
+    if l.route == r.id:
+      l.routeCause = Opt.some(r.endCode)
+      discard l.observe(r.endCode)
+
+proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.} =
+  ## [SPEC INTERFACE l.2004-2006] None of the attempt's handles remains valid:
+  ## their links close; a materialization still connecting is NOT_READY.
+  var mine: seq[Link]
+  for l in st.links.values:
+    if l.attempt == token:
+      mine.add(l)
+  for l in mine:
+    if l.connecting != nil:
+      l.connecting.answerError(ecNotReady, "the consumer's realization ended")
+      l.connecting = nil
+    l.held = false
+    st.closeLink(l)
+
+proc linksStopped(st: State) =
+  ## [plan §2.9] The Runtime thread leaves: nothing still parked on a link
+  ## waits for an event that no longer comes.
+  for l in st.links.values:
+    if l.connecting != nil:
+      l.connecting.answerError(ecNotReady, "the Runtime stopped")
+    for reply in l.calls.values:
+      reply.answerError(ecNotReady, "the Runtime stopped")
+    for p in l.asyncs.values:
+      dropCall(asyncOf(p))
+  st.links.clear()
+  for m in st.material.mvalues:
+    m.burn()
+  st.material.clear()
+
 # Route handles ------------------------------------------------------------------
 
 proc materialize(st: State, q: Request) =
@@ -6366,9 +6774,7 @@ proc materialize(st: State, q: Request) =
     )
     return
   if r.mode == rmLocalTransport:
-    # [plan §7.1] Step 4b-2a: the consumer side of a transported route is
-    # built in 4b-2b.
-    q.reply.answerError(ecModule, "local transport handles are not built yet")
+    st.connectLink(q, r)
     return
   r.pins.add(Pin(handle: q.handle, attempt: q.attempt))
   q.reply.answer(Reply())
@@ -6517,6 +6923,11 @@ proc observeEnd(st: State, q: Request) =
   if r.isNil:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
+  let l = st.links.getOrDefault(linkOf(q.handle))
+  if l != nil and l.observed.isSome:
+    # [Rev R4] The first terminal cause, the connection's or the route's.
+    q.reply.answerError(l.observed.get, "the handle's path has ended")
+    return
   if r.isTerminal:
     q.reply.answerError(r.endCode, "the route is " & $r.state)
     return
@@ -6559,6 +6970,12 @@ proc releaseHandle(st: State, q: Request) =
         kept.add(p)
     r.subs = kept
     st.settle(r)
+  let l = st.links.getOrDefault(linkOf(q.handle))
+  if l != nil:
+    # [Rev R5] The handle's reference goes; the connection closes once no
+    # asynchronous call prepared on it awaits its Response (IF l.1506).
+    l.held = false
+    st.settleLink(l)
   q.reply.answer(Reply(subs: gone))
 
 # Events -----------------------------------------------------------------------------
@@ -6966,6 +7383,32 @@ proc rcHandled(st: State, p: pointer) =
 
 # The Runtime thread ---------------------------------------------------------------
 
+when defined(lcnTestHooks):
+  proc transportHook(st: State, q: Request) =
+    ## [4b-2 plan §4.1] `closeSessionsForTests`: the provider side closes every
+    ## session of route `q.route` at once, so its handles lose their
+    ## connections with no known cause. `failNextConnectForTests`: the next
+    ## materialization fails with cause `q.generation` instead of connecting.
+    ## `spoilNextTicketForTests`: the next materialization's Hello carries a
+    ## ticket the provider never issued, which its Hello rejects.
+    case q.reason
+    of "close-sessions":
+      let r = st.route(q.route)
+      if r != nil:
+        for conn in r.sessions:
+          let s = st.sv.session(conn)
+          if s != nil:
+            st.sv.close(s)
+      q.reply.answer(Reply())
+    of "connect-fault":
+      st.connectFault = Opt.some(ConnectFailure(q.generation))
+      q.reply.answer(Reply())
+    of "spoil-ticket":
+      st.spoilTicket = true
+      q.reply.answer(Reply())
+    else:
+      q.reply.answerError(ecInvalidParams, "unknown transport hook")
+
 proc handle(st: State, q: Request) {.gcsafe.} =
   if q.kind in {
     rqCreate, rqStart, rqStop, rqReportFailure, rqRecover, rqBootstrap, rqRc,
@@ -6980,6 +7423,11 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     when defined(lcnTestHooks):
       st.ldr.confirm = q.reply
       st.confirmStep()
+    else:
+      q.reply.answerError(ecInvalidParams, "not a test build")
+  of rqTransportHook:
+    when defined(lcnTestHooks):
+      st.transportHook(q)
     else:
       q.reply.answerError(ecInvalidParams, "not a test build")
   of rqCreate:
@@ -7071,6 +7519,8 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.configCommit(q)
   of rqMaterialize:
     st.materialize(q)
+  of rqLinkCall:
+    st.linkCall(q)
   of rqAdmit:
     st.admit(q)
   of rqObserveEnd:
@@ -7530,10 +7980,27 @@ proc asyncEvent(st: State, m: Msg) =
       let r = st.route(a.route)
       if r != nil:
         inc r.pending
+    if c.link != 0:
+      let l = st.links.getOrDefault(c.link)
+      if l != nil:
+        dec l.prepared
     if c.isTerminal:
       st.asyncTerminal(a)
+      let l = st.links.getOrDefault(c.link)
+      if l != nil:
+        st.settleLink(l)
+    elif c.link != 0:
+      st.linkSubmit(a, c)
     else:
       st.dispatchCall(a)
+  of aeLinkHold, aeLinkDrop:
+    let l = st.links.getOrDefault(cast[uint64](m.extra))
+    if l != nil:
+      if m.event == aeLinkHold:
+        inc l.prepared
+      else:
+        dec l.prepared
+        st.settleLink(l)
   of aeTerminal:
     let a = st.asyncCalls.getOrDefault(m.target)
     if a != nil:
@@ -7726,6 +8193,14 @@ proc ioEvent(st: State, ev: sink IoEvent) =
   of IoEventKind.evClosed:
     if isServed(ev.conn):
       st.servedClosed(ev.conn)
+    else:
+      st.linkClosed(ev)
+  of IoEventKind.evConnected:
+    st.linkConnected(ev.conn)
+  of IoEventKind.evConnectFailed:
+    st.linkConnectFailed(ev)
+  of IoEventKind.evResponse:
+    st.linkResponse(ev.conn, ev.tag, move ev.outcome)
   of IoEventKind.evSubscribe:
     # [plan §7.1] Provider-side subscriptions are step 4b-2c's.
     discard st.shared.tport.submitOwner(
@@ -7748,7 +8223,10 @@ proc ioEvent(st: State, ev: sink IoEvent) =
       )
     )
   of IoEventKind.evLocalFailure:
-    st.diagnose("transport: " & ev.localMsg)
+    if isServed(ev.conn):
+      st.diagnose("transport: " & ev.localMsg)
+    else:
+      st.linkLocalFailure(ev)
   else:
     discard
 
@@ -7850,6 +8328,12 @@ proc checkTransported(st: State, now: MonoTime) =
   ## close.
   let mono = st.monoNow
   st.tickets.sweep(mono)
+  var spent: seq[string]
+  for id, m in st.material:
+    if mono >= m.expires:
+      spent.add(id)
+  for id in spent:
+    st.dropMaterial(id)
   var due: seq[Session]
   for s in st.sv.sessions.values:
     if not s.ended and s.endsAt.isSome and mono >= s.endsAt.get:
@@ -8264,6 +8748,7 @@ proc runtimeLoop(s: ptr Shared) =
   st.releaseConfigs()
   st.unwire()
   st.store.close()
+  st.linksStopped()
   st.sv.removeAll() # [plan §2.9] what is still present
   s.finished = true
 
@@ -8366,6 +8851,40 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
     e.freeEngine()
     return err(r.error.get)
   ok(e)
+
+when defined(lcnTestHooks):
+  proc closeSessionsForTests*(e: Engine, route: string): Result[void, EngineError] =
+    ## A test hook (4b-2 plan §4.1): the provider side closes every session of
+    ## `route` at once; the caller sees a lost connection (TF-15).
+    let r =
+      e.call(Request(kind: rqTransportHook, reason: "close-sessions", route: route))
+    if r.error.isSome:
+      return err(r.error.get)
+    ok()
+
+  proc failNextConnectForTests*(
+      e: Engine, cause: ConnectFailure
+  ): Result[void, EngineError] =
+    ## A test hook (4b-2 plan §4.1, [Rev R15]): the next materialization of a
+    ## transported route fails with `cause`, as if the I/O thread reported it
+    ## (K12: one process cannot fake another uid).
+    let r = e.call(
+      Request(
+        kind: rqTransportHook, reason: "connect-fault", generation: uint64(ord(cause))
+      )
+    )
+    if r.error.isSome:
+      return err(r.error.get)
+    ok()
+
+  proc spoilNextTicketForTests*(e: Engine): Result[void, EngineError] =
+    ## A test hook (4b-2 plan §4.1): the next materialization of a transported
+    ## route connects with a ticket the provider never issued, so the
+    ## provider's Hello answers ProtocolError NOT_AUTHORISED (RUN-0803).
+    let r = e.call(Request(kind: rqTransportHook, reason: "spoil-ticket"))
+    if r.error.isSome:
+      return err(r.error.get)
+    ok()
 
 when defined(lcnTestHooks):
   export sidetable.JournalEntry

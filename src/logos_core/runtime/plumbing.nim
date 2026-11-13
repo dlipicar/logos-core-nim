@@ -422,6 +422,9 @@ type
     rqRcPrecheck ## the checks before a malformed Runtime Control request
     rqMaterialize ## `materialize_route`
     rqAdmit ## a call through a route handle
+    rqLinkCall
+      ## [I90] a synchronous call through a transported route handle: sent on
+      ## its link, answered when the Response comes (`transported.nim`)
     rqObserveEnd ## a route handle's `observe_end`
     rqReleaseHandle ## a route handle's `release`
     rqRoutes ## every route record (observation for the host and tests)
@@ -460,6 +463,9 @@ type
     rqConfirmTermination
       ## [D27 revised; plan §2.12] `confirmTerminationForTests`: served only
       ## in a build with `lcnTestHooks`
+    rqTransportHook
+      ## [I90; 4b-2 plan §4.1] `closeSessionsForTests`, `failNextConnectForTests`:
+      ## served only in a build with `lcnTestHooks`
       ## [SPEC RUNTIME §10.1 l.3801-3804] an execution authorization ended
       ## outside the Runtime's own checks (`engine.stopForAuthority`)
 
@@ -631,6 +637,13 @@ type
     schemaAllowed*: bool
       ## [I87] rqConfigCommit: a `configuration-schema-mismatch` may carry its
       ## detail (the caller holds `get_configuration_schema` authority)
+    conn*: uint64 ## [I90] rqMaterialize: the transported handle's link; 0: direct
+    failure*: Opt[InvocationFailure]
+      ## [I90] rqLinkCall: the call's failure as its Response gave it (the
+      ## result is in `bytes`)
+    recheck*: bool
+      ## [I90] rqLinkCall: the session refused the request locally as
+      ## INVALID_PARAMS; the caller's thread rebuilds the detail
 
   ReplyChannel* = ptr Channel[Reply]
 
@@ -668,6 +681,7 @@ type
     gated*: bool
       ## rqRcDeliver: the worker holds the subscription's gate, so an entry
       ## may be admitted
+    conn*: uint64 ## [I90] rqLinkCall: the handle's link
     reply*: ReplyChannel
 
   JobKind* = enum
@@ -778,6 +792,10 @@ type
     aeTerminal ## its terminal outcome was decided off the Runtime thread
     aeDeferred ## it was handed to a deferred provider (`extra`)
     aeHook ## a deferred invocation's `request_cancel` is due (`extra`)
+    aeLinkHold
+      ## [I90; Rev R5] a call was prepared on a transported handle: its link
+      ## (`extra`, the `ConnId`) stays until the call is submitted or released
+    aeLinkDrop ## [I90] such a call was released unsubmitted
 
   MsgKind* = enum
     ## [IMPL] The first kind carries no fields. Nim 2.2.14's `=wasMoved` for a

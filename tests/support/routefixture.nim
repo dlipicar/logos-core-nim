@@ -159,6 +159,22 @@ let PassingStop = initDuration(milliseconds = 300 * Slow)
   ## [IMPL] The stop deadline of a case about the deadline: one that waits for
   ## it to pass.
 
+when declared(transportParity):
+  # The local-transport parity pass (step 4b-2; DECISIONS I90): `test_routes_lt`,
+  # `test_async_lt` and `test_routes_ca_lt` run these cases with the meter and
+  # sensor providers routed over local transport (G254), each reached through
+  # the Runtime's endpoint for it (G257). A documented difference has its own
+  # `when declared(transportParity)` branch.
+  import std/exitprocs
+  import ../../src/logos_core/runtime/routing
+  import ./shortdir
+
+  let parityBase = makeShortBase("lcnlt", "/e999/12345678/logos_sensor_module.sock")
+  addExitProc(
+    proc() =
+      removeDir(parityBase)
+  )
+
 proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineConfig =
   inc engines
   result = defaultConfig(work / ("e" & $engines))
@@ -175,6 +191,12 @@ proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineCo
     checkStaticRegistration("meter", meterModuleStaticSymbols()).tryGet,
   ]
   result.statics.add(extra)
+  when declared(transportParity):
+    result.routing = @[
+      RoutingRule(callee: "meter_module", mode: rmLocalTransport),
+      RoutingRule(callee: "sensor_module", mode: rmLocalTransport),
+    ]
+    result.endpointDir = parityBase / ("e" & $engines)
   when declared(caParity):
     result.statics.add(fakeCaRegistration())
     if policy.rules.len == 0:
@@ -185,6 +207,17 @@ proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineCo
           instance: ParityCa, evaluationDeadline: initDuration(seconds = 60)
         )
       )
+
+let eventsOverTransport = not declared(transportParity)
+  ## [plan §7.1] false until step 4b-2c builds subscriptions over local transport
+
+template eventsCase() =
+  ## A case that subscribes through a route handle: under the local-transport
+  ## parity pass it is skipped until step 4b-2c. It leaves the test body's
+  ## block, so the case reports SKIPPED.
+  if not eventsOverTransport:
+    skip()
+    break
 
 var live: Engine ## the test's engine from `fixtureEngine` until `finish`
 
@@ -329,6 +362,14 @@ proc establish(
 proc routesOf(r: RcResult): LogosNSRuntimeControlEstablishRouteResponse =
   LogosNSRuntimeControlEstablishRouteResponse.decode(r.response).tryGet
 
+proc redacted(r: RcResult): seq[byte] =
+  ## [G255] `establish_route`'s answer as a replay gives it: without each
+  ## route's one-time invocation.
+  var resp = r.routesOf
+  for rec in resp.routes.mitems:
+    rec.invocation = Opt.none(LogosNSRuntimeControlInvocationDescriptor)
+  encode(resp).tryGet
+
 proc routeId(rc: ptr LogosRuntimeControlBinding, key: string): string =
   let r = rc.establish(key)
   check r.code == ecOk
@@ -353,15 +394,17 @@ proc providerAddress(
 ): LogosNSRuntimeModuleProviderAddress =
   LogosNSRuntimeModuleProviderAddress(provider: id, runtime_instance_id: runtime)
 
-proc materialize(
+var renewals = 0 ## the parity pass's renewals for a fresh ticket
+
+proc rawMaterialize(
     rc: ptr LogosRuntimeControlBinding,
     route: string,
-    root = meterRoot,
-    schema = meterSchema,
-): (ErrorCode, LogosRouteHandle) =
-  var h = LogosRouteHandle()
+    root: Digest,
+    schema: seq[byte],
+    h: var LogosRouteHandle,
+): LogosResult =
   var r: ContractRoot = root
-  let res = rc.vtable.materializeRoute(
+  result = rc.vtable.materializeRoute(
     rc,
     cstring(route),
     addr r,
@@ -369,6 +412,40 @@ proc materialize(
     csize_t(schema.len),
     addr h,
   )
+  when declared(transportParity):
+    # [G258; K11] A transported route's ticket opens one connection: where a
+    # direct route materializes again, the parity pass renews it for a fresh
+    # ticket first, as a consumer must.
+    if result.code == CErrorCode(ord(ecNotAuthorised)) and result.message != nil and
+        "unused ticket" in $result.message:
+      inc renewals
+      let n = rcCall(
+        rc,
+        "renew_route",
+        encode(
+          LogosNSRuntimeControlRenewRouteRequest(
+            request_key: "parity-renewal-" & $renewals, route: route
+          )
+        ).tryGet,
+      )
+      if n.code == ecOk:
+        result = rc.vtable.materializeRoute(
+          rc,
+          cstring(route),
+          addr r,
+          cast[ptr UncheckedArray[uint8]](unsafeAddr schema[0]),
+          csize_t(schema.len),
+          addr h,
+        )
+
+proc materialize(
+    rc: ptr LogosRuntimeControlBinding,
+    route: string,
+    root = meterRoot,
+    schema = meterSchema,
+): (ErrorCode, LogosRouteHandle) =
+  var h = LogosRouteHandle()
+  let res = rawMaterialize(rc, route, root, schema, h)
   (toResult(res).code, h)
 
 type Materialized = object
@@ -384,15 +461,7 @@ proc materializeStatus(
     schema = meterSchema,
 ): Materialized =
   ## `materialize`, with the returned status's validation detail as given.
-  var r: ContractRoot = root
-  let res = rc.vtable.materializeRoute(
-    rc,
-    cstring(route),
-    addr r,
-    cast[ptr UncheckedArray[uint8]](unsafeAddr schema[0]),
-    csize_t(schema.len),
-    addr result.handle,
-  )
+  let res = rawMaterialize(rc, route, root, schema, result.handle)
   result.code = errorCode(int64(res.code)).get
   result.detailNull = res.detail == nil
   result.detailLen = int(res.detailLen)

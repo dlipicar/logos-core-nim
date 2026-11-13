@@ -127,16 +127,45 @@ Tier 4b step 4b-2 (DECISIONS I90) builds transported local routes: a host routin
   `local-transport` invocation descriptor and a one-time ticket (RUN-0541, RUN-0623); no observation,
   record, retained answer or stored file holds a ticket (RUN-0543, RUN-0544; a replay carries no
   `invocation`, G255). Four §6.2 units are claimed for the Runtime-served endpoint (RUN-0220,
-  RUN-0226, RUN-0229, RUN-0230); the rest of §6.2 and §4.2.1 wait for the Module Host. The
-  consumer's transported handle is part 4b-2b: until then materializing such a route is
-  `MODULE_ERROR`, and the execution-boundary invariance units (RUN-0007, RUN-0008, RUN-0014,
-  IFC-0007 to IFC-0015) stay deferred. RUN-0045, RUN-0552 and IFC-0010 are remote-only and move to
-  Tier 5.
+  RUN-0226, RUN-0229, RUN-0230); the rest of §6.2 and §4.2.1 wait for the Module Host. RUN-0045,
+  RUN-0552 and IFC-0010 are remote-only and move to Tier 5.
 - **TRANSPORT**: the session is bound to the Runtime's authority decision and ends with it, also
   after a renewal (TRN-0153, TRN-0317); the ticket goes only to the consumer (TRN-0195). The end of a
   route terminates, drains or closes its sessions by cause (G260; G174 amended).
 - **CAPABILITY AUTHORITY**: the ticket binds the decision, its freshness and revocation (CAP-0254).
 - **LOADER**: the MAY of l.193 is taken (LDR-0021 leaves inspection).
+
+Part 4b-2b builds the consumer's transported handle, on the Runtime thread until the Module Host
+moves it (4b-3):
+
+- **RUNTIME**: `materialize_route` on a transported route connects with the route's one-time ticket
+  and returns once the provider holds the session (RUN-0800, RUN-0802); a Hello rejection gives its
+  code, a loss TRANSPORT_ERROR, and nothing is replayed or renewed (RUN-0803 to RUN-0806). A further
+  handle needs `renew_route` (G258; RUN-0801's reuse is not taken, G164). The execution-boundary
+  invariance units are claimed (RUN-0007, RUN-0008, RUN-0014, and INTERFACE IFC-0007 to IFC-0015 but
+  IFC-0010): one scripted sequence gives the same codes, messages, details and payloads through a
+  direct and a transported handle.
+- **TRANSPORT**: the handle's observer learns a lost connection (TRN-0278; TRANSPORT_ERROR, G256) and
+  the route's end (G260); a peer that is not the Runtime's identity fails the route (TRN-0187,
+  TRN-0191; G259).
+- **INTERFACE**: a cancelled or timed-out asynchronous call sends Cancel (IFC-0729); IFC-0480 and
+  IFC-0948 move from inspection to tests.
+
+The parity suites `test_routes_lt`, `test_async_lt` and `test_routes_ca_lt` rerun the route and
+asynchronous-call suites with every route to the test providers over local transport. What a
+consumer sees differently, and why:
+
+- A transported route's live `establish_route` or `renew_route` answer carries `invocation`; its
+  replay does not (G255).
+- A second `materialize_route` on one route ticket is NOT_AUTHORISED until `renew_route` (G258).
+- An ended route's record stays listed until its connections have closed, a moment after the end:
+  the session and the consumer's connection reach it until then (RUNTIME §7.5 l.1346).
+- The wire does not carry the caller's mode, so a provider with a deferred surface serves every
+  Request through it, also those a direct caller made synchronously.
+- A call still running when its provider's stop deadline passes reaches its caller as
+  TRANSPORT_ERROR (TRANSPORT l.543; G260), where a direct caller waits for its result.
+- Subscriptions through a transported handle are `MODULE_ERROR` until part 4b-2c; the four event
+  cases of `test_async_lt` are skipped until then.
 
 ## Properties not claimed
 

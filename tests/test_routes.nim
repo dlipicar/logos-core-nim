@@ -287,9 +287,17 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check rec.expected_contract.get.schema_root == @meterRoot
     check rec.state.kind == LogosNSRuntimeControlRouteStateKind.Ready
     check rec.decision_id.isSome
-    check rec.invocation.isNone # a direct route (l.3469)
     check rec.failure.isNone
-    check e.routes().mapIt(encode(it).tryGet) == @[encode(rec).tryGet]
+    when declared(transportParity):
+      # [G254; RUN-0541] A transported route's answer carries its invocation;
+      # its record never does (RUN-0543).
+      check rec.invocation.isSome
+      var kept = rec
+      kept.invocation = Opt.none(LogosNSRuntimeControlInvocationDescriptor)
+      check e.routes().mapIt(encode(it).tryGet) == @[encode(kept).tryGet]
+    else:
+      check rec.invocation.isNone # a direct route (l.3469)
+      check e.routes().mapIt(encode(it).tryGet) == @[encode(rec).tryGet]
     e.finish()
 
   test "[IMPL-DECISION G169] [RUN-0556] [RUN-0188] [RUN-0121] [RUN-0546] establishment failures":
@@ -393,7 +401,10 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check first.code == ecOk
     let again = rc.establish("k1")
     check again.code == ecOk
-    check again.response == first.response
+    when declared(transportParity):
+      check again.response == first.redacted # [G255] no one-time invocation
+    else:
+      check again.response == first.response
     check e.routes().len == 1
     check rc.establish("k1", all = true).code == ecInvalidParams
     check rc.renew("k1", first.routesOf.routes[0].route).code == ecInvalidParams
@@ -973,8 +984,13 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     check e.routes()[0].state.kind == LogosNSRuntimeControlRouteStateKind.Failed
     gate.store(false)
     joinThread(t)
-    check bgCode.load == 0
-    check bgValue.load == 1 # INTERFACE l.2101-2102: marked cancelled
+    when declared(transportParity):
+      # [G260; TRANSPORT l.543] Past the stop deadline the session closed: the
+      # caller's call failed TRANSPORT_ERROR, and the late result was not sent.
+      check bgCode.load == ord(ecTransport)
+    else:
+      check bgCode.load == 0
+      check bgValue.load == 1 # INTERFACE l.2101-2102: marked cancelled
     check waitUntil(
       proc(): bool =
         destroyed.load == before + 1
@@ -1017,7 +1033,10 @@ suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
     # stays subject to the current checks.
     let again = rc.establish("k1")
     check again.code == ecOk
-    check again.response == first.response
+    when declared(transportParity):
+      check again.response == first.redacted # [G255] no one-time invocation
+    else:
+      check again.response == first.response
     check e.routes().len == 3
     e.finish()
 
@@ -1055,7 +1074,16 @@ suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
     check rc.close(rc.routeId("b")).code == ecOk
     check e.routes().len == 1
     check e.stop(c.instance).tryGet.state == msUnloaded
-    check e.routes().len == 0
+    when declared(transportParity):
+      # [I90] The route's session and the consumer's connection reach the
+      # record until the Runtime has seen them close, a moment after the stop
+      # returned.
+      check waitUntil(
+        proc(): bool =
+          e.routes().len == 0
+      )
+    else:
+      check e.routes().len == 0
     h.release() # nothing reaches it any more; releasing finds no record
     e.finish()
 

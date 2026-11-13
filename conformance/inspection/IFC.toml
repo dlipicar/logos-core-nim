@@ -65,10 +65,6 @@ reason = "IFC-0252 is a permission and IFC-0253, IFC-0254 bind the author of a m
 
 # I-no-transport (DECISIONS I88)
 [[item]]
-ids = ["IFC-0480", "IFC-0948"]
-reason = "Rules about the consumer's side of a Transport boundary, which comes with Tier 4b step 4b-2b: in 4b-2a a transported route's materialization is refused MODULE_ERROR (DECISIONS I90), so a consumer reaches providers through direct routes only. IFC-0480: every route handle is the one HandleState with the one routeVtable (runtime/bindings.nim) whatever the provider, so callers see one contract; invariance across modes is tested with the transported handle and deferred with IFC-0007 to IFC-0015 (deferred:tier-4b). IFC-0948: only a transported handle needs provider-session establishment; a direct route has none, so no Hello rejection or establishment failure reaches a consumer (rcMaterializeOp reaches only the engine's materialize checks, test [IFC-0943])."
-
-[[item]]
 ids = ["IFC-0524"]
 reason = "A negative over what crosses a Transport boundary (INTERFACE l.3929). The Runtime Control binding, the publish callback and their state (AttemptServices) live on the process's shared heap and are handed only to _MODULE_init in that process (bindings.fill). The transport I/O thread takes only IoCommand values: transport/io/api.nim checks at compile time that IoCommand and IoEvent hold no ref, ptr, pointer or proc, so none of them can be carried to a peer (DECISIONS I83, I90). A served invocation's context is built on the provider's side from its own session (runtime/served.nim, runtime/asynccall.nim newSessionCall)."
 

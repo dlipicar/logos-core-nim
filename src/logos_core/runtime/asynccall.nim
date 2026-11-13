@@ -104,6 +104,9 @@ type
     conn*: uint64
     requestId*: uint64
     sent: bool ## session: its Response was submitted, or none is due (under `lock`)
+    link*: uint64
+      ## [I90] a route call through a transported handle: the link the Runtime
+      ## thread sends it on (`transported.nim`); 0: direct
 
   Deferred = object
     ## One provider invocation of the deferred surface (INTERFACE §2.9.2).
@@ -309,6 +312,19 @@ proc offerCommitted(
 
 proc asyncOf*(p: pointer): ptr AsyncCall =
   cast[ptr AsyncCall](p)
+
+proc retainCall*(c: ptr AsyncCall) =
+  ## [I90] Another holder: a transported call's link, until its Response.
+  discard c.refs.fetchAdd(1)
+
+proc methodOf*(c: ptr AsyncCall): string =
+  $c.methodName
+
+proc paramsOf*(c: ptr AsyncCall): seq[byte] =
+  bytesOf(c.params, c.paramsLen)
+
+proc blobOf*(c: ptr AsyncCall): ptr SchemaBlob =
+  c.blob
 
 proc isTerminal*(c: ptr AsyncCall): bool =
   withLock c.lock:
@@ -789,15 +805,19 @@ proc releaseOp(call: ptr LogosAsyncCall) {.cdecl.} =
     return
   let me = getThreadId()
   var won = false
+  var unsent = false
   withLock c.lock:
     case c.phase
     of cpPrepared:
       c.phase = cpDone
+      unsent = true
     of cpSubmitted:
       c.decideLocked(failed(failure(ecCancelled, "the call was released")), okCancelled)
       won = true
     else:
       discard
+  if unsent and c.link != 0:
+    c.engine.post(Msg(kind: mkAsync, event: aeLinkDrop, extra: cast[pointer](c.link)))
   if won:
     c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
   withLock c.lock:
@@ -827,6 +847,7 @@ proc prepare*(
     options: ptr LogosAsyncOptions,
     callbacks: ptr LogosAsyncCallbacks,
     outCall: ptr LogosAsyncCall,
+    link = 0'u64,
 ): LogosResult =
   ## [SPEC INTERFACE §2.9.1 l.2035-2048, §5.2 l.3901-3911] Copies what the call
   ## keeps; runs no provider code and no callback; reserves no authority. The
@@ -863,11 +884,15 @@ proc prepare*(
   c.timeoutMs = options.timeoutMs
   c.complete = callbacks.complete
   c.userData = callbacks.userData
+  c.link = link
   initLock(c.lock)
   initCond(c.cond)
   c.refs.store(1)
   outCall.vtable = addr asyncVtable
   outCall.state = c
+  if link != 0:
+    # [Rev R5] Posted before anything the consumer does next with the handle.
+    e.post(Msg(kind: mkAsync, event: aeLinkHold, extra: cast[pointer](link)))
   LogosResult()
 
 proc newSessionCall*(

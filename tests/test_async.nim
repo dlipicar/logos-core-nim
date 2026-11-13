@@ -614,6 +614,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     e.finish()
 
   test "[RUN-0821] [RUN-0825] [RUN-0843] [IFC-0721] events an asynchronous call publishes in its scope reach the preparing handle's subscriptions":
+    eventsCase()
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -729,7 +730,11 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
     let expected = h.raw("read", req(5)).response
-    check submits.load == 0 # `_MODULE_dispatch`
+    # [I90; G257] Over local transport the Runtime serves each Request as an
+    # asynchronous invocation, which the deferred surface takes: the wire does
+    # not carry the caller's mode.
+    let wire = (when declared(transportParity): 1 else: 0)
+    check submits.load == wire # direct: `_MODULE_dispatch`
     var inline = h.started(req(5), addr done[0])
     check done[0].finished
     check done[0].codeOf == ecOk
@@ -744,9 +749,9 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     check done[1].finished
     check done[1].codeOf == ecOk
     check done[1].responseOf == expected
-    check submits.load == 2
-    check submitSawContext.load == 2
-    check ownerReleases.load == 2
+    check submits.load == 2 + wire
+    check submitSawContext.load == 2 + wire
+    check ownerReleases.load == 2 + wire
     parked.release()
     h.release()
     e.finish()
@@ -832,7 +837,12 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     # [G174] A route that failed with its provider lets the call complete.
     settle(module, inv)
     check done[0].finished
-    check done[0].codeOf == ecOk
+    when declared(transportParity):
+      # [G260; TRANSPORT l.543] Past the stop deadline the session closed: the
+      # call failed TRANSPORT_ERROR before its result.
+      check done[0].codeOf == ecTransport
+    else:
+      check done[0].codeOf == ecOk
     check waitUntil(
       proc(): bool =
         destroyed.load == gone + 1
@@ -867,6 +877,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0782] [IFC-0742] [RUN-0824] [RUN-0829] [RUN-0835] scoped publication through a deferred invocation's context, before and after its terminal outcome":
+    eventsCase()
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -912,6 +923,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0778] a publication whose handler completes and releases its own invocation keeps the invocation until it returns; stopping the provider waits for it (INTERFACE §2.9.3 l.2175)":
+    eventsCase()
     var cfg = config(extra = @[dmeterStatic])
     cfg.stopDeadline = PassingStop
     let e = fixtureEngine(cfg)
@@ -952,6 +964,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0780] execution release from another thread closes admission and returns while a publication through the invocation is in its handler; the provider is destroyed only once the publication returns (INTERFACE §2.9.3 l.2175-2177)":
+    eventsCase()
     var cfg = config(extra = @[dmeterStatic])
     cfg.stopDeadline = PassingStop
     let e = fixtureEngine(cfg)

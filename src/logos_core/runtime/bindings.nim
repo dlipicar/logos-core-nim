@@ -26,7 +26,7 @@ import ../abi/[checks, types]
 import ../cbor/utf8
 import ../hash/hashinput
 import ../iface/[accept, outcome, payload, surface]
-import ./[asynccall, callside, events, invoke, plumbing, rcevents]
+import ./[asynccall, callside, events, invoke, plumbing, rcevents, transported]
 
 export callside.AttemptServices
 
@@ -169,7 +169,13 @@ proc routeCallOp(
   outLen[] = 0
   if `method` == nil or params == nil or paramsLen == 0:
     return status(ecInvalidParams, "null method or empty request")
-  let r = routeCall(handleOf(route), $`method`, view(params, paramsLen))
+  let h = handleOf(route)
+  let r =
+    if h.conn != 0:
+      # [I90] A transported handle: the Request goes on its link.
+      linkCall(h, $`method`, view(params, paramsLen))
+    else:
+      routeCall(h, $`method`, view(params, paramsLen))
   if r.isErr:
     return status(r.error)
   give(r.get, outBuf, outLen)
@@ -189,7 +195,12 @@ proc routeSubscribeOp(
 ): LogosResult {.cdecl.} =
   ## [SPEC INTERFACE §2.5; RUNTIME §4.4] (`events.nim`)
   bindingEnter()
-  subscribe(handleOf(route), eventName, handler, userData, outId)
+  let h = handleOf(route)
+  if h.conn != 0:
+    # [plan §7.1] Subscriptions over local transport are step 4b-2c's.
+    if outId != nil and handler != nil and eventName != nil:
+      return status(ecModule, "subscriptions over local transport are not built yet")
+  subscribe(h, eventName, handler, userData, outId)
 
 proc routeUnsubscribeOp(
     route: ptr LogosRouteHandle, id: LogosSubscriptionId
@@ -224,6 +235,7 @@ proc routePrepareCallOp(
     options,
     callbacks,
     outCall,
+    link = h.conn,
   )
 
 proc routeObserveEndOp(
@@ -342,6 +354,7 @@ proc rcMaterializeOp(
   if reply.error.isSome:
     freeHandle(h)
     return status(reply.error.get)
+  h.conn = reply.conn
   if set.primary.root == root:
     cacheSelected(root, set, s.engine.payloadDepth)
   outRoute.vtable = addr routeVtable
@@ -388,6 +401,13 @@ proc fill*(services: var InitServices, s: ptr AttemptServices) =
   services.publish = publishOp
   services.publishUserData = s
   services.invocationAccess = LogosInvocationAccess(state: s, current: currentOp)
+
+func linkOf*(handle: pointer): uint64 =
+  ## [I90] Runtime thread: a handle's link; 0 for a direct handle.
+  cast[ptr HandleState](handle).conn
+
+proc blobOfHandle*(handle: pointer): ptr SchemaBlob =
+  cast[ptr HandleState](handle).blob
 
 proc installEnd*(handle: pointer, handler: LogosRouteEndHandler, userData: pointer) =
   ## Runtime thread: the handle's one terminal observer.

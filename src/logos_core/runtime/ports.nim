@@ -20,17 +20,19 @@
 ## | `hello` | `engine.hello` → `hello.acceptHello` with a `HelloCheck` | state checks, then redemption |
 ## | `admitCall` | `engine.servedDispatch` → `admit` | a refusal, or a `CallRef` |
 ## | `callEnded` | `asynccall` commit, then `engine.maybeForget` → `served.callEnded` | the record, the slot |
-## | `subscribe` / `unsubscribe` | 4b-2b | the activation decision (R7) |
-## | `deliver`, `scopedPublish` | 4b-2b | the G175 decisions |
+## | `subscribe` / `unsubscribe` | 4b-2c | the activation decision (R7) |
+## | `deliver`, `scopedPublish` | 4b-2c | the G175 decisions |
 ## | `sessionEnded` | `engine.servedClosed` | each open call ends CANCELLED |
-## | `materializeFailed` | 4b-2b | fails the route (K12) |
+## | `materializeFailed` | `engine.linkConnectFailed` (`transported.connectOutcome`) | fails the route (K12) |
 ##
 ## `EndpointOrders` (the Runtime orders the provider half): `served.stopServing`,
 ## `served.terminate`, `served.drain`, `served.close`; which one a route end
 ## gives a session is `sessionOrder`.
 ##
 ## `LinkOrders` (the Runtime orders the caller half): `routeEnded(link,
-## cause)`, recording the cause first (K13, R3); 4b-2b.
+## cause)`, recording the cause first (K13, R3): `engine.linksEnded` in 4b-2b,
+## where the caller half also runs on the Runtime thread; `engine.linksStopped`
+## at the engine's end.
 
 {.push raises: [], gcsafe.}
 

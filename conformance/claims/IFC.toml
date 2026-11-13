@@ -14,10 +14,10 @@ default = "claimed"
 
 [sections]
 "Abstract" = "claimed"
-# The same interface across direct, local transport and remote transport realizations: testable
-# with the consumer's transported handle (step 4b-2b), with RUNTIME's RUN-0007, RUN-0008. IFC-0010
-# (the remote transport bullet, l.58) waits for the remote profiles (units below).
-"Abstract/Execution-Boundary Invariance" = "deferred:tier-4b"
+# The same interface across direct, local transport and remote transport realizations: claimed with
+# the consumer's transported handle (step 4b-2b, DECISIONS I90), with RUNTIME's RUN-0007, RUN-0008.
+# IFC-0010 (the remote transport bullet, l.58) waits for the remote profiles (units below).
+"Abstract/Execution-Boundary Invariance" = "claimed"
 "References" = "informative"
 "Copyright" = "informative"
 # Phase 2: schema acceptance, the C type mapping (forward), encodings, validation,
@@ -370,8 +370,7 @@ default = "claimed"
 "IFC-0289" = "out-of-scope:a requirement on modules"
 "IFC-0290" = "out-of-scope:a requirement on modules"
 "IFC-0291" = "out-of-scope:a requirement on modules"
-# §2.9.1: a Transport Cancel for an admitted request needs a live session (10b).
-"IFC-0729" = "deferred:tier-4b"
+# §2.9.1: IFC-0729 (a Transport Cancel for an admitted request) is claimed with step 4b-2b.
 # §2.9.2: duties of a provider that exports _MODULE_async_api; the Nim kit does not export it in
 # Tier 4. The Runtime's own duties in §2.9.2 (IFC-0756, 0764, 0765, 0768) are claimed.
 "IFC-0743" = "out-of-scope:a requirement on providers that export _MODULE_async_api"

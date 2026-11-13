@@ -376,9 +376,14 @@ established are never moved (RUNTIME l.940).
   G260): a revocation or expiry answers each call in flight `NOT_AUTHORISED`; `close_route`, a
   provider stop or shutdown lets calls in flight finish within `stop_deadline_ms` (or the shutdown
   grace), then closes.
-- **Built so far (step 4b-2a).** Transported routes are established, renewed and served, but the
-  consumer side is not built yet: `materialize` of a transported route fails with `LOGOS_ERR_MODULE`
-  ("local transport handles are not built yet"). Use transported routes only for testing until 4b-2b.
+- A consumer's `materialize_route` on such a route connects to the endpoint with the route's ticket
+  and returns once the provider holds the session. One ticket opens one handle: a further handle on the
+  same route needs `renew_route` first, and a handle whose connection failed is not retried
+  (DECISIONS G258). A handle whose connection is lost while its route lives gives `LOGOS_ERR_TRANSPORT`
+  until it is released (G256); the route stays ready.
+- **Built so far (steps 4b-2a, 4b-2b).** Transported routes are established, renewed, served and
+  called. Subscriptions through a transported handle fail with `LOGOS_ERR_MODULE` ("subscriptions over
+  local transport are not built yet") until 4b-2c.
 
 ### `transport`
 
