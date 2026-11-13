@@ -73,7 +73,8 @@ jobs:
         run: nix build -L --keep-going --no-link ".#ciGroups.$GROUP"
 
   # One job per OS and Nimble test task. Both tasks in one Linux job passed 60 minutes on 2026-11-13
-  # (orc 27 min, then refc), almost all of it compiling suites.
+  # (orc 27 min, then refc), almost all of it compiling suites. Split, the Linux jobs took 49 and 51
+  # minutes on 18b7867, so the limit matches the nix job's 90.
   nimble:
     name: nimble (${{ matrix.os }}, ${{ matrix.task }})
     strategy:
@@ -82,7 +83,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         task: [test, test_refc]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       TASK: ${{ matrix.task }}
     steps:
