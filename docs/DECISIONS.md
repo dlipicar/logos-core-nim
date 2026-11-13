@@ -1963,8 +1963,9 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   `not-authorised`, recorded as a `revoke-grant` failure. `approval-required` and `invalid-constraints`
   are never produced. Every code used is one the CDDL admits, so the interim conforms whatever the answer.
   `authority/core.nim`; suites `cap.evaluate`, `cap.grants`, `cap.list`, `cap.audit`.
-- **Status:** OPEN (TL-04, extended: TL-04 in `claude-spec-comments-3.md`, logos-lips `68628d95`, with
-  S8a-1 as an addendum still to send); found 2026-11-12 planning step 8a. Built in I84.
+- **Status:** OPEN (TL-04, extended: TL-04 in `claude-spec-comments-3.md`, logos-lips `68628d95`; the
+  S8a-1 addendum (the order of the checks, the record of a repeated revoke, the scopes one request may
+  combine) is in TL-04 since logos-lips `9a8d4c14`); found 2026-11-12 planning step 8a. Built in I84.
 
 ### G206 — The audit record of a repeated revoke
 - **Kind:** GAP · **Specs:** CA l.745 (revoking a revoked grant returns it unchanged), l.1167 (each
@@ -1974,7 +1975,8 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Interim (step 8a plan, approved):** a second `revoke-grant` success record, written behind like an
   evaluation's, since each successful call is recorded. `authority/core.nim` (`revokeEntry`); suite
   `cap.grants`.
-- **Status:** OPEN (TL-04, extended); found 2026-11-12 planning step 8a. Built in I84.
+- **Status:** OPEN (TL-04, extended at logos-lips `9a8d4c14`); found 2026-11-12 planning step 8a. Built
+  in I84.
 
 ### G207 — Scope combinations in one `evaluate`
 - **Kind:** GAP · **Specs:** CA l.486 (an evaluation is one operation; the CA may refuse a request it
@@ -1985,7 +1987,8 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   anyway (CA l.392). `call`, `publish-event` and `subscribe-event` need one route and exactly one root in
   the action's list; `publish-event` needs one provider, backed by the consumer (l.243).
   `authority/scopes.nim` (`checkEvaluateShape`); suite `cap.scopes`.
-- **Status:** OPEN (TL-04, extended); found 2026-11-12 planning step 8a. Built in I84.
+- **Status:** OPEN (TL-04, extended at logos-lips `9a8d4c14`); found 2026-11-12 planning step 8a. Built
+  in I84.
 
 ---
 
