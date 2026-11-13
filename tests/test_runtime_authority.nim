@@ -44,11 +44,14 @@ const
   Orch = "orch"
   Ca = "ca"
   Meter = "meter"
+  NoDeadlineMs = 60_000
+    ## [IMPL] The evaluation deadline of every case but the one that tests it:
+    ## the 5 s default fails closed on a loaded host running a sanitizer build.
 
 let clk = newTestClock()
 useClock(clk)
 
-proc caConfig(recovery = false, deadlineMs = 0): EngineConfig =
+proc caConfig(recovery = false, deadlineMs = NoDeadlineMs): EngineConfig =
   result = config(extra = @[fakeCaRegistration()])
   result.authority = Opt.some(
     AuthorityPolicy(
@@ -154,10 +157,11 @@ proc park(
     ParkArgs(rc: rc, name: name, params: params, slot: slot),
   )
 
-proc parkedCode(slot = 0): ErrorCode =
+proc parkedCode(slot = 0, seconds = 10 * Slow): ErrorCode =
   check waitUntil(
     proc(): bool =
-      parkDone[slot].load
+      parkDone[slot].load,
+    seconds,
   )
   joinThread(parkThreads[slot])
   ErrorCode(parkCode[slot].load)
@@ -630,7 +634,8 @@ suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
 suite "run.authority: parked operations (CA §8; I75)":
   test "[CAP-0260] a hanging evaluate leaves the Runtime thread serving; the deadline fails closed and marks the invocation cancelled":
     fresh()
-    let e = newEngine(caConfig(deadlineMs = 300))
+    # Long enough for the evaluation to reach the authority on a loaded host.
+    let e = newEngine(caConfig(deadlineMs = 1_000 * Slow))
     let orch = e.boot()
     e.startCa(orch)
     check e.start(Meter).isOk
