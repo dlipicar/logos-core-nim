@@ -75,10 +75,12 @@ const Slow* =
   ## multiplied by it; a deadline a test is about is not.
 
 proc fastConfig*(): TransportConfig =
-  ## Small deadlines for tests (`test_transport_io` §5.1 of the plan).
+  ## Small deadlines for tests (`test_transport_io` §5.1 of the plan). The Hello
+  ## and admission deadlines only bound how long a test's own Hellos and frames
+  ## may take on a loaded host; a test about one of them sets it.
   var c = defaultTransportConfig()
-  c.helloTimeout = 300 * Ms
-  c.admissionTimeout = 300 * Ms
+  c.helloTimeout = 5000 * Ms * Slow
+  c.admissionTimeout = 5000 * Ms * Slow
   c.closeLinger = 100 * Ms * Slow
   c.writeStallTimeout = 500 * Ms * Slow
   c

@@ -609,7 +609,9 @@ suite "trnio.hello: the Hello exchange over sockets (TRANSPORT §3.1, §8.1, §8
 
   test "[TRN-0378] [G61] callee: an idle connection closes at the Hello deadline, without ProtocolError":
     let ep = newEndpoint()
-    let o = newOwner()
+    var cfg = fastConfig()
+    cfg.helloTimeout = 300 * Ms
+    let o = newOwner(cfg)
     check o.serve(1, dupCloexec(ep.listener))
     let start = getMonoTime()
     let raw = rawConnect(ep.path)
@@ -625,7 +627,9 @@ suite "trnio.hello: the Hello exchange over sockets (TRANSPORT §3.1, §8.1, §8
 
   test "[TRN-0378] [G61] caller: a callee that never answers is TRANSPORT_ERROR at the deadline":
     let ep = newEndpoint() # listening, never served
-    let o = newOwner()
+    var cfg = fastConfig()
+    cfg.helloTimeout = 300 * Ms
+    let o = newOwner(cfg)
     let start = getMonoTime()
     o.connect(1, ep.path, o.issue())
     let f = o.oneOf(1)
@@ -1554,6 +1558,7 @@ suite "trnio.limits: aggregate limits (TRANSPORT §8.6)":
   test "[TRN-0378] [TRN-0379] [TRN-0381] a frame that finds no room in maxInputBytes waits, then closes at admissionTimeout":
     var cfg = fastConfig()
     cfg.maxInputBytes = 24 * MiB
+    cfg.admissionTimeout = 300 * Ms
     let (o, ep) = served(cfg)
     var a = o.rawSession(ep)
     var b = o.rawSession(ep)
