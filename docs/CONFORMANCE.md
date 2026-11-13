@@ -109,14 +109,14 @@ admitted, and `connOutputBytes` at least `peerFrameLimit` plus `controlReserve`.
 | `maxPayloadDepth` (nesting in `params`, `result`, `data`) | conn | 1024 | ProtocolError `INVALID_PARAMS`, close; sending fails locally |
 | `maxInbound` (accepted connections, pending Hellos included) | loop | 1024 | accept, ProtocolError `MODULE_ERROR` without reading, close |
 | `maxPendingHellos` | loop | 64 | same |
-| `helloTimeout` (the whole Hello exchange) | conn | 10 s | callee: close without ProtocolError; caller: `TRANSPORT_ERROR` |
+| `helloTimeout` (the whole Hello exchange; at the deadline the sockets already readable and the owner's queued commands are handled first) | conn | 10 s | callee: close without ProtocolError; caller: `TRANSPORT_ERROR` |
 | `maxHelloInputBytes` (frame bodies read before establishment) | loop | 32 MiB | the frame waits, bounded by `helloTimeout` |
 | `maxOutbound` | loop | 1024 | caller: local `MODULE_ERROR`, nothing opened |
-| `maxInputBytes` (frame bodies held after establishment: being read, queued for an execution slot, or Events not yet released by the caller's owner) | loop | 256 MiB | reading pauses up to `admissionTimeout` (10 s), then ProtocolError `TRANSPORT_ERROR`, close |
+| `maxInputBytes` (frame bodies held after establishment: being read, queued for an execution slot, or Events not yet released by the caller's owner) | loop | 256 MiB | reading pauses up to `admissionTimeout` (10 s; room freed by the deadline counts, as for `helloTimeout`), then ProtocolError `TRANSPORT_ERROR`, close |
 | `maxOutputBytes` (committed output) | loop | 256 MiB | as `connOutputBytes` |
 | `connOutputBytes` | conn | 2 × `peerFrameLimit` + `controlReserve` | Event: overflow (below); success Response: waits, not committed; control frame: the reserve, then ProtocolError `TRANSPORT_ERROR`, close |
 | `controlReserve` (error Responses, SubscriptionResults, the Hello response) | conn | 64 KiB | ProtocolError `TRANSPORT_ERROR` from the final slot, close |
-| `writeStallTimeout` (output pending, no byte written; at the deadline a write is tried first, and only a socket that accepts nothing is stalled) | conn | 30 s | close without ProtocolError |
+| `writeStallTimeout` (output pending, no byte written; at the deadline a write is tried first, and a socket that accepts nothing is judged one dispatcher turn later, after the sockets that were ready) | conn | 30 s | close without ProtocolError |
 | `closeLinger` (flushing a final ProtocolError) | conn | 1 s | close without finishing the flush |
 | `terminationDrain` (in-flight work after a session's authorization ends) | conn | 0 s | — |
 | `maxInFlight` (execution slots) | conn | 1024 | the Request waits in the delayed-admission queue |
@@ -128,7 +128,7 @@ admitted, and `connOutputBytes` at least `peerFrameLimit` plus `controlReserve`.
 | `maxSubscriptionIds` (subscription-id history, which bounds subscriptions) | conn | 4096 | caller: local `MODULE_ERROR`; callee: ProtocolError `TRANSPORT_ERROR`, close |
 | `maxTotalSubscriptions` (active subscriptions, callee side) | loop | 16384 | SubscriptionResult error `MODULE_ERROR`; the session stays |
 | `maxTotalSubscriptionIds` (subscription-id history, both sides) | loop | 65536 | caller: local `MODULE_ERROR`; callee: ProtocolError `TRANSPORT_ERROR`, close |
-| `callerUndeliveredBytes` (Event frames handed to the caller's owner and not released) | conn | 32 MiB | reading pauses until the owner releases them, with no finite bound; a callee of this implementation closes the connection after its `writeStallTimeout` |
+| `callerUndeliveredBytes` (Event frames handed to the caller's owner and not released) | conn | 32 MiB | reading pauses after the Event that reaches it (so it is exceeded by less than one frame) until the owner releases them, with no finite bound; a callee of this implementation closes the connection after its `writeStallTimeout` |
 | `maxPendingOutputBytes` (Response and Event payloads submitted and not yet committed) | loop | 64 MiB | `submit` returns busy; `submitWait` waits up to its deadline, or with no finite bound when it has none |
 
 Execution slots (A21): a dispatched Request holds its slot until the provider's work ends, even after
