@@ -30,6 +30,7 @@ type
     chan: Channel[IoEvent]
     gate: Atomic[bool] ## while true, the sink waits (on the I/O thread)
     waiting: Atomic[bool] ## the sink is waiting at the gate
+    eventAt: Atomic[int64] ## when the sink last forwarded an evEvent (ticks)
 
   Owner* = ref object
     loop*: Loop
@@ -92,6 +93,8 @@ proc toChannel(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].} =
     while box.gate.load:
       sleep(1)
     box.waiting.store(false)
+  if ev.kind == evEvent:
+    box.eventAt.store(getMonoTime().ticks)
   box.chan.send(ev)
 
 proc newOwner*(config = fastConfig()): Owner =
@@ -120,12 +123,34 @@ proc gate*(o: Owner): ptr Atomic[bool] =
   ## For a thread that opens the gate while the test thread waits.
   addr o.box.gate
 
+proc lastEventAt*(o: Owner): MonoTime =
+  ## When the sink, on the I/O thread, last forwarded an `evEvent`. On a loaded
+  ## host the test thread may receive it much later.
+  let t = getMonoTime()
+  t - initDuration(nanoseconds = t.ticks - o.box.eventAt.load)
+
 proc atGate*(o: Owner): bool =
   ## Whether the I/O thread is waiting at the gate.
   o.box.waiting.load
 
 proc send*(o: Owner, cmd: sink IoCommand) =
   doAssert o.loop.submit(cmd) == sbOk
+
+proc admitHello*(o: Owner, ev: IoEvent) =
+  ## Answers an `evHello` with `acceptHello`'s verdict (what `amAccept` does).
+  let ep = o.served.getOrDefault(ev.helloEndpoint)
+  let r = acceptHello(ep, o.store, ev.frame, now())
+  let v =
+    if r.isOk:
+      AdmitVerdict(
+        kind: avEstablished,
+        response: r.get.response,
+        binding: r.get.binding,
+        endsIn: o.endsIn,
+      )
+    else:
+      AdmitVerdict(kind: avFailed, code: r.error.code, peer: r.error.peer)
+  o.send(IoCommand(conn: ev.conn, kind: cmdAdmit, verdict: v))
 
 proc handle(o: Owner, ev: IoEvent) =
   case ev.kind
@@ -140,19 +165,7 @@ proc handle(o: Owner, ev: IoEvent) =
         )
       )
     of amAccept:
-      let ep = o.served.getOrDefault(ev.helloEndpoint)
-      let r = acceptHello(ep, o.store, ev.frame, now())
-      let v =
-        if r.isOk:
-          AdmitVerdict(
-            kind: avEstablished,
-            response: r.get.response,
-            binding: r.get.binding,
-            endsIn: o.endsIn,
-          )
-        else:
-          AdmitVerdict(kind: avFailed, code: r.error.code, peer: r.error.peer)
-      o.send(IoCommand(conn: ev.conn, kind: cmdAdmit, verdict: v))
+      o.admitHello(ev)
   of evDispatch:
     if o.respond:
       o.send(
