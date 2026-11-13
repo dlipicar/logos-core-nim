@@ -14,7 +14,9 @@
 ## [IMPL] The ordinary lane has `EvalWorkers` threads, spawned on demand and
 ## joined at `close`, apart from the lifecycle and call workers: a CA
 ## `watch_changes` holds a call worker for as long as it runs, so evaluation
-## never waits on that pool (CAP-0382).
+## never waits on that pool (CAP-0382). The renewal lane has one thread of
+## its own and carries execution renewals only, so ordinary saturation never
+## delays them (CA §5.1 l.584-595; CAP-0304, CAP-0311, CAP-0321).
 
 {.push raises: [], gcsafe.}
 
@@ -34,11 +36,11 @@ proc evaluateOn(s: ptr Shared, job: EvalJob): EvalResult =
     return EvalResult(verdict: evFailed, reason: "evaluate failed with " & $error.code)
   readDecision(request, bytes, job.runtimeId)
 
-proc evalWorkerLoop(s: ptr Shared) =
+proc evalWorkerLoop(s: ptr Shared, lane: ptr Channel[EvalJob]) =
   while true:
     var job: EvalJob
     try:
-      job = s.evals.recv()
+      job = lane[].recv()
     except Exception:
       return
     case job.kind
@@ -50,5 +52,10 @@ proc evalWorkerLoop(s: ptr Shared) =
 
 proc evalWorkerMain*(s: ptr Shared) {.thread.} =
   markRuntimeThread()
-  evalWorkerLoop(s)
+  evalWorkerLoop(s, addr s.evals)
+  releasePerThread()
+
+proc renewWorkerMain*(s: ptr Shared) {.thread.} =
+  markRuntimeThread()
+  evalWorkerLoop(s, addr s.renewals)
   releasePerThread()

@@ -177,7 +177,17 @@ proc evaluateRequest*(
       ?accessScope(q, runtimeId)
   var scopes = @[scope]
   canonicalOrder(scopes)
-  ok(EvaluateRequest(consumer: address(runtimeId, q.consumer), scopes: scopes))
+  ok(
+    EvaluateRequest(
+      consumer: address(runtimeId, q.consumer),
+      scopes: scopes,
+      execution_renewal:
+        if q.renewal and q.action == aaExecute:
+          Opt.some(true)
+        else:
+          Opt.none(bool),
+    )
+  )
 
 proc encodeRequest*(q: AuthzRequest, runtimeId: string): Result[seq[byte], string] =
   encode(?evaluateRequest(q, runtimeId))

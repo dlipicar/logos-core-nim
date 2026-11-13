@@ -3,8 +3,10 @@
 ## Runtime thread with parked operations (CA §5, §7; RUNTIME l.1737-1748),
 ## the decision cache and its invalidation (CA §8), the bootstrap and
 ## recovery rules (RUNTIME l.1635-1650, l.1674-1680), execution
-## authorization before realization (RUNTIME §3.6), and route validity
-## (RUNTIME l.3157-3190; TL-03 interim).
+## authorization before realization (RUNTIME §3.6), route validity (RUNTIME
+## l.3157-3190; TL-03 interim), and execution authorization over time:
+## renewal on the reserved lane, the retention rule, and the stops its
+## endings cause (CA §5.1, §8 l.828-866; RUNTIME §10.1).
 ##
 ## The authority is `fakeca`: the real Capability Authority's name and call
 ## surface with a scripted `evaluate`. The orchestration instance and the
@@ -86,13 +88,15 @@ proc startCa(e: Engine, orch: ptr LogosRuntimeControlBinding) =
   check orch.lifecycle("start_module", CaModuleName, Opt.some(Ca)).code == ecOk
   check e.bound
 
-proc ready(): (Engine, ptr LogosRuntimeControlBinding) =
-  ## Bootstrapped, the authority bound, the meter ready (started by the host).
+proc ready(meter = true): (Engine, ptr LogosRuntimeControlBinding) =
+  ## Bootstrapped, the authority bound, the meter ready (started by the host)
+  ## unless `meter` is false.
   fresh()
   let e = newEngine(caConfig())
   let orch = e.boot()
   e.startCa(orch)
-  check e.start(Meter).tryGet.state == msReady
+  if meter:
+    check e.start(Meter).tryGet.state == msReady
   forget()
   (e, orch)
 
@@ -560,7 +564,7 @@ suite "run.authority: notices (CA §8 l.884-903)":
     e.finish()
 
 suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
-  test "[CAP-0344] [CAP-0345] [CAP-0346] [CAP-0347] [CAP-0348] [CAP-0172] [RUN-0854] a lost authority answers parked evaluations and closes admission; neither its late results nor its cache reach the next binding, whatever revision it reports":
+  test "[CAP-0344] [CAP-0345] [CAP-0346] [CAP-0347] [CAP-0348] [CAP-0172] [CAP-0173] [RUN-0854] a lost authority answers parked evaluations and closes admission; neither its late results nor its cache reach the next binding, whatever revision it reports":
     fresh()
     let e = newEngine(caConfig(recovery = true))
     let orch = e.boot()
@@ -586,8 +590,11 @@ suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
       proc(): bool =
         sawCancel.load >= 1
     )
+    # [CAP-0174] The route is unusable until it is re-authorized, which
+    # fails closed while unbound.
     check h.read(1).error.code == ecNotAuthorised
-    check e.lastFor(aaCall).outcome == azEvaluationFailed
+    check e.last.request.operation == "renew_route"
+    check e.last.outcome == azEvaluationFailed
     # The old evaluation's late allow is dropped. Until it returns the old
     # realization is not released, so the authority cannot be recovered yet.
     let failed = e.view(Ca).tryGet
@@ -844,5 +851,444 @@ suite "run.authority: route validity (RUNTIME l.3157-3190; TL-03 interim)":
     )
     check ErrorCode(seen.code.load) == ecNotAuthorised
     check orch.renew("k2", route).code == ecNotAuthorised
+    h.release()
+    e.finish()
+
+# Execution authorization over time ------------------------------------------------------
+
+proc startBy(
+    orch: ptr LogosRuntimeControlBinding, instance: string, module = "client_module"
+) =
+  check orch.lifecycle("start_module", module, Opt.some(instance)).code == ecOk
+
+proc reaches(e: Engine, instance: string, state: ModuleState): bool =
+  ## Each look is a request, after which the Runtime thread checks its
+  ## deadlines on the test clock.
+  waitUntil(
+    proc(): bool =
+      e.view(instance).tryGet.state == state
+  )
+
+proc stoppedFor(e: Engine, instance: string, kind: FailureKind): bool =
+  ## [G168 extended] `unloaded` with the classification, intent and origin
+  ## kept.
+  if not e.reaches(instance, msUnloaded):
+    return false
+  let v = e.view(instance).tryGet
+  v.failure.isSome and v.failure.get.kind == kind and v.execution.intent == inRequested and
+    v.intentOrigin.instance == Orch
+
+proc counted(e: Engine, what: string, n: int): bool =
+  waitUntil(
+    proc(): bool =
+      discard e.list()
+      count(what) >= n
+  )
+
+proc routeState(e: Engine, route: string): LogosNSRuntimeControlRouteRecord =
+  e.routes().filterIt(it.route == route)[0]
+
+proc recoverReq(e: Engine, instance: string): seq[byte] =
+  encode(
+    LogosNSRuntimeControlRecoverModuleRequest(
+      module: "client_module",
+      instance: instance,
+      expected_execution_revision: e.view(instance).tryGet.execution.revision,
+    )
+  ).tryGet
+
+suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10.1)":
+  test "[CAP-0304] [CAP-0311] [CAP-0321] [CAP-0352] a renewal runs on its own lane with execution_renewal while the ordinary lane is saturated; its allow carries the execution past the old end":
+    let (e, orch) = ready()
+    check e.create(client(), "m1").isOk
+    setScript(allow("execute", validMs = 60_000))
+    orch.startBy("m1")
+    forget()
+    hold()
+    setScript(rule(vHang, "rc:get_readiness"))
+    for i in 0 .. 3:
+      park(orch, "get_readiness", observeReq("meter_module", Meter), slot = i)
+    check waitHanging(4)
+    # [IMPL] renewal at end − min(30 s, lifetime / 3): 40 s into 60 s.
+    clk.advance(39_000)
+    discard e.list()
+    check count("renew-execution") == 0
+    clk.advance(2_000)
+    check e.counted("renew-execution", 1)
+    check hanging.load == 4
+    let got = received()
+    let r = got.filterIt(it.what == "renew-execution")[0]
+    check r.consumer == Orch
+    let req = LogosNSCapabilityAuthorityEvaluateRequest.decode(r.request).tryGet
+    check req.execution_renewal == Opt.some(true)
+    check r.thread notin got.filterIt(it.what == "rc:get_readiness").mapIt(it.thread)
+    # An ordinary execution decision never carries the field.
+    check e.create(client(), "m2").isOk
+    release()
+    for i in 0 .. 3:
+      check parkedCode(i) == ecOk
+    orch.startBy("m2")
+    let ex = received().filterIt(it.what == "execute")
+    check ex.len == 1
+    check LogosNSCapabilityAuthorityEvaluateRequest.decode(ex[0].request).tryGet.execution_renewal.isNone
+    # The renewal allowed for ten minutes: the first end passes.
+    clk.advance(30_000)
+    discard e.list()
+    check e.view("m1").tryGet.state == msReady
+    e.finish()
+
+  test "[CAP-0349] [CAP-0350] [CAP-0351] [CAP-0342] a denied renewal stops the execution; a failed one keeps it only until its end, then authority-expired with no grace":
+    let (e, orch) = ready()
+    check e.create(client(), "m1").isOk
+    check e.create(client(), "m2").isOk
+    setScript(allow("execute", validMs = 60_000), rule(vDeny, "renew-execution"))
+    orch.startBy("m1")
+    clk.advance(41_000)
+    check e.stoppedFor("m1", fkAuthorityDenied)
+    forget()
+    setScript(allow("execute", validMs = 60_000), rule(vError, "renew-execution"))
+    orch.startBy("m2")
+    clk.advance(41_000)
+    check e.counted("renew-execution", 1)
+    check e.view("m2").tryGet.state == msReady
+    # Asked again within min(5 s, half of what is left).
+    clk.advance(5_000)
+    check e.counted("renew-execution", 2)
+    clk.advance(13_999)
+    discard e.list()
+    check e.view("m2").tryGet.state == msReady
+    clk.advance(1)
+    check e.stoppedFor("m2", fkAuthorityExpired)
+    e.finish()
+
+  test "[CAP-0166] [CAP-0167] [CAP-0168] [CAP-0169] policy_changed keeps an execution only when its previous revision is the authorization's and a present affected_executions leaves it out":
+    let (e, orch) = ready()
+    let id = e.runtimeInstanceId
+    for m in ["m1", "m2", "m3", "m4", "m5"]:
+      check e.create(client(), m).isOk
+    orch.startBy("m1")
+    orch.startBy("m2")
+    setScript(Rule(what: "execute", verdict: vAllow, validMs: Everything, revision: 9))
+    orch.startBy("m4")
+    setScript()
+    # Listed: revoked. Not listed: kept, at the new revision. Decided at or
+    # after the new revision: untouched.
+    check publish(PolicyChangedName, policyChanged(0, 1, Opt.some(@[(id, "m2")])))
+    check e.stoppedFor("m2", fkAuthorityRevoked)
+    check e.view("m1").tryGet.state == msReady
+    # m1 is now at revision 1, so a notice from 1 keeps it.
+    check publish(
+      PolicyChangedName, policyChanged(1, 2, Opt.some(newSeq[(string, string)]()))
+    )
+    discard e.list()
+    check e.view("m1").tryGet.state == msReady
+    orch.startBy("m3")
+    # affected_executions absent: every authorization before it is revoked.
+    check publish(PolicyChangedName, policyChanged(2, 3))
+    check e.stoppedFor("m1", fkAuthorityRevoked)
+    check e.stoppedFor("m3", fkAuthorityRevoked)
+    orch.startBy("m5")
+    # A previous revision that is not the authorization's.
+    check publish(
+      PolicyChangedName, policyChanged(5, 6, Opt.some(newSeq[(string, string)]()))
+    )
+    check e.stoppedFor("m5", fkAuthorityRevoked)
+    check e.view("m4").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-1066] [RUN-0692] [RUN-0904] [RUN-0699] [CAP-0291] [CAP-0170] [CAP-0185] [CAP-0359] an ended grant stops the executions that used it, keeping intent and origin; their routes follow; recovery under a new grant starts afresh":
+    let (e, orch) = ready(meter = false)
+    let id = e.runtimeInstanceId
+    check e.create(client(), "m1").isOk
+    setScript(allow("execute", grants = @["gm"]))
+    orch.startBy(Meter, "meter_module")
+    setScript(allow("execute", grants = @["g1"]))
+    orch.startBy("m1")
+    let rc1 = latestClient()
+    setScript()
+    let r1 = rc1.routeId("k1")
+    let r2 = orch.routeId("k2")
+    forget()
+    # Its destroy held, so its realization is still there to call from.
+    clientDestroyGate.store(true)
+    check publish(
+      GrantChangedName, grantChanged("g1", GrantStatusKind.Revoked, Orch, id)
+    )
+    check e.reaches("m1", msStopping)
+    check rc1.rcCall(
+      "get_execution_permissions",
+      encode(LogosNSRuntimeControlGetExecutionPermissionsRequest()).tryGet,
+    ).code == ecNotReady
+    check e.routeState(r1).state.kind == LogosNSRuntimeControlRouteStateKind.Closed
+    clientDestroyGate.store(false)
+    check e.stoppedFor("m1", fkAuthorityRevoked)
+    check count("stop") == 0
+    check e.routeState(r2).state.kind == LogosNSRuntimeControlRouteStateKind.Ready
+    check e.view(Meter).tryGet.state == msReady
+    # An expired grant: authority-expired; the provider's routes fail.
+    check publish(
+      GrantChangedName, grantChanged("gm", GrantStatusKind.Expired, Orch, id)
+    )
+    check e.stoppedFor(Meter, fkAuthorityExpired)
+    let f = e.routeState(r2)
+    check f.state.kind == LogosNSRuntimeControlRouteStateKind.Failed
+    check f.failure.get.code == "provider-unavailable"
+    # Orchestration resumes it; the engine never did by itself.
+    setScript(allow("execute", grants = @["g2"]))
+    check orch.rcCall("recover_module", e.recoverReq("m1")).code == ecOk
+    let v = e.view("m1").tryGet
+    check v.state == msReady
+    check v.failure.isNone
+    check e.routeState(r1).state.kind == LogosNSRuntimeControlRouteStateKind.Closed
+    e.finish()
+
+  test "[CAP-0345] [RUN-0702] [RUN-0703] losing the binding stops the executions it authorized, as authority-evaluation-failed; orchestration, the authority and host-started modules keep running":
+    let (e, orch) = ready()
+    check e.create(client(), "m1").isOk
+    orch.startBy("m1")
+    let g = e.generation
+    check publish(PolicyChangedName, @[])
+    check e.generation >= g + 2
+    check e.stoppedFor("m1", fkAuthorityEvaluationFailed)
+    check e.view(Orch).tryGet.state == msReady
+    check e.view(Ca).tryGet.state == msReady
+    check e.view(Meter).tryGet.state == msReady
+    check e.bound
+    e.finish()
+
+  test "[IMPL] [C26] stopForAuthority stops a running instance with the classification given and keeps its intent; anything but an authority classification is refused":
+    let (e, orch) = ready()
+    check e.create(client(), "m1").isOk
+    orch.startBy("m1")
+    check e.stopForAuthority("m1", fkReportedByModule).error.code == ecInvalidParams
+    check e.stopForAuthority("nope", fkAuthorityRevoked).error.code == ecInvalidParams
+    check e.stopForAuthority("m1", fkAuthorityRevoked).isOk
+    check e.stoppedFor("m1", fkAuthorityRevoked)
+    # Not running: nothing happens.
+    check e.stopForAuthority("m1", fkAuthorityDenied).tryGet.failure.get.kind ==
+      fkAuthorityRevoked
+    # An explicit stop clears the classification.
+    check orch.lifecycle("stop_module", "client_module", Opt.some("m1")).code == ecOk
+    check e.view("m1").tryGet.failure.isNone
+    e.finish()
+
+# Route re-authorization ------------------------------------------------------------------
+
+proc client(e: Engine, instance: string): ptr LogosRuntimeControlBinding =
+  ## A consumer started by the host, so its own execution never ends.
+  check e.started(client(), instance).state == msReady
+  latestClient()
+
+proc ended(e: Engine, route: string, code: string): bool =
+  waitUntil(
+    proc(): bool =
+      let r = e.routeState(route)
+      r.state.kind == LogosNSRuntimeControlRouteStateKind.Revoked and r.failure.isSome and
+        r.failure.get.code == code
+  )
+
+proc isReady(e: Engine, route: string): bool =
+  e.routeState(route).state.kind == LogosNSRuntimeControlRouteStateKind.Ready
+
+suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
+  test "[RUN-0567] [RUN-0946] [CAP-0174] [CAP-0189] a renewal narrowed below the bound access revokes with authority-revoked, a denied one with authority-denied; a failed one leaves the route ready and unusable until a later decision; a replay renews nothing":
+    let (e, orch) = ready()
+    var narrowed = allow("renew-route")
+    narrowed.narrowMethods = Opt.some(@[declRoot("meter.read")])
+    let ra = orch.routeId("a")
+    setScript(narrowed)
+    check orch.renew("ra", ra).code == ecNotAuthorised
+    check e.ended(ra, "authority-revoked")
+    let rb = orch.routeId("b")
+    setScript(rule(vDeny, "renew-route"))
+    check orch.renew("rb", rb).code == ecNotAuthorised
+    check e.ended(rb, "authority-denied")
+    setScript()
+    let rc = orch.routeId("c")
+    var h = orch.handle(rc)
+    check h.read(1).isOk
+    setScript(rule(vError, "renew-route"))
+    check orch.renew("rc1", rc).code == ecNotAuthorised
+    check e.isReady(rc)
+    # Unusable: its next use is re-authorized first, and that fails too.
+    forget()
+    check h.read(1).error.code == ecNotAuthorised
+    check count("renew-route") == 1
+    check count("call") == 0
+    setScript()
+    check h.read(1).isOk
+    # A replayed renewal answers as before and renews nothing.
+    clk.advance(1000)
+    check orch.renew("rc2", rc).code == ecOk
+    let renewed = e.routeState(rc).expires_at
+    clk.advance(1000)
+    forget()
+    check orch.renew("rc2", rc).code == ecOk
+    check count("renew-route") == 0
+    check e.routeState(rc).expires_at == renewed
+    h.release()
+    e.finish()
+
+  test "[CAP-0188] [CAP-0189] [CAP-0174] [CAP-0173] after policy_changed each route is re-authorized at once with renew-route while its operations wait; an allow keeps it without extending expires_at; a deny or narrowing revokes it; a failure leaves it ready and unusable until a later re-authorization succeeds":
+    let (e, orch) = ready()
+    let c1 = e.client("m1")
+    let c2 = e.client("m2")
+    let c3 = e.client("m3")
+    setScript(allow("establish-route", validMs = 60_000))
+    let r1 = c1.routeId("k")
+    let r2 = c2.routeId("k")
+    let r3 = c3.routeId("k")
+    setScript()
+    var h1 = c1.handle(r1)
+    var h3 = c3.handle(r3)
+    check h1.read(1).isOk
+    let exp1 = e.routeState(r1).expires_at
+    forget()
+    hold()
+    setScript(
+      rule(vHang, "renew-route", consumer = "m1"),
+      rule(vDeny, "renew-route", consumer = "m2"),
+      rule(vError, "renew-route", consumer = "m3"),
+    )
+    check publish(PolicyChangedName, policyChanged(0, 1))
+    check waitHanging()
+    check e.ended(r2, "authority-denied")
+    # A call on the route being re-authorized waits for it.
+    bgDone.store(false)
+    var t: Thread[ptr LogosRouteHandle]
+    createThread(t, background, addr h1)
+    sleep(50)
+    check not bgDone.load
+    # The failed one stays ready and refuses.
+    check e.isReady(r3)
+    check h3.read(1).error.code == ecNotAuthorised
+    release()
+    joinThread(t)
+    check bgCode.load == 0
+    # Kept for ten more minutes, yet its end does not move.
+    check e.routeState(r1).expires_at == exp1
+    # A later re-authorization makes the failed one usable again.
+    setScript()
+    check h3.read(1).isOk
+    # A shorter valid_until shortens it; a narrowed allow revokes.
+    var narrowed = allow("renew-route", consumer = "m1")
+    narrowed.narrowMethods = Opt.some(@[declRoot("meter.read")])
+    setScript(narrowed, allow("renew-route", consumer = "m3", validMs = 1000))
+    let now = uint64(clk.wallMs)
+    check publish(PolicyChangedName, policyChanged(1, 2))
+    check e.ended(r1, "authority-revoked")
+    check waitUntil(
+      proc(): bool =
+        e.routeState(r3).expires_at == Opt.some(now + 1000)
+    )
+    check e.isReady(r3)
+    h1.release()
+    h3.release()
+    e.finish()
+
+  test "[CAP-0185] [CAP-0359] a revoked grant re-authorizes only the routes whose decisions list it":
+    let (e, orch) = ready()
+    setScript(allow("establish-route", grants = @["ga"]))
+    let ra = orch.routeId("a")
+    setScript(allow("establish-route", grants = @["gb"]))
+    let rb = orch.routeId("b")
+    setScript(rule(vDeny, "renew-route"))
+    forget()
+    check publish(
+      GrantChangedName,
+      grantChanged("ga", GrantStatusKind.Revoked, Orch, e.runtimeInstanceId),
+    )
+    check e.ended(ra, "authority-denied")
+    check count("renew-route") == 1
+    check e.isReady(rb)
+    setScript()
+    var h = orch.handle(rb)
+    check h.read(1).isOk
+    h.release()
+    e.finish()
+
+  test "[RUN-0833] [CAP-0193] [CAP-0194] a call in flight across a policy change commits its response when its route is kept; when the route is revoked it gets NOT_AUTHORISED, its invocation is marked cancelled and the limitation is recorded":
+    let (e, orch) = ready()
+    let route = orch.routeId("k")
+    var h = orch.handle(route)
+    var h2 = orch.handle(route)
+    check h2.read(1).isOk
+    var t: Thread[ptr LogosRouteHandle]
+    gate.store(true)
+    bgDone.store(false)
+    createThread(t, background, addr h)
+    check waitUntil(
+      proc(): bool =
+        held.load == 1
+    )
+    check publish(PolicyChangedName, policyChanged(0, 1))
+    # Kept: the next call waits for the re-authorization, then runs.
+    check h2.read(1).isOk
+    gate.store(false)
+    joinThread(t)
+    check bgCode.load == 0
+    gate.store(true)
+    bgDone.store(false)
+    createThread(t, background, addr h)
+    check waitUntil(
+      proc(): bool =
+        held.load == 1
+    )
+    setScript(rule(vDeny, "renew-route"))
+    check publish(PolicyChangedName, policyChanged(1, 2))
+    check e.ended(route, "authority-denied")
+    gate.store(false)
+    joinThread(t)
+    check ErrorCode(bgCode.load) == ecNotAuthorised
+    check e.diagnostics().anyIt("authority was withdrawn" in it)
+    h.release()
+    h2.release()
+    e.finish()
+
+# Routed calls to the authority's methods -------------------------------------------------
+
+proc evalReq(e: Engine, consumer: string, renewal = false): seq[byte] =
+  encode(
+    LogosNSCapabilityAuthorityEvaluateRequest(
+      consumer:
+        Address(runtime_instance_id: e.runtimeInstanceId, module_instance_id: consumer),
+      scopes: @[],
+      execution_renewal: (if renewal: Opt.some(true) else: Opt.none(bool)),
+    )
+  ).tryGet
+
+suite "run.authority: routed calls to the authority (CA l.88-91, l.579; S8b-1 interim)":
+  test "[CAP-0013] [CAP-0305] [CAP-0248] [RUN-0324] a routed call naming another consumer, or an evaluate carrying execution_renewal, is NOT_AUTHORISED without dispatch and kept as a refusal; a matching call reaches the authority with a module caller":
+    let (e, orch) = ready()
+    let caSet = block:
+      let d = caDocuments()
+      acceptContractSet(d[0], d[1], d[2], AcceptOptions(system: true)).tryGet
+    let caRoot = caSet.primary.root
+    let r = orch.establish("ca", root = caRoot)
+    check r.code == ecOk
+    let (code, handle) = orch.materialize(
+      r.routesOf.routes[0].route,
+      caRoot,
+      encodeCbor(schemaResponse(caSet, caRoot).tryGet),
+    )
+    check code == ecOk
+    var h = handle
+    forget()
+    let before = e.answers().len
+    check h.raw("evaluate", e.evalReq(Meter)).code == ecNotAuthorised
+    check h.raw("evaluate", e.evalReq(Orch, renewal = true)).code == ecNotAuthorised
+    # Only the calls' own decisions reached the authority, from the Runtime.
+    check received().allIt(it.callerKind == CallerSystemService and it.what == "call")
+    let kept = e.answers()[before ..^ 1].filterIt(it.outcome == azRefused)
+    check kept.len == 2
+    check kept.allIt(it.source == psBoundary and it.request.consumer == Orch)
+    check kept.allIt(it.request.operation == "evaluate" and it.request.target.len > 0)
+    # The call's own decision came first, and allowed it.
+    check e.answers()[before ..^ 1].anyIt(it.request.action == aaCall and it.allows)
+    # Its own consumer, without the field: dispatched with a module caller.
+    check h.raw("evaluate", e.evalReq(Orch)).code == ecOk
+    let got = received().filterIt(it.callerKind == CallerModule)
+    check got.len == 1
+    check got[0].consumer == Orch
     h.release()
     e.finish()

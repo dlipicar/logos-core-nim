@@ -599,3 +599,53 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     check seen[1].count.load == 0
     h.release()
     e.finish()
+
+when declared(caParity):
+  proc evaluations(what: string): int =
+    received().countIt(it.what == what)
+
+  suite "run.events: under the Capability Authority (G175; CA l.906-915)":
+    setup:
+      clearAll()
+
+    test "[RUN-0819] [RUN-0822] [CAP-0288] [CAP-0289] [CAP-0191] activation and each delivery are decided by the authority through its cache; after policy_changed the next delivery is decided afresh; an explicit subscribe-event deny ends the subscription":
+      let e = fixtureEngine(config(extra = @[dmeterStatic]))
+      resetDeferred()
+      discard e.started(dmeter())
+      let (_, rc) = e.startClient()
+      var h = rc.handle(rc.routeId("k"))
+      forget()
+      var id: LogosSubscriptionId
+      check h.subscribe(addr seen[0], id) == ecOk
+      check evaluations("subscribe-event") == 1
+      let payload = encodeCbor(parseDiag("{\"value\": 7}").get)
+      publishRaw(cstring(Changed), payload)
+      publishRaw(cstring(Changed), payload)
+      check seen[0].count.load == 2
+      # The activation decision is the delivery's too, while it is valid.
+      check evaluations("subscribe-event") == 1
+      check evaluations("publish-event") == 1
+      check publish(PolicyChangedName, policyChanged(0, 1))
+      publishRaw(cstring(Changed), payload)
+      check seen[0].count.load == 3
+      check evaluations("subscribe-event") == 2
+      check evaluations("publish-event") == 2
+      # Denied for the subscriber: skipped, and the subscription ends.
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(1, 2))
+      publishRaw(cstring(Changed), payload)
+      check seen[0].count.load == 3
+      check evaluations("subscribe-event") == 3
+      setScript()
+      check publish(PolicyChangedName, policyChanged(2, 3))
+      publishRaw(cstring(Changed), payload)
+      check seen[0].count.load == 3
+      check evaluations("subscribe-event") == 3
+      # A new subscription, allowed again, delivers.
+      var id2: LogosSubscriptionId
+      check h.subscribe(addr seen[1], id2) == ecOk
+      publishRaw(cstring(Changed), payload)
+      check seen[1].count.load == 1
+      check seen[0].count.load == 3
+      h.release()
+      e.finish()

@@ -62,6 +62,9 @@ type
       ## the derived rules of protected input before the first binding
     psRecovery = "recovery" ## the same rules after a binding loss, when enabled
     psAuthority = "authority" ## a Capability Authority decision
+    psBoundary = "boundary"
+      ## [S8b-1 interim (TF-31)] the Runtime's own check of a routed call to a
+      ## Capability Authority method, after the call was authorized
 
   AuthzRequest* = object
     action*: AuthzAction
@@ -83,11 +86,17 @@ type
       ## (`logos.runtime_control.route_access`); empty when unconstrained
     providerSelector*: bool
       ## a lifecycle or observation request that selects by provider address
+    renewal*: bool
+      ## [SPEC CA §5.1 l.577-578] an execution decision asked again for an
+      ## execution that is already running (`execution_renewal`)
 
   AuthzOutcome* = enum
     azAllow = "allow"
     azDeny = "deny" ## an explicit deny result from policy
     azEvaluationFailed = "evaluation-failed" ## no valid decision was obtained
+    azRefused = "refused"
+      ## [S8b-1 interim (TF-31)] refused at the invocation boundary: neither a
+      ## deny nor an evaluation failure (RUNTIME l.1745-1748)
 
   AuthzAnswer* = object
     decisionId*: string
@@ -203,7 +212,7 @@ func key*(q: AuthzRequest): string =
   $q.action & "\x1F" & q.operation & "\x1F" & q.consumer & "\x1F" & q.target & "\x1F" &
     q.module & "\x1F" & q.route & "\x1F" & q.instance & "\x1F" & q.provider & "\x1F" &
     hexOf(q.contract) & "\x1F" & hexOf(q.declaration) & "\x1F" & hexOf(q.access) & "\x1F" &
-    $q.providerSelector
+    $q.providerSelector & "\x1F" & $q.renewal
 
 proc retain*(a: var Authorizer, answer: AuthzAnswer) =
   ## Keeps one answer for observation, the oldest dropped first.

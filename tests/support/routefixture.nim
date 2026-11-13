@@ -167,7 +167,13 @@ proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineCo
   when declared(caParity):
     result.statics.add(fakeCaRegistration())
     if policy.rules.len == 0:
-      result.authority = Opt.some(AuthorityPolicy(instance: ParityCa))
+      # No parity case tests the evaluation deadline: a generous one keeps a
+      # sanitizer build on a loaded host from failing closed.
+      result.authority = Opt.some(
+        AuthorityPolicy(
+          instance: ParityCa, evaluationDeadline: initDuration(seconds = 60)
+        )
+      )
 
 proc fixtureEngine(cfg: EngineConfig): Engine =
   ## A new engine; in the parity pass, with the authority bound.

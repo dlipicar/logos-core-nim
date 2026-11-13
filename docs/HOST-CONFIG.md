@@ -192,15 +192,13 @@ and observation requests, including those of the bootstrap. Two kinds:
   lost, so the orchestration instance can recover it (RUNTIME l.1674-1680); default false.
 
   Checked at `create`: `authority` names a listed instance whose `module` is
+  `logos_capability_authority` and whose implementation is the `direct_static` binding
   `logos_capability_authority`; its `primary_contract`, when given, is the pinned Capability Authority
-  contract (otherwise it is checked when the instance is bound); it has a `state_assignment`;
-  `runtime.store_dir` is set; and `policy` loads as the authority will load it. The orchestration
-  instance cannot be the authority, since its module name is outside the reserved prefix.
-
-  **Not yet accepted.** A configuration that passes these checks is still rejected with "this policy
-  kind is not supported yet" until enforcement over time (renewal and ending of execution
-  authorizations, route re-authorization) is built in step 8b-2, so no configuration runs with half the
-  enforcement.
+  contract (otherwise the realized one is checked when the instance is bound); it has a
+  `state_assignment`; `runtime.store_dir` and `runtime.state_root` are set; and `policy` loads as the
+  authority will load it. The orchestration instance cannot be the authority, since its module name
+  is outside the reserved prefix. What the host can expect under this kind is below ("Under
+  `capability-authority`").
 
 Any other kind is rejected with "this policy kind is not supported yet".
 
@@ -311,6 +309,61 @@ yet" until call records and evidence are built in step 8b-3, which also adds the
 - **Results.** A result's message and detail stay in the calling thread's storage until that
   thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
   is silent); `LOGOS_OK` carries neither.
+
+## Under `capability-authority`
+
+- **The authority is part of the library.** `liblogos_runtime` links the Capability Authority (CA
+  §1, l.143) and registers its symbol table itself, as binding `logos_capability_authority`: it is a
+  Logos-defined system module whose call surface uses reserved names, which a host-registered table
+  cannot (DECISIONS I84). A host that registers a binding with that identifier anyway gets
+  `LOGOS_ERR_INVALID_PARAMS` from `start`. The Runtime hands the instance its inputs in process
+  (RUNTIME l.1681): `policy`, the Runtime identity, the attribute source and the wall clock, keyed by
+  its state directory `state_root/<state_assignment>`. The authority keeps its grants, audit and
+  policy revision there; the Runtime keeps its identity in `store_dir`, so both name the same Runtime
+  across starts.
+- **Who starts the authority.** The bootstrap starts the orchestration instance only. Until an
+  authority instance is bound, the Runtime answers from rules derived from this configuration, never
+  configurable (BCP l.360; RUNTIME l.1635-1650, RUN-0305, RUN-0306, RUN-0311). They name the
+  orchestration instance as the only consumer and the authority instance as the only target, and allow:
+  - Runtime Control `start_module`, `recover_module` and `get_readiness`;
+  - `module_execution` `start` in `direct` mode, with the orchestration instance as origin.
+
+  Nothing else is allowed before the binding. Once the authority is `ready` and passes the binding
+  checks (RUNTIME l.1652-1667), every module operation is decided by it, and the derived rules lapse:
+  the two never decide the same operation. The authority does not start itself.
+- **Fail closed.** While no binding exists, every operation the authority would decide is refused
+  with `LOGOS_ERR_NOT_AUTHORISED`, classified as an evaluation failure; nothing falls back to a less
+  constrained policy (RUNTIME l.1737-1748, RUN-0050). An evaluation that takes longer than
+  `evaluation_deadline_ms` is an evaluation failure too, never a deny.
+- **Losing the authority.** When the bound instance stops, fails or loses its notification path, every
+  execution it authorized ends (CA l.828): those modules stop, classified as an authority ending,
+  with their intent kept. The orchestration and authority instances, authorized by the derived rules,
+  keep running. With `recovery: true` the derived rules apply again, so the orchestration instance can
+  recover the authority and then the stopped modules (RUNTIME l.1674-1680). With `recovery: false`
+  (the default) only a host restart restores the deployment.
+- **Authority over time.** A module's execution authorization is renewed before its decision's
+  `valid_until`, on a lane of its own; one that is not renewed, or whose grant is revoked or expires,
+  or that a policy change no longer allows, stops the module (CA §5.1, §8). A route is re-authorized
+  when a grant or policy change affects it: a deny or a narrower allow revokes it; an evaluation
+  failure leaves it `ready` but refuses its calls until a later decision allows it again. A route's
+  `expires_at` is never extended (DECISIONS G170).
+- **Time assurance** (RUN-0940). The host's wall clock is trusted for `valid_until`. Each validity is
+  also held on a monotonic clock fixed when the decision is received, so a backward step of the wall
+  clock never extends authority and a forward step ends it early. There is no skew tolerance.
+- **Events.** A subscription is decided when it is activated and again at each delivery, and a
+  publication at each delivery (DECISIONS G175). Under an authority that issues only single-use
+  decisions, every delivery costs two evaluations on the publishing thread. An explicit deny of a
+  subscription at delivery ends it.
+- **Grants.** A grant comes from a module that a policy `issue` rule allows, or from the embedding
+  host through the authority's protected path. An in-process host reaches the authority with
+  `authorityFor(state_root/<state_assignment>)` and calls `issueProtected` and `revokeProtected`
+  (`docs/AUTHORITY-POLICY.md`, "Grants"); there is no C export.
+- **The attribute source** (BCP l.368). The authority matches policy subjects against facts the
+  Runtime keeps for each instance: its id and module name. Direct instances have no signer or
+  package, so rules naming those match none of them. A host does not supply the facts.
+- **What the Runtime retains about decisions** (RUNTIME l.1756-1760, RUN-0330). The last 4096
+  authorization answers, in memory: for each, the consumer, operation, target, decision id, source,
+  outcome and the grants it used. They are lost at exit; the authority's own audit is what persists.
 
 ## Persistent Runtime state
 

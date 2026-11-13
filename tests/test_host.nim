@@ -92,6 +92,7 @@ proc caConfig(): LcnAppConfig =
   ## `baseConfig` with a Capability Authority instance `ca` deciding.
   result = baseConfig()
   result.runtime.store_dir = Opt.some(work / "store")
+  result.runtime.state_root = Opt.some(work / "state")
   var ca = staticModule("ca", AuthorityModule, "logos_capability_authority")
   ca.state_assignment = Opt.some("ca-state")
   result.modules.add(ca)
@@ -189,7 +190,7 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
         e[1] = cborMap(@[(cbor("kind"), cbor("deny-all"))])
     check parseValue(cv).rejects("policy kind is not supported yet")
 
-  test "[RUN-0304] [RUN-0305] [CAP-0003] [CAP-0006] [I85] a capability-authority policy names a local Capability Authority instance and 8a's policy, and is refused until step 8b-2":
+  test "[RUN-0304] [RUN-0305] [CAP-0003] [CAP-0006] [I85] a capability-authority policy names this library's Capability Authority instance and 8a's policy":
     let ok = caConfig().decoded
     check ok.isOk
     let a = ok.get.authority.get
@@ -197,7 +198,7 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     check a.evaluationDeadline == DefaultEvaluationDeadline
     check not a.recovery
     check ok.get.authorityPolicy == encodeCbor(toCbor(authorityPolicy()))
-    check parse(caConfig()).rejects("this policy kind is not supported yet")
+    check parse(caConfig()).isOk
     var c = caConfig()
     c.authorityArm.authority = "nobody"
     check c.decoded.rejects("policy.authority names no instance in modules")
@@ -205,6 +206,24 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.authorityArm.authority = "meter-1"
     check c.decoded.rejects(
       "policy.authority's module is not logos_capability_authority"
+    )
+    # [IMPL] The library's own binding, wired in process.
+    c = caConfig()
+    c.modules[2] = staticModule("ca", AuthorityModule, "my_authority")
+    c.modules[2].state_assignment = Opt.some("ca-state")
+    check c.decoded.rejects(
+      "policy.authority must be the direct_static binding logos_capability_authority"
+    )
+    c.modules[2].implementation = LcnAppImplementation(
+      kind: LcnAppImplementationKind.Direct_dynamic,
+      arm_Direct_dynamic: LcnAppImplementationARDirectDynamicMap(
+        artifact: LcnAppArtifact(
+          id: "ca", local_path: work / "libca.so", hash: newSeq[byte](32)
+        )
+      ),
+    )
+    check c.decoded.rejects(
+      "policy.authority must be the direct_static binding logos_capability_authority"
     )
     c = caConfig()
     c.modules[2].primary_contract = Opt.some(root(7))
@@ -223,6 +242,9 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c = caConfig()
     c.modules[2].state_assignment = Opt.none(string)
     check c.decoded.rejects("the authority instance needs a state_assignment")
+    c = caConfig()
+    c.runtime.state_root = Opt.none(string)
+    check c.decoded.rejects("capability-authority needs state_root")
     # The evaluation deadline: 1..60000, below the startup deadline (C34(a)).
     for ms in [0'u32, 60_001]:
       c = caConfig()

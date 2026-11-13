@@ -63,7 +63,8 @@ type
     what*: string
       ## what the request asks; empty: anything. `call`, `establish-route`,
       ## `renew-route`, `discover`, `publish-event`, `subscribe-event`,
-      ## `rc:<method>`, `execute`, `stop`
+      ## `rc:<method>`, `execute`, `stop`, `renew-execution` (an `execute`
+      ## with `execution_renewal`)
     verdict*: Verdict
     validMs*: int64 ## allow: `valid_until` this far after `issued_at`
     grants*: seq[string]
@@ -544,7 +545,9 @@ proc fakeDispatch(
     let req = LogosNSCapabilityAuthorityEvaluateRequest.decode(bytes).valueOr:
       return LogosResult(code: CErrorCode(ord(ecInvalidParams)))
     let what =
-      if req.scopes.len > 0:
+      if req.execution_renewal.get(false):
+        "renew-execution"
+      elif req.scopes.len > 0:
         whatOf(req.scopes[0])
       else:
         "?"

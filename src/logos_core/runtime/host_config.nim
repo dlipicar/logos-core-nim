@@ -245,6 +245,17 @@ proc checkAuthority(
   # CAP-0006).
   if r.module != AuthorityModule:
     return err(configError("policy.authority's module is not " & AuthorityModule))
+  # [IMPL] The authority is the Capability Authority this library links (8a),
+  # wired in process (RUNTIME l.1681): its `direct_static` binding
+  # `logos_capability_authority`, which the library registers itself, since a
+  # host-registered table cannot use the reserved `logos` names (I84). A
+  # library loaded apart would not see the wiring.
+  if r.strategy != stDirectStatic or r.binding != AuthorityModule:
+    return err(
+      configError(
+        "policy.authority must be the direct_static binding " & AuthorityModule
+      )
+    )
   # [SPEC RUNTIME l.1652-1655; RUN-0316] Otherwise checked at binding.
   if r.primaryContract.isSome and @(r.primaryContract.get) != caRoots().contract:
     return err(
@@ -261,6 +272,8 @@ proc checkAuthority(
     return err(configError("capability-authority needs store_dir"))
   if r.stateAssignment.isNone:
     return err(configError("the authority instance needs a state_assignment"))
+  if c.stateRoot.isNone:
+    return err(configError("capability-authority needs state_root"))
   var deadline = DefaultEvaluationDeadline
   if p.evaluation_deadline_ms.isSome:
     let v = p.evaluation_deadline_ms.get
@@ -418,12 +431,9 @@ proc parseHostConfig*(
 ): Result[HostConfig, ConfigError] =
   ## [SPEC RUNTIME §13.3] Decodes and validates one configuration; RUN-0741.
   ## [I85] A configuration that passes every check but asks for what is not
-  ## built yet is refused rather than half honoured: the Capability Authority
-  ## policy until its enforcement over time is (step 8b-2), call audit until
-  ## its records are (8b-3).
+  ## built yet is refused rather than half honoured: call audit until its
+  ## records are (step 8b-3).
   let c = ?decodeHostConfig(format, data)
-  if c.authority.isSome:
-    return err(configError("this policy kind is not supported yet"))
   if c.callAudit:
     return err(configError("call_audit is not supported yet"))
   ok(c)

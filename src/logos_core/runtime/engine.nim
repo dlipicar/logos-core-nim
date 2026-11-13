@@ -114,7 +114,7 @@ import ../iface/[accept, outcome]
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
-    invoke, plumbing, store,
+    execauth, invoke, plumbing, store,
   ]
 
 export plumbing
@@ -188,6 +188,13 @@ type
     shown: InstanceView ## the view last exposed, which observers see while `pending`
     pendingExec: PendingExec
       ## [I85] an accepted start or recovery waiting for its execution decision
+    exec: Opt[ExecAuth]
+      ## [I85] the execution authorization of the attempt or realization in
+      ## progress (`execauth.nim`)
+    execSerial: int ## advanced whenever `exec` is replaced or ended
+    enforced: Opt[Failure]
+      ## [G168 extended] the classification an authority stop in progress
+      ## leaves on `unloaded`
 
   Saved = object ## What an accepting commit rolls back when its write fails.
     record: ModuleRecord
@@ -228,6 +235,8 @@ type
     reserved: Table[string, string]
       ## by provider: the route ids `establish_route` allocated (l.3155)
     passes: int
+    waited: Table[string, int]
+      ## by route: the re-authorization it waited for (`routeAuthorized`)
 
   Then = proc(answers: seq[AuthzAnswer]) {.closure, gcsafe, raises: [].}
   Abort = proc() {.closure, gcsafe, raises: [].}
@@ -256,6 +265,7 @@ type
     retries: int
     cacheable: bool
     abandoned: bool ## its answer was given without it
+    renewal: bool ## on the renewal lane
 
   PendingExec = ref object
     ## [SPEC RUNTIME §3.6 step 3; plan §2.9] An accepted start or recovery
@@ -321,7 +331,8 @@ type
     nextPending: int
     evals: Table[int, Eval] ## by job id
     nextEval: int
-    evalBusy: int ## evaluations dispatched and not yet answered
+    evalBusy: int ## ordinary-lane evaluations dispatched and not yet answered
+    renewBusy: int ## renewal-lane evaluations dispatched and not yet answered
     gen: uint64 ## [CAP-0344] the binding generation
     caInst: Inst ## the bound Capability Authority instance, if any
     boundToken: string ## the realization the binding checked
@@ -333,9 +344,16 @@ type
     revokedGrants: seq[(uint64, string)]
       ## (invalidation, grant) for the revocations and expiries processed while
       ## an evaluation was outstanding (CAP-0343)
+    reauthQueue: Deque[string] ## routes waiting for a re-authorization slot
+    reauthBusy: int ## route re-authorizations being evaluated
+    reauthWaiters: Table[string, seq[OpCtx]]
+      ## by route: operations parked on its re-authorization
 
 const
   MaxPasses = 8 ## [IMPL] handler passes per operation; more is an evaluation failure
+  ReauthBatch = 64
+    ## [IMPL; S8b-2 interim] route re-authorizations evaluated at once after
+    ## a notice, the rest queued, so they never fill the ordinary lane's queue
   NotPersisted = "the execution state could not be persisted"
   StoreRetry = initDuration(seconds = 1)
   RevisionMask = 0xFFFF_FFFF'u64
@@ -609,6 +627,15 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
   if r.isTerminal:
     return
   r.terminate(state, failure)
+  if state == rtRevoked and r.calls.len > 0:
+    # [SPEC CA l.917-918; CAP-0193, CAP-0194; I85] Provider code already
+    # running cannot be interrupted: its invocation is marked cancelled, no
+    # response is committed through the route, and the limitation is kept.
+    st.diagnose(
+      $r.calls.len & " admitted call(s) were still running in provider " & r.provider &
+        " when route " & r.id &
+        "'s authority was withdrawn; their invocations are marked cancelled and commit no response"
+    )
   for t in r.calls:
     let ticket = cast[ptr CallTicket](t)
     withLock ticket.lock:
@@ -833,6 +860,13 @@ proc releaseWaiters(st: State, x: Inst) =
       w.reply.answerView(x)
     x.stopWaiters.setLen(0)
 
+proc takeEnforced(x: Inst): Opt[Failure] =
+  ## [G168 extended (I85)] What a stop reaching `unloaded` leaves as
+  ## `failure`: the classification of an authority stop, once; none for any
+  ## other stop (RUNTIME l.3757).
+  result = x.enforced
+  x.enforced = Opt.none(Failure)
+
 proc finishAttempt(st: State, a: Attempt) =
   ## The attempt has nothing left to clean: its outcome is final.
   let x = a.inst
@@ -847,10 +881,11 @@ proc finishAttempt(st: State, a: Attempt) =
     x.attempt = nil
   if a.cancelled and x.state == msStopping:
     # [SPEC RUNTIME §3.4] A completed explicit stop: `unloaded`, failure
-    # cleared. A stop whose deadline passed already left `error`, which the end
-    # of its cleanup does not change (l.611).
+    # cleared (an authority stop's classification kept). A stop whose deadline
+    # passed already left `error`, which the end of its cleanup does not
+    # change (l.611).
     x.state = msUnloaded
-    x.failure = Opt.none(Failure)
+    x.failure = x.takeEnforced()
     x.current = ""
     st.commit(x)
   st.releaseWaiters(x)
@@ -864,6 +899,8 @@ proc failAttempt(st: State, a: Attempt, f: Failure) =
   a.failed = true
   x.state = msError
   x.failure = Opt.some(f)
+  x.exec = Opt.none(ExecAuth)
+  inc x.execSerial
   x.provider = false
   st.commit(x)
   for w in a.waiters:
@@ -1041,6 +1078,17 @@ proc prerequisitesReady(st: State, x: Inst): bool =
 
 proc handle(st: State, q: Request) {.gcsafe.}
 proc beginAttempt(st: State, a: Attempt) {.gcsafe.}
+proc stopInstance(
+  st: State,
+  x: Inst,
+  reply: ReplyChannel,
+  keepIntent: bool,
+  origin = "",
+  enforcement = false,
+) {.gcsafe.}
+
+proc reauthRoutes(st: State, grant: string) {.gcsafe.}
+proc invalidateRoutes(st: State) {.gcsafe.}
 
 func authorityMode(st: State): bool =
   st.cfg.authority.isSome
@@ -1122,9 +1170,22 @@ proc fill(st: State, p: Pending, i: int, answer: AuthzAnswer) =
     st.pendings.del(p.id)
     p.then(p.answers)
 
-proc dispatchEval(st: State, job: sink EvalJob) =
-  inc st.evalBusy
+proc dispatchEval(st: State, job: sink EvalJob, renewal: bool) =
   let s = st.shared
+  if renewal:
+    inc st.renewBusy
+    if not s.renewSpawned:
+      try:
+        createThread(s.renewWorker, renewWorkerMain, s)
+        s.renewSpawned = true
+      except ResourceExhaustedError:
+        discard # [IMPL] the renewal waits; its deadline fails it closed
+    try:
+      s.renewals.send(job)
+    except Exception:
+      discard
+    return
+  inc st.evalBusy
   if st.evalBusy > s.evalSpawned and s.evalSpawned < EvalWorkers:
     try:
       createThread(s.evalWorkers[s.evalSpawned], evalWorkerMain, s)
@@ -1139,8 +1200,9 @@ proc dispatchEval(st: State, job: sink EvalJob) =
 proc startEval(
     st: State, p: Pending, i: int, bytes: seq[byte], cacheable: bool, retries = 0
 ) =
-  ## [plan §2.4] One `evaluate` on the ordinary lane. The authority's
-  ## in-flight count holds its realization until the evaluation returns.
+  ## [plan §2.4] One `evaluate` on the ordinary lane, or on the renewal lane
+  ## for an execution renewal (CA §5.1). The authority's in-flight count
+  ## holds its realization until the evaluation returns.
   let q = p.reqs[i]
   let ca = st.caInst
   if ca.isNil or ca.state != msReady or ca.current != st.boundToken or
@@ -1148,8 +1210,10 @@ proc startEval(
     # [CAP-0344] The binding is being lost; nothing is admitted under it.
     st.fill(p, i, st.failure(q, "no Capability Authority binding"))
     return
-  if st.evalBusy >= EvalWorkers + EvalQueue:
-    # [IMPL] An admission failure before evaluation begins.
+  if not q.renewal and st.evalBusy >= EvalWorkers + EvalQueue:
+    # [IMPL] An admission failure before evaluation begins. [CA §5.1
+    # l.592-595] Ordinary saturation never takes the renewal lane's place;
+    # there is at most one renewal per running instance (`MaxInstances`).
     st.fill(p, i, st.failure(q, "the evaluation queue is full"))
     return
   inc st.nextEval
@@ -1164,6 +1228,7 @@ proc startEval(
     seqAt: st.invalidations,
     retries: retries,
     cacheable: cacheable,
+    renewal: q.renewal,
   )
   st.evals[e.id] = e
   inc ca.inflight
@@ -1179,7 +1244,8 @@ proc startEval(
       access: ca.services,
       ticket: e.ticket,
       runtimeId: st.runtimeId,
-    )
+    ),
+    e.renewal,
   )
 
 proc decideDetached(
@@ -1333,6 +1399,107 @@ template require(st: State, q: Request, reqs: varargs[AuthzRequest]) =
 proc requestBytes(st: State, q: AuthzRequest): seq[byte] =
   encodeRequest(q, st.runtimeId).get(newSeq[byte]())
 
+# Execution authorization over time (CA §8 l.828-866; plan §2.9, §2.10) ---------------
+
+func executing(x: Inst): bool =
+  ## An attempt or realization running under an authorization that ends.
+  x.state in {msLoaded, msReady} and x.exec.isSome and x.exec.get.ends
+
+func failureKind(e: ExecEnding): FailureKind =
+  case e
+  of eeExpired: fkAuthorityExpired
+  of eeRevoked: fkAuthorityRevoked
+  of eeDenied: fkAuthorityDenied
+  of eeNone, eeFailed: fkAuthorityEvaluationFailed
+
+proc stopForAuthority(st: State, x: Inst, kind: FailureKind) =
+  ## [SPEC RUNTIME §10.1 l.3801-3804; CA l.854; plan §2.10] An ended execution
+  ## authorization stops the instance at once, without waiting for a
+  ## re-evaluation or a renewal answer (CAP-0349): its Runtime Control binding
+  ## and admissions into it end as it enters `stopping` (RUN-0904), its
+  ## routes follow (G170), its cleanup asks no stop grant (CAP-0291), and
+  ## intent and origin stay (RUN-1066). It ends `unloaded` with `failure` set
+  ## to `kind`, or `error` with `cleanup-timeout` when the stop deadline
+  ## passes [G168 extended]. Orchestration resumes it with `recover_module`
+  ## (RUN-0696); the engine never restarts it (RUN-0693).
+  if x.state notin {msLoaded, msReady}:
+    return
+  st.diagnose("the execution authorization of " & x.id & " ended: " & $kind)
+  x.enforced = Opt.some(Failure(kind: kind))
+  st.stopInstance(x, nil, keepIntent = true, enforcement = true)
+
+proc endExecution(st: State, x: Inst, ending: ExecEnding) =
+  if ending != eeNone:
+    st.stopForAuthority(x, ending.failureKind)
+
+proc execRenewed(st: State, x: Inst, serial: int, a: AuthzAnswer) =
+  ## [SPEC CA l.855-862; plan §2.9] A renewal's answer, unless the
+  ## authorization it renews has ended meanwhile.
+  if x.execSerial != serial or not x.executing:
+    return
+  st.endExecution(x, x.exec.get.renewed(a, st.gen, st.wallNow, st.monoNow))
+
+proc renewExecution(st: State, x: Inst) =
+  ## [SPEC CA §5.1 l.577-579, l.855-856; CAP-0304, CAP-0311] Before the
+  ## validity end: the same decision for the same retained consumer, target
+  ## and scopes, with `execution_renewal`, on the renewal lane. The field is
+  ## set only here, while the authorization is valid.
+  x.exec.get.renewing = true
+  let serial = x.execSerial
+  var q = x.exec.get.request
+  q.renewal = true
+  st.decideDetached(
+    @[q],
+    proc(got: seq[AuthzAnswer]) =
+      st.execRenewed(x, serial, got[0]),
+    proc() =
+      discard, # [I85] shutdown; the validity end still applies
+  )
+
+proc checkExecutions(st: State) =
+  ## [SPEC CA l.857-858; CAP-0342, CAP-0352] A validity end reached on either
+  ## clock stops the instance as `authority-expired`, with no grace; a
+  ## renewal is asked for when it is due (not after shutdown is accepted).
+  var due: seq[Inst]
+  for x in st.instances.values:
+    if x.executing:
+      due.add(x)
+  for x in due:
+    if not x.executing:
+      continue
+    if x.exec.get.expired(st.wallNow, st.monoNow):
+      st.stopForAuthority(x, fkAuthorityExpired)
+    elif not st.shuttingDown and x.exec.get.renewalDue(st.monoNow):
+      st.renewExecution(x)
+
+proc nextExecution(st: State): Opt[MonoTime] =
+  ## When the Runtime thread next looks at an execution authorization, on the
+  ## real monotonic clock.
+  var t = Opt.none(int64)
+  for x in st.instances.values:
+    if x.executing:
+      let ev = if st.shuttingDown: x.exec.get.deadline else: x.exec.get.nextEvent
+      if ev.isSome and (t.isNone or ev.get < t.get):
+        t = ev
+  if t.isNone:
+    return Opt.none(MonoTime)
+  Opt.some(getMonoTime() + initDuration(nanoseconds = max(t.get - st.monoNow, 0)))
+
+type Ending =
+  proc(id: string, x: var ExecAuth): ExecEnding {.closure, gcsafe, raises: [].}
+
+proc endExecutions(st: State, ending: Ending) =
+  ## Each running execution's authorization through `ending`; those it ends
+  ## are stopped once every one has been looked at.
+  var hit: seq[(Inst, ExecEnding)]
+  for x in st.instances.values:
+    if x.executing:
+      let e = ending(x.id, x.exec.get)
+      if e != eeNone:
+        hit.add((x, e))
+  for (x, e) in hit:
+    st.endExecution(x, e)
+
 # The binding -----------------------------------------------------------------------------
 
 proc bindingRefusal(st: State, x: Inst): string =
@@ -1350,8 +1517,11 @@ proc bindingRefusal(st: State, x: Inst): string =
   if b.dispatch.isNil:
     return "it has no generic dispatch"
   let primary = b.contracts.primary
-  if root.isNone or x.record.primaryContract != root or primary.isNone or
-      primary.get.root != root.get:
+  # A record that names no primary contract is checked by what the
+  # realization exposes (RUN-0316), as host configuration says.
+  if root.isNone or
+      (x.record.primaryContract.isSome and x.record.primaryContract != root) or
+      primary.isNone or primary.get.root != root.get:
     return "its primary contract is not the pinned Capability Authority contract"
   let sel = selectContract(b.contracts, root.get, st.ctx)
   if sel.isNone or sel.get.methodRoot("evaluate") != toDigest(roots.evaluate):
@@ -1400,6 +1570,14 @@ proc loseBinding(st: State, reason: string) =
     return
   st.diagnose("the Capability Authority binding is lost: " & reason)
   st.failOutstanding("the Capability Authority binding was lost")
+  # [SPEC CA l.828; plan §2.13; I85] Every execution it authorized ends,
+  # classified `authority-evaluation-failed`; bootstrap- and
+  # recovery-authorized ones (orchestration, the authority) keep running.
+  st.endExecutions(
+    proc(id: string, x: var ExecAuth): ExecEnding =
+      eeFailed
+  )
+  st.invalidateRoutes()
 
 proc checkBinding(st: State) {.gcsafe.} =
   ## [SPEC RUNTIME l.1652-1667, l.1679-1680; plan §2.3] After every step: the
@@ -1455,7 +1633,10 @@ proc evaluated(st: State, id: int, res: EvalResult) =
   var e: Eval
   if not st.evals.pop(id, e):
     return
-  dec st.evalBusy
+  if e.renewal:
+    dec st.renewBusy
+  else:
+    dec st.evalBusy
   freeTicket(e.ticket)
   let ca = e.authority
   dec ca.inflight
@@ -1527,8 +1708,10 @@ proc pathLoss(st: State, reason: string) =
   st.loseBinding("the notification path is lost: " & reason)
   st.checkBinding()
 
-proc grantEnded(st: State, grant: string) =
-  ## [SPEC CA l.884-891; CAP-0185, CAP-0170] A revoked or expired grant.
+proc grantEnded(st: State, grant: string, expired: bool) =
+  ## [SPEC CA l.884-891, l.913; CAP-0185, CAP-0170] A revoked or expired
+  ## grant: the decisions listing it are no longer used, and the executions
+  ## whose authorization used it end.
   inc st.invalidations
   if st.evals.len == 0:
     st.revokedGrants.setLen(0)
@@ -1539,12 +1722,25 @@ proc grantEnded(st: State, grant: string) =
     st.revokedGrants.keepItIf(it[0] > oldest)
     st.revokedGrants.add((st.invalidations, grant))
   st.cache.dropGrant(grant)
+  st.endExecutions(
+    proc(id: string, x: var ExecAuth): ExecEnding =
+      x.onGrantEnded(grant, expired)
+  )
+  st.reauthRoutes(grant)
 
 proc policyChanged(st: State, n: Notice) =
-  ## [SPEC CA l.899-903; CAP-0184]
+  ## [SPEC CA l.845-850, l.899-903; CAP-0184, CAP-0166 to CAP-0169] The cache
+  ## is cleared and every execution authorization not kept by the retention
+  ## rule ends as revoked (`execauth.onPolicyChange`).
   inc st.invalidations
   st.policyRevision = max(st.policyRevision, n.revision)
   st.cache.clear()
+  let gen = st.gen
+  st.endExecutions(
+    proc(id: string, x: var ExecAuth): ExecEnding =
+      x.onPolicyChange(n, id, gen)
+  )
+  st.reauthRoutes("")
 
 proc notice(st: State, q: Request) =
   ## [SPEC CA §8 l.884-903; RUNTIME l.1660-1667; plan §2.8] A notice from the
@@ -1573,7 +1769,7 @@ proc notice(st: State, q: Request) =
   case n.kind
   of nkGrant:
     if n.ended:
-      st.grantEnded(n.grant)
+      st.grantEnded(n.grant, n.expired)
   of nkPolicy:
     st.policyChanged(n)
 
@@ -1731,12 +1927,17 @@ proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
   x.current = at.token
   x.state = msLoaded
   x.failure = Opt.none(Failure)
+  x.enforced = Opt.none(Failure)
   x.provider = false
   let refused = st.accept(x, saved)
   if refused.isSome:
     for w in waiters:
       w.reply.answerError(refused.get.code, refused.get.message)
     return
+  # [SPEC CA §8 l.828-866; plan §2.9] The authorization the attempt runs
+  # under, with its validity end and renewal time.
+  x.exec = Opt.some(authorization(a, st.gen, st.wallNow, st.monoNow))
+  inc x.execSerial
   st.beginAttempt(at)
 
 proc execute(st: State, x: Inst, reply: ReplyChannel, origin: string) {.gcsafe.} =
@@ -1913,13 +2114,25 @@ proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
     st.beginInit(a, step.binding)
 
 proc stopInstance(
-    st: State, x: Inst, reply: ReplyChannel, keepIntent: bool, origin = ""
+    st: State,
+    x: Inst,
+    reply: ReplyChannel,
+    keepIntent: bool,
+    origin = "",
+    enforcement = false,
 ) =
   ## [SPEC RUNTIME §3.4, §9.1, §10.2] Moves `x` toward `unloaded`; replies
   ## once it is there, or once the stop deadline passes and the instance is
   ## `error` with `cleanup-timeout` [G61]. [I85] A start or recovery waiting
   ## for its execution decision is cancelled: it and the starts that joined
-  ## it get the view after the stop, or NOT_READY at shutdown.
+  ## it get the view after the stop, or NOT_READY at shutdown. An
+  ## `enforcement` stop (`stopForAuthority`) keeps intent, as a shutdown stop
+  ## does, and has the stop deadline of an explicit one.
+  x.exec = Opt.none(ExecAuth)
+  inc x.execSerial
+  if not keepIntent:
+    # [SPEC RUNTIME l.3757] An explicit stop clears the classification.
+    x.enforced = Opt.none(Failure)
   let pe = x.pendingExec
   if pe != nil:
     pe.cancelled = true
@@ -1936,6 +2149,11 @@ proc stopInstance(
   if not keepIntent and x.intent != inStopped:
     # [SPEC RUNTIME §9.1 l.1839] An explicit stop cancels retained intent.
     x.intent = inStopped
+    st.commit(x)
+  if not keepIntent and x.state == msUnloaded and x.failure.isSome:
+    # [SPEC RUNTIME l.3757, l.3760; I85] It completes at once, so the
+    # classification an authority refusal or stop left is cleared.
+    x.failure = Opt.none(Failure)
     st.commit(x)
   case x.state
   of msUnloaded, msStopping:
@@ -1967,7 +2185,7 @@ proc stopInstance(
       st.commit(x)
     else:
       x.state = msUnloaded
-      x.failure = Opt.none(Failure)
+      x.failure = x.takeEnforced()
       x.current = ""
       st.commit(x)
       reply.answerView(x)
@@ -1975,13 +2193,13 @@ proc stopInstance(
   if x.state == msStopping and x.teardown == 0 and x.attempt.isNil and
       x.realization.isNil:
     x.state = msUnloaded
-    x.failure = Opt.none(Failure)
+    x.failure = x.takeEnforced()
     x.current = ""
     st.commit(x)
   if x.state == msUnloaded:
     reply.answerView(x)
     return
-  if not keepIntent:
+  if not keepIntent or enforcement:
     # [G61, revised by A18] The drain deadline of an explicit stop starts
     # when the instance enters `stopping`; shutdown has its own grace.
     x.stopDeadline = Opt.some(getMonoTime() + st.cfg.stopDeadline)
@@ -2821,12 +3039,160 @@ proc establish(st: State, q: Request, x: Inst) =
   st.keys.retain(x.id, req.request_key, op, q.rc.request, bytes)
   q.reply.answer(Reply(bytes: bytes))
 
+# Route re-authorization (CA l.869-873, l.906-914; S8b-2 interim, TF-33) ----------------
+
+proc reauthRequest(r: Route): AuthzRequest =
+  ## The `renew-route` decision for the route as it is bound: its id, provider
+  ## and access (CA l.284-293).
+  AuthzRequest(
+    action: aaRoute,
+    operation: "renew_route",
+    consumer: r.consumer,
+    target: r.provider,
+    provider: r.provider,
+    route: r.id,
+    module: r.selected.module,
+    contract: @(r.selected.root),
+    access: accessBytes(r.access),
+  )
+
+proc releaseReauthWaiters(st: State, r: Route) =
+  ## The operations parked on `r` run again and look at it afresh.
+  var waiting: seq[OpCtx]
+  if st.reauthWaiters.pop(r.id, waiting):
+    for op in waiting:
+      st.rerun(op)
+
+proc shorten(st: State, r: Route, a: AuthzAnswer) =
+  ## [S8b-2 interim] A re-authorization never extends `expires_at`; an
+  ## earlier `valid_until` shortens it.
+  if a.validUntil.isNone or (r.expiresAt.isSome and r.expiresAt.get <= a.validUntil.get):
+    return
+  r.expiresAt = a.validUntil
+  let left = int64(a.validUntil.get) - int64(st.wallNow)
+  let d = st.monoNow + max(left, 0) * 1_000_000
+  if r.monoDeadline.isNone or d < r.monoDeadline.get:
+    r.monoDeadline = Opt.some(d)
+  st.timed.incl(r.id)
+
+proc pumpReauth(st: State) {.gcsafe.}
+
+proc reauthorized(st: State, r: Route, attempt: int, a: AuthzAnswer) =
+  ## [SPEC CA l.906-911; CAP-0189; S8b-2 interim] An allow covering the bound
+  ## access makes the route usable again with the new decision; a deny
+  ## revokes it with `authority-denied`, a narrowed allow with
+  ## `authority-revoked` (G170 extended); an evaluation failure leaves it
+  ## `ready` and unusable (CAP-0174). TL-04: the outcome decides, never a
+  ## code.
+  dec st.reauthBusy
+  if r.reauthTry == attempt and r.reauth == raPending and not r.isTerminal:
+    if a.allows:
+      r.decisionId = a.decisionId
+      r.grants = a.grants
+      st.shorten(r, a)
+      r.reauth = raNone
+    else:
+      case a.outcome
+      of azAllow:
+        st.endRoute(r, rtRevoked, Opt.some(rfAuthorityRevoked))
+      of azDeny:
+        st.endRoute(r, rtRevoked, Opt.some(rfAuthorityDenied))
+      of azEvaluationFailed, azRefused:
+        r.reauth = raFailed
+  st.pumpReauth()
+  st.releaseReauthWaiters(r)
+
+proc startReauth(st: State, r: Route) =
+  inc r.reauthTry
+  r.reauth = raPending
+  inc st.reauthBusy
+  let attempt = r.reauthTry
+  st.decideDetached(
+    @[reauthRequest(r)],
+    proc(got: seq[AuthzAnswer]) =
+      st.reauthorized(r, attempt, got[0]),
+    proc() =
+      # [I85] Shutdown: nothing more is admitted on it.
+      dec st.reauthBusy
+      r.reauth = raNeeded
+      var waiting: seq[OpCtx]
+      if st.reauthWaiters.pop(r.id, waiting):
+        for op in waiting:
+          shuttingDownReply(op.q)
+    ,
+  )
+
+proc pumpReauth(st: State) =
+  while st.reauthBusy < ReauthBatch and st.reauthQueue.len > 0:
+    let r = st.routes.getOrDefault(st.reauthQueue.popFirst())
+    if r != nil and r.reauth == raQueued and not r.isTerminal:
+      st.startReauth(r)
+
+proc reauthRoutes(st: State, grant: string) =
+  ## [SPEC CA l.906-914; CAP-0188, CAP-0359; S8b-2 interim (TF-33)] After a
+  ## `policy_changed` (`grant` empty) or the revocation or expiry of a grant
+  ## its decision used, every dependent ready route is re-authorized at once,
+  ## eagerly, a bounded number at a time; meanwhile it is unusable and the
+  ## operations on it park (CAP-0174). One being evaluated already gives a
+  ## stale result, evaluated again (CAP-0343).
+  for r in st.routes.values:
+    if r.authority and not r.isTerminal and r.reauth notin {raQueued, raPending} and
+        (grant.len == 0 or grant in r.grants):
+      r.reauth = raQueued
+      st.reauthQueue.addLast(r.id)
+  st.pumpReauth()
+
+proc invalidateRoutes(st: State) =
+  ## [SPEC CA l.869-873; CAP-0173, CAP-0174] Binding loss: every route the
+  ## authority decided is unusable until it is re-authorized, at its next use
+  ## under a new binding; nothing is evaluated now.
+  st.reauthQueue.clear()
+  for r in st.routes.values:
+    if r.authority and not r.isTerminal:
+      r.reauth = raNeeded
+
+proc routeAuthorized(st: State, r: Route): Opt[EngineError] =
+  ## [SPEC CA l.869-873, l.906-911; CAP-0173, CAP-0174, CAP-0188] None when
+  ## `r` may carry a protected operation. A route waiting for its
+  ## re-authorization parks the operation (`Parked`) until it answers; one
+  ## that needs it, or whose last one failed, is re-authorized now. An
+  ## operation that already waited for the re-authorization that failed, or
+  ## has no passes left, is NOT_AUTHORISED.
+  if not r.authority or r.isTerminal or r.reauth == raNone:
+    return Opt.none(EngineError)
+  let op = st.op
+  if op.isNil or op.passes >= MaxPasses or
+      (r.reauth == raFailed and op.waited.getOrDefault(r.id, -1) == r.reauthTry):
+    return Opt.some(notAuthorised())
+  if r.reauth in {raNeeded, raFailed, raQueued}:
+    st.startReauth(r)
+  if r.isTerminal:
+    return Opt.some(notAuthorised())
+  case r.reauth
+  of raNone:
+    Opt.none(EngineError)
+  of raPending:
+    op.waited[r.id] = r.reauthTry
+    st.reauthWaiters.mgetOrPut(r.id, @[]).add(op)
+    Opt.some(Parked)
+  else:
+    Opt.some(notAuthorised())
+
+template requireRoute(st: State, q: Request, r: Route) =
+  let refused = st.routeAuthorized(r)
+  if refused.isSome:
+    q.answerFailure(refused.get)
+    return
+
 proc renew(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §9.3 l.3183-3190, l.3471-3484] A new authority check for
   ## an existing ready route. An allow replaces the decision and, from the
-  ## Capability Authority, `expires_at`; a deny makes the route unusable
-  ## [G170 interim (TF-17)], and so does a narrowed allow, with
-  ## `authority-revoked` [G170 extended, I85].
+  ## Capability Authority, `expires_at`, and makes a route waiting for its
+  ## re-authorization usable again; a deny makes the route unusable [G170
+  ## interim (TF-17)], and so does a narrowed allow, with `authority-revoked`
+  ## [G170 extended, I85]. [S8b-2 interim] An evaluation failure is what it
+  ## is for the Runtime's own re-authorization: the route stays `ready` and
+  ## unusable until a later decision allows it.
   const op = "renew_route"
   let req = q.rc.renew
   st.require(
@@ -2877,16 +3243,18 @@ proc renew(st: State, q: Request, x: Inst) =
     # [G170 interim (TF-17)] No call is served under a decision a later check
     # withdrew (CA l.906-911); a terminal route keeps its first end. TL-04:
     # the outcome, never its code, picks the failure.
-    st.endRoute(
-      r,
-      rtRevoked,
-      Opt.some(
-        case ans.outcome
-        of azAllow: rfAuthorityRevoked
-        of azDeny: rfAuthorityDenied
-        of azEvaluationFailed: rfAuthorityEvaluationFailed
-      ),
-    )
+    case ans.outcome
+    of azAllow:
+      st.endRoute(r, rtRevoked, Opt.some(rfAuthorityRevoked))
+    of azDeny:
+      st.endRoute(r, rtRevoked, Opt.some(rfAuthorityDenied))
+    of azEvaluationFailed, azRefused:
+      if r.authority and not r.isTerminal:
+        inc r.reauthTry
+        r.reauth = raFailed
+        st.releaseReauthWaiters(r)
+      elif not r.authority:
+        st.endRoute(r, rtRevoked, Opt.some(rfAuthorityEvaluationFailed))
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
   st.requireReady(q)
@@ -2898,6 +3266,10 @@ proc renew(st: State, q: Request, x: Inst) =
     )
     return
   st.setValidity(r, ans)
+  if r.reauth != raNone:
+    inc r.reauthTry # a re-authorization still out no longer applies
+    r.reauth = raNone
+    st.releaseReauthWaiters(r)
   let bytes = encode(
     LogosNSRuntimeControlRenewRouteResponse(route: r.record(st.runtimeId))
   ).valueOr:
@@ -3207,6 +3579,7 @@ proc materialize(st: State, q: Request) =
   if r.isTerminal and r.endCode == ecNotAuthorised:
     q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
     return
+  st.requireRoute(q, r)
   st.requireReady(q)
   if r.isTerminal:
     q.reply.answerError(r.endCode, "the route is " & $r.state)
@@ -3217,6 +3590,37 @@ proc materialize(st: State, q: Request) =
     )
     return
   r.pins.add(Pin(handle: q.handle, attempt: q.attempt))
+  q.reply.answer(Reply())
+
+proc isAuthorityContract(st: State, sel: SelectedContract): bool =
+  ## [SPEC CA l.88-91] Whether a route selects the pinned Capability Authority
+  ## contract. [IMPL] Its root is computed only for a contract that could be
+  ## it.
+  if "evaluate" notin sel.methods:
+    return false
+  if st.caRoot.isNone:
+    st.caRoot = toDigest(caRoots().contract)
+  st.caRoot == Opt.some(sel.root)
+
+proc refusal(st: State, q: Request) =
+  ## [S8b-1 interim (TF-31); RUNTIME l.1745-1748] A routed call to a
+  ## Capability Authority method refused at the invocation boundary is kept
+  ## among the retained answers as its own kind.
+  let r = st.route(q.route)
+  discard st.authorizer.issue(
+    AuthzRequest(
+      action: aaCall,
+      operation: q.bare,
+      consumer: q.origin.instance,
+      target: (if r.isNil: "" else: r.provider),
+      provider: (if r.isNil: "" else: r.provider),
+      route: q.route,
+      module: (if r.isNil: "" else: r.selected.module),
+    ),
+    azRefused,
+    psBoundary,
+    q.reason,
+  )
   q.reply.answer(Reply())
 
 proc admit(st: State, q: Request) =
@@ -3238,6 +3642,7 @@ proc admit(st: State, q: Request) =
   if r.isTerminal and r.endCode == ecNotAuthorised:
     q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
     return
+  st.requireRoute(q, r)
   st.require(
     q,
     AuthzRequest(
@@ -3294,6 +3699,7 @@ proc admit(st: State, q: Request) =
         ticket: ticket,
         runtimeId: st.runtimeId,
         asyncApi: b.asyncApi,
+        authority: st.isAuthorityContract(r.selected),
       )
     )
   )
@@ -3357,11 +3763,12 @@ proc subscribe(st: State, q: Request) =
       ecNotAuthorised, q.bare & " is not an event of the selected contract"
     )
     return
-  if st.authorityMode and q.bare in [GrantChangedName, PolicyChangedName] and
-      st.caRoot == Opt.some(r.selected.root):
+  if q.bare in [GrantChangedName, PolicyChangedName] and
+      st.isAuthorityContract(r.selected):
     # [SPEC RUNTIME l.1660-1667; RUN-0856, RUN-0857] The Capability
     # Authority's notices reach the Runtime on its protected path only, never
-    # through an ordinary subscription, whatever scope a grant gives.
+    # through an ordinary subscription, whatever scope a grant gives, and
+    # whatever the policy kind: an instance that is not bound is no exception.
     q.reply.answerError(ecNotAuthorised, "the authority's notices are protected")
     return
   if not r.allowsSubscribe(q.bare):
@@ -3370,6 +3777,7 @@ proc subscribe(st: State, q: Request) =
   if r.isTerminal and r.endCode == ecNotAuthorised:
     q.reply.answerError(ecNotAuthorised, "the route is " & $r.state)
     return
+  st.requireRoute(q, r)
   st.require(
     q,
     AuthzRequest(
@@ -3507,6 +3915,15 @@ proc deliver(st: State, q: Request) =
   let c = st.instances.getOrDefault(r.consumer)
   if c.isNil or c.state notin {msLoaded, msReady} or not r.allowsSubscribe(name):
     skip()
+  # [CAP-0174, CAP-0188] A new delivery commitment waits for the route's
+  # re-authorization, and is not made when it fails.
+  let refused = st.routeAuthorized(r)
+  if refused.isSome:
+    if refused.get.parked:
+      return
+    if q.scoped:
+      stop(ecNotAuthorised, "the route is not authorised")
+    skip()
   let contract = @(r.selected.root)
   let declaration = @(r.selected.eventRoot(name).get)
   let published = st.decide(
@@ -3546,6 +3963,10 @@ proc deliver(st: State, q: Request) =
   ).valueOr:
     return
   if not received[0].allows:
+    if received[0].outcome == azDeny:
+      # [G175 extended (TF-24); CA l.913-915; CAP-0191] An explicit deny ends
+      # the subscription: continuing it would exceed current authority.
+      deactivate(s)
     skip()
   q.reply.answer(Reply(admitted: true))
 
@@ -3575,6 +3996,17 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     if x.isNil:
       q.reply.answerError(ecInvalidParams, "unknown module instance")
     else:
+      q.reply.answer(Reply(view: x.exposed))
+  of rqRefusal:
+    st.refusal(q)
+  of rqStopForAuthority:
+    let x = st.instances.getOrDefault(q.instance)
+    if x.isNil:
+      q.reply.answerError(ecInvalidParams, "unknown module instance")
+    elif q.ending notin AuthorityEndings:
+      q.reply.answerError(ecInvalidParams, "not an authority classification")
+    else:
+      st.stopForAuthority(x, q.ending)
       q.reply.answer(Reply(view: x.exposed))
   of rqList:
     var r = Reply()
@@ -3613,7 +4045,7 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     if not st.shutdownDone:
       q.reply.answerError(ecNotReady, "the Runtime has not shut down")
       return
-    if st.busy + st.callBusy + st.evalBusy > 0:
+    if st.busy + st.callBusy + st.evalBusy + st.renewBusy > 0:
       q.reply.answerError(ecNotReady, "module code is still running")
       return
     st.done = true
@@ -3683,7 +4115,7 @@ proc destroyed(st: State, job: int) =
       st.finishAttempt(a)
     elif x.state == msStopping:
       x.state = msUnloaded
-      x.failure = Opt.none(Failure)
+      x.failure = x.takeEnforced()
       x.current = ""
       st.commit(x)
       st.releaseWaiters(x)
@@ -3824,6 +4256,7 @@ proc checkDeadlines(st: State) =
     now = getMonoTime()
   st.checkEvaluations(now)
   st.expireRoutes()
+  st.checkExecutions()
   for a in st.records:
     if not a.terminal and a.deadline.isSome and now >= a.deadline.get:
       # [SPEC INTERFACE l.2059-2068] TIMEOUT, without waiting for the provider.
@@ -3851,9 +4284,11 @@ proc checkDeadlines(st: State) =
     if x.state == msStopping and x.stopDeadline.isSome and now >= x.stopDeadline.get:
       # [G61, revised by A18; SPEC RUNTIME §10.2 l.3835-3838, l.3873-3874]
       # The cleanup failure is recorded; nothing still in use is released.
+      # [G168 extended] It replaces an authority stop's classification.
       x.state = msError
       x.failure =
         Opt.some(Failure(kind: fkCleanupTimeout, reason: "the stop deadline passed"))
+      x.enforced = Opt.none(Failure)
       st.commit(x)
       st.releaseWaiters(x)
   if st.shuttingDown and not st.shutdownDone and now >= st.shutdownDeadline:
@@ -3865,6 +4300,7 @@ proc checkDeadlines(st: State) =
         x.failure = Opt.some(
           Failure(kind: fkCleanupTimeout, reason: "the shutdown grace period passed")
         )
+        x.enforced = Opt.none(Failure)
         st.commit(x)
         for w in x.stopWaiters:
           w.reply.answerView(x)
@@ -3905,6 +4341,9 @@ proc nextDeadline(st: State): Opt[MonoTime] =
   let e = st.nextExpiry()
   if e.isSome:
     consider(e.get)
+  let x = st.nextExecution()
+  if x.isSome:
+    consider(x.get)
   t
 
 # Opening ------------------------------------------------------------------------
@@ -4062,6 +4501,11 @@ proc runtimeLoop(s: ptr Shared) =
       s.evals.send(EvalJob(kind: ejQuit))
     except Exception:
       discard
+  if s.renewSpawned:
+    try:
+      s.renewals.send(EvalJob(kind: ejQuit))
+    except Exception:
+      discard
   st.store.close()
   s.finished = true
 
@@ -4078,6 +4522,7 @@ proc freeEngine(e: Engine) =
   e.jobs.close()
   e.calls.close()
   e.evals.close()
+  e.renewals.close()
   e.closeSlots()
   deinitLock(e.slotLock)
   freeBell(e.bell)
@@ -4101,6 +4546,7 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   e.jobs.open()
   e.calls.open()
   e.evals.open()
+  e.renewals.open()
   e.bell = newBell()
   initLock(e.slotLock)
   try:
@@ -4233,6 +4679,18 @@ proc diagnostics*(e: Engine): seq[string] =
   ## publications, ignored provider completions, long delivery waits.
   e.call(Request(kind: rqDiagnostics)).diagnostics
 
+proc stopForAuthority*(
+    e: Engine, instance: string, ending: FailureKind
+): Result[InstanceView, EngineError] =
+  ## [SPEC RUNTIME §10.1 l.3801-3804; plan §2.10; C26] Stops a running
+  ## instance whose execution authority ended for a reason the Runtime did
+  ## not see itself, as the engine does for its own (intent and origin kept,
+  ## `unloaded` with `ending` as `failure`). `ending` is one of
+  ## `AuthorityEndings`. Nothing happens to an instance that is not loading
+  ## or ready. The hook for settings reconciliation (RUN-0914, deferred).
+  let r = e.call(Request(kind: rqStopForAuthority, instance: instance, ending: ending))
+  r.toResult(r.view)
+
 proc authorityBound*(e: Engine): (bool, uint64) =
   ## [IMPL] Host and test observation (I85): whether a Capability Authority
   ## is bound, and the binding generation, which every establishment and
@@ -4280,6 +4738,8 @@ proc tryClose*(e: Engine): Result[void, EngineError] =
     joinThread(e.workers[i])
   for i in 0 ..< e.evalSpawned:
     joinThread(e.evalWorkers[i])
+  if e.renewSpawned:
+    joinThread(e.renewWorker)
   for i in 0 ..< e.callSpawned:
     joinThread(e.callWorkers[i])
   e.freeEngine()

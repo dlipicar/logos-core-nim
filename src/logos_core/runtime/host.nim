@@ -33,6 +33,10 @@ import results
 import ../abi/[host, types]
 import ../iface/outcome
 import ./[callside, engine, host_config, native]
+from ../authority/facts import SharedFacts, newSharedFacts, freeSharedFacts
+from ../authority/provider import
+  AuthorityWiring, caStaticRegistration, unwireAuthority, wireAuthority
+from ./authscopes import AuthorityModule
 
 export host, outcome.ErrorCode
 
@@ -70,6 +74,11 @@ type
     resultMessage: array[MaxMessageBytes + 1, char]
     engine: Engine
     policyHook: PolicyHook
+    facts: SharedFacts
+      ## [I85] under `capability-authority`, the attribute source the engine
+      ## feeds and the authority reads; freed at `destroy`
+    wired: cstring
+      ## [I85] the authority's state directory while it is wired; nil otherwise
 
 # Per-thread results ---------------------------------------------------------------
 
@@ -302,9 +311,20 @@ proc launch(h: ptr HostRuntime): LogosResult =
   while b != nil:
     let reg = checkStaticRegistration($b.id, b.entries).valueOr:
       return answer(ecModule, "a registered binding no longer checks: " & error)
+    if c.authority.isSome and reg.binding == AuthorityModule:
+      # [IMPL] The authority's binding is the library's own (`parseHostConfig`).
+      return answer(
+        ecInvalidParams,
+        "binding " & AuthorityModule & " is this library's Capability Authority",
+      )
     statics.add(reg)
     ids.incl(reg.binding)
     b = b.next
+  if c.authority.isSome:
+    # [I85; I84] 8a's Capability Authority, linked into this library: the one
+    # registration that may use the reserved `logos` names.
+    statics.add(caStaticRegistration())
+    ids.incl(AuthorityModule)
   # [IMPL-DECISION S4] A static record naming a binding that was never
   # registered: the protected input is inconsistent before anything runs.
   for m in c.modules:
@@ -345,7 +365,14 @@ proc launch(h: ptr HostRuntime): LogosResult =
     startupDeadline: c.startupDeadline,
     stopDeadline: c.stopDeadline,
     shutdownGrace: c.shutdownGrace,
+    authority: c.authority,
   )
+  if c.authority.isSome:
+    # [I85; G47] The attribute source exists before the engine opens, since
+    # restoring the store fills it. Its own copy of the Runtime id is not read
+    # (the wiring's is), so a store-generated identity can stay empty here.
+    h.facts = newSharedFacts(cfg.runtimeInstanceId)
+    cfg.facts = h.facts
   var instances: seq[BootstrapInstance]
   for m in c.modules:
     instances.add(BootstrapInstance(instance: m.instance, record: m.record))
@@ -361,6 +388,25 @@ proc launch(h: ptr HostRuntime): LogosResult =
       return answer(error.code, error.message)
     h.engine = e
     broadcast(h.cond) # a waiter parked before the engine existed
+  if c.authority.isSome:
+    # [C9] Wired before bootstrap initializes the authority, at the directory
+    # the realizer gives its state assignment, with the identity the engine
+    # settled (the configured one or the store's). The engine exists, so a
+    # failure here is a failed start (G190, interim).
+    let a = c.authority.get
+    var dir = ""
+    for m in c.modules:
+      if m.instance == a.instance:
+        dir = c.stateRoot.get / m.record.stateAssignment.get
+    wireAuthority(
+      dir,
+      AuthorityWiring(
+        policy: c.authorityPolicy, runtimeId: e.runtimeInstanceId(), facts: h.facts
+      ),
+    ).isOkOr:
+      return answer(ecModule, "cannot wire the Capability Authority: " & error)
+    h.wired = cast[cstring](allocShared0(dir.len + 1))
+    copyMem(h.wired, unsafeAddr dir[0], dir.len)
   let r = e.bootstrap(instances, c.orchestration)
   if r.isErr:
     # [IMPL-DECISION G190, interim] A failed start stops and destroys nothing
@@ -460,6 +506,11 @@ proc runtimeDestroy*(rt: ptr LogosRuntimeHandle): LogosResult =
         h.engine.tryClose().isOkOr:
           return answer(ecNotReady, error.message)
         h.engine = nil
+  # [C9] Every instance is destroyed: no thread reads the wiring or the facts.
+  if h.wired != nil:
+    unwireAuthority($h.wired)
+    deallocShared(h.wired)
+  freeSharedFacts(h.facts)
   freeBindings(h.bindings)
   if h.config != nil:
     deallocShared(h.config)

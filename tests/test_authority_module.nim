@@ -315,7 +315,7 @@ suite "cap.module: the Capability Authority as a direct-mode module":
     e.finish()
     h.free()
 
-  test "[CAP-0248] [IMPL] a client's evaluate is not-authorised and leaves no record; a payload naming another consumer is not-authorised":
+  test "[CAP-0248] [CAP-0365] [IMPL] a client's evaluate is not-authorised and leaves no record; a payload naming another consumer is refused before dispatch":
     var h = newHost()
     h.wire()
     let e = newEngine(h.caConfig)
@@ -326,8 +326,10 @@ suite "cap.module: the Capability Authority as a direct-mode module":
       r.ask("evaluate", evalRequest("c1", @[callScope(root(M1))]), EvaluateResponse)
     check ev.kind == LogosNSCapabilityAuthorityEvaluateResponseKind.Map_error
     check ev.arm_Map_error.error.code.kind == CaCode.Not_authorised
-    check r.ask("issue_grant", issueReq("c2", "c1"), IssueGrantResponse).issueErrorOf ==
-      CaCode.Not_authorised
+    # [S8b-1 interim] The Runtime checks the payload's consumer at the route,
+    # whatever the policy kind: the authority's own `not-authorised` is
+    # behind it.
+    check r.raw("issue_grant", encode(issueReq("c2", "c1")).get).code == ecNotAuthorised
     let audit = r.ask(
       "query_audit", QueryAuditRequest(consumer: address("c1")), QueryAuditResponse
     )
@@ -342,25 +344,28 @@ suite "cap.module: the Capability Authority as a direct-mode module":
     e.finish()
     h.free()
 
-  test "[CAP-0178] [IMPL] a protected issuance publishes grant_changed once through the instance's publish callback (8b intercepts it)":
+  test "[CAP-0178] [RUN-0856] [RUN-0857] a protected issuance publishes grant_changed through the instance's publish callback, which no ordinary subscription reaches, bound or not":
     var h = newHost()
     h.wire()
     let e = newEngine(h.caConfig)
     discard e.started(caRecord(), "ca")
     let (_, rc) = e.startClient("c1")
     var r = rc.caRoute("ca")
-    # Until 8b refuses it, an ordinary subscription still sees the event.
-    discard r.listen(GrantChanged, 0)
-    let g =
+    # The policy here is allow-all and the instance is not bound: the
+    # authority's notices are still the Runtime's alone (step 8b).
+    var id: LogosSubscriptionId
+    for name in [GrantChanged, "logos.capability_authority.policy_changed_event"]:
+      check toResult(
+        r.vtable.subscribe(addr r, cstring(name), onEvent, addr heard[0], addr id)
+      ).code == ecNotAuthorised
+    discard
       h.authority.issueProtected(Source, address("c1"), @[callScope(root(M1))]).get
-    check eventually(
-      proc(): bool =
-        heard[0].count.load == 1
-    )
-    check heard[0].payloadOf ==
-      encode(LogosNSCapabilityAuthorityGrantChangedEvent(grant: g)).get
-    sleep(20)
-    check heard[0].count.load == 1
+    # The publication was accepted (a failed one would make the authority
+    # unavailable), and the route still answers.
+    discard
+      h.authority.issueProtected(Source, address("c2"), @[callScope(root(M1))]).get
+    check r.raw("list_grants", encode(ListGrantsRequest(consumer: address("c1"))).get).code ==
+      ecOk
     r.release()
     e.finish()
     h.free()

@@ -189,6 +189,45 @@ proc checkResponse*(
     return err(failure(ecModule, "the provider's response cannot be committed"))
   ok()
 
+func sameAddress(v: CborValue, runtimeId, instance: string): bool =
+  if v.kind != ckMap:
+    return false
+  let r = v.lookup("runtime_instance_id")
+  let m = v.lookup("module_instance_id")
+  r.isSome and r.get.kind == ckText and r.get.text == runtimeId and m.isSome and
+    m.get.kind == ckText and m.get.text == instance
+
+proc authorityRefusal*(
+    adm: Admission, engine: Engine, consumer, route, bare: string, request: CborValue
+): Result[void, InvocationFailure] =
+  ## [SPEC CA l.88-91, §5.1 l.579; RUNTIME l.1716-1718; S8b-1 interim (TF-31)]
+  ## After the call's own decision and before dispatch: a request to a
+  ## Capability Authority method must name the authenticated caller as its
+  ## `consumer`, which is validated, never replaced, and an `evaluate` from
+  ## a module never carries `execution_renewal`. Either failure is
+  ## NOT_AUTHORISED without dispatch, and is retained as a refusal of its own
+  ## kind. A request that does not read is left to the schema check.
+  if not adm.authority:
+    return ok()
+  var reason = ""
+  let c = request.lookup("consumer")
+  if c.isSome and not sameAddress(c.get, adm.runtimeId, consumer):
+    reason = "the request names another consumer"
+  elif bare == "evaluate" and request.lookup("execution_renewal").isSome:
+    reason = "execution_renewal is set by the Runtime only"
+  if reason.len == 0:
+    return ok()
+  discard engine.call(
+    Request(
+      kind: rqRefusal,
+      origin: moduleOrigin(consumer),
+      route: route,
+      bare: bare,
+      reason: reason,
+    )
+  )
+  err(failure(ecNotAuthorised, "not authorised"))
+
 proc callProvider*(
     adm: Admission,
     engine: Engine,
@@ -202,7 +241,8 @@ proc callProvider*(
   ## thread; the caller commits the result and leaves the in-flight count.
   let sel = selectedOf(blob).valueOr:
     return err(failure(ecModule, "the selected contract cannot be loaded"))
-  discard ?checkRequest(sel, bare, params)
+  let request = ?checkRequest(sel, bare, params)
+  ?authorityRefusal(adm, engine, $consumer, $route, bare, request)
   var inv = invocationFor(adm, consumer, route, generation, blob, engine)
   initContext(inv)
   var buf: ptr UncheckedArray[uint8] = nil

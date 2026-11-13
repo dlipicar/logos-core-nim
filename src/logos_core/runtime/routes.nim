@@ -72,6 +72,17 @@ type
     rfRouteTimeout = "route-timeout"
     rfOther = "other"
 
+  RouteReauth* = enum
+    ## [S8b-2 interim (TF-33), I85] Where a Capability Authority route stands
+    ## after its decision was invalidated (CA l.869-873, l.906-911): it stays
+    ## `ready` and is unusable for protected operations until a new
+    ## `renew-route` decision allows it again (CAP-0174).
+    raNone ## usable under its decision
+    raNeeded ## invalidated by binding loss: re-authorized at its next use
+    raQueued ## waiting for a re-authorization slot
+    raPending ## a re-authorization is being evaluated
+    raFailed ## the last one failed: unusable, tried again at its next use
+
   Pin* = object ## One unreleased handle of a route.
     handle*: pointer
     attempt*: string ## the execution attempt that materialized it
@@ -98,6 +109,8 @@ type
       ## expires, fixed when `expiresAt` was set
     grants*: seq[string] ## the grants its decision used
     authority*: bool ## its decision came from the Capability Authority
+    reauth*: RouteReauth
+    reauthTry*: int ## advanced each time a re-authorization begins
     handles*: seq[pointer] ## handles observing its end (`observe_end`)
     calls*: seq[pointer] ## the tickets of calls admitted through it
     subs*: seq[pointer]

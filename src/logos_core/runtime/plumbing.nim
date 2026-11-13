@@ -242,6 +242,12 @@ type
       ## [SPEC CA §8; plan §2.8] a `grant_changed` or `policy_changed`
       ## publication, from the publishing thread (`events.publishOp`)
     rqAuthorityState ## the binding (observation for the host and tests)
+    rqStopForAuthority
+    rqRefusal
+      ## [S8b-1 interim] a routed Capability Authority call refused at the
+      ## invocation boundary, to be retained (`invoke.authorityRefusal`)
+      ## [SPEC RUNTIME §10.1 l.3801-3804] an execution authorization ended
+      ## outside the Runtime's own checks (`engine.stopForAuthority`)
 
   RcMethod* = enum
     ## The Runtime Control methods this Runtime performs (RUNTIME §9.3).
@@ -315,6 +321,10 @@ type
     runtimeId*: string
     asyncApi*: ptr LogosAsyncProviderApi
       ## the provider's deferred surface (INTERFACE §2.9.2); nil: synchronous
+    authority*: bool
+      ## [SPEC CA l.88-91, l.579] the route selects the Capability Authority
+      ## contract: the caller checks the request before dispatch
+      ## (`invoke.authorityRefusal`)
 
   Reply* = object
     error*: Opt[EngineError]
@@ -367,6 +377,7 @@ type
     payload*: seq[byte]
       ## rqAuthorityNotice: the event payload; empty when the publication was
       ## dropped before it was read (a malformed notice)
+    ending*: FailureKind ## rqStopForAuthority: the classification
     reply*: ReplyChannel
 
   JobKind* = enum
@@ -510,10 +521,18 @@ type
     evals*: Channel[EvalJob] ## the ordinary evaluation lane
     evalWorkers*: array[EvalWorkers, Thread[ptr Shared]]
     evalSpawned*: int ## written by the Runtime thread only
+    renewals*: Channel[EvalJob]
+      ## [SPEC CA §5.1] the renewal lane: execution renewals only
+    renewWorker*: Thread[ptr Shared]
+    renewSpawned*: bool ## written by the Runtime thread only
     outstanding*: Atomic[int] ## asynchronous calls prepared and not yet freed
     finished*: bool ## the Runtime thread has left its loop
 
   Engine* = ptr Shared
+
+const AuthorityEndings* = {
+  fkAuthorityDenied, fkAuthorityExpired, fkAuthorityRevoked, fkAuthorityEvaluationFailed
+} ## [SPEC RUNTIME l.3753; G168 extended] what an authority stop leaves
 
 func classification*(f: Failure): string =
   ## [SPEC RUNTIME §9.3] The failure code reported for `f`.

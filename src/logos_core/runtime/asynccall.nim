@@ -38,7 +38,7 @@
 import std/[atomics, locks, monotimes, times]
 import results
 import ../abi/[checks, types]
-import ../iface/outcome
+import ../iface/[outcome, payload]
 import ./[callside, invoke, plumbing]
 
 type
@@ -494,6 +494,20 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
     )
     leave(e, adm)
   else:
+    if adm.authority:
+      # [S8b-1 interim] The same check as `callProvider`, before `submit`.
+      let refused = block:
+        let v = decodePayload(params)
+        if v.isErr:
+          Result[void, InvocationFailure].ok()
+        else:
+          authorityRefusal(adm, e, $c.consumer, $c.route, bare, v.get)
+      if refused.isErr:
+        c.offerCommitted(
+          adm.ticket, Result[seq[byte], InvocationFailure].err(refused.error)
+        )
+        leave(e, adm)
+        return
     c.submitDeferred(adm, bare, params)
 
 proc runCall*(p: pointer) =
