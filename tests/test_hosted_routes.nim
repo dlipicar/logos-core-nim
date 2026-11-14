@@ -1,6 +1,7 @@
 ## Hosted providers and consumers (Tier 4b step 4b-3, parts 4b-3.2 and
 ## 4b-3.3; DECISIONS I91, G267, G273, G274; plan §4.3 P-1 to P-14, R10, C-1 to
-## C-7, S-18): the meter kit module built as a
+## C-8, S-18; part 4b-3.4: C-9, G261 for a hosted consumer, and C-10, G244):
+## the meter kit module built as a
 ## shared library and realized `hosted_dynamic` in a `logos-module-host`
 ## process, which serves the endpoint the Runtime made for it with its own
 ## transport loop. Payloads go between the caller and the host directly (the
@@ -33,7 +34,7 @@ when defined(posix):
   import ../src/logos_core/cbor
   import ../src/logos_core/commitment
   import ../src/logos_core/crypto/blake3
-  import ../src/logos_core/iface/[accept, outcome, surface]
+  import ../src/logos_core/iface/[accept, cmap, outcome, provider, surface]
   import ../src/logos_core/iface/common_types
   import ../src/logos_core/loader/contract
   import ../src/logos_core/pins
@@ -43,8 +44,10 @@ when defined(posix):
     LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
     LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
   import ./support/[fakeca, kitbuild, kitruntime, modulehostbuild, shortdir]
-  import ./kit/meter_impl
-  import ./generated/[meter_module_calls, meter_module_types]
+  import ./kit/[bulk_impl, meter_impl]
+  import
+    ./generated/
+      [bulk_module_calls, bulk_module_types, meter_module_calls, meter_module_types]
   import ./support/trnowner except Provider, now, binding, issue, live, release, gate
 
   let
@@ -371,7 +374,7 @@ when defined(posix):
       leftover()
       check noHostLeft()
 
-    test "[RUN-0200] [TRN-0185] [RUN-0223] [LDR-0145] [LDR-0047] [LDR-0049] [LDR-0101] [LDR-0102] [IMPL-DECISION G272] P-1 P-3 the Runtime makes a hosted provider's endpoint, private, before the host serves it; a route with no rule is local-transport; consumer-only and direct realizations serve none":
+    test "[RUN-0200] [TRN-0185] [RUN-0223] [RUN-0228] [LDR-0145] [LDR-0047] [LDR-0048] [LDR-0049] [LDR-0101] [LDR-0102] [IMPL-DECISION G272] P-1 P-3 the Runtime makes a hosted provider's endpoint, private, before the host serves it; a route with no rule is local-transport; consumer-only and direct realizations serve none":
       let cfg = hosted()
       discard cfg.stateOf()
       discard cfg.stateOf("p")
@@ -415,7 +418,7 @@ when defined(posix):
       check not path.parentDir.dirExists
       e.finish()
 
-    test "[RUN-0221] [RUN-0222] [RUN-0224] [RUN-0225] [LDR-0083] P-2 a hosted provider is not ready until the Runtime adopted its served endpoint; a route to it is NOT_READY until then":
+    test "[RUN-0221] [RUN-0222] [RUN-0224] [RUN-0225] [LDR-0050] [LDR-0083] P-2 a hosted provider is not ready until the Runtime adopted its served endpoint; a route to it is NOT_READY until then":
       let cfg = hosted()
       discard cfg.stateOf()
       let e = fixtureEngine(cfg)
@@ -820,6 +823,86 @@ when defined(posix):
   # the provider with the material it kept (RUN-0174); the Runtime admits
   # each materialization and operation (lane 1) and keeps the handle's codes.
 
+  # `bulk_module` publishes an Event of any size (G165), as in `test_transported`.
+  let
+    bulkStatic = checkStaticRegistration("bulk", bulkModuleStaticSymbols()).tryGet
+    bulkSet = acceptContractSet(readFile(repo / "tests/kit/bulk_module.cddl")).tryGet
+    bulkRoot = bulkSet.primary.root
+    bulkSchema = encodeCbor(schemaResponse(bulkSet, bulkRoot).tryGet)
+
+  proc bulkRecord(): ModuleRecord =
+    ModuleRecord(
+      module: "bulk_module",
+      strategy: stDirectStatic,
+      binding: "bulk",
+      primaryContract: Opt.some(bulkRoot),
+    )
+
+  # `vault_module` marks payloads (`_sensitive`), as in `test_audit`: no route
+  # to it is made while erasure is not built (G244). Its entries other than
+  # init and destroy are never reached.
+  const VaultDoc =
+    "_module = \"vault_module\"\n" &
+    "_sensitive = [\"vault.get_response\", \"vault.store_request\"]\n\n" &
+    "vault.store_request = {\n  secret: bstr,\n}\n\n" &
+    "vault.store_response = {\n  ok: bool,\n}\n\n" &
+    "vault.get_request = {\n  slot: uint32,\n}\n\n" &
+    "vault.get_response = {\n  secret: bstr,\n}\n"
+
+  let
+    vaultBinding = acceptBinding("vault_module", Opt.some(VaultDoc)).tryGet
+    vaultRoot = vaultBinding.primary.get.root
+    vaultSurfaceBytes = callSurfaceDescriptor(vaultBinding).tryGet
+  var vaultSurface: ptr UncheckedArray[uint8]
+  vaultSurface = cast[ptr UncheckedArray[uint8]](allocShared0(vaultSurfaceBytes.len))
+  for i, b in vaultSurfaceBytes:
+    vaultSurface[i] = b
+  let vaultSurfaceLen = vaultSurfaceBytes.len
+
+  proc vaultName(): cstring {.cdecl, gcsafe, raises: [].} =
+    "vault_module"
+
+  proc vaultCallSurface(outLen: ptr csize_t): ptr uint8 {.cdecl, gcsafe, raises: [].} =
+    {.cast(gcsafe).}:
+      outLen[] = csize_t(vaultSurfaceLen)
+      cast[ptr uint8](vaultSurface)
+
+  proc vaultInit(
+      input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+  ): LogosResult {.cdecl, gcsafe, raises: [].} =
+    outContext[] = cast[ptr LogosModuleContext](allocShared0(8))
+
+  proc vaultDestroy(module: ptr LogosModuleContext) {.cdecl, gcsafe, raises: [].} =
+    deallocShared(module)
+
+  proc vaultFree(
+      module: ptr LogosModuleContext, p: pointer
+  ) {.cdecl, gcsafe, raises: [].} =
+    if p != nil:
+      deallocShared(p)
+
+  proc vaultDispatch(
+      module: ptr LogosModuleContext,
+      methodName: cstring,
+      params: ptr UncheckedArray[uint8],
+      paramsLen: csize_t,
+      outResp: ptr ptr UncheckedArray[uint8],
+      outLen: ptr csize_t,
+  ): LogosResult {.cdecl, gcsafe, raises: [].} =
+    LogosResult(code: CErrorCode(ord(ecModule)))
+
+  proc vaultTable(): seq[(string, pointer)] =
+    result = @[
+      ("logos_vault_module_MODULE_name", cast[pointer](vaultName)),
+      ("logos_vault_module_MODULE_call_surface", cast[pointer](vaultCallSurface)),
+      ("logos_vault_module_MODULE_init", cast[pointer](vaultInit)),
+      ("logos_vault_module_MODULE_destroy", cast[pointer](vaultDestroy)),
+      ("logos_vault_module_MODULE_dispatch", cast[pointer](vaultDispatch)),
+      ("logos_vault_module_MODULE_free", cast[pointer](vaultFree)),
+    ]
+    for c in cLayout(cSchemaSet(vaultBinding)).tryGet.calls:
+      result.add((c.symbol, cast[pointer](vaultDispatch)))
+
   proc consumerRecord(hosted = true, state = "c"): ModuleRecord =
     ModuleRecord(
       module: "probe_module",
@@ -900,18 +983,25 @@ when defined(posix):
         c.linesOf(file).countIt(it.startsWith(prefix)) >= n
     )
 
-  proc establishVia(c: var Consumer, key: string): string =
-    ## The route `establish_route` gave the probe, or "".
-    let line = c.run("rc establish_route " & hexOf(establishReq(key)))
+  proc establishRecVia(
+      c: var Consumer, key: string, root = meterRoot
+  ): Opt[LogosNSRuntimeControlRouteRecord] =
+    ## The route record `establish_route` gave the probe.
+    let line = c.run("rc establish_route " & hexOf(establishReq(key, root)))
     check codeIn(line) == Opt.some(ecOk)
     if codeIn(line) != Opt.some(ecOk):
-      return ""
+      return
     let resp =
       LogosNSRuntimeControlEstablishRouteResponse.decode(unhexOf(valueIn(line)))
     check resp.isOk and resp.get.routes.len == 1
     if resp.isErr or resp.get.routes.len != 1:
-      return ""
-    resp.get.routes[0].route
+      return
+    Opt.some(resp.get.routes[0])
+
+  proc establishVia(c: var Consumer, key: string): string =
+    ## The route `establish_route` gave the probe, or "".
+    let rec = c.establishRecVia(key)
+    if rec.isNone: "" else: rec.get.route
 
   proc closeVia(c: var Consumer, route: string): Opt[ErrorCode] =
     codeIn(
@@ -921,17 +1011,16 @@ when defined(posix):
       )
     )
 
-  proc renewVia(c: var Consumer, key, route: string): Opt[ErrorCode] =
-    codeIn(
-      c.run(
-        "rc renew_route " &
-          hexOf(
-            encode(
-              LogosNSRuntimeControlRenewRouteRequest(request_key: key, route: route)
-            ).tryGet
-          )
-      )
+  proc renewLine(c: var Consumer, key, route: string): string =
+    c.run(
+      "rc renew_route " &
+        hexOf(
+          encode(LogosNSRuntimeControlRenewRouteRequest(request_key: key, route: route)).tryGet
+        )
     )
+
+  proc renewVia(c: var Consumer, key, route: string): Opt[ErrorCode] =
+    codeIn(c.renewLine(key, route))
 
   proc materializeVia(c: var Consumer, slot: int, route: string): Opt[ErrorCode] =
     let line = c.run(
@@ -1004,10 +1093,14 @@ when defined(posix):
         )
         check e.started(consumerRecord(), "c").state == msReady
         check hostPids(hostProgram).len == (if providerHosted: 2 else: 1)
-        let route = c.establishVia("k")
-        # A route with a hosted end is local-transport (R10): the host
-        # connects with the descriptor it kept and the peer identity the
-        # Runtime names (TRN-0187).
+        let rec = c.establishRecVia("k")
+        let route = (if rec.isSome: rec.get.route else: "")
+        # A route with a hosted end is local-transport (R10), also to a direct
+        # provider: the answer carries its `invocation`, as a direct consumer's
+        # local-transport route's does (RUNTIME l.3004, l.3009). The host keeps
+        # it (RUN-0174) and connects with it to the peer identity the Runtime
+        # names (TRN-0187).
+        check rec.isSome and rec.get.invocationOf.isSome
         check c.materializeVia(0, route) == Opt.some(ecOk)
         let r = readingOf(c.readVia(0, 4))
         check r.isSome and r.get.label == "ch4" and r.get.reading.value == 40
@@ -1034,6 +1127,18 @@ when defined(posix):
         check e.routeOf(route).get.state.kind ==
           LogosNSRuntimeControlRouteStateKind.Ready
         check c.linesOf("ends").len == 0
+        # `renew_route` gives the host a fresh invocation too (RUNTIME l.3468),
+        # which it keeps for the next materialization.
+        let renewed = c.renewLine("r", route)
+        check codeIn(renewed) == Opt.some(ecOk)
+        if codeIn(renewed) == Opt.some(ecOk):
+          let rr =
+            LogosNSRuntimeControlRenewRouteResponse.decode(unhexOf(valueIn(renewed)))
+          check rr.isOk and rr.get.route.invocationOf.isSome
+        check c.materializeVia(1, route) == Opt.some(ecOk)
+        let again = readingOf(c.readVia(1, 4))
+        check again.isSome and again.get.reading.value == 40
+        check codeIn(c.run("release 1")) == Opt.some(ecOk)
         e.finish()
         check noHostLeft()
 
@@ -1214,6 +1319,83 @@ when defined(posix):
         check codeIn(c.run("release-call " & $i)) == Opt.some(ecOk)
       check e.routeOf(route).get.state.kind == LogosNSRuntimeControlRouteStateKind.Ready
       e.finish()
+
+    test "[RUN-0234] [IMPL-DECISION G261] [IMPL-DECISION G267] C-9 a hosted consumer whose route handler does not keep up: the publisher is not held, the connection closes TRANSPORT_ERROR and the host's end handler is called once":
+      # [G261] As for a direct consumer's transported handle (`test_transported`):
+      # the host's loop keeps an Event's bytes until its handler returns
+      # (G178), so a handler that does not return fills the handle's
+      # undelivered allowance and then the provider's connection output, at the
+      # smallest Event output TRANSPORT §2.1 allows, and the connection closes.
+      # The host's limits are the Runtime's (`init.transport`).
+      var cfg = hosted()
+      cfg.statics.add(bulkStatic)
+      var limits = fastConfig()
+      limits.callerUndeliveredBytes = int(limits.frameLimit)
+      limits.connOutputBytes = int(limits.peerFrameLimit) + limits.controlReserve + 4
+      cfg.transport = Opt.some(limits)
+      var c = cfg.serving(extra = "block-handler\n")
+      let e = fixtureEngine(cfg)
+      discard e.started(bulkRecord(), "b")
+      check e.started(consumerRecord(), "c").state == msReady
+      let rec = c.establishRecVia("k", bulkRoot)
+      check rec.isSome
+      let route = (if rec.isSome: rec.get.route else: "")
+      check codeIn(
+        c.run(
+          "materialize 0 " & route & " " & hexOf(bulkRoot) & " " & hexOf(bulkSchema)
+        )
+      ) == Opt.some(ecOk)
+      const Carried = "bulk.carried_event"
+      check codeIn(c.run("subscribe 0 " & Carried & " s1")) == Opt.some(ecOk)
+      check codeIn(c.run("observe-end 0 e1")) == Opt.some(ecOk)
+      # The publisher: a direct consumer on a direct route.
+      let (_, rc) = e.startClient()
+      var (code, direct) = rc.materialize(
+        rc.establish("p", root = bulkRoot).recordOf.route, bulkRoot, bulkSchema
+      )
+      check code == ecOk
+      const Size = 2 * 1024 * 1024
+      const Count = 30
+      var failed = 0
+      for i in 1 .. Count:
+        if invoke(addr direct, BulkSendRequest(size: Size)).isErr:
+          inc failed
+      check failed == 0
+      # Every publication returned while the host's handler held its first Event.
+      check c.linesOf("deliveries").len <= 1
+      writeFile(c.dir / "go-handler", "")
+      check c.noted("ends", "e1 ")
+      check c.linesOf("ends") == @[endLine("e1", ecTransport)]
+      check c.linesOf("deliveries").len < Count
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      direct.release()
+      e.finish()
+      check noHostLeft()
+
+    test "[IMPL-DECISION G244] C-10 a route with a hosted end to a contract that marks a payload is refused MODULE_ERROR before readiness, as a direct one; the host keeps no material":
+      # [SPEC INTERFACE l.388] Erasure on the carrier and in the host is not
+      # built (step 4b-3b), so the refusal covers every route with a hosted
+      # end: it is made in `establish_route` before the route's mode is chosen.
+      var cfg = hosted()
+      cfg.statics.add(checkStaticRegistration("vault", vaultTable()).tryGet)
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(
+        ModuleRecord(
+          module: "vault_module",
+          strategy: stDirectStatic,
+          binding: "vault",
+          primaryContract: Opt.some(vaultRoot),
+        ),
+        "v",
+      )
+      check e.started(consumerRecord(), "c").state == msReady
+      let line = c.run("rc establish_route " & hexOf(establishReq("k", vaultRoot)))
+      check codeIn(line) == Opt.some(ecModule)
+      check "marked payloads are not supported on this path (INTERFACE §1.4.1)" in line
+      check e.routes().len == 0
+      e.finish()
+      check noHostLeft()
 
     test "[RUN-0111] [RUN-0794] [RUN-0181] S-18 a stopping consumer's calls through its routes are refused from stop step 1, NOT_READY, hosted as direct":
       var codes: seq[Opt[ErrorCode]]

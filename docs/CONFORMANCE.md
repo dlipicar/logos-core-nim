@@ -199,13 +199,17 @@ execution scope `local-transport` in a `process` (G272). So:
   `unsupported-strategy` before any code is read (LDR-0067, LDR-0068). The handoff and the paths stay
   out of every record and error (LDR-0045, LDR-0149). The hosted provider endpoint (§5.3) is part
   4b-3.2's, below; the trusted transport adapter handoff (§5.4) is not used (K3: the carrier is a
-  further private handoff).
+  further private handoff) and is labelled `out-of-scope`, as are LDR-0163 and LDR-0164
+  (`force_release`, K7). A hosted cleanup returns only once the host's end is confirmed, so absence
+  is always established and LDR-0125's failed realization never arises (an inspection item).
 - **RUNTIME §4.2.1**: a hosted module's Runtime Control calls are answered through its own
   attempt's binding, so they have the values, errors, decisions and transitions of a direct
   module's (RUN-0169 to RUN-0172, RUN-0180; `test_hosted` compares the same probe library realized
   both ways on two engines with one Runtime instance id). The consumer is the carrier's attempt,
   never a field of a frame. A hosted record names an artifact, never a static binding (RUN-0284).
-  These units are claimed one by one; the rest of §4.2.1 stays `deferred:tier-4b`.
+  RUNTIME §4.2.1 and §6.2 are claimed with part 4b-3.4; that the host keeps no registry or
+  routing policy, only a route's invocation material (RUN-0173), and that the boundary never
+  treats an earlier view as authorization (RUN-0179) are an inspection item.
 - **Ends** (part 4b-3.1b; G268-G270, G275): a host that ends by itself or whose carrier breaks puts
   its instance in `error` with `host-terminated`, fails its routes and starts termination (RUN-0812,
   RUN-0813); a deadline ends the host and keeps the deadline's classification, and a startup past
@@ -227,19 +231,28 @@ execution scope `local-transport` in a `process` (G272). So:
   event payload (`test_hosted_routes` P-13 traces every frame). So a route to a hosted provider
   behaves as a transported route to a direct one; `test_hosted_routes` (P-1 to P-14) shows it with
   the meter kit library realized in a host. With no routing rule a route with a hosted end is
-  `local-transport`; a `direct` rule naming a hosted module is refused (G272). The claims move in
-  part 4b-3.4.
+  `local-transport`; a `direct` rule naming a hosted module is refused (G272). TRN-0184 to
+  TRN-0186, LDR-0081 to LDR-0083, LDR-0145 to LDR-0147 and RUN-0200 are claimed with part 4b-3.4;
+  `test_module_host` (H-5, H-6) shows the host's side of the listener.
 - **Hosted consumers** (part 4b-3.3; G267): a hosted consumer's route handles and connections are
-  in its host, which keeps a route's invocation material from the answers it passes on
-  (RUN-0173 to RUN-0175) and connects to the peer identity and module the Runtime names (TRN-0187).
-  The host sends the exact route id, expected root and construction input (RUN-0177); the Runtime
-  rebuilds the contract and makes the §4.1 checks against its current state (RUN-0178, RUN-0179),
-  and admits
-  each call, subscription change and end observer in a direct handle's order, so codes, ends and
-  their causes are a direct consumer's, and a handle is never retargeted (RUN-0181, RUN-0182).
-  `test_hosted_routes` (C-1 to C-8, S-18) shows it with the probe kit library in a host, to direct
-  and hosted providers. The host waits for its handlers, end observers and completions before
-  `_MODULE_destroy`. The claims move in part 4b-3.4.
+  in its host, which keeps a route's invocation material from the answers it passes on and nothing
+  else of the Runtime's state (RUN-0173 to RUN-0176; RUN-0173 is also an inspection item, with RUN-0179), and
+  connects to the peer identity and module the Runtime names (TRN-0187). The host sends
+  `materialize_route`'s exact route id, expected root and construction input (RUN-0177); the
+  Runtime rebuilds the contract and makes the §4.1 checks against its current state (RUN-0178,
+  RUN-0179), and admits each call, subscription change and end observer in a direct handle's
+  order, so codes, ends and their causes are a direct consumer's, and a handle is never retargeted
+  (RUN-0181, RUN-0182, RUN-0256, RUN-0837); a stopping hosted consumer's calls are refused
+  NOT_READY from stop step 1 as a direct one's (RUN-0111, RUN-0794). `test_hosted_routes` (C-1 to
+  C-10, S-18) shows it with the probe kit library in a host, to direct and hosted providers. The
+  host waits for its handlers, end observers and completions before `_MODULE_destroy`.
+- **Boundary invariance** (part 4b-3.4; RUNTIME l.51-53, l.161, l.970; INTERFACE Abstract):
+  `test_boundary_invariance` runs one case table from the probe through one route handle in four
+  placements (a direct or hosted consumer, a direct or hosted provider) and finds every answer,
+  validation detail, response, delivery and completion, and the selected contract, the direct
+  run's: the meter kit's calls, failures, events and asynchronous calls, the same through a deferred
+  provider, and the shapes kit's C shapes and payload depth limit. RUN-0007, RUN-0008, RUN-0014,
+  RUN-0181 and IFC-0007 to IFC-0015 (but IFC-0010) are tagged again with it.
 - **Differences from direct realization**, none visible to a module's Runtime Control calls: a
   host's environment is `module_host_env` only, and on macOS CoreFoundation may add its own
   `__CF_USER_TEXT_ENCODING` inside the process.

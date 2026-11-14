@@ -132,6 +132,7 @@
                 file:
                 pkgs.stdenv.hostPlatform.isAarch64
                 && lib.elem file [
+                  "test_boundary_invariance.nim"
                   "test_engine.nim"
                   "test_host.nim"
                   "test_host_dylib.nim"

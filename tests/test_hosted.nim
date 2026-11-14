@@ -12,8 +12,8 @@
 ## S-1 (the Loader's capabilities with and without a host program) is in
 ## `test_loader`. Part 4b-3.1b adds S-4's request after the attempt ended and
 ## the ends of a host, S-7 to S-16 (G268-G270, G275); S-18, a stopping hosted
-## consumer's calls into other endpoints, needs 4b-3.3's handles. S-19 shows
-## the release waiting for a handler still running (G267). After every case no
+## consumer's calls, is in `test_hosted_routes` (part 4b-3.3). S-19 shows the
+## release waiting for a handler still running (G267). After every case no
 ## host of this build is left.
 
 when defined(posix):

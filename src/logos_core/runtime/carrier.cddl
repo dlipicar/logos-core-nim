@@ -16,8 +16,7 @@
 ;   lane 2, the boundary:     io_admit_*, io_respond, io_close, io_terminate,
 ;                             io_work_ended, io_subscription_result,
 ;                             io_stop_serving, admit_verdict, call_cancel,
-;                             scoped_result / io_listening, io_serve_failed,
-;                             io_hello, io_established, io_dispatch, io_stop,
+;                             scoped_result / io_hello, io_established, io_dispatch, io_stop,
 ;                             io_closed, io_subscribe, io_unsubscribe,
 ;                             io_publish_failed, io_publish_result,
 ;                             io_local_failure, call_ended, scoped_check,
@@ -57,8 +56,6 @@ lcn.carrier_message =
   lcn.carrier_rc_delivery /
   lcn.carrier_async_done /
   lcn.carrier_route_ended /
-  lcn.carrier_io_listening /
-  lcn.carrier_io_serve_failed /
   lcn.carrier_io_hello /
   lcn.carrier_io_established /
   lcn.carrier_io_dispatch /
@@ -397,15 +394,9 @@ lcn.carrier_link_first = {
 ; call.
 
 ; The host -> the Runtime: the loop's events ------------------------------------------
-
-lcn.carrier_io_listening = {
-  kind: "io_listening",
-}
-
-lcn.carrier_io_serve_failed = {
-  kind: "io_serve_failed",
-  why: tstr .size (0..512),
-}
+;
+; Not the serve outcome: the host keeps it, and reports a listener it cannot
+; serve as `init_failed` (lane 0).
 
 ; The first frame of a connection, for the Runtime's `acceptHello`.
 lcn.carrier_io_hello = {

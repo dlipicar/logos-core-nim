@@ -123,14 +123,10 @@ func commitmentOf*(c: LcnCarrierCommitment): Result[PayloadCommitment, string] =
 
 func toMessage*(ev: IoEvent): Opt[LcnCarrierMessage] =
   ## Host: the message forwarding `ev`; none for an event the Runtime does not
-  ## take from a host (the caller side, the loop's own end).
+  ## take from a host (the caller side, the serve outcome, the loop's own end).
   type K = IoEventKind
   let m =
     case ev.kind
-    of K.evListening:
-      toMessage(LcnCarrierIoListening())
-    of K.evServeFailed:
-      toMessage(LcnCarrierIoServeFailed(why: clipped(ev.serveError)))
     of K.evHello:
       toMessage(LcnCarrierIoHello(conn: ev.conn, frame: ev.frame))
     of K.evEstablished:
@@ -195,14 +191,6 @@ func toEvent*(m: LcnCarrierMessage, index: uint64): Result[Opt[IoEvent], string]
   let ep = hostedEndpoint(index)
   let ev =
     case m.kind
-    of K.lcn_Carrier_io_listening:
-      IoEvent(kind: IoEventKind.evListening, listening: ep)
-    of K.lcn_Carrier_io_serve_failed:
-      IoEvent(
-        kind: IoEventKind.evServeFailed,
-        failedEndpoint: ep,
-        serveError: m.arm_lcn_Carrier_io_serve_failed.why,
-      )
     of K.lcn_Carrier_io_hello:
       let x = m.arm_lcn_Carrier_io_hello
       IoEvent(

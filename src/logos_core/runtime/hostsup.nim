@@ -1479,8 +1479,7 @@ when defined(posix):
       h.toDispatch(m.arm_lcn_Carrier_scoped_admit.call, f)
     of K.lcn_Carrier_scoped_done:
       h.toDispatch(m.arm_lcn_Carrier_scoped_done.call, f)
-    of K.lcn_Carrier_io_listening, K.lcn_Carrier_io_serve_failed,
-        K.lcn_Carrier_io_hello, K.lcn_Carrier_io_established, K.lcn_Carrier_io_dispatch,
+    of K.lcn_Carrier_io_hello, K.lcn_Carrier_io_established, K.lcn_Carrier_io_dispatch,
         K.lcn_Carrier_io_stop, K.lcn_Carrier_io_closed, K.lcn_Carrier_io_subscribe,
         K.lcn_Carrier_io_unsubscribe, K.lcn_Carrier_io_publish_failed,
         K.lcn_Carrier_io_publish_result, K.lcn_Carrier_io_local_failure:

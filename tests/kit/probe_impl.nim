@@ -20,7 +20,8 @@
 ## consumer, in either placement): it runs `<state_dir>/cmd-<n>` (n from 1, one
 ## command each, written whole by the case) on the probe's own binding and
 ## route handles, and writes its result to `out-<n>`, `<code> <hex value or
-## message>`:
+## message>`, with ` detail=<hex>` after a failure's message when it has a
+## validation detail:
 ##
 ## - `rc <method> <hex params>`;
 ## - `materialize <slot> <route> <hex root> <hex schema>`, the handle in
@@ -42,10 +43,11 @@
 ## Other commands: `fail-init` (MODULE_ERROR), `fail-init-context` (a failure
 ## with a context: no destroy may follow), `ok-null` (LOGOS_OK without a
 ## context), `block-init` and `block-destroy` (wait until `<state_dir>/go`
-## exists), `block-handler` (each handler waits until `<state_dir>/go-handler`
-## exists), `quit-init <n>` (exit from module code), `quit-handler` (exit from
-## the first event handler), `rc-destroy <method> <hex params>` (a Runtime
-## Control call from `_MODULE_destroy`, its result in `rc-destroy`).
+## exists), `block-handler` (each handler, a route's Event handler included,
+## waits until `<state_dir>/go-handler` exists), `quit-init <n>` (exit from
+## module code), `quit-handler` (exit from the first event handler),
+## `rc-destroy <method> <hex params>` (a Runtime Control call from
+## `_MODULE_destroy`, its result in `rc-destroy`).
 ## `_MODULE_apply_configuration` answers by what its input contains: `reject`
 ## (a failure status), `bad` (an invalid status), `block` (waits until
 ## `<state_dir>/go-apply` exists, then OK), `quit` (exits); anything else OK.
@@ -113,6 +115,13 @@ proc waitGo(dir: string, name = "go") =
 proc resultLine(r: LogosResult): string =
   $int64(r.code) & " " & (if r.message == nil: "" else: $r.message)
 
+proc fullLine(r: LogosResult): string =
+  ## `resultLine`, then the validation detail's bytes in hex when there are
+  ## some (part 4b-3.4: the invariance suite compares them).
+  result = resultLine(r)
+  if r.detail != nil and r.detailLen > 0:
+    result.add(" detail=" & hex(r.detail, r.detailLen))
+
 func ptrOf(b: seq[byte]): ptr UncheckedArray[uint8] =
   if b.len == 0:
     nil
@@ -130,7 +139,7 @@ proc rcLine(p: ptr Probe, meth, params: string): string =
     result = "0 " & hex(outBuf, outLen)
     p.rc.vtable.releaseResponse(p.rc, outBuf, outLen)
   else:
-    result = resultLine(r)
+    result = fullLine(r)
 
 proc rcCall(p: ptr Probe, meth, params: string) =
   p.note("rc", p.rcLine(meth, params))
@@ -157,6 +166,8 @@ proc onRouteEvent(
   kitEnter()
   let t = cast[ptr Tag](userData)
   t.probe.note("deliveries", t.label & " " & $name & " " & hex(data, len))
+  if t.probe.blockHandler:
+    waitGo(t.probe.dir, "go-handler")
 
 proc onRouteEnd(reason: CErrorCode, userData: pointer) {.cdecl.} =
   kitEnter()
@@ -176,7 +187,7 @@ proc onDone(
     if int64(res.code) == 0:
       "0 " & hex(response, len)
     else:
-      resultLine(res)
+      fullLine(res)
   t.probe.note("done", t.label & " " & line)
   if owner.release != nil:
     owner.release(owner.state)
@@ -222,14 +233,14 @@ proc command(p: ptr Probe, line: string): string =
         result = "0 " & hex(outBuf, outLen)
         h.vtable.releaseResponse(h, outBuf, outLen)
       else:
-        result = resultLine(r)
+        result = fullLine(r)
       return
     of "subscribe":
       let h = addr p.routes[parseInt(w[1])]
       var id: LogosSubscriptionId
       let r =
         h.vtable.subscribe(h, cstring(w[2]), onRouteEvent, p.newTag(w[3]), addr id)
-      return (if int64(r.code) == 0: "0 " & $id else: resultLine(r))
+      return (if int64(r.code) == 0: "0 " & $id else: fullLine(r))
     of "unsubscribe":
       let h = addr p.routes[parseInt(w[1])]
       return
@@ -265,6 +276,8 @@ proc command(p: ptr Probe, line: string): string =
       )
     of "submit", "cancel", "release-call":
       let c = addr p.calls[parseInt(w[1])]
+      if c.vtable == nil:
+        return "no call"
       case w[0]
       of "submit":
         c.vtable.submit(c)
@@ -272,6 +285,7 @@ proc command(p: ptr Probe, line: string): string =
         c.vtable.cancel(c)
       else:
         c.vtable.release(c)
+        c[] = LogosAsyncCall()
       return "0 "
     of "release":
       let h = addr p.routes[parseInt(w[1])]

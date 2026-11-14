@@ -63,14 +63,10 @@ default = "claimed"
 # claimed with step 4b-2a, now that the Runtime supplies the decision, its expiry and revocation
 # (DECISIONS I90).
 "TRN-0165" = "out-of-scope:a requirement on other security profiles"
-# §8.2: built and tagged by the transport I/O tests; what triggers them is the
-# Module Host (TRN-0184, 0185, 0186: the listener transfer and readiness). The
-# Runtime's route handling (TRN-0187: where the expected identity comes from;
-# TRN-0191: failing the route) is claimed with the consumer's transported handle
-# (step 4b-2b), and TRN-0195 (ticket delivery) with step 4b-2a (DECISIONS I90).
-"TRN-0184" = "deferred:tier-4b"
-"TRN-0185" = "deferred:tier-4b"
-"TRN-0186" = "deferred:tier-4b"
+# §8.2: TRN-0184, TRN-0185 and TRN-0186 (the listener transfer and readiness) are claimed with the
+# Module Host (step 4b-3, DECISIONS I91). The Runtime's route handling (TRN-0187: where the
+# expected identity comes from; TRN-0191: failing the route) is claimed with the consumer's
+# transported handle (step 4b-2b), and TRN-0195 (ticket delivery) with step 4b-2a (I90).
 # G58: no claim of protection from same-identity processes.
 "TRN-0346" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
 "TRN-0347" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"

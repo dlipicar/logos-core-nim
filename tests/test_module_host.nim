@@ -14,9 +14,12 @@ when defined(posix):
   import unittest2
   import results
   import ../src/logos_core/iface/outcome
-  import ../src/logos_core/runtime/[carrier, hostsup]
+  import ../src/logos_core/runtime/[carrier, hostio, hostsup]
+  import ../src/logos_core/transport/io/endpoint
+  from ../src/logos_core/transport/io/sock import fdClose, socketPair
   from ../src/logos_core/host/state import ExitCarrierLost
-  import ./support/[childbuild, hostowner, modulehostbuild]
+  import ./support/[childbuild, hostowner, modulehostbuild, shortdir]
+  import ./support/trnowner
 
   let
     work =
@@ -24,6 +27,8 @@ when defined(posix):
       kitVariant
     host = moduleHostProgram()
     probe = buildKitLibrary("probe_impl.nim", "probe")
+    meter = buildKitLibrary("meter_impl.nim", "mhmeter")
+    shortBase = makeShortBase("lcnmh", "/e999/12345678/logos_meter_module.sock")
   removeDir(work)
   createDir(work)
 
@@ -147,6 +152,113 @@ when defined(posix):
             else: Opt.none(string))
         check lines(dir, "inits") == @["init"]
         check lines(dir, "destroyed").len == 0
+
+  # H-5, H-6 ------------------------------------------------------------------------------
+
+  var endpoints = 0
+
+  proc providerInit(path: string, module = "meter_module"): LcnCarrierMessage =
+    ## `init` for the meter library as a provider whose endpoint is `path`.
+    toMessage(
+      LcnCarrierInit(
+        id: 1,
+        module: module,
+        artifact_path: meter,
+        live: false,
+        max_payload_depth: 1024,
+        endpoint: Opt.some(path),
+        transport: Opt.some(transportWords(defaultTransportConfig())),
+        runtime_id: Opt.some("7f3a2c1e-5b4d-4e6f-8a9b-0c1d2e3f4a5b"),
+      )
+    )
+
+  proc newEndpoint(): Endpoint =
+    ## An endpoint as the Runtime makes one, under a fresh private base.
+    inc endpoints
+    let base = shortBase / ("e" & $endpoints)
+    doAssert posix.mkdir(cstring(base), 0o700) == 0
+    createEndpoint(base, "meter_module").tryGet
+
+  proc kinds(r: var HostRun, until: LcnCarrierMessageKind): seq[LcnCarrierMessageKind] =
+    ## The host's messages up to and including the first `until`.
+    while true:
+      let m = r.next()
+      if m.isNone:
+        return
+      result.add(m.get.kind)
+      if m.get.kind == until:
+        return
+
+  suite "host.module: a provider's listener (LOADER §5.3, §6, §12; TRANSPORT §8.2)":
+    test "[LDR-0081] [LDR-0082] [LDR-0146] [TRN-0184] H-5 the host holds the listener it was given and accepts nothing until _MODULE_init succeeded; then it serves that listener, and after a failed init never":
+      type K = LcnCarrierMessageKind
+      block served:
+        let ep = newEndpoint()
+        defer:
+          removeDir(ep.dir.base)
+        var r = startHost(host, listener = ep.listener)
+        defer:
+          r.stop()
+        discard fdClose(ep.listener) # the host's copy is the only one
+        let o = newOwner()
+        defer:
+          o.stop()
+        # A connection made before `init`: its Hello waits in the listener's
+        # queue and the host forwards nothing.
+        o.connect(1, ep.path, o.issue(), module = "meter_module")
+        check r.next(300).isNone
+        # `initialized` once it listens on that listener (G267), then that
+        # connection's Hello, accepted there.
+        check r.send(providerInit(ep.path))
+        check r.kinds(K.lcn_Carrier_initialized) == @[K.lcn_Carrier_initialized]
+        let hello = r.next()
+        check hello.kindOf == $K.lcn_Carrier_io_hello
+        # It serves the path it was given and binds nothing else.
+        check toSeq(walkDirRec(ep.dir.path)) == @[ep.path]
+        check r.send(toMessage(LcnCarrierRelease(id: 9)))
+        check K.lcn_Carrier_released in r.kinds(K.lcn_Carrier_released)
+        check r.waitExit() and r.exitedWith == 0
+      block failed:
+        let ep = newEndpoint()
+        defer:
+          removeDir(ep.dir.base)
+        var r = startHost(host, listener = ep.listener)
+        defer:
+          r.stop()
+        discard fdClose(ep.listener)
+        let o = newOwner()
+        defer:
+          o.stop()
+        o.connect(1, ep.path, o.issue(), module = "meter_module")
+        let f = r.initFailure(providerInit(ep.path, module = "other_module"))
+        check f.code.kind == LcnCarrierInitFailedCodeChoiceKind.Abi_invalid
+        r.closeCarrier()
+        check r.waitExit() and r.exitedWith == 0
+        # The connection ends with the host; no Hello was ever forwarded.
+        let ended = o.expect(
+          proc(ev: IoEvent): bool =
+            ev.conn == 1 and ev.kind in {evConnectFailed, evClosed}
+        )
+        check ended.isSome
+
+    test "[TRN-0186] [LDR-0089] H-6 a provider's init with no listener on fd 4, or a socket that is not listening: init_failed realization-failed, the module destroyed":
+      let ep = newEndpoint()
+      var pair: array[2, cint]
+      check socketPair(addr pair) == 0
+      for listener in [cint(-1), pair[0]]:
+        var r = startHost(host, listener = listener)
+        defer:
+          r.stop()
+        let f = r.initFailure(providerInit(ep.path))
+        check f.code.kind == LcnCarrierInitFailedCodeChoiceKind.Realization_failed
+        check f.phase.kind == LcnCarrierInitFailedPhaseChoiceKind.Bind
+        check "listener" in f.message
+        r.closeCarrier()
+        check r.waitExit()
+      discard fdClose(pair[0])
+      discard fdClose(pair[1])
+      discard fdClose(ep.listener)
+      removeDir(ep.dir.base)
 
   suite "host.module: release and the carrier's end (LOADER §9; RUNTIME l.976)":
     test "[LDR-0117] [LDR-0119] [LDR-0138] H-7 release: destroy exactly once, released, exit 0; a release before init breaks the protocol":

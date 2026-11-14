@@ -180,8 +180,6 @@ proc samples(): seq[LcnCarrierMessage] =
       )
     ),
     # Lane 2 (part 4b-3.2): the host's loop events.
-    toMessage(LcnCarrierIoListening()),
-    toMessage(LcnCarrierIoServeFailed(why: "the listener is not a socket")),
     toMessage(LcnCarrierIoHello(conn: 7, frame: @[0xA0'u8])),
     toMessage(LcnCarrierIoEstablished(conn: 7)),
     toMessage(
@@ -390,19 +388,6 @@ suite "run.carrier: a hosted provider's loop over lane 2 (G273) [IMPL]":
   test "[IMPL-DECISION G273] every callee event of the host's loop reaches the Runtime as the same event, in its numbers":
     let ep = hostedEndpoint(Index)
     block:
-      let ev =
-        roundTrip(IoEvent(kind: IoEventKind.evListening, listening: HostEndpoint))
-      check ev.kind == IoEventKind.evListening and ev.listening == ep
-    block:
-      let ev = roundTrip(
-        IoEvent(
-          kind: IoEventKind.evServeFailed,
-          failedEndpoint: HostEndpoint,
-          serveError: "refused",
-        )
-      )
-      check ev.failedEndpoint == ep and ev.serveError == "refused"
-    block:
       let ev = roundTrip(
         IoEvent(
           conn: HostConn,
@@ -487,10 +472,13 @@ suite "run.carrier: a hosted provider's loop over lane 2 (G273) [IMPL]":
         )
       )
       check ev.localCode == ecNotReady and ev.localMsg == "stopped"
-    # The caller side's events and the loop's own end stay in the host.
+    # The caller side's events, the serve outcome (lane 0's `init_failed`
+    # reports a listener the host cannot serve) and the loop's own end stay in
+    # the host.
     for k in [
       IoEventKind.evConnected, IoEventKind.evConnectFailed, IoEventKind.evResponse,
-      IoEventKind.evStopped, IoEventKind.evEvent, IoEventKind.evSubscription,
+      IoEventKind.evListening, IoEventKind.evServeFailed, IoEventKind.evStopped,
+      IoEventKind.evEvent, IoEventKind.evSubscription,
     ]:
       check toMessage(IoEvent(kind: k)).isNone
     # A connection number no loop gives breaks the protocol.

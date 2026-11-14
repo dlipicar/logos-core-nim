@@ -131,7 +131,6 @@ arm(LcnCarrierIoClosed, lcn_Carrier_io_closed, arm_lcn_Carrier_io_closed)
 arm(LcnCarrierIoDispatch, lcn_Carrier_io_dispatch, arm_lcn_Carrier_io_dispatch)
 arm(LcnCarrierIoEstablished, lcn_Carrier_io_established, arm_lcn_Carrier_io_established)
 arm(LcnCarrierIoHello, lcn_Carrier_io_hello, arm_lcn_Carrier_io_hello)
-arm(LcnCarrierIoListening, lcn_Carrier_io_listening, arm_lcn_Carrier_io_listening)
 arm(
   LcnCarrierIoLocalFailure, lcn_Carrier_io_local_failure,
   arm_lcn_Carrier_io_local_failure,
@@ -145,9 +144,6 @@ arm(
   arm_lcn_Carrier_io_publish_result,
 )
 arm(LcnCarrierIoRespond, lcn_Carrier_io_respond, arm_lcn_Carrier_io_respond)
-arm(
-  LcnCarrierIoServeFailed, lcn_Carrier_io_serve_failed, arm_lcn_Carrier_io_serve_failed
-)
 arm(LcnCarrierIoStop, lcn_Carrier_io_stop, arm_lcn_Carrier_io_stop)
 arm(
   LcnCarrierIoStopServing, lcn_Carrier_io_stop_serving, arm_lcn_Carrier_io_stop_serving

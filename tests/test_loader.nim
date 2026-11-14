@@ -239,7 +239,7 @@ suite "ldr.module: capabilities (LOADER §4)":
     check c.direct_static == Opt.some(true) and c.direct_dynamic == Opt.some(true)
     check c.hosted_dynamic.isNone and c.force_release.isNone
 
-  test "[LDR-0030] [LDR-0034] [LDR-0035] with a Module Host program, hosted_dynamic in a process; still never force_release":
+  test "[LDR-0030] [LDR-0034] [LDR-0035] [LDR-0051] with a Module Host program, hosted_dynamic in a process; still never force_release":
     # Tier 4b step 4b-3 S-1 (plan §2.5): `process` is the one placement
     # built; `sandbox` and `container` stay unadvertised.
     h = open(hosted = true)
