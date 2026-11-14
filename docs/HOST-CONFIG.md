@@ -239,7 +239,7 @@ one exception is the `permissions` array of a `permissions.initial` entry, which
 |---|---|
 | `work_dir` | Absolute path of a directory the Runtime owns. `direct_dynamic` artifacts are copied into private subdirectories here, verified and mapped from the copy (LOADER §3; DECISIONS I74). Created with mode 0700 at `logos_runtime_start` if missing. |
 | `state_root` | Optional absolute path under which module state directories are assigned (G143). Created with mode 0700 at `start` if missing. |
-| `store_dir` | Optional absolute path of the directory that holds the Runtime's persistent state (below, "Persistent Runtime state"). It must be apart from `work_dir` and `state_root`: neither inside the other nor equal. Without it nothing persists. |
+| `store_dir` | Optional absolute path of the directory that holds the Runtime's persistent state (below, "Persistent Runtime state"). It must be apart from `work_dir` and `state_root`: neither inside the other nor equal. [IMPL] The comparison is by path text and case-sensitive, so on a case-insensitive filesystem (Windows, and macOS by default) paths that differ only in case are not detected. Without it nothing persists. |
 | `runtime_instance_id` | Optional `runtime_instance_id` for the Runtime, 1 to 128 bytes of text; only with `store_dir`. Without it, the identity is generated when the store is created and kept with it. |
 | `startup_deadline_ms` | How long one module realization may take from authorization to `ready`, including its `_MODULE_init` (RUNTIME §3.4; G61). Default 120000. It does not bound the Module Loader's start, which has its own deadline (below, "The Module Loader"). |
 | `stop_deadline_ms` | How long a stop may take before the realization is abandoned. Default 10000. |

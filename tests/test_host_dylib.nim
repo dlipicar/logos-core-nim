@@ -247,7 +247,7 @@ suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
     c.orchestration = "sensor-1" # the role follows the instance, any module
     let path = work / "embed.cbor"
     let bytes = c.encode.get
-    writeFile(path, cast[string](bytes))
+    writeFile(path, bytes)
     let (output, code) = execCmdEx(quoteShellCommand([program, path]))
     checkpoint "embed_main exited with " & $code & ", output: " & output.escape
     check code == 0 and output.strip == "ok"
@@ -261,7 +261,7 @@ suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
     c.runtime.store_dir = Opt.some(base / "store")
     c.runtime.state_root = Opt.some(base / "state")
     let path = work / "crash.cbor"
-    writeFile(path, cast[string](c.encode.get))
+    writeFile(path, c.encode.get)
     let (output, code) = execCmdEx(quoteShellCommand([program, path, "crash"]))
     checkpoint "embed_main exited with " & $code & ", output: " & output.escape
     check code == 3
