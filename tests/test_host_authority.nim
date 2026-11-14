@@ -383,7 +383,7 @@ suite "run.host-api: call records and call evidence (I85; CA §9, §9.1)":
     let kid = @[0x68'u8, 0x35]
     var (key, pub) = generateKeyPair().tryGet
     removeFile(keyFile)
-    writeFile(keyFile, cast[string](@key))
+    writeFile(keyFile, key)
     key.clear()
     check chmod(cstring(keyFile), Mode(0o600)) == 0
     let rt = create(h5Config(dir, keyFile, kid))
