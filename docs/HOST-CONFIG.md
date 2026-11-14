@@ -213,7 +213,7 @@ Maps are closed: an unknown key anywhere is rejected. An array that is present m
 | `state_root` | Optional absolute path under which module state directories are assigned (G143). Created with mode 0700 at `start` if missing. |
 | `store_dir` | Optional absolute path of the directory that holds the Runtime's persistent state (below, "Persistent Runtime state"). It must be apart from `work_dir` and `state_root`: neither inside the other nor equal. Without it nothing persists. |
 | `runtime_instance_id` | Optional `runtime_instance_id` for the Runtime, 1 to 128 bytes of text; only with `store_dir`. Without it, the identity is generated when the store is created and kept with it. |
-| `startup_deadline_ms` | How long one module realization may take from authorization to `ready`, including its `_MODULE_init` (RUNTIME §3.4; G61). Default 120000. |
+| `startup_deadline_ms` | How long one module realization may take from authorization to `ready`, including its `_MODULE_init` (RUNTIME §3.4; G61). Default 120000. It does not bound the Module Loader's start, which has its own deadline (below, "The Module Loader"). |
 | `stop_deadline_ms` | How long a stop may take before the realization is abandoned. Default 10000. |
 | `shutdown_grace_ms` | How long shutdown waits for in-flight work before cleanup is left unresolved (RUNTIME §10.2). Default 10000. |
 | `apply_deadline_ms` | How long a live configuration application (`apply_configuration`) may take, from its acceptance to the module's answer (CONFIG §8; DECISIONS G61, I87). When it passes, the outcome is unknown and the instance enters `error` with `configuration-indeterminate`, so the default is long: 120000. |
@@ -509,8 +509,8 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   the failure classification in the message. A failed `start` stops and destroys nothing: request
   shutdown, wait for it, then destroy (RUNTIME l.4075-4079).
 - **The host cannot interrupt `start`.** Only `request_shutdown` and `wait_for_shutdown` may overlap
-  on one handle (RUNTIME l.4082), so a host serializes `start` against both; the startup deadline is
-  what bounds `start`. (A `request_shutdown` that overlaps anyway is accepted and `start` returns
+  on one handle (RUNTIME l.4082), so a host serializes `start` against both. What bounds `start` is
+  the Module Loader's startup deadline, then the orchestration instance's. (A `request_shutdown` that overlaps anyway is accepted and `start` returns
   `LOGOS_ERR_CANCELLED`.)
 - **Startup defaults belong to the orchestration module.** It applies them only while an instance's
   intent is `uninitialized`, by a conditional `start_module` carrying the `expected_execution_revision`
@@ -755,6 +755,18 @@ Module Host exists.
   the pinned Module Loader contract and binds it, and only then realizes the orchestration instance
   through it. A Loader that cannot be established makes `start` return `LOGOS_ERR_MODULE` "the Module
   Loader cannot start: …", after whatever it started has been released.
+- **Its own startup deadline** (RUNTIME l.664; DECISIONS G61, amended 2026-11-14). The Loader's start
+  has a deadline of its own: 120 s, which `startup_deadline_ms` does not change, and which this format
+  has no field for.
+  - It starts when `start` begins.
+  - It covers the Loader's binding, its `_MODULE_init` and readiness checks through `ready`, and the
+    binding checks that follow: the pinned contract, then a `list_capabilities` call that must name a
+    strategy.
+  - When it passes in any of these phases, the Loader's record is `error` with `startup-timeout`, and
+    the Loader never becomes `ready` or bound. Nothing is destroyed while its `_MODULE_init` still runs,
+    and a call already inside it returns first. Then `start` returns `LOGOS_ERR_MODULE` "the Module
+    Loader cannot start: startup-timeout: the startup deadline passed".
+  - Only a new Runtime tries again.
 - **Its own lifecycle** (DECISIONS G246). `stop_module` of the Loader is `LOGOS_ERR_NOT_READY` while
   it owns a realization; owning none, it stops, and every later start of any instance is
   `LOGOS_ERR_NOT_READY`. `recover_module` and `retire_module` of the Loader are `LOGOS_ERR_NOT_READY`.

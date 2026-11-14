@@ -21,13 +21,16 @@
 ## default) for every realization: it starts when the execution attempt is
 ## accepted and covers binding, `_MODULE_init()` and the readiness checks. On
 ## expiry the instance enters `error` with `startup-timeout`, and the attempt
-## can no longer make it ready (§3.4 l.664-668). Module code still running is
-## never interrupted, destroyed or unloaded: a valid context it returns later
-## is destroyed through the realizer, and until then cleanup is unresolved, so
-## `start` is NOT_READY (l.585-587). An explicit stop has a stop deadline
-## (10 s) from the moment the instance enters `stopping`, and shutdown a
-## shutdown grace (10 s); past either, the cleanup failure is recorded: the
-## instance enters `error` with `cleanup-timeout` (§10.2 l.3835-3838,
+## can no longer make it ready (§3.4 l.664-668). [G61, amended 2026-11-14] The
+## Module Loader's start has its own (`loaderStartupDeadline`, 120 s by
+## default), from the open through its binding checks; at its expiry the open
+## fails. Module code still running is never interrupted, destroyed or
+## unloaded: a valid context it returns later is destroyed through the
+## realizer, and until then cleanup is unresolved, so `start` is NOT_READY
+## (l.613). An explicit stop has a stop deadline (10 s) from the moment the
+## instance enters `stopping`, and shutdown a shutdown grace (10 s); past
+## either, the cleanup failure is recorded: the instance enters `error` with
+## `cleanup-timeout` (§10.2 l.3835-3838,
 ## l.3873-3874). A direct realization is never force-released (l.3838): its
 ## cleanup goes on and `start` is NOT_READY until it ends (§3.4 l.613). Its
 ## end does not by itself leave `error` (l.611), and the classification stays
@@ -431,6 +434,9 @@ type
     capabilities: Capabilities
     checking: bool ## the binding's `list_capabilities` is out
     checked: string ## the realization that call checks
+    deadline: MonoTime
+      ## [IMPL-DECISION G61, amended 2026-11-14] the Loader's startup
+      ## deadline: its attempt's, and its binding checks' while the open waits
     wired: pointer ## the key of the Loader's protected wiring; nil when none
     configure: ReplyChannel
       ## the open, answered once the Loader is bound or cannot start
@@ -3501,7 +3507,7 @@ proc start(st: State, q: Request) =
     return
   of msError:
     if x.attempt != nil or x.teardown != 0 or x.realization != nil:
-      # [SPEC RUNTIME §3.4 l.587-588] intent and origin unchanged
+      # [SPEC RUNTIME §3.4 l.613-614] intent and origin unchanged
       q.reply.answerError(ecNotReady, "cleanup of the previous realization is pending")
       return
   of msUnloaded:
@@ -6394,7 +6400,9 @@ proc establishLoader(st: State) =
   ## `requested` intent of the host is resumed; any other is replaced, with a
   ## diagnostic), authorized by the protected construction itself (no
   ## decision and no `execute` check, CA l.343 [IMPL-DECISION G253]), then
-  ## realized by the bootstrap mechanism under the startup deadline.
+  ## realized by the bootstrap mechanism under its own startup deadline
+  ## [IMPL-DECISION G61, amended 2026-11-14], which runs from here through
+  ## its binding checks.
   let rec = loaderRecord()
   var x = st.instances.getOrDefault(LoaderInstanceId)
   if x.isNil:
@@ -6422,12 +6430,10 @@ proc establishLoader(st: State) =
     x.intent = inRequested
     x.intentOrigin = hostOrigin()
     x.intentRevision = x.revision + 1
+  st.ldr.deadline = getMonoTime() + st.cfg.loaderStartupDeadline
   let id = st.nextJobId()
   let at = Attempt(
-    id: id,
-    token: "a-" & st.prefix & "-" & $id,
-    inst: x,
-    deadline: getMonoTime() + st.cfg.startupDeadline,
+    id: id, token: "a-" & st.prefix & "-" & $id, inst: x, deadline: st.ldr.deadline
   )
   x.current = at.token
   x.state = msLoaded
@@ -8460,6 +8466,31 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
       "",
     )
 
+func failureText(f: Failure): string =
+  ## A failure as the open's MODULE_ERROR names it: its classification, then
+  ## its reason unless internal.
+  result = f.classification
+  if f.reason.len > 0 and not f.internal:
+    result.add(": " & f.reason)
+
+proc loaderCheckExpired(st: State) =
+  ## [IMPL-DECISION G61, amended 2026-11-14; SPEC RUNTIME l.664-665] The
+  ## Loader's startup deadline passed during its binding checks, which the
+  ## deadline covers: the binding is never made, the record is `error` with
+  ## `startup-timeout`, and the open fails once the realization is released
+  ## (`answerConfigure`; a call inside it returns first, l.623).
+  let l = st.ldr.inst
+  let f = Failure(kind: fkStartupTimeout, reason: "the startup deadline passed")
+  l.state = msError
+  l.failure = Opt.some(f)
+  l.enforced = Opt.none(Failure)
+  l.exec = Opt.none(ExecAuth)
+  inc l.execSerial
+  l.provider = false
+  st.commit(l)
+  st.releaseWaiters(l)
+  st.cannotStart(f.failureText)
+
 proc answerConfigure(st: State) =
   ## [plan §2.6 step 6] The open is answered once the Loader is bound, or
   ## once it cannot start and nothing it started is left running.
@@ -8494,6 +8525,12 @@ proc loaderChecked(st: State, reply: LoaderReply) =
   ## and names at least one strategy.
   st.ldr.checking = false
   let l = st.ldr.inst
+  if st.ldr.configure != nil and st.ldr.cannotStart.isNone and l.state == msReady and
+      l.current == st.ldr.checked and getMonoTime() >= st.ldr.deadline:
+    # [SPEC RUNTIME l.664-665] It answered after the deadline, before the
+    # Runtime thread's next check: too late all the same.
+    st.loaderCheckExpired()
+    return
   let c = reply.capabilities
   if reply.kind != lrCapabilities or
       not (c.directStatic or c.directDynamic or c.hostedPlacements.len > 0):
@@ -8533,7 +8570,11 @@ proc checkLoader(st: State) =
     if st.ldr.cannotStart.isNone and not st.ldr.bound and not st.ldr.checking:
       if l.state == msReady and l.realization != nil:
         let refused = st.loaderBindingRefusal(l)
-        if refused.len > 0:
+        if getMonoTime() >= st.ldr.deadline:
+          # [IMPL-DECISION G61, amended 2026-11-14] The binding checks run
+          # under the Loader's startup deadline too.
+          st.loaderCheckExpired()
+        elif refused.len > 0:
           st.cannotStart(refused)
         else:
           st.ldr.checking = true
@@ -8542,11 +8583,7 @@ proc checkLoader(st: State) =
             LoaderCall(kind: lcCapabilities), lmListCapabilities, capabilitiesBytes()
           )
       elif l.attempt.isNil and l.state notin {msLoaded, msReady}:
-        let f = l.failure.get(Failure(kind: fkOther))
-        var why = f.classification
-        if f.reason.len > 0 and not f.internal:
-          why.add(": " & f.reason)
-        st.cannotStart(why)
+        st.cannotStart(l.failure.get(Failure(kind: fkOther)).failureText)
     if st.ldr.bound or st.ldr.cannotStart.isSome:
       st.answerConfigure()
   elif st.shuttingDown and l.state == msReady and not st.loaderOwns() and l.inflight == 0 and
@@ -9090,6 +9127,9 @@ proc checkDeadlines(st: State) =
     if not a.terminal and a.deadline.isSome and now >= a.deadline.get:
       # [SPEC INTERFACE l.2059-2068] TIMEOUT, without waiting for the provider.
       st.endCall(a, failure(ecTimeout, "the call timed out"), okTimeout)
+  if st.ldr.configure != nil and st.ldr.checking and st.ldr.cannotStart.isNone and
+      now >= st.ldr.deadline:
+    st.loaderCheckExpired()
   for x in st.instances.values:
     let a = x.attempt
     if a != nil and a.phase in {apBind, apInit, apRealize} and not a.expired and
@@ -9156,6 +9196,8 @@ proc nextDeadline(st: State): Opt[MonoTime] =
     if t.isNone or d < t.get:
       t = Opt.some(d)
 
+  if st.ldr.configure != nil and st.ldr.checking and st.ldr.cannotStart.isNone:
+    consider(st.ldr.deadline)
   for x in st.instances.values:
     let a = x.attempt
     if a != nil and a.phase in {apBind, apInit, apRealize} and not a.expired and
@@ -9494,7 +9536,8 @@ proc freeEngine(e: Engine) =
   freeAuditLog(e.audit)
   freeSideTable(e.side)
   when defined(lcnTestHooks):
-    freeLoaderFaultBox(e.faults)
+    if e.ownFaults:
+      freeLoaderFaultBox(e.faults)
   deallocShared(e)
 
 proc joinAll(e: Engine) =
@@ -9524,6 +9567,16 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
     return err(engineError(ecInvalidParams, "invalid runtime instance id"))
   if cfg.authority.isSome and cfg.authority.get.instance.len == 0:
     return err(engineError(ecInvalidParams, "the authority policy names no instance"))
+  # [IMPL-DECISION G61, amended 2026-11-14; SPEC RUNTIME l.664] finite and
+  # positive.
+  if cfg.loaderStartupDeadline <= DurationZero or
+      cfg.loaderStartupDeadline > MaxLoaderStartupDeadline:
+    return err(
+      engineError(
+        ecInvalidParams,
+        "the Module Loader's startup deadline is not above zero and at most an hour",
+      )
+    )
   # [SPEC INTERFACE §4.5.1 l.3150; IF-02, I88] one setting, at least 128.
   let depth = (if cfg.maxPayloadDepth == 0: DefaultMaxDepth else: cfg.maxPayloadDepth)
   if depth < MinMaxDepth or depth > DefaultMaxDepth:
@@ -9555,7 +9608,8 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   e.bell = newBell()
   e.side = newSideTable()
   when defined(lcnTestHooks):
-    e.faults = newLoaderFaultBox()
+    e.ownFaults = cfg.loaderFaults.isNil
+    e.faults = (if e.ownFaults: newLoaderFaultBox() else: cfg.loaderFaults)
   initLock(e.slotLock)
   try:
     createThread(e.runtime, runtimeMain, e)
@@ -9651,10 +9705,11 @@ when defined(lcnTestHooks):
     discard e.call(Request(kind: rqConfirmTermination))
 
 proc newEngine*(cfg: EngineConfig): Engine =
-  ## `openEngine` for a configuration without a store, which cannot fail.
+  ## `openEngine` for a configuration without a store, which fails only for an
+  ## invalid configuration or a Module Loader that cannot start (G190).
   doAssert cfg.storeDir.isNone, "a persistent engine is opened with openEngine"
   let e = openEngine(cfg)
-  doAssert e.isOk, "invalid runtime instance id or payload depth"
+  doAssert e.isOk, "openEngine failed: " & $e.error.code & " " & e.error.message
   e.get
 
 template toResult(r: Reply, body: untyped): untyped =
@@ -9766,7 +9821,7 @@ proc runtimeInstanceId*(e: Engine): string =
 proc cleanupPending*(e: Engine, instance: string): bool =
   ## [IMPL] Host and test observation: `instance` is `unloaded` or `error` and
   ## the cleanup of its previous realization has not completed, so a start or
-  ## a recovery answers NOT_READY (RUNTIME §3.4 l.587-588, l.3538; G20). The
+  ## a recovery answers NOT_READY (RUNTIME §3.4 l.613, l.3538; G20). The
   ## view does not show it: an instance reaches `error` before its cleanup
   ## ends. False for an unknown instance.
   e.call(Request(kind: rqCleanup, instance: instance)).pending
