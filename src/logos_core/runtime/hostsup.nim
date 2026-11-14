@@ -947,10 +947,21 @@ when defined(posix):
       let d = m.arm_lcn_Carrier_rc_delivered
       let p = h.findSub(d.local)
       if p != nil:
+        var ahead = false
         withLock h.lock:
-          if d.seq > p.acked:
+          # [SPEC RUNTIME l.954, l.956; G267] The host's frames are untrusted
+          # input: an acknowledgement of an entry not yet sent would let later
+          # entries pass before its handler returned (G178).
+          if d.seq > p.sent:
+            ahead = true
+          elif d.seq > p.acked:
             p.acked = d.seq
           broadcast(h.cond)
+        if ahead:
+          h.carrierLost(
+            "the carrier to the Module Host failed: an acknowledgement of an entry not sent"
+          )
+          return false
     of K.lcn_Carrier_rc_async_submit, K.lcn_Carrier_rc_async_cancel:
       h.asyncOp(m)
     else:

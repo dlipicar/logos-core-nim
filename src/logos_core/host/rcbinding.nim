@@ -72,7 +72,9 @@ const
 type Pool = object
   ch: Channel[seq[byte]]
   lock: Lock
+  done: Cond ## signalled when `pending` reaches 0
   idle, count, max: int
+  pending: int ## frames posted whose callback has not returned
   threads: array[MaxCompletionWorkers, Thread[ptr Pool]]
   run: proc(f: seq[byte]) {.nimcall, gcsafe, raises: [].}
 
@@ -93,6 +95,9 @@ proc poolLoop(p: ptr Pool) =
     p.run(f)
     withLock p.lock:
       inc p.idle
+      dec p.pending
+      if p.pending == 0:
+        broadcast(p.done)
 
 proc poolMain(p: ptr Pool) {.thread.} =
   poolLoop(p)
@@ -104,6 +109,7 @@ proc newPool(
   result = createShared(Pool)
   result.ch.open()
   initLock(result.lock)
+  initCond(result.done)
   result.max = max
   result.run = run
 
@@ -111,6 +117,7 @@ proc post(p: ptr Pool, f: seq[byte]) =
   ## Main thread: one callback frame; the pool grows while every worker is busy.
   var grow = false
   withLock p.lock:
+    inc p.pending
     if p.idle == 0 and p.count < p.max:
       grow = true
       inc p.count
@@ -124,6 +131,11 @@ proc post(p: ptr Pool, f: seq[byte]) =
     p.ch.send(f)
   except Exception:
     carrierLost("a callback queue failed")
+
+proc awaitIdle(p: ptr Pool) =
+  withLock p.lock:
+    while p.pending > 0:
+      wait(p.done, p.lock)
 
 proc stopPool(p: ptr Pool) =
   var n: int
@@ -633,6 +645,16 @@ proc delivered*(f: seq[byte]) =
 proc completed*(f: seq[byte]) =
   ## Main thread: an `async_done`.
   completions.post(f)
+
+proc awaitCallbacks*() =
+  ## Lifecycle thread, at the release, before `_MODULE_destroy` (DECISIONS
+  ## G267; INTERFACE l.1465, l.1503, l.1999): every event handler and
+  ## completion the Runtime handed over has returned, as the Runtime waits
+  ## for a direct module's (`engine.releaseRealization`). The main thread keeps
+  ## serving their Runtime Control calls meanwhile; a callback that never
+  ## returns leaves the release to the stop deadline, which ends the host.
+  events.awaitIdle()
+  completions.awaitIdle()
 
 proc stopBinding*() =
   ## At a graceful exit: the workers are joined.

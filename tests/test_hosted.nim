@@ -12,8 +12,9 @@
 ## S-1 (the Loader's capabilities with and without a host program) is in
 ## `test_loader`. Part 4b-3.1b adds S-4's request after the attempt ended and
 ## the ends of a host, S-7 to S-16 (G268-G270, G275); S-18, a stopping hosted
-## consumer's calls into other endpoints, needs 4b-3.3's handles. After every
-## case no host of this build is left.
+## consumer's calls into other endpoints, needs 4b-3.3's handles. S-19 shows
+## the release waiting for a handler still running (G267). After every case no
+## host of this build is left.
 
 when defined(posix):
   import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
@@ -359,6 +360,31 @@ when defined(posix):
       check e.start("s").tryGet.state == msReady
       sleep(150 * Slow)
       check lines(dir, "events").countIt(it.startsWith(ModuleStateEv)) == delivered
+      e.finish()
+
+    test "[IMPL-DECISION G267] S-19 a stop releases the host only once an event handler still running has returned: `_MODULE_destroy` comes after it":
+      var cfg = hostedConfig()
+      let dir = cfg.prepare("subscribe " & ModuleStateEv, "block-handler")
+      let e = fixtureEngine(cfg)
+      discard e.create(probe(), "p").tryGet
+      check e.start("p").tryGet.state == msReady
+      # The probe's own `loaded` to `ready` is held in its handler.
+      check waitUntil(
+        proc(): bool =
+          lines(dir, "events").anyIt(it.startsWith(ModuleStateEv))
+      )
+      var stopping: Thread[(Engine, string)]
+      proc stopOn(arg: (Engine, string)) {.thread.} =
+        discard arg[0].stop(arg[1])
+
+      createThread(stopping, stopOn, (e, "p"))
+      sleep(300 * Slow)
+      check lines(dir, "destroyed").len == 0
+      check e.view("p").tryGet.state == msStopping
+      writeFile(dir / "go-handler", "")
+      joinThread(stopping)
+      check e.view("p").tryGet.state == msUnloaded
+      check lines(dir, "destroyed") == @["destroyed"]
       e.finish()
 
   # S-6 ---------------------------------------------------------------------------------

@@ -21,6 +21,10 @@
 ##   `checkLive`, `initInputFor`, `initModule`, `checkInit`), so a hosted
 ##   realization makes the direct one's checks with the direct one's errors
 ##   (LOADER l.388-403). After `released` the host exits 0.
+## - **The release** waits, in the host itself, for the Runtime Control
+##   callbacks in flight (event deliveries and completions) and, by running
+##   on the lifecycle thread, any `apply` hook, before `_MODULE_destroy`
+##   (G267).
 
 {.push raises: [], gcsafe.}
 
@@ -163,6 +167,11 @@ proc release(life: var Lifecycle, m: LcnCarrierRelease) =
   ## [SPEC LOADER §9 (LDR-0119)] `_MODULE_destroy` exactly once, then
   ## `released` and a clean exit.
   if life.phase == phActive:
+    # [IMPL-DECISION G267] The host itself waits before `_MODULE_destroy`,
+    # whatever the Runtime already waited for: its Runtime Control callbacks
+    # (`awaitCallbacks`). A pending `apply` hook ran on this thread before the
+    # release was read.
+    awaitCallbacks()
     life.binding.destroy(life.context)
     life.context = nil
   life.phase = phReleased
@@ -209,7 +218,9 @@ proc lifecycleMain() {.thread.} =
 proc route(f: seq[byte]) =
   ## Main thread: one frame to whoever handles its kind.
   let m = decodeMessage(f).valueOr:
-    carrierLost("a frame does not decode: " & error)
+    # [SPEC INTERFACE l.395] Not the codec's text: its path may hold a value
+    # from the frame.
+    carrierLost("a frame does not decode")
   type K = LcnCarrierMessageKind
   case m.kind
   of K.lcn_Carrier_init, K.lcn_Carrier_apply, K.lcn_Carrier_release:

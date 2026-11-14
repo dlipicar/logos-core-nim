@@ -2645,7 +2645,15 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   NOT_READY after those checks; `connect_remote` is NOT_AUTHORISED, as no remote enrollment exists.
   **Sessions and calls (parts 4b-3.2, 4b-3.3):** the lane-2 message set, the host's copy of the
   session state the Runtime gave it, the check order (plan R14) and the four duties of plan R15.
-- **Status:** decided; Runtime Control built 2026-11-14 (I91, part 4b-3.1a). `test_hosted` (S-3).
+  **The host's input and its own waits (the spec check, 2026-11-14):** every lane-1 frame is
+  untrusted input of that host's instance: an `rc_delivered` acknowledgement of an entry not yet sent
+  breaks the carrier (G178's order and G225's bound rest on it), and no carrier-loss diagnostic
+  repeats a codec's text, whose path may hold a value from the frame (INTERFACE l.395). Before
+  `_MODULE_destroy` the host waits for its Runtime Control callbacks in flight (event deliveries and
+  completions) and, by running on one lifecycle thread, a pending `apply` hook, whatever the Runtime
+  already waited for (INTERFACE l.1465, l.1503, l.1999).
+- **Status:** decided; Runtime Control built 2026-11-14 (I91, part 4b-3.1a); the host's input
+  checks and own waits 2026-11-14. `test_hosted` (S-3).
 
 ### G268 — The end of a Module Host
 - **Kind:** GAP (K6, S4b3-1; TF-29) · **Specs:** RUNTIME l.562 (`ready` is left by an unexpected
