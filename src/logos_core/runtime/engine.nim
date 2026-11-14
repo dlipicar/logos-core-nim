@@ -130,7 +130,7 @@ from ../transport/io/endpoint import checkEndpointBase
 from ../transport/io/sock import unixStream
 from ./tport import
   newTransportPorts, freeTransportPorts, ensureStarted, closeTransport, releaseOwner,
-  closing, submit, submitOwner, newConnId, started
+  closing, submit, submitOwner, newConnId, started, setHosted
 from ../permissions import
   PermissionProfile, build, selected, checkProfile, checkSettings, activeIn, missing
 import
@@ -185,6 +185,9 @@ type
     ticket: ptr CallTicket
       ## [I89] its `realize` call's, marked cancelled when the attempt is
       ## cancelled or expires, so the Loader stops before `_MODULE_init`
+    hostedEndpoint: EndpointId
+      ## [RUN-0200; G273] a hosted provider's endpoint, made before its host
+      ## was spawned; 0: none
 
   Waiter = object
     reply: ReplyChannel
@@ -231,6 +234,8 @@ type
       ## is recorded
     providerId: string ## its provider record, when its record expects a contract
     services: ptr AttemptServices ## those of `realization`
+    hostedEndpoint: EndpointId
+      ## [G273] the endpoint its Module Host serves for `realization`; 0: none
     inflight: int
       ## route calls admitted into `realization` and not yet left, deferred
       ## invocations included until they are idle (INTERFACE l.2155-2158)
@@ -1911,6 +1916,9 @@ proc finishAttempt(st: State, a: Attempt) =
   ## The attempt has nothing left to clean: its outcome is final.
   let x = a.inst
   a.phase = apDone
+  if a.hostedEndpoint != 0 and x.hostedEndpoint != a.hostedEndpoint:
+    # [RUN-0228] An endpoint no realization took is removed.
+    st.sv.stopServing(a.hostedEndpoint)
   if x.attempt == a or x.attempt.isNil:
     x.endAttempted()
   if a.request.configuration.isSome:
@@ -2416,6 +2424,19 @@ proc adoptRealization(st: State, a: Attempt, r: RealizationView) =
     a.phase = apCleanup
     st.releaseRealization(x)
     return
+  if a.hostedEndpoint != 0:
+    # [TRN-0185; RUN-0223, RUN-0224] Before `ready`: the path is still the
+    # socket the Runtime made, and the endpoint takes the realization's
+    # contracts; its host listens already.
+    st.sv.adoptHosted(a.hostedEndpoint, x.surfaceContracts).isOkOr:
+      st.diagnose("the endpoint of " & x.id & " is not valid: " & error)
+      st.failAttempt(
+        a, Failure(kind: fkOther, reason: "the provider's endpoint is not valid")
+      )
+      a.phase = apCleanup
+      st.releaseRealization(x)
+      return
+    x.hostedEndpoint = a.hostedEndpoint
   # [SPEC RUNTIME §3.4] Every lifecycle and realization check succeeded.
   a.provides = provider
   st.promote(a)
@@ -3831,6 +3852,20 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       fail("the Module Host carrier cannot be made")
     a.services.adoptHost(h)
     host = h
+    if x.providerId.len > 0:
+      # [SPEC LOADER §5.3; RUN-0200, RUN-0223; G273] A hosted provider's
+      # endpoint is made and validated before its host is spawned; the host
+      # gets the listener as fd 4 and serves it.
+      let id = hostedEndpoint(h.index)
+      let e = st.sv.openHosted(
+        id, x.id & "/" & x.current, x.id, x.providerId, x.record.module
+      ).valueOr:
+        st.diagnose("the endpoint of " & x.id & " cannot be made: " & error)
+        fail("the provider's endpoint cannot be made")
+      a.hostedEndpoint = id
+      h.setEndpoint(e.ep.listener, e.ep.path, st.runtimeId, st.shared.tport.config).isOkOr:
+        st.diagnose("the endpoint of " & x.id & " cannot be handed over: " & error)
+        fail("the provider's endpoint cannot be handed over")
   st.side.putInbound(
     x.id,
     InboundHandoff(
@@ -4868,6 +4903,9 @@ proc servedEndpoint(st: State, y: Inst): Result[ServedEndpoint, string] =
   let e = st.sv.endpointOf(key)
   if e != nil:
     return ok(e)
+  if y.hosted:
+    # [G273] Only its Module Host serves it.
+    return err("the Module Host's endpoint does not serve")
   if not st.shared.tport.started:
     return err("the transport is not running")
   let b = y.realization.contracts
@@ -5059,10 +5097,22 @@ proc establish(st: State, q: Request, x: Inst) =
       if narrowed.isSome:
         routeAccess = narrowed.get
     # [IMPL-DECISION G254; I90] The mode, once per selected provider.
-    let mode = selectMode(
-      st.cfg.routing,
-      RouteEnds(consumerModule: x.record.module, providerModule: y.record.module),
+    let ends = RouteEnds(
+      consumerModule: x.record.module,
+      providerModule: y.record.module,
+      consumerHosted: x.hosted,
+      providerHosted: y.hosted,
     )
+    let mode = selectMode(st.cfg.routing, ends)
+    let conflict = hostedConflict(mode, ends)
+    if conflict.isSome:
+      # [Rev R10; IMPL] A direct rule meeting a Module Host.
+      st.diagnose("no route to " & y.providerId & " was made: " & conflict.get)
+      if all:
+        omitted = true
+        continue
+      q.reply.answerError(ecNotReady, conflict.get)
+      return
     var endpoint = Opt.none(uint64)
     if mode == rmLocalTransport:
       let ep = st.servedEndpoint(y)
@@ -7510,9 +7560,16 @@ proc admit(st: State, q: Request) =
       if a.terminal:
         ticket.closed.store(true)
   let b = p.realization
+  var host: pointer = nil
+  if p.hosted and p.hostOf != nil:
+    # [G273] The call runs in the provider's Module Host; the reference is
+    # the call's until it ends.
+    host = p.hostOf
+    retain(cast[Host](host))
   q.reply.answer(
     Reply(
       admission: Admission(
+        host: host,
         dispatch: b.dispatch,
         free: b.free,
         context: b.context,
@@ -8570,6 +8627,19 @@ when defined(lcnTestHooks):
     of "spoil-ticket":
       st.spoilTicket = true
       q.reply.answer(Reply())
+    of "hosted-endpoint":
+      # [4b-3 plan §4.3 P-1, P-5] The path of `q.instance`'s hosted endpoint,
+      # adopted or not yet.
+      let x = st.instances.getOrDefault(q.instance)
+      let id =
+        if x.isNil:
+          EndpointId(0)
+        elif x.hostedEndpoint == 0 and x.attempt != nil:
+          x.attempt.hostedEndpoint # not adopted yet
+        else:
+          x.hostedEndpoint
+      let e = st.sv.endpoints.getOrDefault(id)
+      q.reply.answer(Reply(id: (if e.isNil: "" else: e.ep.path)))
     else:
       q.reply.answerError(ecInvalidParams, "unknown transport hook")
 
@@ -8878,6 +8948,8 @@ proc hostFailed(st: State, x: Inst, f: Failure) =
   st.releaseRealization(x)
   st.releaseWaiters(x)
 
+proc servedClosed(st: State, conn: ConnId) {.gcsafe.}
+
 proc hostEnded(st: State, h: Host, e: HostEndNote) =
   ## [R27; plan §2.9; G268] Every end of a Module Host reaches the Runtime
   ## thread here, before the Loader reports anything that follows from it
@@ -8891,6 +8963,17 @@ proc hostEnded(st: State, h: Host, e: HostEndNote) =
   ##   when that came first (e; S4b3-1);
   ## - while a release is outstanding, the end belongs to that release, which
   ##   then succeeds (LOADER l.573, l.590).
+  ##
+  ## [RUN-0228; G273] Its sessions ended with it, and the endpoint it served
+  ## stops serving: it is removed once they are closed (RUNTIME l.1166).
+  let ep = hostedEndpoint(h.index)
+  var conns: seq[ConnId]
+  for conn, s in st.sv.sessions:
+    if s.endpoint == ep:
+      conns.add(conn)
+  for conn in conns:
+    st.servedClosed(conn)
+  st.sv.stopServing(ep)
   var x: Inst = nil
   for y in st.instances.values:
     if y.hostOf == h:
@@ -8971,6 +9054,22 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
           "the call surface of " & x.id & " is not acceptable: " & error,
           rec.realization,
         )
+    # [SPEC LOADER §5.3, l.479-480] A hosted provider's record names the
+    # endpoint the Runtime made for it; every other record names none.
+    let made = st.sv.endpoints.getOrDefault(a.hostedEndpoint)
+    let expected =
+      if a.hostedEndpoint != 0 and made != nil:
+        Opt.some(made.ep.path)
+      else:
+        Opt.none(string)
+    if rec.providerEndpoint != expected:
+      invalid(
+        if expected.isNone:
+          "a realization that serves no endpoint names one"
+        else:
+          "a hosted provider's record does not name its endpoint",
+        rec.realization,
+      )
     let h = handoff.get
     let v = RealizationView(
       mechanism: mLoader,
@@ -8989,17 +9088,6 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
       let c = a.request.configuration.get
       v.live = c.live
       v.initCommitment = Opt.some(c.commitment)
-    if h.host != nil and v.provider:
-      # [IMPL; plan §7.1] A hosted provider's endpoint is served from its
-      # host in 4b-3.2: until then the attempt fails and the realization is
-      # released through the Loader.
-      x.realization = v
-      st.failAttempt(
-        a, Failure(kind: fkOther, reason: "a hosted provider is not served yet")
-      )
-      a.phase = apCleanup
-      st.releaseRealization(x)
-      return
     st.adoptRealization(a, v)
   of lrError:
     st.failAttempt(a, classify(reply.error, phase))
@@ -9472,7 +9560,7 @@ proc servedStop(st: State, conn: ConnId, id: uint64) =
   st.cancelInvocation(a)
   st.endCall(a, failure(ecCancelled, "the call was cancelled"), okCancelled)
 
-proc servedClosed(st: State, conn: ConnId) =
+proc servedClosed(st: State, conn: ConnId) {.gcsafe.} =
   ## [plan §2.5] `SessionAuthority.sessionEnded`: each served invocation still
   ## listed is cancelled and answers nothing; its work leaves the in-flight
   ## count as it ends, and its worker writes its record (CA l.1193). The
@@ -10116,6 +10204,12 @@ proc startTransportFor(s: ptr Shared, cfg: EngineConfig): Opt[EngineError] =
     )
   checkEndpointBase(base).isOkOr:
     return Opt.some(engineError(ecModule, "the endpoint directory: " & error.msg))
+  if s.hosts != nil:
+    # [G273] Every host's loop reports as the Runtime's own does, and orders
+    # for a hosted connection go to its host.
+    let hs = cast[HostSupervisor](s.hosts)
+    hs.setIoSink(ioSink, s)
+    s.tport.setHosted(submitHosted, hs)
   s.tport.ensureStarted(ioSink, s).isOkOr:
     return Opt.some(engineError(ecModule, "the transport cannot start: " & error))
   Opt.none(EngineError)
@@ -10164,7 +10258,8 @@ proc runtimeLoop(s: ptr Shared) =
       )
       s.finished = true
       return
-  if anyTransported(cfg.routing):
+  if anyTransported(cfg.routing) or s.hosts != nil:
+    # [Rev R10] A Module Host may serve or call through local transport.
     let failed = startTransportFor(s, cfg)
     if failed.isSome:
       first.request.reply.answer(Reply(error: failed))
@@ -10412,6 +10507,13 @@ when defined(lcnTestHooks):
     ## `get_execution_summary` would give it (`rsCurrent`, `rsAbsent`,
     ## `rsUnknown`); empty for an unknown instance.
     e.call(Request(kind: rqTransportHook, reason: "realization", instance: instance)).id
+
+  proc hostedEndpointForTests*(e: Engine, instance: string): string =
+    ## A test hook (4b-3 plan §4.3 P-1): the path of `instance`'s hosted
+    ## endpoint; empty when it serves none.
+    e.call(
+      Request(kind: rqTransportHook, reason: "hosted-endpoint", instance: instance)
+    ).id
 
   proc spoilNextTicketForTests*(e: Engine): Result[void, EngineError] =
     ## A test hook (4b-2 plan §4.1): the next materialization of a transported

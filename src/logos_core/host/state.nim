@@ -17,6 +17,7 @@
 
 import std/[atomics, locks, posix]
 import results
+import ../iface/outcome
 import ../runtime/carrier
 
 export carrier
@@ -28,8 +29,9 @@ const
 
 type
   Answer* = object
-    ## A lane-1 reply as plain values: `failed` with `code`, `message` and
-    ## `detail`, or a success with `value` and `sub`.
+    ## A reply as plain values: `failed` with `code`, `message` and `detail`,
+    ## or a success with `value`, `sub`, `targets` or `admitted` (lane 1) or
+    ## `ready` and `tag` (a scoped step, lane 2).
     failed*: bool
     code*: uint8
     hasMessage*: bool
@@ -38,6 +40,11 @@ type
     detail*: seq[byte]
     value*: seq[byte]
     sub*: uint64
+    targets*: seq[(uint64, seq[byte])] ## an `rc_publish`'s sessions and contracts
+    admitted*: seq[uint64] ## an `rc_deliver`'s sessions
+    ready*: bool
+    hasTag*: bool
+    tag*: uint64
 
   SlotObj = object
     id: uint64
@@ -152,6 +159,27 @@ func answerOf*(r: LcnCarrierRcReply): Answer =
   else:
     result.value = r.value.get(@[])
     result.sub = r.sub.get(0)
+    for t in r.targets.get(@[]):
+      result.targets.add((t.conn, t.contract))
+    result.admitted = r.admitted.get(@[])
 
 func answerOf*(f: LcnCarrierFailure): Answer =
   answerOf(LcnCarrierRcReply(failure: Opt.some(f)))
+
+func answerOf*(r: LcnCarrierScopedResult): Answer =
+  if r.failure.isSome:
+    return answerOf(r.failure.get)
+  result.ready = r.ready.get(false)
+  if r.tag.isSome:
+    result.hasTag = true
+    result.tag = r.tag.get
+
+func failureOf*(a: Answer): InvocationFailure =
+  ## A failed answer's status, as the module reads it.
+  result = InvocationFailure(code: ecModule)
+  if a.code > 0 and a.code <= uint8(high(ErrorCode)):
+    result.code = ErrorCode(a.code)
+  if a.hasMessage:
+    result.message = Opt.some(a.message)
+  if a.hasDetail:
+    result.detail = Opt.some(a.detail)

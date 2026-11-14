@@ -1,0 +1,807 @@
+## Hosted providers (Tier 4b step 4b-3, part 4b-3.2; DECISIONS I91, G267,
+## G273, G274; plan §4.3 P-1 to P-14, R10): the meter kit module built as a
+## shared library and realized `hosted_dynamic` in a `logos-module-host`
+## process, which serves the endpoint the Runtime made for it with its own
+## transport loop. Payloads go between the caller and the host directly (the
+## owner's direct layout): the host reports each session event and call
+## without its payload, and the Runtime judges every Hello, admits every call,
+## subscription and delivery, keeps every session and writes every call
+## record, as for the endpoint it serves itself (4b-2), so the caller sees the
+## same protocol. A test-owned transport loop (`support/trnowner.nim`)
+## connects with a route's descriptor as a consumer's binding does, and the
+## client module calls through materialized handles.
+##
+## The test process cannot reach the hosted meter's globals: channel 22 holds
+## a call until the file `open` is in the meter's state directory or the call
+## is cancelled, and adds a line to `held` there when it starts. After every
+## case no host of this build is left. Waits that only bound a test scale
+## with `Slow`.
+
+when defined(posix):
+  import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
+  import std/posix except Time
+  import unittest2
+  import ../src/logos_core/runtime/[engine, hostsup]
+  import ../src/logos_core/abi/types
+  import ../src/logos_core/base/clock
+  import ../src/logos_core/cbor
+  import ../src/logos_core/commitment
+  import ../src/logos_core/crypto/blake3
+  import ../src/logos_core/iface/[accept, outcome, surface]
+  import ../src/logos_core/iface/common_types
+  import ../src/logos_core/loader/contract
+  import ../src/logos_core/pins
+  import ../src/logos_core/authority/scopes except
+    LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
+    LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
+    LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
+    LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
+  import ./support/[fakeca, kitbuild, kitruntime, modulehostbuild, shortdir]
+  import ./kit/meter_impl
+  import ./generated/[meter_module_calls, meter_module_types]
+  import ./support/trnowner except Provider, now, binding, issue, live, release, gate
+
+  let
+    repo = currentSourcePath().parentDir.parentDir
+    work = repo / "build" / "hosted-routes" / kitVariant
+  removeDir(work)
+  createDir(work)
+
+  include ./support/routefixture
+
+  # The endpoints go under a short private base: `<base>/e<n>/<8
+  # hex>/logos_meter_module.sock`.
+  let shortBase = makeShortBase("lcnhr", "/e999/12345678/logos_meter_module.sock")
+
+  const
+    SanitizerEnv =
+      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
+    Wait = 5000 * Slow ## ms: bounds a wait for a response or an end
+    MeterModule = "meter_module"
+
+  let
+    hostProgram = moduleHostProgram()
+    meterLib = buildKitLibrary("meter_impl.nim", "hrmeter")
+    deferredLib = buildKitLibrary("deferred_adapter.nim", "hrdeferred")
+    probeLib = buildKitLibrary("probe_impl.nim", "probe")
+
+  proc digestOf(path: string): array[32, byte] =
+    var h: Blake3Hasher
+    h.init()
+    let bytes = readFile(path)
+    h.update(bytes.toOpenArrayByte(0, bytes.high))
+    h.finish()
+
+  let
+    meterDigest = digestOf(meterLib)
+    deferredDigest = digestOf(deferredLib)
+    probeDigest = digestOf(probeLib)
+
+  # Set-up -------------------------------------------------------------------------------
+
+  proc hosted(policy = allowAll(), clock = systemClock()): EngineConfig =
+    ## `config` with a state root, the Module Host program and a short
+    ## endpoint directory; no routing rule, so a route with a hosted end is
+    ## `local-transport` (R10).
+    result = config(policy)
+    result.stateRoot = Opt.some(result.workDir / "state")
+    result.moduleHost = Opt.some(hostProgram)
+    result.moduleHostEnv = @SanitizerEnv
+    result.endpointDir = shortBase / ("e" & $engines)
+    result.transport = Opt.some(fastConfig())
+    result.clock = clock
+
+  proc hostedMeter(
+      state = "m", lib = meterLib, digest = meterDigest, id = "meter"
+  ): ModuleRecord =
+    ModuleRecord(
+      module: MeterModule,
+      strategy: stHostedDynamic,
+      placement: "process",
+      artifact:
+        ArtifactRecord(id: id, localPath: lib, hash: digest, hashSuite: HashSuiteId),
+      primaryContract: Opt.some(meterRoot),
+      stateAssignment: Opt.some(state),
+    )
+
+  proc hostedProbe(): ModuleRecord =
+    ModuleRecord(
+      module: "probe_module",
+      strategy: stHostedDynamic,
+      placement: "process",
+      artifact: ArtifactRecord(
+        id: "probe", localPath: probeLib, hash: probeDigest, hashSuite: HashSuiteId
+      ),
+      stateAssignment: Opt.some("p"),
+    )
+
+  proc stateOf(cfg: EngineConfig, state = "m"): string =
+    ## The meter's state directory, made before its start.
+    result = cfg.stateRoot.get / state
+    createDir(result)
+
+  proc heldCalls(dir: string): int =
+    try:
+      readFile(dir / "held").splitLines.countIt(it.len > 0)
+    except IOError:
+      0
+
+  proc heldAt(dir: string, n: int): bool =
+    waitUntil(
+      proc(): bool =
+        heldCalls(dir) == n
+    )
+
+  proc open(dir: string) =
+    ## Every call held on channel 22 returns.
+    writeFile(dir / "open", "")
+
+  proc noHostLeft(): bool =
+    waitUntil(
+      proc(): bool =
+        hostPids(hostProgram).len == 0
+    )
+
+  proc failureOf(v: InstanceView): string =
+    if v.failure.isSome: v.failure.get.classification else: ""
+
+  proc modeOf(path: string): int =
+    var s: Stat
+    if lstat(cstring(path), s) != 0:
+      return -1
+    int(s.st_mode) and 0o7777
+
+  proc isSocket(path: string): bool =
+    var s: Stat
+    lstat(cstring(path), s) == 0 and S_ISSOCK(s.st_mode)
+
+  proc socketsUnder(dir: string): seq[string] =
+    for path in walkDirRec(dir):
+      if path.isSocket:
+        result.add(path)
+
+  var startReply: Atomic[int] ## the state `startOn` got, or -1; -2 while it waits
+
+  proc startOn(arg: (Engine, string)) {.thread.} =
+    let r = arg[0].start(arg[1])
+    startReply.store(
+      if r.isOk:
+        ord(r.get.state)
+      else:
+        -1
+    )
+    releasePerThread()
+
+  proc stalledStart(
+      e: Engine, instance: string, t: var Thread[(Engine, string)]
+  ): bool =
+    ## Starts `instance` from `t` with the Loader's `realize` reply held: the
+    ## host runs and serves, and the Runtime has not adopted it.
+    check e.setLoaderFaultsForTests(LoaderFaults(stall: {lmRealize})).isOk
+    startReply.store(-2)
+    createThread(t, startOn, (e, instance))
+    waitUntil(
+      proc(): bool =
+        e.stalledLoaderCallsForTests() == 1
+    )
+
+  # The caller ------------------------------------------------------------------------------
+
+  type Invocation = object
+    path: string
+    ticket: RouteTicket
+
+  proc recordOf(r: RcResult): LogosNSRuntimeControlRouteRecord =
+    r.routesOf.routes[0]
+
+  proc invocationOf(rec: LogosNSRuntimeControlRouteRecord): Opt[Invocation] =
+    if rec.invocation.isNone:
+      return Opt.none(Invocation)
+    let d = rec.invocation.get
+    if d.kind != LogosNSRuntimeControlInvocationDescriptorKind.Case0 or
+        d.arm_0.ticket.len != TicketBytes:
+      return Opt.none(Invocation)
+    var t: RouteTicket
+    copyMem(addr t[0], unsafeAddr d.arm_0.ticket[0], TicketBytes)
+    Opt.some(Invocation(path: d.arm_0.path, ticket: t))
+
+  proc renewed(r: RcResult): LogosNSRuntimeControlRouteRecord =
+    LogosNSRuntimeControlRenewRouteResponse.decode(r.response).tryGet.route
+
+  proc meterInput(): ContractInput =
+    ContractInput(root: meterRoot, schema: meterSchema, system: false)
+
+  var nextConn, nextTag: uint64
+
+  proc seen(o: Owner, pred: proc(ev: IoEvent): bool, timeoutMs = Wait): Opt[IoEvent] =
+    let until = getMonoTime() + initDuration(milliseconds = timeoutMs)
+    while true:
+      for ev in o.log:
+        if pred(ev):
+          return Opt.some(ev)
+      if getMonoTime() >= until:
+        return Opt.none(IoEvent)
+      discard o.pump(10)
+
+  proc open(o: Owner, inv: Invocation, selected = meterInput()): (ConnId, IoEvent) =
+    inc nextConn
+    let conn = nextConn
+    o.connect(conn, inv.path, inv.ticket, module = MeterModule, selected = selected)
+    let ev = o.seen(
+      proc(ev: IoEvent): bool =
+        ev.conn == conn and ev.kind in {evConnected, evConnectFailed}
+    )
+    doAssert ev.isSome, "no outcome for connection " & $conn
+    (conn, ev.get)
+
+  proc refusal(o: Owner, inv: Invocation, selected = meterInput()): ErrorCode =
+    let (_, ev) = o.open(inv, selected)
+    if ev.kind == evConnectFailed: ev.failCode else: ecOk
+
+  proc session(o: Owner, inv: Invocation): ConnId =
+    let (conn, ev) = o.open(inv)
+    check ev.kind == evConnected
+    conn
+
+  proc send(o: Owner, conn: ConnId, channel: uint64, name = "read"): uint64 =
+    inc nextTag
+    o.call(conn, nextTag, name, cborMap((cbor("channel"), cbor(channel))))
+    nextTag
+
+  proc outcome(
+      o: Owner, conn: ConnId, tag: uint64, timeoutMs = Wait
+  ): Opt[CallOutcome] =
+    let ev = o.seen(
+      proc(ev: IoEvent): bool =
+        ev.kind == evResponse and ev.conn == conn and ev.tag == tag,
+      timeoutMs,
+    )
+    if ev.isNone:
+      Opt.none(CallOutcome)
+    else:
+      Opt.some(ev.get.outcome)
+
+  proc codeOf(o: Opt[CallOutcome]): Opt[ErrorCode] =
+    if o.isNone:
+      Opt.none(ErrorCode)
+    elif o.get.ok:
+      Opt.some(ecOk)
+    else:
+      Opt.some(o.get.failure.code)
+
+  proc reading(o: Opt[CallOutcome]): MeterReadResponse =
+    doAssert o.isSome and o.get.ok
+    MeterReadResponse.decode(o.get.result).tryGet
+
+  proc responses(o: Owner, conn: ConnId, tag: uint64): int =
+    for ev in o.log:
+      if ev.kind == evResponse and ev.conn == conn and ev.tag == tag:
+        inc result
+
+  proc closedOf(o: Owner, conn: ConnId, timeoutMs = Wait): Opt[IoEvent] =
+    o.seen(
+      proc(ev: IoEvent): bool =
+        ev.kind == evClosed and ev.conn == conn,
+      timeoutMs,
+    )
+
+  # Events -------------------------------------------------------------------------------
+
+  type Heard = object ## One subscription's deliveries.
+    count: Atomic[int]
+    last: Atomic[int]
+
+  var heard: array[2, Heard]
+
+  proc onHeard(
+      name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
+  ) {.cdecl, gcsafe, raises: [].} =
+    let s = cast[ptr Heard](userData)
+    if len > 0:
+      let ev = MeterChangedEvent.decode(toOpenArray(data, 0, int(len) - 1))
+      if ev.isOk:
+        s.last.store(int(ev.get.value))
+    s.count += 1
+
+  proc hear(
+      h: var LogosRouteHandle, slot: int, id: var LogosSubscriptionId
+  ): ErrorCode =
+    toResult(
+      h.vtable.subscribe(
+        addr h, cstring("meter.changed_event"), onHeard, addr heard[slot], addr id
+      )
+    ).code
+
+  # Call records ---------------------------------------------------------------------------
+
+  type Kept = object ## One call record's outcome and commitments.
+    success: bool
+    request, response: Opt[LogosNSCapabilityAuthorityAuditValueCommitment]
+
+  proc keptReach(e: Engine, n: int): bool =
+    waitUntil(
+      proc(): bool =
+        e.audit.records.len >= n
+    )
+
+  proc lastKept(e: Engine): Kept =
+    ## The newest call record.
+    let rs = e.audit.records
+    doAssert rs.len > 0, "no call record"
+    let r = AuditRecord.decode(rs[^1].bytes).tryGet
+    type K = AuditKind
+    var c: Opt[LogosNSCapabilityAuthorityCallCommitments]
+    case r.kind
+    of K.Call_success:
+      result.success = true
+      c = Opt.some(r.arm_Call_success.commitments)
+    of K.Call_failure:
+      c = r.arm_Call_failure.commitments
+    else:
+      doAssert false, "not a call record"
+    if c.isSome:
+      type C = LogosNSCapabilityAuthorityCallCommitmentsKind
+      case c.get.kind
+      of C.Map_request:
+        result.request = Opt.some(c.get.arm_Map_request.request)
+        result.response = c.get.arm_Map_request.response
+      of C.Map_response:
+        result.response = Opt.some(c.get.arm_Map_response.response)
+
+  func textBytes(s: string): seq[byte] =
+    for c in s:
+      result.add(byte(c))
+
+  proc heardAt(slot, n: int): bool =
+    waitUntil(
+      proc(): bool =
+        heard[slot].count.load >= n
+    )
+
+  # P-1 to P-5 -------------------------------------------------------------------------
+
+  suite "run.hosted: a hosted provider's endpoint (LOADER §5.3; RUNTIME §3.4; TRANSPORT §8.2)":
+    teardown:
+      leftover()
+      check noHostLeft()
+
+    test "[RUN-0200] [TRN-0185] [RUN-0223] [LDR-0145] [LDR-0047] [LDR-0049] [LDR-0101] [LDR-0102] [IMPL-DECISION G272] P-1 P-3 the Runtime makes a hosted provider's endpoint, private, before the host serves it; a route with no rule is local-transport; consumer-only and direct realizations serve none":
+      let cfg = hosted()
+      discard cfg.stateOf()
+      discard cfg.stateOf("p")
+      writeFile(cfg.stateRoot.get / "p" / "probe.cmd", "\n")
+      let e = fixtureEngine(cfg)
+      let hm = e.started(hostedMeter(), "hm")
+      check hm.state == msReady
+      check hostPids(hostProgram).len == 1
+      # The endpoint the Runtime made and the record named (the engine adopts
+      # a hosted provider only when its record names exactly that path).
+      let path = e.hostedEndpointForTests("hm")
+      check path.startsWith(cfg.endpointDir & "/")
+      check path.endsWith("/logos_meter_module.sock")
+      check path.isSocket
+      check path.modeOf == 0o600
+      check path.parentDir.modeOf == 0o700
+      check cfg.endpointDir.modeOf == 0o700
+      # No rule names the meter: the route is local-transport, to that path.
+      let (_, rc) = e.startClient("c")
+      let rec = rc.establish("k").recordOf
+      let inv = rec.invocationOf
+      check inv.isSome
+      if inv.isSome:
+        check inv.get.path == path
+      var h = rc.handle(rec.route)
+      let r = h.read(5)
+      check r.isOk
+      if r.isOk:
+        check r.get.reading.value == 50
+      h.release()
+      # A consumer-only hosted realization and a direct one serve none.
+      discard e.create(hostedProbe(), "p").tryGet
+      check e.start("p").tryGet.state == msReady
+      check e.hostedEndpointForTests("p") == ""
+      discard e.started(meter(), "dm")
+      check e.hostedEndpointForTests("dm") == ""
+      check cfg.endpointDir.socketsUnder.len == 1
+      # The endpoint goes with the realization.
+      check e.stop("hm").tryGet.state == msUnloaded
+      check not path.isSocket
+      check not path.parentDir.dirExists
+      e.finish()
+
+    test "[RUN-0221] [RUN-0222] [RUN-0224] [RUN-0225] [LDR-0083] P-2 a hosted provider is not ready until the Runtime adopted its served endpoint; a route to it is NOT_READY until then":
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      let (_, rc) = e.startClient("c")
+      discard e.create(hostedMeter(), "hm").tryGet
+      var t: Thread[(Engine, string)]
+      check e.stalledStart("hm", t)
+      # The host serves already (it answered `initialized` only then), and the
+      # Runtime has not adopted it.
+      check hostPids(hostProgram).len == 1
+      check e.hostedEndpointForTests("hm").isSocket
+      check e.view("hm").tryGet.state != msReady
+      check rc.establish("early").code == ecNotReady
+      e.releaseLoaderStallForTests()
+      joinThread(t)
+      check startReply.load == ord(msReady)
+      check rc.establish("k").code == ecOk
+      e.finish()
+
+    test "[TRN-0186] [LDR-0089] [LDR-0165] P-4 a listener that does not reach the host fails the placement; nothing falls back to direct and nothing is left served":
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.create(hostedMeter(), "hm").tryGet
+      dropNextListener()
+      let r = e.start("hm")
+      check r.isErr or r.get.state != msReady
+      let v = e.view("hm").tryGet
+      check v.state == msError
+      check v.failureOf == "loader-realization-failed"
+      check noHostLeft()
+      for j in e.loaderJournalForTests():
+        if j.meth == $lmRealize:
+          check j.strategy == "hosted_dynamic"
+      check cfg.endpointDir.socketsUnder.len == 0
+      e.finish()
+
+    test "[TRN-0185] [RUN-0223] P-5 an endpoint path replaced after the host serves it fails validation before ready: the start fails and nothing is served":
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.create(hostedMeter(), "hm").tryGet
+      var t: Thread[(Engine, string)]
+      check e.stalledStart("hm", t)
+      let path = e.hostedEndpointForTests("hm")
+      check path.isSocket
+      moveFile(path, path & ".moved")
+      e.releaseLoaderStallForTests()
+      joinThread(t)
+      check startReply.load != ord(msReady)
+      check e.view("hm").tryGet.state == msError
+      check e.diagnostics().anyIt("is not valid" in it)
+      check noHostLeft()
+      e.finish()
+
+    test "[IMPL-DECISION G272] R10 a direct routing rule meeting a hosted end: establish_route is NOT_READY with the reason":
+      var cfg = hosted()
+      cfg.routing = @[RoutingRule(callee: MeterModule, mode: rmDirect)]
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      let r = rc.establish("k")
+      check r.code == ecNotReady
+      check "Module Host" in r.message
+      e.finish()
+
+  # P-6 to P-12 ------------------------------------------------------------------------
+
+  suite "run.hosted: sessions at a hosted provider (TRANSPORT §3.1, §6, §8.1; RUNTIME §7.5)":
+    setup:
+      for h in heard.mitems:
+        h.count.store(0)
+        h.last.store(0)
+    teardown:
+      leftover()
+      check noHostLeft()
+
+    test "[RUN-0226] [LDR-0147] [CAP-0254] [TRN-0153] P-6 at a hosted endpoint a ticket opens one session; the path alone, a forged, used or expired ticket is NOT_AUTHORISED; a wrong schema is VERSION_MISMATCH; another provider's ticket is NOT_AUTHORISED and stays live":
+      var clock = newTestClock()
+      defer:
+        clock.freeClock()
+      let cfg = hosted(clock = clock)
+      discard cfg.stateOf("m1")
+      discard cfg.stateOf("m2")
+      let e = fixtureEngine(cfg)
+      let one = e.started(hostedMeter("m1"), "h1")
+      let two = e.started(hostedMeter("m2"), "h2")
+      let (_, rc) = e.startClient("c")
+      let rec =
+        rc.establish("k", provider = Opt.some(providerAddress(one.providerId))).recordOf
+      let inv = rec.invocationOf.get
+      check inv.path == e.hostedEndpointForTests("h1")
+      let o = newOwner()
+      defer:
+        o.stop()
+      # The path alone: a ticket the Runtime never issued.
+      var forged = inv
+      for i in 0 ..< forged.ticket.len:
+        forged.ticket[i] = byte(i)
+      check o.refusal(forged) == ecNotAuthorised
+      check o.refusal(inv, storageInput()) == ecVersionMismatch
+      # [Rev R24; TRANSPORT l.960] h1's ticket at h2's endpoint: refused, and
+      # still live for its own.
+      var elsewhere = inv
+      elsewhere.path = e.hostedEndpointForTests("h2")
+      check elsewhere.path != inv.path
+      check o.refusal(elsewhere) == ecNotAuthorised
+      let conn = o.session(inv)
+      check o.outcome(conn, o.send(conn, 4)).reading.reading.value == 40
+      check o.refusal(inv) == ecNotAuthorised
+      let fresh = rc.renew("r", rec.route).renewed.invocationOf.get
+      clock.advance(61_000)
+      check o.refusal(fresh) == ecNotAuthorised
+      discard two
+      e.finish()
+
+    test "[RUN-0226] [RUN-0220] [RUN-0229] [RUN-0230] [RUN-0231] [RUN-0815] P-8 calls on two sessions run at once in the host and answer out of order; the caller is the ticket's consumer; logos.schema is served; a deferred provider completes":
+      let cfg = hosted()
+      let dir = cfg.stateOf()
+      discard cfg.stateOf("d")
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (c1, rc1) = e.startClient("c1")
+      let (c2, rc2) = e.startClient("c2")
+      let o = newOwner()
+      defer:
+        o.stop()
+      let a = o.session(rc1.establish("k").recordOf.invocationOf.get)
+      let b = o.session(rc2.establish("k").recordOf.invocationOf.get)
+      # Each session's caller is its route's consumer.
+      let whoA = o.outcome(a, o.send(a, 18)).reading
+      let whoB = o.outcome(b, o.send(b, 18)).reading
+      check whoA.label == c1.instance
+      check whoB.label == c2.instance
+      check whoA.reading.label == Opt.some(e.runtimeInstanceId)
+      # A held call holds neither its session nor the other.
+      let slow = o.send(a, 22)
+      check dir.heldAt(1)
+      check o.outcome(a, o.send(a, 5)).reading.reading.value == 50
+      check o.outcome(b, o.send(b, 6)).reading.reading.value == 60
+      check o.responses(a, slow) == 0
+      dir.open()
+      check o.outcome(a, slow).codeOf == Opt.some(ecOk)
+      # Introspection over the session (E3).
+      inc nextTag
+      o.call(b, nextTag, "schema", cborMap())
+      let s = o.outcome(b, nextTag)
+      check s.codeOf == Opt.some(ecOk)
+      if s.isSome and s.get.ok:
+        check s.get.result == meterSchema
+      # A deferred provider in a host: `submit` completes the invocation.
+      let d = e.started(hostedMeter("d", deferredLib, deferredDigest, "deferred"), "hd")
+      let rd =
+        rc1.establish("kd", provider = Opt.some(providerAddress(d.providerId))).recordOf
+      let cd = o.session(rd.invocationOf.get)
+      check o.outcome(cd, o.send(cd, 7)).reading.reading.value == 70
+      check o.outcome(cd, o.send(cd, 13)).codeOf == Opt.some(ecModule)
+      e.finish()
+
+    test "[IMPL-DECISION G172] [RUN-0815] [IMPL-DECISION G274] P-9 a hosted provider's failure passes through; an invalid status or a response outside the schema is MODULE_ERROR, as direct":
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      discard e.started(meter(), "dm")
+      let (_, rc) = e.startClient("c")
+      let hm = e.view("hm").tryGet
+      let dm = e.view("dm").tryGet
+      var hh = rc.handle(
+        rc.establish("kh", provider = Opt.some(providerAddress(hm.providerId))).recordOf.route
+      )
+      var hd = rc.handle(
+        rc.establish("kd", provider = Opt.some(providerAddress(dm.providerId))).recordOf.route
+      )
+      for channel in [13'u32, 14, 16]:
+        checkpoint("channel " & $channel)
+        let viaHost = hh.read(channel)
+        let direct = hd.read(channel)
+        check viaHost.isErr and direct.isErr
+        if viaHost.isErr and direct.isErr:
+          check viaHost.error.code == direct.error.code
+          check viaHost.error.code == ecModule
+          check viaHost.error.message == direct.error.message
+      hh.release()
+      hd.release()
+      e.finish()
+
+    test "[CAP-0210] [CAP-0211] [CAP-0213] [RUN-0815] [IMPL-DECISION G274] P-14 under a Capability Authority whose allow retains both sides, a hosted call's record holds the provider host's commitments, the same as the direct provider's for the same call; a provider failure's holds the request side only":
+      resetFake()
+      var cfg = hosted()
+      cfg.statics.add(fakeCaRegistration())
+      cfg.authority = Opt.some(
+        AuthorityPolicy(instance: "ca", evaluationDeadline: initDuration(seconds = 60))
+      )
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.create(fakeCaRecord(), "ca").tryGet
+      check e.start("ca").tryGet.state == msReady
+      check e.authorityBound()[0]
+      discard e.started(hostedMeter(), "hm")
+      discard e.started(meter(), "dm")
+      let (_, rc) = e.startClient("c")
+      let hm = e.view("hm").tryGet
+      let dm = e.view("dm").tryGet
+      var hh = rc.handle(
+        rc.establish("kh", provider = Opt.some(providerAddress(hm.providerId))).recordOf.route
+      )
+      var hd = rc.handle(
+        rc.establish("kd", provider = Opt.some(providerAddress(dm.providerId))).recordOf.route
+      )
+      var both = allow("call", validMs = 0)
+      both.retainRequest = true
+      both.retainResponse = true
+      setScript(both)
+      # The consumer has the host's Response before the Runtime has the
+      # call's end, so a hosted call's record is waited for, as an
+      # asynchronous call's is.
+      check hh.read(5).isOk
+      check e.keptReach(1)
+      let viaHost = e.lastKept
+      check hd.read(5).isOk
+      check e.keptReach(2)
+      let direct = e.lastKept
+      check viaHost.success and direct.success
+      check viaHost.request.isSome and viaHost.response.isSome
+      check viaHost.request == direct.request
+      check viaHost.response == direct.response
+      # [CAP-0213] A provider failure committed the request only.
+      check hh.read(13).isErr
+      check e.keptReach(3)
+      let failedHost = e.lastKept
+      check hd.read(13).isErr
+      check e.keptReach(4)
+      let failedDirect = e.lastKept
+      check e.audit.records.len == 4
+      check not failedHost.success and not failedDirect.success
+      check failedHost.request.isSome and failedHost.response.isNone
+      check failedHost.request == failedDirect.request
+      hh.release()
+      hd.release()
+      e.finish()
+
+    test "[RUN-0226] [IMPL-DECISION G244] P-7 per-call admission at a hosted provider: a method outside the route's access is NOT_AUTHORISED and reaches no provider":
+      let cfg = hosted()
+      let dir = cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      let o = newOwner()
+      defer:
+        o.stop()
+      let rec =
+        rc.establish("k", scope = access(methods = Opt.some(newSeq[seq[byte]]())))
+      if rec.code == ecOk:
+        let conn = o.session(rec.recordOf.invocationOf.get)
+        check o.outcome(conn, o.send(conn, 22)).codeOf == Opt.some(ecNotAuthorised)
+        check dir.heldCalls == 0
+      else:
+        check rec.code in {ecInvalidParams, ecNotAuthorised}
+      e.finish()
+
+    test "[TRN-0317] [IMPL-DECISION G174] [IMPL-DECISION G260] P-11 revocation answers a hosted provider's in-flight Request NOT_AUTHORISED, then ends the session NOT_AUTHORISED; close_route drains without a ProtocolError":
+      let cfg =
+        hosted(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
+      let dir = cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      let o = newOwner()
+      defer:
+        o.stop()
+      block revoked:
+        let rec = rc.establish("k").recordOf
+        let conn = o.session(rec.invocationOf.get)
+        let tag = o.send(conn, 22)
+        check dir.heldAt(1)
+        check rc.renew("r", rec.route).code == ecNotAuthorised
+        check o.outcome(conn, tag).codeOf == Opt.some(ecNotAuthorised)
+        let closed = o.closedOf(conn)
+        check closed.isSome
+        if closed.isSome:
+          check closed.get.cause == ccPeerError
+          check closed.get.code == ecNotAuthorised
+        dir.open()
+        o.settle(50 * Slow)
+        check o.responses(conn, tag) == 1
+      removeFile(dir / "open")
+      removeFile(dir / "held")
+      block closing:
+        # Channel 23: the provider goes on after its invocation is marked
+        # cancelled, as G174 marks the route's admitted calls at its end.
+        let rec = rc.establish("k2").recordOf
+        let conn = o.session(rec.invocationOf.get)
+        let tag = o.send(conn, 23)
+        check dir.heldAt(1)
+        check rc.close(rec.route).code == ecOk
+        check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecNotReady)
+        check o.closedOf(conn, 50 * Slow).isNone # still draining
+        dir.open()
+        let late = o.outcome(conn, tag)
+        check late.codeOf == Opt.some(ecOk)
+        if late.codeOf == Opt.some(ecOk):
+          check late.reading.reading.value == 1 # it saw `is_cancelled`
+        let closed = o.closedOf(conn)
+        check closed.isSome
+        if closed.isSome:
+          check closed.get.cause == ccPeerClosed
+      e.finish()
+
+    test "[IFC-0729] [RUN-0230] P-12 Cancel to a hosted provider: the call ends CANCELLED, the provider sees is_cancelled, and its late result is not sent":
+      let cfg = hosted()
+      let dir = cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      let o = newOwner()
+      defer:
+        o.stop()
+      let conn = o.session(rc.establish("k").recordOf.invocationOf.get)
+      let tag = o.send(conn, 22)
+      check dir.heldAt(1)
+      o.cancel(conn, tag)
+      check o.outcome(conn, tag).codeOf == Opt.some(ecCancelled)
+      # The provider's wait ends on `is_cancelled`, not on `open`.
+      o.settle(100 * Slow)
+      check o.responses(conn, tag) == 1
+      check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecOk)
+      e.finish()
+
+    test "[RUN-0234] [RUN-0246] [IMPL-DECISION G175] P-10 a hosted provider's Event reaches transported subscribers on two connections; a per-delivery deny skips only one":
+      let cfg =
+        hosted(denying(deny(action = Opt.some(aaPublishEvent), target = "second")))
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (_, rf) = e.startClient("first")
+      let (_, rs) = e.startClient("second")
+      var k1 = rf.handle(rf.establish("k").recordOf.route)
+      var k2 = rs.handle(rs.establish("k").recordOf.route)
+      var a, b: LogosSubscriptionId
+      check k1.hear(0, a) == ecOk
+      check k2.hear(1, b) == ecOk
+      # Channel 15 publishes `meter.changed_event` (value 150) from the host.
+      let r = k1.read(15)
+      check r.isOk
+      check heardAt(0, 1)
+      check heard[0].last.load == 150
+      sleep(100 * Slow)
+      check heard[1].count.load == 0
+      check k2.read(4).isOk # skipped, with no signal: the session goes on
+      k1.release()
+      k2.release()
+      e.finish()
+
+    test "[RUN-0815] [IMPL-DECISION G273] [IMPL-DECISION G274] P-13 payloads go between the consumer's process and the host directly: no carrier frame holds a request, a response or an event payload, and the call, its events and its schema answer still pass":
+      # [plan §2.7; the owner's direct layout] Distinct payloads: the request
+      # (channel 0x6C636E31), its response label, and the two events channel
+      # 24 publishes, ordinary and scoped.
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      var k = rc.handle(rc.establish("k").recordOf.route)
+      heard[0].count.store(0)
+      heard[0].last.store(0)
+      var a: LogosSubscriptionId
+      check k.hear(0, a) == ecOk
+      let channel = 0x6C636E31'u32
+      traceMarkers(
+        [
+          encodeCbor(cbor(uint64(channel))),
+          textBytes("ch" & $channel),
+          encodeCbor(cbor(0x6C636E32'u64)),
+          encodeCbor(cbor(0x6C636E33'u64)),
+        ]
+      )
+      let r = k.read(channel)
+      check r.isOk
+      if r.isOk:
+        check r.get.label == "ch" & $channel
+      check k.read(24).isOk
+      check heardAt(0, 2)
+      check heard[0].last.load == 0x6C636E33
+      let (frames, hits) = traced()
+      check frames > 0
+      check hits == 0
+      # The trace sees what does cross: the method name of each dispatch.
+      traceMarkers([textBytes("read")])
+      check k.read(5).isOk
+      check traced().hits > 0
+      traceMarkers([])
+      k.release()
+      e.finish()

@@ -143,6 +143,9 @@ type
       ## the `hostsup.Host` of a hosted realization (opaque here); nil once its
       ## release has begun
     surface*: Opt[seq[byte]] ## a hosted provider's exact call surface
+    endpoint*: Opt[string]
+      ## [SPEC LOADER §5.3] a hosted provider's endpoint address: the
+      ## Runtime-created listener's
     key: string
     releasing: bool ## `_MODULE_destroy` has been handed out
     applying: bool
@@ -155,6 +158,8 @@ type
     moduleInstance*: string
     status*: RealizationStatus
     callSurface*: Opt[seq[byte]] ## an active provider realization only
+    providerEndpoint*: Opt[string]
+      ## [SPEC LOADER §5.3, l.479] an active hosted provider realization only
     failure*: Opt[LoaderError]
 
   Capabilities* = object ## [SPEC LOADER §4] `logos.module_loader.capabilities`
@@ -219,6 +224,7 @@ type
 
   HostedInit* = object ## [plan §2.5 step 8] A Module Host's successful initialization.
     surface*: Opt[seq[byte]] ## a provider's exact call surface
+    endpoint*: Opt[string] ## [SPEC LOADER §5.3] the address it serves
 
   Step* = object
     case kind*: StepKind
@@ -776,6 +782,7 @@ proc completeHosted*(
     hosted: true,
     host: host,
     surface: init.surface,
+    endpoint: init.endpoint,
     key: keyOf(req),
   )
   if req.state.isSome and r.stateRoot.isSome:
@@ -955,6 +962,7 @@ func record*(x: Realization): RealizationRecord =
   of rsActive:
     if x.hosted:
       result.callSurface = x.surface
+      result.providerEndpoint = x.endpoint
     elif x.binding.provider:
       result.callSurface = Opt.some(x.binding.callSurface)
   of rsFailed:

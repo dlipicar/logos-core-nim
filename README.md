@@ -60,8 +60,11 @@ The specs are being revised, so the work is ordered by how settled each area is
   start and stop). A host that ends by itself, a broken carrier, a deadline and the Module Loader's
   loss end the instance's realization (`error`, with the deadline's classification or
   `host-terminated`); a restart lock keeps a host of an earlier run from being joined by a new one
-  (part 4b-3.1b).
-- Not yet: the rest of Tier 4b (the rest of the Module Host: hosted providers and consumers' routes; the rest of transported routes, `logosd`
+  (part 4b-3.1b). A hosted provider serves the endpoint the Runtime made for it: payloads go
+  between the consumer's process and the host directly, the Runtime admits every Hello, call,
+  subscription and delivery, and the host checks payloads, runs the provider and commits each
+  Response (part 4b-3.2).
+- Not yet: the rest of Tier 4b (the rest of the Module Host: hosted consumers' routes; the rest of transported routes, `logosd`
   and `logosctl`, the Runtime's permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).

@@ -36,8 +36,10 @@ when defined(posix):
   import ../src/logos_core/loader/contract
   import ../src/logos_core/pins
   import
-    ./support/
-      [fakeca, kitbuild, kitruntime, modulehostbuild, tunerconfig, withoutloader]
+    ./support/[
+      fakeca, kitbuild, kitruntime, modulehostbuild, shortdir, tunerconfig,
+      withoutloader,
+    ]
   import ./kit/meter_impl
   import ./generated/meter_module_calls
 
@@ -49,6 +51,10 @@ when defined(posix):
 
   include ./support/routefixture
   include ./support/configrc
+
+  # [R10] A route with a hosted end is local-transport: its endpoints go
+  # under a short private base, `<base>/e<n>/<8 hex>/logos_meter_module.sock`.
+  let shortBase = makeShortBase("lcnhs", "/e999/12345678/logos_meter_module.sock")
 
   const
     RuntimeId = "0b6f2d4e-8a1c-4f3b-9d2e-7c5a1b3e9f40"
@@ -94,6 +100,7 @@ when defined(posix):
     result = config(extra = extra)
     result.runtimeInstanceId = RuntimeId
     result.stateRoot = Opt.some(result.workDir / "state")
+    result.endpointDir = shortBase / ("e" & $engines)
     if host:
       result.moduleHost = Opt.some(hostProgram)
       result.moduleHostEnv = @SanitizerEnv

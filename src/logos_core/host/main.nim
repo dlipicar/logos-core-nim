@@ -21,6 +21,10 @@
 ##   `checkLive`, `initInputFor`, `initModule`, `checkInit`), so a hosted
 ##   realization makes the direct one's checks with the direct one's errors
 ##   (LOADER l.388-403). After `released` the host exits 0.
+## - **A provider's endpoint** (4b-3.2; `endpoint.nim`): with `init.endpoint`
+##   the loop serves fd 4 before `initialized` is sent; the Runtime's lane-2
+##   orders and verdicts go to it from the main thread, in order, and the
+##   release stops it before the context is destroyed.
 ## - **The release** waits, in the host itself, for the Runtime Control
 ##   callbacks in flight (event deliveries and completions) and, by running
 ##   on the lifecycle thread, any `apply` hook, before `_MODULE_destroy`
@@ -34,7 +38,7 @@ import ../abi/[checks, types]
 import ../base/perthread
 import ../runtime/realizer
 import ../transport/io/sock
-import ./[rcbinding, state]
+import ./[endpoint, rcbinding, state]
 
 when defined(linux):
   proc prctl(
@@ -65,7 +69,7 @@ type
 var
   lifeCh: ptr Channel[seq[byte]]
   lifeThread: Thread[void]
-  maxPayloadDepth*: int ## [plan §2.7] what `init` carried; read by 4b-3.2's endpoint
+  maxPayloadDepth: int ## [plan §2.7] what `init` carried, for the endpoint's checks
 
 # Lane 0: the lifecycle thread ------------------------------------------------------------
 
@@ -139,6 +143,28 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
       # status: the instance exists and is destroyed exactly once.
       b.destroy(ctx)
     refuse(initFailure(outcome.error), P.Init)
+  if m.endpoint.isSome:
+    # [SPEC LOADER §5.3; RUN-0200, TRN-0184-TRN-0186] The provider's endpoint
+    # is served from the listener the Runtime made before `initialized`; one
+    # that cannot be served ends the realization, its context destroyed.
+    let served =
+      if not b.provider:
+        Result[void, string].err("the module provides no contract to serve")
+      elif m.transport.isNone or m.runtime_id.isNone:
+        Result[void, string].err("the endpoint's transport limits are missing")
+      else:
+        serveEndpoint(
+          b, ctx, access.state, m.module, m.endpoint.get, m.runtime_id.get,
+          m.transport.get, ListenerFd, maxPayloadDepth,
+        )
+    if served.isErr:
+      b.destroy(ctx)
+      refuse(
+        loaderError(
+          lecRealizationFailed, "the endpoint cannot be served: " & served.error
+        ),
+        P.Bind,
+      )
   life.binding = b
   life.context = ctx
   life.live = m.live
@@ -168,9 +194,10 @@ proc release(life: var Lifecycle, m: LcnCarrierRelease) =
   ## `released` and a clean exit.
   if life.phase == phActive:
     # [IMPL-DECISION G267] The host itself waits before `_MODULE_destroy`,
-    # whatever the Runtime already waited for: its Runtime Control callbacks
-    # (`awaitCallbacks`). A pending `apply` hook ran on this thread before the
-    # release was read.
+    # whatever the Runtime already waited for: the dispatched calls
+    # (`stopServing`) and its Runtime Control callbacks (`awaitCallbacks`). A
+    # pending `apply` hook ran on this thread before the release was read.
+    stopServing()
     awaitCallbacks()
     life.binding.destroy(life.context)
     life.context = nil
@@ -235,6 +262,17 @@ proc route(f: seq[byte]) =
     delivered(f)
   of K.lcn_Carrier_async_done:
     completed(f)
+  of K.lcn_Carrier_scoped_result:
+    let r = m.arm_lcn_Carrier_scoped_result
+    answered(r.id, answerOf(r))
+  of K.lcn_Carrier_io_admit_established, K.lcn_Carrier_io_admit_failed,
+      K.lcn_Carrier_io_admit_unavailable, K.lcn_Carrier_io_respond,
+      K.lcn_Carrier_io_close, K.lcn_Carrier_io_terminate, K.lcn_Carrier_io_work_ended,
+      K.lcn_Carrier_io_subscription_result, K.lcn_Carrier_io_stop_serving,
+      K.lcn_Carrier_admit_verdict, K.lcn_Carrier_call_cancel:
+    # [K38 interim] In the order the Runtime gave, on one thread: a verdict,
+    # a cancellation and a session order apply as they came.
+    order(f)
   else:
     carrierLost("an unexpected message: " & $m.kind)
 
@@ -283,8 +321,21 @@ proc carrierFd(): cint =
     notStarted("the carrier cannot be made non-blocking")
 
 proc keepPrivate(fd: cint) =
-  ## [plan §2.2 steps 4-5] Kept, and not inherited by a module's children.
+  ## [plan §2.2 steps 4-5] Kept, and not inherited by a module's children. A
+  ## number the Runtime left closed is held on /dev/null, so no descriptor the
+  ## host opens later takes it and is served as the listener or kept as the
+  ## lock [IMPL].
   if fcntl(fd, F_GETFD) >= 0:
+    discard fcntl(fd, F_SETFD, FD_CLOEXEC)
+    return
+  let n = posix.open("/dev/null", O_RDONLY or O_CLOEXEC)
+  if n < 0:
+    notStarted("fd " & $fd & " cannot be held")
+  if n != fd:
+    let d = dup2(n, fd)
+    discard posix.close(n)
+    if d < 0:
+      notStarted("fd " & $fd & " cannot be held")
     discard fcntl(fd, F_SETFD, FD_CLOEXEC)
 
 proc runHost*() {.noreturn.} =
@@ -295,9 +346,9 @@ proc runHost*() {.noreturn.} =
     discard prctl(PrSetPdeathsig, culong(SIGKILL))
     if getppid() != parent:
       exitnow(ExitCarrierLost) # [IMPL] the daemon ended before the signal was set
-  let fd = carrierFd()
   keepPrivate(ListenerFd)
   keepPrivate(LockFd)
+  let fd = carrierFd()
   initHostShared(fd)
   initBinding()
   lifeCh = createShared(Channel[seq[byte]])

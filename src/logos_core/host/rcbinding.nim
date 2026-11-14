@@ -20,14 +20,22 @@
 ##   order; the completion runs on a host completion worker with a response
 ##   owner of its own; release waits for a completion already received,
 ##   except from inside it (l.2085).
+## - **Publications** (RUNTIME §7.3; plan §2.7, part 4b-3.2). The payload
+##   stays here: the Runtime names the subscriber sessions (`rc_publish`),
+##   the payload is checked under each one's selected contract, the Runtime
+##   admits each delivery (`rc_deliver`) and this host's loop writes the
+##   Events (`endpoint.publishConn`).
 
 {.push raises: [], gcsafe.}
 
-import std/[atomics, locks]
+import std/[atomics, locks, tables]
 import results
 import ../abi/[checks, cstatus, types]
 import ../base/perthread
-import ./state
+import ../hash/hashinput
+import ../runtime/[entryframe, hostio]
+import ../transport/io/api except decodeMessage
+import ./[endpoint, selected, state]
 
 # Statuses ------------------------------------------------------------------------------
 
@@ -36,13 +44,6 @@ func codeOf(c: uint8): ErrorCode =
     ErrorCode(c)
   else:
     ecModule
-
-proc failureOf(a: Answer): InvocationFailure =
-  result.code = codeOf(a.code)
-  if a.hasMessage:
-    result.message = Opt.some(a.message)
-  if a.hasDetail:
-    result.detail = Opt.some(a.detail)
 
 proc statusOf(a: Answer): LogosResult =
   if a.failed:
@@ -591,25 +592,57 @@ proc publishOp(
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
 ) {.cdecl.} =
-  ## [SPEC RUNTIME §7.3] The Runtime publishes it as for a direct module and
-  ## this returns once it has (no result).
+  ## [SPEC RUNTIME §7.3, l.1221-1231] An ordinary publication: delivered to
+  ## each subscriber session whose selected contract takes the payload and
+  ## whose delivery the Runtime admits; one that cannot be delivered is the
+  ## Runtime's diagnostic. Returns once every admitted Event is taken by the
+  ## loop (no result).
   bindingEnter()
   let id = nextId()
-  discard request(
+  let a = request(
     toMessage(
       LcnCarrierRcPublish(
-        id: id,
-        event: (if eventName == nil: @[] else: bytesOf(eventName)),
-        data: bytesOf(cborData, cborDataLen),
+        id: id, event: (if eventName == nil: @[] else: bytesOf(eventName))
       )
     ),
     id,
   )
-
-proc currentOp(state: pointer): ptr LogosInvocationContext {.cdecl.} =
-  ## [SPEC INTERFACE §2.9.3] No provider entry runs in a consumer-only host
-  ## (4b-3.2 adds the served ones).
-  nil
+  if a.failed or a.targets.len == 0:
+    return
+  let name = $eventName # the Runtime checked it
+  let data = bytesOf(cborData, cborDataLen)
+  var checked: Table[Digest, ErrorCode]
+  var conns: seq[uint64]
+  var dropped: seq[LcnCarrierDropped]
+  for (conn, contract) in a.targets:
+    let root = digestOf(contract).valueOr:
+      carrierLost("a publication target whose contract is not a digest")
+    if root notin checked:
+      checked[root] =
+        if data.len == 0:
+          ecInvalidParams
+        else:
+          let sel = selectedFor(root)
+          if sel.isErr:
+            ecModule
+          else:
+            let c = sel.get.checkEvent(name, data)
+            if c.isErr: c.error.code else: ecOk
+    let code = checked.getOrDefault(root, ecModule)
+    if code == ecOk:
+      conns.add(conn)
+    else:
+      dropped.add(LcnCarrierDropped(conn: conn, code: uint8(ord(code))))
+  let id2 = nextId()
+  let b = request(
+    toMessage(LcnCarrierRcDeliver(id: id2, event: name, conns: conns, dropped: dropped)),
+    id2,
+  )
+  if b.failed:
+    return
+  for conn in b.admitted:
+    if publishConn(conn, name, data) == sbStopped:
+      return
 
 var
   bindingState: int ## [SPEC INTERFACE §5.2] non-null; the host has one instance
@@ -625,7 +658,9 @@ proc hostServices*(): (
     addr binding,
     publishOp,
     nil,
-    LogosInvocationAccess(state: addr accessState, current: currentOp),
+    # [SPEC INTERFACE §2.9.3] The context of the provider entry running on
+    # the calling thread (`endpoint.nim` makes it current), as direct.
+    LogosInvocationAccess(state: addr accessState, current: entryframe.currentOp),
   )
 
 # Startup and frames from the main thread -------------------------------------------------

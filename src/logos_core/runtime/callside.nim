@@ -20,20 +20,13 @@ import ../cbor/[decode, utf8]
 import ../hash/hashinput
 import ../iface/[accept, outcome, payload, surface]
 import ../transport/boundary
-import ./plumbing
+import ./[callcheck, plumbing]
 import ../abi/cstatus
+import ./entryframe
 
-export cstatus
-
-const
-  TextCapacity* = 160 ## instance ids are at most 128 bytes; tokens are shorter
-  MaxEventNameBytes* = 128 ## [SPEC INTERFACE §1.5] a complete event identifier
+export callcheck, cstatus, entryframe
 
 type
-  FixedText* = object
-    len: int
-    data: array[TextCapacity, char]
-
   SchemaBlob* = object
     ## The construction input `materialize_route` validated, shared by the
     ## handle, its subscriptions and its prepared calls, which may outlive it
@@ -43,10 +36,6 @@ type
     len*: int
     data*: ptr UncheckedArray[byte]
     depth*: int ## [IF-02, I88] the engine's payload depth setting
-
-  Selected* = object ## One selected contract, as this thread loaded it.
-    boundary*: Boundary
-    validator*: ContractValidator
 
   AttemptServices* = object
     ## One execution attempt's Runtime Control binding, publish callback and
@@ -113,33 +102,6 @@ type
       ## Runtime's protected path (an engine `evaluate`): a SYSTEM_SERVICE
       ## caller view with the Runtime id and no module view (I85)
 
-  Frame* = object
-    ## One provider entry active on this thread, or a barrier (`context` nil)
-    ## that hides every entry below it from `current` while a consumer
-    ## callback runs (INTERFACE l.2170).
-    context*: ptr LogosInvocationContext
-    access*: pointer
-    previous*: ptr Frame
-
-func fixed*(s: string): FixedText =
-  doAssert s.len <= TextCapacity
-  result.len = s.len
-  for i, c in s:
-    result.data[i] = c
-
-func `$`*(t: FixedText): string =
-  result = newString(t.len)
-  for i in 0 ..< t.len:
-    result[i] = t.data[i]
-
-func utf8View*(t: var FixedText): LogosUtf8View =
-  ## A borrowed view of `t`'s bytes, valid while `t` stays where it is.
-  LogosUtf8View(
-    data: (if t.len == 0: nil
-    else: cast[ptr UncheckedArray[uint8]](addr t.data[0])),
-    len: csize_t(t.len),
-  )
-
 # Results ---------------------------------------------------------------------------
 
 proc status*(e: EngineError): LogosResult =
@@ -147,16 +109,6 @@ proc status*(e: EngineError): LogosResult =
 
 func failureOf*(e: EngineError): InvocationFailure =
   InvocationFailure(code: e.code, message: Opt.some(e.message))
-
-proc checkEventName*(name: cstring): Result[string, InvocationFailure] =
-  ## [SPEC INTERFACE §1.5, §2.5, §2.9.3] A malformed event identifier is
-  ## INVALID_PARAMS: null, empty, longer than 128 bytes or not UTF-8.
-  if name == nil:
-    return err(failure(ecInvalidParams, "a null event name"))
-  let s = $name
-  if s.len == 0 or s.len > MaxEventNameBytes or not isValidUtf8(s):
-    return err(failure(ecInvalidParams, "an event name has 1 to 128 UTF-8 bytes"))
-  ok(s)
 
 # Construction input and the selected contract ---------------------------------------
 
@@ -206,12 +158,7 @@ proc selectedOf*(b: ptr SchemaBlob): Result[Selected, string] =
       return ok(selectedCache[key])
     except KeyError:
       discard
-  let set = ?acceptSchemaResponse(
-    b.data.toOpenArray(0, b.len - 1), b.root, AcceptOptions(system: true)
-  )
-  let bd = ?boundary(set, b.root)
-  let v = ?validator(set, b.depth)
-  let s = Selected(boundary: bd, validator: v)
+  let s = ?buildSelected(b.data.toOpenArray(0, b.len - 1), b.root, b.depth)
   selectedCache[key] = s
   ok(s)
 
@@ -219,10 +166,9 @@ proc cacheSelected*(root: Digest, set: ContractSet, depth: int) =
   ## Keeps the set `materialize_route` just validated for this thread.
   hookSelected()
   if (root, depth) notin selectedCache:
-    let b = boundary(set, root)
-    let v = validator(set, depth)
-    if b.isOk and v.isOk:
-      selectedCache[(root, depth)] = Selected(boundary: b.get, validator: v.get)
+    let s = buildSelected(set, root, depth)
+    if s.isOk:
+      selectedCache[(root, depth)] = s.get
 
 # Route handles ------------------------------------------------------------------------
 
@@ -241,59 +187,6 @@ var generations: Atomic[uint64]
 proc nextGeneration*(): uint64 =
   ## [G177] A fresh invocation-path generation; never reused in this process.
   generations.fetchAdd(1) + 1
-
-# The invocation-context stack ---------------------------------------------------------
-
-var
-  active {.threadvar.}: ptr Frame
-  runtimeOwned {.threadvar.}: bool
-
-proc markRuntimeThread*() =
-  ## The engine's own threads: the Runtime thread and its lifecycle and call
-  ## workers, where module initialization, destruction and completion
-  ## callbacks run.
-  runtimeOwned = true
-
-proc setRuntimeOwned*(owned: bool) =
-  ## [plan §2.6; G267] A Module Host's Runtime Control worker takes the calling
-  ## host thread's kind for one call: one the host runs module code on, or one
-  ## module code created.
-  runtimeOwned = owned
-
-proc inRuntimeCallback*(): bool =
-  ## [SPEC RUNTIME l.4083] Whether this thread is one the Runtime owns, or is
-  ## inside a provider entry or a consumer callback: module code whose
-  ## completion shutdown may require.
-  runtimeOwned or active != nil
-
-proc push*(f: var Frame) =
-  f.previous = active
-  active = addr f
-
-proc pop*(f: var Frame) =
-  active = f.previous
-
-template barrier*(body: untyped) =
-  ## [SPEC INTERFACE l.2170] A consumer callback (an event handler) never sees
-  ## the invocation context of a provider entry below it on this thread.
-  var fence = Frame()
-  push(fence)
-  body
-  pop(fence)
-
-proc currentOp*(state: pointer): ptr LogosInvocationContext {.cdecl.} =
-  ## [SPEC INTERFACE §2.9.3, l.2166-2170] The context of the innermost provider
-  ## entry active on this thread for the instance `state` belongs to, so a
-  ## nested entry into another instance hides nothing; none outside one, and
-  ## none past a consumer callback's barrier.
-  var f = active
-  while f != nil:
-    if f.context == nil:
-      return nil
-    if f.access == state:
-      return f.context
-    f = f.previous
-  nil
 
 # Entry guards of a deferred invocation ------------------------------------------------
 

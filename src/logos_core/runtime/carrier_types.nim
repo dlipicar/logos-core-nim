@@ -10,7 +10,7 @@ import ../iface/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.carrier.v1: the private carrier between the Runtime and one\x0A; Module Host (DECISIONS G266; 4b-3 plan \xC2\xA72.4, K3). Never in a public record,\x0A; a store or a configuration file.\x0A;\x0A; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR\x0A; lcn.carrier_message (runtime/carrier.nim). Its `kind` fixes its lane:\x0A;   lane 0, the Loader:       init, apply, release / initialized, init_failed,\x0A;                             applied, released, fatal\x0A;   lane 1, Runtime Control:  rc_reply, rc_event, async_done / rc_call,\x0A;                             rc_subscribe, rc_unsubscribe, rc_delivered,\x0A;                             rc_connect_remote, rc_publish, rc_prepare,\x0A;                             rc_async_submit, rc_async_cancel,\x0A;                             rc_async_release\x0A; A frame that does not decode to one message is terminal carrier loss\x0A; (RUNTIME RUN-0812). No message carries a consumer, instance or ticket: the\x0A; Runtime takes them from the carrier it made for the attempt (RUN-0171,\x0A; RUN-0172). Each side numbers its own requests (`id`); a reply names the\x0A; request it answers.\x0A\x0Alcn.carrier_message =\x0A  lcn.carrier_init /\x0A  lcn.carrier_apply /\x0A  lcn.carrier_release /\x0A  lcn.carrier_initialized /\x0A  lcn.carrier_init_failed /\x0A  lcn.carrier_applied /\x0A  lcn.carrier_released /\x0A  lcn.carrier_fatal /\x0A  lcn.carrier_rc_call /\x0A  lcn.carrier_rc_subscribe /\x0A  lcn.carrier_rc_unsubscribe /\x0A  lcn.carrier_rc_delivered /\x0A  lcn.carrier_rc_connect_remote /\x0A  lcn.carrier_rc_publish /\x0A  lcn.carrier_rc_prepare /\x0A  lcn.carrier_rc_async_submit /\x0A  lcn.carrier_rc_async_cancel /\x0A  lcn.carrier_rc_async_release /\x0A  lcn.carrier_rc_reply /\x0A  lcn.carrier_rc_delivery /\x0A  lcn.carrier_async_done\x0A\x0A; A failure status as the side that read it holds it (abi/checks AbiFailure):\x0A; `reason` is set when the status itself broke the ABI (never forwarded).\x0Alcn.carrier_failure = {\x0A  code: uint8,\x0A  ? message: tstr .size (0..512),\x0A  ? detail: bstr .size (0..4096),\x0A  ? reason: tstr .size (0..512),\x0A}\x0A\x0A; Lane 0, the Loader -> the host ---------------------------------------------------\x0A\x0A; [SPEC LOADER \xC2\xA76] The one initialization: the staged artifact, the state\x0A; directory and the configuration input (LOADER \xC2\xA75.2), never in a record.\x0Alcn.carrier_init = {\x0A  kind: \"init\",\x0A  id: uint64,\x0A  module: tstr .size (1..64),\x0A  artifact_path: tstr .size (1..4096),\x0A  ? state_dir: tstr .size (1..4096),\x0A  ? configuration: bstr,\x0A  live: bool,\x0A  max_payload_depth: uint64,\x0A}\x0A\x0Alcn.carrier_apply = {\x0A  kind: \"apply\",\x0A  id: uint64,\x0A  configuration: bstr,\x0A}\x0A\x0Alcn.carrier_release = {\x0A  kind: \"release\",\x0A  id: uint64,\x0A}\x0A\x0A; Lane 0, the host -> the Loader ---------------------------------------------------\x0A\x0Alcn.carrier_initialized = {\x0A  kind: \"initialized\",\x0A  id: uint64,\x0A  ? call_surface: bstr, ; a provider\'s exact `_MODULE_call_surface()` bytes\x0A}\x0A\x0A; [SPEC LOADER \xC2\xA710] The Loader error the host\'s ABI caller produced, with the\x0A; module\'s own status for diagnostics only (`cause`); `phase` \"init\" when it\x0A; came from `_MODULE_init` itself (G250).\x0Alcn.carrier_init_failed = {\x0A  kind: \"init_failed\",\x0A  id: uint64,\x0A  code: \"abi-invalid\" / \"artifact-unavailable\" / \"realization-failed\",\x0A  message: tstr .size (0..512),\x0A  phase: \"bind\" / \"init\",\x0A  ? cause: lcn.carrier_failure,\x0A}\x0A\x0A; The hook\'s status as `readStatus` read it; none: LOGOS_OK.\x0Alcn.carrier_applied = {\x0A  kind: \"applied\",\x0A  id: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_released = {\x0A  kind: \"released\",\x0A  id: uint64,\x0A}\x0A\x0A; The host cannot go on (never from module code): the Loader ends it.\x0Alcn.carrier_fatal = {\x0A  kind: \"fatal\",\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; Lane 1, the host -> the Runtime --------------------------------------------------\x0A\x0A; [SPEC INTERFACE \xC2\xA75.2; RUNTIME \xC2\xA79] One Runtime Control call. `runtime_thread`:\x0A; the calling thread is one the host runs module code on (RUNTIME l.3870).\x0Alcn.carrier_rc_call = {\x0A  kind: \"rc_call\",\x0A  id: uint64,\x0A  method: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  params: bstr,\x0A  runtime_thread: bool,\x0A}\x0A\x0A; `local`: the host\'s own token for the handler, named by each rc_event.\x0Alcn.carrier_rc_subscribe = {\x0A  kind: \"rc_subscribe\",\x0A  id: uint64,\x0A  event: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  local: uint64,\x0A}\x0A\x0A; `in_handler`: made by the handler of `local`\'s delivery in progress, which\x0A; the Runtime runs it beside, so it does not wait for its own frame (G178).\x0Alcn.carrier_rc_unsubscribe = {\x0A  kind: \"rc_unsubscribe\",\x0A  id: uint64,\x0A  sub: uint64,\x0A  ? in_handler: uint64,\x0A}\x0A\x0Alcn.carrier_rc_delivered = {\x0A  kind: \"rc_delivered\",\x0A  local: uint64,\x0A  seq: uint64,\x0A}\x0A\x0Alcn.carrier_rc_connect_remote = {\x0A  kind: \"rc_connect_remote\",\x0A  id: uint64,\x0A  endpoint: bstr,\x0A  expected_root: bstr .size 32,\x0A}\x0A\x0Alcn.carrier_rc_publish = {\x0A  kind: \"rc_publish\",\x0A  id: uint64,\x0A  event: bstr,\x0A  data: bstr,\x0A}\x0A\x0A; [SPEC INTERFACE \xC2\xA72.9.1] A prepared Runtime Control call, numbered `call` by\x0A; the host.\x0Alcn.carrier_rc_prepare = {\x0A  kind: \"rc_prepare\",\x0A  id: uint64,\x0A  call: uint64,\x0A  method: bstr,\x0A  params: bstr,\x0A  ? timeout_ms: uint64, ; the options the host checked as the Runtime does\x0A}\x0A\x0Alcn.carrier_rc_async_submit = {\x0A  kind: \"rc_async_submit\",\x0A  call: uint64,\x0A}\x0A\x0Alcn.carrier_rc_async_cancel = {\x0A  kind: \"rc_async_cancel\",\x0A  call: uint64,\x0A}\x0A\x0Alcn.carrier_rc_async_release = {\x0A  kind: \"rc_async_release\",\x0A  id: uint64,\x0A  call: uint64,\x0A}\x0A\x0A; Lane 1, the Runtime -> the host --------------------------------------------------\x0A\x0A; The outcome of the request `id` names: `failure`, or a success with the\x0A; response bytes (`value`) or a subscription id (`sub`).\x0Alcn.carrier_rc_reply = {\x0A  kind: \"rc_reply\",\x0A  id: uint64,\x0A  ? value: bstr,\x0A  ? sub: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_rc_delivery = {\x0A  kind: \"rc_event\",\x0A  local: uint64,\x0A  seq: uint64,\x0A  name: tstr .size (1..128),\x0A  data: bstr,\x0A}\x0A\x0Alcn.carrier_async_done = {\x0A  kind: \"async_done\",\x0A  call: uint64,\x0A  ? value: bstr,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.carrier.v1: the private carrier between the Runtime and one\x0A; Module Host (DECISIONS G266; 4b-3 plan \xC2\xA72.4, K3). Never in a public record,\x0A; a store or a configuration file.\x0A;\x0A; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR\x0A; lcn.carrier_message (runtime/carrier.nim). Its `kind` fixes its lane:\x0A;   lane 0, the Loader:       init, apply, release / initialized, init_failed,\x0A;                             applied, released, fatal\x0A;   lane 1, Runtime Control:  rc_reply, rc_event, async_done / rc_call,\x0A;                             rc_subscribe, rc_unsubscribe, rc_delivered,\x0A;                             rc_connect_remote, rc_publish, rc_deliver,\x0A;                             rc_prepare, rc_async_submit, rc_async_cancel,\x0A;                             rc_async_release\x0A;   lane 2, the boundary:     io_admit_*, io_respond, io_close, io_terminate,\x0A;                             io_work_ended, io_subscription_result,\x0A;                             io_stop_serving, admit_verdict, call_cancel,\x0A;                             scoped_result / io_listening, io_serve_failed,\x0A;                             io_hello, io_established, io_dispatch, io_stop,\x0A;                             io_closed, io_subscribe, io_unsubscribe,\x0A;                             io_publish_failed, io_publish_result,\x0A;                             io_local_failure, call_ended, scoped_check,\x0A;                             scoped_admit, scoped_done\x0A; A frame that does not decode to one message is terminal carrier loss\x0A; (RUNTIME RUN-0812). No message carries a consumer, instance or ticket: the\x0A; Runtime takes them from the carrier it made for the attempt (RUN-0171,\x0A; RUN-0172). Each side numbers its own requests (`id`); a reply names the\x0A; request it answers.\x0A\x0Alcn.carrier_message =\x0A  lcn.carrier_init /\x0A  lcn.carrier_apply /\x0A  lcn.carrier_release /\x0A  lcn.carrier_initialized /\x0A  lcn.carrier_init_failed /\x0A  lcn.carrier_applied /\x0A  lcn.carrier_released /\x0A  lcn.carrier_fatal /\x0A  lcn.carrier_rc_call /\x0A  lcn.carrier_rc_subscribe /\x0A  lcn.carrier_rc_unsubscribe /\x0A  lcn.carrier_rc_delivered /\x0A  lcn.carrier_rc_connect_remote /\x0A  lcn.carrier_rc_publish /\x0A  lcn.carrier_rc_deliver /\x0A  lcn.carrier_rc_prepare /\x0A  lcn.carrier_rc_async_submit /\x0A  lcn.carrier_rc_async_cancel /\x0A  lcn.carrier_rc_async_release /\x0A  lcn.carrier_rc_reply /\x0A  lcn.carrier_rc_delivery /\x0A  lcn.carrier_async_done /\x0A  lcn.carrier_io_listening /\x0A  lcn.carrier_io_serve_failed /\x0A  lcn.carrier_io_hello /\x0A  lcn.carrier_io_established /\x0A  lcn.carrier_io_dispatch /\x0A  lcn.carrier_io_stop /\x0A  lcn.carrier_io_closed /\x0A  lcn.carrier_io_subscribe /\x0A  lcn.carrier_io_unsubscribe /\x0A  lcn.carrier_io_publish_failed /\x0A  lcn.carrier_io_publish_result /\x0A  lcn.carrier_io_local_failure /\x0A  lcn.carrier_call_ended /\x0A  lcn.carrier_scoped_check /\x0A  lcn.carrier_scoped_admit /\x0A  lcn.carrier_scoped_done /\x0A  lcn.carrier_io_admit_established /\x0A  lcn.carrier_io_admit_failed /\x0A  lcn.carrier_io_admit_unavailable /\x0A  lcn.carrier_io_respond /\x0A  lcn.carrier_io_close /\x0A  lcn.carrier_io_terminate /\x0A  lcn.carrier_io_work_ended /\x0A  lcn.carrier_io_subscription_result /\x0A  lcn.carrier_io_stop_serving /\x0A  lcn.carrier_admit_verdict /\x0A  lcn.carrier_call_cancel /\x0A  lcn.carrier_scoped_result\x0A\x0A; A failure status as the side that read it holds it (abi/checks AbiFailure):\x0A; `reason` is set when the status itself broke the ABI (never forwarded).\x0Alcn.carrier_failure = {\x0A  code: uint8,\x0A  ? message: tstr .size (0..512),\x0A  ? detail: bstr .size (0..4096),\x0A  ? reason: tstr .size (0..512),\x0A}\x0A\x0A; Lane 0, the Loader -> the host ---------------------------------------------------\x0A\x0A; [SPEC LOADER \xC2\xA76] The one initialization: the staged artifact, the state\x0A; directory and the configuration input (LOADER \xC2\xA75.2), never in a record.\x0A; [LOADER \xC2\xA75.3; part 4b-3.2] A provider\'s `endpoint` is the path of the\x0A; listener on fd 4, which the host serves once `_MODULE_init` succeeded, with\x0A; the Runtime\'s `transport` limits (runtime/hostio.nim gives their order) and\x0A; its `runtime_id` for the invocation context\'s caller view.\x0Alcn.carrier_init = {\x0A  kind: \"init\",\x0A  id: uint64,\x0A  module: tstr .size (1..64),\x0A  artifact_path: tstr .size (1..4096),\x0A  ? state_dir: tstr .size (1..4096),\x0A  ? configuration: bstr,\x0A  live: bool,\x0A  max_payload_depth: uint64,\x0A  ? endpoint: tstr .size (1..4096),\x0A  ? transport: [* uint64],\x0A  ? runtime_id: tstr .size (1..256),\x0A}\x0A\x0Alcn.carrier_apply = {\x0A  kind: \"apply\",\x0A  id: uint64,\x0A  configuration: bstr,\x0A}\x0A\x0Alcn.carrier_release = {\x0A  kind: \"release\",\x0A  id: uint64,\x0A}\x0A\x0A; Lane 0, the host -> the Loader ---------------------------------------------------\x0A\x0Alcn.carrier_initialized = {\x0A  kind: \"initialized\",\x0A  id: uint64,\x0A  ? call_surface: bstr, ; a provider\'s exact `_MODULE_call_surface()` bytes\x0A}\x0A\x0A; [SPEC LOADER \xC2\xA710] The Loader error the host\'s ABI caller produced, with the\x0A; module\'s own status for diagnostics only (`cause`); `phase` \"init\" when it\x0A; came from `_MODULE_init` itself (G250).\x0Alcn.carrier_init_failed = {\x0A  kind: \"init_failed\",\x0A  id: uint64,\x0A  code: \"abi-invalid\" / \"artifact-unavailable\" / \"realization-failed\",\x0A  message: tstr .size (0..512),\x0A  phase: \"bind\" / \"init\",\x0A  ? cause: lcn.carrier_failure,\x0A}\x0A\x0A; The hook\'s status as `readStatus` read it; none: LOGOS_OK.\x0Alcn.carrier_applied = {\x0A  kind: \"applied\",\x0A  id: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_released = {\x0A  kind: \"released\",\x0A  id: uint64,\x0A}\x0A\x0A; The host cannot go on (never from module code): the Loader ends it.\x0Alcn.carrier_fatal = {\x0A  kind: \"fatal\",\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; Lane 1, the host -> the Runtime --------------------------------------------------\x0A\x0A; [SPEC INTERFACE \xC2\xA75.2; RUNTIME \xC2\xA79] One Runtime Control call. `runtime_thread`:\x0A; the calling thread is one the host runs module code on (RUNTIME l.3870).\x0Alcn.carrier_rc_call = {\x0A  kind: \"rc_call\",\x0A  id: uint64,\x0A  method: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  params: bstr,\x0A  runtime_thread: bool,\x0A}\x0A\x0A; `local`: the host\'s own token for the handler, named by each rc_event.\x0Alcn.carrier_rc_subscribe = {\x0A  kind: \"rc_subscribe\",\x0A  id: uint64,\x0A  event: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  local: uint64,\x0A}\x0A\x0A; `in_handler`: made by the handler of `local`\'s delivery in progress, which\x0A; the Runtime runs it beside, so it does not wait for its own frame (G178).\x0Alcn.carrier_rc_unsubscribe = {\x0A  kind: \"rc_unsubscribe\",\x0A  id: uint64,\x0A  sub: uint64,\x0A  ? in_handler: uint64,\x0A}\x0A\x0Alcn.carrier_rc_delivered = {\x0A  kind: \"rc_delivered\",\x0A  local: uint64,\x0A  seq: uint64,\x0A}\x0A\x0Alcn.carrier_rc_connect_remote = {\x0A  kind: \"rc_connect_remote\",\x0A  id: uint64,\x0A  endpoint: bstr,\x0A  expected_root: bstr .size 32,\x0A}\x0A\x0A; [SPEC RUNTIME \xC2\xA77.3; part 4b-3.2, plan \xC2\xA72.7] An ordinary publication\'s\x0A; subscriber sessions, which the reply names (`targets`). The payload stays in\x0A; the host: it checks it under each target\'s selected contract and asks for\x0A; the deliveries with `rc_deliver`.\x0Alcn.carrier_rc_publish = {\x0A  kind: \"rc_publish\",\x0A  id: uint64,\x0A  event: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A}\x0A\x0A; The sessions whose selected contract took the payload (`conns`), and the\x0A; ones that did not (`dropped`, with the check\'s code and nothing else), which\x0A; the Runtime records as a diagnostic (RUNTIME l.1226-1227). The reply names\x0A; the sessions each delivery was admitted to (`admitted`); the host\'s loop\x0A; writes those Events.\x0Alcn.carrier_rc_deliver = {\x0A  kind: \"rc_deliver\",\x0A  id: uint64,\x0A  event: tstr .size (1..128),\x0A  conns: [* uint64],\x0A  dropped: [* lcn.carrier_dropped],\x0A}\x0A\x0Alcn.carrier_dropped = {\x0A  conn: uint64,\x0A  code: uint8,\x0A}\x0A\x0A; One subscriber session of the host\'s endpoint and its selected contract.\x0Alcn.carrier_target = {\x0A  conn: uint64,\x0A  contract: bstr .size 32,\x0A}\x0A\x0A; [SPEC INTERFACE \xC2\xA72.9.1] A prepared Runtime Control call, numbered `call` by\x0A; the host.\x0Alcn.carrier_rc_prepare = {\x0A  kind: \"rc_prepare\",\x0A  id: uint64,\x0A  call: uint64,\x0A  method: bstr,\x0A  params: bstr,\x0A  ? timeout_ms: uint64, ; the options the host checked as the Runtime does\x0A}\x0A\x0Alcn.carrier_rc_async_submit = {\x0A  kind: \"rc_async_submit\",\x0A  call: uint64,\x0A}\x0A\x0Alcn.carrier_rc_async_cancel = {\x0A  kind: \"rc_async_cancel\",\x0A  call: uint64,\x0A}\x0A\x0Alcn.carrier_rc_async_release = {\x0A  kind: \"rc_async_release\",\x0A  id: uint64,\x0A  call: uint64,\x0A}\x0A\x0A; Lane 1, the Runtime -> the host --------------------------------------------------\x0A\x0A; The outcome of the request `id` names: `failure`, or a success with the\x0A; response bytes (`value`), a subscription id (`sub`), an `rc_publish`\'s\x0A; `targets` or an `rc_deliver`\'s `admitted` sessions.\x0Alcn.carrier_rc_reply = {\x0A  kind: \"rc_reply\",\x0A  id: uint64,\x0A  ? value: bstr,\x0A  ? sub: uint64,\x0A  ? targets: [* lcn.carrier_target],\x0A  ? admitted: [* uint64],\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_rc_delivery = {\x0A  kind: \"rc_event\",\x0A  local: uint64,\x0A  seq: uint64,\x0A  name: tstr .size (1..128),\x0A  data: bstr,\x0A}\x0A\x0Alcn.carrier_async_done = {\x0A  kind: \"async_done\",\x0A  call: uint64,\x0A  ? value: bstr,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0A; Lane 2, the boundary (part 4b-3.2; G267, plan \xC2\xA72.7) ------------------------------\x0A;\x0A; A hosted provider\'s endpoint is served by the host\'s own I/O loop on the\x0A; listener the Runtime made (fd 4). Payloads stay in the host: it checks each\x0A; request, response and event payload with the module\'s own call surface, and\x0A; its loop writes every Response and Event. The Runtime decides: it judges\x0A; every Hello, admits every call (`admit_verdict`), subscription and\x0A; delivery, keeps the sessions and writes the call records from what the host\x0A; reports (`call_ended`), and orders the loop\'s session ends, exactly as for\x0A; an endpoint it serves itself (G257). A `conn` is the host\'s own number for\x0A; one accepted connection; a `call` is the Runtime\'s number for one admitted\x0A; call.\x0A\x0A; The host -> the Runtime: the loop\'s events ------------------------------------------\x0A\x0Alcn.carrier_io_listening = {\x0A  kind: \"io_listening\",\x0A}\x0A\x0Alcn.carrier_io_serve_failed = {\x0A  kind: \"io_serve_failed\",\x0A  why: tstr .size (0..512),\x0A}\x0A\x0A; The first frame of a connection, for the Runtime\'s `acceptHello`.\x0Alcn.carrier_io_hello = {\x0A  kind: \"io_hello\",\x0A  conn: uint64,\x0A  frame: bstr,\x0A}\x0A\x0Alcn.carrier_io_established = {\x0A  kind: \"io_established\",\x0A  conn: uint64,\x0A}\x0A\x0A; A Request the loop resolved under the session\'s contract and access; its\x0A; params stay in the host.\x0Alcn.carrier_io_dispatch = {\x0A  kind: \"io_dispatch\",\x0A  conn: uint64,\x0A  request: uint64,\x0A  method: tstr,\x0A  introspection: bool,\x0A}\x0A\x0Alcn.carrier_io_stop = {\x0A  kind: \"io_stop\",\x0A  conn: uint64,\x0A  request: uint64,\x0A}\x0A\x0Alcn.carrier_io_closed = {\x0A  kind: \"io_closed\",\x0A  conn: uint64,\x0A}\x0A\x0Alcn.carrier_io_subscribe = {\x0A  kind: \"io_subscribe\",\x0A  conn: uint64,\x0A  sub: uint64,\x0A  event: tstr,\x0A}\x0A\x0Alcn.carrier_io_unsubscribe = {\x0A  kind: \"io_unsubscribe\",\x0A  conn: uint64,\x0A  sub: uint64,\x0A}\x0A\x0Alcn.carrier_io_publish_failed = {\x0A  kind: \"io_publish_failed\",\x0A  conn: uint64,\x0A  event: tstr,\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; `error`: the transport\'s `PublishErrorKind`, by its position.\x0Alcn.carrier_publish_failure = {\x0A  error: uint8,\x0A  code: uint8,\x0A  message: tstr .size (0..512),\x0A}\x0A\x0Alcn.carrier_io_publish_result = {\x0A  kind: \"io_publish_result\",\x0A  conn: uint64,\x0A  tag: uint64,\x0A  request: uint64,\x0A  ? failure: lcn.carrier_publish_failure,\x0A}\x0A\x0Alcn.carrier_io_local_failure = {\x0A  kind: \"io_local_failure\",\x0A  conn: uint64,\x0A  code: uint8,\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; [SPEC RUNTIME \xC2\xA74.1; CA l.1172-1177; plan \xC2\xA72.7 step 5] Call `call` has ended\x0A; in the host: whether the Response its loop committed was a success, and the\x0A; request and response commitments the admission asked to retain\x0A; (`admit_verdict`), as the host\'s boundary computed them (G274).\x0Alcn.carrier_call_ended = {\x0A  kind: \"call_ended\",\x0A  call: uint64,\x0A  succeeded: bool,\x0A  ? request: lcn.carrier_commitment,\x0A  ? response: lcn.carrier_commitment,\x0A}\x0A\x0Alcn.carrier_commitment = {\x0A  subtree_root: bstr .size 32,\x0A  value_root: bstr .size 32,\x0A}\x0A\x0A; [SPEC INTERFACE \xC2\xA72.9.3 l.2187-2199; RUNTIME \xC2\xA77.3.1] A running call\'s\x0A; invocation-scoped publication of `event`, in three steps that each wait for\x0A; a `scoped_result`: its destination (`ready`) before the host checks the\x0A; payload, then the delivery\'s admission (`tag`), then, once the host\'s loop\x0A; took the Event, its verdict. No step carries the payload.\x0Alcn.carrier_scoped_check = {\x0A  kind: \"scoped_check\",\x0A  id: uint64,\x0A  call: uint64,\x0A  event: bstr, ; the module\'s bytes, checked as given\x0A}\x0A\x0Alcn.carrier_scoped_admit = {\x0A  kind: \"scoped_admit\",\x0A  id: uint64,\x0A  call: uint64,\x0A  event: tstr .size (1..128),\x0A}\x0A\x0A; `abandon`: the loop did not take the Event (it is stopping).\x0Alcn.carrier_scoped_done = {\x0A  kind: \"scoped_done\",\x0A  id: uint64,\x0A  call: uint64,\x0A  tag: uint64,\x0A  abandon: bool,\x0A}\x0A\x0A; The Runtime -> the host: the loop\'s orders ------------------------------------------\x0A\x0A; [SPEC TRANSPORT \xC2\xA73.1, \xC2\xA78.1] The Hello passed and its ticket was redeemed:\x0A; the session\'s selected contract and route access (declaration subtree\x0A; roots; absent: the whole list), and when its authorization ends, in\x0A; nanoseconds from now (TRN-0317): the host\'s loop ends it then as a\x0A; backstop to the Runtime\'s own end. Nothing else of the route reaches the\x0A; host.\x0Alcn.carrier_io_admit_established = {\x0A  kind: \"io_admit_established\",\x0A  conn: uint64,\x0A  response: bstr,\x0A  contract: bstr .size 32,\x0A  ? methods: [* bstr .size 32],\x0A  ? publish_events: [* bstr .size 32],\x0A  ? subscribe_events: [* bstr .size 32],\x0A  ? ends_in: uint64,\x0A}\x0A\x0Alcn.carrier_io_admit_failed = {\x0A  kind: \"io_admit_failed\",\x0A  conn: uint64,\x0A  code: uint8,\x0A  peer: bool,\x0A}\x0A\x0Alcn.carrier_io_admit_unavailable = {\x0A  kind: \"io_admit_unavailable\",\x0A  conn: uint64,\x0A}\x0A\x0A; A Request\'s terminal failure the Runtime answers (an end, a revocation, a\x0A; refused queue): the host commits it unless its loop already committed a\x0A; Response to that Request (K38 interim).\x0Alcn.carrier_io_respond = {\x0A  kind: \"io_respond\",\x0A  conn: uint64,\x0A  request: uint64,\x0A  failure: lcn.carrier_failure,\x0A  work_ended: bool,\x0A}\x0A\x0Alcn.carrier_io_close = {\x0A  kind: \"io_close\",\x0A  conn: uint64,\x0A}\x0A\x0Alcn.carrier_io_terminate = {\x0A  kind: \"io_terminate\",\x0A  conn: uint64,\x0A}\x0A\x0Alcn.carrier_io_work_ended = {\x0A  kind: \"io_work_ended\",\x0A  conn: uint64,\x0A  request: uint64,\x0A}\x0A\x0Alcn.carrier_io_subscription_result = {\x0A  kind: \"io_subscription_result\",\x0A  conn: uint64,\x0A  sub: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_io_stop_serving = {\x0A  kind: \"io_stop_serving\",\x0A}\x0A\x0A; [SPEC RUNTIME \xC2\xA74.1, \xC2\xA76.4, \xC2\xA77.5; plan \xC2\xA72.7 steps 2-4] The Runtime\'s decision on\x0A; the dispatched Request `request` of `conn`, under the session\'s selected\x0A; `contract`:\x0A; - `failure`: refused. The host commits it, or INVALID_PARAMS when it is\x0A;   NOT_READY and the params do not validate (G171).\x0A; - otherwise admitted as `call`: the host validates the params, runs the\x0A;   provider with an invocation context whose caller is `consumer` (or\x0A;   answers `logos.schema` itself) and ends with `call_ended`, which carries\x0A;   a commitment only where `retain_request` or `retain_response` asks.\x0Alcn.carrier_admit_verdict = {\x0A  kind: \"admit_verdict\",\x0A  conn: uint64,\x0A  request: uint64,\x0A  contract: bstr .size 32,\x0A  ? failure: lcn.carrier_failure,\x0A  ? call: uint64,\x0A  ? consumer: tstr .size (1..256),\x0A  retain_request: bool,\x0A  retain_response: bool,\x0A}\x0A\x0A; [SPEC INTERFACE l.2101] Call `call` was cancelled: `is_cancelled` reads true.\x0Alcn.carrier_call_cancel = {\x0A  kind: \"call_cancel\",\x0A  call: uint64,\x0A}\x0A\x0A; The answer to a scoped step: `failure` stops the publication; `ready` (the\x0A; destination is open) answers `scoped_check`; `tag` (the delivery was\x0A; admitted; none: the subscriber\'s own decisions skipped it) answers\x0A; `scoped_admit`.\x0Alcn.carrier_scoped_result = {\x0A  kind: \"scoped_result\",\x0A  id: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A  ? ready: bool,\x0A  ? tag: uint64,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -26,6 +26,17 @@ template carrierSchema*(): GeneratedSchema =
   generatedSchema()
 
 type
+  LcnCarrierAdmitVerdict* = object
+    call*: Opt[uint64]
+    conn*: uint64
+    consumer*: Opt[string]
+    contract*: seq[byte]
+    failure*: Opt[LcnCarrierFailure]
+    kind*: string = "admit_verdict"
+    request*: uint64
+    retain_request*: bool
+    retain_response*: bool
+
   LcnCarrierApplied* = object
     failure*: Opt[LcnCarrierFailure]
     id*: uint64
@@ -42,6 +53,25 @@ type
     kind*: string = "async_done"
     value*: Opt[seq[byte]]
 
+  LcnCarrierCallCancel* = object
+    call*: uint64
+    kind*: string = "call_cancel"
+
+  LcnCarrierCallEnded* = object
+    call*: uint64
+    kind*: string = "call_ended"
+    request*: Opt[LcnCarrierCommitment]
+    response*: Opt[LcnCarrierCommitment]
+    succeeded*: bool
+
+  LcnCarrierCommitment* = object
+    subtree_root*: seq[byte]
+    value_root*: seq[byte]
+
+  LcnCarrierDropped* = object
+    code*: uint8
+    conn*: uint64
+
   LcnCarrierFailure* = object
     code*: uint8
     detail*: Opt[seq[byte]]
@@ -55,12 +85,15 @@ type
   LcnCarrierInit* = object
     artifact_path*: string
     configuration*: Opt[seq[byte]]
+    endpoint*: Opt[string]
     id*: uint64
     kind*: string = "init"
     live*: bool
     max_payload_depth*: uint64
     module*: string
+    runtime_id*: Opt[string]
     state_dir*: Opt[string]
+    transport*: Opt[seq[uint64]]
 
   LcnCarrierInitFailedCodeChoiceKind* {.pure.} = enum
     Abi_invalid
@@ -100,19 +133,155 @@ type
     id*: uint64
     kind*: string = "initialized"
 
+  LcnCarrierIoAdmitEstablished* = object
+    conn*: uint64
+    contract*: seq[byte]
+    ends_in*: Opt[uint64]
+    kind*: string = "io_admit_established"
+    methods*: Opt[seq[seq[byte]]]
+    publish_events*: Opt[seq[seq[byte]]]
+    response*: seq[byte]
+    subscribe_events*: Opt[seq[seq[byte]]]
+
+  LcnCarrierIoAdmitFailed* = object
+    code*: uint8
+    conn*: uint64
+    kind*: string = "io_admit_failed"
+    peer*: bool
+
+  LcnCarrierIoAdmitUnavailable* = object
+    conn*: uint64
+    kind*: string = "io_admit_unavailable"
+
+  LcnCarrierIoClose* = object
+    conn*: uint64
+    kind*: string = "io_close"
+
+  LcnCarrierIoClosed* = object
+    conn*: uint64
+    kind*: string = "io_closed"
+
+  LcnCarrierIoDispatch* = object
+    conn*: uint64
+    introspection*: bool
+    kind*: string = "io_dispatch"
+    `method`*: string
+    request*: uint64
+
+  LcnCarrierIoEstablished* = object
+    conn*: uint64
+    kind*: string = "io_established"
+
+  LcnCarrierIoHello* = object
+    conn*: uint64
+    frame*: seq[byte]
+    kind*: string = "io_hello"
+
+  LcnCarrierIoListening* = object
+    kind*: string = "io_listening"
+
+  LcnCarrierIoLocalFailure* = object
+    code*: uint8
+    conn*: uint64
+    kind*: string = "io_local_failure"
+    message*: string
+
+  LcnCarrierIoPublishFailed* = object
+    conn*: uint64
+    event*: string
+    kind*: string = "io_publish_failed"
+    message*: string
+
+  LcnCarrierIoPublishResult* = object
+    conn*: uint64
+    failure*: Opt[LcnCarrierPublishFailure]
+    kind*: string = "io_publish_result"
+    request*: uint64
+    tag*: uint64
+
+  LcnCarrierIoRespond* = object
+    conn*: uint64
+    failure*: LcnCarrierFailure
+    kind*: string = "io_respond"
+    request*: uint64
+    work_ended*: bool
+
+  LcnCarrierIoServeFailed* = object
+    kind*: string = "io_serve_failed"
+    why*: string
+
+  LcnCarrierIoStop* = object
+    conn*: uint64
+    kind*: string = "io_stop"
+    request*: uint64
+
+  LcnCarrierIoStopServing* = object
+    kind*: string = "io_stop_serving"
+
+  LcnCarrierIoSubscribe* = object
+    conn*: uint64
+    event*: string
+    kind*: string = "io_subscribe"
+    sub*: uint64
+
+  LcnCarrierIoSubscriptionResult* = object
+    conn*: uint64
+    failure*: Opt[LcnCarrierFailure]
+    kind*: string = "io_subscription_result"
+    sub*: uint64
+
+  LcnCarrierIoTerminate* = object
+    conn*: uint64
+    kind*: string = "io_terminate"
+
+  LcnCarrierIoUnsubscribe* = object
+    conn*: uint64
+    kind*: string = "io_unsubscribe"
+    sub*: uint64
+
+  LcnCarrierIoWorkEnded* = object
+    conn*: uint64
+    kind*: string = "io_work_ended"
+    request*: uint64
+
   LcnCarrierMessageKind* {.pure.} = enum
+    lcn_Carrier_admit_verdict
     lcn_Carrier_applied
     lcn_Carrier_apply
     lcn_Carrier_async_done
+    lcn_Carrier_call_cancel
+    lcn_Carrier_call_ended
     lcn_Carrier_fatal
     lcn_Carrier_init
     lcn_Carrier_init_failed
     lcn_Carrier_initialized
+    lcn_Carrier_io_admit_established
+    lcn_Carrier_io_admit_failed
+    lcn_Carrier_io_admit_unavailable
+    lcn_Carrier_io_close
+    lcn_Carrier_io_closed
+    lcn_Carrier_io_dispatch
+    lcn_Carrier_io_established
+    lcn_Carrier_io_hello
+    lcn_Carrier_io_listening
+    lcn_Carrier_io_local_failure
+    lcn_Carrier_io_publish_failed
+    lcn_Carrier_io_publish_result
+    lcn_Carrier_io_respond
+    lcn_Carrier_io_serve_failed
+    lcn_Carrier_io_stop
+    lcn_Carrier_io_stop_serving
+    lcn_Carrier_io_subscribe
+    lcn_Carrier_io_subscription_result
+    lcn_Carrier_io_terminate
+    lcn_Carrier_io_unsubscribe
+    lcn_Carrier_io_work_ended
     lcn_Carrier_rc_async_cancel
     lcn_Carrier_rc_async_release
     lcn_Carrier_rc_async_submit
     lcn_Carrier_rc_call
     lcn_Carrier_rc_connect_remote
+    lcn_Carrier_rc_deliver
     lcn_Carrier_rc_delivered
     lcn_Carrier_rc_delivery
     lcn_Carrier_rc_prepare
@@ -122,15 +291,25 @@ type
     lcn_Carrier_rc_unsubscribe
     lcn_Carrier_release
     lcn_Carrier_released
+    lcn_Carrier_scoped_admit
+    lcn_Carrier_scoped_check
+    lcn_Carrier_scoped_done
+    lcn_Carrier_scoped_result
 
   LcnCarrierMessage* = object
     case kind*: LcnCarrierMessageKind
+    of LcnCarrierMessageKind.lcn_Carrier_admit_verdict:
+      arm_lcn_Carrier_admit_verdict*: LcnCarrierAdmitVerdict
     of LcnCarrierMessageKind.lcn_Carrier_applied:
       arm_lcn_Carrier_applied*: LcnCarrierApplied
     of LcnCarrierMessageKind.lcn_Carrier_apply:
       arm_lcn_Carrier_apply*: LcnCarrierApply
     of LcnCarrierMessageKind.lcn_Carrier_async_done:
       arm_lcn_Carrier_async_done*: LcnCarrierAsyncDone
+    of LcnCarrierMessageKind.lcn_Carrier_call_cancel:
+      arm_lcn_Carrier_call_cancel*: LcnCarrierCallCancel
+    of LcnCarrierMessageKind.lcn_Carrier_call_ended:
+      arm_lcn_Carrier_call_ended*: LcnCarrierCallEnded
     of LcnCarrierMessageKind.lcn_Carrier_fatal:
       arm_lcn_Carrier_fatal*: LcnCarrierFatal
     of LcnCarrierMessageKind.lcn_Carrier_init:
@@ -139,6 +318,48 @@ type
       arm_lcn_Carrier_init_failed*: LcnCarrierInitFailed
     of LcnCarrierMessageKind.lcn_Carrier_initialized:
       arm_lcn_Carrier_initialized*: LcnCarrierInitialized
+    of LcnCarrierMessageKind.lcn_Carrier_io_admit_established:
+      arm_lcn_Carrier_io_admit_established*: LcnCarrierIoAdmitEstablished
+    of LcnCarrierMessageKind.lcn_Carrier_io_admit_failed:
+      arm_lcn_Carrier_io_admit_failed*: LcnCarrierIoAdmitFailed
+    of LcnCarrierMessageKind.lcn_Carrier_io_admit_unavailable:
+      arm_lcn_Carrier_io_admit_unavailable*: LcnCarrierIoAdmitUnavailable
+    of LcnCarrierMessageKind.lcn_Carrier_io_close:
+      arm_lcn_Carrier_io_close*: LcnCarrierIoClose
+    of LcnCarrierMessageKind.lcn_Carrier_io_closed:
+      arm_lcn_Carrier_io_closed*: LcnCarrierIoClosed
+    of LcnCarrierMessageKind.lcn_Carrier_io_dispatch:
+      arm_lcn_Carrier_io_dispatch*: LcnCarrierIoDispatch
+    of LcnCarrierMessageKind.lcn_Carrier_io_established:
+      arm_lcn_Carrier_io_established*: LcnCarrierIoEstablished
+    of LcnCarrierMessageKind.lcn_Carrier_io_hello:
+      arm_lcn_Carrier_io_hello*: LcnCarrierIoHello
+    of LcnCarrierMessageKind.lcn_Carrier_io_listening:
+      arm_lcn_Carrier_io_listening*: LcnCarrierIoListening
+    of LcnCarrierMessageKind.lcn_Carrier_io_local_failure:
+      arm_lcn_Carrier_io_local_failure*: LcnCarrierIoLocalFailure
+    of LcnCarrierMessageKind.lcn_Carrier_io_publish_failed:
+      arm_lcn_Carrier_io_publish_failed*: LcnCarrierIoPublishFailed
+    of LcnCarrierMessageKind.lcn_Carrier_io_publish_result:
+      arm_lcn_Carrier_io_publish_result*: LcnCarrierIoPublishResult
+    of LcnCarrierMessageKind.lcn_Carrier_io_respond:
+      arm_lcn_Carrier_io_respond*: LcnCarrierIoRespond
+    of LcnCarrierMessageKind.lcn_Carrier_io_serve_failed:
+      arm_lcn_Carrier_io_serve_failed*: LcnCarrierIoServeFailed
+    of LcnCarrierMessageKind.lcn_Carrier_io_stop:
+      arm_lcn_Carrier_io_stop*: LcnCarrierIoStop
+    of LcnCarrierMessageKind.lcn_Carrier_io_stop_serving:
+      arm_lcn_Carrier_io_stop_serving*: LcnCarrierIoStopServing
+    of LcnCarrierMessageKind.lcn_Carrier_io_subscribe:
+      arm_lcn_Carrier_io_subscribe*: LcnCarrierIoSubscribe
+    of LcnCarrierMessageKind.lcn_Carrier_io_subscription_result:
+      arm_lcn_Carrier_io_subscription_result*: LcnCarrierIoSubscriptionResult
+    of LcnCarrierMessageKind.lcn_Carrier_io_terminate:
+      arm_lcn_Carrier_io_terminate*: LcnCarrierIoTerminate
+    of LcnCarrierMessageKind.lcn_Carrier_io_unsubscribe:
+      arm_lcn_Carrier_io_unsubscribe*: LcnCarrierIoUnsubscribe
+    of LcnCarrierMessageKind.lcn_Carrier_io_work_ended:
+      arm_lcn_Carrier_io_work_ended*: LcnCarrierIoWorkEnded
     of LcnCarrierMessageKind.lcn_Carrier_rc_async_cancel:
       arm_lcn_Carrier_rc_async_cancel*: LcnCarrierRcAsyncCancel
     of LcnCarrierMessageKind.lcn_Carrier_rc_async_release:
@@ -149,6 +370,8 @@ type
       arm_lcn_Carrier_rc_call*: LcnCarrierRcCall
     of LcnCarrierMessageKind.lcn_Carrier_rc_connect_remote:
       arm_lcn_Carrier_rc_connect_remote*: LcnCarrierRcConnectRemote
+    of LcnCarrierMessageKind.lcn_Carrier_rc_deliver:
+      arm_lcn_Carrier_rc_deliver*: LcnCarrierRcDeliver
     of LcnCarrierMessageKind.lcn_Carrier_rc_delivered:
       arm_lcn_Carrier_rc_delivered*: LcnCarrierRcDelivered
     of LcnCarrierMessageKind.lcn_Carrier_rc_delivery:
@@ -167,6 +390,19 @@ type
       arm_lcn_Carrier_release*: LcnCarrierRelease
     of LcnCarrierMessageKind.lcn_Carrier_released:
       arm_lcn_Carrier_released*: LcnCarrierReleased
+    of LcnCarrierMessageKind.lcn_Carrier_scoped_admit:
+      arm_lcn_Carrier_scoped_admit*: LcnCarrierScopedAdmit
+    of LcnCarrierMessageKind.lcn_Carrier_scoped_check:
+      arm_lcn_Carrier_scoped_check*: LcnCarrierScopedCheck
+    of LcnCarrierMessageKind.lcn_Carrier_scoped_done:
+      arm_lcn_Carrier_scoped_done*: LcnCarrierScopedDone
+    of LcnCarrierMessageKind.lcn_Carrier_scoped_result:
+      arm_lcn_Carrier_scoped_result*: LcnCarrierScopedResult
+
+  LcnCarrierPublishFailure* = object
+    code*: uint8
+    error*: uint8
+    message*: string
 
   LcnCarrierRcAsyncCancel* = object
     call*: uint64
@@ -194,6 +430,13 @@ type
     id*: uint64
     kind*: string = "rc_connect_remote"
 
+  LcnCarrierRcDeliver* = object
+    conns*: seq[uint64]
+    dropped*: seq[LcnCarrierDropped]
+    event*: string
+    id*: uint64
+    kind*: string = "rc_deliver"
+
   LcnCarrierRcDelivered* = object
     kind*: string = "rc_delivered"
     local*: uint64
@@ -215,16 +458,17 @@ type
     timeout_ms*: Opt[uint64]
 
   LcnCarrierRcPublish* = object
-    data*: seq[byte]
     event*: seq[byte]
     id*: uint64
     kind*: string = "rc_publish"
 
   LcnCarrierRcReply* = object
+    admitted*: Opt[seq[uint64]]
     failure*: Opt[LcnCarrierFailure]
     id*: uint64
     kind*: string = "rc_reply"
     sub*: Opt[uint64]
+    targets*: Opt[seq[LcnCarrierTarget]]
     value*: Opt[seq[byte]]
 
   LcnCarrierRcSubscribe* = object
@@ -247,6 +491,40 @@ type
     id*: uint64
     kind*: string = "released"
 
+  LcnCarrierScopedAdmit* = object
+    call*: uint64
+    event*: string
+    id*: uint64
+    kind*: string = "scoped_admit"
+
+  LcnCarrierScopedCheck* = object
+    call*: uint64
+    event*: seq[byte]
+    id*: uint64
+    kind*: string = "scoped_check"
+
+  LcnCarrierScopedDone* = object
+    abandon*: bool
+    call*: uint64
+    id*: uint64
+    kind*: string = "scoped_done"
+    tag*: uint64
+
+  LcnCarrierScopedResult* = object
+    failure*: Opt[LcnCarrierFailure]
+    id*: uint64
+    kind*: string = "scoped_result"
+    ready*: Opt[bool]
+    tag*: Opt[uint64]
+
+  LcnCarrierTarget* = object
+    conn*: uint64
+    contract*: seq[byte]
+
+proc toCbor*(x: LcnCarrierAdmitVerdict): CborValue
+proc fromChecked*(T: type LcnCarrierAdmitVerdict, v: CborValue): LcnCarrierAdmitVerdict
+proc stepEncLcnCarrierAdmitVerdict*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierAdmitVerdict*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnCarrierApplied): CborValue
 proc fromChecked*(T: type LcnCarrierApplied, v: CborValue): LcnCarrierApplied
 proc stepEncLcnCarrierApplied*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -259,6 +537,22 @@ proc toCbor*(x: LcnCarrierAsyncDone): CborValue
 proc fromChecked*(T: type LcnCarrierAsyncDone, v: CborValue): LcnCarrierAsyncDone
 proc stepEncLcnCarrierAsyncDone*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCarrierAsyncDone*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierCallCancel): CborValue
+proc fromChecked*(T: type LcnCarrierCallCancel, v: CborValue): LcnCarrierCallCancel
+proc stepEncLcnCarrierCallCancel*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierCallCancel*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierCallEnded): CborValue
+proc fromChecked*(T: type LcnCarrierCallEnded, v: CborValue): LcnCarrierCallEnded
+proc stepEncLcnCarrierCallEnded*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierCallEnded*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierCommitment): CborValue
+proc fromChecked*(T: type LcnCarrierCommitment, v: CborValue): LcnCarrierCommitment
+proc stepEncLcnCarrierCommitment*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierCommitment*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierDropped): CborValue
+proc fromChecked*(T: type LcnCarrierDropped, v: CborValue): LcnCarrierDropped
+proc stepEncLcnCarrierDropped*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierDropped*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnCarrierFailure): CborValue
 proc fromChecked*(T: type LcnCarrierFailure, v: CborValue): LcnCarrierFailure
 proc stepEncLcnCarrierFailure*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -287,10 +581,98 @@ proc toCbor*(x: LcnCarrierInitialized): CborValue
 proc fromChecked*(T: type LcnCarrierInitialized, v: CborValue): LcnCarrierInitialized
 proc stepEncLcnCarrierInitialized*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCarrierInitialized*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoAdmitEstablished): CborValue
+proc fromChecked*(T: type LcnCarrierIoAdmitEstablished, v: CborValue): LcnCarrierIoAdmitEstablished
+proc stepEncLcnCarrierIoAdmitEstablished*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoAdmitEstablished*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoAdmitFailed): CborValue
+proc fromChecked*(T: type LcnCarrierIoAdmitFailed, v: CborValue): LcnCarrierIoAdmitFailed
+proc stepEncLcnCarrierIoAdmitFailed*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoAdmitFailed*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoAdmitUnavailable): CborValue
+proc fromChecked*(T: type LcnCarrierIoAdmitUnavailable, v: CborValue): LcnCarrierIoAdmitUnavailable
+proc stepEncLcnCarrierIoAdmitUnavailable*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoAdmitUnavailable*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoClose): CborValue
+proc fromChecked*(T: type LcnCarrierIoClose, v: CborValue): LcnCarrierIoClose
+proc stepEncLcnCarrierIoClose*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoClose*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoClosed): CborValue
+proc fromChecked*(T: type LcnCarrierIoClosed, v: CborValue): LcnCarrierIoClosed
+proc stepEncLcnCarrierIoClosed*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoClosed*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoDispatch): CborValue
+proc fromChecked*(T: type LcnCarrierIoDispatch, v: CborValue): LcnCarrierIoDispatch
+proc stepEncLcnCarrierIoDispatch*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoDispatch*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoEstablished): CborValue
+proc fromChecked*(T: type LcnCarrierIoEstablished, v: CborValue): LcnCarrierIoEstablished
+proc stepEncLcnCarrierIoEstablished*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoEstablished*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoHello): CborValue
+proc fromChecked*(T: type LcnCarrierIoHello, v: CborValue): LcnCarrierIoHello
+proc stepEncLcnCarrierIoHello*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoHello*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoListening): CborValue
+proc fromChecked*(T: type LcnCarrierIoListening, v: CborValue): LcnCarrierIoListening
+proc stepEncLcnCarrierIoListening*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoListening*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoLocalFailure): CborValue
+proc fromChecked*(T: type LcnCarrierIoLocalFailure, v: CborValue): LcnCarrierIoLocalFailure
+proc stepEncLcnCarrierIoLocalFailure*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoLocalFailure*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoPublishFailed): CborValue
+proc fromChecked*(T: type LcnCarrierIoPublishFailed, v: CborValue): LcnCarrierIoPublishFailed
+proc stepEncLcnCarrierIoPublishFailed*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoPublishFailed*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoPublishResult): CborValue
+proc fromChecked*(T: type LcnCarrierIoPublishResult, v: CborValue): LcnCarrierIoPublishResult
+proc stepEncLcnCarrierIoPublishResult*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoPublishResult*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoRespond): CborValue
+proc fromChecked*(T: type LcnCarrierIoRespond, v: CborValue): LcnCarrierIoRespond
+proc stepEncLcnCarrierIoRespond*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoRespond*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoServeFailed): CborValue
+proc fromChecked*(T: type LcnCarrierIoServeFailed, v: CborValue): LcnCarrierIoServeFailed
+proc stepEncLcnCarrierIoServeFailed*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoServeFailed*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoStop): CborValue
+proc fromChecked*(T: type LcnCarrierIoStop, v: CborValue): LcnCarrierIoStop
+proc stepEncLcnCarrierIoStop*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoStop*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoStopServing): CborValue
+proc fromChecked*(T: type LcnCarrierIoStopServing, v: CborValue): LcnCarrierIoStopServing
+proc stepEncLcnCarrierIoStopServing*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoStopServing*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoSubscribe): CborValue
+proc fromChecked*(T: type LcnCarrierIoSubscribe, v: CborValue): LcnCarrierIoSubscribe
+proc stepEncLcnCarrierIoSubscribe*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoSubscribe*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoSubscriptionResult): CborValue
+proc fromChecked*(T: type LcnCarrierIoSubscriptionResult, v: CborValue): LcnCarrierIoSubscriptionResult
+proc stepEncLcnCarrierIoSubscriptionResult*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoSubscriptionResult*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoTerminate): CborValue
+proc fromChecked*(T: type LcnCarrierIoTerminate, v: CborValue): LcnCarrierIoTerminate
+proc stepEncLcnCarrierIoTerminate*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoTerminate*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoUnsubscribe): CborValue
+proc fromChecked*(T: type LcnCarrierIoUnsubscribe, v: CborValue): LcnCarrierIoUnsubscribe
+proc stepEncLcnCarrierIoUnsubscribe*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoUnsubscribe*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierIoWorkEnded): CborValue
+proc fromChecked*(T: type LcnCarrierIoWorkEnded, v: CborValue): LcnCarrierIoWorkEnded
+proc stepEncLcnCarrierIoWorkEnded*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierIoWorkEnded*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnCarrierMessage): CborValue
 proc fromChecked*(T: type LcnCarrierMessage, v: CborValue): LcnCarrierMessage
 proc stepEncLcnCarrierMessage*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCarrierMessage*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierPublishFailure): CborValue
+proc fromChecked*(T: type LcnCarrierPublishFailure, v: CborValue): LcnCarrierPublishFailure
+proc stepEncLcnCarrierPublishFailure*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierPublishFailure*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnCarrierRcAsyncCancel): CborValue
 proc fromChecked*(T: type LcnCarrierRcAsyncCancel, v: CborValue): LcnCarrierRcAsyncCancel
 proc stepEncLcnCarrierRcAsyncCancel*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -311,6 +693,10 @@ proc toCbor*(x: LcnCarrierRcConnectRemote): CborValue
 proc fromChecked*(T: type LcnCarrierRcConnectRemote, v: CborValue): LcnCarrierRcConnectRemote
 proc stepEncLcnCarrierRcConnectRemote*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCarrierRcConnectRemote*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierRcDeliver): CborValue
+proc fromChecked*(T: type LcnCarrierRcDeliver, v: CborValue): LcnCarrierRcDeliver
+proc stepEncLcnCarrierRcDeliver*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierRcDeliver*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnCarrierRcDelivered): CborValue
 proc fromChecked*(T: type LcnCarrierRcDelivered, v: CborValue): LcnCarrierRcDelivered
 proc stepEncLcnCarrierRcDelivered*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -347,6 +733,96 @@ proc toCbor*(x: LcnCarrierReleased): CborValue
 proc fromChecked*(T: type LcnCarrierReleased, v: CborValue): LcnCarrierReleased
 proc stepEncLcnCarrierReleased*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCarrierReleased*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierScopedAdmit): CborValue
+proc fromChecked*(T: type LcnCarrierScopedAdmit, v: CborValue): LcnCarrierScopedAdmit
+proc stepEncLcnCarrierScopedAdmit*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierScopedAdmit*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierScopedCheck): CborValue
+proc fromChecked*(T: type LcnCarrierScopedCheck, v: CborValue): LcnCarrierScopedCheck
+proc stepEncLcnCarrierScopedCheck*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierScopedCheck*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierScopedDone): CborValue
+proc fromChecked*(T: type LcnCarrierScopedDone, v: CborValue): LcnCarrierScopedDone
+proc stepEncLcnCarrierScopedDone*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierScopedDone*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierScopedResult): CborValue
+proc fromChecked*(T: type LcnCarrierScopedResult, v: CborValue): LcnCarrierScopedResult
+proc stepEncLcnCarrierScopedResult*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierScopedResult*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCarrierTarget): CborValue
+proc fromChecked*(T: type LcnCarrierTarget, v: CborValue): LcnCarrierTarget
+proc stepEncLcnCarrierTarget*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCarrierTarget*(w: var DecWork, v: CborValue, dst: pointer)
+
+proc stepEncLcnCarrierAdmitVerdict*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierAdmitVerdict](src)
+  var n = 6
+  if x.call.isSome:
+    inc n
+  if x.consumer.isSome:
+    inc n
+  if x.failure.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.call.isSome:
+    node.entries[k].key = cbor("call")
+    node.entries[k].value = cbor(uint64(x.call.get))
+    inc k
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  if x.consumer.isSome:
+    node.entries[k].key = cbor("consumer")
+    node.entries[k].value = cbor(x.consumer.get)
+    inc k
+  node.entries[k].key = cbor("contract")
+  node.entries[k].value = cbor(x.contract)
+  inc k
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    w.later(stepEncLcnCarrierFailure, addr x.failure.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("admit_verdict")
+  inc k
+  node.entries[k].key = cbor("request")
+  node.entries[k].value = cbor(uint64(x.request))
+  inc k
+  node.entries[k].key = cbor("retain_request")
+  node.entries[k].value = cbor(x.retain_request)
+  inc k
+  node.entries[k].key = cbor("retain_response")
+  node.entries[k].value = cbor(x.retain_response)
+  inc k
+
+proc stepDecLcnCarrierAdmitVerdict*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierAdmitVerdict](dst)
+  r[] = LcnCarrierAdmitVerdict()
+  let f1 = v.lookup("call")
+  if f1.isSome:
+    r.call = Opt.some(uint64(f1.get.uint))
+  r.conn = uint64(v.lookup("conn").get.uint)
+  let f2 = v.lookup("consumer")
+  if f2.isSome:
+    r.consumer = Opt.some(f2.get.text)
+  r.contract = v.lookup("contract").get.bytes
+  let f3 = v.lookup("failure")
+  if f3.isSome:
+    r.failure = Opt.some(default(LcnCarrierFailure))
+    w.later(stepDecLcnCarrierFailure, f3.get, addr r.failure.get)
+  r.request = uint64(v.lookup("request").get.uint)
+  r.retain_request = asBool(v.lookup("retain_request").get)
+  r.retain_response = asBool(v.lookup("retain_response").get)
+
+proc toCbor*(x: LcnCarrierAdmitVerdict): CborValue =
+  runEnc(stepEncLcnCarrierAdmitVerdict, addr x)
+
+proc fromChecked*(T: type LcnCarrierAdmitVerdict, v: CborValue): LcnCarrierAdmitVerdict =
+  var r: LcnCarrierAdmitVerdict
+  runDec(stepDecLcnCarrierAdmitVerdict, v, addr r)
+  r
 
 proc stepEncLcnCarrierApplied*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnCarrierApplied](src)
@@ -370,10 +846,10 @@ proc stepEncLcnCarrierApplied*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCarrierApplied*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierApplied](dst)
   r[] = LcnCarrierApplied()
-  let f1 = v.lookup("failure")
-  if f1.isSome:
+  let f4 = v.lookup("failure")
+  if f4.isSome:
     r.failure = Opt.some(default(LcnCarrierFailure))
-    w.later(stepDecLcnCarrierFailure, f1.get, addr r.failure.get)
+    w.later(stepDecLcnCarrierFailure, f4.get, addr r.failure.get)
   r.id = uint64(v.lookup("id").get.uint)
 
 proc toCbor*(x: LcnCarrierApplied): CborValue =
@@ -442,13 +918,13 @@ proc stepDecLcnCarrierAsyncDone*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierAsyncDone](dst)
   r[] = LcnCarrierAsyncDone()
   r.call = uint64(v.lookup("call").get.uint)
-  let f2 = v.lookup("failure")
-  if f2.isSome:
+  let f5 = v.lookup("failure")
+  if f5.isSome:
     r.failure = Opt.some(default(LcnCarrierFailure))
-    w.later(stepDecLcnCarrierFailure, f2.get, addr r.failure.get)
-  let f3 = v.lookup("value")
-  if f3.isSome:
-    r.value = Opt.some(f3.get.bytes)
+    w.later(stepDecLcnCarrierFailure, f5.get, addr r.failure.get)
+  let f6 = v.lookup("value")
+  if f6.isSome:
+    r.value = Opt.some(f6.get.bytes)
 
 proc toCbor*(x: LcnCarrierAsyncDone): CborValue =
   runEnc(stepEncLcnCarrierAsyncDone, addr x)
@@ -456,6 +932,133 @@ proc toCbor*(x: LcnCarrierAsyncDone): CborValue =
 proc fromChecked*(T: type LcnCarrierAsyncDone, v: CborValue): LcnCarrierAsyncDone =
   var r: LcnCarrierAsyncDone
   runDec(stepDecLcnCarrierAsyncDone, v, addr r)
+  r
+
+proc stepEncLcnCarrierCallCancel*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierCallCancel](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("call")
+  node.entries[k].value = cbor(uint64(x.call))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("call_cancel")
+  inc k
+
+proc stepDecLcnCarrierCallCancel*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierCallCancel](dst)
+  r[] = LcnCarrierCallCancel()
+  r.call = uint64(v.lookup("call").get.uint)
+
+proc toCbor*(x: LcnCarrierCallCancel): CborValue =
+  runEnc(stepEncLcnCarrierCallCancel, addr x)
+
+proc fromChecked*(T: type LcnCarrierCallCancel, v: CborValue): LcnCarrierCallCancel =
+  var r: LcnCarrierCallCancel
+  runDec(stepDecLcnCarrierCallCancel, v, addr r)
+  r
+
+proc stepEncLcnCarrierCallEnded*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierCallEnded](src)
+  var n = 3
+  if x.request.isSome:
+    inc n
+  if x.response.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("call")
+  node.entries[k].value = cbor(uint64(x.call))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("call_ended")
+  inc k
+  if x.request.isSome:
+    node.entries[k].key = cbor("request")
+    w.later(stepEncLcnCarrierCommitment, addr x.request.get, addr node.entries[k].value)
+    inc k
+  if x.response.isSome:
+    node.entries[k].key = cbor("response")
+    w.later(stepEncLcnCarrierCommitment, addr x.response.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("succeeded")
+  node.entries[k].value = cbor(x.succeeded)
+  inc k
+
+proc stepDecLcnCarrierCallEnded*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierCallEnded](dst)
+  r[] = LcnCarrierCallEnded()
+  r.call = uint64(v.lookup("call").get.uint)
+  let f7 = v.lookup("request")
+  if f7.isSome:
+    r.request = Opt.some(default(LcnCarrierCommitment))
+    w.later(stepDecLcnCarrierCommitment, f7.get, addr r.request.get)
+  let f8 = v.lookup("response")
+  if f8.isSome:
+    r.response = Opt.some(default(LcnCarrierCommitment))
+    w.later(stepDecLcnCarrierCommitment, f8.get, addr r.response.get)
+  r.succeeded = asBool(v.lookup("succeeded").get)
+
+proc toCbor*(x: LcnCarrierCallEnded): CborValue =
+  runEnc(stepEncLcnCarrierCallEnded, addr x)
+
+proc fromChecked*(T: type LcnCarrierCallEnded, v: CborValue): LcnCarrierCallEnded =
+  var r: LcnCarrierCallEnded
+  runDec(stepDecLcnCarrierCallEnded, v, addr r)
+  r
+
+proc stepEncLcnCarrierCommitment*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierCommitment](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("subtree_root")
+  node.entries[k].value = cbor(x.subtree_root)
+  inc k
+  node.entries[k].key = cbor("value_root")
+  node.entries[k].value = cbor(x.value_root)
+  inc k
+
+proc stepDecLcnCarrierCommitment*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierCommitment](dst)
+  r[] = LcnCarrierCommitment()
+  r.subtree_root = v.lookup("subtree_root").get.bytes
+  r.value_root = v.lookup("value_root").get.bytes
+
+proc toCbor*(x: LcnCarrierCommitment): CborValue =
+  runEnc(stepEncLcnCarrierCommitment, addr x)
+
+proc fromChecked*(T: type LcnCarrierCommitment, v: CborValue): LcnCarrierCommitment =
+  var r: LcnCarrierCommitment
+  runDec(stepDecLcnCarrierCommitment, v, addr r)
+  r
+
+proc stepEncLcnCarrierDropped*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierDropped](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("code")
+  node.entries[k].value = cbor(uint64(x.code))
+  inc k
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+
+proc stepDecLcnCarrierDropped*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierDropped](dst)
+  r[] = LcnCarrierDropped()
+  r.code = uint8(v.lookup("code").get.uint)
+  r.conn = uint64(v.lookup("conn").get.uint)
+
+proc toCbor*(x: LcnCarrierDropped): CborValue =
+  runEnc(stepEncLcnCarrierDropped, addr x)
+
+proc fromChecked*(T: type LcnCarrierDropped, v: CborValue): LcnCarrierDropped =
+  var r: LcnCarrierDropped
+  runDec(stepDecLcnCarrierDropped, v, addr r)
   r
 
 proc stepEncLcnCarrierFailure*(w: var EncWork, src: pointer, dst: ptr CborValue) =
@@ -490,15 +1093,15 @@ proc stepDecLcnCarrierFailure*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierFailure](dst)
   r[] = LcnCarrierFailure()
   r.code = uint8(v.lookup("code").get.uint)
-  let f4 = v.lookup("detail")
-  if f4.isSome:
-    r.detail = Opt.some(f4.get.bytes)
-  let f5 = v.lookup("message")
-  if f5.isSome:
-    r.message = Opt.some(f5.get.text)
-  let f6 = v.lookup("reason")
-  if f6.isSome:
-    r.reason = Opt.some(f6.get.text)
+  let f9 = v.lookup("detail")
+  if f9.isSome:
+    r.detail = Opt.some(f9.get.bytes)
+  let f10 = v.lookup("message")
+  if f10.isSome:
+    r.message = Opt.some(f10.get.text)
+  let f11 = v.lookup("reason")
+  if f11.isSome:
+    r.reason = Opt.some(f11.get.text)
 
 proc toCbor*(x: LcnCarrierFailure): CborValue =
   runEnc(stepEncLcnCarrierFailure, addr x)
@@ -538,7 +1141,13 @@ proc stepEncLcnCarrierInit*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   var n = 6
   if x.configuration.isSome:
     inc n
+  if x.endpoint.isSome:
+    inc n
+  if x.runtime_id.isSome:
+    inc n
   if x.state_dir.isSome:
+    inc n
+  if x.transport.isSome:
     inc n
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
   dst[] = node
@@ -549,6 +1158,10 @@ proc stepEncLcnCarrierInit*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   if x.configuration.isSome:
     node.entries[k].key = cbor("configuration")
     node.entries[k].value = cbor(x.configuration.get)
+    inc k
+  if x.endpoint.isSome:
+    node.entries[k].key = cbor("endpoint")
+    node.entries[k].value = cbor(x.endpoint.get)
     inc k
   node.entries[k].key = cbor("id")
   node.entries[k].value = cbor(uint64(x.id))
@@ -565,25 +1178,48 @@ proc stepEncLcnCarrierInit*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   node.entries[k].key = cbor("module")
   node.entries[k].value = cbor(x.module)
   inc k
+  if x.runtime_id.isSome:
+    node.entries[k].key = cbor("runtime_id")
+    node.entries[k].value = cbor(x.runtime_id.get)
+    inc k
   if x.state_dir.isSome:
     node.entries[k].key = cbor("state_dir")
     node.entries[k].value = cbor(x.state_dir.get)
+    inc k
+  if x.transport.isSome:
+    node.entries[k].key = cbor("transport")
+    let a16 = newCborArray(x.transport.get.len)
+    node.entries[k].value = a16
+    for i17 in 0 ..< x.transport.get.len:
+      a16.items[i17] = cbor(uint64(x.transport.get[i17]))
     inc k
 
 proc stepDecLcnCarrierInit*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierInit](dst)
   r[] = LcnCarrierInit()
   r.artifact_path = v.lookup("artifact_path").get.text
-  let f7 = v.lookup("configuration")
-  if f7.isSome:
-    r.configuration = Opt.some(f7.get.bytes)
+  let f12 = v.lookup("configuration")
+  if f12.isSome:
+    r.configuration = Opt.some(f12.get.bytes)
+  let f13 = v.lookup("endpoint")
+  if f13.isSome:
+    r.endpoint = Opt.some(f13.get.text)
   r.id = uint64(v.lookup("id").get.uint)
   r.live = asBool(v.lookup("live").get)
   r.max_payload_depth = uint64(v.lookup("max_payload_depth").get.uint)
   r.module = v.lookup("module").get.text
-  let f8 = v.lookup("state_dir")
-  if f8.isSome:
-    r.state_dir = Opt.some(f8.get.text)
+  let f14 = v.lookup("runtime_id")
+  if f14.isSome:
+    r.runtime_id = Opt.some(f14.get.text)
+  let f15 = v.lookup("state_dir")
+  if f15.isSome:
+    r.state_dir = Opt.some(f15.get.text)
+  let f18 = v.lookup("transport")
+  if f18.isSome:
+    r.transport = Opt.some(default(seq[uint64]))
+    r.transport.get.setLen(f18.get.items.len)
+    for i19 in 0 ..< f18.get.items.len:
+      r.transport.get[i19] = uint64(f18.get.items[i19].uint)
 
 proc toCbor*(x: LcnCarrierInit): CborValue =
   runEnc(stepEncLcnCarrierInit, addr x)
@@ -680,16 +1316,16 @@ proc stepEncLcnCarrierInitFailed*(w: var EncWork, src: pointer, dst: ptr CborVal
 proc stepDecLcnCarrierInitFailed*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierInitFailed](dst)
   r[] = LcnCarrierInitFailed()
-  let f9 = v.lookup("cause")
-  if f9.isSome:
+  let f20 = v.lookup("cause")
+  if f20.isSome:
     r.cause = Opt.some(default(LcnCarrierFailure))
-    w.later(stepDecLcnCarrierFailure, f9.get, addr r.cause.get)
-  let f10 = v.lookup("code").get
-  w.later(stepDecLcnCarrierInitFailedCodeChoice, f10, addr r.code)
+    w.later(stepDecLcnCarrierFailure, f20.get, addr r.cause.get)
+  let f21 = v.lookup("code").get
+  w.later(stepDecLcnCarrierInitFailedCodeChoice, f21, addr r.code)
   r.id = uint64(v.lookup("id").get.uint)
   r.message = v.lookup("message").get.text
-  let f11 = v.lookup("phase").get
-  w.later(stepDecLcnCarrierInitFailedPhaseChoice, f11, addr r.phase)
+  let f22 = v.lookup("phase").get
+  w.later(stepDecLcnCarrierInitFailedPhaseChoice, f22, addr r.phase)
 
 proc toCbor*(x: LcnCarrierInitFailed): CborValue =
   runEnc(stepEncLcnCarrierInitFailed, addr x)
@@ -721,9 +1357,9 @@ proc stepEncLcnCarrierInitialized*(w: var EncWork, src: pointer, dst: ptr CborVa
 proc stepDecLcnCarrierInitialized*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierInitialized](dst)
   r[] = LcnCarrierInitialized()
-  let f12 = v.lookup("call_surface")
-  if f12.isSome:
-    r.call_surface = Opt.some(f12.get.bytes)
+  let f23 = v.lookup("call_surface")
+  if f23.isSome:
+    r.call_surface = Opt.some(f23.get.bytes)
   r.id = uint64(v.lookup("id").get.uint)
 
 proc toCbor*(x: LcnCarrierInitialized): CborValue =
@@ -734,15 +1370,708 @@ proc fromChecked*(T: type LcnCarrierInitialized, v: CborValue): LcnCarrierInitia
   runDec(stepDecLcnCarrierInitialized, v, addr r)
   r
 
+proc stepEncLcnCarrierIoAdmitEstablished*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoAdmitEstablished](src)
+  var n = 4
+  if x.ends_in.isSome:
+    inc n
+  if x.methods.isSome:
+    inc n
+  if x.publish_events.isSome:
+    inc n
+  if x.subscribe_events.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("contract")
+  node.entries[k].value = cbor(x.contract)
+  inc k
+  if x.ends_in.isSome:
+    node.entries[k].key = cbor("ends_in")
+    node.entries[k].value = cbor(uint64(x.ends_in.get))
+    inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_admit_established")
+  inc k
+  if x.methods.isSome:
+    node.entries[k].key = cbor("methods")
+    let a25 = newCborArray(x.methods.get.len)
+    node.entries[k].value = a25
+    for i26 in 0 ..< x.methods.get.len:
+      a25.items[i26] = cbor(x.methods.get[i26])
+    inc k
+  if x.publish_events.isSome:
+    node.entries[k].key = cbor("publish_events")
+    let a29 = newCborArray(x.publish_events.get.len)
+    node.entries[k].value = a29
+    for i30 in 0 ..< x.publish_events.get.len:
+      a29.items[i30] = cbor(x.publish_events.get[i30])
+    inc k
+  node.entries[k].key = cbor("response")
+  node.entries[k].value = cbor(x.response)
+  inc k
+  if x.subscribe_events.isSome:
+    node.entries[k].key = cbor("subscribe_events")
+    let a33 = newCborArray(x.subscribe_events.get.len)
+    node.entries[k].value = a33
+    for i34 in 0 ..< x.subscribe_events.get.len:
+      a33.items[i34] = cbor(x.subscribe_events.get[i34])
+    inc k
+
+proc stepDecLcnCarrierIoAdmitEstablished*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoAdmitEstablished](dst)
+  r[] = LcnCarrierIoAdmitEstablished()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.contract = v.lookup("contract").get.bytes
+  let f24 = v.lookup("ends_in")
+  if f24.isSome:
+    r.ends_in = Opt.some(uint64(f24.get.uint))
+  let f27 = v.lookup("methods")
+  if f27.isSome:
+    r.methods = Opt.some(default(seq[seq[byte]]))
+    r.methods.get.setLen(f27.get.items.len)
+    for i28 in 0 ..< f27.get.items.len:
+      r.methods.get[i28] = f27.get.items[i28].bytes
+  let f31 = v.lookup("publish_events")
+  if f31.isSome:
+    r.publish_events = Opt.some(default(seq[seq[byte]]))
+    r.publish_events.get.setLen(f31.get.items.len)
+    for i32 in 0 ..< f31.get.items.len:
+      r.publish_events.get[i32] = f31.get.items[i32].bytes
+  r.response = v.lookup("response").get.bytes
+  let f35 = v.lookup("subscribe_events")
+  if f35.isSome:
+    r.subscribe_events = Opt.some(default(seq[seq[byte]]))
+    r.subscribe_events.get.setLen(f35.get.items.len)
+    for i36 in 0 ..< f35.get.items.len:
+      r.subscribe_events.get[i36] = f35.get.items[i36].bytes
+
+proc toCbor*(x: LcnCarrierIoAdmitEstablished): CborValue =
+  runEnc(stepEncLcnCarrierIoAdmitEstablished, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoAdmitEstablished, v: CborValue): LcnCarrierIoAdmitEstablished =
+  var r: LcnCarrierIoAdmitEstablished
+  runDec(stepDecLcnCarrierIoAdmitEstablished, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoAdmitFailed*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoAdmitFailed](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("code")
+  node.entries[k].value = cbor(uint64(x.code))
+  inc k
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_admit_failed")
+  inc k
+  node.entries[k].key = cbor("peer")
+  node.entries[k].value = cbor(x.peer)
+  inc k
+
+proc stepDecLcnCarrierIoAdmitFailed*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoAdmitFailed](dst)
+  r[] = LcnCarrierIoAdmitFailed()
+  r.code = uint8(v.lookup("code").get.uint)
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.peer = asBool(v.lookup("peer").get)
+
+proc toCbor*(x: LcnCarrierIoAdmitFailed): CborValue =
+  runEnc(stepEncLcnCarrierIoAdmitFailed, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoAdmitFailed, v: CborValue): LcnCarrierIoAdmitFailed =
+  var r: LcnCarrierIoAdmitFailed
+  runDec(stepDecLcnCarrierIoAdmitFailed, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoAdmitUnavailable*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoAdmitUnavailable](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_admit_unavailable")
+  inc k
+
+proc stepDecLcnCarrierIoAdmitUnavailable*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoAdmitUnavailable](dst)
+  r[] = LcnCarrierIoAdmitUnavailable()
+  r.conn = uint64(v.lookup("conn").get.uint)
+
+proc toCbor*(x: LcnCarrierIoAdmitUnavailable): CborValue =
+  runEnc(stepEncLcnCarrierIoAdmitUnavailable, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoAdmitUnavailable, v: CborValue): LcnCarrierIoAdmitUnavailable =
+  var r: LcnCarrierIoAdmitUnavailable
+  runDec(stepDecLcnCarrierIoAdmitUnavailable, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoClose*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoClose](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_close")
+  inc k
+
+proc stepDecLcnCarrierIoClose*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoClose](dst)
+  r[] = LcnCarrierIoClose()
+  r.conn = uint64(v.lookup("conn").get.uint)
+
+proc toCbor*(x: LcnCarrierIoClose): CborValue =
+  runEnc(stepEncLcnCarrierIoClose, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoClose, v: CborValue): LcnCarrierIoClose =
+  var r: LcnCarrierIoClose
+  runDec(stepDecLcnCarrierIoClose, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoClosed*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoClosed](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_closed")
+  inc k
+
+proc stepDecLcnCarrierIoClosed*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoClosed](dst)
+  r[] = LcnCarrierIoClosed()
+  r.conn = uint64(v.lookup("conn").get.uint)
+
+proc toCbor*(x: LcnCarrierIoClosed): CborValue =
+  runEnc(stepEncLcnCarrierIoClosed, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoClosed, v: CborValue): LcnCarrierIoClosed =
+  var r: LcnCarrierIoClosed
+  runDec(stepDecLcnCarrierIoClosed, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoDispatch*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoDispatch](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](5))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("introspection")
+  node.entries[k].value = cbor(x.introspection)
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_dispatch")
+  inc k
+  node.entries[k].key = cbor("method")
+  node.entries[k].value = cbor(x.`method`)
+  inc k
+  node.entries[k].key = cbor("request")
+  node.entries[k].value = cbor(uint64(x.request))
+  inc k
+
+proc stepDecLcnCarrierIoDispatch*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoDispatch](dst)
+  r[] = LcnCarrierIoDispatch()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.introspection = asBool(v.lookup("introspection").get)
+  r.`method` = v.lookup("method").get.text
+  r.request = uint64(v.lookup("request").get.uint)
+
+proc toCbor*(x: LcnCarrierIoDispatch): CborValue =
+  runEnc(stepEncLcnCarrierIoDispatch, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoDispatch, v: CborValue): LcnCarrierIoDispatch =
+  var r: LcnCarrierIoDispatch
+  runDec(stepDecLcnCarrierIoDispatch, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoEstablished*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoEstablished](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_established")
+  inc k
+
+proc stepDecLcnCarrierIoEstablished*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoEstablished](dst)
+  r[] = LcnCarrierIoEstablished()
+  r.conn = uint64(v.lookup("conn").get.uint)
+
+proc toCbor*(x: LcnCarrierIoEstablished): CborValue =
+  runEnc(stepEncLcnCarrierIoEstablished, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoEstablished, v: CborValue): LcnCarrierIoEstablished =
+  var r: LcnCarrierIoEstablished
+  runDec(stepDecLcnCarrierIoEstablished, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoHello*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoHello](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("frame")
+  node.entries[k].value = cbor(x.frame)
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_hello")
+  inc k
+
+proc stepDecLcnCarrierIoHello*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoHello](dst)
+  r[] = LcnCarrierIoHello()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.frame = v.lookup("frame").get.bytes
+
+proc toCbor*(x: LcnCarrierIoHello): CborValue =
+  runEnc(stepEncLcnCarrierIoHello, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoHello, v: CborValue): LcnCarrierIoHello =
+  var r: LcnCarrierIoHello
+  runDec(stepDecLcnCarrierIoHello, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoListening*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoListening](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_listening")
+  inc k
+
+proc stepDecLcnCarrierIoListening*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoListening](dst)
+  r[] = LcnCarrierIoListening()
+
+proc toCbor*(x: LcnCarrierIoListening): CborValue =
+  runEnc(stepEncLcnCarrierIoListening, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoListening, v: CborValue): LcnCarrierIoListening =
+  var r: LcnCarrierIoListening
+  runDec(stepDecLcnCarrierIoListening, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoLocalFailure*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoLocalFailure](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("code")
+  node.entries[k].value = cbor(uint64(x.code))
+  inc k
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_local_failure")
+  inc k
+  node.entries[k].key = cbor("message")
+  node.entries[k].value = cbor(x.message)
+  inc k
+
+proc stepDecLcnCarrierIoLocalFailure*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoLocalFailure](dst)
+  r[] = LcnCarrierIoLocalFailure()
+  r.code = uint8(v.lookup("code").get.uint)
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.message = v.lookup("message").get.text
+
+proc toCbor*(x: LcnCarrierIoLocalFailure): CborValue =
+  runEnc(stepEncLcnCarrierIoLocalFailure, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoLocalFailure, v: CborValue): LcnCarrierIoLocalFailure =
+  var r: LcnCarrierIoLocalFailure
+  runDec(stepDecLcnCarrierIoLocalFailure, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoPublishFailed*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoPublishFailed](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("event")
+  node.entries[k].value = cbor(x.event)
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_publish_failed")
+  inc k
+  node.entries[k].key = cbor("message")
+  node.entries[k].value = cbor(x.message)
+  inc k
+
+proc stepDecLcnCarrierIoPublishFailed*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoPublishFailed](dst)
+  r[] = LcnCarrierIoPublishFailed()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.event = v.lookup("event").get.text
+  r.message = v.lookup("message").get.text
+
+proc toCbor*(x: LcnCarrierIoPublishFailed): CborValue =
+  runEnc(stepEncLcnCarrierIoPublishFailed, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoPublishFailed, v: CborValue): LcnCarrierIoPublishFailed =
+  var r: LcnCarrierIoPublishFailed
+  runDec(stepDecLcnCarrierIoPublishFailed, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoPublishResult*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoPublishResult](src)
+  var n = 4
+  if x.failure.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    w.later(stepEncLcnCarrierPublishFailure, addr x.failure.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_publish_result")
+  inc k
+  node.entries[k].key = cbor("request")
+  node.entries[k].value = cbor(uint64(x.request))
+  inc k
+  node.entries[k].key = cbor("tag")
+  node.entries[k].value = cbor(uint64(x.tag))
+  inc k
+
+proc stepDecLcnCarrierIoPublishResult*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoPublishResult](dst)
+  r[] = LcnCarrierIoPublishResult()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  let f37 = v.lookup("failure")
+  if f37.isSome:
+    r.failure = Opt.some(default(LcnCarrierPublishFailure))
+    w.later(stepDecLcnCarrierPublishFailure, f37.get, addr r.failure.get)
+  r.request = uint64(v.lookup("request").get.uint)
+  r.tag = uint64(v.lookup("tag").get.uint)
+
+proc toCbor*(x: LcnCarrierIoPublishResult): CborValue =
+  runEnc(stepEncLcnCarrierIoPublishResult, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoPublishResult, v: CborValue): LcnCarrierIoPublishResult =
+  var r: LcnCarrierIoPublishResult
+  runDec(stepDecLcnCarrierIoPublishResult, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoRespond*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoRespond](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](5))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("failure")
+  w.later(stepEncLcnCarrierFailure, addr x.failure, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_respond")
+  inc k
+  node.entries[k].key = cbor("request")
+  node.entries[k].value = cbor(uint64(x.request))
+  inc k
+  node.entries[k].key = cbor("work_ended")
+  node.entries[k].value = cbor(x.work_ended)
+  inc k
+
+proc stepDecLcnCarrierIoRespond*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoRespond](dst)
+  r[] = LcnCarrierIoRespond()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  let f38 = v.lookup("failure").get
+  w.later(stepDecLcnCarrierFailure, f38, addr r.failure)
+  r.request = uint64(v.lookup("request").get.uint)
+  r.work_ended = asBool(v.lookup("work_ended").get)
+
+proc toCbor*(x: LcnCarrierIoRespond): CborValue =
+  runEnc(stepEncLcnCarrierIoRespond, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoRespond, v: CborValue): LcnCarrierIoRespond =
+  var r: LcnCarrierIoRespond
+  runDec(stepDecLcnCarrierIoRespond, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoServeFailed*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoServeFailed](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_serve_failed")
+  inc k
+  node.entries[k].key = cbor("why")
+  node.entries[k].value = cbor(x.why)
+  inc k
+
+proc stepDecLcnCarrierIoServeFailed*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoServeFailed](dst)
+  r[] = LcnCarrierIoServeFailed()
+  r.why = v.lookup("why").get.text
+
+proc toCbor*(x: LcnCarrierIoServeFailed): CborValue =
+  runEnc(stepEncLcnCarrierIoServeFailed, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoServeFailed, v: CborValue): LcnCarrierIoServeFailed =
+  var r: LcnCarrierIoServeFailed
+  runDec(stepDecLcnCarrierIoServeFailed, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoStop*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoStop](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_stop")
+  inc k
+  node.entries[k].key = cbor("request")
+  node.entries[k].value = cbor(uint64(x.request))
+  inc k
+
+proc stepDecLcnCarrierIoStop*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoStop](dst)
+  r[] = LcnCarrierIoStop()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.request = uint64(v.lookup("request").get.uint)
+
+proc toCbor*(x: LcnCarrierIoStop): CborValue =
+  runEnc(stepEncLcnCarrierIoStop, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoStop, v: CborValue): LcnCarrierIoStop =
+  var r: LcnCarrierIoStop
+  runDec(stepDecLcnCarrierIoStop, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoStopServing*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoStopServing](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_stop_serving")
+  inc k
+
+proc stepDecLcnCarrierIoStopServing*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoStopServing](dst)
+  r[] = LcnCarrierIoStopServing()
+
+proc toCbor*(x: LcnCarrierIoStopServing): CborValue =
+  runEnc(stepEncLcnCarrierIoStopServing, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoStopServing, v: CborValue): LcnCarrierIoStopServing =
+  var r: LcnCarrierIoStopServing
+  runDec(stepDecLcnCarrierIoStopServing, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoSubscribe*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoSubscribe](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("event")
+  node.entries[k].value = cbor(x.event)
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_subscribe")
+  inc k
+  node.entries[k].key = cbor("sub")
+  node.entries[k].value = cbor(uint64(x.sub))
+  inc k
+
+proc stepDecLcnCarrierIoSubscribe*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoSubscribe](dst)
+  r[] = LcnCarrierIoSubscribe()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.event = v.lookup("event").get.text
+  r.sub = uint64(v.lookup("sub").get.uint)
+
+proc toCbor*(x: LcnCarrierIoSubscribe): CborValue =
+  runEnc(stepEncLcnCarrierIoSubscribe, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoSubscribe, v: CborValue): LcnCarrierIoSubscribe =
+  var r: LcnCarrierIoSubscribe
+  runDec(stepDecLcnCarrierIoSubscribe, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoSubscriptionResult*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoSubscriptionResult](src)
+  var n = 3
+  if x.failure.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    w.later(stepEncLcnCarrierFailure, addr x.failure.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_subscription_result")
+  inc k
+  node.entries[k].key = cbor("sub")
+  node.entries[k].value = cbor(uint64(x.sub))
+  inc k
+
+proc stepDecLcnCarrierIoSubscriptionResult*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoSubscriptionResult](dst)
+  r[] = LcnCarrierIoSubscriptionResult()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  let f39 = v.lookup("failure")
+  if f39.isSome:
+    r.failure = Opt.some(default(LcnCarrierFailure))
+    w.later(stepDecLcnCarrierFailure, f39.get, addr r.failure.get)
+  r.sub = uint64(v.lookup("sub").get.uint)
+
+proc toCbor*(x: LcnCarrierIoSubscriptionResult): CborValue =
+  runEnc(stepEncLcnCarrierIoSubscriptionResult, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoSubscriptionResult, v: CborValue): LcnCarrierIoSubscriptionResult =
+  var r: LcnCarrierIoSubscriptionResult
+  runDec(stepDecLcnCarrierIoSubscriptionResult, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoTerminate*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoTerminate](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_terminate")
+  inc k
+
+proc stepDecLcnCarrierIoTerminate*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoTerminate](dst)
+  r[] = LcnCarrierIoTerminate()
+  r.conn = uint64(v.lookup("conn").get.uint)
+
+proc toCbor*(x: LcnCarrierIoTerminate): CborValue =
+  runEnc(stepEncLcnCarrierIoTerminate, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoTerminate, v: CborValue): LcnCarrierIoTerminate =
+  var r: LcnCarrierIoTerminate
+  runDec(stepDecLcnCarrierIoTerminate, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoUnsubscribe*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoUnsubscribe](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_unsubscribe")
+  inc k
+  node.entries[k].key = cbor("sub")
+  node.entries[k].value = cbor(uint64(x.sub))
+  inc k
+
+proc stepDecLcnCarrierIoUnsubscribe*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoUnsubscribe](dst)
+  r[] = LcnCarrierIoUnsubscribe()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.sub = uint64(v.lookup("sub").get.uint)
+
+proc toCbor*(x: LcnCarrierIoUnsubscribe): CborValue =
+  runEnc(stepEncLcnCarrierIoUnsubscribe, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoUnsubscribe, v: CborValue): LcnCarrierIoUnsubscribe =
+  var r: LcnCarrierIoUnsubscribe
+  runDec(stepDecLcnCarrierIoUnsubscribe, v, addr r)
+  r
+
+proc stepEncLcnCarrierIoWorkEnded*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierIoWorkEnded](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("io_work_ended")
+  inc k
+  node.entries[k].key = cbor("request")
+  node.entries[k].value = cbor(uint64(x.request))
+  inc k
+
+proc stepDecLcnCarrierIoWorkEnded*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierIoWorkEnded](dst)
+  r[] = LcnCarrierIoWorkEnded()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.request = uint64(v.lookup("request").get.uint)
+
+proc toCbor*(x: LcnCarrierIoWorkEnded): CborValue =
+  runEnc(stepEncLcnCarrierIoWorkEnded, addr x)
+
+proc fromChecked*(T: type LcnCarrierIoWorkEnded, v: CborValue): LcnCarrierIoWorkEnded =
+  var r: LcnCarrierIoWorkEnded
+  runDec(stepDecLcnCarrierIoWorkEnded, v, addr r)
+  r
+
 proc stepEncLcnCarrierMessage*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnCarrierMessage](src)
   case x.kind
+  of LcnCarrierMessageKind.lcn_Carrier_admit_verdict:
+    w.later(stepEncLcnCarrierAdmitVerdict, addr x.arm_lcn_Carrier_admit_verdict, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_applied:
     w.later(stepEncLcnCarrierApplied, addr x.arm_lcn_Carrier_applied, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_apply:
     w.later(stepEncLcnCarrierApply, addr x.arm_lcn_Carrier_apply, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_async_done:
     w.later(stepEncLcnCarrierAsyncDone, addr x.arm_lcn_Carrier_async_done, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_call_cancel:
+    w.later(stepEncLcnCarrierCallCancel, addr x.arm_lcn_Carrier_call_cancel, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_call_ended:
+    w.later(stepEncLcnCarrierCallEnded, addr x.arm_lcn_Carrier_call_ended, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_fatal:
     w.later(stepEncLcnCarrierFatal, addr x.arm_lcn_Carrier_fatal, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_init:
@@ -751,6 +2080,48 @@ proc stepEncLcnCarrierMessage*(w: var EncWork, src: pointer, dst: ptr CborValue)
     w.later(stepEncLcnCarrierInitFailed, addr x.arm_lcn_Carrier_init_failed, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_initialized:
     w.later(stepEncLcnCarrierInitialized, addr x.arm_lcn_Carrier_initialized, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_admit_established:
+    w.later(stepEncLcnCarrierIoAdmitEstablished, addr x.arm_lcn_Carrier_io_admit_established, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_admit_failed:
+    w.later(stepEncLcnCarrierIoAdmitFailed, addr x.arm_lcn_Carrier_io_admit_failed, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_admit_unavailable:
+    w.later(stepEncLcnCarrierIoAdmitUnavailable, addr x.arm_lcn_Carrier_io_admit_unavailable, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_close:
+    w.later(stepEncLcnCarrierIoClose, addr x.arm_lcn_Carrier_io_close, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_closed:
+    w.later(stepEncLcnCarrierIoClosed, addr x.arm_lcn_Carrier_io_closed, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_dispatch:
+    w.later(stepEncLcnCarrierIoDispatch, addr x.arm_lcn_Carrier_io_dispatch, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_established:
+    w.later(stepEncLcnCarrierIoEstablished, addr x.arm_lcn_Carrier_io_established, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_hello:
+    w.later(stepEncLcnCarrierIoHello, addr x.arm_lcn_Carrier_io_hello, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_listening:
+    w.later(stepEncLcnCarrierIoListening, addr x.arm_lcn_Carrier_io_listening, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_local_failure:
+    w.later(stepEncLcnCarrierIoLocalFailure, addr x.arm_lcn_Carrier_io_local_failure, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_publish_failed:
+    w.later(stepEncLcnCarrierIoPublishFailed, addr x.arm_lcn_Carrier_io_publish_failed, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_publish_result:
+    w.later(stepEncLcnCarrierIoPublishResult, addr x.arm_lcn_Carrier_io_publish_result, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_respond:
+    w.later(stepEncLcnCarrierIoRespond, addr x.arm_lcn_Carrier_io_respond, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_serve_failed:
+    w.later(stepEncLcnCarrierIoServeFailed, addr x.arm_lcn_Carrier_io_serve_failed, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_stop:
+    w.later(stepEncLcnCarrierIoStop, addr x.arm_lcn_Carrier_io_stop, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_stop_serving:
+    w.later(stepEncLcnCarrierIoStopServing, addr x.arm_lcn_Carrier_io_stop_serving, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_subscribe:
+    w.later(stepEncLcnCarrierIoSubscribe, addr x.arm_lcn_Carrier_io_subscribe, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_subscription_result:
+    w.later(stepEncLcnCarrierIoSubscriptionResult, addr x.arm_lcn_Carrier_io_subscription_result, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_terminate:
+    w.later(stepEncLcnCarrierIoTerminate, addr x.arm_lcn_Carrier_io_terminate, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_unsubscribe:
+    w.later(stepEncLcnCarrierIoUnsubscribe, addr x.arm_lcn_Carrier_io_unsubscribe, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_io_work_ended:
+    w.later(stepEncLcnCarrierIoWorkEnded, addr x.arm_lcn_Carrier_io_work_ended, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_rc_async_cancel:
     w.later(stepEncLcnCarrierRcAsyncCancel, addr x.arm_lcn_Carrier_rc_async_cancel, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_rc_async_release:
@@ -761,6 +2132,8 @@ proc stepEncLcnCarrierMessage*(w: var EncWork, src: pointer, dst: ptr CborValue)
     w.later(stepEncLcnCarrierRcCall, addr x.arm_lcn_Carrier_rc_call, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_rc_connect_remote:
     w.later(stepEncLcnCarrierRcConnectRemote, addr x.arm_lcn_Carrier_rc_connect_remote, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_rc_deliver:
+    w.later(stepEncLcnCarrierRcDeliver, addr x.arm_lcn_Carrier_rc_deliver, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_rc_delivered:
     w.later(stepEncLcnCarrierRcDelivered, addr x.arm_lcn_Carrier_rc_delivered, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_rc_delivery:
@@ -779,6 +2152,14 @@ proc stepEncLcnCarrierMessage*(w: var EncWork, src: pointer, dst: ptr CborValue)
     w.later(stepEncLcnCarrierRelease, addr x.arm_lcn_Carrier_release, addr dst[])
   of LcnCarrierMessageKind.lcn_Carrier_released:
     w.later(stepEncLcnCarrierReleased, addr x.arm_lcn_Carrier_released, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_scoped_admit:
+    w.later(stepEncLcnCarrierScopedAdmit, addr x.arm_lcn_Carrier_scoped_admit, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_scoped_check:
+    w.later(stepEncLcnCarrierScopedCheck, addr x.arm_lcn_Carrier_scoped_check, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_scoped_done:
+    w.later(stepEncLcnCarrierScopedDone, addr x.arm_lcn_Carrier_scoped_done, addr dst[])
+  of LcnCarrierMessageKind.lcn_Carrier_scoped_result:
+    w.later(stepEncLcnCarrierScopedResult, addr x.arm_lcn_Carrier_scoped_result, addr dst[])
 
 proc stepDecLcnCarrierMessage*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierMessage](dst)
@@ -796,56 +2177,143 @@ proc stepDecLcnCarrierMessage*(w: var DecWork, v: CborValue, dst: pointer) =
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_applied)
     w.later(stepDecLcnCarrierApplied, v, addr r.arm_lcn_Carrier_applied)
   of 4:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_stop)
+    w.later(stepDecLcnCarrierIoStop, v, addr r.arm_lcn_Carrier_io_stop)
+  of 5:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_call)
     w.later(stepDecLcnCarrierRcCall, v, addr r.arm_lcn_Carrier_rc_call)
-  of 5:
+  of 6:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_release)
     w.later(stepDecLcnCarrierRelease, v, addr r.arm_lcn_Carrier_release)
-  of 6:
+  of 7:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_close)
+    w.later(stepDecLcnCarrierIoClose, v, addr r.arm_lcn_Carrier_io_close)
+  of 8:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_hello)
+    w.later(stepDecLcnCarrierIoHello, v, addr r.arm_lcn_Carrier_io_hello)
+  of 9:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_reply)
     w.later(stepDecLcnCarrierRcReply, v, addr r.arm_lcn_Carrier_rc_reply)
-  of 7:
+  of 10:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_released)
     w.later(stepDecLcnCarrierReleased, v, addr r.arm_lcn_Carrier_released)
-  of 8:
+  of 11:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_closed)
+    w.later(stepDecLcnCarrierIoClosed, v, addr r.arm_lcn_Carrier_io_closed)
+  of 12:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_async_done)
     w.later(stepDecLcnCarrierAsyncDone, v, addr r.arm_lcn_Carrier_async_done)
-  of 9:
+  of 13:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_call_ended)
+    w.later(stepDecLcnCarrierCallEnded, v, addr r.arm_lcn_Carrier_call_ended)
+  of 14:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_respond)
+    w.later(stepDecLcnCarrierIoRespond, v, addr r.arm_lcn_Carrier_io_respond)
+  of 15:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_deliver)
+    w.later(stepDecLcnCarrierRcDeliver, v, addr r.arm_lcn_Carrier_rc_deliver)
+  of 16:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_prepare)
     w.later(stepDecLcnCarrierRcPrepare, v, addr r.arm_lcn_Carrier_rc_prepare)
-  of 10:
+  of 17:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_publish)
     w.later(stepDecLcnCarrierRcPublish, v, addr r.arm_lcn_Carrier_rc_publish)
-  of 11:
+  of 18:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_call_cancel)
+    w.later(stepDecLcnCarrierCallCancel, v, addr r.arm_lcn_Carrier_call_cancel)
+  of 19:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_init_failed)
     w.later(stepDecLcnCarrierInitFailed, v, addr r.arm_lcn_Carrier_init_failed)
-  of 12:
+  of 20:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_initialized)
     w.later(stepDecLcnCarrierInitialized, v, addr r.arm_lcn_Carrier_initialized)
-  of 13:
+  of 21:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_dispatch)
+    w.later(stepDecLcnCarrierIoDispatch, v, addr r.arm_lcn_Carrier_io_dispatch)
+  of 22:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_delivery)
     w.later(stepDecLcnCarrierRcDelivery, v, addr r.arm_lcn_Carrier_rc_delivery)
-  of 14:
+  of 23:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_scoped_done)
+    w.later(stepDecLcnCarrierScopedDone, v, addr r.arm_lcn_Carrier_scoped_done)
+  of 24:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_listening)
+    w.later(stepDecLcnCarrierIoListening, v, addr r.arm_lcn_Carrier_io_listening)
+  of 25:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_subscribe)
+    w.later(stepDecLcnCarrierIoSubscribe, v, addr r.arm_lcn_Carrier_io_subscribe)
+  of 26:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_terminate)
+    w.later(stepDecLcnCarrierIoTerminate, v, addr r.arm_lcn_Carrier_io_terminate)
+  of 27:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_delivered)
     w.later(stepDecLcnCarrierRcDelivered, v, addr r.arm_lcn_Carrier_rc_delivered)
-  of 15:
+  of 28:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_subscribe)
     w.later(stepDecLcnCarrierRcSubscribe, v, addr r.arm_lcn_Carrier_rc_subscribe)
-  of 16:
+  of 29:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_scoped_admit)
+    w.later(stepDecLcnCarrierScopedAdmit, v, addr r.arm_lcn_Carrier_scoped_admit)
+  of 30:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_scoped_check)
+    w.later(stepDecLcnCarrierScopedCheck, v, addr r.arm_lcn_Carrier_scoped_check)
+  of 31:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_admit_verdict)
+    w.later(stepDecLcnCarrierAdmitVerdict, v, addr r.arm_lcn_Carrier_admit_verdict)
+  of 32:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_work_ended)
+    w.later(stepDecLcnCarrierIoWorkEnded, v, addr r.arm_lcn_Carrier_io_work_ended)
+  of 33:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_scoped_result)
+    w.later(stepDecLcnCarrierScopedResult, v, addr r.arm_lcn_Carrier_scoped_result)
+  of 34:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_established)
+    w.later(stepDecLcnCarrierIoEstablished, v, addr r.arm_lcn_Carrier_io_established)
+  of 35:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_unsubscribe)
+    w.later(stepDecLcnCarrierIoUnsubscribe, v, addr r.arm_lcn_Carrier_io_unsubscribe)
+  of 36:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_unsubscribe)
     w.later(stepDecLcnCarrierRcUnsubscribe, v, addr r.arm_lcn_Carrier_rc_unsubscribe)
-  of 17:
+  of 37:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_admit_failed)
+    w.later(stepDecLcnCarrierIoAdmitFailed, v, addr r.arm_lcn_Carrier_io_admit_failed)
+  of 38:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_serve_failed)
+    w.later(stepDecLcnCarrierIoServeFailed, v, addr r.arm_lcn_Carrier_io_serve_failed)
+  of 39:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_stop_serving)
+    w.later(stepDecLcnCarrierIoStopServing, v, addr r.arm_lcn_Carrier_io_stop_serving)
+  of 40:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_async_cancel)
     w.later(stepDecLcnCarrierRcAsyncCancel, v, addr r.arm_lcn_Carrier_rc_async_cancel)
-  of 18:
+  of 41:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_async_submit)
     w.later(stepDecLcnCarrierRcAsyncSubmit, v, addr r.arm_lcn_Carrier_rc_async_submit)
-  of 19:
+  of 42:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_local_failure)
+    w.later(stepDecLcnCarrierIoLocalFailure, v, addr r.arm_lcn_Carrier_io_local_failure)
+  of 43:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_async_release)
     w.later(stepDecLcnCarrierRcAsyncRelease, v, addr r.arm_lcn_Carrier_rc_async_release)
-  of 20:
+  of 44:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_publish_failed)
+    w.later(stepDecLcnCarrierIoPublishFailed, v, addr r.arm_lcn_Carrier_io_publish_failed)
+  of 45:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_publish_result)
+    w.later(stepDecLcnCarrierIoPublishResult, v, addr r.arm_lcn_Carrier_io_publish_result)
+  of 46:
     r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_rc_connect_remote)
     w.later(stepDecLcnCarrierRcConnectRemote, v, addr r.arm_lcn_Carrier_rc_connect_remote)
+  of 47:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_admit_established)
+    w.later(stepDecLcnCarrierIoAdmitEstablished, v, addr r.arm_lcn_Carrier_io_admit_established)
+  of 48:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_admit_unavailable)
+    w.later(stepDecLcnCarrierIoAdmitUnavailable, v, addr r.arm_lcn_Carrier_io_admit_unavailable)
+  of 49:
+    r[] = LcnCarrierMessage(kind: LcnCarrierMessageKind.lcn_Carrier_io_subscription_result)
+    w.later(stepDecLcnCarrierIoSubscriptionResult, v, addr r.arm_lcn_Carrier_io_subscription_result)
   else:
     raiseAssert "a checked value selects a known arm"
 
@@ -855,6 +2323,36 @@ proc toCbor*(x: LcnCarrierMessage): CborValue =
 proc fromChecked*(T: type LcnCarrierMessage, v: CborValue): LcnCarrierMessage =
   var r: LcnCarrierMessage
   runDec(stepDecLcnCarrierMessage, v, addr r)
+  r
+
+proc stepEncLcnCarrierPublishFailure*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierPublishFailure](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("code")
+  node.entries[k].value = cbor(uint64(x.code))
+  inc k
+  node.entries[k].key = cbor("error")
+  node.entries[k].value = cbor(uint64(x.error))
+  inc k
+  node.entries[k].key = cbor("message")
+  node.entries[k].value = cbor(x.message)
+  inc k
+
+proc stepDecLcnCarrierPublishFailure*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierPublishFailure](dst)
+  r[] = LcnCarrierPublishFailure()
+  r.code = uint8(v.lookup("code").get.uint)
+  r.error = uint8(v.lookup("error").get.uint)
+  r.message = v.lookup("message").get.text
+
+proc toCbor*(x: LcnCarrierPublishFailure): CborValue =
+  runEnc(stepEncLcnCarrierPublishFailure, addr x)
+
+proc fromChecked*(T: type LcnCarrierPublishFailure, v: CborValue): LcnCarrierPublishFailure =
+  var r: LcnCarrierPublishFailure
+  runDec(stepDecLcnCarrierPublishFailure, v, addr r)
   r
 
 proc stepEncLcnCarrierRcAsyncCancel*(w: var EncWork, src: pointer, dst: ptr CborValue) =
@@ -1006,6 +2504,55 @@ proc fromChecked*(T: type LcnCarrierRcConnectRemote, v: CborValue): LcnCarrierRc
   runDec(stepDecLcnCarrierRcConnectRemote, v, addr r)
   r
 
+proc stepEncLcnCarrierRcDeliver*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierRcDeliver](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](5))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conns")
+  let a40 = newCborArray(x.conns.len)
+  node.entries[k].value = a40
+  for i41 in 0 ..< x.conns.len:
+    a40.items[i41] = cbor(uint64(x.conns[i41]))
+  inc k
+  node.entries[k].key = cbor("dropped")
+  let a44 = newCborArray(x.dropped.len)
+  node.entries[k].value = a44
+  for i45 in 0 ..< x.dropped.len:
+    w.later(stepEncLcnCarrierDropped, addr x.dropped[i45], addr a44.items[i45])
+  inc k
+  node.entries[k].key = cbor("event")
+  node.entries[k].value = cbor(x.event)
+  inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("rc_deliver")
+  inc k
+
+proc stepDecLcnCarrierRcDeliver*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierRcDeliver](dst)
+  r[] = LcnCarrierRcDeliver()
+  let f42 = v.lookup("conns").get
+  r.conns.setLen(f42.items.len)
+  for i43 in 0 ..< f42.items.len:
+    r.conns[i43] = uint64(f42.items[i43].uint)
+  let f46 = v.lookup("dropped").get
+  r.dropped.setLen(f46.items.len)
+  for i47 in 0 ..< f46.items.len:
+    w.later(stepDecLcnCarrierDropped, f46.items[i47], addr r.dropped[i47])
+  r.event = v.lookup("event").get.text
+  r.id = uint64(v.lookup("id").get.uint)
+
+proc toCbor*(x: LcnCarrierRcDeliver): CborValue =
+  runEnc(stepEncLcnCarrierRcDeliver, addr x)
+
+proc fromChecked*(T: type LcnCarrierRcDeliver, v: CborValue): LcnCarrierRcDeliver =
+  var r: LcnCarrierRcDeliver
+  runDec(stepDecLcnCarrierRcDeliver, v, addr r)
+  r
+
 proc stepEncLcnCarrierRcDelivered*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnCarrierRcDelivered](src)
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
@@ -1107,9 +2654,9 @@ proc stepDecLcnCarrierRcPrepare*(w: var DecWork, v: CborValue, dst: pointer) =
   r.id = uint64(v.lookup("id").get.uint)
   r.`method` = v.lookup("method").get.bytes
   r.params = v.lookup("params").get.bytes
-  let f13 = v.lookup("timeout_ms")
-  if f13.isSome:
-    r.timeout_ms = Opt.some(uint64(f13.get.uint))
+  let f48 = v.lookup("timeout_ms")
+  if f48.isSome:
+    r.timeout_ms = Opt.some(uint64(f48.get.uint))
 
 proc toCbor*(x: LcnCarrierRcPrepare): CborValue =
   runEnc(stepEncLcnCarrierRcPrepare, addr x)
@@ -1121,12 +2668,9 @@ proc fromChecked*(T: type LcnCarrierRcPrepare, v: CborValue): LcnCarrierRcPrepar
 
 proc stepEncLcnCarrierRcPublish*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnCarrierRcPublish](src)
-  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
   dst[] = node
   var k = 0
-  node.entries[k].key = cbor("data")
-  node.entries[k].value = cbor(x.data)
-  inc k
   node.entries[k].key = cbor("event")
   node.entries[k].value = cbor(x.event)
   inc k
@@ -1140,7 +2684,6 @@ proc stepEncLcnCarrierRcPublish*(w: var EncWork, src: pointer, dst: ptr CborValu
 proc stepDecLcnCarrierRcPublish*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierRcPublish](dst)
   r[] = LcnCarrierRcPublish()
-  r.data = v.lookup("data").get.bytes
   r.event = v.lookup("event").get.bytes
   r.id = uint64(v.lookup("id").get.uint)
 
@@ -1155,15 +2698,26 @@ proc fromChecked*(T: type LcnCarrierRcPublish, v: CborValue): LcnCarrierRcPublis
 proc stepEncLcnCarrierRcReply*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnCarrierRcReply](src)
   var n = 2
+  if x.admitted.isSome:
+    inc n
   if x.failure.isSome:
     inc n
   if x.sub.isSome:
+    inc n
+  if x.targets.isSome:
     inc n
   if x.value.isSome:
     inc n
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
   dst[] = node
   var k = 0
+  if x.admitted.isSome:
+    node.entries[k].key = cbor("admitted")
+    let a49 = newCborArray(x.admitted.get.len)
+    node.entries[k].value = a49
+    for i50 in 0 ..< x.admitted.get.len:
+      a49.items[i50] = cbor(uint64(x.admitted.get[i50]))
+    inc k
   if x.failure.isSome:
     node.entries[k].key = cbor("failure")
     w.later(stepEncLcnCarrierFailure, addr x.failure.get, addr node.entries[k].value)
@@ -1178,6 +2732,13 @@ proc stepEncLcnCarrierRcReply*(w: var EncWork, src: pointer, dst: ptr CborValue)
     node.entries[k].key = cbor("sub")
     node.entries[k].value = cbor(uint64(x.sub.get))
     inc k
+  if x.targets.isSome:
+    node.entries[k].key = cbor("targets")
+    let a55 = newCborArray(x.targets.get.len)
+    node.entries[k].value = a55
+    for i56 in 0 ..< x.targets.get.len:
+      w.later(stepEncLcnCarrierTarget, addr x.targets.get[i56], addr a55.items[i56])
+    inc k
   if x.value.isSome:
     node.entries[k].key = cbor("value")
     node.entries[k].value = cbor(x.value.get)
@@ -1186,17 +2747,29 @@ proc stepEncLcnCarrierRcReply*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCarrierRcReply*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierRcReply](dst)
   r[] = LcnCarrierRcReply()
-  let f14 = v.lookup("failure")
-  if f14.isSome:
+  let f51 = v.lookup("admitted")
+  if f51.isSome:
+    r.admitted = Opt.some(default(seq[uint64]))
+    r.admitted.get.setLen(f51.get.items.len)
+    for i52 in 0 ..< f51.get.items.len:
+      r.admitted.get[i52] = uint64(f51.get.items[i52].uint)
+  let f53 = v.lookup("failure")
+  if f53.isSome:
     r.failure = Opt.some(default(LcnCarrierFailure))
-    w.later(stepDecLcnCarrierFailure, f14.get, addr r.failure.get)
+    w.later(stepDecLcnCarrierFailure, f53.get, addr r.failure.get)
   r.id = uint64(v.lookup("id").get.uint)
-  let f15 = v.lookup("sub")
-  if f15.isSome:
-    r.sub = Opt.some(uint64(f15.get.uint))
-  let f16 = v.lookup("value")
-  if f16.isSome:
-    r.value = Opt.some(f16.get.bytes)
+  let f54 = v.lookup("sub")
+  if f54.isSome:
+    r.sub = Opt.some(uint64(f54.get.uint))
+  let f57 = v.lookup("targets")
+  if f57.isSome:
+    r.targets = Opt.some(default(seq[LcnCarrierTarget]))
+    r.targets.get.setLen(f57.get.items.len)
+    for i58 in 0 ..< f57.get.items.len:
+      w.later(stepDecLcnCarrierTarget, f57.get.items[i58], addr r.targets.get[i58])
+  let f59 = v.lookup("value")
+  if f59.isSome:
+    r.value = Opt.some(f59.get.bytes)
 
 proc toCbor*(x: LcnCarrierRcReply): CborValue =
   runEnc(stepEncLcnCarrierRcReply, addr x)
@@ -1265,9 +2838,9 @@ proc stepDecLcnCarrierRcUnsubscribe*(w: var DecWork, v: CborValue, dst: pointer)
   let r = cast[ptr LcnCarrierRcUnsubscribe](dst)
   r[] = LcnCarrierRcUnsubscribe()
   r.id = uint64(v.lookup("id").get.uint)
-  let f17 = v.lookup("in_handler")
-  if f17.isSome:
-    r.in_handler = Opt.some(uint64(f17.get.uint))
+  let f60 = v.lookup("in_handler")
+  if f60.isSome:
+    r.in_handler = Opt.some(uint64(f60.get.uint))
   r.sub = uint64(v.lookup("sub").get.uint)
 
 proc toCbor*(x: LcnCarrierRcUnsubscribe): CborValue =
@@ -1328,6 +2901,203 @@ proc fromChecked*(T: type LcnCarrierReleased, v: CborValue): LcnCarrierReleased 
   runDec(stepDecLcnCarrierReleased, v, addr r)
   r
 
+proc stepEncLcnCarrierScopedAdmit*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierScopedAdmit](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("call")
+  node.entries[k].value = cbor(uint64(x.call))
+  inc k
+  node.entries[k].key = cbor("event")
+  node.entries[k].value = cbor(x.event)
+  inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("scoped_admit")
+  inc k
+
+proc stepDecLcnCarrierScopedAdmit*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierScopedAdmit](dst)
+  r[] = LcnCarrierScopedAdmit()
+  r.call = uint64(v.lookup("call").get.uint)
+  r.event = v.lookup("event").get.text
+  r.id = uint64(v.lookup("id").get.uint)
+
+proc toCbor*(x: LcnCarrierScopedAdmit): CborValue =
+  runEnc(stepEncLcnCarrierScopedAdmit, addr x)
+
+proc fromChecked*(T: type LcnCarrierScopedAdmit, v: CborValue): LcnCarrierScopedAdmit =
+  var r: LcnCarrierScopedAdmit
+  runDec(stepDecLcnCarrierScopedAdmit, v, addr r)
+  r
+
+proc stepEncLcnCarrierScopedCheck*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierScopedCheck](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("call")
+  node.entries[k].value = cbor(uint64(x.call))
+  inc k
+  node.entries[k].key = cbor("event")
+  node.entries[k].value = cbor(x.event)
+  inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("scoped_check")
+  inc k
+
+proc stepDecLcnCarrierScopedCheck*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierScopedCheck](dst)
+  r[] = LcnCarrierScopedCheck()
+  r.call = uint64(v.lookup("call").get.uint)
+  r.event = v.lookup("event").get.bytes
+  r.id = uint64(v.lookup("id").get.uint)
+
+proc toCbor*(x: LcnCarrierScopedCheck): CborValue =
+  runEnc(stepEncLcnCarrierScopedCheck, addr x)
+
+proc fromChecked*(T: type LcnCarrierScopedCheck, v: CborValue): LcnCarrierScopedCheck =
+  var r: LcnCarrierScopedCheck
+  runDec(stepDecLcnCarrierScopedCheck, v, addr r)
+  r
+
+proc stepEncLcnCarrierScopedDone*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierScopedDone](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](5))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("abandon")
+  node.entries[k].value = cbor(x.abandon)
+  inc k
+  node.entries[k].key = cbor("call")
+  node.entries[k].value = cbor(uint64(x.call))
+  inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("scoped_done")
+  inc k
+  node.entries[k].key = cbor("tag")
+  node.entries[k].value = cbor(uint64(x.tag))
+  inc k
+
+proc stepDecLcnCarrierScopedDone*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierScopedDone](dst)
+  r[] = LcnCarrierScopedDone()
+  r.abandon = asBool(v.lookup("abandon").get)
+  r.call = uint64(v.lookup("call").get.uint)
+  r.id = uint64(v.lookup("id").get.uint)
+  r.tag = uint64(v.lookup("tag").get.uint)
+
+proc toCbor*(x: LcnCarrierScopedDone): CborValue =
+  runEnc(stepEncLcnCarrierScopedDone, addr x)
+
+proc fromChecked*(T: type LcnCarrierScopedDone, v: CborValue): LcnCarrierScopedDone =
+  var r: LcnCarrierScopedDone
+  runDec(stepDecLcnCarrierScopedDone, v, addr r)
+  r
+
+proc stepEncLcnCarrierScopedResult*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierScopedResult](src)
+  var n = 2
+  if x.failure.isSome:
+    inc n
+  if x.ready.isSome:
+    inc n
+  if x.tag.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.failure.isSome:
+    node.entries[k].key = cbor("failure")
+    w.later(stepEncLcnCarrierFailure, addr x.failure.get, addr node.entries[k].value)
+    inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("scoped_result")
+  inc k
+  if x.ready.isSome:
+    node.entries[k].key = cbor("ready")
+    node.entries[k].value = cbor(x.ready.get)
+    inc k
+  if x.tag.isSome:
+    node.entries[k].key = cbor("tag")
+    node.entries[k].value = cbor(uint64(x.tag.get))
+    inc k
+
+proc stepDecLcnCarrierScopedResult*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierScopedResult](dst)
+  r[] = LcnCarrierScopedResult()
+  let f61 = v.lookup("failure")
+  if f61.isSome:
+    r.failure = Opt.some(default(LcnCarrierFailure))
+    w.later(stepDecLcnCarrierFailure, f61.get, addr r.failure.get)
+  r.id = uint64(v.lookup("id").get.uint)
+  let f62 = v.lookup("ready")
+  if f62.isSome:
+    r.ready = Opt.some(asBool(f62.get))
+  let f63 = v.lookup("tag")
+  if f63.isSome:
+    r.tag = Opt.some(uint64(f63.get.uint))
+
+proc toCbor*(x: LcnCarrierScopedResult): CborValue =
+  runEnc(stepEncLcnCarrierScopedResult, addr x)
+
+proc fromChecked*(T: type LcnCarrierScopedResult, v: CborValue): LcnCarrierScopedResult =
+  var r: LcnCarrierScopedResult
+  runDec(stepDecLcnCarrierScopedResult, v, addr r)
+  r
+
+proc stepEncLcnCarrierTarget*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCarrierTarget](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("conn")
+  node.entries[k].value = cbor(uint64(x.conn))
+  inc k
+  node.entries[k].key = cbor("contract")
+  node.entries[k].value = cbor(x.contract)
+  inc k
+
+proc stepDecLcnCarrierTarget*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCarrierTarget](dst)
+  r[] = LcnCarrierTarget()
+  r.conn = uint64(v.lookup("conn").get.uint)
+  r.contract = v.lookup("contract").get.bytes
+
+proc toCbor*(x: LcnCarrierTarget): CborValue =
+  runEnc(stepEncLcnCarrierTarget, addr x)
+
+proc fromChecked*(T: type LcnCarrierTarget, v: CborValue): LcnCarrierTarget =
+  var r: LcnCarrierTarget
+  runDec(stepDecLcnCarrierTarget, v, addr r)
+  r
+
+proc fromCbor*(T: type LcnCarrierAdmitVerdict, v: CborValue): Result[LcnCarrierAdmitVerdict, string] =
+  ## A value checked against `lcn.carrier_admit_verdict`.
+  ?generatedSchema().check("lcn.carrier_admit_verdict", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierAdmitVerdict): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_admit_verdict`.
+  generatedSchema().encodeChecked("lcn.carrier_admit_verdict", toCbor(x))
+
+proc decode*(T: type LcnCarrierAdmitVerdict, data: openArray[byte]): Result[LcnCarrierAdmitVerdict, string] =
+  ## One deterministic-CBOR `lcn.carrier_admit_verdict` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_admit_verdict", data)
+  ok(fromChecked(T, v))
+
 proc fromCbor*(T: type LcnCarrierApplied, v: CborValue): Result[LcnCarrierApplied, string] =
   ## A value checked against `lcn.carrier_applied`.
   ?generatedSchema().check("lcn.carrier_applied", v)
@@ -1368,6 +3138,62 @@ proc encode*(x: LcnCarrierAsyncDone): Result[seq[byte], string] =
 proc decode*(T: type LcnCarrierAsyncDone, data: openArray[byte]): Result[LcnCarrierAsyncDone, string] =
   ## One deterministic-CBOR `lcn.carrier_async_done` value.
   let v = ?generatedSchema().decodeChecked("lcn.carrier_async_done", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierCallCancel, v: CborValue): Result[LcnCarrierCallCancel, string] =
+  ## A value checked against `lcn.carrier_call_cancel`.
+  ?generatedSchema().check("lcn.carrier_call_cancel", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierCallCancel): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_call_cancel`.
+  generatedSchema().encodeChecked("lcn.carrier_call_cancel", toCbor(x))
+
+proc decode*(T: type LcnCarrierCallCancel, data: openArray[byte]): Result[LcnCarrierCallCancel, string] =
+  ## One deterministic-CBOR `lcn.carrier_call_cancel` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_call_cancel", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierCallEnded, v: CborValue): Result[LcnCarrierCallEnded, string] =
+  ## A value checked against `lcn.carrier_call_ended`.
+  ?generatedSchema().check("lcn.carrier_call_ended", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierCallEnded): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_call_ended`.
+  generatedSchema().encodeChecked("lcn.carrier_call_ended", toCbor(x))
+
+proc decode*(T: type LcnCarrierCallEnded, data: openArray[byte]): Result[LcnCarrierCallEnded, string] =
+  ## One deterministic-CBOR `lcn.carrier_call_ended` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_call_ended", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierCommitment, v: CborValue): Result[LcnCarrierCommitment, string] =
+  ## A value checked against `lcn.carrier_commitment`.
+  ?generatedSchema().check("lcn.carrier_commitment", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierCommitment): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_commitment`.
+  generatedSchema().encodeChecked("lcn.carrier_commitment", toCbor(x))
+
+proc decode*(T: type LcnCarrierCommitment, data: openArray[byte]): Result[LcnCarrierCommitment, string] =
+  ## One deterministic-CBOR `lcn.carrier_commitment` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_commitment", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierDropped, v: CborValue): Result[LcnCarrierDropped, string] =
+  ## A value checked against `lcn.carrier_dropped`.
+  ?generatedSchema().check("lcn.carrier_dropped", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierDropped): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_dropped`.
+  generatedSchema().encodeChecked("lcn.carrier_dropped", toCbor(x))
+
+proc decode*(T: type LcnCarrierDropped, data: openArray[byte]): Result[LcnCarrierDropped, string] =
+  ## One deterministic-CBOR `lcn.carrier_dropped` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_dropped", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnCarrierFailure, v: CborValue): Result[LcnCarrierFailure, string] =
@@ -1440,6 +3266,300 @@ proc decode*(T: type LcnCarrierInitialized, data: openArray[byte]): Result[LcnCa
   let v = ?generatedSchema().decodeChecked("lcn.carrier_initialized", data)
   ok(fromChecked(T, v))
 
+proc fromCbor*(T: type LcnCarrierIoAdmitEstablished, v: CborValue): Result[LcnCarrierIoAdmitEstablished, string] =
+  ## A value checked against `lcn.carrier_io_admit_established`.
+  ?generatedSchema().check("lcn.carrier_io_admit_established", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoAdmitEstablished): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_admit_established`.
+  generatedSchema().encodeChecked("lcn.carrier_io_admit_established", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoAdmitEstablished, data: openArray[byte]): Result[LcnCarrierIoAdmitEstablished, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_admit_established` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_admit_established", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoAdmitFailed, v: CborValue): Result[LcnCarrierIoAdmitFailed, string] =
+  ## A value checked against `lcn.carrier_io_admit_failed`.
+  ?generatedSchema().check("lcn.carrier_io_admit_failed", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoAdmitFailed): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_admit_failed`.
+  generatedSchema().encodeChecked("lcn.carrier_io_admit_failed", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoAdmitFailed, data: openArray[byte]): Result[LcnCarrierIoAdmitFailed, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_admit_failed` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_admit_failed", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoAdmitUnavailable, v: CborValue): Result[LcnCarrierIoAdmitUnavailable, string] =
+  ## A value checked against `lcn.carrier_io_admit_unavailable`.
+  ?generatedSchema().check("lcn.carrier_io_admit_unavailable", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoAdmitUnavailable): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_admit_unavailable`.
+  generatedSchema().encodeChecked("lcn.carrier_io_admit_unavailable", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoAdmitUnavailable, data: openArray[byte]): Result[LcnCarrierIoAdmitUnavailable, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_admit_unavailable` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_admit_unavailable", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoClose, v: CborValue): Result[LcnCarrierIoClose, string] =
+  ## A value checked against `lcn.carrier_io_close`.
+  ?generatedSchema().check("lcn.carrier_io_close", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoClose): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_close`.
+  generatedSchema().encodeChecked("lcn.carrier_io_close", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoClose, data: openArray[byte]): Result[LcnCarrierIoClose, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_close` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_close", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoClosed, v: CborValue): Result[LcnCarrierIoClosed, string] =
+  ## A value checked against `lcn.carrier_io_closed`.
+  ?generatedSchema().check("lcn.carrier_io_closed", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoClosed): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_closed`.
+  generatedSchema().encodeChecked("lcn.carrier_io_closed", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoClosed, data: openArray[byte]): Result[LcnCarrierIoClosed, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_closed` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_closed", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoDispatch, v: CborValue): Result[LcnCarrierIoDispatch, string] =
+  ## A value checked against `lcn.carrier_io_dispatch`.
+  ?generatedSchema().check("lcn.carrier_io_dispatch", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoDispatch): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_dispatch`.
+  generatedSchema().encodeChecked("lcn.carrier_io_dispatch", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoDispatch, data: openArray[byte]): Result[LcnCarrierIoDispatch, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_dispatch` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_dispatch", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoEstablished, v: CborValue): Result[LcnCarrierIoEstablished, string] =
+  ## A value checked against `lcn.carrier_io_established`.
+  ?generatedSchema().check("lcn.carrier_io_established", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoEstablished): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_established`.
+  generatedSchema().encodeChecked("lcn.carrier_io_established", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoEstablished, data: openArray[byte]): Result[LcnCarrierIoEstablished, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_established` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_established", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoHello, v: CborValue): Result[LcnCarrierIoHello, string] =
+  ## A value checked against `lcn.carrier_io_hello`.
+  ?generatedSchema().check("lcn.carrier_io_hello", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoHello): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_hello`.
+  generatedSchema().encodeChecked("lcn.carrier_io_hello", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoHello, data: openArray[byte]): Result[LcnCarrierIoHello, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_hello` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_hello", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoListening, v: CborValue): Result[LcnCarrierIoListening, string] =
+  ## A value checked against `lcn.carrier_io_listening`.
+  ?generatedSchema().check("lcn.carrier_io_listening", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoListening): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_listening`.
+  generatedSchema().encodeChecked("lcn.carrier_io_listening", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoListening, data: openArray[byte]): Result[LcnCarrierIoListening, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_listening` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_listening", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoLocalFailure, v: CborValue): Result[LcnCarrierIoLocalFailure, string] =
+  ## A value checked against `lcn.carrier_io_local_failure`.
+  ?generatedSchema().check("lcn.carrier_io_local_failure", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoLocalFailure): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_local_failure`.
+  generatedSchema().encodeChecked("lcn.carrier_io_local_failure", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoLocalFailure, data: openArray[byte]): Result[LcnCarrierIoLocalFailure, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_local_failure` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_local_failure", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoPublishFailed, v: CborValue): Result[LcnCarrierIoPublishFailed, string] =
+  ## A value checked against `lcn.carrier_io_publish_failed`.
+  ?generatedSchema().check("lcn.carrier_io_publish_failed", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoPublishFailed): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_publish_failed`.
+  generatedSchema().encodeChecked("lcn.carrier_io_publish_failed", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoPublishFailed, data: openArray[byte]): Result[LcnCarrierIoPublishFailed, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_publish_failed` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_publish_failed", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoPublishResult, v: CborValue): Result[LcnCarrierIoPublishResult, string] =
+  ## A value checked against `lcn.carrier_io_publish_result`.
+  ?generatedSchema().check("lcn.carrier_io_publish_result", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoPublishResult): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_publish_result`.
+  generatedSchema().encodeChecked("lcn.carrier_io_publish_result", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoPublishResult, data: openArray[byte]): Result[LcnCarrierIoPublishResult, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_publish_result` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_publish_result", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoRespond, v: CborValue): Result[LcnCarrierIoRespond, string] =
+  ## A value checked against `lcn.carrier_io_respond`.
+  ?generatedSchema().check("lcn.carrier_io_respond", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoRespond): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_respond`.
+  generatedSchema().encodeChecked("lcn.carrier_io_respond", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoRespond, data: openArray[byte]): Result[LcnCarrierIoRespond, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_respond` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_respond", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoServeFailed, v: CborValue): Result[LcnCarrierIoServeFailed, string] =
+  ## A value checked against `lcn.carrier_io_serve_failed`.
+  ?generatedSchema().check("lcn.carrier_io_serve_failed", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoServeFailed): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_serve_failed`.
+  generatedSchema().encodeChecked("lcn.carrier_io_serve_failed", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoServeFailed, data: openArray[byte]): Result[LcnCarrierIoServeFailed, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_serve_failed` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_serve_failed", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoStop, v: CborValue): Result[LcnCarrierIoStop, string] =
+  ## A value checked against `lcn.carrier_io_stop`.
+  ?generatedSchema().check("lcn.carrier_io_stop", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoStop): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_stop`.
+  generatedSchema().encodeChecked("lcn.carrier_io_stop", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoStop, data: openArray[byte]): Result[LcnCarrierIoStop, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_stop` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_stop", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoStopServing, v: CborValue): Result[LcnCarrierIoStopServing, string] =
+  ## A value checked against `lcn.carrier_io_stop_serving`.
+  ?generatedSchema().check("lcn.carrier_io_stop_serving", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoStopServing): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_stop_serving`.
+  generatedSchema().encodeChecked("lcn.carrier_io_stop_serving", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoStopServing, data: openArray[byte]): Result[LcnCarrierIoStopServing, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_stop_serving` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_stop_serving", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoSubscribe, v: CborValue): Result[LcnCarrierIoSubscribe, string] =
+  ## A value checked against `lcn.carrier_io_subscribe`.
+  ?generatedSchema().check("lcn.carrier_io_subscribe", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoSubscribe): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_subscribe`.
+  generatedSchema().encodeChecked("lcn.carrier_io_subscribe", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoSubscribe, data: openArray[byte]): Result[LcnCarrierIoSubscribe, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_subscribe` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_subscribe", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoSubscriptionResult, v: CborValue): Result[LcnCarrierIoSubscriptionResult, string] =
+  ## A value checked against `lcn.carrier_io_subscription_result`.
+  ?generatedSchema().check("lcn.carrier_io_subscription_result", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoSubscriptionResult): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_subscription_result`.
+  generatedSchema().encodeChecked("lcn.carrier_io_subscription_result", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoSubscriptionResult, data: openArray[byte]): Result[LcnCarrierIoSubscriptionResult, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_subscription_result` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_subscription_result", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoTerminate, v: CborValue): Result[LcnCarrierIoTerminate, string] =
+  ## A value checked against `lcn.carrier_io_terminate`.
+  ?generatedSchema().check("lcn.carrier_io_terminate", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoTerminate): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_terminate`.
+  generatedSchema().encodeChecked("lcn.carrier_io_terminate", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoTerminate, data: openArray[byte]): Result[LcnCarrierIoTerminate, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_terminate` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_terminate", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoUnsubscribe, v: CborValue): Result[LcnCarrierIoUnsubscribe, string] =
+  ## A value checked against `lcn.carrier_io_unsubscribe`.
+  ?generatedSchema().check("lcn.carrier_io_unsubscribe", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoUnsubscribe): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_unsubscribe`.
+  generatedSchema().encodeChecked("lcn.carrier_io_unsubscribe", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoUnsubscribe, data: openArray[byte]): Result[LcnCarrierIoUnsubscribe, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_unsubscribe` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_unsubscribe", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierIoWorkEnded, v: CborValue): Result[LcnCarrierIoWorkEnded, string] =
+  ## A value checked against `lcn.carrier_io_work_ended`.
+  ?generatedSchema().check("lcn.carrier_io_work_ended", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierIoWorkEnded): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_io_work_ended`.
+  generatedSchema().encodeChecked("lcn.carrier_io_work_ended", toCbor(x))
+
+proc decode*(T: type LcnCarrierIoWorkEnded, data: openArray[byte]): Result[LcnCarrierIoWorkEnded, string] =
+  ## One deterministic-CBOR `lcn.carrier_io_work_ended` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_io_work_ended", data)
+  ok(fromChecked(T, v))
+
 proc fromCbor*(T: type LcnCarrierMessage, v: CborValue): Result[LcnCarrierMessage, string] =
   ## A value checked against `lcn.carrier_message`.
   ?generatedSchema().check("lcn.carrier_message", v)
@@ -1452,6 +3572,20 @@ proc encode*(x: LcnCarrierMessage): Result[seq[byte], string] =
 proc decode*(T: type LcnCarrierMessage, data: openArray[byte]): Result[LcnCarrierMessage, string] =
   ## One deterministic-CBOR `lcn.carrier_message` value.
   let v = ?generatedSchema().decodeChecked("lcn.carrier_message", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierPublishFailure, v: CborValue): Result[LcnCarrierPublishFailure, string] =
+  ## A value checked against `lcn.carrier_publish_failure`.
+  ?generatedSchema().check("lcn.carrier_publish_failure", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierPublishFailure): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_publish_failure`.
+  generatedSchema().encodeChecked("lcn.carrier_publish_failure", toCbor(x))
+
+proc decode*(T: type LcnCarrierPublishFailure, data: openArray[byte]): Result[LcnCarrierPublishFailure, string] =
+  ## One deterministic-CBOR `lcn.carrier_publish_failure` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_publish_failure", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnCarrierRcAsyncCancel, v: CborValue): Result[LcnCarrierRcAsyncCancel, string] =
@@ -1522,6 +3656,20 @@ proc encode*(x: LcnCarrierRcConnectRemote): Result[seq[byte], string] =
 proc decode*(T: type LcnCarrierRcConnectRemote, data: openArray[byte]): Result[LcnCarrierRcConnectRemote, string] =
   ## One deterministic-CBOR `lcn.carrier_rc_connect_remote` value.
   let v = ?generatedSchema().decodeChecked("lcn.carrier_rc_connect_remote", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierRcDeliver, v: CborValue): Result[LcnCarrierRcDeliver, string] =
+  ## A value checked against `lcn.carrier_rc_deliver`.
+  ?generatedSchema().check("lcn.carrier_rc_deliver", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierRcDeliver): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_rc_deliver`.
+  generatedSchema().encodeChecked("lcn.carrier_rc_deliver", toCbor(x))
+
+proc decode*(T: type LcnCarrierRcDeliver, data: openArray[byte]): Result[LcnCarrierRcDeliver, string] =
+  ## One deterministic-CBOR `lcn.carrier_rc_deliver` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_rc_deliver", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnCarrierRcDelivered, v: CborValue): Result[LcnCarrierRcDelivered, string] =
@@ -1648,4 +3796,74 @@ proc encode*(x: LcnCarrierReleased): Result[seq[byte], string] =
 proc decode*(T: type LcnCarrierReleased, data: openArray[byte]): Result[LcnCarrierReleased, string] =
   ## One deterministic-CBOR `lcn.carrier_released` value.
   let v = ?generatedSchema().decodeChecked("lcn.carrier_released", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierScopedAdmit, v: CborValue): Result[LcnCarrierScopedAdmit, string] =
+  ## A value checked against `lcn.carrier_scoped_admit`.
+  ?generatedSchema().check("lcn.carrier_scoped_admit", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierScopedAdmit): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_scoped_admit`.
+  generatedSchema().encodeChecked("lcn.carrier_scoped_admit", toCbor(x))
+
+proc decode*(T: type LcnCarrierScopedAdmit, data: openArray[byte]): Result[LcnCarrierScopedAdmit, string] =
+  ## One deterministic-CBOR `lcn.carrier_scoped_admit` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_scoped_admit", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierScopedCheck, v: CborValue): Result[LcnCarrierScopedCheck, string] =
+  ## A value checked against `lcn.carrier_scoped_check`.
+  ?generatedSchema().check("lcn.carrier_scoped_check", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierScopedCheck): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_scoped_check`.
+  generatedSchema().encodeChecked("lcn.carrier_scoped_check", toCbor(x))
+
+proc decode*(T: type LcnCarrierScopedCheck, data: openArray[byte]): Result[LcnCarrierScopedCheck, string] =
+  ## One deterministic-CBOR `lcn.carrier_scoped_check` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_scoped_check", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierScopedDone, v: CborValue): Result[LcnCarrierScopedDone, string] =
+  ## A value checked against `lcn.carrier_scoped_done`.
+  ?generatedSchema().check("lcn.carrier_scoped_done", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierScopedDone): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_scoped_done`.
+  generatedSchema().encodeChecked("lcn.carrier_scoped_done", toCbor(x))
+
+proc decode*(T: type LcnCarrierScopedDone, data: openArray[byte]): Result[LcnCarrierScopedDone, string] =
+  ## One deterministic-CBOR `lcn.carrier_scoped_done` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_scoped_done", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierScopedResult, v: CborValue): Result[LcnCarrierScopedResult, string] =
+  ## A value checked against `lcn.carrier_scoped_result`.
+  ?generatedSchema().check("lcn.carrier_scoped_result", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierScopedResult): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_scoped_result`.
+  generatedSchema().encodeChecked("lcn.carrier_scoped_result", toCbor(x))
+
+proc decode*(T: type LcnCarrierScopedResult, data: openArray[byte]): Result[LcnCarrierScopedResult, string] =
+  ## One deterministic-CBOR `lcn.carrier_scoped_result` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_scoped_result", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCarrierTarget, v: CborValue): Result[LcnCarrierTarget, string] =
+  ## A value checked against `lcn.carrier_target`.
+  ?generatedSchema().check("lcn.carrier_target", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCarrierTarget): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.carrier_target`.
+  generatedSchema().encodeChecked("lcn.carrier_target", toCbor(x))
+
+proc decode*(T: type LcnCarrierTarget, data: openArray[byte]): Result[LcnCarrierTarget, string] =
+  ## One deterministic-CBOR `lcn.carrier_target` value.
+  let v = ?generatedSchema().decodeChecked("lcn.carrier_target", data)
   ok(fromChecked(T, v))

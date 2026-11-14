@@ -43,6 +43,15 @@
 ## output budget releases it, waits 1 ms and tries again. Every other end is
 ## answered by the Runtime thread (`unsentFailure`), unless the session
 ## already committed it (`markSent`: a Cancel, a closed session).
+##
+## [plan §2.7; part 4b-3.2; G273] A served invocation on a hosted provider's
+## endpoint carries no params: its Module Host keeps them, checks them, runs
+## the provider and commits the Response itself (`runHostedRoute`,
+## `hostcall.nim`). The worker admits it, sends the verdict, answers the
+## host's scoped steps and, at `call_ended`, records the decision as sent
+## (`hostCommitted`) and writes the call record from what the host
+## committed. The Runtime's own failures still go to the host as orders,
+## which take effect when the host processes them (K38 interim).
 
 {.push raises: [], gcsafe.}
 
@@ -51,7 +60,7 @@ from std/os import sleep
 import results
 import ../abi/[checks, types]
 import ../iface/[outcome, payload]
-import ./[callside, invoke, plumbing]
+import ./[callside, hostcall, hostsup, invoke, plumbing]
 from ../transport/io/api import IoCommand, IoCommandKind, CallOutcome, SubmitResult
 from ./tport import trySubmit
 
@@ -283,6 +292,19 @@ proc offer(
     c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
     return ok
   false
+
+proc hostCommitted(c: ptr AsyncCall, r: Result[seq[byte], InvocationFailure]) =
+  ## [K38 interim; plan §2.7] A hosted session call's outcome: its Module Host
+  ## commits the Response, so nothing is submitted here; the decision is
+  ## recorded as sent.
+  var won = false
+  withLock c.lock:
+    if c.phase == cpSubmitted:
+      c.decideLocked(r, okResult)
+      c.sent = true
+      won = true
+  if won:
+    c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
 
 proc offerCommitted(
     c: ptr AsyncCall,
@@ -689,6 +711,16 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
     return
   if c.isTerminal:
     # Decided while it was admitted: nothing is dispatched.
+    if adm.host != nil:
+      dropHost(cast[Host](adm.host)) # the admission's
+    e.record(adm.capture, trail)
+    leave(e, adm)
+    return
+  if adm.host != nil:
+    # [G272] A hosted provider is reached only over local transport, through
+    # its host's endpoint (`runHostedRoute`).
+    dropHost(cast[Host](adm.host)) # the admission's
+    c.offer(failed(failure(ecModule, "the provider is in a Module Host")))
     e.record(adm.capture, trail)
     leave(e, adm)
     return
@@ -740,6 +772,60 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
       return
     c.submitDeferred(adm, bare, params, share(adm.capture, trail))
 
+proc runHostedRoute(c: ptr AsyncCall, bare: string) =
+  ## [plan §2.7 steps 2-6] A Request on a hosted provider's endpoint: admitted
+  ## here, checked, run and answered in its Module Host (`hostcall.nim`).
+  let e = c.engine
+  let reply = e.call(
+    Request(
+      kind: rqAdmit,
+      origin: moduleOrigin($c.consumer),
+      attempt: $c.attempt,
+      route: $c.route,
+      bare: bare,
+      call: c,
+    )
+  )
+  let h = hostOf(e, c.conn)
+  defer:
+    if h != nil:
+      dropHost(h)
+  if reply.error.isSome:
+    # [G171] The host checks the params of a NOT_READY refusal first.
+    let f = failureOf(reply.error.get)
+    if h != nil:
+      h.refuseHosted(c.conn, c.requestId, c.blob.root, f)
+    c.hostCommitted(failed(f))
+    return
+  let adm = reply.admission
+  var trail: CallTrail
+  if adm.host != nil:
+    dropHost(cast[Host](adm.host)) # the admission's; `h` serves the session
+  if not adm.introspection and c.isTerminal:
+    # Decided while it was admitted: nothing is dispatched.
+    e.record(adm.capture, trail)
+    leave(e, adm)
+    return
+  let r =
+    if h == nil:
+      Result[void, InvocationFailure].err(
+        failure(ecModule, "the Module Host has ended")
+      )
+    else:
+      h.runHosted(
+        adm, e, c.consumer, c.route, c.generation, c.blob, c.conn, c.requestId, trail
+      )
+  trail.succeeded = r.isOk
+  c.hostCommitted(
+    if r.isOk:
+      Result[seq[byte], InvocationFailure].ok(newSeq[byte]())
+    else:
+      failed(r.error)
+  )
+  e.record(adm.capture, trail)
+  if not adm.introspection:
+    leave(e, adm)
+
 proc runCall*(p: pointer) =
   ## Call worker: one submitted call, unless it is already terminal. The
   ## engine posts `mkCallJobDone` after this returns.
@@ -755,6 +841,8 @@ proc runCall*(p: pointer) =
   let params = bytesOf(c.params, c.paramsLen)
   if c.rc:
     c.offer(rcInvoke(c.engine, $c.consumer, $c.attempt, bare, params))
+  elif c.session and c.conn.isHostedConn:
+    c.runHostedRoute(bare)
   else:
     c.runRoute(bare, params)
 

@@ -84,6 +84,7 @@ arm(
   arm_lcn_Carrier_rc_connect_remote,
 )
 arm(LcnCarrierRcPublish, lcn_Carrier_rc_publish, arm_lcn_Carrier_rc_publish)
+arm(LcnCarrierRcDeliver, lcn_Carrier_rc_deliver, arm_lcn_Carrier_rc_deliver)
 arm(LcnCarrierRcPrepare, lcn_Carrier_rc_prepare, arm_lcn_Carrier_rc_prepare)
 arm(
   LcnCarrierRcAsyncSubmit, lcn_Carrier_rc_async_submit, arm_lcn_Carrier_rc_async_submit
@@ -98,6 +99,60 @@ arm(
 arm(LcnCarrierRcReply, lcn_Carrier_rc_reply, arm_lcn_Carrier_rc_reply)
 arm(LcnCarrierRcDelivery, lcn_Carrier_rc_delivery, arm_lcn_Carrier_rc_delivery)
 arm(LcnCarrierAsyncDone, lcn_Carrier_async_done, arm_lcn_Carrier_async_done)
+
+# Lane 2 (4b-3.2): a hosted provider's endpoint and its calls.
+arm(LcnCarrierAdmitVerdict, lcn_Carrier_admit_verdict, arm_lcn_Carrier_admit_verdict)
+arm(LcnCarrierCallCancel, lcn_Carrier_call_cancel, arm_lcn_Carrier_call_cancel)
+arm(LcnCarrierCallEnded, lcn_Carrier_call_ended, arm_lcn_Carrier_call_ended)
+arm(
+  LcnCarrierIoAdmitEstablished, lcn_Carrier_io_admit_established,
+  arm_lcn_Carrier_io_admit_established,
+)
+arm(
+  LcnCarrierIoAdmitFailed, lcn_Carrier_io_admit_failed, arm_lcn_Carrier_io_admit_failed
+)
+arm(
+  LcnCarrierIoAdmitUnavailable, lcn_Carrier_io_admit_unavailable,
+  arm_lcn_Carrier_io_admit_unavailable,
+)
+arm(LcnCarrierIoClose, lcn_Carrier_io_close, arm_lcn_Carrier_io_close)
+arm(LcnCarrierIoClosed, lcn_Carrier_io_closed, arm_lcn_Carrier_io_closed)
+arm(LcnCarrierIoDispatch, lcn_Carrier_io_dispatch, arm_lcn_Carrier_io_dispatch)
+arm(LcnCarrierIoEstablished, lcn_Carrier_io_established, arm_lcn_Carrier_io_established)
+arm(LcnCarrierIoHello, lcn_Carrier_io_hello, arm_lcn_Carrier_io_hello)
+arm(LcnCarrierIoListening, lcn_Carrier_io_listening, arm_lcn_Carrier_io_listening)
+arm(
+  LcnCarrierIoLocalFailure, lcn_Carrier_io_local_failure,
+  arm_lcn_Carrier_io_local_failure,
+)
+arm(
+  LcnCarrierIoPublishFailed, lcn_Carrier_io_publish_failed,
+  arm_lcn_Carrier_io_publish_failed,
+)
+arm(
+  LcnCarrierIoPublishResult, lcn_Carrier_io_publish_result,
+  arm_lcn_Carrier_io_publish_result,
+)
+arm(LcnCarrierIoRespond, lcn_Carrier_io_respond, arm_lcn_Carrier_io_respond)
+arm(
+  LcnCarrierIoServeFailed, lcn_Carrier_io_serve_failed, arm_lcn_Carrier_io_serve_failed
+)
+arm(LcnCarrierIoStop, lcn_Carrier_io_stop, arm_lcn_Carrier_io_stop)
+arm(
+  LcnCarrierIoStopServing, lcn_Carrier_io_stop_serving, arm_lcn_Carrier_io_stop_serving
+)
+arm(LcnCarrierIoSubscribe, lcn_Carrier_io_subscribe, arm_lcn_Carrier_io_subscribe)
+arm(
+  LcnCarrierIoSubscriptionResult, lcn_Carrier_io_subscription_result,
+  arm_lcn_Carrier_io_subscription_result,
+)
+arm(LcnCarrierIoTerminate, lcn_Carrier_io_terminate, arm_lcn_Carrier_io_terminate)
+arm(LcnCarrierIoUnsubscribe, lcn_Carrier_io_unsubscribe, arm_lcn_Carrier_io_unsubscribe)
+arm(LcnCarrierIoWorkEnded, lcn_Carrier_io_work_ended, arm_lcn_Carrier_io_work_ended)
+arm(LcnCarrierScopedCheck, lcn_Carrier_scoped_check, arm_lcn_Carrier_scoped_check)
+arm(LcnCarrierScopedAdmit, lcn_Carrier_scoped_admit, arm_lcn_Carrier_scoped_admit)
+arm(LcnCarrierScopedDone, lcn_Carrier_scoped_done, arm_lcn_Carrier_scoped_done)
+arm(LcnCarrierScopedResult, lcn_Carrier_scoped_result, arm_lcn_Carrier_scoped_result)
 
 proc frameOf*(m: LcnCarrierMessage): Result[seq[byte], string] =
   ## The length prefix and the encoded message.
@@ -167,6 +222,13 @@ when defined(posix):
     withLock w.lock:
       result = sendAll(w.fd, f, alive, ctx)
 
+  proc sendFrame*(
+      w: var CarrierWriter, f: openArray[byte], alive: AliveFn = nil, ctx: pointer = nil
+  ): Result[void, string] =
+    ## One whole frame `frameOf` made, under the write lock.
+    withLock w.lock:
+      result = sendAll(w.fd, f, alive, ctx)
+
   # Reading -------------------------------------------------------------------------------
 
   type ReadOutcome* = enum
@@ -202,5 +264,10 @@ else:
       m: LcnCarrierMessage,
       alive: AliveFn = nil,
       ctx: pointer = nil,
+  ): Result[void, string] =
+    err("hosted placement is not supported on this platform")
+
+  proc sendFrame*(
+      w: var CarrierWriter, f: openArray[byte], alive: AliveFn = nil, ctx: pointer = nil
   ): Result[void, string] =
     err("hosted placement is not supported on this platform")

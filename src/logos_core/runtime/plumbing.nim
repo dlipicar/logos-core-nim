@@ -659,6 +659,9 @@ type
     capture*: CallCapture
       ## [SPEC CA l.1176-1177] what the applied call decision requires the
       ## boundary to record (`callaudit.nim`); empty: nothing
+    host*: pointer
+      ## [G273] the provider's Module Host (a retained `hostsup.Host`), which
+      ## runs the call (`hostcall.nim`); nil: the provider is in this process
 
   Reply* = object
     error*: Opt[EngineError]

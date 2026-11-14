@@ -197,8 +197,9 @@ execution scope `local-transport` in a `process` (G272). So:
 - **LOADER**: the Loader advertises `hosted_dynamic {process}` when `runtime.module_host` is set
   (LDR-0034, LDR-0035) and never `force_release`; a placement it does not advertise is
   `unsupported-strategy` before any code is read (LDR-0067, LDR-0068). The handoff and the paths stay
-  out of every record and error (LDR-0045, LDR-0149). The hosted provider endpoint and the trusted
-  transport adapter handoff (§5.3, §5.4) wait for part 4b-3.2.
+  out of every record and error (LDR-0045, LDR-0149). The hosted provider endpoint (§5.3) is part
+  4b-3.2's, below; the trusted transport adapter handoff (§5.4) is not used (K3: the carrier is a
+  further private handoff).
 - **RUNTIME §4.2.1**: a hosted module's Runtime Control calls are answered through its own
   attempt's binding, so they have the values, errors, decisions and transitions of a direct
   module's (RUN-0169 to RUN-0172, RUN-0180; `test_hosted` compares the same probe library realized
@@ -212,8 +213,23 @@ execution scope `local-transport` in a `process` (G272). So:
   Module Loader's loss each host is ended and its cleanup resolves only when the end is confirmed
   (RUN-1067 to RUN-1070, tagged again on hosts); after an unclean end a host of the previous run is
   never adopted, and its instance waits for its restart lock (RUN-0814).
-- **Not yet**: hosted providers (4b-3.2) and hosted consumers' routes (4b-3.3); RUN-0228 (the path
-  removed) comes with hosted providers.
+- **Hosted providers** (part 4b-3.2; G267, G272-G274): the Runtime makes and validates a hosted
+  provider's endpoint before its host starts, hands the host the listener and validates the path
+  again before `ready`; the Loader's record names it (LDR-0047, LDR-0049, LDR-0101, LDR-0102); a
+  listener that does not arrive fails the placement with nothing served (TRN-0186, LDR-0089). The
+  host serves that listener only, with the Runtime's transport loop. Payloads go between the
+  consumer's process and the host directly, and the Runtime stays on the control path (the owner's
+  direct layout, G267): it judges every Hello, admits every call, subscription and delivery and keeps
+  every session, from what the host reports without payloads; the host keeps only the session state
+  it was given, checks each payload with the Runtime's own checks on the same contract, runs the
+  provider and commits the Response (G273), and reports the commitments a call record retains
+  (G274) (RUN-0226, RUN-0815, LDR-0147, TRN-0317). No carrier frame holds a request, response or
+  event payload (`test_hosted_routes` P-13 traces every frame). So a route to a hosted provider
+  behaves as a transported route to a direct one; `test_hosted_routes` (P-1 to P-14) shows it with
+  the meter kit library realized in a host. With no routing rule a route with a hosted end is
+  `local-transport`; a `direct` rule naming a hosted module is refused (G272). The claims move in
+  part 4b-3.4.
+- **Not yet**: hosted consumers' routes (4b-3.3).
 - **Differences from direct realization**, none visible to a module's Runtime Control calls: a
   host's environment is `module_host_env` only, and on macOS CoreFoundation may add its own
   `__CF_USER_TEXT_ENCODING` inside the process.
@@ -270,6 +286,16 @@ reaches a scope until package-backed requests are presented to policy.
 - Containment of what a hosted module starts: a Module Host's process group is killed after every
   end of the host, but a process the module moved into another group or session outlives it
   (DECISIONS G265). Placement `process` is a separate address space, not a sandbox.
+- What a hosted provider's host commits, and the roots of its call records: the host runs module
+  code in its own address space (SEC l.205), and it checks and commits a hosted call's request and
+  response, its Events and its scoped publications itself. So that a consumer receives only a
+  checked Response, that a Runtime order (a failure Response, a session's end) takes effect when the
+  host's loop processes it and nothing after it is sent (DECISIONS G273), that a call record's
+  request and response roots are the values the consumer exchanged (DECISIONS G274), and that the
+  host serves only the listener it was handed, all rest on the host program. Every authorization
+  decision does not: the Runtime judges every Hello, call, subscription and delivery from names,
+  roots and connection numbers, and no verdict reads a payload. Both are interims (plan R16, K38,
+  K44), reported as TF-50 and TF-51.
 
 ## Unix-stream endpoints and peer checks
 
@@ -413,10 +439,14 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   dropped; a pause between a read and the guarded request it decided on, `openPauseGateForTests`),
   and `callsForTests`, `callTimesForTests` and `targetsForTests` read its record of the calls it made.
 - `hostsup` (DECISIONS I91): `holdEnd` delays the confirmation of a Module Host's end (`holdEnds`
-  every host's, those not yet spawned included), `breakCarrier`
-  treats the next frame from a host as malformed, and `hostEnds` and `pidOf` read what supervision
-  saw. The engine's `moduleHostForTests` hands a test an instance's host, and
-  `realizationForTests` reads an instance's `realization` when no client is left to ask. The `logos-module-host` program itself has no hooks: its suites drive it through its carrier
+  every host's, those not yet spawned included), `breakCarrier` treats the next frame from a host as
+  malformed, `dropNextListener` spawns the next provider's host without its listener, `hostEnds` and
+  `pidOf` read what supervision saw, and `traceMarkers` and `traced` count the carrier frames the
+  Runtime sends and receives and those holding any of the given byte strings (`test_hosted_routes`
+  P-13). The engine's `moduleHostForTests` hands a test an instance's host, `realizationForTests`
+  reads an instance's `realization` when no client is left to ask, and `hostedEndpointForTests`
+  reads the path of an instance's hosted endpoint. The `logos-module-host` program itself has no
+  hooks: its suites drive it through its carrier
   (`tests/support/hostowner.nim`) and a probe module.
 
 No deployment binary contains them.

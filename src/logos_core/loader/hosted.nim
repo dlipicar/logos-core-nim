@@ -70,6 +70,13 @@ proc startHosted*(
     live: call.live,
     max_payload_depth: uint64(maxPayloadDepth),
   )
+  let ep = h.endpointInit()
+  if ep.isSome:
+    # [SPEC LOADER §5.3; RUN-0200] The Runtime-created listener is the host's
+    # fd 4; `init` names its address and the Transport limits it serves with.
+    init.endpoint = Opt.some(ep.get.path)
+    init.transport = Opt.some(ep.get.transport)
+    init.runtime_id = Opt.some(ep.get.runtimeId)
   if call.configuration != nil:
     var b = newSeq[byte](call.configurationLen)
     for i in 0 ..< b.len:
@@ -89,7 +96,14 @@ proc startHosted*(
     retain(h) # the realization's
     HostedOutcome(
       outcome: Result[HostedInit, LoaderError].ok(
-        HostedInit(surface: m.arm_lcn_Carrier_initialized.call_surface)
+        HostedInit(
+          surface: m.arm_lcn_Carrier_initialized.call_surface,
+          endpoint:
+            if ep.isSome:
+              Opt.some(ep.get.path)
+            else:
+              Opt.none(string),
+        )
       )
     )
   of K.lcn_Carrier_init_failed:

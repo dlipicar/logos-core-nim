@@ -608,6 +608,15 @@ proc checkModuleHost(c: var HostConfig, r: LcnAppRuntime): Result[void, ConfigEr
             "declaration " & d.record.module & ": hosted_dynamic needs module_host"
           )
         )
+  var hosted: seq[string]
+  for m in c.modules:
+    if m.record.strategy == stHostedDynamic:
+      hosted.add(m.record.module)
+  for d in c.declarations:
+    if d.record.strategy == stHostedDynamic:
+      hosted.add(d.record.module)
+  checkHostedRules(c.routing, hosted).isOkOr:
+    return err(configError("routing: " & error))
   ok()
 
 proc decodeHostConfig*(

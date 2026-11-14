@@ -245,14 +245,16 @@ func failedRecord(
 proc activeRecord(
     a: LogosNSModuleLoaderActiveRealization, instance: string, id: Opt[string]
 ): LoaderReply =
-  ## [SPEC LOADER §7, l.325] An active record names the request's instance;
-  ## a direct realization has no provider endpoint.
+  ## [SPEC LOADER §7] An active record names the request's instance. Its
+  ## provider endpoint, if any, is checked by the engine against the one it
+  ## made for the attempt (§5.3, l.479-480).
   if a.module_instance != instance:
     return invalid("an active record names another module instance")
   if id.isSome and a.realization != id.get:
     return invalid("an active record names another realization")
+  var endpoint = Opt.none(string)
   if a.provider_endpoint.isSome:
-    return invalid("a direct realization names a provider endpoint")
+    endpoint = Opt.some(a.provider_endpoint.get.address)
   LoaderReply(
     kind: lrActive,
     record: RealizationRecord(
@@ -260,6 +262,7 @@ proc activeRecord(
       moduleInstance: a.module_instance,
       status: rsActive,
       callSurface: a.call_surface,
+      providerEndpoint: endpoint,
     ),
   )
 

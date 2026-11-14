@@ -38,7 +38,7 @@ type
 
   RouteEnds* = object
     ## [Rev R12] What selection may look at: the two module names, and whether
-    ## each end runs in a Module Host (always false in 4b-2).
+    ## each end runs in a Module Host (4b-3).
     consumerModule*, providerModule*: string
     consumerHosted*, providerHosted*: bool
 
@@ -46,6 +46,10 @@ func selectMode*(rules: openArray[RoutingRule], ends: RouteEnds): RouteMode =
   ## [IMPL-DECISION G254] The mode of a route from `ends.consumerModule`
   ## to `ends.providerModule`: the rule naming both wins, then the rule for any
   ## caller, else direct.
+  ## [Rev R10 (4b-3); RUNTIME l.3006-3007] With no rule, a route with an end
+  ## in a Module Host is local-transport: a direct route needs one address
+  ## space. A `direct` rule meeting a hosted end is the caller's to refuse
+  ## (`hostedConflict`).
   var any = Opt.none(RouteMode)
   for r in rules:
     if r.callee != ends.providerModule:
@@ -55,7 +59,36 @@ func selectMode*(rules: openArray[RoutingRule], ends: RouteEnds): RouteMode =
         return r.mode
     else:
       any = Opt.some(r.mode)
-  any.get(rmDirect)
+  if any.isSome:
+    return any.get
+  if ends.consumerHosted or ends.providerHosted: rmLocalTransport else: rmDirect
+
+func hostedConflict*(mode: RouteMode, ends: RouteEnds): Opt[string] =
+  ## [Rev R10; IMPL] A `direct` rule chose the mode of a route with an end in
+  ## a Module Host: the reason it cannot be made.
+  if mode == rmDirect and (ends.consumerHosted or ends.providerHosted):
+    return Opt.some(
+      "a direct routing rule names " &
+        (if ends.providerHosted: ends.providerModule else: ends.consumerModule) &
+        ", which runs in a Module Host"
+    )
+  Opt.none(string)
+
+func checkHostedRules*(
+    rules: openArray[RoutingRule], hosted: openArray[string]
+): Result[void, string] =
+  ## [Rev R10] At configuration load: no `direct` rule names a module the
+  ## configuration places `hosted_dynamic`, as caller or callee.
+  for r in rules:
+    if r.mode != rmDirect:
+      continue
+    for m in hosted:
+      if r.callee == m or r.caller == Opt.some(m):
+        return err(
+          "the direct routing rule " & r.caller.get("any") & " -> " & r.callee &
+            " names " & m & ", which is hosted_dynamic"
+        )
+  ok()
 
 func anyTransported*(rules: openArray[RoutingRule]): bool =
   ## Whether some rule selects local transport: the I/O thread is started at

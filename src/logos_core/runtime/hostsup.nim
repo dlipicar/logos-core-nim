@@ -29,6 +29,18 @@
 ##   beside the waiting delivery, on its thread, so it does not wait for its
 ##   own frame, as direct.
 ##
+## - **Hosted endpoints [G273] (4b-3.2).** A hosted provider's host serves
+##   the listener the Runtime made (fd 4) with its own transport loop and
+##   forwards the loop's events on lane 2; they reach the engine through
+##   `setIoSink` as its own loop's do, in the Runtime's connection numbers
+##   (`hostnum.nim`). The Runtime's orders for those connections come back
+##   through `submitHosted`, the transport port's hook, onto the host's
+##   sender thread, so no Runtime thread waits for a host to read. A call
+##   the Runtime admitted runs in the host (`beginDispatch`); its end and its
+##   scoped publication steps come back to the waiting call worker
+##   (`hostcall.nim`). No payload crosses (plan §2.7): `hostio.toMessage`
+##   refuses the commands that would carry one.
+##
 ## On Windows no supervisor is made (`newSupervisor` gives nil, plan §2.1):
 ## the procedures below are POSIX and have stand-ins there that no host
 ## reaches.
@@ -44,13 +56,14 @@ import std/[atomics, locks]
 import results
 import ../abi/[checks, types]
 import ../base/[perthread, testhooks]
-import ./[carrier, callside]
+import ../transport/io/api except decodeMessage
+import ./[carrier, callside, events, hostio]
 
 when defined(posix):
   import std/[os, posix, tables]
   import ../transport/io/sock
 
-export carrier
+export carrier, hostio
 
 testHooksMarker("hostsup")
 
@@ -67,6 +80,7 @@ const
   TickMs = 50 ## [IMPL; R2] the supervision tick
   MaxProxyWorkers = 64 ## [IMPL] Runtime Control requests in progress at once, per engine
   ProgramName = "logos-module-host"
+  MaxTransportWords = 64 ## [IMPL] room for `transportWords`
 
 type
   HostEnd* = object ## [R7 (c)] How a host ended, as supervision saw it.
@@ -92,6 +106,15 @@ type
     nested: Channel[seq[byte]]
       ## requests the host's handler made beside the delivery in progress
     next: ptr ProxySubObj
+
+  DispatchObj = object ## [G273] One admitted call the host is running.
+    host: Host
+    call: uint64
+    frames: Channel[seq[byte]]
+      ## its `dispatched` and `scoped_publish` frames; empty: the host ended
+    next: ptr DispatchObj
+
+  HostDispatch* = ptr DispatchObj
 
   ProxyAsyncObj = object ## One prepared Runtime Control call a host made.
     host: Host
@@ -128,6 +151,16 @@ type
     asyncs: ptr ProxyAsyncObj
     nextId: Atomic[uint64]
     services: ptr AttemptServices ## freed with the host (`freeWith`)
+    index: uint64 ## [G273] its number in hosted connection and endpoint ids
+    listenerFd: cint
+      ## [RUN-0200] a copy of its endpoint's listener, for the spawn (fd 4)
+    endpointPath, runtimeId: cstring ## shared; nil: no endpoint
+    transport: array[MaxTransportWords, uint64]
+    transportLen: int
+    dispatches: ptr DispatchObj ## under `lock`
+    outQ: Channel[seq[byte]] ## lane-2 frames for the sender; empty: stop
+    sender: Thread[Host]
+    senderRunning: bool ## under `lock`
     next: ptr HostObj
 
   Host* = ptr HostObj
@@ -169,6 +202,9 @@ type
     queued: int ## jobs sent and not yet taken, under `lock`
     onEnd: EndNotify
     onEndCtx: pointer
+    onIo: IoSink ## [G273] where a host's loop events go
+    onIoCtx: pointer
+    nextIndex: Atomic[uint64]
 
   HostSupervisor* = ptr SupervisorObj
 
@@ -213,6 +249,12 @@ when defined(posix):
     s.onEnd = fn
     s.onEndCtx = ctx
 
+  proc setIoSink*(s: HostSupervisor, fn: IoSink, ctx: pointer) =
+    ## [G273] Before the first spawn: the engine's sink for the events of
+    ## every host's loop, which it handles as its own loop's.
+    s.onIo = fn
+    s.onIoCtx = ctx
+
   proc wakeUp(s: HostSupervisor) =
     if s.wake[1] >= 0:
       var b = 1'u8
@@ -234,6 +276,9 @@ when defined(posix):
     ## [G275]: the instance's restart lock, held; the host takes it as fd 5 and
     ## this copy is closed once the host is spawned (or with the host). On an
     ## error the caller still owns it.
+    let index = s.nextIndex.fetchAdd(1) + 1
+    if index > MaxHostIndex:
+      return err("no Module Host number is left")
     var fds: array[2, cint]
     let r = socketPair(addr fds)
     if r < 0:
@@ -251,12 +296,15 @@ when defined(posix):
     h.hostFd = fds[1]
     h.writer.initWriter(fds[0])
     h.pid = -1
+    h.index = index
+    h.listenerFd = -1
     h.lockFd = lockFd
     h.rc = rc
     h.publish = publish
     h.publishUserData = publishUserData
     h.payloadDepth = payloadDepth
     h.lane0.open()
+    h.outQ.open()
     ok(h)
 
   proc retain*(h: Host) =
@@ -281,6 +329,19 @@ when defined(posix):
   proc freeHost(h: Host) =
     if h.services != nil:
       freeShared(h.services)
+    if h.listenerFd >= 0:
+      discard fdClose(h.listenerFd)
+    if h.endpointPath != nil:
+      deallocShared(h.endpointPath)
+    if h.runtimeId != nil:
+      deallocShared(h.runtimeId)
+    var d = h.dispatches
+    while d != nil:
+      let n = d.next
+      d.frames.drainClose()
+      freeShared(d)
+      d = n
+    h.outQ.drainClose()
     if h.lockFd >= 0:
       discard fdClose(h.lockFd)
     if h.daemonFd >= 0:
@@ -312,6 +373,45 @@ when defined(posix):
   proc nextRequest*(h: Host): uint64 =
     h.nextId.fetchAdd(1) + 1
 
+  func index*(h: Host): uint64 =
+    ## [G273] Its number in hosted connection and endpoint ids.
+    h.index
+
+  proc setEndpoint*(
+      h: Host, listener: cint, path, runtimeId: string, transport: TransportConfig
+  ): Result[void, string] =
+    ## [SPEC LOADER §5.3; RUN-0200; G273] Before the spawn: the endpoint the
+    ## Runtime made for this hosted provider. The host gets a copy of
+    ## `listener` as its fd 4, which is closed here once it is spawned; the
+    ## caller keeps its own. `path`, `runtimeId` and `transport` go into
+    ## `init` (`endpointInit`).
+    let fd = dupFd(listener)
+    if fd < 0:
+      return err("the listener cannot be duplicated")
+    let words = transportWords(transport)
+    if words.len > MaxTransportWords:
+      discard fdClose(fd)
+      return err("the transport limits do not fit")
+    h.listenerFd = fd
+    h.endpointPath = sharedCString(path)
+    h.runtimeId = sharedCString(runtimeId)
+    for i, w in words:
+      h.transport[i] = w
+    h.transportLen = words.len
+    ok()
+
+  proc endpointInit*(
+      h: Host
+  ): Opt[tuple[path, runtimeId: string, transport: seq[uint64]]] =
+    ## [SPEC LOADER §5.3] What `init` carries for a hosted provider; none for
+    ## a consumer-only host.
+    if h.endpointPath == nil:
+      return Opt.none(tuple[path, runtimeId: string, transport: seq[uint64]])
+    var words: seq[uint64]
+    for i in 0 ..< h.transportLen:
+      words.add(h.transport[i])
+    Opt.some((path: $h.endpointPath, runtimeId: $h.runtimeId, transport: words))
+
   proc alive(ctx: pointer): bool {.nimcall.} =
     let h = cast[Host](ctx)
     withLock h.lock:
@@ -322,10 +422,68 @@ when defined(posix):
     withLock h.lock:
       result = h.confirmed
 
+  when defined(lcnTestHooks):
+    # [plan §2.7] The carrier trace: every frame, both ways, is counted, and
+    # so is each one holding any of the markers a test set, so a test shows
+    # that no payload crosses.
+    const MaxMarkers = 4
+    var traceLock: Lock
+    var markers: array[MaxMarkers, array[64, byte]]
+    var markerLens: array[MaxMarkers, int]
+    var markerCount: int
+    var tracedFrames, tracedHits: Atomic[int]
+    initLock(traceLock)
+
+    proc traceMarkers*(marks: openArray[seq[byte]]) =
+      ## Starts counting afresh with `marks` (each at most 64 bytes); none
+      ## stops.
+      withLock traceLock:
+        markerCount = 0
+        for m in marks:
+          if markerCount < MaxMarkers and m.len > 0 and m.len <= 64:
+            for i, b in m:
+              markers[markerCount][i] = b
+            markerLens[markerCount] = m.len
+            inc markerCount
+        tracedFrames.store(0)
+        tracedHits.store(0)
+
+    proc traced*(): tuple[frames, hits: int] =
+      (tracedFrames.load, tracedHits.load)
+
+    proc holds(f: openArray[byte], m: openArray[byte]): bool =
+      if m.len == 0 or m.len > f.len:
+        return false
+      for i in 0 .. f.len - m.len:
+        var same = true
+        for j in 0 ..< m.len:
+          if f[i + j] != m[j]:
+            same = false
+            break
+        if same:
+          return true
+      false
+
+    proc trace(f: openArray[byte]) =
+      var hit = false
+      withLock traceLock:
+        if markerCount == 0:
+          return
+        for i in 0 ..< markerCount:
+          if f.holds(markers[i].toOpenArray(0, markerLens[i] - 1)):
+            hit = true
+      discard tracedFrames.fetchAdd(1)
+      if hit:
+        discard tracedHits.fetchAdd(1)
+
   proc sendMsg*(h: Host, m: LcnCarrierMessage): Result[void, string] =
     ## One message to the host; an error once its carrier is down.
     if not alive(h):
       return err("the Module Host has ended")
+    when defined(lcnTestHooks):
+      let f = frameOf(m)
+      if f.isOk:
+        trace(f.get)
     h.writer.send(m, alive, h)
 
   # Test hooks ------------------------------------------------------------------------------
@@ -408,6 +566,13 @@ when defined(posix):
       withLock hookLock:
         brokenHosts.mark(h, true)
 
+    var dropListener: Atomic[bool]
+
+    proc dropNextListener*() =
+      ## [plan §4.3 P-4] The next host spawned with a listener gets none on
+      ## fd 4, as if the transfer were lost.
+      dropListener.store(true)
+
     proc hostEnds*(): seq[HostEnd] =
       ## [plan §2.3] Every end confirmed in this process, in order.
       withLock hookLock:
@@ -476,8 +641,14 @@ when defined(posix):
       if h.terminating:
         return err("the Module Host was ended before it started")
     ?s.startThreads()
-    var req =
-      SpawnReq(h: h, listener: listener, lock: (if lock >= 0: lock else: h.lockFd))
+    var req = SpawnReq(
+      h: h,
+      listener: (if listener >= 0: listener else: h.listenerFd),
+      lock: (if lock >= 0: lock else: h.lockFd),
+    )
+    when defined(lcnTestHooks):
+      if req.listener >= 0 and dropListener.exchange(false):
+        req.listener = -1
     withLock s.lock:
       if s.closing.load:
         return err("the Runtime is closing")
@@ -493,6 +664,10 @@ when defined(posix):
       # [G275] The host's fd 5 holds the lock now.
       discard fdClose(h.lockFd)
       h.lockFd = -1
+    if h.listenerFd >= 0:
+      # [RUN-0200] The host's fd 4 is its copy; the Runtime keeps its own.
+      discard fdClose(h.listenerFd)
+      h.listenerFd = -1
     if req.rc != 0:
       return err("the Module Host cannot be started: " & $strerror(-req.rc))
     ok()
@@ -569,6 +744,177 @@ when defined(posix):
     let m = decodeMessage(f).valueOr:
       return Opt.none(LcnCarrierMessage)
     Opt.some(m)
+
+  # Hosted endpoints [G273] ------------------------------------------------------------------
+
+  proc senderMain(h: Host) {.thread.} =
+    ## The host's lane-2 orders, written in the order they were given; a write
+    ## waits for the host to read, never a Runtime thread.
+    while true:
+      var f: seq[byte]
+      try:
+        f = h.outQ.recv()
+      except Exception:
+        break
+      if f.len == 0:
+        break
+      if alive(h):
+        discard h.writer.sendFrame(f, alive, h)
+    releasePerThread()
+
+  proc queueOut(h: Host, f: sink seq[byte]): SubmitResult =
+    ## [G273 interim (K38)] One lane-2 order for the sender. None carries a
+    ## payload or a success (`hostio.toMessage`), so none is charged against
+    ## an output budget: the host's loop charges what it commits itself.
+    when defined(lcnTestHooks):
+      trace(f)
+    withLock h.lock:
+      if h.confirmed or h.carrierDown:
+        return sbStopped
+      if not h.senderRunning:
+        try:
+          createThread(h.sender, senderMain, h)
+        except Exception:
+          return sbStopped
+        h.senderRunning = true
+      try:
+        h.outQ.send(f)
+      except Exception:
+        return sbStopped
+    sbOk
+
+  proc stopSender(h: Host) =
+    ## Supervision thread, once the carrier is down: the sender's write ends
+    ## within one step and it is joined.
+    var running: bool
+    withLock h.lock:
+      running = h.senderRunning
+      h.senderRunning = false
+    if running:
+      try:
+        h.outQ.send(@[])
+      except Exception:
+        discard
+      try:
+        joinThread(h.sender)
+      except Exception:
+        discard
+
+  proc findIndex(s: HostSupervisor, index: uint64): Host =
+    ## The live host numbered `index`, retained; nil when there is none.
+    withLock s.lock:
+      var p = s.hosts
+      while p != nil:
+        if p.index == index:
+          retain(p)
+          return p
+        p = p.next
+    nil
+
+  proc findHost*(s: HostSupervisor, conn: uint64): Host =
+    ## The live host serving hosted connection `conn`, retained; nil when
+    ## there is none.
+    if s == nil or not conn.isHostedConn:
+      return nil
+    s.findIndex(hostOfConn(conn))
+
+  proc submitHosted*(
+      ctx: pointer, cmd: var IoCommand
+  ): SubmitResult {.nimcall, gcsafe, raises: [].} =
+    ## [G273] The transport port's hook (`setHosted`): an order for a hosted
+    ## connection or endpoint goes to its host's sender. `sbStopped` once the
+    ## host has ended, as for a connection the loop no longer has.
+    let s = cast[HostSupervisor](ctx)
+    let index =
+      if cmd.kind == IoCommandKind.cmdStopServing:
+        hostOfEndpoint(cmd.stopEndpoint)
+      else:
+        hostOfConn(cmd.conn)
+    let h = s.findIndex(index)
+    if h == nil:
+      return sbStopped
+    let m = hostio.toMessage(cmd)
+    result =
+      if m.isNone:
+        sbStopped
+      else:
+        let f = frameOf(m.get)
+        if f.isErr:
+          sbStopped
+        else:
+          h.queueOut(f.get)
+    dropHost(h)
+
+  proc beginDispatch*(h: Host, call: uint64): HostDispatch =
+    ## [G273] Waits for call `call`'s frames from the host; nil once it has
+    ## ended. The caller sends `admit_verdict` next and ends with
+    ## `endDispatch`.
+    let d = createShared(DispatchObj)
+    d.host = h
+    d.call = call
+    d.frames.open()
+    withLock h.lock:
+      if h.confirmed or h.carrierDown:
+        d.frames.close()
+        freeShared(d)
+        return nil
+      d.next = h.dispatches
+      h.dispatches = d
+    retain(h)
+    d
+
+  proc nextFrame*(d: HostDispatch): Opt[seq[byte]] =
+    ## The call's next frame, without waiting; an empty frame once the host
+    ## has ended.
+    try:
+      let (got, f) = d.frames.tryRecv()
+      if got:
+        if f.len == 0:
+          d.frames.send(f) # the marker stays
+        return Opt.some(f)
+    except Exception:
+      return Opt.some(newSeq[byte]())
+    Opt.none(seq[byte])
+
+  proc endDispatch*(d: HostDispatch) =
+    if d == nil:
+      return
+    let h = d.host
+    withLock h.lock:
+      var p = addr h.dispatches
+      while p[] != nil:
+        if p[] == d:
+          p[] = d.next
+          break
+        p = addr p[].next
+    d.frames.drainClose()
+    freeShared(d)
+    dropHost(h)
+
+  proc toDispatch(h: Host, call: uint64, f: seq[byte]) =
+    ## Supervision thread: a frame for the waiting call; a frame for a call no
+    ## one waits for any more (it was given up) is dropped.
+    withLock h.lock:
+      var p = h.dispatches
+      while p != nil:
+        if p.call == call:
+          try:
+            p.frames.send(f)
+          except Exception:
+            discard
+          return
+        p = p.next
+
+  proc endDispatches(h: Host) =
+    ## Supervision thread, at the confirmed end: every waiting call is told.
+    withLock h.lock:
+      var p = h.dispatches
+      while p != nil:
+        try:
+          p.frames.send(@[])
+        except Exception:
+          discard
+        p = p.next
 
   # Proxy operations ------------------------------------------------------------------------
 
@@ -763,13 +1109,43 @@ when defined(posix):
         )
       h.reply(r)
     of K.lcn_Carrier_rc_publish:
+      # [SPEC RUNTIME §7.3; plan §2.7] The subscriber sessions of an ordinary
+      # publication, in the host's numbers; its payload stays in the host.
       let c = m.arm_lcn_Carrier_rc_publish
-      let name = textOf(c.event)
-      if h.publish != nil:
-        h.publish(
-          h.publishUserData, cstring(name), bytesPtr(c.data), csize_t(c.data.len)
-        )
-      h.reply(LcnCarrierRcReply(id: c.id))
+      var r = LcnCarrierRcReply(id: c.id, targets: Opt.some(newSeq[LcnCarrierTarget]()))
+      let name = checkEventName(c.event)
+      if name.isErr:
+        r.targets.reset()
+        r.failure = Opt.some(toCarrier(name.error))
+      elif h.publishUserData != nil:
+        let a = cast[ptr AttemptServices](h.publishUserData)
+        for t in hostedTargets(a, name.get):
+          if t.conn.isHostedConn and hostOfConn(t.conn) == h.index:
+            r.targets.get.add(
+              LcnCarrierTarget(conn: hostConnOf(t.conn), contract: @(t.root))
+            )
+      h.reply(r)
+    of K.lcn_Carrier_rc_deliver:
+      # [SPEC RUNTIME l.1225-1231; G175] Each delivery admitted afresh; the
+      # sessions whose contract did not take the payload are diagnostics.
+      let c = m.arm_lcn_Carrier_rc_deliver
+      var conns: seq[uint64]
+      var dropped: seq[(uint64, ErrorCode)]
+      for x in c.conns:
+        let n = hostedConn(h.index, x)
+        if n.isSome:
+          conns.add(n.get)
+      for x in c.dropped:
+        let n = hostedConn(h.index, x.conn)
+        if n.isSome:
+          dropped.add((n.get, errorCodeOf(x.code).get(ecInvalidParams)))
+      var admitted: seq[uint64]
+      if h.publishUserData != nil:
+        for conn in hostedDeliver(
+          cast[ptr AttemptServices](h.publishUserData), c.event, conns, dropped
+        ):
+          admitted.add(hostConnOf(conn))
+      h.reply(LcnCarrierRcReply(id: c.id, admitted: Opt.some(admitted)))
     of K.lcn_Carrier_rc_prepare:
       let c = m.arm_lcn_Carrier_rc_prepare
       let p = createShared(ProxyAsyncObj)
@@ -906,6 +1282,8 @@ when defined(posix):
       if testBreak(h):
         h.carrierLost("the carrier to the Module Host failed: a malformed frame")
         return false
+    when defined(lcnTestHooks):
+      trace(f)
     let m = decodeMessage(f).valueOr:
       h.carrierLost("the carrier to the Module Host failed: a frame does not decode")
       return false
@@ -932,7 +1310,8 @@ when defined(posix):
         discard
     of K.lcn_Carrier_rc_call, K.lcn_Carrier_rc_subscribe,
         K.lcn_Carrier_rc_connect_remote, K.lcn_Carrier_rc_publish,
-        K.lcn_Carrier_rc_prepare, K.lcn_Carrier_rc_async_release:
+        K.lcn_Carrier_rc_deliver, K.lcn_Carrier_rc_prepare,
+        K.lcn_Carrier_rc_async_release:
       s.enqueue(h, f)
     of K.lcn_Carrier_rc_unsubscribe:
       let u = m.arm_lcn_Carrier_rc_unsubscribe
@@ -972,6 +1351,33 @@ when defined(posix):
           return false
     of K.lcn_Carrier_rc_async_submit, K.lcn_Carrier_rc_async_cancel:
       h.asyncOp(m)
+    of K.lcn_Carrier_call_ended:
+      h.toDispatch(m.arm_lcn_Carrier_call_ended.call, f)
+    of K.lcn_Carrier_scoped_check:
+      h.toDispatch(m.arm_lcn_Carrier_scoped_check.call, f)
+    of K.lcn_Carrier_scoped_admit:
+      h.toDispatch(m.arm_lcn_Carrier_scoped_admit.call, f)
+    of K.lcn_Carrier_scoped_done:
+      h.toDispatch(m.arm_lcn_Carrier_scoped_done.call, f)
+    of K.lcn_Carrier_io_listening, K.lcn_Carrier_io_serve_failed,
+        K.lcn_Carrier_io_hello, K.lcn_Carrier_io_established, K.lcn_Carrier_io_dispatch,
+        K.lcn_Carrier_io_stop, K.lcn_Carrier_io_closed, K.lcn_Carrier_io_subscribe,
+        K.lcn_Carrier_io_unsubscribe, K.lcn_Carrier_io_publish_failed,
+        K.lcn_Carrier_io_publish_result, K.lcn_Carrier_io_local_failure:
+      # [G273] An event of the host's loop, as the Runtime's own loop reports
+      # it. A host without an endpoint has no loop to report from.
+      var served: bool
+      withLock h.lock:
+        served = h.endpointPath != nil
+      let ev = toEvent(m, h.index)
+      if not served or ev.isErr:
+        h.carrierLost(
+          "the carrier to the Module Host failed: " &
+            (if served: ev.error else: "an endpoint event from a host with no endpoint")
+        )
+        return false
+      if ev.get.isSome and s.onIo != nil:
+        s.onIo(ev.get.get, s.onIoCtx)
     else:
       h.carrierLost(
         "the carrier to the Module Host failed: an unexpected " & $m.kind & " message"
@@ -1010,6 +1416,7 @@ when defined(posix):
     withLock h.lock:
       h.carrierDown = true
       e = h.endOf()
+    h.stopSender()
     when defined(lcnTestHooks):
       recordEnd(e)
     # [R27] The Runtime hears of the end before the Loader's waits return, so
@@ -1019,6 +1426,7 @@ when defined(posix):
     withLock h.lock:
       h.confirmed = true
       broadcast(h.cond)
+    h.endDispatches()
     discard posix.shutdown(SocketHandle(h.daemonFd), SHUT_RDWR)
     try:
       h.lane0.send(@[])
@@ -1311,4 +1719,37 @@ else:
     false
 
   proc closeSupervisor*(s: HostSupervisor) =
+    discard
+
+  proc setIoSink*(s: HostSupervisor, fn: IoSink, ctx: pointer) =
+    discard
+
+  func index*(h: Host): uint64 =
+    0
+
+  proc setEndpoint*(
+      h: Host, listener: cint, path, runtimeId: string, transport: TransportConfig
+  ): Result[void, string] =
+    err(Unsupported)
+
+  proc endpointInit*(
+      h: Host
+  ): Opt[tuple[path, runtimeId: string, transport: seq[uint64]]] =
+    Opt.none(tuple[path, runtimeId: string, transport: seq[uint64]])
+
+  proc submitHosted*(
+      ctx: pointer, cmd: var IoCommand
+  ): SubmitResult {.nimcall, gcsafe, raises: [].} =
+    sbStopped
+
+  proc findHost*(s: HostSupervisor, conn: uint64): Host =
+    nil
+
+  proc beginDispatch*(h: Host, call: uint64): HostDispatch =
+    nil
+
+  proc nextFrame*(d: HostDispatch): Opt[seq[byte]] =
+    Opt.some(newSeq[byte]())
+
+  proc endDispatch*(d: HostDispatch) =
     discard

@@ -114,30 +114,6 @@ proc initContext*(s: var InvocationState) =
 
 # Route calls ---------------------------------------------------------------------------
 
-proc checkRequest*(
-    sel: Selected, bare: string, params: openArray[byte], trail: var CallTrail
-): Result[CborValue, InvocationFailure] =
-  ## [SPEC RUNTIME §4.1 l.833-841, l.852-853] A request is validated and
-  ## committed before provider code runs; `logos.schema` is the boundary's.
-  ## [RUN-0332; I85] The commitment is kept in `trail`.
-  let request =
-    if sel.validator.surface.findMethod(bare).isSome:
-      sel.validator.checkParams(bare, params).valueOr:
-        return err(toFailure(error))
-    else:
-      decodePayload(params, maxDepth = sel.validator.maxDepth).valueOr:
-        return err(toFailure(error))
-  let c = sel.boundary.commitRequest(bare, request).valueOr:
-    return err(error.failure)
-  trail.request = Opt.some(c)
-  ok(request)
-
-proc checkRequest*(
-    sel: Selected, bare: string, params: openArray[byte]
-): Result[CborValue, InvocationFailure] =
-  var trail: CallTrail
-  checkRequest(sel, bare, params, trail)
-
 proc record*(e: Engine, c: CallCapture, trail: CallTrail) =
   ## [SPEC CA l.1172-1174; I85] The call's record after its outcome, when the
   ## decision applied to it requires one (`callaudit.nim`).
@@ -152,13 +128,9 @@ proc notReadyAfter*(
 ): InvocationFailure =
   ## [G171 interim (TF-18)] A call the Runtime thread answered NOT_READY is
   ## authorized; its payload is validated before readiness is reported.
-  if e.code == ecNotReady:
-    let sel = selectedOf(b)
-    if sel.isOk:
-      let r = checkRequest(sel.get, bare, params)
-      if r.isErr:
-        return r.error
-  failureOf(e)
+  if e.code != ecNotReady:
+    return failureOf(e)
+  notReadyAfter(selectedOf(b), bare, params, failureOf(e))
 
 proc introspect*(
     b: ptr SchemaBlob,
@@ -167,23 +139,11 @@ proc introspect*(
     schema: openArray[byte],
     trail: var CallTrail,
 ): Result[seq[byte], InvocationFailure] =
-  ## [SPEC INTERFACE §5.1; RUNTIME §9.3 l.2990-2992] `logos.schema`: the
-  ## selected contract's `logos.schema_response`, from the boundary, whose
-  ## commitments are under the common schema (CA l.1203-1204). [SPEC RUNTIME
-  ## l.432-434] `schema` is that response built from the provider's validated
-  ## surface at admission; the consumer's construction input only checks the
-  ## request (DECISIONS I88).
+  ## [SPEC INTERFACE §5.1; RUNTIME §9.3 l.2990-2992] `logos.schema`, from the
+  ## provider's validated surface at admission (`callcheck.introspect`).
   let sel = selectedOf(b).valueOr:
     return err(failure(ecModule, "the selected contract cannot be loaded"))
-  discard ?checkRequest(sel, bare, params, trail)
-  if schema.len == 0:
-    return err(failure(ecModule, "the schema response cannot be built"))
-  let v = decodeCbor(schema).valueOr:
-    return err(failure(ecModule, "the schema response cannot be built"))
-  let c = sel.boundary.commitResponse(bare, v).valueOr:
-    return err(failure(ecModule, "the schema response cannot be committed"))
-  trail.response = Opt.some(c)
-  ok(@schema)
+  introspect(sel, bare, params, schema, trail)
 
 proc invocationFor*(
     adm: Admission,
@@ -209,19 +169,6 @@ proc invocationFor*(
     generation: generation,
     blob: blob,
   )
-
-proc checkResponse*(
-    sel: Selected, bare: string, bytes: openArray[byte], trail: var CallTrail
-): Result[void, InvocationFailure] =
-  ## [SPEC RUNTIME §4.1 l.838-840] A response that does not validate or commit
-  ## is not returned as a success. [RUN-0332; I85] Its commitment is kept in
-  ## `trail`.
-  let response = sel.validator.checkResult(bare, bytes).valueOr:
-    return err(failure(ecModule, "the provider's response does not match its schema"))
-  let c = sel.boundary.commitResponse(bare, response).valueOr:
-    return err(failure(ecModule, "the provider's response cannot be committed"))
-  trail.response = Opt.some(c)
-  ok()
 
 func sameAddress(v: CborValue, runtimeId, instance: string): bool =
   if v.kind != ckMap:

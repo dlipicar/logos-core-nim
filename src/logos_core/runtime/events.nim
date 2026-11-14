@@ -317,19 +317,11 @@ proc linkDrain*(e: Engine, p: pointer) =
 proc checkPublication(
     b: ptr SchemaBlob, name: string, data: openArray[byte]
 ): Result[void, InvocationFailure] =
-  ## [SPEC RUNTIME l.1221-1227, l.1233-1235] The name resolves under the
-  ## selected contract; the payload is one value of its event-data type; its
-  ## commitment is computed before delivery.
+  ## [SPEC RUNTIME l.1221-1227, l.1233-1235] As `callcheck.checkEvent`, under
+  ## the subscriber route's selected contract.
   let sel = selectedOf(b).valueOr:
     return err(failure(ecModule, "the selected contract cannot be loaded"))
-  if not sel.boundary.knowsEvent(name):
-    return
-      err(failure(ecNotAuthorised, name & " is not an event of the selected contract"))
-  let v = sel.validator.checkEvent(name, data).valueOr:
-    return err(toFailure(error))
-  discard sel.boundary.commitEvent(name, v).valueOr:
-    return err(error.failure)
-  ok()
+  sel.checkEvent(name, data)
 
 proc describe(f: InvocationFailure): string =
   $f.code & (if f.message.isSome: ": " & f.message.get else: "")
@@ -453,18 +445,97 @@ proc publishOp*(
         stopped = sent == SubmitResult.sbStopped
     drop(blob)
 
-proc scopedOverSession(
-    inv: ptr InvocationState, sel: Selected, name: string, bytes: seq[byte]
-): LogosResult =
-  ## [SPEC RUNTIME §7.3.1; INTERFACE l.2187-2199; plan §2.7, E2] A served
-  ## invocation's scoped publication goes to its session, checked in a direct
-  ## one's order: the scope and an authority end (NOT_AUTHORISED), the
-  ## payload (INVALID_PARAMS), a closed destination (NOT_READY), then the
-  ## per-delivery decisions; the session commits one Event per subscription
-  ## to it on that connection, or reports why it did not, and that verdict is
-  ## the result.
-  let e = inv.engine
-  let first = e.call(
+# A hosted publisher (part 4b-3.2; plan §2.7) ------------------------------------------
+#
+# The payload stays in the publisher's Module Host, which checks it under each
+# subscriber session's selected contract and writes the Events with its own
+# loop. Here the Runtime names the sessions and admits each delivery as for a
+# direct publisher; nothing it decides reads the payload.
+
+type HostedTarget* = object
+  conn*: uint64 ## the Runtime's number for the session
+  root*: Digest ## its selected contract
+
+proc hostedCandidates(a: ptr AttemptServices, name: string): Reply =
+  let e = a.engine
+  if name in [GrantChangedName, PolicyChangedName]:
+    # [SPEC CA §8; RUNTIME l.1660-1667] As `publishOp`: under the Capability
+    # Authority policy a notice is consumed on the protected path. A hosted
+    # module is never the bound authority (`host_config`: the authority is
+    # `direct_static`), so its notice is ignored there and needs no payload.
+    let consumed = e.call(
+      Request(
+        kind: rqAuthorityNotice,
+        origin: moduleOrigin($a.instance),
+        attempt: $a.attempt,
+        bare: name,
+      )
+    )
+    if consumed.admitted:
+      return Reply()
+  result = e.call(
+    Request(
+      kind: rqCandidates,
+      origin: moduleOrigin($a.instance),
+      attempt: $a.attempt,
+      bare: name,
+    )
+  )
+  for p in result.subs:
+    drop(subOf(p)) # [G272] none: a hosted provider's routes are transported
+  result.subs.setLen(0)
+
+proc hostedTargets*(a: ptr AttemptServices, name: string): seq[HostedTarget] =
+  ## [SPEC RUNTIME §7.3, l.1221-1224] The subscriber sessions an ordinary
+  ## publication of `name` by a hosted publisher may reach, with the contract
+  ## its payload is checked under for each.
+  let reply = hostedCandidates(a, name)
+  for t in reply.targets:
+    let blob = cast[ptr SchemaBlob](t.blob)
+    result.add(HostedTarget(conn: t.conn, root: blob.root))
+    drop(blob)
+
+proc hostedDeliver*(
+    a: ptr AttemptServices,
+    name: string,
+    conns: openArray[uint64],
+    dropped: openArray[(uint64, ErrorCode)],
+): seq[uint64] =
+  ## [SPEC RUNTIME l.1225-1231; G175] The rest of a hosted publisher's
+  ## ordinary publication, once its host checked the payload: a session whose
+  ## contract did not take it is a diagnostic; each other session still a
+  ## candidate is admitted afresh, in order. The admitted sessions.
+  let e = a.engine
+  let reply = hostedCandidates(a, name)
+  for t in reply.targets:
+    drop(cast[ptr SchemaBlob](t.blob))
+    for (conn, code) in dropped:
+      if conn == t.conn:
+        e.diagnose(
+          "a publication of " & name & " from " & $a.instance &
+            " was not delivered on route " & t.route & ": " & $code
+        )
+    if t.conn in conns:
+      let r = e.call(
+        Request(
+          kind: rqDeliverConn,
+          origin: moduleOrigin($a.instance),
+          attempt: $a.attempt,
+          conn: t.conn,
+          route: t.route,
+          bare: name,
+        )
+      )
+      if r.admitted:
+        result.add(t.conn)
+
+proc scopedCheck*(
+    inv: ptr InvocationState, name: string
+): Result[bool, InvocationFailure] =
+  ## [SPEC RUNTIME §7.3.1; INTERFACE l.2193-2196] A served invocation's
+  ## scoped publication, before its payload is checked: the scope and an
+  ## authority end (NOT_AUTHORISED); whether the destination is open.
+  let first = inv.engine.call(
     Request(
       kind: rqScopedConn,
       origin: moduleOrigin($inv.provider),
@@ -475,16 +546,16 @@ proc scopedOverSession(
     )
   )
   if first.error.isSome:
-    return status(first.error.get)
-  let v = sel.validator.checkEvent(name, bytes)
-  if v.isErr:
-    return status(toFailure(v.error))
-  let c = sel.boundary.commitEvent(name, v.get)
-  if c.isErr:
-    return status(c.error.failure)
-  if not first.ready:
-    return status(ecNotReady, "the invocation's destination is closed")
-  let d = e.call(
+    return err(failureOf(first.error.get))
+  ok(first.ready)
+
+proc scopedAdmit*(
+    inv: ptr InvocationState, name: string
+): Result[Opt[uint64], InvocationFailure] =
+  ## [G175; E2] Once the payload is checked: the delivery decisions. The tag
+  ## its verdict is awaited by; none when the subscriber's own decisions
+  ## skipped it.
+  let d = inv.engine.call(
     Request(
       kind: rqDeliverConn,
       scoped: true,
@@ -497,27 +568,59 @@ proc scopedOverSession(
     )
   )
   if d.error.isSome:
-    return status(d.error.get)
+    return err(failureOf(d.error.get))
   if not d.admitted:
+    return ok(Opt.none(uint64))
+  ok(Opt.some(d.pubTag))
+
+proc scopedVerdict*(
+    inv: ptr InvocationState, tag: uint64, abandon: bool
+): Result[void, InvocationFailure] =
+  ## [E2] The session's verdict on the Event, once the loop took it; `abandon`
+  ## when the loop did not.
+  let w =
+    inv.engine.call(Request(kind: rqPublishVerdict, pubTag: tag, abandon: abandon))
+  if w.error.isSome:
+    return err(failureOf(w.error.get))
+  ok()
+
+proc scopedOverSession(
+    inv: ptr InvocationState, sel: Selected, name: string, bytes: seq[byte]
+): LogosResult =
+  ## [SPEC RUNTIME §7.3.1; INTERFACE l.2187-2199; plan §2.7, E2] A served
+  ## invocation's scoped publication goes to its session, checked in a direct
+  ## one's order: the scope and an authority end (NOT_AUTHORISED), the
+  ## payload (INVALID_PARAMS), a closed destination (NOT_READY), then the
+  ## per-delivery decisions; the session commits one Event per subscription
+  ## to it on that connection, or reports why it did not, and that verdict is
+  ## the result. A Module Host runs the same steps (`host/endpoint.nim`).
+  let ready = inv.scopedCheck(name).valueOr:
+    return status(error)
+  let v = sel.validator.checkEvent(name, bytes)
+  if v.isErr:
+    return status(toFailure(v.error))
+  let c = sel.boundary.commitEvent(name, v.get)
+  if c.isErr:
+    return status(c.error.failure)
+  if not ready:
+    return status(ecNotReady, "the invocation's destination is closed")
+  let tag = inv.scopedAdmit(name).valueOr:
+    return status(error)
+  if tag.isNone:
     return LogosResult() # the subscriber's own decisions skipped it
-  let sent = e.tport.submitWait(
+  let sent = inv.engine.tport.submitWait(
     IoCommand(
       conn: inv.conn,
       kind: IoCommandKind.cmdPublishScoped,
       pubRequest: inv.requestId,
-      pubTag: d.pubTag,
+      pubTag: tag.get,
       event: name,
       data: bytes,
       tooLarge: tlReport,
     )
   )
-  let w = e.call(
-    Request(
-      kind: rqPublishVerdict, pubTag: d.pubTag, abandon: sent != SubmitResult.sbOk
-    )
-  )
-  if w.error.isSome:
-    return status(w.error.get)
+  inv.scopedVerdict(tag.get, sent != SubmitResult.sbOk).isOkOr:
+    return status(error)
   LogosResult()
 
 proc scopedPublish*(

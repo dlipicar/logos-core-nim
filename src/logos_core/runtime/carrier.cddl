@@ -8,9 +8,18 @@
 ;                             applied, released, fatal
 ;   lane 1, Runtime Control:  rc_reply, rc_event, async_done / rc_call,
 ;                             rc_subscribe, rc_unsubscribe, rc_delivered,
-;                             rc_connect_remote, rc_publish, rc_prepare,
-;                             rc_async_submit, rc_async_cancel,
+;                             rc_connect_remote, rc_publish, rc_deliver,
+;                             rc_prepare, rc_async_submit, rc_async_cancel,
 ;                             rc_async_release
+;   lane 2, the boundary:     io_admit_*, io_respond, io_close, io_terminate,
+;                             io_work_ended, io_subscription_result,
+;                             io_stop_serving, admit_verdict, call_cancel,
+;                             scoped_result / io_listening, io_serve_failed,
+;                             io_hello, io_established, io_dispatch, io_stop,
+;                             io_closed, io_subscribe, io_unsubscribe,
+;                             io_publish_failed, io_publish_result,
+;                             io_local_failure, call_ended, scoped_check,
+;                             scoped_admit, scoped_done
 ; A frame that does not decode to one message is terminal carrier loss
 ; (RUNTIME RUN-0812). No message carries a consumer, instance or ticket: the
 ; Runtime takes them from the carrier it made for the attempt (RUN-0171,
@@ -32,13 +41,42 @@ lcn.carrier_message =
   lcn.carrier_rc_delivered /
   lcn.carrier_rc_connect_remote /
   lcn.carrier_rc_publish /
+  lcn.carrier_rc_deliver /
   lcn.carrier_rc_prepare /
   lcn.carrier_rc_async_submit /
   lcn.carrier_rc_async_cancel /
   lcn.carrier_rc_async_release /
   lcn.carrier_rc_reply /
   lcn.carrier_rc_delivery /
-  lcn.carrier_async_done
+  lcn.carrier_async_done /
+  lcn.carrier_io_listening /
+  lcn.carrier_io_serve_failed /
+  lcn.carrier_io_hello /
+  lcn.carrier_io_established /
+  lcn.carrier_io_dispatch /
+  lcn.carrier_io_stop /
+  lcn.carrier_io_closed /
+  lcn.carrier_io_subscribe /
+  lcn.carrier_io_unsubscribe /
+  lcn.carrier_io_publish_failed /
+  lcn.carrier_io_publish_result /
+  lcn.carrier_io_local_failure /
+  lcn.carrier_call_ended /
+  lcn.carrier_scoped_check /
+  lcn.carrier_scoped_admit /
+  lcn.carrier_scoped_done /
+  lcn.carrier_io_admit_established /
+  lcn.carrier_io_admit_failed /
+  lcn.carrier_io_admit_unavailable /
+  lcn.carrier_io_respond /
+  lcn.carrier_io_close /
+  lcn.carrier_io_terminate /
+  lcn.carrier_io_work_ended /
+  lcn.carrier_io_subscription_result /
+  lcn.carrier_io_stop_serving /
+  lcn.carrier_admit_verdict /
+  lcn.carrier_call_cancel /
+  lcn.carrier_scoped_result
 
 ; A failure status as the side that read it holds it (abi/checks AbiFailure):
 ; `reason` is set when the status itself broke the ABI (never forwarded).
@@ -53,6 +91,10 @@ lcn.carrier_failure = {
 
 ; [SPEC LOADER §6] The one initialization: the staged artifact, the state
 ; directory and the configuration input (LOADER §5.2), never in a record.
+; [LOADER §5.3; part 4b-3.2] A provider's `endpoint` is the path of the
+; listener on fd 4, which the host serves once `_MODULE_init` succeeded, with
+; the Runtime's `transport` limits (runtime/hostio.nim gives their order) and
+; its `runtime_id` for the invocation context's caller view.
 lcn.carrier_init = {
   kind: "init",
   id: uint64,
@@ -62,6 +104,9 @@ lcn.carrier_init = {
   ? configuration: bstr,
   live: bool,
   max_payload_depth: uint64,
+  ? endpoint: tstr .size (1..4096),
+  ? transport: [* uint64],
+  ? runtime_id: tstr .size (1..256),
 }
 
 lcn.carrier_apply = {
@@ -155,11 +200,38 @@ lcn.carrier_rc_connect_remote = {
   expected_root: bstr .size 32,
 }
 
+; [SPEC RUNTIME §7.3; part 4b-3.2, plan §2.7] An ordinary publication's
+; subscriber sessions, which the reply names (`targets`). The payload stays in
+; the host: it checks it under each target's selected contract and asks for
+; the deliveries with `rc_deliver`.
 lcn.carrier_rc_publish = {
   kind: "rc_publish",
   id: uint64,
-  event: bstr,
-  data: bstr,
+  event: bstr, ; the module's bytes, checked by the Runtime as given
+}
+
+; The sessions whose selected contract took the payload (`conns`), and the
+; ones that did not (`dropped`, with the check's code and nothing else), which
+; the Runtime records as a diagnostic (RUNTIME l.1226-1227). The reply names
+; the sessions each delivery was admitted to (`admitted`); the host's loop
+; writes those Events.
+lcn.carrier_rc_deliver = {
+  kind: "rc_deliver",
+  id: uint64,
+  event: tstr .size (1..128),
+  conns: [* uint64],
+  dropped: [* lcn.carrier_dropped],
+}
+
+lcn.carrier_dropped = {
+  conn: uint64,
+  code: uint8,
+}
+
+; One subscriber session of the host's endpoint and its selected contract.
+lcn.carrier_target = {
+  conn: uint64,
+  contract: bstr .size 32,
 }
 
 ; [SPEC INTERFACE §2.9.1] A prepared Runtime Control call, numbered `call` by
@@ -192,12 +264,15 @@ lcn.carrier_rc_async_release = {
 ; Lane 1, the Runtime -> the host --------------------------------------------------
 
 ; The outcome of the request `id` names: `failure`, or a success with the
-; response bytes (`value`) or a subscription id (`sub`).
+; response bytes (`value`), a subscription id (`sub`), an `rc_publish`'s
+; `targets` or an `rc_deliver`'s `admitted` sessions.
 lcn.carrier_rc_reply = {
   kind: "rc_reply",
   id: uint64,
   ? value: bstr,
   ? sub: uint64,
+  ? targets: [* lcn.carrier_target],
+  ? admitted: [* uint64],
   ? failure: lcn.carrier_failure,
 }
 
@@ -214,4 +289,256 @@ lcn.carrier_async_done = {
   call: uint64,
   ? value: bstr,
   ? failure: lcn.carrier_failure,
+}
+
+; Lane 2, the boundary (part 4b-3.2; G267, plan §2.7) ------------------------------
+;
+; A hosted provider's endpoint is served by the host's own I/O loop on the
+; listener the Runtime made (fd 4). Payloads stay in the host: it checks each
+; request, response and event payload with the module's own call surface, and
+; its loop writes every Response and Event. The Runtime decides: it judges
+; every Hello, admits every call (`admit_verdict`), subscription and
+; delivery, keeps the sessions and writes the call records from what the host
+; reports (`call_ended`), and orders the loop's session ends, exactly as for
+; an endpoint it serves itself (G257). A `conn` is the host's own number for
+; one accepted connection; a `call` is the Runtime's number for one admitted
+; call.
+
+; The host -> the Runtime: the loop's events ------------------------------------------
+
+lcn.carrier_io_listening = {
+  kind: "io_listening",
+}
+
+lcn.carrier_io_serve_failed = {
+  kind: "io_serve_failed",
+  why: tstr .size (0..512),
+}
+
+; The first frame of a connection, for the Runtime's `acceptHello`.
+lcn.carrier_io_hello = {
+  kind: "io_hello",
+  conn: uint64,
+  frame: bstr,
+}
+
+lcn.carrier_io_established = {
+  kind: "io_established",
+  conn: uint64,
+}
+
+; A Request the loop resolved under the session's contract and access; its
+; params stay in the host.
+lcn.carrier_io_dispatch = {
+  kind: "io_dispatch",
+  conn: uint64,
+  request: uint64,
+  method: tstr,
+  introspection: bool,
+}
+
+lcn.carrier_io_stop = {
+  kind: "io_stop",
+  conn: uint64,
+  request: uint64,
+}
+
+lcn.carrier_io_closed = {
+  kind: "io_closed",
+  conn: uint64,
+}
+
+lcn.carrier_io_subscribe = {
+  kind: "io_subscribe",
+  conn: uint64,
+  sub: uint64,
+  event: tstr,
+}
+
+lcn.carrier_io_unsubscribe = {
+  kind: "io_unsubscribe",
+  conn: uint64,
+  sub: uint64,
+}
+
+lcn.carrier_io_publish_failed = {
+  kind: "io_publish_failed",
+  conn: uint64,
+  event: tstr,
+  message: tstr .size (0..512),
+}
+
+; `error`: the transport's `PublishErrorKind`, by its position.
+lcn.carrier_publish_failure = {
+  error: uint8,
+  code: uint8,
+  message: tstr .size (0..512),
+}
+
+lcn.carrier_io_publish_result = {
+  kind: "io_publish_result",
+  conn: uint64,
+  tag: uint64,
+  request: uint64,
+  ? failure: lcn.carrier_publish_failure,
+}
+
+lcn.carrier_io_local_failure = {
+  kind: "io_local_failure",
+  conn: uint64,
+  code: uint8,
+  message: tstr .size (0..512),
+}
+
+; [SPEC RUNTIME §4.1; CA l.1172-1177; plan §2.7 step 5] Call `call` has ended
+; in the host: whether the Response its loop committed was a success, and the
+; request and response commitments the admission asked to retain
+; (`admit_verdict`), as the host's boundary computed them (G274).
+lcn.carrier_call_ended = {
+  kind: "call_ended",
+  call: uint64,
+  succeeded: bool,
+  ? request: lcn.carrier_commitment,
+  ? response: lcn.carrier_commitment,
+}
+
+lcn.carrier_commitment = {
+  subtree_root: bstr .size 32,
+  value_root: bstr .size 32,
+}
+
+; [SPEC INTERFACE §2.9.3 l.2187-2199; RUNTIME §7.3.1] A running call's
+; invocation-scoped publication of `event`, in three steps that each wait for
+; a `scoped_result`: its destination (`ready`) before the host checks the
+; payload, then the delivery's admission (`tag`), then, once the host's loop
+; took the Event, its verdict. No step carries the payload.
+lcn.carrier_scoped_check = {
+  kind: "scoped_check",
+  id: uint64,
+  call: uint64,
+  event: bstr, ; the module's bytes, checked as given
+}
+
+lcn.carrier_scoped_admit = {
+  kind: "scoped_admit",
+  id: uint64,
+  call: uint64,
+  event: tstr .size (1..128),
+}
+
+; `abandon`: the loop did not take the Event (it is stopping).
+lcn.carrier_scoped_done = {
+  kind: "scoped_done",
+  id: uint64,
+  call: uint64,
+  tag: uint64,
+  abandon: bool,
+}
+
+; The Runtime -> the host: the loop's orders ------------------------------------------
+
+; [SPEC TRANSPORT §3.1, §8.1] The Hello passed and its ticket was redeemed:
+; the session's selected contract and route access (declaration subtree
+; roots; absent: the whole list), and when its authorization ends, in
+; nanoseconds from now (TRN-0317): the host's loop ends it then as a
+; backstop to the Runtime's own end. Nothing else of the route reaches the
+; host.
+lcn.carrier_io_admit_established = {
+  kind: "io_admit_established",
+  conn: uint64,
+  response: bstr,
+  contract: bstr .size 32,
+  ? methods: [* bstr .size 32],
+  ? publish_events: [* bstr .size 32],
+  ? subscribe_events: [* bstr .size 32],
+  ? ends_in: uint64,
+}
+
+lcn.carrier_io_admit_failed = {
+  kind: "io_admit_failed",
+  conn: uint64,
+  code: uint8,
+  peer: bool,
+}
+
+lcn.carrier_io_admit_unavailable = {
+  kind: "io_admit_unavailable",
+  conn: uint64,
+}
+
+; A Request's terminal failure the Runtime answers (an end, a revocation, a
+; refused queue): the host commits it unless its loop already committed a
+; Response to that Request (K38 interim).
+lcn.carrier_io_respond = {
+  kind: "io_respond",
+  conn: uint64,
+  request: uint64,
+  failure: lcn.carrier_failure,
+  work_ended: bool,
+}
+
+lcn.carrier_io_close = {
+  kind: "io_close",
+  conn: uint64,
+}
+
+lcn.carrier_io_terminate = {
+  kind: "io_terminate",
+  conn: uint64,
+}
+
+lcn.carrier_io_work_ended = {
+  kind: "io_work_ended",
+  conn: uint64,
+  request: uint64,
+}
+
+lcn.carrier_io_subscription_result = {
+  kind: "io_subscription_result",
+  conn: uint64,
+  sub: uint64,
+  ? failure: lcn.carrier_failure,
+}
+
+lcn.carrier_io_stop_serving = {
+  kind: "io_stop_serving",
+}
+
+; [SPEC RUNTIME §4.1, §6.4, §7.5; plan §2.7 steps 2-4] The Runtime's decision on
+; the dispatched Request `request` of `conn`, under the session's selected
+; `contract`:
+; - `failure`: refused. The host commits it, or INVALID_PARAMS when it is
+;   NOT_READY and the params do not validate (G171).
+; - otherwise admitted as `call`: the host validates the params, runs the
+;   provider with an invocation context whose caller is `consumer` (or
+;   answers `logos.schema` itself) and ends with `call_ended`, which carries
+;   a commitment only where `retain_request` or `retain_response` asks.
+lcn.carrier_admit_verdict = {
+  kind: "admit_verdict",
+  conn: uint64,
+  request: uint64,
+  contract: bstr .size 32,
+  ? failure: lcn.carrier_failure,
+  ? call: uint64,
+  ? consumer: tstr .size (1..256),
+  retain_request: bool,
+  retain_response: bool,
+}
+
+; [SPEC INTERFACE l.2101] Call `call` was cancelled: `is_cancelled` reads true.
+lcn.carrier_call_cancel = {
+  kind: "call_cancel",
+  call: uint64,
+}
+
+; The answer to a scoped step: `failure` stops the publication; `ready` (the
+; destination is open) answers `scoped_check`; `tag` (the delivery was
+; admitted; none: the subscriber's own decisions skipped it) answers
+; `scoped_admit`.
+lcn.carrier_scoped_result = {
+  kind: "scoped_result",
+  id: uint64,
+  ? failure: lcn.carrier_failure,
+  ? ready: bool,
+  ? tag: uint64,
 }

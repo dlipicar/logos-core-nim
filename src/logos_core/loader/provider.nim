@@ -310,12 +310,16 @@ func failedOf(x: RealizationRecord): LogosNSModuleLoaderFailedRealization =
   )
 
 func activeOf(x: RealizationRecord): LogosNSModuleLoaderActiveRealization =
-  ## [SPEC LOADER §7] A direct realization has no provider endpoint (l.325).
-  LogosNSModuleLoaderActiveRealization(
+  ## [SPEC LOADER §5.3, §7] Only an active hosted provider realization has a
+  ## provider endpoint (l.320-321, l.479-480).
+  result = LogosNSModuleLoaderActiveRealization(
     realization: x.realization,
     module_instance: x.moduleInstance,
     call_surface: x.callSurface,
   )
+  if x.providerEndpoint.isSome:
+    result.provider_endpoint =
+      Opt.some(LogosNSModuleLoaderProviderEndpoint(address: x.providerEndpoint.get))
 
 func realizationOf(x: RealizationRecord): LogosNSModuleLoaderRealization =
   type K = LogosNSModuleLoaderRealizationKind

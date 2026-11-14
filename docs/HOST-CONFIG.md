@@ -420,8 +420,9 @@ modules of this Runtime is direct or uses local transport. Each rule names a `ca
 module name), a `mode` (`direct` or `local-transport`), and optionally a `caller` (the consumer's module
 name; absent: any consumer). For a route, the rule naming both its consumer and its provider wins, then
 the rule for any consumer; with no matching rule the route is direct, as in every configuration without
-`routing`. The mode is fixed when the route is established: `renew_route` keeps it, and routes already
-established are never moved (RUNTIME l.940).
+`routing`, unless one of its ends runs in a Module Host: then it is `local-transport` (RUNTIME
+l.3006-3007; DECISIONS G272). The mode is fixed when the route is established: `renew_route` keeps it,
+and routes already established are never moved (RUNTIME l.940).
 
 - Two rules for the same `caller` and `callee` are refused, as is a rule naming the Module Loader
   (`logos_module_loader`) as caller or callee (every route to the Loader is refused, G251) and a rule
@@ -431,6 +432,10 @@ established are never moved (RUNTIME l.940).
   policy evaluations stay direct.
 - `local-transport` is refused on platforms without the `logos.local.unix-stream` profile (Windows,
   TRANSPORT §8.2.1).
+- A `direct` rule naming, as callee or as caller, a module this file places `hosted_dynamic` is
+  refused ("routing: the direct routing rule ... names ..., which is hosted_dynamic"): a direct route
+  needs one address space. For a hosted instance no configuration named (a `create_module` one),
+  `establish_route` under such a rule is `LOGOS_ERR_NOT_READY` with that reason (DECISIONS G272).
 - A transported route to a provider has the Runtime serve that provider at an endpoint under
   `runtime.endpoint_dir`, created when the first such route to its realization is established; the
   provider's code still runs in the Runtime's process (DECISIONS G257). The consumer's
@@ -605,8 +610,9 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   whether or not any route is ever transported, so every host that loads the library gets it. The
   Runtime's own socket writes never raise `SIGPIPE` either way (`MSG_NOSIGNAL`, `SO_NOSIGPIPE`). A host
   that relies on `SIGPIPE` for its own pipes restores its disposition after loading the library.
-- **Threads.** With a `local-transport` rule, the Runtime starts one more thread at `start`, the
-  transport I/O thread, and stops it at `destroy`. Without one, no such thread exists.
+- **Threads.** With a `local-transport` rule, or with `runtime.module_host` set, the Runtime starts
+  one more thread at `start`, the transport I/O thread, and stops it at `destroy`. Without either, no
+  such thread exists.
 - **Results.** A result's message and detail stay in the calling thread's storage until that
   thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
   is silent); `LOGOS_OK` carries neither.
@@ -880,7 +886,8 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105).
   working directory the Runtime's, and its standard output and error are the Runtime's.
 - **The process.** Started with `posix_spawn`, never `fork`: standard input from `/dev/null`;
   descriptor 3 the private carrier to the Runtime (a socket pair the Runtime makes; DECISIONS G266);
-  descriptor 5 the instance's restart lock (below); no other descriptor of the Runtime; a process group of its own; an empty signal mask, and SIGPIPE,
+  descriptor 4 a provider's listener (below); descriptor 5 the instance's restart lock (below); no
+  other descriptor of the Runtime; a process group of its own; an empty signal mask, and SIGPIPE,
   SIGTERM, SIGINT and SIGHUP at their default actions. `argv` is only the program's name: nothing
   about the instance is in its command line or environment. On Linux it is killed when the
   Runtime's supervision thread ends (`PR_SET_PDEATHSIG`). It runs as the Runtime's user: placement
@@ -920,9 +927,24 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105).
   tries the lock again every second and the instance is restored as any other (`error`, `other`)
   once it can take it. Nothing ever connects to a host of an earlier run. The files are not removed;
   they hold no data.
-- **Not yet** (Tier 4b step 4b-3, later parts): a hosted *provider* fails its start (`other`, "a
-  hosted provider is not served yet") and its realization is released; a hosted consumer's
-  `materialize_route` is `LOGOS_ERR_NOT_READY`.
+- **A hosted provider** (an instance whose record names a contract; DECISIONS G267, G273, G274):
+  before its host starts, the Runtime creates its endpoint under `runtime.endpoint_dir` exactly as
+  for a direct provider served over local transport, and hands the host the listening socket as
+  descriptor 4. The host serves it with the Runtime's transport code before it reports the module
+  initialized, and the Runtime checks the socket is still the one it made before the instance is
+  `ready`; a listener that does not reach the host, or a path replaced meanwhile, fails the start and
+  nothing is served. Every route to it is `local-transport` (above, `routing`). Payloads go between
+  the consumer's process and the host directly; the Runtime stays on the control path. It judges
+  each Hello, admits each call, subscription and delivery and keeps each session from what the host
+  reports without payloads, so tickets, access, revocation and the call records' outcomes are
+  exactly those of a direct provider's transported routes. The host checks each payload against the
+  selected contract with the Runtime's own checks, runs the provider's code for each admitted call
+  (synchronous or deferred, up to 64 at once), commits the Response and reports the commitments a
+  call record retains; those roots, and what the host sends a consumer, rest on the host
+  (docs/CONFORMANCE.md, DECISIONS G273, G274). The endpoint goes with the realization, as a direct
+  provider's does.
+- **Not yet** (Tier 4b step 4b-3, part 4b-3.3): a hosted consumer's `materialize_route` is
+  `LOGOS_ERR_NOT_READY`.
 - **Exit statuses** of the program, for a log: 0 after an orderly release; 2 when it was not started
   by a Runtime (descriptor 3 is not a connected local stream socket); 70 when its carrier broke the
   protocol or closed unexpectedly. The Windows build is a stub that exits 2.

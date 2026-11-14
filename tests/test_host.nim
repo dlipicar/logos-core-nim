@@ -808,7 +808,7 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.modules[1].instance = "p-" & repeat("0a", 16) & "-2"
     check parse(c).rejects("Runtime-assigned name form")
 
-  test "[IMPL] module_host is an absolute regular executable, of this user or root and writable by its owner only; module_host_env names each variable once; a hosted record needs module_host":
+  test "[IMPL] [IMPL-DECISION G272] module_host is an absolute regular executable, of this user or root and writable by its owner only; module_host_env names each variable once; a hosted record needs module_host; no direct routing rule names a hosted module":
     # Tier 4b step 4b-3 (plan §2.2, §3, R4; DECISIONS G264).
     let dir = work / "module-host"
     createDir(dir)
@@ -881,6 +881,36 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
       check parse(c).rejects(
         "declaration probe_module: hosted_dynamic needs module_host"
       )
+      # [Rev R10] A direct routing rule naming a hosted_dynamic module, as
+      # callee or as caller, is refused; local-transport is accepted.
+      c = baseConfig()
+      c.runtime.module_host = Opt.some(program)
+      c.modules.add(hosted)
+      proc rule(
+          callee: string,
+          mode: LcnAppRoutingRuleModeChoiceKind,
+          caller = Opt.none(string),
+      ): LcnAppRoutingRule =
+        LcnAppRoutingRule(
+          callee: callee, caller: caller, mode: LcnAppRoutingRuleModeChoice(kind: mode)
+        )
+
+      type M = LcnAppRoutingRuleModeChoiceKind
+      c.routing = Opt.some(@[rule("probe_module", M.Direct)])
+      check parse(c).rejects(
+        "routing: the direct routing rule any -> probe_module names probe_module, which is hosted_dynamic"
+      )
+      c.routing = Opt.some(@[rule("meter_module", M.Direct, Opt.some("probe_module"))])
+      check parse(c).rejects(
+        "routing: the direct routing rule probe_module -> meter_module names probe_module, which is hosted_dynamic"
+      )
+      c.routing = Opt.some(
+        @[
+          rule("probe_module", M.Local_transport),
+          rule("meter_module", M.Direct, Opt.some("client_module")),
+        ]
+      )
+      check parse(c).isOk
 
   test "[RUN-0284] a hosted_dynamic implementation is an artifact in a placement, never a static binding":
     var c = baseConfig()
