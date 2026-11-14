@@ -60,6 +60,9 @@ proc cCompiler(): string =
     path.strip
   elif defined(msan):
     "clang"
+  elif defined(windows):
+    # The MinGW-w64 gcc on PATH, the one Nim's own builds use there.
+    getEnv("CC", "gcc")
   else:
     getEnv("CC", "cc")
 
@@ -68,6 +71,8 @@ proc buildEmbedMain*(library: string): string =
   ## warnings as errors in strict C11.
   let dir = library.parentDir
   result = dir / "embed_main"
+  when defined(windows):
+    result = result.addFileExt(ExeExt)
   var args = @[
     cCompiler(),
     "-std=c11",
@@ -85,7 +90,13 @@ proc buildEmbedMain*(library: string): string =
     # (config.nims). The program needs its own: the library's copy comes after the
     # runtime's weak defaults in symbol lookup order, so the runtime never sees it.
     args.add(root / "tests" / "support" / "sanitizers.c")
-  args.add(["-L" & dir, "-llogos_runtime", "-Wl,-rpath," & dir])
+  when defined(windows):
+    # MinGW's ld links `logos_runtime.dll` itself by name. Windows has no rpath:
+    # the loader looks in the program's own directory first, and the program is
+    # built next to the library.
+    args.add(["-L" & dir, "-llogos_runtime"])
+  else:
+    args.add(["-L" & dir, "-llogos_runtime", "-Wl,-rpath," & dir])
   args.add(sanitizerFlags)
   let (output, code) = execCmdEx(quoteShellCommand(args))
   doAssert code == 0, "building embed_main failed:\n" & output
