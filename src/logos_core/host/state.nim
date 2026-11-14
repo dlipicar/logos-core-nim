@@ -7,7 +7,11 @@
 ##   status 70 at once, without destroying the context (RUNTIME l.976).
 ## - **Waiting.** A thread that sends a request waits on a slot of its own
 ##   (one `Channel` of plain answers); the main thread decodes the reply and
-##   hands it over, so no generated case object crosses threads.
+##   hands it over, so no generated case object crosses threads. Slots are
+##   reused, never closed: a sender signals a channel after releasing its
+##   lock (Nim 2.2.14 `channels_builtin.sendImpl`), so a slot closed and
+##   freed once its answer was read could still be signalled (the Runtime's
+##   reply slots, `plumbing.ReplySlot`, for the same reason).
 ## - **Host threads.** The threads the host runs module code on (the
 ##   lifecycle thread and the callback workers) mark themselves; a Runtime
 ##   Control call from one tells the Runtime so (RUNTIME l.4083), as a direct
@@ -42,7 +46,7 @@ type
   SlotObj = object
     id: uint64
     ch: Channel[Answer]
-    next: ptr SlotObj
+    next: ptr SlotObj ## in `slots` while a request waits, in `free` after
 
   Slot* = ptr SlotObj
 
@@ -52,6 +56,7 @@ type
     nextId: Atomic[uint64]
     lock: Lock
     slots: ptr SlotObj ## waiting requests, under `lock`
+    free: ptr SlotObj ## slots no request uses, under `lock`
     stopping*: Atomic[bool] ## the release completed: the carrier's end is expected
 
 var hs*: ptr HostShared
@@ -88,31 +93,26 @@ proc send*(m: LcnCarrierMessage) =
     carrierLost("the carrier failed: " & error)
 
 proc openSlot*(id: uint64): Slot =
-  result = createShared(SlotObj)
-  result.id = id
-  result.ch.open()
   withLock hs.lock:
+    result = hs.free
+    if result != nil:
+      hs.free = result.next
+    else:
+      result = createShared(SlotObj)
+      result.ch.open()
+    result.id = id
     result.next = hs.slots
     hs.slots = result
 
-proc closeSlot(s: Slot) =
-  withLock hs.lock:
-    var p = addr hs.slots
-    while p[] != nil:
-      if p[] == s:
-        p[] = s.next
-        break
-      p = addr p[].next
-  s.ch.close()
-  freeShared(s)
-
 proc await*(s: Slot): Answer =
-  ## The answer to the slot's request; the slot is gone after.
+  ## The answer to the slot's request; the slot is free for another after.
   try:
     result = s.ch.recv()
   except Exception:
     carrierLost("a reply slot failed")
-  closeSlot(s)
+  withLock hs.lock:
+    s.next = hs.free
+    hs.free = s
 
 proc request*(m: LcnCarrierMessage, id: uint64): Answer =
   ## Sends `m` (whose request id is `id`) and waits for its reply.
@@ -125,12 +125,15 @@ proc answered*(id: uint64, a: sink Answer) =
   ## protocol violation.
   var s: Slot
   withLock hs.lock:
-    var p = hs.slots
-    while p != nil:
-      if p.id == id:
-        s = p
+    var p = addr hs.slots
+    while p[] != nil:
+      if p[].id == id:
+        # Out of `slots` now: a second reply to `id` answers no request.
+        s = p[]
+        p[] = s.next
+        s.next = nil
         break
-      p = p.next
+      p = addr p[].next
   if s == nil:
     carrierLost("a reply to no request (" & $id & ")")
   try:
