@@ -876,6 +876,16 @@ type
     mkApplied ## [I87] `_MODULE_apply_configuration` returned (`res`)
     mkLoaderReply ## [I89] a Module Loader call returned (`loaderReply`)
     mkIo ## [I90] an event of the transport I/O thread (`io`)
+    mkHostEnded
+      ## [I91; R27] a Module Host's end, before the Loader reports anything
+      ## that follows from it (`host`, `hostEnd`)
+
+  HostEndNote* = object
+    ## [R7] How a Module Host ended, as plain values (`hostsup.HostEnd`).
+    orderly*: bool ## a terminal lane-0 message came first
+    byRuntime*: bool ## the Runtime ended it
+    lost*: string ## why its carrier failed; empty: it did not
+    how*: string ## its exit status or signal, for diagnostics
 
   Msg* = object
     job*: int
@@ -905,6 +915,9 @@ type
       loaderReply*: LoaderReply
     of mkIo:
       io*: IoEvent
+    of mkHostEnded:
+      host*: pointer ## retained for the message; the Runtime thread drops it
+      hostEnd*: HostEndNote
 
   ReplySlot = object
     ## One reply channel, reused by one call after another [IMPL]. A sender

@@ -223,6 +223,8 @@ proc initModule(
       stateRoot: w.stateRoot,
       side: w.side,
       hosted: w.hosted,
+      hostEnded: hostEnded,
+      endHosts: endHosts,
     )
   ).valueOr:
     return err(moduleError("the Module Loader does not start: " & error))

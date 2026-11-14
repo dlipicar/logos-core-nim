@@ -808,7 +808,7 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105).
   working directory the Runtime's, and its standard output and error are the Runtime's.
 - **The process.** Started with `posix_spawn`, never `fork`: standard input from `/dev/null`;
   descriptor 3 the private carrier to the Runtime (a socket pair the Runtime makes; DECISIONS G266);
-  no other descriptor of the Runtime; a process group of its own; an empty signal mask, and SIGPIPE,
+  descriptor 5 the instance's restart lock (below); no other descriptor of the Runtime; a process group of its own; an empty signal mask, and SIGPIPE,
   SIGTERM, SIGINT and SIGHUP at their default actions. `argv` is only the program's name: nothing
   about the instance is in its command line or environment. On Linux it is killed when the
   Runtime's supervision thread ends (`PR_SET_PDEATHSIG`). It runs as the Runtime's user: placement
@@ -822,12 +822,35 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105).
   the host, and has it map the staged copy and run the module's checks and `_MODULE_init`; the same
   failures give the same Loader errors (LOADER l.388-403). A stop has the host call
   `_MODULE_destroy` once; the host then exits.
+- **A host that ends by itself** (its module exits or crashes, it is killed from outside, or its
+  carrier breaks; DECISIONS G268): the instance enters `error` with `host-terminated` and a
+  diagnostic names it with the exit status, the signal or the carrier's failure; its routes fail, its
+  Loader record is released, its intent is kept and nothing restarts it. A restart policy sees a live
+  failure (G289). An end that follows the host's own answer (a failed `_MODULE_init`, a release) is
+  classified by the Loader's answer, as for a direct module.
+- **Deadlines** (DECISIONS G269). Past the startup deadline the instance enters `error` with
+  `startup-timeout` and a host still in `_MODULE_init` is ended; `realization` is `unknown` until
+  its end is confirmed, then `absent`. Past the stop deadline (`cleanup-timeout`) and the shutdown
+  grace period, the host is ended and its release completes. Past the apply deadline
+  (`configuration-indeterminate`), a hook that still has not returned one stop deadline later has
+  its host ended. In every case the state stays `error` with the deadline's classification.
+- **Live configuration** runs `_MODULE_apply_configuration` in the host. A host that ends while it
+  runs answers the `apply_configuration` caller `LOGOS_ERR_MODULE` and leaves the instance `error`
+  with `host-terminated` (DECISIONS G270).
+- **The Module Loader's loss** ends every host it owned; each instance's cleanup resolves when its
+  host's end is confirmed, and nothing is realized again until the Runtime restarts.
+- **The restart lock** (DECISIONS G275): `<work_dir>/hosts/` (made 0700) holds one lock file per
+  hosted instance, named by a hash of its id. The Runtime takes the lock before it starts a host and
+  hands it to the host, so it is held while the host, or anything the module forked, runs. After
+  the Runtime ended without completing shutdown, a stored hosted instance whose lock is still held
+  reports `realization` `unknown`, and `start_module` and `recover_module` answer
+  `LOGOS_ERR_NOT_READY` ("a Module Host of the previous run may still be running"); the Runtime
+  tries the lock again every second and the instance is restored as any other (`error`, `other`)
+  once it can take it. Nothing ever connects to a host of an earlier run. The files are not removed;
+  they hold no data.
 - **Not yet** (Tier 4b step 4b-3, later parts): a hosted *provider* fails its start (`other`, "a
   hosted provider is not served yet") and its realization is released; a hosted consumer's
-  `materialize_route` is `LOGOS_ERR_NOT_READY`; a host that ends by itself, a lost carrier, a
-  deadline that passes while module code runs in a host, a live configuration application in a host
-  and a Runtime that restarts with hosts still running are handled from part 4b-3.1b. Until then a
-  host that ends by itself leaves its instance `ready` with nothing behind it; stop it.
+  `materialize_route` is `LOGOS_ERR_NOT_READY`.
 - **Exit statuses** of the program, for a log: 0 after an orderly release; 2 when it was not started
   by a Runtime (descriptor 3 is not a connected local stream socket); 70 when its carrier broke the
   protocol or closed unexpectedly. The Windows build is a stub that exits 2.

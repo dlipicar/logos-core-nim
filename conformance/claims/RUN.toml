@@ -44,6 +44,15 @@ default = "claimed"
 "RUN-0172" = "claimed"
 "RUN-0180" = "claimed"
 "RUN-0284" = "claimed"
+# Part 4b-3.1b (DECISIONS I91, G268, G269, G275): a host's end or a broken carrier ends the hosted
+# work, fails the instance and its routes, and starts termination (RUN-0812, RUN-0813; the hosted
+# provider's admission is tagged again with part 4b-3.2); nothing is adopted after a Loader's loss
+# or an unclean end (RUN-0814); a startup past its deadline (RUN-0227, §6.2). RUN-0228 (the path
+# removed) comes with hosted providers.
+"RUN-0227" = "claimed"
+"RUN-0812" = "claimed"
+"RUN-0813" = "claimed"
+"RUN-0814" = "claimed"
 # RUN-0501 (l.2741), RUN-0541, RUN-0543, RUN-0544 and RUN-0623 are claimed with step 4b-2a
 # (DECISIONS I90). RUN-0541: a replayed establish or renew answer carries no `invocation`, so its
 # retained bytes hold no ticket (the NA-04 interim, G255); the consumer renews. RUN-0800 to RUN-0806

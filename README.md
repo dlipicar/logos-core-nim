@@ -49,8 +49,11 @@ The specs are being revised, so the work is ordered by how settled each area is
   `hosted_dynamic` module runs in a `logos-module-host` process of its own that the Runtime starts,
   supervises and ends; its Runtime Control calls, events and asynchronous calls cross a private
   carrier and are answered as a direct module's are (part 4b-3.1a, I91: consumer-only modules,
-  start and stop).
-- Not yet: the rest of Tier 4b (the rest of the Module Host: its ends and deadlines, hosted providers and consumers' routes; the rest of transported routes, `logosd`
+  start and stop). A host that ends by itself, a broken carrier, a deadline and the Module Loader's
+  loss end the instance's realization (`error`, with the deadline's classification or
+  `host-terminated`); a restart lock keeps a host of an earlier run from being joined by a new one
+  (part 4b-3.1b).
+- Not yet: the rest of Tier 4b (the rest of the Module Host: hosted providers and consumers' routes; the rest of transported routes, `logosd`
   and `logosctl`, permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).

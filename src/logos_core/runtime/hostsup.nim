@@ -75,6 +75,12 @@ type
     terminated*: bool ## supervision ended it before it ended by itself
     reason*: string ## why supervision ended it; empty: it did not
     released*: bool ## it answered `released` first (an orderly end)
+    orderly*: bool
+      ## [R7 (c)] a terminal lane-0 message came first (`released`,
+      ## `init_failed`, `fatal`): the Loader's answer decides
+    byRuntime*: bool
+      ## [R7 (d)] the Runtime ended it (a deadline, its Loader's loss): the
+      ## Runtime's classification stays
     carrierLost*: string ## why the carrier failed; empty: it did not
 
   ProxySubObj = object
@@ -105,6 +111,9 @@ type
     waitStatus: cint
     terminating: bool
     termReason: FixedText
+    byRuntime: bool ## [R7 (d)] the Runtime asked for the end
+    orderly: bool ## [R7 (c)] a terminal lane-0 message was read
+    lockFd: cint ## [G275] the restart lock, the daemon's copy until the spawn
     carrierDown: bool
     lostReason: FixedText
     released: bool
@@ -137,9 +146,11 @@ type
     rc: cint
     next: ptr SpawnReq
 
-  EndNotify* = proc(ctx: pointer, h: Host) {.nimcall, gcsafe, raises: [].}
-    ## Supervision thread: `h`'s end is confirmed. A callee that keeps `h`
-    ## retains it.
+  EndNotify* = proc(ctx: pointer, h: Host, e: HostEnd) {.nimcall, gcsafe, raises: [].}
+    ## Supervision thread: `h` has ended as `e` says. Called before anyone
+    ## waiting for the end (`awaitEnd`, `awaitLane0`) is woken, so what the
+    ## callee posts precedes anything they report [R27]. A callee that keeps
+    ## `h` retains it.
 
   SupervisorObj = object
     program: cstring
@@ -215,10 +226,14 @@ when defined(posix):
       publish: LogosPublishFn,
       publishUserData: pointer,
       payloadDepth: int,
+      lockFd: cint = -1,
   ): Result[Host, string] =
     ## [plan §2.4] The carrier of one hosted attempt and its launch state: the
     ## attempt's Runtime Control binding and publish callback, from which every
-    ## lane-1 frame takes its consumer. One reference, the caller's.
+    ## lane-1 frame takes its consumer. One reference, the caller's. `lockFd`
+    ## [G275]: the instance's restart lock, held; the host takes it as fd 5 and
+    ## this copy is closed once the host is spawned (or with the host). On an
+    ## error the caller still owns it.
     var fds: array[2, cint]
     let r = socketPair(addr fds)
     if r < 0:
@@ -236,6 +251,7 @@ when defined(posix):
     h.hostFd = fds[1]
     h.writer.initWriter(fds[0])
     h.pid = -1
+    h.lockFd = lockFd
     h.rc = rc
     h.publish = publish
     h.publishUserData = publishUserData
@@ -265,6 +281,8 @@ when defined(posix):
   proc freeHost(h: Host) =
     if h.services != nil:
       freeShared(h.services)
+    if h.lockFd >= 0:
+      discard fdClose(h.lockFd)
     if h.daemonFd >= 0:
       discard fdClose(h.daemonFd)
     if h.hostFd >= 0:
@@ -316,7 +334,7 @@ when defined(posix):
     const MaxEndRecords = 512
 
     type EndRecord = object ## plain values: written by the supervision thread
-      exited, terminated, released: bool
+      exited, terminated, released, orderly, byRuntime: bool
       status: int
       reason, lost: FixedText
 
@@ -363,6 +381,8 @@ when defined(posix):
             exited: e.exited,
             terminated: e.terminated,
             released: e.released,
+            orderly: e.orderly,
+            byRuntime: e.byRuntime,
             status: e.status,
             reason: clipText(e.reason),
             lost: clipText(e.carrierLost),
@@ -391,6 +411,8 @@ when defined(posix):
               status: r.status,
               terminated: r.terminated,
               released: r.released,
+              orderly: r.orderly,
+              byRuntime: r.byRuntime,
               reason: $r.reason,
               carrierLost: $r.lost,
             )
@@ -446,7 +468,8 @@ when defined(posix):
       if h.terminating:
         return err("the Module Host was ended before it started")
     ?s.startThreads()
-    var req = SpawnReq(h: h, listener: listener, lock: lock)
+    var req =
+      SpawnReq(h: h, listener: listener, lock: (if lock >= 0: lock else: h.lockFd))
     withLock s.lock:
       if s.closing.load:
         return err("the Runtime is closing")
@@ -458,16 +481,26 @@ when defined(posix):
         wait(s.spawned, s.lock)
     discard fdClose(h.hostFd)
     h.hostFd = -1
+    if h.lockFd >= 0:
+      # [G275] The host's fd 5 holds the lock now.
+      discard fdClose(h.lockFd)
+      h.lockFd = -1
     if req.rc != 0:
       return err("the Module Host cannot be started: " & $strerror(-req.rc))
     ok()
 
-  proc terminate*(h: Host, reason: string) =
+  proc terminate*(h: Host, reason: string, byRuntime = false) =
     ## [SPEC RUNTIME l.669; G61] Ends the host's process group; idempotent,
-    ## returns at once. `awaitEnd` waits for the confirmation.
+    ## returns at once. `awaitEnd` waits for the confirmation. `byRuntime`
+    ## [R7 (d)]: the Runtime ends it at a deadline or after its Loader's loss,
+    ## also when the host is already ending for another reason.
     var pid: cint = -1
     withLock h.lock:
-      if h.confirmed or h.terminating:
+      if h.confirmed:
+        return
+      if byRuntime and not h.carrierDown:
+        h.byRuntime = true
+      if h.terminating:
         return
       h.terminating = true
       h.termReason = clipText(reason)
@@ -488,6 +521,8 @@ when defined(posix):
     result.terminated = h.terminating
     result.reason = $h.termReason
     result.released = h.released
+    result.orderly = h.orderly
+    result.byRuntime = h.byRuntime
     result.carrierLost = $h.lostReason
 
   proc awaitEnd*(h: Host): HostEnd =
@@ -867,8 +902,14 @@ when defined(posix):
       h.carrierLost("the carrier to the Module Host failed: a frame does not decode")
       return false
     case m.kind
-    of K.lcn_Carrier_initialized, K.lcn_Carrier_init_failed, K.lcn_Carrier_applied,
-        K.lcn_Carrier_fatal:
+    of K.lcn_Carrier_initialized, K.lcn_Carrier_applied:
+      try:
+        h.lane0.send(f)
+      except Exception:
+        discard
+    of K.lcn_Carrier_init_failed, K.lcn_Carrier_fatal:
+      withLock h.lock:
+        h.orderly = true # [R7 (c)]
       try:
         h.lane0.send(f)
       except Exception:
@@ -876,6 +917,7 @@ when defined(posix):
     of K.lcn_Carrier_released:
       withLock h.lock:
         h.released = true
+        h.orderly = true
       try:
         h.lane0.send(f)
       except Exception:
@@ -947,19 +989,22 @@ when defined(posix):
       s.readHost(h, r)
     var e: HostEnd
     withLock h.lock:
-      h.confirmed = true
       h.carrierDown = true
       e = h.endOf()
+    when defined(lcnTestHooks):
+      recordEnd(e)
+    # [R27] The Runtime hears of the end before the Loader's waits return, so
+    # the end is handled before any answer the Loader gives because of it.
+    if s.onEnd != nil:
+      s.onEnd(s.onEndCtx, h, e)
+    withLock h.lock:
+      h.confirmed = true
       broadcast(h.cond)
     discard posix.shutdown(SocketHandle(h.daemonFd), SHUT_RDWR)
     try:
       h.lane0.send(@[])
     except Exception:
       discard
-    when defined(lcnTestHooks):
-      recordEnd(e)
-    if s.onEnd != nil:
-      s.onEnd(s.onEndCtx, h)
 
   proc reapStep(s: HostSupervisor, h: Host, r: var FrameReader): bool =
     ## One supervision step for a live host; true once its end is confirmed.
@@ -1197,6 +1242,7 @@ else:
       publish: LogosPublishFn,
       publishUserData: pointer,
       payloadDepth: int,
+      lockFd: cint = -1,
   ): Result[Host, string] =
     err(Unsupported)
 
@@ -1230,7 +1276,7 @@ else:
   proc spawn*(h: Host, listener: cint = -1, lock: cint = -1): Result[void, string] =
     err(Unsupported)
 
-  proc terminate*(h: Host, reason: string) =
+  proc terminate*(h: Host, reason: string, byRuntime = false) =
     discard
 
   proc awaitEnd*(h: Host): HostEnd =

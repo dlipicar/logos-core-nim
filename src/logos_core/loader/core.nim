@@ -24,7 +24,8 @@
 ## - **Closing.** `closeCore` refuses new requests, answers the queued ones and
 ##   joins the thread. A realization still live then is left as it is: the
 ##   Runtime releases every realization the Loader owns before it destroys the
-##   Loader (RUNTIME l.3863; G247).
+##   Loader (RUNTIME l.3863; G247). A hosted one left after a loss has its
+##   Module Host ended and dropped (plan §2.9).
 
 {.push raises: [], gcsafe.}
 
@@ -47,6 +48,10 @@ type
     hosted*: bool
       ## [plan §2.5] a Module Host program is configured: the `hosted_dynamic`
       ## driver serves placement `process` (LDR-0033-LDR-0035)
+    hostEnded*: proc(host: pointer): bool {.nimcall, gcsafe, raises: [].}
+      ## [L l.497-499] a hosted realization's host has ended (`hosted.nim`)
+    endHosts*: proc(hosts: openArray[pointer]) {.nimcall, gcsafe, raises: [].}
+      ## [plan §2.9] ends and drops the hosts still held when the thread stops
 
   InitCall* = object
     ## The one `_MODULE_init(input, &context)` call the caller runs. `input`
@@ -198,6 +203,7 @@ type
       ## instances with a mutation running, and the mutations waiting for it
     attempts: Table[string, Attempt]
     releasing: Table[string, string] ## instance: the realization being released
+    hostEnded: proc(host: pointer): bool {.nimcall, gcsafe, raises: [].}
 
 const ClosingText* = "the Module Loader is closing"
 
@@ -403,6 +409,7 @@ proc handle(c: var Core, q: sink Request) =
   of rkCapabilities:
     q.slot.answer(Reply(kind: rkCapabilities, caps: c.r.capabilities))
   of rkStatus:
+    c.r.failEndedHosts(c.hostEnded)
     q.slot.answer(Reply(kind: rkStatus, record: c.r.getStatus(q.instance, q.statusId)))
   of rkBegin, rkBeginRelease, rkBeginApply:
     if q.instance in c.busy:
@@ -549,7 +556,12 @@ proc coreLoop(sh: ptr CoreShared) =
     cfg = sh.start.recv()
   except Exception:
     return
-  var c = Core(sh: sh, side: cfg.side, r: newRealizer(cfg.workDir, cfg.stateRoot))
+  var c = Core(
+    sh: sh,
+    side: cfg.side,
+    r: newRealizer(cfg.workDir, cfg.stateRoot),
+    hostEnded: cfg.hostEnded,
+  )
   if cfg.hosted:
     # [plan §2.5; LOADER §4] Advertised only with a Module Host program (K7:
     # never `force_release`).
@@ -567,6 +579,10 @@ proc coreLoop(sh: ptr CoreShared) =
   except Exception:
     discard
   c.run()
+  if cfg.endHosts != nil:
+    # [SPEC RUNTIME l.3821; plan §2.9] No Module Host outlives the Loader that
+    # owned it; the Runtime releases first what it can (G247).
+    cfg.endHosts(c.r.takeHosts())
   c.r = nil
 
 proc coreMain(sh: ptr CoreShared) {.thread.} =

@@ -20,9 +20,12 @@
 ## with a context: no destroy may follow), `ok-null` (LOGOS_OK without a
 ## context), `block-init` and `block-destroy` (wait until `<state_dir>/go`
 ## exists), `block-handler` (each handler waits until `<state_dir>/go-handler`
-## exists), `quit-init <n>` (exit from module code). `_MODULE_apply_configuration`
-## answers its input: `ok`, `reject` (a failure status) or `bad` (an invalid
-## status).
+## exists), `quit-init <n>` (exit from module code), `quit-handler` (exit from
+## the first event handler), `rc-destroy <method> <hex params>` (a Runtime
+## Control call from `_MODULE_destroy`, its result in `rc-destroy`).
+## `_MODULE_apply_configuration` answers by what its input contains: `reject`
+## (a failure status), `bad` (an invalid status), `block` (waits until
+## `<state_dir>/go-apply` exists, then OK), `quit` (exits); anything else OK.
 
 {.push raises: [].}
 
@@ -34,7 +37,7 @@ type Probe = object ## Plain data in shared memory: entries run on any thread (r
   dirBuf: array[1024, char] ## the state directory; empty: none
   dirLen: int
   rc: ptr LogosRuntimeControlBinding
-  blockDestroy, blockHandler: bool
+  blockDestroy, blockHandler, quitHandler: bool
   handled, inside: Atomic[int]
 
 var failedContext: int ## a failing init's context: never destroyed
@@ -101,6 +104,8 @@ proc onEvent(
   if p.inside.fetchAdd(1) != 0:
     p.note("events", "overlap")
   p.note("events", $name & " " & hex(data, len))
+  if p.quitHandler:
+    quit(3) # [plan S-7] module code ends its host
   if p.handled.fetchAdd(1) == 0:
     # [G178] A handler may call Runtime Control.
     var outBuf: ptr UncheckedArray[uint8]
@@ -164,6 +169,8 @@ proc probeInit(
       p.blockDestroy = true
     of "block-handler":
       p.blockHandler = true
+    of "quit-handler":
+      p.quitHandler = true
     of "quit-init":
       quit(
         if w.len > 1:
@@ -202,6 +209,26 @@ proc probeDestroy(
   let p = cast[ptr Probe](module)
   if p.blockDestroy:
     waitGo(p.dir)
+  var commands: seq[string]
+  try:
+    commands = readFile(p.dir / "probe.cmd").splitLines
+  except IOError, OSError:
+    discard
+  for c in commands:
+    let w = c.splitWhitespace
+    if w.len > 1 and w[0] == "rc-destroy":
+      let before = p.dir / "rc"
+      p.rcCall(w[1], (if w.len > 2: w[2] else: ""))
+      # The result went to `rc`; it is moved to `rc-destroy`.
+      try:
+        let all = readFile(before).splitLines
+        var last = ""
+        for l in all:
+          if l.len > 0:
+            last = l
+        p.note("rc-destroy", last)
+      except IOError, OSError:
+        discard
   p.note("destroyed", "destroyed")
   # The probe's memory stays: a handler of a subscription may still be ending.
 
@@ -216,12 +243,13 @@ proc probeApply(
   var text = newString(int(len))
   for i in 0 ..< int(len):
     text[i] = char(cbor[i])
-  case text
-  of "reject":
+  if "reject" in text:
     result.code = CErrorCode(ord(ecInvalidParams))
     result.message = "the probe rejects it"
-  of "bad":
+  elif "bad" in text:
     result.code = CErrorCode(0)
     result.message = "an OK status with a message"
-  else:
-    discard
+  elif "block" in text:
+    waitGo(p.dir, "go-apply")
+  elif "quit" in text:
+    quit(3) # [plan S-13] module code ends its host in its hook

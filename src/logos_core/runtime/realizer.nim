@@ -972,3 +972,24 @@ proc getStatus*(
 
 func liveCount*(r: Realizer): int =
   r.live.len
+
+proc failEndedHosts*(
+    r: Realizer, ended: proc(host: pointer): bool {.nimcall, gcsafe, raises: [].}
+) =
+  ## [SPEC LOADER l.497-499] An active hosted realization whose Module Host
+  ## ended without a release is `failed`, owned until its release.
+  if ended.isNil:
+    return
+  for x in r.live.values:
+    if x.hosted and x.status == rsActive and not x.releasing and x.host != nil and
+        ended(x.host):
+      x.status = rsFailed
+      x.failure = loaderError(lecRealizationFailed, "the Module Host ended")
+
+proc takeHosts*(r: Realizer): seq[pointer] =
+  ## [plan §2.9] The hosts of the hosted realizations still retained, now the
+  ## caller's to end: the Loader is stopping.
+  for x in r.live.values:
+    if x.hosted and x.host != nil:
+      result.add(x.host)
+      x.host = nil

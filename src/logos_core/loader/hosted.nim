@@ -14,6 +14,9 @@
 ##   exactly once (LDR-0119).
 ## - **Apply** (`applyHosted`): `apply` and the hook's status; the host's end
 ##   while it is outstanding is an indeterminate outcome (L l.497-499).
+## - **Ends** (`hostEnded`, `endHosts`): a record whose host ended by itself is
+##   `failed` (L l.497-499); the Loader's thread ends and drops every host it
+##   still holds when it stops (`closeCore` after a loss, RUNTIME l.3821).
 
 {.push raises: [], gcsafe.}
 
@@ -125,23 +128,41 @@ proc releaseHosted*(host: pointer) =
   dropHost(h)
 
 proc applyHosted*(host: pointer, configuration: openArray[byte]): AbiCheck =
-  ## [SPEC LOADER §8; plan §2.10] The hook's status as the host read it; the
-  ## host's end while it is outstanding leaves the outcome indeterminate.
+  ## [SPEC LOADER §8, l.497-499; plan §2.10; G270] The hook's status as the
+  ## host read it. The host's end while it is outstanding leaves the outcome
+  ## indeterminate (the record becomes `failed`), reported only once the end
+  ## is confirmed, so the Runtime has handled the end first [R27].
   let h = cast[Host](host)
-  let lost = AbiCheck.err(
-    AbiFailure(code: ecModule, reason: "the Module Host ended during the application")
-  )
+  template lost(): AbiCheck =
+    discard h.awaitEnd()
+    AbiCheck.err(
+      AbiFailure(code: ecModule, reason: "the Module Host ended during the application")
+    )
+
   h.sendMsg(
     toMessage(LcnCarrierApply(id: h.nextRequest(), configuration: @configuration))
   ).isOkOr:
-    return lost
+    return lost()
   type K = LcnCarrierMessageKind
   let m = h.awaitLane0().valueOr:
-    return lost
+    return lost()
   if m.kind != K.lcn_Carrier_applied:
     h.terminate("an unexpected lane-0 message")
-    return lost
+    return lost()
   let f = m.arm_lcn_Carrier_applied.failure
   if f.isSome:
     return AbiCheck.err(toAbi(f.get))
   AbiCheck.ok()
+
+proc hostEnded*(host: pointer): bool {.nimcall.} =
+  ## [SPEC LOADER l.497-499] The host's end is confirmed.
+  cast[Host](host).ended
+
+proc endHosts*(hosts: openArray[pointer]) =
+  ## [SPEC RUNTIME l.3821; plan §2.9] Hosts of realizations the Loader still
+  ## held when its thread stopped: ended, reaped and dropped.
+  for p in hosts:
+    let h = cast[Host](p)
+    h.terminate("its Module Loader stopped")
+    discard h.awaitEnd()
+    dropHost(h)

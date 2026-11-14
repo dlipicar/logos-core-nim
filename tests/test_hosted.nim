@@ -10,13 +10,17 @@
 ## Control in a host is what it sees in process (RUNTIME l.970).
 ##
 ## S-1 (the Loader's capabilities with and without a host program) is in
-## `test_loader`; S-4's frame after the attempt ended and S-7 to S-16 and S-18
-## come with 4b-3.1b. After every case no host of this build is left.
+## `test_loader`. Part 4b-3.1b adds S-4's request after the attempt ended and
+## the ends of a host, S-7 to S-16 (G268-G270, G275); S-18, a stopping hosted
+## consumer's calls into other endpoints, needs 4b-3.3's handles. After every
+## case no host of this build is left.
 
 when defined(posix):
   import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
+  import std/posix except Time
   import unittest2
   import ../src/logos_core/runtime/engine
+  import ../src/logos_core/runtime/[hostlock, hostsup, store]
   import ../src/logos_core/abi/types
   import ../src/logos_core/cbor
   import ../src/logos_core/commitment
@@ -30,7 +34,9 @@ when defined(posix):
     LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
   import ../src/logos_core/loader/contract
   import ../src/logos_core/pins
-  import ./support/[fakeca, kitbuild, kitruntime, modulehostbuild, withoutloader]
+  import
+    ./support/
+      [fakeca, kitbuild, kitruntime, modulehostbuild, tunerconfig, withoutloader]
   import ./kit/meter_impl
   import ./generated/meter_module_calls
 
@@ -41,6 +47,7 @@ when defined(posix):
   createDir(work)
 
   include ./support/routefixture
+  include ./support/configrc
 
   const
     RuntimeId = "0b6f2d4e-8a1c-4f3b-9d2e-7c5a1b3e9f40"
@@ -65,8 +72,11 @@ when defined(posix):
 
   let probeDigest = digestOf(probeLib)
 
-  proc probe(hosted = true, placement = "process", digest = probeDigest): ModuleRecord =
-    ## The probe library, `hosted_dynamic` or `direct_dynamic`, with state `p`.
+  proc probe(
+      hosted = true, placement = "process", digest = probeDigest, state = "p"
+  ): ModuleRecord =
+    ## The probe library, `hosted_dynamic` or `direct_dynamic`, with state
+    ## assignment `state`.
     ModuleRecord(
       module: "probe_module",
       strategy: (if hosted: stHostedDynamic else: stDirectDynamic),
@@ -74,7 +84,7 @@ when defined(posix):
       artifact: ArtifactRecord(
         id: "probe", localPath: probeLib, hash: digest, hashSuite: HashSuiteId
       ),
-      stateAssignment: Opt.some("p"),
+      stateAssignment: Opt.some(state),
     )
 
   proc hostedConfig(host = true, extra: seq[StaticRegistration] = @[]): EngineConfig =
@@ -87,11 +97,15 @@ when defined(posix):
       result.moduleHost = Opt.some(hostProgram)
       result.moduleHostEnv = @SanitizerEnv
 
-  proc prepare(cfg: EngineConfig, commands: varargs[string]): string =
-    ## The probe's state directory, holding `commands` before its start.
-    result = cfg.stateRoot.get / "p"
+  proc prepareAt(cfg: EngineConfig, state: string, commands: varargs[string]): string =
+    ## The state directory `state`, holding the probe's `commands`.
+    result = cfg.stateRoot.get / state
     createDir(result)
     writeFile(result / "probe.cmd", commands.join("\n") & "\n")
+
+  proc prepare(cfg: EngineConfig, commands: varargs[string]): string =
+    ## The probe's state directory, holding `commands` before its start.
+    cfg.prepareAt("p", commands)
 
   proc lines(dir, file: string): seq[string] =
     try:
@@ -454,6 +468,456 @@ when defined(posix):
       check lines(dir, "inits") == @["init"]
       check hostsLeft().len == 0
       e.finish()
+  # 4b-3.1b: the ends of a host ---------------------------------------------------------
+
+  proc hostOf(e: Engine, instance: string): Host =
+    ## The instance's Module Host, retained: `dropHost` it.
+    e.moduleHostForTests(instance)
+
+  proc killHost(e: Engine, instance: string): bool =
+    ## SIGKILL to the instance's host process, from outside the Runtime.
+    let h = e.hostOf(instance)
+    if h.isNil:
+      return false
+    let pid = pidOf(h)
+    dropHost(h)
+    pid > 0 and posix.kill(Pid(pid), SIGKILL) == 0
+
+  proc realization(
+      rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string
+  ): LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind =
+    rc.summary(e, instance).realization.kind
+
+  type R = LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind
+
+  proc errorWith(e: Engine, instance, classification: string): bool =
+    waitUntil(
+      proc(): bool =
+        let v = e.view(instance).tryGet
+        v.state == msError and v.failureOf == classification
+    )
+
+  proc absentAgain(
+      e: Engine, rc: ptr LogosRuntimeControlBinding, instance: string
+  ): bool =
+    waitUntil(
+      proc(): bool =
+        rc.realization(e, instance) == R.Absent and not e.cleanupPending(instance)
+    )
+
+  proc releases(e: Engine, instance: string): int =
+    e.loaderJournalForTests().countIt(it.meth == $lmRelease and it.instance == instance)
+
+  suite "run.hosted: a request after the attempt ended (RUNTIME §4.2.1)":
+    teardown:
+      leftover()
+      check noHostLeft()
+
+    test "[RUN-0172] S-4 a Runtime Control request the host makes from `_MODULE_destroy` is answered as in process":
+      let self = encode(
+        LogosNSRuntimeControlGetReadinessRequest(
+          module: "probe_module", instance: Opt.some("p")
+        )
+      ).tryGet
+      proc run(hosted: bool): seq[string] =
+        let cfg = hostedConfig(hosted)
+        let dir =
+          cfg.prepare("rc-destroy get_readiness " & hex(self), "rc-destroy get_self a0")
+        let e = fixtureEngine(cfg)
+        discard e.create(probe(hosted), "p").tryGet
+        check e.start("p").tryGet.state == msReady
+        check e.stop("p").tryGet.state == msUnloaded
+        result = lines(dir, "rc-destroy")
+        e.finish()
+
+      let direct = run(false)
+      check direct.len == 2
+      check run(true) == direct
+
+  suite "run.hosted: a host that ends by itself (RUNTIME l.975-976; G268)":
+    teardown:
+      leftover()
+      check noHostLeft()
+
+    test "[RUN-0812] [RUN-0813] [IMPL-DECISION G268] S-7 a host whose module exits, or that is killed from outside: `error` with `host-terminated`, its routes failed, its record released, intent kept, nothing restarted":
+      for how in ["quit", "kill"]:
+        let cfg = hostedConfig()
+        var commands = @["rc establish_route " & hex(establishReq("k"))]
+        if how == "quit":
+          commands.add("subscribe " & ModuleStateEv)
+          commands.add("quit-handler")
+        let dir = cfg.prepare(commands)
+        let e = fixtureEngine(cfg)
+        let (_, rc) = e.startClient("c")
+        discard e.started(meter(), "m")
+        discard e.create(probe(), "p").tryGet
+        let v = e.start("p").tryGet
+        check v.state in {msReady, msError}
+        check lines(dir, "rc").len == 1 and lines(dir, "rc")[0].startsWith("0 ")
+        if how == "quit":
+          # The probe's first handler call exits the host.
+          discard e.started(slow(), "s")
+        else:
+          check e.killHost("p")
+        check e.errorWith("p", "host-terminated")
+        let realizes = e.realizations
+        let after = e.view("p").tryGet
+        check after.execution.intent == inRequested
+        check e.absentAgain(rc, "p")
+        check e.releases("p") == 1
+        let mine = e.routes().filterIt(it.consumer.module_instance_id == "p")
+        check mine.len == 1
+        if mine.len == 1:
+          check mine[0].state.kind == LogosNSRuntimeControlRouteStateKind.Failed
+        check e.diagnostics().anyIt("Module Host of p ended unexpectedly" in it)
+        check noHostLeft()
+        sleep(200 * Slow)
+        check e.realizations == realizes # no restart
+        check e.view("p").tryGet.state == msError
+        # A later start is a new realization in a new host.
+        writeFile(dir / "probe.cmd", "\n")
+        check e.start("p").tryGet.state == msReady
+        check e.stop("p").tryGet.state == msUnloaded
+        e.finish()
+
+    test "[RUN-0812] [IMPL-DECISION G268] S-8 a carrier that breaks: the host is ended at once, `host-terminated` with the carrier's failure":
+      let cfg = hostedConfig()
+      let dir = cfg.prepare("subscribe " & ModuleStateEv)
+      let e = fixtureEngine(cfg)
+      let (_, rc) = e.startClient("c")
+      discard e.create(probe(), "p").tryGet
+      check e.start("p").tryGet.state == msReady
+      discard settled(dir, "events", 2)
+      let h = e.hostOf("p")
+      check h != nil
+      breakCarrier(h)
+      dropHost(h)
+      # The host's next frame (its acknowledgement of a delivery) breaks it.
+      discard e.started(slow(), "s")
+      check e.errorWith("p", "host-terminated")
+      let v = e.view("p").tryGet
+      check v.failure.get.reason ==
+        "the carrier to the Module Host failed: a malformed frame"
+      check e.diagnostics().anyIt(
+        "the Module Host of p ended: the carrier to the Module Host failed" in it
+      )
+      check hostEnds()[^1].carrierLost.len > 0
+      check e.absentAgain(rc, "p")
+      e.finish()
+
+  # S-9 to S-11 --------------------------------------------------------------------------
+
+  suite "run.hosted: deadlines end the host (G61; G269)":
+    teardown:
+      leftover()
+      check noHostLeft()
+
+    test "[RUN-0227] [IMPL-DECISION G269] S-9 past the startup deadline: `error` with `startup-timeout`, `unknown` until the host's end is confirmed, then `absent`; the next start is accepted":
+      var cfg = hostedConfig()
+      cfg.startupDeadline = PassingStop
+      let dir = cfg.prepare("block-init")
+      let e = fixtureEngine(cfg)
+      let (_, rc) = e.startClient("c")
+      discard e.create(probe(), "p").tryGet
+      # The host's end is held, once it is spawned, until the case has looked.
+      var started: Thread[(Engine, string)]
+      var held: Host
+      proc startOn(arg: (Engine, string)) {.thread.} =
+        discard arg[0].start(arg[1])
+
+      createThread(started, startOn, (e, "p"))
+      check waitUntil(
+        proc(): bool =
+          let h = e.hostOf("p")
+          if h != nil and pidOf(h) > 0:
+            held = h
+            return true
+          if h != nil:
+            dropHost(h)
+          false
+      )
+      holdEnd(held, true)
+      joinThread(started)
+      let v = e.view("p").tryGet
+      check v.state == msError and v.failureOf == "startup-timeout"
+      check rc.realization(e, "p") == R.Unknown
+      check e.start("p").error.code == ecNotReady
+      holdEnd(held, false)
+      dropHost(held)
+      check e.absentAgain(rc, "p")
+      check e.view("p").tryGet.failureOf == "startup-timeout"
+      let ends = hostEnds()
+      check ends[^1].byRuntime and ends[^1].terminated
+      writeFile(dir / "probe.cmd", "\n")
+      check e.start("p").tryGet.state == msReady
+      e.finish()
+
+    test "[IMPL-DECISION G269] [IMPL-DECISION G180] S-10 past the stop deadline with `_MODULE_destroy` blocked: `cleanup-timeout`, the host ended, the release succeeds, `absent`; a later stop gives `unloaded`":
+      var cfg = hostedConfig()
+      cfg.stopDeadline = PassingStop
+      let dir = cfg.prepare("block-destroy")
+      let e = fixtureEngine(cfg)
+      let (_, rc) = e.startClient("c")
+      discard e.create(probe(), "p").tryGet
+      check e.start("p").tryGet.state == msReady
+      let v = e.stop("p").tryGet
+      check v.state == msError and v.failureOf == "cleanup-timeout"
+      check e.absentAgain(rc, "p")
+      check e.releases("p") == 1
+      check lines(dir, "destroyed").len == 0 # ended inside destroy
+      check hostEnds()[^1].byRuntime
+      check e.view("p").tryGet.failureOf == "cleanup-timeout"
+      check e.stop("p").tryGet.state == msUnloaded
+      e.finish()
+
+    test "[IMPL-DECISION G269] S-11 shutdown with a host whose `_MODULE_destroy` blocks completes after the grace period; the host is ended":
+      var cfg = hostedConfig()
+      cfg.shutdownGrace = PassingStop
+      discard cfg.prepare("block-destroy")
+      let e = fixtureEngine(cfg)
+      discard e.create(probe(), "p").tryGet
+      check e.start("p").tryGet.state == msReady
+      let began = getMonoTime()
+      e.requestShutdown()
+      discard e.awaitShutdown()
+      check getMonoTime() - began >= PassingStop
+      check noHostLeft()
+      check e.view("p").tryGet.failureOf == "cleanup-timeout"
+      live = nil
+      check e.close(initDuration(seconds = 10 * Slow))
+
+  # S-12, S-13 ---------------------------------------------------------------------------
+
+  var applyCode: Atomic[int] ## the code of `applyOn`'s call; -2 while it runs
+
+  proc applyOn(
+      arg: (ptr LogosRuntimeControlBinding, LogosNSRuntimeModuleInstanceAddress, uint64)
+  ) {.thread.} =
+    var t = arg[1]
+    applyCode.store(ord(arg[0].applyOf(t, arg[2]).code))
+
+  proc liveProbe(a: AcceptedConfiguration): ModuleRecord =
+    result = probe()
+    result.configuration = Opt.some(a.digest)
+
+  proc staged(rc: ptr LogosRuntimeControlBinding, e: Engine, station: string): uint64 =
+    ## A value whose station tells the probe's hook what to do, staged.
+    let t = e.target("p")
+    rc.stage(t, rc.summary(t).state_revision, tunerValue(station)).updated.state_revision
+
+  proc applyingIn(
+      rc: ptr LogosRuntimeControlBinding,
+      e: Engine,
+      station: string,
+      th:
+        var Thread[
+          (ptr LogosRuntimeControlBinding, LogosNSRuntimeModuleInstanceAddress, uint64)
+        ],
+  ) =
+    let revision = rc.staged(e, station)
+    applyCode.store(-2)
+    createThread(th, applyOn, (rc, e.target("p"), revision))
+
+  proc liveStart(cfg: EngineConfig): (Engine, ptr LogosRuntimeControlBinding) =
+    let a = tunerAccepted(default = Opt.some(tunerValue()), live = true)
+    let e = fixtureEngine(cfg)
+    let (_, rc) = e.startClient("c")
+    discard e.create(liveProbe(a), "p", configuration = Opt.some(a)).tryGet
+    check e.start("p").tryGet.state == msReady
+    (e, rc)
+
+  suite "run.hosted: live configuration in a host (LOADER §8; CONFIG §8; G269, G270)":
+    teardown:
+      leftover()
+      check noHostLeft()
+
+    test "[LDR-0111] [LDR-0112] S-12 a live application runs the hook in the host: applied, or rejected with nothing changed":
+      let cfg = hostedConfig()
+      let dir = cfg.prepare()
+      let (e, rc) = liveStart(cfg)
+      let t = e.target("p")
+      let ok = rc.applyOf(t, rc.staged(e, "radio-9"))
+      check ok.code == ecOk
+      check lines(dir, "applied").len == 1
+      let rejected = rc.applyOf(t, rc.staged(e, "reject"))
+      check rejected.code == ecModule
+      check lines(dir, "applied").len == 2
+      check e.view("p").tryGet.state == msReady
+      check e.stop("p").tryGet.state == msUnloaded
+      e.finish()
+
+    test "[IMPL-DECISION G269] S-12 past the apply deadline: MODULE_ERROR and `configuration-indeterminate`; a hook that still does not return ends its host a stop deadline later":
+      var cfg = hostedConfig()
+      cfg.applyDeadline = PassingStop
+      cfg.stopDeadline = PassingStop
+      let dir = cfg.prepare()
+      let (e, rc) = liveStart(cfg)
+      var th: Thread[
+        (ptr LogosRuntimeControlBinding, LogosNSRuntimeModuleInstanceAddress, uint64)
+      ]
+      rc.applyingIn(e, "block", th)
+      joinThread(th)
+      check applyCode.load == ord(ecModule)
+      check e.errorWith("p", "configuration-indeterminate")
+      check e.absentAgain(rc, "p")
+      check hostEnds()[^1].byRuntime
+      check e.view("p").tryGet.failureOf == "configuration-indeterminate"
+      check lines(dir, "destroyed").len == 0
+      e.finish()
+
+    test "[IMPL-DECISION G270] S-13 a live application whose host ends (killed, its carrier broken, its module exiting in the hook): MODULE_ERROR to the caller, `error` with `host-terminated`":
+      for how in ["kill", "carrier", "quit"]:
+        let cfg = hostedConfig()
+        let dir = cfg.prepare()
+        let (e, rc) = liveStart(cfg)
+        var th: Thread[
+          (ptr LogosRuntimeControlBinding, LogosNSRuntimeModuleInstanceAddress, uint64)
+        ]
+        rc.applyingIn(e, (if how == "quit": "quit" else: "block"), th)
+        check waitUntil(
+          proc(): bool =
+            lines(dir, "applied").len == 1
+        )
+        case how
+        of "kill":
+          check e.killHost("p")
+        of "carrier":
+          let h = e.hostOf("p")
+          breakCarrier(h)
+          dropHost(h)
+          writeFile(dir / "go-apply", "") # the host's `applied` breaks it
+        else:
+          discard
+        joinThread(th)
+        check applyCode.load == ord(ecModule)
+        check e.errorWith("p", "host-terminated")
+        check e.absentAgain(rc, "p")
+        e.finish()
+
+  # S-14, S-15 ---------------------------------------------------------------------------
+
+  suite "run.hosted: the Module Loader's loss with live hosts (RUNTIME l.3813-3825)":
+    teardown:
+      if live != nil:
+        live.clearLoaderFaultsForTests()
+      leftover()
+      check noHostLeft()
+
+    test "[RUN-1067] [RUN-1069] [RUN-1070] S-14 the Loader fails with two live hosts: both instances `error`, both hosts ended, intent kept, nothing realized; once both ends are confirmed nothing is left to clean":
+      let cfg = hostedConfig()
+      discard cfg.prepareAt("p1")
+      discard cfg.prepareAt("p2")
+      let e = fixtureEngine(cfg)
+      for id in ["p1", "p2"]:
+        discard e.create(probe(state = id), id).tryGet
+        check e.start(id).tryGet.state == msReady
+      check hostsLeft().len == 2
+      let realizes = e.realizations
+      check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
+      for id in ["p1", "p2"]:
+        let v = e.view(id).tryGet
+        check v.state == msError and v.failureOf == "other"
+        check v.execution.intent == inRequested
+      check noHostLeft()
+      check waitUntil(
+        proc(): bool =
+          not e.cleanupPending("p1") and not e.cleanupPending("p2")
+      )
+      for id in ["p1", "p2"]:
+        check e.start(id).error.code == ecNotReady
+        check e.view(id).tryGet.state == msError
+      check e.realizations == realizes
+      check e.releases("p1") == 0 and e.releases("p2") == 0
+      check not e.diagnostics().anyIt("termination required" in it)
+      e.requestShutdown()
+      check e.awaitShutdown().isOk
+      live = nil
+      check e.close(initDuration(seconds = 10 * Slow))
+
+    test "[RUN-1068] [RUN-1070] S-15 the Loader fails while a host's end is not yet confirmed: cleanup stays unresolved and nothing starts until it is":
+      let cfg = hostedConfig()
+      discard cfg.prepare()
+      let e = fixtureEngine(cfg)
+      discard e.startClient("c")
+      discard e.create(probe(), "p").tryGet
+      check e.start("p").tryGet.state == msReady
+      let h = e.hostOf("p")
+      holdEnd(h, true)
+      check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
+      check e.view("p").tryGet.state == msError
+      sleep(200 * Slow)
+      # The client is lost with the Loader: the Runtime is asked directly.
+      check e.realizationForTests("p") == "rsUnknown"
+      check e.cleanupPending("p")
+      check e.start("p").error.code == ecNotReady
+      holdEnd(h, false)
+      dropHost(h)
+      check waitUntil(
+        proc(): bool =
+          not e.cleanupPending("p")
+      )
+      check e.start("p").error.code == ecNotReady # until a host restart (K4)
+      e.confirmTerminationForTests() # the client, realized directly
+      e.finish()
+
+  # S-16 ---------------------------------------------------------------------------------
+
+  proc crash(dir: string, ids: openArray[string]) =
+    ## The store as an unclean end leaves it: `ids` still `ready` (G193).
+    var (s, snap) = openStore(dir).tryGet
+    var x = snap.get
+    for i in 0 ..< x.instances.len:
+      if x.instances[i].instance in ids:
+        x.instances[i].state = msReady
+        x.instances[i].failure = Opt.none(Failure)
+    s.write(x).tryGet
+    s.close()
+
+  suite "run.hosted: after an unclean end (G193; G275)":
+    teardown:
+      leftover()
+      check noHostLeft()
+
+    test "[RUN-0814] [IMPL-DECISION G275] [IMPL-DECISION G193] S-16 a hosted instance restored with its restart lock held is `unknown` and not started until the lock is free; with the lock free G193 holds":
+      var cfg = hostedConfig()
+      cfg.storeDir = Opt.some(cfg.workDir / "store")
+      discard cfg.prepare()
+      block:
+        let e = openEngine(cfg).tryGet
+        live = e
+        discard e.create(probe(), "p").tryGet
+        check e.start("p").tryGet.state == msReady
+        e.finish()
+      for held in [true, false]:
+        crash(cfg.storeDir.get, ["p"])
+        var fd = cint(-1)
+        if held:
+          # A stand-in for a host of the previous run: an open file holding it.
+          let (taken, lock) = takeHostLock(cfg.workDir, "p")
+          check taken == loTaken
+          fd = lock
+        let e = openEngine(cfg).tryGet
+        live = e
+        let (_, rc) = e.startClient("c" & $held)
+        let v = e.view("p").tryGet
+        check v.state == msError and v.failureOf == "other"
+        if held:
+          check rc.realization(e, "p") == R.Unknown
+          let r = e.start("p")
+          check r.isErr and r.error.code == ecNotReady
+          if r.isErr:
+            check r.error.message ==
+              "a Module Host of the previous run may still be running"
+          check e.cleanupPending("p")
+          closeLock(fd)
+          check waitUntil(
+            proc(): bool =
+              rc.realization(e, "p") == R.Absent
+          )
+        else:
+          check rc.realization(e, "p") == R.Absent
+        check e.start("p").tryGet.state == msReady
+        e.finish()
 else:
   import unittest2
 

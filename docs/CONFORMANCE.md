@@ -205,9 +205,15 @@ execution scope `local-transport` in a `process` (G272). So:
   both ways on two engines with one Runtime instance id). The consumer is the carrier's attempt,
   never a field of a frame. A hosted record names an artifact, never a static binding (RUN-0284).
   These units are claimed one by one; the rest of §4.2.1 stays `deferred:tier-4b`.
-- **Not yet**: hosted providers (4b-3.2) and hosted consumers' routes (4b-3.3); a host's unexpected
-  end, carrier loss, deadlines in a host, live configuration in a host and Loader loss with live
-  hosts (4b-3.1b). Until 4b-3.1b a host that ends by itself leaves its instance `ready`.
+- **Ends** (part 4b-3.1b; G268-G270, G275): a host that ends by itself or whose carrier breaks puts
+  its instance in `error` with `host-terminated`, fails its routes and starts termination (RUN-0812,
+  RUN-0813); a deadline ends the host and keeps the deadline's classification, and a startup past
+  its deadline is `error` (RUN-0227); a live application whose host ends is MODULE_ERROR. After the
+  Module Loader's loss each host is ended and its cleanup resolves only when the end is confirmed
+  (RUN-1067 to RUN-1070, tagged again on hosts); after an unclean end a host of the previous run is
+  never adopted, and its instance waits for its restart lock (RUN-0814).
+- **Not yet**: hosted providers (4b-3.2) and hosted consumers' routes (4b-3.3); RUN-0228 (the path
+  removed) comes with hosted providers.
 - **Differences from direct realization**, none visible to a module's Runtime Control calls: a
   host's environment is `module_host_env` only, and on macOS CoreFoundation may add its own
   `__CF_USER_TEXT_ENCODING` inside the process.
@@ -380,7 +386,8 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   and `callsForTests`, `callTimesForTests` and `targetsForTests` read its record of the calls it made.
 - `hostsup` (DECISIONS I91): `holdEnd` delays the confirmation of a Module Host's end, `breakCarrier`
   treats the next frame from a host as malformed, and `hostEnds` and `pidOf` read what supervision
-  saw. The `logos-module-host` program itself has no hooks: its suites drive it through its carrier
+  saw. The engine's `moduleHostForTests` hands a test an instance's host, and
+  `realizationForTests` reads an instance's `realization` when no client is left to ask. The `logos-module-host` program itself has no hooks: its suites drive it through its carrier
   (`tests/support/hostowner.nim`) and a probe module.
 
 No deployment binary contains them.
