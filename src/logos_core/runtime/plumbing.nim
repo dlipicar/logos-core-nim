@@ -31,6 +31,11 @@ export
 
 const
   DefaultStartupDeadline* = initDuration(seconds = 120)
+  DefaultLoaderStartupDeadline* = initDuration(seconds = 120)
+    ## [IMPL-DECISION G61, amended 2026-11-14] how long the Module Loader's own
+    ## start may take, from the open through its binding checks
+  MaxLoaderStartupDeadline* = initDuration(hours = 1)
+    ## [IMPL] the longest, as for the host configuration's deadlines
   DefaultStopDeadline* = initDuration(seconds = 10)
   DefaultShutdownGrace* = initDuration(seconds = 10)
   DefaultApplyDeadline* = initDuration(seconds = 120)
@@ -379,6 +384,12 @@ type
       ## [G55] what `create_module` may create, one per module name; a change
       ## affects only later creations (RUNTIME l.3621)
     startupDeadline*: Duration
+      ## [G61, revised by A18] each module realization's, the Module Loader's
+      ## excepted
+    loaderStartupDeadline*: Duration
+      ## [IMPL-DECISION G61, amended 2026-11-14; SPEC RUNTIME l.664] the Module
+      ## Loader's start, from the open through its binding checks: above zero
+      ## and at most `MaxLoaderStartupDeadline`, or the open is INVALID_PARAMS
     stopDeadline*: Duration
     shutdownGrace*: Duration
     applyDeadline*: Duration
@@ -421,6 +432,10 @@ type
     initialSettings*: seq[InitialSettings]
       ## [SPEC RUNTIME l.2543; I93] with `permissions`: the protected initial
       ## settings of new instances; unused without it
+    when defined(lcnTestHooks):
+      loaderFaults*: LoaderFaultBox
+        ## [D27 revised] a test's own fault box, armed before the open and
+        ## freed by the test after the engine; nil: the engine makes its own
 
   # Messages ---------------------------------------------------------------------
   RequestKind* = enum
@@ -973,6 +988,7 @@ type
       ## open, started only when needed, closed after every worker has left
     when defined(lcnTestHooks):
       faults*: LoaderFaultBox ## [D27 revised; plan §2.12] the injected faults
+      ownFaults*: bool ## `faults` is the engine's own, freed with it
 
   Engine* = ptr Shared
 
@@ -1037,6 +1053,7 @@ proc defaultConfig*(workDir: string): EngineConfig =
     workDir: workDir,
     policy: allowAll(),
     startupDeadline: DefaultStartupDeadline,
+    loaderStartupDeadline: DefaultLoaderStartupDeadline,
     stopDeadline: DefaultStopDeadline,
     shutdownGrace: DefaultShutdownGrace,
     applyDeadline: DefaultApplyDeadline,

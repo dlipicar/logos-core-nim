@@ -492,9 +492,10 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
 
   test "[RUN-0796] [RUN-0797] [RUN-0792] [RUN-0793] [RUN-0791] the startup deadline: error, then the late context is destroyed":
     var cfg = config()
-    # [I89] The deadline also bounds the Module Loader's own start at open,
-    # which this test is not about: scaled by `Slow`. The gated init passes it
-    # whatever its length.
+    # [IMPL-DECISION G61, amended 2026-11-14] This deadline bounds the module's
+    # attempts only: the Module Loader's start at open has its own. The gated
+    # init passes it whatever its length; `Slow` gives the last start, which is
+    # not gated, time to become ready.
     cfg.startupDeadline = initDuration(milliseconds = 150 * Slow)
     let e = newEngine(cfg)
     discard e.create(gated(), "g").tryGet
@@ -768,10 +769,11 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     e.finish()
     reset()
     var cfg = config()
-    # [I89] The deadline also bounds the Module Loader's own start at open,
-    # which this test is not about: scaled by `Slow`. The gated init passes it
-    # whatever its length.
+    # [IMPL-DECISION G61, amended 2026-11-14] The short deadline bounds the
+    # modules' attempts only; the Module Loader's start keeps its own, at its
+    # default. The gated init passes the short one whatever its length.
     cfg.startupDeadline = initDuration(milliseconds = 250 * Slow)
+    cfg.loaderStartupDeadline = DefaultLoaderStartupDeadline
     e = newEngine(cfg)
     initGate.store(true)
     r = e.bootstrap(deployment(), "o")

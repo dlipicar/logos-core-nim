@@ -77,6 +77,22 @@ proc loaderOf(e: Engine): InstanceView =
 proc failureOf(v: InstanceView): string =
   if v.failure.isSome: v.failure.get.classification else: ""
 
+var
+  stallSeen: Atomic[bool] ## `releaseLate` saw the held call
+  openDone: Atomic[bool] ## the open it runs beside has returned
+
+proc releaseLate(arg: (LoaderFaultBox, Duration)) {.thread.} =
+  ## Once a Loader call is held, waits a whole deadline, which has then passed
+  ## (it began before the call), and lets the call reply.
+  let (box, deadline) = arg
+  while box.stalledCalls() == 0:
+    if openDone.load:
+      return
+    sleep(2)
+  stallSeen.store(true)
+  sleep(int(deadline.inMilliseconds) + 1)
+  box.releaseStall()
+
 const
   StaticKind =
     LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind.Direct_static
@@ -134,20 +150,67 @@ suite "run.loader: the Loader instance (LOADER §1-§2; RUNTIME l.1635-1650) [IM
     let b = openEngine(cfg)
     check b.isErr and b.error.code == ecInvalidParams
 
-  test "[IMPL-DECISION G190] a Loader that cannot be established fails the open with MODULE_ERROR, leaving nothing running":
-    # The startup deadline bounds the Loader's own start; one that passes at
-    # once cannot be met.
+  test "[IMPL-DECISION G190] [IMPL-DECISION G61] a Loader that cannot be established fails the open with MODULE_ERROR, leaving nothing running":
+    # The Loader's own startup deadline (G61, amended 2026-11-14) bounds its
+    # start; one that passes at once cannot be met.
     var cfg = config()
-    cfg.startupDeadline = initDuration(nanoseconds = 1)
+    cfg.loaderStartupDeadline = initDuration(nanoseconds = 1)
     let r = openEngine(cfg)
     check r.isErr and r.error.code == ecModule
     check r.error.message.startsWith("the Module Loader cannot start: startup-timeout")
     # The open released what it started: a new engine opens on the same
     # directories.
-    cfg.startupDeadline = DefaultStartupDeadline
+    cfg.loaderStartupDeadline = DefaultLoaderStartupDeadline
     let e = fixtureEngine(cfg)
     check e.loaderOf.state == msReady
     e.finish()
+
+  test "[IMPL-DECISION G61] the modules' startup deadline does not bound the Loader's start":
+    var cfg = config()
+    cfg.startupDeadline = initDuration(nanoseconds = 1)
+    let e = fixtureEngine(cfg)
+    check e.loaderOf.state == msReady
+    let v = e.create(meter(), "m").tryGet
+    check e.start(v.instance).tryGet.failureOf == "startup-timeout"
+    e.finish()
+
+  test "[IMPL-DECISION G61] the Loader's startup deadline is above zero and at most an hour":
+    for d in [
+      DurationZero,
+      initDuration(milliseconds = -1),
+      MaxLoaderStartupDeadline + initDuration(nanoseconds = 1),
+    ]:
+      var cfg = config()
+      cfg.loaderStartupDeadline = d
+      let r = openEngine(cfg)
+      check r.isErr and r.error.code == ecInvalidParams
+    var cfg = config()
+    cfg.loaderStartupDeadline = MaxLoaderStartupDeadline
+    let e = fixtureEngine(cfg)
+    check e.loaderOf.state == msReady
+    e.finish()
+
+  test "[IMPL-DECISION G61] [IMPL-DECISION G190] the Loader's startup deadline covers its binding checks":
+    # The binding's `list_capabilities` is held until the deadline has passed:
+    # the binding is not made, and the open fails once the call has returned
+    # and the Loader is released.
+    let box = newLoaderFaultBox()
+    box.setFaults(LoaderFaults(stall: {lmListCapabilities}))
+    var cfg = config()
+    cfg.loaderStartupDeadline = initDuration(milliseconds = 1000 * Slow)
+    cfg.loaderFaults = box
+    stallSeen.store(false)
+    openDone.store(false)
+    var t: Thread[(LoaderFaultBox, Duration)]
+    createThread(t, releaseLate, (box, cfg.loaderStartupDeadline))
+    let r = openEngine(cfg)
+    openDone.store(true)
+    joinThread(t)
+    freeLoaderFaultBox(box)
+    check stallSeen.load
+    check r.isErr and r.error.code == ecModule
+    check r.error.message ==
+      "the Module Loader cannot start: startup-timeout: the startup deadline passed"
 
   test "[RUN-0639] [IMPL-DECISION G57] its summary is implementation-specific; what it realizes reports the strategy":
     let e = fixtureEngine(config())

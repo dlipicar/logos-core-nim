@@ -405,6 +405,8 @@ proc launch(h: ptr HostRuntime): LogosResult =
     ordering: c.ordering,
     declarations: c.declarations,
     startupDeadline: c.startupDeadline,
+    loaderStartupDeadline: DefaultLoaderStartupDeadline,
+      # [IMPL-DECISION G61, amended 2026-11-14] not in `lcn.app_config`
     stopDeadline: c.stopDeadline,
     shutdownGrace: c.shutdownGrace,
     applyDeadline: c.applyDeadline,

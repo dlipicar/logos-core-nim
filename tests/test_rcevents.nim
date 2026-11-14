@@ -309,6 +309,15 @@ when declared(caParity):
     ## A new script takes effect: the cached decisions go.
     check publish(PolicyChangedName, policyChanged(revision - 1, revision))
 
+  proc refusals(e: Engine, subscriber: string, event: string): int =
+    ## The retained decisions on `event` for `subscriber` that refused it.
+    ## [G161] Only an allow is cached, so each entry judged while the policy
+    ## refuses gets an evaluation, and one of these, of its own.
+    for a in e.answers():
+      if a.request.action == aaObserveEvent and a.request.consumer == subscriber and
+          a.request.operation == event and not a.allows:
+        inc result
+
   func only(s: varargs[string]): Opt[seq[string]] =
     Opt.some(@s)
 
@@ -885,10 +894,21 @@ when declared(caParity):
       setScript(rule(vDeny, "rcev:module_state_changed", code = 1))
       changePolicy(1)
       watches[0].hold.store(false)
-      discard watches[0].quiet()
+      # The three entries queued behind the held one are judged again at
+      # delivery, each by an evaluation the CA answers by its script then. The
+      # case waits for those three refusals, and then for the two of the next
+      # start's entries at fan-out, so no entry is still to be judged when the
+      # script allows again.
+      check waitUntil(
+        proc(): bool =
+          e.refusals("c", "module_state_changed") >= 3
+      )
       check watches[0].count.load == 1
       check e.start("s").tryGet.state == msReady # refused at fan-out
-      sleep(100 * Slow)
+      check waitUntil(
+        proc(): bool =
+          e.refusals("c", "module_state_changed") >= 5
+      )
       check watches[0].count.load == 1
       setScript()
       changePolicy(2)

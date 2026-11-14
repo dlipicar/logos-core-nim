@@ -123,12 +123,17 @@ With Nix, which also runs nph and the spec checks:
 nix flake check -L
 ```
 
-CI splits the checks into groups and builds each group in its own job: `orc-spec` (orc, nph, lint
-and the spec checks), `refc`, `orc-release`, and on Linux `asan`, `tsan` and `msan`. One group builds
-alone with:
+CI splits the checks into groups: `orc-spec` (orc, nph, lint and the spec checks), `refc`,
+`orc-release`, and on Linux `asan`, `tsan` and `msan`. On macOS each group is one job; on Linux each
+group runs as two shards, `ciShards.<group>-1` and `<group>-2`. One group or one shard builds alone
+with:
 
 ```bash
 nix build -L --keep-going .#ciGroups.asan
+```
+
+```bash
+nix build -L --keep-going .#ciShards.asan-1
 ```
 
 ```bash
