@@ -103,6 +103,9 @@ type
     stateDir*: string
     policy*: seq[byte] ## an `lcn.authority_policy` value
     runtimeId*: string
+    profile*: ProfileSource
+      ## the selected permission profile (DECISIONS I93), built on the CA
+      ## thread; nil: none, and every permission is unknown
     facts*: SharedFacts
     clock*: Clock
     limits*: AuthorityLimits
@@ -434,6 +437,7 @@ type Ca = object
   sh: ptr AuthorityShared
   cfg: AuthorityConfig
   view: FactsView
+  profile: PermissionProfile ## this thread's value of `cfg.profile`
   policy: Policy
   revision: uint64
   changedAt: uint64
@@ -684,8 +688,9 @@ proc doEvaluate(
     )
     return evaluateError(failed)
 
-  let form =
-    validateScopes(req.scopes, ca.runtimeId, ca.limits.maxScopes, evaluating = true)
+  let form = validateScopes(
+    req.scopes, ca.runtimeId, ca.limits.maxScopes, evaluating = true, ca.profile
+  )
   if form.isErr:
     fail(form.error.code)
   validated = true
@@ -765,15 +770,21 @@ proc doEvaluate(
 
   if op.isRestrictedOperation:
     deny(DenialKind.Scope_denied)
+  # [G207, amended by I93] Deny when any deny pattern contains any requested
+  # scope; allow when one rule, or one grant, covers every requested scope.
+  # Permission scopes name no target (CA l.212-216): they are tied to the
+  # start only by standing beside its scope in one rule or grant (l.489).
   for r in ca.policy.rules:
-    if r.kind == rkDeny and r.subject.matches(consumerFacts) and
-        r.deny.containsAny(op, ca.view):
-      deny(r.code)
+    if r.kind != rkDeny or not r.subject.matches(consumerFacts):
+      continue
+    for s in req.scopes:
+      if r.deny.containsAny(s, ca.view, ca.profile):
+        deny(r.code)
   var byRule = false
   var commitment = req.commitment
   for r in ca.policy.rules:
     if r.kind == rkAllow and r.subject.matches(consumerFacts) and
-        r.allow.containsAny(op, ca.view):
+        r.allow.containsEach(req.scopes, ca.view, ca.profile):
       byRule = true
       commitment = union(commitment, r.commitment)
   if byRule:
@@ -785,12 +796,7 @@ proc doEvaluate(
     let e = ca.grants.byId.getOrDefault(gid)
     if e.grant.target != req.consumer:
       continue
-    var covering = false
-    for s in e.grant.scopes:
-      if covers(s, op, ca.runtimeId):
-        covering = true
-        break
-    if not covering:
+    if not coversEach(e.grant.scopes, req.scopes, ca.runtimeId, ca.profile):
       continue
     case e.grant.status(now)
     of GrantStatusKind.Revoked:
@@ -933,8 +939,9 @@ proc doIssue(
     )
     return issueDenial(denied)
 
-  let form =
-    validateScopes(req.scopes, ca.runtimeId, ca.limits.maxScopes, evaluating = false)
+  let form = validateScopes(
+    req.scopes, ca.runtimeId, ca.limits.maxScopes, evaluating = false, ca.profile
+  )
   if form.isErr and form.error.code == CaCode.Invalid_request:
     fail(CaCode.Invalid_request)
   if req.expires_at.isSome and req.expires_at.get <= now:
@@ -986,7 +993,7 @@ proc doIssue(
     targetMatched = true
     var all = true
     for s in req.scopes:
-      if not r.issue.containsAny(s, ca.view):
+      if not r.issue.containsAny(s, ca.view, ca.profile):
         all = false
         break
     if not all:
@@ -1029,7 +1036,9 @@ proc doIssueProtected(
   let now = ca.now
   if not validSource(source):
     return err(caError(CaCode.Invalid_request, "source"))
-  ?validateScopes(scopes, ca.runtimeId, ca.limits.maxScopes, evaluating = false)
+  ?validateScopes(
+    scopes, ca.runtimeId, ca.limits.maxScopes, evaluating = false, ca.profile
+  )
   if expiresAt.isSome and expiresAt.get <= now:
     return err(caError(CaCode.Invalid_request, "expires_at"))
   ca.refreshFacts()
@@ -1450,7 +1459,7 @@ proc addPolicyRecord(ca: var Ca, at: uint64): Result[void, string] =
 proc doReplacePolicy(ca: var Ca, bytes: seq[byte]): Result[uint64, string] =
   ## [SPEC CA l.829-848, l.884; §0.1 U4] A changed policy takes effect when
   ## this returns, after it is durable; an unchanged digest is a no-op.
-  let p = ?loadPolicy(bytes)
+  let p = ?loadPolicy(bytes, ca.profile)
   if p.digest == ca.policy.digest:
     return ok(ca.revision)
   let now = ca.now
@@ -1533,7 +1542,8 @@ proc open(
 ): Result[void, string] =
   ca.sh = sh
   ca.cfg = cfg
-  ca.policy = ?loadPolicy(cfg.policy)
+  ca.profile = build(cfg.profile)
+  ca.policy = ?loadPolicy(cfg.policy, ca.profile)
   let entropy = if cfg.entropy == nil: systemEntropy else: cfg.entropy
   ca.ids = ?newIdAllocator(entropy)
   if not entropy(ca.cursorKey):
@@ -1584,6 +1594,18 @@ proc open(
         e.expiryRecorded = true
         e.expiryEmitted = true
       e.records.add sr
+    if g.status(now) == GrantStatusKind.Active:
+      # [IMPL; I93] An active grant naming a permission the selected profile
+      # does not define, or constraints that no longer conform, fails the open
+      # closed: it could otherwise never be evaluated as issued. A terminal
+      # grant allows nothing and stays as history.
+      for sc in g.scopes:
+        if sc.kind == skPermission and
+            ca.profile.validate(sc.pm.permission, sc.pm.constraints).isErr:
+          refuse(
+            "grant " & g.grant_id & " names the permission " & sc.pm.permission &
+              ", which the selected profile does not define as it was issued"
+          )
     ca.grants.put(e)
   var segs = loaded.segments
   segs.sort(

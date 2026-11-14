@@ -14,7 +14,7 @@ import ../src/logos_core/iface/accept
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/names
 from ../src/logos_core/runtime/rc_types import rcDocuments
-import ./support/[authfixture, cafake, kitbuild]
+import ./support/[authfixture, cafake, kitbuild, permfixture]
 
 let
   repo = currentSourcePath().parentDir.parentDir
@@ -161,10 +161,15 @@ type Env = object
   facts: SharedFacts
   clock: Clock
   sink: ChannelSink
+  profile: ProfileSource
   a: Authority
 
 proc open(
-    policy: seq[byte], limits = AuthorityLimits(), dir = "", facts: SharedFacts = nil
+    policy: seq[byte],
+    limits = AuthorityLimits(),
+    dir = "",
+    facts: SharedFacts = nil,
+    profile: ProfileSource = nil,
 ): Env =
   result.dir =
     if dir.len > 0:
@@ -178,8 +183,16 @@ proc open(
       facts
   result.clock = newTestClock()
   result.sink = newChannelSink()
-  result.a =
-    openTest(result.dir, policy, result.facts, result.clock, result.sink.sink, limits)
+  result.profile = profile
+  result.a = openTest(
+    result.dir,
+    policy,
+    result.facts,
+    result.clock,
+    result.sink.sink,
+    limits,
+    profile = profile,
+  )
 
 proc close(e: var Env) =
   closeAuthority(e.a)
@@ -189,7 +202,8 @@ proc close(e: var Env) =
 
 proc reopen(e: var Env, policy: seq[byte], limits = AuthorityLimits()) =
   closeAuthority(e.a)
-  e.a = openTest(e.dir, policy, e.facts, e.clock, e.sink.sink, limits)
+  e.a =
+    openTest(e.dir, policy, e.facts, e.clock, e.sink.sink, limits, profile = e.profile)
 
 proc now(e: Env): uint64 =
   uint64(e.clock.wallMs)
@@ -783,13 +797,13 @@ suite "cap.evaluate: decisions":
       CaCode.Invalid_request
     e.close()
 
-  test "[CAP-0072] [CAP-0073] [CAP-0074] [CAP-0202] [CAP-0423] [CAP-0427] a permission scope is unknown-permission, recorded without scopes":
+  test "[CAP-0072] [CAP-0073] [CAP-0074] [CAP-0202] [CAP-0423] [CAP-0427] without a permission profile a permission scope is unknown-permission, recorded without scopes":
     var e = open(
       policyBytes(
         @[alphaCalls(), inspectRule(anyone(), audit = Opt.some(targetSelf()))]
       )
     )
-    var scopes = @[callM1(), permissionScope()]
+    var scopes = @[meScope("alpha", instance = Opt.some("m-a")), permissionScope()]
     sortSet(scopes)
     check e.evaluate("m-a", scopes).errorOf == CaCode.Unknown_permission
     let rs = e.query("m-a")
@@ -829,6 +843,232 @@ suite "cap.evaluate: decisions":
       )
     )
     check e.evaluate("m-a", @[callM1()]).decisionOf.denialOf == DenialKind.Not_granted
+    e.close()
+
+# cap.permissions --------------------------------------------------------------------------
+
+proc startA(action = MeActionKind.Start): Scope =
+  meScope("alpha", instance = Opt.some("m-a"), action = action)
+
+proc startReq(perms: varargs[Scope]): seq[Scope] =
+  ## A start of `m-a` with `perms`, in set order.
+  result = @[startA()]
+  for p in perms:
+    result.add p
+  sortSet(result)
+
+proc permQuota(limit: uint64): Scope =
+  permissionScope(Quota, quota(limit))
+
+proc permAmbient(): Scope =
+  permissionScope(HostAmbient, HostAmbientConstraints)
+
+proc startRule(perms: seq[LcnApScope]): LcnApRule =
+  ## beta may start any instance, with `perms`, in one rule.
+  allowRule(
+    subject(modules = @["beta"]),
+    @[mePattern(anyone(), @[LcnApModuleExecutionActionsLIChoiceKind.Start])] & perms,
+  )
+
+proc issuePerms(
+    perms = @[permPattern(HostAmbient), permPattern(Quota)]
+): seq[LcnApRule] =
+  ## beta issues starts with `perms` to anyone and revokes what it issued.
+  @[
+    issueRule(
+      subject(modules = @["beta"]),
+      targetSubject(anyone()),
+      @[mePattern(anyone(), @[LcnApModuleExecutionActionsLIChoiceKind.Start])] & perms,
+    ),
+    revokeRule(subject(modules = @["beta"]), targetIssued()),
+  ]
+
+suite "cap.permissions: the selected profile (I93)":
+  test "[CAP-0072] [CAP-0073] [CAP-0074] a defined permission passes; an undefined one is unknown-permission; constraints that do not conform are invalid-constraints; unknown wins":
+    let t = testProfile()
+    check validateScopes(startReq(permQuota(5), permAmbient()), Rt, 64, true, t).isOk
+    check validateScopes(startReq(permissionScope("lcn-test.other")), Rt, 64, true, t).error.code ==
+      CaCode.Unknown_permission
+    let nonShortest = @[0xa1'u8, 0x65, 0x6c, 0x69, 0x6d, 0x69, 0x74, 0x18, 0x05]
+    for bad in [
+      @[0xa0'u8], # no limit
+      nonShortest, # not deterministic
+      quota(5) & @[0x00'u8], # trailing bytes
+      encodeCbor(cborMap((cbor("limit"), cbor("five")))), # not a uint64
+    ]:
+      check validateScopes(startReq(permissionScope(Quota, bad)), Rt, 64, true, t).error.code ==
+        CaCode.Invalid_constraints
+    check validateScopes(
+      startReq(permissionScope(HostAmbient, encodeCbor(cborMap((cbor("a"), cbor(1)))))),
+      Rt,
+      64,
+      true,
+      t,
+    ).error.code == CaCode.Invalid_constraints
+    # every name is checked before any constraints, whatever the order
+    check validateScopes(
+      startReq(permissionScope(Quota, @[0xa0'u8]), permissionScope("zz-unknown")),
+      Rt,
+      64,
+      true,
+      t,
+    ).error.code == CaCode.Unknown_permission
+    check validateScopes(
+      startReq(permissionScope(Quota, @[0xa0'u8]), permissionScope("aa-unknown")),
+      Rt,
+      64,
+      true,
+      t,
+    ).error.code == CaCode.Unknown_permission
+    var e =
+      open(policyBytes(@[startRule(@[permPattern(Quota)])]), profile = testProfile)
+    check e.evaluate("m-b", startReq(permissionScope(Quota, @[0xa0'u8]))).errorOf ==
+      CaCode.Invalid_constraints
+    check e.evaluate("m-b", startReq(permissionScope("lcn-test.other"))).errorOf ==
+      CaCode.Unknown_permission
+    check e.evaluate("m-b", startReq(permQuota(5))).decisionOf.allowed
+    e.close()
+
+  test "[CAP-0021] containment is the definition's: host-ambient by equality, a quota within a larger one; a grant of 10 covers a request of 5":
+    let t = testProfile()
+    check covers(permQuota(10), permQuota(5), Rt, t)
+    check covers(permQuota(5), permQuota(5), Rt, t)
+    check not covers(permQuota(5), permQuota(10), Rt, t)
+    check covers(permAmbient(), permAmbient(), Rt, t)
+    check not covers(permAmbient(), permQuota(5), Rt, t)
+    check not covers(permQuota(10), permQuota(5), Rt, NoProfile)
+    check not covers(permQuota(10), permQuota(5), Rt)
+    var e = open(policyBytes(issuePerms()), profile = testProfile)
+    let g = e.issue("m-b", "m-c", startReq(permQuota(10))).grantOf
+    let d = e.evaluate("m-c", startReq(permQuota(5))).decisionOf
+    check d.allowed and d.grant_ids.get == @[g.grant_id]
+    check same(d.allowed_scopes.get, startReq(permQuota(5)))
+    check e.evaluate("m-c", startReq(permQuota(11))).decisionOf.denialOf ==
+      DenialKind.Not_granted
+    e.close()
+
+  test "[IMPL-DECISION G207] permission scopes stand only beside a start: alone, beside a stop or beside a provider call they are invalid-request, with and without a profile":
+    for prof in @[ProfileSource(nil), ProfileSource(testProfile)]:
+      var e = open(policyBytes(@[alphaCalls()]), profile = prof)
+      check e.evaluate("m-a", @[permAmbient()]).errorOf == CaCode.Invalid_request
+      var stop = @[startA(MeActionKind.Stop), permAmbient()]
+      sortSet(stop)
+      check e.evaluate("m-a", stop).errorOf == CaCode.Invalid_request
+      var call = @[callM1(), permAmbient()]
+      sortSet(call)
+      check e.evaluate("m-a", call).errorOf == CaCode.Invalid_request
+      check e.evaluate("m-a", @[callM1()]).decisionOf.allowed
+      e.close()
+
+  test "[IMPL-DECISION G207] one allow rule must hold the start and every permission; two rules that each hold a part deny; a deny pattern on a permission denies":
+    var e = open(
+      policyBytes(@[startRule(@[permPattern(HostAmbient)])]), profile = testProfile
+    )
+    check e.evaluate("m-b", startReq(permAmbient())).decisionOf.allowed
+    check e.evaluate("m-b", startReq()).decisionOf.allowed
+    check e.evaluate("m-b", startReq(permAmbient(), permQuota(1))).decisionOf.denialOf ==
+      DenialKind.Not_granted
+    e.close()
+    e = open(
+      policyBytes(
+        @[
+          startRule(@[]),
+          allowRule(subject(modules = @["beta"]), @[permPattern(HostAmbient)]),
+        ]
+      ),
+      profile = testProfile,
+    )
+    check e.evaluate("m-b", startReq()).decisionOf.allowed
+    check e.evaluate("m-b", startReq(permAmbient())).decisionOf.denialOf ==
+      DenialKind.Not_granted
+    e.close()
+    e = open(
+      policyBytes(@[startRule(@[permPattern(Quota, Opt.some(quota(10)))])]),
+      profile = testProfile,
+    )
+    check e.evaluate("m-b", startReq(permQuota(10))).decisionOf.allowed
+    check e.evaluate("m-b", startReq(permQuota(11))).decisionOf.denialOf ==
+      DenialKind.Not_granted
+    e.close()
+    e = open(
+      policyBytes(
+        @[
+          startRule(@[permPattern(Quota)]),
+          denyRule(
+            subject(modules = @["beta"]), @[permPattern(Quota, Opt.some(quota(100)))]
+          ),
+        ]
+      ),
+      profile = testProfile,
+    )
+    check e.evaluate("m-b", startReq(permQuota(5))).decisionOf.denialOf ==
+      DenialKind.Scope_denied
+    check e.evaluate("m-b", startReq(permQuota(500))).decisionOf.allowed
+    check e.evaluate("m-b", startReq()).decisionOf.allowed
+    e.close()
+
+  test "[CAP-0063] [IMPL-DECISION G207] one grant covering the start and its permissions allows and is listed; two grants that cover it only together deny":
+    var e = open(policyBytes(issuePerms()), profile = testProfile)
+    let exp = e.now + 10_000
+    let g = e.issue("m-b", "m-c", startReq(permAmbient()), Opt.some(exp)).grantOf
+    let d = e.evaluate("m-c", startReq(permAmbient())).decisionOf
+    check d.allowed
+    check d.grant_ids.get == @[g.grant_id]
+    check d.valid_until.get <= exp
+    check same(d.allowed_scopes.get, startReq(permAmbient()))
+    # g covers the start but not the quota, and a grant of the quota alone
+    # holds no start: neither covers the request
+    discard e.issue("m-b", "m-c", @[permQuota(10)]).grantOf
+    check e.evaluate("m-c", startReq(permQuota(5))).decisionOf.denialOf ==
+      DenialKind.Not_granted
+    let both = e.issue("m-b", "m-c", startReq(permQuota(10))).grantOf
+    check e.evaluate("m-c", startReq(permQuota(5))).decisionOf.grant_ids.get ==
+      @[both.grant_id]
+    e.close()
+
+  test "[CAP-0074] a policy naming an undefined permission or constraints that do not conform does not load; issue_grant validates permission scopes alike":
+    let t = testProfile()
+    check loadPolicy(policyBytes(@[startRule(@[permPattern(Quota)])]), t).isOk
+    check loadPolicy(policyBytes(@[startRule(@[permPattern(Quota)])])).isErr
+    check loadPolicy(policyBytes(@[startRule(@[permPattern("lcn-test.other")])]), t).error
+      .contains("not defined")
+    check loadPolicy(
+      policyBytes(@[startRule(@[permPattern(Quota, Opt.some(@[0xa0'u8]))])]), t
+    ).error
+      .contains("conform")
+    var e = open(policyBytes(issuePerms()), profile = testProfile)
+    check e.issue("m-b", "m-c", startReq(permissionScope("lcn-test.other"))).issueErrorOf ==
+      CaCode.Unknown_permission
+    check e.issue("m-b", "m-c", startReq(permissionScope(Quota, @[0xa0'u8]))).issueErrorOf ==
+      CaCode.Invalid_constraints
+    check e.issue("m-b", "m-c", startReq(permissionScope(Unenforced, @[0xa0'u8]))).issueDenialOf ==
+      DenialKind.Scope_denied
+    discard e.issue("m-b", "m-c", startReq(permQuota(5))).grantOf
+    check e.a.replacePolicy(policyBytes(issuePerms(@[permPattern(Unenforced)]))).isOk
+    check e.a.replacePolicy(policyBytes(@[startRule(@[permPattern("lcn-test.other")])])).isErr
+    e.close()
+
+  test "[IMPL] an active grant naming a permission the selected profile does not define fails the open closed; a revoked one does not":
+    var e = open(policyBytes(issuePerms()), profile = testProfile)
+    let g = e.issue("m-b", "m-c", startReq(permQuota(5))).grantOf
+    closeAuthority(e.a)
+    let v1 = policyBytes(issuePerms(@[permPattern(HostAmbient)]))
+    let refused = openAuthority(
+      testConfig(e.dir, v1, e.facts, e.clock, e.sink.sink, profile = profileV1)
+    )
+    check refused.isErr and refused.error.contains("lcn-test.quota")
+    e.a = openTest(
+      e.dir,
+      policyBytes(issuePerms()),
+      e.facts,
+      e.clock,
+      e.sink.sink,
+      profile = testProfile,
+    )
+    discard e.revoke("m-b", g.grant_id).grantOf
+    closeAuthority(e.a)
+    e.a = openTest(e.dir, v1, e.facts, e.clock, e.sink.sink, profile = profileV1)
+    check e.evaluate("m-c", startReq(permQuota(5))).errorOf == CaCode.Unknown_permission
     e.close()
 
 # cap.ids ---------------------------------------------------------------------------------

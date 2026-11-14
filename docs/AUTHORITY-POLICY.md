@@ -87,7 +87,9 @@ lcn.ap_subject = {
 
 lcn.ap_target = lcn.ap_subject / "self" / "issued"
 
-lcn.ap_scope = lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution
+lcn.ap_scope =
+  lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution /
+  lcn.ap_permission
 
 lcn.ap_provider_access = {
   kind: "provider-access",
@@ -122,6 +124,17 @@ lcn.ap_module_execution = {
   ? placements: [* ("process" / "sandbox" / "container")],
 }
 
+; A permission scope (CA l.212-216; DECISIONS I93): the name, and the broadest
+; constraints allowed (one deterministic-CBOR value of the definition); without
+; constraints any conforming value. Both are checked against the selected
+; permission profile when the policy is loaded. A start is allowed only by one
+; rule holding its execution scope and every permission scope (G207).
+lcn.ap_permission = {
+  kind: "permission",
+  permission: tstr .size (1..128),
+  ? constraints: bstr .size (1..1048576),
+}
+
 ; a declaration root, or a name the contract's pinned schema resolves (only with
 ; "capability-authority" or "runtime-control")
 lcn.ap_decl = bstr .size 32 / tstr .size (1..128)
@@ -146,14 +159,14 @@ refused otherwise ("not a set").
 
 ## Rules
 
-**`allow`.** A consumer matching `subject` may do what any of `scopes` covers. An `evaluate` the rule
-covers is allowed with `requested_scopes` as `allowed_scopes` and `valid_until` = now +
-`decision_validity_ms`. `commitment` adds call-record retention requirements to the decision (the
+**`allow`.** A consumer matching `subject` may do what the rule covers whole: every requested scope
+inside some pattern of this one rule (DECISIONS G207). An `evaluate` the rule covers is allowed with
+`requested_scopes` as `allowed_scopes` and `valid_until` = now + `decision_validity_ms`. `commitment` adds call-record retention requirements to the decision (the
 Runtime's call records, `docs/HOST-CONFIG.md` `call_audit`); the decision's commitment is the union of
 the request's, every covering rule's and every supporting grant's.
 
-**`deny`.** A consumer matching `subject` is refused what any of `scopes` covers, with `code` (default
-`scope-denied`). Deny overrides allow and every grant: rules have no order, and one matching deny
+**`deny`.** A consumer matching `subject` is refused a request when any of `scopes` covers any
+requested scope, a permission scope included, with `code` (default `scope-denied`). Deny overrides allow and every grant: rules have no order, and one matching deny
 decides. A deny names no grant and no validity.
 
 **`issue`.** A module matching `subject` may issue grants to targets matching `targets`, for scopes
@@ -221,6 +234,11 @@ A pattern covers a requested scope when everything the scope asks for is inside 
   list is any; an empty list is none.
 - **`module-execution`.** Starting or stopping instances matching `targets`. `modes` and `placements`
   restrict how; `placements` needs `modes` to be exactly `["local-transport"]`.
+- **`permission`.** A permission the selected permission profile defines (`docs/PERMISSIONS.md`), with
+  the broadest `constraints` allowed. The pattern covers a requested permission scope of the same name
+  whose constraints are contained in the pattern's under the definition's containment (CA l.129); with
+  no `constraints`, any conforming value. A pattern naming a permission the profile does not define, or
+  constraints that do not conform, refuses the policy.
 
 **Names and roots.** A method or event is named by its 32-byte declaration root, or by its name for the
 two symbolic contracts only. Names resolve when the policy is loaded; an unknown name refuses the
@@ -240,10 +258,19 @@ l.214). As modules see it:
 
 Routes, `discover` and `renew-route` to the authority with unconstrained `access` are ordinary scopes.
 
-**Permission scopes** (CA l.392). No permission profile is selected, so every `permission` scope in
-`evaluate` or `issue_grant` fails `unknown-permission`, and its failure record has no `scopes`. Format 1
-has no permission patterns: a rule with one does not decode. Tier 4 sends none (permission settings are
-empty, RUNTIME l.2541-2543).
+**Permission scopes** (CA l.212-216, l.387-392; DECISIONS I93). The host selects a permission profile
+in protected configuration (`docs/HOST-CONFIG.md`, `permissions`); the authority gets the same profile
+through its wiring. A permission scope names no target: it is tied to the start it stands beside, and
+only there.
+- **A start needs its execution scope and its permission scopes in the same rule or grant.** Two
+  separate grants, or two rules, that cover the request only together are denied (G207, our choice
+  under TL-04). A rule allowing `logos-core-nim.host-ambient` on its own would otherwise lend it to
+  every module its subject may start.
+- A permission scope beside anything but one `module-execution` `start` is `invalid-request`, with and
+  without a profile (CA l.484-486).
+- With no profile selected every permission scope is `unknown-permission`, and a policy with a
+  permission pattern does not load. The Runtime then sends none (the constant form of
+  `docs/HOST-CONFIG.md`, G229).
 
 ## Grants
 
@@ -254,8 +281,9 @@ empty, RUNTIME l.2541-2543).
   recorded once, at `expires_at`, even when the authority was down then.
 - **Revocation** keeps the time and reason. Revoking a revoked grant returns it unchanged and records
   another success. Revoking an expired grant is `grant-not-active`.
-- **Use.** A grant supports an evaluation when its target is the consumer, it is active, and one of its
-  scopes covers the request. When several do, the decision names the one that lasts longest (no
+- **Use.** A grant supports an evaluation when its target is the consumer, it is active, and it covers
+  the whole request: every requested scope inside one of its scopes (G207). Permission scopes are
+  contained through their definitions (CAP-0021). When several do, the decision names the one that lasts longest (no
   `expires_at` first, then the latest, then the lower id) and ends with it. Without a supporting grant
   the deny is `grant-revoked` or `grant-expired` when such a grant would have covered it, else
   `not-granted`.
@@ -271,9 +299,9 @@ wins.
 |---|---|---|---|---|---|---|---|
 | 1 | Wrong caller kind, or `consumer` is not the caller | `not-authorised` | same | same | same | same | same |
 | 2 | Queue full, timed out before it ran, or authority closed | `authority-unavailable` | same | same | same | same | same |
-| 3 | Form: set order or duplicates, shape, `expires_at` not in the future, limit, cursor, `since > until` | `invalid-request` | `invalid-request` | | | `invalid-request` | `invalid-request` |
+| 3 | Form: set order or duplicates, shape (a permission scope beside anything but a `start`, for `evaluate`), `expires_at` not in the future, limit, cursor, `since > until` | `invalid-request` | `invalid-request` | | | `invalid-request` | `invalid-request` |
 | 4 | Another Runtime, or `remote-enrollment` | `unsupported-scope` | same | | | | |
-| 5 | A permission scope | `unknown-permission` | same | | | | |
+| 5 | A permission the selected profile does not define; then constraints that do not conform to their definition | `unknown-permission`; `invalid-constraints` | same | | | | |
 | 6 | Facts unavailable, writes failing, out of ids or room, notification lost | `authority-unavailable` | same | same | same | same | same |
 | 6a | No `issue` rule matches the caller | | deny `consumer-denied` | | | | |
 | 6b | An unknown consumer, target, instance or provider; package facts that differ | `invalid-request` | same | | | | |
@@ -283,7 +311,8 @@ wins.
 
 - A caller the authority does not know (retired) is `not-authorised` for every module method, and
   nothing is recorded.
-- `invalid-constraints` is never produced: no permission is known, so constraints are never read.
+- Step 5 checks every permission name before any constraints, so an undefined name wins over
+  constraints that do not conform (G205).
 - Each code and denial has one fixed message, with no ids, paths or policy text.
 - Steps 6a and 8 are recorded as denials. Steps 3 to 7 and 9, and step 8 of `revoke_grant`, are
   recorded as failures. Steps 1 and 2 are not recorded.
@@ -297,7 +326,10 @@ Nothing is allowed by default. A deployment needs at least:
 - **Module consumers of the authority.** Routes to the authority and calls to the methods each module
   uses. `evaluate`, `grant_changed` and `policy_changed` cannot be granted (above).
 - **The orchestration instance.** Runtime Control and module execution for the instance named by the
-  host configuration's `orchestration`. Step 8b states the exact rules when the binding lands.
+  host configuration's `orchestration`. Step 8b states the exact rules when the binding lands. With a
+  permission profile selected, each `module-execution` `start` pattern holds, in the same rule, a
+  `permission` pattern for every permission the started instances' settings name: at least
+  `logos-core-nim.host-ambient` (DECISIONS G110, G207).
 
 The example below has them, plus an administration console that issues, revokes and inspects, a module
 that is refused the authority altogether, and the rule that lets every module see its own grants and

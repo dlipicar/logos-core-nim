@@ -33,12 +33,14 @@ type
   AuthorityWiring* = object
     ## The embedded inputs of one CA instance (§2.15): the policy
     ## (`lcn.authority_policy`), the Runtime id, the facts table step 8b feeds,
-    ## the clock and the limits.
+    ## the clock, the limits and the selected permission profile (I93; nil:
+    ## none), a constructor each thread builds its own value from.
     policy*: seq[byte]
     runtimeId*: string
     facts*: SharedFacts
     clock*: Clock
     limits*: AuthorityLimits
+    profile*: ProfileSource
 
   WiringEntry = object ## One wiring, in shared memory: read from any thread.
     stateDir: cstring
@@ -48,6 +50,7 @@ type
     facts: SharedFacts
     clock: Clock
     limits: AuthorityLimits
+    profile: ProfileSource
     next: ptr WiringEntry
 
 var wiringLock: Lock
@@ -86,6 +89,7 @@ proc wireAuthority*(stateDir: string, w: AuthorityWiring): Result[void, string] 
   e.facts = w.facts
   e.clock = w.clock
   e.limits = w.limits
+  e.profile = w.profile
   var taken = false
   withLock wiringLock:
     var p = wirings
@@ -123,7 +127,11 @@ proc readWiring(stateDir: string): Opt[AuthorityWiring] =
     while p != nil:
       if $p.stateDir == stateDir:
         var w = AuthorityWiring(
-          runtimeId: $p.runtimeId, facts: p.facts, clock: p.clock, limits: p.limits
+          runtimeId: $p.runtimeId,
+          facts: p.facts,
+          clock: p.clock,
+          limits: p.limits,
+          profile: p.profile,
         )
         w.policy = newSeq[byte](p.policyLen)
         if p.policyLen > 0:
@@ -176,6 +184,7 @@ proc initModule(
     facts: w.facts,
     clock: w.clock,
     limits: w.limits,
+    profile: w.profile,
     sink: AuthoritySink(env: env, notify: publishNotify),
   )
   let a = openAuthority(cfg).valueOr:
