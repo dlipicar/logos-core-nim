@@ -442,7 +442,7 @@ suite "run.evidence: the key (CA §9.1 l.1265-1287)":
     let path = work / "evidence.key"
     proc put(p: string, bytes: openArray[byte], mode = 0o600) =
       removeFile(p)
-      writeFile(p, cast[string](@bytes))
+      writeFile(p, bytes)
       check chmod(cstring(p), Mode(mode)) == 0
 
     # [CAP-0402] A key from FIPS 205 key generation.
@@ -457,10 +457,11 @@ suite "run.evidence: the key (CA §9.1 l.1265-1287)":
     check loadEvidenceKey("evidence.key").isErr
     check loadEvidenceKey(work / "absent.key").isErr
     check loadEvidenceKey(work).isErr
-    put(path, key, 0o644)
-    check loadEvidenceKey(path).error.contains("0600")
-    put(path, key, 0o400)
-    check loadEvidenceKey(path).isErr
+    when not defined(windows): # [I85] the mode is checked on POSIX only
+      put(path, key, 0o644)
+      check loadEvidenceKey(path).error.contains("0600")
+      put(path, key, 0o400)
+      check loadEvidenceKey(path).isErr
     put(path, key[0 ..< 95])
     check loadEvidenceKey(path).isErr
     put(path, @key & @[0'u8])
@@ -470,8 +471,9 @@ suite "run.evidence: the key (CA §9.1 l.1265-1287)":
     put(path, altered)
     check loadEvidenceKey(path).error.contains("derive")
     put(path, key)
-    let link = work / "link.key"
-    removeFile(link)
-    createSymlink(path, link)
     check loadEvidenceKey(path).isOk
-    check loadEvidenceKey(link).isErr
+    when not defined(windows): # [I85] a link is refused on POSIX only
+      let link = work / "link.key"
+      removeFile(link)
+      createSymlink(path, link)
+      check loadEvidenceKey(link).isErr
