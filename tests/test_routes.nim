@@ -949,7 +949,9 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     e.finish()
 
   test "[IFC-0740] [IFC-0287] [IFC-0288] [RUN-0299] [RUN-0300] an admitted call holds its provider's release and sees cancellation (§3.4 l.623)":
-    let e = fixtureEngine(config())
+    var cfg = config()
+    cfg.stopDeadline = PassingStop
+    let e = fixtureEngine(cfg)
     let m = e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))

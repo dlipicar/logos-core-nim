@@ -61,12 +61,6 @@ proc caConfig(recovery = false, deadlineMs = NoDeadlineMs): EngineConfig =
     )
   )
   result.clock = clk
-  # [IMPL] No case here is about the stop deadline: it only bounds the
-  # authority stops the cases wait for. Those stops release through the Module
-  # Loader on a lifecycle worker, and a worker's first Loader call loads that
-  # thread's contract tables (about 40 ms under refc on an idle Mac), which a
-  # loaded host pushed past the fixture's 300 ms (CI, 2026-11-13).
-  result.stopDeadline = initDuration(seconds = 10 * Slow)
 
 proc fresh() =
   resetFake()

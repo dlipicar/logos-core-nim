@@ -815,7 +815,9 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0768] [IFC-0287] [IFC-0756] [IFC-0757] stopping the provider waits for execution release before destroy":
-    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    var cfg = config(extra = @[dmeterStatic])
+    cfg.stopDeadline = PassingStop
+    let e = fixtureEngine(cfg)
     let m = e.started(dmeter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -910,7 +912,9 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0778] a publication whose handler completes and releases its own invocation keeps the invocation until it returns; stopping the provider waits for it (INTERFACE §2.9.3 l.2175)":
-    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    var cfg = config(extra = @[dmeterStatic])
+    cfg.stopDeadline = PassingStop
+    let e = fixtureEngine(cfg)
     let m = e.started(dmeter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
@@ -948,7 +952,9 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     e.finish()
 
   test "[IFC-0780] execution release from another thread closes admission and returns while a publication through the invocation is in its handler; the provider is destroyed only once the publication returns (INTERFACE §2.9.3 l.2175-2177)":
-    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    var cfg = config(extra = @[dmeterStatic])
+    cfg.stopDeadline = PassingStop
+    let e = fixtureEngine(cfg)
     let m = e.started(dmeter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))

@@ -680,7 +680,9 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     e.finish()
 
   test "[RUN-0640] [RUN-0630] [IMPL-DECISION G180] [IMPL-DECISION G227] a cleanup past its deadline is unknown; its end is absent at a new revision, and a revision read before it is stale":
-    let e = fixtureEngine(config())
+    var cfg = config()
+    cfg.stopDeadline = PassingStop
+    let e = fixtureEngine(cfg)
     let (_, rc) = e.startClient("c")
     discard e.started(client(), "w")
     clientDestroyGate.store(true)

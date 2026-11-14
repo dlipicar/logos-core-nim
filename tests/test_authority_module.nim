@@ -121,8 +121,7 @@ proc free(h: var CaHost) =
 proc caConfig(h: CaHost, store = false): EngineConfig =
   result = config(extra = @[caStaticRegistration()])
   result.runtimeInstanceId = Rt
-  # The fixture's 300 ms drain bound is for its own suites: a stop here
-  # waits for watch bodies, which a loaded host may hold up.
+  # A stop here waits for watch bodies, which a loaded host may hold up.
   result.stopDeadline = initDuration(seconds = 30)
   result.stateRoot = Opt.some(h.root / "state")
   if store:
