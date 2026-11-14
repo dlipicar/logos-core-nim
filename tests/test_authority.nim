@@ -1858,14 +1858,14 @@ suite "cap.persist: state across restarts and failures":
     check readFile(e.dir / MetaName) == meta
     var m = decode(LcnAsMeta, meta.toOpenArrayByte(0, meta.high)).get
     m.contract = root(9)
-    writeFile(e.dir / MetaName, cast[string](encode(m).get))
+    writeFile(e.dir / MetaName, encode(m).get)
     check openAuthority(testConfig(e.dir, p, e.facts, e.clock, e.sink.sink)).error
       .contains("contract")
     var v = toCbor(decode(LcnAsMeta, meta.toOpenArrayByte(0, meta.high)).get)
     for (k, x) in v.entries.mitems:
       if k.text == "format":
         x = cbor("logos-core-nim.authority-state.v2")
-    writeFile(e.dir / MetaName, cast[string](encodeCbor(v)))
+    writeFile(e.dir / MetaName, encodeCbor(v))
     check openAuthority(testConfig(e.dir, p, e.facts, e.clock, e.sink.sink)).isErr
     writeFile(e.dir / MetaName, meta)
     writeFile(e.dir / GrantsDir / "g-bad.cbor", "not cbor")
