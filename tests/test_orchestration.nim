@@ -88,9 +88,9 @@ proc waitUntil(cond: proc(): bool {.closure.}, seconds = Patience): bool =
   cond()
 
 proc cleaned(e: Engine, id: string): bool =
-  ## [SPEC RUNTIME l.587-588] The cleanup of `id`'s previous realization has
-  ## ended: before it, a start or recovery is NOT_READY, and its commit would
-  ## make a revision read earlier stale.
+  ## [SPEC RUNTIME l.613, l.3538] The cleanup of `id`'s previous realization
+  ## has ended: before it, a start or recovery is NOT_READY, and its commit
+  ## would make a revision read earlier stale.
   waitUntil(
     proc(): bool =
       not e.cleanupPending(id)
