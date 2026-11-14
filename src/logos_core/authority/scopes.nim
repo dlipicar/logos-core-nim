@@ -13,7 +13,13 @@
 ## - **Containment** (`covers`): required identity fields equal, constrained
 ##   lists of the narrower scope subsets of the broader one, absent optional
 ##   identities and lists unconstrained (l.119-127). An omitted provider
-##   runtime id means the local Runtime, for comparison only (l.229-232).
+##   runtime id means the local Runtime, for comparison only (l.229-232). A
+##   permission scope is contained through its definition in the selected
+##   profile (CAP-0021; DECISIONS I93); with no profile it never is.
+## - **Permissions** (`validateScopes`): a name the profile does not define is
+##   `unknown-permission`, constraints that do not conform `invalid-constraints`
+##   (CA l.388-392; G205 amended). A permission scope is evaluated only beside a
+##   `module-execution` `start` (G207 amended, K47).
 ## - **The contracts.** The Capability Authority and Runtime Control
 ##   commitments and declaration roots are computed from the mirrored spec
 ##   text (`caDocuments`, `rcDocuments`), never typed in (CAP-0089, CAP-0090).
@@ -28,8 +34,9 @@ import ../iface/[accept, names]
 import ./logos_capability_authority_types
 from ../runtime/rc_types import rcDocuments
 import ../base/perthread
+import ../permissions
 
-export results, logos_capability_authority_types
+export results, logos_capability_authority_types, permissions
 
 type
   Scope* = LogosNSCapabilityAuthorityScope
@@ -364,17 +371,29 @@ proc checkEvaluateShape*(
     scopes: openArray[Scope], maxScopes: int
 ): Result[void, CaError] =
   ## [IMPL] The rules for one evaluated operation (CA l.483-487; G207 interim,
-  ## "TL-04, extended"): exactly one non-permission scope, one action per
-  ## action-bearing scope, and for a call, publication or subscription one
-  ## route and the one declaration being checked (l.288-289).
+  ## "TL-04, extended", amended by I93): exactly one non-permission scope, one
+  ## action per action-bearing scope, and for a call, publication or
+  ## subscription one route and the one declaration being checked (l.288-289).
+  ## Permission scopes stand only beside a `module-execution` `start` (CA
+  ## l.345, l.351-353, l.489; K47): a form rule, with and without a profile.
   if scopes.len > maxScopes:
     return err(invalid("too many scopes"))
   var operations = 0
-  for s in scopes:
+  var permissions = 0
+  var op = -1
+  for i, s in scopes:
     if s.kind != skPermission:
       inc operations
+      op = i
+    else:
+      inc permissions
   if operations != 1:
     return err(invalid("not exactly one operation"))
+  if permissions > 0:
+    let o = scopes[op]
+    if o.kind != skExecution or o.me.actions.len != 1 or
+        o.me.actions[0].kind != MeActionKind.Start:
+      return err(invalid("a permission scope beside an operation other than a start"))
   for s in scopes:
     case s.kind
     of skProvider:
@@ -416,12 +435,18 @@ proc checkEvaluateShape*(
   ok()
 
 proc validateScopes*(
-    scopes: openArray[Scope], localRuntime: string, maxScopes: int, evaluating: bool
+    scopes: openArray[Scope],
+    localRuntime: string,
+    maxScopes: int,
+    evaluating: bool,
+    profile = NoProfile,
 ): Result[void, CaError] =
   ## The payload checks of `evaluate` and `issue_grant`, phase by phase across
-  ## all scopes, the first failure in array order within a phase (G205):
-  ## form (`invalid-request`), locality (`unsupported-scope`), then permission
-  ## scopes (`unknown-permission`: no permission is defined here, §1.6).
+  ## all scopes, the first failure in array order within a phase (G205,
+  ## amended by I93): form (`invalid-request`), locality
+  ## (`unsupported-scope`), then permission scopes: every name first
+  ## (`unknown-permission`, CAP-0073), then every constraints value
+  ## (`invalid-constraints`, CAP-0074), both through `profile` (CA l.388-392).
   if scopes.len > maxScopes:
     return err(invalid("too many scopes"))
   ?checkScopeSet(scopes)
@@ -432,8 +457,12 @@ proc validateScopes*(
   for s in scopes:
     ?checkLocality(s, localRuntime)
   for s in scopes:
-    if s.kind == skPermission:
+    if s.kind == skPermission and not profile.defines(s.pm.permission):
       return err(caError(CaCode.Unknown_permission))
+  for s in scopes:
+    if s.kind == skPermission and
+        profile.validate(s.pm.permission, s.pm.constraints).isErr:
+      return err(caError(CaCode.Invalid_constraints))
   ok()
 
 proc canonicalOrder*(scopes: var seq[Scope]) =
@@ -555,8 +584,8 @@ func accessCovers*(broad, narrow: Opt[RouteAccess]): bool =
 
 func covers*(broader, narrower: Scope, localRuntime: string): bool =
   ## [SPEC CA l.119-127] Whether `narrower` is equal to or narrower than
-  ## `broader`. A permission scope never covers here: no permission defines
-  ## its containment (§1.6).
+  ## `broader`. A permission scope never covers here: its containment is its
+  ## definition's, through a profile (the overload below).
   if broader.kind != narrower.kind:
     return false
   case broader.kind
@@ -595,6 +624,37 @@ func covers*(broader, narrower: Scope, localRuntime: string): bool =
       kindsSubset(n.uses, b.uses)
   of skPermission:
     false
+
+proc covers*(
+    broader, narrower: Scope, localRuntime: string, profile: PermissionProfile
+): bool =
+  ## `covers`, with a permission scope contained through its definition in
+  ## `profile` (CA l.129; CAP-0021): the same name, and the narrower
+  ## constraints equal to or narrower than the broader ones.
+  if broader.kind == skPermission and narrower.kind == skPermission:
+    broader.pm.permission == narrower.pm.permission and
+      profile.contained(
+        narrower.pm.permission, narrower.pm.constraints, broader.pm.constraints
+      )
+  else:
+    covers(broader, narrower, localRuntime)
+
+proc coversEach*(
+    broader, narrower: openArray[Scope],
+    localRuntime: string,
+    profile: PermissionProfile,
+): bool =
+  ## [G207 amended] Every scope of `narrower` is covered by some scope of
+  ## `broader`: one grant covering a whole request.
+  for n in narrower:
+    var found = false
+    for b in broader:
+      if covers(b, n, localRuntime, profile):
+        found = true
+        break
+    if not found:
+      return false
+  true
 
 func coversAlternatives*(
     broader: openArray[Scope], narrower: Scope, localRuntime: string

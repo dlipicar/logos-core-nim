@@ -40,6 +40,14 @@ The specs are being revised, so the work is ordered by how settled each area is
   such a route calls its provider over a socket (part 4b-2b) and subscribes to its events, which
   reach the handlers on the Runtime's event workers (part 4b-2c). The route, asynchronous-call and
   event suites rerun over local transport.
+- Tier 4b, step 4b-4: permissions. The permission profile `logos-core-nim.permission-profile.v1`
+  and its one definition, `logos-core-nim.host-ambient` ([docs/PERMISSIONS.md](docs/PERMISSIONS.md)),
+  and the Capability Authority's side: permission validation and containment, permission patterns in
+  policy, and one rule or grant for a whole start (part 4b-4a, I93). The Capability Authority's §3.5 is
+  claimed. In direct mode (part 4b-4b), a host that selects the profile provisions each instance's
+  permission settings; the Runtime saves them, reconciles a replacement by stopping the instance,
+  refuses a start whose settings lack host-ambient, asks the authority for every saved permission, and
+  tells each realization what it was given.
 - Tier 4b, step 4b-5: the reference orchestration module. `lcn_orchestrator`, a module a host links
   in and names as its orchestration instance, applies startup defaults, reconciles after restarts,
   recovers failures under a configured restart policy with retry accounting that survives restarts,
@@ -54,7 +62,7 @@ The specs are being revised, so the work is ordered by how settled each area is
   `host-terminated`); a restart lock keeps a host of an earlier run from being joined by a new one
   (part 4b-3.1b).
 - Not yet: the rest of Tier 4b (the rest of the Module Host: hosted providers and consumers' routes; the rest of transported routes, `logosd`
-  and `logosctl`, permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
+  and `logosctl`, the Runtime's permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 
@@ -123,12 +131,17 @@ With Nix, which also runs nph and the spec checks:
 nix flake check -L
 ```
 
-CI splits the checks into groups and builds each group in its own job: `orc-spec` (orc, nph, lint
-and the spec checks), `refc`, `orc-release`, and on Linux `asan`, `tsan` and `msan`. One group builds
-alone with:
+CI splits the checks into groups: `orc-spec` (orc, nph, lint and the spec checks), `refc`,
+`orc-release`, and on Linux `asan`, `tsan` and `msan`. On macOS each group is one job; on Linux each
+group runs as two shards, `ciShards.<group>-1` and `<group>-2`. One group or one shard builds alone
+with:
 
 ```bash
 nix build -L --keep-going .#ciGroups.asan
+```
+
+```bash
+nix build -L --keep-going .#ciShards.asan-1
 ```
 
 ```bash

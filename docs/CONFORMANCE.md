@@ -84,9 +84,9 @@ Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --close
   instance is the first item of Tier 4b (TF-36).
 - **CONFIGURATION** is claimed in full for direct mode.
 - **CAPABILITY AUTHORITY** is claimed for the local Authority and the Runtime's side of authority.
-  Deferred: §3.5 permission profiles, enforcers and definitions (G110; Tier 4b), hosted placements, OS
-  permission revocation (Tier 5), and the route ticket's decision, expiry and revocation, which the
-  Runtime supplies in 10b.
+  Deferred: §3.5 permission profiles, enforcers and definitions (G110; Tier 4b, claimed in step
+  4b-4a, below), hosted placements, OS permission revocation (Tier 5), and the route ticket's
+  decision, expiry and revocation, which the Runtime supplies in 10b.
 - **TRANSPORT** is claimed for the sans-I/O protocol and the unix-stream I/O layer. Deferred: what the
   Runtime and the Module Host trigger (10b, Tier 4b), Windows and the remote profiles (Tier 5). Out of
   scope: §8.1.2 (a MAY profile left unused, l.1075) and requirements on contracts and deployments.
@@ -232,6 +232,34 @@ RUN-0696 (resumption once permissions or authority allow) stays `deferred:tier-4
 half is built and tested, its permission half comes with permission enforcement (4b-4) and step
 4b-5c. "The reference orchestration module" in `docs/HOST-CONFIG.md` documents its configuration, its
 state file and what it decides.
+
+### What Tier 4b step 4b-4 changes
+
+Tier 4b step 4b-4 (DECISIONS I93) builds permissions, the half the Runtime enforces. Part 4b-4a
+builds the registry and the Capability Authority's side, so the **CAPABILITY AUTHORITY** entry
+changes: §3.5 is claimed. The one profile this repository ships, `logos-core-nim.permission-profile.v1`
+(G279), defines `logos-core-nim.host-ambient`: its constraints, containment, enforcement component
+(Runtime admission) and its unenforceable and revoked behaviours (CAP-0021, CAP-0083;
+`docs/PERMISSIONS.md`). The authority takes the selected profile through its wiring: an undefined
+permission is `unknown-permission`, constraints that do not conform `invalid-constraints` (CAP-0072 to
+CAP-0074), and a start needs its execution scope and every permission scope in one rule or grant
+(G207 amended). Inspection items carry the facility classes (CAP-0075 to CAP-0082: one name stands for
+all seven, with no per-class limit; G283), device restrictions (CAP-0292, CAP-0293, not applicable) and
+provider-enforced permissions (CAP-0294 to CAP-0297, not applicable; G286). Hosted placements
+(CAP-0065, CAP-0066) wait for 4b-4c.
+
+Part 4b-4b builds the Runtime's half in direct mode, so the **RUNTIME** entry changes: with a profile
+selected in `app-config.v1` `permissions`, each instance has its own permission settings, provisioned
+by the host, saved and restored (`prm`), replaced by `update_permission_settings` and reconciled by
+stopping a running instance with its intent and origin kept (RUN-0914, RUN-1066); settings that
+cannot be enforced are `failed` (G281, G285). Admission refuses settings that are `failed` or lack
+host-ambient before any decision (G284), the execution decision covers one permission scope per saved
+setting (G217 amended; CAP-0063, CAP-0068), `get_execution_permissions` answers the permissions
+admission installed (G282), a revoked grant stops the instance (CAP-0192), and
+`permission_settings_changed_event` follows every committed change. RUN-0914, RUN-1066, RUN-0923 and
+CAP-0192 are claimed, and the settings units the constant form (G229) answered by inspection are now
+tested. Without a profile the constant form stands. PKG-0335 moves to Tier 5: no requested permission
+reaches a scope until package-backed requests are presented to policy.
 
 ## Properties not claimed
 

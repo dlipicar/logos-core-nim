@@ -5,9 +5,12 @@
 ## `destroy`, `dispatch` and `free`:
 ##
 ## - `evaluate` answers from a script of rules matched by consumer and by what
-##   the request asks (`what`): allow (with a validity, grants, a commitment
-##   and narrowing), deny, an `error` arm, a non-OK status, a hang until
-##   released, or one of the malformed decisions an evaluation must refuse.
+##   the request asks (`what`, read from its one non-permission scope): allow
+##   (with a validity, grants, a commitment and narrowing), deny, an `error`
+##   arm, a non-OK status, a hang until released, or one of the malformed
+##   decisions an evaluation must refuse. An allow echoes the request's
+##   permission scopes (I93); a rule can replace one's constraints
+##   (`permName`, `permConstraints`), to narrow or widen it.
 ## - Every request is recorded with its caller kind, thread and order.
 ## - The test publishes `grant_changed`, `policy_changed` or anything else
 ##   through the instance's publish callback.
@@ -82,6 +85,10 @@ type
       ## allow: the allowed Runtime Control scopes, one per alternative
     retainRequest*, retainResponse*: bool ## allow: `commitment`
     code*: int ## deny: the denial code; error: the error code (enum ordinal)
+    permName*: string
+      ## [I93] allow: the allowed permission scope of this name gets
+      ## `permConstraints` (or is dropped when they are empty)
+    permConstraints*: seq[byte]
 
   Received* = object
     what*: string
@@ -247,6 +254,8 @@ proc encodeRule(r: Rule): string =
     (if r.retainRequest: "q" else: "") & (if r.retainResponse: "s" else: ""),
     $r.code,
     encodeNarrows(r.narrowControl),
+    r.permName,
+    hexOf(r.permConstraints),
   ].join("\x1F")
 
 proc decodeRule(s: string): Rule =
@@ -274,6 +283,9 @@ proc decodeRule(s: string): Rule =
     result.narrowProviders = Opt.some(split1(f[7][1 ..^ 1]))
   if f.len > 10:
     result.narrowControl = decodeNarrows(f[10])
+  if f.len > 12:
+    result.permName = f[11]
+    result.permConstraints = unhex(f[12])
 
 # Test controls -------------------------------------------------------------------------
 
@@ -430,6 +442,14 @@ proc whatOf(s: Scope): string =
   else:
     "?"
 
+proc primary(scopes: openArray[Scope]): int =
+  ## [I93] The request's one non-permission scope: a permission scope sorts
+  ## before it (CA l.130-138).
+  for i, s in scopes:
+    if s.kind != skPermission:
+      return i
+  0
+
 proc matching(rules: seq[Rule], what, consumer: string): Rule =
   for r in rules:
     if (r.what.len == 0 or r.what == what) and
@@ -514,6 +534,19 @@ proc decision(
               )
             )
           s.pa.providers = Opt.some(ps)
+  if r.permName.len > 0:
+    var kept: seq[Scope]
+    for s in allowed:
+      if s.kind == skPermission and s.pm.permission == r.permName:
+        if r.permConstraints.len == 0:
+          continue
+        var n = s
+        n.pm.constraints = r.permConstraints
+        kept.add(n)
+      else:
+        kept.add(s)
+    canonicalOrder(kept)
+    allowed = kept
   if r.narrowControl.len > 0:
     var alts: seq[Scope]
     for s in allowed:
@@ -575,7 +608,7 @@ proc decision(
   of vOtherScopes:
     result.requested_scopes = @[]
   of vBroadened:
-    result.allowed_scopes = Opt.some(@[broadened(req.scopes[0])])
+    result.allowed_scopes = Opt.some(@[broadened(req.scopes[primary(req.scopes)])])
   of vUncovered:
     result.allowed_scopes = Opt.some(newSeq[Scope]())
   of vUnordered:
@@ -594,7 +627,7 @@ proc decision(
     result.issued_at = now - 2000
     result.valid_until = Opt.some(now - 1000)
   of vPlacements:
-    var s = allowed[0]
+    var s = allowed[primary(allowed)]
     if s.kind == skExecution:
       s.me.placements = Opt.some(newSeq[LogosNSCapabilityAuthorityHostedPlacement]())
     result.allowed_scopes = Opt.some(@[s])
@@ -635,7 +668,7 @@ proc fakeDispatch(
       if req.execution_renewal.get(false):
         "renew-execution"
       elif req.scopes.len > 0:
-        whatOf(req.scopes[0])
+        whatOf(req.scopes[primary(req.scopes)])
       else:
         "?"
     let at = revision.load

@@ -74,13 +74,27 @@ var
 proc ms(n: int): int64 =
   int64(n) * Slow
 
-proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10 * Slow): bool =
+const Patience = 30 * Slow
+  ## Seconds a case waits for what will happen. CI's x86 runners ran these
+  ## suites 5 to 13 times slower than framework.lan (run 43589472593); only a
+  ## failing case waits this long.
+
+proc waitUntil(cond: proc(): bool {.closure.}, seconds = Patience): bool =
   let until = getMonoTime() + initDuration(seconds = seconds)
   while getMonoTime() < until:
     if cond():
       return true
     sleep(2)
   cond()
+
+proc cleaned(e: Engine, id: string): bool =
+  ## [SPEC RUNTIME l.613, l.3538] The cleanup of `id`'s previous realization
+  ## has ended: before it, a start or recovery is NOT_READY, and its commit
+  ## would make a revision read earlier stale.
+  waitUntil(
+    proc(): bool =
+      not e.cleanupPending(id)
+  )
 
 proc flakyRecord(): ModuleRecord =
   ModuleRecord(module: Flaky, strategy: stDirectStatic, binding: "flaky")
@@ -204,7 +218,7 @@ proc finish(e: Engine) =
     flaky[i].destroyGate.store(false)
   openPauseGateForTests()
   e.shutdown()
-  check e.close(initDuration(seconds = 10 * Slow))
+  check e.close(initDuration(seconds = Patience))
 
 proc leftover() =
   if live != nil:
@@ -403,13 +417,15 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
   test "[RUN-0684] disabled: a failure is never recovered":
     flaky[0].failInits.store(1)
     let e = boot(value(defaults = starts(0), restart = Opt.some(disabled())))
+    # The note is the module's decision on the failure; the state alone can
+    # come first, before the start call's answer reaches the module.
     check waitUntil(
       proc(): bool =
-        e.state(flakyInstance(0)) == msError
+        "the restart policy is disabled" in diagText()
     )
+    check e.state(flakyInstance(0)) == msError
     sleep(int(ms(300)))
     check recovers(flakyInstance(0)) == 0
-    check "the restart policy is disabled" in diagText()
     e.finish()
 
   test "[RUN-0687] an explicit stop drops the armed recovery and its episode":
@@ -442,23 +458,26 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     flaky[0].failInits.store(1)
     let e = boot(
       value(
-        defaults = starts(0), restart = Opt.some(restart(initial = 5000, maxMs = 5000))
+        defaults = starts(0),
+        restart = Opt.some(restart(initial = 300_000, maxMs = 300_000)),
       )
     )
+    # The module has the start's answer; its first recovery is five minutes away.
     check waitUntil(
       proc(): bool =
-        e.state(flakyInstance(0)) == msError
+        "start_module flaky-0: answered" in diagText() and
+          e.state(flakyInstance(0)) == msError
     )
     sleep(int(ms(50)))
     let t0 = getMonoTime()
     live = nil
     e.shutdown()
-    check (getMonoTime() - t0).inMilliseconds < ms(2000)
+    check (getMonoTime() - t0).inMilliseconds < ms(30_000) # a tenth of the delay
     let n = targetsForTests().len
     sleep(int(ms(200)))
     check targetsForTests().len == n
     check recovers(flakyInstance(0)) == 0
-    check e.close(initDuration(seconds = 10 * Slow))
+    check e.close(initDuration(seconds = Patience))
 
   test "[RUN-0686] a lost answer is charged once; the restarted module reads before it decides":
     flaky[0].failInits.store(1)
@@ -480,6 +499,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     let left = entryOf(flakyInstance(0)).get
     check left.pending.isSome and left.attempts == 1
     discard e.stop(Orch).tryGet
+    check e.cleaned(Orch)
     check e.start(Orch).tryGet.state == msReady
     check waitUntil(
       proc(): bool =
@@ -520,6 +540,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     )
     sleep(int(ms(150)))
     check recovers(flakyInstance(1)) == before # nothing while it is down (l.3806)
+    check e.cleaned(Orch)
     let r = e.view(Orch).tryGet.execution.revision
     check e.recover(Orch, r).tryGet.state == msReady
     check waitUntil(e.isReady(flakyInstance(1)))
@@ -693,6 +714,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     sleep(int(ms(200)))
     check recovers(flakyInstance(0)) == 0
     check e.state(flakyInstance(0)) == msError
+    check e.cleaned(Orch)
     check e.recover(Orch, e.view(Orch).tryGet.execution.revision).tryGet.state == msReady
     check waitUntil(e.isReady(flakyInstance(0)))
     check recovers(flakyInstance(0)) == 1
@@ -710,7 +732,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     # may come well after the authority is ready: count from that probe.
     check waitUntil(
       proc(): bool =
-        callsForTests("list_modules") >= 1
+        callsForTests("list_modules") >= 2
     )
     sleep(int(ms(600)))
     check e.view(flakyInstance(0)).tryGet.execution.intent == inUninitialized

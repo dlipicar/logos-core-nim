@@ -79,6 +79,11 @@ setOrchestratorDiagnostics(sink)
 proc ms(n: int): int64 =
   int64(n) * Slow
 
+const Patience = 30 * Slow
+  ## Seconds a case waits for what will happen. CI's x86 runners ran these
+  ## suites 5 to 13 times slower than framework.lan (run 43589472593); only a
+  ## failing case waits this long.
+
 proc restart(
     initial = 20, maxMs = 200, mult = 2, attempts = 3, stable = 100
 ): LcnOrchestratorRestart =
@@ -264,14 +269,14 @@ proc finish(rt: ptr LogosRuntimeHandle) =
     flaky[i].destroyGate.store(false)
   check runtimeRequestShutdown(rt).ec == ecOk
   check runtimeWaitForShutdown(rt).ec == ecOk
-  let until = getMonoTime() + initDuration(seconds = 10 * Slow)
+  let until = getMonoTime() + initDuration(seconds = Patience)
   var r = runtimeDestroy(rt)
   while r.ec == ecNotReady and "still running" in r.text and getMonoTime() < until:
     sleep(1)
     r = runtimeDestroy(rt)
   check r.ec == ecOk
 
-proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10 * Slow): bool =
+proc waitUntil(cond: proc(): bool {.closure.}, seconds = Patience): bool =
   let until = getMonoTime() + initDuration(seconds = seconds)
   while getMonoTime() < until:
     if cond():
@@ -397,13 +402,15 @@ suite "orch.host: the reference orchestration module behind the Host Embedding A
         dir, Opt.some(value(defaults = starts(0), restart = Opt.some(disabled()))), @[0]
       )
     )
+    # The note is the module's decision on the failure; the state alone can
+    # come first, before the start call's answer reaches the module.
     check waitUntil(
       proc(): bool =
-        e.state(flakyInstance(0)) == msError
+        "the restart policy is disabled" in diagText()
     )
+    check e.state(flakyInstance(0)) == msError
     sleep(int(ms(300)))
     check recovers(flakyInstance(0)) == 0
-    check "the restart policy is disabled" in diagText()
     rt.finish()
     # No provisioned value: the declaration's default, 1 s doubling, 8 attempts.
     flaky[1].failInits.store(1000)

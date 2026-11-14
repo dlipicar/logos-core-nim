@@ -112,3 +112,20 @@ lcn.cfg_record = {
   state: bstr,
   ? last_provisioned: bstr .size 32,
 }
+
+; [I93] one instance's permission settings (side record kind `prm`), present
+; for every instance while a permission profile is selected
+; (docs/PERMISSIONS.md): the logos.runtime_control.permission_settings_state
+; it reports. The revision is at least 1 and failure is present only with
+; failed (checked when it is read, runtime/settings.nim).
+lcn.prm_record = {
+  revision: uint64,
+  permissions: [* lcn.rs_permission_setting],
+  application: "pending" / "applied" / "failed",
+  ? failure: "enforcement-failed",
+}
+
+lcn.rs_permission_setting = {
+  permission: tstr .size (1..128),
+  constraints: bstr .size (1..1048576),
+}

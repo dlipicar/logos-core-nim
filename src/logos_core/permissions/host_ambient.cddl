@@ -1,0 +1,6 @@
+; The constraints of the permission logos-core-nim.host-ambient (DECISIONS
+; D25, G110, G279; docs/PERMISSIONS.md): the empty map, so its only value
+; encodes as 0xa0. A supporting schema, resolved against itself and the common
+; schema only (CA l.394-404: no per-class limit can be expressed).
+
+lcn_permissions.host_ambient = {}

@@ -27,6 +27,7 @@
 
 import std/deques
 import results
+from ../permissions import PermissionSetting
 
 export results
 
@@ -96,6 +97,10 @@ type
     hosted*: bool
       ## [SPEC CA l.324-325; plan §2.11; G272] an execution in a Module Host:
       ## mode `local-transport`, placement `process`; false: `direct`
+    permissions*: seq[PermissionSetting]
+      ## [TF-32 interim; G217 amended; I93] an execution request under a
+      ## selected permission profile: the instance's saved settings at
+      ## admission, one permission scope each; empty without a profile
     filters*: bool
       ## [IMPL; G161 extension, I86] an observation of many subjects (a list
       ## method, a Runtime Control event): it names no subject, and a

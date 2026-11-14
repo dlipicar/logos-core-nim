@@ -405,6 +405,8 @@ proc launch(h: ptr HostRuntime): LogosResult =
     ordering: c.ordering,
     declarations: c.declarations,
     startupDeadline: c.startupDeadline,
+    loaderStartupDeadline: DefaultLoaderStartupDeadline,
+      # [IMPL-DECISION G61, amended 2026-11-14] not in `lcn.app_config`
     stopDeadline: c.stopDeadline,
     shutdownGrace: c.shutdownGrace,
     applyDeadline: c.applyDeadline,
@@ -416,6 +418,8 @@ proc launch(h: ptr HostRuntime): LogosResult =
     endpointDir: c.endpointDir,
     moduleHost: c.moduleHost,
     moduleHostEnv: c.moduleHostEnv,
+    permissions: c.permissions,
+    initialSettings: c.initialSettings,
   )
   if c.authority.isSome:
     # [I85; G47] The attribute source exists before the engine opens, since
@@ -456,7 +460,12 @@ proc launch(h: ptr HostRuntime): LogosResult =
         dir = c.stateRoot.get / m.record.stateAssignment.get
     wireAuthority(
       dir,
-      AuthorityWiring(policy: c.authorityPolicy, runtimeId: runtimeId, facts: h.facts),
+      AuthorityWiring(
+        policy: c.authorityPolicy,
+        runtimeId: runtimeId,
+        facts: h.facts,
+        profile: c.permissions,
+      ),
     ).isOkOr:
       return answer(ecModule, "cannot wire the Capability Authority: " & error)
     h.wired = cast[cstring](allocShared0(dir.len + 1))

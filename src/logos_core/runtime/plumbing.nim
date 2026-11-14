@@ -22,14 +22,20 @@ from ../transport/io/api import TransportConfig, IoEvent
 from ./tport import TransportPorts
 from ./sidetable import SideTable
 from ../loader/contract import LoaderInstanceId, LoaderModuleName, LoaderBindingId
+from ../permissions import ProfileSource, PermissionSetting
 
 export
   authz, callaudit, clock, configcheck, facts, loaderbinding, records, realizer, routes,
   routing, outcome.ErrorCode, hashinput.Digest, LoaderInstanceId, LoaderModuleName,
-  LoaderBindingId
+  LoaderBindingId, ProfileSource, PermissionSetting
 
 const
   DefaultStartupDeadline* = initDuration(seconds = 120)
+  DefaultLoaderStartupDeadline* = initDuration(seconds = 120)
+    ## [IMPL-DECISION G61, amended 2026-11-14] how long the Module Loader's own
+    ## start may take, from the open through its binding checks
+  MaxLoaderStartupDeadline* = initDuration(hours = 1)
+    ## [IMPL] the longest, as for the host configuration's deadlines
   DefaultStopDeadline* = initDuration(seconds = 10)
   DefaultShutdownGrace* = initDuration(seconds = 10)
   DefaultApplyDeadline* = initDuration(seconds = 120)
@@ -333,6 +339,14 @@ type
     ## must end to clean (RUNTIME l.3823): their instance ids. It must not
     ## call into the engine.
 
+  InitialSettings* = object
+    ## [SPEC RUNTIME l.2543; G110; I93] Protected provisioning of a new
+    ## instance's permission settings: the entry naming the instance, else
+    ## its module's entry (`instance` empty).
+    module*: string
+    instance*: string ## empty: every new instance of `module`
+    permissions*: seq[PermissionSetting] ## ascending by name; may be empty
+
   EngineConfig* = object
     runtimeInstanceId*: string
       ## [SPEC RUNTIME §9.2 l.2665-2672] this Runtime's identity, assigned by
@@ -370,6 +384,12 @@ type
       ## [G55] what `create_module` may create, one per module name; a change
       ## affects only later creations (RUNTIME l.3621)
     startupDeadline*: Duration
+      ## [G61, revised by A18] each module realization's, the Module Loader's
+      ## excepted
+    loaderStartupDeadline*: Duration
+      ## [IMPL-DECISION G61, amended 2026-11-14; SPEC RUNTIME l.664] the Module
+      ## Loader's start, from the open through its binding checks: above zero
+      ## and at most `MaxLoaderStartupDeadline`, or the open is INVALID_PARAMS
     stopDeadline*: Duration
     shutdownGrace*: Duration
     applyDeadline*: Duration
@@ -412,6 +432,18 @@ type
     moduleHostEnv*: seq[string]
       ## [R4; G264] the variables every Module Host gets from this process's
       ## environment; nothing else reaches a host
+    permissions*: ProfileSource
+      ## [I93; G279] the selected permission profile, as the constructor each
+      ## thread that needs it builds its own value from (the Runtime thread,
+      ## the evaluation workers); nil: none, and permission settings keep the
+      ## constant form (G229)
+    initialSettings*: seq[InitialSettings]
+      ## [SPEC RUNTIME l.2543; I93] with `permissions`: the protected initial
+      ## settings of new instances; unused without it
+    when defined(lcnTestHooks):
+      loaderFaults*: LoaderFaultBox
+        ## [D27 revised] a test's own fault box, armed before the open and
+        ## freed by the test after the engine; nil: the engine makes its own
 
   # Messages ---------------------------------------------------------------------
   RequestKind* = enum
@@ -803,6 +835,9 @@ type
       access*: pointer ## the authority's invocation-access state
       ticket*: ptr CallTicket ## marked cancelled when the deadline passes
       runtimeId*: string
+      profile*: ProfileSource
+        ## [I93] the selected permission profile; the worker checks the
+        ## decision's permission scopes against its own copy
     of ejQuit:
       discard
 
@@ -978,6 +1013,7 @@ type
       ## ends its loop and before any worker is joined
     when defined(lcnTestHooks):
       faults*: LoaderFaultBox ## [D27 revised; plan §2.12] the injected faults
+      ownFaults*: bool ## `faults` is the engine's own, freed with it
 
   Engine* = ptr Shared
 
@@ -1042,6 +1078,7 @@ proc defaultConfig*(workDir: string): EngineConfig =
     workDir: workDir,
     policy: allowAll(),
     startupDeadline: DefaultStartupDeadline,
+    loaderStartupDeadline: DefaultLoaderStartupDeadline,
     stopDeadline: DefaultStopDeadline,
     shutdownGrace: DefaultShutdownGrace,
     applyDeadline: DefaultApplyDeadline,

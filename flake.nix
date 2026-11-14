@@ -452,6 +452,12 @@
       # (.github/workflows/ci.yml): one runner took over two hours for all of them on x86_64.
       # A check whose name ends in no known variant goes to `orc-spec`, so a new variant is
       # still built. `nix build .#ciGroups.asan` builds one group locally.
+      #
+      # `ciShards` splits each group into `ciShardCount` parts, `<group>-1` to `<group>-N`: the
+      # group's checks sorted by name, the i-th going to shard (i mod N) + 1. Each check is in
+      # exactly one shard of its group. The Linux jobs build shards: on 36f355c (2026-11-14) the
+      # x86_64 asan and msan groups passed the 90-minute job limit and tsan took 81 minutes. The
+      # count must match the `shard` list in ci.yml.
       legacyPackages = forAllSystems (
         system:
         let
@@ -471,17 +477,38 @@
               v = variant name;
             in
             if v == null then "orc-spec" else v;
-        in
-        {
-          ciGroups = lib.mapAttrs (
-            group: names:
-            bySystem.${system}.pkgs.linkFarm "ci-${group}" (
+          groups = lib.groupBy groupOf (builtins.attrNames checks);
+          farm =
+            label: names:
+            bySystem.${system}.pkgs.linkFarm "ci-${label}" (
               map (name: {
                 inherit name;
                 path = checks.${name};
               }) names
-            )
-          ) (lib.groupBy groupOf (builtins.attrNames checks));
+            );
+          ciShardCount = 2;
+          shardOf =
+            i: names:
+            map (x: x.name) (
+              builtins.filter (x: lib.mod x.index ciShardCount == i) (
+                lib.imap0 (index: name: { inherit index name; }) (lib.sort lib.lessThan names)
+              )
+            );
+          shardsOf =
+            group: names:
+            lib.listToAttrs (
+              lib.genList (
+                i:
+                let
+                  label = "${group}-${toString (i + 1)}";
+                in
+                lib.nameValuePair label (farm label (shardOf i names))
+              ) ciShardCount
+            );
+        in
+        {
+          ciGroups = lib.mapAttrs farm groups;
+          ciShards = lib.concatMapAttrs shardsOf groups;
         }
       );
 

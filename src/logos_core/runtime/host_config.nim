@@ -25,6 +25,7 @@ from ../transport/io/sock import unixStream
 from ../transport/framing import MinFrameLimit
 from ../authority/policy import loadPolicy
 from ./authscopes import AuthorityModule, caRoots
+import ../permissions
 
 export results
 
@@ -84,6 +85,11 @@ type
     moduleHostEnv*: seq[string]
       ## [R4; G264] the variables every Module Host gets from the daemon's
       ## environment
+    permissions*: ProfileSource
+      ## [I93; G279] `permissions.profile`, resolved to a profile this
+      ## library ships; nil: none (G229)
+    initialSettings*: seq[InitialSettings]
+      ## [SPEC RUNTIME l.2543; I93] `permissions.initial`, checked
 
   ConfigError* = object
     message*: string
@@ -278,7 +284,9 @@ func cborFailure(e: CborError): ConfigError =
   )
 
 proc checkAuthority(
-    c: var HostConfig, p: LcnAppPolicyARCapabilityAuthorityMap
+    c: var HostConfig,
+    p: LcnAppPolicyARCapabilityAuthorityMap,
+    profile: PermissionProfile,
 ): Result[void, ConfigError] =
   ## [I85; plan §3.2] The `capability-authority` policy's checks at `create`.
   var found = false
@@ -344,7 +352,7 @@ proc checkAuthority(
     return err(configError("evaluation_deadline_ms must be below startup_deadline_ms"))
   # [C9] 8a's policy format, checked as the authority will load it.
   let bytes = encodeCbor(toCbor(p.policy))
-  discard loadPolicy(bytes).valueOr:
+  discard loadPolicy(bytes, profile).valueOr:
     return err(configError(error))
   c.authority = Opt.some(
     AuthorityPolicy(
@@ -355,6 +363,92 @@ proc checkAuthority(
   )
   c.authorityPolicy = bytes
   ok()
+
+proc checkPermissions(
+    c: var HostConfig, p: Opt[LcnAppPermissions], profile: var PermissionProfile
+): Result[void, ConfigError] =
+  ## [I93; G110, G279, G253; plan §2.2] `permissions`: the profile this
+  ## library ships under that name, and the protected initial settings of new
+  ## instances. Each entry is unique by (module, instance); an `instance`
+  ## names a configured instance of that module; neither names the Module
+  ## Loader, whose settings are its construction's (G246, G253); each array is
+  ## ascending, defined and conforming (R l.2536-2537) and names only
+  ## permissions the Runtime enforces (G280). [Rev R3] The orchestration
+  ## instance, and under `capability-authority` the authority instance, are
+  ## provisioned with the profile's minimum, since bootstrap starts them
+  ## through the precheck (G284).
+  if p.isNone:
+    return ok()
+  let source = builtinProfile(p.get.profile).valueOr:
+    return err(configError("permissions.profile names no profile this library ships"))
+  profile = build(source)
+  checkProfile(profile).isOkOr:
+    return err(configError("the permission profile is not valid: " & error))
+  c.permissions = source
+  if p.get.initial.isNone:
+    return ok()
+  let initial = p.get.initial.get
+  if initial.len == 0:
+    return err(configError("permissions.initial is present but empty"))
+  var seen = initHashSet[(string, string)]()
+  for e in initial:
+    let instance = e.instance.get("")
+    let what =
+      "permissions.initial entry for " &
+      (if instance.len > 0: "instance " & instance
+      else: "module " & e.module)
+    if (e.module, instance) in seen:
+      return err(configError(what & " is listed twice"))
+    seen.incl((e.module, instance))
+    if e.module == LoaderModuleName or instance == LoaderInstanceId:
+      return err(configError(what & " names the reserved Module Loader"))
+    if instance.len > 0:
+      var found = false
+      for m in c.modules:
+        if m.instance == instance:
+          found = true
+          if m.record.module != e.module:
+            return err(configError(what & " names an instance of another module"))
+      if not found:
+        return err(configError(what & " names no instance in modules"))
+    var xs: seq[PermissionSetting]
+    for s in e.permissions:
+      xs.add(PermissionSetting(permission: s.permission, constraints: s.constraints))
+    profile.checkSettings(xs).isOkOr:
+      return err(
+        configError(
+          what & (
+            case error
+            of peUnordered: " is not ascending by permission name"
+            of peUnknown: " names a permission the profile does not define"
+            of peInvalid: " has constraints the permission does not admit"
+          )
+        )
+      )
+    for s in xs:
+      if not profile.activeIn(s.permission):
+        return
+          err(configError(what & " names " & s.permission & ", which is not enforced"))
+    c.initialSettings.add(
+      InitialSettings(module: e.module, instance: instance, permissions: xs)
+    )
+  ok()
+
+func provisioned(c: HostConfig, profile: PermissionProfile, instance: string): bool =
+  ## [Rev R3] The instance's initial settings hold the profile's minimum.
+  var module = ""
+  for m in c.modules:
+    if m.instance == instance:
+      module = m.record.module
+  var settings = Opt.none(seq[PermissionSetting])
+  for e in c.initialSettings:
+    if e.module == module and e.instance == instance:
+      settings = Opt.some(e.permissions)
+  if settings.isNone:
+    for e in c.initialSettings:
+      if e.module == module and e.instance.len == 0:
+        settings = Opt.some(e.permissions)
+  profile.missing(settings.get(newSeq[PermissionSetting]())).len == 0
 
 proc checkCallAudit(c: var HostConfig, a: LcnAppCallAudit): Result[void, ConfigError] =
   ## [I85; plan §3.2] `call_audit` (CA §9, §9.1).
@@ -663,11 +757,27 @@ proc decodeHostConfig*(
           record: r, configuration: accepted, persistentState: persistent
         )
       )
+  var profile = NoProfile
+  ?checkPermissions(c, cfg.permissions, profile)
   case cfg.policy.kind
   of LcnAppPolicyKind.Allow_all:
     discard
   of LcnAppPolicyKind.Capability_authority:
-    ?checkAuthority(c, cfg.policy.arm_Capability_authority)
+    ?checkAuthority(c, cfg.policy.arm_Capability_authority, profile)
+  if profile.selected:
+    # [Rev R3] Bootstrap starts these through the settings precheck.
+    if not c.provisioned(profile, c.orchestration):
+      return err(
+        configError(
+          "permissions.initial does not provision the orchestration instance with the profile's minimum"
+        )
+      )
+    if c.authority.isSome and not c.provisioned(profile, c.authority.get.instance):
+      return err(
+        configError(
+          "permissions.initial does not provision the authority instance with the profile's minimum"
+        )
+      )
   if cfg.call_audit.isSome:
     ?checkCallAudit(c, cfg.call_audit.get)
   # [I90] Transported routes: the routing rules, the I/O thread's limits and
