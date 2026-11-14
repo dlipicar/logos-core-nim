@@ -65,7 +65,9 @@ lcn.ap_subject = {
 
 lcn.ap_target = lcn.ap_subject / "self" / "issued"
 
-lcn.ap_scope = lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution
+lcn.ap_scope =
+  lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution /
+  lcn.ap_permission
 
 lcn.ap_provider_access = {
   kind: "provider-access",
@@ -98,6 +100,17 @@ lcn.ap_module_execution = {
   actions: [* ("start" / "stop")],
   ? modes: [* ("direct" / "local-transport")],
   ? placements: [* ("process" / "sandbox" / "container")],
+}
+
+; A permission scope (CA l.212-216; DECISIONS I93): the name, and the broadest
+; constraints allowed (one deterministic-CBOR value of the definition); without
+; constraints any conforming value. Both are checked against the selected
+; permission profile when the policy is loaded. A start is allowed only by one
+; rule holding its execution scope and every permission scope (G207).
+lcn.ap_permission = {
+  kind: "permission",
+  permission: tstr .size (1..128),
+  ? constraints: bstr .size (1..1048576),
 }
 
 ; a declaration root, or a name the contract's pinned schema resolves (only with

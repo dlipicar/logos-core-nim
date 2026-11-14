@@ -27,6 +27,7 @@
 
 import std/deques
 import results
+from ../permissions import PermissionSetting
 
 export results
 
@@ -93,6 +94,10 @@ type
     renewal*: bool
       ## [SPEC CA §5.1 l.577-578] an execution decision asked again for an
       ## execution that is already running (`execution_renewal`)
+    permissions*: seq[PermissionSetting]
+      ## [TF-32 interim; G217 amended; I93] an execution request under a
+      ## selected permission profile: the instance's saved settings at
+      ## admission, one permission scope each; empty without a profile
     filters*: bool
       ## [IMPL; G161 extension, I86] an observation of many subjects (a list
       ## method, a Runtime Control event): it names no subject, and a

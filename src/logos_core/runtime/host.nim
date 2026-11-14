@@ -416,6 +416,8 @@ proc launch(h: ptr HostRuntime): LogosResult =
     routing: c.routing,
     transport: Opt.some(c.transport),
     endpointDir: c.endpointDir,
+    permissions: c.permissions,
+    initialSettings: c.initialSettings,
   )
   if c.authority.isSome:
     # [I85; G47] The attribute source exists before the engine opens, since
@@ -456,7 +458,12 @@ proc launch(h: ptr HostRuntime): LogosResult =
         dir = c.stateRoot.get / m.record.stateAssignment.get
     wireAuthority(
       dir,
-      AuthorityWiring(policy: c.authorityPolicy, runtimeId: runtimeId, facts: h.facts),
+      AuthorityWiring(
+        policy: c.authorityPolicy,
+        runtimeId: runtimeId,
+        facts: h.facts,
+        profile: c.permissions,
+      ),
     ).isOkOr:
       return answer(ecModule, "cannot wire the Capability Authority: " & error)
     h.wired = cast[cstring](allocShared0(dir.len + 1))

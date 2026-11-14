@@ -32,6 +32,7 @@ import ./support/authfixture except
 import ./kit/meter_impl
 import ./generated/meter_module_calls
 import ../src/logos_core/runtime/evidence
+from ../src/logos_core/permissions import HostAmbient
 from ../src/logos_core/crypto/slhdsa import generateKeyPair
 from std/posix import Mode, chmod
 
@@ -239,6 +240,90 @@ suite "run.host-api: under 8a's Capability Authority (I85; C9)":
     ).isOk
     unwireAuthority(dir / "state" / CaAssignment)
     freeSharedFacts(f)
+
+# H6 -------------------------------------------------------------------------------------
+
+const Meter2 = "meter-2"
+
+proc h6Config(dir: string): LcnAppConfig =
+  ## [I93] The shipped profile, every module provisioned with host-ambient. The
+  ## orchestrator may start meter-1 by one rule holding its execution and
+  ## host-ambient; the rule for meter-2 holds its execution alone.
+  let amb = LcnAppPermissionSetting(permission: HostAmbient, constraints: @[0xA0'u8])
+  let orch = subject(modules = @["client_module"])
+  let start = @[policy_types.LcnApModuleExecutionActionsLIChoiceKind.Start]
+  let bytes = policyBytes(
+    @[
+      allowRule(orch, @[rcPattern()]),
+      allowRule(
+        orch,
+        @[mePattern(subject(instances = @[Meter]), start), permPattern(HostAmbient)],
+      ),
+      allowRule(orch, @[mePattern(subject(instances = @[Meter2]), start)]),
+    ]
+  )
+  result = h4Config(dir)
+  result.policy.arm_Capability_authority.policy =
+    host_config_types.LcnAuthorityPolicy.fromCbor(decodeCbor(bytes).tryGet).tryGet
+  var m2 = module(Meter2, "meter_module", "meter")
+  m2.primary_contract = Opt.some(SchemaCommitment(schema_root: @meterRoot))
+  result.modules.add(m2)
+  result.permissions = Opt.some(
+    LcnAppPermissions(
+      initial: Opt.some(
+        @[
+          LcnAppInitialSettings(module: "client_module", permissions: @[amb]),
+          LcnAppInitialSettings(
+            module: "logos_capability_authority", permissions: @[amb]
+          ),
+          LcnAppInitialSettings(module: "meter_module", permissions: @[amb]),
+        ]
+      )
+    )
+  )
+
+suite "run.host-api: permissions under 8a's Capability Authority (I93)":
+  test "[CAP-0063] [CAP-0068] [CAP-0192] [RUN-1066] [IMPL-DECISION G207] with the shipped profile a start is allowed by one rule or grant holding its execution and host-ambient; a grant revoked stops it":
+    let dir = work / "h6"
+    let rt = create(h6Config(dir))
+    check rt.register("client", clientTable()) == ecOk
+    check rt.register("meter", meterModuleStaticSymbols()) == ecOk
+    check runtimeStart(rt).ec == ecOk
+    let e = engineOf(rt)
+    let orch = latestClient()
+    check orch.lifecycle("start_module", "logos_capability_authority", Opt.some(Ca)).code ==
+      ecOk
+    check e.authorityBound()[0]
+    # [I93] The orchestrator's own snapshot: host-ambient, installed by its
+    # protected bootstrap.
+    let mine = rcCall(orch, "get_execution_permissions", [0xA0'u8])
+    check mine.code == ecOk
+    check LogosNSRuntimeControlGetExecutionPermissionsResponse.decode(mine.response).tryGet.kind ==
+      LogosNSRuntimeControlGetExecutionPermissionsResponseKind.Available
+    # One rule holds the start and host-ambient.
+    check orch.lifecycle("start_module", "meter_module", Opt.some(Meter)).code == ecOk
+    check e.reaches(Meter, msReady)
+    # The rule for meter-2 lacks host-ambient: not granted.
+    check orch.lifecycle("start_module", "meter_module", Opt.some(Meter2)).code ==
+      ecNotAuthorised
+    check e.view(Meter2).tryGet.failure.get.kind == fkAuthorityDenied
+    # A grant of both lets it start; its revocation stops it (CA l.915-916).
+    let a = authorityFor(dir / "state" / CaAssignment).get
+    var scopes = @[
+      meScope("meter_module", Opt.some(Meter2), runtimeId = RtId),
+      permissionScope(HostAmbient, @[0xA0'u8]),
+    ]
+    canonicalOrder(scopes)
+    let g = a.issueProtected(HostSource, address(Orch, RtId), scopes).tryGet
+    check orch.lifecycle("start_module", "meter_module", Opt.some(Meter2)).code == ecOk
+    check e.reaches(Meter2, msReady)
+    check a.revokeProtected(HostSource, g.grant_id).isOk
+    check e.reaches(Meter2, msUnloaded)
+    let v = e.view(Meter2).tryGet
+    check v.failure.get.kind == fkAuthorityRevoked
+    check v.execution.intent == inRequested
+    check e.view(Meter).tryGet.state == msReady
+    rt.shutDown()
 
 # H5 -------------------------------------------------------------------------------------
 

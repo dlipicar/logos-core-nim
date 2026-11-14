@@ -18,6 +18,7 @@ lcn.app_config = {
   ? call_audit: lcn.app_call_audit,
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
+  ? permissions: lcn.app_permissions,
 }
 
 lcn.app_runtime = {
@@ -89,6 +90,32 @@ lcn.app_transport = {
   ? max_outbound: uint16,
   ? max_calls: uint32,
   ? max_in_flight: uint32,
+}
+
+; The permission profile (RUNTIME l.1595, l.2526-2604; DECISIONS G110, G279,
+; I93; docs/PERMISSIONS.md). Absent: no profile is selected and permission
+; settings have the constant form (G229). profile names a profile this library
+; ships. initial is the protected provisioning of a new instance's settings
+; (RUNTIME l.2543): the entry naming the instance, else its module's entry,
+; else revision 1 with no permission (l.2541). It never names the Module
+; Loader, whose settings are its construction's (G253). Each permissions array
+; is ascending by permission name and names only defined permissions the
+; Runtime enforces; it may be empty.
+lcn.app_permissions = {
+  profile: "logos-core-nim.permission-profile.v1",
+  ? initial: [* lcn.app_initial_settings],
+}
+
+lcn.app_initial_settings = {
+  module: tstr .size (1..64),
+  ? instance: lcn.app_instance_id,
+  permissions: [* lcn.app_permission_setting],
+}
+
+; logos.runtime_control.permission_setting (RUNTIME l.2348-2351)
+lcn.app_permission_setting = {
+  permission: tstr .size (1..128),
+  constraints: bstr .size (1..1048576),
 }
 
 ; logos.runtime.module_instance_id (RUNTIME §9.2)

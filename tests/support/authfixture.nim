@@ -371,8 +371,15 @@ proc meScope*(
     )
   )
 
-func permissionScope*(name = "net"): Scope =
-  toScope(PermissionScope(permission: name, constraints: @[0xA0'u8]))
+func permissionScope*(name = "net", constraints = @[0xA0'u8]): Scope =
+  toScope(PermissionScope(permission: name, constraints: constraints))
+
+proc permPattern*(name: string, constraints = Opt.none(seq[byte])): LcnApScope =
+  ## A policy permission pattern (I93).
+  LcnApScope(
+    kind: LcnApScopeKind.lcn_Ap_permission,
+    arm_lcn_Ap_permission: LcnApPermission(permission: name, constraints: constraints),
+  )
 
 func evalRequest*(
     consumer: string, scopes: seq[Scope], commitment = Opt.none(CommitmentRequirements)
@@ -389,11 +396,13 @@ proc testConfig*(
     sink: AuthoritySink,
     limits = AuthorityLimits(),
     runtimeId = Rt,
+    profile: ProfileSource = nil,
 ): AuthorityConfig =
   AuthorityConfig(
     stateDir: dir,
     policy: policy,
     runtimeId: runtimeId,
+    profile: profile,
     facts: facts,
     clock: clock,
     limits: limits,
@@ -408,10 +417,10 @@ proc openTest*(
     sink: AuthoritySink,
     limits = AuthorityLimits(),
     runtimeId = Rt,
+    profile: ProfileSource = nil,
 ): Authority =
-  openAuthority(testConfig(dir, policy, facts, clock, sink, limits, runtimeId)).expect(
-    "opens"
-  )
+  openAuthority(testConfig(dir, policy, facts, clock, sink, limits, runtimeId, profile))
+    .expect("opens")
 
 proc privateDir*(path: string) =
   ## A fresh, empty, owner-only directory.

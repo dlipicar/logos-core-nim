@@ -24,6 +24,7 @@ import results
 import ../base/perthread
 import ../iface/outcome
 import ../authority/logos_capability_authority_types
+from ../permissions import build
 import ./[authscopes, callside, invoke, plumbing]
 
 proc evaluateOn(s: ptr Shared, job: EvalJob): EvalResult =
@@ -34,7 +35,8 @@ proc evaluateOn(s: ptr Shared, job: EvalJob): EvalResult =
     "evaluate", job.request,
   ).valueOr:
     return EvalResult(verdict: evFailed, reason: "evaluate failed with " & $error.code)
-  readDecision(request, bytes, job.runtimeId)
+  # [I93] The worker's own copy of the selected profile (none: nil).
+  readDecision(request, bytes, job.runtimeId, build(job.profile))
 
 proc evalWorkerLoop(s: ptr Shared, lane: ptr Channel[EvalJob]) =
   while true:

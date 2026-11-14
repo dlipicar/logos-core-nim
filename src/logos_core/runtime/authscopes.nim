@@ -20,7 +20,10 @@
 ##   them covers it (CA l.119-131). 8a's policy matcher then needs
 ##   Runtime Control rules that target `modules` or nothing.
 ## - No `commitment` is sent: the Runtime adds no retention of its own.
-## - The execution decision carries no permission scopes (TF-32, G217).
+## - [TF-32 interim; G217 amended; I93] Under a selected permission profile
+##   the execution decision carries one permission scope per saved setting
+##   beside its execution scope (CA l.345); without one, the execution scope
+##   alone.
 ##
 ## Decisions (CA §5, l.554-573), checked off the Runtime thread. Every failure
 ## is an evaluation failure, never a deny (CAP-0118, CAP-0260, CAP-0261,
@@ -28,10 +31,13 @@
 ## received set is ordered; the allow and deny arms carry only their fields;
 ## `valid_until` follows `issued_at`; every allowed scope is covered by a
 ## requested one and every requested scope covers an allowed one (8a's
-## `covers`, alternatives never combined); nothing allowed lacks an
-## enforcement point here (placements, a mode other than direct, permission or
-## remote-enrollment scopes; CAP-0084, CAP-0068); and an allow that keeps a
-## route usable has `valid_until` (CAP-0049, RUN-0566; S8b-2 interim, TF-33).
+## `covers`, alternatives never combined; a permission scope contained
+## through its definition in the selected profile, CAP-0021); nothing allowed
+## lacks an enforcement point here (placements, a mode other than direct,
+## remote-enrollment scopes, and permission scopes the selected profile does
+## not define with an active point; CAP-0084, CAP-0068); and an allow that
+## keeps a route usable has `valid_until` (CAP-0049, RUN-0566; S8b-2 interim,
+## TF-33).
 
 {.push raises: [].}
 
@@ -190,6 +196,12 @@ proc evaluateRequest*(
     of aaRoute, aaCall, aaPublishEvent, aaSubscribeEvent, aaDiscover:
       ?accessScope(q, runtimeId)
   var scopes = @[scope]
+  if q.action == aaExecute:
+    # [TF-32 interim; G217 amended] One permission scope per saved setting.
+    for p in q.permissions:
+      scopes.add(
+        toScope(PermissionScope(permission: p.permission, constraints: p.constraints))
+      )
   canonicalOrder(scopes)
   ok(
     EvaluateRequest(
@@ -240,10 +252,14 @@ proc keepsRoute(scopes: openArray[Scope]): bool =
       return true
   false
 
-proc enforceable(s: Scope): bool =
-  ## [SPEC CA l.413; CAP-0084, CAP-0068] What this Runtime can enforce.
+proc enforceable(s: Scope, profile: PermissionProfile): bool =
+  ## [SPEC CA l.413; CAP-0084, CAP-0068] What this Runtime can enforce. [I93;
+  ## G280] A permission scope whose definition the selected profile has, with
+  ## its active point (Runtime admission).
   case s.kind
-  of skPermission, skEnrollment:
+  of skPermission:
+    profile.activeIn(s.pm.permission)
+  of skEnrollment:
     false
   of skExecution:
     if s.me.placements.isSome:
@@ -257,7 +273,7 @@ proc enforceable(s: Scope): bool =
     true
 
 proc checkDecision*(
-    request: EvaluateRequest, d: Decision, localRuntime: string
+    request: EvaluateRequest, d: Decision, localRuntime: string, profile = NoProfile
 ): Result[void, string] =
   ## [SPEC CA l.554-573; plan §2.6] The checks of one decision against the
   ## request it answers.
@@ -292,15 +308,20 @@ proc checkDecision*(
     let allowed = d.allowed_scopes.get
     for a in allowed:
       # [SPEC CA l.565-567; CAP-0113, CAP-0116, CAP-0117]
-      if not coversAlternatives(request.scopes, a, localRuntime):
+      var covered = false
+      for q in request.scopes:
+        if covers(q, a, localRuntime, profile):
+          covered = true
+          break
+      if not covered:
         return err("an allowed scope is not covered by a requested scope")
-      if not enforceable(a):
+      if not enforceable(a, profile):
         return err("an allowed scope has no enforcement point here") # CAP-0118
     for q in request.scopes:
       # [CAP-0114]
       var any = false
       for a in allowed:
-        if covers(q, a, localRuntime):
+        if covers(q, a, localRuntime, profile):
           any = true
       if not any:
         return err("a requested scope covers no allowed scope")
@@ -310,7 +331,10 @@ proc checkDecision*(
   ok()
 
 proc readDecision*(
-    request: EvaluateRequest, response: openArray[byte], localRuntime: string
+    request: EvaluateRequest,
+    response: openArray[byte],
+    localRuntime: string,
+    profile = NoProfile,
 ): EvalResult =
   ## [SPEC RUNTIME l.1737-1748; CA §5, §7] The verdict one `evaluate`
   ## response gives: an `error` arm or anything malformed is an evaluation
@@ -324,7 +348,7 @@ proc readDecision*(
   of LogosNSCapabilityAuthorityEvaluateResponseKind.Map_decision:
     discard
   let d = r.arm_Map_decision.decision
-  checkDecision(request, d, localRuntime).isOkOr:
+  checkDecision(request, d, localRuntime, profile).isOkOr:
     return failed("a malformed decision: " & error)
   result = EvalResult(
     verdict:
@@ -355,16 +379,21 @@ proc allowedScopes*(x: AuthzAnswer): seq[Scope] =
     if s.isOk:
       result.add(s.get)
 
-proc fits*(x: AuthzAnswer, request: EvaluateRequest, localRuntime: string): bool =
+proc fits*(
+    x: AuthzAnswer, request: EvaluateRequest, localRuntime: string, profile = NoProfile
+): bool =
   ## [SPEC CA l.565-567; CAP-0115] The operation fits one allowed scope whole:
-  ## alternatives are never combined.
+  ## alternatives are never combined. [IMPL-DECISION G282] A requested
+  ## permission scope fits an allowed one of the same name it contains: a
+  ## narrowed permission scope is accepted, and installed narrowed.
   let allowed = x.allowedScopes
   for q in request.scopes:
-    if q.kind == skPermission:
-      continue
     var any = false
     for a in allowed:
-      if covers(a, q, localRuntime):
+      if q.kind == skPermission:
+        if covers(q, a, localRuntime, profile):
+          any = true
+      elif covers(a, q, localRuntime):
         any = true
     if not any:
       return false
@@ -425,7 +454,7 @@ func toRcAccess*(a: Opt[RouteAccess]): LogosNSRuntimeControlRouteAccess =
 # The engine's view (plain values only) ---------------------------------------------------
 
 proc narrowedFor*(
-    x: AuthzAnswer, request: openArray[byte], localRuntime: string
+    x: AuthzAnswer, request: openArray[byte], localRuntime: string, profile = NoProfile
 ): bool =
   ## [CAP-0115, CAP-0051] Whether an allow excludes the operation it answered:
   ## an establish-route allow may narrow the access, which becomes the
@@ -449,7 +478,46 @@ proc narrowedFor*(
   of aaDiscover:
     x.allowedProviders(r, localRuntime).isNone
   else:
-    not x.fits(r, localRuntime)
+    not x.fits(r, localRuntime, profile)
+
+proc installedOf*(x: AuthzAnswer): seq[PermissionSetting] =
+  ## [IMPL-DECISION G282] The permission scopes an execution allow installs:
+  ## a Capability Authority allow's allowed permission scopes, each possibly
+  ## narrower than asked; any other source allows what was asked, the saved
+  ## settings at admission (RUNTIME l.1677 for the derived rules). Ascending
+  ## by name.
+  if x.source != psAuthority:
+    return x.request.permissions
+  for s in x.allowedScopes:
+    if s.kind == skPermission:
+      result.add(
+        PermissionSetting(permission: s.pm.permission, constraints: s.pm.constraints)
+      )
+  for i in 1 ..< result.len:
+    var j = i
+    while j > 0 and result[j].permission < result[j - 1].permission:
+      swap(result[j], result[j - 1])
+      dec j
+
+proc keepsInstalled*(
+    x: AuthzAnswer, installed: openArray[PermissionSetting], profile: PermissionProfile
+): bool =
+  ## [I93; plan §2.6] A renewal's allow keeps what admission installed: each
+  ## installed setting is contained in an allowed permission scope of its
+  ## name. Otherwise it narrowed the execution and ends it (`eeRevoked`).
+  if x.source != psAuthority:
+    return true
+  let allowed = x.allowedScopes
+  for s in installed:
+    var kept = false
+    for a in allowed:
+      if a.kind == skPermission and a.pm.permission == s.permission and
+          profile.contained(s.permission, s.constraints, a.pm.constraints):
+        kept = true
+        break
+    if not kept:
+      return false
+  true
 
 proc routeAccessOf*(
     x: AuthzAnswer, request: openArray[byte], localRuntime: string

@@ -4,7 +4,9 @@
 ## The input is one deterministic-CBOR `lcn.authority_policy` value
 ## (`policy.cddl`). Loading checks what the schema cannot express and resolves
 ## every name to an exact root, so evaluation sees only exact roots and no
-## alias survives load (CA l.451-452).
+## alias survives load (CA l.451-452). A permission pattern is checked against
+## the selected permission profile (DECISIONS I93): an undefined name or
+## constraints that do not conform fail the load.
 ##
 ## Rules have no order. Deny overrides allow.
 
@@ -47,6 +49,7 @@ type
     pkProvider
     pkControl
     pkExecution
+    pkPermission
 
   Pattern* = object
     case kind*: PatternKind
@@ -63,6 +66,9 @@ type
       meActions*: set[MeActionKind]
       modes*: Opt[set[ExecModeKind]]
       placements*: Opt[set[PlacementKind]]
+    of pkPermission:
+      permission*: string
+      constraints*: Opt[seq[byte]] ## none: any conforming value
 
   RuleKind* = enum
     rkAllow
@@ -233,7 +239,9 @@ proc restrictedRoots(): seq[Root] =
     caEventRoot("policy_changed"),
   ]
 
-proc compilePattern(s: LcnApScope, what: string): Result[Pattern, string] =
+proc compilePattern(
+    s: LcnApScope, what: string, profile: PermissionProfile
+): Result[Pattern, string] =
   case s.kind
   of LcnApScopeKind.lcn_Ap_provider_access:
     let p = s.arm_lcn_Ap_provider_access
@@ -319,18 +327,32 @@ proc compilePattern(s: LcnApScope, what: string): Result[Pattern, string] =
         m.incl PlacementKind(ord(x.kind))
       r.placements = Opt.some(m)
     ok(r)
+  of LcnApScopeKind.lcn_Ap_permission:
+    let p = s.arm_lcn_Ap_permission
+    # [SPEC CA l.388-392; I93] Checked as a requested permission scope is.
+    if not profile.defines(p.permission):
+      return err(what & ": the permission " & p.permission & " is not defined")
+    if p.constraints.isSome and profile.validate(p.permission, p.constraints.get).isErr:
+      return err(what & ": constraints that do not conform to " & p.permission)
+    ok(
+      Pattern(kind: pkPermission, permission: p.permission, constraints: p.constraints)
+    )
 
-proc compilePatterns(xs: seq[LcnApScope], what: string): Result[seq[Pattern], string] =
+proc compilePatterns(
+    xs: seq[LcnApScope], what: string, profile: PermissionProfile
+): Result[seq[Pattern], string] =
   ?setOf(xs, true, what & ".scopes")
   var r: seq[Pattern]
   for i, s in xs:
-    r.add ?compilePattern(s, what & ".scopes[" & $i & "]")
+    r.add ?compilePattern(s, what & ".scopes[" & $i & "]", profile)
   ok(r)
 
 func commitmentOf(c: LcnApCommitment): CommitmentRequirements =
   CommitmentRequirements(request: c.request, response: c.response)
 
-proc compileRule(x: LcnApRule, i: int): Result[Rule, string] =
+proc compileRule(
+    x: LcnApRule, i: int, profile: PermissionProfile
+): Result[Rule, string] =
   let what = "rules[" & $i & "]"
   let subjectOf =
     case x.kind
@@ -344,14 +366,14 @@ proc compileRule(x: LcnApRule, i: int): Result[Rule, string] =
   of LcnApRuleKind.lcn_Ap_allow:
     let a = x.arm_lcn_Ap_allow
     var r = Rule(kind: rkAllow, subject: subject)
-    r.allow = ?compilePatterns(a.scopes, what)
+    r.allow = ?compilePatterns(a.scopes, what, profile)
     if a.commitment.isSome:
       r.commitment = Opt.some(commitmentOf(a.commitment.get))
     ok(r)
   of LcnApRuleKind.lcn_Ap_deny:
     let a = x.arm_lcn_Ap_deny
     var r = Rule(kind: rkDeny, subject: subject)
-    r.deny = ?compilePatterns(a.scopes, what)
+    r.deny = ?compilePatterns(a.scopes, what, profile)
     r.code = DenialKind.Scope_denied
     if a.code.isSome:
       r.code =
@@ -364,7 +386,7 @@ proc compileRule(x: LcnApRule, i: int): Result[Rule, string] =
     let a = x.arm_lcn_Ap_issue
     var r = Rule(kind: rkIssue, subject: subject)
     r.issueTargets = ?compileTarget(a.targets, false, what & ".targets")
-    r.issue = ?compilePatterns(a.scopes, what)
+    r.issue = ?compilePatterns(a.scopes, what, profile)
     if a.max_validity_ms.isSome and a.max_validity_ms.get < MinValidityMs:
       return err(what & ".max_validity_ms is below 1000")
     r.maxValidityMs = a.max_validity_ms
@@ -384,8 +406,9 @@ proc compileRule(x: LcnApRule, i: int): Result[Rule, string] =
     r.policyChanges = a.policy_changes.get(false)
     ok(r)
 
-proc loadPolicy*(bytes: openArray[byte]): Result[Policy, string] =
-  ## Decodes and validates a policy, resolving every name to its exact root.
+proc loadPolicy*(bytes: openArray[byte], profile = NoProfile): Result[Policy, string] =
+  ## Decodes and validates a policy, resolving every name to its exact root;
+  ## permission patterns against `profile`.
   let p = decode(LcnAuthorityPolicy, bytes).valueOr:
     return err("policy: " & error)
   if not validSource(p.source):
@@ -405,7 +428,7 @@ proc loadPolicy*(bytes: openArray[byte]): Result[Policy, string] =
       return err("policy: audit.records is outside 1024..1048576")
   ?setOf(p.rules, true, "policy: rules")
   for i, x in p.rules:
-    let rule = compileRule(x, i).valueOr:
+    let rule = compileRule(x, i, profile).valueOr:
       return err("policy: " & error)
     r.rules.add rule
   ok(r)
@@ -427,9 +450,14 @@ func providerEntryMatches(s: Subject, p: ProviderAddress, view: FactsView): bool
   let b = view.backing(p.provider)
   b.kind == flFound and s.matches(snapshot(b.instance, b.facts))
 
-proc patternContains*(p: Pattern, r: Scope, view: FactsView): bool =
+proc patternContains*(
+    p: Pattern, r: Scope, view: FactsView, profile = NoProfile
+): bool =
   ## Whether the rule pattern `p` contains the requested scope `r` (§2.7).
-  ## Every address in `r` is local and resolved before this runs.
+  ## Every address in `r` is local and resolved before this runs. A
+  ## permission pattern contains a permission scope of the same name whose
+  ## constraints conform and, when the pattern has constraints, are contained
+  ## in them (CA l.129; I93).
   case p.kind
   of pkProvider:
     if r.kind != skProvider:
@@ -511,12 +539,31 @@ proc patternContains*(p: Pattern, r: Scope, view: FactsView): bool =
         p.execTargets.matches(snapshot(x.instance.get, f.facts))
     else:
       p.execTargets.modulesOnly and x.module in p.execTargets.modules.get
+  of pkPermission:
+    if r.kind != skPermission or r.pm.permission != p.permission:
+      return false
+    if p.constraints.isNone:
+      profile.validate(r.pm.permission, r.pm.constraints).isOk
+    else:
+      profile.contained(r.pm.permission, r.pm.constraints, p.constraints.get)
 
-proc containsAny*(ps: openArray[Pattern], r: Scope, view: FactsView): bool =
+proc containsAny*(
+    ps: openArray[Pattern], r: Scope, view: FactsView, profile = NoProfile
+): bool =
   for p in ps:
-    if p.patternContains(r, view):
+    if p.patternContains(r, view, profile):
       return true
   false
+
+proc containsEach*(
+    ps: openArray[Pattern], rs: openArray[Scope], view: FactsView, profile = NoProfile
+): bool =
+  ## [G207 amended] Every scope of `rs` is contained in some pattern of `ps`:
+  ## one rule covering a whole request.
+  for r in rs:
+    if not ps.containsAny(r, view, profile):
+      return false
+  true
 
 func targetMatches*(
     t: Target,

@@ -55,6 +55,7 @@ lcn.app_config = {
   ? call_audit: lcn.app_call_audit,
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
+  ? permissions: lcn.app_permissions,
 }
 
 lcn.app_runtime = {
@@ -126,6 +127,32 @@ lcn.app_transport = {
   ? max_outbound: uint16,
   ? max_calls: uint32,
   ? max_in_flight: uint32,
+}
+
+; The permission profile (RUNTIME l.1595, l.2526-2604; DECISIONS G110, G279,
+; I93; docs/PERMISSIONS.md). Absent: no profile is selected and permission
+; settings have the constant form (G229). profile names a profile this library
+; ships. initial is the protected provisioning of a new instance's settings
+; (RUNTIME l.2543): the entry naming the instance, else its module's entry,
+; else revision 1 with no permission (l.2541). It never names the Module
+; Loader, whose settings are its construction's (G253). Each permissions array
+; is ascending by permission name and names only defined permissions the
+; Runtime enforces; it may be empty.
+lcn.app_permissions = {
+  profile: "logos-core-nim.permission-profile.v1",
+  ? initial: [* lcn.app_initial_settings],
+}
+
+lcn.app_initial_settings = {
+  module: tstr .size (1..64),
+  ? instance: lcn.app_instance_id,
+  permissions: [* lcn.app_permission_setting],
+}
+
+; logos.runtime_control.permission_setting (RUNTIME l.2348-2351)
+lcn.app_permission_setting = {
+  permission: tstr .size (1..128),
+  constraints: bstr .size (1..1048576),
 }
 
 ; logos.runtime.module_instance_id (RUNTIME §9.2)
@@ -201,7 +228,8 @@ lcn.app_declaration = {
 ```
 
 Maps are closed: an unknown key anywhere is rejected. An array that is present must be non-empty
-(RUNTIME §8 l.1428), even where the CDDL writes `[*`; the CDDL tooling has no `+` occurrence yet.
+(RUNTIME §8 l.1428), even where the CDDL writes `[*`; the CDDL tooling has no `+` occurrence yet. The
+one exception is the `permissions` array of a `permissions.initial` entry, which may be empty.
 
 ## Fields
 
@@ -252,6 +280,32 @@ and observation requests, including those of the bootstrap. Two kinds:
   `capability-authority`").
 
 Any other kind is rejected with "this policy kind is not supported yet".
+
+### `permissions`
+
+The permission profile and the protected provisioning of new instances' permission settings (RUNTIME
+l.1595, l.2526-2604; DECISIONS I93, G110, G279; `docs/PERMISSIONS.md`). Absent: no profile is selected,
+and every instance has the constant settings of "Permission settings in direct mode" below (DECISIONS
+G229). Present:
+
+| Field | Meaning |
+|---|---|
+| `profile` | The profile this library ships, `logos-core-nim.permission-profile.v1`: one permission, `logos-core-nim.host-ambient`, which every realization must hold. Under `capability-authority` the authority gets the same profile, so a policy can name permissions (`docs/AUTHORITY-POLICY.md`). |
+| `initial` | The settings a new instance is created with (RUNTIME l.2543): the entry naming its `instance`, else the entry for its `module` without `instance`, else revision 1 with no permission (l.2541). Never its `requested_permissions` or a declaration (RUNTIME l.2543). Each entry's `permissions` is ascending by permission name, names only permissions the profile defines and the Runtime enforces, with constraints the definition admits, and may be empty, so an instance entry can withdraw what its module's entry gives. |
+
+Checked at `create`, each failure `LOGOS_ERR_INVALID_PARAMS` naming the entry: entries are unique by
+module and instance; an `instance` names a listed instance of that `module`; no entry names the Module
+Loader's module or instance, whose settings are its construction's (DECISIONS G253); and the
+orchestration instance, and under `capability-authority` the authority instance, are provisioned with
+host-ambient, since bring-up starts them through the same admission as any instance (DECISIONS G284).
+These entries apply only when an instance is created: an instance the store already holds keeps its
+saved settings ("Persistent Runtime state").
+
+**A trap.** An authorized `update_permission_settings` that removes host-ambient from the orchestration
+or the authority instance stops it at once (reconciliation), and makes every later bring-up fail with
+`LOGOS_ERR_NOT_AUTHORISED` until the settings are replaced. The library leaves that to the host's
+policy: do not grant settings administration of system instances (logosd's default policy will not,
+step 4b-6).
 
 ### `orchestration`
 
@@ -568,9 +622,12 @@ these duties itself, and the engine does not do them for it:
   responses (a lost `recover_module` answer is settled by reading `get_readiness`). An explicit stop
   or a shutdown cancels pending automatic recovery; the engine refuses a recovery prepared before
   either, by the revision guard.
-- **Resumption after a permission or authority stop** (l.3801-3804). When required permissions or
-  authority become available again, request resumption of the retained intent through
-  `recover_module`; a failed resumption is subject to the restart policy.
+- **Resumption after a permission or authority stop** (l.3801-3804, l.2598-2599). When required
+  permissions or authority become available again, request resumption of the retained intent through
+  `recover_module`; a failed resumption is subject to the restart policy. A permission settings
+  replacement stops a running instance with no failure classification: the settings' `applied`
+  (`permission_settings_changed_event`) is the moment to recover it, and its recovery is decided for
+  the retained origin with the new settings.
 - **Failure classifications** (l.3756). Treat a classification it does not recognize as an
   unspecified failure, and never derive a restart policy from its spelling.
 
@@ -749,8 +806,11 @@ Module Host exists.
   a declaration or `orchestration` that names them makes `create` return `LOGOS_ERR_INVALID_PARAMS`, and so does
   `logos_runtime_register_binding` with that binding id. No configuration, registration or module can
   replace or configure the Loader. The policy is not asked about it: no execution decision and no
-  `execute` check is made for it (CAPABILITY AUTHORITY l.343), and its permission settings are the
-  constant form every instance has until permission profiles exist.
+  `execute` check is made for it (CAPABILITY AUTHORITY l.343). Its permission settings are its
+  construction's: with a profile selected, the profile's minimum (host-ambient), revision 1,
+  `applied`, written before the Loader is first exposed; an `update_permission_settings` aimed at it
+  is `LOGOS_ERR_NOT_READY` (DECISIONS G253, I93). Without a profile they are the constant form every
+  instance has.
 - **Established first at `start`.** `start` realizes the Loader, checks that its primary contract is
   the pinned Module Loader contract and binds it, and only then realizes the orchestration instance
   through it. A Loader that cannot be established makes `start` return `LOGOS_ERR_MODULE` "the Module
@@ -901,7 +961,9 @@ identity, and every configured instance is new.
 
 - **Where it is.** `store_dir` holds `runtime-state.cbor` (one deterministic-CBOR value, format
   `logos-core-nim.runtime-state.v1`), one `cfg-<hash>.cbor` side record per configurable instance
-  (its configuration binding and state, up to about 17 MiB), and `lock`. The directory is
+  (its configuration binding and state, up to about 17 MiB), while a permission profile is selected
+  one `prm-<hash>.cbor` side record per instance (its permission settings: revision, permissions and
+  status, `store.cddl`'s `lcn.prm_record`; DECISIONS I93), and `lock`. The directory is
   created with mode 0700 and refused at `start` (`LOGOS_ERR_MODULE`) if group or other may access it
   or another user owns it; the files are created 0600. Each change is written to a temporary file,
   flushed to the medium (`F_FULLFSYNC` on macOS), renamed over the old file and the directory flushed,
@@ -920,7 +982,14 @@ identity, and every configured instance is new.
 - **What survives a restart.** For each instance: its id, its provider id, the record it was created
   from, its lifecycle state, its failure classification and reason, its execution intent, the
   intent's revision and its origin; for a configurable instance, its configuration binding, state
-  revision, current and staged values and their provenance. Also the ids of retired instances with
+  revision, current and staged values and their provenance; with a profile selected, its permission
+  settings, revision and status kept. Settings that were `pending` when the Runtime ended settle as
+  it opens, at the same revision: `applied`, or `failed` for a permission no active point enforces
+  (no realization survives the process; RUNTIME l.2590). An instance with no settings record (created
+  while no profile was selected) gets revision 1 with no permission. The store must agree with the
+  selection: settings saved while a profile was selected make `start` return `LOGOS_ERR_MODULE` when
+  no profile is selected, or when they name a permission the selected profile does not define,
+  naming the instance; accepted settings are never dropped silently (RUNTIME l.2544). Also the ids of retired instances with
   the state assignments they keep, and `create_module` keys. A configurable instance whose side
   record is missing or does not hold the binding its record names makes `start` return
   `LOGOS_ERR_MODULE` naming it, and nothing is written. Not kept: routes and their keys (a route id from an earlier run is
@@ -979,7 +1048,9 @@ identity, and every configured instance is new.
   `error`, its intent is not `requested`, nothing of a realization or its cleanup is left, no other
   instance's `requested` intent names it as origin, and the configuration no longer lists it
   (`LOGOS_ERR_NOT_READY` otherwise). A target on another Runtime is `LOGOS_ERR_INVALID_PARAMS`
-  (DECISIONS G194, interim). The removal is written before the answer.
+  (DECISIONS G194, interim). The removal is written before the answer. The instance's permission
+  settings go with it: they stay attributed to its address and pass to no other (RUNTIME l.2637), so a
+  new instance of the same module is provisioned afresh.
 - **Retention.** Retiring an instance keeps its state directory and reserves its state assignment:
   retirement is not deletion (BCP l.395). No deletion operation exists yet (DECISIONS G143).
 - **Bounds.** At most `MaxInstances` (1024) known instances, retained ones included, for
@@ -1049,20 +1120,59 @@ them to be documented).
   after it stops (RUNTIME l.540-541); before any bind it is `LOGOS_ERR_NOT_READY`, once the caller
   holds a `discover` allow for each contract the record expects (otherwise `LOGOS_ERR_NOT_AUTHORISED`,
   which does not say whether it was bound).
-- **Permission settings in direct mode.** Every instance has permission settings at revision 1, with
-  no permission, `applied` (RUNTIME l.2541): no permission profile is selected, so a replacement that
-  names a permission is `LOGOS_ERR_INVALID_PARAMS` (l.2536) and one with `[]` at revision 1 changes
-  nothing (DECISIONS G229). `applied` with `[]` claims no containment: direct modules are trusted
-  in-process code (SECURITY l.204; RUNTIME l.1622, l.2545). A target on another Runtime is
+- **Permission settings in direct mode, without a profile.** Every instance has permission settings at
+  revision 1, with no permission, `applied` (RUNTIME l.2541): no permission profile is selected, so a
+  replacement that names a permission is `LOGOS_ERR_INVALID_PARAMS` (l.2536) and one with `[]` at
+  revision 1 changes nothing (DECISIONS G229). `applied` with `[]` claims no containment: direct
+  modules are trusted in-process code (SECURITY l.204; RUNTIME l.1622, l.2545).
+  `get_execution_permissions` is `unavailable`. A target on another Runtime is
   `LOGOS_ERR_INVALID_PARAMS` (DECISIONS G228, interim).
+- **Permission settings with a profile** (RUNTIME l.2526-2604; DECISIONS I93, G281-G285;
+  `docs/PERMISSIONS.md`). Each instance's settings are its own, saved before any reply.
+  - *Replacement.* `update_permission_settings` with an array that is not ascending, repeats a name,
+    names a permission the profile does not define or has constraints its definition does not admit,
+    or with a stale `expected_revision`, is `LOGOS_ERR_INVALID_PARAMS` without detail and saves
+    nothing. Repeating the saved `pending` or `applied` array returns the state unchanged. Anything
+    else is a new revision, and its status follows what is left of the instance's realization: none
+    (`unloaded`, or `error` with its cleanup complete) `applied` at once, to be enforced at the next
+    start; `loaded` or `ready` `pending`, and the instance is stopped at once, keeping its intent and
+    origin, with no failure classification; `stopping`, or `error` with its cleanup running,
+    `pending` until that stop or cleanup ends; `error` with `cleanup-timeout` or `cleanup-failed`
+    `failed` at once. Widening and narrowing alike stop the instance. The engine never restarts it:
+    resumption is `recover_module` by orchestration ("Orchestration duties").
+  - *Settlement.* `pending` becomes `applied` once nothing of the realization is left, and `failed`
+    (with `failure: "enforcement-failed"`) when its stop passes the stop deadline: the old
+    realization may persist with its old access, so the instance stays stopped and the late end of
+    its cleanup restores nothing. A permission no active point enforces makes the settings `failed`
+    once nothing is left. `failed` stays until a replacement is accepted; an `unloaded` instance whose
+    settings fail gets the classification `permission-enforcement-failed`.
+  - *Admission.* A start or recovery of an instance whose settings are `failed` is
+    `LOGOS_ERR_NOT_AUTHORISED` with the classification `permission-enforcement-failed`, and of one
+    whose settings lack host-ambient `LOGOS_ERR_NOT_AUTHORISED` with `authority-denied`, before any
+    authority is asked; the instance stays `unloaded` (or `error`), its intent kept, and a diagnostic
+    names what is lacking. Otherwise the execution decision covers the execution scope and one
+    permission scope per saved setting (DECISIONS G217): under `capability-authority`, one rule or one
+    grant must allow all of them (G207).
+  - *The snapshot.* `get_execution_permissions` answers each realization with the permissions its
+    admission installed: the saved settings at that admission, or the narrower constraints the
+    authority allowed (DECISIONS G282). A replacement does not change a running realization's
+    snapshot; it stops the realization. An authority renewal that narrows an installed permission
+    ends the execution like a denial.
+  - *Revocation.* A grant or policy change that ends the execution authorization stops the instance
+    (`authority-revoked`), whatever its settings' status; `pending` is no grace period (l.2601).
+  - *Authority.* Each method is authorized for its target, as a lifecycle request for an update and
+    an observation for a read (l.2580); settings authority grants no start, and changes no
+    intent. A target on another Runtime is `LOGOS_ERR_INVALID_PARAMS`.
 
 ### Runtime Control subscriptions
 
 A module subscribes to the Runtime Control events through the binding it received at initialization
-(INTERFACE §2.5, applied by l.3837; DECISIONS I86, part 7b). The six event names are accepted;
-`permission_settings_changed_event` is never produced (direct mode has constant permission settings,
-DECISIONS G229). `configuration_state_changed_event` follows every committed configuration revision,
-with the state's summary and never a value.
+(INTERFACE §2.5, applied by l.3837; DECISIONS I86, part 7b). The six event names are accepted.
+`permission_settings_changed_event` follows every committed change of an instance's saved settings or
+their status, in commit order, while a profile is selected (RUNTIME l.2603-2604; DECISIONS I93);
+without one it is never produced, the settings being constant (DECISIONS G229).
+`configuration_state_changed_event` follows every committed configuration revision, with the state's
+summary and never a value.
 
 - **Activation.** `subscribe` asks the event's own decision first, without a subject: a denial is
   `LOGOS_ERR_NOT_AUTHORISED`, as is a name that is not a Runtime Control event. A narrowed allow
