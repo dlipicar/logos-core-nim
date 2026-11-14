@@ -88,7 +88,9 @@ type
     attempts*: int64 ## charged recoveries: the policy's limit
     calls*: int64 ## charged recoveries made, refusals included: the spacing
     lastCallAt*: Opt[int64] ## wall clock, ms since the epoch
-    lastCallMono*: Opt[int64] ## the same moment on the monotonic clock
+    lastCallMono*: Opt[int64]
+      ## the backoff's anchor on the monotonic clock: the write-ahead's
+      ## moment, which the worker moves to the call itself once written
     pending*: Opt[uint64] ## the guarded revision of an unanswered call
     exhausted*: bool
 

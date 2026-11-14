@@ -388,6 +388,12 @@ proc issue(w: var Worker, v: View, d: Decision, memo: var Memo): bool =
         while pauseGateSet() and not w.sh.quit.load:
           sleep(5)
   let name = methodOf(d.step)
+  if d.charged:
+    # [I94] The backoff runs from the call, not from its write-ahead: a slow
+    # write must not bring the next call closer than the delay. The file keeps
+    # the write-ahead's time, which a restart reads.
+    w.acc.entries.withValue(v.instance, e):
+      e[].lastCallMono = Opt.some(monoMs())
   w.counted(name, v.instance)
   let slot = addr w.sh.slots[i]
   var prepared: Result[void, RcFailure]
