@@ -153,10 +153,13 @@ proc latestClient(): ptr LogosRuntimeControlBinding =
   cast[ptr LogosRuntimeControlBinding](clients[(clientInits.load - 1) mod MaxClients].load)
 
 proc reaches(e: Engine, instance: string, state: ModuleState): bool =
-  waitUntil(
+  result = waitUntil(
     proc(): bool =
       e.view(instance).tryGet.state == state
   )
+  if not result:
+    let v = e.view(instance).tryGet
+    checkpoint(instance & " is " & $v.state & " with failure " & $v.failure)
 
 proc routeState(e: Engine, route: string): LogosNSRuntimeControlRouteRecord =
   e.routes().filterIt(it.route == route)[0]

@@ -229,6 +229,8 @@ proc refuse(q: Request) =
 # The thread ---------------------------------------------------------------------------
 
 proc countLive(c: var Core) =
+  ## [IMPL] Stored before a mutation that changes the live set is answered,
+  ## so a caller that reads `liveCount` after its reply sees that mutation.
   c.sh.live.store(c.r.liveCount, moRelease)
 
 proc start(c: var Core, q: sink Request)
@@ -352,6 +354,7 @@ proc start(c: var Core, q: sink Request) =
       # Nothing to destroy: the record (if any) is gone now.
       c.r.finishRelease(q.instance)
       c.side.withdrawOutbound(q.releaseId)
+      c.countLive()
     q.slot.answer(Reply(kind: rkBeginRelease, teardown: t))
     c.finish(q.instance)
   of rkBeginApply:
@@ -423,6 +426,7 @@ proc handle(c: var Core, q: sink Request) =
         ),
       )
       reply.outcome = RecordResult.ok(x.get.record)
+    c.countLive()
     q.slot.answer(Reply(kind: rkInitDone, init: reply))
     c.finish(q.instance)
   of rkAbandon:
@@ -433,6 +437,7 @@ proc handle(c: var Core, q: sink Request) =
     var id: string
     if c.releasing.pop(q.instance, id):
       c.side.withdrawOutbound(id)
+    c.countLive()
     q.slot.answer(Reply(kind: rkReleaseDone))
     c.finish(q.instance)
   of rkApplyDone:

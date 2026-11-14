@@ -155,11 +155,20 @@ when declared(caParity):
 
   const ParityCa = "parity-ca"
 
+let PassingStop = initDuration(milliseconds = 300 * Slow)
+  ## [IMPL] The stop deadline of a case about the deadline: one that waits for
+  ## it to pass.
+
 proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineConfig =
   inc engines
   result = defaultConfig(work / ("e" & $engines))
   result.policy = policy
-  result.stopDeadline = initDuration(milliseconds = 300 * Slow)
+  # [IMPL] Otherwise the stop deadline only bounds the stops a case waits for.
+  # A stop releases through the Module Loader on a lifecycle worker, and a
+  # worker's first Loader call loads that thread's contract tables (on an idle
+  # Mac about 40 ms under refc and 140 ms under ASan), which a loaded CI host
+  # pushed past 300 ms × `Slow` (2026-11-13).
+  result.stopDeadline = initDuration(seconds = 10 * Slow)
   result.statics = @[
     checkStaticRegistration("client", clientTable()).tryGet,
     checkStaticRegistration("slow", slowTable()).tryGet,

@@ -5,10 +5,11 @@ name: CI
 # A second job runs the Nimble path from the same checkout so it cannot rot (R2), once per OS,
 # memory manager and shard.
 # Legs per R1: Linux x86_64, Linux aarch64, macOS arm64 until Tier 4 work starts.
-# Each Linux leg runs as six parallel jobs, one per check group (flake.nix `ciGroups`): a single
-# runner took over two hours for every check on x86_64. Each check is in exactly one group, and
-# the orc-spec job also evaluates every flake output. macOS has no sanitizer checks and runs
-# `nix flake check` in one job.
+# Each leg runs as parallel jobs, one per check group (flake.nix `ciGroups`): a single runner took
+# over two hours for every check on Linux x86_64, and 86 of its 90 minutes on macOS (5bd731f,
+# 2026-11-13). Each check is in exactly one group, and the orc-spec job also evaluates every flake
+# output. Linux has six groups; macOS has no sanitizer checks, so only orc-spec, refc and
+# orc-release.
 
 on:
   pull_request:
@@ -29,11 +30,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
         group: [orc-spec, refc, orc-release, asan, tsan, msan]
-        include:
+        # flake.nix defines the sanitizer variants on Linux only.
+        exclude:
           - os: macos-latest
-            group: all
+            group: asan
+          - os: macos-latest
+            group: tsan
+          - os: macos-latest
+            group: msan
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -60,16 +66,11 @@ jobs:
             echo "NIX_CONFIG=substituters = https://cache.nixos.org/" >> "$GITHUB_ENV"
           fi
 
-      - name: Flake checks
-        if: matrix.group == 'all'
-        run: nix flake check -L --keep-going
-
       - name: Evaluate every flake output
         if: matrix.group == 'orc-spec'
         run: nix flake check --no-build
 
       - name: Checks in group ${{ matrix.group }}
-        if: matrix.group != 'all'
         run: nix build -L --keep-going --no-link ".#ciGroups.$GROUP"
 
   # One job per OS, Nimble test task and shard of the suites (`LCN_SHARD`, logos_core.nimble). Both

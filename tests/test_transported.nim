@@ -497,7 +497,9 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     e.finish()
 
   ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] a provider stop drains to the stop deadline, then closes; the provider is destroyed only after its call returns":
-    let e = fixtureEngine(transported())
+    var cfg = transported()
+    cfg.stopDeadline = PassingStop
+    let e = fixtureEngine(cfg)
     let meterView = e.started(meter())
     let (_, rc) = e.startClient()
     let o = newOwner()
@@ -512,7 +514,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check heldAt(before + 1)
     var t: Thread[(Engine, string)]
     check e.stopping(meterView.instance, t)
-    # The stop deadline (300 ms × Slow) passes with the call held: the session
+    # The stop deadline (`PassingStop`) passes with the call held: the session
     # closes, so the caller's call fails TRANSPORT_ERROR (TRANSPORT l.543).
     check o.outcome(conn, tag, 3 * Wait).codeOf == Opt.some(ecTransport)
     check o.closedOf(conn).isSome
