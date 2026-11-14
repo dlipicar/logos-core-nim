@@ -56,6 +56,7 @@ import std/[atomics, locks]
 import results
 import ../abi/[checks, cstatus, types]
 import ../base/[perthread, testhooks]
+import ../iface/[accept, surface]
 import ../transport/io/api except decodeMessage
 import ./[carrier, callside, events, hostio]
 import ./plumbing except Request
@@ -1244,11 +1245,28 @@ when defined(posix):
       # [plan §2.8; part 4b-3.3] The Runtime's §4.1 checks against its current
       # state; the host connects itself with what it retained.
       let c = m.arm_lcn_Carrier_rc_materialize
+      # [SPEC RUNTIME l.965 (RUN-0177); INTERFACE §5.2 l.3904-3906] The
+      # construction input as the module gave it: the Runtime rebuilds the
+      # contract itself, as the direct binding does, and never takes the
+      # host's word for it (RUNTIME l.954).
+      let set = acceptSchemaResponse(c.schema, AcceptOptions(system: true)).valueOr:
+        h.reply(
+          LcnCarrierRcReply(
+            id: c.id,
+            failure: Opt.some(
+              LcnCarrierFailure(
+                code: uint8(ord(ecInvalidParams)),
+                message: Opt.some("invalid construction input"),
+              )
+            ),
+          )
+        )
+        return
       var q = h.hostedRequest(rqMaterialize)
       q.route = c.route
       for i in 0 ..< min(q.root.len, c.expected_root.len):
         q.root[i] = c.expected_root[i]
-      q.rebuilt = c.rebuilt and c.expected_root.len == q.root.len
+      q.rebuilt = c.expected_root.len == q.root.len and set.primary.root == q.root
       q.material = c.material
       var r = h.hostedReply(c.id, q)
       h.reply(r)

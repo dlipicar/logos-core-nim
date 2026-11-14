@@ -115,7 +115,7 @@ proc samples(): seq[LcnCarrierMessage] =
     # A hosted consumer's route handles (part 4b-3.3).
     toMessage(
       LcnCarrierRcMaterialize(
-        id: 24, route: "r-1", expected_root: root, rebuilt: true, material: true
+        id: 24, route: "r-1", expected_root: root, schema: @[0xa0'u8], material: true
       )
     ),
     toMessage(LcnCarrierRcLinkResult(id: 25, link: 1)),

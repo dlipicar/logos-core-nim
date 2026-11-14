@@ -232,7 +232,9 @@ execution scope `local-transport` in a `process` (G272). So:
 - **Hosted consumers** (part 4b-3.3; G267): a hosted consumer's route handles and connections are
   in its host, which keeps a route's invocation material from the answers it passes on
   (RUN-0173 to RUN-0175) and connects to the peer identity and module the Runtime names (TRN-0187).
-  The Runtime makes the §4.1 checks against its current state (RUN-0177 to RUN-0179) and admits
+  The host sends the exact route id, expected root and construction input (RUN-0177); the Runtime
+  rebuilds the contract and makes the §4.1 checks against its current state (RUN-0178, RUN-0179),
+  and admits
   each call, subscription change and end observer in a direct handle's order, so codes, ends and
   their causes are a direct consumer's, and a handle is never retargeted (RUN-0181, RUN-0182).
   `test_hosted_routes` (C-1 to C-8, S-18) shows it with the probe kit library in a host, to direct

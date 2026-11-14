@@ -272,18 +272,19 @@ lcn.carrier_rc_async_release = {
 
 ; [SPEC INTERFACE §5.2 l.3880-3911; RUNTIME §4.1, §4.2.1; part 4b-3.3, plan
 ; §2.8] A hosted consumer's `materialize_route`, after the direct binding's
-; local checks: the exact route id and expected root, whether the
-; construction input rebuilt that root (`rebuilt`), and whether the host
-; holds unused invocation material for the route (`material`, RUN-0174). The
-; Runtime makes its §4.1 checks against its current state; the reply names
-; the handle's link (`link`) and the provider's expected peer identity and
-; module (`uid`, `module`, TRN-0187), with which the host connects itself.
+; local checks: the exact route id, expected root and construction input
+; (`schema`, the module's bytes; RUN-0177), and whether the host holds unused
+; invocation material for the route (`material`, RUN-0174). The Runtime
+; rebuilds the contract from `schema` itself and makes its §4.1 checks
+; against its current state; the reply names the handle's link (`link`) and
+; the provider's expected peer identity and module (`uid`, `module`,
+; TRN-0187), with which the host connects itself.
 lcn.carrier_rc_materialize = {
   kind: "rc_materialize",
   id: uint64,
   route: tstr .size (1..128),
   expected_root: bstr .size 32,
-  rebuilt: bool,
+  schema: bstr,
   material: bool,
 }
 

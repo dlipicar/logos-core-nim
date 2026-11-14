@@ -1583,11 +1583,7 @@ proc materialize*(
   let a = request(
     toMessage(
       LcnCarrierRcMaterialize(
-        id: rid,
-        route: id,
-        expected_root: @root,
-        rebuilt: set.primary.root == root,
-        material: m != nil,
+        id: rid, route: id, expected_root: @root, schema: @input, material: m != nil
       )
     ),
     rid,

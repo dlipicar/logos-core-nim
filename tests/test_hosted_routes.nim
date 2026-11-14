@@ -1037,15 +1037,37 @@ when defined(posix):
         e.finish()
         check noHostLeft()
 
-    test "[RUN-0178] [RUN-0179] C-2 a route closed between establishment and materialization: the Runtime's checks against its current state refuse it NOT_READY":
+    test "[RUN-0177] [RUN-0178] [RUN-0179] C-2 the Runtime's own checks at materialization: another contract's construction input is VERSION_MISMATCH and malformed input INVALID_PARAMS, the host keeping its material; a route closed between establishment and materialization is NOT_READY":
       let cfg = hosted()
       var c = cfg.serving()
       let e = fixtureEngine(cfg)
       discard e.started(meter(), "m")
       discard e.started(consumerRecord(), "c")
       let route = c.establishVia("k")
-      check c.closeVia(route) == Opt.some(ecOk)
-      check c.materializeVia(0, route) == Opt.some(ecNotReady)
+      # The host sends the construction input as the module gave it, and the
+      # Runtime rebuilds the contract itself (RUN-0177): a valid input for
+      # another contract passes the host's local checks and is refused by the
+      # Runtime, as for a direct consumer.
+      const OtherDoc =
+        "_module = \"other_module\"\n\n" & "other.ping_request = {\n  n: uint32,\n}\n\n" &
+        "other.ping_response = {\n  n: uint32,\n}\n"
+      let otherSet = acceptContractSet(OtherDoc).tryGet
+      let otherSchema =
+        encodeCbor(schemaResponse(otherSet, otherSet.primary.root).tryGet)
+      proc materializeWith(c: var Consumer, schema: openArray[byte]): Opt[ErrorCode] =
+        codeIn(
+          c.run("materialize 0 " & route & " " & hexOf(meterRoot) & " " & hexOf(schema))
+        )
+
+      check c.materializeWith(otherSchema) == Opt.some(ecVersionMismatch)
+      check c.materializeWith([0x00'u8]) == Opt.some(ecInvalidParams)
+      # Neither used the material the host kept for the route.
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      check readingOf(c.readVia(0, 4)).isSome
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      let closed = c.establishVia("k2")
+      check c.closeVia(closed) == Opt.some(ecOk)
+      check c.materializeVia(1, closed) == Opt.some(ecNotReady)
       e.finish()
 
     test "[RUN-0175] [RUN-0176] C-3 a hosted consumer cannot materialize another consumer's route: NOT_AUTHORISED; its own still works":
