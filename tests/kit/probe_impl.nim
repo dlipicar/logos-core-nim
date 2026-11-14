@@ -16,6 +16,29 @@
 ##   `overlap` if a handler began while another was running;
 ## - `applied`: one line per `_MODULE_apply_configuration`, its bytes in hex.
 ##
+## `serve` starts a command thread (part 4b-3.3: the probe as a route's
+## consumer, in either placement): it runs `<state_dir>/cmd-<n>` (n from 1, one
+## command each, written whole by the case) on the probe's own binding and
+## route handles, and writes its result to `out-<n>`, `<code> <hex value or
+## message>`:
+##
+## - `rc <method> <hex params>`;
+## - `materialize <slot> <route> <hex root> <hex schema>`, the handle in
+##   `slot` (0-15);
+## - `call <slot> <method> <hex params>`;
+## - `subscribe <slot> <event> <tag>` (its id as the value), each delivery
+##   appended to `deliveries` as `<tag> <name> <hex data>`;
+##   `unsubscribe <slot> <id>`;
+## - `observe-end <slot> <tag>`, the end appended to `ends` as
+##   `<tag> <code>`;
+## - `prepare <slot> <call> <method> <hex params> <timeout ms or ->`, its
+##   completion appended to `done` as `<call> <code> <hex value or message>`;
+##   `submit <call>`, `cancel <call>`, `release-call <call>`;
+## - `release <slot>`.
+##
+## The thread keeps serving while `_MODULE_destroy` blocks, and is joined
+## after.
+##
 ## Other commands: `fail-init` (MODULE_ERROR), `fail-init-context` (a failure
 ## with a context: no destroy may follow), `ok-null` (LOGOS_OK without a
 ## context), `block-init` and `block-destroy` (wait until `<state_dir>/go`
@@ -33,12 +56,25 @@ import std/[algorithm, atomics, os, strutils]
 import ../../src/logos_core/abi/types
 import ../../src/logos_core/codegen/kitrt
 
-type Probe = object ## Plain data in shared memory: entries run on any thread (refc).
-  dirBuf: array[1024, char] ## the state directory; empty: none
-  dirLen: int
-  rc: ptr LogosRuntimeControlBinding
-  blockDestroy, blockHandler, quitHandler: bool
-  handled, inside: Atomic[int]
+type
+  Tag = object ## What a route callback reports under, with its probe.
+    probe: ptr Probe
+    text: array[32, char]
+    len: int
+
+  Probe = object ## Plain data in shared memory: entries run on any thread (refc).
+    dirBuf: array[1024, char] ## the state directory; empty: none
+    dirLen: int
+    rc: ptr LogosRuntimeControlBinding
+    blockDestroy, blockHandler, quitHandler: bool
+    handled, inside: Atomic[int]
+    serving: Atomic[bool]
+    served: bool
+    server: Thread[ptr Probe]
+    routes: array[16, LogosRouteHandle]
+    calls: array[16, LogosAsyncCall]
+    tags: array[64, Tag]
+    tagCount: int ## only the command thread makes tags
 
 var failedContext: int ## a failing init's context: never destroyed
 
@@ -77,24 +113,194 @@ proc waitGo(dir: string, name = "go") =
 proc resultLine(r: LogosResult): string =
   $int64(r.code) & " " & (if r.message == nil: "" else: $r.message)
 
-proc rcCall(p: ptr Probe, meth, params: string) =
+func ptrOf(b: seq[byte]): ptr UncheckedArray[uint8] =
+  if b.len == 0:
+    nil
+  else:
+    cast[ptr UncheckedArray[uint8]](unsafeAddr b[0])
+
+proc rcLine(p: ptr Probe, meth, params: string): string =
   let bytes = unhex(params)
   var outBuf: ptr UncheckedArray[uint8]
   var outLen: csize_t
   let r = p.rc.vtable.call(
-    p.rc,
-    cstring(meth),
-    (if bytes.len == 0: nil
-    else: cast[ptr UncheckedArray[uint8]](unsafeAddr bytes[0])),
-    csize_t(bytes.len),
-    addr outBuf,
-    addr outLen,
+    p.rc, cstring(meth), ptrOf(bytes), csize_t(bytes.len), addr outBuf, addr outLen
   )
   if int64(r.code) == 0:
-    p.note("rc", "0 " & hex(outBuf, outLen))
+    result = "0 " & hex(outBuf, outLen)
     p.rc.vtable.releaseResponse(p.rc, outBuf, outLen)
   else:
-    p.note("rc", resultLine(r))
+    result = resultLine(r)
+
+proc rcCall(p: ptr Probe, meth, params: string) =
+  p.note("rc", p.rcLine(meth, params))
+
+# The command thread (`serve`) ---------------------------------------------------------
+
+proc newTag(p: ptr Probe, text: string): ptr Tag =
+  let i = min(p.tagCount, p.tags.high)
+  inc p.tagCount
+  result = addr p.tags[i]
+  result.probe = p
+  result.len = min(text.len, result.text.len)
+  for k in 0 ..< result.len:
+    result.text[k] = text[k]
+
+proc label(t: ptr Tag): string =
+  result = newString(t.len)
+  for k in 0 ..< t.len:
+    result[k] = t.text[k]
+
+proc onRouteEvent(
+    name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
+) {.cdecl.} =
+  kitEnter()
+  let t = cast[ptr Tag](userData)
+  t.probe.note("deliveries", t.label & " " & $name & " " & hex(data, len))
+
+proc onRouteEnd(reason: CErrorCode, userData: pointer) {.cdecl.} =
+  kitEnter()
+  let t = cast[ptr Tag](userData)
+  t.probe.note("ends", t.label & " " & $int64(reason))
+
+proc onDone(
+    userData: pointer,
+    res: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+) {.cdecl.} =
+  kitEnter()
+  let t = cast[ptr Tag](userData)
+  let line =
+    if int64(res.code) == 0:
+      "0 " & hex(response, len)
+    else:
+      resultLine(res)
+  t.probe.note("done", t.label & " " & line)
+  if owner.release != nil:
+    owner.release(owner.state)
+
+proc command(p: ptr Probe, line: string): string =
+  let w = line.splitWhitespace
+  if w.len == 0:
+    return "bad"
+  try:
+    case w[0]
+    of "rc":
+      return p.rcLine(w[1], (if w.len > 2: w[2] else: ""))
+    of "materialize":
+      let root = unhex(w[3])
+      let schema = unhex(w[4])
+      var r: ContractRoot
+      for i in 0 ..< min(r.len, root.len):
+        r[i] = root[i]
+      return resultLine(
+        p.rc.vtable.materializeRoute(
+          p.rc,
+          cstring(w[2]),
+          addr r,
+          ptrOf(schema),
+          csize_t(schema.len),
+          addr p.routes[parseInt(w[1])],
+        )
+      )
+    of "call":
+      let h = addr p.routes[parseInt(w[1])]
+      let params = unhex(
+        if w.len > 3:
+          w[3]
+        else:
+          ""
+      )
+      var outBuf: ptr UncheckedArray[uint8]
+      var outLen: csize_t
+      let r = h.vtable.call(
+        h, cstring(w[2]), ptrOf(params), csize_t(params.len), addr outBuf, addr outLen
+      )
+      if int64(r.code) == 0:
+        result = "0 " & hex(outBuf, outLen)
+        h.vtable.releaseResponse(h, outBuf, outLen)
+      else:
+        result = resultLine(r)
+      return
+    of "subscribe":
+      let h = addr p.routes[parseInt(w[1])]
+      var id: LogosSubscriptionId
+      let r =
+        h.vtable.subscribe(h, cstring(w[2]), onRouteEvent, p.newTag(w[3]), addr id)
+      return (if int64(r.code) == 0: "0 " & $id else: resultLine(r))
+    of "unsubscribe":
+      let h = addr p.routes[parseInt(w[1])]
+      return
+        resultLine(h.vtable.unsubscribe(h, LogosSubscriptionId(parseBiggestUInt(w[2]))))
+    of "observe-end":
+      let h = addr p.routes[parseInt(w[1])]
+      return resultLine(h.vtable.observeEnd(h, onRouteEnd, p.newTag(w[2])))
+    of "prepare":
+      let h = addr p.routes[parseInt(w[1])]
+      let params = unhex(w[4])
+      var opts = LogosAsyncOptions(
+        abiVersion: AsyncCallAbiVersion,
+        structSize: csize_t(sizeof(LogosAsyncOptions)),
+        hasTimeout: w[5] != "-",
+        timeoutMs: (if w[5] == "-": 0'u64 else: uint64(parseBiggestUInt(w[5]))),
+      )
+      var cbs = LogosAsyncCallbacks(
+        abiVersion: AsyncCallAbiVersion,
+        structSize: csize_t(sizeof(LogosAsyncCallbacks)),
+        complete: onDone,
+        userData: p.newTag(w[2]),
+      )
+      return resultLine(
+        h.vtable.prepareCall(
+          h,
+          cstring(w[3]),
+          ptrOf(params),
+          csize_t(params.len),
+          addr opts,
+          addr cbs,
+          addr p.calls[parseInt(w[2])],
+        )
+      )
+    of "submit", "cancel", "release-call":
+      let c = addr p.calls[parseInt(w[1])]
+      case w[0]
+      of "submit":
+        c.vtable.submit(c)
+      of "cancel":
+        c.vtable.cancel(c)
+      else:
+        c.vtable.release(c)
+      return "0 "
+    of "release":
+      let h = addr p.routes[parseInt(w[1])]
+      h.vtable.release(h)
+      return "0 "
+    else:
+      return "bad"
+  except ValueError, IndexDefect:
+    return "bad"
+
+proc serveMain(p: ptr Probe) {.thread.} =
+  var n = 1
+  while p.serving.load:
+    let f = p.dir / ("cmd-" & $n)
+    if not fileExists(f):
+      sleep(1)
+      continue
+    var line = ""
+    try:
+      line = readFile(f).strip
+    except IOError, OSError:
+      discard
+    let res = p.command(line)
+    try:
+      writeFile(p.dir / ("out-" & $n & ".tmp"), res)
+      moveFile(p.dir / ("out-" & $n & ".tmp"), p.dir / ("out-" & $n))
+    except Exception:
+      discard
+    inc n
 
 proc onEvent(
     name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
@@ -196,6 +402,13 @@ proc probeInit(
       var id: LogosSubscriptionId
       let r = p.rc.vtable.subscribe(p.rc, cstring(w[1]), onEvent, p, addr id)
       p.note("events", "subscribed " & resultLine(r))
+    of "serve":
+      p.serving.store(true)
+      try:
+        createThread(p.server, serveMain, p)
+        p.served = true
+      except ResourceExhaustedError:
+        p.serving.store(false)
     else:
       discard
   outContext[] = cast[ptr LogosModuleContext](p)
@@ -209,6 +422,10 @@ proc probeDestroy(
   let p = cast[ptr Probe](module)
   if p.blockDestroy:
     waitGo(p.dir)
+  if p.served:
+    p.serving.store(false)
+    joinThread(p.server)
+    p.served = false
   var commands: seq[string]
   try:
     commands = readFile(p.dir / "probe.cmd").splitLines

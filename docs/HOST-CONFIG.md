@@ -943,8 +943,13 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105).
   call record retains; those roots, and what the host sends a consumer, rest on the host
   (docs/CONFORMANCE.md, DECISIONS G273, G274). The endpoint goes with the realization, as a direct
   provider's does.
-- **Not yet** (Tier 4b step 4b-3, part 4b-3.3): a hosted consumer's `materialize_route` is
-  `LOGOS_ERR_NOT_READY`.
+- **A hosted consumer** (DECISIONS G267): its route handles and their connections are in its host,
+  which connects to the provider's endpoint itself, so payloads go between the two directly. The
+  host keeps a route's ticket and endpoint path from the `establish_route` or `renew_route` answer
+  it passes on to the module, until the route's handle is materialized or the route ends; the
+  Runtime makes every decision of `materialize_route` and of each call, subscription and end
+  observer through the handle, as for a direct consumer, so codes, ends and their order are a direct
+  consumer's. Every host receives the Runtime's Transport limits, which its own connections use.
 - **Exit statuses** of the program, for a log: 0 after an orderly release; 2 when it was not started
   by a Runtime (descriptor 3 is not a connected local stream socket); 70 when its carrier broke the
   protocol or closed unexpectedly. The Windows build is a stub that exits 2.

@@ -1,5 +1,6 @@
-## Hosted providers (Tier 4b step 4b-3, part 4b-3.2; DECISIONS I91, G267,
-## G273, G274; plan §4.3 P-1 to P-14, R10): the meter kit module built as a
+## Hosted providers and consumers (Tier 4b step 4b-3, parts 4b-3.2 and
+## 4b-3.3; DECISIONS I91, G267, G273, G274; plan §4.3 P-1 to P-14, R10, C-1 to
+## C-7, S-18): the meter kit module built as a
 ## shared library and realized `hosted_dynamic` in a `logos-module-host`
 ## process, which serves the endpoint the Runtime made for it with its own
 ## transport loop. Payloads go between the caller and the host directly (the
@@ -10,6 +11,11 @@
 ## same protocol. A test-owned transport loop (`support/trnowner.nim`)
 ## connects with a route's descriptor as a consumer's binding does, and the
 ## client module calls through materialized handles.
+##
+## A hosted consumer is `probe_module` realized `hosted_dynamic` with its
+## `serve` command thread: the case writes it commands and reads its answers in
+## its state directory. The host connects to the provider's endpoint itself
+## with the material it kept, and the Runtime admits each of its steps.
 ##
 ## The test process cannot reach the hosted meter's globals: channel 22 holds
 ## a call until the file `open` is in the meter's state directory or the call
@@ -805,3 +811,407 @@ when defined(posix):
       traceMarkers([])
       k.release()
       e.finish()
+
+  # A hosted consumer (part 4b-3.3) --------------------------------------------------------
+  #
+  # `probe_module` with `serve` runs commands from its state directory on its
+  # own binding and route handles (`tests/kit/probe_impl.nim`). Realized
+  # `hosted_dynamic`, its route handles live in the host, which connects to
+  # the provider with the material it kept (RUN-0174); the Runtime admits
+  # each materialization and operation (lane 1) and keeps the handle's codes.
+
+  proc consumerRecord(hosted = true, state = "c"): ModuleRecord =
+    ModuleRecord(
+      module: "probe_module",
+      strategy: (if hosted: stHostedDynamic else: stDirectDynamic),
+      placement: (if hosted: "process" else: ""),
+      artifact: ArtifactRecord(
+        id: "probe", localPath: probeLib, hash: probeDigest, hashSuite: HashSuiteId
+      ),
+      stateAssignment: Opt.some(state),
+    )
+
+  type Consumer = object ## The probe's command files.
+    dir: string ## its state directory
+    n: int ## the commands posted
+
+  proc serving(cfg: EngineConfig, state = "c", extra = ""): Consumer =
+    ## The probe's state directory, with `serve` and `extra` as its commands.
+    let dir = cfg.stateOf(state)
+    writeFile(dir / "probe.cmd", "serve\n" & extra)
+    Consumer(dir: dir)
+
+  func hexOf(b: openArray[byte]): string =
+    for x in b:
+      result.add(toHex(x, 2).toLowerAscii)
+
+  proc unhexOf(s: string): seq[byte] =
+    var i = 0
+    while i + 1 < s.len:
+      result.add(byte(parseHexInt(s[i .. i + 1])))
+      i += 2
+
+  proc post(c: var Consumer, line: string): int =
+    ## Hands the probe's command thread one command, written whole; its number.
+    inc c.n
+    let path = c.dir / ("cmd-" & $c.n)
+    writeFile(path & ".tmp", line)
+    moveFile(path & ".tmp", path)
+    c.n
+
+  proc outcome(c: Consumer, n: int, seconds = 10 * Slow): string =
+    ## The probe's answer to command `n`, `<code> <hex value or message>`;
+    ## `none` if it gave none in time.
+    let path = c.dir / ("out-" & $n)
+    if not waitUntil(
+      proc(): bool =
+        fileExists(path),
+      seconds,
+    ):
+      return "none"
+    readFile(path)
+
+  proc run(c: var Consumer, line: string): string =
+    c.outcome(c.post(line))
+
+  proc codeIn(line: string): Opt[ErrorCode] =
+    try:
+      errorCode(parseBiggestInt(line.split(' ', 1)[0]))
+    except ValueError:
+      Opt.none(ErrorCode)
+
+  func valueIn(line: string): string =
+    let w = line.split(' ', 1)
+    if w.len > 1:
+      w[1]
+    else:
+      ""
+
+  proc linesOf(c: Consumer, file: string): seq[string] =
+    try:
+      readFile(c.dir / file).splitLines.filterIt(it.len > 0)
+    except IOError:
+      @[]
+
+  proc noted(c: Consumer, file, prefix: string, n = 1): bool =
+    ## `file` has `n` lines that start with `prefix`.
+    waitUntil(
+      proc(): bool =
+        c.linesOf(file).countIt(it.startsWith(prefix)) >= n
+    )
+
+  proc establishVia(c: var Consumer, key: string): string =
+    ## The route `establish_route` gave the probe, or "".
+    let line = c.run("rc establish_route " & hexOf(establishReq(key)))
+    check codeIn(line) == Opt.some(ecOk)
+    if codeIn(line) != Opt.some(ecOk):
+      return ""
+    let resp =
+      LogosNSRuntimeControlEstablishRouteResponse.decode(unhexOf(valueIn(line)))
+    check resp.isOk and resp.get.routes.len == 1
+    if resp.isErr or resp.get.routes.len != 1:
+      return ""
+    resp.get.routes[0].route
+
+  proc closeVia(c: var Consumer, route: string): Opt[ErrorCode] =
+    codeIn(
+      c.run(
+        "rc close_route " &
+          hexOf(encode(LogosNSRuntimeControlCloseRouteRequest(route: route)).tryGet)
+      )
+    )
+
+  proc renewVia(c: var Consumer, key, route: string): Opt[ErrorCode] =
+    codeIn(
+      c.run(
+        "rc renew_route " &
+          hexOf(
+            encode(
+              LogosNSRuntimeControlRenewRouteRequest(request_key: key, route: route)
+            ).tryGet
+          )
+      )
+    )
+
+  proc materializeVia(c: var Consumer, slot: int, route: string): Opt[ErrorCode] =
+    let line = c.run(
+      "materialize " & $slot & " " & route & " " & hexOf(meterRoot) & " " &
+        hexOf(meterSchema)
+    )
+    checkpoint("materialize: " & line)
+    codeIn(line)
+
+  proc readLine(slot: int, channel: uint32): string =
+    "call " & $slot & " read " & hexOf(
+      encode(MeterReadRequest(channel: channel)).tryGet
+    )
+
+  proc readVia(c: var Consumer, slot: int, channel: uint32): string =
+    c.run(readLine(slot, channel))
+
+  proc readingOf(line: string): Opt[MeterReadResponse] =
+    if codeIn(line) != Opt.some(ecOk):
+      return Opt.none(MeterReadResponse)
+    let r = MeterReadResponse.decode(unhexOf(valueIn(line)))
+    if r.isErr:
+      Opt.none(MeterReadResponse)
+    else:
+      Opt.some(r.get)
+
+  proc routeOf(e: Engine, route: string): Opt[LogosNSRuntimeControlRouteRecord] =
+    for rec in e.routes():
+      if rec.route == route:
+        return Opt.some(rec)
+    Opt.none(LogosNSRuntimeControlRouteRecord)
+
+  proc failedWith(e: Engine, route: string, code: string): bool =
+    waitUntil(
+      proc(): bool =
+        let rec = e.routeOf(route)
+        rec.isSome and rec.get.state.kind == LogosNSRuntimeControlRouteStateKind.Failed and
+          rec.get.failure.isSome and rec.get.failure.get.code == code
+    )
+
+  proc killHost(e: Engine, instance: string): bool =
+    ## SIGKILL to the instance's host process, from outside the Runtime.
+    let h = e.moduleHostForTests(instance)
+    if h.isNil:
+      return false
+    let pid = pidOf(h)
+    dropHost(h)
+    pid > 0 and posix.kill(Pid(pid), SIGKILL) == 0
+
+  func endLine(tag: string, code: ErrorCode): string =
+    tag & " " & $ord(code)
+
+  suite "run.hosted: a hosted consumer's routes (RUNTIME §4.2.1; INTERFACE §2.5, §5.2)":
+    teardown:
+      leftover()
+      check noHostLeft()
+
+    test "[RUN-0173] [RUN-0174] [RUN-0177] [RUN-0181] [RUN-0800] [TRN-0187] [IMPL-DECISION G267] C-1 a hosted consumer establishes, materializes, calls, subscribes, observes the end and releases, to a direct provider and to a hosted one":
+      for providerHosted in [false, true]:
+        let cfg = hosted()
+        discard cfg.stateOf()
+        var c = cfg.serving()
+        let e = fixtureEngine(cfg)
+        discard e.started(
+          if providerHosted:
+            hostedMeter()
+          else:
+            meter(),
+          "m",
+        )
+        check e.started(consumerRecord(), "c").state == msReady
+        check hostPids(hostProgram).len == (if providerHosted: 2 else: 1)
+        let route = c.establishVia("k")
+        # A route with a hosted end is local-transport (R10): the host
+        # connects with the descriptor it kept and the peer identity the
+        # Runtime names (TRN-0187).
+        check c.materializeVia(0, route) == Opt.some(ecOk)
+        let r = readingOf(c.readVia(0, 4))
+        check r.isSome and r.get.label == "ch4" and r.get.reading.value == 40
+        let sub = c.run("subscribe 0 meter.changed_event s1")
+        check codeIn(sub) == Opt.some(ecOk)
+        # Channel 21 publishes `meter.changed_event` (210) and answers with
+        # its caller: the probe's own instance.
+        let who = readingOf(c.readVia(0, 21))
+        check who.isSome and who.get.label == "c"
+        check c.noted("deliveries", "s1 meter.changed_event ")
+        let delivered = c.linesOf("deliveries")
+        if delivered.len > 0:
+          let ev = MeterChangedEvent.decode(unhexOf(delivered[0].split(' ')[2]))
+          check ev.isOk and ev.get.value == 210
+        check codeIn(c.run("observe-end 0 e1")) == Opt.some(ecOk)
+        check codeIn(c.run("unsubscribe 0 " & valueIn(sub))) == Opt.some(ecOk)
+        check codeIn(c.run("unsubscribe 0 " & valueIn(sub))) != Opt.some(ecOk)
+        discard c.readVia(0, 21)
+        sleep(50 * Slow)
+        check c.linesOf("deliveries").len == 1
+        check codeIn(c.run("release 0")) == Opt.some(ecOk)
+        # The route stays ready after the handle's release; the end handler
+        # is not called (INTERFACE l.1461-1468).
+        check e.routeOf(route).get.state.kind ==
+          LogosNSRuntimeControlRouteStateKind.Ready
+        check c.linesOf("ends").len == 0
+        e.finish()
+        check noHostLeft()
+
+    test "[RUN-0178] [RUN-0179] C-2 a route closed between establishment and materialization: the Runtime's checks against its current state refuse it NOT_READY":
+      let cfg = hosted()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      discard e.started(consumerRecord(), "c")
+      let route = c.establishVia("k")
+      check c.closeVia(route) == Opt.some(ecOk)
+      check c.materializeVia(0, route) == Opt.some(ecNotReady)
+      e.finish()
+
+    test "[RUN-0175] [RUN-0176] C-3 a hosted consumer cannot materialize another consumer's route: NOT_AUTHORISED; its own still works":
+      let cfg = hosted()
+      var first = cfg.serving("c")
+      var second = cfg.serving("d")
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      discard e.started(consumerRecord(state = "c"), "c")
+      discard e.started(consumerRecord(state = "d"), "d")
+      let route = first.establishVia("k")
+      check second.materializeVia(0, route) == Opt.some(ecNotAuthorised)
+      check first.materializeVia(0, route) == Opt.some(ecOk)
+      check readingOf(first.readVia(0, 4)).isSome
+      check codeIn(first.run("release 0")) == Opt.some(ecOk)
+      e.finish()
+
+    test "[RUN-0182] [RUN-0837] C-4 a provider restarted under a hosted consumer's open handle: the handle ends NOT_READY and is never retargeted":
+      let cfg = hosted()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      discard e.started(consumerRecord(), "c")
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      check codeIn(c.run("observe-end 0 e1")) == Opt.some(ecOk)
+      check e.stop("m").tryGet.state == msUnloaded
+      check c.noted("ends", "e1 ")
+      check c.linesOf("ends") == @[endLine("e1", ecNotReady)]
+      check e.start("m").tryGet.state == msReady
+      check codeIn(c.readVia(0, 4)) == Opt.some(ecNotReady)
+      check e.failedWith(route, "provider-unavailable")
+      check c.renewVia("r", route) == Opt.some(ecNotReady)
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      e.finish()
+
+    test "[RUN-0805] [RUN-0256] [RUN-0837] [RUN-0838] C-5 a hosted provider's host killed during a hosted consumer's call: the call is TRANSPORT_ERROR, the end is reported once and never changes, and the failed route answers NOT_READY":
+      let cfg = hosted()
+      let mdir = cfg.stateOf()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      discard e.started(consumerRecord(), "c")
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      check codeIn(c.run("observe-end 0 e1")) == Opt.some(ecOk)
+      # Channel 23 holds the call in the provider until `open`.
+      let n = c.post(readLine(0, 23))
+      check mdir.heldAt(1)
+      check e.killHost("hm")
+      check codeIn(c.outcome(n)) == Opt.some(ecTransport)
+      check c.noted("ends", "e1 ")
+      let first = c.linesOf("ends")
+      check first.len == 1
+      if first.len == 1:
+        check first[0] in [endLine("e1", ecTransport), endLine("e1", ecNotReady)]
+      check e.failedWith(route, "provider-unavailable")
+      check codeIn(c.readVia(0, 4)) == Opt.some(ecNotReady)
+      sleep(50 * Slow)
+      check c.linesOf("ends") == first
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      e.finish()
+
+    test "[TRN-0191] [IMPL-DECISION G259] C-6 a peer that is not the expected identity, met for a hosted consumer: materialize is TRANSPORT_ERROR, the route fails transport-error and its ticket is dead":
+      let cfg = hosted()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      discard e.started(consumerRecord(), "c")
+      let route = c.establishVia("k")
+      check e.failNextConnectForTests(cfPeerMismatch).isOk
+      check c.materializeVia(0, route) == Opt.some(ecTransport)
+      check e.failedWith(route, "transport-error")
+      check e.diagnostics().anyIt("peer identity mismatch" in it)
+      check c.renewVia("r", route) == Opt.some(ecNotReady)
+      check c.materializeVia(1, route) == Opt.some(ecNotReady)
+      e.finish()
+
+    test "[RUN-0256] [RUN-0837] [IMPL-DECISION G260] C-7 close_route under a hosted consumer's open handle: the end and later calls are NOT_READY, not TRANSPORT_ERROR":
+      let cfg = hosted()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      discard e.started(consumerRecord(), "c")
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      check codeIn(c.run("observe-end 0 e1")) == Opt.some(ecOk)
+      check c.closeVia(route) == Opt.some(ecOk)
+      check c.noted("ends", "e1 ")
+      check c.linesOf("ends") == @[endLine("e1", ecNotReady)]
+      check codeIn(c.readVia(0, 4)) == Opt.some(ecNotReady)
+      check codeIn(c.run("observe-end 0 e2")) == Opt.some(ecNotReady)
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      e.finish()
+
+    test "[IFC-0729] [RUN-0181] [IMPL-DECISION G267] C-8 prepared calls from a hosted consumer to a hosted provider: a response, a timeout that cancels the provider's call, an expiry at submission, a cancellation before it, and the connection kept until the last completes":
+      let cfg = hosted()
+      let mdir = cfg.stateOf()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      discard e.started(consumerRecord(), "c")
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      proc prepareLine(call: int, channel: uint32, timeout: string): string =
+        "prepare 0 " & $call & " read " &
+          hexOf(encode(MeterReadRequest(channel: channel)).tryGet) & " " & timeout
+
+      proc doneOf(c: Consumer, call: int): string =
+        for line in c.linesOf("done"):
+          if line.startsWith($call & " "):
+            return line.split(' ', 1)[1]
+        "none"
+
+      check codeIn(c.run(prepareLine(1, 4, "-"))) == Opt.some(ecOk)
+      check codeIn(c.run(prepareLine(2, 22, $(1000 * Slow)))) == Opt.some(ecOk)
+      check codeIn(c.run(prepareLine(3, 4, "0"))) == Opt.some(ecOk)
+      check codeIn(c.run(prepareLine(4, 4, "-"))) == Opt.some(ecOk)
+      check codeIn(c.run(prepareLine(5, 22, "-"))) == Opt.some(ecOk)
+      check codeIn(c.run("cancel 4")) == Opt.some(ecOk)
+      for i in [1, 3, 4]:
+        check codeIn(c.run("submit " & $i)) == Opt.some(ecOk)
+      check c.noted("done", "", 3)
+      let r = readingOf(c.doneOf(1))
+      check r.isSome and r.get.reading.value == 40
+      check codeIn(c.doneOf(3)) == Opt.some(ecTimeout)
+      check codeIn(c.doneOf(4)) == Opt.some(ecCancelled)
+      # Channel 22 holds the call in the provider until it is cancelled: the
+      # timeout ends it, and the Cancel goes to the provider.
+      check codeIn(c.run("submit 2")) == Opt.some(ecOk)
+      check mdir.heldAt(1)
+      check c.noted("done", "2 ")
+      check codeIn(c.doneOf(2)) == Opt.some(ecTimeout)
+      # A released handle keeps its connection for the call still running.
+      check codeIn(c.run("submit 5")) == Opt.some(ecOk)
+      check mdir.heldAt(2)
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      mdir.open()
+      check c.noted("done", "5 ")
+      let five = readingOf(c.doneOf(5))
+      # Answered to the caller, and not cancelled by the handle's release.
+      check five.isSome and five.get.label == "c" and five.get.reading.value == 0
+      for i in 1 .. 5:
+        check codeIn(c.run("release-call " & $i)) == Opt.some(ecOk)
+      check e.routeOf(route).get.state.kind == LogosNSRuntimeControlRouteStateKind.Ready
+      e.finish()
+
+    test "[RUN-0111] [RUN-0794] [RUN-0181] S-18 a stopping consumer's calls through its routes are refused from stop step 1, NOT_READY, hosted as direct":
+      var codes: seq[Opt[ErrorCode]]
+      for hostedConsumer in [true, false]:
+        let cfg = hosted()
+        var c = cfg.serving(extra = "block-destroy\n")
+        let e = fixtureEngine(cfg)
+        discard e.started(meter(), "m")
+        discard e.started(consumerRecord(hostedConsumer), "c")
+        let route = c.establishVia("k")
+        check c.materializeVia(0, route) == Opt.some(ecOk)
+        check readingOf(c.readVia(0, 4)).isSome
+        var t: Thread[(Engine, string)]
+        check e.stopping("c", t)
+        # `_MODULE_destroy` waits for `go`; the command thread still serves.
+        codes.add(codeIn(c.readVia(0, 4)))
+        check codeIn(c.run("release 0")) == Opt.some(ecOk)
+        writeFile(c.dir / "go", "")
+        joinThread(t)
+        check stopReply.load == ord(msUnloaded)
+        e.finish()
+        check noHostLeft()
+      check codes == @[Opt.some(ecNotReady), Opt.some(ecNotReady)]

@@ -45,6 +45,12 @@ type
     ready*: bool
     hasTag*: bool
     tag*: uint64
+    hasLink*: bool ## an `rc_materialize`'s handle: `link`, `uid`, `module`
+    link*: uint64
+    uid*: uint32
+    module*: string
+    hasCode*: bool ## an `rc_link_closed`'s first terminal cause
+    code8*: uint8
 
   SlotObj = object
     id: uint64
@@ -162,6 +168,14 @@ func answerOf*(r: LcnCarrierRcReply): Answer =
     for t in r.targets.get(@[]):
       result.targets.add((t.conn, t.contract))
     result.admitted = r.admitted.get(@[])
+    if r.link.isSome:
+      result.hasLink = true
+      result.link = r.link.get
+      result.uid = r.uid.get(0)
+      result.module = r.module.get("")
+    if r.code.isSome:
+      result.hasCode = true
+      result.code8 = r.code.get
 
 func answerOf*(f: LcnCarrierFailure): Answer =
   answerOf(LcnCarrierRcReply(failure: Opt.some(f)))

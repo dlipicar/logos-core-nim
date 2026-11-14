@@ -54,10 +54,12 @@
 
 import std/[atomics, locks]
 import results
-import ../abi/[checks, types]
+import ../abi/[checks, cstatus, types]
 import ../base/[perthread, testhooks]
 import ../transport/io/api except decodeMessage
 import ./[carrier, callside, events, hostio]
+import ./plumbing except Request
+from ./plumbing import nil
 
 when defined(posix):
   import std/[os, posix, tables]
@@ -377,6 +379,23 @@ when defined(posix):
     ## [G273] Its number in hosted connection and endpoint ids.
     h.index
 
+  proc setTransport*(h: Host, transport: TransportConfig): Result[void, string] =
+    ## [plan §2.8; part 4b-3.3] Before the spawn: the Transport limits the
+    ## host's own I/O loop runs with, for a hosted consumer's connections and a
+    ## hosted provider's endpoint alike (`transportInit`).
+    let words = transportWords(transport)
+    if words.len > MaxTransportWords:
+      return err("the transport limits do not fit")
+    for i, w in words:
+      h.transport[i] = w
+    h.transportLen = words.len
+    ok()
+
+  proc transportInit*(h: Host): seq[uint64] =
+    ## What `init` carries as `transport`; empty when none was set.
+    for i in 0 ..< h.transportLen:
+      result.add(h.transport[i])
+
   proc setEndpoint*(
       h: Host, listener: cint, path, runtimeId: string, transport: TransportConfig
   ): Result[void, string] =
@@ -385,19 +404,13 @@ when defined(posix):
     ## `listener` as its fd 4, which is closed here once it is spawned; the
     ## caller keeps its own. `path`, `runtimeId` and `transport` go into
     ## `init` (`endpointInit`).
+    ?h.setTransport(transport)
     let fd = dupFd(listener)
     if fd < 0:
       return err("the listener cannot be duplicated")
-    let words = transportWords(transport)
-    if words.len > MaxTransportWords:
-      discard fdClose(fd)
-      return err("the transport limits do not fit")
     h.listenerFd = fd
     h.endpointPath = sharedCString(path)
     h.runtimeId = sharedCString(runtimeId)
-    for i, w in words:
-      h.transport[i] = w
-    h.transportLen = words.len
     ok()
 
   proc endpointInit*(
@@ -783,6 +796,14 @@ when defined(posix):
         return sbStopped
     sbOk
 
+  proc notify*(h: Host, m: LcnCarrierMessage) =
+    ## [plan §2.8; part 4b-3.3] A notice from the Runtime thread
+    ## (`route_ended`): queued for the sender, so the Runtime thread never
+    ## waits for a host to read. Nothing once the host has ended.
+    let f = frameOf(m)
+    if f.isOk:
+      discard h.queueOut(f.get)
+
   proc stopSender(h: Host) =
     ## Supervision thread, once the carrier is down: the sender's write ends
     ## within one step and it is joined.
@@ -967,6 +988,37 @@ when defined(posix):
           return p
         p = p.next
     nil
+
+  proc hostedRequest(h: Host, kind: RequestKind): plumbing.Request =
+    ## [plan §2.8] A request about a hosted consumer's handle, made through the
+    ## attempt's own binding: the consumer and attempt are never the frame's
+    ## (RUN-0171, RUN-0172).
+    let s = cast[ptr AttemptServices](h.rc.state)
+    plumbing.Request(
+      kind: kind, origin: moduleOrigin($s.instance), attempt: $s.attempt, hosted: true
+    )
+
+  proc hostedReply(h: Host, id: uint64, q: sink plumbing.Request): LcnCarrierRcReply =
+    let s = cast[ptr AttemptServices](h.rc.state)
+    let reply = s.engine.call(q)
+    result = LcnCarrierRcReply(id: id)
+    if reply.error.isSome:
+      result.failure = Opt.some(
+        LcnCarrierFailure(
+          code: uint8(ord(reply.error.get.code)),
+          message: Opt.some(clip(reply.error.get.message)),
+        )
+      )
+      return
+    case q.kind
+    of rqMaterialize:
+      result.link = Opt.some(reply.conn)
+      result.uid = Opt.some(reply.uid)
+      result.module = Opt.some(reply.module)
+    of rqHostedClosed:
+      result.code = Opt.some(uint8(ord(reply.first)))
+    else:
+      discard
 
   proc unsubscribe(h: Host, u: LcnCarrierRcUnsubscribe) =
     let res = h.rc.vtable.unsubscribe(h.rc, LogosSubscriptionId(u.sub))
@@ -1188,6 +1240,54 @@ when defined(posix):
         p.call.vtable.release(addr p.call)
         p.call.vtable = nil
       h.reply(LcnCarrierRcReply(id: c.id))
+    of K.lcn_Carrier_rc_materialize:
+      # [plan §2.8; part 4b-3.3] The Runtime's §4.1 checks against its current
+      # state; the host connects itself with what it retained.
+      let c = m.arm_lcn_Carrier_rc_materialize
+      var q = h.hostedRequest(rqMaterialize)
+      q.route = c.route
+      for i in 0 ..< min(q.root.len, c.expected_root.len):
+        q.root[i] = c.expected_root[i]
+      q.rebuilt = c.rebuilt and c.expected_root.len == q.root.len
+      q.material = c.material
+      var r = h.hostedReply(c.id, q)
+      h.reply(r)
+    of K.lcn_Carrier_rc_link_result:
+      let c = m.arm_lcn_Carrier_rc_link_result
+      var q = h.hostedRequest(rqHostedResult)
+      q.conn = c.link
+      q.connectFailed = c.cause.isSome
+      q.failCause = c.cause.get(0)
+      q.code = errorCodeOf(c.code.get(0)).get(ecTransport)
+      h.reply(h.hostedReply(c.id, q))
+    of K.lcn_Carrier_rc_link_admit:
+      let c = m.arm_lcn_Carrier_rc_link_admit
+      var q = h.hostedRequest(rqHostedAdmit)
+      q.conn = c.link
+      q.op = c.op
+      if c.closed.isSome:
+        q.closed = Opt.some(errorCodeOf(c.closed.get).get(ecTransport))
+      if c.op == 1:
+        # [SPEC INTERFACE §1.5] The module's bytes, checked as given.
+        let name = checkEventName(c.name.get(@[]))
+        if name.isErr:
+          h.reply(LcnCarrierRcReply(id: c.id, failure: Opt.some(toCarrier(name.error))))
+          return
+        q.bare = name.get
+      else:
+        q.bare = textOf(c.name.get(@[]))
+      h.reply(h.hostedReply(c.id, q))
+    of K.lcn_Carrier_rc_link_closed:
+      let c = m.arm_lcn_Carrier_rc_link_closed
+      var q = h.hostedRequest(rqHostedClosed)
+      q.conn = c.link
+      q.code = errorCodeOf(c.code).get(ecTransport)
+      h.reply(h.hostedReply(c.id, q))
+    of K.lcn_Carrier_rc_link_released:
+      let c = m.arm_lcn_Carrier_rc_link_released
+      var q = h.hostedRequest(rqHostedReleased)
+      q.conn = c.link
+      h.reply(h.hostedReply(c.id, q))
     else:
       discard
 
@@ -1311,7 +1411,9 @@ when defined(posix):
     of K.lcn_Carrier_rc_call, K.lcn_Carrier_rc_subscribe,
         K.lcn_Carrier_rc_connect_remote, K.lcn_Carrier_rc_publish,
         K.lcn_Carrier_rc_deliver, K.lcn_Carrier_rc_prepare,
-        K.lcn_Carrier_rc_async_release:
+        K.lcn_Carrier_rc_async_release, K.lcn_Carrier_rc_materialize,
+        K.lcn_Carrier_rc_link_result, K.lcn_Carrier_rc_link_admit,
+        K.lcn_Carrier_rc_link_closed, K.lcn_Carrier_rc_link_released:
       s.enqueue(h, f)
     of K.lcn_Carrier_rc_unsubscribe:
       let u = m.arm_lcn_Carrier_rc_unsubscribe
@@ -1691,6 +1793,9 @@ else:
   proc sendMsg*(h: Host, m: LcnCarrierMessage): Result[void, string] =
     err(Unsupported)
 
+  proc notify*(h: Host, m: LcnCarrierMessage) =
+    discard
+
   proc spawnProcess*(
       program: string,
       env: openArray[string],
@@ -1736,6 +1841,12 @@ else:
       h: Host
   ): Opt[tuple[path, runtimeId: string, transport: seq[uint64]]] =
     Opt.none(tuple[path, runtimeId: string, transport: seq[uint64]])
+
+  proc setTransport*(h: Host, transport: TransportConfig): Result[void, string] =
+    err(Unsupported)
+
+  proc transportInit*(h: Host): seq[uint64] =
+    @[]
 
   proc submitHosted*(
       ctx: pointer, cmd: var IoCommand

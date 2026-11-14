@@ -1313,6 +1313,10 @@ proc records(st: State): seq[AsyncRec] =
 proc linksEnded(st: State, r: Route) {.gcsafe.}
 proc keepMaterial(st: State, r: Route, path: string, t: RouteTicket) {.gcsafe.}
 proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.}
+proc linkSubscribeRefusal(
+  st: State, l: Link, r: Route, q: Request
+): Opt[EngineError] {.gcsafe.}
+
 proc schemaBlob(st: State, r: Route): ptr SchemaBlob {.gcsafe.}
 
 proc endServices(st: State, s: ptr AttemptServices, instance: string) =
@@ -3852,6 +3856,11 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       fail("the Module Host carrier cannot be made")
     a.services.adoptHost(h)
     host = h
+    # [plan §2.8; part 4b-3.3] Every host's own loop connects its consumer's
+    # handles with the Runtime's Transport limits.
+    h.setTransport(st.shared.tport.config).isOkOr:
+      st.diagnose("the Module Host of " & x.id & " cannot be set up: " & error)
+      fail("the Module Host's transport limits cannot be handed over")
     if x.providerId.len > 0:
       # [SPEC LOADER §5.3; RUN-0200, RUN-0223; G273] A hosted provider's
       # endpoint is made and validated before its host is spawned; the host
@@ -5166,7 +5175,9 @@ proc establish(st: State, q: Request, x: Inst) =
         issueFailed = true
       else:
         response.routes.add(rec.live(t.get.path, t.get.ticket))
-        st.keepMaterial(r, t.get.path, t.get.ticket)
+        if not x.hosted:
+          # [plan §2.8; RUN-0174] A hosted consumer's host retains it.
+          st.keepMaterial(r, t.get.path, t.get.ticket)
     else:
       response.routes.add(rec)
     st.hintRc(InvKind.Routes, recordSubject(r)) # [SPEC RUNTIME l.3417]
@@ -5429,7 +5440,9 @@ proc renew(st: State, q: Request, x: Inst) =
       q.reply.answerError(ecModule, "a route ticket cannot be issued")
       return
     answer = rec.live(t.path, t.ticket)
-    st.keepMaterial(r, t.path, t.ticket)
+    if not x.hosted:
+      # [plan §2.8; RUN-0174] A hosted consumer's host retains it.
+      st.keepMaterial(r, t.path, t.ticket)
   let bytes = encode(LogosNSRuntimeControlRenewRouteResponse(route: answer)).valueOr:
     q.reply.answerError(ecModule, "the response cannot be encoded")
     return
@@ -7017,7 +7030,10 @@ proc endLinkSubs(st: State, l: Link, code: ErrorCode) =
       st.dropLinkSub(l, ls)
 
 proc closeLink(st: State, l: Link) =
-  ## [Rev R5] The link's connection goes: `cmdClose`, once.
+  ## [Rev R5] The link's connection goes: `cmdClose`, once. [plan §2.8] A
+  ## hosted link's connection is its host's, which closes it itself.
+  if l.hosted:
+    return
   if l.state != lkClosed and not l.closeSent:
     l.closeSent = true
     discard
@@ -7031,6 +7047,21 @@ proc settleLink(st: State, l: Link) =
       st.links.del(l.conn)
     else:
       st.closeLink(l)
+
+proc dropHosted(st: State, l: Link) =
+  ## [plan §2.8] A hosted link goes: its host's reference with it.
+  st.links.del(l.conn)
+  l.state = lkClosed
+  if l.host != nil:
+    dropHost(cast[Host](l.host))
+    l.host = nil
+
+proc hostedFired(st: State, l: Link) =
+  ## [INTERFACE l.1486-1490; I86] A hosted handle's first terminal cause is
+  ## known: an installed observer runs in its host, and its registration goes.
+  if l.observing and l.observed.isSome:
+    l.observing = false
+    st.endRegsGone(l.consumer, 1)
 
 proc linkObserved(st: State, l: Link) =
   ## [Rev R4; INTERFACE l.1486-1490] The handle's path ended before its route:
@@ -7055,7 +7086,10 @@ proc linkConnectFailed(st: State, ev: IoEvent) =
   let l = st.links.getOrDefault(ev.conn)
   if l.isNil:
     return
-  st.links.del(ev.conn)
+  if l.hosted:
+    st.dropHosted(l)
+  else:
+    st.links.del(ev.conn)
   l.state = lkClosed
   let cause = l.routeCause
   let (code, failed) = connectOutcome(ev.failCause, ev.failCode)
@@ -7156,7 +7190,10 @@ proc linkConnected(st: State, conn: ConnId) =
   if l.routeCause.isSome or r.isNil or r.isTerminal:
     let code = l.routeCause.get(if r.isNil: ecNotAuthorised else: r.endCode)
     reply.answerError(code, "the route ended while its handle connected")
-    st.closeLink(l)
+    if l.hosted:
+      st.dropHosted(l)
+    else:
+      st.closeLink(l)
     return
   l.held = true
   r.pins.add(Pin(handle: l.handle, attempt: l.attempt))
@@ -7344,11 +7381,36 @@ proc linksEnded(st: State, r: Route) {.gcsafe.} =
   ## and takes it as its first cause unless the connection ended before; the
   ## route's unused material goes with its tickets.
   st.dropMaterial(r.id)
+  var firsts: seq[LcnCarrierLinkFirst]
   for l in st.links.values:
     if l.route == r.id:
       l.routeCause = Opt.some(r.endCode)
       discard l.observe(r.endCode)
       st.endLinkSubs(l, r.endCode)
+      if l.hosted:
+        st.hostedFired(l)
+        firsts.add(
+          LcnCarrierLinkFirst(
+            link: l.conn, first: uint8(ord(l.observed.get(r.endCode)))
+          )
+        )
+  let x = st.instances.getOrDefault(r.consumer)
+  if x != nil and x.hosted and x.hostOf != nil:
+    # [plan §2.8; part 4b-3.3] The consumer's host learns the route's cause,
+    # which its handles' subscriptions end with and each observer gets when
+    # it is the handle's first, and wipes the route's retained ticket; queued,
+    # never a write from this thread.
+    notify(
+      x.hostOf,
+      toMessage(
+        LcnCarrierRouteEnded(
+          route: r.id,
+          code: uint8(ord(r.endCode)),
+          revoked: r.state == rtRevoked,
+          links: firsts,
+        )
+      ),
+    )
 
 proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.} =
   ## [SPEC INTERFACE l.2004-2006] None of the attempt's handles remains valid:
@@ -7363,7 +7425,14 @@ proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.} =
       l.connecting = nil
     st.endLinkSubs(l, ecNotReady)
     l.held = false
-    st.closeLink(l)
+    if l.hosted:
+      # [plan §2.8] Its host is ending: its registration goes with the link.
+      if l.observing:
+        l.observing = false
+        st.endRegsGone(l.consumer, 1)
+      st.dropHosted(l)
+    else:
+      st.closeLink(l)
 
 proc linksStopped(st: State) =
   ## [plan §2.9] The Runtime thread leaves: nothing still parked on a link
@@ -7382,6 +7451,9 @@ proc linksStopped(st: State) =
         ls.unsubscribing.answerError(ecNotReady, "the Runtime stopped")
     l.state = lkClosed
     st.dropLinkSubs(l)
+    if l.host != nil:
+      dropHost(cast[Host](l.host))
+      l.host = nil
   st.links.clear()
   for w in st.pubWaits.values:
     if w.reply != nil:
@@ -7390,6 +7462,181 @@ proc linksStopped(st: State) =
   for m in st.material.mvalues:
     m.burn()
   st.material.clear()
+
+# A hosted consumer's route handles (4b-3.3) ------------------------------------
+
+proc hostedMaterialize(st: State, q: Request, r: Route) =
+  ## [plan §2.8; RUN-0177-RUN-0179; part 4b-3.3] After the §4.1 checks against
+  ## the Runtime's current state, a hosted consumer's handle is a hosted link:
+  ## the host connects with the invocation material it retained (RUN-0174), to
+  ## the peer identity and module given here (TRN-0187). Without material the
+  ## handle is NOT_AUTHORISED and nothing is connected (K11), as for a direct
+  ## consumer; a route a hosted end has is local-transport (G272).
+  if r.mode != rmLocalTransport:
+    q.reply.answerError(ecNotReady, "a hosted consumer's route is not local-transport")
+    return
+  if not q.material:
+    q.reply.answerError(
+      ecNotAuthorised, "the route has no unused ticket; renew_route issues one"
+    )
+    return
+  let e = st.sv.endpoints.getOrDefault(r.endpoint.get(0))
+  let x = st.instances.getOrDefault(r.consumer)
+  let h = (if x.isNil: nil else: x.hostOf)
+  if e.isNil or h.isNil:
+    q.reply.answerError(ecNotReady, "the provider's endpoint is gone")
+    return
+  retain(h)
+  let l = Link(
+    conn: st.shared.tport.newConnId(),
+    route: r.id,
+    consumer: r.consumer,
+    attempt: q.attempt,
+    generation: nextGeneration(),
+    state: lkConnecting,
+    hosted: true,
+    host: h,
+  )
+  l.handle = cast[pointer](l) # its pin's identity, never dereferenced
+  st.links[l.conn] = l
+  var uid = st.shared.tport.euid
+  when defined(lcnTestHooks):
+    if st.connectFault == Opt.some(cfPeerMismatch):
+      # The host's own peer check meets an identity other than the one given.
+      st.connectFault = Opt.none(ConnectFailure)
+      uid = uid xor 1
+  q.reply.answer(Reply(conn: l.conn, uid: uid, module: e.module))
+
+proc hostedLink(st: State, q: Request): Link =
+  ## The hosted link `q` names, when the calling attempt made it.
+  let l = st.links.getOrDefault(q.conn)
+  if l.isNil or not l.hosted or l.attempt != q.attempt or l.consumer != q.origin.instance:
+    return nil
+  l
+
+proc hostedResult(st: State, q: Request) =
+  ## [plan §2.8; RUN-0800, RUN-0802; K12, Rev R15] The host's connection
+  ## completed its Hello, or failed: answered as a direct handle's
+  ## (`linkConnected`, `linkConnectFailed`), so a peer that is not the
+  ## expected identity fails the route before the materialization is answered.
+  let l = st.hostedLink(q)
+  if l.isNil or l.state != lkConnecting:
+    q.reply.answerError(ecNotReady, "the consumer's realization ended")
+    return
+  l.connecting = q.reply
+  if not q.connectFailed:
+    st.linkConnected(l.conn)
+    return
+  let cause =
+    if q.failCause <= uint8(ord(high(ConnectFailure))):
+      ConnectFailure(q.failCause)
+    else:
+      cfConnect
+  st.linkConnectFailed(
+    IoEvent(
+      conn: l.conn,
+      kind: IoEventKind.evConnectFailed,
+      failCode: q.code,
+      failCause: cause,
+      failMsg: "reported by the consumer's Module Host",
+    )
+  )
+
+proc hostedClosed(st: State, l: Link, code: ErrorCode) =
+  ## [plan §2.6, §2.8 step 5; Rev R4] The host's connection for `l` ended
+  ## with `code` (TF-15, G256): unless the route ended first, that is the
+  ## handle's first cause.
+  if l.state == lkClosed:
+    return
+  l.state = lkClosed
+  if l.held:
+    discard l.observe(code)
+  st.hostedFired(l)
+
+proc hostedAdmit(st: State, q: Request) =
+  ## [SPEC RUNTIME §4.1, l.1343-1347; INTERFACE §2.5; plan §2.8] One
+  ## operation through a hosted handle, decided as a direct transported
+  ## handle's before anything goes on its connection: a call (`linkAdmits`),
+  ## a subscribe, an unsubscribe, an observer's installation (`observeEnd`).
+  let l = st.hostedLink(q)
+  let r = (if l.isNil: nil else: st.route(l.route))
+  if l.isNil or r.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if q.closed.isSome:
+    st.hostedClosed(l, q.closed.get)
+  case q.op
+  of 0:
+    let refused = st.linkAdmits(l, r, q.origin.instance, q.attempt, q.bare)
+    if refused.isSome:
+      q.reply.answerError(refused.get.code, refused.get.message)
+      return
+  of 1:
+    let refused = st.linkSubscribeRefusal(l, r, q)
+    if refused.isSome:
+      q.reply.answerError(refused.get.code, refused.get.message)
+      return
+  of 2:
+    if r.isTerminal:
+      q.reply.answerError(r.endCode, "the route is " & $r.state)
+      return
+    let code = l.newCallCode
+    if code.isSome:
+      q.reply.answerError(code.get, "the handle's connection has ended")
+      return
+  of 3:
+    if l.observed.isSome:
+      q.reply.answerError(l.observed.get, "the handle's path has ended")
+      return
+    if r.isTerminal:
+      q.reply.answerError(r.endCode, "the route is " & $r.state)
+      return
+    if l.observing:
+      q.reply.answerError(ecInvalidParams, "an observer is already installed")
+      return
+    if st.endRegs.getOrDefault(r.consumer) >= st.limits.endRegsPerConsumer or
+        st.endRegsTotal >= st.limits.endRegsTotal:
+      # [SPEC INTERFACE l.1483-1484; IFC-0660; I86]
+      q.reply.answerError(ecModule, "no local registration capacity")
+      return
+    l.observing = true
+    st.endRegs.inc(r.consumer)
+    inc st.endRegsTotal
+  else:
+    q.reply.answerError(ecModule, "an unknown handle operation")
+    return
+  q.reply.answer(Reply())
+
+proc hostedClosedReport(st: State, q: Request) =
+  ## The host's report of its connection's end; the reply is the handle's
+  ## first terminal cause.
+  let l = st.hostedLink(q)
+  if l.isNil:
+    q.reply.answer(Reply(first: q.code))
+    return
+  st.hostedClosed(l, q.code)
+  q.reply.answer(Reply(first: l.observed.get(l.routeCause.get(q.code))))
+
+proc hostedReleased(st: State, q: Request) =
+  ## [SPEC INTERFACE §5.2 l.3895-3897] A hosted handle was released: its pin
+  ## and its observer's registration go with its link.
+  let l = st.hostedLink(q)
+  if l.isNil:
+    q.reply.answer(Reply())
+    return
+  let r = st.route(l.route)
+  if l.observing:
+    l.observing = false
+    st.endRegsGone(l.consumer, 1)
+  l.held = false
+  st.dropHosted(l)
+  if r != nil:
+    for j, p in r.pins:
+      if p.handle == l.handle:
+        r.pins.delete(j)
+        break
+    st.settle(r)
+  q.reply.answer(Reply())
 
 # Route handles ------------------------------------------------------------------
 
@@ -7433,6 +7680,9 @@ proc materialize(st: State, q: Request) =
     q.reply.answerError(
       ecVersionMismatch, "the expected contract root is not the route's contract"
     )
+    return
+  if q.hosted:
+    st.hostedMaterialize(q, r)
     return
   if r.mode == rmLocalTransport:
     st.connectLink(q, r)
@@ -7931,42 +8181,47 @@ proc linkConsumer(st: State, l: Link): Inst =
   let x = st.instances.getOrDefault(l.consumer)
   if x != nil and x.current == l.attempt and x.state in {msLoaded, msReady}: x else: nil
 
-proc linkSubscribe(st: State, q: Request) =
+proc linkSubscribeRefusal(
+    st: State, l: Link, r: Route, q: Request
+): Opt[EngineError] {.gcsafe.} =
   ## [SPEC INTERFACE §2.5 l.1417-1432; RUNTIME §4.4 l.1018-1024; plan §2.7] A
-  ## transported handle's `subscribe`: a direct one's local checks (ownership,
-  ## the event under the selected contract and the route's subscribe scope,
-  ## the route's end), then the handle's code and the consumer's liveness,
-  ## with no wire traffic when one fails; the provider decides the activation
-  ## (G175). The reply waits for the SubscriptionResult [Rev R6] (RUN-0192).
-  let l = st.links.getOrDefault(q.conn)
-  let r = st.route(q.route)
+  ## transported handle's `subscribe` checks: a direct one's local checks
+  ## (ownership, the event under the selected contract and the route's
+  ## subscribe scope, the route's end), then the handle's code and the
+  ## consumer's liveness, with no wire traffic when one fails.
+  template refuse(code: ErrorCode, message: string): untyped =
+    return Opt.some(engineError(code, message))
+
   if l.isNil or r.isNil or r.consumer != q.origin.instance or l.route != r.id:
-    q.reply.answerError(ecNotAuthorised, "not authorised")
-    return
+    refuse(ecNotAuthorised, "not authorised")
   st.expireIfDue(r)
   if r.selected.eventRoot(q.bare).isNone:
-    q.reply.answerError(
-      ecNotAuthorised, q.bare & " is not an event of the selected contract"
-    )
-    return
+    refuse(ecNotAuthorised, q.bare & " is not an event of the selected contract")
   if q.bare in [GrantChangedName, PolicyChangedName] and
       st.isAuthorityContract(r.selected):
-    q.reply.answerError(ecNotAuthorised, "the authority's notices are protected")
-    return
+    refuse(ecNotAuthorised, "the authority's notices are protected")
   if not r.allowsSubscribe(q.bare):
-    q.reply.answerError(ecNotAuthorised, "the event is outside the route's access")
-    return
+    refuse(ecNotAuthorised, "the event is outside the route's access")
   if r.isTerminal:
-    q.reply.answerError(r.endCode, "the route is " & $r.state)
-    return
+    refuse(r.endCode, "the route is " & $r.state)
   let code = l.newCallCode
   if code.isSome:
-    q.reply.answerError(code.get, "the handle's connection has ended")
-    return
+    refuse(code.get, "the handle's connection has ended")
   let x = st.instances.getOrDefault(r.consumer)
   if x.isNil or q.attempt != x.current or x.state notin {msLoaded, msReady} or
       st.shuttingDown:
-    q.reply.answerError(ecNotReady, "the consumer is not live")
+    refuse(ecNotReady, "the consumer is not live")
+  Opt.none(EngineError)
+
+proc linkSubscribe(st: State, q: Request) =
+  ## [plan §2.7] A transported handle's `subscribe`, once its checks pass
+  ## (`linkSubscribeRefusal`): the provider decides the activation (G175).
+  ## The reply waits for the SubscriptionResult [Rev R6] (RUN-0192).
+  let l = st.links.getOrDefault(q.conn)
+  let r = st.route(q.route)
+  let refused = st.linkSubscribeRefusal(l, r, q)
+  if refused.isSome:
+    q.reply.answerError(refused.get.code, refused.get.message)
     return
   inc l.nextSub
   let ls = LinkSub(
@@ -8789,6 +9044,14 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.observeEnd(q)
   of rqReleaseHandle:
     st.releaseHandle(q)
+  of rqHostedResult:
+    st.hostedResult(q)
+  of rqHostedAdmit:
+    st.hostedAdmit(q)
+  of rqHostedClosed:
+    st.hostedClosedReport(q)
+  of rqHostedReleased:
+    st.hostedReleased(q)
   of rqIdentity:
     q.reply.answer(Reply(id: st.runtimeId))
   of rqCleanup:

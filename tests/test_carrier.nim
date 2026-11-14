@@ -112,6 +112,26 @@ proc samples(): seq[LcnCarrierMessage] =
     toMessage(LcnCarrierRcAsyncSubmit(call: 1)),
     toMessage(LcnCarrierRcAsyncCancel(call: 1)),
     toMessage(LcnCarrierRcAsyncRelease(id: 20, call: 1)),
+    # A hosted consumer's route handles (part 4b-3.3).
+    toMessage(
+      LcnCarrierRcMaterialize(
+        id: 24, route: "r-1", expected_root: root, rebuilt: true, material: true
+      )
+    ),
+    toMessage(LcnCarrierRcLinkResult(id: 25, link: 1)),
+    toMessage(
+      LcnCarrierRcLinkResult(
+        id: 26, link: 1, cause: Opt.some(2'u8), code: Opt.some(uint8(ord(ecTransport)))
+      )
+    ),
+    toMessage(
+      LcnCarrierRcLinkAdmit(
+        id: 27, link: 1, op: 0, name: Opt.some(@[0x67'u8]), closed: Opt.some(13'u8)
+      )
+    ),
+    toMessage(LcnCarrierRcLinkAdmit(id: 28, link: 1, op: 3)),
+    toMessage(LcnCarrierRcLinkClosed(id: 29, link: 1, code: uint8(ord(ecTransport)))),
+    toMessage(LcnCarrierRcLinkReleased(id: 30, link: 1)),
     toMessage(LcnCarrierRcReply(id: 21)),
     toMessage(
       LcnCarrierRcReply(
@@ -124,11 +144,33 @@ proc samples(): seq[LcnCarrierMessage] =
       )
     ),
     toMessage(
+      LcnCarrierRcReply(
+        id: 24,
+        link: Opt.some(1'u64),
+        uid: Opt.some(501'u32),
+        module: Opt.some("meter_module"),
+        code: Opt.some(uint8(ord(ecNotReady))),
+      )
+    ),
+    toMessage(
       LcnCarrierRcDelivery(
         local: 1,
         seq: 1,
         name: "logos.runtime_control.inventory_changed_event",
         data: @[],
+      )
+    ),
+    toMessage(
+      LcnCarrierRouteEnded(
+        route: "r-1",
+        code: uint8(ord(ecNotAuthorised)),
+        revoked: true,
+        links: @[LcnCarrierLinkFirst(link: 1, first: uint8(ord(ecTransport)))],
+      )
+    ),
+    toMessage(
+      LcnCarrierRouteEnded(
+        route: "r-2", code: uint8(ord(ecNotReady)), revoked: false, links: @[]
       )
     ),
     toMessage(LcnCarrierAsyncDone(call: 1)),

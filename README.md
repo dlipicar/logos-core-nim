@@ -63,8 +63,10 @@ The specs are being revised, so the work is ordered by how settled each area is
   (part 4b-3.1b). A hosted provider serves the endpoint the Runtime made for it: payloads go
   between the consumer's process and the host directly, the Runtime admits every Hello, call,
   subscription and delivery, and the host checks payloads, runs the provider and commits each
-  Response (part 4b-3.2).
-- Not yet: the rest of Tier 4b (the rest of the Module Host: hosted consumers' routes; the rest of transported routes, `logosd`
+  Response (part 4b-3.2). A hosted consumer's route handles are in its host, which connects to the
+  provider itself while the Runtime decides each materialization, call, subscription and end
+  observer, so its codes and route ends are a direct consumer's (part 4b-3.3).
+- Not yet: the rest of Tier 4b (the rest of the Module Host: the invariance suite and its claims; the rest of transported routes, `logosd`
   and `logosctl`, the Runtime's permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).

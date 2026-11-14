@@ -100,6 +100,17 @@ arm(LcnCarrierRcReply, lcn_Carrier_rc_reply, arm_lcn_Carrier_rc_reply)
 arm(LcnCarrierRcDelivery, lcn_Carrier_rc_delivery, arm_lcn_Carrier_rc_delivery)
 arm(LcnCarrierAsyncDone, lcn_Carrier_async_done, arm_lcn_Carrier_async_done)
 
+# Lane 1 (4b-3.3): a hosted consumer's route handles.
+arm(LcnCarrierRcMaterialize, lcn_Carrier_rc_materialize, arm_lcn_Carrier_rc_materialize)
+arm(LcnCarrierRcLinkResult, lcn_Carrier_rc_link_result, arm_lcn_Carrier_rc_link_result)
+arm(LcnCarrierRcLinkAdmit, lcn_Carrier_rc_link_admit, arm_lcn_Carrier_rc_link_admit)
+arm(LcnCarrierRcLinkClosed, lcn_Carrier_rc_link_closed, arm_lcn_Carrier_rc_link_closed)
+arm(
+  LcnCarrierRcLinkReleased, lcn_Carrier_rc_link_released,
+  arm_lcn_Carrier_rc_link_released,
+)
+arm(LcnCarrierRouteEnded, lcn_Carrier_route_ended, arm_lcn_Carrier_route_ended)
+
 # Lane 2 (4b-3.2): a hosted provider's endpoint and its calls.
 arm(LcnCarrierAdmitVerdict, lcn_Carrier_admit_verdict, arm_lcn_Carrier_admit_verdict)
 arm(LcnCarrierCallCancel, lcn_Carrier_call_cancel, arm_lcn_Carrier_call_cancel)

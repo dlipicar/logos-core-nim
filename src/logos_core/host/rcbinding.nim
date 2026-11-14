@@ -35,7 +35,7 @@ import ../base/perthread
 import ../hash/hashinput
 import ../runtime/[entryframe, hostio]
 import ../transport/io/api except decodeMessage
-import ./[endpoint, selected, state]
+import ./[consumer, endpoint, selected, state]
 
 # Statuses ------------------------------------------------------------------------------
 
@@ -390,6 +390,8 @@ proc rcCallOp(
   )
   if a.failed:
     return statusOf(a)
+  # [RUN-0174; plan §2.8] A route's invocation material stays in the host.
+  retainFrom($`method`, a.value)
   give(a.value, outBuf, outLen)
 
 proc rcReleaseResponseOp(
@@ -473,17 +475,10 @@ proc rcMaterializeOp(
     schemaLen: csize_t,
     outRoute: ptr LogosRouteHandle,
 ): LogosResult {.cdecl.} =
-  ## [SPEC INTERFACE §5.2 l.3880-3911] Input checks as `bindings.rcMaterializeOp`.
-  ## [IMPL] Materialization through the carrier is 4b-3.3's: until then a
-  ## hosted consumer gets NOT_READY.
+  ## [SPEC INTERFACE §5.2 l.3880-3911] A hosted consumer's handle
+  ## (`consumer.nim`, part 4b-3.3).
   bindingEnter()
-  if outRoute == nil:
-    return status(ecInvalidParams, "null route output")
-  outRoute.vtable = nil
-  outRoute.state = nil
-  checkMaterializeInput(routeId, expectedRoot, schema, schemaLen).isOkOr:
-    return status(error)
-  status(ecNotReady, "a route cannot be materialized in a Module Host yet")
+  consumer.materialize(routeId, expectedRoot, schema, schemaLen, outRoute)
 
 proc rcConnectRemoteOp(
     binding: ptr LogosRuntimeControlBinding,
@@ -690,6 +685,7 @@ proc awaitCallbacks*() =
   ## returns leaves the release to the stop deadline, which ends the host.
   events.awaitIdle()
   completions.awaitIdle()
+  awaitConsumer()
 
 proc stopBinding*() =
   ## At a graceful exit: the workers are joined.

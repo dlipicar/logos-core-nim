@@ -6,11 +6,13 @@
 ; lcn.carrier_message (runtime/carrier.nim). Its `kind` fixes its lane:
 ;   lane 0, the Loader:       init, apply, release / initialized, init_failed,
 ;                             applied, released, fatal
-;   lane 1, Runtime Control:  rc_reply, rc_event, async_done / rc_call,
-;                             rc_subscribe, rc_unsubscribe, rc_delivered,
-;                             rc_connect_remote, rc_publish, rc_deliver,
-;                             rc_prepare, rc_async_submit, rc_async_cancel,
-;                             rc_async_release
+;   lane 1, Runtime Control:  rc_reply, rc_event, async_done, route_ended /
+;                             rc_call, rc_subscribe, rc_unsubscribe,
+;                             rc_delivered, rc_connect_remote, rc_publish,
+;                             rc_deliver, rc_prepare, rc_async_submit,
+;                             rc_async_cancel, rc_async_release,
+;                             rc_materialize, rc_link_result, rc_link_admit,
+;                             rc_link_closed, rc_link_released
 ;   lane 2, the boundary:     io_admit_*, io_respond, io_close, io_terminate,
 ;                             io_work_ended, io_subscription_result,
 ;                             io_stop_serving, admit_verdict, call_cancel,
@@ -46,9 +48,15 @@ lcn.carrier_message =
   lcn.carrier_rc_async_submit /
   lcn.carrier_rc_async_cancel /
   lcn.carrier_rc_async_release /
+  lcn.carrier_rc_materialize /
+  lcn.carrier_rc_link_result /
+  lcn.carrier_rc_link_admit /
+  lcn.carrier_rc_link_closed /
+  lcn.carrier_rc_link_released /
   lcn.carrier_rc_reply /
   lcn.carrier_rc_delivery /
   lcn.carrier_async_done /
+  lcn.carrier_route_ended /
   lcn.carrier_io_listening /
   lcn.carrier_io_serve_failed /
   lcn.carrier_io_hello /
@@ -94,7 +102,8 @@ lcn.carrier_failure = {
 ; [LOADER §5.3; part 4b-3.2] A provider's `endpoint` is the path of the
 ; listener on fd 4, which the host serves once `_MODULE_init` succeeded, with
 ; the Runtime's `transport` limits (runtime/hostio.nim gives their order) and
-; its `runtime_id` for the invocation context's caller view.
+; its `runtime_id` for the invocation context's caller view. [part 4b-3.3]
+; Every host gets `transport`: a consumer's own connections use it.
 lcn.carrier_init = {
   kind: "init",
   id: uint64,
@@ -261,11 +270,71 @@ lcn.carrier_rc_async_release = {
   call: uint64,
 }
 
+; [SPEC INTERFACE §5.2 l.3880-3911; RUNTIME §4.1, §4.2.1; part 4b-3.3, plan
+; §2.8] A hosted consumer's `materialize_route`, after the direct binding's
+; local checks: the exact route id and expected root, whether the
+; construction input rebuilt that root (`rebuilt`), and whether the host
+; holds unused invocation material for the route (`material`, RUN-0174). The
+; Runtime makes its §4.1 checks against its current state; the reply names
+; the handle's link (`link`) and the provider's expected peer identity and
+; module (`uid`, `module`, TRN-0187), with which the host connects itself.
+lcn.carrier_rc_materialize = {
+  kind: "rc_materialize",
+  id: uint64,
+  route: tstr .size (1..128),
+  expected_root: bstr .size 32,
+  rebuilt: bool,
+  material: bool,
+}
+
+; The outcome of the host's connection for `link`: none, the Hello completed;
+; otherwise its ConnectFailure (`cause`, its ordinal in transport/io/api.nim)
+; and code. The reply is the materialization's: success, or the code the
+; Runtime gives (the route's own when it ended meanwhile).
+lcn.carrier_rc_link_result = {
+  kind: "rc_link_result",
+  id: uint64,
+  link: uint64,
+  ? cause: uint8,
+  ? code: uint8,
+}
+
+; One operation through the handle `link`, admitted before anything is sent
+; on its connection: `op` 0 a call (`name`, the method), 1 a subscribe
+; (`name`, the event), 2 an unsubscribe, 3 an `observe_end` installation.
+; `closed`: the host's connection ended with that code and the Runtime has
+; not been told yet (`rc_link_closed`).
+lcn.carrier_rc_link_admit = {
+  kind: "rc_link_admit",
+  id: uint64,
+  link: uint64,
+  op: uint8, ; 0 to 3; any other value is refused as MODULE_ERROR
+  ? name: bstr, ; the module's bytes, checked by the Runtime as given
+  ? closed: uint8,
+}
+
+; The connection of `link` ended with `code` (TF-15, G256). The reply's
+; `code` is the handle's first terminal cause (INTERFACE l.1486-1490).
+lcn.carrier_rc_link_closed = {
+  kind: "rc_link_closed",
+  id: uint64,
+  link: uint64,
+  code: uint8,
+}
+
+; The handle `link` was released: its pin and its observer go.
+lcn.carrier_rc_link_released = {
+  kind: "rc_link_released",
+  id: uint64,
+  link: uint64,
+}
+
 ; Lane 1, the Runtime -> the host --------------------------------------------------
 
 ; The outcome of the request `id` names: `failure`, or a success with the
 ; response bytes (`value`), a subscription id (`sub`), an `rc_publish`'s
-; `targets` or an `rc_deliver`'s `admitted` sessions.
+; `targets`, an `rc_deliver`'s `admitted` sessions, an `rc_materialize`'s
+; `link`, `uid` and `module`, or an `rc_link_closed`'s `code`.
 lcn.carrier_rc_reply = {
   kind: "rc_reply",
   id: uint64,
@@ -273,6 +342,10 @@ lcn.carrier_rc_reply = {
   ? sub: uint64,
   ? targets: [* lcn.carrier_target],
   ? admitted: [* uint64],
+  ? link: uint64,
+  ? uid: uint32,
+  ? module: tstr .size (1..64),
+  ? code: uint8,
   ? failure: lcn.carrier_failure,
 }
 
@@ -289,6 +362,24 @@ lcn.carrier_async_done = {
   call: uint64,
   ? value: bstr,
   ? failure: lcn.carrier_failure,
+}
+
+; [plan §2.8 steps 1-2; K13] A route the host's consumer holds ended with
+; `code`, which every new operation on its handles reports from now on;
+; `revoked`: it was revoked, which ends the calls still running through them
+; (G174). The host wipes the route's retained ticket. `links`: each handle of
+; the route and its first terminal cause (INTERFACE l.1486-1490).
+lcn.carrier_route_ended = {
+  kind: "route_ended",
+  route: tstr .size (1..128),
+  code: uint8,
+  revoked: bool,
+  links: [* lcn.carrier_link_first],
+}
+
+lcn.carrier_link_first = {
+  link: uint64,
+  first: uint8,
 }
 
 ; Lane 2, the boundary (part 4b-3.2; G267, plan §2.7) ------------------------------

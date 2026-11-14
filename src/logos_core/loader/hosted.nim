@@ -70,6 +70,11 @@ proc startHosted*(
     live: call.live,
     max_payload_depth: uint64(maxPayloadDepth),
   )
+  let words = h.transportInit()
+  if words.len > 0:
+    # [plan §2.8; part 4b-3.3] The Transport limits of the host's own loop,
+    # which connects its consumer's handles and serves a provider's endpoint.
+    init.transport = Opt.some(words)
   let ep = h.endpointInit()
   if ep.isSome:
     # [SPEC LOADER §5.3; RUN-0200] The Runtime-created listener is the host's

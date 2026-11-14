@@ -38,7 +38,7 @@ import ../abi/[checks, types]
 import ../base/perthread
 import ../runtime/realizer
 import ../transport/io/sock
-import ./[endpoint, rcbinding, state]
+import ./[consumer, endpoint, rcbinding, state]
 
 when defined(linux):
   proc prctl(
@@ -104,6 +104,8 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
     return
 
   maxPayloadDepth = int(min(m.max_payload_depth, uint64(high(int32))))
+  # [plan §2.8] A consumer's own connections use the Runtime's limits.
+  setConsumerTransport(m.transport.get(@[]), maxPayloadDepth)
   let code = mapStaged(m.artifact_path).valueOr:
     refuse(error, P.Bind)
   let b = completeProbe(code, probeCode(code, m.module), false).valueOr:
@@ -265,6 +267,8 @@ proc route(f: seq[byte]) =
   of K.lcn_Carrier_scoped_result:
     let r = m.arm_lcn_Carrier_scoped_result
     answered(r.id, answerOf(r))
+  of K.lcn_Carrier_route_ended:
+    routeEnded(m.arm_lcn_Carrier_route_ended)
   of K.lcn_Carrier_io_admit_established, K.lcn_Carrier_io_admit_failed,
       K.lcn_Carrier_io_admit_unavailable, K.lcn_Carrier_io_respond,
       K.lcn_Carrier_io_close, K.lcn_Carrier_io_terminate, K.lcn_Carrier_io_work_ended,
@@ -351,6 +355,7 @@ proc runHost*() {.noreturn.} =
   let fd = carrierFd()
   initHostShared(fd)
   initBinding()
+  initConsumer()
   lifeCh = createShared(Channel[seq[byte]])
   lifeCh[].open()
   try:

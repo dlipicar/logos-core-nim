@@ -517,6 +517,13 @@ type
       ## SubscriptionResult comes
     rqLinkUnsubscribe ## [I90] a transported handle's `unsubscribe`
     rqLinkNext
+    rqHostedResult
+      ## [plan §2.8] a hosted consumer's connection for its handle completed
+      ## its Hello or failed
+    rqHostedAdmit ## [plan §2.8] one operation through a hosted handle
+    rqHostedClosed ## [plan §2.8] a hosted handle's connection ended
+    rqHostedReleased
+      ## [plan §2.8] a hosted handle was released
       ## [I90] an event worker draining a transported subscription asks for
       ## its next Event; `credit` is the one it is done with
     rqDeliverConn
@@ -710,6 +717,9 @@ type
       ## with a retained selected contract the receiver drops
     credit*: int ## [I90] rqLinkNext: the admitted Event's credit
     pubTag*: uint64 ## [I90] rqDeliverConn (scoped): the publication's tag
+    uid*: uint32 ## [plan §2.8] rqMaterialize (hosted): the provider's expected peer uid
+    module*: string ## [plan §2.8] rqMaterialize (hosted): the provider's module
+    first*: ErrorCode ## [plan §2.8] rqHostedClosed: the handle's first terminal cause
 
   PublishTarget* = object
     ## [I90; plan §2.7] One transported subscriber connection of an ordinary
@@ -760,6 +770,16 @@ type
       ## rqRcDeliver: the worker holds the subscription's gate, so an entry
       ## may be admitted
     conn*: uint64 ## [I90] rqLinkCall: the handle's link
+    hosted*: bool ## [plan §2.8] rqMaterialize: a hosted consumer's, whose host connects
+    material*: bool
+      ## [plan §2.8] rqMaterialize: the host holds unused invocation material
+    op*: uint8
+      ## [plan §2.8] rqHostedAdmit: 0 call, 1 subscribe, 2 unsubscribe, 3 observe
+    closed*: Opt[ErrorCode]
+      ## [plan §2.8] rqHostedAdmit: the host's connection ended with this code
+    connectFailed*: bool ## [plan §2.8] rqHostedResult: the connection failed
+    failCause*: uint8 ## [plan §2.8] rqHostedResult: its `ConnectFailure`
+    code*: ErrorCode ## [plan §2.8] rqHostedResult, rqHostedClosed: its code
     reply*: ReplyChannel
 
   JobKind* = enum

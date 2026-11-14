@@ -229,7 +229,15 @@ execution scope `local-transport` in a `process` (G272). So:
   the meter kit library realized in a host. With no routing rule a route with a hosted end is
   `local-transport`; a `direct` rule naming a hosted module is refused (G272). The claims move in
   part 4b-3.4.
-- **Not yet**: hosted consumers' routes (4b-3.3).
+- **Hosted consumers** (part 4b-3.3; G267): a hosted consumer's route handles and connections are
+  in its host, which keeps a route's invocation material from the answers it passes on
+  (RUN-0173 to RUN-0175) and connects to the peer identity and module the Runtime names (TRN-0187).
+  The Runtime makes the §4.1 checks against its current state (RUN-0177 to RUN-0179) and admits
+  each call, subscription change and end observer in a direct handle's order, so codes, ends and
+  their causes are a direct consumer's, and a handle is never retargeted (RUN-0181, RUN-0182).
+  `test_hosted_routes` (C-1 to C-8, S-18) shows it with the probe kit library in a host, to direct
+  and hosted providers. The host waits for its handlers, end observers and completions before
+  `_MODULE_destroy`. The claims move in part 4b-3.4.
 - **Differences from direct realization**, none visible to a module's Runtime Control calls: a
   host's environment is `module_host_env` only, and on macOS CoreFoundation may add its own
   `__CF_USER_TEXT_ENCODING` inside the process.
