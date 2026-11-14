@@ -340,6 +340,7 @@ when defined(posix):
 
     var hookLock: Lock
     var heldHosts, brokenHosts: array[64, uint] ## [plan §2.3] under `hookLock`
+    var holdingAll: bool ## [plan §2.3] under `hookLock`: every host's end is held
     var endRecords: ptr UncheckedArray[EndRecord]
     var endCount: int
     initLock(hookLock)
@@ -366,7 +367,7 @@ when defined(posix):
 
     proc testHeld(h: Host): bool =
       withLock hookLock:
-        result = heldHosts.marked(h) and not h.sup.closing.load
+        result = (holdingAll or heldHosts.marked(h)) and not h.sup.closing.load
 
     proc testBreak(h: Host): bool =
       withLock hookLock:
@@ -394,6 +395,13 @@ when defined(posix):
       withLock hookLock:
         heldHosts.mark(h, hold)
       h.sup.wakeUp()
+
+    proc holdEnds*(hold: bool) =
+      ## [plan §2.3] Delays (or releases) the confirmation of every host's end,
+      ## those not yet spawned included; `holdEnd` on one of them wakes its
+      ## supervision.
+      withLock hookLock:
+        holdingAll = hold
 
     proc breakCarrier*(h: Host) =
       ## [plan §2.3] The next frame from `h` is treated as malformed.

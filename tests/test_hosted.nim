@@ -635,22 +635,27 @@ when defined(posix):
 
   suite "run.hosted: deadlines end the host (G61; G269)":
     teardown:
+      holdEnds(false)
       leftover()
       check noHostLeft()
 
     test "[RUN-0227] [IMPL-DECISION G269] S-9 past the startup deadline: `error` with `startup-timeout`, `unknown` until the host's end is confirmed, then `absent`; the next start is accepted":
       var cfg = hostedConfig()
-      cfg.startupDeadline = PassingStop
+      # [IMPL] The first start waits this out; the second must finish within it
+      # on a loaded host, which 300 ms did not always allow (refc, 2026-11-14).
+      cfg.startupDeadline = initDuration(milliseconds = 1500 * Slow)
       let dir = cfg.prepare("block-init")
       let e = fixtureEngine(cfg)
       let (_, rc) = e.startClient("c")
       discard e.create(probe(), "p").tryGet
-      # The host's end is held, once it is spawned, until the case has looked.
+      # The host's end is held from before its spawn until the case has looked,
+      # so the deadline cannot end it first.
       var started: Thread[(Engine, string)]
       var held: Host
       proc startOn(arg: (Engine, string)) {.thread.} =
         discard arg[0].start(arg[1])
 
+      holdEnds(true)
       createThread(started, startOn, (e, "p"))
       check waitUntil(
         proc(): bool =
@@ -662,13 +667,13 @@ when defined(posix):
             dropHost(h)
           false
       )
-      holdEnd(held, true)
       joinThread(started)
       let v = e.view("p").tryGet
       check v.state == msError and v.failureOf == "startup-timeout"
       check rc.realization(e, "p") == R.Unknown
       check e.start("p").error.code == ecNotReady
-      holdEnd(held, false)
+      holdEnds(false)
+      holdEnd(held, false) # wakes its supervision
       dropHost(held)
       check e.absentAgain(rc, "p")
       check e.view("p").tryGet.failureOf == "startup-timeout"

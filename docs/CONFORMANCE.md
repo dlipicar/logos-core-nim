@@ -412,7 +412,8 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   lifecycle answer dropped, as a crash would lose it; every state-file write failing; every event
   dropped; a pause between a read and the guarded request it decided on, `openPauseGateForTests`),
   and `callsForTests`, `callTimesForTests` and `targetsForTests` read its record of the calls it made.
-- `hostsup` (DECISIONS I91): `holdEnd` delays the confirmation of a Module Host's end, `breakCarrier`
+- `hostsup` (DECISIONS I91): `holdEnd` delays the confirmation of a Module Host's end (`holdEnds`
+  every host's, those not yet spawned included), `breakCarrier`
   treats the next frame from a host as malformed, and `hostEnds` and `pidOf` read what supervision
   saw. The engine's `moduleHostForTests` hands a test an instance's host, and
   `realizationForTests` reads an instance's `realization` when no client is left to ask. The `logos-module-host` program itself has no hooks: its suites drive it through its carrier
