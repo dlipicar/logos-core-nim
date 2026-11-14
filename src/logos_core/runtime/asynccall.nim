@@ -32,14 +32,28 @@
 ## (l.2155-2158). A cancellation, a timeout or the end of the route or consumer
 ## marks it cancelled and arranges one `request_cancel` after `submit`
 ## returned, unless execution was already released (l.2143-2153).
+##
+## [IMPL; DECISIONS I90, plan §2.5] A served invocation of a transported route
+## is an `AsyncCall` with a session origin: the Runtime thread makes it at
+## `evDispatch`, holds its one reference, and a call worker admits and runs it
+## as above. Its outcome is a Response on the session, never a callback. The
+## G174 discipline, adapted (owner batch B 7): under the ticket's lock, an end
+## code NOT_AUTHORISED means the Runtime answers the Request; otherwise the
+## worker submits the Response while still holding the lock, and on a full
+## output budget releases it, waits 1 ms and tries again. Every other end is
+## answered by the Runtime thread (`unsentFailure`), unless the session
+## already committed it (`markSent`: a Cancel, a closed session).
 
 {.push raises: [], gcsafe.}
 
 import std/[atomics, locks, monotimes, times]
+from std/os import sleep
 import results
 import ../abi/[checks, types]
 import ../iface/[outcome, payload]
 import ./[callside, invoke, plumbing]
+from ../transport/io/api import IoCommand, IoCommandKind, CallOutcome, SubmitResult
+from ./tport import trySubmit
 
 type
   CallPhase* = enum
@@ -86,6 +100,10 @@ type
     kind: CallEnd
     owned: ptr Owned ## the outcome until the callback takes it
     completer: int ## the thread running the completion callback
+    session*: bool ## [I90] a served invocation: its outcome is a Response on `conn`
+    conn*: uint64
+    requestId*: uint64
+    sent: bool ## session: its Response was submitted, or none is due (under `lock`)
 
   Deferred = object
     ## One provider invocation of the deferred surface (INTERFACE §2.9.2).
@@ -147,8 +165,9 @@ proc ownedOf(r: Result[seq[byte], InvocationFailure]): (ErrorCode, ptr Owned) =
   let o = createShared(Owned)
   if r.isOk:
     let b = r.get
-    o.response = copyBytes(cast[ptr UncheckedArray[uint8]](unsafeAddr b[0]), b.len)
-    o.responseLen = b.len
+    if b.len > 0: # empty: a session's introspection, answered by the I/O thread
+      o.response = copyBytes(cast[ptr UncheckedArray[uint8]](unsafeAddr b[0]), b.len)
+      o.responseLen = b.len
     return (ecOk, o)
   let f = r.error
   if f.message.isSome:
@@ -194,23 +213,86 @@ proc refuseQueued*(c: ptr AsyncCall, f: InvocationFailure): bool =
       return true
   false
 
+func outcomeOf(r: Result[seq[byte], InvocationFailure]): CallOutcome =
+  if r.isOk:
+    CallOutcome(ok: true, result: r.get)
+  else:
+    CallOutcome(ok: false, failure: r.error)
+
+proc sessionCommit(
+    c: ptr AsyncCall,
+    t: ptr CallTicket,
+    r: Result[seq[byte], InvocationFailure],
+    workEnded: bool,
+): bool =
+  ## [I90; plan §2.5; owner batch B 7] A served invocation's own outcome: the
+  ## Response is submitted under the ticket's lock (when admitted) and the
+  ## call's lock, and the decision made with it, so it is ordered with the
+  ## route's revocation through the loop (RUNTIME l.1292-1296). A full output
+  ## budget releases both locks before waiting (l.1298). True when `r` is the
+  ## call's outcome and a success.
+  let ok = r.isOk
+  var cmd = IoCommand(
+    conn: c.conn,
+    kind: IoCommandKind.cmdRespond,
+    requestId: c.requestId,
+    outcome: outcomeOf(r),
+    workEnded: workEnded,
+  )
+  while true:
+    var state = 0
+      # 0: lost; 1: decided and sent; 2: busy; 3: decided, the Runtime answers
+    if t != nil:
+      acquire(t.lock)
+    if t != nil and t.endCode == ord(ecNotAuthorised):
+      if c.decide(failed(revokedResult()), okEnded):
+        state = 3
+    else:
+      acquire(c.lock)
+      if c.phase == cpSubmitted:
+        if c.engine.tport.trySubmit(cmd) == SubmitResult.sbBusy:
+          state = 2
+        else:
+          c.decideLocked(r, okResult)
+          c.sent = true
+          state = 1
+      release(c.lock)
+    if t != nil:
+      release(t.lock)
+    case state
+    of 2:
+      sleep(1) # [IMPL] 1 ms, holding nothing
+    of 1, 3:
+      c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
+      return state == 1 and ok
+    else:
+      return false
+
 proc offer(
     c: ptr AsyncCall, r: Result[seq[byte], InvocationFailure]
 ): bool {.discardable.} =
   ## A decision off the Runtime thread; true when `r` is the call's outcome
   ## and a success.
   let ok = r.isOk
+  if c.session:
+    return c.sessionCommit(nil, r, workEnded = true)
   if c.decide(r, okResult):
     c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
     return ok
   false
 
 proc offerCommitted(
-    c: ptr AsyncCall, t: ptr CallTicket, r: Result[seq[byte], InvocationFailure]
+    c: ptr AsyncCall,
+    t: ptr CallTicket,
+    r: Result[seq[byte], InvocationFailure],
+    workEnded = false,
 ): bool {.discardable.} =
   ## [G174] A provider's result, decided under the ticket's lock so the commit
   ## is ordered with the route's revocation (RUNTIME l.1292-1293); true when
-  ## it is the call's outcome and a success.
+  ## it is the call's outcome and a success. `workEnded`: a served
+  ## invocation's provider work ended with it (the synchronous path).
+  if c.session:
+    return c.sessionCommit(t, r, workEnded)
   let ok = r.isOk
   var won = false
   withLock t.lock:
@@ -242,6 +324,41 @@ proc deadline*(c: ptr AsyncCall): Opt[MonoTime] =
     return Opt.none(MonoTime)
   let ms = int64(min(c.timeoutMs, uint64(high(int64) div 2_000_000)))
   Opt.some(c.submittedAt + initDuration(milliseconds = ms))
+
+proc markSent*(c: ptr AsyncCall) =
+  ## [I90] Session: no Response is due from here on (the session committed
+  ## CANCELLED, closed, or was answered by a termination).
+  withLock c.lock:
+    c.sent = true
+
+proc unsentFailure*(c: ptr AsyncCall): Opt[CallOutcome] =
+  ## [I90] Runtime thread, at a session call's terminal decision: the failure
+  ## the Runtime answers its Request with, when nothing was sent for it.
+  withLock c.lock:
+    if c.sent or c.phase < cpTerminal or c.code == ecOk:
+      return Opt.none(CallOutcome)
+    c.sent = true
+    var f = InvocationFailure(code: c.code)
+    if c.owned != nil and c.owned.message != nil:
+      f.message = Opt.some($c.owned.message)
+    return Opt.some(CallOutcome(ok: false, failure: f))
+
+proc introspectSession(c: ptr AsyncCall): bool =
+  ## [E3; I90] An authorized `logos.schema` on a session: the I/O thread
+  ## answers it from the selected contract (`cmdIntrospect`).
+  var cmd = IoCommand(
+    conn: c.conn, kind: IoCommandKind.cmdIntrospect, introspectId: c.requestId
+  )
+  var won = false
+  withLock c.lock:
+    if c.phase == cpSubmitted:
+      discard c.engine.tport.trySubmit(cmd) # uncharged: never busy
+      c.decideLocked(Result[seq[byte], InvocationFailure].ok(@[]), okResult)
+      c.sent = true
+      won = true
+  if won:
+    c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
+  won
 
 proc suppress*(c: ptr AsyncCall) =
   ## [IMPL] The consumer's realization ended: a completion callback that has
@@ -538,7 +655,12 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
   let adm = reply.admission
   var trail: CallTrail
   if adm.introspection:
-    trail.succeeded = c.offer(introspect(c.blob, bare, params, adm.schema, trail))
+    let r = introspect(c.blob, bare, params, adm.schema, trail)
+    if c.session and r.isOk:
+      # [E3] The record commits what the boundary answers with.
+      trail.succeeded = c.introspectSession()
+    else:
+      trail.succeeded = c.offer(r)
     e.record(adm.capture, trail)
     return
   if c.isTerminal:
@@ -553,6 +675,7 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
       callProvider(
         adm, e, c.consumer, c.route, c.generation, c.blob, bare, params, trail
       ),
+      workEnded = true,
     )
     e.record(adm.capture, trail)
     leave(e, adm)
@@ -574,7 +697,9 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
           authorityRefusal(adm, e, $c.consumer, $c.route, bare, v.get)
     if refused.isErr:
       c.offerCommitted(
-        adm.ticket, Result[seq[byte], InvocationFailure].err(refused.error)
+        adm.ticket,
+        Result[seq[byte], InvocationFailure].err(refused.error),
+        workEnded = true,
       )
       e.record(adm.capture, trail)
       leave(e, adm)
@@ -744,3 +869,40 @@ proc prepare*(
   outCall.vtable = addr asyncVtable
   outCall.state = c
   LogosResult()
+
+proc newSessionCall*(
+    e: Engine,
+    consumer, attempt, route: FixedText,
+    generation: uint64,
+    blob: ptr SchemaBlob,
+    methodName: string,
+    params: openArray[byte],
+    conn, requestId: uint64,
+): ptr AsyncCall =
+  ## [I90; plan §2.5] A served invocation of Request `requestId` on session
+  ## `conn`, submitted at once; the Runtime thread holds its one reference.
+  ## `attempt` is the consumer attempt that established the route, which
+  ## admission checks; `blob` (retained by the call) is the provider's
+  ## construction input for the selected contract.
+  discard e.outstanding.fetchAdd(1)
+  let c = createShared(AsyncCall)
+  c.engine = e
+  c.session = true
+  c.conn = conn
+  c.requestId = requestId
+  c.consumer = consumer
+  c.attempt = attempt
+  c.route = route
+  c.generation = generation
+  c.blob = blob
+  c.methodName = copyText(methodName)
+  c.params = cast[ptr UncheckedArray[byte]](allocShared(max(params.len, 1)))
+  for i, b in params:
+    c.params[i] = b
+  c.paramsLen = params.len
+  c.phase = cpSubmitted
+  c.submittedAt = getMonoTime()
+  initLock(c.lock)
+  initCond(c.cond)
+  c.refs.store(1)
+  c

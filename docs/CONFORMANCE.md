@@ -117,6 +117,27 @@ change:
 - **SYSTEM BCP**: bootstrap's Loader step (BCP l.287-290, BCP-0021 to BCP-0024) is tagged by tests,
   and its units keep the BCP's `deferred:tier-4b` default until logosd composes the system (4b-8).
 
+### What Tier 4b step 4b-2 changes
+
+Tier 4b step 4b-2 (DECISIONS I90) builds transported local routes: a host routing rule (G254) selects
+`local-transport` for a route, and the Runtime serves a direct provider at an endpoint of its own
+(G257). Part 4b-2a builds the provider side:
+
+- **RUNTIME**: a transported route's live `establish_route` and `renew_route` answers carry the
+  `local-transport` invocation descriptor and a one-time ticket (RUN-0541, RUN-0623); no observation,
+  record, retained answer or stored file holds a ticket (RUN-0543, RUN-0544; a replay carries no
+  `invocation`, G255). Four §6.2 units are claimed for the Runtime-served endpoint (RUN-0220,
+  RUN-0226, RUN-0229, RUN-0230); the rest of §6.2 and §4.2.1 wait for the Module Host. The
+  consumer's transported handle is part 4b-2b: until then materializing such a route is
+  `MODULE_ERROR`, and the execution-boundary invariance units (RUN-0007, RUN-0008, RUN-0014,
+  IFC-0007 to IFC-0015) stay deferred. RUN-0045, RUN-0552 and IFC-0010 are remote-only and move to
+  Tier 5.
+- **TRANSPORT**: the session is bound to the Runtime's authority decision and ends with it, also
+  after a renewal (TRN-0153, TRN-0317); the ticket goes only to the consumer (TRN-0195). The end of a
+  route terminates, drains or closes its sessions by cause (G260; G174 amended).
+- **CAPABILITY AUTHORITY**: the ticket binds the decision, its freshness and revocation (CAP-0254).
+- **LOADER**: the MAY of l.193 is taken (LDR-0021 leaves inspection).
+
 ### What Tier 4b step 4b-5 changes
 
 Tier 4b step 4b-5 (DECISIONS I94) adds the reference orchestration module, `lcn_orchestrator`, so the

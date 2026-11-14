@@ -14,31 +14,10 @@ import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, surface]
 import ../src/logos_core/transport/[access, boundary, envelope, framing, session]
 import ../src/logos_core/transport/io/sock
-import ./support/[ctl, peerbuild, peerproc, specdata, trnowner]
+import ./support/[ctl, peerbuild, peerproc, shortdir, specdata, trnowner]
 
-# Sockets go under a short private base: TMPDIR when the deepest path fits
-# `sun_path` and its filesystem holds sockets, else /tmp (plan §5.1).
-proc holdsSockets(dir: string): bool =
-  let fd = unixSocket()
-  let path = dir / "probe.sock"
-  result = sockBind(fd, cstring(path)) == 0
-  discard fdClose(fd)
-  discard unlink(cstring(path))
-
-proc makeBase(): string =
-  let probe = "/12345678/logos_storage_module.sock"
-  var root = getEnv("TMPDIR", "/tmp").strip(leading = false, chars = {'/'})
-  if root.len == 0 or root.len + 16 + probe.len + 1 > int(sunPathMax()):
-    root = "/tmp"
-  result = root / ("lcnio-" & $getpid())
-  createDir(result)
-  if not holdsSockets(result) and root != "/tmp":
-    removeDir(result)
-    result = "/tmp" / ("lcnio-" & $getpid())
-    createDir(result)
-  doAssert chmod(cstring(result), 0o700) == 0
-
-let base = makeBase()
+# Sockets go under a short private base (plan §5.1; `support/shortdir.nim`).
+let base = makeShortBase("lcnio")
 
 const deviceTarget = defined(android) or defined(ios)
 
@@ -1183,7 +1162,41 @@ suite "trnio.calls: calls over sockets (TRANSPORT §4, §6, §7, §8.1, §8.6; A
     check r.get.outcome.result == encodeCbor(
       schemaResponse(storageSet, storageRoot).get
     )
-    check o.events(evDispatch, callee).len == 0
+    # [E3] The owner saw it only to authorize it.
+    let d = o.events(evDispatch, callee)
+    check d.len == 1 and d[0].introspection
+    o.done(ep)
+
+  test "[TRN-0161] [I90] E3: an introspection the owner refuses is that failure, holds its slot until answered, and a late cmdIntrospect does nothing":
+    var cfg = fastConfig()
+    cfg.maxInFlight = 1
+    let (o, ep) = served(cfg)
+    o.introspect = false
+    let callee = o.attach(ep, 1)
+    o.call(1, 1, "schema")
+    let d = o.waitN(evDispatch, callee)
+    check d.len == 1 and d[0].introspection
+    # Its slot is held: the next Request waits for it.
+    o.callExists(1, 2)
+    o.settle(50)
+    check o.events(evDispatch, callee).len == 1
+    o.send(
+      IoCommand(
+        conn: callee,
+        kind: cmdRespond,
+        requestId: d[0].requestId,
+        outcome:
+          CallOutcome(ok: false, failure: InvocationFailure(code: ecNotAuthorised)),
+        workEnded: true,
+      )
+    )
+    check o.response(1, 1).code == ecNotAuthorised
+    check o.response(1, 2).code == ecOk
+    # Answered and ended: a late cmdIntrospect for it is ignored.
+    o.send(IoCommand(conn: callee, kind: cmdIntrospect, introspectId: d[0].requestId))
+    o.settle(50)
+    check o.events(evResponse, 1).len == 2
+    check o.events(evClosed).len == 0
     o.done(ep)
 
   test "[TRN-0162] a route that selects an implemented interface discloses only that interface":
@@ -1222,7 +1235,7 @@ suite "trnio.calls: calls over sockets (TRANSPORT §4, §6, §7, §8.1, §8.6; A
     check r.get.outcome.result == selected.schema
     check r.get.outcome.result !=
       encodeCbor(schemaResponse(sensor, sensor.primary.root).get)
-    check o.events(evDispatch).len == 0
+    check o.events(evDispatch).allIt(it.introspection)
     o.done(ep)
 
   test "[TRN-0151] [TRN-0158] [CAP-0253] a method outside the route's access is NOT_AUTHORISED, without dispatch":
@@ -1402,22 +1415,84 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
     check o.waitN(evSubscription, 1).len == 1
     o.callExists(1, 1)
     let a = o.waitN(evDispatch, callee)[0].requestId
-    o.publishScoped(callee, a, Progress, progress(1))
+    o.publishScoped(callee, a, Progress, progress(1), tag = 11)
     check o.waitN(evEvent, 1).len == 1
+    # [E2] Each scoped publication gets its verdict, committed or not.
+    let ok1 = o.waitN(evPublishResult, callee)
+    check ok1.len == 1 and ok1[0].pubResultTag == 11
+    check ok1.len == 1 and ok1[0].pubResultRequest == a
+    check ok1.len == 1 and ok1[0].pubResultFailure.isNone
     o.respondTo(callee, a)
     check o.response(1, 1).code == ecOk
-    o.publishScoped(callee, a, Progress, progress(2))
-    let f = o.waitN(evPublishFailed, callee)
-    check f.len == 1 and f[0].pubFailKind == peNoDestination
-    check f.len == 1 and f[0].pubFailRequest == Opt.some(a)
+    o.publishScoped(callee, a, Progress, progress(2), tag = 12)
+    let f = o.waitN(evPublishResult, callee, 2)
+    check f.len == 2 and f[1].pubResultTag == 12
+    check f.len == 2 and f[1].pubResultFailure.get.kind == peNoDestination
     o.callExists(1, 2)
     let b = o.waitN(evDispatch, callee, 2)[1].requestId
     o.cancel(1, 2)
     check o.response(1, 2).code == ecCancelled
     o.settle(20)
-    o.publishScoped(callee, b, Progress, progress(3))
-    check o.waitN(evPublishFailed, callee, 2).len == 2
+    o.publishScoped(callee, b, Progress, progress(3), tag = 13)
+    let g = o.waitN(evPublishResult, callee, 3)
+    check g.len == 3 and g[2].pubResultTag == 13 and g[2].pubResultFailure.isSome
     check o.events(evEvent, 1).len == 1
+    check o.events(evPublishFailed, callee).len == 0 # never for a scoped one
+    o.done(ep)
+
+  test "[TRN-0265] [IMPL-DECISION G165] [I90] E2: a scoped Event too large for the peer is reported, then tlClose closes":
+    let (o, ep) = served()
+    o.respond = false
+    let callee = o.attach(ep, 1)
+    o.subscribe(1, 1, Progress)
+    check o.waitN(evSubscription, 1).len == 1
+    o.callExists(1, 1)
+    let a = o.waitN(evDispatch, callee)[0].requestId
+    let huge = progress(0, "x".repeat(int(MinFrameLimit)))
+    o.publishScoped(callee, a, Progress, huge, tlReport, tag = 1)
+    let f = o.waitN(evPublishResult, callee, timeoutMs = BigWait)
+    check f.len == 1 and f[0].pubResultFailure.get.kind == peTooLarge
+    check f.len == 1 and f[0].pubResultFailure.get.code == ecModule
+    o.publishScoped(callee, a, Progress, huge, tlClose, tag = 2)
+    let g = o.waitN(evPublishResult, callee, 2, timeoutMs = BigWait)
+    check g.len == 2 and g[1].pubResultTag == 2 and g[1].pubResultFailure.isSome
+    let closed = o.waitN(evClosed, callee, timeoutMs = BigWait)
+    check closed.len == 1 and closed[0].cause == ccProtocol
+    check closed.len == 1 and closed[0].code == ecTransport
+    # A scoped publication on a closed connection is still answered.
+    o.publishScoped(callee, a, Progress, progress(1), tag = 3)
+    let h = o.waitN(evPublishResult, callee, 3)
+    check h.len == 3 and h[2].pubResultFailure.get.kind == peClosed
+    o.done(ep)
+
+  test "[TRN-0106] [I90] E1: cmdPublishConn reaches the subscriptions of one connection only":
+    let (o, ep) = served()
+    let c1 = o.attach(ep, 1)
+    let c2 = o.attach(ep, 2)
+    o.subscribe(1, 1, Progress)
+    o.subscribe(2, 1, Progress)
+    check o.waitN(evSubscription, 1).len == 1
+    check o.waitN(evSubscription, 2).len == 1
+    o.publishConn(c2, Progress, progress(7))
+    let e = o.waitN(evEvent, 2)
+    check e.len == 1 and decodeValue(e[0].eventData).get == progress(7)
+    o.settle(50)
+    check o.events(evEvent, 1).len == 0
+    # Refusals are reported for that connection, as for cmdPublish.
+    o.publishConn(c1, Progress, cborMap())
+    let f = o.waitN(evPublishFailed, c1)
+    check f.len == 1 and f[0].pubFailKind == peInvalid and f[0].pubFailRequest.isNone
+    # Its payload is charged until committed.
+    check o.loop.submit(
+      IoCommand(conn: c1, kind: cmdPublishConn, event: Progress, data: newSeq[byte](8))
+    ) == sbOk
+    # A closed connection: nothing to report.
+    o.send(IoCommand(conn: c2, kind: cmdClose))
+    check o.waitN(evClosed, c2).len == 1
+    o.publishConn(c2, Progress, progress(8))
+    o.settle(50)
+    check o.events(evEvent, 2).len == 1
+    check o.events(evPublishFailed, c2).len == 0
     o.done(ep)
 
   test "[TRN-0265] [TRN-0266] [IMPL-DECISION G165] an oversized Event is never committed: tlReport keeps the connection, tlClose closes":

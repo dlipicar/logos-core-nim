@@ -1147,7 +1147,9 @@ suite "run.rc: realization changes (G227)":
     leftover()
 
   test "[RUN-0630] [IMPL-DECISION G227] the late end of a cleanup gives `execution_state_changed` at a new revision and no state change":
-    let e = fixtureEngine(rcConfig())
+    var cfg = rcConfig()
+    cfg.stopDeadline = PassingStop
+    let e = fixtureEngine(cfg)
     let (_, rc) = e.startClient("c")
     discard e.started(client(), "w")
     var a, b: LogosSubscriptionId

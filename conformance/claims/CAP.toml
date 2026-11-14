@@ -33,7 +33,5 @@ default = "claimed"
 "CAP-0192" = "deferred:tier-5"
 # §11, transport step 10a (DECISIONS I83): the route ticket binds the consumer, provider, contract and
 # route access; bad material gives no session and no dispatch; a COSE object is not a Hello token
-# (CAP-0253, CAP-0255, CAP-0256, claimed by default). The binding carries the decision, its expiry
-# and revocation, but they come from a test owner until the Runtime supplies them in 10b: tagged, not
-# claimed (fable-review §7.5).
-"CAP-0254" = "deferred:tier-4b"
+# (CAP-0253, CAP-0255, CAP-0256, claimed by default). CAP-0254 (decision, freshness, revocation) is
+# claimed with step 4b-2a, where the Runtime issues and revokes the tickets (DECISIONS I90).

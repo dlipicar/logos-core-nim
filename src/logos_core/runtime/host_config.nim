@@ -18,6 +18,9 @@ import ../iface/outcome
 import ../abi/host
 import ./[artifact, configcheck, plumbing]
 import ./host_config_types
+import ../transport/io/api
+from ../transport/io/sock import unixStream
+from ../transport/framing import MinFrameLimit
 from ../authority/policy import loadPolicy
 from ./authscopes import AuthorityModule, caRoots
 
@@ -67,6 +70,12 @@ type
     modules*: seq[HostModule] ## in configuration order
     ordering*: seq[(string, string)] ## (prerequisite, dependent), RUNTIME §3.7
     declarations*: seq[ModuleDeclaration] ## [G55] what `create_module` may create
+    routing*: seq[RoutingRule] ## [IMPL-DECISION G254; I90]
+    transport*: TransportConfig
+      ## [SPEC TRANSPORT §8.6; I90] `defaultTransportConfig()` with the
+      ## configured limits, validated; its depth is `maxPayloadDepth` (G241)
+    endpointDir*: string
+      ## [SPEC TRANSPORT §8.2; G58; I90] `<work_dir>/endpoints` unless set
 
   ConfigError* = object
     message*: string
@@ -344,6 +353,90 @@ proc checkCallAudit(c: var HostConfig, a: LcnAppCallAudit): Result[void, ConfigE
       Opt.some(EvidenceKeySetting(kid: k.kid, secretKeyFile: k.secret_key_file))
   ok()
 
+const
+  MsNanos = 1_000_000'i64
+  MiB = 1024 * 1024
+
+proc checkTransport(
+    c: var HostConfig, t: Opt[LcnAppTransport]
+): Result[void, ConfigError] =
+  ## [SPEC TRANSPORT §2.1, §5.2, §8.6; I90] The configured limits over
+  ## `defaultTransportConfig()`. A larger `frame_limit` raises the limits that
+  ## must hold one maximal frame, unless they are configured too [IMPL]; then
+  ## `TransportConfig.validate` runs, and its refusal names the limit.
+  var x = defaultTransportConfig()
+  x.maxPayloadDepth = c.maxPayloadDepth
+  if t.isSome:
+    let a = t.get
+    if a.frame_limit.isSome:
+      let f = a.frame_limit.get
+      if f < MinFrameLimit:
+        return err(configError("transport.frame_limit must be at least 16777216"))
+      x.frameLimit = f
+      x.peerFrameLimit = f
+      let n = int(f)
+      x.connOutputBytes = max(x.connOutputBytes, 2 * n + 64 * 1024)
+      x.callerUndeliveredBytes = max(x.callerUndeliveredBytes, 2 * n)
+      x.maxHelloInputBytes = max(x.maxHelloInputBytes, 2 * n)
+      x.maxInputBytes = max(x.maxInputBytes, 4 * n)
+      x.maxOutputBytes = max(x.maxOutputBytes, 4 * x.connOutputBytes)
+    template millis(field: untyped, v: Opt[uint32], name: string) =
+      if v.isSome:
+        if v.get < MinDeadlineMs or v.get > MaxDeadlineMs:
+          return
+            err(configError("transport." & name & " must be 1 to 3600000 milliseconds"))
+        x.field = int64(v.get) * MsNanos
+
+    millis(helloTimeout, a.hello_timeout_ms, "hello_timeout_ms")
+    millis(writeStallTimeout, a.write_stall_timeout_ms, "write_stall_timeout_ms")
+    if a.max_pending_output_bytes.isSome:
+      let v = a.max_pending_output_bytes.get
+      if v == 0 or v > uint64(high(int32)) * 16:
+        return err(configError("transport.max_pending_output_bytes is out of range"))
+      x.maxPendingOutputBytes = int(v)
+    if a.conn_output_bytes.isSome:
+      x.connOutputBytes = int(a.conn_output_bytes.get)
+      x.maxOutputBytes = max(x.maxOutputBytes, x.connOutputBytes)
+    if a.caller_undelivered_bytes.isSome:
+      x.callerUndeliveredBytes = int(a.caller_undelivered_bytes.get)
+    if a.max_inbound.isSome:
+      x.maxInbound = int(a.max_inbound.get)
+      x.maxPendingHellos = min(x.maxPendingHellos, x.maxInbound)
+    if a.max_outbound.isSome:
+      x.maxOutbound = int(a.max_outbound.get)
+    if a.max_calls.isSome:
+      x.maxCalls = int(a.max_calls.get)
+    if a.max_in_flight.isSome:
+      x.maxInFlight = int(a.max_in_flight.get)
+  x.validate().isOkOr:
+    return err(configError("transport: " & error))
+  c.transport = x
+  ok()
+
+proc checkRouting(
+    c: var HostConfig, rules: Opt[seq[LcnAppRoutingRule]]
+): Result[void, ConfigError] =
+  ## [IMPL-DECISION G254; I90] `routing`, as `routing.checkRules`.
+  if rules.isNone:
+    return ok()
+  if rules.get.len == 0:
+    return err(configError("routing is present but empty"))
+  for r in rules.get:
+    c.routing.add(
+      RoutingRule(
+        caller: r.caller,
+        callee: r.callee,
+        mode:
+          case r.mode.kind
+          of LcnAppRoutingRuleModeChoiceKind.Direct: rmDirect
+          of LcnAppRoutingRuleModeChoiceKind.Local_transport: rmLocalTransport
+        ,
+      )
+    )
+  checkRules(c.routing, unixStream).isOkOr:
+    return err(configError("routing: " & error))
+  ok()
+
 proc decodeHostConfig*(
     format: string, data: openArray[byte]
 ): Result[HostConfig, ConfigError] =
@@ -498,6 +591,12 @@ proc decodeHostConfig*(
     ?checkAuthority(c, cfg.policy.arm_Capability_authority)
   if cfg.call_audit.isSome:
     ?checkCallAudit(c, cfg.call_audit.get)
+  # [I90] Transported routes: the routing rules, the I/O thread's limits and
+  # the endpoint directory.
+  ?checkRouting(c, cfg.routing)
+  ?checkTransport(c, cfg.transport)
+  c.endpointDir = cfg.runtime.endpoint_dir.get(c.workDir / "endpoints")
+  ?checkPath("endpoint_dir", c.endpointDir)
   ok(c)
 
 proc parseHostConfig*(

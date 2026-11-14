@@ -24,9 +24,9 @@ import ../cbor
 import ../commitment
 import ../hash/hashinput
 import ../iface/[accept, names, outcome]
-import ./rc_types
+import ./[rc_types, routing]
 
-export rc_types
+export rc_types, routing
 
 const MaxRetainedKeys* = 4096
   ## [IMPL] successful route-operation results kept per consumer for
@@ -124,6 +124,14 @@ type
       ## its unreleased handles; one whose attempt's context is destroyed no
       ## longer counts (INTERFACE l.2004-2006)
     pending*: int ## asynchronous calls submitted through it and still recorded
+    mode*: RouteMode
+      ## [IMPL-DECISION G254; I90] fixed at establishment; renewal keeps
+      ## it (RUNTIME l.940)
+    consumerAttempt*: string
+      ## [I90] the consumer attempt that established it: served calls are
+      ## admitted against it, there being no handle (plan §2.5)
+    endpoint*: Opt[uint64] ## [G257] a transported route's served endpoint
+    sessions*: seq[uint64] ## [I90] its sessions at that endpoint, by `ConnId`
     droppable*: bool ## ended and reachable through nothing: its record may be dropped
     dropped*: bool ## [IMPL] dropped: its id is unknown from then on
 
@@ -307,7 +315,8 @@ func reachable*(r: Route): bool =
   ## [SPEC RUNTIME §7.5 l.1346] Whether something can still reach the record
   ## by its route: an unreleased handle, a handle observing its end, an
   ## admitted call, or a submitted call. A handle's subscriptions go with it.
-  r.pins.len > 0 or r.handles.len > 0 or r.calls.len > 0 or r.pending > 0
+  r.pins.len > 0 or r.handles.len > 0 or r.calls.len > 0 or r.pending > 0 or
+    r.sessions.len > 0
 
 func terminate*(r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229] The route takes no new calls. Only

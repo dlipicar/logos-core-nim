@@ -100,6 +100,14 @@ when unixStream:
       )
     ok()
 
+proc checkEndpointBase*(base: string): Result[void, EndpointError] =
+  ## [IMPL] The base check `makeEndpointDir` runs, for an owner that wants
+  ## its configuration refused early (the Runtime at open, I90).
+  when unixStream:
+    checkBase(base)
+  else:
+    err(fail(eeUnsupported, "unix-stream endpoints are not supported (§8.2.1)"))
+
 proc makeEndpointDir*(base: string): Result[EndpointDir, EndpointError] =
   ## [SPEC TRANSPORT §8.2; G58] A new directory `<base>/<8 hex>`, mode 0700 and
   ## owned by the effective uid. Its name is random and never reused, so a
@@ -187,7 +195,7 @@ proc removeDir*(d: EndpointDir): Result[void, EndpointError] =
   else:
     err(fail(eeUnsupported, "unix-stream endpoints are not supported (§8.2.1)"))
 
-proc validateEndpoint*(ep: Endpoint): Result[void, EndpointError]
+proc validateEndpoint*(ep: Endpoint): Result[void, EndpointError] {.gcsafe.}
 
 proc bindEndpoint*(
     d: EndpointDir, moduleName: string, backlog = 128
@@ -267,7 +275,7 @@ proc createEndpoint*(
     return err(error)
   ok(ep)
 
-proc validateEndpoint*(ep: Endpoint): Result[void, EndpointError] =
+proc validateEndpoint*(ep: Endpoint): Result[void, EndpointError] {.gcsafe.} =
   ## [SPEC TRANSPORT §8.2] The listener is a listening AF_UNIX stream socket
   ## bound to `path`; the directory is still the 0700 directory of this uid that
   ## was made, at its path, not a symbolic link; the socket path is still the

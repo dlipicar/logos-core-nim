@@ -153,6 +153,12 @@ type
     cmdUnsubscribe ## caller: an Unsubscribe
     cmdAbandonSubscription ## caller: stop delivering a subscription's Events (§3.4)
     cmdRelease ## caller: the owner is done with `evEvent` bytes (credits)
+    cmdPublishConn
+      ## callee: an ordinary Event to the subscriptions of one connection
+      ## (E1, DECISIONS I90): the owner authorizes each route's delivery
+    cmdIntrospect
+      ## callee: answer a dispatched `logos.schema` Request from the selected
+      ## contract, once the owner authorized it (E3, DECISIONS I90)
 
   IoCommand* = object
     conn*: ConnId
@@ -192,14 +198,24 @@ type
       subEvent*: string ## cmdSubscribe: the event
       subFailure*: Opt[InvocationFailure]
         ## cmdSubscriptionResult: none commits the successful result
-    of cmdPublish, cmdPublishScoped:
+    of cmdPublish, cmdPublishScoped, cmdPublishConn:
       pubEndpoint*: EndpointId ## cmdPublish: every established connection there
       pubRequest*: uint64 ## cmdPublishScoped: the invocation (on `conn`)
+      pubTag*: uint64
+        ## cmdPublishScoped: owner-chosen, echoed by its `evPublishResult` (E2)
       event*: string
       data*: seq[byte] ## the encoded data
       tooLarge*: TooLargeAction
     of cmdRelease:
       releaseBytes*: int
+    of cmdIntrospect:
+      introspectId*: uint64
+
+  PublishFailure* = object
+    ## Why a publication was not committed (I54's mapping in `code`).
+    kind*: PublishErrorKind
+    code*: ErrorCode
+    msg*: string
 
   CloseCause* = enum
     ccPeerClosed ## end of input or a reset from the peer
@@ -237,9 +253,14 @@ type
     evStopped ## the loop has stopped; the last event
     evSubscribe ## callee: a Subscribe; answer with `cmdSubscriptionResult`
     evUnsubscribe ## callee: an Unsubscribe; answer with `cmdSubscriptionResult`
-    evPublishFailed ## callee: a publication was not committed on `conn`
+    evPublishFailed
+      ## callee: an ordinary publication (`cmdPublish`, `cmdPublishConn`) was
+      ## not committed on `conn`
     evEvent ## caller: an Event; release its `credit` with `cmdRelease`
     evSubscription ## caller: a Subscribe or Unsubscribe completed
+    evPublishResult
+      ## callee: the outcome of one `cmdPublishScoped`, committed or not (E2,
+      ## DECISIONS I90)
 
   IoEvent* = object
     conn*: ConnId
@@ -261,6 +282,10 @@ type
       requestId*: uint64
       methodName*: string
       params*: seq[byte] ## the encoded, validated params map
+      introspection*: bool
+        ## `logos.schema` (E3): authorize it as any call, then answer with
+        ## `cmdIntrospect` (or a failed `cmdRespond`); the I/O thread builds
+        ## the answer from the selected contract only
     of evStop:
       stopId*: uint64
     of evConnected:
@@ -293,7 +318,7 @@ type
       pubFailKind*: PublishErrorKind
       pubFailCode*: ErrorCode ## I54's mapping (`PublishError.code`)
       pubFailEvent*: string
-      pubFailRequest*: Opt[uint64] ## the invocation, for a scoped publication
+      pubFailRequest*: Opt[uint64] ## [IMPL] always none since E2
       pubFailMsg*: string
     of evEvent:
       eventSub*: uint64
@@ -304,6 +329,10 @@ type
       subscriptionId*: uint64
       subscriptionOp*: MessageKind ## mkSubscribe or mkUnsubscribe
       subscriptionFailure*: Opt[InvocationFailure]
+    of evPublishResult:
+      pubResultTag*: uint64 ## the command's `pubTag`
+      pubResultRequest*: uint64 ## the invocation
+      pubResultFailure*: Opt[PublishFailure] ## none: committed
 
   IoSink* = proc(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].}
     ## Called on the I/O thread with every event, in order (per connection, the

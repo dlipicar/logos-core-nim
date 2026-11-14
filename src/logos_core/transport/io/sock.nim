@@ -37,6 +37,9 @@ when unixStream:
   proc sockRecv*(fd: cint, p: pointer, n: csize_t): clong {.importc: "lcn_recv", cdecl.}
   proc shutdownWrite*(fd: cint): cint {.importc: "lcn_shutdown_write", cdecl.}
   proc fdClose*(fd: cint): cint {.importc: "lcn_close", cdecl.}
+  proc dupFd*(fd: cint): cint {.importc: "lcn_dup_cloexec", cdecl.}
+    ## A close-on-exec copy of `fd`, or a negated errno.
+
   proc peerCredRaw*(
     fd: cint, uid, gid: ptr uint32, pid: ptr int32
   ): cint {.importc: "lcn_peercred", cdecl.}
@@ -151,6 +154,9 @@ else:
 
   proc fdClose*(fd: cint): cint =
     0
+
+  proc dupFd*(fd: cint): cint =
+    -1
 
   proc geteuid*(): uint32 =
     0

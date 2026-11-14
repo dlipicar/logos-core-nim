@@ -963,9 +963,11 @@ proc reaches(e: Engine, instance: string, state: ModuleState): bool =
 proc stoppedFor(e: Engine, instance: string, kind: FailureKind): bool =
   ## [G168 extended] `unloaded` with the classification, intent and origin
   ## kept.
-  if not e.reaches(instance, msUnloaded):
-    return false
+  let reached = e.reaches(instance, msUnloaded)
   let v = e.view(instance).tryGet
+  if not reached:
+    checkpoint(instance & " is " & $v.state & " with failure " & $v.failure)
+    return false
   v.failure.isSome and v.failure.get.kind == kind and v.execution.intent == inRequested and
     v.intentOrigin.instance == Orch
 

@@ -54,6 +54,14 @@ iterator digests*[B](s: TicketStore[B]): Blake3Digest =
   for d in tables.keys(s.live):
     yield d
 
+func earliest*[B](s: TicketStore[B]): Opt[Nanos] =
+  ## The earliest expiry of a live record: when `sweep` next deletes one.
+  var t = Opt.none(Nanos)
+  for r in tables.values(s.live):
+    if t.isNone or r.expires < t.get:
+      t = Opt.some(r.expires)
+  t
+
 proc sweep*[B](s: var TicketStore[B], now: Nanos) =
   ## Deletes every expired record [SPEC TRANSPORT §8.1.1].
   var gone: seq[Blake3Digest]

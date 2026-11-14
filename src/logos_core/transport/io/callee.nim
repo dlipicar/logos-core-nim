@@ -211,7 +211,6 @@ proc admit*(io: Io, c: Conn, v: AdmitVerdict) =
     # [SPEC TRANSPORT §3.1 step 3] The ticket was not evaluated: it stays live.
     io.closeConn(c, ccProtocol, ecModule, Opt.some(protocolErrorBody(ecModule)))
 
-proc introspect(io: Io, c: Conn, id: uint64)
 proc workEnded*(io: Io, c: Conn, id: uint64)
 
 proc queueForSlots(io: Io, c: Conn) =
@@ -225,19 +224,19 @@ proc act(io: Io, c: Conn, acts: seq[CalleeAction]) =
       return
     case a.kind
     of caDispatch:
-      if a.introspection:
-        io.introspect(c, a.request.id)
-      else:
-        c.dispatched.incl(a.request.id)
-        io.emit(
-          IoEvent(
-            conn: c.id,
-            kind: evDispatch,
-            requestId: a.request.id,
-            methodName: a.request.methodName,
-            params: encodeCbor(a.request.params),
-          )
+      # [E3; DECISIONS I90] `logos.schema` too goes to the owner, which
+      # authorizes it as any call and answers with `cmdIntrospect`.
+      c.dispatched.incl(a.request.id)
+      io.emit(
+        IoEvent(
+          conn: c.id,
+          kind: evDispatch,
+          requestId: a.request.id,
+          methodName: a.request.methodName,
+          params: encodeCbor(a.request.params),
+          introspection: a.introspection,
         )
+      )
     of caSend:
       io.commitControl(c, a.bytes)
     of caStop:
@@ -315,18 +314,22 @@ proc workEnded*(io: Io, c: Conn, id: uint64) =
     io.zombies.del(c.id)
   io.admitWaiting()
 
-proc introspect(io: Io, c: Conn, id: uint64) =
-  ## [SPEC TRANSPORT §8.1] `logos.schema`, answered by the provider-side
-  ## boundary with the selected contract's construction input only; the owner
-  ## never sees it, and its slot is released at once.
-  let v = schemaResponse(c.callee.boundary.contracts, c.callee.boundary.selected)
-  if v.isErr:
-    io.respondOutcome(
-      c, id, Outcome(ok: false, failure: InvocationFailure(code: ecModule))
-    )
-  else:
-    let n = encodeCbor(v.get).len
-    io.respondOutcome(c, id, Outcome(ok: true, response: v.get), n)
+proc introspect*(io: Io, c: Conn, id: uint64) =
+  ## [SPEC TRANSPORT §8.1; E3] `cmdIntrospect`: the owner authorized the
+  ## dispatched `logos.schema` Request `id`; the provider-side boundary answers
+  ## with the selected contract's construction input only, and its slot is
+  ## released. On a closed connection only the slot is released.
+  if c.role != roCallee or not c.callee.isExecuting(id):
+    return
+  if c.established and c.callee.isInFlight(id):
+    let v = schemaResponse(c.callee.boundary.contracts, c.callee.boundary.selected)
+    if v.isErr:
+      io.respondOutcome(
+        c, id, Outcome(ok: false, failure: InvocationFailure(code: ecModule))
+      )
+    else:
+      let n = encodeCbor(v.get).len
+      io.respondOutcome(c, id, Outcome(ok: true, response: v.get), n)
   io.workEnded(c, id)
 
 proc calleeFrame*(io: Io, c: Conn, body: sink seq[byte]) =
@@ -453,6 +456,26 @@ proc decodeData(io: Io, data: openArray[byte]): Result[CborValue, PublishError] 
     return err(PublishError(kind: peInvalid, msg: "the data does not decode"))
   ok(v.get)
 
+proc publishTo(io: Io, c: Conn, data: var Opt[CborValue], cmd: IoCommand) =
+  ## One connection's part of an ordinary publication.
+  let ids = c.callee.subscribersOf(cmd.event)
+  if ids.len == 0:
+    return
+  if data.isNone:
+    let d = io.decodeData(cmd.data)
+    if d.isErr:
+      io.publishFailed(c, d.error, cmd.event, Opt.none(uint64))
+      return
+    data = Opt.some(d.get)
+  for id in ids:
+    let r = c.callee.publish(id, data.get)
+    if r.isErr:
+      io.refused(c, r.error, cmd.event, Opt.none(uint64), cmd.tooLarge)
+      break
+    io.commitEvents(c, @[r.get])
+    if c.closed:
+      break
+
 proc publish*(io: Io, cmd: IoCommand) =
   ## [SPEC TRANSPORT §5.1, §5.2, §8.1] `cmdPublish`: an Event to every active
   ## subscription to `event` on the established connections of the endpoint,
@@ -468,49 +491,72 @@ proc publish*(io: Io, cmd: IoCommand) =
   )
   var data = Opt.none(CborValue)
   for c in conns:
-    let ids = c.callee.subscribersOf(cmd.event)
-    if ids.len == 0:
-      continue
-    if data.isNone:
-      let d = io.decodeData(cmd.data)
-      if d.isErr:
-        io.publishFailed(c, d.error, cmd.event, Opt.none(uint64))
-        continue
-      data = Opt.some(d.get)
-    for id in ids:
-      let r = c.callee.publish(id, data.get)
-      if r.isErr:
-        io.refused(c, r.error, cmd.event, Opt.none(uint64), cmd.tooLarge)
-        break
-      io.commitEvents(c, @[r.get])
-      if c.closed:
-        break
+    io.publishTo(c, data, cmd)
+
+proc publishConn*(io: Io, c: Conn, cmd: IoCommand) =
+  ## [SPEC TRANSPORT §5.1, §5.2; E1, DECISIONS I90] `cmdPublishConn`: an
+  ## ordinary Event to the active subscriptions to `event` on one connection,
+  ## within its publish scope, by subscription id; a refusal is reported as for
+  ## `cmdPublish`. Nothing is reported for a connection already closed.
+  if c.isNil or c.role != roCallee or not c.established:
+    return
+  var data = Opt.none(CborValue)
+  io.publishTo(c, data, cmd)
+
+proc publishResult(io: Io, conn: ConnId, cmd: IoCommand, failure: Opt[PublishFailure]) =
+  io.emit(
+    IoEvent(
+      conn: conn,
+      kind: evPublishResult,
+      pubResultTag: cmd.pubTag,
+      pubResultRequest: cmd.pubRequest,
+      pubResultFailure: failure,
+    )
+  )
+
+func toFailure(e: PublishError): Opt[PublishFailure] =
+  Opt.some(PublishFailure(kind: e.kind, code: e.code, msg: e.msg))
 
 proc publishScoped*(io: Io, c: Conn, cmd: IoCommand) =
   ## [SPEC TRANSPORT §5.2, §6; RUNTIME §7.3.1] `cmdPublishScoped`: one Event
   ## per active subscription to `event` on the invocation's connection, while
-  ## the request is in flight.
-  let req = Opt.some(cmd.pubRequest)
+  ## the request is in flight. [E2; DECISIONS I90] Every one is answered by an
+  ## `evPublishResult`, committed or not, so its publisher learns the outcome
+  ## (INTERFACE l.2189-2196). A too-large Event under `tlClose` closes the
+  ## connection after its failure is reported.
   if c.isNil or c.role != roCallee or not c.established:
-    io.emit(
-      IoEvent(
-        conn: cmd.conn,
-        kind: evPublishFailed,
-        pubFailKind: peClosed,
-        pubFailCode: ecTransport,
-        pubFailEvent: cmd.event,
-        pubFailRequest: req,
-        pubFailMsg: "the connection is closed",
-      )
+    io.publishResult(
+      cmd.conn,
+      cmd,
+      Opt.some(
+        PublishFailure(
+          kind: peClosed, code: ecTransport, msg: "the connection is closed"
+        )
+      ),
     )
     return
   let data = io.decodeData(cmd.data).valueOr:
-    io.publishFailed(c, error, cmd.event, req)
+    io.publishResult(c.id, cmd, toFailure(error))
     return
   let frames = c.callee.publishScoped(cmd.pubRequest, cmd.event, data).valueOr:
-    io.refused(c, error, cmd.event, req, cmd.tooLarge)
+    io.publishResult(c.id, cmd, toFailure(error))
+    if error.kind == peTooLarge and cmd.tooLarge == tlClose:
+      # [SPEC TRANSPORT §2.1; G165(a)]
+      io.closeConn(c, ccProtocol, ecTransport, Opt.some(protocolErrorBody(ecTransport)))
     return
   io.commitEvents(c, frames)
+  if c.closed:
+    # The output overflowed while committing: closure ends the invocation's
+    # subscriptions, and the Event was not delivered (§5.2).
+    io.publishResult(
+      c.id,
+      cmd,
+      Opt.some(
+        PublishFailure(kind: peClosed, code: ecTransport, msg: "the connection closed")
+      ),
+    )
+  else:
+    io.publishResult(c.id, cmd, Opt.none(PublishFailure))
 
 # The session's end -----------------------------------------------------------------
 

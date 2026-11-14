@@ -644,9 +644,11 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     e.finish()
     # `error` whose cleanup has not finished: the state alone is not the evidence.
     # The stop of an `error` instance whose cleanup is pending waits in
-    # `stopping`; this engine's stop deadline (300 ms) ends it in `error` with
-    # intent stopped, and nothing changes the revision after that.
-    let f = newEngine(rconfig())
+    # `stopping`; this engine's stop deadline (300 ms × `Slow`) ends it in
+    # `error` with intent stopped, and nothing changes the revision after that.
+    var fcfg = rconfig()
+    fcfg.stopDeadline = PassingStop
+    let f = newEngine(fcfg)
     let (_, frc) = f.startClient("a")
     discard f.create(counter(), "v").tryGet
     check f.start("v").tryGet.state == msReady

@@ -864,6 +864,32 @@ suite "trn.hello: Hello and route tickets (TRANSPORT §3.1, §3.3, §8.1)":
       endpoint, store, wire(helloMap(module = cbor("")).with("x", cbor(1'u64))), Second
     ).error.reason == hrEnvelope
 
+  test "[TRN-0145] [TRN-0146] [I90] E4: the owner's state check runs after every Hello check and before redemption; its refusal consumes nothing":
+    var store: TicketStore[RouteBinding]
+    let t = store.issue(routeBinding(consumer = "app-7"), 0, 100 * Second).get
+    var seen: seq[string]
+    let refuse: HelloCheck = proc(b: RouteBinding): Result[void, HelloFailure] =
+      seen.add(b.consumer)
+      err(failure(ecNotAuthorised, hrState, NotAuthorisedMessage))
+    let f = acceptHello(endpoint, store, helloWith(t), Second, check = refuse).error
+    check f.code == ecNotAuthorised and f.reason == hrState
+    check seen == @["app-7"]
+    check store.len == 1 # still live
+    # A failed earlier check never reaches it.
+    seen.setLen(0)
+    check acceptHello(
+      endpoint,
+      store,
+      helloWith(t, schemaCommitment(sensorIface)),
+      Second,
+      check = refuse,
+    ).error.reason == hrSchema
+    check seen.len == 0
+    let pass: HelloCheck = proc(b: RouteBinding): Result[void, HelloFailure] =
+      ok()
+    check acceptHello(endpoint, store, helloWith(t), Second, check = pass).isOk
+    check store.len == 0
+
   test "[TRN-0146] [TRN-0145] [TRN-0157] [TRN-0177] [TRN-0079] [TRN-0075] a redeemed ticket never establishes another session":
     var store: TicketStore[RouteBinding]
     let t = store.issue(routeBinding(), 0, 100 * Second).get

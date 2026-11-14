@@ -13,10 +13,6 @@ ids = ["LDR-0010"]
 reason = "A negative over the Loader's code (LOADER l.102). src/logos_core/loader/ imports from runtime/ only the realizer and what it uses (config, native, artifact), the side table, the bell and callside's call frames; none of engine, store, routes, bindings, observe or rcevents. The Loader returns realization records and status in its responses, and the engine applies every transition on the Runtime thread (runtime/engine.nim `realizeThroughLoader`, `releasedThroughLoader`, `classify`; DECISIONS I75). The tests show the engine's transitions; that the Loader has no path to Runtime-owned state is shown by its imports."
 
 [[item]]
-ids = ["LDR-0021"]
-reason = "A MAY not taken in 4b-1 (LOADER l.190): a directly realized provider is reached through the in-process route only. A Runtime-served Transport endpoint for direct providers comes with Tier 4b step 4b-2 (plan K8)."
-
-[[item]]
 ids = ["LDR-0022"]
 reason = "A duty of the language implementation (LOADER l.202). Nim exports the canonical C ABI only through an adapter: lcn-gen's kit (src/logos_core/codegen/kitgen.nim) generates the `_MODULE_*` exports for the Loader (src/logos_core/loader/logos_module_loader_kit.nim) and for every test fixture built with a kit (tests/support/kitbuild.nim). The kit's own tests show the exported ABI; that this is the adapter the rule asks for is a fact about the build."
 

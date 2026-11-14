@@ -159,6 +159,12 @@ int lcn_shutdown_write(int fd) { return shutdown(fd, SHUT_WR) < 0 ? neg() : 0; }
 
 int lcn_close(int fd) { return close(fd) < 0 ? neg() : 0; }
 
+/* A close-on-exec copy of fd: the I/O thread's own listener (DECISIONS I90). */
+int lcn_dup_cloexec(int fd) {
+  int r = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+  return r < 0 ? neg() : r;
+}
+
 int lcn_peercred(int fd, uint32_t *uid, uint32_t *gid, int32_t *pid) {
   /* TRANSPORT §8.2: SO_PEERCRED or getpeereid(). The pid is for diagnostics
      only; -1 when the platform does not report it. */
