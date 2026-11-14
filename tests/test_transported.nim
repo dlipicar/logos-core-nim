@@ -1285,12 +1285,13 @@ proc bulk(): ModuleRecord =
     primaryContract: Opt.some(bulkRoot),
   )
 
-proc bulkEngine(): (
-  Engine, ptr LogosRuntimeControlBinding, ptr LogosRuntimeControlBinding
-) =
+proc bulkEngine(
+    transport = fastConfig()
+): (Engine, ptr LogosRuntimeControlBinding, ptr LogosRuntimeControlBinding) =
   ## The bulk provider, `client_module` routed to it over local transport and
-  ## `twin_module` directly.
+  ## `twin_module` directly, under the I/O thread limits `transport`.
   var cfg = transported(extra = @[bulkStatic, twinStatic])
+  cfg.transport = Opt.some(transport)
   cfg.routing = @[
     RoutingRule(
       caller: Opt.some("client_module"), callee: "bulk_module", mode: rmLocalTransport
@@ -1511,7 +1512,13 @@ suite "run.transported: events (I90 part 4b-2c)":
     e.finish()
 
   ltTest "[IMPL-DECISION D3] [RUN-0234] a transported subscriber that does not keep up: its connection closes TRANSPORT_ERROR; a direct subscriber gets every Event and the publisher is not held":
-    let (e, rc, twin) = bulkEngine()
+    # [G261] The smallest Event output TRANSPORT §2.1 allows, one maximal
+    # frame at each end: the held subscriber's undelivered allowance, then its
+    # connection's output, fill after half the Events the defaults need.
+    var limits = fastConfig()
+    limits.callerUndeliveredBytes = int(limits.frameLimit)
+    limits.connOutputBytes = int(limits.peerFrameLimit) + limits.controlReserve + 4
+    let (e, rc, twin) = bulkEngine(limits)
     var (_, far) = rc.bulkHandle("far")
     let near = twin.establish("near", root = bulkRoot).recordOf.route
     var (nc, direct) = twin.materialize(near, bulkRoot, bulkSchema)
@@ -1523,18 +1530,20 @@ suite "run.transported: events (I90 part 4b-2c)":
     var seen: EndSeen
     check far.observe(addr seen) == ecOk
     heard[0].hold.store(true)
-    # 2 MiB Events: the held subscriber's undelivered allowance, then its
-    # connection's output, fill well before the last of them.
+    # 2 MiB Events: those two limits and the socket between them hold about
+    # 36 MiB, well before the last of them.
     const Size = 2 * 1024 * 1024
-    const Count = 60
-    let started = getMonoTime()
+    const Count = 30
     var failed = 0
     for i in 1 .. Count:
       if invoke(addr direct, BulkSendRequest(size: Size)).isErr:
         inc failed
-    let took = getMonoTime() - started
     check failed == 0
-    check took < initDuration(seconds = 20 * Slow)
+    # [G261] The publisher is not held by that subscriber: every publication
+    # returned before its handler finished a single Event. The publisher may
+    # wait for the shared output budget, which drains as fast as the I/O
+    # thread commits or overflows, so its time is not bounded here.
+    check heard[0].count.load == 0
     check heard[1].count.load == Count
     heard[0].hold.store(false)
     check ended(addr seen)

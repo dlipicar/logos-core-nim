@@ -9,7 +9,9 @@ name: CI
 # over two hours for every check on Linux x86_64, and 86 of its 90 minutes on macOS (5bd731f,
 # 2026-11-13). Each check is in exactly one group, and the orc-spec job also evaluates every flake
 # output. Linux has six groups; macOS has no sanitizer checks, so only orc-spec, refc and
-# orc-release.
+# orc-release. On Linux each group runs as two shards (flake.nix `ciShards`): on 36f355c
+# (2026-11-14) the x86_64 asan and msan jobs passed the 90-minute limit and tsan took 81 minutes.
+# macOS builds each group whole (33-36 minutes).
 
 on:
   pull_request:
@@ -24,7 +26,7 @@ concurrency:
 
 jobs:
   nix:
-    name: nix (${{ matrix.os }}, ${{ matrix.group }})
+    name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ matrix.os != 'macos-latest' && format(' {0}/2', matrix.shard) || '' }})
     # ATTIC_TOKEN_PUBLIC only exists in the public-cache environment.
     environment: ${{ github.ref == 'refs/heads/master' && 'public-cache' || '' }}
     strategy:
@@ -32,8 +34,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
         group: [orc-spec, refc, orc-release, asan, tsan, msan]
-        # flake.nix defines the sanitizer variants on Linux only.
+        # The 2 is `ciShardCount` in flake.nix.
+        shard: [1, 2]
+        # flake.nix defines the sanitizer variants on Linux only, and macOS builds whole groups.
         exclude:
+          - os: macos-latest
+            shard: 2
           - os: macos-latest
             group: asan
           - os: macos-latest
@@ -44,6 +50,7 @@ jobs:
     timeout-minutes: 90
     env:
       GROUP: ${{ matrix.group }}
+      SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v4
 
@@ -67,11 +74,17 @@ jobs:
           fi
 
       - name: Evaluate every flake output
-        if: matrix.group == 'orc-spec'
+        if: matrix.group == 'orc-spec' && matrix.shard == 1
         run: nix flake check --no-build
 
       - name: Checks in group ${{ matrix.group }}
-        run: nix build -L --keep-going --no-link ".#ciGroups.$GROUP"
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            attr="ciGroups.$GROUP"
+          else
+            attr="ciShards.$GROUP-$SHARD"
+          fi
+          nix build -L --keep-going --no-link ".#$attr"
 
   # One job per OS, Nimble test task and shard of the suites (`LCN_SHARD`, logos_core.nimble). Both
   # tasks in one Linux job passed 60 minutes on 2026-11-13 (orc 27 min, then refc); one job per task
