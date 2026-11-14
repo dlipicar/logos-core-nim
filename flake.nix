@@ -326,6 +326,7 @@
             spectrace
             lcnGen
             lcnPkg
+            logosModuleHost
             android
             ios
             updateNimbleDeps
