@@ -3,7 +3,7 @@
 ##
 ## The module calls `get_self` (which needs no grant, l.2555), `list_modules`
 ## and `get_readiness` over the whole scope (TF-09, G161), `recover_module`
-## on any instance with requested intent, and subscribes to four Runtime
+## on any instance with requested intent, and subscribes to five Runtime
 ## Control events. It is the origin of what it starts: the authority and the
 ## `start` defaults (`start_module`), and the `stop` defaults (`stop_module`).
 ## Those instances' execution and ambient permissions are what 4b-6 grants
@@ -22,6 +22,7 @@ const
     "logos.runtime_control.execution_state_changed_event",
     "logos.runtime_control.inventory_changed_event",
     "logos.runtime_control.configuration_state_changed_event",
+    "logos.runtime_control.permission_settings_changed_event",
   ]
 
 type

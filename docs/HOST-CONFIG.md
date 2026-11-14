@@ -726,12 +726,19 @@ lcn_orchestrator.override = {
   An invalid value fails the module's start with `LOGOS_ERR_MODULE`, and the diagnostic says which
   field.
 - **What it decides from.** Each instance's lifecycle state and intent, read with `list_modules` and
-  `get_readiness`; from a failure classification only `cleanup-timeout` (DECISIONS G291), so every
-  other classification, known or not, decides alike (RUNTIME l.3756). Its own instance and the Module
+  `get_readiness`. From a failure classification it reads only whether it is one of four that name an
+  enforcement outcome, which make an `error` a resumption, not a live failure (RUNTIME l.3775;
+  DECISIONS G291 as amended): `cleanup-timeout` (an enforcement stop overran its deadline),
+  `permission-enforcement-failed`, `authority-denied` and `authority-evaluation-failed` (a start or
+  recovery the permission settings refused or the authority denied). The engine sets the last three
+  only for such refusals and denials, settings that failed, and stops for authority, never for a
+  failure of an accepted attempt. Every other classification, known or not, is a live failure, and no
+  restart policy is derived from its spelling (RUNTIME l.3756). Its own instance and the Module
   Loader are always left out; every other instance with `requested` intent is the module's, whoever
   its origin is, and keeps that origin (l.3774).
-- **Events are hints.** It subscribes to the module-state, execution-state, inventory and
-  configuration-state events and re-reads what they name before it decides (l.3427). Every
+- **Events are hints.** It subscribes to the module-state, execution-state, inventory,
+  configuration-state and permission-settings events and re-reads what they name before it decides
+  (l.3427). Every
   `resync_ms` it subscribes anew, drops the old subscriptions and re-reads every instance (l.3428;
   DECISIONS G225), so a lost event delays a decision by at most that long.
 - **Recovery and its accounting** (l.3786-3790). A failure seen while the module runs (`error` with
@@ -748,12 +755,26 @@ lcn_orchestrator.override = {
   `disabled` every `requested` instance in `error`, the authority included, is resumed once after the
   module starts, and not again.
 - **Probes** (l.3801-3804; DECISIONS G288). An instance with `requested` intent that is `unloaded`
-  (its start was refused for authority, or a configuration is missing, or a prerequisite was not
-  ready) or `error` with `cleanup-timeout` (an enforcement stop that overran its deadline, G291), and a
-  start or stop default that was refused, is retried by uncharged probes on the policy's spacing
-  (`delay(n)` after the last probe; the package default's under `disabled`), never exhausted. The
-  authority's return to `ready` and a `configuration_state_changed` event for the instance bring the
+  (its start was refused for authority or by its permission settings, a settings replacement stopped
+  it, a configuration is missing, or a prerequisite was not ready) or `error` with one of the four
+  classifications above (an enforcement stop that overran its deadline, then perhaps a probe refused
+  or denied, G291), and a start or stop default that was refused, is retried by uncharged probes on the policy's spacing (`delay(n)` after the last probe;
+  the package default's under `disabled`), never exhausted. The authority's return to `ready`, and a
+  `configuration_state_changed` or `permission_settings_changed` event for the instance, bring the
   next probe forward, never closer than `initial_delay_ms` after the last.
+- **When permissions become available** (l.3803-3804; DECISIONS G288, G284). The module never learns
+  the moment from the permission profile or the authority; the settings event is its hint. An instance
+  a settings replacement stopped is recovered once its settings settle `applied`; one whose start or
+  recovery the settings refused (`LOGOS_ERR_NOT_AUTHORISED`, `authority-denied`: they lack
+  host-ambient) is recovered once a replacement gives it back, a startup default that was refused
+  included, since the refused start already made its intent `requested`. Each probe is decided for the
+  instance's retained origin with its current settings, so a probe made while they still lack what it
+  needs is refused again and costs nothing. When a reconciliation stop overruns its deadline the
+  settings are `failed` and the instance `error`: its probes are refused
+  (`permission-enforcement-failed`) until, once the late cleanup has ended, an accepted replacement
+  applies, and then it is resumed, under `disabled` too. A refused probe is not a failed resumption. A
+  resumption the Runtime accepts and that then fails is an execution failure: under `backoff` it opens
+  an episode, charged; under `disabled` it is not retried (l.3804). An explicit stop ends the probes.
 - **Under `capability-authority`.** With `authority` set, the module first brings the authority up
   under the derived rules (polling it from 100 ms, doubling to 5 s), then waits for the binding, which
   it infers from the first `list_modules` that succeeds (probing from 50 ms, doubling to 2 s;
@@ -777,7 +798,7 @@ lcn_orchestrator.override = {
   invalid value, a failed start's reason, exhausted attempts. Repeated conditions are written at most
   every 30 s.
 - **What its instance needs from the policy** (`orchestratorNeeds`). `list_modules`,
-  `get_readiness` and `recover_module` on every instance, the four events above, and `start_module`
+  `get_readiness` and `recover_module` on every instance, the five events above, and `start_module`
   or `stop_module` with the module as origin for the authority and each default, with those
   instances' execution. `get_self` needs nothing (RUNTIME l.2555).
 - **Limits.**

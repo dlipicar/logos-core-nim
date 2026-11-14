@@ -19,9 +19,11 @@
 ##    answer was lost is charged once (C-9); (f) the module's first decision
 ##    after it starts resumes uncharged, under every policy, unless an episode
 ##    is open under an enabled policy (G289, amending G193); (g) `unloaded`, or
-##    `error` from an enforcement stop that overran its deadline, is probed
-##    uncharged and never exhausts (G288, G291); (h) any other `error` is a
-##    live failure under the restart policy (RUNTIME l.3786-3789).
+##    `error` whose classification names an enforcement outcome (an
+##    enforcement stop that overran its deadline, or a start or recovery the
+##    authority or the permission settings refused), is probed uncharged and
+##    never exhausts (G288, G291 as amended); (h) any other `error` is a live
+##    failure under the restart policy (RUNTIME l.3786-3789).
 
 {.push raises: [], gcsafe.}
 
@@ -37,9 +39,23 @@ const
   PackageMaxAttempts* = 8'i64
   PackageStableMs* = 60_000'i64
   DefaultResyncMs* = 30_000'i64 ## [IMPL] `resync_ms` when the value leaves it out
-  OverranFailure* = "cleanup-timeout"
-    ## [SPEC RUNTIME l.3754; G180, G291] the one failure classification the
-    ## rules read
+  ResumableFailures* = [
+    "cleanup-timeout", "permission-enforcement-failed", "authority-denied",
+    "authority-evaluation-failed",
+  ]
+    ## [SPEC RUNTIME l.3754, l.3801-3804; G180, G284, G291 as amended
+    ## 2026-11-14] The failure classifications the rules read, a closed set:
+    ## `error` with one of them is an enforcement outcome, resumed by probes.
+    ## The engine sets the last three only when it refuses or denies a start or
+    ## recovery, settles settings `failed`, or stops for authority; never for a
+    ## failure of an accepted attempt (`test_orchestration` pins the sites).
+
+func resumable*(failure: Opt[string]): bool =
+  ## [SPEC RUNTIME l.3756; G291 as amended] True only for a classification in
+  ## `ResumableFailures`: every other one, recognized or not, and none, leave
+  ## an `error` a live failure, and no restart policy is derived from a
+  ## spelling outside the set.
+  failure.isSome and failure.get in ResumableFailures
 
 type
   Backoff* = object ## `restart.backoff`, in milliseconds
@@ -73,7 +89,7 @@ type
     revision*: uint64 ## the execution revision a guarded request carries
     prerequisitesReady*: bool ## every prerequisite in `ordering` is `ready`
     isSelf*, isLoader*: bool
-    overran*: bool ## `failure` is `cleanup-timeout`
+    resumable*: bool ## `failure` is one of `ResumableFailures`
 
   DefaultKind* = enum
     defaultNone
@@ -328,7 +344,7 @@ proc decide*(
       memo.readySince = Opt.none(int64)
       if not v.prerequisitesReady:
         return # 4d [G287]
-      let live = v.life == lifeError and not v.overran
+      let live = v.life == lifeError and not v.resumable
       if firstPass:
         # 4f [G289, amending G193]
         if not live or not r.enabled or entry.isNone:
@@ -339,7 +355,8 @@ proc decide*(
           result.revision = v.revision
           return
       if not live:
-        # 4g [G288, G291]: uncharged, never exhausted, under every policy.
+        # 4g [G288, G291 as amended]: uncharged, never exhausted, under every
+        # policy.
         memo.see(waitingProbe, now)
         if not result.due(memo.probeDue(r.backoff, now, immediate = false), now):
           return

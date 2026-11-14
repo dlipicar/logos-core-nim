@@ -3,21 +3,24 @@
 ## from `orchestratorStaticSymbols()` as the orchestration instance, the
 ## `flaky_module` test kit (`tests/kit/flaky_impl.nim`), and a state directory
 ## under the test's work directory. Cases that change authority at run time
-## bind the scripted Capability Authority (`support/fakeca.nim`).
+## bind the scripted Capability Authority (`support/fakeca.nim`). Cases on
+## permissions select the shipped profile (DECISIONS I93) and change an
+## instance's settings with `update_permission_settings`, called as another
+## flaky instance.
 ##
 ## Module code runs on the engine's workers and the module's own worker, so
 ## the test reads what happened through atomics, the module's call record
 ## (its test hooks) and its state file. Spacing is asserted with lower bounds;
 ## upper bounds are `Slow`-scaled ceilings.
 
-import std/[atomics, locks, monotimes, os, strutils, tables, times]
+import std/[algorithm, atomics, locks, monotimes, os, strutils, tables, times]
 import unittest2
 import ../src/logos_core/runtime/[configcheck, engine]
 import ../src/logos_core/orchestration
 import ../src/logos_core/orchestration/[accounting, testhooks]
 import ../src/logos_core/kit/rcclient
 import ../src/logos_core/loader/contract
-import ./support/[fakeca, slowdown, tunerconfig]
+import ./support/[fakeca, permfixture, slowdown, tunerconfig]
 import ./kit/[flaky_impl, tuner_impl]
 
 let
@@ -162,7 +165,17 @@ proc orchRecord(a: AcceptedConfiguration): ModuleRecord =
     configuration: Opt.some(a.digest),
   )
 
-proc orchConfig(policy = allowAll(), authority = false): EngineConfig =
+proc orchConfig(
+    policy = allowAll(),
+    authority = false,
+    profiled = false,
+    perms: seq[InitialSettings] = @[],
+    profile: ProfileSource = profileV1,
+): EngineConfig =
+  ## With `profiled`, `profile` (the shipped one unless a case says) is
+  ## selected and the orchestration and flaky modules are provisioned with
+  ## host-ambient; `perms` come after, so an instance's entry overrides its
+  ## module's.
   inc engines
   let dir = work / ("e" & $engines)
   result = defaultConfig(dir)
@@ -170,6 +183,11 @@ proc orchConfig(policy = allowAll(), authority = false): EngineConfig =
   stateDir = dir / "state" / OrchState
   result.policy = policy
   result.stopDeadline = initDuration(milliseconds = ms(300))
+  if profiled:
+    result.permissions = profile
+    for m in [OrchestratorModule, Flaky]:
+      result.initialSettings.add(InitialSettings(module: m, permissions: @[ambient()]))
+    result.initialSettings.add(perms)
   result.statics = @[
     checkStaticRegistration(OrchestratorBinding, orchestratorStaticSymbols()).tryGet,
     checkStaticRegistration("flaky", flakyModuleStaticSymbols()).tryGet,
@@ -188,12 +206,15 @@ proc boot(
     policy = allowAll(),
     extra: seq[BootstrapInstance] = @[],
     before: proc(e: Engine) {.closure.} = nil,
+    profiled = false,
+    perms: seq[InitialSettings] = @[],
+    profile: ProfileSource = profileV1,
 ): Engine =
   ## A new engine with `orch` (holding the role, configured with `v`), the
   ## flaky instances of `slots`, the Capability Authority when `v` names one,
   ## and `extra`, bootstrapped.
   let authority = v.authority.isSome
-  let e = newEngine(orchConfig(policy, authority))
+  let e = newEngine(orchConfig(policy, authority, profiled, perms, profile))
   live = e
   if not before.isNil:
     before(e)
@@ -259,6 +280,53 @@ proc gapsMs(times: seq[int64]): seq[int64] =
 proc reportFailure(e: Engine, id: string) =
   let v = e.view(id).tryGet
   check e.reportFailure(id, v.attempt, "test").isOk
+
+type SettingsView = LogosNSRuntimeControlPermissionSettingsState
+
+func status(s: SettingsView): string =
+  ($s.application.kind).toLowerAscii
+
+proc settingsAs(e: Engine, slot: int, id: string): SettingsView =
+  ## `id`'s permission settings, read as flaky instance `slot`.
+  let t = LogosNSRuntimeModuleInstanceAddress(
+    runtime_instance_id: e.runtimeInstanceId(), module_instance_id: id
+  )
+  let r = call(
+    flakyBinding(slot),
+    "get_permission_settings",
+    LogosNSRuntimeControlGetPermissionSettingsRequest(target: t),
+    LogosNSRuntimeControlGetPermissionSettingsResponse,
+  )
+  check r.isOk
+  if r.isOk:
+    result = r.get.state
+
+proc replaceSettings(
+    e: Engine, slot: int, id: string, xs: seq[PermissionSetting]
+): SettingsView =
+  ## [SPEC RUNTIME l.2580-2601] Replaces `id`'s settings with `xs`, as flaky
+  ## instance `slot`: the state the reply reports.
+  let t = LogosNSRuntimeModuleInstanceAddress(
+    runtime_instance_id: e.runtimeInstanceId(), module_instance_id: id
+  )
+  var rc: seq[LogosNSRuntimeControlPermissionSetting]
+  for x in xs:
+    rc.add(
+      LogosNSRuntimeControlPermissionSetting(
+        permission: x.permission, constraints: x.constraints
+      )
+    )
+  let r = call(
+    flakyBinding(slot),
+    "update_permission_settings",
+    LogosNSRuntimeControlUpdatePermissionSettingsRequest(
+      target: t, expected_revision: e.settingsAs(slot, id).revision, permissions: rc
+    ),
+    LogosNSRuntimeControlUpdatePermissionSettingsResponse,
+  )
+  check r.isOk
+  if r.isOk:
+    result = r.get.state
 
 proc imports(path: string): seq[string] =
   ## The module paths a Nim source's import and include statements name.
@@ -792,3 +860,326 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     check recovers(flakyInstance(0)) >= 1
     check entryOf(flakyInstance(0)).isNone
     e.finish()
+
+suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) [IMPL-DECISION G288] [IMPL-DECISION G284]":
+  ## The shipped profile is selected: every realization must hold host-ambient.
+  ## After the first uncharged call, the next come 50 ms, 800 ms, then 12.8 s
+  ## later (`Slow`-scaled), so a recovery within a few seconds of the settings
+  ## event was brought forward by it, not found by the next probe.
+  setup:
+    resetFlaky()
+    clearOrchestratorFaultsForTests()
+    clearDiag()
+    resetFake()
+
+  teardown:
+    leftover()
+
+  proc spaced(): Opt[LcnOrchestratorRestart] =
+    Opt.some(restart(initial = 50, maxMs = 60_000, mult = 16))
+
+  test "[RUN-0696] [RUN-0914] [RUN-1066] a permission withdrawn stops the instance, intent and origin kept; given back, the settings event brings its recovery forward":
+    let e = boot(
+      value(defaults = starts(0, 1), restart = spaced()),
+      slots = @[0, 1],
+      profiled = true,
+    )
+    check waitUntil(e.isReady(flakyInstance(0)))
+    check waitUntil(e.isReady(flakyInstance(1)))
+    # The module reads the instance after its start's answer; seen ready, its
+    # start no longer counts toward the probe spacing.
+    check waitUntil(
+      proc(): bool =
+        callsForTests("get_readiness", flakyInstance(0)) >= 1
+    )
+    check e.replaceSettings(1, flakyInstance(0), @[]).status == "pending"
+    # [RUN-0914] [RUN-1066] The reconciliation stop keeps intent and origin.
+    check waitUntil(
+      proc(): bool =
+        e.settingsAs(1, flakyInstance(0)).status == "applied"
+    )
+    var v = e.view(flakyInstance(0)).tryGet
+    check v.state == msUnloaded
+    check v.execution.intent == inRequested
+    check v.intentOrigin.instance == Orch
+    # Probes, each refused for the settings (G284): uncharged, never exhausted.
+    check waitUntil(
+      proc(): bool =
+        recovers(flakyInstance(0)) >= 3
+    )
+    v = e.view(flakyInstance(0)).tryGet
+    check v.state == msUnloaded
+    check v.failure.isSome and v.failure.get.kind == fkAuthorityDenied
+    check v.execution.intent == inRequested
+    check entryOf(flakyInstance(0)).isNone
+    check "attempt" notin diagText()
+    let before = recovers(flakyInstance(0))
+    check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
+    let t0 = getMonoTime()
+    check waitUntil(e.isReady(flakyInstance(0)))
+    check (getMonoTime() - t0).inMilliseconds < ms(6_000)
+    check recovers(flakyInstance(0)) == before + 1
+    v = e.view(flakyInstance(0)).tryGet
+    check v.intentOrigin.instance == Orch and v.failure.isNone
+    check entryOf(flakyInstance(0)).isNone
+    e.finish()
+
+  test "[RUN-0696] a startup default refused for a missing permission keeps requested intent; the permission given, it is resumed":
+    let e = boot(
+      value(defaults = starts(0, 1), restart = spaced()),
+      slots = @[0, 1],
+      profiled = true,
+      perms = @[InitialSettings(module: Flaky, instance: flakyInstance(0))],
+    )
+    check waitUntil(e.isReady(flakyInstance(1)))
+    # The start, then probes at +50 and +800: the next is 12.8 s away.
+    check waitUntil(
+      proc(): bool =
+        recovers(flakyInstance(0)) >= 2
+    )
+    check callsForTests("start_module", flakyInstance(0)) == 1
+    let v = e.view(flakyInstance(0)).tryGet
+    check v.state == msUnloaded
+    check v.failure.isSome and v.failure.get.kind == fkAuthorityDenied
+    check v.execution.intent == inRequested
+    check v.intentOrigin.instance == Orch
+    check entryOf(flakyInstance(0)).isNone
+    let before = recovers(flakyInstance(0))
+    check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
+    let t0 = getMonoTime()
+    check waitUntil(e.isReady(flakyInstance(0)))
+    check (getMonoTime() - t0).inMilliseconds < ms(6_000)
+    check recovers(flakyInstance(0)) == before + 1
+    check callsForTests("start_module", flakyInstance(0)) == 1
+    e.finish()
+
+  test "[RUN-0696] [RUN-0686] a refused probe is not a failed resumption; one accepted that then fails is under the restart policy: charged":
+    let e = boot(
+      value(defaults = starts(0, 1), restart = spaced()),
+      slots = @[0, 1],
+      profiled = true,
+      perms = @[InitialSettings(module: Flaky, instance: flakyInstance(0))],
+    )
+    check waitUntil(e.isReady(flakyInstance(1)))
+    check waitUntil(
+      proc(): bool =
+        recovers(flakyInstance(0)) >= 2
+    )
+    check "attempt" notin diagText() # the probes were uncharged
+    let before = recovers(flakyInstance(0))
+    flaky[0].failInits.store(1)
+    check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
+    # The resumption is accepted and its initialization fails: an execution
+    # failure (l.3804), so the next recovery is the episode's first attempt.
+    check waitUntil(e.isReady(flakyInstance(0)))
+    check recovers(flakyInstance(0)) == before + 2
+    check "recover_module flaky-0: attempt 1 of 3" in diagText()
+    e.finish()
+
+  test "[RUN-0696] [RUN-0684] under disabled, a resumption accepted that then fails is not retried":
+    let e = boot(
+      value(defaults = starts(0, 1), restart = Opt.some(disabled())),
+      slots = @[0, 1],
+      profiled = true,
+      perms = @[InitialSettings(module: Flaky, instance: flakyInstance(0))],
+    )
+    check waitUntil(e.isReady(flakyInstance(1)))
+    check waitUntil(
+      proc(): bool =
+        recovers(flakyInstance(0)) >= 1
+    )
+    flaky[0].failInits.store(1)
+    check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
+    # [SPEC RUNTIME l.3804] The accepted resumption failed: a live failure.
+    check waitUntil(
+      proc(): bool =
+        "the restart policy is disabled" in diagText()
+    )
+    let v = e.view(flakyInstance(0)).tryGet
+    check v.state == msError
+    check v.failure.isSome and v.failure.get.kind == fkInitializationFailed
+    let n = recovers(flakyInstance(0))
+    sleep(int(ms(300)))
+    check recovers(flakyInstance(0)) == n
+    e.finish()
+
+  test "[RUN-0696] [RUN-1055] [IMPL-DECISION G291] under disabled, settings that failed when the reconciliation stop overran: probes go on through the refusal, and an accepted replacement resumes it":
+    let e = boot(
+      value(defaults = starts(0, 1), restart = Opt.some(disabled())),
+      slots = @[0, 1],
+      profiled = true,
+    )
+    check waitUntil(e.isReady(flakyInstance(0)))
+    check waitUntil(e.isReady(flakyInstance(1)))
+    flaky[0].destroyGate.store(true)
+    check e.replaceSettings(1, flakyInstance(0), @[]).status == "pending"
+    # [G285] The stop overruns its deadline: settings failed, cleanup-timeout.
+    check waitUntil(
+      proc(): bool =
+        let v = e.view(flakyInstance(0)).tryGet
+        v.state == msError and v.failure.isSome and
+          v.failure.get.kind == fkCleanupTimeout
+    )
+    check waitUntil(
+      proc(): bool =
+        e.settingsAs(1, flakyInstance(0)).status == "failed"
+    )
+    flaky[0].destroyGate.store(false)
+    check e.cleaned(flakyInstance(0))
+    # [G284] A probe is refused for the failed settings; the classification
+    # it leaves is still read as a resumption.
+    check waitUntil(
+      proc(): bool =
+        let v = e.view(flakyInstance(0)).tryGet
+        v.failure.isSome and v.failure.get.kind == fkPermissionEnforcementFailed
+    )
+    check e.state(flakyInstance(0)) == msError
+    check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
+    check waitUntil(e.isReady(flakyInstance(0)))
+    check "the restart policy is disabled" notin diagText()
+    check "attempt" notin diagText()
+    check entryOf(flakyInstance(0)).isNone
+    e.finish()
+
+  test "[RUN-0696] [RUN-1055] [IMPL-DECISION G291] under disabled, a recovery the authority denies after an authority stop overran: probes go on, and once allowed it is resumed":
+    let e = boot(
+      value(defaults = starts(0), authority = true, restart = Opt.some(disabled()))
+    )
+    check waitUntil(e.isReady(flakyInstance(0)))
+    flaky[0].destroyGate.store(true)
+    discard e.stopForAuthority(flakyInstance(0), fkAuthorityRevoked)
+    check waitUntil(
+      proc(): bool =
+        let v = e.view(flakyInstance(0)).tryGet
+        v.state == msError and v.failure.isSome and
+          v.failure.get.kind == fkCleanupTimeout
+    )
+    setScript(rule(vDeny, what = "execute", consumer = Orch))
+    flaky[0].destroyGate.store(false)
+    check e.cleaned(flakyInstance(0))
+    # [G168] The denial leaves the state as it was, `authority-denied`.
+    check waitUntil(
+      proc(): bool =
+        let v = e.view(flakyInstance(0)).tryGet
+        v.failure.isSome and v.failure.get.kind == fkAuthorityDenied
+    )
+    check e.state(flakyInstance(0)) == msError
+    setScript()
+    check waitUntil(e.isReady(flakyInstance(0)))
+    check "the restart policy is disabled" notin diagText()
+    check entryOf(flakyInstance(0)).isNone
+    e.finish()
+
+  test "[RUN-0696] [RUN-1065] [IMPL-DECISION G288] settings events never bring a probe closer than initial_delay_ms after the last":
+    let e = boot(
+      value(defaults = starts(0, 1), restart = spaced()),
+      slots = @[0, 1],
+      profiled = true,
+      profile = testProfile,
+      perms = @[InitialSettings(module: Flaky, instance: flakyInstance(0))],
+    )
+    check waitUntil(e.isReady(flakyInstance(1)))
+    check waitUntil(
+      proc(): bool =
+        recovers(flakyInstance(0)) >= 2
+    )
+    # The next probe is 12.8 s away; each replacement below lacks host-ambient,
+    # applies at once and is published.
+    let t0 = getMonoTime().ticks
+    for i in 0 ..< 40:
+      let limit = uint64(1 + i mod 2)
+      check e.replaceSettings(1, flakyInstance(0), @[setting(Quota, quota(limit))]).status ==
+        "applied"
+      sleep(int(ms(10)))
+    let all = callTimesForTests("recover_module", flakyInstance(0))
+    var during = 0
+    for t in all:
+      if t >= t0:
+        inc during
+    check during >= 3 # brought forward by the events
+    for x in gapsMs(all):
+      check x >= ms(50) - 2
+    check entryOf(flakyInstance(0)).isNone
+    e.finish()
+
+  test "[RUN-0696] [RUN-0687] an explicit stop ends the probes: a later settings event recovers nothing":
+    let e = boot(
+      value(defaults = starts(0, 1), restart = spaced()),
+      slots = @[0, 1],
+      profiled = true,
+      perms = @[InitialSettings(module: Flaky, instance: flakyInstance(0))],
+    )
+    check waitUntil(e.isReady(flakyInstance(1)))
+    check waitUntil(
+      proc(): bool =
+        recovers(flakyInstance(0)) >= 2
+    )
+    check e.stop(flakyInstance(0)).isOk
+    check e.view(flakyInstance(0)).tryGet.execution.intent == inStopped
+    let n = recovers(flakyInstance(0))
+    check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
+    sleep(int(ms(500)))
+    check recovers(flakyInstance(0)) == n
+    check e.state(flakyInstance(0)) == msUnloaded
+    check e.view(flakyInstance(0)).tryGet.execution.intent == inStopped
+    e.finish()
+
+  test "[RUN-1055] [IMPL-DECISION G291] the engine sets authority-denied, authority-evaluation-failed and permission-enforcement-failed only where it refuses, denies, fails settings or stops for authority, never for a failure of an accepted attempt":
+    # Every routine in src/logos_core/runtime that names one of the three
+    # kinds, or builds a failure whose kind a variable holds. A new site must
+    # be read against G291 before it joins the list.
+    let expected = @[
+      ("engine.nim", "checkBootstrap"), # reads: the orchestration start refused
+      ("engine.nim", "executeDecided"), # G168: a denied execution decision
+      ("engine.nim", "failureKind"),
+        # CA §8: what an ended authorization's stop records
+      ("engine.nim", "profiledSettings"), # G281: a replacement failed while unloaded
+      ("engine.nim", "restoreSettings"), # G281: pending settings settled failed at open
+      ("engine.nim", "selectConfig"), # reads: an allowed start clears it
+      ("engine.nim", "settingsRefusal"), # G284: a start or recovery the settings refuse
+      ("engine.nim", "settleSettings"),
+        # G281, G285: settings settled failed while unloaded
+      ("engine.nim", "stopForAuthority"),
+        # an enforcement stop; its kind is an AuthorityEnding
+      ("plumbing.nim", ""), # the enumeration and AuthorityEndings
+      ("store.nim", "classificationOf"), # reads a recorded classification back
+    ]
+    const kinds = [
+      "fkAuthorityDenied", "fkAuthorityEvaluationFailed",
+      "fkPermissionEnforcementFailed",
+    ]
+    const routines =
+      ["proc ", "func ", "template ", "iterator ", "method ", "converter "]
+    const built = "Failure(kind: "
+    var found: seq[(string, string)]
+    for f in walkDir(repo / "src" / "logos_core" / "runtime"):
+      if not f.path.endsWith(".nim"):
+        continue
+      var routine = ""
+      for raw in readFile(f.path).splitLines:
+        let line = raw.strip
+        if line.len == 0 or line.startsWith("#"):
+          continue
+        let indent = raw.len - raw.strip(trailing = false).len
+        if indent == 0:
+          routine = ""
+        if indent <= 2:
+          for kw in routines:
+            if line.startsWith(kw):
+              var n = line[kw.len .. ^1]
+              let cut = n.find({'(', '*', '[', ':', ' ', '='})
+              if cut >= 0:
+                n = n[0 ..< cut]
+              routine = n
+        var hit = false
+        for k in kinds:
+          if k in line:
+            hit = true
+        let i = line.find(built)
+        if i >= 0 and (i == 0 or line[i - 1] notin IdentChars) and
+            not line[i + built.len .. ^1].startsWith("fk"):
+          hit = true
+        let site = (f.path.extractFilename, routine)
+        if hit and site notin found:
+          found.add(site)
+    check found.sorted == expected.sorted

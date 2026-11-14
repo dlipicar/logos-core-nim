@@ -54,7 +54,11 @@ const
   EvExecutionState = "logos.runtime_control.execution_state_changed_event"
   EvInventory = "logos.runtime_control.inventory_changed_event"
   EvConfigurationState = "logos.runtime_control.configuration_state_changed_event"
-  Events = [EvModuleState, EvExecutionState, EvInventory, EvConfigurationState]
+  EvPermissionSettings = "logos.runtime_control.permission_settings_changed_event"
+  Events = [
+    EvModuleState, EvExecutionState, EvInventory, EvConfigurationState,
+    EvPermissionSettings,
+  ]
 
 type
   DiagnosticsSink* = proc(line: string) {.nimcall, gcsafe, raises: [].}
@@ -65,6 +69,7 @@ type
     hintExecutionState
     hintInventory
     hintConfigurationState
+    hintPermissionSettings
 
   Hint = object
     kind: HintKind
@@ -198,6 +203,8 @@ proc onEvent(
     kind = hintInventory
   elif name == EvConfigurationState:
     kind = hintConfigurationState
+  elif name == EvPermissionSettings:
+    kind = hintPermissionSettings
   else:
     return
   withLock sh.lock:
@@ -284,7 +291,7 @@ proc viewOf(
     revision: execution.revision,
     isSelf: instance == w.selfId,
     isLoader: instance == LoaderInstanceId,
-    overran: failure.isSome and failure.get == OverranFailure,
+    resumable: resumable(failure),
   )
 
 proc prerequisitesReady(w: Worker, instance: string): bool =
@@ -784,6 +791,17 @@ proc applyHints(w: var Worker) =
     of hintConfigurationState:
       # [G162, G288] A configuration for the instance brings its probe forward.
       let e = LogosNSRuntimeControlConfigurationStateChangedEvent.decode(bytes)
+      if e.isOk:
+        let inst = e.get.target.module_instance_id
+        if inst in w.known:
+          w.hinted(inst)
+        else:
+          w.rescan = true
+    of hintPermissionSettings:
+      # [SPEC RUNTIME l.3803; G288] A change of the instance's permission
+      # settings brings its probe forward: a settlement after a
+      # reconciliation stop, or a replacement that gives back what it lacked.
+      let e = LogosNSRuntimeControlPermissionSettingsChangedEvent.decode(bytes)
       if e.isOk:
         let inst = e.get.target.module_instance_id
         if inst in w.known:

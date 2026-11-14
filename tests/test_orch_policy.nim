@@ -36,7 +36,7 @@ func view(
     intent = intentRequested,
     rev = 7'u64,
     intentRev = 3'u64,
-    overran = false,
+    resumable = false,
     ready = true,
     instance = "w",
 ): View =
@@ -48,7 +48,7 @@ func view(
     intentRevision: intentRev,
     revision: rev,
     prerequisitesReady: ready,
-    overran: overran,
+    resumable: resumable,
   )
 
 proc decideNow(
@@ -253,16 +253,33 @@ suite "orch: the decision rules (RUNTIME l.3774-3790) [IMPL-DECISION G287] [IMPL
     check entry.isNone # the old episode went; nothing charged yet in the new one
     check d.dueAt.get == 30
 
-  test "[RUN-1055] the same view with any failure classification but cleanup-timeout gives the same action":
-    for failure in ["initialization-failed", "x-unheard-of", "loader-foo", ""]:
+  test "[RUN-1055] [IMPL-DECISION G291] four classifications are read, a closed set; every other one, recognized or not, and none, is a live failure":
+    # [SPEC RUNTIME l.3754] the initial classifications, a Loader error, an
+    # unrecognized spelling, and none.
+    let others = @[
+      "startup-timeout", "initialization-failed", "reported-by-module",
+      "host-terminated", "authority-expired", "authority-revoked",
+      "configuration-indeterminate", "cleanup-failed", "remote-state-unknown", "other",
+      "loader-foo", "x-unheard-of", "CLEANUP-TIMEOUT", "authority-denied ", "",
+    ]
+    for f in ResumableFailures:
+      check resumable(Opt.some(f))
+    check ResumableFailures.len == 4
+    check not resumable(Opt.none(string))
+    for f in others:
+      check not resumable(Opt.some(f))
       var entry = Opt.none(Entry)
       var memo = Memo()
-      # `overran` is the only classification the rules read; every other one,
-      # and none, is a live failure.
-      let v = view(lifeError, overran = false)
+      let v = view(lifeError, resumable = resumable(Opt.some(f)))
       let d = decideNow(v, entry, memo, backoff(), 100)
-      check d.step == stepNone and d.dueAt.get == 120
-      discard failure
+      check d.step == stepNone and d.dueAt.get == 120 # rule h: the backoff
+    for f in ResumableFailures:
+      var entry = Opt.none(Entry)
+      var memo = Memo()
+      let v = view(lifeError, resumable = resumable(Opt.some(f)))
+      let d = decideNow(v, entry, memo, disabledRestart(), 100)
+      check d.step == stepNone and d.dueAt.isSome # rule g: a probe, even disabled
+      check entry.isNone
 
   test "[RUN-0025] startup defaults: only for uninitialized, guarded by the observed revision; stop; unlisted":
     var entry = Opt.none(Entry)
@@ -422,14 +439,14 @@ suite "orch: the decision rules (RUNTIME l.3774-3790) [IMPL-DECISION G287] [IMPL
       view(lifeUnloaded, instance = "x"), entry, memo, backoff(), 0, firstPass = true
     ).step == stepRecover
 
-  test "[RUN-0696] [RUN-1055] [IMPL-DECISION G291] error with cleanup-timeout and requested intent is an uncharged probe under every policy, never exhausted":
+  test "[RUN-0696] [RUN-1055] [IMPL-DECISION G291] error with a resumable classification and requested intent is an uncharged probe under every policy, never exhausted":
     for r in [backoff(attempts = 1), disabledRestart()]:
       var entry = Opt.none(Entry)
       var memo = Memo()
       var t = 0'i64
       var probes = 0
       for i in 0 ..< 20:
-        let d = decideNow(view(lifeError, overran = true), entry, memo, r, t)
+        let d = decideNow(view(lifeError, resumable = true), entry, memo, r, t)
         if d.step == stepRecover:
           check not d.charged
           memo.noteProbe(t)
@@ -437,7 +454,7 @@ suite "orch: the decision rules (RUNTIME l.3774-3790) [IMPL-DECISION G287] [IMPL
         t += 100_000
       check probes == 19
       check entry.isNone
-    # The same view without the overrun is a live failure (rule h).
+    # The same view with any other classification is a live failure (rule h).
     var entry = Opt.none(Entry)
     var memo = Memo()
     check decideNow(view(lifeError), entry, memo, disabledRestart(), 0).step == stepNone

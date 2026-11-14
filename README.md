@@ -51,8 +51,8 @@ The specs are being revised, so the work is ordered by how settled each area is
 - Tier 4b, step 4b-5: the reference orchestration module. `lcn_orchestrator`, a module a host links
   in and names as its orchestration instance, applies startup defaults, reconciles after restarts,
   recovers failures under a configured restart policy with retry accounting that survives restarts,
-  and resumes what authority held back (I94); `docs/HOST-CONFIG.md` documents its configuration.
-  RUNTIME is claimed for the engine with this module, but for the permission half of RUN-0696.
+  and resumes what authority or permissions held back (I94); `docs/HOST-CONFIG.md` documents its
+  configuration. RUNTIME is claimed for the engine with this module.
 - Not yet: the rest of Tier 4b (the Module Host and the hosted strategy, the rest of transported routes, `logosd`
   and `logosctl`, the Runtime's permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 

@@ -196,9 +196,12 @@ module's duties leave the deferred list: startup defaults (RUN-0025), acting onl
 Control binding (RUN-0021), reconciliation and resumption (RUN-1063, RUN-1065), the restart policy
 and its accounting (RUN-0684 to RUN-0686) and the cancellation of pending recovery (RUN-0687) are
 claimed; the module's tests tag RUN-1064, RUN-0983 and RUN-1055 besides their inspection items.
-RUN-0696 (resumption once permissions or authority allow) stays `deferred:tier-4b`: its authority
-half is built and tested, its permission half comes with permission enforcement (4b-4) and step
-4b-5c. "The reference orchestration module" in `docs/HOST-CONFIG.md` documents its configuration, its
+RUN-0696 (resumption once permissions or authority allow) is claimed by part 4b-5c, which makes the
+module take `permission_settings_changed` as a hint: its tests cover a permission withdrawn and given
+back, a startup default refused for a missing permission, and a resumption that is accepted and then
+fails (charged), besides the authority half's cases. The same part widens what the module reads as a
+resumption to four classifications that name an enforcement outcome (DECISIONS G291 as amended), and
+a source test pins the engine routines that set the authority and permission ones. "The reference orchestration module" in `docs/HOST-CONFIG.md` documents its configuration, its
 state file and what it decides.
 
 ### What Tier 4b step 4b-4 changes

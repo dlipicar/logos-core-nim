@@ -63,14 +63,6 @@ default = "claimed"
 "RUN-0925" = "deferred:tier-4b"
 "RUN-0998" = "deferred:tier-4b"
 "RUN-1000" = "deferred:tier-4b"
-# Requirements on the orchestration module (RUNTIME l.72, l.187, l.194, l.3774, l.3786, l.3803):
-# claimed with the reference orchestration module (I94, 4b-5b), except RUN-0696 (l.3803), whose
-# authority half is built and tested (tests/test_orchestration.nim, tests/test_orchestration_host.nim:
-# an execution refused for the origin's authority, an enforcement stop past its deadline, the
-# authority's loss under `recovery: true`); its permission half is built in the engine with
-# permission enforcement (4b-4b, I93) and waits for the reference module's use of the
-# `permission_settings_changed` hint (4b-5c).
-"RUN-0696" = "deferred:tier-4b"
 # Remote transport, facades, enrollment, listeners and exports (Tier 5).
 "RUN-0092" = "deferred:tier-5"
 "RUN-0286" = "deferred:tier-5"
