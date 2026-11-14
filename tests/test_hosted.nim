@@ -867,8 +867,11 @@ when defined(posix):
       check e.realizations == realizes
       check e.releases("p1") == 0 and e.releases("p2") == 0
       check not e.diagnostics().anyIt("termination required" in it)
+      # Owning nothing now, the Loader is released; a shutdown asked for at
+      # once waits for that release (G60).
       e.requestShutdown()
       check e.awaitShutdown().isOk
+      check not e.cleanupPending(LoaderInstanceId)
       live = nil
       check e.close(initDuration(seconds = 10 * Slow))
 
