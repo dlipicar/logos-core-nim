@@ -1,0 +1,217 @@
+; logos-core-nim.carrier.v1: the private carrier between the Runtime and one
+; Module Host (DECISIONS G266; 4b-3 plan §2.4, K3). Never in a public record,
+; a store or a configuration file.
+;
+; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR
+; lcn.carrier_message (runtime/carrier.nim). Its `kind` fixes its lane:
+;   lane 0, the Loader:       init, apply, release / initialized, init_failed,
+;                             applied, released, fatal
+;   lane 1, Runtime Control:  rc_reply, rc_event, async_done / rc_call,
+;                             rc_subscribe, rc_unsubscribe, rc_delivered,
+;                             rc_connect_remote, rc_publish, rc_prepare,
+;                             rc_async_submit, rc_async_cancel,
+;                             rc_async_release
+; A frame that does not decode to one message is terminal carrier loss
+; (RUNTIME RUN-0812). No message carries a consumer, instance or ticket: the
+; Runtime takes them from the carrier it made for the attempt (RUN-0171,
+; RUN-0172). Each side numbers its own requests (`id`); a reply names the
+; request it answers.
+
+lcn.carrier_message =
+  lcn.carrier_init /
+  lcn.carrier_apply /
+  lcn.carrier_release /
+  lcn.carrier_initialized /
+  lcn.carrier_init_failed /
+  lcn.carrier_applied /
+  lcn.carrier_released /
+  lcn.carrier_fatal /
+  lcn.carrier_rc_call /
+  lcn.carrier_rc_subscribe /
+  lcn.carrier_rc_unsubscribe /
+  lcn.carrier_rc_delivered /
+  lcn.carrier_rc_connect_remote /
+  lcn.carrier_rc_publish /
+  lcn.carrier_rc_prepare /
+  lcn.carrier_rc_async_submit /
+  lcn.carrier_rc_async_cancel /
+  lcn.carrier_rc_async_release /
+  lcn.carrier_rc_reply /
+  lcn.carrier_rc_delivery /
+  lcn.carrier_async_done
+
+; A failure status as the side that read it holds it (abi/checks AbiFailure):
+; `reason` is set when the status itself broke the ABI (never forwarded).
+lcn.carrier_failure = {
+  code: uint8,
+  ? message: tstr .size (0..512),
+  ? detail: bstr .size (0..4096),
+  ? reason: tstr .size (0..512),
+}
+
+; Lane 0, the Loader -> the host ---------------------------------------------------
+
+; [SPEC LOADER §6] The one initialization: the staged artifact, the state
+; directory and the configuration input (LOADER §5.2), never in a record.
+lcn.carrier_init = {
+  kind: "init",
+  id: uint64,
+  module: tstr .size (1..64),
+  artifact_path: tstr .size (1..4096),
+  ? state_dir: tstr .size (1..4096),
+  ? configuration: bstr,
+  live: bool,
+  max_payload_depth: uint64,
+}
+
+lcn.carrier_apply = {
+  kind: "apply",
+  id: uint64,
+  configuration: bstr,
+}
+
+lcn.carrier_release = {
+  kind: "release",
+  id: uint64,
+}
+
+; Lane 0, the host -> the Loader ---------------------------------------------------
+
+lcn.carrier_initialized = {
+  kind: "initialized",
+  id: uint64,
+  ? call_surface: bstr, ; a provider's exact `_MODULE_call_surface()` bytes
+}
+
+; [SPEC LOADER §10] The Loader error the host's ABI caller produced, with the
+; module's own status for diagnostics only (`cause`); `phase` "init" when it
+; came from `_MODULE_init` itself (G250).
+lcn.carrier_init_failed = {
+  kind: "init_failed",
+  id: uint64,
+  code: "abi-invalid" / "artifact-unavailable" / "realization-failed",
+  message: tstr .size (0..512),
+  phase: "bind" / "init",
+  ? cause: lcn.carrier_failure,
+}
+
+; The hook's status as `readStatus` read it; none: LOGOS_OK.
+lcn.carrier_applied = {
+  kind: "applied",
+  id: uint64,
+  ? failure: lcn.carrier_failure,
+}
+
+lcn.carrier_released = {
+  kind: "released",
+  id: uint64,
+}
+
+; The host cannot go on (never from module code): the Loader ends it.
+lcn.carrier_fatal = {
+  kind: "fatal",
+  message: tstr .size (0..512),
+}
+
+; Lane 1, the host -> the Runtime --------------------------------------------------
+
+; [SPEC INTERFACE §5.2; RUNTIME §9] One Runtime Control call. `runtime_thread`:
+; the calling thread is one the host runs module code on (RUNTIME l.3870).
+lcn.carrier_rc_call = {
+  kind: "rc_call",
+  id: uint64,
+  method: bstr, ; the module's bytes, checked by the Runtime as given
+  params: bstr,
+  runtime_thread: bool,
+}
+
+; `local`: the host's own token for the handler, named by each rc_event.
+lcn.carrier_rc_subscribe = {
+  kind: "rc_subscribe",
+  id: uint64,
+  event: bstr, ; the module's bytes, checked by the Runtime as given
+  local: uint64,
+}
+
+; `in_handler`: made by the handler of `local`'s delivery in progress, which
+; the Runtime runs it beside, so it does not wait for its own frame (G178).
+lcn.carrier_rc_unsubscribe = {
+  kind: "rc_unsubscribe",
+  id: uint64,
+  sub: uint64,
+  ? in_handler: uint64,
+}
+
+lcn.carrier_rc_delivered = {
+  kind: "rc_delivered",
+  local: uint64,
+  seq: uint64,
+}
+
+lcn.carrier_rc_connect_remote = {
+  kind: "rc_connect_remote",
+  id: uint64,
+  endpoint: bstr,
+  expected_root: bstr .size 32,
+}
+
+lcn.carrier_rc_publish = {
+  kind: "rc_publish",
+  id: uint64,
+  event: bstr,
+  data: bstr,
+}
+
+; [SPEC INTERFACE §2.9.1] A prepared Runtime Control call, numbered `call` by
+; the host.
+lcn.carrier_rc_prepare = {
+  kind: "rc_prepare",
+  id: uint64,
+  call: uint64,
+  method: bstr,
+  params: bstr,
+  ? timeout_ms: uint64, ; the options the host checked as the Runtime does
+}
+
+lcn.carrier_rc_async_submit = {
+  kind: "rc_async_submit",
+  call: uint64,
+}
+
+lcn.carrier_rc_async_cancel = {
+  kind: "rc_async_cancel",
+  call: uint64,
+}
+
+lcn.carrier_rc_async_release = {
+  kind: "rc_async_release",
+  id: uint64,
+  call: uint64,
+}
+
+; Lane 1, the Runtime -> the host --------------------------------------------------
+
+; The outcome of the request `id` names: `failure`, or a success with the
+; response bytes (`value`) or a subscription id (`sub`).
+lcn.carrier_rc_reply = {
+  kind: "rc_reply",
+  id: uint64,
+  ? value: bstr,
+  ? sub: uint64,
+  ? failure: lcn.carrier_failure,
+}
+
+lcn.carrier_rc_delivery = {
+  kind: "rc_event",
+  local: uint64,
+  seq: uint64,
+  name: tstr .size (1..128),
+  data: bstr,
+}
+
+lcn.carrier_async_done = {
+  kind: "async_done",
+  call: uint64,
+  ? value: bstr,
+  ? failure: lcn.carrier_failure,
+}

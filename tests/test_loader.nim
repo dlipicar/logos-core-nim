@@ -170,9 +170,9 @@ var h: LoaderHarness
   ## The suite's Loader; every suite's teardown closes it, also after a
   ## failure.
 
-proc open(stateRoot = Opt.some(work / "state")): LoaderHarness =
+proc open(stateRoot = Opt.some(work / "state"), hosted = false): LoaderHarness =
   reset()
-  openHarness(statics(), work, stateRoot).tryGet
+  openHarness(statics(), work, stateRoot, hosted).tryGet
 
 proc idOf(r: Realized): string =
   r.response.get.active.get.realization
@@ -238,6 +238,22 @@ suite "ldr.module: capabilities (LOADER §4)":
     ).get.capabilities
     check c.direct_static == Opt.some(true) and c.direct_dynamic == Opt.some(true)
     check c.hosted_dynamic.isNone and c.force_release.isNone
+
+  test "[LDR-0030] [LDR-0034] [LDR-0035] with a Module Host program, hosted_dynamic in a process; still never force_release":
+    # Tier 4b step 4b-3 S-1 (plan §2.5): `process` is the one placement
+    # built; `sandbox` and `container` stay unadvertised.
+    h = open(hosted = true)
+    let c = h.at.typed(
+      "list_capabilities",
+      LogosNSModuleLoaderListCapabilitiesRequest(),
+      LogosNSModuleLoaderListCapabilitiesResponse,
+    ).get.capabilities
+    check c.direct_static == Opt.some(true) and c.direct_dynamic == Opt.some(true)
+    check c.hosted_dynamic.isSome
+    let p = c.hosted_dynamic.get
+    check p.process == Opt.some(true)
+    check p.sandbox.isNone and p.container.isNone
+    check c.force_release.isNone
 
 suite "ldr.module: realize (LOADER §6, §7, §10)":
   teardown:

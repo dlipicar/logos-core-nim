@@ -136,6 +136,13 @@ type
     initCommitment*: Opt[SchemaRoots]
       ## [SPEC CONFIG §8 l.296] the schema commitment of the configuration it
       ## was initialized with; none without a configuration
+    hosted*: bool
+      ## [plan §2.5] a `hosted_dynamic` realization: its context lives in a
+      ## Module Host, reached through `host`
+    host*: pointer
+      ## the `hostsup.Host` of a hosted realization (opaque here); nil once its
+      ## release has begun
+    surface*: Opt[seq[byte]] ## a hosted provider's exact call surface
     key: string
     releasing: bool ## `_MODULE_destroy` has been handed out
     applying: bool
@@ -160,7 +167,9 @@ type
     dkInProcess
       ## bound and initialized in this process (the direct strategies): the
       ## phases below
-    # 4b-3 adds a hosted driver kind, whose start and release run elsewhere.
+    dkHosted
+      ## [plan §2.5] started, initialized, applied and released in a Module
+      ## Host the Loader's caller drives (`skHosted`)
 
   StrategyDriver* = object
     ## [SPEC LOADER §4; plan §2.15] One strategy this realizer can satisfy in
@@ -196,6 +205,20 @@ type
     skLive ## the instance already has this realization
     skBind ## run `runBind`, then `storeBinding`
     skInit ## the binding is ready: `prepareInit`
+    skHosted ## [plan §2.5] start a Module Host for `hosted`, then `completeHosted`
+
+  HostedSpec* = object
+    ## [plan §2.5 steps 3-4] What starting a hosted realization needs, as plain
+    ## values: the artifact to stage in `dir` as `name`, and the state
+    ## directory already established.
+    module*: string
+    artifact*: ArtifactRecord
+    dir*: string
+    name*: string
+    stateDir*: Opt[string]
+
+  HostedInit* = object ## [plan §2.5 step 8] A Module Host's successful initialization.
+    surface*: Opt[seq[byte]] ## a provider's exact call surface
 
   Step* = object
     case kind*: StepKind
@@ -205,6 +228,8 @@ type
       spec*: BindSpec
     of skInit:
       binding*: ref NativeBinding
+    of skHosted:
+      hosted*: HostedSpec
 
   InitHandoff* = ref object
     ## The initialization input and what it points to: neither moves nor
@@ -215,15 +240,20 @@ type
     stateDir: Opt[string]
     stateDirText: string
 
-  Teardown* = object ## The one `_MODULE_destroy(context)` call a release hands out.
+  Teardown* = object
+    ## The one `_MODULE_destroy(context)` call a release hands out, or, for a
+    ## hosted realization, its host (`destroy` nil), which the caller releases.
     destroy*: ModuleDestroyFn
     context*: ptr LogosModuleContext
+    host*: pointer
 
   ApplyHook* = object
     ## [SPEC LOADER §8] The one `_MODULE_apply_configuration` call an apply
-    ## hands out, through the retained context.
+    ## hands out, through the retained context, or, for a hosted realization,
+    ## its host (`apply` nil), which runs the hook.
     apply*: ModuleApplyConfigurationFn
     context*: ptr LogosModuleContext
+    host*: pointer
 
   Realizer* = ref object
     drivers: array[Strategy, Opt[StrategyDriver]]
@@ -421,6 +451,109 @@ proc dynamicSpec(r: Realizer, d: RealizationDescriptor): Result[BindSpec, Loader
     )
   )
 
+# [plan §2.2; G266] The ABI caller's phases a Module Host runs too: mapping a
+# staged copy, probing it, completing the binding, the live-reconfiguration
+# check and the initialization input. Direct and hosted realization share
+# them, so both make the same symbol, name, call-surface and init-input
+# checks with the same errors (LOADER l.388-403).
+
+proc stageArtifact*(
+    a: ArtifactRecord, dir, name: string
+): Result[string, LoaderError] {.gcsafe.} =
+  ## [SPEC LOADER §3 l.212-214] The verified, read-only private copy. A staging
+  ## control that cannot be established is `realization-failed` [SPEC LOADER
+  ## l.628; C-08].
+  let path = stage(a, dir, name).valueOr:
+    return err(
+      loaderError(
+        (
+          case error.kind
+          of sfUnavailable: lecArtifactUnavailable
+          of sfIntegrity: lecArtifactIntegrityFailed
+          of sfControls: lecRealizationFailed
+        ),
+        error.msg,
+      )
+    )
+  ok(path)
+
+proc mapStaged*(path: string): Result[ModuleCode, LoaderError] {.gcsafe.} =
+  ## [SPEC RUNTIME §2.1] Maps a verified staged copy; runs its load-time code.
+  let lib = mapLibrary(path)
+  if lib == nil:
+    return fail(lecArtifactUnavailable, "the platform loader refused the library")
+  ok(ModuleCode(kind: codeDynamic, library: lib))
+
+proc probeCode*(
+    code: ModuleCode, module: string
+): Result[NativeProbe, LoaderError] {.gcsafe.} =
+  ## `probeNative`: runs `_MODULE_name()` and `_MODULE_call_surface()`.
+  let p = probeNative(code, module)
+  if p.isErr:
+    return fail(lecAbiInvalid, p.error)
+  ok(p.get)
+
+proc completeProbe*(
+    code: ModuleCode, probe: Result[NativeProbe, LoaderError], system: bool
+): Result[ref NativeBinding, LoaderError] {.gcsafe.} =
+  ## `completeNative`: validates the probe; runs no module code.
+  if probe.isErr:
+    return err(probe.error)
+  let c = completeNative(code, probe.get, AcceptOptions(system: system))
+  if c.isErr:
+    return fail(lecAbiInvalid, c.error)
+  let b = new NativeBinding
+  b[] = c.get
+  ok(b)
+
+func checkLive*(live: bool, b: NativeBinding): Result[void, LoaderError] =
+  ## [SPEC RUNTIME l.1386-1392 (RUN-1086); CONFIG l.264 (CFG-0091)] A live
+  ## declaration needs the apply hook; checked per instance, since bindings
+  ## are shared.
+  if live and b.applyConfiguration.isNil:
+    return fail(
+      lecAbiInvalid,
+      "the module declares live reconfiguration but exports no apply_configuration",
+    )
+  ok()
+
+proc initInputFor*(
+    services: InitServices,
+    stateDir: cstring,
+    configuration: ptr UncheckedArray[uint8],
+    configurationLen: int,
+    declaresEvents: bool,
+): Result[LogosModuleInitInput, LoaderError] =
+  ## [SPEC LOADER §6 steps 4-7; INTERFACE §2.6] The initialization input:
+  ## `stateDir` and `configuration` must stay where they are until
+  ## `_MODULE_init` has returned. No configuration: NULL and 0.
+  var input = LogosModuleInitInput(
+    abiVersion: ModuleInitAbiVersion,
+    structSize: csize_t(sizeof(LogosModuleInitInput)),
+    runtimeControl: services.runtimeControl,
+    publishUserData: services.publishUserData,
+    publish: services.publish,
+    stateDir: stateDir,
+    invocationAccess: services.invocationAccess,
+  )
+  if configuration != nil:
+    # [SPEC CONFIG l.224-226 (CFG-0066, CFG-0067); RUNTIME RUN-0291] The
+    # snapshot's bytes, borrowed for the call.
+    input.configurationCbor = configuration
+    input.configurationCborLen = csize_t(configurationLen)
+  checkInitInput(addr input, declaresEvents).isOkOr:
+    return fail(
+      lecRealizationFailed,
+      "the Runtime's initialization services are invalid: " & error.message.get(""),
+    )
+  ok(input)
+
+func initFailure*(f: AbiFailure): LoaderError =
+  ## [SPEC LOADER §6, §10] What a failed `_MODULE_init` is to the Loader.
+  loaderError(
+    lecRealizationFailed, "_MODULE_init() failed with " & $f.code, Opt.some(f)
+  )
+
 proc runBind*(spec: BindSpec): BindResult {.gcsafe.} =
   ## Maps and probes the module code `spec` names (`probeNative`). Runs
   ## artifact code; any thread may call it, and it touches no realizer
@@ -433,36 +566,16 @@ proc runBind*(spec: BindSpec): BindResult {.gcsafe.} =
       result.system = spec.system
       ModuleCode(kind: codeStatic, table: spec.symbols)
     of codeDynamic:
-      let path = stage(spec.artifact, spec.dir, spec.name).valueOr:
-        # Not cached: a later request may find the artifact readable. A
-        # staging control that cannot be established is `realization-failed`
-        # [SPEC LOADER l.628; C-08].
-        result.probe.err(
-          loaderError(
-            (
-              case error.kind
-              of sfUnavailable: lecArtifactUnavailable
-              of sfIntegrity: lecArtifactIntegrityFailed
-              of sfControls: lecRealizationFailed
-            ),
-            error.msg,
-          )
-        )
+      let path = stageArtifact(spec.artifact, spec.dir, spec.name).valueOr:
+        # Not cached: a later request may find the artifact readable.
+        result.probe.err(error)
         return
-      let lib = mapLibrary(path)
-      if lib == nil:
-        result.probe.err(
-          loaderError(lecArtifactUnavailable, "the platform loader refused the library")
-        )
+      mapStaged(path).valueOr:
+        result.probe.err(error)
         return
-      ModuleCode(kind: codeDynamic, library: lib)
   result.cache = true # the code is mapped: its binding outcome is final
   result.code = code
-  let p = probeNative(code, spec.module)
-  if p.isOk:
-    result.probe.ok(p.get)
-  else:
-    result.probe.err(loaderError(lecAbiInvalid, p.error))
+  result.probe = probeCode(code, spec.module)
 
 proc storeBinding*(
     r: Realizer, res: sink BindResult
@@ -472,17 +585,7 @@ proc storeBinding*(
   ## key wins.
   if res.key in r.bindings:
     return r.bindings.getOrDefault(res.key)
-  let x =
-    if res.probe.isErr:
-      Result[ref NativeBinding, LoaderError].err(res.probe.error)
-    else:
-      let c = completeNative(res.code, res.probe.get, AcceptOptions(system: res.system))
-      if c.isOk:
-        let b = new NativeBinding
-        b[] = c.get
-        Result[ref NativeBinding, LoaderError].ok(b)
-      else:
-        Result[ref NativeBinding, LoaderError].err(loaderError(lecAbiInvalid, c.error))
+  let x = completeProbe(res.code, res.probe, res.system)
   if res.cache:
     r.bindings[res.key] = x
   x
@@ -529,8 +632,27 @@ proc begin*(r: Realizer, req: RealizeRequest): Result[Step, LoaderError] =
   let spec =
     case d.strategy
     of stHostedDynamic:
-      # 4b-3's hosted driver starts the module elsewhere.
-      return fail(lecUnsupportedStrategy, $d.strategy & " is not advertised")
+      # [plan §2.5] The hosted driver starts the module in a Module Host.
+      if r.drivers[d.strategy].get.kind != dkHosted or
+          d.placement notin r.drivers[d.strategy].get.placements:
+        # [SPEC LOADER l.364 (LDR-0067, LDR-0068)] Before any artifact is read.
+        return fail(
+          lecUnsupportedStrategy, "the placement " & d.placement & " is not advertised"
+        )
+      if r.artifactDir.len == 0:
+        r.artifactDir = privateDir(r.workDir).valueOr:
+          return fail(lecRealizationFailed, "no private artifact directory: " & error)
+      inc r.staged
+      var h = HostedSpec(
+        module: d.module,
+        artifact: d.artifact,
+        dir: r.artifactDir,
+        name: "h" & $r.staged,
+      )
+      if req.state.isSome:
+        # [SPEC LOADER §5.1; G143] Established before the host initializes.
+        h.stateDir = Opt.some(?r.stateDirFor(req.state.get))
+      return ok(Step(kind: skHosted, hosted: h))
     of stDirectStatic:
       ?r.staticSpec(d)
     of stDirectDynamic:
@@ -549,39 +671,24 @@ proc prepareInit*(
 ): Result[InitHandoff, LoaderError] =
   ## [SPEC LOADER §6 steps 4-7] The state directory and the initialization
   ## input, which stay where they are until `_MODULE_init` has returned.
-  if req.configuration.isSome and req.configuration.get.live and
-      b.applyConfiguration.isNil:
-    # [SPEC RUNTIME l.1386-1392 (RUN-1086); CONFIG l.264 (CFG-0091)] A live
-    # declaration needs the apply hook; checked per instance, since bindings
-    # are shared.
-    return fail(
-      lecAbiInvalid,
-      "the module declares live reconfiguration but exports no apply_configuration",
-    )
+  ?checkLive(req.configuration.isSome and req.configuration.get.live, b[])
   let h = InitHandoff(request: req, binding: b)
   if req.state.isSome:
     h.stateDir = Opt.some(?r.stateDirFor(req.state.get))
     h.stateDirText = h.stateDir.get
-  h.input = LogosModuleInitInput(
-    abiVersion: ModuleInitAbiVersion,
-    structSize: csize_t(sizeof(LogosModuleInitInput)),
-    runtimeControl: req.services.runtimeControl,
-    publishUserData: req.services.publishUserData,
-    publish: req.services.publish,
-    stateDir: (if h.stateDir.isSome: cstring(h.stateDirText) else: nil),
-    invocationAccess: req.services.invocationAccess,
-  )
+  var cfg: ptr UncheckedArray[uint8] = nil
+  var cfgLen = 0
   if req.configuration.isSome:
-    # [SPEC CONFIG l.224-226 (CFG-0066, CFG-0067); RUNTIME RUN-0291] The
-    # snapshot's bytes, borrowed for the call; absent stays NULL and 0.
     let input = req.configuration.get.input
-    h.input.configurationCbor = cast[ptr UncheckedArray[uint8]](input.address)
-    h.input.configurationCborLen = csize_t(input.len)
-  checkInitInput(addr h.input, b.declaresEvents).isOkOr:
-    return fail(
-      lecRealizationFailed,
-      "the Runtime's initialization services are invalid: " & error.message.get(""),
-    )
+    cfg = cast[ptr UncheckedArray[uint8]](input.address)
+    cfgLen = input.len
+  h.input = ?initInputFor(
+    req.services,
+    (if h.stateDir.isSome: cstring(h.stateDirText) else: nil),
+    cfg,
+    cfgLen,
+    b.declaresEvents,
+  )
   ok(h)
 
 proc initModule*(
@@ -621,12 +728,7 @@ proc completeInitChecked*(
   if outcome.isErr:
     if returnedOk and ctx != nil:
       orphan = ctx
-    let f = outcome.error
-    return err(
-      loaderError(
-        lecRealizationFailed, "_MODULE_init() failed with " & $f.code, Opt.some(f)
-      )
-    )
+    return err(initFailure(outcome.error))
   let x = Realization(
     id: r.nextId(),
     moduleInstance: h.request.moduleInstance,
@@ -662,6 +764,28 @@ proc completeInit*(
   let (outcome, returnedOk) = checkInit(res, ctx)
   r.completeInitChecked(h, outcome, returnedOk, ctx, orphan)
 
+proc completeHosted*(
+    r: Realizer, req: RealizeRequest, init: HostedInit, host: pointer
+): Realization =
+  ## [SPEC LOADER §6 step 8, §7; plan §2.5] A Module Host initialized the
+  ## instance: the active realization, holding `host`.
+  result = Realization(
+    id: r.nextId(),
+    moduleInstance: req.moduleInstance,
+    status: rsActive,
+    hosted: true,
+    host: host,
+    surface: init.surface,
+    key: keyOf(req),
+  )
+  if req.state.isSome and r.stateRoot.isSome:
+    result.stateDir = Opt.some(r.stateRoot.get / req.state.get)
+  if req.configuration.isSome:
+    let c = req.configuration.get
+    result.live = c.live
+    result.initCommitment = Opt.some(c.commitment)
+  r.live[req.moduleInstance] = result
+
 proc realize*(r: Realizer, req: RealizeRequest): Result[Realization, LoaderError] =
   ## [SPEC LOADER §6] Every phase on the calling thread. Returns the active
   ## realization, or an error after every partial context it can clean is
@@ -671,6 +795,8 @@ proc realize*(r: Realizer, req: RealizeRequest): Result[Realization, LoaderError
     case step.kind
     of skLive:
       return ok(step.realization)
+    of skHosted:
+      return fail(lecUnsupportedStrategy, "hosted_dynamic needs a Module Host driver")
     of skBind:
       ?r.storeBinding(runBind(step.spec))
     of skInit:
@@ -703,6 +829,12 @@ proc beginRelease*(
     # [SPEC LOADER §11 (LDR-0136)] Application is excluded from release.
     return fail(lecInvalidRequest, "a configuration is being applied")
   found.releasing = true
+  if found.hosted:
+    if found.host == nil:
+      return ok(Opt.none(Teardown))
+    let t = Teardown(host: found.host)
+    found.host = nil # the caller ends the host
+    return ok(Opt.some(t))
   if found.context == nil:
     return ok(Opt.none(Teardown))
   let t = Teardown(destroy: found.binding.destroy, context: found.context)
@@ -739,6 +871,17 @@ proc beginApply*(
   let x = r.live.getOrDefault(moduleInstance)
   if x.isNil or x.id != realization:
     return fail(lecRealizationNotFound, "no realization matches both identifiers")
+  if x.hosted:
+    # [plan §2.10] The host checked the hook at initialization (`checkLive`).
+    if not x.live:
+      return
+        fail(lecInvalidRequest, "the realization did not declare live reconfiguration")
+    if x.status != rsActive or x.releasing or x.host == nil:
+      return fail(lecInvalidRequest, "the realization is not active")
+    if x.applying:
+      return fail(lecInvalidRequest, "a configuration is already being applied")
+    x.applying = true
+    return ok(ApplyHook(host: x.host))
   if not x.live or x.binding.applyConfiguration.isNil:
     return
       fail(lecInvalidRequest, "the realization did not declare live reconfiguration")
@@ -810,7 +953,9 @@ func record*(x: Realization): RealizationRecord =
   )
   case x.status
   of rsActive:
-    if x.binding.provider:
+    if x.hosted:
+      result.callSurface = x.surface
+    elif x.binding.provider:
       result.callSurface = Opt.some(x.binding.callSurface)
   of rsFailed:
     result.failure = Opt.some(x.failure)

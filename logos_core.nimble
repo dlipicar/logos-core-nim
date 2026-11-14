@@ -6,9 +6,10 @@ description = "The Logos Core module specs in Nim"
 license = "MIT OR Apache-2.0"
 srcDir = "src"
 installExt = @["nim"]
-bin = @["lcn_gen", "lcn_pkg"]
+bin = @["lcn_gen", "lcn_pkg", "logos_module_host"]
 namedBin["lcn_gen"] = "lcn-gen"
 namedBin["lcn_pkg"] = "lcn-pkg"
+namedBin["logos_module_host"] = "logos-module-host"
 
 # Dependencies
 #

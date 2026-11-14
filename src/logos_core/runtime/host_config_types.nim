@@ -10,7 +10,7 @@ import ../iface/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.app-config.v1: the Host Embedding API configuration (RUNTIME\x0A; \xC2\xA713.3 configuration_format; decision G76). One Logos deterministic-CBOR\x0A; lcn.app_config value. docs/HOST-CONFIG.md documents each field.\x0A;\x0A; An array that is present is non-empty, and the checks the schema cannot\x0A; express (unique ids, ordering, the orchestration instance, the authority\x0A; instance) are applied at logos_runtime_create (runtime/host_config.nim).\x0A; lcn.authority_policy is the Capability Authority\'s policy input,\x0A; authority/policy.cddl (docs/AUTHORITY-POLICY.md).\x0A\x0Alcn.app_config = {\x0A  runtime: lcn.app_runtime,\x0A  policy: lcn.app_policy,\x0A  orchestration: lcn.app_instance_id,\x0A  modules: [* lcn.app_module],\x0A  ? ordering: [* lcn.app_ordering],\x0A  ? declarations: [* lcn.app_declaration],\x0A  ? call_audit: lcn.app_call_audit,\x0A  ? routing: [* lcn.app_routing_rule],\x0A  ? transport: lcn.app_transport,\x0A}\x0A\x0Alcn.app_runtime = {\x0A  work_dir: lcn.app_path,\x0A  ? state_root: lcn.app_path,\x0A  ? store_dir: lcn.app_path,\x0A  ? runtime_instance_id: tstr .size (1..128),\x0A  ? startup_deadline_ms: uint32,\x0A  ? stop_deadline_ms: uint32,\x0A  ? shutdown_grace_ms: uint32,\x0A  ? apply_deadline_ms: uint32,\x0A  ? max_payload_depth: uint16,\x0A  ? endpoint_dir: lcn.app_path,\x0A}\x0A\x0Alcn.app_path = tstr .size (1..4096)\x0A\x0A; allow-all: every operation is allowed (RUNTIME l.1633-1634).\x0A; capability-authority: the named logos_capability_authority instance decides\x0A; (RUNTIME \xC2\xA79; DECISIONS I85). evaluation_deadline_ms: 1..60000, default 5000;\x0A; recovery: the derived rules also apply after a binding loss (RUN-0860).\x0Alcn.app_policy =\x0A  { kind: \"allow-all\" } /\x0A  {\x0A    kind: \"capability-authority\",\x0A    authority: lcn.app_instance_id,\x0A    policy: lcn.authority_policy,\x0A    ? evaluation_deadline_ms: uint32,\x0A    ? recovery: bool,\x0A  }\x0A\x0A; Call audit (CA \xC2\xA79, \xC2\xA79.1): call_records is the in-memory ring\'s capacity,\x0A; 1..1000000, default 4096; evidence the call-evidence signing key.\x0Alcn.app_call_audit = {\x0A  ? call_records: uint32,\x0A  ? evidence: lcn.app_evidence_key,\x0A}\x0A\x0A; kid: the logos.capability_authority.evidence_key_id verifiers map to this\x0A; Runtime; secret_key_file: a 96-byte SLH-DSA-SHA2-192s secret key, mode 0600.\x0Alcn.app_evidence_key = {\x0A  kid: bstr .size (1..128),\x0A  secret_key_file: lcn.app_path,\x0A}\x0A\x0A; Routing selection (RUNTIME l.901-911; DECISIONS I90, G254): a route\x0A; from a module named caller (absent: any) to the module named callee is\x0A; direct or uses local transport. The rule naming the caller wins; with no\x0A; rule a route is direct. No rule names logos_module_loader, no callee is\x0A; logos_runtime_control, and local-transport is refused where the platform\x0A; has no unix-stream profile (TRANSPORT \xC2\xA78.2.1).\x0Alcn.app_routing_rule = {\x0A  ? caller: tstr .size (1..64),\x0A  callee: tstr .size (1..64),\x0A  mode: \"direct\" / \"local-transport\",\x0A}\x0A\x0A; The transport I/O thread\'s limits (TRANSPORT \xC2\xA75.2, \xC2\xA78.6; DECISIONS I90);\x0A; an absent field keeps its default. docs/HOST-CONFIG.md lists every limit.\x0A; frame_limit is at least 16 MiB (TRANSPORT l.380).\x0Alcn.app_transport = {\x0A  ? frame_limit: uint32,\x0A  ? hello_timeout_ms: uint32,\x0A  ? write_stall_timeout_ms: uint32,\x0A  ? max_pending_output_bytes: uint64,\x0A  ? conn_output_bytes: uint32,\x0A  ? caller_undelivered_bytes: uint32,\x0A  ? max_inbound: uint16,\x0A  ? max_outbound: uint16,\x0A  ? max_calls: uint32,\x0A  ? max_in_flight: uint32,\x0A}\x0A\x0A; logos.runtime.module_instance_id (RUNTIME \xC2\xA79.2)\x0Alcn.app_instance_id = tstr .size (1..128)\x0A\x0Alcn.app_module = {\x0A  instance: lcn.app_instance_id,\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration: lcn.app_configuration,\x0A  ? provisioned_configuration: bstr .size (1..8388608),\x0A}\x0A\x0A; One deterministic-CBOR logos.module_configuration.configuration_declaration\x0A; (CONFIG \xC2\xA72): the module\'s schema binding and its optional package default.\x0A; provisioned_configuration is this instance\'s protected value (CONFIG l.142;\x0A; decision G141), a complete value of the binding\'s root; it needs\x0A; configuration. docs/HOST-CONFIG.md says when a changed value takes effect.\x0Alcn.app_configuration = bstr .size (1..16777216)\x0A\x0A; logos.module_loader.direct_static and direct_dynamic (LOADER \xC2\xA73)\x0Alcn.app_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.app_artifact }\x0A\x0A; logos.module_loader.artifact (LOADER \xC2\xA73)\x0Alcn.app_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.app_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0A; logos.package_manifest.provider_requirement (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0A; logos.package_manifest.requested_permission (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one lifecycle-ordering constraint (RUNTIME \xC2\xA73.7)\x0Alcn.app_ordering = {\x0A  prerequisite: lcn.app_instance_id,\x0A  dependent: lcn.app_instance_id,\x0A}\x0A\x0A; One accepted declaration per module name, for create_module (decision G55;\x0A; RUNTIME l.3614-3621): lcn.app_module without instance, state_assignment and\x0A; provisioned_configuration (a provisioned value belongs to an instance, never\x0A; to a module name: RUN-0923). With persistent_state, each created instance\x0A; gets a fresh state assignment.\x0Alcn.app_declaration = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? persistent_state: true,\x0A  ? configuration: lcn.app_configuration,\x0A}\x0A\x0A; logos-core-nim.authority-policy.v1: the Capability Authority\'s policy input\x0A; (BCP l.360; DECISIONS I84). One Logos deterministic-CBOR lcn.authority_policy\x0A; value. docs/AUTHORITY-POLICY.md documents each rule.\x0A;\x0A; Every array is a set: strictly ascending by its elements\' deterministic-CBOR\x0A; bytes, with no duplicates (CA l.130-138 applied to this input), and non-empty,\x0A; except a method or event list, which permits none of that kind when empty\x0A; (CA l.126). The checks the schema cannot express (order, non-empty arrays, the\x0A; source pattern, bounds, names that resolve, restricted declarations) are\x0A; applied when the policy is loaded (authority/policy.nim).\x0A\x0Alcn.authority_policy = {\x0A  format: \"logos-core-nim.authority-policy.v1\",\x0A  source: tstr .size (1..128),\x0A  ? decision_validity_ms: uint64,\x0A  ? audit: { ? records: uint64 },\x0A  rules: [* lcn.ap_rule],\x0A}\x0A\x0Alcn.ap_rule = lcn.ap_allow / lcn.ap_deny / lcn.ap_issue / lcn.ap_revoke / lcn.ap_inspect\x0A\x0Alcn.ap_allow = {\x0A  kind: \"allow\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? commitment: lcn.ap_commitment,\x0A}\x0A\x0Alcn.ap_deny = {\x0A  kind: \"deny\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? code: \"scope-denied\" / \"consumer-denied\" / \"target-denied\",\x0A}\x0A\x0Alcn.ap_issue = {\x0A  kind: \"issue\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A  scopes: [* lcn.ap_scope],\x0A  ? max_validity_ms: uint64,\x0A}\x0A\x0Alcn.ap_revoke = {\x0A  kind: \"revoke\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A}\x0A\x0Alcn.ap_inspect = {\x0A  kind: \"inspect\",\x0A  subject: lcn.ap_subject,\x0A  ? grants: lcn.ap_target,\x0A  ? audit: lcn.ap_target,\x0A  ? policy_changes: true,\x0A}\x0A\x0A; G47 facts. Fields AND, list entries OR; {} matches any Runtime-known instance.\x0Alcn.ap_subject = {\x0A  ? instances: [* tstr .size (1..128)],\x0A  ? modules: [* tstr .size (1..64)],\x0A  ? signers: [* bstr .size 48],\x0A  ? packages: [* tstr .size (1..128)],\x0A}\x0A\x0Alcn.ap_target = lcn.ap_subject / \"self\" / \"issued\"\x0A\x0Alcn.ap_scope = lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution\x0A\x0Alcn.ap_provider_access = {\x0A  kind: \"provider-access\",\x0A  contract: logos.schema_commitment / \"capability-authority\" / \"runtime-control\",\x0A  actions: [* lcn.ap_action],\x0A  ? providers: lcn.ap_subject,\x0A  ? access: lcn.ap_access,\x0A}\x0A\x0Alcn.ap_action =\x0A  \"discover\" / \"establish-route\" / \"renew-route\" / \"call\" / \"publish-event\" /\x0A  \"subscribe-event\"\x0A\x0Alcn.ap_access = {\x0A  ? methods: [* lcn.ap_decl],\x0A  ? publish_events: [* lcn.ap_decl],\x0A  ? subscribe_events: [* lcn.ap_decl],\x0A}\x0A\x0Alcn.ap_runtime_control = {\x0A  kind: \"runtime-control\",\x0A  ? methods: [* lcn.ap_decl],\x0A  ? events: [* lcn.ap_decl],\x0A  ? targets: lcn.ap_subject,\x0A}\x0A\x0Alcn.ap_module_execution = {\x0A  kind: \"module-execution\",\x0A  targets: lcn.ap_subject,\x0A  actions: [* (\"start\" / \"stop\")],\x0A  ? modes: [* (\"direct\" / \"local-transport\")],\x0A  ? placements: [* (\"process\" / \"sandbox\" / \"container\")],\x0A}\x0A\x0A; a declaration root, or a name the contract\'s pinned schema resolves (only with\x0A; \"capability-authority\" or \"runtime-control\")\x0Alcn.ap_decl = bstr .size 32 / tstr .size (1..128)\x0A\x0A; logos.capability_authority.commitment_requirements, repeated (test_nimgen)\x0Alcn.ap_commitment = {\x0A  ? request: \"retain-root\",\x0A  ? response: \"retain-root\",\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.app-config.v1: the Host Embedding API configuration (RUNTIME\x0A; \xC2\xA713.3 configuration_format; decision G76). One Logos deterministic-CBOR\x0A; lcn.app_config value. docs/HOST-CONFIG.md documents each field.\x0A;\x0A; An array that is present is non-empty, and the checks the schema cannot\x0A; express (unique ids, ordering, the orchestration instance, the authority\x0A; instance) are applied at logos_runtime_create (runtime/host_config.nim).\x0A; lcn.authority_policy is the Capability Authority\'s policy input,\x0A; authority/policy.cddl (docs/AUTHORITY-POLICY.md).\x0A\x0Alcn.app_config = {\x0A  runtime: lcn.app_runtime,\x0A  policy: lcn.app_policy,\x0A  orchestration: lcn.app_instance_id,\x0A  modules: [* lcn.app_module],\x0A  ? ordering: [* lcn.app_ordering],\x0A  ? declarations: [* lcn.app_declaration],\x0A  ? call_audit: lcn.app_call_audit,\x0A  ? routing: [* lcn.app_routing_rule],\x0A  ? transport: lcn.app_transport,\x0A}\x0A\x0Alcn.app_runtime = {\x0A  work_dir: lcn.app_path,\x0A  ? state_root: lcn.app_path,\x0A  ? store_dir: lcn.app_path,\x0A  ? runtime_instance_id: tstr .size (1..128),\x0A  ? startup_deadline_ms: uint32,\x0A  ? stop_deadline_ms: uint32,\x0A  ? shutdown_grace_ms: uint32,\x0A  ? apply_deadline_ms: uint32,\x0A  ? max_payload_depth: uint16,\x0A  ? endpoint_dir: lcn.app_path,\x0A  ? module_host: lcn.app_path,\x0A  ? module_host_env: [* lcn.app_env_name],\x0A}\x0A\x0A; module_host: the logos-module-host program, an absolute path (Tier 4b step\x0A; 4b-3); without it hosted_dynamic is refused. module_host_env: the names of\x0A; the variables every Module Host gets from the daemon\'s environment.\x0Alcn.app_env_name = tstr .size (1..128)\x0A\x0Alcn.app_path = tstr .size (1..4096)\x0A\x0A; allow-all: every operation is allowed (RUNTIME l.1633-1634).\x0A; capability-authority: the named logos_capability_authority instance decides\x0A; (RUNTIME \xC2\xA79; DECISIONS I85). evaluation_deadline_ms: 1..60000, default 5000;\x0A; recovery: the derived rules also apply after a binding loss (RUN-0860).\x0Alcn.app_policy =\x0A  { kind: \"allow-all\" } /\x0A  {\x0A    kind: \"capability-authority\",\x0A    authority: lcn.app_instance_id,\x0A    policy: lcn.authority_policy,\x0A    ? evaluation_deadline_ms: uint32,\x0A    ? recovery: bool,\x0A  }\x0A\x0A; Call audit (CA \xC2\xA79, \xC2\xA79.1): call_records is the in-memory ring\'s capacity,\x0A; 1..1000000, default 4096; evidence the call-evidence signing key.\x0Alcn.app_call_audit = {\x0A  ? call_records: uint32,\x0A  ? evidence: lcn.app_evidence_key,\x0A}\x0A\x0A; kid: the logos.capability_authority.evidence_key_id verifiers map to this\x0A; Runtime; secret_key_file: a 96-byte SLH-DSA-SHA2-192s secret key, mode 0600.\x0Alcn.app_evidence_key = {\x0A  kid: bstr .size (1..128),\x0A  secret_key_file: lcn.app_path,\x0A}\x0A\x0A; Routing selection (RUNTIME l.901-911; DECISIONS I90, G254): a route\x0A; from a module named caller (absent: any) to the module named callee is\x0A; direct or uses local transport. The rule naming the caller wins; with no\x0A; rule a route is direct. No rule names logos_module_loader, no callee is\x0A; logos_runtime_control, and local-transport is refused where the platform\x0A; has no unix-stream profile (TRANSPORT \xC2\xA78.2.1).\x0Alcn.app_routing_rule = {\x0A  ? caller: tstr .size (1..64),\x0A  callee: tstr .size (1..64),\x0A  mode: \"direct\" / \"local-transport\",\x0A}\x0A\x0A; The transport I/O thread\'s limits (TRANSPORT \xC2\xA75.2, \xC2\xA78.6; DECISIONS I90);\x0A; an absent field keeps its default. docs/HOST-CONFIG.md lists every limit.\x0A; frame_limit is at least 16 MiB (TRANSPORT l.380).\x0Alcn.app_transport = {\x0A  ? frame_limit: uint32,\x0A  ? hello_timeout_ms: uint32,\x0A  ? write_stall_timeout_ms: uint32,\x0A  ? max_pending_output_bytes: uint64,\x0A  ? conn_output_bytes: uint32,\x0A  ? caller_undelivered_bytes: uint32,\x0A  ? max_inbound: uint16,\x0A  ? max_outbound: uint16,\x0A  ? max_calls: uint32,\x0A  ? max_in_flight: uint32,\x0A}\x0A\x0A; logos.runtime.module_instance_id (RUNTIME \xC2\xA79.2)\x0Alcn.app_instance_id = tstr .size (1..128)\x0A\x0Alcn.app_module = {\x0A  instance: lcn.app_instance_id,\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration: lcn.app_configuration,\x0A  ? provisioned_configuration: bstr .size (1..8388608),\x0A}\x0A\x0A; One deterministic-CBOR logos.module_configuration.configuration_declaration\x0A; (CONFIG \xC2\xA72): the module\'s schema binding and its optional package default.\x0A; provisioned_configuration is this instance\'s protected value (CONFIG l.142;\x0A; decision G141), a complete value of the binding\'s root; it needs\x0A; configuration. docs/HOST-CONFIG.md says when a changed value takes effect.\x0Alcn.app_configuration = bstr .size (1..16777216)\x0A\x0A; logos.module_loader.direct_static, direct_dynamic and hosted_dynamic with\x0A; the process placement (LOADER \xC2\xA73)\x0Alcn.app_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.app_artifact } /\x0A  { strategy: \"hosted_dynamic\", placement: \"process\", artifact: lcn.app_artifact }\x0A\x0A; logos.module_loader.artifact (LOADER \xC2\xA73)\x0Alcn.app_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.app_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0A; logos.package_manifest.provider_requirement (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0A; logos.package_manifest.requested_permission (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one lifecycle-ordering constraint (RUNTIME \xC2\xA73.7)\x0Alcn.app_ordering = {\x0A  prerequisite: lcn.app_instance_id,\x0A  dependent: lcn.app_instance_id,\x0A}\x0A\x0A; One accepted declaration per module name, for create_module (decision G55;\x0A; RUNTIME l.3614-3621): lcn.app_module without instance, state_assignment and\x0A; provisioned_configuration (a provisioned value belongs to an instance, never\x0A; to a module name: RUN-0923). With persistent_state, each created instance\x0A; gets a fresh state assignment.\x0Alcn.app_declaration = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? persistent_state: true,\x0A  ? configuration: lcn.app_configuration,\x0A}\x0A\x0A; logos-core-nim.authority-policy.v1: the Capability Authority\'s policy input\x0A; (BCP l.360; DECISIONS I84). One Logos deterministic-CBOR lcn.authority_policy\x0A; value. docs/AUTHORITY-POLICY.md documents each rule.\x0A;\x0A; Every array is a set: strictly ascending by its elements\' deterministic-CBOR\x0A; bytes, with no duplicates (CA l.130-138 applied to this input), and non-empty,\x0A; except a method or event list, which permits none of that kind when empty\x0A; (CA l.126). The checks the schema cannot express (order, non-empty arrays, the\x0A; source pattern, bounds, names that resolve, restricted declarations) are\x0A; applied when the policy is loaded (authority/policy.nim).\x0A\x0Alcn.authority_policy = {\x0A  format: \"logos-core-nim.authority-policy.v1\",\x0A  source: tstr .size (1..128),\x0A  ? decision_validity_ms: uint64,\x0A  ? audit: { ? records: uint64 },\x0A  rules: [* lcn.ap_rule],\x0A}\x0A\x0Alcn.ap_rule = lcn.ap_allow / lcn.ap_deny / lcn.ap_issue / lcn.ap_revoke / lcn.ap_inspect\x0A\x0Alcn.ap_allow = {\x0A  kind: \"allow\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? commitment: lcn.ap_commitment,\x0A}\x0A\x0Alcn.ap_deny = {\x0A  kind: \"deny\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? code: \"scope-denied\" / \"consumer-denied\" / \"target-denied\",\x0A}\x0A\x0Alcn.ap_issue = {\x0A  kind: \"issue\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A  scopes: [* lcn.ap_scope],\x0A  ? max_validity_ms: uint64,\x0A}\x0A\x0Alcn.ap_revoke = {\x0A  kind: \"revoke\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A}\x0A\x0Alcn.ap_inspect = {\x0A  kind: \"inspect\",\x0A  subject: lcn.ap_subject,\x0A  ? grants: lcn.ap_target,\x0A  ? audit: lcn.ap_target,\x0A  ? policy_changes: true,\x0A}\x0A\x0A; G47 facts. Fields AND, list entries OR; {} matches any Runtime-known instance.\x0Alcn.ap_subject = {\x0A  ? instances: [* tstr .size (1..128)],\x0A  ? modules: [* tstr .size (1..64)],\x0A  ? signers: [* bstr .size 48],\x0A  ? packages: [* tstr .size (1..128)],\x0A}\x0A\x0Alcn.ap_target = lcn.ap_subject / \"self\" / \"issued\"\x0A\x0Alcn.ap_scope = lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution\x0A\x0Alcn.ap_provider_access = {\x0A  kind: \"provider-access\",\x0A  contract: logos.schema_commitment / \"capability-authority\" / \"runtime-control\",\x0A  actions: [* lcn.ap_action],\x0A  ? providers: lcn.ap_subject,\x0A  ? access: lcn.ap_access,\x0A}\x0A\x0Alcn.ap_action =\x0A  \"discover\" / \"establish-route\" / \"renew-route\" / \"call\" / \"publish-event\" /\x0A  \"subscribe-event\"\x0A\x0Alcn.ap_access = {\x0A  ? methods: [* lcn.ap_decl],\x0A  ? publish_events: [* lcn.ap_decl],\x0A  ? subscribe_events: [* lcn.ap_decl],\x0A}\x0A\x0Alcn.ap_runtime_control = {\x0A  kind: \"runtime-control\",\x0A  ? methods: [* lcn.ap_decl],\x0A  ? events: [* lcn.ap_decl],\x0A  ? targets: lcn.ap_subject,\x0A}\x0A\x0Alcn.ap_module_execution = {\x0A  kind: \"module-execution\",\x0A  targets: lcn.ap_subject,\x0A  actions: [* (\"start\" / \"stop\")],\x0A  ? modes: [* (\"direct\" / \"local-transport\")],\x0A  ? placements: [* (\"process\" / \"sandbox\" / \"container\")],\x0A}\x0A\x0A; a declaration root, or a name the contract\'s pinned schema resolves (only with\x0A; \"capability-authority\" or \"runtime-control\")\x0Alcn.ap_decl = bstr .size 32 / tstr .size (1..128)\x0A\x0A; logos.capability_authority.commitment_requirements, repeated (test_nimgen)\x0Alcn.ap_commitment = {\x0A  ? request: \"retain-root\",\x0A  ? response: \"retain-root\",\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -271,6 +271,8 @@ type
     requested_permissions*: Opt[seq[LcnAppPermission]]
     requires*: Opt[seq[LcnAppRequirement]]
 
+  LcnAppEnvName* = string
+
   LcnAppEvidenceKey* = object
     kid*: seq[byte]
     secret_key_file*: LcnAppPath
@@ -283,9 +285,15 @@ type
     binding*: string
     strategy*: string = "direct_static"
 
+  LcnAppImplementationARProcessHostedDynamicMap* = object
+    artifact*: LcnAppArtifact
+    placement*: string = "process"
+    strategy*: string = "hosted_dynamic"
+
   LcnAppImplementationKind* {.pure.} = enum
     Direct_dynamic
     Direct_static
+    Process_hosted_dynamic
 
   LcnAppImplementation* = object
     case kind*: LcnAppImplementationKind
@@ -293,6 +301,8 @@ type
       arm_Direct_dynamic*: LcnAppImplementationARDirectDynamicMap
     of LcnAppImplementationKind.Direct_static:
       arm_Direct_static*: LcnAppImplementationARDirectStaticMap
+    of LcnAppImplementationKind.Process_hosted_dynamic:
+      arm_Process_hosted_dynamic*: LcnAppImplementationARProcessHostedDynamicMap
 
   LcnAppInstanceId* = string
 
@@ -375,6 +385,8 @@ type
     apply_deadline_ms*: Opt[uint32]
     endpoint_dir*: Opt[LcnAppPath]
     max_payload_depth*: Opt[uint16]
+    module_host*: Opt[LcnAppPath]
+    module_host_env*: Opt[seq[LcnAppEnvName]]
     runtime_instance_id*: Opt[string]
     shutdown_grace_ms*: Opt[uint32]
     startup_deadline_ms*: Opt[uint32]
@@ -507,6 +519,8 @@ proc toCbor*(x: LcnAppDeclaration): CborValue
 proc fromChecked*(T: type LcnAppDeclaration, v: CborValue): LcnAppDeclaration
 proc stepEncLcnAppDeclaration*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnAppDeclaration*(w: var DecWork, v: CborValue, dst: pointer)
+proc encLcnAppEnvName*(x: LcnAppEnvName): CborValue
+proc decLcnAppEnvName*(v: CborValue): LcnAppEnvName
 proc toCbor*(x: LcnAppEvidenceKey): CborValue
 proc fromChecked*(T: type LcnAppEvidenceKey, v: CborValue): LcnAppEvidenceKey
 proc stepEncLcnAppEvidenceKey*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -521,6 +535,10 @@ proc toCbor*(x: LcnAppImplementationARDirectStaticMap): CborValue
 proc fromChecked*(T: type LcnAppImplementationARDirectStaticMap, v: CborValue): LcnAppImplementationARDirectStaticMap
 proc stepEncLcnAppImplementationARDirectStaticMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnAppImplementationARDirectStaticMap*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnAppImplementationARProcessHostedDynamicMap): CborValue
+proc fromChecked*(T: type LcnAppImplementationARProcessHostedDynamicMap, v: CborValue): LcnAppImplementationARProcessHostedDynamicMap
+proc stepEncLcnAppImplementationARProcessHostedDynamicMap*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnAppImplementationARProcessHostedDynamicMap*(w: var DecWork, v: CborValue, dst: pointer)
 proc stepEncLcnAppImplementation*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnAppImplementation*(w: var DecWork, v: CborValue, dst: pointer)
 proc encLcnAppInstanceId*(x: LcnAppInstanceId): CborValue
@@ -1786,6 +1804,12 @@ proc fromChecked*(T: type LcnAppDeclaration, v: CborValue): LcnAppDeclaration =
   runDec(stepDecLcnAppDeclaration, v, addr r)
   r
 
+proc encLcnAppEnvName*(x: LcnAppEnvName): CborValue =
+  cbor(x)
+
+proc decLcnAppEnvName*(v: CborValue): LcnAppEnvName =
+  v.text
+
 proc stepEncLcnAppEvidenceKey*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnAppEvidenceKey](src)
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
@@ -1863,6 +1887,35 @@ proc fromChecked*(T: type LcnAppImplementationARDirectStaticMap, v: CborValue): 
   runDec(stepDecLcnAppImplementationARDirectStaticMap, v, addr r)
   r
 
+proc stepEncLcnAppImplementationARProcessHostedDynamicMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnAppImplementationARProcessHostedDynamicMap](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("artifact")
+  w.later(stepEncLcnAppArtifact, addr x.artifact, addr node.entries[k].value)
+  inc k
+  node.entries[k].key = cbor("placement")
+  node.entries[k].value = cbor("process")
+  inc k
+  node.entries[k].key = cbor("strategy")
+  node.entries[k].value = cbor("hosted_dynamic")
+  inc k
+
+proc stepDecLcnAppImplementationARProcessHostedDynamicMap*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnAppImplementationARProcessHostedDynamicMap](dst)
+  r[] = LcnAppImplementationARProcessHostedDynamicMap()
+  let f124 = v.lookup("artifact").get
+  w.later(stepDecLcnAppArtifact, f124, addr r.artifact)
+
+proc toCbor*(x: LcnAppImplementationARProcessHostedDynamicMap): CborValue =
+  runEnc(stepEncLcnAppImplementationARProcessHostedDynamicMap, addr x)
+
+proc fromChecked*(T: type LcnAppImplementationARProcessHostedDynamicMap, v: CborValue): LcnAppImplementationARProcessHostedDynamicMap =
+  var r: LcnAppImplementationARProcessHostedDynamicMap
+  runDec(stepDecLcnAppImplementationARProcessHostedDynamicMap, v, addr r)
+  r
+
 proc stepEncLcnAppImplementation*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnAppImplementation](src)
   case x.kind
@@ -1870,6 +1923,8 @@ proc stepEncLcnAppImplementation*(w: var EncWork, src: pointer, dst: ptr CborVal
     w.later(stepEncLcnAppImplementationARDirectDynamicMap, addr x.arm_Direct_dynamic, addr dst[])
   of LcnAppImplementationKind.Direct_static:
     w.later(stepEncLcnAppImplementationARDirectStaticMap, addr x.arm_Direct_static, addr dst[])
+  of LcnAppImplementationKind.Process_hosted_dynamic:
+    w.later(stepEncLcnAppImplementationARProcessHostedDynamicMap, addr x.arm_Process_hosted_dynamic, addr dst[])
 
 proc stepDecLcnAppImplementation*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAppImplementation](dst)
@@ -1880,6 +1935,9 @@ proc stepDecLcnAppImplementation*(w: var DecWork, v: CborValue, dst: pointer) =
   of 1:
     r[] = LcnAppImplementation(kind: LcnAppImplementationKind.Direct_dynamic)
     w.later(stepDecLcnAppImplementationARDirectDynamicMap, v, addr r.arm_Direct_dynamic)
+  of 2:
+    r[] = LcnAppImplementation(kind: LcnAppImplementationKind.Process_hosted_dynamic)
+    w.later(stepDecLcnAppImplementationARProcessHostedDynamicMap, v, addr r.arm_Process_hosted_dynamic)
   else:
     raiseAssert "a checked value selects a known arm"
 
@@ -1926,10 +1984,10 @@ proc stepEncLcnAppModule*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   inc k
   if x.implements.isSome:
     node.entries[k].key = cbor("implements")
-    let a126 = newCborArray(x.implements.get.len)
-    node.entries[k].value = a126
-    for i127 in 0 ..< x.implements.get.len:
-      w.later(stepEncSchemaCommitment, addr x.implements.get[i127], addr a126.items[i127])
+    let a127 = newCborArray(x.implements.get.len)
+    node.entries[k].value = a127
+    for i128 in 0 ..< x.implements.get.len:
+      w.later(stepEncSchemaCommitment, addr x.implements.get[i128], addr a127.items[i128])
     inc k
   node.entries[k].key = cbor("instance")
   node.entries[k].value = encLcnAppInstanceId(x.instance)
@@ -1947,17 +2005,17 @@ proc stepEncLcnAppModule*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc k
   if x.requested_permissions.isSome:
     node.entries[k].key = cbor("requested_permissions")
-    let a132 = newCborArray(x.requested_permissions.get.len)
-    node.entries[k].value = a132
-    for i133 in 0 ..< x.requested_permissions.get.len:
-      w.later(stepEncLcnAppPermission, addr x.requested_permissions.get[i133], addr a132.items[i133])
+    let a133 = newCborArray(x.requested_permissions.get.len)
+    node.entries[k].value = a133
+    for i134 in 0 ..< x.requested_permissions.get.len:
+      w.later(stepEncLcnAppPermission, addr x.requested_permissions.get[i134], addr a133.items[i134])
     inc k
   if x.requires.isSome:
     node.entries[k].key = cbor("requires")
-    let a136 = newCborArray(x.requires.get.len)
-    node.entries[k].value = a136
-    for i137 in 0 ..< x.requires.get.len:
-      w.later(stepEncLcnAppRequirement, addr x.requires.get[i137], addr a136.items[i137])
+    let a137 = newCborArray(x.requires.get.len)
+    node.entries[k].value = a137
+    for i138 in 0 ..< x.requires.get.len:
+      w.later(stepEncLcnAppRequirement, addr x.requires.get[i138], addr a137.items[i138])
     inc k
   if x.state_assignment.isSome:
     node.entries[k].key = cbor("state_assignment")
@@ -1967,41 +2025,41 @@ proc stepEncLcnAppModule*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnAppModule*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAppModule](dst)
   r[] = LcnAppModule()
-  let f124 = v.lookup("configuration")
-  if f124.isSome:
-    r.configuration = Opt.some(decLcnAppConfiguration(f124.get))
-  let f125 = v.lookup("implementation").get
-  w.later(stepDecLcnAppImplementation, f125, addr r.implementation)
-  let f128 = v.lookup("implements")
-  if f128.isSome:
+  let f125 = v.lookup("configuration")
+  if f125.isSome:
+    r.configuration = Opt.some(decLcnAppConfiguration(f125.get))
+  let f126 = v.lookup("implementation").get
+  w.later(stepDecLcnAppImplementation, f126, addr r.implementation)
+  let f129 = v.lookup("implements")
+  if f129.isSome:
     r.implements = Opt.some(default(seq[SchemaCommitment]))
-    r.implements.get.setLen(f128.get.items.len)
-    for i129 in 0 ..< f128.get.items.len:
-      w.later(stepDecSchemaCommitment, f128.get.items[i129], addr r.implements.get[i129])
+    r.implements.get.setLen(f129.get.items.len)
+    for i130 in 0 ..< f129.get.items.len:
+      w.later(stepDecSchemaCommitment, f129.get.items[i130], addr r.implements.get[i130])
   r.instance = decLcnAppInstanceId(v.lookup("instance").get)
   r.module = v.lookup("module").get.text
-  let f130 = v.lookup("primary_contract")
-  if f130.isSome:
-    r.primary_contract = Opt.some(default(SchemaCommitment))
-    w.later(stepDecSchemaCommitment, f130.get, addr r.primary_contract.get)
-  let f131 = v.lookup("provisioned_configuration")
+  let f131 = v.lookup("primary_contract")
   if f131.isSome:
-    r.provisioned_configuration = Opt.some(f131.get.bytes)
-  let f134 = v.lookup("requested_permissions")
-  if f134.isSome:
+    r.primary_contract = Opt.some(default(SchemaCommitment))
+    w.later(stepDecSchemaCommitment, f131.get, addr r.primary_contract.get)
+  let f132 = v.lookup("provisioned_configuration")
+  if f132.isSome:
+    r.provisioned_configuration = Opt.some(f132.get.bytes)
+  let f135 = v.lookup("requested_permissions")
+  if f135.isSome:
     r.requested_permissions = Opt.some(default(seq[LcnAppPermission]))
-    r.requested_permissions.get.setLen(f134.get.items.len)
-    for i135 in 0 ..< f134.get.items.len:
-      w.later(stepDecLcnAppPermission, f134.get.items[i135], addr r.requested_permissions.get[i135])
-  let f138 = v.lookup("requires")
-  if f138.isSome:
+    r.requested_permissions.get.setLen(f135.get.items.len)
+    for i136 in 0 ..< f135.get.items.len:
+      w.later(stepDecLcnAppPermission, f135.get.items[i136], addr r.requested_permissions.get[i136])
+  let f139 = v.lookup("requires")
+  if f139.isSome:
     r.requires = Opt.some(default(seq[LcnAppRequirement]))
-    r.requires.get.setLen(f138.get.items.len)
-    for i139 in 0 ..< f138.get.items.len:
-      w.later(stepDecLcnAppRequirement, f138.get.items[i139], addr r.requires.get[i139])
-  let f140 = v.lookup("state_assignment")
-  if f140.isSome:
-    r.state_assignment = Opt.some(f140.get.text)
+    r.requires.get.setLen(f139.get.items.len)
+    for i140 in 0 ..< f139.get.items.len:
+      w.later(stepDecLcnAppRequirement, f139.get.items[i140], addr r.requires.get[i140])
+  let f141 = v.lookup("state_assignment")
+  if f141.isSome:
+    r.state_assignment = Opt.some(f141.get.text)
 
 proc toCbor*(x: LcnAppModule): CborValue =
   runEnc(stepEncLcnAppModule, addr x)
@@ -2067,9 +2125,9 @@ proc stepDecLcnAppPermission*(w: var DecWork, v: CborValue, dst: pointer) =
   r[] = LcnAppPermission()
   r.constraints = v.lookup("constraints").get.bytes
   r.permission = v.lookup("permission").get.text
-  let f141 = v.lookup("reason")
-  if f141.isSome:
-    r.reason = Opt.some(f141.get.text)
+  let f142 = v.lookup("reason")
+  if f142.isSome:
+    r.reason = Opt.some(f142.get.text)
 
 proc toCbor*(x: LcnAppPermission): CborValue =
   runEnc(stepEncLcnAppPermission, addr x)
@@ -2132,14 +2190,14 @@ proc stepDecLcnAppPolicyARCapabilityAuthorityMap*(w: var DecWork, v: CborValue, 
   let r = cast[ptr LcnAppPolicyARCapabilityAuthorityMap](dst)
   r[] = LcnAppPolicyARCapabilityAuthorityMap()
   r.authority = decLcnAppInstanceId(v.lookup("authority").get)
-  let f142 = v.lookup("evaluation_deadline_ms")
-  if f142.isSome:
-    r.evaluation_deadline_ms = Opt.some(uint32(f142.get.uint))
-  let f143 = v.lookup("policy").get
-  w.later(stepDecLcnAuthorityPolicy, f143, addr r.policy)
-  let f144 = v.lookup("recovery")
-  if f144.isSome:
-    r.recovery = Opt.some(asBool(f144.get))
+  let f143 = v.lookup("evaluation_deadline_ms")
+  if f143.isSome:
+    r.evaluation_deadline_ms = Opt.some(uint32(f143.get.uint))
+  let f144 = v.lookup("policy").get
+  w.later(stepDecLcnAuthorityPolicy, f144, addr r.policy)
+  let f145 = v.lookup("recovery")
+  if f145.isSome:
+    r.recovery = Opt.some(asBool(f145.get))
 
 proc toCbor*(x: LcnAppPolicyARCapabilityAuthorityMap): CborValue =
   runEnc(stepEncLcnAppPolicyARCapabilityAuthorityMap, addr x)
@@ -2218,10 +2276,10 @@ proc stepEncLcnAppRequirement*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnAppRequirement*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAppRequirement](dst)
   r[] = LcnAppRequirement()
-  let f145 = v.lookup("cardinality").get
-  w.later(stepDecLcnAppRequirementCardinalityChoice, f145, addr r.cardinality)
-  let f146 = v.lookup("contract").get
-  w.later(stepDecSchemaCommitment, f146, addr r.contract)
+  let f146 = v.lookup("cardinality").get
+  w.later(stepDecLcnAppRequirementCardinalityChoice, f146, addr r.cardinality)
+  let f147 = v.lookup("contract").get
+  w.later(stepDecSchemaCommitment, f147, addr r.contract)
 
 proc toCbor*(x: LcnAppRequirement): CborValue =
   runEnc(stepEncLcnAppRequirement, addr x)
@@ -2280,11 +2338,11 @@ proc stepDecLcnAppRoutingRule*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAppRoutingRule](dst)
   r[] = LcnAppRoutingRule()
   r.callee = v.lookup("callee").get.text
-  let f147 = v.lookup("caller")
-  if f147.isSome:
-    r.caller = Opt.some(f147.get.text)
-  let f148 = v.lookup("mode").get
-  w.later(stepDecLcnAppRoutingRuleModeChoice, f148, addr r.mode)
+  let f148 = v.lookup("caller")
+  if f148.isSome:
+    r.caller = Opt.some(f148.get.text)
+  let f149 = v.lookup("mode").get
+  w.later(stepDecLcnAppRoutingRuleModeChoice, f149, addr r.mode)
 
 proc toCbor*(x: LcnAppRoutingRule): CborValue =
   runEnc(stepEncLcnAppRoutingRule, addr x)
@@ -2302,6 +2360,10 @@ proc stepEncLcnAppRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   if x.endpoint_dir.isSome:
     inc n
   if x.max_payload_depth.isSome:
+    inc n
+  if x.module_host.isSome:
+    inc n
+  if x.module_host_env.isSome:
     inc n
   if x.runtime_instance_id.isSome:
     inc n
@@ -2329,6 +2391,17 @@ proc stepEncLcnAppRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   if x.max_payload_depth.isSome:
     node.entries[k].key = cbor("max_payload_depth")
     node.entries[k].value = cbor(uint64(x.max_payload_depth.get))
+    inc k
+  if x.module_host.isSome:
+    node.entries[k].key = cbor("module_host")
+    node.entries[k].value = encLcnAppPath(x.module_host.get)
+    inc k
+  if x.module_host_env.isSome:
+    node.entries[k].key = cbor("module_host_env")
+    let a154 = newCborArray(x.module_host_env.get.len)
+    node.entries[k].value = a154
+    for i155 in 0 ..< x.module_host_env.get.len:
+      a154.items[i155] = encLcnAppEnvName(x.module_host_env.get[i155])
     inc k
   if x.runtime_instance_id.isSome:
     node.entries[k].key = cbor("runtime_instance_id")
@@ -2361,33 +2434,42 @@ proc stepEncLcnAppRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnAppRuntime*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAppRuntime](dst)
   r[] = LcnAppRuntime()
-  let f149 = v.lookup("apply_deadline_ms")
-  if f149.isSome:
-    r.apply_deadline_ms = Opt.some(uint32(f149.get.uint))
-  let f150 = v.lookup("endpoint_dir")
+  let f150 = v.lookup("apply_deadline_ms")
   if f150.isSome:
-    r.endpoint_dir = Opt.some(decLcnAppPath(f150.get))
-  let f151 = v.lookup("max_payload_depth")
+    r.apply_deadline_ms = Opt.some(uint32(f150.get.uint))
+  let f151 = v.lookup("endpoint_dir")
   if f151.isSome:
-    r.max_payload_depth = Opt.some(uint16(f151.get.uint))
-  let f152 = v.lookup("runtime_instance_id")
+    r.endpoint_dir = Opt.some(decLcnAppPath(f151.get))
+  let f152 = v.lookup("max_payload_depth")
   if f152.isSome:
-    r.runtime_instance_id = Opt.some(f152.get.text)
-  let f153 = v.lookup("shutdown_grace_ms")
+    r.max_payload_depth = Opt.some(uint16(f152.get.uint))
+  let f153 = v.lookup("module_host")
   if f153.isSome:
-    r.shutdown_grace_ms = Opt.some(uint32(f153.get.uint))
-  let f154 = v.lookup("startup_deadline_ms")
-  if f154.isSome:
-    r.startup_deadline_ms = Opt.some(uint32(f154.get.uint))
-  let f155 = v.lookup("state_root")
-  if f155.isSome:
-    r.state_root = Opt.some(decLcnAppPath(f155.get))
-  let f156 = v.lookup("stop_deadline_ms")
+    r.module_host = Opt.some(decLcnAppPath(f153.get))
+  let f156 = v.lookup("module_host_env")
   if f156.isSome:
-    r.stop_deadline_ms = Opt.some(uint32(f156.get.uint))
-  let f157 = v.lookup("store_dir")
-  if f157.isSome:
-    r.store_dir = Opt.some(decLcnAppPath(f157.get))
+    r.module_host_env = Opt.some(default(seq[LcnAppEnvName]))
+    r.module_host_env.get.setLen(f156.get.items.len)
+    for i157 in 0 ..< f156.get.items.len:
+      r.module_host_env.get[i157] = decLcnAppEnvName(f156.get.items[i157])
+  let f158 = v.lookup("runtime_instance_id")
+  if f158.isSome:
+    r.runtime_instance_id = Opt.some(f158.get.text)
+  let f159 = v.lookup("shutdown_grace_ms")
+  if f159.isSome:
+    r.shutdown_grace_ms = Opt.some(uint32(f159.get.uint))
+  let f160 = v.lookup("startup_deadline_ms")
+  if f160.isSome:
+    r.startup_deadline_ms = Opt.some(uint32(f160.get.uint))
+  let f161 = v.lookup("state_root")
+  if f161.isSome:
+    r.state_root = Opt.some(decLcnAppPath(f161.get))
+  let f162 = v.lookup("stop_deadline_ms")
+  if f162.isSome:
+    r.stop_deadline_ms = Opt.some(uint32(f162.get.uint))
+  let f163 = v.lookup("store_dir")
+  if f163.isSome:
+    r.store_dir = Opt.some(decLcnAppPath(f163.get))
   r.work_dir = decLcnAppPath(v.lookup("work_dir").get)
 
 proc toCbor*(x: LcnAppRuntime): CborValue =
@@ -2468,36 +2550,36 @@ proc stepEncLcnAppTransport*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnAppTransport*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAppTransport](dst)
   r[] = LcnAppTransport()
-  let f158 = v.lookup("caller_undelivered_bytes")
-  if f158.isSome:
-    r.caller_undelivered_bytes = Opt.some(uint32(f158.get.uint))
-  let f159 = v.lookup("conn_output_bytes")
-  if f159.isSome:
-    r.conn_output_bytes = Opt.some(uint32(f159.get.uint))
-  let f160 = v.lookup("frame_limit")
-  if f160.isSome:
-    r.frame_limit = Opt.some(uint32(f160.get.uint))
-  let f161 = v.lookup("hello_timeout_ms")
-  if f161.isSome:
-    r.hello_timeout_ms = Opt.some(uint32(f161.get.uint))
-  let f162 = v.lookup("max_calls")
-  if f162.isSome:
-    r.max_calls = Opt.some(uint32(f162.get.uint))
-  let f163 = v.lookup("max_in_flight")
-  if f163.isSome:
-    r.max_in_flight = Opt.some(uint32(f163.get.uint))
-  let f164 = v.lookup("max_inbound")
+  let f164 = v.lookup("caller_undelivered_bytes")
   if f164.isSome:
-    r.max_inbound = Opt.some(uint16(f164.get.uint))
-  let f165 = v.lookup("max_outbound")
+    r.caller_undelivered_bytes = Opt.some(uint32(f164.get.uint))
+  let f165 = v.lookup("conn_output_bytes")
   if f165.isSome:
-    r.max_outbound = Opt.some(uint16(f165.get.uint))
-  let f166 = v.lookup("max_pending_output_bytes")
+    r.conn_output_bytes = Opt.some(uint32(f165.get.uint))
+  let f166 = v.lookup("frame_limit")
   if f166.isSome:
-    r.max_pending_output_bytes = Opt.some(uint64(f166.get.uint))
-  let f167 = v.lookup("write_stall_timeout_ms")
+    r.frame_limit = Opt.some(uint32(f166.get.uint))
+  let f167 = v.lookup("hello_timeout_ms")
   if f167.isSome:
-    r.write_stall_timeout_ms = Opt.some(uint32(f167.get.uint))
+    r.hello_timeout_ms = Opt.some(uint32(f167.get.uint))
+  let f168 = v.lookup("max_calls")
+  if f168.isSome:
+    r.max_calls = Opt.some(uint32(f168.get.uint))
+  let f169 = v.lookup("max_in_flight")
+  if f169.isSome:
+    r.max_in_flight = Opt.some(uint32(f169.get.uint))
+  let f170 = v.lookup("max_inbound")
+  if f170.isSome:
+    r.max_inbound = Opt.some(uint16(f170.get.uint))
+  let f171 = v.lookup("max_outbound")
+  if f171.isSome:
+    r.max_outbound = Opt.some(uint16(f171.get.uint))
+  let f172 = v.lookup("max_pending_output_bytes")
+  if f172.isSome:
+    r.max_pending_output_bytes = Opt.some(uint64(f172.get.uint))
+  let f173 = v.lookup("write_stall_timeout_ms")
+  if f173.isSome:
+    r.write_stall_timeout_ms = Opt.some(uint32(f173.get.uint))
 
 proc toCbor*(x: LcnAppTransport): CborValue =
   runEnc(stepEncLcnAppTransport, addr x)
@@ -2523,9 +2605,9 @@ proc stepEncLcnAuthorityPolicyAuditMap*(w: var EncWork, src: pointer, dst: ptr C
 proc stepDecLcnAuthorityPolicyAuditMap*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAuthorityPolicyAuditMap](dst)
   r[] = LcnAuthorityPolicyAuditMap()
-  let f168 = v.lookup("records")
-  if f168.isSome:
-    r.records = Opt.some(uint64(f168.get.uint))
+  let f174 = v.lookup("records")
+  if f174.isSome:
+    r.records = Opt.some(uint64(f174.get.uint))
 
 proc toCbor*(x: LcnAuthorityPolicyAuditMap): CborValue =
   runEnc(stepEncLcnAuthorityPolicyAuditMap, addr x)
@@ -2557,10 +2639,10 @@ proc stepEncLcnAuthorityPolicy*(w: var EncWork, src: pointer, dst: ptr CborValue
   node.entries[k].value = cbor("logos-core-nim.authority-policy.v1")
   inc k
   node.entries[k].key = cbor("rules")
-  let a171 = newCborArray(x.rules.len)
-  node.entries[k].value = a171
-  for i172 in 0 ..< x.rules.len:
-    w.later(stepEncLcnApRule, addr x.rules[i172], addr a171.items[i172])
+  let a177 = newCborArray(x.rules.len)
+  node.entries[k].value = a177
+  for i178 in 0 ..< x.rules.len:
+    w.later(stepEncLcnApRule, addr x.rules[i178], addr a177.items[i178])
   inc k
   node.entries[k].key = cbor("source")
   node.entries[k].value = cbor(x.source)
@@ -2569,17 +2651,17 @@ proc stepEncLcnAuthorityPolicy*(w: var EncWork, src: pointer, dst: ptr CborValue
 proc stepDecLcnAuthorityPolicy*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAuthorityPolicy](dst)
   r[] = LcnAuthorityPolicy()
-  let f169 = v.lookup("audit")
-  if f169.isSome:
+  let f175 = v.lookup("audit")
+  if f175.isSome:
     r.audit = Opt.some(default(LcnAuthorityPolicyAuditMap))
-    w.later(stepDecLcnAuthorityPolicyAuditMap, f169.get, addr r.audit.get)
-  let f170 = v.lookup("decision_validity_ms")
-  if f170.isSome:
-    r.decision_validity_ms = Opt.some(uint64(f170.get.uint))
-  let f173 = v.lookup("rules").get
-  r.rules.setLen(f173.items.len)
-  for i174 in 0 ..< f173.items.len:
-    w.later(stepDecLcnApRule, f173.items[i174], addr r.rules[i174])
+    w.later(stepDecLcnAuthorityPolicyAuditMap, f175.get, addr r.audit.get)
+  let f176 = v.lookup("decision_validity_ms")
+  if f176.isSome:
+    r.decision_validity_ms = Opt.some(uint64(f176.get.uint))
+  let f179 = v.lookup("rules").get
+  r.rules.setLen(f179.items.len)
+  for i180 in 0 ..< f179.items.len:
+    w.later(stepDecLcnApRule, f179.items[i180], addr r.rules[i180])
   r.source = v.lookup("source").get.text
 
 proc toCbor*(x: LcnAuthorityPolicy): CborValue =

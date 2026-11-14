@@ -6,7 +6,8 @@
 ## Runtime-owned state from it (§8 l.1398-1400, l.1543-1546). The first Tier 4
 ## slice takes records from host registration and test harnesses only (G55):
 ## each names one protected static binding or one accepted dynamic artifact,
-## both for direct mode (§8 l.1515-1519).
+## for direct mode (§8 l.1515-1519) or, since Tier 4b step 4b-3, a dynamic
+## artifact for a Module Host (`hosted_dynamic`, placement `process`).
 ##
 ## [IMPL] An absent `implements`, `requires` or `requested_permissions` is an
 ## empty sequence here; a decoder for an input that can encode a present but
@@ -44,11 +45,15 @@ type
   ModuleRecord* = object
     ## [SPEC RUNTIME §8] One resolved module record for direct mode.
     module*: string ## the flat runtime module name (§1.3)
-    strategy*: Strategy ## `direct_static` or `direct_dynamic`
+    strategy*: Strategy
     binding*: string ## the protected static binding (`direct_static`)
     artifact*: ArtifactRecord
-      ## the accepted dynamic artifact (`direct_dynamic`); its digest is
-      ## accepted evidence only because a protected input supplied it (§8)
+      ## the accepted dynamic artifact (`direct_dynamic`, `hosted_dynamic`);
+      ## its digest is accepted evidence only because a protected input
+      ## supplied it (§8)
+    placement*: string
+      ## [SPEC LOADER §3; plan §2.6] `hosted_dynamic`'s placement: `process`
+      ## is the one this Runtime realizes (Tier 4b step 4b-3)
     primaryContract*: Opt[Digest] ## expected primary contract root
     implements*: seq[Digest] ## expected implemented interface roots
     requires*: seq[ProviderRequirement]
@@ -72,7 +77,11 @@ func checkRecord*(r: ModuleRecord): Result[void, string] =
   of stDirectStatic:
     if not r.binding.sized(1, MaxBindingIdBytes):
       return err("a static binding identifier must have 1 to 128 UTF-8 bytes")
-  of stDirectDynamic:
+  of stDirectDynamic, stHostedDynamic:
+    if r.strategy == stHostedDynamic and r.placement notin HostedPlacements:
+      # [SPEC LOADER §3] One of the placement values; whether one is
+      # advertised is the Loader's (`unsupported-strategy`, l.364).
+      return err("unknown hosted placement")
     let a = r.artifact
     if not a.id.sized(1, MaxArtifactIdBytes):
       return err("an artifact id must have 1 to 128 UTF-8 bytes")
@@ -82,9 +91,6 @@ func checkRecord*(r: ModuleRecord): Result[void, string] =
     # realization is directed; the digest length is fixed by the type.
     if a.hashSuite != HashSuiteId:
       return err("unknown artifact hash suite")
-  of stHostedDynamic:
-    # [IMPL] local-transport mode is not built (the slice is direct only).
-    return err("hosted realization is not supported")
   var seen = initHashSet[Digest]()
   for c in r.implements:
     if c in seen:
@@ -113,5 +119,9 @@ func checkRecord*(r: ModuleRecord): Result[void, string] =
 func descriptor*(r: ModuleRecord): RealizationDescriptor =
   ## [SPEC RUNTIME §8; LOADER §3] What the realizer is asked to realize.
   RealizationDescriptor(
-    strategy: r.strategy, module: r.module, binding: r.binding, artifact: r.artifact
+    strategy: r.strategy,
+    module: r.module,
+    binding: r.binding,
+    artifact: r.artifact,
+    placement: r.placement,
   )

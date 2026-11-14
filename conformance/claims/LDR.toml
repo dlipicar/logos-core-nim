@@ -9,8 +9,8 @@
 #
 # The Runtime binds a `logos_module_loader` instance (DECISIONS I89, Tier 4b step 4b-1): a module
 # that advertises the direct strategies only (K10, decision 10), established by the Runtime's
-# bootstrap and called through its contract. LOADER is claimed for the direct strategies; the hosted
-# strategy (the Module Host, 4b-3) is deferred, as a direct-only Loader advertises none (l.252-259).
+# bootstrap and called through its contract. LOADER is claimed for the direct strategies and, from
+# Tier 4b step 4b-3 (I91), for `hosted_dynamic {process}` as each part builds it.
 default = "claimed"
 
 [sections]
@@ -25,9 +25,8 @@ default = "claimed"
 "LDR-0047" = "claimed"
 "LDR-0052" = "claimed"
 "LDR-0053" = "claimed"
-# The hosted strategy (4b-3); a direct-only Loader advertises no hosted strategy (K10, decision 10).
-"LDR-0034" = "deferred:tier-4b"
-"LDR-0040" = "deferred:tier-4b"
+# The hosted strategy (4b-3): part 4b-3.1a claims the capability (LDR-0034) and the state directory
+# in a host (LDR-0040); the provider's endpoint and its handoff come with part 4b-3.2.
 "LDR-0081" = "deferred:tier-4b"
 "LDR-0082" = "deferred:tier-4b"
 "LDR-0083" = "deferred:tier-4b"

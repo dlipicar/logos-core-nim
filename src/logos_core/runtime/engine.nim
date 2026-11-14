@@ -131,8 +131,8 @@ from ./tport import
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
-    execauth, inventory, invoke, loaderbinding, observe, plumbing, rcevents, served,
-    sessionauth, sidetable, store, transported,
+    execauth, hostsup, inventory, invoke, loaderbinding, observe, plumbing, rcevents,
+    served, sessionauth, sidetable, store, transported,
   ]
 
 export plumbing
@@ -587,6 +587,11 @@ const
   ConfigNotPersisted = "the configuration state could not be persisted"
   StoreRetry = initDuration(seconds = 1)
   RevisionMask = 0xFFFF_FFFF'u64
+
+func hosted(x: Inst): bool =
+  ## [R28; 4b-4 plan §2.15] The instance's strategy and placement, read from
+  ## its accepted record: a Module Host realizes it.
+  x.record.strategy == stHostedDynamic
 
 proc workerLoop(s: ptr Shared) =
   while true:
@@ -3400,6 +3405,7 @@ proc execute(st: State, x: Inst, reply: ReplyChannel, origin: string) {.gcsafe.}
     target: x.id,
     instance: x.id,
     module: x.record.module,
+    hosted: x.hosted, # [plan §2.11] `local-transport` with `process`
   )
   st.decideDetached(
     @[q],
@@ -3541,6 +3547,22 @@ proc realizeThroughLoader(st: State, a: Attempt) =
     st.diagnose("the realize request of " & x.id & " cannot be encoded: " & error)
     fail("the realize request cannot be encoded")
   let s = a.request.services
+  var host: pointer = nil
+  if x.record.strategy == stHostedDynamic and st.shared.hosts != nil:
+    # [plan §2.6 step 3; G265] The carrier of the attempt's Module Host, whose
+    # every lane-1 request is the attempt's own binding's. The attempt's
+    # services hold the reference and outlive the host's last request.
+    let h = newHost(
+      cast[HostSupervisor](st.shared.hosts),
+      s.runtimeControl,
+      s.publish,
+      s.publishUserData,
+      st.shared.payloadDepth,
+    ).valueOr:
+      st.diagnose("the Module Host carrier of " & x.id & " cannot be made: " & error)
+      fail("the Module Host carrier cannot be made")
+    a.services.adoptHost(h)
+    host = h
   st.side.putInbound(
     x.id,
     InboundHandoff(
@@ -3548,6 +3570,7 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       publish: s.publish,
       publishUserData: s.publishUserData,
       invocationAccess: s.invocationAccess,
+      host: host,
     ),
   ).isOkOr:
     st.diagnose("the private handoff of " & x.id & " cannot be placed: " & error)
@@ -3610,6 +3633,8 @@ proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
       workDir: st.cfg.workDir,
       stateRoot: st.cfg.stateRoot,
       side: st.side,
+      hosted: st.shared.hosts != nil,
+      maxPayloadDepth: st.shared.payloadDepth,
     ),
   ).isOkOr:
     st.failAttempt(
@@ -3633,6 +3658,10 @@ proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
     st.dispatch(Job(id: id, kind: jkBind, spec: step.spec))
   of skInit:
     st.beginInit(a, step.binding)
+  of skHosted:
+    # The bootstrap realizer has no hosted driver: `begin` refuses first.
+    st.failAttempt(a, Failure(kind: fkOther, reason: "the Module Loader is not hosted"))
+    st.finishAttempt(a)
 
 proc stopInstance(
     st: State,
@@ -5449,7 +5478,23 @@ proc summary(st: State, q: Request, x: Inst) =
       of stDirectDynamic:
         C(kind: K.Direct_dynamic)
       of stHostedDynamic:
-        C(kind: K.Hosted_dynamic)
+        # [SPEC RUNTIME l.3523-3528; plan §2.6] with the record's placement.
+        type P =
+          LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind
+
+        let placement =
+          case y.record.placement
+          of "sandbox": P.Sandbox
+          of "container": P.Container
+          else: P.Process
+        C(
+          kind: K.Hosted_dynamic,
+          arm_Hosted_dynamic: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap(
+            placement: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice(
+              kind: placement
+            )
+          ),
+        )
   var r = LogosNSRuntimeControlGetExecutionSummaryResponse(
     target: LogosNSRuntimeModuleInstanceAddress(
       runtime_instance_id: st.runtimeId, module_instance_id: y.id
@@ -8417,6 +8462,17 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
       let c = a.request.configuration.get
       v.live = c.live
       v.initCommitment = Opt.some(c.commitment)
+    if h.host != nil and v.provider:
+      # [IMPL; plan §7.1] A hosted provider's endpoint is served from its
+      # host in 4b-3.2: until then the attempt fails and the realization is
+      # released through the Loader.
+      x.realization = v
+      st.failAttempt(
+        a, Failure(kind: fkOther, reason: "a hosted provider is not served yet")
+      )
+      a.phase = apCleanup
+      st.releaseRealization(x)
+      return
     st.adoptRealization(a, v)
   of lrError:
     st.failAttempt(a, classify(reply.error, phase))
@@ -9480,6 +9536,8 @@ proc freeEngine(e: Engine) =
   ## Every thread but the transport I/O thread has left. [I90; plan §2.9] That
   ## one stops first, once no port call is inside; the sink drops what it
   ## reports after that, so nothing then sends to any channel or rings the bell.
+  closeSupervisor(cast[HostSupervisor](e.hosts)) # a failed open's
+  e.hosts = nil
   closeTransport(e.tport)
   freeTransportPorts(e.tport)
   e.inbox.close()
@@ -9554,6 +9612,9 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   e.rcJobs.open()
   e.bell = newBell()
   e.side = newSideTable()
+  if cfg.moduleHost.isSome:
+    # [plan §2.3; G265] Its threads start with the first spawn.
+    e.hosts = newSupervisor(cfg.moduleHost.get, cfg.moduleHostEnv)
   when defined(lcnTestHooks):
     e.faults = newLoaderFaultBox()
   initLock(e.slotLock)
@@ -9832,9 +9893,16 @@ proc tryClose*(e: Engine): Result[void, EngineError] =
   ## Stops the Runtime thread after shutdown and frees the engine. NOT_READY,
   ## with the engine intact and running, before shutdown completed or while a
   ## worker is inside module code that may still report to it.
+  if cast[HostSupervisor](e.hosts).busy:
+    # [plan §2.3; R26] A Module Host or a Runtime Control request of one still
+    # needs the Runtime thread.
+    return err(engineError(ecNotReady, "module code is still running"))
   let r = e.call(Request(kind: rqTerminate))
   if r.error.isSome:
     return err(r.error.get)
+  # [R26] No host survives the engine: any left is ended and confirmed.
+  closeSupervisor(cast[HostSupervisor](e.hosts))
+  e.hosts = nil
   e.joinAll()
   e.freeEngine()
   ok()

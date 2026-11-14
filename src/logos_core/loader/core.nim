@@ -44,6 +44,9 @@ type
     workDir*: string
     stateRoot*: Opt[string]
     side*: SideTable
+    hosted*: bool
+      ## [plan §2.5] a Module Host program is configured: the `hosted_dynamic`
+      ## driver serves placement `process` (LDR-0033-LDR-0035)
 
   InitCall* = object
     ## The one `_MODULE_init(input, &context)` call the caller runs. `input`
@@ -55,6 +58,15 @@ type
     pkDone ## the realize is complete: `outcome`
     pkBind ## run `runBind(spec)`, then `bound`
     pkInit ## run `call`, then `initDone`
+    pkHosted ## [plan §2.5] start the Module Host `hosted` names, then `hostedDone`
+
+  HostedCall* = object
+    ## What the caller needs to start a Module Host. `configuration` stays
+    ## valid until `hostedDone` or `abandon`.
+    spec*: HostedSpec
+    configuration*: ptr UncheckedArray[uint8] ## nil: none
+    configurationLen*: int
+    live*: bool
 
   PhaseReply* = object
     outcome*: Result[RealizationRecord, LoaderError]
@@ -68,6 +80,8 @@ type
       spec*: BindSpec
     of pkInit:
       call*: InitCall
+    of pkHosted:
+      hosted*: HostedCall
 
   InitReply* = object
     outcome*: Result[RealizationRecord, LoaderError]
@@ -93,6 +107,7 @@ type
     rkReleaseDone
     rkBeginApply
     rkApplyDone
+    rkHostedDone
 
   Request = object
     slot: ptr ReplySlot
@@ -116,6 +131,10 @@ type
       applyId: string
     of rkApplyDone:
       applyStatus: AbiCheck
+    of rkHostedDone:
+      hostedOutcome: Result[HostedInit, LoaderError]
+      hostedPhase: FailedPhase
+      host: pointer
     of rkCapabilities, rkAbandon, rkReleaseDone:
       discard
 
@@ -125,7 +144,7 @@ type
       caps: Capabilities
     of rkStatus:
       record: Result[RealizationRecord, LoaderError]
-    of rkBegin, rkBound:
+    of rkBegin, rkBound, rkHostedDone:
       step: PhaseReply
     of rkInitDone:
       init: InitReply
@@ -212,6 +231,12 @@ proc refuse(q: Request) =
   of rkBound:
     q.slot.answer(
       Reply(kind: rkBound, step: PhaseReply(kind: pkDone, outcome: RecordResult.err(e)))
+    )
+  of rkHostedDone:
+    q.slot.answer(
+      Reply(
+        kind: rkHostedDone, step: PhaseReply(kind: pkDone, outcome: RecordResult.err(e))
+      )
     )
   of rkInitDone:
     q.slot.answer(
@@ -337,6 +362,14 @@ proc beginRealize(c: var Core, q: Request) =
     q.slot.answer(Reply(kind: rkBegin, step: PhaseReply(kind: pkBind, spec: step.spec)))
   of skInit:
     c.prepare(q, step.binding)
+  of skHosted:
+    var call = HostedCall(spec: step.hosted)
+    let cfg = q.realize.configuration
+    if cfg.isSome:
+      call.configuration = cast[ptr UncheckedArray[uint8]](cfg.get.input.address)
+      call.configurationLen = cfg.get.input.len
+      call.live = cfg.get.live
+    q.slot.answer(Reply(kind: rkBegin, step: PhaseReply(kind: pkHosted, hosted: call)))
 
 proc start(c: var Core, q: sink Request) =
   ## A mutation whose turn has come.
@@ -444,6 +477,38 @@ proc handle(c: var Core, q: sink Request) =
     let r = c.r.completeApplyChecked(q.instance, q.applyStatus)
     q.slot.answer(Reply(kind: rkApplyDone, applied: r))
     c.finish(q.instance)
+  of rkHostedDone:
+    var a: Attempt
+    if not c.attempts.pop(q.instance, a):
+      q.slot.answer(
+        Reply(
+          kind: rkHostedDone,
+          step: PhaseReply(
+            kind: pkDone,
+            outcome: RecordResult.err(
+              loaderError(lecRealizationFailed, "no attempt in progress")
+            ),
+          ),
+        )
+      )
+      return
+    var outcome: RecordResult
+    if q.hostedOutcome.isErr:
+      if q.hostedPhase == fpInit:
+        # [IMPL-DECISION G250; batch A 3] the host's `_MODULE_init` failed
+        c.side.setFailedPhase(q.instance, fpInit)
+      outcome = RecordResult.err(q.hostedOutcome.error)
+    else:
+      let x = c.r.completeHosted(a.request, q.hostedOutcome.get, q.host)
+      # [plan §2.5] The Runtime calls a hosted realization through its host.
+      discard c.side.putOutbound(x.id, OutboundHandoff(host: q.host))
+      outcome = RecordResult.ok(x.record)
+    dropInput(a.request)
+    c.countLive()
+    q.slot.answer(
+      Reply(kind: rkHostedDone, step: PhaseReply(kind: pkDone, outcome: outcome))
+    )
+    c.finish(q.instance)
 
 proc tryTake(ch: var Channel[Request]): Opt[Request] =
   try:
@@ -485,6 +550,14 @@ proc coreLoop(sh: ptr CoreShared) =
   except Exception:
     return
   var c = Core(sh: sh, side: cfg.side, r: newRealizer(cfg.workDir, cfg.stateRoot))
+  if cfg.hosted:
+    # [plan §2.5; LOADER §4] Advertised only with a Module Host program (K7:
+    # never `force_release`).
+    discard c.r.registerDriver(
+      StrategyDriver(
+        strategy: stHostedDynamic, kind: dkHosted, placements: @["process"]
+      )
+    )
   for reg in cfg.statics:
     # [SPEC RUNTIME §13.3] A duplicate binding identifier leaves the first
     # registration unchanged, as the engine's own realizer did before I89.
@@ -673,6 +746,28 @@ proc initDone*(
   if r.isNone:
     return InitReply(outcome: RecordResult.err(closing()))
   r.get.init
+
+proc hostedDone*(
+    c: LoaderCore,
+    instance: string,
+    outcome: sink Result[HostedInit, LoaderError],
+    phase: FailedPhase,
+    host: pointer,
+): PhaseReply =
+  ## [plan §2.5] The Module Host `host` initialized the instance, or failed
+  ## (`phase` `fpInit`: in `_MODULE_init`).
+  let r = c.submit(
+    Request(
+      kind: rkHostedDone,
+      instance: instance,
+      hostedOutcome: outcome,
+      hostedPhase: phase,
+      host: host,
+    )
+  )
+  if r.isNone:
+    return PhaseReply(kind: pkDone, outcome: RecordResult.err(closing()))
+  r.get.step
 
 proc abandon*(c: LoaderCore, instance: string) =
   ## The realize was cancelled before `_MODULE_init`: nothing was created.

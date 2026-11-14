@@ -186,6 +186,32 @@ providers over local transport. What a consumer sees differently, and why:
   provider side cannot end one subscription of a session (K40), where a direct route's subscription
   ends (CA l.913-915).
 
+### What Tier 4b step 4b-3 changes
+
+Tier 4b step 4b-3 (DECISIONS I91) adds the Module Host, `logos-module-host`, and `hosted_dynamic`
+with the `process` placement. Part 4b-3.1a builds the host program, its supervision and the carrier
+(G264-G266), the Loader's hosted driver, and hosted consumer-only modules: their lifecycle and
+their Runtime Control binding, events and asynchronous calls included (G267, G271), with the
+execution scope `local-transport` in a `process` (G272). So:
+
+- **LOADER**: the Loader advertises `hosted_dynamic {process}` when `runtime.module_host` is set
+  (LDR-0034, LDR-0035) and never `force_release`; a placement it does not advertise is
+  `unsupported-strategy` before any code is read (LDR-0067, LDR-0068). The handoff and the paths stay
+  out of every record and error (LDR-0045, LDR-0149). The hosted provider endpoint and the trusted
+  transport adapter handoff (§5.3, §5.4) wait for part 4b-3.2.
+- **RUNTIME §4.2.1**: a hosted module's Runtime Control calls are answered through its own
+  attempt's binding, so they have the values, errors, decisions and transitions of a direct
+  module's (RUN-0169 to RUN-0172, RUN-0180; `test_hosted` compares the same probe library realized
+  both ways on two engines with one Runtime instance id). The consumer is the carrier's attempt,
+  never a field of a frame. A hosted record names an artifact, never a static binding (RUN-0284).
+  These units are claimed one by one; the rest of §4.2.1 stays `deferred:tier-4b`.
+- **Not yet**: hosted providers (4b-3.2) and hosted consumers' routes (4b-3.3); a host's unexpected
+  end, carrier loss, deadlines in a host, live configuration in a host and Loader loss with live
+  hosts (4b-3.1b). Until 4b-3.1b a host that ends by itself leaves its instance `ready`.
+- **Differences from direct realization**, none visible to a module's Runtime Control calls: a
+  host's environment is `module_host_env` only, and on macOS CoreFoundation may add its own
+  `__CF_USER_TEXT_ENCODING` inside the process.
+
 ### What Tier 4b step 4b-5 changes
 
 Tier 4b step 4b-5 (DECISIONS I94) adds the reference orchestration module, `lcn_orchestrator`, so the
@@ -207,6 +233,9 @@ state file and what it decides.
   run as the daemon's user, so a process running as that user can replace a socket pathname or
   impersonate an endpoint. Deployments that need that protection must run hosts under distinct OS
   identities, which this implementation does not set up (DECISIONS G58).
+- Containment of what a hosted module starts: a Module Host's process group is killed after every
+  end of the host, but a process the module moved into another group or session outlives it
+  (DECISIONS G265). Placement `process` is a separate address space, not a sandbox.
 
 ## Unix-stream endpoints and peer checks
 
@@ -332,7 +361,8 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
 4. A hook does nothing until the Runtime's host selects it. In an in-process suite, that is a call by the
    test.
 
-The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader` and `orchestration`):
+The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `orchestration` and
+`hostsup`):
 
 - `host.setPolicyForTests`: the authority policy the next `start` installs.
 - `engine.loaderJournalForTests`: the Module Loader's request journal, kept in the engine's side table.
@@ -348,6 +378,10 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader` an
   lifecycle answer dropped, as a crash would lose it; every state-file write failing; every event
   dropped; a pause between a read and the guarded request it decided on, `openPauseGateForTests`),
   and `callsForTests`, `callTimesForTests` and `targetsForTests` read its record of the calls it made.
+- `hostsup` (DECISIONS I91): `holdEnd` delays the confirmation of a Module Host's end, `breakCarrier`
+  treats the next frame from a host as malformed, and `hostEnds` and `pidOf` read what supervision
+  saw. The `logos-module-host` program itself has no hooks: its suites drive it through its carrier
+  (`tests/support/hostowner.nim`) and a probe module.
 
 No deployment binary contains them.
 

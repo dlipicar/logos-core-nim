@@ -1,0 +1,157 @@
+## The Module Host's process-wide state (Tier 4b step 4b-3; DECISIONS G264,
+## G266; plan §2.1, §2.2) [IMPL]. One host serves one realization, so this is
+## one object in shared memory, made at startup.
+##
+## - **The carrier.** The main thread is its only reader; any thread writes a
+##   whole frame under the writer's lock. Losing it ends the process with
+##   status 70 at once, without destroying the context (RUNTIME l.976).
+## - **Waiting.** A thread that sends a request waits on a slot of its own
+##   (one `Channel` of plain answers); the main thread decodes the reply and
+##   hands it over, so no generated case object crosses threads.
+## - **Host threads.** The threads the host runs module code on (the
+##   lifecycle thread and the callback workers) mark themselves; a Runtime
+##   Control call from one tells the Runtime so (RUNTIME l.4083), as a direct
+##   module's call from a Runtime-owned thread does.
+
+{.push raises: [], gcsafe.}
+
+import std/[atomics, locks, posix]
+import results
+import ../runtime/carrier
+
+export carrier
+
+const
+  ExitNotStartedByLoader* = 2 ## [plan §2.2 step 3] fd 3 is not a carrier
+  ExitCarrierLost* = 70
+    ## [plan §2.9; RUN-0812] the carrier failed or broke the protocol
+
+type
+  Answer* = object
+    ## A lane-1 reply as plain values: `failed` with `code`, `message` and
+    ## `detail`, or a success with `value` and `sub`.
+    failed*: bool
+    code*: uint8
+    hasMessage*: bool
+    message*: string
+    hasDetail*: bool
+    detail*: seq[byte]
+    value*: seq[byte]
+    sub*: uint64
+
+  SlotObj = object
+    id: uint64
+    ch: Channel[Answer]
+    next: ptr SlotObj
+
+  Slot* = ptr SlotObj
+
+  HostShared* = object
+    fd*: cint ## the carrier, moved above 64
+    writer*: CarrierWriter
+    nextId: Atomic[uint64]
+    lock: Lock
+    slots: ptr SlotObj ## waiting requests, under `lock`
+    stopping*: Atomic[bool] ## the release completed: the carrier's end is expected
+
+var hs*: ptr HostShared
+var hostOwned {.threadvar.}: bool
+
+proc initHostShared*(fd: cint) =
+  hs = createShared(HostShared)
+  hs.fd = fd
+  hs.writer.initWriter(fd)
+  initLock(hs.lock)
+
+proc markHostThread*() =
+  hostOwned = true
+
+proc onHostThread*(): bool =
+  hostOwned
+
+proc carrierLost*(why: string) {.noreturn.} =
+  ## [SPEC RUNTIME RUN-0812, l.976] Terminal: no destroy, no exit handlers.
+  try:
+    stderr.writeLine("logos-module-host: " & why)
+  except IOError:
+    discard
+  exitnow(ExitCarrierLost)
+
+proc nextId*(): uint64 =
+  hs.nextId.fetchAdd(1) + 1
+
+proc send*(m: LcnCarrierMessage) =
+  ## One message to the Runtime; a carrier that cannot take it is lost.
+  hs.writer.send(m).isOkOr:
+    if hs.stopping.load:
+      return
+    carrierLost("the carrier failed: " & error)
+
+proc openSlot*(id: uint64): Slot =
+  result = createShared(SlotObj)
+  result.id = id
+  result.ch.open()
+  withLock hs.lock:
+    result.next = hs.slots
+    hs.slots = result
+
+proc closeSlot(s: Slot) =
+  withLock hs.lock:
+    var p = addr hs.slots
+    while p[] != nil:
+      if p[] == s:
+        p[] = s.next
+        break
+      p = addr p[].next
+  s.ch.close()
+  freeShared(s)
+
+proc await*(s: Slot): Answer =
+  ## The answer to the slot's request; the slot is gone after.
+  try:
+    result = s.ch.recv()
+  except Exception:
+    carrierLost("a reply slot failed")
+  closeSlot(s)
+
+proc request*(m: LcnCarrierMessage, id: uint64): Answer =
+  ## Sends `m` (whose request id is `id`) and waits for its reply.
+  let s = openSlot(id)
+  send(m)
+  s.await()
+
+proc answered*(id: uint64, a: sink Answer) =
+  ## Main thread: the reply to request `id`. One no request waits for is a
+  ## protocol violation.
+  var s: Slot
+  withLock hs.lock:
+    var p = hs.slots
+    while p != nil:
+      if p.id == id:
+        s = p
+        break
+      p = p.next
+  if s == nil:
+    carrierLost("a reply to no request (" & $id & ")")
+  try:
+    s.ch.send(a)
+  except Exception:
+    carrierLost("a reply slot failed")
+
+func answerOf*(r: LcnCarrierRcReply): Answer =
+  if r.failure.isSome:
+    let f = r.failure.get
+    result.failed = true
+    result.code = f.code
+    if f.message.isSome:
+      result.hasMessage = true
+      result.message = f.message.get
+    if f.detail.isSome:
+      result.hasDetail = true
+      result.detail = f.detail.get
+  else:
+    result.value = r.value.get(@[])
+    result.sub = r.sub.get(0)
+
+func answerOf*(f: LcnCarrierFailure): Answer =
+  answerOf(LcnCarrierRcReply(failure: Opt.some(f)))

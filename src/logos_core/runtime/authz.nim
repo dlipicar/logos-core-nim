@@ -93,6 +93,9 @@ type
     renewal*: bool
       ## [SPEC CA §5.1 l.577-578] an execution decision asked again for an
       ## execution that is already running (`execution_renewal`)
+    hosted*: bool
+      ## [SPEC CA l.324-325; plan §2.11; G272] an execution in a Module Host:
+      ## mode `local-transport`, placement `process`; false: `direct`
     filters*: bool
       ## [IMPL; G161 extension, I86] an observation of many subjects (a list
       ## method, a Runtime Control event): it names no subject, and a

@@ -414,6 +414,8 @@ proc launch(h: ptr HostRuntime): LogosResult =
     routing: c.routing,
     transport: Opt.some(c.transport),
     endpointDir: c.endpointDir,
+    moduleHost: c.moduleHost,
+    moduleHostEnv: c.moduleHostEnv,
   )
   if c.authority.isSome:
     # [I85; G47] The attribute source exists before the engine opens, since

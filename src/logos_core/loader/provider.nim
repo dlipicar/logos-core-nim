@@ -37,7 +37,7 @@ import ../abi/checks
 import ../runtime/[config, native]
 from ../runtime/callside import barrier, push, pop, Frame
 import ../hash/hashinput
-import ./[contract, core, logos_module_loader_kit]
+import ./[contract, core, hosted, logos_module_loader_kit]
 import ../base/testhooks
 
 export core, native, contract
@@ -54,6 +54,10 @@ type
     workDir*: string ## its private directory for verified library copies
     stateRoot*: Opt[string] ## the module state directories, one per assignment
     side*: SideTable
+    hosted*: bool
+      ## [plan §2.5] the Runtime supervises Module Hosts: `hosted_dynamic`
+      ## with placement `process` is served
+    maxPayloadDepth*: int ## [IF-02] what a Module Host enforces, as the Runtime does
 
   SharedSymbol = object
     name: cstring
@@ -73,6 +77,8 @@ type
     workDir: cstring
     stateRoot: cstring ## nil: none
     side: SideTable
+    hosted: bool
+    maxPayloadDepth: int
     next: ptr WiringEntry
 
 var wiringLock: Lock
@@ -114,6 +120,8 @@ proc wireLoader*(key: pointer, w: LoaderWiring): Result[void, string] =
   let e = cast[ptr WiringEntry](allocShared0(sizeof(WiringEntry)))
   e.key = key
   e.side = w.side
+  e.hosted = w.hosted
+  e.maxPayloadDepth = w.maxPayloadDepth
   e.workDir = sharedText(w.workDir)
   if w.stateRoot.isSome:
     e.stateRoot = sharedText(w.stateRoot.get)
@@ -171,7 +179,12 @@ proc readWiring(key: pointer): Opt[LoaderWiring] =
     var p = wirings
     while p != nil:
       if p.key == key:
-        var w = LoaderWiring(workDir: $p.workDir, side: p.side)
+        var w = LoaderWiring(
+          workDir: $p.workDir,
+          side: p.side,
+          hosted: p.hosted,
+          maxPayloadDepth: p.maxPayloadDepth,
+        )
         if p.stateRoot != nil:
           w.stateRoot = Opt.some($p.stateRoot)
         for i in 0 ..< p.staticCount:
@@ -194,6 +207,7 @@ type LoaderModule* = ref object
   core: LoaderCore
   services: ModuleServices
   side: SideTable
+  maxPayloadDepth: int
 
 const NotWired = "the Module Loader has no protected wiring"
 
@@ -204,11 +218,19 @@ proc initModule(
     return err(moduleError(NotWired))
   let c = openCore(
     CoreConfig(
-      statics: w.statics, workDir: w.workDir, stateRoot: w.stateRoot, side: w.side
+      statics: w.statics,
+      workDir: w.workDir,
+      stateRoot: w.stateRoot,
+      side: w.side,
+      hosted: w.hosted,
     )
   ).valueOr:
     return err(moduleError("the Module Loader does not start: " & error))
-  ok(LoaderModule(core: c, services: init.services, side: w.side))
+  ok(
+    LoaderModule(
+      core: c, services: init.services, side: w.side, maxPayloadDepth: w.maxPayloadDepth
+    )
+  )
 
 proc destroyModule(m: LoaderModule) =
   ## Stops and joins the Loader's thread.
@@ -482,6 +504,7 @@ proc `realize`(
       publishUserData: h.publishUserData,
       invocationAccess: h.invocationAccess,
     )
+  let host = (if handoff.isSome: handoff.get.host else: nil)
   if request.configuration.isSome:
     let c = configurationOf(request.configuration.get).valueOr:
       return ok(realizeResponse(RecordResult.err(error)))
@@ -504,6 +527,13 @@ proc `realize`(
         m.core.abandon(instance)
         return err(failure(ecCancelled, "the realize was cancelled"))
       return m.runInit(instance, step.call)
+    of pkHosted:
+      if m.services.isCancelled():
+        m.core.abandon(instance)
+        return err(failure(ecCancelled, "the realize was cancelled"))
+      # [plan §2.5] The Module Host runs `_MODULE_init`; this thread waits.
+      var r = startHosted(host, step.hosted, m.maxPayloadDepth)
+      step = m.core.hostedDone(instance, move r.outcome, r.phase, host)
 
 proc `get_status`(
     m: LoaderModule, request: LogosNSModuleLoaderGetStatusRequest
@@ -555,13 +585,17 @@ proc `apply_configuration`(
   let hook = m.core.beginApply(request.realization, instance).valueOr:
     return ok(failed(error))
   var status: AbiCheck
-  barrier:
-    let res = hook.apply(
-      hook.context,
-      cast[ptr UncheckedArray[uint8]](unsafeAddr bytes[0]),
-      csize_t(bytes.len),
-    )
-    status = readStatus(res)
+  if hook.host != nil:
+    # [plan §2.10] The host runs the hook.
+    status = applyHosted(hook.host, bytes)
+  else:
+    barrier:
+      let res = hook.apply(
+        hook.context,
+        cast[ptr UncheckedArray[uint8]](unsafeAddr bytes[0]),
+        csize_t(bytes.len),
+      )
+      status = readStatus(res)
   let applied = m.core.applyDone(instance, status)
   if applied.isOk:
     return ok(
@@ -601,8 +635,12 @@ proc `release`(
     )
   if t.isSome:
     let d = t.get
-    barrier:
-      d.destroy(d.context)
+    if d.host != nil:
+      # [plan §2.5] The host destroys the context, exits, and is reaped.
+      releaseHosted(d.host)
+    else:
+      barrier:
+        d.destroy(d.context)
     m.core.releaseDone(instance)
   ok(
     LogosNSModuleLoaderReleaseResponse(

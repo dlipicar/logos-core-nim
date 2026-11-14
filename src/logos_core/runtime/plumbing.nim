@@ -404,6 +404,14 @@ type
     endpointDir*: string
       ## [SPEC TRANSPORT §8.2; G58; I90] where the Runtime makes the endpoints
       ## it serves; empty: `<workDir>/endpoints`
+    moduleHost*: Opt[string]
+      ## [plan §2.2; G264] the `logos-module-host` program, protected
+      ## deployment input (LOADER l.107-108); none: the Module Loader does not
+      ## advertise `hosted_dynamic`. Never searched for, never read from the
+      ## environment.
+    moduleHostEnv*: seq[string]
+      ## [R4; G264] the variables every Module Host gets from this process's
+      ## environment; nothing else reaches a host
 
   # Messages ---------------------------------------------------------------------
   RequestKind* = enum
@@ -951,6 +959,10 @@ type
     tport*: TransportPorts
       ## [I90] the port to the transport I/O thread (`tport.nim`); made at
       ## open, started only when needed, closed after every worker has left
+    hosts*: pointer
+      ## [plan §2.3; G265] the `hostsup.HostSupervisor` when `moduleHost` is
+      ## configured, else nil; made at open, closed after the Runtime thread
+      ## ends its loop and before any worker is joined
     when defined(lcnTestHooks):
       faults*: LoaderFaultBox ## [D27 revised; plan §2.12] the injected faults
 

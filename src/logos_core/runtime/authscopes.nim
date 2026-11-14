@@ -121,7 +121,22 @@ proc executionScope(
         module: q.module,
         instance: Opt.some(q.instance),
         actions: @[MeAction(kind: action)],
-        modes: Opt.some(@[ExecMode(kind: ExecModeKind.Direct)]),
+        modes: Opt.some(
+          @[
+            ExecMode(
+              kind:
+                (if q.hosted: ExecModeKind.Local_transport else: ExecModeKind.Direct)
+            )
+          ]
+        ),
+        # [SPEC CA l.324-325; plan §2.11; G272] A hosted execution names its
+        # placement, which needs `local-transport`.
+        placements: (
+          if q.hosted:
+            Opt.some(@[Placement(kind: PlacementKind.Process)])
+          else:
+            Opt.none(seq[Placement])
+        ),
       )
     )
   )
@@ -246,11 +261,18 @@ proc enforceable(s: Scope): bool =
   of skPermission, skEnrollment:
     false
   of skExecution:
+    # [plan §2.11; G272] `direct`, and since 4b-3 `local-transport` with the
+    # `process` placement, which a Module Host enforces; any other placement
+    # stays unenforceable (I85, G52).
+    var hostedOnly = false
     if s.me.placements.isSome:
-      return false
+      for p in s.me.placements.get:
+        if p.kind != PlacementKind.Process:
+          return false
+      hostedOnly = true
     if s.me.modes.isSome:
       for m in s.me.modes.get:
-        if m.kind != ExecModeKind.Direct:
+        if m.kind == ExecModeKind.Local_transport and not hostedOnly:
           return false
     true
   else:

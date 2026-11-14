@@ -45,7 +45,12 @@ The specs are being revised, so the work is ordered by how settled each area is
   recovers failures under a configured restart policy with retry accounting that survives restarts,
   and resumes what authority held back (I94); `docs/HOST-CONFIG.md` documents its configuration.
   RUNTIME is claimed for the engine with this module, but for the permission half of RUN-0696.
-- Not yet: the rest of Tier 4b (the Module Host and the hosted strategy, the rest of transported routes, `logosd`
+- Tier 4b, step 4b-3 (in progress): the Module Host. With `runtime.module_host` set, a
+  `hosted_dynamic` module runs in a `logos-module-host` process of its own that the Runtime starts,
+  supervises and ends; its Runtime Control calls, events and asynchronous calls cross a private
+  carrier and are answered as a direct module's are (part 4b-3.1a, I91: consumer-only modules,
+  start and stop).
+- Not yet: the rest of Tier 4b (the rest of the Module Host: its ends and deadlines, hosted providers and consumers' routes; the rest of transported routes, `logosd`
   and `logosctl`, permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).

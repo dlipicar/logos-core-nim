@@ -13,8 +13,8 @@
 ##   invocation access; LOADER §6 steps 5-6). The Runtime puts it before it
 ##   sends `realize` and withdraws it when the reply arrives. The Loader writes
 ##   back one field, `failedPhase`: `fpInit` when the error it returns came
-##   from `_MODULE_init` itself (RUNTIME l.1566-1569; G250). A slot for a
-##   transferred listener is reserved for hosted realization (4b-3, C-10).
+##   from `_MODULE_init` itself (RUNTIME l.1566-1569; G250). A hosted attempt's
+##   entry also names its Module Host (4b-3; `hostsup.Host`, C-10).
 ## - **Outbound**, keyed by realization id: what the Runtime needs to call an
 ##   active direct provider and to publish for it (its dispatch, free and
 ##   asynchronous entries, its context, whether it declares events). The
@@ -68,9 +68,10 @@ type
     publish*: LogosPublishFn
     publishUserData*: pointer
     invocationAccess*: LogosInvocationAccess
-    listener*: pointer
-      ## [C-10] reserved for a transferred listener (hosted realization,
-      ## 4b-3); nil in 4b-1
+    host*: pointer
+      ## [plan §2.4, §2.5; C-10] a hosted attempt's `hostsup.Host`: its
+      ## carrier, launch state and (4b-3.2) transferred listener; nil for a
+      ## direct attempt
 
   OutboundHandoff* = object
     ## [SPEC LOADER l.704] What the Runtime calls an active direct
@@ -80,6 +81,7 @@ type
     asyncApi*: ptr LogosAsyncProviderApi ## nil: the synchronous provider ABI
     context*: ptr LogosModuleContext
     declaresEvents*: bool
+    host*: pointer ## [plan §2.5] a hosted realization's `hostsup.Host`; nil: direct
 
   InEntry = object
     key: Key
