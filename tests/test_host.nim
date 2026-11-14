@@ -13,11 +13,13 @@ import ../src/logos_core/iface/outcome
 import
   ../src/logos_core/runtime/[engine, host, host_config, host_config_types, rc_types]
 from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
+from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
+import ../src/logos_core/permissions
 from ../src/logos_core/crypto/slhdsa import Seed, keyPairFromSeeds
 from std/posix import Mode, chmod
 from ../src/logos_core/transport/io/sock import unixStream
 from ../src/logos_core/transport/framing import MinFrameLimit
-import ./support/[kitbuild, slowdown, tunerconfig, withoutloader]
+import ./support/[kitbuild, permfixture, slowdown, tunerconfig, withoutloader]
 import ./kit/meter_impl
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "host" / kitVariant
@@ -327,6 +329,139 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c = baseConfig()
     c.orchestration = LoaderInstanceId
     check parse(c).rejects("orchestration names the reserved Module Loader instance")
+
+  test "[IMPL-DECISION G279] [IMPL-DECISION G110] [IMPL-DECISION G253] [I93] permissions: the shipped profile by name, and protected initial settings by module or by instance":
+    let amb = LcnAppPermissionSetting(permission: HostAmbient, constraints: @[0xA0'u8])
+    var c = baseConfig()
+    # Absent: no profile, the constant form (G229).
+    check c.decoded.get.permissions == nil
+    c.permissions = Opt.some(LcnAppPermissions())
+    # [Rev R3] Bootstrap starts the orchestration instance through the precheck.
+    check c.decoded.rejects(
+      "permissions.initial does not provision the orchestration instance with the profile's minimum"
+    )
+    c.permissions.get.initial = Opt.some(
+      @[
+        LcnAppInitialSettings(module: "test_orchestrator", permissions: @[amb]),
+        LcnAppInitialSettings(
+          module: "meter_module", instance: Opt.some("meter-1"), permissions: @[]
+        ),
+      ]
+    )
+    let h = c.decoded
+    check h.isOk
+    check parse(c).isOk
+    check build(h.get.permissions).name == ProfileV1
+    check h.get.initialSettings ==
+      @[
+        InitialSettings(module: "test_orchestrator", permissions: @[ambient()]),
+        InitialSettings(module: "meter_module", instance: "meter-1"),
+      ]
+    # Only the shipped identifier is a profile.
+    check parseValue(
+      toCbor(baseConfig()).withEntry(
+        "permissions", cborMap((cbor("profile"), cbor("lcn-test.profile.v1")))
+      )
+    ).isErr
+    # Present arrays are non-empty.
+    c.permissions.get.initial = Opt.some(newSeq[LcnAppInitialSettings]())
+    check c.decoded.rejects("permissions.initial is present but empty")
+    proc entries(xs: varargs[LcnAppInitialSettings]): LcnAppConfig =
+      result = baseConfig()
+      result.permissions = Opt.some(
+        LcnAppPermissions(
+          initial: Opt.some(
+            @[LcnAppInitialSettings(module: "test_orchestrator", permissions: @[amb])] &
+              @xs
+          )
+        )
+      )
+
+    let other =
+      LcnAppPermissionSetting(permission: "lcn-test.quota", constraints: @[0xA0'u8])
+    check entries(LcnAppInitialSettings(module: "meter_module", permissions: @[other])).decoded
+      .rejects(
+        "permissions.initial entry for module meter_module names a permission the profile does not define"
+      )
+    let bad = LcnAppPermissionSetting(permission: HostAmbient, constraints: @[0x01'u8])
+    check entries(LcnAppInitialSettings(module: "meter_module", permissions: @[bad])).decoded
+      .rejects("has constraints the permission does not admit")
+    check entries(
+      LcnAppInitialSettings(module: "meter_module", permissions: @[amb, amb])
+    ).decoded
+      .rejects("is not ascending by permission name")
+    check entries(LcnAppInitialSettings(module: "test_orchestrator", permissions: @[])).decoded
+      .rejects("permissions.initial entry for module test_orchestrator is listed twice")
+    check entries(
+      LcnAppInitialSettings(
+        module: "test_orchestrator", instance: Opt.some("meter-1"), permissions: @[]
+      )
+    ).decoded
+      .rejects("names an instance of another module")
+    check entries(
+      LcnAppInitialSettings(
+        module: "meter_module", instance: Opt.some("meter-2"), permissions: @[]
+      )
+    ).decoded
+      .rejects("names no instance in modules")
+    check entries(LcnAppInitialSettings(module: LoaderModuleName, permissions: @[])).decoded
+      .rejects("names the reserved Module Loader")
+    check entries(
+      LcnAppInitialSettings(
+        module: "meter_module", instance: Opt.some(LoaderInstanceId), permissions: @[]
+      )
+    ).decoded
+      .rejects("names the reserved Module Loader")
+    # An instance entry overrides its module's: the orchestration instance
+    # left without the minimum.
+    check entries(
+      LcnAppInitialSettings(
+        module: "test_orchestrator", instance: Opt.some("orch"), permissions: @[]
+      )
+    ).decoded
+      .rejects("does not provision the orchestration instance")
+
+  test "[IMPL-DECISION G279] [I93] under capability-authority the authority instance is provisioned too, and the policy is loaded against the selected profile":
+    let amb = LcnAppPermissionSetting(permission: HostAmbient, constraints: @[0xA0'u8])
+    var c = caConfig()
+    c.permissions = Opt.some(
+      LcnAppPermissions(
+        initial: Opt.some(
+          @[LcnAppInitialSettings(module: "test_orchestrator", permissions: @[amb])]
+        )
+      )
+    )
+    check c.decoded.rejects(
+      "permissions.initial does not provision the authority instance with the profile's minimum"
+    )
+    c.permissions.get.initial.get.add(
+      LcnAppInitialSettings(module: AuthorityModule, permissions: @[amb])
+    )
+    check c.decoded.isOk
+    # A rule naming host-ambient: loaded with the profile, refused without.
+    var v = toCbor(authorityPolicy())
+    var rules = v.entries
+    for e in rules.mitems:
+      if e[0].text == "rules":
+        e[1] = cborArray(
+          cborMap(
+            (cbor("kind"), cbor("allow")),
+            (cbor("subject"), cborMap()),
+            (
+              cbor("scopes"),
+              cborArray(
+                cborMap(
+                  (cbor("kind"), cbor("permission")),
+                  (cbor("permission"), cbor(HostAmbient)),
+                )
+              ),
+            ),
+          )
+        )
+    c.authorityArm.policy = LcnAuthorityPolicy.fromCbor(cborMap(rules)).tryGet
+    check c.decoded.isOk
+    c.permissions = Opt.none(LcnAppPermissions)
+    check c.decoded.isErr
 
   test "records: each passes the RUNTIME §8 checks; ids and state assignments are unique":
     var c = baseConfig()

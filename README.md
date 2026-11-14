@@ -44,7 +44,10 @@ The specs are being revised, so the work is ordered by how settled each area is
   and its one definition, `logos-core-nim.host-ambient` ([docs/PERMISSIONS.md](docs/PERMISSIONS.md)),
   and the Capability Authority's side: permission validation and containment, permission patterns in
   policy, and one rule or grant for a whole start (part 4b-4a, I93). The Capability Authority's §3.5 is
-  claimed.
+  claimed. In direct mode (part 4b-4b), a host that selects the profile provisions each instance's
+  permission settings; the Runtime saves them, reconciles a replacement by stopping the instance,
+  refuses a start whose settings lack host-ambient, asks the authority for every saved permission, and
+  tells each realization what it was given.
 - Tier 4b, step 4b-5: the reference orchestration module. `lcn_orchestrator`, a module a host links
   in and names as its orchestration instance, applies startup defaults, reconciles after restarts,
   recovers failures under a configured restart policy with retry accounting that survives restarts,

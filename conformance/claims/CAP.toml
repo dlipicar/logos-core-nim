@@ -16,14 +16,14 @@ default = "claimed"
 # §3.5, permission profiles and definitions, is claimed with Tier 4b step 4b-4a (DECISIONS I93): the
 # shipped profile and its one definition, logos-core-nim.host-ambient (G110, G279), containment
 # (CAP-0021), the enforcement component and behaviours (CAP-0083); the facility classes, device
-# restrictions and provider-enforced permissions by inspection (G283, G286).
+# restrictions and provider-enforced permissions by inspection (G283, G286). The Runtime's half, part
+# 4b-4b: the permission scopes of an execution decision and their admission (CAP-0063, CAP-0068), and
+# the stop when a permission's grant is revoked (CAP-0192).
 
 [units]
 # Hosted placements in execution decisions: the Module Host (4b-4c).
 "CAP-0065" = "deferred:tier-4b"
 "CAP-0066" = "deferred:tier-4b"
-# Operating-system permission revocation: per-module OS enforcement.
-"CAP-0192" = "deferred:tier-5"
 # §11, transport step 10a (DECISIONS I83): the route ticket binds the consumer, provider, contract and
 # route access; bad material gives no session and no dispatch; a COSE object is not a Hello token
 # (CAP-0253, CAP-0255, CAP-0256, claimed by default). CAP-0254 (decision, freshness, revocation) is

@@ -22,11 +22,12 @@ from ../transport/io/api import TransportConfig, IoEvent
 from ./tport import TransportPorts
 from ./sidetable import SideTable
 from ../loader/contract import LoaderInstanceId, LoaderModuleName, LoaderBindingId
+from ../permissions import ProfileSource, PermissionSetting
 
 export
   authz, callaudit, clock, configcheck, facts, loaderbinding, records, realizer, routes,
   routing, outcome.ErrorCode, hashinput.Digest, LoaderInstanceId, LoaderModuleName,
-  LoaderBindingId
+  LoaderBindingId, ProfileSource, PermissionSetting
 
 const
   DefaultStartupDeadline* = initDuration(seconds = 120)
@@ -333,6 +334,14 @@ type
     ## must end to clean (RUNTIME l.3823): their instance ids. It must not
     ## call into the engine.
 
+  InitialSettings* = object
+    ## [SPEC RUNTIME l.2543; G110; I93] Protected provisioning of a new
+    ## instance's permission settings: the entry naming the instance, else
+    ## its module's entry (`instance` empty).
+    module*: string
+    instance*: string ## empty: every new instance of `module`
+    permissions*: seq[PermissionSetting] ## ascending by name; may be empty
+
   EngineConfig* = object
     runtimeInstanceId*: string
       ## [SPEC RUNTIME §9.2 l.2665-2672] this Runtime's identity, assigned by
@@ -404,6 +413,14 @@ type
     endpointDir*: string
       ## [SPEC TRANSPORT §8.2; G58; I90] where the Runtime makes the endpoints
       ## it serves; empty: `<workDir>/endpoints`
+    permissions*: ProfileSource
+      ## [I93; G279] the selected permission profile, as the constructor each
+      ## thread that needs it builds its own value from (the Runtime thread,
+      ## the evaluation workers); nil: none, and permission settings keep the
+      ## constant form (G229)
+    initialSettings*: seq[InitialSettings]
+      ## [SPEC RUNTIME l.2543; I93] with `permissions`: the protected initial
+      ## settings of new instances; unused without it
 
   # Messages ---------------------------------------------------------------------
   RequestKind* = enum
@@ -795,6 +812,9 @@ type
       access*: pointer ## the authority's invocation-access state
       ticket*: ptr CallTicket ## marked cancelled when the deadline passes
       runtimeId*: string
+      profile*: ProfileSource
+        ## [I93] the selected permission profile; the worker checks the
+        ## decision's permission scopes against its own copy
     of ejQuit:
       discard
 

@@ -128,11 +128,13 @@ from ../transport/io/sock import unixStream
 from ./tport import
   newTransportPorts, freeTransportPorts, ensureStarted, closeTransport, releaseOwner,
   closing, submit, submitOwner, newConnId, started
+from ../permissions import
+  PermissionProfile, build, selected, checkProfile, checkSettings, activeIn, missing
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
     execauth, inventory, invoke, loaderbinding, observe, plumbing, rcevents, served,
-    sessionauth, sidetable, store, transported,
+    sessionauth, settings, sidetable, store, transported,
   ]
 
 export plumbing
@@ -276,6 +278,16 @@ type
       ## in progress although the instance is `error`: an application's
       ## outcome became indeterminate while it was `stopping`. The stop still
       ## completes it, to `unloaded`, within its stop deadline.
+    settings: SettingsState
+      ## [I93] its permission settings while a profile is selected (its `prm`
+      ## side record); unused without one (G229)
+    reconciling: bool
+      ## [I93; G281] a settings reconciliation stop is in progress: settled
+      ## through `releaseWaiters`
+    installed: Opt[seq[PermissionSetting]]
+      ## [IMPL-DECISION G282] the permission scopes the current attempt's or
+      ## realization's admission allowed, set at its accepting commit; none
+      ## without a profile (`get_execution_permissions`)
 
   Saved = object ## What an accepting commit rolls back when its write fails.
     record: ModuleRecord
@@ -402,6 +414,9 @@ type
     waiters: seq[Waiter]
     joined: seq[OpCtx] ## later starts that join while it can still succeed
     cancelled: bool
+    settingsRevision: uint64
+      ## [I93] the settings revision its request carries: a replacement saved
+      ## meanwhile makes the answer stale
 
   LoaderCallKind = enum
     lcCapabilities ## the binding check's `list_capabilities`
@@ -537,6 +552,13 @@ type
         ## [plan §4.1] the next materialization's Hello carries a ticket the
         ## provider never issued
     caRoot: Opt[Digest] ## the pinned Capability Authority contract root
+    profile: PermissionProfile
+      ## [I93] the selected permission profile, this thread's copy; no name:
+      ## none (G229)
+    unsettled: HashSet[string]
+      ## [I93] instances whose settlement was not written: held back,
+      ## `pending`, until `nextSettleTry`
+    nextSettleTry: MonoTime
     op: OpCtx ## the request being handled
     pendings: Table[int, Pending]
     nextPending: int
@@ -585,6 +607,10 @@ const
     ## a notice, the rest queued, so they never fill the ordinary lane's queue
   NotPersisted = "the execution state could not be persisted"
   ConfigNotPersisted = "the configuration state could not be persisted"
+  SettingsNotPersisted = "the permission settings could not be persisted"
+  SettingsRetry = initDuration(seconds = 1)
+    ## [IMPL; I93] a settings status change whose write failed is tried again
+    ## after this long, held back meanwhile
   StoreRetry = initDuration(seconds = 1)
   RevisionMask = 0xFFFF_FFFF'u64
 
@@ -1653,6 +1679,143 @@ proc persistConfig(st: State, x: Inst, next: ConfigState): Opt[EngineError] =
   st.publishConfig(x)
   Opt.none(EngineError)
 
+# Permission settings (DECISIONS I93) ----------------------------------------------
+
+func profiled(st: State): bool =
+  ## [I93; G279] A permission profile is selected; without one, settings keep
+  ## the constant form (G229).
+  st.profile.selected
+
+proc publishSettings(st: State, x: Inst) =
+  ## [SPEC RUNTIME l.2603-2604; RUN-0482] After every committed settings
+  ## change, in commit order; delivery is authorized per subscriber and
+  ## target as every Runtime Control event's is.
+  if st.rcByEvent[rePermissionSettings].len == 0:
+    return
+  st.publishRc(
+    rePermissionSettings,
+    instanceSubject(x.record.module, x.id),
+    encode(
+      LogosNSRuntimeControlPermissionSettingsChangedEvent(
+        target: st.addressOf(x.id), state: x.settings.toRc
+      )
+    )
+      .get(newSeq[byte]()),
+  )
+
+proc persistSettings(st: State, x: Inst, next: SettingsState): Opt[EngineError] =
+  ## [SPEC RUNTIME l.2588; I93] A settings change of `x`: written to its `prm`
+  ## side record before it is exposed (RUN-0477), then taken and published.
+  ## On a failed write nothing changes: MODULE_ERROR.
+  let bytes = prmBytes(next).valueOr:
+    return Opt.some(engineError(ecModule, "the permission settings cannot be encoded"))
+  st.store.putSide(PrmSide, x.id, bytes).isOkOr:
+    st.diagnose("the permission settings of " & x.id & " were not written: " & error)
+    return Opt.some(engineError(ecModule, SettingsNotPersisted))
+  x.settings = next
+  st.publishSettings(x)
+  Opt.none(EngineError)
+
+func remainsOf(x: Inst): Remains =
+  ## [G281, G285] What is left of `x`'s realization: none; one whose stop or
+  ## cleanup can still establish absence; or one that may persist with the
+  ## access it was admitted with (its stop deadline passed, its cleanup
+  ## failed, or its Loader was lost).
+  if x.attempt.isNil and x.realization.isNil and x.teardown == 0:
+    return rmNone
+  if x.realization != nil and x.realization.lost:
+    return rmOverrun
+  if x.state == msError and x.failure.isSome and
+      x.failure.get.kind in {fkCleanupTimeout, fkCleanupFailed}:
+    return rmOverrun
+  rmRunning
+
+proc settleSettings(st: State, x: Inst) =
+  ## [SPEC RUNTIME l.2591, l.2600; G281, G285; plan §2.5] `pending` settings
+  ## settle once no realization remains (`applied`, or `failed` for an
+  ## inactive definition) or once one may persist past its deadline
+  ## (`failed`; the instance keeps its classification). Written before it is
+  ## published; a failed write holds it back, still `pending`, and it is
+  ## tried again (`retrySettlements`). A `failed` result on an `unloaded`
+  ## instance sets its `failure` to `permission-enforcement-failed` (R7).
+  if not st.profiled or x.settings.application != saPending:
+    return
+  let to = x.settings.settled(x.remainsOf, st.profile).valueOr:
+    return
+  var next = x.settings
+  next.application = to
+  if st.persistSettings(x, next).isSome:
+    if st.unsettled.len == 0:
+      st.nextSettleTry = getMonoTime() + SettingsRetry
+    st.unsettled.incl(x.id)
+    return
+  st.unsettled.excl(x.id)
+  x.reconciling = false
+  if to == saFailed and x.state == msUnloaded:
+    x.failure = Opt.some(Failure(kind: fkPermissionEnforcementFailed))
+    st.commit(x)
+
+proc retrySettlements(st: State, now: MonoTime) =
+  if st.unsettled.len == 0 or now < st.nextSettleTry:
+    return
+  var due: seq[Inst]
+  for id in st.unsettled:
+    let x = st.instances.getOrDefault(id)
+    if x != nil:
+      due.add(x)
+  st.unsettled.clear()
+  for x in due:
+    st.settleSettings(x)
+
+proc settingsRefusal(st: State, x: Inst): Opt[EngineError] =
+  ## [IMPL-DECISION G284 (S4b4-1; extends G168); CA l.364; RUNTIME l.2538,
+  ## l.2591; plan §2.6] Before an execution decision is asked: `failed`
+  ## settings, or `applied` ones lacking a minimum permission of the profile,
+  ## refuse the start or recovery NOT_AUTHORISED, the state unchanged, intent
+  ## and origin kept, `failure` naming why. No authority decision exists for
+  ## it (R l.1756); a diagnostic line explains it. `pending` cannot be reached
+  ## here (R5): NOT_READY. The Loader never comes here: its protected
+  ## construction is its authorization (G253).
+  if not st.profiled:
+    return Opt.none(EngineError)
+  var kind: FailureKind
+  case x.settings.application
+  of saPending:
+    return
+      Opt.some(engineError(ecNotReady, "the permission settings are being reconciled"))
+  of saFailed:
+    kind = fkPermissionEnforcementFailed
+    st.diagnose("the permission settings of " & x.id & " failed: its start is refused")
+  of saApplied:
+    let lacking = st.profile.missing(x.settings.permissions)
+    if lacking.len == 0:
+      return Opt.none(EngineError)
+    kind = fkAuthorityDenied
+    st.diagnose(
+      "the permission settings of " & x.id & " lack " & lacking.join(", ") &
+        ": its start is refused"
+    )
+  if x.failure.isNone or x.failure.get.kind != kind:
+    x.failure = Opt.some(Failure(kind: kind))
+    st.commit(x)
+  Opt.some(engineError(ecNotAuthorised, "execution is not authorised"))
+
+proc initialFor(st: State, module, id: string): seq[PermissionSetting] =
+  ## [SPEC RUNTIME l.2541-2543; G110, G253] A new instance's protected initial
+  ## settings: the Loader's construction gives the profile's minimum; else
+  ## the entry naming the instance, else its module's entry, else none.
+  if id == LoaderInstanceId:
+    return st.profile.minimum
+  var byModule = Opt.none(seq[PermissionSetting])
+  for e in st.cfg.initialSettings:
+    if e.module != module:
+      continue
+    if e.instance == id:
+      return e.permissions
+    if e.instance.len == 0:
+      byModule = Opt.some(e.permissions)
+  byModule.get(newSeq[PermissionSetting]())
+
 proc endAttempted(x: Inst) =
   ## [SPEC CONFIG §6 l.238-242 (CFG-0074, CFG-0075)] The attempt can no
   ## longer promote its snapshot: it is dropped and nothing else changes. A
@@ -1668,11 +1831,17 @@ proc releaseConfigs(st: State) =
 # Lifecycle ----------------------------------------------------------------------
 
 proc releaseWaiters(st: State, x: Inst) =
-  ## Stop requests wait for `unloaded`.
+  ## Stop requests wait for `unloaded`. [I93; R11] Every path that ends an
+  ## attempt, a realization or a teardown, or records that one overran,
+  ## passes here once the end is recorded: pending permission settings settle
+  ## (`settleSettings`, reading only `remainsOf`). Hosted ends come here too
+  ## (4b-3's `hostEnded`). Calling it again, or on an end that settles
+  ## nothing, is harmless.
   if x.state in {msUnloaded, msError}:
     for w in x.stopWaiters:
       w.reply.answerView(x)
     x.stopWaiters.setLen(0)
+  st.settleSettings(x)
 
 proc takeEnforced(x: Inst): Opt[Failure] =
   ## [G168 extended (I85)] What a stop reaching `unloaded` leaves as
@@ -2467,6 +2636,7 @@ proc startEval(
       access: ca.services,
       ticket: e.ticket,
       runtimeId: st.runtimeId,
+      profile: st.cfg.permissions,
     ),
     e.renewal,
   )
@@ -2834,6 +3004,12 @@ proc execRenewed(st: State, x: Inst, serial: int, a: AuthzAnswer) =
   ## authorization it renews has ended meanwhile.
   if x.execSerial != serial or not x.executing:
     return
+  var a = a
+  if a.outcome == azAllow and x.installed.isSome and
+      not a.keepsInstalled(x.installed.get, st.profile):
+    # [I93; plan §2.6] A renewal narrowing an installed permission ends the
+    # authorization, as a narrowed execution does.
+    a.narrowed = true
   st.endExecution(x, x.exec.get.renewed(a, st.gen, st.wallNow, st.monoNow))
 
 proc renewExecution(st: State, x: Inst) =
@@ -3077,7 +3253,7 @@ proc evaluated(st: State, id: int, res: EvalResult) =
       a.outcome = azEvaluationFailed
       a.reason = "the decision expired before it was used"
     elif a.outcome == azAllow:
-      a.narrowed = a.narrowedFor(e.bytes, st.runtimeId)
+      a.narrowed = a.narrowedFor(e.bytes, st.runtimeId, st.profile)
   st.authorizer.retain(a)
   if a.outcome == azAllow and not a.narrowed and a.validUntil.isSome and e.cacheable:
     let left = int64(a.validUntil.get - st.wallNow)
@@ -3305,7 +3481,8 @@ proc selectConfig(st: State, x: Inst, pe: PendingExec): Opt[Opt[ValueRecord]] =
     refusal =
       engineError(ecNotReady, "the module instance has no eligible configuration value")
     if x.failure.isSome and
-        x.failure.get.kind in {fkAuthorityDenied, fkAuthorityEvaluationFailed}:
+        x.failure.get.kind in
+        {fkAuthorityDenied, fkAuthorityEvaluationFailed, fkPermissionEnforcementFailed}:
       x.failure = Opt.none(Failure)
       st.commit(x)
   if x.orchestration and st.bootstrapReply != nil:
@@ -3316,12 +3493,20 @@ proc selectConfig(st: State, x: Inst, pe: PendingExec): Opt[Opt[ValueRecord]] =
   pe.answerExec(refusal.code, refusal.message)
   Opt.none(Opt[ValueRecord])
 
+proc decideExec(st: State, x: Inst, pe: PendingExec) {.gcsafe.}
+
 proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
   ## [SPEC RUNTIME §3.6, §9.3; C17] The execution decision for an accepted
   ## start or recovery.
   if pe.cancelled or x.pendingExec != pe:
     return
   x.pendingExec = nil
+  if st.profiled and x.settings.revision != pe.settingsRevision:
+    # [IMPL; I93] A replacement was saved while the decision was pending: the
+    # answer is for other settings. The precheck and the evaluation run again
+    # for the same waiters and joined starts.
+    st.decideExec(x, pe)
+    return
   if not a.allows:
     # [G168 interim] NOT_AUTHORISED; the state stays, the failure records why
     # and intent stays `requested` with its origin. [IMPL] A narrowed allow
@@ -3378,6 +3563,12 @@ proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
   # under, with its validity end and renewal time.
   x.exec = Opt.some(authorization(a, st.gen, st.wallNow, st.monoNow))
   inc x.execSerial
+  # [IMPL-DECISION G282] What this realization's admission installed.
+  x.installed =
+    if st.profiled:
+      Opt.some(a.installedOf)
+    else:
+      Opt.none(seq[PermissionSetting])
   st.beginAttempt(at)
 
 proc execute(st: State, x: Inst, reply: ReplyChannel, origin: string) {.gcsafe.} =
@@ -3389,9 +3580,19 @@ proc execute(st: State, x: Inst, reply: ReplyChannel, origin: string) {.gcsafe.}
     # [SPEC RUNTIME §3.7, §10.1] A dependent waits for every prerequisite.
     reply.answerError(ecNotReady, "a lifecycle prerequisite is not ready")
     return
-  # [SPEC RUNTIME §3.6 step 3] Execution authorization, for the retained
-  # origin, before any artifact code runs.
-  let pe = PendingExec(waiters: @[Waiter(reply: reply, origin: origin)])
+  st.decideExec(x, PendingExec(waiters: @[Waiter(reply: reply, origin: origin)]))
+
+proc decideExec(st: State, x: Inst, pe: PendingExec) =
+  ## [SPEC RUNTIME §3.6 step 3] Execution authorization, for the retained
+  ## origin, before any artifact code runs. [IMPL-DECISION G284] Under a
+  ## selected profile the saved settings are checked first; [TF-32 interim;
+  ## G217 amended] the request then carries one permission scope per saved
+  ## setting.
+  let refused = st.settingsRefusal(x)
+  if refused.isSome:
+    pe.answerExec(refused.get.code, refused.get.message)
+    return
+  pe.settingsRevision = x.settings.revision
   x.pendingExec = pe
   let q = AuthzRequest(
     action: aaExecute,
@@ -3400,6 +3601,11 @@ proc execute(st: State, x: Inst, reply: ReplyChannel, origin: string) {.gcsafe.}
     target: x.id,
     instance: x.id,
     module: x.record.module,
+    permissions:
+      if st.profiled:
+        x.settings.permissions
+      else:
+        newSeq[PermissionSetting](),
   )
   st.decideDetached(
     @[q],
@@ -3945,6 +4151,26 @@ proc createInst(
       st.diagnose("the configuration of " & id & " was not written: " & error)
       x.config.release()
       return err(engineError(ecModule, ConfigNotPersisted))
+  if st.profiled:
+    # [SPEC RUNTIME l.2541-2543; I93 (R17)] Its permission settings, written
+    # before the snapshot names it, as its configuration is: the protected
+    # provisioning, else revision 1 with none (G281). Never from
+    # `requested_permissions` (RUN-0894).
+    x.settings = initialSettings(st.initialFor(record.module, id))
+    let written = block:
+      let bytes = prmBytes(x.settings)
+      if bytes.isErr:
+        Result[void, string].err(bytes.error)
+      else:
+        st.store.putSide(PrmSide, id, bytes.get)
+    if written.isErr:
+      st.diagnose(
+        "the permission settings of " & id & " were not written: " & written.error
+      )
+      if configuration.isSome:
+        discard st.store.deleteSide(ConfigSide, id)
+        x.config.release()
+      return err(engineError(ecModule, SettingsNotPersisted))
   st.instances[id] = x
   if key.isSome:
     var k = key.get
@@ -3961,6 +4187,8 @@ proc createInst(
     if x.configurable:
       discard st.store.deleteSide(ConfigSide, id)
       x.config.release()
+    if st.profiled:
+      discard st.store.deleteSide(PrmSide, id)
     return err(refused.get)
   if x.configurable and x.config.revision > 0:
     # [SPEC CONFIG l.324-325] The source's staging, after the creation.
@@ -4359,6 +4587,14 @@ proc retireInst(st: State, y: Inst): Result[void, string] =
     st.store.deleteSide(ConfigSide, y.id).isOkOr:
       st.diagnose("the configuration of retired " & y.id & " was not removed: " & error)
     y.config.release()
+  if st.profiled:
+    # [SPEC RUNTIME l.3586; RUN-0923; I93] Its settings go with it; a crash
+    # before this leaves a record `reapSides` removes.
+    st.store.deleteSide(PrmSide, y.id).isOkOr:
+      st.diagnose(
+        "the permission settings of retired " & y.id & " were not removed: " & error
+      )
+  st.unsettled.excl(y.id)
   # [SPEC RUNTIME l.3417, l.3420] A membership change, judged by the retained
   # facts of the record that left.
   st.hintRc(InvKind.Modules, instanceSubject(y.record.module, y.id, y.providerId))
@@ -5550,13 +5786,101 @@ proc describeProvider(st: State, q: Request, x: Inst) =
     )
   )
 
+proc settingsAnswer(st: State, q: Request, y: Inst, update: bool) =
+  let address = st.addressOf(y.id)
+  if update:
+    q.reply.answerEncoded(
+      encode(
+        LogosNSRuntimeControlUpdatePermissionSettingsResponse(
+          target: address, state: y.settings.toRc
+        )
+      )
+    )
+  else:
+    q.reply.answerEncoded(
+      encode(
+        LogosNSRuntimeControlGetPermissionSettingsResponse(
+          target: address, state: y.settings.toRc
+        )
+      )
+    )
+
+proc profiledSettings(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME §9.3 l.2526-2604; I93; plan §2.4] Under a selected profile,
+  ## in this order: the caller and the target (`localTarget`: authority over
+  ## the exact target, RUN-0473; another Runtime's target INVALID_PARAMS
+  ## without detail, G228, RUN-0910), readiness; then for an update the
+  ## array (unknown, invalid, unordered or repeated: INVALID_PARAMS without
+  ## detail, RUN-0892, RUN-0468), the revision (RUN-0474), the bound Loader
+  ## (NOT_READY, G253 (K37)), a repeat (RUN-0475), and a new replacement:
+  ## saved, published and reconciled (G281, G285), all before the reply
+  ## (RUN-0477). Intent, its origin and the execution revision are not
+  ## touched (RUN-0481); a failed replacement of an `unloaded` instance sets
+  ## its `failure` (R7), an execution change.
+  let update = q.rc.m == rmUpdatePermissionSettings
+  let target = if update: q.rc.updateSettings.target else: q.rc.getSettings.target
+  let y = st.localTarget(
+    q, x, target, (if update: aaLifecycle else: aaObserve), $q.rc.m
+  ).valueOr:
+    return
+  st.requireReady(q)
+  if not update:
+    st.settingsAnswer(q, y, update)
+    return
+  let req = q.rc.updateSettings
+  let xs = fromRc(req.permissions)
+  if st.profile.checkSettings(xs).isErr:
+    q.reply.answerError(ecInvalidParams, "the permission settings are not valid")
+    return
+  if req.expected_revision != y.settings.revision:
+    q.reply.answerError(ecInvalidParams, "permission settings revision mismatch")
+    return
+  if st.isLoader(y) and st.ldr.bound:
+    # [IMPL-DECISION G253 (K37)] Reconciliation would stop it, which is
+    # refused while it is bound (decision 5).
+    q.reply.answerError(
+      ecNotReady,
+      "the Module Loader's permission settings cannot change while it is bound",
+    )
+    return
+  if y.settings.repeats(xs):
+    st.settingsAnswer(q, y, update)
+    return
+  let next = y.settings.replaced(xs, y.remainsOf, st.profile)
+  let failed = st.persistSettings(y, next)
+  if failed.isSome:
+    q.reply.answerError(failed.get.code, failed.get.message)
+    return
+  case next.application
+  of saPending:
+    # [SPEC RUNTIME l.2595-2597; RUN-0912, RUN-0914, RUN-1066; G281] Stop and
+    # re-realize: a running realization is stopped as an enforcement stop with
+    # no classification, intent and origin kept, asking no stop grant (CA
+    # l.338-339); a stop or cleanup already running is awaited. The engine
+    # never restarts it (RUN-0915).
+    y.reconciling = true
+    if y.state in {msLoaded, msReady}:
+      st.stopInstance(y, nil, keepIntent = true, enforcement = true)
+    st.settleSettings(y)
+  of saFailed:
+    if y.state == msUnloaded:
+      y.failure = Opt.some(Failure(kind: fkPermissionEnforcementFailed))
+      st.commit(y)
+  of saApplied:
+    discard
+  st.settingsAnswer(q, y, update)
+
 proc permissionSettings(st: State, q: Request, x: Inst) =
   ## [IMPL-DECISION G229] The constant form RUNTIME l.2536 and l.2541 give
   ## when no permission profile is selected: every local instance has
   ## revision 1, no permission and `applied` (l.2545: it grants nothing); a
   ## replacement naming any permission names an unknown definition
   ## (INVALID_PARAMS without detail, l.2536); an empty replacement at revision
-  ## 1 gives the existing state (l.2584). Nothing is stored.
+  ## 1 gives the existing state (l.2584). Nothing is stored. Under a profile:
+  ## `profiledSettings`.
+  if st.profiled:
+    st.profiledSettings(q, x)
+    return
   let update = q.rc.m == rmUpdatePermissionSettings
   let target = if update: q.rc.updateSettings.target else: q.rc.getSettings.target
   let y = st.localTarget(
@@ -6067,16 +6391,29 @@ proc rc(st: State, q: Request) =
       )
     )
   of rmGetExecutionPermissions:
-    # [SPEC RUNTIME §9.3 l.2562-2574] Caller-bound; no operating-system
-    # permission enforcement is installed here, so no enforced snapshot.
+    # [SPEC RUNTIME §9.3 l.2562-2574] Caller-bound. [IMPL-DECISION G282] The
+    # snapshot the caller's own realization was admitted with (RUN-0906,
+    # RUN-0907, RUN-0909); without a profile nothing is installed:
+    # `unavailable` (RUN-0908).
     st.requireReady(q)
-    q.reply.answerEncoded(
-      encode(
-        LogosNSRuntimeControlGetExecutionPermissionsResponse(
-          kind: LogosNSRuntimeControlGetExecutionPermissionsResponseKind.Unavailable
+    type K = LogosNSRuntimeControlGetExecutionPermissionsResponseKind
+    if x.installed.isSome:
+      q.reply.answerEncoded(
+        encode(
+          LogosNSRuntimeControlGetExecutionPermissionsResponse(
+            kind: K.Available,
+            arm_Available: LogosNSRuntimeControlGetExecutionPermissionsResponseARAvailableMap(
+              permissions: x.installed.get.toRc
+            ),
+          )
         )
       )
-    )
+    else:
+      q.reply.answerEncoded(
+        encode(
+          LogosNSRuntimeControlGetExecutionPermissionsResponse(kind: K.Unavailable)
+        )
+      )
   of rmReportFailure:
     st.requireReady(q)
     let response = encode(LogosNSRuntimeControlReportFailureResponse()).valueOr:
@@ -6165,7 +6502,9 @@ proc checkBootstrap(st: State) =
     )
   elif x.state == msError or (x.state == msUnloaded and x.failure.isSome):
     let f = x.failure.get(Failure(kind: fkOther))
-    if f.kind in {fkAuthorityDenied, fkAuthorityEvaluationFailed}:
+    if f.kind in
+        {fkAuthorityDenied, fkAuthorityEvaluationFailed, fkPermissionEnforcementFailed}:
+      # [I93; G284] a start the permission settings refuse too
       outcome = Opt.some(
         Reply(
           error: Opt.some(
@@ -6379,13 +6718,18 @@ proc loaderRecord(): ModuleRecord =
   )
 
 proc provisionBootstrapSettings(st: State, x: Inst) =
-  ## [SPEC RUNTIME l.2538, l.2543, l.2549; plan §2.6 step 3 (R9)] Where the
-  ## protected construction supplies the Loader's initial permission
-  ## settings, before the instance is first exposed. [IMPL-DECISION G229]
-  ## Without a profile there is nothing to provision: the constant form, as
-  ## every instance has. 4b-4 writes the selected profile's required list
-  ## here.
-  discard
+  ## [SPEC RUNTIME l.2538, l.2543, l.2549; plan §2.6 step 3 (R9);
+  ## IMPL-DECISION G253] The protected construction supplies the Loader's
+  ## permission settings: the selected profile's minimum, saved by
+  ## `createInst` (or restored, `restoreSettings`) before the instance is
+  ## first exposed. Its realization installs them: its construction is its
+  ## authorization (CA l.343), so no decision narrows them. [G229] Without a
+  ## profile nothing is installed.
+  x.installed =
+    if st.profiled:
+      Opt.some(st.profile.minimum)
+    else:
+      Opt.none(seq[PermissionSetting])
 
 proc establishLoader(st: State) =
   ## [SPEC RUNTIME l.1635-1641, l.1667, l.1685; BOOTSTRAP l.287-288; plan §2.6
@@ -8309,6 +8653,10 @@ proc teardownDone(st: State, x: Inst) =
     x.current = ""
     st.commit(x)
     st.releaseWaiters(x)
+  else:
+    # [I93; R11] An `error` realization's release completed: its pending
+    # settings may settle.
+    st.releaseWaiters(x)
 
 proc destroyed(st: State, job: int) =
   if job in st.teardowns:
@@ -8333,9 +8681,7 @@ proc cleanupFailed(st: State, x: Inst, reason: string) =
   x.failure = Opt.some(Failure(kind: fkCleanupFailed, reason: reason))
   x.enforced = Opt.none(Failure)
   st.commit(x)
-  for w in x.stopWaiters:
-    w.reply.answerView(x)
-  x.stopWaiters.setLen(0)
+  st.releaseWaiters(x) # [I93; R11] its pending settings fail (G285)
   let a = x.attempt
   if a != nil and a.phase == apCleanup:
     st.finishAttempt(a)
@@ -9086,6 +9432,7 @@ proc checkDeadlines(st: State) =
   st.expireRoutes()
   st.checkTransported(now)
   st.checkExecutions()
+  st.retrySettlements(now)
   for a in st.records:
     if not a.terminal and a.deadline.isSome and now >= a.deadline.get:
       # [SPEC INTERFACE l.2059-2068] TIMEOUT, without waiting for the provider.
@@ -9145,9 +9492,7 @@ proc checkDeadlines(st: State) =
         )
         x.enforced = Opt.none(Failure)
         st.commit(x)
-        for w in x.stopWaiters:
-          w.reply.answerView(x)
-        x.stopWaiters.setLen(0)
+        st.releaseWaiters(x) # [I93; R11]
     st.finishShutdown()
 
 proc nextDeadline(st: State): Opt[MonoTime] =
@@ -9175,6 +9520,8 @@ proc nextDeadline(st: State): Opt[MonoTime] =
       consider(x.apply.deadline)
   if st.storeFailed:
     consider(st.nextStoreTry)
+  if st.unsettled.len > 0:
+    consider(st.nextSettleTry)
   if st.shuttingDown and not st.shutdownDone:
     consider(st.shutdownDeadline)
   for a in st.asyncCalls.values:
@@ -9259,11 +9606,101 @@ proc restoreConfigs(st: State): Opt[string] =
       )
   Opt.none(string)
 
+proc restoreSettings(st: State): Opt[string] =
+  ## [SPEC RUNTIME l.2544, l.2591-2600; I93 (R6, R17)] Each instance's
+  ## settings from its `prm` side record, its revision and status kept; the
+  ## store must agree with the selection, fail closed [IMPL]: a record with no
+  ## profile selected, or one naming a permission the profile does not define
+  ## or constraints it does not admit, refuses the open, naming the instance
+  ## (accepted settings are never dropped silently). No realization survives
+  ## the previous process, so a `pending` one settles now (`applied`, or
+  ## `failed` for an inactive definition), before anything is exposed and
+  ## with no event. An instance with no record was created without a
+  ## profile: it gets the default (the Loader: its construction's minimum).
+  ## What changed is written back.
+  let stored = st.store.listSide(PrmSide).valueOr:
+    return Opt.some("the permission settings cannot be read: " & error)
+  if not st.profiled:
+    if stored.len > 0:
+      return Opt.some(
+        "the state store holds permission settings, but no permission profile is selected"
+      )
+    return Opt.none(string)
+  for x in st.instances.values:
+    let data = st.store.getSide(PrmSide, x.id).valueOr:
+      return Opt.some(
+        "the permission settings of instance " & x.id & " cannot be read: " & error
+      )
+    var write = data.isNone
+    if data.isNone:
+      x.settings = initialSettings(
+        if x.id == LoaderInstanceId:
+          st.profile.minimum
+        else:
+          newSeq[PermissionSetting]()
+      )
+    else:
+      x.settings = settingsOf(data.get).valueOr:
+        return Opt.some(
+          "the permission settings of instance " & x.id & " cannot be restored: " & error
+        )
+      if st.profile.checkSettings(x.settings.permissions).isErr:
+        return Opt.some(
+          "the permission settings of instance " & x.id &
+            " name a permission the selected profile does not define as saved"
+        )
+      let to = x.settings.settled(rmNone, st.profile)
+      if to.isSome:
+        x.settings.application = to.get
+        write = true
+        if to.get == saFailed and x.state == msUnloaded:
+          x.failure = Opt.some(Failure(kind: fkPermissionEnforcementFailed))
+    if write:
+      let bytes = prmBytes(x.settings).valueOr:
+        return Opt.some(
+          "the permission settings of instance " & x.id & " cannot be encoded: " & error
+        )
+      st.store.putSide(PrmSide, x.id, bytes).isOkOr:
+        return Opt.some(
+          "the permission settings of instance " & x.id & " cannot be written: " & error
+        )
+  Opt.none(string)
+
+proc selectProfile(st: State): Opt[EngineError] =
+  ## [I93; G279] The selected permission profile, this thread's copy, and the
+  ## protected initial settings checked against it: ascending names, defined
+  ## and conforming, every one enforced by an active point (G280).
+  if st.cfg.permissions == nil:
+    return Opt.none(EngineError)
+  st.profile = build(st.cfg.permissions)
+  checkProfile(st.profile).isOkOr:
+    return Opt.some(
+      engineError(ecInvalidParams, "the permission profile is not valid: " & error)
+    )
+  for e in st.cfg.initialSettings:
+    let what =
+      "the initial permission settings of " &
+      (if e.instance.len > 0: "instance " & e.instance
+      else: "module " & e.module)
+    if st.profile.checkSettings(e.permissions).isErr:
+      return Opt.some(engineError(ecInvalidParams, what & " are not valid"))
+    for p in e.permissions:
+      if not st.profile.activeIn(p.permission):
+        return Opt.some(
+          engineError(
+            ecInvalidParams, what & " name " & p.permission & ", which is not enforced"
+          )
+        )
+  Opt.none(EngineError)
+
 proc load(st: State): Opt[EngineError] =
   ## [IMPL] Before any request (DECISIONS I82): the store is locked and read,
   ## the identity checked [G192 interim (TF-27)], the instances restored, a
   ## new revision epoch computed and everything written back. Without
   ## `storeDir` only the identity is set.
+  let refused = st.selectProfile()
+  if refused.isSome:
+    return refused
   if st.cfg.storeDir.isNone:
     st.runtimeId = st.cfg.runtimeInstanceId
     return Opt.none(EngineError)
@@ -9306,6 +9743,10 @@ proc load(st: State): Opt[EngineError] =
   if lost.isSome:
     st.releaseConfigs()
     fail(ecModule, lost.get)
+  let disagree = st.restoreSettings()
+  if disagree.isSome:
+    st.releaseConfigs()
+    fail(ecModule, disagree.get)
   st.store.write(st.snapshot()).isOkOr:
     st.releaseConfigs()
     fail(ecModule, NotPersisted & ": " & error)
@@ -9789,7 +10230,8 @@ proc stopForAuthority*(
   ## not see itself, as the engine does for its own (intent and origin kept,
   ## `unloaded` with `ending` as `failure`). `ending` is one of
   ## `AuthorityEndings`. Nothing happens to an instance that is not loading
-  ## or ready. The hook for settings reconciliation (RUN-0914, deferred).
+  ## or ready. Settings reconciliation stops by its own path, with no
+  ## classification (`profiledSettings`; G281).
   let r = e.call(Request(kind: rqStopForAuthority, instance: instance, ending: ending))
   r.toResult(r.view)
 
