@@ -837,15 +837,21 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     let gone = destroyed.load
     discard e.stop(m.instance) # answers at its deadline, still stopping
     check destroyed.load == gone
-    check done[0].count.load == 0
-    # [G174] A route that failed with its provider lets the call complete.
-    settle(module, inv)
-    check done[0].finished
     when declared(transportParity):
-      # [G260; TRANSPORT l.543] Past the stop deadline the session closed: the
-      # call failed TRANSPORT_ERROR before its result.
+      # [G260; TRANSPORT l.543] The provider stop drains the session until its
+      # stop deadline, the one `e.stop` answered at; then the session closes
+      # and the call fails TRANSPORT_ERROR before its result. That failure may
+      # arrive before or after `e.stop` returns, so the case waits for it. The
+      # destroy still waits for the module's release.
+      check done[0].finished
       check done[0].codeOf == ecTransport
+      check destroyed.load == gone
+      settle(module, inv)
     else:
+      check done[0].count.load == 0
+      # [G174] A route that failed with its provider lets the call complete.
+      settle(module, inv)
+      check done[0].finished
       check done[0].codeOf == ecOk
     check waitUntil(
       proc(): bool =

@@ -285,6 +285,14 @@ suite "run.authority: bootstrap and recovery rules (RUNTIME l.1635-1650, l.1674-
     forget()
     check orch.observe().code == ecNotAuthorised
     check e.last.outcome == azEvaluationFailed
+    # [G227] The end of the failed realization's cleanup is one more commit,
+    # which advances the execution revision, and a recovery before it is
+    # NOT_READY: the revision is read once the cleanup has ended. The Runtime
+    # commits after the step that ended it, before it answers the next request.
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending(Ca)
+    )
     let failed = e.view(Ca).tryGet
     check failed.state == msError
     let r = orch.rcCall(
