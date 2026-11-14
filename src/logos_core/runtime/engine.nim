@@ -4341,6 +4341,11 @@ proc shutdownComplete(st: State): bool =
         x.apply != nil:
       # [I87] An application in flight is waited for as a call is.
       return false
+    if st.isLoader(x) and x.teardown != 0:
+      # [G60 extended; I91] A lost Loader's own release, begun once it owns
+      # nothing (plan §2.11), stays `error` and is never stopped here; it is
+      # waited for as any release in progress is, the grace bounding it.
+      return false
   true
 
 proc shutdownOutcome(st: State): Opt[EngineError] =
