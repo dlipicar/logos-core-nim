@@ -142,6 +142,12 @@ proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10): bool =
 proc failureOf(v: InstanceView): string =
   if v.failure.isSome: v.failure.get.classification else: ""
 
+proc statesSince(e: Engine, instance: string, serial: uint64): seq[ModuleState] =
+  ## The states `instance` committed after the change `serial`, in order.
+  for c in e.changes():
+    if c.serial > serial and c.view.instance == instance:
+      result.add(c.view.state)
+
 # Calls on other threads -------------------------------------------------------------
 
 var
@@ -343,21 +349,22 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     check r.isErr and r.error.code == ecNotReady
     check e.view("g").tryGet.execution.intent == inStopped
     destroyGate.store(false)
+    # [G227] The end of the cleanup moves the realization from `unknown` to
+    # `absent`: one more commit, still `error`. The Runtime thread makes it
+    # only after `_MODULE_destroy` returned and the release was answered, so
+    # the case waits for that commit, not for the destroy.
     check waitUntil(
       proc(): bool =
-        destroys.load == 1 and live.load == 0
+        let s = e.statesSince("g", before)
+        s.len >= 3 and s[^2] == msError and s[^1] == msError
     )
+    check destroys.load == 1 and live.load == 0
+    let states = e.statesSince("g", before)
+    check states.len >= 3 and states[^3] == msStopping and states[^2] == msError and
+      states[^1] == msError
     # The end of the cleanup leaves the instance in `error` with its cause.
     let v = e.view("g").tryGet
     check v.state == msError and v.failureOf == "cleanup-timeout"
-    var states: seq[ModuleState]
-    for c in e.changes():
-      if c.serial > before and c.view.instance == "g":
-        states.add(c.view.state)
-    # [G227] The end of the cleanup moves the realization from `unknown` to
-    # `absent`: one more commit, still `error`.
-    check states.len >= 3 and states[^3] == msStopping and states[^2] == msError and
-      states[^1] == msError
     # A later stop finds nothing left to clean: `unloaded`, failure cleared.
     let again = e.stop("g").tryGet
     check again.state == msUnloaded and again.failure.isNone
