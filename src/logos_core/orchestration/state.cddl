@@ -1,0 +1,21 @@
+; logos-core-nim.orchestrator-state.v1 (DECISIONS I94): the reference
+; orchestration module's retry accounting, one deterministic-CBOR value in
+; <state directory>/orchestrator-state.cbor, written by
+; orchestration/accounting.nim and nothing else.
+
+lcn_orch.state = {
+  format: "logos-core-nim.orchestrator-state.v1",
+  ? runtime_instance_id: tstr .size (1..128),
+  entries: [* lcn_orch.entry],
+}
+
+lcn_orch.entry = {
+  instance: tstr .size (1..128),
+  module: tstr .size (1..64),
+  intent_revision: uint64,
+  attempts: uint32,
+  calls: uint64,
+  ? last_call_at: uint64,
+  ? pending: uint64,
+  ? exhausted: true,
+}

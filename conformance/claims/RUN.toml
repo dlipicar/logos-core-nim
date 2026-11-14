@@ -63,25 +63,19 @@ default = "claimed"
 "RUN-0925" = "deferred:tier-4b"
 "RUN-0998" = "deferred:tier-4b"
 "RUN-1000" = "deferred:tier-4b"
-# Requirements on the orchestration module (TIER4-PLAN decision 5; RUNTIME l.72, l.187, l.194, l.3774,
-# l.3786, l.3803), which the host supplies until the default orchestration module of Tier 4b.
-"RUN-0021" = "deferred:tier-4b"
-"RUN-0025" = "deferred:tier-4b"
-"RUN-0684" = "deferred:tier-4b"
-"RUN-0685" = "deferred:tier-4b"
-"RUN-0686" = "deferred:tier-4b"
+# Requirements on the orchestration module (RUNTIME l.72, l.187, l.194, l.3774, l.3786, l.3803):
+# claimed with the reference orchestration module (I94, 4b-5b), except RUN-0696 (l.3803), whose
+# authority half is built and tested (tests/test_orchestration.nim, tests/test_orchestration_host.nim:
+# an execution refused for the origin's authority, an enforcement stop past its deadline, the
+# authority's loss under `recovery: true`); its permission half waits for permission enforcement
+# (4b-4) and the `permission_settings_changed` hint (4b-5c).
 "RUN-0696" = "deferred:tier-4b"
-"RUN-1063" = "deferred:tier-4b"
-"RUN-1065" = "deferred:tier-4b"
 # One MUST over three stop causes (l.3801): the authority stop is built and tested; the stops caused
 # by settings reconciliation and permission withdrawal come with permission enforcement (G110).
 "RUN-0914" = "deferred:tier-4b"
 "RUN-1066" = "deferred:tier-4b"
 # Six record kinds (l.2637): permission settings are not stored until permission enforcement (G229).
 "RUN-0923" = "deferred:tier-4b"
-# The engine's half (the revision guard after an explicit stop or shutdown) is tested; orchestration's
-# half comes with the default orchestration module (l.3790).
-"RUN-0687" = "deferred:tier-4b"
 # Remote transport, facades, enrollment, listeners and exports (Tier 5).
 "RUN-0092" = "deferred:tier-5"
 "RUN-0286" = "deferred:tier-5"

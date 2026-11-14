@@ -186,6 +186,21 @@ providers over local transport. What a consumer sees differently, and why:
   provider side cannot end one subscription of a session (K40), where a direct route's subscription
   ends (CA l.913-915).
 
+### What Tier 4b step 4b-5 changes
+
+Tier 4b step 4b-5 (DECISIONS I94) adds the reference orchestration module, `lcn_orchestrator`, so the
+**RUNTIME** entry changes: RUNTIME is claimed for the engine with the reference orchestration module,
+wherever a host names it in `orchestration` (logosd will, from step 4b-6); a host that names another
+module carries the duties `docs/HOST-CONFIG.md` lists under "Orchestration duties". The orchestration
+module's duties leave the deferred list: startup defaults (RUN-0025), acting only through its Runtime
+Control binding (RUN-0021), reconciliation and resumption (RUN-1063, RUN-1065), the restart policy
+and its accounting (RUN-0684 to RUN-0686) and the cancellation of pending recovery (RUN-0687) are
+claimed; the module's tests tag RUN-1064, RUN-0983 and RUN-1055 besides their inspection items.
+RUN-0696 (resumption once permissions or authority allow) stays `deferred:tier-4b`: its authority
+half is built and tested, its permission half comes with permission enforcement (4b-4) and step
+4b-5c. "The reference orchestration module" in `docs/HOST-CONFIG.md` documents its configuration, its
+state file and what it decides.
+
 ## Properties not claimed
 
 - Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
@@ -317,7 +332,7 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
 4. A hook does nothing until the Runtime's host selects it. In an in-process suite, that is a call by the
    test.
 
-The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable` and `loader`):
+The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader` and `orchestration`):
 
 - `host.setPolicyForTests`: the authority policy the next `start` installs.
 - `engine.loaderJournalForTests`: the Module Loader's request journal, kept in the engine's side table.
@@ -328,6 +343,11 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable` and `loader`
 - `engine.confirmTerminationForTests`: stands in for the protected mechanism that confirms a lost
   Loader's realizations are gone (RUNTIME l.3825; G249), which a deployment does by ending the host
   process.
+- `orchestration/testhooks.nim` (DECISIONS I94): `setOrchestratorFaultsForTests` and
+  `clearOrchestratorFaultsForTests` select faults in the reference orchestration module (the next
+  lifecycle answer dropped, as a crash would lose it; every state-file write failing; every event
+  dropped; a pause between a read and the guarded request it decided on, `openPauseGateForTests`),
+  and `callsForTests`, `callTimesForTests` and `targetsForTests` read its record of the calls it made.
 
 No deployment binary contains them.
 
