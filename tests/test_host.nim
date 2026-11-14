@@ -1112,7 +1112,9 @@ suite "run.host-api: structures and results (RUNTIME §13.1, §13.2, §13.4)":
     let path = work / "evidence.key"
     proc put(mode: int) =
       removeFile(path)
-      writeFile(path, cast[string](@sk))
+      # The byte overload: a seq cast to a string has no terminating NUL, and
+      # Windows writes a string with fprintf("%s"), which runs past its end.
+      writeFile(path, sk)
       check chmod(cstring(path), Mode(mode)) == 0
 
     var c = deployment()
@@ -1133,8 +1135,9 @@ suite "run.host-api: structures and results (RUNTIME §13.1, §13.2, §13.4)":
 
     removeFile(path)
     check refused("cannot be read")
-    put(0o644)
-    check refused("0600")
+    when not defined(windows): # [I85] the mode is checked on POSIX only
+      put(0o644)
+      check refused("0600")
     put(0o600)
     rt = create(c)
     check rt.auditRecords.len == 0

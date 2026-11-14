@@ -103,10 +103,11 @@ func deadline(
   ok(initDuration(milliseconds = int64(v)))
 
 func within(path, dir: string): bool =
-  ## `path` is `dir` or below it, lexically.
+  ## `path` is `dir` or below it, lexically. Normalizing leaves only the
+  ## platform's separator (`\` on Windows).
   let p = normalizedPath(path)
   let d = normalizedPath(dir)
-  p == d or p.startsWith(d.strip(leading = false, chars = {'/'}) & "/")
+  p == d or p.startsWith(d.strip(leading = false, chars = {DirSep}) & DirSep)
 
 func checkStore(c: HostConfig): Result[void, ConfigError] =
   ## [IMPL] The store directory holds `runtime-state.cbor`, its side records
