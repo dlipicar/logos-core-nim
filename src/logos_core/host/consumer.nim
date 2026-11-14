@@ -214,7 +214,9 @@ type
     done: bool
     ok: bool
     code: ErrorCode
-    message: cstring
+    message: cstring ## nil: none
+    detail: ptr UncheckedArray[uint8] ## nil: none
+    detailLen: int
     recheck: bool ## the session refused the request locally as INVALID_PARAMS
     value: ptr UncheckedArray[uint8]
     valueLen: int
@@ -461,16 +463,30 @@ proc newOutcome(): ptr Outcome =
 
 proc freeOutcome(o: ptr Outcome) =
   freeText(o.message)
+  freeBytes(o.detail)
   freeBytes(o.value)
   freeShared(o)
 
-proc failLocked(o: ptr Outcome, code: ErrorCode, message: string) =
-  if o == nil or o.done:
-    return
+proc setFailure(o: ptr Outcome, f: InvocationFailure) =
+  ## [SPEC INTERFACE §5.1, §5.2] A failure as it came: its code, and its
+  ## message and detail only when it has them, as a direct transported
+  ## handle gives them (`transported.nim`).
   o.done = true
   o.ok = false
-  o.code = code
-  o.message = sharedText(clip(message))
+  o.code = f.code
+  if f.message.isSome:
+    o.message = sharedText(clip(f.message.get))
+  if f.detail.isSome:
+    o.detail = sharedBytes(f.detail.get)
+    o.detailLen = f.detail.get.len
+
+proc failLocked(o: ptr Outcome, f: InvocationFailure) =
+  if o == nil or o.done:
+    return
+  o.setFailure(f)
+
+proc failLocked(o: ptr Outcome, code: ErrorCode, message: string) =
+  o.failLocked(InvocationFailure(code: code, message: Opt.some(message)))
 
 proc succeedLocked(o: ptr Outcome, value: openArray[byte]) =
   if o == nil or o.done:
@@ -489,6 +505,8 @@ proc failureOf(o: ptr Outcome): InvocationFailure =
   result = InvocationFailure(code: o.code)
   if o.message != nil:
     result.message = Opt.some($o.message)
+  if o.detail != nil:
+    result.detail = Opt.some(bytesOf(o.detail, o.detailLen))
 
 # The Runtime's admission ------------------------------------------------------------------
 
@@ -540,16 +558,16 @@ proc scheduleObserverLocked(l: ptr HLink) =
     retainLocked(l)
     post(Job(kind: jkObserver, link: l))
 
-proc decideLocked(c: ptr HAsync, code: ErrorCode, message: string): bool =
+proc decideLocked(c: ptr HAsync, f: InvocationFailure): bool =
   ## [SPEC INTERFACE l.2065-2071] The first terminal decision wins.
   if c.phase != apSubmitted:
     return false
   c.phase = apTerminal
-  c.o.done = true
-  c.o.ok = false
-  c.o.code = code
-  c.o.message = sharedText(clip(message))
+  (addr c.o).setFailure(f)
   true
+
+proc decideLocked(c: ptr HAsync, code: ErrorCode, message: string): bool =
+  c.decideLocked(InvocationFailure(code: code, message: Opt.some(message)))
 
 proc decideOkLocked(c: ptr HAsync, value: openArray[byte]): bool =
   if c.phase != apSubmitted:
@@ -571,6 +589,7 @@ proc freeAsync(c: ptr HAsync) =
   freeText(c.methodName)
   freeBytes(c.params)
   freeText(c.o.message)
+  freeBytes(c.o.detail)
   freeBytes(c.o.value)
   freeShared(c)
 
@@ -702,7 +721,7 @@ proc onResponse(
       elif o.ok:
         w.o.succeedLocked(o.result)
       else:
-        w.o.failLocked(o.failure.code, o.failure.message.get("the call failed"))
+        w.o.failLocked(o.failure)
       freeShared(w)
       return nil
     p = addr w.next
@@ -715,7 +734,7 @@ proc onResponse(
         elif o.ok:
           c.decideOkLocked(o.result)
         else:
-          c.decideLocked(o.failure.code, o.failure.message.get("the call failed"))
+          c.decideLocked(o.failure)
       if won:
         c.o.recheck = local and code == ecInvalidParams
         return c
@@ -916,9 +935,11 @@ proc runObserver(l: ptr HLink) =
       l.obsRunner = 0
       broadcast(cc)
 
-type Owned = object ## A completion's response and message, released by its owner.
+type Owned = object
+  ## A completion's response, message and detail, released by its owner.
   response: ptr UncheckedArray[uint8]
   message: cstring
+  detail: ptr UncheckedArray[uint8]
 
 proc ownedRelease(state: pointer) {.cdecl.} =
   let o = cast[ptr Owned](state)
@@ -926,6 +947,7 @@ proc ownedRelease(state: pointer) {.cdecl.} =
     return
   cFree(o.response)
   cFree(o.message)
+  cFree(o.detail)
   cFree(o)
 
 proc runCompletion(c: ptr HAsync) =
@@ -951,9 +973,7 @@ proc runCompletion(c: ptr HAsync) =
     response = o.response
     len = csize_t(c.o.valueLen)
   else:
-    var f = InvocationFailure(code: c.o.code)
-    if c.o.message != nil:
-      f.message = Opt.some($c.o.message)
+    var f = failureOf(addr c.o)
     if c.o.recheck:
       f = c.link.recheck($c.methodName, bytesOf(c.params, c.paramsLen), f)
     res.code = CErrorCode(ord(f.code))
@@ -964,6 +984,15 @@ proc runCompletion(c: ptr HAsync) =
         o.message[i] = ch
       o.message[t.len] = '\0'
       res.message = o.message
+    # [SPEC INTERFACE §5.1] As `status` and the Runtime's completions
+    # (`asynccall.nim`): an INVALID_PARAMS detail within the bound.
+    if f.code == ecInvalidParams and f.detail.isSome and f.detail.get.len > 0 and
+        f.detail.get.len <= MaxDetailBytes:
+      let d = f.detail.get
+      o.detail = cast[ptr UncheckedArray[uint8]](cMalloc(csize_t(d.len)))
+      copyMem(o.detail, unsafeAddr d[0], d.len)
+      res.detail = o.detail
+      res.detailLen = csize_t(d.len)
   c.complete(
     c.userData, res, response, len, LogosResponseOwner(state: o, release: ownedRelease)
   )
@@ -986,7 +1015,7 @@ proc runSubmit(c: ptr HAsync) =
     let f = l.recheck(bare, params, failureOf(a))
     var won: bool
     withLock cl:
-      won = c.decideLocked(f.code, f.message.get("the call was refused"))
+      won = c.decideLocked(f)
     if won:
       completeLater(c)
     return
