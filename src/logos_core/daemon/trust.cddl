@@ -1,0 +1,36 @@
+; logosd's trust input and its continuity record, and the binding of a
+; call-evidence key (Tier 4b step 4b-6; DECISIONS I95, G297, G299). Each is one
+; Logos deterministic-CBOR value in a file of its own; docs/DAEMON.md documents
+; them.
+
+; logos-core-nim.trust.v1, <session>/trust.cbor: the revisioned trust file
+; (G137; PACKAGE MANAGER l.395-400). development is D27's switch. Tier 5 adds
+; the package-signing anchors. Without the file the compiled-in floor applies:
+; revision 1, development false.
+lcn.trust_file = {
+  format: "logos-core-nim.trust.v1",
+  revision: uint64,
+  development: bool,
+}
+
+; logos-core-nim.trust-mark.v1, <session>/state/trust-mark.cbor: the highest
+; revision used and the digest of that revision's bytes (BLAKE3-256).
+lcn.trust_mark = {
+  format: "logos-core-nim.trust-mark.v1",
+  revision: uint64,
+  digest: bstr .size 32,
+}
+
+; logos-core-nim.evidence-key.v1, <session>/keys/evidence-<kid>.cbor: the
+; call-evidence key a kid names, and the one Runtime it signs for (CAPABILITY
+; AUTHORITY l.1265, l.1290). kid is the first 16 bytes of BLAKE3-256 of the
+; public key. A retired key keeps its binding, with retired_ms, and loses its
+; secret half.
+lcn.ev_key_binding = {
+  format: "logos-core-nim.evidence-key.v1",
+  kid: bstr .size 16,
+  runtime_instance_id: tstr .size (1..128),
+  public_key: bstr .size 48,
+  created_ms: uint64,
+  ? retired_ms: uint64,
+}

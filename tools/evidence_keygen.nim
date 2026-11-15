@@ -4,35 +4,27 @@
 ## secret-key bytes in a new file restricted to its owner (mode 0600) before
 ## they are written, and the 48-byte public key printed in hex for the
 ## verifiers' trust input. An evidence key is never a package signing key
-## (CAP-0401): `lcn-pkg keygen` makes those.
+## (CAP-0401): `lcn-pkg keygen` makes those. Under logosd, `logosctl init`
+## makes the key and its binding instead (docs/DAEMON.md).
 ##
 ##   nim c -r tools/evidence_keygen.nim /abs/path/evidence.key
 
-import std/[os, posix]
+import std/os
 import ../src/logos_core/base/hex
-import ../src/logos_core/crypto/slhdsa
+import ../src/logos_core/runtime/evidence
 
 proc main(): int =
   if paramCount() != 1 or not isAbsolute(paramStr(1)):
     stderr.writeLine "usage: evidence_keygen ABSOLUTE-PATH"
     return 2
   let path = paramStr(1)
-  var (sk, pk) = generateKeyPair().valueOr:
+  var (sk, pk) = generateEvidenceKey().valueOr:
     stderr.writeLine error
     return 1
   defer:
     sk.clear()
-  # Created exclusively with mode 0600, then written.
-  let fd = posix.open(cstring(path), O_WRONLY or O_CREAT or O_EXCL, Mode(0o600))
-  if fd < 0:
-    stderr.writeLine path &
-      " cannot be created (it may exist; a key is never overwritten)"
-    return 1
-  let n = posix.write(fd, addr sk[0], SecretKeyBytes)
-  discard posix.close(fd)
-  if n != SecretKeyBytes:
-    stderr.writeLine "the key could not be written"
-    discard tryRemoveFile(path)
+  writeEvidenceKeyFile(path, sk).isOkOr:
+    stderr.writeLine error
     return 1
   echo "public key: ", pk.toHex
   0

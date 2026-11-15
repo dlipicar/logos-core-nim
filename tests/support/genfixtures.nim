@@ -310,6 +310,50 @@ proc generatedHostConfigTypes*(): Result[string, string] =
     err(e.msg)
 
 const
+  daemonConfigTypesPath* = "src/logos_core/daemon/daemon_config_types.nim"
+  daemonConfigPrimary* = "src/logos_core/daemon/daemon_config.cddl"
+  trustTypesPath* = "src/logos_core/daemon/trust_types.nim"
+  trustPrimary* = "src/logos_core/daemon/trust.cddl"
+
+proc daemonConfigDocument*(): string {.raises: [IOError].} =
+  ## logosd's configuration schema, then the host configuration and authority
+  ## policy schemas whose rules it reuses (DECISIONS G293): one primary
+  ## document, since all three use the `lcn` namespace.
+  readFile(daemonConfigPrimary) & "\n" & hostConfigDocument()
+
+proc generatedDaemonConfigTypes*(): Result[string, string] =
+  ## `logos-core-nim.daemon-config.v1`'s types (G293), for `daemon/`.
+  try:
+    let set = ?acceptContractSet(daemonConfigDocument(), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(
+        importPrefix: "../",
+        schemaAccessor: "daemonConfigSchema",
+        documentsAccessor: "daemonConfigDocuments",
+      ),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedTrustTypes*(): Result[string, string] =
+  ## The trust file, its mark and the evidence key binding (G297, G299).
+  try:
+    let set = ?acceptContractSet(readFile(trustPrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(
+        importPrefix: "../",
+        schemaAccessor: "trustSchema",
+        documentsAccessor: "trustDocuments",
+      ),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+const
   storeTypesPath* = "src/logos_core/runtime/store_types.nim"
   storePrimary* = "src/logos_core/runtime/store.cddl"
 

@@ -1406,3 +1406,124 @@ suite "run.authority: routed calls to the authority (CA l.88-91, l.579; S8b-1 in
     check got[0].consumer == Orch
     h.release()
     e.finish()
+
+# Remote listeners and exports (K19 interim; DECISIONS G298) ----------------------------
+
+proc tlsAddress(): CborValue =
+  cborMap(
+    (cbor("transport"), cbor("tls-tcp")),
+    (cbor("host"), cbor("listener.example")),
+    (cbor("port"), cbor(443'u64)),
+  )
+
+proc listenerReq(): seq[byte] =
+  encodeCbor(
+    cborMap(
+      (
+        cbor("listener"),
+        cborMap(
+          (cbor("address"), tlsAddress()),
+          (cbor("enabled"), cbor(true)),
+          (cbor("runtime_control_enabled"), cbor(false)),
+        ),
+      )
+    )
+  )
+
+proc exportReq(provider: string, runtime = Opt.none(string)): seq[byte] =
+  var p = @[(cbor("provider"), cbor(provider))]
+  if runtime.isSome:
+    p.add((cbor("runtime_instance_id"), cbor(runtime.get)))
+  encodeCbor(
+    cborMap(
+      (
+        cbor("export"),
+        cborMap(
+          (cbor("listener"), tlsAddress()),
+          (cbor("provider"), cborMap(p)),
+          (cbor("enabled"), cbor(true)),
+        ),
+      )
+    )
+  )
+
+suite "run.authority: remote listeners and exports without remote transport (K19 interim; G298)":
+  test "[RUN-0346] [IMPL-DECISION G298] the four remote methods are authorized before anything else; a denied consumer is NOT_AUTHORISED (RUNTIME l.1626)":
+    let (e, orch) = ready()
+    let pid = e.view(Meter).tryGet.providerId
+    check pid.len > 0
+    let calls = @[
+      ("list_remote_listeners", @[0xA0'u8]),
+      ("list_provider_exports", @[0xA0'u8]),
+      ("set_remote_listener", listenerReq()),
+      ("set_provider_export", exportReq(pid)),
+    ]
+    for (m, params) in calls:
+      checkpoint m
+      setScript(
+        rule(
+          vDeny,
+          "rc:" & m,
+          code = ord(LogosNSCapabilityAuthorityDenialCodeKind.Not_granted),
+        )
+      )
+      let before = e.answers().len
+      check rcCall(orch, m, params).code == ecNotAuthorised
+      check e.answers().len > before # an evaluation was made
+      check e.last.request.operation == m
+      check e.last.outcome == azDeny
+    # An unknown provider is the same non-revealing NOT_AUTHORISED (l.3439).
+    setScript()
+    check rcCall(orch, "set_provider_export", exportReq("p-unknown")).code ==
+      ecNotAuthorised
+    e.finish()
+
+  test "[RUN-0346] [IMPL-DECISION G298] allowed: the lists are empty pages, a cursor is refused; set_provider_export is INVALID_PARAMS; set_remote_listener is MODULE_ERROR (RUNTIME l.3372, l.3391, l.3438, l.3441-3442)":
+    let (e, orch) = ready()
+    setScript()
+    let pid = e.view(Meter).tryGet.providerId
+    let listeners = rcCall(orch, "list_remote_listeners", [0xA0'u8])
+    check listeners.code == ecOk
+    let l =
+      LogosNSRuntimeControlListRemoteListenersResponse.decode(listeners.response).tryGet
+    check l.listeners.len == 0 and l.next_cursor.isNone
+    let exports = rcCall(orch, "list_provider_exports", [0xA0'u8])
+    check exports.code == ecOk
+    let x =
+      LogosNSRuntimeControlListProviderExportsResponse.decode(exports.response).tryGet
+    check x.exports.len == 0 and x.next_cursor.isNone
+    let cursor = encodeCbor(cborMap((cbor("cursor"), cbor("c-1"))))
+    for m in ["list_remote_listeners", "list_provider_exports"]:
+      checkpoint m
+      let r = rcCall(orch, m, cursor)
+      check r.code == ecInvalidParams
+      check r.detail.len == 0
+    let ex = rcCall(orch, "set_provider_export", exportReq(pid))
+    check ex.code == ecInvalidParams
+    check ex.detail.len == 0 # a semantic input error carries no detail (l.3440)
+    let foreign =
+      rcCall(orch, "set_provider_export", exportReq(pid, Opt.some("another-runtime")))
+    check foreign.code == ecInvalidParams
+    let li = rcCall(orch, "set_remote_listener", listenerReq())
+    check li.code == ecModule
+    check li.message == "remote transport is not supported by this Runtime"
+    check li.detail.len == 0
+    e.finish()
+
+  test "[RUN-0346] [IFC-0416] a malformed request is INVALID_PARAMS with its detail; set_remote_listener, naming no target, is authorized first (G171 interim)":
+    let (e, orch) = ready()
+    setScript(
+      rule(
+        vDeny,
+        "rc:set_remote_listener",
+        code = ord(LogosNSCapabilityAuthorityDenialCodeKind.Not_granted),
+      )
+    )
+    check rcCall(orch, "set_remote_listener", [0xA0'u8]).code == ecNotAuthorised
+    setScript()
+    for m in ["set_remote_listener", "set_provider_export"]:
+      checkpoint m
+      let r = rcCall(orch, m, [0xA0'u8])
+      check r.code == ecInvalidParams
+      check r.detail.len > 0
+    e.finish()

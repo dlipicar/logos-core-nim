@@ -132,8 +132,12 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     let broken = rcCall(rc, "get_self", [0xFF'u8])
     check broken.code == ecInvalidParams
     check rcCall(rc, "start_module", [0xA0'u8]).code == ecInvalidParams
-    # A method of the contract this Runtime does not perform yet [IMPL].
-    check rcCall(rc, "list_remote_listeners", [0xA0'u8]).code == ecModule
+    # [K19 interim; G298] A remote method is checked and authorized like the
+    # others; without remote transport its list is an empty page.
+    let listeners = rcCall(rc, "list_remote_listeners", [0xA0'u8])
+    check listeners.code == ecOk
+    check LogosNSRuntimeControlListRemoteListenersResponse.decode(listeners.response).tryGet.listeners.len ==
+      0
     var len: csize_t
     let empty = [0xA0'u8]
     let r = rc.vtable.call(

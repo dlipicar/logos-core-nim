@@ -381,8 +381,10 @@ proc rcRequest(
   ## method: METHOD_NOT_FOUND for a name the contract does not declare,
   ## INVALID_PARAMS with its detail for bytes that are not a value of the
   ## method's request schema (a configuration value over 8 MiB included,
-  ## CFG-0025). A method this Runtime does not perform yet is MODULE_ERROR
-  ## [IMPL]. A staged configuration value is taken out into `value`: it stays
+  ## CFG-0025). [K19 interim; G298] The four remote listener and export
+  ## methods are decoded like the others and answered after their
+  ## authorization (`engine.remoteList`, `engine.setExport`). A method this
+  ## Runtime does not perform yet is MODULE_ERROR [IMPL]. A staged configuration value is taken out into `value`: it stays
   ## on this thread (I87).
   let declaration = RcNamespace & bare & "_request"
   if bare.len == 0 or not rcSchema().declares(declaration) or
@@ -522,6 +524,20 @@ proc rcRequest(
   of $rmApplyConfiguration:
     var c = call(rmApplyConfiguration)
     c.cfgApply = fromChecked(LogosNSRuntimeControlApplyConfigurationRequest, v)
+    ok(c)
+  of $rmListRemoteListeners:
+    var c = call(rmListRemoteListeners)
+    c.listListeners = fromChecked(LogosNSRuntimeControlListRemoteListenersRequest, v)
+    ok(c)
+  of $rmSetRemoteListener:
+    ok(call(rmSetRemoteListener))
+  of $rmListProviderExports:
+    var c = call(rmListProviderExports)
+    c.listExports = fromChecked(LogosNSRuntimeControlListProviderExportsRequest, v)
+    ok(c)
+  of $rmSetProviderExport:
+    var c = call(rmSetProviderExport)
+    c.setExport = fromChecked(LogosNSRuntimeControlSetProviderExportRequest, v)
     ok(c)
   else:
     err(

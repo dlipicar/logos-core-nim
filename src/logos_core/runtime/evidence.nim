@@ -293,6 +293,49 @@ proc exportRecord*(
 
 # The key file -----------------------------------------------------------------------------
 
+proc generateEvidenceKey*(): Result[(SecretKey, PublicKey), string] =
+  ## [SPEC CA l.1272-1276; CAP-0402] A fresh call-evidence key pair: FIPS 205
+  ## SLH-DSA-SHA2-192s key generation with seeds from the operating-system
+  ## CSPRNG. An evidence key is never a package signing key (CAP-0401).
+  generateKeyPair()
+
+func evidencePublicKey*(key: SecretKey): PublicKey =
+  ## [SPEC PM §4.3] The public half a secret key holds: `PK.seed || PK.root`.
+  for i in 0 ..< PublicKeyBytes:
+    result[i] = key[2 * N + i]
+
+proc writeEvidenceKeyFile*(path: string, key: SecretKey): Result[void, string] =
+  ## [IMPL; G149] Writes `key`'s 96 bytes to a new file at `path`, created
+  ## exclusively with mode 0600 before anything is written, so the key is
+  ## never readable by others and an existing file is never overwritten.
+  ## The file `loadEvidenceKey` reads.
+  if not isAbsolute(path):
+    return err("the evidence key file is not an absolute path")
+  when defined(windows):
+    var f: File
+    if not open(f, path, fmWrite):
+      return err(path & " cannot be created")
+    let n =
+      try:
+        writeBuffer(f, unsafeAddr key[0], SecretKeyBytes)
+      except IOError:
+        -1
+    close(f)
+    if n != SecretKeyBytes:
+      return err("the evidence key could not be written")
+  else:
+    let fd =
+      posix.open(cstring(path), O_WRONLY or O_CREAT or O_EXCL or O_CLOEXEC, Mode(0o600))
+    if fd < 0:
+      return err(path & " cannot be created (it may exist; a key is never overwritten)")
+    let n = posix.write(fd, unsafeAddr key[0], SecretKeyBytes)
+    let synced = fsync(fd) == 0
+    discard posix.close(fd)
+    if n != SecretKeyBytes or not synced:
+      discard posix.unlink(cstring(path))
+      return err("the evidence key could not be written")
+  ok()
+
 proc loadEvidenceKey*(path: string): Result[SecretKey, string] =
   ## [SPEC CA l.1272-1276; plan §2.15] The FIPS 205 SLH-DSA-SHA2-192s secret
   ## key in `path`: an absolute path to a regular file (not a link) of exactly

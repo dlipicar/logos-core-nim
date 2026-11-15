@@ -12,6 +12,10 @@ proc main() =
   echo rcTypesPath
   writeFile(hostConfigTypesPath, generatedHostConfigTypes().get)
   echo hostConfigTypesPath
+  writeFile(daemonConfigTypesPath, generatedDaemonConfigTypes().get)
+  echo daemonConfigTypesPath
+  writeFile(trustTypesPath, generatedTrustTypes().get)
+  echo trustTypesPath
   writeFile(storeTypesPath, generatedStoreTypes().get)
   echo storeTypesPath
   writeFile(carrierTypesPath, generatedCarrierTypes().get)
