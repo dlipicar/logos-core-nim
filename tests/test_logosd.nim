@@ -3,7 +3,8 @@
 ## shutdown by signal and by command, a restart after kill -9, the
 ## development switch and its banner, trust continuity, the offline writers'
 ## lock, concurrent shells, retirement, the socket path's limits, a Loader
-## loss, and a key bound to another Runtime.
+## loss, a key bound to another Runtime, and the call-evidence store's
+## commands.
 ##
 ## The children are built for the suite's variant (`daemonbuild.nim`): logosd
 ## with test hooks, logosctl without. They run with `posix_spawn`, their
@@ -12,18 +13,25 @@
 ## stderr when it is not 0.
 
 when defined(posix):
-  import std/[json, monotimes, os, strutils, times]
+  import std/[json, monotimes, os, sequtils, strutils, times]
   import unittest2
   import ../src/logos_core/cbor
   import ../src/logos_core/crypto/blake3
   import
-    ../src/logos_core/daemon/
-      [config, daemon_config_types, evkey, session, sessioninit, trust_types, trustfile]
+    ../src/logos_core/daemon/[
+      config, daemon_config_types, evkey, evstore, session, sessioninit, trust_types,
+      trustfile,
+    ]
+  from ../src/logos_core/runtime/evidence import
+    newEvidenceContext, accept, verifyEvidence
+  from ../src/logos_core/authority/scopes import encode
   from ../src/logos_core/daemon/supervise import heldLocks
   from ../src/logos_core/iface/accept import acceptContractSet
   from ../src/logos_core/durable import writeAtomic, removeIfPresent
   import
-    ./support/[daemonbuild, daemonproc, kitbuild, modulehostbuild, shortdir, slowdown]
+    ./support/[
+      daemonbuild, daemonproc, evfixture, kitbuild, modulehostbuild, shortdir, slowdown
+    ]
 
   import std/posix
 
@@ -659,6 +667,91 @@ when defined(posix):
       discard waitExit(sh, StopMs)
       check hostsGone()
       check heldLocks(c.s.workDir).len == 0
+
+    test "[CAP-0415] [CAP-0416] [CAP-0417] [IMPL-DECISION G301] the call-evidence store: one daemon-config change turns it on and logosd opens it; audit evidence ls lists what the store's API wrote, export --seq N writes call evidence that verifies, to a new 0600 file or to a pipe; an existing file and a reaped seq are refused":
+      let c = newCase()
+      check c.initDefault().code == 0
+      let k = listEvidenceKeys(c.s.keysDir).expect("keys")[0]
+      let rid = k.binding.runtime_instance_id
+      c.editConfig(
+        proc(dc: var LcnDaemonConfig) =
+          dc.call_audit = Opt.some(
+            LcnDcCallAudit(
+              evidence: Opt.some(
+                LcnAppEvidenceKey(kid: k.binding.kid, secret_key_file: k.keyFile)
+              ),
+              store: Opt.some(LcnDcEvidenceStore()),
+            )
+          )
+      )
+      let d = c.start()
+      c.expectReady(d)
+      check stopped(d) == 0
+      check "call-evidence store: boot 1, next seq 0" in d.errText
+      check segmentNames(c.s.evidenceDir).mapIt(it[0]) == @[0'u64]
+      # Records as logosd's store keeps them, written through its API while
+      # logosd is stopped (no call here retains one).
+      let records = (0 ..< 3).mapIt(meterCallRecordBytes(rid, "d-" & $it, uint64(it)))
+      var o = StoreOptions(
+        dir: c.s.evidenceDir,
+        producer: rid,
+        kid: k.binding.kid,
+        maxRecords: 1_000,
+        maxAgeDays: 30,
+        queue: 64,
+      )
+      var st = openStore(o).expect("the store")
+      check st.boot == 2
+      for i, r in records:
+        st.offer(uint64(i), r)
+      closeStore(st)
+      let (code, j) = c.ctlJson("audit", "evidence", "ls")
+      check code == 0
+      let segs = j{"result", "segments"}.getElems
+      check segs.len == 1
+      if segs.len == 1:
+        check segs[0]{"records"}.getInt == 3
+        check segs[0]{"end_seq"}.getInt == 3
+        check segs[0]{"producer"}.getStr == rid
+        check segs[0]{"boot"}.getInt == 2
+      var ctx = newEvidenceContext()
+      check ctx.accept(k.binding.kid, rid, k.binding.public_key).isOk
+      proc verifies(bytes: string, want: seq[byte]): bool =
+        let v = verifyEvidence(bytes.toOpenArrayByte(0, bytes.high), ctx)
+        if v.isErr:
+          checkpoint(v.error)
+          return false
+        v.get.producer == rid and v.get.proofs.isNone and
+          encode(v.get.record).expect("an encoding") == want
+
+      let outFile = c.dir / "seq1.cose"
+      let wrote = c.ctl("audit", "evidence", "export", "--seq", "1", "--out", outFile)
+      check wrote.code == 0
+      check ("written to " & outFile) in wrote.stdout
+      var fst: Stat
+      check stat(cstring(outFile), fst) == 0
+      check (int(fst.st_mode) and 0o777) == 0o600
+      check verifies(readFile(outFile), records[1])
+      let again = c.ctl("audit", "evidence", "export", "--seq", "1", "--out", outFile)
+      check again.code == 1
+      check "exists" in again.stderr
+      # stdout is a file here, not a terminal: the container itself.
+      let piped = runOnce(
+        ctlExe,
+        @["--session-dir", c.s.dir, "audit", "evidence", "export", "--seq", "2"],
+        c.dir,
+        timeoutMs = 120_000 * Slow,
+      )
+      check piped.code == 0
+      check verifies(piped.stdout, records[2])
+      # Reaped: an open bounded to one seq drops the older segment.
+      o.maxRecords = 1
+      closeStore(openStore(o).expect("the store"))
+      let reaped =
+        c.ctl("audit", "evidence", "export", "--seq", "1", "--out", outFile & ".2")
+      check reaped.code == 1
+      check "seq 1 is not retained" in reaped.stderr
+      check not fileExists(outFile & ".2")
 else:
   import unittest2
 

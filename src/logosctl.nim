@@ -12,7 +12,9 @@
 ## renders the responses' CBOR (G89). Offline commands read the session, and
 ## those that write hold its lock, so they are refused while logosd runs.
 ## Policy, grants and trust change through no online command (BOOTSTRAP
-## l.380-382): only the owner's files, offline.
+## l.380-382): only the owner's files, offline. `audit evidence` reads the
+## call-evidence store and exports a record as call evidence, offline and
+## read-only, while logosd runs or not (G301; DAEMON.md §9).
 ##
 ## | Exit | Meaning |
 ## |---|---|
@@ -47,8 +49,10 @@ when defined(posix):
   import ./logos_core/iface/outcome
   import ./logos_core/runtime/rc_types
   import
-    ./logos_core/daemon/
-      [compose, ctlwire, evkey, render, session, sessioninit, trustfile]
+    ./logos_core/daemon/[
+      compose, ctlwire, evexport, evkey, evstore, render, session, sessioninit,
+      trustfile,
+    ]
 
   const
     Usage =
@@ -81,6 +85,8 @@ offline (the session's files; writers hold its lock):
   trust development on|off
   trust reestablish --revision N
   trust evidence-keys ls|rotate
+  audit evidence ls
+  audit evidence export --seq N [--out FILE]
   version"""
     DefaultTimeoutMs = 65_000
     ExitOk = 0
@@ -113,6 +119,7 @@ offline (the session's files; writers hold its lock):
       requestKey: string
       result: JsonNode
       text: string
+      raw: bool ## the bytes went to stdout themselves: nothing else is printed
 
   func fail(exit: int, message: string, code = ""): Fail =
     Fail(exit: exit, message: message, code: code)
@@ -1128,6 +1135,111 @@ offline (the session's files; writers hold its lock):
     else:
       err(usage("unknown trust command " & sub))
 
+  # Call evidence ------------------------------------------------------------------------
+
+  proc segmentsJson(xs: seq[SegmentSummary]): (JsonNode, string) =
+    var a = newJArray()
+    var rows: seq[seq[string]]
+    for x in xs:
+      let producer = if x.header.isSome: x.header.get.producer else: ""
+      let kid =
+        if x.header.isSome:
+          toHex(x.header.get.kid).toLowerAscii
+        else:
+          ""
+      let boot =
+        if x.header.isSome:
+          $x.header.get.boot
+        else:
+          ""
+      a.add(
+        %*{
+          "segment": x.name,
+          "first_seq": x.first,
+          "end_seq": x.endSeq,
+          "records": x.records,
+          "gaps": x.gaps,
+          "dropped": x.dropped,
+          "producer": producer,
+          "kid": kid,
+          "boot": (if x.header.isSome: %x.header.get.boot else: newJNull()),
+          "damaged": x.damaged,
+        }
+      )
+      rows.add(
+        @[
+          x.name,
+          $x.first,
+          $x.endSeq,
+          $x.records,
+          $x.dropped & (if x.damaged: " (damaged tail)" else: ""),
+          producer,
+          kid,
+          boot,
+        ]
+      )
+    (
+      a,
+      table(
+        [
+          "SEGMENT", "FIRST_SEQ", "END_SEQ", "RECORDS", "DROPPED", "PRODUCER", "KID",
+          "BOOT",
+        ],
+        rows,
+      ),
+    )
+
+  proc writeStdout(data: openArray[byte]): Result[void, Fail] =
+    try:
+      if data.len > 0:
+        if stdout.writeBuffer(unsafeAddr data[0], data.len) != data.len:
+          return err(fail(ExitUsage, "stdout: a short write"))
+      flushFile(stdout)
+      ok()
+    except IOError as e:
+      err(fail(ExitUsage, "stdout: " & e.msg))
+
+  proc cmdAudit(c: Cli, s: Session): Result[Done, Fail] =
+    let sub = ?c.arg(1, "an audit command")
+    if sub != "evidence":
+      return err(usage("unknown audit command " & sub))
+    let op = ?c.arg(2, "ls or export")
+    case op
+    of "ls":
+      let xs = summarize(s.evidenceDir).valueOr:
+        return err(fail(ExitUsage, error))
+      let (j, text) = segmentsJson(xs)
+      ok(s.offline("audit evidence ls", %*{"segments": j}, text))
+    of "export":
+      let seqNo = ?c.uintOpt("seq")
+      if seqNo.isNone:
+        return err(usage("audit evidence export needs --seq N"))
+      let outPath = c.opt("out")
+      if outPath.isNone and isatty(1) != 0:
+        return err(
+          fail(
+            ExitUsage,
+            "call evidence is not written to a terminal: use --out FILE or a pipe",
+          )
+        )
+      let container = exportStored(s, seqNo.get).valueOr:
+        return err(fail(ExitUsage, error.message))
+      if outPath.isSome:
+        ?writeOut(outPath.get, container)
+        return ok(
+          s.offline(
+            "audit evidence export",
+            %*{"seq": seqNo.get, "out": outPath.get, "bytes": container.len},
+            "seq " & $seqNo.get & ": call evidence written to " & outPath.get,
+          )
+        )
+      ?writeStdout(container)
+      var d = s.offline("audit evidence export", newJNull(), "")
+      d.raw = true
+      ok(d)
+    else:
+      err(usage("unknown audit evidence command " & op))
+
   # Main --------------------------------------------------------------------------------
 
   proc parse(): Result[Cli, Fail] =
@@ -1161,6 +1273,8 @@ offline (the session's files; writers hold its lock):
     ok(c)
 
   proc emit(c: Cli, d: Done) =
+    if d.raw:
+      return
     if c.json:
       show(
         $envelope(d.deployment, d.command, true, requestKey = d.requestKey).withResult(
@@ -1201,6 +1315,8 @@ offline (the session's files; writers hold its lock):
         cmdInit(c, s)
       of "trust":
         cmdTrust(c, s)
+      of "audit":
+        cmdAudit(c, s)
       of "daemon":
         if c.args.len > 1 and c.args[1] == "config":
           cmdDaemonConfig(c, s)
@@ -1212,7 +1328,7 @@ offline (the session's files; writers hold its lock):
         online(c, s)
     if r.isErr:
       let deployment =
-        if c.args[0] in ["init", "trust"]:
+        if c.args[0] in ["init", "trust", "audit"]:
           offlineDeployment(s)
         else:
           "unknown"
