@@ -349,7 +349,8 @@ var
   depth: int
   workers: ptr Workers
   timerOn: bool ## under `cl`
-  timerMade: bool ## under `cl`: `timer` was started once
+  timerMade: bool ## under `cl`: `timer` was started and not yet joined
+  timerStop: bool ## under `cl`: the release ends the timer and arms no other
   timer: Thread[void]
 
 # Workers --------------------------------------------------------------------------------
@@ -1102,6 +1103,9 @@ proc timerMain() {.thread.} =
     var cancels: seq[(uint64, uint64)]
     var any = false
     withLock cl:
+      if timerStop:
+        timerOn = false
+        return
       let now = getMonoTime()
       var l = links
       while l != nil:
@@ -1128,7 +1132,7 @@ proc timerMain() {.thread.} =
     sleep(TimerStepMs)
 
 proc armTimerLocked() =
-  if timerOn:
+  if timerOn or timerStop:
     return
   if timerMade:
     # The previous timer returned once it had nothing to watch: it is joined
@@ -1774,6 +1778,19 @@ proc zeroOutcome(o: ptr Outcome) =
     secureZero(o.message, o.message.len)
   secureZero(o.detail, o.detailLen)
   secureZero(o.value, o.valueLen)
+
+proc stopConsumerTimer*() =
+  ## Lifecycle thread, at the release, after `_MODULE_destroy` [DECISIONS I92]:
+  ## the timer ends at its next look and is joined outside `cl`, which it
+  ## takes to look. A timer that returned was joined only by the next arm, so
+  ## the last one would outlive the release unjoined.
+  var made = false
+  withLock cl:
+    timerStop = true
+    made = timerMade
+    timerMade = false
+  if made:
+    joinThread(timer)
 
 proc wipeConsumer*() =
   ## Lifecycle thread, at the release, after `_MODULE_destroy` and before the

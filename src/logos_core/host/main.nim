@@ -225,7 +225,10 @@ proc release(life: var Lifecycle, m: LcnCarrierRelease) =
     awaitCallbacks()
     life.binding.destroy(life.context)
     life.context = nil
+    stopConsumerTimer()
     wipeConsumer() # [DECISIONS G276] what the module never released
+  else:
+    stopConsumerTimer() # a call `_MODULE_init` prepared may have armed it
   life.phase = phReleased
   hs.stopping.store(true)
   send(toMessage(LcnCarrierReleased(id: m.id)))
