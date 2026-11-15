@@ -188,6 +188,9 @@ type
     hostedEndpoint: EndpointId
       ## [RUN-0200; G273] a hosted provider's endpoint, made before its host
       ## was spawned; 0: none
+    hostedPath: string
+      ## the path of `hostedEndpoint` as made, which its Loader record names
+      ## even after shutdown stopped it serving (RUNTIME l.3846-3849)
 
   Waiter = object
     reply: ReplyChannel
@@ -3912,6 +3915,7 @@ proc realizeThroughLoader(st: State, a: Attempt) =
         st.diagnose("the endpoint of " & x.id & " cannot be made: " & error)
         fail("the provider's endpoint cannot be made")
       a.hostedEndpoint = id
+      a.hostedPath = e.ep.path
       h.setEndpoint(e.ep.listener, e.ep.path, st.runtimeId, st.shared.tport.config).isOkOr:
         st.diagnose("the endpoint of " & x.id & " cannot be handed over: " & error)
         fail("the provider's endpoint cannot be handed over")
@@ -9473,11 +9477,13 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
           rec.realization,
         )
     # [SPEC LOADER §5.3, l.479-480] A hosted provider's record names the
-    # endpoint the Runtime made for it; every other record names none.
-    let made = st.sv.endpoints.getOrDefault(a.hostedEndpoint)
+    # endpoint the Runtime made for it; every other record names none. The
+    # path is the one made: a shutdown that began while `realize` ran has
+    # stopped the endpoint already (RUNTIME l.3846-3849), which is no fault
+    # of the Loader's, and `adoptRealization` then fails the attempt.
     let expected =
-      if a.hostedEndpoint != 0 and made != nil:
-        Opt.some(made.ep.path)
+      if a.hostedEndpoint != 0:
+        Opt.some(a.hostedPath)
       else:
         Opt.none(string)
     if rec.providerEndpoint != expected:

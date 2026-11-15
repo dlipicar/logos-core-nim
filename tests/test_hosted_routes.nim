@@ -476,6 +476,33 @@ when defined(posix):
       check noHostLeft()
       e.finish()
 
+    test "[RUN-0705] [RUN-1074] P-5b a shutdown accepted while a hosted provider's realize reply is held stops its endpoint at once; the reply that then names it is no Loader failure: the attempt fails and nothing is left":
+      # Tier 4b step 4b-6 (test_logosd's unclean-end case found it): the
+      # record names the endpoint made for it, which shutdown has stopped.
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.create(hostedMeter(), "hm").tryGet
+      var t: Thread[(Engine, string)]
+      check e.stalledStart("hm", t)
+      let path = e.hostedEndpointForTests("hm")
+      check path.isSocket
+      e.requestShutdown()
+      # [SPEC RUNTIME l.3846-3849] Shutdown's first step: no endpoint serves.
+      check waitUntil(
+        proc(): bool =
+          not path.isSocket
+      )
+      e.releaseLoaderStallForTests()
+      joinThread(t)
+      check startReply.load != ord(msReady)
+      check e.awaitShutdown().isOk
+      check not e.diagnostics().anyIt("invalid response" in it)
+      check not e.diagnostics().anyIt("Module Loader has failed" in it)
+      check e.view("hm").tryGet.state != msReady
+      check noHostLeft()
+      e.finish()
+
     test "[IMPL-DECISION G272] R10 a direct routing rule meeting a hosted end: establish_route is NOT_READY with the reason":
       var cfg = hosted()
       cfg.routing = @[RoutingRule(callee: MeterModule, mode: rmDirect)]
