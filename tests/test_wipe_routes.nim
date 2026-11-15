@@ -278,7 +278,9 @@ proc matrix(h: var LogosRouteHandle, local = true) =
   wipe(b)
   check r.code == ecOk
   wipe(r)
-  var held: seq[byte]
+  # Initialized: under ORC a local declared without an initializer and first
+  # written in a branch is not destroyed by its next write (nim-lang/Nim#26725).
+  var held: seq[byte] = @[]
   if local:
     held = vaultHolds(int(Slot))
     check held == canary
