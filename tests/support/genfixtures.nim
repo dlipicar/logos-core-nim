@@ -354,6 +354,26 @@ proc generatedTrustTypes*(): Result[string, string] =
     err(e.msg)
 
 const
+  evstoreTypesPath* = "src/logos_core/daemon/evstore_types.nim"
+  evstorePrimary* = "src/logos_core/daemon/evstore.cddl"
+
+proc generatedEvstoreTypes*(): Result[string, string] =
+  ## The call-evidence store's entries (G301).
+  try:
+    let set = ?acceptContractSet(readFile(evstorePrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(
+        importPrefix: "../",
+        schemaAccessor: "evstoreSchema",
+        documentsAccessor: "evstoreDocuments",
+      ),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+const
   ctlTypesPath* = "src/logos_core/daemon/ctl_types.nim"
   ctlPrimary* = "src/logos_core/daemon/ctl.cddl"
   logosctlTypesPath* = "src/logos_core/daemon/logosctl_types.nim"

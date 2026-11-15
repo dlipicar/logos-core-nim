@@ -1,0 +1,30 @@
+; logos-core-nim.evidence-store.v1: logosd's call-evidence store (Tier 4b step
+; 4b-6; DECISIONS G301). <session>/state/evidence/ holds segments named
+; seg-<the first seq, 20 digits>.lcr. A segment is a sequence of entries, each
+; a 4-byte big-endian length, then one Logos deterministic-CBOR lcn.ev_entry.
+; Its first entry is its header; then records and gaps, in seq order.
+; docs/DAEMON.md §9.
+lcn.ev_entry = lcn.ev_header / lcn.ev_record / lcn.ev_gap
+
+; Who wrote the segment: the Runtime whose invocation boundary made its
+; records, the kid of the evidence key configured when the store opened, and
+; that open's number, counted from 1.
+lcn.ev_header = {
+  format: "logos-core-nim.evidence-store.v1",
+  producer: tstr .size (1..128),
+  kid: bstr .size 16,
+  boot: uint64,
+}
+
+; One call record as the Runtime retained it (a CAPABILITY AUTHORITY
+; audit_record in deterministic CBOR), and when the store was handed it.
+lcn.ev_record = {
+  seq: uint64,
+  at_ms: uint64,
+  record: bstr .size (1..1048576),
+}
+
+; Records the store dropped because its queue was full: count seqs from first.
+lcn.ev_gap = {
+  gap: { first: uint64, count: uint64 },
+}
