@@ -140,6 +140,28 @@ proc patterns(): seq[seq[byte]] =
 
 let scans = wipeAuditScans()
 
+proc found(p: pointer, n: int): int {.gcsafe.} =
+  ## The patterns in a live region of `n` bytes, as the scan counts them,
+  ## searched here so the check holds where the scanner is off (Windows).
+  if p == nil or n <= 0:
+    return 0
+  let b = cast[ptr UncheckedArray[byte]](p)
+  template holds(m: seq[byte]): bool =
+    var hit = false
+    if m.len > 0 and m.len <= n:
+      for i in 0 .. n - m.len:
+        if equalMem(addr b[i], unsafeAddr m[0], m.len):
+          hit = true
+          break
+    hit
+
+  {.cast(gcsafe).}:
+    if holds(canary):
+      inc result
+    for r in roots:
+      if holds(r):
+        inc result
+
 proc arm() =
   armWipeAudit(patterns())
 
@@ -153,10 +175,13 @@ proc finds(s: string): int =
   if s.len == 0:
     0
   else:
-    wipeAuditFinds(s.toOpenArrayByte(0, s.high))
+    found(unsafeAddr s[0], s.len)
 
 proc finds(b: seq[byte]): int =
-  wipeAuditFinds(b)
+  if b.len == 0:
+    0
+  else:
+    found(unsafeAddr b[0], b.len)
 
 proc wipe(r: var RcResult) =
   wipe(r.message)
@@ -396,7 +421,7 @@ suite "wipe: generated code (W-8)":
     var r =
       store(ctx, addr owner, true, "echo", input, csize_t(canary.len), 3, addr stored)
     check r.code == CErrorCode(ord(ecModule))
-    check r.message != nil and wipeAuditFinds(r.message, r.message.len) == 1
+    check r.message != nil and found(r.message, r.message.len) == 1
     r = store(ctx, addr owner, false, "", input, 300, 2, addr stored)
     check r.code == CErrorCode(ord(ecInvalidParams))
     # The response: in the arena the owner releases, zeroed then.
@@ -408,13 +433,13 @@ suite "wipe: generated code (W-8)":
       ctx, addr owner, uint32(Slot), addr present, addr note, addr data, addr len
     ).code == 0
     check int(len) == canary.len
-    check wipeAuditFinds(data, int(len)) == 1
+    check found(data, int(len)) == 1
     owner.release(owner.state)
     owner = LogosResponseOwner()
     check exchange(
       ctx, addr owner, input, csize_t(canary.len), uint32(Slot), addr data, addr len
     ).code == 0
-    check wipeAuditFinds(data, int(len)) == 1
+    check found(data, int(len)) == 1
     owner.release(owner.state)
     owner = LogosResponseOwner()
     # Outside the schema: MODULE_ERROR, no copy left.
@@ -432,7 +457,7 @@ suite "wipe: generated code (W-8)":
       ctx, addr owner, uint32(BadSlot), addr present, addr note, addr data, addr len
     )
     check r.code == CErrorCode(ord(ecModule))
-    check r.message == nil or wipeAuditFinds(r.message, r.message.len) == 0
+    check r.message == nil or found(r.message, r.message.len) == 0
     secureZero(input, canary.len)
     deallocShared(input)
     kdestroy(ctx)
@@ -693,7 +718,7 @@ proc onComplete(
     owner: LogosResponseOwner,
 ) {.cdecl, gcsafe, raises: [].} =
   let d = cast[ptr Done](userData)
-  if response != nil and wipeAuditFinds(response, int(len)) > 0:
+  if response != nil and found(response, int(len)) > 0:
     d.canaries += 1
   if not owner.release.isNil:
     owner.release(owner.state)
