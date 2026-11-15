@@ -219,13 +219,17 @@ proc absentFrom(e: Engine): bool =
 # Set-up -----------------------------------------------------------------------------
 
 when unixStream:
-  # The endpoints go under a short private base (sun_path); the closure keeps
-  # its own copy of the path.
+  # The endpoints go under a short private base (sun_path).
+  proc removeAtExit(dir: string) =
+    ## The closure keeps its own copy: the main module's globals are destroyed
+    ## before exit procedures run.
+    addExitProc(
+      proc() =
+        removeDir(dir)
+    )
+
   let shortBase = makeShortBase("lcnwr", "/e999/12345678/logos_vault_module.sock")
-  addExitProc(
-    proc() =
-      removeDir(shortBase)
-  )
+  removeAtExit(shortBase)
 
 proc wipeConfig(transported = false): EngineConfig =
   result = config(extra = @[vaultStatic, dvaultStatic])
@@ -422,8 +426,16 @@ suite "wipe: generated code (W-8)":
       store(ctx, addr owner, true, "echo", input, csize_t(canary.len), 3, addr stored)
     check r.code == CErrorCode(ord(ecModule))
     check r.message != nil and found(r.message, r.message.len) == 1
-    r = store(ctx, addr owner, false, "", input, 300, 2, addr stored)
+    # A secret over its 256-byte bound, the canary at its start: a block of its
+    # own, so the entry reads only what it is given.
+    const Over = 300
+    let over = cast[ptr UncheckedArray[uint8]](allocShared0(Over))
+    copyMem(over, input, canary.len)
+    r = store(ctx, addr owner, false, "", over, csize_t(Over), 2, addr stored)
     check r.code == CErrorCode(ord(ecInvalidParams))
+    check r.message == nil or found(r.message, r.message.len) == 0
+    secureZero(over, Over)
+    deallocShared(over)
     # The response: in the arena the owner releases, zeroed then.
     var present = false
     var note: cstring
@@ -1352,6 +1364,22 @@ when defined(posix):
 
     test "[IFC-0578] [IFC-0579] W-10 a refc Module Host under an orc Runtime refuses its own part: a provider whose contract marks a payload fails init, and a hosted consumer's route to one fails at materialization, MODULE_ERROR":
       when ChannelsMove:
+        when defined(asan):
+          # refc scans the stack conservatively and cannot see AddressSanitizer's
+          # fake stack frames, so a refc host under detect_stack_use_after_return
+          # frees what its locals still hold. Its hosts start without fake
+          # stacks (the last setting wins); this process read its own at start.
+          let asanOptions = getEnv("ASAN_OPTIONS")
+          putEnv(
+            "ASAN_OPTIONS",
+            (if asanOptions.len > 0: asanOptions & ":" else: "") &
+              "detect_stack_use_after_return=0",
+          )
+          defer:
+            if asanOptions.len == 0:
+              delEnv("ASAN_OPTIONS")
+            else:
+              putEnv("ASAN_OPTIONS", asanOptions)
         let program = refcHostProgram()
         var cfg = hostedConfig()
         cfg.moduleHost = Opt.some(program)
