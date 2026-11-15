@@ -1,0 +1,121 @@
+; logos-core-nim.daemon-config.v1: logosd's protected deployment input (Tier 4b
+; step 4b-6; DECISIONS I95, G293). One Logos deterministic-CBOR
+; lcn.daemon_config value in <session>/daemon-config.cbor. docs/DAEMON.md
+; documents each field (BCP l.359).
+;
+; logosd derives one logos-core-nim.app-config.v1 value from it
+; (daemon/compose.nim, G294) and hands that to logos_runtime_create; it is not a
+; configuration_format of the library. Where the host configuration has a rule,
+; this format uses it, so a field means the same in both: the rules named
+; lcn.app_* and lcn.ap_* are host_config.cddl's and policy.cddl's, resolved in
+; one document with this one. Every path is absolute. The checks the schema
+; cannot express (reserved names, the strategies an operator may use, the
+; development switch, the evidence key's binding) are applied by
+; daemon/config.nim before anything starts.
+
+lcn.daemon_config = {
+  format: "logos-core-nim.daemon-config.v1",
+  runtime: lcn.dc_runtime,
+  policy: lcn.dc_policy,
+  ? modules: [* lcn.app_module],
+  ? declarations: [* lcn.app_declaration],
+  ? ordering: [* lcn.app_ordering],
+  ? orchestration: lcn.dc_orchestration,
+  ? call_audit: lcn.dc_call_audit,
+  ? routing: [* lcn.app_routing_rule],
+  ? transport: lcn.app_transport,
+  ? permissions: lcn.dc_permissions,
+  ? ctl: lcn.dc_ctl,
+  ? test_hooks: lcn.dc_test_hooks,
+}
+
+; runtime_instance_id: assigned by logosctl init (RUNTIME l.2665) and fixed for
+; the session's life. The directories come from the session layout.
+lcn.dc_runtime = {
+  runtime_instance_id: tstr .size (1..128),
+  ? startup_deadline_ms: uint32,
+  ? stop_deadline_ms: uint32,
+  ? shutdown_grace_ms: uint32,
+  ? apply_deadline_ms: uint32,
+  ? max_payload_depth: uint16,
+  ? module_host: lcn.app_path,
+  ? module_host_env: [* lcn.app_env_name],
+}
+
+; allow-all needs the development switch in the trust file (decision 11).
+; capability-authority: the authority instance is logosd's own; rules are the
+; operator's, and logosd adds the system rules (DAEMON.md §5). recovery: absent
+; is off; logosctl init writes true (RUNTIME l.1676).
+lcn.dc_policy =
+  { kind: "allow-all" } /
+  {
+    kind: "capability-authority",
+    source: tstr .size (1..128),
+    ? decision_validity_ms: uint64,
+    ? audit: { ? records: uint64 },
+    ? evaluation_deadline_ms: uint32,
+    ? recovery: bool,
+    rules: [* lcn.ap_rule],
+  }
+
+; The orchestration module's value (decision 8): the operator instances it
+; starts, and its restart policy. lcn.dc_restart and lcn.dc_override repeat
+; lcn_orchestrator.restart and lcn_orchestrator.override (config.cddl).
+lcn.dc_orchestration = {
+  ? start: [* lcn.app_instance_id],
+  ? restart: lcn.dc_restart,
+  ? overrides: [* lcn.dc_override],
+  ? resync_ms: uint32,
+}
+
+lcn.dc_restart =
+  { kind: "disabled" } /
+  {
+    kind: "backoff",
+    initial_delay_ms: uint32,
+    max_delay_ms: uint32,
+    multiplier: uint32,
+    ? max_attempts: uint32,
+    stable_ms: uint32,
+  }
+
+lcn.dc_override = {
+  instance: lcn.app_instance_id,
+  restart: lcn.dc_restart,
+}
+
+; call_records and evidence as in the host configuration; store: logosd's
+; call-evidence store (G301), which needs evidence.
+lcn.dc_call_audit = {
+  ? call_records: uint32,
+  ? evidence: lcn.app_evidence_key,
+  ? store: lcn.dc_evidence_store,
+}
+
+lcn.dc_evidence_store = {
+  ? max_records: uint32,
+  ? max_age_days: uint16,
+  ? queue: uint32,
+}
+
+; profile: absent selects the reference profile, since logosd always selects
+; one (decision 3). initial: the operator instances' settings; logosd adds the
+; system instances' host-ambient settings.
+lcn.dc_permissions = {
+  ? profile: "logos-core-nim.permission-profile.v1",
+  ? initial: [* lcn.app_initial_settings],
+}
+
+; The logosctl instance's socket (G296).
+lcn.dc_ctl = {
+  ? socket_dir: lcn.app_path,
+  ? workers: uint8,
+  ? idle_timeout_ms: uint32,
+}
+
+; Accepted only by a logosd built with lcnTestHooks, with the development
+; switch on (G300); a packaged logosd refuses the field.
+lcn.dc_test_hooks = {
+  ? ctl_command_delay_ms: uint32,
+  ? loader_failure_after_ms: uint32,
+}

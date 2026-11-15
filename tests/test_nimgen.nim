@@ -26,6 +26,8 @@ suite "ifc.nim-types: generated modules (D29)":
     check generatedCommonMirrors().get == readFile(commonMirrorsPath)
     check generatedRcTypes().get == readFile(rcTypesPath)
     check generatedHostConfigTypes().get == readFile(hostConfigTypesPath)
+    check generatedDaemonConfigTypes().get == readFile(daemonConfigTypesPath)
+    check generatedTrustTypes().get == readFile(trustTypesPath)
     check generatedStoreTypes().get == readFile(storeTypesPath)
     check generatedCarrierTypes().get == readFile(carrierTypesPath)
     check generatedCaTypes().get == readFile(caTypesPath)
@@ -56,6 +58,7 @@ suite "ifc.nim-types: generated modules (D29)":
     for path in [
       caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath,
       orchTypesPath, orchConfigTypesPath, orchKitPath, orchStateTypesPath,
+      daemonConfigTypesPath, trustTypesPath,
     ]:
       checkpoint path
       check stamp in readFile(path)
