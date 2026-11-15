@@ -9,6 +9,8 @@
 ## count every build's hosts, or none.
 
 import std/[os, strutils]
+when defined(linux):
+  import std/posix
 import ./childbuild
 
 var built: string
@@ -51,13 +53,22 @@ proc hostPids*(program = moduleHostProgram()): seq[int] =
           $cast[cstring](addr buf[0]) == want:
         result.add(int(pid))
   elif defined(linux):
+    # `readlink` into a buffer, not `expandSymlink`: a zombie's `exe` cannot be
+    # read, which is how zombies are left out, and `expandSymlink` then raises
+    # after making its string result, which ARC/ORC never frees (Nim 2.2.14;
+    # LeakSanitizer saw it for every host a test ended by force).
+    var buf: array[4096, char]
     for kind, path in walkDir("/proc"):
       let name = path.extractFilename
       if kind == pcDir and name.len > 0 and name.allCharsInSet(Digits):
-        try:
-          if expandSymlink(path / "exe") == want:
-            result.add(parseInt(name))
-        except OSError, ValueError:
-          discard
+        let n = readlink(cstring(path / "exe"), cast[cstring](addr buf[0]), buf.len)
+        if n > 0 and n < buf.len:
+          var exe = newString(n)
+          copyMem(addr exe[0], addr buf[0], n)
+          if exe == want:
+            try:
+              result.add(parseInt(name))
+            except ValueError:
+              discard
   else:
     discard
