@@ -899,6 +899,10 @@ when defined(posix):
     result.moduleHostEnv = @SanitizerEnv
     result.endpointDir = shortBase / ("e" & $engines)
     result.transport = Opt.some(fastConfig())
+    # [IMPL] Only a bound on the hosts' graceful ends, which a case checks.
+    # An audit host's end under ThreadSanitizer on a loaded CI runner passed
+    # the 10 s default, and the Runtime killed it (CI on eed9d58).
+    result.shutdownGrace = initDuration(seconds = 10 * Slow)
 
   proc stateOf(cfg: EngineConfig, state: string): string =
     result = cfg.stateRoot.get / state
@@ -1365,10 +1369,13 @@ when defined(posix):
       check noHostLeft()
 
     test "[IFC-0578] [IFC-0579] W-10 a refc Module Host under an orc Runtime refuses its own part: a provider whose contract marks a payload fails init, and a hosted consumer's route to one fails at materialization, MODULE_ERROR":
-      when ChannelsMove and defined(asan) and not defined(clang):
+      when ChannelsMove and (defined(msan) or (defined(asan) and not defined(clang))):
         # Under gcc's AddressSanitizer refc's stack scan is instrumented
         # (nimbase.h's CLANG_NO_SANITIZE_ADDRESS is empty but for clang), so a
-        # refc program reports its own scan of the stack as an overflow.
+        # refc program reports its own scan of the stack as an overflow. Under
+        # MemorySanitizer, which nimbase.h exempts it from on no compiler, the
+        # scan reads stack memory nothing initialized, such as its own
+        # `registers` buffer (on x86_64 and aarch64).
         skip()
       elif ChannelsMove:
         when defined(asan):

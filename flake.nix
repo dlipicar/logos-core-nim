@@ -143,6 +143,7 @@
                   "test_module_host.nim"
                   "test_realizer.nim"
                   "test_routes.nim"
+                  "test_wipe_routes.nim"
                 ];
             }
           ];
