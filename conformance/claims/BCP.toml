@@ -22,6 +22,19 @@ default = "deferred:tier-4b"
 "BCP-0004" = "claimed"
 "BCP-0073" = "claimed"
 "BCP-0098" = "claimed"
+# Tier 4b step 4b-6b (I95): the logosctl instance as the activation path (G296), its wire
+# (BCP-0090), and the development switch (D27, G299, G300). BCP-0036, BCP-0049, BCP-0050 and BCP-0092
+# are tagged by test_logosd and keep the default until 4b-8.
+"BCP-0084" = "claimed"
+"BCP-0086" = "claimed"
+"BCP-0087" = "claimed"
+"BCP-0088" = "claimed"
+"BCP-0089" = "claimed"
+"BCP-0090" = "claimed"
+"BCP-0093" = "claimed"
+"BCP-0094" = "claimed"
+"BCP-0095" = "claimed"
+"BCP-0096" = "claimed"
 # §5.2 and §5.5: duties of a specification and its owner when defining a profile.
 "BCP-0026" = "out-of-scope:a requirement on specification authors"
 "BCP-0029" = "out-of-scope:a requirement on specification authors"

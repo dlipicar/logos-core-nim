@@ -146,7 +146,7 @@ suite "dc.schema: daemon_config.cddl and trust.cddl [IMPL-DECISION G293] [IMPL-D
     test r:
       holds(trustModel, trustCodec, r)
 
-  test "a daemon-config's diagnostic text and its deterministic CBOR round-trip":
+  test "[BCP-0090] a daemon-config's diagnostic text and its deterministic CBOR round-trip":
     let text = dcText(
       extra =
         "\"modules\": [" & hostedModule("svc") &
@@ -1027,3 +1027,18 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     check dirExists(s.endpointDir) and toSeq(walkDir(s.endpointDir)).len == 0
     check fileExists(s.workDir / "restart.lock")
     check getFilePermissions(s.runDir) == {fpUserRead, fpUserWrite, fpUserExec}
+
+suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim":
+  test "every daemon CDDL file, and S1-S5 for init's default configuration, word for word":
+    let root = currentSourcePath().parentDir.parentDir
+    let doc = readFile(root / "docs" / "DAEMON.md")
+    for name in ["daemon_config.cddl", "trust.cddl", "ctl.cddl", "logosctl.cddl"]:
+      checkpoint name
+      let schema = readFile(root / "src/logos_core/daemon" / name)
+      check ("```cddl\n" & schema & "```") in doc
+    check ("## 3. `" & DaemonConfigFormat & "`") in doc
+    let orch = orchestratorValue(defaultDaemonConfig("x")).get
+    var listing = "```text\n"
+    for r in systemRules(orch).get:
+      listing.add(toDiag(r) & "\n")
+    check (listing & "```") in doc

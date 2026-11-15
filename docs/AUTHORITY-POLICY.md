@@ -527,3 +527,9 @@ starting it (RUNTIME l.1681, l.3075-3077): `wireAuthority(stateDir, wiring)` wit
 Runtime id, the facts table, the clock and the limits, keyed by the instance's state directory. An
 instance without wiring does not start (MODULE_ERROR). The wiring stays until `unwireAuthority`, so a
 stopped instance starts again on the same state. Step 8b does this from the host configuration.
+
+**Under logosd.** logosd's authority instance is `authority`. logosd merges the operator's rules in
+daemon-config with its own system rules (S1-S5), which let the orchestrator and the `logosctl`
+instance do their work and keep `logosctl` from stopping or reconfiguring the Module Loader, the
+authority and itself; a deny wins, so an operator rule cannot undo them. It also provisions the
+system instances' permission settings. [DAEMON.md](DAEMON.md) §5 lists the rules.

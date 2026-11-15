@@ -10,3 +10,13 @@ reason = "An illustrative block: the layer diagram of the specification set and 
 [[item]]
 ids = ["BCP-0098"]
 reason = "No optional logging exists to fail. The Runtime's diagnostics are a bounded in-memory list (engine.diagnose, plumbing.MaxDiagnostics, the oldest dropped first), which cannot fail and which no audit or enforcement step reads or waits on; no logging module contract or deployment log sink is built. Required audit is separate from it: call records are produced at the invocation boundary (runtime/callaudit.nim; tests [CAP-0205] [CAP-0210]) and the authority keeps its own audit in its state (authority/audit.nim; test [CAP-0244] [CAP-0264]); enforcement never depends on a diagnostic being kept."
+
+# bcp-non-production-doc (DECISIONS I95, K23, D27)
+[[item]]
+ids = ["BCP-0094"]
+reason = "The deployment documentation part: docs/DAEMON.md §6 states that the development switch makes the deployment non-production, what it enables (allow-all, test_hooks) and where the designation shows (the start log's NON-PRODUCTION warning and ready line, the deployment field of every logosctl JSON envelope, the banner of its text output). The diagnostics part is tested: test_logosd [BCP-0094] (start log, online and offline commands, text and JSON) and test_ctl_module [BCP-0094] (each response's deployment follows the handoff)."
+
+# bcp-switch-gates (DECISIONS I95, D27, G300)
+[[item]]
+ids = ["BCP-0096"]
+reason = "What the switch gates, found by a grep for `development` over src/: daemon/config.nim check 3 (allow-all and test_hooks are accepted only with it on) and the designation (daemon/assemble.nim's warning, ready line and presentation handoff; logosctl.nim's output). Nothing under runtime/, authority/, orchestration/ or transport/ reads it, so the Capability Authority's policy evaluation, trust continuity (trustfile.nim, which writes it but checks revisions the same either way), the host-configuration checks and every Core check run unchanged. test_logosd [BCP-0096] shows one: with the switch on under capability-authority, `module stop logos_module_loader` is still NOT_AUTHORISED; test_daemon_config's continuity rows run with the switch on as well."

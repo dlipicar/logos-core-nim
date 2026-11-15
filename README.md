@@ -79,8 +79,15 @@ The specs are being revised, so the work is ordered by how settled each area is
   ends included, in an orc build (I92). A refc build of the Runtime or the host refuses it instead.
   INTERFACE §1.4.1 and SEC-0057 are claimed for orc builds, with the non-claims in
   [docs/CONFORMANCE.md](docs/CONFORMANCE.md).
-- Not yet: the rest of Tier 4b (the rest of transported routes, `logosd`
-  and `logosctl`, the Runtime's permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
+- Tier 4b, step 4b-6: `logosd` and `logosctl`. `logosd` hosts one Runtime for a session directory
+  (`$HOME/.logos-core` by default): it checks `daemon-config.v1` and the trust file, composes the
+  host configuration with the orchestrator, the Capability Authority and the `logosctl` instance, and
+  ends on SIGTERM or `logosctl daemon stop`. The `logosctl` instance serves an owner-only socket;
+  each shell command is one Runtime Control call it makes through its own binding, and no module
+  payload passes through it. The development switch in the trust file gates allow-all and test
+  hooks, and marks every output `NON-PRODUCTION`. [docs/DAEMON.md](docs/DAEMON.md).
+- Not yet: the rest of Tier 4b (the rest of transported routes, the call-evidence store and its
+  export, the Runtime's permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 
@@ -223,6 +230,32 @@ are in [docs/HOST-CONFIG.md](docs/HOST-CONFIG.md). To build the library and `log
 nimble build_runtime_lib
 ```
 
+## Running logosd
+
+On Linux and macOS (`logosd` and `logosctl` are POSIX programs; on Windows both exit 2):
+
+```bash
+nix build .#logosd .#logosctl
+```
+
+```bash
+logosctl init
+```
+
+```bash
+logosd
+```
+
+```bash
+logosctl status
+```
+
+`init` makes the session directory, a Runtime id, the evidence key and the default daemon-config;
+`logosd` logs to stderr and prints a `ready` line once the Runtime has started; `logosctl` prints text
+on a terminal and JSON otherwise. `contrib/` has a systemd user unit and a launchd agent. The
+session layout, the daemon-config fields, the default policy and every command are in
+[docs/DAEMON.md](docs/DAEMON.md).
+
 ## Layout
 
 | Path | What |
@@ -232,6 +265,7 @@ nimble build_runtime_lib
 | `src/logos_core/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
 | `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
 | `src/logos_core/runtime/`, `src/liblogos_runtime.nim` | The Runtime: the Loader, the engine (instances, lifecycle, Runtime Control, routes, events, asynchronous calls), transported routes (`routing`, `tport`, `sessionauth`, `served`, `ports`), the host configuration and the Host Embedding API; the `liblogos_runtime` exports. |
+| `src/logos_core/daemon/`, `src/logosd.nim`, `src/logosctl.nim` | logosd and logosctl: `daemon-config.v1` and its checks, the session and trust file, the composition, the `logosctl` instance and its socket protocol, the shell's output. |
 | `src/logos_core/orchestration/`, `src/logos_core/orchestration.nim` | The reference orchestration module `lcn_orchestrator`: its configuration (`config.cddl`), decisions (`policy.nim`), retry accounting (`accounting.nim`) and worker; `src/logos_core/kit/rcclient.nim` is the typed Runtime Control client it calls through. |
 | `src/logos_core/transport/` | TRANSPORT: envelope codec, framing, Hello, tickets, sessions, the schema boundary; `io/`, the unix-stream I/O thread. |
 | `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; catalog and inspection records (`records.nim`) and the sans-I/O dependency resolver (`resolver.nim`); the `lcn-pkg` CLI. |

@@ -316,8 +316,8 @@ saved settings ("Persistent Runtime state").
 **A trap.** An authorized `update_permission_settings` that removes host-ambient from the orchestration
 or the authority instance stops it at once (reconciliation), and makes every later bring-up fail with
 `LOGOS_ERR_NOT_AUTHORISED` until the settings are replaced. The library leaves that to the host's
-policy: do not grant settings administration of system instances (logosd's default policy will not,
-step 4b-6).
+policy: do not grant settings administration of system instances (logosd's system rules do not:
+docs/DAEMON.md §5).
 
 ### `orchestration`
 
@@ -628,7 +628,7 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
 
 RUNTIME l.72 defines a Runtime instance as the Runtime engine plus an orchestration module. RUNTIME
 is claimed for the engine with the reference orchestration module, `lcn_orchestrator`, wherever a
-host names it (logosd will, from Tier 4b step 4b-6; "The reference orchestration module" below;
+host names it (logosd does: docs/DAEMON.md §4; "The reference orchestration module" below;
 DECISIONS I94, docs/CONFORMANCE.md). A host that names another module in `orchestration` carries
 these duties itself, and the engine does not do them for it:
 
