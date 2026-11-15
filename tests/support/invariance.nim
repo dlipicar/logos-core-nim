@@ -67,9 +67,10 @@ proc meterLines(): seq[string] =
     "submit 1",
     "wait-done 1",
     "release-call 1",
-    # A timeout that does not pass: the provider's failure answers first. Not
-    # 5000 ms: a hosted call under TSan on a CI runner took longer (2026-11-15).
-    prepare(2, "read", read(13), $(5000 * Slow)),
+    # A timeout that does not pass: the provider's failure answers first. Far
+    # from any round trip, as it costs nothing: a hosted call under TSan on a
+    # CI runner took longer than 5000 ms (2026-11-15).
+    prepare(2, "read", read(13), $(60_000 * Slow)),
     "submit 2",
     "wait-done 2",
     "release-call 2",
