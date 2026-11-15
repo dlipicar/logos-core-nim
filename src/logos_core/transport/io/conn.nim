@@ -784,6 +784,10 @@ proc respondOutcome*(
   ## not fit the output budgets now waits, uncommitted and still counted; it is
   ## never dropped for capacity, and the write-stall timer bounds the wait.
   if not c.established or not c.callee.isInFlight(id):
+    if outcome.ok:
+      # [DECISIONS G276] Never sent: a late answer after its CANCELLED (a
+      # Cancel or the caller's deadline), or the connection ended.
+      wipe(outcome.response)
     io.uncharge(charge)
     return
   if outcome.ok:
