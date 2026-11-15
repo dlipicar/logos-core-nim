@@ -1268,6 +1268,14 @@ them to be documented).
     its cleanup restores nothing. A permission no active point enforces makes the settings `failed`
     once nothing is left. `failed` stays until a replacement is accepted; an `unloaded` instance whose
     settings fail gets the classification `permission-enforcement-failed`.
+  - *Hosted instances* (DECISIONS G285, G275; part 4b-4c). A `hosted_dynamic` instance whose stop
+    passes its deadline has its Module Host ended by force. Its realization stays until that end is
+    confirmed, so a replacement meanwhile is `pending`, and the settings become `applied`, not
+    `failed`, once the release completes. The same holds at the shutdown grace and after the Module
+    Loader's loss. The instance keeps `cleanup-timeout`. When a hosted release fails and nothing ends
+    its host (`cleanup-failed`), the settings are `failed` as for a direct one. A hosted instance
+    restored with its restart lock held keeps `pending` settings until the lock is taken; they settle
+    then and the event is published.
   - *Admission.* A start or recovery of an instance whose settings are `failed` is
     `LOGOS_ERR_NOT_AUTHORISED` with the classification `permission-enforcement-failed`, and of one
     whose settings lack host-ambient `LOGOS_ERR_NOT_AUTHORISED` with `authority-denied`, before any

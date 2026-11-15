@@ -47,7 +47,10 @@ The specs are being revised, so the work is ordered by how settled each area is
   claimed. In direct mode (part 4b-4b), a host that selects the profile provisions each instance's
   permission settings; the Runtime saves them, reconciles a replacement by stopping the instance,
   refuses a start whose settings lack host-ambient, asks the authority for every saved permission, and
-  tells each realization what it was given.
+  tells each realization what it was given. The same holds for hosted instances (part 4b-4c): their
+  execution decisions name `local-transport` in a `process`, a stop past its deadline settles once the
+  Module Host's forced end is confirmed, and a host of the previous run holds settings back until its
+  restart lock is free.
 - Tier 4b, step 4b-5: the reference orchestration module. `lcn_orchestrator`, a module a host links
   in and names as its orchestration instance, applies startup defaults, reconciles after restarts,
   recovers failures under a configured restart policy with retry accounting that survives restarts,

@@ -89,9 +89,11 @@ host sees of them is in `docs/HOST-CONFIG.md`, "Permission settings with a profi
   permission is one no active point enforces (G280). The instance stays stopped: admission refuses it
   until a replacement is accepted, and the late end of the old cleanup restores nothing.
 - **Restart** (l.2544, l.2590). Settings come back with their revision and status. No realization
-  survives the process, so `pending` settles as the Runtime opens. A store whose settings the
-  selected profile cannot read (no profile, or an undefined permission) is refused: accepted settings
-  are never dropped silently.
+  survives the process, so `pending` settles as the Runtime opens. A hosted instance whose Module
+  Host of the previous run may still be running (its restart lock is held, G275) is the exception:
+  its `pending` settings stay `pending` until the lock is taken, and then settle and are published. A
+  store whose settings the selected profile cannot read (no profile, or an undefined permission) is
+  refused: accepted settings are never dropped silently.
 
 ## Admission and the snapshot
 
@@ -115,6 +117,34 @@ The Runtime enforces host-ambient at admission, the one point it controls (G110,
 
 Without a profile none of this runs: the decision carries the execution scope alone, and
 `get_execution_permissions` is `unavailable`.
+
+## Hosted instances
+
+A `hosted_dynamic` instance runs in a Module Host process of its own (`docs/HOST-CONFIG.md`,
+`module_host`; DECISIONS G264), and the same rules hold, with the Runtime still enforcing at
+admission (DECISIONS I93, part 4b-4c):
+
+- **Admission** (CA l.349-353; CAP-0065, CAP-0066). The Runtime refuses a start before the Loader is
+  asked to realize the host's process, exactly as above. The execution decision's execution scope
+  names the mode `local-transport` and the placement `process` (G272), beside the permission scopes.
+  `process` is the only placement in 4b; a decision allowing a sandbox or a container is an
+  evaluation failure.
+- **The snapshot.** A module in a host calls `get_execution_permissions` through its own Runtime
+  Control binding and gets its realization's snapshot, as in process.
+- **Reconciliation.** A replacement stops the hosted instance; its host is released and ends, then
+  the settings are `applied`.
+- **A stop past its deadline** (G269, G285). The Runtime ends the host by force: `cleanup-timeout`
+  is recorded and the host's process group is killed. The old access ends with the process, so the
+  settings stay `pending` until that end is confirmed and then become `applied`. The instance stays
+  `error` (owner batch C 13), and orchestration resumes it on the settings event. The same holds at
+  the shutdown grace and after the Module Loader's loss.
+- **A host nothing ends.** When a release fails and the Loader still holds the realization
+  (`cleanup-failed`), or an answer is lost while the Loader stays bound, the host may live on with its
+  old access, as a direct realization may. The settings are then `failed`.
+- **Not enforced in 4b.** The host is a separate address space, not a sandbox: it gets the same
+  operating-system access as any process of the Runtime's user, so host-ambient means the same thing
+  there (SECURITY l.207-210). No constraint crosses to the Loader or the host (G280). Sandbox,
+  container and operating-system enforcement are Tier 5.
 
 ## A trap
 
