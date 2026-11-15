@@ -135,10 +135,11 @@ when defined(posix):
     except IOError:
       0
 
-  proc heldAt(dir: string, n: int): bool =
+  proc heldAt(dir: string, n: int, seconds = 10 * Slow): bool =
     waitUntil(
       proc(): bool =
-        heldCalls(dir) == n
+        heldCalls(dir) == n,
+      seconds,
     )
 
   proc open(dir: string) =
@@ -1288,32 +1289,38 @@ when defined(posix):
             return line.split(' ', 1)[1]
         "none"
 
-      # [IMPL] Call 2's timeout must pass only once the provider holds it: on a
-      # CI runner its way there took longer than 1000 ms × `Slow` under ASan,
-      # and TSan's 10 s were enough (2026-11-15).
-      let holdTimeout = max(1000 * Slow, 10_000)
       check codeIn(c.run(prepareLine(1, 4, "-"))) == Opt.some(ecOk)
-      check codeIn(c.run(prepareLine(2, 22, $holdTimeout))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(3, 4, "0"))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(4, 4, "-"))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(5, 22, "-"))) == Opt.some(ecOk)
       check codeIn(c.run("cancel 4")) == Opt.some(ecOk)
+      let submitted = getMonoTime()
       for i in [1, 3, 4]:
         check codeIn(c.run("submit " & $i)) == Opt.some(ecOk)
       check c.noted("done", "", 3)
+      let roundTrip = (getMonoTime() - submitted).inMilliseconds
       let r = readingOf(c.doneOf(1))
       check r.isSome and r.get.reading.value == 40
       check codeIn(c.doneOf(3)) == Opt.some(ecTimeout)
       check codeIn(c.doneOf(4)) == Opt.some(ecCancelled)
+      # [IMPL] Call 2's timeout must pass only once the provider holds it, and
+      # its way there is part of call 1's round trip: five times that round
+      # trip on this machine now, and at least 10 s. Under ASan the way took
+      # 0.8-1.2 s on a loaded Mac (the round trip 1.2-1.4 s) and longer than
+      # 10 s on a CI runner (2026-11-15).
+      let holdTimeout = max(10_000'i64, 5 * roundTrip)
+      let bound = int(holdTimeout div 1000) + 10 * Slow
+      check codeIn(c.run(prepareLine(2, 22, $holdTimeout))) == Opt.some(ecOk)
       # Channel 22 holds the call in the provider until it is cancelled: the
       # timeout ends it, and the Cancel goes to the provider.
       check codeIn(c.run("submit 2")) == Opt.some(ecOk)
-      check mdir.heldAt(1)
-      check c.noted("done", "2 ", seconds = holdTimeout div 1000 + 10 * Slow)
+      check mdir.heldAt(1, bound)
+      check c.doneOf(2) == "none" # held before the timeout passed
+      check c.noted("done", "2 ", seconds = bound)
       check codeIn(c.doneOf(2)) == Opt.some(ecTimeout)
       # A released handle keeps its connection for the call still running.
       check codeIn(c.run("submit 5")) == Opt.some(ecOk)
-      check mdir.heldAt(2)
+      check mdir.heldAt(2, bound)
       check codeIn(c.run("release 0")) == Opt.some(ecOk)
       mdir.open()
       check c.noted("done", "5 ")
