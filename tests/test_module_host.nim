@@ -343,6 +343,22 @@ when defined(posix):
         check r.sendRaw(f)
         check r.waitExit() and r.exitedWith == ExitCarrierLost
 
+    test "[IMPL-DECISION I92] H-15 an init that carries wipe_audit to a host that is no audit build: exit 70, before the module is bound":
+      # Test support only (the test-hook rule): a host that cannot scan is not
+      # one a test may believe armed.
+      when kitAudit:
+        skip()
+      else:
+        let dir = stateDir("serve")
+        var m = initMsg(dir)
+        m.arm_lcn_Carrier_init.wipe_audit = Opt.some(@[newSeq[byte](16)])
+        var r = startHost(host)
+        defer:
+          r.stop()
+        check r.send(m)
+        check r.waitExit() and r.exitedWith == ExitCarrierLost
+        check toSeq(walkDir(dir)).len == 1 # `probe.cmd` alone: no init ran
+
   suite "host.module: spawn (plan §2.3, R4, R5)":
     test "[IMPL] H-14 the child starts with an empty signal mask, default actions, only the allow-listed environment, /dev/null on fd 0, the lock on fd 5 and nothing above it":
       # Built without Nim's own signal handlers, which would replace the

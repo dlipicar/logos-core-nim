@@ -2152,17 +2152,15 @@ const LostAnswer = "the Module Loader's answer was lost and could not be resolve
 
 proc teardownDone(st: State, x: Inst) {.gcsafe.}
 proc cleanupFailed(st: State, x: Inst, reason: string) {.gcsafe.}
-func erases(st: State, mode: RouteMode, ends: RouteEnds): bool =
+func erases(st: State, mode: RouteMode): bool =
   ## [DECISIONS G277] Whether the participants of a path of this kind erase
   ## marked payloads: the Runtime and its served endpoint do on every local
   ## kind in this build. A remote kind, when one exists, starts without. No
   ## define or configuration turns the refusal off; the test hook only adds
-  ## kinds to refuse.
-  ## [IMPL] Not yet with an end in a Module Host: its own sites come with step
-  ## 4b-3b.2.
-  result =
-    mode in {rmDirect, rmLocalTransport} and not ends.consumerHosted and
-    not ends.providerHosted
+  ## kinds to refuse. A Module Host is one of the participants: it erases at
+  ## its own sites (`host/endpoint`, `host/consumer`), so a hosted end does not
+  ## change the answer.
+  result = mode in {rmDirect, rmLocalTransport}
   when defined(lcnTestHooks):
     if mode in st.erasureMissing:
       result = false
@@ -5118,7 +5116,7 @@ proc establish(st: State, q: Request, x: Inst) =
       providerHosted: y.hosted,
     )
     let mode = selectMode(st.cfg.routing, ends)
-    if sel.get.sensitive.len > 0 and not st.erases(mode, ends):
+    if sel.get.sensitive.len > 0 and not st.erases(mode):
       # [SPEC INTERFACE l.388; DECISIONS G277, re-deciding G244] A contract
       # that marks a payload is routed only on a path kind whose participants
       # the Runtime controls erase it (l.381-386): every local kind does in
@@ -7312,14 +7310,18 @@ proc linkSubmit(st: State, a: AsyncRec, c: ptr AsyncCall) =
     dropCall(c)
     st.endCall(a, failure(ecNotReady, "the transport is stopping"), okResult)
 
-proc linkDecide(st: State, p: pointer, r: Result[seq[byte], InvocationFailure]) =
+proc linkDecide(st: State, p: pointer, r: sink Result[seq[byte], InvocationFailure]) =
   ## An asynchronous call's Response, or its failure: its outcome unless one
   ## was decided (a cancellation, a timeout); the link's reference goes.
+  ## [DECISIONS G276] `r` is wiped once decided on: the call keeps its own
+  ## copy, and a late one is dropped.
+  var r = r
   let c = asyncOf(p)
   if c.decide(r, okResult):
     let a = st.asyncCalls.getOrDefault(p)
     if a != nil:
       st.asyncTerminal(a)
+  wipe(r)
   dropCall(c)
 
 proc linkResponse(st: State, conn: ConnId, tag: uint64, o: sink CallOutcome) =
@@ -10836,6 +10838,13 @@ when defined(lcnTestHooks):
     e.call(
       Request(kind: rqTransportHook, reason: "hosted-endpoint", instance: instance)
     ).id
+
+  proc setWipeAuditForTests*(e: Engine, patterns: openArray[seq[byte]]) =
+    ## A test hook (4b-3b plan §4.1; DECISIONS I92): every Module Host spawned
+    ## from now on is sent `patterns` in its `init`; an audit build of the
+    ## host arms its free scan with them and exits 97 at a graceful end that
+    ## found one. Process-wide; empty: none.
+    setWipeAudit(patterns)
 
   proc setErasureMissingForTests*(
       e: Engine, modes: set[RouteMode]

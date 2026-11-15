@@ -115,6 +115,15 @@ const
       primary: "tests/kit/beacon_module.cddl",
       kit: true,
     ),
+    NimFixture(module: "vault_module_types.nim", primary: "tests/kit/vault_module.cddl"),
+    NimFixture(
+      module: "vault_module_kit.nim", primary: "tests/kit/vault_module.cddl", kit: true
+    ),
+    NimFixture(
+      module: "vault_module_calls.nim",
+      primary: "tests/kit/vault_module.cddl",
+      calls: true,
+    ),
     NimFixture(module: "bulk_module_types.nim", primary: "tests/kit/bulk_module.cddl"),
     NimFixture(
       module: "bulk_module_kit.nim", primary: "tests/kit/bulk_module.cddl", kit: true
@@ -188,6 +197,10 @@ const headerFixtures* = [
   ),
   HeaderFixture(
     header: "metrics_provider_types.h", primary: "spec/mirrors/IFC/3.9.2.interface.cddl"
+  ),
+  HeaderFixture(header: "vault_module_types.h", primary: "tests/kit/vault_module.cddl"),
+  HeaderFixture(
+    header: "vault_module_calls.h", primary: "tests/kit/vault_module.cddl", calls: true
   ),
   HeaderFixture(
     header: "meter_module_calls.h",

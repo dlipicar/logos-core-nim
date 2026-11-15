@@ -3,8 +3,8 @@
 ## admission, and the `call` audit records written after each outcome, under
 ## a scripted Capability Authority (`support/fakeca`) whose allows carry
 ## `retain-root`. The orchestration instance is routefixture's client module;
-## the providers are the meter kit module, its deferred adapter and a small
-## hand-written module whose contract marks payloads `_sensitive`.
+## the providers are the meter kit module and its deferred adapter. Marked
+## payloads (`_sensitive`) are `test_wipe_routes`'s (Tier 4b step 4b-3b).
 
 import std/[atomics, monotimes, os, sequtils, sets, strutils, times, typedthreads]
 import unittest2
@@ -33,88 +33,6 @@ removeDir(work)
 createDir(work)
 
 include ./support/routefixture
-
-# A module with `_sensitive` payloads ---------------------------------------------------
-
-const VaultDoc =
-  "_module = \"vault_module\"\n" &
-  "_sensitive = [\"vault.get_response\", \"vault.store_request\"]\n\n" &
-  "vault.store_request = {\n  secret: bstr,\n}\n\n" &
-  "vault.store_response = {\n  ok: bool,\n}\n\n" &
-  "vault.get_request = {\n  slot: uint32,\n}\n\n" &
-  "vault.get_response = {\n  secret: bstr,\n}\n"
-
-let
-  vaultBinding = acceptBinding("vault_module", Opt.some(VaultDoc)).tryGet
-  vaultRoot = vaultBinding.primary.get.root
-  vaultSet = acceptContractSet(VaultDoc).tryGet
-  vaultSchema = encodeCbor(schemaResponse(vaultSet, vaultRoot).tryGet)
-
-var vaultSurface: ptr UncheckedArray[uint8]
-var vaultSurfaceLen: int
-
-block:
-  let d = callSurfaceDescriptor(vaultBinding).tryGet
-  vaultSurface = cast[ptr UncheckedArray[uint8]](allocShared0(d.len))
-  for i, b in d:
-    vaultSurface[i] = b
-  vaultSurfaceLen = d.len
-
-proc vaultName(): cstring {.cdecl, gcsafe, raises: [].} =
-  "vault_module"
-
-proc vaultCallSurface(outLen: ptr csize_t): ptr uint8 {.cdecl, gcsafe, raises: [].} =
-  outLen[] = csize_t(vaultSurfaceLen)
-  cast[ptr uint8](vaultSurface)
-
-proc vaultInit(
-    input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
-): LogosResult {.cdecl, gcsafe, raises: [].} =
-  outContext[] = cast[ptr LogosModuleContext](allocShared0(8))
-
-proc vaultDestroy(module: ptr LogosModuleContext) {.cdecl, gcsafe, raises: [].} =
-  deallocShared(module)
-
-proc vaultFree(
-    module: ptr LogosModuleContext, p: pointer
-) {.cdecl, gcsafe, raises: [].} =
-  if p != nil:
-    deallocShared(p)
-
-proc vaultDispatch(
-    module: ptr LogosModuleContext,
-    methodName: cstring,
-    params: ptr UncheckedArray[uint8],
-    paramsLen: csize_t,
-    outResp: ptr ptr UncheckedArray[uint8],
-    outLen: ptr csize_t,
-): LogosResult {.cdecl, gcsafe, raises: [].} =
-  # `store` answers `{ok: true}`, `get` `{secret: h'00'}`.
-  let bytes =
-    if $methodName == "store":
-      @[0xA1'u8, 0x62, 0x6F, 0x6B, 0xF5]
-    else:
-      @[0xA1'u8, 0x66, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x41, 0x00]
-  let p = cast[ptr UncheckedArray[uint8]](allocShared0(bytes.len))
-  for i, b in bytes:
-    p[i] = b
-  outResp[] = p
-  outLen[] = csize_t(bytes.len)
-  LogosResult()
-
-proc vaultTable(): seq[(string, pointer)] =
-  result = @[
-    ("logos_vault_module_MODULE_name", cast[pointer](vaultName)),
-    ("logos_vault_module_MODULE_call_surface", cast[pointer](vaultCallSurface)),
-    ("logos_vault_module_MODULE_init", cast[pointer](vaultInit)),
-    ("logos_vault_module_MODULE_destroy", cast[pointer](vaultDestroy)),
-    ("logos_vault_module_MODULE_dispatch", cast[pointer](vaultDispatch)),
-    ("logos_vault_module_MODULE_free", cast[pointer](vaultFree)),
-  ]
-  # The typed per-method symbols the call surface requires; the Runtime calls
-  # through `dispatch`, never these.
-  for c in cLayout(cSchemaSet(vaultBinding)).tryGet.calls:
-    result.add((c.symbol, cast[pointer](vaultDispatch)))
 
 # The meter kit module behind a `_MODULE_dispatch` that records how the
 # Runtime left the response outputs on entry (INTERFACE §2.6 l.1754).
@@ -149,17 +67,8 @@ proc recordingTable(): seq[(string, pointer)] =
       result.add((name, p))
 
 let
-  vaultStatic = checkStaticRegistration("vault", vaultTable()).tryGet
   dmeterStatic = checkStaticRegistration("dmeter", deferredMeterSymbols()).tryGet
   rmeterStatic = checkStaticRegistration("rmeter", recordingTable()).tryGet
-
-proc vault(): ModuleRecord =
-  ModuleRecord(
-    module: "vault_module",
-    strategy: stDirectStatic,
-    binding: "vault",
-    primaryContract: Opt.some(vaultRoot),
-  )
 
 proc dmeter(): ModuleRecord =
   ModuleRecord(
@@ -184,15 +93,13 @@ const
   Ca = "ca"
   Meter = "meter"
   Deferred = "dmeter"
-  Vault = "vault"
   Recorder = "rmeter"
 
 let clk = newTestClock()
 useClock(clk)
 
 proc auditConfig(records: int): EngineConfig =
-  result =
-    config(extra = @[fakeCaRegistration(), vaultStatic, dmeterStatic, rmeterStatic])
+  result = config(extra = @[fakeCaRegistration(), dmeterStatic, rmeterStatic])
   result.authority = Opt.some(
     AuthorityPolicy(instance: Ca, evaluationDeadline: initDuration(seconds = 60))
   )
@@ -213,14 +120,13 @@ proc ready(records = 0): (Engine, ptr LogosRuntimeControlBinding) =
       BootstrapInstance(instance: Ca, record: fakeCaRecord()),
       BootstrapInstance(instance: Meter, record: meter()),
       BootstrapInstance(instance: Deferred, record: dmeter()),
-      BootstrapInstance(instance: Vault, record: vault()),
     ],
     Orch,
   ).isOk
   let orch = latestClient()
   check orch.lifecycle("start_module", CaModuleName, Opt.some(Ca)).code == ecOk
   check e.authorityBound()[0]
-  for x in [Meter, Deferred, Vault]:
+  for x in [Meter, Deferred]:
     check e.start(x).tryGet.state == msReady
   forget()
   (e, orch)
@@ -572,7 +478,7 @@ suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (
     check w.scope.rc.methods == Opt.some(@[rcMethodRoot("establish_route")])
     e.finish()
 
-  test "[CAP-0207] [IFC-0578] [IFC-0579] logos.schema is recorded under the common schema with the selected contract in its scope; a contract that marks a payload is routed only on a path kind with erasure (DECISIONS I88, G277)":
+  test "[CAP-0207] logos.schema is recorded under the common schema with the selected contract in its scope (DECISIONS I88)":
     let (e, orch) = ready()
     setScript(retaining("call"))
     var h = orch.handle(orch.routeTo(e, Meter, "k"))
@@ -588,33 +494,6 @@ suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (
     check v.response.get ==
       schemaSet(common).rootsOf("logos.schema_response", r.response)
     h.release()
-    # [G277, re-deciding G244] The vault marks `store`'s request and `get`'s
-    # response. A direct route erases them (4b-3b), so it is made.
-    setScript(retaining("call", request = false, response = false))
-    let made = orch.establish(
-      "v",
-      root = vaultRoot,
-      provider = Opt.some(providerAddress(e.view(Vault).tryGet.providerId)),
-    )
-    check made.code == ecOk
-    # On a path kind without erasure (`erasureMissing`) the route is refused
-    # after its authority and contract checks, whatever the policy retains,
-    # and nothing is downgraded to ordinary handling (INTERFACE l.386-388).
-    check e.setErasureMissingForTests({rmDirect}).isOk
-    for i, rule in [
-      retaining("call"), retaining("call", request = false, response = false)
-    ]:
-      setScript(rule)
-      let refused = orch.establish(
-        "w" & $i,
-        root = vaultRoot,
-        provider = Opt.some(providerAddress(e.view(Vault).tryGet.providerId)),
-      )
-      check refused.code == ecModule
-      check refused.message ==
-        "marked payloads are not supported on this path (INTERFACE §1.4.1)"
-    check e.setErasureMissingForTests({}).isOk
-    check e.view(Vault).tryGet.state == msReady
     e.finish()
 
   test "[CAP-0244] [CAP-0257] [CAP-0264] a record holds only its CDDL fields, no ticket, key or secret; the newest call_records records are kept, in order":

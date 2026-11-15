@@ -1,0 +1,45 @@
+; -- metadata --
+_module = "vault_module"
+_sensitive = ["vault.exchange_request", "vault.exchange_response", "vault.fetch_response", "vault.store_request"]
+
+; Input for tests/generated/vault_module_*: a provider whose contract marks
+; payloads (INTERFACE §1.2.1; Tier 4b step 4b-3b, DECISIONS I92). `peek` marks
+; nothing, `store` its request, `fetch` its response and `exchange` both
+; (tests/kit/vault_impl.nim).
+
+vault.peek_request = {
+  slot: uint32,
+}
+
+vault.peek_response = {
+  stored: bool,
+  size: uint32,
+}
+
+vault.store_request = {
+  slot: uint32,
+  secret: bstr .size (1..256),
+  ? note: tstr .size (1..256),
+}
+
+vault.store_response = {
+  stored: bool,
+}
+
+vault.fetch_request = {
+  slot: uint32,
+}
+
+vault.fetch_response = {
+  secret: bstr .size (0..256),
+  ? note: tstr .size (1..64),
+}
+
+vault.exchange_request = {
+  slot: uint32,
+  secret: bstr .size (1..256),
+}
+
+vault.exchange_response = {
+  previous: bstr .size (0..256),
+}

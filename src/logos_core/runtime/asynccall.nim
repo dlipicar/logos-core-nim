@@ -181,20 +181,28 @@ proc ownedOf(r: Result[seq[byte], InvocationFailure]): (ErrorCode, ptr Owned) =
   ## A Runtime copy of an outcome: a success's response, or a failure's
   ## message and (INVALID_PARAMS only) detail.
   let o = createShared(Owned)
+  # [DECISIONS G276] Read in place: a `let` of `r.get` or `r.error` is a copy
+  # the caller's wipe of `r` would not reach.
   if r.isOk:
-    let b = r.get
+    template b(): untyped =
+      r.vResultPrivate
+
     if b.len > 0: # empty: a session's introspection, answered by the I/O thread
       o.response = copyBytes(cast[ptr UncheckedArray[uint8]](unsafeAddr b[0]), b.len)
       o.responseLen = b.len
     return (ecOk, o)
-  let f = r.error
+  template f(): untyped =
+    r.eResultPrivate
+
   if f.message.isSome:
     var m = clip(f.message.get)
     o.message = copyText(m)
     wipe(m) # [DECISIONS G276]
   if f.code == ecInvalidParams and f.detail.isSome and f.detail.get.len > 0 and
       f.detail.get.len <= MaxDetailBytes:
-    let d = f.detail.get
+    template d(): untyped =
+      f.detail.vResultPrivate
+
     o.detail = copyBytes(cast[ptr UncheckedArray[uint8]](unsafeAddr d[0]), d.len)
     o.detailLen = d.len
   (f.code, o)

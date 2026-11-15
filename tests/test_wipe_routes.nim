@@ -1,0 +1,1239 @@
+## Erasure of marked payloads on routes (Tier 4b step 4b-3b plan §4.2, W-4 to
+## W-10; DECISIONS G276-G278, I92): the vault kit module (`kit/vault_impl`),
+## whose contract marks `store`'s request, `fetch`'s response and both of
+## `exchange`, called on direct, transported and hosted routes, through raw
+## dispatch, the generated typed entries and the generated call helpers.
+##
+## The free scan (`base/wipeaudit`) searches every block released in this
+## process, and in an audit-build Module Host, for a canary (32 random
+## lowercase letters per run) and the value roots of the payloads that carry
+## it. The test's own copies are wiped as the module's would be: a hit is a
+## copy something on the path left behind. The scan sees the Nim heap only
+## under orc and arc (`test_wipe_routes.nims`); elsewhere the hit counts are
+## not checked, and every other check runs. The module keeps what it stores
+## outside the Nim heap: its own copies are its own (INTERFACE l.388, l.399).
+
+import
+  std/[
+    atomics, exitprocs, monotimes, os, sequtils, strutils, sysrand, times, typedthreads
+  ]
+import unittest2
+import ../src/logos_core/runtime/[engine, routing]
+import ../src/logos_core/abi/types
+import ../src/logos_core/base/[wipe, wipeaudit]
+import ../src/logos_core/cbor
+import ../src/logos_core/commitment
+import ../src/logos_core/hash
+import ../src/logos_core/iface/[accept, cmap, outcome, provider, surface]
+import ../src/logos_core/iface/common_types
+import ../src/logos_core/authority/scopes except
+  LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
+  LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
+  LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
+  LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
+import ../src/logos_core/transport/io/sock
+import ./support/[fakeca, kitbuild, kitruntime, shortdir]
+import ./kit/[meter_impl, vault_impl, vault_deferred]
+import ./generated/[meter_module_calls, vault_module_calls]
+
+let
+  repo = currentSourcePath().parentDir.parentDir
+  work = repo / "build" / "wipe-routes" / kitVariant
+removeDir(work)
+createDir(work)
+
+include ./support/routefixture
+
+# The vault ------------------------------------------------------------------------
+
+let
+  vaultSet = acceptContractSet(readFile(repo / "tests/kit/vault_module.cddl")).tryGet
+  vaultRoot = vaultSet.primary.root
+  vaultSchema = encodeCbor(schemaResponse(vaultSet, vaultRoot).tryGet)
+  vaultStatic = checkStaticRegistration("vault", vaultModuleStaticSymbols()).tryGet
+  dvaultStatic = checkStaticRegistration("dvault", deferredVaultSymbols()).tryGet
+
+const
+  Vault = "vault"
+  DVault = "dvault"
+  Ca = "ca"
+  Slot = 1'u64 ## where the canary is stored
+  BadSlot = 15'u64 ## `fetch` answers outside its schema there
+
+proc vaultRecord(binding = "vault"): ModuleRecord =
+  ModuleRecord(
+    module: "vault_module",
+    strategy: stDirectStatic,
+    binding: binding,
+    primaryContract: Opt.some(vaultRoot),
+  )
+
+# The canary and the patterns ------------------------------------------------------
+
+let canary = block:
+  var c = urandom(32)
+  for b in c.mitems:
+    b = byte(ord('a') + int(b) mod 26)
+  c
+
+let canaryText = block:
+  var s = newString(canary.len)
+  for i, b in canary:
+    s[i] = char(b)
+  s
+
+proc kv(k: string, v: CborValue): CborEntry =
+  (cbor(k), v)
+
+proc req(entries: varargs[CborEntry]): seq[byte] =
+  ## Deterministic CBOR of a map; its tree is wiped once encoded.
+  let t = cborMap(entries)
+  result = encodeCbor(t)
+  wipe(t)
+
+proc storeReq(slot = Slot, note = "", extra = ""): seq[byte] =
+  var e = @[kv("secret", cbor(canary)), kv("slot", cbor(slot))]
+  if note.len > 0:
+    e.add(kv("note", cbor(note)))
+  if extra.len > 0:
+    e.add(kv(extra, cbor(0'u64)))
+  result = req(e)
+
+proc slotReq(slot = Slot): seq[byte] =
+  req(kv("slot", cbor(slot)))
+
+proc exchangeReq(slot = Slot): seq[byte] =
+  req(kv("secret", cbor(canary)), kv("slot", cbor(slot)))
+
+proc valueRootOf(declaration: string, bytes: seq[byte]): seq[byte] =
+  var t = decodeCbor(bytes).tryGet
+  let n = vaultSet.schemaSet.normalize(0, declaration, t).tryGet
+  result = @(valueRoot(n).tryGet)
+  wipe(t)
+
+let roots = block:
+  # The value roots of every payload that carries the canary (TRANSPORT §4.1).
+  var r: seq[seq[byte]]
+  var b = storeReq()
+  r.add(valueRootOf("vault.store_request", b))
+  wipe(b)
+  b = exchangeReq()
+  r.add(valueRootOf("vault.exchange_request", b))
+  wipe(b)
+  b = req(kv("secret", cbor(canary)))
+  r.add(valueRootOf("vault.fetch_response", b))
+  wipe(b)
+  b = req(kv("previous", cbor(canary)))
+  r.add(valueRootOf("vault.exchange_response", b))
+  wipe(b)
+  r
+
+proc patterns(): seq[seq[byte]] =
+  ## Fresh copies: `armWipeAudit` zeroes what it is given.
+  result.add(canary)
+  for r in roots:
+    result.add(r)
+
+let scans = wipeAuditScans()
+
+proc arm() =
+  armWipeAudit(patterns())
+
+proc hits(): int =
+  ## Blocks released holding a pattern since arming (backtraces to stderr).
+  result = wipeAuditHits()
+  if result > 0:
+    reportWipeAudit()
+
+proc finds(s: string): int =
+  if s.len == 0:
+    0
+  else:
+    wipeAuditFinds(s.toOpenArrayByte(0, s.high))
+
+proc finds(b: seq[byte]): int =
+  wipeAuditFinds(b)
+
+proc wipe(r: var RcResult) =
+  wipe(r.message)
+  wipe(r.detail)
+  wipe(r.response)
+
+proc lookupBytes(bytes: seq[byte], key: string): seq[byte] =
+  ## A byte string of a response map; its tree is wiped.
+  let t = decodeCbor(bytes).tryGet
+  result = t.lookup(key).get.bytes
+  wipe(t)
+
+var engineWork: string ## the latest engine's work directory
+
+proc absentFrom(e: Engine): bool =
+  ## [SPEC INTERFACE l.3357-3367; SECURITY l.401-403] No pattern in a call
+  ## record, a diagnostic or the engine's files.
+  result = true
+  for r in e.audit.records:
+    if finds(r.bytes) > 0:
+      result = false
+  for d in e.diagnostics:
+    if finds(d) > 0:
+      result = false
+  for f in walkDirRec(engineWork):
+    try:
+      var s = readFile(f)
+      if finds(s) > 0:
+        checkpoint("a pattern in " & f)
+        result = false
+      wipe(s)
+    except IOError:
+      discard
+
+# Set-up -----------------------------------------------------------------------------
+
+when unixStream:
+  # The endpoints go under a short private base (sun_path); the closure keeps
+  # its own copy of the path.
+  let shortBase = makeShortBase("lcnwr", "/e999/12345678/logos_vault_module.sock")
+  addExitProc(
+    proc() =
+      removeDir(shortBase)
+  )
+
+proc wipeConfig(transported = false): EngineConfig =
+  result = config(extra = @[vaultStatic, dvaultStatic])
+  when unixStream:
+    if transported:
+      result.routing = @[RoutingRule(callee: "vault_module", mode: rmLocalTransport)]
+      result.endpointDir = shortBase / ("e" & $engines)
+
+proc vaultRoute(
+    orch: ptr LogosRuntimeControlBinding, e: Engine, instance, key: string
+): RcResult =
+  orch.establish(
+    key,
+    root = vaultRoot,
+    provider = Opt.some(providerAddress(e.view(instance).tryGet.providerId)),
+  )
+
+proc vaultHandle(
+    orch: ptr LogosRuntimeControlBinding, e: Engine, instance, key: string
+): LogosRouteHandle =
+  let r = orch.vaultRoute(e, instance, key)
+  check r.code == ecOk
+  let (code, h) = orch.materialize(r.routesOf.routes[0].route, vaultRoot, vaultSchema)
+  check code == ecOk
+  h
+
+proc ready(cfg: EngineConfig): (Engine, ptr LogosRuntimeControlBinding) =
+  vaultReset()
+  resetVaultDeferred()
+  engineWork = cfg.workDir
+  let e = fixtureEngine(cfg)
+  let (_, orch) = e.startClient()
+  discard e.started(vaultRecord(), Vault)
+  discard e.started(vaultRecord("dvault"), DVault)
+  (e, orch)
+
+# The call matrix (W-4, W-6, W-7) ---------------------------------------------------------
+
+proc matrix(h: var LogosRouteHandle, local = true) =
+  ## Every method and every rejection a marked payload meets, through `h`.
+  ## The test's own copies are wiped as it goes. `local`: the vault is in
+  ## this process, and what it keeps is checked.
+  # `store` (request marked): kept by the module.
+  var b = storeReq()
+  var r = h.raw("store", b)
+  wipe(b)
+  check r.code == ecOk
+  wipe(r)
+  var held: seq[byte]
+  if local:
+    held = vaultHolds(int(Slot))
+    check held == canary
+    wipe(held)
+  # `peek` (unmarked): no payload of the canary.
+  b = slotReq()
+  r = h.raw("peek", b)
+  check r.code == ecOk
+  check r.response.len > 0 and finds(r.response) == 0
+  wipe(r)
+  # `fetch` (response marked).
+  b = slotReq()
+  r = h.raw("fetch", b)
+  check r.code == ecOk
+  held = lookupBytes(r.response, "secret")
+  check held == canary
+  wipe(held)
+  wipe(r)
+  # `exchange` (both marked).
+  b = exchangeReq()
+  r = h.raw("exchange", b)
+  wipe(b)
+  check r.code == ecOk
+  held = lookupBytes(r.response, "previous")
+  check held == canary
+  wipe(held)
+  wipe(r)
+  # [G278; S4b3b-2 (b)] INVALID_PARAMS for an unknown key that is the canary:
+  # the detail path stops before it and the message is fixed.
+  b = storeReq(slot = 2, extra = canaryText)
+  r = h.raw("store", b)
+  wipe(b)
+  check r.code == ecInvalidParams
+  check finds(r.message) == 0 and finds(r.detail) == 0
+  check r.detail.len > 0
+  wipe(r)
+  # A provider failure whose message holds the canary: forwarded to the
+  # caller only (INTERFACE l.3366).
+  b = storeReq(slot = 3, note = "echo")
+  r = h.raw("store", b)
+  wipe(b)
+  check r.code == ecModule
+  check canaryText in r.message
+  wipe(r)
+  # A response outside its schema that holds the canary: MODULE_ERROR, and
+  # the message says nothing of it.
+  b = storeReq(slot = BadSlot)
+  r = h.raw("store", b)
+  wipe(b)
+  check r.code == ecOk
+  wipe(r)
+  b = slotReq(BadSlot)
+  r = h.raw("fetch", b)
+  check r.code == ecModule
+  check finds(r.message) == 0
+  wipe(r)
+
+suite "wipe: a direct route (W-4)":
+  teardown:
+    disarmWipeAudit()
+    leftover()
+
+  test "[IFC-0575] [IFC-0580] [SEC-0057] every method and rejection of a marked contract on a direct route leaves no copy of the canary or its value roots, and no diagnostic, record or file holds them":
+    let (e, orch) = ready(wipeConfig())
+    var h = orch.vaultHandle(e, Vault, "w4")
+    arm()
+    h.matrix()
+    h.release()
+    check e.absentFrom()
+    e.finish()
+    if scans:
+      check hits() == 0
+
+suite "wipe: generated code (W-8)":
+  teardown:
+    disarmWipeAudit()
+    leftover()
+
+  test "[IFC-0577] the kit's typed provider entries keep the request and response marked through their temporaries and cleanup":
+    vaultReset()
+    var ctx: ptr LogosModuleContext
+    var init = input()
+    let symbols = vaultModuleStaticSymbols()
+    proc sym(name: string): pointer =
+      for (n, p) in symbols:
+        if n == name:
+          return p
+
+    let kinit = cast[ModuleInitFn](sym("logos_vault_module_MODULE_init"))
+    let kdestroy = cast[ModuleDestroyFn](sym("logos_vault_module_MODULE_destroy"))
+    check kinit(addr init, addr ctx).code == 0
+    type
+      StoreFn = proc(
+        p0: ptr LogosModuleContext,
+        p1: ptr LogosResponseOwner,
+        p2: bool,
+        p3: cstring,
+        p4: ptr UncheckedArray[uint8],
+        p5: csize_t,
+        p6: uint32,
+        p7: ptr bool,
+      ): LogosResult {.cdecl, gcsafe, raises: [].}
+      FetchFn = proc(
+        p0: ptr LogosModuleContext,
+        p1: ptr LogosResponseOwner,
+        p2: uint32,
+        p3: ptr bool,
+        p4: ptr cstring,
+        p5: ptr ptr UncheckedArray[uint8],
+        p6: ptr csize_t,
+      ): LogosResult {.cdecl, gcsafe, raises: [].}
+      ExchangeFn = proc(
+        p0: ptr LogosModuleContext,
+        p1: ptr LogosResponseOwner,
+        p2: ptr UncheckedArray[uint8],
+        p3: csize_t,
+        p4: uint32,
+        p5: ptr ptr UncheckedArray[uint8],
+        p6: ptr csize_t,
+      ): LogosResult {.cdecl, gcsafe, raises: [].}
+
+    let
+      store = cast[StoreFn](sym("logos_vault_module_CALL_vault_Store"))
+      fetch = cast[FetchFn](sym("logos_vault_module_CALL_vault_Fetch"))
+      exchange = cast[ExchangeFn](sym("logos_vault_module_CALL_vault_Exchange"))
+    # The caller's input: one block outside the Nim heap, zeroed by the test.
+    let input = cast[ptr UncheckedArray[uint8]](allocShared0(canary.len))
+    for i, b in canary:
+      input[i] = b
+    arm()
+    var owner = LogosResponseOwner()
+    var stored = false
+    check store(
+      ctx, addr owner, false, nil, input, csize_t(canary.len), uint32(Slot), addr stored
+    ).code == 0
+    check stored
+    var held = vaultHolds(int(Slot))
+    check held == canary
+    wipe(held)
+    # A provider failure that holds the canary, and an invalid input.
+    var r =
+      store(ctx, addr owner, true, "echo", input, csize_t(canary.len), 3, addr stored)
+    check r.code == CErrorCode(ord(ecModule))
+    check r.message != nil and wipeAuditFinds(r.message, r.message.len) == 1
+    r = store(ctx, addr owner, false, "", input, 300, 2, addr stored)
+    check r.code == CErrorCode(ord(ecInvalidParams))
+    # The response: in the arena the owner releases, zeroed then.
+    var present = false
+    var note: cstring
+    var data: ptr UncheckedArray[uint8]
+    var len: csize_t
+    check fetch(
+      ctx, addr owner, uint32(Slot), addr present, addr note, addr data, addr len
+    ).code == 0
+    check int(len) == canary.len
+    check wipeAuditFinds(data, int(len)) == 1
+    owner.release(owner.state)
+    owner = LogosResponseOwner()
+    check exchange(
+      ctx, addr owner, input, csize_t(canary.len), uint32(Slot), addr data, addr len
+    ).code == 0
+    check wipeAuditFinds(data, int(len)) == 1
+    owner.release(owner.state)
+    owner = LogosResponseOwner()
+    # Outside the schema: MODULE_ERROR, no copy left.
+    discard store(
+      ctx,
+      addr owner,
+      false,
+      nil,
+      input,
+      csize_t(canary.len),
+      uint32(BadSlot),
+      addr stored,
+    )
+    r = fetch(
+      ctx, addr owner, uint32(BadSlot), addr present, addr note, addr data, addr len
+    )
+    check r.code == CErrorCode(ord(ecModule))
+    check r.message == nil or wipeAuditFinds(r.message, r.message.len) == 0
+    secureZero(input, canary.len)
+    deallocShared(input)
+    kdestroy(ctx)
+    if scans:
+      check hits() == 0
+
+  test "[IFC-0577] the generated call helpers keep a marked request and response marked; a handler that keeps the request keeps it intact (INTERFACE l.399)":
+    let (e, orch) = ready(wipeConfig())
+    var h = orch.vaultHandle(e, Vault, "w8")
+    arm()
+    var rq = VaultStoreRequest(slot: uint32(Slot), secret: canary)
+    let s = invoke(addr h, rq)
+    wipeTyped(rq)
+    check s.isOk and s.get.stored
+    var held = vaultHolds(int(Slot))
+    check held == canary
+    wipe(held)
+    var f = invoke(addr h, VaultFetchRequest(slot: uint32(Slot)))
+    check f.isOk and f.get.secret == canary
+    wipeTyped(f)
+    var x = VaultExchangeRequest(slot: uint32(Slot), secret: canary)
+    var g = invoke(addr h, x)
+    wipeTyped(x)
+    check g.isOk and g.get.previous == canary
+    wipeTyped(g)
+    # A provider failure that holds the canary reaches this caller only.
+    var bad = VaultStoreRequest(slot: 3, secret: canary, note: Opt.some("echo"))
+    var failed = invoke(addr h, bad)
+    wipeTyped(bad)
+    check failed.isErr and failed.error.message.isSome and
+      finds(failed.error.message.get) == 1
+    wipeError(failed)
+    # Kept intact by the module: it answers for its own copies.
+    held = vaultHolds(int(Slot))
+    check held == canary
+    wipe(held)
+    h.release()
+    e.finish()
+    if scans:
+      check hits() == 0
+
+suite "wipe: G244 lifted (W-10)":
+  teardown:
+    disarmWipeAudit()
+    leftover()
+
+  test "[IFC-0578] [IFC-0579] a contract that marks a payload is routed on every local path kind; on a kind without erasure it is refused MODULE_ERROR with no handle (DECISIONS G277)":
+    let (e, orch) = ready(wipeConfig())
+    check orch.vaultRoute(e, Vault, "direct").code == ecOk
+    check e.setErasureMissingForTests({rmDirect}).isOk
+    let refused = orch.vaultRoute(e, Vault, "refused")
+    check refused.code == ecModule
+    check refused.message ==
+      "marked payloads are not supported on this path (INTERFACE §1.4.1)"
+    check refused.response.len == 0
+    check e.setErasureMissingForTests({}).isOk
+    check e.view(Vault).tryGet.state == msReady
+    e.finish()
+    when unixStream:
+      let (t, torch) = ready(wipeConfig(transported = true))
+      check torch.vaultRoute(t, Vault, "transported").code == ecOk
+      check t.setErasureMissingForTests({rmLocalTransport}).isOk
+      let no = torch.vaultRoute(t, Vault, "refused")
+      check no.code == ecModule
+      check no.response.len == 0
+      check t.setErasureMissingForTests({}).isOk
+      t.finish()
+
+suite "wipe: a transported route (W-6)":
+  teardown:
+    disarmWipeAudit()
+    leftover()
+
+  test "[IFC-0575] [IFC-0576] every method and rejection of a marked contract on a local-transport route leaves no copy in the Runtime, its served endpoint or the caller's binding":
+    when unixStream:
+      let (e, orch) = ready(wipeConfig(transported = true))
+      var h = orch.vaultHandle(e, Vault, "w6")
+      arm()
+      h.matrix()
+      h.release()
+      check e.absentFrom()
+      e.finish()
+      if scans:
+        check hits() == 0
+    else:
+      skip()
+
+# Retention (W-9) --------------------------------------------------------------------
+
+proc caConfig(transported = false): EngineConfig =
+  result = wipeConfig(transported)
+  result.statics.add(fakeCaRegistration())
+  result.authority = Opt.some(
+    AuthorityPolicy(instance: Ca, evaluationDeadline: initDuration(seconds = 60))
+  )
+
+proc caReady(transported = false): (Engine, ptr LogosRuntimeControlBinding) =
+  resetFake()
+  result = ready(caConfig(transported))
+  discard result[0].started(fakeCaRecord(), Ca)
+  check result[0].authorityBound()[0]
+
+proc retaining(request = true, response = true): Rule =
+  ## A single-use allow of every call whose `commitment` retains the sides
+  ## asked.
+  result = allow("call", validMs = 0)
+  result.retainRequest = request
+  result.retainResponse = response
+
+proc lastCall(e: Engine): AuthzAnswer =
+  for a in e.answers():
+    if a.request.action == aaCall:
+      result = a
+
+proc holds(hay, needle: openArray[byte]): bool =
+  if needle.len == 0 or needle.len > hay.len:
+    return false
+  for i in 0 .. hay.len - needle.len:
+    if hay.toOpenArray(i, i + needle.len - 1) == needle:
+      return true
+
+proc retention(e: Engine, orch: ptr LogosRuntimeControlBinding, vault = Vault) =
+  ## `vault`: the instance called; the one in this process (`Vault`) is
+  ## checked to keep nothing it was refused.
+  setScript(allow("establish"))
+  var h = orch.vaultHandle(e, vault, "w9")
+  arm()
+  # Both sides retained: a marked request or response is refused before
+  # dispatch (INTERFACE l.395-397; CA l.479); the module never runs.
+  setScript(retaining())
+  var b = storeReq()
+  var r = h.raw("store", b)
+  wipe(b)
+  check r.code == ecNotAuthorised
+  check e.lastCall.outcome == azRefused and e.lastCall.reason == "sensitive-retention"
+  wipe(r)
+  if vault == Vault:
+    check vaultHolds(int(Slot)).len == 0
+  b = slotReq()
+  r = h.raw("fetch", b)
+  check r.code == ecNotAuthorised
+  wipe(r)
+  b = exchangeReq()
+  r = h.raw("exchange", b)
+  wipe(b)
+  check r.code == ecNotAuthorised
+  wipe(r)
+  # An unmarked method of the same contract keeps its retention: its record
+  # holds its request's value root.
+  let records = e.audit.records.len
+  b = slotReq()
+  let peekRoot = valueRootOf("vault.peek_request", b)
+  r = h.raw("peek", b)
+  check r.code == ecOk
+  wipe(r)
+  check waitUntil(
+    proc(): bool =
+      e.audit.records.len > records
+  )
+  check e.audit.records[^1].bytes.holds(peekRoot)
+  # Per side: the response alone retained lets `store` through, not `fetch`.
+  setScript(retaining(request = false))
+  b = storeReq()
+  r = h.raw("store", b)
+  wipe(b)
+  check r.code == ecOk
+  wipe(r)
+  b = slotReq()
+  r = h.raw("fetch", b)
+  check r.code == ecNotAuthorised
+  wipe(r)
+  # Nothing retained: every method runs.
+  setScript(retaining(request = false, response = false))
+  b = slotReq()
+  r = h.raw("fetch", b)
+  check r.code == ecOk
+  var held = lookupBytes(r.response, "secret")
+  check held == canary
+  wipe(held)
+  wipe(r)
+  h.release()
+  check e.absentFrom()
+
+suite "wipe: retention of a marked payload (W-9)":
+  teardown:
+    disarmWipeAudit()
+    leftover()
+
+  test "[IFC-0581] [SEC-0057] on a direct route a decision that retains a marked side refuses the call NOT_AUTHORISED before dispatch, recorded as sensitive-retention without a value root; an unmarked method keeps its root":
+    let (e, orch) = caReady()
+    e.retention(orch)
+    # On a path kind without erasure the route is refused after its authority
+    # and contract checks, whatever the decision retains, and nothing is
+    # downgraded to ordinary handling (INTERFACE l.386-388; G277).
+    check e.setErasureMissingForTests({rmDirect}).isOk
+    for i, keep in [true, false]:
+      var rule = allow("establish")
+      rule.retainRequest = keep
+      rule.retainResponse = keep
+      setScript(rule)
+      let refused = orch.vaultRoute(e, Vault, "w9-" & $i)
+      check refused.code == ecModule
+      check refused.message ==
+        "marked payloads are not supported on this path (INTERFACE §1.4.1)"
+    check e.setErasureMissingForTests({}).isOk
+    e.finish()
+    if scans:
+      check hits() == 0
+
+  test "[IFC-0581] [SEC-0057] the same on a local-transport route: the served endpoint admits through the same check":
+    when unixStream:
+      let (e, orch) = caReady(transported = true)
+      e.retention(orch)
+      e.finish()
+      if scans:
+        check hits() == 0
+    else:
+      skip()
+
+# Asynchronous calls (W-5) -----------------------------------------------------------
+
+type Done = object
+  count: Atomic[int]
+  code: Atomic[int]
+  canaries: Atomic[int] ## completions whose response held the canary
+
+var done: Done
+
+proc onComplete(
+    userData: pointer,
+    r: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+) {.cdecl, gcsafe, raises: [].} =
+  let d = cast[ptr Done](userData)
+  if response != nil and wipeAuditFinds(response, int(len)) > 0:
+    d.canaries += 1
+  if not owner.release.isNil:
+    owner.release(owner.state)
+  d.code.store(int(r.code))
+  d.count += 1
+
+proc prepared(
+    h: var LogosRouteHandle, name: string, params: var seq[byte], timeoutMs = 0'u64
+): LogosAsyncCall =
+  ## A prepared call; `params` is wiped once the call holds its own copy.
+  var o = LogosAsyncOptions(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncOptions)),
+    hasTimeout: timeoutMs > 0,
+    timeoutMs: timeoutMs,
+  )
+  var cb = LogosAsyncCallbacks(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncCallbacks)),
+    complete: onComplete,
+    userData: addr done,
+  )
+  result = LogosAsyncCall()
+  var r = toResult(
+    h.vtable.prepareCall(
+      addr h,
+      cstring(name),
+      cast[ptr UncheckedArray[uint8]](addr params[0]),
+      csize_t(params.len),
+      addr o,
+      addr cb,
+      addr result,
+    )
+  )
+  check r.code == ecOk
+  wipe(r)
+  wipe(params)
+
+proc completions(n: int): bool =
+  waitUntil(
+    proc(): bool =
+      done.count.load >= n
+  )
+
+proc deferredCalls(transported: bool) =
+  let (e, orch) = ready(wipeConfig(transported))
+  var h = orch.vaultHandle(e, DVault, "w5")
+  done.count.store(0)
+  done.canaries.store(0)
+  arm()
+  # A held `store` the caller cancels: the provider still reads its request
+  # intact after `complete` and before `execution_release` (INTERFACE l.2121).
+  var b = storeReq()
+  var c = h.prepared("store", b)
+  c.vtable.submit(addr c)
+  let p = takeVault()
+  check p.parked
+  c.vtable.cancel(addr c)
+  check completions(1)
+  check done.code.load == ord(ecCancelled)
+  p.answerVault()
+  check rereadIntact.load == 1 and rereadChanged.load == 0
+  c.vtable.release(addr c)
+  var held = vaultHolds(int(Slot))
+  check held == canary
+  wipe(held)
+  # A held `fetch` (response marked) past its deadline: TIMEOUT, then the
+  # provider's late response holding the canary is dropped.
+  b = slotReq()
+  c = h.prepared("fetch", b, timeoutMs = uint64(50 * Slow))
+  c.vtable.submit(addr c)
+  let q = takeVault()
+  check q.parked
+  check completions(2)
+  check done.code.load == ord(ecTimeout)
+  q.answerVault()
+  check rereadIntact.load == 2
+  c.vtable.release(addr c)
+  # A held `exchange` answered in time: its response reaches the caller.
+  b = exchangeReq()
+  c = h.prepared("exchange", b)
+  c.vtable.submit(addr c)
+  let x = takeVault()
+  check x.parked
+  x.answerVault()
+  check completions(3)
+  check done.code.load == ord(ecOk)
+  check done.canaries.load == 1
+  c.vtable.release(addr c)
+  h.release()
+  check e.absentFrom()
+  e.finish()
+  if scans:
+    check hits() == 0
+
+suite "wipe: asynchronous calls (W-5)":
+  teardown:
+    disarmWipeAudit()
+    leftover()
+
+  test "[IFC-0576] [IFC-0575] a deferred provider's request stays intact until its execution is released, through a cancel and a timeout, and no copy is left once it is":
+    deferredCalls(transported = false)
+
+  test "[IFC-0576] [IFC-0575] the same through a local-transport route: a Cancel and a late Response":
+    when unixStream:
+      deferredCalls(transported = true)
+    else:
+      skip()
+
+# Hosted routes (W-7; W-9 and W-10 with a hosted end) ---------------------------------
+#
+# The vault built as a shared library in an audit build of the Module Host,
+# and `probe_module` as a hosted consumer that calls through its own route
+# handles (`kit/probe_impl.nim`, `serve`). The Runtime sends each host the
+# patterns in its `init` (`setWipeAuditForTests`); an audit host exits 97 at
+# a graceful end that released a block holding one. Every host's stderr is
+# this process's fd 2, sent to a file for the case and checked. The carrier
+# trace counts the frames between the Runtime and its hosts that hold a
+# pattern: payloads go between the participants directly.
+
+when defined(posix):
+  import std/posix except Time
+  from ../src/logos_core/pins import HashSuiteId
+  import ../src/logos_core/crypto/blake3
+  import ../src/logos_core/runtime/hostsup
+  import ./support/modulehostbuild
+  from ./support/trnowner import fastConfig
+
+  const
+    SanitizerEnv =
+      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
+    HoldSlot = 14'u64 ## `exchange` there waits for a cancel or the file `open`
+    HVault = "hv"
+    HProbe = "p"
+
+  proc digestOf(path: string): array[32, byte] =
+    var h: Blake3Hasher
+    h.init()
+    let bytes = readFile(path)
+    h.update(bytes.toOpenArrayByte(0, bytes.high))
+    h.finish()
+
+  let
+    hostProgram = moduleHostProgram()
+    vaultLib = buildKitLibrary("vault_impl.nim", "wvault")
+    probeLib = buildKitLibrary("probe_impl.nim", "wprobe")
+    vaultDigest = digestOf(vaultLib)
+    probeDigest = digestOf(probeLib)
+    errPath = work / "hosts.stderr"
+
+  proc hostedConfig(): EngineConfig =
+    ## `wipeConfig` with a state root and the Module Host; no routing rule, so
+    ## a route with a hosted end is `local-transport` (R10).
+    result = wipeConfig()
+    result.stateRoot = Opt.some(result.workDir / "state")
+    result.moduleHost = Opt.some(hostProgram)
+    result.moduleHostEnv = @SanitizerEnv
+    result.endpointDir = shortBase / ("e" & $engines)
+    result.transport = Opt.some(fastConfig())
+
+  proc stateOf(cfg: EngineConfig, state: string): string =
+    result = cfg.stateRoot.get / state
+    createDir(result)
+
+  proc hostedVault(): ModuleRecord =
+    ModuleRecord(
+      module: "vault_module",
+      strategy: stHostedDynamic,
+      placement: "process",
+      artifact: ArtifactRecord(
+        id: "wvault", localPath: vaultLib, hash: vaultDigest, hashSuite: HashSuiteId
+      ),
+      primaryContract: Opt.some(vaultRoot),
+      stateAssignment: Opt.some("hv"),
+    )
+
+  proc hostedProbe(): ModuleRecord =
+    ModuleRecord(
+      module: "probe_module",
+      strategy: stHostedDynamic,
+      placement: "process",
+      artifact: ArtifactRecord(
+        id: "wprobe", localPath: probeLib, hash: probeDigest, hashSuite: HashSuiteId
+      ),
+      stateAssignment: Opt.some("p"),
+    )
+
+  # Hosts' stderr and ends.
+
+  var savedErr: cint = -1
+
+  proc captureStderr() =
+    ## From now on fd 2, which every host spawned inherits, goes to `errPath`.
+    flushFile(stderr)
+    savedErr = dup(2)
+    let fd = posix.open(cstring(errPath), O_WRONLY or O_CREAT or O_TRUNC, 0o600)
+    discard dup2(fd, 2)
+    discard posix.close(fd)
+
+  proc restoreStderr(): bool =
+    ## fd 2 back; whether nothing written meanwhile holds a pattern. What was
+    ## written is shown on it.
+    if savedErr < 0:
+      return true
+    flushFile(stderr)
+    discard dup2(savedErr, 2)
+    discard posix.close(savedErr)
+    savedErr = -1
+    var s = readFile(errPath)
+    result = finds(s) == 0
+    if s.len > 0:
+      stderr.write(s)
+    wipe(s)
+
+  proc graceful(since, count: int): bool =
+    ## `count` hosts ended after the first `since` ends, every one exited 0:
+    ## an audit host exits 97 at a graceful end that found a pattern.
+    if not waitUntil(
+      proc(): bool =
+        hostEnds().len >= since + count
+    ):
+      return false
+    result = true
+    let ends = hostEnds()
+    for x in ends[since .. ^1]:
+      if not x.exited or x.status != 0:
+        checkpoint(
+          "a host ended: exited " & $x.exited & ", status " & $x.status & ", " & x.reason &
+            " " & x.carrierLost
+        )
+        result = false
+
+  proc noHostLeft(): bool =
+    waitUntil(
+      proc(): bool =
+        hostPids(hostProgram).len == 0
+    )
+
+  proc audited(e: Engine) =
+    ## Hosts spawned from now on are armed with the patterns, when this build
+    ## scans (an audit host of a refc build would find refc's own channel
+    ## copies, a stated non-claim). Before `arm`: the copies made on the way
+    ## are released unscanned.
+    if scans:
+      e.setWipeAuditForTests(patterns())
+
+  proc traceAll() =
+    ## Counts the carrier frames that hold a pattern, from now on. After the
+    ## hosts' `init`, which carries them.
+    var p = patterns()
+    traceMarkers(p)
+    for x in p.mitems:
+      wipe(x)
+
+  proc noneTraced(): bool =
+    let (frames, found) = traced()
+    checkpoint("carrier frames " & $frames & ", holding a pattern " & $found)
+    frames > 0 and found == 0
+
+  proc unaudited() =
+    setWipeAudit(newSeq[seq[byte]]())
+    traceMarkers(newSeq[seq[byte]]())
+
+  proc heldCalls(dir: string): int =
+    try:
+      readFile(dir / "held").splitLines.countIt(it.len > 0)
+    except IOError:
+      0
+
+  # The probe's command files (as in `test_hosted_routes`).
+
+  type Consumer = object
+    dir: string ## its state directory
+    n: int ## the commands posted
+
+  proc serving(cfg: EngineConfig): Consumer =
+    let dir = cfg.stateOf("p")
+    writeFile(dir / "probe.cmd", "serve\n")
+    Consumer(dir: dir)
+
+  func hexOf(b: openArray[byte]): string =
+    for x in b:
+      result.add(toHex(x, 2).toLowerAscii)
+
+  proc unhexOf(s: string): seq[byte] =
+    result = newSeq[byte](s.len div 2)
+    for i in 0 ..< result.len:
+      result[i] = byte(parseHexInt(s[2 * i .. 2 * i + 1]))
+
+  proc run(c: var Consumer, line: string): string =
+    ## The probe's answer to one command: `<code> <hex value or message>`, or
+    ## `none` if it gave none in time.
+    inc c.n
+    let path = c.dir / ("cmd-" & $c.n)
+    writeFile(path & ".tmp", line)
+    moveFile(path & ".tmp", path)
+    let answer = c.dir / ("out-" & $c.n)
+    if not waitUntil(
+      proc(): bool =
+        fileExists(answer)
+    ):
+      return "none"
+    readFile(answer)
+
+  proc codeIn(line: string): Opt[ErrorCode] =
+    try:
+      errorCode(parseBiggestInt(line.split(' ', 1)[0]))
+    except ValueError:
+      Opt.none(ErrorCode)
+
+  func valueIn(line: string): string =
+    let w = line.split(' ', 1)
+    if w.len > 1:
+      w[1]
+    else:
+      ""
+
+  proc linesOf(c: Consumer, file: string): seq[string] =
+    try:
+      readFile(c.dir / file).splitLines.filterIt(it.len > 0)
+    except IOError:
+      @[]
+
+  proc establishVia(c: var Consumer, e: Engine, instance, key: string): string =
+    ## The probe's `establish_route` to `instance`'s vault: its line.
+    c.run(
+      "rc establish_route " &
+        hexOf(
+          establishReq(
+            key,
+            vaultRoot,
+            provider = Opt.some(providerAddress(e.view(instance).tryGet.providerId)),
+          )
+        )
+    )
+
+  proc routeVia(c: var Consumer, e: Engine, instance, key: string, slot: int): bool =
+    ## A route to `instance` materialized in the probe's handle `slot`.
+    let line = c.establishVia(e, instance, key)
+    check codeIn(line) == Opt.some(ecOk)
+    if codeIn(line) != Opt.some(ecOk):
+      return false
+    let resp =
+      LogosNSRuntimeControlEstablishRouteResponse.decode(unhexOf(valueIn(line)))
+    check resp.isOk and resp.get.routes.len == 1
+    if resp.isErr or resp.get.routes.len != 1:
+      return false
+    let m = c.run(
+      "materialize " & $slot & " " & resp.get.routes[0].route & " " & hexOf(vaultRoot) &
+        " " & hexOf(vaultSchema)
+    )
+    checkpoint("materialize: " & m)
+    codeIn(m) == Opt.some(ecOk)
+
+  proc callVia(
+      c: var Consumer, slot: int, meth: string, params: var seq[byte]
+  ): string =
+    ## The probe's answer to a call through its handle `slot`; `params` is
+    ## wiped once posted (hex: no pattern).
+    let line = "call " & $slot & " " & meth & " " & hexOf(params)
+    wipe(params)
+    c.run(line)
+
+  proc secretIn(line, key: string): seq[byte] =
+    var b = unhexOf(valueIn(line))
+    result = lookupBytes(b, key)
+    wipe(b)
+
+  proc probeMatrix(c: var Consumer, slot: int, hold: string) =
+    ## The W-4 matrix through the probe's handle `slot`, except a provider
+    ## failure that holds the canary (the probe writes a failure's message to
+    ## its answer file: its own copy), then a held `exchange` the probe
+    ## cancels. `hold`: the called vault's state directory.
+    var b = storeReq()
+    check codeIn(c.callVia(slot, "store", b)) == Opt.some(ecOk)
+    b = slotReq()
+    var line = c.callVia(slot, "peek", b)
+    check codeIn(line) == Opt.some(ecOk)
+    b = slotReq()
+    line = c.callVia(slot, "fetch", b)
+    check codeIn(line) == Opt.some(ecOk)
+    var held = line.secretIn("secret")
+    check held == canary
+    wipe(held)
+    b = exchangeReq()
+    line = c.callVia(slot, "exchange", b)
+    check codeIn(line) == Opt.some(ecOk)
+    held = line.secretIn("previous")
+    check held == canary
+    wipe(held)
+    b = storeReq(slot = 2, extra = canaryText)
+    line = c.callVia(slot, "store", b)
+    check codeIn(line) == Opt.some(ecInvalidParams)
+    check canaryText notin line and hexOf(canary) notin line
+    b = storeReq(slot = BadSlot)
+    check codeIn(c.callVia(slot, "store", b)) == Opt.some(ecOk)
+    b = slotReq(BadSlot)
+    line = c.callVia(slot, "fetch", b)
+    check codeIn(line) == Opt.some(ecModule)
+    check canaryText notin line
+    # A held `exchange` cancelled by the probe: the vault answers once it sees
+    # the cancel, with the canary; its late response is dropped.
+    b = storeReq(slot = HoldSlot)
+    check codeIn(c.callVia(slot, "store", b)) == Opt.some(ecOk)
+    b = exchangeReq(HoldSlot)
+    let prep = "prepare " & $slot & " 0 exchange " & hexOf(b) & " -"
+    wipe(b)
+    let before = heldCalls(hold)
+    check codeIn(c.run(prep)) == Opt.some(ecOk)
+    check codeIn(c.run("submit 0")) == Opt.some(ecOk)
+    check waitUntil(
+      proc(): bool =
+        heldCalls(hold) == before + 1
+    )
+    check codeIn(c.run("cancel 0")) == Opt.some(ecOk)
+    let probe = c
+    check waitUntil(
+      proc(): bool =
+        probe.linesOf("done").len == 1
+    )
+    let ended = c.linesOf("done")
+    check ended.len == 1 and ended[0].startsWith("0 " & $ord(ecCancelled) & " ")
+    check codeIn(c.run("release-call 0")) == Opt.some(ecOk)
+    b = slotReq(HoldSlot)
+    line = c.callVia(slot, "fetch", b)
+    check codeIn(line) == Opt.some(ecOk)
+    held = line.secretIn("secret")
+    check held == canary
+    wipe(held)
+    check codeIn(c.run("release " & $slot)) == Opt.some(ecOk)
+
+  proc heldCancel(h: var LogosRouteHandle, hold: string) =
+    ## A held `exchange` this process cancels on its handle: the hosted vault
+    ## answers with the canary once it sees the cancel; the late response is
+    ## dropped.
+    var b = storeReq(slot = HoldSlot)
+    var r = h.raw("store", b)
+    wipe(b)
+    check r.code == ecOk
+    wipe(r)
+    done.count.store(0)
+    done.canaries.store(0)
+    b = exchangeReq(HoldSlot)
+    var c = h.prepared("exchange", b)
+    c.vtable.submit(addr c)
+    check waitUntil(
+      proc(): bool =
+        heldCalls(hold) == 1
+    )
+    c.vtable.cancel(addr c)
+    check completions(1)
+    check done.code.load == ord(ecCancelled)
+    c.vtable.release(addr c)
+    b = slotReq(HoldSlot)
+    r = h.raw("fetch", b)
+    check r.code == ecOk
+    var held = lookupBytes(r.response, "secret")
+    check held == canary
+    wipe(held)
+    wipe(r)
+
+  suite "wipe: hosted routes (W-7, W-9, W-10)":
+    teardown:
+      unaudited()
+      disarmWipeAudit()
+      discard restoreStderr()
+      leftover()
+
+    test "[IFC-0575] [IFC-0576] [IFC-0580] W-7 every method, rejection and a Cancel on a route to a hosted provider leaves no copy in the audit host, the Runtime or the caller, no carrier frame holds one, and nor does the host's stderr":
+      let since = hostEnds().len
+      let cfg = hostedConfig()
+      let hold = cfg.stateOf("hv")
+      engineWork = cfg.workDir
+      vaultReset()
+      let e = fixtureEngine(cfg)
+      e.audited()
+      captureStderr()
+      check e.started(hostedVault(), HVault).state == msReady
+      let (_, orch) = e.startClient()
+      var h = orch.vaultHandle(e, HVault, "w7")
+      traceAll()
+      arm()
+      h.matrix(local = false)
+      h.heldCancel(hold)
+      h.release()
+      check noneTraced()
+      check e.absentFrom()
+      e.finish()
+      check restoreStderr()
+      check graceful(since, 1)
+      check noHostLeft()
+      if scans:
+        check hits() == 0
+
+    test "[IFC-0575] [IFC-0576] [IFC-0580] W-7 the same from a hosted consumer, to a provider the Runtime serves and to a hosted one: no copy in either host or the Runtime":
+      let since = hostEnds().len
+      var cfg = hostedConfig()
+      let hold = cfg.stateOf("hv")
+      let local = cfg.stateOf("v")
+      engineWork = cfg.workDir
+      vaultReset()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      e.audited()
+      captureStderr()
+      var record = vaultRecord()
+      record.stateAssignment = Opt.some("v")
+      check e.started(record, Vault).state == msReady
+      check e.started(hostedVault(), HVault).state == msReady
+      check e.started(hostedProbe(), HProbe).state == msReady
+      traceAll()
+      arm()
+      check c.routeVia(e, Vault, "local", 0)
+      c.probeMatrix(0, local)
+      writeFile(c.dir / "done", "") # the next Cancel's line is the first again
+      check c.routeVia(e, HVault, "hosted", 1)
+      c.probeMatrix(1, hold)
+      check noneTraced()
+      check e.absentFrom()
+      e.finish()
+      check restoreStderr()
+      check graceful(since, 2)
+      check noHostLeft()
+      if scans:
+        check hits() == 0
+
+    test "[IFC-0581] [SEC-0057] W-9 on a route to a hosted provider a decision that retains a marked side refuses the call NOT_AUTHORISED before dispatch; the host never runs it":
+      let since = hostEnds().len
+      var cfg = hostedConfig()
+      discard cfg.stateOf("hv")
+      cfg.statics.add(fakeCaRegistration())
+      cfg.authority = Opt.some(
+        AuthorityPolicy(instance: Ca, evaluationDeadline: initDuration(seconds = 60))
+      )
+      engineWork = cfg.workDir
+      resetFake()
+      let e = fixtureEngine(cfg)
+      e.audited()
+      captureStderr()
+      let (_, orch) = e.startClient()
+      check e.started(hostedVault(), HVault).state == msReady
+      discard e.started(fakeCaRecord(), Ca)
+      check e.authorityBound()[0]
+      e.retention(orch, HVault)
+      e.finish()
+      check restoreStderr()
+      check graceful(since, 1)
+      if scans:
+        check hits() == 0
+
+    test "[IFC-0578] [IFC-0579] W-10 a marked contract is routed to a hosted provider and from a hosted consumer; with the path kind without erasure it is refused MODULE_ERROR with no handle":
+      var cfg = hostedConfig()
+      discard cfg.stateOf("hv")
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      check e.started(vaultRecord(), Vault).state == msReady
+      check e.started(hostedVault(), HVault).state == msReady
+      check e.started(hostedProbe(), HProbe).state == msReady
+      let (_, orch) = e.startClient()
+      check orch.vaultRoute(e, HVault, "to-hosted").code == ecOk
+      check codeIn(c.establishVia(e, Vault, "from-hosted")) == Opt.some(ecOk)
+      check e.setErasureMissingForTests({rmLocalTransport}).isOk
+      let refused = orch.vaultRoute(e, HVault, "refused")
+      check refused.code == ecModule
+      check refused.message ==
+        "marked payloads are not supported on this path (INTERFACE §1.4.1)"
+      check refused.response.len == 0
+      let line = c.establishVia(e, Vault, "refused-hosted")
+      check codeIn(line) == Opt.some(ecModule)
+      check "marked payloads are not supported on this path (INTERFACE §1.4.1)" in line
+      check e.setErasureMissingForTests({}).isOk
+      check e.routes().len == 2
+      e.finish()
+      check noHostLeft()

@@ -896,14 +896,14 @@ proc unsubscribe*(c: var CallerConn, id: uint64): Result[seq[byte], LocalFailure
     )
   ok(encoded(Message(kind: mkUnsubscribe, unsubscribe: Unsubscribe(id: id))))
 
-proc onResponse(c: var CallerConn, resp: Response): seq[CallerEvent] =
+proc onResponse(c: var CallerConn, r: var Response): seq[CallerEvent] =
   ## [SPEC TRANSPORT §3.4, §4.1] A Response must name a transmitted Request with
   ## no terminal Response received. One no longer awaited is still validated,
   ## then discarded, and its id retired; a later one is a duplicate.
   ## [DECISIONS G276] Its value root is zeroed once checked; a result that is
   ## not delivered is zeroed, and a delivered marked one once re-encoded
-  ## (`marked`, read by the I/O carrier).
-  var r = resp
+  ## (`marked`, read by the I/O carrier). `r` is the decoded message's own:
+  ## a failure is moved into the event, so no copy of its text is left.
   defer:
     if r.ok:
       wipe(r.commitment)
@@ -932,7 +932,7 @@ proc onResponse(c: var CallerConn, resp: Response): seq[CallerEvent] =
     if r.ok:
       Outcome(ok: true, response: r.resultMap)
     else:
-      Outcome(ok: false, failure: r.failure)
+      Outcome(ok: false, failure: move r.failure)
   @[
     CallerEvent(
       id: r.id,
@@ -992,7 +992,7 @@ proc receive*(c: var CallerConn, frame: openArray[byte]): seq[CallerEvent] =
   ## One frame body from the callee.
   if c.state == csClosed:
     return @[]
-  let m = decodeMessage(frame, c.limits.payloadDepth).valueOr:
+  var m = decodeMessage(frame, c.limits.payloadDepth).valueOr:
     # [SPEC TRANSPORT §2.3, §8.3, §10]
     return c.shut(closing(ecInvalidParams, $error))
   case m.kind

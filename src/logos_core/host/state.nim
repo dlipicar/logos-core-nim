@@ -30,6 +30,9 @@ const
   ExitNotStartedByLoader* = 2 ## [plan §2.2 step 3] fd 3 is not a carrier
   ExitCarrierLost* = 70
     ## [plan §2.9; RUN-0812] the carrier failed or broke the protocol
+  ExitWipeAudit* = 97
+    ## [DECISIONS I92] test builds only: an armed audit host found a pattern
+    ## in a released block, and ended gracefully otherwise
 
 type
   Answer* = object

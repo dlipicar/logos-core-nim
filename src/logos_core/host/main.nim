@@ -37,6 +37,8 @@ import results
 import ../abi/[checks, types]
 import ../base/perthread
 import ../runtime/realizer
+when defined(lcnWipeAudit):
+  import ../base/wipeaudit
 import ../transport/io/sock
 import ./[consumer, endpoint, rcbinding, state]
 
@@ -92,6 +94,15 @@ func initFailed(
     f.cause = Opt.some(toCarrier(e.cause.get))
   toMessage(f)
 
+proc gracefulStatus(): cint =
+  ## 0, or in an armed audit build [DECISIONS I92] 97 once a released block
+  ## held a pattern; the backtraces go to stderr first.
+  when defined(lcnWipeAudit):
+    if wipeAuditHits() > 0:
+      reportWipeAudit(2)
+      return ExitWipeAudit
+  0
+
 proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
   ## [SPEC LOADER §6 steps 5-8; plan §2.5 step 8] Bind, then the one
   ## `_MODULE_init` call. The host is ended by the Runtime after a failure.
@@ -103,6 +114,11 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
     send(initFailed(m.id, e, phase))
     return
 
+  when not defined(lcnWipeAudit):
+    # [DECISIONS I92] Test support only: a host that cannot scan is not one a
+    # test may believe armed. An audit build armed itself in `route`.
+    if m.wipe_audit.isSome:
+      carrierLost("an init with wipe_audit for a host that is no audit build")
   maxPayloadDepth = int(min(m.max_payload_depth, uint64(high(int32))))
   # [plan §2.8] A consumer's own connections use the Runtime's limits.
   setConsumerTransport(m.transport.get(@[]), maxPayloadDepth)
@@ -207,7 +223,7 @@ proc release(life: var Lifecycle, m: LcnCarrierRelease) =
   life.phase = phReleased
   hs.stopping.store(true)
   send(toMessage(LcnCarrierReleased(id: m.id)))
-  exitnow(0)
+  exitnow(gracefulStatus())
 
 proc lifecycleLoop() =
   markHostThread()
@@ -245,15 +261,43 @@ proc lifecycleMain() {.thread.} =
 
 # The carrier loop ------------------------------------------------------------------------
 
-proc route(f: seq[byte]) =
+when defined(lcnWipeAudit):
+  var auditArmed: bool ## main thread
+
+  proc auditInit(f: var seq[byte], m: var LcnCarrierMessage) =
+    ## [DECISIONS I92] An audit build arms its scan with the patterns of the
+    ## Runtime's first `init`, here, before the init goes on, and then zeroes
+    ## every copy of them it holds: the lifecycle thread gets the init
+    ## re-encoded without them, so no copy is released once armed.
+    if m.arm_lcn_Carrier_init.wipe_audit.isNone:
+      return
+    var p = move(m.arm_lcn_Carrier_init.wipe_audit.get)
+    m.arm_lcn_Carrier_init.wipe_audit = Opt.none(seq[seq[byte]])
+    for i in 0 ..< p.len:
+      if i >= MaxPatterns or auditArmed:
+        if p[i].len > 0:
+          zeroMem(addr p[i][0], p[i].len)
+    if p.len > 0 and not auditArmed:
+      p.setLen(min(p.len, MaxPatterns))
+      auditArmed = true
+      armWipeAudit(move p) # zeroed once registered
+    if f.len > 0:
+      zeroMem(addr f[0], f.len)
+    f = encode(m).valueOr:
+      carrierLost("an init does not encode")
+
+proc route(f: var seq[byte]) =
   ## Main thread: one frame to whoever handles its kind.
-  let m = decodeMessage(f).valueOr:
+  var m = decodeMessage(f).valueOr:
     # [SPEC INTERFACE l.395] Not the codec's text: its path may hold a value
     # from the frame.
     carrierLost("a frame does not decode")
   type K = LcnCarrierMessageKind
   case m.kind
   of K.lcn_Carrier_init, K.lcn_Carrier_apply, K.lcn_Carrier_release:
+    when defined(lcnWipeAudit):
+      if m.kind == K.lcn_Carrier_init:
+        auditInit(f, m)
     try:
       lifeCh[].send(f)
     except Exception:
@@ -288,7 +332,7 @@ proc carrierLoop() {.noreturn.} =
     var p = TPollfd(fd: hs.fd, events: POLLIN)
     discard posix.poll(addr p, 1, -1)
     let (outcome, why) = readFrames(hs.fd, reader, frames)
-    for f in frames:
+    for f in frames.mitems:
       route(f)
     frames.setLen(0)
     case outcome
@@ -296,7 +340,7 @@ proc carrierLoop() {.noreturn.} =
       discard
     of roClosed:
       if hs.stopping.load:
-        exitnow(0)
+        exitnow(gracefulStatus())
       carrierLost(why)
     of roFailed:
       carrierLost(why)

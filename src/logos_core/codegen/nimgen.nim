@@ -82,6 +82,9 @@ type
     idents: Table[string, string] ## Nim-normalized identifier -> origin
     errors: seq[string]
     tmp: int
+    marked: HashSet[(int, string)]
+      ## [SPEC INTERFACE §1.2.1] (document, declaration) pairs `_sensitive`
+      ## marks: their codecs wipe the trees between bytes and Nim values
 
 const
   NimKeywords = [
@@ -772,17 +775,33 @@ proc genDeclaration(g: var NGen, doc: int, d: Declaration) =
         ", string] =\n  ## A value checked against `" & d.name &
         "`.\n  ?generatedSchema().check(" & q & ", v)\n  ok(fromChecked(T, v))"
     )
-    g.api.add(
-      "proc encode*(x: " & name &
-        "): Result[seq[byte], string] =\n  ## Logos deterministic CBOR, checked against `" &
-        d.name & "`.\n  generatedSchema().encodeChecked(" & q & ", toCbor(x))"
-    )
-    g.api.add(
-      "proc decode*(T: type " & name & ", data: openArray[byte]): Result[" & name &
-        ", string] =\n  ## One deterministic-CBOR `" & d.name &
-        "` value.\n  let v = ?generatedSchema().decodeChecked(" & q &
-        ", data)\n  ok(fromChecked(T, v))"
-    )
+    if (doc, d.name) in g.marked:
+      # [DECISIONS G276] A marked declaration: the tree between the bytes and
+      # the Nim value is wiped once used.
+      g.api.add(
+        "proc encode*(x: " & name &
+          "): Result[seq[byte], string] =\n  ## Logos deterministic CBOR, checked against `" &
+          d.name & "` (marked: the tree is wiped).\n  let v = toCbor(x)\n" &
+          "  result = generatedSchema().encodeChecked(" & q & ", v)\n  wipe(v)"
+      )
+      g.api.add(
+        "proc decode*(T: type " & name & ", data: openArray[byte]): Result[" & name &
+          ", string] =\n  ## One deterministic-CBOR `" & d.name &
+          "` value (marked: the tree is wiped).\n  let v = ?generatedSchema().decodeChecked(" &
+          q & ", data)\n  result = ok(fromChecked(T, v))\n  wipe(v)"
+      )
+    else:
+      g.api.add(
+        "proc encode*(x: " & name &
+          "): Result[seq[byte], string] =\n  ## Logos deterministic CBOR, checked against `" &
+          d.name & "`.\n  generatedSchema().encodeChecked(" & q & ", toCbor(x))"
+      )
+      g.api.add(
+        "proc decode*(T: type " & name & ", data: openArray[byte]): Result[" & name &
+          ", string] =\n  ## One deterministic-CBOR `" & d.name &
+          "` value.\n  let v = ?generatedSchema().decodeChecked(" & q &
+          ", data)\n  ok(fromChecked(T, v))"
+      )
   else:
     g.claim(name, d.name)
     g.claim("enc" & name, d.name)
@@ -828,6 +847,8 @@ proc newNGen(docs: seq[Doc], roots: seq[Digest]): NGen =
     for d in v.model.declarations:
       if d.kind != dkMethod:
         g.byImport[toHex(roots[i]) & toHex(declarationRoot(v.model, d))] = (i, d.name)
+    for name in sensitiveDeclarations(v.model):
+      g.marked.incl((i, name))
   for t in ReservedTypes:
     g.idents[nimNorm(t)] = "the runtime"
   g

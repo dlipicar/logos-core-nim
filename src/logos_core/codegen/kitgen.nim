@@ -288,12 +288,38 @@ proc kitModule*(
       o.add("  mixin " & surface.methods.mapIt(handlerName(it.bare)).join(", ") & "\n")
     o.add("  let request = ?kitValidator().checkedRequest(bare, params)\n")
     for m in surface.methods:
+      let requestType = names.getOrDefault(m.request)
+      if not (m.sensitiveRequest or m.sensitiveResponse):
+        o.add(
+          "  if bare == " & escape(m.bare) & ":\n" & "    let response = ?" &
+            handlerName(m.bare) & "(instance, fromChecked(" & requestType &
+            ", request))\n" & "    return encodedResponse(encode(response))\n"
+        )
+        continue
+      # [DECISIONS G276] A marked method: the request tree and the typed values
+      # of its marked payloads are wiped once used, and so is its failure's
+      # text once copied (INTERFACE l.380-386, l.3366). The handler borrows the
+      # typed request; what it keeps is its own copy (l.388, l.399).
+      o.add("  if bare == " & escape(m.bare) & ":\n")
+      if m.sensitiveRequest:
+        o.add(
+          "    var typed = fromChecked(" & requestType & ", request)\n" &
+            "    wipe(request)\n" & "    var response = " & handlerName(m.bare) &
+            "(instance, typed)\n" & "    wipeTyped(typed)\n"
+        )
+      else:
+        o.add(
+          "    var response = " & handlerName(m.bare) & "(instance, fromChecked(" &
+            requestType & ", request))\n"
+        )
       o.add(
-        "  if bare == " & escape(m.bare) & ":\n" & "    let response = ?" &
-          handlerName(m.bare) & "(instance, fromChecked(" & names.getOrDefault(
-          m.request
-        ) & ", request))\n" & "    return encodedResponse(encode(response))\n"
+        "    if response.isErr:\n      result = err(response.error)\n" &
+          "      wipeError(response)\n      return\n" &
+          "    result = encodedResponse(encode(response.get))\n"
       )
+      if m.sensitiveResponse:
+        o.add("    wipeTyped(response.get)\n")
+      o.add("    return\n")
     o.add(
       "  discard request\n  err(failure(ecMethodNotFound, \"unknown method \" & bare))\n"
     )

@@ -838,9 +838,9 @@ when defined(posix):
       primaryContract: Opt.some(bulkRoot),
     )
 
-  # `vault_module` marks payloads (`_sensitive`), as in `test_audit`: no route
-  # to it is made while erasure is not built (G244). Its entries other than
-  # init and destroy are never reached.
+  # `vault_module` marks payloads (`_sensitive`): C-10 makes a route to it and
+  # calls nothing. Its entries other than init and destroy are never reached;
+  # calls on marked payloads are `test_wipe_routes`'s.
   const VaultDoc =
     "_module = \"vault_module\"\n" &
     "_sensitive = [\"vault.get_response\", \"vault.store_request\"]\n\n" &
@@ -1372,10 +1372,10 @@ when defined(posix):
       e.finish()
       check noHostLeft()
 
-    test "[IMPL-DECISION G244] C-10 a route with a hosted end to a contract that marks a payload is refused MODULE_ERROR before readiness, as a direct one; the host keeps no material":
-      # [SPEC INTERFACE l.388] Erasure on the carrier and in the host is not
-      # built (step 4b-3b), so the refusal covers every route with a hosted
-      # end: it is made in `establish_route` before the route's mode is chosen.
+    test "[IMPL-DECISION G244] [IMPL-DECISION G277] C-10 a route with a hosted end to a contract that marks a payload is made (G244 lifted, step 4b-3b); on a path kind without erasure it is refused MODULE_ERROR before readiness, as a direct one, and the host keeps no material":
+      # [SPEC INTERFACE l.388] The host erases marked payloads (step 4b-3b),
+      # so a route with a hosted end is made; `erasureMissing` stands for a
+      # path kind without erasure, refused in `establish_route`.
       var cfg = hosted()
       cfg.statics.add(checkStaticRegistration("vault", vaultTable()).tryGet)
       var c = cfg.serving()
@@ -1390,10 +1390,14 @@ when defined(posix):
         "v",
       )
       check e.started(consumerRecord(), "c").state == msReady
-      let line = c.run("rc establish_route " & hexOf(establishReq("k", vaultRoot)))
+      let made = c.run("rc establish_route " & hexOf(establishReq("k", vaultRoot)))
+      check codeIn(made) == Opt.some(ecOk)
+      check e.setErasureMissingForTests({rmLocalTransport}).isOk
+      let line = c.run("rc establish_route " & hexOf(establishReq("k2", vaultRoot)))
       check codeIn(line) == Opt.some(ecModule)
       check "marked payloads are not supported on this path (INTERFACE §1.4.1)" in line
-      check e.routes().len == 0
+      check e.setErasureMissingForTests({}).isOk
+      check e.routes().len == 1
       e.finish()
       check noHostLeft()
 

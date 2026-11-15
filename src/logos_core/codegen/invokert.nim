@@ -72,10 +72,12 @@ proc routeCall*(
   checkRoute(route).isOkOr:
     return err(toFailure(error))
   # The bytes the route gets are one deterministic-CBOR item within the depth
-  # limit: text that is not UTF-8, or nesting past the limit, stops here.
-  decodeCbor(params).isOkOr:
+  # limit: text that is not UTF-8, or nesting past the limit, stops here. The
+  # tree of that check is wiped: it may be a marked request (DECISIONS G276).
+  let probe = decodeCbor(params).valueOr:
     return
       err(failure(ecInvalidParams, "the request has no deterministic CBOR: " & $error))
+  wipe(probe)
   var buffer: ptr UncheckedArray[uint8] = nil
   var len: csize_t = 0
   let r = route.vtable.call(
@@ -86,10 +88,15 @@ proc routeCall*(
     addr buffer,
     addr len,
   )
-  checkOutcome(r, bufferShape(buffer, len)).isOkOr:
+  var outcome = checkOutcome(r, bufferShape(buffer, len))
+  if outcome.isErr:
     if transfersBuffer(r, buffer):
       route.vtable.releaseResponse(route, buffer, len)
-    return err(toFailure(error))
+    # [DECISIONS G276] A provider's failure text goes to this caller only: the
+    # copy it was checked in is zeroed.
+    result = err(toFailure(outcome.error))
+    wipe(outcome.eResultPrivate)
+    return
   var decoded = Result[CborValue, string].err("a response longer than memory")
   if len <= csize_t(high(int)):
     let d = decodeCbor(buffer.toOpenArray(0, int(len) - 1))
@@ -104,6 +111,9 @@ proc routeCall*(
       moduleError("the route's response is not one deterministic-CBOR item: " & error)
     )
   schema.check(response, v).isOkOr:
+    # [DECISIONS G276, G278] A rejected response is wiped; for a marked one
+    # the message has no path (`nimrt.check`).
+    wipe(v)
     return err(moduleError("the route's response does not match its schema: " & error))
   ok(v)
 

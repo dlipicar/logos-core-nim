@@ -55,6 +55,13 @@ func validator*(s: ContractSet, maxDepth: int): Result[ContractValidator, string
     return err("the payload depth limit is below " & $MinMaxDepth)
   ok(newValidator(s, maxDepth))
 
+func marked*(v: ContractValidator, methodName: string): tuple[request, response: bool] =
+  ## [SPEC INTERFACE §1.2.1] Which payloads of the bare method `methodName`
+  ## `_sensitive` marks; none for a name the set does not expose.
+  let m = v.surface.findMethod(methodName).valueOr:
+    return (false, false)
+  (m.sensitiveRequest, m.sensitiveResponse)
+
 func failure(code: ErrorCode, reason: InvalidParamsReason, msg: string): PayloadError =
   PayloadError(code: code, reason: Opt.some(reason), msg: msg)
 

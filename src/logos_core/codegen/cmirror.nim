@@ -1072,10 +1072,12 @@ proc methodPieces(
     request, response, methodName: string,
     k: int,
     prefix: string,
+    markedRequest = false,
 ): MethodPieces =
   ## [SPEC INTERFACE §2.4] One method's flattened parameters (`cmap.methodParams`
   ## after its first two) and its builders, named `<prefix>Request<k>` and
-  ## `<prefix>Respond<k>`.
+  ## `<prefix>Respond<k>`. [DECISIONS G276] A marked request's builder wipes
+  ## the tree it encodes, on every exit.
   var r = MethodPieces()
   var req = Emit(base: 2)
   var res = Emit(base: 2)
@@ -1093,7 +1095,12 @@ proc methodPieces(
     r.params.add(p & ": ptr " & t)
     reqParams.add(p & ": ptr " & t)
     r.ins.add(p)
-    req.line("ok(encodeCbor(?cIn_" & t & "((?present(" & p & "))[], depth)))")
+    if markedRequest:
+      req.line("let t = ?cIn_" & t & "((?present(" & p & "))[], depth)")
+      req.line("result = ok(encodeCbor(t))")
+      req.line("wipe(t)")
+    else:
+      req.line("ok(encodeCbor(?cIn_" & t & "((?present(" & p & "))[], depth)))")
   else:
     let members = g.layout.halves.getOrDefault(request)
     var srcs: seq[string]
@@ -1110,6 +1117,8 @@ proc methodPieces(
           p
       )
     req.line("var e: seq[CborEntry]")
+    if markedRequest:
+      req.line("defer: wipe(cborMap(e))")
     g.inMap(req, rqOwner, @[], rq.body, members, srcs, "e")
     req.line("ok(encodeCbor(cborMap(e)))")
   # The response.
@@ -1212,32 +1221,32 @@ proc finish(
     )
   )
 
-proc kitMirrors*(
-    s: ContractSet, prefix: string, methods: seq[KitMethod]
-): Result[KitMirrors, string] =
-  ## [SPEC INTERFACE §2.4] The typed provider functions of the module binding
-  ## `s`, for `kitgen`; `prefix` starts the exported procs' Nim names.
-  var (g, docs) = ?setGen(s, "kitSchema()")
-  var byRequest: Table[string, KitMethod]
-  for m in methods:
-    byRequest[m.request] = m
-  var res = KitMirrors()
-  var callProcs: seq[string]
-  for k, call in g.layout.calls:
-    if call.request notin byRequest:
-      return err("no handler for " & call.methodName)
-    let km = byRequest.getOrDefault(call.request)
-    let mp =
-      g.methodPieces(docs, call.request, call.response, call.methodName, k, "kit")
-    callProcs.add(mp.builders)
-    let params =
-      @["p0: ptr LogosModuleContext", "p1: ptr LogosResponseOwner"] & mp.params
-    let nonNull = @["p0", "p1"] & mp.outs
-    # The generic body.
+proc markedHalves(docs: seq[MDoc]): HashSet[string] =
+  ## [SPEC INTERFACE §1.2.1] The request and response declarations
+  ## `_sensitive` marks, in every document of the set.
+  for d in docs:
+    if not d.common:
+      for name in sensitiveDeclarations(d.model):
+        result.incl(name)
+
+proc stagedWipes(mp: MethodPieces, indent: string): string =
+  ## Zeroes the staged output mirrors on the stack (DECISIONS G276).
+  for (local, _) in mp.staged:
+    result.add(indent & "wipeObject(" & local & ")\n")
+
+proc plainKitCall(
+    km: KitMethod,
+    symbol, methodName, response: string,
+    k: int,
+    params, nonNull: seq[string],
+    mp: MethodPieces,
+): string =
+  ## The generic body of an unmarked method's provider function.
+  block:
     var body =
       "proc kitCall" & $k & "[T](" & params.join(", ") & "): LogosResult =\n" & "  ## `" &
-      call.symbol & "` (INTERFACE §2.4): `" & call.methodName & "`.\n" & "  mixin " &
-      km.handler & "\n" & "  if " & nonNull.mapIt(it & " == nil").join(" or ") & ":\n" &
+      symbol & "` (INTERFACE §2.4): `" & methodName & "`.\n" & "  mixin " & km.handler &
+      "\n" & "  if " & nonNull.mapIt(it & " == nil").join(" or ") & ":\n" &
       "    return failureResult(moduleError(\"a null module, response owner or output\"))\n" &
       "  let params = kitRequest" & $k & "(" & mp.ins.join(", ") & ").valueOr:\n" &
       "    return failureResult(failure(ecInvalidParams, error))\n" &
@@ -1246,7 +1255,7 @@ proc kitMirrors*(
       "  let instance {.cursor.} = cast[T](instanceOf(p0))\n" & "  let response = " &
       km.handler & "(instance, fromChecked(" & km.requestType & ", request)).valueOr:\n" &
       "    return failureResult(error)\n" & "  let v = toCbor(response)\n" &
-      "  kitSchema().check(" & escape(call.response) & ", v).isOkOr:\n" &
+      "  kitSchema().check(" & escape(response) & ", v).isOkOr:\n" &
       "    return failureResult(moduleError(\"the response does not match its schema: \" & error))\n"
     if mp.staged.len > 0:
       body.add("  var arena: CallArena\n")
@@ -1263,7 +1272,112 @@ proc kitMirrors*(
     else:
       body.add("  p1[] = LogosResponseOwner()\n")
     body.add("  okResult()")
-    callProcs.add(body)
+    body
+
+proc markedKitCall(
+    km: KitMethod,
+    symbol, methodName, response: string,
+    k: int,
+    params, nonNull: seq[string],
+    mp: MethodPieces,
+    mreq, mres: bool,
+): string =
+  ## [DECISIONS G276] The generic body of a marked method's provider function:
+  ## the request's bytes and tree, the typed values of its marked payloads,
+  ## the response tree and the staged outputs are wiped once used, and a
+  ## failure's text once copied (INTERFACE l.380-386, l.3366).
+  var body =
+    "proc kitCall" & $k & "[T](" & params.join(", ") & "): LogosResult =\n" & "  ## `" &
+    symbol & "` (INTERFACE §2.4): `" & methodName & "` (marked).\n" & "  mixin " &
+    km.handler & "\n" & "  if " & nonNull.mapIt(it & " == nil").join(" or ") & ":\n" &
+    "    return failureResult(moduleError(\"a null module, response owner or output\"))\n" &
+    "  var params = kitRequest" & $k & "(" & mp.ins.join(", ") & ").valueOr:\n" &
+    "    return failureResult(failure(ecInvalidParams, error))\n" &
+    "  let request = kitValidator().checkedRequest(" & escape(km.bare) &
+    ", params).valueOr:\n" & "    wipe(params)\n" & "    return failureResult(error)\n" &
+    "  wipe(params)\n" & "  let instance {.cursor.} = cast[T](instanceOf(p0))\n"
+  if mreq:
+    body.add(
+      "  var typed = fromChecked(" & km.requestType & ", request)\n" &
+        "  wipe(request)\n" & "  var response = " & km.handler & "(instance, typed)\n" &
+        "  wipeTyped(typed)\n"
+    )
+  else:
+    body.add(
+      "  var response = " & km.handler & "(instance, fromChecked(" & km.requestType &
+        ", request))\n"
+    )
+  body.add(
+    "  if response.isErr:\n    result = failureResult(response.error)\n" &
+      "    wipeError(response)\n    return\n" & "  let v = toCbor(response.get)\n"
+  )
+  let wipeV = if mres: "    wipe(v)\n" else: ""
+  if mres:
+    body.add("  wipeTyped(response.get)\n")
+  body.add(
+    "  kitSchema().check(" & escape(response) & ", v).isOkOr:\n" & wipeV &
+      "    return failureResult(moduleError(\"the response does not match its schema: \" & error))\n"
+  )
+  if mp.staged.len > 0:
+    body.add("  var arena: CallArena\n")
+    for (local, t) in mp.staged:
+      body.add("  var " & local & ": " & t & "\n")
+    body.add(
+      "  kitRespond" & $k & "(arena, v, " & mp.staged.mapIt(it[0]).join(", ") &
+        ").isOkOr:\n" & "    arena.release()\n" & wipeV &
+        (if mres: mp.stagedWipes("    ") else: "") &
+        "    return failureResult(moduleError(\"the response has no canonical C value: \" & error))\n"
+    )
+    if mres:
+      body.add("  wipe(v)\n")
+    for i, p in mp.outs:
+      body.add("  " & p & "[] = " & mp.staged[i][0] & "\n")
+    if mres:
+      body.add(mp.stagedWipes("  "))
+    body.add("  p1[] = arena.owner\n")
+  else:
+    if mres:
+      body.add("  wipe(v)\n")
+    body.add("  p1[] = LogosResponseOwner()\n")
+  body.add("  okResult()")
+  body
+
+proc kitMirrors*(
+    s: ContractSet, prefix: string, methods: seq[KitMethod]
+): Result[KitMirrors, string] =
+  ## [SPEC INTERFACE §2.4] The typed provider functions of the module binding
+  ## `s`, for `kitgen`; `prefix` starts the exported procs' Nim names.
+  var (g, docs) = ?setGen(s, "kitSchema()")
+  let marked = markedHalves(docs)
+  var byRequest: Table[string, KitMethod]
+  for m in methods:
+    byRequest[m.request] = m
+  var res = KitMirrors()
+  var callProcs: seq[string]
+  for k, call in g.layout.calls:
+    if call.request notin byRequest:
+      return err("no handler for " & call.methodName)
+    let km = byRequest.getOrDefault(call.request)
+    let (mreq, mres) = (call.request in marked, call.response in marked)
+    let mp =
+      g.methodPieces(docs, call.request, call.response, call.methodName, k, "kit", mreq)
+    callProcs.add(mp.builders)
+    let params =
+      @["p0: ptr LogosModuleContext", "p1: ptr LogosResponseOwner"] & mp.params
+    let nonNull = @["p0", "p1"] & mp.outs
+    if mreq or mres:
+      callProcs.add(
+        markedKitCall(
+          km, call.symbol, call.methodName, call.response, k, params, nonNull, mp, mreq,
+          mres,
+        )
+      )
+    else:
+      callProcs.add(
+        plainKitCall(
+          km, call.symbol, call.methodName, call.response, k, params, nonNull, mp
+        )
+      )
     let names = toSeq(0 ..< params.len).mapIt("p" & $it)
     res.symbols.add((call.symbol, prefix & "KitCall" & $k))
     res.exports.add(
@@ -1275,43 +1389,18 @@ proc kitMirrors*(
   (res.types, res.procs, res.layout) = ?g.finish(callProcs, prefix & "Layout")
   ok(res)
 
-proc callMirrors*(
-    s: ContractSet, prefix: string, names: Table[string, string]
-): Result[KitMirrors, string] =
-  ## [SPEC INTERFACE §2.7.2, App A.5] The typed call helpers of every method the
-  ## set `s` exposes, for `callsgen`: `invoke` over the Nim types (`names`, the
-  ## `nimgen` type of each declaration) and, for C callers, the bodies of
-  ## `lcn_invoke_<namespace>_<Method>` and `lcn_clear_<namespace>_<Method>`,
-  ## which the export template defines; `prefix` starts their Nim names.
-  var (g, docs) = ?setGen(s, "callsSchema()", emitLiterals = true)
-  var res = KitMirrors()
-  var callProcs: seq[string]
-  for k, m in g.layout.methods:
-    let mp = g.methodPieces(docs, m.request, m.response, m.methodName, k, "call")
-    callProcs.add(mp.builders)
-    let request = names.getOrDefault(m.request)
-    let response = names.getOrDefault(m.response)
-    if request.len == 0 or response.len == 0:
-      return err("no Nim type for " & m.methodName)
-    let call =
-      "routeCall(p0, " & escape(m.bare) & ", params, callsSchema(), " &
-      escape(m.response) & ")"
-    # Nim callers.
-    callProcs.add(
-      "proc invoke*(route: ptr LogosRouteHandle, request: " & request & "): Result[" &
-        response & ", InvocationFailure] =\n" & "  ## `" & m.methodName &
-        "` through `route` (INTERFACE §5.2).\n" & "  let p0 = route\n" &
-        "  let params = encodeCbor(toCbor(request))\n" & "  let v = ?" & call & "\n" &
-        "  ok(fromChecked(" & response & ", v))"
-    )
-    # C callers.
-    let params = @["p0: ptr LogosRouteHandle", "p1: ptr LogosResponseOwner"] & mp.params
-    let nonNull = @["p0", "p1"] & mp.outs
+proc plainCallInvoke(
+    component, methodName, call: string,
+    k: int,
+    params, nonNull: seq[string],
+    mp: MethodPieces,
+): string =
+  ## The body of an unmarked method's C call helper.
+  block:
     var body =
       "proc callInvoke" & $k & "(" & params.join(", ") & "): LogosResult =\n" &
-      "  ## `lcn_invoke_" & m.component & "` (INTERFACE §2.7.2, App A.5): `" &
-      m.methodName & "`.\n" & "  if " & nonNull.mapIt(it & " == nil").join(" or ") &
-      ":\n" &
+      "  ## `lcn_invoke_" & component & "` (INTERFACE §2.7.2, App A.5): `" & methodName &
+      "`.\n" & "  if " & nonNull.mapIt(it & " == nil").join(" or ") & ":\n" &
       "    return failureResult(moduleError(\"a null route, response owner or output\"))\n" &
       "  let params = callRequest" & $k & "(" & mp.ins.join(", ") & ").valueOr:\n" &
       "    return failureResult(failure(ecInvalidParams, error))\n" & "  let v = " & call &
@@ -1331,7 +1420,123 @@ proc callMirrors*(
     else:
       body.add("  discard v\n  p1[] = LogosResponseOwner()\n")
     body.add("  okResult()")
-    callProcs.add(body)
+    body
+
+proc markedInvoke(
+    methodName, request, response, call: string, mreq, mres: bool
+): string =
+  ## [DECISIONS G276] The Nim call helper of a marked method: the request tree
+  ## and bytes, the response tree and a failure's intermediate copy are wiped
+  ## once used (INTERFACE l.380-386). The values it returns are the caller's.
+  result =
+    "proc invoke*(route: ptr LogosRouteHandle, request: " & request & "): Result[" &
+    response & ", InvocationFailure] =\n" & "  ## `" & methodName &
+    "` through `route` (INTERFACE §5.2; marked).\n" & "  let p0 = route\n"
+  if mreq:
+    result.add("  let t = toCbor(request)\n  var params = encodeCbor(t)\n  wipe(t)\n")
+  else:
+    result.add("  let params = encodeCbor(toCbor(request))\n")
+  result.add("  var r = " & call & "\n")
+  if mreq:
+    result.add("  wipe(params)\n")
+  result.add(
+    "  if r.isErr:\n    result = err(r.error)\n    wipeError(r)\n    return\n" &
+      "  result = ok(fromChecked(" & response & ", r.get))"
+  )
+  if mres:
+    result.add("\n  wipe(r.get)")
+
+proc markedCallInvoke(
+    component, methodName, call: string,
+    k: int,
+    params, nonNull: seq[string],
+    mp: MethodPieces,
+    mreq, mres: bool,
+): string =
+  ## [DECISIONS G276] The body of a marked method's C call helper: as
+  ## `markedInvoke`, and the staged output mirrors are zeroed once copied.
+  var body =
+    "proc callInvoke" & $k & "(" & params.join(", ") & "): LogosResult =\n" &
+    "  ## `lcn_invoke_" & component & "` (INTERFACE §2.7.2, App A.5): `" & methodName &
+    "` (marked).\n" & "  if " & nonNull.mapIt(it & " == nil").join(" or ") & ":\n" &
+    "    return failureResult(moduleError(\"a null route, response owner or output\"))\n" &
+    "  var params = callRequest" & $k & "(" & mp.ins.join(", ") & ").valueOr:\n" &
+    "    return failureResult(failure(ecInvalidParams, error))\n" & "  var r = " & call &
+    "\n"
+  if mreq:
+    body.add("  wipe(params)\n")
+  body.add(
+    "  if r.isErr:\n    result = failureResult(r.error)\n    wipeError(r)\n    return\n"
+  )
+  let wipeV = if mres: "    wipe(r.get)\n" else: ""
+  if mp.staged.len > 0:
+    body.add("  var arena: CallArena\n")
+    for (local, t) in mp.staged:
+      body.add("  var " & local & ": " & t & "\n")
+    body.add(
+      "  callRespond" & $k & "(arena, r.get, " & mp.staged.mapIt(it[0]).join(", ") &
+        ").isOkOr:\n" & "    arena.release()\n" & wipeV &
+        (if mres: mp.stagedWipes("    ") else: "") &
+        "    return failureResult(moduleError(\"the response has no canonical C value: \" & error))\n"
+    )
+    if mres:
+      body.add("  wipe(r.get)\n")
+    for i, p in mp.outs:
+      body.add("  " & p & "[] = " & mp.staged[i][0] & "\n")
+    if mres:
+      body.add(mp.stagedWipes("  "))
+    body.add("  p1[] = arena.owner\n")
+  else:
+    if mres:
+      body.add("  wipe(r.get)\n")
+    body.add("  p1[] = LogosResponseOwner()\n")
+  body.add("  okResult()")
+  body
+
+proc callMirrors*(
+    s: ContractSet, prefix: string, names: Table[string, string]
+): Result[KitMirrors, string] =
+  ## [SPEC INTERFACE §2.7.2, App A.5] The typed call helpers of every method the
+  ## set `s` exposes, for `callsgen`: `invoke` over the Nim types (`names`, the
+  ## `nimgen` type of each declaration) and, for C callers, the bodies of
+  ## `lcn_invoke_<namespace>_<Method>` and `lcn_clear_<namespace>_<Method>`,
+  ## which the export template defines; `prefix` starts their Nim names.
+  var (g, docs) = ?setGen(s, "callsSchema()", emitLiterals = true)
+  let marked = markedHalves(docs)
+  var res = KitMirrors()
+  var callProcs: seq[string]
+  for k, m in g.layout.methods:
+    let (mreq, mres) = (m.request in marked, m.response in marked)
+    let mp = g.methodPieces(docs, m.request, m.response, m.methodName, k, "call", mreq)
+    callProcs.add(mp.builders)
+    let request = names.getOrDefault(m.request)
+    let response = names.getOrDefault(m.response)
+    if request.len == 0 or response.len == 0:
+      return err("no Nim type for " & m.methodName)
+    let call =
+      "routeCall(p0, " & escape(m.bare) & ", params, callsSchema(), " &
+      escape(m.response) & ")"
+    # Nim callers.
+    let params = @["p0: ptr LogosRouteHandle", "p1: ptr LogosResponseOwner"] & mp.params
+    let nonNull = @["p0", "p1"] & mp.outs
+    if mreq or mres:
+      callProcs.add(markedInvoke(m.methodName, request, response, call, mreq, mres))
+      callProcs.add(
+        markedCallInvoke(
+          m.component, m.methodName, call, k, params, nonNull, mp, mreq, mres
+        )
+      )
+    else:
+      callProcs.add(
+        "proc invoke*(route: ptr LogosRouteHandle, request: " & request & "): Result[" &
+          response & ", InvocationFailure] =\n" & "  ## `" & m.methodName &
+          "` through `route` (INTERFACE §5.2).\n" & "  let p0 = route\n" &
+          "  let params = encodeCbor(toCbor(request))\n" & "  let v = ?" & call & "\n" &
+          "  ok(fromChecked(" & response & ", v))"
+      )
+      callProcs.add(
+        plainCallInvoke(m.component, m.methodName, call, k, params, nonNull, mp)
+      )
     let outParams = mp.params[mp.params.len - mp.outs.len .. ^1]
     let clearParams = @["p1: ptr LogosResponseOwner"] & outParams
     var clear =

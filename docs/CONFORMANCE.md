@@ -93,7 +93,7 @@ Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --close
 - **INTERFACE** adds the Runtime as ABI caller, route and Runtime Control binding, asynchronous calls
   and the invocation context. Deferred: the boundary-invariance units until a second boundary exists,
   marked-payload erasure (Tier 4b; until then no route is made to a contract that marks a payload,
-  G244), the reverse mapper and remote bindings (Tier 5).
+  G244; claimed in step 4b-3b, below), the reverse mapper and remote bindings (Tier 5).
 - **PACKAGE MANAGER**, **SYSTEM BCP** and **SECURITY CONSIDERATIONS** keep the parts built; the
   Package Manager handoff and complete-system composition are Tier 4b, installation and platform
   profiles Tier 5 (with the BCP's QUIC and Package Manager realization profiles, §5.3). The BCP's
@@ -257,6 +257,44 @@ execution scope `local-transport` in a `process` (G272). So:
   host's environment is `module_host_env` only, and on macOS CoreFoundation may add its own
   `__CF_USER_TEXT_ENCODING` inside the process.
 
+### What Tier 4b step 4b-3b changes
+
+Tier 4b step 4b-3b (DECISIONS I92) builds the erasure of marked payloads (INTERFACE §1.4.1), so the
+**INTERFACE** entry changes: IFC-0575 to IFC-0577, IFC-0580 and IFC-0581 are claimed, and
+**SECURITY CONSIDERATIONS** claims SEC-0057. So:
+
+- **Who erases** (G277, the owner's reading of l.388): each participant answers for its own copies.
+  The Runtime, the endpoints it serves, the Module Host and the code lcn-gen generates are the
+  participants this repository controls; a module's own copies are the module's (l.400-401).
+- **What is erased** (G276): byte buffers that can hold a method payload are zeroed at last use
+  whether or not it is marked; value trees, commitment intermediates and hasher states when the side
+  is marked, and always where they exist before the method is resolved; generated code for marked
+  declarations only. A shared request copy is released only once execution is released and nothing
+  holds it, through a cancel or a timeout too (IFC-0576, l.2121).
+- **Paths** (G277, re-deciding G244): a contract that marks a payload is routed on `direct` and
+  `local-transport` paths, hosted ends included, and refused MODULE_ERROR only on a path kind without
+  erasure (a remote mode, once Tier 5 adds one); no switch turns the refusal off (IFC-0578,
+  IFC-0579).
+- **Diagnostics** (G278): for a marked request the INVALID_PARAMS path stops before the first key
+  taken from the payload; generated messages for a marked declaration carry no path; a provider's
+  failure text is forwarded to its caller only; no marked value or value root reaches a diagnostic,
+  an audit record, an observation result or the carrier (IFC-0580, SEC-0057).
+- **Retention** (IFC-0581): a decision that retains a marked side refuses the call NOT_AUTHORISED
+  before dispatch, recorded as `sensitive-retention` without a value root, on direct, transported
+  and hosted paths alike; an unmarked method of the same contract keeps its retention.
+- **How it is shown**: test builds rename `free` and `realloc` to a scan that searches every
+  released block for a per-run canary and the value roots of the payloads that carry it
+  (`base/wipeaudit`; "Test hooks" below). `test_wipe_routes` runs every method and rejection of the
+  `vault_module` kit, whose contract marks `store`'s request, `fetch`'s response and both of
+  `exchange`, through raw dispatch, the generated typed entries and the generated call helpers, on
+  direct, transported and hosted routes, with a deferred provider through a cancel and a timeout,
+  and with audit builds of the Module Host for a hosted provider and a hosted consumer: no released
+  block, carrier frame, host stderr, diagnostic, record or engine file holds a pattern. The scan
+  sees the Nim heap under orc and arc; under refc the other checks run.
+- **Not claimed** (also under "Properties not claimed"): a host ended by force, a refc build of the
+  Runtime or the Module Host, values reached through a ref in generated code under refc, the kit's
+  per-thread failure text until the thread's next kit call, and values held on the stack.
+
 ### What Tier 4b step 4b-5 changes
 
 Tier 4b step 4b-5 (DECISIONS I94) adds the reference orchestration module, `lcn_orchestrator`, so the
@@ -322,6 +360,24 @@ reaches a scope until package-backed requests are presented to policy.
   decision does not: the Runtime judges every Hello, call, subscription and delivery from names,
   roots and connection numbers, and no verdict reads a payload. Both are interims (plan R16, K38,
   K44), reported as TF-50 and TF-51.
+
+- Erasure of a marked payload (INTERFACE §1.4.1; DECISIONS I92) where no wipe can run or reach:
+  - **A Module Host ended by force**: SIGKILL at a startup, stop or apply deadline (G269), or
+    `_exit(70)` on a broken carrier (G266), ends the process without running any wipe. This is a
+    non-claim for that host's own buffers only (LOADER l.573 permits the forced end); the Runtime's
+    and the peer's keep their claim.
+  - **A refc build of the Runtime or the Module Host**: under refc, Nim's `Channel[T]` deep-copies
+    each message into the channel's region and frees that copy inside the standard library,
+    unerased, and the Runtime and the host pass payload bytes in channel messages. What ships is orc
+    (`build_runtime_lib`, the packaged host).
+  - **Generated code under refc** is claimed except for values reached through a ref (a recursive
+    type): `wipeTyped` follows a ref only when it can see the ref is the value's alone, which only
+    orc and arc can tell. Under orc a ref another owner shares is left to that owner.
+  - **The kit's per-thread failure text**: a failure a kit provider returns is copied into its
+    thread's slot for the caller and zeroed at that thread's next kit entry, not when the caller is
+    done with it.
+  - **Values on the stack**: fixed-size values held in locals (a digest, a scalar) are not zeroed;
+    every heap and shared-heap copy is.
 
 ## Unix-stream endpoints and peer checks
 
@@ -447,8 +503,8 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
 4. A hook does nothing until the Runtime's host selects it. In an in-process suite, that is a call by the
    test.
 
-The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `orchestration` and
-`hostsup`):
+The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `orchestration`,
+`hostsup` and `wipeaudit`):
 
 - `host.setPolicyForTests`: the authority policy the next `start` installs.
 - `engine.loaderJournalForTests`: the Module Loader's request journal, kept in the engine's side table.
@@ -468,12 +524,25 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   every host's, those not yet spawned included), `breakCarrier` treats the next frame from a host as
   malformed, `dropNextListener` spawns the next provider's host without its listener, `hostEnds` and
   `pidOf` read what supervision saw, and `traceMarkers` and `traced` count the carrier frames the
-  Runtime sends and receives and those holding any of the given byte strings (`test_hosted_routes`
-  P-13). The engine's `moduleHostForTests` hands a test an instance's host, `realizationForTests`
+  Runtime sends and receives and those holding any of up to eight given byte strings
+  (`test_hosted_routes` P-13, `test_wipe_routes` W-7). The engine's `moduleHostForTests` hands a test an instance's host, `realizationForTests`
   reads an instance's `realization` when no client is left to ask, and `hostedEndpointForTests`
   reads the path of an instance's hosted endpoint. The `logos-module-host` program itself has no
   hooks: its suites drive it through its carrier
   (`tests/support/hostowner.nim`) and a probe module.
+
+- Erasure (DECISIONS I92): `engine.setErasureMissingForTests` names route modes that
+  `establish_route` treats as path kinds without erasure, so a contract that marks a payload is
+  refused on them as G244 did (G277); `engine.setWipeAuditForTests` (with `hostsup.setWipeAudit`)
+  has every Module Host spawned afterwards sent the given patterns in its `init`.
+- The free scan (`base/wipeaudit`, marker `wipeaudit`) follows the same rule under its own define,
+  `lcnWipeAudit`, which only `tests/test_wipe.nims`, `tests/test_wipe_routes.nims` and the audit
+  builds of the Module Host and the kits those suites build set: `free` and `realloc` in all the C
+  of such a build go through a shim that searches each released block for the registered patterns.
+  It is inert until armed, by `armWipeAudit` in a test process or by the Runtime's `init` in an
+  audit host, which exits 97 at a graceful end that found a pattern. A host built without the define
+  treats an `init` that carries patterns as carrier loss (`test_module_host` H-15), and the flake's
+  `no-test-hooks` check also requires the marker in a probe built with `-d:lcnWipeAudit` alone.
 
 No deployment binary contains them.
 

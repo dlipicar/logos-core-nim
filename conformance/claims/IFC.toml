@@ -23,9 +23,10 @@ default = "claimed"
 # Phase 2: schema acceptance, the C type mapping (forward), encodings, validation,
 # the common schema and its limits.
 "§1" = "claimed"
-# Marked payloads (DECISIONS I88, D-c, G244): `_sensitive` acceptance and its C constants are
-# claimed, and so is the refusal to establish a path for a contract that marks a payload
-# (IFC-0578, IFC-0579). Erasure, no logs and the retention refusal are deferred below.
+# Marked payloads (DECISIONS I88, I92; G276-G278): `_sensitive` acceptance and its C constants,
+# erasure by every participant the Runtime controls and by generated code, no marked value or
+# value root in logs, audit or diagnostics, the retention refusal, and paths refused only on a
+# path kind without erasure (G277, re-deciding G244). Non-claims in docs/CONFORMANCE.md.
 "§1.4.1" = "claimed"
 "§2" = "claimed"
 "§2.4" = "claimed"
@@ -343,15 +344,6 @@ default = "claimed"
 # Both directions of the authoring mapping (the reverse mapper, D30, G139).
 "IFC-0003" = "deferred:tier-5"
 "IFC-0004" = "deferred:tier-5"
-# §1.4.1 (D-c): erasure of Runtime-owned and generated copies, no marked value in logs, audit or
-# diagnostics, and the retention refusal on an established path come together in Tier 4b; until
-# then no path is made for a marked payload (G244), so IFC-0581's second guard in `admit` is never
-# reached.
-"IFC-0575" = "deferred:tier-4b"
-"IFC-0576" = "deferred:tier-4b"
-"IFC-0577" = "deferred:tier-4b"
-"IFC-0580" = "deferred:tier-4b"
-"IFC-0581" = "deferred:tier-4b"
 # §2.5: duties of the module that subscribes or holds a route handle.
 "IFC-0177" = "out-of-scope:a requirement on calling modules"
 "IFC-0185" = "out-of-scope:a requirement on calling modules"

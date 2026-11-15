@@ -8,6 +8,10 @@
 ## on POSIX each builds under an exclusive `lockf` on `<name>.lock` into its own
 ## file and renames it over the old one (the `peerbuild.nim` pattern), so no
 ## process loads a half-written library and no two share a nimcache at once.
+##
+## [DECISIONS I92] A suite built with `-d:lcnWipeAudit` (`test_wipe_routes`)
+## builds its libraries and children as audit builds too (`kitAudit`): the free
+## scan, on the Nim heap through `malloc`, in their own variant directory.
 
 import std/[os, osproc, strutils]
 when defined(posix):
@@ -34,11 +38,22 @@ const
       "msan"
     else:
       ""
+  kitAudit* = defined(lcnWipeAudit)
   kitVariant* =
     kitMm & (when defined(release): "-release" else: "") &
-    (when kitSanitizer.len > 0: "-" & kitSanitizer else: "")
+    (when kitSanitizer.len > 0: "-" & kitSanitizer else: "") &
+    (when kitAudit: "-wipeaudit" else: "")
   kitTestsDir = currentSourcePath().parentDir.parentDir
   nimExe = getCurrentCompilerExe()
+
+proc kitAuditFlags*(executable: bool): seq[string] =
+  ## The audit build's switches (`tests/test_wipe.nims`); none otherwise. An
+  ## executable exports the scan registry on Linux, for the libraries it loads.
+  when kitAudit:
+    result = @["-d:lcnWipeAudit", "-d:useMalloc"]
+    when defined(linux):
+      if executable:
+        result.add("--passL:-rdynamic")
 
 proc buildKitLibrary*(source, name: string): string =
   ## `tests/kit/<source>` as `lib<name>` under `build/kit-dylib/<variant>/`.
@@ -55,6 +70,7 @@ proc buildKitLibrary*(source, name: string): string =
     args.add("-d:release")
   when kitSanitizer.len > 0:
     args.add("-d:" & kitSanitizer)
+  args.add(kitAuditFlags(false))
   args.add(
     [
       "--app:lib",

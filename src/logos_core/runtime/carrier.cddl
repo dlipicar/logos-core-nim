@@ -101,6 +101,11 @@ lcn.carrier_failure = {
 ; the Runtime's `transport` limits (runtime/hostio.nim gives their order) and
 ; its `runtime_id` for the invocation context's caller view. [part 4b-3.3]
 ; Every host gets `transport`: a consumer's own connections use it.
+; [DECISIONS I92] `wipe_audit`, in test builds only: the patterns an audit
+; build of the host searches every released block for (base/wipeaudit.nim).
+; The Runtime sends it only after a test's `setWipeAuditForTests`; a host
+; that is no audit build ignores it; an audit build takes the first 8, and
+; is not armed by an empty list.
 lcn.carrier_init = {
   kind: "init",
   id: uint64,
@@ -113,6 +118,7 @@ lcn.carrier_init = {
   ? endpoint: tstr .size (1..4096),
   ? transport: [* uint64],
   ? runtime_id: tstr .size (1..256),
+  ? wipe_audit: [* bstr .size (16..64)],
 }
 
 lcn.carrier_apply = {

@@ -440,7 +440,7 @@ when defined(posix):
     # [plan §2.7] The carrier trace: every frame, both ways, is counted, and
     # so is each one holding any of the markers a test set, so a test shows
     # that no payload crosses.
-    const MaxMarkers = 4
+    const MaxMarkers = 8
     var traceLock: Lock
     var markers: array[MaxMarkers, array[64, byte]]
     var markerLens: array[MaxMarkers, int]
@@ -449,8 +449,8 @@ when defined(posix):
     initLock(traceLock)
 
     proc traceMarkers*(marks: openArray[seq[byte]]) =
-      ## Starts counting afresh with `marks` (each at most 64 bytes); none
-      ## stops.
+      ## Starts counting afresh with `marks` (at most 8, each at most 64
+      ## bytes); none stops.
       withLock traceLock:
         markerCount = 0
         for m in marks:
@@ -464,6 +464,25 @@ when defined(posix):
 
     proc traced*(): tuple[frames, hits: int] =
       (tracedFrames.load, tracedHits.load)
+
+    # [DECISIONS I92] The patterns an audit build of the host scans released
+    # blocks for, sent in `init` to every host spawned while they are set.
+    var auditPatterns: seq[seq[byte]] ## under `traceLock`
+
+    proc setWipeAudit*(patterns: openArray[seq[byte]]) =
+      ## None: hosts spawned from now on are not armed. The patterns set
+      ## before are zeroed: a test's armed scan would find them released.
+      withLock traceLock:
+        {.cast(gcsafe).}:
+          for p in auditPatterns.mitems:
+            if p.len > 0:
+              zeroMem(addr p[0], p.len)
+          auditPatterns = @patterns
+
+    proc wipeAuditInit*(): seq[seq[byte]] =
+      withLock traceLock:
+        {.cast(gcsafe).}:
+          result = auditPatterns
 
     proc holds(f: openArray[byte], m: openArray[byte]): bool =
       if m.len == 0 or m.len > f.len:

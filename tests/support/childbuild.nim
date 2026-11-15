@@ -27,6 +27,7 @@ proc buildChild*(source, name, subdir: string, defines: seq[string] = @[]): stri
     args.add("-d:" & kitSanitizer)
   for d in defines:
     args.add("-d:" & d)
+  args.add(kitAuditFlags(true))
   args.add(["--nimcache:" & dir / "nimcache", "-o:" & fresh, repoDir / source])
   let lock =
     posix.open(cstring(dir / "build.lock"), O_RDWR or O_CREAT or O_CLOEXEC, 0o644)

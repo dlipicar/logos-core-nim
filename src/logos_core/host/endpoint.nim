@@ -170,6 +170,10 @@ proc freeInv(d: ptr HostInv) =
     deallocShared(d.methodName)
   freeWiped(d.params, d.paramsLen) # [DECISIONS G276]
   deinitLock(d.lock)
+  # [DECISIONS G276] Its commitments: a marked side's value root is the
+  # payload's own (TRANSPORT §4.1); plain digests, zeroed in place.
+  secureZero(addr d.requestRoot, sizeof(d.requestRoot))
+  secureZero(addr d.responseRoot, sizeof(d.responseRoot))
   freeShared(d)
 
 proc newInv(ev: IoEvent) =

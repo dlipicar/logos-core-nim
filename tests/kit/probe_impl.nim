@@ -100,13 +100,18 @@ func hex(p: ptr UncheckedArray[uint8], n: csize_t): string =
     result.add(toHex(p[i], 2).toLowerAscii)
 
 func unhex(s: string): seq[byte] =
+  ## Made at its final size: a growing copy would release a partial one.
+  result = newSeq[byte](s.len div 2)
+  var n = 0
   var i = 0
   while i + 1 < s.len:
     try:
-      result.add(byte(parseHexInt(s[i .. i + 1])))
+      result[n] = byte(parseHexInt(s[i .. i + 1]))
+      inc n
     except ValueError:
       discard
     i += 2
+  result.setLen(n)
 
 proc waitGo(dir: string, name = "go") =
   while not fileExists(dir / name):
@@ -218,7 +223,7 @@ proc command(p: ptr Probe, line: string): string =
       )
     of "call":
       let h = addr p.routes[parseInt(w[1])]
-      let params = unhex(
+      var params = unhex(
         if w.len > 3:
           w[3]
         else:
@@ -229,6 +234,9 @@ proc command(p: ptr Probe, line: string): string =
       let r = h.vtable.call(
         h, cstring(w[2]), ptrOf(params), csize_t(params.len), addr outBuf, addr outLen
       )
+      # [DECISIONS I92] The probe's own copy of the request, wiped: the
+      # erasure tests scan what a host releases (`test_wipe_routes` W-7).
+      wipe(params)
       if int64(r.code) == 0:
         result = "0 " & hex(outBuf, outLen)
         h.vtable.releaseResponse(h, outBuf, outLen)
@@ -250,7 +258,7 @@ proc command(p: ptr Probe, line: string): string =
       return resultLine(h.vtable.observeEnd(h, onRouteEnd, p.newTag(w[2])))
     of "prepare":
       let h = addr p.routes[parseInt(w[1])]
-      let params = unhex(w[4])
+      var params = unhex(w[4])
       var opts = LogosAsyncOptions(
         abiVersion: AsyncCallAbiVersion,
         structSize: csize_t(sizeof(LogosAsyncOptions)),
@@ -263,17 +271,17 @@ proc command(p: ptr Probe, line: string): string =
         complete: onDone,
         userData: p.newTag(w[2]),
       )
-      return resultLine(
-        h.vtable.prepareCall(
-          h,
-          cstring(w[3]),
-          ptrOf(params),
-          csize_t(params.len),
-          addr opts,
-          addr cbs,
-          addr p.calls[parseInt(w[2])],
-        )
+      let r = h.vtable.prepareCall(
+        h,
+        cstring(w[3]),
+        ptrOf(params),
+        csize_t(params.len),
+        addr opts,
+        addr cbs,
+        addr p.calls[parseInt(w[2])],
       )
+      wipe(params) # [DECISIONS I92] the call keeps its own copy
+      return resultLine(r)
     of "submit", "cancel", "release-call":
       let c = addr p.calls[parseInt(w[1])]
       if c.vtable == nil:

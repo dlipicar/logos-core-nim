@@ -20,7 +20,12 @@
 ##   the generated converters (`callrt`, `cmirror`) and share the dispatch
 ##   path's validation and handlers.
 ## - Every failure becomes a `logos_result_t` whose message and detail live in
-##   thread-local storage until the next call on that thread (§2.7).
+##   thread-local storage until the next call on that thread (§2.7), which
+##   zeroes them first.
+## - Marked payloads (INTERFACE §1.2.1, l.380-386; DECISIONS G276): a marked
+##   request is validated in the marked scope, the generated route and typed
+##   entries wipe a marked method's trees and typed values, and every dispatch
+##   response buffer and failure copy is zeroed once released, marked or not.
 ##
 ## Concurrency (§2.8): any entry may run on any thread, concurrently with the
 ## others on the same context. Each exported entry starts with `kitEnter` in
@@ -42,7 +47,7 @@ import ../cbor
 import ../pins
 import ../iface/[accept, outcome, payload]
 import ../abi/[types, checks]
-import ../base/[libvisibility, perthread]
+import ../base/[libvisibility, perthread, wipe]
 import ./nimrt
 
 export results, outcome, types, payload, nimrt
@@ -126,12 +131,14 @@ template kitEnter*() =
   when not defined(gcDestructors):
     var kitStackBottom {.volatile, noinit.}: pointer
     nimGC_setStackBottom(addr kitStackBottom)
+  clearLastFailure()
 
 # Failures --------------------------------------------------------------------------
 
-func failure*(code: ErrorCode, message: string): InvocationFailure =
+func failure*(code: ErrorCode, message: sink string): InvocationFailure =
   ## An invocation failure with a diagnostic message (at most 512 UTF-8 bytes;
-  ## a longer one is cut at a character boundary when it is returned).
+  ## a longer one is cut at a character boundary when it is returned). The
+  ## message is moved in, so a marked method's text leaves no copy (G276).
   InvocationFailure(code: code, message: Opt.some(message))
 
 func moduleError*(message: string): InvocationFailure =
@@ -152,6 +159,18 @@ func clip(m: string): string =
 var
   resultMessage {.threadvar.}: array[MaxMessageBytes + 1, char]
   resultDetail {.threadvar.}: array[MaxDetailBytes, uint8]
+  resultUsed {.threadvar.}: int ## bytes of `resultMessage` written last
+  detailUsed {.threadvar.}: int ## bytes of `resultDetail` written last
+
+proc clearLastFailure*() =
+  ## [DECISIONS G276] Zeroes this thread's last failure message and detail
+  ## (§2.7: valid until the thread's next call, which runs this first).
+  if resultUsed > 0:
+    secureZero(addr resultMessage[0], resultUsed)
+    resultUsed = 0
+  if detailUsed > 0:
+    secureZero(addr resultDetail[0], detailUsed)
+    detailUsed = 0
 
 proc okResult*(): LogosResult =
   LogosResult(code: CErrorCode(0))
@@ -161,29 +180,36 @@ proc failureResult*(f: InvocationFailure): LogosResult =
   ## and detail live in this thread's storage until the next kit call on the
   ## thread. A failure that is not a valid status (code OK, a NUL or invalid
   ## UTF-8 in the message, detail its code does not allow) becomes MODULE_ERROR
-  ## without diagnostics, as an ABI caller would treat it.
+  ## without diagnostics, as an ABI caller would treat it. [DECISIONS G276] A
+  ## marked method's failure text may hold its payload: every copy made here
+  ## is zeroed once written; the caller's `f` is the caller's.
   var f = f
-  if f.message.isSome:
+  if f.message.isSome and f.message.get.len > MaxMessageBytes:
     # Through a local: under refc, `f.message = Opt.some(clip(f.message.get))`
     # resets the destination before the argument reads it (nim-lang/Nim#25993,
     # fixed in 2.4.0, not in 2.2.14).
-    let clipped = clip(f.message.get)
+    var clipped = clip(f.message.get)
+    wipe(f.message)
     f.message = Opt.some(clipped)
+    wipe(clipped)
   if checkFailure(f).isErr or (f.message.isSome and '\0' in f.message.get):
+    wipe(f)
     f = InvocationFailure(code: ecModule)
+  clearLastFailure()
   var r = LogosResult(code: CErrorCode(ord(f.code)))
   if f.message.isSome:
-    let m = f.message.get
-    for i, c in m:
+    for i, c in f.message.get:
       resultMessage[i] = c
-    resultMessage[m.len] = '\0'
+    resultMessage[f.message.get.len] = '\0'
+    resultUsed = f.message.get.len + 1
     r.message = cast[cstring](addr resultMessage[0])
   if f.detail.isSome:
-    let d = f.detail.get
-    for i, b in d:
+    for i, b in f.detail.get:
       resultDetail[i] = b
+    detailUsed = f.detail.get.len
     r.detail = cast[ptr UncheckedArray[uint8]](addr resultDetail[0])
-    r.detailLen = csize_t(d.len)
+    r.detailLen = csize_t(f.detail.get.len)
+  wipe(f)
   r
 
 # Contexts --------------------------------------------------------------------------
@@ -252,10 +278,20 @@ proc kitDestroy*(module: ptr LogosModuleContext, dispose: DisposeFn) =
   dispose(c.instance)
   cFree(c)
 
+const ResponseHeader = 16
+  ## [IMPL] A dispatch response buffer starts 16 bytes into its block, after
+  ## its length, so `_MODULE_free` can zero it (DECISIONS G276).
+
 proc kitFree*(module: ptr LogosModuleContext, p: pointer) =
-  ## [SPEC INTERFACE §2.7] `_MODULE_free`: releases a dispatch response buffer;
-  ## null is a no-op. Thread-safe: the buffers come from the C allocator.
-  cFree(p)
+  ## [SPEC INTERFACE §2.7] `_MODULE_free`: zeroes and releases a dispatch
+  ## response buffer; null is a no-op. Thread-safe: the buffers come from the C
+  ## allocator.
+  if p == nil:
+    return
+  let base = cast[pointer](cast[uint](p) - ResponseHeader)
+  let n = int(cast[ptr uint64](base)[])
+  secureZero(base, ResponseHeader + n)
+  cFree(base)
 
 proc kitDispatch*(
     module: ptr LogosModuleContext,
@@ -278,21 +314,29 @@ proc kitDispatch*(
   if params == nil and paramsLen != 0:
     return failureResult(failure(ecInvalidParams, "null params with a length"))
   let bare = $methodName
-  let response =
+  # [DECISIONS G276] The response bytes and a failure's text are zeroed once
+  # copied out, for every method: the kit runtime does not ask which is marked.
+  var response =
     if paramsLen == 0:
       route(module.context.instance, bare, [])
     else:
       route(module.context.instance, bare, params.toOpenArray(0, int(paramsLen) - 1))
   if response.isErr:
-    return failureResult(response.error)
-  let bytes = response.get
-  let buffer = cast[ptr UncheckedArray[uint8]](cMalloc(csize_t(bytes.len)))
-  if buffer == nil:
+    result = failureResult(response.error)
+    wipe(response)
+    return
+  let n = response.get.len
+  let base = cMalloc(csize_t(ResponseHeader + n))
+  if base == nil:
+    wipe(response)
     return failureResult(moduleError("out of memory for the response"))
-  for i, b in bytes:
+  cast[ptr uint64](base)[] = uint64(n)
+  let buffer = cast[ptr UncheckedArray[uint8]](cast[uint](base) + ResponseHeader)
+  for i, b in response.get:
     buffer[i] = b
+  wipe(response)
   outResponse[] = buffer
-  outResponseLen[] = csize_t(bytes.len)
+  outResponseLen[] = csize_t(n)
   okResult()
 
 proc kitApply*(
@@ -414,18 +458,23 @@ proc checkedRequest*(
   ## METHOD_NOT_FOUND for a method the contract set does not expose (the
   ## well-known `schema` included: the kit is never given the route's selected
   ## contract, App A.3), INVALID_PARAMS with its detail for bytes that are not
-  ## a deterministic-CBOR value of the request schema.
-  v.checkParams(bare, params).mapErr(toFailure)
+  ## a deterministic-CBOR value of the request schema. A marked request is
+  ## validated in the marked scope: one the schema rejects is wiped, and its
+  ## detail path stops before the value's own keys (DECISIONS G276, G278).
+  markedScope(v.marked(bare).request):
+    result = v.checkParams(bare, params).mapErr(toFailure)
 
 proc encodedResponse*(
-    r: Result[seq[byte], string]
+    r: sink Result[seq[byte], string]
 ): Result[seq[byte], InvocationFailure] =
   ## A handler's response as the generated `encode` checked it against the
   ## response schema: one that does not match is not a contract response, so
-  ## the call fails in the module (MODULE_ERROR, INTERFACE §4.3).
+  ## the call fails in the module (MODULE_ERROR, INTERFACE §4.3). The bytes are
+  ## moved, not copied (DECISIONS G276).
+  var r = r
   if r.isErr:
     return err(moduleError("the response does not match its schema: " & r.error))
-  ok(r.get)
+  ok(move r.get)
 
 # Services --------------------------------------------------------------------------
 

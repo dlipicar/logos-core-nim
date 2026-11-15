@@ -13,7 +13,8 @@
 ##
 ## - Blocks come from the C allocator and are chained through their first word.
 ##   Each block's 16-byte header keeps the payload aligned for every member
-##   type.
+##   type; its second word is the payload's size, so the release zeroes the
+##   whole block before freeing it (DECISIONS G276).
 ## - On success the arena becomes the response owner (§2.7.1). Its state is the
 ##   newest block and its release function frees the chain. That needs no Nim
 ##   runtime, so a caller may clear owners on any thread, concurrently.
@@ -46,6 +47,7 @@ import std/atomics
 import results
 import ../cbor
 import ../abi/types
+import ../base/wipe
 
 export results, cbor, types
 
@@ -93,16 +95,20 @@ proc alloc*(a: var CallArena, size: int): Result[pointer, string] =
   if p == nil:
     return err("out of memory for the response")
   cast[ptr pointer](p)[] = a.head
+  cast[ptr uint64](cast[uint](p) + 8)[] = uint64(size)
   a.head = p
   discard liveBlocks.fetchAdd(1)
   ok(cast[pointer](cast[uint](p) + BlockHeader))
 
 proc releaseBlocks(state: pointer) {.cdecl, gcsafe, raises: [].} =
   ## [SPEC INTERFACE §2.7.1] The owner's release: the C allocator only, so any
-  ## thread may call it, and distinct owners concurrently.
+  ## thread may call it, and distinct owners concurrently. Each block is
+  ## zeroed first: it may hold a marked response.
   var p = state
   while p != nil:
     let next = cast[ptr pointer](p)[]
+    let size = int(cast[ptr uint64](cast[uint](p) + 8)[])
+    secureZero(p, BlockHeader + size)
     cFree(p)
     discard liveBlocks.fetchSub(1)
     p = next
@@ -189,7 +195,8 @@ proc inText*(p: cstring): Result[CborValue, string] =
   ## is checked with the rest of the request.
   if p == nil:
     return err("a null text pointer")
-  ok(cbor($p))
+  # Built in place, so no copy of the text is left unwiped (DECISIONS G276).
+  ok(CborValue(kind: ckText, text: $p, validUtf8: true))
 
 proc counted*(p: pointer, n: csize_t): Result[int, string] =
   ## A byte string's length or a list's count, with its pointer.
@@ -256,12 +263,19 @@ proc runOut*(a: var CallArena, root: OutFrame): Result[void, string] =
   ok()
 
 proc runIn*(step: InStep, src: pointer, depth: int): Result[CborValue, string] =
-  ## As `runOut`: the value of the mirror at `src`.
+  ## As `runOut`: the value of the mirror at `src`. A conversion that fails
+  ## wipes what it built (DECISIONS G276): it may be part of a marked request.
   var root: CborValue
   var stack = @[InFrame(step: step, src: src, dst: addr root, depth: depth)]
   while stack.len > 0:
     var child: InFrame
-    if ?stack[^1].step(stack[^1], child):
+    let more = stack[^1].step(stack[^1], child).valueOr:
+      wipe(child.cur)
+      for f in stack:
+        wipe(f.cur)
+      wipe(root)
+      return err(error)
+    if more:
       stack.add(move child)
     else:
       stack.setLen(stack.len - 1)

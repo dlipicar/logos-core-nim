@@ -82,6 +82,11 @@ proc startHosted*(
     init.endpoint = Opt.some(ep.get.path)
     init.transport = Opt.some(ep.get.transport)
     init.runtime_id = Opt.some(ep.get.runtimeId)
+  when defined(lcnTestHooks):
+    # [DECISIONS I92] A test armed the audit hosts (`setWipeAuditForTests`).
+    let audit = wipeAuditInit()
+    if audit.len > 0:
+      init.wipe_audit = Opt.some(audit)
   if call.configuration != nil:
     var b = newSeq[byte](call.configurationLen)
     for i in 0 ..< b.len:

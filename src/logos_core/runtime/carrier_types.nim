@@ -10,7 +10,7 @@ import ../iface/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.carrier.v1: the private carrier between the Runtime and one\x0A; Module Host (DECISIONS G266; 4b-3 plan \xC2\xA72.4, K3). Never in a public record,\x0A; a store or a configuration file.\x0A;\x0A; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR\x0A; lcn.carrier_message (runtime/carrier.nim). Its `kind` fixes its lane:\x0A;   lane 0, the Loader:       init, apply, release / initialized, init_failed,\x0A;                             applied, released, fatal\x0A;   lane 1, Runtime Control:  rc_reply, rc_event, async_done, route_ended /\x0A;                             rc_call, rc_subscribe, rc_unsubscribe,\x0A;                             rc_delivered, rc_connect_remote, rc_publish,\x0A;                             rc_deliver, rc_prepare, rc_async_submit,\x0A;                             rc_async_cancel, rc_async_release,\x0A;                             rc_materialize, rc_link_result, rc_link_admit,\x0A;                             rc_link_closed, rc_link_released\x0A;   lane 2, the boundary:     io_admit_*, io_respond, io_close, io_terminate,\x0A;                             io_work_ended, io_subscription_result,\x0A;                             io_stop_serving, admit_verdict, call_cancel,\x0A;                             scoped_result / io_hello, io_established, io_dispatch, io_stop,\x0A;                             io_closed, io_subscribe, io_unsubscribe,\x0A;                             io_publish_failed, io_publish_result,\x0A;                             io_local_failure, call_ended, scoped_check,\x0A;                             scoped_admit, scoped_done\x0A; A frame that does not decode to one message is terminal carrier loss\x0A; (RUNTIME RUN-0812). No message carries a consumer, instance or ticket: the\x0A; Runtime takes them from the carrier it made for the attempt (RUN-0171,\x0A; RUN-0172). Each side numbers its own requests (`id`); a reply names the\x0A; request it answers.\x0A\x0Alcn.carrier_message =\x0A  lcn.carrier_init /\x0A  lcn.carrier_apply /\x0A  lcn.carrier_release /\x0A  lcn.carrier_initialized /\x0A  lcn.carrier_init_failed /\x0A  lcn.carrier_applied /\x0A  lcn.carrier_released /\x0A  lcn.carrier_fatal /\x0A  lcn.carrier_rc_call /\x0A  lcn.carrier_rc_subscribe /\x0A  lcn.carrier_rc_unsubscribe /\x0A  lcn.carrier_rc_delivered /\x0A  lcn.carrier_rc_connect_remote /\x0A  lcn.carrier_rc_publish /\x0A  lcn.carrier_rc_deliver /\x0A  lcn.carrier_rc_prepare /\x0A  lcn.carrier_rc_async_submit /\x0A  lcn.carrier_rc_async_cancel /\x0A  lcn.carrier_rc_async_release /\x0A  lcn.carrier_rc_materialize /\x0A  lcn.carrier_rc_link_result /\x0A  lcn.carrier_rc_link_admit /\x0A  lcn.carrier_rc_link_closed /\x0A  lcn.carrier_rc_link_released /\x0A  lcn.carrier_rc_reply /\x0A  lcn.carrier_rc_delivery /\x0A  lcn.carrier_async_done /\x0A  lcn.carrier_route_ended /\x0A  lcn.carrier_io_hello /\x0A  lcn.carrier_io_established /\x0A  lcn.carrier_io_dispatch /\x0A  lcn.carrier_io_stop /\x0A  lcn.carrier_io_closed /\x0A  lcn.carrier_io_subscribe /\x0A  lcn.carrier_io_unsubscribe /\x0A  lcn.carrier_io_publish_failed /\x0A  lcn.carrier_io_publish_result /\x0A  lcn.carrier_io_local_failure /\x0A  lcn.carrier_call_ended /\x0A  lcn.carrier_scoped_check /\x0A  lcn.carrier_scoped_admit /\x0A  lcn.carrier_scoped_done /\x0A  lcn.carrier_io_admit_established /\x0A  lcn.carrier_io_admit_failed /\x0A  lcn.carrier_io_admit_unavailable /\x0A  lcn.carrier_io_respond /\x0A  lcn.carrier_io_close /\x0A  lcn.carrier_io_terminate /\x0A  lcn.carrier_io_work_ended /\x0A  lcn.carrier_io_subscription_result /\x0A  lcn.carrier_io_stop_serving /\x0A  lcn.carrier_admit_verdict /\x0A  lcn.carrier_call_cancel /\x0A  lcn.carrier_scoped_result\x0A\x0A; A failure status as the side that read it holds it (abi/checks AbiFailure):\x0A; `reason` is set when the status itself broke the ABI (never forwarded).\x0Alcn.carrier_failure = {\x0A  code: uint8,\x0A  ? message: tstr .size (0..512),\x0A  ? detail: bstr .size (0..4096),\x0A  ? reason: tstr .size (0..512),\x0A}\x0A\x0A; Lane 0, the Loader -> the host ---------------------------------------------------\x0A\x0A; [SPEC LOADER \xC2\xA76] The one initialization: the staged artifact, the state\x0A; directory and the configuration input (LOADER \xC2\xA75.2), never in a record.\x0A; [LOADER \xC2\xA75.3; part 4b-3.2] A provider\'s `endpoint` is the path of the\x0A; listener on fd 4, which the host serves once `_MODULE_init` succeeded, with\x0A; the Runtime\'s `transport` limits (runtime/hostio.nim gives their order) and\x0A; its `runtime_id` for the invocation context\'s caller view. [part 4b-3.3]\x0A; Every host gets `transport`: a consumer\'s own connections use it.\x0Alcn.carrier_init = {\x0A  kind: \"init\",\x0A  id: uint64,\x0A  module: tstr .size (1..64),\x0A  artifact_path: tstr .size (1..4096),\x0A  ? state_dir: tstr .size (1..4096),\x0A  ? configuration: bstr,\x0A  live: bool,\x0A  max_payload_depth: uint64,\x0A  ? endpoint: tstr .size (1..4096),\x0A  ? transport: [* uint64],\x0A  ? runtime_id: tstr .size (1..256),\x0A}\x0A\x0Alcn.carrier_apply = {\x0A  kind: \"apply\",\x0A  id: uint64,\x0A  configuration: bstr,\x0A}\x0A\x0Alcn.carrier_release = {\x0A  kind: \"release\",\x0A  id: uint64,\x0A}\x0A\x0A; Lane 0, the host -> the Loader ---------------------------------------------------\x0A\x0Alcn.carrier_initialized = {\x0A  kind: \"initialized\",\x0A  id: uint64,\x0A  ? call_surface: bstr, ; a provider\'s exact `_MODULE_call_surface()` bytes\x0A}\x0A\x0A; [SPEC LOADER \xC2\xA710] The Loader error the host\'s ABI caller produced, with the\x0A; module\'s own status for diagnostics only (`cause`); `phase` \"init\" when it\x0A; came from `_MODULE_init` itself (G250).\x0Alcn.carrier_init_failed = {\x0A  kind: \"init_failed\",\x0A  id: uint64,\x0A  code: \"abi-invalid\" / \"artifact-unavailable\" / \"realization-failed\",\x0A  message: tstr .size (0..512),\x0A  phase: \"bind\" / \"init\",\x0A  ? cause: lcn.carrier_failure,\x0A}\x0A\x0A; The hook\'s status as `readStatus` read it; none: LOGOS_OK.\x0Alcn.carrier_applied = {\x0A  kind: \"applied\",\x0A  id: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_released = {\x0A  kind: \"released\",\x0A  id: uint64,\x0A}\x0A\x0A; The host cannot go on (never from module code): the Loader ends it.\x0Alcn.carrier_fatal = {\x0A  kind: \"fatal\",\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; Lane 1, the host -> the Runtime --------------------------------------------------\x0A\x0A; [SPEC INTERFACE \xC2\xA75.2; RUNTIME \xC2\xA79] One Runtime Control call. `runtime_thread`:\x0A; the calling thread is one the host runs module code on (RUNTIME l.3870).\x0Alcn.carrier_rc_call = {\x0A  kind: \"rc_call\",\x0A  id: uint64,\x0A  method: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  params: bstr,\x0A  runtime_thread: bool,\x0A}\x0A\x0A; `local`: the host\'s own token for the handler, named by each rc_event.\x0Alcn.carrier_rc_subscribe = {\x0A  kind: \"rc_subscribe\",\x0A  id: uint64,\x0A  event: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  local: uint64,\x0A}\x0A\x0A; `in_handler`: made by the handler of `local`\'s delivery in progress, which\x0A; the Runtime runs it beside, so it does not wait for its own frame (G178).\x0Alcn.carrier_rc_unsubscribe = {\x0A  kind: \"rc_unsubscribe\",\x0A  id: uint64,\x0A  sub: uint64,\x0A  ? in_handler: uint64,\x0A}\x0A\x0Alcn.carrier_rc_delivered = {\x0A  kind: \"rc_delivered\",\x0A  local: uint64,\x0A  seq: uint64,\x0A}\x0A\x0Alcn.carrier_rc_connect_remote = {\x0A  kind: \"rc_connect_remote\",\x0A  id: uint64,\x0A  endpoint: bstr,\x0A  expected_root: bstr .size 32,\x0A}\x0A\x0A; [SPEC RUNTIME \xC2\xA77.3; part 4b-3.2, plan \xC2\xA72.7] An ordinary publication\'s\x0A; subscriber sessions, which the reply names (`targets`). The payload stays in\x0A; the host: it checks it under each target\'s selected contract and asks for\x0A; the deliveries with `rc_deliver`.\x0Alcn.carrier_rc_publish = {\x0A  kind: \"rc_publish\",\x0A  id: uint64,\x0A  event: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A}\x0A\x0A; The sessions whose selected contract took the payload (`conns`), and the\x0A; ones that did not (`dropped`, with the check\'s code and nothing else), which\x0A; the Runtime records as a diagnostic (RUNTIME l.1226-1227). The reply names\x0A; the sessions each delivery was admitted to (`admitted`); the host\'s loop\x0A; writes those Events.\x0Alcn.carrier_rc_deliver = {\x0A  kind: \"rc_deliver\",\x0A  id: uint64,\x0A  event: tstr .size (1..128),\x0A  conns: [* uint64],\x0A  dropped: [* lcn.carrier_dropped],\x0A}\x0A\x0Alcn.carrier_dropped = {\x0A  conn: uint64,\x0A  code: uint8,\x0A}\x0A\x0A; One subscriber session of the host\'s endpoint and its selected contract.\x0Alcn.carrier_target = {\x0A  conn: uint64,\x0A  contract: bstr .size 32,\x0A}\x0A\x0A; [SPEC INTERFACE \xC2\xA72.9.1] A prepared Runtime Control call, numbered `call` by\x0A; the host.\x0Alcn.carrier_rc_prepare = {\x0A  kind: \"rc_prepare\",\x0A  id: uint64,\x0A  call: uint64,\x0A  method: bstr,\x0A  params: bstr,\x0A  ? timeout_ms: uint64, ; the options the host checked as the Runtime does\x0A}\x0A\x0Alcn.carrier_rc_async_submit = {\x0A  kind: \"rc_async_submit\",\x0A  call: uint64,\x0A}\x0A\x0Alcn.carrier_rc_async_cancel = {\x0A  kind: \"rc_async_cancel\",\x0A  call: uint64,\x0A}\x0A\x0Alcn.carrier_rc_async_release = {\x0A  kind: \"rc_async_release\",\x0A  id: uint64,\x0A  call: uint64,\x0A}\x0A\x0A; [SPEC INTERFACE \xC2\xA75.2 l.3880-3911; RUNTIME \xC2\xA74.1, \xC2\xA74.2.1; part 4b-3.3, plan\x0A; \xC2\xA72.8] A hosted consumer\'s `materialize_route`, after the direct binding\'s\x0A; local checks: the exact route id, expected root and construction input\x0A; (`schema`, the module\'s bytes; RUN-0177), and whether the host holds unused\x0A; invocation material for the route (`material`, RUN-0174). The Runtime\x0A; rebuilds the contract from `schema` itself and makes its \xC2\xA74.1 checks\x0A; against its current state; the reply names the handle\'s link (`link`) and\x0A; the provider\'s expected peer identity and module (`uid`, `module`,\x0A; TRN-0187), with which the host connects itself.\x0Alcn.carrier_rc_materialize = {\x0A  kind: \"rc_materialize\",\x0A  id: uint64,\x0A  route: tstr .size (1..128),\x0A  expected_root: bstr .size 32,\x0A  schema: bstr,\x0A  material: bool,\x0A}\x0A\x0A; The outcome of the host\'s connection for `link`: none, the Hello completed;\x0A; otherwise its ConnectFailure (`cause`, its ordinal in transport/io/api.nim)\x0A; and code. The reply is the materialization\'s: success, or the code the\x0A; Runtime gives (the route\'s own when it ended meanwhile).\x0Alcn.carrier_rc_link_result = {\x0A  kind: \"rc_link_result\",\x0A  id: uint64,\x0A  link: uint64,\x0A  ? cause: uint8,\x0A  ? code: uint8,\x0A}\x0A\x0A; One operation through the handle `link`, admitted before anything is sent\x0A; on its connection: `op` 0 a call (`name`, the method), 1 a subscribe\x0A; (`name`, the event), 2 an unsubscribe, 3 an `observe_end` installation.\x0A; `closed`: the host\'s connection ended with that code and the Runtime has\x0A; not been told yet (`rc_link_closed`).\x0Alcn.carrier_rc_link_admit = {\x0A  kind: \"rc_link_admit\",\x0A  id: uint64,\x0A  link: uint64,\x0A  op: uint8, ; 0 to 3; any other value is refused as MODULE_ERROR\x0A  ? name: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  ? closed: uint8,\x0A}\x0A\x0A; The connection of `link` ended with `code` (TF-15, G256). The reply\'s\x0A; `code` is the handle\'s first terminal cause (INTERFACE l.1486-1490).\x0Alcn.carrier_rc_link_closed = {\x0A  kind: \"rc_link_closed\",\x0A  id: uint64,\x0A  link: uint64,\x0A  code: uint8,\x0A}\x0A\x0A; The handle `link` was released: its pin and its observer go.\x0Alcn.carrier_rc_link_released = {\x0A  kind: \"rc_link_released\",\x0A  id: uint64,\x0A  link: uint64,\x0A}\x0A\x0A; Lane 1, the Runtime -> the host --------------------------------------------------\x0A\x0A; The outcome of the request `id` names: `failure`, or a success with the\x0A; response bytes (`value`), a subscription id (`sub`), an `rc_publish`\'s\x0A; `targets`, an `rc_deliver`\'s `admitted` sessions, an `rc_materialize`\'s\x0A; `link`, `uid` and `module`, or an `rc_link_closed`\'s `code`.\x0Alcn.carrier_rc_reply = {\x0A  kind: \"rc_reply\",\x0A  id: uint64,\x0A  ? value: bstr,\x0A  ? sub: uint64,\x0A  ? targets: [* lcn.carrier_target],\x0A  ? admitted: [* uint64],\x0A  ? link: uint64,\x0A  ? uid: uint32,\x0A  ? module: tstr .size (1..64),\x0A  ? code: uint8,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_rc_delivery = {\x0A  kind: \"rc_event\",\x0A  local: uint64,\x0A  seq: uint64,\x0A  name: tstr .size (1..128),\x0A  data: bstr,\x0A}\x0A\x0Alcn.carrier_async_done = {\x0A  kind: \"async_done\",\x0A  call: uint64,\x0A  ? value: bstr,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0A; [plan \xC2\xA72.8 steps 1-2; K13] A route the host\'s consumer holds ended with\x0A; `code`, which every new operation on its handles reports from now on;\x0A; `revoked`: it was revoked, which ends the calls still running through them\x0A; (G174). The host wipes the route\'s retained ticket. `links`: each handle of\x0A; the route and its first terminal cause (INTERFACE l.1486-1490).\x0Alcn.carrier_route_ended = {\x0A  kind: \"route_ended\",\x0A  route: tstr .size (1..128),\x0A  code: uint8,\x0A  revoked: bool,\x0A  links: [* lcn.carrier_link_first],\x0A}\x0A\x0Alcn.carrier_link_first = {\x0A  link: uint64,\x0A  first: uint8,\x0A}\x0A\x0A; Lane 2, the boundary (part 4b-3.2; G267, plan \xC2\xA72.7) ------------------------------\x0A;\x0A; A hosted provider\'s endpoint is served by the host\'s own I/O loop on the\x0A; listener the Runtime made (fd 4). Payloads stay in the host: it checks each\x0A; request, response and event payload with the module\'s own call surface, and\x0A; its loop writes every Response and Event. The Runtime decides: it judges\x0A; every Hello, admits every call (`admit_verdict`), subscription and\x0A; delivery, keeps the sessions and writes the call records from what the host\x0A; reports (`call_ended`), and orders the loop\'s session ends, exactly as for\x0A; an endpoint it serves itself (G257). A `conn` is the host\'s own number for\x0A; one accepted connection; a `call` is the Runtime\'s number for one admitted\x0A; call.\x0A\x0A; The host -> the Runtime: the loop\'s events ------------------------------------------\x0A;\x0A; Not the serve outcome: the host keeps it, and reports a listener it cannot\x0A; serve as `init_failed` (lane 0).\x0A\x0A; The first frame of a connection, for the Runtime\'s `acceptHello`.\x0Alcn.carrier_io_hello = {\x0A  kind: \"io_hello\",\x0A  conn: uint64,\x0A  frame: bstr,\x0A}\x0A\x0Alcn.carrier_io_established = {\x0A  kind: \"io_established\",\x0A  conn: uint64,\x0A}\x0A\x0A; A Request the loop resolved under the session\'s contract and access; its\x0A; params stay in the host.\x0Alcn.carrier_io_dispatch = {\x0A  kind: \"io_dispatch\",\x0A  conn: uint64,\x0A  request: uint64,\x0A  method: tstr,\x0A  introspection: bool,\x0A}\x0A\x0Alcn.carrier_io_stop = {\x0A  kind: \"io_stop\",\x0A  conn: uint64,\x0A  request: uint64,\x0A}\x0A\x0Alcn.carrier_io_closed = {\x0A  kind: \"io_closed\",\x0A  conn: uint64,\x0A}\x0A\x0Alcn.carrier_io_subscribe = {\x0A  kind: \"io_subscribe\",\x0A  conn: uint64,\x0A  sub: uint64,\x0A  event: tstr,\x0A}\x0A\x0Alcn.carrier_io_unsubscribe = {\x0A  kind: \"io_unsubscribe\",\x0A  conn: uint64,\x0A  sub: uint64,\x0A}\x0A\x0Alcn.carrier_io_publish_failed = {\x0A  kind: \"io_publish_failed\",\x0A  conn: uint64,\x0A  event: tstr,\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; `error`: the transport\'s `PublishErrorKind`, by its position.\x0Alcn.carrier_publish_failure = {\x0A  error: uint8,\x0A  code: uint8,\x0A  message: tstr .size (0..512),\x0A}\x0A\x0Alcn.carrier_io_publish_result = {\x0A  kind: \"io_publish_result\",\x0A  conn: uint64,\x0A  tag: uint64,\x0A  request: uint64,\x0A  ? failure: lcn.carrier_publish_failure,\x0A}\x0A\x0Alcn.carrier_io_local_failure = {\x0A  kind: \"io_local_failure\",\x0A  conn: uint64,\x0A  code: uint8,\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; [SPEC RUNTIME \xC2\xA74.1; CA l.1172-1177; plan \xC2\xA72.7 step 5] Call `call` has ended\x0A; in the host: whether the Response its loop committed was a success, and the\x0A; request and response commitments the admission asked to retain\x0A; (`admit_verdict`), as the host\'s boundary computed them (G274).\x0Alcn.carrier_call_ended = {\x0A  kind: \"call_ended\",\x0A  call: uint64,\x0A  succeeded: bool,\x0A  ? request: lcn.carrier_commitment,\x0A  ? response: lcn.carrier_commitment,\x0A}\x0A\x0Alcn.carrier_commitment = {\x0A  subtree_root: bstr .size 32,\x0A  value_root: bstr .size 32,\x0A}\x0A\x0A; [SPEC INTERFACE \xC2\xA72.9.3 l.2187-2199; RUNTIME \xC2\xA77.3.1] A running call\'s\x0A; invocation-scoped publication of `event`, in three steps that each wait for\x0A; a `scoped_result`: its destination (`ready`) before the host checks the\x0A; payload, then the delivery\'s admission (`tag`), then, once the host\'s loop\x0A; took the Event, its verdict. No step carries the payload.\x0Alcn.carrier_scoped_check = {\x0A  kind: \"scoped_check\",\x0A  id: uint64,\x0A  call: uint64,\x0A  event: bstr, ; the module\'s bytes, checked as given\x0A}\x0A\x0Alcn.carrier_scoped_admit = {\x0A  kind: \"scoped_admit\",\x0A  id: uint64,\x0A  call: uint64,\x0A  event: tstr .size (1..128),\x0A}\x0A\x0A; `abandon`: the loop did not take the Event (it is stopping).\x0Alcn.carrier_scoped_done = {\x0A  kind: \"scoped_done\",\x0A  id: uint64,\x0A  call: uint64,\x0A  tag: uint64,\x0A  abandon: bool,\x0A}\x0A\x0A; The Runtime -> the host: the loop\'s orders ------------------------------------------\x0A\x0A; [SPEC TRANSPORT \xC2\xA73.1, \xC2\xA78.1] The Hello passed and its ticket was redeemed:\x0A; the session\'s selected contract and route access (declaration subtree\x0A; roots; absent: the whole list), and when its authorization ends, in\x0A; nanoseconds from now (TRN-0317): the host\'s loop ends it then as a\x0A; backstop to the Runtime\'s own end. Nothing else of the route reaches the\x0A; host.\x0Alcn.carrier_io_admit_established = {\x0A  kind: \"io_admit_established\",\x0A  conn: uint64,\x0A  response: bstr,\x0A  contract: bstr .size 32,\x0A  ? methods: [* bstr .size 32],\x0A  ? publish_events: [* bstr .size 32],\x0A  ? subscribe_events: [* bstr .size 32],\x0A  ? ends_in: uint64,\x0A}\x0A\x0Alcn.carrier_io_admit_failed = {\x0A  kind: \"io_admit_failed\",\x0A  conn: uint64,\x0A  code: uint8,\x0A  peer: bool,\x0A}\x0A\x0Alcn.carrier_io_admit_unavailable = {\x0A  kind: \"io_admit_unavailable\",\x0A  conn: uint64,\x0A}\x0A\x0A; A Request\'s terminal failure the Runtime answers (an end, a revocation, a\x0A; refused queue): the host commits it unless its loop already committed a\x0A; Response to that Request (K38 interim).\x0Alcn.carrier_io_respond = {\x0A  kind: \"io_respond\",\x0A  conn: uint64,\x0A  request: uint64,\x0A  failure: lcn.carrier_failure,\x0A  work_ended: bool,\x0A}\x0A\x0Alcn.carrier_io_close = {\x0A  kind: \"io_close\",\x0A  conn: uint64,\x0A}\x0A\x0Alcn.carrier_io_terminate = {\x0A  kind: \"io_terminate\",\x0A  conn: uint64,\x0A}\x0A\x0Alcn.carrier_io_work_ended = {\x0A  kind: \"io_work_ended\",\x0A  conn: uint64,\x0A  request: uint64,\x0A}\x0A\x0Alcn.carrier_io_subscription_result = {\x0A  kind: \"io_subscription_result\",\x0A  conn: uint64,\x0A  sub: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_io_stop_serving = {\x0A  kind: \"io_stop_serving\",\x0A}\x0A\x0A; [SPEC RUNTIME \xC2\xA74.1, \xC2\xA76.4, \xC2\xA77.5; plan \xC2\xA72.7 steps 2-4] The Runtime\'s decision on\x0A; the dispatched Request `request` of `conn`, under the session\'s selected\x0A; `contract`:\x0A; - `failure`: refused. The host commits it, or INVALID_PARAMS when it is\x0A;   NOT_READY and the params do not validate (G171).\x0A; - otherwise admitted as `call`: the host validates the params, runs the\x0A;   provider with an invocation context whose caller is `consumer` (or\x0A;   answers `logos.schema` itself) and ends with `call_ended`, which carries\x0A;   a commitment only where `retain_request` or `retain_response` asks.\x0Alcn.carrier_admit_verdict = {\x0A  kind: \"admit_verdict\",\x0A  conn: uint64,\x0A  request: uint64,\x0A  contract: bstr .size 32,\x0A  ? failure: lcn.carrier_failure,\x0A  ? call: uint64,\x0A  ? consumer: tstr .size (1..256),\x0A  retain_request: bool,\x0A  retain_response: bool,\x0A}\x0A\x0A; [SPEC INTERFACE l.2101] Call `call` was cancelled: `is_cancelled` reads true.\x0Alcn.carrier_call_cancel = {\x0A  kind: \"call_cancel\",\x0A  call: uint64,\x0A}\x0A\x0A; The answer to a scoped step: `failure` stops the publication; `ready` (the\x0A; destination is open) answers `scoped_check`; `tag` (the delivery was\x0A; admitted; none: the subscriber\'s own decisions skipped it) answers\x0A; `scoped_admit`.\x0Alcn.carrier_scoped_result = {\x0A  kind: \"scoped_result\",\x0A  id: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A  ? ready: bool,\x0A  ? tag: uint64,\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.carrier.v1: the private carrier between the Runtime and one\x0A; Module Host (DECISIONS G266; 4b-3 plan \xC2\xA72.4, K3). Never in a public record,\x0A; a store or a configuration file.\x0A;\x0A; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR\x0A; lcn.carrier_message (runtime/carrier.nim). Its `kind` fixes its lane:\x0A;   lane 0, the Loader:       init, apply, release / initialized, init_failed,\x0A;                             applied, released, fatal\x0A;   lane 1, Runtime Control:  rc_reply, rc_event, async_done, route_ended /\x0A;                             rc_call, rc_subscribe, rc_unsubscribe,\x0A;                             rc_delivered, rc_connect_remote, rc_publish,\x0A;                             rc_deliver, rc_prepare, rc_async_submit,\x0A;                             rc_async_cancel, rc_async_release,\x0A;                             rc_materialize, rc_link_result, rc_link_admit,\x0A;                             rc_link_closed, rc_link_released\x0A;   lane 2, the boundary:     io_admit_*, io_respond, io_close, io_terminate,\x0A;                             io_work_ended, io_subscription_result,\x0A;                             io_stop_serving, admit_verdict, call_cancel,\x0A;                             scoped_result / io_hello, io_established, io_dispatch, io_stop,\x0A;                             io_closed, io_subscribe, io_unsubscribe,\x0A;                             io_publish_failed, io_publish_result,\x0A;                             io_local_failure, call_ended, scoped_check,\x0A;                             scoped_admit, scoped_done\x0A; A frame that does not decode to one message is terminal carrier loss\x0A; (RUNTIME RUN-0812). No message carries a consumer, instance or ticket: the\x0A; Runtime takes them from the carrier it made for the attempt (RUN-0171,\x0A; RUN-0172). Each side numbers its own requests (`id`); a reply names the\x0A; request it answers.\x0A\x0Alcn.carrier_message =\x0A  lcn.carrier_init /\x0A  lcn.carrier_apply /\x0A  lcn.carrier_release /\x0A  lcn.carrier_initialized /\x0A  lcn.carrier_init_failed /\x0A  lcn.carrier_applied /\x0A  lcn.carrier_released /\x0A  lcn.carrier_fatal /\x0A  lcn.carrier_rc_call /\x0A  lcn.carrier_rc_subscribe /\x0A  lcn.carrier_rc_unsubscribe /\x0A  lcn.carrier_rc_delivered /\x0A  lcn.carrier_rc_connect_remote /\x0A  lcn.carrier_rc_publish /\x0A  lcn.carrier_rc_deliver /\x0A  lcn.carrier_rc_prepare /\x0A  lcn.carrier_rc_async_submit /\x0A  lcn.carrier_rc_async_cancel /\x0A  lcn.carrier_rc_async_release /\x0A  lcn.carrier_rc_materialize /\x0A  lcn.carrier_rc_link_result /\x0A  lcn.carrier_rc_link_admit /\x0A  lcn.carrier_rc_link_closed /\x0A  lcn.carrier_rc_link_released /\x0A  lcn.carrier_rc_reply /\x0A  lcn.carrier_rc_delivery /\x0A  lcn.carrier_async_done /\x0A  lcn.carrier_route_ended /\x0A  lcn.carrier_io_hello /\x0A  lcn.carrier_io_established /\x0A  lcn.carrier_io_dispatch /\x0A  lcn.carrier_io_stop /\x0A  lcn.carrier_io_closed /\x0A  lcn.carrier_io_subscribe /\x0A  lcn.carrier_io_unsubscribe /\x0A  lcn.carrier_io_publish_failed /\x0A  lcn.carrier_io_publish_result /\x0A  lcn.carrier_io_local_failure /\x0A  lcn.carrier_call_ended /\x0A  lcn.carrier_scoped_check /\x0A  lcn.carrier_scoped_admit /\x0A  lcn.carrier_scoped_done /\x0A  lcn.carrier_io_admit_established /\x0A  lcn.carrier_io_admit_failed /\x0A  lcn.carrier_io_admit_unavailable /\x0A  lcn.carrier_io_respond /\x0A  lcn.carrier_io_close /\x0A  lcn.carrier_io_terminate /\x0A  lcn.carrier_io_work_ended /\x0A  lcn.carrier_io_subscription_result /\x0A  lcn.carrier_io_stop_serving /\x0A  lcn.carrier_admit_verdict /\x0A  lcn.carrier_call_cancel /\x0A  lcn.carrier_scoped_result\x0A\x0A; A failure status as the side that read it holds it (abi/checks AbiFailure):\x0A; `reason` is set when the status itself broke the ABI (never forwarded).\x0Alcn.carrier_failure = {\x0A  code: uint8,\x0A  ? message: tstr .size (0..512),\x0A  ? detail: bstr .size (0..4096),\x0A  ? reason: tstr .size (0..512),\x0A}\x0A\x0A; Lane 0, the Loader -> the host ---------------------------------------------------\x0A\x0A; [SPEC LOADER \xC2\xA76] The one initialization: the staged artifact, the state\x0A; directory and the configuration input (LOADER \xC2\xA75.2), never in a record.\x0A; [LOADER \xC2\xA75.3; part 4b-3.2] A provider\'s `endpoint` is the path of the\x0A; listener on fd 4, which the host serves once `_MODULE_init` succeeded, with\x0A; the Runtime\'s `transport` limits (runtime/hostio.nim gives their order) and\x0A; its `runtime_id` for the invocation context\'s caller view. [part 4b-3.3]\x0A; Every host gets `transport`: a consumer\'s own connections use it.\x0A; [DECISIONS I92] `wipe_audit`, in test builds only: the patterns an audit\x0A; build of the host searches every released block for (base/wipeaudit.nim).\x0A; The Runtime sends it only after a test\'s `setWipeAuditForTests`; a host\x0A; that is no audit build ignores it; an audit build takes the first 8, and\x0A; is not armed by an empty list.\x0Alcn.carrier_init = {\x0A  kind: \"init\",\x0A  id: uint64,\x0A  module: tstr .size (1..64),\x0A  artifact_path: tstr .size (1..4096),\x0A  ? state_dir: tstr .size (1..4096),\x0A  ? configuration: bstr,\x0A  live: bool,\x0A  max_payload_depth: uint64,\x0A  ? endpoint: tstr .size (1..4096),\x0A  ? transport: [* uint64],\x0A  ? runtime_id: tstr .size (1..256),\x0A  ? wipe_audit: [* bstr .size (16..64)],\x0A}\x0A\x0Alcn.carrier_apply = {\x0A  kind: \"apply\",\x0A  id: uint64,\x0A  configuration: bstr,\x0A}\x0A\x0Alcn.carrier_release = {\x0A  kind: \"release\",\x0A  id: uint64,\x0A}\x0A\x0A; Lane 0, the host -> the Loader ---------------------------------------------------\x0A\x0Alcn.carrier_initialized = {\x0A  kind: \"initialized\",\x0A  id: uint64,\x0A  ? call_surface: bstr, ; a provider\'s exact `_MODULE_call_surface()` bytes\x0A}\x0A\x0A; [SPEC LOADER \xC2\xA710] The Loader error the host\'s ABI caller produced, with the\x0A; module\'s own status for diagnostics only (`cause`); `phase` \"init\" when it\x0A; came from `_MODULE_init` itself (G250).\x0Alcn.carrier_init_failed = {\x0A  kind: \"init_failed\",\x0A  id: uint64,\x0A  code: \"abi-invalid\" / \"artifact-unavailable\" / \"realization-failed\",\x0A  message: tstr .size (0..512),\x0A  phase: \"bind\" / \"init\",\x0A  ? cause: lcn.carrier_failure,\x0A}\x0A\x0A; The hook\'s status as `readStatus` read it; none: LOGOS_OK.\x0Alcn.carrier_applied = {\x0A  kind: \"applied\",\x0A  id: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_released = {\x0A  kind: \"released\",\x0A  id: uint64,\x0A}\x0A\x0A; The host cannot go on (never from module code): the Loader ends it.\x0Alcn.carrier_fatal = {\x0A  kind: \"fatal\",\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; Lane 1, the host -> the Runtime --------------------------------------------------\x0A\x0A; [SPEC INTERFACE \xC2\xA75.2; RUNTIME \xC2\xA79] One Runtime Control call. `runtime_thread`:\x0A; the calling thread is one the host runs module code on (RUNTIME l.3870).\x0Alcn.carrier_rc_call = {\x0A  kind: \"rc_call\",\x0A  id: uint64,\x0A  method: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  params: bstr,\x0A  runtime_thread: bool,\x0A}\x0A\x0A; `local`: the host\'s own token for the handler, named by each rc_event.\x0Alcn.carrier_rc_subscribe = {\x0A  kind: \"rc_subscribe\",\x0A  id: uint64,\x0A  event: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  local: uint64,\x0A}\x0A\x0A; `in_handler`: made by the handler of `local`\'s delivery in progress, which\x0A; the Runtime runs it beside, so it does not wait for its own frame (G178).\x0Alcn.carrier_rc_unsubscribe = {\x0A  kind: \"rc_unsubscribe\",\x0A  id: uint64,\x0A  sub: uint64,\x0A  ? in_handler: uint64,\x0A}\x0A\x0Alcn.carrier_rc_delivered = {\x0A  kind: \"rc_delivered\",\x0A  local: uint64,\x0A  seq: uint64,\x0A}\x0A\x0Alcn.carrier_rc_connect_remote = {\x0A  kind: \"rc_connect_remote\",\x0A  id: uint64,\x0A  endpoint: bstr,\x0A  expected_root: bstr .size 32,\x0A}\x0A\x0A; [SPEC RUNTIME \xC2\xA77.3; part 4b-3.2, plan \xC2\xA72.7] An ordinary publication\'s\x0A; subscriber sessions, which the reply names (`targets`). The payload stays in\x0A; the host: it checks it under each target\'s selected contract and asks for\x0A; the deliveries with `rc_deliver`.\x0Alcn.carrier_rc_publish = {\x0A  kind: \"rc_publish\",\x0A  id: uint64,\x0A  event: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A}\x0A\x0A; The sessions whose selected contract took the payload (`conns`), and the\x0A; ones that did not (`dropped`, with the check\'s code and nothing else), which\x0A; the Runtime records as a diagnostic (RUNTIME l.1226-1227). The reply names\x0A; the sessions each delivery was admitted to (`admitted`); the host\'s loop\x0A; writes those Events.\x0Alcn.carrier_rc_deliver = {\x0A  kind: \"rc_deliver\",\x0A  id: uint64,\x0A  event: tstr .size (1..128),\x0A  conns: [* uint64],\x0A  dropped: [* lcn.carrier_dropped],\x0A}\x0A\x0Alcn.carrier_dropped = {\x0A  conn: uint64,\x0A  code: uint8,\x0A}\x0A\x0A; One subscriber session of the host\'s endpoint and its selected contract.\x0Alcn.carrier_target = {\x0A  conn: uint64,\x0A  contract: bstr .size 32,\x0A}\x0A\x0A; [SPEC INTERFACE \xC2\xA72.9.1] A prepared Runtime Control call, numbered `call` by\x0A; the host.\x0Alcn.carrier_rc_prepare = {\x0A  kind: \"rc_prepare\",\x0A  id: uint64,\x0A  call: uint64,\x0A  method: bstr,\x0A  params: bstr,\x0A  ? timeout_ms: uint64, ; the options the host checked as the Runtime does\x0A}\x0A\x0Alcn.carrier_rc_async_submit = {\x0A  kind: \"rc_async_submit\",\x0A  call: uint64,\x0A}\x0A\x0Alcn.carrier_rc_async_cancel = {\x0A  kind: \"rc_async_cancel\",\x0A  call: uint64,\x0A}\x0A\x0Alcn.carrier_rc_async_release = {\x0A  kind: \"rc_async_release\",\x0A  id: uint64,\x0A  call: uint64,\x0A}\x0A\x0A; [SPEC INTERFACE \xC2\xA75.2 l.3880-3911; RUNTIME \xC2\xA74.1, \xC2\xA74.2.1; part 4b-3.3, plan\x0A; \xC2\xA72.8] A hosted consumer\'s `materialize_route`, after the direct binding\'s\x0A; local checks: the exact route id, expected root and construction input\x0A; (`schema`, the module\'s bytes; RUN-0177), and whether the host holds unused\x0A; invocation material for the route (`material`, RUN-0174). The Runtime\x0A; rebuilds the contract from `schema` itself and makes its \xC2\xA74.1 checks\x0A; against its current state; the reply names the handle\'s link (`link`) and\x0A; the provider\'s expected peer identity and module (`uid`, `module`,\x0A; TRN-0187), with which the host connects itself.\x0Alcn.carrier_rc_materialize = {\x0A  kind: \"rc_materialize\",\x0A  id: uint64,\x0A  route: tstr .size (1..128),\x0A  expected_root: bstr .size 32,\x0A  schema: bstr,\x0A  material: bool,\x0A}\x0A\x0A; The outcome of the host\'s connection for `link`: none, the Hello completed;\x0A; otherwise its ConnectFailure (`cause`, its ordinal in transport/io/api.nim)\x0A; and code. The reply is the materialization\'s: success, or the code the\x0A; Runtime gives (the route\'s own when it ended meanwhile).\x0Alcn.carrier_rc_link_result = {\x0A  kind: \"rc_link_result\",\x0A  id: uint64,\x0A  link: uint64,\x0A  ? cause: uint8,\x0A  ? code: uint8,\x0A}\x0A\x0A; One operation through the handle `link`, admitted before anything is sent\x0A; on its connection: `op` 0 a call (`name`, the method), 1 a subscribe\x0A; (`name`, the event), 2 an unsubscribe, 3 an `observe_end` installation.\x0A; `closed`: the host\'s connection ended with that code and the Runtime has\x0A; not been told yet (`rc_link_closed`).\x0Alcn.carrier_rc_link_admit = {\x0A  kind: \"rc_link_admit\",\x0A  id: uint64,\x0A  link: uint64,\x0A  op: uint8, ; 0 to 3; any other value is refused as MODULE_ERROR\x0A  ? name: bstr, ; the module\'s bytes, checked by the Runtime as given\x0A  ? closed: uint8,\x0A}\x0A\x0A; The connection of `link` ended with `code` (TF-15, G256). The reply\'s\x0A; `code` is the handle\'s first terminal cause (INTERFACE l.1486-1490).\x0Alcn.carrier_rc_link_closed = {\x0A  kind: \"rc_link_closed\",\x0A  id: uint64,\x0A  link: uint64,\x0A  code: uint8,\x0A}\x0A\x0A; The handle `link` was released: its pin and its observer go.\x0Alcn.carrier_rc_link_released = {\x0A  kind: \"rc_link_released\",\x0A  id: uint64,\x0A  link: uint64,\x0A}\x0A\x0A; Lane 1, the Runtime -> the host --------------------------------------------------\x0A\x0A; The outcome of the request `id` names: `failure`, or a success with the\x0A; response bytes (`value`), a subscription id (`sub`), an `rc_publish`\'s\x0A; `targets`, an `rc_deliver`\'s `admitted` sessions, an `rc_materialize`\'s\x0A; `link`, `uid` and `module`, or an `rc_link_closed`\'s `code`.\x0Alcn.carrier_rc_reply = {\x0A  kind: \"rc_reply\",\x0A  id: uint64,\x0A  ? value: bstr,\x0A  ? sub: uint64,\x0A  ? targets: [* lcn.carrier_target],\x0A  ? admitted: [* uint64],\x0A  ? link: uint64,\x0A  ? uid: uint32,\x0A  ? module: tstr .size (1..64),\x0A  ? code: uint8,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_rc_delivery = {\x0A  kind: \"rc_event\",\x0A  local: uint64,\x0A  seq: uint64,\x0A  name: tstr .size (1..128),\x0A  data: bstr,\x0A}\x0A\x0Alcn.carrier_async_done = {\x0A  kind: \"async_done\",\x0A  call: uint64,\x0A  ? value: bstr,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0A; [plan \xC2\xA72.8 steps 1-2; K13] A route the host\'s consumer holds ended with\x0A; `code`, which every new operation on its handles reports from now on;\x0A; `revoked`: it was revoked, which ends the calls still running through them\x0A; (G174). The host wipes the route\'s retained ticket. `links`: each handle of\x0A; the route and its first terminal cause (INTERFACE l.1486-1490).\x0Alcn.carrier_route_ended = {\x0A  kind: \"route_ended\",\x0A  route: tstr .size (1..128),\x0A  code: uint8,\x0A  revoked: bool,\x0A  links: [* lcn.carrier_link_first],\x0A}\x0A\x0Alcn.carrier_link_first = {\x0A  link: uint64,\x0A  first: uint8,\x0A}\x0A\x0A; Lane 2, the boundary (part 4b-3.2; G267, plan \xC2\xA72.7) ------------------------------\x0A;\x0A; A hosted provider\'s endpoint is served by the host\'s own I/O loop on the\x0A; listener the Runtime made (fd 4). Payloads stay in the host: it checks each\x0A; request, response and event payload with the module\'s own call surface, and\x0A; its loop writes every Response and Event. The Runtime decides: it judges\x0A; every Hello, admits every call (`admit_verdict`), subscription and\x0A; delivery, keeps the sessions and writes the call records from what the host\x0A; reports (`call_ended`), and orders the loop\'s session ends, exactly as for\x0A; an endpoint it serves itself (G257). A `conn` is the host\'s own number for\x0A; one accepted connection; a `call` is the Runtime\'s number for one admitted\x0A; call.\x0A\x0A; The host -> the Runtime: the loop\'s events ------------------------------------------\x0A;\x0A; Not the serve outcome: the host keeps it, and reports a listener it cannot\x0A; serve as `init_failed` (lane 0).\x0A\x0A; The first frame of a connection, for the Runtime\'s `acceptHello`.\x0Alcn.carrier_io_hello = {\x0A  kind: \"io_hello\",\x0A  conn: uint64,\x0A  frame: bstr,\x0A}\x0A\x0Alcn.carrier_io_established = {\x0A  kind: \"io_established\",\x0A  conn: uint64,\x0A}\x0A\x0A; A Request the loop resolved under the session\'s contract and access; its\x0A; params stay in the host.\x0Alcn.carrier_io_dispatch = {\x0A  kind: \"io_dispatch\",\x0A  conn: uint64,\x0A  request: uint64,\x0A  method: tstr,\x0A  introspection: bool,\x0A}\x0A\x0Alcn.carrier_io_stop = {\x0A  kind: \"io_stop\",\x0A  conn: uint64,\x0A  request: uint64,\x0A}\x0A\x0Alcn.carrier_io_closed = {\x0A  kind: \"io_closed\",\x0A  conn: uint64,\x0A}\x0A\x0Alcn.carrier_io_subscribe = {\x0A  kind: \"io_subscribe\",\x0A  conn: uint64,\x0A  sub: uint64,\x0A  event: tstr,\x0A}\x0A\x0Alcn.carrier_io_unsubscribe = {\x0A  kind: \"io_unsubscribe\",\x0A  conn: uint64,\x0A  sub: uint64,\x0A}\x0A\x0Alcn.carrier_io_publish_failed = {\x0A  kind: \"io_publish_failed\",\x0A  conn: uint64,\x0A  event: tstr,\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; `error`: the transport\'s `PublishErrorKind`, by its position.\x0Alcn.carrier_publish_failure = {\x0A  error: uint8,\x0A  code: uint8,\x0A  message: tstr .size (0..512),\x0A}\x0A\x0Alcn.carrier_io_publish_result = {\x0A  kind: \"io_publish_result\",\x0A  conn: uint64,\x0A  tag: uint64,\x0A  request: uint64,\x0A  ? failure: lcn.carrier_publish_failure,\x0A}\x0A\x0Alcn.carrier_io_local_failure = {\x0A  kind: \"io_local_failure\",\x0A  conn: uint64,\x0A  code: uint8,\x0A  message: tstr .size (0..512),\x0A}\x0A\x0A; [SPEC RUNTIME \xC2\xA74.1; CA l.1172-1177; plan \xC2\xA72.7 step 5] Call `call` has ended\x0A; in the host: whether the Response its loop committed was a success, and the\x0A; request and response commitments the admission asked to retain\x0A; (`admit_verdict`), as the host\'s boundary computed them (G274).\x0Alcn.carrier_call_ended = {\x0A  kind: \"call_ended\",\x0A  call: uint64,\x0A  succeeded: bool,\x0A  ? request: lcn.carrier_commitment,\x0A  ? response: lcn.carrier_commitment,\x0A}\x0A\x0Alcn.carrier_commitment = {\x0A  subtree_root: bstr .size 32,\x0A  value_root: bstr .size 32,\x0A}\x0A\x0A; [SPEC INTERFACE \xC2\xA72.9.3 l.2187-2199; RUNTIME \xC2\xA77.3.1] A running call\'s\x0A; invocation-scoped publication of `event`, in three steps that each wait for\x0A; a `scoped_result`: its destination (`ready`) before the host checks the\x0A; payload, then the delivery\'s admission (`tag`), then, once the host\'s loop\x0A; took the Event, its verdict. No step carries the payload.\x0Alcn.carrier_scoped_check = {\x0A  kind: \"scoped_check\",\x0A  id: uint64,\x0A  call: uint64,\x0A  event: bstr, ; the module\'s bytes, checked as given\x0A}\x0A\x0Alcn.carrier_scoped_admit = {\x0A  kind: \"scoped_admit\",\x0A  id: uint64,\x0A  call: uint64,\x0A  event: tstr .size (1..128),\x0A}\x0A\x0A; `abandon`: the loop did not take the Event (it is stopping).\x0Alcn.carrier_scoped_done = {\x0A  kind: \"scoped_done\",\x0A  id: uint64,\x0A  call: uint64,\x0A  tag: uint64,\x0A  abandon: bool,\x0A}\x0A\x0A; The Runtime -> the host: the loop\'s orders ------------------------------------------\x0A\x0A; [SPEC TRANSPORT \xC2\xA73.1, \xC2\xA78.1] The Hello passed and its ticket was redeemed:\x0A; the session\'s selected contract and route access (declaration subtree\x0A; roots; absent: the whole list), and when its authorization ends, in\x0A; nanoseconds from now (TRN-0317): the host\'s loop ends it then as a\x0A; backstop to the Runtime\'s own end. Nothing else of the route reaches the\x0A; host.\x0Alcn.carrier_io_admit_established = {\x0A  kind: \"io_admit_established\",\x0A  conn: uint64,\x0A  response: bstr,\x0A  contract: bstr .size 32,\x0A  ? methods: [* bstr .size 32],\x0A  ? publish_events: [* bstr .size 32],\x0A  ? subscribe_events: [* bstr .size 32],\x0A  ? ends_in: uint64,\x0A}\x0A\x0Alcn.carrier_io_admit_failed = {\x0A  kind: \"io_admit_failed\",\x0A  conn: uint64,\x0A  code: uint8,\x0A  peer: bool,\x0A}\x0A\x0Alcn.carrier_io_admit_unavailable = {\x0A  kind: \"io_admit_unavailable\",\x0A  conn: uint64,\x0A}\x0A\x0A; A Request\'s terminal failure the Runtime answers (an end, a revocation, a\x0A; refused queue): the host commits it unless its loop already committed a\x0A; Response to that Request (K38 interim).\x0Alcn.carrier_io_respond = {\x0A  kind: \"io_respond\",\x0A  conn: uint64,\x0A  request: uint64,\x0A  failure: lcn.carrier_failure,\x0A  work_ended: bool,\x0A}\x0A\x0Alcn.carrier_io_close = {\x0A  kind: \"io_close\",\x0A  conn: uint64,\x0A}\x0A\x0Alcn.carrier_io_terminate = {\x0A  kind: \"io_terminate\",\x0A  conn: uint64,\x0A}\x0A\x0Alcn.carrier_io_work_ended = {\x0A  kind: \"io_work_ended\",\x0A  conn: uint64,\x0A  request: uint64,\x0A}\x0A\x0Alcn.carrier_io_subscription_result = {\x0A  kind: \"io_subscription_result\",\x0A  conn: uint64,\x0A  sub: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A}\x0A\x0Alcn.carrier_io_stop_serving = {\x0A  kind: \"io_stop_serving\",\x0A}\x0A\x0A; [SPEC RUNTIME \xC2\xA74.1, \xC2\xA76.4, \xC2\xA77.5; plan \xC2\xA72.7 steps 2-4] The Runtime\'s decision on\x0A; the dispatched Request `request` of `conn`, under the session\'s selected\x0A; `contract`:\x0A; - `failure`: refused. The host commits it, or INVALID_PARAMS when it is\x0A;   NOT_READY and the params do not validate (G171).\x0A; - otherwise admitted as `call`: the host validates the params, runs the\x0A;   provider with an invocation context whose caller is `consumer` (or\x0A;   answers `logos.schema` itself) and ends with `call_ended`, which carries\x0A;   a commitment only where `retain_request` or `retain_response` asks.\x0Alcn.carrier_admit_verdict = {\x0A  kind: \"admit_verdict\",\x0A  conn: uint64,\x0A  request: uint64,\x0A  contract: bstr .size 32,\x0A  ? failure: lcn.carrier_failure,\x0A  ? call: uint64,\x0A  ? consumer: tstr .size (1..256),\x0A  retain_request: bool,\x0A  retain_response: bool,\x0A}\x0A\x0A; [SPEC INTERFACE l.2101] Call `call` was cancelled: `is_cancelled` reads true.\x0Alcn.carrier_call_cancel = {\x0A  kind: \"call_cancel\",\x0A  call: uint64,\x0A}\x0A\x0A; The answer to a scoped step: `failure` stops the publication; `ready` (the\x0A; destination is open) answers `scoped_check`; `tag` (the delivery was\x0A; admitted; none: the subscriber\'s own decisions skipped it) answers\x0A; `scoped_admit`.\x0Alcn.carrier_scoped_result = {\x0A  kind: \"scoped_result\",\x0A  id: uint64,\x0A  ? failure: lcn.carrier_failure,\x0A  ? ready: bool,\x0A  ? tag: uint64,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -94,6 +94,7 @@ type
     runtime_id*: Opt[string]
     state_dir*: Opt[string]
     transport*: Opt[seq[uint64]]
+    wipe_audit*: Opt[seq[seq[byte]]]
 
   LcnCarrierInitFailedCodeChoiceKind* {.pure.} = enum
     Abi_invalid
@@ -1223,6 +1224,8 @@ proc stepEncLcnCarrierInit*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc n
   if x.transport.isSome:
     inc n
+  if x.wipe_audit.isSome:
+    inc n
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
   dst[] = node
   var k = 0
@@ -1267,6 +1270,13 @@ proc stepEncLcnCarrierInit*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     for i17 in 0 ..< x.transport.get.len:
       a16.items[i17] = cbor(uint64(x.transport.get[i17]))
     inc k
+  if x.wipe_audit.isSome:
+    node.entries[k].key = cbor("wipe_audit")
+    let a20 = newCborArray(x.wipe_audit.get.len)
+    node.entries[k].value = a20
+    for i21 in 0 ..< x.wipe_audit.get.len:
+      a20.items[i21] = cbor(x.wipe_audit.get[i21])
+    inc k
 
 proc stepDecLcnCarrierInit*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierInit](dst)
@@ -1294,6 +1304,12 @@ proc stepDecLcnCarrierInit*(w: var DecWork, v: CborValue, dst: pointer) =
     r.transport.get.setLen(f18.get.items.len)
     for i19 in 0 ..< f18.get.items.len:
       r.transport.get[i19] = uint64(f18.get.items[i19].uint)
+  let f22 = v.lookup("wipe_audit")
+  if f22.isSome:
+    r.wipe_audit = Opt.some(default(seq[seq[byte]]))
+    r.wipe_audit.get.setLen(f22.get.items.len)
+    for i23 in 0 ..< f22.get.items.len:
+      r.wipe_audit.get[i23] = f22.get.items[i23].bytes
 
 proc toCbor*(x: LcnCarrierInit): CborValue =
   runEnc(stepEncLcnCarrierInit, addr x)
@@ -1390,16 +1406,16 @@ proc stepEncLcnCarrierInitFailed*(w: var EncWork, src: pointer, dst: ptr CborVal
 proc stepDecLcnCarrierInitFailed*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierInitFailed](dst)
   r[] = LcnCarrierInitFailed()
-  let f20 = v.lookup("cause")
-  if f20.isSome:
+  let f24 = v.lookup("cause")
+  if f24.isSome:
     r.cause = Opt.some(default(LcnCarrierFailure))
-    w.later(stepDecLcnCarrierFailure, f20.get, addr r.cause.get)
-  let f21 = v.lookup("code").get
-  w.later(stepDecLcnCarrierInitFailedCodeChoice, f21, addr r.code)
+    w.later(stepDecLcnCarrierFailure, f24.get, addr r.cause.get)
+  let f25 = v.lookup("code").get
+  w.later(stepDecLcnCarrierInitFailedCodeChoice, f25, addr r.code)
   r.id = uint64(v.lookup("id").get.uint)
   r.message = v.lookup("message").get.text
-  let f22 = v.lookup("phase").get
-  w.later(stepDecLcnCarrierInitFailedPhaseChoice, f22, addr r.phase)
+  let f26 = v.lookup("phase").get
+  w.later(stepDecLcnCarrierInitFailedPhaseChoice, f26, addr r.phase)
 
 proc toCbor*(x: LcnCarrierInitFailed): CborValue =
   runEnc(stepEncLcnCarrierInitFailed, addr x)
@@ -1431,9 +1447,9 @@ proc stepEncLcnCarrierInitialized*(w: var EncWork, src: pointer, dst: ptr CborVa
 proc stepDecLcnCarrierInitialized*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierInitialized](dst)
   r[] = LcnCarrierInitialized()
-  let f23 = v.lookup("call_surface")
-  if f23.isSome:
-    r.call_surface = Opt.some(f23.get.bytes)
+  let f27 = v.lookup("call_surface")
+  if f27.isSome:
+    r.call_surface = Opt.some(f27.get.bytes)
   r.id = uint64(v.lookup("id").get.uint)
 
 proc toCbor*(x: LcnCarrierInitialized): CborValue =
@@ -1473,27 +1489,27 @@ proc stepEncLcnCarrierIoAdmitEstablished*(w: var EncWork, src: pointer, dst: ptr
   inc k
   if x.methods.isSome:
     node.entries[k].key = cbor("methods")
-    let a25 = newCborArray(x.methods.get.len)
-    node.entries[k].value = a25
-    for i26 in 0 ..< x.methods.get.len:
-      a25.items[i26] = cbor(x.methods.get[i26])
+    let a29 = newCborArray(x.methods.get.len)
+    node.entries[k].value = a29
+    for i30 in 0 ..< x.methods.get.len:
+      a29.items[i30] = cbor(x.methods.get[i30])
     inc k
   if x.publish_events.isSome:
     node.entries[k].key = cbor("publish_events")
-    let a29 = newCborArray(x.publish_events.get.len)
-    node.entries[k].value = a29
-    for i30 in 0 ..< x.publish_events.get.len:
-      a29.items[i30] = cbor(x.publish_events.get[i30])
+    let a33 = newCborArray(x.publish_events.get.len)
+    node.entries[k].value = a33
+    for i34 in 0 ..< x.publish_events.get.len:
+      a33.items[i34] = cbor(x.publish_events.get[i34])
     inc k
   node.entries[k].key = cbor("response")
   node.entries[k].value = cbor(x.response)
   inc k
   if x.subscribe_events.isSome:
     node.entries[k].key = cbor("subscribe_events")
-    let a33 = newCborArray(x.subscribe_events.get.len)
-    node.entries[k].value = a33
-    for i34 in 0 ..< x.subscribe_events.get.len:
-      a33.items[i34] = cbor(x.subscribe_events.get[i34])
+    let a37 = newCborArray(x.subscribe_events.get.len)
+    node.entries[k].value = a37
+    for i38 in 0 ..< x.subscribe_events.get.len:
+      a37.items[i38] = cbor(x.subscribe_events.get[i38])
     inc k
 
 proc stepDecLcnCarrierIoAdmitEstablished*(w: var DecWork, v: CborValue, dst: pointer) =
@@ -1501,28 +1517,28 @@ proc stepDecLcnCarrierIoAdmitEstablished*(w: var DecWork, v: CborValue, dst: poi
   r[] = LcnCarrierIoAdmitEstablished()
   r.conn = uint64(v.lookup("conn").get.uint)
   r.contract = v.lookup("contract").get.bytes
-  let f24 = v.lookup("ends_in")
-  if f24.isSome:
-    r.ends_in = Opt.some(uint64(f24.get.uint))
-  let f27 = v.lookup("methods")
-  if f27.isSome:
-    r.methods = Opt.some(default(seq[seq[byte]]))
-    r.methods.get.setLen(f27.get.items.len)
-    for i28 in 0 ..< f27.get.items.len:
-      r.methods.get[i28] = f27.get.items[i28].bytes
-  let f31 = v.lookup("publish_events")
+  let f28 = v.lookup("ends_in")
+  if f28.isSome:
+    r.ends_in = Opt.some(uint64(f28.get.uint))
+  let f31 = v.lookup("methods")
   if f31.isSome:
-    r.publish_events = Opt.some(default(seq[seq[byte]]))
-    r.publish_events.get.setLen(f31.get.items.len)
+    r.methods = Opt.some(default(seq[seq[byte]]))
+    r.methods.get.setLen(f31.get.items.len)
     for i32 in 0 ..< f31.get.items.len:
-      r.publish_events.get[i32] = f31.get.items[i32].bytes
-  r.response = v.lookup("response").get.bytes
-  let f35 = v.lookup("subscribe_events")
+      r.methods.get[i32] = f31.get.items[i32].bytes
+  let f35 = v.lookup("publish_events")
   if f35.isSome:
-    r.subscribe_events = Opt.some(default(seq[seq[byte]]))
-    r.subscribe_events.get.setLen(f35.get.items.len)
+    r.publish_events = Opt.some(default(seq[seq[byte]]))
+    r.publish_events.get.setLen(f35.get.items.len)
     for i36 in 0 ..< f35.get.items.len:
-      r.subscribe_events.get[i36] = f35.get.items[i36].bytes
+      r.publish_events.get[i36] = f35.get.items[i36].bytes
+  r.response = v.lookup("response").get.bytes
+  let f39 = v.lookup("subscribe_events")
+  if f39.isSome:
+    r.subscribe_events = Opt.some(default(seq[seq[byte]]))
+    r.subscribe_events.get.setLen(f39.get.items.len)
+    for i40 in 0 ..< f39.get.items.len:
+      r.subscribe_events.get[i40] = f39.get.items[i40].bytes
 
 proc toCbor*(x: LcnCarrierIoAdmitEstablished): CborValue =
   runEnc(stepEncLcnCarrierIoAdmitEstablished, addr x)
@@ -1826,10 +1842,10 @@ proc stepDecLcnCarrierIoPublishResult*(w: var DecWork, v: CborValue, dst: pointe
   let r = cast[ptr LcnCarrierIoPublishResult](dst)
   r[] = LcnCarrierIoPublishResult()
   r.conn = uint64(v.lookup("conn").get.uint)
-  let f37 = v.lookup("failure")
-  if f37.isSome:
+  let f41 = v.lookup("failure")
+  if f41.isSome:
     r.failure = Opt.some(default(LcnCarrierPublishFailure))
-    w.later(stepDecLcnCarrierPublishFailure, f37.get, addr r.failure.get)
+    w.later(stepDecLcnCarrierPublishFailure, f41.get, addr r.failure.get)
   r.request = uint64(v.lookup("request").get.uint)
   r.tag = uint64(v.lookup("tag").get.uint)
 
@@ -1866,8 +1882,8 @@ proc stepDecLcnCarrierIoRespond*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierIoRespond](dst)
   r[] = LcnCarrierIoRespond()
   r.conn = uint64(v.lookup("conn").get.uint)
-  let f38 = v.lookup("failure").get
-  w.later(stepDecLcnCarrierFailure, f38, addr r.failure)
+  let f42 = v.lookup("failure").get
+  w.later(stepDecLcnCarrierFailure, f42, addr r.failure)
   r.request = uint64(v.lookup("request").get.uint)
   r.work_ended = asBool(v.lookup("work_ended").get)
 
@@ -1988,10 +2004,10 @@ proc stepDecLcnCarrierIoSubscriptionResult*(w: var DecWork, v: CborValue, dst: p
   let r = cast[ptr LcnCarrierIoSubscriptionResult](dst)
   r[] = LcnCarrierIoSubscriptionResult()
   r.conn = uint64(v.lookup("conn").get.uint)
-  let f39 = v.lookup("failure")
-  if f39.isSome:
+  let f43 = v.lookup("failure")
+  if f43.isSome:
     r.failure = Opt.some(default(LcnCarrierFailure))
-    w.later(stepDecLcnCarrierFailure, f39.get, addr r.failure.get)
+    w.later(stepDecLcnCarrierFailure, f43.get, addr r.failure.get)
   r.sub = uint64(v.lookup("sub").get.uint)
 
 proc toCbor*(x: LcnCarrierIoSubscriptionResult): CborValue =
@@ -2584,16 +2600,16 @@ proc stepEncLcnCarrierRcDeliver*(w: var EncWork, src: pointer, dst: ptr CborValu
   dst[] = node
   var k = 0
   node.entries[k].key = cbor("conns")
-  let a40 = newCborArray(x.conns.len)
-  node.entries[k].value = a40
-  for i41 in 0 ..< x.conns.len:
-    a40.items[i41] = cbor(uint64(x.conns[i41]))
+  let a44 = newCborArray(x.conns.len)
+  node.entries[k].value = a44
+  for i45 in 0 ..< x.conns.len:
+    a44.items[i45] = cbor(uint64(x.conns[i45]))
   inc k
   node.entries[k].key = cbor("dropped")
-  let a44 = newCborArray(x.dropped.len)
-  node.entries[k].value = a44
-  for i45 in 0 ..< x.dropped.len:
-    w.later(stepEncLcnCarrierDropped, addr x.dropped[i45], addr a44.items[i45])
+  let a48 = newCborArray(x.dropped.len)
+  node.entries[k].value = a48
+  for i49 in 0 ..< x.dropped.len:
+    w.later(stepEncLcnCarrierDropped, addr x.dropped[i49], addr a48.items[i49])
   inc k
   node.entries[k].key = cbor("event")
   node.entries[k].value = cbor(x.event)
@@ -2608,14 +2624,14 @@ proc stepEncLcnCarrierRcDeliver*(w: var EncWork, src: pointer, dst: ptr CborValu
 proc stepDecLcnCarrierRcDeliver*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierRcDeliver](dst)
   r[] = LcnCarrierRcDeliver()
-  let f42 = v.lookup("conns").get
-  r.conns.setLen(f42.items.len)
-  for i43 in 0 ..< f42.items.len:
-    r.conns[i43] = uint64(f42.items[i43].uint)
-  let f46 = v.lookup("dropped").get
-  r.dropped.setLen(f46.items.len)
+  let f46 = v.lookup("conns").get
+  r.conns.setLen(f46.items.len)
   for i47 in 0 ..< f46.items.len:
-    w.later(stepDecLcnCarrierDropped, f46.items[i47], addr r.dropped[i47])
+    r.conns[i47] = uint64(f46.items[i47].uint)
+  let f50 = v.lookup("dropped").get
+  r.dropped.setLen(f50.items.len)
+  for i51 in 0 ..< f50.items.len:
+    w.later(stepDecLcnCarrierDropped, f50.items[i51], addr r.dropped[i51])
   r.event = v.lookup("event").get.text
   r.id = uint64(v.lookup("id").get.uint)
 
@@ -2727,14 +2743,14 @@ proc stepEncLcnCarrierRcLinkAdmit*(w: var EncWork, src: pointer, dst: ptr CborVa
 proc stepDecLcnCarrierRcLinkAdmit*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierRcLinkAdmit](dst)
   r[] = LcnCarrierRcLinkAdmit()
-  let f48 = v.lookup("closed")
-  if f48.isSome:
-    r.closed = Opt.some(uint8(f48.get.uint))
+  let f52 = v.lookup("closed")
+  if f52.isSome:
+    r.closed = Opt.some(uint8(f52.get.uint))
   r.id = uint64(v.lookup("id").get.uint)
   r.link = uint64(v.lookup("link").get.uint)
-  let f49 = v.lookup("name")
-  if f49.isSome:
-    r.name = Opt.some(f49.get.bytes)
+  let f53 = v.lookup("name")
+  if f53.isSome:
+    r.name = Opt.some(f53.get.bytes)
   r.op = uint8(v.lookup("op").get.uint)
 
 proc toCbor*(x: LcnCarrierRcLinkAdmit): CborValue =
@@ -2838,12 +2854,12 @@ proc stepEncLcnCarrierRcLinkResult*(w: var EncWork, src: pointer, dst: ptr CborV
 proc stepDecLcnCarrierRcLinkResult*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierRcLinkResult](dst)
   r[] = LcnCarrierRcLinkResult()
-  let f50 = v.lookup("cause")
-  if f50.isSome:
-    r.cause = Opt.some(uint8(f50.get.uint))
-  let f51 = v.lookup("code")
-  if f51.isSome:
-    r.code = Opt.some(uint8(f51.get.uint))
+  let f54 = v.lookup("cause")
+  if f54.isSome:
+    r.cause = Opt.some(uint8(f54.get.uint))
+  let f55 = v.lookup("code")
+  if f55.isSome:
+    r.code = Opt.some(uint8(f55.get.uint))
   r.id = uint64(v.lookup("id").get.uint)
   r.link = uint64(v.lookup("link").get.uint)
 
@@ -2931,9 +2947,9 @@ proc stepDecLcnCarrierRcPrepare*(w: var DecWork, v: CborValue, dst: pointer) =
   r.id = uint64(v.lookup("id").get.uint)
   r.`method` = v.lookup("method").get.bytes
   r.params = v.lookup("params").get.bytes
-  let f52 = v.lookup("timeout_ms")
-  if f52.isSome:
-    r.timeout_ms = Opt.some(uint64(f52.get.uint))
+  let f56 = v.lookup("timeout_ms")
+  if f56.isSome:
+    r.timeout_ms = Opt.some(uint64(f56.get.uint))
 
 proc toCbor*(x: LcnCarrierRcPrepare): CborValue =
   runEnc(stepEncLcnCarrierRcPrepare, addr x)
@@ -2998,10 +3014,10 @@ proc stepEncLcnCarrierRcReply*(w: var EncWork, src: pointer, dst: ptr CborValue)
   var k = 0
   if x.admitted.isSome:
     node.entries[k].key = cbor("admitted")
-    let a53 = newCborArray(x.admitted.get.len)
-    node.entries[k].value = a53
-    for i54 in 0 ..< x.admitted.get.len:
-      a53.items[i54] = cbor(uint64(x.admitted.get[i54]))
+    let a57 = newCborArray(x.admitted.get.len)
+    node.entries[k].value = a57
+    for i58 in 0 ..< x.admitted.get.len:
+      a57.items[i58] = cbor(uint64(x.admitted.get[i58]))
     inc k
   if x.code.isSome:
     node.entries[k].key = cbor("code")
@@ -3031,10 +3047,10 @@ proc stepEncLcnCarrierRcReply*(w: var EncWork, src: pointer, dst: ptr CborValue)
     inc k
   if x.targets.isSome:
     node.entries[k].key = cbor("targets")
-    let a62 = newCborArray(x.targets.get.len)
-    node.entries[k].value = a62
-    for i63 in 0 ..< x.targets.get.len:
-      w.later(stepEncLcnCarrierTarget, addr x.targets.get[i63], addr a62.items[i63])
+    let a66 = newCborArray(x.targets.get.len)
+    node.entries[k].value = a66
+    for i67 in 0 ..< x.targets.get.len:
+      w.later(stepEncLcnCarrierTarget, addr x.targets.get[i67], addr a66.items[i67])
     inc k
   if x.uid.isSome:
     node.entries[k].key = cbor("uid")
@@ -3048,41 +3064,41 @@ proc stepEncLcnCarrierRcReply*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCarrierRcReply*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierRcReply](dst)
   r[] = LcnCarrierRcReply()
-  let f55 = v.lookup("admitted")
-  if f55.isSome:
-    r.admitted = Opt.some(default(seq[uint64]))
-    r.admitted.get.setLen(f55.get.items.len)
-    for i56 in 0 ..< f55.get.items.len:
-      r.admitted.get[i56] = uint64(f55.get.items[i56].uint)
-  let f57 = v.lookup("code")
-  if f57.isSome:
-    r.code = Opt.some(uint8(f57.get.uint))
-  let f58 = v.lookup("failure")
-  if f58.isSome:
-    r.failure = Opt.some(default(LcnCarrierFailure))
-    w.later(stepDecLcnCarrierFailure, f58.get, addr r.failure.get)
-  r.id = uint64(v.lookup("id").get.uint)
-  let f59 = v.lookup("link")
+  let f59 = v.lookup("admitted")
   if f59.isSome:
-    r.link = Opt.some(uint64(f59.get.uint))
-  let f60 = v.lookup("module")
-  if f60.isSome:
-    r.module = Opt.some(f60.get.text)
-  let f61 = v.lookup("sub")
+    r.admitted = Opt.some(default(seq[uint64]))
+    r.admitted.get.setLen(f59.get.items.len)
+    for i60 in 0 ..< f59.get.items.len:
+      r.admitted.get[i60] = uint64(f59.get.items[i60].uint)
+  let f61 = v.lookup("code")
   if f61.isSome:
-    r.sub = Opt.some(uint64(f61.get.uint))
-  let f64 = v.lookup("targets")
+    r.code = Opt.some(uint8(f61.get.uint))
+  let f62 = v.lookup("failure")
+  if f62.isSome:
+    r.failure = Opt.some(default(LcnCarrierFailure))
+    w.later(stepDecLcnCarrierFailure, f62.get, addr r.failure.get)
+  r.id = uint64(v.lookup("id").get.uint)
+  let f63 = v.lookup("link")
+  if f63.isSome:
+    r.link = Opt.some(uint64(f63.get.uint))
+  let f64 = v.lookup("module")
   if f64.isSome:
+    r.module = Opt.some(f64.get.text)
+  let f65 = v.lookup("sub")
+  if f65.isSome:
+    r.sub = Opt.some(uint64(f65.get.uint))
+  let f68 = v.lookup("targets")
+  if f68.isSome:
     r.targets = Opt.some(default(seq[LcnCarrierTarget]))
-    r.targets.get.setLen(f64.get.items.len)
-    for i65 in 0 ..< f64.get.items.len:
-      w.later(stepDecLcnCarrierTarget, f64.get.items[i65], addr r.targets.get[i65])
-  let f66 = v.lookup("uid")
-  if f66.isSome:
-    r.uid = Opt.some(uint32(f66.get.uint))
-  let f67 = v.lookup("value")
-  if f67.isSome:
-    r.value = Opt.some(f67.get.bytes)
+    r.targets.get.setLen(f68.get.items.len)
+    for i69 in 0 ..< f68.get.items.len:
+      w.later(stepDecLcnCarrierTarget, f68.get.items[i69], addr r.targets.get[i69])
+  let f70 = v.lookup("uid")
+  if f70.isSome:
+    r.uid = Opt.some(uint32(f70.get.uint))
+  let f71 = v.lookup("value")
+  if f71.isSome:
+    r.value = Opt.some(f71.get.bytes)
 
 proc toCbor*(x: LcnCarrierRcReply): CborValue =
   runEnc(stepEncLcnCarrierRcReply, addr x)
@@ -3151,9 +3167,9 @@ proc stepDecLcnCarrierRcUnsubscribe*(w: var DecWork, v: CborValue, dst: pointer)
   let r = cast[ptr LcnCarrierRcUnsubscribe](dst)
   r[] = LcnCarrierRcUnsubscribe()
   r.id = uint64(v.lookup("id").get.uint)
-  let f68 = v.lookup("in_handler")
-  if f68.isSome:
-    r.in_handler = Opt.some(uint64(f68.get.uint))
+  let f72 = v.lookup("in_handler")
+  if f72.isSome:
+    r.in_handler = Opt.some(uint64(f72.get.uint))
   r.sub = uint64(v.lookup("sub").get.uint)
 
 proc toCbor*(x: LcnCarrierRcUnsubscribe): CborValue =
@@ -3226,10 +3242,10 @@ proc stepEncLcnCarrierRouteEnded*(w: var EncWork, src: pointer, dst: ptr CborVal
   node.entries[k].value = cbor("route_ended")
   inc k
   node.entries[k].key = cbor("links")
-  let a69 = newCborArray(x.links.len)
-  node.entries[k].value = a69
-  for i70 in 0 ..< x.links.len:
-    w.later(stepEncLcnCarrierLinkFirst, addr x.links[i70], addr a69.items[i70])
+  let a73 = newCborArray(x.links.len)
+  node.entries[k].value = a73
+  for i74 in 0 ..< x.links.len:
+    w.later(stepEncLcnCarrierLinkFirst, addr x.links[i74], addr a73.items[i74])
   inc k
   node.entries[k].key = cbor("revoked")
   node.entries[k].value = cbor(x.revoked)
@@ -3242,10 +3258,10 @@ proc stepDecLcnCarrierRouteEnded*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierRouteEnded](dst)
   r[] = LcnCarrierRouteEnded()
   r.code = uint8(v.lookup("code").get.uint)
-  let f71 = v.lookup("links").get
-  r.links.setLen(f71.items.len)
-  for i72 in 0 ..< f71.items.len:
-    w.later(stepDecLcnCarrierLinkFirst, f71.items[i72], addr r.links[i72])
+  let f75 = v.lookup("links").get
+  r.links.setLen(f75.items.len)
+  for i76 in 0 ..< f75.items.len:
+    w.later(stepDecLcnCarrierLinkFirst, f75.items[i76], addr r.links[i76])
   r.revoked = asBool(v.lookup("revoked").get)
   r.route = v.lookup("route").get.text
 
@@ -3394,17 +3410,17 @@ proc stepEncLcnCarrierScopedResult*(w: var EncWork, src: pointer, dst: ptr CborV
 proc stepDecLcnCarrierScopedResult*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCarrierScopedResult](dst)
   r[] = LcnCarrierScopedResult()
-  let f73 = v.lookup("failure")
-  if f73.isSome:
+  let f77 = v.lookup("failure")
+  if f77.isSome:
     r.failure = Opt.some(default(LcnCarrierFailure))
-    w.later(stepDecLcnCarrierFailure, f73.get, addr r.failure.get)
+    w.later(stepDecLcnCarrierFailure, f77.get, addr r.failure.get)
   r.id = uint64(v.lookup("id").get.uint)
-  let f74 = v.lookup("ready")
-  if f74.isSome:
-    r.ready = Opt.some(asBool(f74.get))
-  let f75 = v.lookup("tag")
-  if f75.isSome:
-    r.tag = Opt.some(uint64(f75.get.uint))
+  let f78 = v.lookup("ready")
+  if f78.isSome:
+    r.ready = Opt.some(asBool(f78.get))
+  let f79 = v.lookup("tag")
+  if f79.isSome:
+    r.tag = Opt.some(uint64(f79.get.uint))
 
 proc toCbor*(x: LcnCarrierScopedResult): CborValue =
   runEnc(stepEncLcnCarrierScopedResult, addr x)
