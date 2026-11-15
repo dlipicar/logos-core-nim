@@ -1,0 +1,74 @@
+; logos-core-nim.ctl.v1: the protocol between the logosctl shell and the
+; logosctl instance's socket (Tier 4b step 4b-6; DECISIONS G296; BOOTSTRAP
+; l.384-390). BOOTSTRAP assigns no interoperable encoding, so this one is the
+; implementation's own; docs/DAEMON.md §7 documents it.
+;
+; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR
+; value of at most 33554432 bytes. One connection carries any number of
+; request and response pairs, in sequence: an lcn.ctl_message from the shell,
+; then an lcn.ctl_reply from the module. (Names ending in _request or
+; _response are callable rules, INTERFACE §1.3, so these are not.)
+
+lcn.ctl_message = {
+  protocol: "logos-core-nim.ctl.v1",
+  command: lcn.ctl_command,
+}
+
+; daemon-info: the presentation logosd handed to the module, and the Runtime's
+; id. rc: one Runtime Control call by the logosctl instance, with these
+; request bytes; the response bytes come back verbatim.
+lcn.ctl_command = lcn.ctl_info_command / lcn.ctl_rc_command
+
+lcn.ctl_info_command = { op: "daemon-info" }
+
+lcn.ctl_rc_command = {
+  op: "rc",
+  method: lcn.ctl_method,
+  params: bstr .size (0..33554432),
+  ? deadline_ms: uint32,
+}
+
+lcn.ctl_method = "get_self" / "list_modules" / "list_routes" / "get_readiness" /
+  "get_execution_summary" / "get_permission_settings" /
+  "get_configuration_schema" / "get_configuration_summary" /
+  "get_configuration" / "update_configuration" / "apply_configuration" /
+  "create_module" / "start_module" / "stop_module" / "recover_module" /
+  "retire_module" / "shutdown_runtime"
+
+lcn.ctl_reply = {
+  protocol: "logos-core-nim.ctl.v1",
+  deployment: lcn.ctl_deployment,
+  outcome: lcn.ctl_outcome,
+}
+
+lcn.ctl_deployment = "production" / "non-production"
+
+lcn.ctl_outcome = lcn.ctl_ok / lcn.ctl_rc_error / lcn.ctl_refused
+
+; result: the Runtime Control response, or for daemon-info an
+; lcn.ctl_daemon_info value.
+lcn.ctl_ok = { status: "ok", ? result: bstr }
+
+; The shared error channel's values (INTERFACE §5.1, §5.2): the code, and
+; the message and detail the Runtime forwarded.
+lcn.ctl_rc_error = {
+  status: "rc-error",
+  code: uint8,
+  ? message: tstr .size (0..512),
+  ? detail: bstr .size (0..4096),
+}
+
+; A frame or a command the module refuses; the connection is closed after it.
+lcn.ctl_refused = {
+  status: "refused",
+  reason: "protocol" / "command" / "too-large" / "busy" / "closing",
+  ? message: tstr,
+}
+
+lcn.ctl_daemon_info = {
+  version: tstr,
+  runtime_instance_id: tstr,
+  trust_revision: uint64,
+  started_at_ms: uint64,
+  socket: tstr,
+}

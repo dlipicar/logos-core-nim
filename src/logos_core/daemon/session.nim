@@ -80,6 +80,15 @@ func socketPath*(s: Session, socketDir = ""): string =
   ## The logosctl instance's socket: `run/logosctl.sock`, or in `ctl.socket_dir`.
   (if socketDir.len > 0: socketDir else: s.runDir) / SocketName
 
+proc entryExists*(path: string): bool =
+  ## Whether `path` names any directory entry, a socket or a dangling link
+  ## included (`fileExists` is true only for regular files).
+  when defined(posix):
+    var st: Stat
+    lstat(cstring(path), st) == 0
+  else:
+    fileExists(path) or dirExists(path) or symlinkExists(path)
+
 proc resolveSession*(flag = ""): Result[Session, string] =
   ## [G88] `--session-dir`, else `$LOGOSCTL_SESSION_DIR`, else
   ## `$HOME/.logos-core`; relative paths are taken from the working directory.

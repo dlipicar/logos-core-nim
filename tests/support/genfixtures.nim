@@ -354,6 +354,44 @@ proc generatedTrustTypes*(): Result[string, string] =
     err(e.msg)
 
 const
+  ctlTypesPath* = "src/logos_core/daemon/ctl_types.nim"
+  ctlPrimary* = "src/logos_core/daemon/ctl.cddl"
+  logosctlTypesPath* = "src/logos_core/daemon/logosctl_types.nim"
+  logosctlKitPath* = "src/logos_core/daemon/logosctl_kit.nim"
+  logosctlPrimary* = "src/logos_core/daemon/logosctl.cddl"
+
+proc generatedCtlTypes*(): Result[string, string] =
+  ## The logosctl socket's messages (`logos-core-nim.ctl.v1`, G296), for
+  ## `daemon/ctlwire.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(ctlPrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(
+        importPrefix: "../",
+        schemaAccessor: "ctlSchema",
+        documentsAccessor: "ctlDocuments",
+      ),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc logosctlSet(): Result[ContractSet, string] =
+  try:
+    acceptContractSet(readFile(logosctlPrimary), [], [], AcceptOptions())
+  except IOError as e:
+    err(e.msg)
+
+proc generatedLogosctlTypes*(): Result[string, string] =
+  ## The logosctl module's types: no method, no event, no configuration.
+  nimModule(?logosctlSet(), NimOptions(importPrefix: "../"), false)
+
+proc generatedLogosctlKit*(): Result[string, string] =
+  ## The logosctl module's kit (G296), for `daemon/ctlmodule.nim`.
+  kitModule(?logosctlSet(), KitOptions(importPrefix: "../"), false)
+
+const
   storeTypesPath* = "src/logos_core/runtime/store_types.nim"
   storePrimary* = "src/logos_core/runtime/store.cddl"
 

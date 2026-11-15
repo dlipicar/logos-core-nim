@@ -1,0 +1,12 @@
+; -- metadata --
+_module = "logosctl"
+
+; The logosctl module (Tier 4b step 4b-6; DECISIONS G296; D13(a); BOOTSTRAP
+; l.384-390): a consumer-only module with no method, no event and no
+; configuration. Its instance serves the owner's socket and makes each
+; command's Runtime Control call through its own binding (RUNTIME
+; l.182-184); logosd hands it the socket path before start. ctl.cddl is the
+; socket's protocol.
+
+; A module document declares at least one type: the module's name.
+logosctl.name = "logosctl"

@@ -16,6 +16,12 @@ proc main() =
   echo daemonConfigTypesPath
   writeFile(trustTypesPath, generatedTrustTypes().get)
   echo trustTypesPath
+  writeFile(ctlTypesPath, generatedCtlTypes().get)
+  echo ctlTypesPath
+  writeFile(logosctlTypesPath, generatedLogosctlTypes().get)
+  echo logosctlTypesPath
+  writeFile(logosctlKitPath, generatedLogosctlKit().get)
+  echo logosctlKitPath
   writeFile(storeTypesPath, generatedStoreTypes().get)
   echo storeTypesPath
   writeFile(carrierTypesPath, generatedCarrierTypes().get)
