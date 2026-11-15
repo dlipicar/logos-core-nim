@@ -50,6 +50,20 @@ const
 proc dcBytes(diag: string): seq[byte] =
   encodeCbor(parseDiag(diag).expect("diagnostic notation"))
 
+func dq(path: string): string =
+  ## `path` inside a diagnostic-notation text string: a Windows path's
+  ## backslashes escaped.
+  path.replace("\\", "\\\\")
+
+template posixTest(name: string, body: untyped) =
+  ## A test of what only a POSIX host has (file modes, links, hosted modules,
+  ## POSIX paths): logosd and logosctl run on POSIX hosts only (DAEMON.md).
+  test name:
+    when defined(posix):
+      body
+    else:
+      skip()
+
 proc dcOf(diag: string): LcnDaemonConfig =
   decodeDaemonConfig(dcBytes(diag)).expect("a daemon-config")
 
@@ -301,7 +315,7 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
     let k = createEvidenceKey(s.keysDir, "rt-1").get
     let evidence =
       "\"evidence\": {\"kid\": h'" & k.binding.kid.toHex & "', \"secret_key_file\": \"" &
-      k.keyFile & "\"}"
+      dq(k.keyFile) & "\"}"
     check checked(dcText(extra = "\"call_audit\": {" & evidence & "}")).get.store.isNone
     let st =
       checked(dcText(extra = "\"call_audit\": {" & evidence & ", \"store\": {}}")).get
@@ -351,13 +365,14 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
       dcText(
         extra =
           "\"call_audit\": {\"evidence\": {\"kid\": h'" & wrongKid.toHex &
-          "', \"secret_key_file\": \"" & k.keyFile & "\"}}"
+          "', \"secret_key_file\": \"" & dq(k.keyFile) & "\"}}"
       )
     ) == "call_audit.evidence: call_audit.evidence.kid does not match the evidence key"
     check refusal(
       dcText(
         extra =
-          "\"call_audit\": {" & evidence.replace(k.keyFile, s.keysDir / "none.key") & "}"
+          "\"call_audit\": {" &
+          evidence.replace(dq(k.keyFile), dq(s.keysDir / "none.key")) & "}"
       )
     )
       .startsWith("call_audit.evidence: ")
@@ -433,7 +448,7 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
     check p.composition.orchestrator.authority.isNone
     check p.composition.entryFor(AuthorityModule, AuthorityInstance).len == 0
 
-  test "an operator deployment: hosted modules, their module-level host-ambient, ordering, the start list, restart and audit":
+  posixTest "an operator deployment: hosted modules, their module-level host-ambient, ordering, the start list, restart and audit":
     let s = freshSession()
     let k = createEvidenceKey(s.keysDir, "rt-1").get
     let host = getAppFilename()
@@ -471,7 +486,7 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
     check o.restart.isSome and o.overrides.get.len == 1
     check p.config.store.isSome
 
-  test "the fifth check: a derived configuration the library refuses is reported as such":
+  posixTest "the fifth check: a derived configuration the library refuses is reported as such":
     let s = Session(dir: freshDir())
     let missing = dcText().replace(
         "{\"runtime_instance_id\": \"rt-1\"}",
@@ -484,7 +499,7 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
     check prepareDaemon(s, dcBytes(dcText(policy = "{\"kind\": \"allow-all\"}")), prod).error
       .startsWith("policy: allow-all needs")
 
-  test "[IMPL-DECISION G294] the default module_host: libexec beside the resolved executable, else a sibling, else none":
+  posixTest "[IMPL-DECISION G294] the default module_host: libexec beside the resolved executable, else a sibling, else none":
     let root = freshDir("mh")
     createDir(root / "bin")
     createDir(root / "libexec" / "logos-core")
@@ -792,7 +807,7 @@ suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION
     check establishTrust(s).isOk
     check readMark(s).get.get.revision == 1
 
-  test "the trust file is a private regular file: group access or a link is refused":
+  posixTest "the trust file is a private regular file: group access or a link is refused":
     let s = freshSession()
     discard initTrust(s, development = false).get
     setFilePermissions(s.trustPath, {fpUserRead, fpUserWrite, fpGroupRead})
@@ -815,7 +830,8 @@ suite "dc.keys: the evidence key and its binding to one Runtime [IMPL-DECISION G
     check k.binding.kid == @(blake3(k.binding.public_key).toOpenArray(0, KidBytes - 1))
     check k.binding.runtime_instance_id == "rt-1" and k.binding.retired_ms.isNone
     check k.keyFile == s.keysDir / keyFileName(k.binding.kid)
-    check getFilePermissions(k.keyFile) == {fpUserRead, fpUserWrite}
+    when defined(posix):
+      check getFilePermissions(k.keyFile) == {fpUserRead, fpUserWrite}
     check readBinding(s.keysDir / bindingFileName(k.binding.kid)).get == k.binding
     check checkEvidenceKey(k.keyFile, k.binding.kid, "rt-1").isOk
 
@@ -880,13 +896,14 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     let s = Session(dir: freshDir())
     let r = initSession(s, InitOptions()).get
     check r.runtimeId.isUuid4
-    for d in [
-      s.dir, s.keysDir, s.stateDir, s.storeDir, s.modulesDir, s.evidenceDir, s.workDir
-    ]:
-      checkpoint d
-      check getFilePermissions(d) == {fpUserRead, fpUserWrite, fpUserExec}
-    check getFilePermissions(s.configPath) == {fpUserRead, fpUserWrite}
-    check not dirExists(s.runDir) # made at each start
+    when defined(posix):
+      for d in [
+        s.dir, s.keysDir, s.stateDir, s.storeDir, s.modulesDir, s.evidenceDir, s.workDir
+      ]:
+        checkpoint d
+        check getFilePermissions(d) == {fpUserRead, fpUserWrite, fpUserExec}
+      check getFilePermissions(s.configPath) == {fpUserRead, fpUserWrite}
+      check not dirExists(s.runDir) # made at each start
     let (dc, bytes) = readDaemonConfig(s).get
     check dc.runtime.runtime_instance_id == r.runtimeId
     check dc.policy.kind == LcnDcPolicyKind.Capability_authority
@@ -903,7 +920,7 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     let other = initSession(Session(dir: freshDir()), InitOptions()).get
     check other.runtimeId != r.runtimeId
 
-  test "--development writes revision 2; --config's id is replaced; --module-config reaches the derived configuration":
+  posixTest "--development writes revision 2; --config's id is replaced; --module-config reaches the derived configuration":
     let s = Session(dir: freshDir())
     let cfg = dcOf(
       dcText(
@@ -958,15 +975,16 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     check initSession(e, InitOptions(config: Opt.some(allowAll))).isErr
     check dirExists(e.dir) and toSeq(walkDir(e.dir)).len == 0
     check initSession(e, InitOptions()).isOk
-    let open = Session(dir: freshDir())
-    createDir(open.dir)
-    setFilePermissions(
-      open.dir, {fpUserRead, fpUserWrite, fpUserExec, fpGroupRead, fpGroupExec}
-    )
-    check initSession(open, InitOptions()).error ==
-      "the session directory is not usable: " & open.dir &
-      " is accessible to group or other"
-    check dirExists(open.dir) and toSeq(walkDir(open.dir)).len == 0
+    when defined(posix):
+      let open = Session(dir: freshDir())
+      createDir(open.dir)
+      setFilePermissions(
+        open.dir, {fpUserRead, fpUserWrite, fpUserExec, fpGroupRead, fpGroupExec}
+      )
+      check initSession(open, InitOptions()).error ==
+        "the session directory is not usable: " & open.dir &
+        " is accessible to group or other"
+      check dirExists(open.dir) and toSeq(walkDir(open.dir)).len == 0
 
   test "the session lock: one holder at a time":
     let s = Session(dir: freshDir())
@@ -977,7 +995,7 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     var again = lockSession(s).get
     again.release()
 
-  test "[DECISIONS G88] the session directory: the flag, else LOGOSCTL_SESSION_DIR, else HOME/.logos-core; relative paths resolved":
+  posixTest "[DECISIONS G88] the session directory: the flag, else LOGOSCTL_SESSION_DIR, else HOME/.logos-core; relative paths resolved":
     let savedEnv = getEnv(SessionEnv)
     let savedHome = getEnv("HOME")
     putEnv(SessionEnv, "/srv/logos")
@@ -993,7 +1011,7 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     if savedEnv.len > 0:
       putEnv(SessionEnv, savedEnv)
 
-  test "run/ is emptied at each start without following a link; work/ is kept":
+  posixTest "run/ is emptied at each start without following a link; work/ is kept":
     let s = Session(dir: freshDir())
     discard initSession(s, InitOptions()).get
     check resetRunDir(s).isOk
