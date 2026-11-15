@@ -1369,12 +1369,15 @@ suite "run.depth: one payload depth setting (INTERFACE §4.5.1; DECISIONS I88)":
         # At 1024 the kit's own limit refuses the response inside the module.
         check deeper.message == "the provider's response does not match its schema"
       # An asynchronous call: the same checks, answered by its completion.
+      # [IMPL] A payload 1024 levels deep is checked on the way in and out,
+      # which under x86 MSan on a loaded CI runner took more than 30 s
+      # (2026-11-15): the wait only bounds the completion's coming.
       for (levels, expected) in [(p, ecOk), (p + 1, ecInvalidParams)]:
         done[0].clear()
         var (c, call) = h.prepare(reflectReq(1, levels), addr done[0], name = "reflect")
         check c == ecOk
         call.submit()
-        check done[0].finished
+        check done[0].finished(seconds = 60 * Slow)
         check done[0].codeOf == expected
         call.release()
       h.release()
@@ -1398,7 +1401,7 @@ suite "run.depth: one payload depth setting (INTERFACE §4.5.1; DECISIONS I88)":
         check r.code == ecInvalidParams
         check (r.detail.len > 0) == detailed
       settle(module, inv)
-      check done[1].finished
+      check done[1].finished(seconds = 60 * Slow)
       parked.release()
       m.release()
       # A Runtime Control request: the same.
