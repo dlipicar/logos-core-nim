@@ -461,7 +461,14 @@ proc probeDestroy(
       except IOError, OSError:
         discard
   p.note("destroyed", "destroyed")
-  # The probe's memory stays: a handler of a subscription may still be ending.
+  # Freed when nothing can reach it any more: no handler of a subscription is
+  # inside (the Runtime destroys a context only once its handlers have
+  # returned, INTERFACE l.1465, l.1999) and no route callback holds one of its
+  # tags. A probe that made tags keeps its memory: route callbacks carry
+  # pointers into it. A direct probe's memory is the test process's, where
+  # LeakSanitizer reports what is never freed.
+  if p.inside.load == 0 and p.tagCount == 0:
+    deallocShared(p)
 
 proc probeApply(
     module: ptr LogosModuleContext, cbor: ptr UncheckedArray[uint8], len: csize_t
