@@ -416,6 +416,8 @@ proc launch(h: ptr HostRuntime): LogosResult =
     routing: c.routing,
     transport: Opt.some(c.transport),
     endpointDir: c.endpointDir,
+    moduleHost: c.moduleHost,
+    moduleHostEnv: c.moduleHostEnv,
     permissions: c.permissions,
     initialSettings: c.initialSettings,
   )

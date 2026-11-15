@@ -808,6 +808,149 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.modules[1].instance = "p-" & repeat("0a", 16) & "-2"
     check parse(c).rejects("Runtime-assigned name form")
 
+  test "[IMPL] [IMPL-DECISION G272] module_host is an absolute regular executable, of this user or root and writable by its owner only; module_host_env names each variable once; a hosted record needs module_host; no direct routing rule names a hosted module":
+    # Tier 4b step 4b-3 (plan §2.2, §3, R4; DECISIONS G264).
+    let dir = work / "module-host"
+    createDir(dir)
+    let program = dir / "logos-module-host"
+    writeFile(program, "#!/bin/sh\nexit 2\n")
+    when defined(posix):
+      check chmod(cstring(program), Mode(0o755)) == 0
+    let hosted = LcnAppModule(
+      instance: "probe-1",
+      module: "probe_module",
+      implementation: LcnAppImplementation(
+        kind: LcnAppImplementationKind.Process_hosted_dynamic,
+        arm_Process_hosted_dynamic: LcnAppImplementationARProcessHostedDynamicMap(
+          artifact: LcnAppArtifact(
+            id: "probe", local_path: dir / "libprobe.so", hash: newSeq[byte](32)
+          )
+        ),
+      ),
+    )
+    var c = baseConfig()
+    c.modules.add(hosted)
+    check parse(c).rejects("module instance probe-1: hosted_dynamic needs module_host")
+    c.runtime.module_host = Opt.some(program)
+    when not defined(posix):
+      # [plan §2.1] The host is a stub here.
+      check parse(c).rejects("module_host is not supported on this platform")
+    else:
+      let accepted = parse(c)
+      check accepted.isOk
+      if accepted.isOk:
+        check accepted.get.moduleHost == Opt.some(program)
+        check accepted.get.moduleHostEnv.len == 0
+        let r = accepted.get.modules[^1].record
+        check r.strategy == stHostedDynamic and r.placement == "process"
+      c.runtime.module_host = Opt.some("logos-module-host")
+      check parse(c).rejects("module_host must be an absolute path")
+      c.runtime.module_host = Opt.some(program)
+      check chmod(cstring(program), Mode(0o775)) == 0
+      check parse(c).rejects("module_host is writable by its group or others")
+      check chmod(cstring(program), Mode(0o644)) == 0
+      check parse(c).rejects("module_host is not executable")
+      check chmod(cstring(program), Mode(0o755)) == 0
+      let link = dir / "link"
+      removeFile(link)
+      createSymlink(program, link)
+      c.runtime.module_host = Opt.some(link)
+      check parse(c).rejects("module_host is a symbolic link")
+      c.runtime.module_host = Opt.some(dir)
+      check parse(c).rejects("module_host is not a regular file")
+      c.runtime.module_host = Opt.some(dir / "missing")
+      check parse(c).rejects("module_host does not exist")
+      c.runtime.module_host = Opt.some(program)
+      c.runtime.module_host_env = Opt.some(newSeq[string]())
+      check parse(c).rejects("module_host_env is present but empty")
+      c.runtime.module_host_env = Opt.some(@["A=B"])
+      check parse(c).rejects("module_host_env names A=B badly or twice")
+      c.runtime.module_host_env = Opt.some(@["TSAN_OPTIONS", "TSAN_OPTIONS"])
+      check parse(c).rejects("module_host_env names TSAN_OPTIONS badly or twice")
+      c.runtime.module_host_env = Opt.some(@["TSAN_OPTIONS", "ASAN_OPTIONS"])
+      check parse(c).get.moduleHostEnv == @["TSAN_OPTIONS", "ASAN_OPTIONS"]
+      # A declaration needs it as a module does.
+      c = baseConfig()
+      c.declarations = Opt.some(
+        @[
+          LcnAppDeclaration(
+            module: "probe_module", implementation: hosted.implementation
+          )
+        ]
+      )
+      check parse(c).rejects(
+        "declaration probe_module: hosted_dynamic needs module_host"
+      )
+      # [Rev R10] A direct routing rule naming a hosted_dynamic module, as
+      # callee or as caller, is refused; local-transport is accepted.
+      c = baseConfig()
+      c.runtime.module_host = Opt.some(program)
+      c.modules.add(hosted)
+      proc rule(
+          callee: string,
+          mode: LcnAppRoutingRuleModeChoiceKind,
+          caller = Opt.none(string),
+      ): LcnAppRoutingRule =
+        LcnAppRoutingRule(
+          callee: callee, caller: caller, mode: LcnAppRoutingRuleModeChoice(kind: mode)
+        )
+
+      type M = LcnAppRoutingRuleModeChoiceKind
+      c.routing = Opt.some(@[rule("probe_module", M.Direct)])
+      check parse(c).rejects(
+        "routing: the direct routing rule any -> probe_module names probe_module, which is hosted_dynamic"
+      )
+      c.routing = Opt.some(@[rule("meter_module", M.Direct, Opt.some("probe_module"))])
+      check parse(c).rejects(
+        "routing: the direct routing rule probe_module -> meter_module names probe_module, which is hosted_dynamic"
+      )
+      c.routing = Opt.some(
+        @[
+          rule("probe_module", M.Local_transport),
+          rule("meter_module", M.Direct, Opt.some("client_module")),
+        ]
+      )
+      check parse(c).isOk
+
+  test "[RUN-0284] a hosted_dynamic implementation is an artifact in a placement, never a static binding":
+    var c = baseConfig()
+    c.runtime.module_host = Opt.some(work / "module-host" / "logos-module-host")
+    let artifact = LcnAppArtifact(
+      id: "probe", local_path: work / "libprobe.so", hash: newSeq[byte](32)
+    )
+    c.modules.add(
+      LcnAppModule(
+        instance: "probe-1",
+        module: "probe_module",
+        implementation: LcnAppImplementation(
+          kind: LcnAppImplementationKind.Process_hosted_dynamic,
+          arm_Process_hosted_dynamic:
+            LcnAppImplementationARProcessHostedDynamicMap(artifact: artifact),
+        ),
+      )
+    )
+    var cv = toCbor(c)
+    for e in cv.entries.mitems:
+      if e[0].text == "modules":
+        for m in e[1].items.mitems:
+          for f in m.entries.mitems:
+            if f[0].text == "implementation" and
+                f[1].entries.anyIt(it[0].text == "placement"):
+              f[1] = f[1].withEntry("binding", cbor("probe"))
+    check parseValue(cv).rejects("lcn.app_config")
+    # Without its placement, or with a placement other than `process`.
+    for placement in ["sandbox", "container"]:
+      var pv = toCbor(c)
+      for e in pv.entries.mitems:
+        if e[0].text == "modules":
+          for m in e[1].items.mitems:
+            for f in m.entries.mitems:
+              if f[0].text == "implementation":
+                for g in f[1].entries.mitems:
+                  if g[0].text == "placement":
+                    g[1] = cbor(placement)
+      check parseValue(pv).rejects("lcn.app_config")
+
   test "[RUN-0740] docs/HOST-CONFIG.md names the identifier and carries the schema verbatim":
     let root = currentSourcePath().parentDir.parentDir
     let doc = readFile(root / "docs" / "HOST-CONFIG.md")

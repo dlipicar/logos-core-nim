@@ -186,6 +186,77 @@ providers over local transport. What a consumer sees differently, and why:
   provider side cannot end one subscription of a session (K40), where a direct route's subscription
   ends (CA l.913-915).
 
+### What Tier 4b step 4b-3 changes
+
+Tier 4b step 4b-3 (DECISIONS I91) adds the Module Host, `logos-module-host`, and `hosted_dynamic`
+with the `process` placement. Part 4b-3.1a builds the host program, its supervision and the carrier
+(G264-G266), the Loader's hosted driver, and hosted consumer-only modules: their lifecycle and
+their Runtime Control binding, events and asynchronous calls included (G267, G271), with the
+execution scope `local-transport` in a `process` (G272). So:
+
+- **LOADER**: the Loader advertises `hosted_dynamic {process}` when `runtime.module_host` is set
+  (LDR-0034, LDR-0035) and never `force_release`; a placement it does not advertise is
+  `unsupported-strategy` before any code is read (LDR-0067, LDR-0068). The handoff and the paths stay
+  out of every record and error (LDR-0045, LDR-0149). The hosted provider endpoint (§5.3) is part
+  4b-3.2's, below; the trusted transport adapter handoff (§5.4) is not used (K3: the carrier is a
+  further private handoff) and is labelled `out-of-scope`, as are LDR-0163 and LDR-0164
+  (`force_release`, K7). A hosted cleanup returns only once the host's end is confirmed, so absence
+  is always established and LDR-0125's failed realization never arises (an inspection item).
+- **RUNTIME §4.2.1**: a hosted module's Runtime Control calls are answered through its own
+  attempt's binding, so they have the values, errors, decisions and transitions of a direct
+  module's (RUN-0169 to RUN-0172, RUN-0180; `test_hosted` compares the same probe library realized
+  both ways on two engines with one Runtime instance id). The consumer is the carrier's attempt,
+  never a field of a frame. A hosted record names an artifact, never a static binding (RUN-0284).
+  RUNTIME §4.2.1 and §6.2 are claimed with part 4b-3.4; that the host keeps no registry or
+  routing policy, only a route's invocation material (RUN-0173), and that the boundary never
+  treats an earlier view as authorization (RUN-0179) are an inspection item.
+- **Ends** (part 4b-3.1b; G268-G270, G275): a host that ends by itself or whose carrier breaks puts
+  its instance in `error` with `host-terminated`, fails its routes and starts termination (RUN-0812,
+  RUN-0813); a deadline ends the host and keeps the deadline's classification, and a startup past
+  its deadline is `error` (RUN-0227); a live application whose host ends is MODULE_ERROR. After the
+  Module Loader's loss each host is ended and its cleanup resolves only when the end is confirmed
+  (RUN-1067 to RUN-1070, tagged again on hosts); after an unclean end a host of the previous run is
+  never adopted, and its instance waits for its restart lock (RUN-0814).
+- **Hosted providers** (part 4b-3.2; G267, G272-G274): the Runtime makes and validates a hosted
+  provider's endpoint before its host starts, hands the host the listener and validates the path
+  again before `ready`; the Loader's record names it (LDR-0047, LDR-0049, LDR-0101, LDR-0102); a
+  listener that does not arrive fails the placement with nothing served (TRN-0186, LDR-0089). The
+  host serves that listener only, with the Runtime's transport loop. Payloads go between the
+  consumer's process and the host directly, and the Runtime stays on the control path (the owner's
+  direct layout, G267): it judges every Hello, admits every call, subscription and delivery and keeps
+  every session, from what the host reports without payloads; the host keeps only the session state
+  it was given, checks each payload with the Runtime's own checks on the same contract, runs the
+  provider and commits the Response (G273), and reports the commitments a call record retains
+  (G274) (RUN-0226, RUN-0815, LDR-0147, TRN-0317). No carrier frame holds a request, response or
+  event payload (`test_hosted_routes` P-13 traces every frame). So a route to a hosted provider
+  behaves as a transported route to a direct one; `test_hosted_routes` (P-1 to P-14) shows it with
+  the meter kit library realized in a host. With no routing rule a route with a hosted end is
+  `local-transport`; a `direct` rule naming a hosted module is refused (G272). TRN-0184 to
+  TRN-0186, LDR-0081 to LDR-0083, LDR-0145 to LDR-0147 and RUN-0200 are claimed with part 4b-3.4;
+  `test_module_host` (H-5, H-6) shows the host's side of the listener.
+- **Hosted consumers** (part 4b-3.3; G267): a hosted consumer's route handles and connections are
+  in its host, which keeps a route's invocation material from the answers it passes on and nothing
+  else of the Runtime's state (RUN-0173 to RUN-0176; RUN-0173 is also an inspection item, with RUN-0179), and
+  connects to the peer identity and module the Runtime names (TRN-0187). The host sends
+  `materialize_route`'s exact route id, expected root and construction input (RUN-0177); the
+  Runtime rebuilds the contract and makes the §4.1 checks against its current state (RUN-0178,
+  RUN-0179), and admits each call, subscription change and end observer in a direct handle's
+  order, so codes, ends and their causes are a direct consumer's, and a handle is never retargeted
+  (RUN-0181, RUN-0182, RUN-0256, RUN-0837); a stopping hosted consumer's calls are refused
+  NOT_READY from stop step 1 as a direct one's (RUN-0111, RUN-0794). `test_hosted_routes` (C-1 to
+  C-10, S-18) shows it with the probe kit library in a host, to direct and hosted providers. The
+  host waits for its handlers, end observers and completions before `_MODULE_destroy`.
+- **Boundary invariance** (part 4b-3.4; RUNTIME l.51-53, l.161, l.970; INTERFACE Abstract):
+  `test_boundary_invariance` runs one case table from the probe through one route handle in four
+  placements (a direct or hosted consumer, a direct or hosted provider) and finds every answer,
+  validation detail, response, delivery and completion, and the selected contract, the direct
+  run's: the meter kit's calls, failures, events and asynchronous calls, the same through a deferred
+  provider, and the shapes kit's C shapes and payload depth limit. RUN-0007, RUN-0008, RUN-0014,
+  RUN-0181 and IFC-0007 to IFC-0015 (but IFC-0010) are tagged again with it.
+- **Differences from direct realization**, none visible to a module's Runtime Control calls: a
+  host's environment is `module_host_env` only, and on macOS CoreFoundation may add its own
+  `__CF_USER_TEXT_ENCODING` inside the process.
+
 ### What Tier 4b step 4b-5 changes
 
 Tier 4b step 4b-5 (DECISIONS I94) adds the reference orchestration module, `lcn_orchestrator`, so the
@@ -238,6 +309,19 @@ reaches a scope until package-backed requests are presented to policy.
   run as the daemon's user, so a process running as that user can replace a socket pathname or
   impersonate an endpoint. Deployments that need that protection must run hosts under distinct OS
   identities, which this implementation does not set up (DECISIONS G58).
+- Containment of what a hosted module starts: a Module Host's process group is killed after every
+  end of the host, but a process the module moved into another group or session outlives it
+  (DECISIONS G265). Placement `process` is a separate address space, not a sandbox.
+- What a hosted provider's host commits, and the roots of its call records: the host runs module
+  code in its own address space (SEC l.205), and it checks and commits a hosted call's request and
+  response, its Events and its scoped publications itself. So that a consumer receives only a
+  checked Response, that a Runtime order (a failure Response, a session's end) takes effect when the
+  host's loop processes it and nothing after it is sent (DECISIONS G273), that a call record's
+  request and response roots are the values the consumer exchanged (DECISIONS G274), and that the
+  host serves only the listener it was handed, all rest on the host program. Every authorization
+  decision does not: the Runtime judges every Hello, call, subscription and delivery from names,
+  roots and connection numbers, and no verdict reads a payload. Both are interims (plan R16, K38,
+  K44), reported as TF-50 and TF-51.
 
 ## Unix-stream endpoints and peer checks
 
@@ -363,7 +447,8 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
 4. A hook does nothing until the Runtime's host selects it. In an in-process suite, that is a call by the
    test.
 
-The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader` and `orchestration`):
+The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `orchestration` and
+`hostsup`):
 
 - `host.setPolicyForTests`: the authority policy the next `start` installs.
 - `engine.loaderJournalForTests`: the Module Loader's request journal, kept in the engine's side table.
@@ -379,6 +464,16 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader` an
   lifecycle answer dropped, as a crash would lose it; every state-file write failing; every event
   dropped; a pause between a read and the guarded request it decided on, `openPauseGateForTests`),
   and `callsForTests`, `callTimesForTests` and `targetsForTests` read its record of the calls it made.
+- `hostsup` (DECISIONS I91): `holdEnd` delays the confirmation of a Module Host's end (`holdEnds`
+  every host's, those not yet spawned included), `breakCarrier` treats the next frame from a host as
+  malformed, `dropNextListener` spawns the next provider's host without its listener, `hostEnds` and
+  `pidOf` read what supervision saw, and `traceMarkers` and `traced` count the carrier frames the
+  Runtime sends and receives and those holding any of the given byte strings (`test_hosted_routes`
+  P-13). The engine's `moduleHostForTests` hands a test an instance's host, `realizationForTests`
+  reads an instance's `realization` when no client is left to ask, and `hostedEndpointForTests`
+  reads the path of an instance's hosted endpoint. The `logos-module-host` program itself has no
+  hooks: its suites drive it through its carrier
+  (`tests/support/hostowner.nim`) and a probe module.
 
 No deployment binary contains them.
 

@@ -12,6 +12,11 @@
 ## sets `stopping`, waits until no call is inside, and only then stops the loop.
 ## Events the I/O thread reports after that are dropped by the sink.
 ##
+## Hosted endpoints (4b-3.2; G273). A command for a hosted connection or
+## endpoint (`hostnum.nim`) goes to its Module Host through `hosted`, the
+## hook the host supervisor sets, before the loop is looked at: a host's
+## endpoint is served by the host's own loop.
+##
 ## [IMPL] The Runtime thread submits only uncharged commands, so it never sees
 ## `sbBusy` (`submitOwner` asserts it); charged ones (a successful Response, an
 ## Event) come from call workers and publishing threads, which may wait.
@@ -21,12 +26,19 @@
 import std/[atomics, os]
 import results
 import ../transport/io/[api, loop, sock]
+import ./hostnum
 
 export api
 
 type
+  HostedSubmit* =
+    proc(ctx: pointer, cmd: var IoCommand): SubmitResult {.nimcall, gcsafe, raises: [].}
+    ## takes `cmd` unless it answers `sbBusy`
+
   TransportPortsObj = object
     loop: Loop ## nil until `ensureStarted`
+    hosted: Atomic[pointer] ## a `HostedSubmit`, set before the first host
+    hostedCtx: Atomic[pointer]
     stopping: Atomic[bool]
     users: Atomic[int]
     nextConn: Atomic[uint64]
@@ -69,6 +81,18 @@ proc ensureStarted*(
   onOwner = true
   ok()
 
+proc setHosted*(p: TransportPorts, fn: HostedSubmit, ctx: pointer) =
+  ## The host supervisor's route for hosted commands; once, on the Runtime
+  ## thread, before the first host is spawned.
+  p.hostedCtx.store(ctx, moRelease)
+  p.hosted.store(cast[pointer](fn), moRelease)
+
+proc hostedContext*(p: TransportPorts): pointer =
+  ## The host supervisor `setHosted` gave; nil before the first host.
+  if p == nil:
+    return nil
+  p.hostedCtx.load(moAcquire)
+
 proc enter(p: TransportPorts): bool =
   discard p.users.fetchAdd(1)
   if p.stopping.load or p.loop == nil:
@@ -79,20 +103,25 @@ proc enter(p: TransportPorts): bool =
 proc leave(p: TransportPorts) =
   discard p.users.fetchSub(1)
 
-proc submit*(p: TransportPorts, cmd: sink IoCommand): SubmitResult =
-  ## Never blocks. `sbStopped` once the port is closing or was never started.
-  if p == nil or not p.enter():
-    return sbStopped
-  result = p.loop.submit(cmd)
-  p.leave()
-
 proc trySubmit*(p: TransportPorts, cmd: var IoCommand): SubmitResult =
   ## `submit` that takes `cmd` only when it is queued (`sbOk`): a busy command
   ## stays with the caller, to be offered again without a copy.
-  if p == nil or not p.enter():
+  if p == nil:
+    return sbStopped
+  if cmd.isHostedCommand:
+    let fn = cast[HostedSubmit](p.hosted.load(moAcquire))
+    if fn == nil or p.stopping.load:
+      return sbStopped
+    return fn(p.hostedCtx.load(moAcquire), cmd)
+  if not p.enter():
     return sbStopped
   result = p.loop.trySubmit(cmd)
   p.leave()
+
+proc submit*(p: TransportPorts, cmd: sink IoCommand): SubmitResult =
+  ## Never blocks. `sbStopped` once the port is closing or was never started.
+  var cmd = cmd
+  p.trySubmit(cmd)
 
 proc submitOwner*(p: TransportPorts, cmd: sink IoCommand): SubmitResult =
   ## The Runtime thread's submit: an uncharged command, which is never busy.
@@ -111,10 +140,7 @@ proc submitWait*(
   var cmd = cmd
   var waited = 0'i64
   while true:
-    if p == nil or not p.enter():
-      return sbStopped
-    let r = p.loop.trySubmit(cmd)
-    p.leave()
+    let r = p.trySubmit(cmd)
     if r != sbBusy:
       return r
     if timeout.isSome and waited >= timeout.get:

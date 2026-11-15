@@ -26,6 +26,12 @@
 ## first. A connection lost with no known cause is TRANSPORT_ERROR (TF-15, G256);
 ## NOT_READY is never inferred from it.
 ##
+## [plan §2.8; part 4b-3.3] A hosted consumer's handle is a `Link` too
+## (`hosted`): the Runtime admits each of its operations and keeps its codes,
+## its pin and its observer's registration, while its connection, its
+## subscriptions and its payloads are the Module Host's (the owner's direct
+## layout, 2026-11-14).
+##
 ## [plan §2.7; I90 part 4b-2c] A subscription through a transported handle is
 ## a `LinkSub`: the consumer's `subscribe` waits until the provider's
 ## SubscriptionResult [Rev R6]; the Runtime thread activates the subscription
@@ -101,6 +107,14 @@ type
       ## submitted or released: each keeps the link
     subs*: OrderedTable[uint64, LinkSub] ## [plan §2.7] by subscription id
     nextSub*: uint64
+    hosted*: bool
+      ## [plan §2.8; part 4b-3.3] a hosted consumer's handle: its connection,
+      ## calls, subscriptions and observer are in the consumer's Module Host;
+      ## `conn` is the Runtime's number for it, never the I/O thread's
+    host*: pointer ## a hosted link's Module Host (`hostsup.Host`), retained
+    observing*: bool
+      ## a hosted link's `observe_end` is installed and has not fired: one of
+      ## the consumer's registrations (I86)
 
 proc burn*(m: var Material) =
   ## [SPEC TRANSPORT l.1038] The raw ticket exists only transiently.

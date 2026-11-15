@@ -130,14 +130,14 @@ from ../transport/io/endpoint import checkEndpointBase
 from ../transport/io/sock import unixStream
 from ./tport import
   newTransportPorts, freeTransportPorts, ensureStarted, closeTransport, releaseOwner,
-  closing, submit, submitOwner, newConnId, started
+  closing, submit, submitOwner, newConnId, started, setHosted
 from ../permissions import
   PermissionProfile, build, selected, checkProfile, checkSettings, activeIn, missing
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
-    execauth, inventory, invoke, loaderbinding, observe, plumbing, rcevents, served,
-    sessionauth, settings, sidetable, store, transported,
+    execauth, hostlock, hostsup, inventory, invoke, loaderbinding, observe, plumbing,
+    rcevents, served, sessionauth, settings, sidetable, store, transported,
   ]
 
 export plumbing
@@ -185,6 +185,9 @@ type
     ticket: ptr CallTicket
       ## [I89] its `realize` call's, marked cancelled when the attempt is
       ## cancelled or expires, so the Loader stops before `_MODULE_init`
+    hostedEndpoint: EndpointId
+      ## [RUN-0200; G273] a hosted provider's endpoint, made before its host
+      ## was spawned; 0: none
 
   Waiter = object
     reply: ReplyChannel
@@ -201,6 +204,9 @@ type
     expired: bool
       ## the deadline passed first: the outcome is indeterminate and already
       ## answered, and the hook's result is ignored (CFG-0139)
+    hostKill: Opt[MonoTime]
+      ## [G269; plan R9] after expiry, for a hosted realization: when the
+      ## Runtime ends the Module Host whose hook has still not returned
 
   StopWaiter = object
     reply: ReplyChannel
@@ -228,6 +234,8 @@ type
       ## is recorded
     providerId: string ## its provider record, when its record expects a contract
     services: ptr AttemptServices ## those of `realization`
+    hostedEndpoint: EndpointId
+      ## [G273] the endpoint its Module Host serves for `realization`; 0: none
     inflight: int
       ## route calls admitted into `realization` and not yet left, deferred
       ## invocations included until they are idle (INTERFACE l.2155-2158)
@@ -281,6 +289,11 @@ type
       ## in progress although the instance is `error`: an application's
       ## outcome became indeterminate while it was `stopping`. The stop still
       ## completes it, to `unloaded`, within its stop deadline.
+    prevHost: bool
+      ## [G275; plan R6] restored after an unclean end with its restart lock
+      ## still held: a Module Host of the previous run may still be running,
+      ## so its realization is `unknown` and it is not started until the lock
+      ## can be taken
     settings: SettingsState
       ## [I93] its permission settings while a profile is selected (its `prm`
       ## side record); unused without one (G229)
@@ -529,6 +542,7 @@ type
     budget: uint64 ## `revisionBudget`
     storeFailed: bool ## the last write failed: changes are held back
     nextStoreTry: MonoTime
+    nextLockTry: MonoTime ## [G275] when the held restart locks are tried again
     tombstones: OrderedTable[string, Opt[string]]
       ## retired host-assigned instance ids, with the state assignment each
       ## keeps reserved (RUNTIME l.3582, l.3587)
@@ -619,6 +633,33 @@ const
     ## after this long, held back meanwhile
   StoreRetry = initDuration(seconds = 1)
   RevisionMask = 0xFFFF_FFFF'u64
+
+func hosted(x: Inst): bool =
+  ## [R28; 4b-4 plan §2.15] The instance's strategy and placement, read from
+  ## its accepted record: a Module Host realizes it.
+  x.record.strategy == stHostedDynamic
+
+func hostIn(s: ptr AttemptServices): Host =
+  if s.isNil:
+    nil
+  else:
+    cast[Host](s.host)
+
+func hostOf(x: Inst): Host =
+  ## [plan §2.9] The Module Host of `x`'s realization, or of its attempt.
+  result = hostIn(x.services)
+  if result.isNil and x.attempt != nil:
+    result = hostIn(x.attempt.services)
+
+proc endHost(x: Inst, reason: string) =
+  ## [SPEC RUNTIME l.669, l.3835; G269] The Runtime's protected supervision
+  ## ends `x`'s Module Host; the classification already recorded stays [R7
+  ## (d)]. Its cleanup resolves when the end is confirmed (`hostEnded`).
+  let h = x.hostOf
+  if h != nil:
+    h.terminate(reason, byRuntime = true)
+
+const PrevHost = "a Module Host of the previous run may still be running"
 
 proc workerLoop(s: ptr Shared) =
   while true:
@@ -1272,6 +1313,10 @@ proc records(st: State): seq[AsyncRec] =
 proc linksEnded(st: State, r: Route) {.gcsafe.}
 proc keepMaterial(st: State, r: Route, path: string, t: RouteTicket) {.gcsafe.}
 proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.}
+proc linkSubscribeRefusal(
+  st: State, l: Link, r: Route, q: Request
+): Opt[EngineError] {.gcsafe.}
+
 proc schemaBlob(st: State, r: Route): ptr SchemaBlob {.gcsafe.}
 
 proc endServices(st: State, s: ptr AttemptServices, instance: string) =
@@ -1875,6 +1920,9 @@ proc finishAttempt(st: State, a: Attempt) =
   ## The attempt has nothing left to clean: its outcome is final.
   let x = a.inst
   a.phase = apDone
+  if a.hostedEndpoint != 0 and x.hostedEndpoint != a.hostedEndpoint:
+    # [RUN-0228] An endpoint no realization took is removed.
+    st.sv.stopServing(a.hostedEndpoint)
   if x.attempt == a or x.attempt.isNil:
     x.endAttempted()
   if a.request.configuration.isSome:
@@ -2184,12 +2232,20 @@ proc loaderLost(st: State, f: Failure) =
   for x in st.instances.values:
     if not st.isLoader(x) and x.ownedBy(st):
       owned.add(x)
-      affected.add(x.id)
+      if x.hostOf.isNil:
+        affected.add(x.id)
   for x in owned:
     st.orphan(x, "its Module Loader failed")
+  for x in owned:
+    # [SPEC RUNTIME l.3821-3823; plan §2.9] A hosted one's envelope is its
+    # Module Host, which the Runtime's own supervision ends; its cleanup
+    # resolves once that end is confirmed (`hostEnded`), never by a Loader.
+    x.endHost("its Module Loader failed")
   if affected.len == 0:
-    # [plan §2.11 step 2] After the calls in flight return.
-    st.releaseRealization(l)
+    # [plan §2.11 step 2] After the calls in flight return, and once no
+    # host of a realization it owned remains.
+    if not st.loaderOwns():
+      st.releaseRealization(l)
     return
   # [SPEC RUNTIME l.3823; IMPL-DECISION G249 (R19)] Termination required.
   st.ldr.termination = affected
@@ -2372,6 +2428,19 @@ proc adoptRealization(st: State, a: Attempt, r: RealizationView) =
     a.phase = apCleanup
     st.releaseRealization(x)
     return
+  if a.hostedEndpoint != 0:
+    # [TRN-0185; RUN-0223, RUN-0224] Before `ready`: the path is still the
+    # socket the Runtime made, and the endpoint takes the realization's
+    # contracts; its host listens already.
+    st.sv.adoptHosted(a.hostedEndpoint, x.surfaceContracts).isOkOr:
+      st.diagnose("the endpoint of " & x.id & " is not valid: " & error)
+      st.failAttempt(
+        a, Failure(kind: fkOther, reason: "the provider's endpoint is not valid")
+      )
+      a.phase = apCleanup
+      st.releaseRealization(x)
+      return
+    x.hostedEndpoint = a.hostedEndpoint
   # [SPEC RUNTIME §3.4] Every lifecycle and realization check succeeded.
   a.provides = provider
   st.promote(a)
@@ -3607,6 +3676,7 @@ proc decideExec(st: State, x: Inst, pe: PendingExec) =
     target: x.id,
     instance: x.id,
     module: x.record.module,
+    hosted: x.hosted, # [plan §2.11] `local-transport` with `process`
     permissions:
       if st.profiled:
         x.settings.permissions
@@ -3718,6 +3788,10 @@ proc start(st: State, q: Request) =
       return
   of msUnloaded:
     discard
+  if x.prevHost:
+    # [G275; SPEC RUNTIME l.613] Its earlier execution envelope may still run.
+    q.reply.answerError(ecNotReady, PrevHost)
+    return
   let missing = st.loaderMissing(x)
   if missing.isSome:
     q.reply.answerError(ecNotReady, missing.get)
@@ -3753,6 +3827,54 @@ proc realizeThroughLoader(st: State, a: Attempt) =
     st.diagnose("the realize request of " & x.id & " cannot be encoded: " & error)
     fail("the realize request cannot be encoded")
   let s = a.request.services
+  var host: pointer = nil
+  if x.record.strategy == stHostedDynamic and st.shared.hosts != nil:
+    # [plan §2.6 step 3; G265] The carrier of the attempt's Module Host, whose
+    # every lane-1 request is the attempt's own binding's. The attempt's
+    # services hold the reference and outlive the host's last request.
+    # [G275] The instance's restart lock goes to the host.
+    let (taken, lock) = takeHostLock(st.cfg.workDir, x.id)
+    case taken
+    of loTaken:
+      discard
+    of loHeld:
+      st.diagnose("the restart lock of " & x.id & " is held: " & PrevHost)
+      fail("a Module Host of an earlier realization may still be running")
+    of loFailed:
+      st.diagnose("the restart lock of " & x.id & " cannot be taken")
+      fail("the Module Host restart lock cannot be taken")
+    let h = newHost(
+      cast[HostSupervisor](st.shared.hosts),
+      s.runtimeControl,
+      s.publish,
+      s.publishUserData,
+      st.shared.payloadDepth,
+      lock,
+    ).valueOr:
+      closeLock(lock)
+      st.diagnose("the Module Host carrier of " & x.id & " cannot be made: " & error)
+      fail("the Module Host carrier cannot be made")
+    a.services.adoptHost(h)
+    host = h
+    # [plan §2.8; part 4b-3.3] Every host's own loop connects its consumer's
+    # handles with the Runtime's Transport limits.
+    h.setTransport(st.shared.tport.config).isOkOr:
+      st.diagnose("the Module Host of " & x.id & " cannot be set up: " & error)
+      fail("the Module Host's transport limits cannot be handed over")
+    if x.providerId.len > 0:
+      # [SPEC LOADER §5.3; RUN-0200, RUN-0223; G273] A hosted provider's
+      # endpoint is made and validated before its host is spawned; the host
+      # gets the listener as fd 4 and serves it.
+      let id = hostedEndpoint(h.index)
+      let e = st.sv.openHosted(
+        id, x.id & "/" & x.current, x.id, x.providerId, x.record.module
+      ).valueOr:
+        st.diagnose("the endpoint of " & x.id & " cannot be made: " & error)
+        fail("the provider's endpoint cannot be made")
+      a.hostedEndpoint = id
+      h.setEndpoint(e.ep.listener, e.ep.path, st.runtimeId, st.shared.tport.config).isOkOr:
+        st.diagnose("the endpoint of " & x.id & " cannot be handed over: " & error)
+        fail("the provider's endpoint cannot be handed over")
   st.side.putInbound(
     x.id,
     InboundHandoff(
@@ -3760,6 +3882,7 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       publish: s.publish,
       publishUserData: s.publishUserData,
       invocationAccess: s.invocationAccess,
+      host: host,
     ),
   ).isOkOr:
     st.diagnose("the private handoff of " & x.id & " cannot be placed: " & error)
@@ -3822,6 +3945,8 @@ proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
       workDir: st.cfg.workDir,
       stateRoot: st.cfg.stateRoot,
       side: st.side,
+      hosted: st.shared.hosts != nil,
+      maxPayloadDepth: st.shared.payloadDepth,
     ),
   ).isOkOr:
     st.failAttempt(
@@ -3845,6 +3970,10 @@ proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
     st.dispatch(Job(id: id, kind: jkBind, spec: step.spec))
   of skInit:
     st.beginInit(a, step.binding)
+  of skHosted:
+    # The bootstrap realizer has no hosted driver: `begin` refuses first.
+    st.failAttempt(a, Failure(kind: fkOther, reason: "the Module Loader is not hosted"))
+    st.finishAttempt(a)
 
 proc stopInstance(
     st: State,
@@ -4008,6 +4137,9 @@ proc recover(st: State, q: Request) =
   if x.attempt != nil or x.teardown != 0 or x.realization != nil:
     # [SPEC RUNTIME l.3538; G20] cleanup of the earlier realization first
     q.reply.answerError(ecNotReady, "cleanup of the previous realization is pending")
+    return
+  if x.prevHost:
+    q.reply.answerError(ecNotReady, PrevHost) # [G275]
     return
   let missing = st.loaderMissing(x)
   if missing.isSome:
@@ -4252,6 +4384,11 @@ proc shutdownComplete(st: State): bool =
     if x.state in {msLoaded, msReady, msStopping} or x.indeterminateStop or
         x.apply != nil:
       # [I87] An application in flight is waited for as a call is.
+      return false
+    if st.isLoader(x) and x.teardown != 0:
+      # [G60 extended; I91] A lost Loader's own release, begun once it owns
+      # nothing (plan §2.11), stays `error` and is never stopped here; it is
+      # waited for as any release in progress is, the grace bounding it.
       return false
   true
 
@@ -4649,7 +4786,7 @@ proc retire(st: State, q: Request, x: Inst) =
   var live =
     y.state notin {msUnloaded, msError} or y.attempt != nil or y.teardown != 0 or
     y.realization != nil or y.inflight > 0 or y.stopWaiters.len > 0 or
-    y.pendingExec != nil
+    y.pendingExec != nil or y.prevHost
   for a in st.asyncCalls.values:
     if a.provider == y.id or a.consumer == y.id:
       live = true
@@ -4780,6 +4917,9 @@ proc servedEndpoint(st: State, y: Inst): Result[ServedEndpoint, string] =
   let e = st.sv.endpointOf(key)
   if e != nil:
     return ok(e)
+  if y.hosted:
+    # [G273] Only its Module Host serves it.
+    return err("the Module Host's endpoint does not serve")
   if not st.shared.tport.started:
     return err("the transport is not running")
   let b = y.realization.contracts
@@ -4971,10 +5111,22 @@ proc establish(st: State, q: Request, x: Inst) =
       if narrowed.isSome:
         routeAccess = narrowed.get
     # [IMPL-DECISION G254; I90] The mode, once per selected provider.
-    let mode = selectMode(
-      st.cfg.routing,
-      RouteEnds(consumerModule: x.record.module, providerModule: y.record.module),
+    let ends = RouteEnds(
+      consumerModule: x.record.module,
+      providerModule: y.record.module,
+      consumerHosted: x.hosted,
+      providerHosted: y.hosted,
     )
+    let mode = selectMode(st.cfg.routing, ends)
+    let conflict = hostedConflict(mode, ends)
+    if conflict.isSome:
+      # [Rev R10; IMPL] A direct rule meeting a Module Host.
+      st.diagnose("no route to " & y.providerId & " was made: " & conflict.get)
+      if all:
+        omitted = true
+        continue
+      q.reply.answerError(ecNotReady, conflict.get)
+      return
     var endpoint = Opt.none(uint64)
     if mode == rmLocalTransport:
       let ep = st.servedEndpoint(y)
@@ -5028,7 +5180,9 @@ proc establish(st: State, q: Request, x: Inst) =
         issueFailed = true
       else:
         response.routes.add(rec.live(t.get.path, t.get.ticket))
-        st.keepMaterial(r, t.get.path, t.get.ticket)
+        if not x.hosted:
+          # [plan §2.8; RUN-0174] A hosted consumer's host retains it.
+          st.keepMaterial(r, t.get.path, t.get.ticket)
     else:
       response.routes.add(rec)
     st.hintRc(InvKind.Routes, recordSubject(r)) # [SPEC RUNTIME l.3417]
@@ -5291,7 +5445,9 @@ proc renew(st: State, q: Request, x: Inst) =
       q.reply.answerError(ecModule, "a route ticket cannot be issued")
       return
     answer = rec.live(t.path, t.ticket)
-    st.keepMaterial(r, t.path, t.ticket)
+    if not x.hosted:
+      # [plan §2.8; RUN-0174] A hosted consumer's host retains it.
+      st.keepMaterial(r, t.path, t.ticket)
   let bytes = encode(LogosNSRuntimeControlRenewRouteResponse(route: answer)).valueOr:
     q.reply.answerError(ecModule, "the response cannot be encoded")
     return
@@ -5337,6 +5493,9 @@ proc realizationStatus(x: Inst): RealizationStatus =
   ## `unknown` while a Loader bind is unresolved (static bindings resolve
   ## inside the accepting step) or a bind, `_MODULE_init` or cleanup has
   ## outlived its deadline (G180); `absent` otherwise, after a restart too.
+  if x.prevHost:
+    # [G275; SPEC RUNTIME l.3533] A host of the previous run may hold it.
+    return rsUnknown
   let a = x.attempt
   if a != nil and a.phase == apRealize:
     # [plan §2.6] A `realize` not yet answered: whether a realization exists
@@ -5691,7 +5850,23 @@ proc summary(st: State, q: Request, x: Inst) =
       of stDirectDynamic:
         C(kind: K.Direct_dynamic)
       of stHostedDynamic:
-        C(kind: K.Hosted_dynamic)
+        # [SPEC RUNTIME l.3523-3528; plan §2.6] with the record's placement.
+        type P =
+          LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoiceKind
+
+        let placement =
+          case y.record.placement
+          of "sandbox": P.Sandbox
+          of "container": P.Container
+          else: P.Process
+        C(
+          kind: K.Hosted_dynamic,
+          arm_Hosted_dynamic: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicMap(
+            placement: LogosNSRuntimeControlExecutionSelectionImplementationARHostedDynamicPlacementChoice(
+              kind: placement
+            )
+          ),
+        )
   var r = LogosNSRuntimeControlGetExecutionSummaryResponse(
     target: LogosNSRuntimeModuleInstanceAddress(
       runtime_instance_id: st.runtimeId, module_instance_id: y.id
@@ -6259,6 +6434,10 @@ proc applyExpired(st: State, x: Inst) =
   ## ignored when it comes (CFG-0139), and the context stays owned until then.
   let run = x.apply
   run.expired = true
+  if x.hostOf != nil:
+    # [G269; plan R9; CONFIG l.272] The hook may run on: the release waits for
+    # it, for a stop deadline from now; then the Runtime ends the host.
+    run.hostKill = Opt.some(st.newStopDeadline())
   x.config.adopt(x.config.withoutAttempt)
   run.reply.answerError(
     ecModule, "the configuration was not applied in time: its outcome is unknown"
@@ -6856,7 +7035,10 @@ proc endLinkSubs(st: State, l: Link, code: ErrorCode) =
       st.dropLinkSub(l, ls)
 
 proc closeLink(st: State, l: Link) =
-  ## [Rev R5] The link's connection goes: `cmdClose`, once.
+  ## [Rev R5] The link's connection goes: `cmdClose`, once. [plan §2.8] A
+  ## hosted link's connection is its host's, which closes it itself.
+  if l.hosted:
+    return
   if l.state != lkClosed and not l.closeSent:
     l.closeSent = true
     discard
@@ -6870,6 +7052,21 @@ proc settleLink(st: State, l: Link) =
       st.links.del(l.conn)
     else:
       st.closeLink(l)
+
+proc dropHosted(st: State, l: Link) =
+  ## [plan §2.8] A hosted link goes: its host's reference with it.
+  st.links.del(l.conn)
+  l.state = lkClosed
+  if l.host != nil:
+    dropHost(cast[Host](l.host))
+    l.host = nil
+
+proc hostedFired(st: State, l: Link) =
+  ## [INTERFACE l.1486-1490; I86] A hosted handle's first terminal cause is
+  ## known: an installed observer runs in its host, and its registration goes.
+  if l.observing and l.observed.isSome:
+    l.observing = false
+    st.endRegsGone(l.consumer, 1)
 
 proc linkObserved(st: State, l: Link) =
   ## [Rev R4; INTERFACE l.1486-1490] The handle's path ended before its route:
@@ -6894,7 +7091,10 @@ proc linkConnectFailed(st: State, ev: IoEvent) =
   let l = st.links.getOrDefault(ev.conn)
   if l.isNil:
     return
-  st.links.del(ev.conn)
+  if l.hosted:
+    st.dropHosted(l)
+  else:
+    st.links.del(ev.conn)
   l.state = lkClosed
   let cause = l.routeCause
   let (code, failed) = connectOutcome(ev.failCause, ev.failCode)
@@ -6995,7 +7195,10 @@ proc linkConnected(st: State, conn: ConnId) =
   if l.routeCause.isSome or r.isNil or r.isTerminal:
     let code = l.routeCause.get(if r.isNil: ecNotAuthorised else: r.endCode)
     reply.answerError(code, "the route ended while its handle connected")
-    st.closeLink(l)
+    if l.hosted:
+      st.dropHosted(l)
+    else:
+      st.closeLink(l)
     return
   l.held = true
   r.pins.add(Pin(handle: l.handle, attempt: l.attempt))
@@ -7183,11 +7386,36 @@ proc linksEnded(st: State, r: Route) {.gcsafe.} =
   ## and takes it as its first cause unless the connection ended before; the
   ## route's unused material goes with its tickets.
   st.dropMaterial(r.id)
+  var firsts: seq[LcnCarrierLinkFirst]
   for l in st.links.values:
     if l.route == r.id:
       l.routeCause = Opt.some(r.endCode)
       discard l.observe(r.endCode)
       st.endLinkSubs(l, r.endCode)
+      if l.hosted:
+        st.hostedFired(l)
+        firsts.add(
+          LcnCarrierLinkFirst(
+            link: l.conn, first: uint8(ord(l.observed.get(r.endCode)))
+          )
+        )
+  let x = st.instances.getOrDefault(r.consumer)
+  if x != nil and x.hosted and x.hostOf != nil:
+    # [plan §2.8; part 4b-3.3] The consumer's host learns the route's cause,
+    # which its handles' subscriptions end with and each observer gets when
+    # it is the handle's first, and wipes the route's retained ticket; queued,
+    # never a write from this thread.
+    notify(
+      x.hostOf,
+      toMessage(
+        LcnCarrierRouteEnded(
+          route: r.id,
+          code: uint8(ord(r.endCode)),
+          revoked: r.state == rtRevoked,
+          links: firsts,
+        )
+      ),
+    )
 
 proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.} =
   ## [SPEC INTERFACE l.2004-2006] None of the attempt's handles remains valid:
@@ -7202,7 +7430,14 @@ proc linksOfAttemptEnded(st: State, token: string) {.gcsafe.} =
       l.connecting = nil
     st.endLinkSubs(l, ecNotReady)
     l.held = false
-    st.closeLink(l)
+    if l.hosted:
+      # [plan §2.8] Its host is ending: its registration goes with the link.
+      if l.observing:
+        l.observing = false
+        st.endRegsGone(l.consumer, 1)
+      st.dropHosted(l)
+    else:
+      st.closeLink(l)
 
 proc linksStopped(st: State) =
   ## [plan §2.9] The Runtime thread leaves: nothing still parked on a link
@@ -7221,6 +7456,9 @@ proc linksStopped(st: State) =
         ls.unsubscribing.answerError(ecNotReady, "the Runtime stopped")
     l.state = lkClosed
     st.dropLinkSubs(l)
+    if l.host != nil:
+      dropHost(cast[Host](l.host))
+      l.host = nil
   st.links.clear()
   for w in st.pubWaits.values:
     if w.reply != nil:
@@ -7229,6 +7467,181 @@ proc linksStopped(st: State) =
   for m in st.material.mvalues:
     m.burn()
   st.material.clear()
+
+# A hosted consumer's route handles (4b-3.3) ------------------------------------
+
+proc hostedMaterialize(st: State, q: Request, r: Route) =
+  ## [plan §2.8; RUN-0177-RUN-0179; part 4b-3.3] After the §4.1 checks against
+  ## the Runtime's current state, a hosted consumer's handle is a hosted link:
+  ## the host connects with the invocation material it retained (RUN-0174), to
+  ## the peer identity and module given here (TRN-0187). Without material the
+  ## handle is NOT_AUTHORISED and nothing is connected (K11), as for a direct
+  ## consumer; a route a hosted end has is local-transport (G272).
+  if r.mode != rmLocalTransport:
+    q.reply.answerError(ecNotReady, "a hosted consumer's route is not local-transport")
+    return
+  if not q.material:
+    q.reply.answerError(
+      ecNotAuthorised, "the route has no unused ticket; renew_route issues one"
+    )
+    return
+  let e = st.sv.endpoints.getOrDefault(r.endpoint.get(0))
+  let x = st.instances.getOrDefault(r.consumer)
+  let h = (if x.isNil: nil else: x.hostOf)
+  if e.isNil or h.isNil:
+    q.reply.answerError(ecNotReady, "the provider's endpoint is gone")
+    return
+  retain(h)
+  let l = Link(
+    conn: st.shared.tport.newConnId(),
+    route: r.id,
+    consumer: r.consumer,
+    attempt: q.attempt,
+    generation: nextGeneration(),
+    state: lkConnecting,
+    hosted: true,
+    host: h,
+  )
+  l.handle = cast[pointer](l) # its pin's identity, never dereferenced
+  st.links[l.conn] = l
+  var uid = st.shared.tport.euid
+  when defined(lcnTestHooks):
+    if st.connectFault == Opt.some(cfPeerMismatch):
+      # The host's own peer check meets an identity other than the one given.
+      st.connectFault = Opt.none(ConnectFailure)
+      uid = uid xor 1
+  q.reply.answer(Reply(conn: l.conn, uid: uid, module: e.module))
+
+proc hostedLink(st: State, q: Request): Link =
+  ## The hosted link `q` names, when the calling attempt made it.
+  let l = st.links.getOrDefault(q.conn)
+  if l.isNil or not l.hosted or l.attempt != q.attempt or l.consumer != q.origin.instance:
+    return nil
+  l
+
+proc hostedResult(st: State, q: Request) =
+  ## [plan §2.8; RUN-0800, RUN-0802; K12, Rev R15] The host's connection
+  ## completed its Hello, or failed: answered as a direct handle's
+  ## (`linkConnected`, `linkConnectFailed`), so a peer that is not the
+  ## expected identity fails the route before the materialization is answered.
+  let l = st.hostedLink(q)
+  if l.isNil or l.state != lkConnecting:
+    q.reply.answerError(ecNotReady, "the consumer's realization ended")
+    return
+  l.connecting = q.reply
+  if not q.connectFailed:
+    st.linkConnected(l.conn)
+    return
+  let cause =
+    if q.failCause <= uint8(ord(high(ConnectFailure))):
+      ConnectFailure(q.failCause)
+    else:
+      cfConnect
+  st.linkConnectFailed(
+    IoEvent(
+      conn: l.conn,
+      kind: IoEventKind.evConnectFailed,
+      failCode: q.code,
+      failCause: cause,
+      failMsg: "reported by the consumer's Module Host",
+    )
+  )
+
+proc hostedClosed(st: State, l: Link, code: ErrorCode) =
+  ## [plan §2.6, §2.8 step 5; Rev R4] The host's connection for `l` ended
+  ## with `code` (TF-15, G256): unless the route ended first, that is the
+  ## handle's first cause.
+  if l.state == lkClosed:
+    return
+  l.state = lkClosed
+  if l.held:
+    discard l.observe(code)
+  st.hostedFired(l)
+
+proc hostedAdmit(st: State, q: Request) =
+  ## [SPEC RUNTIME §4.1, l.1343-1347; INTERFACE §2.5; plan §2.8] One
+  ## operation through a hosted handle, decided as a direct transported
+  ## handle's before anything goes on its connection: a call (`linkAdmits`),
+  ## a subscribe, an unsubscribe, an observer's installation (`observeEnd`).
+  let l = st.hostedLink(q)
+  let r = (if l.isNil: nil else: st.route(l.route))
+  if l.isNil or r.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if q.closed.isSome:
+    st.hostedClosed(l, q.closed.get)
+  case q.op
+  of 0:
+    let refused = st.linkAdmits(l, r, q.origin.instance, q.attempt, q.bare)
+    if refused.isSome:
+      q.reply.answerError(refused.get.code, refused.get.message)
+      return
+  of 1:
+    let refused = st.linkSubscribeRefusal(l, r, q)
+    if refused.isSome:
+      q.reply.answerError(refused.get.code, refused.get.message)
+      return
+  of 2:
+    if r.isTerminal:
+      q.reply.answerError(r.endCode, "the route is " & $r.state)
+      return
+    let code = l.newCallCode
+    if code.isSome:
+      q.reply.answerError(code.get, "the handle's connection has ended")
+      return
+  of 3:
+    if l.observed.isSome:
+      q.reply.answerError(l.observed.get, "the handle's path has ended")
+      return
+    if r.isTerminal:
+      q.reply.answerError(r.endCode, "the route is " & $r.state)
+      return
+    if l.observing:
+      q.reply.answerError(ecInvalidParams, "an observer is already installed")
+      return
+    if st.endRegs.getOrDefault(r.consumer) >= st.limits.endRegsPerConsumer or
+        st.endRegsTotal >= st.limits.endRegsTotal:
+      # [SPEC INTERFACE l.1483-1484; IFC-0660; I86]
+      q.reply.answerError(ecModule, "no local registration capacity")
+      return
+    l.observing = true
+    st.endRegs.inc(r.consumer)
+    inc st.endRegsTotal
+  else:
+    q.reply.answerError(ecModule, "an unknown handle operation")
+    return
+  q.reply.answer(Reply())
+
+proc hostedClosedReport(st: State, q: Request) =
+  ## The host's report of its connection's end; the reply is the handle's
+  ## first terminal cause.
+  let l = st.hostedLink(q)
+  if l.isNil:
+    q.reply.answer(Reply(first: q.code))
+    return
+  st.hostedClosed(l, q.code)
+  q.reply.answer(Reply(first: l.observed.get(l.routeCause.get(q.code))))
+
+proc hostedReleased(st: State, q: Request) =
+  ## [SPEC INTERFACE §5.2 l.3895-3897] A hosted handle was released: its pin
+  ## and its observer's registration go with its link.
+  let l = st.hostedLink(q)
+  if l.isNil:
+    q.reply.answer(Reply())
+    return
+  let r = st.route(l.route)
+  if l.observing:
+    l.observing = false
+    st.endRegsGone(l.consumer, 1)
+  l.held = false
+  st.dropHosted(l)
+  if r != nil:
+    for j, p in r.pins:
+      if p.handle == l.handle:
+        r.pins.delete(j)
+        break
+    st.settle(r)
+  q.reply.answer(Reply())
 
 # Route handles ------------------------------------------------------------------
 
@@ -7272,6 +7685,9 @@ proc materialize(st: State, q: Request) =
     q.reply.answerError(
       ecVersionMismatch, "the expected contract root is not the route's contract"
     )
+    return
+  if q.hosted:
+    st.hostedMaterialize(q, r)
     return
   if r.mode == rmLocalTransport:
     st.connectLink(q, r)
@@ -7399,9 +7815,16 @@ proc admit(st: State, q: Request) =
       if a.terminal:
         ticket.closed.store(true)
   let b = p.realization
+  var host: pointer = nil
+  if p.hosted and p.hostOf != nil:
+    # [G273] The call runs in the provider's Module Host; the reference is
+    # the call's until it ends.
+    host = p.hostOf
+    retain(cast[Host](host))
   q.reply.answer(
     Reply(
       admission: Admission(
+        host: host,
         dispatch: b.dispatch,
         free: b.free,
         context: b.context,
@@ -7763,42 +8186,47 @@ proc linkConsumer(st: State, l: Link): Inst =
   let x = st.instances.getOrDefault(l.consumer)
   if x != nil and x.current == l.attempt and x.state in {msLoaded, msReady}: x else: nil
 
-proc linkSubscribe(st: State, q: Request) =
+proc linkSubscribeRefusal(
+    st: State, l: Link, r: Route, q: Request
+): Opt[EngineError] {.gcsafe.} =
   ## [SPEC INTERFACE §2.5 l.1417-1432; RUNTIME §4.4 l.1018-1024; plan §2.7] A
-  ## transported handle's `subscribe`: a direct one's local checks (ownership,
-  ## the event under the selected contract and the route's subscribe scope,
-  ## the route's end), then the handle's code and the consumer's liveness,
-  ## with no wire traffic when one fails; the provider decides the activation
-  ## (G175). The reply waits for the SubscriptionResult [Rev R6] (RUN-0192).
-  let l = st.links.getOrDefault(q.conn)
-  let r = st.route(q.route)
+  ## transported handle's `subscribe` checks: a direct one's local checks
+  ## (ownership, the event under the selected contract and the route's
+  ## subscribe scope, the route's end), then the handle's code and the
+  ## consumer's liveness, with no wire traffic when one fails.
+  template refuse(code: ErrorCode, message: string): untyped =
+    return Opt.some(engineError(code, message))
+
   if l.isNil or r.isNil or r.consumer != q.origin.instance or l.route != r.id:
-    q.reply.answerError(ecNotAuthorised, "not authorised")
-    return
+    refuse(ecNotAuthorised, "not authorised")
   st.expireIfDue(r)
   if r.selected.eventRoot(q.bare).isNone:
-    q.reply.answerError(
-      ecNotAuthorised, q.bare & " is not an event of the selected contract"
-    )
-    return
+    refuse(ecNotAuthorised, q.bare & " is not an event of the selected contract")
   if q.bare in [GrantChangedName, PolicyChangedName] and
       st.isAuthorityContract(r.selected):
-    q.reply.answerError(ecNotAuthorised, "the authority's notices are protected")
-    return
+    refuse(ecNotAuthorised, "the authority's notices are protected")
   if not r.allowsSubscribe(q.bare):
-    q.reply.answerError(ecNotAuthorised, "the event is outside the route's access")
-    return
+    refuse(ecNotAuthorised, "the event is outside the route's access")
   if r.isTerminal:
-    q.reply.answerError(r.endCode, "the route is " & $r.state)
-    return
+    refuse(r.endCode, "the route is " & $r.state)
   let code = l.newCallCode
   if code.isSome:
-    q.reply.answerError(code.get, "the handle's connection has ended")
-    return
+    refuse(code.get, "the handle's connection has ended")
   let x = st.instances.getOrDefault(r.consumer)
   if x.isNil or q.attempt != x.current or x.state notin {msLoaded, msReady} or
       st.shuttingDown:
-    q.reply.answerError(ecNotReady, "the consumer is not live")
+    refuse(ecNotReady, "the consumer is not live")
+  Opt.none(EngineError)
+
+proc linkSubscribe(st: State, q: Request) =
+  ## [plan §2.7] A transported handle's `subscribe`, once its checks pass
+  ## (`linkSubscribeRefusal`): the provider decides the activation (G175).
+  ## The reply waits for the SubscriptionResult [Rev R6] (RUN-0192).
+  let l = st.links.getOrDefault(q.conn)
+  let r = st.route(q.route)
+  let refused = st.linkSubscribeRefusal(l, r, q)
+  if refused.isSome:
+    q.reply.answerError(refused.get.code, refused.get.message)
     return
   inc l.nextSub
   let ls = LinkSub(
@@ -8459,6 +8887,19 @@ when defined(lcnTestHooks):
     of "spoil-ticket":
       st.spoilTicket = true
       q.reply.answer(Reply())
+    of "hosted-endpoint":
+      # [4b-3 plan §4.3 P-1, P-5] The path of `q.instance`'s hosted endpoint,
+      # adopted or not yet.
+      let x = st.instances.getOrDefault(q.instance)
+      let id =
+        if x.isNil:
+          EndpointId(0)
+        elif x.hostedEndpoint == 0 and x.attempt != nil:
+          x.attempt.hostedEndpoint # not adopted yet
+        else:
+          x.hostedEndpoint
+      let e = st.sv.endpoints.getOrDefault(id)
+      q.reply.answer(Reply(id: (if e.isNil: "" else: e.ep.path)))
     else:
       q.reply.answerError(ecInvalidParams, "unknown transport hook")
 
@@ -8480,7 +8921,21 @@ proc handle(st: State, q: Request) {.gcsafe.} =
       q.reply.answerError(ecInvalidParams, "not a test build")
   of rqTransportHook:
     when defined(lcnTestHooks):
-      st.transportHook(q)
+      if q.reason == "module-host":
+        # [plan §2.3] The test's handle on an instance's Module Host.
+        var r = Reply()
+        let x = st.instances.getOrDefault(q.instance)
+        if x != nil and x.hostOf != nil:
+          retain(x.hostOf)
+          r.subs = @[cast[pointer](x.hostOf)]
+        q.reply.answer(r)
+      elif q.reason == "realization":
+        # [plan §2.3] The instance's realization status, for a case where no
+        # client can ask any more (its Loader is lost).
+        let x = st.instances.getOrDefault(q.instance)
+        q.reply.answer(Reply(id: (if x.isNil: "" else: $x.realizationStatus)))
+      else:
+        st.transportHook(q)
     else:
       q.reply.answerError(ecInvalidParams, "not a test build")
   of rqActivate:
@@ -8594,6 +9049,14 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.observeEnd(q)
   of rqReleaseHandle:
     st.releaseHandle(q)
+  of rqHostedResult:
+    st.hostedResult(q)
+  of rqHostedAdmit:
+    st.hostedAdmit(q)
+  of rqHostedClosed:
+    st.hostedClosedReport(q)
+  of rqHostedReleased:
+    st.hostedReleased(q)
   of rqIdentity:
     q.reply.answer(Reply(id: st.runtimeId))
   of rqCleanup:
@@ -8601,8 +9064,10 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     q.reply.answer(
       Reply(
         pending:
-          not x.isNil and x.state in {msUnloaded, msError} and
-          (x.attempt != nil or x.teardown != 0 or x.realization != nil)
+          not x.isNil and x.state in {msUnloaded, msError} and (
+            x.attempt != nil or x.teardown != 0 or x.realization != nil or x.prevHost
+              # [G275]
+          )
       )
     )
   of rqSubscribe:
@@ -8717,6 +9182,112 @@ proc releasedThroughLoader(st: State, x: Inst, reply: LoaderReply) =
         "release answered " & $reply.kind
     )
 
+# Module Host ends (Tier 4b step 4b-3; DECISIONS G268-G270) -------------------------
+
+proc hostFailed(st: State, x: Inst, f: Failure) =
+  ## [G268, G270] `x`'s Module Host ended by itself while its realization was
+  ## live: `error` with `host-terminated` (a later cause replaces an earlier
+  ## one, RUNTIME l.3757), its routes failed and its callers released in the
+  ## same step (`commit`; RUN-0812, RUN-0813), a live configuration
+  ## application in flight answered MODULE_ERROR (K9, owner batch C 12), and
+  ## the Loader's failed record released (LOADER l.497-499; RUNTIME l.668).
+  ## Intent is kept and nothing restarts the host (LOADER l.105).
+  let run = x.apply
+  if run != nil:
+    # The Loader's answer to the application finds nothing to complete.
+    x.apply = nil
+    st.applies.del(run.job)
+    drop(run.input)
+    if not run.expired:
+      x.config.adopt(x.config.withoutAttempt)
+      run.reply.answerError(
+        ecModule, "the configuration application failed: the Module Host ended"
+      )
+  if x.realization != nil:
+    x.realization.failed = true
+  x.indeterminateStop = false
+  x.state = msError
+  x.failure = Opt.some(f)
+  x.enforced = Opt.none(Failure)
+  x.exec = Opt.none(ExecAuth)
+  inc x.execSerial
+  x.provider = false
+  st.commit(x)
+  st.releaseRealization(x)
+  st.releaseWaiters(x)
+
+proc servedClosed(st: State, conn: ConnId) {.gcsafe.}
+
+proc hostEnded(st: State, h: Host, e: HostEndNote) =
+  ## [R27; plan §2.9; G268] Every end of a Module Host reaches the Runtime
+  ## thread here, before the Loader reports anything that follows from it
+  ## (`hostsup.confirm`), and goes on through the existing paths. Which
+  ## classification it gets [R7]:
+  ## - after a terminal lane-0 message (`init_failed`, `fatal`, `released`)
+  ##   the Loader's answer decides (c);
+  ## - an end the Runtime caused (a deadline, its Loader's loss) keeps the
+  ##   classification already recorded (d);
+  ## - any other end is `host-terminated`, its reason the carrier's failure
+  ##   when that came first (e; S4b3-1);
+  ## - while a release is outstanding, the end belongs to that release, which
+  ##   then succeeds (LOADER l.573, l.590).
+  ##
+  ## [RUN-0228; G273] Its sessions ended with it, and the endpoint it served
+  ## stops serving: it is removed once they are closed (RUNTIME l.1166).
+  let ep = hostedEndpoint(h.index)
+  var conns: seq[ConnId]
+  for conn, s in st.sv.sessions:
+    if s.endpoint == ep:
+      conns.add(conn)
+  for conn in conns:
+    st.servedClosed(conn)
+  st.sv.stopServing(ep)
+  var x: Inst = nil
+  for y in st.instances.values:
+    if y.hostOf == h:
+      x = y
+      break
+  if x.isNil:
+    return # nothing uses the host any more
+  let unexpected = not e.orderly and not e.byRuntime
+  let f = Failure(
+    kind: fkHostTerminated,
+    reason: (if e.lost.len > 0: e.lost else: "the Module Host ended unexpectedly"),
+  )
+  if e.lost.len > 0:
+    st.diagnose("the Module Host of " & x.id & " ended: " & e.lost)
+  elif unexpected:
+    st.diagnose("the Module Host of " & x.id & " ended unexpectedly (" & e.how & ")")
+  let a = x.attempt
+  if x.realization != nil and x.realization.lost:
+    # [SPEC RUNTIME l.3821-3822; plan §2.9] The protected supervision's
+    # confirmation for a realization its failed Loader owned: absent now, the
+    # instance staying `error` (l.611).
+    x.realization = nil
+    x.teardown = 0
+    st.endServices(x.services, x.id)
+    freeAttemptServices(x.services)
+    x.services = nil
+    st.releaseWaiters(x)
+    let l = st.ldr.inst
+    if st.ldr.lost and l != nil and not st.loaderOwns():
+      st.releaseRealization(l)
+    return
+  if a != nil and a.phase == apRealize:
+    # The Loader's `realize` answers once the end is confirmed; an attempt
+    # already failed, expired or stopped keeps its outcome.
+    if unexpected:
+      st.failAttempt(a, f)
+    return
+  if not unexpected or x.teardown != 0:
+    return
+  if a != nil and a.phase == apReadyPending:
+    st.failAttempt(a, f)
+    st.abandon(a)
+    return
+  if x.realization != nil:
+    st.hostFailed(x, f)
+
 proc realized(st: State, a: Attempt, reply: LoaderReply) =
   ## [SPEC LOADER §6, §7; RUNTIME §3.4; plan §2.6-§2.8] `realize` returned:
   ## the inbound entry is withdrawn with the phase the Loader wrote in it; an
@@ -8751,6 +9322,22 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
           "the call surface of " & x.id & " is not acceptable: " & error,
           rec.realization,
         )
+    # [SPEC LOADER §5.3, l.479-480] A hosted provider's record names the
+    # endpoint the Runtime made for it; every other record names none.
+    let made = st.sv.endpoints.getOrDefault(a.hostedEndpoint)
+    let expected =
+      if a.hostedEndpoint != 0 and made != nil:
+        Opt.some(made.ep.path)
+      else:
+        Opt.none(string)
+    if rec.providerEndpoint != expected:
+      invalid(
+        if expected.isNone:
+          "a realization that serves no endpoint names one"
+        else:
+          "a hosted provider's record does not name its endpoint",
+        rec.realization,
+      )
     let h = handoff.get
     let v = RealizationView(
       mechanism: mLoader,
@@ -9241,7 +9828,7 @@ proc servedStop(st: State, conn: ConnId, id: uint64) =
   st.cancelInvocation(a)
   st.endCall(a, failure(ecCancelled, "the call was cancelled"), okCancelled)
 
-proc servedClosed(st: State, conn: ConnId) =
+proc servedClosed(st: State, conn: ConnId) {.gcsafe.} =
   ## [plan §2.5] `SessionAuthority.sessionEnded`: each served invocation still
   ## listed is cancelled and answers nothing; its work leaves the in-flight
   ## count as it ends, and its worker writes its record (CA l.1193). The
@@ -9345,7 +9932,7 @@ proc handle(st: State, m: sink Msg) =
     dec st.busy
     st.jobClock = getMonoTime()
   of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle, mkEvaluated,
-      mkRcHandled, mkIo:
+      mkRcHandled, mkIo, mkHostEnded:
     discard
   case m.kind
   of mkBound:
@@ -9396,6 +9983,10 @@ proc handle(st: State, m: sink Msg) =
     st.loaderReplied(m.job, move m.loaderReply)
   of mkIo:
     st.ioEvent(move m.io)
+  of mkHostEnded:
+    let h = cast[Host](m.host)
+    st.hostEnded(h, m.hostEnd)
+    dropHost(h) # the message's
   of mkRequest, mkJobDone:
     discard
   st.settle()
@@ -9458,11 +10049,22 @@ proc nextTransported(st: State): Opt[MonoTime] =
       t = Opt.some(d)
   t
 
+proc retryLocks(st: State, now: MonoTime) =
+  ## [G275; plan R6] Once a restart lock held after an unclean end can be
+  ## taken, the earlier host is gone: the realization is `absent`, committed.
+  st.nextLockTry = now + initDuration(seconds = 1)
+  for x in st.instances.values:
+    if x.prevHost and lockFree(st.cfg.workDir, x.id):
+      x.prevHost = false
+      st.commit(x)
+
 proc checkDeadlines(st: State) =
   var now = getMonoTime()
   if st.storeFailed and now >= st.nextStoreTry:
     st.retryStore()
     now = getMonoTime()
+  if now >= st.nextLockTry:
+    st.retryLocks(now)
   st.checkEvaluations(now)
   st.checkStarvation(now)
   st.snapshots.reclaim(now)
@@ -9489,6 +10091,10 @@ proc checkDeadlines(st: State) =
       a.expired = true
       if a.ticket != nil:
         a.ticket.cancelled.store(true)
+      if a.phase == apRealize:
+        # [SPEC RUNTIME l.669; G269] A Module Host still initializing is ended
+        # at once; the Loader's `realize` then fails and nothing remains.
+        x.endHost("the startup deadline passed")
     if a != nil and a.phase == apReadyPending:
       if now >= a.deadline:
         st.failAttempt(
@@ -9502,6 +10108,9 @@ proc checkDeadlines(st: State) =
     let run = x.apply
     if run != nil and not run.expired and now >= run.deadline:
       st.applyExpired(x)
+    if run != nil and run.hostKill.isSome and now >= run.hostKill.get:
+      run.hostKill = Opt.none(MonoTime)
+      x.endHost("the configuration hook did not return in time") # [G269]
     if (x.state == msStopping or x.indeterminateStop) and x.stopDeadline.isSome and
         now >= x.stopDeadline.get:
       # [G61, revised by A18; SPEC RUNTIME §10.2 l.3835-3838, l.3873-3874]
@@ -9515,6 +10124,10 @@ proc checkDeadlines(st: State) =
       x.enforced = Opt.none(Failure)
       st.commit(x)
       st.releaseWaiters(x)
+      # [G61 "Only hosted realizations may be terminated"; G269; G180 (a)
+      # extended] The host is ended; the Loader's `release` then succeeds and
+      # the realization is `absent`, the instance staying `error`.
+      x.endHost("the stop deadline passed")
   if st.shuttingDown and not st.shutdownDone and now >= st.shutdownDeadline:
     # [SPEC RUNTIME §10.2 step 6] The cleanup failure is recorded and shutdown
     # continues; nothing still in use is released. [plan §2.10 (R3)] A Loader
@@ -9533,6 +10146,10 @@ proc checkDeadlines(st: State) =
         x.enforced = Opt.none(Failure)
         st.commit(x)
         st.releaseWaiters(x) # [I93; R11]
+    for x in st.instances.values:
+      # [G269; SPEC RUNTIME l.3860-3861] Every Module Host left is ended; its
+      # release completes after shutdown, before `close`.
+      x.endHost("the shutdown grace period passed")
     st.finishShutdown()
 
 proc nextDeadline(st: State): Opt[MonoTime] =
@@ -9560,6 +10177,10 @@ proc nextDeadline(st: State): Opt[MonoTime] =
       consider(x.stopDeadline.get)
     if x.apply != nil and not x.apply.expired:
       consider(x.apply.deadline)
+    if x.apply != nil and x.apply.hostKill.isSome:
+      consider(x.apply.hostKill.get)
+    if x.prevHost:
+      consider(st.nextLockTry)
   if st.storeFailed:
     consider(st.nextStoreTry)
   if st.unsettled.len > 0:
@@ -9619,6 +10240,11 @@ proc restore(st: State, snap: Snapshot) =
       # with `other`, intent kept. Resuming it is not a retry after failure.
       x.state = msError
       x.failure = Opt.some(Failure(kind: fkOther, reason: UncleanEnd))
+    if s.record.strategy == stHostedDynamic and not lockFree(st.cfg.workDir, x.id):
+      # [G275, amends G193 for hosts; plan R6] Its Module Host may outlive the
+      # previous run: nothing is realized for it until the lock can be taken.
+      x.prevHost = true
+      st.nextLockTry = getMonoTime() + initDuration(seconds = 1)
     # [G178] Created in an earlier process: its next exposure is a change.
     x.seen = true
     x.seenState = x.state
@@ -9802,6 +10428,25 @@ proc ioSink(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].} =
   if not s.tport.closing:
     s.post(Msg(kind: mkIo, io: ev))
 
+proc hostEndSink(ctx: pointer, h: Host, e: HostEnd) {.nimcall, gcsafe, raises: [].} =
+  ## [R27; plan §2.3] Supervision thread: a Module Host ended. Posted before
+  ## the Loader can report anything that follows from the end; the message
+  ## holds a reference, dropped on the Runtime thread (or by `freeEngine`).
+  let s = cast[ptr Shared](ctx)
+  retain(h)
+  s.post(
+    Msg(
+      kind: mkHostEnded,
+      host: h,
+      hostEnd: HostEndNote(
+        orderly: e.orderly,
+        byRuntime: e.byRuntime,
+        lost: e.carrierLost,
+        how: (if e.exited: "exit status " else: "signal ") & $e.status,
+      ),
+    )
+  )
+
 func endpointBase(cfg: EngineConfig): string =
   ## [C36] `runtime.endpoint_dir`, by default `<work_dir>/endpoints`.
   if cfg.endpointDir.len > 0:
@@ -9827,6 +10472,12 @@ proc startTransportFor(s: ptr Shared, cfg: EngineConfig): Opt[EngineError] =
     )
   checkEndpointBase(base).isOkOr:
     return Opt.some(engineError(ecModule, "the endpoint directory: " & error.msg))
+  if s.hosts != nil:
+    # [G273] Every host's loop reports as the Runtime's own does, and orders
+    # for a hosted connection go to its host.
+    let hs = cast[HostSupervisor](s.hosts)
+    hs.setIoSink(ioSink, s)
+    s.tport.setHosted(submitHosted, hs)
   s.tport.ensureStarted(ioSink, s).isOkOr:
     return Opt.some(engineError(ecModule, "the transport cannot start: " & error))
   Opt.none(EngineError)
@@ -9875,7 +10526,8 @@ proc runtimeLoop(s: ptr Shared) =
       )
       s.finished = true
       return
-  if anyTransported(cfg.routing):
+  if anyTransported(cfg.routing) or s.hosts != nil:
+    # [Rev R10] A Module Host may serve or call through local transport.
     let failed = startTransportFor(s, cfg)
     if failed.isSome:
       first.request.reply.answer(Reply(error: failed))
@@ -9963,8 +10615,23 @@ proc freeEngine(e: Engine) =
   ## Every thread but the transport I/O thread has left. [I90; plan §2.9] That
   ## one stops first, once no port call is inside; the sink drops what it
   ## reports after that, so nothing then sends to any channel or rings the bell.
+  closeSupervisor(cast[HostSupervisor](e.hosts)) # a failed open's
+  e.hosts = nil
   closeTransport(e.tport)
   freeTransportPorts(e.tport)
+  while true:
+    # [plan §2.3] What came after the Runtime thread left: a host's end
+    # holds a reference.
+    var got: bool
+    var m: Msg
+    try:
+      (got, m) = e.inbox.tryRecv()
+    except Exception:
+      break
+    if not got:
+      break
+    if m.kind == mkHostEnded:
+      dropHost(cast[Host](m.host))
   e.inbox.close()
   e.jobs.close()
   e.calls.close()
@@ -10048,6 +10715,10 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   e.rcJobs.open()
   e.bell = newBell()
   e.side = newSideTable()
+  if cfg.moduleHost.isSome:
+    # [plan §2.3; G265] Its threads start with the first spawn.
+    e.hosts = newSupervisor(cfg.moduleHost.get, cfg.moduleHostEnv)
+    setEndNotify(cast[HostSupervisor](e.hosts), hostEndSink, cast[pointer](e))
   when defined(lcnTestHooks):
     e.ownFaults = cfg.loaderFaults.isNil
     e.faults = (if e.ownFaults: newLoaderFaultBox() else: cfg.loaderFaults)
@@ -10087,6 +10758,30 @@ when defined(lcnTestHooks):
     if r.error.isSome:
       return err(r.error.get)
     ok()
+
+  proc moduleHostForTests*(e: Engine, instance: string): Host =
+    ## A test hook (plan §2.3, R20): `instance`'s Module Host, with a
+    ## reference the caller drops (`dropHost`); nil when it has none. The
+    ## supervision hooks (`holdEnd`, `breakCarrier`, `pidOf`) act on it.
+    let r =
+      e.call(Request(kind: rqTransportHook, reason: "module-host", instance: instance))
+    if r.subs.len > 0:
+      cast[Host](r.subs[0])
+    else:
+      nil
+
+  proc realizationForTests*(e: Engine, instance: string): string =
+    ## A test hook (plan §2.3): `instance`'s realization status as
+    ## `get_execution_summary` would give it (`rsCurrent`, `rsAbsent`,
+    ## `rsUnknown`); empty for an unknown instance.
+    e.call(Request(kind: rqTransportHook, reason: "realization", instance: instance)).id
+
+  proc hostedEndpointForTests*(e: Engine, instance: string): string =
+    ## A test hook (4b-3 plan §4.3 P-1): the path of `instance`'s hosted
+    ## endpoint; empty when it serves none.
+    e.call(
+      Request(kind: rqTransportHook, reason: "hosted-endpoint", instance: instance)
+    ).id
 
   proc spoilNextTicketForTests*(e: Engine): Result[void, EngineError] =
     ## A test hook (4b-2 plan §4.1): the next materialization of a transported
@@ -10329,9 +11024,16 @@ proc tryClose*(e: Engine): Result[void, EngineError] =
   ## Stops the Runtime thread after shutdown and frees the engine. NOT_READY,
   ## with the engine intact and running, before shutdown completed or while a
   ## worker is inside module code that may still report to it.
+  if cast[HostSupervisor](e.hosts).busy:
+    # [plan §2.3; R26] A Module Host or a Runtime Control request of one still
+    # needs the Runtime thread.
+    return err(engineError(ecNotReady, "module code is still running"))
   let r = e.call(Request(kind: rqTerminate))
   if r.error.isSome:
     return err(r.error.get)
+  # [R26] No host survives the engine: any left is ended and confirmed.
+  closeSupervisor(cast[HostSupervisor](e.hosts))
+  e.hosts = nil
   e.joinAll()
   e.freeEngine()
   ok()

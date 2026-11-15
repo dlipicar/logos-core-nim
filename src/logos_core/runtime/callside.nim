@@ -20,17 +20,13 @@ import ../cbor/[decode, utf8]
 import ../hash/hashinput
 import ../iface/[accept, outcome, payload, surface]
 import ../transport/boundary
-import ./plumbing
+import ./[callcheck, plumbing]
+import ../abi/cstatus
+import ./entryframe
 
-const
-  TextCapacity* = 160 ## instance ids are at most 128 bytes; tokens are shorter
-  MaxEventNameBytes* = 128 ## [SPEC INTERFACE §1.5] a complete event identifier
+export callcheck, cstatus, entryframe
 
 type
-  FixedText* = object
-    len: int
-    data: array[TextCapacity, char]
-
   SchemaBlob* = object
     ## The construction input `materialize_route` validated, shared by the
     ## handle, its subscriptions and its prepared calls, which may outlive it
@@ -41,10 +37,6 @@ type
     data*: ptr UncheckedArray[byte]
     depth*: int ## [IF-02, I88] the engine's payload depth setting
 
-  Selected* = object ## One selected contract, as this thread loaded it.
-    boundary*: Boundary
-    validator*: ContractValidator
-
   AttemptServices* = object
     ## One execution attempt's Runtime Control binding, publish callback and
     ## invocation-access state. Valid until the attempt's context has been
@@ -53,6 +45,10 @@ type
     instance*: FixedText
     attempt*: FixedText
     binding*: LogosRuntimeControlBinding
+    host*: pointer
+      ## [plan §2.6] a hosted attempt's `hostsup.Host`, whose requests use
+      ## `binding`: the host frees these services with itself, after its last
+      ## request
 
   CallbackState* = enum
     cbNone
@@ -106,132 +102,13 @@ type
       ## Runtime's protected path (an engine `evaluate`): a SYSTEM_SERVICE
       ## caller view with the Runtime id and no module view (I85)
 
-  Frame* = object
-    ## One provider entry active on this thread, or a barrier (`context` nil)
-    ## that hides every entry below it from `current` while a consumer
-    ## callback runs (INTERFACE l.2170).
-    context*: ptr LogosInvocationContext
-    access*: pointer
-    previous*: ptr Frame
-
-proc cMalloc*(size: csize_t): pointer {.importc: "malloc", header: "<stdlib.h>".}
-proc cFree*(p: pointer) {.importc: "free", header: "<stdlib.h>".}
-
-template bindingEnter*() =
-  ## [IMPL] As the module kit's entries: a thread this Nim runtime did not
-  ## create (a module's own) registers before its first allocation.
-  setupForeignThreadGc()
-  enterThread()
-  when not defined(gcDestructors):
-    var stackBottom {.volatile, noinit.}: pointer
-    nimGC_setStackBottom(addr stackBottom)
-
-func fixed*(s: string): FixedText =
-  doAssert s.len <= TextCapacity
-  result.len = s.len
-  for i, c in s:
-    result.data[i] = c
-
-func `$`*(t: FixedText): string =
-  result = newString(t.len)
-  for i in 0 ..< t.len:
-    result[i] = t.data[i]
-
-func utf8View*(t: var FixedText): LogosUtf8View =
-  ## A borrowed view of `t`'s bytes, valid while `t` stays where it is.
-  LogosUtf8View(
-    data: (if t.len == 0: nil
-    else: cast[ptr UncheckedArray[uint8]](addr t.data[0])),
-    len: csize_t(t.len),
-  )
-
 # Results ---------------------------------------------------------------------------
-
-var
-  statusMessage {.threadvar.}: array[MaxMessageBytes + 1, char]
-  statusDetail {.threadvar.}: array[MaxDetailBytes, uint8]
-
-func clip*(m: string): string =
-  ## At most `MaxMessageBytes` bytes, cut before a continuation byte, no NUL.
-  var s = m
-  for c in s.mitems:
-    if c == '\0':
-      c = ' '
-  if s.len <= MaxMessageBytes:
-    return s
-  var n = MaxMessageBytes
-  while n > 0 and (uint8(s[n]) and 0xC0'u8) == 0x80'u8:
-    dec n
-  s[0 ..< n]
-
-proc status*(f: InvocationFailure): LogosResult =
-  ## [SPEC INTERFACE §5.1, §5.2] A failure status whose message and detail live
-  ## in this thread's storage until the next binding operation on it.
-  var r = LogosResult(code: CErrorCode(ord(f.code)))
-  if f.message.isSome:
-    let m = clip(f.message.get)
-    for i, c in m:
-      statusMessage[i] = c
-    statusMessage[m.len] = '\0'
-    r.message = cast[cstring](addr statusMessage[0])
-  if f.detail.isSome and f.detail.get.len <= MaxDetailBytes and f.code == ecInvalidParams:
-    let d = f.detail.get
-    for i, b in d:
-      statusDetail[i] = b
-    r.detail = cast[ptr UncheckedArray[uint8]](addr statusDetail[0])
-    r.detailLen = csize_t(d.len)
-  r
-
-proc status*(code: ErrorCode, message: string): LogosResult =
-  status(InvocationFailure(code: code, message: Opt.some(message)))
 
 proc status*(e: EngineError): LogosResult =
   status(e.code, e.message)
 
-func failureOf*(f: AbiFailure): InvocationFailure =
-  ## A producer's own valid failure, forwarded as it gave it; any other
-  ## rejection as MODULE_ERROR without its diagnostics (I66).
-  if f.reason.len == 0:
-    InvocationFailure(code: f.code, message: f.message, detail: f.detail)
-  else:
-    InvocationFailure(code: f.code)
-
 func failureOf*(e: EngineError): InvocationFailure =
   InvocationFailure(code: e.code, message: Opt.some(e.message))
-
-func failure*(code: ErrorCode, message: string): InvocationFailure =
-  InvocationFailure(code: code, message: Opt.some(message))
-
-proc status*(f: AbiFailure): LogosResult =
-  status(failureOf(f))
-
-proc give*(
-    bytes: openArray[byte], outBuf: ptr ptr UncheckedArray[uint8], outLen: ptr csize_t
-): LogosResult =
-  ## A success: the response in a C buffer the caller releases once.
-  let p = cast[ptr UncheckedArray[uint8]](cMalloc(csize_t(max(bytes.len, 1))))
-  if p == nil:
-    return status(ecModule, "out of memory")
-  for i, b in bytes:
-    p[i] = b
-  outBuf[] = p
-  outLen[] = csize_t(bytes.len)
-  LogosResult()
-
-func view*(p: ptr UncheckedArray[uint8], len: csize_t): seq[byte] =
-  result = newSeq[byte](int(len))
-  for i in 0 ..< int(len):
-    result[i] = p[i]
-
-proc checkEventName*(name: cstring): Result[string, InvocationFailure] =
-  ## [SPEC INTERFACE §1.5, §2.5, §2.9.3] A malformed event identifier is
-  ## INVALID_PARAMS: null, empty, longer than 128 bytes or not UTF-8.
-  if name == nil:
-    return err(failure(ecInvalidParams, "a null event name"))
-  let s = $name
-  if s.len == 0 or s.len > MaxEventNameBytes or not isValidUtf8(s):
-    return err(failure(ecInvalidParams, "an event name has 1 to 128 UTF-8 bytes"))
-  ok(s)
 
 # Construction input and the selected contract ---------------------------------------
 
@@ -281,12 +158,7 @@ proc selectedOf*(b: ptr SchemaBlob): Result[Selected, string] =
       return ok(selectedCache[key])
     except KeyError:
       discard
-  let set = ?acceptSchemaResponse(
-    b.data.toOpenArray(0, b.len - 1), b.root, AcceptOptions(system: true)
-  )
-  let bd = ?boundary(set, b.root)
-  let v = ?validator(set, b.depth)
-  let s = Selected(boundary: bd, validator: v)
+  let s = ?buildSelected(b.data.toOpenArray(0, b.len - 1), b.root, b.depth)
   selectedCache[key] = s
   ok(s)
 
@@ -294,10 +166,9 @@ proc cacheSelected*(root: Digest, set: ContractSet, depth: int) =
   ## Keeps the set `materialize_route` just validated for this thread.
   hookSelected()
   if (root, depth) notin selectedCache:
-    let b = boundary(set, root)
-    let v = validator(set, depth)
-    if b.isOk and v.isOk:
-      selectedCache[(root, depth)] = Selected(boundary: b.get, validator: v.get)
+    let s = buildSelected(set, root, depth)
+    if s.isOk:
+      selectedCache[(root, depth)] = s.get
 
 # Route handles ------------------------------------------------------------------------
 
@@ -316,53 +187,6 @@ var generations: Atomic[uint64]
 proc nextGeneration*(): uint64 =
   ## [G177] A fresh invocation-path generation; never reused in this process.
   generations.fetchAdd(1) + 1
-
-# The invocation-context stack ---------------------------------------------------------
-
-var
-  active {.threadvar.}: ptr Frame
-  runtimeOwned {.threadvar.}: bool
-
-proc markRuntimeThread*() =
-  ## The engine's own threads: the Runtime thread and its lifecycle and call
-  ## workers, where module initialization, destruction and completion
-  ## callbacks run.
-  runtimeOwned = true
-
-proc inRuntimeCallback*(): bool =
-  ## [SPEC RUNTIME l.4083] Whether this thread is one the Runtime owns, or is
-  ## inside a provider entry or a consumer callback: module code whose
-  ## completion shutdown may require.
-  runtimeOwned or active != nil
-
-proc push*(f: var Frame) =
-  f.previous = active
-  active = addr f
-
-proc pop*(f: var Frame) =
-  active = f.previous
-
-template barrier*(body: untyped) =
-  ## [SPEC INTERFACE l.2170] A consumer callback (an event handler) never sees
-  ## the invocation context of a provider entry below it on this thread.
-  var fence = Frame()
-  push(fence)
-  body
-  pop(fence)
-
-proc currentOp*(state: pointer): ptr LogosInvocationContext {.cdecl.} =
-  ## [SPEC INTERFACE §2.9.3, l.2166-2170] The context of the innermost provider
-  ## entry active on this thread for the instance `state` belongs to, so a
-  ## nested entry into another instance hides nothing; none outside one, and
-  ## none past a consumer callback's barrier.
-  var f = active
-  while f != nil:
-    if f.context == nil:
-      return nil
-    if f.access == state:
-      return f.context
-    f = f.previous
-  nil
 
 # Entry guards of a deferred invocation ------------------------------------------------
 

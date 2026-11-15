@@ -32,7 +32,14 @@ lcn.app_runtime = {
   ? apply_deadline_ms: uint32,
   ? max_payload_depth: uint16,
   ? endpoint_dir: lcn.app_path,
+  ? module_host: lcn.app_path,
+  ? module_host_env: [* lcn.app_env_name],
 }
+
+; module_host: the logos-module-host program, an absolute path (Tier 4b step
+; 4b-3); without it hosted_dynamic is refused. module_host_env: the names of
+; the variables every Module Host gets from the daemon's environment.
+lcn.app_env_name = tstr .size (1..128)
 
 lcn.app_path = tstr .size (1..4096)
 
@@ -141,10 +148,12 @@ lcn.app_module = {
 ; configuration. docs/HOST-CONFIG.md says when a changed value takes effect.
 lcn.app_configuration = bstr .size (1..16777216)
 
-; logos.module_loader.direct_static and direct_dynamic (LOADER §3)
+; logos.module_loader.direct_static, direct_dynamic and hosted_dynamic with
+; the process placement (LOADER §3)
 lcn.app_implementation =
   { strategy: "direct_static", binding: tstr .size (1..128) } /
-  { strategy: "direct_dynamic", artifact: lcn.app_artifact }
+  { strategy: "direct_dynamic", artifact: lcn.app_artifact } /
+  { strategy: "hosted_dynamic", placement: "process", artifact: lcn.app_artifact }
 
 ; logos.module_loader.artifact (LOADER §3)
 lcn.app_artifact = {

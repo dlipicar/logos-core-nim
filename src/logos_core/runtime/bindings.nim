@@ -26,7 +26,7 @@ import ../abi/[checks, types]
 import ../cbor/utf8
 import ../hash/hashinput
 import ../iface/[accept, outcome, payload, surface]
-import ./[asynccall, callside, events, invoke, plumbing, rcevents, transported]
+import ./[asynccall, callside, events, hostsup, invoke, plumbing, rcevents, transported]
 
 export callside.AttemptServices
 
@@ -387,9 +387,21 @@ proc newAttemptServices*(e: Engine, instance, attempt: string): ptr AttemptServi
   result.attempt = fixed(attempt)
   result.binding = LogosRuntimeControlBinding(vtable: addr rcVtable, state: result)
 
+proc adoptHost*(s: ptr AttemptServices, h: Host) =
+  ## [plan §2.6] The attempt's Module Host; the services keep its reference.
+  s.host = h
+
 proc freeAttemptServices*(s: ptr AttemptServices) =
   ## Once the attempt's context is destroyed, or its initialization made none.
-  if s != nil:
+  ## A hosted attempt's go with its host, which may still be reaped.
+  if s == nil:
+    return
+  if s.host != nil:
+    let h = cast[Host](s.host)
+    s.host = nil
+    h.freeWith(s)
+    dropHost(h)
+  else:
     freeShared(s)
 
 func attemptOf*(s: ptr AttemptServices): string =

@@ -424,6 +424,14 @@ type
     endpointDir*: string
       ## [SPEC TRANSPORT §8.2; G58; I90] where the Runtime makes the endpoints
       ## it serves; empty: `<workDir>/endpoints`
+    moduleHost*: Opt[string]
+      ## [plan §2.2; G264] the `logos-module-host` program, protected
+      ## deployment input (LOADER l.107-108); none: the Module Loader does not
+      ## advertise `hosted_dynamic`. Never searched for, never read from the
+      ## environment.
+    moduleHostEnv*: seq[string]
+      ## [R4; G264] the variables every Module Host gets from this process's
+      ## environment; nothing else reaches a host
     permissions*: ProfileSource
       ## [I93; G279] the selected permission profile, as the constructor each
       ## thread that needs it builds its own value from (the Runtime thread,
@@ -509,6 +517,13 @@ type
       ## SubscriptionResult comes
     rqLinkUnsubscribe ## [I90] a transported handle's `unsubscribe`
     rqLinkNext
+    rqHostedResult
+      ## [plan §2.8] a hosted consumer's connection for its handle completed
+      ## its Hello or failed
+    rqHostedAdmit ## [plan §2.8] one operation through a hosted handle
+    rqHostedClosed ## [plan §2.8] a hosted handle's connection ended
+    rqHostedReleased
+      ## [plan §2.8] a hosted handle was released
       ## [I90] an event worker draining a transported subscription asks for
       ## its next Event; `credit` is the one it is done with
     rqDeliverConn
@@ -651,6 +666,9 @@ type
     capture*: CallCapture
       ## [SPEC CA l.1176-1177] what the applied call decision requires the
       ## boundary to record (`callaudit.nim`); empty: nothing
+    host*: pointer
+      ## [G273] the provider's Module Host (a retained `hostsup.Host`), which
+      ## runs the call (`hostcall.nim`); nil: the provider is in this process
 
   Reply* = object
     error*: Opt[EngineError]
@@ -699,6 +717,9 @@ type
       ## with a retained selected contract the receiver drops
     credit*: int ## [I90] rqLinkNext: the admitted Event's credit
     pubTag*: uint64 ## [I90] rqDeliverConn (scoped): the publication's tag
+    uid*: uint32 ## [plan §2.8] rqMaterialize (hosted): the provider's expected peer uid
+    module*: string ## [plan §2.8] rqMaterialize (hosted): the provider's module
+    first*: ErrorCode ## [plan §2.8] rqHostedClosed: the handle's first terminal cause
 
   PublishTarget* = object
     ## [I90; plan §2.7] One transported subscriber connection of an ordinary
@@ -749,6 +770,16 @@ type
       ## rqRcDeliver: the worker holds the subscription's gate, so an entry
       ## may be admitted
     conn*: uint64 ## [I90] rqLinkCall: the handle's link
+    hosted*: bool ## [plan §2.8] rqMaterialize: a hosted consumer's, whose host connects
+    material*: bool
+      ## [plan §2.8] rqMaterialize: the host holds unused invocation material
+    op*: uint8
+      ## [plan §2.8] rqHostedAdmit: 0 call, 1 subscribe, 2 unsubscribe, 3 observe
+    closed*: Opt[ErrorCode]
+      ## [plan §2.8] rqHostedAdmit: the host's connection ended with this code
+    connectFailed*: bool ## [plan §2.8] rqHostedResult: the connection failed
+    failCause*: uint8 ## [plan §2.8] rqHostedResult: its `ConnectFailure`
+    code*: ErrorCode ## [plan §2.8] rqHostedResult, rqHostedClosed: its code
     reply*: ReplyChannel
 
   JobKind* = enum
@@ -903,6 +934,16 @@ type
     mkApplied ## [I87] `_MODULE_apply_configuration` returned (`res`)
     mkLoaderReply ## [I89] a Module Loader call returned (`loaderReply`)
     mkIo ## [I90] an event of the transport I/O thread (`io`)
+    mkHostEnded
+      ## [I91; R27] a Module Host's end, before the Loader reports anything
+      ## that follows from it (`host`, `hostEnd`)
+
+  HostEndNote* = object
+    ## [R7] How a Module Host ended, as plain values (`hostsup.HostEnd`).
+    orderly*: bool ## a terminal lane-0 message came first
+    byRuntime*: bool ## the Runtime ended it
+    lost*: string ## why its carrier failed; empty: it did not
+    how*: string ## its exit status or signal, for diagnostics
 
   Msg* = object
     job*: int
@@ -932,6 +973,9 @@ type
       loaderReply*: LoaderReply
     of mkIo:
       io*: IoEvent
+    of mkHostEnded:
+      host*: pointer ## retained for the message; the Runtime thread drops it
+      hostEnd*: HostEndNote
 
   ReplySlot = object
     ## One reply channel, reused by one call after another [IMPL]. A sender
@@ -986,6 +1030,10 @@ type
     tport*: TransportPorts
       ## [I90] the port to the transport I/O thread (`tport.nim`); made at
       ## open, started only when needed, closed after every worker has left
+    hosts*: pointer
+      ## [plan §2.3; G265] the `hostsup.HostSupervisor` when `moduleHost` is
+      ## configured, else nil; made at open, closed after the Runtime thread
+      ## ends its loop and before any worker is joined
     when defined(lcnTestHooks):
       faults*: LoaderFaultBox ## [D27 revised; plan §2.12] the injected faults
       ownFaults*: bool ## `faults` is the engine's own, freed with it

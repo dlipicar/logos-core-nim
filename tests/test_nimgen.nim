@@ -27,6 +27,7 @@ suite "ifc.nim-types: generated modules (D29)":
     check generatedRcTypes().get == readFile(rcTypesPath)
     check generatedHostConfigTypes().get == readFile(hostConfigTypesPath)
     check generatedStoreTypes().get == readFile(storeTypesPath)
+    check generatedCarrierTypes().get == readFile(carrierTypesPath)
     check generatedCaTypes().get == readFile(caTypesPath)
     check generatedCaKit().get == readFile(caKitPath)
     check generatedLdrTypes().get == readFile(ldrTypesPath)
@@ -51,6 +52,7 @@ suite "ifc.nim-types: generated modules (D29)":
     check stamp in readFile(rcTypesPath)
     check stamp in readFile(hostConfigTypesPath)
     check stamp in readFile(storeTypesPath)
+    check stamp in readFile(carrierTypesPath)
     for path in [
       caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath,
       orchTypesPath, orchConfigTypesPath, orchKitPath, orchStateTypesPath,

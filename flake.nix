@@ -132,10 +132,13 @@
                 file:
                 pkgs.stdenv.hostPlatform.isAarch64
                 && lib.elem file [
+                  "test_boundary_invariance.nim"
                   "test_engine.nim"
                   "test_host.nim"
                   "test_host_dylib.nim"
+                  "test_hosted.nim"
                   "test_kit_dylib.nim"
+                  "test_module_host.nim"
                   "test_realizer.nim"
                   "test_routes.nim"
                 ];
@@ -233,6 +236,23 @@
             meta.mainProgram = "lcn-gen";
           };
 
+          # The Module Host program (Tier 4b step 4b-3; DECISIONS G264): one process per
+          # hosted module instance, started by the Runtime from `runtime.module_host`.
+          logosModuleHost = nimDerivation {
+            pname = "logos-module-host";
+            version = "0.0.1";
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c -d:release --outdir:build/bin src/logos_module_host.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm755 build/bin/logos_module_host $out/bin/logos-module-host
+            '';
+            meta.mainProgram = "logos-module-host";
+          };
+
           # PM §3, §4, §4.3, §7.1 package tools (a subset: no fetch or install).
           lcnPkg = nimDerivation {
             pname = "lcn-pkg";
@@ -307,6 +327,7 @@
             spectrace
             lcnGen
             lcnPkg
+            logosModuleHost
             android
             ios
             updateNimbleDeps
@@ -326,6 +347,7 @@
           inherit (s) nim nph spectrace;
           lcn-gen = s.lcnGen;
           lcn-pkg = s.lcnPkg;
+          logos-module-host = s.logosModuleHost;
         }
         // lib.optionalAttrs (s.android != null) {
           android-sdk = s.android.sdk.androidsdk;

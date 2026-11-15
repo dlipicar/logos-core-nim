@@ -70,9 +70,12 @@ lcn.rs_record = {
 
 lcn.rs_path = tstr .size (1..4096)
 
+; hosted_dynamic: Tier 4b step 4b-3; a store holding it is refused by older
+; builds. Nothing about a Module Host (pid, path, descriptor) is stored.
 lcn.rs_implementation =
   { strategy: "direct_static", binding: tstr .size (1..128) } /
-  { strategy: "direct_dynamic", artifact: lcn.rs_artifact }
+  { strategy: "direct_dynamic", artifact: lcn.rs_artifact } /
+  { strategy: "hosted_dynamic", placement: "process", artifact: lcn.rs_artifact }
 
 lcn.rs_artifact = {
   id: tstr .size (1..128),

@@ -20,11 +20,9 @@ default = "claimed"
 # "Appendix A. Implementation Notes (Informative)", l.4092.
 "App A" = "informative"
 # Local transport mode, a permission (l.49): the hosted process-local boundary (§4.2.1) and
-# provider-side local Transport scheduling (§6.2) come with the Module Host (step 4b-3). The
-# Runtime-served endpoint of a direct provider (step 4b-2, DECISIONS I90, G257) claims the §6.2
-# units it builds below.
-"§4.2.1" = "deferred:tier-4b"
-"§6.2" = "deferred:tier-4b"
+# provider-side local Transport scheduling (§6.2) are claimed with the Module Host (step 4b-3,
+# DECISIONS I91, part 4b-3.4); the Runtime-served endpoint of a direct provider (step 4b-2, I90,
+# G257) built part of §6.2 first.
 # A MAY convenience mode not provided (l.1094); l.1122 steers multi-instance code to handles.
 "§5.2.1" = "out-of-scope:a MAY convenience mode not provided (singleton direct calls, l.1094)"
 
@@ -34,8 +32,11 @@ default = "claimed"
 # Remote only (fable-scope §7): `connect_remote` (l.234-241) and the rule that a local route never
 # crosses Runtimes (TRANSPORT l.1136); with the remote profiles.
 "RUN-0045" = "deferred:tier-5"
-"RUN-0200" = "deferred:tier-4b"
-"RUN-0284" = "deferred:tier-4b"
+# The Module Host (step 4b-3, DECISIONS I91): §4.2.1 (a hosted module's Runtime Control binding,
+# its route handles and the ends of its host; G267, G268), §6.2 (a hosted provider's endpoint,
+# readiness and calls; G267, G273, G274), RUN-0200 (§5.1, the endpoint made before the host
+# starts) and RUN-0284 (§8, a hosted record names an artifact) are claimed; the gates were parts
+# 4b-3.1a to 4b-3.3, the claims part 4b-3.4. RUN-0173 and RUN-0179 are also inspection items.
 # RUN-0501 (l.2741), RUN-0541, RUN-0543, RUN-0544 and RUN-0623 are claimed with step 4b-2a
 # (DECISIONS I90). RUN-0541: a replayed establish or renew answer carries no `invocation`, so its
 # retained bytes hold no ticket (the NA-04 interim, G255); the consumer renews. RUN-0800 to RUN-0806
@@ -43,13 +44,6 @@ default = "claimed"
 # RUN-0234, RUN-0246 and RUN-0832 (subscriptions, delivery and scoped publication over a session)
 # are claimed with step 4b-2c.
 "RUN-0552" = "deferred:tier-5"
-# §6.2 units the Runtime-served endpoint builds (step 4b-2a, G257): scheduling on the engine's
-# call workers, checks before any ordinary message, independent dispatches, correlation. RUN-0231
-# and RUN-0815 (the hosted context) stay with the section for 4b-3.
-"RUN-0220" = "claimed"
-"RUN-0226" = "claimed"
-"RUN-0229" = "claimed"
-"RUN-0230" = "claimed"
 # Package-backed selection: the Package Manager handoff (Tier 4b).
 "RUN-0844" = "deferred:tier-4b"
 "RUN-0995" = "deferred:tier-4b"

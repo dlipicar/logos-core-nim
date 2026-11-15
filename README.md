@@ -53,7 +53,23 @@ The specs are being revised, so the work is ordered by how settled each area is
   recovers failures under a configured restart policy with retry accounting that survives restarts,
   and resumes what authority or permissions held back (I94); `docs/HOST-CONFIG.md` documents its
   configuration. RUNTIME is claimed for the engine with this module.
-- Not yet: the rest of Tier 4b (the Module Host and the hosted strategy, the rest of transported routes, `logosd`
+- Tier 4b, step 4b-3: the Module Host. With `runtime.module_host` set, a
+  `hosted_dynamic` module runs in a `logos-module-host` process of its own that the Runtime starts,
+  supervises and ends; its Runtime Control calls, events and asynchronous calls cross a private
+  carrier and are answered as a direct module's are (part 4b-3.1a, I91: consumer-only modules,
+  start and stop). A host that ends by itself, a broken carrier, a deadline and the Module Loader's
+  loss end the instance's realization (`error`, with the deadline's classification or
+  `host-terminated`); a restart lock keeps a host of an earlier run from being joined by a new one
+  (part 4b-3.1b). A hosted provider serves the endpoint the Runtime made for it: payloads go
+  between the consumer's process and the host directly, the Runtime admits every Hello, call,
+  subscription and delivery, and the host checks payloads, runs the provider and commits each
+  Response (part 4b-3.2). A hosted consumer's route handles are in its host, which connects to the
+  provider itself while the Runtime decides each materialization, call, subscription and end
+  observer, so its codes and route ends are a direct consumer's (part 4b-3.3). One case table run
+  from a consumer through a route in the four placements, either end direct or hosted, gives the
+  same answers, deliveries and completions (part 4b-3.4); RUNTIME §4.2.1 and §6.2 and LOADER §5.3
+  are claimed.
+- Not yet: the rest of Tier 4b (the rest of transported routes, `logosd`
   and `logosctl`, the Runtime's permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).

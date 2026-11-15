@@ -94,6 +94,21 @@ func digestOf(c: SchemaCommitment): Result[Digest, string] =
     d[i] = c.schema_root[i]
   ok(d)
 
+func rsArtifact(a: ArtifactRecord): LcnRsArtifact =
+  LcnRsArtifact(
+    id: a.id, local_path: a.localPath, hash: @(a.hash), hash_suite: a.hashSuite
+  )
+
+func artifactOf(a: LcnRsArtifact): Result[ArtifactRecord, string] =
+  if a.hash.len != 32:
+    return err("an artifact hash is not 32 bytes")
+  var h: array[32, byte]
+  for i in 0 ..< 32:
+    h[i] = a.hash[i]
+  ok(
+    ArtifactRecord(id: a.id, localPath: a.local_path, hash: h, hashSuite: a.hash_suite)
+  )
+
 func toRs*(r: ModuleRecord): LcnRsRecord =
   ## The persisted form of a record: `lcn.rs_record`.
   result = LcnRsRecord(module: r.module, state_assignment: r.stateAssignment)
@@ -103,17 +118,18 @@ func toRs*(r: ModuleRecord): LcnRsRecord =
       kind: LcnRsImplementationKind.Direct_static,
       arm_Direct_static: LcnRsImplementationARDirectStaticMap(binding: r.binding),
     )
-  else:
+  of stDirectDynamic:
     result.implementation = LcnRsImplementation(
       kind: LcnRsImplementationKind.Direct_dynamic,
-      arm_Direct_dynamic: LcnRsImplementationARDirectDynamicMap(
-        artifact: LcnRsArtifact(
-          id: r.artifact.id,
-          local_path: r.artifact.localPath,
-          hash: @(r.artifact.hash),
-          hash_suite: r.artifact.hashSuite,
-        )
-      ),
+      arm_Direct_dynamic:
+        LcnRsImplementationARDirectDynamicMap(artifact: rsArtifact(r.artifact)),
+    )
+  of stHostedDynamic:
+    # [plan §2.13] The selection only: nothing about a Module Host (LDR-0149).
+    result.implementation = LcnRsImplementation(
+      kind: LcnRsImplementationKind.Process_hosted_dynamic,
+      arm_Process_hosted_dynamic:
+        LcnRsImplementationARProcessHostedDynamicMap(artifact: rsArtifact(r.artifact)),
     )
   if r.primaryContract.isSome:
     result.primary_contract = Opt.some(commitment(r.primaryContract.get))
@@ -160,16 +176,12 @@ func fromRs*(r: LcnRsRecord): Result[ModuleRecord, string] =
     m.strategy = stDirectStatic
     m.binding = r.implementation.arm_Direct_static.binding
   of LcnRsImplementationKind.Direct_dynamic:
-    let a = r.implementation.arm_Direct_dynamic.artifact
-    if a.hash.len != 32:
-      return err("an artifact hash is not 32 bytes")
     m.strategy = stDirectDynamic
-    var h: array[32, byte]
-    for i in 0 ..< 32:
-      h[i] = a.hash[i]
-    m.artifact = ArtifactRecord(
-      id: a.id, localPath: a.local_path, hash: h, hashSuite: a.hash_suite
-    )
+    m.artifact = ?artifactOf(r.implementation.arm_Direct_dynamic.artifact)
+  of LcnRsImplementationKind.Process_hosted_dynamic:
+    m.strategy = stHostedDynamic
+    m.placement = "process"
+    m.artifact = ?artifactOf(r.implementation.arm_Process_hosted_dynamic.artifact)
   if r.primary_contract.isSome:
     m.primaryContract = Opt.some(?digestOf(r.primary_contract.get))
   if r.implements.isSome:

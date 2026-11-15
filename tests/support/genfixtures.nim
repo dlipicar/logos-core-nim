@@ -311,6 +311,21 @@ proc generatedStoreTypes*(): Result[string, string] =
   except IOError as e:
     err(e.msg)
 
+const
+  carrierTypesPath* = "src/logos_core/runtime/carrier_types.nim"
+  carrierPrimary* = "src/logos_core/runtime/carrier.cddl"
+
+proc generatedCarrierTypes*(): Result[string, string] =
+  ## The Module Host carrier's messages (`logos-core-nim.carrier.v1`, DECISIONS
+  ## G266), for `runtime/carrier.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(carrierPrimary), [], [], AcceptOptions())
+    nimModule(
+      set, NimOptions(importPrefix: "../", schemaAccessor: "carrierSchema"), false
+    )
+  except IOError as e:
+    err(e.msg)
+
 proc fixturePath*(f: NimFixture): string =
   "tests/generated" / f.module
 

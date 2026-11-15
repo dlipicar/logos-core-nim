@@ -14,6 +14,8 @@ proc main() =
   echo hostConfigTypesPath
   writeFile(storeTypesPath, generatedStoreTypes().get)
   echo storeTypesPath
+  writeFile(carrierTypesPath, generatedCarrierTypes().get)
+  echo carrierTypesPath
   writeFile(caTypesPath, generatedCaTypes().get)
   echo caTypesPath
   writeFile(caKitPath, generatedCaKit().get)

@@ -8,36 +8,20 @@
 # A `[units]` entry gives one requirement unit its own status, overriding its section's.
 #
 # The Runtime binds a `logos_module_loader` instance (DECISIONS I89, Tier 4b step 4b-1): a module
-# that advertises the direct strategies only (K10, decision 10), established by the Runtime's
-# bootstrap and called through its contract. LOADER is claimed for the direct strategies; the hosted
-# strategy (the Module Host, 4b-3) is deferred, as a direct-only Loader advertises none (l.252-259).
+# that advertises the direct strategies (K10, decision 10) and, with a Module Host program,
+# `hosted_dynamic {process}` (Tier 4b step 4b-3, I91), established by the Runtime's bootstrap and
+# called through its contract. LOADER is claimed for both: the hosted provider endpoint (§5.3) with
+# part 4b-3.2's tests and absence that cleanup cannot establish (LDR-0125) as an inspection item.
+# The trusted transport adapter handoff (§5.4) is not used: the carrier of a hosted module's
+# Runtime Control binding is a further private handoff, not a Transport adapter (K3).
 default = "claimed"
 
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
-# The hosted provider endpoint and the trusted transport adapter handoff: hosted realizations only.
-"§5.3" = "deferred:tier-4b"
-"§5.4" = "deferred:tier-4b"
+"§5.4" = "out-of-scope:the §5.4 adapter handoff is not used (K3)"
 
 [units]
-# Rules of §5.3 that hold for every realization: a direct one has no endpoint.
-"LDR-0047" = "claimed"
-"LDR-0052" = "claimed"
-"LDR-0053" = "claimed"
-# The hosted strategy (4b-3); a direct-only Loader advertises no hosted strategy (K10, decision 10).
-"LDR-0034" = "deferred:tier-4b"
-"LDR-0040" = "deferred:tier-4b"
-"LDR-0081" = "deferred:tier-4b"
-"LDR-0082" = "deferred:tier-4b"
-"LDR-0083" = "deferred:tier-4b"
-"LDR-0101" = "deferred:tier-4b"
-"LDR-0145" = "deferred:tier-4b"
-"LDR-0146" = "deferred:tier-4b"
-"LDR-0147" = "deferred:tier-4b"
-# `force_release` is never advertised (K7); 4b-3 labels them `out-of-scope`.
-"LDR-0163" = "deferred:tier-4b"
-"LDR-0164" = "deferred:tier-4b"
-# Absence not established: the hosted strategy, 4b-3 (an init that fails and writes a context
-# leaves no record here, K35).
-"LDR-0125" = "deferred:tier-4b"
+# `force_release` is never advertised (K7; the refusal is tested as LDR-0120 and LDR-0121).
+"LDR-0163" = "out-of-scope:force_release is never advertised (K7)"
+"LDR-0164" = "out-of-scope:force_release is never advertised (K7)"

@@ -155,6 +155,50 @@ proc openEndpoint*(
   sv.byRealization[realization] = e.id
   ok(e)
 
+proc openHosted*(
+    sv: Served, id: EndpointId, realization, instance, provider, module: string
+): Result[ServedEndpoint, string] =
+  ## [SPEC LOADER §5.3; RUN-0200; G273] A hosted provider's endpoint, made and
+  ## validated before its Module Host is spawned: the host gets a copy of the
+  ## listener and serves it with its own loop; the Runtime keeps its copy and
+  ## the path for validation and removal. Registered as serving, with no
+  ## contract until its realization is adopted (`adoptHosted`), so no Hello
+  ## passes before then.
+  let ep = createEndpoint(sv.base, module, sv.tport.config.listenBacklog).valueOr:
+    return err("the endpoint cannot be created: " & error.msg)
+  validateEndpoint(ep).isOkOr:
+    discard removeEndpoint(ep)
+    return err("the endpoint is not valid: " & error.msg)
+  let e = ServedEndpoint(
+    id: id,
+    realization: realization,
+    instance: instance,
+    provider: provider,
+    module: module,
+    ep: ep,
+    callee: CalleeEndpoint(endpoint: ep.path, provider: module),
+    state: esServing,
+  )
+  sv.endpoints[id] = e
+  sv.byRealization[realization] = id
+  ok(e)
+
+proc adoptHosted*(
+    sv: Served, id: EndpointId, contracts: seq[Digest]
+): Result[void, string] =
+  ## [TRN-0185; RUN-0223] Before the provider is `ready`: the path is still
+  ## the socket the Runtime made, and the endpoint takes the realization's
+  ## contracts. The host already listens: it answered `initialized` only once
+  ## its loop did (LDR-0083).
+  let e = sv.endpoints.getOrDefault(id)
+  if e.isNil or e.state != esServing:
+    return err("the endpoint no longer serves")
+  validateEndpoint(e.ep).isOkOr:
+    return err(error.msg)
+  e.callee.contracts = contracts
+  e.listening = true
+  ok()
+
 proc maybeRemove(sv: Served, e: ServedEndpoint) =
   ## [SPEC RUNTIME l.1166] Removed once it no longer serves and its last
   ## session has closed.

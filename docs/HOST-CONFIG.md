@@ -69,7 +69,14 @@ lcn.app_runtime = {
   ? apply_deadline_ms: uint32,
   ? max_payload_depth: uint16,
   ? endpoint_dir: lcn.app_path,
+  ? module_host: lcn.app_path,
+  ? module_host_env: [* lcn.app_env_name],
 }
+
+; module_host: the logos-module-host program, an absolute path (Tier 4b step
+; 4b-3); without it hosted_dynamic is refused. module_host_env: the names of
+; the variables every Module Host gets from the daemon's environment.
+lcn.app_env_name = tstr .size (1..128)
 
 lcn.app_path = tstr .size (1..4096)
 
@@ -178,10 +185,12 @@ lcn.app_module = {
 ; configuration. docs/HOST-CONFIG.md says when a changed value takes effect.
 lcn.app_configuration = bstr .size (1..16777216)
 
-; logos.module_loader.direct_static and direct_dynamic (LOADER §3)
+; logos.module_loader.direct_static, direct_dynamic and hosted_dynamic with
+; the process placement (LOADER §3)
 lcn.app_implementation =
   { strategy: "direct_static", binding: tstr .size (1..128) } /
-  { strategy: "direct_dynamic", artifact: lcn.app_artifact }
+  { strategy: "direct_dynamic", artifact: lcn.app_artifact } /
+  { strategy: "hosted_dynamic", placement: "process", artifact: lcn.app_artifact }
 
 ; logos.module_loader.artifact (LOADER §3)
 lcn.app_artifact = {
@@ -247,6 +256,9 @@ one exception is the `permissions` array of a `permissions.initial` entry, which
 | `apply_deadline_ms` | How long a live configuration application (`apply_configuration`) may take, from its acceptance to the module's answer (CONFIG §8; DECISIONS G61, I87). When it passes, the outcome is unknown and the instance enters `error` with `configuration-indeterminate`, so the default is long: 120000. |
 | `max_payload_depth` | The Runtime's one payload depth limit (INTERFACE §4.5.1 l.3150; DECISIONS G241, I88): how many arrays and maps may nest on any path of a payload, counted from the payload's own root (the root map is depth 1; byte-string contents are not traversed). It applies to every payload the Runtime decodes or validates: route call requests and responses, asynchronous calls, events, Runtime Control requests and responses, and configuration values (defaults, provisioned and updated). A payload one level deeper is refused before it is dispatched, accepted or delivered, with `LOGOS_ERR_INVALID_PARAMS` and no detail for a request (a provider's too-deep response or event is a `LOGOS_ERR_MODULE` failure or a dropped publication). 128 to 1024; default 1024. A transported route (Tier 4b) gives its frame decoder this limit plus the envelope's own levels. Modules built with lcn-gen's kit check their own inputs at 1024. |
 | `endpoint_dir` | Absolute path of the directory under which the Runtime creates the endpoints of transported routes (TRANSPORT §8.2; DECISIONS G58, I90): one fresh `<8 hex>` directory of mode 0700 per served provider, holding the socket `logos_<module>.sock`. Default `<work_dir>/endpoints`. Used only when a `routing` rule selects `local-transport`: then it is created with mode 0700 at `start` if missing, and it must be a real directory of the Runtime's user that no one else can write to, or a root-owned sticky directory such as `/tmp`. Keep it short: a socket path longer than the platform's `sun_path` (104 bytes on macOS, 108 on Linux) cannot be created, and the route that needed it fails with `LOGOS_ERR_MODULE`. Directories a crashed Runtime left behind are not removed. |
+
+| `module_host` | Absolute path of the `logos-module-host` program (DECISIONS G264, I91), which runs each `hosted_dynamic` instance in a process of its own (below, "Module Hosts"). It is protected deployment input like the rest of this file (LOADER l.107-108), and is checked when the configuration is read: the path's last component is not a symbolic link, it is a regular file owned by the Runtime's user or by root, writable by its owner only, and executable by its owner. Its directories are the deployment's to protect. Without it the Module Loader does not advertise `hosted_dynamic` and a `hosted_dynamic` module or declaration is refused ("hosted_dynamic needs module_host"). Not supported on Windows. |
+| `module_host_env` | The names of the environment variables every Module Host gets, each with the value the Runtime's own process has when `start` runs (a name it does not have is left out). Each name is 1 to 128 bytes, without `=`, listed once; the list is not empty when present. Nothing else of the Runtime's environment reaches a host, not even `PATH`. Typical entries are a sanitizer's options or `TZ`. |
 
 Each deadline is 1 to 3600000 milliseconds. Paths must be absolute, so their meaning does not depend
 on the host's working directory.
@@ -325,7 +337,7 @@ holds is not created again: it keeps its state and intent (below).
 |---|---|
 | `instance` | The instance's protected `module_instance_id`, unique in the configuration. Names of the form the Runtime gives what it creates (`m-`, `s-` or `p-`, 32 lowercase hexadecimal digits, `-`, a decimal number) are refused, here and as `state_assignment`. |
 | `module` | The flat runtime module name (RUNTIME §1.3). |
-| `implementation` | `direct_static` with a `binding` identifier the host registers with `logos_runtime_register_binding` before `start`; or `direct_dynamic` with an `artifact` (`id`, absolute `local_path`, BLAKE3-256 `hash`), verified against the exact bytes before mapping. A static binding no entry names is kept until `destroy`; one named but never registered makes `start` fail with `LOGOS_ERR_INVALID_PARAMS` before anything runs. |
+| `implementation` | `direct_static` with a `binding` identifier the host registers with `logos_runtime_register_binding` before `start`; `direct_dynamic` with an `artifact` (`id`, absolute `local_path`, BLAKE3-256 `hash`), verified against the exact bytes before mapping; or `hosted_dynamic` with `placement: "process"` and an `artifact`, verified the same way and mapped in a Module Host process of its own (needs `runtime.module_host`; below, "Module Hosts"). A static binding no entry names is kept until `destroy`; one named but never registered makes `start` fail with `LOGOS_ERR_INVALID_PARAMS` before anything runs. A hosted implementation never names a static binding (RUNTIME l.1514), and `sandbox` and `container` placements are not offered. |
 | `primary_contract`, `implements` | Expected contract commitments. They are checked against what the implementation reports at binding; they prove nothing on their own (RUNTIME §8 l.1414-1418). Implemented commitments must be unique. |
 | `requires` | Provider requirements: a contract and a cardinality. They select and grant nothing. |
 | `requested_permissions` | Module-declared policy inputs, as in a package manifest (PM §4): names unique, `constraints` one deterministic-CBOR value. They grant nothing. |
@@ -333,7 +345,6 @@ holds is not created again: it keeps its state and intent (below).
 | `configuration` | The module's configuration declaration (CONFIG §2): one deterministic-CBOR `logos.module_configuration.configuration_declaration`, its schema binding and an optional package default. See *Module configuration* below. |
 | `provisioned_configuration` | This instance's protected configuration value (CONFIG l.142; DECISIONS G141): one complete value of the binding's root, at most 8 MiB. It needs `configuration`. |
 
-`hosted_dynamic` realization cannot be expressed in v1.
 
 ### `ordering`
 
@@ -409,8 +420,9 @@ modules of this Runtime is direct or uses local transport. Each rule names a `ca
 module name), a `mode` (`direct` or `local-transport`), and optionally a `caller` (the consumer's module
 name; absent: any consumer). For a route, the rule naming both its consumer and its provider wins, then
 the rule for any consumer; with no matching rule the route is direct, as in every configuration without
-`routing`. The mode is fixed when the route is established: `renew_route` keeps it, and routes already
-established are never moved (RUNTIME l.940).
+`routing`, unless one of its ends runs in a Module Host: then it is `local-transport` (RUNTIME
+l.3006-3007; DECISIONS G272). The mode is fixed when the route is established: `renew_route` keeps it,
+and routes already established are never moved (RUNTIME l.940).
 
 - Two rules for the same `caller` and `callee` are refused, as is a rule naming the Module Loader
   (`logos_module_loader`) as caller or callee (every route to the Loader is refused, G251) and a rule
@@ -420,6 +432,10 @@ established are never moved (RUNTIME l.940).
   policy evaluations stay direct.
 - `local-transport` is refused on platforms without the `logos.local.unix-stream` profile (Windows,
   TRANSPORT §8.2.1).
+- A `direct` rule naming, as callee or as caller, a module this file places `hosted_dynamic` is
+  refused ("routing: the direct routing rule ... names ..., which is hosted_dynamic"): a direct route
+  needs one address space. For a hosted instance no configuration named (a `create_module` one),
+  `establish_route` under such a rule is `LOGOS_ERR_NOT_READY` with that reason (DECISIONS G272).
 - A transported route to a provider has the Runtime serve that provider at an endpoint under
   `runtime.endpoint_dir`, created when the first such route to its realization is established; the
   provider's code still runs in the Runtime's process (DECISIONS G257). The consumer's
@@ -594,8 +610,9 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   whether or not any route is ever transported, so every host that loads the library gets it. The
   Runtime's own socket writes never raise `SIGPIPE` either way (`MSG_NOSIGNAL`, `SO_NOSIGPIPE`). A host
   that relies on `SIGPIPE` for its own pipes restores its disposition after loading the library.
-- **Threads.** With a `local-transport` rule, the Runtime starts one more thread at `start`, the
-  transport I/O thread, and stops it at `destroy`. Without one, no such thread exists.
+- **Threads.** With a `local-transport` rule, or with `runtime.module_host` set, the Runtime starts
+  one more thread at `start`, the transport I/O thread, and stops it at `destroy`. Without either, no
+  such thread exists.
 - **Results.** A result's message and detail stay in the calling thread's storage until that
   thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
   is silent); `LOGOS_OK` carries neither.
@@ -818,8 +835,9 @@ lcn_orchestrator.override = {
 Every module instance but one is realized and released through a Module Loader that the Runtime
 binds as a system service (RUNTIME l.1635-1667; DECISIONS I89). The Loader is the module
 `logos_module_loader`, built into the library as a `direct_static` binding. It advertises the two
-direct strategies only; a `hosted_dynamic` record is refused with `unsupported-strategy` until the
-Module Host exists.
+direct strategies, and `hosted_dynamic` with the `process` placement when `runtime.module_host` is set
+(LOADER §4; DECISIONS G264). It never advertises `force_release`. A strategy or placement it does not
+advertise is refused with `unsupported-strategy` before any artifact is read (LOADER l.377).
 
 - **Built in, never configured** (BOOTSTRAP l.287; DECISIONS G246, G253). The Runtime's construction
   always establishes, authorizes and binds the Loader, before anything else. Its instance id, module
@@ -875,6 +893,88 @@ Module Host exists.
   `destroy` is `LOGOS_ERR_NOT_READY` until then. Keeping the Loader delays no withdrawal: each
   instance's routes and Runtime Control binding end when its stop begins.
 
+## Module Hosts
+
+With `runtime.module_host` set, a `hosted_dynamic` instance runs in a `logos-module-host` process
+of its own, one per realization (DECISIONS G264-G267, I91; LOADER §3-§9). The Runtime starts and
+ends it for the Module Loader; nothing restarts it (LOADER l.105).
+
+- **What the module sees.** The same entry points, initialization input and Runtime Control binding
+  as in process (RUNTIME §4.2.1): every Runtime Control call, subscription and asynchronous call
+  crosses to the Runtime and is answered through the instance's own binding, so values, errors,
+  authority decisions and state transitions are those a direct module gets (RUNTIME l.970). The
+  module's `state_dir` is the same directory. Its environment is only `module_host_env`, its
+  working directory the Runtime's, and its standard output and error are the Runtime's.
+- **The process.** Started with `posix_spawn`, never `fork`: standard input from `/dev/null`;
+  descriptor 3 the private carrier to the Runtime (a socket pair the Runtime makes; DECISIONS G266);
+  descriptor 4 a provider's listener (below); descriptor 5 the instance's restart lock (below); no
+  other descriptor of the Runtime; a process group of its own; an empty signal mask, and SIGPIPE,
+  SIGTERM, SIGINT and SIGHUP at their default actions. `argv` is only the program's name: nothing
+  about the instance is in its command line or environment. On Linux it is killed when the
+  Runtime's supervision thread ends (`PR_SET_PDEATHSIG`). It runs as the Runtime's user: placement
+  `process` is a separate address space, not a sandbox (LOADER §3).
+- **Supervision** (DECISIONS G265). One supervision thread per Runtime, started with the first host,
+  watches every carrier and reaps each host it started (`waitpid` on its own pids, never on any
+  child). After every end, an orderly one too, the host's whole process group is killed, and the
+  end counts only once the host is reaped and the group is gone. A process the module moved out of
+  the group is not covered.
+- **Start and stop.** The Loader stages and verifies the artifact as for `direct_dynamic`, starts
+  the host, and has it map the staged copy and run the module's checks and `_MODULE_init`; the same
+  failures give the same Loader errors (LOADER l.388-403). A stop has the host call
+  `_MODULE_destroy` once; the host then exits.
+- **A host that ends by itself** (its module exits or crashes, it is killed from outside, or its
+  carrier breaks; DECISIONS G268): the instance enters `error` with `host-terminated` and a
+  diagnostic names it with the exit status, the signal or the carrier's failure; its routes fail, its
+  Loader record is released, its intent is kept and nothing restarts it. A restart policy sees a live
+  failure (G289). An end that follows the host's own answer (a failed `_MODULE_init`, a release) is
+  classified by the Loader's answer, as for a direct module.
+- **Deadlines** (DECISIONS G269). Past the startup deadline the instance enters `error` with
+  `startup-timeout` and a host still in `_MODULE_init` is ended; `realization` is `unknown` until
+  its end is confirmed, then `absent`. Past the stop deadline (`cleanup-timeout`) and the shutdown
+  grace period, the host is ended and its release completes. Past the apply deadline
+  (`configuration-indeterminate`), a hook that still has not returned one stop deadline later has
+  its host ended. In every case the state stays `error` with the deadline's classification.
+- **Live configuration** runs `_MODULE_apply_configuration` in the host. A host that ends while it
+  runs answers the `apply_configuration` caller `LOGOS_ERR_MODULE` and leaves the instance `error`
+  with `host-terminated` (DECISIONS G270).
+- **The Module Loader's loss** ends every host it owned; each instance's cleanup resolves when its
+  host's end is confirmed, and nothing is realized again until the Runtime restarts.
+- **The restart lock** (DECISIONS G275): `<work_dir>/hosts/` (made 0700) holds one lock file per
+  hosted instance, named by a hash of its id. The Runtime takes the lock before it starts a host and
+  hands it to the host, so it is held while the host, or anything the module forked, runs. After
+  the Runtime ended without completing shutdown, a stored hosted instance whose lock is still held
+  reports `realization` `unknown`, and `start_module` and `recover_module` answer
+  `LOGOS_ERR_NOT_READY` ("a Module Host of the previous run may still be running"); the Runtime
+  tries the lock again every second and the instance is restored as any other (`error`, `other`)
+  once it can take it. Nothing ever connects to a host of an earlier run. The files are not removed;
+  they hold no data.
+- **A hosted provider** (an instance whose record names a contract; DECISIONS G267, G273, G274):
+  before its host starts, the Runtime creates its endpoint under `runtime.endpoint_dir` exactly as
+  for a direct provider served over local transport, and hands the host the listening socket as
+  descriptor 4. The host serves it with the Runtime's transport code before it reports the module
+  initialized, and the Runtime checks the socket is still the one it made before the instance is
+  `ready`; a listener that does not reach the host, or a path replaced meanwhile, fails the start and
+  nothing is served. Every route to it is `local-transport` (above, `routing`). Payloads go between
+  the consumer's process and the host directly; the Runtime stays on the control path. It judges
+  each Hello, admits each call, subscription and delivery and keeps each session from what the host
+  reports without payloads, so tickets, access, revocation and the call records' outcomes are
+  exactly those of a direct provider's transported routes. The host checks each payload against the
+  selected contract with the Runtime's own checks, runs the provider's code for each admitted call
+  (synchronous or deferred, up to 64 at once), commits the Response and reports the commitments a
+  call record retains; those roots, and what the host sends a consumer, rest on the host
+  (docs/CONFORMANCE.md, DECISIONS G273, G274). The endpoint goes with the realization, as a direct
+  provider's does.
+- **A hosted consumer** (DECISIONS G267): its route handles and their connections are in its host,
+  which connects to the provider's endpoint itself, so payloads go between the two directly. The
+  host keeps a route's ticket and endpoint path from the `establish_route` or `renew_route` answer
+  it passes on to the module, until the route's handle is materialized or the route ends; the
+  Runtime makes every decision of `materialize_route` and of each call, subscription and end
+  observer through the handle, as for a direct consumer, so codes, ends and their order are a direct
+  consumer's. Every host receives the Runtime's Transport limits, which its own connections use.
+- **Exit statuses** of the program, for a log: 0 after an orderly release; 2 when it was not started
+  by a Runtime (descriptor 3 is not a connected local stream socket); 70 when its carrier broke the
+  protocol or closed unexpectedly. The Windows build is a stub that exits 2.
+
 ## Runtime limits
 
 Every limit of the engine in one place (RUNTIME l.3394-3396 and BCP l.369-370 ask for them to be
@@ -905,6 +1005,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | transport aggregates | docs/CONFORMANCE.md, "Transport limits"; set by the Runtime with 10b | fixed |
 | transported routes: I/O thread limits and Event output | `transport` (Fields) and "Event output" under `routing` | here |
 | the reference orchestration module | "The reference orchestration module", Limits; `resync_ms` in its value | fixed |
+| Module Hosts | one process per `hosted_dynamic` realization; their Runtime Control requests run on 64 proxy workers per Runtime, started on demand; a carrier frame is at most 16 MiB + 64 KiB | fixed |
 
 ## Loaded code
 

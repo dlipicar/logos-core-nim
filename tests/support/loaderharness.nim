@@ -67,13 +67,24 @@ proc targetServices*(publish = true): InboundHandoff =
   )
 
 proc openHarness*(
-    statics: seq[StaticRegistration], workDir: string, stateRoot = Opt.none(string)
+    statics: seq[StaticRegistration],
+    workDir: string,
+    stateRoot = Opt.none(string),
+    hosted = false,
 ): Result[LoaderHarness, string] =
-  ## Wires and realizes a Loader that may realize `statics`.
+  ## Wires and realizes a Loader that may realize `statics`; with `hosted`,
+  ## one wired as if a Module Host program were configured (its
+  ## capabilities only: the harness supervises no host).
   var h = LoaderHarness(side: newSideTable())
   ?wireLoader(
     addr loaderRc,
-    LoaderWiring(statics: statics, workDir: workDir, stateRoot: stateRoot, side: h.side),
+    LoaderWiring(
+      statics: statics,
+      workDir: workDir,
+      stateRoot: stateRoot,
+      side: h.side,
+      hosted: hosted,
+    ),
   )
   h.boot = newRealizer(workDir)
   ?h.boot.registerStatic(loaderStaticRegistration())

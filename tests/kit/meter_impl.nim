@@ -9,7 +9,13 @@
 ## cancelled, 19 does what 18 does once `gate` opens, 20 reads this
 ## instance's own state (the last part of its state directory, or `none`, and
 ## its count of reads), 21 publishes `meter.changed_event` and then reads the
-## caller; any other channel `c` reads `ch<c>` with value `10 c`.
+## caller, 22 adds a line to the file `held` in its state directory and does
+## what 18 does once the invocation is cancelled or the file `open` is there
+## (for a module in a Module Host, where the test cannot reach `gate`; at most
+## a minute), 23 does what 22 does but waits for `open` alone, 24 publishes
+## `meter.changed_event` with value 0x6C636E32 and then in the invocation's
+## scope with value 0x6C636E33 (payloads a carrier trace looks for); any other
+## channel `c` reads `ch<c>` with value `10 c`.
 
 {.used.} # imported by the tests for the C symbols it exports
 import std/[atomics, os]
@@ -55,12 +61,26 @@ proc `read`(
     ok(MeterReadResponse(label: "published", reading: MeterReading(value: 15)))
   of 16:
     err(InvocationFailure(code: ecOk))
-  of 18, 19:
+  of 18, 19, 22, 23:
     if c == 19:
       held += 1
       while gate.load:
         sleep(1)
       held -= 1
+    if c == 22 or c == 23:
+      let dir = m.stateDir.get("/nonexistent")
+      try:
+        let f = open(dir / "held", fmAppend)
+        f.write("held\n")
+        f.close()
+      except CatchableError:
+        discard
+      let opened = dir / "open"
+      var waited = 0
+      while (c == 23 or not m.services.isCancelled) and not fileExists(opened) and
+          waited < 60_000:
+        sleep(1)
+        inc waited
     let who = ?m.services.caller()
     ok(
       MeterReadResponse(
@@ -90,6 +110,10 @@ proc `read`(
         reading: MeterReading(value: uint64(m.reads.load)),
       )
     )
+  of 24:
+    ?m.services.publish(MeterChangedEvent(value: 0x6C636E32'u64))
+    ?m.services.publishScoped(MeterChangedEvent(value: 0x6C636E33'u64))
+    ok(MeterReadResponse(label: "ch24", reading: MeterReading(value: 240)))
   of 21:
     ?m.services.publish(MeterChangedEvent(value: 210))
     let who = ?m.services.caller() # after the handlers' nested entries returned

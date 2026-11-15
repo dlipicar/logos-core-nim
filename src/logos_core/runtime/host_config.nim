@@ -12,6 +12,8 @@
 {.push raises: [].}
 
 import std/[os, sets, strutils, tables, times]
+when defined(posix):
+  import std/posix
 import results
 import ../cbor
 import ../iface/outcome
@@ -77,6 +79,12 @@ type
       ## configured limits, validated; its depth is `maxPayloadDepth` (G241)
     endpointDir*: string
       ## [SPEC TRANSPORT §8.2; G58; I90] `<work_dir>/endpoints` unless set
+    moduleHost*: Opt[string]
+      ## [plan §2.2; G264] the `logos-module-host` program; none: hosted
+      ## realization is not advertised, and a hosted record is refused here
+    moduleHostEnv*: seq[string]
+      ## [R4; G264] the variables every Module Host gets from the daemon's
+      ## environment
     permissions*: ProfileSource
       ## [I93; G279] `permissions.profile`, resolved to a profile this
       ## library ships; nil: none (G229)
@@ -153,6 +161,19 @@ func record(m: LcnAppModule | LcnAppDeclaration): Result[ModuleRecord, ConfigErr
     let a = m.implementation.arm_Direct_dynamic.artifact
     ?checkPath("an artifact local_path", a.local_path)
     r.strategy = stDirectDynamic
+    var hash: array[32, byte]
+    for i in 0 ..< hash.len:
+      hash[i] = a.hash[i]
+    r.artifact = ArtifactRecord(
+      id: a.id, localPath: a.local_path, hash: hash, hashSuite: a.hash_suite
+    )
+  of LcnAppImplementationKind.Process_hosted_dynamic:
+    # [plan §3] A Module Host realizes it (Tier 4b step 4b-3); RUN-0284 holds
+    # by the shape: there is no static variant.
+    let a = m.implementation.arm_Process_hosted_dynamic.artifact
+    ?checkPath("an artifact local_path", a.local_path)
+    r.strategy = stHostedDynamic
+    r.placement = "process"
     var hash: array[32, byte]
     for i in 0 ..< hash.len:
       hash[i] = a.hash[i]
@@ -532,6 +553,73 @@ proc checkRouting(
     return err(configError("routing: " & error))
   ok()
 
+proc checkHostProgram(path: string): Result[void, ConfigError] =
+  ## [plan §2.2; G264] The program is protected deployment input (LOADER
+  ## l.107-108): a regular executable file, owned by the daemon's user or by
+  ## root, writable by its owner only, and no symbolic link at its last
+  ## component. Its directories are the deployment's.
+  ?checkPath("module_host", path)
+  when defined(posix):
+    var st: posix.Stat
+    if posix.lstat(cstring(path), st) != 0:
+      return err(configError("module_host does not exist"))
+    if posix.S_ISLNK(st.st_mode):
+      return err(configError("module_host is a symbolic link"))
+    if not posix.S_ISREG(st.st_mode):
+      return err(configError("module_host is not a regular file"))
+    if st.st_uid != posix.geteuid() and st.st_uid != 0:
+      return err(configError("module_host is owned by another user"))
+    let mode = uint32(st.st_mode)
+    if (mode and 0o022'u32) != 0:
+      return err(configError("module_host is writable by its group or others"))
+    if (mode and 0o100'u32) == 0:
+      return err(configError("module_host is not executable"))
+    ok()
+  else:
+    # [plan §2.1] The host is a stub here: nothing is hosted.
+    err(configError("module_host is not supported on this platform"))
+
+proc checkModuleHost(c: var HostConfig, r: LcnAppRuntime): Result[void, ConfigError] =
+  ## [plan §2.2, §3; R4] `module_host`, `module_host_env`, and no hosted
+  ## record without a program [IMPL]: the mistake is named where it was made.
+  if r.module_host.isSome:
+    ?checkHostProgram(r.module_host.get)
+    c.moduleHost = Opt.some(r.module_host.get)
+  if r.module_host_env.isSome:
+    if r.module_host_env.get.len == 0:
+      return err(configError("module_host_env is present but empty"))
+    var seen = initHashSet[string]()
+    for n in r.module_host_env.get:
+      if '=' in n or n in seen:
+        return err(configError("module_host_env names " & n & " badly or twice"))
+      seen.incl(n)
+      c.moduleHostEnv.add(n)
+  if c.moduleHost.isNone:
+    for m in c.modules:
+      if m.record.strategy == stHostedDynamic:
+        return err(
+          configError(
+            "module instance " & m.instance & ": hosted_dynamic needs module_host"
+          )
+        )
+    for d in c.declarations:
+      if d.record.strategy == stHostedDynamic:
+        return err(
+          configError(
+            "declaration " & d.record.module & ": hosted_dynamic needs module_host"
+          )
+        )
+  var hosted: seq[string]
+  for m in c.modules:
+    if m.record.strategy == stHostedDynamic:
+      hosted.add(m.record.module)
+  for d in c.declarations:
+    if d.record.strategy == stHostedDynamic:
+      hosted.add(d.record.module)
+  checkHostedRules(c.routing, hosted).isOkOr:
+    return err(configError("routing: " & error))
+  ok()
+
 proc decodeHostConfig*(
     format: string, data: openArray[byte]
 ): Result[HostConfig, ConfigError] =
@@ -708,6 +796,7 @@ proc decodeHostConfig*(
   ?checkTransport(c, cfg.transport)
   c.endpointDir = cfg.runtime.endpoint_dir.get(c.workDir / "endpoints")
   ?checkPath("endpoint_dir", c.endpointDir)
+  ?checkModuleHost(c, cfg.runtime)
   ok(c)
 
 proc parseHostConfig*(

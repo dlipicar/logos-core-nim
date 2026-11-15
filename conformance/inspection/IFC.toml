@@ -76,7 +76,7 @@ reason = "A negative on the consumer of a route handle; no test can show a use t
 # I-marked-may (DECISIONS I88)
 [[item]]
 ids = ["IFC-0574", "IFC-0582"]
-reason = "A SHOULD and a MAY about buffers that hold a marked payload. No Tier 4 path carries one: establish_route refuses a contract that marks any payload with MODULE_ERROR before readiness, so no route is made ready and no handle, call or buffer ever holds a marked payload (engine.nim, the establish_route path on sel.sensitive; DECISIONS G244, I88 D-c; test [IFC-0578]). Erasure and the other marked-payload duties are deferred to Tier 4b with IFC-0575 to IFC-0577 and IFC-0580."
+reason = "A SHOULD and a MAY about buffers that hold a marked payload. No Tier 4 path carries one: establish_route refuses a contract that marks any payload with MODULE_ERROR before readiness, so no route is made ready and no handle, call or buffer ever holds a marked payload (engine.nim, the establish_route path on sel.sensitive; DECISIONS G244, I88 D-c; test [IFC-0578]). The refusal is made before a route's mode is chosen, so it covers every route with a hosted end too (test [IMPL-DECISION G244] C-10 in tests/test_hosted_routes.nim). A route payload with a hosted end goes between the two processes over the route's own session, with a transported route's copies, never through the carrier (DECISIONS G267; test P-13 in tests/test_hosted_routes.nim traces every carrier frame). Erasure and the other marked-payload duties are deferred to Tier 4b with IFC-0575 to IFC-0577 and IFC-0580."
 
 # I-build (DECISIONS I88)
 [[item]]
