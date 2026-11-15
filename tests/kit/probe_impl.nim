@@ -77,8 +77,15 @@ type
     calls: array[16, LogosAsyncCall]
     tags: array[64, Tag]
     tagCount: int ## only the command thread makes tags
+    keptNext: ptr Probe ## in `kept` after `_MODULE_destroy`
 
 var failedContext: int ## a failing init's context: never destroyed
+
+var kept: Atomic[pointer]
+  ## The probes whose memory stays after `_MODULE_destroy`, linked through
+  ## `keptNext`. This library is never unloaded (the Runtime maps a module
+  ## library for the life of its process), so they stay reachable, and
+  ## LeakSanitizer does not count kept memory as leaked.
 
 proc dir(p: ptr Probe): string =
   result = newString(p.dirLen)
@@ -469,7 +476,21 @@ proc probeDestroy(
       except IOError, OSError:
         discard
   p.note("destroyed", "destroyed")
-  # The probe's memory stays: a handler of a subscription may still be ending.
+  # Freed when nothing can reach it any more: no handler of a subscription is
+  # inside (the Runtime destroys a context only once its handlers have
+  # returned, INTERFACE l.1465, l.1999) and no route callback holds one of its
+  # tags. A probe that made tags keeps its memory, in `kept`: its commands
+  # need not release the handles their callbacks were registered on before
+  # this returns (INTERFACE l.3860 asks a module to), so the Runtime may still
+  # hold pointers into it. A direct probe's memory is the test process's.
+  if p.inside.load == 0 and p.tagCount == 0:
+    deallocShared(p)
+  else:
+    var head = kept.load
+    while true:
+      p.keptNext = cast[ptr Probe](head)
+      if kept.compareExchangeWeak(head, p):
+        break
 
 proc probeApply(
     module: ptr LogosModuleContext, cbor: ptr UncheckedArray[uint8], len: csize_t
