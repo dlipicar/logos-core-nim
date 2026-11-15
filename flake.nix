@@ -400,9 +400,9 @@
             nph --check src tests logos_core.nimble config.nims
             touch $out
           '';
-          # The test-hook rule (src/logos_core/base/testhooks.nim; D27 revised 2026-11-13, I89):
-          # no deployment output holds the marker, and a probe built with the define does, so
-          # the search is not vacuous. Deployment outputs are this system's packages and apps
+          # The test-hook rule (src/logos_core/base/testhooks.nim; D27 revised 2026-11-13, I89,
+          # I92): no deployment output holds the marker, and the probes built with either
+          # define do, so the search is not vacuous. Deployment outputs are this system's packages and apps
           # except the toolchain (nim, nph), the Android SDK and the test-suite builds and
           # runners, which are test builds.
           no-test-hooks =
@@ -435,6 +435,12 @@
                 nim c --hints:off -d:lcnTestHooks --outdir:build tests/support/hookprobe.nim
                 if ! grep -qaF "$marker" build/hookprobe; then
                   echo "the probe built with the define holds no marker"
+                  exit 1
+                fi
+                # The erasure tests' free scan (DECISIONS I92) carries the marker on its own.
+                nim c --hints:off -u:lcnTestHooks -d:lcnWipeAudit --outdir:build tests/support/wipeprobe.nim
+                if ! grep -qaF "$marker" build/wipeprobe; then
+                  echo "the probe built with -d:lcnWipeAudit holds no marker"
                   exit 1
                 fi
                 runHook postBuild

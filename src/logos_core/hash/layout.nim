@@ -90,6 +90,33 @@ func domainOf*(k: NodeKind): Domain =
   of nkReference: dReference
   of nkBranch: dBranch
 
+# Erasure ---------------------------------------------------------------------------
+
+func wipe*(n: PhysNode) =
+  ## [DECISIONS G276] Zeroes every payload, digest and label of the objects below
+  ## `n` (a payload may copy a marked value's scalars, and a digest is derived
+  ## from them), iteratively, and drops the links. In place: wiped by its last
+  ## holder only.
+  var stack = @[n]
+  while stack.len > 0:
+    let x = stack.pop()
+    if x.isNil:
+      continue
+    wipeObject(x.digest)
+    wipe(x.payload)
+    x.payload = nil
+    for r in x.children:
+      wipe(r.label)
+      stack.add(r.node)
+    x.children.setLen(0)
+
+func wipe*(r: var PhysRoot) =
+  wipeObject(r.digest)
+  wipe(r.payload)
+  r.payload = nil
+  wipe(r.child)
+  r.child = nil
+
 # Payload building blocks -------------------------------------------------------------
 
 func entry(k: uint64, v: CborValue): CborEntry =

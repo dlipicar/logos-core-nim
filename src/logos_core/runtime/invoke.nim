@@ -114,14 +114,15 @@ proc initContext*(s: var InvocationState) =
 
 # Route calls ---------------------------------------------------------------------------
 
-proc record*(e: Engine, c: CallCapture, trail: CallTrail) =
+proc record*(e: Engine, c: CallCapture, trail: var CallTrail) =
   ## [SPEC CA l.1172-1174; I85] The call's record after its outcome, when the
-  ## decision applied to it requires one (`callaudit.nim`).
-  if not c.retains:
-    return
-  let kept = e.audit.keep(c, trail, uint64(max(e.clock.wallMs, 0'i64)))
-  if kept.isErr:
-    e.diagnose("a call record could not be kept: " & kept.error)
+  ## decision applied to it requires one (`callaudit.nim`). The trail's value
+  ## roots are zeroed afterwards [DECISIONS G276].
+  if c.retains:
+    let kept = e.audit.keep(c, trail, uint64(max(e.clock.wallMs, 0'i64)))
+    if kept.isErr:
+      e.diagnose("a call record could not be kept: " & kept.error)
+  wipe(trail)
 
 proc notReadyAfter*(
     b: ptr SchemaBlob, bare: string, params: openArray[byte], e: EngineError
@@ -226,8 +227,12 @@ proc callProvider*(
   ## in-flight count. `conn`, `requestId`: a served invocation's session.
   let sel = selectedOf(blob).valueOr:
     return err(failure(ecModule, "the selected contract cannot be loaded"))
+  let marked = sel.marked(bare)
   let request = ?checkRequest(sel, bare, params, trail)
-  ?authorityRefusal(adm, engine, $consumer, $route, bare, request)
+  let refused = authorityRefusal(adm, engine, $consumer, $route, bare, request)
+  if marked.request:
+    wipe(request) # [DECISIONS G276] the tree serves the authority check only
+  ?refused
   var inv =
     invocationFor(adm, consumer, route, generation, blob, engine, conn, requestId)
   initContext(inv)
@@ -244,17 +249,20 @@ proc callProvider*(
     addr len,
   )
   pop(f)
-  checkOutcome(r, bufferShape(buf, len)).isOkOr:
+  var outcome = checkOutcome(r, bufferShape(buf, len))
+  if outcome.isErr:
     if transfersBuffer(r, buf):
       adm.free(adm.context, buf)
-    return err(failureOf(error))
+    return err(takeFailure(outcome))
   var bytes: seq[byte]
   if len <= csize_t(high(int)):
     bytes = view(buf, len)
   adm.free(adm.context, buf)
   if bytes.len == 0:
     return err(failure(ecModule, "the provider's response is too long"))
-  ?checkResponse(sel, bare, bytes, trail)
+  checkResponse(sel, bare, bytes, trail).isOkOr:
+    wipe(bytes) # [DECISIONS G276] a response that is not returned
+    return err(error)
   ok(bytes)
 
 proc systemCall*(
@@ -312,13 +320,16 @@ proc revokedResult*(): InvocationFailure =
   failure(ecNotAuthorised, "the route was revoked")
 
 proc commitSync*(
-    t: ptr CallTicket, r: sink Result[seq[byte], InvocationFailure]
+    t: ptr CallTicket, r: var Result[seq[byte], InvocationFailure]
 ): Result[seq[byte], InvocationFailure] =
   ## [G174] Step 5: the commit decision, ordered with the route's revocation.
+  ## A response the revocation keeps from its caller is zeroed [DECISIONS G276].
   withLock t.lock:
     if t.endCode == ord(ecNotAuthorised):
+      if r.isOk:
+        wipe(r.value)
       return err(revokedResult())
-  r
+  move r
 
 proc leave*(e: Engine, adm: Admission) =
   ## Step 6: the call has left the provider.
@@ -349,12 +360,10 @@ proc routeCall*(
     trail.succeeded = result.isOk
     h.engine.record(adm.capture, trail)
     return
-  result = commitSync(
-    adm.ticket,
-    callProvider(
-      adm, h.engine, h.consumer, h.route, h.generation, h.blob, bare, params, trail
-    ),
+  var r = callProvider(
+    adm, h.engine, h.consumer, h.route, h.generation, h.blob, bare, params, trail
   )
+  result = commitSync(adm.ticket, r)
   trail.succeeded = result.isOk
   h.engine.record(adm.capture, trail)
   leave(h.engine, adm)

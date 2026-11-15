@@ -103,6 +103,25 @@ func validateAgainst(
     )
   ok()
 
+func rejected(x: CborValue, e: PayloadError): PayloadError =
+  ## [DECISIONS G276] A marked value that failed validation (the marked scope)
+  ## is wiped: nothing else holds it. The error's path items are the tree's
+  ## own keys, so they are copied out first; the path stops before any key
+  ## that is not the schema's (G278).
+  result = e
+  if inMarkedScope():
+    for p in result.path.mitems:
+      p =
+        case p.kind
+        of ckText:
+          cbor(p.text)
+        of ckUint:
+          cbor(p.uint)
+        else:
+          decodeCbor(encodeCbor(p)).valueOr:
+            cborNull()
+    wipe(x)
+
 func checkParams*(
     v: ContractValidator, methodName: string, data: openArray[byte]
 ): Result[CborValue, PayloadError] =
@@ -114,7 +133,8 @@ func checkParams*(
     return
       err(PayloadError(code: ecMethodNotFound, msg: "unknown method " & methodName))
   let x = ?decodePayload(data, maxDepth = v.maxDepth)
-  ?v.validateAgainst(m.doc, m.request, x, ecInvalidParams)
+  v.validateAgainst(m.doc, m.request, x, ecInvalidParams).isOkOr:
+    return err(rejected(x, error))
   ok(x)
 
 func checkResult*(
@@ -127,7 +147,8 @@ func checkResult*(
     return
       err(PayloadError(code: ecMethodNotFound, msg: "unknown method " & methodName))
   let x = ?decodePayload(data, ecModule, v.maxDepth)
-  ?v.validateAgainst(m.doc, m.response, x, ecModule)
+  v.validateAgainst(m.doc, m.response, x, ecModule).isOkOr:
+    return err(rejected(x, error))
   ok(x)
 
 func checkEvent*(

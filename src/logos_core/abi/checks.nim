@@ -231,16 +231,20 @@ func checkInitInput*(input: ptr LogosModuleInitInput, declaresEvents: bool): Abi
 
 func readMessage(m: cstring): Result[Opt[string], string] =
   ## A message of at most 512 bytes before its NUL, read without looking past
-  ## the 513th byte.
+  ## the 513th byte. Allocated once at its length: no growth leaves a copy of
+  ## a prefix behind [DECISIONS G276].
   if m == nil:
     return ok(Opt.none(string))
   let bytes = cast[ptr UncheckedArray[char]](m)
-  var s = newStringOfCap(64)
-  for i in 0 .. MaxMessageBytes:
-    if bytes[i] == '\0':
-      return ok(Opt.some(s))
-    s.add bytes[i]
-  err("message is longer than " & $MaxMessageBytes & " bytes")
+  var n = 0
+  while n <= MaxMessageBytes and bytes[n] != '\0':
+    inc n
+  if n > MaxMessageBytes:
+    return err("message is longer than " & $MaxMessageBytes & " bytes")
+  var s = newString(n)
+  for i in 0 ..< n:
+    s[i] = bytes[i]
+  ok(Opt.some(move s))
 
 func readDetail(
     p: ptr UncheckedArray[uint8], len: csize_t
@@ -259,20 +263,30 @@ proc readStatus*(r: LogosResult): AbiCheck =
   ## nonzero code, message of at most 512 UTF-8 bytes, only the detail its code
   ## allows) with its diagnostics copied; anything else MODULE_ERROR with
   ## neither, as `checkedProviderStatus` does.
-  let msg = readMessage(r.message)
+  ## The copies a rejected status leaves are zeroed [DECISIONS G276].
+  var msg = readMessage(r.message)
   if msg.isErr:
     return moduleFailure("invalid status: " & msg.error)
-  let det = readDetail(r.detail, r.detailLen)
+  var det = readDetail(r.detail, r.detailLen)
   if det.isErr:
+    wipe(msg.value)
     return moduleFailure("invalid status: " & det.error)
   let code = errorCode(int64(r.code)).valueOr:
+    wipe(msg.value)
+    wipe(det.value)
     return moduleFailure("invalid status: unallocated code " & $int64(r.code))
   let st = checkStatus(code, msg.get, det.get)
   if st.isErr:
+    wipe(msg.value)
+    wipe(det.value)
     return moduleFailure("invalid status: " & st.error)
   if code == ecOk:
     return ok()
-  err(AbiFailure(code: code, message: msg.get, detail: det.get))
+  err(AbiFailure(code: code, message: move msg.value, detail: move det.value))
+
+proc wipe*(f: var AbiFailure) =
+  wipe(f.message)
+  wipe(f.detail)
 
 proc checkOutcome*(r: LogosResult, outputs: OutputShape): AbiCheck =
   ## [SPEC INTERFACE §2.4, §2.6, §2.9.1, §5.2] The combination rule shared by

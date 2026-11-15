@@ -1,7 +1,8 @@
 ## The test-hook rule (D27, revised 2026-11-13 by the owner, batch A item 1;
 ## DECISIONS I89) [IMPL].
 ##
-## 1. Hook code under `src/` exists only inside `when defined(lcnTestHooks)`.
+## 1. Hook code under `src/` exists only inside `when defined(lcnTestHooks)`
+##    (or `lcnWipeAudit`, for the free scan in `wipeaudit.nim`).
 ## 2. Only test builds set the define: `tests/config.nims` does, for every
 ##    suite; no package, app, nimble `bin` or `build_*` task does.
 ## 3. Each module that holds hooks calls `testHooksMarker`, which, under the
@@ -18,9 +19,10 @@ const TestHooksMarker* = "LCN_TEST_" & "HOOKS_BUILD"
   ## Joined here so this source never holds the marker itself.
 
 template testHooksMarker*(name: static string) =
-  ## Under `lcnTestHooks`, the C symbol `lcn_test_hooks_<name>` holding the
-  ## marker; nothing otherwise.
-  when defined(lcnTestHooks):
+  ## Under `lcnTestHooks`, or `lcnWipeAudit` (the free scan of the erasure
+  ## tests, `wipeaudit.nim`, under the same rule), the C symbol
+  ## `lcn_test_hooks_<name>` holding the marker; nothing otherwise.
+  when defined(lcnTestHooks) or defined(lcnWipeAudit):
     let lcnTestHooksBuild {.exportc: "lcn_test_hooks_" & name, used.}: cstring =
       TestHooksMarker
 

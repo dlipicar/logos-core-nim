@@ -61,7 +61,8 @@ import results
 import ../abi/[checks, types]
 import ../iface/[outcome, payload]
 import ./[callside, hostcall, hostsup, invoke, plumbing]
-from ../transport/io/api import IoCommand, IoCommandKind, CallOutcome, SubmitResult
+from ../transport/io/api import
+  IoCommand, IoCommandKind, CallOutcome, SubmitResult, wipe
 from ./tport import trySubmit
 
 type
@@ -147,6 +148,11 @@ proc copyBytes(p: ptr UncheckedArray[uint8], n: int): ptr UncheckedArray[byte] =
   for i in 0 ..< n:
     result[i] = p[i]
 
+proc freeText(p: cstring) =
+  ## [DECISIONS G276] A `copyText` copy: zeroed with its NUL, then released.
+  if p != nil:
+    freeWiped(p, len(p) + 1)
+
 func failed(f: InvocationFailure): Result[seq[byte], InvocationFailure] =
   Result[seq[byte], InvocationFailure].err(f)
 
@@ -163,12 +169,12 @@ proc ownedRelease(state: pointer) {.cdecl.} =
   let o = cast[ptr Owned](state)
   if o == nil:
     return
-  if o.message != nil:
-    deallocShared(o.message)
+  # [DECISIONS G276] Each copy zeroed before it is released.
+  freeText(o.message)
   if o.detail != nil:
-    deallocShared(o.detail)
+    freeWiped(o.detail, max(o.detailLen, 1))
   if o.response != nil:
-    deallocShared(o.response)
+    freeWiped(o.response, max(o.responseLen, 1))
   freeShared(o)
 
 proc ownedOf(r: Result[seq[byte], InvocationFailure]): (ErrorCode, ptr Owned) =
@@ -183,7 +189,9 @@ proc ownedOf(r: Result[seq[byte], InvocationFailure]): (ErrorCode, ptr Owned) =
     return (ecOk, o)
   let f = r.error
   if f.message.isSome:
-    o.message = copyText(clip(f.message.get))
+    var m = clip(f.message.get)
+    o.message = copyText(m)
+    wipe(m) # [DECISIONS G276]
   if f.code == ecInvalidParams and f.detail.isSome and f.detail.get.len > 0 and
       f.detail.get.len <= MaxDetailBytes:
     let d = f.detail.get
@@ -275,9 +283,11 @@ proc sessionCommit(
     of 2:
       sleep(1) # [IMPL] 1 ms, holding nothing
     of 1, 3:
+      wipe(cmd) # [DECISIONS G276] the copy, when it was not queued
       c.engine.post(Msg(kind: mkAsync, event: aeTerminal, target: c))
       return state == 1 and ok
     else:
+      wipe(cmd)
       return false
 
 proc offer(
@@ -414,7 +424,7 @@ proc freeCall(c: ptr AsyncCall) =
     ownedRelease(c.owned)
   drop(c.blob)
   deallocShared(c.methodName)
-  deallocShared(c.params)
+  freeWiped(c.params, max(c.paramsLen, 1)) # [DECISIONS G276] the last reference
   deinitCond(c.cond)
   deinitLock(c.lock)
   discard c.engine.outstanding.fetchSub(1)
@@ -490,12 +500,13 @@ proc completionOf(
 ): Result[seq[byte], InvocationFailure] =
   ## [SPEC INTERFACE l.2126-2135] The provider's completion as the ordinary
   ## boundary checks a result, copied before its owner is released.
+  ## A copy that is not returned is zeroed [DECISIONS G276].
   let shape = completionShape(response, len, owner)
-  let checked = checkOutcome(res, shape)
+  var checked = checkOutcome(res, shape)
   if checked.isErr:
     if ownerValid(owner):
       releaseOwner(owner)
-    return err(failureOf(checked.error))
+    return err(takeFailure(checked))
   var bytes: seq[byte]
   if len <= csize_t(high(int)):
     bytes = view(response, len)
@@ -503,8 +514,11 @@ proc completionOf(
   if bytes.len == 0:
     return err(failure(ecModule, "the provider's response is too long"))
   let sel = selectedOf(d.state.blob).valueOr:
+    wipe(bytes)
     return err(failure(ecModule, "the selected contract cannot be loaded"))
-  ?checkResponse(sel, $d.methodName, bytes, trail)
+  checkResponse(sel, $d.methodName, bytes, trail).isOkOr:
+    wipe(bytes)
+    return err(error)
   ok(bytes)
 
 proc recordDeferred(
@@ -543,10 +557,11 @@ proc completeOp(
       swap(audit, d.audit)
   if first:
     var trail: CallTrail
-    trail.succeeded = d.call.offerCommitted(
-      s.ticket, d.completionOf(result, response, len, owner, trail)
-    )
+    var r = d.completionOf(result, response, len, owner, trail)
+    trail.succeeded = d.call.offerCommitted(s.ticket, r)
+    wipe(r) # [DECISIONS G276] the call holds its own copy
     recordDeferred(s, audit, trail)
+    wipe(trail)
   else:
     releaseOwner(owner)
     s.engine.diagnose(
@@ -677,7 +692,9 @@ proc finishDeferred*(p: pointer): (string, string, ptr CallTicket) =
     d.audit = nil
   drop(d.state.blob)
   deallocShared(d.methodName)
-  deallocShared(d.params)
+  # [DECISIONS G276; IFC-0576] The request copy the provider borrowed, zeroed
+  # only now: the invocation is idle (execution released, no entry admitted).
+  freeWiped(d.params, max(d.paramsLen, 1))
   deinitLock(d.state.glock)
   freeShared(d)
 
@@ -726,23 +743,21 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
     return
   if adm.asyncApi == nil:
     # [SPEC INTERFACE l.2013-2017] Over the synchronous provider ABI.
-    trail.succeeded = c.offerCommitted(
-      adm.ticket,
-      callProvider(
-        adm,
-        e,
-        c.consumer,
-        c.route,
-        c.generation,
-        c.blob,
-        bare,
-        params,
-        trail,
-        (if c.session: c.conn else: 0'u64),
-        (if c.session: c.requestId else: 0'u64),
-      ),
-      workEnded = true,
+    var r = callProvider(
+      adm,
+      e,
+      c.consumer,
+      c.route,
+      c.generation,
+      c.blob,
+      bare,
+      params,
+      trail,
+      (if c.session: c.conn else: 0'u64),
+      (if c.session: c.requestId else: 0'u64),
     )
+    trail.succeeded = c.offerCommitted(adm.ticket, r, workEnded = true)
+    wipe(r) # [DECISIONS G276] the call holds its own copy
     e.record(adm.capture, trail)
     leave(e, adm)
   else:
@@ -760,7 +775,10 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
         if v.isErr:
           Result[void, InvocationFailure].err(v.error)
         else:
-          authorityRefusal(adm, e, $c.consumer, $c.route, bare, v.get)
+          let a = authorityRefusal(adm, e, $c.consumer, $c.route, bare, v.get)
+          if sel.get.marked(bare).request:
+            wipe(v.get) # [DECISIONS G276] the tree serves the authority check only
+          a
     if refused.isErr:
       c.offerCommitted(
         adm.ticket,
@@ -838,13 +856,14 @@ proc runCall*(p: pointer) =
   if not begun:
     return
   let bare = $c.methodName
-  let params = bytesOf(c.params, c.paramsLen)
+  var params = bytesOf(c.params, c.paramsLen)
   if c.rc:
     c.offer(rcInvoke(c.engine, $c.consumer, $c.attempt, bare, params))
   elif c.session and c.conn.isHostedConn:
     c.runHostedRoute(bare)
   else:
     c.runRoute(bare, params)
+  wipe(params) # [DECISIONS G276] the worker's copy
 
 # The async call vtable -------------------------------------------------------------------
 

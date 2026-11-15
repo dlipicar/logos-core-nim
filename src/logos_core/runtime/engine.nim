@@ -110,7 +110,7 @@ import
 from std/os import sleep, `/`, createDir, dirExists, setFilePermissions, FilePermission
 import results
 import ../abi/types
-import ../base/[perthread, testhooks]
+import ../base/[perthread, testhooks, wipe]
 import ../cbor/[decode, utf8]
 import ../commitment
 import ../iface/[accept, outcome, surface]
@@ -120,7 +120,7 @@ from ../loader/provider import
 from ../transport/io/api import
   IoEvent, IoEventKind, IoSink, IoCommand, IoCommandKind, TransportConfig,
   defaultTransportConfig, ContractInput, EndpointId, ConnId, CallOutcome,
-  ConnectFailure, PeerIdentity, SubmitResult, PublishFailure
+  ConnectFailure, PeerIdentity, SubmitResult, PublishFailure, wipe
 from ../transport/envelope import MessageKind
 from ../transport/session import PublishErrorKind
 from ../transport/ticket import MaxTicketLifetime, RouteTicket
@@ -571,6 +571,8 @@ type
       spoilTicket: bool
         ## [plan §4.1] the next materialization's Hello carries a ticket the
         ## provider never issued
+      erasureMissing: set[RouteMode]
+        ## [4b-3b plan §2.6] path kinds to treat as without erasure
     caRoot: Opt[Digest] ## the pinned Capability Authority contract root
     profile: PermissionProfile
       ## [I93] the selected permission profile, this thread's copy; no name:
@@ -2150,6 +2152,21 @@ const LostAnswer = "the Module Loader's answer was lost and could not be resolve
 
 proc teardownDone(st: State, x: Inst) {.gcsafe.}
 proc cleanupFailed(st: State, x: Inst, reason: string) {.gcsafe.}
+func erases(st: State, mode: RouteMode, ends: RouteEnds): bool =
+  ## [DECISIONS G277] Whether the participants of a path of this kind erase
+  ## marked payloads: the Runtime and its served endpoint do on every local
+  ## kind in this build. A remote kind, when one exists, starts without. No
+  ## define or configuration turns the refusal off; the test hook only adds
+  ## kinds to refuse.
+  ## [IMPL] Not yet with an end in a Module Host: its own sites come with step
+  ## 4b-3b.2.
+  result =
+    mode in {rmDirect, rmLocalTransport} and not ends.consumerHosted and
+    not ends.providerHosted
+  when defined(lcnTestHooks):
+    if mode in st.erasureMissing:
+      result = false
+
 when defined(lcnTestHooks):
   proc confirmStep(st: State) {.gcsafe.}
 
@@ -5093,12 +5110,22 @@ proc establish(st: State, q: Request, x: Inst) =
     checkAccessRoots(req.access, sel.get).isOkOr:
       q.reply.answerError(ecInvalidParams, error)
       return
-    if sel.get.sensitive.len > 0:
-      # [SPEC INTERFACE l.388; I88 D-c, deferred:tier-4b] The erasure marked
-      # payloads need (l.381-386) is not built, so no route to a contract
-      # that marks one is made ready and no handle is ever returned (RUNTIME
-      # l.3197). The request is valid and authorized: the internal-capability
-      # failure (l.3442, by analogy).
+    # [IMPL-DECISION G254; I90] The mode, once per selected provider.
+    let ends = RouteEnds(
+      consumerModule: x.record.module,
+      providerModule: y.record.module,
+      consumerHosted: x.hosted,
+      providerHosted: y.hosted,
+    )
+    let mode = selectMode(st.cfg.routing, ends)
+    if sel.get.sensitive.len > 0 and not st.erases(mode, ends):
+      # [SPEC INTERFACE l.388; DECISIONS G277, re-deciding G244] A contract
+      # that marks a payload is routed only on a path kind whose participants
+      # the Runtime controls erase it (l.381-386): every local kind does in
+      # this build, and each module answers for its own copies (l.400-401).
+      # On any other kind no route is made ready and no handle is returned
+      # (RUNTIME l.3197). The request is valid and authorized: the
+      # internal-capability failure (l.3442, by analogy).
       q.reply.answerError(
         ecModule, "marked payloads are not supported on this path (INTERFACE §1.4.1)"
       )
@@ -5110,14 +5137,6 @@ proc establish(st: State, q: Request, x: Inst) =
       let narrowed = routeAccessOf(ans, st.requestBytes(rq), st.runtimeId)
       if narrowed.isSome:
         routeAccess = narrowed.get
-    # [IMPL-DECISION G254; I90] The mode, once per selected provider.
-    let ends = RouteEnds(
-      consumerModule: x.record.module,
-      providerModule: y.record.module,
-      consumerHosted: x.hosted,
-      providerHosted: y.hosted,
-    )
-    let mode = selectMode(st.cfg.routing, ends)
     let conflict = hostedConflict(mode, ends)
     if conflict.isSome:
       # [Rev R10; IMPL] A direct rule meeting a Module Host.
@@ -7233,9 +7252,12 @@ proc linkAdmits(
     refuse(ecNotReady, "the consumer is not live")
   Opt.none(EngineError)
 
-proc linkCall(st: State, q: Request) =
+proc linkCall(st: State, q: var Request) =
   ## [plan §2.6; I90] A synchronous call through a transported handle: sent on
   ## its link once admitted; the reply waits for the Response.
+  ## [DECISIONS G276] The payload moves into the command, or is wiped.
+  defer:
+    wipe(q.payload)
   let l = st.links.getOrDefault(q.conn)
   let refused =
     st.linkAdmits(l, st.route(q.route), q.origin.instance, q.attempt, q.bare)
@@ -7250,7 +7272,7 @@ proc linkCall(st: State, q: Request) =
       kind: IoCommandKind.cmdCall,
       tag: tag,
       methodName: q.bare,
-      params: q.payload,
+      params: move q.payload,
     )
   )
   if sent != SubmitResult.sbOk:
@@ -7266,7 +7288,9 @@ proc linkSubmit(st: State, a: AsyncRec, c: ptr AsyncCall) =
   let l = st.links.getOrDefault(c.link)
   let refused = st.linkAdmits(l, st.route(a.route), a.consumer, a.attempt, bare)
   if refused.isSome:
-    st.endCall(a, notReadyAfter(c.blobOf, bare, c.paramsOf, refused.get), okResult)
+    var params = c.paramsOf
+    st.endCall(a, notReadyAfter(c.blobOf, bare, params, refused.get), okResult)
+    wipe(params) # [DECISIONS G276]
     if l != nil:
       st.settleLink(l)
     return
@@ -7302,6 +7326,10 @@ proc linkResponse(st: State, conn: ConnId, tag: uint64, o: sink CallOutcome) =
   ## [SPEC TRANSPORT §3.2, §3.4] A call's terminal outcome on a link,
   ## including the synthetic TRANSPORT_ERROR of a lost connection (l.543). A
   ## late Response after Cancel finds its call decided and is discarded.
+  ## [DECISIONS G276] What is not handed on is wiped.
+  var o = o
+  defer:
+    wipe(o)
   let l = st.links.getOrDefault(conn)
   if l.isNil:
     return
@@ -7341,9 +7369,13 @@ proc linkLocalFailure(st: State, ev: IoEvent) =
     if code == ecInvalidParams:
       let sel = selectedOf(c.blobOf)
       if sel.isOk:
-        let v = checkRequest(sel.get, c.methodOf, c.paramsOf)
+        var params = c.paramsOf
+        let v = checkRequest(sel.get, c.methodOf, params)
+        wipe(params) # [DECISIONS G276]
         if v.isErr:
           g = v.error
+        elif sel.get.marked(c.methodOf).request:
+          wipe(v.get)
     st.linkDecide(p, Result[seq[byte], InvocationFailure].err(g))
   else:
     st.diagnose("transport: " & ev.localMsg)
@@ -8887,6 +8919,14 @@ when defined(lcnTestHooks):
     of "spoil-ticket":
       st.spoilTicket = true
       q.reply.answer(Reply())
+    of "erasure-missing":
+      # [4b-3b plan §2.6] The route modes to treat as without erasure, as a
+      # bit set in `q.generation`.
+      st.erasureMissing = {}
+      for m in RouteMode:
+        if (q.generation and (1'u64 shl ord(m))) != 0:
+          st.erasureMissing.incl(m)
+      q.reply.answer(Reply())
     of "hosted-endpoint":
       # [4b-3 plan §4.3 P-1, P-5] The path of `q.instance`'s hosted endpoint,
       # adopted or not yet.
@@ -9042,7 +9082,7 @@ proc handle(st: State, q: Request) {.gcsafe.} =
   of rqMaterialize:
     st.materialize(q)
   of rqLinkCall:
-    st.linkCall(q)
+    raiseAssert "a link call is handled before its decisions (`handle(Msg)`)"
   of rqAdmit:
     st.admit(q)
   of rqObserveEnd:
@@ -9866,6 +9906,11 @@ proc endpointFailed(st: State, id: EndpointId, why: string) =
 proc ioEvent(st: State, ev: sink IoEvent) =
   ## [I90; plan §2.1] An event of the transport I/O thread. Accepted
   ## connections are the provider half's; outbound ones are links (4b-2b).
+  ## [DECISIONS G276] A dispatched Request's params are copied into its call:
+  ## the event's are wiped, as is any payload an event kept.
+  var ev = ev
+  defer:
+    wipe(ev)
   case ev.kind
   of IoEventKind.evListening:
     st.sv.listening(ev.listening)
@@ -9917,8 +9962,14 @@ proc ioEvent(st: State, ev: sink IoEvent) =
     discard
 
 proc handle(st: State, m: sink Msg) =
+  var m = m
   case m.kind
   of mkRequest:
+    if m.request.kind == rqLinkCall:
+      # [DECISIONS G276] A link call needs no decisions (the provider side
+      # authorizes): its payload moves into the I/O command, copied nowhere.
+      st.linkCall(m.request)
+      return
     # [I85] The request's decisions stay with it while it is parked.
     let saved = st.op
     st.op = OpCtx(q: m.request)
@@ -10425,8 +10476,11 @@ proc ioSink(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].} =
   ## Runtime thread's inbox, in order; never blocks. Dropped once the port
   ## closes (`freeEngine`).
   let s = cast[ptr Shared](ctx)
+  var ev = ev
   if not s.tport.closing:
-    s.post(Msg(kind: mkIo, io: ev))
+    s.post(Msg(kind: mkIo, io: move ev))
+  else:
+    wipe(ev) # [DECISIONS G276]
 
 proc hostEndSink(ctx: pointer, h: Host, e: HostEnd) {.nimcall, gcsafe, raises: [].} =
   ## [R27; plan §2.3] Supervision thread: a Module Host ended. Posted before
@@ -10782,6 +10836,22 @@ when defined(lcnTestHooks):
     e.call(
       Request(kind: rqTransportHook, reason: "hosted-endpoint", instance: instance)
     ).id
+
+  proc setErasureMissingForTests*(
+      e: Engine, modes: set[RouteMode]
+  ): Result[void, EngineError] =
+    ## A test hook (4b-3b plan §2.6, W-10): `establish_route` treats `modes` as
+    ## path kinds without erasure, so a contract that marks a payload is
+    ## refused on them as before the lift (G277). Empty: none.
+    var bits = 0'u64
+    for m in modes:
+      bits = bits or (1'u64 shl ord(m))
+    let r = e.call(
+      Request(kind: rqTransportHook, reason: "erasure-missing", generation: bits)
+    )
+    if r.error.isSome:
+      return err(r.error.get)
+    ok()
 
   proc spoilNextTicketForTests*(e: Engine): Result[void, EngineError] =
     ## A test hook (4b-2 plan §4.1): the next materialization of a transported

@@ -59,7 +59,11 @@ func localFailure(code: ErrorCode, msg: string): LocalFailure =
   LocalFailure(code: code, msg: msg)
 
 func encoded(m: Message): seq[byte] =
-  encodeCbor(toCbor(m))
+  ## [DECISIONS G276] The wrapper tree is zeroed once encoded; it shares the
+  ## payload, which its owner answers for.
+  let t = toCbor(m)
+  result = encodeCbor(t)
+  wipeEnvelope(t)
 
 func responseErr(id: uint64, f: InvocationFailure): seq[byte] =
   encoded(Message(kind: mkResponse, response: Response(id: id, ok: false, failure: f)))
@@ -249,6 +253,22 @@ func dispatch(c: CalleeConn, r: Request): CalleeAction =
     introspection: c.boundary.isIntrospection(r.methodName),
   )
 
+func marked*(c: CalleeConn, methodName: string): tuple[request, response: bool] =
+  c.boundary.marked(methodName)
+
+proc dropParams(c: CalleeConn, r: Request) =
+  ## [DECISIONS G276] A marked Request's params tree, once nothing will
+  ## dispatch it.
+  if c.boundary.marked(r.methodName).request:
+    wipe(r.params)
+
+proc dropDelayed(c: var CalleeConn) =
+  for d in c.delayed.mitems:
+    c.dropParams(d.request)
+    wipe(d.request.commitment)
+  c.delayed = @[]
+  c.delayedBytes = 0
+
 func send(bytes: seq[byte]): CalleeAction =
   CalleeAction(kind: caSend, bytes: bytes)
 
@@ -259,8 +279,7 @@ proc close(c: var CalleeConn, r: CloseReason): seq[CalleeAction] =
   c.state = csClosed
   c.inFlight.clear()
   c.subs.clear()
-  c.delayed = @[]
-  c.delayedBytes = 0
+  c.dropDelayed()
   @[CalleeAction(kind: caClose, close: r)]
 
 proc lose*(c: var CalleeConn) =
@@ -278,14 +297,17 @@ func pendingOp(c: CalleeConn, id: uint64): bool =
 proc onRequest(c: var CalleeConn, r: Request, size: int): seq[CalleeAction] =
   # [SPEC TRANSPORT §7] Request ids strictly increase on a connection.
   if c.highestId.isSome and r.id <= c.highestId.get:
+    c.dropParams(r)
     return c.close(closing(ecInvalidParams, "a Request id did not increase"))
   c.highestId = Opt.some(r.id)
   if c.state == csTerminating:
     # [SPEC TRANSPORT §8.1] Committed now, without dispatch, and with nothing
     # that discloses the authorization condition.
+    c.dropParams(r)
     return @[send(responseErr(r.id, failureOf(ecNotAuthorised)))]
   let checked = c.boundary.acceptRequest(r)
   if checked.isErr:
+    c.dropParams(r)
     let rj = checked.error
     case rj.kind
     of rjClose:
@@ -303,6 +325,7 @@ proc onRequest(c: var CalleeConn, r: Request, size: int): seq[CalleeAction] =
   # queue closes the connection; there is no overload response (l.1357).
   if c.delayed.len >= c.limits.maxDelayedRequests or
       c.delayedBytes + size > c.limits.maxDelayedBytes:
+    c.dropParams(r)
     return c.close(closing(ecTransport, "the delayed-admission queue is full"))
   c.inFlight[r.id] = r.methodName
   c.delayed.add(Delayed(request: r, bytes: size))
@@ -322,6 +345,8 @@ proc onCancel(c: var CalleeConn, id: uint64): seq[CalleeAction] =
   for i, d in c.delayed:
     if d.request.id == id:
       c.delayedBytes -= d.bytes
+      c.dropParams(d.request)
+      wipe(c.delayed[i].request.commitment)
       c.delayed.delete(i)
       return @[send(responseErr(id, failureOf(ecCancelled)))]
   @[send(responseErr(id, failureOf(ecCancelled))), CalleeAction(kind: caStop, id: id)]
@@ -447,16 +472,30 @@ proc respond*(c: var CalleeConn, id: uint64, outcome: Outcome): Opt[seq[byte]] =
   ## still be answered (§8.1, RUNTIME §9.3). The slot stays held until
   ## `workEnded`; a queued Request was never dispatched, so nothing can answer
   ## it yet.
+  ##
+  ## [DECISIONS G276] The response tree is the transport's decoded copy: zeroed
+  ## once encoded when marked, and whenever it is not sent; the encoding is
+  ## the caller's to zero once framed.
   if c.state == csClosed or id notin c.executing:
+    if outcome.ok:
+      wipe(outcome.response)
     return Opt.none(seq[byte])
   var methodName: string
   if not c.inFlight.pop(id, methodName):
+    if outcome.ok:
+      wipe(outcome.response)
     return Opt.none(seq[byte])
+  let marked = outcome.ok and c.boundary.marked(methodName).response
+  defer:
+    if marked:
+      wipe(outcome.response)
   var resp: Response
   if outcome.ok:
     checkPayload(outcome.response, c.limits.payloadDepth).isOkOr:
+      wipe(outcome.response)
       return Opt.some(responseErr(id, failureOf(ecModule)))
     let commitment = c.boundary.commitResponse(methodName, outcome.response).valueOr:
+      wipe(outcome.response)
       return Opt.some(responseErr(id, failureOf(ecModule)))
     resp =
       Response(id: id, ok: true, resultMap: outcome.response, commitment: commitment)
@@ -466,10 +505,15 @@ proc respond*(c: var CalleeConn, id: uint64, outcome: Outcome): Opt[seq[byte]] =
     # A failure the envelope cannot carry (code 0, an over-long message,
     # detail its code does not allow) is the module's fault [IMPL].
     resp = Response(id: id, ok: false, failure: failureOf(ecModule))
-  let bytes = encoded(Message(kind: mkResponse, response: resp))
+  var bytes = encoded(Message(kind: mkResponse, response: resp))
+  if resp.ok:
+    wipe(resp.commitment)
+  else:
+    wipe(resp.failure)
   if not fits(bytes.len, c.limits.peerFrameLimit):
+    wipe(bytes)
     return Opt.some(responseErr(id, failureOf(ecModule)))
-  Opt.some(bytes)
+  Opt.some(move bytes)
 
 proc subscriptionResult*(
     c: var CalleeConn, id: uint64, failure = Opt.none(InvocationFailure)
@@ -612,8 +656,7 @@ proc beginTermination*(c: var CalleeConn): seq[CalleeAction] =
   for d in c.delayed:
     c.inFlight.del(d.request.id)
     acts.add(send(responseErr(d.request.id, failureOf(ecNotAuthorised))))
-  c.delayed = @[]
-  c.delayedBytes = 0
+  c.dropDelayed()
   var ops: seq[(uint64, MessageKind)]
   for id, s in c.subs:
     if s.pending.isSome:
@@ -655,6 +698,7 @@ type
     case kind*: CallerEventKind
     of ceResponse:
       outcome*: Outcome
+      marked*: bool ## a marked result: its tree is zeroed once re-encoded
     of ceEvent:
       event*: string
       data*: CborValue
@@ -750,8 +794,10 @@ proc request*(
     return err(localFailure(ecModule, "maxCalls calls are outstanding"))
   checkPayload(params, c.limits.payloadDepth).isOkOr:
     return err(localFailure(ecInvalidParams, error.msg))
-  let commitment = c.boundary.commitRequest(methodName, params).valueOr:
+  var commitment = c.boundary.commitRequest(methodName, params).valueOr:
     return err(localFailure(error.failure.code, error.msg))
+  defer:
+    wipe(commitment) # [DECISIONS G276]
   if c.lastId == Opt.some(high(uint64)):
     discard c.shut(peerClosed(ecTransport, "no larger Request id"))
     return
@@ -761,7 +807,7 @@ proc request*(
       c.lastId.get + 1
     else:
       0'u64
-  let bytes = encoded(
+  var bytes = encoded(
     Message(
       kind: mkRequest,
       request:
@@ -769,6 +815,7 @@ proc request*(
     )
   )
   if not fits(bytes.len, c.limits.peerFrameLimit):
+    wipe(bytes) # [DECISIONS G276]
     return err(
       localFailure(
         ecModule,
@@ -777,7 +824,7 @@ proc request*(
     )
   c.lastId = Opt.some(id)
   c.pending[id] = methodName
-  ok((id, bytes))
+  ok((id, move bytes))
 
 func cancel*(c: CallerConn, id: uint64): Opt[seq[byte]] =
   ## [SPEC TRANSPORT §6] A Cancel for a transmitted request with no terminal
@@ -849,17 +896,31 @@ proc unsubscribe*(c: var CallerConn, id: uint64): Result[seq[byte], LocalFailure
     )
   ok(encoded(Message(kind: mkUnsubscribe, unsubscribe: Unsubscribe(id: id))))
 
-proc onResponse(c: var CallerConn, r: Response): seq[CallerEvent] =
+proc onResponse(c: var CallerConn, resp: Response): seq[CallerEvent] =
   ## [SPEC TRANSPORT §3.4, §4.1] A Response must name a transmitted Request with
   ## no terminal Response received. One no longer awaited is still validated,
   ## then discarded, and its id retired; a later one is a duplicate.
+  ## [DECISIONS G276] Its value root is zeroed once checked; a result that is
+  ## not delivered is zeroed, and a delivered marked one once re-encoded
+  ## (`marked`, read by the I/O carrier).
+  var r = resp
+  defer:
+    if r.ok:
+      wipe(r.commitment)
   var methodName: string
   var awaited = true
   if not c.pending.pop(r.id, methodName):
     if not c.abandoned.pop(r.id, methodName):
+      if r.ok:
+        wipe(r.resultMap)
       return c.shut(closing(ecInvalidParams, "a Response for no outstanding request"))
     awaited = false
   let checked = c.boundary.acceptResponse(methodName, r)
+  if checked.isErr or not awaited:
+    if r.ok:
+      wipe(r.resultMap)
+    else:
+      wipe(r.failure)
   if checked.isErr:
     # The waiting call gets TRANSPORT_ERROR (from `shut`).
     if awaited:
@@ -872,7 +933,14 @@ proc onResponse(c: var CallerConn, r: Response): seq[CallerEvent] =
       Outcome(ok: true, response: r.resultMap)
     else:
       Outcome(ok: false, failure: r.failure)
-  @[CallerEvent(id: r.id, kind: ceResponse, outcome: outcome)]
+  @[
+    CallerEvent(
+      id: r.id,
+      kind: ceResponse,
+      outcome: outcome,
+      marked: r.ok and c.boundary.marked(methodName).response,
+    )
+  ]
 
 proc onEvent(c: var CallerConn, e: Event): seq[CallerEvent] =
   ## [SPEC TRANSPORT §3.4, §4.1] An Event must name an active subscription and

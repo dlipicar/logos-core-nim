@@ -399,7 +399,7 @@ proc rcReleaseResponseOp(
     response: ptr UncheckedArray[uint8],
     responseLen: csize_t,
 ) {.cdecl.} =
-  cFree(response)
+  releaseGiven(response) # [DECISIONS G276]
 
 proc rcSubscribeOp(
     binding: ptr LogosRuntimeControlBinding,

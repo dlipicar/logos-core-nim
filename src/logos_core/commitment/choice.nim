@@ -166,6 +166,14 @@ func key(v: CborValue): string =
     k[i] = char(x)
   k
 
+func matches(v, literal: CborValue): bool =
+  ## Whether the payload item `v` encodes as the schema's `literal`. In the
+  ## marked scope the item's encoding is zeroed after the comparison
+  ## [DECISIONS G276].
+  var mine = encodeCbor(v)
+  result = mine == encodeCbor(literal)
+  wipeIfMarked(mine)
+
 func contains(vs: seq[CborValue], v: CborValue): bool =
   let k = key(v)
   for x in vs:
@@ -548,7 +556,7 @@ func observe(test: PlanTest, field: string, v: CborValue, o: Outcome): bool =
   of ptScalarLiteral:
     case o.kind
     of ocLiteral:
-      v.isScalar and key(v) == key(o.literal)
+      v.isScalar and matches(v, o.literal)
     of ocNotApplicable:
       not v.isScalar
     else:
@@ -574,7 +582,7 @@ func observe(test: PlanTest, field: string, v: CborValue, o: Outcome): bool =
     of ocPresent, ocOther:
       not value.isNil
     of ocLiteral:
-      not value.isNil and key(value) == key(o.literal)
+      not value.isNil and matches(value, o.literal)
     else:
       false
 
@@ -665,13 +673,16 @@ func enterValidate(
   of snPrimitive:
     if n.primitiveAccepts(v): eValid else: eFailed
   of snLiteral:
-    if v.isScalar and key(literalValue(n.literal)) == key(v): eValid else: eFailed
+    if v.isScalar and matches(v, literalValue(n.literal)): eValid else: eFailed
   of snMap:
     if v.kind != ckMap:
       return eFailed
     for (k, _) in v.entries:
       if k.kind != ckText or not n.fields.anyIt(it.name == k.text):
-        path.add(k)
+        # [DECISIONS G278] The unknown key comes from the payload: for a marked
+        # one (the marked scope) the path stops before it (S4b3b-2 (b)).
+        if not inMarkedScope():
+          path.add(k)
         return eFailed
     stack.add(ValidateFrame(doc: doc, n: n, v: v, depth: depth, member: member))
     ePushed

@@ -217,19 +217,30 @@ func checkWellFormed(
 
 # Pass 2: deterministic decoding ---------------------------------------------------
 
-type Frame = object
-  node: CborValue
-  start: int
-  left: uint64
-  keyStart, keyEnd: int ## encoded bytes of the pending map key
-  prevKeyStart, prevKeyEnd: int
-  key: CborValue
+type
+  Frame = object
+    node: CborValue
+    start: int
+    left: uint64
+    keyStart, keyEnd: int ## encoded bytes of the pending map key
+    prevKeyStart, prevKeyEnd: int
+    key: CborValue
 
-func decodeDeterministic(
-    data: openArray[byte], opts: DecodeOptions
+  Decoding = object
+    ## What a failed decode leaves behind: the open containers and the item
+    ## being attached, wiped by `decodeDeterministic` [DECISIONS G276].
+    stack: seq[Frame]
+    item: CborValue
+
+func capped(count: uint64, room: int): int =
+  ## A container's capacity: its count, which pass 1 bounded by the bytes left,
+  ## so it is never grown (and never copied) while it fills [DECISIONS G276].
+  int(min(count, uint64(max(room, 0))))
+
+func decodeInto(
+    data: openArray[byte], opts: DecodeOptions, st: var Decoding
 ): Result[CborValue, CborError] =
   var
-    stack: seq[Frame]
     pos = 0
     containers, tags = 0 ## arrays and maps, and tags, open on the stack
   while true:
@@ -257,46 +268,50 @@ func decodeDeterministic(
       return err(tooDeep(start, "arrays and maps", opts.maxDepth))
     if h.major == 6 and tags + 1 > opts.maxTagDepth:
       return err(tooDeep(start, "tags", opts.maxTagDepth))
-    var item: CborValue = nil
+    st.item = nil
     case h.major
     of 0:
-      item = CborValue(kind: ckUint, uint: h.arg)
+      st.item = CborValue(kind: ckUint, uint: h.arg)
     of 1:
-      item = CborValue(kind: ckNint, nint: h.arg)
+      st.item = CborValue(kind: ckNint, nint: h.arg)
     of 2:
       let n = int(h.arg)
-      item = CborValue(kind: ckBytes, bytes: @(data.toOpenArray(pos, pos + n - 1)))
+      st.item = CborValue(kind: ckBytes, bytes: @(data.toOpenArray(pos, pos + n - 1)))
       pos += n
     of 3:
       let n = int(h.arg)
-      var text = newString(n)
-      for i in 0 ..< n:
-        text[i] = char(data[pos + i])
+      # Checked before the copy, so a rejected text leaves none [DECISIONS G276].
       let valid = isValidUtf8(data.toOpenArray(pos, pos + n - 1))
       if not valid and not opts.allowInvalidUtf8:
         return err(cborError(cekInvalidUtf8, start, "text string is not UTF-8"))
-      item = CborValue(kind: ckText, text: text, validUtf8: valid)
+      var text = newString(n)
+      for i in 0 ..< n:
+        text[i] = char(data[pos + i])
+      st.item = CborValue(kind: ckText, text: text, validUtf8: valid)
       pos += n
     of 4:
       let node = CborValue(
-        kind: ckArray, items: newSeqOfCap[CborValue](int(min(h.arg, 1024'u64)))
+        kind: ckArray, items: newSeqOfCap[CborValue](capped(h.arg, data.len - pos))
       )
       if h.arg == 0:
-        item = node
+        st.item = node
       else:
-        stack.add(Frame(node: node, start: start, left: h.arg))
+        st.stack.add(Frame(node: node, start: start, left: h.arg))
         inc containers
     of 5:
       let node = CborValue(
-        kind: ckMap, entries: newSeqOfCap[CborEntry](int(min(h.arg, 1024'u64)))
+        kind: ckMap,
+        entries: newSeqOfCap[CborEntry](capped(h.arg, (data.len - pos) div 2)),
       )
       if h.arg == 0:
-        item = node
+        st.item = node
       else:
-        stack.add(Frame(node: node, start: start, left: h.arg * 2, prevKeyStart: -1))
+        st.stack.add(Frame(node: node, start: start, left: h.arg * 2, prevKeyStart: -1))
         inc containers
     of 6:
-      stack.add(Frame(node: CborValue(kind: ckTag, tag: h.arg), start: start, left: 1))
+      st.stack.add(
+        Frame(node: CborValue(kind: ckTag, tag: h.arg), start: start, left: 1)
+      )
       inc tags
     else:
       case h.ai
@@ -312,28 +327,28 @@ func decodeDeterministic(
         if not isShortest(width, h.arg):
           return
             err(cborError(cekNonDeterministic, start, "float not in shortest form"))
-        item = CborValue(kind: ckFloat, width: width, floatBits: h.arg)
+        st.item = CborValue(kind: ckFloat, width: width, floatBits: h.arg)
       of 24:
-        item = CborValue(kind: ckSimple, simple: uint8(h.arg))
+        st.item = CborValue(kind: ckSimple, simple: uint8(h.arg))
       else:
-        item = CborValue(kind: ckSimple, simple: h.ai)
+        st.item = CborValue(kind: ckSimple, simple: h.ai)
     var itemStart = start
     # Attach the finished item, then every container it completes.
-    while item != nil:
-      if stack.len == 0:
+    while st.item != nil:
+      if st.stack.len == 0:
         if pos != data.len:
           return err(cborError(cekMalformed, pos, "trailing bytes after the data item"))
-        return ok(item)
-      case stack[^1].node.kind
+        return ok(st.item)
+      case st.stack[^1].node.kind
       of ckArray:
-        stack[^1].node.items.add(item)
+        st.stack[^1].node.items.add(st.item)
       of ckTag:
-        stack[^1].node.content = item
+        st.stack[^1].node.content = st.item
       else:
-        if stack[^1].left mod 2 == 0:
-          if stack[^1].prevKeyStart >= 0:
+        if st.stack[^1].left mod 2 == 0:
+          if st.stack[^1].prevKeyStart >= 0:
             let order = cmpBytes(
-              data.toOpenArray(stack[^1].prevKeyStart, stack[^1].prevKeyEnd - 1),
+              data.toOpenArray(st.stack[^1].prevKeyStart, st.stack[^1].prevKeyEnd - 1),
               data.toOpenArray(itemStart, pos - 1),
             )
             if order == 0:
@@ -341,25 +356,43 @@ func decodeDeterministic(
             if order > 0:
               return
                 err(cborError(cekNonDeterministic, itemStart, "map keys out of order"))
-          stack[^1].key = item
-          stack[^1].keyStart = itemStart
-          stack[^1].keyEnd = pos
+          st.stack[^1].key = st.item
+          st.stack[^1].keyStart = itemStart
+          st.stack[^1].keyEnd = pos
         else:
-          stack[^1].node.entries.add((stack[^1].key, item))
-          stack[^1].prevKeyStart = stack[^1].keyStart
-          stack[^1].prevKeyEnd = stack[^1].keyEnd
-          stack[^1].key = nil
-      dec stack[^1].left
-      if stack[^1].left == 0:
-        let frame = stack.pop()
+          st.stack[^1].node.entries.add((st.stack[^1].key, st.item))
+          st.stack[^1].prevKeyStart = st.stack[^1].keyStart
+          st.stack[^1].prevKeyEnd = st.stack[^1].keyEnd
+          st.stack[^1].key = nil
+      dec st.stack[^1].left
+      if st.stack[^1].left == 0:
+        let frame = st.stack.pop()
         if frame.node.kind == ckTag:
           dec tags
         else:
           dec containers
-        item = frame.node
+        st.item = frame.node
         itemStart = frame.start
       else:
-        item = nil
+        st.item = nil
+
+func wipe(st: var Decoding) =
+  for f in st.stack.mitems:
+    wipe(f.node)
+    wipe(f.key)
+  st.stack.setLen(0)
+  wipe(st.item)
+  st.item = nil
+
+func decodeDeterministic(
+    data: openArray[byte], opts: DecodeOptions
+): Result[CborValue, CborError] =
+  ## [DECISIONS G276] A decode that fails wipes the partial tree it built:
+  ## nothing above it saw the tree, which may hold payload bytes.
+  var st: Decoding
+  result = decodeInto(data, opts, st)
+  if result.isErr:
+    st.wipe()
 
 func decodeCbor*(
     data: openArray[byte], opts = defaultDecodeOptions()

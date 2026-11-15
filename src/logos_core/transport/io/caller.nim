@@ -92,7 +92,7 @@ proc established(io: Io, c: Conn) =
   c.phase = phHello
   # [SPEC TRANSPORT §3.1, §8.1] The Hello carries the ticket; this copy is
   # zeroed now and the queued frame once written.
-  discard io.commit(c, c.hello, fcControl, secret = true)
+  discard io.commit(c, c.hello, fcControl)
   zero(c.hello)
   c.hello = @[]
   io.updateReading(c)
@@ -201,10 +201,11 @@ proc callOutcome(o: Outcome): CallOutcome =
   else:
     CallOutcome(ok: false, failure: o.failure)
 
-proc callerEvents(io: Io, c: Conn, evs: seq[CallerEvent], size: int) =
+proc callerEvents(io: Io, c: Conn, events: sink seq[CallerEvent], size: int) =
   ## `size`: the frame's body length, an Event's credit.
   var tags: seq[uint64]
-  for ev in evs:
+  var evs = events
+  for ev in evs.mitems:
     case ev.kind
     of ceResponse:
       var tag: uint64
@@ -216,6 +217,13 @@ proc callerEvents(io: Io, c: Conn, evs: seq[CallerEvent], size: int) =
             conn: c.id, kind: evResponse, tag: tag, outcome: callOutcome(ev.outcome)
           )
         )
+      # [DECISIONS G276] The decoded result, once re-encoded or not delivered:
+      # zeroed when marked; a failure's diagnostics always.
+      if ev.outcome.ok:
+        if ev.marked:
+          wipe(ev.outcome.response)
+      else:
+        wipe(ev.outcome.failure)
     of ceEvent:
       c.keep(size)
       c.undelivered += size
@@ -251,7 +259,7 @@ proc callerEvents(io: Io, c: Conn, evs: seq[CallerEvent], size: int) =
   if not c.closed:
     io.account(c)
 
-proc callerFrame*(io: Io, c: Conn, body: sink seq[byte]) =
+proc callerFrame*(io: Io, c: Conn, body: var seq[byte]) =
   case c.phase
   of phHello:
     let r = acceptHelloResponse(c.sent, body, io.limits)
@@ -310,10 +318,14 @@ proc call*(io: Io, c: Conn, cmd: IoCommand) =
   let params = decodeValue(cmd.params, io.config.maxPayloadDepth).valueOr:
     io.localFailure(cmd.conn, cmd.tag, ecInvalidParams, $error)
     return
+  # [DECISIONS G276] The params tree, once encoded or refused, when marked.
+  defer:
+    if c.caller.boundary.marked(cmd.methodName).request:
+      wipe(params)
   if not io.fitsNow(c, io.requestOverhead + cmd.methodName.len + cmd.params.len):
     io.localFailure(cmd.conn, cmd.tag, ecModule, "the connection's output is full")
     return
-  let (id, bytes) = c.caller.request(cmd.methodName, params).valueOr:
+  var (id, bytes) = c.caller.request(cmd.methodName, params).valueOr:
     io.localFailure(cmd.conn, cmd.tag, error.code, error.msg)
     if c.caller.state == csClosed:
       io.closeConn(c, ccOwner, ecTransport)
@@ -321,7 +333,9 @@ proc call*(io: Io, c: Conn, cmd: IoCommand) =
   c.toWire[cmd.tag] = id
   c.toTag[id] = cmd.tag
   io.account(c)
-  if not io.commit(c, bytes, fcData):
+  let committed = io.commit(c, bytes, fcData)
+  wipe(bytes) # [DECISIONS G276] framed: the frame is the copy that is sent
+  if not committed:
     io.closeConn(c, ccProtocol, ecTransport, Opt.some(protocolErrorBody(ecTransport)))
 
 proc cancel*(io: Io, c: Conn, tag: uint64) =

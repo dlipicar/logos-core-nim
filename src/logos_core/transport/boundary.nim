@@ -136,6 +136,15 @@ func knowsMethod*(b: Boundary, methodName: string): bool =
 func knowsEvent*(b: Boundary, eventId: string): bool =
   b.surface.findEvent(eventId).isSome
 
+func marked*(b: Boundary, methodName: string): tuple[request, response: bool] =
+  ## [SPEC INTERFACE §1.2.1] Which payloads of a method of the selected contract
+  ## `_sensitive` marks; none for a well-known method or an unknown name.
+  if b.isWellKnown(methodName):
+    return (false, false)
+  let m = b.surface.findMethod(methodName).valueOr:
+    return (false, false)
+  (m.sensitiveRequest, m.sensitiveResponse)
+
 func isIntrospection*(b: Boundary, methodName: string): bool =
   ## [SPEC TRANSPORT §8.1] `logos.schema`, answered by the provider-side boundary.
   b.isWellKnown(methodName)
@@ -149,10 +158,19 @@ func validate(t: Target, v: CborValue): Result[void, seq[CborValue]] =
 
 func commit(t: Target, v: CborValue): Result[PayloadCommitment, string] =
   ## [SPEC TRANSPORT §4.1] The roots of a validated value: the declaration's
-  ## subtree root and the value root under the defining contract.
-  let r = ?t.set.normalize(0, t.declaration, v)
-  let root = ?valueRoot(r)
-  ok(PayloadCommitment(subtreeRoot: r.subtreeRoot, valueRoot: root))
+  ## subtree root and the value root under the defining contract. In the marked
+  ## scope the normalized and laid-out trees, which copy the payload's scalars,
+  ## are wiped once the root is taken [DECISIONS G276].
+  var r = ?t.set.normalize(0, t.declaration, v)
+  var laid = layout(r)
+  if inMarkedScope():
+    wipe(r.node)
+  if laid.isErr:
+    return err(laid.error)
+  let c = PayloadCommitment(subtreeRoot: r.subtreeRoot, valueRoot: laid.get.digest)
+  if inMarkedScope():
+    wipe(laid.value)
+  ok(c)
 
 # Sending ---------------------------------------------------------------------------
 #
@@ -162,7 +180,7 @@ func commit(t: Target, v: CborValue): Result[PayloadCommitment, string] =
 
 func send(t: Target, v: CborValue): Result[PayloadCommitment, Reject] =
   ## [SPEC TRANSPORT §4.1] The sending boundary computes the commitment from the
-  ## validated schema-typed value.
+  ## validated schema-typed value. The caller sets the marked scope.
   t.validate(v).isOkOr:
     return err(
       reject(
@@ -189,7 +207,8 @@ func commitRequest*(
         methodName & " is not a method of the selected contract",
       )
     )
-  t.send(params)
+  markedScope(b.marked(methodName).request):
+    result = t.send(params)
 
 func commitResponse*(
     b: Boundary, methodName: string, value: CborValue
@@ -203,7 +222,8 @@ func commitResponse*(
         methodName & " is not a method of the selected contract",
       )
     )
-  t.send(value)
+  markedScope(b.marked(methodName).response):
+    result = t.send(value)
 
 func commitEvent*(
     b: Boundary, eventId: string, data: CborValue
@@ -221,8 +241,8 @@ func commitEvent*(
 
 # Receiving -------------------------------------------------------------------------
 
-func recheck(
-    t: Target, v: CborValue, c: PayloadCommitment, onSchema: RejectKind
+func recheckIn(
+    t: Target, v: CborValue, c: PayloadCommitment, onSchema: RejectKind, marked: bool
 ): Result[void, Reject] =
   ## [SPEC TRANSPORT §4.1] The receiving order: (1) the subtree root, whose
   ## mismatch closes the session even when the payload also fails its schema;
@@ -232,6 +252,9 @@ func recheck(
   ## computed for a schema-invalid payload. A commitment the commitment layer
   ## cannot compute is a resource failure, not a mismatch [IMPL]: the call fails
   ## with MODULE_ERROR, or a response-ok or Event closes the session with it.
+  ## For a marked payload (`marked`, in the marked scope) the recomputed value
+  ## root is zeroed after the comparison, and the validator's INVALID_PARAMS
+  ## path stops before its first payload-derived segment [DECISIONS G276, G278].
   if c.subtreeRoot != t.subtreeRoot:
     return err(
       reject(rjClose, rcSubtreeRoot, ecInvalidParams, "schema_subtree_root differs")
@@ -251,15 +274,24 @@ func recheck(
         )
       )
     return err(r)
-  let mine = t.commit(v).valueOr:
+  var mine = t.commit(v).valueOr:
     return err(
       reject(
         onSchema, rcResource, ecModule, "the commitment cannot be computed: " & error
       )
     )
-  if mine.valueRoot != c.valueRoot:
+  let same = mine.valueRoot == c.valueRoot
+  if marked:
+    wipe(mine)
+  if not same:
     return err(reject(rjClose, rcValueRoot, ecInvalidParams, "value_root differs"))
   ok()
+
+func recheck(
+    t: Target, v: CborValue, c: PayloadCommitment, onSchema: RejectKind, marked: bool
+): Result[void, Reject] =
+  markedScope(marked):
+    result = t.recheckIn(v, c, onSchema, marked)
 
 func acceptRequest*(b: Boundary, r: Request): Result[void, Reject] =
   ## [SPEC TRANSPORT §4.1, §8.1, §8.3] Before dispatch: the bare method name
@@ -284,7 +316,7 @@ func acceptRequest*(b: Boundary, r: Request): Result[void, Reject] =
         r.methodName & " is outside the route scope",
       )
     )
-  t.recheck(r.params, r.commitment, rjRespond)
+  t.recheck(r.params, r.commitment, rjRespond, b.marked(r.methodName).request)
 
 func acceptResponse*(
     b: Boundary, methodName: string, r: Response
@@ -300,7 +332,7 @@ func acceptResponse*(
         rjClose, rcUnknownTarget, ecInvalidParams, methodName & " is not a known method"
       )
     )
-  t.recheck(r.resultMap, r.commitment, rjClose)
+  t.recheck(r.resultMap, r.commitment, rjClose, b.marked(methodName).response)
 
 func acceptEvent*(b: Boundary, e: Event): Result[void, Reject] =
   ## [SPEC TRANSPORT §4.1] Before an Event is delivered: a schema-invalid one
@@ -314,4 +346,4 @@ func acceptEvent*(b: Boundary, e: Event): Result[void, Reject] =
         e.event & " is not in the selected contract",
       )
     )
-  t.recheck(e.data, e.commitment, rjClose)
+  t.recheck(e.data, e.commitment, rjClose, false)

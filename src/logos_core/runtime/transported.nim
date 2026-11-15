@@ -45,6 +45,7 @@
 
 import std/[deques, tables]
 import results
+import ../base/wipe
 import ../iface/outcome
 import ../transport/ticket
 from ../transport/io/api import ConnId, ConnectFailure, CloseCause, CallOutcome
@@ -192,7 +193,9 @@ proc linkCall*(
   ## locally, and G171's validation before a NOT_READY) are run again here,
   ## where the construction input is loaded, so the failure carries the same
   ## detail as on a direct route.
-  let reply = h.engine.call(
+  # [DECISIONS G276] The Request's copy of `params` moves to the I/O thread;
+  # the reply's result and failure text are wiped once handed on.
+  var reply = h.engine.call(
     Request(
       kind: rqLinkCall,
       origin: moduleOrigin($h.consumer),
@@ -203,6 +206,10 @@ proc linkCall*(
       payload: params,
     )
   )
+  defer:
+    wipe(reply.bytes)
+    if reply.failure.isSome:
+      wipe(reply.failure.get)
   if reply.error.isSome:
     return err(notReadyAfter(h.blob, bare, params, reply.error.get))
   if reply.failure.isSome:
@@ -213,5 +220,7 @@ proc linkCall*(
         let r = checkRequest(sel.get, bare, params)
         if r.isErr:
           return err(r.error)
+        if sel.get.marked(bare).request:
+          wipe(r.get)
     return err(f)
-  ok(reply.bytes)
+  ok(move reply.bytes)

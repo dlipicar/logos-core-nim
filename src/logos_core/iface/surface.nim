@@ -28,6 +28,8 @@ type
     request*, response*: string ## the declarations' qualified names
     contract*: Digest ## the defining contract's schema root
     doc*: int ## the defining document's index in `ContractSet.documents`
+    sensitiveRequest*, sensitiveResponse*: bool
+      ## [SPEC INTERFACE §1.2.1] the payloads `_sensitive` marks
 
   SurfaceEvent* = object
     id*: string ## [SPEC INTERFACE §1.5] the complete schema event identifier
@@ -62,6 +64,8 @@ func callSurface*(s: ContractSet): CallSurface =
           response: m.response,
           contract: d.root,
           doc: i,
+          sensitiveRequest: m.sensitiveRequest,
+          sensitiveResponse: m.sensitiveResponse,
         )
       )
     for e in d.model.events:

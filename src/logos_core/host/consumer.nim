@@ -56,7 +56,7 @@ import std/[atomics, locks, monotimes, times]
 from std/os import sleep
 import results
 import ../abi/[checks, cstatus, types]
-import ../base/perthread
+import ../base/[perthread, wipe]
 import ../cbor/utf8
 import ../hash/hashinput
 import ../iface/[accept, outcome, surface]
@@ -84,13 +84,17 @@ proc sharedBytes(b: openArray[byte]): ptr UncheckedArray[uint8] =
   copyMem(result, unsafeAddr b[0], b.len)
 
 proc freeText(p: var cstring) =
+  ## [DECISIONS G276] Zeroed, then released: a failure's text may be the
+  ## provider's, and may quote a payload.
   if p != nil:
+    secureZero(p, p.len)
     deallocShared(p)
     p = nil
 
-proc freeBytes(p: var ptr UncheckedArray[uint8]) =
+proc freeBytes(p: var ptr UncheckedArray[uint8], n: int) =
+  ## [DECISIONS G276] `n` bytes: zeroed, then released.
   if p != nil:
-    deallocShared(p)
+    freeWiped(p, n)
     p = nil
 
 proc bytesOf(p: ptr UncheckedArray[uint8], n: int): seq[byte] =
@@ -398,7 +402,7 @@ proc retainLocked(l: ptr HLink) =
 
 proc freeLink(l: ptr HLink) =
   freeText(l.route)
-  freeBytes(l.schema)
+  freeBytes(l.schema, l.schemaLen)
   freeShared(l)
 
 proc dropLocked(l: ptr HLink): bool =
@@ -463,8 +467,8 @@ proc newOutcome(): ptr Outcome =
 
 proc freeOutcome(o: ptr Outcome) =
   freeText(o.message)
-  freeBytes(o.detail)
-  freeBytes(o.value)
+  freeBytes(o.detail, o.detailLen)
+  freeBytes(o.value, o.valueLen)
   freeShared(o)
 
 proc setFailure(o: ptr Outcome, f: InvocationFailure) =
@@ -502,6 +506,7 @@ proc waitFor(o: ptr Outcome) =
       wait(cc, cl)
 
 proc failureOf(o: ptr Outcome): InvocationFailure =
+  ## A copy of the failure, which the caller wipes [DECISIONS G276].
   result = InvocationFailure(code: o.code)
   if o.message != nil:
     result.message = Opt.some($o.message)
@@ -547,6 +552,8 @@ proc recheck(
   let r = checkRequest(sel.get, bare, params)
   if r.isErr:
     return r.error
+  if sel.get.marked(bare).request:
+    wipe(r.get) # [DECISIONS G276]
   f
 
 # Ends ---------------------------------------------------------------------------------
@@ -587,10 +594,10 @@ proc completeLater(c: ptr HAsync) =
 
 proc freeAsync(c: ptr HAsync) =
   freeText(c.methodName)
-  freeBytes(c.params)
+  freeBytes(c.params, c.paramsLen)
   freeText(c.o.message)
-  freeBytes(c.o.detail)
-  freeBytes(c.o.value)
+  freeBytes(c.o.detail, c.o.detailLen)
+  freeBytes(c.o.value, c.o.valueLen)
   freeShared(c)
 
 proc jobDone(c: ptr HAsync) =
@@ -624,7 +631,7 @@ proc endSubsLocked(l: ptr HLink, code: ErrorCode) =
       s.head = e.next
       release(l, e.credit)
       freeText(e.name)
-      freeBytes(e.data)
+      freeBytes(e.data, e.len)
       freeShared(e)
     s.tail = nil
     if s.unsubscribing != nil:
@@ -786,7 +793,7 @@ proc onSubscription(l: ptr HLink, ev: IoEvent) =
           s.head = e.next
           release(l, e.credit)
           freeText(e.name)
-          freeBytes(e.data)
+          freeBytes(e.data, e.len)
           freeShared(e)
         s.tail = nil
         p[] = s.next
@@ -851,6 +858,11 @@ proc onClosed(l: ptr HLink, ev: IoEvent): seq[ptr HAsync] =
 
 proc consumerEvent(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].} =
   ## I/O thread: one event of a handle's connection; never blocks.
+  ## [DECISIONS G276] A Response's result is copied into its outcome: the
+  ## event's is wiped, as is a failure's text.
+  var ev = ev
+  defer:
+    wipe(ev)
   var done: seq[ptr HAsync]
   withLock cl:
     let l = findLocked(ev.conn)
@@ -914,7 +926,7 @@ proc runDrain(l: ptr HLink, s: ptr LSub) =
       broadcast(cc)
     release(l, e.credit)
     freeText(e.name)
-    freeBytes(e.data)
+    freeBytes(e.data, e.len)
     freeShared(e)
 
 proc runObserver(l: ptr HLink) =
@@ -938,15 +950,22 @@ proc runObserver(l: ptr HLink) =
 type Owned = object
   ## A completion's response, message and detail, released by its owner.
   response: ptr UncheckedArray[uint8]
+  responseLen: int
   message: cstring
   detail: ptr UncheckedArray[uint8]
+  detailLen: int
 
 proc ownedRelease(state: pointer) {.cdecl.} =
+  ## [DECISIONS G276] Each copy is zeroed, then freed.
   let o = cast[ptr Owned](state)
   if o == nil:
     return
+  secureZero(o.response, o.responseLen)
   cFree(o.response)
+  if o.message != nil:
+    secureZero(o.message, o.message.len)
   cFree(o.message)
+  secureZero(o.detail, o.detailLen)
   cFree(o.detail)
   cFree(o)
 
@@ -968,31 +987,40 @@ proc runCompletion(c: ptr HAsync) =
   var len: csize_t = 0
   if c.o.ok:
     o.response = cast[ptr UncheckedArray[uint8]](cMalloc(csize_t(max(c.o.valueLen, 1))))
+    o.responseLen = max(c.o.valueLen, 1)
     if c.o.valueLen > 0:
       copyMem(o.response, c.o.value, c.o.valueLen)
     response = o.response
     len = csize_t(c.o.valueLen)
   else:
+    # [DECISIONS G276] The failure's copies are wiped once copied out.
     var f = failureOf(addr c.o)
     if c.o.recheck:
-      f = c.link.recheck($c.methodName, bytesOf(c.params, c.paramsLen), f)
+      var params = bytesOf(c.params, c.paramsLen)
+      var g = c.link.recheck($c.methodName, params, f)
+      wipe(params)
+      wipe(f)
+      f = move g
     res.code = CErrorCode(ord(f.code))
     if f.message.isSome:
-      let t = clip(f.message.get)
+      var t = clip(f.message.get)
       o.message = cast[cstring](cMalloc(csize_t(t.len + 1)))
       for i, ch in t:
         o.message[i] = ch
       o.message[t.len] = '\0'
       res.message = o.message
+      wipe(t)
     # [SPEC INTERFACE §5.1] As `status` and the Runtime's completions
     # (`asynccall.nim`): an INVALID_PARAMS detail within the bound.
     if f.code == ecInvalidParams and f.detail.isSome and f.detail.get.len > 0 and
         f.detail.get.len <= MaxDetailBytes:
-      let d = f.detail.get
-      o.detail = cast[ptr UncheckedArray[uint8]](cMalloc(csize_t(d.len)))
-      copyMem(o.detail, unsafeAddr d[0], d.len)
+      let n = f.detail.get.len
+      o.detail = cast[ptr UncheckedArray[uint8]](cMalloc(csize_t(n)))
+      o.detailLen = n
+      copyMem(o.detail, addr f.detail.get[0], n)
       res.detail = o.detail
-      res.detailLen = csize_t(d.len)
+      res.detailLen = csize_t(n)
+    wipe(f)
   c.complete(
     c.userData, res, response, len, LogosResponseOwner(state: o, release: ownedRelease)
   )
@@ -1009,7 +1037,9 @@ proc runSubmit(c: ptr HAsync) =
     if c.phase != apSubmitted:
       return
   let bare = $c.methodName
-  let params = bytesOf(c.params, c.paramsLen)
+  var params = bytesOf(c.params, c.paramsLen)
+  defer:
+    wipe(params) # [DECISIONS G276]
   let a = l.admit(0, bare)
   if a.failed:
     let f = l.recheck(bare, params, failureOf(a))
@@ -1031,9 +1061,11 @@ proc runSubmit(c: ptr HAsync) =
       kind: IoCommandKind.cmdCall,
       tag: c.tag,
       methodName: bare,
-      params: params,
+      params: move params,
     )
-  if submitCmd(cmd) != sbOk:
+  let sent = submitCmd(cmd)
+  wipe(cmd) # [DECISIONS G276] not queued
+  if sent != sbOk:
     var won: bool
     withLock cl:
       c.sent = false
@@ -1269,7 +1301,11 @@ proc routeCallOp(
   if l == nil:
     return nullRoute()
   let bare = $`method`
-  let bytes = view(params, paramsLen)
+  # [DECISIONS G276] The request copies, the response copy and a failure's
+  # text are zeroed once handed on, on every exit.
+  var bytes = view(params, paramsLen)
+  defer:
+    wipe(bytes)
   let a = l.admit(0, bare)
   if a.failed:
     return status(l.recheck(bare, bytes, failureOf(a)))
@@ -1289,7 +1325,9 @@ proc routeCallOp(
       methodName: bare,
       params: bytes,
     )
-  if submitCmd(cmd) != sbOk:
+  let sent = submitCmd(cmd)
+  wipe(cmd)
+  if sent != sbOk:
     withLock cl:
       var p = addr l.calls
       while p[] != nil:
@@ -1301,18 +1339,23 @@ proc routeCallOp(
       o.failLocked(ecNotReady, "the transport is stopping")
   waitFor(o)
   if o.ok:
-    result = give(bytesOf(o.value, o.valueLen), outBuf, outLen)
+    var value = bytesOf(o.value, o.valueLen)
+    result = give(value, outBuf, outLen)
+    wipe(value)
   else:
     var f = failureOf(o)
     if o.recheck:
-      f = l.recheck(bare, bytes, f)
+      var g = l.recheck(bare, bytes, f)
+      wipe(f)
+      f = move g
     result = status(f)
+    wipe(f)
   freeOutcome(o)
 
 proc routeReleaseResponseOp(
     route: ptr LogosRouteHandle, response: ptr UncheckedArray[uint8], len: csize_t
 ) {.cdecl.} =
-  cFree(response)
+  releaseGiven(response) # [DECISIONS G276]
 
 proc routeSubscribeOp(
     route: ptr LogosRouteHandle,
@@ -1451,7 +1494,7 @@ proc routePrepareCallOp(
   let c = createShared(HAsync)
   c.link = l
   c.methodName = sharedText($`method`)
-  c.params = sharedBytes(view(params, paramsLen))
+  c.params = sharedBytes(params.toOpenArray(0, int(paramsLen) - 1))
   c.paramsLen = int(paramsLen)
   c.hasTimeout = options.hasTimeout
   c.timeoutMs = options.timeoutMs
@@ -1522,7 +1565,7 @@ proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
         s.head = e.next
         release(l, e.credit)
         freeText(e.name)
-        freeBytes(e.data)
+        freeBytes(e.data, e.len)
         freeShared(e)
       s.tail = nil
       if s.subscribing != nil:
@@ -1717,6 +1760,33 @@ proc setConsumerTransport*(transport: openArray[uint64], payloadDepth: int) =
       for i, w in transport:
         transportWords[i] = w
       transportLen = transport.len
+
+proc zeroOutcome(o: ptr Outcome) =
+  if o == nil:
+    return
+  if o.message != nil:
+    secureZero(o.message, o.message.len)
+  secureZero(o.detail, o.detailLen)
+  secureZero(o.value, o.valueLen)
+
+proc wipeConsumer*() =
+  ## Lifecycle thread, at the release, after `_MODULE_destroy` and before the
+  ## exit [DECISIONS G276]: what the module will never release (prepared
+  ## calls, their outcomes, waits never answered) is zeroed in place; the
+  ## process ends next.
+  withLock cl:
+    var l = links
+    while l != nil:
+      var c = l.asyncs
+      while c != nil:
+        secureZero(c.params, c.paramsLen)
+        zeroOutcome(addr c.o)
+        c = c.next
+      var w = l.calls
+      while w != nil:
+        zeroOutcome(w.o)
+        w = w.next
+      l = l.next
 
 proc awaitConsumer*() =
   ## Lifecycle thread, at the release, before `_MODULE_destroy`: every handler,

@@ -39,7 +39,7 @@ import std/locks
 import results
 import ../cbor
 import ../authority/scopes
-from ../transport/envelope import PayloadCommitment
+from ../transport/envelope import PayloadCommitment, wipe
 
 export PayloadCommitment
 
@@ -67,6 +67,14 @@ type
   RetainedRecord* = object
     index*: uint64 ## [IMPL] counts every record appended, from 0
     bytes*: seq[byte] ## the `audit_record`, deterministic CBOR
+
+proc wipe*(t: var CallTrail) =
+  ## [DECISIONS G276] The value roots a call committed, once recorded: zeroed,
+  ## whether or not the capture kept them (SECURITY-CONSIDERATIONS l.401-403).
+  if t.request.isSome:
+    wipe(t.request.get)
+  if t.response.isSome:
+    wipe(t.response.get)
 
 func retains*(c: CallCapture): bool =
   ## Whether the applied decision requires a call record.
@@ -185,7 +193,8 @@ proc share*(c: CallCapture, t: CallTrail): ptr SharedCapture =
   for i, b in bytes:
     result.data[i] = b
   result.len = bytes.len
-  if t.request.isSome:
+  if t.request.isSome and c.retainRequest:
+    # [DECISIONS G276] Only a root the capture keeps crosses threads.
     result.request = t.request.get
     result.hasRequest = true
 
@@ -198,6 +207,7 @@ proc unshare*(p: ptr SharedCapture): (CallCapture, CallTrail) =
     bytes[i] = p.data[i]
   if p.hasRequest:
     result[1].request = Opt.some(p.request)
+  wipe(p.request)
   deallocShared(p.data)
   freeShared(p)
   let v = decodeCbor(bytes).valueOr:

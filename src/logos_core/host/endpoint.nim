@@ -48,7 +48,7 @@ import std/[atomics, locks, os, strutils]
 import results
 import ../cbor
 import ../abi/[checks, cstatus, types]
-import ../base/perthread
+import ../base/[perthread, wipe]
 import ../hash/hashinput
 import ../iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
@@ -143,6 +143,7 @@ proc shared(s: string): cstring =
     copyMem(result, unsafeAddr s[0], s.len)
 
 proc paramsOf(d: ptr HostInv): seq[byte] =
+  ## A copy of the params, which the caller wipes [DECISIONS G276].
   if d.params == nil:
     return
   result = newSeq[byte](d.paramsLen)
@@ -167,8 +168,7 @@ proc unlinkLocked(d: ptr HostInv) =
 proc freeInv(d: ptr HostInv) =
   if d.methodName != nil:
     deallocShared(d.methodName)
-  if d.params != nil:
-    deallocShared(d.params)
+  freeWiped(d.params, d.paramsLen) # [DECISIONS G276]
   deinitLock(d.lock)
   freeShared(d)
 
@@ -225,22 +225,30 @@ proc commit(d: ptr HostInv, cmd: var IoCommand, success: bool) =
       return
     sleep(BusyStepMs)
 
-proc respond(d: ptr HostInv, r: Result[seq[byte], InvocationFailure], workEnded: bool) =
+proc respond(
+    d: ptr HostInv, r: var Result[seq[byte], InvocationFailure], workEnded: bool
+) =
+  ## [DECISIONS G276] The outcome moves into the command; what the loop did not
+  ## take, and `r`, are wiped.
+  let ok = r.isOk
   var cmd = IoCommand(
     conn: d.conn,
     kind: IoCommandKind.cmdRespond,
     requestId: d.request,
     outcome:
-      if r.isOk:
-        CallOutcome(ok: true, result: r.get)
+      if ok:
+        CallOutcome(ok: true, result: move r.get)
       else:
         CallOutcome(ok: false, failure: r.error),
     workEnded: workEnded,
   )
-  d.commit(cmd, r.isOk)
+  d.commit(cmd, ok)
+  wipe(cmd)
+  wipe(r)
 
 proc fail(d: ptr HostInv, f: InvocationFailure) =
-  d.respond(Result[seq[byte], InvocationFailure].err(f), workEnded = true)
+  var r = Result[seq[byte], InvocationFailure].err(f)
+  d.respond(r, workEnded = true)
 
 proc ended(d: ptr HostInv) =
   ## An admitted call's last step: the Runtime learns what was committed and
@@ -410,7 +418,7 @@ var contextVtable = LogosInvocationContextVtable(
 
 # Calls ---------------------------------------------------------------------------------------
 
-proc finished(d: ptr HostInv, outcome: Result[seq[byte], InvocationFailure]) =
+proc finished(d: ptr HostInv, outcome: sink Result[seq[byte], InvocationFailure]) =
   ## [SPEC RUNTIME §4.1 l.838-840; R19] The provider's result, checked against
   ## the schema, committed once its scoped publications are answered.
   var r = outcome
@@ -425,6 +433,7 @@ proc finished(d: ptr HostInv, outcome: Result[seq[byte], InvocationFailure]) =
       else:
         sel.get.checkResponse($d.methodName, r.get, trail)
     if checked.isErr:
+      wipe(r) # [DECISIONS G276]
       r = Result[seq[byte], InvocationFailure].err(checked.error)
     d.responseRoot = trail.response
   while true:
@@ -458,12 +467,14 @@ proc runSync(d: ptr HostInv) =
     sv.module, d.methodName, d.params, csize_t(d.paramsLen), addr buf, addr len
   )
   pop(f)
-  let outcome = block:
-    let checked = checkOutcome(r, bufferShape(buf, len))
+  # [DECISIONS G276] The provider's text and bytes are copied once, then the
+  # copies are wiped where they end (`respond`); its buffer is its own to wipe.
+  var outcome = block:
+    var checked = checkOutcome(r, bufferShape(buf, len))
     if checked.isErr:
       if transfersBuffer(r, buf):
         sv.free(sv.module, buf)
-      Result[seq[byte], InvocationFailure].err(failureOf(checked.error))
+      Result[seq[byte], InvocationFailure].err(takeFailure(checked))
     else:
       var bytes: seq[byte]
       if len <= csize_t(high(int)):
@@ -474,8 +485,8 @@ proc runSync(d: ptr HostInv) =
           failure(ecModule, "the provider's response is too long")
         )
       else:
-        Result[seq[byte], InvocationFailure].ok(bytes)
-  d.finished(outcome)
+        Result[seq[byte], InvocationFailure].ok(move bytes)
+  d.finished(move outcome)
   d.ended()
 
 proc releaseOwner(o: LogosResponseOwner) =
@@ -504,12 +515,12 @@ proc completeOp(
   if not first:
     releaseOwner(owner)
     return
-  let checked = checkOutcome(res, completionShape(response, len, owner))
-  let outcome =
+  var checked = checkOutcome(res, completionShape(response, len, owner))
+  var outcome =
     if checked.isErr:
       if ownerValid(owner):
         releaseOwner(owner)
-      Result[seq[byte], InvocationFailure].err(failureOf(checked.error))
+      Result[seq[byte], InvocationFailure].err(takeFailure(checked))
     else:
       var bytes: seq[byte]
       if len <= csize_t(high(int)):
@@ -520,8 +531,8 @@ proc completeOp(
           failure(ecModule, "the provider's response is too long")
         )
       else:
-        Result[seq[byte], InvocationFailure].ok(bytes)
-  d.finished(outcome)
+        Result[seq[byte], InvocationFailure].ok(move bytes)
+  d.finished(move outcome)
   d.leave()
 
 proc executionReleaseOp(inv: ptr LogosProviderInvocation) {.cdecl.} =
@@ -602,7 +613,9 @@ proc runAdmitted(d: ptr HostInv) =
   if d.introspection:
     # [SPEC INTERFACE §5.1; TRANSPORT §8.1; E3] The loop answers from the
     # selected contract; the record commits that answer.
-    let r = introspect(sel.get, $d.methodName, d.paramsOf, schemaAnswer(d.root), trail)
+    var params = d.paramsOf
+    let r = introspect(sel.get, $d.methodName, params, schemaAnswer(d.root), trail)
+    wipe(params)
     d.requestRoot = trail.request
     d.responseRoot = trail.response
     if r.isOk:
@@ -614,12 +627,16 @@ proc runAdmitted(d: ptr HostInv) =
       d.fail(r.error)
     d.ended()
     return
-  let checked = checkRequest(sel.get, $d.methodName, d.paramsOf, trail)
+  var params = d.paramsOf
+  let checked = checkRequest(sel.get, $d.methodName, params, trail)
+  wipe(params)
   d.requestRoot = trail.request
   if checked.isErr:
     d.fail(checked.error)
     d.ended()
     return
+  if sel.get.marked($d.methodName).request:
+    wipe(checked.get) # [DECISIONS G276] validated; the provider reads the bytes
   d.context = LogosInvocationContext(vtable: addr contextVtable, state: d)
   if d.deferred:
     d.runDeferred()
@@ -697,9 +714,11 @@ proc verdict(v: LcnCarrierAdmitVerdict) =
     if not answered:
       # [G171 interim (TF-18)] A NOT_READY refusal is reported only once the
       # params validate.
+      var params = d.paramsOf
       let f = notReadyAfter(
-        selectedFor(root), $d.methodName, d.paramsOf, toInvocation(v.failure.get)
+        selectedFor(root), $d.methodName, params, toInvocation(v.failure.get)
       )
+      wipe(params)
       d.fail(f)
     freeInv(d)
     return
@@ -813,6 +832,9 @@ proc loopEvent(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].} =
   ## I/O thread: the serve outcome is the host's; a dispatched Request's
   ## params stay here; every other event of the callee side goes to the
   ## Runtime as it came, with no payload.
+  var ev = ev
+  defer:
+    wipe(ev) # [DECISIONS G276] the params are copied into the record
   case ev.kind
   of IoEventKind.evListening:
     withLock sv.lock:
@@ -951,3 +973,13 @@ proc stopServing*() =
   except Exception:
     discard
   sv.loop.stopTransport()
+  # [DECISIONS G276] Requests never admitted: their params go before the exit.
+  var gone: seq[ptr HostInv]
+  withLock sv.lock:
+    var p = sv.calls
+    while p != nil:
+      gone.add(p)
+      p = p.next
+    sv.calls = nil
+  for d in gone:
+    freeInv(d)

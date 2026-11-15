@@ -7,8 +7,9 @@
 {.push raises: [].}
 
 import results
+import ../base/wipe
 
-export results
+export results, wipe
 
 type
   CborKind* = enum
@@ -221,3 +222,48 @@ func lookup*(v: CborValue, key: string): Opt[CborValue] =
 
 func lookup*(v: CborValue, key: uint64): Opt[CborValue] =
   lookup(v, cbor(key))
+
+func wipe*(v: CborValue) =
+  ## [SPEC INTERFACE l.381; DECISIONS G276] Zeroes every leaf of the tree at
+  ## `v` in place (byte and text strings to their capacity, integers, tags,
+  ## simple values and float bits) and empties its arrays and maps. Iterative,
+  ## so a deep payload costs heap, not stack. The tree's last holder calls it:
+  ## a tree still in use elsewhere would be erased for that holder too.
+  if v.isNil:
+    return
+  var stack = @[v]
+  while stack.len > 0:
+    let n = stack.pop()
+    if n.isNil:
+      continue
+    case n.kind
+    of ckUint:
+      n.uint = 0
+    of ckNint:
+      n.nint = 0
+    of ckBytes:
+      wipe(n.bytes)
+    of ckText:
+      wipe(n.text)
+    of ckArray:
+      for x in n.items:
+        stack.add(x)
+      n.items.setLen(0)
+    of ckMap:
+      for (k, x) in n.entries:
+        stack.add(k)
+        stack.add(x)
+      n.entries.setLen(0)
+    of ckTag:
+      n.tag = 0
+      stack.add(n.content)
+      n.content = nil
+    of ckSimple:
+      n.simple = 0
+    of ckFloat:
+      n.floatBits = 0
+
+func wipeIfMarked*(v: CborValue) =
+  ## `wipe` while this thread is in a marked scope (`base/wipe.nim`).
+  if inMarkedScope():
+    wipe(v)

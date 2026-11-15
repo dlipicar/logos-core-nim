@@ -417,6 +417,33 @@ const
   Second = 1000 * Millisecond
   MiB = 1024 * 1024
 
+# Erasure ([DECISIONS G276]) --------------------------------------------------------
+
+proc wipe*(o: var CallOutcome) =
+  ## A call's encoded result, or its failure's diagnostics.
+  wipe(o.result)
+  wipe(o.failure)
+
+proc wipe*(c: var IoCommand) =
+  ## The payload bytes a command carries, once it is not queued.
+  case c.kind
+  of cmdRespond:
+    wipe(c.outcome)
+  of cmdCall:
+    wipe(c.params)
+  else:
+    discard
+
+proc wipe*(e: var IoEvent) =
+  ## The payload bytes an event carries, once handled.
+  case e.kind
+  of evDispatch:
+    wipe(e.params)
+  of evResponse:
+    wipe(e.outcome)
+  else:
+    discard
+
 func defaultTransportConfig*(): TransportConfig =
   ## The [IMPL] defaults of the table in `aggregate.nim`.
   TransportConfig(

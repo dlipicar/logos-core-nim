@@ -41,12 +41,13 @@ proc buildSelected*(
   let v = ?validator(set, depth)
   ok(Selected(boundary: bd, validator: v))
 
-proc checkRequest*(
+func marked*(sel: Selected, bare: string): tuple[request, response: bool] =
+  ## [SPEC INTERFACE §1.2.1] Which payloads of method `bare` `_sensitive` marks.
+  sel.boundary.marked(bare)
+
+proc checkRequestIn(
     sel: Selected, bare: string, params: openArray[byte], trail: var CallTrail
 ): Result[CborValue, InvocationFailure] =
-  ## [SPEC RUNTIME §4.1 l.833-841, l.852-853] A request is validated and
-  ## committed before provider code runs; `logos.schema` is the boundary's.
-  ## [RUN-0332; I85] The commitment is kept in `trail`.
   let request =
     if sel.validator.surface.findMethod(bare).isSome:
       sel.validator.checkParams(bare, params).valueOr:
@@ -55,9 +56,21 @@ proc checkRequest*(
       decodePayload(params, maxDepth = sel.validator.maxDepth).valueOr:
         return err(toFailure(error))
   let c = sel.boundary.commitRequest(bare, request).valueOr:
+    wipe(request) # [DECISIONS G276] refused: nothing else holds it
     return err(error.failure)
   trail.request = Opt.some(c)
   ok(request)
+
+proc checkRequest*(
+    sel: Selected, bare: string, params: openArray[byte], trail: var CallTrail
+): Result[CborValue, InvocationFailure] =
+  ## [SPEC RUNTIME §4.1 l.833-841, l.852-853] A request is validated and
+  ## committed before provider code runs; `logos.schema` is the boundary's.
+  ## [RUN-0332; I85] The commitment is kept in `trail`. A marked request is
+  ## checked in the marked scope, and its tree, once returned, is the caller's
+  ## to wipe after dispatch; a refused one is wiped here [DECISIONS G276].
+  markedScope(sel.marked(bare).request):
+    result = checkRequestIn(sel, bare, params, trail)
 
 proc checkRequest*(
     sel: Selected, bare: string, params: openArray[byte]
@@ -70,12 +83,18 @@ proc checkResponse*(
 ): Result[void, InvocationFailure] =
   ## [SPEC RUNTIME §4.1 l.838-840] A response that does not validate or commit
   ## is not returned as a success. [RUN-0332; I85] Its commitment is kept in
-  ## `trail`.
-  let response = sel.validator.checkResult(bare, bytes).valueOr:
-    return err(failure(ecModule, "the provider's response does not match its schema"))
-  let c = sel.boundary.commitResponse(bare, response).valueOr:
-    return err(failure(ecModule, "the provider's response cannot be committed"))
-  trail.response = Opt.some(c)
+  ## `trail`. A marked response is checked in the marked scope and its tree
+  ## wiped before return [DECISIONS G276].
+  let marked = sel.marked(bare).response
+  markedScope(marked):
+    let response = sel.validator.checkResult(bare, bytes).valueOr:
+      return err(failure(ecModule, "the provider's response does not match its schema"))
+    let c = sel.boundary.commitResponse(bare, response)
+    if marked or c.isErr:
+      wipe(response)
+    if c.isErr:
+      return err(failure(ecModule, "the provider's response cannot be committed"))
+    trail.response = Opt.some(c.get)
   ok()
 
 proc notReadyAfter*(
@@ -90,6 +109,8 @@ proc notReadyAfter*(
     let r = checkRequest(sel.get, bare, params)
     if r.isErr:
       return r.error
+    if sel.get.marked(bare).request:
+      wipe(r.get) # [DECISIONS G276]
   f
 
 proc introspect*(

@@ -197,6 +197,11 @@ proc loadPinnedEnvelope(): Envelope =
 perThread(envelope, Envelope, loadPinnedEnvelope())
 discard envelope()
 
+func wipe*(c: var PayloadCommitment) =
+  ## [DECISIONS G276] A marked payload's value root is value-derived
+  ## (SECURITY-CONSIDERATIONS l.401-403): zeroed with the payload.
+  wipeObject(c.valueRoot)
+
 func envelopeSchema*(): ProtocolSchema =
   {.cast(noSideEffect).}:
     envelope().schema
@@ -419,11 +424,32 @@ func decodeValue*(
     )
   ok(v)
 
+func wipeEnvelope*(v: CborValue) =
+  ## [DECISIONS G276] A message tree around its payload: the commitment's value
+  ## root, a failure's message and detail, a Hello's token. The payload (the
+  ## top-level `params`, `result` or `data`) is detached first, so the typed
+  ## view that shares it keeps it; the caller answers for it.
+  if v.isNil or v.kind != ckMap:
+    wipe(v)
+    return
+  for e in v.entries.mitems:
+    if e.key.kind == ckText and e.key.text in ["params", "result", "data"]:
+      e.value = nil
+  wipe(v)
+
 proc decodeMessage*(
     data: openArray[byte], payloadDepth = DefaultMaxDepth
 ): Result[Message, EnvelopeError] =
-  ## [SPEC TRANSPORT §2.3, §8.3] One frame body whose envelope is valid.
-  checkMessage(?decodeValue(data, payloadDepth))
+  ## [SPEC TRANSPORT §2.3, §8.3] One frame body whose envelope is valid. The
+  ## tree around the payload is zeroed once the typed view is taken, and all of
+  ## it when the envelope is invalid: the method is not known yet
+  ## [DECISIONS G276].
+  let v = ?decodeValue(data, payloadDepth)
+  result = checkMessage(v)
+  if result.isOk:
+    wipeEnvelope(v)
+  else:
+    wipe(v)
 
 func checkPayload*(v: CborValue, payloadDepth: int): Result[void, EnvelopeError] =
   ## [SPEC TRANSPORT §2.3; INTERFACE §4.4 item 5, §4.5.1] What a receiver's

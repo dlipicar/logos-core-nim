@@ -67,7 +67,7 @@ proc rcReleaseResponseOp(
     response: ptr UncheckedArray[uint8],
     responseLen: csize_t,
 ) {.cdecl.} =
-  cFree(response)
+  releaseGiven(response) # [DECISIONS G276]
 
 proc rcSubscribeOp(
     binding: ptr LogosRuntimeControlBinding,
@@ -170,21 +170,29 @@ proc routeCallOp(
   if `method` == nil or params == nil or paramsLen == 0:
     return status(ecInvalidParams, "null method or empty request")
   let h = handleOf(route)
-  let r =
+  # [DECISIONS G276] The request copy, the response and a failure's
+  # diagnostics are zeroed once handed on, on every exit.
+  var request = view(params, paramsLen)
+  var r =
     if h.conn != 0:
       # [I90] A transported handle: the Request goes on its link.
-      linkCall(h, $`method`, view(params, paramsLen))
+      linkCall(h, $`method`, request)
     else:
-      routeCall(h, $`method`, view(params, paramsLen))
-  if r.isErr:
-    return status(r.error)
-  give(r.get, outBuf, outLen)
+      routeCall(h, $`method`, request)
+  wipe(request)
+  result =
+    if r.isErr:
+      status(r.error)
+    else:
+      give(r.get, outBuf, outLen)
+  wipe(r)
 
 proc routeReleaseResponseOp(
     route: ptr LogosRouteHandle, response: ptr UncheckedArray[uint8], len: csize_t
 ) {.cdecl.} =
-  ## The Runtime's copy: the provider's buffer is long released.
-  cFree(response)
+  ## The Runtime's copy: the provider's buffer is long released. It is zeroed
+  ## to the size it was given with, before it is freed [DECISIONS G276].
+  releaseGiven(response)
 
 proc routeSubscribeOp(
     route: ptr LogosRouteHandle,

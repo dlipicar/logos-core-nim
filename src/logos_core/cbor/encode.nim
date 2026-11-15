@@ -10,6 +10,7 @@
 
 import std/algorithm
 import ./value
+import ../base/wipe
 
 func writeHead*(output: var seq[byte], major: uint8, arg: uint64) =
   ## The shortest head for `arg` (INTERFACE §4.4 item 2).
@@ -70,32 +71,93 @@ func encodeScalar(v: CborValue, output: var seq[byte]) =
   of ckArray, ckMap, ckTag:
     raiseAssert "not a scalar"
 
-type
-  EncodedEntry = tuple[key, value: seq[byte]]
+func headSize(arg: uint64): int =
+  if arg < 24:
+    1
+  elif arg <= 0xff:
+    2
+  elif arg <= 0xffff:
+    3
+  elif arg <= 0xffff_ffff'u64:
+    5
+  else:
+    9
 
-  Frame = object
-    node: CborValue ## the array, map or tag being written
-    next: int ## children finished: items, keys and values, or the tag content
-    buf: seq[byte] ## maps: the key or value being written
-    key: seq[byte] ## maps: the finished key waiting for its value
-    entries: seq[EncodedEntry] ## maps: finished entries, sorted at the end
+func encodedSize*(v: CborValue): int =
+  ## The length of `v`'s deterministic encoding, without encoding it.
+  var stack = @[v]
+  while stack.len > 0:
+    let n = stack.pop()
+    case n.kind
+    of ckUint:
+      result += headSize(n.uint)
+    of ckNint:
+      result += headSize(n.nint)
+    of ckBytes:
+      result += headSize(uint64(n.bytes.len)) + n.bytes.len
+    of ckText:
+      result += headSize(uint64(n.text.len)) + n.text.len
+    of ckSimple:
+      result += (if n.simple < 24: 1 else: 2)
+    of ckFloat:
+      result += 1 + ord(n.width)
+    of ckArray:
+      result += headSize(uint64(n.items.len))
+      for x in n.items:
+        stack.add(x)
+    of ckMap:
+      result += headSize(uint64(n.entries.len))
+      for (k, x) in n.entries:
+        stack.add(k)
+        stack.add(x)
+    of ckTag:
+      result += headSize(n.tag)
+      stack.add(n.content)
 
-func encodeCbor*(v: CborValue, output: var seq[byte]) =
+type Frame = object
+  node: CborValue ## the array, map or tag being written
+  next: int ## children finished: items, keys then values, or the tag content
+  keys: seq[seq[byte]] ## maps: each entry's encoded key, by entry index
+  order: seq[int] ## maps: entry indices in the order of their encoded keys
+
+func sized(v: CborValue): seq[byte] =
+  newSeqOfCap[byte](encodedSize(v))
+
+func sortKeys(f: var Frame) =
+  ## The entry order of a map whose keys are all encoded (INTERFACE §4.4 item
+  ## 1). Duplicate keys are a programming error.
+  let n = f.keys.len
+  f.order = newSeq[int](n)
+  for i in 0 ..< n:
+    f.order[i] = i
+  let keys = addr f.keys
+  f.order.sort(
+    proc(a, b: int): int =
+      cmpBytes(keys[][a], keys[][b])
+  )
+  for i in 1 ..< n:
+    doAssert cmpBytes(keys[][f.order[i - 1]], keys[][f.order[i]]) != 0,
+      "duplicate CBOR map key"
+
+func encodeInto(v: CborValue, output: var seq[byte]) =
   ## Iterative, like the decoder: nesting costs heap, not call stack (INTERFACE
-  ## §4.5.1). Arrays and tags write straight into their sink; a map collects
-  ## its encoded entries, sorts them by key bytes and then writes them into
-  ## its own sink. A sink is the innermost unfinished map's buffer, or `output`.
+  ## §4.5.1). Everything is written into storage sized for it beforehand, so
+  ## nothing is reallocated [DECISIONS G276]. A map first encodes each key
+  ## into its own buffer of exact size, then writes its entries in the order of
+  ## those encodings; the key buffers are zeroed when it closes. The sink is the
+  ## key being encoded by the innermost map still encoding keys, or `output`.
   var
     stack: seq[Frame]
-    maps: seq[int] ## indices of the map frames in `stack`
+    keying: seq[int] ## indices of the map frames still encoding their keys
     pending = v
 
   template sink(): ptr seq[byte] =
     # Taken fresh for every write: `stack.add` may move the buffers.
-    if maps.len == 0:
+    if keying.len == 0:
       addr output
     else:
-      addr stack[maps[^1]].buf
+      let m = keying[^1]
+      addr stack[m].keys[stack[m].next]
 
   while true:
     case pending.kind
@@ -111,11 +173,13 @@ func encodeCbor*(v: CborValue, output: var seq[byte]) =
       pending = pending.content
       continue
     of ckMap:
-      if pending.entries.len == 0:
-        writeHead(sink()[], 5, 0)
-      else:
-        stack.add(Frame(node: pending))
-        maps.add(stack.high)
+      writeHead(sink()[], 5, uint64(pending.entries.len))
+      if pending.entries.len > 0:
+        var f = Frame(node: pending)
+        f.keys = newSeq[seq[byte]](pending.entries.len)
+        f.keys[0] = sized(pending.entries[0].key)
+        stack.add(move f)
+        keying.add(stack.high)
         pending = pending.entries[0].key
         continue
     else:
@@ -125,9 +189,9 @@ func encodeCbor*(v: CborValue, output: var seq[byte]) =
       if stack.len == 0:
         return
       let top = stack.high
+      inc stack[top].next
       case stack[top].node.kind
       of ckArray:
-        inc stack[top].next
         if stack[top].next < stack[top].node.items.len:
           pending = stack[top].node.items[stack[top].next]
           break
@@ -135,35 +199,43 @@ func encodeCbor*(v: CborValue, output: var seq[byte]) =
       of ckTag:
         stack.setLen(top)
       else:
-        let child = move stack[top].buf
-        stack[top].buf = @[]
-        if stack[top].next mod 2 == 0:
-          stack[top].key = child
-        else:
-          stack[top].entries.add((move stack[top].key, child))
-          stack[top].key = @[]
-        inc stack[top].next
         let n = stack[top].node.entries.len
-        if stack[top].next < 2 * n:
-          let e = stack[top].node.entries[stack[top].next div 2]
-          pending = if stack[top].next mod 2 == 0: e.key else: e.value
+        var i = stack[top].next
+        if i < n:
+          # Still encoding keys.
+          stack[top].keys[i] = sized(stack[top].node.entries[i].key)
+          pending = stack[top].node.entries[i].key
           break
-        var entries = move stack[top].entries
+        if i == n:
+          # Every key is encoded: from here on the entries go to the outer sink.
+          keying.setLen(keying.len - 1)
+          stack[top].sortKeys()
+        i -= n # values finished
+        if i < n:
+          let j = stack[top].order[i]
+          sink()[].add(stack[top].keys[j])
+          pending = stack[top].node.entries[j].value
+          break
+        # [DECISIONS G276] A key may be payload: its own encoding is zeroed.
+        for k in stack[top].keys.mitems:
+          wipe(k)
         stack.setLen(top)
-        maps.setLen(maps.len - 1)
-        entries.sort(
-          proc(a, b: EncodedEntry): int =
-            cmpBytes(a.key, b.key)
-        )
-        for i in 1 ..< entries.len:
-          doAssert entries[i - 1].key != entries[i].key, "duplicate CBOR map key"
-        let s = sink()
-        writeHead(s[], 5, uint64(n))
-        for (kb, xb) in entries:
-          s[].add(kb)
-          s[].add(xb)
+
+func encodeCbor*(v: CborValue, output: var seq[byte]) =
+  ## Appends `v`'s encoding to `output`. When `output` has no room for it, it
+  ## is moved once into storage of the final size and the old storage is zeroed
+  ## [DECISIONS G276].
+  let need = output.len + encodedSize(v)
+  if output.capacity < need:
+    var grown = newSeqOfCap[byte](need)
+    grown.add(output)
+    wipe(output)
+    output = move grown
+  encodeInto(v, output)
 
 func encodeCbor*(v: CborValue): seq[byte] =
-  var output: seq[byte]
-  encodeCbor(v, output)
+  ## [DECISIONS G276] One allocation, of exactly the encoded length: no
+  ## reallocation leaves a stale copy of a payload behind.
+  var output = newSeqOfCap[byte](encodedSize(v))
+  encodeInto(v, output)
   output

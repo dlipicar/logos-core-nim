@@ -218,22 +218,35 @@ proc queueForSlots(io: Io, c: Conn) =
     c.slotQueued = true
     io.slotWaiters.addLast(c.key)
 
-proc act(io: Io, c: Conn, acts: seq[CalleeAction]) =
-  for a in acts:
+proc act(io: Io, c: Conn, acts: sink seq[CalleeAction]) =
+  var acts = acts
+  defer:
+    # [DECISIONS G276] A dispatched Request's value root was checked by the
+    # session and is needed no further; actions not run drop their params.
+    for a in acts.mitems:
+      if a.kind == caDispatch:
+        wipe(a.request.commitment)
+  for i, a in acts.mpairs:
     if c.closed:
+      for rest in acts.toOpenArray(i, acts.high):
+        if rest.kind == caDispatch and c.callee.marked(rest.request.methodName).request:
+          wipe(rest.request.params)
       return
     case a.kind
     of caDispatch:
       # [E3; DECISIONS I90] `logos.schema` too goes to the owner, which
       # authorizes it as any call and answers with `cmdIntrospect`.
       c.dispatched.incl(a.request.id)
+      var params = encodeCbor(a.request.params)
+      if c.callee.marked(a.request.methodName).request:
+        wipe(a.request.params) # [DECISIONS G276] encoded: the tree is done
       io.emit(
         IoEvent(
           conn: c.id,
           kind: evDispatch,
           requestId: a.request.id,
           methodName: a.request.methodName,
-          params: encodeCbor(a.request.params),
+          params: move params,
           introspection: a.introspection,
         )
       )
@@ -332,7 +345,7 @@ proc introspect*(io: Io, c: Conn, id: uint64) =
       io.respondOutcome(c, id, Outcome(ok: true, response: v.get), n)
   io.workEnded(c, id)
 
-proc calleeFrame*(io: Io, c: Conn, body: sink seq[byte]) =
+proc calleeFrame*(io: Io, c: Conn, body: var seq[byte]) =
   case c.phase
   of phHello:
     # [SPEC TRANSPORT §3.1, §2.3] The first frame goes to the owner, which
@@ -344,7 +357,7 @@ proc calleeFrame*(io: Io, c: Conn, body: sink seq[byte]) =
         conn: c.id,
         kind: evHello,
         helloEndpoint: c.endpoint,
-        frame: body,
+        frame: move body,
         helloPeer: c.peer,
       )
     )
@@ -385,7 +398,9 @@ proc respond*(
       )
   else:
     io.uncharge(charge)
-    io.respondOutcome(c, id, Outcome(ok: false, failure: outcome.failure))
+    var o = Outcome(ok: false, failure: outcome.failure)
+    io.respondOutcome(c, id, o)
+    wipe(o.failure) # [DECISIONS G276] the failure's diagnostics, once encoded
   if workEnded:
     io.workEnded(c, id)
 

@@ -111,6 +111,67 @@ func parseScalarKind*(s: string): Opt[ScalarKind] =
       return Opt.some(k)
   Opt.none(ScalarKind)
 
+# Erasure ---------------------------------------------------------------------------
+
+func wipe*(d: var ScalarData) =
+  ## [DECISIONS G276] A scalar copied from a payload: zeroed in place.
+  case d.kind
+  of skBool:
+    d.boolean = false
+  of skUint8, skUint16, skUint32, skUint64:
+    d.unsigned = 0
+  of skInt8, skInt16, skInt32, skInt64:
+    d.signed = 0
+  of skTstr:
+    wipe(d.text)
+  of skBstr:
+    wipe(d.bytes)
+
+func wipe*(n: ValueNode) =
+  ## [DECISIONS G276] Zeroes every scalar of the tree below `n` and empties its
+  ## containers, iteratively (payload depth costs heap, not stack). Field names
+  ## are zeroed too: a map's names may come from its payload. In place: the tree
+  ## is wiped by its last holder only.
+  var stack = @[n]
+  while stack.len > 0:
+    let x = stack.pop()
+    if x.isNil:
+      continue
+    case x.kind
+    of vkMap:
+      for f in x.fields:
+        stack.add(f)
+      x.fields.setLen(0)
+    of vkField:
+      wipe(x.fieldName)
+      stack.add(x.fieldValue)
+      x.fieldValue = nil
+    of vkAbsent:
+      discard
+    of vkList:
+      for e in x.elements:
+        stack.add(e)
+      x.elements.setLen(0)
+    of vkListElement:
+      x.elementIndex = 0
+      stack.add(x.elementValue)
+      x.elementValue = nil
+    of vkTuple:
+      for p in x.positions:
+        stack.add(p)
+      x.positions.setLen(0)
+    of vkTupleElement:
+      stack.add(x.positionValue)
+      x.positionValue = nil
+    of vkChoice:
+      stack.add(x.armValue)
+      x.armValue = nil
+    of vkScalar:
+      wipe(x.scalar)
+    of vkReference:
+      stack.add(x.referencedValue)
+      x.referencedValue = nil
+
 # Constructors --------------------------------------------------------------------
 
 func boolScalar*(v: bool): ScalarData =
@@ -146,7 +207,9 @@ func textScalar*(v: string): ScalarData =
 func bytesScalar*(v: openArray[byte]): ScalarData =
   ScalarData(kind: skBstr, bytes: @v)
 
-func scalarNode*(schema: Digest, data: ScalarData): ValueNode =
+func scalarNode*(schema: Digest, data: sink ScalarData): ValueNode =
+  ## `data` is taken: a temporary built from a payload leaves no copy behind
+  ## [DECISIONS G276].
   ValueNode(kind: vkScalar, schema: schema, scalar: data)
 
 func fieldNode*(schema: Digest, name: string, value: ValueNode): ValueNode =

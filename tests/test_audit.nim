@@ -572,7 +572,7 @@ suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (
     check w.scope.rc.methods == Opt.some(@[rcMethodRoot("establish_route")])
     e.finish()
 
-  test "[CAP-0207] [IFC-0578] [IFC-0579] logos.schema is recorded under the common schema with the selected contract in its scope; no route is made to a contract that marks a payload (DECISIONS I88, D-c)":
+  test "[CAP-0207] [IFC-0578] [IFC-0579] logos.schema is recorded under the common schema with the selected contract in its scope; a contract that marks a payload is routed only on a path kind with erasure (DECISIONS I88, G277)":
     let (e, orch) = ready()
     setScript(retaining("call"))
     var h = orch.handle(orch.routeTo(e, Meter, "k"))
@@ -588,22 +588,32 @@ suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (
     check v.response.get ==
       schemaSet(common).rootsOf("logos.schema_response", r.response)
     h.release()
-    # The vault marks `store`'s request and `get`'s response. Erasure is not
-    # built (deferred:tier-4b), so the route is refused after its authority
-    # and contract checks, whatever the policy retains, and nothing is
-    # downgraded to ordinary handling (INTERFACE l.386-388).
-    for rule in [
+    # [G277, re-deciding G244] The vault marks `store`'s request and `get`'s
+    # response. A direct route erases them (4b-3b), so it is made.
+    setScript(retaining("call", request = false, response = false))
+    let made = orch.establish(
+      "v",
+      root = vaultRoot,
+      provider = Opt.some(providerAddress(e.view(Vault).tryGet.providerId)),
+    )
+    check made.code == ecOk
+    # On a path kind without erasure (`erasureMissing`) the route is refused
+    # after its authority and contract checks, whatever the policy retains,
+    # and nothing is downgraded to ordinary handling (INTERFACE l.386-388).
+    check e.setErasureMissingForTests({rmDirect}).isOk
+    for i, rule in [
       retaining("call"), retaining("call", request = false, response = false)
     ]:
       setScript(rule)
       let refused = orch.establish(
-        "v",
+        "w" & $i,
         root = vaultRoot,
         provider = Opt.some(providerAddress(e.view(Vault).tryGet.providerId)),
       )
       check refused.code == ecModule
       check refused.message ==
         "marked payloads are not supported on this path (INTERFACE §1.4.1)"
+    check e.setErasureMissingForTests({}).isOk
     check e.view(Vault).tryGet.state == msReady
     e.finish()
 

@@ -73,10 +73,12 @@ type
     fcEvent ## Events: never the control reserve; overflow closes (§5.2)
 
   OutFrame = object
-    data: seq[byte] ## prefix and body
+    data: seq[byte]
+      ## prefix and body; zeroed once written or dropped, whatever it holds: a
+      ## route ticket, or a payload whose marking the transport does not read
+      ## here [DECISIONS G276]
     pooled: int ## charged to the data budget and `maxOutputBytes`
     reserve: int ## charged to the control reserve
-    secret: bool ## holds a route ticket: zeroed once written or dropped
 
   PendingResponse = object
     ## An ok-Response that found no room: not committed, so a Cancel processed
@@ -161,7 +163,9 @@ type
     observed*: Opt[PeerCred]
 
   FrameHandler* =
-    proc(io: Io, c: Conn, body: sink seq[byte]) {.nimcall, gcsafe, raises: [].}
+    proc(io: Io, c: Conn, body: var seq[byte]) {.nimcall, gcsafe, raises: [].}
+    ## `body` is the handler's to keep (by moving it) or to leave: what it
+    ## leaves is zeroed when it returns [DECISIONS G276].
 
   CommandPump* = proc(io: Io) {.nimcall, gcsafe, raises: [].}
 
@@ -268,8 +272,9 @@ func framed*(body: openArray[byte]): seq[byte] =
     copyMem(addr result[4], unsafeAddr body[0], body.len)
 
 proc zero*(s: var seq[byte]) =
+  ## [DECISIONS G276] Zeroed with a call the compiler cannot remove.
   if s.len > 0:
-    zeroMem(addr s[0], s.len)
+    secureZero(addr s[0], s.len)
 
 proc newConn*(io: Io, id: ConnId, role: Role, fd: cint): Conn =
   Conn(key: io.newKey(), id: id, role: role, fd: fd, want: -1)
@@ -472,7 +477,10 @@ proc readSome(io: Io, c: Conn) =
     let hello = c.helloPool
     c.reserved = 0
     c.keepIn = 0
-    io.onFrame(io, c, move body)
+    io.onFrame(io, c, body)
+    # [DECISIONS G276] The frame is read before its method is known: zeroed
+    # whatever it carried, unless the handler kept it.
+    wipe(body)
     # What the transport still holds of this frame stays reserved (`kept`).
     let keep = min(held, c.keepIn)
     c.keepIn = 0
@@ -566,8 +574,7 @@ proc updateWriting(io: Io, c: Conn) =
     cancelTimer(c.stallTimer)
 
 proc dropFrame(io: Io, c: Conn, f: var OutFrame) =
-  if f.secret:
-    zero(f.data)
+  wipe(f.data)
   if f.pooled > 0:
     c.dataBytes -= f.pooled
     io.outputPool.release(f.pooled)
@@ -696,9 +703,7 @@ proc onStall(arg: pointer) {.gcsafe, raises: [].} =
 proc dataRoom(io: Io, c: Conn): int =
   io.config.connOutputBytes - io.config.controlReserve - c.dataBytes
 
-proc commit*(
-    io: Io, c: Conn, body: openArray[byte], cls: FrameClass, secret = false
-): bool =
+proc commit*(io: Io, c: Conn, body: openArray[byte], cls: FrameClass): bool =
   ## Appends one frame to the connection's ordered output: it is committed.
   ## False, and nothing committed, when there is no room: a data frame then
   ## waits or fails; an Event overflows (§5.2); a control frame has exhausted
@@ -706,7 +711,7 @@ proc commit*(
   if c.closed or c.writeFailed or c.phase == phConnecting:
     return false
   let n = body.len + 4
-  var f = OutFrame(secret: secret)
+  var f = OutFrame()
   if n <= io.dataRoom(c) and io.outputPool.tryReserve(n):
     f.pooled = n
     c.dataBytes += n
@@ -732,11 +737,13 @@ proc commitControl*(io: Io, c: Conn, body: openArray[byte]) =
 # ok-Responses ----------------------------------------------------------------------
 
 proc commitResponse(io: Io, c: Conn, id: uint64, outcome: Outcome) =
-  let bytes = c.callee.respond(id, outcome)
+  var bytes = c.callee.respond(id, outcome)
   if bytes.isSome:
     c.dispatched.excl(id)
     let cls = if outcome.ok: fcData else: fcControl
-    if not io.commit(c, bytes.get, cls) and cls == fcControl and not c.closed:
+    let committed = io.commit(c, bytes.get, cls)
+    wipe(bytes.get) # [DECISIONS G276] framed: the frame is the copy sent
+    if not committed and cls == fcControl and not c.closed:
       io.closeConn(c, ccProtocol, ecTransport, Opt.some(protocolErrorBody(ecTransport)))
 
 proc fitsNow*(io: Io, c: Conn, size: int): bool =
@@ -749,7 +756,9 @@ proc drainPending(io: Io, c: Conn) =
   while c.pending.len > 0 and c.established:
     let p = addr c.pending[0]
     if not c.callee.isInFlight(p.id):
-      io.uncharge(c.pending.popFirst.charge)
+      let r = c.pending.popFirst
+      wipe(r.response) # [DECISIONS G276] discarded after its CANCELLED
+      io.uncharge(r.charge)
       continue
     if not io.fitsNow(c, p.size):
       if p.size <= io.dataRoom(c) and not c.outWaiting:
@@ -792,7 +801,9 @@ proc respondOutcome*(
 
 proc dropPending(io: Io, c: Conn) =
   while c.pending.len > 0:
-    io.uncharge(c.pending.popFirst.charge)
+    let r = c.pending.popFirst
+    wipe(r.response) # [DECISIONS G276] never sent: the connection closed
+    io.uncharge(r.charge)
 
 proc onLinger(arg: pointer) {.gcsafe, raises: [].} =
   let io = theIo
@@ -838,7 +849,7 @@ proc finalClose*(io: Io, c: Conn) =
     let n = c.reserved
     c.reserved = 0
     io.releaseInput(n, c.helloPool)
-  c.body = @[]
+  wipe(c.body) # [DECISIONS G276] a partial frame
   io.dropPending(c)
   io.byKey.del(c.key)
   if io.conns.getOrDefault(c.id) == c:
@@ -956,7 +967,7 @@ proc closeConn*(
   c.undelivered = 0
   if kept > 0:
     io.releaseInput(kept, false)
-  c.body = @[]
+  wipe(c.body) # [DECISIONS G276] a partial frame
   io.dropPending(c)
   io.account(c)
   if c.role == roCallee and c.callee.executing > 0:

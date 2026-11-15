@@ -120,8 +120,10 @@ proc trySubmit*(p: TransportPorts, cmd: var IoCommand): SubmitResult =
 
 proc submit*(p: TransportPorts, cmd: sink IoCommand): SubmitResult =
   ## Never blocks. `sbStopped` once the port is closing or was never started.
+  ## [DECISIONS G276] A command not queued is wiped.
   var cmd = cmd
-  p.trySubmit(cmd)
+  result = p.trySubmit(cmd)
+  wipe(cmd)
 
 proc submitOwner*(p: TransportPorts, cmd: sink IoCommand): SubmitResult =
   ## The Runtime thread's submit: an uncharged command, which is never busy.
@@ -138,6 +140,8 @@ proc submitWait*(
   if isIoThread() or onOwner:
     return sbRefused
   var cmd = cmd
+  defer:
+    wipe(cmd) # [DECISIONS G276] not queued
   var waited = 0'i64
   while true:
     let r = p.trySubmit(cmd)

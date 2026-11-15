@@ -56,6 +56,39 @@ type
     of false:
       failure*: InvocationFailure
 
+# Erasure ([DECISIONS G276, G278]) --------------------------------------------------
+#
+# A provider's failure message and detail may hold a marked payload's text: they
+# are forwarded to the caller only (INTERFACE l.3366), and every copy on the
+# way is zeroed once used. results 0.5.1 has no `var` accessor for an error, so
+# the error of a `Result` is reached through its exported private field [IMPL].
+
+proc wipe*(o: var Opt[string]) =
+  if o.isSome:
+    wipe(o.get)
+  o = Opt.none(string)
+
+proc wipe*(o: var Opt[seq[byte]]) =
+  if o.isSome:
+    wipe(o.get)
+  o = Opt.none(seq[byte])
+
+proc wipe*(f: var InvocationFailure) =
+  wipe(f.message)
+  wipe(f.detail)
+
+proc wipeError*[T](r: var Result[T, InvocationFailure]) =
+  ## The failure's diagnostics, when `r` holds one.
+  if r.isErr:
+    wipe(r.eResultPrivate)
+
+proc wipe*(r: var Result[seq[byte], InvocationFailure]) =
+  ## The response bytes, or the failure's diagnostics.
+  if r.isOk:
+    wipe(r.value)
+  else:
+    wipe(r.eResultPrivate)
+
 func cName*(c: ErrorCode): string =
   ## [SPEC INTERFACE §5.2] The `logos_error_code_t` enumerator.
   case c

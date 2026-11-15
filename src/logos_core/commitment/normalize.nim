@@ -198,7 +198,12 @@ func enter(
     ok(rewrap(scalarNode(id, scalarOf(s.scalar, v)), wrappers))
   of snLiteral:
     let lit = literalValue(s.literal)
-    if v.kind != lit.kind or encodeCbor(v) != encodeCbor(lit):
+    var same = v.kind == lit.kind
+    if same:
+      var mine = encodeCbor(v)
+      same = mine == encodeCbor(lit)
+      wipeIfMarked(mine) # [DECISIONS G276]
+    if not same:
       return err("not the literal " & $toDiag(lit))
     ok(rewrap(scalarNode(id, s.literal), wrappers))
   of snMap, snList, snTuple:
@@ -228,16 +233,15 @@ func finish(n: var Normalizer, f: Frame): ValueNode =
   rewrap(node, f.wrappers)
 
 func value(
-    n: var Normalizer, at: Site, v: CborValue, depth: int
+    n: var Normalizer, stack: var seq[Frame], at: Site, v: CborValue, depth: int
 ): Result[ValueNode, string] =
   ## `depth` counts the maps and arrays above `v`; imported references and choice
   ## arms add no level. Members are normalized depth first in order, with the
   ## frames on the heap, so the native stack does not grow with the payload depth
   ## and every depth up to `DefaultMaxDepth` is supported on any thread
-  ## [SPEC INTERFACE §4.5.1] (DECISIONS I51).
-  var
-    stack: seq[Frame]
-    produced = ?n.enter(stack, at, v, depth)
+  ## [SPEC INTERFACE §4.5.1] (DECISIONS I51). `stack` holds the open frames,
+  ## which a failure leaves to the caller.
+  var produced = ?n.enter(stack, at, v, depth)
   while true:
     if not produced.isNil:
       # Hand the finished member to the frame that started it.
@@ -301,8 +305,18 @@ func value(
 
 func normalizeAt*(s: SchemaSet, site: Site, v: CborValue): Result[ValueNode, string] =
   ## The value node of `v` at `site` (a declaration body or any node below one).
-  var n = Normalizer(set: addr s)
-  n.value(site, v, 0)
+  ## A failure in the marked scope wipes the members built so far
+  ## [DECISIONS G276].
+  var
+    n = Normalizer(set: addr s)
+    stack: seq[Frame]
+  result = n.value(stack, site, v, 0)
+  if result.isErr and inMarkedScope():
+    for f in stack:
+      for m in f.members:
+        wipe(m)
+      for (_, m) in f.positions:
+        wipe(m)
 
 func normalize*(
     s: SchemaSet, doc: int, declaration: string, v: CborValue

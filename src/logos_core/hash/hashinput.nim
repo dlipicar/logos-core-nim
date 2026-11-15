@@ -88,5 +88,8 @@ func digestOfInput*(encoded: openArray[byte]): Digest =
 
 func digestOf*(domain: Domain, payload: CborValue, profile = SpecProfile): Digest =
   ## The digest of `payload` under `domain`: BLAKE3-256 of the deterministic
-  ## CBOR encoding of its hash input [SPEC HASH §6].
-  digestOfInput(encodeCbor(hashInput(domain, payload, profile)))
+  ## CBOR encoding of its hash input [SPEC HASH §6]. In the marked scope the
+  ## encoding is zeroed once hashed [DECISIONS G276].
+  var encoded = encodeCbor(hashInput(domain, payload, profile))
+  result = digestOfInput(encoded)
+  wipeIfMarked(encoded)

@@ -82,7 +82,7 @@ func charge(cmd: IoCommand): int =
     0
 
 when unixStream:
-  proc onFrame(io: Io, c: Conn, body: sink seq[byte]) {.nimcall, gcsafe, raises: [].} =
+  proc onFrame(io: Io, c: Conn, body: var seq[byte]) {.nimcall, gcsafe, raises: [].} =
     case c.role
     of roCallee:
       calleeFrame(io, c, body)
@@ -108,7 +108,7 @@ when unixStream:
     io.zombies.clear()
     io.slotWaiters.clear()
 
-  proc handle(io: Io, cmd: sink IoCommand) =
+  proc handleIn(io: Io, cmd: var IoCommand) =
     let c = io.conns.getOrDefault(cmd.conn)
     # A closed callee connection whose work has not ended (A21).
     let z =
@@ -159,7 +159,6 @@ when unixStream:
     of cmdRelease:
       io.release(c, cmd.releaseBytes)
     of cmdConnect:
-      var cmd = cmd
       io.connect(cmd)
     of cmdCall:
       io.call(c, cmd)
@@ -190,7 +189,7 @@ else:
     if n > 0 and not io.pendingOut.isNil:
       discard io.pendingOut[].fetchSub(n)
 
-  proc handle(io: Io, cmd: sink IoCommand) =
+  proc handleIn(io: Io, cmd: var IoCommand) =
     ## [SPEC TRANSPORT §8.2.1] No unix-stream profile here (G107): every
     ## placement and connect fails closed, and no fd is opened.
     io.uncharge(charge(cmd))
@@ -229,6 +228,13 @@ else:
       io.stopping = true
     else:
       discard
+
+proc handle(io: Io, cmd: sink IoCommand) =
+  ## [DECISIONS G276] What a handled command still carries of a payload (the
+  ## params of a call, the result of a response) is zeroed once handled.
+  var cmd = cmd
+  io.handleIn(cmd)
+  wipe(cmd)
 
 proc drain(lp: Loop, io: Io, slice = high(int64)): bool =
   ## Handles queued commands in channel order for about `slice` nanoseconds,
@@ -401,9 +407,11 @@ proc trySubmit*(lp: Loop, cmd: var IoCommand): SubmitResult =
 proc submit*(lp: Loop, cmd: sink IoCommand): SubmitResult =
   ## Queues `cmd` for the I/O thread. Never blocks. `sbBusy` when its payload
   ## does not fit `maxPendingOutputBytes`; `sbStopped` once `stopTransport`
-  ## began. `cmdShutdown` is internal.
+  ## began. `cmdShutdown` is internal. [DECISIONS G276] A command not queued
+  ## is wiped.
   var cmd = cmd
-  lp.trySubmit(cmd)
+  result = lp.trySubmit(cmd)
+  wipe(cmd)
 
 proc submitWait*(
     lp: Loop, cmd: sink IoCommand, timeout = Opt.none(int64)
@@ -413,9 +421,11 @@ proc submitWait*(
   ## `sbBusy`; without a timeout the wait has no finite bound. `sbRefused` on
   ## the I/O thread or a registered owner thread, whose waiting could keep the
   ## budget from draining.
+  var cmd = cmd
+  defer:
+    wipe(cmd) # [DECISIONS G276] not queued
   if onIoThread or (not ownerOf.isNil and ownerOf == lp):
     return sbRefused
-  var cmd = cmd
   let start = getMonoTime()
   while true:
     let r = lp.trySubmit(cmd)

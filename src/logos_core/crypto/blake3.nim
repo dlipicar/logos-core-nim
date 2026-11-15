@@ -4,6 +4,7 @@
 {.push raises: [].}
 
 import std/os
+import ../base/wipe
 
 const
   blake3Dir = currentSourcePath().parentDir() / "blake3"
@@ -91,13 +92,21 @@ proc finish*(h: var Blake3Hasher): Blake3Digest =
   h.finish(digest)
   digest
 
+proc wipe*(h: var Blake3Hasher) =
+  ## [DECISIONS G276] The state keeps up to 64 input bytes and the chaining
+  ## values: zeroed, to be initialized again before any further use.
+  wipeObject(h)
+
 func blake3*(data: openArray[byte]): Blake3Digest =
   ## One-shot hash. A `func`: the hasher state is local, so the C calls have no
-  ## observable side effect.
+  ## observable side effect. In the marked scope the state is zeroed before it
+  ## goes out of scope [DECISIONS G276].
   var digest: Blake3Digest
   {.cast(noSideEffect).}:
     var h: Blake3Hasher
     h.init()
     h.update(data)
     digest = h.finish()
+    if inMarkedScope():
+      h.wipe()
   digest
