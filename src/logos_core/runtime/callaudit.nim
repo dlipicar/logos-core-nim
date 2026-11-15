@@ -32,6 +32,11 @@
 ##   `call_audit.call_records` records (default 4096), in memory, lost at
 ##   exit. Records hold no ticket, key or secret (CAP-0244, CAP-0257,
 ##   CAP-0264): a capture holds ids, a scope and flags only.
+## - The sink (`setSink`; DECISIONS G301, G304). An in-process host may also
+##   be handed each record as it is retained, to keep it elsewhere: logosd's
+##   call-evidence store (`daemon/evstore.nim`). `append` calls it after the
+##   ring holds the record, outside the ring lock, on the appending thread;
+##   the sink must return at once and never call into the engine.
 
 {.push raises: [].}
 
@@ -238,9 +243,19 @@ type
     first: int ## the oldest record's slot
     count: int
     next: uint64 ## the index the next record gets
+    sink: CallRecordSink ## set before the engine runs; nil: none
+    sinkData: pointer
 
   AuditLog* = ptr AuditLogObj
     ## Shared by every thread of one engine; created and freed with it.
+
+  CallRecordSink* = proc(data: pointer, index: uint64, bytes: openArray[byte]) {.
+    nimcall, gcsafe, raises: []
+  .}
+    ## [IMPL-DECISION G304] Handed each record as it is retained, with its
+    ## index, on the appending thread, outside the ring's lock. It must not
+    ## block, take an engine lock or call into the engine; `bytes` is valid
+    ## during the call only.
 
 proc newAuditLog*(capacity: int): AuditLog =
   ## A ring of `capacity` records (`DefaultCallRecords` when 0).
@@ -250,6 +265,12 @@ proc newAuditLog*(capacity: int): AuditLog =
   initLock(result.lock)
   result.capacity = n
   result.slots = cast[ptr UncheckedArray[Slot]](allocShared0(n * sizeof(Slot)))
+
+proc setSink*(log: AuditLog, sink: CallRecordSink, data: pointer) =
+  ## Before any record is appended: the engine sets it at open.
+  if log != nil:
+    log.sink = sink
+    log.sinkData = data
 
 proc freeAuditLog*(log: AuditLog) =
   if log == nil:
@@ -263,7 +284,7 @@ proc freeAuditLog*(log: AuditLog) =
 
 proc append*(log: AuditLog, bytes: openArray[byte]): uint64 =
   ## Keeps `bytes` as the newest record, dropping the oldest when full; its
-  ## index.
+  ## index. Then hands it to the sink, if one is set.
   let data = cast[ptr UncheckedArray[byte]](allocShared0(max(bytes.len, 1)))
   for i, b in bytes:
     data[i] = b
@@ -282,6 +303,8 @@ proc append*(log: AuditLog, bytes: openArray[byte]): uint64 =
     log.slots[at] = Slot(index: result, data: data, len: bytes.len)
   if gone != nil:
     deallocShared(gone)
+  if log.sink != nil:
+    log.sink(log.sinkData, result, bytes)
 
 proc copyOut(s: Slot): seq[byte] =
   result = newSeq[byte](s.len)

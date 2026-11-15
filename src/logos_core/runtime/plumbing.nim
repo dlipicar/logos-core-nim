@@ -413,6 +413,10 @@ type
       ## notice that it must end its process; nil: none. A C host learns it
       ## from `logos_runtime_wait_for_shutdown`.
     terminationData*: pointer ## passed to `onTerminationRequired`
+    callRecordSink*: CallRecordSink
+      ## [IMPL-DECISION G304] an in-process host's (logosd's) receiver of each
+      ## retained call record (`callaudit.nim`); nil: none
+    callRecordSinkData*: pointer ## passed to `callRecordSink`
     routing*: seq[RoutingRule]
       ## [IMPL-DECISION G254; I90] the routing-selection input; empty:
       ## every route is direct (`routing.nim`)

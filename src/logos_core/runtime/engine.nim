@@ -10884,6 +10884,7 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   let e = createShared(Shared)
   e.tport = tp
   e.audit = newAuditLog(cfg.callRecords)
+  e.audit.setSink(cfg.callRecordSink, cfg.callRecordSinkData)
   e.clock = cfg.clock
   e.payloadDepth = depth
   e.inbox.open()
