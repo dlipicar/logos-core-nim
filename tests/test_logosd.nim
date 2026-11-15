@@ -37,6 +37,7 @@ const
   ChatterLine = "chatter: beacon_module initialized in process "
     ## `tests/kit/chatter_impl.nim`'s line, which ends with the writer's pid
   ChatterInstance = "chatter-1"
+  ChatterDelayVar = "LCN_CHATTER_INIT_DELAY_MS" ## `chatter_impl`'s init delay
 
 let
   dExe = logosdProgram()
@@ -152,13 +153,14 @@ proc initDefault(c: Case): Ran =
   dc.declarations = Opt.some(@[sensorDecl()])
   c.initWith(dc)
 
-proc initHosted(c: Case, start: bool): Ran =
+proc initHosted(c: Case, start: bool, hostEnv: seq[string] = @[]): Ran =
   ## The default configuration with the hosted `chatter-1`, which the
-  ## orchestrator starts when `start` is set.
+  ## orchestrator starts when `start` is set; `hostEnv` adds to the host's
+  ## environment allow-list.
   var dc = defaultDaemonConfig("assigned-by-init")
   dc.declarations = Opt.some(@[sensorDecl()])
   dc.runtime.module_host = Opt.some(hostExe)
-  dc.runtime.module_host_env = Opt.some(@SanitizerEnv)
+  dc.runtime.module_host_env = Opt.some(@SanitizerEnv & hostEnv)
   dc.modules = Opt.some(@[chatterModule()])
   if start:
     var o = dc.orchestration.get(LcnDcOrchestration())
@@ -171,8 +173,8 @@ proc editConfig(c: Case, edit: proc(dc: var LcnDaemonConfig)) =
   edit(dc)
   check writeAtomic(c.s.dir, DaemonConfigName, dc.encode.expect("bytes")).isOk
 
-proc start(c: Case, name = "logosd"): Child =
-  result = spawnChild(dExe, ["--session-dir", c.s.dir], c.dir, name)
+proc start(c: Case, name = "logosd", env: openArray[(string, string)] = []): Child =
+  result = spawnChild(dExe, ["--session-dir", c.s.dir], c.dir, name, env)
   children.add(result)
 
 proc socketOf(c: Case): string =
@@ -625,3 +627,33 @@ suite "daemon.logosd: logosd and logosctl as processes (DAEMON.md) [IMPL-DECISIO
     check hostsGone(2_000 * Slow)
     check heldLocks(c.s.workDir).len == 0
     check c.lockFree
+
+  test "[RUN-0705] SIGTERM while a hosted provider's _MODULE_init still runs: logosd shuts down cleanly (exit 0), the start does not complete and its host is gone":
+    # The realization in flight is cancelled and its host ended; the race
+    # where the Loader's reply arrives after shutdown began is test_hosted_routes
+    # P-5b's.
+    let c = newCase()
+    check c.initHosted(start = false, hostEnv = @[ChatterDelayVar]).code == 0
+    let d = c.start(env = [(ChatterDelayVar, $(1_500 * Slow))])
+    c.expectReady(d)
+    let sh = spawnChild(
+      ctlExe,
+      [
+        "--session-dir", c.s.dir, "--text", "module", "start", "beacon_module",
+        "--instance", ChatterInstance,
+      ],
+      c.dir,
+      "start",
+    )
+    children.add(sh)
+    # The line comes from `_MODULE_init`, which then waits: realize is in flight.
+    check d.chatterLogged(1).len == 1
+    check c.state(ChatterInstance) != "ready"
+    check d.stopped == 0
+    let log = d.errText
+    checkpoint(log)
+    check "the Module Loader failed" notin log
+    check "stopped" in log
+    discard waitExit(sh, StopMs)
+    check hostsGone()
+    check heldLocks(c.s.workDir).len == 0
