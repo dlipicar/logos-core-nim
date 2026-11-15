@@ -60,7 +60,16 @@ typedef struct {
   void *trace[LCN_WIPE_TRACES][LCN_WIPE_DEPTH];
 } LcnWipeRegistry;
 
+#if defined(LCN_WIPE_IN_LIBRARY)
+/* A library's own registry, used only where no executable exports one: file
+ * local, so it is never a second definition of the executable's (an ODR
+ * violation to AddressSanitizer on Linux). */
+__attribute__((unused)) static LcnWipeRegistry lcn_wipe_own;
+#define LCN_OWN_REGISTRY (&lcn_wipe_own)
+#else
 __attribute__((visibility("default"))) LcnWipeRegistry lcn_wipe_registry;
+#define LCN_OWN_REGISTRY (&lcn_wipe_registry)
+#endif
 
 #if defined(LCN_WIPE_SCAN)
 
@@ -73,7 +82,7 @@ __attribute__((constructor)) static void lcn_wipe_attach(void) {
   LcnWipeRegistry *r =
       (LcnWipeRegistry *)dlsym(RTLD_DEFAULT, "lcn_wipe_registry");
   if (r == NULL)
-    r = &lcn_wipe_registry;
+    r = LCN_OWN_REGISTRY;
   __atomic_store_n(&lcn_registry_ptr, r, __ATOMIC_RELEASE);
 }
 

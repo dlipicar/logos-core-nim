@@ -32,6 +32,10 @@ when defined(lcnWipeAudit):
   testHooksMarker("wipeaudit")
 
   {.passc: "-Dfree=lcn_wipe_free -Drealloc=lcn_wipe_realloc".}
+  when appType == "lib":
+    # A library exports no registry of its own (`wipeaudit.c`): two images
+    # defining one are an ODR violation to AddressSanitizer on Linux.
+    {.passc: "-DLCN_WIPE_IN_LIBRARY".}
   {.compile: "wipeaudit.c".}
 
   proc lcnWipeSupported(): cint {.importc: "lcn_wipe_supported", cdecl.}

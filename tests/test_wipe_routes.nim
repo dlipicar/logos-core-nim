@@ -1363,7 +1363,12 @@ when defined(posix):
       check noHostLeft()
 
     test "[IFC-0578] [IFC-0579] W-10 a refc Module Host under an orc Runtime refuses its own part: a provider whose contract marks a payload fails init, and a hosted consumer's route to one fails at materialization, MODULE_ERROR":
-      when ChannelsMove:
+      when ChannelsMove and defined(asan) and not defined(clang):
+        # Under gcc's AddressSanitizer refc's stack scan is instrumented
+        # (nimbase.h's CLANG_NO_SANITIZE_ADDRESS is empty but for clang), so a
+        # refc program reports its own scan of the stack as an overflow.
+        skip()
+      elif ChannelsMove:
         when defined(asan):
           # refc scans the stack conservatively and cannot see AddressSanitizer's
           # fake stack frames, so a refc host under detect_stack_use_after_return
