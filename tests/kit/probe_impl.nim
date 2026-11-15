@@ -225,6 +225,8 @@ proc command(p: ptr Probe, line: string): string =
       )
     of "call":
       let h = addr p.routes[parseInt(w[1])]
+      if h.vtable == nil:
+        return "no route" # not materialized: an answer, not a crash
       let params = unhex(
         if w.len > 3:
           w[3]
@@ -244,19 +246,27 @@ proc command(p: ptr Probe, line: string): string =
       return
     of "subscribe":
       let h = addr p.routes[parseInt(w[1])]
+      if h.vtable == nil:
+        return "no route"
       var id: LogosSubscriptionId
       let r =
         h.vtable.subscribe(h, cstring(w[2]), onRouteEvent, p.newTag(w[3]), addr id)
       return (if int64(r.code) == 0: "0 " & $id else: fullLine(r))
     of "unsubscribe":
       let h = addr p.routes[parseInt(w[1])]
+      if h.vtable == nil:
+        return "no route"
       return
         resultLine(h.vtable.unsubscribe(h, LogosSubscriptionId(parseBiggestUInt(w[2]))))
     of "observe-end":
       let h = addr p.routes[parseInt(w[1])]
+      if h.vtable == nil:
+        return "no route"
       return resultLine(h.vtable.observeEnd(h, onRouteEnd, p.newTag(w[2])))
     of "prepare":
       let h = addr p.routes[parseInt(w[1])]
+      if h.vtable == nil:
+        return "no route"
       let params = unhex(w[4])
       var opts = LogosAsyncOptions(
         abiVersion: AsyncCallAbiVersion,
@@ -296,6 +306,8 @@ proc command(p: ptr Probe, line: string): string =
       return "0 "
     of "release":
       let h = addr p.routes[parseInt(w[1])]
+      if h.vtable == nil:
+        return "no route"
       h.vtable.release(h)
       return "0 "
     else:

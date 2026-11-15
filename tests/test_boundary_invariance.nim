@@ -25,6 +25,7 @@ when defined(posix):
   import ../src/logos_core/iface/[accept, outcome, surface]
   import ../src/logos_core/iface/common_types
   import ../src/logos_core/pins
+  from ../src/logos_core/transport/io/api import defaultTransportConfig
   import ./support/[invariance, kitbuild, kitruntime, modulehostbuild, shortdir]
   import ./kit/meter_impl
   import ./generated/[meter_module_calls, meter_module_types]
@@ -87,6 +88,15 @@ when defined(posix):
     result.moduleHostEnv = @SanitizerEnv
     result.endpointDir = shortBase / ("e" & $engines)
     result.maxPayloadDepth = Depth
+    # [IMPL] The Hello and admission deadlines only bound how long the route's
+    # own Hello and frames take: scaled by `Slow`, the rest of the transport
+    # configuration as given. They are what a direct consumer's
+    # materialization waits on, and one failed on a CI runner where this
+    # suite's build alone took nine minutes (2026-11-15).
+    var transport = defaultTransportConfig()
+    transport.helloTimeout *= int64(Slow)
+    transport.admissionTimeout *= int64(Slow)
+    result.transport = Opt.some(transport)
 
   proc record(
       module, lib: string, hosted: bool, state: string, contract = Opt.none(Digest)
