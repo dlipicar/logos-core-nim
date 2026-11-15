@@ -113,6 +113,14 @@ A `?` inside a half-built constructor leaks under ORC on Nim 2.2.14 (I77). The f
 python3 tools/lint/ctortry.py src tests
 ```
 
+A local declared without an initializer, first written in a branch and written again after it,
+loses the branch's value undestroyed under ORC (I92, nim-lang/Nim#26725). The flake's
+`lint-first-write` check rejects it; to run it by hand:
+
+```bash
+python3 tools/lint/firstwrite.py src tests
+```
+
 `lcn-gen` and `lcn-pkg` build with `--useSystemNim`. On macOS, nimble 0.20.1 crashes without it
 while looking up the Nim that `nimble.lock` names; on Linux the flag changes nothing:
 

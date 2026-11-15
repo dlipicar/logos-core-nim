@@ -447,6 +447,13 @@
             python3 ${./tools/lint/ctortry.py} src tests
             touch $out
           '';
+          # No local first written in a branch and written again after it: that write drops
+          # the branch's value undestroyed, so unwiped, on Nim 2.2.14 (I92; Nim#26725).
+          lint-first-write = s.pkgs.runCommand "lint-first-write" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+            cd ${s.nimSources}
+            python3 ${./tools/lint/firstwrite.py} src tests
+            touch $out
+          '';
         }
       );
 
