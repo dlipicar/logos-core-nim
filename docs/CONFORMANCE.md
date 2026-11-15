@@ -340,7 +340,7 @@ CAP-0074), and a start needs its execution scope and every permission scope in o
 (G207 amended). Inspection items carry the facility classes (CAP-0075 to CAP-0082: one name stands for
 all seven, with no per-class limit; G283), device restrictions (CAP-0292, CAP-0293, not applicable) and
 provider-enforced permissions (CAP-0294 to CAP-0297, not applicable; G286). Hosted placements
-(CAP-0065, CAP-0066) wait for 4b-4c.
+(CAP-0065, CAP-0066) are claimed with part 4b-4c, below.
 
 Part 4b-4b builds the Runtime's half in direct mode, so the **RUNTIME** entry changes: with a profile
 selected in `app-config.v1` `permissions`, each instance has its own permission settings, provisioned
@@ -354,6 +354,14 @@ admission installed (G282), a revoked grant stops the instance (CAP-0192), and
 CAP-0192 are claimed, and the settings units the constant form (G229) answered by inspection are now
 tested. Without a profile the constant form stands. PKG-0335 moves to Tier 5: no requested permission
 reaches a scope until package-backed requests are presented to policy.
+
+Part 4b-4c extends this to hosted instances, so the **CAPABILITY AUTHORITY** entry is claimed whole:
+a hosted start's execution decision is asked before the Loader realizes the Module Host's process and
+covers `local-transport` in the `process` placement and the permission scopes (CAP-0065, CAP-0066;
+G272). The settings of a hosted instance settle once its host's forced end is confirmed (G285), and a
+hosted instance whose host of the previous run may still run holds them `pending` until its restart
+lock is free (G275). Sandbox and container placements, and any enforcement by the operating system,
+stay Tier 5.
 
 ## Properties not claimed
 

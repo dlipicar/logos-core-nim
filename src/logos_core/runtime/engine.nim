@@ -1769,13 +1769,36 @@ proc persistSettings(st: State, x: Inst, next: SettingsState): Opt[EngineError] 
   st.publishSettings(x)
   Opt.none(EngineError)
 
-func remainsOf(x: Inst): Remains =
+func forcedEnd(st: State, x: Inst): bool =
+  ## [IMPL-DECISION G285 amended; G269; 4b-4 plan R25] The Runtime's supervision
+  ## ends `x`'s Module Host by force, in the same engine turn as what it
+  ## follows, and its realization stays until that end is confirmed: past
+  ## the stop deadline or the shutdown grace (`cleanup-timeout`), or after
+  ## the Module Loader's loss (`loaderLost` ends every host it owned).
+  if not x.hosted or x.hostOf.isNil:
+    return false
+  if x.state == msError and x.failure.isSome and x.failure.get.kind == fkCleanupTimeout:
+    return true
+  x.realization != nil and x.realization.lost and st.ldr.lost
+
+func remainsOf(st: State, x: Inst): Remains =
   ## [G281, G285] What is left of `x`'s realization: none; one whose stop or
   ## cleanup can still establish absence; or one that may persist with the
   ## access it was admitted with (its stop deadline passed, its cleanup
-  ## failed, or its Loader was lost).
+  ## failed, or its Loader was lost). [4b-4 plan R25, R26] A hosted one whose
+  ## host the Runtime ends by force can still establish absence: the forced
+  ## end does (RUNTIME l.669, l.3821; owner batch C 13), so it is not one
+  ## that may persist. Nor is a hosted instance whose Module Host of the
+  ## previous run may still run (G275; owner batch C 11): nothing is known
+  ## until its restart lock is taken. A hosted end that schedules no forced
+  ## end (a cleanup failure, a lost answer while the Loader stays bound) may
+  ## persist, as a direct one does.
+  if x.prevHost:
+    return rmRunning
   if x.attempt.isNil and x.realization.isNil and x.teardown == 0:
     return rmNone
+  if st.forcedEnd(x):
+    return rmRunning
   if x.realization != nil and x.realization.lost:
     return rmOverrun
   if x.state == msError and x.failure.isSome and
@@ -1793,7 +1816,7 @@ proc settleSettings(st: State, x: Inst) =
   ## instance sets its `failure` to `permission-enforcement-failed` (R7).
   if not st.profiled or x.settings.application != saPending:
     return
-  let to = x.settings.settled(x.remainsOf, st.profile).valueOr:
+  let to = x.settings.settled(st.remainsOf(x), st.profile).valueOr:
     return
   var next = x.settings
   next.application = to
@@ -6044,7 +6067,7 @@ proc profiledSettings(st: State, q: Request, x: Inst) =
   if y.settings.repeats(xs):
     st.settingsAnswer(q, y, update)
     return
-  let next = y.settings.replaced(xs, y.remainsOf, st.profile)
+  let next = y.settings.replaced(xs, st.remainsOf(y), st.profile)
   let failed = st.persistSettings(y, next)
   if failed.isSome:
     q.reply.answerError(failed.get.code, failed.get.message)
@@ -10111,11 +10134,17 @@ proc nextTransported(st: State): Opt[MonoTime] =
 proc retryLocks(st: State, now: MonoTime) =
   ## [G275; plan R6] Once a restart lock held after an unclean end can be
   ## taken, the earlier host is gone: the realization is `absent`, committed.
+  ## [G275 amended; 4b-4 plan R26] Its `pending` permission settings then
+  ## settle, published after that commit.
   st.nextLockTry = now + initDuration(seconds = 1)
+  var freed: seq[Inst]
   for x in st.instances.values:
     if x.prevHost and lockFree(st.cfg.workDir, x.id):
       x.prevHost = false
       st.commit(x)
+      freed.add(x)
+  for x in freed:
+    st.settleSettings(x)
 
 proc checkDeadlines(st: State) =
   var now = getMonoTime()
@@ -10342,9 +10371,12 @@ proc restoreSettings(st: State): Opt[string] =
   ## (accepted settings are never dropped silently). No realization survives
   ## the previous process, so a `pending` one settles now (`applied`, or
   ## `failed` for an inactive definition), before anything is exposed and
-  ## with no event. An instance with no record was created without a
-  ## profile: it gets the default (the Loader: its construction's minimum).
-  ## What changed is written back.
+  ## with no event. [G275 amended; owner batch C 11; 4b-4 plan R26] A hosted
+  ## instance whose restart lock is still held keeps its `pending` settings
+  ## until the lock is taken (`retryLocks`): a Module Host of the previous
+  ## run may still hold the old access (RUNTIME l.2600). An instance with
+  ## no record was created without a profile: it gets the default (the
+  ## Loader: its construction's minimum). What changed is written back.
   let stored = st.store.listSide(PrmSide).valueOr:
     return Opt.some("the permission settings cannot be read: " & error)
   if not st.profiled:
@@ -10376,7 +10408,7 @@ proc restoreSettings(st: State): Opt[string] =
           "the permission settings of instance " & x.id &
             " name a permission the selected profile does not define as saved"
         )
-      let to = x.settings.settled(rmNone, st.profile)
+      let to = x.settings.settled(st.remainsOf(x), st.profile)
       if to.isSome:
         x.settings.application = to.get
         write = true
