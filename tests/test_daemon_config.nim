@@ -1032,7 +1032,9 @@ suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim
   test "every daemon CDDL file, and S1-S5 for init's default configuration, word for word":
     let root = currentSourcePath().parentDir.parentDir
     let doc = readFile(root / "docs" / "DAEMON.md")
-    for name in ["daemon_config.cddl", "trust.cddl", "ctl.cddl", "logosctl.cddl"]:
+    for name in [
+      "daemon_config.cddl", "trust.cddl", "ctl.cddl", "logosctl.cddl", "evstore.cddl"
+    ]:
       checkpoint name
       let schema = readFile(root / "src/logos_core/daemon" / name)
       check ("```cddl\n" & schema & "```") in doc

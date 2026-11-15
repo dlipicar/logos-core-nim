@@ -69,8 +69,8 @@ marked field, as the library does (G277).
   daemon never blocks a new one. The Runtime's transport endpoints are under `run/ep/`.
 - `work/` is the Runtime's `work_dir`. It keeps the Module Hosts' restart locks (`work/hosts/`), so it is
   never emptied.
-- `state/` holds the Runtime's persistent state (`state/store`, `state/modules`), the trust mark and, in a
-  later step, the call-evidence store.
+- `state/` holds the Runtime's persistent state (`state/store`, `state/modules`), the trust mark and the
+  call-evidence store (`state/evidence/`, §9).
 
 ## 3. `logos-core-nim.daemon-config.v1`
 
@@ -598,7 +598,120 @@ set`, `logosctl trust …`, or the owner's own edits, each applying at the next 
 
 ## 9. Call evidence
 
-Built in step 4b-6c.
+The Runtime's invocation boundary keeps a `call` record for each call whose applied decision retains a
+commitment (CA l.1172-1198), in a ring of `call_audit.call_records` records, lost at exit (I85).
+logosd can also keep them on disk, so the owner can later export one as call evidence (G301; G115,
+G143, G149).
+
+### The store
+
+- **Off by default** (G115). Without `call_audit.store` nothing is persisted. `logosctl init` makes the
+  evidence key anyway (G149), so turning the store on is one change: `call_audit.evidence` (the kid and
+  key file `trust evidence-keys ls` shows) and `call_audit.store` (`{}` for the defaults), then a
+  `daemon config set` and a restart. The store needs the key (§3, check 4).
+- **Where.** `state/evidence/` (0700), segments `seg-<first seq, 20 digits>.lcr` (0600). logosd logs
+  `call-evidence store: boot N, next seq S in DIR` when it opens it.
+- **How a record gets there.** logosd sets the store as the Runtime's call record sink (G304). Each
+  record the ring takes is offered at once, on the thread that made it: copied into memory and queued
+  under a short lock, never waiting for the disk. A record's seq is the store's base (the seq after the
+  last one stored when it opened) plus the ring's index, so records from concurrent calls keep unique,
+  ordered seqs. One writer thread writes up to 256 entries at a time in seq order and flushes the segment
+  to the medium after each batch.
+- **Drops.** At most `queue` records wait (default 4096). A record past that window is dropped; the
+  writer writes a gap entry for each run of dropped seqs and logs the drops once per batch. Drops are
+  recorded, never silent.
+- **Format** (`evstore.cddl`). Each entry is a 4-byte big-endian length, then one deterministic-CBOR
+  `lcn.ev_entry`. A segment's first entry is its header: the producer (the Runtime id), the kid
+  configured when the store opened, and the open's number (`boot`, from 1). Each open starts a segment;
+  a segment is rotated at 10,000 entries or 16 MiB.
+
+```cddl
+; logos-core-nim.evidence-store.v1: logosd's call-evidence store (Tier 4b step
+; 4b-6; DECISIONS G301). <session>/state/evidence/ holds segments named
+; seg-<the first seq, 20 digits>.lcr. A segment is a sequence of entries, each
+; a 4-byte big-endian length, then one Logos deterministic-CBOR lcn.ev_entry.
+; Its first entry is its header; then records and gaps, in seq order.
+; docs/DAEMON.md §9.
+lcn.ev_entry = lcn.ev_header / lcn.ev_record / lcn.ev_gap
+
+; Who wrote the segment: the Runtime whose invocation boundary made its
+; records, the kid of the evidence key configured when the store opened, and
+; that open's number, counted from 1.
+lcn.ev_header = {
+  format: "logos-core-nim.evidence-store.v1",
+  producer: tstr .size (1..128),
+  kid: bstr .size 16,
+  boot: uint64,
+}
+
+; One call record as the Runtime retained it (a CAPABILITY AUTHORITY
+; audit_record in deterministic CBOR), and when the store was handed it.
+lcn.ev_record = {
+  seq: uint64,
+  at_ms: uint64,
+  record: bstr .size (1..1048576),
+}
+
+; Records the store dropped because its queue was full: count seqs from first.
+lcn.ev_gap = {
+  gap: { first: uint64, count: uint64 },
+}
+```
+
+- **Bounds** (G143; CA l.1169). Whole segments, oldest first, are reaped when the store opens and at each
+  rotation, while the store spans more than `max_records` seqs (default 1,000,000; dropped seqs count,
+  as if stored) or while the oldest segment was last written more than `max_age_days` ago (default 30;
+  the file's modification time, so a restore that resets it keeps a segment longer). The segment being
+  written is never reaped.
+- **Crash.** Segments are only appended to. At open, a torn or undecodable tail of the newest segment is
+  cut off and logged. A failed write closes the segment and the next batch starts another, so damage
+  stays at a segment's end; readers stop there.
+
+### Export
+
+```sh
+logosctl audit evidence ls
+logosctl audit evidence export --seq N --out FILE      # or: … --seq N > FILE
+```
+
+- **Selection.** `ls` lists the segments: first and end seq, records, dropped seqs, producer, kid and
+  boot. `export` takes one seq.
+- **Authorization.** Both are offline and read-only, and work while logosd runs. The owner's command on
+  the owner-only session files is the protected integration's authorization to disclose the complete
+  record (CA l.1321, as I85 reads it; CAP-0416). There is no export through the socket and no client
+  command.
+- **What is exported.** A `logos.call-evidence.cose-sign1-slh-dsa-sha2-192s` container for the record as
+  stored, complete and with no proofs (CA l.1322; as I85). It is signed with the current evidence key,
+  the one daemon-config names, checked against its binding (§3, check 4), for the Runtime that binding
+  names: a kid maps to one producer (CA l.1265, l.1290). Signing in the shell uses the Runtime's own key
+  on the Runtime's behalf. A segment whose header names another Runtime is refused: "seg-… was written by
+  Runtime X; the current evidence key belongs to Runtime Y". The container authorizes nothing (CAP-0256).
+- **Not retained.** A seq that was reaped, dropped, cut off or never stored is refused: "seq N is not
+  retained", exit 1 (CAP-0417).
+- **Delivery.** `--out FILE` creates the file with `O_EXCL` and mode 0600; an existing file is refused.
+  Without `--out` the container goes to stdout when stdout is not a terminal, and is never written to a
+  terminal.
+- **The key.** A rotated key (`trust evidence-keys rotate`) applies at the next start. Its binding stays,
+  marked retired, with only the public half (CA l.1273). An export always signs with the current key, so a
+  record stored under an older kid is re-signed; a verifier needs the current key's binding.
+
+### Limits
+
+These are what the store does and does not protect (CA l.1320; CAP-0415):
+- **What a record holds**: the consumer's address, the decision id, one call scope, a timestamp, and for
+  each retained side its schema subtree root and value root. No payload, proof or constraint value.
+- **No marked side.** A call whose decision would retain a marked side's root is refused before dispatch
+  (IF l.397, IFC-0581, G278), so no record holds one.
+- **Guessable data.** A retained root of guessable data discloses it to whoever can read the store (SEC
+  l.402).
+- **Who can read it.** Other operating-system users are kept out by the modes; processes of the same user,
+  backups and the disk are not. The store is plaintext at rest.
+- **Integrity.** None beyond the file modes: whoever can write the session can change a record before it
+  is exported, and the export signs what the store holds.
+- **Load.** Under load records are dropped, as recorded gaps.
+- **Rotation** re-signs with the current key (above).
+- **Hosted providers.** A hosted provider's call roots are the ones its Module Host reports (G274);
+  CONFORMANCE states the trust that rests on.
 
 ## 10. Remote surfaces
 
@@ -623,8 +736,9 @@ host (SEC l.524; R l.2830). The Runtime Control's remote methods answer as
 
 logosd logs to stderr, one line per event: `logosd[<pid>]: <level>: <text>`, levels `error`, `warn` and
 `info` (`--log-level`, default `info`). A service manager collects it. The start log has the ready line
-(§4), the `NON-PRODUCTION` warning when the switch is on, the orchestrator's lines, and one line per
-socket command (`logosctl: <method> from uid U pid P: <code>`).
+(§4), the `NON-PRODUCTION` warning when the switch is on, the call-evidence store's line when it is on
+(§9), the orchestrator's lines, and one line per socket command (`logosctl: <method> from uid U pid P:
+<code>`). The store warns when it drops records or cuts off a torn tail.
 
 **The logging rule** (IF l.395, SEC l.403, G278): no log line holds a payload, a value root, a ticket, a
 key, record content, or the failure text of a method with a marked field. Method names, schema roots,
@@ -636,7 +750,7 @@ data puts it in logosd's log.
 | Exit | logosd |
 |---|---|
 | 0 | stopped cleanly |
-| 1 | refused: arguments, session, lock, daemon-config, trust file, socket path |
+| 1 | refused: arguments, session, lock, daemon-config, trust file, socket path, the call-evidence store |
 | 2 | the Runtime could not be created or started |
 | 3 | shutdown ended with an error |
 | 4 | the Module Loader failed (§15) |
@@ -644,7 +758,7 @@ data puts it in logosd's log.
 | Exit | logosctl |
 |---|---|
 | 0 | done |
-| 1 | usage, a refused value or frame, an offline check |
+| 1 | usage, a refused value or frame, an offline check or export (§9) |
 | 2 | no daemon, busy, or the outcome unknown |
 | 4 | the Runtime Control call failed (code and message on stderr) |
 
