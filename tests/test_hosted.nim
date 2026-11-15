@@ -165,10 +165,20 @@ when defined(posix):
 
   proc settled(dir, file: string, atLeast: int): seq[string] =
     ## `file`'s lines once there are `atLeast` and no more arrive for a while.
-    discard waitUntil(
-      proc(): bool =
-        lines(dir, file).len >= atLeast
-    )
+    ## [IMPL] The wait is bounded per line, not for all of them: each of a
+    ## host's deliveries crosses the carrier and two threads on each side, one
+    ## at a time (G178), about 135 ms on a loaded Mac, and a CI runner five
+    ## times slower than framework.lan passed one bound for all of S-5's
+    ## (2026-11-15).
+    var seen = lines(dir, file).len
+    while seen < atLeast:
+      let before = seen
+      if not waitUntil(
+        proc(): bool =
+          lines(dir, file).len > before
+      ):
+        break
+      seen = lines(dir, file).len
     var last = -1
     while true:
       result = lines(dir, file)
@@ -648,8 +658,9 @@ when defined(posix):
 
     test "[RUN-0227] [IMPL-DECISION G269] S-9 past the startup deadline: `error` with `startup-timeout`, `unknown` until the host's end is confirmed, then `absent`; the next start is accepted":
       var cfg = hostedConfig()
-      # [IMPL] The first start waits this out; the second must finish within it
-      # on a loaded host, which 300 ms did not always allow (refc, 2026-11-14).
+      # [IMPL] The first start waits this out, its host spawned before it
+      # passes. The next start is not bounded by it (below): within it, a
+      # host's start passed 1500 ms × `Slow` on CI (2026-11-15).
       cfg.startupDeadline = initDuration(milliseconds = 1500 * Slow)
       let dir = cfg.prepare("block-init")
       let e = fixtureEngine(cfg)
@@ -687,6 +698,8 @@ when defined(posix):
       let ends = hostEnds()
       check ends[^1].byRuntime and ends[^1].terminated
       writeFile(dir / "probe.cmd", "\n")
+      # The next start is accepted; how long it takes is not this case.
+      check e.setStartupDeadlineForTests(DefaultStartupDeadline).isOk
       check e.start("p").tryGet.state == msReady
       e.finish()
 

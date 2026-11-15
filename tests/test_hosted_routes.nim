@@ -977,11 +977,12 @@ when defined(posix):
     except IOError:
       @[]
 
-  proc noted(c: Consumer, file, prefix: string, n = 1): bool =
+  proc noted(c: Consumer, file, prefix: string, n = 1, seconds = 10 * Slow): bool =
     ## `file` has `n` lines that start with `prefix`.
     waitUntil(
       proc(): bool =
-        c.linesOf(file).countIt(it.startsWith(prefix)) >= n
+        c.linesOf(file).countIt(it.startsWith(prefix)) >= n,
+      seconds,
     )
 
   proc establishRecVia(
@@ -1288,8 +1289,12 @@ when defined(posix):
             return line.split(' ', 1)[1]
         "none"
 
+      # [IMPL] Call 2's timeout must pass only once the provider holds it: on a
+      # CI runner its way there took longer than 1000 ms × `Slow` under ASan,
+      # and TSan's 10 s were enough (2026-11-15).
+      let holdTimeout = max(1000 * Slow, 10_000)
       check codeIn(c.run(prepareLine(1, 4, "-"))) == Opt.some(ecOk)
-      check codeIn(c.run(prepareLine(2, 22, $(1000 * Slow)))) == Opt.some(ecOk)
+      check codeIn(c.run(prepareLine(2, 22, $holdTimeout))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(3, 4, "0"))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(4, 4, "-"))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(5, 22, "-"))) == Opt.some(ecOk)
@@ -1305,7 +1310,7 @@ when defined(posix):
       # timeout ends it, and the Cancel goes to the provider.
       check codeIn(c.run("submit 2")) == Opt.some(ecOk)
       check mdir.heldAt(1)
-      check c.noted("done", "2 ")
+      check c.noted("done", "2 ", seconds = holdTimeout div 1000 + 10 * Slow)
       check codeIn(c.doneOf(2)) == Opt.some(ecTimeout)
       # A released handle keeps its connection for the call still running.
       check codeIn(c.run("submit 5")) == Opt.some(ecOk)

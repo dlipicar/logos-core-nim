@@ -14,6 +14,7 @@ import std/strutils
 import results
 import ../../src/logos_core/cbor
 import ../generated/[meter_module_types, shapes_module_types]
+import ./slowdown
 
 type Script* = object
   kit*: string ## the provider's source under `tests/kit/`
@@ -66,7 +67,9 @@ proc meterLines(): seq[string] =
     "submit 1",
     "wait-done 1",
     "release-call 1",
-    prepare(2, "read", read(13), "5000"),
+    # A timeout that does not pass: the provider's failure answers first. Not
+    # 5000 ms: a hosted call under TSan on a CI runner took longer (2026-11-15).
+    prepare(2, "read", read(13), $(5000 * Slow)),
     "submit 2",
     "wait-done 2",
     "release-call 2",

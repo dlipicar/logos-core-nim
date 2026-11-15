@@ -138,6 +138,7 @@
                   "test_host_dylib.nim"
                   "test_hosted.nim"
                   "test_hosted_permissions.nim"
+                  "test_hosted_routes.nim"
                   "test_kit_dylib.nim"
                   "test_module_host.nim"
                   "test_realizer.nim"
