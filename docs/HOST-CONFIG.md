@@ -613,6 +613,13 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
 - **Threads.** With a `local-transport` rule, or with `runtime.module_host` set, the Runtime starts
   one more thread at `start`, the transport I/O thread, and stops it at `destroy`. Without either, no
   such thread exists.
+- **Remote listeners and provider exports** (DECISIONS G298, K19's interim). This Runtime has no
+  remote transport, so no listener, export or enrollment exists. Each of the four methods is
+  authorized first (`LOGOS_ERR_NOT_AUTHORISED` when the decision denies); then
+  `list_remote_listeners` and `list_provider_exports` answer an empty page (a cursor is
+  `LOGOS_ERR_INVALID_PARAMS`, none having been issued), `set_provider_export` is
+  `LOGOS_ERR_INVALID_PARAMS` (it names no listener record), and `set_remote_listener` is
+  `LOGOS_ERR_MODULE`, "remote transport is not supported by this Runtime".
 - **Results.** A result's message and detail stay in the calling thread's storage until that
   thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
   is silent); `LOGOS_OK` carries neither.
@@ -886,7 +893,11 @@ advertise is refused with `unsupported-strategy` before any artifact is read (LO
   required…", `logos_runtime_wait_for_shutdown` returns `LOGOS_ERR_MODULE` with a message ending "the
   Module Loader failed: the host process must end", and `logos_runtime_destroy` returns
   `LOGOS_ERR_NOT_READY` with the same text. A Loader that fails owning nothing is released, and only
-  starts are refused.
+  starts are refused. An in-process Nim host can learn of it at once: `runtimeSetTerminationHook(rt,
+  hook, data)`, set before `start` (`LOGOS_ERR_NOT_READY` once a start was attempted;
+  `LOGOS_ERR_INVALID_PARAMS` for a nil handle or hook), is called once, on a Runtime thread, with the
+  instances left unresolved; it must not call into the Runtime. It has no C export (DECISIONS G304).
+  logosd uses it to end its process (`docs/DAEMON.md`).
 - **Shutdown** (RUNTIME l.3847-3864). Every instance the Loader realized is released before the
   Loader. A release still running when the shutdown grace ends makes shutdown complete with
   `LOGOS_ERR_MODULE`; the Loader stays, asked only to release, until that release returns, and

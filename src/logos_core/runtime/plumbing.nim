@@ -560,6 +560,11 @@ type
     rmGetConfiguration = "get_configuration"
     rmUpdateConfiguration = "update_configuration"
     rmApplyConfiguration = "apply_configuration"
+    rmListRemoteListeners = "list_remote_listeners"
+      ## [K19 interim; G298] authorized, then an empty page: no listener exists
+    rmSetRemoteListener = "set_remote_listener"
+    rmListProviderExports = "list_provider_exports"
+    rmSetProviderExport = "set_provider_export"
 
   ConfigUpdate* = object
     ## [SPEC CONFIG §5; I87] `update_configuration` as the Runtime thread
@@ -622,7 +627,13 @@ type
       cfgUpdate*: ConfigUpdate
     of rmApplyConfiguration:
       cfgApply*: LogosNSRuntimeControlApplyConfigurationRequest
-    of rmGetSelf, rmShutdownRuntime, rmGetExecutionPermissions:
+    of rmListRemoteListeners:
+      listListeners*: LogosNSRuntimeControlListRemoteListenersRequest
+    of rmListProviderExports:
+      listExports*: LogosNSRuntimeControlListProviderExportsRequest
+    of rmSetProviderExport:
+      setExport*: LogosNSRuntimeControlSetProviderExportRequest
+    of rmGetSelf, rmShutdownRuntime, rmGetExecutionPermissions, rmSetRemoteListener:
       discard
 
   CallTicket* = object

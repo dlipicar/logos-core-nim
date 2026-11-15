@@ -4517,11 +4517,12 @@ proc rcPrecheck(st: State, q: Request) =
   let x = st.caller(q).valueOr:
     q.reply.answerError(error.code, error.message)
     return
-  if q.bare in [$rmEstablishRoute, $rmShutdownRuntime]:
+  if q.bare in [$rmEstablishRoute, $rmShutdownRuntime, $rmSetRemoteListener]:
     st.require(
       q, AuthzRequest(action: aaRuntimeControl, operation: q.bare, consumer: x.id)
     )
-  elif q.bare in [$rmListModules, $rmListRoutes]:
+  elif q.bare in
+      [$rmListModules, $rmListRoutes, $rmListRemoteListeners, $rmListProviderExports]:
     st.require(q, st.listRequest(x, q.bare))
   q.reply.answer(Reply())
 
@@ -5927,6 +5928,69 @@ proc summary(st: State, q: Request, x: Inst) =
     r.failure = Opt.some(v.failure.get.classification)
   q.reply.answerEncoded(encode(r))
 
+proc remoteList(st: State, q: Request, x: Inst) =
+  ## [K19 interim; G298; SPEC RUNTIME l.1626, l.3366-3372, l.3386-3392]
+  ## `list_remote_listeners` and `list_provider_exports`: authorized like
+  ## every list method, then the limit, the cursor, readiness, and an empty
+  ## page from one consistent snapshot. This Runtime has no remote transport,
+  ## so no listener or export record exists and no page continues: every
+  ## cursor is refused.
+  let operation = $q.rc.m
+  discard st.listAuthority(q, x, operation).valueOr:
+    return
+  let (limit, cursor) =
+    if q.rc.m == rmListRemoteListeners:
+      (q.rc.listListeners.limit, q.rc.listListeners.cursor)
+    else:
+      (q.rc.listExports.limit, q.rc.listExports.cursor)
+  discard listLimit(q, limit).valueOr:
+    return
+  if cursor.isSome:
+    q.reply.answerError(ecInvalidParams, BadCursor)
+    return
+  st.requireReady(q)
+  if q.rc.m == rmListRemoteListeners:
+    q.reply.answerEncoded(encode(LogosNSRuntimeControlListRemoteListenersResponse()))
+  else:
+    q.reply.answerEncoded(encode(LogosNSRuntimeControlListProviderExportsResponse()))
+
+proc setExport(st: State, q: Request, x: Inst) =
+  ## [K19 interim; G298; SPEC RUNTIME l.3434-3442] `set_provider_export`. A
+  ## provider of another Runtime is an invalid export request the request
+  ## itself discloses: INVALID_PARAMS. The provider is the target: unknown,
+  ## hidden or denied is one non-revealing NOT_AUTHORISED (l.3439), as for
+  ## `describe_provider`. An allowed request names a listener with no record,
+  ## since no remote listener exists here: INVALID_PARAMS (l.3438), with no
+  ## detail.
+  let p = q.rc.setExport.export.provider
+  if p.runtime_instance_id.isSome and p.runtime_instance_id.get != st.runtimeId:
+    q.reply.answerError(ecInvalidParams, "the provider names another Runtime")
+    return
+  var owner: Inst
+  for y in st.instances.values:
+    if y.providerId.len > 0 and y.providerId == p.provider:
+      owner = y
+  if owner.isNil and st.authorityMode:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  st.require(
+    q,
+    AuthzRequest(
+      action: aaRuntimeControl,
+      operation: $rmSetProviderExport,
+      consumer: x.id,
+      target: p.provider,
+      provider: p.provider,
+      providerSelector: true,
+      module: owner.moduleOf,
+    ),
+  )
+  if owner.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  st.requireReady(q)
+  q.reply.answerError(ecInvalidParams, "the export names no remote listener record")
+
 proc describeProvider(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §2.4 l.448-458; CA l.250-257] The exact call surface
   ## validated at the provider's last bind. Order: a foreign Runtime id
@@ -6682,6 +6746,21 @@ proc rc(st: State, q: Request) =
     st.configUpdate(q, x)
   of rmApplyConfiguration:
     st.configApply(q, x)
+  of rmListRemoteListeners, rmListProviderExports:
+    st.remoteList(q, x)
+  of rmSetProviderExport:
+    st.setExport(q, x)
+  of rmSetRemoteListener:
+    # [K19 interim; G298; SPEC RUNTIME l.1626, l.3441-3442] Authorized, then
+    # refused: no listener can be activated without remote transport.
+    st.require(
+      q,
+      AuthzRequest(
+        action: aaRuntimeControl, operation: $rmSetRemoteListener, consumer: x.id
+      ),
+    )
+    st.requireReady(q)
+    q.reply.answerError(ecModule, "remote transport is not supported by this Runtime")
   of rmShutdownRuntime:
     # [SPEC RUNTIME §9.3 l.3695-3700] Runtime-wide; the response acknowledges
     # acceptance and is attempted before teardown.
