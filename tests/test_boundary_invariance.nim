@@ -46,6 +46,14 @@ when defined(posix):
     SanitizerEnv =
       ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
     Depth = MinMaxDepth ## `max_payload_depth`: the depth cases stay small
+    Answer = 60 * Slow
+      ## [IMPL] seconds: bounds a wait for the probe's answer or a note, which
+      ## always come. With a hosted consumer and a hosted provider, a
+      ## materialization and a call that publishes an Event (three carrier
+      ## round trips more) took about 0.2 s with orc on an idle Mac, and more
+      ## than the 30 s this replaces on a CI runner under x86 MSan with three
+      ## other suites beside it (2026-11-15), so that a late answer was read
+      ## as the next command's.
 
   let
     hostProgram = moduleHostProgram()
@@ -143,7 +151,8 @@ when defined(posix):
     let path = c.dir / ("out-" & $c.post(line))
     if not waitUntil(
       proc(): bool =
-        fileExists(path)
+        fileExists(path),
+      Answer,
     ):
       return "none"
     readFile(path)
@@ -151,7 +160,8 @@ when defined(posix):
   proc noted(dir, file: string, n: int): bool =
     waitUntil(
       proc(): bool =
-        linesOf(dir, file).len >= n
+        linesOf(dir, file).len >= n,
+      Answer,
     )
 
   proc noHostLeft(): bool =

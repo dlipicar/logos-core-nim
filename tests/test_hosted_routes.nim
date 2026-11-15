@@ -66,7 +66,15 @@ when defined(posix):
   const
     SanitizerEnv =
       ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
-    Wait = 5000 * Slow ## ms: bounds a wait for a response or an end
+    # [IMPL] Bounds a wait for what comes: a response, an end, a held call, a
+    # delivery, a record or the probe's answer. A hosted path crosses the
+    # carrier, a call that publishes an Event three more times, and on a CI
+    # runner under x86 MSan, with three other suites building and running
+    # beside it, such steps outlasted the 15 s and 30 s bounds this replaces
+    # (2026-11-15; 0.1-0.3 s with orc on an idle Mac). A wait for what comes
+    # costs nothing more while it comes in time.
+    Answer = 60 * Slow ## seconds
+    Wait = 1000 * Answer ## ms
     MeterModule = "meter_module"
 
   let
@@ -89,6 +97,14 @@ when defined(posix):
 
   # Set-up -------------------------------------------------------------------------------
 
+  proc roomy(): TransportConfig =
+    ## `fastConfig` whose Hello and admission deadlines are `Wait`: no case
+    ## here is about them, and a Hello with a host asks the Runtime about the
+    ## ticket over the carrier.
+    result = fastConfig()
+    result.helloTimeout = int64(Wait) * Ms
+    result.admissionTimeout = int64(Wait) * Ms
+
   proc hosted(policy = allowAll(), clock = systemClock()): EngineConfig =
     ## `config` with a state root, the Module Host program and a short
     ## endpoint directory; no routing rule, so a route with a hosted end is
@@ -98,7 +114,7 @@ when defined(posix):
     result.moduleHost = Opt.some(hostProgram)
     result.moduleHostEnv = @SanitizerEnv
     result.endpointDir = shortBase / ("e" & $engines)
-    result.transport = Opt.some(fastConfig())
+    result.transport = Opt.some(roomy())
     result.clock = clock
 
   proc hostedMeter(
@@ -136,7 +152,7 @@ when defined(posix):
     except IOError:
       0
 
-  proc heldAt(dir: string, n: int, seconds = 10 * Slow): bool =
+  proc heldAt(dir: string, n: int, seconds = Answer): bool =
     waitUntil(
       proc(): bool =
         heldCalls(dir) == n,
@@ -317,6 +333,8 @@ when defined(posix):
   proc hear(
       h: var LogosRouteHandle, slot: int, id: var LogosSubscriptionId
   ): ErrorCode =
+    if h.vtable == nil:
+      return ecNotReady # not materialized: the case fails here, not in a crash
     toResult(
       h.vtable.subscribe(
         addr h, cstring("meter.changed_event"), onHeard, addr heard[slot], addr id
@@ -332,7 +350,8 @@ when defined(posix):
   proc keptReach(e: Engine, n: int): bool =
     waitUntil(
       proc(): bool =
-        e.audit.records.len >= n
+        e.audit.records.len >= n,
+      Answer,
     )
 
   proc lastKept(e: Engine): Kept =
@@ -366,7 +385,8 @@ when defined(posix):
   proc heardAt(slot, n: int): bool =
     waitUntil(
       proc(): bool =
-        heard[slot].count.load >= n
+        heard[slot].count.load >= n,
+      Answer,
     )
 
   # P-1 to P-5 -------------------------------------------------------------------------
@@ -514,7 +534,7 @@ when defined(posix):
         rc.establish("k", provider = Opt.some(providerAddress(one.providerId))).recordOf
       let inv = rec.invocationOf.get
       check inv.path == e.hostedEndpointForTests("h1")
-      let o = newOwner()
+      let o = newOwner(roomy())
       defer:
         o.stop()
       # The path alone: a ticket the Runtime never issued.
@@ -546,7 +566,7 @@ when defined(posix):
       discard e.started(hostedMeter(), "hm")
       let (c1, rc1) = e.startClient("c1")
       let (c2, rc2) = e.startClient("c2")
-      let o = newOwner()
+      let o = newOwner(roomy())
       defer:
         o.stop()
       let a = o.session(rc1.establish("k").recordOf.invocationOf.get)
@@ -670,7 +690,7 @@ when defined(posix):
       let e = fixtureEngine(cfg)
       discard e.started(hostedMeter(), "hm")
       let (_, rc) = e.startClient("c")
-      let o = newOwner()
+      let o = newOwner(roomy())
       defer:
         o.stop()
       let rec =
@@ -690,7 +710,7 @@ when defined(posix):
       let e = fixtureEngine(cfg)
       discard e.started(hostedMeter(), "hm")
       let (_, rc) = e.startClient("c")
-      let o = newOwner()
+      let o = newOwner(roomy())
       defer:
         o.stop()
       block revoked:
@@ -737,7 +757,7 @@ when defined(posix):
       let e = fixtureEngine(cfg)
       discard e.started(hostedMeter(), "hm")
       let (_, rc) = e.startClient("c")
-      let o = newOwner()
+      let o = newOwner(roomy())
       defer:
         o.stop()
       let conn = o.session(rc.establish("k").recordOf.invocationOf.get)
@@ -944,7 +964,7 @@ when defined(posix):
     moveFile(path & ".tmp", path)
     c.n
 
-  proc outcome(c: Consumer, n: int, seconds = 10 * Slow): string =
+  proc outcome(c: Consumer, n: int, seconds = Answer): string =
     ## The probe's answer to command `n`, `<code> <hex value or message>`;
     ## `none` if it gave none in time.
     let path = c.dir / ("out-" & $n)
@@ -978,7 +998,7 @@ when defined(posix):
     except IOError:
       @[]
 
-  proc noted(c: Consumer, file, prefix: string, n = 1, seconds = 10 * Slow): bool =
+  proc noted(c: Consumer, file, prefix: string, n = 1, seconds = Answer): bool =
     ## `file` has `n` lines that start with `prefix`.
     waitUntil(
       proc(): bool =
