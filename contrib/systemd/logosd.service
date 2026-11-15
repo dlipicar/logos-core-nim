@@ -1,0 +1,26 @@
+# logosd as a systemd user service (Tier 4b step 4b-6; DECISIONS G58, G146; docs/DAEMON.md §13).
+# One per user session: logosd runs as its user, never as root. Install with
+#   install -Dm644 logosd.service ~/.config/systemd/user/logosd.service
+#   systemctl --user enable --now logosd
+# The session is ~/.logos-core unless LOGOSCTL_SESSION_DIR or --session-dir says otherwise;
+# create it first with `logosctl init`. stderr is the log (journalctl --user -u logosd).
+
+[Unit]
+Description=Logos Core daemon (logosd)
+
+[Service]
+Type=simple
+ExecStart=%h/.nix-profile/bin/logosd
+KillSignal=SIGTERM
+# Exit 4 (the Module Loader failed) needs a new process: on-failure restarts it, as it does
+# exits 2 and 3. Exit 1 is a refused configuration or trust file, which a restart repeats.
+Restart=on-failure
+RestartPreventExitStatus=1
+RestartSec=2
+# Above the shutdown logosd waits for with the default deadlines: each instance's stop (10 s),
+# the shutdown grace (10 s), and the destroy retries (grace plus 5 s). Raise it with
+# runtime.stop_deadline_ms or runtime.shutdown_grace_ms.
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

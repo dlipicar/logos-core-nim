@@ -77,6 +77,10 @@
               ./docs/HOST-CONFIG.md
               # test_authority loads the documented example policy and format.
               ./docs/AUTHORITY-POLICY.md
+              # test_daemon_config checks the documented CDDL is the one in src.
+              ./docs/DAEMON.md
+              # The service-manager units for logosd (DAEMON.md §13).
+              ./contrib
             ];
           };
 
@@ -271,6 +275,101 @@
             meta.mainProgram = "lcn-pkg";
           };
 
+          # logosd and logosctl (Tier 4b step 4b-6; DECISIONS I95; docs/DAEMON.md): orc
+          # release builds without test hooks (R5, D27). logosd finds the Module Host at
+          # ../libexec/logos-core, where its package puts it.
+          daemonVersion = "0.0.1";
+          logosd = nimDerivation {
+            pname = "logosd";
+            version = daemonVersion;
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --mm:orc -d:release -d:lcnVersion=${daemonVersion} --outdir:build/bin src/logosd.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm755 build/bin/logosd $out/bin/logosd
+              install -Dm755 ${lib.getExe logosModuleHost} $out/libexec/logos-core/logos-module-host
+            '';
+            meta.mainProgram = "logosd";
+          };
+          logosctl = nimDerivation {
+            pname = "logosctl";
+            version = daemonVersion;
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --mm:orc -d:release -d:lcnVersion=${daemonVersion} --outdir:build/bin src/logosctl.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm755 build/bin/logosctl $out/bin/logosctl
+            '';
+            meta.mainProgram = "logosctl";
+          };
+
+          # The packaged daemon and shell, run (step 4b-6 plan §4.6): init, start, status,
+          # module ls, stop; then test_hooks with the switch on, which this logosd refuses.
+          logosdSmoke =
+            pkgs.runCommand "logosd-smoke"
+              {
+                nativeBuildInputs = [
+                  logosd
+                  logosctl
+                ];
+              }
+              ''
+                set -eu
+                s=$TMPDIR/s
+                ctl() { logosctl --session-dir "$s" "$@"; }
+                ctl init > init.out
+                # The default module_host is the packaged one. The build sandbox shows the
+                # store as owned by nobody, which G272 refuses for a Module Host (a deployed
+                # store is root's or the user's), so the smoke runs a copy of it instead.
+                host=${logosd}/libexec/logos-core/logos-module-host
+                test -x "$host"
+                mkdir "$TMPDIR/host"
+                cp "$host" "$TMPDIR/host/logos-module-host"
+                chmod 0755 "$TMPDIR/host/logos-module-host"
+                ctl daemon config get --format diag --out init.diag
+                sed "s|\"runtime\": {|\"runtime\": {\"module_host\": \"$TMPDIR/host/logos-module-host\", |" \
+                  init.diag > host.diag
+                grep -q '"module_host"' host.diag
+                ctl daemon config set @host.diag
+                logosd --session-dir "$s" 2> logosd.err &
+                pid=$!
+                i=0
+                until ctl status > /dev/null 2>&1; do
+                  i=$((i + 1))
+                  if [ $i -gt 600 ] || ! kill -0 $pid 2> /dev/null; then
+                    echo "logosd did not answer"; cat logosd.err; exit 1
+                  fi
+                  sleep 0.1
+                done
+                ctl --json status > status.json
+                grep -q '"deployment":"production"' status.json
+                ctl --text module ls > modules.out
+                for i in orchestrator authority logosctl; do
+                  grep -q "^$i .* ready" modules.out || { echo "$i is not ready"; cat modules.out; exit 1; }
+                done
+                ctl daemon stop --wait
+                if ! wait $pid; then echo "logosd did not exit 0"; cat logosd.err; exit 1; fi
+                grep -q "ready: runtime " logosd.err
+                if grep -o '/nix/store/[^ ,:]*' logosd.err | grep -v "^${logosd}/"; then
+                  echo "the log names a store path outside logosd"; exit 1
+                fi
+                ctl trust development on
+                ctl daemon config get --format diag --out cfg.diag
+                sed '1s/^{/{"test_hooks": {"ctl_command_delay_ms": 1}, /' cfg.diag > hooks.diag
+                ctl daemon config set @hooks.diag
+                rc=0
+                logosd --session-dir "$s" 2> hooks.err || rc=$?
+                [ $rc -eq 1 ] || { echo "logosd exited $rc, not 1"; cat hooks.err; exit 1; }
+                grep -q "this logosd has no test hooks" hooks.err
+                touch $out
+              '';
+
           # Android suites, SDK and emulator runner (nix/android.nix); x86_64 Linux
           # hosts only, where the emulator has KVM. Not part of `checks`.
           android =
@@ -330,6 +429,9 @@
             lcnGen
             lcnPkg
             logosModuleHost
+            logosd
+            logosctl
+            logosdSmoke
             android
             ios
             updateNimbleDeps
@@ -350,6 +452,7 @@
           lcn-gen = s.lcnGen;
           lcn-pkg = s.lcnPkg;
           logos-module-host = s.logosModuleHost;
+          inherit (s) logosd logosctl;
         }
         // lib.optionalAttrs (s.android != null) {
           android-sdk = s.android.sdk.androidsdk;
@@ -374,6 +477,14 @@
         lcn-pkg = {
           type = "app";
           program = lib.getExe bySystem.${system}.lcnPkg;
+        };
+        logosd = {
+          type = "app";
+          program = lib.getExe bySystem.${system}.logosd;
+        };
+        logosctl = {
+          type = "app";
+          program = lib.getExe bySystem.${system}.logosctl;
         };
       }
       // lib.optionalAttrs (bySystem.${system}.android != null) {
@@ -442,6 +553,7 @@
                 runHook postBuild
               '';
             };
+          logosd-smoke = s.logosdSmoke;
           # No `?` inside a half-built constructor: it leaks on Nim 2.2.14 (I77).
           lint-ctor-try = s.pkgs.runCommand "lint-ctor-try" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}

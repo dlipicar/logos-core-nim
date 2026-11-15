@@ -10,6 +10,11 @@ bin = @["lcn_gen", "lcn_pkg", "logos_module_host"]
 namedBin["lcn_gen"] = "lcn-gen"
 namedBin["lcn_pkg"] = "lcn-pkg"
 namedBin["logos_module_host"] = "logos-module-host"
+# logosd and logosctl need unix-stream sockets, peer credentials and signals: POSIX hosts
+# only (DECISIONS I95; docs/DAEMON.md). The Module Host lands beside logosd, where its
+# default lookup finds it.
+when not defined(windows):
+  bin.add ["logosd", "logosctl"]
 
 # Dependencies
 #
