@@ -123,9 +123,10 @@ type Frame = object
 func sized(v: CborValue): seq[byte] =
   newSeqOfCap[byte](encodedSize(v))
 
-func sortKeys(f: var Frame) =
+func sortKeys(f: var Frame): bool =
   ## The entry order of a map whose keys are all encoded (INTERFACE §4.4 item
-  ## 1). Duplicate keys are a programming error.
+  ## 1); false when two keys are equal. Duplicate keys are a programming error,
+  ## reported by `encodeCbor` once nothing of the encoding is held.
   let n = f.keys.len
   f.order = newSeq[int](n)
   for i in 0 ..< n:
@@ -136,16 +137,20 @@ func sortKeys(f: var Frame) =
       cmpBytes(keys[][a], keys[][b])
   )
   for i in 1 ..< n:
-    doAssert cmpBytes(keys[][f.order[i - 1]], keys[][f.order[i]]) != 0,
-      "duplicate CBOR map key"
+    if cmpBytes(keys[][f.order[i - 1]], keys[][f.order[i]]) == 0:
+      return false
+  true
 
-func encodeInto(v: CborValue, output: var seq[byte]) =
+func encodeInto(v: CborValue, output: var seq[byte]): bool =
   ## Iterative, like the decoder: nesting costs heap, not call stack (INTERFACE
   ## §4.5.1). Everything is written into storage sized for it beforehand, so
   ## nothing is reallocated [DECISIONS G276]. A map first encodes each key
   ## into its own buffer of exact size, then writes its entries in the order of
   ## those encodings; the key buffers are zeroed when it closes. The sink is the
   ## key being encoded by the innermost map still encoding keys, or `output`.
+  ## False for a map with a duplicate key, every key buffer zeroed: the caller
+  ## raises once it holds nothing (a Defect skips the destructors of a func
+  ## that raises nothing else, which would leave these buffers allocated).
   var
     stack: seq[Frame]
     keying: seq[int] ## indices of the map frames still encoding their keys
@@ -187,7 +192,7 @@ func encodeInto(v: CborValue, output: var seq[byte]) =
     # `pending` is finished: close every container it completes.
     while true:
       if stack.len == 0:
-        return
+        return true
       let top = stack.high
       inc stack[top].next
       case stack[top].node.kind
@@ -209,7 +214,11 @@ func encodeInto(v: CborValue, output: var seq[byte]) =
         if i == n:
           # Every key is encoded: from here on the entries go to the outer sink.
           keying.setLen(keying.len - 1)
-          stack[top].sortKeys()
+          if not stack[top].sortKeys():
+            for f in stack.mitems:
+              for k in f.keys.mitems:
+                wipe(k)
+            return false
         i -= n # values finished
         if i < n:
           let j = stack[top].order[i]
@@ -231,11 +240,14 @@ func encodeCbor*(v: CborValue, output: var seq[byte]) =
     grown.add(output)
     wipe(output)
     output = move grown
-  encodeInto(v, output)
+  doAssert encodeInto(v, output), "duplicate CBOR map key"
 
 func encodeCbor*(v: CborValue): seq[byte] =
   ## [DECISIONS G276] One allocation, of exactly the encoded length: no
   ## reallocation leaves a stale copy of a payload behind.
   var output = newSeqOfCap[byte](encodedSize(v))
-  encodeInto(v, output)
+  if not encodeInto(v, output):
+    wipe(output)
+    output = @[] # released before the Defect, which skips this func's destructors
+    raiseAssert "duplicate CBOR map key"
   output
