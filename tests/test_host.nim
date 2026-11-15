@@ -14,6 +14,7 @@ import
   ../src/logos_core/runtime/[engine, host, host_config, host_config_types, rc_types]
 from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
 from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
+from ../src/logos_core/runtime/plumbing import LoaderFaults
 import ../src/logos_core/permissions
 from ../src/logos_core/crypto/slhdsa import Seed, keyPairFromSeeds
 from std/posix import Mode, chmod
@@ -2040,3 +2041,64 @@ suite "run.host-api: shutdown and destruction (RUNTIME §13.2, §10.2) [G60]":
         check tries < 100_000
         if tries >= 100_000:
           break
+
+var
+  hookCalls: Atomic[int] ## termination hook calls
+  hookNames: Atomic[int] ## how many instances the last call named
+  hookData: Atomic[pointer] ## the data the last call carried
+
+proc onTermination(
+    data: pointer, unresolved: seq[string]
+) {.nimcall, gcsafe, raises: [].} =
+  discard hookCalls.fetchAdd(1)
+  hookNames.store(unresolved.len)
+  hookData.store(data)
+
+suite "run.host-api: the termination hook (RUNTIME l.3823-3824) [IMPL-DECISION G304] [IMPL-DECISION G249]":
+  setup:
+    resetOrchestrator()
+    hookCalls.store(0)
+    hookNames.store(0)
+    hookData.store(nil)
+
+  test "[IMPL-DECISION G304] a null handle or hook is INVALID_PARAMS; set before start OK; after a start attempt NOT_READY":
+    check runtimeSetTerminationHook(nil, onTermination, nil).ec == ecInvalidParams
+    let rt = registered(deployment())
+    check runtimeSetTerminationHook(rt, nil, nil).ec == ecInvalidParams
+    check runtimeSetTerminationHook(rt, onTermination, nil).ec == ecOk
+    check runtimeSetTerminationHook(rt, onTermination, nil).ec == ecOk # replaced
+    check runtimeStart(rt).ec == ecOk
+    let late = runtimeSetTerminationHook(rt, onTermination, nil)
+    check late.ec == ecNotReady and late.text == "start was already attempted"
+    rt.finish()
+    check hookCalls.load == 0
+
+  test "[IMPL-DECISION G304] [IMPL-DECISION G249] a Loader loss calls the hook once with its data; the wait says the host process must end; destroy waits for the confirmation":
+    let rt = registered(deployment())
+    var marker = 7
+    check runtimeSetTerminationHook(rt, onTermination, addr marker).ec == ecOk
+    check runtimeStart(rt).ec == ecOk
+    check setLoaderFaultsForTests(engineOf(rt), LoaderFaults(reportFailure: true)).isOk
+    check waitUntil(
+      proc(): bool =
+        hookCalls.load == 1
+    )
+    check hookData.load == cast[pointer](addr marker)
+    check hookNames.load >= 1
+    orchGate.store(false)
+    orchDestroyGate.store(false)
+    check runtimeRequestShutdown(rt).ec == ecOk
+    let r = runtimeWaitForShutdown(rt)
+    check r.ec == ecModule and "the host process must end" in r.text
+    let refused = runtimeDestroy(rt)
+    check refused.ec == ecNotReady and "the host process must end" in refused.text
+    check hookCalls.load == 1
+    confirmTerminationForTests(engineOf(rt))
+    var destroyed = false
+    for _ in 0 ..< 10_000:
+      if runtimeDestroy(rt).ec == ecOk:
+        destroyed = true
+        break
+      sleep(1)
+    check destroyed
+    check hookCalls.load == 1

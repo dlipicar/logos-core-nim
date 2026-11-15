@@ -32,7 +32,7 @@ when defined(posix):
 import results
 import ../abi/[host, types]
 import ../iface/outcome
-import ./[callside, engine, evidence, host_config, native]
+import ./[callside, engine, evidence, host_config, native, plumbing]
 from ../crypto/cose import MaxCoseKidBytes
 from ../authority/facts import SharedFacts, newSharedFacts, freeSharedFacts
 from ../authority/provider import
@@ -40,7 +40,7 @@ from ../authority/provider import
 from ./authscopes import AuthorityModule
 import ../base/testhooks
 
-export host, outcome.ErrorCode
+export host, outcome.ErrorCode, plumbing.TerminationHook
 
 testHooksMarker("host")
 
@@ -95,6 +95,9 @@ type
     evidence: ptr EvidenceKeyBox ## [I85] `call_audit.evidence`; nil: none
     producer: cstring
       ## [I85] the Runtime identity the engine settled: the evidence producer
+    terminationHook: TerminationHook
+      ## [G304; G249] the in-process host's notice of a Loader loss; nil: none
+    terminationData: pointer
 
 # Per-thread results ---------------------------------------------------------------
 
@@ -239,6 +242,29 @@ proc policyOf(h: ptr HostRuntime, c: HostConfig): AuthzPolicy =
     if h.policyHook != nil:
       return h.policyHook()
   c.policy
+
+proc runtimeSetTerminationHook*(
+    rt: ptr LogosRuntimeHandle, hook: TerminationHook, data: pointer
+): LogosResult =
+  ## [IMPL-DECISION G304; G249] In-process hosts only (no C export, as
+  ## `auditRecords`): the procedure the engine calls once, on a Runtime
+  ## thread, when the Module Loader failed and in-process realizations it
+  ## owned are left unresolved (RUNTIME l.3823-3824). It must not call into
+  ## the Runtime; logosd raises a signal and ends the process (DAEMON.md
+  ## §15). Set before `start`: NOT_READY once a start was attempted; a nil
+  ## hook is INVALID_PARAMS.
+  entry()
+  if rt == nil:
+    return answer(ecInvalidParams, "runtime is null")
+  if hook == nil:
+    return answer(ecInvalidParams, "the termination hook is null")
+  let h = hostOf(rt)
+  withLock h.lock:
+    if h.startAttempted:
+      return answer(ecNotReady, "start was already attempted")
+    h.terminationHook = hook
+    h.terminationData = data
+  answer(ecOk)
 
 proc engineOf*(rt: ptr LogosRuntimeHandle): Engine =
   ## In-process hosts and tests: the engine, for observation; nil before
@@ -420,6 +446,8 @@ proc launch(h: ptr HostRuntime): LogosResult =
     moduleHostEnv: c.moduleHostEnv,
     permissions: c.permissions,
     initialSettings: c.initialSettings,
+    onTerminationRequired: h.terminationHook,
+    terminationData: h.terminationData,
   )
   if c.authority.isSome:
     # [I85; G47] The attribute source exists before the engine opens, since
