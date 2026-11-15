@@ -10,6 +10,9 @@
 ##
 ## - `store` with the note `echo` fails with a message that holds the secret
 ##   (a provider failure forwarded to the caller only, l.3366);
+## - `store` with the note `leak` copies the secret to the Nim heap and drops
+##   the copy unwiped, stores nothing and answers `stored: false`: the free
+##   scan's self-test in an audit host (W-3);
 ## - `fetch` of slot 15 returns a note longer than its schema allows that holds
 ##   the secret (a response outside its schema: MODULE_ERROR);
 ## - `exchange` returns the slot's previous secret and keeps the new one; on
@@ -106,6 +109,12 @@ proc `store`(
     result = err(failure(ecModule, "refused " & text))
     wipe(text)
     return
+  if r.note == Opt.some("leak"):
+    var leak = newSeq[byte](r.secret.len)
+    for i, b in r.secret:
+      leak[i] = b
+    doAssert leak.len == r.secret.len # released unwiped, on purpose
+    return ok(VaultStoreResponse(stored: false))
   withLock vaultLock:
     keep(int(r.slot), r.secret)
   ok(VaultStoreResponse(stored: true))

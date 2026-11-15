@@ -22,6 +22,23 @@
 
 {.compile: "wipe.c".}
 
+const
+  ChannelsMove* = defined(gcDestructors)
+    ## [DECISIONS G277] Whether this build's memory manager moves a channel
+    ## message's heap parts to its receiver (orc, arc). Under refc a channel
+    ## deep-copies each message and frees the copy unerased, so a refc build
+    ## carries no marked payload: the Runtime refuses every marked route
+    ## (`engine.erases`), and a Module Host refuses a marked provider at
+    ## `init` and a marked route when its consumer materializes it.
+  MarkedUnsupported* =
+    "marked payloads are not supported on this path (INTERFACE §1.4.1)"
+    ## [DECISIONS G244, G277] The refusal of a marked route, wherever it is
+    ## made.
+  MarkedUnsupportedByHost* =
+    "marked payloads are not supported by this build of the Module Host (INTERFACE §1.4.1)"
+    ## [DECISIONS G277] A refc Module Host's refusal of a provider whose
+    ## contracts mark a payload, at `init`.
+
 when defined(lcnWipeAudit):
   # The free scan of the erasure tests: in every audit-build image that wipes.
   import ./wipeaudit

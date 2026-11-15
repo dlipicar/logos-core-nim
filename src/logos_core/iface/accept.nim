@@ -159,6 +159,24 @@ func sensitiveDeclarations*(m: SchemaModel): seq[string] =
   names.sort()
   names
 
+func marksPayloads*(c: Contract): bool =
+  ## [SPEC INTERFACE §1.2.1] Whether a method of `c` has a payload `_sensitive`
+  ## marks.
+  for m in c.model.methods:
+    if m.sensitiveRequest or m.sensitiveResponse:
+      return true
+  false
+
+func marksPayloads*(s: ContractSet): bool =
+  ## Whether the selected contract `s` reconstructs, its primary document or
+  ## an interface it implements, marks a payload.
+  s.primary.marksPayloads or s.interfaces.anyIt(it.marksPayloads)
+
+func marksPayloads*(b: ModuleBinding): bool =
+  ## Whether a contract the provider exposes marks a payload.
+  (b.primary.isSome and b.primary.get.marksPayloads) or
+    b.interfaces.anyIt(it.marksPayloads)
+
 # One document ----------------------------------------------------------------------
 
 func checkFields(n: SchemaNode, owner: string): Result[void, string] =

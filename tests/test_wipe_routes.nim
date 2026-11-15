@@ -12,6 +12,10 @@
 ## under orc and arc (`test_wipe_routes.nims`); elsewhere the hit counts are
 ## not checked, and every other check runs. The module keeps what it stores
 ## outside the Nim heap: its own copies are its own (INTERFACE l.388, l.399).
+##
+## [DECISIONS G277] A refc build routes no marked contract: there, the cases
+## that need a marked route are skipped, and W-10 checks the refusal on the
+## product paths, with no test hook. W-3's half in an audit host is here too.
 
 import
   std/[
@@ -309,15 +313,18 @@ suite "wipe: a direct route (W-4)":
     leftover()
 
   test "[IFC-0575] [IFC-0580] [SEC-0057] every method and rejection of a marked contract on a direct route leaves no copy of the canary or its value roots, and no diagnostic, record or file holds them":
-    let (e, orch) = ready(wipeConfig())
-    var h = orch.vaultHandle(e, Vault, "w4")
-    arm()
-    h.matrix()
-    h.release()
-    check e.absentFrom()
-    e.finish()
-    if scans:
-      check hits() == 0
+    when ChannelsMove:
+      let (e, orch) = ready(wipeConfig())
+      var h = orch.vaultHandle(e, Vault, "w4")
+      arm()
+      h.matrix()
+      h.release()
+      check e.absentFrom()
+      e.finish()
+      if scans:
+        check hits() == 0
+    else:
+      skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
 suite "wipe: generated code (W-8)":
   teardown:
@@ -433,65 +440,81 @@ suite "wipe: generated code (W-8)":
       check hits() == 0
 
   test "[IFC-0577] the generated call helpers keep a marked request and response marked; a handler that keeps the request keeps it intact (INTERFACE l.399)":
-    let (e, orch) = ready(wipeConfig())
-    var h = orch.vaultHandle(e, Vault, "w8")
-    arm()
-    var rq = VaultStoreRequest(slot: uint32(Slot), secret: canary)
-    let s = invoke(addr h, rq)
-    wipeTyped(rq)
-    check s.isOk and s.get.stored
-    var held = vaultHolds(int(Slot))
-    check held == canary
-    wipe(held)
-    var f = invoke(addr h, VaultFetchRequest(slot: uint32(Slot)))
-    check f.isOk and f.get.secret == canary
-    wipeTyped(f)
-    var x = VaultExchangeRequest(slot: uint32(Slot), secret: canary)
-    var g = invoke(addr h, x)
-    wipeTyped(x)
-    check g.isOk and g.get.previous == canary
-    wipeTyped(g)
-    # A provider failure that holds the canary reaches this caller only.
-    var bad = VaultStoreRequest(slot: 3, secret: canary, note: Opt.some("echo"))
-    var failed = invoke(addr h, bad)
-    wipeTyped(bad)
-    check failed.isErr and failed.error.message.isSome and
-      finds(failed.error.message.get) == 1
-    wipeError(failed)
-    # Kept intact by the module: it answers for its own copies.
-    held = vaultHolds(int(Slot))
-    check held == canary
-    wipe(held)
-    h.release()
-    e.finish()
-    if scans:
-      check hits() == 0
+    when ChannelsMove:
+      let (e, orch) = ready(wipeConfig())
+      var h = orch.vaultHandle(e, Vault, "w8")
+      arm()
+      var rq = VaultStoreRequest(slot: uint32(Slot), secret: canary)
+      let s = invoke(addr h, rq)
+      wipeTyped(rq)
+      check s.isOk and s.get.stored
+      var held = vaultHolds(int(Slot))
+      check held == canary
+      wipe(held)
+      var f = invoke(addr h, VaultFetchRequest(slot: uint32(Slot)))
+      check f.isOk and f.get.secret == canary
+      wipeTyped(f)
+      var x = VaultExchangeRequest(slot: uint32(Slot), secret: canary)
+      var g = invoke(addr h, x)
+      wipeTyped(x)
+      check g.isOk and g.get.previous == canary
+      wipeTyped(g)
+      # A provider failure that holds the canary reaches this caller only.
+      var bad = VaultStoreRequest(slot: 3, secret: canary, note: Opt.some("echo"))
+      var failed = invoke(addr h, bad)
+      wipeTyped(bad)
+      check failed.isErr and failed.error.message.isSome and
+        finds(failed.error.message.get) == 1
+      wipeError(failed)
+      # Kept intact by the module: it answers for its own copies.
+      held = vaultHolds(int(Slot))
+      check held == canary
+      wipe(held)
+      h.release()
+      e.finish()
+      if scans:
+        check hits() == 0
+    else:
+      skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
 suite "wipe: G244 lifted (W-10)":
   teardown:
     disarmWipeAudit()
     leftover()
 
-  test "[IFC-0578] [IFC-0579] a contract that marks a payload is routed on every local path kind; on a kind without erasure it is refused MODULE_ERROR with no handle (DECISIONS G277)":
+  test "[IFC-0578] [IFC-0579] a contract that marks a payload is routed on every local path kind of an orc or arc build; on a kind without erasure, and on every kind of a refc build, it is refused MODULE_ERROR with no handle (DECISIONS G277)":
+    # [SPEC INTERFACE l.388-389] Under refc the refusal is the product's own
+    # (`ChannelsMove`); under orc and arc the hook stands for a kind without
+    # erasure.
     let (e, orch) = ready(wipeConfig())
-    check orch.vaultRoute(e, Vault, "direct").code == ecOk
-    check e.setErasureMissingForTests({rmDirect}).isOk
+    when ChannelsMove:
+      check orch.vaultRoute(e, Vault, "direct").code == ecOk
+      check e.setErasureMissingForTests({rmDirect}).isOk
     let refused = orch.vaultRoute(e, Vault, "refused")
     check refused.code == ecModule
-    check refused.message ==
-      "marked payloads are not supported on this path (INTERFACE §1.4.1)"
+    check refused.message == MarkedUnsupported
     check refused.response.len == 0
-    check e.setErasureMissingForTests({}).isOk
+    when ChannelsMove:
+      check e.setErasureMissingForTests({}).isOk
+      check e.routes().len == 1
+    else:
+      check e.routes().len == 0
     check e.view(Vault).tryGet.state == msReady
     e.finish()
     when unixStream:
       let (t, torch) = ready(wipeConfig(transported = true))
-      check torch.vaultRoute(t, Vault, "transported").code == ecOk
-      check t.setErasureMissingForTests({rmLocalTransport}).isOk
+      when ChannelsMove:
+        check torch.vaultRoute(t, Vault, "transported").code == ecOk
+        check t.setErasureMissingForTests({rmLocalTransport}).isOk
       let no = torch.vaultRoute(t, Vault, "refused")
       check no.code == ecModule
+      check no.message == MarkedUnsupported
       check no.response.len == 0
-      check t.setErasureMissingForTests({}).isOk
+      when ChannelsMove:
+        check t.setErasureMissingForTests({}).isOk
+        check t.routes().len == 1
+      else:
+        check t.routes().len == 0
       t.finish()
 
 suite "wipe: a transported route (W-6)":
@@ -500,18 +523,21 @@ suite "wipe: a transported route (W-6)":
     leftover()
 
   test "[IFC-0575] [IFC-0576] every method and rejection of a marked contract on a local-transport route leaves no copy in the Runtime, its served endpoint or the caller's binding":
-    when unixStream:
-      let (e, orch) = ready(wipeConfig(transported = true))
-      var h = orch.vaultHandle(e, Vault, "w6")
-      arm()
-      h.matrix()
-      h.release()
-      check e.absentFrom()
-      e.finish()
-      if scans:
-        check hits() == 0
+    when ChannelsMove:
+      when unixStream:
+        let (e, orch) = ready(wipeConfig(transported = true))
+        var h = orch.vaultHandle(e, Vault, "w6")
+        arm()
+        h.matrix()
+        h.release()
+        check e.absentFrom()
+        e.finish()
+        if scans:
+          check hits() == 0
+      else:
+        skip()
     else:
-      skip()
+      skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
 # Retention (W-9) --------------------------------------------------------------------
 
@@ -615,35 +641,40 @@ suite "wipe: retention of a marked payload (W-9)":
     leftover()
 
   test "[IFC-0581] [SEC-0057] on a direct route a decision that retains a marked side refuses the call NOT_AUTHORISED before dispatch, recorded as sensitive-retention without a value root; an unmarked method keeps its root":
-    let (e, orch) = caReady()
-    e.retention(orch)
-    # On a path kind without erasure the route is refused after its authority
-    # and contract checks, whatever the decision retains, and nothing is
-    # downgraded to ordinary handling (INTERFACE l.386-388; G277).
-    check e.setErasureMissingForTests({rmDirect}).isOk
-    for i, keep in [true, false]:
-      var rule = allow("establish")
-      rule.retainRequest = keep
-      rule.retainResponse = keep
-      setScript(rule)
-      let refused = orch.vaultRoute(e, Vault, "w9-" & $i)
-      check refused.code == ecModule
-      check refused.message ==
-        "marked payloads are not supported on this path (INTERFACE §1.4.1)"
-    check e.setErasureMissingForTests({}).isOk
-    e.finish()
-    if scans:
-      check hits() == 0
-
-  test "[IFC-0581] [SEC-0057] the same on a local-transport route: the served endpoint admits through the same check":
-    when unixStream:
-      let (e, orch) = caReady(transported = true)
+    when ChannelsMove:
+      let (e, orch) = caReady()
       e.retention(orch)
+      # On a path kind without erasure the route is refused after its authority
+      # and contract checks, whatever the decision retains, and nothing is
+      # downgraded to ordinary handling (INTERFACE l.386-388; G277).
+      check e.setErasureMissingForTests({rmDirect}).isOk
+      for i, keep in [true, false]:
+        var rule = allow("establish")
+        rule.retainRequest = keep
+        rule.retainResponse = keep
+        setScript(rule)
+        let refused = orch.vaultRoute(e, Vault, "w9-" & $i)
+        check refused.code == ecModule
+        check refused.message == MarkedUnsupported
+      check e.setErasureMissingForTests({}).isOk
       e.finish()
       if scans:
         check hits() == 0
     else:
-      skip()
+      skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
+
+  test "[IFC-0581] [SEC-0057] the same on a local-transport route: the served endpoint admits through the same check":
+    when ChannelsMove:
+      when unixStream:
+        let (e, orch) = caReady(transported = true)
+        e.retention(orch)
+        e.finish()
+        if scans:
+          check hits() == 0
+      else:
+        skip()
+    else:
+      skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
 # Asynchronous calls (W-5) -----------------------------------------------------------
 
@@ -764,13 +795,19 @@ suite "wipe: asynchronous calls (W-5)":
     leftover()
 
   test "[IFC-0576] [IFC-0575] a deferred provider's request stays intact until its execution is released, through a cancel and a timeout, and no copy is left once it is":
-    deferredCalls(transported = false)
+    when ChannelsMove:
+      deferredCalls(transported = false)
+    else:
+      skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
   test "[IFC-0576] [IFC-0575] the same through a local-transport route: a Cancel and a late Response":
-    when unixStream:
-      deferredCalls(transported = true)
+    when ChannelsMove:
+      when unixStream:
+        deferredCalls(transported = true)
+      else:
+        skip()
     else:
-      skip()
+      skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
 # Hosted routes (W-7; W-9 and W-10 with a hosted end) ---------------------------------
 #
@@ -788,8 +825,9 @@ when defined(posix):
   from ../src/logos_core/pins import HashSuiteId
   import ../src/logos_core/crypto/blake3
   import ../src/logos_core/runtime/hostsup
-  import ./support/modulehostbuild
+  import ./support/[childbuild, modulehostbuild]
   from ./support/trnowner import fastConfig
+  from ../src/logos_core/host/state import ExitWipeAudit
 
   const
     SanitizerEnv =
@@ -910,8 +948,9 @@ when defined(posix):
       e.setWipeAuditForTests(patterns())
 
   proc traceAll() =
-    ## Counts the carrier frames that hold a pattern, from now on. After the
-    ## hosts' `init`, which carries them.
+    ## Counts the carrier frames that hold a pattern, from now on. The one
+    ## exemption is the `init`'s `wipe_audit`, the patterns themselves
+    ## (`hostsup.sendMsg`), so the trace starts before the hosts do.
     var p = patterns()
     traceMarkers(p)
     for x in p.mitems:
@@ -999,23 +1038,56 @@ when defined(posix):
         )
     )
 
-  proc routeVia(c: var Consumer, e: Engine, instance, key: string, slot: int): bool =
-    ## A route to `instance` materialized in the probe's handle `slot`.
+  proc materializeVia(
+      c: var Consumer, e: Engine, instance, key: string, slot: int
+  ): string =
+    ## A route to `instance` established by the probe, then its
+    ## `materialize_route` into the handle `slot`: that line.
     let line = c.establishVia(e, instance, key)
     check codeIn(line) == Opt.some(ecOk)
     if codeIn(line) != Opt.some(ecOk):
-      return false
+      return "none"
     let resp =
       LogosNSRuntimeControlEstablishRouteResponse.decode(unhexOf(valueIn(line)))
     check resp.isOk and resp.get.routes.len == 1
     if resp.isErr or resp.get.routes.len != 1:
-      return false
-    let m = c.run(
+      return "none"
+    c.run(
       "materialize " & $slot & " " & resp.get.routes[0].route & " " & hexOf(vaultRoot) &
         " " & hexOf(vaultSchema)
     )
+
+  proc routeVia(c: var Consumer, e: Engine, instance, key: string, slot: int): bool =
+    ## A route to `instance` materialized in the probe's handle `slot`.
+    let m = c.materializeVia(e, instance, key, slot)
     checkpoint("materialize: " & m)
     codeIn(m) == Opt.some(ecOk)
+
+  proc refusedInit(e: Engine, r: ModuleRecord, instance: string): bool =
+    ## [DECISIONS G277] A provider a refc Module Host refuses at `init`: the
+    ## instance ends in error with the host's message.
+    discard e.create(r, instance).tryGet
+    discard e.start(instance)
+    let v = e.view(instance).tryGet
+    checkpoint(
+      "state " & $v.state & ": " & (if v.failure.isSome: v.failure.get.reason else: "")
+    )
+    v.state == msError and v.failure.isSome and
+      MarkedUnsupportedByHost in v.failure.get.reason
+
+  var refcHost: string
+
+  proc refcHostProgram(): string =
+    ## [DECISIONS G277] The Module Host built under refc, for a suite that is
+    ## not: the Runtime erases, the host refuses its own part.
+    if refcHost.len == 0:
+      refcHost = buildChild(
+        "src/logos_module_host.nim",
+        "logos-module-host",
+        "module-host-refc",
+        mm = "refc",
+      )
+    refcHost
 
   proc callVia(
       c: var Consumer, slot: int, meth: string, params: var seq[byte]
@@ -1124,7 +1196,7 @@ when defined(posix):
     wipe(held)
     wipe(r)
 
-  suite "wipe: hosted routes (W-7, W-9, W-10)":
+  suite "wipe: hosted routes (W-3, W-7, W-9, W-10)":
     teardown:
       unaudited()
       disarmWipeAudit()
@@ -1132,108 +1204,183 @@ when defined(posix):
       leftover()
 
     test "[IFC-0575] [IFC-0576] [IFC-0580] W-7 every method, rejection and a Cancel on a route to a hosted provider leaves no copy in the audit host, the Runtime or the caller, no carrier frame holds one, and nor does the host's stderr":
-      let since = hostEnds().len
-      let cfg = hostedConfig()
-      let hold = cfg.stateOf("hv")
-      engineWork = cfg.workDir
-      vaultReset()
-      let e = fixtureEngine(cfg)
-      e.audited()
-      captureStderr()
-      check e.started(hostedVault(), HVault).state == msReady
-      let (_, orch) = e.startClient()
-      var h = orch.vaultHandle(e, HVault, "w7")
-      traceAll()
-      arm()
-      h.matrix(local = false)
-      h.heldCancel(hold)
-      h.release()
-      check noneTraced()
-      check e.absentFrom()
-      e.finish()
-      check restoreStderr()
-      check graceful(since, 1)
-      check noHostLeft()
-      if scans:
-        check hits() == 0
+      when ChannelsMove:
+        let since = hostEnds().len
+        let cfg = hostedConfig()
+        let hold = cfg.stateOf("hv")
+        engineWork = cfg.workDir
+        vaultReset()
+        let e = fixtureEngine(cfg)
+        e.audited()
+        captureStderr()
+        traceAll()
+        check e.started(hostedVault(), HVault).state == msReady
+        let (_, orch) = e.startClient()
+        var h = orch.vaultHandle(e, HVault, "w7")
+        arm()
+        h.matrix(local = false)
+        h.heldCancel(hold)
+        h.release()
+        check noneTraced()
+        check e.absentFrom()
+        e.finish()
+        check restoreStderr()
+        check graceful(since, 1)
+        check noHostLeft()
+        if scans:
+          check hits() == 0
+      else:
+        skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
     test "[IFC-0575] [IFC-0576] [IFC-0580] W-7 the same from a hosted consumer, to a provider the Runtime serves and to a hosted one: no copy in either host or the Runtime":
-      let since = hostEnds().len
-      var cfg = hostedConfig()
-      let hold = cfg.stateOf("hv")
-      let local = cfg.stateOf("v")
-      engineWork = cfg.workDir
-      vaultReset()
-      var c = cfg.serving()
-      let e = fixtureEngine(cfg)
-      e.audited()
-      captureStderr()
-      var record = vaultRecord()
-      record.stateAssignment = Opt.some("v")
-      check e.started(record, Vault).state == msReady
-      check e.started(hostedVault(), HVault).state == msReady
-      check e.started(hostedProbe(), HProbe).state == msReady
-      traceAll()
-      arm()
-      check c.routeVia(e, Vault, "local", 0)
-      c.probeMatrix(0, local)
-      writeFile(c.dir / "done", "") # the next Cancel's line is the first again
-      check c.routeVia(e, HVault, "hosted", 1)
-      c.probeMatrix(1, hold)
-      check noneTraced()
-      check e.absentFrom()
-      e.finish()
-      check restoreStderr()
-      check graceful(since, 2)
-      check noHostLeft()
-      if scans:
-        check hits() == 0
+      when ChannelsMove:
+        let since = hostEnds().len
+        var cfg = hostedConfig()
+        let hold = cfg.stateOf("hv")
+        let local = cfg.stateOf("v")
+        engineWork = cfg.workDir
+        vaultReset()
+        var c = cfg.serving()
+        let e = fixtureEngine(cfg)
+        e.audited()
+        captureStderr()
+        var record = vaultRecord()
+        record.stateAssignment = Opt.some("v")
+        traceAll()
+        check e.started(record, Vault).state == msReady
+        check e.started(hostedVault(), HVault).state == msReady
+        check e.started(hostedProbe(), HProbe).state == msReady
+        arm()
+        check c.routeVia(e, Vault, "local", 0)
+        c.probeMatrix(0, local)
+        writeFile(c.dir / "done", "") # the next Cancel's line is the first again
+        check c.routeVia(e, HVault, "hosted", 1)
+        c.probeMatrix(1, hold)
+        check noneTraced()
+        check e.absentFrom()
+        e.finish()
+        check restoreStderr()
+        check graceful(since, 2)
+        check noHostLeft()
+        if scans:
+          check hits() == 0
+      else:
+        skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
     test "[IFC-0581] [SEC-0057] W-9 on a route to a hosted provider a decision that retains a marked side refuses the call NOT_AUTHORISED before dispatch; the host never runs it":
-      let since = hostEnds().len
-      var cfg = hostedConfig()
-      discard cfg.stateOf("hv")
-      cfg.statics.add(fakeCaRegistration())
-      cfg.authority = Opt.some(
-        AuthorityPolicy(instance: Ca, evaluationDeadline: initDuration(seconds = 60))
-      )
-      engineWork = cfg.workDir
-      resetFake()
-      let e = fixtureEngine(cfg)
-      e.audited()
-      captureStderr()
-      let (_, orch) = e.startClient()
-      check e.started(hostedVault(), HVault).state == msReady
-      discard e.started(fakeCaRecord(), Ca)
-      check e.authorityBound()[0]
-      e.retention(orch, HVault)
-      e.finish()
-      check restoreStderr()
-      check graceful(since, 1)
-      if scans:
-        check hits() == 0
+      when ChannelsMove:
+        let since = hostEnds().len
+        var cfg = hostedConfig()
+        discard cfg.stateOf("hv")
+        cfg.statics.add(fakeCaRegistration())
+        cfg.authority = Opt.some(
+          AuthorityPolicy(instance: Ca, evaluationDeadline: initDuration(seconds = 60))
+        )
+        engineWork = cfg.workDir
+        resetFake()
+        let e = fixtureEngine(cfg)
+        e.audited()
+        captureStderr()
+        let (_, orch) = e.startClient()
+        check e.started(hostedVault(), HVault).state == msReady
+        discard e.started(fakeCaRecord(), Ca)
+        check e.authorityBound()[0]
+        e.retention(orch, HVault)
+        e.finish()
+        check restoreStderr()
+        check graceful(since, 1)
+        if scans:
+          check hits() == 0
+      else:
+        skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
-    test "[IFC-0578] [IFC-0579] W-10 a marked contract is routed to a hosted provider and from a hosted consumer; with the path kind without erasure it is refused MODULE_ERROR with no handle":
+    test "[IFC-0578] [IFC-0579] W-10 a marked contract is routed to a hosted provider and from a hosted consumer; with the path kind without erasure, and in a refc build, it is refused MODULE_ERROR with no handle, and a refc host refuses the provider at init":
       var cfg = hostedConfig()
       discard cfg.stateOf("hv")
       var c = cfg.serving()
       let e = fixtureEngine(cfg)
       check e.started(vaultRecord(), Vault).state == msReady
-      check e.started(hostedVault(), HVault).state == msReady
+      when ChannelsMove:
+        check e.started(hostedVault(), HVault).state == msReady
+      else:
+        check e.refusedInit(hostedVault(), HVault)
       check e.started(hostedProbe(), HProbe).state == msReady
-      let (_, orch) = e.startClient()
-      check orch.vaultRoute(e, HVault, "to-hosted").code == ecOk
-      check codeIn(c.establishVia(e, Vault, "from-hosted")) == Opt.some(ecOk)
-      check e.setErasureMissingForTests({rmLocalTransport}).isOk
-      let refused = orch.vaultRoute(e, HVault, "refused")
-      check refused.code == ecModule
-      check refused.message ==
-        "marked payloads are not supported on this path (INTERFACE §1.4.1)"
-      check refused.response.len == 0
+      when ChannelsMove:
+        let (_, orch) = e.startClient()
+        check orch.vaultRoute(e, HVault, "to-hosted").code == ecOk
+        check codeIn(c.establishVia(e, Vault, "from-hosted")) == Opt.some(ecOk)
+        check e.setErasureMissingForTests({rmLocalTransport}).isOk
+        let refused = orch.vaultRoute(e, HVault, "refused")
+        check refused.code == ecModule
+        check refused.message == MarkedUnsupported
+        check refused.response.len == 0
       let line = c.establishVia(e, Vault, "refused-hosted")
       check codeIn(line) == Opt.some(ecModule)
-      check "marked payloads are not supported on this path (INTERFACE §1.4.1)" in line
-      check e.setErasureMissingForTests({}).isOk
-      check e.routes().len == 2
+      check MarkedUnsupported in line
+      when ChannelsMove:
+        check e.setErasureMissingForTests({}).isOk
+        check e.routes().len == 2
+      else:
+        check e.routes().len == 0
       e.finish()
       check noHostLeft()
+
+    test "[IFC-0578] [IFC-0579] W-10 a refc Module Host under an orc Runtime refuses its own part: a provider whose contract marks a payload fails init, and a hosted consumer's route to one fails at materialization, MODULE_ERROR":
+      when ChannelsMove:
+        let program = refcHostProgram()
+        var cfg = hostedConfig()
+        cfg.moduleHost = Opt.some(program)
+        discard cfg.stateOf("hv")
+        var c = cfg.serving()
+        let e = fixtureEngine(cfg)
+        check e.started(vaultRecord(), Vault).state == msReady
+        check e.refusedInit(hostedVault(), HVault)
+        check e.started(hostedProbe(), HProbe).state == msReady
+        let line = c.materializeVia(e, Vault, "refc-host", 0)
+        check codeIn(line) == Opt.some(ecModule)
+        check MarkedUnsupported in line
+        e.finish()
+        check waitUntil(
+          proc(): bool =
+            hostPids(program).len == 0
+        )
+      else:
+        skip() # the W-10 case above runs this build's own refc host
+
+    test "W-3 the free scan proves itself in an audit host: a copy the module releases unwiped makes the host exit 97 at its graceful end, with the report on its stderr":
+      when ChannelsMove:
+        if not scans:
+          skip()
+        else:
+          let since = hostEnds().len
+          let cfg = hostedConfig()
+          discard cfg.stateOf("hv")
+          engineWork = cfg.workDir
+          vaultReset()
+          let e = fixtureEngine(cfg)
+          e.audited()
+          captureStderr()
+          check e.started(hostedVault(), HVault).state == msReady
+          let (_, orch) = e.startClient()
+          var h = orch.vaultHandle(e, HVault, "w3")
+          var b = storeReq(note = "leak")
+          var r = h.raw("store", b)
+          wipe(b)
+          check r.code == ecOk
+          wipe(r)
+          h.release()
+          e.finish()
+          check waitUntil(
+            proc(): bool =
+              hostEnds().len >= since + 1
+          )
+          let ends = hostEnds()
+          check ends.len == since + 1 and ends[^1].exited and
+            ends[^1].status == ExitWipeAudit
+          let report = readFile(errPath)
+          check "wipe audit: pattern" in report
+          writeFile(errPath, "") # expected: not shown again
+          check restoreStderr()
+          check noHostLeft()
+      else:
+        skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)

@@ -1,7 +1,9 @@
 ## The free scan of the erasure tests (Tier 4b step 4b-3b plan §4.1; DECISIONS
 ## I92) [IMPL]: test support under the test-hook rule (`testhooks.nim`).
 ##
-## 1. Everything here exists only under `when defined(lcnWipeAudit)`.
+## 1. Everything here exists only under `when defined(lcnWipeAudit)`, which
+##    compiles only with `lcnTestHooks` (D27 as written): an audit build is a
+##    test-hook build.
 ## 2. Only test builds set the define: `tests/test_wipe.nims`, and the audit
 ##    variants of the Module Host and the kits that the tests build for it.
 ## 3. `testHooksMarker("wipeaudit")` puts the test-hook marker in every binary
@@ -15,6 +17,12 @@
 ## orc or arc: refc's heap never reaches `free` (`wipeAuditScans`).
 
 {.used.}
+
+when defined(lcnWipeAudit) and not defined(lcnTestHooks):
+  {.
+    error:
+      "-d:lcnWipeAudit is test support: it needs -d:lcnTestHooks (D27, DECISIONS I92)"
+  .}
 
 when defined(lcnWipeAudit):
   {.push raises: [], gcsafe.}

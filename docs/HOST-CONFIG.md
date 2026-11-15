@@ -897,7 +897,8 @@ advertise is refused with `unsupported-strategy` before any artifact is read (LO
 
 With `runtime.module_host` set, a `hosted_dynamic` instance runs in a `logos-module-host` process
 of its own, one per realization (DECISIONS G264-G267, I91; LOADER §3-§9). The Runtime starts and
-ends it for the Module Loader; nothing restarts it (LOADER l.105).
+ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged runtime library and
+`logos-module-host` are orc builds (DECISIONS G277).
 
 - **What the module sees.** The same entry points, initialization input and Runtime Control binding
   as in process (RUNTIME §4.2.1): every Runtime Control call, subscription and asynchronous call

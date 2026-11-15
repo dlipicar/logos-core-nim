@@ -2155,12 +2155,14 @@ proc cleanupFailed(st: State, x: Inst, reason: string) {.gcsafe.}
 func erases(st: State, mode: RouteMode): bool =
   ## [DECISIONS G277] Whether the participants of a path of this kind erase
   ## marked payloads: the Runtime and its served endpoint do on every local
-  ## kind in this build. A remote kind, when one exists, starts without. No
-  ## define or configuration turns the refusal off; the test hook only adds
-  ## kinds to refuse. A Module Host is one of the participants: it erases at
-  ## its own sites (`host/endpoint`, `host/consumer`), so a hosted end does not
-  ## change the answer.
-  result = mode in {rmDirect, rmLocalTransport}
+  ## kind in an orc or arc build, and on none under refc (`ChannelsMove`). A
+  ## remote kind, when one exists, starts without. No define or configuration
+  ## turns the refusal off; the test hook only adds kinds to refuse. A Module
+  ## Host is one of the participants: it erases at its own sites
+  ## (`host/endpoint`, `host/consumer`), and a refc host refuses its own part
+  ## (`host/main.initialize`, `host/consumer.materialize`), so a hosted end
+  ## does not change the answer.
+  result = ChannelsMove and mode in {rmDirect, rmLocalTransport}
   when defined(lcnTestHooks):
     if mode in st.erasureMissing:
       result = false
@@ -5124,9 +5126,7 @@ proc establish(st: State, q: Request, x: Inst) =
       # On any other kind no route is made ready and no handle is returned
       # (RUNTIME l.3197). The request is valid and authorized: the
       # internal-capability failure (l.3442, by analogy).
-      q.reply.answerError(
-        ecModule, "marked payloads are not supported on this path (INTERFACE §1.4.1)"
-      )
+      q.reply.answerError(ecModule, MarkedUnsupported)
       return
     var routeAccess = req.access
     if ans.source == psAuthority:

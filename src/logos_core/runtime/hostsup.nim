@@ -514,9 +514,23 @@ when defined(posix):
     if not alive(h):
       return err("the Module Host has ended")
     when defined(lcnTestHooks):
-      let f = frameOf(m)
-      if f.isOk:
-        trace(f.get)
+      if m.kind == LcnCarrierMessageKind.lcn_Carrier_init and
+          m.arm_lcn_Carrier_init.wipe_audit.isSome:
+        # [DECISIONS I92] The trace exempts exactly `init.wipe_audit`, the
+        # patterns an audit host is armed with: the rest of the init is
+        # traced. The copy's patterns are zeroed before it is dropped.
+        var t = m.arm_lcn_Carrier_init
+        for p in t.wipe_audit.get.mitems:
+          if p.len > 0:
+            zeroMem(addr p[0], p.len)
+        t.wipe_audit = Opt.none(seq[seq[byte]])
+        let f = frameOf(toMessage(t))
+        if f.isOk:
+          trace(f.get)
+      else:
+        let f = frameOf(m)
+        if f.isOk:
+          trace(f.get)
     h.writer.send(m, alive, h)
 
   # Test hooks ------------------------------------------------------------------------------
@@ -1900,3 +1914,11 @@ else:
 
   proc endDispatch*(d: HostDispatch) =
     discard
+
+  when defined(lcnTestHooks):
+    # [DECISIONS I92] No Module Host here, so none to arm.
+    proc setWipeAudit*(patterns: openArray[seq[byte]]) =
+      discard
+
+    proc wipeAuditInit*(): seq[seq[byte]] =
+      @[]

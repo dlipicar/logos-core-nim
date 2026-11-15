@@ -1650,6 +1650,12 @@ proc materialize*(
   let input = view(schema, schemaLen)
   let set = acceptSchemaResponse(input, AcceptOptions(system: true)).valueOr:
     return status(ecInvalidParams, "invalid construction input: " & error)
+  when not ChannelsMove:
+    # [DECISIONS G277] A refc host carries no marked payload: a route whose
+    # selected contract marks one fails here, before the Runtime is asked,
+    # as the Runtime's own refusal would (`engine.erases`).
+    if set.marksPayloads:
+      return status(ecModule, MarkedUnsupported)
   let m = takeMaterial(id)
   let rid = nextId()
   let a = request(

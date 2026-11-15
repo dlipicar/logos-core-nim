@@ -35,7 +35,8 @@
 import std/[atomics, posix]
 import results
 import ../abi/[checks, types]
-import ../base/perthread
+import ../base/[perthread, wipe]
+import ../iface/accept
 import ../runtime/realizer
 when defined(lcnWipeAudit):
   import ../base/wipeaudit
@@ -126,6 +127,11 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
     refuse(error, P.Bind)
   let b = completeProbe(code, probeCode(code, m.module), false).valueOr:
     refuse(error, P.Bind)
+  when not ChannelsMove:
+    # [DECISIONS G277] A refc host carries no marked payload: a provider that
+    # exposes a contract marking one is refused before `_MODULE_init`.
+    if b.provider and b.contracts.marksPayloads:
+      refuse(loaderError(lecRealizationFailed, MarkedUnsupportedByHost), P.Bind)
   checkLive(m.live, b[]).isOkOr:
     refuse(error, P.Bind)
   let (rc, publish, publishUserData, access) = hostServices()

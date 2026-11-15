@@ -523,3 +523,73 @@ when not defined(windows):
           theIo = nil
         check hits() == 0
         disarmWipeAudit()
+
+# Channel messages (W-12) ------------------------------------------------------------
+
+import ../src/logos_core/runtime/plumbing as plumbing
+import ../src/logos_core/transport/io/api as ioapi
+from ../src/logos_core/loader/core import CoreConfig
+import ./support/inlinefields
+when defined(posix):
+  from ../src/logos_core/host/state import Answer
+
+suite "wipe: channel messages (W-12)":
+  test "[IMPL-DECISION G276] no channel message type holds a payload's bytes or a payload value root inline: only roots and digests that are of no method payload":
+    # [Rev R19] Under orc a channel moves a message's heap parts, and copies
+    # its inline bytes into the queue's slot (`copyMem` of its size). The
+    # slot is not cleared after `recv`, and the queue is freed unerased when
+    # it grows and when it is closed, so what is inline stays. Each inline
+    # array of a channel message is listed here, and a new one fails this
+    # case until it is reviewed; the free scan sees one at channel close.
+    # The listed ones are:
+    # - contract and schema roots, and the artifact's hash;
+    # - configuration commitments (CONFIG §6): a configuration is no method
+    #   payload, and `_sensitive` marks method payloads only (INTERFACE
+    #   §1.2.1);
+    # - `IoCommand.ticket`: invocation material, not a payload.
+    # The messages the modules keep private hold pointers or heap parts only
+    # (`host/endpoint.Job`, `host/consumer.Job`, `hostsup.ProxyJob`), or no
+    # payload (`loader/core`'s and `authority/core`'s requests and replies).
+    check inlineArrays(plumbing.Msg) ==
+      @[
+        "Msg.request.record.artifact.hash",
+        "Msg.request.record.primaryContract.vResultPrivate",
+        "Msg.request.record.configuration.vResultPrivate",
+        "Msg.request.configuration.vResultPrivate.roots.schemaRoot",
+        "Msg.request.configuration.vResultPrivate.roots.subtreeRoot",
+        "Msg.request.configuration.vResultPrivate.digest",
+        "Msg.request.configuration.vResultPrivate.default.vResultPrivate.valueRoot",
+        "Msg.request.configuration.vResultPrivate.provisioned.vResultPrivate.valueRoot",
+        "Msg.request.rc.cfgUpdate.valueRoot", "Msg.request.root",
+        "Msg.io.binding.contract",
+      ]
+    check inlineArrays(plumbing.Reply) ==
+      @[
+        "Reply.view.primaryContract.vResultPrivate",
+        "Reply.config.binding.commitment.schemaRoot",
+        "Reply.config.binding.commitment.subtreeRoot", "Reply.config.binding.digest",
+        "Reply.config.current.vResultPrivate.valueRoot",
+        "Reply.config.current.vResultPrivate.commitment.schemaRoot",
+        "Reply.config.current.vResultPrivate.commitment.subtreeRoot",
+        "Reply.config.staged.vResultPrivate.valueRoot",
+        "Reply.config.staged.vResultPrivate.commitment.schemaRoot",
+        "Reply.config.staged.vResultPrivate.commitment.subtreeRoot",
+        "Reply.config.attempted.vResultPrivate.valueRoot",
+        "Reply.config.attempted.vResultPrivate.commitment.schemaRoot",
+        "Reply.config.attempted.vResultPrivate.commitment.subtreeRoot",
+        "Reply.config.lastProvisioned.vResultPrivate",
+      ]
+    check inlineArrays(plumbing.Job) == @["Job.spec.artifact.hash"]
+    check inlineArrays(plumbing.EvalJob).len == 0
+    check inlineArrays(plumbing.CallJob).len == 0
+    check inlineArrays(plumbing.RcJob).len == 0
+    check inlineArrays(ioapi.IoCommand) ==
+      @[
+        "IoCommand.contract.root", "IoCommand.verdict.binding.contract",
+        "IoCommand.ticket", "IoCommand.selected.root",
+      ]
+    check inlineArrays(ioapi.IoEvent) == @["IoEvent.binding.contract"]
+    check inlineArrays(ioapi.CallOutcome).len == 0
+    check inlineArrays(CoreConfig).len == 0
+    when defined(posix):
+      check inlineArrays(Answer).len == 0

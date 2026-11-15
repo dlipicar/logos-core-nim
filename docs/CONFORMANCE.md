@@ -261,7 +261,8 @@ execution scope `local-transport` in a `process` (G272). So:
 
 Tier 4b step 4b-3b (DECISIONS I92) builds the erasure of marked payloads (INTERFACE §1.4.1), so the
 **INTERFACE** entry changes: IFC-0575 to IFC-0577, IFC-0580 and IFC-0581 are claimed, and
-**SECURITY CONSIDERATIONS** claims SEC-0057. So:
+**SECURITY CONSIDERATIONS** claims SEC-0057. IFC-0575 is claimed for orc builds of the Runtime and the
+host; a refc build of either never carries a marked payload. So:
 
 - **Who erases** (G277, the owner's reading of l.388): each participant answers for its own copies.
   The Runtime, the endpoints it serves, the Module Host and the code lcn-gen generates are the
@@ -275,6 +276,13 @@ Tier 4b step 4b-3b (DECISIONS I92) builds the erasure of marked payloads (INTERF
   `local-transport` paths, hosted ends included, and refused MODULE_ERROR only on a path kind without
   erasure (a remote mode, once Tier 5 adds one); no switch turns the refusal off (IFC-0578,
   IFC-0579).
+- **Builds** (G277's build condition, IF l.388-389): a participant erases only in an orc or arc
+  build, where a channel moves a message's heap parts; under refc a channel deep-copies each message
+  and frees the copy unerased. A refc Runtime refuses every marked route, with G244's code, message
+  and place; a refc Module Host fails the `init` of a provider whose contract marks a payload, and a
+  hosted consumer's materialization of a route to one. No channel message holds a payload's bytes or
+  a payload value root inline (G276; W-12), since a channel copies inline bytes into its queue and
+  never clears them.
 - **Diagnostics** (G278): for a marked request the INVALID_PARAMS path stops before the first key
   taken from the payload; generated messages for a marked declaration carry no path; a provider's
   failure text is forwarded to its caller only; no marked value or value root reaches a diagnostic,
@@ -289,11 +297,17 @@ Tier 4b step 4b-3b (DECISIONS I92) builds the erasure of marked payloads (INTERF
   `exchange`, through raw dispatch, the generated typed entries and the generated call helpers, on
   direct, transported and hosted routes, with a deferred provider through a cancel and a timeout,
   and with audit builds of the Module Host for a hosted provider and a hosted consumer: no released
-  block, carrier frame, host stderr, diagnostic, record or engine file holds a pattern. The scan
-  sees the Nim heap under orc and arc; under refc the other checks run.
+  block, carrier frame, host stderr, diagnostic, record or engine file holds a pattern. The carrier
+  trace exempts exactly the `init`'s `wipe_audit`, the patterns themselves, and runs from before the
+  hosts start. The scan proves itself in-process and in an audit host (W-3: a copy left unwiped on
+  purpose makes the host exit 97), which tells an armed host from one never armed. The scan sees the
+  Nim heap under orc and arc; under refc the cases that need a marked route are skipped, and W-10
+  and `test_hosted_routes` C-10 check the refusal on the product paths, with no test hook. A refc
+  host under an orc Runtime is checked too.
 - **Not claimed** (also under "Properties not claimed"): a host ended by force, a refc build of the
-  Runtime or the Module Host, values reached through a ref in generated code under refc, the kit's
-  per-thread failure text until the thread's next kit call, and values held on the stack.
+  Runtime or the Module Host (it refuses instead), values reached through a ref in generated code
+  under refc, the kit's per-thread failure text until the thread's next kit call, and values held on
+  the stack.
 
 ### What Tier 4b step 4b-5 changes
 
@@ -368,8 +382,10 @@ reaches a scope until package-backed requests are presented to policy.
     and the peer's keep their claim.
   - **A refc build of the Runtime or the Module Host**: under refc, Nim's `Channel[T]` deep-copies
     each message into the channel's region and frees that copy inside the standard library,
-    unerased, and the Runtime and the host pass payload bytes in channel messages. What ships is orc
-    (`build_runtime_lib`, the packaged host).
+    unerased, and the Runtime and the host pass payload bytes in channel messages. So a refc build
+    never carries a marked payload: the Runtime refuses every marked route, and the host a marked
+    provider at `init` and a marked route at materialization (G277). IFC-0575 is claimed for orc
+    builds of the Runtime and the host. What ships is orc (`build_runtime_lib`, the packaged host).
   - **Generated code under refc** is claimed except for values reached through a ref (a recursive
     type): `wipeTyped` follows a ref only when it can see the ref is the value's alone, which only
     orc and arc can tell. Under orc a ref another owner shares is left to that owner.
@@ -535,14 +551,17 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   `establish_route` treats as path kinds without erasure, so a contract that marks a payload is
   refused on them as G244 did (G277); `engine.setWipeAuditForTests` (with `hostsup.setWipeAudit`)
   has every Module Host spawned afterwards sent the given patterns in its `init`.
-- The free scan (`base/wipeaudit`, marker `wipeaudit`) follows the same rule under its own define,
-  `lcnWipeAudit`, which only `tests/test_wipe.nims`, `tests/test_wipe_routes.nims` and the audit
-  builds of the Module Host and the kits those suites build set: `free` and `realloc` in all the C
-  of such a build go through a shim that searches each released block for the registered patterns.
-  It is inert until armed, by `armWipeAudit` in a test process or by the Runtime's `init` in an
-  audit host, which exits 97 at a graceful end that found a pattern. A host built without the define
-  treats an `init` that carries patterns as carrier loss (`test_module_host` H-15), and the flake's
-  `no-test-hooks` check also requires the marker in a probe built with `-d:lcnWipeAudit` alone.
+- The free scan (`base/wipeaudit`, marker `wipeaudit`) has its own define, `lcnWipeAudit`, which
+  only `tests/test_wipe.nims`, `tests/test_wipe_routes.nims` and the audit builds of the Module Host
+  and the kits those suites build set. It compiles only with `lcnTestHooks` (a compile error
+  otherwise), so an audit build is a test-hook build and the `no-test-hooks` probe covers it. `free`
+  and `realloc` in all the C of such a build go through a shim that searches each released block for
+  the registered patterns. It is inert until armed, by `armWipeAudit` in a test process or by the
+  Runtime's `init` in an audit host, which exits 97 at a graceful end that found a pattern. Only a
+  test-hook Runtime writes the `init`'s `wipe_audit`, and only after `setWipeAuditForTests`; nothing
+  under `logosd` calls it, so the audit cannot be armed in a deployment. A host built without the
+  define treats an `init` that carries the field, even an empty list, as carrier loss
+  (`test_module_host` H-15). The carrier trace exempts exactly that field.
 
 No deployment binary contains them.
 

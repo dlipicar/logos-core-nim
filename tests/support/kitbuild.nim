@@ -50,7 +50,7 @@ proc kitAuditFlags*(executable: bool): seq[string] =
   ## The audit build's switches (`tests/test_wipe.nims`); none otherwise. An
   ## executable exports the scan registry on Linux, for the libraries it loads.
   when kitAudit:
-    result = @["-d:lcnWipeAudit", "-d:useMalloc"]
+    result = @["-d:lcnTestHooks", "-d:lcnWipeAudit", "-d:useMalloc"]
     when defined(linux):
       if executable:
         result.add("--passL:-rdynamic")

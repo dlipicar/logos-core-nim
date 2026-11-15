@@ -31,6 +31,7 @@ when defined(posix):
   import ../src/logos_core/runtime/[engine, hostsup]
   import ../src/logos_core/abi/types
   import ../src/logos_core/base/clock
+  from ../src/logos_core/base/wipe import ChannelsMove, MarkedUnsupported
   import ../src/logos_core/cbor
   import ../src/logos_core/commitment
   import ../src/logos_core/crypto/blake3
@@ -1372,10 +1373,11 @@ when defined(posix):
       e.finish()
       check noHostLeft()
 
-    test "[IMPL-DECISION G244] [IMPL-DECISION G277] C-10 a route with a hosted end to a contract that marks a payload is made (G244 lifted, step 4b-3b); on a path kind without erasure it is refused MODULE_ERROR before readiness, as a direct one, and the host keeps no material":
+    test "[IMPL-DECISION G244] [IMPL-DECISION G277] C-10 a route with a hosted end to a contract that marks a payload is made (G244 lifted, step 4b-3b); on a path kind without erasure, and in a refc build, it is refused MODULE_ERROR before readiness, as a direct one, and the host keeps no material":
       # [SPEC INTERFACE l.388] The host erases marked payloads (step 4b-3b),
       # so a route with a hosted end is made; `erasureMissing` stands for a
-      # path kind without erasure, refused in `establish_route`.
+      # path kind without erasure, refused in `establish_route`. A refc build
+      # refuses every marked route itself (`ChannelsMove`), with no hook.
       var cfg = hosted()
       cfg.statics.add(checkStaticRegistration("vault", vaultTable()).tryGet)
       var c = cfg.serving()
@@ -1390,14 +1392,18 @@ when defined(posix):
         "v",
       )
       check e.started(consumerRecord(), "c").state == msReady
-      let made = c.run("rc establish_route " & hexOf(establishReq("k", vaultRoot)))
-      check codeIn(made) == Opt.some(ecOk)
-      check e.setErasureMissingForTests({rmLocalTransport}).isOk
+      when ChannelsMove:
+        let made = c.run("rc establish_route " & hexOf(establishReq("k", vaultRoot)))
+        check codeIn(made) == Opt.some(ecOk)
+        check e.setErasureMissingForTests({rmLocalTransport}).isOk
       let line = c.run("rc establish_route " & hexOf(establishReq("k2", vaultRoot)))
       check codeIn(line) == Opt.some(ecModule)
-      check "marked payloads are not supported on this path (INTERFACE §1.4.1)" in line
-      check e.setErasureMissingForTests({}).isOk
-      check e.routes().len == 1
+      check MarkedUnsupported in line
+      when ChannelsMove:
+        check e.setErasureMissingForTests({}).isOk
+        check e.routes().len == 1
+      else:
+        check e.routes().len == 0
       e.finish()
       check noHostLeft()
 

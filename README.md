@@ -73,7 +73,8 @@ The specs are being revised, so the work is ordered by how settled each area is
   and the code lcn-gen generates zero their copies of a payload the contract marks `_sensitive`, keep
   it and its value roots out of diagnostics, records and the carrier, and refuse a call whose
   decision would retain one; a contract that marks a payload is routed on every local path, hosted
-  ends included (I92). INTERFACE §1.4.1 and SEC-0057 are claimed, with the non-claims in
+  ends included, in an orc build (I92). A refc build of the Runtime or the host refuses it instead.
+  INTERFACE §1.4.1 and SEC-0057 are claimed for orc builds, with the non-claims in
   [docs/CONFORMANCE.md](docs/CONFORMANCE.md).
 - Not yet: the rest of Tier 4b (the rest of transported routes, `logosd`
   and `logosctl`, the Runtime's permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).

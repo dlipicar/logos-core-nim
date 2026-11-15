@@ -14,13 +14,16 @@ export kitbuild
 
 const repoDir = currentSourcePath().parentDir.parentDir.parentDir
 
-proc buildChild*(source, name, subdir: string, defines: seq[string] = @[]): string =
-  ## `source` (relative to the repository) as `build/<subdir>/<variant>/<name>`.
+proc buildChild*(
+    source, name, subdir: string, defines: seq[string] = @[], mm = kitMm
+): string =
+  ## `source` (relative to the repository) as `build/<subdir>/<variant>/<name>`;
+  ## `mm` another memory manager than the suite's (give it its own `subdir`).
   let dir = repoDir / "build" / subdir / kitVariant
   createDir(dir)
   let exe = dir / name
   let fresh = exe & ".tmp-" & $getCurrentProcessId()
-  var args = @[getCurrentCompilerExe(), "c", "--hints:off", "--mm:" & kitMm]
+  var args = @[getCurrentCompilerExe(), "c", "--hints:off", "--mm:" & mm]
   when defined(release):
     args.add("-d:release")
   when kitSanitizer.len > 0:
