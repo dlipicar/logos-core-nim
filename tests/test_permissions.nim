@@ -544,15 +544,16 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
     e.finish()
 
   test "[RUN-0891] [IMPL-DECISION G281] a resumption that fails after the settings applied is an execution failure; the settings stay applied":
-    var cfg = pconfig()
-    cfg.startupDeadline = PassingStop
-    let e = fixtureEngine(cfg)
+    let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     discard e.started(slow(), "s")
     check rc.writeSettings(e.target("s"), 1, @[setting(Quota, quota(1)), ambient()]).code ==
       ecOk
     check e.stateIs("s", msUnloaded)
     check rc.statusIs(e, "s", "applied")
+    # Only the resumption is bounded by the short deadline: the starts before
+    # it, the parity pass's authority among them, are not this case.
+    check e.setStartupDeadlineForTests(PassingStop).isOk
     slowGate.store(true)
     let r = e.recover("s", e.view("s").tryGet.execution.revision)
     check r.isOk and r.get.state == msError

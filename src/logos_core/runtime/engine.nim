@@ -8872,6 +8872,9 @@ when defined(lcnTestHooks):
     ## materialization fails with cause `q.generation` instead of connecting.
     ## `spoilNextTicketForTests`: the next materialization's Hello carries a
     ## ticket the provider never issued, which its Hello rejects.
+    ## `setStartupDeadlineForTests`: attempts that begin from now on have
+    ## `q.generation` milliseconds; the caller keeps it above the authority's
+    ## evaluation deadline (C34(a)), as the configuration would.
     case q.reason
     of "close-sessions":
       let r = st.route(q.route)
@@ -8886,6 +8889,9 @@ when defined(lcnTestHooks):
       q.reply.answer(Reply())
     of "spoil-ticket":
       st.spoilTicket = true
+      q.reply.answer(Reply())
+    of "startup-deadline":
+      st.cfg.startupDeadline = initDuration(milliseconds = int64(q.generation))
       q.reply.answer(Reply())
     of "hosted-endpoint":
       # [4b-3 plan §4.3 P-1, P-5] The path of `q.instance`'s hosted endpoint,
@@ -10782,6 +10788,20 @@ when defined(lcnTestHooks):
     e.call(
       Request(kind: rqTransportHook, reason: "hosted-endpoint", instance: instance)
     ).id
+
+  proc setStartupDeadlineForTests*(e: Engine, d: Duration): Result[void, EngineError] =
+    ## A test hook: the startup deadline of the attempts that begin from now
+    ## on, so a case can bound one start without binding the starts before it.
+    let r = e.call(
+      Request(
+        kind: rqTransportHook,
+        reason: "startup-deadline",
+        generation: uint64(d.inMilliseconds),
+      )
+    )
+    if r.error.isSome:
+      return err(r.error.get)
+    ok()
 
   proc spoilNextTicketForTests*(e: Engine): Result[void, EngineError] =
     ## A test hook (4b-2 plan §4.1): the next materialization of a transported
