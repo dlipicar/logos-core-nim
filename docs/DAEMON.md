@@ -61,7 +61,7 @@ marked field, as the library does (G277).
 
 - Every directory is owner-only. A session directory that group or other can access is refused, as is a
   path component that is a link where a directory is expected.
-- `lock` is an advisory lock (`lockf`). logosd holds it for its whole life. Every offline `logosctl`
+- `lock` is an advisory lock (`flock`). logosd holds it for its whole life. Every offline `logosctl`
   command that writes (`init`, `daemon config set`, `trust development`, `trust reestablish`,
   `trust evidence-keys rotate`) takes it, and is refused while logosd runs: "another logosd or an
   offline logosctl command holds this session" (exit 1). Offline reads take no lock.
@@ -71,6 +71,12 @@ marked field, as the library does (G277).
   never emptied.
 - `state/` holds the Runtime's persistent state (`state/store`, `state/modules`), the trust mark and the
   call-evidence store (`state/evidence/`, §9).
+- **The store is made by `init`, never by logosd.** `logosctl init` writes `state/store/runtime-state.cbor`
+  holding the session's Runtime id and no instance. A start that finds no such file is refused (exit 1):
+  "the Runtime state store is missing …; restore state/ from a backup, or make a new session with
+  logosctl init". The Runtime id is fixed for the session, and the system instance ids are fixed
+  strings, so a new store under the old id would give the old instances' addresses to unrelated ones
+  (RUNTIME l.2630-2632). A lost `state/` therefore needs a new session; a restored backup of it starts.
 
 ## 3. `logos-core-nim.daemon-config.v1`
 
@@ -376,7 +382,8 @@ At each start logosd reads the file and the mark and decides:
 
 A refusal is exit 1. logosd never creates a mark. `logosctl init` writes the file and its mark together;
 `logosctl trust reestablish --revision N` writes a mark from the current file when the owner names its
-revision (after a lost or restored `state/`). The trust file is read twice during start, and a change
+revision (after the mark alone was lost, or `state/` was restored from a backup; a lost `state/` also
+lost the Runtime's store and needs a new session, §2). The trust file is read twice during start, and a change
 between the reads is refused.
 
 **The development switch** (D27). `logosctl trust development on|off` writes the next revision with the
@@ -718,7 +725,8 @@ These are what the store does and does not protect (CA l.1320; CAP-0415):
 logosd has no remote transport, no listener and no provider export: nothing is reachable from another
 host (SEC l.524; R l.2830). The Runtime Control's remote methods answer as
 [HOST-CONFIG.md](HOST-CONFIG.md) says, after authorization (R l.1626): the two lists an empty page,
-`set_provider_export` INVALID_PARAMS, `set_remote_listener` MODULE_ERROR. `logosctl` calls none of them.
+`set_provider_export` INVALID_PARAMS, `set_remote_listener` MODULE_ERROR for enabling a listener and
+success for disabling one, with no record kept. `logosctl` calls none of them.
 
 ## 11. State protection
 
@@ -728,7 +736,8 @@ host (SEC l.524; R l.2830). The Runtime Control's remote methods answer as
   the evidence key (§8).
 - **Restore and rollback.** A restored older `trust.cbor` is refused by continuity (§6); a restored
   `state/` without its mark needs `trust reestablish`. A restored `state/` keeps the Runtime id, which is
-  in `daemon-config.cbor`.
+  in `daemon-config.cbor`. A lost `state/` is not recreated: logosd refuses to start without the store
+  (§2), and the owner makes a new session with `logosctl init`.
 - **Retirement** (`module retire`) keeps the instance's state directory: "retired; its state directory
   is kept".
 
@@ -750,7 +759,7 @@ data puts it in logosd's log.
 | Exit | logosd |
 |---|---|
 | 0 | stopped cleanly |
-| 1 | refused: arguments, session, lock, daemon-config, trust file, socket path, the call-evidence store |
+| 1 | refused: arguments, session, lock, a missing Runtime store, daemon-config, trust file, socket path, the call-evidence store |
 | 2 | the Runtime could not be created or started |
 | 3 | shutdown ended with an error |
 | 4 | the Module Loader failed (§15) |
@@ -809,9 +818,18 @@ If the Module Loader fails, the Runtime cannot realize anything again, and the p
 must end (R l.3823-3824). logosd:
 
 1. receives the Runtime's termination notice (it names the instances left unresolved) and logs
-   "the Module Loader failed; termination required for …";
+   "the Module Loader failed; termination required for …". The notice comes through the Host API's
+   termination hook on whichever thread the Runtime ran it, which signals the process
+   (`kill(getpid(), SIGUSR1)`), so logosd's signal thread takes it;
 2. requests shutdown; the wait returns with the loss;
-3. does not destroy the Runtime. It waits up to 10 s for every Module Host to be gone (their restart
-   locks under `work/hosts/`), releases the session lock, logs "exiting with 4", and exits 4.
+3. does not destroy the Runtime. It writes out the call-evidence store (§9), waits up to 10 s for every
+   Module Host to be gone (their restart locks under `work/hosts/`), logs "exiting with 4", and exits 4.
+   It keeps the session lock to the end: the kernel drops it with the process, so no offline writer or
+   second logosd holds the session while the orphaned in-process code still runs (R l.3824, l.2641).
+
+The Runtime sends the notice only when the failed Loader leaves in-process realizations. Under logosd
+that is always so: `orchestrator`, `logosctl` and, under capability-authority, `authority` are
+`direct_static`.
 
 A service manager restarts it (§13); the new process composes a new Runtime from the same session.
+Run without one, logosd stays stopped after exit 4 until someone starts it.
