@@ -247,13 +247,21 @@ proc vaultRoute(
     provider = Opt.some(providerAddress(e.view(instance).tryGet.providerId)),
   )
 
+type NoHandle = object of CatchableError ## a case's route has no handle
+
 proc vaultHandle(
     orch: ptr LogosRuntimeControlBinding, e: Engine, instance, key: string
 ): LogosRouteHandle =
   let r = orch.vaultRoute(e, instance, key)
   check r.code == ecOk
+  if r.code != ecOk:
+    raise newException(NoHandle, "establish_route: " & $r.code & " " & r.message)
   let (code, h) = orch.materialize(r.routesOf.routes[0].route, vaultRoot, vaultSchema)
   check code == ecOk
+  if code != ecOk:
+    # [IMPL] A call through the empty handle would crash the process, and with
+    # it the case's failed checks, which unittest2 prints at the suite's end.
+    raise newException(NoHandle, "materialize_route: " & $code)
   h
 
 proc ready(cfg: EngineConfig): (Engine, ptr LogosRuntimeControlBinding) =
@@ -1072,6 +1080,49 @@ when defined(posix):
 
   var savedErr: cint = -1
 
+  let crashSignals = [SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT]
+  var crashActions: array[5, Sigaction] ## theirs, while captured
+
+  proc replayCaptured() {.noconv.} =
+    ## [IMPL] The process ends while fd 2 is captured: fd 2 back, then the
+    ## capture, which holds why (a sanitizer's report, a crash's message, a
+    ## defect in a thread). Without it the log shows nothing of it (CI on
+    ## 8522a1f, the hosted W-7 case under MemorySanitizer). System calls only:
+    ## it runs in a signal handler and in a sanitizer's death.
+    let saved = savedErr
+    if saved < 0:
+      return
+    savedErr = -1
+    discard dup2(saved, 2)
+    const Head = "\n[test_wipe_routes] ending while stderr is captured; the capture:\n"
+    discard posix.write(2, cstring(Head), Head.len)
+    {.cast(gcsafe).}:
+      let src = posix.open(cstring(errPath), O_RDONLY)
+    if src >= 0:
+      var buf: array[4096, char]
+      while true:
+        let n = posix.read(src, addr buf[0], buf.len)
+        if n <= 0:
+          break
+        discard posix.write(2, addr buf[0], n)
+      discard posix.close(src)
+
+  proc onCrash(sig: cint) {.noconv.} =
+    ## The capture shown, then the signal's own handler: a fault recurs on
+    ## return, and `abort` raises again.
+    replayCaptured()
+    for i, s in crashSignals:
+      if s == sig:
+        discard sigaction(sig, crashActions[i], nil)
+
+  addExitProc(replayCaptured) # a `quit`, an unhandled defect in a thread
+  when defined(asan) or defined(msan) or defined(tsan):
+    proc sanitizerDeathCallback(
+      cb: proc() {.noconv.}
+    ) {.importc: "__sanitizer_set_death_callback", cdecl.}
+
+    sanitizerDeathCallback(replayCaptured) # its report, before it exits
+
   proc captureStderr() =
     ## From now on fd 2, which every host spawned inherits, goes to `errPath`.
     flushFile(stderr)
@@ -1079,12 +1130,19 @@ when defined(posix):
     let fd = posix.open(cstring(errPath), O_WRONLY or O_CREAT or O_TRUNC, 0o600)
     discard dup2(fd, 2)
     discard posix.close(fd)
+    var act: Sigaction
+    act.sa_handler = onCrash
+    discard sigemptyset(act.sa_mask)
+    for i, s in crashSignals:
+      discard sigaction(s, act, crashActions[i])
 
   proc restoreStderr(): bool =
     ## fd 2 back; whether nothing written meanwhile holds a pattern. What was
     ## written is shown on it.
     if savedErr < 0:
       return true
+    for i, s in crashSignals:
+      discard sigaction(s, crashActions[i], nil)
     flushFile(stderr)
     discard dup2(savedErr, 2)
     discard posix.close(savedErr)
@@ -1404,8 +1462,9 @@ when defined(posix):
         check noneTraced()
         check e.absentFrom()
         e.finish()
-        check restoreStderr()
+        # Every host ended, and so wrote all it will, before the capture is read.
         check graceful(since, 1)
+        check restoreStderr()
         check noHostLeft()
         if scans:
           check hits() == 0
@@ -1439,8 +1498,9 @@ when defined(posix):
         check noneTraced()
         check e.absentFrom()
         e.finish()
-        check restoreStderr()
+        # Every host ended, and so wrote all it will, before the capture is read.
         check graceful(since, 2)
+        check restoreStderr()
         check noHostLeft()
         if scans:
           check hits() == 0
@@ -1467,8 +1527,9 @@ when defined(posix):
         check e.authorityBound()[0]
         e.retention(orch, HVault)
         e.finish()
-        check restoreStderr()
+        # Every host ended, and so wrote all it will, before the capture is read.
         check graceful(since, 1)
+        check restoreStderr()
         if scans:
           check hits() == 0
       else:
