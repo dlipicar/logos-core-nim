@@ -1,0 +1,123 @@
+fact loop:wsastartup 0
+fact loop:pid 2012
+fact loop:a.register_accepted ok
+fact loop:a.register_client ok
+fact loop:a.echo_1B ok
+fact loop:a.echo_1B_ms 0
+fact loop:a.echo_64K ok
+fact loop:a.echo_64K_ms 0
+fact loop:a.echo_8M ok
+fact loop:a.echo_8M_ms 8
+fact loop:a.signal_fired 200
+fact loop:a.signal_seen 5
+fact loop:a.signal_final_seen true
+fact loop:a.acceptex_listen 0
+fact loop:a.acceptex_register_listener ok
+fact loop:a.acceptex_post 0
+fact loop:a.acceptex_connect wouldblock
+fact loop:a.acceptex_completed ok
+fact loop:a.acceptex_update_context 0
+fact loop:a.acceptex_peerpid_is_self true
+fact loop:a.acceptex_register_accepted ok
+fact loop:a.acceptex_socket_reads true
+fact loop:a.close_with_pending_recv err=1236
+fact loop:a.connectex_unbound stage=2 r=10022
+fact loop:a.connectex_bind_client 0
+fact loop:a.connectex_bound stage=3 r=0
+fact loop:a.connectex_completed ok
+fact loop:b.zero_recv_post 0
+fact loop:b.zero_recv_waits_without_data true
+fact loop:b.zero_recv_completes_on_data ok bytes=0
+fact loop:b.data_still_queued_after_zero_recv 5
+fact loop:b.zero_recv_completes_on_eof ok
+fact loop:b.recv_after_eof 0
+fact loop:b.fill_stopped 10035
+fact loop:b.fill_queued_bytes 131072
+fact loop:b.zero_send_post 0
+fact loop:b.zero_send_waits_when_full false
+fact loop:b.zero_send_after_drain ok
+fact loop:c.echo_1B ok
+fact loop:c.echo_1B_pairs_ok 1
+fact loop:c.echo_1B_ms 0
+fact loop:c.echo_1B_wakeups 5
+fact loop:c.echo_8M.signal_fired 200
+fact loop:c.echo_8M.signal_seen 2
+fact loop:c.echo_8M.signal_final_seen true
+fact loop:c.echo_8M ok
+fact loop:c.echo_8M_pairs_ok 1
+fact loop:c.echo_8M_ms 19
+fact loop:c.echo_8M_wakeups 168
+fact loop:c.scale200_1K ok
+fact loop:c.scale200_1K_pairs_ok 200
+fact loop:c.scale200_1K_ms 7
+fact loop:c.scale200_1K_wakeups 822
+fact loop:d.afd_open ok
+fact loop:d.afd_register ok
+fact loop:d.base_is_socket true
+fact loop:d.poll_post 0
+fact loop:d.recv_poll_waits_without_data true
+fact loop:d.recv_poll_on_data ok events=0x01
+fact loop:d.recv_poll_level_triggered true
+fact loop:d.send_poll_when_empty ok events=0x04
+fact loop:d.fill_queued_bytes 131072
+fact loop:d.send_poll_waits_when_full true
+fact loop:d.send_poll_after_drain ok events=0x04 drained=131072
+fact loop:d.poll_on_peer_shutdown ok events=0x08
+fact loop:d.poll_on_local_close ok events=0x20
+fact loop:d.poll_on_peer_close ok events=0x08
+fact loop:d.echo_1B ok
+fact loop:d.echo_1B_pairs_ok 1
+fact loop:d.echo_1B_ms 0
+fact loop:d.echo_1B_wakeups 4
+fact loop:d.echo_8M.signal_fired 200
+fact loop:d.echo_8M.signal_seen 2
+fact loop:d.echo_8M.signal_final_seen true
+fact loop:d.echo_8M ok
+fact loop:d.echo_8M_pairs_ok 1
+fact loop:d.echo_8M_ms 13
+fact loop:d.echo_8M_wakeups 130
+fact loop:d.scale200_1K ok
+fact loop:d.scale200_1K_pairs_ok 200
+fact loop:d.scale200_1K_ms 4
+fact loop:d.scale200_1K_wakeups 800
+fact loop:d.scale200_256K ok
+fact loop:d.scale200_256K_pairs_ok 200
+fact loop:d.scale200_256K_ms 135
+fact loop:d.scale200_256K_wakeups 1200
+fact loop:d.two_polls_send_completes ok events=0x04
+fact loop:d.two_polls_recv_still_waits true
+fact loop:d.two_polls_recv_completes ok events=0x01
+fact loop:d.cancel_call 0
+fact loop:d.cancel_completion err=995
+fact loop:d.accept_poll_waits true
+fact loop:d.accept_poll_on_connect ok events=0x80
+fact loop:d.accept_after_poll ok
+fact loop:c.accept_eventselect 0
+fact loop:c.connect_eventselect 0
+fact loop:c.connect_call wouldblock
+fact loop:c.accept_event true
+fact loop:c.accept_bits 0x08 err=0
+fact loop:c.accept_after_event ok
+fact loop:c.connect_event true
+fact loop:c.connect_bits 0x12 err=0
+fact loop:c.connect_missing_path 10061
+fact loop:d.connect_call wouldblock
+fact loop:d.connect_poll ok events=0x04
+fact loop:inherit.parent_register_listener ok
+fact loop:inherit.mark_inheritable 0
+fact loop:inherit.spawn true
+fact loop:child.register_inherited_listener ok
+fact loop:child.afd_open ok
+fact loop:child.base_is_socket true
+fact loop:child.accept_poll_post 0
+fact loop:child.accept_poll ok events=0x80
+fact loop:child.accept ok
+fact loop:child.peerpid_is_parent true
+fact loop:child.recv_poll ok events=0x01
+fact loop:child.recv 1 byte0=42
+fact loop:inherit.child_exit 0
+fact loop:c.scale200_256K ok
+fact loop:c.scale200_256K_pairs_ok 200
+fact loop:c.scale200_256K_ms 136
+fact loop:c.scale200_256K_wakeups 1307
+fact loop:done 1
