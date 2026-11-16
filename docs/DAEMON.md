@@ -113,6 +113,7 @@ lcn.daemon_config = {
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
   ? permissions: lcn.dc_permissions,
+  ? state_transfers: [* lcn.app_state_transfer],
   ? ctl: lcn.dc_ctl,
   ? test_hooks: lcn.dc_test_hooks,
 }
@@ -228,6 +229,7 @@ the meaning those pages give them.
 | `call_audit` | `call_records` and `evidence` as in the host configuration; `store` (§9) needs `evidence`. |
 | `routing`, `transport` | As in the host configuration. |
 | `permissions` | `profile`: absent selects the reference profile `logos-core-nim.permission-profile.v1`, since logosd always selects one; `initial`: the operator instances' settings. An entry naming a system instance or module is refused: logosd provisions those itself (§5). |
+| `state_transfers` | As in the host configuration: an operator instance's replacement continues from its state, applied once at the next start (§11, "Replacing an instance"). Neither side may be a system instance. |
 | `ctl` | The socket (§7): `socket_dir` (absolute; default `<session>/run`), `workers` (1–32, default 4), `idle_timeout_ms` (100–600000, default 30000). |
 | `test_hooks` | Refused by a packaged logosd (§6). |
 
@@ -240,7 +242,9 @@ reported with the field it concerns, and logosd exits 1.
 2. Names and strategies: no operator instance uses a reserved id (`orchestrator`, `authority`,
    `logosctl`, `logos_module_loader`) and no operator module a reserved name (`logos_module_loader`,
    `logos_capability_authority`, `logosctl`, `lcn_orchestrator`); no `direct_static`; `ordering` and
-   `orchestration.start` name operator instances, each once; `permissions.initial` names no system one.
+   `orchestration.start` name operator instances, each once; `permissions.initial` names no system one;
+   `state_transfers` names no system instance on either side, and no `orchestration.start` entry is
+   the source of a transfer (the transfer retires it).
 3. The development switch: `allow-all` and `test_hooks` need it (§6).
 4. `ctl`'s bounds; `call_audit.store` needs `call_audit.evidence`; the evidence key's file, its `kid`
    and its binding name this Runtime (§9).
@@ -252,7 +256,7 @@ reported with the field it concerns, and logosd exits 1.
 logosd hands one `logos-core-nim.app-config.v1` value to `logos_runtime_create`. It supplies the bootstrap
 inputs through it: `work_dir`, `state_root`, `store_dir` and `endpoint_dir` from the session layout, the
 Runtime id, the instances of §4, the merged policy of §5, and the permission settings of §5. `routing`,
-`transport` and `call_audit.call_records`/`evidence` pass through unchanged.
+`transport`, `state_transfers` and `call_audit.call_records`/`evidence` pass through unchanged.
 
 ## 4. Composition and bootstrap
 
@@ -602,6 +606,9 @@ set`, `logosctl trust …`, or the owner's own edits, each applying at the next 
   the trust file and its switch, and the evidence key.
 - An `issue` rule in the policy is protected input too. Under it a module may issue grants while the
   daemon runs (CA l.752), within what the rule allows; that is the only change of authority at run time.
+- **State transfers** are the same kind of input (decision 9): an entry in `state_transfers`, set with
+  `daemon config set` while logosd is stopped, authorizes one replacement instance to take another's
+  state at the next start (§11). No socket command and no Runtime Control method moves state.
 
 ## 9. Call evidence
 
@@ -740,6 +747,29 @@ success for disabling one, with no record kept. `logosctl` calls none of them.
   (§2), and the owner makes a new session with `logosctl init`.
 - **Retirement** (`module retire`) keeps the instance's state directory: "retired; its state directory
   is kept".
+- **Replacing an instance** (an upgrade under a new instance id; DECISIONS G92 as re-decided
+  2026-11-15, I96). An operator instance's state stays with its state assignment, and a new instance
+  starts empty. To carry `a`'s state over to a new instance `b`:
+  1. While logosd runs, read `a`'s configuration (`logosctl config get a`) if `b` should keep it, and
+     turn it into `b`'s `provisioned_configuration` outside Core: the transfer discards `a`'s
+     ([HOST-CONFIG.md](HOST-CONFIG.md), "Keeping a configuration across an upgrade"). Then stop
+     logosd, and back up `state/` (`state/store` and `state/modules` together). `move` takes no
+     snapshot: the backup is the rollback.
+  2. With `daemon config get`, edit the configuration: add `b` to `modules` with its own
+     `state_assignment`; remove `a` from `modules`, from `orchestration.start` and from anything
+     else naming it; add `{from: "a", to: "b", mode: "move"}` to `state_transfers`; name `b` where
+     `a` was. Set it with `daemon config set`.
+  3. Start logosd. Before anything starts, the Runtime retires `a`, creates `b` and renames `a`'s
+     directory under `state/modules` to `b`'s; afterwards `logosctl module ls` lists `b` and not `a`
+     (the Runtime's own diagnostic is not printed in logosd's log). The orchestrator then starts `b` like any operator instance, under the policy's rules
+     for `b`: a grant or rule naming `a` does not cover it.
+
+  An applied entry changes nothing at later starts; remove it when convenient. A refused transfer
+  fails the start with nothing changed, and the log names the reason ([HOST-CONFIG.md](HOST-CONFIG.md),
+  "State transfer to a replacement instance"). `a` must have stopped cleanly or the daemon's last run
+  must have ended: a hosted `a` whose Module Host of an earlier run still holds its restart lock is
+  refused until that process is gone; find it with `lsof <file>` or `fuser <file>` on the file the
+  message names, end it, and start again. A `move` reads nothing: the files are renamed in place.
 
 ## 12. Diagnostics
 

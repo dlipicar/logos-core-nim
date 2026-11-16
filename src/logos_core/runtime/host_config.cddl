@@ -19,6 +19,7 @@ lcn.app_config = {
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
   ? permissions: lcn.app_permissions,
+  ? state_transfers: [* lcn.app_state_transfer],
 }
 
 lcn.app_runtime = {
@@ -123,6 +124,23 @@ lcn.app_initial_settings = {
 lcn.app_permission_setting = {
   permission: tstr .size (1..128),
   constraints: bstr .size (1..1048576),
+}
+
+; One state transfer (RUNTIME l.3546-3553; DECISIONS I96, G305-G307),
+; applied once, when start bootstraps, before anything starts. to is a listed
+; instance new to the Runtime with its own state_assignment; from is an
+; instance the Runtime retains or retired, not listed in modules. from is
+; stopped and retired in the same write that creates to, which then gets
+; from's state: move renames from's state directory to to's; copy copies it
+; (at most max_bytes, default 1 GiB) and leaves it as it was. The entry is the
+; deployment's assertion that to can use that state: the Runtime infers none
+; from names, versions or contracts (RUN-0999). docs/HOST-CONFIG.md, "State
+; transfer".
+lcn.app_state_transfer = {
+  from: lcn.app_instance_id,
+  to: lcn.app_instance_id,
+  mode: "move" / "copy",
+  ? max_bytes: uint64,
 }
 
 ; logos.runtime.module_instance_id (RUNTIME §9.2)

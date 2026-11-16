@@ -76,6 +76,10 @@ const
   DefaultEvaluationDeadline* = initDuration(seconds = 5)
     ## [IMPL] how long an operation waits for its decisions (I85)
   DefaultListLimit* = 100 ## [SPEC RUNTIME l.3379] a list page without `limit`
+  DefaultTransferBytes* = 1'u64 shl 30
+    ## [IMPL-DECISION I96; BCP l.369-370] a `copy` transfer's `max_bytes`
+    ## when the entry gives none: 1 GiB
+  MaxTransferBytes* = 1'u64 shl 40 ## [IMPL] the largest `max_bytes`: 1 TiB
   MaxEventWorkers* = 64
     ## [IMPL-DECISION G178] threads that run Runtime Control event handlers,
     ## apart from the lifecycle, call and evaluation workers, so a slow
@@ -262,6 +266,22 @@ type
     configuration*: Opt[AcceptedConfiguration]
       ## [SPEC CONFIG §2, §4] the accepted declaration, with this instance's
       ## provisioned value if any (G141); its digest is `record.configuration`
+
+  TransferMode* = enum
+    ## [IMPL-DECISION I96; G305] How a transfer fills the replacement's fresh
+    ## state assignment from the source's preserved storage (RUNTIME l.3550).
+    tmMove = "move" ## the source's directory is renamed to the target's
+    tmCopy = "copy" ## the source's directory is copied and left as it was
+
+  StateTransfer* = object
+    ## [SPEC RUNTIME l.3546-3553; IMPL-DECISION I96; G306] One entry of the
+    ## protected `state_transfers` input: the deployment's authorization of a
+    ## migration from `source` (retained or retired, not configured) into
+    ## `target` (configured, new to the Runtime), applied once by bootstrap.
+    source*: string
+    target*: string
+    mode*: TransferMode
+    maxBytes*: uint64 ## `copy` only; 0: the default (`DefaultTransferBytes`)
 
   AuthorityPolicy* = object
     ## [SPEC RUNTIME §9; plan §2.3, §2.13] The `capability-authority` policy:
@@ -759,6 +779,7 @@ type
     reason*: string
     config*: EngineConfig
     bootstrap*: seq[BootstrapInstance] ## rqBootstrap; `instance` names orchestration
+    transfers*: seq[StateTransfer] ## rqBootstrap: the `state_transfers` entries [I96]
     rc*: RcCall
     route*: string
     root*: Digest ## rqMaterialize: `expected_contract_root`

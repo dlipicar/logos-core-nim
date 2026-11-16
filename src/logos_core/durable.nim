@@ -102,6 +102,15 @@ elif defined(windows):
 
 # Directories ----------------------------------------------------------------------
 
+proc syncDir*(dir: string): Result[void, string] =
+  ## Flushes `dir` itself, so a rename or removal in it survives a crash
+  ## (Tier 4b step 4b-7's state transfer). Windows: nothing to flush; a rename
+  ## there is made durable by `MOVEFILE_WRITE_THROUGH`.
+  when defined(posix):
+    flushDir(dir)
+  else:
+    ok()
+
 proc ensurePrivateDir*(path: string): Result[void, string] =
   ## [IMPL] Creates `path` with mode 0700 when it is missing (its parents get
   ## the usual mode). An existing directory that group or other may access is

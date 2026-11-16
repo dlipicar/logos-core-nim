@@ -526,7 +526,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
       return answer(ecModule, "cannot wire the Capability Authority: " & error)
     h.wired = cast[cstring](allocShared0(dir.len + 1))
     copyMem(h.wired, unsafeAddr dir[0], dir.len)
-  let r = e.bootstrap(instances, c.orchestration)
+  let r = e.bootstrap(instances, c.orchestration, c.transfers)
   if r.isErr:
     # [IMPL-DECISION G190, interim] A failed start stops and destroys nothing
     # (RUN-0737).

@@ -570,6 +570,64 @@ when defined(posix):
       check heldLocks(c.s.workDir).len == 0
       check c.lockFree
 
+    test "[RUN-0998] [RUN-0925] [RUN-1000] [IMPL-DECISION I96] a hosted operator module replaced by state_transfers move: the next start retires it and gives its directory to the replacement, which the orchestrator starts":
+      let c = newCase()
+      var dc = defaultDaemonConfig("assigned-by-init")
+      dc.runtime.module_host = Opt.some(hostExe)
+      dc.runtime.module_host_env = Opt.some(@SanitizerEnv)
+      var old = chatterModule()
+      old.state_assignment = Opt.some("chatter-1-state")
+      dc.modules = Opt.some(@[old])
+      dc.orchestration =
+        Opt.some(LcnDcOrchestration(start: Opt.some(@[ChatterInstance])))
+      check c.initWith(dc).code == 0
+      var d = c.start()
+      c.expectReady(d)
+      check c.reaches(ChatterInstance, "ready")
+      check d.stopped == 0
+      check hostsGone()
+      let fromDir = c.s.modulesDir / "chatter-1-state"
+      let toDir = c.s.modulesDir / "chatter-2-state"
+      check dirExists(fromDir)
+      writeFile(fromDir / "data", "chatter-1's state")
+      # The operator's edit, offline: the replacement instead of the old one.
+      c.editConfig(
+        proc(dc: var LcnDaemonConfig) =
+          var m = chatterModule()
+          m.instance = "chatter-2"
+          m.state_assignment = Opt.some("chatter-2-state")
+          dc.modules = Opt.some(@[m])
+          dc.orchestration =
+            Opt.some(LcnDcOrchestration(start: Opt.some(@["chatter-2"])))
+          dc.state_transfers = Opt.some(
+            @[
+              LcnAppStateTransfer(
+                `from`: ChatterInstance,
+                to: "chatter-2",
+                mode: LcnAppStateTransferModeChoice(
+                  kind: LcnAppStateTransferModeChoiceKind.Move
+                ),
+              )
+            ]
+          )
+      )
+      check c.ctl("daemon", "config", "check").code == 0
+      d = c.start("logosd2")
+      c.expectReady(d)
+      check c.reaches("chatter-2", "ready")
+      check c.state(ChatterInstance) == ""
+      check not dirExists(fromDir)
+      check readFile(toDir / "data") == "chatter-1's state"
+      check d.stopped == 0
+      check hostsGone()
+      # Applied once: the entry left in place changes nothing at the next start.
+      d = c.start("logosd3")
+      c.expectReady(d)
+      check c.reaches("chatter-2", "ready")
+      check "state transfer:" notin d.errText
+      check readFile(toDir / "data") == "chatter-1's state"
+      check d.stopped == 0
+
     test "[BCP-0036] [BCP-0049] [BCP-0050] a selected profile that fails (run/ep made unwritable): the hosted start fails, no Module Host runs and nothing realizes the module elsewhere; usable again, it starts":
       let c = newCase()
       check c.initHosted(start = false).code == 0

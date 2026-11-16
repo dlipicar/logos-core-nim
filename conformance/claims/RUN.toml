@@ -53,11 +53,11 @@ default = "claimed"
 "RUN-1024" = "deferred:tier-4b"
 "RUN-1025" = "deferred:tier-4b"
 # State transfer to a replacement instance (G92 as re-decided 2026-11-15: a fresh assignment filled
-# by copy or move; Tier 4b step 4b-7). RUN-0999 and RUN-1001 need no transfer: claimed by tests
-# (I89, 4b-1d).
-"RUN-0925" = "deferred:tier-4b"
-"RUN-0998" = "deferred:tier-4b"
-"RUN-1000" = "deferred:tier-4b"
+# by copy or move): RUN-0925 and RUN-0998 are claimed with Tier 4b step 4b-7a (I96). RUN-0999 and
+# RUN-1001 need no transfer: claimed by tests (I89, 4b-1d). RUN-1000's ordinary package acceptance
+# waits for the Package Manager (Tier 5); execution authorization, initialization and readiness of a
+# replacement are tested ([RUN-1000] in tests/test_logosd.nim).
+"RUN-1000" = "deferred:tier-5"
 # Remote transport, facades, enrollment, listeners and exports (Tier 5).
 "RUN-0092" = "deferred:tier-5"
 "RUN-0286" = "deferred:tier-5"

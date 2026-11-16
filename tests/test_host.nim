@@ -14,7 +14,8 @@ import
   ../src/logos_core/runtime/[engine, host, host_config, host_config_types, rc_types]
 from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
 from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
-from ../src/logos_core/runtime/plumbing import LoaderFaults
+from ../src/logos_core/runtime/plumbing import
+  LoaderFaults, StateTransfer, TransferMode, MaxTransferBytes
 import ../src/logos_core/permissions
 from ../src/logos_core/crypto/slhdsa import Seed, keyPairFromSeeds
 from std/posix import Mode, chmod
@@ -808,6 +809,89 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c = baseConfig()
     c.modules[1].instance = "p-" & repeat("0a", 16) & "-2"
     check parse(c).rejects("Runtime-assigned name form")
+
+  test "[IMPL-DECISION I96] [IMPL-DECISION G306] state_transfers: between a source not listed and a listed target with its own assignment, with a store and a state root; move only in this build":
+    proc transfer(
+        source, target: string, copy = false, maxBytes = Opt.none(uint64)
+    ): LcnAppStateTransfer =
+      LcnAppStateTransfer(
+        `from`: source,
+        to: target,
+        mode: LcnAppStateTransferModeChoice(
+          kind: (
+            if copy: LcnAppStateTransferModeChoiceKind.Copy
+            else: LcnAppStateTransferModeChoiceKind.Move
+          )
+        ),
+        max_bytes: maxBytes,
+      )
+
+    proc withTransfers(t: seq[LcnAppStateTransfer]): LcnAppConfig =
+      result = baseConfig()
+      result.runtime.store_dir = Opt.some(work / "store")
+      result.runtime.state_root = Opt.some(work / "state")
+      result.modules[1].state_assignment = Opt.some("meter-2-state")
+      result.state_transfers = Opt.some(t)
+
+    let ok1 = parse(withTransfers(@[transfer("meter-0", "meter-1")])).tryGet
+    check ok1.transfers ==
+      @[StateTransfer(source: "meter-0", target: "meter-1", mode: tmMove)]
+    # The schema: mode is required, with no default.
+    let noMode = cborMap((cbor("from"), cbor("meter-0")), (cbor("to"), cbor("meter-1")))
+    let v = toCbor(withTransfers(@[transfer("meter-0", "meter-1")]))
+    var entries: seq[CborEntry]
+    for e in v.entries:
+      if e.key == cbor("state_transfers"):
+        entries.add((e.key, cborArray(noMode)))
+      else:
+        entries.add(e)
+    check parseValue(cborMap(entries)).rejects("does not match lcn.app_config")
+    check parse(withTransfers(@[])).rejects("state_transfers is present but empty")
+    var noStore = withTransfers(@[transfer("meter-0", "meter-1")])
+    noStore.runtime.store_dir = Opt.none(string)
+    check parse(noStore).rejects("needs store_dir and state_root")
+    var noRoot = withTransfers(@[transfer("meter-0", "meter-1")])
+    noRoot.runtime.state_root = Opt.none(string)
+    check parse(noRoot).rejects("needs store_dir and state_root")
+    let form = "m-" & repeat("0a", 16) & "-1"
+    for (t, fragment) in [
+      (transfer(LoaderInstanceId, "meter-1"), "reserved Module Loader"),
+      (transfer(form, "meter-1"), "Runtime-assigned name form"),
+      (transfer("meter-1", "meter-1"), "same instance"),
+      (transfer("orch", "meter-1"), "from is listed in modules"),
+      (transfer("meter-0", "meter-9"), "to is not listed in modules"),
+      (transfer("meter-0", "orch"), "to has no state_assignment"),
+      (transfer("meter-0", "meter-1", maxBytes = Opt.some(5'u64)), "for copy only"),
+    ]:
+      check parse(withTransfers(@[t])).rejects(fragment)
+    var two = withTransfers(@[])
+    two.modules.add(staticModule("meter-3", "meter_module", "meter"))
+    two.modules[2].state_assignment = Opt.some("meter-3-state")
+    two.state_transfers =
+      Opt.some(@[transfer("x", "meter-1"), transfer("x", "meter-3")])
+    check parse(two).rejects("x is the source of two entries")
+    two.state_transfers =
+      Opt.some(@[transfer("x", "meter-1"), transfer("y", "meter-1")])
+    check parse(two).rejects("meter-1 is the target of two entries")
+    # A source that is also a target is a listed instance: no chain.
+    two.state_transfers =
+      Opt.some(@[transfer("x", "meter-1"), transfer("meter-1", "meter-3")])
+    check parse(two).rejects("from is listed in modules")
+    # Copy bounds, checked by every build; copy itself is refused until 7b.
+    for n in [0'u64, MaxTransferBytes + 1]:
+      check decoded(withTransfers(@[transfer("meter-0", "meter-1", true, Opt.some(n))]))
+        .rejects("max_bytes must be 1 to")
+    let copy =
+      withTransfers(@[transfer("meter-0", "meter-1", true, Opt.some(MaxTransferBytes))])
+    check decoded(copy).tryGet.transfers[0].maxBytes == MaxTransferBytes
+    check parse(copy).rejects("copy is not supported yet")
+    # Never the authority instance, wired to its directory before bootstrap.
+    var ca = caConfig()
+    ca.modules[1].state_assignment = Opt.some("meter-2-state")
+    ca.state_transfers = Opt.some(@[transfer("ca", "meter-1")])
+    check parse(ca).rejects("names the Capability Authority instance")
+    ca.state_transfers = Opt.some(@[transfer("meter-0", "ca")])
+    check parse(ca).rejects("names the Capability Authority instance")
 
   test "[IMPL] [IMPL-DECISION G272] module_host is an absolute regular executable, of this user or root and writable by its owner only; module_host_env names each variable once; a hosted record needs module_host; no direct routing rule names a hosted module":
     # Tier 4b step 4b-3 (plan §2.2, §3, R4; DECISIONS G264).

@@ -25,6 +25,7 @@ lcn.daemon_config = {
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
   ? permissions: lcn.dc_permissions,
+  ? state_transfers: [* lcn.app_state_transfer],
   ? ctl: lcn.dc_ctl,
   ? test_hooks: lcn.dc_test_hooks,
 }

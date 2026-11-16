@@ -403,6 +403,42 @@ suite "run.store: the Runtime state store [IMPL]":
       check fileExists(dir / name)
     s.close()
 
+  test "[IMPL-DECISION I96] a transfer record round-trips; a malformed one is refused":
+    let r = XferRecord(
+      source: "a",
+      sourceAssignment: "a-state",
+      mode: tmMove,
+      bytes: 0,
+      files: 0,
+      epoch: 1_800_000_000'u64,
+      at: 1_800_000_123'u64,
+    )
+    let bytes = xferBytes(r).tryGet
+    check xferOf(bytes).tryGet == r
+    var c = r
+    c.mode = tmCopy
+    c.bytes = 4096
+    c.files = 3
+    check xferOf(xferBytes(c).tryGet).tryGet == c
+    check xferOf([0xA0'u8]).isErr
+    check xferOf(bytes[0 ..< bytes.len - 1]).isErr
+    var empty = LcnXferRecord.decode(bytes).tryGet
+    empty.`from` = ""
+    check xferOf(encodeCbor(toCbor(empty))).isErr
+
+  test "[IMPL-DECISION I96] a retired instance's transfer record is kept at open; its other records are reaped":
+    let dir = freshDir()
+    var (s, _) = openStore(dir).tryGet
+    s.putSide(XferSide, "gone", [1'u8]).tryGet
+    s.putSide("cfg", "gone", [2'u8]).tryGet
+    s.putSide(XferSide, "stray", [3'u8]).tryGet
+    let reaped = s.reapSides(initHashSet[string](), toHashSet(["gone"])).tryGet
+    check "gone" in reaped and "stray" in reaped
+    check s.getSide(XferSide, "gone").tryGet == Opt.some(@[1'u8])
+    check s.getSide("cfg", "gone").tryGet.isNone
+    check s.getSide(XferSide, "stray").tryGet.isNone
+    s.close()
+
   test "[IMPL-DECISION G160] declaration facts leave out local_path and reason text":
     let a = dynRecord("/opt/a/sensor.so", Opt.some("to measure"))
     let b = dynRecord("/srv/b/sensor.so")

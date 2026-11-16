@@ -81,6 +81,10 @@ proc hostedModule(instance: string, module = "svc"): string =
     "/lib" & module & ".so\", \"hash\": " & Zero32 &
     ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}}}"
 
+proc withState(module, assignment: string): string =
+  ## A module entry of `hostedModule` or `staticModule` with a state assignment.
+  module[0 ..< module.len - 1] & ", \"state_assignment\": \"" & assignment & "\"}"
+
 proc staticModule(instance, module: string): string =
   "{\"instance\": \"" & instance & "\", \"module\": \"" & module &
     "\", \"implementation\": {\"strategy\": \"direct_static\", \"binding\": \"b\"}}"
@@ -263,6 +267,27 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
               inst & ", \"permissions\": [" & ambient & "]}]}"
           )
         )
+
+  test "[IMPL-DECISION I96] check 2: state_transfers names no system instance, and no orchestration.start entry is a transfer source":
+    let mods =
+      "\"modules\": [" & withState(hostedModule("b"), "b-state") & ", " &
+      hostedModule("c") & "]"
+    proc transfers(source, target: string): string =
+      ", \"state_transfers\": [{\"from\": \"" & source & "\", \"to\": \"" & target &
+        "\", \"mode\": \"move\"}]"
+
+    check checked(dcText(extra = mods & transfers("a", "b"))).isOk
+    for id in [OrchestratorInstance, AuthorityInstance, CtlInstance, LoaderInstanceId]:
+      checkpoint id
+      check refusal(dcText(extra = mods & transfers(id, "b"))) ==
+        "state_transfers: " & id & " to b names the system instance " & id
+      check refusal(dcText(extra = mods & transfers("a", id))) ==
+        "state_transfers: a to " & id & " names the system instance " & id
+    check refusal(
+      dcText(
+        extra = mods & transfers("c", "b") & ", \"orchestration\": {\"start\": [\"c\"]}"
+      )
+    ) == "orchestration.start: c is a state_transfers source, retired at start"
 
   test "check 3: allow-all needs the development switch":
     let allowAll = dcText(policy = "{\"kind\": \"allow-all\"}")
@@ -486,6 +511,32 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
     check o.ordering.get.len == 1 and o.resync_ms == Opt.some(2000'u32)
     check o.restart.isSome and o.overrides.get.len == 1
     check p.config.store.isSome
+
+  posixTest "[IMPL-DECISION I96] [IMPL-DECISION G306] state_transfers pass through unchanged; the library's own checks apply":
+    let s = Session(dir: freshDir())
+    let host = getAppFilename()
+    proc text(mode: string): string =
+      dcText(
+        extra =
+          "\"modules\": [" & withState(hostedModule("b"), "b-state") &
+          "], \"state_transfers\": [{\"from\": \"a\", \"to\": \"b\", \"mode\": \"" & mode &
+          "\"}]"
+      )
+        .replace(
+          "{\"runtime_instance_id\": \"rt-1\"}",
+          "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & host & "\"}",
+        )
+
+    let p = prepareDaemon(s, dcBytes(text("move")), prod).get
+    let t = p.composition.appConfig.state_transfers.get
+    check t.len == 1
+    check t[0].`from` == "a" and t[0].to == "b"
+    check t[0].mode.kind == LcnAppStateTransferModeChoiceKind.Move
+    # [I96, part 7a] copy is the library's refusal, the fifth check.
+    check prepareDaemon(s, dcBytes(text("copy")), prod).error ==
+      "the derived host configuration is refused: state_transfers: a to b: copy is not supported yet"
+    let none = prepareDaemon(s, dcBytes(dcText()), prod).get
+    check none.composition.appConfig.state_transfers.isNone
 
   posixTest "the fifth check: a derived configuration the library refuses is reported as such":
     let s = Session(dir: freshDir())

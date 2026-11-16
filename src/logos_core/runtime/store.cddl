@@ -129,3 +129,21 @@ lcn.rs_permission_setting = {
   permission: tstr .size (1..128),
   constraints: bstr .size (1..1048576),
 }
+
+; [IMPL-DECISION I96] where a transferred instance's state came from (side
+; record kind `xfer`, keyed by the replacement): the deployment's
+; state_transfers entry as applied (DECISIONS G305, G306). Written before the
+; commit that creates the replacement; kept while the replacement is known or
+; retired (RUNTIME l.3588); reaped at open only for an id neither is (a crash
+; before the commit). bytes and files: copied, or 0 for a move, which reads
+; nothing. epoch: the revision epoch of the start that applied it; at: Unix
+; seconds.
+lcn.xfer_record = {
+  from: tstr .size (1..128),
+  from_assignment: tstr .size (1..128),
+  mode: "move" / "copy",
+  bytes: uint64,
+  files: uint64,
+  epoch: uint64,
+  at: uint64,
+}

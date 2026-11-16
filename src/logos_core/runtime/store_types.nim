@@ -10,7 +10,7 @@ import ../iface/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.runtime-state.v1: the Runtime\'s persistent state (DECISIONS\x0A; I82). One Logos deterministic-CBOR lcn.rs_state value in\x0A; <store_dir>/runtime-state.cbor, written by runtime/store.nim and nothing else.\x0A;\x0A; Arrays may be empty here. The checks the schema cannot express (unique ids,\x0A; intent fields, keys naming known instances, unshared state assignments) are\x0A; applied when the store is read; a failure leaves the file as it is.\x0A;\x0A; The lcn.rs_record rules repeat host_config.cddl\'s lcn.app_module rules\x0A; without `instance` and the configuration inputs (test_nimgen compares\x0A; them), plus the accepted configuration binding\'s digest (DECISIONS I87).\x0A\x0Alcn.rs_state = {\x0A  format: \"logos-core-nim.runtime-state.v1\",\x0A  runtime_instance_id: tstr .size (1..128),\x0A  epoch: uint64,\x0A  instances: [* lcn.rs_instance],\x0A  retired: [* lcn.rs_retired],\x0A  create_keys: [* lcn.rs_create_key],\x0A}\x0A\x0Alcn.rs_instance = {\x0A  instance: tstr .size (1..128),\x0A  ? provider: tstr .size (1..128),\x0A  source: \"host\" / \"create_module\",\x0A  record: lcn.rs_record,\x0A  state: \"unloaded\" / \"loaded\" / \"ready\" / \"stopping\" / \"error\",\x0A  ? failure: lcn.rs_failure,\x0A  revision: uint64,\x0A  intent: \"uninitialized\" / \"requested\" / \"stopped\",\x0A  ? intent_revision: uint64,\x0A  ? origin: lcn.rs_origin,\x0A}\x0A\x0A; a classification as RUNTIME l.3753 spells it, loader-<code> included\x0Alcn.rs_failure = {\x0A  classification: tstr .size (1..64),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0Alcn.rs_origin =\x0A  { kind: \"host\" } /\x0A  { kind: \"instance\", instance: tstr .size (1..128) }\x0A\x0A; A retired host-assigned instance id, and the host-assigned state\x0A; assignment it keeps reserved. Runtime-assigned names need no tombstone.\x0Alcn.rs_retired = {\x0A  instance: tstr .size (1..128),\x0A  ? state_assignment: tstr .size (1..128),\x0A}\x0A\x0A; one create_module key association (RUNTIME l.3627-3628)\x0Alcn.rs_create_key = {\x0A  consumer: tstr .size (1..128),\x0A  key: tstr .size (1..128),\x0A  module: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0Alcn.rs_record = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.rs_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.rs_requirement],\x0A  ? requested_permissions: [* lcn.rs_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration_commitment: bstr .size 32,\x0A}\x0A\x0Alcn.rs_path = tstr .size (1..4096)\x0A\x0A; hosted_dynamic: Tier 4b step 4b-3; a store holding it is refused by older\x0A; builds. Nothing about a Module Host (pid, path, descriptor) is stored.\x0Alcn.rs_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.rs_artifact } /\x0A  { strategy: \"hosted_dynamic\", placement: \"process\", artifact: lcn.rs_artifact }\x0A\x0Alcn.rs_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.rs_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0Alcn.rs_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0Alcn.rs_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one side record (runtime/store.nim putSide): the instance it belongs to\x0Alcn.rs_side = {\x0A  instance: tstr .size (1..128),\x0A  value: bstr,\x0A}\x0A\x0A; [IMPL-DECISION I87] one configurable instance\'s configuration (side record\x0A; kind `cfg`): the whole accepted binding, so an instance restores from its\x0A; side record alone, and its state. Both are deterministic-CBOR CONFIG\x0A; values (logos.module_configuration.schema_binding and\x0A; .configuration_state), never the in-flight attempted record. The binding\'s\x0A; blake3 digest is the instance record\'s configuration_commitment.\x0Alcn.cfg_record = {\x0A  binding: bstr,\x0A  state: bstr,\x0A  ? last_provisioned: bstr .size 32,\x0A}\x0A\x0A; [I93] one instance\'s permission settings (side record kind `prm`), present\x0A; for every instance while a permission profile is selected\x0A; (docs/PERMISSIONS.md): the logos.runtime_control.permission_settings_state\x0A; it reports. The revision is at least 1 and failure is present only with\x0A; failed (checked when it is read, runtime/settings.nim).\x0Alcn.prm_record = {\x0A  revision: uint64,\x0A  permissions: [* lcn.rs_permission_setting],\x0A  application: \"pending\" / \"applied\" / \"failed\",\x0A  ? failure: \"enforcement-failed\",\x0A}\x0A\x0Alcn.rs_permission_setting = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.runtime-state.v1: the Runtime\'s persistent state (DECISIONS\x0A; I82). One Logos deterministic-CBOR lcn.rs_state value in\x0A; <store_dir>/runtime-state.cbor, written by runtime/store.nim and nothing else.\x0A;\x0A; Arrays may be empty here. The checks the schema cannot express (unique ids,\x0A; intent fields, keys naming known instances, unshared state assignments) are\x0A; applied when the store is read; a failure leaves the file as it is.\x0A;\x0A; The lcn.rs_record rules repeat host_config.cddl\'s lcn.app_module rules\x0A; without `instance` and the configuration inputs (test_nimgen compares\x0A; them), plus the accepted configuration binding\'s digest (DECISIONS I87).\x0A\x0Alcn.rs_state = {\x0A  format: \"logos-core-nim.runtime-state.v1\",\x0A  runtime_instance_id: tstr .size (1..128),\x0A  epoch: uint64,\x0A  instances: [* lcn.rs_instance],\x0A  retired: [* lcn.rs_retired],\x0A  create_keys: [* lcn.rs_create_key],\x0A}\x0A\x0Alcn.rs_instance = {\x0A  instance: tstr .size (1..128),\x0A  ? provider: tstr .size (1..128),\x0A  source: \"host\" / \"create_module\",\x0A  record: lcn.rs_record,\x0A  state: \"unloaded\" / \"loaded\" / \"ready\" / \"stopping\" / \"error\",\x0A  ? failure: lcn.rs_failure,\x0A  revision: uint64,\x0A  intent: \"uninitialized\" / \"requested\" / \"stopped\",\x0A  ? intent_revision: uint64,\x0A  ? origin: lcn.rs_origin,\x0A}\x0A\x0A; a classification as RUNTIME l.3753 spells it, loader-<code> included\x0Alcn.rs_failure = {\x0A  classification: tstr .size (1..64),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0Alcn.rs_origin =\x0A  { kind: \"host\" } /\x0A  { kind: \"instance\", instance: tstr .size (1..128) }\x0A\x0A; A retired host-assigned instance id, and the host-assigned state\x0A; assignment it keeps reserved. Runtime-assigned names need no tombstone.\x0Alcn.rs_retired = {\x0A  instance: tstr .size (1..128),\x0A  ? state_assignment: tstr .size (1..128),\x0A}\x0A\x0A; one create_module key association (RUNTIME l.3627-3628)\x0Alcn.rs_create_key = {\x0A  consumer: tstr .size (1..128),\x0A  key: tstr .size (1..128),\x0A  module: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0Alcn.rs_record = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.rs_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? requires: [* lcn.rs_requirement],\x0A  ? requested_permissions: [* lcn.rs_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration_commitment: bstr .size 32,\x0A}\x0A\x0Alcn.rs_path = tstr .size (1..4096)\x0A\x0A; hosted_dynamic: Tier 4b step 4b-3; a store holding it is refused by older\x0A; builds. Nothing about a Module Host (pid, path, descriptor) is stored.\x0Alcn.rs_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.rs_artifact } /\x0A  { strategy: \"hosted_dynamic\", placement: \"process\", artifact: lcn.rs_artifact }\x0A\x0Alcn.rs_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.rs_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0Alcn.rs_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0Alcn.rs_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one side record (runtime/store.nim putSide): the instance it belongs to\x0Alcn.rs_side = {\x0A  instance: tstr .size (1..128),\x0A  value: bstr,\x0A}\x0A\x0A; [IMPL-DECISION I87] one configurable instance\'s configuration (side record\x0A; kind `cfg`): the whole accepted binding, so an instance restores from its\x0A; side record alone, and its state. Both are deterministic-CBOR CONFIG\x0A; values (logos.module_configuration.schema_binding and\x0A; .configuration_state), never the in-flight attempted record. The binding\'s\x0A; blake3 digest is the instance record\'s configuration_commitment.\x0Alcn.cfg_record = {\x0A  binding: bstr,\x0A  state: bstr,\x0A  ? last_provisioned: bstr .size 32,\x0A}\x0A\x0A; [I93] one instance\'s permission settings (side record kind `prm`), present\x0A; for every instance while a permission profile is selected\x0A; (docs/PERMISSIONS.md): the logos.runtime_control.permission_settings_state\x0A; it reports. The revision is at least 1 and failure is present only with\x0A; failed (checked when it is read, runtime/settings.nim).\x0Alcn.prm_record = {\x0A  revision: uint64,\x0A  permissions: [* lcn.rs_permission_setting],\x0A  application: \"pending\" / \"applied\" / \"failed\",\x0A  ? failure: \"enforcement-failed\",\x0A}\x0A\x0Alcn.rs_permission_setting = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A}\x0A\x0A; [IMPL-DECISION I96] where a transferred instance\'s state came from (side\x0A; record kind `xfer`, keyed by the replacement): the deployment\'s\x0A; state_transfers entry as applied (DECISIONS G305, G306). Written before the\x0A; commit that creates the replacement; kept while the replacement is known or\x0A; retired (RUNTIME l.3588); reaped at open only for an id neither is (a crash\x0A; before the commit). bytes and files: copied, or 0 for a move, which reads\x0A; nothing. epoch: the revision epoch of the start that applied it; at: Unix\x0A; seconds.\x0Alcn.xfer_record = {\x0A  from: tstr .size (1..128),\x0A  from_assignment: tstr .size (1..128),\x0A  mode: \"move\" / \"copy\",\x0A  bytes: uint64,\x0A  files: uint64,\x0A  epoch: uint64,\x0A  at: uint64,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -221,6 +221,26 @@ type
     retired*: seq[LcnRsRetired]
     runtime_instance_id*: string
 
+  LcnXferRecordModeChoiceKind* {.pure.} = enum
+    Copy
+    Move
+
+  LcnXferRecordModeChoice* = object
+    case kind*: LcnXferRecordModeChoiceKind
+    of LcnXferRecordModeChoiceKind.Copy:
+      discard
+    of LcnXferRecordModeChoiceKind.Move:
+      discard
+
+  LcnXferRecord* = object
+    at*: uint64
+    bytes*: uint64
+    epoch*: uint64
+    files*: uint64
+    `from`*: string
+    from_assignment*: string
+    mode*: LcnXferRecordModeChoice
+
 proc toCbor*(x: LcnCfgRecord): CborValue
 proc fromChecked*(T: type LcnCfgRecord, v: CborValue): LcnCfgRecord
 proc stepEncLcnCfgRecord*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -323,6 +343,14 @@ proc toCbor*(x: LcnRsState): CborValue
 proc fromChecked*(T: type LcnRsState, v: CborValue): LcnRsState
 proc stepEncLcnRsState*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnRsState*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnXferRecord): CborValue
+proc fromChecked*(T: type LcnXferRecord, v: CborValue): LcnXferRecord
+proc toCbor*(x: LcnXferRecordModeChoice): CborValue
+proc fromChecked*(T: type LcnXferRecordModeChoice, v: CborValue): LcnXferRecordModeChoice
+proc stepEncLcnXferRecordModeChoice*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnXferRecordModeChoice*(w: var DecWork, v: CborValue, dst: pointer)
+proc stepEncLcnXferRecord*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnXferRecord*(w: var DecWork, v: CborValue, dst: pointer)
 
 proc stepEncLcnCfgRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnCfgRecord](src)
@@ -1242,6 +1270,79 @@ proc fromChecked*(T: type LcnRsState, v: CborValue): LcnRsState =
   runDec(stepDecLcnRsState, v, addr r)
   r
 
+proc stepEncLcnXferRecordModeChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnXferRecordModeChoice](src)
+  case x.kind
+  of LcnXferRecordModeChoiceKind.Copy:
+    dst[] = cbor("copy")
+  of LcnXferRecordModeChoiceKind.Move:
+    dst[] = cbor("move")
+
+proc stepDecLcnXferRecordModeChoice*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnXferRecordModeChoice](dst)
+  case generatedSchema().arm("lcn.xfer_record#mode", v)
+  of 0:
+    r[] = LcnXferRecordModeChoice(kind: LcnXferRecordModeChoiceKind.Copy)
+  of 1:
+    r[] = LcnXferRecordModeChoice(kind: LcnXferRecordModeChoiceKind.Move)
+  else:
+    raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: LcnXferRecordModeChoice): CborValue =
+  runEnc(stepEncLcnXferRecordModeChoice, addr x)
+
+proc fromChecked*(T: type LcnXferRecordModeChoice, v: CborValue): LcnXferRecordModeChoice =
+  var r: LcnXferRecordModeChoice
+  runDec(stepDecLcnXferRecordModeChoice, v, addr r)
+  r
+
+proc stepEncLcnXferRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnXferRecord](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](7))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("at")
+  node.entries[k].value = cbor(uint64(x.at))
+  inc k
+  node.entries[k].key = cbor("bytes")
+  node.entries[k].value = cbor(uint64(x.bytes))
+  inc k
+  node.entries[k].key = cbor("epoch")
+  node.entries[k].value = cbor(uint64(x.epoch))
+  inc k
+  node.entries[k].key = cbor("files")
+  node.entries[k].value = cbor(uint64(x.files))
+  inc k
+  node.entries[k].key = cbor("from")
+  node.entries[k].value = cbor(x.`from`)
+  inc k
+  node.entries[k].key = cbor("from_assignment")
+  node.entries[k].value = cbor(x.from_assignment)
+  inc k
+  node.entries[k].key = cbor("mode")
+  w.later(stepEncLcnXferRecordModeChoice, addr x.mode, addr node.entries[k].value)
+  inc k
+
+proc stepDecLcnXferRecord*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnXferRecord](dst)
+  r[] = LcnXferRecord()
+  r.at = uint64(v.lookup("at").get.uint)
+  r.bytes = uint64(v.lookup("bytes").get.uint)
+  r.epoch = uint64(v.lookup("epoch").get.uint)
+  r.files = uint64(v.lookup("files").get.uint)
+  r.`from` = v.lookup("from").get.text
+  r.from_assignment = v.lookup("from_assignment").get.text
+  let f51 = v.lookup("mode").get
+  w.later(stepDecLcnXferRecordModeChoice, f51, addr r.mode)
+
+proc toCbor*(x: LcnXferRecord): CborValue =
+  runEnc(stepEncLcnXferRecord, addr x)
+
+proc fromChecked*(T: type LcnXferRecord, v: CborValue): LcnXferRecord =
+  var r: LcnXferRecord
+  runDec(stepDecLcnXferRecord, v, addr r)
+  r
+
 proc fromCbor*(T: type LcnCfgRecord, v: CborValue): Result[LcnCfgRecord, string] =
   ## A value checked against `lcn.cfg_record`.
   ?generatedSchema().check("lcn.cfg_record", v)
@@ -1450,4 +1551,18 @@ proc encode*(x: LcnRsState): Result[seq[byte], string] =
 proc decode*(T: type LcnRsState, data: openArray[byte]): Result[LcnRsState, string] =
   ## One deterministic-CBOR `lcn.rs_state` value.
   let v = ?generatedSchema().decodeChecked("lcn.rs_state", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnXferRecord, v: CborValue): Result[LcnXferRecord, string] =
+  ## A value checked against `lcn.xfer_record`.
+  ?generatedSchema().check("lcn.xfer_record", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnXferRecord): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.xfer_record`.
+  generatedSchema().encodeChecked("lcn.xfer_record", toCbor(x))
+
+proc decode*(T: type LcnXferRecord, data: openArray[byte]): Result[LcnXferRecord, string] =
+  ## One deterministic-CBOR `lcn.xfer_record` value.
+  let v = ?generatedSchema().decodeChecked("lcn.xfer_record", data)
   ok(fromChecked(T, v))

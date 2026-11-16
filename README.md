@@ -88,6 +88,11 @@ The specs are being revised, so the work is ordered by how settled each area is
   hooks, and marks every output `NON-PRODUCTION`. An optional call-evidence store keeps the call
   records the Runtime retains on disk, and `logosctl audit evidence export` signs one as call
   evidence. [docs/DAEMON.md](docs/DAEMON.md).
+- Tier 4b, step 4b-7: state transfer to a replacement instance. A `state_transfers` entry in the
+  host configuration (or logosd's daemon-config) gives a new instance, under its own state
+  assignment, the state directory of the instance it replaces: at the next start the old instance
+  is retired and its directory renamed (`move`). [docs/HOST-CONFIG.md](docs/HOST-CONFIG.md),
+  "State transfer to a replacement instance".
 - Not yet: the rest of Tier 4b (the rest of transported routes, the Runtime's permission enforcement,
   package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 

@@ -465,6 +465,9 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
     routing: dc.routing,
     transport: dc.transport,
     permissions: Opt.some(permissionsOf(dc)),
+    # [I96; G306; decision 9] The operator's transfers as they are: protected
+    # offline input, applied once at the next start (DAEMON.md §11).
+    state_transfers: dc.state_transfers,
   )
   if dc.call_audit.isSome:
     let a = dc.call_audit.get

@@ -56,6 +56,7 @@ lcn.app_config = {
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
   ? permissions: lcn.app_permissions,
+  ? state_transfers: [* lcn.app_state_transfer],
 }
 
 lcn.app_runtime = {
@@ -160,6 +161,23 @@ lcn.app_initial_settings = {
 lcn.app_permission_setting = {
   permission: tstr .size (1..128),
   constraints: bstr .size (1..1048576),
+}
+
+; One state transfer (RUNTIME l.3546-3553; DECISIONS I96, G305-G307),
+; applied once, when start bootstraps, before anything starts. to is a listed
+; instance new to the Runtime with its own state_assignment; from is an
+; instance the Runtime retains or retired, not listed in modules. from is
+; stopped and retired in the same write that creates to, which then gets
+; from's state: move renames from's state directory to to's; copy copies it
+; (at most max_bytes, default 1 GiB) and leaves it as it was. The entry is the
+; deployment's assertion that to can use that state: the Runtime infers none
+; from names, versions or contracts (RUN-0999). docs/HOST-CONFIG.md, "State
+; transfer".
+lcn.app_state_transfer = {
+  from: lcn.app_instance_id,
+  to: lcn.app_instance_id,
+  mode: "move" / "copy",
+  ? max_bytes: uint64,
 }
 
 ; logos.runtime.module_instance_id (RUNTIME §9.2)
@@ -500,6 +518,24 @@ The limits of the transport I/O thread (TRANSPORT §5.2, §8.6; DECISIONS I90), 
 A value the I/O thread cannot run with is refused with `LOGOS_ERR_INVALID_PARAMS` and "transport: …"
 naming the limit. The payload depth is `runtime.max_payload_depth`; there is no separate one.
 
+### `state_transfers`
+
+A replacement instance's state, taken from the instance it replaces at the next `start` (DECISIONS
+G92 as re-decided 2026-11-15, I96, G306; RUNTIME l.3546-3553). Each entry is one authorization,
+applied once; below, "State transfer to a replacement instance", says what happens. Optional; when
+present, not empty, and only with `store_dir` and `state_root`.
+
+| Field | Meaning |
+|---|---|
+| `from` | The instance replaced: one the store knows, running or retired, and not listed in `modules` (RUNTIME l.3581). |
+| `to` | The replacement: listed in `modules` with its own `state_assignment`, and new to the store. |
+| `mode` | `move` (the source's directory becomes the replacement's) or `copy` (not supported yet: refused with "copy is not supported yet"). Required: there is no default. |
+| `max_bytes` | `copy` only: the most the copied tree may hold, 1 to 2^40. |
+
+An instance is the `from` of one entry at most and the `to` of one entry at most. Neither side may be
+the Module Loader's instance, a Runtime-assigned name, or the Capability Authority instance. Anything
+else is refused at `create` with `LOGOS_ERR_INVALID_PARAMS` and "state_transfers: …".
+
 ## Module configuration
 
 A module that takes configuration declares it (CONFIG; DECISIONS I87): in `configuration`, a schema
@@ -567,7 +603,9 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   instance's value with Runtime Control `get_configuration`; turn it into a complete value under the
   new instance's schema outside Core (Core never transforms a value); then either provision it for
   the new instance (`provisioned_configuration`) or stage it with `update_configuration` before the
-  new instance's first start. Retire the old instance afterwards.
+  new instance's first start. Retire the old instance afterwards. To keep its module state too, give
+  the new instance a `state_transfers` entry, which retires the old one ("State transfer to a
+  replacement instance", below).
 
 ## What the host can expect
 
@@ -1028,6 +1066,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | transported routes: I/O thread limits and Event output | `transport` (Fields) and "Event output" under `routing` | here |
 | the reference orchestration module | "The reference orchestration module", Limits; `resync_ms` in its value | fixed |
 | Module Hosts | one process per `hosted_dynamic` realization; their Runtime Control requests run on 64 proxy workers per Runtime, started on demand; a carrier frame is at most 16 MiB + 64 KiB | fixed |
+| state transfers | one entry per instance on each side; `move` is one rename and copies nothing | here |
 
 ## Loaded code
 
@@ -1107,7 +1146,8 @@ identity, and every configured instance is new.
   `logos-core-nim.runtime-state.v1`), one `cfg-<hash>.cbor` side record per configurable instance
   (its configuration binding and state, up to about 17 MiB), while a permission profile is selected
   one `prm-<hash>.cbor` side record per instance (its permission settings: revision, permissions and
-  status, `store.cddl`'s `lcn.prm_record`; DECISIONS I93), and `lock`. The directory is
+  status, `store.cddl`'s `lcn.prm_record`; DECISIONS I93), one `xfer-<hash>.cbor` side record per
+  instance a state transfer populated (below), and `lock`. The directory is
   created with mode 0700 and refused at `start` (`LOGOS_ERR_MODULE`) if group or other may access it
   or another user owns it; the files are created 0600. Each change is written to a temporary file,
   flushed to the medium (`F_FULLFSYNC` on macOS), renamed over the old file and the directory flushed,
@@ -1196,9 +1236,79 @@ identity, and every configured instance is new.
   settings go with it: they stay attributed to its address and pass to no other (RUNTIME l.2637), so a
   new instance of the same module is provisioned afresh.
 - **Retention.** Retiring an instance keeps its state directory and reserves its state assignment:
-  retirement is not deletion (BCP l.395). No deletion operation exists yet (DECISIONS G143).
+  retirement is not deletion (BCP l.395). No deletion operation exists yet (DECISIONS G143). A
+  replacement instance gets a retired or replaced instance's state only through `state_transfers`
+  (below).
 - **Bounds.** At most `MaxInstances` (1024) known instances, retained ones included, for
   `create_module`.
+
+## State transfer to a replacement instance
+
+An instance's module state stays with its state assignment: a new instance, even of the same module,
+starts with its own empty directory (RUNTIME l.3581, l.2638). To replace instance `a` by a new
+instance `b` that continues from `a`'s state (an upgrade under a new id, a changed declaration),
+give `b` its own `state_assignment` in `modules` and add `{from: a, to: b, mode: move}` to
+`state_transfers`, with the Runtime stopped. The entry is the authorization (DECISIONS G306): no
+Runtime Control method moves state.
+
+At the next `start`, before the orchestration instance or anything else starts (DECISIONS I96):
+
+1. Every entry is checked, and a refused one fails the start with nothing changed (table below).
+2. For each entry, in order: `b`'s transfer record is written; then one write creates `b`
+   (`unloaded`, intent `uninitialized`, its own assignment) and retires `a` if it is still known
+   (RUNTIME l.3548: the deployment's stop; its intent ends with it); then `state_root/<a's
+   assignment>` is renamed to `state_root/<b's assignment>` and `state_root` flushed. A diagnostic
+   says "state transfer: a (a-state) to b (b-state), move".
+3. `b` starts only the ordinary way (the orchestration module or a Runtime Control `start_module`;
+   the bootstrap itself when `b` is the orchestration instance), with its own authorization,
+   initialization and readiness (RUNTIME l.3553).
+
+`a`'s id and its assignment stay reserved on its tombstone, as for any retirement, and its directory
+name is gone. An applied entry is satisfied: left in the configuration, it changes nothing at later
+starts, and can be removed whenever convenient.
+
+- **What `b` gets.** The files only. Its configuration comes from its own entry (CONFIG l.251-256),
+  its permission settings from its own provisioning, and its grants from the policy; `a`'s
+  configuration and settings records are deleted with its retirement, and its grants name `a` and
+  pass to no other instance (CA l.733). No route survives a restart. Read `a`'s configuration while
+  it is still known ("Keeping a configuration across an upgrade", above).
+- **No snapshot.** `move` is one rename on one file system and reads nothing. Back up `store_dir` and
+  `state_root` together before a start that applies an entry: the backup is the rollback (RUNTIME
+  l.3549-3550, l.3554; BCP l.394).
+- **Quiescence.** The source must have nothing of a realization left (RUNTIME l.3548, l.3563): its
+  realization is `absent`, and nothing it owned is pending. A direct instance of an earlier run
+  qualifies once the Runtime holds the store lock, after a clean end or not. For a `hosted_dynamic`
+  source the restart lock is the evidence ("Module Hosts", above): it must exist and be free.
+  Processes a module started on its own are outside this evidence, as for a restart.
+- **Interrupted transfers.** A crash before `b` is written leaves nothing: the transfer record is
+  removed at the next start. A crash after it is completed at the next start, before anything runs:
+  the directory is renamed and a diagnostic says "completed the state transfer to b". If neither
+  directory is there any more (deleted by hand), a diagnostic says "the state directory of b is
+  missing", and every start of `b` fails (`error`, `other`, "the state transferred to b is
+  missing") without creating an empty directory, until the directory is restored from the backup or
+  made empty on purpose.
+- **The record.** `xfer-<hash>.cbor` in `store_dir` (`store.cddl`'s `lcn.xfer_record`): the source,
+  its assignment, the mode, the bytes and files copied (0 for `move`), the Runtime epoch and the time
+  of the transfer. It stays when `b` is retired: retirement keeps audit history (RUNTIME l.3588).
+- **Windows.** `move` renames with `MoveFileExW` (write-through, never replacing).
+
+| Refusal at `start` | Code |
+|---|---|
+| `b` is known to the store without a record of this transfer ("a transfer populates only a new instance"), or was retired | `LOGOS_ERR_INVALID_PARAMS` |
+| `a` is unknown, or kept no state assignment ("the transfer source is unknown or kept no state assignment") | `LOGOS_ERR_INVALID_PARAMS` |
+| `state_root/<a's assignment>` is not a directory, or a link to one ("the transfer source has no state directory") | `LOGOS_ERR_INVALID_PARAMS` |
+| `state_root/<b's assignment>` exists ("the replacement's state directory already exists"): nothing is merged | `LOGOS_ERR_INVALID_PARAMS` |
+| `a` still has a realization or its cleanup | `LOGOS_ERR_NOT_READY` |
+| `a` is `hosted_dynamic` and its restart lock file is missing: an edited `work_dir` or a cleaned `hosts/` is no evidence that its host ended | `LOGOS_ERR_NOT_READY`, naming the file |
+| A Module Host of an earlier run may still hold `a`'s state: its restart lock is held | `LOGOS_ERR_NOT_READY`, naming the file |
+| Another instance's retained `requested` intent names `a` as its origin (RUNTIME l.3568-3570) | `LOGOS_ERR_NOT_READY` |
+| The store cannot be written, or the rename fails | `LOGOS_ERR_MODULE` |
+
+A held restart lock stays refused until the process holding it is gone: nothing ends a host of an
+earlier run. Find it with `lsof <file>` or `fuser <file>`, end it, and start again (RUNTIME l.2641,
+l.977). For an intent that names `a`, stop or retire that instance while the Runtime runs, then
+start again. A refused start runs nothing (DECISIONS G190) and leaves the store and both directories
+as they were; a `LOGOS_ERR_MODULE` after the write leaves the rename to the next start.
 
 ## Observation
 

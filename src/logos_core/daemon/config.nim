@@ -129,10 +129,26 @@ proc checkNames(dc: LcnDaemonConfig): Result[void, string] =
     for id in [o.prerequisite, o.dependent]:
       if id notin operator:
         return err("ordering: " & id & " is not an operator instance in modules")
+  var sources = initHashSet[string]()
+  for t in dc.state_transfers.get(@[]):
+    # [I96; G306] A transfer is between operator instances: logosd's own
+    # (and the Loader) keep their state where they are.
+    for id in [t.`from`, t.to]:
+      if id.isReservedInstance:
+        return err(
+          "state_transfers: " & t.`from` & " to " & t.to & " names the system instance " &
+            id
+        )
+    sources.incl(t.`from`)
   if dc.orchestration.isSome:
     let o = dc.orchestration.get
     var seen = initHashSet[string]()
     for id in o.start.get(@[]):
+      if id in sources:
+        # [I96] The transfer retires its source at this start.
+        return err(
+          "orchestration.start: " & id & " is a state_transfers source, retired at start"
+        )
       if id notin operator:
         return
           err("orchestration.start: " & id & " is not an operator instance in modules")

@@ -11,7 +11,7 @@ reason = "A documentation requirement: docs/HOST-CONFIG.md, Module configuration
 
 [[item]]
 ids = ["CFG-0134"]
-reason = "A documentation requirement on a deployment workflow: docs/HOST-CONFIG.md, Module configuration, 'Keeping a configuration across an upgrade', names it (get_configuration on the old instance, a transformation outside Core, then provisioned_configuration or update_configuration on the new instance id before its first start). The Runtime steps it uses are tested under their own units (DECISIONS I87)."
+reason = "A documentation requirement on a deployment workflow: docs/HOST-CONFIG.md, Module configuration, 'Keeping a configuration across an upgrade', names it (get_configuration on the old instance, a transformation outside Core, then provisioned_configuration or update_configuration on the new instance id before its first start). docs/HOST-CONFIG.md, 'State transfer to a replacement instance', and docs/DAEMON.md §11, 'Replacing an instance', place it in the replacement procedure: the old instance's configuration is discarded with its retirement, so it is read first (DECISIONS I96). The Runtime steps it uses are tested under their own units (DECISIONS I87)."
 
 # cfg-authority (DECISIONS I88)
 [[item]]

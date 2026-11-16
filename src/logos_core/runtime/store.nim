@@ -264,6 +264,57 @@ proc configOf*(data: openArray[byte], digest: Digest): Result[ConfigState, strin
     last = Opt.some(d)
   decodeStored(r.binding, r.state, digest, last)
 
+const XferSide* = "xfer"
+  ## [I96] the side-record kind of a transferred instance's provenance
+
+type XferRecord* = object
+  ## [IMPL-DECISION I96; G306] One `lcn.xfer_record`: where a transferred
+  ## instance's state came from, as the deployment's entry was applied.
+  source*: string ## the transfer's source instance
+  sourceAssignment*: string ## its state assignment
+  mode*: TransferMode
+  bytes*: uint64 ## copied; 0 for a move, which reads nothing
+  files*: uint64
+  epoch*: uint64 ## the revision epoch of the start that applied it
+  at*: uint64 ## Unix seconds
+
+proc xferBytes*(r: XferRecord): Result[seq[byte], string] =
+  encode(
+    LcnXferRecord(
+      `from`: r.source,
+      from_assignment: r.sourceAssignment,
+      mode:
+        case r.mode
+        of tmMove:
+          LcnXferRecordModeChoice(kind: LcnXferRecordModeChoiceKind.Move)
+        of tmCopy:
+          LcnXferRecordModeChoice(kind: LcnXferRecordModeChoiceKind.Copy),
+      bytes: r.bytes,
+      files: r.files,
+      epoch: r.epoch,
+      at: r.at,
+    )
+  )
+
+proc xferOf*(data: openArray[byte]): Result[XferRecord, string] =
+  ## An `xfer` side record read back.
+  let r = ?LcnXferRecord.decode(data)
+  ok(
+    XferRecord(
+      source: r.`from`,
+      sourceAssignment: r.from_assignment,
+      mode:
+        case r.mode.kind
+        of LcnXferRecordModeChoiceKind.Move: tmMove
+        of LcnXferRecordModeChoiceKind.Copy: tmCopy
+      ,
+      bytes: r.bytes,
+      files: r.files,
+      epoch: r.epoch,
+      at: r.at,
+    )
+  )
+
 func classificationOf*(text: string): Result[Failure, string] =
   ## The failure a stored classification names (RUNTIME l.3753).
   if text.startsWith("loader-"):
@@ -598,14 +649,19 @@ proc listSide*(s: Store, kind: string): Result[seq[(string, seq[byte])], string]
         found.add((side.get.instance, side.get.value))
   ok(found)
 
-proc reapSides*(s: var Store, known: HashSet[string]): Result[seq[string], string] =
+proc reapSides*(
+    s: var Store, known: HashSet[string], retired = initHashSet[string]()
+): Result[seq[string], string] =
   ## [IMPL] Removes the side records of instances that are not known (retired,
   ## or a crash between a side write and the snapshot commit); returns their
   ## instances. A side record that does not decode fails the open.
+  ## [I96; RUNTIME l.3588] An `xfer` record of a `retired` instance is kept
+  ## with its tombstone: retirement erases no audit history.
   var reaped: seq[string]
   for name in s.sideNames:
     let side = ?s.readSide(name)
-    if side.isSome and side.get.instance notin known:
+    if side.isSome and side.get.instance notin known and
+        not (name.startsWith(XferSide & "-") and side.get.instance in retired):
       if s.isPersistent:
         ?removeDurably(s.dir, name)
       else:

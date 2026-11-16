@@ -107,7 +107,8 @@ import
     algorithm, atomics, deques, locks, monotimes, sequtils, sets, strutils, sysrand,
     tables, times, typedthreads,
   ]
-from std/os import sleep, `/`, createDir, dirExists, setFilePermissions, FilePermission
+from std/os import
+  sleep, `/`, createDir, dirExists, fileExists, setFilePermissions, FilePermission
 import results
 import ../abi/types
 import ../base/[perthread, testhooks, wipe]
@@ -137,7 +138,7 @@ import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
     execauth, hostlock, hostsup, inventory, invoke, loaderbinding, observe, plumbing,
-    rcevents, served, sessionauth, settings, sidetable, store, transported,
+    rcevents, served, sessionauth, settings, sidetable, statexfer, store, transported,
   ]
 
 export plumbing
@@ -550,6 +551,9 @@ type
       ## retired host-assigned instance ids, with the state assignment each
       ## keeps reserved (RUNTIME l.3582, l.3587)
     createKeys: seq[CreateKey] ## `create_module` key associations
+    xfers: Table[string, XferRecord]
+      ## [I96] the `xfer` records of live transfer targets: the sweep reads
+      ## them, and a target whose directory is missing is not realized
     assignments: int ## state assignments `create_module` gave (`s-<prefix>-<n>`)
     clock: Clock ## [I85] decision validity
     timed: HashSet[string] ## ready routes with an `expires_at`
@@ -3853,6 +3857,8 @@ proc start(st: State, q: Request) =
     return
   st.execute(x, q.reply, q.origin.instance)
 
+proc transferredMissing(st: State, x: Inst): Opt[string] {.gcsafe.}
+
 proc realizeThroughLoader(st: State, a: Attempt) =
   ## [SPEC LOADER §6; RUNTIME l.1641, l.3816-3817; plan §2.6] Every instance
   ## but the Loader: its private handoffs into the side table (D14), then
@@ -3866,6 +3872,10 @@ proc realizeThroughLoader(st: State, a: Attempt) =
   let refused = st.loaderRefusal(lmRealize)
   if refused.isSome:
     fail(refused.get)
+  let missing = st.transferredMissing(x)
+  if missing.isSome:
+    st.diagnose(missing.get)
+    fail("the state directory of a transfer target is missing")
   let bytes = realizeBytes(a.request).valueOr:
     st.diagnose("the realize request of " & x.id & " cannot be encoded: " & error)
     fail("the realize request cannot be encoded")
@@ -4242,6 +4252,40 @@ proc assignmentInUse(st: State, assignment: string, skip = ""): Opt[string] =
       return Opt.some(id)
   Opt.none(string)
 
+type RetireUndo = object
+  ## What `retireMutation` changed, to put back when its write fails.
+  inst: Inst
+  instances: OrderedTable[string, Inst]
+  keys: seq[CreateKey]
+  tombstone: bool
+
+proc retireMutation(st: State, y: Inst): RetireUndo =
+  ## [SPEC RUNTIME l.3585-3588, l.3595] The in-memory part of a retirement,
+  ## before its one durable write: the instance and its provider record leave
+  ## the inventory, a host-assigned id is kept as a tombstone with the state
+  ## assignment it reserves, and its `create_module` keys are dropped
+  ## (RUN-1028). Nothing is transferred: a state transfer (I96) migrates the
+  ## preserved storage afterwards, under its own entry.
+  # [Nim drafts 70, 80] `var` copies: a `let` copy of a seq aliases the
+  # original under refc, and the rollback would restore nothing.
+  var instances = st.instances
+  var keys = st.createKeys
+  result = RetireUndo(
+    inst: y, instances: instances, keys: keys, tombstone: not isRuntimeForm(y.id)
+  )
+  st.instances.del(y.id)
+  if result.tombstone:
+    # [IMPL] A Runtime-assigned name never comes back anyway (I82, C-3).
+    st.tombstones[y.id] = y.record.stateAssignment
+  st.createKeys.keepItIf(it.instance != y.id)
+
+proc undoRetire(st: State, u: RetireUndo) =
+  ## The write failed: everything as it was.
+  st.instances = u.instances
+  st.createKeys = u.keys
+  if u.tombstone:
+    st.tombstones.del(u.inst.id)
+
 proc createInst(
     st: State,
     record: ModuleRecord,
@@ -4250,6 +4294,7 @@ proc createInst(
     created = false,
     key = Opt.none(CreateKey),
     configuration = Opt.none(AcceptedConfiguration),
+    retiring: Inst = nil,
 ): Result[Inst, EngineError] =
   ## A local module-instance record: `unloaded`, intent `uninitialized`
   ## (§9.3 l.3623), written before it is exposed. Records come from the host
@@ -4257,6 +4302,9 @@ proc createInst(
   ## request's key association, written with the record (l.3627-3628). A
   ## configurable record comes with its accepted declaration, whose state
   ## (`initialState`) is written to its side record first (I87 C2).
+  ## [I96] `retiring`, a state transfer's live source, is retired in the same
+  ## write (`retireMutation`; the caller then runs `retireCommitted`); on a
+  ## failed write both are undone.
   if st.shuttingDown:
     return err(engineError(ecNotReady, "the Runtime is shutting down"))
   if not origin.host and not created:
@@ -4360,8 +4408,16 @@ proc createInst(
     st.createKeys.add(k)
   # [G47; C11] The attribute source knows it before anything can name it.
   st.putFacts(x)
+  var undo: Opt[RetireUndo]
+  if retiring != nil:
+    # [SPEC RUNTIME l.3548; I96] The deployment's stop and the source's
+    # retirement, in the write that creates its replacement. Its intent goes
+    # with its record, so no intent revision is owed (l.3504).
+    undo = Opt.some(st.retireMutation(retiring))
   let refused = st.accept(x, x.save)
   if refused.isSome:
+    if undo.isSome:
+      st.undoRetire(undo.get)
     st.instances.del(id)
     st.dropFacts(x)
     if key.isSome:
@@ -4743,32 +4799,13 @@ proc rcRecover(st: State, q: Request, x: Inst) =
   r.expectedRevision = Opt.some(req.expected_execution_revision)
   st.recover(r)
 
-proc retireInst(st: State, y: Inst): Result[void, string] =
-  ## [SPEC RUNTIME l.3585-3588, l.3595] One durable write before the answer:
-  ## the instance and its provider record leave the inventory, a host-assigned
-  ## id is kept as a tombstone with the state assignment it reserves, and its
-  ## `create_module` keys are dropped (RUN-1028). On a failed write nothing
-  ## changes. The state directory, packages, grants and history stay; nothing
-  ## is transferred.
-  let instances = st.instances
-  let keys = st.createKeys
-  st.instances.del(y.id)
-  let tombstone = not isRuntimeForm(y.id)
-  if tombstone:
-    # [IMPL] A Runtime-assigned name never comes back anyway (I82, C-3).
-    st.tombstones[y.id] = y.record.stateAssignment
-  st.createKeys.keepItIf(it.instance != y.id)
-  let w = st.persist()
-  if w.isErr:
-    st.instances = instances
-    st.createKeys = keys
-    if tombstone:
-      st.tombstones.del(y.id)
-    return err(w.error)
+proc retireCommitted(st: State, y: Inst) =
+  ## [SPEC RUNTIME l.3576, l.3586] After the retirement's write: its change-log
+  ## entries, its configuration and permission settings records go; its
+  ## `xfer` record stays with the tombstone (l.3588; I96).
   # [SPEC RUNTIME l.3576] Nothing later publishes a change of the retired
   # record (RUN-1012).
   st.changes.keepItIf(it.view.instance != y.id)
-  st.written(nil)
   if y.configurable:
     # [I87 C7] After the commit point; a crash before this leaves a record
     # `reapSides` removes at the next open.
@@ -4783,10 +4820,38 @@ proc retireInst(st: State, y: Inst): Result[void, string] =
         "the permission settings of retired " & y.id & " were not removed: " & error
       )
   st.unsettled.excl(y.id)
+  st.xfers.del(y.id)
   # [SPEC RUNTIME l.3417, l.3420] A membership change, judged by the retained
   # facts of the record that left.
   st.hintRc(InvKind.Modules, instanceSubject(y.record.module, y.id, y.providerId))
+
+proc retireInst(st: State, y: Inst): Result[void, string] =
+  ## [SPEC RUNTIME l.3585-3588, l.3595] One durable write before the answer
+  ## (`retireMutation`); on a failed write nothing changes. The state
+  ## directory, packages, grants and history stay; nothing is transferred.
+  let u = st.retireMutation(y)
+  let w = st.persist()
+  if w.isErr:
+    st.undoRetire(u)
+    return err(w.error)
+  st.written(nil)
+  st.retireCommitted(y)
   ok()
+
+proc ownsNothing(st: State, y: Inst): bool =
+  ## [SPEC RUNTIME l.3563-3566] What the Runtime owns for `y`, not its state
+  ## alone: no attempt, realization or destroy job, no call or deferred
+  ## invocation in it, no stop waiting on it, no execution decision pending,
+  ## no Module Host of an earlier run that may hold it (G275), and no
+  ## asynchronous call it makes or serves.
+  if y.state notin {msUnloaded, msError} or y.attempt != nil or y.teardown != 0 or
+      y.realization != nil or y.inflight > 0 or y.stopWaiters.len > 0 or
+      y.pendingExec != nil or y.prevHost:
+    return false
+  for a in st.asyncCalls.values:
+    if a.provider == y.id or a.consumer == y.id:
+      return false
+  true
 
 proc retire(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §9.3 retire_module, l.3556-3595] Removes a stopped
@@ -4825,17 +4890,7 @@ proc retire(st: State, q: Request, x: Inst) =
     q.reply.answerError(ecInvalidParams, "execution revision mismatch")
     return
   st.requireReady(q)
-  # [SPEC RUNTIME l.3563-3566] What the Runtime owns, not the state alone:
-  # no attempt, realization or destroy job, no call or deferred invocation
-  # in it, no stop waiting on it.
-  var live =
-    y.state notin {msUnloaded, msError} or y.attempt != nil or y.teardown != 0 or
-    y.realization != nil or y.inflight > 0 or y.stopWaiters.len > 0 or
-    y.pendingExec != nil or y.prevHost
-  for a in st.asyncCalls.values:
-    if a.provider == y.id or a.consumer == y.id:
-      live = true
-  if live:
+  if not st.ownsNothing(y):
     q.reply.answerError(ecNotReady, "the module instance still has a realization")
     return
   if y.intent == inRequested:
@@ -6930,10 +6985,253 @@ proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] 
         )
   Opt.none(EngineError)
 
+# State transfer (Tier 4b step 4b-7; DECISIONS I96) ---------------------------------
+
+func transferError(code: ErrorCode, t: StateTransfer, why: string): EngineError =
+  engineError(code, "state transfer " & t.source & " to " & t.target & ": " & why)
+
+proc sweepTransfers(st: State): Opt[EngineError] =
+  ## [IMPL-DECISION I96; plan §2.6] Before anything of this start: a transfer
+  ## an earlier start committed whose rename was not made is completed. Only
+  ## live targets are swept: a retired target's directory may be gone for
+  ## good (moved on, or purged). A target whose directory and source are both
+  ## missing is reported and left; nothing realizes it until its directory
+  ## exists again (`transferredMissing`, BCP l.405).
+  if not st.store.isPersistent or st.cfg.stateRoot.isNone:
+    return Opt.none(EngineError)
+  let root = st.cfg.stateRoot.get
+  for id, rec in st.xfers:
+    let x = st.instances.getOrDefault(id)
+    if x.isNil or x.record.stateAssignment.isNone:
+      continue
+    let assignment = x.record.stateAssignment.get
+    if entryKind(dirOf(root, assignment)) != ekMissing:
+      continue
+    case rec.mode
+    of tmMove:
+      if entryKind(dirOf(root, rec.sourceAssignment)) in {ekDir, ekLinkToDir}:
+        # The commit happened, so the rename is owed.
+        moveDir(root, rec.sourceAssignment, assignment).isOkOr:
+          return Opt.some(
+            engineError(
+              ecModule, "the state transfer to " & id & " cannot be completed: " & error
+            )
+          )
+        st.diagnose("completed the state transfer to " & id)
+        continue
+    of tmCopy:
+      discard
+    st.diagnose(
+      "the state directory of " & id & " is missing: " & dirOf(root, assignment) &
+        "; it is not realized until the directory exists"
+    )
+  Opt.none(EngineError)
+
+proc transferredMissing(st: State, x: Inst): Opt[string] =
+  ## [I96; owner's condition 2 (batch F item 21); BCP l.405] A transfer
+  ## target whose state directory is missing: realizing it would make an
+  ## empty one (`realizer.stateDirFor`) and silently drop the state it was
+  ## given.
+  if x.id notin st.xfers or st.cfg.stateRoot.isNone or x.record.stateAssignment.isNone:
+    return Opt.none(string)
+  let dir = dirOf(st.cfg.stateRoot.get, x.record.stateAssignment.get)
+  if entryKind(dir) in {ekDir, ekLinkToDir}:
+    return Opt.none(string)
+  Opt.some("the state transferred to " & x.id & " is missing: " & dir)
+
+proc checkTransfers(
+    st: State, configured: seq[BootstrapInstance], transfers: seq[StateTransfer]
+): Result[seq[bool], EngineError] =
+  ## [SPEC RUNTIME l.3546-3553, l.3563-3570; IMPL-DECISION I96, G305-G307]
+  ## Every entry, before anything changes (plan §2.4). Returns, per entry,
+  ## whether it is still to apply (false: an earlier start applied it). The
+  ## codes are a deployment action's: INVALID_PARAMS for input, NOT_READY for
+  ## a source that may still be in use, MODULE_ERROR for what cannot be done.
+  var todo: seq[bool]
+  if transfers.len == 0:
+    return ok(todo)
+  if not st.store.isPersistent or st.cfg.stateRoot.isNone:
+    # 1
+    return
+      err(engineError(ecInvalidParams, "state transfers need a store and a state root"))
+  let root = st.cfg.stateRoot.get
+  var listed = initTable[string, ModuleRecord]()
+  for b in configured:
+    listed[b.instance] = b.record
+  var sources, targets: HashSet[string]
+  for t in transfers:
+    # 2: shape, as `logos_runtime_create` checks it, for engine-level hosts too
+    if t.source == t.target or t.source in listed or t.target notin listed or
+        listed.getOrDefault(t.target).stateAssignment.isNone or t.source in sources or
+        t.target in targets or t.source == LoaderInstanceId or
+        t.target == LoaderInstanceId or
+        (st.authorityMode and t.target == st.cfg.authority.get.instance) or
+        (t.maxBytes != 0 and t.mode != tmCopy):
+      return err(transferError(ecInvalidParams, t, "the entry is not a valid transfer"))
+    sources.incl(t.source)
+    targets.incl(t.target)
+  for t in transfers:
+    let target = st.instances.getOrDefault(t.target)
+    if target != nil:
+      # 3: an applied entry is satisfied; anything else known is not new
+      if t.target in st.xfers and st.xfers.getOrDefault(t.target).source == t.source:
+        todo.add(false)
+        continue
+      return err(
+        transferError(
+          ecInvalidParams,
+          t,
+          "a transfer populates only a new instance, and " & t.target & " is known",
+        )
+      )
+    if t.target in st.tombstones:
+      # 4
+      return
+        err(transferError(ecInvalidParams, t, "instance " & t.target & " was retired"))
+    # 5
+    let y = st.instances.getOrDefault(t.source)
+    var assignment = Opt.none(string)
+    if y != nil:
+      assignment = y.record.stateAssignment
+    elif t.source in st.tombstones:
+      assignment = st.tombstones.getOrDefault(t.source)
+    if assignment.isNone:
+      return err(
+        transferError(
+          ecInvalidParams, t,
+          "the transfer source is unknown or kept no state assignment",
+        )
+      )
+    # 6
+    let from_dir = dirOf(root, assignment.get)
+    if entryKind(from_dir) notin {ekDir, ekLinkToDir}:
+      return err(
+        transferError(
+          ecInvalidParams, t, "the transfer source has no state directory: " & from_dir
+        )
+      )
+    # 7: never a merge into what is there
+    let to_dir = dirOf(root, listed.getOrDefault(t.target).stateAssignment.get)
+    if entryKind(to_dir) != ekMissing:
+      return err(
+        transferError(
+          ecInvalidParams,
+          t,
+          "the replacement's state directory already exists: " & to_dir,
+        )
+      )
+    if y != nil:
+      when defined(posix):
+        if y.record.strategy == stHostedDynamic and
+            not fileExists(lockPath(st.cfg.workDir, y.id)):
+          # 8a [owner's condition 1; G275] An absent restart lock is no
+          # evidence that no host of an earlier run holds the state (an
+          # edited work_dir, a cleaned hosts/).
+          return err(
+            transferError(
+              ecNotReady,
+              t,
+              "the transfer source is hosted and its restart lock is missing, so its host's end cannot be confirmed: " &
+                lockPath(st.cfg.workDir, y.id),
+            )
+          )
+      if y.prevHost:
+        # 8 [G275; SPEC RUNTIME l.2641, l.977] The source's Module Host of an
+        # earlier run may still run: its holder is found by the lock file.
+        return err(
+          transferError(
+            ecNotReady,
+            t,
+            "a Module Host of an earlier run may still hold the transfer source's state: " &
+              lockPath(st.cfg.workDir, y.id),
+          )
+        )
+      if not st.ownsNothing(y) or y.realizationStatus != rsAbsent:
+        # 8 [SPEC RUNTIME l.3548, l.3532, l.3563-3566]
+        return err(
+          transferError(
+            ecNotReady, t, "the transfer source still has a realization or its cleanup"
+          )
+        )
+      for z in st.instances.values:
+        # 9 [SPEC RUNTIME l.3568-3570]
+        if z != y and z.intent == inRequested and not z.intentOrigin.host and
+            z.intentOrigin.instance == y.id:
+          return err(
+            transferError(
+              ecNotReady, t,
+              "the transfer source is the origin of retained execution intent",
+            )
+          )
+    if t.mode == tmCopy:
+      # [I96, part 7a] `parseHostConfig` refuses `copy` until part 7b.
+      return err(transferError(ecModule, t, "copy is not supported by this build"))
+    todo.add(true)
+  ok(todo)
+
+proc applyTransfers(
+    st: State,
+    configured: seq[BootstrapInstance],
+    transfers: seq[StateTransfer],
+    todo: seq[bool],
+): Opt[EngineError] =
+  ## [SPEC RUNTIME l.3546-3553; IMPL-DECISION I96; plan §2.5] Each entry
+  ## still to apply, in order, with its own commit: the target's `xfer`
+  ## record; one write that creates the target (`unloaded`, `uninitialized`,
+  ## its own fresh assignment) and retires a live source; then the rename.
+  ## A failure before the commit leaves nothing; after it, the next start
+  ## completes the rename (`sweepTransfers`).
+  let root = st.cfg.stateRoot.get
+  for i, t in transfers:
+    if not todo[i]:
+      continue
+    var b: BootstrapInstance
+    for c in configured:
+      if c.instance == t.target:
+        b = c
+    let y = st.instances.getOrDefault(t.source)
+    let fromAssignment =
+      if y != nil:
+        y.record.stateAssignment.get
+      else:
+        st.tombstones.getOrDefault(t.source).get
+    let toAssignment = b.record.stateAssignment.get
+    let rec = XferRecord(
+      source: t.source,
+      sourceAssignment: fromAssignment,
+      mode: t.mode,
+      epoch: st.epoch,
+      at: uint64(max(getTime().toUnix, 0)),
+    )
+    let bytes = xferBytes(rec).valueOr:
+      return Opt.some(transferError(ecModule, t, "its record cannot be encoded"))
+    st.store.putSide(XferSide, t.target, bytes).isOkOr:
+      st.diagnose("the transfer record of " & t.target & " was not written: " & error)
+      return Opt.some(transferError(ecModule, t, "its record could not be persisted"))
+    let x = st.createInst(
+      b.record, t.target, hostOrigin(), configuration = b.configuration, retiring = y
+    ).valueOr:
+      discard st.store.deleteSide(XferSide, t.target)
+      return Opt.some(error)
+    if y != nil:
+      st.retireCommitted(y)
+      st.dropFacts(y)
+    st.xfers[x.id] = rec
+    moveDir(root, fromAssignment, toAssignment).isOkOr:
+      st.diagnose("the state transfer to " & x.id & " is not complete: " & error)
+      return Opt.some(transferError(ecModule, t, error))
+    st.diagnose(
+      "state transfer: " & t.source & " (" & fromAssignment & ") to " & t.target & " (" &
+        toAssignment & "), " & $t.mode
+    )
+  Opt.none(EngineError)
+
 proc bootstrap(st: State, q: Request) =
   ## [SPEC RUNTIME l.187-192, l.1640, §13.2] Bootstrap policy is in place (the
-  ## authorizer exists before this request). Reconciles the configured
-  ## instances with the retained ones (`reconcile`), creates the new ones in
+  ## authorizer exists before this request). Completes the state transfers an
+  ## earlier start committed (`sweepTransfers`), reconciles the configured
+  ## instances with the retained ones (`reconcile`), checks and applies this
+  ## start's state transfers around `reprovision` (I96), creates the new ones in
   ## configuration order with their protected identity and the host's origin,
   ## records the orchestration role, and re-establishes that one instance
   ## [G191 interim (TF-26)]: retained `requested` intent with the host's
@@ -6967,14 +7265,26 @@ proc bootstrap(st: State, q: Request) =
       ecInvalidParams, "the orchestration instance cannot be the Capability Authority"
     )
     return
+  let unswept = st.sweepTransfers()
+  if unswept.isSome:
+    q.reply.answerError(unswept.get.code, unswept.get.message)
+    return
   let refused = st.reconcile(q.bootstrap)
   if refused.isSome:
     q.reply.answerError(refused.get.code, refused.get.message)
+    return
+  let todo = st.checkTransfers(q.bootstrap, q.transfers).valueOr:
+    q.reply.answerError(error.code, error.message)
     return
   let unprovisioned = st.reprovision(q.bootstrap)
   if unprovisioned.isSome:
     q.reply.answerError(unprovisioned.get.code, unprovisioned.get.message)
     return
+  if q.transfers.len > 0:
+    let failed = st.applyTransfers(q.bootstrap, q.transfers, todo)
+    if failed.isSome:
+      q.reply.answerError(failed.get.code, failed.get.message)
+      return
   for b in q.bootstrap:
     var x = st.instances.getOrDefault(b.instance)
     if x.isNil:
@@ -10590,10 +10900,22 @@ proc load(st: State): Opt[EngineError] =
   var known = initHashSet[string]()
   for id in st.instances.keys:
     known.incl(id)
-  let reaped = st.store.reapSides(known).valueOr:
+  var retired = initHashSet[string]()
+  for id in st.tombstones.keys:
+    retired.incl(id)
+  # [I96; owner's condition 4 (batch F item 21)] A retired target keeps its
+  # `xfer` record with its tombstone: `logosctl state purge` reads it.
+  let reaped = st.store.reapSides(known, retired).valueOr:
     fail(ecModule, "the state store cannot be read: " & error)
   for id in reaped:
     st.diagnose("removed the side records of unknown instance " & id)
+  let xfers = st.store.listSide(XferSide).valueOr:
+    fail(ecModule, "the state store cannot be read: " & error)
+  for (id, data) in xfers:
+    let rec = xferOf(data).valueOr:
+      fail(ecModule, "the transfer record of " & id & " is malformed: " & error)
+    if id in st.instances:
+      st.xfers[id] = rec
   let lost = st.restoreConfigs()
   if lost.isSome:
     st.releaseConfigs()
@@ -11221,13 +11543,24 @@ proc authorityBound*(e: Engine): (bool, uint64) =
   (r.bound, r.generation)
 
 proc bootstrap*(
-    e: Engine, instances: seq[BootstrapInstance], orchestration: string
+    e: Engine,
+    instances: seq[BootstrapInstance],
+    orchestration: string,
+    transfers = newSeq[StateTransfer](),
 ): Result[InstanceView, EngineError] =
   ## [SPEC RUNTIME l.1640, §13.2; G190 interim] Creates `instances` and starts
   ## `orchestration`, one of them; returns once it is `ready`, or with the
-  ## code its failure maps to (`checkBootstrap`).
-  let r =
-    e.call(Request(kind: rqBootstrap, bootstrap: instances, instance: orchestration))
+  ## code its failure maps to (`checkBootstrap`). [I96] `transfers` are
+  ## applied first, once; a refused one fails the bootstrap before anything
+  ## starts.
+  let r = e.call(
+    Request(
+      kind: rqBootstrap,
+      bootstrap: instances,
+      instance: orchestration,
+      transfers: transfers,
+    )
+  )
   r.toResult(r.view)
 
 proc shutdown*(e: Engine) =

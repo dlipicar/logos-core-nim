@@ -90,6 +90,10 @@ type
       ## library ships; nil: none (G229)
     initialSettings*: seq[InitialSettings]
       ## [SPEC RUNTIME l.2543; I93] `permissions.initial`, checked
+    transfers*: seq[StateTransfer]
+      ## [SPEC RUNTIME l.3546-3553; I96; G306] `state_transfers`, checked as
+      ## far as the configuration alone allows; bootstrap checks the rest
+      ## against the store
 
   ConfigError* = object
     message*: string
@@ -620,6 +624,70 @@ proc checkModuleHost(c: var HostConfig, r: LcnAppRuntime): Result[void, ConfigEr
     return err(configError("routing: " & error))
   ok()
 
+proc checkTransfers(
+    c: var HostConfig, entries: Opt[seq[LcnAppStateTransfer]]
+): Result[void, ConfigError] =
+  ## [SPEC RUNTIME l.3546-3553; IMPL-DECISION I96; G305-G307] `state_transfers`
+  ## as far as the configuration decides it: a store and a state root; `to`
+  ## a listed instance with a state assignment and `from` not listed (RUNTIME
+  ## l.3581), so no chain; one entry per instance on each side; never the
+  ## authority instance (wired to its directory before bootstrap) nor the
+  ## Loader; no name of the Runtime's form; `max_bytes` only with `copy`.
+  ## Bootstrap checks the rest against the store (engine `checkTransfers`).
+  if entries.isNone:
+    return ok()
+  if entries.get.len == 0:
+    return err(configError("state_transfers is present but empty"))
+  if c.storeDir.isNone or c.stateRoot.isNone:
+    return err(configError("state_transfers needs store_dir and state_root"))
+  var
+    listed = initTable[string, ModuleRecord]()
+    sources = initHashSet[string]()
+    targets = initHashSet[string]()
+  for m in c.modules:
+    listed[m.instance] = m.record
+  for e in entries.get:
+    let what = "state_transfers: " & e.`from` & " to " & e.to
+    for id in [e.`from`, e.to]:
+      if id == LoaderInstanceId:
+        return err(configError(what & " names the reserved Module Loader"))
+      if isRuntimeForm(id):
+        return err(configError(what & " uses a Runtime-assigned name form"))
+      if c.authority.isSome and id == c.authority.get.instance:
+        return err(configError(what & " names the Capability Authority instance"))
+    if e.`from` == e.to:
+      return err(configError(what & ": from and to are the same instance"))
+    if e.`from` in listed:
+      # [SPEC RUNTIME l.3581] The source is retired by the transfer.
+      return err(configError(what & ": from is listed in modules"))
+    if e.to notin listed:
+      return err(configError(what & ": to is not listed in modules"))
+    if listed.getOrDefault(e.to).stateAssignment.isNone:
+      return err(configError(what & ": to has no state_assignment"))
+    if e.`from` in sources:
+      return err(configError(what & ": " & e.`from` & " is the source of two entries"))
+    if e.to in targets:
+      return err(configError(what & ": " & e.to & " is the target of two entries"))
+    sources.incl(e.`from`)
+    targets.incl(e.to)
+    let mode =
+      case e.mode.kind
+      of LcnAppStateTransferModeChoiceKind.Move: tmMove
+      of LcnAppStateTransferModeChoiceKind.Copy: tmCopy
+    var limit = 0'u64
+    if e.max_bytes.isSome:
+      if mode != tmCopy:
+        return err(configError(what & ": max_bytes is for copy only"))
+      limit = e.max_bytes.get
+      if limit < 1 or limit > MaxTransferBytes:
+        return err(configError(what & ": max_bytes must be 1 to " & $MaxTransferBytes))
+    c.transfers.add(
+      StateTransfer(source: e.`from`, target: e.to, mode: mode, maxBytes: limit)
+    )
+  # [IMPL] No chain: every target is listed and no source is, so no instance
+  # is both, and one start never reads a state it has just moved.
+  ok()
+
 proc decodeHostConfig*(
     format: string, data: openArray[byte]
 ): Result[HostConfig, ConfigError] =
@@ -797,12 +865,22 @@ proc decodeHostConfig*(
   c.endpointDir = cfg.runtime.endpoint_dir.get(c.workDir / "endpoints")
   ?checkPath("endpoint_dir", c.endpointDir)
   ?checkModuleHost(c, cfg.runtime)
+  ?checkTransfers(c, cfg.state_transfers)
   ok(c)
 
 proc parseHostConfig*(
     format: string, data: openArray[byte]
 ): Result[HostConfig, ConfigError] =
   ## [SPEC RUNTIME §13.3] Decodes and validates one configuration; RUN-0741.
-  ## [I85] Every kind the format has is built (8b-3), so nothing is refused
-  ## beyond `decodeHostConfig`'s checks.
-  decodeHostConfig(format, data)
+  ## [I85] Every kind the format has is built (8b-3). [I96, part 7a] A
+  ## `copy` transfer is refused until part 7b builds it.
+  let c = ?decodeHostConfig(format, data)
+  for t in c.transfers:
+    if t.mode == tmCopy:
+      return err(
+        configError(
+          "state_transfers: " & t.source & " to " & t.target &
+            ": copy is not supported yet"
+        )
+      )
+  ok(c)

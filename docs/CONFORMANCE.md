@@ -388,6 +388,23 @@ module with its owner-only socket (D13 (a)) and the shell `logosctl` (`docs/DAEM
 - No remote listener, export or enrollment exists (G298, K19): the remote Runtime Control methods
   answer after authorization as `docs/HOST-CONFIG.md` says.
 
+### What Tier 4b step 4b-7 changes
+
+Tier 4b step 4b-7 (DECISIONS I96) builds state transfer to a replacement instance (RUNTIME
+l.3546-3554): a `state_transfers` entry in protected host configuration (G306) gives a new instance,
+with a fresh state assignment of its own (G305), the state of an instance it replaces, applied once at
+`start`. Part 7a builds `move` (G307).
+
+- **RUNTIME**: RUN-0925 (permissions, configuration and grants come from the replacement's own
+  provisioning) and RUN-0998 (the source stopped and quiescent before its state is migrated: no
+  realization or cleanup left, a hosted source's restart lock present and free) are claimed.
+  RUN-1000 moves to Tier 5: the replacement's ordinary package acceptance waits for the Package
+  Manager; its authorization, initialization and readiness are the ordinary ones and are tested.
+- What a `move` relies on: one `rename(2)` within `state_root`'s file system, then a flush of the
+  directory. A crash after the commit is completed at the next start; a target whose directory is
+  missing is never started on an empty one. Processes a module started on its own are outside the
+  quiescence evidence, as for a restart.
+
 ## Properties not claimed
 
 - Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
