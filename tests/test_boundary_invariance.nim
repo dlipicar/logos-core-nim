@@ -97,12 +97,16 @@ when defined(posix):
     result.endpointDir = shortBase / ("e" & $engines)
     result.maxPayloadDepth = Depth
     # [IMPL] The Hello and admission deadlines only bound how long the route's
-    # own Hello and frames take: scaled by `Slow`, the rest of the transport
-    # configuration as given. They are what a direct consumer's
-    # materialization waits on, and one failed on a CI runner where this
-    # suite's build alone took nine minutes (2026-11-15).
+    # own Hello and frames take, the rest of the transport configuration as
+    # given. They are what a direct consumer's materialization waits on, and
+    # one failed on a CI runner where this suite's build alone took nine
+    # minutes (2026-11-15). The Hello's is `Answer`, as in test_wipe_routes
+    # `hostedConfig`: a hosted provider's Hello crosses the carrier both ways,
+    # since the Runtime judges it, about 1 s under MemorySanitizer on an idle
+    # host, and test_wipe_routes' passed 15 s on a loaded CI runner (CI on
+    # 5887c5a). The admission deadline is scaled by `Slow`.
     var transport = defaultTransportConfig()
-    transport.helloTimeout *= int64(Slow)
+    transport.helloTimeout = int64(Answer) * 1_000_000_000 # ns
     transport.admissionTimeout *= int64(Slow)
     result.transport = Opt.some(transport)
 
