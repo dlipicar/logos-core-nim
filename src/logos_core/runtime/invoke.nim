@@ -121,7 +121,9 @@ proc record*(e: Engine, c: CallCapture, trail: var CallTrail) =
   if c.retains:
     let kept = e.audit.keep(c, trail, uint64(max(e.clock.wallMs, 0'i64)))
     if kept.isErr:
-      e.diagnose("a call record could not be kept: " & kept.error)
+      # [SPEC RUNTIME l.1770; I95 amended 2026-11-16] a failed requirement:
+      # logosd logs it as a warning
+      e.diagnose("a call record could not be kept: " & kept.error, warn = true)
   wipe(trail)
 
 proc notReadyAfter*(

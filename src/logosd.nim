@@ -166,6 +166,17 @@ when defined(posix):
       logError(started.error.message)
       return started.error.exit
     when defined(lcnTestHooks):
+      let injected = d.prepared.config.hooks.diagnostics
+      if injected.isSome:
+        # Between the start's read and the thread's first: the ring wraps
+        # when `count` exceeds it.
+        diagnoseForTests(d.rt, injected.get.text, int(injected.get.count)).isOkOr:
+          logError("test hook: " & error)
+    # [I95 amended 2026-11-16] The Runtime's diagnostics while it runs.
+    var draining: DrainThread
+    draining.startDraining(d.diagnostics, d.rt).isOkOr:
+      logError(error)
+    when defined(lcnTestHooks):
       var timer: Thread[(ptr LogosRuntimeHandle, int)]
       var timing = false
       let after = d.prepared.config.hooks.loaderFailureAfterMs
@@ -181,6 +192,9 @@ when defined(posix):
       timerStop.store(true)
       if timing:
         joinThread(timer)
+    # What shutdown or the Loader's failure recorded, before any exit.
+    draining.stopDraining(d.diagnostics)
+    d.diagnostics.drainNow(d.rt)
     if d.supervisor.loaderLost.isSome:
       # [G302; RUNTIME l.3823-3824, l.3985] No destroy: hosts confirmed gone
       # by their restart locks, then the process ends.

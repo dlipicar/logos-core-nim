@@ -207,6 +207,14 @@ lcn.dc_ctl = {
 lcn.dc_test_hooks = {
   ? ctl_command_delay_ms: uint32,
   ? loader_failure_after_ms: uint32,
+  ? diagnostics: lcn.dc_test_diagnostics,
+}
+
+; count diagnostics holding text, recorded as text the Runtime did not write
+; once the start's own diagnostics are logged (I95, amended 2026-11-16).
+lcn.dc_test_diagnostics = {
+  text: tstr .size (1..1024),
+  count: uint32,
 }
 ```
 
@@ -231,7 +239,7 @@ the meaning those pages give them.
 | `permissions` | `profile`: absent selects the reference profile `logos-core-nim.permission-profile.v1`, since logosd always selects one; `initial`: the operator instances' settings. An entry naming a system instance or module is refused: logosd provisions those itself (§5). |
 | `state_transfers` | As in the host configuration: an operator instance's replacement continues from its state, applied once at the next start (§11, "Replacing an instance"). Neither side may be a system instance. |
 | `ctl` | The socket (§7): `socket_dir` (absolute; default `<session>/run`), `workers` (1–32, default 4), `idle_timeout_ms` (100–600000, default 30000). |
-| `test_hooks` | Refused by a packaged logosd (§6). |
+| `test_hooks` | Refused by a packaged logosd (§6). `ctl_command_delay_ms` holds each socket command; `loader_failure_after_ms` has the Module Loader report its failure that long after the start; `diagnostics` has the Runtime record `count` diagnostics holding `text`, as text it did not write, after the start's own are logged (§12). |
 
 ### The checks
 
@@ -776,12 +784,45 @@ success for disabling one, with no record kept. `logosctl` calls none of them.
 logosd logs to stderr, one line per event: `logosd[<pid>]: <level>: <text>`, levels `error`, `warn` and
 `info` (`--log-level`, default `info`). A service manager collects it. The start log has the ready line
 (§4), the `NON-PRODUCTION` warning when the switch is on, the call-evidence store's line when it is on
-(§9), the orchestrator's lines, and one line per socket command (`logosctl: <method> from uid U pid P:
-<code>`). The store warns when it drops records or cuts off a torn tail.
+(§9), the orchestrator's lines, the Runtime's diagnostics (below), and one line per socket command
+(`logosctl: <method> from uid U pid P: <code>`). The store warns when it drops records or cuts off a torn
+tail.
 
-**The logging rule** (IF l.395, SEC l.403, G278): no log line holds a payload, a value root, a ticket, a
-key, record content, or the failure text of a method with a marked field. Method names, schema roots,
-codes and instance ids are metadata and may appear.
+**The logging rule** (IF l.395, SEC l.305-306, l.403, G278): no log line holds a payload, a value root, a
+ticket, a key, record content, or the failure text of a method with a marked field. Method names, schema
+roots, codes and instance ids are metadata and may appear. **Every line is one line:** logosd replaces each
+control character (a line break, an escape, a C1 control) with a space before it writes, so no text in a
+line, whoever wrote it, ends it, starts another or moves a terminal's cursor.
+
+### The Runtime's diagnostics
+
+The Runtime keeps a diagnostic for what it reports to no caller: a publication it could not deliver
+(RUNTIME l.1227), a call record it could not keep (RUNTIME l.1770), state it could not persist, a state
+transfer (§11), a module's or the Module Loader's reported failure, and the like. logosd logs each as
+`runtime: <text>`, at `warn` for a call record not kept and for state not persisted, at `info` otherwise.
+This is the logging integration BCP l.550-552 describes, and it states what that asks:
+
+- **Attribution.** Text the Runtime did not write is quoted, cut to 256 bytes (`...` marks a cut) and
+  followed by `(text from <who>)`: the instance whose reported failure it is, `logos_module_loader` for
+  the Loader's, or `the transport serving <provider>` for a publication or link failure a Module Host
+  reported. It is that supplier's word and no evidence of another module's identity (BCP l.551).
+  Everything else in a `runtime:` line is the Runtime's.
+- **Who can read it.** The log is logosd's stderr, which only the service manager receives: the owner's
+  user journal under systemd (`journalctl --user -u logosd`), `~/Library/Logs/logosd.log` under launchd
+  (§13). The session owner and whoever the host lets read that journal or file can read it; logosd serves
+  it to no one, and `logosctl` has no command for it.
+- **Sensitive data.** The logging rule above. No diagnostic carries a payload, a value root, a ticket, a
+  key, record content or a marked method's failure text; a validation failure's message names no marked
+  path (G278).
+- **Retention.** The Runtime holds the latest 4096 in memory only. Those not yet logged are lost when the
+  process ends; nothing in the session keeps them.
+- **Delivery bounds.** logosd reads them once at start, after bootstrap, so a state transfer's line is in
+  the start log; every second while it runs; and once after the Runtime's shutdown, before it exits 0, 3
+  or 4 (§15). A failed start logs them before it exits 2. When more than 4096 arrive between two reads,
+  the oldest are lost and the next read logs one warning, `runtime: N diagnostics dropped`. If the
+  periodic read cannot start, logosd logs an error and runs on with the start and final reads. Required
+  audit does not depend on this log (BCP l.552): call records and the evidence store (§9) are kept as
+  before.
 
 Hosted modules' stdout and stderr are inherited and pass through unfiltered: a module that logs its own
 data puts it in logosd's log.

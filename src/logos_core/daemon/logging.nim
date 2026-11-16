@@ -2,16 +2,18 @@
 ## event, `logosd[<pid>]: <level>: <text>`, written whole under a lock from any
 ## thread. There is no log file; a service manager collects stderr.
 ##
-## The rule for what a line may hold (SEC l.527; IF l.395, SEC l.403, G278):
-## no payload, no value root, no ticket, key or record content, and no
-## provider failure text of a marked method. Method names, schema roots,
-## codes and instance ids are metadata and stay. Callers keep to it; nothing
-## here filters.
+## The rule for what a line may hold (SEC l.527; IF l.395, SEC l.305-306,
+## l.403, G278): no payload, no value root, no ticket, key or record content,
+## and no provider failure text of a marked method. Method names, schema roots,
+## codes and instance ids are metadata and stay. Callers keep to it. Here each
+## line is made one line (`logtext.oneLine`): no text in it can end it and
+## start another that reads as logosd's (I95, amended 2026-11-16).
 
 {.push raises: [], gcsafe.}
 
 import std/[atomics, locks, os]
 import results
+from ../base/logtext import oneLine
 
 type
   LogLevel* = enum
@@ -72,7 +74,7 @@ proc setLogSink*(s: LogSink) =
 proc logLine*(level: LogLevel, text: string) =
   if ord(level) > threshold.load:
     return
-  let line = "logosd[" & $getCurrentProcessId() & "]: " & $level & ": " & text
+  let line = "logosd[" & $getCurrentProcessId() & "]: " & $level & ": " & oneLine(text)
   withLock sinkLock:
     {.cast(gcsafe).}:
       if sink.isNil:

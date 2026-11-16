@@ -119,4 +119,12 @@ lcn.dc_ctl = {
 lcn.dc_test_hooks = {
   ? ctl_command_delay_ms: uint32,
   ? loader_failure_after_ms: uint32,
+  ? diagnostics: lcn.dc_test_diagnostics,
+}
+
+; count diagnostics holding text, recorded as text the Runtime did not write
+; once the start's own diagnostics are logged (I95, amended 2026-11-16).
+lcn.dc_test_diagnostics = {
+  text: tstr .size (1..1024),
+  count: uint32,
 }

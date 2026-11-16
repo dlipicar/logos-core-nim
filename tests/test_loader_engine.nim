@@ -693,6 +693,14 @@ suite "run.loader: Loader loss (RUNTIME l.3813-3825; plan §2.11) [IMPL-DECISION
     # [IMPL-DECISION G249] Termination required, once, in the diagnostics too.
     check terminations.load == 1 and terminationNames.load == 2
     check e.diagnostics().anyIt("termination required" in it)
+    # [I95 amended 2026-11-16] The Loader's own words, quoted and attributed
+    # (BCP l.551).
+    check e.diagnostics().anyIt(
+      (
+        "the Module Loader has failed: reported-by-module: " &
+        "\"a failure injected by the test\" (text from " & LoaderInstanceId & ")"
+      ) in it
+    )
     e.requestShutdown()
     let r = e.awaitShutdown()
     check r.isErr and r.error.code == ecModule

@@ -108,7 +108,7 @@ const
   DcRules = [
     "lcn.daemon_config", "lcn.dc_runtime", "lcn.dc_policy", "lcn.dc_orchestration",
     "lcn.dc_restart", "lcn.dc_override", "lcn.dc_call_audit", "lcn.dc_evidence_store",
-    "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_test_hooks",
+    "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_test_hooks", "lcn.dc_test_diagnostics",
   ]
   TrustRules = ["lcn.trust_file", "lcn.trust_mark", "lcn.ev_key_binding"]
 
@@ -298,7 +298,8 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
   test "[IMPL-DECISION G300] check 3: test_hooks needs a hook build and the development switch, and selects in-process hooks":
     let hooks = dcText(
       extra =
-        "\"test_hooks\": {\"ctl_command_delay_ms\": 50, \"loader_failure_after_ms\": 200}"
+        "\"test_hooks\": {\"ctl_command_delay_ms\": 50, \"loader_failure_after_ms\": 200, " &
+        "\"diagnostics\": {\"text\": \"t\", \"count\": 3}}"
     )
     check refusal(hooks, dev, hooksBuild = false) ==
       "test_hooks: this logosd has no test hooks"
@@ -309,8 +310,11 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
     let c = checked(hooks, dev, hooksBuild = true).get
     check c.hooks.ctlCommandDelayMs == Opt.some(50'u32)
     check c.hooks.loaderFailureAfterMs == Opt.some(200'u32)
+    check c.hooks.diagnostics.isSome # [I95 amended 2026-11-16]
+    check c.hooks.diagnostics.get.text == "t" and c.hooks.diagnostics.get.count == 3
     let none = checked(dcText(), dev, hooksBuild = true).get
     check none.hooks.ctlCommandDelayMs.isNone and none.hooks.loaderFailureAfterMs.isNone
+    check none.hooks.diagnostics.isNone
     check HooksBuild # tests are built with lcnTestHooks
 
   test "[IMPL-DECISION G293] ctl: the socket directory is absolute; workers 1 to 32; idle timeout 100 to 600000 ms":

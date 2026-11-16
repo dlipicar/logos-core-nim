@@ -40,7 +40,7 @@ from ../authority/provider import
 from ./authscopes import AuthorityModule
 import ../base/testhooks
 
-export host, outcome.ErrorCode, plumbing.TerminationHook, CallRecordSink
+export host, outcome.ErrorCode, plumbing.TerminationHook, CallRecordSink, Diagnostic
 
 testHooksMarker("host")
 
@@ -653,6 +653,20 @@ proc auditRecords*(rt: ptr LogosRuntimeHandle): seq[RetainedRecord] =
   if e == nil:
     return
   e.audit.records
+
+proc runtimeDiagnosticsAfter*(
+    rt: ptr LogosRuntimeHandle, cursor: uint64
+): tuple[entries: seq[Diagnostic], overwritten: uint64] =
+  ## [SPEC RUNTIME l.1227; IMPL-DECISION G304; I95 amended 2026-11-16]
+  ## In-process hosts only (no C export, as `auditRecords`): the retained
+  ## diagnostics after `cursor` (the serial of the last one read; 0: none),
+  ## oldest first, each one line, and how many after `cursor` the Runtime's
+  ## ring (`MaxDiagnostics`) dropped before this read. Nothing before `start`.
+  ## logosd drains them into its log (DAEMON.md §12).
+  let e = engineOf(rt)
+  if e == nil:
+    return
+  e.diagnosticsAfter(cursor)
 
 proc exportCallEvidence*(
     rt: ptr LogosRuntimeHandle, recordIndex: uint64
