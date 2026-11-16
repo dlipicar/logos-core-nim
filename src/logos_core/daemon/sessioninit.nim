@@ -4,9 +4,13 @@
 ## `initSession` makes a new session: the layout, the Runtime id (a lowercase
 ## UUID version 4, RUNTIME l.2665), the evidence key and its binding to that id
 ## (G149), the trust file at revision 1 (revision 2 with the development
-## switch) and its mark, and the daemon-config, checked as logosd checks it.
+## switch) and its mark, the daemon-config, checked as logosd checks it, and
+## the Runtime's state store, holding that id and nothing else.
 ## The Runtime id is fixed for the session's life: a new id needs a new
-## session, and with it a new key and kid (CA l.1265, l.1290).
+## session, and with it a new key and kid (CA l.1265, l.1290). The store is
+## made here, never by logosd, so a session whose store was lost cannot start
+## a new one under the old id (RUNTIME l.2630-2632): logosd refuses a missing
+## store (`assemble.nim`).
 ##
 ## The default daemon-config is `capability-authority` with source
 ## `logosd-default`, `recovery: true` (U8) and no operator rule, so only the
@@ -19,6 +23,7 @@ import results
 import ../base/hex
 import ../cbor
 import ../durable
+import ../runtime/store
 import ./[compose, config, evkey, session, trustfile]
 
 export results
@@ -92,6 +97,12 @@ proc makeSession(s: Session, opts: InitOptions): Result[InitResult, string] =
   let bytes = ?dc.encode
   discard ?prepareDaemon(s, bytes, trust, exe = opts.exe)
   ?writeAtomic(s.dir, DaemonConfigName, bytes)
+  # [RUNTIME l.2630-2632; I95] The store, with the id and no instance: the
+  # Runtime's first start finds it as any later start does.
+  var (rs, _) = ?openStore(s.storeDir)
+  let made = rs.write(Snapshot(runtimeInstanceId: runtimeId))
+  rs.close()
+  ?made
   ok(InitResult(runtimeId: runtimeId, key: key, trust: trust))
 
 proc initSession*(s: Session, opts: InitOptions): Result[InitResult, string] =

@@ -27,7 +27,8 @@ when defined(posix):
   from ../src/logos_core/authority/scopes import encode
   from ../src/logos_core/daemon/supervise import heldLocks
   from ../src/logos_core/iface/accept import acceptContractSet
-  from ../src/logos_core/durable import writeAtomic, removeIfPresent
+  from ../src/logos_core/durable import
+    acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
   import
     ./support/[
       daemonbuild, daemonproc, evfixture, kitbuild, modulehostbuild, shortdir, slowdown
@@ -206,11 +207,12 @@ when defined(posix):
       checkpoint("logosd stderr:\n" & d.errText)
 
   proc lockFree(c: Case): bool =
-    let fd = posix.open(cstring(c.s.dir / "lock"), O_RDWR or O_CLOEXEC)
-    if fd < 0:
-      return true
-    result = lockf(fd, F_TLOCK, 0) == 0
-    discard posix.close(fd)
+    ## The session lock (an `flock`, `durable.acquire`) is free: probed with
+    ## the same call, since `lockf` does not see an `flock`.
+    var l = acquire(c.s.dir).valueOr:
+      return false
+    l.release()
+    true
 
   proc expectReady(c: Case, d: Child) =
     if not c.ready(d):
@@ -435,6 +437,22 @@ when defined(posix):
       check startsWith(1)
       check c.ctl("trust", "reestablish", "--revision", "3").code == 0
       check startsWith(0)
+
+    test "[IMPL-DECISION G192] a session whose state store was lost does not start again under its Runtime id (exit 1; RUNTIME l.2630-2632)":
+      let c = newCase()
+      check c.initDefault().code == 0
+      let d = c.start()
+      c.expectReady(d)
+      check d.stopped == 0
+      # The whole of state/ lost: the trust mark re-established, the store not.
+      removeDir(c.s.stateDir)
+      check ensurePrivateDir(c.s.stateDir).isOk
+      check c.ctl("trust", "reestablish", "--revision", "1").code == 0
+      let again = c.start()
+      check waitExit(again, ReadyMs) == 1
+      check "the Runtime state store is missing" in again.errText
+      check "logosctl init" in again.errText
+      check not fileExists(c.s.storeDir / "runtime-state.cbor")
 
     test "offline writers are refused while logosd runs (exit 1); read-only offline commands work":
       let c = newCase()

@@ -23,6 +23,7 @@ import ../iface/outcome
 import ../orchestration
 import ../runtime/host
 from ../runtime/plumbing import DefaultShutdownGrace
+from ../runtime/store import SnapshotName
 from ../transport/io/sock import fitsSunPath, sunPathMax
 from ../durable import ensurePrivateDir
 import ./[compose, ctlmodule, evstore, logging, session, supervise, trustfile]
@@ -166,6 +167,18 @@ proc assembleDaemon*(
   ## Steps 4 to 9. The caller holds the session lock.
   let (_, bytes) = readDaemonConfig(s).valueOr:
     return err(startError(ExitRefused, error))
+  # [RUNTIME l.2630-2632; I95] `init` made the store; logosd never makes one.
+  # A new store under this session's fixed Runtime id would give the old
+  # instances' addresses to unrelated ones.
+  if not entryExists(s.storeDir / SnapshotName):
+    return err(
+      startError(
+        ExitRefused,
+        "the Runtime state store is missing (" & s.storeDir / SnapshotName &
+          "): this session's Runtime id cannot name a new one; restore state/ " &
+          "from a backup, or make a new session with logosctl init",
+      )
+    )
   let seen = readTrust(s).valueOr:
     return err(startError(ExitRefused, "the trust file: " & error))
   let prepared = prepareDaemon(

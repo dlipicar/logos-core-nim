@@ -195,7 +195,10 @@ when defined(posix):
           else: ""
         )
       )
-      lock.release()
+      # The session lock is not released: the orphaned in-process code still
+      # runs until the process is gone, and the kernel drops the `flock` then
+      # (RUNTIME l.3824, l.2641). Released earlier, an offline writer or a
+      # second logosd could hold the session beside it.
       exitnow(cint(ExitLoaderLost))
     withLock sig.lock:
       sig.destroying = true # [R16] before the first destroy attempt
