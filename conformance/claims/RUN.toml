@@ -52,8 +52,9 @@ default = "claimed"
 "RUN-1023" = "deferred:tier-4b"
 "RUN-1024" = "deferred:tier-4b"
 "RUN-1025" = "deferred:tier-4b"
-# Upgrade and transfer of a state assignment (G92, G143). RUN-0999 and RUN-1001 need no transfer:
-# claimed by tests (I89, 4b-1d).
+# State transfer to a replacement instance (G92 as re-decided 2026-11-15: a fresh assignment filled
+# by copy or move; Tier 4b step 4b-7). RUN-0999 and RUN-1001 need no transfer: claimed by tests
+# (I89, 4b-1d).
 "RUN-0925" = "deferred:tier-4b"
 "RUN-0998" = "deferred:tier-4b"
 "RUN-1000" = "deferred:tier-4b"

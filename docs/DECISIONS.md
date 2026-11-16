@@ -136,6 +136,7 @@ had chosen" (A5) and added rows it found settled or changed without a note.
 | Re-decided 2026-11-11 | G52, G53, G55 (for the first Tier 4 slice); after the review, with the Fable 5.2 session's view (owner: "Accept all"): G47, G61, G82, G86, G92, G99, G100, G110, G117 (lowercase half), G137, G140, G143, D18, D27, the section 13 dev-key bullet and I52 (items A6, A7, A9, A10, A12–A18, A21, B1) |
 | Revised 2026-11-13 (owner, batch A, Tier 4b step 4b-1) | D27 (the test-hook rule, item 1), G110 (the enforcer is Runtime admission, item 2) |
 | Revised 2026-11-14 (owner, batch D, Tier 4b step 4b-4) | G207 (one rule or grant covers a whole request, item 17), G283 (K27: CAP-0075 to CAP-0082 by one inspection item, item 16); G205 amended with it (I93) |
+| Re-decided 2026-11-15 (owner, batch F, Tier 4b step 4b-7) | G92 (item 21: a fresh assignment filled by `copy` or `move`, the source retired in the same write, no snapshot for `move`; with F1) |
 | Transport, settled as chosen | G30 (plus a silent close on a first ProtocolError), G33, G34, G35, G36, G37 (order restated, no code change) |
 | Transport, settled differently: code changed | G31 (late replies validated), G32 (overlap closes, ids stay used); I51–I59 |
 | Transport, to decide before Tier 4 | G107 (direction confirmed, more requirements), G165 (new; a TF-06 note); G58 decided 2026-11-10: no same-identity claim, and its socket layout is settled as chosen (RUNTIME l.316-317; review item B6) |
@@ -1459,6 +1460,30 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   Existing routes are never retargeted to it (l.3553). Compatibility is declared explicitly per module
   and version pair, never inferred from names or versions (l.3551). Whether the old instance is then
   retired or kept stopped is decided with Tier 4b.
+- **Re-decided 2026-11-15 (owner: "Accept, start 4b-6", taking the Fable session's position on batch F
+  item 21 and F1, `tier4b-plans/fable-batches-efg.md` §2.1 and §5; Tier 4b step 4b-7, started 2026-11-16,
+  "Start 4b-7"):** no assignment identifier moves. The re-decision of 2026-11-11 above is replaced in
+  steps 3 and 4:
+  - The replacement receives a **fresh state assignment** of its own (RUNTIME l.3549's rule), filled by a
+    separately authorized migration (l.3550) that the deployment chooses per transfer: `copy` (the
+    source's directory is copied and left as it was) or `move` (the directory is renamed to the
+    replacement's). The identifier stays on the retired source's tombstone (l.2637, l.3587); the split
+    between the abstract assignment and its concrete storage is l.94-95 and l.1448 (G305, the K31 row).
+  - **The old instance is retired** in the same durable write that creates the replacement (step 4's open
+    question, l.3563-3588; CONFIG l.265).
+  - **`move` takes no snapshot** (step 3 changes): the operator's backup is the rollback, and the
+    documents say so (l.3554; BCP l.394). `copy` keeps the source, which is the snapshot. The transfer's
+    `mode` is required, with no default.
+  - **The authorization** is protected offline configuration, a `state_transfers` entry applied once at
+    start (G306, the K32 row; decision 9: no socket command and no Runtime Control method, l.3554). The
+    entry is also the explicit compatibility assertion (l.3551).
+  - **Four conditions** from what is built: a hosted source whose restart lock file (G275) is absent is
+    refused; a transfer target whose directory is missing is never realized on a recreated empty one
+    (BCP l.405); no purge while a rename is owed; the transfer record is kept with the tombstone (l.3588).
+  - **F1:** `copy` reads the module's state in the Runtime's process (logosd's); its block buffer is
+    zeroed, and the documents say so. `move` reads nothing.
+
+  Steps 1, 2, 5 and 6 stand. Built in step 4b-7 (I96).
 
 ### G143 — State layout, retention and audit retention
 - **Kind:** FREE · **Specs:** RUNTIME §8, l.1317 (allocation, reuse, retention, deletion, migration of
