@@ -14,7 +14,10 @@
 ## Policy, grants and trust change through no online command (BOOTSTRAP
 ## l.380-382): only the owner's files, offline. `audit evidence` reads the
 ## call-evidence store and exports a record as call evidence, offline and
-## read-only, while logosd runs or not (G301; DAEMON.md §9).
+## read-only, while logosd runs or not (G301; DAEMON.md §9). `state list` and
+## `state purge` read the Runtime's store under the session's lock and then
+## the store's; a purge removes a retired instance's preserved state (G143,
+## I96 part 7c; DAEMON.md §11).
 ##
 ## | Exit | Meaning |
 ## |---|---|
@@ -47,7 +50,7 @@ when defined(posix):
   import ./logos_core/cbor
   import ./logos_core/durable
   import ./logos_core/iface/outcome
-  import ./logos_core/runtime/rc_types
+  import ./logos_core/runtime/[rc_types, stateadmin]
   import
     ./logos_core/daemon/[
       compose, ctlwire, evexport, evkey, evstore, render, session, sessioninit,
@@ -87,6 +90,9 @@ offline (the session's files; writers hold its lock):
   trust evidence-keys ls|rotate
   audit evidence ls
   audit evidence export --seq N [--out FILE]
+  state list
+  state purge INSTANCE [--yes]
+  state purge --assignment A [--yes]
   version"""
     DefaultTimeoutMs = 65_000
     ExitOk = 0
@@ -95,7 +101,7 @@ offline (the session's files; writers hold its lock):
     ExitRc = 4
     NoValue = [
       "json", "text", "wait", "development", "remove", "print-template", "help",
-      "version",
+      "version", "yes",
     ]
 
   type
@@ -1240,6 +1246,112 @@ offline (the session's files; writers hold its lock):
     else:
       err(usage("unknown audit evidence command " & op))
 
+  proc stateFail(e: StateError): Fail =
+    fail(ExitUsage, e.message, code = $e.code)
+
+  proc entriesJson(xs: seq[StateEntry]): (JsonNode, string) =
+    var j = newJArray()
+    var lines: seq[string] = @[]
+    for x in xs:
+      j.add(
+        %*{
+          "name": x.name,
+          "holder": $x.holder,
+          "instance": x.instance,
+          "present": x.present,
+          "link": x.link,
+          "bytes": x.bytes,
+          "files": x.files,
+          "origin": x.origin,
+          "moved": x.moved,
+        }
+      )
+      var line = x.name & "  " & $x.holder
+      if x.instance.len > 0:
+        line.add(" " & x.instance)
+      if x.present:
+        line.add("  " & $x.bytes & " bytes in " & $x.files & " files")
+        if x.link:
+          line.add(" (a symbolic link)")
+      else:
+        line.add("  no directory")
+      if x.origin.len > 0:
+        line.add("  " & x.origin)
+      if x.moved.len > 0:
+        line.add("  " & x.moved)
+      lines.add(line)
+    (j, (if lines.len == 0: "no module state" else: lines.join("\n")))
+
+  proc cmdState(c: Cli, s: Session): Result[Done, Fail] =
+    ## [G143; I96 part 7c] Offline: the session's lock, then the store's.
+    let sub = ?c.arg(1, "list or purge")
+    case sub
+    of "list":
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let xs = listState(s.storeDir, s.modulesDir).valueOr:
+        return err(stateFail(error))
+      let (j, text) = entriesJson(xs)
+      ok(s.offline("state list", %*{"entries": j}, text))
+    of "purge":
+      let assignment = c.opt("assignment")
+      let instance =
+        if c.args.len > 2:
+          Opt.some(c.args[2])
+        else:
+          Opt.none(string)
+      if instance.isSome == assignment.isSome:
+        return err(usage("state purge needs an instance or --assignment A"))
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let (dc, _) = readDaemonConfig(s).valueOr:
+        return err(fail(ExitUsage, error))
+      var configured: seq[string] = @[]
+      for m in dc.modules.get(@[]):
+        if m.state_assignment.isSome:
+          configured.add(m.state_assignment.get)
+      if "yes" notin c.flags:
+        if isatty(0) == 0:
+          return
+            err(fail(ExitUsage, "state purge deletes module state for good: add --yes"))
+        let what =
+          if instance.isSome:
+            "the preserved state of retired instance " & instance.get
+          else:
+            "the state directory " & assignment.get
+        say("logosctl: delete " & what & " for good? [y/N]")
+        var answer = ""
+        try:
+          answer = stdin.readLine()
+        except IOError:
+          discard
+        if answer.strip.toLowerAscii notin ["y", "yes"]:
+          return err(fail(ExitUsage, "nothing purged"))
+      let p = purgeState(s.storeDir, s.modulesDir, instance, assignment, configured).valueOr:
+        return err(stateFail(error))
+      let text =
+        if p.removed:
+          "purged " & p.dir & ": " & $p.bytes & " bytes in " & $p.files & " files"
+        else:
+          "nothing to purge: " & p.dir & " does not exist"
+      ok(
+        s.offline(
+          "state purge",
+          %*{
+            "assignment": p.assignment,
+            "dir": p.dir,
+            "removed": p.removed,
+            "bytes": p.bytes,
+            "files": p.files,
+          },
+          text,
+        )
+      )
+    else:
+      err(usage("unknown state command " & sub))
+
   # Main --------------------------------------------------------------------------------
 
   proc parse(): Result[Cli, Fail] =
@@ -1317,6 +1429,8 @@ offline (the session's files; writers hold its lock):
         cmdTrust(c, s)
       of "audit":
         cmdAudit(c, s)
+      of "state":
+        cmdState(c, s)
       of "daemon":
         if c.args.len > 1 and c.args[1] == "config":
           cmdDaemonConfig(c, s)
@@ -1328,7 +1442,7 @@ offline (the session's files; writers hold its lock):
         online(c, s)
     if r.isErr:
       let deployment =
-        if c.args[0] in ["init", "trust", "audit"]:
+        if c.args[0] in ["init", "trust", "audit", "state"]:
           offlineDeployment(s)
         else:
           "unknown"

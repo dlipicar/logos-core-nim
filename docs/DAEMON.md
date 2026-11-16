@@ -63,8 +63,9 @@ marked field, as the library does (G277).
   path component that is a link where a directory is expected.
 - `lock` is an advisory lock (`flock`). logosd holds it for its whole life. Every offline `logosctl`
   command that writes (`init`, `daemon config set`, `trust development`, `trust reestablish`,
-  `trust evidence-keys rotate`) takes it, and is refused while logosd runs: "another logosd or an
-  offline logosctl command holds this session" (exit 1). Offline reads take no lock.
+  `trust evidence-keys rotate`, `state purge`), and `state list`, which reads the Runtime's store
+  under the store's own lock, takes it, and is refused while logosd runs: "another logosd or an
+  offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
 - `run/` is emptied and recreated at each start while logosd holds the lock, so a socket left by a killed
   daemon never blocks a new one. The Runtime's transport endpoints are under `run/ep/`.
 - `work/` is the Runtime's `work_dir`. It keeps the Module Hosts' restart locks (`work/hosts/`), so it is
@@ -609,6 +610,10 @@ set`, `logosctl trust …`, or the owner's own edits, each applying at the next 
 - **State transfers** are the same kind of input (decision 9): an entry in `state_transfers`, set with
   `daemon config set` while logosd is stopped, authorizes one replacement instance to take another's
   state at the next start (§11). No socket command and no Runtime Control method moves state.
+- **State disposal** is offline too: `logosctl state purge`, with logosd stopped, removes a retired
+  instance's preserved state directory, the separately authorized deletion of BCP l.395;
+  `logosctl state list` shows what is kept and where it came from (§11). No socket command and no
+  Runtime Control method deletes module state.
 
 ## 9. Call evidence
 
@@ -746,7 +751,7 @@ success for disabling one, with no record kept. `logosctl` calls none of them.
   in `daemon-config.cbor`. A lost `state/` is not recreated: logosd refuses to start without the store
   (§2), and the owner makes a new session with `logosctl init`.
 - **Retirement** (`module retire`) keeps the instance's state directory: "retired; its state directory
-  is kept".
+  is kept". Only `logosctl state purge`, below, removes it.
 - **Replacing an instance** (an upgrade under a new instance id; DECISIONS G92 as re-decided
   2026-11-15, I96). An operator instance's state stays with its state assignment, and a new instance
   starts empty. To carry `a`'s state over to a new instance `b`:
@@ -760,9 +765,11 @@ success for disabling one, with no record kept. `logosctl` calls none of them.
      else naming it; add `{from: "a", to: "b", mode: "move"}` to `state_transfers`; name `b` where
      `a` was. Set it with `daemon config set`.
   3. Start logosd. Before anything starts, the Runtime retires `a`, creates `b` and renames `a`'s
-     directory under `state/modules` to `b`'s; afterwards `logosctl module ls` lists `b` and not `a`
-     (the Runtime's own diagnostic is not printed in logosd's log). The orchestrator then starts `b` like any operator instance, under the policy's rules
-     for `b`: a grant or rule naming `a` does not cover it.
+     directory under `state/modules` to `b`'s; afterwards `logosctl module ls` lists `b` and not `a`.
+     The orchestrator then starts `b` like any operator instance, under the policy's rules for `b`: a
+     grant or rule naming `a` does not cover it. The transfer's record is `b`'s transfer record in
+     `state/store`, kept even after `b` is retired: with logosd stopped, `logosctl state list` shows
+     `b`'s assignment "from a (a-state), move" and `a`'s "to b, move".
 
   `mode: "copy"` instead leaves `a`'s directory as it was (not on Windows): the copy is the
   rollback, and a later `{from: "a", to: "c", mode: "copy"}` gives a new `c` `a`'s state again.
@@ -777,6 +784,21 @@ success for disabling one, with no record kept. `logosctl` calls none of them.
   must have ended: a hosted `a` whose Module Host of an earlier run still holds its restart lock is
   refused until that process is gone; find it with `lsof <file>` or `fuser <file>` on the file the
   message names, end it, and start again. A `move` reads nothing: the files are renamed in place.
+- **Listing and purging state** (DECISIONS G143 as re-decided 2026-11-15, I96). Offline, with logosd
+  stopped; each takes the session's lock, then the store's, and neither writes the Runtime's store.
+  - `logosctl state list`: one line per state assignment the store names and per directory in
+    `state/modules`: its holder (`live <id>`, `retired <id>`, `none`, or `unfinished` for a
+    `+transfer-…` or `+purge-…` name the next start removes), its size, and its transfer history
+    ("from a (a-state), move" on the replacement, "to b, move" on the source).
+  - `logosctl state purge INSTANCE` removes a retired instance's preserved state directory, for
+    good (the separately authorized disposal of RUNTIME l.3587-3588; BCP l.394-395). The
+    tombstone keeps the assignment reserved: it is never reused. `--assignment A` removes a
+    directory no instance and no tombstone names. It asks first; `--yes` confirms (needed when
+    stdin is not a terminal). Refused: a live instance ("retire it first"), an assignment the
+    configuration names, a symbolic link (the target is yours to remove), and, with
+    `LOGOS_ERR_NOT_READY`, an assignment a state transfer still owes to its replacement (start
+    logosd once to complete it). The directory is renamed to `+purge-<random>` first, so an
+    interrupted purge leaves only a name the next start removes. No link inside is followed.
 
 ## 12. Diagnostics
 

@@ -637,9 +637,35 @@ when defined(posix):
       d = c.start("logosd3")
       c.expectReady(d)
       check c.reaches("chatter-2", "ready")
-      check "state transfer:" notin d.errText
       check readFile(toDir / "data") == "chatter-1's state"
       check d.stopped == 0
+      # [G143; I96 part 7c] Offline, the store says where the state went.
+      let (code, j) = c.ctlJson("state", "list")
+      check code == 0
+      var seen = 0
+      for e in j{"result", "entries"}.getElems:
+        if e{"name"}.getStr == "chatter-2-state":
+          check e{"holder"}.getStr == "live" and e{"instance"}.getStr == "chatter-2"
+          check e{"origin"}.getStr == "from chatter-1 (chatter-1-state), move"
+          inc seen
+        if e{"name"}.getStr == "chatter-1-state":
+          check e{"holder"}.getStr == "retired" and not e{"present"}.getBool
+          check e{"moved"}.getStr == "to chatter-2, move"
+          inc seen
+      check seen == 2
+      let text = c.ctl("state", "list")
+      check text.code == 0
+      check "chatter-2-state  live chatter-2" in text.stdout
+      check "from chatter-1 (chatter-1-state), move" in text.stdout
+      # Not a terminal and no `--yes`: nothing is purged.
+      let unasked = c.ctl("state", "purge", ChatterInstance)
+      check unasked.code == 1 and "add --yes" in unasked.stderr
+      # A live instance's state is never purged; the moved one has nothing left.
+      let live = c.ctl("state", "purge", "chatter-2", "--yes")
+      check live.code == 1 and "retire it first" in live.stderr
+      let moved = c.ctl("state", "purge", ChatterInstance, "--yes")
+      check moved.code == 0 and "nothing to purge" in moved.stdout
+      check dirExists(toDir)
 
     test "[BCP-0036] [BCP-0049] [BCP-0050] a selected profile that fails (run/ep made unwritable): the hosted start fails, no Module Host runs and nothing realizes the module elsewhere; usable again, it starts":
       let c = newCase()

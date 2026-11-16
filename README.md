@@ -92,7 +92,8 @@ The specs are being revised, so the work is ordered by how settled each area is
   host configuration (or logosd's daemon-config) gives a new instance, under its own state
   assignment, the state directory of the instance it replaces: at the next start the old instance
   is retired and its directory renamed (`move`) or copied, leaving it as the rollback (`copy`, not
-  on Windows). [docs/HOST-CONFIG.md](docs/HOST-CONFIG.md),
+  on Windows). `logosctl state list` shows where state is and came from; `logosctl state purge`
+  removes a retired instance's state for good. [docs/HOST-CONFIG.md](docs/HOST-CONFIG.md),
   "State transfer to a replacement instance".
 - Not yet: the rest of Tier 4b (the rest of transported routes, the Runtime's permission enforcement,
   package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).

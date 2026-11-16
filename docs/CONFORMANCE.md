@@ -411,6 +411,9 @@ with a fresh state assignment of its own (G305), the state of an instance it rep
   not kept. The state passes through the Runtime's process (the owner's F1), one 64 KiB buffer zeroed
   before it is freed; that erasure is claimed for orc builds only (R5), like the marked-payload
   erasure. `copy` is not built on Windows (`LOGOS_ERR_MODULE`).
+- Part 7c builds the separately authorized disposal of preserved state (RUNTIME l.3587-3588, BCP
+  l.394-395): `logosctl state purge`, offline, for a retired instance's directory only, never while a
+  transfer from it is owed; and `logosctl state list`. The tombstone keeps the assignment reserved.
 
 ## Properties not claimed
 

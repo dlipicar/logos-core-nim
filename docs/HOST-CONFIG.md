@@ -1239,9 +1239,13 @@ identity, and every configured instance is new.
   settings go with it: they stay attributed to its address and pass to no other (RUNTIME l.2637), so a
   new instance of the same module is provisioned afresh.
 - **Retention.** Retiring an instance keeps its state directory and reserves its state assignment:
-  retirement is not deletion (BCP l.395). No deletion operation exists yet (DECISIONS G143). A
-  replacement instance gets a retired or replaced instance's state only through `state_transfers`
-  (below).
+  retirement is not deletion (BCP l.395). The library deletes no state directory. A host removes a
+  retired instance's directory offline, with the Runtime stopped (logosd's `logosctl state purge`,
+  [DAEMON.md](DAEMON.md) §11; DECISIONS G143), and never one a state transfer still owes (its
+  replacement's directory missing: start the Runtime once first). The tombstone keeps the
+  assignment reserved, so it is never reused. A name in `state_root` starting with `+` is the
+  Runtime's (an unfinished copy or purge) and is removed at the next start. A replacement
+  instance gets a retired or replaced instance's state only through `state_transfers` (below).
 - **Bounds.** At most `MaxInstances` (1024) known instances, retained ones included, for
   `create_module`.
 
