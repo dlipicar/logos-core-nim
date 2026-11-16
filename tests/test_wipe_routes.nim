@@ -256,12 +256,15 @@ proc vaultHandle(
   check r.code == ecOk
   if r.code != ecOk:
     raise newException(NoHandle, "establish_route: " & $r.code & " " & r.message)
-  let (code, h) = orch.materialize(r.routesOf.routes[0].route, vaultRoot, vaultSchema)
-  check code == ecOk
-  if code != ecOk:
+  var h = LogosRouteHandle()
+  let m = toResult(
+    rawMaterialize(orch, r.routesOf.routes[0].route, vaultRoot, vaultSchema, h)
+  )
+  check m.code == ecOk
+  if m.code != ecOk:
     # [IMPL] A call through the empty handle would crash the process, and with
     # it the case's failed checks, which unittest2 prints at the suite's end.
-    raise newException(NoHandle, "materialize_route: " & $code)
+    raise newException(NoHandle, "materialize_route: " & $m.code & " " & m.message)
   h
 
 proc ready(cfg: EngineConfig): (Engine, ptr LogosRuntimeControlBinding) =
@@ -1010,7 +1013,7 @@ when defined(posix):
   import ../src/logos_core/crypto/blake3
   import ../src/logos_core/runtime/hostsup
   import ./support/[childbuild, modulehostbuild]
-  from ./support/trnowner import fastConfig
+  from ./support/trnowner import fastConfig, Ms
   from ../src/logos_core/host/state import ExitWipeAudit
 
   const
@@ -1043,7 +1046,15 @@ when defined(posix):
     result.moduleHost = Opt.some(hostProgram)
     result.moduleHostEnv = @SanitizerEnv
     result.endpointDir = shortBase / ("e" & $engines)
-    result.transport = Opt.some(fastConfig())
+    # [IMPL] Only a bound on how long a Hello with a host may take, which no
+    # case here is about. A hosted provider's Hello crosses the carrier both
+    # ways, since the Runtime judges it: about 1 s under MemorySanitizer on an
+    # idle host (0.13 s under orc), and a loaded CI runner passed fastConfig's
+    # 15 s (CI on 8522a1f and 5887c5a; a short deadline gives the same
+    # failures, `ccHelloTimeout`).
+    var transport = fastConfig()
+    transport.helloTimeout = 60_000 * Ms * Slow
+    result.transport = Opt.some(transport)
     # [IMPL] Only a bound on the hosts' graceful ends, which a case checks.
     # An audit host's end under ThreadSanitizer on a loaded CI runner passed
     # the 10 s default, and the Runtime killed it (CI on eed9d58).
@@ -1337,6 +1348,10 @@ when defined(posix):
     c.run(line)
 
   proc secretIn(line, key: string): seq[byte] =
+    ## The value at `key` of a successful answer's map; none for any other
+    ## answer, whose message is not hex (its check has failed already).
+    if codeIn(line) != Opt.some(ecOk):
+      return
     var b = unhexOf(valueIn(line))
     result = lookupBytes(b, key)
     wipe(b)

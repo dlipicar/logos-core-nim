@@ -307,13 +307,16 @@ proc stopping(e: Engine, instance: string, t: var Thread[(Engine, string)]): boo
   )
 
 proc finish(e: Engine) =
-  if live == e:
-    live = nil
   clientDestroyGate.store(false)
   slowGate.store(false)
   gate.store(false)
   e.shutdown()
-  check e.close(initDuration(seconds = 10 * Slow))
+  let closed = e.close(initDuration(seconds = 10 * Slow))
+  check closed
+  # [IMPL] Remembered until it closed: an engine `close` gave up on is still
+  # running, and the suite's `leftover` tries again before the next case.
+  if closed and live == e:
+    live = nil
 
 proc leftover() =
   ## [IMPL] For a suite's `teardown`: a test that ended before its `finish`,
