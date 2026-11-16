@@ -181,10 +181,12 @@ nix flake check -L
 ```
 
 CI splits the checks into groups: `orc-spec` (orc, nph, lint and the spec checks), `refc`,
-`orc-release`, and on Linux `asan`, `tsan` and `msan`. On macOS each group is one job; on Linux each
-group runs as two shards, `ciShards.<group>-1` and `<group>-2`, `tsan` as three (`tsan-3`), `asan`
-as four (`asan-3`, `asan-4`) and `msan` as five (`msan-3` to `msan-5`). The heaviest suites' measured
-times (`ciWeights` in `flake.nix`) balance the shards. One group or one shard builds alone with:
+`orc-release`, and on Linux `asan`, `tsan` and `msan`. On macOS `refc` and `orc-release` are one job
+each and `orc-spec` runs as two shards; on Linux each group runs as two shards, `ciShards.<group>-1`
+and `<group>-2`, `tsan` as three (`tsan-3`), `asan` as four (`asan-3`, `asan-4`) and `msan` as five
+(`msan-3` to `msan-5`). The heaviest suites' measured times (`ciWeights` in `flake.nix`) balance the
+shards. The Nimble tasks run as three shards on Linux and two on macOS (`LCN_SHARD`). One group or
+one shard builds alone with:
 
 ```bash
 nix build -L --keep-going .#ciGroups.asan
