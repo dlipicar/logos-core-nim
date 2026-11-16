@@ -1,0 +1,13 @@
+; -- metadata --
+_module = "lcn_call"
+
+; The CLI module (Tier 5 step N-2; DECISIONS G343; BOOTSTRAP l.384-390): a
+; consumer-only module with no method and no event. Its one instance, logosd's
+; system instance lcn_call, runs in its own Module Host, serves the owner's
+; launcher socket (cli.cddl) and makes each command's calls through its own
+; Runtime Control binding and the routes that binding grants (RUNTIME
+; l.182-184). Payloads go between it and the provider, never through logosd.
+; Its configuration is settings.cddl, written by logosd at every start.
+
+; A module document declares at least one type: the module's name.
+lcn_call.name = "lcn_call"

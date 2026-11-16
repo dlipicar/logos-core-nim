@@ -32,6 +32,10 @@ suite "ifc.nim-types: generated modules (D29)":
     check generatedCtlTypes().get == readFile(ctlTypesPath)
     check generatedLogosctlTypes().get == readFile(logosctlTypesPath)
     check generatedLogosctlKit().get == readFile(logosctlKitPath)
+    check generatedCliTypes().get == readFile(cliTypesPath)
+    check generatedLcnCallTypes().get == readFile(lcnCallTypesPath)
+    check generatedLcnCallConfigTypes().get == readFile(lcnCallConfigTypesPath)
+    check generatedLcnCallKit().get == readFile(lcnCallKitPath)
     check generatedStoreTypes().get == readFile(storeTypesPath)
     check generatedCarrierTypes().get == readFile(carrierTypesPath)
     check generatedCaTypes().get == readFile(caTypesPath)
@@ -63,7 +67,8 @@ suite "ifc.nim-types: generated modules (D29)":
       caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath,
       orchTypesPath, orchConfigTypesPath, orchKitPath, orchStateTypesPath,
       daemonConfigTypesPath, trustTypesPath, evstoreTypesPath, ctlTypesPath,
-      logosctlTypesPath, logosctlKitPath,
+      logosctlTypesPath, logosctlKitPath, cliTypesPath, lcnCallTypesPath,
+      lcnCallConfigTypesPath, lcnCallKitPath,
     ]:
       checkpoint path
       check stamp in readFile(path)

@@ -24,6 +24,14 @@ proc main() =
   echo logosctlTypesPath
   writeFile(logosctlKitPath, generatedLogosctlKit().get)
   echo logosctlKitPath
+  writeFile(cliTypesPath, generatedCliTypes().get)
+  echo cliTypesPath
+  writeFile(lcnCallTypesPath, generatedLcnCallTypes().get)
+  echo lcnCallTypesPath
+  writeFile(lcnCallConfigTypesPath, generatedLcnCallConfigTypes().get)
+  echo lcnCallConfigTypesPath
+  writeFile(lcnCallKitPath, generatedLcnCallKit().get)
+  echo lcnCallKitPath
   writeFile(storeTypesPath, generatedStoreTypes().get)
   echo storeTypesPath
   writeFile(carrierTypesPath, generatedCarrierTypes().get)
