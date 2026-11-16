@@ -79,6 +79,8 @@
               ./docs/AUTHORITY-POLICY.md
               # test_daemon_config checks the documented CDDL is the one in src.
               ./docs/DAEMON.md
+              # test_deployment checks the deployment document's facts block.
+              ./docs/DEPLOYMENT.md
               # The service-manager units for logosd (DAEMON.md §13).
               ./contrib
             ];
@@ -137,6 +139,7 @@
                 pkgs.stdenv.hostPlatform.isAarch64
                 && lib.elem file [
                   "test_boundary_invariance.nim"
+                  "test_deployment.nim"
                   "test_engine.nim"
                   "test_host.nim"
                   "test_host_dylib.nim"
@@ -209,6 +212,8 @@
               ./oracle
               ./src/logos_core/pins.nim
               ./src/logos_core/base/nfc_tables.nim
+              # spec-deploydoc checks the deployment document against the claims (G309).
+              ./docs/DEPLOYMENT.md
             ];
           };
           specCheck =
@@ -225,6 +230,7 @@
             spec-pins = specCheck "spec-pins" "spectrace pins";
             spec-ledger = specCheck "spec-ledger" "spectrace check";
             spec-gate = specCheck "spec-gate" "spectrace gate --closed-tier 1 --closed-tier 2 --closed-tier 3 --closed-tier 4";
+            spec-deploydoc = specCheck "spec-deploydoc" "spectrace deploydoc";
             oracle-selftest = specCheck "oracle-selftest" "python3 oracle/selftest.py && python3 oracle/gen_cddl_vectors.py --check && python3 oracle/gen_hash_vectors.py --check && python3 oracle/gen_cose_vectors.py --check && python3 oracle/gen_nfc_tables.py --check";
           };
 

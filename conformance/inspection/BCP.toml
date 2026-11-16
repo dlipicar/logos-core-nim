@@ -35,3 +35,149 @@ reason = "The explicit selections this deployment takes are honoured even where 
 [[item]]
 ids = ["BCP-0061", "BCP-0062"]
 reason = "No Core profile is defined by a string, key, backend name or label: each profile used is named by its owning specification's identifier (bcp-fixed-profiles), and the configuration formats select none by a name of their own. Routing rules name a mode (direct or local-transport), whose profile is the fixed logos.local.unix-stream. `permissions.profile` names the permission profile that CA §3.3-§3.5 asks a deployment to define (logos-core-nim.permission-profile.v1, G279); its names appear only where CA puts permission names (scopes, settings and definitions). The other logos-core-nim.* identifiers name this implementation's own documents (app-config, daemon-config, the carrier, the store, the trust file) and appear in no Transport Hello, invocation descriptor, Runtime Control address or discovery result. Test hooks are code under the lcnTestHooks define (docs/CONFORMANCE.md 'Test hooks'; D27 as amended), absent from every packaged build (flake check no-test-hooks), selected by in-process calls only (G300), and named in no address, discovery or negotiation field."
+
+# The BCP §5.4 deployment document (DECISIONS I97, G309, G310). Each unit below is claimed by
+# inspection because docs/DEPLOYMENT.md answers every part of its item truthfully, `none` included;
+# each reason names the rows, the parts answered None or Not supported and the tier expected to change
+# them. `spectrace deploydoc` (flake check spec-deploydoc) keeps the rows, the claims and these reasons
+# in step; tests/test_deployment.nim keeps the facts block in step with the code.
+
+# bcp-deploy-doc (DECISIONS I97, G309, G310)
+[[item]]
+ids = ["BCP-0038", "BCP-0039"]
+reason = "docs/DEPLOYMENT.md is logosd's §5.4 document (G310: logosd claims no complete system, owner decision 10 (a), and publishes the document as a deployment that owes it would). Its item table has one row per §5.4 item (rows 0 to 23, split where a part is supported and another is not) and indexes every applicable choice. Its second table is the sweep BCP l.355 needs: a search of the pinned specifications (6a4dfa28) for 'MUST document', 'MUST be documented', 'documentation MUST', 'MUST identify', 'MUST state', 'MUST describe' and 'documented', read hit by hit, whose hits that assign a choice to a deployment are rows: R l.187, R l.1395, R l.3037, R l.3394, R l.3775, R l.4035, IF l.881, IF l.3150, CA l.101-103, CA l.406-407, CA l.408, CA l.760, CA l.1320, T l.815-816, T l.1343-1345, CFG l.134, CFG l.261, PM l.402. The Package Manager's own duties (PM l.836, l.859, l.934, l.1191, l.1705) belong to a Package Manager, which is not deployed (Tier 5); the document says so. The other hits are duties of a specification, a record or a message. The items answered None or Not supported are listed under their own units below."
+
+# bcp-deploy-duty-r3037 (DECISIONS I97)
+[[item]]
+ids = ["BCP-0038"]
+reason = "R l.3037 (RUN-0940): the time assurance the selected authority policy needs is documented in docs/HOST-CONFIG.md, Under capability-authority, Time assurance (the host's wall clock trusted for valid_until, each validity also held on a monotonic clock, no skew tolerance; no certificate policy is selected), and indexed by docs/DEPLOYMENT.md's duty table."
+
+# bcp-deploy-duty-r3394 (DECISIONS I97)
+[[item]]
+ids = ["BCP-0038"]
+reason = "R l.3394 and l.3397 (RUN-0965, RUN-0967): snapshot capacity, retention, reclamation and overload are documented in docs/HOST-CONFIG.md, Observation, Limits, and indexed by docs/DEPLOYMENT.md's duty table."
+
+# bcp-deploy-duty-r3775 (DECISIONS I97)
+[[item]]
+ids = ["BCP-0038"]
+reason = "R l.3775 (RUN-1064): resumption after a Runtime restart is told apart from retries after a failure in docs/DEPLOYMENT.md §9 (Recovery: a resumption, not a retry, uncharged; G193, G289) and docs/HOST-CONFIG.md, The reference orchestration module ('Resumption is not a retry'), indexed by the duty table."
+
+# bcp-deploy-duty-r4035 (DECISIONS I97)
+[[item]]
+ids = ["BCP-0038"]
+reason = "R l.4035 (RUN-0740): the one configuration format, logos-core-nim.app-config.v1, with its semantics and how protected bootstrap and deployment inputs are supplied, is docs/HOST-CONFIG.md; logosd derives it from its own protected input, daemon-config.v1 (docs/DAEMON.md §3, The derived host configuration). Indexed by docs/DEPLOYMENT.md's duty table."
+
+# bcp-deploy-duty-t815 (DECISIONS I97)
+[[item]]
+ids = ["BCP-0038"]
+reason = "T l.815-816 (TRN-0309, TRN-0310): the overflow actions for transported event output, the conditions selecting them, the wait bounds (including the unbounded submitWait) and that closing a connection ends its subscriptions are documented in docs/CONFORMANCE.md, Event output overflow, indexed by docs/DEPLOYMENT.md's duty table."
+
+# bcp-deploy-duty-t1345 (DECISIONS I97)
+[[item]]
+ids = ["BCP-0038"]
+reason = "T l.1343-1345 (TRN-0378 to TRN-0380): every Transport limit, its scope (connection or I/O loop) and its behaviour on exhaustion are documented in docs/CONFORMANCE.md, Transport limits, indexed by docs/DEPLOYMENT.md's duty table and §12."
+
+# bcp-deploy-duty-ca1320 (DECISIONS I97)
+[[item]]
+ids = ["BCP-0038"]
+reason = "CA l.1320 (CAP-0415): the evidence export integration (selection by seq, authorization by the owner's offline command on owner-only files, limits, delivery to an O_EXCL 0600 file or a non-terminal stdout) is documented in docs/DAEMON.md §9, Export and Limits, indexed by docs/DEPLOYMENT.md's duty table."
+
+# bcp-deploy-pm-sources (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0040"]
+reason = "docs/DEPLOYMENT.md row 1 and §1: no Package Manager is deployed, so there is no source kind and no package-provenance profile; lcn-pkg, the LGX parser and the resolver are tools (I49, I69). Answered None; Tier 5 (the Package Manager) is expected to change it."
+
+# bcp-deploy-protected-inputs (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0074"]
+reason = "docs/DEPLOYMENT.md row 2 and §2: each protected input (daemon-config with the policy, module configuration values and state_transfers; the trust file and its mark; the evidence key and its binding) with its representation, who writes it, its validation at set and at every start, and replacement at the next start; revocation of a grant or an execution is immediate (CA §8), a withdrawn switch, a rotated key and a changed policy apply at the next start. Every part Supported."
+
+# bcp-deploy-policy (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0075"]
+reason = "docs/DEPLOYMENT.md row 3 and §3: the format (authority-policy.v1, docs/AUTHORITY-POLICY.md), its administration (offline, §17), the system rules S1 to S5 (docs/DAEMON.md §5) and host-ambient for the bootstrap and system instances (docs/PERMISSIONS.md). Every part Supported."
+
+# bcp-deploy-transport (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0041"]
+reason = "docs/DEPLOYMENT.md rows 4a and 4b and §4: the local profile logos.local.unix-stream (Supported; test [BCP-0041] in tests/test_deployment.nim compares it with the facts block); remote profiles: None, no listener, export or enrollment (G298); Tier 5 is expected to change it."
+
+# bcp-deploy-trust (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0042"]
+reason = "docs/DEPLOYMENT.md rows 5a to 5d and §5: call-evidence signing is Supported (one key per session bound to the Runtime, rotated offline; G149). Package-signing trust is None: the carrier, the revisioned trust file, exists and holds no anchors (G299). Package provenance and source evidence: None. Remote Runtime enrollment: None. Tier 5 is expected to change all three."
+
+# bcp-deploy-loader (DECISIONS I97, G309, G312)
+[[item]]
+ids = ["BCP-0043"]
+reason = "docs/DEPLOYMENT.md rows 6a and 6b and §6: the three strategies with where each runs and how it is selected, and the process mechanism (Supported; test [BCP-0043] in tests/test_deployment.nim compares the Loader's advertised capabilities with the facts block). sandbox and container are Not supported: unadvertised, refused with unsupported-strategy (L l.377); Tier 5 is expected to change it."
+
+# bcp-deploy-permissions (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0044"]
+reason = "docs/DEPLOYMENT.md row 7 and §7: the one definition, logos-core-nim.host-ambient, its empty constraint map, its facility classes, its enforcer (Runtime admission) and what happens when it cannot be enforced or is revoked (docs/PERMISSIONS.md). Supported; test [BCP-0044] in tests/test_deployment.nim compares the registry with the facts block."
+
+# bcp-deploy-isolation (DECISIONS I97, G309, G265)
+[[item]]
+ids = ["BCP-0045"]
+reason = "docs/DEPLOYMENT.md rows 8a and 8b and §8: isolation and process behaviour are Supported as described (direct modules share logosd's address space; a hosted module has its own process, process group and environment, under logosd's user; test [BCP-0045] in tests/test_deployment.nim checks the uid). Filesystem, network, device, credential and resource controls are Not supported: placement process is not a sandbox (G265). Tier 5 is expected to change it. §8 also states the data path."
+
+# bcp-deploy-directories (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0046"]
+reason = "docs/DEPLOYMENT.md row 9 and §9: the session's directories and modes, state realization by assignment (G143), retention after retirement, cleanup at start, recovery (resumption, the restart lock and unknown, G275; Loader loss) and migration (state_transfers, I96). Supported; test [BCP-0046] in tests/test_deployment.nim checks the modes and that retirement keeps the state directory."
+
+# bcp-deploy-declarations (DECISIONS I97, G309, G311)
+[[item]]
+ids = ["BCP-0076"]
+reason = "docs/DEPLOYMENT.md rows 10a and 10b and §10: accepted-declaration selection is Supported (daemon-config modules and declarations, one per module name; G55). Exact package/version pinning is None: nothing creates a package-backed module (G311). Tier 5 is expected to change it."
+
+# bcp-deploy-attributes (DECISIONS I97, G309, G47)
+[[item]]
+ids = ["BCP-0077"]
+reason = "docs/DEPLOYMENT.md row 11 and §11: the attribute-source integration of G47 (CA l.101-103): the Runtime's registry as the source, instance id and module name bound to the consumer and target, fixed for an instance's life, a missing fact an evaluation failure, disclosed to the authority only. Supported: a mechanism is described, not a none (G309)."
+
+# bcp-deploy-bounds (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0047"]
+reason = "docs/DEPLOYMENT.md rows 12a and 12b and §12: the Runtime's, the Transport's, the Module Loader's and schema processing's bounds are Supported and linked (docs/HOST-CONFIG.md Runtime limits; docs/CONFORMANCE.md Transport limits; max_payload_depth, G241). Package Manager bounds and dependency-resolution limits are None: no Package Manager is deployed. Tier 5 is expected to change it."
+
+# bcp-deploy-deadlines (DECISIONS I97, G309, G61, G269)
+[[item]]
+ids = ["BCP-0078"]
+reason = "docs/DEPLOYMENT.md row 13 and §13: the five deadlines (the Loader's startup, startup, application, stop, shutdown grace) with their defaults, start points, covered phases and logical effects; the permitted escalation (a Module Host ended by force, G269) and the shared-process limitation (a direct realization is never ended by force; G61, G173). Supported; test [BCP-0078] in tests/test_deployment.nim compares the defaults with the facts block."
+
+# bcp-deploy-upgrade (DECISIONS I97, G309, I87, I96)
+[[item]]
+ids = ["BCP-0079"]
+reason = "docs/DEPLOYMENT.md row 14 and §14: the configuration-preserving upgrade is the operator's workflow (docs/DAEMON.md §11 step 1); package defaults are accepted as the declaration's default_value, and a reset takes the verified complete default from that declaration (docs/HOST-CONFIG.md, Package defaults and reset). Supported."
+
+# bcp-deploy-presentation (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0048"]
+reason = "docs/DEPLOYMENT.md row 15 and §15: no presentation profile is selected, and none is assigned (BCP l.341). Answered None, with no tier expected to change it."
+
+# bcp-deploy-installation (DECISIONS I97, G309, G146)
+[[item]]
+ids = ["BCP-0080"]
+reason = "docs/DEPLOYMENT.md rows 16a and 16b and §16: Package Manager installation and inventory scope and shared-state coordination are None (no Package Manager; Tier 5 is expected to change it). The protected administration of the operating-system integration material is Supported: a systemd user unit and a launchd agent, installed by the owner, never as root (G146)."
+
+# bcp-deploy-admin-path (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0082"]
+reason = "docs/DEPLOYMENT.md row 18a and §17: the administrative path is offline edits of owner-only session files, applying at the next start; the operating system authenticates the owner, and whoever can write the session authorizes every change (docs/DAEMON.md §8). Supported."
+
+# bcp-deploy-approval (DECISIONS I97, G309)
+[[item]]
+ids = ["BCP-0083"]
+reason = "docs/DEPLOYMENT.md row 18b and §17: there is no user-facing approval and so no approval presentation. Answered None, with no tier expected to change it."
+
+# bcp-deploy-activation (DECISIONS I97, G309, G296)
+[[item]]
+ids = ["BCP-0085"]
+reason = "docs/DEPLOYMENT.md row 19 and §17 index docs/DAEMON.md §7, Activation, which documents the five items BCP l.384 lists for the logosctl socket: mechanism, admission (the peer uid), accepted application selection (one instance, seventeen methods), presentation handoff (what crosses at initialization, nothing that authenticates) and failure behaviour. Supported; BCP-0086 to BCP-0089 are tested (step 4b-6)."
+
+# bcp-deploy-state-at-rest (DECISIONS I97, G309, G143)
+[[item]]
+ids = ["BCP-0091", "BCP-0092"]
+reason = "docs/DEPLOYMENT.md row 21 and §19: protection at rest (file modes only), other principals and same-user processes, no secret store, backup and synchronization exposure (no sync facility; a copy holds everything, the evidence key included), restore and rollback (continuity, trust reestablish, the operator's backup as move's rollback), retention and deletion (retirement keeps state and is not deletion; logosctl state purge is the separate deletion; no physical erasure claimed, BCP l.396). Supported; tests [BCP-0091] [BCP-0092] in tests/test_deployment.nim check the modes and the state kept after retirement."

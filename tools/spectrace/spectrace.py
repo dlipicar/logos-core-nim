@@ -689,6 +689,202 @@ def cmd_gate(args) -> int:
     return 1 if failures or stale else 0
 
 
+# The BCP §5.4 deployment document (DECISIONS G309, I97) ------------------------------
+
+DEPLOY_DOC = Path("docs") / "DEPLOYMENT.md"
+DEPLOY_ITEM_HEADER = ["Item", "BCP", "Part", "Verdict", "Changes in", "Answer", "Section", "Units"]
+DEPLOY_DUTY_HEADER = ["Spec", "Line", "Duty", "Answer", "Units"]
+DEPLOY_VERDICTS = {"Supported", "None", "Not supported"}
+DEPLOY_SPECS = {"R": "RUN", "T": "TRN", "CA": "CAP", "IF": "IFC", "CFG": "CFG", "PM": "PKG", "L": "LDR"}
+DEPLOY_LINE_RE = re.compile(r"l\.\d+(?:-\d+)?")
+DEPLOY_UNIT_RE = re.compile(r"\b[A-Z]{3}-\d{4}\b")
+DEPLOY_TIER_RE = re.compile(r"Tier (?:[1-5]|4b)")
+DEPLOY_ANCHOR_RE = re.compile(r"\]\(#([^)]+)\)")
+DEPLOY_FACTS_FENCE = "```json deployment-facts"
+
+
+def md_cells(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def md_table(lines: list[str], header: list[str]) -> list[tuple[int, list[str]]] | None:
+    """The rows (1-based line, cells) of the table whose header is exactly `header`."""
+    for i, line in enumerate(lines):
+        if line.startswith("|") and md_cells(line) == header:
+            rows = []
+            j = i + 2  # past the delimiter row
+            while j < len(lines) and lines[j].startswith("|"):
+                rows.append((j + 1, md_cells(lines[j])))
+                j += 1
+            return rows
+    return None
+
+
+def gh_anchor(heading: str) -> str:
+    """GitHub's anchor for a heading: lowercase, punctuation dropped, spaces to hyphens."""
+    text = re.sub(r"[`*_\[\]]", "", heading).strip().lower()
+    text = re.sub(r"[^\w\- ]", "", text)
+    return text.replace(" ", "-")
+
+
+def cmd_deploydoc(args) -> int:
+    """G309 on docs/DEPLOYMENT.md: every gated BCP §5.4 unit is answered by an item row, each row's
+    units are claimed with evidence, a None or Not supported row's units name its tier in their
+    inspection reason, the duty table's units are claimed and its rows are named under BCP-0038,
+    every in-page link resolves, and the facts block parses."""
+    root = Path(args.root)
+    doc_path = root / DEPLOY_DOC
+    failures: list[str] = []
+    if not doc_path.exists():
+        print(f"{DEPLOY_DOC}: missing")
+        return 1
+    lines = doc_path.read_text(encoding="utf-8").splitlines()
+
+    referenced: set[str] = set()
+    for test in (root / "tests").rglob("*.nim"):
+        referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
+    reasons: dict[str, list[str]] = {}
+    for extra in sorted((root / "conformance" / "inspection").glob("*.toml")):
+        for item in load_toml(extra).get("item", []):
+            for i in item.get("ids", []):
+                reasons.setdefault(i, []).append(str(item.get("reason", "")))
+
+    claims_cache: dict[str, tuple[dict, dict[str, Unit]]] = {}
+
+    def lookup(uid: str) -> tuple[str | None, Unit | None]:
+        prefix = uid[:3]
+        if prefix not in PREFIX_FILE:
+            return None, None
+        if prefix not in claims_cache:
+            claims = load_toml(root / "conformance" / "claims" / f"{prefix}.toml")
+            _, units = load_ledger(ledger_path(root, prefix))
+            claims_cache[prefix] = (claims, {u.id: u for u in units if not u.retired})
+        claims, units = claims_cache[prefix]
+        unit = units.get(uid)
+        return (unit_status(claims, unit) if unit else None), unit
+
+    def check_claimed(where: str, uid: str) -> None:
+        status, unit = lookup(uid)
+        if unit is None or unit.kind not in GATED_KINDS:
+            failures.append(f"{where}: {uid} is not a live gated requirement")
+        elif status != "claimed":
+            failures.append(f"{where}: {uid} is {status}, not claimed")
+        elif uid not in referenced and uid not in reasons:
+            failures.append(f"{where}: {uid} is claimed with no tagged test and no inspection item")
+
+    anchors: set[str] = set()
+    for line in lines:
+        m = HEADING_RE.match(line)
+        if m:
+            anchors.add(gh_anchor(m.group(2)))
+    for n, line in enumerate(lines, 1):
+        for a in DEPLOY_ANCHOR_RE.findall(line):
+            if a not in anchors:
+                failures.append(f"l.{n}: the link #{a} names no heading")
+
+    _, bcp_units = load_ledger(ledger_path(root, "BCP"))
+    gated = {
+        u.id
+        for u in bcp_units
+        if not u.retired and u.kind in GATED_KINDS and within(u.section, "§5.4")
+    }
+
+    items = md_table(lines, DEPLOY_ITEM_HEADER)
+    if items is None:
+        failures.append("the item table (header " + " | ".join(DEPLOY_ITEM_HEADER) + ") is missing")
+        items = []
+    answered: set[str] = set()
+    for n, cells in items:
+        where = f"l.{n} item {cells[0] if cells else '?'}"
+        if len(cells) != len(DEPLOY_ITEM_HEADER):
+            failures.append(f"{where}: {len(cells)} cells, not {len(DEPLOY_ITEM_HEADER)}")
+            continue
+        row = dict(zip(DEPLOY_ITEM_HEADER, cells))
+        verdict, tier = row["Verdict"], row["Changes in"]
+        if verdict not in DEPLOY_VERDICTS:
+            failures.append(f"{where}: Verdict {verdict!r} is not one of {sorted(DEPLOY_VERDICTS)}")
+        if verdict == "Supported" and tier != "—":
+            failures.append(f"{where}: a Supported row has Changes in {tier!r}, not —")
+        if tier != "—" and not DEPLOY_TIER_RE.fullmatch(tier):
+            failures.append(f"{where}: Changes in {tier!r} is neither — nor a tier")
+        if not row["Answer"]:
+            failures.append(f"{where}: no Answer")
+        if not DEPLOY_ANCHOR_RE.search(row["Section"]):
+            failures.append(f"{where}: the Section cell links no section")
+        ids = DEPLOY_UNIT_RE.findall(row["Units"])
+        if not ids:
+            failures.append(f"{where}: no units")
+        for uid in ids:
+            if uid not in gated:
+                failures.append(f"{where}: {uid} is not a gated unit of BCP §5.4")
+                continue
+            answered.add(uid)
+            check_claimed(where, uid)
+            if verdict != "Supported":
+                rs = reasons.get(uid, [])
+                if not rs:
+                    failures.append(f"{where}: {uid} answers {verdict} with no inspection item")
+                elif tier != "—" and not any(tier in r for r in rs):
+                    failures.append(f"{where}: no inspection reason of {uid} names {tier}")
+    for uid in sorted(gated - answered):
+        failures.append(f"{uid} (BCP §5.4) is in no row of the item table")
+
+    duties = md_table(lines, DEPLOY_DUTY_HEADER)
+    if duties is None:
+        failures.append("the duty table (header " + " | ".join(DEPLOY_DUTY_HEADER) + ") is missing")
+        duties = []
+    doc_reasons = reasons.get("BCP-0038", [])
+    for n, cells in duties:
+        where = f"l.{n} duty"
+        if len(cells) != len(DEPLOY_DUTY_HEADER):
+            failures.append(f"{where}: {len(cells)} cells, not {len(DEPLOY_DUTY_HEADER)}")
+            continue
+        row = dict(zip(DEPLOY_DUTY_HEADER, cells))
+        spec, line_m = row["Spec"], DEPLOY_LINE_RE.search(row["Line"])
+        if spec not in DEPLOY_SPECS:
+            failures.append(f"{where}: Spec {spec!r} is not one of {sorted(DEPLOY_SPECS)}")
+            continue
+        if line_m is None:
+            failures.append(f"{where}: Line {row['Line']!r} names no line")
+            continue
+        cite = f"{spec} {line_m.group(0)}"
+        where = f"l.{n} duty {cite}"
+        if not row["Answer"]:
+            failures.append(f"{where}: no Answer")
+        ids = DEPLOY_UNIT_RE.findall(row["Units"])
+        if not ids:
+            failures.append(f"{where}: no units")
+        for uid in ids:
+            if uid[:3] != DEPLOY_SPECS[spec]:
+                failures.append(f"{where}: {uid} is not a unit of {spec}")
+            check_claimed(where, uid)
+        if not any(cite in r for r in doc_reasons):
+            failures.append(f"{where}: no inspection item of BCP-0038 names {cite}")
+
+    fence = [i for i, line in enumerate(lines) if line.strip() == DEPLOY_FACTS_FENCE]
+    if len(fence) != 1:
+        failures.append(f"{len(fence)} facts blocks ({DEPLOY_FACTS_FENCE}), not one")
+    else:
+        body: list[str] = []
+        for line in lines[fence[0] + 1 :]:
+            if line.startswith("```"):
+                break
+            body.append(line)
+        try:
+            if not isinstance(json.loads("\n".join(body)), dict):
+                failures.append("the facts block is not a JSON object")
+        except json.JSONDecodeError as e:
+            failures.append(f"the facts block is not JSON: {e}")
+
+    for f in failures:
+        print(f)
+    print(
+        f"{DEPLOY_DOC}: {len(items)} item rows, {len(duties)} duty rows, "
+        f"{len(answered)}/{len(gated)} BCP §5.4 units answered, {len(failures)} failures"
+    )
+    return 1 if failures else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="spectrace")
     ap.add_argument("--root", default=".", help="logos-core-nim checkout")
@@ -711,6 +907,7 @@ def main() -> int:
             p.add_argument("--quiet", action="store_true")
         if name in ("mirror", "pins"):
             p.add_argument("--write", action="store_true")
+    sub.add_parser("deploydoc", help="check docs/DEPLOYMENT.md against the claims (DECISIONS G309)")
     g = sub.add_parser("gate")
     g.add_argument("--show", type=int, default=20, help="missing units listed per spec")
     g.add_argument(
@@ -727,6 +924,7 @@ def main() -> int:
         "mirror": cmd_mirror,
         "pins": cmd_pins,
         "gate": cmd_gate,
+        "deploydoc": cmd_deploydoc,
     }[args.cmd](args)
 
 

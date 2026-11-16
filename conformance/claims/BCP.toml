@@ -6,10 +6,13 @@
 #   informative           no requirements to test
 #   out-of-scope:<why>    normative, but not this repository's to implement
 
-# A complete Logos module system (the composition this BCP defines, its §5 profiles and deployment
-# documentation) is logosd's: Tier 4b (DECISIONS I88). What a Tier 4 component already meets is
-# claimed by unit.
-default = "deferred:tier-4b"
+# logosd follows §5.1's bootstrap and publishes the §5.4 deployment document (docs/DEPLOYMENT.md;
+# DECISIONS I97, G310). Every gated §5.4 unit is claimed under G309: by inspection where the
+# document answers its item truthfully, none included, with tests where the answer is checked
+# against the code (tests/test_deployment.nim); `spectrace deploydoc` keeps the two in step. No
+# complete Logos module system is claimed (owner decision 10 (a); docs/CONFORMANCE.md "Properties
+# not claimed"): a unit that is met is claimed whether or not the whole is (I97).
+default = "claimed"
 
 [sections]
 "References" = "informative"
@@ -21,8 +24,8 @@ default = "deferred:tier-4b"
 "BCP-0073" = "claimed"
 "BCP-0098" = "claimed"
 # Tier 4b step 4b-6b (I95): the logosctl instance as the activation path (G296), its wire
-# (BCP-0090), and the development switch (D27, G299, G300). BCP-0092 is tagged by test_logosd and
-# test_stateadmin and is claimed with the deployment document (4b-8b).
+# (BCP-0090), and the development switch (D27, G299, G300). The other §5.4 units, BCP-0092
+# among them, are claimed by the default with the deployment document (step 4b-8b, I97).
 "BCP-0084" = "claimed"
 "BCP-0086" = "claimed"
 "BCP-0087" = "claimed"

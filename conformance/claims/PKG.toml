@@ -79,11 +79,13 @@ default = "deferred:tier-5"
 # builds the revisioned trust file's carrier for D27's development switch
 # (G299; tests tag PKG-0418 to PKG-0421 as evidence); the units are claimed with
 # the Package Manager, whose package-signing anchors the file carries then.
+# PKG-0422, whether continued execution depends on that trust, is a documentation
+# duty this deployment meets now with a true "no" (docs/DEPLOYMENT.md §1;
+# DECISIONS G137 as amended 2026-11-16, I97): claimed through "§4.1".
 "PKG-0418" = "deferred:tier-5"
 "PKG-0419" = "deferred:tier-5"
 "PKG-0420" = "deferred:tier-5"
 "PKG-0421" = "deferred:tier-5"
-"PKG-0422" = "deferred:tier-5"
 "PKG-0423" = "deferred:tier-5"
 "PKG-0424" = "deferred:tier-5"
 # §5: package identity, installed records, sources and retention; the

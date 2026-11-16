@@ -1133,8 +1133,11 @@ Runtime's life: a host that cycles many distinct artifacts through one Runtime s
   `authorityFor(state_root/<state_assignment>)` and calls `issueProtected` and `revokeProtected`
   (`docs/AUTHORITY-POLICY.md`, "Grants"); there is no C export.
 - **The attribute source** (BCP l.368). The authority matches policy subjects against facts the
-  Runtime keeps for each instance: its id and module name. Direct instances have no signer or
-  package, so rules naming those match none of them. A host does not supply the facts.
+  Runtime keeps for each instance: its id and module name. No instance has a signer or package
+  fact, direct or hosted: the Runtime records the module name and no selection for every
+  instance, whatever its strategy (DECISIONS I97), so rules naming those match none of them. A
+  host does not supply the facts. logosd's deployment document states it
+  ([DEPLOYMENT.md](DEPLOYMENT.md) §11).
 - **What the Runtime retains about decisions** (RUNTIME l.1756-1760, RUN-0330). The last 4096
   authorization answers, in memory: for each, the consumer, operation, target, decision id, source,
   outcome and the grants it used. They are lost at exit; the authority's own audit is what persists.
