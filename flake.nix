@@ -580,8 +580,9 @@
       # the group's checks sorted by name, the i-th going to shard (i mod N) + 1. Each check is in
       # exactly one shard of its group. The Linux jobs build shards: on 36f355c (2026-11-14) the
       # x86_64 asan and msan groups passed the 90-minute job limit and tsan took 81 minutes. msan
-      # has three: on eed9d58 (2026-11-15) its x86_64 second shard of two passed the limit again
-      # (the first took 52 minutes). The counts must match the `shard` lists in ci.yml.
+      # and asan have three: on eed9d58 (2026-11-15) msan's x86_64 second shard of two passed the
+      # limit again (the first took 52 minutes), and on 5ddd886 (the same day) asan's did (the
+      # first took 69). The counts must match the `shard` lists in ci.yml.
       legacyPackages = forAllSystems (
         system:
         let
@@ -610,7 +611,7 @@
                 path = checks.${name};
               }) names
             );
-          ciShardCount = group: if group == "msan" then 3 else 2;
+          ciShardCount = group: if builtins.elem group [ "asan" "msan" ] then 3 else 2;
           shardOf =
             n: i: names:
             map (x: x.name) (

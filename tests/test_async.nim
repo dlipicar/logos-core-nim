@@ -105,8 +105,17 @@ proc onComplete(
 
 var done: array[4, Done]
 
-proc codeOf(d: var Done): ErrorCode =
-  errorCode(int64(d.code.load)).get
+proc codeOf(d: var Done): Opt[ErrorCode] =
+  ## The completion's code; none before a completion, so a check that compares
+  ## it fails instead of raising a defect.
+  let c = errorCode(int64(d.code.load))
+  if c.isOk:
+    Opt.some(c.get)
+  else:
+    Opt.none(ErrorCode)
+
+func `==`(a: Opt[ErrorCode], b: ErrorCode): bool =
+  a == Opt.some(b)
 
 proc responseOf(d: var Done): seq[byte] =
   d.bytes[0 ..< d.len.load]
@@ -387,7 +396,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     discard e.started(meter())
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.routeId("k"))
-    var outcomes: seq[ErrorCode]
+    var outcomes: seq[Opt[ErrorCode]]
     for i in 0 ..< 200:
       done[0].clear()
       var call = h.started(req(i mod 10), addr done[0], timeoutMs = i mod 3)
@@ -397,8 +406,8 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
       check done[0].count.load == 1
       if done[0].codeOf notin outcomes:
         outcomes.add(done[0].codeOf)
-    check outcomes.allIt(it in [ecOk, ecCancelled, ecTimeout])
-    check ecCancelled in outcomes
+    check outcomes.allIt(it.isSome and it.get in [ecOk, ecCancelled, ecTimeout])
+    check Opt.some(ecCancelled) in outcomes
     sleep(50)
     check done[0].count.load == 1
     h.release()
@@ -1203,14 +1212,21 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
       proc(): bool =
         held.load == before + MaxCallWorkers + MaxNestedCallWorkers
     )
+    # [IMPL] Each completion comes: a refused call's `refuseDelay` after the
+    # 128th call is held (0.1 s with orc, 0.3 s with ASan on an idle Mac, over
+    # local transport too), the rest once the gate opens. Under aarch64 MSan on
+    # a CI runner, with 128 held calls each polling the gate every millisecond,
+    # a refused call's completion over local transport (`test_async_lt`) took
+    # more than 30 s (2026-11-15).
+    const Completes = 60 * Slow ## seconds
     for i in N - 2 ..< N:
-      check many[i].finished
+      check many[i].finished(seconds = Completes)
       check many[i].codeOf == ecModule
       check many[i].messageOf == "no call worker is available"
     check e.diagnostics().anyIt("every call worker is busy" in it)
     gate.store(false)
     for i in 0 ..< N - 2:
-      check many[i].finished
+      check many[i].finished(seconds = Completes)
       check many[i].codeOf == ecOk
     for c in calls.mitems:
       c.release()

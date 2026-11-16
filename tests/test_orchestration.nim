@@ -273,6 +273,20 @@ proc entryOf(id: string): Opt[Entry] =
 proc recovers(id: string): int =
   callsForTests("recover_module", id)
 
+proc settled(id: string): proc(): bool =
+  ## [IMPL] Every `recover_module` call on `id` counted so far is answered
+  ## (the module's diagnostics). A probe is counted when the module sends it;
+  ## until its answer the Runtime may still decide it, and decided after a
+  ## settings replacement it is that replacement's resumption, not a refused
+  ## probe (x86_64 orc-release CI, 2026-11-15).
+  result = proc(): bool =
+    diagText().count("recover_module " & id & ": answered") >= recovers(id)
+
+proc explain(e: Engine) =
+  ## What the module and the engine reported, printed if a later check fails.
+  checkpoint "orchestrator: " & diagText()
+  checkpoint "engine: " & e.diagnostics().join(" | ")
+
 proc gapsMs(times: seq[int64]): seq[int64] =
   for i in 1 ..< times.len:
     result.add((times[i] - times[i - 1]) div 1_000_000)
@@ -907,6 +921,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
       proc(): bool =
         recovers(flakyInstance(0)) >= 3
     )
+    check waitUntil(settled(flakyInstance(0)))
     v = e.view(flakyInstance(0)).tryGet
     check v.state == msUnloaded
     check v.failure.isSome and v.failure.get.kind == fkAuthorityDenied
@@ -917,6 +932,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
     let t0 = getMonoTime()
     check waitUntil(e.isReady(flakyInstance(0)))
+    explain(e)
     check (getMonoTime() - t0).inMilliseconds < ms(6_000)
     check recovers(flakyInstance(0)) == before + 1
     v = e.view(flakyInstance(0)).tryGet
@@ -937,6 +953,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
       proc(): bool =
         recovers(flakyInstance(0)) >= 2
     )
+    check waitUntil(settled(flakyInstance(0)))
     check callsForTests("start_module", flakyInstance(0)) == 1
     let v = e.view(flakyInstance(0)).tryGet
     check v.state == msUnloaded
@@ -948,6 +965,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
     let t0 = getMonoTime()
     check waitUntil(e.isReady(flakyInstance(0)))
+    explain(e)
     check (getMonoTime() - t0).inMilliseconds < ms(6_000)
     check recovers(flakyInstance(0)) == before + 1
     check callsForTests("start_module", flakyInstance(0)) == 1
@@ -965,6 +983,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
       proc(): bool =
         recovers(flakyInstance(0)) >= 2
     )
+    check waitUntil(settled(flakyInstance(0)))
     check "attempt" notin diagText() # the probes were uncharged
     let before = recovers(flakyInstance(0))
     flaky[0].failInits.store(1)
@@ -1083,6 +1102,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
       proc(): bool =
         recovers(flakyInstance(0)) >= 2
     )
+    check waitUntil(settled(flakyInstance(0)))
     # The next probe is 12.8 s away; each replacement below lacks host-ambient,
     # applies at once and is published.
     let t0 = getMonoTime().ticks

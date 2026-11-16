@@ -166,8 +166,8 @@ nix flake check -L
 
 CI splits the checks into groups: `orc-spec` (orc, nph, lint and the spec checks), `refc`,
 `orc-release`, and on Linux `asan`, `tsan` and `msan`. On macOS each group is one job; on Linux each
-group runs as two shards, `ciShards.<group>-1` and `<group>-2`, and `msan` as three (`msan-3`). One
-group or one shard builds alone with:
+group runs as two shards, `ciShards.<group>-1` and `<group>-2`, and `asan` and `msan` as three
+(`asan-3`, `msan-3`). One group or one shard builds alone with:
 
 ```bash
 nix build -L --keep-going .#ciGroups.asan
