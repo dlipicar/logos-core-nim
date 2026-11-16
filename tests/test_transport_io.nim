@@ -660,6 +660,11 @@ suite "trnio.hello: the Hello exchange over sockets (TRANSPORT §3.1, §8.1, §8
     # Waiting behind the stalled frames: not admitted while they hold the pool.
     check o.oneOf(1, 100).isNone
     let c = o.oneOf(1, 5 * margin)
+    if c.isSome and c.get.kind == evConnectFailed:
+      # x86_64 MSan CI on b3af640 failed it after 13.3 s, without saying why.
+      checkpoint "connect failed: " & $c.get.failCode & " " & $c.get.failCause & ": " &
+        c.get.failMsg
+      checkpoint "events: " & $o.kinds(1)
     check c.isSome and c.get.kind == evConnected
     for fd in evil:
       let (data, ended) = readUntilEnd(fd, o, 2000)

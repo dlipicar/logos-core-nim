@@ -116,6 +116,10 @@ when defined(posix):
     result.endpointDir = shortBase / ("e" & $engines)
     result.transport = Opt.some(roomy())
     result.clock = clock
+    # [IMPL] Only a bound on the hosts' graceful ends, which no case here is
+    # about (test_wipe_routes `hostedConfig`): P-5b's shutdown completed with
+    # an error after 32.9 s on a loaded x86_64 MSan runner (CI on b3af640).
+    result.shutdownGrace = initDuration(seconds = 10 * Slow)
 
   proc hostedMeter(
       state = "m", lib = meterLib, digest = meterDigest, id = "meter"
@@ -516,7 +520,11 @@ when defined(posix):
       e.releaseLoaderStallForTests()
       joinThread(t)
       check startReply.load != ord(msReady)
-      check e.awaitShutdown().isOk
+      let down = e.awaitShutdown()
+      if down.isErr:
+        checkpoint "shutdown: " & down.error.message
+        checkpoint "engine: " & e.diagnostics().join(" | ")
+      check down.isOk
       check not e.diagnostics().anyIt("invalid response" in it)
       check not e.diagnostics().anyIt("Module Loader has failed" in it)
       check e.view("hm").tryGet.state != msReady

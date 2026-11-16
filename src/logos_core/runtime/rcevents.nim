@@ -31,6 +31,16 @@ import ../base/perthread
 import ../iface/outcome
 import ./[callside, events, plumbing]
 
+when defined(lcnTestHooks):
+  import std/os
+
+  var drainDelayMs: Atomic[int]
+
+  proc setRcDrainDelayForTests*(ms: int) =
+    ## Each drain an event worker takes starts `ms` late, so its entries stay
+    ## queued meanwhile (a loaded host's event workers); 0 turns it off.
+    drainDelayMs.store(ms)
+
 const
   RcPrefix = "logos.runtime_control."
   RcSuffix = "_event"
@@ -226,6 +236,10 @@ proc rcWorkerLoop(e: Engine) =
     of rjQuit:
       return
     of rjDrain:
+      when defined(lcnTestHooks):
+        let late = drainDelayMs.load
+        if late > 0:
+          sleep(late)
       drain(e, rcSubOf(job.sub))
     of rjLinkDrain:
       linkDrain(e, job.sub)
