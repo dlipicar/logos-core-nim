@@ -551,6 +551,7 @@ when defined(posix):
         h.count.store(0)
         h.last.store(0)
     teardown:
+      setCancelMarkDelayForTests(0)
       leftover()
       check noHostLeft()
 
@@ -784,6 +785,42 @@ when defined(posix):
         check closed.isSome
         if closed.isSome:
           check closed.get.cause == ccPeerClosed
+      e.finish()
+
+    test "[TRN-0317] [IMPL-DECISION G174] P-11b a revoked route's NOT_AUTHORISED reaches a hosted provider's host before its call's cancel: the provider, which returns once cancelled, commits nothing, even while the Runtime thread is slow to go on after marking the call cancelled":
+      # [IMPL; I91] The Runtime thread waits after it marks the route's call
+      # cancelled, so the call worker forwards the cancel long before the
+      # thread goes on. The meter returns on the cancel (channel 22), and the
+      # host must still have committed the NOT_AUTHORISED first (CI on dc2e7ef:
+      # P-11 under refc got the provider's OK).
+      let cfg =
+        hosted(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
+      let dir = cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      let o = newOwner(roomy())
+      defer:
+        o.stop()
+      let rec = rc.establish("k").recordOf
+      let conn = o.session(rec.invocationOf.get)
+      let tag = o.send(conn, 22)
+      check dir.heldAt(1)
+      setCancelMarkDelayForTests(300 * Slow)
+      check rc.renew("r", rec.route).code == ecNotAuthorised
+      let got = o.outcome(conn, tag)
+      setCancelMarkDelayForTests(0)
+      check got.codeOf == Opt.some(ecNotAuthorised)
+      if got.codeOf == Opt.some(ecOk):
+        checkpoint "the provider's own result was committed: value " &
+          $got.reading.reading.value
+      let closed = o.closedOf(conn)
+      check closed.isSome
+      if closed.isSome:
+        check closed.get.cause == ccPeerError
+        check closed.get.code == ecNotAuthorised
+      o.settle(50 * Slow)
+      check o.responses(conn, tag) == 1
       e.finish()
 
     test "[IFC-0729] [RUN-0230] P-12 Cancel to a hosted provider: the call ends CANCELLED, the provider sees is_cancelled, and its late result is not sent":
