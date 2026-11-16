@@ -32,6 +32,7 @@ import ./support/authfixture except
 import ./kit/meter_impl
 import ./generated/meter_module_calls
 import ../src/logos_core/runtime/evidence
+import ../src/logos_core/daemon/evstore
 from ../src/logos_core/permissions import HostAmbient
 from ../src/logos_core/crypto/slhdsa import generateKeyPair
 from std/posix import Mode, chmod
@@ -419,4 +420,59 @@ suite "run.host-api: call records and call evidence (I85; CA §9, §9.1)":
     check v.get.record.arm_Call_success.consumer == address(Orch, RtId)
     check v.get.proofs.isNone
     rt.shutDown()
+    removeFile(keyFile)
+
+  test "[CAP-0415] [IMPL-DECISION G304] [IMPL-DECISION G301] a call record sink set before start is handed every record as the Runtime retains it: logosd's call-evidence store holds them in index order, as the ring held them; a nil sink is INVALID_PARAMS and one set after start NOT_READY":
+    let dir = work / "h7"
+    createDir(dir)
+    let keyFile = dir / "evidence.key"
+    let kid = @[0x68'u8, 0x37]
+    var (key, _) = generateKeyPair().tryGet
+    writeFile(keyFile, key)
+    key.clear()
+    check chmod(cstring(keyFile), Mode(0o600)) == 0
+    let store = openStore(
+      StoreOptions(
+        dir: dir / "evidence",
+        producer: RtId,
+        kid: newSeq[byte](16),
+        maxRecords: 1_000,
+        maxAgeDays: 30,
+        queue: 64,
+      )
+    ).tryGet
+    let rt = create(h5Config(dir, keyFile, kid))
+    check runtimeSetCallRecordSink(rt, nil, store).ec == ecInvalidParams
+    check runtimeSetCallRecordSink(rt, evidenceSink, store).ec == ecOk
+    check rt.register("client", clientTable()) == ecOk
+    check rt.register("meter", meterModuleStaticSymbols()) == ecOk
+    check runtimeStart(rt).ec == ecOk
+    check runtimeSetCallRecordSink(rt, evidenceSink, store).ec == ecNotReady
+    let e = engineOf(rt)
+    let orch = latestClient()
+    check orch.lifecycle("start_module", "logos_capability_authority", Opt.some(Ca)).code ==
+      ecOk
+    check e.authorityBound()[0]
+    check orch.lifecycle("start_module", "meter_module", Opt.some(Meter)).code == ecOk
+    check e.reaches(Meter, msReady)
+    let r = orch.establish("h7")
+    check r.code == ecOk
+    var h = orch.handle(r.routesOf.routes[0].route)
+    for channel in 1'u32 .. 3:
+      check h.read(channel).isOk
+    h.release()
+    let kept = rt.auditRecords
+    check kept.mapIt(it.index) == @[1'u64, 2]
+    check store.waitWrittenForTests(3, 60_000)
+    rt.shutDown()
+    closeStore(store)
+    var stored: seq[LcnEvRecord]
+    for (first, name) in segmentNames(dir / "evidence"):
+      for x in parseSegment(first, readSegment(dir / "evidence", name).tryGet).entries:
+        check x.kind == LcnEvEntryKind.lcn_Ev_record
+        stored.add(x.arm_lcn_Ev_record)
+    check stored.mapIt(it.seq) == @[0'u64, 1, 2]
+    check stored[1].record == kept[0].bytes
+    check stored[2].record == kept[1].bytes
+    check AuditRecord.decode(stored[0].record).tryGet.kind == AuditKind.Call_success
     removeFile(keyFile)

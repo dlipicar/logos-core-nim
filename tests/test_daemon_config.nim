@@ -16,6 +16,7 @@ import
   ../src/logos_core/daemon/
     [compose, daemon_config_types, evkey, session, sessioninit, trust_types, trustfile]
 import ../src/logos_core/runtime/authz
+from ../src/logos_core/runtime/store import openStore, close
 from ../src/logos_core/runtime/authscopes import evaluateRequest, AuthorityModule
 from ../src/logos_core/permissions import PermissionSetting, HostAmbient, profileV1
 from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
@@ -916,6 +917,13 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     check r.trust.file.revision == 1 and not r.trust.file.development
     check establishTrust(s).isOk
     check prepareDaemon(s, bytes, readTrust(s).get).isOk
+    # [RUNTIME l.2630-2632] init made the Runtime's store, with the id and no
+    # instance: logosd never makes one (DAEMON.md §2).
+    var (rs, snap) = openStore(s.storeDir).get
+    rs.close()
+    check snap.isSome
+    check snap.get.runtimeInstanceId == r.runtimeId
+    check snap.get.instances.len == 0 and snap.get.epoch == 0
     # Another session gets another Runtime id.
     let other = initSession(Session(dir: freshDir()), InitOptions()).get
     check other.runtimeId != r.runtimeId
@@ -1032,7 +1040,9 @@ suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim
   test "every daemon CDDL file, and S1-S5 for init's default configuration, word for word":
     let root = currentSourcePath().parentDir.parentDir
     let doc = readFile(root / "docs" / "DAEMON.md")
-    for name in ["daemon_config.cddl", "trust.cddl", "ctl.cddl", "logosctl.cddl"]:
+    for name in [
+      "daemon_config.cddl", "trust.cddl", "ctl.cddl", "logosctl.cddl", "evstore.cddl"
+    ]:
       checkpoint name
       let schema = readFile(root / "src/logos_core/daemon" / name)
       check ("```cddl\n" & schema & "```") in doc

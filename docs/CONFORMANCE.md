@@ -363,6 +363,31 @@ hosted instance whose host of the previous run may still run holds them `pending
 lock is free (G275). Sandbox and container placements, and any enforcement by the operating system,
 stay Tier 5.
 
+### What Tier 4b step 4b-6 changes
+
+Tier 4b step 4b-6 (DECISIONS I95) builds `logosd`, the host of one Runtime, the persistent `logosctl`
+module with its owner-only socket (D13 (a)) and the shell `logosctl` (`docs/DAEMON.md`).
+
+- **SYSTEM BCP**: the logosctl instance is the activation path of BCP l.384-390 (G296): BCP-0084 and
+  BCP-0086 to BCP-0089; its wire format is documented (BCP-0090, `logos-core-nim.ctl.v1`); and the
+  development switch (D27, G299, G300): non-production is identified in the start log and every
+  `logosctl` output, development trust comes only from the protected trust file, and the switch never
+  bypasses authority (BCP-0093 to BCP-0096; inspection items `bcp-non-production-doc` and
+  `bcp-switch-gates`). BCP-0036, BCP-0049, BCP-0050 and BCP-0092 are tagged by `test_logosd` and keep
+  the BCP's `deferred:tier-4b` default until logosd composes the whole system (4b-8).
+- **RUNTIME**: under logosd the Runtime id is host-assigned by `logosctl init` (G192 amended), and
+  logosd ends its process when the Module Loader fails (l.3823-3824; G302): it does not destroy the
+  Runtime, confirms every Module Host gone by its restart lock, and exits 4.
+- **CAPABILITY AUTHORITY**, call evidence: CAP-0415 to CAP-0418 stay claimed through the library's
+  integration (I85). logosd adds a persistent store and an owner-only offline export (G301): the record
+  as stored, complete and with no proofs, signed with the session's current evidence key for the Runtime
+  its binding names. What the store keeps, how long, and what it does not protect are documented in
+  DAEMON.md §9 (CA l.1320; CAP-0415): it is plaintext, protected by file modes only, and drops records
+  under load as recorded gaps. A hosted provider's roots in a stored record rest on its Module Host, as
+  for the ring (G274).
+- No remote listener, export or enrollment exists (G298, K19): the remote Runtime Control methods
+  answer after authorization as `docs/HOST-CONFIG.md` says.
+
 ## Properties not claimed
 
 - Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
@@ -528,7 +553,7 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
    test.
 
 The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `orchestration`,
-`hostsup` and `wipeaudit`):
+`hostsup`, `wipeaudit`, `ctlmodule` and `evstore`):
 
 - `host.setPolicyForTests`: the authority policy the next `start` installs.
 - `engine.loaderJournalForTests`: the Module Loader's request journal, kept in the engine's side table.
@@ -570,6 +595,14 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   under `logosd` calls it, so the audit cannot be armed in a deployment. A host built without the
   define treats an `init` that carries the field, even an empty list, as carrier loss
   (`test_module_host` H-15). The carrier trace exempts exactly that field.
+
+- logosd (DECISIONS I95, G300): `ctlmodule.setCommandDelayForTests` holds each socket command, and
+  `assemble.failLoaderForTests` has the Module Loader report its own failure. A test-hook logosd selects
+  them from daemon-config's `test_hooks` (`ctl_command_delay_ms`, `loader_failure_after_ms`), and only
+  with the development switch on; a packaged logosd has no hook code and refuses `test_hooks`. No
+  environment variable or socket command selects a hook.
+- The call-evidence store (G301): `evstore.pauseForTests` holds its writer, and `waitWrittenForTests`
+  waits for it, both called by `test_evidence_store` and `test_host_authority`.
 
 No deployment binary contains them.
 

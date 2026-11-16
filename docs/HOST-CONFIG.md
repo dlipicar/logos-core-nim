@@ -387,6 +387,12 @@ evidence names the same Runtime across starts.
 - **Retention.** The newest `call_records` records, in memory, the oldest dropped first, lost at
   exit; the authority's own audit is separate. An in-process host reads them with `auditRecords(rt)`,
   each with its index, which counts the records appended since `start`, from 0.
+- **Keeping them elsewhere.** An in-process Nim host can also be handed each record as it is retained:
+  `runtimeSetCallRecordSink(rt, sink, data)`, set before `start` (`LOGOS_ERR_NOT_READY` once a start was
+  attempted; `LOGOS_ERR_INVALID_PARAMS` for a nil handle or sink), calls `sink(data, index, bytes)` on
+  the thread that appended the record, after the ring holds it and outside the ring's lock. The sink
+  must return at once and never call into the Runtime; `bytes` is valid during the call only. It has no
+  C export (DECISIONS G304). logosd's call-evidence store is one (`docs/DAEMON.md` §9).
 - **Marked payloads.** A `_sensitive` payload is never retained: a call whose decision would retain one
   is refused with `LOGOS_ERR_NOT_AUTHORISED` before dispatch (INTERFACE l.397). Write `commitment`
   rules that do not cover such methods, or that retain only their unmarked side.
@@ -618,8 +624,12 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   authorized first (`LOGOS_ERR_NOT_AUTHORISED` when the decision denies); then
   `list_remote_listeners` and `list_provider_exports` answer an empty page (a cursor is
   `LOGOS_ERR_INVALID_PARAMS`, none having been issued), `set_provider_export` is
-  `LOGOS_ERR_INVALID_PARAMS` (it names no listener record), and `set_remote_listener` is
-  `LOGOS_ERR_MODULE`, "remote transport is not supported by this Runtime".
+  `LOGOS_ERR_INVALID_PARAMS` (it names no listener record), and `set_remote_listener` that enables a
+  listener is `LOGOS_ERR_MODULE`, "remote transport is not supported by this Runtime". One that
+  disables a listener assigns the state every listener has by default (RUNTIME l.2830): it succeeds
+  with the requested record. This Runtime keeps a listener record only for a state other than the
+  default, so the lists stay empty, an export naming that listener still finds no record, and no
+  `inventory_changed` hint is sent.
 - **Results.** A result's message and detail stay in the calling thread's storage until that
   thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
   is silent); `LOGOS_OK` carries neither.

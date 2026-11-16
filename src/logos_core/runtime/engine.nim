@@ -6755,8 +6755,13 @@ proc rc(st: State, q: Request) =
   of rmSetProviderExport:
     st.setExport(q, x)
   of rmSetRemoteListener:
-    # [K19 interim; G298; SPEC RUNTIME l.1626, l.3441-3442] Authorized, then
-    # refused: no listener can be activated without remote transport.
+    # [K19 interim; G298 amended (U3); SPEC RUNTIME l.1626, l.2830, l.3431-3442]
+    # Authorized, then: enabling is refused, since no listener can be
+    # activated without remote transport; disabling assigns the state every
+    # listener has by default, so it succeeds with the requested record. No
+    # record is kept for the default state, so the lists stay empty, an
+    # export naming the listener still finds no record, and no
+    # `inventory_changed` hint is sent (l.3418: nothing changed).
     st.require(
       q,
       AuthzRequest(
@@ -6764,7 +6769,13 @@ proc rc(st: State, q: Request) =
       ),
     )
     st.requireReady(q)
-    q.reply.answerError(ecModule, "remote transport is not supported by this Runtime")
+    let listener = q.rc.setListener.listener
+    if listener.enabled:
+      q.reply.answerError(ecModule, "remote transport is not supported by this Runtime")
+    else:
+      q.reply.answerEncoded(
+        encode(LogosNSRuntimeControlSetRemoteListenerResponse(listener: listener))
+      )
   of rmShutdownRuntime:
     # [SPEC RUNTIME §9.3 l.3695-3700] Runtime-wide; the response acknowledges
     # acceptance and is attempted before teardown.
@@ -10884,6 +10895,7 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   let e = createShared(Shared)
   e.tport = tp
   e.audit = newAuditLog(cfg.callRecords)
+  e.audit.setSink(cfg.callRecordSink, cfg.callRecordSinkData)
   e.clock = cfg.clock
   e.payloadDepth = depth
   e.inbox.open()

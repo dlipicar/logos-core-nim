@@ -33,7 +33,7 @@ when defined(posix):
   import ./logos_core/abi/host as abihost
   import ./logos_core/durable
   import ./logos_core/runtime/host
-  import ./logos_core/daemon/[assemble, logging, session]
+  import ./logos_core/daemon/[assemble, evstore, logging, session]
 
   const Usage =
     "usage: logosd [--session-dir DIR] [--log-level error|warn|info] [--version]"
@@ -186,6 +186,7 @@ when defined(posix):
       # by their restart locks, then the process ends.
       withLock sig.lock:
         sig.destroying = true
+      stop(d.store) # [G301] what was offered is written before the exit
       let held = confirmHostsGone(s.workDir)
       logError(
         "exiting with " & $ExitLoaderLost &
@@ -194,7 +195,10 @@ when defined(posix):
           else: ""
         )
       )
-      lock.release()
+      # The session lock is not released: the orphaned in-process code still
+      # runs until the process is gone, and the kernel drops the `flock` then
+      # (RUNTIME l.3824, l.2641). Released earlier, an offline writer or a
+      # second logosd could hold the session beside it.
       exitnow(cint(ExitLoaderLost))
     withLock sig.lock:
       sig.destroying = true # [R16] before the first destroy attempt

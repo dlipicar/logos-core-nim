@@ -16,6 +16,9 @@
 ##   description, so a second holder in the same process is refused too. On
 ##   Windows: `LockFileEx` with `LOCKFILE_EXCLUSIVE_LOCK |
 ##   LOCKFILE_FAIL_IMMEDIATELY`.
+## - **Append-only files** (logosd's call-evidence store, G301). Created
+##   exclusively, 0600, with the directory flushed; each append is written whole
+##   and flushed to the medium before it returns.
 ## - **Modes.** A directory is created 0700; one that group or other may access
 ##   is refused. Files are created 0600. Windows: the directory's ACL is
 ##   inherited, nothing is checked (docs/HOST-CONFIG.md).
@@ -38,6 +41,13 @@ export results
 const
   LockName* = "lock"
   TmpSuffix* = ".tmp"
+
+type AppendFile* = object ## A file written only at its end, flushed at each append.
+  when defined(windows):
+    handle: Handle
+  else:
+    fd: cint
+  isOpen: bool
 
 type DurableLock* = object ## An exclusive lock on a directory, held until `release`.
   when defined(windows):
@@ -230,6 +240,76 @@ proc removeDurably*(dir, name: string): Result[void, string] =
     flushDir(dir)
   else:
     ok()
+
+# Append-only files ------------------------------------------------------------------
+
+proc createAppend*(dir, name: string): Result[AppendFile, string] =
+  ## A new file `dir/name`, 0600; an existing one is refused. The directory is
+  ## flushed, so the name survives a crash.
+  let path = dir / name
+  when defined(posix):
+    let fd = posix.open(
+      cstring(path), O_WRONLY or O_CREAT or O_EXCL or O_APPEND or O_CLOEXEC, 0o600
+    )
+    if fd < 0:
+      return err(describe("cannot create", path, errno))
+    flushDir(dir).isOkOr:
+      discard posix.close(fd)
+      return err(error)
+    ok(AppendFile(fd: fd, isOpen: true))
+  elif defined(windows):
+    let h = createFileW(
+      newWideCString(path),
+      GENERIC_WRITE,
+      FILE_SHARE_READ,
+      nil,
+      CREATE_NEW,
+      FILE_ATTRIBUTE_NORMAL,
+      0,
+    )
+    if h == INVALID_HANDLE_VALUE:
+      return err(describe("cannot create", path, int32(getLastError())))
+    ok(AppendFile(handle: h, isOpen: true))
+
+proc append*(f: var AppendFile, data: openArray[byte]): Result[void, string] =
+  ## Writes `data` at the end, then flushes the file to the medium.
+  if not f.isOpen:
+    return err("the file is closed")
+  when defined(posix):
+    var off = 0
+    while off < data.len:
+      let n = posix.write(f.fd, unsafeAddr data[off], data.len - off)
+      if n < 0:
+        if errno == EINTR:
+          continue
+        return err("cannot append: " & $strerror(errno))
+      off += n
+    if flushFd(f.fd) != 0:
+      return err("cannot flush: " & $strerror(errno))
+    ok()
+  elif defined(windows):
+    var off = 0
+    while off < data.len:
+      var written: int32
+      let chunk = int32(min(data.len - off, 1 shl 30))
+      if writeFile(f.handle, unsafeAddr data[off], chunk, addr written, nil) == 0:
+        return err("cannot append: Windows error " & $getLastError())
+      off += int(written)
+    if flushFileBuffers(f.handle) == 0:
+      return err("cannot flush: Windows error " & $getLastError())
+    ok()
+
+proc close*(f: var AppendFile) =
+  if not f.isOpen:
+    return
+  f.isOpen = false
+  when defined(posix):
+    discard posix.close(f.fd)
+  elif defined(windows):
+    discard closeHandle(f.handle)
+
+func isOpen*(f: AppendFile): bool =
+  f.isOpen
 
 # The lock -------------------------------------------------------------------------
 

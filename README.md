@@ -85,9 +85,11 @@ The specs are being revised, so the work is ordered by how settled each area is
   ends on SIGTERM or `logosctl daemon stop`. The `logosctl` instance serves an owner-only socket;
   each shell command is one Runtime Control call it makes through its own binding, and no module
   payload passes through it. The development switch in the trust file gates allow-all and test
-  hooks, and marks every output `NON-PRODUCTION`. [docs/DAEMON.md](docs/DAEMON.md).
-- Not yet: the rest of Tier 4b (the rest of transported routes, the call-evidence store and its
-  export, the Runtime's permission enforcement, package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
+  hooks, and marks every output `NON-PRODUCTION`. An optional call-evidence store keeps the call
+  records the Runtime retains on disk, and `logosctl audit evidence export` signs one as call
+  evidence. [docs/DAEMON.md](docs/DAEMON.md).
+- Not yet: the rest of Tier 4b (the rest of transported routes, the Runtime's permission enforcement,
+  package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 
@@ -265,7 +267,7 @@ session layout, the daemon-config fields, the default policy and every command a
 | `src/logos_core/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
 | `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
 | `src/logos_core/runtime/`, `src/liblogos_runtime.nim` | The Runtime: the Loader, the engine (instances, lifecycle, Runtime Control, routes, events, asynchronous calls), transported routes (`routing`, `tport`, `sessionauth`, `served`, `ports`), the host configuration and the Host Embedding API; the `liblogos_runtime` exports. |
-| `src/logos_core/daemon/`, `src/logosd.nim`, `src/logosctl.nim` | logosd and logosctl: `daemon-config.v1` and its checks, the session and trust file, the composition, the `logosctl` instance and its socket protocol, the shell's output. |
+| `src/logos_core/daemon/`, `src/logosd.nim`, `src/logosctl.nim` | logosd and logosctl: `daemon-config.v1` and its checks, the session and trust file, the composition, the `logosctl` instance and its socket protocol, the call-evidence store and its export, the shell's output. |
 | `src/logos_core/orchestration/`, `src/logos_core/orchestration.nim` | The reference orchestration module `lcn_orchestrator`: its configuration (`config.cddl`), decisions (`policy.nim`), retry accounting (`accounting.nim`) and worker; `src/logos_core/kit/rcclient.nim` is the typed Runtime Control client it calls through. |
 | `src/logos_core/transport/` | TRANSPORT: envelope codec, framing, Hello, tickets, sessions, the schema boundary; `io/`, the unix-stream I/O thread. |
 | `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; catalog and inspection records (`records.nim`) and the sans-I/O dependency resolver (`resolver.nim`); the `lcn-pkg` CLI. |

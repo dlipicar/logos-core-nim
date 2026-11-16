@@ -40,7 +40,7 @@ from ../authority/provider import
 from ./authscopes import AuthorityModule
 import ../base/testhooks
 
-export host, outcome.ErrorCode, plumbing.TerminationHook
+export host, outcome.ErrorCode, plumbing.TerminationHook, CallRecordSink
 
 testHooksMarker("host")
 
@@ -98,6 +98,9 @@ type
     terminationHook: TerminationHook
       ## [G304; G249] the in-process host's notice of a Loader loss; nil: none
     terminationData: pointer
+    recordSink: CallRecordSink
+      ## [G304; G301] the in-process host's receiver of call records; nil: none
+    recordSinkData: pointer
 
 # Per-thread results ---------------------------------------------------------------
 
@@ -264,6 +267,29 @@ proc runtimeSetTerminationHook*(
       return answer(ecNotReady, "start was already attempted")
     h.terminationHook = hook
     h.terminationData = data
+  answer(ecOk)
+
+proc runtimeSetCallRecordSink*(
+    rt: ptr LogosRuntimeHandle, sink: CallRecordSink, data: pointer
+): LogosResult =
+  ## [IMPL-DECISION G304; G301] In-process hosts only (no C export, as
+  ## `auditRecords`): the procedure handed each call record as the engine
+  ## retains it, with its index, on the appending thread (`callaudit.nim`).
+  ## It must return at once and never call into the Runtime; logosd's
+  ## call-evidence store queues the record (DAEMON.md §9). With none, nothing
+  ## changes. Set before `start`: NOT_READY once a start was attempted; a nil
+  ## sink is INVALID_PARAMS.
+  entry()
+  if rt == nil:
+    return answer(ecInvalidParams, "runtime is null")
+  if sink == nil:
+    return answer(ecInvalidParams, "the call record sink is null")
+  let h = hostOf(rt)
+  withLock h.lock:
+    if h.startAttempted:
+      return answer(ecNotReady, "start was already attempted")
+    h.recordSink = sink
+    h.recordSinkData = data
   answer(ecOk)
 
 proc engineOf*(rt: ptr LogosRuntimeHandle): Engine =
@@ -448,6 +474,8 @@ proc launch(h: ptr HostRuntime): LogosResult =
     initialSettings: c.initialSettings,
     onTerminationRequired: h.terminationHook,
     terminationData: h.terminationData,
+    callRecordSink: h.recordSink,
+    callRecordSinkData: h.recordSinkData,
   )
   if c.authority.isSome:
     # [I85; G47] The attribute source exists before the engine opens, since

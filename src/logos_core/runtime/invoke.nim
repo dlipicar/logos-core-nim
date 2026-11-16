@@ -530,7 +530,9 @@ proc rcRequest(
     c.listListeners = fromChecked(LogosNSRuntimeControlListRemoteListenersRequest, v)
     ok(c)
   of $rmSetRemoteListener:
-    ok(call(rmSetRemoteListener))
+    var c = call(rmSetRemoteListener)
+    c.setListener = fromChecked(LogosNSRuntimeControlSetRemoteListenerRequest, v)
+    ok(c)
   of $rmListProviderExports:
     var c = call(rmListProviderExports)
     c.listExports = fromChecked(LogosNSRuntimeControlListProviderExportsRequest, v)

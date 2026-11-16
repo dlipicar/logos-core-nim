@@ -7,8 +7,9 @@
 ## `assembleDaemon` runs steps 4 to 9: the daemon-config and its five checks,
 ## the trust decision, the evidence key's binding (check 4), `run/` and the
 ## socket path, then `runtimeCreate` with the derived app-config, the two
-## static bindings, the termination hook, the presentation handoff, the
-## orchestrator's diagnostics and the selected test hooks. Nothing has
+## static bindings, the termination hook, the call-evidence store as the call
+## record sink (G301), the presentation handoff, the orchestrator's
+## diagnostics and the selected test hooks. Nothing has
 ## started when it returns. `startDaemon` is step 10; `finishDaemon` the
 ## destroy after the wait.
 
@@ -22,9 +23,10 @@ import ../iface/outcome
 import ../orchestration
 import ../runtime/host
 from ../runtime/plumbing import DefaultShutdownGrace
+from ../runtime/store import SnapshotName
 from ../transport/io/sock import fitsSunPath, sunPathMax
 from ../durable import ensurePrivateDir
-import ./[compose, ctlmodule, logging, session, supervise, trustfile]
+import ./[compose, ctlmodule, evstore, logging, session, supervise, trustfile]
 
 when defined(posix):
   import std/posix
@@ -60,6 +62,7 @@ type
     trust*: TrustInput
     rt*: ptr LogosRuntimeHandle
     supervisor*: Supervisor
+    store*: EvidenceStore ## [G301] nil: no `call_audit.store`
     socketPath*: string
     startedAtMs*: uint64
     graceMs*: int
@@ -84,6 +87,27 @@ proc ok(r: LogosResult): bool =
 
 proc orchestratorSink(line: string) {.nimcall, gcsafe, raises: [].} =
   logInfo("orchestrator: " & line)
+
+proc storeLog(line: string) {.nimcall, gcsafe, raises: [].} =
+  logWarn(line)
+
+proc openEvidenceStore(s: Session, c: DaemonConfig): Result[EvidenceStore, string] =
+  ## [G301] The store `call_audit.store` configures (check 4 made sure the
+  ## evidence key is configured too); nil when there is none.
+  if c.store.isNone:
+    return ok(EvidenceStore(nil))
+  let st = c.store.get
+  openStore(
+    StoreOptions(
+      dir: s.evidenceDir,
+      producer: c.value.runtime.runtime_instance_id,
+      kid: c.value.call_audit.get.evidence.get.kid,
+      maxRecords: st.maxRecords,
+      maxAgeDays: st.maxAgeDays,
+      queue: st.queue,
+      log: storeLog,
+    )
+  )
 
 proc register(
     rt: ptr LogosRuntimeHandle, id: string, table: openArray[(string, pointer)]
@@ -143,6 +167,18 @@ proc assembleDaemon*(
   ## Steps 4 to 9. The caller holds the session lock.
   let (_, bytes) = readDaemonConfig(s).valueOr:
     return err(startError(ExitRefused, error))
+  # [RUNTIME l.2630-2632; I95] `init` made the store; logosd never makes one.
+  # A new store under this session's fixed Runtime id would give the old
+  # instances' addresses to unrelated ones.
+  if not entryExists(s.storeDir / SnapshotName):
+    return err(
+      startError(
+        ExitRefused,
+        "the Runtime state store is missing (" & s.storeDir / SnapshotName &
+          "): this session's Runtime id cannot name a new one; restore state/ " &
+          "from a backup, or make a new session with logosctl init",
+      )
+    )
   let seen = readTrust(s).valueOr:
     return err(startError(ExitRefused, "the trust file: " & error))
   let prepared = prepareDaemon(
@@ -194,6 +230,20 @@ proc assembleDaemon*(
   if not hooked.ok:
     freeSupervisor(sv)
     undo("the termination hook: " & hooked.text)
+  let store = openEvidenceStore(s, c).valueOr:
+    freeSupervisor(sv)
+    discard runtimeDestroy(rt)
+    return err(startError(ExitRefused, "the call-evidence store: " & error))
+  if store != nil:
+    let sunk = runtimeSetCallRecordSink(rt, evidenceSink, store)
+    if not sunk.ok:
+      closeStore(store)
+      freeSupervisor(sv)
+      undo("the call record sink: " & sunk.text)
+    logInfo(
+      "call-evidence store: boot " & $store.boot & ", next seq " & $store.base & " in " &
+        s.evidenceDir
+    )
   let started = uint64(toUnix(getTime()) * 1000 + getTime().nanosecond div 1_000_000)
   setPresentation(
     Presentation(
@@ -217,6 +267,7 @@ proc assembleDaemon*(
       trust: trust,
       rt: rt,
       supervisor: sv,
+      store: store,
       socketPath: path,
       startedAtMs: started,
       graceMs:
@@ -246,13 +297,19 @@ proc destroyRuntime*(d: var Daemon): Result[void, string] =
   ok()
 
 proc release*(d: var Daemon) =
-  ## What the daemon holds besides the Runtime: the handoff and the
-  ## supervisor. After a successful destroy, or at a Loader-loss exit.
+  ## What the daemon holds besides the Runtime: the handoff, the supervisor
+  ## and the call-evidence store. After a successful destroy, or at a
+  ## Loader-loss exit. With the Runtime not destroyed, its sink may still be
+  ## called: the store is only stopped (written out), not freed.
   clearPresentation()
   setOrchestratorDiagnostics(nil)
   if d.rt == nil:
     freeSupervisor(d.supervisor)
     d.supervisor = nil
+    closeStore(d.store)
+    d.store = nil
+  else:
+    stop(d.store)
 
 proc startDaemon*(d: var Daemon): Result[void, StartError] =
   ## Step 10: `runtimeStart`, which returns once orchestration is `ready`
