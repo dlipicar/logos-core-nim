@@ -583,14 +583,19 @@
       # A check whose name ends in no known variant goes to `orc-spec`, so a new variant is
       # still built. `nix build .#ciGroups.asan` builds one group locally.
       #
-      # `ciShards` splits each group into `ciShardCount group` parts, `<group>-1` to `<group>-N`:
-      # the group's checks sorted by name, the i-th going to shard (i mod N) + 1. Each check is in
-      # exactly one shard of its group. The Linux jobs build shards: on 36f355c (2026-11-14) the
-      # x86_64 asan and msan groups passed the 90-minute job limit and tsan took 81 minutes. asan
-      # has three: on 5ddd886 (2026-11-15) its x86_64 second shard of two passed the limit (the
-      # first took 69). msan has four: on eed9d58 (the same day) its x86_64 second shard of two
-      # passed the limit (the first took 52 minutes), and on b3af640 (2026-11-16) its second of
-      # three did (the others took 72 and 71). The counts must match the `shard` lists in ci.yml.
+      # `ciShards` splits each group into `ciShardCount group` parts, `<group>-1` to `<group>-N`,
+      # heaviest check first, each to the part with the least weight so far (`ciWeights`; ties to
+      # the lower part, equal weights by name). Every check is placed exactly once whatever the
+      # weights say, and evaluation fails if a group's parts do not hold its checks exactly once.
+      # The Linux jobs build shards: on 36f355c (2026-11-14) the x86_64 asan and msan groups passed
+      # the 90-minute job limit and tsan took 81 minutes; on 5ddd886 and eed9d58 (2026-11-15) the
+      # second x86_64 asan and msan shards of two did; and on b3af640 (2026-11-16) msan's second of
+      # three did. Those parts were dealt round-robin by name. On 5887c5a (2026-11-16) x86_64
+      # tsan's second shard of two took 81 minutes, asan's second of three 74, and msan's four 55
+      # to 68. A shard took about 7 minutes plus its checks' build and test time over the runner's
+      # four parallel builds, and the slow shards held the heaviest suites together. asan and msan
+      # now have four and five parts, tsan three: on that run's times each comes to about 45 to 55
+      # minutes. The counts must match the `shard` lists in ci.yml.
       legacyPackages = forAllSystems (
         system:
         let
@@ -622,28 +627,76 @@
           ciShardCount =
             group:
             if group == "msan" then
-              4
+              5
             else if group == "asan" then
+              4
+            else if group == "tsan" then
               3
             else
               2;
+          # A suite's weight: its build and test minutes on x86_64 CI, the mean of its asan, tsan
+          # and msan checks in run 43909188165 (5887c5a, 2026-11-16), for the ten heaviest suites.
+          # Every other check weighs `ciDefaultWeight`, about the mean of the rest (5.5). A suite
+          # missing here, or a weight gone stale, only balances the parts worse. To refresh, take
+          # each suite's first and last `nix build -L` line in a run's sanitizer jobs.
+          ciWeights = {
+            test_boundary_invariance = 42;
+            test_logosd = 32;
+            test_hosted_routes = 25;
+            test_authority = 20;
+            test_wipe_routes = 18;
+            test_hosted = 17;
+            test_routes_ca = 14;
+            test_ctl_module = 14;
+            test_hosted_permissions = 14;
+            test_observe_ca = 13;
+          };
+          ciDefaultWeight = 5;
           shardOf =
-            n: i: names:
-            map (x: x.name) (
-              builtins.filter (x: lib.mod x.index n == i) (
-                lib.imap0 (index: name: { inherit index name; }) (lib.sort lib.lessThan names)
-              )
-            );
+            group: n: names:
+            let
+              weight =
+                name:
+                ciWeights.${if group == "orc-spec" then name else lib.removeSuffix "-${group}" name}
+                  or ciDefaultWeight;
+              heaviestFirst = lib.sort (
+                a: b: weight a > weight b || (weight a == weight b && a < b)
+              ) names;
+              lightest =
+                loads:
+                lib.foldl' (
+                  best: i: if builtins.elemAt loads i < builtins.elemAt loads best then i else best
+                ) 0 (lib.range 1 (n - 1));
+              place =
+                acc: name:
+                let
+                  k = lightest acc.loads;
+                in
+                {
+                  loads = lib.imap0 (i: l: if i == k then l + weight name else l) acc.loads;
+                  parts = lib.imap0 (i: p: if i == k then p ++ [ name ] else p) acc.parts;
+                };
+              parts =
+                (builtins.foldl' place {
+                  loads = lib.genList (_: 0) n;
+                  parts = lib.genList (_: [ ]) n;
+                } heaviestFirst).parts;
+            in
+            assert lib.sort lib.lessThan (lib.concatLists parts) == lib.sort lib.lessThan names;
+            parts;
           shardsOf =
             group: names:
+            let
+              parts = shardOf group (ciShardCount group) names;
+            in
             lib.listToAttrs (
-              lib.genList (
-                i:
+              lib.imap0 (
+                i: part:
                 let
                   label = "${group}-${toString (i + 1)}";
                 in
-                lib.nameValuePair label (farm label (shardOf (ciShardCount group) i names))
-              ) (ciShardCount group)
+                lib.nameValuePair label (farm label part)
+              ) parts
             );
         in
         {

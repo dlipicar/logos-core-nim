@@ -9,11 +9,13 @@ name: CI
 # over two hours for every check on Linux x86_64, and 86 of its 90 minutes on macOS (5bd731f,
 # 2026-11-13). Each check is in exactly one group, and the orc-spec job also evaluates every flake
 # output. Linux has six groups; macOS has no sanitizer checks, so only orc-spec, refc and
-# orc-release. On Linux each group runs as two shards, asan as three and msan as four (flake.nix
-# `ciShards`): on 36f355c (2026-11-14) the x86_64 asan and msan jobs passed the 90-minute limit and
-# tsan took 81 minutes, on eed9d58 (2026-11-15) the second x86_64 msan shard of two did, on 5ddd886
-# (the same day) the second x86_64 asan shard of two did, and on b3af640 (2026-11-16) the second
-# x86_64 msan shard of three did (the other two took 72 and 71 minutes).
+# orc-release. On Linux each group runs as two shards, tsan as three, asan as four and msan as five
+# (flake.nix `ciShards`, which balances them by the heaviest suites' measured times): on 36f355c
+# (2026-11-14) the x86_64 asan and msan jobs passed the 90-minute limit and tsan took 81 minutes,
+# on eed9d58 (2026-11-15) the second x86_64 msan shard of two did, on 5ddd886 (the same day) the
+# second x86_64 asan shard of two did, on b3af640 (2026-11-16) the second x86_64 msan shard of three
+# did (the other two took 72 and 71 minutes), and on 5887c5a (the same day) the second x86_64 tsan
+# shard of two took 81 minutes, asan's second of three 74 and msan's four 55 to 68.
 # macOS builds each group whole (33-36 minutes).
 
 on:
@@ -29,7 +31,7 @@ concurrency:
 
 jobs:
   nix:
-    name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 4) || (matrix.group == 'asan' && 3) || 2) || '' }})
+    name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 5) || (matrix.group == 'asan' && 4) || (matrix.group == 'tsan' && 3) || 2) || '' }})
     # ATTIC_TOKEN_PUBLIC only exists in the public-cache environment.
     environment: ${{ github.ref == 'refs/heads/master' && 'public-cache' || '' }}
     strategy:
@@ -37,7 +39,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
         group: [orc-spec, refc, orc-release, asan, tsan, msan]
-        # `ciShardCount` in flake.nix: 2, 3 for asan and 4 for msan (the shards past 2 in `include`).
+        # `ciShardCount` in flake.nix: 2, 3 for tsan, 4 for asan and 5 for msan (the shards past 2
+        # in `include`).
         shard: [1, 2]
         # flake.nix defines the sanitizer variants on Linux only, and macOS builds whole groups.
         exclude:
@@ -57,6 +60,18 @@ jobs:
             group: asan
             shard: 3
           - os: ubuntu-latest
+            group: asan
+            shard: 4
+          - os: ubuntu-24.04-arm
+            group: asan
+            shard: 4
+          - os: ubuntu-latest
+            group: tsan
+            shard: 3
+          - os: ubuntu-24.04-arm
+            group: tsan
+            shard: 3
+          - os: ubuntu-latest
             group: msan
             shard: 3
           - os: ubuntu-24.04-arm
@@ -68,6 +83,12 @@ jobs:
           - os: ubuntu-24.04-arm
             group: msan
             shard: 4
+          - os: ubuntu-latest
+            group: msan
+            shard: 5
+          - os: ubuntu-24.04-arm
+            group: msan
+            shard: 5
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
