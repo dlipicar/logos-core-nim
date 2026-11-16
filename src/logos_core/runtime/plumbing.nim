@@ -637,7 +637,9 @@ type
       listExports*: LogosNSRuntimeControlListProviderExportsRequest
     of rmSetProviderExport:
       setExport*: LogosNSRuntimeControlSetProviderExportRequest
-    of rmGetSelf, rmShutdownRuntime, rmGetExecutionPermissions, rmSetRemoteListener:
+    of rmSetRemoteListener:
+      setListener*: LogosNSRuntimeControlSetRemoteListenerRequest
+    of rmGetSelf, rmShutdownRuntime, rmGetExecutionPermissions:
       discard
 
   CallTicket* = object

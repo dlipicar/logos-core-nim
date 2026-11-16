@@ -624,8 +624,12 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   authorized first (`LOGOS_ERR_NOT_AUTHORISED` when the decision denies); then
   `list_remote_listeners` and `list_provider_exports` answer an empty page (a cursor is
   `LOGOS_ERR_INVALID_PARAMS`, none having been issued), `set_provider_export` is
-  `LOGOS_ERR_INVALID_PARAMS` (it names no listener record), and `set_remote_listener` is
-  `LOGOS_ERR_MODULE`, "remote transport is not supported by this Runtime".
+  `LOGOS_ERR_INVALID_PARAMS` (it names no listener record), and `set_remote_listener` that enables a
+  listener is `LOGOS_ERR_MODULE`, "remote transport is not supported by this Runtime". One that
+  disables a listener assigns the state every listener has by default (RUNTIME l.2830): it succeeds
+  with the requested record. This Runtime keeps a listener record only for a state other than the
+  default, so the lists stay empty, an export naming that listener still finds no record, and no
+  `inventory_changed` hint is sent.
 - **Results.** A result's message and detail stay in the calling thread's storage until that
   thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
   is silent); `LOGOS_OK` carries neither.

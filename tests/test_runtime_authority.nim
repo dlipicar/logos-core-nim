@@ -1416,15 +1416,15 @@ proc tlsAddress(): CborValue =
     (cbor("port"), cbor(443'u64)),
   )
 
-proc listenerReq(): seq[byte] =
+proc listenerReq(enabled = true, control = false): seq[byte] =
   encodeCbor(
     cborMap(
       (
         cbor("listener"),
         cborMap(
           (cbor("address"), tlsAddress()),
-          (cbor("enabled"), cbor(true)),
-          (cbor("runtime_control_enabled"), cbor(false)),
+          (cbor("enabled"), cbor(enabled)),
+          (cbor("runtime_control_enabled"), cbor(control)),
         ),
       )
     )
@@ -1478,7 +1478,7 @@ suite "run.authority: remote listeners and exports without remote transport (K19
       ecNotAuthorised
     e.finish()
 
-  test "[RUN-0346] [IMPL-DECISION G298] allowed: the lists are empty pages, a cursor is refused; set_provider_export is INVALID_PARAMS; set_remote_listener is MODULE_ERROR (RUNTIME l.3372, l.3391, l.3438, l.3441-3442)":
+  test "[RUN-0346] [IMPL-DECISION G298] allowed: the lists are empty pages, a cursor is refused; set_provider_export is INVALID_PARAMS; enabling a listener is MODULE_ERROR, disabling one succeeds and keeps no record (RUNTIME l.2830, l.3372, l.3391, l.3431-3442)":
     let (e, orch) = ready()
     setScript()
     let pid = e.view(Meter).tryGet.providerId
@@ -1508,6 +1508,22 @@ suite "run.authority: remote listeners and exports without remote transport (K19
     check li.code == ecModule
     check li.message == "remote transport is not supported by this Runtime"
     check li.detail.len == 0
+    # Disabling assigns the default state (U3: only enabling is refused): the
+    # requested record comes back, and none is kept.
+    for control in [false, true]:
+      checkpoint "runtime_control_enabled " & $control
+      let off = rcCall(orch, "set_remote_listener", listenerReq(false, control))
+      check off.code == ecOk
+      let r = LogosNSRuntimeControlSetRemoteListenerResponse.decode(off.response).tryGet
+      check not r.listener.enabled
+      check r.listener.runtime_control_enabled == control
+      check r.listener.address.kind ==
+        LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Tls_tcp_runtime_address
+    let after = LogosNSRuntimeControlListRemoteListenersResponse.decode(
+      rcCall(orch, "list_remote_listeners", [0xA0'u8]).response
+    ).tryGet
+    check after.listeners.len == 0
+    check rcCall(orch, "set_provider_export", exportReq(pid)).code == ecInvalidParams
     e.finish()
 
   test "[RUN-0346] [IFC-0416] a malformed request is INVALID_PARAMS with its detail; set_remote_listener, naming no target, is authorized first (G171 interim)":
