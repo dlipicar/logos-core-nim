@@ -16,6 +16,7 @@
 import std/[algorithm, atomics, locks, monotimes, os, strutils, tables, times]
 import unittest2
 import ../src/logos_core/runtime/[configcheck, engine]
+from ../src/logos_core/runtime/rcevents import setRcDrainDelayForTests
 import ../src/logos_core/orchestration
 import ../src/logos_core/orchestration/[accounting, testhooks]
 import ../src/logos_core/kit/rcclient
@@ -887,6 +888,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     resetFake()
 
   teardown:
+    setRcDrainDelayForTests(0)
     leftover()
 
   proc spaced(): Opt[LcnOrchestratorRestart] =
@@ -969,6 +971,34 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check (getMonoTime() - t0).inMilliseconds < ms(6_000)
     check recovers(flakyInstance(0)) == before + 1
     check callsForTests("start_module", flakyInstance(0)) == 1
+    e.finish()
+
+  test "[RUN-0696] [IMPL] a settings event still queued when the module subscribes anew is delivered: it brings the resumption forward":
+    # [I94] Ending a subscription discards its queue. The resync used to end
+    # the generation that held the event (x86_64 orc CI on b3af640). Here
+    # each drain starts half a resync interval late, so a resync falls
+    # between the event and its delivery half the time.
+    let e = boot(
+      value(defaults = starts(0, 1), restart = spaced()),
+      slots = @[0, 1],
+      profiled = true,
+      perms = @[InitialSettings(module: Flaky, instance: flakyInstance(0))],
+    )
+    check waitUntil(e.isReady(flakyInstance(1)))
+    check waitUntil(
+      proc(): bool =
+        recovers(flakyInstance(0)) >= 2
+    )
+    check waitUntil(settled(flakyInstance(0)))
+    let before = recovers(flakyInstance(0))
+    setRcDrainDelayForTests(int(ms(100)))
+    check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
+    let t0 = getMonoTime()
+    check waitUntil(e.isReady(flakyInstance(0)))
+    setRcDrainDelayForTests(0)
+    explain(e)
+    check (getMonoTime() - t0).inMilliseconds < ms(6_000)
+    check recovers(flakyInstance(0)) == before + 1
     e.finish()
 
   test "[RUN-0696] [RUN-0686] a refused probe is not a failed resumption; one accepted that then fails is under the restart policy: charged":

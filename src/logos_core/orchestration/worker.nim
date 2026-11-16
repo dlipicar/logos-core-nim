@@ -5,8 +5,8 @@
 ## Control call and every state-file write. Other threads only hand it data:
 ##
 ## - Event handlers (the Runtime's event workers, G178) copy the event's bytes
-##   into a ring of 64 hints and ring the bell; a full ring or a larger event
-##   sets `overflow`, which makes the worker resynchronize at once.
+##   into a ring of 128 hints and ring the bell; a full ring or a larger event
+##   sets `overflow`, which makes the worker traverse everything at once.
 ## - Completions of the module's asynchronous lifecycle calls (the Runtime's
 ##   lifecycle workers) copy the code and response into the call's slot and
 ##   ring the bell.
@@ -41,8 +41,10 @@ when defined(lcnTestHooks):
   import ./testhooks
 
 const
-  HintSlots* = 64 ## [IMPL] queued hints before a resync
-  HintBytes* = 1024 ## [IMPL] a larger event is a resync
+  HintSlots* = 128
+    ## [IMPL] queued hints before a full re-read: 64 events, since two
+    ## generations of subscriptions deliver each one (`resync`)
+  HintBytes* = 1024 ## [IMPL] a larger event is a full re-read
   MaxInFlight* = 16 ## [IMPL] lifecycle calls at once
   PageLimit = 256'u16
   BringUpFirstMs = 100'i64 ## [IMPL] authority polls: 100 ms doubling to 5 s
@@ -128,6 +130,7 @@ type
     readSet: HashSet[string]
     blocked: HashSet[string]
     subs: seq[LogosSubscriptionId]
+    prior: seq[LogosSubscriptionId] ## the generation before `subs` (`resync`)
     nextTry: int64
     bringDelay, probeDelay: int64
     nextResync: int64
@@ -609,8 +612,9 @@ proc lostAuthority(w: var Worker) =
   let now = monoMs()
   if w.s.authority.isSome:
     diag("list_modules refused: back to the authority's bring-up")
-    w.unsubscribeAll(w.subs)
+    w.unsubscribeAll(w.subs & w.prior)
     w.subs = @[]
+    w.prior = @[]
     w.phase = phaseBringUp
     w.bringDelay = BringUpFirstMs
     w.nextTry = now
@@ -724,10 +728,20 @@ proc probe(w: var Worker) =
 
 proc resync(w: var Worker) =
   ## [SPEC RUNTIME l.3426, l.3428; G225] Subscribe anew first, then end the
-  ## old subscriptions, then traverse everything.
+  ## generation before the current one, then traverse everything.
+  ##
+  ## [IMPL; I94] The current generation stays until the next resync.
+  ## Unsubscribing discards what its queue holds, and the traversal decides
+  ## from readings alone, with no hint. Ended at once, the old generation
+  ## lost a settings event the Runtime had queued but not yet delivered; the
+  ## probe that event would have brought forward waited for its schedule
+  ## (12.8 s on x86_64 orc CI, 2026-11-16). Kept one interval, an event is
+  ## lost only if its delivery takes longer than that interval. Meanwhile,
+  ## both generations deliver each event, and a hint is idempotent.
   let now = monoMs()
   let fresh = w.subscribeAll()
-  w.unsubscribeAll(w.subs)
+  w.unsubscribeAll(w.prior)
+  w.prior = w.subs
   w.subs = fresh
   w.nextResync = now + w.s.resyncMs
   w.rescan = false
@@ -761,8 +775,8 @@ proc applyHints(w: var Worker) =
   ## [SPEC RUNTIME l.3427] Hints name what to read again.
   let (got, overflow) = w.takeHints()
   if overflow:
+    # Hints the ring had no room for: the subscriptions themselves are intact.
     w.rescan = true
-    w.nextResync = monoMs()
   for (kind, bytes) in got:
     case kind
     of hintModuleState:
@@ -932,8 +946,9 @@ proc shutdown(w: var Worker) =
   ## waits for a running handler), calls in flight are cancelled and released
   ## (each waits for a running completion). A charged call keeps its
   ## `pending` for the next start.
-  w.unsubscribeAll(w.subs)
+  w.unsubscribeAll(w.subs & w.prior)
   w.subs = @[]
+  w.prior = @[]
   for i in 0 ..< MaxInFlight:
     if w.sh.slots[i].busy:
       cancel(w.sh.slots[i].call)
@@ -990,8 +1005,14 @@ proc runWorker(sh: ptr Shared) =
         w.probe()
     of phaseOperational:
       w.applyHints()
-      if w.rescan or now >= w.nextResync:
+      if now >= w.nextResync:
         w.resync()
+      elif w.rescan:
+        # [SPEC RUNTIME l.3424] A hint marked the readings stale, and the
+        # subscriptions stand: read everything again, without subscribing
+        # anew (that is the periodic resync's, `resync`).
+        w.rescan = false
+        discard w.traverse()
       w.dueTimers(monoMs())
       w.runReads()
     of phaseHalted:

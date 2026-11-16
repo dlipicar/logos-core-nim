@@ -773,8 +773,11 @@ lcn_orchestrator.override = {
 - **Events are hints.** It subscribes to the module-state, execution-state, inventory,
   configuration-state and permission-settings events and re-reads what they name before it decides
   (l.3427). Every
-  `resync_ms` it subscribes anew, drops the old subscriptions and re-reads every instance (l.3428;
-  DECISIONS G225), so a lost event delays a decision by at most that long.
+  `resync_ms` it subscribes anew, drops the subscriptions made the time before and re-reads every
+  instance (l.3428; DECISIONS G225), so a lost event delays a decision by at most that long. It
+  keeps each generation of subscriptions for one more interval, because dropping a subscription
+  discards the events still queued for it (DECISIONS I94). A full ring of hints, or an inventory
+  event, makes it re-read everything at once, without subscribing anew.
 - **Recovery and its accounting** (l.3786-3790). A failure seen while the module runs (`error` with
   `requested` intent) starts an episode: recoveries on the backoff, each charged, up to
   `max_attempts`, then the diagnostic "restart attempts exhausted after *n* of *m*" and no more. The
