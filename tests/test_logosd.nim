@@ -38,8 +38,17 @@ when defined(posix):
 
   const
     ReadyMs = 20_000 * Slow
-    StopMs = 10_000 * Slow
+    StopDeadlineMs = 10_000 * Slow
+      ## `runtime.stop_deadline_ms` and `shutdown_grace_ms` here: the defaults
+      ## (10 s), scaled under a sanitizer, where a Module Host's stop on a
+      ## loaded CI runner outlasted them (CI on b3af640: exit 3, "cleanup
+      ## unresolved"). No case is about these deadlines.
+    StopMs = 3 * StopDeadlineMs
+      ## how long a case waits for logosd to exit: past both deadlines
     HostsGoneMs = 10_000 * Slow
+    LossAfterMs = 5_000 * Slow
+      ## the Loader-loss cases' `test_hooks.loader_failure_after_ms` when a
+      ## module is started first
     SanitizerEnv =
       ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
       ## the Module Host's environment allow-list here: the sanitizers' settings
@@ -155,6 +164,10 @@ when defined(posix):
     writeFile(result, cast[string](dc.encode.expect("an encoding")))
 
   proc initWith(c: Case, dc: LcnDaemonConfig, extra: varargs[string]): Ran =
+    var dc = dc
+    when Slow > 1:
+      dc.runtime.stop_deadline_ms = Opt.some(uint32(StopDeadlineMs))
+      dc.runtime.shutdown_grace_ms = Opt.some(uint32(StopDeadlineMs))
     c.ctl(@["init", "--config", "@" & c.configFile(dc)] & @extra)
 
   proc initDefault(c: Case): Ran =
@@ -635,17 +648,31 @@ when defined(posix):
       check d.stopped == 0
 
     test "[Rev R7] [G302] a Loader loss with a hosted module running: logosd exits 4 without hanging, its Module Host gone and every restart lock free":
+      # The module is started here once the socket answers, not by the
+      # orchestrator, whose start list waits for the authority binding and may
+      # still be waiting when the timer fires on a slow host (CI on b3af640).
+      # The timer runs from the end of logosd's start; `module start` answers
+      # once the instance is ready, well inside it.
       let c = newCase()
-      check c.initHosted(start = true).code == 0
+      check c.initHosted(start = false).code == 0
       check c.ctl("trust", "development", "on").code == 0
       c.editConfig(
         proc(dc: var LcnDaemonConfig) =
           dc.test_hooks = Opt.some(
-            LcnDcTestHooks(loader_failure_after_ms: Opt.some(uint32(1_500 * Slow)))
+            LcnDcTestHooks(loader_failure_after_ms: Opt.some(uint32(LossAfterMs)))
           )
       )
       let d = c.start()
-      check waitExit(d, ReadyMs + StopMs) == 4
+      c.expectReady(d)
+      let begun = getMonoTime()
+      let started = c.startChatter()
+      checkpoint(
+        "module start: " & $started.code & " after " &
+          $(getMonoTime() - begun).inMilliseconds & " ms " & started.stderr
+      )
+      check started.code == 0
+      check d.chatterLogged(1).len == 1
+      check waitExit(d, LossAfterMs + StopMs) == 4
       let log = d.errText
       checkpoint(log)
       check chatterPids(log).len == 1
