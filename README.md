@@ -95,8 +95,15 @@ The specs are being revised, so the work is ordered by how settled each area is
   on Windows). `logosctl state list` shows where state is and came from; `logosctl state purge`
   removes a retired instance's state for good. [docs/HOST-CONFIG.md](docs/HOST-CONFIG.md),
   "State transfer to a replacement instance".
-- Not yet: the rest of Tier 4b (the rest of transported routes, the Runtime's permission enforcement,
-  package installation into the Runtime) and Tier 5 (remote Runtimes, platform permissions, Windows local transport).
+- Tier 4b, step 4b-8: claims and the deployment document. `logosd` publishes BCP §5.4's deployment
+  profile, checked against the code by `spectrace deploydoc` and a test, and Tier 4b is closed:
+  RUNTIME is claimed for the Runtime instance `logosd` runs (the engine with the reference
+  orchestration module, direct and local transport, hosted modules in a Module Host), LOADER for
+  `direct_static`, `direct_dynamic` and `hosted_dynamic` in a `process`. No complete Logos module
+  system is claimed: there is no Package Manager yet (I97). [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md),
+  [docs/CONFORMANCE.md](docs/CONFORMANCE.md).
+- Not yet: Tier 5: the Package Manager handoff and package installation into the Runtime, remote
+  Runtimes, platform permissions and OS isolation of hosted modules, Windows local transport.
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 

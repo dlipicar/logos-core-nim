@@ -52,7 +52,7 @@ heading under a numbered one.
 |---|---|
 | `claimed` | Built. Every live `kw`, `cddl` and `block` unit in the section must be referenced by a test. |
 | `deferred:tier-N` | Not built yet; N is the tier in `docs/SPEC-STATUS.md`. |
-| `deferred:tier-4b` | Not built yet: `logosctl`, `logosd`, the Module Host and what they bring (SPEC-STATUS's Tier 4b). |
+| `deferred:tier-4b` | Tier 4b is closed (DECISIONS I97): no unit may carry it, and the gate refuses it with `--closed-tier 4b`. |
 | `informative` | Nothing to test (References, Copyright, and appendices the spec marks informative). |
 | `out-of-scope:<why>` | Normative, but not this repository's to implement: a requirement on another party (modules, contracts, applications, specifications, deployments) or a MAY not taken. |
 
@@ -416,7 +416,59 @@ with a fresh state assignment of its own (G305), the state of an instance it rep
   l.394-395): `logosctl state purge`, offline, for a retired instance's directory only, never while a
   transfer from it is owed; and `logosctl state list`. The tombstone keeps the assignment reserved.
 
+### What is claimed at the end of Tier 4b
+
+Tier 4b is closed (DECISIONS I97, 2026-11-16): `spectrace gate --closed-tier 1 --closed-tier 2
+--closed-tier 3 --closed-tier 4 --closed-tier 4b` (the flake's `spec-gate` check) fails on any
+status that still defers to one of them. The sections above say what each step changed; this is the
+claim as it stands.
+
+- **RUNTIME** is claimed for the Runtime instance that `logosd` runs: the engine plus the reference
+  orchestration module (RUNTIME l.72; DECISIONS I94), in direct and local-transport mode, with hosted
+  realizations through the Module Host (I91). A host that embeds `liblogos_runtime` without `logosd`
+  names the reference module or carries its duties itself (`docs/HOST-CONFIG.md`, "Orchestration
+  duties"). Tier 5: remote mode, facades, enrollment, listeners and exports, and package-backed
+  selection with the Package Manager handoff (owner decision 1 (a)).
+- **LOADER** is claimed for `direct_static`, `direct_dynamic` and `hosted_dynamic` with placement
+  `process`; `sandbox` and `container` are refused `unsupported-strategy`. Out of scope: force
+  release (LDR-0163, LDR-0164; K7) and the §5.4 adapter handoff (K3).
+- **CONFIGURATION** is claimed, with the Loader's handoff to hosted modules.
+- **CAPABILITY AUTHORITY** is claimed. Permissions are one definition, `logos-core-nim.host-ambient`,
+  enforced by Runtime admission (CAP-0075 to CAP-0082 by inspection, G283; CAP-0292 and CAP-0293 and
+  CAP-0294 to CAP-0297 not applicable, G286). It grants or refuses all of a module's operating-system
+  access at once; no finer containment is claimed (`docs/PERMISSIONS.md`, "What is not enforced").
+- **TRANSPORT** is claimed for the sans-I/O protocol, the unix-stream I/O layer and its integration
+  into the Runtime and the Module Host. Out of scope: §8.1.2 (G48(a)). Tier 5: §8.2.1 (Windows) and
+  the remote profiles.
+- **INTERFACE** adds execution-boundary invariance (direct against local transport, I91) and
+  marked-payload erasure for orc builds, with the five non-claims below (I92). Tier 5: remote mode
+  (IFC-0010), the reverse mapper and remote bindings.
+- **PACKAGE MANAGER** keeps Tier 3's artifacts and the §11 resolver, and adds PKG-0288 (by tags) and
+  PKG-0422 (a true "no", G137 as amended 2026-11-16). The handoff (§17), trust continuity beyond
+  PKG-0422's statement (G299) and installation are Tier 5.
+- **SYSTEM BCP**: `logosd` follows §5.1's bootstrap (BCP-0021 to BCP-0024 are claimed as met, I97's
+  rule; G310) and publishes the §5.4 deployment document, [DEPLOYMENT.md](DEPLOYMENT.md). Every gated
+  unit of §5.2 to §5.5 that it meets or answers is claimed; `spectrace deploydoc` (flake check
+  `spec-deploydoc`) keeps the document's items, the units' evidence and its duty table in step, and
+  `tests/test_deployment.nim` checks its facts against the code. **No complete Logos module system is
+  claimed** (below). Tier 5: the QUIC and Package Manager realization profiles.
+- **SECURITY CONSIDERATIONS**: as at the end of Tier 4, plus SEC-0057 (marked-payload erasure, orc
+  builds).
+
+The gate at the close: RUN 829/829, LDR 131/131, CFG 122/122, CAP 385/385, TRN 242/242, IFC 624/624,
+PKG 212/212, BCP 49/49, SEC 2/2, with nothing deferred to Tier 4b and to Tier 5 RUN 133, TRN 58,
+IFC 172, PKG 308, BCP 4, SEC 1.
+
 ## Properties not claimed
+
+- A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
+  is no Package Manager, so no package is installed, selected or trusted, and BCP's units that bind
+  the whole are claimed only where `logosd` meets them on its own. `docs/DEPLOYMENT.md` answers each
+  missing facility "None" or "Not supported", with the tier that changes it.
+- Operating-system isolation of hosted modules (SEC l.207-209): a Module Host is a process of the
+  daemon's user with the daemon's view of the file system, the network and devices; placements
+  `sandbox` and `container` are not offered (`docs/DEPLOYMENT.md` §8; DECISIONS G265 for what a module
+  starts, below).
 
 - Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
   run as the daemon's user, so a process running as that user can replace a socket pathname or

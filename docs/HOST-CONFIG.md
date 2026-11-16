@@ -1065,7 +1065,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | call records in memory (`call_audit.call_records`) | 1 to 1,000,000, default 4096 | here |
 | the Capability Authority's audit records (`audit.records`) | docs/AUTHORITY-POLICY.md | in the policy |
 | deadlines | `runtime` (Fields) | here |
-| transport aggregates | docs/CONFORMANCE.md, "Transport limits"; set by the Runtime with 10b | fixed |
+| transport aggregates | docs/CONFORMANCE.md, "Transport limits", on the Runtime's transport I/O thread (DECISIONS I90); the ones `transport` names are set here (next row) | fixed |
 | transported routes: I/O thread limits and Event output | `transport` (Fields) and "Event output" under `routing` | here |
 | the reference orchestration module | "The reference orchestration module", Limits; `resync_ms` in its value | fixed |
 | Module Hosts | one process per `hosted_dynamic` realization; their Runtime Control requests run on 64 proxy workers per Runtime, started on demand; a carrier frame is at most 16 MiB + 64 KiB | fixed |
@@ -1406,7 +1406,8 @@ them to be documented).
   `other` (DECISIONS G57). A consumer of
   module records, readiness results, module-state events or execution summaries must treat a
   classification it does not recognize as an unspecified failure and never derive a restart policy
-  from its spelling (RUNTIME l.3756): later specs and Tier 4b add classifications.
+  from its spelling (RUNTIME l.3756): later specs may add classifications, as Tier 4b added
+  `host-terminated` (DECISIONS G268).
 - **`describe_provider`** returns the call surface validated when the provider was last bound, kept
   after it stops (RUNTIME l.540-541); before any bind it is `LOGOS_ERR_NOT_READY`, once the caller
   holds a `discover` allow for each contract the record expects (otherwise `LOGOS_ERR_NOT_AUTHORISED`,
