@@ -393,7 +393,7 @@ module with its owner-only socket (D13 (a)) and the shell `logosctl` (`docs/DAEM
 Tier 4b step 4b-7 (DECISIONS I96) builds state transfer to a replacement instance (RUNTIME
 l.3546-3554): a `state_transfers` entry in protected host configuration (G306) gives a new instance,
 with a fresh state assignment of its own (G305), the state of an instance it replaces, applied once at
-`start`. Part 7a builds `move` (G307).
+`start`. Part 7a builds `move` (G307), part 7b `copy`.
 
 - **RUNTIME**: RUN-0925 (permissions, configuration and grants come from the replacement's own
   provisioning) and RUN-0998 (the source stopped and quiescent before its state is migrated: no
@@ -404,6 +404,13 @@ with a fresh state assignment of its own (G305), the state of an instance it rep
   directory. A crash after the commit is completed at the next start; a target whose directory is
   missing is never started on an empty one. Processes a module started on its own are outside the
   quiescence evidence, as for a restart.
+- What a `copy` relies on: the whole tree measured before anything is written, then copied into a
+  staging directory in `state_root` with every file and directory flushed before the commit, so a
+  committed copy is always complete; the next start renames it, or removes a staging directory no
+  commit owes. Directories and regular files only; owners, times, extended attributes and ACLs are
+  not kept. The state passes through the Runtime's process (the owner's F1), one 64 KiB buffer zeroed
+  before it is freed; that erasure is claimed for orc builds only (R5), like the marked-payload
+  erasure. `copy` is not built on Windows (`LOGOS_ERR_MODULE`).
 
 ## Properties not claimed
 

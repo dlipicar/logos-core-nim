@@ -538,9 +538,9 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
     check t.len == 1
     check t[0].`from` == "a" and t[0].to == "b"
     check t[0].mode.kind == LcnAppStateTransferModeChoiceKind.Move
-    # [I96, part 7a] copy is the library's refusal, the fifth check.
-    check prepareDaemon(s, dcBytes(text("copy")), prod).error ==
-      "the derived host configuration is refused: state_transfers: a to b: copy is not supported yet"
+    let c = prepareDaemon(s, dcBytes(text("copy")), prod).get
+    check c.composition.appConfig.state_transfers.get[0].mode.kind ==
+      LcnAppStateTransferModeChoiceKind.Copy
     let none = prepareDaemon(s, dcBytes(dcText()), prod).get
     check none.composition.appConfig.state_transfers.isNone
 

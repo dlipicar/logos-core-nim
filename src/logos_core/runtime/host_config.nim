@@ -872,15 +872,6 @@ proc parseHostConfig*(
     format: string, data: openArray[byte]
 ): Result[HostConfig, ConfigError] =
   ## [SPEC RUNTIME §13.3] Decodes and validates one configuration; RUN-0741.
-  ## [I85] Every kind the format has is built (8b-3). [I96, part 7a] A
-  ## `copy` transfer is refused until part 7b builds it.
-  let c = ?decodeHostConfig(format, data)
-  for t in c.transfers:
-    if t.mode == tmCopy:
-      return err(
-        configError(
-          "state_transfers: " & t.source & " to " & t.target &
-            ": copy is not supported yet"
-        )
-      )
-  ok(c)
+  ## [I85] Every kind the format has is built (8b-3); [I96] `copy` included,
+  ## which the engine refuses on a platform without it, at `start`.
+  decodeHostConfig(format, data)

@@ -108,13 +108,15 @@ import
     tables, times, typedthreads,
   ]
 from std/os import
-  sleep, `/`, createDir, dirExists, fileExists, setFilePermissions, FilePermission
+  sleep, `/`, createDir, dirExists, fileExists, setFilePermissions, FilePermission,
+  walkDir, PathComponent
 import results
 import ../abi/types
 import ../base/[perthread, testhooks, wipe]
 from ../base/logtext import oneLine, supplied
 import ../cbor/[decode, utf8]
 import ../commitment
+from ../durable import syncDir
 import ../iface/[accept, outcome, surface]
 import ../loader/contract
 from ../loader/provider import
@@ -7042,11 +7044,40 @@ proc sweepTransfers(st: State): Opt[EngineError] =
         st.diagnose("completed the state transfer to " & id)
         continue
     of tmCopy:
-      discard
+      let staging = stagingName(assignment)
+      if entryKind(dirOf(root, staging)) == ekDir:
+        # The commit came after the whole copy was flushed: it is complete.
+        moveDir(root, staging, assignment).isOkOr:
+          return Opt.some(
+            engineError(
+              ecModule, "the state transfer to " & id & " cannot be completed: " & error
+            )
+          )
+        st.diagnose("completed the state transfer to " & id)
+        continue
     st.diagnose(
       "the state directory of " & id & " is missing: " & dirOf(root, assignment) &
         "; it is not realized until the directory exists"
     )
+  when defined(posix):
+    # [I96; plan §2.6 step 2] What no committed transfer owes: an uncommitted
+    # copy's staging, an interrupted purge. `+` is never an assignment's.
+    var reserved: seq[string] = @[]
+    try:
+      for f in walkDir(root, relative = true):
+        if isReserved(f.path):
+          reserved.add(f.path)
+    except CatchableError as e:
+      return Opt.some(engineError(ecModule, "the state root cannot be read: " & e.msg))
+    for name in reserved:
+      removeTree(root, name).isOkOr:
+        return Opt.some(
+          engineError(
+            ecModule,
+            "an unfinished state transfer or purge cannot be removed: " & error,
+          )
+        )
+      st.diagnose("removed an unfinished state transfer or purge: " & dirOf(root, name))
   Opt.none(EngineError)
 
 proc transferredMissing(st: State, x: Inst): Opt[string] =
@@ -7070,6 +7101,8 @@ proc checkTransfers(
   ## codes are a deployment action's: INVALID_PARAMS for input, NOT_READY for
   ## a source that may still be in use, MODULE_ERROR for what cannot be done.
   var todo: seq[bool]
+  var copyBytes = 0'u64 ## of every `copy` entry still to apply
+  var free = Opt.none(uint64)
   if transfers.len == 0:
     return ok(todo)
   if not st.store.isPersistent or st.cfg.stateRoot.isNone:
@@ -7186,8 +7219,37 @@ proc checkTransfers(
             )
           )
     if t.mode == tmCopy:
-      # [I96, part 7a] `parseHostConfig` refuses `copy` until part 7b.
-      return err(transferError(ecModule, t, "copy is not supported by this build"))
+      when not defined(posix):
+        # 11 [IMPL]
+        return err(transferError(ecModule, t, "copy is not supported on this platform"))
+      else:
+        # 10 [BCP l.369-370; I96] measured, metadata only, before anything
+        # is written: content is the entry's (INVALID_PARAMS), a bound or the
+        # space the deployment's (MODULE_ERROR)
+        let limit = (if t.maxBytes == 0: DefaultTransferBytes else: t.maxBytes)
+        let size = measureTree(from_dir, limit).valueOr:
+          return err(
+            transferError(
+              (if error.kind == tfContent: ecInvalidParams else: ecModule),
+              t,
+              error.message,
+            )
+          )
+        copyBytes += size.bytes
+        if free.isNone:
+          let n = freeBytes(root).valueOr:
+            return err(transferError(ecModule, t, error))
+          free = Opt.some(n)
+        if free.get < copyBytes + FreeSpaceMargin:
+          return err(
+            transferError(
+              ecModule,
+              t,
+              "the state root's file system has " & $free.get &
+                " bytes free, and the copies need " & $copyBytes & " and " &
+                $FreeSpaceMargin & " more",
+            )
+          )
     todo.add(true)
   ok(todo)
 
@@ -7198,11 +7260,14 @@ proc applyTransfers(
     todo: seq[bool],
 ): Opt[EngineError] =
   ## [SPEC RUNTIME l.3546-3553; IMPL-DECISION I96; plan §2.5] Each entry
-  ## still to apply, in order, with its own commit: the target's `xfer`
-  ## record; one write that creates the target (`unloaded`, `uninitialized`,
-  ## its own fresh assignment) and retires a live source; then the rename.
-  ## A failure before the commit leaves nothing; after it, the next start
-  ## completes the rename (`sweepTransfers`).
+  ## still to apply, in order, with its own commit: for `copy`, the source's
+  ## tree copied into its staging directory and flushed (F1: through this
+  ## process, one zeroed buffer); the target's `xfer` record; one write that
+  ## creates the target (`unloaded`, `uninitialized`, its own fresh
+  ## assignment) and retires a live source; then the rename (the source's
+  ## directory, or the staging one). A failure before the commit leaves
+  ## nothing; after it, the next start completes the rename
+  ## (`sweepTransfers`).
   let root = st.cfg.stateRoot.get
   for i, t in transfers:
     if not todo[i]:
@@ -7218,34 +7283,74 @@ proc applyTransfers(
       else:
         st.tombstones.getOrDefault(t.source).get
     let toAssignment = b.record.stateAssignment.get
+    # `copy`: the whole tree is staged and flushed before the commit, so a
+    # committed copy is always complete (`sweepTransfers`).
+    let staging = stagingName(toAssignment)
+    var size = TreeSize()
+    proc unstage() =
+      if t.mode == tmCopy:
+        removeTree(root, staging).isOkOr:
+          st.diagnose("the staging copy for " & t.target & " was not removed: " & error)
+
+    if t.mode == tmCopy:
+      if entryKind(dirOf(root, staging)) != ekMissing:
+        removeTree(root, staging).isOkOr:
+          return Opt.some(transferError(ecModule, t, error))
+      let limit = (if t.maxBytes == 0: DefaultTransferBytes else: t.maxBytes)
+      size = copyTree(dirOf(root, fromAssignment), dirOf(root, staging), limit).valueOr:
+        let why = error.message
+        unstage()
+        return Opt.some(transferError(ecModule, t, why))
+      syncDir(root).isOkOr:
+        unstage()
+        return Opt.some(transferError(ecModule, t, error))
     let rec = XferRecord(
       source: t.source,
       sourceAssignment: fromAssignment,
       mode: t.mode,
+      bytes: size.bytes,
+      files: size.files,
       epoch: st.epoch,
       at: uint64(max(getTime().toUnix, 0)),
     )
     let bytes = xferBytes(rec).valueOr:
+      unstage()
       return Opt.some(transferError(ecModule, t, "its record cannot be encoded"))
     st.store.putSide(XferSide, t.target, bytes).isOkOr:
       st.diagnose("the transfer record of " & t.target & " was not written: " & error)
+      unstage()
       return Opt.some(transferError(ecModule, t, "its record could not be persisted"))
     let x = st.createInst(
       b.record, t.target, hostOrigin(), configuration = b.configuration, retiring = y
     ).valueOr:
       discard st.store.deleteSide(XferSide, t.target)
+      unstage()
       return Opt.some(error)
     if y != nil:
       st.retireCommitted(y)
       st.dropFacts(y)
     st.xfers[x.id] = rec
-    moveDir(root, fromAssignment, toAssignment).isOkOr:
+    let moved =
+      case t.mode
+      of tmMove:
+        moveDir(root, fromAssignment, toAssignment)
+      of tmCopy:
+        moveDir(root, staging, toAssignment)
+    moved.isOkOr:
       st.diagnose("the state transfer to " & x.id & " is not complete: " & error)
       return Opt.some(transferError(ecModule, t, error))
-    st.diagnose(
-      "state transfer: " & t.source & " (" & fromAssignment & ") to " & t.target & " (" &
-        toAssignment & "), " & $t.mode
-    )
+    case t.mode
+    of tmMove:
+      st.diagnose(
+        "state transfer: " & t.source & " (" & fromAssignment & ") to " & t.target & " (" &
+          toAssignment & "), move"
+      )
+    of tmCopy:
+      st.diagnose(
+        "state transfer: " & t.source & " (" & fromAssignment & ") to " & t.target & " (" &
+          toAssignment & "), copy, " & $size.bytes & " bytes in " & $size.files &
+          " files"
+      )
   Opt.none(EngineError)
 
 proc bootstrap(st: State, q: Request) =

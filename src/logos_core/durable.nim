@@ -102,6 +102,14 @@ elif defined(windows):
 
 # Directories ----------------------------------------------------------------------
 
+when defined(posix):
+  proc syncFd*(fd: cint): Result[void, string] =
+    ## Flushes the open file or directory `fd` to the medium (Tier 4b step
+    ## 4b-7's `copy`).
+    if flushFd(fd) != 0:
+      return err($strerror(errno))
+    ok()
+
 proc syncDir*(dir: string): Result[void, string] =
   ## Flushes `dir` itself, so a rename or removal in it survives a crash
   ## (Tier 4b step 4b-7's state transfer). Windows: nothing to flush; a rename

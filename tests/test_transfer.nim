@@ -2,7 +2,8 @@
 ## `sweepTransfers`, `checkTransfers`, `applyTransfers`; `runtime/statexfer.nim`;
 ## DECISIONS I96, G92 as re-decided 2026-11-15, G305-G307): a replacement gets
 ## a fresh state assignment, filled from the source's preserved storage by
-## `move` at a Runtime start, and the source is retired in the same write.
+## `move` or `copy` at a Runtime start, and the source is retired in the same
+## write.
 ## Engine level, with persistent engines in the worktree's `build/` (renames,
 ## modes and locks need POSIX semantics). `holder_module` records the state
 ## directory it is given and appends to `inits` there.
@@ -11,7 +12,8 @@ import std/[algorithm, atomics, monotimes, os, sequtils, strutils, times, typedt
 when defined(posix):
   import std/posix
 import unittest2
-import ../src/logos_core/runtime/[artifact, engine, store, store_types, hostlock]
+import
+  ../src/logos_core/runtime/[artifact, engine, store, store_types, hostlock, statexfer]
 import ../src/logos_core/pins
 import ../src/logos_core/abi/types
 import ../src/logos_core/cbor
@@ -149,6 +151,12 @@ proc putXfer(base, instance: string, r: XferRecord) =
 proc setMode(dir: string, mode: int) =
   when defined(posix):
     doAssert chmod(cstring(dir), Mode(mode)) == 0
+
+proc makeFifo(path: string) =
+  when defined(posix):
+    doAssert mkfifo(cstring(path), Mode(0o600)) == 0
+  else:
+    doAssert false, "no FIFO on this platform"
 
 proc asRoot(): bool =
   when defined(posix):
@@ -663,4 +671,183 @@ suite "run.transfer: a replacement instance filled by move (I96; RUNTIME l.3546-
     e = openAt(base)
     check xferOn(base, "b").isSome
     check xferOn(base, "zz").isNone
+    e.finish()
+
+proc cp(source, target: string, maxBytes = 0'u64): StateTransfer =
+  StateTransfer(source: source, target: target, mode: tmCopy, maxBytes: maxBytes)
+
+proc reserved(base: string): seq[string] =
+  ## The names in `state_root` only a transfer or a purge makes.
+  var found: seq[string] = @[]
+  for f in walkDir(base / "state", relative = true):
+    if isReserved(f.path):
+      found.add(f.path)
+  found
+
+suite "run.transfer: a replacement instance filled by copy (I96; RUNTIME l.3546-3553)":
+  teardown:
+    leftover()
+
+  test "[RUN-0998] [RUN-1020] copy: the source's directory is unchanged; a copy from the retired source rolls back":
+    when not defined(posix):
+      # [I96] `copy` is not supported on Windows: MODULE_ERROR, nothing changed.
+      let base = freshBase()
+      var e = seeded(base)
+      e.restart(base)
+      let r = e.boot(
+        @[BootstrapInstance(instance: "b", record: holder("b-state"))], @[cp("a", "b")]
+      )
+      check r.isErr and r.error.code == ecModule
+      check "not supported on this platform" in r.error.message
+      check e.view("a").isOk
+      e.finish()
+    else:
+      let base = freshBase()
+      var e = seeded(base)
+      createDir(stateOf(base, "a-state") / "sub" / "deeper")
+      writeFile(stateOf(base, "a-state") / "sub" / "deeper" / "leaf", "leaf")
+      writeFile(stateOf(base, "a-state") / "empty", "")
+      setFilePermissions(
+        stateOf(base, "a-state") / "sub" / "deeper" / "leaf", {fpUserRead}
+      )
+      let before = contents(stateOf(base, "a-state"))
+      e.restart(base)
+      let b = BootstrapInstance(instance: "b", record: holder("b-state"))
+      check e.boot(@[b], @[cp("a", "b")]).isOk
+      check e.view("a").isErr
+      check retiredOf(base).anyIt(
+        it.instance == "a" and it.stateAssignment == Opt.some("a-state")
+      )
+      check contents(stateOf(base, "a-state")) == before
+      check contents(stateOf(base, "b-state")) == before
+      check getFilePermissions(stateOf(base, "b-state") / "sub" / "deeper" / "leaf") ==
+        {fpUserRead}
+      let x = xferOn(base, "b").get
+      check x.mode == tmCopy
+      check x.files == 4 # data, inits, empty, leaf
+      check x.bytes == uint64(before.mapIt(it[1].len).foldl(a + b, 0))
+      check e.diagnosed(
+        "state transfer: a (a-state) to b (b-state), copy, " & $x.bytes &
+          " bytes in 4 files"
+      )
+      check reserved(base).len == 0
+      # `b` runs and writes; `a`'s directory stays as it was.
+      check e.start("b").tryGet.state == msReady
+      check readFile(stateOf(base, "b-state") / "inits") == "init\ninit\n"
+      check contents(stateOf(base, "a-state")) == before
+      check e.stop("b").tryGet.state == msUnloaded
+      # Rolling back: `c` from the retired `a` gets the state as it was.
+      e.restart(base)
+      let c = BootstrapInstance(instance: "c", record: holder("c-state"))
+      check e.boot(@[b, c], @[cp("a", "c")]).isOk
+      check contents(stateOf(base, "c-state")) == before
+      check xferOn(base, "c").get.source == "a"
+      e.finish()
+
+  test "[IMPL-DECISION I96] copy refusals: other entries are INVALID_PARAMS, bounds MODULE_ERROR; nothing is staged":
+    when not defined(posix):
+      skip()
+      break
+    let base = freshBase()
+    var e = seeded(base)
+    e.finish()
+    let b = BootstrapInstance(instance: "b", record: holder("b-state"))
+    proc refused(t: StateTransfer, code: ErrorCode, text: string): bool =
+      let e = openAt(base)
+      let before = storeBytes(base)
+      let r = e.boot(@[b], @[t])
+      let same = storeBytes(base) == before
+      e.finish()
+      result =
+        r.isErr and r.error.code == code and text in r.error.message and same and
+        reserved(base).len == 0 and not dirExists(stateOf(base, "b-state")) and
+        xferOn(base, "b").isNone
+      if not result:
+        echo "refused: ", r
+
+    # A symbolic link inside, named by its relative path.
+    createDir(stateOf(base, "a-state") / "sub")
+    createSymlink(
+      stateOf(base, "a-state") / "data", stateOf(base, "a-state") / "sub" / "ln"
+    )
+    check refused(
+      cp("a", "b"), ecInvalidParams, "other than a directory or a regular file: sub/ln"
+    )
+    removeFile(stateOf(base, "a-state") / "sub" / "ln")
+    # A FIFO.
+    makeFifo(stateOf(base, "a-state") / "sub" / "pipe")
+    check refused(cp("a", "b"), ecInvalidParams, "sub/pipe")
+    removeFile(stateOf(base, "a-state") / "sub" / "pipe")
+    # Over `max_bytes`: `data` and `inits` hold 14 bytes.
+    check refused(cp("a", "b", 13), ecModule, "more than max_bytes (13)")
+    # Deeper than `MaxTransferDepth`.
+    var deep = stateOf(base, "a-state") / "sub"
+    for i in 0 ..< MaxTransferDepth:
+      deep = deep / "d"
+    createDir(deep)
+    check refused(
+      cp("a", "b"), ecModule, "deeper than " & $MaxTransferDepth & " levels"
+    )
+    removeDir(stateOf(base, "a-state") / "sub")
+    # Within the bounds, exactly, it applies.
+    e = openAt(base)
+    check e.boot(@[b], @[cp("a", "b", 14)]).isOk
+    check readFile(stateOf(base, "b-state") / "data") == "a's state"
+    e.finish()
+
+  test "[IMPL-DECISION I96] a copy that cannot read a file: the staging is removed, nothing is committed, MODULE_ERROR":
+    when not defined(posix):
+      skip()
+      break
+    if asRoot():
+      skip()
+      break
+    let base = freshBase()
+    var e = seeded(base)
+    e.finish()
+    writeFile(stateOf(base, "a-state") / "secret", "unreadable")
+    setMode(stateOf(base, "a-state") / "secret", 0)
+    let b = BootstrapInstance(instance: "b", record: holder("b-state"))
+    e = openAt(base)
+    let before = storeBytes(base)
+    let r = e.boot(@[b], @[cp("a", "b")])
+    check r.isErr and r.error.code == ecModule
+    check "cannot open secret" in r.error.message
+    check storeBytes(base) == before
+    check reserved(base).len == 0
+    check not dirExists(stateOf(base, "b-state"))
+    check e.view("a").isOk and e.view("b").isErr
+    check xferOn(base, "b").isNone
+    e.finish()
+    # Readable again, the next start applies it.
+    setMode(stateOf(base, "a-state") / "secret", 0o600)
+    e = openAt(base)
+    check e.boot(@[b], @[cp("a", "b")]).isOk
+    check readFile(stateOf(base, "b-state") / "secret") == "unreadable"
+    e.finish()
+
+  test "[IMPL-DECISION I96] crash completion for copy: a committed staging is renamed; an uncommitted one and a purge's are removed; other names are kept":
+    when not defined(posix):
+      skip()
+      break
+    let base = freshBase()
+    var e = seeded(base)
+    e.restart(base)
+    let b = BootstrapInstance(instance: "b", record: holder("b-state"))
+    check e.boot(@[b], @[cp("a", "b")]).isOk
+    e.finish()
+    # As if the commit had happened and the rename had not.
+    moveDir(stateOf(base, "b-state"), stateOf(base, stagingName("b-state")))
+    # An uncommitted copy's staging, an interrupted purge, an operator's name.
+    createDir(stateOf(base, stagingName("z-state")) / "half")
+    writeFile(stateOf(base, stagingName("z-state")) / "half" / "f", "x")
+    createDir(stateOf(base, PurgePrefix & "0123456789abcdef"))
+    createDir(stateOf(base, "operator-notes"))
+    e = openAt(base)
+    check e.boot(@[b]).isOk
+    check e.diagnosed("completed the state transfer to b")
+    check readFile(stateOf(base, "b-state") / "data") == "a's state"
+    check reserved(base).len == 0
+    check dirExists(stateOf(base, "operator-notes"))
+    check dirExists(stateOf(base, "a-state"))
     e.finish()
