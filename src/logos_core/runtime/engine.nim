@@ -7679,7 +7679,13 @@ proc linkConnectFailed(st: State, ev: IoEvent) =
   if l.connecting != nil:
     let reply = l.connecting
     l.connecting = nil
-    reply.answerError(cause.get(code), "the route's handle could not be connected")
+    # [IMPL] With the I/O thread's reason, a fixed text (the close cause, such
+    # as `ccHelloTimeout` or `ccPeerClosed`, or a system error), which tells a
+    # deadline from a loss; a hosted consumer's host reports none.
+    var msg = "the route's handle could not be connected"
+    if ev.failMsg.len > 0:
+      msg.add(": " & ev.failMsg)
+    reply.answerError(cause.get(code), msg)
 
 proc connectLink(st: State, q: Request, r: Route) =
   ## [plan §2.6 steps 2-6; G258] A transported handle: the route's material,
