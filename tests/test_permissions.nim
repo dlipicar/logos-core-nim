@@ -984,7 +984,7 @@ when declared(caParity):
       check rc.now(e, "t").perms == @[setting(Quota, quota(10)), ambient()]
       e.finish()
 
-    test "[CAP-0084] [CAP-0068] [IMPL-DECISION G282] an allow broadening a permission, leaving one out, or allowing another is an evaluation failure":
+    test "[CAP-0084] [CAP-0068] [BCP-0049] [BCP-0081] [IMPL-DECISION G282] an allow broadening a permission, leaving one out, or allowing another is an evaluation failure":
       let e = fixtureEngine(quotaTen())
       let (_, rc) = e.startClient("c")
       discard e.create(client(), "t").tryGet

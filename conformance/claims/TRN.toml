@@ -17,8 +17,8 @@ default = "claimed"
 # requests and commitments, subscriptions, cancellation, multiplexing, route
 # termination, validation and evolution. Tier 4 step 10a (DECISIONS I83): the
 # unix-stream I/O layer, event output, execution slots, route access, test hooks
-# and the aggregate limits. The Runtime's side of routes is 10b (Tier 4b); Windows
-# and the remote profiles tier 5. Claimed by default with Tier 4 (DECISIONS I88).
+# and the aggregate limits. The Runtime's side of routes was built in Tier 4b steps
+# 4b-2 and 4b-3 (DECISIONS I90, I91); Windows and the remote profiles tier 5. Claimed by default with Tier 4 (DECISIONS I88).
 "Abstract" = "claimed"
 "§1" = "claimed"
 "§2" = "claimed"

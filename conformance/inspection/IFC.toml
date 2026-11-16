@@ -46,7 +46,7 @@ reason = "IFC-0671 is a permission for generators and IFC-0192 its example block
 # I-forced-termination (DECISIONS I88)
 [[item]]
 ids = ["IFC-0215"]
-reason = "A permission about forced termination of an execution envelope. Direct mode has no envelope to terminate (no Module Host, no process or sandbox placement): the Runtime never forces termination, and a _MODULE_destroy that outlives its deadline is recorded as cleanup-timeout and left to return, never interrupted (engine.nim stop and shutdown paths; test [RUN-1072]). Forced termination comes with hosted execution in Tier 4b."
+reason = "A permission about forced termination of an execution envelope, taken for hosted realizations only (DECISIONS I97 re-read it). A Module Host whose _MODULE_destroy outlives the stop deadline or the shutdown grace is ended by force, so destroy may not return (G269; tests S-10 and S-11 in tests/test_hosted.nim, S-24 in tests/test_hosted_permissions.nim). A direct realization shares the Runtime's process and has no envelope to terminate: its _MODULE_destroy past the deadline is recorded as cleanup-timeout and left to return, never interrupted (engine.nim stop and shutdown paths; tests [RUN-1072] in tests/test_engine.nim)."
 
 # I-opaque (DECISIONS I88)
 [[item]]

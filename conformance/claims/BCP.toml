@@ -10,8 +10,6 @@
 # documentation) is logosd's: Tier 4b (DECISIONS I88). What a Tier 4 component already meets is
 # claimed by unit.
 default = "deferred:tier-4b"
-# BCP-0021 to BCP-0024 (the Module Loader in the composition) are tagged by Tier 4b step 4b-1's tests
-# (I89) and keep this default until the BCP's status changes with logosd (4b-8).
 
 [sections]
 "References" = "informative"
@@ -23,8 +21,8 @@ default = "deferred:tier-4b"
 "BCP-0073" = "claimed"
 "BCP-0098" = "claimed"
 # Tier 4b step 4b-6b (I95): the logosctl instance as the activation path (G296), its wire
-# (BCP-0090), and the development switch (D27, G299, G300). BCP-0036, BCP-0049, BCP-0050 and BCP-0092
-# are tagged by test_logosd and keep the default until 4b-8.
+# (BCP-0090), and the development switch (D27, G299, G300). BCP-0092 is tagged by test_logosd and
+# test_stateadmin and is claimed with the deployment document (4b-8b).
 "BCP-0084" = "claimed"
 "BCP-0086" = "claimed"
 "BCP-0087" = "claimed"
@@ -35,6 +33,24 @@ default = "deferred:tier-4b"
 "BCP-0094" = "claimed"
 "BCP-0095" = "claimed"
 "BCP-0096" = "claimed"
+# Tier 4b step 4b-8a (I97): a unit that is met is claimed whether or not the whole is (I97's rule),
+# so the §5.1 composition units logosd meets are claimed by its tests (BCP-0021 to BCP-0024: 4b-1's
+# engine tests and 4b-6's logosd tests) while no complete Logos module system is claimed (G310,
+# docs/CONFORMANCE.md "Properties not claimed"). The §5.2, §5.3 and §5.5 rules on fixed and
+# selected profiles, and the fail-closed rules of §5.4, are claimed by tags and inspection items.
+"BCP-0021" = "claimed"
+"BCP-0022" = "claimed"
+"BCP-0023" = "claimed"
+"BCP-0024" = "claimed"
+"BCP-0027" = "claimed"
+"BCP-0028" = "claimed"
+"BCP-0036" = "claimed"
+"BCP-0049" = "claimed"
+"BCP-0050" = "claimed"
+"BCP-0061" = "claimed"
+"BCP-0062" = "claimed"
+"BCP-0063" = "claimed"
+"BCP-0081" = "claimed"
 # §5.2 and §5.5: duties of a specification and its owner when defining a profile.
 "BCP-0026" = "out-of-scope:a requirement on specification authors"
 "BCP-0029" = "out-of-scope:a requirement on specification authors"

@@ -720,7 +720,7 @@ when defined(posix):
       check moved.code == 0 and "nothing to purge" in moved.stdout
       check dirExists(toDir)
 
-    test "[BCP-0036] [BCP-0049] [BCP-0050] a selected profile that fails (run/ep made unwritable): the hosted start fails, no Module Host runs and nothing realizes the module elsewhere; usable again, it starts":
+    test "[BCP-0028] [BCP-0036] [BCP-0049] [BCP-0050] a selected profile that fails (run/ep made unwritable): the hosted start fails, no Module Host runs and nothing realizes the module elsewhere; usable again, it starts":
       let c = newCase()
       check c.initHosted(start = false).code == 0
       let d = c.start()

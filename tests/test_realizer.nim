@@ -472,7 +472,7 @@ suite "run.realizer: verified dynamic libraries (RUNTIME §2.1, §3.6; LOADER §
     check x.error.code == lecArtifactUnavailable
     check path notin x.error.message and work notin x.error.message
 
-  test "[LDR-0144] [SEC-0021] [PKG-0220] a staging control it cannot establish is realization-failed; an unreadable source stays artifact-unavailable":
+  test "[LDR-0144] [SEC-0021] [PKG-0220] [BCP-0049] [BCP-0050] [BCP-0081] a staging control it cannot establish is realization-failed; an unreadable source stays artifact-unavailable":
     # [SPEC LOADER l.628, l.622; C-08, I88] The private copy is the control that
     # maps the verified bytes without a path-replacement gap (l.214). Code runs
     # only from that verified copy, never from the source path (PKG-0220).

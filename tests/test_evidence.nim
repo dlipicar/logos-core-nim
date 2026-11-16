@@ -308,7 +308,7 @@ suite "run.evidence: the container (CA §9.1 l.1219-1287)":
       c[i] = c[i] xor 1
       check rejects(c)
 
-  test "[CAP-0397] [CAP-0398] [CAP-0399] [CAP-0400] the verifier takes the profile, algorithm and external_aad from its own context; a claim naming another profile is rejected after verification, with no retry":
+  test "[CAP-0397] [CAP-0398] [CAP-0399] [CAP-0400] [BCP-0063] the verifier takes the profile, algorithm and external_aad from its own context; a claim naming another profile is rejected after verification, with no retry":
     # The container is signed correctly over this profile's Sig_structure; its
     # claim names the package-signing profile.
     let s = decodeCoseSign1Structure(otherProfile).tryGet

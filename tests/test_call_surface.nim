@@ -196,7 +196,7 @@ suite "ifc.call-surface: the provider call-surface descriptor (INTERFACE §2.6)"
     )
     check rejected(v).contains("1 to 128")
 
-  test "[IFC-0245] an unknown profile identifier":
+  test "[IFC-0245] [BCP-0063] an unknown profile identifier":
     let v = decoded(full())
     v.lookup("primary").get.lookup("commitment").get.put(
       "hash_profile", cbor("logos.hash-profile.2099-01")

@@ -236,7 +236,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
   teardown:
     leftover()
 
-  ltTest "[RUN-0541] [RUN-0623] [IMPL-DECISION G254] [IMPL-DECISION G257] a local-transport route's answer carries the invocation descriptor; the endpoint is private; renewal issues a fresh ticket":
+  ltTest "[RUN-0541] [RUN-0623] [BCP-0028] [IMPL-DECISION G254] [IMPL-DECISION G257] a local-transport route's answer carries the invocation descriptor; the endpoint is private; renewal issues a fresh ticket":
     let e = fixtureEngine(transported())
     let dir = shortBase / ("e" & $engines)
     discard e.started(meter())

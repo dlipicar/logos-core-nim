@@ -444,7 +444,7 @@ when defined(posix):
       check not path.parentDir.dirExists
       e.finish()
 
-    test "[RUN-0221] [RUN-0222] [RUN-0224] [RUN-0225] [LDR-0050] [LDR-0083] P-2 a hosted provider is not ready until the Runtime adopted its served endpoint; a route to it is NOT_READY until then":
+    test "[RUN-0221] [RUN-0222] [RUN-0224] [RUN-0225] [LDR-0050] [LDR-0083] [PKG-0288] P-2 a hosted provider is not ready until the Runtime adopted its served endpoint; a route to it is NOT_READY until then":
       let cfg = hosted()
       discard cfg.stateOf()
       let e = fixtureEngine(cfg)
@@ -464,7 +464,7 @@ when defined(posix):
       check rc.establish("k").code == ecOk
       e.finish()
 
-    test "[TRN-0186] [LDR-0089] [LDR-0165] P-4 a listener that does not reach the host fails the placement; nothing falls back to direct and nothing is left served":
+    test "[TRN-0186] [LDR-0089] [LDR-0165] [BCP-0028] [BCP-0036] [BCP-0049] [BCP-0050] P-4 a listener that does not reach the host fails the placement; nothing falls back to direct and nothing is left served":
       let cfg = hosted()
       discard cfg.stateOf()
       let e = fixtureEngine(cfg)

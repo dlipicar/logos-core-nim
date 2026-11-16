@@ -18,7 +18,7 @@ reason = "A duty of the language implementation (LOADER l.202). Nim exports the 
 
 [[item]]
 ids = ["LDR-0042"]
-reason = "A negative over the whole Loader (LOADER l.287). Per-instance state reaches the module only through logos_module_init_input_t.state_dir, which runtime/realizer.nim fills from the realize request's mapped state assignment (tests [LDR-0039] and [LDR-0041] in tests/test_loader.nim, [RUN-0275] in tests/test_persist.nim). No code under src/ mutates the process environment: `grep -rnE 'putEnv|putenv|setenv|unsetenv|delEnv' src/` finds nothing (DECISIONS I82)."
+reason = "A negative over the whole Loader (LOADER l.287). Per-instance state reaches the module only through logos_module_init_input_t.state_dir, which runtime/realizer.nim fills from the realize request's mapped state assignment (tests [LDR-0039] and [LDR-0041] in tests/test_loader.nim, [RUN-0275] in tests/test_persist.nim). No code under src/ mutates the process environment: `grep -rnE 'putEnv|putenv|setenv|unsetenv|delEnv' src/` finds nothing (DECISIONS I82). For a hosted realization the state directory travels in the carrier's init message (runtime/carrier.cddl lcn.carrier_init state_dir), and a Module Host's environment is only the configured module_host_env (test [LDR-0042] H-2 in tests/test_module_host.nim; re-read for DECISIONS I97)."
 
 [[item]]
 ids = ["LDR-0088"]

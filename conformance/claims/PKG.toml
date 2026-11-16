@@ -18,8 +18,9 @@ default = "deferred:tier-5"
 # (§4.3), built over the vendored slhdsa-c (DECISIONS R4, I68). Promoted from tier
 # 5 as sans-I/O: §6 catalog entries and inspection records, and §11 resolution
 # (I69, G167). Fetch, catalog documents, the storage role, installation, Runtime
-# handoffs and the methods are tier 5. The Package Manager handoff to the Runtime and
-# the protected trust-input path come with logosd (Tier 4b; DECISIONS I88).
+# handoffs and the methods are tier 5. The Package Manager handoff to the Runtime (§17)
+# is Tier 5 too (owner decision 1 (a), 2026-11-13, area 7; DECISIONS I97); logosd built
+# the trust file's carrier in Tier 4b (G299).
 "§2" = "claimed"
 "§3" = "claimed"
 "§4" = "claimed"
@@ -37,7 +38,7 @@ default = "deferred:tier-5"
 "§11" = "claimed"
 "§14" = "deferred:tier-5"
 "§16" = "claimed"
-"§17" = "deferred:tier-4b"
+"§17" = "deferred:tier-5"
 
 [units]
 # §2: the Nix profile, and the catalog, Storage and backend metadata a manifest
@@ -46,8 +47,10 @@ default = "deferred:tier-5"
 "PKG-0019" = "deferred:tier-5"
 "PKG-0021" = "deferred:tier-5"
 # §4: configuration schema and default artifacts reach CONFIG through the Package
-# Manager handoff (Tier 4b); app-config v1 carries declarations directly (I87).
-"PKG-0060" = "deferred:tier-4b"
+# Manager handoff (Tier 5, area 7); app-config v1 carries declarations directly (I87).
+"PKG-0060" = "deferred:tier-5"
+# §4: catalog entries, Storage and Nix metadata are fetch's, the storage role's and the Nix
+# profile's (Tier 5); the unit is claimed with them, not with the handoff.
 "PKG-0069" = "deferred:tier-5"
 # §4.1: verification caching, rotation and revocation act on resolution and the
 # installed set; catalog trust and the protected trust-input path come with the
@@ -113,12 +116,12 @@ default = "deferred:tier-5"
 # it waits for the owner's answer, and PM validation next changes with installation
 # (Tier 5). Tier 3 is closed, so it no longer names tier 3 (DECISIONS I88).
 "PKG-0275" = "deferred:tier-5"
-# §9: checking `implements` against a contract's own commitments, and provider
-# validation, happen where the executable's call surface is known: the Package
-# Manager handoff (Tier 4b).
-"PKG-0287" = "deferred:tier-4b"
-"PKG-0288" = "deferred:tier-4b"
-"PKG-0289" = "deferred:tier-4b"
+# §9: checking `implements` against a contract's own commitments (PKG-0287) and what the
+# Package Manager may treat as proof of a call surface (PKG-0289) belong to its inspection
+# and handoff (Tier 5, area 7). PKG-0288, the Runtime validating a selected provider
+# before a ready invocation path, is claimed with §9: tests [PKG-0288] (DECISIONS I97).
+"PKG-0287" = "deferred:tier-5"
+"PKG-0289" = "deferred:tier-5"
 # §6: catalog documents, their acquisition and the storage locators are fetch's
 # (G90, G91); presentation contracts belong to applications.
 "PKG-0472" = "deferred:tier-5"

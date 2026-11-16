@@ -353,7 +353,7 @@ when defined(posix):
       e.finish()
 
   suite "run.hosted.permissions: what a hosted execution can enforce (CA l.413; G272)":
-    test "[IMPL-DECISION G272] [CAP-0068] [CAP-0066] an allow for `local-transport` in a `process` with the permission scopes is accepted; one placing the execution in a sandbox or a container is an evaluation failure":
+    test "[IMPL-DECISION G272] [CAP-0068] [CAP-0066] [BCP-0081] an allow for `local-transport` in a `process` with the permission scopes is accepted; one placing the execution in a sandbox or a container is an evaluation failure":
       let q = AuthzRequest(
         action: aaExecute,
         operation: "execute",

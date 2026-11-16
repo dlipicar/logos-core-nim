@@ -410,7 +410,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
   setup:
     reset()
 
-  test "[RUN-0104] [RUN-0105] [RUN-0106] [RUN-0114] [RUN-0134] [RUN-0265] [RUN-0266] [RUN-0288] [RUN-0795] the call surface is compared with the expected contracts":
+  test "[RUN-0104] [RUN-0105] [RUN-0106] [RUN-0114] [RUN-0134] [RUN-0265] [RUN-0266] [RUN-0288] [RUN-0795] [PKG-0288] the call surface is compared with the expected contracts":
     let e = newEngine(config())
     let root = meterRoot()
     var wrong = root

@@ -95,8 +95,9 @@ Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --close
   marked-payload erasure (Tier 4b; until then no route is made to a contract that marks a payload,
   G244; claimed in step 4b-3b, below), the reverse mapper and remote bindings (Tier 5).
 - **PACKAGE MANAGER**, **SYSTEM BCP** and **SECURITY CONSIDERATIONS** keep the parts built; the
-  Package Manager handoff and complete-system composition are Tier 4b, installation and platform
-  profiles Tier 5 (with the BCP's QUIC and Package Manager realization profiles, §5.3). The BCP's
+  Package Manager handoff and installation are Tier 5 (the handoff moved there from Tier 4b by owner
+  decision 1 (a), 2026-11-13), complete-system composition Tier 4b, and platform profiles Tier 5
+  (with the BCP's QUIC and Package Manager realization profiles, §5.3). The BCP's
   duties of specification authors (§5.2, §5.5) are out of scope.
 
 ### What Tier 4b step 4b-1 changes

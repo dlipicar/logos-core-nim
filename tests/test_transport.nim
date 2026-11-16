@@ -2213,7 +2213,7 @@ suite "trn.evolution: protocol evolution (TRANSPORT §10, §10.1)":
       var (caller, _) = pair()
       check closeCode(caller.receive(wire(v))) == Opt.some(ecInvalidParams)
 
-  test "[TRN-0254] another hash profile or suite is VERSION_MISMATCH":
+  test "[TRN-0254] [BCP-0063] another hash profile or suite is VERSION_MISMATCH":
     let sent = Hello(module: "storage_module", token: ticketBytes(1), schema: root)
     for (k, v) in [
       ("hash_profile", "logos.hash-profile.2027-01.choice-index"),
