@@ -299,6 +299,7 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
     let hooks = dcText(
       extra =
         "\"test_hooks\": {\"ctl_command_delay_ms\": 50, \"loader_failure_after_ms\": 200, " &
+        "\"loader_failure_on_file\": \"/tmp/f\", " &
         "\"diagnostics\": {\"text\": \"t\", \"count\": 3}}"
     )
     check refusal(hooks, dev, hooksBuild = false) ==
@@ -310,11 +311,12 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
     let c = checked(hooks, dev, hooksBuild = true).get
     check c.hooks.ctlCommandDelayMs == Opt.some(50'u32)
     check c.hooks.loaderFailureAfterMs == Opt.some(200'u32)
+    check c.hooks.loaderFailureOnFile == Opt.some("/tmp/f")
     check c.hooks.diagnostics.isSome # [I95 amended 2026-11-16]
     check c.hooks.diagnostics.get.text == "t" and c.hooks.diagnostics.get.count == 3
     let none = checked(dcText(), dev, hooksBuild = true).get
     check none.hooks.ctlCommandDelayMs.isNone and none.hooks.loaderFailureAfterMs.isNone
-    check none.hooks.diagnostics.isNone
+    check none.hooks.diagnostics.isNone and none.hooks.loaderFailureOnFile.isNone
     check HooksBuild # tests are built with lcnTestHooks
 
   test "[IMPL-DECISION G293] ctl: the socket directory is absolute; workers 1 to 32; idle timeout 100 to 600000 ms":

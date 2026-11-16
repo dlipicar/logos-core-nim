@@ -203,10 +203,13 @@ lcn.dc_ctl = {
 }
 
 ; Accepted only by a logosd built with lcnTestHooks, with the development
-; switch on (G300); a packaged logosd refuses the field.
+; switch on (G300); a packaged logosd refuses the field. The Module Loader
+; reports its failure loader_failure_after_ms after the start, or once the
+; file loader_failure_on_file names exists, whichever comes first.
 lcn.dc_test_hooks = {
   ? ctl_command_delay_ms: uint32,
   ? loader_failure_after_ms: uint32,
+  ? loader_failure_on_file: lcn.app_path,
   ? diagnostics: lcn.dc_test_diagnostics,
 }
 
@@ -239,7 +242,7 @@ the meaning those pages give them.
 | `permissions` | `profile`: absent selects the reference profile `logos-core-nim.permission-profile.v1`, since logosd always selects one; `initial`: the operator instances' settings. An entry naming a system instance or module is refused: logosd provisions those itself (§5). |
 | `state_transfers` | As in the host configuration: an operator instance's replacement continues from its state, applied once at the next start (§11, "Replacing an instance"). Neither side may be a system instance. |
 | `ctl` | The socket (§7): `socket_dir` (absolute; default `<session>/run`), `workers` (1–32, default 4), `idle_timeout_ms` (100–600000, default 30000). |
-| `test_hooks` | Refused by a packaged logosd (§6). `ctl_command_delay_ms` holds each socket command; `loader_failure_after_ms` has the Module Loader report its failure that long after the start; `diagnostics` has the Runtime record `count` diagnostics holding `text`, as text it did not write, after the start's own are logged (§12). |
+| `test_hooks` | Refused by a packaged logosd (§6). `ctl_command_delay_ms` holds each socket command; `loader_failure_after_ms` has the Module Loader report its failure that long after the start, and `loader_failure_on_file` once the file it names exists, whichever comes first; `diagnostics` has the Runtime record `count` diagnostics holding `text`, as text it did not write, after the start's own are logged (§12). |
 
 ### The checks
 

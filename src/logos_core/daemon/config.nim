@@ -65,6 +65,7 @@ type
   HookSelection* = object ## [G300] what `test_hooks` selects, in a hook build
     ctlCommandDelayMs*: Opt[uint32]
     loaderFailureAfterMs*: Opt[uint32]
+    loaderFailureOnFile*: Opt[string] ## once this file exists
     diagnostics*: Opt[LcnDcTestDiagnostics] ## [I95 amended 2026-11-16]
 
   DaemonConfig* = object ## A decoded daemon-config that passed checks 1 to 4.
@@ -187,6 +188,7 @@ proc checkGates(
       return err("test_hooks: needs the development switch")
     hooks.ctlCommandDelayMs = dc.test_hooks.get.ctl_command_delay_ms
     hooks.loaderFailureAfterMs = dc.test_hooks.get.loader_failure_after_ms
+    hooks.loaderFailureOnFile = dc.test_hooks.get.loader_failure_on_file
     hooks.diagnostics = dc.test_hooks.get.diagnostics
   ok(hooks)
 

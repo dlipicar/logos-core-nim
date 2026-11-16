@@ -115,10 +115,13 @@ lcn.dc_ctl = {
 }
 
 ; Accepted only by a logosd built with lcnTestHooks, with the development
-; switch on (G300); a packaged logosd refuses the field.
+; switch on (G300); a packaged logosd refuses the field. The Module Loader
+; reports its failure loader_failure_after_ms after the start, or once the
+; file loader_failure_on_file names exists, whichever comes first.
 lcn.dc_test_hooks = {
   ? ctl_command_delay_ms: uint32,
   ? loader_failure_after_ms: uint32,
+  ? loader_failure_on_file: lcn.app_path,
   ? diagnostics: lcn.dc_test_diagnostics,
 }
 

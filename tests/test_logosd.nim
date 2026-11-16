@@ -47,9 +47,6 @@ when defined(posix):
     StopMs = 3 * StopDeadlineMs
       ## how long a case waits for logosd to exit: past both deadlines
     HostsGoneMs = 10_000 * Slow
-    LossAfterMs = 5_000 * Slow
-      ## the Loader-loss cases' `test_hooks.loader_failure_after_ms` when a
-      ## module is started first
     SanitizerEnv =
       ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
       ## the Module Host's environment allow-list here: the sanitizers' settings
@@ -763,18 +760,18 @@ when defined(posix):
 
     test "[Rev R7] [G302] a Loader loss with a hosted module running: logosd exits 4 without hanging, its Module Host gone and every restart lock free":
       # The module is started here once the socket answers, not by the
-      # orchestrator, whose start list waits for the authority binding and may
-      # still be waiting when the timer fires on a slow host (CI on b3af640).
-      # The timer runs from the end of logosd's start; `module start` answers
-      # once the instance is ready, well inside it.
+      # orchestrator, whose start list waits for the authority binding (CI on
+      # b3af640). The Loader fails once the case makes the trigger file, after
+      # `module start` has answered: a timer from logosd's start fired before
+      # the hosted start ended under a sanitizer (CI on 1ca4710).
       let c = newCase()
+      let trigger = c.dir / "fail-loader"
       check c.initHosted(start = false).code == 0
       check c.ctl("trust", "development", "on").code == 0
       c.editConfig(
         proc(dc: var LcnDaemonConfig) =
-          dc.test_hooks = Opt.some(
-            LcnDcTestHooks(loader_failure_after_ms: Opt.some(uint32(LossAfterMs)))
-          )
+          dc.test_hooks =
+            Opt.some(LcnDcTestHooks(loader_failure_on_file: Opt.some(trigger)))
       )
       let d = c.start()
       c.expectReady(d)
@@ -786,7 +783,9 @@ when defined(posix):
       )
       check started.code == 0
       check d.chatterLogged(1).len == 1
-      check waitExit(d, LossAfterMs + StopMs) == 4
+      check d.alive # nothing has failed the Loader yet
+      writeFile(trigger, "")
+      check waitExit(d, StopMs) == 4
       let log = d.errText
       checkpoint(log)
       check chatterPids(log).len == 1
