@@ -484,6 +484,13 @@ when defined(posix):
         proc(): bool =
           e.view("orchestrator").expect("a view").state == msError
       )
+      # [RUNTIME l.613, l.3538] The instance is `error` before its realization's
+      # cleanup ends, and that cleanup commits again: a revision read before it
+      # would be stale (INVALID_PARAMS), and a recovery before it NOT_READY.
+      check waitUntil(
+        proc(): bool =
+          not e.cleanupPending("orchestrator")
+      )
       let rec = fd.modules.filterIt(it.instance == Opt.some("orchestrator"))[0]
       let r = fd.rc(
         LcnCtlMethodKind.Recover_module,
