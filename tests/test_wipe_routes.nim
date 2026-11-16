@@ -845,7 +845,8 @@ proc deferredCalls(transported: bool) =
 
 when unixStream:
   # The serving loop alone, its owner standing in for both Runtimes.
-  from ./support/trnowner import Owner, newOwner, serve, connect, issue, pump, send, stop
+  from ./support/trnowner import
+    Owner, newOwner, serve, connect, issue, pump, send, stop
   from ./support/peerproc import dupCloexec
   from ../src/logos_core/transport/io import
     CallOutcome, ContractInput, IoCommand, IoCommandKind, IoEvent, IoEventKind,
@@ -900,7 +901,10 @@ when unixStream:
     arm()
     o.send(
       IoCommand(
-        conn: 7, kind: IoCommandKind.cmdCall, tag: 1, methodName: "fetch",
+        conn: 7,
+        kind: IoCommandKind.cmdCall,
+        tag: 1,
+        methodName: "fetch",
         params: slotReq(),
       )
     )
@@ -914,8 +918,7 @@ when unixStream:
       proc(ev: IoEvent): bool =
         ev.kind == IoEventKind.evResponse and ev.conn == 7 and ev.tag == 1
     )
-    check r.isSome and not r.get.outcome.ok and
-      r.get.outcome.failure.code == ecCancelled
+    check r.isSome and not r.get.outcome.ok and r.get.outcome.failure.code == ecCancelled
     check o.seen(
       proc(ev: IoEvent): bool =
         ev.kind == IoEventKind.evStop and ev.conn == callee
@@ -934,7 +937,10 @@ when unixStream:
     # the answer was handled.
     o.send(
       IoCommand(
-        conn: 7, kind: IoCommandKind.cmdCall, tag: 2, methodName: "fetch",
+        conn: 7,
+        kind: IoCommandKind.cmdCall,
+        tag: 2,
+        methodName: "fetch",
         params: slotReq(),
       )
     )
