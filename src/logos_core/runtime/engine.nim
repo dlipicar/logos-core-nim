@@ -113,6 +113,7 @@ from std/os import
 import results
 import ../abi/types
 import ../base/[perthread, testhooks, wipe]
+from ../base/logtext import oneLine, supplied
 import ../cbor/[decode, utf8]
 import ../commitment
 from ../durable import syncDir
@@ -542,7 +543,8 @@ type
     liveAttempts: HashSet[string]
       ## attempt tokens whose bindings are valid: from acceptance until the
       ## context they made is destroyed, or their outcome is final
-    diagnostics: Deque[string]
+    diagnostics: Deque[Diagnostic]
+    diagnosed: uint64 ## [I95 amended 2026-11-16] diagnostics recorded since start
     store: Store ## [IMPL] the persistent state; in memory without `storeDir`
     epoch: uint64 ## the revision epoch of this start (I82)
     budget: uint64 ## `revisionBudget`
@@ -860,11 +862,30 @@ proc overflow(st: State, calls: bool) =
   except ResourceExhaustedError:
     discard # tried again after the next delay
 
-proc diagnose(st: State, text: string) =
+proc diagnose(st: State, text: string, warn = false) =
   ## [SPEC RUNTIME l.1227] Kept for observation, the oldest dropped first.
+  ## [I95 amended 2026-11-16] Each is one line and numbered from the start, so
+  ## a reader drains them with a cursor and learns how many it missed.
   if st.diagnostics.len >= MaxDiagnostics:
     st.diagnostics.popFirst()
-  st.diagnostics.addLast(text)
+  inc st.diagnosed
+  st.diagnostics.addLast(
+    Diagnostic(serial: st.diagnosed, warn: warn, text: oneLine(text))
+  )
+
+func moduleText(f: Failure): bool =
+  ## [I95 amended 2026-11-16] Whether `f`'s reason is text a module gave (its
+  ## report, its initialization's failure message, the Loader's error
+  ## message), not the Runtime's own.
+  f.kind in {fkReportedByModule, fkInitializationFailed, fkLoader}
+
+func diagnosticReason(f: Failure, by: string): string =
+  ## `f`'s reason in a diagnostic: a module's text quoted, cut and attributed
+  ## to `by`, the instance that gave it (`logtext.supplied`; BCP l.551).
+  if f.moduleText:
+    supplied(f.reason, by)
+  else:
+    f.reason
 
 # Observation --------------------------------------------------------------------
 
@@ -1583,7 +1604,7 @@ proc persist(st: State): Result[void, string] =
 proc storeFailure(st: State, error: string) =
   ## [IMPL] Changes are held back until a write succeeds (I82).
   if not st.storeFailed:
-    st.diagnose(NotPersisted & ": " & error)
+    st.diagnose(NotPersisted & ": " & error, warn = true)
   st.storeFailed = true
   st.nextStoreTry = getMonoTime() + StoreRetry
 
@@ -1938,10 +1959,11 @@ proc takeEnforced(x: Inst): Opt[Failure] =
 func isLoader(st: State, x: Inst): bool =
   not st.ldr.inst.isNil and x == st.ldr.inst
 
-proc cannotStart(st: State, why: string) =
+proc cannotStart(st: State, why: string, said = "") =
+  ## `said`: `why` as a diagnostic gives it, when it holds a module's text.
   if st.ldr.cannotStart.isNone:
     st.ldr.cannotStart = Opt.some(why)
-    st.diagnose("the Module Loader cannot start: " & why)
+    st.diagnose("the Module Loader cannot start: " & (if said.len > 0: said else: why))
 
 proc unwire(st: State) =
   ## The Loader's protected wiring ends after its `_MODULE_destroy` returned,
@@ -2266,7 +2288,7 @@ proc loaderLost(st: State, f: Failure) =
   st.shared.loaderLost.store(true, moRelease)
   var why = f.classification
   if f.reason.len > 0:
-    why.add(": " & f.reason)
+    why.add(": " & f.diagnosticReason(l.id))
   st.diagnose("the Module Loader has failed: " & why)
   l.state = msError
   l.failure = Opt.some(f)
@@ -9667,9 +9689,16 @@ proc handle(st: State, q: Request) {.gcsafe.} =
   of rqRcDeliver:
     st.deliverRc(q)
   of rqDiagnostics:
+    # [I95 amended 2026-11-16] Those after the cursor, and how many after it
+    # the ring dropped.
     var r = Reply()
-    for d in st.diagnostics:
-      r.diagnostics.add(d)
+    if q.cursor < st.diagnosed:
+      let first = st.diagnosed - uint64(st.diagnostics.len) + 1
+      if q.cursor + 1 < first:
+        r.overwritten = first - (q.cursor + 1)
+      for d in st.diagnostics:
+        if d.serial > q.cursor:
+          r.diagnostics.add(d)
     q.reply.answer(r)
   of rqAuthorityNotice:
     st.notice(q)
@@ -10098,7 +10127,11 @@ proc checkLoader(st: State) =
             LoaderCall(kind: lcCapabilities), lmListCapabilities, capabilitiesBytes()
           )
       elif l.attempt.isNil and l.state notin {msLoaded, msReady}:
-        st.cannotStart(l.failure.get(Failure(kind: fkOther)).failureText)
+        let f = l.failure.get(Failure(kind: fkOther))
+        var said = f.classification
+        if f.reason.len > 0 and not f.internal:
+          said.add(": " & f.diagnosticReason(l.id))
+        st.cannotStart(f.failureText, said)
     if st.ldr.bound or st.ldr.cannotStart.isSome:
       st.answerConfigure()
   elif st.shuttingDown and l.state == msReady and not st.loaderOwns() and l.inflight == 0 and
@@ -10445,6 +10478,17 @@ proc endpointFailed(st: State, id: EndpointId, why: string) =
     if not r.isTerminal and r.endpoint == Opt.some(id):
       st.endRoute(r, rtFailed, Opt.some(rfTransportError))
 
+proc servedBy(st: State, conn: ConnId): string =
+  ## [I95 amended 2026-11-16; BCP l.551] Who supplied text an event of served
+  ## connection `conn` carries: the I/O loop serving its provider, which is a
+  ## Module Host's for a hosted provider (G273).
+  let s = st.sv.session(conn)
+  if s != nil:
+    let r = st.route(s.route)
+    if r != nil:
+      return "the transport serving " & r.provider
+  "the transport serving connection " & $conn
+
 proc ioEvent(st: State, ev: sink IoEvent) =
   ## [I90; plan §2.1] An event of the transport I/O thread. Accepted
   ## connections are the provider half's; outbound ones are links (4b-2b).
@@ -10493,11 +10537,11 @@ proc ioEvent(st: State, ev: sink IoEvent) =
     # that connection).
     st.diagnose(
       "a publication of " & ev.pubFailEvent & " was not delivered on connection " &
-        $ev.conn & ": " & ev.pubFailMsg
+        $ev.conn & ": " & supplied(ev.pubFailMsg, st.servedBy(ev.conn))
     )
   of IoEventKind.evLocalFailure:
     if isServed(ev.conn):
-      st.diagnose("transport: " & ev.localMsg)
+      st.diagnose("transport: " & supplied(ev.localMsg, st.servedBy(ev.conn)))
     else:
       st.linkLocalFailure(ev)
   else:
@@ -10541,7 +10585,7 @@ proc handle(st: State, m: sink Msg) =
   of mkCallDone:
     st.callLeft(m.provider, m.route, m.ticket)
   of mkDiagnostic:
-    st.diagnose(m.text)
+    st.diagnose(m.text, m.warn)
   of mkAsync:
     st.asyncEvent(m)
   of mkCallJobDone:
@@ -11476,6 +11520,16 @@ when defined(lcnTestHooks):
         return err(r.error.get)
     ok()
 
+  proc diagnoseForTests*(e: Engine, text, by: string, count: int) =
+    ## A test hook (DAEMON.md §12): `count` diagnostics, each holding `text`
+    ## as the Runtime records text it did not write (`by` supplied it), then
+    ## once they are retained.
+    let line = "a diagnostic injected by the test: " & supplied(text, by)
+    for _ in 0 ..< count:
+      e.diagnose(line)
+    # After them in the Runtime thread's order: they are retained.
+    discard e.call(Request(kind: rqDiagnostics, cursor: high(uint64)))
+
   proc releaseLoaderStallForTests*(e: Engine) =
     ## A test hook: every Loader call held by `stall` replies.
     e.faults.releaseStall()
@@ -11625,7 +11679,18 @@ proc routes*(e: Engine): seq[LogosNSRuntimeControlRouteRecord] =
 proc diagnostics*(e: Engine): seq[string] =
   ## [SPEC RUNTIME l.1227] The retained diagnostics, oldest first: dropped
   ## publications, ignored provider completions, long delivery waits.
-  e.call(Request(kind: rqDiagnostics)).diagnostics
+  for d in e.call(Request(kind: rqDiagnostics)).diagnostics:
+    result.add(d.text)
+
+proc diagnosticsAfter*(
+    e: Engine, cursor: uint64
+): tuple[entries: seq[Diagnostic], overwritten: uint64] =
+  ## [SPEC RUNTIME l.1227; I95 amended 2026-11-16] The retained diagnostics
+  ## after `cursor` (the serial of the last one read; 0: none), oldest first,
+  ## and how many after it the ring dropped before this read (it keeps
+  ## `MaxDiagnostics`). The next cursor is the last entry's serial.
+  let r = e.call(Request(kind: rqDiagnostics, cursor: cursor))
+  (entries: r.diagnostics, overwritten: r.overwritten)
 
 proc stopForAuthority*(
     e: Engine, instance: string, ending: FailureKind

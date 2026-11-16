@@ -26,6 +26,7 @@ when defined(posix):
     newEvidenceContext, accept, verifyEvidence
   from ../src/logos_core/authority/scopes import encode
   from ../src/logos_core/daemon/supervise import heldLocks
+  from ../src/logos_core/runtime/plumbing import MaxDiagnostics
   from ../src/logos_core/iface/accept import acceptContractSet
   from ../src/logos_core/durable import
     acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
@@ -46,9 +47,6 @@ when defined(posix):
     StopMs = 3 * StopDeadlineMs
       ## how long a case waits for logosd to exit: past both deadlines
     HostsGoneMs = 10_000 * Slow
-    LossAfterMs = 5_000 * Slow
-      ## the Loader-loss cases' `test_hooks.loader_failure_after_ms` when a
-      ## module is started first
     SanitizerEnv =
       ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
       ## the Module Host's environment allow-list here: the sanitizers' settings
@@ -546,7 +544,57 @@ when defined(posix):
       let log = d.errText
       check "the Module Loader failed; termination required" in log
       check "exiting with 4" in log
+      # [I95 amended 2026-11-16] Drained before the exit: the Runtime's line,
+      # the Loader's own words quoted and attributed (BCP l.551).
+      check (
+        "info: runtime: the Module Loader has failed: reported-by-module: " &
+        "\"a failure injected by the test\" (text from logos_module_loader)"
+      ) in log
       check c.lockFree
+
+    test "[IMPL] [I95 amended 2026-11-16] the Runtime's diagnostics in logosd's log: text it did not write one line and attributed, and a wrap of its ring counted in one line (DAEMON.md §12; BCP l.551)":
+      # test_hooks.diagnostics records count lines once the start's own
+      # diagnostics are logged, before the drain's thread first reads: past the
+      # ring's size, its next read finds the oldest dropped.
+      let c = newCase()
+      check c.initDefault().code == 0
+      check c.ctl("trust", "development", "on").code == 0
+      c.editConfig(
+        proc(dc: var LcnDaemonConfig) =
+          dc.test_hooks = Opt.some(
+            LcnDcTestHooks(
+              diagnostics: Opt.some(
+                LcnDcTestDiagnostics(
+                  text: "injected\nlogosd[1]: error: a forged line",
+                  count: uint32(MaxDiagnostics + 5),
+                )
+              )
+            )
+          )
+      )
+      let d = c.start()
+      c.expectReady(d)
+      let until = getMonoTime() + initDuration(milliseconds = ReadyMs)
+      while "diagnostics dropped" notin d.errText and getMonoTime() < until:
+        sleep(50)
+      check d.stopped == 0
+      let lines = d.errText.splitLines
+      let injected = lines.filterIt(
+        (
+          "info: runtime: a diagnostic injected by the test: " &
+          "\"injected logosd[1]: error: a forged line\" (text from test_hooks)"
+        ) in it
+      )
+      checkpoint($injected.len & " injected lines logged")
+      check injected.len == MaxDiagnostics
+      check lines.allIt(not it.startsWith("logosd[1]:"))
+      let dropped =
+        lines.filterIt("warn: runtime: " in it and "diagnostics dropped" in it)
+      check dropped.len == 1
+      if dropped.len == 1:
+        let n = dropped[0].split("warn: runtime: ")[1].split(' ')[0]
+        checkpoint(dropped[0])
+        check parseInt(n) >= 5
 
     test "a key whose binding names another Runtime id: start exits 1":
       let c = newCase()
@@ -631,6 +679,11 @@ when defined(posix):
       check c.state(ChatterInstance) == ""
       check not dirExists(fromDir)
       check readFile(toDir / "data") == "chatter-1's state"
+      # [I95 amended 2026-11-16] The transfer's diagnostic, drained at start.
+      check (
+        "info: runtime: state transfer: chatter-1 (chatter-1-state) to chatter-2 " &
+        "(chatter-2-state), move"
+      ) in d.errText
       check d.stopped == 0
       check hostsGone()
       # Applied once: the entry left in place changes nothing at the next start.
@@ -733,18 +786,18 @@ when defined(posix):
 
     test "[Rev R7] [G302] a Loader loss with a hosted module running: logosd exits 4 without hanging, its Module Host gone and every restart lock free":
       # The module is started here once the socket answers, not by the
-      # orchestrator, whose start list waits for the authority binding and may
-      # still be waiting when the timer fires on a slow host (CI on b3af640).
-      # The timer runs from the end of logosd's start; `module start` answers
-      # once the instance is ready, well inside it.
+      # orchestrator, whose start list waits for the authority binding (CI on
+      # b3af640). The Loader fails once the case makes the trigger file, after
+      # `module start` has answered: a timer from logosd's start fired before
+      # the hosted start ended under a sanitizer (CI on 1ca4710).
       let c = newCase()
+      let trigger = c.dir / "fail-loader"
       check c.initHosted(start = false).code == 0
       check c.ctl("trust", "development", "on").code == 0
       c.editConfig(
         proc(dc: var LcnDaemonConfig) =
-          dc.test_hooks = Opt.some(
-            LcnDcTestHooks(loader_failure_after_ms: Opt.some(uint32(LossAfterMs)))
-          )
+          dc.test_hooks =
+            Opt.some(LcnDcTestHooks(loader_failure_on_file: Opt.some(trigger)))
       )
       let d = c.start()
       c.expectReady(d)
@@ -756,7 +809,9 @@ when defined(posix):
       )
       check started.code == 0
       check d.chatterLogged(1).len == 1
-      check waitExit(d, LossAfterMs + StopMs) == 4
+      check d.alive # nothing has failed the Loader yet
+      writeFile(trigger, "")
+      check waitExit(d, StopMs) == 4
       let log = d.errText
       checkpoint(log)
       check chatterPids(log).len == 1

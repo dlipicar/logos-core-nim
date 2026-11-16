@@ -91,13 +91,19 @@ when defined(posix):
 
     var timerStop: Atomic[bool]
 
-    proc timerMain(arg: (ptr LogosRuntimeHandle, int)) {.thread.} =
-      ## [G300] `test_hooks.loader_failure_after_ms`, in a test build only.
-      let (rt, ms) = arg
-      let until = getMonoTime() + initDuration(milliseconds = ms)
-      while getMonoTime() < until:
+    proc timerMain(arg: (ptr LogosRuntimeHandle, int, cstring)) {.thread.} =
+      ## [G300] `test_hooks.loader_failure_after_ms` (`ms` >= 0) and
+      ## `loader_failure_on_file` (`file` not nil), in a test build only:
+      ## whichever comes first.
+      let (rt, ms, file) = arg
+      let until = getMonoTime() + initDuration(milliseconds = max(ms, 0))
+      while true:
         if timerStop.load:
           return
+        if ms >= 0 and getMonoTime() >= until:
+          break
+        if file != nil and access(file, F_OK) == 0:
+          break
         sleep(5)
       withLock sig.lock:
         if sig.destroying:
@@ -166,12 +172,33 @@ when defined(posix):
       logError(started.error.message)
       return started.error.exit
     when defined(lcnTestHooks):
-      var timer: Thread[(ptr LogosRuntimeHandle, int)]
+      let injected = d.prepared.config.hooks.diagnostics
+      if injected.isSome:
+        # Between the start's read and the thread's first: the ring wraps
+        # when `count` exceeds it.
+        diagnoseForTests(d.rt, injected.get.text, int(injected.get.count)).isOkOr:
+          logError("test hook: " & error)
+    # [I95 amended 2026-11-16] The Runtime's diagnostics while it runs.
+    var draining: DrainThread
+    draining.startDraining(d.diagnostics, d.rt).isOkOr:
+      logError(error)
+    when defined(lcnTestHooks):
+      var timer: Thread[(ptr LogosRuntimeHandle, int, cstring)]
       var timing = false
+      var file: cstring = nil # on the shared heap: the timer's thread reads it
       let after = d.prepared.config.hooks.loaderFailureAfterMs
-      if after.isSome:
+      let on = d.prepared.config.hooks.loaderFailureOnFile
+      if on.isSome:
+        file = cast[cstring](allocShared0(on.get.len + 1))
+        copyMem(file, on.get.cstring, on.get.len)
+      if after.isSome or on.isSome:
+        let ms =
+          if after.isSome:
+            int(after.get)
+          else:
+            -1
         try:
-          createThread(timer, timerMain, (d.rt, int(after.get)))
+          createThread(timer, timerMain, (d.rt, ms, file))
           timing = true
         except ResourceExhaustedError as e:
           logError("cannot start the test hook timer: " & e.msg)
@@ -181,6 +208,11 @@ when defined(posix):
       timerStop.store(true)
       if timing:
         joinThread(timer)
+      if file != nil:
+        deallocShared(file)
+    # What shutdown or the Loader's failure recorded, before any exit.
+    draining.stopDraining(d.diagnostics)
+    d.diagnostics.drainNow(d.rt)
     if d.supervisor.loaderLost.isSome:
       # [G302; RUNTIME l.3823-3824, l.3985] No destroy: hosts confirmed gone
       # by their restart locks, then the process ends.

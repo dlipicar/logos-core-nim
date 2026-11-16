@@ -623,9 +623,12 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   define treats an `init` that carries the field, even an empty list, as carrier loss
   (`test_module_host` H-15). The carrier trace exempts exactly that field.
 
-- logosd (DECISIONS I95, G300): `ctlmodule.setCommandDelayForTests` holds each socket command, and
-  `assemble.failLoaderForTests` has the Module Loader report its own failure. A test-hook logosd selects
-  them from daemon-config's `test_hooks` (`ctl_command_delay_ms`, `loader_failure_after_ms`), and only
+- logosd (DECISIONS I95, G300): `ctlmodule.setCommandDelayForTests` holds each socket command,
+  `assemble.failLoaderForTests` has the Module Loader report its own failure, and
+  `assemble.diagnoseForTests` (over `engine.diagnoseForTests`; I95 amended 2026-11-16) has the Runtime
+  record diagnostics holding text it did not write. A test-hook logosd selects them from daemon-config's
+  `test_hooks` (`ctl_command_delay_ms`, `loader_failure_after_ms` or `loader_failure_on_file`,
+  `diagnostics`), and only
   with the development switch on; a packaged logosd has no hook code and refuses `test_hooks`. No
   environment variable or socket command selects a hook.
 - The call-evidence store (G301): `evstore.pauseForTests` holds its writer, and `waitWrittenForTests`

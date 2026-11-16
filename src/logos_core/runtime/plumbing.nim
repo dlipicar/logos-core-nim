@@ -707,6 +707,14 @@ type
       ## [G273] the provider's Module Host (a retained `hostsup.Host`), which
       ## runs the call (`hostcall.nim`); nil: the provider is in this process
 
+  Diagnostic* = object
+    ## [SPEC RUNTIME l.1227; I95 amended 2026-11-16] One retained diagnostic.
+    serial*: uint64 ## its position among every diagnostic since start, from 1
+    warn*: bool
+      ## a failed requirement it reports (a call record not kept, state not
+      ## persisted): logosd logs it as a warning
+    text*: string ## one line (`logtext.oneLine`)
+
   Reply* = object
     error*: Opt[EngineError]
     view*: InstanceView
@@ -722,7 +730,10 @@ type
       ## each with a reference the receiver drops
     ready*: bool ## rqScoped: the invocation's destination is open
     admitted*: bool ## rqDeliver: the handler may run
-    diagnostics*: seq[string]
+    diagnostics*: seq[Diagnostic] ## rqDiagnostics: those after `cursor`, oldest first
+    overwritten*: uint64
+      ## rqDiagnostics: the diagnostics after `cursor` dropped from the ring
+      ## before this read
     pending*: bool ## rqCleanup
     bound*: bool ## rqAuthorityState: a Capability Authority is bound
     generation*: uint64 ## rqAuthorityState: the binding generation
@@ -797,6 +808,7 @@ type
     scoped*: bool ## rqDeliver, rqDeliverConn: an invocation-scoped publication
     credit*: int ## [I90] rqLinkNext: the credit of the Event its handler finished
     pubTag*: uint64 ## [I90] rqPublishVerdict
+    cursor*: uint64 ## rqDiagnostics: the serial of the last diagnostic read; 0: none
     abandon*: bool
       ## [I90] rqPublishVerdict: the publication was not sent (the loop is
       ## stopping); forget it
@@ -1001,6 +1013,7 @@ type
       ticket*: ptr CallTicket
     of mkDiagnostic:
       text*: string
+      warn*: bool ## [I95 amended 2026-11-16] logged as a warning
     of mkAsync, mkCallJobDone, mkCompleted, mkDeferredIdle, mkRcHandled:
       event*: AsyncEvent
       target*: pointer ## the asynchronous call, or the deferred invocation
@@ -1180,9 +1193,9 @@ proc post*(s: ptr Shared, m: sink Msg) =
     discard # [IMPL] cannot happen for these value-only messages
   s.bell.ring()
 
-proc diagnose*(s: ptr Shared, text: string) =
+proc diagnose*(s: ptr Shared, text: string, warn = false) =
   ## [SPEC RUNTIME l.1227] Records a diagnostic from any thread.
-  s.post(Msg(kind: mkDiagnostic, text: text))
+  s.post(Msg(kind: mkDiagnostic, text: text, warn: warn))
 
 proc takeSlot(e: Engine): ptr ReplySlot =
   withLock e.slotLock:

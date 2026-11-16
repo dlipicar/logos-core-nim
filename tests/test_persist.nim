@@ -12,6 +12,7 @@ when defined(posix):
   import std/posix
 import unittest2
 import ../src/logos_core/runtime/[engine, store]
+from ../src/logos_core/base/logtext import ForeignTextLimit
 import ../src/logos_core/abi/types
 import ../src/logos_core/cbor
 import ../src/logos_core/commitment
@@ -262,6 +263,9 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
       check e.view("k2").tryGet.execution == k2.execution
       check e.changes.len == entries
       check e.diagnosed(NotPersisted)
+      # [I95 amended 2026-11-16] A failed requirement: logosd logs it as a
+      # warning.
+      check e.diagnosticsAfter(0).entries.anyIt(it.warn and NotPersisted in it.text)
       # A stop still withdraws and cleans at once; its answer is MODULE_ERROR.
       let s = e.stop("m")
       check s.isErr and s.error.code == ecModule and NotPersisted in s.error.message
@@ -287,6 +291,9 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
       check after.len == 2
       check after.mapIt(it.view.instance).toSeq.len == 2
       check e.diagnosed("persisted again")
+      check e.diagnosticsAfter(0).entries.anyIt(
+        not it.warn and "persisted again" in it.text
+      )
       check e.start("k2").tryGet.state == msReady
       # A shutdown whose final state cannot be written says so.
       setMode(storeOf(base), 0o500)
@@ -300,6 +307,47 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
       check e.view("k2").tryGet.state == msError
       check e.view("k2").tryGet.failure.get.reason == Unclean
       e.finish()
+
+  test "[IMPL] [I95 amended 2026-11-16] diagnostics read with a cursor: numbered, one line each, text the Runtime did not write cut and attributed, and those the ring dropped counted (RUNTIME l.1227)":
+    let base = freshBase()
+    var e = openAt(base)
+    discard e.create(keeper(), "k2").tryGet
+    let (before, missed) = e.diagnosticsAfter(0)
+    check missed == 0
+    var cursor = (if before.len > 0: before[^1].serial else: 0'u64)
+    check e.diagnosticsAfter(cursor).entries.len == 0
+    # One line however the text breaks it; cut, quoted and attributed.
+    e.diagnoseForTests(
+      "first\nlogosd[1]: error: forged\r\x1b[2J\xc2\x9b" & repeat('x', 400), "k2", 1
+    )
+    var (got, dropped) = e.diagnosticsAfter(cursor)
+    check dropped == 0
+    check got.len == 1
+    if got.len == 1:
+      let t = got[0].text
+      checkpoint(t)
+      check got[0].serial == cursor + 1
+      check not got[0].warn
+      check "first logosd[1]: error: forged" in t
+      check t.allIt(it >= ' ' and it != '\x7f')
+      check "\xc2\x9b" notin t
+      check t.endsWith("...\" (text from k2)")
+      check t.len < ForeignTextLimit + 100
+      cursor = got[0].serial
+    # A wrap: the ring keeps `MaxDiagnostics`, and the reader learns how many
+    # after its cursor it dropped.
+    e.diagnoseForTests("filler", "k2", MaxDiagnostics + 5)
+    (got, dropped) = e.diagnosticsAfter(cursor)
+    check dropped >= 5
+    check got.len == MaxDiagnostics
+    if got.len > 0:
+      check got[0].serial == cursor + dropped + 1
+      check got[^1].serial - got[0].serial == uint64(MaxDiagnostics - 1)
+      check e.diagnosticsAfter(got[^1].serial) ==
+        (entries: newSeq[Diagnostic](), overwritten: 0'u64)
+      # A cursor past the end reads nothing.
+      check e.diagnosticsAfter(high(uint64)).entries.len == 0
+    e.finish()
 
   test "[RUN-0631] [RUN-0633] [IMPL] ready is written before it is exposed; until then the instance stays loaded":
     if asRoot():

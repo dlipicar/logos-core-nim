@@ -26,16 +26,17 @@ from ../runtime/plumbing import DefaultShutdownGrace
 from ../runtime/store import SnapshotName
 from ../transport/io/sock import fitsSunPath, sunPathMax
 from ../durable import ensurePrivateDir
-import ./[compose, ctlmodule, evstore, logging, session, supervise, trustfile]
+import
+  ./[compose, ctlmodule, diagdrain, evstore, logging, session, supervise, trustfile]
 
 when defined(posix):
   import std/posix
 
 when defined(lcnTestHooks):
   from ../runtime/plumbing import LoaderFaults
-  from ../runtime/engine import setLoaderFaultsForTests
+  from ../runtime/engine import setLoaderFaultsForTests, diagnoseForTests
 
-export results, compose, supervise
+export results, compose, diagdrain, supervise
 
 const
   DestroyExtraMs* = 5_000 ## [IMPL] destroy is retried for the grace plus this
@@ -66,6 +67,7 @@ type
     socketPath*: string
     startedAtMs*: uint64
     graceMs*: int
+    diagnostics*: Drain ## [I95 amended 2026-11-16] the Runtime's, into the log
 
 func startError(exit: int, message: string): StartError =
   StartError(exit: exit, message: message)
@@ -322,10 +324,14 @@ proc startDaemon*(d: var Daemon): Result[void, StartError] =
         ", socket " & d.socketPath & ", trust revision " & $d.trust.file.revision & ", " &
         d.designation
     )
+    # [I95 amended 2026-11-16] What bootstrap recorded, a state transfer's
+    # line among it.
+    d.diagnostics.drainNow(d.rt)
     return ok()
   let message = "start: " & r.text
   discard runtimeRequestShutdown(d.rt)
   discard runtimeWaitForShutdown(d.rt)
+  d.diagnostics.drainNow(d.rt) # why the start failed, as the Runtime saw it
   discard destroyRuntime(d)
   err(startError(ExitStartFailed, message))
 
@@ -338,6 +344,18 @@ when defined(lcnTestHooks):
       return err("no engine")
     e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOkOr:
       return err(error.message)
+    ok()
+
+  proc diagnoseForTests*(
+      rt: ptr LogosRuntimeHandle, text: string, count: int
+  ): Result[void, string] =
+    ## [I95 amended 2026-11-16] `test_hooks.diagnostics`'s action: `count`
+    ## diagnostics holding `text`, as the Runtime records text it did not
+    ## write, attributed to `test_hooks`.
+    let e = engineOf(rt)
+    if e == nil:
+      return err("no engine")
+    e.diagnoseForTests(text, "test_hooks", count)
     ok()
 
 {.pop.}
