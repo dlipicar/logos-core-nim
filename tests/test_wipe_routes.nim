@@ -811,6 +811,21 @@ proc deferredCalls(transported: bool) =
   q.answerVault()
   check rereadIntact.load == 2
   c.vtable.release(addr c)
+  # A held `fetch` the caller cancels, answered after its CANCELLED: the
+  # provider's response holding the canary is dropped. On a local-transport
+  # route either the provider's Runtime (once it handled the Stop) or the
+  # serving loop drops it, by timing; `lateAnswer` is the loop's case alone.
+  b = slotReq()
+  c = h.prepared("fetch", b)
+  c.vtable.submit(addr c)
+  let k = takeVault()
+  check k.parked
+  c.vtable.cancel(addr c)
+  check completions(3)
+  check done.code.load == ord(ecCancelled)
+  k.answerVault()
+  check rereadIntact.load == 3
+  c.vtable.release(addr c)
   # A held `exchange` answered in time: its response reaches the caller.
   b = exchangeReq()
   c = h.prepared("exchange", b)
@@ -818,7 +833,7 @@ proc deferredCalls(transported: bool) =
   let x = takeVault()
   check x.parked
   x.answerVault()
-  check completions(3)
+  check completions(4)
   check done.code.load == ord(ecOk)
   check done.canaries.load == 1
   c.vtable.release(addr c)
@@ -827,6 +842,116 @@ proc deferredCalls(transported: bool) =
   e.finish()
   if scans:
     check hits() == 0
+
+when unixStream:
+  # The serving loop alone, its owner standing in for both Runtimes.
+  from ./support/trnowner import Owner, newOwner, serve, connect, issue, pump, send, stop
+  from ./support/peerproc import dupCloexec
+  from ../src/logos_core/transport/io import
+    CallOutcome, ContractInput, IoCommand, IoCommandKind, IoEvent, IoEventKind,
+    createEndpoint, removeEndpoint
+
+  proc seen(o: Owner, cond: proc(ev: IoEvent): bool): Opt[IoEvent] =
+    ## The first event of the whole log that matches, once there is one.
+    let deadline = getMonoTime() + initDuration(milliseconds = 5000 * Slow)
+    while true:
+      for i in 0 ..< o.log.len:
+        if cond(o.log[i]):
+          return Opt.some(o.log[i])
+      if getMonoTime() >= deadline:
+        return Opt.none(IoEvent)
+      discard o.pump(10)
+
+  proc lateAnswer() =
+    ## [DECISIONS G276] The provider's ok-Response to a request whose CANCELLED
+    ## the serving loop already committed is decoded, then discarded: its tree
+    ## is zeroed, as any Response not sent. Through a Runtime this is a race
+    ## (the Cancel of a timeout or a cancel reaches the loop before the late
+    ## answer that the provider's Runtime had not yet turned away); CI on
+    ## eed9d58 hit it once, on aarch64.
+    let ep = createEndpoint(shortBase, "vault_module").tryGet
+    let input = ContractInput(root: vaultRoot, schema: vaultSchema, system: false)
+    let o = newOwner()
+    o.respond = false
+    check o.serve(
+      1,
+      dupCloexec(ep.listener),
+      provider = "vault_module",
+      contract = input,
+      contracts = @[vaultRoot],
+    )
+    o.connect(
+      7,
+      ep.path,
+      o.issue(trnowner.binding(provider = "vault_module", contract = vaultRoot)),
+      module = "vault_module",
+      selected = input,
+    )
+    let est = o.seen(
+      proc(ev: IoEvent): bool =
+        ev.kind == IoEventKind.evEstablished
+    )
+    check est.isSome
+    check o.seen(
+      proc(ev: IoEvent): bool =
+        ev.kind == IoEventKind.evConnected and ev.conn == 7
+    ).isSome
+    let callee = est.get.conn
+    arm()
+    o.send(
+      IoCommand(
+        conn: 7, kind: IoCommandKind.cmdCall, tag: 1, methodName: "fetch",
+        params: slotReq(),
+      )
+    )
+    let d = o.seen(
+      proc(ev: IoEvent): bool =
+        ev.kind == IoEventKind.evDispatch and ev.conn == callee
+    )
+    check d.isSome
+    o.send(IoCommand(conn: 7, kind: IoCommandKind.cmdCancel, callTag: 1))
+    let r = o.seen(
+      proc(ev: IoEvent): bool =
+        ev.kind == IoEventKind.evResponse and ev.conn == 7 and ev.tag == 1
+    )
+    check r.isSome and not r.get.outcome.ok and
+      r.get.outcome.failure.code == ecCancelled
+    check o.seen(
+      proc(ev: IoEvent): bool =
+        ev.kind == IoEventKind.evStop and ev.conn == callee
+    ).isSome
+    # The provider's answer, holding the canary, after its CANCELLED.
+    o.send(
+      IoCommand(
+        conn: callee,
+        kind: IoCommandKind.cmdRespond,
+        requestId: d.get.requestId,
+        outcome: CallOutcome(ok: true, result: req(kv("secret", cbor(canary)))),
+        workEnded: true,
+      )
+    )
+    # The loop handles commands in order: once the next call is dispatched,
+    # the answer was handled.
+    o.send(
+      IoCommand(
+        conn: 7, kind: IoCommandKind.cmdCall, tag: 2, methodName: "fetch",
+        params: slotReq(),
+      )
+    )
+    check o.seen(
+      proc(ev: IoEvent): bool =
+        ev.kind == IoEventKind.evDispatch and ev.conn == callee and
+          ev.requestId != d.get.requestId
+    ).isSome
+    o.stop()
+    check removeEndpoint(ep).isOk
+    var answers = 0
+    for ev in o.log:
+      if ev.kind == IoEventKind.evResponse and ev.conn == 7 and ev.tag == 1:
+        inc answers
+    check answers == 1 # its CANCELLED only
+    if scans:
+      check hits() == 0
 
 suite "wipe: asynchronous calls (W-5)":
   teardown:
@@ -847,6 +972,12 @@ suite "wipe: asynchronous calls (W-5)":
         skip()
     else:
       skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
+
+  test "[IFC-0575] the serving loop alone: a provider's answer after its CANCELLED is discarded and leaves no copy":
+    when unixStream:
+      lateAnswer()
+    else:
+      skip()
 
 # Hosted routes (W-7; W-9 and W-10 with a hosted end) ---------------------------------
 #
@@ -899,6 +1030,10 @@ when defined(posix):
     result.moduleHostEnv = @SanitizerEnv
     result.endpointDir = shortBase / ("e" & $engines)
     result.transport = Opt.some(fastConfig())
+    # [IMPL] Only a bound on the hosts' graceful ends, which a case checks.
+    # An audit host's end under ThreadSanitizer on a loaded CI runner passed
+    # the 10 s default, and the Runtime killed it (CI on eed9d58).
+    result.shutdownGrace = initDuration(seconds = 10 * Slow)
 
   proc stateOf(cfg: EngineConfig, state: string): string =
     result = cfg.stateRoot.get / state
@@ -1365,10 +1500,13 @@ when defined(posix):
       check noHostLeft()
 
     test "[IFC-0578] [IFC-0579] W-10 a refc Module Host under an orc Runtime refuses its own part: a provider whose contract marks a payload fails init, and a hosted consumer's route to one fails at materialization, MODULE_ERROR":
-      when ChannelsMove and defined(asan) and not defined(clang):
+      when ChannelsMove and (defined(msan) or (defined(asan) and not defined(clang))):
         # Under gcc's AddressSanitizer refc's stack scan is instrumented
         # (nimbase.h's CLANG_NO_SANITIZE_ADDRESS is empty but for clang), so a
-        # refc program reports its own scan of the stack as an overflow.
+        # refc program reports its own scan of the stack as an overflow. Under
+        # MemorySanitizer, which nimbase.h exempts it from on no compiler, the
+        # scan reads stack memory nothing initialized, such as its own
+        # `registers` buffer (on x86_64 and aarch64).
         skip()
       elif ChannelsMove:
         when defined(asan):

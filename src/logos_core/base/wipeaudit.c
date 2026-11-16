@@ -10,6 +10,14 @@
  * scanned too. One registry serves every image: the shim in a dlopened kit
  * finds the executable's with dlsym(RTLD_DEFAULT) when it loads.
  *
+ * Every block is zeroed to its usable size before it is released, armed or
+ * not, and `realloc` never releases part of a block by itself: an allocation
+ * that reuses the memory then holds only the bytes its own owner writes, so
+ * a hit is a copy the released block's owner held. Without this, a block its
+ * owner never fully writes, such as ORC's cycle-collector buffers, carried
+ * the bytes of a copy released earlier while the scan was off, and the scan
+ * reported them at the later release (CI on eed9d58; DECISIONS I92).
+ *
  * Not on Windows: the scanner stays off there (`lcn_wipe_supported`). */
 #undef free
 #undef realloc
@@ -138,21 +146,33 @@ static void lcn_scan_block(void *p) {
   lcn_in_scan = 0;
 }
 
+/* Called through a volatile pointer: a store before `free` may otherwise be
+ * removed as dead. The sanitizers see it as the memset it is. */
+static void *(*volatile lcn_memset)(void *, int, size_t) = memset;
+
 void lcn_wipe_free(void *p) {
+  if (p == NULL)
+    return;
   lcn_scan_block(p);
+  lcn_memset(p, 0, lcn_block_size(p));
   free(p);
 }
 
 void *lcn_wipe_realloc(void *p, size_t n) {
-  if (p == NULL || n == 0 || lcn_armed_registry() == NULL)
-    return realloc(p, n);
+  if (p == NULL)
+    return malloc(n);
+  if (n == 0) {
+    lcn_wipe_free(p);
+    return NULL;
+  }
+  size_t old = lcn_block_size(p);
+  if (n <= old)
+    return p; /* kept whole: no tail is released unzeroed */
   void *q = malloc(n);
   if (q == NULL)
     return NULL;
-  size_t old = lcn_block_size(p);
-  memcpy(q, p, old < n ? old : n);
-  lcn_scan_block(p);
-  free(p);
+  memcpy(q, p, old);
+  lcn_wipe_free(p);
   return q;
 }
 
