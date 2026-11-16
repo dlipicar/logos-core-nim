@@ -207,12 +207,21 @@ when defined(posix):
         # queue and the host forwards nothing.
         o.connect(1, ep.path, o.issue(), module = "meter_module")
         check r.next(300).isNone
-        # `initialized` once it listens on that listener (G267), then that
-        # connection's Hello, accepted there.
+        # `initialized` once it listens on that listener (G267), and that
+        # connection's Hello, accepted there. The loop serves fd 4 before
+        # `initialized` is sent (`host/main.nim`), so the Hello may come
+        # first: it did on macOS CI (1ca4710).
         check r.send(providerInit(ep.path))
-        check r.kinds(K.lcn_Carrier_initialized) == @[K.lcn_Carrier_initialized]
-        let hello = r.next()
-        check hello.kindOf == $K.lcn_Carrier_io_hello
+        var got: seq[K]
+        while K.lcn_Carrier_initialized notin got or K.lcn_Carrier_io_hello notin got:
+          let m = r.next()
+          if m.isNone:
+            break
+          got.add(m.get.kind)
+        checkpoint "the host's messages: " & $got
+        check got.len == 2
+        check got.count(K.lcn_Carrier_initialized) == 1
+        check got.count(K.lcn_Carrier_io_hello) == 1
         # It serves the path it was given and binds nothing else.
         check toSeq(walkDirRec(ep.dir.path)) == @[ep.path]
         check r.send(toMessage(LcnCarrierRelease(id: 9)))
