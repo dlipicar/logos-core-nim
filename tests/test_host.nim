@@ -877,14 +877,17 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     two.state_transfers =
       Opt.some(@[transfer("x", "meter-1"), transfer("meter-1", "meter-3")])
     check parse(two).rejects("from is listed in modules")
-    # Copy bounds, checked by every build; copy itself is refused until 7b.
+    # Copy bounds.
     for n in [0'u64, MaxTransferBytes + 1]:
       check decoded(withTransfers(@[transfer("meter-0", "meter-1", true, Opt.some(n))]))
         .rejects("max_bytes must be 1 to")
     let copy =
       withTransfers(@[transfer("meter-0", "meter-1", true, Opt.some(MaxTransferBytes))])
-    check decoded(copy).tryGet.transfers[0].maxBytes == MaxTransferBytes
-    check parse(copy).rejects("copy is not supported yet")
+    let parsed = parse(copy).tryGet.transfers[0]
+    check parsed.mode == tmCopy and parsed.maxBytes == MaxTransferBytes
+    check parse(withTransfers(@[transfer("meter-0", "meter-1", true)])).tryGet.transfers[
+      0
+    ].maxBytes == 0 # the default, `DefaultTransferBytes`, applies
     # Never the authority instance, wired to its directory before bootstrap.
     var ca = caConfig()
     ca.modules[1].state_assignment = Opt.some("meter-2-state")

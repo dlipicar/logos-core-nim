@@ -764,6 +764,13 @@ success for disabling one, with no record kept. `logosctl` calls none of them.
      (the Runtime's own diagnostic is not printed in logosd's log). The orchestrator then starts `b` like any operator instance, under the policy's rules
      for `b`: a grant or rule naming `a` does not cover it.
 
+  `mode: "copy"` instead leaves `a`'s directory as it was (not on Windows): the copy is the
+  rollback, and a later `{from: "a", to: "c", mode: "copy"}` gives a new `c` `a`'s state again.
+  **A `copy` reads `a`'s state in logosd's process**: the Runtime thread reads and writes every
+  byte through one 64 KiB buffer, zeroed before it is freed, and keeps, logs and records nothing
+  of it ([HOST-CONFIG.md](HOST-CONFIG.md), "State transfer to a replacement instance"). It is
+  the one place module state passes through logosd.
+
   An applied entry changes nothing at later starts; remove it when convenient. A refused transfer
   fails the start with nothing changed, and the log names the reason ([HOST-CONFIG.md](HOST-CONFIG.md),
   "State transfer to a replacement instance"). `a` must have stopped cleanly or the daemon's last run

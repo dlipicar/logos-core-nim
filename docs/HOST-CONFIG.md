@@ -529,8 +529,8 @@ present, not empty, and only with `store_dir` and `state_root`.
 |---|---|
 | `from` | The instance replaced: one the store knows, running or retired, and not listed in `modules` (RUNTIME l.3581). |
 | `to` | The replacement: listed in `modules` with its own `state_assignment`, and new to the store. |
-| `mode` | `move` (the source's directory becomes the replacement's) or `copy` (not supported yet: refused with "copy is not supported yet"). Required: there is no default. |
-| `max_bytes` | `copy` only: the most the copied tree may hold, 1 to 2^40. |
+| `mode` | `move` (the source's directory becomes the replacement's) or `copy` (the replacement gets a copy and the source's directory stays as it was; not on Windows). Required: there is no default. |
+| `max_bytes` | `copy` only: the most the copied tree's files may hold, 1 to 2^40; 1 GiB when absent. |
 
 An instance is the `from` of one entry at most and the `to` of one entry at most. Neither side may be
 the Module Loader's instance, a Runtime-assigned name, or the Capability Authority instance. Anything
@@ -1069,7 +1069,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | transported routes: I/O thread limits and Event output | `transport` (Fields) and "Event output" under `routing` | here |
 | the reference orchestration module | "The reference orchestration module", Limits; `resync_ms` in its value | fixed |
 | Module Hosts | one process per `hosted_dynamic` realization; their Runtime Control requests run on 64 proxy workers per Runtime, started on demand; a carrier frame is at most 16 MiB + 64 KiB | fixed |
-| state transfers | one entry per instance on each side; `move` is one rename and copies nothing | here |
+| state transfers | one entry per instance on each side; `move` is one rename and copies nothing; `copy` at most `max_bytes` (1 GiB by default, at most 2^40), 1,000,000 entries (`MaxTransferFiles`), 64 directory levels (`MaxTransferDepth`), and 64 MiB left free on `state_root`'s file system | here |
 
 ## Loaded code
 
@@ -1250,42 +1250,65 @@ identity, and every configured instance is new.
 An instance's module state stays with its state assignment: a new instance, even of the same module,
 starts with its own empty directory (RUNTIME l.3581, l.2638). To replace instance `a` by a new
 instance `b` that continues from `a`'s state (an upgrade under a new id, a changed declaration),
-give `b` its own `state_assignment` in `modules` and add `{from: a, to: b, mode: move}` to
-`state_transfers`, with the Runtime stopped. The entry is the authorization (DECISIONS G306): no
+give `b` its own `state_assignment` in `modules` and add `{from: a, to: b, mode: move}` (or
+`mode: copy`) to `state_transfers`, with the Runtime stopped. The entry is the authorization (DECISIONS G306): no
 Runtime Control method moves state.
 
 At the next `start`, before the orchestration instance or anything else starts (DECISIONS I96):
 
 1. Every entry is checked, and a refused one fails the start with nothing changed (table below).
-2. For each entry, in order: `b`'s transfer record is written; then one write creates `b`
-   (`unloaded`, intent `uninitialized`, its own assignment) and retires `a` if it is still known
-   (RUNTIME l.3548: the deployment's stop; its intent ends with it); then `state_root/<a's
-   assignment>` is renamed to `state_root/<b's assignment>` and `state_root` flushed. A diagnostic
-   says "state transfer: a (a-state) to b (b-state), move".
+2. For each entry, in order: for `copy`, `state_root/<a's assignment>` is copied into a staging
+   directory `state_root/+transfer-<hash of b's assignment>` and flushed; `b`'s transfer record is
+   written; then one write creates `b` (`unloaded`, intent `uninitialized`, its own assignment) and
+   retires `a` if it is still known (RUNTIME l.3548: the deployment's stop; its intent ends with it);
+   then `state_root/<a's assignment>` (`move`) or the staging directory (`copy`) is renamed to
+   `state_root/<b's assignment>` and `state_root` flushed. A diagnostic says "state transfer: a
+   (a-state) to b (b-state), move", or "…, copy, N bytes in K files".
 3. `b` starts only the ordinary way (the orchestration module or a Runtime Control `start_module`;
    the bootstrap itself when `b` is the orchestration instance), with its own authorization,
    initialization and readiness (RUNTIME l.3553).
 
-`a`'s id and its assignment stay reserved on its tombstone, as for any retirement, and its directory
-name is gone. An applied entry is satisfied: left in the configuration, it changes nothing at later
-starts, and can be removed whenever convenient.
+`a`'s id and its assignment stay reserved on its tombstone, as for any retirement. After `move` its
+directory name is gone; after `copy` its directory stays as it was, for a later rollback or a purge.
+An applied entry is satisfied: left in the configuration, it changes nothing at later starts, and can
+be removed whenever convenient.
 
 - **What `b` gets.** The files only. Its configuration comes from its own entry (CONFIG l.251-256),
   its permission settings from its own provisioning, and its grants from the policy; `a`'s
   configuration and settings records are deleted with its retirement, and its grants name `a` and
   pass to no other instance (CA l.733). No route survives a restart. Read `a`'s configuration while
   it is still known ("Keeping a configuration across an upgrade", above).
-- **No snapshot.** `move` is one rename on one file system and reads nothing. Back up `store_dir` and
-  `state_root` together before a start that applies an entry: the backup is the rollback (RUNTIME
-  l.3549-3550, l.3554; BCP l.394).
+- **No snapshot for `move`.** `move` is one rename on one file system and reads nothing. Back up
+  `store_dir` and `state_root` together before a start that applies an entry: the backup is the
+  rollback (RUNTIME l.3549-3550, l.3554; BCP l.394).
+- **`copy`.** The source's directory stays as it was, so it is the rollback: a later entry
+  `{from: a, to: c, mode: copy}` gives a new `c` `a`'s state as it was at the transfer (RUNTIME
+  l.3588: `a`'s tombstone keeps its assignment). What is copied:
+  - directories and regular files only. Any other entry (a symbolic link, a socket, a FIFO, a
+    device) refuses the transfer, naming its path. A link at the root of `a`'s directory is followed;
+    inside, none is. Hard links become separate files. Each file keeps its permission bits;
+    directories are made 0700; owners, times, extended attributes and ACLs are not kept;
+  - at most `max_bytes` of file content (1 GiB by default), 1,000,000 entries and 64 levels of
+    directories, with that many bytes and 64 MiB more free on `state_root`'s file system. All of
+    it is measured, reading metadata only, before anything is written;
+  - every file and directory is flushed before the commit. A large copy lengthens the start: there
+    is no deadline.
+- **`copy` reads the state in the Runtime's process** (in logosd, the daemon's). The Runtime
+  thread reads and writes every byte of `a`'s files through one 64 KiB buffer, zeroed after the copy
+  and on every error before it is freed (in orc builds; DECISIONS R5); nothing else of the content is
+  kept, logged or recorded. `move` reads nothing. Apart from `copy`, no module state passes through
+  the Runtime or logosd.
 - **Quiescence.** The source must have nothing of a realization left (RUNTIME l.3548, l.3563): its
   realization is `absent`, and nothing it owned is pending. A direct instance of an earlier run
   qualifies once the Runtime holds the store lock, after a clean end or not. For a `hosted_dynamic`
   source the restart lock is the evidence ("Module Hosts", above): it must exist and be free.
   Processes a module started on its own are outside this evidence, as for a restart.
 - **Interrupted transfers.** A crash before `b` is written leaves nothing: the transfer record is
-  removed at the next start. A crash after it is completed at the next start, before anything runs:
-  the directory is renamed and a diagnostic says "completed the state transfer to b". If neither
+  removed at the next start, and so is an unfinished staging directory (every `+transfer-…` and
+  `+purge-…` name in `state_root` that no committed transfer owes is removed, with a diagnostic;
+  `+` is outside an assignment's characters, so no instance owns such a name). A crash after it is
+  completed at the next start, before anything runs: the directory (or the whole staging copy) is
+  renamed and a diagnostic says "completed the state transfer to b". If neither
   directory is there any more (deleted by hand), a diagnostic says "the state directory of b is
   missing", and every start of `b` fails (`error`, `other`, "the state transferred to b is
   missing") without creating an empty directory, until the directory is restored from the backup or
@@ -1293,7 +1316,8 @@ starts, and can be removed whenever convenient.
 - **The record.** `xfer-<hash>.cbor` in `store_dir` (`store.cddl`'s `lcn.xfer_record`): the source,
   its assignment, the mode, the bytes and files copied (0 for `move`), the Runtime epoch and the time
   of the transfer. It stays when `b` is retired: retirement keeps audit history (RUNTIME l.3588).
-- **Windows.** `move` renames with `MoveFileExW` (write-through, never replacing).
+- **Windows.** `move` renames with `MoveFileExW` (write-through, never replacing). `copy` is not
+  supported there: `LOGOS_ERR_MODULE`, nothing changed.
 
 | Refusal at `start` | Code |
 |---|---|
@@ -1305,7 +1329,10 @@ starts, and can be removed whenever convenient.
 | `a` is `hosted_dynamic` and its restart lock file is missing: an edited `work_dir` or a cleaned `hosts/` is no evidence that its host ended | `LOGOS_ERR_NOT_READY`, naming the file |
 | A Module Host of an earlier run may still hold `a`'s state: its restart lock is held | `LOGOS_ERR_NOT_READY`, naming the file |
 | Another instance's retained `requested` intent names `a` as its origin (RUNTIME l.3568-3570) | `LOGOS_ERR_NOT_READY` |
-| The store cannot be written, or the rename fails | `LOGOS_ERR_MODULE` |
+| `copy`: `a`'s directory holds an entry other than a directory or a regular file ("…: sub/link") | `LOGOS_ERR_INVALID_PARAMS` |
+| `copy`: more than `max_bytes`, 1,000,000 entries or 64 levels, or too little free space | `LOGOS_ERR_MODULE` |
+| `copy` on Windows | `LOGOS_ERR_MODULE` |
+| The store cannot be written, a `copy` cannot read or write a file (the staging directory is removed), or the rename fails | `LOGOS_ERR_MODULE` |
 
 A held restart lock stays refused until the process holding it is gone: nothing ends a host of an
 earlier run. Find it with `lsof <file>` or `fuser <file>`, end it, and start again (RUNTIME l.2641,
