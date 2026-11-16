@@ -7,7 +7,7 @@ import unittest2
 import ../src/logos_core/[hash, pins]
 import ../src/logos_core/iface/accept
 import ../src/logos_core/base/hex
-import ./support/specdata
+import ./support/[ccompile, specdata]
 from ../src/logos_core/codegen/hostgen import logosRuntimeHeader
 from ../src/logos_core/abi/host import AppConfigFormat
 
@@ -225,60 +225,8 @@ let
 
 const outDir = "build/codegen/ifc"
 
-type Mode = tuple[cxx: bool, std, fallback: string]
-
-const modes: array[5, Mode] = [
-  (false, "c17", "c17"),
-  (false, "c23", "c2x"),
-  (true, "c++17", "c++17"),
-  (true, "c++20", "c++2a"),
-  (true, "c++23", "c++2b"),
-]
-
-proc compilerFor(cxx: bool): string =
-  ## $CC / $CXX, else the first such compiler on PATH: MinGW and MSYS2 have no `cc`.
-  result = getEnv(if cxx: "CXX" else: "CC")
-  let names =
-    if cxx:
-      ["c++", "g++", "clang++"]
-    else:
-      ["cc", "gcc", "clang"]
-  for name in names:
-    if result.len == 0:
-      result = findExe(name)
-
 proc compileUnit(name, source: string, extra = ""): string =
-  ## Writes `logos_types.h` and the translation unit `name` and checks its syntax
-  ## in every supported language mode with every warning an error; "" when all
-  ## compile, else the first failure.
-  createDir(outDir)
-  writeFile(outDir / "logos_types.h", logosTypesHeader())
-  let unit = outDir / name & ".c"
-  writeFile(unit, source)
-  for m in modes:
-    let cc = compilerFor(m.cxx)
-    if cc.len == 0:
-      return "no " & (if m.cxx: "C++" else: "C") & " compiler on PATH"
-    # A wrapped clang (Nix) passes linker flags that -fsyntax-only leaves unused.
-    let (version, _) = execCmdEx(quoteShell(cc) & " --version")
-    let quiet = if "clang" in version: " -Qunused-arguments" else: ""
-    let lang = if m.cxx: " -x c++" else: ""
-    var output = ""
-    for std in [m.std, m.fallback]:
-      let cmd =
-        quoteShell(cc) & quiet & lang & " -std=" & std &
-        " -Wall -Wextra -Wpedantic -Werror -fsyntax-only" & extra & " -I " &
-        quoteShell(outDir) & " " & quoteShell(unit)
-      let (o, code) = execCmdEx(cmd)
-      if code == 0:
-        output = ""
-        break
-      output = m.std & ": " & o
-      if "std=" notin o: # an older compiler may know only the draft name
-        break
-    if output.len > 0:
-      return output
-  ""
+  compileUnitIn(outDir, name, source, extra)
 
 proc compiles(name, header: string, extra = ""): string =
   createDir(outDir)
@@ -290,21 +238,6 @@ proc compilesSet(name: string, s: ContractSet): string =
   if h.isErr:
     return h.error
   compiles(name, h.get)
-
-const deviceTarget = defined(android) or defined(ios)
-  ## A suite cross-compiled for an emulator or simulator runs where there is no C
-  ## compiler. There a test that compiles headers reports SKIPPED and its other
-  ## checks still run; the host suites compile every header.
-
-template checkCompiles(call: untyped) =
-  when deviceTarget:
-    skip()
-  else:
-    check call == ""
-
-const staticAssert =
-  "#ifdef __cplusplus\n#define CHECK(c) static_assert(c, #c)\n#else\n" &
-  "#define CHECK(c) _Static_assert(c, #c)\n#endif\n"
 
 # Tests -----------------------------------------------------------------------------
 
