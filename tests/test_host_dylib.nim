@@ -18,6 +18,8 @@ import ../src/logos_core/crypto/blake3
 import ../src/logos_core/iface/outcome
 import ../src/logos_core/runtime/[host_config_types, store_types]
 import ./support/[hostbuild, kitbuild, tunerconfig, withoutloader]
+when defined(posix):
+  from std/posix import Sigaction, SIGINT, SIGPIPE, SIGSEGV, sigemptyset
 
 {.compile: "host/host_harness.c".}
 {.compile: "host/test_orchestrator.c".}
@@ -101,7 +103,34 @@ let
   tunerLib = buildKitLibrary("tuner_impl.nim", "hdtuner")
 removeDir(work)
 createDir(work)
-doAssert hhLoad(cstring(library)) == 0, "cannot load " & library
+
+when defined(posix):
+  # [DECISIONS G340] The library is loaded with a sentinel handler on each
+  # watched signal, and what is set after the load is kept for the test below;
+  # then the test program's own handlers go back.
+  proc sigactionOf(
+    sig: cint, act, old: ptr Sigaction
+  ): cint {.importc: "sigaction", header: "<signal.h>".}
+
+  proc sentinel(sig: cint) {.noconv.} =
+    discard
+
+  let watchedSignals = [("SIGINT", SIGINT), ("SIGSEGV", SIGSEGV), ("SIGPIPE", SIGPIPE)]
+  var signalsAfterLoad = default(array[3, pointer])
+  block:
+    var own = default(array[3, Sigaction])
+    var mark = Sigaction()
+    mark.sa_handler = sentinel
+    discard sigemptyset(mark.sa_mask)
+    for i, (name, sig) in watchedSignals:
+      doAssert sigactionOf(sig, addr mark, addr own[i]) == 0, name
+    doAssert hhLoad(cstring(library)) == 0, "cannot load " & library
+    for i, (name, sig) in watchedSignals:
+      var now = Sigaction()
+      doAssert sigactionOf(sig, addr own[i], addr now) == 0, name
+      signalsAfterLoad[i] = cast[pointer](now.sa_handler)
+else:
+  doAssert hhLoad(cstring(library)) == 0, "cannot load " & library
 
 const meterSymbols = block:
   ## Every symbol the meter kit library exports, as its generated kit names them.
@@ -239,6 +268,14 @@ proc finish(rt: ptr LogosRuntimeHandle) =
 suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
   setup:
     torReset(TorPlain)
+
+  test "[DECISIONS G340] loading the library leaves the host's SIGINT, SIGSEGV and SIGPIPE dispositions as they were":
+    when defined(posix):
+      for i, (name, _) in watchedSignals:
+        checkpoint name
+        check signalsAfterLoad[i] == cast[pointer](sentinel)
+    else:
+      skip()
 
   test "[RUN-0716] [RUN-0739] a program that includes only logos_runtime.h builds against the library and runs":
     let program = buildEmbedMain(library)

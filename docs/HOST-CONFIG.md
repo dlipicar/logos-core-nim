@@ -649,11 +649,14 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   module code is still running on a Runtime thread; otherwise it returns `LOGOS_ERR_NOT_READY` and
   the handle stays valid, so the host retries. After a `start` that failed, shutdown is requested
   and waited for first.
-- **SIGPIPE.** The transport code (chronos 4.4.1, `asyncengine.globalInit`) sets `SIGPIPE` to ignored,
-  process-wide, in its module initializer: `liblogos_runtime` runs it in its load-time constructor,
-  whether or not any route is ever transported, so every host that loads the library gets it. The
-  Runtime's own socket writes never raise `SIGPIPE` either way (`MSG_NOSIGNAL`, `SO_NOSIGPIPE`). A host
-  that relies on `SIGPIPE` for its own pipes restores its disposition after loading the library.
+- **Signals** (DECISIONS G340). Loading `liblogos_runtime` leaves every signal disposition of the host
+  as it was. The library is built with `-d:noSignalHandler`, so its Nim runtime installs no handler
+  for SIGINT, SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS or SIGPIPE; a crash inside it is the host's to
+  report. The transport code (chronos 4.4.1, `asyncengine.globalInit`) sets `SIGPIPE` to ignored in its
+  module initializer; the library records the disposition before that and puts it back at the end of
+  its load-time constructor. The Runtime's own socket writes never raise `SIGPIPE` (`MSG_NOSIGNAL`,
+  `SO_NOSIGPIPE`), so it does not need the signal ignored. logosd and the Module Host are programs and
+  set their own dispositions (`docs/DAEMON.md` §13; below).
 - **Threads.** With a `local-transport` rule, or with `runtime.module_host` set, the Runtime starts
   one more thread at `start`, the transport I/O thread, and stops it at `destroy`. Without either, no
   such thread exists.

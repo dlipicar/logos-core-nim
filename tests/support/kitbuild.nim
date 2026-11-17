@@ -65,7 +65,11 @@ proc buildKitLibrary*(source, name: string): string =
       result & ".tmp-" & $getCurrentProcessId()
     else:
       result
-  var args = @[nimExe, "c", "--hints:off", "--mm:" & kitMm]
+  # [DECISIONS G340] A module library leaves the process's signal dispositions
+  # to its host: without -d:noSignalHandler its NimMain sets handlers for
+  # SIGINT, SIGSEGV, SIGABRT, SIGFPE, SIGILL and SIGBUS and ignores SIGPIPE when
+  # it is loaded (system/excpt.nim, `registerSignalHandler`).
+  var args = @[nimExe, "c", "--hints:off", "--mm:" & kitMm, "-d:noSignalHandler"]
   when defined(release):
     args.add("-d:release")
   when kitSanitizer.len > 0:

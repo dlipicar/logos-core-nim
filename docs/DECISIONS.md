@@ -4759,6 +4759,28 @@ their history.
 - **Options offered:** (a) an org-provided VM, with the Storage team or infra running the seeder; owners
   and dates recorded as entry criteria *(recommended)*; (b) framework.lan, if it gets a public IP and port
   forwarding; (c) decide later.
+### G340 — A library leaves its host's signal dispositions alone
+- **Kind:** Choice [IMPL] · **Specs:** none; RUNTIME §13 (a host embeds `liblogos_runtime`) and
+  INTERFACE §2.6 (a module library is loaded into a host's process).
+- **Decision:** every library built here is compiled with `-d:noSignalHandler`: `liblogos_runtime`
+  (a compile-time error without it; `nimble build_runtime_lib`, `tests/support/hostbuild.nim`) and the
+  kit's module libraries (`tests/support/kitbuild.nim`); `base/libvisibility`, which both import, warns
+  when a library is built without it. Otherwise a Nim library's `NimMain` sets handlers for SIGINT,
+  SIGSEGV, SIGABRT, SIGFPE, SIGILL and SIGBUS and ignores SIGPIPE for the whole process when it is
+  loaded (`system/excpt.nim`, `registerSignalHandler`), replacing the host's. chronos ignores SIGPIPE in
+  its own module initializer (`asyncengine.globalInit`); `liblogos_runtime` imports `base/hostsignals`
+  before anything that imports chronos, which records SIGPIPE's disposition, and restores it last in its
+  initializer. The Runtime's socket writes do not need SIGPIPE ignored (`MSG_NOSIGNAL`, `SO_NOSIGPIPE`,
+  `transport/io/sock.c`). A crash inside a library is the host's to report. The programs keep Nim's
+  handlers and set their own dispositions: logosd (a signal thread over blocked SIGTERM, SIGINT,
+  SIGHUP, SIGUSR1 and SIGUSR2; SIGPIPE ignored; `docs/DAEMON.md` §13), `logos-module-host` (SIGPIPE
+  ignored, `host/main.nim`), logosctl, lcn-gen and lcn-pkg (Nim's handlers: a stack trace on a crash).
+  A module repository builds its module library with the switch too (the kit's guide, TIER5-PLAN N-1).
+- **Test:** `tests/test_host_dylib.nim` "[DECISIONS G340] loading the library leaves the host's SIGINT,
+  SIGSEGV and SIGPIPE dispositions as they were": a sentinel handler on each before the load, compared
+  after it. It fails without the switch (all three) and without the restore (SIGPIPE). POSIX only.
+- **Status:** decided 2026-11-16 by the planning session (TIER5-PLAN N-1, sub-part 1); not a spec matter.
+
 - **Decision:** (c). **Status:** OPEN.
 
 ---
@@ -4964,6 +4986,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G310 | which deployments BCP §5.1 and §5.4 bind | GAP, interim (TF-43) | 10 |
 | G311 | the reach of "for package-backed module creation" in BCP l.367 | Reading | 10 |
 | G312 | Loader strategies and hosted placements are not Core profiles | Reading | 10 |
+| G340 | a library leaves its host's signal dispositions alone | Choice | 12 |
 
 ---
 
