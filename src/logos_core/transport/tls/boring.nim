@@ -20,6 +20,15 @@ when defined(android):
 elif defined(linux):
   {.passl: "-lstdc++".}
 
+# macOS sanitizer builds compile with Xcode's clang (`config.nims`), but the Nix shell's SDKROOT
+# is nixpkgs' apple-sdk, which has no libc++ headers, and that clang links no C++ runtime by
+# itself. Only builds that compile BoringSSL's C++ need the Xcode SDK and libc++ [IMPL].
+when defined(macosx) and (defined(asan) or defined(tsan)):
+  const xcodeSdk =
+    staticExec("env -u DEVELOPER_DIR -u SDKROOT /usr/bin/xcrun --show-sdk-path")
+  {.passc: "-isysroot " & xcodeSdk.}
+  {.passl: "-isysroot " & xcodeSdk & " -lc++".}
+
 const
   KuDigitalSignature* = 0x0080'u32 ## `KU_DIGITAL_SIGNATURE` (not in the binding)
   MbstringAsc* = 0x1001.cint ## `MBSTRING_ASC` (not in the binding)
