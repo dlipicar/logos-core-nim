@@ -32,6 +32,11 @@ when defined(posix):
       ## seconds a bounding wait allows: 20 s times Slow did not cover a start
       ## at load 400 under refc and ASan (4b-8's load fix)
     Timeout = 15_000 * Slow ## a client's wait for a reply, ms
+    IdleMs = min(60_000 * Slow, 600_000)
+      ## `ctl.idle_timeout_ms` where no case is about it, at most what the
+      ## daemon-config takes: at 2 s times Slow, RUN-0347's 16 clients under
+      ## ASan at load 400 were closed before they sent their command (send:
+      ## Broken pipe; 4b-8's load fix)
 
   # Captured log lines --------------------------------------------------------------------
 
@@ -102,7 +107,7 @@ when defined(posix):
     var dc = defaultDaemonConfig("assigned-by-init")
     dc.declarations = Opt.some(@[sensorDeclaration()])
     dc.ctl = Opt.some(
-      LcnDcCtl(workers: Opt.some(4'u8), idle_timeout_ms: Opt.some(uint32(2_000 * Slow)))
+      LcnDcCtl(workers: Opt.some(4'u8), idle_timeout_ms: Opt.some(uint32(IdleMs)))
     )
     if edit != nil:
       edit(dc)
@@ -454,8 +459,7 @@ when defined(posix):
           proc(dc: var LcnDaemonConfig) =
             dc.ctl = Opt.some(
               LcnDcCtl(
-                workers: Opt.some(16'u8),
-                idle_timeout_ms: Opt.some(uint32(2_000 * Slow)),
+                workers: Opt.some(16'u8), idle_timeout_ms: Opt.some(uint32(IdleMs))
               )
             )
         )
