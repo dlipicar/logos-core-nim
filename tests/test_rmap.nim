@@ -1,10 +1,11 @@
 ## INTERFACE §3 (Canonical C-to-CDDL Mapping): the reverse mapper. The input set
 ## and its includes (§3, §3.2), the accepted C subset and header frame (§2, §3.1),
-## literal recognition (§3.5, §3.9).
+## literal recognition (§3.5, §3.9), CDDL emission (§1.3, §3).
 
 import std/[os, sequtils, strutils]
 import unittest2
 import ../src/logos_core/iface/[accept, cinput, cliteral]
+import ../src/logos_core/cddl/emit
 import ./support/[ccompile, specdata]
 
 const outDir = "build/rmap"
@@ -536,3 +537,138 @@ suite "ifc.c-reverse: literal recognition (INTERFACE §3.5, §3.9)":
   test "[IMPL-DECISION G321] at most 64 nested parentheses in one literal":
     check literal(repeat('(', 64) & "1" & repeat(')', 64)).isOk
     check literal(repeat('(', 65) & "1" & repeat(')', 65)).error.reason == rkLimit
+
+# CDDL emission -----------------------------------------------------------------------
+
+func prim(name: string): ENode =
+  ENode(kind: enPrim, prim: name)
+
+func fld(name: string, n: ENode, optional = false): EField =
+  EField(name: name, optional: optional, node: n)
+
+func emap(fs: varargs[EField]): ENode =
+  ENode(kind: enMap, fields: @fs)
+
+func decl(name: string, n: ENode): EDeclaration =
+  EDeclaration(name: name, node: n)
+
+proc acceptedOne(source: string): Contract =
+  let r = acceptContractSet(source)
+  if r.isErr:
+    checkpoint source
+    checkpoint r.error
+  r.get.primary
+
+proc literalOf(c: Contract, name: string): ScalarData =
+  for d in c.model.declarations:
+    if d.name == name and d.kind == dkType and d.body.kind == snLiteral:
+      return d.body.literal
+  checkpoint "no literal declaration " & name
+  fail()
+
+suite "ifc.c-reverse: CDDL emission (INTERFACE §1.3, §3; G320)":
+  test "[IMPL-DECISION G320] the §3.9.1 module, emitted, accepts to the mirror's root":
+    let d = EDocument(
+      module: "meter_module",
+      declarations: @[
+        decl("meter.changed_event", emap(fld("value", prim("uint64")))),
+        decl(
+          "meter.reading",
+          emap(
+            fld("label", prim("tstr"), optional = true), fld("value", prim("uint64"))
+          ),
+        ),
+        decl("meter.read_request", emap(fld("channel", prim("uint32")))),
+        decl(
+          "meter.read_response",
+          emap(
+            fld("label", ENode(kind: enSized, base: "tstr", lo: 1, hi: 64)),
+            fld("reading", ENode(kind: enRef, target: "meter.reading")),
+          ),
+        ),
+      ],
+    )
+    let text = emit(d)
+    check text.startsWith("; -- metadata --\n_module = \"meter_module\"\n")
+    let got = acceptedOne(text)
+    let want = acceptedOne(mirror("IFC/3.9.1.module.cddl"))
+    check got.root == want.root
+    check got.model.moduleName == want.model.moduleName
+
+  test "[IMPL-DECISION G320] every node form, and literals with every escaped character":
+    let tricky =
+      "q\"b\\c\x01\x1f\x7f\xc2\x85\xc3\xa9\xf4\x8f\xbf\xbe\xf4\x8f\xbf\xbf\xf0\x9f\x98\x80"
+    let d = EDocument(
+      declarations: @[
+        decl("k.text", ENode(kind: enText, text: tricky)),
+        decl("k.yes", ENode(kind: enBool, boolean: true)),
+        decl("k.big", ENode(kind: enInt, magnitude: high(uint64))),
+        decl(
+          "k.low",
+          ENode(kind: enInt, negative: true, magnitude: 9223372036854775808'u64),
+        ),
+        decl(
+          "k.all",
+          emap(
+            fld("a", ENode(kind: enSized, base: "bstr", lo: 16, hi: 16)),
+            fld("b", ENode(kind: enSized, base: "bstr", lo: 0, hi: 8)),
+            fld("c", ENode(kind: enList, element: prim("int8"))),
+            fld("d", ENode(kind: enTuple, items: @[prim("bool"), prim("tstr")])),
+            fld("e", ENode(kind: enTuple, items: @[])),
+            fld("f", emap(), optional = true),
+            fld(
+              "g",
+              ENode(
+                kind: enChoice,
+                arms:
+                  @[ENode(kind: enText, text: "x"), ENode(kind: enRef, target: "k.yes")],
+              ),
+            ),
+            fld(
+              "h",
+              ENode(
+                kind: enList,
+                element: ENode(
+                  kind: enChoice, arms: @[prim("uint16"), emap(fld("z", prim("bstr")))]
+                ),
+              ),
+            ),
+          ),
+        ),
+      ]
+    )
+    let text = emit(d)
+    check not text.contains("metadata")
+    let c = acceptedOne(text)
+    let lit = c.literalOf("k.text")
+    check lit.kind == skTstr
+    if lit.kind == skTstr:
+      check lit.text == tricky
+    let big = c.literalOf("k.big")
+    check big.kind == skUint64
+    if big.kind == skUint64:
+      check big.unsigned == high(uint64)
+    let low = c.literalOf("k.low")
+    check low.kind == skInt64
+    if low.kind == skInt64:
+      check low.signed == low(int64)
+    # deterministic: printing the same document twice gives the same text
+    check emit(d) == text
+
+  test "[IMPL-DECISION G320] [IFC-0569] a field name a reader could take for a type or a value is a quoted text key, with the same field identity":
+    for name in QuotedKeys:
+      let d = EDocument(declarations: @[decl("k.m", emap(fld(name, prim("uint8"))))])
+      let quoted = emit(d)
+      checkpoint quoted
+      check ("\"" & name & "\": uint8") in quoted
+      let a = acceptedOne(quoted)
+      check a.model.declarations[0].body.fields[0].name == name
+      # RFC 8610 §3.5.1: the bare spelling is the same text key
+      let bare = quoted.replace("\"" & name & "\":", name & ":")
+      let b = acceptedOne(bare)
+      check a.root == b.root
+    # other names, keywords included, stay bare
+    for name in ["class", "value", "has", "type", "map"]:
+      let quoted =
+        emit(EDocument(declarations: @[decl("k.m", emap(fld(name, prim("uint8"))))]))
+      check ("  " & name & ": uint8") in quoted
