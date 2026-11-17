@@ -207,14 +207,24 @@ when defined(posix):
       e: Engine, instance: string, t: var Thread[(Engine, string)]
   ): bool =
     ## Starts `instance` from `t` with the Loader's `realize` reply held: the
-    ## host runs and serves, and the Runtime has not adopted it.
+    ## host runs and serves, and the Runtime has not adopted it. [IMPL] The
+    ## wait for the hold is `Answer`: under ASan on a host at load 100 a
+    ## hosted realize took longer than 10 s times Slow (4b-8's closing
+    ## check). If it never comes, the start is let through (the release is
+    ## kept for a reply that is still to be held) and joined, and the case
+    ## checks nothing more.
     check e.setLoaderFaultsForTests(LoaderFaults(stall: {lmRealize})).isOk
     startReply.store(-2)
     createThread(t, startOn, (e, instance))
-    waitUntil(
+    result = waitUntil(
       proc(): bool =
-        e.stalledLoaderCallsForTests() == 1
+        e.stalledLoaderCallsForTests() == 1,
+      Answer,
     )
+    check result
+    if not result:
+      e.releaseLoaderStallForTests()
+      joinThread(t)
 
   # The caller ------------------------------------------------------------------------------
 
@@ -451,17 +461,17 @@ when defined(posix):
       let (_, rc) = e.startClient("c")
       discard e.create(hostedMeter(), "hm").tryGet
       var t: Thread[(Engine, string)]
-      check e.stalledStart("hm", t)
-      # The host serves already (it answered `initialized` only then), and the
-      # Runtime has not adopted it.
-      check hostPids(hostProgram).len == 1
-      check e.hostedEndpointForTests("hm").isSocket
-      check e.view("hm").tryGet.state != msReady
-      check rc.establish("early").code == ecNotReady
-      e.releaseLoaderStallForTests()
-      joinThread(t)
-      check startReply.load == ord(msReady)
-      check rc.establish("k").code == ecOk
+      if e.stalledStart("hm", t):
+        # The host serves already (it answered `initialized` only then), and
+        # the Runtime has not adopted it.
+        check hostPids(hostProgram).len == 1
+        check e.hostedEndpointForTests("hm").isSocket
+        check e.view("hm").tryGet.state != msReady
+        check rc.establish("early").code == ecNotReady
+        e.releaseLoaderStallForTests()
+        joinThread(t)
+        check startReply.load == ord(msReady)
+        check rc.establish("k").code == ecOk
       e.finish()
 
     test "[TRN-0186] [LDR-0089] [LDR-0165] [BCP-0028] [BCP-0036] [BCP-0049] [BCP-0050] P-4 a listener that does not reach the host fails the placement; nothing falls back to direct and nothing is left served":
@@ -488,16 +498,16 @@ when defined(posix):
       let e = fixtureEngine(cfg)
       discard e.create(hostedMeter(), "hm").tryGet
       var t: Thread[(Engine, string)]
-      check e.stalledStart("hm", t)
-      let path = e.hostedEndpointForTests("hm")
-      check path.isSocket
-      moveFile(path, path & ".moved")
-      e.releaseLoaderStallForTests()
-      joinThread(t)
-      check startReply.load != ord(msReady)
-      check e.view("hm").tryGet.state == msError
-      check e.diagnostics().anyIt("is not valid" in it)
-      check noHostLeft()
+      if e.stalledStart("hm", t):
+        let path = e.hostedEndpointForTests("hm")
+        check path.isSocket
+        moveFile(path, path & ".moved")
+        e.releaseLoaderStallForTests()
+        joinThread(t)
+        check startReply.load != ord(msReady)
+        check e.view("hm").tryGet.state == msError
+        check e.diagnostics().anyIt("is not valid" in it)
+        check noHostLeft()
       e.finish()
 
     test "[RUN-0705] [RUN-1074] P-5b a shutdown accepted while a hosted provider's realize reply is held stops its endpoint at once; the reply that then names it is no Loader failure: the attempt fails and nothing is left":
@@ -508,27 +518,27 @@ when defined(posix):
       let e = fixtureEngine(cfg)
       discard e.create(hostedMeter(), "hm").tryGet
       var t: Thread[(Engine, string)]
-      check e.stalledStart("hm", t)
-      let path = e.hostedEndpointForTests("hm")
-      check path.isSocket
-      e.requestShutdown()
-      # [SPEC RUNTIME l.3846-3849] Shutdown's first step: no endpoint serves.
-      check waitUntil(
-        proc(): bool =
-          not path.isSocket
-      )
-      e.releaseLoaderStallForTests()
-      joinThread(t)
-      check startReply.load != ord(msReady)
-      let down = e.awaitShutdown()
-      if down.isErr:
-        checkpoint "shutdown: " & down.error.message
-        checkpoint "engine: " & e.diagnostics().join(" | ")
-      check down.isOk
-      check not e.diagnostics().anyIt("invalid response" in it)
-      check not e.diagnostics().anyIt("Module Loader has failed" in it)
-      check e.view("hm").tryGet.state != msReady
-      check noHostLeft()
+      if e.stalledStart("hm", t):
+        let path = e.hostedEndpointForTests("hm")
+        check path.isSocket
+        e.requestShutdown()
+        # [SPEC RUNTIME l.3846-3849] Shutdown's first step: no endpoint serves.
+        check waitUntil(
+          proc(): bool =
+            not path.isSocket
+        )
+        e.releaseLoaderStallForTests()
+        joinThread(t)
+        check startReply.load != ord(msReady)
+        let down = e.awaitShutdown()
+        if down.isErr:
+          checkpoint "shutdown: " & down.error.message
+          checkpoint "engine: " & e.diagnostics().join(" | ")
+        check down.isOk
+        check not e.diagnostics().anyIt("invalid response" in it)
+        check not e.diagnostics().anyIt("Module Loader has failed" in it)
+        check e.view("hm").tryGet.state != msReady
+        check noHostLeft()
       e.finish()
 
     test "[IMPL-DECISION G272] R10 a direct routing rule meeting a hosted end: establish_route is NOT_READY with the reason":
