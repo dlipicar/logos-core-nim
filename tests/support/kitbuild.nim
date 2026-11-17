@@ -55,9 +55,47 @@ proc kitAuditFlags*(executable: bool): seq[string] =
       if executable:
         result.add("--passL:-rdynamic")
 
-proc buildKitLibrary*(source, name: string): string =
-  ## `tests/kit/<source>` as `lib<name>` under `build/kit-dylib/<variant>/`.
-  let dir = kitTestsDir.parentDir / "build" / "kit-dylib" / kitVariant
+const otherMm* = (if kitMm == "refc": "orc" else: "refc")
+  ## [DECISIONS G342] The memory manager a mixed-manager case builds its module
+  ## with: refc beside an orc host, orc beside a refc one.
+
+proc kitCompiler(): (string, string) =
+  ## [DECISIONS G341] The compiler a kit library is built with and its variant
+  ## suffix: `LCN_KIT_NIM` when it is set (the toolchain check builds the
+  ## libraries with a module library's own compiler, the host with this one),
+  ## else this build's.
+  let other = getEnv("LCN_KIT_NIM")
+  if other.len == 0:
+    return (nimExe, "")
+  let (version, code) = execCmdEx(quoteShellCommand([other, "--version"]))
+  doAssert code == 0, "LCN_KIT_NIM: " & version
+  let words = version.splitWhitespace
+  let at = words.find("Version")
+  doAssert at >= 0 and at < words.high, "LCN_KIT_NIM: " & version
+  (other, "-nim" & words[at + 1])
+
+proc kitVariantOf*(mm: string): string =
+  ## `kitVariant` for a library built with `mm` (and `LCN_KIT_NIM`).
+  mm & kitVariant[kitMm.len .. ^1] & kitCompiler()[1]
+
+proc exportListFlags*(kit: string): seq[string] =
+  ## [DECISIONS G341] The link switch for the export list lcn-gen wrote for
+  ## the kit `kit` (`tests/generated/<kit>_kit.exports` or `.map`); none on
+  ## Windows, where a library exports only what it marks for export.
+  let base = kitTestsDir / "generated" / kit & "_kit"
+  when defined(macosx):
+    @["--passL:-Wl,-exported_symbols_list," & base & ".exports"]
+  elif defined(windows):
+    @[]
+  else:
+    @["--passL:-Wl,--version-script=" & base & ".map"]
+
+proc buildKitLibrary*(source, name: string, mm = kitMm, exports = ""): string =
+  ## `tests/kit/<source>` as `lib<name>` under `build/kit-dylib/<variant>/`,
+  ## built with `mm` (by default this build's) and, when `exports` names a
+  ## kit, linked with that kit's export list.
+  let (compiler, _) = kitCompiler()
+  let dir = kitTestsDir.parentDir / "build" / "kit-dylib" / kitVariantOf(mm)
   createDir(dir)
   result = dir / (DynlibFormat % name)
   let output =
@@ -69,12 +107,20 @@ proc buildKitLibrary*(source, name: string): string =
   # to its host: without -d:noSignalHandler its NimMain sets handlers for
   # SIGINT, SIGSEGV, SIGABRT, SIGFPE, SIGILL and SIGBUS and ignores SIGPIPE when
   # it is loaded (system/excpt.nim, `registerSignalHandler`).
-  var args = @[nimExe, "c", "--hints:off", "--mm:" & kitMm, "-d:noSignalHandler"]
+  var args = @[compiler, "c", "--hints:off", "--mm:" & mm, "-d:noSignalHandler"]
   when defined(release):
     args.add("-d:release")
   when kitSanitizer.len > 0:
-    args.add("-d:" & kitSanitizer)
+    # [DECISIONS G342] A refc library is built without the sanitizer: refc's
+    # conservative scan does not see what AddressSanitizer moves to its fake
+    # stacks, and a refc build under -d:asan fails on its own (UBSan: a cell with
+    # no type in `gc_common.prepareDealloc`, with no other manager in the
+    # process). The project's sanitizer runs are orc builds (`logos_core.nimble`).
+    if mm != "refc":
+      args.add("-d:" & kitSanitizer)
   args.add(kitAuditFlags(false))
+  if exports.len > 0:
+    args.add(exportListFlags(exports))
   args.add(
     [
       "--app:lib",

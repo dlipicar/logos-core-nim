@@ -1496,3 +1496,197 @@ when defined(posix):
         e.finish()
         check noHostLeft()
       check codes == @[Opt.some(ecNotReady), Opt.some(ecNotReady)]
+
+  # M-1 to M-3: a module built with the other memory manager ---------------------------
+
+  # [DECISIONS G342; TIER5-PLAN A7] The meter, the deferred adapter and the probe
+  # built with `otherMm` (refc beside this orc build, orc beside a refc one):
+  # two Nim runtimes with different memory managers in one process, the
+  # Runtime's or a Module Host's and the module's. The handlers store nothing
+  # in the instance from the calling thread, so the kit's refc limit (I71)
+  # holds; the confined mode, which lifts it, comes with step N-1's sub-part 3.
+  let
+    # [DECISIONS G341] Linked with the kit's export list, as a port builds them.
+    mixedMeterLib =
+      buildKitLibrary("meter_impl.nim", "hrmeterx", otherMm, exports = "meter_module")
+    mixedDeferredLib = buildKitLibrary(
+      "deferred_adapter.nim", "hrdeferredx", otherMm, exports = "meter_module"
+    )
+    mixedProbeLib = buildKitLibrary("probe_impl.nim", "probex", otherMm)
+    mixedMeterDigest = digestOf(mixedMeterLib)
+    mixedDeferredDigest = digestOf(mixedDeferredLib)
+    mixedProbeDigest = digestOf(mixedProbeLib)
+
+  proc directMixedMeter(state = "m"): ModuleRecord =
+    ModuleRecord(
+      module: MeterModule,
+      strategy: stDirectDynamic,
+      artifact: ArtifactRecord(
+        id: "meterx",
+        localPath: mixedMeterLib,
+        hash: mixedMeterDigest,
+        hashSuite: HashSuiteId,
+      ),
+      primaryContract: Opt.some(meterRoot),
+      stateAssignment: Opt.some(state),
+    )
+
+  proc hostedMixedProbe(): ModuleRecord =
+    ModuleRecord(
+      module: "probe_module",
+      strategy: stHostedDynamic,
+      placement: "process",
+      artifact: ArtifactRecord(
+        id: "probex",
+        localPath: mixedProbeLib,
+        hash: mixedProbeDigest,
+        hashSuite: HashSuiteId,
+      ),
+      stateAssignment: Opt.some("p"),
+    )
+
+  type Reader = object ## One thread's handle and what its reads got.
+    handle: LogosRouteHandle
+    ok: Atomic[int]
+
+  const
+    ReaderThreads = 8
+    ReadsPerThread = 50
+    # [DECISIONS G342] A refc library is built without the sanitizer
+    # (`kitbuild`); MemorySanitizer takes what uninstrumented code writes for
+    # uninitialized (DECISIONS I77), so its run skips these cases.
+    mixedUninstrumented = defined(msan) and otherMm == "refc"
+
+  template instrumentedOnly() =
+    if mixedUninstrumented:
+      skip()
+      break
+
+  proc reads(r: ptr Reader) {.thread.} =
+    ## Reads every channel from 30 on through the thread's own handle (one
+    ## handle per thread: INTERFACE l.1980).
+    for i in 0 ..< ReadsPerThread:
+      let c = uint32(30 + i)
+      let got = r.handle.read(c)
+      if got.isOk and got.get.reading.value == uint64(c) * 10:
+        r.ok += 1
+    releasePerThread()
+
+  suite "run.mixed: a module built with the other memory manager (DECISIONS G342; TIER5-PLAN A7)":
+    setup:
+      for h in heard.mitems:
+        h.count.store(0)
+        h.last.store(0)
+    teardown:
+      leftover()
+      check noHostLeft()
+
+    test "M-1 hosted: calls on two sessions at once, a held call, the caller, events from a handler and from the module's own thread, a deferred provider, and a restart":
+      instrumentedOnly()
+      let cfg = hosted()
+      let dir = cfg.stateOf()
+      discard cfg.stateOf("d")
+      let e = fixtureEngine(cfg)
+      discard
+        e.started(hostedMeter(lib = mixedMeterLib, digest = mixedMeterDigest), "hm")
+      let (c1, rc1) = e.startClient("c1")
+      let (_, rc2) = e.startClient("c2")
+      let o = newOwner(roomy())
+      defer:
+        o.stop()
+      let a = o.session(rc1.establish("k").recordOf.invocationOf.get)
+      let b = o.session(rc2.establish("k").recordOf.invocationOf.get)
+      check o.outcome(a, o.send(a, 18)).reading.label == c1.instance
+      let slow = o.send(a, 22)
+      check dir.heldAt(1)
+      check o.outcome(b, o.send(b, 6)).reading.reading.value == 60
+      dir.open()
+      check o.outcome(a, slow).codeOf == Opt.some(ecOk)
+      # Events: from a handler (15), and from a thread the module's runtime
+      # made, through the host's publish callback (25).
+      var k = rc1.handle(rc1.establish("ke").recordOf.route)
+      var sub: LogosSubscriptionId
+      check k.hear(0, sub) == ecOk
+      check k.read(15).isOk
+      check heardAt(0, 1)
+      check heard[0].last.load == 150
+      let r25 = k.read(25)
+      check r25.isOk and r25.get.reading.value == 250
+      check heardAt(0, 2)
+      check heard[0].last.load == 250
+      k.release()
+      # A deferred provider built the same way.
+      let d = e.started(
+        hostedMeter("d", mixedDeferredLib, mixedDeferredDigest, "deferredx"), "hd"
+      )
+      let cd = o.session(
+        rc1.establish("kd", provider = Opt.some(providerAddress(d.providerId))).recordOf.invocationOf.get
+      )
+      check o.outcome(cd, o.send(cd, 7)).reading.reading.value == 70
+      check o.outcome(cd, o.send(cd, 13)).codeOf == Opt.some(ecModule)
+      # A restart: a new host process loads the library again.
+      check e.stop("hm").tryGet.state == msUnloaded
+      check e.start("hm").tryGet.state == msReady
+      let a2 = o.session(rc1.establish("k2").recordOf.invocationOf.get)
+      check o.outcome(a2, o.send(a2, 9)).reading.reading.value == 90
+      e.finish()
+
+    test "M-2 direct_dynamic in this process: reads from 8 threads on their own handles, events from a handler and from the module's own thread, scoped events, and a second instance after the first is stopped":
+      instrumentedOnly()
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(directMixedMeter(), "dm")
+      let (_, rc) = e.startClient("c")
+      let route = rc.establish("k").recordOf.route
+      var readers: array[ReaderThreads, Reader]
+      var threads: array[ReaderThreads, Thread[ptr Reader]]
+      for i in 0 ..< ReaderThreads:
+        readers[i].handle = rc.handle(route)
+      for i in 0 ..< ReaderThreads:
+        createThread(threads[i], reads, addr readers[i])
+      joinThreads(threads)
+      for i in 0 ..< ReaderThreads:
+        check readers[i].ok.load == ReadsPerThread
+        readers[i].handle.release()
+      var k = rc.handle(route)
+      var sub: LogosSubscriptionId
+      check k.hear(0, sub) == ecOk
+      check k.read(15).isOk
+      check heard[0].last.load == 150 # direct delivery runs before publish returns
+      check k.read(25).isOk
+      check heard[0].count.load == 2
+      check heard[0].last.load == 250
+      check k.read(17).isOk # in the invocation's scope
+      check heard[0].count.load == 3
+      check heard[0].last.load == 170
+      k.release()
+      check e.stop("dm").tryGet.state == msUnloaded
+      # The library stays loaded (`runtime/artifact.nim`); a new instance runs.
+      discard e.started(directMixedMeter("m2"), "dm2")
+      var k2 = rc.handle(rc.establish("k2").recordOf.route)
+      let again = k2.read(20)
+      check again.isOk and again.get.label == "m2"
+      k2.release()
+      e.finish()
+
+    test "M-3 a hosted consumer built with the other memory manager calls, subscribes and releases, to a hosted provider built the same way":
+      instrumentedOnly()
+      let cfg = hosted()
+      discard cfg.stateOf()
+      var c = cfg.serving(state = "p")
+      let e = fixtureEngine(cfg)
+      discard
+        e.started(hostedMeter(lib = mixedMeterLib, digest = mixedMeterDigest), "m")
+      check e.started(hostedMixedProbe(), "c").state == msReady
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      let r = readingOf(c.readVia(0, 4))
+      check r.isSome and r.get.reading.value == 40
+      let sub = c.run("subscribe 0 meter.changed_event s1")
+      check codeIn(sub) == Opt.some(ecOk)
+      check readingOf(c.readVia(0, 25)).isSome
+      check c.noted("deliveries", "s1 meter.changed_event ")
+      check codeIn(c.run("unsubscribe 0 " & valueIn(sub))) == Opt.some(ecOk)
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      e.finish()

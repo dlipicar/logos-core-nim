@@ -14,7 +14,7 @@
 ## libraries (`support/testroute`): caller, helpers and provider then each run
 ## on a Nim runtime of their own.
 
-import std/[dynlib, typedthreads]
+import std/[dynlib, os, typedthreads]
 import unittest2
 import ../src/logos_core/iface/[accept, provider]
 from ../src/logos_core/runtime/rc_types import
@@ -60,11 +60,15 @@ proc load(path, module: string): Library =
     dispatch: symbol(DispatchFn, "dispatch"),
   )
 
+proc build(source, name, module: string): Library =
+  ## The kit library, linked with its kit's export list (DECISIONS G341).
+  load(buildKitLibrary(source, name, exports = module), module)
+
 let
-  meter = load(buildKitLibrary("meter_impl.nim", "kitmeter"), "meter_module")
-  sensor = load(buildKitLibrary("sensor_impl.nim", "kitsensor"), "sensor_module")
-  shapes = load(buildKitLibrary("shapes_impl.nim", "kitshapes"), "shapes_module")
-  tuner = load(buildKitLibrary("tuner_impl.nim", "kittuner"), "tuner_module")
+  meter = build("meter_impl.nim", "kitmeter", "meter_module")
+  sensor = build("sensor_impl.nim", "kitsensor", "sensor_module")
+  shapes = build("shapes_impl.nim", "kitshapes", "shapes_module")
+  tuner = build("tuner_impl.nim", "kittuner", "tuner_module")
   tunerApply =
     cast[ApplyFn](tuner.handle.symAddr("logos_tuner_module_MODULE_apply_configuration"))
 
@@ -178,6 +182,30 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
       "meter_module", Opt.some(mirror("IFC/3.9.1.module.cddl")), [], []
     ).get
     check bytes == callSurfaceDescriptor(b).get
+
+  test "[DECISIONS G341] a library linked with its kit's export list exports its ABI and nothing else":
+    for (lib, name, module) in [
+      (meter, "kitmeter", "meter_module"),
+      (sensor, "kitsensor", "sensor_module"),
+      (shapes, "kitshapes", "shapes_module"),
+      (tuner, "kittuner", "tuner_module"),
+    ]:
+      checkpoint module
+      var listed = 0
+      for line in lines(
+        currentSourcePath().parentDir / "generated" / module & "_kit.exports"
+      ):
+        if line.len > 0 and line[0] == '_':
+          checkpoint line
+          check lib.handle.symAddr(cstring(line[1 ..^ 1])) != nil
+          inc listed
+      check listed >= 7 # name, init, destroy, call_surface, free, dispatch, a _CALL_
+      when not defined(windows):
+        # What the list leaves out: the library's `NimMain` and the BLAKE3
+        # functions its C marks for export (base/libvisibility).
+        for hidden in ["lib" & name & "NimMain", "blake3_hasher_init", "blake3_version"]:
+          checkpoint hidden
+          check lib.handle.symAddr(cstring(hidden)) == nil
 
   test "calls from the loading thread: a response, a failure's message, an event":
     withLock publishedLock:
