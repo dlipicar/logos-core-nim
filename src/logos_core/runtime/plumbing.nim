@@ -116,6 +116,7 @@ when defined(lcnTestHooks):
       faults: LoaderFaults
       stalled: int ## calls holding their reply
       releases: int ## `releaseStall` calls so far
+      early: bool ## a `releaseStall` found no call held: the next one passes
 
     LoaderFaultBox* = ptr LoaderFaultBoxObj
 
@@ -158,8 +159,12 @@ when defined(lcnTestHooks):
       broadcast(b.cond)
 
   proc stallHere*(b: LoaderFaultBox) =
-    ## Holds the calling worker until the next `releaseStall`.
+    ## Holds the calling worker until the next `releaseStall`, or not at all
+    ## if one came while no call was held.
     withLock b.lock:
+      if b.early:
+        b.early = false
+        return
       let gen = b.releases
       inc b.stalled
       while b.releases == gen:
@@ -167,8 +172,14 @@ when defined(lcnTestHooks):
       dec b.stalled
 
   proc releaseStall*(b: LoaderFaultBox) =
+    ## [IMPL] With no call held, the release is kept for the next one: a call
+    ## that took its `stall` fault but was slow to reach `stallHere` (a test
+    ## whose wait for the stall gave up, 4b-8's closing check) is not held for
+    ## good.
     withLock b.lock:
       inc b.releases
+      if b.stalled == 0:
+        b.early = true
       broadcast(b.cond)
 
   proc stalledCalls*(b: LoaderFaultBox): int =

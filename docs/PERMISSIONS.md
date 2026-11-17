@@ -44,7 +44,8 @@ not exist here (G283). A module in a direct implementation runs in the host's ad
 nothing between the module and the host's facilities could hold such a limit (SECURITY l.203-205).
 
 **What is not enforced.**
-- No per-class or per-resource limit, no sandbox, container or operating-system enforcement (Tier 5).
+- No per-class or per-resource limit, no sandbox, container or operating-system enforcement (outside Tier 5:
+  DECISIONS D16).
 - No per-module device restriction: the profile claims none, so CA l.408-409 do not apply (CAP-0292,
   CAP-0293).
 - No permission is enforced by a module provider (CA l.419-422 do not apply, G286).
@@ -144,7 +145,7 @@ admission (DECISIONS I93, part 4b-4c):
 - **Not enforced in 4b.** The host is a separate address space, not a sandbox: it gets the same
   operating-system access as any process of the Runtime's user, so host-ambient means the same thing
   there (SECURITY l.207-210). No constraint crosses to the Loader or the host (G280). Sandbox,
-  container and operating-system enforcement are Tier 5.
+  container and operating-system enforcement are outside Tier 5 (DECISIONS D16).
 
 ## A trap
 

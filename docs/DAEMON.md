@@ -465,7 +465,9 @@ the instance's log lines; they never reach a Runtime Control request and never s
 
 **No payload is relayed.** The seventeen methods are reads, lifecycle, configuration and shutdown. No
 method payload of any operator module, and no event, crosses the socket or passes through the instance.
-A later command that calls a provider would connect to the provider itself.
+Calls to providers from the command line come with the CLI module `lcn_call` (Tier 5 plan A3, step
+N-2), a module instance of its own whose routes carry the payloads between module processes; neither
+this instance nor logosd relays them.
 
 ### The methods
 

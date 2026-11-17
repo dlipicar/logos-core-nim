@@ -832,8 +832,9 @@ when defined(posix):
 
   proc notify*(h: Host, m: LcnCarrierMessage) =
     ## [plan §2.8; part 4b-3.3] A notice from the Runtime thread
-    ## (`route_ended`): queued for the sender, so the Runtime thread never
-    ## waits for a host to read. Nothing once the host has ended.
+    ## (`route_ended`) or a call worker (`call_cancel`): queued for the sender
+    ## behind the lane-2 orders already given, so its writer never waits for a
+    ## host to read. Nothing once the host has ended.
     let f = frameOf(m)
     if f.isOk:
       discard h.queueOut(f.get)

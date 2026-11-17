@@ -1243,19 +1243,12 @@ proc asyncTerminal(st: State, a: AsyncRec) =
   let c = asyncOf(a.call)
   if a.ticket != nil:
     a.ticket.closed.store(true)
-  if c.callEnd != okResult:
-    st.cancelInvocation(a)
-    if a.linkTag != 0 and c.callEnd in {okCancelled, okTimeout}:
-      # [IFC-0729; TRANSPORT §3.4] A sent call cancelled or timed out: Cancel
-      # on its link; its late Response is discarded (`linkResponse`).
-      let l = st.links.getOrDefault(c.link)
-      if l != nil and l.state == lkOpen and a.linkTag in l.asyncs:
-        discard st.shared.tport.submitOwner(
-          IoCommand(conn: l.conn, kind: IoCommandKind.cmdCancel, callTag: a.linkTag)
-        )
   if a.session:
     # [I90; plan §2.5] No callback: a decision no worker answered is the
-    # Runtime's to answer (an end, a refused queue).
+    # Runtime's to answer (an end, a refused queue). [IMPL; I91] Answered
+    # before the invocation is marked cancelled: a hosted call's cancel goes
+    # to its host behind this answer (`hostcall`), so a provider that returns
+    # because it was cancelled cannot commit its own Response first.
     let f = c.unsentFailure()
     if f.isSome:
       discard st.shared.tport.submitOwner(
@@ -1267,6 +1260,17 @@ proc asyncTerminal(st: State, a: AsyncRec) =
           workEnded: false,
         )
       )
+  if c.callEnd != okResult:
+    st.cancelInvocation(a)
+    if a.linkTag != 0 and c.callEnd in {okCancelled, okTimeout}:
+      # [IFC-0729; TRANSPORT §3.4] A sent call cancelled or timed out: Cancel
+      # on its link; its late Response is discarded (`linkResponse`).
+      let l = st.links.getOrDefault(c.link)
+      if l != nil and l.state == lkOpen and a.linkTag in l.asyncs:
+        discard st.shared.tport.submitOwner(
+          IoCommand(conn: l.conn, kind: IoCommandKind.cmdCancel, callTag: a.linkTag)
+        )
+  if a.session:
     c.suppress()
   elif a.attempt in st.liveAttempts:
     a.completing = true
@@ -1471,6 +1475,15 @@ proc endTransported(st: State, r: Route) =
     of soDrain:
       st.sv.drain(s, deadline)
 
+when defined(lcnTestHooks):
+  var cancelMarkDelayMs: Atomic[int]
+
+  proc setCancelMarkDelayForTests*(ms: int) =
+    ## Once a route's end has marked its admitted calls cancelled, the Runtime
+    ## thread waits `ms` before it goes on; 0 turns it off. A cancel forwarded
+    ## to a hosted provider meanwhile must not overtake what the end answered.
+    cancelMarkDelayMs.store(ms)
+
 proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229; INTERFACE §2.5] The route takes no
   ## new calls, its subscriptions are deactivated, and each handle observing
@@ -1498,16 +1511,28 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
     let ticket = cast[ptr CallTicket](t)
     withLock ticket.lock:
       ticket.endCode = ord(r.endCode)
-    ticket.cancelled.store(true)
   for p in r.subs:
     deactivate(subOf(p))
-  for a in st.records:
-    if not a.rc and a.route == r.id:
-      st.cancelInvocation(a)
-      if r.state == rtRevoked:
+  # [IMPL; I91] What the Runtime answers and orders for the route's calls goes
+  # out before any of them is marked cancelled: a hosted provider's host gets
+  # its call's cancel behind them (`hostcall`), so a provider that returns
+  # because it was cancelled cannot commit its own Response through a revoked
+  # route first (CA l.917-918; TRANSPORT l.987-991).
+  if r.state == rtRevoked:
+    for a in st.records:
+      if not a.rc and a.route == r.id:
         st.endCall(a, revokedResult(), okEnded)
   if r.mode == rmLocalTransport:
     st.endTransported(r)
+  for t in r.calls:
+    cast[ptr CallTicket](t).cancelled.store(true)
+  for a in st.records:
+    if not a.rc and a.route == r.id:
+      st.cancelInvocation(a)
+  when defined(lcnTestHooks):
+    let late = cancelMarkDelayMs.load
+    if late > 0 and r.calls.len > 0:
+      sleep(late)
   for h in r.handles:
     scheduleEnd(h, r.endCode)
     st.dispatch(Job(id: st.nextJobId(), kind: jkObserveEnd, handle: h))

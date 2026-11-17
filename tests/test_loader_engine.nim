@@ -193,24 +193,33 @@ suite "run.loader: the Loader instance (LOADER §1-§2; RUNTIME l.1635-1650) [IM
   test "[IMPL-DECISION G61] [IMPL-DECISION G190] the Loader's startup deadline covers its binding checks":
     # The binding's `list_capabilities` is held until the deadline has passed:
     # the binding is not made, and the open fails once the call has returned
-    # and the Loader is released.
-    let box = newLoaderFaultBox()
-    box.setFaults(LoaderFaults(stall: {lmListCapabilities}))
-    var cfg = config()
-    cfg.loaderStartupDeadline = initDuration(milliseconds = 1000 * Slow)
-    cfg.loaderFaults = box
-    stallSeen.store(false)
-    openDone.store(false)
-    var t: Thread[(LoaderFaultBox, Duration)]
-    createThread(t, releaseLate, (box, cfg.loaderStartupDeadline))
-    let r = openEngine(cfg)
-    openDone.store(true)
-    joinThread(t)
-    freeLoaderFaultBox(box)
+    # and the Loader is released. [IMPL] An attempt counts only if the call
+    # was held: on a host at load 400 under ASan the deadline passed before
+    # the binding check was reached (4b-8's load fix), so each further
+    # attempt doubles it.
+    var deadline = initDuration(milliseconds = 1000 * Slow)
+    for attempt in 1 .. 4:
+      let box = newLoaderFaultBox()
+      box.setFaults(LoaderFaults(stall: {lmListCapabilities}))
+      var cfg = config()
+      cfg.loaderStartupDeadline = deadline
+      cfg.loaderFaults = box
+      stallSeen.store(false)
+      openDone.store(false)
+      var t: Thread[(LoaderFaultBox, Duration)]
+      createThread(t, releaseLate, (box, cfg.loaderStartupDeadline))
+      let r = openEngine(cfg)
+      openDone.store(true)
+      joinThread(t)
+      freeLoaderFaultBox(box)
+      check r.isErr and r.error.code == ecModule
+      check r.error.message ==
+        "the Module Loader cannot start: startup-timeout: the startup deadline passed"
+      if stallSeen.load:
+        break
+      checkpoint "attempt " & $attempt & ": the deadline passed before the binding check"
+      deadline = deadline * 2
     check stallSeen.load
-    check r.isErr and r.error.code == ecModule
-    check r.error.message ==
-      "the Module Loader cannot start: startup-timeout: the startup deadline passed"
 
   test "[RUN-0639] [IMPL-DECISION G57] its summary is implementation-specific; what it realizes reports the strategy":
     let e = fixtureEngine(config())

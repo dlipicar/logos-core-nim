@@ -38,7 +38,11 @@ when defined(posix):
   import std/posix
 
   const
-    ReadyMs = 20_000 * Slow
+    ReadyMs = 120_000 * Slow
+      ## [IMPL] Only bounds a wait for what comes: the socket answering, an
+      ## instance's state, the chatter line, an expected exit. With 20 s
+      ## times Slow, starts on a host at load 100 outlasted it under refc
+      ## and ASan (4b-8's closing check).
     StopDeadlineMs = 10_000 * Slow
       ## `runtime.stop_deadline_ms` and `shutdown_grace_ms` here: the defaults
       ## (10 s), scaled under a sanitizer, where a Module Host's stop on a
