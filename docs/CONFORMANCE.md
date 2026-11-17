@@ -474,7 +474,10 @@ IFC 172, PKG 308, BCP 4, SEC 1.
 - Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
   run as the daemon's user, so a process running as that user can replace a socket pathname or
   impersonate an endpoint. Deployments that need that protection must run hosts under distinct OS
-  identities, which this implementation does not set up (DECISIONS G58).
+  identities, which this implementation does not set up (DECISIONS G58). The same holds on Windows
+  once the profile is built there (step 5-9): a consumer of the Runtime's own user can delete,
+  rename or re-secure the endpoint, and TRANSPORT l.1156 is read as not reaching it (DECISIONS G332,
+  the owner's reading, 2026-11-17).
 - Containment of what a hosted module starts: a Module Host's process group is killed after every
   end of the host, but a process the module moved into another group or session outlives it
   (DECISIONS G265). Placement `process` is a separate address space, not a sandbox.
