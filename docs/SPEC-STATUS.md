@@ -46,8 +46,8 @@ the log at the end of this section, re-opens the inspection items its work makes
 
 The 676 units `deferred:tier-5` at `3c6f3c3`. Areas A1 and A3 are counted by work (PM l.1649-1702's
 inspect, install, remove and update units and the §14 result encoders are installation's), the others by
-section; *Steps* says whose work makes each unit claimable. The PKG units one by one are in the
-workspace's `tier5-plans/step5-0-pkg-recount.tsv`.
+section; *Steps* says whose work makes each unit claimable. The PKG units are listed by step after the
+table (each unit with its reason: the workspace's `tier5-plans/step5-0-pkg-recount.tsv`).
 
 | Area | What | Units | Steps |
 |---|---|---|---|
@@ -65,6 +65,25 @@ workspace's `tier5-plans/step5-0-pkg-recount.tsv`.
 | H | The reverse mapper (INTERFACE §3) | IFC 152, and IFC-0887, IFC-0904 to re-evidence | 5-1 |
 | K | iOS baseline (SEC-0044); sandbox and container placements and OS-enforced permissions have no gated unit | SEC 1 | outside Tier 5: M12 |
 | | **Total** | **676**: PKG 308, RUN 133, IFC 172, TRN 58, BCP 4, SEC 1 | |
+
+The 308 PKG units by step (`PKG-` omitted):
+
+| Step | Area | Units | Ids |
+|---|---|---|---|
+| 5-3a | A4 | 4 | 0418-0421 |
+| 5-3b | A2 | 10 | 0019, 0021, 0069, 0114, 0115, 0353, 0449, 0472-0474 |
+| 5-3b | A4 | 16 | 0076, 0077, 0079, 0081-0083, 0085-0093, 0112 |
+| 5-5 | A3 | 63 | 0011, 0012, 0172, 0177, 0178, 0181, 0182, 0189, 0190, 0192, 0204, 0219, 0222, 0271, 0275, 0291-0293, 0356, 0357, 0359-0363, 0389-0411, 0468-0471, 0487-0489, 0493, 0498-0500, 0534-0537 |
+| 5-5 | A4 | 7 | 0080, 0436-0441 |
+| 5-6a | A1 | 29 | 0003-0008, 0365-0380, 0388, 0519-0524 |
+| 5-6a | A2 | 2 | 0513, 0514 |
+| 5-6b | A1 | 49 | 0381, 0383-0387, 0525-0533, 0538-0542, 0544-0562, 0564-0573 |
+| 5-7a | A4 | 1 | 0435 |
+| 5-8 | B | 19 | 0060, 0287, 0289, 0335, 0337-0345, 0347-0351, 0512 |
+| 5-8 | A2 | 1 | 0354 |
+| 5-8 | A4 | 2 | 0423, 0424 |
+| 5-10 | D | 30 | 0017, 0224-0252 |
+| 5-11 | C | 75 | 0118-0170, 0450-0467, 0515-0518 |
 
 A dropped area's units that bind without it stay and are claimed in their own steps: TRN-0352, PKG-0190,
 PKG-0166, PKG-0167, PKG-0169, the `nix` and `quic` refusals (plan A1). At the close (5-13) every unit
