@@ -70,14 +70,27 @@ default = "claimed"
 # G58: no claim of protection from same-identity processes.
 "TRN-0346" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
 "TRN-0347" = "out-of-scope:a requirement on deployments claiming same-identity protection (G58)"
-# §8.4.1: the tls-tcp carrier's library, step 5-2b (DECISIONS I99): TLS 1.3 only, mutual
+# §8.4, §8.4.1: the tls-tcp carrier's library (DECISIONS I99). Step 5-2b: TLS 1.3 only, mutual
 # authentication, the channel binding, no resumption or early data before Transport data, SNI.
-# The enrollment checks (TRN-0216, TRN-0221 to TRN-0226, TRN-0370 to TRN-0375) come with 5-2a;
-# what needs routes, tickets and provider sessions with 5-7a. The rest of §8.4 stays tier 5.
+# Step 5-2a: the trust snapshot and the enrollment checks (G324, G325). What needs routes,
+# tickets, provider sessions and the trust input stays tier 5 for 5-7a, as does QUIC (§8.4.2).
+"TRN-0216" = "claimed"
 "TRN-0219" = "claimed"
 "TRN-0220" = "claimed"
+"TRN-0221" = "claimed"
+"TRN-0222" = "claimed"
+"TRN-0223" = "claimed"
+"TRN-0224" = "claimed"
+"TRN-0225" = "claimed"
+"TRN-0226" = "claimed"
 "TRN-0228" = "claimed"
 "TRN-0233" = "claimed"
+"TRN-0370" = "claimed"
+"TRN-0371" = "claimed"
+"TRN-0372" = "claimed"
+"TRN-0373" = "claimed"
+"TRN-0374" = "claimed"
+"TRN-0375" = "claimed"
 "TRN-0376" = "claimed"
 # §10: a requirement on a future transport profile.
 "TRN-0252" = "out-of-scope:a requirement on future transport profiles"

@@ -459,15 +459,26 @@ The gate at the close: RUN 829/829, LDR 131/131, CFG 122/122, CAP 385/385, TRN 2
 PKG 212/212, BCP 49/49, SEC 2/2, with nothing deferred to Tier 4b and to Tier 5 RUN 133, TRN 58,
 IFC 172, PKG 308, BCP 4, SEC 1.
 
-### What Tier 5 step 5-2b changes
+### What Tier 5 step 5-2 changes
 
-The `logos.remote.tls-tcp` carrier's library (DECISIONS I99; G323, G326, G328), under
+The `logos.remote.tls-tcp` carrier's library (DECISIONS I99; G323 to G328), under
 `src/logos_core/transport/tls/`: TLS 1.3 only with mutual authentication over TCP, the RFC 9266
 channel binding, the signing seam and P-256 credentials. Nothing runs it yet: the TLS processes that
 will (facade and listener processes, logosd's signing service) are steps 5-7a and 5-7b, and no
 deployment enables a remote surface (`docs/DEPLOYMENT.md` keeps its answers). TRN-0219, TRN-0220,
-TRN-0228, TRN-0233 and TRN-0376 are claimed by `tests/test_remote_tls.nim`; the rest of TRANSPORT §8.4
-stays Tier 5, and its enrollment checks come with part 5-2a.
+TRN-0228, TRN-0233 and TRN-0376 are claimed by `tests/test_remote_tls.nim` (part 5-2b).
+
+Part 5-2a adds the verifier: a trust snapshot built from protected input and never changed by a peer,
+and nine checks in a fixed order (accepted time, one certificate that is a direct anchor, the
+enrollment, the key, complete DER equality with the anchor, validity, Key Usage, Extended Key Usage,
+unprocessed critical extensions; G324, G325). Accepted current time is the system clock at or past
+`TimeFloor`. TRN-0216, TRN-0221 to TRN-0226 and TRN-0370 to TRN-0375 are claimed. What needs routes,
+tickets, provider sessions and the remote trust input stays Tier 5 (5-7a).
+
+Not claimed: erasure on remote paths. The pinned BoringSSL frees decrypted records unerased; the fix
+is proposed to nim-boringssl as an option, `BORINGSSL_ZERO_RECORD_BUFFERS` (G327), which our build will
+set. Until it is pinned and set and the TLS processes' own erasure is shown, remote paths refuse marked
+contracts (G277), as any build without the option will.
 
 ## Properties not claimed
 

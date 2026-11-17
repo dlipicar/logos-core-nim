@@ -1,13 +1,14 @@
 ## Fixtures for `test_remote_tls.nim` (step 5-2): parties with a P-256 key and a
 ## self-signed certificate, the in-process test signer, and a fixture
 ## `PeerCheck` that pins one SPKI per Runtime id. The enrollment checks
-## (TRANSPORT §8.4.1 l.1245-1267) are 5-2a's `verify.nim`; this check only lets
-## the carrier be shown before them.
+## (TRANSPORT §8.4.1 l.1245-1267) are `verify.nim`'s (5-2a); the pinned check
+## shows the carrier on its own. Trust snapshots, clocks and odd certificates
+## for the verifier's cases.
 
 import std/[tables, times]
 import results
 import ../../src/logos_core/transport/tls
-import ../../src/logos_core/transport/tls/testsigner
+import ../../src/logos_core/transport/tls/[boring, testsigner]
 
 export tls, testsigner
 
@@ -92,3 +93,64 @@ proc freeContexts*() =
 proc fastConfig*(timeoutMs = 10_000): TlsConfig =
   result = defaultTlsConfig()
   result.handshakeTimeoutMs = timeoutMs
+
+# 5-2a: trust snapshots, clocks and odd certificates -------------------------------------
+
+proc anchorId*(p: Party): string =
+  p.id & "-anchor"
+
+proc activeRecord*(
+    p: Party, revision = 1'u64, keys: seq[seq[byte]] = @[]
+): EnrollmentRecord =
+  ## `p` enrolled with its own certificate as direct anchor.
+  EnrollmentRecord(
+    runtime: p.id,
+    revision: revision,
+    status: rsActive,
+    anchor: p.anchorId,
+    spkis: (if keys.len == 0: @[p.spki] else: keys),
+  )
+
+proc snapshotOf*(
+    anchored: openArray[Party], records: openArray[EnrollmentRecord]
+): TrustSnapshot =
+  ## Every party of `anchored` as a direct anchor, and `records`.
+  var anchors: seq[(string, seq[byte])] = @[]
+  for p in anchored:
+    anchors.add((p.anchorId, p.cert))
+  newTrustSnapshot(7, anchors, records).get
+
+proc enrolled*(parties: openArray[Party]): TrustSnapshot =
+  ## Each party anchored and actively enrolled.
+  var records: seq[EnrollmentRecord] = @[]
+  for p in parties:
+    records.add(activeRecord(p))
+  snapshotOf(parties, records)
+
+proc fixedClock*(at: int64): Clock =
+  result = proc(): Result[int64, string] {.gcsafe, raises: [].} =
+    ok(at)
+
+proc noClock*(): Clock =
+  result = proc(): Result[int64, string] {.gcsafe, raises: [].} =
+    err("no clock")
+
+proc withCriticalExtension*(p: Party): seq[byte] =
+  ## `p`'s certificate with a private critical extension added, signed again.
+  let x = parseCertificate(p.cert).get
+  let obj = OBJ_txt2obj("1.3.6.1.4.1.55555.1".cstring, 1)
+  let value = ASN1_OCTET_STRING_new()
+  var null = [0x05'u8, 0x00]
+  doAssert ASN1_OCTET_STRING_set(value, addr null[0], 2) == 1
+  var ext: ptr X509_EXTENSION = nil
+  doAssert X509_EXTENSION_create_by_OBJ(addr ext, obj, 1, value) != nil
+  doAssert X509_add_ext(x, ext, -1) == 1
+  doAssert X509_sign(x, p.key.raw, EVP_sha256()) > 0
+  X509_EXTENSION_free(ext)
+  ASN1_OCTET_STRING_free(value)
+  ASN1_OBJECT_free(obj)
+  let n = i2d_X509(x, nil)
+  result = newSeq[byte](n)
+  var q = addr result[0]
+  doAssert i2d_X509(x, addr q) == n
+  X509_free(x)

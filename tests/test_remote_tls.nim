@@ -1,9 +1,10 @@
 ## TRANSPORT §8.4.1; owner B1; I99, G323, G326, G328: the `logos.remote.tls-tcp`
-## carrier's library (step 5-2b): P-256 credentials, the signing seam, the
-## sans-I/O engine and authenticated streams over loopback TCP. The peer checks
-## here are the fixture's (`support/tls_fixtures.nim`: one pinned SPKI per
-## Runtime id); the enrollment checks are 5-2a's. The one suite that imports
-## the TLS library, so that one test build per variant compiles BoringSSL.
+## carrier's library: P-256 credentials, the signing seam, the sans-I/O engine
+## and authenticated streams over loopback TCP (step 5-2b, with the fixture's
+## check that pins one SPKI per Runtime id, `support/tls_fixtures.nim`); the
+## trust snapshot and the enrollment checks, alone and through real handshakes
+## (step 5-2a; G324, G325). The one suite that imports the TLS library, so that
+## one test build per variant compiles BoringSSL.
 
 import std/[sequtils, strutils]
 import unittest2
@@ -104,6 +105,7 @@ proc listen(
     signer: Signer = nil,
     config = fastConfig(),
     ctx: TlsContext = nil,
+    check: PeerCheck = nil,
 ): TlsListener =
   let sctx =
     if ctx == nil:
@@ -115,7 +117,12 @@ proc listen(
       keySigner(server.key, tlsServer)
     else:
       signer
-  serve("127.0.0.1", 0, sctx, pinnedCheck(known), sig, config, echoHandler(seen)).get
+  let chk =
+    if check == nil:
+      pinnedCheck(known)
+    else:
+      check
+  serve("127.0.0.1", 0, sctx, chk, sig, config, echoHandler(seen)).get
 
 proc addressOf(l: TlsListener, serverName = ""): TlsTcpAddress =
   TlsTcpAddress(host: "127.0.0.1", port: l.localPort, serverName: serverName)
@@ -129,6 +136,7 @@ proc dial(
     config = fastConfig(),
     ctx: TlsContext = nil,
     registry: StreamRegistry = nil,
+    check: PeerCheck = nil,
 ): Result[TlsStream, string] =
   let cctx =
     if ctx == nil:
@@ -140,9 +148,12 @@ proc dial(
       keySigner(client.key, tlsClient)
     else:
       signer
-  waitFor connect(
-    l.addressOf(serverName), cctx, expectCheck(server), sig, config, registry
-  )
+  let chk =
+    if check == nil:
+      expectCheck(server)
+    else:
+      check
+  waitFor connect(l.addressOf(serverName), cctx, chk, sig, config, registry)
 
 proc roundTrip(s: TlsStream, body: seq[byte]): Result[seq[byte], string] =
   ?(waitFor s.writeFrame(body))
@@ -611,6 +622,274 @@ suite "tls.signing seam":
     waitFor s.close()
     waitFor l.close()
 
+# Step 5-2a: the trust snapshot and the enrollment checks ---------------------------------
+
+proc uuid(n: int): string =
+  ## A lowercase UUIDv4 for party `n`.
+  "00000000-0000-4000-8000-" & align($n, 12, '0')
+
+let
+  now = nowPosix()
+  clock = fixedClock(now)
+  eServer = newParty(uuid(1), extendedKeyUsage = "serverAuth")
+  eClient = newParty(uuid(2), extendedKeyUsage = "clientAuth")
+  eAny = newParty(uuid(3), extendedKeyUsage = "anyExtendedKeyUsage")
+  eBoth = newParty(uuid(4), extendedKeyUsage = "clientAuth,serverAuth")
+  kuEnc = newParty(uuid(5), keyUsage = "critical,keyEncipherment")
+  expired = newParty(uuid(6), notBefore = now - 2 * 86400, notAfter = now - 86400)
+  future = newParty(uuid(7), notBefore = now + 86400, notAfter = now + 2 * 86400)
+  noKu = newParty(uuid(8), keyUsage = "")
+  expiredKuEnc = newParty(
+    uuid(9),
+    keyUsage = "critical,keyEncipherment",
+    notBefore = now - 2 * 86400,
+    notAfter = now - 86400,
+  )
+  oddParties =
+    [eServer, eClient, eAny, eBoth, kuEnc, expired, future, noKu, expiredKuEnc]
+
+proc verdict(
+    t: TrustSnapshot, p: Party, role: TlsRole, expected: string, cert: seq[byte] = @[]
+): Result[PeerIdentity, string] =
+  checkPeer(t, @[(if cert.len > 0: cert else: p.cert)], role, expected, clock())
+
+proc reason(r: Result[PeerIdentity, string]): string =
+  if r.isOk: "ok" else: r.error
+
+suite "tls.trust":
+  test "[IMPL-DECISION I99] Runtime ids are lowercase UUIDv4 (RUNTIME l.2670); the snapshot refuses malformed protected input":
+    check isRuntimeId(IdA)
+    check isRuntimeId(uuid(1))
+    for bad in [
+      "", IdA.toUpperAscii, "0b6f3c3e-9d0f-1c1a-8f43-7a8f2b9b1a01",
+      "0b6f3c3e-9d0f-4c1a-7f43-7a8f2b9b1a01", "0b6f3c3e9d0f4c1a8f437a8f2b9b1a01",
+      "0b6f3c3e-9d0f-4c1a-8f43-7a8f2b9b1a0g",
+    ]:
+      check not isRuntimeId(bad)
+    let anchors = @[(a.anchorId, a.cert)]
+    check newTrustSnapshot(1, anchors, [activeRecord(a)]).isOk
+    var upper = activeRecord(a)
+    upper.runtime = IdA.toUpperAscii
+    check newTrustSnapshot(1, anchors, [upper]).isErr
+    var unknownAnchor = activeRecord(a)
+    unknownAnchor.anchor = "nope"
+    check newTrustSnapshot(1, anchors, [unknownAnchor]).isErr
+    check newTrustSnapshot(
+      1, anchors, [activeRecord(a, keys = @[a.spki, b.spki, c.spki])]
+    ).isErr
+    check newTrustSnapshot(1, anchors, [activeRecord(a, keys = @[a.spki, a.spki])]).isErr
+    check newTrustSnapshot(1, anchors, [activeRecord(a), activeRecord(a, 2)]).isErr
+    check newTrustSnapshot(1, anchors & anchors, [activeRecord(a)]).isErr
+    let t =
+      newTrustSnapshot(3, anchors, [activeRecord(a, keys = @[a.spki, b.spki])]).get
+    check t.anchorRevision == 3
+    check t.holdersOf(b.spki).len == 1
+
+  test "[TRN-0216] [TRN-0217] a presented credential creates or alters nothing: an unknown key fails, again, and the snapshot is unchanged":
+    let t = enrolled([a, b])
+    let before = (t.anchorCount, t.recordCount)
+    for i in 0 ..< 3:
+      check verdict(t, c, tlsClient, "").reason.startsWith("3 enrollment")
+      check verdict(t, c, tlsServer, IdC).reason.startsWith("3 enrollment")
+    check (t.anchorCount, t.recordCount) == before
+    check t.record(IdC).isNone
+    check t.holdersOf(c.spki).len == 0
+
+suite "tls.verify":
+  test "[TRN-0223] [TRN-0224] [TRN-0225] [TRN-0374] [IMPL-DECISION G324] the expected Runtime's active record, or the one record that holds an inbound key; the direct anchor passes on its active status":
+    let t = enrolled([a, b])
+    let toB = verdict(t, b, tlsServer, IdB)
+    check toB.isOk
+    check toB.get == PeerIdentity(runtime: IdB, revision: 1, anchor: b.anchorId)
+    let fromA = verdict(t, a, tlsClient, "")
+    check fromA.isOk
+    check fromA.get.runtime == IdA
+    # another Runtime's certificate for the expected one
+    check verdict(t, a, tlsServer, IdB).reason.startsWith("4 key")
+
+  test "[TRN-0375] [IMPL-DECISION G325] no accepted current time fails first; the system clock is accepted only at or past the floor":
+    let t = enrolled([a])
+    check checkPeer(t, @[a.cert], tlsClient, "", noClock()()).reason.startsWith(
+      "1 time"
+    )
+    check checkPeer(t, @[], tlsClient, "", noClock()()).reason.startsWith("1 time")
+    let sys = systemClock()()
+    check sys.isOk
+    check sys.get >= TimeFloor
+
+  test "[TRN-0224] [TRN-0370] [TRN-0374] [TRN-0375] [IMPL-DECISION G324] one certificate, the direct anchor: a chain, a re-issued certificate for the same key or no certificate fails":
+    let t = enrolled([a, b])
+    check checkPeer(t, @[a.cert, b.cert], tlsClient, "", clock()).reason.startsWith(
+      "2 chain"
+    )
+    check checkPeer(t, @[], tlsClient, "", clock()).reason.startsWith("2 chain")
+    check checkPeer(t, @[@[1'u8, 2, 3]], tlsClient, "", clock()).reason.startsWith(
+      "2 chain"
+    )
+    let reissued = a.key.selfSignedCertificate(
+      CertificateOptions(
+        commonName: IdA,
+        notBefore: now - 3600,
+        notAfter: now + 86400,
+        keyUsage: ServerKu,
+      )
+    ).get
+    check certificateSpki(reissued).get == a.spki
+    check verdict(t, a, tlsClient, "", reissued).reason.startsWith("5 anchor")
+    check verdict(t, a, tlsServer, IdA, reissued).reason.startsWith("5 anchor")
+
+  test "[TRN-0226] no match, several Runtimes, a conflicting, revoked or stale enrollment: each fails authentication":
+    # inbound: no record holds the key
+    check verdict(enrolled([a]), b, tlsClient, "").reason.startsWith("3 enrollment: no")
+    # inbound: two Runtimes hold the key
+    let two =
+      snapshotOf([a, b], [activeRecord(a), activeRecord(b, keys = @[b.spki, a.spki])])
+    check verdict(two, a, tlsClient, "").reason ==
+      "3 enrollment: 2 Runtimes hold this key"
+    # conflicting: inbound by key, outbound by name
+    let conflict = snapshotOf(
+      [a, b],
+      [
+        activeRecord(a),
+        EnrollmentRecord(
+          runtime: IdB, revision: 4, status: rsConflicting, spkis: @[b.spki, c.spki]
+        ),
+      ],
+    )
+    check verdict(conflict, b, tlsClient, "").reason.contains("conflicting")
+    check verdict(conflict, c, tlsClient, "").reason.contains("conflicting")
+    check verdict(conflict, b, tlsServer, IdB).reason.contains("conflicting")
+    check verdict(conflict, a, tlsClient, "").isOk
+    # revoked: outbound by name; inbound its key is held by no active record
+    let revoked = snapshotOf(
+      [a, b],
+      [activeRecord(a), EnrollmentRecord(runtime: IdB, revision: 5, status: rsRevoked)],
+    )
+    check verdict(revoked, b, tlsServer, IdB).reason.contains("revoked")
+    check verdict(revoked, b, tlsClient, "").reason.startsWith("3 enrollment: no")
+    # stale: only the current revision reaches the snapshot; its new key
+    # replaced the old one
+    let rotated = snapshotOf([a, c], [activeRecord(a, 2, keys = @[c.spki])])
+    check verdict(rotated, a, tlsServer, IdA).reason.startsWith("4 key")
+    check verdict(rotated, a, tlsClient, "").reason.startsWith("3 enrollment")
+
+  test "[TRN-0371] the validity period at accepted current time, also for the direct anchor":
+    let t = enrolled(oddParties)
+    check verdict(t, expired, tlsClient, "").reason.startsWith("6 validity")
+    check verdict(t, future, tlsServer, future.id).reason.startsWith("6 validity")
+    check checkPeer(
+      t, @[expired.cert], tlsClient, "", fixedClock(now - 2 * 86400 + 60)()
+    ).isOk
+
+  test "[TRN-0372] Key Usage, when present, must permit digital signatures":
+    let t = enrolled(oddParties)
+    check verdict(t, kuEnc, tlsClient, "").reason.startsWith("7 key usage")
+    check verdict(t, noKu, tlsClient, "").isOk
+
+  test "[TRN-0373] Extended Key Usage, when present, must name the role; anyExtendedKeyUsage alone does not":
+    let t = enrolled(oddParties)
+    check verdict(t, eServer, tlsServer, eServer.id).isOk
+    check verdict(t, eServer, tlsClient, "").reason.startsWith("8 extended key usage")
+    check verdict(t, eClient, tlsClient, "").isOk
+    check verdict(t, eClient, tlsServer, eClient.id).reason.startsWith("8")
+    check verdict(t, eAny, tlsClient, "").reason.startsWith("8")
+    check verdict(t, eAny, tlsServer, eAny.id).reason.startsWith("8")
+    check verdict(t, eBoth, tlsClient, "").isOk
+    check verdict(t, eBoth, tlsServer, eBoth.id).isOk
+
+  test "[TRN-0370] [IMPL-DECISION G324] a critical extension path validation would not process fails":
+    let odd = withCriticalExtension(c)
+    let t = snapshotOf([c], [activeRecord(c)])
+    let t2 = newTrustSnapshot(1, @[(c.anchorId, odd)], [activeRecord(c)]).get
+    check checkPeer(t2, @[odd], tlsClient, "", clock()).reason.startsWith(
+      "9 extensions"
+    )
+    check verdict(t, c, tlsClient, "").isOk
+
+  test "[IMPL-DECISION G324] the first failing check is the one reported":
+    let t = enrolled(oddParties)
+    # expired and without digitalSignature: validity (6) comes before key usage (7)
+    check verdict(t, expiredKuEnc, tlsClient, "").reason.startsWith("6 validity")
+    # a stranger's chain of two: the chain (2) comes before the enrollment (3)
+    check checkPeer(t, @[c.cert, c.cert], tlsClient, "", clock()).reason.startsWith(
+      "2 chain"
+    )
+
+suite "tls.enrollment handshakes":
+  test "[TRN-0221] [TRN-0222] [TRN-0223] [TRN-0225] both ends authenticate through their enrollments before any Transport data":
+    let t = enrolled([a, b])
+    let seen = Seen()
+    let l = listen(b, seen, [], check = anyEnrolled(t, clock))
+    let s = l.dial(a, b, check = expectRuntime(t, IdB, clock)).get
+    check s.peer == PeerIdentity(runtime: IdB, revision: 1, anchor: b.anchorId)
+    check s.roundTrip(@[3'u8]).get == @[3'u8]
+    check seen.peers == @[IdA]
+    waitFor s.close()
+    waitFor l.close()
+
+  test "[TRN-0222] the caller refuses a target that is not the Runtime it named":
+    let t = enrolled([a, b, c])
+    let seen = Seen()
+    let l = listen(c, seen, [], check = anyEnrolled(t, clock))
+    let r = l.dial(a, c, check = expectRuntime(t, IdB, clock))
+    check r.isErr
+    check "4 key" in r.error
+    check waitUntil(
+      proc(): bool =
+        l.failedHandshakes == 1,
+      2000,
+    )
+    check seen.peers.len == 0
+    waitFor l.close()
+
+  test "[TRN-0221] [TRN-0226] an unenrolled, revoked or conflicting caller is refused and closed; its frames are never read":
+    let cases = [
+      ("unenrolled", enrolled([b])),
+      (
+        "revoked",
+        snapshotOf(
+          [a, b],
+          [
+            activeRecord(b),
+            EnrollmentRecord(runtime: IdA, revision: 2, status: rsRevoked),
+          ],
+        ),
+      ),
+      (
+        "conflicting",
+        snapshotOf(
+          [a, b],
+          [
+            activeRecord(b),
+            EnrollmentRecord(
+              runtime: IdA, revision: 2, status: rsConflicting, spkis: @[a.spki]
+            ),
+          ],
+        ),
+      ),
+    ]
+    for (name, t) in cases:
+      checkpoint name
+      let seen = Seen()
+      let l = listen(b, seen, [], check = anyEnrolled(t, clock))
+      let r = l.dial(a, b, check = expectRuntime(t, IdB, clock))
+      if r.isOk:
+        # TLS 1.3: the client finishes before the server has checked it (G328).
+        discard waitFor r.get.writeFrame(@[1'u8])
+        check (waitFor r.get.readFrame()).isErr
+        waitFor r.get.close()
+      check waitUntil(
+        proc(): bool =
+          l.failedHandshakes == 1,
+        2000,
+      )
+      check "3 enrollment" in l.lastFailure
+      check seen.peers.len == 0
+      check seen.frames == 0
+      waitFor l.close()
+
 freeContexts()
 for p in [a, b, c]:
+  p.free()
+for p in oddParties:
   p.free()
