@@ -27,7 +27,7 @@ requires "results == 0.5.1"
 requires "unittest2 == 0.3.0"
 # BoringSSL for TLS 1.3 and QUIC (D28). Only `transport/tls/boring.nim` imports it (the tls-tcp
 # carrier, DECISIONS I99), so only the TLS suite and the TLS programs compile it.
-requires "https://github.com/vacp2p/nim-boringssl == 0.0.14"
+requires "https://github.com/iftech/nim-boringssl == 0.0.16"
 # Raw deflate and CRC-32 for LGX's gzip layer (PM §7.1).
 requires "zlib == 0.3.0"
 # The transport I/O thread's event loop (G77(a); DECISIONS I83), and the tls-tcp carrier's

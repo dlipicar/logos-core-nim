@@ -5,9 +5,9 @@
     "url": "https://github.com/status-im/nim-bearssl"
   },
   "boringssl": {
-    "hash": "sha256-ETqSceUxZhDCw1N5rhsd5HdrT4KnmXmuGyJ8UuY2wHY=",
-    "rev": "a57b97f5ba45353a1a38c81b4f5e6f537469a63e",
-    "url": "https://github.com/vacp2p/nim-boringssl"
+    "hash": "sha256-jSRzvq921Un8Dj3zdk1/N2mW/n24uqyl+IP/zv6F4y4=",
+    "rev": "c3161dc2bda0bb6ca63a8b3b63a22889fd4b58e6",
+    "url": "https://github.com/iftech/nim-boringssl"
   },
   "chronos": {
     "hash": "sha256-N+5LFmxaOctBPNwy+JIuJy217hntJxbHouY6oyCgNm8=",
