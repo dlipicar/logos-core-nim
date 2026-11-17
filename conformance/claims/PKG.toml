@@ -7,6 +7,8 @@
 #   out-of-scope:<why>    normative, but not this repository's to implement
 # A `[units]` entry gives one requirement unit its own status, overriding its section's.
 
+# The Tier 5 area and step of each deferred unit: docs/SPEC-STATUS.md, "The Tier 5 plan"
+# (step 5-0's recount by work, DECISIONS I103).
 default = "deferred:tier-5"
 
 [sections]
@@ -65,7 +67,11 @@ default = "deferred:tier-5"
 # §4.3: freshness is the §4.2 catalog's.
 "PKG-0112" = "deferred:tier-5"
 # §4.3: key separation across package signing, provenance (§4.5), call evidence (CA
-# §9.1) and TLS needs those other key uses, which arrive with tiers 4 and 5.
+# §9.1) and TLS. The package-signing keys (lcn-pkg keygen) and the call-evidence key
+# (tools/evidence_keygen.nim, logosd's daemon/evkey.nim; G149, G301) exist and are made
+# apart. The TLS key comes with remote Runtimes (owner decision B2: its own offline
+# command, Tier 5 step 5-7a) and a provenance key with step 5-11 if it is kept; the
+# unit is claimed once the TLS key exists (corrected by step 5-0).
 "PKG-0435" = "deferred:tier-5"
 # §4.3: the signer record is derived (signerRecord) but retained with installed
 # state, reported by inspections and carried by handoffs only with installation.

@@ -19,7 +19,7 @@
 ## 4. While it runs, the call worker answers the host's scoped publication
 ##    steps (`scoped_check`, `scoped_admit`, `scoped_done`) as a direct
 ##    invocation's `publish` decides them, and forwards cancellation
-##    (`call_cancel`) once the ticket is cancelled.
+##    (`call_cancel`, behind the lane-2 orders) once the ticket is cancelled.
 ## 5. The host reports the end (`call_ended`): whether its loop committed a
 ##    success, and the commitments the capture asked for, which go into the
 ##    call record (K44 interim, G274: the provider host's verified roots).
@@ -107,8 +107,11 @@ proc runHosted*(
     let f = d.nextFrame()
     if f.isNone:
       if not cancelSent and adm.ticket != nil and adm.ticket.cancelled.load:
+        # [IMPL; I91] Queued behind the Runtime's lane-2 orders: whatever it
+        # answered before it marked the call cancelled reaches the host's
+        # loop first (`engine.endRoute`, `asyncTerminal`).
         cancelSent = true
-        discard h.sendMsg(toMessage(LcnCarrierCallCancel(call: call)))
+        h.notify(toMessage(LcnCarrierCallCancel(call: call)))
       sleep(step)
       step = min(step + 1, MaxStepMs)
       continue

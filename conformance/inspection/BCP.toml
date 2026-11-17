@@ -110,7 +110,7 @@ reason = "docs/DEPLOYMENT.md rows 5a to 5d and §5: call-evidence signing is Sup
 # bcp-deploy-loader (DECISIONS I97, G309, G312)
 [[item]]
 ids = ["BCP-0043"]
-reason = "docs/DEPLOYMENT.md rows 6a and 6b and §6: the three strategies with where each runs and how it is selected, and the process mechanism (Supported; test [BCP-0043] in tests/test_deployment.nim compares the Loader's advertised capabilities with the facts block). sandbox and container are Not supported: unadvertised, refused with unsupported-strategy (L l.377); Tier 5 is expected to change it."
+reason = "docs/DEPLOYMENT.md rows 6a and 6b and §6: the three strategies with where each runs and how it is selected, and the process mechanism (Supported; test [BCP-0043] in tests/test_deployment.nim compares the Loader's advertised capabilities with the facts block). sandbox and container are Not supported: unadvertised, refused with unsupported-strategy (L l.377); outside Tier 5, no change is planned (DECISIONS D16)."
 
 # bcp-deploy-permissions (DECISIONS I97, G309)
 [[item]]
@@ -120,7 +120,7 @@ reason = "docs/DEPLOYMENT.md row 7 and §7: the one definition, logos-core-nim.h
 # bcp-deploy-isolation (DECISIONS I97, G309, G265)
 [[item]]
 ids = ["BCP-0045"]
-reason = "docs/DEPLOYMENT.md rows 8a and 8b and §8: isolation and process behaviour are Supported as described (direct modules share logosd's address space; a hosted module has its own process, process group and environment, under logosd's user; test [BCP-0045] in tests/test_deployment.nim checks the uid). Filesystem, network, device, credential and resource controls are Not supported: placement process is not a sandbox (G265). Tier 5 is expected to change it. §8 also states the data path."
+reason = "docs/DEPLOYMENT.md rows 8a and 8b and §8: isolation and process behaviour are Supported as described (direct modules share logosd's address space; a hosted module has its own process, process group and environment, under logosd's user; test [BCP-0045] in tests/test_deployment.nim checks the uid). Filesystem, network, device, credential and resource controls are Not supported: placement process is not a sandbox (G265). Outside Tier 5, no change is planned (DECISIONS D16). §8 also states the data path."
 
 # bcp-deploy-directories (DECISIONS I97, G309)
 [[item]]
