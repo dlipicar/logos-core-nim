@@ -28,7 +28,9 @@ when defined(posix):
   import std/posix
 
   const
-    Patience = 20 * Slow ## seconds a bounding wait allows
+    Patience = 60 * Slow
+      ## seconds a bounding wait allows: 20 s times Slow did not cover a start
+      ## at load 400 under refc and ASan (4b-8's load fix)
     Timeout = 15_000 * Slow ## a client's wait for a reply, ms
 
   # Captured log lines --------------------------------------------------------------------
@@ -124,6 +126,11 @@ when defined(posix):
     doAssert d.isOk, "assemble: " & d.error.message
     result.d = d.get
     result.unstarted = true
+    # [IMPL] The teardown's from now on, whatever the case does next: a
+    # daemon left running reads the next case's handoff, which is
+    # process-wide, and its logosctl takes that case's socket path.
+    if live != nil:
+      live[] = result
 
   proc boot(s: Session): Live =
     ## Starts, then waits for the socket: the orchestrator starts the logosctl
@@ -135,6 +142,8 @@ when defined(posix):
     doAssert r.isOk, "start: " & r.error.message
     result.up = true
     result.unstarted = false
+    if live != nil:
+      live[] = result # a failed wait below leaves it to the teardown
     let until = getMonoTime() + initDuration(seconds = Patience)
     while logText().count(serving) == before:
       doAssert getMonoTime() < until,
