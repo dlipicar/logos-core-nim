@@ -47,10 +47,10 @@ CONFORMANCE and `conformance/`.
 | 5c | l.362 | package-provenance and source-evidence requirements | None | Tier 5 | none selected | [§5](#5-trust-inputs) | BCP-0042 |
 | 5d | l.362 | remote Runtime enrollment | None | Tier 5 | no enrollment trust | [§5](#5-trust-inputs) | BCP-0042 |
 | 6a | l.363 | Module Loader mappings; the `process` mechanism | Supported | — | `direct_static`, `direct_dynamic`, `hosted_dynamic` with placement `process` | [§6](#6-module-loader-mappings) | BCP-0043 |
-| 6b | l.363 | `sandbox` and `container` mechanisms | Not supported | Tier 5 | not advertised; a request for one is `unsupported-strategy` | [§6](#6-module-loader-mappings) | BCP-0043 |
+| 6b | l.363 | `sandbox` and `container` mechanisms | Not supported | — | not advertised; a request for one is `unsupported-strategy`; outside Tier 5 (D16) | [§6](#6-module-loader-mappings) | BCP-0043 |
 | 7 | l.364 | permission definitions, constraint mappings, enforcers | Supported | — | one definition, host-ambient, empty constraints, enforced by Runtime admission | [§7](#7-permission-definitions) | BCP-0044 |
 | 8a | l.365 | isolation and process behaviour | Supported | — | separate address spaces for hosted modules, one OS user, a process group per host | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
-| 8b | l.365 | filesystem, network, device, credential and resource controls | Not supported | Tier 5 | none: a module has its OS user's access | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
+| 8b | l.365 | filesystem, network, device, credential and resource controls | Not supported | — | none: a module has its OS user's access; outside Tier 5 (D16) | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
 | 9 | l.366 | directories, state, retention, cleanup, recovery, migration | Supported | — | the session tree; state kept after retirement; restart lock; `state_transfers` | [§9](#9-directories-and-state) | BCP-0046 |
 | 10a | l.367 | accepted-declaration selection | Supported | — | daemon-config `modules` and `declarations`, one declaration per module name | [§10](#10-declaration-selection) | BCP-0076 |
 | 10b | l.367 | exact package/version pinning | None | Tier 5 | no package-backed creation | [§10](#10-declaration-selection) | BCP-0076 |
@@ -190,7 +190,8 @@ Items 6a and 6b. The Loader is built in, `direct_static`, bound first, never con
 
 - `sandbox` and `container` are not advertised. A descriptor naming one is refused with
   `unsupported-strategy` before any artifact is read (L l.377); this Runtime never selects another
-  strategy in its place. Tier 5.
+  strategy in its place. Outside Tier 5: DECISIONS D16 leaves sandbox and container placements out,
+  and the Tier 5 plan keeps them out (its area K).
 - `force_release` is never advertised.
 - The strategy is required in every entry: logosd chooses none. `logosctl init --print-template`
   writes `hosted_dynamic` with placement `process` for operator modules.
@@ -220,8 +221,8 @@ of the host, an environment of only `module_host_env`, and the descriptors liste
 G265): a hosted module has the filesystem, network, device, process and credential access of logosd's
 user, and no operating-system resource control is applied. A process the module moves out of its
 group or session outlives the host. Processes of the same user can reach each other's sockets and
-files (CONFORMANCE, "Properties not claimed"). Tier 5 is expected to add sandbox and container
-placements and their controls.
+files (CONFORMANCE, "Properties not claimed"). Outside Tier 5: DECISIONS D16 leaves sandbox and container
+placements and their controls out, and so does the Tier 5 plan (its area K).
 
 **The data path.**
 

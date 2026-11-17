@@ -102,8 +102,12 @@ The specs are being revised, so the work is ordered by how settled each area is
   `direct_static`, `direct_dynamic` and `hosted_dynamic` in a `process`. No complete Logos module
   system is claimed: there is no Package Manager yet (I97). [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md),
   [docs/CONFORMANCE.md](docs/CONFORMANCE.md).
-- Not yet: Tier 5: the Package Manager handoff and package installation into the Runtime, remote
-  Runtimes, platform permissions and OS isolation of hosted modules, Windows local transport.
+- Not yet, Tier 5 ([docs/SPEC-STATUS.md](docs/SPEC-STATUS.md), "The Tier 5 plan"): the Package
+  Manager (package trust, sources and the catalog, installation, its service and package-backed
+  selection; SLSA provenance and the Nix profile if kept), remote Runtimes over `tls-tcp` (QUIC if
+  kept), the reverse mapper (C to CDDL), and the Windows local transport if its spike allows. Outside
+  Tier 5: sandbox and container placements and operating-system enforcement of permissions
+  (DECISIONS D16).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 
