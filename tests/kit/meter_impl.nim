@@ -12,7 +12,8 @@
 ## caller, 22 adds a line to the file `held` in its state directory and does
 ## what 18 does once the invocation is cancelled or the file `open` is there
 ## (for a module in a Module Host, where the test cannot reach `gate`; at most
-## a minute), 23 does what 22 does but waits for `open` alone, 24 publishes
+## a minute), 23 does what 22 does but waits for `open` alone, and writes the
+## file `cancelled` there once it sees the invocation cancelled, 24 publishes
 ## `meter.changed_event` with value 0x6C636E32 and then in the invocation's
 ## scope with value 0x6C636E33 (payloads a carrier trace looks for); any other
 ## channel `c` reads `ch<c>` with value `10 c`.
@@ -77,8 +78,15 @@ proc `read`(
         discard
       let opened = dir / "open"
       var waited = 0
+      var told = false
       while (c == 23 or not m.services.isCancelled) and not fileExists(opened) and
           waited < 60_000:
+        if c == 23 and not told and m.services.isCancelled:
+          told = true
+          try:
+            writeFile(dir / "cancelled", "")
+          except CatchableError:
+            discard
         sleep(1)
         inc waited
     let who = ?m.services.caller()

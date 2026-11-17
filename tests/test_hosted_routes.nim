@@ -786,6 +786,15 @@ when defined(posix):
         check rc.close(rec.route).code == ecOk
         check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecNotReady)
         check o.closedOf(conn, 50 * Slow).isNone # still draining
+        # [IMPL] The call's cancel reaches the host behind what the Runtime
+        # ordered first (I91), and 50 ms times Slow was not always enough for
+        # it under MSan on a host at load 100 (4b-8's closing check): the
+        # provider tells when it sees it.
+        check waitUntil(
+          proc(): bool =
+            fileExists(dir / "cancelled"),
+          Answer,
+        )
         dir.open()
         let late = o.outcome(conn, tag)
         check late.codeOf == Opt.some(ecOk)
