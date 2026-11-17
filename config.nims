@@ -8,6 +8,12 @@ switch("styleCheck", "usages")
 switch("styleCheck", "error")
 switch("hint", "XDeclaredButNotUsed:off")
 
+# DECISIONS G327, I99: BoringSSL zeroes its TLS record buffers before freeing them
+# (nim-boringssl's opt-in BORINGSSL_ZERO_RECORD_BUFFERS, from 0.0.16). Every build reads this
+# file, nimble's and the flake's alike; `transport/tls/boring.nim` reports which build it got,
+# and a build without it keeps marked payloads off the carrier (G277).
+switch("define", "BORINGSSL_ZERO_RECORD_BUFFERS=true")
+
 # Sanitizer builds [IMPL]: -d:asan (AddressSanitizer with UndefinedBehaviorSanitizer),
 # -d:tsan (ThreadSanitizer), -d:msan (MemorySanitizer, clang on Linux only). Nim's allocator
 # gives way to malloc so the sanitizer sees every allocation, the first finding aborts, and

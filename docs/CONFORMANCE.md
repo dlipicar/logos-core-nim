@@ -475,10 +475,15 @@ unprocessed critical extensions; G324, G325). Accepted current time is the syste
 `TimeFloor`. TRN-0216, TRN-0221 to TRN-0226 and TRN-0370 to TRN-0375 are claimed. What needs routes,
 tickets, provider sessions and the remote trust input stays Tier 5 (5-7a).
 
-Not claimed: erasure on remote paths. The pinned BoringSSL frees decrypted records unerased; the fix
-is proposed to nim-boringssl as an option, `BORINGSSL_ZERO_RECORD_BUFFERS` (G327), which our build will
-set. Until it is pinned and set and the TLS processes' own erasure is shown, remote paths refuse marked
-contracts (G277), as any build without the option will.
+Part 5-2d pins nim-boringssl 0.0.16 and turns on its `BORINGSSL_ZERO_RECORD_BUFFERS` (G327): BoringSSL
+zeroes its TLS record buffers before freeing them, and the carrier erases its own copies of decrypted
+data (the stream's read buffer, partial frames, frames not taken, the framed copy of a body it sends).
+A frame read is the caller's (`TlsFrame`), as is a body given to `writeFrame`. `test_remote_tls`'s free
+scan finds no released block holding the plaintext of 256 KiB sent through two streams. A stream set
+to carry marked payloads is refused where this does not hold (`carrierErases`, `requireErasure`).
+
+Not claimed: erasure on remote paths. The facade and listener processes' own erasure comes with 5-7a;
+until it is shown, remote paths refuse marked contracts (G277), as any build without the option will.
 
 ## Properties not claimed
 
@@ -723,7 +728,9 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
 - The tls-tcp carrier (I99): `testsigner.keySigner` holds the TLS key in the process (owner decision
   B1: tests only); `engine.newTlsContextForTests` makes settings no conforming peer has (TLS 1.2
   allowed, or no certificate) to show the refusals; `stream.abortForTests` ends a connection without
-  close_notify. All are called by `test_remote_tls`.
+  close_notify; `stream.recordErasureMissingForTests` makes the carrier behave as a build whose
+  BoringSSL frees records unerased (it only adds G277's refusal). All are called by `test_remote_tls`,
+  which is also an audit build (`base/wipeaudit`).
 
 No deployment binary contains them.
 

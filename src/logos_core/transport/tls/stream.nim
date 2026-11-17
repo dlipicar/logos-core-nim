@@ -18,7 +18,7 @@ import chronos
 import results
 import ../framing
 import ../../base/[testhooks, wipe]
-import ./[engine, params, signing]
+import ./[boring, engine, params, signing]
 
 export chronos, results, engine, params, signing
 
@@ -44,14 +44,25 @@ type
     eof: bool
     reader: Future[void].Raising([])
     outLock: AsyncLock
-    frames: FrameReader
-    ready: Deque[seq[byte]]
+    prefix: array[4, byte] ## a frame's length prefix, as it arrives
+    prefixLen: int
+    body: seq[byte] ## the frame being read, allocated at its declared length
+    bodyLen: int ## bytes of `body` filled
+    inBody: bool
+    framingError: string
+    ready: Deque[TlsFrame]
     readBuf: seq[byte]
     binding: seq[byte]
     bindingTaken: bool
     closing: bool
     closed: bool
     registry: StreamRegistry
+
+  TlsFrame* = ref object
+    ## One TRANSPORT §2.1 frame body read from a stream. It is handed over by
+    ## reference, so the stream and its futures keep no copy: the body is the
+    ## caller's to erase when it holds a marked payload (`wipe`).
+    body*: seq[byte]
 
   StreamHandler* = proc(s: TlsStream): Future[void] {.async: (raises: []), gcsafe.}
     ## Owns an accepted stream; the listener closes it when this returns.
@@ -71,6 +82,35 @@ type
     refusedOverBound: int
     failedHandshakes: int
     lastFailure: string
+
+# Erasure -----------------------------------------------------------------------------
+
+when defined(lcnTestHooks):
+  var recordErasureMissingForTests* = false
+    ## Test hook (D27): behave as a build whose BoringSSL frees decrypted
+    ## records unerased. It can only add the refusal, never lift it.
+
+proc carrierErases*(): bool =
+  ## [DECISIONS G277, G327] Whether the carrier erases what it holds of a
+  ## marked payload: BoringSSL's record buffers (`recordBuffersErased`, the
+  ## BORINGSSL_ZERO_RECORD_BUFFERS build) and the carrier's own copies, which
+  ## it always wipes (`wipePlaintext`, `sealFrame`). A frame `readFrame`
+  ## returns and a body given to `writeFrame` are the caller's. The TLS
+  ## processes add their own conditions (5-7a); until they are shown, remote
+  ## paths refuse marked contracts whatever this says.
+  result = recordBuffersErased
+  when defined(lcnTestHooks):
+    if recordErasureMissingForTests:
+      result = false
+
+proc requireErasure*(): Result[void, string] =
+  ## The refusal a marked payload meets on a carrier that does not erase.
+  if carrierErases():
+    return ok()
+  err(
+    MarkedUnsupported &
+      ": this build's TLS library frees decrypted records unerased (BORINGSSL_ZERO_RECORD_BUFFERS)"
+  )
 
 # The registry ------------------------------------------------------------------------
 
@@ -105,8 +145,7 @@ proc newStream(
     inEvent: newAsyncEvent(),
     spaceEvent: newAsyncEvent(),
     outLock: newAsyncLock(),
-    frames: newFrameReader(cfg.frameLimit).get,
-    ready: initDeque[seq[byte]](),
+    ready: initDeque[TlsFrame](),
     readBuf: newSeq[byte](16 * 1024),
     binding: @[],
   )
@@ -190,6 +229,20 @@ proc handshake(s: TlsStream) {.async: (raises: [CancelledError, TlsError]).} =
         discard
       raise newException(TlsError, why)
 
+proc wipePlaintext(s: TlsStream) =
+  ## [DECISIONS G327; INTERFACE l.381] The carrier's own copies of decrypted
+  ## data, erased before they are released: the read buffer, a partial frame
+  ## and frames read but not taken. A frame `readFrame` returned is the
+  ## caller's.
+  wipe(s.readBuf)
+  wipe(s.body)
+  for f in s.ready:
+    wipe(f.body)
+  s.ready.clear()
+  s.inBody = false
+  s.bodyLen = 0
+  s.prefixLen = 0
+
 proc release(s: TlsStream) {.async: (raises: []).} =
   ## Closes the transport first (that ends the reader), waits for the reader
   ## within `closeWaitMs`, then frees the engine. Safe to repeat.
@@ -204,6 +257,7 @@ proc release(s: TlsStream) {.async: (raises: []).} =
     except CancelledError:
       discard
   wipe(s.binding)
+  s.wipePlaintext()
   s.engine.free()
 
 proc startDriver(s: TlsStream) =
@@ -273,29 +327,67 @@ proc close*(s: TlsStream) {.async: (raises: []).} =
       discard
   await s.release()
 
+proc wipe*(f: TlsFrame) =
+  ## Erases a frame's body.
+  if f != nil:
+    wipe(f.body)
+
+proc absorb(s: TlsStream, data: openArray[byte]): Result[void, string] =
+  ## Splits decrypted bytes into frames. A frame's body is allocated at its
+  ## declared length once the prefix is read (TRANSPORT §2.1, §8.3: a length
+  ## over `frameLimit` fails before anything is allocated), so it never grows
+  ## and leaves no unerased copy behind.
+  var i = 0
+  while i < data.len:
+    if not s.inBody:
+      let take = min(4 - s.prefixLen, data.len - i)
+      copyMem(addr s.prefix[s.prefixLen], unsafeAddr data[i], take)
+      s.prefixLen += take
+      i += take
+      if s.prefixLen < 4:
+        break
+      s.prefixLen = 0
+      let n = parsePrefix(s.prefix, s.cfg.frameLimit)
+      if n.isErr:
+        return err("a frame of " & $n.error.declared & " bytes is over the limit")
+      s.body = newSeq[byte](int(n.get))
+      s.bodyLen = 0
+      s.inBody = true
+    else:
+      let take = min(s.body.len - s.bodyLen, data.len - i)
+      if take > 0:
+        copyMem(addr s.body[s.bodyLen], unsafeAddr data[i], take)
+        s.bodyLen += take
+        i += take
+    if s.inBody and s.bodyLen == s.body.len:
+      s.ready.addLast(TlsFrame(body: move s.body))
+      s.body = @[]
+      s.inBody = false
+  ok()
+
 proc readFrame*(
     s: TlsStream
-): Future[Result[Opt[seq[byte]], string]] {.async: (raises: [CancelledError]).} =
-  ## The next TRANSPORT §2.1 frame body; none at a clean end (close_notify). An
-  ## end without close_notify, a TLS failure or a frame over `frameLimit` is an
-  ## error, after which the stream is to be closed.
+): Future[Result[Opt[TlsFrame], string]] {.async: (raises: [CancelledError]).} =
+  ## The next TRANSPORT §2.1 frame; none at a clean end (close_notify). An end
+  ## without close_notify, a TLS failure or a frame over `frameLimit` is an
+  ## error, after which the stream is to be closed. The frame is the caller's,
+  ## to erase when it holds a marked payload.
   while true:
     if s.ready.len > 0:
       return ok(Opt.some(s.ready.popFirst()))
     if s.closed or s.closing:
       return err("closed")
-    if s.frames.failed:
-      return err("a frame over the limit")
+    if s.framingError.len > 0:
+      return err(s.framingError)
     let seen = s.fed
     let o = s.engine.readApp(s.readBuf)
     s.spaceEvent.fire()
     case o.kind
     of rdData:
-      let got = s.frames.feed(s.readBuf.toOpenArray(0, o.n - 1))
+      let got = s.absorb(s.readBuf.toOpenArray(0, o.n - 1))
       if got.isErr:
-        return err("a frame of " & $got.error.declared & " bytes is over the limit")
-      for f in got.get:
-        s.ready.addLast(f)
+        s.framingError = got.error
+        return err(got.error)
     of rdNeedInput:
       try:
         await s.flush()
@@ -303,27 +395,46 @@ proc readFrame*(
         return err(x.msg)
       await s.waitIn(seen)
     of rdClosed:
-      if s.frames.finish().isErr:
+      if s.inBody or s.prefixLen > 0:
         return err("the peer closed inside a frame")
-      return ok(Opt.none(seq[byte]))
+      return ok(Opt.none(TlsFrame))
     of rdFailed:
       return err(s.engine.failure)
 
-proc writeFrame*(
-    s: TlsStream, body: seq[byte]
-): Future[Result[void, string]] {.async: (raises: [CancelledError]).} =
-  ## One TRANSPORT §2.1 frame; it waits while earlier output is being sent.
+proc sealFrame(s: TlsStream, body: openArray[byte]): Result[void, string] =
+  ## Hands one frame to the engine, which seals it into records, and erases
+  ## the framed copy.
   if s.closed or s.closing:
     return err("closed")
-  let f = frame(body, s.cfg.peerFrameLimit)
+  var f = frame(body, s.cfg.peerFrameLimit)
   if f.isErr:
     return err("a frame of " & $body.len & " bytes is over the peer's limit")
-  ?s.engine.writeApp(f.get)
+  let written = s.engine.writeApp(f.get)
+  wipe(f.get)
+  written
+
+proc flushWritten(
+    s: TlsStream
+): Future[Result[void, string]] {.async: (raises: [CancelledError]).} =
   try:
     await s.flush(wait = true)
   except TlsError as x:
     return err(x.msg)
   ok()
+
+proc writeFrame*(
+    s: TlsStream, body: openArray[byte]
+): Future[Result[void, string]].Raising([CancelledError]) =
+  ## One TRANSPORT §2.1 frame; the future completes once earlier output has
+  ## been sent. `body` is sealed before this returns, so the carrier keeps no
+  ## plaintext copy of it; `body` stays the caller's.
+  let sealed = s.sealFrame(body)
+  if sealed.isErr:
+    let failed =
+      Future[Result[void, string]].Raising([CancelledError]).init("tls.writeFrame")
+    failed.complete(sealed)
+    return failed
+  s.flushWritten()
 
 # Connecting --------------------------------------------------------------------------
 
@@ -358,6 +469,8 @@ proc connect*(
   ## ends the attempt: nothing else is tried (l.1219-1221).
   ?config.check()
   ?address.check()
+  if config.carriesMarked:
+    ?requireErasure()
   if ctx == nil or ctx.role != tlsClient:
     return err("a client stream needs a client context")
   let e = ?newEngine(ctx, peerCheck, address.serverName)
@@ -460,6 +573,8 @@ proc serve*(
   ## A listener on `host`:`port` (0: any free port) that hands each
   ## authenticated stream to `onStream`.
   ?config.check()
+  if config.carriesMarked:
+    ?requireErasure()
   if ctx == nil or ctx.role != tlsServer:
     return err("a listener needs a server context")
   if peerCheck == nil or signer == nil or onStream == nil:

@@ -6,9 +6,10 @@
 ## (step 5-2a; G324, G325). The one suite that imports the TLS library, so that
 ## one test build per variant compiles BoringSSL.
 
-import std/[sequtils, strutils]
+import std/[sequtils, strutils, sysrand]
 import unittest2
 import results
+import ../src/logos_core/base/[wipe, wipeaudit]
 import ../src/logos_core/transport/tls/boring
 import ./support/[slowdown, tls_fixtures]
 
@@ -51,7 +52,7 @@ proc echoHandler(seen: Seen): StreamHandler =
         if f.get.isNone:
           return
         inc seen.frames
-        if (await s.writeFrame(f.get.get)).isErr:
+        if (await s.writeFrame(f.get.get.body)).isErr:
           return
     except CancelledError:
       discard
@@ -160,7 +161,7 @@ proc roundTrip(s: TlsStream, body: seq[byte]): Result[seq[byte], string] =
   let f = ?(waitFor s.readFrame())
   if f.isNone:
     return err("closed")
-  ok(f.get)
+  ok(f.get.body)
 
 suite "tls.credentials":
   test "[IMPL-DECISION I99] a P-256 key, its PKCS#8 form, a self-signed certificate and the SPKI an enrollment holds":
@@ -422,7 +423,7 @@ suite "tls.streams":
     for i in 0 ..< 20:
       check (waitFor s.writeFrame(@[byte(i)])).isOk
     for i in 0 ..< 20:
-      check (waitFor s.readFrame()).get.get == @[byte(i)]
+      check (waitFor s.readFrame()).get.get.body == @[byte(i)]
     waitFor s.close()
     check waitUntil(
       proc(): bool =
@@ -887,6 +888,123 @@ suite "tls.enrollment handshakes":
       check seen.peers.len == 0
       check seen.frames == 0
       waitFor l.close()
+
+# G327: erasure of decrypted data -----------------------------------------------------------
+
+proc arm(patterns: sink seq[seq[byte]]) =
+  ## The patterns are taken and zeroed once registered: pass copies.
+  armWipeAudit(patterns)
+
+proc hits(): int =
+  ## Blocks released holding a pattern since arming; the backtraces go to stderr.
+  result = wipeAuditHits()
+  if result > 0:
+    reportWipeAudit()
+
+type Sink = ref object
+  frames: int
+  bytes: int
+  done: bool
+
+proc wipingHandler(sink: Sink): StreamHandler =
+  ## Reads frames to the end, erasing each, as an owner of marked data must.
+  result = proc(s: TlsStream): Future[void] {.async: (raises: []), gcsafe.} =
+    try:
+      while true:
+        var f = await s.readFrame()
+        if f.isErr or f.get.isNone:
+          break
+        inc sink.frames
+        sink.bytes += f.get.get.body.len
+        wipe(f.get.get)
+    except CancelledError:
+      discard
+    sink.done = true
+
+suite "tls.erasure":
+  test "[IMPL-DECISION G327] this build's BoringSSL zeroes its record buffers, so the carrier takes marked payloads":
+    check recordBuffersErased
+    check carrierErases()
+    check requireErasure().isOk
+    var cfg = fastConfig()
+    cfg.carriesMarked = true
+    let seen = Seen()
+    let l = listen(b, seen, [a], config = cfg)
+    let s = l.dial(a, b, config = cfg).get
+    check s.roundTrip(@[1'u8]).isOk
+    waitFor s.close()
+    waitFor l.close()
+
+  test "[IMPL-DECISION G277] [IMPL-DECISION G327] a carrier whose TLS library leaves records unerased refuses marked payloads, on both sides":
+    recordErasureMissingForTests = true
+    var cfg = fastConfig()
+    cfg.carriesMarked = true
+    check not carrierErases()
+    let r = serve(
+      "127.0.0.1",
+      0,
+      serverContext(b),
+      pinnedCheck([a]),
+      keySigner(b.key, tlsServer),
+      cfg,
+      echoHandler(Seen()),
+    )
+    check r.isErr
+    check "BORINGSSL_ZERO_RECORD_BUFFERS" in r.error
+    let seen = Seen()
+    let l = listen(b, seen, [a])
+    let refused = l.dial(a, b, config = cfg)
+    check refused.isErr
+    check MarkedUnsupported in refused.error
+    # unmarked traffic is unaffected
+    let s = l.dial(a, b).get
+    check s.roundTrip(@[2'u8]).isOk
+    recordErasureMissingForTests = false
+    waitFor s.close()
+    waitFor l.close()
+    check seen.peers == @[IdA]
+
+  test "[IMPL-DECISION G327] no released block holds decrypted data: BoringSSL's record buffers and the carrier's own copies are erased":
+    if not wipeAuditScans():
+      skip()
+    else:
+      var marker = urandom(32)
+      var data = newSeq[byte](256 * 1024)
+      for i in 0 ..< data.len:
+        data[i] = marker[i mod marker.len]
+      let sink = Sink()
+      let l = serve(
+        "127.0.0.1",
+        0,
+        serverContext(b),
+        pinnedCheck([a]),
+        keySigner(b.key, tlsServer),
+        fastConfig(),
+        wipingHandler(sink),
+      ).get
+      let s = l.dial(a, b).get
+      arm(@[marker])
+      # the control: a copy released unerased is found
+      var leak = data[0 ..< 64]
+      leak = @[]
+      check wipeAuditHits() >= 1
+      disarmWipeAudit()
+      arm(@[marker])
+      for i in 0 ..< 4:
+        check (waitFor s.writeFrame(data.toOpenArray(i * 65536, i * 65536 + 65535))).isOk
+      waitFor s.close()
+      check waitUntil(
+        proc(): bool =
+          sink.done,
+        5000,
+      )
+      check sink.frames == 4
+      check sink.bytes == data.len
+      waitFor l.close()
+      check hits() == 0
+      disarmWipeAudit()
+      wipe(data)
+      wipe(marker)
 
 freeContexts()
 for p in [a, b, c]:

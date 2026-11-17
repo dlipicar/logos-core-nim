@@ -30,6 +30,12 @@ when defined(macosx) and (defined(asan) or defined(tsan)):
   {.passl: "-isysroot " & xcodeSdk & " -lc++".}
 
 const
+  recordBuffersErased* =
+    when declared(boringsslZeroRecordBuffers): boringsslZeroRecordBuffers else: false
+    ## [DECISIONS G327] Whether this build's BoringSSL zeroes its TLS record
+    ## buffers before freeing them: nim-boringssl's BORINGSSL_ZERO_RECORD_BUFFERS
+    ## (0.0.16 on), which `config.nims` turns on. False for a build without it,
+    ## or with a binding that does not declare it.
   KuDigitalSignature* = 0x0080'u32 ## `KU_DIGITAL_SIGNATURE` (not in the binding)
   MbstringAsc* = 0x1001.cint ## `MBSTRING_ASC` (not in the binding)
   TlsextNametypeHostName* = 0.cint ## `TLSEXT_NAMETYPE_host_name`
