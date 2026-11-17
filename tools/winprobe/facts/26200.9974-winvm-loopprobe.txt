@@ -1,5 +1,5 @@
 fact loop:wsastartup 0
-fact loop:pid 2012
+fact loop:pid 5204
 fact loop:a.register_accepted ok
 fact loop:a.register_client ok
 fact loop:a.echo_1B ok
@@ -7,7 +7,7 @@ fact loop:a.echo_1B_ms 0
 fact loop:a.echo_64K ok
 fact loop:a.echo_64K_ms 0
 fact loop:a.echo_8M ok
-fact loop:a.echo_8M_ms 8
+fact loop:a.echo_8M_ms 13
 fact loop:a.signal_fired 200
 fact loop:a.signal_seen 5
 fact loop:a.signal_final_seen true
@@ -41,16 +41,16 @@ fact loop:c.echo_1B_pairs_ok 1
 fact loop:c.echo_1B_ms 0
 fact loop:c.echo_1B_wakeups 5
 fact loop:c.echo_8M.signal_fired 200
-fact loop:c.echo_8M.signal_seen 2
+fact loop:c.echo_8M.signal_seen 3
 fact loop:c.echo_8M.signal_final_seen true
 fact loop:c.echo_8M ok
 fact loop:c.echo_8M_pairs_ok 1
-fact loop:c.echo_8M_ms 19
-fact loop:c.echo_8M_wakeups 168
+fact loop:c.echo_8M_ms 44
+fact loop:c.echo_8M_wakeups 316
 fact loop:c.scale200_1K ok
 fact loop:c.scale200_1K_pairs_ok 200
-fact loop:c.scale200_1K_ms 7
-fact loop:c.scale200_1K_wakeups 822
+fact loop:c.scale200_1K_ms 9
+fact loop:c.scale200_1K_wakeups 962
 fact loop:d.afd_open ok
 fact loop:d.afd_register ok
 fact loop:d.base_is_socket true
@@ -74,15 +74,15 @@ fact loop:d.echo_8M.signal_seen 2
 fact loop:d.echo_8M.signal_final_seen true
 fact loop:d.echo_8M ok
 fact loop:d.echo_8M_pairs_ok 1
-fact loop:d.echo_8M_ms 13
+fact loop:d.echo_8M_ms 15
 fact loop:d.echo_8M_wakeups 130
 fact loop:d.scale200_1K ok
 fact loop:d.scale200_1K_pairs_ok 200
-fact loop:d.scale200_1K_ms 4
+fact loop:d.scale200_1K_ms 5
 fact loop:d.scale200_1K_wakeups 800
 fact loop:d.scale200_256K ok
 fact loop:d.scale200_256K_pairs_ok 200
-fact loop:d.scale200_256K_ms 135
+fact loop:d.scale200_256K_ms 115
 fact loop:d.scale200_256K_wakeups 1200
 fact loop:d.two_polls_send_completes ok events=0x04
 fact loop:d.two_polls_recv_still_waits true
@@ -118,6 +118,25 @@ fact loop:child.recv 1 byte0=42
 fact loop:inherit.child_exit 0
 fact loop:c.scale200_256K ok
 fact loop:c.scale200_256K_pairs_ok 200
-fact loop:c.scale200_256K_ms 136
-fact loop:c.scale200_256K_wakeups 1307
+fact loop:c.scale200_256K_ms 153
+fact loop:c.scale200_256K_wakeups 1969
+fact loop:c.accepted_signals_listener_event true bits=0x01
+fact loop:c.accepted_own_eventselect 0
+fact loop:c.accepted_after_own_selection own=true listener_again=false
+fact loop:c.limit1024_1K ok
+fact loop:c.limit1024_1K_pairs_ok 1024
+fact loop:c.limit1024_1K_ms 47
+fact loop:c.limit1024_1K_wakeups 5064
+fact loop:c.limit1024_64K ok
+fact loop:c.limit1024_64K_pairs_ok 1024
+fact loop:c.limit1024_64K_ms 336
+fact loop:c.limit1024_64K_wakeups 5077
+fact loop:d.limit1024_1K ok
+fact loop:d.limit1024_1K_pairs_ok 1024
+fact loop:d.limit1024_1K_ms 27
+fact loop:d.limit1024_1K_wakeups 4096
+fact loop:d.limit1024_64K ok
+fact loop:d.limit1024_64K_pairs_ok 1024
+fact loop:d.limit1024_64K_ms 201
+fact loop:d.limit1024_64K_wakeups 4096
 fact loop:done 1

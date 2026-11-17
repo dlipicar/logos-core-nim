@@ -1050,6 +1050,75 @@ proc acceptConnectReady() =
   discard lp_close(dl)
   spin(50)
 
+proc acceptedAssociation() =
+  # (c): an accepted socket starts with the listener's event and mask (`WSAEventSelect`), so it
+  # needs its own selection before use.
+  let p = sockPath("as")
+  let l = lp_socket()
+  discard lp_bind_listen(l, p.cstring, 16)
+  let lev = lp_event()
+  discard lp_eventselect(l, lev, FdAccept or FdRead)
+  let lwh = registerWaitable(
+      HANDLE(cast[uint](lev)),
+      ULONG(WT_EXECUTEINWAITTHREAD),
+      InfiniteDuration,
+      onEvFlag,
+      nil,
+    )
+    .get()
+  let lkey = cast[pointer](lwh)
+  let c = lp_socket()
+  discard lp_connect(c, p.cstring)
+  var got = runUntil(
+    proc(): bool =
+      gEvFired.getOrDefault(lkey) > 0,
+    3000,
+  )
+  var errs: array[10, cint]
+  discard lp_enum_events(l, lev, errs[0].addr)
+  let x = lp_accept(l)
+  let before = gEvFired.getOrDefault(lkey)
+  var b = [byte 7]
+  discard lp_send(c, b[0].addr, 1)
+  got = runUntil(
+    proc(): bool =
+      gEvFired.getOrDefault(lkey) > before,
+    2000,
+  )
+  let bits = lp_enum_events(x, lev, errs[0].addr)
+  fact("c.accepted_signals_listener_event", $got & " bits=0x" & toHex(bits, 2))
+  let own = lp_event()
+  fact("c.accepted_own_eventselect", lp_eventselect(x, own, FdRead or FdClose))
+  let owh = registerWaitable(
+      HANDLE(cast[uint](own)),
+      ULONG(WT_EXECUTEINWAITTHREAD),
+      InfiniteDuration,
+      onEvFlag,
+      nil,
+    )
+    .get()
+  let okey = cast[pointer](owh)
+  var r: array[4, byte]
+  discard lp_recv(x, r[0].addr, 4)
+  let lBefore = gEvFired.getOrDefault(lkey)
+  discard lp_send(c, b[0].addr, 1)
+  got = runUntil(
+    proc(): bool =
+      gEvFired.getOrDefault(okey) > 0,
+    2000,
+  )
+  spin(50)
+  fact(
+    "c.accepted_after_own_selection",
+    "own=" & $got & " listener_again=" & $(gEvFired.getOrDefault(lkey) > lBefore),
+  )
+  discard closeWaitable(lwh)
+  discard closeWaitable(owh)
+  discard lp_close(x)
+  discard lp_close(c)
+  discard lp_close(l)
+  spin(50)
+
 proc inheritedListener() =
   ## The parent binds, listens and registers the listener on its own port (as
   ## variant (a) would); a child that inherits it polls it with AFD.
@@ -1172,6 +1241,14 @@ proc main() =
     acceptConnectReady()
     inheritedListener()
   echoReady(mEvent, 200, 256 * 1024, "scale200_256K")
+  acceptedAssociation()
+  # At the documented limit (G329, Fable): a process holds at most `maxInbound` + `maxOutbound`
+  # connections (1024 + 1024, `transport/io/aggregate.nim`); 1024 pairs are 2048 of them.
+  echoReady(mEvent, 1024, 1024, "limit1024_1K")
+  echoReady(mEvent, 1024, 64 * 1024, "limit1024_64K")
+  if gAfd != nil:
+    echoReady(mAfd, 1024, 1024, "limit1024_1K")
+    echoReady(mAfd, 1024, 64 * 1024, "limit1024_64K")
   fact("done", 1)
 
 main()

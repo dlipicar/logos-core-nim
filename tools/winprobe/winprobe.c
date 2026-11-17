@@ -1563,6 +1563,83 @@ static void grant_self_to_restricted(void) {
 
 /* ====================================================================== Q9 */
 
+/* Sets the owner of the object at path itself to the SID given as a string. */
+static DWORD set_owner(const char *path, const char *sidstr) {
+  PSID sid = NULL;
+  if (!ConvertStringSidToSidA(sidstr, &sid)) return GetLastError();
+  HANDLE h = open_nofollow(path, WRITE_OWNER | READ_CONTROL);
+  if (h == INVALID_HANDLE_VALUE) {
+    DWORD e = GetLastError();
+    LocalFree(sid);
+    return e;
+  }
+  DWORD r = SetSecurityInfo(h, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, sid, NULL, NULL,
+                            NULL);
+  CloseHandle(h);
+  LocalFree(sid);
+  return r;
+}
+
+/* G332 (Fable's review of the spike): whether the Runtime can name its own user as the owner
+ * of the endpoint directory and socket object under every token, and the volume facts a
+ * placement must check (persistent ACLs, reparse points, a local fixed drive). */
+static void q8_owner_volume(void) {
+  char d[MAX_PATH], s[MAX_PATH], sd[2048];
+  int e;
+  snprintf(d, sizeof d, "%s\\own", g_base);
+  CreateDirectoryA(d, NULL);
+  sddl_of(d, sd, sizeof sd);
+  fact("Q8.owner.dir_default", "%s", sd);
+  DWORD r = set_owner(d, g_usersid);
+  sddl_of(d, sd, sizeof sd);
+  fact("Q8.owner.set_dir_owner_user", "%s %s", okerr(r == 0, r), sd);
+  snprintf(s, sizeof s, "%s\\o.sock", d);
+  SOCKET l = ulisten(s, 4, &e);
+  sddl_of(s, sd, sizeof sd);
+  fact("Q8.owner.socket_in_owned_dir", "%s", sd);
+  if (l != INVALID_SOCKET) {
+    r = set_owner(s, g_usersid);
+    sddl_of(s, sd, sizeof sd);
+    fact("Q8.owner.set_socket_owner_user", "%s %s", okerr(r == 0, r), sd);
+    /* Another principal as owner: refused unless the token may restore (SeRestore). */
+    r = set_owner(s, "S-1-5-18");
+    fact("Q8.owner.set_socket_owner_system", "%s", okerr(r == 0, r));
+    closesocket(l);
+  }
+  DeleteFileA(s);
+  RemoveDirectoryA(d);
+
+  HANDLE h = open_nofollow(g_base, FILE_READ_ATTRIBUTES);
+  if (h == INVALID_HANDLE_VALUE) {
+    fact("Q8.volume", "open-err=%lu", (unsigned long)GetLastError());
+    return;
+  }
+  WCHAR fs[MAX_PATH + 1];
+  DWORD serial = 0, maxlen = 0, flags = 0;
+  BOOL ok = GetVolumeInformationByHandleW(h, NULL, 0, &serial, &maxlen, &flags, fs, MAX_PATH + 1);
+  if (ok)
+    fact("Q8.volume.flags", "fs=%ls persistent_acls=%d reparse_points=%d flags=0x%08lx", fs,
+         (flags & FILE_PERSISTENT_ACLS) != 0, (flags & FILE_SUPPORTS_REPARSE_POINTS) != 0,
+         (unsigned long)flags);
+  else
+    fact("Q8.volume.flags", "err=%lu", (unsigned long)GetLastError());
+  /* Succeeds only for a file on a network redirector (SMB and the like). */
+  FILE_REMOTE_PROTOCOL_INFO rp;
+  memset(&rp, 0, sizeof rp);
+  ok = GetFileInformationByHandleEx(h, FileRemoteProtocolInfo, &rp, sizeof rp);
+  DWORD rpe = ok ? 0 : GetLastError();
+  CloseHandle(h);
+  if (ok)
+    fact("Q8.volume.remote_protocol", "remote protocol=0x%08lx", (unsigned long)rp.Protocol);
+  else
+    fact("Q8.volume.remote_protocol", "local err=%lu", (unsigned long)rpe);
+  char root[MAX_PATH];
+  if (GetVolumePathNameA(g_base, root, sizeof root))
+    fact("Q8.volume.drive_type", "%u", (unsigned)GetDriveTypeA(root));
+  else
+    fact("Q8.volume.drive_type", "err=%lu", (unsigned long)GetLastError());
+}
+
 static void q9_reparse(void) {
   char p[MAX_PATH], t[MAX_PATH], j[MAX_PATH], q[96];
   int e;
@@ -2192,6 +2269,7 @@ static void run_all(void) {
   HANDLE rt, wrt;
   make_tokens(&rt, &wrt);
   q6_q8_acl(rt, wrt);
+  q8_owner_volume();
   if (rt) CloseHandle(rt);
   if (wrt) CloseHandle(wrt);
   q9_reparse();
