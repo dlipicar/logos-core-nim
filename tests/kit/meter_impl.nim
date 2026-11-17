@@ -12,14 +12,14 @@
 ## caller, 22 adds a line to the file `held` in its state directory and does
 ## what 18 does once the invocation is cancelled or the file `open` is there
 ## (for a module in a Module Host, where the test cannot reach `gate`; at most
-## a minute), 23 does what 22 does but waits for `open` alone, and writes the
-## file `cancelled` there once it sees the invocation cancelled, 24 publishes
-## `meter.changed_event` with value 0x6C636E32 and then in the invocation's
-## scope with value 0x6C636E33 (payloads a carrier trace looks for); any other
-## channel `c` reads `ch<c>` with value `10 c`.
+## ten minutes of wall time), 23 does what 22 does but waits for `open` alone,
+## and writes the file `cancelled` there once it sees the invocation
+## cancelled, 24 publishes `meter.changed_event` with value 0x6C636E32 and then
+## in the invocation's scope with value 0x6C636E33 (payloads a carrier trace
+## looks for); any other channel `c` reads `ch<c>` with value `10 c`.
 
 {.used.} # imported by the tests for the C symbols it exports
-import std/[atomics, os]
+import std/[atomics, monotimes, os, times]
 import ../generated/meter_module_kit
 
 type Meter* = ref object
@@ -77,10 +77,13 @@ proc `read`(
       except CatchableError:
         discard
       let opened = dir / "open"
-      var waited = 0
+      # [IMPL] Wall time, past every hold a test asks for: counted in 1 ms
+      # sleeps, a minute was reached before test_hosted_routes C-8's timeout
+      # under TSan on a host at load 100 (4b-8's closing check).
+      let until = getMonoTime() + initDuration(minutes = 10)
       var told = false
       while (c == 23 or not m.services.isCancelled) and not fileExists(opened) and
-          waited < 60_000:
+          getMonoTime() < until:
         if c == 23 and not told and m.services.isCancelled:
           told = true
           try:
@@ -88,7 +91,6 @@ proc `read`(
           except CatchableError:
             discard
         sleep(1)
-        inc waited
     let who = ?m.services.caller()
     ok(
       MeterReadResponse(

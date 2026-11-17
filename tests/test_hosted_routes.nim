@@ -1419,8 +1419,10 @@ when defined(posix):
       # its way there is part of call 1's round trip: five times that round
       # trip on this machine now, and at least 10 s. Under ASan the way took
       # 0.8-1.2 s on a loaded Mac (the round trip 1.2-1.4 s) and longer than
-      # 10 s on a CI runner (2026-11-15).
-      let holdTimeout = max(10_000'i64, 5 * roundTrip)
+      # 10 s on a CI runner (2026-11-15). At most 5 minutes, half of channel
+      # 22's hold: under TSan on a host at load 100 the hold, then a minute,
+      # ended first and call 2 was OK (4b-8's closing check).
+      let holdTimeout = min(max(10_000'i64, 5 * roundTrip), 300_000)
       let bound = int(holdTimeout div 1000) + 10 * Slow
       check codeIn(c.run(prepareLine(2, 22, $holdTimeout))) == Opt.some(ecOk)
       # Channel 22 holds the call in the provider until it is cancelled: the
@@ -1429,6 +1431,7 @@ when defined(posix):
       check mdir.heldAt(1, bound)
       check c.doneOf(2) == "none" # held before the timeout passed
       check c.noted("done", "2 ", seconds = bound)
+      checkpoint "call 1's round trip " & $roundTrip & " ms; call 2: " & c.doneOf(2)
       check codeIn(c.doneOf(2)) == Opt.some(ecTimeout)
       # A released handle keeps its connection for the call still running.
       check codeIn(c.run("submit 5")) == Opt.some(ecOk)
