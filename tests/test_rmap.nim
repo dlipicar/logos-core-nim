@@ -82,6 +82,20 @@ let
   mod392 = mirror("IFC/3.9.2.module.cddl")
   sup392 = mirror("IFC/3.9.2.supporting.cddl")
 
+# A document guard for namespace `x` with all-zero roots around `BODY`.
+const guarded =
+  "#ifdef LOGOS_DOCUMENT_x_DEFINED\n" &
+  "#if !defined(LOGOS_DOCUMENT_x_ROOT_0) || LOGOS_DOCUMENT_x_ROOT_0 != 0x0000000000000000ULL || \\\n" &
+  "    !defined(LOGOS_DOCUMENT_x_ROOT_1) || LOGOS_DOCUMENT_x_ROOT_1 != 0x0000000000000000ULL || \\\n" &
+  "    !defined(LOGOS_DOCUMENT_x_ROOT_2) || LOGOS_DOCUMENT_x_ROOT_2 != 0x0000000000000000ULL || \\\n" &
+  "    !defined(LOGOS_DOCUMENT_x_ROOT_3) || LOGOS_DOCUMENT_x_ROOT_3 != 0x0000000000000000ULL\n" &
+  "#error \"Conflicting Logos schema document x\"\n#endif\n#else\n" &
+  "#define LOGOS_DOCUMENT_x_DEFINED 1\n" &
+  "#define LOGOS_DOCUMENT_x_ROOT_0 0x0000000000000000ULL\n" &
+  "#define LOGOS_DOCUMENT_x_ROOT_1 0x0000000000000000ULL\n" &
+  "#define LOGOS_DOCUMENT_x_ROOT_2 0x0000000000000000ULL\n" &
+  "#define LOGOS_DOCUMENT_x_ROOT_3 0x0000000000000000ULL\n" & "BODY" & "#endif\n"
+
 # Tests -----------------------------------------------------------------------------
 
 suite "ifc.c-reverse: the input set and its includes (INTERFACE §3, §3.2)":
@@ -159,6 +173,12 @@ suite "ifc.c-reverse: the input set and its includes (INTERFACE §3, §3.2)":
     ) == rkOutsideSubset
     check refused(src("a.h", v), src("c.h", "typedef float logos_x_F_t;\n")) ==
       rkOutsideSubset
+    # nor do declared identity constants: a repeated document guard's body is
+    # parsed although the guard is already defined when it is reached
+    check refused(
+      src("a.h", guarded.replace("BODY", v)),
+      src("b.h", "#include \"a.h\"\n" & guarded.replace("BODY", "double d;\n")),
+    ) == rkOutsideSubset
 
   test "[IMPL-DECISION G317] logos_types.h is predefined, not supplied; an include cycle is rejected":
     check refused(src("logos_types.h", v)) == rkLogicalName
@@ -237,18 +257,6 @@ suite "ifc.c-reverse: the C subset and the header frame (INTERFACE §2, §3.1)":
         for r in it.roots:
           check r.len == 21 and r.startsWith("0x") and r.endsWith("ULL")
     # checks and includes stay outside every guard (INTERFACE §3.2 l.2325)
-    let guarded =
-      "#ifdef LOGOS_DOCUMENT_x_DEFINED\n" &
-      "#if !defined(LOGOS_DOCUMENT_x_ROOT_0) || LOGOS_DOCUMENT_x_ROOT_0 != 0x0000000000000000ULL || \\\n" &
-      "    !defined(LOGOS_DOCUMENT_x_ROOT_1) || LOGOS_DOCUMENT_x_ROOT_1 != 0x0000000000000000ULL || \\\n" &
-      "    !defined(LOGOS_DOCUMENT_x_ROOT_2) || LOGOS_DOCUMENT_x_ROOT_2 != 0x0000000000000000ULL || \\\n" &
-      "    !defined(LOGOS_DOCUMENT_x_ROOT_3) || LOGOS_DOCUMENT_x_ROOT_3 != 0x0000000000000000ULL\n" &
-      "#error \"Conflicting Logos schema document x\"\n#endif\n#else\n" &
-      "#define LOGOS_DOCUMENT_x_DEFINED 1\n" &
-      "#define LOGOS_DOCUMENT_x_ROOT_0 0x0000000000000000ULL\n" &
-      "#define LOGOS_DOCUMENT_x_ROOT_1 0x0000000000000000ULL\n" &
-      "#define LOGOS_DOCUMENT_x_ROOT_2 0x0000000000000000ULL\n" &
-      "#define LOGOS_DOCUMENT_x_ROOT_3 0x0000000000000000ULL\n" & "BODY" & "#endif\n"
     let ok1 = parsedOk(guarded.replace("BODY", "typedef uint64_t logos_x_V_t;\n"))
     check ok1.items[0].name == "x"
     check parseRefused(guarded.replace("BODY", "#include \"b.h\"\n")) == rkConditional
@@ -266,12 +274,25 @@ suite "ifc.c-reverse: the C subset and the header frame (INTERFACE §2, §3.1)":
     check threeRoots != guarded
     check parseRefused(threeRoots.replace("BODY", "")) == rkIdentity
 
-  test "[IMPL-DECISION G317] a file-level include guard is accepted only around declarations":
+  test "[IMPL-DECISION G317] a file-level include guard may enclose declarations and the fixed and standard includes, never a contract include or a check":
     let g = "#ifndef DEMO_H\n#define DEMO_H\nBODY#endif\n"
     let ok1 = parsedOk(g.replace("BODY", "typedef uint64_t logos_x_V_t;\n"))
     check ok1.includeGuard == "DEMO_H"
     check ok1.items.len == 1
-    check parseRefused(g.replace("BODY", "#include <stdint.h>\n")) == rkConditional
+    # the usual hand-written shape (INTERFACE §3.2 l.2298, l.2325)
+    let ok2 = parsedOk(
+      g.replace(
+        "BODY",
+        "#include <stdint.h>\n#include \"logos_types.h\"\n" &
+          "#ifdef __cplusplus\nextern \"C\" {\n#endif\n" &
+          "typedef uint64_t logos_x_V_t;\n#ifdef __cplusplus\n}\n#endif\n",
+      )
+    )
+    check ok2.includeGuard == "DEMO_H"
+    check ok2.linkage
+    check ok2.items.mapIt(it.kind) == @[ciInclude, ciInclude, ciAlias]
+    discard readOk(src("a.h", g.replace("BODY", "#include \"logos_types.h\"\n")))
+    check parseRefused(g.replace("BODY", "#include \"b.h\"\n")) == rkConditional
     check parseRefused(
       g.replace(
         "BODY",
@@ -279,6 +300,7 @@ suite "ifc.c-reverse: the C subset and the header frame (INTERFACE §2, §3.1)":
           "#error \"x\"\n#endif\n",
       )
     ) == rkConditional
+    check parseRefused(g.replace("BODY", guarded.replace("BODY", ""))) == rkConditional
     check parseRefused(
       "#ifndef LOGOS_DEMO_H\n#define LOGOS_DEMO_H\ntypedef uint64_t logos_x_V_t;\n#endif\n"
     ) == rkConditional

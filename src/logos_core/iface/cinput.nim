@@ -11,8 +11,11 @@
 ## "logos_types.h"`, which is never resolved against the set; its declarations
 ## are the predefined environment, in scope whether or not a header includes it
 ## (l.2217-2219, l.2640). The allowed standard headers are `<stdbool.h>`,
-## `<stddef.h>` and `<stdint.h>`, which declare the §3.1 table's `bool`,
-## `size_t` and fixed-width types (l.2298). An include cycle is rejected.
+## `<stddef.h>` and `<stdint.h>`: the headers `logos_types.h` itself includes
+## (l.3432-3434), which declare the §3.1 table's `bool`, `size_t` and
+## fixed-width types (l.2298 points at §3.1, which names none). An include
+## cycle is rejected, which is stricter than the text: l.2297 only makes a
+## repeated include the same header.
 
 {.push raises: [].}
 

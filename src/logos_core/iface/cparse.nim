@@ -15,8 +15,10 @@
 ## rejected (l.2270-2273, l.2567-2569).
 ##
 ## [IMPL-DECISION G317] A file-level include guard (`#ifndef G` / `#define G` ...
-## `#endif`, with `G` not a `LOGOS_` name) is accepted only when it encloses no
-## include, no check and no document guard (IF l.642, l.2325).
+## `#endif`, with `G` not a `LOGOS_` name) may differ (IF l.642). It may enclose
+## declarations, the fixed `logos_types.h` include and the standard headers, but
+## no contract-header dependency include, no mapping or context check and no
+## document guard with its identity check (l.2325).
 
 {.push raises: [].}
 
@@ -687,11 +689,21 @@ proc parseBlock(
         )
   ok("")
 
-proc hasFrameItems(items: seq[CItem]): bool =
-  for it in items:
-    if it.kind in {ciInclude, ciRevisionCheck, ciContextCheck, ciDocumentGuard}:
-      return true
-  false
+proc guardedFrameItem(items: seq[CItem]): int =
+  ## [SPEC INTERFACE §3.2 l.2325] The first item a file-level include guard must
+  ## not enclose: a contract-header dependency include, or a mapping, context or
+  ## document identity check. The fixed `logos_types.h` include and the standard
+  ## headers are not contract-header includes (l.2298). -1 when there is none.
+  for k, it in items:
+    case it.kind
+    of ciInclude:
+      if not it.angle and it.name != "logos_types.h":
+        return k
+    of ciRevisionCheck, ciContextCheck, ciDocumentGuard:
+      return k
+    else:
+      discard
+  -1
 
 proc parseHeader*(name, source: string): Result[ParsedHeader, Rejection] =
   ## [SPEC INTERFACE §3.1] One header body's items, or the reason it is outside
@@ -721,13 +733,18 @@ proc parseHeader*(name, source: string): Result[ParsedHeader, Rejection] =
       err(reject(rkConditional, name, p.us[p.i].line, "#" & stop & " without its #if"))
   if p.linkage != 0:
     return err(reject(rkConditional, name, 0, "the linkage wrapper is not closed"))
-  if guard.len > 0 and hasFrameItems(items):
-    return err(
-      reject(
-        rkConditional, name, 1,
-        "a file-level include guard around an include or check (INTERFACE §3.2 l.2325)",
+  if guard.len > 0:
+    let k = guardedFrameItem(items)
+    if k >= 0:
+      return err(
+        reject(
+          rkConditional,
+          name,
+          items[k].line,
+          "a file-level include guard around a contract-header include or a check " &
+            "(INTERFACE §3.2 l.2325)",
+        )
       )
-    )
   ok(ParsedHeader(name: name, items: items, linkage: p.sawLinkage, includeGuard: guard))
 
 func render*(m: CMember): string =
