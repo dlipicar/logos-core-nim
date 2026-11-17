@@ -599,7 +599,9 @@
       # to 68. A shard took about 7 minutes plus its checks' build and test time over the runner's
       # four parallel builds, and the slow shards held the heaviest suites together. asan and msan
       # now have four and five parts, tsan three: on that run's times each comes to about 45 to 55
-      # minutes. The counts must match the `shard` lists in ci.yml.
+      # minutes. On dc2e7ef (2026-11-16) they took 25 to 66 minutes, so the weights are now the mean
+      # of two runs; orc-spec's checks, `<suite>-orc`, had found no weight. The counts must match
+      # the `shard` lists in ci.yml.
       legacyPackages = forAllSystems (
         system:
         let
@@ -639,29 +641,32 @@
             else
               2;
           # A suite's weight: its build and test minutes on x86_64 CI, the mean of its asan, tsan
-          # and msan checks in run 43909188165 (5887c5a, 2026-11-16), for the ten heaviest suites.
-          # Every other check weighs `ciDefaultWeight`, about the mean of the rest (5.5). A suite
+          # and msan checks in runs 43909188165 (5887c5a) and 43942225210 (dc2e7ef, 2026-11-16),
+          # for the twelve heaviest suites. Every other check weighs `ciDefaultWeight`, about the
+          # mean of the rest (5.6). An orc-spec check `<suite>-orc` weighs as its suite. A suite
           # missing here, or a weight gone stale, only balances the parts worse. To refresh, take
           # each suite's first and last `nix build -L` line in a run's sanitizer jobs.
           ciWeights = {
-            test_boundary_invariance = 42;
-            test_logosd = 32;
-            test_hosted_routes = 25;
-            test_authority = 20;
+            test_boundary_invariance = 35;
+            test_logosd = 35;
+            test_hosted_routes = 27;
             test_wipe_routes = 18;
-            test_hosted = 17;
-            test_routes_ca = 14;
-            test_ctl_module = 14;
-            test_hosted_permissions = 14;
-            test_observe_ca = 13;
+            test_hosted = 18;
+            test_authority = 17;
+            test_host = 16;
+            test_orchestration = 14;
+            test_ctl_module = 13;
+            test_routes_ca = 13;
+            test_config = 12;
+            test_deployment = 12;
           };
-          ciDefaultWeight = 5;
+          ciDefaultWeight = 6;
           shardOf =
             group: n: names:
             let
               weight =
                 name:
-                ciWeights.${if group == "orc-spec" then name else lib.removeSuffix "-${group}" name}
+                ciWeights.${lib.removeSuffix "-${if group == "orc-spec" then "orc" else group}" name}
                   or ciDefaultWeight;
               heaviestFirst = lib.sort (
                 a: b: weight a > weight b || (weight a == weight b && a < b)

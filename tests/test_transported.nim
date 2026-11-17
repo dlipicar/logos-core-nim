@@ -230,6 +230,12 @@ proc heldAt(n: int): bool =
       held.load == n
   )
 
+proc parked(
+    seconds = 10 * Slow
+): (ptr LogosModuleContext, ptr LogosProviderInvocation) =
+  ## `takeHeld`, its wait scaled by `Slow`: nil when no call was parked.
+  takeHeld(seconds)
+
 # Tests ----------------------------------------------------------------------------------
 
 suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)":
@@ -1100,8 +1106,10 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
     let (_, rc) = e.startClient()
     var h = rc.handle(rc.establish("k").recordOf.route)
     mode.store(ord(dmHold))
+    let submitted = getMonoTime()
     var c = h.submitted(readReq(5), addr done[0])
-    let (module, inv) = takeHeld()
+    let (module, inv) = parked()
+    let way = (getMonoTime() - submitted).inMilliseconds
     check inv != nil
     c.vtable.cancel(addr c)
     check done[0].finished
@@ -1110,18 +1118,34 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
       proc(): bool =
         hooks.load == 1
     )
-    settle(module, inv)
-    var t = h.submitted(readReq(5), addr done[1], timeoutMs = 50)
-    let (module2, inv2) = takeHeld()
-    check done[1].finished
-    check done[1].codeOf == ecTimeout
-    check waitUntil(
-      proc(): bool =
-        hooks.load == 2
-    )
-    settle(module2, inv2)
-    sleep(50)
-    check done[0].count.load == 1 and done[1].count.load == 1
+    if inv != nil:
+      settle(module, inv)
+    # [IMPL] The timeout must pass only once the provider holds the call, as
+    # in test_hosted_routes C-8: five times call 0's way there, and at least
+    # 1 s times Slow. With 50 ms it could pass before the call reached the
+    # provider: under MSan on a host at load 100 nothing was parked within
+    # the wait, and `settle` read the nil it got (4b-8's closing check).
+    let holdTimeout = max(int64(1_000 * Slow), 5 * way)
+    let bound = int(holdTimeout div 1000) + 10 * Slow
+    var t = h.submitted(readReq(5), addr done[1], timeoutMs = int(holdTimeout))
+    let (module2, inv2) = parked(bound)
+    checkpoint "call 0's way " & $way & " ms; call 1's timeout " & $holdTimeout & " ms"
+    check inv2 != nil
+    if inv2 != nil:
+      check done[1].count.load == 0 # held before the timeout passed
+      check waitUntil(
+        proc(): bool =
+          done[1].count.load >= 1,
+        bound,
+      )
+      check done[1].codeOf == ecTimeout
+      check waitUntil(
+        proc(): bool =
+          hooks.load == 2
+      )
+      settle(module2, inv2)
+      sleep(50)
+      check done[0].count.load == 1 and done[1].count.load == 1
     c.vtable.release(addr c)
     t.vtable.release(addr t)
     h.release()
@@ -1568,7 +1592,7 @@ suite "run.transported: events (I90 part 4b-2c)":
       check h2.hear(1, b) == ecOk
       mode.store(ord(dmHold))
       var call = h1.submitted(readReq(5), addr done[0])
-      let (module, inv) = takeHeld()
+      let (module, inv) = parked()
       check inv != nil
       check ctxPublish(inv, "meter.unknown_event", valid) == ecNotAuthorised
       check ctxPublish(inv, Changed, changed(3)[0 .. 2]) == ecInvalidParams
@@ -1604,7 +1628,7 @@ suite "run.transported: events (I90 part 4b-2c)":
       check h.hear(0, a) == ecOk
       mode.store(ord(dmHold))
       var call = h.submitted(readReq(5), addr done[0])
-      let (module, inv) = takeHeld()
+      let (module, inv) = parked()
       check inv != nil
       check rc.renew("r", route).code == ecNotAuthorised
       check done[0].finished
@@ -1629,7 +1653,7 @@ suite "run.transported: events (I90 part 4b-2c)":
       check h1.observe(addr seen) == ecOk
       mode.store(ord(dmHold))
       var call = h1.submitted(readReq(5), addr done[0])
-      let (module, inv) = takeHeld()
+      let (module, inv) = parked()
       check inv != nil
       check e.closeSessionsForTests(route).isOk
       check ended(addr seen)
