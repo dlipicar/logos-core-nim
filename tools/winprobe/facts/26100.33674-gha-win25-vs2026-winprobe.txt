@@ -1,0 +1,628 @@
+fact asis:Q7.grant_probe_exe_to_restricted ok
+fact elevated:probe.base C:\Users\RUNNER~1\AppData\Local\Temp\lp2816
+fact elevated:Q15.token elevated=1 elevation_type=1 integrity=0x3000 default_owner=S-1-5-32-544 restricted=0
+fact elevated:Q15.enabled_privileges SeDebugPrivilege,SeChangeNotifyPrivilege,SeImpersonatePrivilege,SeCreateGlobalPrivilege
+fact elevated:Q15.token_identity user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q15.version 10.0.26100
+fact elevated:Q15.ubr 33674
+fact elevated:Q15.ProductName Windows Server 2025 Datacenter
+fact elevated:Q15.DisplayVersion 24H2
+fact elevated:Q15.EditionID ServerDatacenter
+fact elevated:Q15.InstallationType Server
+fact elevated:Q15.afunix_sys 6.2.26100.32684
+fact elevated:Q15.probe_in_job 1
+fact elevated:Q15.user_sid S-1-5-21-<machine>-500
+fact elevated:Q1.listen ok
+fact elevated:Q1.protocol AF_UNIX
+fact elevated:Q1.service_flags1 0x00020026 ifs_handles=1
+fact elevated:Q1.provider_flags 0x00000008
+fact elevated:Q1.bound_object attrs=0x00000420 tag=0x80000023 err=0
+fact elevated:Q1.open_following err=1920
+fact elevated:Q1.bind_existing_socket err=10048
+fact elevated:Q1.bind_existing_file err=10048
+fact elevated:Q1.so_acceptconn_listener ok value=1
+fact elevated:Q1.so_acceptconn_bound_only ok value=0
+fact elevated:Q1.bound_only_file_after_close present
+fact elevated:Q1.getsockname ok len=54 match=1
+fact elevated:Q1.bufsizes sndbuf=131072 rcvbuf=131072
+fact elevated:Q1.max_path_bytes 108 (sun_path 108)
+fact elevated:Q1.connect ok
+fact elevated:Q1.accept ok
+fact elevated:Q1.peerpid_same_process caller=2816 acceptor=2816 self=2816
+fact elevated:Q1.half_close_eof recv=0
+fact elevated:Q1.half_close_reply send=1 recv=1
+fact elevated:Q1.peer_close recv=0 err=0
+fact elevated:Q1.select_readable 1
+fact elevated:Q1.wsapoll r=1 revents=0x100
+fact elevated:Q1.nonblocking_empty_recv recv=-1 err=10035
+fact elevated:Q1.fill_send buffered=131072 err=10035
+fact elevated:Q1.select_writable_when_full 0
+fact elevated:Q1.nonblocking_connect_past_backlog 10035,10035,10035,10035,10035,10055
+fact elevated:Q1.connect_writable_before_accept 5
+fact elevated:Q1.delete_while_listening ok
+fact elevated:Q1.connect_after_delete err=10061
+fact elevated:Q1.rebind_after_delete_old_open ok
+fact elevated:Q1.rebind_who_accepts old=0 new=1
+fact elevated:Q1.file_after_listener_close present
+fact elevated:Q1.paths.acp 1252
+fact elevated:Q1.paths.latin1_utf8 bind=ok file_at_wide_name=1 path_bytes=52
+fact elevated:Q1.paths.latin1_acp bind=err=10050 file_at_wide_name=0 path_bytes=51
+fact elevated:Q1.paths.cjk_utf8 bind=ok file_at_wide_name=1 path_bytes=53
+fact elevated:Q1.paths.cjk_acp unrepresentable in code page 1252
+fact elevated:Q1.paths.connect_upper_case ok
+fact elevated:Q1.paths.connect_short_name ok via=C:\Users\RUNNER~1\AppData\Local\Temp\lp2816\LONGSO~1
+fact elevated:Q1.paths.final_path_via_short_name exact=0 nocase=0
+fact elevated:Q1.paths.connect_via_ancestor_junction ok
+fact elevated:Q10.final_path_through_junction open=ok equals_opened=0 equals_real=0
+fact elevated:Q10.open_junction_dir_following ok
+fact elevated:Q10.open_regular_file_through_junction ok
+fact elevated:Q2.v1.spawn_host ok runtime_pid=2816 host_pid=3804
+fact elevated:Q15.proc.consumer.v1 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q2.v1.consumer_connect ok
+fact elevated:Q2.v1.consumer_peerpid 2816 err=0
+fact elevated:Q5.v1.ref_runtime pid=2816 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v1.ref_host pid=3804 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v1.open_peer_all_access_from_pid ok
+fact elevated:Q2.v1.consumer_served ok
+fact elevated:Q2.v1.consumer_peerpid_after_accept 2816 err=0
+fact elevated:Q15.proc.host.v1 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q3.v1.host_listener_usable ok so_type=1
+fact elevated:Q3.v1.host_acceptconn 1
+fact elevated:Q2.v1.host_pid 3804
+fact elevated:Q2.v1.host_accept0 ok accepted_peerpid=7916
+fact elevated:Q14.v1.acceptor_reads_client_token ok same_user=1
+fact elevated:Q2.v2.spawn_host ok runtime_pid=2816 host_pid=5384
+fact elevated:Q15.proc.consumer.v2 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q2.v2.consumer_connect ok
+fact elevated:Q2.v2.consumer_peerpid 2816 err=0
+fact elevated:Q5.v2.ref_runtime pid=2816 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v2.ref_host pid=5384 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v2.open_peer_all_access_from_pid ok
+fact elevated:Q2.v2.consumer_served ok
+fact elevated:Q2.v2.consumer_peerpid_after_accept 2816 err=0
+fact elevated:Q15.proc.host.v2 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q3.v2.host_listener_usable ok so_type=1
+fact elevated:Q3.v2.host_acceptconn 1
+fact elevated:Q2.v2.host_pid 5384
+fact elevated:Q2.v2.host_accept0 ok accepted_peerpid=4040
+fact elevated:Q14.v2.acceptor_reads_client_token ok same_user=1
+fact elevated:Q2.v3.spawn_host ok runtime_pid=2816 host_pid=4268
+fact elevated:Q15.proc.consumer.v3 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q2.v3.consumer_connect ok
+fact elevated:Q2.v3.consumer_peerpid 2816 err=0
+fact elevated:Q5.v3.ref_runtime pid=2816 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v3.ref_host pid=4268 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v3.open_peer_all_access_from_pid ok
+fact elevated:Q2.v3.consumer_served ok
+fact elevated:Q2.v3.consumer_peerpid_after_accept 2816 err=0
+fact elevated:Q15.proc.host.v3 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q3.v3.host_listener_usable ok so_type=1
+fact elevated:Q3.v3.host_acceptconn 1
+fact elevated:Q2.v3.host_pid 4268
+fact elevated:Q2.v3.host_accept0 ok accepted_peerpid=8740
+fact elevated:Q14.v3.acceptor_reads_client_token ok same_user=1
+fact elevated:Q15.proc.creator.v4 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q2.v4.creator_pid 3784 listen=ok
+fact elevated:Q2.v4.creator_exited creator_pid=3784 alive=0 host_pid=6760
+fact elevated:Q15.proc.consumer.v4 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q2.v4.consumer_connect ok
+fact elevated:Q2.v4.consumer_peerpid 3784 err=0
+fact elevated:Q2.v4.consumer_served ok
+fact elevated:Q2.v4.consumer_peerpid_after_accept 3784 err=0
+fact elevated:Q15.proc.host.v4 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q3.v4.host_listener_usable ok so_type=1
+fact elevated:Q3.v4.host_acceptconn 1
+fact elevated:Q2.v4.host_pid 6760
+fact elevated:Q2.v4.host_accept0 ok accepted_peerpid=10020
+fact elevated:Q14.v4.acceptor_reads_client_token ok same_user=1
+fact elevated:Q3.v5.wsaduplicatesocket ok
+fact elevated:Q2.v5.spawn_host ok runtime_pid=2816 host_pid=1528
+fact elevated:Q15.proc.third.third user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q4.third.info_used_by_third_process returned value=20 usable=0 acceptconn=-1
+fact elevated:Q15.proc.consumer.v5 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q2.v5.consumer_connect ok
+fact elevated:Q2.v5.consumer_peerpid 2816 err=0
+fact elevated:Q5.v5.ref_runtime pid=2816 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v5.ref_host pid=1528 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v5.open_peer_all_access_from_pid ok
+fact elevated:Q2.v5.consumer_served ok
+fact elevated:Q2.v5.consumer_peerpid_after_accept 2816 err=0
+fact elevated:Q15.proc.host.v5 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q3.v5.host_wsasocket ok value=20
+fact elevated:Q3.v5.host_dup_usable_before_reuse ok so_type=1
+fact elevated:Q4.v5.info_reused_by_target returned same_value=1 usable=1
+fact elevated:Q3.v5.host_listener_usable ok so_type=1
+fact elevated:Q3.v5.host_acceptconn 1
+fact elevated:Q2.v5.host_pid 1528
+fact elevated:Q2.v5.host_accept0 ok accepted_peerpid=5152
+fact elevated:Q14.v5.acceptor_reads_client_token ok same_user=1
+fact elevated:Q3.v6.wsaduplicatesocket ok
+fact elevated:Q2.v6.spawn_host ok runtime_pid=2816 host_pid=7712
+fact elevated:Q15.proc.third.third user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q4.third.info_used_by_third_process returned value=20 usable=0 acceptconn=-1
+fact elevated:Q15.proc.consumer.v6 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q2.v6.consumer_connect ok
+fact elevated:Q2.v6.consumer_peerpid 2816 err=0
+fact elevated:Q5.v6.ref_runtime pid=2816 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v6.ref_host pid=7712 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact elevated:Q5.v6.open_peer_all_access_from_pid ok
+fact elevated:Q2.v6.consumer_served ok
+fact elevated:Q2.v6.consumer_peerpid_after_accept 2816 err=0
+fact elevated:Q15.proc.host.v6 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q3.v6.host_wsasocket ok value=20
+fact elevated:Q3.v6.host_dup_usable_before_reuse ok so_type=1
+fact elevated:Q4.v6.info_reused_by_target returned same_value=1 usable=1
+fact elevated:Q3.v6.host_listener_usable ok so_type=1
+fact elevated:Q3.v6.host_acceptconn 1
+fact elevated:Q2.v6.host_pid 7712
+fact elevated:Q2.v6.host_accept0 ok accepted_peerpid=9408
+fact elevated:Q14.v6.acceptor_reads_client_token ok same_user=1
+fact elevated:Q15.proc.hyg.list user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q4.list.unlisted_event_in_child absent
+fact elevated:Q4.list.listed_socket_in_child present
+fact elevated:Q4.list.child_handle_count 85
+fact elevated:Q15.proc.hyg.inheritall user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q4.inheritall.unlisted_event_in_child present (inherited)
+fact elevated:Q4.inheritall.listed_socket_in_child present
+fact elevated:Q4.inheritall.child_handle_count 99
+fact elevated:Q5.min_rights_alive 1
+fact elevated:Q15.proc.sleep.sleep user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q5.after_exit signalled=1 pid_kept=1 token=ok
+fact elevated:Q15.proc.connector.pxa user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q5.peer_exit.exited_before_accept accept=ok peerpid_is_peer=1 err=0
+fact elevated:Q5.peer_exit.open_exited_pid opened exit_code=0x0
+fact elevated:Q5.peer_exit.recv_after_exit -1(err=10054),-1(err=10054)
+fact elevated:Q5.peer_exit.open_exited_pid_after_close err=87
+fact elevated:Q15.proc.connector.pxb user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q5.peer_exit.query_after_exit alive_is_peer=1 exited_is_peer=1 err=0
+fact elevated:Q8.base_dir_sddl O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact elevated:Q8.socket_sddl_default O:BAD:(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;LA)
+fact elevated:Q8.set_protected_dir_dacl ok
+fact elevated:Q8.dir_sddl_protected O:BAD:PAI(A;OICI;FA;;;LA)
+fact elevated:Q8.socket_sddl_in_protected_dir O:BAD:AI(A;ID;FA;;;LA)
+fact elevated:Q8.set_dacl_on_socket_object ok
+fact elevated:Q8.socket_sddl_after_set O:BAD:PAI(A;;FA;;;LA)
+fact elevated:Q6.connect_owner_rights_all set=ok connect=ok
+fact elevated:Q7.owner_rights_all_owner_write_dac ok
+fact elevated:Q6.delete_owner_rights_all_via_dir ok
+fact elevated:Q6.connect_owner_rights_generic_read set=ok connect=err=10013
+fact elevated:Q7.owner_rights_generic_read_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_generic_read_via_dir ok
+fact elevated:Q6.connect_owner_rights_generic_write set=ok connect=ok
+fact elevated:Q7.owner_rights_generic_write_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_generic_write_via_dir ok
+fact elevated:Q6.connect_owner_rights_write_data_sync set=ok connect=ok
+fact elevated:Q7.owner_rights_write_data_sync_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_write_data_sync_via_dir ok
+fact elevated:Q6.connect_owner_rights_write_data set=ok connect=ok
+fact elevated:Q7.owner_rights_write_data_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_write_data_via_dir ok
+fact elevated:Q6.connect_owner_rights_read_data_sync set=ok connect=err=10013
+fact elevated:Q7.owner_rights_read_data_sync_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_read_data_sync_via_dir ok
+fact elevated:Q6.connect_owner_rights_append_sync set=ok connect=err=10013
+fact elevated:Q7.owner_rights_append_sync_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_append_sync_via_dir ok
+fact elevated:Q6.connect_owner_rights_execute_sync set=ok connect=err=10013
+fact elevated:Q7.owner_rights_execute_sync_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_execute_sync_via_dir ok
+fact elevated:Q6.connect_owner_rights_read_attrs_sync set=ok connect=err=10013
+fact elevated:Q7.owner_rights_read_attrs_sync_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_read_attrs_sync_via_dir ok
+fact elevated:Q6.connect_owner_rights_write_attrs_sync set=ok connect=err=10013
+fact elevated:Q7.owner_rights_write_attrs_sync_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_write_attrs_sync_via_dir ok
+fact elevated:Q6.connect_owner_rights_sync_only set=ok connect=err=10013
+fact elevated:Q7.owner_rights_sync_only_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_sync_only_via_dir ok
+fact elevated:Q6.connect_owner_rights_none set=ok connect=err=10013
+fact elevated:Q7.owner_rights_none_owner_write_dac err=5
+fact elevated:Q6.delete_owner_rights_none_via_dir ok
+fact elevated:Q6.connect_right 0x100002
+fact elevated:Q6.delete_without_dir_delete_child err=5
+fact elevated:Q7.plain.endpoint_dacl set=ok O:BAD:PAI(A;;FA;;;LA)(A;;0x100002;;;RC)
+fact elevated:Q7.plain.token user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q7.plain.connect ok
+fact elevated:Q7.plain.open_sock_write_dac ok
+fact elevated:Q7.plain.open_sock_write_owner ok
+fact elevated:Q7.plain.open_sock_delete ok
+fact elevated:Q7.plain.open_sock_write_attrs ok
+fact elevated:Q7.plain.open_dir_write_dac ok
+fact elevated:Q7.plain.open_dir_delete ok
+fact elevated:Q7.plain.plant_file_in_dir ok
+fact elevated:Q7.plain.rename_sock ok
+fact elevated:Q7.plain.delete_sock ok
+fact elevated:Q7.restricted.endpoint_dacl set=ok O:BAD:PAI(A;;FA;;;LA)(A;;0x100002;;;RC)
+fact elevated:Q7.restricted.token user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=err=0xc0000022 restricted=1
+fact elevated:Q7.restricted.connect ok
+fact elevated:Q7.restricted.open_sock_write_dac err=5
+fact elevated:Q7.restricted.open_sock_write_owner err=5
+fact elevated:Q7.restricted.open_sock_delete err=5
+fact elevated:Q7.restricted.open_sock_write_attrs err=5
+fact elevated:Q7.restricted.open_dir_write_dac err=5
+fact elevated:Q7.restricted.open_dir_delete err=5
+fact elevated:Q7.restricted.plant_file_in_dir err=5
+fact elevated:Q7.restricted.rename_sock err=5
+fact elevated:Q7.restricted.delete_sock err=5
+fact elevated:Q7.write_restricted.endpoint_dacl set=ok O:BAD:PAI(A;;FA;;;LA)(A;;0x100002;;;RC)
+fact elevated:Q7.write_restricted.token user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=1
+fact elevated:Q7.write_restricted.connect ok
+fact elevated:Q7.write_restricted.open_sock_write_dac err=5
+fact elevated:Q7.write_restricted.open_sock_write_owner err=5
+fact elevated:Q7.write_restricted.open_sock_delete ok
+fact elevated:Q7.write_restricted.open_sock_write_attrs err=5
+fact elevated:Q7.write_restricted.open_dir_write_dac err=5
+fact elevated:Q7.write_restricted.open_dir_delete ok
+fact elevated:Q7.write_restricted.plant_file_in_dir err=5
+fact elevated:Q7.write_restricted.rename_sock err=5
+fact elevated:Q7.write_restricted.delete_sock ok
+fact elevated:Q8.owner.dir_default O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact elevated:Q8.owner.set_dir_owner_user ok O:LAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact elevated:Q8.owner.socket_in_owned_dir O:BAD:(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;LA)
+fact elevated:Q8.owner.set_socket_owner_user ok O:LAD:(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;LA)
+fact elevated:Q8.owner.set_socket_owner_system err=1307
+fact elevated:Q8.volume.flags fs=NTFS persistent_acls=1 reparse_points=1 flags=0x03e72eff
+fact elevated:Q8.volume.remote_protocol local err=87
+fact elevated:Q8.volume.drive_type 3
+fact elevated:Q9.real_socket accept
+fact elevated:Q9.make_junction ok
+fact elevated:Q9.bind_through_ancestor_junction ok lands_in_target=1
+fact elevated:Q9.ancestor_junction_path reject:ancestor-reparse=0xa0000003
+fact elevated:Q9.connect_through_ancestor_junction ok
+fact elevated:Q9.leaf_junction reject:tag=0xa0000003
+fact elevated:Q9.bind_on_leaf_junction err=10022
+fact elevated:Q9.leaf_symlink reject:tag=0xa000000c
+fact elevated:Q9.connect_through_leaf_symlink err=10061
+fact elevated:Q9.bind_on_dangling_symlink err=10048 target_created=0
+fact elevated:Q9.regular_file reject:not-reparse
+fact elevated:Q9.directory reject:not-reparse
+fact elevated:Q9.other_socket_same_path reject:id-mismatch
+fact elevated:Q9.missing reject:open-err=2
+fact elevated:Q10.ancestor00 path=C:\ reparse=0 tag=0x00000000 risky=AuthenticatedUsers:0x4
+fact elevated:Q10.ancestor00_sddl O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:AI(A;;0x1000a1;;;S-1-15-3-65536-1888954469-739942743-1668119174-2468466756-4239452838-1296943325-355587736-700089176)(A;;LC;;;AU)(A;OICIIO;SDGXGWGR;;;AU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)
+fact elevated:Q10.ancestor01 path=C:\Users reparse=0 tag=0x00000000 risky=none
+fact elevated:Q10.ancestor01_sddl O:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)(A;;0x1200a9;;;WD)(A;OICIIO;GXGR;;;WD)(A;;0x100021;;;S-1-15-3-65536-4045685566-1323397456-4055816110-285687253-194181-4019357623-1925838800-191844675)
+fact elevated:Q10.ancestor02 path=C:\Users\RUNNER~1 reparse=0 tag=0x00000000 risky=none
+fact elevated:Q10.ancestor02_sddl O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LA)(A;;0x100020;;;S-1-15-3-65536-599108337-2355189375-1353122160-3480128286-3345335107-485756383-4087318168-230526575)
+fact elevated:Q10.ancestor03 path=C:\Users\RUNNER~1\AppData reparse=0 tag=0x00000000 risky=none
+fact elevated:Q10.ancestor03_sddl O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact elevated:Q10.ancestor04 path=C:\Users\RUNNER~1\AppData\Local reparse=0 tag=0x00000000 risky=none
+fact elevated:Q10.ancestor04_sddl O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact elevated:Q10.ancestor05 path=C:\Users\RUNNER~1\AppData\Local\Temp reparse=0 tag=0x00000000 risky=none
+fact elevated:Q10.ancestor05_sddl O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact elevated:Q10.ancestor06 path=C:\Users\RUNNER~1\AppData\Local\Temp\lp2816 reparse=0 tag=0x00000000 risky=none
+fact elevated:Q10.ancestor06_sddl O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact elevated:Q12.pair accept=ok unlinked=ok both_ends_self=1
+fact elevated:Q12.parent_end recv=4 data=pong peerpid_after_handoff=2816
+fact elevated:Q15.proc.pair.pair user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q12.pair.child_end peerpid=2816 recv=4 send=4
+fact elevated:Q13.create_job ok limits=ok
+fact elevated:Q13.terminate.assign_nested ok
+fact elevated:Q13.terminate.active_before 2
+fact elevated:Q13.terminate.after child_gone=1 grandchild_gone=1 active=0 ms=0
+fact elevated:Q15.proc.jobchild.terminate user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q13.terminate.grandchild ok pid=2420
+fact elevated:Q13.terminate.breakaway_spawn err=5
+fact elevated:Q13.jobchild.exit_code 0x4d
+fact elevated:Q13.close.assign_nested ok
+fact elevated:Q13.close.active_before 2
+fact elevated:Q13.close.after child_gone=1 grandchild_gone=1 active=-1 ms=0
+fact elevated:Q15.proc.jobchild.close user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x3000 logon_type=2 restricted=0
+fact elevated:Q13.close.grandchild ok pid=1828
+fact elevated:Q13.close.breakaway_spawn err=5
+fact elevated:probe.base_removed ok
+fact elevated:Q15.standard_token create ok owner=ok integrity=ok default_dacl=ok
+fact standard:Q15.proc.host.v4 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q3.v4.host_listener_usable ok so_type=1
+fact standard:Q3.v4.host_acceptconn 1
+fact standard:Q2.v4.host_pid 948
+fact standard:Q2.v4.host_accept0 ok accepted_peerpid=7732
+fact standard:Q14.v4.acceptor_reads_client_token ok same_user=1
+fact standard:probe.base C:\Users\RUNNER~1\AppData\Local\Temp\lp2816s
+fact standard:Q15.token elevated=1 elevation_type=1 integrity=0x2000 default_owner=S-1-5-21-<machine>-500 restricted=0
+fact standard:Q15.enabled_privileges SeChangeNotifyPrivilege
+fact standard:Q15.token_identity user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q15.version 10.0.26100
+fact standard:Q15.ubr 33674
+fact standard:Q15.ProductName Windows Server 2025 Datacenter
+fact standard:Q15.DisplayVersion 24H2
+fact standard:Q15.EditionID ServerDatacenter
+fact standard:Q15.InstallationType Server
+fact standard:Q15.afunix_sys 6.2.26100.32684
+fact standard:Q15.probe_in_job 1
+fact standard:Q15.user_sid S-1-5-21-<machine>-500
+fact standard:Q1.listen ok
+fact standard:Q1.protocol AF_UNIX
+fact standard:Q1.service_flags1 0x00020026 ifs_handles=1
+fact standard:Q1.provider_flags 0x00000008
+fact standard:Q1.bound_object attrs=0x00000420 tag=0x80000023 err=0
+fact standard:Q1.open_following err=1920
+fact standard:Q1.bind_existing_socket err=10048
+fact standard:Q1.bind_existing_file err=10048
+fact standard:Q1.so_acceptconn_listener ok value=1
+fact standard:Q1.so_acceptconn_bound_only ok value=0
+fact standard:Q1.bound_only_file_after_close present
+fact standard:Q1.getsockname ok len=55 match=1
+fact standard:Q1.bufsizes sndbuf=131072 rcvbuf=131072
+fact standard:Q1.max_path_bytes 108 (sun_path 108)
+fact standard:Q1.connect ok
+fact standard:Q1.accept ok
+fact standard:Q1.peerpid_same_process caller=1956 acceptor=1956 self=1956
+fact standard:Q1.half_close_eof recv=0
+fact standard:Q1.half_close_reply send=1 recv=1
+fact standard:Q1.peer_close recv=0 err=0
+fact standard:Q1.select_readable 1
+fact standard:Q1.wsapoll r=1 revents=0x100
+fact standard:Q1.nonblocking_empty_recv recv=-1 err=10035
+fact standard:Q1.fill_send buffered=131072 err=10035
+fact standard:Q1.select_writable_when_full 0
+fact standard:Q1.nonblocking_connect_past_backlog 10035,10035,10035,10035,10035,10055
+fact standard:Q1.connect_writable_before_accept 5
+fact standard:Q1.delete_while_listening ok
+fact standard:Q1.connect_after_delete err=10061
+fact standard:Q1.rebind_after_delete_old_open ok
+fact standard:Q1.rebind_who_accepts old=0 new=1
+fact standard:Q1.file_after_listener_close present
+fact standard:Q1.paths.acp 1252
+fact standard:Q1.paths.latin1_utf8 bind=ok file_at_wide_name=1 path_bytes=53
+fact standard:Q1.paths.latin1_acp bind=err=10050 file_at_wide_name=0 path_bytes=52
+fact standard:Q1.paths.cjk_utf8 bind=ok file_at_wide_name=1 path_bytes=54
+fact standard:Q1.paths.cjk_acp unrepresentable in code page 1252
+fact standard:Q1.paths.connect_upper_case ok
+fact standard:Q1.paths.connect_short_name ok via=C:\Users\RUNNER~1\AppData\Local\Temp\lp2816s\LONGSO~1
+fact standard:Q1.paths.final_path_via_short_name exact=0 nocase=0
+fact standard:Q1.paths.connect_via_ancestor_junction ok
+fact standard:Q10.final_path_through_junction open=ok equals_opened=0 equals_real=0
+fact standard:Q10.open_junction_dir_following ok
+fact standard:Q10.open_regular_file_through_junction ok
+fact standard:Q2.v1.spawn_host ok runtime_pid=1956 host_pid=5852
+fact standard:Q15.proc.consumer.v1 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q2.v1.consumer_connect ok
+fact standard:Q2.v1.consumer_peerpid 1956 err=0
+fact standard:Q5.v1.ref_runtime pid=1956 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v1.ref_host pid=5852 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v1.open_peer_all_access_from_pid ok
+fact standard:Q2.v1.consumer_served ok
+fact standard:Q2.v1.consumer_peerpid_after_accept 1956 err=0
+fact standard:Q15.proc.host.v1 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q3.v1.host_listener_usable ok so_type=1
+fact standard:Q3.v1.host_acceptconn 1
+fact standard:Q2.v1.host_pid 5852
+fact standard:Q2.v1.host_accept0 ok accepted_peerpid=2032
+fact standard:Q14.v1.acceptor_reads_client_token ok same_user=1
+fact standard:Q2.v2.spawn_host ok runtime_pid=1956 host_pid=5836
+fact standard:Q15.proc.consumer.v2 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q2.v2.consumer_connect ok
+fact standard:Q2.v2.consumer_peerpid 1956 err=0
+fact standard:Q5.v2.ref_runtime pid=1956 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v2.ref_host pid=5836 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v2.open_peer_all_access_from_pid ok
+fact standard:Q2.v2.consumer_served ok
+fact standard:Q2.v2.consumer_peerpid_after_accept 1956 err=0
+fact standard:Q15.proc.host.v2 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q3.v2.host_listener_usable ok so_type=1
+fact standard:Q3.v2.host_acceptconn 1
+fact standard:Q2.v2.host_pid 5836
+fact standard:Q2.v2.host_accept0 ok accepted_peerpid=4016
+fact standard:Q14.v2.acceptor_reads_client_token ok same_user=1
+fact standard:Q2.v3.spawn_host ok runtime_pid=1956 host_pid=8116
+fact standard:Q15.proc.consumer.v3 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q2.v3.consumer_connect ok
+fact standard:Q2.v3.consumer_peerpid 1956 err=0
+fact standard:Q5.v3.ref_runtime pid=1956 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v3.ref_host pid=8116 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v3.open_peer_all_access_from_pid ok
+fact standard:Q2.v3.consumer_served ok
+fact standard:Q2.v3.consumer_peerpid_after_accept 1956 err=0
+fact standard:Q15.proc.host.v3 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q3.v3.host_listener_usable ok so_type=1
+fact standard:Q3.v3.host_acceptconn 1
+fact standard:Q2.v3.host_pid 8116
+fact standard:Q2.v3.host_accept0 ok accepted_peerpid=4308
+fact standard:Q14.v3.acceptor_reads_client_token ok same_user=1
+fact standard:Q15.proc.creator.v4 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q2.v4.creator_pid 8848 listen=ok
+fact standard:Q2.v4.creator_exited creator_pid=8848 alive=0 host_pid=948
+fact standard:Q15.proc.consumer.v4 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q2.v4.consumer_connect ok
+fact standard:Q2.v4.consumer_peerpid 8848 err=0
+fact standard:Q2.v4.consumer_served ok
+fact standard:Q2.v4.consumer_peerpid_after_accept 8848 err=0
+fact standard:Q3.v5.wsaduplicatesocket ok
+fact standard:Q2.v5.spawn_host ok runtime_pid=1956 host_pid=212
+fact standard:Q15.proc.third.third user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q4.third.info_used_by_third_process returned value=20 usable=0 acceptconn=-1
+fact standard:Q15.proc.consumer.v5 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q2.v5.consumer_connect ok
+fact standard:Q2.v5.consumer_peerpid 1956 err=0
+fact standard:Q5.v5.ref_runtime pid=1956 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v5.ref_host pid=212 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v5.open_peer_all_access_from_pid ok
+fact standard:Q2.v5.consumer_served ok
+fact standard:Q2.v5.consumer_peerpid_after_accept 1956 err=0
+fact standard:Q15.proc.host.v5 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q3.v5.host_wsasocket ok value=20
+fact standard:Q3.v5.host_dup_usable_before_reuse ok so_type=1
+fact standard:Q4.v5.info_reused_by_target returned same_value=1 usable=1
+fact standard:Q3.v5.host_listener_usable ok so_type=1
+fact standard:Q3.v5.host_acceptconn 1
+fact standard:Q2.v5.host_pid 212
+fact standard:Q2.v5.host_accept0 ok accepted_peerpid=1904
+fact standard:Q14.v5.acceptor_reads_client_token ok same_user=1
+fact standard:Q3.v6.wsaduplicatesocket ok
+fact standard:Q2.v6.spawn_host ok runtime_pid=1956 host_pid=2620
+fact standard:Q15.proc.third.third user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q4.third.info_used_by_third_process returned value=20 usable=0 acceptconn=-1
+fact standard:Q15.proc.consumer.v6 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q2.v6.consumer_connect ok
+fact standard:Q2.v6.consumer_peerpid 1956 err=0
+fact standard:Q5.v6.ref_runtime pid=1956 matches_peer=1 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v6.ref_host pid=2620 matches_peer=0 alive=1 token=ok same_user=1 widen_vm_read=ok
+fact standard:Q5.v6.open_peer_all_access_from_pid ok
+fact standard:Q2.v6.consumer_served ok
+fact standard:Q2.v6.consumer_peerpid_after_accept 1956 err=0
+fact standard:Q15.proc.host.v6 user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q3.v6.host_wsasocket ok value=20
+fact standard:Q3.v6.host_dup_usable_before_reuse ok so_type=1
+fact standard:Q4.v6.info_reused_by_target returned same_value=1 usable=1
+fact standard:Q3.v6.host_listener_usable ok so_type=1
+fact standard:Q3.v6.host_acceptconn 1
+fact standard:Q2.v6.host_pid 2620
+fact standard:Q2.v6.host_accept0 ok accepted_peerpid=1740
+fact standard:Q14.v6.acceptor_reads_client_token ok same_user=1
+fact standard:Q15.proc.hyg.list user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q4.list.unlisted_event_in_child absent
+fact standard:Q4.list.listed_socket_in_child present
+fact standard:Q4.list.child_handle_count 85
+fact standard:Q15.proc.hyg.inheritall user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q4.inheritall.unlisted_event_in_child present (inherited)
+fact standard:Q4.inheritall.listed_socket_in_child present
+fact standard:Q4.inheritall.child_handle_count 87
+fact standard:Q5.min_rights_alive 1
+fact standard:Q15.proc.sleep.sleep user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q5.after_exit signalled=1 pid_kept=1 token=ok
+fact standard:Q15.proc.connector.pxa user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q5.peer_exit.exited_before_accept accept=ok peerpid_is_peer=1 err=0
+fact standard:Q5.peer_exit.open_exited_pid opened exit_code=0x0
+fact standard:Q5.peer_exit.recv_after_exit -1(err=10054),-1(err=10054)
+fact standard:Q5.peer_exit.open_exited_pid_after_close err=87
+fact standard:Q15.proc.connector.pxb user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q5.peer_exit.query_after_exit alive_is_peer=1 exited_is_peer=1 err=0
+fact standard:Q8.base_dir_sddl O:LAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact standard:Q8.socket_sddl_default O:LAD:(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;LA)
+fact standard:Q8.set_protected_dir_dacl ok
+fact standard:Q8.dir_sddl_protected O:LAD:PAI(A;OICI;FA;;;LA)
+fact standard:Q8.socket_sddl_in_protected_dir O:LAD:AI(A;ID;FA;;;LA)
+fact standard:Q8.set_dacl_on_socket_object ok
+fact standard:Q8.socket_sddl_after_set O:LAD:PAI(A;;FA;;;LA)
+fact standard:Q6.connect_owner_rights_all set=ok connect=ok
+fact standard:Q7.owner_rights_all_owner_write_dac ok
+fact standard:Q6.delete_owner_rights_all_via_dir ok
+fact standard:Q6.connect_owner_rights_generic_read set=ok connect=err=10013
+fact standard:Q7.owner_rights_generic_read_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_generic_read_via_dir ok
+fact standard:Q6.connect_owner_rights_generic_write set=ok connect=ok
+fact standard:Q7.owner_rights_generic_write_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_generic_write_via_dir ok
+fact standard:Q6.connect_owner_rights_write_data_sync set=ok connect=ok
+fact standard:Q7.owner_rights_write_data_sync_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_write_data_sync_via_dir ok
+fact standard:Q6.connect_owner_rights_write_data set=ok connect=ok
+fact standard:Q7.owner_rights_write_data_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_write_data_via_dir ok
+fact standard:Q6.connect_owner_rights_read_data_sync set=ok connect=err=10013
+fact standard:Q7.owner_rights_read_data_sync_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_read_data_sync_via_dir ok
+fact standard:Q6.connect_owner_rights_append_sync set=ok connect=err=10013
+fact standard:Q7.owner_rights_append_sync_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_append_sync_via_dir ok
+fact standard:Q6.connect_owner_rights_execute_sync set=ok connect=err=10013
+fact standard:Q7.owner_rights_execute_sync_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_execute_sync_via_dir ok
+fact standard:Q6.connect_owner_rights_read_attrs_sync set=ok connect=err=10013
+fact standard:Q7.owner_rights_read_attrs_sync_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_read_attrs_sync_via_dir ok
+fact standard:Q6.connect_owner_rights_write_attrs_sync set=ok connect=err=10013
+fact standard:Q7.owner_rights_write_attrs_sync_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_write_attrs_sync_via_dir ok
+fact standard:Q6.connect_owner_rights_sync_only set=ok connect=err=10013
+fact standard:Q7.owner_rights_sync_only_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_sync_only_via_dir ok
+fact standard:Q6.connect_owner_rights_none set=ok connect=err=10013
+fact standard:Q7.owner_rights_none_owner_write_dac err=5
+fact standard:Q6.delete_owner_rights_none_via_dir ok
+fact standard:Q6.connect_right 0x100002
+fact standard:Q6.delete_without_dir_delete_child err=5
+fact standard:Q7.plain.endpoint_dacl set=ok O:LAD:PAI(A;;FA;;;LA)(A;;0x100002;;;RC)
+fact standard:Q7.plain.token user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q7.plain.connect ok
+fact standard:Q7.plain.open_sock_write_dac ok
+fact standard:Q7.plain.open_sock_write_owner ok
+fact standard:Q7.plain.open_sock_delete ok
+fact standard:Q7.plain.open_sock_write_attrs ok
+fact standard:Q7.plain.open_dir_write_dac ok
+fact standard:Q7.plain.open_dir_delete ok
+fact standard:Q7.plain.plant_file_in_dir ok
+fact standard:Q7.plain.rename_sock ok
+fact standard:Q7.plain.delete_sock ok
+fact standard:Q7.restricted.endpoint_dacl set=ok O:LAD:PAI(A;;FA;;;LA)(A;;0x100002;;;RC)
+fact standard:Q7.restricted.open_own_token err=5
+fact standard:Q7.restricted.token user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=err=0xc0000017 restricted=1
+fact standard:Q7.restricted.connect ok
+fact standard:Q7.restricted.open_sock_write_dac err=5
+fact standard:Q7.restricted.open_sock_write_owner err=5
+fact standard:Q7.restricted.open_sock_delete err=5
+fact standard:Q7.restricted.open_sock_write_attrs err=5
+fact standard:Q7.restricted.open_dir_write_dac err=5
+fact standard:Q7.restricted.open_dir_delete err=5
+fact standard:Q7.restricted.plant_file_in_dir err=5
+fact standard:Q7.restricted.rename_sock err=5
+fact standard:Q7.restricted.delete_sock err=5
+fact standard:Q7.write_restricted.endpoint_dacl set=ok O:LAD:PAI(A;;FA;;;LA)(A;;0x100002;;;RC)
+fact standard:Q7.write_restricted.token user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=1
+fact standard:Q7.write_restricted.connect ok
+fact standard:Q7.write_restricted.open_sock_write_dac err=5
+fact standard:Q7.write_restricted.open_sock_write_owner err=5
+fact standard:Q7.write_restricted.open_sock_delete ok
+fact standard:Q7.write_restricted.open_sock_write_attrs err=5
+fact standard:Q7.write_restricted.open_dir_write_dac err=5
+fact standard:Q7.write_restricted.open_dir_delete ok
+fact standard:Q7.write_restricted.plant_file_in_dir err=5
+fact standard:Q7.write_restricted.rename_sock err=5
+fact standard:Q7.write_restricted.delete_sock ok
+fact standard:Q8.owner.dir_default O:LAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact standard:Q8.owner.set_dir_owner_user ok O:LAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact standard:Q8.owner.socket_in_owned_dir O:LAD:(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;LA)
+fact standard:Q8.owner.set_socket_owner_user ok O:LAD:(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;LA)
+fact standard:Q8.owner.set_socket_owner_system err=1307
+fact standard:Q8.volume.flags fs=NTFS persistent_acls=1 reparse_points=1 flags=0x03e72eff
+fact standard:Q8.volume.remote_protocol local err=87
+fact standard:Q8.volume.drive_type 3
+fact standard:Q9.real_socket accept
+fact standard:Q9.make_junction ok
+fact standard:Q9.bind_through_ancestor_junction ok lands_in_target=1
+fact standard:Q9.ancestor_junction_path reject:ancestor-reparse=0xa0000003
+fact standard:Q9.connect_through_ancestor_junction ok
+fact standard:Q9.leaf_junction reject:tag=0xa0000003
+fact standard:Q9.bind_on_leaf_junction err=10022
+fact standard:Q9.leaf_symlink reject:tag=0xa000000c
+fact standard:Q9.connect_through_leaf_symlink err=10061
+fact standard:Q9.bind_on_dangling_symlink err=10048 target_created=0
+fact standard:Q9.regular_file reject:not-reparse
+fact standard:Q9.directory reject:not-reparse
+fact standard:Q9.other_socket_same_path reject:id-mismatch
+fact standard:Q9.missing reject:open-err=2
+fact standard:Q10.ancestor00 path=C:\ reparse=0 tag=0x00000000 risky=AuthenticatedUsers:0x4
+fact standard:Q10.ancestor00_sddl O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:AI(A;;0x1000a1;;;S-1-15-3-65536-1888954469-739942743-1668119174-2468466756-4239452838-1296943325-355587736-700089176)(A;;LC;;;AU)(A;OICIIO;SDGXGWGR;;;AU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)
+fact standard:Q10.ancestor01 path=C:\Users reparse=0 tag=0x00000000 risky=none
+fact standard:Q10.ancestor01_sddl O:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)(A;;0x1200a9;;;WD)(A;OICIIO;GXGR;;;WD)(A;;0x100021;;;S-1-15-3-65536-4045685566-1323397456-4055816110-285687253-194181-4019357623-1925838800-191844675)
+fact standard:Q10.ancestor02 path=C:\Users\RUNNER~1 reparse=0 tag=0x00000000 risky=none
+fact standard:Q10.ancestor02_sddl O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LA)(A;;0x100020;;;S-1-15-3-65536-599108337-2355189375-1353122160-3480128286-3345335107-485756383-4087318168-230526575)
+fact standard:Q10.ancestor03 path=C:\Users\RUNNER~1\AppData reparse=0 tag=0x00000000 risky=none
+fact standard:Q10.ancestor03_sddl O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact standard:Q10.ancestor04 path=C:\Users\RUNNER~1\AppData\Local reparse=0 tag=0x00000000 risky=none
+fact standard:Q10.ancestor04_sddl O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact standard:Q10.ancestor05 path=C:\Users\RUNNER~1\AppData\Local\Temp reparse=0 tag=0x00000000 risky=none
+fact standard:Q10.ancestor05_sddl O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact standard:Q10.ancestor06 path=C:\Users\RUNNER~1\AppData\Local\Temp\lp2816s reparse=0 tag=0x00000000 risky=none
+fact standard:Q10.ancestor06_sddl O:LAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)
+fact standard:Q12.pair accept=ok unlinked=ok both_ends_self=1
+fact standard:Q12.parent_end recv=4 data=pong peerpid_after_handoff=1956
+fact standard:Q15.proc.pair.pair user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q12.pair.child_end peerpid=1956 recv=4 send=4
+fact standard:Q13.create_job ok limits=ok
+fact standard:Q13.terminate.assign_nested ok
+fact standard:Q13.terminate.active_before 2
+fact standard:Q13.terminate.after child_gone=1 grandchild_gone=1 active=0 ms=0
+fact standard:Q15.proc.jobchild.terminate user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q13.terminate.grandchild ok pid=9756
+fact standard:Q13.terminate.breakaway_spawn err=5
+fact standard:Q13.jobchild.exit_code 0x4d
+fact standard:Q13.close.assign_nested ok
+fact standard:Q13.close.active_before 2
+fact standard:Q13.close.after child_gone=1 grandchild_gone=1 active=-1 ms=0
+fact standard:Q15.proc.jobchild.close user=S-1-5-21-<machine>-500 elevated=1 elevation_type=1 integrity=0x2000 logon_type=2 restricted=0
+fact standard:Q13.close.grandchild ok pid=1012
+fact standard:Q13.close.breakaway_spawn err=5
+fact standard:probe.base_removed ok
+fact elevated:probe.done ok

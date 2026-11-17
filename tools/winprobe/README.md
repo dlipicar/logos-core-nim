@@ -7,7 +7,7 @@ tools, not tests: nothing here is part of `nimble test`, and nothing here builds
 |---|---|
 | `winprobe.c` | Q1-Q10, Q12-Q15 of the step 5-4 plan: AF_UNIX basics and paths, peer-query attribution, listener transfer and handle hygiene, the held process reference, DACLs, the reparse-tag check, ancestors, the G108 carrier, Job Objects, the build |
 | `loopprobe.nim`, `loopprobe.c` | Q11: four ways to drive AF_UNIX sockets from chronos 4.4.1's Windows dispatcher without a fork |
-| `facts/<build>.<ubr>-<machine>-<probe>.txt` | The raw output per measured build: the evidence TRANSPORT l.1170 asks for before support is claimed on a build. How builds qualify is not decided yet (the step 5-4 report's G333, with the owner) |
+| `facts/<build>.<ubr>-<machine>-<probe>.txt` | The raw output per measured build: the evidence TRANSPORT l.1170 asks for before support is claimed on a build. A build qualifies by its OS build and its `afunix.sys` build (G333, owner 2026-11-17); the patch level (UBR) is recorded, not keyed. Measured: 26200 (winvm.lan), 26100 (`windows-2025`), 20348 (`windows-2022`) |
 
 ## Running
 
