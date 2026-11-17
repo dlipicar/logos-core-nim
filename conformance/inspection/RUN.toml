@@ -132,7 +132,8 @@ reason = "RUN-0349: every mutation is applied on the one Runtime thread (DECISIO
 ids = ["RUN-0483"]
 reason = "An umbrella over LOGOS-MODULE-CONFIGURATION (RUNTIME l.2606). The five configuration methods and `configuration_state_changed_event` are built to that specification (DECISIONS I87), which is claimed in full (conformance/claims/CFG.toml, default `claimed`) and covered unit by unit by [CFG-...] tags in tests/test_config.nim, tests/test_rcevents.nim, tests/test_kit.nim and tests/test_realizer.nim. The unit adds no behaviour of its own a test could show."
 
-# R-f (DECISIONS I88)
+# R-f (DECISIONS I88). True only while no remote Runtime exists: Tier 5 step 5-7
+# re-opens it with facades (step 5-0).
 [[item]]
 ids = ["RUN-0488"]
 reason = "A MAY that never applies in Tier 4 (RUNTIME l.2650). Every provider record belongs to a local module instance: engine.nim gives a provider id only to a local instance whose surface provides a contract, and `moduleRecord` always sets `instance`. Facade providers backed by a remote Runtime come with remote transport (deferred:tier-5). Test [RUN-0401] ... in tests/test_observe.nim reads every listed record's instance."

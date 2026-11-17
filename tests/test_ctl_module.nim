@@ -28,7 +28,9 @@ when defined(posix):
   import std/posix
 
   const
-    Patience = 20 * Slow ## seconds a bounding wait allows
+    Patience = 60 * Slow
+      ## seconds a bounding wait allows: 20 s times Slow did not cover a start
+      ## at load 400 under refc and ASan (4b-8's load fix)
     Timeout = 15_000 * Slow ## a client's wait for a reply, ms
 
   # Captured log lines --------------------------------------------------------------------
@@ -113,6 +115,7 @@ when defined(posix):
     d: Daemon
     lock: DurableLock
     up: bool
+    unstarted: bool ## assembled, and no start has succeeded
 
   var live: ptr Live ## what the teardown ends, if a case left it running
 
@@ -122,6 +125,12 @@ when defined(posix):
     let d = assembleDaemon(s, AssembleOptions(version: "test", notify: notifyTest))
     doAssert d.isOk, "assemble: " & d.error.message
     result.d = d.get
+    result.unstarted = true
+    # [IMPL] The teardown's from now on, whatever the case does next: a
+    # daemon left running reads the next case's handoff, which is
+    # process-wide, and its logosctl takes that case's socket path.
+    if live != nil:
+      live[] = result
 
   proc boot(s: Session): Live =
     ## Starts, then waits for the socket: the orchestrator starts the logosctl
@@ -132,6 +141,9 @@ when defined(posix):
     let r = startDaemon(result.d)
     doAssert r.isOk, "start: " & r.error.message
     result.up = true
+    result.unstarted = false
+    if live != nil:
+      live[] = result # a failed wait below leaves it to the teardown
     let until = getMonoTime() + initDuration(seconds = Patience)
     while logText().count(serving) == before:
       doAssert getMonoTime() < until,
@@ -148,6 +160,14 @@ when defined(posix):
     l.d.release()
     l.lock.release()
     check not entryExists(l.d.socketPath)
+
+  proc abandon(l: var Live) =
+    ## A daemon assembled and never started, or whose start failed: destroyed
+    ## as before a start, and released.
+    l.unstarted = false
+    check destroyRuntime(l.d).isOk
+    l.d.release()
+    l.lock.release()
 
   proc client(l: Live): cint =
     connectCtl(l.d.socketPath, Timeout).expect("a connection")
@@ -239,6 +259,10 @@ when defined(posix):
     doAssert int64(runtimeStart(rt).code) == 0
     releasePerThread()
 
+  var
+    startThread: Thread[ptr LogosRuntimeHandle] ## a case's `starter`
+    starting: bool ## `startThread` runs and is not joined yet
+
   suite "daemon.ctl: the logosctl module and logosd's assembly (DAEMON.md §7) [IMPL-DECISION G296] [IMPL-DECISION G302]":
     setup:
       clearLog()
@@ -247,12 +271,23 @@ when defined(posix):
       live = addr l
 
     teardown:
-      if live != nil and live[].up:
-        when defined(lcnTestHooks):
-          setCommandDelayForTests(0)
-          holdInitForTests(false)
-          setCredOfForTests(nil)
-        finish(live[])
+      # [IMPL] Also after a case that failed before its daemon was up: a hold
+      # left on would hold the next case's logosctl init (4b-8's closing
+      # check), and a start left running ends once it is released.
+      when defined(lcnTestHooks):
+        setCommandDelayForTests(0)
+        holdInitForTests(false)
+        setCredOfForTests(nil)
+      if live != nil:
+        if starting:
+          joinThread(startThread)
+          starting = false
+          live[].up = true
+          live[].unstarted = false
+        if live[].up:
+          finish(live[])
+        elif live[].unstarted:
+          abandon(live[])
       live = nil
 
     test "[BCP-0090] [BCP-0084] [BCP-0089] daemon-info and get_self: the logosctl instance's own address; the log line carries the peer, the request does not":
@@ -568,30 +603,40 @@ when defined(posix):
         holdInitForTests(true)
         l = assembled(newSession())
         check not entryExists(l.d.socketPath)
-        var th: Thread[ptr LogosRuntimeHandle]
-        createThread(th, starter, l.d.rt)
-        check waitUntil(
+        createThread(startThread, starter, l.d.rt)
+        starting = true
+        # [IMPL] Only bounds the wait: the start reaches logosctl's init after
+        # the orchestrator and the authority, which took longer than 20 s
+        # times Slow under ASan on a host at load 100 (4b-8's closing check).
+        let reached = waitUntil(
           proc(): bool =
-            initWaitingForTests()
+            initWaitingForTests(),
+          seconds = 60 * Slow,
         )
-        check entryExists(l.d.socketPath)
-        let fd = l.client
-        defer:
-          closeFd(fd)
-        sendRaw(fd, infoMessage().encode.expect("bytes"))
-        var none = TPollfd(fd: fd, events: POLLIN)
-        check poll(addr none, 1, cint(200)) == 0 # held: no answer yet
-        holdInitForTests(false)
-        check readReply(fd).outcome.kind == LcnCtlOutcomeKind.lcn_Ctl_ok
-        joinThread(th)
-        l.up = true
-        let journal = engineOf(l.d.rt).loaderJournalForTests()
-        let realized = journal.filterIt(it.meth == "realize").mapIt(it.instance)
-        check realized.len >= 3
-        check realized[0] == "orchestrator"
-        for i in ["orchestrator", "authority", "logosctl"]:
-          check i in realized
-        check LoaderInstanceId notin realized
+        # If it was not, the teardown releases init, joins the start and ends
+        # the daemon.
+        check reached
+        if reached:
+          check entryExists(l.d.socketPath)
+          let fd = l.client
+          defer:
+            closeFd(fd)
+          sendRaw(fd, infoMessage().encode.expect("bytes"))
+          var none = TPollfd(fd: fd, events: POLLIN)
+          check poll(addr none, 1, cint(200)) == 0 # held: no answer yet
+          holdInitForTests(false)
+          check readReply(fd).outcome.kind == LcnCtlOutcomeKind.lcn_Ctl_ok
+          joinThread(startThread)
+          starting = false
+          l.up = true
+          l.unstarted = false
+          let journal = engineOf(l.d.rt).loaderJournalForTests()
+          let realized = journal.filterIt(it.meth == "realize").mapIt(it.instance)
+          check realized.len >= 3
+          check realized[0] == "orchestrator"
+          for i in ["orchestrator", "authority", "logosctl"]:
+            check i in realized
+          check LoaderInstanceId notin realized
 
     test "[G302] [G304] a Loader loss: the hook fires with its instances, the supervisor requests shutdown, the wait names the loss; destroy is not attempted":
       when defined(lcnTestHooks):
