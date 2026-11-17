@@ -486,6 +486,33 @@ lang = "c"
 ordinal = 3
 
 [[mirror]]
+out = "IFC/3.3.upload_url.cddl"
+file = "spec-module-interface.md"
+section = "§3.3"
+
+[[mirror]]
+out = "IFC/3.4.space_info.h"
+file = "spec-module-interface.md"
+section = "§3.4"
+lang = "c"
+
+[[mirror]]
+out = "IFC/3.4.space_info.cddl"
+file = "spec-module-interface.md"
+section = "§3.4"
+
+[[mirror]]
+out = "IFC/3.6.event.h"
+file = "spec-module-interface.md"
+section = "§3.6"
+lang = "c"
+
+[[mirror]]
+out = "IFC/3.6.event.cddl"
+file = "spec-module-interface.md"
+section = "§3.6"
+
+[[mirror]]
 out = "IFC/2.5.event.cddl"
 file = "spec-module-interface.md"
 section = "§2.5"

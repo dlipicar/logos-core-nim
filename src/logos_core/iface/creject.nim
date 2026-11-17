@@ -32,6 +32,47 @@ type
     rkLiteralText = "literal-text" ## a bad escape, invalid UTF-8, embedded NUL
     rkLiteralKind = "literal-kind" ## the wrong scalar kind for its node
     rkLiteralMissing = "literal-missing"
+    # Names and paths [SPEC INTERFACE §2.1 l.786-829, §3.5 l.2520-2531]
+    rkName = "name" ## an identifier that does not decode to a namespace or module
+    rkPath = "path" ## an inline stem reached by no path, or a type at the wrong path
+    rkEscape = "escape" ## an unescaped keyword member or an unnecessary escape
+    rkFixedType = "fixed-type-redeclared" ## [SPEC INTERFACE §3.2 l.2335]
+    # Groups, roles and binding [SPEC INTERFACE §3.2 l.2373-2387, §3.7]
+    rkSelection = "selection" ## no single subject or module to reconstruct
+    rkIncompleteGroup = "incomplete-group" ## l.2375
+    rkConflictingDefinition = "conflicting-definition" ## l.2376
+    rkConflictingGroup = "conflicting-group" ## l.2303
+    rkHalfMissing = "method-half-missing" ## l.2377
+    rkRoleConstant = "role-constant" ## l.2378: missing or conflicting
+    rkRoleMismatch = "role-mismatch" ## l.2379
+    rkModuleName = "module-name" ## l.2380: inconsistent runtime module names
+    rkImplements = "implements" ## l.2381: no complete matching interface group
+    rkDuplicateImplements = "duplicate-implements" ## l.2382
+    rkMissingImplements = "missing-implements" ## l.2383
+    rkSupportingCallable = "supporting-callable" ## l.2384
+    rkUnreferencedDependency = "unreferenced-dependency" ## l.2385
+    rkImplementsIndex = "implements-index" ## l.2386, l.2358
+    rkCollision = "collision" ## l.2387
+    rkSensitive = "sensitive" ## l.2365-2367
+    rkLifecycle = "lifecycle" ## [IMPL-DECISION G322] §3.7, §2.6
+    # Declarations [SPEC INTERFACE §3.3-§3.6]
+    rkFunction = "function" ## not the `_FN_t` or `_CALL_` pattern
+    rkProviderMismatch = "provider-mismatch" ## a provider function unlike its typedef
+    rkParamOrder = "parameter-order" ## an input after an output, no direction prefix
+    rkWrapper = "choice-wrapper" ## l.2420-2433: the wrapper missing, renamed or mixed
+    rkPresence = "presence" ## a `has_` member that is not the exact adjacent flag
+    rkMember = "member" ## an unmatched length, count, output or reserved member
+    rkFieldOrder = "field-order" ## members not in canonical field order
+    rkAggregate = "aggregate" ## an aggregate tag's members, `_empty`, an empty struct
+    rkChoice = "choice" ## form, discriminant, constants, union members, storage
+    rkEvent = "event" ## l.2575-2577
+    rkRecursiveEmbedded = "recursive-embedded" ## l.2393
+    rkRecursivePointer = "recursive-pointer" ## l.2393
+    # The result [SPEC INTERFACE §3.8; IMPL-DECISION G319]
+    rkSchema = "schema" ## the reconstructed document is not a valid Logos schema
+    rkRestatedFact = "restated-fact" ## l.636: metadata that `H'` does not have
+    rkNotCanonical = "not-canonical" ## any other difference from `H'`
+    rkDeclareOrder = "declare-before-use" ## [IMPL-DECISION G319] l.891
     # Tooling limits [SPEC INTERFACE §2.1 l.881-882]
     rkLimit = "limit"
 

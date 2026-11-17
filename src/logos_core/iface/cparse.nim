@@ -35,7 +35,11 @@ type
     isConst*: bool
     base*: string ## an identifier, or `struct <tag>`
     pointers*: int
+    constPtr*: bool
+      ## `T* const*`: the first pointer is const (a list of text strings, §2.3)
     arrayLen*: int ## 0 when not an array; `[0]` is kept as -1
+    ptrToArray*: bool
+      ## a parameter `T (*name)[N]`: a pointer to an exact-size byte array (§2.4)
 
   CMember* = object ## A struct member, union member or parameter.
     ctype*: CType
@@ -105,8 +109,15 @@ func isId(t: Token, s: string): bool =
   t.kind == tkIdent and t.text == s
 
 func `$`*(t: CType): string =
-  ## The normalized spelling, as in `const logos_x_t*` or `uint8_t[16]`.
-  result = (if t.isConst: "const " else: "") & t.base & repeat('*', t.pointers)
+  ## The normalized spelling, as in `const logos_x_t*`, `const char* const*`,
+  ## `uint8_t[16]` or `const uint8_t (*)[16]`.
+  result = (if t.isConst: "const " else: "") & t.base
+  if t.ptrToArray:
+    return result & " (*)[" & $max(t.arrayLen, 0) & "]"
+  if t.constPtr and t.pointers > 0:
+    result.add("* const" & repeat('*', t.pointers - 1))
+  else:
+    result.add(repeat('*', t.pointers))
   if t.arrayLen != 0:
     result.add("[" & $max(t.arrayLen, 0) & "]")
 
@@ -219,11 +230,15 @@ proc parseType(
 proc parseDeclarator(
     p: Parser, toks: openArray[Token], i: var int, t: var CType
 ): Result[string, Rejection] =
-  ## `*`... name [`[N]`]
+  ## `*`... name [`[N]`]; one `* const *` is allowed (`const char* const*`).
   while i < toks.len and toks[i].isP("*"):
     inc t.pointers
     inc i
-    if i < toks.len and (toks[i].isId("const") or toks[i].isId("restrict")):
+    if i < toks.len and toks[i].isId("const") and t.pointers == 1 and not t.constPtr and
+        i + 1 < toks.len and toks[i + 1].isP("*"):
+      t.constPtr = true
+      inc i
+    elif i < toks.len and (toks[i].isId("const") or toks[i].isId("restrict")):
       return err(p.outside(toks[i].line, "a qualified pointer"))
   if i >= toks.len or toks[i].kind != tkIdent:
     let line =
@@ -258,6 +273,29 @@ proc parseDeclarator(
       t.arrayLen = -1
     i += 3
   ok(name)
+
+proc arrayBound(p: Parser, toks: openArray[Token], i: var int): Result[int, Rejection] =
+  ## `[N]` with one decimal constant; -1 for `[0]`.
+  if i + 2 >= toks.len or toks[i + 1].kind != tkNumber or not toks[i + 2].isP("]"):
+    return
+      err(p.outside(toks[i].line, "an array bound that is not one decimal constant"))
+  let n = toks[i + 1].text
+  for c in n:
+    if c notin {'0' .. '9'} or (n.len > 1 and n[0] == '0'):
+      return
+        err(p.outside(toks[i].line, "an array bound that is not one decimal constant"))
+  if n.len > 9:
+    return
+      err(reject(rkLimit, p.header, toks[i].line, "an array bound above 999999999"))
+  var v =
+    try:
+      parseInt(n)
+    except ValueError:
+      0
+  if v == 0:
+    v = -1
+  i += 3
+  ok(v)
 
 proc parseMembers(
     p: Parser, toks: openArray[Token], i: var int, inUnion: bool
@@ -320,9 +358,18 @@ proc parseParams(
       else:
         toks[^1].line
     var t = ?p.parseType(toks, i, false)
-    let name = ?p.parseDeclarator(toks, i, t)
-    if t.arrayLen != 0:
-      return err(p.outside(line, "an array parameter"))
+    var name = ""
+    if i + 4 < toks.len and toks[i].isP("(") and toks[i + 1].isP("*") and
+        toks[i + 2].kind == tkIdent and toks[i + 3].isP(")") and toks[i + 4].isP("["):
+      # [SPEC INTERFACE §2.4] an exact-size byte string: `T (*name)[N]`
+      name = toks[i + 2].text
+      i += 4
+      t.arrayLen = ?p.arrayBound(toks, i)
+      t.ptrToArray = true
+    else:
+      name = ?p.parseDeclarator(toks, i, t)
+      if t.arrayLen != 0:
+        return err(p.outside(line, "an array parameter"))
     ps.add(CMember(ctype: t, name: name, line: line, unionMembers: @[]))
     if i < toks.len and toks[i].isP(","):
       inc i

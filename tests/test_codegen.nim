@@ -563,7 +563,7 @@ suite "ifc.c-types: names and schema metadata (INTERFACE §2, §2.1)":
       check decodeNamespace(c).get == ns
     check decodeNamespace("a_NS_").isErr
 
-  test "[IFC-0618] [IFC-0619] [IFC-0620] [IFC-0887] [IFC-0889] [IFC-0891] every fixed keyword spelling as a field escapes its member only":
+  test "[IFC-0618] [IFC-0619] [IFC-0620] [IFC-0889] [IFC-0891] every fixed keyword spelling as a field escapes its member only":
     check CEscapedIdentifiers.toSeq.sorted ==
       mirror("IFC/2.1.keywords.txt").splitWhitespace.sorted
     var fields: seq[string]
@@ -1243,7 +1243,7 @@ storage.report_response =
     check "in_class_" notin got.text and "out_class_" notin got.text
     checkCompiles compilesSet("abiforms", accepted(source))
 
-  test "[IFC-0903] [IFC-0904] §3.9.8: methods init, destroy and upload_url beside the lifecycle symbols":
+  test "[IFC-0903] §3.9.8: methods init, destroy and upload_url beside the lifecycle symbols":
     let source = module(
       "demo.init_request = {}\ndemo.init_response = {}\n" &
         "demo.destroy_request = {}\ndemo.destroy_response = {}\n" &
