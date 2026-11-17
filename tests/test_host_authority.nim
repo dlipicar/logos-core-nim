@@ -35,7 +35,8 @@ import ../src/logos_core/runtime/evidence
 import ../src/logos_core/daemon/evstore
 from ../src/logos_core/permissions import HostAmbient
 from ../src/logos_core/crypto/slhdsa import generateKeyPair
-from std/posix import Mode, chmod
+when not defined(windows):
+  from std/posix import Mode, chmod
 
 let
   repo = currentSourcePath().parentDir.parentDir
@@ -386,7 +387,8 @@ suite "run.host-api: call records and call evidence (I85; CA §9, §9.1)":
     removeFile(keyFile)
     writeFile(keyFile, key)
     key.clear()
-    check chmod(cstring(keyFile), Mode(0o600)) == 0
+    when not defined(windows): # [I85] the key's mode is checked on POSIX only
+      check chmod(cstring(keyFile), Mode(0o600)) == 0
     let rt = create(h5Config(dir, keyFile, kid))
     check rt.register("client", clientTable()) == ecOk
     check rt.register("meter", meterModuleStaticSymbols()) == ecOk
@@ -430,7 +432,8 @@ suite "run.host-api: call records and call evidence (I85; CA §9, §9.1)":
     var (key, _) = generateKeyPair().tryGet
     writeFile(keyFile, key)
     key.clear()
-    check chmod(cstring(keyFile), Mode(0o600)) == 0
+    when not defined(windows): # [I85] the key's mode is checked on POSIX only
+      check chmod(cstring(keyFile), Mode(0o600)) == 0
     let store = openStore(
       StoreOptions(
         dir: dir / "evidence",

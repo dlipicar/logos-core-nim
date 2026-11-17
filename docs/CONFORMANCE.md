@@ -616,9 +616,9 @@ TRANSPORT §5.2 (TRN-0309, TRN-0310) as built in `io/callee.nim` and `io/loop.ni
 
 TRANSPORT §8.5 (TRN-0241 to TRN-0244). The hooks that inject or observe framed messages are all under
 `tests/`: the sans-I/O session state machines driven directly (`tests/test_transport.nim`), raw
-sockets that write crafted frames (`tests/test_transport_io.nim`), and the child-process peer
-`tests/support/trnpeer.nim`. Nothing under `src/` refers to them, advertises them or falls back to
-them. They use only the test tickets of `tests/support/trnowner.nim` and test data. No claim depends on
+sockets that write crafted frames (`tests/transport_io_body.nim`, the suite `test_transport_io`), and
+the child-process peer `tests/support/trnpeer.nim`. Nothing under `src/` refers to them, advertises
+them or falls back to them. They use only the test tickets of `tests/support/trnowner.nim` and test data. No claim depends on
 another implementation recognizing them.
 
 Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
