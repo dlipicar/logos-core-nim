@@ -362,7 +362,8 @@ covers `local-transport` in the `process` placement and the permission scopes (C
 G272). The settings of a hosted instance settle once its host's forced end is confirmed (G285), and a
 hosted instance whose host of the previous run may still run holds them `pending` until its restart
 lock is free (G275). Sandbox and container placements, and any enforcement by the operating system,
-stay Tier 5.
+are not built and are outside Tier 5 (DECISIONS D16; Tier 5 plan §3, area K; corrected 2026-11-17,
+step 5-0).
 
 ### What Tier 4b step 4b-6 changes
 
@@ -464,7 +465,7 @@ IFC 172, PKG 308, BCP 4, SEC 1.
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
   is no Package Manager, so no package is installed, selected or trusted, and BCP's units that bind
   the whole are claimed only where `logosd` meets them on its own. `docs/DEPLOYMENT.md` answers each
-  missing facility "None" or "Not supported", with the tier that changes it.
+  missing facility "None" or "Not supported", with the tier that changes it where one is planned.
 - Operating-system isolation of hosted modules (SEC l.207-209): a Module Host is a process of the
   daemon's user with the daemon's view of the file system, the network and devices; placements
   `sandbox` and `container` are not offered (`docs/DEPLOYMENT.md` §8; DECISIONS G265 for what a module

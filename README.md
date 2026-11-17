@@ -102,8 +102,12 @@ The specs are being revised, so the work is ordered by how settled each area is
   `direct_static`, `direct_dynamic` and `hosted_dynamic` in a `process`. No complete Logos module
   system is claimed: there is no Package Manager yet (I97). [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md),
   [docs/CONFORMANCE.md](docs/CONFORMANCE.md).
-- Not yet: Tier 5: the Package Manager handoff and package installation into the Runtime, remote
-  Runtimes, platform permissions and OS isolation of hosted modules, Windows local transport.
+- Not yet, Tier 5 ([docs/SPEC-STATUS.md](docs/SPEC-STATUS.md), "The Tier 5 plan"): the Package
+  Manager (package trust, sources and the catalog, installation, its service and package-backed
+  selection; SLSA provenance and the Nix profile if kept), remote Runtimes over `tls-tcp` (QUIC if
+  kept), the reverse mapper (C to CDDL), and the Windows local transport if its spike allows. Outside
+  Tier 5: sandbox and container placements and operating-system enforcement of permissions
+  (DECISIONS D16).
 
 Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
 
@@ -191,12 +195,13 @@ nix flake check -L
 ```
 
 CI splits the checks into groups: `orc-spec` (orc, nph, lint and the spec checks), `refc`,
-`orc-release`, and on Linux `asan`, `tsan` and `msan`. On macOS each group is one job; on Linux each
-group runs as two shards, `ciShards.<group>-1` and `<group>-2`, `tsan` as three (`tsan-3`), `asan`
-as four (`asan-3`, `asan-4`) and `msan` as five (`msan-3` to `msan-5`). The heaviest suites' measured
-times (`ciWeights` in `flake.nix`) balance the shards. A third job runs the Nimble path on Windows
-(`windows-2025`, four shards of `nimble test` under orc, and the Windows probes; DECISIONS G334). One
-group or one shard builds alone with:
+`orc-release`, and on Linux `asan`, `tsan` and `msan`. On macOS `refc` and `orc-release` are one job
+each and `orc-spec` runs as two shards; on Linux each group runs as two shards, `ciShards.<group>-1`
+and `<group>-2`, `tsan` as three (`tsan-3`), `asan` as four (`asan-3`, `asan-4`) and `msan` as five
+(`msan-3` to `msan-5`). The heaviest suites' measured times (`ciWeights` in `flake.nix`) balance the
+shards. The Nimble tasks run as three shards on Linux and two on macOS (`LCN_SHARD`). A third job runs
+the Nimble path on Windows (`windows-2025`, four shards of `nimble test` under orc, and the Windows
+probes; DECISIONS G334). One group or one shard builds alone with:
 
 ```bash
 nix build -L --keep-going .#ciGroups.asan

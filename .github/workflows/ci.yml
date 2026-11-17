@@ -8,8 +8,8 @@ name: CI
 # in the third; Android and iOS join with M12.
 # Each leg runs as parallel jobs, one per check group (flake.nix `ciGroups`): a single runner took
 # over two hours for every check on Linux x86_64, and 86 of its 90 minutes on macOS (5bd731f,
-# 2026-11-13). Each check is in exactly one group, and the orc-spec job also evaluates every flake
-# output. Linux has six groups; macOS has no sanitizer checks, so only orc-spec, refc and
+# 2026-11-13). Each check is in exactly one group, and the first orc-spec shard also evaluates every
+# flake output. Linux has six groups; macOS has no sanitizer checks, so only orc-spec, refc and
 # orc-release. On Linux each group runs as two shards, tsan as three, asan as four and msan as five
 # (flake.nix `ciShards`, which balances them by the heaviest suites' measured times): on 36f355c
 # (2026-11-14) the x86_64 asan and msan jobs passed the 90-minute limit and tsan took 81 minutes,
@@ -17,7 +17,8 @@ name: CI
 # second x86_64 asan shard of two did, on b3af640 (2026-11-16) the second x86_64 msan shard of three
 # did (the other two took 72 and 71 minutes), and on 5887c5a (the same day) the second x86_64 tsan
 # shard of two took 81 minutes, asan's second of three 74 and msan's four 55 to 68.
-# macOS builds each group whole (33-36 minutes).
+# macOS builds refc and orc-release whole and orc-spec as two shards: the whole orc-spec group took
+# 49 minutes on 19a6274 (2026-11-15) and 73 on dc2e7ef (2026-11-16); refc took 52 to 60 in between.
 
 on:
   pull_request:
@@ -38,7 +39,7 @@ concurrency:
 jobs:
   nix:
     if: ${{ !inputs.windows_only }}
-    name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 5) || (matrix.group == 'asan' && 4) || (matrix.group == 'tsan' && 3) || 2) || '' }})
+    name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ (matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 5) || (matrix.group == 'asan' && 4) || (matrix.group == 'tsan' && 3) || 2)) || (matrix.group == 'orc-spec' && format(' {0}/2', matrix.shard)) || '' }})
     # ATTIC_TOKEN_PUBLIC only exists in the public-cache environment.
     environment: ${{ github.ref == 'refs/heads/master' && 'public-cache' || '' }}
     strategy:
@@ -49,9 +50,14 @@ jobs:
         # `ciShardCount` in flake.nix: 2, 3 for tsan, 4 for asan and 5 for msan (the shards past 2
         # in `include`).
         shard: [1, 2]
-        # flake.nix defines the sanitizer variants on Linux only, and macOS builds whole groups.
+        # flake.nix defines the sanitizer variants on Linux only, and macOS builds refc and
+        # orc-release whole.
         exclude:
           - os: macos-latest
+            group: refc
+            shard: 2
+          - os: macos-latest
+            group: orc-release
             shard: 2
           - os: macos-latest
             group: asan
@@ -129,7 +135,7 @@ jobs:
 
       - name: Checks in group ${{ matrix.group }}
         run: |
-          if [ "$RUNNER_OS" = macOS ]; then
+          if [ "$RUNNER_OS" = macOS ] && [ "$GROUP" != orc-spec ]; then
             attr="ciGroups.$GROUP"
           else
             attr="ciShards.$GROUP-$SHARD"
@@ -138,22 +144,31 @@ jobs:
 
   # One job per OS, Nimble test task and shard of the suites (`LCN_SHARD`, logos_core.nimble). Both
   # tasks in one Linux job passed 60 minutes on 2026-11-13 (orc 27 min, then refc); one job per task
-  # took 49 and 51 minutes on 18b7867, almost all of it compiling suites one after another.
+  # took 49 and 51 minutes on 18b7867, almost all of it compiling suites one after another. Linux
+  # runs three shards: on dc2e7ef (2026-11-16) its test_refc shards of two took 66 and 69 minutes.
+  # macOS runs two (its test_refc shards took 44 and 46).
   nimble:
     if: ${{ !inputs.windows_only }}
-    name: nimble (${{ matrix.os }}, ${{ matrix.task }}, ${{ matrix.shard }}/2)
+    name: nimble (${{ matrix.os }}, ${{ matrix.task }}, ${{ matrix.shard }}/${{ matrix.os == 'macos-latest' && 2 || 3 }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         task: [test, test_refc]
         shard: [1, 2]
+        include:
+          - os: ubuntu-latest
+            task: test
+            shard: 3
+          - os: ubuntu-latest
+            task: test_refc
+            shard: 3
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
       TASK: ${{ matrix.task }}
-      # The 2 is the number of entries in `shard`.
-      LCN_SHARD: ${{ matrix.shard }}/2
+      # The shard count: macOS has `shard` 1 and 2, Linux also the 3 in `include`.
+      LCN_SHARD: ${{ matrix.shard }}/${{ matrix.os == 'macos-latest' && 2 || 3 }}
     steps:
       - uses: actions/checkout@v4
 
