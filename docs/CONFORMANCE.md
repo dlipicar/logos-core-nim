@@ -459,6 +459,16 @@ The gate at the close: RUN 829/829, LDR 131/131, CFG 122/122, CAP 385/385, TRN 2
 PKG 212/212, BCP 49/49, SEC 2/2, with nothing deferred to Tier 4b and to Tier 5 RUN 133, TRN 58,
 IFC 172, PKG 308, BCP 4, SEC 1.
 
+### What Tier 5 step 5-2b changes
+
+The `logos.remote.tls-tcp` carrier's library (DECISIONS I99; G323, G326, G328), under
+`src/logos_core/transport/tls/`: TLS 1.3 only with mutual authentication over TCP, the RFC 9266
+channel binding, the signing seam and P-256 credentials. Nothing runs it yet: the TLS processes that
+will (facade and listener processes, logosd's signing service) are steps 5-7a and 5-7b, and no
+deployment enables a remote surface (`docs/DEPLOYMENT.md` keeps its answers). TRN-0219, TRN-0220,
+TRN-0228, TRN-0233 and TRN-0376 are claimed by `tests/test_remote_tls.nim`; the rest of TRANSPORT §8.4
+stays Tier 5, and its enrollment checks come with part 5-2a.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
@@ -591,6 +601,19 @@ Fixed statements:
   A Cancel acts only on a Request whose Response is not yet committed.
 - There is no common overload response.
 
+### The tls-tcp carrier's limits
+
+`TlsConfig` (`transport/tls/params.nim`; DECISIONS I99), checked before a connection or listener
+starts. The defaults are `[IMPL]`. "listener" is one listening socket; "conn" is one TLS connection.
+
+| Limit | Scope | Default | On exhaustion |
+|---|---|---|---|
+| `handshakeTimeoutMs` (TCP connect and the TLS handshake, signing included) | conn | 10 s | the attempt fails; nothing else is tried |
+| `maxHandshakes` (handshakes in progress) | listener | 64 | the connection is closed at once, unread |
+| `readBound` (ciphertext read from the socket and not yet consumed) | conn | 64 KiB | the socket is not read until it drains |
+| `frameLimit`, `peerFrameLimit` | conn | 16 MiB | as TRANSPORT §2.1: a declared length over `frameLimit` fails the read; a body over `peerFrameLimit` is not written |
+| `closeWaitMs` (close_notify and the reader's end at close) | conn | 2 s | the connection is freed anyway |
+
 ## Event output overflow
 
 TRANSPORT §5.2 (TRN-0309, TRN-0310) as built in `io/callee.nim` and `io/loop.nim`:
@@ -633,7 +656,7 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
    test.
 
 The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `orchestration`,
-`hostsup`, `wipeaudit`, `ctlmodule` and `evstore`):
+`hostsup`, `wipeaudit`, `ctlmodule`, `evstore`, `tls_engine`, `tls_stream` and `tls_keysigner`):
 
 - `host.setPolicyForTests`: the authority policy the next `start` installs.
 - `engine.loaderJournalForTests`: the Module Loader's request journal, kept in the engine's side table.
@@ -686,6 +709,10 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   environment variable or socket command selects a hook.
 - The call-evidence store (G301): `evstore.pauseForTests` holds its writer, and `waitWrittenForTests`
   waits for it, both called by `test_evidence_store` and `test_host_authority`.
+- The tls-tcp carrier (I99): `testsigner.keySigner` holds the TLS key in the process (owner decision
+  B1: tests only); `engine.newTlsContextForTests` makes settings no conforming peer has (TLS 1.2
+  allowed, or no certificate) to show the refusals; `stream.abortForTests` ends a connection without
+  close_notify. All are called by `test_remote_tls`.
 
 No deployment binary contains them.
 

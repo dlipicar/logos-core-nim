@@ -25,13 +25,13 @@ when not defined(windows):
 requires "nim == 2.2.14"
 requires "results == 0.5.1"
 requires "unittest2 == 0.3.0"
-# BoringSSL for TLS 1.3 and QUIC (D28, tier 5); nothing imports it since package signing moved
-# to SLH-DSA over the vendored slhdsa-c (DECISIONS I68).
+# BoringSSL for TLS 1.3 and QUIC (D28). Only `transport/tls/boring.nim` imports it (the tls-tcp
+# carrier, DECISIONS I99), so only the TLS suite and the TLS programs compile it.
 requires "https://github.com/vacp2p/nim-boringssl == 0.0.14"
 # Raw deflate and CRC-32 for LGX's gzip layer (PM §7.1).
 requires "zlib == 0.3.0"
-# The transport I/O thread's event loop (G77(a); DECISIONS I83). Only
-# chronos/[asyncloop, timer, threadsync] are imported; stew is compiled with them, and
+# The transport I/O thread's event loop (G77(a); DECISIONS I83), and the tls-tcp carrier's
+# streams (I99), which also import chronos's TCP transports; stew is compiled with them, and
 # httputils and bearssl (chronos's HTTP and TLS layers) are locked but never compiled.
 # Every transitive package is pinned exactly, and before chronos: nimble 0.20.1 caches a
 # download under the version its first requirement names, so chronos's `>=` ranges coming
