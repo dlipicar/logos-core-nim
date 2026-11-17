@@ -35,20 +35,6 @@ when unixStream:
   proc sockAccept*(fd: cint): cint {.importc: "lcn_accept", cdecl.}
   proc sockSend*(fd: cint, p: pointer, n: csize_t): clong {.importc: "lcn_send", cdecl.}
   proc sockRecv*(fd: cint, p: pointer, n: csize_t): clong {.importc: "lcn_recv", cdecl.}
-  proc maxFds*(): cint {.importc: "lcn_max_fds", cdecl.}
-    ## [G344] The most descriptors one message carries.
-
-  proc sockSendFds*(
-    fd: cint, p: pointer, n: csize_t, fds: ptr cint, nfds: cint
-  ): clong {.importc: "lcn_send_fds", cdecl.}
-    ## [G344] Up to `n` bytes with `nfds` descriptors on the first byte.
-
-  proc sockRecvFds*(
-    fd: cint, p: pointer, n: csize_t, fds: ptr cint, cap: cint, nfds, dropped: ptr cint
-  ): clong {.importc: "lcn_recv_fds", cdecl.}
-    ## [G344] Up to `n` bytes and their descriptors (close-on-exec); any beyond
-    ## `cap`, or cut off, are closed and counted in `dropped`.
-
   proc shutdownWrite*(fd: cint): cint {.importc: "lcn_shutdown_write", cdecl.}
   proc fdClose*(fd: cint): cint {.importc: "lcn_close", cdecl.}
   proc dupFd*(fd: cint): cint {.importc: "lcn_dup_cloexec", cdecl.}

@@ -157,7 +157,7 @@ proc failed*(
   p.errors.line(t)
 
 proc streamLine*(p: Presenter, v: JsonNode, text: string): Result[void, SinkError] =
-  ## [G350] One stream item: a JSON line, or a text line.
+  ## [G349] One stream item: a JSON line, or a text line.
   if p.json:
     return p.output.line($v)
   p.output.line(text)

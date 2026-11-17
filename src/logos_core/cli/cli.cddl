@@ -1,5 +1,5 @@
 ; logos-core-nim.cli.v1: the protocol between the logosctl launcher and the
-; lcn_call instance's socket (Tier 5 step N-2; DECISIONS G344, G345; BOOTSTRAP
+; lcn_call instance's socket (Tier 5 step N-2; DECISIONS G344; BOOTSTRAP
 ; l.384-390). BOOTSTRAP assigns no interoperable activation encoding or
 ; terminal protocol, so this one is the implementation's own; docs/DAEMON.md
 ; §7a documents it.
@@ -80,7 +80,7 @@ lcn.cli_describe_command = {
 }
 
 ; A stream ends at count events, after for_ms, at the launcher's EOF, or when
-; lcn_call ends it (G350).
+; lcn_call ends it (G349).
 lcn.cli_subscribe_command = {
   op: "subscribe",
   provider: lcn.cli_provider,
@@ -90,7 +90,7 @@ lcn.cli_subscribe_command = {
 }
 
 ; The target Runtime's own Runtime Control events; names (1 to 16) absent:
-; the default set (G350).
+; the default set, the three the events rule grants (G346).
 lcn.cli_events_command = {
   op: "events",
   ? names: [* tstr .size (1..128)],

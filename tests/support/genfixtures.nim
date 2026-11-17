@@ -461,7 +461,7 @@ proc generatedLcnCallTypes*(): Result[string, string] =
   nimModule(set, NimOptions(importPrefix: "../"), false)
 
 proc generatedLcnCallConfigTypes*(): Result[string, string] =
-  ## Its configuration types, `lcn_call.settings` (G343, G345).
+  ## Its configuration types, `lcn_call.settings` (G343, G344).
   let (set, opts) = ?lcnCallKitParts()
   configurationTypesModule(set, opts.configuration.get, opts)
 

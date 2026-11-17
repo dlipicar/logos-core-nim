@@ -1,4 +1,4 @@
-## `logos-core-nim.cli.v1`'s wire (Tier 5 step N-2; DECISIONS G344, G345;
+## `logos-core-nim.cli.v1`'s wire (Tier 5 step N-2; DECISIONS G344;
 ## BOOTSTRAP l.384-390): the launcher's request frame with its descriptors,
 ## the replies, their bounds and checks, and the exit statuses both sides
 ## share. docs/DAEMON.md §7a.
@@ -16,7 +16,7 @@ import results
 import ../cbor
 import ../transport/io/sock
 import ../daemon/ctlwire
-import ./cli_types
+import ./[cli_types, fdpass]
 
 export results, cli_types
 export
@@ -97,7 +97,7 @@ when defined(posix):
       var n = cint(0)
       var dropped = cint(0)
       let room = cint(MaxFds - fds.len)
-      let r = sockRecvFds(
+      let r = recvFds(
         fd,
         addr buf[got],
         csize_t(buf.len - got),
@@ -189,7 +189,7 @@ proc writeRequest*(
     while sent < frame.len:
       let r =
         if sent == 0:
-          sockSendFds(
+          sendFds(
             fd,
             addr frame[0],
             csize_t(frame.len),

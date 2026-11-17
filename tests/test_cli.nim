@@ -1,5 +1,5 @@
 ## The CLI's pieces that need no Runtime (Tier 5 step N-2a; DECISIONS G344,
-## G345, G347, G349; D26 (a); docs/DAEMON.md §7a): the launcher socket's
+## G347, G349; D26 (a); docs/DAEMON.md §7a): the launcher socket's
 ## frames with descriptors, the request checks, the typing of arguments from a
 ## request rule, the `--json` reader, and the output written to the
 ## launcher's descriptors. `test_lcn_call` runs the module itself.
@@ -11,7 +11,7 @@ when defined(posix):
   import ../src/logos_core/iface/[accept, surface]
   import ../src/logos_core/daemon/render
   import ../src/logos_core/transport/io/sock
-  import ../src/logos_core/cli/[args, present, wire]
+  import ../src/logos_core/cli/[args, fdpass, present, wire]
   import std/posix except Stat
 
   discard signal(SIGPIPE, SIG_IGN) # as the Module Host does
@@ -141,9 +141,9 @@ when defined(posix):
       for i in 0 ..< 10:
         ten[i] = a[1]
       let header = [0'u8, 0, 0, 2]
-      check sockSendFds(s[0], unsafeAddr header[0], 4, addr ten[0], 10) == 4
+      check sendFds(s[0], unsafeAddr header[0], 4, addr ten[0], 10) == 4
       let body = [7'u8, 7]
-      check sockSendFds(s[0], unsafeAddr body[0], 2, addr ten[0], 10) == 2
+      check sendFds(s[0], unsafeAddr body[0], 2, addr ten[0], 10) == 2
       let r = readRequest(s[1], 2000)
       check r.isErr and r.error.kind == feTooLarge
       discard posix.close(a[1])
@@ -172,7 +172,7 @@ when defined(posix):
         let s = pair()
         let a = mkpipe()
         let partial = [0'u8, 0, 0, 9, 1]
-        check sockSendFds(s[0], unsafeAddr partial[0], 5, unsafeAddr a[1], 1) == 5
+        check sendFds(s[0], unsafeAddr partial[0], 5, unsafeAddr a[1], 1) == 5
         discard shutdownWrite(s[0])
         let r = readRequest(s[1], 2000)
         check r.isErr and r.error.kind == fePartial
@@ -234,6 +234,22 @@ when defined(posix):
       var m = callMessage(StdRoles, @[textArg("a", "1")])
       m.command.arm_lcn_Cli_call_command.json = Opt.some("{}")
       check checkMessage(m, 2).isErr
+
+    test "the target is optional and kept as named; the rc op is reserved, with no file":
+      var m = callMessage(StdRoles, @[])
+      check decodeMessage(m.encode.get).get.target.isNone
+      m.target = Opt.some("edge-1")
+      check decodeMessage(m.encode.get).get.targetOf == "edge-1"
+      var rc = callMessage(StdRoles, @[])
+      rc.command = LcnCliCommand(
+        kind: LcnCliCommandKind.lcn_Cli_rc_command,
+        arm_lcn_Cli_rc_command: LcnCliRcCommand(`method`: "list_modules", params: @[]),
+      )
+      let d = decodeMessage(rc.encode.get)
+      check d.isOk and d.get.command.opName == "rc"
+      check checkMessage(rc, 2).isOk
+      rc.fds.add(role(LcnCliFdRoleKind.File))
+      check checkMessage(rc, 3).isErr
 
     test "node names":
       check validNodeName("local")
