@@ -254,15 +254,22 @@ proc isReady(e: Engine, id: string): proc(): bool =
     e.state(id) == msReady
 
 proc entries(): Accounting =
-  ## The state file as the module last wrote it.
+  ## The state file as the module last wrote it. On Windows a read can meet the
+  ## module's replacing rename and fail to open the file, which a POSIX rename
+  ## never shows (step 5-4's Windows run), so the read is retried.
   let path = stateDir / StateFileName
-  if not fileExists(path):
-    return Accounting()
-  let s = readFile(path)
-  var b = newSeq[byte](s.len)
-  for i, c in s:
-    b[i] = byte(c)
-  decodeState(b).tryGet
+  for attempt in 0 ..< 200:
+    if not fileExists(path):
+      return Accounting()
+    try:
+      let s = readFile(path)
+      var b = newSeq[byte](s.len)
+      for i, c in s:
+        b[i] = byte(c)
+      return decodeState(b).tryGet
+    except IOError:
+      sleep(5)
+  raise newException(IOError, "cannot read " & path)
 
 proc entryOf(id: string): Opt[Entry] =
   let a = entries()
