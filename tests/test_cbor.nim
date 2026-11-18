@@ -1,9 +1,10 @@
-import std/[json, random, strutils]
+import std/[json, os, random, strutils]
 import unittest2
 import ../src/logos_core/cbor
 import ../src/logos_core/base/hex
 import ../src/logos_core/crypto/blake3
 import ./support/specdata
+import ./support/testdirs
 
 type Vector = object
   hex, expect, note, diag: string
@@ -11,7 +12,7 @@ type Vector = object
     ## the class in the generic data model (`allowFloats`), where it differs
 
 proc vectors(): seq[Vector] =
-  let root = parseJson(readRepoFile("tests/vectors/cbor/decode.json"))
+  let root = parseJson(readRepoFile(vectorDir / "cbor/decode.json"))
   var output: seq[Vector]
   for v in root["vectors"]:
     output.add(

@@ -21,6 +21,7 @@ import ../src/logos_core/iface/common_types
 import ../src/logos_core/transport/envelope
 import ../src/logos_core/transport/framing
 import ./support/[kitbuild, kitruntime, tunerconfig]
+import ./support/testdirs
 import ./kit/[meter_impl, tuner_impl]
 import ./generated/[meter_module_calls, tuner_module_types]
 
@@ -1314,7 +1315,7 @@ proc readyLive(
   doAssert rc.stage(result, 2, tunerValue("radio-2", 9)).updated.state_revision == 3
 
 let
-  tunerSet = acceptContractSet(readFile(repo / "tests/kit/tuner_module.cddl")).tryGet
+  tunerSet = acceptContractSet(readFile(repo / fixtureDir / "tuner_module.cddl")).tryGet
   tunerRoot = tunerSet.primary.root
   tunerSchema = encodeCbor(schemaResponse(tunerSet, tunerRoot).tryGet)
 

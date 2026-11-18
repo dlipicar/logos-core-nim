@@ -1,13 +1,14 @@
 ## base/nfc.nim against Python's unicodedata (tests/vectors/nfc.json, written by
 ## oracle/gen_nfc_tables.py), plus UAX #15 cases written out here.
 
-import std/[json, strutils]
+import std/[json, os, strutils]
 import unittest2
 import ../src/logos_core/base/nfc
 import ./support/specdata
+import ./support/testdirs
 
 suite "base.nfc: Normalization Form C (UAX #15) for LGX paths":
-  let doc = parseJson(readRepoFile("tests/vectors/nfc.json"))
+  let doc = parseJson(readRepoFile(vectorDir / "nfc.json"))
 
   test "the tables and the vectors come from the same Unicode version":
     check doc["unicode"].getStr == UnicodeVersion

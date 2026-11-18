@@ -18,6 +18,7 @@ import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, surface]
 import ../src/logos_core/iface/common_types
 import ./support/[kitbuild, kitruntime]
+import ./support/testdirs
 import ./kit/[deferred_adapter, meter_impl, shapes_impl]
 import ./generated/[meter_module_calls, meter_module_types]
 
@@ -1272,7 +1273,8 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
 # One payload depth setting ----------------------------------------------------------------
 
 let
-  shapesSet = acceptContractSet(readFile(repo / "tests/kit/shapes_module.cddl")).tryGet
+  shapesSet =
+    acceptContractSet(readFile(repo / fixtureDir / "shapes_module.cddl")).tryGet
   shapesRoot = shapesSet.primary.root
   shapesSchema = encodeCbor(schemaResponse(shapesSet, shapesRoot).tryGet)
   shapesStatic = checkStaticRegistration("shapes", shapesModuleStaticSymbols()).tryGet

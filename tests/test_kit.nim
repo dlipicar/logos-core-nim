@@ -12,6 +12,7 @@ from ../src/logos_core/codegen/callrt import
   arenaBlocks, failArenaAllocation, CallArena, text, release
 from ../src/logos_core/codegen/common_mirrors import commonMirrorLayout
 import ./support/[kitruntime, specdata, typedharness, tunerconfig]
+import ./support/testdirs
 import ./generated/meter_module_kit
 from ./generated/sensor_module_kit import sensorModuleLayout
 from ./generated/shapes_module_kit import shapesModuleLayout
@@ -415,7 +416,7 @@ suite "ifc.kit: configuration (CONFIG §2, §6, §8; DECISIONS I87) [IMPL]":
     ).error.code == ecInvalidParams
 
   test "[CFG-0019] [IMPL] generation: a root that is not a type of its schema, a schema that is not supporting and a Nim name shared with the module are errors":
-    let module = acceptContractSet(readFile("tests/kit/tuner_module.cddl")).tryGet
+    let module = acceptContractSet(readFile(fixtureDir / "tuner_module.cddl")).tryGet
     let config = configurationSet(tunerDocument).tryGet
     proc kit(c: ContractSet, root: string): Result[string, string] =
       kitModule(
@@ -429,7 +430,7 @@ suite "ifc.kit: configuration (CONFIG §2, §6, §8; DECISIONS I87) [IMPL]":
     check kit(config, TunerRoot).isOk
     check kit(config, "tuner.nothing").error ==
       "the configuration root tuner.nothing is not a type of its schema"
-    check configurationSet(readFile("tests/kit/tuner_module.cddl")).error ==
+    check configurationSet(readFile(fixtureDir / "tuner_module.cddl")).error ==
       "the configuration schema is not a supporting schema"
     let clash = configurationSet("radio.band = { x: uint32 }\n").tryGet
     check "have one Nim name, RadioBand" in kit(clash, "radio.band").error
@@ -928,7 +929,7 @@ proc cFacts(facts: seq[(string, int)]): Result[seq[string], string] =
   let base = dir / "layout"
   writeFile(base & ".c", src)
   let exe = base & (when defined(windows): ".exe" else: "")
-  let generated = currentSourcePath().parentDir / "generated"
+  let generated = repoDir / generatedDir
   let (o, rc) = execCmdEx(
     quoteShell(cc) & " -std=c17 -Wall -Werror -I " & quoteShell(generated) & " " &
       quoteShell(base & ".c") & " -o " & quoteShell(exe)

@@ -1,11 +1,12 @@
 ## The official BLAKE3 test vectors (tests/vectors/blake3_test_vectors.json, from
 ## the BLAKE3 repository at the vendored commit; see tools/update-blake3.sh).
 
-import std/json
+import std/[json, os]
 import unittest2
 import ../src/logos_core/crypto/blake3
 import ../src/logos_core/base/hex
 import ./support/specdata
+import ./support/testdirs
 
 proc input(n: int): seq[byte] =
   var data = newSeq[byte](n)
@@ -20,7 +21,7 @@ proc toBytes(s: string): seq[byte] =
   b
 
 suite "blake3: official test vectors":
-  let root = parseJson(readRepoFile("tests/vectors/blake3_test_vectors.json"))
+  let root = parseJson(readRepoFile(vectorDir / "blake3_test_vectors.json"))
   let key = block:
     var k: array[Blake3KeyLen, byte]
     let s = root["key"].getStr

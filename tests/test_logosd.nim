@@ -32,7 +32,8 @@ when defined(posix):
     acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
   import
     ./support/[
-      daemonbuild, daemonproc, evfixture, kitbuild, modulehostbuild, shortdir, slowdown
+      daemonbuild, daemonproc, evfixture, kitbuild, modulehostbuild, shortdir, slowdown,
+      testdirs,
     ]
 
   import std/posix
@@ -66,9 +67,7 @@ when defined(posix):
     hostExe = moduleHostProgram()
     chatterLib = buildKitLibrary("chatter_impl.nim", "lgdchatter")
     beaconRoot = @(
-      acceptContractSet(
-        readFile(currentSourcePath().parentDir / "kit" / "beacon_module.cddl")
-      )
+      acceptContractSet(readFile(repoDir / fixtureDir / "beacon_module.cddl"))
       .expect("the beacon_module contract set").primary.root
     ) ## so `chatter-1` provides it: a hosted provider's endpoint is made in `run/ep`
 

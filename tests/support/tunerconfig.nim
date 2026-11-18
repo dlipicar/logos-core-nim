@@ -9,13 +9,13 @@ import ../../src/logos_core/cbor
 import ../../src/logos_core/commitment
 import ../../src/logos_core/iface/accept
 import ../../src/logos_core/runtime/[configcheck, rc_types]
+import ./testdirs
 
 export results
 
 const TunerRoot* = "tuner.config"
 
-let tunerDocument* =
-  readFile(currentSourcePath().parentDir.parentDir / "kit" / "tuner_config.cddl")
+let tunerDocument* = readFile(repoDir / fixtureDir / "tuner_config.cddl")
 
 proc rootsOf*(document, root: string): (seq[byte], seq[byte]) =
   ## The schema root and the root's subtree root, recomputed from the text.

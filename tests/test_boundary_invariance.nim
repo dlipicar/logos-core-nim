@@ -27,6 +27,7 @@ when defined(posix):
   import ../src/logos_core/pins
   from ../src/logos_core/transport/io/api import defaultTransportConfig
   import ./support/[invariance, kitbuild, kitruntime, modulehostbuild, shortdir]
+  import ./support/testdirs
   import ./kit/meter_impl
   import ./generated/[meter_module_calls, meter_module_types]
 
@@ -59,7 +60,7 @@ when defined(posix):
     hostProgram = moduleHostProgram()
     probeLib = buildKitLibrary("probe_impl.nim", "probe")
     shapesSet =
-      acceptContractSet(readFile(repo / "tests/kit/shapes_module.cddl")).tryGet
+      acceptContractSet(readFile(repo / fixtureDir / "shapes_module.cddl")).tryGet
     shapesRoot = shapesSet.primary.root
     shapesSchema = encodeCbor(schemaResponse(shapesSet, shapesRoot).tryGet)
 

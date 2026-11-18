@@ -1,8 +1,9 @@
-import std/[algorithm, sequtils, sets, strutils, tables]
+import std/[algorithm, os, sequtils, sets, strutils, tables]
 import unittest2
 import ../src/logos_core/[cbor, hash]
 import ../src/logos_core/base/hex
 import ./support/[cddlshape, specdata, valuevec]
+import ./support/testdirs
 
 let
   # [SPEC HASH App B] synthetic identities
@@ -30,7 +31,7 @@ type OracleVector = object
 
 proc oracleVectors(): seq[OracleVector] =
   ## tests/vectors/hash/layout.cbor, written by oracle/gen_hash_vectors.py [G17].
-  let file = decodeCbor(readRepoFile("tests/vectors/hash/layout.cbor")).get
+  let file = decodeCbor(readRepoFile(vectorDir / "hash/layout.cbor")).get
   for v in file.lookup("vectors").get.items:
     result.add(
       OracleVector(

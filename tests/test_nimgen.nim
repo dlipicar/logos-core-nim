@@ -11,6 +11,7 @@ import ../src/logos_core/codegen/nimgen
 from ../src/logos_core/iface/outcome as oc import nil
 import ../src/logos_core/authority/[policy_types, logos_capability_authority_types]
 import ./support/[specdata, genfixtures]
+import ./support/testdirs
 import
   ./generated/[meter_module_types, sensor_module_types, recursive_types, demo_types]
 
@@ -493,8 +494,8 @@ suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
         "kit",
         "--out:" & dir,
         "--import-prefix:" & fixturePrefix,
-        "tests/kit/tuner_module.cddl",
-        "--configuration:tests/kit/tuner_config.cddl",
+        fixtureDir / "tuner_module.cddl",
+        "--configuration:" & fixtureDir / "tuner_config.cddl",
         "--configuration-root:tuner.config",
         "--live-reconfiguration",
       ]
@@ -504,24 +505,26 @@ suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
       "tuner_module_kit.nim", "tuner_module_kit.exports", "tuner_module_kit.map",
     ]:
       checkpoint name
-      check readFile(dir / name) == readFile("tests/generated" / name)
+      check readFile(dir / name) == readFile(generatedDir / name)
     for bad in [
       @[
-        "kit", "tests/kit/tuner_module.cddl",
-        "--configuration:tests/kit/tuner_config.cddl",
+        "kit",
+        fixtureDir / "tuner_module.cddl",
+        "--configuration:" & fixtureDir / "tuner_config.cddl",
       ],
-      @["kit", "tests/kit/tuner_module.cddl", "--configuration-root:tuner.config"],
-      @["kit", "tests/kit/tuner_module.cddl", "--live-reconfiguration"],
+      @["kit", fixtureDir / "tuner_module.cddl", "--configuration-root:tuner.config"],
+      @["kit", fixtureDir / "tuner_module.cddl", "--live-reconfiguration"],
       @[
-        "nim", "tests/kit/tuner_module.cddl",
-        "--configuration:tests/kit/tuner_config.cddl",
+        "nim",
+        fixtureDir / "tuner_module.cddl",
+        "--configuration:" & fixtureDir / "tuner_config.cddl",
         "--configuration-root:tuner.config",
       ],
       @[
         "kit",
         "--out:" & dir / "x",
-        "tests/kit/tuner_module.cddl",
-        "--configuration:tests/kit/tuner_config.cddl",
+        fixtureDir / "tuner_module.cddl",
+        "--configuration:" & fixtureDir / "tuner_config.cddl",
         "--configuration-root:tuner.nothing",
       ],
     ]:

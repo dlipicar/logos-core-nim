@@ -20,6 +20,7 @@ import ../src/logos_core/iface/[accept, provider]
 from ../src/logos_core/runtime/rc_types import
   LogosNSModuleConfigurationConfigurationInput, encode
 import ./support/[kitbuild, kitruntime, specdata, testroute, typedharness, tunerconfig]
+import ./support/testdirs
 import ./generated/[meter_module_types, sensor_module_types, tuner_module_types]
 
 type
@@ -192,9 +193,7 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
     ]:
       checkpoint module
       var listed = 0
-      for line in lines(
-        currentSourcePath().parentDir / "generated" / module & "_kit.exports"
-      ):
+      for line in lines(repoDir / generatedDir / module & "_kit.exports"):
         if line.len > 0 and line[0] == '_':
           checkpoint line
           check lib.handle.symAddr(cstring(line[1 ..^ 1])) != nil

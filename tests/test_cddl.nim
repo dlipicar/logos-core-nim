@@ -1,8 +1,9 @@
-import std/[random, sequtils, strutils]
+import std/[os, random, sequtils, strutils]
 import unittest2
 import ../src/logos_core/[cbor, cddl]
 import ../src/logos_core/base/hex
 import ./support/specdata
+import ./support/testdirs
 
 type Vector = object
   name, expect, input, diag, canonicalHex, errorClass, notes: string
@@ -15,7 +16,7 @@ proc text(v: CborValue, key: string): string =
 
 proc vectors(): seq[Vector] =
   ## tests/vectors/cddl/vectors.cbor, written by oracle/gen_cddl_vectors.py [G16].
-  let root = decodeCbor(readRepoFile("tests/vectors/cddl/vectors.cbor")).get
+  let root = decodeCbor(readRepoFile(vectorDir / "cddl/vectors.cbor")).get
   var output: seq[Vector]
   for r in root.lookup("vectors").get.items:
     var v = Vector(

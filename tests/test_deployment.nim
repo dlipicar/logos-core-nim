@@ -33,6 +33,7 @@ when defined(posix):
     ../src/logos_core/daemon/
       [assemble, ctlwire, daemon_config_types, logging, session, sessioninit]
   import ./support/[kitbuild, loaderharness, modulehostbuild, shortdir, slowdown]
+  import ./support/testdirs
 
   import std/posix
 
@@ -107,9 +108,7 @@ when defined(posix):
     hostExe = moduleHostProgram()
     chatterLib = buildKitLibrary("chatter_impl.nim", "dplchatter")
     beaconRoot = @(
-      acceptContractSet(
-        readFile(currentSourcePath().parentDir / "kit" / "beacon_module.cddl")
-      )
+      acceptContractSet(readFile(repoDir / fixtureDir / "beacon_module.cddl"))
       .expect("the beacon_module contract set").primary.root
     ) ## so `chatter-1` is a provider: its endpoint is made in `run/ep`
 

@@ -1,4 +1,4 @@
-## Builds a `tests/kit/` source as a shared library (`--app:lib`) with this
+## Builds a kit source as a shared library (`--app:lib`) with this
 ## build's memory manager, mode and sanitizer, for the suites that load kit modules the way
 ## a Runtime does (`test_kit_dylib`, `test_realizer`). Each library gets its own
 ## `--nimMainPrefix`, so its `NimMain` is distinct from the host's and from any
@@ -16,6 +16,7 @@
 import std/[os, osproc, strutils]
 when defined(posix):
   import std/posix
+import ./testdirs
 
 const
   kitMm* =
@@ -43,8 +44,34 @@ const
     kitMm & (when defined(release): "-release" else: "") &
     (when kitSanitizer.len > 0: "-" & kitSanitizer else: "") &
     (when kitAudit: "-wipeaudit" else: "")
-  kitTestsDir = currentSourcePath().parentDir.parentDir
   nimExe = getCurrentCompilerExe()
+
+type KitTree* = object
+  ## Where a suite's kit libraries come from [IMPL]: the kit source directories and the
+  ## directories of generated export lists, each searched in order, and the build directory.
+  sources*: seq[string]
+  generated*: seq[string]
+  build*: string
+
+proc kitTreeOf*(suite: string): KitTree =
+  ## The tree of the suite at the absolute path `suite`: its own directories, then the shared ones.
+  let tests = suite.parentDir
+  KitTree(
+    sources: @[tests / "kit", repoDir / fixtureDir],
+    generated: @[tests / "generated", repoDir / generatedDir],
+    build: repoDir / "build" / "kit-dylib",
+  )
+
+template kitTree*(): KitTree =
+  ## The calling suite's tree: paths follow the suite, not this helper.
+  kitTreeOf(instantiationInfo(fullPaths = true).filename)
+
+proc locate(dirs: openArray[string], file: string): string =
+  ## `file` in the first of `dirs` that holds it.
+  for dir in dirs:
+    if fileExists(dir / file):
+      return dir / file
+  doAssert false, file & " is in none of " & $dirs
 
 proc kitAuditFlags*(executable: bool): seq[string] =
   ## The audit build's switches (`tests/test_wipe.nims`); none otherwise. An
@@ -78,24 +105,29 @@ proc kitVariantOf*(mm: string): string =
   ## `kitVariant` for a library built with `mm` (and `LCN_KIT_NIM`).
   mm & kitVariant[kitMm.len .. ^1] & kitCompiler()[1]
 
-proc exportListFlags*(kit: string): seq[string] =
+proc exportListFlags*(tree: KitTree, kit: string): seq[string] =
   ## [DECISIONS G341] The link switch for the export list lcn-gen wrote for
-  ## the kit `kit` (`tests/generated/<kit>_kit.exports` or `.map`); none on
-  ## Windows, where a library exports only what it marks for export.
-  let base = kitTestsDir / "generated" / kit & "_kit"
+  ## the kit `kit` (`<kit>_kit.exports` or `.map`, in the tree's generated
+  ## directories); none on Windows, where a library exports only what it marks
+  ## for export.
   when defined(macosx):
-    @["--passL:-Wl,-exported_symbols_list," & base & ".exports"]
+    @[
+      "--passL:-Wl,-exported_symbols_list," &
+        locate(tree.generated, kit & "_kit.exports")
+    ]
   elif defined(windows):
     @[]
   else:
-    @["--passL:-Wl,--version-script=" & base & ".map"]
+    @["--passL:-Wl,--version-script=" & locate(tree.generated, kit & "_kit.map")]
 
-proc buildKitLibrary*(source, name: string, mm = kitMm, exports = ""): string =
-  ## `tests/kit/<source>` as `lib<name>` under `build/kit-dylib/<variant>/`,
-  ## built with `mm` (by default this build's) and, when `exports` names a
-  ## kit, linked with that kit's export list.
+proc buildKitLibraryIn*(
+    tree: KitTree, source, name: string, mm = kitMm, exports = ""
+): string =
+  ## The kit source `source` as `lib<name>` under the tree's build directory,
+  ## in `<variant>/`, built with `mm` (by default this build's) and, when
+  ## `exports` names a kit, linked with that kit's export list.
   let (compiler, _) = kitCompiler()
-  let dir = kitTestsDir.parentDir / "build" / "kit-dylib" / kitVariantOf(mm)
+  let dir = tree.build / kitVariantOf(mm)
   createDir(dir)
   result = dir / (DynlibFormat % name)
   let output =
@@ -120,14 +152,14 @@ proc buildKitLibrary*(source, name: string, mm = kitMm, exports = ""): string =
       args.add("-d:" & kitSanitizer)
   args.add(kitAuditFlags(false))
   if exports.len > 0:
-    args.add(exportListFlags(exports))
+    args.add(tree.exportListFlags(exports))
   args.add(
     [
       "--app:lib",
       "--nimMainPrefix:lib" & name,
       "--nimcache:" & dir / ("nimcache-" & name),
       "-o:" & output,
-      kitTestsDir / "kit" / source,
+      locate(tree.sources, source),
     ]
   )
   when defined(posix):
@@ -141,3 +173,9 @@ proc buildKitLibrary*(source, name: string, mm = kitMm, exports = ""): string =
       moveFile(output, result)
     discard posix.close(lock) # releases the lock
   doAssert code == 0, "building " & source & " failed:\n" & log
+
+template buildKitLibrary*(source, name: string, mm = kitMm, exports = ""): string =
+  ## `buildKitLibraryIn` with the calling suite's tree.
+  buildKitLibraryIn(
+    kitTreeOf(instantiationInfo(fullPaths = true).filename), source, name, mm, exports
+  )

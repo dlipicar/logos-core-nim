@@ -6,7 +6,7 @@
 ## only `logos_runtime.h`.
 
 import std/[os, osproc, strutils]
-import ./kitbuild
+import ./[kitbuild, testdirs]
 
 const
   root = currentSourcePath().parentDir.parentDir.parentDir
@@ -82,7 +82,7 @@ proc buildEmbedMain*(library: string): string =
     "-Wextra",
     "-Werror",
     "-pedantic",
-    "-I" & root / "tests" / "generated",
+    "-I" & root / generatedDir,
     "-o",
     result,
     root / "tests" / "host" / "embed_main.c",
