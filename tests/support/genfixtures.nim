@@ -148,8 +148,7 @@ const
     ),
   ]
 
-proc generated*(f: NimFixture): Result[string, string] =
-  ## The module lcn-gen makes for `f` now.
+proc fixtureSet(f: NimFixture): Result[(ContractSet, KitOptions), string] =
   try:
     let set = ?acceptContractSet(
       readFile(f.primary),
@@ -162,16 +161,59 @@ proc generated*(f: NimFixture): Result[string, string] =
       let cfgSet = ?configurationSet(readFile(f.configuration))
       opts.configuration =
         Opt.some(KitConfiguration(set: cfgSet, root: f.configurationRoot, live: f.live))
-    if f.configurationTypes:
-      configurationTypesModule(set, opts.configuration.get, opts)
-    elif f.kit:
-      kitModule(set, opts, f.system)
-    elif f.calls:
-      callsModule(set, CallsOptions(importPrefix: fixturePrefix), f.system)
-    else:
-      nimModule(set, NimOptions(importPrefix: fixturePrefix), f.system)
+    ok((set, opts))
   except IOError as e:
     err(e.msg)
+
+proc generated*(f: NimFixture): Result[string, string] =
+  ## The module lcn-gen makes for `f` now.
+  let (set, opts) = ?fixtureSet(f)
+  if f.configurationTypes:
+    configurationTypesModule(set, opts.configuration.get, opts)
+  elif f.kit:
+    kitModule(set, opts, f.system)
+  elif f.calls:
+    callsModule(set, CallsOptions(importPrefix: fixturePrefix), f.system)
+  else:
+    nimModule(set, NimOptions(importPrefix: fixturePrefix), f.system)
+
+type ExportFixture* = object
+  ## [DECISIONS G341] A kit's export list under tests/generated/, which
+  ## `kitbuild` links a kit library with.
+  kit*: string ## the kit's `NimFixture.module`
+  kind*: ExportListKind
+
+const exportFixtures* = [
+  ExportFixture(kit: "meter_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "meter_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "sensor_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "sensor_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "shapes_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "shapes_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "tuner_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "tuner_module_kit.nim", kind: elGnu),
+]
+
+proc fixtureName(f: ExportFixture): string =
+  f.kit.changeFileExt(
+    case f.kind
+    of elDarwin: "exports"
+    of elGnu: "map"
+  )
+
+proc generated*(f: ExportFixture): Result[string, string] =
+  ## The export list lcn-gen makes for `f` now.
+  for k in nimFixtures:
+    if k.module == f.kit and k.kit:
+      let (set, opts) = ?fixtureSet(k)
+      let name = exportListName(set, f.kind)
+      if name != f.fixtureName:
+        return err("lcn-gen names it " & name)
+      return ok(exportList(name, ?kitSymbols(set, opts, k.system), f.kind))
+  err("no kit fixture " & f.kit)
+
+proc fixturePath*(f: ExportFixture): string =
+  "tests/generated" / f.fixtureName
 
 type HeaderFixture* = object
   header*: string ## the file under tests/generated/

@@ -59,7 +59,10 @@ proc releasePerThread*() {.gcsafe.} =
   releases = @[]
   pending = 0
   when defined(gcOrc):
-    GC_fullCollect()
+    # [DECISIONS G341] Nim 2.2.4 (the libraries' compiler) does not mark it
+    # `raises: []`; it raises nothing.
+    {.cast(raises: []).}:
+      GC_fullCollect()
 
 proc releaseAtNimThreadEnd() {.gcsafe, raises: [].} =
   releasePerThread()

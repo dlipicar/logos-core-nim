@@ -16,7 +16,10 @@
 ## and writes the file `cancelled` there once it sees the invocation
 ## cancelled, 24 publishes `meter.changed_event` with value 0x6C636E32 and then
 ## in the invocation's scope with value 0x6C636E33 (payloads a carrier trace
-## looks for); any other channel `c` reads `ch<c>` with value `10 c`.
+## looks for), 25 publishes `meter.changed_event` with value 250 from a thread
+## of the module's own runtime, then joins it (DECISIONS G342: a module thread
+## calling the host's publish callback); any other channel `c` reads `ch<c>`
+## with value `10 c`.
 
 {.used.} # imported by the tests for the C symbols it exports
 import std/[atomics, monotimes, os, times]
@@ -46,6 +49,12 @@ proc initModule(_: type Meter, init: ModuleInit): Result[Meter, InvocationFailur
 
 proc destroyModule(m: Meter) =
   destroyed += 1
+
+var threadPublished*: Atomic[int] ## channel 25's publications the callback took
+
+proc publisher(s: ModuleServices) {.thread.} =
+  if s.publish(MeterChangedEvent(value: 250)).isOk:
+    threadPublished += 1
 
 proc `read`(
     m: Meter, request: MeterReadRequest
@@ -124,6 +133,14 @@ proc `read`(
     ?m.services.publish(MeterChangedEvent(value: 0x6C636E32'u64))
     ?m.services.publishScoped(MeterChangedEvent(value: 0x6C636E33'u64))
     ok(MeterReadResponse(label: "ch24", reading: MeterReading(value: 240)))
+  of 25:
+    var t: Thread[ModuleServices]
+    try:
+      createThread(t, publisher, m.services)
+    except CatchableError as e:
+      return err(moduleError("channel 25 has no thread: " & e.msg))
+    joinThread(t)
+    ok(MeterReadResponse(label: "ch25", reading: MeterReading(value: 250)))
   of 21:
     ?m.services.publish(MeterChangedEvent(value: 210))
     let who = ?m.services.caller() # after the handlers' nested entries returned

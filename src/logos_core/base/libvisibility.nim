@@ -24,3 +24,13 @@
 
 when not defined(windows):
   {.passc: "-fvisibility=hidden".}
+
+# [DECISIONS G340] A library leaves the process's signal dispositions to its
+# host. Without -d:noSignalHandler its `NimMain` sets handlers for SIGINT,
+# SIGSEGV, SIGABRT, SIGFPE, SIGILL and SIGBUS, and ignores SIGPIPE, when it is
+# loaded (system/excpt.nim, `registerSignalHandler`).
+when appType == "lib" and not defined(noSignalHandler):
+  {.
+    warning:
+      "built as a library without -d:noSignalHandler: loading it replaces the host's signal handlers (logos-core-nim DECISIONS G340)"
+  .}

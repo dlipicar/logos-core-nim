@@ -1,6 +1,7 @@
 ## Builds `liblogos_runtime` (`src/liblogos_runtime.nim`) the way
 ## `kitbuild.buildKitLibrary` builds a kit module: `--app:lib` with this build's
-## memory manager, mode and sanitizer, its own `--nimMainPrefix` and nimcache.
+## memory manager, mode and sanitizer, its own `--nimMainPrefix` and nimcache,
+## and `-d:noSignalHandler`.
 ## Also compiles `tests/host/embed_main.c` against it, as a program that knows
 ## only `logos_runtime.h`.
 
@@ -28,7 +29,8 @@ proc buildRuntimeLibrary*(): string =
   let dir = libDir()
   createDir(dir)
   result = dir / (DynlibFormat % "logos_runtime")
-  var args = @[nimExe, "c", "--hints:off", "--mm:" & kitMm]
+  # [DECISIONS G340] The library leaves the host's signal dispositions alone.
+  var args = @[nimExe, "c", "--hints:off", "--mm:" & kitMm, "-d:noSignalHandler"]
   when defined(release):
     args.add("-d:release")
   when defined(asan):

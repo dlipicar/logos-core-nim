@@ -11,10 +11,22 @@
 ## that links the library at load time puts its exports in the process's global
 ## scope on ELF systems, where a module library the Runtime maps would
 ## otherwise bind to this runtime's tables.
+##
+## [DECISIONS G340] Loading the library leaves the host's signal dispositions
+## as they were: it is built with `-d:noSignalHandler`, so its `NimMain` sets
+## no handler, and `base/hostsignals` puts back the `SIGPIPE` disposition
+## chronos's initializer changes.
+
+when not defined(noSignalHandler):
+  {.
+    error:
+      "liblogos_runtime is built with -d:noSignalHandler (DECISIONS G340): otherwise loading it replaces the host's signal handlers"
+  .}
 
 {.push raises: [].}
 
 import ./logos_core/base/libvisibility
+import ./logos_core/base/hostsignals # before anything that imports chronos
 import ./logos_core/abi/[host, types]
 import ./logos_core/runtime/host as hostApi
 
@@ -47,3 +59,6 @@ proc logosRuntimeDestroy(
     runtime: ptr LogosRuntimeHandle
 ): LogosResult {.exportc: "logos_runtime_destroy", dynlib, cdecl.} =
   runtimeDestroy(runtime)
+
+# [DECISIONS G340] Last in the library's initializer, after chronos's.
+restoreHostSignals()

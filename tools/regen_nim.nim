@@ -54,5 +54,8 @@ proc main() =
   for f in headerFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath
+  for f in exportFixtures:
+    writeFile(f.fixturePath, f.generated.get)
+    echo f.fixturePath
 
 main()

@@ -101,7 +101,8 @@ task build_runtime_lib,
   "Build liblogos_runtime and logos_runtime.h under build/lib/ (RUNTIME §13)":
   let dir = "build/lib/orc" & (if defined(release): "-release" else: "")
   mkDir(dir)
-  exec "nim c --hints:off --mm:orc --app:lib --nimMainPrefix:liblogos_runtime" &
+  # -d:noSignalHandler: loading the library leaves the host's signal handlers (DECISIONS G340).
+  exec "nim c --hints:off --mm:orc --app:lib --nimMainPrefix:liblogos_runtime -d:noSignalHandler" &
     (if defined(release): " -d:release" else: "") & " --nimcache:" & dir &
     "/nimcache-logos_runtime -o:" & dir & "/" & (
     when defined(macosx): "liblogos_runtime.dylib"

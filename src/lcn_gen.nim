@@ -40,7 +40,10 @@ kit          accepts a concrete module document's set and writes the Nim
              symbols, typed _CALL_ provider functions included, over
              handlers its author writes in Nim (PROVISIONAL); with
              --configuration, also DIR/<module>_configuration_types.nim, and
-             the kit checks and delivers the configuration (CONFIG §6, §8)
+             the kit checks and delivers the configuration (CONFIG §6, §8);
+             also DIR/<module>_kit.exports and DIR/<module>_kit.map, the
+             library's export list for macOS ld (-exported_symbols_list) and
+             GNU ld (--version-script): its ABI symbols and nothing else
 calls        accepts a provider's set (a concrete module document, or an
              interface document) and writes DIR/<stem>_types.h,
              <stem>_types.nim, <stem>_calls.nim and <stem>_calls.h: typed
@@ -228,6 +231,12 @@ proc main(): int =
         if configTypes.len > 0:
           outputs.add((configurationTypesName(set) & ".nim", configTypes))
         outputs.add((set.cSchemaSet.headerName & "_kit.nim", kit))
+        # [DECISIONS G341] The library's export lists, for its link.
+        let symbols = kitSymbols(set, kopts, opts.system).valueOr:
+          return fail(error)
+        for kind in ExportListKind:
+          let name = exportListName(set, kind)
+          outputs.add((name, exportList(name, symbols, kind)))
         for (name, text) in outputs:
           let r = write(outDir, name, text)
           if r != 0:

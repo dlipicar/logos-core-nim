@@ -430,6 +430,12 @@ test hooks (flake check `no-test-hooks`). A refc build of the Runtime or the Mod
 contract with a marked field (DECISIONS G277): under refc a channel message's copy is freed unerased.
 The erasure claim and its five non-claims are in CONFORMANCE, "Properties not claimed".
 
+A module library logosd maps (`direct_dynamic`) or a Module Host loads may be built with either memory
+manager (DECISIONS G342; measured with the Runtime and the Module Host on macOS, Linux pending). Build
+it with `-d:noSignalHandler`, so that loading it leaves the process's signal handlers alone (G340; the
+kit warns without it), and link it with its kit's export list (G341). In a refc module written with
+today's kit, handlers on threads other than the loading one must not store GC'd values (DECISIONS I71).
+
 ## 23. Diagnostics and logs
 
 [DAEMON.md](DAEMON.md) §12: logosd logs to stderr, one line per event, collected by the service

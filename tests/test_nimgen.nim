@@ -50,6 +50,9 @@ suite "ifc.nim-types: generated modules (D29)":
     for f in headerFixtures:
       checkpoint f.header
       check f.generated.get == readFile(f.fixturePath)
+    for f in exportFixtures:
+      checkpoint f.fixturePath
+      check f.generated.get == readFile(f.fixturePath)
 
   test "every generated module carries the provisional stamp of the pinned spec":
     let stamp = "PROVISIONAL (spec " & SpecRevision[0 .. 7] & ")"
@@ -68,6 +71,8 @@ suite "ifc.nim-types: generated modules (D29)":
       checkpoint path
       check stamp in readFile(path)
     for f in nimFixtures:
+      check stamp in readFile(f.fixturePath)
+    for f in exportFixtures:
       check stamp in readFile(f.fixturePath)
 
   test "[IMPL] the policy's lcn.ap_commitment repeats logos.capability_authority.commitment_requirements":
@@ -454,7 +459,7 @@ suite "ifc.nim-types: payload depth [IMPL]":
     check deepChecks.load == 15
 
 suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
-  test "[CFG-0068] the command line writes the committed types, configuration types and kit; its configuration options go together":
+  test "[CFG-0068] the command line writes the committed types, configuration types, kit and export lists (DECISIONS G341); its configuration options go together":
     let exe = "build/tools/lcn_gen_cli"
     let (built, code) = execCmdEx(
       quoteShellCommand(
@@ -491,7 +496,7 @@ suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
     ) == 0
     for name in [
       "tuner_module_types.nim", "tuner_module_configuration_types.nim",
-      "tuner_module_kit.nim",
+      "tuner_module_kit.nim", "tuner_module_kit.exports", "tuner_module_kit.map",
     ]:
       checkpoint name
       check readFile(dir / name) == readFile("tests/generated" / name)
