@@ -3,7 +3,7 @@
 
 [[item]]
 ids = ["TRN-0241", "TRN-0242", "TRN-0243", "TRN-0244"]
-reason = "Test hooks (§8.5). The hooks that inject or observe framed messages are the sans-I/O session state machines driven directly by tests/test_transport.nim, raw sockets writing crafted frames in tests/test_transport_io.nim, and the child-process peer tests/support/trnpeer.nim. All are under tests/; nothing under src/ imports, advertises or falls back to them, and they run only with the test tickets of tests/support/trnowner.nim and test data. No claim depends on another implementation recognizing them. docs/CONFORMANCE.md 'Test hooks' states this."
+reason = "Test hooks (§8.5). The hooks that inject or observe framed messages are the sans-I/O session state machines driven directly by tests/test_transport.nim, raw sockets writing crafted frames in tests/transport_io_body.nim (the suite tests/test_transport_io.nim), and the child-process peer tests/support/trnpeer.nim. All are under tests/; nothing under src/ imports, advertises or falls back to them, and they run only with the test tickets of tests/support/trnowner.nim and test data. No claim depends on another implementation recognizing them. docs/CONFORMANCE.md 'Test hooks' states this."
 
 [[item]]
 ids = ["TRN-0309", "TRN-0310"]

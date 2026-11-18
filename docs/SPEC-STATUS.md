@@ -61,7 +61,7 @@ table (each unit with its reason: the workspace's `tier5-plans/step5-0-pkg-recou
 | E1 | `logos.remote.tls-tcp` (TRANSPORT §8.4, §8.4.1) | TRN 36 | 5-2 |
 | E2 | `logos.remote.quic` (TRANSPORT §8.4.2), droppable | TRN 5; BCP-0032; RUN-0503, RUN-0504, RUN-0507 (counted in F) | 5-12 |
 | F | Remote Runtimes (RUNTIME §9, §9.3; INTERFACE §5.2) | RUN 126; IFC 20 | 5-7a, 5-7b |
-| G | Windows local transport (TRANSPORT §8.2.1) | TRN 17 | 5-4 (the spike), 5-9 |
+| G | Windows local transport (TRANSPORT §8.2.1) | TRN 17 | 5-4 (the spike: go on three builds, no chronos fork, G329-G333; TRN-0352's test), 5-9 |
 | H | The reverse mapper (INTERFACE §3) | IFC 152, and IFC-0887, IFC-0904 to re-evidence | 5-1 |
 | K | iOS baseline (SEC-0044); sandbox and container placements and OS-enforced permissions have no gated unit | SEC 1 | outside Tier 5: M12 |
 | | **Total** | **676**: PKG 308, RUN 133, IFC 172, TRN 58, BCP 4, SEC 1 | |

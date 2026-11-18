@@ -68,11 +68,16 @@ proc privateDir*(base: string): Result[string, string] =
       return err("mkdtemp failed: " & $strerror(errno))
     ok(tmpl)
   else:
+    # [IMPL] A new directory per call, as mkdtemp gives: a second Realizer in the
+    # process must not reuse the first one's, whose mapped copies Windows cannot
+    # replace or remove (I100).
     try:
-      let dir = base / ("lcn-artifacts-" & $getCurrentProcessId())
-      createDir(dir)
-      setFilePermissions(dir, {fpUserRead, fpUserWrite, fpUserExec})
-      ok(dir)
+      for n in 1 .. 1000:
+        let dir = base / ("lcn-artifacts-" & $getCurrentProcessId() & "-" & $n)
+        if not existsOrCreateDir(dir):
+          setFilePermissions(dir, {fpUserRead, fpUserWrite, fpUserExec})
+          return ok(dir)
+      err("cannot create a new artifact directory")
     except OSError, IOError:
       err("cannot create the artifact directory")
 

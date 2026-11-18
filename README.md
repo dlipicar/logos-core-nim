@@ -155,11 +155,21 @@ while looking up the Nim that `nimble.lock` names; on Linux the flag changes not
 nimble build --useSystemNim
 ```
 
-On Windows (x86_64, MinGW-w64; DECISIONS G126, I45), the same two commands run from `cmd` or
-PowerShell. `PATH` needs Nim 2.2.14 with its MinGW gcc, Git, and `nasm`: nim-boringssl assembles
-its Windows sources with nasm while compiling. `.gitattributes` keeps every checkout LF, whatever
-`core.autocrlf` says, because the spec mirrors and test vectors are compared byte for byte. Nix
-does not build for Windows.
+On Windows (x86_64, MinGW-w64; DECISIONS G126, G334), the same two commands run from `cmd` or
+PowerShell. `PATH` needs Nim 2.2.14 with its MinGW gcc, and Git. No nasm: BLAKE3's assembly goes
+through gcc, and nothing on Windows assembles BoringSSL. `.gitattributes` keeps every checkout LF,
+whatever `core.autocrlf` says, because the spec mirrors and test vectors are compared byte for byte.
+Nix does not build for Windows. CI's Windows job is `tools/ci/windows.ps1`, which runs the same by
+hand: `toolchain -ToolDir <dir>` fetches nim-lang.org's Nim 2.2.14 and MinGW-w64 gcc 11.1.0, checks
+their SHA-256 and puts both first on `PATH`; `setup`, `test` and `probe` are the job's other steps
+(`probe` runs `tools/winprobe`, the measurements behind G107, and compares them with the committed
+facts for the build):
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows.ps1 toolchain -ToolDir C:\lcn-tools
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows.ps1 setup -ToolDir C:\lcn-tools
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ci\windows.ps1 test -ToolDir C:\lcn-tools
+```
 
 On Android (DECISIONS I46), an x86_64 Linux host with KVM runs every suite on an emulator. The flake
 pins the SDK, NDK, emulator and system image, cross-compiles the suites for x86_64 and aarch64, boots
@@ -189,8 +199,9 @@ CI splits the checks into groups: `orc-spec` (orc, nph, lint and the spec checks
 each and `orc-spec` runs as two shards; on Linux each group runs as two shards, `ciShards.<group>-1`
 and `<group>-2`, `tsan` as three (`tsan-3`), `asan` as four (`asan-3`, `asan-4`) and `msan` as five
 (`msan-3` to `msan-5`). The heaviest suites' measured times (`ciWeights` in `flake.nix`) balance the
-shards. The Nimble tasks run as three shards on Linux and two on macOS (`LCN_SHARD`). One group or
-one shard builds alone with:
+shards. The Nimble tasks run as three shards on Linux and two on macOS (`LCN_SHARD`). A third job runs
+the Nimble path on Windows (`windows-2025`, four shards of `nimble test` under orc, and the Windows
+probes; DECISIONS G334). One group or one shard builds alone with:
 
 ```bash
 nix build -L --keep-going .#ciGroups.asan

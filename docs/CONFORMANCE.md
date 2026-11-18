@@ -500,7 +500,10 @@ until it is shown, remote paths refuse marked contracts (G277), as any build wit
 - Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
   run as the daemon's user, so a process running as that user can replace a socket pathname or
   impersonate an endpoint. Deployments that need that protection must run hosts under distinct OS
-  identities, which this implementation does not set up (DECISIONS G58).
+  identities, which this implementation does not set up (DECISIONS G58). The same holds on Windows
+  once the profile is built there (step 5-9): a consumer of the Runtime's own user can delete,
+  rename or re-secure the endpoint, and TRANSPORT l.1156 is read as not reaching it (DECISIONS G332,
+  the owner's reading, 2026-11-17).
 - Containment of what a hosted module starts: a Module Host's process group is killed after every
   end of the host, but a process the module moved into another group or session outlives it
   (DECISIONS G265). Placement `process` is a separate address space, not a sandbox.
@@ -663,9 +666,9 @@ TRANSPORT §5.2 (TRN-0309, TRN-0310) as built in `io/callee.nim` and `io/loop.ni
 
 TRANSPORT §8.5 (TRN-0241 to TRN-0244). The hooks that inject or observe framed messages are all under
 `tests/`: the sans-I/O session state machines driven directly (`tests/test_transport.nim`), raw
-sockets that write crafted frames (`tests/test_transport_io.nim`), and the child-process peer
-`tests/support/trnpeer.nim`. Nothing under `src/` refers to them, advertises them or falls back to
-them. They use only the test tickets of `tests/support/trnowner.nim` and test data. No claim depends on
+sockets that write crafted frames (`tests/transport_io_body.nim`, the suite `test_transport_io`), and
+the child-process peer `tests/support/trnpeer.nim`. Nothing under `src/` refers to them, advertises
+them or falls back to them. They use only the test tickets of `tests/support/trnowner.nim` and test data. No claim depends on
 another implementation recognizing them.
 
 Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):

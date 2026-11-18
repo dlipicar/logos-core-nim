@@ -3,8 +3,9 @@ name: CI
 # `nix flake check` on each leg: every test suite under orc and refc, nph, and the spec checks
 # (mirrors, pins, requirement ledger, coverage gate, oracle selftest) against the pinned specs.
 # A second job runs the Nimble path from the same checkout so it cannot rot (R2), once per OS,
-# memory manager and shard.
-# Legs per R1: Linux x86_64, Linux aarch64, macOS arm64 until Tier 4 work starts.
+# memory manager and shard. A third runs it on Windows (A6, G334), where there is no Nix.
+# Legs per R6: Linux x86_64, Linux aarch64 and macOS arm64 in the first two jobs, Windows x86_64
+# in the third; Android and iOS join with M12.
 # Each leg runs as parallel jobs, one per check group (flake.nix `ciGroups`): a single runner took
 # over two hours for every check on Linux x86_64, and 86 of its 90 minutes on macOS (5bd731f,
 # 2026-11-13). Each check is in exactly one group, and the first orc-spec shard also evaluates every
@@ -25,6 +26,11 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Run only the windows job (a trial of the Windows leg)
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -32,6 +38,7 @@ concurrency:
 
 jobs:
   nix:
+    if: ${{ !inputs.windows_only }}
     name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ (matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 5) || (matrix.group == 'asan' && 4) || (matrix.group == 'tsan' && 3) || 2)) || (matrix.group == 'orc-spec' && format(' {0}/2', matrix.shard)) || '' }})
     # ATTIC_TOKEN_PUBLIC only exists in the public-cache environment.
     environment: ${{ github.ref == 'refs/heads/master' && 'public-cache' || '' }}
@@ -141,6 +148,7 @@ jobs:
   # runs three shards: on dc2e7ef (2026-11-16) its test_refc shards of two took 66 and 69 minutes.
   # macOS runs two (its test_refc shards took 44 and 46).
   nimble:
+    if: ${{ !inputs.windows_only }}
     name: nimble (${{ matrix.os }}, ${{ matrix.task }}, ${{ matrix.shard }}/${{ matrix.os == 'macos-latest' && 2 || 3 }})
     strategy:
       fail-fast: false
@@ -216,3 +224,72 @@ jobs:
           echo "$USER ALL=(lcnpeer) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/lcnpeer
           LCN_PEER_USER=lcnpeer nix develop -c nim c -r --outdir:build/tests/g129 \
             tests/test_transport_io.nim "trnio.peer*::*"
+
+  # The Windows leg (A6, R6, G334): the Nimble path with its own toolchain, since there is no Nix
+  # on Windows. Every step is `tools/ci/windows.ps1`, so a Windows machine runs the same commands
+  # (5-4 proved each one on winvm.lan) and so can the repositories split from this one. The
+  # toolchain is nim-lang.org's Nim 2.2.14 and its MinGW-w64 gcc 11.1.0, pinned by SHA-256 in the
+  # script and checked after a cache hit as after a download. No nasm: nothing on Windows
+  # assembles with it (BLAKE3's assembly goes through gcc; BoringSSL builds without assembly
+  # there, 5-2). orc only: refc is covered on Linux and macOS (G123 as revised). The probes
+  # (tools/winprobe, G107) run beside the suites on windows-2025 and alone on windows-2022, and
+  # compare their facts with the committed ones for that build; they never fail the job.
+  windows:
+    name: windows (${{ matrix.os }}, ${{ matrix.shard == 0 && 'probes' || format('{0}/4', matrix.shard) }})
+    # Until a run on master is green; then this line goes and the leg blocks (G123 as revised).
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025]
+        # The 4 is the number of shards, here, in the name and in LCN_SHARD; 0 is the probes
+        # alone. All 77 suites under orc took 161 minutes on winvm.lan (2 vCPUs; 69 compiling, 92
+        # running); round-robin over four gives 32 to 48 minutes there per shard (5-4, I100).
+        shard: [1, 2, 3, 4]
+        include:
+          - os: windows-2022
+            shard: 0
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      LCN_SHARD: ${{ matrix.shard }}/4
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the toolchain archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\lcn-toolchain\archives
+          key: windows-toolchain-${{ hashFiles('tools/ci/windows.ps1') }}
+
+      - name: Toolchain
+        run: ./tools/ci/windows.ps1 toolchain
+
+      - name: Cache the locked dependencies
+        uses: actions/cache@v4
+        with:
+          path: nimbledeps/pkgs2
+          key: windows-nimbledeps-${{ hashFiles('nimble.lock') }}
+
+      - name: nimble setup
+        run: ./tools/ci/windows.ps1 setup
+
+      - name: Windows probes (informational)
+        if: matrix.shard <= 1
+        continue-on-error: true
+        run: ./tools/ci/windows.ps1 probe
+
+      - name: Keep the probes' facts
+        if: matrix.shard <= 1 && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: winprobe-facts-${{ matrix.os }}
+          path: build/winprobe/facts/
+          if-no-files-found: warn
+
+      - name: nimble test
+        if: matrix.shard != 0
+        run: ./tools/ci/windows.ps1 test
