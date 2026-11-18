@@ -8,9 +8,10 @@
 ##
 ## 1. accepted current time exists (G325; T l.1267);
 ## 2. exactly one certificate: a direct anchor (G324; B2);
-## 3. the enrollment: as client, the expected Runtime's current record is
-##    `active` (T l.1245-1247); as server, exactly one current record holds the
-##    leaf's key, and it is `active` (T l.1251-1254);
+## 3. the enrollment: no two current records hold the leaf's key, for a client
+##    as for a server (G324; T l.1253); as client, the expected Runtime's current
+##    record is `active` (T l.1245-1247); as server, one current record holds
+##    the key, and it is `active` (T l.1251-1254);
 ## 4. the leaf's DER SPKI is one of that record's keys (T l.1248-1250);
 ## 5. the leaf's DER equals the record's anchor certificate (T l.1258, l.1260);
 ## 6. notBefore <= now <= notAfter (T l.1259);
@@ -69,6 +70,9 @@ proc checkPeer*(
   if info.isErr:
     return err("2 chain: " & info.error)
   let cert = info.get
+  let holders = t.holdersOf(cert.spki)
+  if holders.len > 1:
+    return err("3 enrollment: " & $holders.len & " Runtimes hold this key")
   var rec = EnrollmentRecord()
   if expected.len > 0:
     let r = t.record(expected)
@@ -76,11 +80,8 @@ proc checkPeer*(
       return err("3 enrollment: no record for Runtime " & expected)
     rec = r.get
   else:
-    let holders = t.holdersOf(cert.spki)
     if holders.len == 0:
       return err("3 enrollment: no Runtime is enrolled with this key")
-    if holders.len > 1:
-      return err("3 enrollment: " & $holders.len & " Runtimes hold this key")
     rec = holders[0]
   case rec.status
   of rsRevoked:

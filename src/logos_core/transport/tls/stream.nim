@@ -44,6 +44,7 @@ type
     eof: bool
     reader: Future[void].Raising([])
     outLock: AsyncLock
+    inFlight: int ## ciphertext handed to the transport and not yet sent
     prefix: array[4, byte] ## a frame's length prefix, as it arrives
     prefixLen: int
     body: seq[byte] ## the frame being read, allocated at its declared length
@@ -195,10 +196,13 @@ proc flush(s: TlsStream, wait = false) {.async: (raises: [CancelledError, TlsErr
       let chunk = s.engine.takeOutput()
       if chunk.len == 0:
         break
+      s.inFlight = chunk.len
       discard await s.tr.write(chunk)
+      s.inFlight = 0
   except TransportError as x:
     raise newException(TlsError, "write: " & x.msg)
   finally:
+    s.inFlight = 0
     try:
       s.outLock.release()
     except AsyncLockError:
@@ -401,11 +405,21 @@ proc readFrame*(
     of rdFailed:
       return err(s.engine.failure)
 
+proc outputRetained*(s: TlsStream): int =
+  ## Ciphertext sealed and not yet sent: what `writeBound` limits.
+  s.engine.pendingOutput + s.inFlight
+
 proc sealFrame(s: TlsStream, body: openArray[byte]): Result[void, string] =
   ## Hands one frame to the engine, which seals it into records, and erases
-  ## the framed copy.
+  ## the framed copy. [SPEC TRANSPORT §8.6] A frame that would pass `writeBound`
+  ## while earlier output waits is refused before anything is sealed.
   if s.closed or s.closing:
     return err("closed")
+  if not fits(body.len, s.cfg.peerFrameLimit):
+    return err("a frame of " & $body.len & " bytes is over the peer's limit")
+  let retained = s.outputRetained
+  if retained > 0 and retained + body.len > s.cfg.writeBound:
+    return err("output bound: " & $retained & " bytes wait to be sent")
   var f = frame(body, s.cfg.peerFrameLimit)
   if f.isErr:
     return err("a frame of " & $body.len & " bytes is over the peer's limit")
@@ -427,7 +441,8 @@ proc writeFrame*(
 ): Future[Result[void, string]].Raising([CancelledError]) =
   ## One TRANSPORT §2.1 frame; the future completes once earlier output has
   ## been sent. `body` is sealed before this returns, so the carrier keeps no
-  ## plaintext copy of it; `body` stays the caller's.
+  ## plaintext copy of it; `body` stays the caller's. Past `writeBound` it
+  ## fails with nothing sealed, and the stream stays usable.
   let sealed = s.sealFrame(body)
   if sealed.isErr:
     let failed =
@@ -548,8 +563,8 @@ proc acceptLoop(l: TlsListener) {.async: (raises: []).} =
     if l.closing:
       await tr.closeWait()
       return
-    if l.handshaking.len >= l.cfg.maxHandshakes:
-      # Over the handshake bound: closed at once, unread.
+    if l.handshaking.len >= l.cfg.maxHandshakes or l.tasks.len >= l.cfg.maxConnections:
+      # Over a bound (TRANSPORT §8.6): closed at once, unread.
       inc l.refusedOverBound
       await tr.closeWait()
       continue
@@ -606,8 +621,13 @@ proc registry*(l: TlsListener): StreamRegistry =
   l.registry
 
 proc refusedOverBound*(l: TlsListener): int =
-  ## Connections closed unread because the handshake bound was reached.
+  ## Connections closed unread because `maxHandshakes` or `maxConnections` was
+  ## reached.
   l.refusedOverBound
+
+proc connectionsHeld*(l: TlsListener): int =
+  ## Connections that count against `maxConnections`, until their teardown ends.
+  l.tasks.len
 
 proc failedHandshakes*(l: TlsListener): int =
   l.failedHandshakes

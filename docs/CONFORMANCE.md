@@ -627,9 +627,16 @@ starts. The defaults are `[IMPL]`. "listener" is one listening socket; "conn" is
 |---|---|---|---|
 | `handshakeTimeoutMs` (TCP connect and the TLS handshake, signing included) | conn | 10 s | the attempt fails; nothing else is tried |
 | `maxHandshakes` (handshakes in progress) | listener | 64 | the connection is closed at once, unread |
+| `maxConnections` (connections held: handshaking, open, or in teardown) | listener | 1024 | the connection is closed at once, unread |
 | `readBound` (ciphertext read from the socket and not yet consumed) | conn | 64 KiB | the socket is not read until it drains |
+| `writeBound` (ciphertext sealed and not yet sent) | conn | 16 MiB | `writeFrame` fails with nothing sealed and the stream stays usable; a frame with no output waiting always fits |
 | `frameLimit`, `peerFrameLimit` | conn | 16 MiB | as TRANSPORT §2.1: a declared length over `frameLimit` fails the read; a body over `peerFrameLimit` is not written |
 | `closeWaitMs` (close_notify and the reader's end at close) | conn | 2 s | the connection is freed anyway |
+
+A listener's connections hold at most `maxConnections` × (`readBound` + `writeBound` + `frameLimit`)
+bytes of Transport input and output, and each listener process has one listener (owner decision B1).
+A caller's outbound connections have no count here: the facade process opens one for each consumer
+route and bounds them with its routes (5-7b).
 
 ## Event output overflow
 

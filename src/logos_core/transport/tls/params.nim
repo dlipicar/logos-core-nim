@@ -33,7 +33,13 @@ type
     ## [IMPL] I99: the carrier's limits, checked by `check` before use.
     handshakeTimeoutMs*: int ## each handshake's deadline, connect included
     maxHandshakes*: int ## a listener's handshakes at once; more are closed unread
+    maxConnections*: int
+      ## a listener's connections at once, handshaking or open (TRANSPORT §8.6);
+      ## more are closed unread
     readBound*: int ## ciphertext taken from the socket but not yet consumed
+    writeBound*: int
+      ## ciphertext sealed and not yet sent (TRANSPORT §8.6): a frame that would
+      ## pass it while output waits is refused; a frame alone always fits
     frameLimit*: uint32 ## the largest frame body accepted (TRANSPORT §2.1)
     peerFrameLimit*: uint32 ## the largest frame body sent (TRANSPORT §2.1)
     closeWaitMs*: int ## how long teardown waits for the reader to end
@@ -46,7 +52,9 @@ func defaultTlsConfig*(): TlsConfig =
   TlsConfig(
     handshakeTimeoutMs: 10_000,
     maxHandshakes: 64,
+    maxConnections: 1024,
     readBound: 64 * 1024,
+    writeBound: MinFrameLimit.int,
     frameLimit: MinFrameLimit,
     peerFrameLimit: MinFrameLimit,
     closeWaitMs: 2_000,
@@ -58,8 +66,12 @@ func check*(c: TlsConfig): Result[void, string] =
     return err("handshakeTimeoutMs must be 1 to 600000")
   if c.maxHandshakes < 1 or c.maxHandshakes > 4096:
     return err("maxHandshakes must be 1 to 4096")
+  if c.maxConnections < c.maxHandshakes or c.maxConnections > 65_536:
+    return err("maxConnections must be maxHandshakes to 65536")
   if c.readBound < 16 * 1024 + 256 or c.readBound > 16 * 1024 * 1024:
     return err("readBound must hold one TLS record and be at most 16 MiB")
+  if c.writeBound < 16 * 1024 + 256 or c.writeBound > 1024 * 1024 * 1024:
+    return err("writeBound must hold one TLS record and be at most 1 GiB")
   if c.frameLimit < MinFrameLimit:
     return err("frameLimit below 16 MiB does not conform (TRANSPORT §2.1)")
   if c.peerFrameLimit < MinFrameLimit:

@@ -380,6 +380,45 @@ suite "tls.handshake":
     check seen.frames == 0
     waitFor l.close()
 
+  test "[TRN-0221] [IMPL-DECISION G328] a server sends no Transport data before its check passed":
+    let seen = Seen()
+    let speaksFirst: StreamHandler = proc(
+        s: TlsStream
+    ): Future[void] {.async: (raises: []), gcsafe.} =
+      inc seen.frames
+      try:
+        discard await s.writeFrame(@[7'u8])
+        discard await s.readFrame()
+      except CancelledError:
+        discard
+    let l = serve(
+      "127.0.0.1",
+      0,
+      serverContext(b),
+      pinnedCheck([a]),
+      keySigner(b.key, tlsServer),
+      fastConfig(),
+      speaksFirst,
+    ).get
+    # refused: the handler never runs and the client's first read is a failure
+    let refused = l.dial(c, b)
+    if refused.isOk:
+      check (waitFor refused.get.readFrame()).isErr
+      waitFor refused.get.close()
+    check waitUntil(
+      proc(): bool =
+        l.failedHandshakes == 1,
+      2000,
+    )
+    check seen.frames == 0
+    # accepted: the same handler speaks first
+    let s = l.dial(a, b).get
+    let f = waitFor s.readFrame()
+    check f.isOk and f.get.isSome and f.get.get.body == @[7'u8]
+    check seen.frames == 1
+    waitFor s.close()
+    waitFor l.close()
+
   test "[TRN-0222] the client refuses a server its check does not accept":
     let seen = Seen()
     let l = listen(c, seen, [a])
@@ -585,6 +624,101 @@ suite "tls.signing seam":
       waitFor s.close()
     waitFor l.close()
 
+  test "[IMPL-DECISION I99] past the connection bound a connection is closed at once, unread, until one ends":
+    let seen = Seen()
+    var cfg = fastConfig()
+    cfg.maxHandshakes = 2
+    cfg.maxConnections = 2
+    let l = listen(b, seen, [a], config = cfg)
+    let s1 = l.dial(a, b).get
+    let s2 = l.dial(a, b).get
+    check s1.roundTrip(@[1'u8]).isOk
+    check s2.roundTrip(@[2'u8]).isOk
+    check l.connectionsHeld == 2
+    check l.handshakesInProgress == 0
+    let third = waitFor connect(initTAddress("127.0.0.1", Port(l.localPort)))
+    check waitUntil(
+      proc(): bool =
+        l.refusedOverBound == 1,
+      2000,
+    )
+    var buf: array[16, byte]
+    let n =
+      try:
+        waitFor third.readOnce(addr buf[0], buf.len)
+      except CatchableError:
+        0
+    check n == 0
+    waitFor third.closeWait()
+    waitFor s1.close()
+    check waitUntil(
+      proc(): bool =
+        l.connectionsHeld == 1,
+      2000,
+    )
+    let s3 = l.dial(a, b).get
+    check s3.roundTrip(@[3'u8]).isOk
+    waitFor s2.close()
+    waitFor s3.close()
+    waitFor l.close()
+
+  test "[IMPL-DECISION I99] a limit below the handshake bound is refused":
+    var cfg = fastConfig()
+    cfg.maxConnections = cfg.maxHandshakes - 1
+    check cfg.check().isErr
+    cfg = fastConfig()
+    cfg.writeBound = 1024
+    check cfg.check().isErr
+
+  test "[IMPL-DECISION I99] output past the write bound is refused with nothing sealed, and the stream stays usable":
+    let hold = newAsyncEvent()
+    let quiet: StreamHandler = proc(
+        s: TlsStream
+    ): Future[void] {.async: (raises: []), gcsafe.} =
+      # Reads nothing until released, so the sender's output backs up.
+      try:
+        await hold.wait()
+        while true:
+          let f = await s.readFrame()
+          if f.isErr or f.get.isNone:
+            return
+      except CancelledError:
+        discard
+    var cfg = fastConfig()
+    cfg.writeBound = 64 * 1024
+    let l = serve(
+      "127.0.0.1",
+      0,
+      serverContext(b),
+      pinnedCheck([a]),
+      keySigner(b.key, tlsServer),
+      cfg,
+      quiet,
+    ).get
+    let s = l.dial(a, b, config = cfg).get
+    let body = newSeq[byte](32 * 1024)
+    var pending: seq[Future[Result[void, string]].Raising([CancelledError])] = @[]
+    var refusal = ""
+    for i in 0 ..< 4096:
+      let w = s.writeFrame(body)
+      if w.finished and w.value.isErr:
+        refusal = w.value.error
+        break
+      pending.add(w)
+    require refusal.startsWith("output bound")
+    # the bound, plus each record's header and tag
+    check s.outputRetained <= cfg.writeBound + cfg.writeBound div 256
+    let before = s.outputRetained
+    check (waitFor s.writeFrame(body)).isErr
+    check s.outputRetained == before
+    hold.fire()
+    for w in pending:
+      check (waitFor w).isOk
+    check s.outputRetained == 0
+    check (waitFor s.writeFrame(body)).isOk
+    waitFor s.close()
+    waitFor l.close()
+
   test "[IMPL-DECISION I99] past the handshake bound a connection is closed at once, unread":
     let seen = Seen()
     var cfg = fastConfig()
@@ -773,6 +907,29 @@ suite "tls.verify":
     let rotated = snapshotOf([a, c], [activeRecord(a, 2, keys = @[c.spki])])
     check verdict(rotated, a, tlsServer, IdA).reason.startsWith("4 key")
     check verdict(rotated, a, tlsClient, "").reason.startsWith("3 enrollment")
+
+  test "[TRN-0226] [IMPL-DECISION G324] a caller also refuses a target whose key another Runtime's current record holds":
+    let two =
+      snapshotOf([a, b], [activeRecord(a), activeRecord(b, keys = @[b.spki, a.spki])])
+    check verdict(two, a, tlsServer, IdA).reason ==
+      "3 enrollment: 2 Runtimes hold this key"
+    let conflicting = snapshotOf(
+      [a],
+      [
+        activeRecord(a),
+        EnrollmentRecord(
+          runtime: IdB, revision: 4, status: rsConflicting, spkis: @[a.spki]
+        ),
+      ],
+    )
+    check verdict(conflicting, a, tlsServer, IdA).reason ==
+      "3 enrollment: 2 Runtimes hold this key"
+    # a revoked record names no key, so it holds none
+    let revoked = snapshotOf(
+      [a],
+      [activeRecord(a), EnrollmentRecord(runtime: IdB, revision: 5, status: rsRevoked)],
+    )
+    check verdict(revoked, a, tlsServer, IdA).isOk
 
   test "[TRN-0371] the validity period at accepted current time, also for the direct anchor":
     let t = enrolled(oddParties)
