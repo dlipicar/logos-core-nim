@@ -15,9 +15,9 @@ when defined(posix):
   import std/posix
 import unittest2
 import ../src/logos_core/runtime/realizer
-import ../src/logos_core/crypto/blake3
-import ../src/logos_core/iface/[accept, names]
-import ../src/logos_core/pins
+import logos_sdk/crypto/blake3
+import logos_sdk/iface/[accept, names]
+import logos_sdk/pins
 import ../src/logos_core/runtime/config
 import ./support/[kitbuild, kitruntime, tunerconfig]
 import ./kit/[meter_impl, sensor_impl, shapes_impl]

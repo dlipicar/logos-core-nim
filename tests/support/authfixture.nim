@@ -5,7 +5,7 @@
 import std/[atomics, os]
 import results
 import ../../src/logos_core/authority/[core, policy_types]
-from ../../src/logos_core/kit/rc_types import
+from logos_sdk/kit/rc_types import
   LogosNSRuntimeControlExecutionSelectionImplementationChoice,
   LogosNSRuntimeControlExecutionSelectionImplementationChoiceKind,
   LogosNSRuntimeControlExecutionSelectionImplementationARDirectStaticMap,

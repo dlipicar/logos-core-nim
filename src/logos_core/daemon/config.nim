@@ -12,7 +12,7 @@
 
 import std/[os, sets]
 import results
-import ../cbor
+import logos_sdk/cbor
 import ../loader/contract
 from ../runtime/authscopes import AuthorityModule
 from ../orchestration/settings import OrchestratorModule

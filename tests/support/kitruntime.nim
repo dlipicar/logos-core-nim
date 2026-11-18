@@ -6,9 +6,9 @@
 
 import std/[atomics, locks]
 import results
-import ../../src/logos_core/cbor
-import ../../src/logos_core/abi/[checks, types]
-import ../../src/logos_core/iface/outcome
+import logos_sdk/cbor
+import logos_sdk/abi/[checks, types]
+import logos_sdk/iface/outcome
 
 export atomics, locks, results, checks, types, outcome
 

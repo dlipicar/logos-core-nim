@@ -23,7 +23,7 @@
 import std/[locks, monotimes, os, strutils, times]
 import results
 from ../runtime/host import runtimeRequestShutdown
-from ../abi/host as abihost import LogosRuntimeHandle
+from logos_sdk/abi/host as abihost import LogosRuntimeHandle
 import ./logging
 
 when defined(posix):

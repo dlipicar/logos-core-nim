@@ -3,9 +3,9 @@
 
 import std/[algorithm, sequtils, strutils]
 import unittest2
-import ../src/logos_core/hash
-import ../src/logos_core/iface/[provider, surface]
-import ../src/logos_core/base/hex
+import logos_sdk/hash
+import logos_sdk/iface/[provider, surface]
+import logos_sdk/base/hex
 import ./support/specdata
 
 # Documents ---------------------------------------------------------------------------

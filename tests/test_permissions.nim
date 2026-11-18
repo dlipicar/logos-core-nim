@@ -19,12 +19,12 @@ import ../src/logos_core/runtime/[settings, store]
 from ../src/logos_core/runtime/authscopes import AuthorityModule, evaluateRequest
 from ../src/logos_core/authority/logos_capability_authority_types import toCbor
 from ../src/logos_core/authority/scopes import GrantStatusKind
-import ../src/logos_core/abi/types
-import ../src/logos_core/cbor
-import ../src/logos_core/codegen/nimrt
-import ../src/logos_core/commitment
-import ../src/logos_core/iface/[accept, outcome, provider, surface]
-import ../src/logos_core/codegen/common_types
+import logos_sdk/abi/types
+import logos_sdk/cbor
+import logos_sdk/codegen/nimrt
+import logos_sdk/commitment
+import logos_sdk/iface/[accept, outcome, provider, surface]
+import logos_sdk/codegen/common_types
 import ../src/logos_core/package/manifest
 import ./support/[kitbuild, kitruntime, permfixture]
 import ./kit/meter_impl

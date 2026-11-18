@@ -7,8 +7,8 @@
 when defined(posix):
   import std/[json, os, strutils, tempfiles]
   import unittest2
-  import ../src/logos_core/cbor
-  import ../src/logos_core/iface/[accept, surface]
+  import logos_sdk/cbor
+  import logos_sdk/iface/[accept, surface]
   import ../src/logos_core/daemon/render
   import ../src/logos_core/transport/io/sock
   import ../src/logos_core/cli/[args, fdpass, present, wire]

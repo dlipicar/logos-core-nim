@@ -55,8 +55,8 @@
 {.push raises: [].}
 
 import std/[algorithm, atomics, os, strutils]
-import ../../src/logos_core/abi/types
-import ../../src/logos_core/codegen/kitrt
+import logos_sdk/abi/types
+import logos_sdk/codegen/kitrt
 
 type
   Tag = object ## What a route callback reports under, with its probe.

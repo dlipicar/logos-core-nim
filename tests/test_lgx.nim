@@ -4,9 +4,9 @@
 
 import std/[algorithm, os, sequtils, strutils, tables]
 import unittest2
-import ../src/logos_core/base/hex
-import ../src/logos_core/[cbor, pins]
-import ../src/logos_core/crypto/blake3
+import logos_sdk/base/hex
+import logos_sdk/[cbor, pins]
+import logos_sdk/crypto/blake3
 import ../src/logos_core/package/lgx
 import zlib/zlib_api
 

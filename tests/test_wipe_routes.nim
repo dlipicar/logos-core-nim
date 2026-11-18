@@ -23,13 +23,13 @@ import
   ]
 import unittest2
 import ../src/logos_core/runtime/[engine, routing]
-import ../src/logos_core/abi/types
-import ../src/logos_core/base/[wipe, wipeaudit]
-import ../src/logos_core/cbor
-import ../src/logos_core/commitment
-import ../src/logos_core/hash
-import ../src/logos_core/iface/[accept, cmap, outcome, provider, surface]
-import ../src/logos_core/codegen/common_types
+import logos_sdk/abi/types
+import logos_sdk/base/[wipe, wipeaudit]
+import logos_sdk/cbor
+import logos_sdk/commitment
+import logos_sdk/hash
+import logos_sdk/iface/[accept, cmap, outcome, provider, surface]
+import logos_sdk/codegen/common_types
 import ../src/logos_core/authority/scopes except
   LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
   LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
@@ -1009,8 +1009,8 @@ suite "wipe: asynchronous calls (W-5)":
 
 when defined(posix):
   import std/posix except Time
-  from ../src/logos_core/pins import HashSuiteId
-  import ../src/logos_core/crypto/blake3
+  from logos_sdk/pins import HashSuiteId
+  import logos_sdk/crypto/blake3
   import ../src/logos_core/runtime/hostsup
   import ./support/[childbuild, modulehostbuild]
   from ./support/trnowner import fastConfig, Ms

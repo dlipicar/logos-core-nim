@@ -15,9 +15,9 @@ import std/[os, sets, strutils, tables, times]
 when defined(posix):
   import std/posix
 import results
-import ../cbor
-import ../iface/outcome
-import ../abi/host
+import logos_sdk/cbor
+import logos_sdk/iface/outcome
+import logos_sdk/abi/host
 import ./[artifact, configcheck, plumbing]
 import ./host_config_types
 import ../transport/io/api

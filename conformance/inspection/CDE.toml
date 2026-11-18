@@ -3,7 +3,7 @@
 
 [[item]]
 ids = ["CDE-0027"]
-reason = "Addressed to consumers. CddlDocument has no root field; the COMMITMENT layer selects rules by bound name (src/logos_core/cddl/model.nim)."
+reason = "Addressed to consumers. CddlDocument has no root field; the COMMITMENT layer selects rules by bound name (sdk/src/logos_sdk/cddl/model.nim)."
 
 [[item]]
 ids = ["CDE-0064", "CDE-0079"]

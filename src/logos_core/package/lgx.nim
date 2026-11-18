@@ -11,9 +11,9 @@
 import std/[algorithm, sets, strutils, tables, unicode]
 import results
 import zlib/zlib_api
-import ../base/[hex, nfc]
-import ../cbor/utf8
-import ../crypto/blake3
+import logos_sdk/base/[hex, nfc]
+import logos_sdk/cbor/utf8
+import logos_sdk/crypto/blake3
 import ./[errors, manifest, signing]
 
 export results, errors, manifest, signing

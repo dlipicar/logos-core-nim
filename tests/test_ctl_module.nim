@@ -11,14 +11,14 @@
 when defined(posix):
   import std/[atomics, hashes, locks, monotimes, os, sequtils, strutils, times]
   import unittest2
-  import ../src/logos_core/cbor
-  import ../src/logos_core/crypto/blake3
-  from ../src/logos_core/base/perthread import releasePerThread
-  import ../src/logos_core/iface/outcome
+  import logos_sdk/cbor
+  import logos_sdk/crypto/blake3
+  from logos_sdk/base/perthread import releasePerThread
+  import logos_sdk/iface/outcome
   from ../src/logos_core/runtime/plumbing import
     RcMethod, holdRcAnswerForTests, rcAnswerHeldForTests, releaseRcAnswerForTests
-  import ../src/logos_core/abi/host as abihost
-  import ../src/logos_core/runtime/[engine, host], ../src/logos_core/kit/rc_types
+  import logos_sdk/abi/host as abihost
+  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/rc_types
   from ../src/logos_core/durable import DurableLock, release
   from ../src/logos_core/loader/contract import LoaderInstanceId
   from ../src/logos_core/transport/io/peercred import effectiveUid

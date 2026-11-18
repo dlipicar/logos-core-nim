@@ -15,8 +15,8 @@
 when defined(posix):
   import std/[json, monotimes, os, sequtils, strutils, times]
   import unittest2
-  import ../src/logos_core/cbor
-  import ../src/logos_core/crypto/blake3
+  import logos_sdk/cbor
+  import logos_sdk/crypto/blake3
   import
     ../src/logos_core/daemon/[
       config, daemon_config_types, evkey, evstore, session, sessioninit, trust_types,
@@ -27,7 +27,7 @@ when defined(posix):
   from ../src/logos_core/authority/scopes import encode
   from ../src/logos_core/daemon/supervise import heldLocks
   from ../src/logos_core/runtime/plumbing import MaxDiagnostics
-  from ../src/logos_core/iface/accept import acceptContractSet
+  from logos_sdk/iface/accept import acceptContractSet
   from ../src/logos_core/durable import
     acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
   import

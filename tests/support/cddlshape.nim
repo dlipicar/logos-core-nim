@@ -5,7 +5,7 @@
 ## module schemas.
 
 import std/[sequtils, sets, strutils, tables]
-import ../../src/logos_core/cbor
+import logos_sdk/cbor
 import ./specdata
 
 type Shapes* = object

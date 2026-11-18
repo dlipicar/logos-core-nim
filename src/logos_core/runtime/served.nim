@@ -24,8 +24,8 @@
 
 import std/[monotimes, sets, tables]
 import results
-import ../hash/hashinput
-import ../iface/outcome
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/outcome
 import ../transport/hello
 import ../transport/io/[api, endpoint, sock]
 import ./[ports, tport]

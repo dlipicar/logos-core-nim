@@ -191,4 +191,4 @@ def main(roots):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:] or ["src", "tests"]))
+    sys.exit(main(sys.argv[1:] or ["src", "sdk/src", "tests"]))

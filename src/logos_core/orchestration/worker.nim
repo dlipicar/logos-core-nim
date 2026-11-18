@@ -31,9 +31,9 @@
 import std/[atomics, locks, monotimes, os, sets, strutils, tables, times]
 import results
 import ../durable
-import ../base/perthread
+import logos_sdk/base/perthread
 import ../runtime/bell
-import ../kit/rcclient
+import logos_sdk/kit/rcclient
 import ../loader/contract
 import ./[accounting, policy, settings]
 

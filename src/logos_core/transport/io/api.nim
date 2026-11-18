@@ -10,9 +10,9 @@
 
 import std/macros
 import results
-import ../../cbor
-import ../../hash/hashinput
-import ../../iface/outcome
+import logos_sdk/cbor
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/outcome
 import ../[envelope, framing, hello, limits, session, ticket]
 
 export results, hashinput, outcome, hello, limits, ticket, PublishErrorKind, MessageKind

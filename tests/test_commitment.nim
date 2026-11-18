@@ -1,7 +1,7 @@
 import std/[algorithm, sequtils, strutils]
 import unittest2
-import ../src/logos_core/[cbor, cddl, hash, commitment]
-import ../src/logos_core/base/hex
+import logos_sdk/[cbor, cddl, hash, commitment]
+import logos_sdk/base/hex
 import ./support/[cddlshape, specdata]
 
 proc build(source: string, ctx = pinnedContext()): SchemaModel =

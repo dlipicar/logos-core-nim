@@ -11,11 +11,11 @@
 
 import std/[algorithm, locks, os, sequtils, strutils, times]
 import unittest2
-import ../src/logos_core/cbor
+import logos_sdk/cbor
 from ../src/logos_core/runtime/callside import nil
 from ../src/logos_core/runtime/config import liveConfigBlobs
 from ../src/logos_core/runtime/plumbing import CallTicket
-import ../src/logos_core/iface/names
+import logos_sdk/iface/names
 import ./support/[loaderharness, slowdown, tunerconfig]
 from ./support/kitbuild import kitVariant
 from ./support/kitruntime import rcBinding, publishOp, publishState

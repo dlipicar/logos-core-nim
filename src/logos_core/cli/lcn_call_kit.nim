@@ -11,7 +11,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_core/codegen/[kitrt, common_mirrors]
+import logos_sdk/codegen/[kitrt, common_mirrors]
 import ./[lcn_call_types, lcn_call_configuration_types]
 
 export kitrt, common_mirrors, lcn_call_types, lcn_call_configuration_types

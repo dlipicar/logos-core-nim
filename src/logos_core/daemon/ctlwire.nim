@@ -12,7 +12,7 @@
 
 import std/[monotimes, times]
 import results
-import ../cbor
+import logos_sdk/cbor
 import ../transport/io/[peercred, sock]
 import ./ctl_types
 

@@ -1,4 +1,4 @@
-/* Free scanner for the erasure tests (src/logos_core/base/wipeaudit.nim; Tier
+/* Free scanner for the erasure tests (sdk/src/logos_sdk/base/wipeaudit.nim; Tier
  * 4b step 4b-3b plan §4.1; DECISIONS I92) [IMPL]. Test support: compiled only
  * under -d:lcnWipeAudit, which only test builds set.
  *

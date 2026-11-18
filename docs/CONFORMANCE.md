@@ -695,7 +695,7 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
 2. Only test builds set the define: `tests/config.nims` sets it for every suite, nimble's and the flake's
    alike. No flake package or app, nimble `bin` or `build_*` task sets it.
 3. Each module that holds hooks puts a marker constant in the binary under the define
-   (`src/logos_core/base/testhooks.nim`). The flake check `no-test-hooks` fails when any deployment
+   (`sdk/src/logos_sdk/base/testhooks.nim`). The flake check `no-test-hooks` fails when any deployment
    package or app of the system holds it, and requires it in a probe built with the define.
 4. A hook does nothing until the Runtime's host selects it. In an in-process suite, that is a call by the
    test.

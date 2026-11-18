@@ -1,4 +1,4 @@
-/* Erasure that the compiler cannot remove (src/logos_core/base/wipe.nim;
+/* Erasure that the compiler cannot remove (sdk/src/logos_sdk/base/wipe.nim;
  * INTERFACE l.381; Tier 4b step 4b-3b, DECISIONS G276) [IMPL]. `memset`, and
  * so Nim's `zeroMem`, may be elided when the buffer is not read again before
  * it is freed. */

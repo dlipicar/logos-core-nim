@@ -8,12 +8,12 @@
 
 import std/[algorithm, os, osproc, sequtils, strutils]
 import unittest2
-import ../src/logos_core/iface/[accept, cinput, cliteral, rmap]
-import ../src/logos_core/iface/payload
-import ../src/logos_core/cddl/emit
-import ../src/logos_core/base/hex
-import ../src/logos_core/hash/hashinput
-import ../src/logos_core/cbor
+import logos_sdk/iface/[accept, cinput, cliteral, rmap]
+import logos_sdk/iface/payload
+import logos_sdk/cddl/emit
+import logos_sdk/base/hex
+import logos_sdk/hash/hashinput
+import logos_sdk/cbor
 import ./support/[ccompile, specdata]
 from ./support/genfixtures import
   caPrimary, caSupporting, carrierPrimary, cliPrimary, ctlPrimary, daemonConfigDocument,

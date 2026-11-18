@@ -22,10 +22,10 @@
 
 import std/[atomics, locks]
 import results
-import ../abi/[checks, types]
-import ../cbor/utf8
-import ../hash/hashinput
-import ../iface/[accept, outcome, payload, surface]
+import logos_sdk/abi/[checks, types]
+import logos_sdk/cbor/utf8
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/[accept, outcome, payload, surface]
 import ./[asynccall, callside, events, hostsup, invoke, plumbing, rcevents, transported]
 
 export callside.AttemptServices

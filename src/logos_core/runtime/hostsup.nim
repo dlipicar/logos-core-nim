@@ -54,9 +54,9 @@
 
 import std/[atomics, locks]
 import results
-import ../abi/[checks, cstatus, types]
-import ../base/[perthread, testhooks]
-import ../iface/[accept, surface]
+import logos_sdk/abi/[checks, cstatus, types]
+import logos_sdk/base/[perthread, testhooks]
+import logos_sdk/iface/[accept, surface]
 import ../transport/io/api except decodeMessage
 import ./[carrier, callside, events, hostio]
 import ./plumbing except Request

@@ -4,10 +4,10 @@
 
 import std/[os, osproc, strutils]
 import unittest2
-import ../src/logos_core/abi/checks
-from ../src/logos_core/iface/cmap import logosTypesHeader
-from ../src/logos_core/codegen/hostgen import logosRuntimeHeader
-import ../src/logos_core/abi/host
+import logos_sdk/abi/checks
+from logos_sdk/iface/cmap import logosTypesHeader
+from logos_sdk/codegen/hostgen import logosRuntimeHeader
+import logos_sdk/abi/host
 from ../src/logos_core/runtime/config import
   ValueRecord, SchemaRoots, Provenance, newBlob, drop, encodeInput
 

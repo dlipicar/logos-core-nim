@@ -31,8 +31,8 @@
 
 import std/[atomics, deques, locks, tables]
 import results
-import ../abi/[checks, types]
-import ../base/perthread
+import logos_sdk/abi/[checks, types]
+import logos_sdk/base/perthread
 import ../runtime/[bell, config, realizer, sidetable]
 
 export realizer, sidetable

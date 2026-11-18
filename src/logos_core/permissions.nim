@@ -20,10 +20,10 @@
 
 import std/tables
 import results
-import ./base/perthread
-import ./cbor
-import ./codegen/nimrt
-import ./iface/accept
+import logos_sdk/base/perthread
+import logos_sdk/cbor
+import logos_sdk/codegen/nimrt
+import logos_sdk/iface/accept
 
 export results
 

@@ -24,10 +24,10 @@
 import std/strutils except fromHex
 from std/json import escapeJson
 import results
-import ../cbor
-import ../commitment
-import ../base/hex
-import ../iface/surface
+import logos_sdk/cbor
+import logos_sdk/commitment
+import logos_sdk/base/hex
+import logos_sdk/iface/surface
 
 export results
 

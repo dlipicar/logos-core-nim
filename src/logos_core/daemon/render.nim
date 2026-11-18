@@ -17,8 +17,8 @@
 
 import std/[json, strutils]
 import results
-import ../cbor
-import ../base/hex
+import logos_sdk/cbor
+import logos_sdk/base/hex
 
 export json
 

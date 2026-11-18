@@ -7,7 +7,7 @@
 
 import std/[os, osproc, strutils]
 import unittest2
-import ../../src/logos_core/iface/cmap
+import logos_sdk/iface/cmap
 
 type Mode* = tuple[cxx: bool, std, fallback: string]
 

@@ -12,7 +12,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_core/codegen/[invokert, common_mirrors]
+import logos_sdk/codegen/[invokert, common_mirrors]
 import ./metrics_provider_types
 
 export invokert, common_mirrors, metrics_provider_types

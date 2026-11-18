@@ -24,7 +24,7 @@
 
 import std/[algorithm, atomics, monotimes, os, times]
 import chronos/[asyncloop, threadsync]
-import ../../base/perthread
+import logos_sdk/base/perthread
 import ./[api, sock]
 
 when unixStream:

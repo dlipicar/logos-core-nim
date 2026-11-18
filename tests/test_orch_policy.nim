@@ -7,7 +7,7 @@
 import std/[os, strutils, tables]
 import unittest2
 import ../src/logos_core/durable
-import ../src/logos_core/iface/outcome
+import logos_sdk/iface/outcome
 import ../src/logos_core/loader/contract
 import ../src/logos_core/orchestration/[accounting, policy, settings]
 

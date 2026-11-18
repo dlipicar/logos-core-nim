@@ -21,8 +21,8 @@
 {.push raises: [], gcsafe.}
 
 import results
-import ../base/perthread
-import ../iface/outcome
+import logos_sdk/base/perthread
+import logos_sdk/iface/outcome
 import ../authority/logos_capability_authority_types
 from ../permissions import build
 import ./[authscopes, callside, invoke, plumbing]

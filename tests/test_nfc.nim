@@ -3,7 +3,7 @@
 
 import std/[json, os, strutils]
 import unittest2
-import ../src/logos_core/base/nfc
+import logos_sdk/base/nfc
 import ./support/specdata
 import ./support/testdirs
 

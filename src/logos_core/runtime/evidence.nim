@@ -35,8 +35,8 @@
 import std/tables
 from std/os import isAbsolute
 import results
-import ../cbor
-import ../hash/[hashinput, view]
+import logos_sdk/cbor
+import logos_sdk/hash/[hashinput, view]
 import ../authority/scopes
 import ../crypto/[cose, slhdsa]
 

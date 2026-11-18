@@ -9,9 +9,9 @@
 
 import std/[os, sequtils, strutils]
 import unittest2
-import ../src/logos_core/cbor
-import ../src/logos_core/base/hex
-import ../src/logos_core/crypto/blake3
+import logos_sdk/cbor
+import logos_sdk/base/hex
+import logos_sdk/crypto/blake3
 import
   ../src/logos_core/daemon/
     [compose, daemon_config_types, evkey, session, sessioninit, trust_types, trustfile]
@@ -21,7 +21,7 @@ from ../src/logos_core/runtime/authscopes import evaluateRequest, AuthorityModul
 from ../src/logos_core/permissions import PermissionSetting, HostAmbient, profileV1
 from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
 from ../src/logos_core/orchestration/settings import OrchestratorModule
-import ../src/logos_core/base/clock
+import logos_sdk/base/clock
 from ../src/logos_core/durable import release
 import ./support/[authfixture, kitbuild, schemasuite]
 

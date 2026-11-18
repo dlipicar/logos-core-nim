@@ -72,6 +72,7 @@
               ./config.nims
               ./.nph.toml
               ./src
+              ./sdk
               ./tests
               ./spec
               # test_host checks the documented schema is the one in src.
@@ -219,8 +220,8 @@
               ./conformance
               ./tests
               ./oracle
-              ./src/logos_core/pins.nim
-              ./src/logos_core/base/nfc_tables.nim
+              ./sdk/src/logos_sdk/pins.nim
+              ./sdk/src/logos_sdk/base/nfc_tables.nim
               # spec-deploydoc checks the deployment document against the claims (G309).
               ./docs/DEPLOYMENT.md
             ];
@@ -527,10 +528,10 @@
         // {
           nph = s.pkgs.runCommand "nph-check" { nativeBuildInputs = [ s.nph ]; } ''
             cd ${s.nimSources}
-            nph --check src tests logos_core.nimble config.nims
+            nph --check src sdk/src tests logos_core.nimble config.nims
             touch $out
           '';
-          # The test-hook rule (src/logos_core/base/testhooks.nim; D27 revised 2026-11-13, I89):
+          # The test-hook rule (sdk/src/logos_sdk/base/testhooks.nim; D27 revised 2026-11-13, I89):
           # no deployment output holds the marker, and a probe built with the define does, so
           # the search is not vacuous. Deployment outputs are this system's packages and apps
           # except the toolchain (nim, nph), the Android SDK and the test-suite builds and
@@ -574,14 +575,14 @@
           # No `?` inside a half-built constructor: it leaks on Nim 2.2.14 (I77).
           lint-ctor-try = s.pkgs.runCommand "lint-ctor-try" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
-            python3 ${./tools/lint/ctortry.py} src tests
+            python3 ${./tools/lint/ctortry.py} src sdk/src tests
             touch $out
           '';
           # No local first written in a branch and written again after it: that write drops
           # the branch's value undestroyed, so unwiped, on Nim 2.2.14 (I92; Nim#26725).
           lint-first-write = s.pkgs.runCommand "lint-first-write" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
-            python3 ${./tools/lint/firstwrite.py} src tests
+            python3 ${./tools/lint/firstwrite.py} src sdk/src tests
             touch $out
           '';
           # The import direction between the SDK, core, the daemon and the CLI.

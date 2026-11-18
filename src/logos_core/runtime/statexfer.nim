@@ -22,8 +22,8 @@
 import std/[os, strutils]
 import results
 import ../durable
-import ../base/wipe
-import ../crypto/blake3
+import logos_sdk/base/wipe
+import logos_sdk/crypto/blake3
 
 when defined(posix):
   import std/posix

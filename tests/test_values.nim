@@ -4,8 +4,8 @@
 
 import std/[sequtils, sets, strformat, strutils, tables]
 import unittest2
-import ../src/logos_core/[cbor, hash, commitment]
-import ../src/logos_core/base/hex
+import logos_sdk/[cbor, hash, commitment]
+import logos_sdk/base/hex
 import ./support/[cddlshape, specdata, valuevec]
 
 # Schemas and values ------------------------------------------------------------------

@@ -24,7 +24,7 @@
 
 import std/[base64, monotimes, strutils, sysrand, tables, times]
 import results
-import ./[observe, plumbing], ../kit/rc_types
+import ./[observe, plumbing], logos_sdk/kit/rc_types
 
 type
   ListKind* = enum

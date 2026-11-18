@@ -3,7 +3,7 @@
 ## 101 (packable scalar kind), and the generators that file names for large trees.
 
 import std/[sequtils, strformat]
-import ../../src/logos_core/[cbor, hash]
+import logos_sdk/[cbor, hash]
 
 proc ident*(b: byte): Digest =
   for i in 0 ..< DigestLen:

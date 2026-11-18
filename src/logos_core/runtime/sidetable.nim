@@ -27,8 +27,8 @@
 
 import std/locks
 import results
-import ../abi/types
-import ../base/testhooks
+import logos_sdk/abi/types
+import logos_sdk/base/testhooks
 
 export results
 

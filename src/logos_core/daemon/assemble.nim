@@ -17,9 +17,9 @@
 
 import std/[monotimes, os, strutils, times]
 import results
-import ../abi/host as abihost
-import ../abi/types
-import ../iface/outcome
+import logos_sdk/abi/host as abihost
+import logos_sdk/abi/types
+import logos_sdk/iface/outcome
 import ../orchestration
 import ../runtime/host
 from ../runtime/plumbing import DefaultShutdownGrace

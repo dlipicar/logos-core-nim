@@ -26,9 +26,9 @@
 
 import std/[algorithm, os, sets, strutils, tables]
 import results
-import ../cbor
+import logos_sdk/cbor
 import ../loader/contract
-from ../abi/host import AppConfigFormat
+from logos_sdk/abi/host import AppConfigFormat
 from ../runtime/authscopes import AuthorityModule
 from ../authority/scopes import rcContractInfo
 from ../runtime/host_config import parseHostConfig

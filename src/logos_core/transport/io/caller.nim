@@ -14,8 +14,8 @@
 
 import chronos/asyncloop
 import results
-import ../../cbor
-import ../../iface/[outcome, surface]
+import logos_sdk/cbor
+import logos_sdk/iface/[outcome, surface]
 import ../[boundary, envelope, hello, session]
 import ./[api, conn, peercred, sock]
 

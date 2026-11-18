@@ -5,9 +5,8 @@
 
 import std/[os, sequtils, strutils]
 import results
-import ../../src/logos_core/iface/[accept, cmap]
-import
-  ../../src/logos_core/codegen/[callsgen, cmirror, hostgen, kitgen, nimgen, sdkroot]
+import logos_sdk/iface/[accept, cmap]
+import logos_sdk/codegen/[callsgen, cmirror, hostgen, kitgen, nimgen, sdkroot]
 import ./testdirs
 
 const coreGeneratedDir = "tests/generated" ## the generated files only core's suites use
@@ -317,9 +316,9 @@ proc generatedCommonMirrors*(): Result[string, string] =
   commonMirrorModule(SdkImportRoot)
 
 const
-  commonTypesPath* = "src/logos_core/codegen/common_types.nim"
-  commonMirrorsPath* = "src/logos_core/codegen/common_mirrors.nim"
-  rcTypesPath* = "src/logos_core/kit/rc_types.nim"
+  commonTypesPath* = "sdk/src/logos_sdk/codegen/common_types.nim"
+  commonMirrorsPath* = "sdk/src/logos_sdk/codegen/common_mirrors.nim"
+  rcTypesPath* = "sdk/src/logos_sdk/kit/rc_types.nim"
   rcPrimary* = "spec/mirrors/RNT/9.3.runtime-control.cddl"
   rcSupporting* = [
     "spec/mirrors/RNT/9.2.runtime-types.cddl",

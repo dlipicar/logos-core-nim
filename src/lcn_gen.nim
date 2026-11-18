@@ -8,9 +8,9 @@
 
 import std/[os, parseopt, strutils]
 import results
-import ./logos_core/base/hex
-import ./logos_core/iface/[accept, rmap]
-import ./logos_core/codegen/[callsgen, hostgen, kitgen, nimgen, sdkroot]
+import logos_sdk/base/hex
+import logos_sdk/iface/[accept, rmap]
+import logos_sdk/codegen/[callsgen, hostgen, kitgen, nimgen, sdkroot]
 
 const usage =
   """

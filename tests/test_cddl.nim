@@ -1,7 +1,7 @@
 import std/[os, random, sequtils, strutils]
 import unittest2
-import ../src/logos_core/[cbor, cddl]
-import ../src/logos_core/base/hex
+import logos_sdk/[cbor, cddl]
+import logos_sdk/base/hex
 import ./support/specdata
 import ./support/testdirs
 

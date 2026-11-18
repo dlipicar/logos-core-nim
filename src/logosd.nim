@@ -30,7 +30,7 @@ proc say(text: string) =
 
 when defined(posix):
   import std/[locks, posix]
-  import ./logos_core/abi/host as abihost
+  import logos_sdk/abi/host as abihost
   import ./logos_core/durable
   import ./logos_core/runtime/host
   import ./logos_core/daemon/[assemble, evstore, logging, session]

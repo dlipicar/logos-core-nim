@@ -13,8 +13,8 @@
 
 import std/[os, strutils, times]
 import results
-import ../base/hex
-import ../crypto/[blake3, slhdsa]
+import logos_sdk/base/hex
+import logos_sdk/crypto/blake3, ../crypto/slhdsa
 import ../durable
 import ../runtime/evidence
 import ./trust_types

@@ -3,8 +3,8 @@
 
 import std/[json, os, strutils]
 import unittest2
-import ../src/logos_core/base/hex
-import ../src/logos_core/crypto/blake3
+import logos_sdk/base/hex
+import logos_sdk/crypto/blake3
 import ../src/logos_core/package/lgx
 import ../src/lcn_pkg
 

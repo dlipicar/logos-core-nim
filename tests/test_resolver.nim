@@ -6,8 +6,8 @@
 
 import std/[sequtils, strutils, tables]
 import unittest2
-import ../src/logos_core/[cbor, pins]
-import ../src/logos_core/crypto/[blake3, slhdsa]
+import logos_sdk/[cbor, pins]
+import logos_sdk/crypto/blake3, ../src/logos_core/crypto/slhdsa
 import ../src/logos_core/package/[lgx, resolver, signing, trust]
 
 proc b(s: string): seq[byte] =

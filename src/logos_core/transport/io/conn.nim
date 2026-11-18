@@ -37,8 +37,8 @@
 import std/[algorithm, atomics, deques, sets, tables]
 import chronos/[asyncloop, timer]
 import results
-import ../../cbor
-import ../../iface/[outcome, surface]
+import logos_sdk/cbor
+import logos_sdk/iface/[outcome, surface]
 import ../[boundary, envelope, framing, session]
 import ./[api, aggregate, sock]
 

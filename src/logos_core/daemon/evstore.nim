@@ -44,7 +44,7 @@
 import std/[locks, os, strutils, times, typedthreads]
 import results
 import ../durable
-import ../base/testhooks
+import logos_sdk/base/testhooks
 import ./evstore_types
 
 export results, evstore_types

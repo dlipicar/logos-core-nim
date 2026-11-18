@@ -3,7 +3,7 @@
 # tests recompute every root and digest from spec/mirrors/ and compare with these.
 # A spec revision that changes one is reviewed and the value re-copied here; code
 # never carries these values as literals: pins with a `code` name are generated into
-# src/logos_core/pins.nim by `spectrace pins --write`, and pins with `registry =
+# sdk/src/logos_sdk/pins.nim by `spectrace pins --write`, and pins with `registry =
 # "common"` (each a row of the COMMITMENT §5 registry) into its `CommonRegistry`.
 # A pin with a `mirror` instead of a `value` is a whole pinned document, taken from
 # that mirror (which `spectrace mirror` checks against the spec).

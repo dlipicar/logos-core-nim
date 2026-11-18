@@ -12,7 +12,7 @@
 
 import results
 import ../durable
-import ../kit/rcclient
+import logos_sdk/kit/rcclient
 import ./[accounting, lcn_orchestrator_kit, settings, worker]
 
 type OrchestratorInstance* = ref object

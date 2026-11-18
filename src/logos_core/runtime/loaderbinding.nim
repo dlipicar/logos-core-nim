@@ -16,8 +16,8 @@
 {.push raises: [].}
 
 import results
-import ../abi/types
-import ../iface/[accept, outcome, provider]
+import logos_sdk/abi/types
+import logos_sdk/iface/[accept, outcome, provider]
 import ../loader/[contract, logos_module_loader_types]
 import ./[config, realizer]
 

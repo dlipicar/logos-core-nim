@@ -21,7 +21,7 @@
 
 import std/[json, strutils]
 import results
-import ../cbor
+import logos_sdk/cbor
 import ../daemon/render
 
 export results, json

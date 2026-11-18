@@ -11,13 +11,13 @@
 import std/[algorithm, os, random, strutils, sysrand]
 import unittest2
 import results
-import ../src/logos_core/base/[wipe, wipeaudit]
-import ../src/logos_core/cbor
-import ../src/logos_core/crypto/blake3
-import ../src/logos_core/hash/hashinput
-import ../src/logos_core/iface/accept
+import logos_sdk/base/[wipe, wipeaudit]
+import logos_sdk/cbor
+import logos_sdk/crypto/blake3
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/accept
 import ../src/logos_core/transport/[boundary, envelope]
-import ../src/logos_core/abi/cstatus
+import logos_sdk/abi/cstatus
 
 let canary = urandom(32)
 let scans = wipeAuditScans()

@@ -20,11 +20,11 @@
 
 import std/[deques, sets, tables]
 import results
-import ../cbor
-import ../commitment
-import ../hash/hashinput
-import ../iface/[accept, names, outcome]
-import ../kit/rc_types, ./routing
+import logos_sdk/cbor
+import logos_sdk/commitment
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/[accept, names, outcome]
+import logos_sdk/kit/rc_types, ./routing
 
 export rc_types, routing
 

@@ -15,7 +15,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_core/codegen/[kitrt, common_mirrors]
+import logos_sdk/codegen/[kitrt, common_mirrors]
 import ./meter_module_types
 
 export kitrt, common_mirrors, meter_module_types

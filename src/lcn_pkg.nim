@@ -14,9 +14,9 @@
 
 import std/[algorithm, json, os, parseopt, strutils]
 import results
-import ./logos_core/base/hex
-import ./logos_core/cbor
-import ./logos_core/crypto/blake3
+import logos_sdk/base/hex
+import logos_sdk/cbor
+import logos_sdk/crypto/blake3
 import ./logos_core/package/lgx
 
 const usage = """

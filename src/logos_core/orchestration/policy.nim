@@ -28,7 +28,7 @@
 {.push raises: [], gcsafe.}
 
 import results
-import ../iface/outcome
+import logos_sdk/iface/outcome
 
 export results
 

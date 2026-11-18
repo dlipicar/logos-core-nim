@@ -6,13 +6,13 @@
 
 import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads, unicode]
 import unittest2
-import ../src/logos_core/cbor
-import ../src/logos_core/abi/[host, types]
-import ../src/logos_core/crypto/blake3
-import ../src/logos_core/iface/outcome
+import logos_sdk/cbor
+import logos_sdk/abi/[host, types]
+import logos_sdk/crypto/blake3
+import logos_sdk/iface/outcome
 import
   ../src/logos_core/runtime/[engine, host, host_config, host_config_types],
-  ../src/logos_core/kit/rc_types
+  logos_sdk/kit/rc_types
 from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
 from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
 from ../src/logos_core/runtime/plumbing import

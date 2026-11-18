@@ -7,8 +7,8 @@
 
 import std/[algorithm, os, posix, sequtils, strutils]
 import unittest2
-import ../src/logos_core/[cbor, commitment, hash]
-import ../src/logos_core/iface/accept
+import logos_sdk/[cbor, commitment, hash]
+import logos_sdk/iface/accept
 import ../src/logos_core/crypto/[cose, slhdsa]
 import ../src/logos_core/authority/scopes
 import ../src/logos_core/runtime/evidence

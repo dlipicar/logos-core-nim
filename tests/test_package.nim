@@ -3,10 +3,10 @@
 
 import std/[algorithm, json, os, sequtils, strutils]
 import unittest2
-import ../src/logos_core/base/hex
-import ../src/logos_core/[cbor, commitment, hash, pins]
-import ../src/logos_core/iface/accept
-import ../src/logos_core/cddl/syntax
+import logos_sdk/base/hex
+import logos_sdk/[cbor, commitment, hash, pins]
+import logos_sdk/iface/accept
+import logos_sdk/cddl/syntax
 import ../src/logos_core/package/[semver, signing]
 import ./support/specdata
 
@@ -830,16 +830,20 @@ suite "pkg.ownership: shared type ownership (PM §16)":
     # Contract identity and the commitment, hash and transport rules are defined
     # without the package layer: no module of theirs imports it.
     # Relative to the repository root, where the suites run (readRepoFile).
-    let root = repoPath("src" / "logos_core")
+    let roots = [repoPath("src" / "logos_core"), repoPath("sdk/src/logos_sdk")]
     var checked = 0
     for layer in ["iface", "transport", "commitment", "hash", "cbor", "cddl"]:
-      var files = @[root / layer & ".nim"]
-      for f in walkDirRec(root / layer):
-        files.add(f)
+      var files: seq[string]
+      for root in roots:
+        files.add(root / layer & ".nim")
+        for f in walkDirRec(root / layer):
+          files.add(f)
+      var scanned = 0
       for f in files:
         if not f.endsWith(".nim") or not fileExists(f):
           continue
         inc checked
+        inc scanned
         for line in readFile(f).splitLines:
           let l = line.strip
           if l.startsWith("import ") or l.startsWith("from ") or l.startsWith(
@@ -847,4 +851,6 @@ suite "pkg.ownership: shared type ownership (PM §16)":
           ):
             checkpoint f & ": " & l
             check "package" notin l
+      checkpoint layer
+      check scanned > 0
     check checked > 20

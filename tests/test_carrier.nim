@@ -13,10 +13,10 @@
 import std/sequtils
 import unittest2
 import results
-import ../src/logos_core/abi/checks
-import ../src/logos_core/cbor
-import ../src/logos_core/hash/hashinput
-import ../src/logos_core/iface/outcome
+import logos_sdk/abi/checks
+import logos_sdk/cbor
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/outcome
 import ../src/logos_core/runtime/[carrier, hostio]
 import ../src/logos_core/transport/io/api except decodeMessage
 

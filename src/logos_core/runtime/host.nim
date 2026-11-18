@@ -30,15 +30,15 @@ import std/[locks, os, sets]
 when defined(posix):
   import std/posix
 import results
-import ../abi/[host, types]
-import ../iface/outcome
+import logos_sdk/abi/[host, types]
+import logos_sdk/iface/outcome
 import ./[callside, engine, evidence, host_config, native, plumbing]
 from ../crypto/cose import MaxCoseKidBytes
 from ../authority/facts import SharedFacts, newSharedFacts, freeSharedFacts
 from ../authority/provider import
   AuthorityWiring, caStaticRegistration, unwireAuthority, wireAuthority
 from ./authscopes import AuthorityModule
-import ../base/testhooks
+import logos_sdk/base/testhooks
 
 export host, outcome.ErrorCode, plumbing.TerminationHook, CallRecordSink, Diagnostic
 

@@ -42,10 +42,10 @@
 
 import std/[os, strutils, sysrand, tables]
 import results
-import ../abi/[checks, types]
-import ../cbor/utf8
-import ../iface/[accept, names, outcome]
-import ../pins
+import logos_sdk/abi/[checks, types]
+import logos_sdk/cbor/utf8
+import logos_sdk/iface/[accept, names, outcome]
+import logos_sdk/pins
 import ./[artifact, config, native]
 
 export artifact, native

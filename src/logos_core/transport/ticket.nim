@@ -7,7 +7,7 @@
 
 import std/[sysrand, tables]
 import results
-import ../crypto/blake3
+import logos_sdk/crypto/blake3
 
 export results
 

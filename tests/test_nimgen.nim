@@ -4,11 +4,11 @@
 
 import std/[atomics, os, osproc, strutils, typedthreads]
 import unittest2
-import ../src/logos_core/[cbor, hash, pins]
-import ../src/logos_core/iface/surface
-import ../src/logos_core/base/perthread
-import ../src/logos_core/codegen/nimgen
-from ../src/logos_core/iface/outcome as oc import nil
+import logos_sdk/[cbor, hash, pins]
+import logos_sdk/iface/surface
+import logos_sdk/base/perthread
+import logos_sdk/codegen/nimgen
+from logos_sdk/iface/outcome as oc import nil
 import ../src/logos_core/authority/[policy_types, logos_capability_authority_types]
 import ./support/[specdata, genfixtures]
 import ./support/testdirs

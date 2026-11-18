@@ -2,9 +2,9 @@
 
 import std/[algorithm, sequtils, strutils]
 import unittest2
-import ../src/logos_core/[cbor, hash, commitment]
-import ../src/logos_core/iface/accept
-import ../src/logos_core/base/hex
+import logos_sdk/[cbor, hash, commitment]
+import logos_sdk/iface/accept
+import logos_sdk/base/hex
 import ./support/specdata
 
 proc accepted(
@@ -573,7 +573,7 @@ suite "iface: dynamic schema limits (INTERFACE §5.3)":
 
 # Call surfaces and logos.schema ------------------------------------------------------
 
-import ../src/logos_core/iface/surface
+import logos_sdk/iface/surface
 
 proc encoded(v: CborValue): seq[byte] =
   encodeCbor(v)
@@ -782,7 +782,7 @@ suite "iface: schema commitments and logos.schema (INTERFACE §5.1)":
 
 # Payloads and outcomes ---------------------------------------------------------------
 
-import ../src/logos_core/iface/payload
+import logos_sdk/iface/payload
 
 proc bytesOf(h: string): seq[byte] =
   hexBytes(h)

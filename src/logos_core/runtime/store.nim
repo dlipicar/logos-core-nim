@@ -23,11 +23,11 @@
 
 import std/[os, sets, strutils, tables]
 import results
-import ../cbor
-import ../cbor/utf8
-import ../crypto/blake3
+import logos_sdk/cbor
+import logos_sdk/cbor/utf8
+import logos_sdk/crypto/blake3
 import ../durable
-import ../codegen/common_types
+import logos_sdk/codegen/common_types
 import ./[plumbing, store_types]
 
 export results

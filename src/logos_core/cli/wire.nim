@@ -13,7 +13,7 @@
 
 import std/[monotimes, times]
 import results
-import ../cbor
+import logos_sdk/cbor
 import ../transport/io/sock
 import ../daemon/ctlwire
 import ./[cli_types, fdpass]

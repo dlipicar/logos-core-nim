@@ -229,7 +229,7 @@ So is `lcn-pkg`, which builds, signs, packs and checks packages (`lcn-pkg --help
 nix run .#lcn-pkg -- verify example.lgx --trust:trust.json
 ```
 
-The generated Nim modules (`src/logos_core/codegen/common_types.nim`, `tests/generated/`) are
+The generated Nim modules (`sdk/src/logos_sdk/codegen/common_types.nim`, `tests/generated/`) are
 committed, and a test fails when they are stale. To rewrite them:
 
 ```bash
@@ -296,15 +296,15 @@ session layout, the daemon-config fields, the default policy and every command a
 | Path | What |
 |---|---|
 | `src/logos_core/` | The library. BLAKE3 and slhdsa-c (FIPS 205) C sources are vendored under `crypto/blake3/` and `crypto/slhdsa/` (`tools/update-blake3.sh`, `tools/update-slhdsa.sh`). |
-| `src/logos_core/iface/` | INTERFACE: acceptance, names, the C type mapping and its reverse (`clex`, `cliteral`, `cparse`, `cinput`, `creject`, `rmap`), call surfaces and the provider call-surface descriptor, payloads, outcomes. |
-| `src/logos_core/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
-| `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
+| `sdk/src/logos_sdk/iface/` | INTERFACE: acceptance, names, the C type mapping and its reverse (`clex`, `cliteral`, `cparse`, `cinput`, `creject`, `rmap`), call surfaces and the provider call-surface descriptor, payloads, outcomes. |
+| `sdk/src/logos_sdk/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
+| `sdk/src/logos_sdk/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
 | `src/logos_core/runtime/`, `src/liblogos_runtime.nim` | The Runtime: the Loader, the engine (instances, lifecycle, Runtime Control, routes, events, asynchronous calls), transported routes (`routing`, `tport`, `sessionauth`, `served`, `ports`), the host configuration and the Host Embedding API; the `liblogos_runtime` exports. |
 | `src/logos_core/daemon/`, `src/logosd.nim`, `src/logosctl.nim` | logosd and logosctl: `daemon-config.v1` and its checks, the session and trust file, the composition, the `logosctl` instance and its socket protocol, the call-evidence store and its export, the shell's output. |
-| `src/logos_core/orchestration/`, `src/logos_core/orchestration.nim` | The reference orchestration module `lcn_orchestrator`: its configuration (`config.cddl`), decisions (`policy.nim`), retry accounting (`accounting.nim`) and worker; `src/logos_core/kit/rcclient.nim` is the typed Runtime Control client it calls through. |
+| `src/logos_core/orchestration/`, `src/logos_core/orchestration.nim` | The reference orchestration module `lcn_orchestrator`: its configuration (`config.cddl`), decisions (`policy.nim`), retry accounting (`accounting.nim`) and worker; `sdk/src/logos_sdk/kit/rcclient.nim` is the typed Runtime Control client it calls through. |
 | `src/logos_core/transport/` | TRANSPORT: envelope codec, framing, Hello, tickets, sessions, the schema boundary; `io/`, the unix-stream I/O thread. |
 | `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; catalog and inspection records (`records.nim`) and the sans-I/O dependency resolver (`resolver.nim`); the `lcn-pkg` CLI. |
-| `src/logos_core/crypto/slhdsa.nim`, `src/logos_core/base/nfc.nim` | SLH-DSA-SHA2-192s over slhdsa-c (pure and internal functions only); Unicode NFC for LGX paths. |
+| `src/logos_core/crypto/slhdsa.nim`, `sdk/src/logos_sdk/base/nfc.nim` | SLH-DSA-SHA2-192s over slhdsa-c (pure and internal functions only); Unicode NFC for LGX paths. |
 | `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. `tests/generated/` is `lcn-gen` output; `tests/kit/` holds three modules written with the kit, which `test_kit_dylib` also builds as shared libraries, and the C harness that calls their typed functions directly or through the typed call helpers (`test_calls`). `tests/host/` drives `liblogos_runtime` from C (`test_host_dylib`). |
 | `spec/mirrors/`, `spec/mirrors.toml` | Verbatim copies of the spec blocks the code and tests are built from. |
 | `spec/pins.toml` | Every identifier, root and digest the specs pin, with the section it comes from. |

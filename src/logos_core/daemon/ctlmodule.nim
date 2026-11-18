@@ -38,11 +38,11 @@
 
 import std/[atomics, locks, monotimes, os, times]
 import results
-import ../abi/[checks, types]
-import ../base/[perthread, testhooks]
-import ../iface/outcome
-from ../kit/rcclient import checkBinding, `$`
-import ../runtime/bell, ../kit/rc_types
+import logos_sdk/abi/[checks, types]
+import logos_sdk/base/[perthread, testhooks]
+import logos_sdk/iface/outcome
+from logos_sdk/kit/rcclient import checkBinding, `$`
+import ../runtime/bell, logos_sdk/kit/rc_types
 import ../transport/io/[peercred, sock]
 import ./[ctlwire, logging, logosctl_kit]
 

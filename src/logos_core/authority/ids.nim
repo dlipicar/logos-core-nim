@@ -10,7 +10,7 @@
 
 import std/sysrand
 import results
-import ../base/hex
+import logos_sdk/base/hex
 
 export results
 

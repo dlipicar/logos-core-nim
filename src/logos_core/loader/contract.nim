@@ -11,9 +11,9 @@
 
 import std/tables
 import results
-import ../commitment
-import ../iface/[accept, names]
-import ../base/perthread
+import logos_sdk/commitment
+import logos_sdk/iface/[accept, names]
+import logos_sdk/base/perthread
 import ./logos_module_loader_types
 
 const

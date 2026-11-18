@@ -19,9 +19,9 @@
 
 import std/[dynlib, sets, strutils, tables]
 import results
-import ../abi/[checks, types]
-import ../cbor/utf8
-import ../iface/[accept, cmap, names, provider]
+import logos_sdk/abi/[checks, types]
+import logos_sdk/cbor/utf8
+import logos_sdk/iface/[accept, cmap, names, provider]
 
 export results
 

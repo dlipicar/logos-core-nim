@@ -11,7 +11,7 @@
 
 import results
 import ../permissions
-import ../kit/rc_types, ./store_types
+import logos_sdk/kit/rc_types, ./store_types
 
 export results
 

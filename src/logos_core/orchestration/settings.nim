@@ -19,7 +19,7 @@
 import std/[sets, tables]
 import results
 import ../loader/contract
-import ../kit/rc_types
+import logos_sdk/kit/rc_types
 import ./[lcn_orchestrator_kit, policy]
 
 export results, lcn_orchestrator_configuration_types, policy

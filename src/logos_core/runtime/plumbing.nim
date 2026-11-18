@@ -11,10 +11,10 @@
 
 import std/[atomics, locks, sysrand, times, typedthreads]
 import results
-import ../abi/types
-import ../base/[clock, testhooks]
-import ../hash/hashinput
-import ../iface/outcome
+import logos_sdk/abi/types
+import logos_sdk/base/[clock, testhooks]
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/outcome
 import ../authority/facts
 import ./[authz, bell, callaudit, configcheck, loaderbinding, records, realizer, routes]
 import ./routing

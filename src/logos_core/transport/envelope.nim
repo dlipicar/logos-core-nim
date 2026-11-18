@@ -16,12 +16,12 @@
 {.push raises: [].}
 
 import results
-import ../base/perthread
-import ../cbor
-import ../commitment
-import ../hash/hashinput
-import ../iface/[outcome, surface]
-import ../pins
+import logos_sdk/base/perthread
+import logos_sdk/cbor
+import logos_sdk/commitment
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/[outcome, surface]
+import logos_sdk/pins
 import ./[framing, protocddl]
 
 export results, outcome, hashinput

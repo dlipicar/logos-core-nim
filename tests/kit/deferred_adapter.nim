@@ -11,8 +11,8 @@
 
 {.used.}
 import std/[atomics, os]
-import ../../src/logos_core/abi/types
-import ../../src/logos_core/iface/outcome
+import logos_sdk/abi/types
+import logos_sdk/iface/outcome
 import ./meter_impl
 
 type DeferredMode* = enum

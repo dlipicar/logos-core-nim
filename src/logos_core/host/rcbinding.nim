@@ -30,9 +30,9 @@
 
 import std/[atomics, locks, tables]
 import results
-import ../abi/[checks, cstatus, types]
-import ../base/perthread
-import ../hash/hashinput
+import logos_sdk/abi/[checks, cstatus, types]
+import logos_sdk/base/perthread
+import logos_sdk/hash/hashinput
 import ../runtime/[entryframe, hostio]
 import ../transport/io/api except decodeMessage
 import ./[consumer, endpoint, selected, state]

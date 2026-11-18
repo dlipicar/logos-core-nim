@@ -14,8 +14,8 @@
 
 import std/[sets, strutils, tables]
 import results
-import ../cbor
-import ../crypto/blake3
+import logos_sdk/cbor
+import logos_sdk/crypto/blake3
 import ./[facts, policy_types, scopes]
 
 export results, facts, scopes

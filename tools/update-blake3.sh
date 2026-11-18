@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Vendors the official BLAKE3 C implementation into src/logos_core/crypto/blake3/.
+# Vendors the official BLAKE3 C implementation into sdk/src/logos_sdk/crypto/blake3/.
 # Usage: tools/update-blake3.sh [<tag> <commit>]
 set -euo pipefail
 cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 TAG="${1:-1.8.7}"
 COMMIT="${2:-f3149ec5bb5449af877ba20377a11008ff499fa2}"
-DEST=src/logos_core/crypto/blake3
+DEST=sdk/src/logos_sdk/crypto/blake3
 RAW="https://raw.githubusercontent.com/BLAKE3-team/BLAKE3/$COMMIT/c"
 
 actual=$(git ls-remote https://github.com/BLAKE3-team/BLAKE3 "refs/tags/$TAG^{}" "refs/tags/$TAG" |

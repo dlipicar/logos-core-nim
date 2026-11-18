@@ -21,7 +21,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_core/codegen/[kitrt, common_mirrors]
+import logos_sdk/codegen/[kitrt, common_mirrors]
 import ./logos_capability_authority_types
 
 export kitrt, common_mirrors, logos_capability_authority_types

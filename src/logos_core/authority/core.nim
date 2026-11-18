@@ -28,7 +28,7 @@
 import
   std/[algorithm, atomics, deques, heapqueue, locks, monotimes, sets, tables, times]
 import results
-import ../base/clock
+import logos_sdk/base/clock
 import ../runtime/bell
 import ./[audit, cursor, facts, grants, ids, persist, policy, scopes, state_types]
 

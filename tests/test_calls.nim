@@ -9,7 +9,7 @@
 
 import std/[strutils, typedthreads]
 import unittest2
-from ../src/logos_core/codegen/callrt import arenaBlocks, failArenaAllocation
+from logos_sdk/codegen/callrt import arenaBlocks, failArenaAllocation
 import ./support/[testroute, typedharness]
 import ./generated/[meter_module_calls, sensor_module_calls, shapes_module_calls]
 from ./generated/metrics_provider_calls import nil

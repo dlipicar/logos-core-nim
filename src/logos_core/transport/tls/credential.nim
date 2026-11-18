@@ -8,7 +8,7 @@
 {.push raises: [].}
 
 import results
-import ../../base/wipe
+import logos_sdk/base/wipe
 import ./boring
 
 export results

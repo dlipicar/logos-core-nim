@@ -8,10 +8,10 @@
 ## under test: the values come from the model, the verdicts from the schema.
 
 import std/[macros, strutils, tables]
-import ../../src/logos_core/cbor
-import ../../src/logos_core/[commitment, hash]
-import ../../src/logos_core/codegen/nimrt
-import ../../src/logos_core/iface/accept
+import logos_sdk/cbor
+import logos_sdk/[commitment, hash]
+import logos_sdk/codegen/nimrt
+import logos_sdk/iface/accept
 
 export cbor, nimrt
 

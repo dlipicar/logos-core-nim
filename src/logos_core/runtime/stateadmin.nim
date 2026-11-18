@@ -18,7 +18,7 @@
 
 import std/[algorithm, os, strutils, sysrand, tables]
 import results
-import ../iface/outcome
+import logos_sdk/iface/outcome
 import ./[statexfer, store]
 
 export results, outcome

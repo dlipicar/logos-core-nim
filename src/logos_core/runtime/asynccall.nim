@@ -58,8 +58,8 @@
 import std/[atomics, locks, monotimes, times]
 from std/os import sleep
 import results
-import ../abi/[checks, types]
-import ../iface/[outcome, payload]
+import logos_sdk/abi/[checks, types]
+import logos_sdk/iface/[outcome, payload]
 import ./[callside, hostcall, hostsup, invoke, plumbing]
 from ../transport/io/api import
   IoCommand, IoCommandKind, CallOutcome, SubmitResult, wipe

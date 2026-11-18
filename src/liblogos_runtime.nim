@@ -25,9 +25,9 @@ when not defined(noSignalHandler):
 
 {.push raises: [].}
 
-import ./logos_core/base/libvisibility
-import ./logos_core/base/hostsignals # before anything that imports chronos
-import ./logos_core/abi/[host, types]
+import logos_sdk/base/libvisibility
+import logos_sdk/base/hostsignals # before anything that imports chronos
+import logos_sdk/abi/[host, types]
 import ./logos_core/runtime/host as hostApi
 
 proc logosRuntimeCreate(

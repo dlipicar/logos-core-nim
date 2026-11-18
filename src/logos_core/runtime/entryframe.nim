@@ -10,9 +10,9 @@
 {.push raises: [], gcsafe.}
 
 import results
-import ../abi/[cstatus, types]
-import ../cbor/utf8
-import ../iface/outcome
+import logos_sdk/abi/[cstatus, types]
+import logos_sdk/cbor/utf8
+import logos_sdk/iface/outcome
 
 const
   TextCapacity* = 160 ## instance ids are at most 128 bytes; tokens are shorter

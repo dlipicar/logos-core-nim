@@ -14,11 +14,11 @@
 import std/[atomics, monotimes, os, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
-import ../src/logos_core/abi/types
-import ../src/logos_core/iface/[accept, names, outcome]
-import ../src/logos_core/crypto/blake3
+import logos_sdk/abi/types
+import logos_sdk/iface/[accept, names, outcome]
+import logos_sdk/crypto/blake3
 import ../src/logos_core/package/manifest
-import ../src/logos_core/pins
+import logos_sdk/pins
 import ./support/[kitbuild, kitruntime, slowdown, withoutloader]
 import ./kit/meter_impl
 

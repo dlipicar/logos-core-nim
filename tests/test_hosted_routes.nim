@@ -29,16 +29,16 @@ when defined(posix):
   import std/posix except Time
   import unittest2
   import ../src/logos_core/runtime/[engine, hostsup]
-  import ../src/logos_core/abi/types
-  import ../src/logos_core/base/clock
-  from ../src/logos_core/base/wipe import ChannelsMove, MarkedUnsupported
-  import ../src/logos_core/cbor
-  import ../src/logos_core/commitment
-  import ../src/logos_core/crypto/blake3
-  import ../src/logos_core/iface/[accept, cmap, outcome, provider, surface]
-  import ../src/logos_core/codegen/common_types
+  import logos_sdk/abi/types
+  import logos_sdk/base/clock
+  from logos_sdk/base/wipe import ChannelsMove, MarkedUnsupported
+  import logos_sdk/cbor
+  import logos_sdk/commitment
+  import logos_sdk/crypto/blake3
+  import logos_sdk/iface/[accept, cmap, outcome, provider, surface]
+  import logos_sdk/codegen/common_types
   import ../src/logos_core/loader/contract
-  import ../src/logos_core/pins
+  import logos_sdk/pins
   import ../src/logos_core/authority/scopes except
     LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
     LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,

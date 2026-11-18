@@ -39,9 +39,9 @@
 
 import std/[atomics, locks, monotimes, tables, times]
 import results
-import ../abi/types
-import ../hash/hashinput
-import ../iface/[outcome, payload]
+import logos_sdk/abi/types
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/[outcome, payload]
 import ../transport/boundary
 from ../transport/io/api import IoCommand, IoCommandKind, SubmitResult, TooLargeAction
 import ./[bell, callside, plumbing]

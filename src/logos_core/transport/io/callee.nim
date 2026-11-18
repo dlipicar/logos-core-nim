@@ -19,8 +19,8 @@
 import std/[algorithm, sets]
 import chronos/asyncloop
 import results
-import ../../cbor
-import ../../iface/[outcome, surface]
+import logos_sdk/cbor
+import logos_sdk/iface/[outcome, surface]
 import ../[access, boundary, envelope, session]
 import ./[api, conn, endpoint, peercred, sock]
 

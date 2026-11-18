@@ -11,7 +11,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_core/codegen/[kitrt, common_mirrors]
+import logos_sdk/codegen/[kitrt, common_mirrors]
 import ./flaky_module_types
 
 export kitrt, common_mirrors, flaky_module_types

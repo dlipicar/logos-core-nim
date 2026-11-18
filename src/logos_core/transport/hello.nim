@@ -6,7 +6,7 @@
 {.push raises: [].}
 
 import results
-import ../cbor
+import logos_sdk/cbor
 import ./[envelope, framing, limits, ticket]
 
 export results, envelope, limits, ticket

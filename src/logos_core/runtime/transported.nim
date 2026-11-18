@@ -45,11 +45,11 @@
 
 import std/[deques, tables]
 import results
-import ../base/wipe
-import ../iface/outcome
+import logos_sdk/base/wipe
+import logos_sdk/iface/outcome
 import ../transport/ticket
 from ../transport/io/api import ConnId, ConnectFailure, CloseCause, CallOutcome
-import ../abi/types
+import logos_sdk/abi/types
 import ./[callside, invoke, plumbing]
 
 export results

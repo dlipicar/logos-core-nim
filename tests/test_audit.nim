@@ -9,19 +9,19 @@
 import std/[atomics, monotimes, os, sequtils, sets, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
-import ../src/logos_core/abi/types
-import ../src/logos_core/cbor
-import ../src/logos_core/commitment
-import ../src/logos_core/hash
-import ../src/logos_core/iface/[accept, cmap, outcome, provider, surface]
-import ../src/logos_core/codegen/nimrt
-import ../src/logos_core/codegen/common_types
+import logos_sdk/abi/types
+import logos_sdk/cbor
+import logos_sdk/commitment
+import logos_sdk/hash
+import logos_sdk/iface/[accept, cmap, outcome, provider, surface]
+import logos_sdk/codegen/nimrt
+import logos_sdk/codegen/common_types
 import ../src/logos_core/authority/scopes except
   LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
   LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
   LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
   LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
-from ../src/logos_core/kit/rc_types import rcSchema
+from logos_sdk/kit/rc_types import rcSchema
 import ./support/[fakeca, kitbuild, kitruntime]
 import ./kit/[deferred_adapter, meter_impl]
 import ./generated/meter_module_calls

@@ -13,8 +13,8 @@
 
 import std/[atomics, sets]
 import results
-import ../../src/logos_core/abi/[checks, types]
-import ../../src/logos_core/iface/outcome
+import logos_sdk/abi/[checks, types]
+import logos_sdk/iface/outcome
 import ../../src/logos_core/runtime/[callside, invoke, plumbing]
 import ../../src/logos_core/loader/[provider, logos_module_loader_types]
 from ./kitruntime import armed, rcBinding, publishOp, publishState

@@ -4,8 +4,10 @@ when withDir(thisDir(), system.fileExists("nimble.paths")):
   include "nimble.paths"
 # end Nimble config
 
-# Generated code imports this library by package path (`logos_core/...`).
+# Generated code and core import the SDK by package path (`logos_sdk/...`), and generated code
+# in core imports core by its own (`logos_core/...`).
 switch("path", thisDir() & "/src")
+switch("path", thisDir() & "/sdk/src")
 
 switch("styleCheck", "usages")
 switch("styleCheck", "error")

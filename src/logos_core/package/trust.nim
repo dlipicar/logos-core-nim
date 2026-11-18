@@ -9,7 +9,7 @@
 
 import std/[sets, tables]
 import results
-import ../base/hex
+import logos_sdk/base/hex
 import ../crypto/slhdsa
 
 export results, slhdsa

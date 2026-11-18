@@ -26,9 +26,9 @@
 
 import std/[atomics, locks, strutils]
 import results
-import ../abi/types
-import ../base/perthread
-import ../iface/outcome
+import logos_sdk/abi/types
+import logos_sdk/base/perthread
+import logos_sdk/iface/outcome
 import ./[callside, events, plumbing]
 
 when defined(lcnTestHooks):

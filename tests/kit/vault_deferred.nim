@@ -10,7 +10,7 @@
 
 {.used.}
 import std/[atomics, os]
-import ../../src/logos_core/abi/types
+import logos_sdk/abi/types
 import ./vault_impl
 
 const MaxHeld = 8

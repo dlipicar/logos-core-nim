@@ -33,12 +33,12 @@
 
 import std/[locks, tables]
 import results
-import ../abi/checks
+import logos_sdk/abi/checks
 import ../runtime/[config, native]
 from ../runtime/callside import barrier, push, pop, Frame
-import ../hash/hashinput
+import logos_sdk/hash/hashinput
 import ./[contract, core, hosted, logos_module_loader_kit]
-import ../base/testhooks
+import logos_sdk/base/testhooks
 
 export core, native, contract
 

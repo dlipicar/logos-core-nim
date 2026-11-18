@@ -14,7 +14,7 @@
 {.push raises: [].}
 
 import results
-import ../../base/hex
+import logos_sdk/base/hex
 import ../ticket
 import ./sock
 

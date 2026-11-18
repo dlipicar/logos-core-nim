@@ -21,8 +21,8 @@
 {.push raises: [], gcsafe.}
 
 import results
-import ../abi/checks
-import ../iface/outcome
+import logos_sdk/abi/checks
+import logos_sdk/iface/outcome
 import ../runtime/[hostsup, realizer, sidetable]
 import ./core
 

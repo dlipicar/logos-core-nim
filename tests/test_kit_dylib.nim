@@ -16,9 +16,8 @@
 
 import std/[dynlib, os, typedthreads]
 import unittest2
-import ../src/logos_core/iface/[accept, provider]
-from ../src/logos_core/kit/rc_types import
-  LogosNSModuleConfigurationConfigurationInput, encode
+import logos_sdk/iface/[accept, provider]
+from logos_sdk/kit/rc_types import LogosNSModuleConfigurationConfigurationInput, encode
 import ./support/[kitbuild, kitruntime, specdata, testroute, typedharness, tunerconfig]
 import ./support/testdirs
 import ./generated/[meter_module_types, sensor_module_types, tuner_module_types]

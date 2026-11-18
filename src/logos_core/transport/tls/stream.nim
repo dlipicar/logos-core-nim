@@ -17,7 +17,7 @@ import std/deques
 import chronos
 import results
 import ../framing
-import ../../base/[testhooks, wipe]
+import logos_sdk/base/[testhooks, wipe]
 import ./[boring, engine, params, signing]
 
 export chronos, results, engine, params, signing

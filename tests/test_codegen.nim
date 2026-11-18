@@ -4,13 +4,13 @@
 
 import std/[algorithm, os, osproc, sequtils, strutils]
 import unittest2
-import ../src/logos_core/[hash, pins]
-import ../src/logos_core/iface/accept
-import ../src/logos_core/base/hex
+import logos_sdk/[hash, pins]
+import logos_sdk/iface/accept
+import logos_sdk/base/hex
 import ./support/[ccompile, specdata]
 import ./support/testdirs
-from ../src/logos_core/codegen/hostgen import logosRuntimeHeader
-from ../src/logos_core/abi/host import AppConfigFormat
+from logos_sdk/codegen/hostgen import logosRuntimeHeader
+from logos_sdk/abi/host import AppConfigFormat
 
 # Accepting sets ------------------------------------------------------------------
 

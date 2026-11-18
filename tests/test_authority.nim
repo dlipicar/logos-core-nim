@@ -6,14 +6,14 @@
 
 import std/[atomics, monotimes, os, sets, strutils, tables, times]
 import unittest2
-import ../src/logos_core/cbor
+import logos_sdk/cbor
 import
   ../src/logos_core/authority/
     [audit, core, cursor, ids, persist, policy, policy_types, state_types]
-import ../src/logos_core/iface/accept
-import ../src/logos_core/commitment
-import ../src/logos_core/iface/names
-from ../src/logos_core/kit/rc_types import rcDocuments
+import logos_sdk/iface/accept
+import logos_sdk/commitment
+import logos_sdk/iface/names
+from logos_sdk/kit/rc_types import rcDocuments
 import ./support/[authfixture, cafake, kitbuild, permfixture]
 
 let

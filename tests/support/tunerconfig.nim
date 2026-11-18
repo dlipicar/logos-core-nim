@@ -5,10 +5,10 @@
 
 import std/os
 import results
-import ../../src/logos_core/cbor
-import ../../src/logos_core/commitment
-import ../../src/logos_core/iface/accept
-import ../../src/logos_core/runtime/configcheck, ../../src/logos_core/kit/rc_types
+import logos_sdk/cbor
+import logos_sdk/commitment
+import logos_sdk/iface/accept
+import ../../src/logos_core/runtime/configcheck, logos_sdk/kit/rc_types
 import ./testdirs
 
 export results

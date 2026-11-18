@@ -10,7 +10,7 @@
 ##   nim c -r tools/evidence_keygen.nim /abs/path/evidence.key
 
 import std/os
-import ../src/logos_core/base/hex
+import logos_sdk/base/hex
 import ../src/logos_core/runtime/evidence
 
 proc main(): int =

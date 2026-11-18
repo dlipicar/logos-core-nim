@@ -36,10 +36,24 @@ class PathMap:
         return path if best is None else best[1] + path[len(best[0]) :]
 
     def forward(self, path):
-        return self._map(path, self.moves)
+        """Where `path` is now, following every later move."""
+        for _ in range(8):
+            moved = self._map(path, self.moves)
+            if moved == path:
+                break
+            path = moved
+        return path
 
-    def back(self, path):
-        return self._map(path, [(new, old) for old, new in self.moves])
+    def history(self, path):
+        """`path`, and every place it was before."""
+        places = [path]
+        pairs = [(new, old) for old, new in self.moves]
+        for _ in range(8):
+            before = self._map(places[-1], pairs)
+            if before == places[-1]:
+                break
+            places.append(before)
+        return places
 
 
 def in_sdk_sources(path, package):
@@ -67,8 +81,7 @@ def respell(root, importer, module, paths):
     if current not in (None, "?"):
         return spelled(root, importer, module, current, False, paths.package)
     name = module if module.endswith(".nim") else module + ".nim"
-    old_importer = paths.back(importer)
-    bases = [os.path.dirname(old_importer)]
+    bases = [os.path.dirname(place) for place in paths.history(importer)]
     if not module.startswith("."):
         bases += list(layers.SEARCH_PATHS)
     for base in bases:

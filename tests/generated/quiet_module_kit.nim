@@ -11,7 +11,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_core/codegen/[kitrt, common_mirrors]
+import logos_sdk/codegen/[kitrt, common_mirrors]
 import ./[quiet_module_types, quiet_module_configuration_types]
 
 export kitrt, common_mirrors, quiet_module_types, quiet_module_configuration_types

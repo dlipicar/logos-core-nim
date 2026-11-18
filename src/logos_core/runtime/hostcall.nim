@@ -33,9 +33,9 @@
 import std/atomics
 from std/os import sleep
 import results
-import ../abi/[checks, types]
-import ../hash/hashinput
-import ../iface/outcome
+import logos_sdk/abi/[checks, types]
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/outcome
 import ./[callside, events, hostsup, invoke, plumbing]
 from ./tport import hostedContext
 

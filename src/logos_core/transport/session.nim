@@ -9,7 +9,7 @@
 
 import std/[algorithm, sets, tables]
 import results
-import ../cbor
+import logos_sdk/cbor
 import ./[boundary, envelope, framing, limits]
 
 export results, boundary, envelope, framing, limits

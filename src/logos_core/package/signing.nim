@@ -15,12 +15,12 @@
 
 import std/strutils
 import results
-import ../base/[hex, perthread]
-import ../cbor
-import ../cddl/syntax
-import ../commitment
-import ../hash
-import ../iface/accept
+import logos_sdk/base/[hex, perthread]
+import logos_sdk/cbor
+import logos_sdk/cddl/syntax
+import logos_sdk/commitment
+import logos_sdk/hash
+import logos_sdk/iface/accept
 import ../crypto/[cose, slhdsa]
 import ./[errors, manifest, trust]
 

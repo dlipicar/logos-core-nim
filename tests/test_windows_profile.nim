@@ -18,9 +18,9 @@ when defined(windows):
   import unittest2
   import ../src/logos_core/runtime/engine
   import ../src/logos_core/runtime/hostsup
-  import ../src/logos_core/crypto/blake3
+  import logos_sdk/crypto/blake3
   import ../src/logos_core/loader/logos_module_loader_types
-  import ../src/logos_core/pins
+  import logos_sdk/pins
   import ../src/logos_core/transport/io/[endpoint, sock]
   from ../src/logos_core/runtime/artifact import ArtifactRecord
   from ../src/logos_core/runtime/routing import RoutingRule, rmLocalTransport

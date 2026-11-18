@@ -15,7 +15,7 @@
 
 import std/[os, posix, strutils]
 import results
-import ../../src/logos_core/cbor
+import logos_sdk/cbor
 import ../../src/logos_core/transport/io/sock
 import ./[ctl, trnowner]
 

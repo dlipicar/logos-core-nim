@@ -13,7 +13,7 @@ when defined(posix):
   import std/[os, posix, sequtils, strutils]
   import unittest2
   import results
-  import ../src/logos_core/iface/outcome
+  import logos_sdk/iface/outcome
   import ../src/logos_core/runtime/[carrier, hostio, hostsup]
   import ../src/logos_core/transport/io/endpoint
   from ../src/logos_core/transport/io/sock import fdClose, socketPair

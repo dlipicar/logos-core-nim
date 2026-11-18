@@ -42,7 +42,7 @@
 
 import std/locks
 import results
-import ../cbor
+import logos_sdk/cbor
 import ../authority/scopes
 from ../transport/envelope import PayloadCommitment, wipe
 

@@ -13,9 +13,9 @@
 
 import std/[monotimes, os, osproc, sequtils, strutils, times]
 import unittest2
-import ../src/logos_core/abi/host
-import ../src/logos_core/crypto/blake3
-import ../src/logos_core/iface/outcome
+import logos_sdk/abi/host
+import logos_sdk/crypto/blake3
+import logos_sdk/iface/outcome
 import ../src/logos_core/runtime/[host_config_types, store_types]
 import ./support/[hostbuild, kitbuild, tunerconfig, withoutloader]
 when defined(posix):

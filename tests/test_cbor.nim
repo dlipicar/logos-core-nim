@@ -1,8 +1,8 @@
 import std/[json, os, random, strutils]
 import unittest2
-import ../src/logos_core/cbor
-import ../src/logos_core/base/hex
-import ../src/logos_core/crypto/blake3
+import logos_sdk/cbor
+import logos_sdk/base/hex
+import logos_sdk/crypto/blake3
 import ./support/specdata
 import ./support/testdirs
 

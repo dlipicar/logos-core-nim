@@ -501,7 +501,7 @@ def section_text(path: Path, section: str) -> str:
     return "\n".join(out)
 
 
-PINS_NIM = Path("src/logos_core/pins.nim")
+PINS_NIM = Path("sdk/src/logos_sdk/pins.nim")
 
 
 def pins_nim(pins: dict, root: Path) -> str:
@@ -548,7 +548,7 @@ def pins_nim(pins: dict, root: Path) -> str:
 
 def cmd_pins(args) -> int:
     """Every pinned value must still appear in the section it is pinned from, and
-    src/logos_core/pins.nim must be generated from the current pins."""
+    sdk/src/logos_sdk/pins.nim must be generated from the current pins."""
     root, specs = Path(args.root), Path(args.specs)
     pins = load_toml(root / "spec" / "pins.toml")
     bad = 0

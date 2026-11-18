@@ -24,8 +24,8 @@
 {.push raises: [], gcsafe.}
 
 import results
-import ../hash/hashinput
-import ../iface/outcome
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/outcome
 import ../transport/io/api
 from ../transport/envelope import PayloadCommitment
 import ./[carrier, hostnum]

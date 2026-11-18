@@ -24,8 +24,8 @@
 
 import std/os
 import results
-import ../cbor
-import ../crypto/blake3
+import logos_sdk/cbor
+import logos_sdk/crypto/blake3
 import ../durable
 import ./[session, trust_types]
 

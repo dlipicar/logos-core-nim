@@ -9,7 +9,7 @@
 when not defined(lcnTestHooks):
   {.error: "testsigner.nim holds the TLS key in the process: test builds only (D27)".}
 
-import ../../base/testhooks
+import logos_sdk/base/testhooks
 import ./[credential, signing]
 
 export signing

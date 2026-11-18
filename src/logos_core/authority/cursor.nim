@@ -17,8 +17,8 @@
 
 import std/[base64, strutils]
 import results
-import ../cbor
-import ../crypto/blake3
+import logos_sdk/cbor
+import logos_sdk/crypto/blake3
 import ./scopes
 
 export results

@@ -12,7 +12,7 @@
 {.push raises: [].}
 
 import results
-import ../../base/[testhooks, wipe]
+import logos_sdk/base/[testhooks, wipe]
 import ./[boring, params, signing]
 
 export results, signing

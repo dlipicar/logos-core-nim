@@ -9,10 +9,10 @@
 
 import std/sets
 import results
-import ../cbor
-import ../commitment
-import ../hash
-import ../iface/[outcome, payload, surface]
+import logos_sdk/cbor
+import logos_sdk/commitment
+import logos_sdk/hash
+import logos_sdk/iface/[outcome, payload, surface]
 import ./envelope
 
 export results

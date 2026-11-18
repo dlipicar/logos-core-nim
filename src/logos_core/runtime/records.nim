@@ -17,12 +17,12 @@
 
 import std/sets
 import results
-import ../cbor
-import ../cbor/utf8
-import ../hash/hashinput
-import ../iface/names
+import logos_sdk/cbor
+import logos_sdk/cbor/utf8
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/names
 import ../package/manifest
-import ../pins
+import logos_sdk/pins
 import ./realizer
 
 export hashinput.Digest, manifest.RequestedPermission, realizer.Strategy

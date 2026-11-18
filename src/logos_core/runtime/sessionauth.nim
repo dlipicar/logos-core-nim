@@ -14,7 +14,7 @@
 {.push raises: [].}
 
 import results
-import ../hash/hashinput
+import logos_sdk/hash/hashinput
 import ../transport/[hello, ticket]
 import ./routes
 

@@ -13,7 +13,7 @@
 
 import std/[atomics, locks, os]
 import results
-from ../base/logtext import oneLine
+from logos_sdk/base/logtext import oneLine
 
 type
   LogLevel* = enum

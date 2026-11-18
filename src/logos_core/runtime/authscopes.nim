@@ -43,10 +43,10 @@
 
 import std/[strutils, tables]
 import results
-import ../cbor
-import ../codegen/common_types
+import logos_sdk/cbor
+import logos_sdk/codegen/common_types
 import ../authority/scopes
-from ../kit/rc_types import LogosNSRuntimeControlRouteAccess, decode
+from logos_sdk/kit/rc_types import LogosNSRuntimeControlRouteAccess, decode
 import ./authz
 
 type

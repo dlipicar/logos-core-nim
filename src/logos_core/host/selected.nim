@@ -13,10 +13,10 @@
 
 import std/tables
 import results
-import ../cbor
-import ../base/perthread
-import ../hash/hashinput
-import ../iface/[accept, surface]
+import logos_sdk/cbor
+import logos_sdk/base/perthread
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/[accept, surface]
 import ../runtime/callcheck
 
 export callcheck

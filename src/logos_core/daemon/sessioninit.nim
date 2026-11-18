@@ -20,8 +20,8 @@
 
 import std/[os, sysrand]
 import results
-import ../base/hex
-import ../cbor
+import logos_sdk/base/hex
+import logos_sdk/cbor
 import ../durable
 import ../runtime/store
 import ./[compose, config, evkey, session, trustfile]

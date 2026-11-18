@@ -17,14 +17,14 @@ when defined(posix):
   import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
   import unittest2
   import ../src/logos_core/runtime/engine
-  import ../src/logos_core/abi/types
-  import ../src/logos_core/cbor
-  import ../src/logos_core/cbor/decode
-  import ../src/logos_core/commitment
-  import ../src/logos_core/crypto/blake3
-  import ../src/logos_core/iface/[accept, outcome, surface]
-  import ../src/logos_core/codegen/common_types
-  import ../src/logos_core/pins
+  import logos_sdk/abi/types
+  import logos_sdk/cbor
+  import logos_sdk/cbor/decode
+  import logos_sdk/commitment
+  import logos_sdk/crypto/blake3
+  import logos_sdk/iface/[accept, outcome, surface]
+  import logos_sdk/codegen/common_types
+  import logos_sdk/pins
   from ../src/logos_core/transport/io/api import defaultTransportConfig
   import ./support/[invariance, kitbuild, kitruntime, modulehostbuild, shortdir]
   import ./support/testdirs

@@ -22,19 +22,19 @@ when defined(posix):
   import unittest2
   import ../src/logos_core/runtime/engine
   import ../src/logos_core/runtime/[hostlock, hostsup, store]
-  import ../src/logos_core/abi/types
-  import ../src/logos_core/cbor
-  import ../src/logos_core/commitment
-  import ../src/logos_core/crypto/blake3
-  import ../src/logos_core/iface/[accept, outcome, surface]
-  import ../src/logos_core/codegen/common_types
+  import logos_sdk/abi/types
+  import logos_sdk/cbor
+  import logos_sdk/commitment
+  import logos_sdk/crypto/blake3
+  import logos_sdk/iface/[accept, outcome, surface]
+  import logos_sdk/codegen/common_types
   import ../src/logos_core/authority/scopes except
     LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
     LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
     LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
     LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
   import ../src/logos_core/loader/contract
-  import ../src/logos_core/pins
+  import logos_sdk/pins
   import
     ./support/[
       fakeca, kitbuild, kitruntime, modulehostbuild, shortdir, tunerconfig,

@@ -14,14 +14,14 @@
 
 import std/[atomics, locks, tables]
 import results
-import ../abi/[checks, types]
-import ../base/perthread
-import ../cbor/[decode, utf8]
-import ../hash/hashinput
-import ../iface/[accept, outcome, payload, surface]
+import logos_sdk/abi/[checks, types]
+import logos_sdk/base/perthread
+import logos_sdk/cbor/[decode, utf8]
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/[accept, outcome, payload, surface]
 import ../transport/boundary
 import ./[callcheck, plumbing]
-import ../abi/cstatus
+import logos_sdk/abi/cstatus
 import ./entryframe
 
 export callcheck, cstatus, entryframe

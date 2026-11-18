@@ -19,7 +19,7 @@
 
 {.push raises: [], gcsafe.}
 
-import ../base/testhooks
+import logos_sdk/base/testhooks
 
 testHooksMarker("orchestration")
 

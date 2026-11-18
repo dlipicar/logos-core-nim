@@ -6,12 +6,12 @@
 
 import std/[os, osproc, strutils, typedthreads]
 import unittest2
-import ../src/logos_core/cbor
-import ../src/logos_core/iface/[accept, provider]
-from ../src/logos_core/codegen/callrt import
+import logos_sdk/cbor
+import logos_sdk/iface/[accept, provider]
+from logos_sdk/codegen/callrt import
   arenaBlocks, failArenaAllocation, CallArena, text, release
-from ../src/logos_core/codegen/common_mirrors import commonMirrorLayout
-from ../src/logos_core/codegen/sdkroot import SdkImportRoot
+from logos_sdk/codegen/common_mirrors import commonMirrorLayout
+from logos_sdk/codegen/sdkroot import SdkImportRoot
 import ./support/[kitruntime, specdata, typedharness, tunerconfig]
 import ./support/testdirs
 import ./generated/meter_module_kit
@@ -20,8 +20,8 @@ from ./generated/shapes_module_kit import shapesModuleLayout
 from ./generated/tuner_module_kit import nil
 from ./generated/quiet_module_kit import nil
 import ./kit/[meter_impl, sensor_impl, shapes_impl, tuner_impl, quiet_impl, beacon_impl]
-import ../src/logos_core/pins
-from ../src/logos_core/codegen/kitgen import
+import logos_sdk/pins
+from logos_sdk/codegen/kitgen import
   KitConfiguration, KitOptions, configurationSet, kitModule
 
 {.compile("kit/typed_linked.c", "-Werror=incompatible-pointer-types").}

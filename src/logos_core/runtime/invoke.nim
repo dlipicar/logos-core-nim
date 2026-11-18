@@ -35,9 +35,9 @@
 
 import std/[atomics, locks]
 import results
-import ../cbor
-import ../abi/[checks, types]
-import ../iface/[accept, outcome, payload, surface]
+import logos_sdk/cbor
+import logos_sdk/abi/[checks, types]
+import logos_sdk/iface/[accept, outcome, payload, surface]
 import ../transport/boundary
 import ./[callside, events, plumbing]
 

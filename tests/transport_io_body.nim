@@ -9,10 +9,10 @@
 import std/[atomics, base64, monotimes, os, posix, sequtils, strutils, times]
 import unittest2
 import results
-import ../src/logos_core/cbor
-import ../src/logos_core/base/hex
-import ../src/logos_core/commitment
-import ../src/logos_core/iface/[accept, surface]
+import logos_sdk/cbor
+import logos_sdk/base/hex
+import logos_sdk/commitment
+import logos_sdk/iface/[accept, surface]
 import ../src/logos_core/transport/[access, boundary, envelope, framing, session]
 import ../src/logos_core/transport/io/sock
 import ./support/[ctl, peerbuild, peerproc, shortdir, specdata, trnowner]

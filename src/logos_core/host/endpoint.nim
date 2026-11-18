@@ -46,11 +46,11 @@
 
 import std/[atomics, locks, os, strutils]
 import results
-import ../cbor
-import ../abi/[checks, cstatus, types]
-import ../base/[perthread, wipe]
-import ../hash/hashinput
-import ../iface/[accept, outcome, surface]
+import logos_sdk/cbor
+import logos_sdk/abi/[checks, cstatus, types]
+import logos_sdk/base/[perthread, wipe]
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
 import ../transport/io/[loop, sock]
 import ../runtime/[carrier, entryframe, hostio, native]

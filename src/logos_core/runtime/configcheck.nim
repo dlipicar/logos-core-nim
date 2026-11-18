@@ -15,12 +15,12 @@
 
 import std/tables
 import results
-import ../base/perthread
-import ../cbor
-import ../codegen/nimrt
-import ../commitment
-import ../iface/[accept, payload]
-import ./config, ../kit/rc_types
+import logos_sdk/base/perthread
+import logos_sdk/cbor
+import logos_sdk/codegen/nimrt
+import logos_sdk/commitment
+import logos_sdk/iface/[accept, payload]
+import ./config, logos_sdk/kit/rc_types
 
 export config
 

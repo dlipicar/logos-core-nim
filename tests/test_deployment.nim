@@ -15,15 +15,15 @@
 when defined(posix):
   import std/[json, locks, monotimes, os, sequtils, strutils, times]
   import unittest2
-  import ../src/logos_core/crypto/blake3
+  import logos_sdk/crypto/blake3
   import ../src/logos_core/permissions
-  import ../src/logos_core/runtime/[engine, host], ../src/logos_core/kit/rc_types
+  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/rc_types
   from ../src/logos_core/runtime/plumbing import
     DefaultStartupDeadline, DefaultLoaderStartupDeadline, DefaultStopDeadline,
     DefaultShutdownGrace, DefaultApplyDeadline, MaxDiagnostics
   from ../src/logos_core/runtime/routing import RouteMode
   from ../src/logos_core/runtime/realizer import LoaderErrorCode, lecUnsupportedStrategy
-  from ../src/logos_core/iface/accept import acceptContractSet
+  from logos_sdk/iface/accept import acceptContractSet
   from ../src/logos_core/durable import DurableLock, release
   from ../src/logos_core/daemon/config import
     DefaultStoreQueue, DefaultStoreRecords, DefaultStoreAgeDays

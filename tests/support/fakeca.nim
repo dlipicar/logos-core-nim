@@ -24,10 +24,10 @@
 
 import std/[atomics, locks, os, strutils, tables]
 import results
-import ../../src/logos_core/cbor
-import ../../src/logos_core/abi/types
-import ../../src/logos_core/base/clock
-import ../../src/logos_core/iface/outcome
+import logos_sdk/cbor
+import logos_sdk/abi/types
+import logos_sdk/base/clock
+import logos_sdk/iface/outcome
 import ../../src/logos_core/authority/[provider, scopes]
 import ../../src/logos_core/runtime/engine
 from ../../src/logos_core/runtime/authscopes import AuthorityModule

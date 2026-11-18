@@ -3,7 +3,7 @@
 
 import std/[os, parsecfg, streams, strutils]
 import results
-import ../../src/logos_core/base/hex
+import logos_sdk/base/hex
 
 proc repoPath*(rel: string): string =
   rel

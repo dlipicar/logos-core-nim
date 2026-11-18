@@ -6,7 +6,7 @@ import std/[os, sets, strutils, tables]
 when defined(posix):
   import std/posix
 import unittest2
-import ../src/logos_core/cbor
+import logos_sdk/cbor
 import ../src/logos_core/durable
 import ../src/logos_core/runtime/[plumbing, store, store_types]
 import ./support/kitbuild

@@ -11,9 +11,9 @@
 
 import std/[atomics, monotimes, os, tables, times]
 import results
-import ../../src/logos_core/cbor
-import ../../src/logos_core/hash/hashinput
-import ../../src/logos_core/iface/[accept, surface]
+import logos_sdk/cbor
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/[accept, surface]
 import ../../src/logos_core/transport/[hello, ticket]
 import ../../src/logos_core/transport/io
 import ./[slowdown, specdata]

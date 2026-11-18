@@ -16,8 +16,8 @@
 
 import std/[sets, tables]
 import results
-import ../commitment
-import ../iface/[names, surface]
+import logos_sdk/commitment
+import logos_sdk/iface/[names, surface]
 import ./[boundary, hello]
 
 export boundary, hello

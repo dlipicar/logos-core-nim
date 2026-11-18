@@ -14,7 +14,7 @@
 
 import std/[algorithm, sequtils, sets, tables]
 import results
-import ../cbor
+import logos_sdk/cbor
 import ./[errors, lgx, manifest, records, semver, signing, trust]
 
 export results, errors, records

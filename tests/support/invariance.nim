@@ -12,7 +12,7 @@
 
 import std/strutils
 import results
-import ../../src/logos_core/cbor
+import logos_sdk/cbor
 import ../generated/[meter_module_types, shapes_module_types]
 import ./slowdown
 

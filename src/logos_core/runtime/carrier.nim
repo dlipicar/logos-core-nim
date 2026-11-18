@@ -27,8 +27,8 @@
 
 import std/locks
 import results
-import ../abi/checks
-import ../iface/outcome
+import logos_sdk/abi/checks
+import logos_sdk/iface/outcome
 import ../transport/framing
 import ./carrier_types
 

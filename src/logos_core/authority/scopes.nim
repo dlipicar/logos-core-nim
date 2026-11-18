@@ -28,12 +28,12 @@
 
 import std/[algorithm, strutils, tables]
 import results
-import ../cbor
-import ../commitment
-import ../iface/[accept, names]
+import logos_sdk/cbor
+import logos_sdk/commitment
+import logos_sdk/iface/[accept, names]
 import ./logos_capability_authority_types
-from ../kit/rc_types import rcDocuments
-import ../base/perthread
+from logos_sdk/kit/rc_types import rcDocuments
+import logos_sdk/base/perthread
 import ../permissions
 
 export results, logos_capability_authority_types, permissions

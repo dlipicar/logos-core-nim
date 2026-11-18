@@ -12,13 +12,13 @@ import std/[algorithm, atomics, monotimes, os, sequtils, strutils, times, typedt
 import unittest2
 import ../src/logos_core/runtime/engine
 import ../src/logos_core/runtime/artifact
-import ../src/logos_core/abi/types
-import ../src/logos_core/cbor
-import ../src/logos_core/codegen/nimrt
-import ../src/logos_core/commitment
-import ../src/logos_core/iface/[accept, outcome, provider, surface]
-import ../src/logos_core/codegen/common_types
-import ../src/logos_core/pins
+import logos_sdk/abi/types
+import logos_sdk/cbor
+import logos_sdk/codegen/nimrt
+import logos_sdk/commitment
+import logos_sdk/iface/[accept, outcome, provider, surface]
+import logos_sdk/codegen/common_types
+import logos_sdk/pins
 import ./support/[kitbuild, kitruntime]
 import ./kit/meter_impl
 import ./generated/meter_module_calls

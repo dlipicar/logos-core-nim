@@ -46,11 +46,11 @@ proc show(text: string) =
 
 when defined(posix):
   import std/[monotimes, posix, times]
-  import ./logos_core/base/hex
-  import ./logos_core/cbor
+  import logos_sdk/base/hex
+  import logos_sdk/cbor
   import ./logos_core/durable
-  import ./logos_core/iface/outcome
-  import ./logos_core/kit/rc_types, ./logos_core/runtime/stateadmin
+  import logos_sdk/iface/outcome
+  import logos_sdk/kit/rc_types, ./logos_core/runtime/stateadmin
   import
     ./logos_core/daemon/[
       compose, ctlwire, evexport, evkey, evstore, render, session, sessioninit,

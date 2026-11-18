@@ -19,7 +19,7 @@ import ../src/logos_core/runtime/[configcheck, engine]
 from ../src/logos_core/runtime/rcevents import setRcDrainDelayForTests
 import ../src/logos_core/orchestration
 import ../src/logos_core/orchestration/[accounting, testhooks]
-import ../src/logos_core/kit/rcclient
+import logos_sdk/kit/rcclient
 import ../src/logos_core/loader/contract
 import ./support/[fakeca, permfixture, slowdown, tunerconfig]
 import ./kit/[flaky_impl, tuner_impl]
@@ -374,7 +374,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
 
   test "[RUN-0021] [RUN-0022] it requests only through its binding, as the origin of what it starts; the role confers nothing; it never calls the Loader":
     let src = repo / "src" / "logos_core"
-    var files = @[src / "kit" / "rcclient.nim"]
+    var files = @[repo / "sdk" / "src" / "logos_sdk" / "kit" / "rcclient.nim"]
     for f in walkDir(src / "orchestration"):
       if f.path.endsWith(".nim"):
         files.add(f.path)

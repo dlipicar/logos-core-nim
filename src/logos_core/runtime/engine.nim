@@ -111,13 +111,13 @@ from std/os import
   sleep, `/`, createDir, dirExists, fileExists, setFilePermissions, FilePermission,
   walkDir, PathComponent
 import results
-import ../abi/types
-import ../base/[perthread, testhooks, wipe]
-from ../base/logtext import oneLine, supplied
-import ../cbor/[decode, utf8]
-import ../commitment
+import logos_sdk/abi/types
+import logos_sdk/base/[perthread, testhooks, wipe]
+from logos_sdk/base/logtext import oneLine, supplied
+import logos_sdk/cbor/[decode, utf8]
+import logos_sdk/commitment
 from ../durable import syncDir
-import ../iface/[accept, outcome, surface]
+import logos_sdk/iface/[accept, outcome, surface]
 import ../loader/contract
 from ../loader/provider import
   LoaderWiring, wireLoader, unwireLoader, loaderStaticRegistration

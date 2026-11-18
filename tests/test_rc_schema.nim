@@ -6,7 +6,7 @@
 
 import std/strutils
 import unittest2
-import ../src/logos_core/kit/rc_types
+import logos_sdk/kit/rc_types
 import ./support/schemasuite
 
 const Rules = [

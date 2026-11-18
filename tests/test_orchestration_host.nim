@@ -18,9 +18,9 @@ import unittest2
 import ../src/logos_core/runtime/[engine, host, store]
 import ../src/logos_core/runtime/host_config_types except
   LcnAuthorityPolicy, LcnAuthorityPolicyAuditMap
-import ../src/logos_core/abi/types
-import ../src/logos_core/cbor
-import ../src/logos_core/iface/outcome
+import logos_sdk/abi/types
+import logos_sdk/cbor
+import logos_sdk/iface/outcome
 import ../src/logos_core/orchestration
 import ../src/logos_core/orchestration/[accounting, testhooks]
 import ./support/authfixture except

@@ -21,7 +21,7 @@
 
 import std/[atomics, locks, posix]
 import results
-import ../iface/outcome
+import logos_sdk/iface/outcome
 import ../runtime/carrier
 
 export carrier

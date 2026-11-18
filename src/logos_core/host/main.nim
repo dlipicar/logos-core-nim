@@ -34,12 +34,12 @@
 
 import std/[atomics, posix]
 import results
-import ../abi/[checks, types]
-import ../base/[perthread, wipe]
-import ../iface/accept
+import logos_sdk/abi/[checks, types]
+import logos_sdk/base/[perthread, wipe]
+import logos_sdk/iface/accept
 import ../runtime/realizer
 when defined(lcnWipeAudit):
-  import ../base/wipeaudit
+  import logos_sdk/base/wipeaudit
 import ../transport/io/sock
 import ./[consumer, endpoint, rcbinding, state]
 

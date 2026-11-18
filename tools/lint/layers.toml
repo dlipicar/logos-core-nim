@@ -8,8 +8,6 @@ strict = false
 # What generated kits import, and what it must never reach.
 kit_facade = "sdk/src/logos_sdk/kit.nim"
 kit_forbidden = [
-  "src/logos_core/kit/rcclient.nim",
-  "src/logos_core/kit/rc_types.nim",
   "sdk/src/logos_sdk/kit/rcclient.nim",
   "sdk/src/logos_sdk/kit/rc_types.nim",
 ]
@@ -48,22 +46,13 @@ daemon_allowlist = [
 testing_importers = ["tools/regen_nim.nim"]
 
 [layers]
-sdk_base = [
-  "src/logos_core/abi/",
-  "src/logos_core/base/",
-  "src/logos_core/cbor/",
-  "src/logos_core/cddl/",
-  "src/logos_core/commitment/",
-  "src/logos_core/hash/",
-  "src/logos_core/iface/",
-  "src/logos_core/cbor.nim",
-  "src/logos_core/cddl.nim",
-  "src/logos_core/commitment.nim",
-  "src/logos_core/hash.nim",
-  "src/logos_core/pins.nim",
-  "src/logos_core/crypto/blake3.nim",
+sdk_base = ["sdk/src/logos_sdk/"]
+sdk_binding = [
+  "sdk/src/logos_sdk.nim",
+  "sdk/src/logos_sdk/kit.nim",
+  "sdk/src/logos_sdk/codegen/",
+  "sdk/src/logos_sdk/kit/",
 ]
-sdk_binding = ["src/logos_core/codegen/", "src/logos_core/kit/"]
 sdk_testing = ["sdk/src/logos_sdk/testing/"]
 sdk_tests = ["sdk/tests/"]
 daemon_cli = [

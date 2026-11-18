@@ -1,3 +1,7 @@
+[package]
+name = "logos_sdk"
+root = "sdk/src"
+
 # What the restructure moved, oldest first. `rewrite_imports.py` reads this; an entry ending in `/`
 # covers a directory. Decision rows and old plans keep the paths they were written with: this map
 # is how to read them.
@@ -9,3 +13,67 @@ to = "src/logos_core/codegen/common_types.nim"
 [[move]]
 from = "src/logos_core/runtime/rc_types.nim"
 to = "src/logos_core/kit/rc_types.nim"
+
+[[move]]
+from = "src/logos_core/abi/"
+to = "sdk/src/logos_sdk/abi/"
+
+[[move]]
+from = "src/logos_core/base/"
+to = "sdk/src/logos_sdk/base/"
+
+[[move]]
+from = "src/logos_core/cbor/"
+to = "sdk/src/logos_sdk/cbor/"
+
+[[move]]
+from = "src/logos_core/cddl/"
+to = "sdk/src/logos_sdk/cddl/"
+
+[[move]]
+from = "src/logos_core/codegen/"
+to = "sdk/src/logos_sdk/codegen/"
+
+[[move]]
+from = "src/logos_core/commitment/"
+to = "sdk/src/logos_sdk/commitment/"
+
+[[move]]
+from = "src/logos_core/hash/"
+to = "sdk/src/logos_sdk/hash/"
+
+[[move]]
+from = "src/logos_core/iface/"
+to = "sdk/src/logos_sdk/iface/"
+
+[[move]]
+from = "src/logos_core/kit/"
+to = "sdk/src/logos_sdk/kit/"
+
+[[move]]
+from = "src/logos_core/cbor.nim"
+to = "sdk/src/logos_sdk/cbor.nim"
+
+[[move]]
+from = "src/logos_core/cddl.nim"
+to = "sdk/src/logos_sdk/cddl.nim"
+
+[[move]]
+from = "src/logos_core/commitment.nim"
+to = "sdk/src/logos_sdk/commitment.nim"
+
+[[move]]
+from = "src/logos_core/hash.nim"
+to = "sdk/src/logos_sdk/hash.nim"
+
+[[move]]
+from = "src/logos_core/pins.nim"
+to = "sdk/src/logos_sdk/pins.nim"
+
+[[move]]
+from = "src/logos_core/crypto/blake3.nim"
+to = "sdk/src/logos_sdk/crypto/blake3.nim"
+
+[[move]]
+from = "src/logos_core/crypto/blake3/"
+to = "sdk/src/logos_sdk/crypto/blake3/"

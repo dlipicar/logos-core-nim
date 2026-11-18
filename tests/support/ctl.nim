@@ -5,7 +5,7 @@
 
 import std/posix
 import results
-import ../../src/logos_core/cbor
+import logos_sdk/cbor
 import ../../src/logos_core/transport/framing
 
 proc waitReadable*(fd: cint, timeoutMs: int): bool =

@@ -15,7 +15,7 @@
 {.push raises: [].}
 
 import results
-import ../cbor
+import logos_sdk/cbor
 import ./slhdsa
 
 export results

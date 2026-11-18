@@ -16,8 +16,8 @@
 
 import std/[strutils, tables]
 import results
-import ../cbor
-import ../commitment
+import logos_sdk/cbor
+import logos_sdk/commitment
 
 export results
 

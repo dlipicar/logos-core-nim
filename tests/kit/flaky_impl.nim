@@ -18,7 +18,7 @@
 {.used.} # imported by the tests for the C symbols it exports
 import std/[atomics, monotimes, os, strutils]
 import ../generated/flaky_module_kit
-import ../../src/logos_core/kit/rcclient
+import logos_sdk/kit/rcclient
 
 const
   FlakySlots* = 16

@@ -28,12 +28,12 @@
 
 import std/atomics
 import results
-import ../cbor
-import ../crypto/blake3
-import ../hash/hashinput
+import logos_sdk/cbor
+import logos_sdk/crypto/blake3
+import logos_sdk/hash/hashinput
 import ../transport/envelope
 import ../transport/framing
-import ../kit/rc_types
+import logos_sdk/kit/rc_types
 
 export results, hashinput.Digest
 

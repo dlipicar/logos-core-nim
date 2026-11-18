@@ -24,8 +24,8 @@ when defined(posix):
   else:
     proc cMkdtemp(tmpl: cstring): cstring {.importc: "mkdtemp", header: "<stdlib.h>".}
 import results
-import ../crypto/blake3
-import ../pins
+import logos_sdk/crypto/blake3
+import logos_sdk/pins
 
 export results
 

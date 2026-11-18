@@ -6,7 +6,7 @@
 {.push raises: [], gcsafe.}
 
 import results
-import ../../src/logos_core/cbor
+import logos_sdk/cbor
 import ../../src/logos_core/permissions
 
 export permissions

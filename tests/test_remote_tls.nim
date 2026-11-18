@@ -9,7 +9,7 @@
 import std/[sequtils, strutils, sysrand]
 import unittest2
 import results
-import ../src/logos_core/base/[wipe, wipeaudit]
+import logos_sdk/base/[wipe, wipeaudit]
 import ../src/logos_core/transport/tls/boring
 import ./support/[slowdown, tls_fixtures]
 
