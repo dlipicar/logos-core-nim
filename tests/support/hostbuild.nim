@@ -6,7 +6,7 @@
 ## only `logos_runtime.h`.
 
 import std/[os, osproc, strutils]
-import ./[kitbuild, testdirs]
+import logos_sdk/testing/[kitbuild, testdirs]
 
 const
   root = currentSourcePath().parentDir.parentDir.parentDir

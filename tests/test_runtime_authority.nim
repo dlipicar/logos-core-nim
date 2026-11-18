@@ -26,9 +26,9 @@ import ../src/logos_core/authority/scopes except
   LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
   LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
   LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
-import ./support/[fakeca, kitbuild, kitruntime, withoutloader]
-import ./kit/meter_impl
-import ./generated/meter_module_calls
+import ./support/[fakeca, withoutloader], logos_sdk/testing/[kitbuild, kitruntime]
+import logos_sdk/testing/fixtures/meter_impl
+import logos_sdk/testing/generated/meter_module_calls
 
 let
   repo = currentSourcePath().parentDir.parentDir

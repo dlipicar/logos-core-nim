@@ -44,11 +44,13 @@ when defined(posix):
     LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
     LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
     LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
-  import ./support/[fakeca, kitbuild, kitruntime, modulehostbuild, shortdir]
-  import ./kit/[bulk_impl, meter_impl]
   import
-    ./generated/
-      [bulk_module_calls, bulk_module_types, meter_module_calls, meter_module_types]
+    ./support/[fakeca, modulehostbuild, shortdir],
+    logos_sdk/testing/[kitbuild, kitruntime]
+  import ./kit/bulk_impl, logos_sdk/testing/fixtures/meter_impl
+  import
+    ./generated/[bulk_module_calls, bulk_module_types],
+    logos_sdk/testing/generated/[meter_module_calls, meter_module_types]
   import ./support/trnowner except Provider, now, binding, issue, live, release, gate
 
   let

@@ -1,4 +1,4 @@
-"""Writes tests/vectors/cddl/vectors.cbor: the cdCDDLe §12 self-vector set (G16).
+"""Writes sdk/tests/vectors/cddl/vectors.cbor: the cdCDDLe §12 self-vector set (G16).
 
 The container is a deterministic-CBOR map {"vectors": [record, ...]} whose
 records follow cdCDDLe §12 exactly. Error classes are the coarse G16 ones:
@@ -26,7 +26,7 @@ import cdcddle  # noqa: E402
 import dcbor  # noqa: E402
 
 ROOT = Path(".")
-OUT = ROOT / "tests/vectors/cddl/vectors.cbor"
+OUT = ROOT / "sdk/tests/vectors/cddl/vectors.cbor"
 
 
 # Model builders (cdCDDLe §8) ---------------------------------------------------

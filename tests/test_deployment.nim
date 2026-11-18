@@ -32,8 +32,10 @@ when defined(posix):
   import
     ../src/logos_core/daemon/
       [assemble, ctlwire, daemon_config_types, logging, session, sessioninit]
-  import ./support/[kitbuild, loaderharness, modulehostbuild, shortdir, slowdown]
-  import ./support/testdirs
+  import
+    logos_sdk/testing/kitbuild,
+    ./support/[loaderharness, modulehostbuild, shortdir, slowdown]
+  import logos_sdk/testing/testdirs
 
   import std/posix
 

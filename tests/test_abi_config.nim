@@ -1,5 +1,5 @@
 ## CONFIG §6 and INTERFACE §5.2: what a Runtime delivers as a module's configuration passes the
-## module initialization check. Apart from tests/test_abi.nim because the delivered form is core's.
+## module initialization check. Apart from sdk/tests/test_abi.nim because the delivered form is core's.
 
 import unittest2
 import logos_sdk/abi/checks

@@ -9,7 +9,7 @@ import logos_sdk/cbor
 import logos_sdk/abi/[checks, types]
 import logos_sdk/iface/outcome
 import ../../src/logos_core/authority/provider
-from ./kitruntime import rcBinding
+from logos_sdk/testing/kitruntime import rcBinding
 
 export atomics, locks, results, checks, types, outcome, provider
 

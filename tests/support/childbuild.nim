@@ -8,7 +8,7 @@
 ## renames it over the old one, so no process ever runs a half-written child.
 
 import std/[os, osproc, posix]
-import ./kitbuild
+import logos_sdk/testing/kitbuild
 
 export kitbuild
 

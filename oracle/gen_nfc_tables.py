@@ -21,7 +21,7 @@ import unicodedata as ud
 from pathlib import Path
 
 TABLES = Path("sdk/src/logos_sdk/base/nfc_tables.nim")
-VECTORS = Path("tests/vectors/nfc.json")
+VECTORS = Path("sdk/tests/vectors/nfc.json")
 
 S_BASE, S_COUNT = 0xAC00, 11172
 

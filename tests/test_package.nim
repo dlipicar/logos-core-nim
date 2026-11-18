@@ -9,7 +9,7 @@ import ../src/logos_core/pins as core_pins
 import logos_sdk/iface/accept
 import logos_sdk/cddl/syntax
 import ../src/logos_core/package/[semver, signing]
-import ./support/specdata
+import logos_sdk/testing/specdata
 
 # Fixtures --------------------------------------------------------------------------
 

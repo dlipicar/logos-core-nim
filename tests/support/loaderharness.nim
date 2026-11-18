@@ -17,7 +17,7 @@ import logos_sdk/abi/[checks, types]
 import logos_sdk/iface/outcome
 import ../../src/logos_core/runtime/[callside, invoke, plumbing]
 import ../../src/logos_core/loader/[provider, logos_module_loader_types]
-from ./kitruntime import armed, rcBinding, publishOp, publishState
+from logos_sdk/testing/kitruntime import armed, rcBinding, publishOp, publishState
 
 export results, checks, types, outcome, provider, logos_module_loader_types, atomics
 

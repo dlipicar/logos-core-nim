@@ -88,9 +88,15 @@
             ];
           };
 
-          testFiles = lib.filter (n: lib.hasPrefix "test_" n && lib.hasSuffix ".nim" n) (
-            builtins.attrNames (builtins.readDir ./tests)
-          );
+          # Each suite by its path from the repository root, where every suite runs.
+          testFilesIn =
+            dir:
+            map (n: "${dir}/${n}") (
+              lib.filter (n: lib.hasPrefix "test_" n && lib.hasSuffix ".nim" n) (
+                builtins.attrNames (builtins.readDir (./. + "/${dir}"))
+              )
+            );
+          testFiles = testFilesIn "tests" ++ testFilesIn "sdk/tests";
           # Both memory managers (refc modules link this code), and a release
           # build: INTERFACE §4.5 forbids build-mode-dependent bytes.
           testVariants = [
@@ -143,7 +149,7 @@
               skip =
                 file:
                 pkgs.stdenv.hostPlatform.isAarch64
-                && lib.elem file [
+                && lib.elem (baseNameOf file) [
                   "test_boundary_invariance.nim"
                   "test_deployment.nim"
                   "test_engine.nim"
@@ -167,7 +173,7 @@
               map (
                 variant:
                 let
-                  name = "${lib.removeSuffix ".nim" file}-${variant.suffix}";
+                  name = "${lib.removeSuffix ".nim" (baseNameOf file)}-${variant.suffix}";
                 in
                 lib.nameValuePair name (
                   nimDerivation (
@@ -178,7 +184,7 @@
                       buildPhase = ''
                         runHook preBuild
                         ${variant.setup or ""}
-                        nim c -r ${variant.flags} --outdir:build tests/${file}
+                        nim c -r ${variant.flags} --outdir:build ${file}
                         runHook postBuild
                       '';
                     }
@@ -189,7 +195,7 @@
                         "fortify3"
                       ];
                     }
-                    // lib.optionalAttrs (file == "test_remote_tls.nim") {
+                    // lib.optionalAttrs (baseNameOf file == "test_remote_tls.nim") {
                       # The independent TLS peer (DECISIONS G128): test only.
                       LCN_TLS_PEER_PYTHON = "${tlsPeerPython}/bin/python3";
                     }
@@ -219,6 +225,7 @@
               ./spec
               ./conformance
               ./tests
+              ./sdk/tests
               ./oracle
               ./sdk/src/logos_sdk/pins.nim
               ./src/logos_core/pins.nim
@@ -529,7 +536,7 @@
         // {
           nph = s.pkgs.runCommand "nph-check" { nativeBuildInputs = [ s.nph ]; } ''
             cd ${s.nimSources}
-            nph --check src sdk/src tests logos_core.nimble config.nims
+            nph --check src sdk/src sdk/tests tests logos_core.nimble config.nims
             touch $out
           '';
           # The test-hook rule (sdk/src/logos_sdk/base/testhooks.nim; D27 revised 2026-11-13, I89):
@@ -576,14 +583,14 @@
           # No `?` inside a half-built constructor: it leaks on Nim 2.2.14 (I77).
           lint-ctor-try = s.pkgs.runCommand "lint-ctor-try" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
-            python3 ${./tools/lint/ctortry.py} src sdk/src tests
+            python3 ${./tools/lint/ctortry.py} src sdk/src sdk/tests tests
             touch $out
           '';
           # No local first written in a branch and written again after it: that write drops
           # the branch's value undestroyed, so unwiped, on Nim 2.2.14 (I92; Nim#26725).
           lint-first-write = s.pkgs.runCommand "lint-first-write" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
-            python3 ${./tools/lint/firstwrite.py} src sdk/src tests
+            python3 ${./tools/lint/firstwrite.py} src sdk/src sdk/tests tests
             touch $out
           '';
           # The import direction between the SDK, core, the daemon and the CLI.

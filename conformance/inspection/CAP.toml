@@ -24,7 +24,7 @@ reason = "Least privilege is the policy's shape: every issue, revoke and inspect
 # cap-subset (DECISIONS I88)
 [[item]]
 ids = ["CAP-0045"]
-reason = "A rule on whoever needs a separately visible subset of a concrete contract: a module author or deployment, which declares the subset as an interface document under _implements. Neither the Runtime nor the Capability Authority makes one: route access only narrows which operations a route may perform, logos.schema always returns the selected contract's own documents (invoke.introspect builds it from the selected contract, never from the access), and a provider is routed only under its primary contract or one of its declared interface roots (engine.establish). Test [IFC-0449] in tests/test_iface.nim shows an interface route exposes the interface and only its own supporting schemas."
+reason = "A rule on whoever needs a separately visible subset of a concrete contract: a module author or deployment, which declares the subset as an interface document under _implements. Neither the Runtime nor the Capability Authority makes one: route access only narrows which operations a route may perform, logos.schema always returns the selected contract's own documents (invoke.introspect builds it from the selected contract, never from the access), and a provider is routed only under its primary contract or one of its declared interface roots (engine.establish). Test [IFC-0449] in sdk/tests/test_iface.nim shows an interface route exposes the interface and only its own supporting schemas."
 
 # cap-direct (DECISIONS I88)
 [[item]]

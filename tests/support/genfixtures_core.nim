@@ -6,40 +6,67 @@ import std/sequtils
 import results
 import logos_sdk/iface/accept
 import logos_sdk/codegen/[kitgen, nimgen, sdkroot]
-import ./fixturegen
+import logos_sdk/testing/fixturegen
 
 export fixturegen
 
 const
+  coreGeneratedDir = "tests/generated" ## the generated files only core's suites use
   coreNimFixtures* = [
-    NimFixture(module: "vault_module_types.nim", primary: "tests/kit/vault_module.cddl"),
     NimFixture(
-      module: "vault_module_kit.nim", primary: "tests/kit/vault_module.cddl", kit: true
+      home: coreGeneratedDir,
+      module: "vault_module_types.nim",
+      primary: "tests/kit/vault_module.cddl",
     ),
     NimFixture(
+      home: coreGeneratedDir,
+      module: "vault_module_kit.nim",
+      primary: "tests/kit/vault_module.cddl",
+      kit: true,
+    ),
+    NimFixture(
+      home: coreGeneratedDir,
       module: "vault_module_calls.nim",
       primary: "tests/kit/vault_module.cddl",
       calls: true,
     ),
-    NimFixture(module: "bulk_module_types.nim", primary: "tests/kit/bulk_module.cddl"),
     NimFixture(
-      module: "bulk_module_kit.nim", primary: "tests/kit/bulk_module.cddl", kit: true
+      home: coreGeneratedDir,
+      module: "bulk_module_types.nim",
+      primary: "tests/kit/bulk_module.cddl",
     ),
     NimFixture(
+      home: coreGeneratedDir,
+      module: "bulk_module_kit.nim",
+      primary: "tests/kit/bulk_module.cddl",
+      kit: true,
+    ),
+    NimFixture(
+      home: coreGeneratedDir,
       module: "bulk_module_calls.nim",
       primary: "tests/kit/bulk_module.cddl",
       calls: true,
     ),
-    NimFixture(module: "flaky_module_types.nim", primary: "tests/kit/flaky_module.cddl"),
     NimFixture(
-      module: "flaky_module_kit.nim", primary: "tests/kit/flaky_module.cddl", kit: true
+      home: coreGeneratedDir,
+      module: "flaky_module_types.nim",
+      primary: "tests/kit/flaky_module.cddl",
+    ),
+    NimFixture(
+      home: coreGeneratedDir,
+      module: "flaky_module_kit.nim",
+      primary: "tests/kit/flaky_module.cddl",
+      kit: true,
     ),
   ]
   coreHeaderFixtures* = [
     HeaderFixture(
-      header: "vault_module_types.h", primary: "tests/kit/vault_module.cddl"
+      home: coreGeneratedDir,
+      header: "vault_module_types.h",
+      primary: "tests/kit/vault_module.cddl",
     ),
     HeaderFixture(
+      home: coreGeneratedDir,
       header: "vault_module_calls.h",
       primary: "tests/kit/vault_module.cddl",
       calls: true,

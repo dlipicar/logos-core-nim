@@ -16,7 +16,7 @@ import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, surface]
 import ../../src/logos_core/transport/[hello, ticket]
 import ../../src/logos_core/transport/io
-import ./[slowdown, specdata]
+import ./slowdown, logos_sdk/testing/specdata
 
 export io, hello, ticket, slowdown
 

@@ -1,6 +1,6 @@
 ## INTERFACE §5.2: the native module ABI as Nim types, field for field and in
 ## the same order as `logos_types.h`, so each has the C layout (checked against
-## the generated header by `tests/test_abi.nim`). Callbacks use the C calling
+## the generated header by `sdk/tests/test_abi.nim`). Callbacks use the C calling
 ## convention. Nothing here allocates or calls through a pointer; the checks a
 ## binding consumer or producer applies are in `checks.nim`.
 ##

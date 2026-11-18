@@ -19,8 +19,8 @@ import logos_sdk/crypto/blake3
 import logos_sdk/iface/[accept, names]
 import logos_sdk/pins
 import ../src/logos_core/runtime/config
-import ./support/[kitbuild, kitruntime, tunerconfig]
-import ./kit/[meter_impl, sensor_impl, shapes_impl]
+import logos_sdk/testing/[kitbuild, kitruntime, tunerconfig]
+import logos_sdk/testing/fixtures/[meter_impl, sensor_impl, shapes_impl]
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "realizer" / kitVariant
 removeDir(work)

@@ -17,10 +17,10 @@ import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, surface]
 import logos_sdk/codegen/common_types
-import ./support/[kitbuild, kitruntime]
-import ./support/testdirs
-import ./kit/[deferred_adapter, meter_impl, shapes_impl]
-import ./generated/[meter_module_calls, meter_module_types]
+import logos_sdk/testing/[kitbuild, kitruntime]
+import logos_sdk/testing/testdirs
+import ./kit/deferred_adapter, logos_sdk/testing/fixtures/[meter_impl, shapes_impl]
+import logos_sdk/testing/generated/[meter_module_calls, meter_module_types]
 
 let
   repo = currentSourcePath().parentDir.parentDir

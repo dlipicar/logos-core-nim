@@ -27,6 +27,6 @@ done
 curl -sfL "https://raw.githubusercontent.com/BLAKE3-team/BLAKE3/$COMMIT/LICENSE_A2" -o "$DEST/LICENSE_A2"
 curl -sfL "https://raw.githubusercontent.com/BLAKE3-team/BLAKE3/$COMMIT/LICENSE_CC0" -o "$DEST/LICENSE_CC0"
 curl -sfL "https://raw.githubusercontent.com/BLAKE3-team/BLAKE3/$COMMIT/test_vectors/test_vectors.json" \
-  -o tests/vectors/blake3_test_vectors.json
+  -o sdk/tests/vectors/blake3_test_vectors.json
 printf 'BLAKE3 %s\ncommit %s\nhttps://github.com/BLAKE3-team/BLAKE3/tree/%s/c\n' "$TAG" "$COMMIT" "$COMMIT" > "$DEST/VERSION"
 echo "vendored BLAKE3 $TAG ($COMMIT) into $DEST"

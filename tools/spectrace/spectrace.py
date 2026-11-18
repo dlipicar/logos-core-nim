@@ -600,6 +600,7 @@ def cmd_pins(args) -> int:
 # Coverage gate -------------------------------------------------------------------
 
 TEST_ID_RE = re.compile(r"\[([A-Z]{3}-\d{4})\]")
+TEST_TREES = ("tests", "sdk/tests")  # core's suites and the SDK's
 # `lc` units stay in the ledger, so tests may still cite them, but no claim
 # needs them covered: lowercase forms keep their ordinary meaning (G117, B1).
 GATED_KINDS = {"kw", "cddl", "block"}
@@ -636,8 +637,9 @@ def cmd_gate(args) -> int:
     item; an inspected unit is claimed; no status defers to a closed tier."""
     root = Path(args.root)
     referenced: set[str] = set()
-    for test in (root / "tests").rglob("*.nim"):
-        referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
+    for tree in TEST_TREES:
+        for test in (root / tree).rglob("*.nim"):
+            referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
     failures = 0
     inspected: dict[str, str] = {}
     for extra in sorted((root / "conformance" / "inspection").glob("*.toml")):
@@ -756,8 +758,9 @@ def cmd_deploydoc(args) -> int:
     lines = doc_path.read_text(encoding="utf-8").splitlines()
 
     referenced: set[str] = set()
-    for test in (root / "tests").rglob("*.nim"):
-        referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
+    for tree in TEST_TREES:
+        for test in (root / tree).rglob("*.nim"):
+            referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
     reasons: dict[str, list[str]] = {}
     for extra in sorted((root / "conformance" / "inspection").glob("*.toml")):
         for item in load_toml(extra).get("item", []):

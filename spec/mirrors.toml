@@ -881,7 +881,7 @@ section = "§9.1"
 
 # MODULE LOADER (Tier 4b step 4b-1; DECISIONS I89) ----------------------------------
 # The contract's CDDL blocks in spec order: `_module` (Abstract), then §3 to §10. The
-# generated types and kit join them as one primary document (tests/support/genfixtures.nim).
+# generated types and kit join them as one primary document (tests/support/genfixtures_core.nim).
 
 [[mirror]]
 out = "LDR/0.module.cddl"

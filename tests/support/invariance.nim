@@ -13,7 +13,7 @@
 import std/strutils
 import results
 import logos_sdk/cbor
-import ../generated/[meter_module_types, shapes_module_types]
+import logos_sdk/testing/generated/[meter_module_types, shapes_module_types]
 import ./slowdown
 
 type Script* = object

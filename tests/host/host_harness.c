@@ -16,7 +16,7 @@
 #include <pthread.h>
 #endif
 
-#include "../generated/logos_runtime.h"
+#include "../../sdk/src/logos_sdk/testing/generated/logos_runtime.h"
 
 typedef struct {
   int32_t code;

@@ -13,7 +13,7 @@ import ../src/logos_core/crypto/[cose, slhdsa]
 import ../src/logos_core/authority/scopes
 import ../src/logos_core/runtime/evidence
 from ../src/logos_core/package/signing import nil
-import ./support/kitbuild
+import logos_sdk/testing/kitbuild
 
 let
   repo = currentSourcePath().parentDir.parentDir

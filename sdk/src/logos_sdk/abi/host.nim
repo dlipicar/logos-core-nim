@@ -1,6 +1,6 @@
 ## RUNTIME §13: the host embedding ABI as Nim types, field for field and in the
 ## same order as `logos_runtime.h`, so each has the C layout (checked against the
-## generated header by `tests/test_abi.nim`). Nothing here allocates or calls
+## generated header by `sdk/tests/test_abi.nim`). Nothing here allocates or calls
 ## through a pointer; the Host Embedding API itself is `runtime/host.nim`.
 
 {.push raises: [].}

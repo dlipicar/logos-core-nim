@@ -15,7 +15,8 @@ import logos_sdk/commitment
 import logos_sdk/iface/[accept, surface]
 import ../src/logos_core/transport/[access, boundary, envelope, framing, session]
 import ../src/logos_core/transport/io/sock
-import ./support/[ctl, peerbuild, peerproc, shortdir, specdata, trnowner]
+import
+  ./support/[ctl, peerbuild, peerproc, shortdir, trnowner], logos_sdk/testing/specdata
 
 # Sockets go under a short private base (plan §5.1; `support/shortdir.nim`).
 let base = makeShortBase("lcnio")

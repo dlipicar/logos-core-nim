@@ -1,4 +1,4 @@
-"""Writes tests/vectors/cbor/decode.json from the cases below.
+"""Writes sdk/tests/vectors/cbor/decode.json from the cases below.
 
 Each case states the expected class. The oracle must classify it the same way,
 or nothing is written; the Nim suite then checks the same file. Sources:
@@ -191,7 +191,7 @@ def main() -> int:
     if bad:
         print(f"{bad} disagreements; nothing written")
         return 1
-    path = Path("tests/vectors/cbor/decode.json")
+    path = Path("sdk/tests/vectors/cbor/decode.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"vectors": out}, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"wrote {len(out)} vectors to {path}")

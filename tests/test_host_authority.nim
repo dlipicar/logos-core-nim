@@ -18,7 +18,7 @@ import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, surface]
 import logos_sdk/codegen/common_types
-import ./support/[kitbuild, kitruntime]
+import logos_sdk/testing/[kitbuild, kitruntime]
 import ../src/logos_core/authority/provider except
   LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
   LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
@@ -29,8 +29,8 @@ import ./support/authfixture except
   LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
   LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
   LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
-import ./kit/meter_impl
-import ./generated/meter_module_calls
+import logos_sdk/testing/fixtures/meter_impl
+import logos_sdk/testing/generated/meter_module_calls
 import ../src/logos_core/runtime/evidence
 import ../src/logos_core/daemon/evstore
 from ../src/logos_core/permissions import HostAmbient

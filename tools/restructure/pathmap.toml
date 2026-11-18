@@ -77,3 +77,375 @@ to = "sdk/src/logos_sdk/crypto/blake3.nim"
 [[move]]
 from = "src/logos_core/crypto/blake3/"
 to = "sdk/src/logos_sdk/crypto/blake3/"
+
+[[move]]
+from = "tests/test_abi.nim"
+to = "sdk/tests/test_abi.nim"
+
+[[move]]
+from = "tests/test_blake3.nim"
+to = "sdk/tests/test_blake3.nim"
+
+[[move]]
+from = "tests/test_call_surface.nim"
+to = "sdk/tests/test_call_surface.nim"
+
+[[move]]
+from = "tests/test_calls.nim"
+to = "sdk/tests/test_calls.nim"
+
+[[move]]
+from = "tests/test_cbor.nim"
+to = "sdk/tests/test_cbor.nim"
+
+[[move]]
+from = "tests/test_cddl.nim"
+to = "sdk/tests/test_cddl.nim"
+
+[[move]]
+from = "tests/test_codegen.nim"
+to = "sdk/tests/test_codegen.nim"
+
+[[move]]
+from = "tests/test_commitment.nim"
+to = "sdk/tests/test_commitment.nim"
+
+[[move]]
+from = "tests/test_hash.nim"
+to = "sdk/tests/test_hash.nim"
+
+[[move]]
+from = "tests/test_iface.nim"
+to = "sdk/tests/test_iface.nim"
+
+[[move]]
+from = "tests/test_kit.nim"
+to = "sdk/tests/test_kit.nim"
+
+[[move]]
+from = "tests/test_kit_dylib.nim"
+to = "sdk/tests/test_kit_dylib.nim"
+
+[[move]]
+from = "tests/test_nfc.nim"
+to = "sdk/tests/test_nfc.nim"
+
+[[move]]
+from = "tests/test_nimgen.nim"
+to = "sdk/tests/test_nimgen.nim"
+
+[[move]]
+from = "tests/test_rc_schema.nim"
+to = "sdk/tests/test_rc_schema.nim"
+
+[[move]]
+from = "tests/test_rmap.nim"
+to = "sdk/tests/test_rmap.nim"
+
+[[move]]
+from = "tests/test_values.nim"
+to = "sdk/tests/test_values.nim"
+
+[[move]]
+from = "tests/support/kitbuild.nim"
+to = "sdk/src/logos_sdk/testing/kitbuild.nim"
+
+[[move]]
+from = "tests/support/kitruntime.nim"
+to = "sdk/src/logos_sdk/testing/kitruntime.nim"
+
+[[move]]
+from = "tests/support/specdata.nim"
+to = "sdk/src/logos_sdk/testing/specdata.nim"
+
+[[move]]
+from = "tests/support/schemasuite.nim"
+to = "sdk/src/logos_sdk/testing/schemasuite.nim"
+
+[[move]]
+from = "tests/support/tunerconfig.nim"
+to = "sdk/src/logos_sdk/testing/tunerconfig.nim"
+
+[[move]]
+from = "tests/support/testdirs.nim"
+to = "sdk/src/logos_sdk/testing/testdirs.nim"
+
+[[move]]
+from = "tests/support/fixturegen.nim"
+to = "sdk/src/logos_sdk/testing/fixturegen.nim"
+
+[[move]]
+from = "tests/support/ccompile.nim"
+to = "sdk/tests/support/ccompile.nim"
+
+[[move]]
+from = "tests/support/cddlshape.nim"
+to = "sdk/tests/support/cddlshape.nim"
+
+[[move]]
+from = "tests/support/genfixtures.nim"
+to = "sdk/tests/support/genfixtures.nim"
+
+[[move]]
+from = "tests/support/testroute.nim"
+to = "sdk/tests/support/testroute.nim"
+
+[[move]]
+from = "tests/support/typedharness.nim"
+to = "sdk/tests/support/typedharness.nim"
+
+[[move]]
+from = "tests/support/valuevec.nim"
+to = "sdk/tests/support/valuevec.nim"
+
+[[move]]
+from = "tests/support/cthread.c"
+to = "sdk/tests/support/cthread.c"
+
+[[move]]
+from = "tests/kit/beacon_impl.nim"
+to = "sdk/src/logos_sdk/testing/fixtures/beacon_impl.nim"
+
+[[move]]
+from = "tests/kit/beacon_module.cddl"
+to = "sdk/src/logos_sdk/testing/fixtures/beacon_module.cddl"
+
+[[move]]
+from = "tests/kit/meter_impl.nim"
+to = "sdk/src/logos_sdk/testing/fixtures/meter_impl.nim"
+
+[[move]]
+from = "tests/kit/sensor_impl.nim"
+to = "sdk/src/logos_sdk/testing/fixtures/sensor_impl.nim"
+
+[[move]]
+from = "tests/kit/shapes_impl.nim"
+to = "sdk/src/logos_sdk/testing/fixtures/shapes_impl.nim"
+
+[[move]]
+from = "tests/kit/shapes_module.cddl"
+to = "sdk/src/logos_sdk/testing/fixtures/shapes_module.cddl"
+
+[[move]]
+from = "tests/kit/tuner_impl.nim"
+to = "sdk/src/logos_sdk/testing/fixtures/tuner_impl.nim"
+
+[[move]]
+from = "tests/kit/tuner_module.cddl"
+to = "sdk/src/logos_sdk/testing/fixtures/tuner_module.cddl"
+
+[[move]]
+from = "tests/kit/tuner_config.cddl"
+to = "sdk/src/logos_sdk/testing/fixtures/tuner_config.cddl"
+
+[[move]]
+from = "tests/kit/quiet_impl.nim"
+to = "sdk/tests/kit/quiet_impl.nim"
+
+[[move]]
+from = "tests/kit/quiet_module.cddl"
+to = "sdk/tests/kit/quiet_module.cddl"
+
+[[move]]
+from = "tests/kit/calls_lib.nim"
+to = "sdk/tests/kit/calls_lib.nim"
+
+[[move]]
+from = "tests/kit/calls_linked.c"
+to = "sdk/tests/kit/calls_linked.c"
+
+[[move]]
+from = "tests/kit/calls_shims.c"
+to = "sdk/tests/kit/calls_shims.c"
+
+[[move]]
+from = "tests/kit/typed_linked.c"
+to = "sdk/tests/kit/typed_linked.c"
+
+[[move]]
+from = "tests/kit/typed_harness.c"
+to = "sdk/tests/kit/typed_harness.c"
+
+[[move]]
+from = "tests/kit/typed_harness.h"
+to = "sdk/tests/kit/typed_harness.h"
+
+[[move]]
+from = "tests/generated/beacon_module_kit.nim"
+to = "sdk/src/logos_sdk/testing/generated/beacon_module_kit.nim"
+
+[[move]]
+from = "tests/generated/beacon_module_types.nim"
+to = "sdk/src/logos_sdk/testing/generated/beacon_module_types.nim"
+
+[[move]]
+from = "tests/generated/demo.cddl"
+to = "sdk/tests/generated/demo.cddl"
+
+[[move]]
+from = "tests/generated/demo_types.nim"
+to = "sdk/tests/generated/demo_types.nim"
+
+[[move]]
+from = "tests/generated/logos_runtime.h"
+to = "sdk/src/logos_sdk/testing/generated/logos_runtime.h"
+
+[[move]]
+from = "tests/generated/logos_types.h"
+to = "sdk/src/logos_sdk/testing/generated/logos_types.h"
+
+[[move]]
+from = "tests/generated/meter_module_calls.h"
+to = "sdk/src/logos_sdk/testing/generated/meter_module_calls.h"
+
+[[move]]
+from = "tests/generated/meter_module_calls.nim"
+to = "sdk/src/logos_sdk/testing/generated/meter_module_calls.nim"
+
+[[move]]
+from = "tests/generated/meter_module_kit.exports"
+to = "sdk/src/logos_sdk/testing/generated/meter_module_kit.exports"
+
+[[move]]
+from = "tests/generated/meter_module_kit.map"
+to = "sdk/src/logos_sdk/testing/generated/meter_module_kit.map"
+
+[[move]]
+from = "tests/generated/meter_module_kit.nim"
+to = "sdk/src/logos_sdk/testing/generated/meter_module_kit.nim"
+
+[[move]]
+from = "tests/generated/meter_module_types.h"
+to = "sdk/src/logos_sdk/testing/generated/meter_module_types.h"
+
+[[move]]
+from = "tests/generated/meter_module_types.nim"
+to = "sdk/src/logos_sdk/testing/generated/meter_module_types.nim"
+
+[[move]]
+from = "tests/generated/metrics_provider_calls.h"
+to = "sdk/tests/generated/metrics_provider_calls.h"
+
+[[move]]
+from = "tests/generated/metrics_provider_calls.nim"
+to = "sdk/tests/generated/metrics_provider_calls.nim"
+
+[[move]]
+from = "tests/generated/metrics_provider_types.h"
+to = "sdk/tests/generated/metrics_provider_types.h"
+
+[[move]]
+from = "tests/generated/metrics_provider_types.nim"
+to = "sdk/tests/generated/metrics_provider_types.nim"
+
+[[move]]
+from = "tests/generated/quiet_module_configuration_types.nim"
+to = "sdk/tests/generated/quiet_module_configuration_types.nim"
+
+[[move]]
+from = "tests/generated/quiet_module_kit.nim"
+to = "sdk/tests/generated/quiet_module_kit.nim"
+
+[[move]]
+from = "tests/generated/quiet_module_types.nim"
+to = "sdk/tests/generated/quiet_module_types.nim"
+
+[[move]]
+from = "tests/generated/recursive_types.nim"
+to = "sdk/tests/generated/recursive_types.nim"
+
+[[move]]
+from = "tests/generated/sensor_module_calls.h"
+to = "sdk/src/logos_sdk/testing/generated/sensor_module_calls.h"
+
+[[move]]
+from = "tests/generated/sensor_module_calls.nim"
+to = "sdk/src/logos_sdk/testing/generated/sensor_module_calls.nim"
+
+[[move]]
+from = "tests/generated/sensor_module_kit.exports"
+to = "sdk/src/logos_sdk/testing/generated/sensor_module_kit.exports"
+
+[[move]]
+from = "tests/generated/sensor_module_kit.map"
+to = "sdk/src/logos_sdk/testing/generated/sensor_module_kit.map"
+
+[[move]]
+from = "tests/generated/sensor_module_kit.nim"
+to = "sdk/src/logos_sdk/testing/generated/sensor_module_kit.nim"
+
+[[move]]
+from = "tests/generated/sensor_module_types.h"
+to = "sdk/src/logos_sdk/testing/generated/sensor_module_types.h"
+
+[[move]]
+from = "tests/generated/sensor_module_types.nim"
+to = "sdk/src/logos_sdk/testing/generated/sensor_module_types.nim"
+
+[[move]]
+from = "tests/generated/shapes_module_calls.h"
+to = "sdk/src/logos_sdk/testing/generated/shapes_module_calls.h"
+
+[[move]]
+from = "tests/generated/shapes_module_calls.nim"
+to = "sdk/src/logos_sdk/testing/generated/shapes_module_calls.nim"
+
+[[move]]
+from = "tests/generated/shapes_module_kit.exports"
+to = "sdk/src/logos_sdk/testing/generated/shapes_module_kit.exports"
+
+[[move]]
+from = "tests/generated/shapes_module_kit.map"
+to = "sdk/src/logos_sdk/testing/generated/shapes_module_kit.map"
+
+[[move]]
+from = "tests/generated/shapes_module_kit.nim"
+to = "sdk/src/logos_sdk/testing/generated/shapes_module_kit.nim"
+
+[[move]]
+from = "tests/generated/shapes_module_types.h"
+to = "sdk/src/logos_sdk/testing/generated/shapes_module_types.h"
+
+[[move]]
+from = "tests/generated/shapes_module_types.nim"
+to = "sdk/src/logos_sdk/testing/generated/shapes_module_types.nim"
+
+[[move]]
+from = "tests/generated/tuner_module_configuration_types.nim"
+to = "sdk/src/logos_sdk/testing/generated/tuner_module_configuration_types.nim"
+
+[[move]]
+from = "tests/generated/tuner_module_kit.exports"
+to = "sdk/src/logos_sdk/testing/generated/tuner_module_kit.exports"
+
+[[move]]
+from = "tests/generated/tuner_module_kit.map"
+to = "sdk/src/logos_sdk/testing/generated/tuner_module_kit.map"
+
+[[move]]
+from = "tests/generated/tuner_module_kit.nim"
+to = "sdk/src/logos_sdk/testing/generated/tuner_module_kit.nim"
+
+[[move]]
+from = "tests/generated/tuner_module_types.nim"
+to = "sdk/src/logos_sdk/testing/generated/tuner_module_types.nim"
+
+[[move]]
+from = "tests/vectors/blake3_test_vectors.json"
+to = "sdk/tests/vectors/blake3_test_vectors.json"
+
+[[move]]
+from = "tests/vectors/nfc.json"
+to = "sdk/tests/vectors/nfc.json"
+
+[[move]]
+from = "tests/vectors/cbor/decode.json"
+to = "sdk/tests/vectors/cbor/decode.json"
+
+[[move]]
+from = "tests/vectors/cddl/vectors.cbor"
+to = "sdk/tests/vectors/cddl/vectors.cbor"
+
+[[move]]
+from = "tests/vectors/hash/layout.cbor"
+to = "sdk/tests/vectors/hash/layout.cbor"

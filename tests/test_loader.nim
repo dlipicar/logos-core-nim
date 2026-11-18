@@ -16,10 +16,10 @@ from ../src/logos_core/runtime/callside import nil
 from ../src/logos_core/runtime/config import liveConfigBlobs
 from ../src/logos_core/runtime/plumbing import CallTicket
 import logos_sdk/iface/names
-import ./support/[loaderharness, slowdown, tunerconfig]
-from ./support/kitbuild import kitVariant
-from ./support/kitruntime import rcBinding, publishOp, publishState
-import ./kit/[meter_impl, sensor_impl]
+import ./support/[loaderharness, slowdown], logos_sdk/testing/tunerconfig
+from logos_sdk/testing/kitbuild import kitVariant
+from logos_sdk/testing/kitruntime import rcBinding, publishOp, publishState
+import logos_sdk/testing/fixtures/[meter_impl, sensor_impl]
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "loader" / kitVariant
 removeDir(work)

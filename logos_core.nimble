@@ -65,10 +65,11 @@ proc shardOf(spec: string): (int, int) =
 
 proc runSuites(flags, outDir: string) =
   var suites: seq[string]
-  for file in listFiles("tests"):
-    let name = file.extractFilename
-    if name.startsWith("test_") and name.endsWith(".nim"):
-      suites.add file
+  for dir in ["tests", "sdk/tests"]:
+    for file in listFiles(dir):
+      let name = file.extractFilename
+      if name.startsWith("test_") and name.endsWith(".nim"):
+        suites.add file
   suites.sort()
   let (k, n) = shardOf(getEnv("LCN_SHARD"))
   if n > 1:

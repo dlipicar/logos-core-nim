@@ -20,9 +20,9 @@ import logos_sdk/codegen/nimrt
 import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, payload, surface]
 import logos_sdk/codegen/common_types
-import ./support/[coretuner, kitbuild, kitruntime]
-import ./kit/meter_impl
-import ./generated/meter_module_calls
+import ./support/coretuner, logos_sdk/testing/[kitbuild, kitruntime]
+import logos_sdk/testing/fixtures/meter_impl
+import logos_sdk/testing/generated/meter_module_calls
 
 let
   repo = currentSourcePath().parentDir.parentDir

@@ -15,6 +15,7 @@ run it after its rebase.
 
 import argparse
 import os
+import re
 import sys
 import tomllib
 
@@ -136,8 +137,10 @@ def rewritten_source(root, importer, text, paths):
 
 
 def rewritten_citations(text, paths):
+    """`text` with each moved path spelled for where it is now. A path is matched only where it
+    starts, so one that moved under a longer prefix is not moved again."""
     for old, new in sorted(paths.moves, key=lambda m: -len(m[0])):
-        text = text.replace(old, new)
+        text = re.sub(r"(?<![\w./-])" + re.escape(old), lambda _: new, text)
     return text
 
 

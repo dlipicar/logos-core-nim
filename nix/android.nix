@@ -86,7 +86,7 @@ let
         file:
         lib.concatMapStrings (variant: ''
           nim c ${variant.flags} ${flags} --hints:off \
-            -o:build/bin/${lib.removeSuffix ".nim" file}-${variant.suffix} tests/${file}
+            -o:build/bin/${lib.removeSuffix ".nim" (baseNameOf file)}-${variant.suffix} ${file}
         '') testVariants
       ) testFiles
       + ''

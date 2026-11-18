@@ -20,10 +20,10 @@ import logos_sdk/iface/[accept, outcome, provider, surface]
 import logos_sdk/codegen/common_types
 import ../src/logos_core/transport/envelope
 import ../src/logos_core/transport/framing
-import ./support/[coretuner, kitbuild, kitruntime]
-import ./support/testdirs
-import ./kit/[meter_impl, tuner_impl]
-import ./generated/[meter_module_calls, tuner_module_types]
+import ./support/coretuner, logos_sdk/testing/[kitbuild, kitruntime]
+import logos_sdk/testing/testdirs
+import logos_sdk/testing/fixtures/[meter_impl, tuner_impl]
+import logos_sdk/testing/generated/[meter_module_calls, tuner_module_types]
 
 let
   repo = currentSourcePath().parentDir.parentDir
@@ -642,7 +642,7 @@ proc tunerTable(live: bool): seq[(string, pointer)] =
 
 proc tunerRegs(): seq[StaticRegistration] =
   ## The hand-written tuner, startup-only and live, and the generated kit
-  ## (`tests/kit/tuner_impl.nim`, live).
+  ## (`sdk/src/logos_sdk/testing/fixtures/tuner_impl.nim`, live).
   @[
     checkStaticRegistration("tuner", tunerTable(false)).tryGet,
     checkStaticRegistration("tuner_live", tunerTable(true)).tryGet,

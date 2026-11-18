@@ -26,9 +26,9 @@ import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, provider, surface]
 import logos_sdk/codegen/common_types
 import ../src/logos_core/package/manifest
-import ./support/[kitbuild, kitruntime, permfixture]
-import ./kit/meter_impl
-import ./generated/meter_module_calls
+import logos_sdk/testing/[kitbuild, kitruntime], ./support/permfixture
+import logos_sdk/testing/fixtures/meter_impl
+import logos_sdk/testing/generated/meter_module_calls
 
 let
   repo = currentSourcePath().parentDir.parentDir

@@ -15,7 +15,7 @@ import
 import ../src/logos_core/durable
 import ../src/logos_core/runtime/evidence
 from ../src/logos_core/authority/scopes import encode
-import ./support/[evfixture, kitbuild]
+import ./support/evfixture, logos_sdk/testing/kitbuild
 
 when defined(posix):
   import std/posix

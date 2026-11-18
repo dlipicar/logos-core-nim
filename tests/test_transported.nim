@@ -24,11 +24,11 @@ import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, surface]
 import logos_sdk/codegen/common_types
-import ./support/[fakeca, kitbuild, kitruntime, shortdir]
-import ./kit/[bulk_impl, deferred_adapter, meter_impl]
+import ./support/[fakeca, shortdir], logos_sdk/testing/[kitbuild, kitruntime]
+import ./kit/[bulk_impl, deferred_adapter], logos_sdk/testing/fixtures/meter_impl
 import
-  ./generated/
-    [bulk_module_calls, bulk_module_types, meter_module_calls, meter_module_types]
+  ./generated/[bulk_module_calls, bulk_module_types],
+  logos_sdk/testing/generated/[meter_module_calls, meter_module_types]
 import ./support/trnowner except Provider, now, binding, issue, live, release, gate
 
 let

@@ -9,7 +9,7 @@ import unittest2
 import logos_sdk/cbor
 import ../src/logos_core/durable
 import ../src/logos_core/runtime/[plumbing, store, store_types]
-import ./support/kitbuild
+import logos_sdk/testing/kitbuild
 
 let
   repo = currentSourcePath().parentDir.parentDir

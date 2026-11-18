@@ -19,8 +19,8 @@ import logos_sdk/iface/[accept, names, outcome]
 import logos_sdk/crypto/blake3
 import ../src/logos_core/package/manifest
 import logos_sdk/pins
-import ./support/[kitbuild, kitruntime, slowdown, withoutloader]
-import ./kit/meter_impl
+import logos_sdk/testing/[kitbuild, kitruntime], ./support/[slowdown, withoutloader]
+import logos_sdk/testing/fixtures/meter_impl
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "engine" / kitVariant
 removeDir(work)

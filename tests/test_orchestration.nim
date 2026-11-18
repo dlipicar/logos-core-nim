@@ -22,7 +22,7 @@ import ../src/logos_core/orchestration/[accounting, testhooks]
 import logos_sdk/kit/rcclient
 import ../src/logos_core/loader/contract
 import ./support/[coretuner, fakeca, permfixture, slowdown]
-import ./kit/[flaky_impl, tuner_impl]
+import ./kit/flaky_impl, logos_sdk/testing/fixtures/tuner_impl
 
 let
   repo = currentSourcePath().parentDir.parentDir

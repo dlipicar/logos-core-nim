@@ -31,10 +31,8 @@ when defined(posix):
   from ../src/logos_core/durable import
     acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
   import
-    ./support/[
-      daemonbuild, daemonproc, evfixture, kitbuild, modulehostbuild, shortdir, slowdown,
-      testdirs,
-    ]
+    ./support/[daemonbuild, daemonproc, evfixture, modulehostbuild, shortdir, slowdown],
+    logos_sdk/testing/[kitbuild, testdirs]
 
   import std/posix
 

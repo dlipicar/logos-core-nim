@@ -14,7 +14,7 @@ import logos_sdk/iface/accept
 import logos_sdk/commitment
 import logos_sdk/iface/names
 from logos_sdk/kit/rc_types import rcDocuments
-import ./support/[authfixture, cafake, kitbuild, permfixture]
+import ./support/[authfixture, cafake, permfixture], logos_sdk/testing/kitbuild
 
 let
   repo = currentSourcePath().parentDir.parentDir

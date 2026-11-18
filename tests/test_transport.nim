@@ -9,7 +9,7 @@ import logos_sdk/[cbor, hash, commitment], ../src/logos_core/transport
 import logos_sdk/iface/[accept, surface, outcome, payload]
 import logos_sdk/crypto/blake3
 import logos_sdk/base/hex
-import ./support/specdata
+import logos_sdk/testing/specdata
 
 const Second = 1_000_000_000'i64
 

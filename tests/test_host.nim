@@ -22,8 +22,10 @@ from ../src/logos_core/crypto/slhdsa import Seed, keyPairFromSeeds
 from std/posix import Mode, chmod
 from ../src/logos_core/transport/io/sock import unixStream
 from ../src/logos_core/transport/framing import MinFrameLimit
-import ./support/[kitbuild, permfixture, slowdown, tunerconfig, withoutloader]
-import ./kit/meter_impl
+import
+  logos_sdk/testing/[kitbuild, tunerconfig],
+  ./support/[permfixture, slowdown, withoutloader]
+import logos_sdk/testing/fixtures/meter_impl
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "host" / kitVariant
 removeDir(work)

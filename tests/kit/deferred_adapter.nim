@@ -13,7 +13,7 @@
 import std/[atomics, os]
 import logos_sdk/abi/types
 import logos_sdk/iface/outcome
-import ./meter_impl
+import logos_sdk/testing/fixtures/meter_impl
 
 type DeferredMode* = enum
   dmInline ## complete and release inside `submit`

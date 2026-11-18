@@ -23,7 +23,7 @@ from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
 from ../src/logos_core/orchestration/settings import OrchestratorModule
 import logos_sdk/base/clock
 from ../src/logos_core/durable import release
-import ./support/[authfixture, kitbuild, schemasuite]
+import ./support/authfixture, logos_sdk/testing/[kitbuild, schemasuite]
 
 let work =
   currentSourcePath().parentDir.parentDir / "build" / "daemon-config" / kitVariant

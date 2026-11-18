@@ -3,7 +3,7 @@
 
 import results
 import ../../src/logos_core/runtime/configcheck
-import ./tunerconfig
+import logos_sdk/testing/tunerconfig
 
 export tunerconfig
 

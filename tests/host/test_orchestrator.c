@@ -22,7 +22,7 @@
 #include <time.h>
 #endif
 
-#include "../generated/logos_runtime.h"
+#include "../../sdk/src/logos_sdk/testing/generated/logos_runtime.h"
 
 enum { TOR_PLAIN = 0, TOR_SHUTDOWN = 1, TOR_WAIT_PROBE = 2, TOR_AUTOSTART = 3 };
 

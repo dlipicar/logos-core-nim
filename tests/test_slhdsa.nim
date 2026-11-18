@@ -6,7 +6,7 @@ import std/[json, sequtils]
 import unittest2
 import ../src/logos_core/crypto/slhdsa
 import logos_sdk/base/hex
-import ./support/specdata
+import logos_sdk/testing/specdata
 
 proc bytes(s: string): seq[byte] =
   hex.fromHex(s).get

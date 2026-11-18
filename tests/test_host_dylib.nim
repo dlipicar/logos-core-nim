@@ -17,7 +17,7 @@ import logos_sdk/abi/host
 import logos_sdk/crypto/blake3
 import logos_sdk/iface/outcome
 import ../src/logos_core/runtime/[host_config_types, store_types]
-import ./support/[hostbuild, kitbuild, tunerconfig, withoutloader]
+import ./support/[hostbuild, withoutloader], logos_sdk/testing/[kitbuild, tunerconfig]
 when defined(posix):
   from std/posix import Sigaction, SIGINT, SIGPIPE, SIGSEGV, sigemptyset
 
@@ -135,7 +135,7 @@ else:
 const meterSymbols = block:
   ## Every symbol the meter kit library exports, as its generated kit names them.
   var names: seq[string]
-  let kit = staticRead("generated/meter_module_kit.nim")
+  let kit = staticRead("../sdk/src/logos_sdk/testing/generated/meter_module_kit.nim")
   var at = 0
   while true:
     let i = kit.find("exportc: \"", at)

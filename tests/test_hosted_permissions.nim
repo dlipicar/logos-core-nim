@@ -34,9 +34,10 @@ when defined(posix):
   from ../src/logos_core/runtime/authscopes import checkDecision, evaluateRequest
   import logos_sdk/pins
   import
-    ./support/[fakeca, kitbuild, kitruntime, modulehostbuild, permfixture, shortdir]
-  import ./kit/meter_impl
-  import ./generated/meter_module_calls
+    ./support/[fakeca, modulehostbuild, permfixture, shortdir],
+    logos_sdk/testing/[kitbuild, kitruntime]
+  import logos_sdk/testing/fixtures/meter_impl
+  import logos_sdk/testing/generated/meter_module_calls
 
   let
     repo = currentSourcePath().parentDir.parentDir

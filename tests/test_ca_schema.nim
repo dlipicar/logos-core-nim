@@ -7,7 +7,7 @@
 
 import unittest2
 import ../src/logos_core/authority/logos_capability_authority_types
-import ./support/schemasuite
+import logos_sdk/testing/schemasuite
 
 const Rules = [
   "logos.capability_authority.decision_id", "logos.capability_authority.route_access",

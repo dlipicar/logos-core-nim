@@ -1,7 +1,7 @@
 ## Rewrites the committed lcn-gen outputs: `nimble regen`.
 
 import results
-import ../tests/support/[genfixtures, genfixtures_core]
+import ../sdk/tests/support/genfixtures, ../tests/support/genfixtures_core
 
 proc main() =
   writeFile(commonTypesPath, generatedCommon().get)

@@ -9,7 +9,7 @@ when defined(posix):
   import std/posix
 import unittest2
 import ../src/logos_core/runtime/[plumbing, records, stateadmin, statexfer, store]
-import ./support/kitbuild
+import logos_sdk/testing/kitbuild
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "stateadmin" / kitVariant
 removeDir(work)

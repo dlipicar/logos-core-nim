@@ -8,7 +8,7 @@
 import unittest2
 import ../src/logos_core/loader/[contract, logos_module_loader_types]
 import ../src/logos_core/loader/logos_module_loader_kit as kit
-import ./support/schemasuite
+import logos_sdk/testing/schemasuite
 
 const Rules = [
   "logos.module_loader.realization_descriptor", "logos.module_loader.hosted_placement",

@@ -56,7 +56,7 @@ build() { # build TARGET SDK SUFFIX FLAGS TEST OUT
 }
 
 mkdir -p "$work/sim" "$work/device"
-for test in "$work"/repo/tests/test_*.nim; do
+for test in "$work"/repo/tests/test_*.nim "$work"/repo/sdk/tests/test_*.nim; do
   case "$(basename "$test")" in *"$pattern"*) ;; *) continue ;; esac
   while read -r suffix flags; do
     echo "test-ios: building $(basename "$test" .nim)-$suffix" >&2

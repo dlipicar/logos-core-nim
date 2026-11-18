@@ -229,7 +229,7 @@ default = "claimed"
 "IFC-0674" = "claimed"
 # §2.6-§2.8 for a module built with lcn-gen's Nim module kit (I71): identity,
 # lifecycle and provider symbols, dispatch, publication, concurrency
-# (tests/test_kit.nim, tests/test_kit_dylib.nim). The Runtime's side of these
+# (sdk/tests/test_kit.nim, sdk/tests/test_kit_dylib.nim). The Runtime's side of these
 # rules stays tier 4.
 "IFC-0194" = "claimed"
 "IFC-0195" = "claimed"
@@ -268,7 +268,7 @@ default = "claimed"
 # §2.3, §2.4, §2.7.1: the module kit's typed provider functions (part B, I72):
 # C inputs converted and validated as dispatch does, complete outputs that one
 # arena owner holds, failures rolled back, owners released on any thread
-# (tests/test_kit.nim, tests/test_kit_dylib.nim, through a C harness). The ABI
+# (sdk/tests/test_kit.nim, sdk/tests/test_kit_dylib.nim, through a C harness). The ABI
 # caller's duties toward a typed provider function (§2.4 initialization,
 # §2.7.1 clearing) are the Runtime's, tier 4; the generated call helpers (part
 # C) call through a route instead.
@@ -283,8 +283,8 @@ default = "claimed"
 "IFC-0694" = "claimed"
 # §2.7, §5.2: lcn-gen's typed call helpers as a route's caller (part C, I73):
 # outputs initialized before `call`, the buffer released exactly once, the
-# message and detail kept per thread (tests/test_calls.nim,
-# tests/test_kit_dylib.nim). IFC-0490 is claimed above.
+# message and detail kept per thread (sdk/tests/test_calls.nim,
+# sdk/tests/test_kit_dylib.nim). IFC-0490 is claimed above.
 "IFC-0260" = "claimed"
 "IFC-0489" = "claimed"
 "IFC-0491" = "claimed"

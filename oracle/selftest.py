@@ -85,7 +85,7 @@ check("HASH App A root equals the oracle hashing of the COMMITMENT App A schema 
 for name, data in (("cde", cde), ("hsh", hsh)):
     check(f"cbor2 agrees with the oracle on {name}", cbor2.dumps(cbor2.loads(data), canonical=True) == data)
 
-vectors = json.loads((ROOT / "tests/vectors/cbor/decode.json").read_text(encoding="utf-8"))["vectors"]
+vectors = json.loads((ROOT / "sdk/tests/vectors/cbor/decode.json").read_text(encoding="utf-8"))["vectors"]
 disagree = [v["hex"][:40] for v in vectors if dcbor.classify(bytes.fromhex(v["hex"])) != v["expect"]]
 check(f"oracle agrees with all {len(vectors)} CBOR vectors", not disagree)
 for h in disagree[:10]:

@@ -24,7 +24,7 @@ when defined(windows):
   import ../src/logos_core/transport/io/[endpoint, sock]
   from ../src/logos_core/runtime/artifact import ArtifactRecord
   from ../src/logos_core/runtime/routing import RoutingRule, rmLocalTransport
-  import ./support/[kitbuild, loaderharness]
+  import logos_sdk/testing/kitbuild, ./support/loaderharness
 
   let work =
     currentSourcePath().parentDir.parentDir / "build" / "winprofile" / kitVariant

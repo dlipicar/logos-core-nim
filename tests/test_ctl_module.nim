@@ -25,7 +25,7 @@ when defined(posix):
   import
     ../src/logos_core/daemon/
       [assemble, ctlmodule, ctlwire, daemon_config_types, logging, session, sessioninit]
-  import ./support/[kitbuild, shortdir, slowdown]
+  import logos_sdk/testing/kitbuild, ./support/[shortdir, slowdown]
 
   import std/posix
 

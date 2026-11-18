@@ -1,4 +1,4 @@
-"""Writes tests/vectors/hash/layout.cbor: value trees and their HASH-profile value roots.
+"""Writes sdk/tests/vectors/hash/layout.cbor: value trees and their HASH-profile value roots.
 
 Each vector holds a normalized value root in the COMMITMENT §9.3 shape, with the two
 list annotations oracle/hashlayout.py documents (keys 100 and 101), and the digests
@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import dcbor  # noqa: E402
 import hashlayout as h  # noqa: E402
 
-OUT = Path("tests/vectors/hash/layout.cbor")
+OUT = Path("sdk/tests/vectors/hash/layout.cbor")
 
 
 def ident(b: int) -> bytes:

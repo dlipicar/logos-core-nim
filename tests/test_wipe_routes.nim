@@ -36,9 +36,9 @@ import ../src/logos_core/authority/scopes except
   LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
   LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
 import ../src/logos_core/transport/io/sock
-import ./support/[fakeca, kitbuild, kitruntime, shortdir]
-import ./kit/[meter_impl, vault_impl, vault_deferred]
-import ./generated/[meter_module_calls, vault_module_calls]
+import ./support/[fakeca, shortdir], logos_sdk/testing/[kitbuild, kitruntime]
+import logos_sdk/testing/fixtures/meter_impl, ./kit/[vault_impl, vault_deferred]
+import logos_sdk/testing/generated/meter_module_calls, ./generated/vault_module_calls
 
 let
   repo = currentSourcePath().parentDir.parentDir
