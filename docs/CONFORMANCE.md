@@ -727,6 +727,10 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   define treats an `init` that carries the field, even an empty list, as carrier loss
   (`test_module_host` H-15). The carrier trace exempts exactly that field.
 
+- logosctl's closing (DECISIONS I97): `plumbing.holdRcAnswerForTests`, `releaseRcAnswerForTests` and
+  `rcAnswerHeldForTests` hold a Runtime Control method's successful call between the Runtime's answer
+  and the call's outcome, and `ctlmodule.closingSeenForTests` reports that a command's unanswered call
+  has seen the instance closing. Only `test_ctl_module` calls them.
 - logosd (DECISIONS I95, G300): `ctlmodule.setCommandDelayForTests` holds each socket command,
   `assemble.failLoaderForTests` has the Module Loader report its own failure, and
   `assemble.diagnoseForTests` (over `engine.diagnoseForTests`; I95 amended 2026-11-16) has the Runtime

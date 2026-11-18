@@ -30,8 +30,9 @@
 ##   checks `params`: the Runtime does, as for any consumer.
 ## - **Destroy.** Sets `closing`, unlinks the socket, shuts down each
 ##   connection waiting for a request, cancels calls in flight, and joins
-##   every thread. A worker writing an answer finishes it first, so a
-##   `shutdown_runtime` command gets its answer.
+##   every thread. A `shutdown_runtime` call is not cancelled, and a worker
+##   writing an answer finishes it first, so that command gets the Runtime's
+##   answer (I97).
 
 {.push raises: [], gcsafe.}
 
@@ -168,6 +169,12 @@ when defined(lcnTestHooks):
     commandDelayMs: Atomic[int]
     initHeld: Atomic[bool]
     initWaiting: Atomic[bool]
+    closingSeen: Atomic[bool]
+
+  proc closingSeenForTests*(): bool =
+    ## [I97] A command's call, still unanswered, has seen the instance closing
+    ## and done what it does then.
+    closingSeen.load
 
   proc setCommandDelayForTests*(ms: int) =
     ## [G300] `test_hooks.ctl_command_delay_ms`: each command waits this long
@@ -325,9 +332,16 @@ proc onComplete(
 func failed(f: AbiFailure): Outcome =
   Outcome(code: f.code, message: f.message, detail: f.detail)
 
-proc rcCall(s: ptr Server, bare: string, params: seq[byte], deadlineMs: int): Outcome =
+proc rcCall(
+    s: ptr Server,
+    bare: string,
+    params: seq[byte],
+    deadlineMs: int,
+    cancelAtClose = true,
+): Outcome =
   ## One asynchronous call through the module's own binding, waited for. A
-  ## call in flight when the module starts closing is cancelled.
+  ## call in flight when the module starts closing is cancelled, unless
+  ## `cancelAtClose` is false: its outcome or its deadline then ends the wait.
   let slot = newSlot()
   var call = LogosAsyncCall()
   var options = LogosAsyncOptions(
@@ -369,9 +383,12 @@ proc rcCall(s: ptr Server, bare: string, params: seq[byte], deadlineMs: int): Ou
       done = slot.done
     if done:
       break
-    if not cancelled and s.isClosing:
-      call.vtable.cancel(addr call)
-      cancelled = true
+    if s.isClosing:
+      if cancelAtClose and not cancelled:
+        call.vtable.cancel(addr call)
+        cancelled = true
+      when defined(lcnTestHooks):
+        closingSeen.store(true)
     slot.bell.wait(Opt.some(getMonoTime() + initDuration(milliseconds = WakeSliceMs)))
   call.vtable.release(addr call)
   result = Outcome(code: slot.code, response: bytesOf(slot.response))
@@ -450,7 +467,16 @@ proc dispatch(s: ptr Server, m: LcnCtlMessage, c: Conn): LcnCtlReply =
     what = methodName(rc.`method`.kind)
     let deadline =
       clamp(int(rc.deadline_ms.get(uint32(MaxDeadlineMs))), 1, MaxDeadlineMs)
-    let o = rcCall(s, what, rc.params, deadline)
+    # [IMPL; I97] The Runtime answers `shutdown_runtime` and then begins the
+    # shutdown that closes this instance: that closing must not overtake the
+    # answer on its way here (DAEMON.md §7).
+    let o = rcCall(
+      s,
+      what,
+      rc.params,
+      deadline,
+      cancelAtClose = rc.`method`.kind != LcnCtlMethodKind.Shutdown_runtime,
+    )
     result = replyOf(s, o)
     outcome = $o.code
   logInfo(
@@ -667,6 +693,8 @@ proc stop(s: ptr Server) =
 proc initModule(
     _: type CtlServer, init: ModuleInit
 ): Result[CtlServer, InvocationFailure] =
+  when defined(lcnTestHooks):
+    closingSeen.store(false)
   let p = presentation().valueOr:
     return fail("no presentation: the logosctl module runs only under logosd")
   checkBinding(init.services.runtimeControl).isOkOr:

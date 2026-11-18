@@ -606,7 +606,8 @@ logosctl.name = "logosctl"
 When the instance stops (shutdown, or a stop by the orchestrator), it stops accepting, ends the
 connections that are reading, lets a command in a call get the Runtime's answer (its result, or
 CANCELLED), unlinks its socket and joins its threads. A `shutdown_runtime` command is answered before
-the instance stops.
+the instance stops, with the Runtime's own outcome: its call is the one call the closing does not cancel,
+so the wait for it ends with that outcome or the command's deadline (I97).
 
 ## 8. Administration
 
