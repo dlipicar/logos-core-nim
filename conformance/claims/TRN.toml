@@ -78,7 +78,9 @@ default = "claimed"
 "TRN-0219" = "claimed"
 "TRN-0220" = "claimed"
 "TRN-0221" = "claimed"
-"TRN-0222" = "claimed"
+# TRN-0222: the carrier authenticates the Runtime it is told to expect; that this is the Runtime the
+# remote invocation names is the facade process's wiring, so the unit is claimed with step 5-7b.
+"TRN-0222" = "deferred:tier-5"
 "TRN-0223" = "claimed"
 "TRN-0224" = "claimed"
 "TRN-0225" = "claimed"
