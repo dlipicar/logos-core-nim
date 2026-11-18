@@ -62,7 +62,7 @@ table (each unit with its reason: the workspace's `tier5-plans/step5-0-pkg-recou
 | E2 | `logos.remote.quic` (TRANSPORT §8.4.2), droppable | TRN 5; BCP-0032; RUN-0503, RUN-0504, RUN-0507 (counted in F) | 5-12 |
 | F | Remote Runtimes (RUNTIME §9, §9.3; INTERFACE §5.2) | RUN 126; IFC 20 | 5-7a, 5-7b |
 | G | Windows local transport (TRANSPORT §8.2.1) | TRN 17 | 5-4 (the spike: go on three builds, no chronos fork, G329-G333; TRN-0352's test), 5-9 |
-| H | The reverse mapper (INTERFACE §3) | IFC 152, and IFC-0887, IFC-0904 to re-evidence | 5-1 |
+| H | The reverse mapper (INTERFACE §3) | IFC 152, and IFC-0887, IFC-0904 to re-evidence; **claimed by 5-1 (I98)** | 5-1 |
 | K | iOS baseline (SEC-0044); sandbox and container placements and OS-enforced permissions have no gated unit | SEC 1 | outside Tier 5: M12 |
 | | **Total** | **676**: PKG 308, RUN 133, IFC 172, TRN 58, BCP 4, SEC 1 | |
 
@@ -155,6 +155,10 @@ G352 and G354 (DECISIONS, "Open items").
   TRN-0233, TRN-0370 to TRN-0376. E1's other 19 units are 5-7a's, but for TRN-0222, which is 5-7b's (the
   facade process passes the invocation's Runtime as the one expected); remote paths refuse marked
   contracts until 5-7a shows the TLS processes' erasure (G277).
+- 2026-11-18, step 5-1 (I98), H, the reverse mapper, parts 5-1a to 5-1c: `lcn-gen cddl` reconstructs the
+  schema documents and module binding of an explicit C header set (G317 to G322). 152 IFC units claimed,
+  IFC-0887 and IFC-0904 re-evidenced in both directions; the gate is IFC 776/776 with 20 units left to 5-7a
+  and 5-7b. G158's interim stays the limit of IFC-0003, IFC-0004 and the §3.8 units.
 
 ## Tiers at f4f83471 (the original plan)
 
