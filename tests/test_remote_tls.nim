@@ -504,6 +504,26 @@ suite "tls.streams":
     check "close_notify" in seen.readErrors[0] or "ended" in seen.readErrors[0]
     waitFor l.close()
 
+  test "[IMPL-DECISION I99] closing a stream whose reader the read bound holds back does not wait out closeWaitMs":
+    let seen = Seen()
+    let l = listen(b, seen, [a])
+    var cfg = fastConfig()
+    cfg.readBound = 32 * 1024
+    cfg.closeWaitMs = 10_000
+    let bound = cfg.readBound
+    let s = l.dial(a, b, config = cfg).get
+    # The echo comes back unread, so the reader stops at the bound.
+    check (waitFor s.writeFrame(newSeq[byte](256 * 1024))).isOk
+    check waitUntil(
+      proc(): bool =
+        s.engine.inputBuffered >= bound,
+      5000,
+    )
+    let t0 = Moment.now()
+    waitFor s.close()
+    check Moment.now() - t0 < milliseconds(5000)
+    waitFor l.close()
+
   test "[TRN-0227] closePeer closes every stream of one Runtime and no other":
     let seen = Seen()
     let l = listen(b, seen, [a, c])

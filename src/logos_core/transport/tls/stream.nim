@@ -153,13 +153,15 @@ proc newStream(
 
 proc pump(s: TlsStream) {.async: (raises: []).} =
   ## The one reader of the transport: ciphertext into the engine, holding back
-  ## while `readBound` bytes wait unconsumed.
+  ## while `readBound` bytes wait unconsumed. Teardown ends that wait.
   var buf = newSeq[byte](16 * 1024)
   try:
     while true:
-      while s.engine.inputBuffered >= s.cfg.readBound:
+      while s.engine.inputBuffered >= s.cfg.readBound and not s.closed:
         s.spaceEvent.clear()
         await s.spaceEvent.wait()
+      if s.closed:
+        break
       let n = await s.tr.readOnce(addr buf[0], buf.len)
       if n == 0:
         break
@@ -254,6 +256,7 @@ proc release(s: TlsStream) {.async: (raises: []).} =
     return
   s.closed = true
   s.registry.remove(s)
+  s.spaceEvent.fire() # a reader held back by `readBound` has no input to end it
   await s.tr.closeWait()
   if s.reader != nil and not s.reader.finished:
     try:
