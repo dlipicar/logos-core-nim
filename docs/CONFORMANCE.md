@@ -93,7 +93,8 @@ Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --close
 - **INTERFACE** adds the Runtime as ABI caller, route and Runtime Control binding, asynchronous calls
   and the invocation context. Deferred: the boundary-invariance units until a second boundary exists,
   marked-payload erasure (Tier 4b; until then no route is made to a contract that marks a payload,
-  G244; claimed in step 4b-3b, below), the reverse mapper and remote bindings (Tier 5).
+  G244; claimed in step 4b-3b, below), the reverse mapper (claimed in step 5-1, below) and remote
+  bindings (Tier 5).
 - **PACKAGE MANAGER**, **SYSTEM BCP** and **SECURITY CONSIDERATIONS** keep the parts built; the
   Package Manager handoff and installation are Tier 5 (the handoff moved there from Tier 4b by owner
   decision 1 (a), 2026-11-13), complete-system composition Tier 4b, and platform profiles Tier 5
@@ -443,7 +444,7 @@ claim as it stands.
   the remote profiles.
 - **INTERFACE** adds execution-boundary invariance (direct against local transport, I91) and
   marked-payload erasure for orc builds, with the five non-claims below (I92). Tier 5: remote mode
-  (IFC-0010), the reverse mapper and remote bindings.
+  (IFC-0010) and remote bindings; the reverse mapper is claimed in step 5-1 (below).
 - **PACKAGE MANAGER** keeps Tier 3's artifacts and the §11 resolver, and adds PKG-0288 (by tags) and
   PKG-0422 (a true "no", G137 as amended 2026-11-16). The handoff (§17), trust continuity beyond
   PKG-0422's statement (G299) and installation are Tier 5.
@@ -459,6 +460,20 @@ claim as it stands.
 The gate at the close: RUN 829/829, LDR 131/131, CFG 122/122, CAP 385/385, TRN 242/242, IFC 624/624,
 PKG 212/212, BCP 49/49, SEC 2/2, with nothing deferred to Tier 4b and to Tier 5 RUN 133, TRN 58,
 IFC 172, PKG 308, BCP 4, SEC 1.
+
+### What Tier 5 step 5-1 changes
+
+The C-to-CDDL reverse mapper, `lcn-gen cddl` (DECISIONS I98, D30, G139; G317 to G322). INTERFACE §3 is
+claimed in both directions, with IFC-0003 and IFC-0004: IFC 776/776, with 20 units left for Tier 5
+(IFC-0010 and the remote bindings of §5.2).
+
+**Limits of the claim.** IFC-0003, IFC-0004 and the §3.8 units (IFC-0355 to IFC-0357, IFC-0861 to
+IFC-0863) hold under G158's interim common-name projection, which the specs do not define (TL-01,
+open): the mapper recognizes the common types by the names this repository's `logos_types.h` declares.
+`lcn-gen cddl` refuses a header set over 16 MiB (G321). A schema set within the §5.3 limits can generate
+a larger one, for example when inline declarations are nested deeply, and the §3.8 round trip is not
+provided for such a set. The refusal is explicit and nothing is written. At this limit the tool can need
+about 3 GB of memory.
 
 ### What Tier 5 step 5-2 changes
 

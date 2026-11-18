@@ -88,7 +88,7 @@ AUTHORITY, IF INTERFACE, CFG CONFIGURATION, PM PACKAGE MANAGER.
 | R | l.3394, l.3397 | snapshot capacity, retention, reclamation and overload | [HOST-CONFIG.md](HOST-CONFIG.md), "Observation", Limits | RUN-0965, RUN-0967 |
 | R | l.3775 | resumption after a restart apart from retries after a failure | [§9](#9-directories-and-state), recovery; [HOST-CONFIG.md](HOST-CONFIG.md), "The reference orchestration module" | RUN-1064 |
 | R | l.4035 | each configuration format and how protected inputs are supplied | `logos-core-nim.app-config.v1` ([HOST-CONFIG.md](HOST-CONFIG.md)); logosd derives it from `daemon-config.v1` ([DAEMON.md](DAEMON.md) §3) | RUN-0740 |
-| IF | l.881 | code-generation tooling's identifier-length and resource limits | lcn-gen's usage text, `Limits` | IFC-0624 |
+| IF | l.881 | code-generation tooling's identifier-length and resource limits | lcn-gen's usage text, `Limits`, for both directions (`lcn-gen cddl` included) | IFC-0624 |
 | IF | l.3150 | a documented, finite, configurable payload depth | `max_payload_depth`, 128 to 1024, default 1024 ([§12](#12-resource-bounds)) | IFC-0923, IFC-0924, IFC-0925 |
 | CA | l.101-103 | a protected attribute-source integration | [§11](#11-the-attribute-source) | CAP-0274, CAP-0275, CAP-0276, CAP-0277, CAP-0278 |
 | CA | l.406-407 | each permission's enforcement component and behaviour | [§7](#7-permission-definitions) | CAP-0083 |

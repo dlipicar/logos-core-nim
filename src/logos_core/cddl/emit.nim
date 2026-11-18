@@ -7,6 +7,9 @@
 ## then the declarations in the order given. Layout, comments and declaration
 ## order are not schema identity inputs (IF §3.8 l.2633).
 ##
+## [IMPL-DECISION G320] `compact` prints the same document with no layout, for a
+## document whose ordinary layout would pass a §5.3 byte limit.
+##
 ## [IMPL-DECISION G320] A map field name is written as a bare key, except a name
 ## that a CDDL reader could take for a type or a value: an RFC 8610 Appendix D or
 ## Logos prelude name, or `true`, `false`, `null`, `nil`, `undefined`. Those are
@@ -159,21 +162,29 @@ func key(name: string): string =
   else:
     name
 
-func emitNode(n: ENode, indent: int, inChoice = false): string
+func emitNode(n: ENode, indent: int, compact: bool, inChoice = false): string
 
-func emitFields(fs: seq[EField], indent: int): string =
+func emitFields(fs: seq[EField], indent: int, compact: bool): string =
   if fs.len == 0:
     return "{}"
+  if compact:
+    var parts: seq[string] = @[]
+    for f in fs:
+      parts.add(
+        (if f.optional: "?" else: "") & key(f.name) & ":" &
+          emitNode(f.node, indent, compact)
+      )
+    return "{" & parts.join(",") & "}"
   let pad = repeat(' ', indent + 2)
   var s = "{\n"
   for f in fs:
     s.add(
       pad & (if f.optional: "? " else: "") & key(f.name) & ": " &
-        emitNode(f.node, indent + 2) & ",\n"
+        emitNode(f.node, indent + 2, compact) & ",\n"
     )
   s & repeat(' ', indent) & "}"
 
-func emitNode(n: ENode, indent: int, inChoice = false): string =
+func emitNode(n: ENode, indent: int, compact: bool, inChoice = false): string =
   case n.kind
   of enPrim:
     n.prim
@@ -189,19 +200,19 @@ func emitNode(n: ENode, indent: int, inChoice = false): string =
   of enText:
     cddlText(n.text)
   of enMap:
-    emitFields(n.fields, indent)
+    emitFields(n.fields, indent, compact)
   of enList:
-    "[* " & emitNode(n.element, indent) & "]"
+    (if compact: "[*" else: "[* ") & emitNode(n.element, indent, compact) & "]"
   of enTuple:
     var parts: seq[string] = @[]
     for x in n.items:
-      parts.add(emitNode(x, indent))
-    "[" & parts.join(", ") & "]"
+      parts.add(emitNode(x, indent, compact))
+    "[" & parts.join(if compact: "," else: ", ") & "]"
   of enChoice:
     var parts: seq[string] = @[]
     for a in n.arms:
-      parts.add(emitNode(a, indent, true))
-    let s = parts.join(" / ")
+      parts.add(emitNode(a, indent, compact, true))
+    let s = parts.join(if compact: "/" else: " / ")
     if inChoice:
       "(" & s & ")"
     else:
@@ -209,27 +220,36 @@ func emitNode(n: ENode, indent: int, inChoice = false): string =
   of enRef:
     n.target
 
-func emit*(d: EDocument): string =
+func emit*(d: EDocument, compact = false): string =
   ## The document's CDDL source: its metadata block, then its declarations.
+  let eq = if compact: "=" else: " = "
   var s = ""
-  if d.module.len > 0 or d.iface.len > 0 or d.implements.len > 0 or d.sensitive.len > 0:
+  if not compact and (
+    d.module.len > 0 or d.iface.len > 0 or d.implements.len > 0 or d.sensitive.len > 0
+  ):
     s.add("; -- metadata --\n")
   if d.module.len > 0:
-    s.add("_module = " & cddlText(d.module) & "\n")
+    s.add("_module" & eq & cddlText(d.module) & "\n")
   if d.iface.len > 0:
-    s.add("_interface = " & cddlText(d.iface) & "\n")
+    s.add("_interface" & eq & cddlText(d.iface) & "\n")
   if d.implements.len > 0:
-    s.add("_implements = [\n")
-    for r in d.implements:
-      s.add("  h'" & r & "',\n")
-    s.add("]\n")
+    if compact:
+      var roots: seq[string] = @[]
+      for r in d.implements:
+        roots.add("h'" & r & "'")
+      s.add("_implements=[" & roots.join(",") & "]\n")
+    else:
+      s.add("_implements = [\n")
+      for r in d.implements:
+        s.add("  h'" & r & "',\n")
+      s.add("]\n")
   if d.sensitive.len > 0:
     var names: seq[string] = @[]
     for n in d.sensitive:
       names.add(cddlText(n))
-    s.add("_sensitive = [" & names.join(", ") & "]\n")
+    s.add("_sensitive" & eq & "[" & names.join(if compact: "," else: ", ") & "]\n")
   for decl in d.declarations:
-    if s.len > 0:
+    if s.len > 0 and not compact:
       s.add("\n")
-    s.add(decl.name & " = " & emitNode(decl.node, 0) & "\n")
+    s.add(decl.name & eq & emitNode(decl.node, 0, compact) & "\n")
   s

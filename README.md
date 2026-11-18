@@ -11,7 +11,8 @@ The specs are being revised, so the work is ordered by how settled each area is
 - Tier 2: INTERFACE schema acceptance, call surfaces, payload validation and outcomes, the common
   schema, and `lcn-gen`, which generates C headers (C mapping revision 3: types, method typedefs and, for a module
   binding, its provider functions and module symbols) and Nim types with codecs. Generated C headers are stamped
-  `PROVISIONAL ABI`.
+  `PROVISIONAL ABI`. `lcn-gen cddl` goes the other way, from an explicit C header set back to its CDDL documents
+  and module binding (Tier 5 step 5-1).
 - Tier 3, without I/O: the TRANSPORT envelope, framing, Hello and route tickets, payload
   commitments, cancellation and multiplexing as codecs and state machines; and the Package Manager's
   package artifacts: the manifest and its commitment, package-signing trust input, COSE_Sign1, LGX
@@ -105,7 +106,7 @@ The specs are being revised, so the work is ordered by how settled each area is
 - Not yet, Tier 5 ([docs/SPEC-STATUS.md](docs/SPEC-STATUS.md), "The Tier 5 plan"): the Package
   Manager (package trust, sources and the catalog, installation, its service and package-backed
   selection; SLSA provenance and the Nix profile if kept), remote Runtimes over `tls-tcp` (QUIC if
-  kept), the reverse mapper (C to CDDL), and the Windows local transport if its spike allows. Outside
+  kept), and the Windows local transport if its spike allows. Outside
   Tier 5: sandbox and container placements and operating-system enforcement of permissions
   (DECISIONS D16).
 
@@ -295,7 +296,7 @@ session layout, the daemon-config fields, the default policy and every command a
 | Path | What |
 |---|---|
 | `src/logos_core/` | The library. BLAKE3 and slhdsa-c (FIPS 205) C sources are vendored under `crypto/blake3/` and `crypto/slhdsa/` (`tools/update-blake3.sh`, `tools/update-slhdsa.sh`). |
-| `src/logos_core/iface/` | INTERFACE: acceptance, names, the C type mapping, call surfaces and the provider call-surface descriptor, payloads, outcomes. |
+| `src/logos_core/iface/` | INTERFACE: acceptance, names, the C type mapping and its reverse (`clex`, `cliteral`, `cparse`, `cinput`, `creject`, `rmap`), call surfaces and the provider call-surface descriptor, payloads, outcomes. |
 | `src/logos_core/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
 | `src/logos_core/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
 | `src/logos_core/runtime/`, `src/liblogos_runtime.nim` | The Runtime: the Loader, the engine (instances, lifecycle, Runtime Control, routes, events, asynchronous calls), transported routes (`routing`, `tport`, `sessionauth`, `served`, `ports`), the host configuration and the Host Embedding API; the `liblogos_runtime` exports. |
