@@ -473,8 +473,9 @@ Part 5-2a adds the verifier: a trust snapshot built from protected input and nev
 and nine checks in a fixed order (accepted time, one certificate that is a direct anchor, the
 enrollment, the key, complete DER equality with the anchor, validity, Key Usage, Extended Key Usage,
 unprocessed critical extensions; G324, G325). Accepted current time is the system clock at or past
-`TimeFloor`. TRN-0216, TRN-0221 to TRN-0226 and TRN-0370 to TRN-0375 are claimed. What needs routes,
-tickets, provider sessions and the remote trust input stays Tier 5 (5-7a).
+`TimeFloor`. TRN-0216, TRN-0221, TRN-0223 to TRN-0226 and TRN-0370 to TRN-0375 are claimed. What needs
+routes, tickets, provider sessions and the remote trust input stays Tier 5 (5-7a), and TRN-0222 waits for
+the facade process that passes the invocation's Runtime as the one expected (5-7b).
 
 Part 5-2d pins nim-boringssl 0.0.16 and turns on its `BORINGSSL_ZERO_RECORD_BUFFERS` (G327): BoringSSL
 zeroes its TLS record buffers before freeing them, and the carrier erases its own copies of decrypted
