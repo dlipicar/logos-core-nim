@@ -24,6 +24,9 @@ reported as TF-12 in `claude-spec-comments-3.md`, logos-lips `457527eb` (branch
 Line numbers in the rows below are those of the report that raised each item (`f4f83471`); the Status
 column is current.
 
+Paths below are where the files are since the SDK moved to `sdk/` (DECISIONS R7). Rows of
+`docs/DECISIONS.md` keep the paths they were written with; `tools/restructure/pathmap.toml` maps them.
+
 ## Tiers at 6a4dfa28
 
 | Tier | Area | State |
@@ -290,8 +293,8 @@ Three spec facts drive the order:
 | IF-04 | claude-spec-comments | INTERFACE §1.5 vs §2.5 | M2 | **HIGH-n** | C form of choice-of-maps events. cl l.300-303 | `iface/cmap.nim` `choiceDef`; test `[IFC-0866] [IFC-0867]` | changed in 6a4dfa28: ordinary tagged union, `_event` stem kept (G63 retired): done |
 | IF-05 | claude-spec-comments | INTERFACE §2.3, §3.5 | M2,M10 | LOW | Header text, not ABI. | — | resolved in 6a4dfa28 |
 | IF-06 | claude-spec-comments | INTERFACE §3.4 | M2,M10 | **HIGH-n** | Position of the `has_` flag is struct layout. =s. cl l.311-314 | `iface/cmap.nim`; test `[IFC-0631]` | resolved in 6a4dfa28; =s (G66) |
-| IF-07 | claude-spec-comments | INTERFACE §2.7 | M2 | MED | Allocation unit and free order. | `codegen/callrt.nim` `CallArena`, response owners (I72); suite `ifc.kit: typed provider functions` in `tests/test_kit.nim` | resolved in 6a4dfa28: built by I72 (review 2026-11-11, item C6) |
-| IF-08 | claude-spec-comments | INTERFACE §2.7, A.5 | M2 | MED | Name of a non-exported free helper. | `lcn_clear_<namespace>_<Method>` in `codegen/cmirror.nim`, `codegen/callsgen.nim` (I73); suites `ifc.calls` in `tests/test_calls.nim` | resolved in 6a4dfa28: our helpers are `lcn_clear_…` (I73), built (review 2026-11-11, item C6) |
+| IF-07 | claude-spec-comments | INTERFACE §2.7 | M2 | MED | Allocation unit and free order. | `codegen/callrt.nim` `CallArena`, response owners (I72); suite `ifc.kit: typed provider functions` in `sdk/tests/test_kit.nim` | resolved in 6a4dfa28: built by I72 (review 2026-11-11, item C6) |
+| IF-08 | claude-spec-comments | INTERFACE §2.7, A.5 | M2 | MED | Name of a non-exported free helper. | `lcn_clear_<namespace>_<Method>` in `codegen/cmirror.nim`, `codegen/callsgen.nim` (I73); suites `ifc.calls` in `sdk/tests/test_calls.nim` | resolved in 6a4dfa28: our helpers are `lcn_clear_…` (I73), built (review 2026-11-11, item C6) |
 | IF-09 | claude-spec-comments | INTERFACE §1.3/§2.1; RUNTIME §1.3 | M2 | LOW | Name reservation; HIGH only if the symbol-derivation scheme changes. =s | `iface/names.nim` (the G69 checks removed) | resolved in 6a4dfa28: no extra reservation; G69 retired: done |
 | IF-10 | claude-spec-comments | INTERFACE §5.2; RUNTIME §4.2 | M2,M6 | LOW | Editorial. | — | resolved in 6a4dfa28 |
 | IF-11 | claude-spec-comments | INTERFACE §2.1 | M2 | LOW | Header order, not ABI. | `iface/cmap.nim` `emit`, `ordered`; test `[IFC-0882]` (§3.9.3 byte for byte) | resolved in 6a4dfa28: placement is not canonical; ours is I60 |
@@ -402,7 +405,7 @@ Three spec facts drive the order:
 | EC-03 | claude-spec-comments | RUNTIME §9.3 | M3 | MED | Error code. | — | resolved in 6a4dfa28: precondition table; remarked in `claude-spec-comments.md`, "Remarks on the response" (logos-lips `68628d95`; review item E5) |
 | EC-04 | claude-spec-comments | CONFIG §8; RUNTIME §9.3 | M4 | MED | Error code; a failure arm would change the Runtime Control root. | — | resolved in 6a4dfa28: CONFIG table with VERSION_MISMATCH and TRANSPORT_ERROR (G21); remarked in `claude-spec-comments.md`, "Remarks on the response" (logos-lips `68628d95`; review item E5) |
 | EC-07 | claude-spec-comments | RUNTIME Sys. Svc Availability | M3,M4 | MED | Error code. | — | resolved in 6a4dfa28: precondition table |
-| EC-08 | claude-spec-comments | INTERFACE §5.2 | M3,M6 | MED | Error code. | `abi/checks.nim` (I66); suites `ifc.abi-*` in `tests/test_abi.nim` | changed in 6a4dfa28 (review 2026-11-11, item A4): VERSION_MISMATCH only for an unsupported version or extent; a null vtable, state or required operation is MODULE_ERROR (INTERFACE l.3819-3820); G25 superseded; done in `abi/checks.nim` (I66) |
+| EC-08 | claude-spec-comments | INTERFACE §5.2 | M3,M6 | MED | Error code. | `abi/checks.nim` (I66); suites `ifc.abi-*` in `sdk/tests/test_abi.nim` | changed in 6a4dfa28 (review 2026-11-11, item A4): VERSION_MISMATCH only for an unsupported version or extent; a null vtable, state or required operation is MODULE_ERROR (INTERFACE l.3819-3820); G25 superseded; done in `abi/checks.nim` (I66) |
 | EC-10 | claude-spec-comments | RUNTIME §9.3 | M3,M4,M6 | MED | Free text becomes an enum → Runtime Control root changes. | — | changed in 6a4dfa28: open failure codes with defined lists (G27) |
 | EC-11 | claude-spec-comments | RUNTIME §13.3/§13.4 | M3 | MED | Error code. (For all EC items: allocating *new* codes instead would cause the common-schema ripple.) | — | resolved in 6a4dfa28 |
 | HC-08 | human-spec-comments | INTERFACE Invariance; RUNTIME §12; CONFIG §1/§6 | M3,M8 | MED | Affects our methods that take host paths (G99). | — | resolved in 6a4dfa28 by spec text (no reply; review 2026-11-11, item E1): a path grants no access in another realization (RUNTIME l.3910); co-location gives no shared namespace, and a contract taking a path defines whose namespace and the failure (l.3917-3920); G99 is decided per contract when the payload modules are ported (re-decided 2026-11-11, review item A9); `claude-spec-comments-3.md` Appendix C |

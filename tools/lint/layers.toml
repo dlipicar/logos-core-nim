@@ -3,7 +3,7 @@
 # under src/ that no entry covers is core.
 
 # `strict = true` accepts no exception and requires every layer to exist.
-strict = false
+strict = true
 
 # What generated kits import, and what it must never reach.
 kit_facade = "sdk/src/logos_sdk/kit.nim"

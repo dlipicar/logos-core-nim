@@ -229,8 +229,8 @@ So is `lcn-pkg`, which builds, signs, packs and checks packages (`lcn-pkg --help
 nix run .#lcn-pkg -- verify example.lgx --trust:trust.json
 ```
 
-The generated Nim modules (`sdk/src/logos_sdk/codegen/common_types.nim`, `tests/generated/`) are
-committed, and a test fails when they are stale. To rewrite them:
+The generated Nim modules (`sdk/src/logos_sdk/codegen/common_types.nim`,
+`sdk/src/logos_sdk/testing/generated/`, `sdk/tests/generated/`, `tests/generated/`) are committed, and a test fails when they are stale. To rewrite them:
 
 ```bash
 nimble regen
@@ -293,9 +293,14 @@ session layout, the daemon-config fields, the default policy and every command a
 
 ## Layout
 
+The implementation has two layers. `sdk/` is the package `logos_sdk`, layer 1: the base set (CBOR,
+cdCDDLe, hashing, commitments and INTERFACE), the generators, the module kit and the helpers module
+tests share (`logos_sdk/testing`). Core, under `src/logos_core/`, is built on it, and the daemon and
+the CLI on core. `tools/lint/layers.py` holds that direction: nothing in `sdk/` imports core.
+
 | Path | What |
 |---|---|
-| `src/logos_core/` | The library. BLAKE3 and slhdsa-c (FIPS 205) C sources are vendored under `crypto/blake3/` and `crypto/slhdsa/` (`tools/update-blake3.sh`, `tools/update-slhdsa.sh`). |
+| `src/logos_core/` | The library, on `logos_sdk`. The slhdsa-c (FIPS 205) C sources are vendored under `crypto/slhdsa/` (`tools/update-slhdsa.sh`), and the BLAKE3 ones under `sdk/src/logos_sdk/crypto/blake3/` (`tools/update-blake3.sh`). |
 | `sdk/src/logos_sdk/iface/` | INTERFACE: acceptance, names, the C type mapping and its reverse (`clex`, `cliteral`, `cparse`, `cinput`, `creject`, `rmap`), call surfaces and the provider call-surface descriptor, payloads, outcomes. |
 | `sdk/src/logos_sdk/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
 | `sdk/src/logos_sdk/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
@@ -305,10 +310,10 @@ session layout, the daemon-config fields, the default policy and every command a
 | `src/logos_core/transport/` | TRANSPORT: envelope codec, framing, Hello, tickets, sessions, the schema boundary; `io/`, the unix-stream I/O thread. |
 | `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; catalog and inspection records (`records.nim`) and the sans-I/O dependency resolver (`resolver.nim`); the `lcn-pkg` CLI. |
 | `src/logos_core/crypto/slhdsa.nim`, `sdk/src/logos_sdk/base/nfc.nim` | SLH-DSA-SHA2-192s over slhdsa-c (pure and internal functions only); Unicode NFC for LGX paths. |
-| `tests/` | unittest2 suites; each one runs under `--mm:orc` and `--mm:refc`. `tests/generated/` is `lcn-gen` output; `tests/kit/` holds three modules written with the kit, which `test_kit_dylib` also builds as shared libraries, and the C harness that calls their typed functions directly or through the typed call helpers (`test_calls`). `tests/host/` drives `liblogos_runtime` from C (`test_host_dylib`). |
+| `sdk/tests/`, `tests/` | unittest2 suites of the SDK and of core; each one runs under `--mm:orc` and `--mm:refc`. `sdk/src/logos_sdk/testing/` holds the helpers, kit fixtures and `lcn-gen` output both use, and `sdk/tests/kit/` the C harness that calls the kit's typed functions directly or through the typed call helpers (`test_calls`). `tests/host/` drives `liblogos_runtime` from C (`test_host_dylib`). |
 | `spec/mirrors/`, `spec/mirrors.toml` | Verbatim copies of the spec blocks the code and tests are built from. |
 | `spec/pins.toml` | Every identifier, root and digest the specs pin, with the section it comes from. |
-| `conformance/` | Requirement ledger and per-section claims; see [docs/CONFORMANCE.md](docs/CONFORMANCE.md). |
+| `conformance/`, `sdk/conformance/` | Requirement ledgers and per-section claims of core and of the SDK; see [docs/CONFORMANCE.md](docs/CONFORMANCE.md). |
 | `tools/spectrace/` | Requirement extraction, mirror and pin checks, coverage gate. |
 | `oracle/` | An independent Python reference for deterministic CBOR, hashing, SLH-DSA-SHA2-192s (FIPS 205) and COSE vectors, and the NFC tables. |
 | `nix/` | Nim overlay, Nimble dependency fetching, the shared derivation helper, the Android and iOS runners. |
