@@ -56,6 +56,7 @@
             ps.cbor2
             ps.blake3
           ]);
+          tlsPeerPython = pkgs.python3.withPackages (ps: [ ps.pyopenssl ]);
 
           deps = import ./nix/nimble-deps.nix {
             inherit (pkgs) lib fetchgit;
@@ -186,6 +187,10 @@
                         "fortify"
                         "fortify3"
                       ];
+                    }
+                    // lib.optionalAttrs (file == "test_remote_tls.nim") {
+                      # The independent TLS peer (DECISIONS G128): test only.
+                      LCN_TLS_PEER_PYTHON = "${tlsPeerPython}/bin/python3";
                     }
                   )
                 )
