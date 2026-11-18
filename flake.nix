@@ -584,6 +584,13 @@
             python3 ${./tools/lint/firstwrite.py} src tests
             touch $out
           '';
+          # The import direction between the SDK, core, the daemon and the CLI.
+          lint-layers = s.pkgs.runCommand "lint-layers" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+            cd ${s.nimSources}
+            python3 ${./tools/lint/layers.py} --self-test
+            python3 ${./tools/lint/layers.py} --config ${./tools/lint/layers.toml}
+            touch $out
+          '';
         }
       );
 

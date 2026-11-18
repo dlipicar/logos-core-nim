@@ -1,0 +1,86 @@
+# The layer map of tools/lint/layers.py. Paths are relative to the repository root; an entry
+# ending in `/` covers a directory, any other names one file, and the longest entry wins. A file
+# under src/ that no entry covers is core.
+
+# `strict = true` accepts no exception and requires every layer to exist.
+strict = false
+
+# What generated kits import, and what it must never reach.
+kit_facade = "sdk/src/logos_sdk/kit.nim"
+kit_forbidden = [
+  "src/logos_core/kit/rcclient.nim",
+  "src/logos_core/kit/rc_types.nim",
+  "sdk/src/logos_sdk/kit/rcclient.nim",
+  "sdk/src/logos_sdk/kit/rc_types.nim",
+]
+
+# The TLS engine, which stays out of logosd and logosctl. `transport/tls/signing` may be reached:
+# the signing service belongs to the daemon.
+daemon_tls_forbidden = [
+  "src/logos_core/transport/tls/boring.nim",
+  "src/logos_core/transport/tls/engine.nim",
+]
+
+# The core modules the daemon and the CLI may import directly, relative to src/logos_core/.
+daemon_allowlist = [
+  "authority/scopes",
+  "crypto/slhdsa",
+  "durable",
+  "loader/contract",
+  "orchestration",
+  "orchestration/needs",
+  "orchestration/settings",
+  "permissions",
+  "runtime/authscopes",
+  "runtime/bell",
+  "runtime/engine",
+  "runtime/evidence",
+  "runtime/host",
+  "runtime/host_config",
+  "runtime/plumbing",
+  "runtime/rc_types",
+  "runtime/stateadmin",
+  "runtime/store",
+  "transport/io/peercred",
+  "transport/io/sock",
+]
+
+# Besides the test trees, what may import logos_sdk/testing.
+testing_importers = ["tools/regen_nim.nim"]
+
+[layers]
+sdk_base = [
+  "src/logos_core/abi/",
+  "src/logos_core/base/",
+  "src/logos_core/cbor/",
+  "src/logos_core/cddl/",
+  "src/logos_core/commitment/",
+  "src/logos_core/hash/",
+  "src/logos_core/iface/",
+  "src/logos_core/cbor.nim",
+  "src/logos_core/cddl.nim",
+  "src/logos_core/commitment.nim",
+  "src/logos_core/hash.nim",
+  "src/logos_core/pins.nim",
+  "src/logos_core/crypto/blake3.nim",
+]
+sdk_binding = ["src/logos_core/codegen/", "src/logos_core/kit/"]
+sdk_testing = ["sdk/src/logos_sdk/testing/"]
+sdk_tests = ["sdk/tests/"]
+daemon_cli = [
+  "src/logos_core/daemon/",
+  "src/logos_core/cli/",
+  "src/logosd.nim",
+  "src/logosctl.nim",
+]
+
+# Each records one import that breaks a rule today.
+[[exception]]
+rule = "sdk-closed"
+file = "src/logos_core/kit/rcclient.nim"
+imports = "src/logos_core/runtime/rc_types.nim"
+
+[[exception]]
+rule = "base-below-binding"
+file = "src/logos_core/iface/common_types.nim"
+imports = "src/logos_core/codegen/nimrt.nim"
