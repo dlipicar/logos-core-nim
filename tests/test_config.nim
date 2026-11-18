@@ -20,7 +20,7 @@ import logos_sdk/iface/[accept, outcome, provider, surface]
 import logos_sdk/codegen/common_types
 import ../src/logos_core/transport/envelope
 import ../src/logos_core/transport/framing
-import ./support/[kitbuild, kitruntime, tunerconfig]
+import ./support/[coretuner, kitbuild, kitruntime]
 import ./support/testdirs
 import ./kit/[meter_impl, tuner_impl]
 import ./generated/[meter_module_calls, tuner_module_types]

@@ -20,7 +20,7 @@ import logos_sdk/codegen/nimrt
 import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, payload, surface]
 import logos_sdk/codegen/common_types
-import ./support/[kitbuild, kitruntime, tunerconfig]
+import ./support/[coretuner, kitbuild, kitruntime]
 import ./kit/meter_impl
 import ./generated/meter_module_calls
 

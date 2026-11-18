@@ -1,7 +1,7 @@
 ## Rewrites the committed lcn-gen outputs: `nimble regen`.
 
 import results
-import ../tests/support/genfixtures
+import ../tests/support/[genfixtures, genfixtures_core]
 
 proc main() =
   writeFile(commonTypesPath, generatedCommon().get)
@@ -59,7 +59,13 @@ proc main() =
   for f in nimFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath
+  for f in coreNimFixtures:
+    writeFile(f.fixturePath, f.generated.get)
+    echo f.fixturePath
   for f in headerFixtures:
+    writeFile(f.fixturePath, f.generated.get)
+    echo f.fixturePath
+  for f in coreHeaderFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath
   for f in exportFixtures:

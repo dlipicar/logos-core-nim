@@ -37,8 +37,7 @@ when defined(posix):
   import logos_sdk/pins
   import
     ./support/[
-      fakeca, kitbuild, kitruntime, modulehostbuild, shortdir, tunerconfig,
-      withoutloader,
+      coretuner, fakeca, kitbuild, kitruntime, modulehostbuild, shortdir, withoutloader
     ]
   import ./kit/meter_impl
   import ./generated/meter_module_calls

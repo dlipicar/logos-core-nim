@@ -15,11 +15,12 @@ import logos_sdk/base/hex
 import logos_sdk/hash/hashinput
 import logos_sdk/cbor
 import ./support/[ccompile, specdata]
-from ./support/genfixtures import
-  caPrimary, caSupporting, carrierPrimary, cliPrimary, ctlPrimary, daemonConfigDocument,
-  evstorePrimary, hostConfigDocument, lcnCallPrimary, ldrPrimary, ldrSupporting,
-  logosctlPrimary, nimFixtures, orchPrimary, orchStatePrimary, policyPrimary, rcPrimary,
-  rcSupporting, statePrimary, storePrimary, trustPrimary
+from ./support/genfixtures import nimFixtures, rcPrimary, rcSupporting
+from ./support/genfixtures_core import
+  caPrimary, caSupporting, carrierPrimary, cliPrimary, coreNimFixtures, ctlPrimary,
+  daemonConfigDocument, evstorePrimary, hostConfigDocument, lcnCallPrimary, ldrPrimary,
+  ldrSupporting, logosctlPrimary, orchPrimary, orchStatePrimary, policyPrimary,
+  statePrimary, storePrimary, trustPrimary
 
 const outDir = "build/rmap"
 
@@ -1851,7 +1852,7 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
         checkpoint name
         check roundTrip(primary, [], supp, system)
       var seen: seq[string]
-      for f in nimFixtures:
+      for f in @nimFixtures & @coreNimFixtures:
         if f.primary notin seen:
           seen.add(f.primary)
           checkpoint f.primary

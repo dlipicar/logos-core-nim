@@ -21,7 +21,7 @@ import ../src/logos_core/orchestration
 import ../src/logos_core/orchestration/[accounting, testhooks]
 import logos_sdk/kit/rcclient
 import ../src/logos_core/loader/contract
-import ./support/[fakeca, permfixture, slowdown, tunerconfig]
+import ./support/[coretuner, fakeca, permfixture, slowdown]
 import ./kit/[flaky_impl, tuner_impl]
 
 let

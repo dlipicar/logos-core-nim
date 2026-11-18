@@ -8,7 +8,7 @@ import results
 import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/iface/accept
-import ../../src/logos_core/runtime/configcheck, logos_sdk/kit/rc_types
+import logos_sdk/kit/rc_types
 import ./testdirs
 
 export results
@@ -52,11 +52,6 @@ proc tunerDecl*(
 proc tunerDeclBytes*(default = Opt.none(seq[byte]), live = false): seq[byte] =
   ## The declaration as a host configuration carries it.
   encode(tunerDecl(default, live)).tryGet
-
-proc tunerAccepted*(
-    default = Opt.none(seq[byte]), provisioned = Opt.none(seq[byte]), live = false
-): AcceptedConfiguration =
-  acceptConfiguration(tunerDecl(default, live), provisioned).tryGet
 
 proc tunerInput*(value: seq[byte], revision = 1'u64): seq[byte] =
   ## One `configuration_input` of `value` under the tuner schema, as a
