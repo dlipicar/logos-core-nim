@@ -99,7 +99,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-1 | TL-01 (G158) | recognize the common type names we generate; G158 is the limit of IFC-0003, IFC-0004 and the §3.8 units | decided (A10) |
 | 5-2 | TS-04 | follow the text: one connection per route, one per consumer for control, a session reused only by the same route (TRANSPORT l.1289; RUNTIME l.1801) | decided (B9) |
 | 5-2 | G86, real Runtimes' TLS credentials | a P-256 key and a self-signed certificate as a direct anchor (G86 as re-decided; 5-2's G324) | decided (B2) |
-| 5-2, 5-7a | marked payloads on remote paths (G277; 5-2's G327) | G277's refusal stays until the patched nim-boringssl, with the opt-in `BORINGSSL_ZERO_RECORD_BUFFERS` our build sets, is pinned and the TLS processes' own erasure is shown | decided 2026-11-17 (owner) |
+| 5-2, 5-7a | marked payloads on remote paths (G277; 5-2's G327) | G277's refusal stays until the TLS processes' own erasure is shown (5-7a); nim-boringssl 0.0.16, with the opt-in `BORINGSSL_ZERO_RECORD_BUFFERS` our build sets, is pinned and the carrier erases its own copies (5-2d) | decided 2026-11-17 (owner); 5-2's half built |
 | 5-3a | the package trust file and the remote trust input; provenance continuity | — | open (C2, C3) |
 | 5-3a | the `lcn.storage_fetch` contract has no readiness signal (G91, G136) | 5-3a adds one | planned |
 | 5-3b | NP-12 | no platform tag in the catalog document | open (C7) |
@@ -146,6 +146,14 @@ G352 and G354 (DECISIONS, "Open items").
 ### Log
 
 - 2026-11-17, step 5-0 (I103): this section; records only, no unit changes status.
+- 2026-11-17, step 5-2 (I99), E1, the `logos.remote.tls-tcp` carrier's library, parts 5-2b, 5-2a and 5-2d:
+  TLS 1.3 only with mutual authentication through a `PeerCheck`, the channel binding, the signing seam
+  (G323), the parameters (G326), P-256 credentials and streams over chronos (5-2b); the trust snapshot
+  and the enrollment checks under B2's direct anchors (G324) with accepted time (G325) (5-2a);
+  nim-boringssl 0.0.16 with `BORINGSSL_ZERO_RECORD_BUFFERS` on and the carrier's own copies erased (G327;
+  5-2d). 18 TRN units claimed: TRN-0216, TRN-0219 to TRN-0226, TRN-0228, TRN-0233, TRN-0370 to
+  TRN-0376. E1's other 18 units are 5-7a's; remote paths refuse marked contracts until 5-7a shows the
+  TLS processes' erasure (G277).
 
 ## Tiers at f4f83471 (the original plan)
 
