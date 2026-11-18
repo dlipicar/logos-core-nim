@@ -5,7 +5,10 @@ Extracts every normative unit of the twelve spec documents into a ledger with
 stable IDs, keeps those IDs across spec revisions, mirrors the CDDL the code is
 built from, checks pinned values, and gates test coverage per claimed section.
 
-Ledger: conformance/requirements/<PFX>.jsonl, one JSON object per unit:
+Each spec's files sit under the conformance tree of the package that owns them: `conformance/`
+for core, `sdk/conformance/` for the SDK.
+
+Ledger: <tree>/requirements/<PFX>.jsonl, one JSON object per unit:
   id, kind, section, heading, line, fingerprint, text[, rule][, lang][, retired]
 kind is one of:
   kw       a sentence, list item or table row with an uppercase BCP 14 keyword
@@ -275,8 +278,32 @@ def rule_unit(name: str, text: list[str], line: int, section: str, heading: str)
 # Ledger -------------------------------------------------------------------------
 
 
+CONFORMANCE_TREES = (Path("conformance"), Path("sdk") / "conformance")  # core's and the SDK's
+
+
 def ledger_path(root: Path, prefix: str) -> Path:
-    return root / "conformance" / "requirements" / f"{prefix}.jsonl"
+    """The spec's ledger, in the tree that holds it; a new ledger starts in core's."""
+    for tree in CONFORMANCE_TREES:
+        path = root / tree / "requirements" / f"{prefix}.jsonl"
+        if path.exists():
+            return path
+    return root / CONFORMANCE_TREES[0] / "requirements" / f"{prefix}.jsonl"
+
+
+def ledger_files(root: Path) -> list[Path]:
+    return [f for tree in CONFORMANCE_TREES for f in sorted((root / tree / "requirements").glob("*.jsonl"))]
+
+
+def inspection_files(root: Path) -> list[Path]:
+    """Every inspection file of both packages, by name."""
+    files = [f for tree in CONFORMANCE_TREES for f in (root / tree / "inspection").glob("*.toml")]
+    return sorted(files, key=lambda f: (f.name, str(f)))
+
+
+def claims_of(root: Path, prefix: str) -> list[dict]:
+    """The spec's claims, one per package that has a claims file."""
+    paths = [root / tree / "claims" / f"{prefix}.toml" for tree in CONFORMANCE_TREES]
+    return [tomllib.loads(p.read_text(encoding="utf-8")) for p in paths if p.exists()]
 
 
 def load_ledger(path: Path) -> tuple[int, list[Unit]]:
@@ -523,7 +550,7 @@ def pins_nim(pins: dict, root: Path, package: str) -> str:
     if package == "sdk":
         # The revision every ledger was synced to: generated headers carry it.
         revs = {json.loads(f.read_text(encoding="utf-8").split("\n", 1)[0])["rev"]
-                for f in (root / "conformance" / "requirements").glob("*.jsonl")}
+                for f in ledger_files(root)}
         if len(revs) != 1:
             raise SystemExit(f"the ledgers name {len(revs)} spec revisions; run `spectrace sync`")
         out.append("  # conformance/requirements/*.jsonl: the spec revision")
@@ -623,6 +650,12 @@ def unit_status(claims: dict, unit) -> str:
     return claims.get("units", {}).get(unit.id) or section_status(claims, unit.section)
 
 
+def status_across(claim_sets: list[dict], unit) -> str:
+    """The unit's status over the packages' claims: `claimed` if one of them claims it."""
+    found = [unit_status(claims, unit) for claims in claim_sets]
+    return "claimed" if "claimed" in found else found[0]
+
+
 def statuses(claims: dict):
     """(key, status) for the default, each section and each unit entry."""
     yield "default", claims.get("default", "")
@@ -642,7 +675,7 @@ def cmd_gate(args) -> int:
             referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
     failures = 0
     inspected: dict[str, str] = {}
-    for extra in sorted((root / "conformance" / "inspection").glob("*.toml")):
+    for extra in inspection_files(root):
         for item in load_toml(extra).get("item", []):
             if not str(item.get("reason", "")).strip():
                 print(f"{extra.name}: inspection item {item.get('ids')} has no reason")
@@ -650,25 +683,33 @@ def cmd_gate(args) -> int:
             referenced.update(item.get("ids", []))
             for i in item.get("ids", []):
                 inspected.setdefault(i, extra.name)
+    # Both packages' ledgers follow one spec revision: `SpecRevision` is derived from them.
+    revs = {json.loads(f.read_text(encoding="utf-8").split("\n", 1)[0])["rev"] for f in ledger_files(root)}
+    if len(revs) > 1:
+        print(f"the ledgers name {len(revs)} spec revisions: {sorted(revs)}")
+        failures += 1
     closed = {f"deferred:tier-{t}" for t in args.closed_tier}
     live_ids: set[str] = set()
     for fname, prefix in SPECS.items():
-        claims = load_toml(root / "conformance" / "claims" / f"{prefix}.toml")
+        claim_sets = claims_of(root, prefix)
         bad_status = [
             s
+            for claims in claim_sets
             for s in [claims.get("default", "")]
             + list(claims.get("sections", {}).values())
             + list(claims.get("units", {}).values())
             if not STATUS_RE.fullmatch(s)
         ]
-        if not claims or bad_status:
+        if not claim_sets or not all(claim_sets) or bad_status:
             print(f"{prefix}: missing claims file or invalid status {bad_status}")
             failures += 1
+            claim_sets = claim_sets or [{}]
         # [W1] A closed tier has nothing deferred to it.
-        for key, value in statuses(claims):
-            if value in closed:
-                print(f"{prefix}: {key} is {value}, a closed tier")
-                failures += 1
+        for claims in claim_sets:
+            for key, value in statuses(claims):
+                if value in closed:
+                    print(f"{prefix}: {key} is {value}, a closed tier")
+                    failures += 1
         _, units = load_ledger(ledger_path(root, prefix))
         if not units:
             print(f"{prefix}: empty ledger; run `spectrace sync`")
@@ -676,13 +717,14 @@ def cmd_gate(args) -> int:
         live = [u for u in units if not u.retired and u.kind in GATED_KINDS]
         live_ids.update(u.id for u in units if not u.retired)
         gated_ids = {u.id for u in live}
-        for uid in sorted(set(claims.get("units", {})) - gated_ids):
+        named = {uid for claims in claim_sets for uid in claims.get("units", {})}
+        for uid in sorted(named - gated_ids):
             print(f"{prefix}: [units] names {uid}, which is not a live gated requirement")
             failures += 1
         by_status: dict[str, int] = {}
         by_label: dict[str, int] = {}
         for u in live:
-            full = unit_status(claims, u)
+            full = status_across(claim_sets, u)
             st = full.split(":")[0]
             by_status[st] = by_status.get(st, 0) + 1
             if st == "deferred":
@@ -691,7 +733,7 @@ def cmd_gate(args) -> int:
             if u.id in inspected and full != "claimed":
                 print(f"{prefix}: {u.id} is inspected ({inspected[u.id]}) but not claimed ({full})")
                 failures += 1
-        claimed = [u for u in live if unit_status(claims, u) == "claimed"]
+        claimed = [u for u in live if status_across(claim_sets, u) == "claimed"]
         missing = [u for u in claimed if u.id not in referenced]
         summary = ", ".join(f"{v} {k}" for k, v in sorted(by_status.items()))
         print(f"{prefix}: {len(claimed) - len(missing)}/{len(claimed)} claimed units tested ({summary})")
@@ -704,6 +746,75 @@ def cmd_gate(args) -> int:
     for i in stale:
         print(f"a test references unknown or retired requirement {i}")
     return 1 if failures or stale else 0
+
+
+# One owner per unit ------------------------------------------------------------------
+
+
+def owner_findings(root: Path) -> list[str]:
+    """A ledger lives in one package, and each live gated unit of a spec with two claims files
+    is claimed by at most one of them; a unit neither claims has the same status in both."""
+    findings = []
+    for prefix in SPECS.values():
+        homes = [t for t in CONFORMANCE_TREES if (root / t / "requirements" / f"{prefix}.jsonl").exists()]
+        if len(homes) > 1:
+            findings.append(f"{prefix}: a ledger in both {homes[0]} and {homes[1]}")
+        claim_sets = claims_of(root, prefix)
+        if len(claim_sets) < 2:
+            continue
+        _, units = load_ledger(ledger_path(root, prefix))
+        for u in units:
+            if u.retired or u.kind not in GATED_KINDS:
+                continue
+            found = [unit_status(claims, u) for claims in claim_sets]
+            if found.count("claimed") > 1:
+                findings.append(f"{u.id}: claimed by both packages")
+            elif "claimed" not in found and len(set(found)) > 1:
+                findings.append(f"{u.id}: claimed by neither, with different statuses {found}")
+    return findings
+
+
+def owners_self_test() -> int:
+    """The lint passes a clean split and catches each planted violation."""
+    import tempfile
+
+    def tree(core: str, sdk: str, both_ledgers: bool = False) -> list[str]:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            unit = Unit("kw", "1", "One", 1, "A MUST.", id="CDE-0001").finish()
+            save_ledger(ledger_path(root, "CDE"), "x.md", "r", 2, [unit])
+            if both_ledgers:
+                save_ledger(root / CONFORMANCE_TREES[1] / "requirements" / "CDE.jsonl", "x.md", "r", 2, [unit])
+            for t, status in zip(CONFORMANCE_TREES, (core, sdk)):
+                (root / t / "claims").mkdir(parents=True, exist_ok=True)
+                (root / t / "claims" / "CDE.toml").write_text(f'default = "{status}"\n', encoding="utf-8")
+            return owner_findings(root)
+
+    out = "out-of-scope:other"
+    cases = [
+        ("one package claims it", tree("claimed", out), False),
+        ("neither claims it, alike", tree(out, out), False),
+        ("both claim it", tree("claimed", "claimed"), True),
+        ("neither claims it, differently", tree(out, "informative"), True),
+        ("a ledger in both packages", tree("claimed", out, both_ledgers=True), True),
+    ]
+    failed = [name for name, found, planted in cases if bool(found) != planted]
+    for name in failed:
+        print(f"owners self-test: {name} went wrong")
+    if not failed:
+        print(f"owners self-test: {len(cases)} cases, {sum(c[2] for c in cases)} planted violations caught")
+    return 1 if failed else 0
+
+
+def cmd_owners(args) -> int:
+    """Each spec unit has one owning package (the restructure's row 35)."""
+    if args.self_test:
+        return owners_self_test()
+    findings = owner_findings(Path(args.root))
+    for f in findings:
+        print(f)
+    print(f"owners: {len(findings)} findings")
+    return 1 if findings else 0
 
 
 # The BCP §5.4 deployment document (DECISIONS G309, I97) ------------------------------
@@ -762,24 +873,24 @@ def cmd_deploydoc(args) -> int:
         for test in (root / tree).rglob("*.nim"):
             referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
     reasons: dict[str, list[str]] = {}
-    for extra in sorted((root / "conformance" / "inspection").glob("*.toml")):
+    for extra in inspection_files(root):
         for item in load_toml(extra).get("item", []):
             for i in item.get("ids", []):
                 reasons.setdefault(i, []).append(str(item.get("reason", "")))
 
-    claims_cache: dict[str, tuple[dict, dict[str, Unit]]] = {}
+    claims_cache: dict[str, tuple[list[dict], dict[str, Unit]]] = {}
 
     def lookup(uid: str) -> tuple[str | None, Unit | None]:
         prefix = uid[:3]
         if prefix not in PREFIX_FILE:
             return None, None
         if prefix not in claims_cache:
-            claims = load_toml(root / "conformance" / "claims" / f"{prefix}.toml")
+            claim_sets = claims_of(root, prefix)
             _, units = load_ledger(ledger_path(root, prefix))
-            claims_cache[prefix] = (claims, {u.id: u for u in units if not u.retired})
-        claims, units = claims_cache[prefix]
+            claims_cache[prefix] = (claim_sets, {u.id: u for u in units if not u.retired})
+        claim_sets, units = claims_cache[prefix]
         unit = units.get(uid)
-        return (unit_status(claims, unit) if unit else None), unit
+        return (status_across(claim_sets, unit) if unit and claim_sets else None), unit
 
     def check_claimed(where: str, uid: str) -> None:
         status, unit = lookup(uid)
@@ -926,6 +1037,8 @@ def main() -> int:
         if name in ("mirror", "pins"):
             p.add_argument("--write", action="store_true")
     sub.add_parser("deploydoc", help="check docs/DEPLOYMENT.md against the claims (DECISIONS G309)")
+    o = sub.add_parser("owners", help="each unit has one owning package")
+    o.add_argument("--self-test", action="store_true", help="check the lint on planted violations")
     g = sub.add_parser("gate")
     g.add_argument("--show", type=int, default=20, help="missing units listed per spec")
     g.add_argument(
@@ -943,6 +1056,7 @@ def main() -> int:
         "pins": cmd_pins,
         "gate": cmd_gate,
         "deploydoc": cmd_deploydoc,
+        "owners": cmd_owners,
     }[args.cmd](args)
 
 

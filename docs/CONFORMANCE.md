@@ -7,7 +7,8 @@ of its units. `tools/spectrace/spectrace.py` does the bookkeeping. In the dev sh
 
 ## Requirement ledger
 
-`conformance/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
+Each spec's files sit under the conformance tree of the package that owns them: `conformance/` for core
+and `sdk/conformance/` for the SDK (CDE, CMT and HSH). `<tree>/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
 the spec revision and the next free ID.
 
 | Prefix | Spec | Prefix | Spec |
@@ -44,7 +45,8 @@ match the pinned specs.
 
 ## Claims
 
-`conformance/claims/<PFX>.toml` gives each section a status. The longest matching section key wins,
+`<tree>/claims/<PFX>.toml` gives each section a status. A spec two packages share has a claims file in each,
+and `spectrace owners` holds that each unit has one owner. The longest matching section key wins,
 and `default` covers the rest. Section keys are `§4.4`, `App B.1`, or `§1/Heading` for an unnumbered
 heading under a numbered one.
 
@@ -779,7 +781,7 @@ test "[CDE-0042] map keys sort by encoded bytes":
 A test of an interim choice for an open item also carries `[IMPL-DECISION Gn]`.
 
 A unit that cannot be tested (pure prose, a rule about other implementations) is covered by an item
-in `conformance/inspection/<PFX>.toml` that states why:
+in `<tree>/inspection/<PFX>.toml` that states why:
 
 ```toml
 [[item]]

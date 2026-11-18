@@ -4,7 +4,7 @@
 [IMPL] `tools/restructure/pathmap.toml` lists what moved. For every `.nim` file, a module path
 that no longer resolves is resolved again from where the importing file used to be, and is spelled
 for the file's place now. A path that crosses into the SDK from outside it becomes a package path,
-inside the SDK it stays relative. The path citations of `conformance/inspection/*.toml` follow the
+inside the SDK it stays relative. The path citations of both packages' `conformance/inspection/*.toml` follow the
 same map. Running it again changes nothing, so a branch that is in flight when a move lands can
 run it after its rebase.
 
@@ -164,8 +164,10 @@ def main():
             if not args.check:
                 with open(full, "w", encoding="utf-8") as f:
                     f.write(new)
-    inspection = os.path.join(args.root, "conformance", "inspection")
-    if os.path.isdir(inspection):
+    for tree in ("conformance", os.path.join("sdk", "conformance")):
+        inspection = os.path.join(args.root, tree, "inspection")
+        if not os.path.isdir(inspection):
+            continue
         for name in sorted(os.listdir(inspection)):
             full = os.path.join(inspection, name)
             if not name.endswith(".toml"):

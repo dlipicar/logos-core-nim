@@ -449,3 +449,39 @@ to = "sdk/tests/vectors/cddl/vectors.cbor"
 [[move]]
 from = "tests/vectors/hash/layout.cbor"
 to = "sdk/tests/vectors/hash/layout.cbor"
+
+[[move]]
+from = "conformance/claims/CDE.toml"
+to = "sdk/conformance/claims/CDE.toml"
+
+[[move]]
+from = "conformance/inspection/CDE.toml"
+to = "sdk/conformance/inspection/CDE.toml"
+
+[[move]]
+from = "conformance/requirements/CDE.jsonl"
+to = "sdk/conformance/requirements/CDE.jsonl"
+
+[[move]]
+from = "conformance/claims/CMT.toml"
+to = "sdk/conformance/claims/CMT.toml"
+
+[[move]]
+from = "conformance/inspection/CMT.toml"
+to = "sdk/conformance/inspection/CMT.toml"
+
+[[move]]
+from = "conformance/requirements/CMT.jsonl"
+to = "sdk/conformance/requirements/CMT.jsonl"
+
+[[move]]
+from = "conformance/claims/HSH.toml"
+to = "sdk/conformance/claims/HSH.toml"
+
+[[move]]
+from = "conformance/inspection/HSH.toml"
+to = "sdk/conformance/inspection/HSH.toml"
+
+[[move]]
+from = "conformance/requirements/HSH.jsonl"
+to = "sdk/conformance/requirements/HSH.jsonl"
