@@ -398,12 +398,6 @@ proc issue(w: var Worker, v: View, d: Decision, memo: var Memo): bool =
         while pauseGateSet() and not w.sh.quit.load:
           sleep(5)
   let name = methodOf(d.step)
-  if d.charged:
-    # [I94] The backoff runs from the call, not from its write-ahead: a slow
-    # write must not bring the next call closer than the delay. The file keeps
-    # the write-ahead's time, which a restart reads.
-    w.acc.entries.withValue(v.instance, e):
-      e[].lastCallMono = Opt.some(monoMs())
   w.counted(name, v.instance)
   let slot = addr w.sh.slots[i]
   var prepared: Result[void, RcFailure]
@@ -471,6 +465,15 @@ proc issue(w: var Worker, v: View, d: Decision, memo: var Memo): bool =
         (if limit > 0: " of " & $limit else: "")
     )
   submit(slot.call)
+  # [I94, G288] The spacing runs from the call, read once it is made: a slow
+  # write or a stalled thread must not bring the next call closer than the
+  # delay. The file keeps the write-ahead's time, which a restart reads.
+  let called = monoMs()
+  if d.charged:
+    w.acc.entries.withValue(v.instance, e):
+      e[].lastCallMono = Opt.some(called)
+  else:
+    memo.lastProbeAt = Opt.some(called)
   true
 
 proc decideOne(w: var Worker, view: View) =
