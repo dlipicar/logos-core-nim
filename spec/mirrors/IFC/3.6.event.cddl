@@ -1,0 +1,5 @@
+storage.upload_progress_event = {
+    bytes_sent: uint64,
+    bytes_total: uint64,
+    session: tstr,
+}
