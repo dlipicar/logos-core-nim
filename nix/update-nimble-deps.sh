@@ -3,6 +3,12 @@
 lock="${1:-nimble.lock}"
 out="${2:-nix/nimble-deps.json}"
 
+# nix-prefetch-git clones under TMPDIR and the hash covers what that file system
+# kept: on exFAT, AppleDouble `._*` files and an executable bit on every file.
+TMPDIR=$(mktemp -d /tmp/update-nimble-deps.XXXXXX)
+export TMPDIR
+trap 'rm -rf "$TMPDIR"' EXIT
+
 [ -f "$lock" ] || { echo "error: $lock not found; run \`nimble lock\` first" >&2; exit 1; }
 existing='{}'
 [ -f "$out" ] && existing=$(cat "$out")
