@@ -151,7 +151,7 @@ G352 and G354 (DECISIONS, "Open items").
   (G323), the parameters (G326), P-256 credentials and streams over chronos (5-2b); the trust snapshot
   and the enrollment checks under B2's direct anchors (G324) with accepted time (G325) (5-2a);
   nim-boringssl 0.0.16 with `BORINGSSL_ZERO_RECORD_BUFFERS` on and the carrier's own copies erased (G327;
-  5-2d). 17 TRN units claimed: TRN-0216, TRN-0219 to TRN-0221, TRN-0223 to TRN-0226, TRN-0228,
+  5-2d); pyOpenSSL as the independent peer in the suite's Nix checks (G128; 5-2c). 17 TRN units claimed: TRN-0216, TRN-0219 to TRN-0221, TRN-0223 to TRN-0226, TRN-0228,
   TRN-0233, TRN-0370 to TRN-0376. E1's other 19 units are 5-7a's, but for TRN-0222, which is 5-7b's (the
   facade process passes the invocation's Runtime as the one expected); remote paths refuse marked
   contracts until 5-7a shows the TLS processes' erasure (G277).

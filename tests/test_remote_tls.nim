@@ -1046,6 +1046,200 @@ suite "tls.enrollment handshakes":
       check seen.frames == 0
       waitFor l.close()
 
+# G128: an independent peer (pyOpenSSL, so OpenSSL against BoringSSL) -----------------------
+
+when (defined(linux) or defined(macosx)) and not defined(android) and not defined(ios):
+  import std/tables
+  import ./support/tlspeers
+
+  const PeerId = IdC
+
+  proc peerTrust(own: Party, peerCert: seq[byte]): TrustSnapshot =
+    ## `own` and the peer, each enrolled with its certificate as direct anchor.
+    let peerRecord = EnrollmentRecord(
+      runtime: PeerId,
+      revision: 1,
+      status: rsActive,
+      anchor: "peer-anchor",
+      spkis: @[certificateSpki(peerCert).get],
+    )
+    newTrustSnapshot(
+      7,
+      [(own.anchorId, own.cert), ("peer-anchor", peerCert)],
+      [activeRecord(own), peerRecord],
+    ).get
+
+  proc dialPeer(
+      peer: PyPeer, own: Party, t: TrustSnapshot, serverName = ""
+  ): Result[TlsStream, string] =
+    waitFor connect(
+      TlsTcpAddress(host: "127.0.0.1", port: peer.port, serverName: serverName),
+      clientContext(own),
+      expectRuntime(t, PeerId, fixedClock(nowPosix())),
+      keySigner(own.key, tlsClient),
+      fastConfig(10_000 * Slow),
+    )
+
+  proc pattern(n: int): seq[byte] =
+    ## More than one TLS record's worth of bytes.
+    result = newSeq[byte](n)
+    for i in 0 ..< n:
+      result[i] = byte(i mod 251)
+
+  suite "tls.independent peer":
+    test "[TRN-0219] [TRN-0220] [TRN-0228] [TRN-0233] [TRN-0376] [IMPL-DECISION G128] our client and a pyOpenSSL server: TLS 1.3, both certificates checked, the same exporter, a clean close":
+      if peerPython().len == 0:
+        skip()
+      else:
+        let bench = newPeerBench(a.cert)
+        var peer = bench.startServer()
+        let r = peer.dialPeer(a, peerTrust(a, bench.cert), "peer.example")
+        checkpoint(if r.isErr: r.error else: "connected")
+        check r.isOk
+        var binding: seq[byte]
+        if r.isOk:
+          let s = r.get
+          check s.peer.runtime == PeerId
+          check s.engine.version == TLS1_3_VERSION.int
+          binding = s.takeChannelBinding().get
+          check binding.len == ChannelBindingLen
+          let body = pattern(100_000)
+          let echoed = s.roundTrip(body)
+          check echoed.isOk and echoed.get == body
+          waitFor s.close()
+        let report = peer.finish()
+        checkpoint $report
+        check report.getOrDefault("exit") == "0"
+        check report.getOrDefault("handshake") == "ok"
+        check report.getOrDefault("version") == "TLSv1.3"
+        check report.getOrDefault("group") == "X25519MLKEM768"
+        check report.getOrDefault("binding") == hexOf(binding)
+        check report.getOrDefault("sni") == "peer.example"
+        check report.getOrDefault("close") == "clean"
+        bench.remove()
+
+    test "[TRN-0219] [TRN-0220] [TRN-0228] [TRN-0233] [IMPL-DECISION G128] a pyOpenSSL client and our server: TLS 1.3, both certificates checked, the same exporter, a clean close":
+      if peerPython().len == 0:
+        skip()
+      else:
+        let bench = newPeerBench(a.cert)
+        let seen = Seen()
+        let l = listen(
+          a,
+          seen,
+          [],
+          config = fastConfig(10_000 * Slow),
+          check = anyEnrolled(peerTrust(a, bench.cert), fixedClock(nowPosix())),
+        )
+        var peer = bench.startClient(l.localPort)
+        let report = peer.finish()
+        checkpoint $report
+        check report.getOrDefault("exit") == "0"
+        check report.getOrDefault("handshake") == "ok"
+        check report.getOrDefault("version") == "TLSv1.3"
+        check report.getOrDefault("group") == "X25519MLKEM768"
+        check report.getOrDefault("echo") == "ok"
+        check report.getOrDefault("close") == "clean"
+        check seen.peers == @[PeerId]
+        check seen.versions == @[TLS1_3_VERSION.int]
+        check seen.frames == 1
+        check seen.readErrors.len == 0
+        check seen.bindings.len == 1
+        if seen.bindings.len == 1:
+          check seen.bindings[0].len == ChannelBindingLen
+          check hexOf(seen.bindings[0]) == report.getOrDefault("binding")
+        waitFor l.close()
+        bench.remove()
+
+    test "[TRN-0219] [IMPL-DECISION G128] a pyOpenSSL server and a pyOpenSSL client that stop at TLS 1.2 are refused":
+      if peerPython().len == 0:
+        skip()
+      else:
+        let bench = newPeerBench(a.cert)
+        var server = bench.startServer(["--tls12"])
+        let r = server.dialPeer(a, peerTrust(a, bench.cert))
+        check r.isErr
+        if r.isErr:
+          check "PROTOCOL_VERSION" in r.error
+        let serverReport = server.finish()
+        checkpoint $serverReport
+        check serverReport.getOrDefault("exit") == "0"
+        check serverReport.getOrDefault("handshake") == "failed"
+
+        let seen = Seen()
+        let l = listen(
+          a,
+          seen,
+          [],
+          check = anyEnrolled(peerTrust(a, bench.cert), fixedClock(nowPosix())),
+        )
+        var client = bench.startClient(l.localPort, ["--tls12"])
+        let clientReport = client.finish()
+        checkpoint $clientReport
+        check clientReport.getOrDefault("exit") == "0"
+        check clientReport.getOrDefault("handshake") == "failed"
+        check waitUntil(
+          proc(): bool =
+            l.failedHandshakes == 1,
+          2000,
+        )
+        check "UNSUPPORTED_PROTOCOL" in l.lastFailure
+        check seen.peers.len == 0
+        waitFor l.close()
+        bench.remove()
+
+    test "[TRN-0220] [TRN-0233] [IMPL-DECISION G128] [IMPL-DECISION G328] a pyOpenSSL client with no certificate is refused and its frame is never read":
+      if peerPython().len == 0:
+        skip()
+      else:
+        let bench = newPeerBench(a.cert)
+        let seen = Seen()
+        let l = listen(
+          a,
+          seen,
+          [],
+          check = anyEnrolled(peerTrust(a, bench.cert), fixedClock(nowPosix())),
+        )
+        var peer = bench.startClient(l.localPort, ["--no-cert"])
+        let report = peer.finish()
+        checkpoint $report
+        check report.getOrDefault("exit") == "0"
+        check report.getOrDefault("echo", "ok") != "ok"
+        check waitUntil(
+          proc(): bool =
+            l.failedHandshakes == 1,
+          2000,
+        )
+        check seen.peers.len == 0
+        check seen.frames == 0
+        waitFor l.close()
+        bench.remove()
+
+    test "[TRN-0219] [IMPL-DECISION G326] [IMPL-DECISION G128] a pyOpenSSL server that has only P-256 is reached through HelloRetryRequest":
+      # Our first ClientHello carries no P-256 key share, so this group is only
+      # reachable after the server asks for one.
+      if peerPython().len == 0:
+        skip()
+      else:
+        let bench = newPeerBench(a.cert)
+        var peer = bench.startServer(["--p256-only"])
+        let r = peer.dialPeer(a, peerTrust(a, bench.cert))
+        checkpoint(if r.isErr: r.error else: "connected")
+        check r.isOk
+        var binding: seq[byte]
+        if r.isOk:
+          let s = r.get
+          binding = s.takeChannelBinding().get
+          let echoed = s.roundTrip(@[7'u8])
+          check echoed.isOk and echoed.get == @[7'u8]
+          waitFor s.close()
+        let report = peer.finish()
+        checkpoint $report
+        check report.getOrDefault("exit") == "0"
+        check report.getOrDefault("group") == "secp256r1"
+        check report.getOrDefault("binding") == hexOf(binding)
+        bench.remove()
+
 # G327: erasure of decrypted data -----------------------------------------------------------
 
 proc arm(patterns: sink seq[seq[byte]]) =
