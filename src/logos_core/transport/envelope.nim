@@ -21,7 +21,7 @@ import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[outcome, surface]
-import logos_sdk/pins
+import ../pins
 import ./[framing, protocddl]
 
 export results, outcome, hashinput

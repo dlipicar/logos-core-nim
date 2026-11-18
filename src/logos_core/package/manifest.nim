@@ -13,6 +13,7 @@ import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/hash
 import logos_sdk/iface/accept
+import ../pins
 import ./[errors, semver]
 
 export results, errors, semver, hashinput

@@ -221,6 +221,7 @@
               ./tests
               ./oracle
               ./sdk/src/logos_sdk/pins.nim
+              ./src/logos_core/pins.nim
               ./sdk/src/logos_sdk/base/nfc_tables.nim
               # spec-deploydoc checks the deployment document against the claims (G309).
               ./docs/DEPLOYMENT.md

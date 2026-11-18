@@ -5,6 +5,7 @@ import std/[algorithm, json, os, sequtils, strutils]
 import unittest2
 import logos_sdk/base/hex
 import logos_sdk/[cbor, commitment, hash, pins]
+import ../src/logos_core/pins as core_pins
 import logos_sdk/iface/accept
 import logos_sdk/cddl/syntax
 import ../src/logos_core/package/[semver, signing]

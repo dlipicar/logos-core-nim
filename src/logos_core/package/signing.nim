@@ -22,6 +22,7 @@ import logos_sdk/commitment
 import logos_sdk/hash
 import logos_sdk/iface/accept
 import ../crypto/[cose, slhdsa]
+import ../pins
 import ./[errors, manifest, trust]
 
 export results, errors, manifest, trust

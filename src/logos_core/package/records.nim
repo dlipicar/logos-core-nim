@@ -12,8 +12,8 @@ import logos_sdk/cbor
 import logos_sdk/cddl/syntax
 import logos_sdk/commitment
 import logos_sdk/iface/accept
-import logos_sdk/pins
 import ../crypto/slhdsa
+import ../pins
 import ./[errors, manifest, semver, signing]
 
 export results, errors, manifest
