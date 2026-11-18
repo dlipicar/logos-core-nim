@@ -15,6 +15,8 @@ when defined(posix):
   import ../src/logos_core/crypto/blake3
   from ../src/logos_core/base/perthread import releasePerThread
   import ../src/logos_core/iface/outcome
+  from ../src/logos_core/runtime/plumbing import
+    RcMethod, holdRcAnswerForTests, rcAnswerHeldForTests, releaseRcAnswerForTests
   import ../src/logos_core/abi/host as abihost
   import ../src/logos_core/runtime/[engine, host, rc_types]
   from ../src/logos_core/durable import DurableLock, release
@@ -283,6 +285,7 @@ when defined(posix):
         setCommandDelayForTests(0)
         holdInitForTests(false)
         setCredOfForTests(nil)
+        releaseRcAnswerForTests()
       if live != nil:
         if starting:
           joinThread(startThread)
@@ -569,6 +572,63 @@ when defined(posix):
       l.lock.release()
       l.up = false
       check not entryExists(l.d.socketPath)
+
+    test "[I97] shutdown_runtime whose answer is still on its way when the instance closes: the socket gets the Runtime's answer, not CANCELLED":
+      when defined(lcnTestHooks):
+        l = boot(newSession())
+        holdRcAnswerForTests(rmShutdownRuntime)
+        let fd = l.client
+        defer:
+          closeFd(fd)
+        sendRaw(
+          fd,
+          rcMessage(
+            LcnCtlMethodKind.Shutdown_runtime,
+            LogosNSRuntimeControlShutdownRuntimeRequest().encode.expect("bytes"),
+          ).encode
+            .expect("bytes"),
+        )
+        # The Runtime has accepted and begun shutting down; the answer waits on
+        # its call worker while the instance's destroy sets `closing`.
+        check waitUntil(rcAnswerHeldForTests)
+        check waitUntil(closingSeenForTests)
+        releaseRcAnswerForTests()
+        let r = readReply(fd)
+        check r.outcome.kind == LcnCtlOutcomeKind.lcn_Ctl_ok
+        check r.rcCode == ecOk
+        check int64(runtimeWaitForShutdown(l.d.rt).code) == 0
+        check destroyRuntime(l.d).isOk
+        l.d.release()
+        l.lock.release()
+        l.up = false
+        check not entryExists(l.d.socketPath)
+
+    test "[I97] any other call whose answer is still on its way when the instance closes is CANCELLED":
+      when defined(lcnTestHooks):
+        l = boot(newSession())
+        holdRcAnswerForTests(rmListRoutes)
+        let fd = l.client
+        defer:
+          closeFd(fd)
+        sendRaw(
+          fd,
+          rcMessage(
+            LcnCtlMethodKind.List_routes,
+            LogosNSRuntimeControlListRoutesRequest().encode.expect("bytes"),
+          ).encode
+            .expect("bytes"),
+        )
+        check waitUntil(rcAnswerHeldForTests)
+        discard runtimeRequestShutdown(l.d.rt)
+        check waitUntil(closingSeenForTests)
+        releaseRcAnswerForTests()
+        check readReply(fd).rcCode == ecCancelled
+        check int64(runtimeWaitForShutdown(l.d.rt).code) == 0
+        check destroyRuntime(l.d).isOk
+        l.d.release()
+        l.lock.release()
+        l.up = false
+        check not entryExists(l.d.socketPath)
 
     test "a stop while a command is in flight: the command gets its answer or CANCELLED; the socket is gone; every thread joined":
       l = boot(newSession())

@@ -1102,6 +1102,32 @@ type
 
   Engine* = ptr Shared
 
+when defined(lcnTestHooks):
+  from std/os import sleep
+
+  var
+    rcAnswerHold: Atomic[int] ## 1 + the held method's ordinal; 0: none
+    rcAnswersHeld: Atomic[int] ## calls waiting at the hold
+
+  proc holdRcAnswerForTests*(m: RcMethod) =
+    ## [I97] Each successful call of `m` waits with the Runtime's answer in
+    ## hand, before its outcome is decided, until `releaseRcAnswerForTests`.
+    rcAnswerHold.store(ord(m) + 1)
+
+  proc releaseRcAnswerForTests*() =
+    rcAnswerHold.store(0)
+
+  proc rcAnswerHeldForTests*(): bool =
+    rcAnswersHeld.load > 0
+
+  proc waitAtRcAnswerHold*(m: RcMethod) =
+    if rcAnswerHold.load != ord(m) + 1:
+      return
+    rcAnswersHeld += 1
+    while rcAnswerHold.load == ord(m) + 1:
+      sleep(1)
+    rcAnswersHeld -= 1
+
 const AuthorityEndings* = {
   fkAuthorityDenied, fkAuthorityExpired, fkAuthorityRevoked, fkAuthorityEvaluationFailed
 } ## [SPEC RUNTIME l.3753; G168 extended] what an authority stop leaves

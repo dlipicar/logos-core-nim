@@ -741,4 +741,6 @@ proc rcInvoke*(
       return err(failure(ecModule, "the response does not match its schema"))
   trail.succeeded = true
   e.record(reply.capture, trail)
+  when defined(lcnTestHooks):
+    waitAtRcAnswerHold(m)
   ok(response)
