@@ -41,7 +41,7 @@ import ../hash/hashinput
 import ../pins
 import ../commitment
 import ../iface/[accept, cmap, names]
-import ./nimrt
+import ./[nimrt, sdkroot]
 
 type
   MDoc = object
@@ -992,7 +992,7 @@ proc newMGen(docs: seq[MDoc], roots: seq[Digest]): MGen =
 
 # The common schema ---------------------------------------------------------------
 
-proc commonMirrorModule*(importPrefix = "../"): Result[string, string] =
+proc commonMirrorModule*(importPrefix = SdkImportRoot): Result[string, string] =
   ## [IMPL] `codegen/common_mirrors.nim`: the mirrors and converters of the
   ## pinned common schema's types (INTERFACE §5.1, §5.2), which every kit
   ## shares, and the shared empty values (§2.3).

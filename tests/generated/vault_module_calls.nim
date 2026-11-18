@@ -15,7 +15,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ../../src/logos_core/codegen/[invokert, common_mirrors]
+import logos_core/codegen/[invokert, common_mirrors]
 import ./vault_module_types
 
 export invokert, common_mirrors, vault_module_types

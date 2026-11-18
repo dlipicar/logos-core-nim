@@ -14,7 +14,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ../../src/logos_core/codegen/[invokert, common_mirrors]
+import logos_core/codegen/[invokert, common_mirrors]
 import ./shapes_module_types
 
 export invokert, common_mirrors, shapes_module_types

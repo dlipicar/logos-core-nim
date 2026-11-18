@@ -50,7 +50,7 @@ import ../commitment
 import ../hash
 import ../pins
 import ../iface/[accept, cmap, names, provider, surface]
-import ./[cmirror, nimgen]
+import ./[cmirror, nimgen, sdkroot]
 
 type
   KitConfiguration* = object
@@ -78,7 +78,7 @@ func configurationTypesName*(s: ContractSet): string =
   s.cSchemaSet.headerName & "_configuration_types"
 
 proc configurationTypesModule*(
-    s: ContractSet, c: KitConfiguration, opts = KitOptions(importPrefix: "logos_core/")
+    s: ContractSet, c: KitConfiguration, opts = KitOptions(importPrefix: SdkImportRoot)
 ): Result[string, string] =
   ## `<module>_configuration_types.nim`: the configuration set's Nim types
   ## (`nimModule`), for the kit of the module set `s`.
@@ -425,14 +425,14 @@ proc kitParts(
   ok((o, table.mapIt(it[0])))
 
 proc kitModule*(
-    s: ContractSet, opts = KitOptions(importPrefix: "logos_core/"), system = false
+    s: ContractSet, opts = KitOptions(importPrefix: SdkImportRoot), system = false
 ): Result[string, string] =
   ## The kit of the module binding `s` establishes, beside the
   ## `<header>_types.nim` that `nimModule` writes for the same set.
   ok((?kitParts(s, opts, system))[0])
 
 proc kitSymbols*(
-    s: ContractSet, opts = KitOptions(importPrefix: "logos_core/"), system = false
+    s: ContractSet, opts = KitOptions(importPrefix: SdkImportRoot), system = false
 ): Result[seq[string], string] =
   ## [DECISIONS G341] The C symbols the kit's template exports: the module's
   ## ABI (INTERFACE §2.4, §2.6) and nothing else, for `exportList`.

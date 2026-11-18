@@ -11,7 +11,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ../codegen/[kitrt, common_mirrors]
+import logos_core/codegen/[kitrt, common_mirrors]
 import ./logosctl_types
 
 export kitrt, common_mirrors, logosctl_types

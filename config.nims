@@ -4,6 +4,9 @@ when withDir(thisDir(), system.fileExists("nimble.paths")):
   include "nimble.paths"
 # end Nimble config
 
+# Generated code imports this library by package path (`logos_core/...`).
+switch("path", thisDir() & "/src")
+
 switch("styleCheck", "usages")
 switch("styleCheck", "error")
 switch("hint", "XDeclaredButNotUsed:off")

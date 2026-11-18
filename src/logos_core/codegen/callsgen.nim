@@ -33,7 +33,7 @@
 import std/[sequtils, strutils, tables]
 import ../pins
 import ../iface/[accept, cmap]
-import ./[cmirror, nimgen]
+import ./[cmirror, nimgen, sdkroot]
 
 type CallsOptions* = object
   importPrefix*: string ## how the output imports this library (`NimOptions`)
@@ -48,7 +48,7 @@ func callsTemplateName*(stem: string): string =
   "export" & pascal(stem) & "Calls"
 
 proc callsModule*(
-    s: ContractSet, opts = CallsOptions(importPrefix: "logos_core/"), system = false
+    s: ContractSet, opts = CallsOptions(importPrefix: SdkImportRoot), system = false
 ): Result[string, string] =
   ## `<stem>_calls.nim` for the set `s`, beside the `<stem>_types.nim` that
   ## `nimModule` writes for the same set.

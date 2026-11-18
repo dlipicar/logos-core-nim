@@ -11,7 +11,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ../codegen/[kitrt, common_mirrors]
+import logos_core/codegen/[kitrt, common_mirrors]
 import ./[lcn_orchestrator_types, lcn_orchestrator_configuration_types]
 
 export kitrt, common_mirrors, lcn_orchestrator_types, lcn_orchestrator_configuration_types

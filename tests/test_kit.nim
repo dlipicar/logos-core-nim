@@ -11,6 +11,7 @@ import ../src/logos_core/iface/[accept, provider]
 from ../src/logos_core/codegen/callrt import
   arenaBlocks, failArenaAllocation, CallArena, text, release
 from ../src/logos_core/codegen/common_mirrors import commonMirrorLayout
+from ../src/logos_core/codegen/sdkroot import SdkImportRoot
 import ./support/[kitruntime, specdata, typedharness, tunerconfig]
 import ./support/testdirs
 import ./generated/meter_module_kit
@@ -422,7 +423,7 @@ suite "ifc.kit: configuration (CONFIG §2, §6, §8; DECISIONS I87) [IMPL]":
       kitModule(
         module,
         KitOptions(
-          importPrefix: "logos_core/",
+          importPrefix: SdkImportRoot,
           configuration: Opt.some(KitConfiguration(set: c, root: root)),
         ),
       )

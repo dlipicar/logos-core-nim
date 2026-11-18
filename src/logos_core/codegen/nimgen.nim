@@ -37,13 +37,13 @@ import ../hash/hashinput
 import ../pins
 import ../commitment
 import ../iface/accept
-import ./nimrt
+import ./[nimrt, sdkroot]
 
 type
   NimOptions* = object
     importPrefix*: string
-      ## How the output imports this library, e.g. `logos_core/` (the default) or
-      ## a relative path ending in `logos_core/`.
+      ## How the output imports this library: `SdkImportRoot` by default, or a
+      ## relative path ending in the library's directory.
     schemaAccessor*: string
       ## When set, the module also exports a template of this name that returns
       ## its per-thread `GeneratedSchema`, for code that validates payloads of
@@ -878,7 +878,7 @@ func stamp(): string =
   "PROVISIONAL (spec " & SpecRevision[0 .. 7] & ")"
 
 proc commonNimModule*(
-    opts = NimOptions(importPrefix: "logos_core/")
+    opts = NimOptions(importPrefix: SdkImportRoot)
 ): Result[string, string] =
   ## The Nim types of the pinned common schema (INTERFACE §5.1):
   ## `codegen/common_types.nim`.
@@ -914,7 +914,7 @@ proc nimTypeNames*(s: ContractSet): Table[string, string] =
         result[d.name] = g.typeNameOf(i, d.name)
 
 proc nimModule*(
-    s: ContractSet, opts = NimOptions(importPrefix: "logos_core/"), system = false
+    s: ContractSet, opts = NimOptions(importPrefix: SdkImportRoot), system = false
 ): Result[string, string] =
   ## The Nim types and codecs of one accepted set (every document's
   ## declarations). The module embeds the documents and reloads them at start.

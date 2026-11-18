@@ -6,7 +6,8 @@
 import std/[os, sequtils, strutils]
 import results
 import ../../src/logos_core/iface/[accept, cmap]
-import ../../src/logos_core/codegen/[callsgen, cmirror, hostgen, kitgen, nimgen]
+import
+  ../../src/logos_core/codegen/[callsgen, cmirror, hostgen, kitgen, nimgen, sdkroot]
 import ./testdirs
 
 const coreGeneratedDir = "tests/generated" ## the generated files only core's suites use
@@ -37,7 +38,7 @@ type NimFixture* = object
     ## the kit
 
 const
-  fixturePrefix* = "../../src/logos_core/"
+  fixturePrefix* = SdkImportRoot
   nimFixtures* = [
     NimFixture(
       module: "meter_module_types.nim", primary: "spec/mirrors/IFC/3.9.1.module.cddl"
@@ -310,10 +311,10 @@ proc fixturePath*(f: HeaderFixture): string =
   generatedHome(f.header) / f.header
 
 proc generatedCommon*(): Result[string, string] =
-  commonNimModule(NimOptions(importPrefix: "../"))
+  commonNimModule(NimOptions(importPrefix: SdkImportRoot))
 
 proc generatedCommonMirrors*(): Result[string, string] =
-  commonMirrorModule("../")
+  commonMirrorModule(SdkImportRoot)
 
 const
   commonTypesPath* = "src/logos_core/codegen/common_types.nim"
@@ -338,7 +339,7 @@ proc generatedRcTypes*(): Result[string, string] =
     nimModule(
       set,
       NimOptions(
-        importPrefix: "../",
+        importPrefix: SdkImportRoot,
         schemaAccessor: "rcSchema",
         documentsAccessor: "rcDocuments",
       ),
@@ -364,7 +365,9 @@ proc generatedHostConfigTypes*(): Result[string, string] =
   try:
     let set = ?acceptContractSet(hostConfigDocument(), [], [], AcceptOptions())
     nimModule(
-      set, NimOptions(importPrefix: "../", schemaAccessor: "hostConfigSchema"), false
+      set,
+      NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "hostConfigSchema"),
+      false,
     )
   except IOError as e:
     err(e.msg)
@@ -388,7 +391,7 @@ proc generatedDaemonConfigTypes*(): Result[string, string] =
     nimModule(
       set,
       NimOptions(
-        importPrefix: "../",
+        importPrefix: SdkImportRoot,
         schemaAccessor: "daemonConfigSchema",
         documentsAccessor: "daemonConfigDocuments",
       ),
@@ -404,7 +407,7 @@ proc generatedTrustTypes*(): Result[string, string] =
     nimModule(
       set,
       NimOptions(
-        importPrefix: "../",
+        importPrefix: SdkImportRoot,
         schemaAccessor: "trustSchema",
         documentsAccessor: "trustDocuments",
       ),
@@ -424,7 +427,7 @@ proc generatedEvstoreTypes*(): Result[string, string] =
     nimModule(
       set,
       NimOptions(
-        importPrefix: "../",
+        importPrefix: SdkImportRoot,
         schemaAccessor: "evstoreSchema",
         documentsAccessor: "evstoreDocuments",
       ),
@@ -448,7 +451,7 @@ proc generatedCtlTypes*(): Result[string, string] =
     nimModule(
       set,
       NimOptions(
-        importPrefix: "../",
+        importPrefix: SdkImportRoot,
         schemaAccessor: "ctlSchema",
         documentsAccessor: "ctlDocuments",
       ),
@@ -465,11 +468,11 @@ proc logosctlSet(): Result[ContractSet, string] =
 
 proc generatedLogosctlTypes*(): Result[string, string] =
   ## The logosctl module's types: no method, no event, no configuration.
-  nimModule(?logosctlSet(), NimOptions(importPrefix: "../"), false)
+  nimModule(?logosctlSet(), NimOptions(importPrefix: SdkImportRoot), false)
 
 proc generatedLogosctlKit*(): Result[string, string] =
   ## The logosctl module's kit (G296), for `daemon/ctlmodule.nim`.
-  kitModule(?logosctlSet(), KitOptions(importPrefix: "../"), false)
+  kitModule(?logosctlSet(), KitOptions(importPrefix: SdkImportRoot), false)
 
 const
   cliTypesPath* = "src/logos_core/cli/cli_types.nim"
@@ -489,7 +492,7 @@ proc generatedCliTypes*(): Result[string, string] =
     nimModule(
       set,
       NimOptions(
-        importPrefix: "../",
+        importPrefix: SdkImportRoot,
         schemaAccessor: "cliSchema",
         documentsAccessor: "cliDocuments",
       ),
@@ -506,7 +509,7 @@ proc lcnCallKitParts(): Result[(ContractSet, KitOptions), string] =
       (
         set,
         KitOptions(
-          importPrefix: "../",
+          importPrefix: SdkImportRoot,
           configuration:
             Opt.some(KitConfiguration(set: cfg, root: lcnCallConfigRoot, live: false)),
         ),
@@ -518,7 +521,7 @@ proc lcnCallKitParts(): Result[(ContractSet, KitOptions), string] =
 proc generatedLcnCallTypes*(): Result[string, string] =
   ## The CLI module's types (G343): no method, no event.
   let (set, _) = ?lcnCallKitParts()
-  nimModule(set, NimOptions(importPrefix: "../"), false)
+  nimModule(set, NimOptions(importPrefix: SdkImportRoot), false)
 
 proc generatedLcnCallConfigTypes*(): Result[string, string] =
   ## Its configuration types, `lcn_call.settings` (G343, G344).
@@ -540,7 +543,7 @@ proc generatedStoreTypes*(): Result[string, string] =
   try:
     let set = ?acceptContractSet(readFile(storePrimary), [], [], AcceptOptions())
     nimModule(
-      set, NimOptions(importPrefix: "../", schemaAccessor: "storeSchema"), false
+      set, NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "storeSchema"), false
     )
   except IOError as e:
     err(e.msg)
@@ -555,7 +558,9 @@ proc generatedCarrierTypes*(): Result[string, string] =
   try:
     let set = ?acceptContractSet(readFile(carrierPrimary), [], [], AcceptOptions())
     nimModule(
-      set, NimOptions(importPrefix: "../", schemaAccessor: "carrierSchema"), false
+      set,
+      NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "carrierSchema"),
+      false,
     )
   except IOError as e:
     err(e.msg)
@@ -596,14 +601,16 @@ proc generatedCaTypes*(): Result[string, string] =
   nimModule(
     ?caSet(),
     NimOptions(
-      importPrefix: "../", schemaAccessor: "caSchema", documentsAccessor: "caDocuments"
+      importPrefix: SdkImportRoot,
+      schemaAccessor: "caSchema",
+      documentsAccessor: "caDocuments",
     ),
     true,
   )
 
 proc generatedCaKit*(): Result[string, string] =
   ## The Capability Authority module kit: provider dispatch and event publishers.
-  kitModule(?caSet(), KitOptions(importPrefix: "../"), true)
+  kitModule(?caSet(), KitOptions(importPrefix: SdkImportRoot), true)
 
 const
   ldrTypesPath* = "src/logos_core/loader/logos_module_loader_types.nim"
@@ -642,7 +649,7 @@ proc generatedLdrTypes*(): Result[string, string] =
   nimModule(
     ?ldrSet(),
     NimOptions(
-      importPrefix: "../",
+      importPrefix: SdkImportRoot,
       schemaAccessor: "ldrSchema",
       documentsAccessor: "ldrDocuments",
     ),
@@ -651,7 +658,7 @@ proc generatedLdrTypes*(): Result[string, string] =
 
 proc generatedLdrKit*(): Result[string, string] =
   ## The Module Loader module kit: provider dispatch (it publishes no event).
-  kitModule(?ldrSet(), KitOptions(importPrefix: "../"), true)
+  kitModule(?ldrSet(), KitOptions(importPrefix: SdkImportRoot), true)
 
 const
   policyTypesPath* = "src/logos_core/authority/policy_types.nim"
@@ -664,7 +671,9 @@ proc generatedPolicyTypes*(): Result[string, string] =
   try:
     let set = ?acceptContractSet(readFile(policyPrimary), [], [], AcceptOptions())
     nimModule(
-      set, NimOptions(importPrefix: "../", schemaAccessor: "policySchema"), false
+      set,
+      NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "policySchema"),
+      false,
     )
   except IOError as e:
     err(e.msg)
@@ -675,7 +684,7 @@ proc generatedStateTypes*(): Result[string, string] =
   try:
     let set = ?acceptContractSet(readFile(statePrimary), [], [], AcceptOptions())
     nimModule(
-      set, NimOptions(importPrefix: "../", schemaAccessor: "stateSchema"), false
+      set, NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "stateSchema"), false
     )
   except IOError as e:
     err(e.msg)
@@ -699,7 +708,7 @@ proc orchKitParts(): Result[(ContractSet, KitOptions), string] =
       (
         set,
         KitOptions(
-          importPrefix: "../",
+          importPrefix: SdkImportRoot,
           configuration:
             Opt.some(KitConfiguration(set: cfg, root: orchConfigRoot, live: false)),
         ),
@@ -712,7 +721,7 @@ proc generatedOrchTypes*(): Result[string, string] =
   ## The reference orchestration module's types (DECISIONS I94), for
   ## `orchestration/`.
   let (set, _) = ?orchKitParts()
-  nimModule(set, NimOptions(importPrefix: "../"), false)
+  nimModule(set, NimOptions(importPrefix: SdkImportRoot), false)
 
 proc generatedOrchConfigTypes*(): Result[string, string] =
   ## Its configuration types, `lcn_orchestrator.config` (DECISIONS I94).
@@ -730,7 +739,9 @@ proc generatedOrchStateTypes*(): Result[string, string] =
   try:
     let set = ?acceptContractSet(readFile(orchStatePrimary), [], [], AcceptOptions())
     nimModule(
-      set, NimOptions(importPrefix: "../", schemaAccessor: "orchStateSchema"), false
+      set,
+      NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "orchStateSchema"),
+      false,
     )
   except IOError as e:
     err(e.msg)

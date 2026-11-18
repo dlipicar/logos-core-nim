@@ -13,7 +13,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ../../src/logos_core/codegen/[invokert, common_mirrors]
+import logos_core/codegen/[invokert, common_mirrors]
 import ./sensor_module_types
 
 export invokert, common_mirrors, sensor_module_types

@@ -10,9 +10,10 @@ import std/[os, parseopt, strutils]
 import results
 import ./logos_core/base/hex
 import ./logos_core/iface/[accept, rmap]
-import ./logos_core/codegen/[callsgen, hostgen, kitgen, nimgen]
+import ./logos_core/codegen/[callsgen, hostgen, kitgen, nimgen, sdkroot]
 
-const usage = """
+const usage =
+  """
 Usage:
   lcn-gen logos-types [--out:DIR]
   lcn-gen logos-runtime [--out:DIR]
@@ -62,7 +63,8 @@ cddl         reads exactly the C headers named, without a preprocessor, and
              --module or --subject, the set must hold one module, or one
              document
 
---import-prefix:P  how Nim output imports this library (default: logos_core/)
+--import-prefix:P  how Nim output imports this library (default: """ &
+  SdkImportRoot & """)
 
 --out:DIR          output directory (default: .)
 --module:NAME      the runtime module name of an explicit module binding; it
@@ -200,7 +202,7 @@ proc main(): int =
     wantHeader = false
     headers: seq[string]
     outDir = "."
-    prefix = "logos_core/"
+    prefix = SdkImportRoot
     opts = AcceptOptions()
     interfaces, supporting: seq[string]
     configuration, configurationRoot = ""

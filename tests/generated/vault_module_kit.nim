@@ -18,7 +18,7 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ../../src/logos_core/codegen/[kitrt, common_mirrors]
+import logos_core/codegen/[kitrt, common_mirrors]
 import ./vault_module_types
 
 export kitrt, common_mirrors, vault_module_types
