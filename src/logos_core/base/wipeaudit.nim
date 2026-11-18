@@ -27,11 +27,12 @@ when defined(lcnWipeAudit) and not defined(lcnTestHooks):
 when defined(lcnWipeAudit):
   {.push raises: [], gcsafe.}
 
+  import std/os
   import ./testhooks
 
   testHooksMarker("wipeaudit")
 
-  {.passc: "-Dfree=lcn_wipe_free -Drealloc=lcn_wipe_realloc".}
+  {.passc: "-include " & currentSourcePath().parentDir & "/wipeaudit_rename.h".}
   when appType == "lib":
     # A library exports no registry of its own (`wipeaudit.c`): two images
     # defining one are an ODR violation to AddressSanitizer on Linux.

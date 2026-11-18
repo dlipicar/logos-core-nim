@@ -3,7 +3,7 @@
  * under -d:lcnWipeAudit, which only test builds set.
  *
  * The audit build renames every `free` and `realloc` in the C it compiles to
- * the functions below (-Dfree=lcn_wipe_free -Drealloc=lcn_wipe_realloc), so
+ * the functions below (the force-included wipeaudit_rename.h), so
  * with -d:useMalloc the Nim heap releases through here. Once armed with
  * patterns, each block is searched for them before it is released; a hit
  * records a backtrace. `realloc` is malloc, copy, scan, free, so growth is
