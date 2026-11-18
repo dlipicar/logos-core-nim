@@ -454,6 +454,65 @@ proc generatedLogosctlKit*(): Result[string, string] =
   kitModule(?logosctlSet(), KitOptions(importPrefix: "../"), false)
 
 const
+  cliTypesPath* = "src/logos_core/cli/cli_types.nim"
+  cliPrimary* = "src/logos_core/cli/cli.cddl"
+  lcnCallPrimary* = "src/logos_core/cli/lcn_call.cddl"
+  lcnCallConfig* = "src/logos_core/cli/settings.cddl"
+  lcnCallConfigRoot* = "lcn_call.settings"
+  lcnCallTypesPath* = "src/logos_core/cli/lcn_call_types.nim"
+  lcnCallKitPath* = "src/logos_core/cli/lcn_call_kit.nim"
+  lcnCallConfigTypesPath* = "src/logos_core/cli/lcn_call_configuration_types.nim"
+
+proc generatedCliTypes*(): Result[string, string] =
+  ## The launcher socket's messages (`logos-core-nim.cli.v1`, G344), for
+  ## `cli/wire.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(cliPrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(
+        importPrefix: "../",
+        schemaAccessor: "cliSchema",
+        documentsAccessor: "cliDocuments",
+      ),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc lcnCallKitParts(): Result[(ContractSet, KitOptions), string] =
+  try:
+    let set = ?acceptContractSet(readFile(lcnCallPrimary), [], [], AcceptOptions())
+    let cfg = ?configurationSet(readFile(lcnCallConfig))
+    ok(
+      (
+        set,
+        KitOptions(
+          importPrefix: "../",
+          configuration:
+            Opt.some(KitConfiguration(set: cfg, root: lcnCallConfigRoot, live: false)),
+        ),
+      )
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedLcnCallTypes*(): Result[string, string] =
+  ## The CLI module's types (G343): no method, no event.
+  let (set, _) = ?lcnCallKitParts()
+  nimModule(set, NimOptions(importPrefix: "../"), false)
+
+proc generatedLcnCallConfigTypes*(): Result[string, string] =
+  ## Its configuration types, `lcn_call.settings` (G343, G344).
+  let (set, opts) = ?lcnCallKitParts()
+  configurationTypesModule(set, opts.configuration.get, opts)
+
+proc generatedLcnCallKit*(): Result[string, string] =
+  ## Its module kit, for `cli/server.nim`: a startup-only configuration.
+  let (set, opts) = ?lcnCallKitParts()
+  kitModule(set, opts, false)
+
+const
   storeTypesPath* = "src/logos_core/runtime/store_types.nim"
   storePrimary* = "src/logos_core/runtime/store.cddl"
 

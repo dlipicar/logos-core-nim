@@ -1,0 +1,128 @@
+; logos-core-nim.cli.v1: the protocol between the logosctl launcher and the
+; lcn_call instance's socket (Tier 5 step N-2; DECISIONS G344; BOOTSTRAP
+; l.384-390). BOOTSTRAP assigns no interoperable activation encoding or
+; terminal protocol, so this one is the implementation's own; docs/DAEMON.md
+; §7a documents it.
+;
+; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR
+; value. A connection carries one command: the launcher sends one
+; lcn.cli_request, with its descriptors attached to the frame's first byte as
+; SCM_RIGHTS ancillary data, in the order its fds list names them; lcn_call
+; answers accepted once it has taken the command, then done with the exit
+; status, or refused instead of both. lcn_call writes everything the user reads
+; to the passed descriptors itself; a reply carries no payload, argument or
+; provider text. The launcher cancels by shutting down its write side. (Names
+; ending in _request or _response are callable rules, INTERFACE §1.3; the
+; request here is lcn.cli_message.)
+
+; Lists are [* ...] (G10: no other occurrence); lcn_call checks the limits the
+; comments give.
+lcn.cli_message = {
+  protocol: "logos-core-nim.cli.v1",
+  ? target: lcn.cli_node_name,
+  output: lcn.cli_output,
+  fds: [* lcn.cli_fd_role],
+  ? deadline_ms: uint32,
+  command: lcn.cli_command,
+}
+
+; The target node's name: "local" is this Runtime (G347); absent, lcn_call's
+; default, "local" in N-2. lcn_call checks the name's syntax,
+; [a-z][a-z0-9_-]*.
+lcn.cli_node_name = tstr .size (1..63)
+
+lcn.cli_output = "json" / "text"
+
+; 2 to 16 descriptors: the first two are always stdout and stderr; each file is
+; the content of one @FILE argument (@- passes the launcher's stdin).
+lcn.cli_fd_role = "stdout" / "stderr" / "file"
+
+lcn.cli_command =
+  lcn.cli_call_command / lcn.cli_describe_command /
+  lcn.cli_subscribe_command / lcn.cli_events_command / lcn.cli_rc_command
+
+; A provider: the instance of a module, and the contract to use, an
+; implemented interface by its root; absent, the primary contract.
+lcn.cli_provider = {
+  module: tstr .size (1..64),
+  ? instance: tstr .size (1..128),
+  ? contract: bstr .size 32,
+}
+
+; One call (D26: named arguments only). args (at most 256) and json are
+; exclusive; json is one JSON object, the whole request.
+lcn.cli_call_command = {
+  op: "call",
+  provider: lcn.cli_provider,
+  method: tstr .size (1..128),
+  ? args: [* lcn.cli_arg],
+  ? json: tstr .size (1..1048576),
+}
+
+; key=value, or key=@FILE: fd indexes the message's fds, a "file" role.
+lcn.cli_arg = lcn.cli_text_arg / lcn.cli_file_arg
+
+lcn.cli_text_arg = {
+  kind: "text",
+  name: tstr .size (1..128),
+  value: tstr .size (0..65536),
+}
+
+lcn.cli_file_arg = {
+  kind: "file",
+  name: tstr .size (1..128),
+  fd: uint8,
+}
+
+lcn.cli_describe_command = {
+  op: "describe",
+  provider: lcn.cli_provider,
+}
+
+; A stream ends at count events, after for_ms, at the launcher's EOF, or when
+; lcn_call ends it (G349).
+lcn.cli_subscribe_command = {
+  op: "subscribe",
+  provider: lcn.cli_provider,
+  event: tstr .size (1..128),
+  ? count: uint32,
+  ? for_ms: uint32,
+}
+
+; The target Runtime's own Runtime Control events; names (1 to 16) absent:
+; the default set, the three the events rule grants (G346).
+lcn.cli_events_command = {
+  op: "events",
+  ? names: [* tstr .size (1..128)],
+  ? count: uint32,
+  ? for_ms: uint32,
+}
+
+; Runtime Control at a named node, through lcn_call's binding for it (RUNTIME
+; l.238; G347): reserved for Tier 5 step 5-7a, refused until then. params is
+; the method's deterministic-CBOR request.
+lcn.cli_rc_command = {
+  op: "rc",
+  method: tstr .size (1..64),
+  params: bstr .size (0..1048576),
+}
+
+lcn.cli_reply = {
+  protocol: "logos-core-nim.cli.v1",
+  outcome: lcn.cli_outcome,
+}
+
+lcn.cli_outcome = lcn.cli_accepted / lcn.cli_done / lcn.cli_refused
+
+lcn.cli_accepted = { status: "accepted" }
+
+; The launcher's exit status (G349).
+lcn.cli_done = { status: "done", exit: uint8 }
+
+; A frame or a command lcn_call refuses before taking it; the connection is
+; closed after it and every descriptor that arrived is closed.
+lcn.cli_refused = {
+  status: "refused",
+  reason: "protocol" / "too-large" / "busy" / "closing",
+  ? message: tstr .size (0..512),
+}

@@ -1,0 +1,21 @@
+; lcn_call configuration (DECISIONS G343, G344): what logosd provisions for its
+; CLI instance at every start, from daemon-config cli and the trust file. A
+; supporting schema, resolved against itself and the common schema only. The
+; instance reads it once, at initialization (startup-only).
+
+lcn_call.settings = {
+  ; The owner-only launcher socket the instance binds (cli.cddl).
+  socket: tstr .size (1..1024),
+  ; The trust file's development switch (D27): non-production puts the
+  ; NON-PRODUCTION banner before every text output and names it in every JSON
+  ; envelope (BOOTSTRAP l.101-102; G89), as logosctl's own commands do.
+  deployment: "production" / "non-production",
+  ; One-shot commands in service at once (1-32); one more is refused busy.
+  workers: uint8,
+  ; Subscriptions and event streams at once (1-64).
+  streams: uint8,
+  ; A connection without a complete request is closed after this.
+  idle_timeout_ms: uint32,
+  ; A route unused for this long is closed (G348; the idle policy, G350).
+  route_idle_ms: uint32,
+}
