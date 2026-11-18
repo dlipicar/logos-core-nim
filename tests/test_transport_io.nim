@@ -641,13 +641,15 @@ suite "trnio.hello: the Hello exchange over sockets (TRANSPORT §3.1, §8.1, §8
 
   test "[TRN-0381] stalled 16 MiB Hellos are bounded by the pre-Hello pool":
     let ep = newEndpoint()
-    # maxHelloInputBytes: 32 MiB. The stalled Hellos' deadlines end `margin`
-    # before the caller's: it waits behind them, then has `margin` to be read,
-    # admitted by the owner and answered (a loaded msan runner took over
-    # 500 ms).
-    let margin = 1000 * Slow
+    # maxHelloInputBytes: 32 MiB. The stalled Hellos' deadlines end `hold` after
+    # the caller connects and `margin` before the caller's: it waits behind
+    # them, then has `margin` to be read, admitted by the owner and answered (a
+    # loaded msan runner took over 3 s on 8aac290, and the caller's own Hello
+    # timed out).
+    let hold = 1000 * Slow
+    let margin = 4 * hold
     var cfg = fastConfig()
-    cfg.helloTimeout = 2 * margin * Ms
+    cfg.helloTimeout = (hold + margin) * Ms
     let o = newOwner(cfg)
     check o.serve(1, dupCloexec(ep.listener))
     var evil: seq[cint]
@@ -659,7 +661,7 @@ suite "trnio.hello: the Hello exchange over sockets (TRANSPORT §3.1, §8.1, §8
     o.connect(1, ep.path, o.issue())
     # Waiting behind the stalled frames: not admitted while they hold the pool.
     check o.oneOf(1, 100).isNone
-    let c = o.oneOf(1, 5 * margin)
+    let c = o.oneOf(1, 2 * (hold + margin))
     if c.isSome and c.get.kind == evConnectFailed:
       # x86_64 MSan CI on b3af640 failed it after 13.3 s, without saying why.
       checkpoint "connect failed: " & $c.get.failCode & " " & $c.get.failCause & ": " &
