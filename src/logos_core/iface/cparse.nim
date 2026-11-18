@@ -113,7 +113,9 @@ func `$`*(t: CType): string =
   ## `uint8_t[16]` or `const uint8_t (*)[16]`.
   result = (if t.isConst: "const " else: "") & t.base
   if t.ptrToArray:
-    return result & " (*)[" & $max(t.arrayLen, 0) & "]"
+    # Not `return result & …`: that leaks `result`'s old value (upstream draft 180).
+    result.add(" (*)[" & $max(t.arrayLen, 0) & "]")
+    return
   if t.constPtr and t.pointers > 0:
     result.add("* const" & repeat('*', t.pointers - 1))
   else:
