@@ -11,10 +11,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./flaky_module_types
 
-export kitrt, common_mirrors, flaky_module_types
+export kit, flaky_module_types
 
 const
   moduleName* = "flaky_module"

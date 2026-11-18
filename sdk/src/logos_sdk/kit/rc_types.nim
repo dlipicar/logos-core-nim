@@ -4,8 +4,8 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ../codegen/nimrt
-import ../codegen/common_types
+import logos_sdk/codegen/nimrt
+import logos_sdk/codegen/common_types
 
 export nimrt, common_types
 

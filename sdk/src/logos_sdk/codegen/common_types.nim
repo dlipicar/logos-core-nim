@@ -5,8 +5,8 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ./nimrt
-from ../iface/outcome import ErrorCode
+import logos_sdk/codegen/nimrt
+from logos_sdk/iface/outcome import ErrorCode
 
 export nimrt, ErrorCode
 

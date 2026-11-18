@@ -18,10 +18,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./vault_module_types
 
-export kitrt, common_mirrors, vault_module_types
+export kit, vault_module_types
 
 const
   moduleName* = "vault_module"

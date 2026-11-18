@@ -11,10 +11,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./beacon_module_types
 
-export kitrt, common_mirrors, beacon_module_types
+export kit, beacon_module_types
 
 const
   moduleName* = "beacon_module"

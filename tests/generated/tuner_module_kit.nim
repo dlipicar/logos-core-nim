@@ -18,10 +18,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./[tuner_module_types, tuner_module_configuration_types]
 
-export kitrt, common_mirrors, tuner_module_types, tuner_module_configuration_types
+export kit, tuner_module_types, tuner_module_configuration_types
 
 const
   moduleName* = "tuner_module"

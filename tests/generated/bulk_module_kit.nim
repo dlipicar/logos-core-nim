@@ -15,10 +15,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./bulk_module_types
 
-export kitrt, common_mirrors, bulk_module_types
+export kit, bulk_module_types
 
 const
   moduleName* = "bulk_module"

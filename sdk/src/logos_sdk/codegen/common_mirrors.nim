@@ -6,8 +6,8 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import ./[callrt, nimrt]
-import ../base/perthread
+import logos_sdk/codegen/[callrt, nimrt]
+import logos_sdk/base/perthread
 
 export callrt, nimrt
 

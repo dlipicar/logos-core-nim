@@ -11,10 +11,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./logosctl_types
 
-export kitrt, common_mirrors, logosctl_types
+export kit, logosctl_types
 
 const
   moduleName* = "logosctl"

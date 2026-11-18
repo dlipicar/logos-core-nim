@@ -19,10 +19,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./logos_module_loader_types
 
-export kitrt, common_mirrors, logos_module_loader_types
+export kit, logos_module_loader_types
 
 const
   moduleName* = "logos_module_loader"

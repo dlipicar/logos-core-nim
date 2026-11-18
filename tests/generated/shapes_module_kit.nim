@@ -17,10 +17,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./shapes_module_types
 
-export kitrt, common_mirrors, shapes_module_types
+export kit, shapes_module_types
 
 const
   moduleName* = "shapes_module"

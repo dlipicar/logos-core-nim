@@ -15,10 +15,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./meter_module_types
 
-export kitrt, common_mirrors, meter_module_types
+export kit, meter_module_types
 
 const
   moduleName* = "meter_module"

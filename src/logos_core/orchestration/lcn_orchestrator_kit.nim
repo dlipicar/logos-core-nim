@@ -11,10 +11,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[kitrt, common_mirrors]
+import logos_sdk/kit
 import ./[lcn_orchestrator_types, lcn_orchestrator_configuration_types]
 
-export kitrt, common_mirrors, lcn_orchestrator_types, lcn_orchestrator_configuration_types
+export kit, lcn_orchestrator_types, lcn_orchestrator_configuration_types
 
 const
   moduleName* = "lcn_orchestrator"

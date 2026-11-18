@@ -216,9 +216,8 @@ proc kitParts(
       header & "_types"
   o.add(
     "\n#!fmt: off\n{.push raises: [], gcsafe.}\n\n" & "import " & opts.importPrefix &
-      "codegen/[kitrt, common_mirrors]\nimport ./" &
-      (if configured: "[" & typeModules & "]" else: typeModules) &
-      "\n\nexport kitrt, common_mirrors, " & typeModules & "\n\n"
+      "kit\nimport ./" & (if configured: "[" & typeModules & "]"
+    else: typeModules) & "\n\nexport kit, " & typeModules & "\n\n"
   )
   let descriptor =
     if provider:
