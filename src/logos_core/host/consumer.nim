@@ -62,7 +62,7 @@ import ../hash/hashinput
 import ../iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
 import ../transport/io/loop
-import ../runtime/[callcheck, entryframe, hostio, rc_types]
+import ../runtime/[callcheck, entryframe, hostio], ../kit/rc_types
 import ./state
 
 const

@@ -13,7 +13,7 @@ import ../src/logos_core/abi/types
 import ../src/logos_core/cbor
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, surface]
-import ../src/logos_core/iface/common_types
+import ../src/logos_core/codegen/common_types
 import ./support/[kitbuild, kitruntime]
 # The CA contract repeats the Runtime types the Runtime Control contract
 # declares: the route fixture uses Runtime Control's.

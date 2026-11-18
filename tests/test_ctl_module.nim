@@ -18,7 +18,7 @@ when defined(posix):
   from ../src/logos_core/runtime/plumbing import
     RcMethod, holdRcAnswerForTests, rcAnswerHeldForTests, releaseRcAnswerForTests
   import ../src/logos_core/abi/host as abihost
-  import ../src/logos_core/runtime/[engine, host, rc_types]
+  import ../src/logos_core/runtime/[engine, host], ../src/logos_core/kit/rc_types
   from ../src/logos_core/durable import DurableLock, release
   from ../src/logos_core/loader/contract import LoaderInstanceId
   from ../src/logos_core/transport/io/peercred import effectiveUid

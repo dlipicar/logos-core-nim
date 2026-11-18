@@ -1,0 +1,11 @@
+# What the restructure moved, oldest first. `rewrite_imports.py` reads this; an entry ending in `/`
+# covers a directory. Decision rows and old plans keep the paths they were written with: this map
+# is how to read them.
+
+[[move]]
+from = "src/logos_core/iface/common_types.nim"
+to = "src/logos_core/codegen/common_types.nim"
+
+[[move]]
+from = "src/logos_core/runtime/rc_types.nim"
+to = "src/logos_core/kit/rc_types.nim"

@@ -24,7 +24,7 @@ import ../cbor
 import ../commitment
 import ../hash/hashinput
 import ../iface/[accept, names, outcome]
-import ./[rc_types, routing]
+import ../kit/rc_types, ./routing
 
 export rc_types, routing
 

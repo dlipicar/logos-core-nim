@@ -3,7 +3,7 @@
 
 [[item]]
 ids = ["CAP-0195"]
-reason = "A negative over the whole authority: it reaches no Runtime state. Under src/logos_core/authority/ the only runtime/ imports are rc_types (generated types and the mirrored Runtime Control text), bell (a wake-up primitive) and native (the static symbol table check, in provider.nim): `grep -rnE 'runtime/' src/logos_core/authority/` shows nothing else. Its inputs are the wiring's facts table and clock, and its outputs the publish callback and its own state directory (DECISIONS I84)."
+reason = "A negative over the whole authority: it reaches no Runtime state. Under src/logos_core/authority/ the only runtime/ imports are bell (a wake-up primitive) and native (the static symbol table check, in provider.nim): `grep -rnE 'runtime/' src/logos_core/authority/` shows nothing else. kit/rc_types holds the generated Runtime Control types and mirrored text. Its inputs are the wiring's facts table and clock, and its outputs the publish callback and its own state directory (DECISIONS I84)."
 
 [[item]]
 ids = ["CAP-0161", "CAP-0162", "CAP-0164", "CAP-0165"]

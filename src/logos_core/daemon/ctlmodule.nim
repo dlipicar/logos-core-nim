@@ -42,7 +42,7 @@ import ../abi/[checks, types]
 import ../base/[perthread, testhooks]
 import ../iface/outcome
 from ../kit/rcclient import checkBinding, `$`
-import ../runtime/[bell, rc_types]
+import ../runtime/bell, ../kit/rc_types
 import ../transport/io/[peercred, sock]
 import ./[ctlwire, logging, logosctl_kit]
 

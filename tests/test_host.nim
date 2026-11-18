@@ -11,7 +11,8 @@ import ../src/logos_core/abi/[host, types]
 import ../src/logos_core/crypto/blake3
 import ../src/logos_core/iface/outcome
 import
-  ../src/logos_core/runtime/[engine, host, host_config, host_config_types, rc_types]
+  ../src/logos_core/runtime/[engine, host, host_config, host_config_types],
+  ../src/logos_core/kit/rc_types
 from ../src/logos_core/runtime/authscopes import AuthorityModule, caRoots
 from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
 from ../src/logos_core/runtime/plumbing import

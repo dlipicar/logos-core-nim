@@ -316,9 +316,9 @@ proc generatedCommonMirrors*(): Result[string, string] =
   commonMirrorModule("../")
 
 const
-  commonTypesPath* = "src/logos_core/iface/common_types.nim"
+  commonTypesPath* = "src/logos_core/codegen/common_types.nim"
   commonMirrorsPath* = "src/logos_core/codegen/common_mirrors.nim"
-  rcTypesPath* = "src/logos_core/runtime/rc_types.nim"
+  rcTypesPath* = "src/logos_core/kit/rc_types.nim"
   rcPrimary* = "spec/mirrors/RNT/9.3.runtime-control.cddl"
   rcSupporting* = [
     "spec/mirrors/RNT/9.2.runtime-types.cddl",

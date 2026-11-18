@@ -19,7 +19,7 @@ import ../src/logos_core/abi/[checks, types]
 import ../src/logos_core/cbor
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, provider, surface]
-import ../src/logos_core/iface/common_types
+import ../src/logos_core/codegen/common_types
 import ../src/logos_core/loader/contract
 import ../src/logos_core/pins
 from ../src/logos_core/runtime/artifact import ArtifactRecord

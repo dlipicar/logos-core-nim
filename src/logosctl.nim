@@ -50,7 +50,7 @@ when defined(posix):
   import ./logos_core/cbor
   import ./logos_core/durable
   import ./logos_core/iface/outcome
-  import ./logos_core/runtime/[rc_types, stateadmin]
+  import ./logos_core/kit/rc_types, ./logos_core/runtime/stateadmin
   import
     ./logos_core/daemon/[
       compose, ctlwire, evexport, evkey, evstore, render, session, sessioninit,

@@ -24,7 +24,7 @@ import ../src/logos_core/cbor
 import ../src/logos_core/codegen/nimrt
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, provider, surface]
-import ../src/logos_core/iface/common_types
+import ../src/logos_core/codegen/common_types
 import ../src/logos_core/package/manifest
 import ./support/[kitbuild, kitruntime, permfixture]
 import ./kit/meter_impl

@@ -38,7 +38,6 @@ daemon_allowlist = [
   "runtime/host",
   "runtime/host_config",
   "runtime/plumbing",
-  "runtime/rc_types",
   "runtime/stateadmin",
   "runtime/store",
   "transport/io/peercred",
@@ -73,14 +72,3 @@ daemon_cli = [
   "src/logosd.nim",
   "src/logosctl.nim",
 ]
-
-# Each records one import that breaks a rule today.
-[[exception]]
-rule = "sdk-closed"
-file = "src/logos_core/kit/rcclient.nim"
-imports = "src/logos_core/runtime/rc_types.nim"
-
-[[exception]]
-rule = "base-below-binding"
-file = "src/logos_core/iface/common_types.nim"
-imports = "src/logos_core/codegen/nimrt.nim"

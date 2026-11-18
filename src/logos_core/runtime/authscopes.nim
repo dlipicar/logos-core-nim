@@ -44,9 +44,9 @@
 import std/[strutils, tables]
 import results
 import ../cbor
-import ../iface/common_types
+import ../codegen/common_types
 import ../authority/scopes
-from ./rc_types import LogosNSRuntimeControlRouteAccess, decode
+from ../kit/rc_types import LogosNSRuntimeControlRouteAccess, decode
 import ./authz
 
 type

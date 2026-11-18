@@ -11,7 +11,7 @@
 
 import results
 import ../permissions
-import ./[rc_types, store_types]
+import ../kit/rc_types, ./store_types
 
 export results
 

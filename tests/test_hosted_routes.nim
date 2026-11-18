@@ -36,7 +36,7 @@ when defined(posix):
   import ../src/logos_core/commitment
   import ../src/logos_core/crypto/blake3
   import ../src/logos_core/iface/[accept, cmap, outcome, provider, surface]
-  import ../src/logos_core/iface/common_types
+  import ../src/logos_core/codegen/common_types
   import ../src/logos_core/loader/contract
   import ../src/logos_core/pins
   import ../src/logos_core/authority/scopes except

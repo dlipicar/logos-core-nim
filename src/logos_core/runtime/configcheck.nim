@@ -20,7 +20,7 @@ import ../cbor
 import ../codegen/nimrt
 import ../commitment
 import ../iface/[accept, payload]
-import ./[config, rc_types]
+import ./config, ../kit/rc_types
 
 export config
 

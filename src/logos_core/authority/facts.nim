@@ -24,7 +24,7 @@
 import std/[locks, tables]
 import results
 import ../cbor
-from ../runtime/rc_types import LogosNSRuntimeControlExecutionSelection, encode, decode
+from ../kit/rc_types import LogosNSRuntimeControlExecutionSelection, encode, decode
 
 export results, LogosNSRuntimeControlExecutionSelection
 

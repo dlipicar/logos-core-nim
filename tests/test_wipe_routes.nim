@@ -29,7 +29,7 @@ import ../src/logos_core/cbor
 import ../src/logos_core/commitment
 import ../src/logos_core/hash
 import ../src/logos_core/iface/[accept, cmap, outcome, provider, surface]
-import ../src/logos_core/iface/common_types
+import ../src/logos_core/codegen/common_types
 import ../src/logos_core/authority/scopes except
   LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
   LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,

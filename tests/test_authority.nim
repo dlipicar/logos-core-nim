@@ -13,7 +13,7 @@ import
 import ../src/logos_core/iface/accept
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/names
-from ../src/logos_core/runtime/rc_types import rcDocuments
+from ../src/logos_core/kit/rc_types import rcDocuments
 import ./support/[authfixture, cafake, kitbuild, permfixture]
 
 let

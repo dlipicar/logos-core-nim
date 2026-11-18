@@ -8,7 +8,7 @@ import results
 import ../../src/logos_core/cbor
 import ../../src/logos_core/commitment
 import ../../src/logos_core/iface/accept
-import ../../src/logos_core/runtime/[configcheck, rc_types]
+import ../../src/logos_core/runtime/configcheck, ../../src/logos_core/kit/rc_types
 import ./testdirs
 
 export results

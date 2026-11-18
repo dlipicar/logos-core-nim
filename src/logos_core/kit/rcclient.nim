@@ -4,7 +4,7 @@
 ## A module that holds a `ptr LogosRuntimeControlBinding` (`ModuleServices.
 ## runtimeControl`) calls the Runtime through it alone (RUNTIME l.182-184):
 ##
-## - `call` sends a typed request (`runtime/rc_types.nim`, types only) by the
+## - `call` sends a typed request (`kit/rc_types.nim`, types only) by the
 ##   method's bare name and decodes the typed response. Results are checked
 ##   as INTERFACE §5.2 requires of a consumer (`checkOutcome`); a buffer handed
 ##   over with LOGOS_OK is released exactly once, even when it is rejected.
@@ -24,7 +24,7 @@
 import results
 import ../abi/[checks, types]
 import ../iface/outcome
-import ../runtime/rc_types
+import ./rc_types
 
 export results, types, outcome, rc_types
 

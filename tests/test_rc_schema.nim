@@ -1,12 +1,12 @@
 ## The Runtime Types and Runtime Control contract (RUNTIME §9.2, §9.3), rule by
 ## rule (DECISIONS I88, W2): values built from the accepted model validate and
-## round-trip byte for byte through `runtime/rc_types.nim`; values outside a
+## round-trip byte for byte through `kit/rc_types.nim`; values outside a
 ## bound are refused (`support/schemasuite`). One test per rule, named by its
 ## requirement id.
 
 import std/strutils
 import unittest2
-import ../src/logos_core/runtime/rc_types
+import ../src/logos_core/kit/rc_types
 import ./support/schemasuite
 
 const Rules = [

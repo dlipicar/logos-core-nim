@@ -15,13 +15,13 @@ import ../src/logos_core/commitment
 import ../src/logos_core/hash
 import ../src/logos_core/iface/[accept, cmap, outcome, provider, surface]
 import ../src/logos_core/codegen/nimrt
-import ../src/logos_core/iface/common_types
+import ../src/logos_core/codegen/common_types
 import ../src/logos_core/authority/scopes except
   LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
   LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
   LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
   LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
-from ../src/logos_core/runtime/rc_types import rcSchema
+from ../src/logos_core/kit/rc_types import rcSchema
 import ./support/[fakeca, kitbuild, kitruntime]
 import ./kit/[deferred_adapter, meter_impl]
 import ./generated/meter_module_calls

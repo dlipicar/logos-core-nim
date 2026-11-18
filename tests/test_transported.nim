@@ -23,7 +23,7 @@ import ../src/logos_core/base/clock
 import ../src/logos_core/cbor
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, surface]
-import ../src/logos_core/iface/common_types
+import ../src/logos_core/codegen/common_types
 import ./support/[fakeca, kitbuild, kitruntime, shortdir]
 import ./kit/[bulk_impl, deferred_adapter, meter_impl]
 import

@@ -27,7 +27,7 @@ import ../cbor
 import ../cbor/utf8
 import ../crypto/blake3
 import ../durable
-import ../iface/common_types
+import ../codegen/common_types
 import ./[plumbing, store_types]
 
 export results

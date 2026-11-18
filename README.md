@@ -229,7 +229,7 @@ So is `lcn-pkg`, which builds, signs, packs and checks packages (`lcn-pkg --help
 nix run .#lcn-pkg -- verify example.lgx --trust:trust.json
 ```
 
-The generated Nim modules (`src/logos_core/iface/common_types.nim`, `tests/generated/`) are
+The generated Nim modules (`src/logos_core/codegen/common_types.nim`, `tests/generated/`) are
 committed, and a test fails when they are stale. To rewrite them:
 
 ```bash

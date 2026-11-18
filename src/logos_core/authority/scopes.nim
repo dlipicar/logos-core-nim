@@ -32,7 +32,7 @@ import ../cbor
 import ../commitment
 import ../iface/[accept, names]
 import ./logos_capability_authority_types
-from ../runtime/rc_types import rcDocuments
+from ../kit/rc_types import rcDocuments
 import ../base/perthread
 import ../permissions
 

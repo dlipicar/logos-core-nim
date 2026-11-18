@@ -17,7 +17,7 @@ when defined(posix):
   import unittest2
   import ../src/logos_core/crypto/blake3
   import ../src/logos_core/permissions
-  import ../src/logos_core/runtime/[engine, host, rc_types]
+  import ../src/logos_core/runtime/[engine, host], ../src/logos_core/kit/rc_types
   from ../src/logos_core/runtime/plumbing import
     DefaultStartupDeadline, DefaultLoaderStartupDeadline, DefaultStopDeadline,
     DefaultShutdownGrace, DefaultApplyDeadline, MaxDiagnostics

@@ -17,7 +17,7 @@ import ../src/logos_core/cbor
 import ../src/logos_core/codegen/nimrt
 import ../src/logos_core/commitment
 import ../src/logos_core/iface/[accept, outcome, provider, surface]
-import ../src/logos_core/iface/common_types
+import ../src/logos_core/codegen/common_types
 import ../src/logos_core/transport/envelope
 import ../src/logos_core/transport/framing
 import ./support/[kitbuild, kitruntime, tunerconfig]

@@ -5,7 +5,7 @@
 {.push raises: [], gcsafe.}
 
 import ../codegen/nimrt
-import ../iface/common_types
+import ../codegen/common_types
 
 export nimrt, common_types
 

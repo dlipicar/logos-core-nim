@@ -33,7 +33,7 @@ import ../crypto/blake3
 import ../hash/hashinput
 import ../transport/envelope
 import ../transport/framing
-import ./rc_types
+import ../kit/rc_types
 
 export results, hashinput.Digest
 

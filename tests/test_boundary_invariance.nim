@@ -23,7 +23,7 @@ when defined(posix):
   import ../src/logos_core/commitment
   import ../src/logos_core/crypto/blake3
   import ../src/logos_core/iface/[accept, outcome, surface]
-  import ../src/logos_core/iface/common_types
+  import ../src/logos_core/codegen/common_types
   import ../src/logos_core/pins
   from ../src/logos_core/transport/io/api import defaultTransportConfig
   import ./support/[invariance, kitbuild, kitruntime, modulehostbuild, shortdir]

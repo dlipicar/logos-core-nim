@@ -39,7 +39,7 @@ OP_CHARS = set("=+-*/<>@$~&%|!?^.:\\")
 
 
 def tokenize(src):
-    """(kind, text, line) for each token: `id`, `str`, `op`, `nl`; comments are dropped."""
+    """(kind, text, line, start, end) per token: `id`, `str`, `op`, `nl`; no comments."""
     out, i, line, n = [], 0, 1, len(src)
 
     def skip_block(j, doc):
@@ -63,7 +63,7 @@ def tokenize(src):
     while i < n:
         c = src[i]
         if c == "\n":
-            out.append(("nl", "\n", line))
+            out.append(("nl", "\n", line, i, i + 1))
             line += 1
             i += 1
         elif c in " \t\r":
@@ -82,7 +82,7 @@ def tokenize(src):
             while j < n and src[j] == '"':
                 j += 1
             text = src[i + 3 : j - 3]
-            out.append(("str", text, line))
+            out.append(("str", text, line, i, j))
             line += src.count("\n", i, j)
             i = j
         elif c == '"':
@@ -101,7 +101,7 @@ def tokenize(src):
                 else:
                     text.append(src[j])
                     j += 1
-            out.append(("str", "".join(text), line))
+            out.append(("str", "".join(text), line, i, j + 1))
             i = j + 1
         elif c == "'":
             if i > 0 and (src[i - 1].isalnum() or src[i - 1] == "_"):
@@ -115,28 +115,34 @@ def tokenize(src):
                 i += 1
         elif c == "`":
             j = src.find("`", i + 1)
-            i = n if j < 0 else j + 1
-            out.append(("op", "`", line))
+            j = n if j < 0 else j + 1
+            out.append(("op", "`", line, i, j))
+            i = j
         elif c.isalnum() or c == "_" or ord(c) >= 0x80:
             j = i
             while j < n and (src[j].isalnum() or src[j] == "_" or ord(src[j]) >= 0x80):
                 j += 1
-            out.append(("id", src[i:j], line))
+            out.append(("id", src[i:j], line, i, j))
             i = j
         elif c in OP_CHARS:
             j = i
             while j < n and src[j] in OP_CHARS:
                 j += 1
-            out.append(("op", src[i:j], line))
+            out.append(("op", src[i:j], line, i, j))
             i = j
         else:
-            out.append(("op", c, line))
+            out.append(("op", c, line, i, i + 1))
             i += 1
     return out
 
 
-def imports_of(src):
-    """Every (module path, line) named by an `import`, `from` or `include` statement."""
+def statements(src):
+    """Every `import`, `from` and `include` statement, as a list of its items.
+
+    An item is a dict: `path` and its source range `start`, `end`; for a bracket group `path` is
+    the prefix, `prefix_end` where the prefix ends, and `members` the (path, start, end, alias)
+    of each entry.
+    """
     toks = tokenize(src)
     found = []
     n = len(toks)
@@ -147,35 +153,50 @@ def imports_of(src):
         return i
 
     def item(i):
-        """One path expression from token i: its expanded paths, and the next index."""
+        """One path expression from token i: the item, and the next index."""
         prefix, wants_part = "", True
+        start = toks[i][3] if i < n else 0
+        end = start
         while i < n:
-            kind, text, _ = toks[i]
+            kind, text, _, _, tok_end = toks[i]
             if kind == "op" and PATH_OP.match(text):
                 prefix += text
                 wants_part = text.endswith("/")
+                end = tok_end
                 i += 1
                 if wants_part:
                     i = skip_nl(i)
             elif kind in ("id", "str") and wants_part:
                 prefix += text
                 wants_part = False
+                end = tok_end
                 i += 1
             elif kind == "op" and text == "[" and wants_part:
+                prefix_end = end
                 i = skip_nl(i + 1)
-                paths = []
+                members = []
                 while i < n and toks[i][1] != "]":
                     sub, i = item(i)
-                    paths += [prefix + s for s in sub]
+                    alias = None
                     i = skip_nl(i)
                     if i < n and toks[i][1] == "as":
+                        alias = toks[i + 1][1]
                         i = skip_nl(i + 2)
+                    if sub:
+                        members.append((sub["path"], sub["start"], sub["end"], alias))
                     if i < n and toks[i][1] == ",":
                         i = skip_nl(i + 1)
-                return paths, i + 1
+                close = toks[i][4] if i < n else end
+                return {
+                    "path": prefix,
+                    "start": start,
+                    "end": close,
+                    "prefix_end": prefix_end,
+                    "members": members,
+                }, i + 1
             else:
                 break
-        return [prefix] if prefix else [], i
+        return ({"path": prefix, "start": start, "end": end} if prefix else None), i
 
     def rest_of_statement(i):
         while i < n and not (toks[i][0] == "nl" and toks[i - 1][1] not in (",", "(")):
@@ -184,13 +205,16 @@ def imports_of(src):
 
     i, previous = 0, None
     while i < n:
-        kind, text, line = toks[i]
+        kind, text, line, _, _ = toks[i]
         at_start = previous is None or previous[0] == "nl" or previous[1] in (":", ";")
         if kind == "id" and text in ("import", "include", "from") and at_start:
             i = skip_nl(i + 1)
+            items = []
             while i < n:
-                paths, i = item(i)
-                found += [(p, line) for p in paths]
+                entry, i = item(i)
+                if entry:
+                    entry["line"] = line
+                    items.append(entry)
                 if text == "from":
                     i = rest_of_statement(i)
                     break
@@ -203,11 +227,24 @@ def imports_of(src):
                     i = skip_nl(i + 1)
                     continue
                 break
-            previous = ("nl", "\n", line)
+            found.append({"kind": text, "items": items})
+            previous = ("nl", "\n", line, 0, 0)
             continue
         previous = toks[i]
         i += 1
     return found
+
+
+def imports_of(src):
+    """Every (module path, line) named by an `import`, `from` or `include` statement."""
+    out = []
+    for statement in statements(src):
+        for entry in statement["items"]:
+            if "members" in entry:
+                out += [(entry["path"] + m[0], entry["line"]) for m in entry["members"]]
+            else:
+                out.append((entry["path"], entry["line"]))
+    return out
 
 
 def nim_files(root):
