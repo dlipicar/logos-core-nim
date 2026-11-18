@@ -6,7 +6,7 @@
 ## the required rejections (§3.9.5). Test ids (T1.1 ...) are those of the 5-1
 ## plan's §5.
 
-import std/[algorithm, os, sequtils, strutils]
+import std/[algorithm, os, osproc, sequtils, strutils]
 import unittest2
 import ../src/logos_core/iface/[accept, cinput, cliteral, rmap]
 import ../src/logos_core/iface/payload
@@ -15,6 +15,11 @@ import ../src/logos_core/base/hex
 import ../src/logos_core/hash/hashinput
 import ../src/logos_core/cbor
 import ./support/[ccompile, specdata]
+from ./support/genfixtures import
+  caPrimary, caSupporting, carrierPrimary, cliPrimary, ctlPrimary, daemonConfigDocument,
+  evstorePrimary, hostConfigDocument, lcnCallPrimary, ldrPrimary, ldrSupporting,
+  logosctlPrimary, nimFixtures, orchPrimary, orchStatePrimary, policyPrimary, rcPrimary,
+  rcSupporting, statePrimary, storePrimary, trustPrimary
 
 const outDir = "build/rmap"
 
@@ -1037,6 +1042,11 @@ suite "ifc.c-reverse: literals in headers (INTERFACE §3.5)":
     ) == rkLiteralMissing
     let ints = generated("demo.k = { a: 7 }\n")
     check refusal(one(swapped(ints, "UINT64_C(7)", "\"7\""))) == rkLiteralKind
+    # A map field without its macro reads as a plain field of another schema: the
+    # root macros the header keeps then reject it.
+    check refusal(
+      one(swapped(ints, "#define LOGOS_LITERAL_demo_K_A UINT64_C(7)\n", ""))
+    ) == rkIdentity
 
 suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3.7)":
   test "T4.1 [IFC-0298] [IFC-0820] [IFC-0821] [IFC-0822] [IFC-0918] one group and no constant: the role and namespace are inferred":
@@ -1209,6 +1219,24 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
     let r =
       rebuilt([src("s.h", own), src("types.h", types393)], RmapOptions(subject: "x"))
     check r.supporting.len == 1 and r.supporting[0].namespace == "recursive"
+    # A header with two documents and a dependency of one of them: the diagnostic
+    # names the document that needs the group (G318).
+    let two =
+      getNode.replace("INCLUDES", "#include \"types.h\"\n").replace(
+        "logos_recursive_Node_t* out_node", "uint64_t* out_v"
+      ) & "#define LOGOS_INTERFACE_NAMESPACE_y \"y\"\n" &
+      "typedef logos_result_t (*logos_y_Get_FN_t)(\n    logos_module_context_t* module,\n" &
+      "    logos_response_owner_t* response_owner,\n    logos_recursive_Node_t* out_node\n);\n"
+    let other = reconstruct(
+      [src("s.h", two), src("types.h", types393)], RmapOptions(subject: "x")
+    )
+    check other.isErr
+    check other.error.reason == rkUnreferencedDependency
+    check "y references it" in other.error.detail
+    check rebuilt(
+      [src("s.h", two), src("types.h", types393)], RmapOptions(subject: "y")
+    ).supporting
+      .mapIt(it.namespace) == @["recursive"]
 
   test "T4.15 [IFC-0306] [IFC-0305] [IFC-0316] implements indices: contiguous from 0, in ascending raw root order":
     check refusal(one(swapped(h392, "INDEX0", "INDEX1"))) == rkImplementsIndex
@@ -1762,6 +1790,48 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
           text
       )
 
+  test "T7.1 [IFC-0356] [IFC-0357] [IFC-0368] [IFC-0381] [IFC-0389] [IFC-0393] [IMPL-DECISION G158] S -> C -> S′ over the system contracts and every generated fixture":
+    when deviceTarget:
+      skip()
+    else:
+      proc texts(paths: openArray[string]): seq[string] =
+        paths.mapIt(readFile(it))
+
+      let none: seq[string] = @[]
+      for (name, primary, supp, system) in [
+        ("Runtime Control", readFile(rcPrimary), texts(rcSupporting), true),
+        ("Capability Authority", caPrimary(), texts(caSupporting), true),
+        ("Loader", ldrPrimary(), texts(ldrSupporting), true),
+        ("host configuration", hostConfigDocument(), none, false),
+        ("daemon configuration", daemonConfigDocument(), none, false),
+        ("trust", readFile(trustPrimary), none, false),
+        ("evidence store", readFile(evstorePrimary), none, false),
+        ("ctl", readFile(ctlPrimary), none, false),
+        ("logosctl", readFile(logosctlPrimary), none, false),
+        ("cli", readFile(cliPrimary), none, false),
+        ("lcn-call", readFile(lcnCallPrimary), none, false),
+        ("store", readFile(storePrimary), none, false),
+        ("carrier", readFile(carrierPrimary), none, false),
+        ("authority policy", readFile(policyPrimary), none, false),
+        ("authority state", readFile(statePrimary), none, false),
+        ("orchestrator", readFile(orchPrimary), none, false),
+        ("orchestrator state", readFile(orchStatePrimary), none, false),
+      ]:
+        checkpoint name
+        check roundTrip(primary, [], supp, system)
+      var seen: seq[string]
+      for f in nimFixtures:
+        if f.primary notin seen:
+          seen.add(f.primary)
+          checkpoint f.primary
+          check roundTrip(
+            readFile(f.primary), texts(f.interfaces), texts(f.supporting), f.system
+          )
+        if f.configuration.len > 0 and f.configuration notin seen:
+          seen.add(f.configuration)
+          checkpoint f.configuration
+          check roundTrip(readFile(f.configuration))
+
   test "T7.2 [IFC-0366] the spec's §3.9.1 C block reconstructs the spec's §3.9.1 schema":
     check rebuilt(one(h391)).primary.get.contract.root == accepted(cddl391).primary.root
 
@@ -1955,3 +2025,177 @@ suite "ifc.c-reverse: the §3.9.5 required rejections (INTERFACE §3.9.5)":
         )
       )
     ) == rkWrapper
+
+# `lcn-gen cddl` ---------------------------------------------------------------------
+
+const lcnGen = outDir / "lcn_gen_cli"
+
+var lcnGenBuilt = false
+
+proc cli(args: openArray[string]): (string, int) =
+  ## Runs `lcn-gen`, built once from this checkout.
+  if not lcnGenBuilt:
+    let (built, code) = execCmdEx(
+      quoteShellCommand(
+        [
+          getCurrentCompilerExe(),
+          "c",
+          "--hints:off",
+          "--nimcache:build/nimcache/lcn_gen_rmap",
+          "-o:" & lcnGen,
+          "src/lcn_gen.nim",
+        ]
+      )
+    )
+    checkpoint built
+    doAssert code == 0, built
+    lcnGenBuilt = true
+  let (output, code) =
+    execCmdEx(quoteShellCommand(@[lcnGen] & @args), options = {poStdErrToStdOut})
+  checkpoint output
+  (output, code)
+
+proc fresh(name: string, files: openArray[(string, string)] = []): string =
+  ## An empty directory under `build/rmap` holding `files`.
+  result = outDir / "cli" / name
+  removeDir(result)
+  createDir(result)
+  for (n, t) in files:
+    createDir(parentDir(result / n))
+    writeFile(result / n, t)
+
+suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
+  test "T9.1 [IMPL-DECISION G321] the command writes one .cddl per document and prints the binding":
+    when deviceTarget:
+      skip()
+    else:
+      let dir = fresh("t91", [("in/m.h", h392)])
+      let (output, code) = cli(["cddl", "--out:" & dir / "out", dir / "in/m.h"])
+      check code == 0
+      let r = rebuilt(one(h392))
+      for d in [r.primary.get, r.interfaces[0], r.supporting[0]]:
+        check readFile(dir / "out" / d.namespace & ".cddl") == d.cddl
+      check toSeq(walkDir(dir / "out")).len == 3
+      check "module sensor_module\n" in output
+      check "primary sensor.control\n" in output
+      check "implements metrics_provider " & toHex(r.interfaces[0].contract.root) & "\n" in
+        output
+      # logical names: an include resolves against them, never against the file's path
+      let split = getNode.replace("INCLUDES", "#include \"dep/types.h\"\n")
+      let d2 = fresh("t91b", [("a.h", split), ("elsewhere/t.h", types393)])
+      check cli(
+        [
+          "cddl",
+          "--out:" & d2 / "out",
+          "--subject:x",
+          "s.h=" & d2 / "a.h",
+          "dep/types.h=" & d2 / "elsewhere/t.h",
+        ]
+      )[1] == 0
+      check fileExists(d2 / "out/x.cddl") and fileExists(d2 / "out/recursive.cddl")
+      check cli(["cddl", "--out:" & d2 / "no", "--subject:x", d2 / "a.h"])[1] == 1
+      check not dirExists(d2 / "no")
+      # usage errors
+      check cli(["cddl"])[1] == 1
+      check cli(["cddl", "--module:a", "--subject:b", dir / "in/m.h"])[1] == 1
+      check cli(["cddl", "--interface:x.cddl", dir / "in/m.h"])[1] == 1
+      check cli(["types", "--subject:b", "x.cddl"])[1] == 1
+      check cli(["types", "--header", "x.cddl"])[1] == 1
+
+  test "T9.2 [IFC-0807] --header writes the identity-checked header of hand-written C, with no root supplied":
+    when deviceTarget:
+      skip()
+    else:
+      check "ROOT_0" notin h392
+      let dir = fresh("t92", [("m.h", h392)])
+      check cli(["cddl", "--out:" & dir / "out", "--header", dir / "m.h"])[1] == 0
+      let header = readFile(dir / "out/sensor_module_types.h")
+      check "LOGOS_DOCUMENT_sensor_NS_control_ROOT_0" in header
+      check cli(
+        [
+          "types",
+          "--out:" & dir / "forward",
+          dir / "out/sensor.control.cddl",
+          "--interface:" & dir / "out/metrics_provider.cddl",
+          "--supporting:" & dir / "out/metrics_types.cddl",
+        ]
+      )[1] == 0
+      check readFile(dir / "forward/sensor_module_types.h") == header
+      checkCompiles compilesFiles(
+        "t92", [("sensor_module_types.h", header)], "sensor_module_types.h"
+      )
+
+  test "T9.3 [IFC-0395] a rejected header set writes nothing":
+    when deviceTarget:
+      skip()
+    else:
+      let bad = swapped(h391, "bool        has_label", "uint32_t    has_label")
+      let dir = fresh("t93", [("bad.h", bad)])
+      let (output, code) =
+        cli(["cddl", "--out:" & dir / "out", "--header", dir / "bad.h"])
+      check code == 1
+      check "[" & $rkPresence & "]" in output
+      check not dirExists(dir / "out")
+      createDir(dir / "kept")
+      check cli(["cddl", "--out:" & dir / "kept", dir / "bad.h"])[1] == 1
+      check toSeq(walkDir(dir / "kept")).len == 0
+
+  test "T9.4 [IFC-0625] [IMPL-DECISION G321] each documented limit, exceeded once, fails explicitly":
+    when deviceTarget:
+      skip()
+    else:
+      proc refused(dir: string, files: openArray[string]) =
+        let (output, code) = cli(@["cddl", "--out:" & dir / "out"] & @files)
+        check code == 1
+        check "[" & $rkLimit & "]" in output
+        check not dirExists(dir / "out")
+
+      let comment = "/*" & repeat('x', MaxHeaderBytes - 4) & "*/"
+      # one header
+      let big = fresh("t94a", [("big.h", comment & " ")])
+      refused(big, [big / "big.h"])
+      # one input set
+      var nine: seq[(string, string)]
+      for i in 0 ..< 9:
+        nine.add(("h" & $i & ".h", comment))
+      let wide = fresh("t94b", nine)
+      refused(wide, nine.mapIt(wide / it[0]))
+      # the number of headers
+      var many: seq[(string, string)]
+      for i in 0 .. MaxHeaders:
+        many.add(("h" & $i & ".h", ""))
+      let lots = fresh("t94c", many)
+      refused(lots, many.mapIt(lots / it[0]))
+      # include depth
+      var chain: seq[(string, string)]
+      for i in 0 .. MaxIncludeDepth + 1:
+        chain.add(
+          (
+            "h" & $i & ".h",
+            if i <= MaxIncludeDepth:
+              "#include \"h" & $(i + 1) & ".h\"\n"
+            else:
+              "",
+          )
+        )
+      let deep = fresh("t94d", chain)
+      refused(deep, chain.mapIt(deep / it[0]))
+      # parentheses in a literal
+      let parens =
+        "typedef uint64_t logos_x_V_t;\n#define LOGOS_LITERAL_x_V " &
+        repeat('(', MaxLiteralParens + 1) & "1" & repeat(')', MaxLiteralParens + 1) &
+        "\n"
+      let lit = fresh("t94e", [("l.h", parens)])
+      refused(lit, [lit / "l.h"])
+
+  test "T9.5 [IFC-0625] [IMPL-DECISION G321] a document within the schema limits whose generated header passes 1 MiB is refused explicitly":
+    var fields: seq[string]
+    for i in 0 ..< 32767:
+      fields.add("f" & $i & "x: [* uint8]")
+    let doc = "_module = \"demo_module\"\ndemo.t = { " & fields.join(", ") & " }\n"
+    let header = generated(doc)
+    check doc.len <= MaxDocumentBytes
+    check header.len > MaxHeaderBytes
+    let r = reconstruct(one(header))
+    check r.isErr
+    check r.error.reason == rkLimit

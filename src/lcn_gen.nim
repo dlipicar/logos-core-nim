@@ -2,11 +2,14 @@
 ## module binding (INTERFACE §2, §2.1-§2.3, §2.5, §3.2; C mapping revision 3),
 ## `logos_types.h` (§5.2) and `logos_runtime.h` (RUNTIME §13): C types, method
 ## typedefs and, for a module binding, its provider functions and module
-## symbols (§2.4, §2.6). Every header is stamped PROVISIONAL ABI.
+## symbols (§2.4, §2.6). Every header is stamped PROVISIONAL ABI. In the other
+## direction, `lcn-gen cddl` reconstructs the schema documents and the module
+## binding of an explicit C header set (INTERFACE §3; DECISIONS G321).
 
 import std/[os, parseopt, strutils]
 import results
-import ./logos_core/iface/accept
+import ./logos_core/base/hex
+import ./logos_core/iface/[accept, rmap]
 import ./logos_core/codegen/[callsgen, hostgen, kitgen, nimgen]
 
 const usage = """
@@ -24,6 +27,8 @@ Usage:
                [--live-reconfiguration]]
   lcn-gen calls [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
                 [--interface:FILE]... [--supporting:FILE]...
+  lcn-gen cddl [--out:DIR] [--system] [--module:NAME | --subject:NS] [--header]
+               [LOGICAL=]HEADER...
 
 logos-types  writes DIR/logos_types.h
 logos-runtime
@@ -49,12 +54,23 @@ calls        accepts a provider's set (a concrete module document, or an
              <stem>_types.nim, <stem>_calls.nim and <stem>_calls.h: typed
              calls to each exposed method through a route handle, for Nim
              callers and, once exported, C callers (PROVISIONAL)
+cddl         reads exactly the C headers named, without a preprocessor, and
+             writes DIR/<namespace>.cddl for each document it reconstructs
+             (INTERFACE §3); prints the module binding. An include resolves
+             against the logical names of those headers only; a header's
+             logical name is LOGICAL, or else its file name. Without
+             --module or --subject, the set must hold one module, or one
+             document
 
 --import-prefix:P  how Nim output imports this library (default: logos_core/)
 
 --out:DIR          output directory (default: .)
 --module:NAME      the runtime module name of an explicit module binding; it
-                   must agree with PRIMARY's _module and _implements
+                   must agree with PRIMARY's _module and _implements; cddl: the
+                   module to reconstruct
+--subject:NS       cddl: the namespace of the document to reconstruct
+--header           cddl: also write the canonical, identity-checked header,
+                   DIR/<module or namespace>_types.h
 --system           the set is a Logos system contract (reserved logos names)
 --interface:FILE   an implemented interface document (repeatable)
 --supporting:FILE  a supporting schema document (repeatable)
@@ -72,8 +88,13 @@ truncated, hashed or aliased. Input is bounded by the INTERFACE §5.3 schema
 limits (1 MiB per document, 8 MiB per input set, 65,536 schema nodes, 128
 nesting levels), and work and memory grow linearly with it. A choice whose
 largest C discriminant exceeds UINT32_MAX, and for nim output names that
-collide under Nim's identifier rules, fail with an error. On any failure
-nothing is written.
+collide under Nim's identifier rules, fail with an error. cddl reads at most
+1 MiB per header, 8 MiB and 1,024 headers per set, includes nested 64 deep and
+literals parenthesized 64 deep, and what it reconstructs is held to the same
+schema limits; it has no identifier-length limit either. The header generated
+for a document near the schema limits can pass 1 MiB, and cddl then refuses it.
+Exceeding a limit is an error, never a shorter result. On any failure nothing
+is written.
 """
 
 proc fail(msg: string): int =
@@ -93,11 +114,86 @@ proc write(dir, name, text: string): int =
     return fail("cannot write " & path & ": " & e.msg)
   0
 
+proc headerSources(files: seq[string]): Result[seq[HeaderSource], string] =
+  ## [IMPL-DECISION G321] `[LOGICAL=]FILE`: each named file is read once. Its size
+  ## is checked first, so that an oversized input fails without being loaded.
+  var res: seq[HeaderSource]
+  for f in files:
+    let eq = f.find('=')
+    let (logical, path) =
+      if eq >= 0:
+        (f[0 ..< eq], f[eq + 1 .. ^1])
+      else:
+        (extractFilename(f), f)
+    try:
+      if getFileSize(path) > MaxHeaderBytes:
+        return err("[" & $rkLimit & "] " & logical & ": a header larger than 1 MiB")
+      res.add(HeaderSource(name: logical, text: readFile(path)))
+    except CatchableError as e:
+      return err("cannot read " & path & ": " & e.msg)
+  ok(res)
+
+proc writeAll(dir: string, outputs: seq[(string, string)]): int =
+  ## Every output, or none: each is written beside its name first.
+  var pending: seq[string]
+  proc discardPending() =
+    for p in pending:
+      try:
+        removeFile(p)
+      except CatchableError:
+        discard
+
+  try:
+    createDir(dir)
+    for (name, text) in outputs:
+      let tmp = dir / name & ".tmp"
+      pending.add(tmp)
+      writeFile(tmp, text)
+    for (name, _) in outputs:
+      moveFile(dir / name & ".tmp", dir / name)
+      echo dir / name
+  except CatchableError as e:
+    discardPending()
+    return fail("cannot write to " & dir & ": " & e.msg)
+  0
+
+proc reverse(files: seq[string], opts: RmapOptions, dir: string, header: bool): int =
+  ## [SPEC INTERFACE §3] `lcn-gen cddl`.
+  let sources = headerSources(files).valueOr:
+    return fail(error)
+  let r = reconstruct(sources, opts).valueOr:
+    return fail($error)
+  var docs: seq[RDocument]
+  if r.primary.isSome:
+    docs.add(r.primary.get)
+  docs.add(r.interfaces)
+  docs.add(r.supporting)
+  var outputs: seq[(string, string)]
+  for d in docs:
+    outputs.add((d.namespace & ".cddl", d.cddl))
+  if header:
+    outputs.add((r.schemaSet.headerName & "_types.h", r.header))
+  let code = writeAll(dir, outputs)
+  if code != 0:
+    return code
+  # [IMPL-DECISION G321] The recovered binding is retained tooling data (l.2284).
+  if r.module.isSome:
+    echo "module ", r.module.get
+  if r.primary.isSome:
+    let p = r.primary.get
+    echo(if r.module.isSome: "primary " else: "subject ", p.namespace)
+  for i in r.interfaces:
+    echo "implements ", i.namespace, " ", toHex(i.contract.root)
+  0
+
 proc main(): int =
   var
     command = ""
     primary = ""
     module = ""
+    subject = ""
+    wantHeader = false
+    headers: seq[string]
     outDir = "."
     prefix = "logos_core/"
     opts = AcceptOptions()
@@ -109,6 +205,8 @@ proc main(): int =
     of cmdArgument:
       if command.len == 0:
         command = key
+      elif command == "cddl":
+        headers.add(key)
       elif primary.len == 0:
         primary = key
       else:
@@ -121,6 +219,10 @@ proc main(): int =
         prefix = val
       of "module":
         module = val
+      of "subject":
+        subject = val
+      of "header":
+        wantHeader = true
       of "system":
         opts.system = true
       of "interface":
@@ -148,7 +250,22 @@ proc main(): int =
       "--configuration and --configuration-root go together, and " &
         "--live-reconfiguration needs them\n" & usage
     )
+  if (subject.len > 0 or wantHeader) and command != "cddl":
+    return fail("--subject and --header apply to cddl only\n" & usage)
   case command
+  of "cddl":
+    if interfaces.len > 0 or supporting.len > 0:
+      return fail("cddl takes headers, not --interface or --supporting\n" & usage)
+    if module.len > 0 and subject.len > 0:
+      return fail("--module and --subject exclude each other\n" & usage)
+    if headers.len == 0:
+      return fail("no header\n" & usage)
+    reverse(
+      headers,
+      RmapOptions(module: module, subject: subject, system: opts.system),
+      outDir,
+      wantHeader,
+    )
   of "logos-types":
     write(outDir, "logos_types.h", logosTypesHeader())
   of "logos-runtime":

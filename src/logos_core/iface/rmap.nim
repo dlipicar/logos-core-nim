@@ -1961,13 +1961,25 @@ proc reconstruct*(
   for cns, g in groups:
     if g.occ.header != subjectHeader and g.role == roleSupporting and
         g.occ.ns notin referenced:
+      # [IMPL-DECISION G318] Say which document needs it: selecting that document,
+      # or the module, is the way to reconstruct this header.
+      var users: seq[string] = @[]
+      for _, other in groups:
+        if g.occ.ns in other.refs:
+          users.add(other.occ.ns)
+      users.sort()
+      let hint =
+        if users.len > 0:
+          "; " & users.join(", ") & " references it: select that document or its module"
+        else:
+          ""
       return err(
         fail(
           rkUnreferencedDependency,
           hs.headers[g.occ.header].name,
           0,
           g.occ.ns & " is supplied as a dependency of " & subjectName &
-            " and not referenced (INTERFACE §3.2 l.2385)",
+            " and not referenced (INTERFACE §3.2 l.2385)" & hint,
         )
       )
 
