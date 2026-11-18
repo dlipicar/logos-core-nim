@@ -200,15 +200,15 @@ suite "ifc.c-reverse: the input set and its includes (INTERFACE §3, §3.2)":
       rkIncludeCycle
     check refused(src("a.h", "#include \"a.h\"\n")) == rkIncludeCycle
 
-  test "[IMPL-DECISION G321] the input limits: 1 MiB a header, 8 MiB a set, 1,024 headers, includes 64 deep":
-    check refused(src("a.h", repeat(' ', MaxHeaderBytes + 1))) == rkLimit
+  test "[IMPL-DECISION G321] the input limits: 16 MiB a set, 1,024 headers, includes 64 deep":
+    check refused(src("a.h", repeat(' ', MaxSetBytes + 1))) == rkLimit
     var many: seq[HeaderSource] = @[]
     for i in 0 .. MaxHeaders:
       many.add(src("h" & $i & ".h", ""))
     check refused(many) == rkLimit
     var big: seq[HeaderSource] = @[]
-    for i in 0 .. 8:
-      big.add(src("b" & $i & ".h", repeat(' ', MaxHeaderBytes)))
+    for i in 0 .. 1:
+      big.add(src("b" & $i & ".h", repeat(' ', MaxSetBytes div 2 + 1)))
     check refused(big) == rkLimit
     var chain: seq[HeaderSource] = @[]
     for i in 0 .. MaxIncludeDepth + 1:
@@ -653,6 +653,7 @@ suite "ifc.c-reverse: CDDL emission (INTERFACE §1.3, §3; G320)":
     let text = emit(d)
     check not text.contains("metadata")
     let c = acceptedOne(text)
+    check acceptedOne(emit(d, compact = true)).root == c.root
     let lit = c.literalOf("k.text")
     check lit.kind == skTstr
     if lit.kind == skTstr:
@@ -667,6 +668,36 @@ suite "ifc.c-reverse: CDDL emission (INTERFACE §1.3, §3; G320)":
       check low.signed == low(int64)
     # deterministic: printing the same document twice gives the same text
     check emit(d) == text
+
+  test "[IMPL-DECISION G320] the compact layout: the same document with no layout":
+    let d = EDocument(
+      module: "k_module",
+      sensitive: @["k.a_request"],
+      declarations: @[
+        decl(
+          "k.a_request",
+          emap(
+            fld("x", ENode(kind: enList, element: prim("uint8")), optional = true),
+            fld("uint", ENode(kind: enTuple, items: @[prim("bool"), prim("tstr")])),
+            fld(
+              "c",
+              ENode(
+                kind: enChoice,
+                arms:
+                  @[ENode(kind: enInt, magnitude: 1), ENode(kind: enText, text: "t")],
+              ),
+            ),
+            fld("s", ENode(kind: enSized, base: "bstr", lo: 1, hi: 4)),
+          ),
+        ),
+        decl("k.a_response", emap()),
+      ],
+    )
+    check emit(d, compact = true) ==
+      "_module=\"k_module\"\n_sensitive=[\"k.a_request\"]\n" &
+      "k.a_request={?x:[*uint8],\"uint\":[bool,tstr],c:1/\"t\",s:bstr .size (1..4)}\n" &
+      "k.a_response={}\n"
+    check acceptedOne(emit(d, compact = true)).root == acceptedOne(emit(d)).root
 
   test "[IMPL-DECISION G320] [IFC-0569] a field name a reader could take for a type or a value is a quoted text key, with the same field identity":
     for name in QuotedKeys:
@@ -2150,16 +2181,26 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
         check "[" & $rkLimit & "]" in output
         check not dirExists(dir / "out")
 
-      let comment = "/*" & repeat('x', MaxHeaderBytes - 4) & "*/"
-      # one header
-      let big = fresh("t94a", [("big.h", comment & " ")])
+      proc sized(path: string, size: int64) =
+        ## A file of `size` bytes; the limit is checked before it is read.
+        var f = open(path, fmWrite)
+        defer:
+          f.close()
+        f.setFilePos(size - 1)
+        f.write('\n')
+
+      # one header past the set limit
+      let big = fresh("t94a")
+      sized(big / "big.h", MaxSetBytes + 1)
       refused(big, [big / "big.h"])
-      # one input set
-      var nine: seq[(string, string)]
-      for i in 0 ..< 9:
-        nine.add(("h" & $i & ".h", comment))
-      let wide = fresh("t94b", nine)
-      refused(wide, nine.mapIt(wide / it[0]))
+      removeFile(big / "big.h")
+      # the running total of an input set
+      let wide = fresh("t94b")
+      sized(wide / "a.h", MaxSetBytes div 2 + 1)
+      sized(wide / "b.h", MaxSetBytes div 2 + 1)
+      refused(wide, [wide / "a.h", wide / "b.h"])
+      removeFile(wide / "a.h")
+      removeFile(wide / "b.h")
       # the number of headers
       var many: seq[(string, string)]
       for i in 0 .. MaxHeaders:
@@ -2188,14 +2229,74 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
       let lit = fresh("t94e", [("l.h", parens)])
       refused(lit, [lit / "l.h"])
 
-  test "T9.5 [IFC-0625] [IMPL-DECISION G321] a document within the schema limits whose generated header passes 1 MiB is refused explicitly":
+  test "T9.5 [IFC-0356] [IMPL-DECISION G321] a map at the node limit round-trips through a header past 1 MiB":
     var fields: seq[string]
     for i in 0 ..< 32767:
       fields.add("f" & $i & "x: [* uint8]")
     let doc = "_module = \"demo_module\"\ndemo.t = { " & fields.join(", ") & " }\n"
     let header = generated(doc)
     check doc.len <= MaxDocumentBytes
-    check header.len > MaxHeaderBytes
-    let r = reconstruct(one(header))
-    check r.isErr
-    check r.error.reason == rkLimit
+    check header.len > 1_048_576
+    let r = rebuilt(one(header))
+    check r.primary.get.contract.root == acceptedOne(doc).root
+    check r.header == header
+
+  test "T9.5b [IFC-0356] [IMPL-DECISION G321] as many methods as fit in 1 MiB round-trip, each provider function checked against its typedef":
+    proc stem(i: int): string =
+      var n = i
+      result = "m"
+      while true:
+        result.add(chr(ord('a') + n mod 26))
+        n = n div 26
+        if n == 0:
+          break
+
+    var doc = "_module=\"d_module\"\n"
+    var count = 0
+    while true:
+      let m = stem(count)
+      let line = "d." & m & "_request={}\nd." & m & "_response={}\n"
+      if doc.len + line.len > MaxDocumentBytes:
+        break
+      doc.add(line)
+      inc count
+    check count > 27_000
+    let header = generated(doc)
+    check header.len < MaxSetBytes
+    let r = rebuilt(one(header))
+    check r.primary.get.contract.root == acceptedOne(doc).root
+    check r.header == header
+
+  test "T9.6 [IFC-0625] [IMPL-DECISION G321] a generated header past the set limit is refused explicitly":
+    let name = repeat('a', 1024)
+    let doc =
+      "_module = \"demo_module\"\ndemo.t = " & repeat("{ " & name & ": ", 127) & "uint8" &
+      repeat(" }", 127) & "\n"
+    let header = generated(doc)
+    check doc.len <= MaxDocumentBytes
+    check header.len > MaxSetBytes
+    check refusal(one(header)) == rkLimit
+
+  test "T9.7 [IFC-0356] [IMPL-DECISION G320] a document of exactly 1 MiB is printed without layout":
+    let head = "_module=\"demo_module\"\ndemo.t={"
+    let tail = ":uint8}\n"
+    let doc = head & repeat('a', MaxDocumentBytes - head.len - tail.len) & tail
+    check doc.len == MaxDocumentBytes
+    let r = rebuilt(one(generated(doc)))
+    check r.primary.get.cddl == doc
+    check r.primary.get.contract.root == acceptedOne(doc).root
+
+  test "T9.8 [IFC-0356] [IMPL-DECISION G320] a set whose ordinary layout would pass 8 MiB is printed without layout":
+    var ifaces: seq[string]
+    for i in 0 ..< 9:
+      let head = "_interface=\"i" & $i & "\"\ni" & $i & ".t={"
+      let tail = ":uint8}\n"
+      ifaces.add(
+        head & repeat('a', MaxInputSetBytes div 9 - head.len - tail.len) & tail
+      )
+    check ifaces.mapIt(it.len).foldl(a + b) <= MaxInputSetBytes
+    let (b, header) = boundHeader("set_module", ifaces)
+    let r = rebuilt(one(header))
+    check r.module.get == "set_module"
+    check r.interfaces.mapIt(it.contract.root) == b.interfaces.mapIt(it.root)
+    check r.interfaces.allIt(it.cddl in ifaces)

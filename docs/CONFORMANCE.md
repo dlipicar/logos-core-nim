@@ -470,8 +470,10 @@ claimed in both directions, with IFC-0003 and IFC-0004: IFC 776/776, with 20 uni
 **Limits of the claim.** IFC-0003, IFC-0004 and the §3.8 units (IFC-0355 to IFC-0357, IFC-0861 to
 IFC-0863) hold under G158's interim common-name projection, which the specs do not define (TL-01,
 open): the mapper recognizes the common types by the names this repository's `logos_types.h` declares.
-`lcn-gen cddl` refuses a header over 1 MiB, including one generated for a document within the §5.3
-limits (G321).
+`lcn-gen cddl` refuses a header set over 16 MiB (G321). A schema set within the §5.3 limits can generate
+a larger one, for example when inline declarations are nested deeply, and the §3.8 round trip is not
+provided for such a set. The refusal is explicit and nothing is written. At this limit the tool can need
+about 3 GB of memory.
 
 ### What Tier 5 step 5-2 changes
 

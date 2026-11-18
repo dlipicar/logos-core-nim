@@ -28,8 +28,7 @@ export results, creject, cparse
 const
   FixedHeader* = "logos_types.h" ## [SPEC INTERFACE §3.2 l.2298, §5.2]
   StandardHeaders* = ["stdbool.h", "stddef.h", "stdint.h"] ## [IMPL-DECISION G317]
-  MaxHeaderBytes* = 1_048_576 ## [IMPL-DECISION G321] one header source
-  MaxSetBytes* = 8_388_608 ## [IMPL-DECISION G321] one input set
+  MaxSetBytes* = 16_777_216 ## [IMPL-DECISION G321] one input set
   MaxHeaders* = 1024 ## [IMPL-DECISION G321]
   MaxIncludeDepth* = 64 ## [IMPL-DECISION G321]
 
@@ -114,11 +113,9 @@ proc readSet*(sources: openArray[HeaderSource]): Result[HeaderSet, Rejection] =
       return err(
         reject(rkDuplicateName, s.name, 0, "a second header with this logical name")
       )
-    if s.text.len > MaxHeaderBytes:
-      return err(reject(rkLimit, s.name, 0, "a header larger than 1 MiB"))
     total += s.text.len
     if total > MaxSetBytes:
-      return err(reject(rkLimit, s.name, 0, "an input set larger than 8 MiB"))
+      return err(reject(rkLimit, s.name, 0, "an input set larger than 16 MiB"))
     hs.byName[s.name] = hs.headers.len
     hs.headers.add(?parseHeader(s.name, s.text))
   # Resolve contract includes.

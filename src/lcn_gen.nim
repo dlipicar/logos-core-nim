@@ -89,12 +89,13 @@ limits (1 MiB per document, 8 MiB per input set, 65,536 schema nodes, 128
 nesting levels), and work and memory grow linearly with it. A choice whose
 largest C discriminant exceeds UINT32_MAX, and for nim output names that
 collide under Nim's identifier rules, fail with an error. cddl reads at most
-1 MiB per header, 8 MiB and 1,024 headers per set, includes nested 64 deep and
-literals parenthesized 64 deep, and what it reconstructs is held to the same
-schema limits; it has no identifier-length limit either. The header generated
-for a document near the schema limits can pass 1 MiB, and cddl then refuses it.
-Exceeding a limit is an error, never a shorter result. On any failure nothing
-is written.
+16 MiB and 1,024 headers per set, includes nested 64 deep and literals
+parenthesized 64 deep, and what it reconstructs is held to the same schema
+limits; it has no identifier-length limit either. At 16 MiB it can need about
+3 GB of memory. A header set over 16 MiB is refused, even one generated from
+documents within the schema limits: inline declarations nested deep repeat
+their field path, up to about 190 times the document's size. Exceeding a limit
+is an error, never a shorter result. On any failure nothing is written.
 """
 
 proc fail(msg: string): int =
@@ -115,9 +116,11 @@ proc write(dir, name, text: string): int =
   0
 
 proc headerSources(files: seq[string]): Result[seq[HeaderSource], string] =
-  ## [IMPL-DECISION G321] `[LOGICAL=]FILE`: each named file is read once. Its size
-  ## is checked first, so that an oversized input fails without being loaded.
+  ## [IMPL-DECISION G321] `[LOGICAL=]FILE`: each named file is read once. The
+  ## running size is checked first, so that an oversized set fails without being
+  ## loaded.
   var res: seq[HeaderSource]
+  var total = 0'i64
   for f in files:
     let eq = f.find('=')
     let (logical, path) =
@@ -126,8 +129,10 @@ proc headerSources(files: seq[string]): Result[seq[HeaderSource], string] =
       else:
         (extractFilename(f), f)
     try:
-      if getFileSize(path) > MaxHeaderBytes:
-        return err("[" & $rkLimit & "] " & logical & ": a header larger than 1 MiB")
+      total += getFileSize(path)
+      if total > MaxSetBytes:
+        return
+          err("[" & $rkLimit & "] " & logical & ": an input set larger than 16 MiB")
       res.add(HeaderSource(name: logical, text: readFile(path)))
     except CatchableError as e:
       return err("cannot read " & path & ": " & e.msg)

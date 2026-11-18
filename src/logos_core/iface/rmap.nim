@@ -1728,6 +1728,12 @@ proc reconstruct*(
     for cns in implNs:
       if groups.getOrDefault(cns).callable:
         provider = true
+    # each group's provider-function typedefs, found once rather than per function
+    var fnTypedefs: Table[string, CItem]
+    for cns, g in groups.mpairs:
+      for gi in g.occ.items:
+        if gi.kind == ciFnTypedef:
+          discard fnTypedefs.hasKeyOrPut(cns & "\0" & gi.name, gi)
     # lifecycle symbols (G322)
     for (h, it) in modItems:
       let hn = hs.headers[h].name
@@ -1768,41 +1774,32 @@ proc reconstruct*(
           )
         )
       let fnName = "logos_" & st.cns & "_" & st.owner & "_FN_t"
-      var found = false
-      for gi in groups.getOrDefault(st.cns).occ.items:
-        if gi.kind == ciFnTypedef and gi.name == fnName:
-          found = true
-          var a = gi
-          a.name = ""
-          var bb = it
-          bb.name = ""
-          if render(
-            CItem(
-              kind: ciFunction,
-              ctype: a.ctype,
-              params: a.params,
-              voidParams: a.voidParams,
-            )
-          ) !=
-              render(
-                CItem(
-                  kind: ciFunction,
-                  ctype: bb.ctype,
-                  params: bb.params,
-                  voidParams: bb.voidParams,
-                )
-              ):
-            return err(
-              fail(
-                rkProviderMismatch,
-                hn,
-                it.line,
-                it.name & " differs from " & fnName & " (INTERFACE §3.3)",
-              )
-            )
-      if not found:
+      let fnKey = st.cns & "\0" & fnName
+      if fnKey notin fnTypedefs:
         return err(
           fail(rkProviderMismatch, hn, it.line, it.name & ": no " & fnName & " typedef")
+        )
+      let a = fnTypedefs.getOrDefault(fnKey)
+      if render(
+        CItem(
+          kind: ciFunction, ctype: a.ctype, params: a.params, voidParams: a.voidParams
+        )
+      ) !=
+          render(
+            CItem(
+              kind: ciFunction,
+              ctype: it.ctype,
+              params: it.params,
+              voidParams: it.voidParams,
+            )
+          ):
+        return err(
+          fail(
+            rkProviderMismatch,
+            hn,
+            it.line,
+            it.name & " differs from " & fnName & " (INTERFACE §3.3)",
+          )
         )
     for op in RequiredOps:
       if op notin symbols:
@@ -1834,6 +1831,22 @@ proc reconstruct*(
         )
       )
 
+  # [IMPL-DECISION G320] A document within §5.3 can print longer than its source
+  # did. When the printed set would pass a §5.3 byte limit, every document is
+  # printed without layout. The primary's reserve is the metadata it gains below.
+  var printedBytes = 0
+  var compact = false
+  for cns, g in groups.mpairs:
+    let reserve =
+      if cns == primaryCns:
+        moduleName.len + 64 + implNs.len * 72
+      else:
+        0
+    let n = emit(g.doc).len + reserve
+    printedBytes += n
+    compact = compact or n > MaxDocumentBytes
+  compact = compact or printedBytes > MaxInputSetBytes
+
   # Acceptance: supporting groups, then interfaces, then the primary document
   var texts: Table[string, string]
   for cns, g in groups.mpairs:
@@ -1849,7 +1862,7 @@ proc reconstruct*(
           g.occ.ns & ": a supporting schema references no other document",
         )
       )
-    g.text = emit(g.doc)
+    g.text = emit(g.doc, compact)
     let s = ?accepted(acceptContractSet(g.text, [], [], aopts), hn, g.occ.ns)
     g.contract = Opt.some(s.primary)
     texts[g.occ.ns] = g.text
@@ -1877,7 +1890,7 @@ proc reconstruct*(
     if g.role != roleInterface:
       continue
     let hn = hs.headers[g.occ.header].name
-    g.text = emit(g.doc)
+    g.text = emit(g.doc, compact)
     let supp = ?supportingTexts(groups, g.refs, hn)
     let s = ?accepted(acceptContractSet(g.text, [], supp, aopts), hn, g.occ.ns)
     g.contract = Opt.some(s.primary)
@@ -1913,7 +1926,7 @@ proc reconstruct*(
         var g = addr groups.mgetOrPut(primaryCns, Group())
         g.doc.module = moduleName
         g.doc.implements = ifaces.mapIt(hexRoot(it[0]))
-        g.text = emit(g.doc)
+        g.text = emit(g.doc, compact)
         for ns in g.refs:
           if projectNamespace(ns) notin implNs:
             refs.incl(ns)
