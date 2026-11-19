@@ -19,7 +19,7 @@ import ../src/logos_core/runtime/[configcheck, engine]
 from ../src/logos_core/runtime/rcevents import setRcDrainDelayForTests
 import ../src/logos_core/orchestration
 import ../src/logos_core/orchestration/[accounting, testhooks]
-import logos_sdk/kit/rcclient
+import logos_sdk/kit/[rc_arms, rcclient]
 import ../src/logos_core/loader/contract
 import ./support/[coretuner, fakeca, permfixture, slowdown]
 import ./kit/flaky_impl, logos_sdk/testing/fixtures/tuner_impl
@@ -348,7 +348,7 @@ proc replaceSettings(
   )
   check r.isOk
   if r.isOk:
-    result = r.get.state
+    result = r.get.accepted.get.state
 
 proc imports(path: string): seq[string] =
   ## The module paths a Nim source's import and include statements name.
@@ -440,7 +440,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     check flaky[2].inits.load == 0 and flaky[3].inits.load == 0
     e.finish()
 
-  test "[RUN-0025] a stop between the read and the guarded request: INVALID_PARAMS, read again, nothing done":
+  test "[RUN-0025] [RUN-1113] [RUN-1114] a stop between the read and the guarded request: `stale-revision` with the current revision, read again, nothing done":
     setOrchestratorFaultsForTests(OrchestratorFaults(pauseBeforeRequest: true))
     let e = boot(value(defaults = starts(4)), slots = @[4])
     check waitUntil(
@@ -448,11 +448,13 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
         pausedForTests() >= 1
     )
     discard e.stop(flakyInstance(4)).tryGet
+    let current = e.view(flakyInstance(4)).tryGet.execution.revision
     let reads = callsForTests("get_readiness", flakyInstance(4))
     openPauseGateForTests()
     check waitUntil(
       proc(): bool =
-        "start_module flaky-4: answered INVALID_PARAMS" in diagText()
+        "start_module flaky-4: answered stale-revision (current revision " & $current &
+          ")" in diagText()
     )
     check waitUntil(
       proc(): bool =

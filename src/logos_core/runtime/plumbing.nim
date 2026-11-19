@@ -265,9 +265,27 @@ type
     serial*: uint64
     view*: InstanceView
 
+  RcErrorCode* = enum
+    ## [SPEC RUNTIME §9.3.1 l.1818-1822] `error_code`: a typed outcome a
+    ## Runtime Control response carries in its `error` arm.
+    recStaleRevision = "stale-revision"
+    recConfigurationRejected = "configuration-rejected"
+    recDeclarationUnavailable = "declaration-unavailable"
+
+  TypedError* = object
+    ## [SPEC RUNTIME §9.3.2] `error`: the code and, for `stale-revision`, the
+    ## revision the Runtime holds.
+    code*: RcErrorCode
+    currentRevision*: Opt[uint64]
+
   EngineError* = object
     code*: ErrorCode
     message*: string
+    typed*: Opt[TypedError]
+      ## [re-pin P4a; I108] a typed Runtime Control outcome: a successful
+      ## response holding the method's error arm, not an invocation error.
+      ## `code` is then MODULE_ERROR, so one that reaches an invocation-error
+      ## path is loud, and never `ecOk`, the parked marker
 
   BootstrapInstance* = object
     ## [SPEC RUNTIME §8, §13.2] One module instance of the protected bootstrap
@@ -1276,6 +1294,18 @@ func moduleOrigin*(instance: string): Origin =
 
 func engineError*(code: ErrorCode, message: string): EngineError =
   EngineError(code: code, message: message)
+
+func typedError*(code: RcErrorCode, current = Opt.none(uint64)): EngineError =
+  ## [SPEC RUNTIME l.1818-1822] A typed outcome (`EngineError.typed`).
+  EngineError(
+    code: ecModule,
+    message: $code,
+    typed: Opt.some(TypedError(code: code, currentRevision: current)),
+  )
+
+func isTyped*(e: EngineError): bool =
+  ## A typed Runtime Control outcome, which callers must not read by `code`.
+  e.typed.isSome
 
 # Worker threads -----------------------------------------------------------------
 

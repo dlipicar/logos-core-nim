@@ -1,0 +1,26 @@
+logos.runtime_enrollment.runtime_instance_id = tstr .size (1..128)
+
+logos.runtime_enrollment.remote_identity_profile =
+    "logos.remote.tls-tcp" /
+    "logos.remote.quic"
+
+logos.runtime_enrollment.trust_anchor_id = bstr .size (1..128)
+logos.runtime_enrollment.subject_public_key_info = bstr .size (1..8192)
+
+logos.runtime_enrollment.remote_runtime_enrollment =
+    {
+        runtime_instance_id: logos.runtime_enrollment.runtime_instance_id,
+        profile: logos.runtime_enrollment.remote_identity_profile,
+        revision: uint64,
+        status: "active",
+        trust_anchor: logos.runtime_enrollment.trust_anchor_id,
+        subject_public_keys: [logos.runtime_enrollment.subject_public_key_info] /
+                             [logos.runtime_enrollment.subject_public_key_info,
+                              logos.runtime_enrollment.subject_public_key_info],
+    } /
+    {
+        runtime_instance_id: logos.runtime_enrollment.runtime_instance_id,
+        profile: logos.runtime_enrollment.remote_identity_profile,
+        revision: uint64,
+        status: "revoked",
+    }

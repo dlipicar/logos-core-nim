@@ -1453,8 +1453,9 @@ them to be documented).
   `docs/PERMISSIONS.md`). Each instance's settings are its own, saved before any reply.
   - *Replacement.* `update_permission_settings` with an array that is not ascending, repeats a name,
     names a permission the profile does not define or has constraints its definition does not admit,
-    or with a stale `expected_revision`, is `LOGOS_ERR_INVALID_PARAMS` without detail and saves
-    nothing. Repeating the saved `pending` or `applied` array returns the state unchanged. Anything
+    is `LOGOS_ERR_INVALID_PARAMS` without detail and saves nothing. One with a stale
+    `expected_revision` is answered with the response's error arm, `stale-revision` with the current
+    revision (RUNTIME l.1818-1822; DECISIONS I108), and saves nothing. Repeating the saved `pending` or `applied` array returns the state unchanged. Anything
     else is a new revision, and its status follows what is left of the instance's realization: none
     (`unloaded`, or `error` with its cleanup complete) `applied` at once, to be enforced at the next
     start; `loaded` or `ready` `pending`, and the instance is stopped at once, keeping its intent and

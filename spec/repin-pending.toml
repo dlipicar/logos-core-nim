@@ -16,13 +16,13 @@
 #
 # spec/repin-baseline.toml is the frozen copy of this list. An entry leaves only with its evidence, and changes
 # sub-step only with a [[moved]] record in spec/repin-text-cleared.toml.
-#   [deferred]        unit that stays deferred past the re-pin = the work item that owns it
+#   [deferred]        unit that stays deferred past the re-pin = the work item that owns it; or a text entry that
+#                     rides on one (same spec and section, same work item), with a [[deferred]] record in
+#                     spec/repin-text-cleared.toml naming the unit and a decision row (DECISIONS I108)
 
 closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
 
 [mirror]
-"RNT/9.3.runtime-control.cddl" = "P4"
-"RNT/9.3.7.runtime-enrollment.cddl" = "P4"
 "PKG/4.manifest.cddl" = "P7"
 "PKG/4.3.signing-profile.cddl" = "P7"
 "PKG/15.methods.cddl" = "P7"
@@ -106,10 +106,7 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "CAP-0494" = "P6"
 "CAP-0495" = "P6"
 "CFG-0151" = "P6"
-"CFG-0152" = "P6"
 "CFG-0153" = "P6"
-"CFG-0154" = "P6"
-"CFG-0155" = "P6"
 "CFG-0156" = "P6"
 "CMT-0242" = "P8"
 "IFC-0957" = "P8"
@@ -233,8 +230,6 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-1108" = "P5"
 "RUN-1109" = "P5"
 "RUN-1110" = "P5"
-"RUN-1113" = "P4"
-"RUN-1114" = "P4"
 "RUN-1115" = "P4"
 "RUN-1116" = "P4"
 "RUN-1117" = "P4"
@@ -244,27 +239,8 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-1121" = "P4"
 "RUN-1122" = "P4"
 "RUN-1123" = "P4"
-"RUN-1124" = "P4"
-"RUN-1125" = "P4"
-"RUN-1127" = "P4"
-"RUN-1128" = "P4"
-"RUN-1129" = "P4"
-"RUN-1130" = "P4"
-"RUN-1131" = "P4"
-"RUN-1132" = "P4"
-"RUN-1133" = "P4"
-"RUN-1134" = "P4"
-"RUN-1135" = "P4"
-"RUN-1136" = "P4"
-"RUN-1137" = "P4"
-"RUN-1138" = "P4"
 "RUN-1141" = "P4"
 "RUN-1142" = "P5"
-"RUN-1146" = "P4"
-"RUN-1147" = "P4"
-"RUN-1148" = "P4"
-"RUN-1149" = "P4"
-"RUN-1150" = "P4"
 "RUN-1161" = "P4"
 "RUN-1162" = "P4"
 "RUN-1164" = "P4"
@@ -283,8 +259,6 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-1181" = "P4"
 "RUN-1183" = "P5"
 "RUN-1184" = "P5"
-"RUN-1185" = "P4"
-"RUN-1187" = "P4"
 "RUN-1188" = "P4"
 "RUN-1190" = "P5"
 "RUN-1191" = "P5"
@@ -299,11 +273,6 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-1200" = "P5"
 "RUN-1201" = "P5"
 "RUN-1202" = "P5"
-"RUN-1203" = "P4"
-"RUN-1204" = "P4"
-"RUN-1205" = "P4"
-"RUN-1206" = "P4"
-"RUN-1208" = "P4"
 
 [units.changed]
 "CAP-0305" = "P4"
@@ -356,19 +325,6 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-0111" = "P5"
 "RUN-0268" = "P4"
 "RUN-0347" = "P4"
-"RUN-0386" = "P4"
-"RUN-0392" = "P4"
-"RUN-0393" = "P4"
-"RUN-0394" = "P4"
-"RUN-0395" = "P4"
-"RUN-0401" = "P4"
-"RUN-0429" = "P4"
-"RUN-0431" = "P4"
-"RUN-0433" = "P4"
-"RUN-0435" = "P4"
-"RUN-0450" = "P4"
-"RUN-0459" = "P4"
-"RUN-0461" = "P4"
 "RUN-0491" = "P4"
 "RUN-0504" = "P4"
 "RUN-0505" = "P4"
@@ -386,9 +342,7 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-0630" = "P4"
 "RUN-0639" = "P4"
 "RUN-0675" = "P4"
-"RUN-0881" = "P4"
 "RUN-0912" = "P4"
-"RUN-1005" = "P4"
 "RUN-1053" = "P4"
 "SEC-0021" = "P6"
 "SEC-0057" = "P6"
@@ -404,12 +358,15 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "PKG-0609" = "5-5"
 "PKG-0610" = "5-5"
 "PKG-0611" = "5-5"
+"RUN-1124" = "5-7a"
+"RUN-1125" = "5-7a"
 "RUN-1163" = "5-7a"
 "TRN-0397" = "5-7a"
 "TRN-0398" = "5-7a"
 "TRN-0401" = "5-12"
 "TRN-0402" = "5-12"
 "TRN-0403" = "5-12"
+"TXT-0163" = "5-7a"
 
 [[text]]
 id = "TXT-0040"
@@ -496,38 +453,6 @@ section = "§4.6"
 source = "n.128"
 class = "todo"
 what = "The invocation status passes through unchanged after the provider-result validation required by Section 5.1."
-
-[[text]]
-id = "TXT-0145"
-step = "P4"
-spec = "RUN"
-line = "none"
-side = "new"
-source = "n.206"
-class = "todo"
-what = "B.3 adds execution; B.5 rewritten as 'Route Resolved Through a Remote Facade'"
-
-[[text]]
-id = "TXT-0570"
-step = "P4"
-spec = "RUN"
-line = "457"
-side = "new"
-section = "App B.3"
-class = "todo"
-guard = true
-what = "Fenced text block of 21 lines changed, and no mirror follows it: {"
-
-[[text]]
-id = "TXT-0571"
-step = "P4"
-spec = "RUN"
-line = "457"
-side = "new"
-section = "App B.5"
-class = "todo"
-guard = true
-what = "Fenced text block of 35 lines changed, and no mirror follows it: {"
 
 [[text]]
 id = "TXT-0146"
@@ -663,19 +588,8 @@ guard = true
 what = "The conditions in this table are failures of the invocation itself: a foreign target address, a reused request key, a route scope that the remote profile cannot carry, and a prohibited lifecycle operation are caller errors, the `NOT_READY` conditions are Runtime-owned readiness failures, and the `MODULE_ERROR` condition is a Runtime failure."
 
 [[text]]
-id = "TXT-0160"
-step = "P4"
-spec = "RUN"
-line = "1818"
-side = "new"
-section = "§9.3.1"
-class = "todo"
-guard = true
-what = "**Typed error outcomes.** An outcome that a correct caller must expect is reported in the response `error` arm, not through the shared invocation-error channel."
-
-[[text]]
 id = "TXT-0161"
-step = "P4"
+step = "P6"
 spec = "RUN"
 line = "1821"
 side = "new"
@@ -683,28 +597,6 @@ section = "§9.3.1"
 source = "review"
 class = "behaviour"
 what = "`configuration-rejected` is produced only by `apply_configuration` under LOGOS-MODULE-CONFIGURATION and omits `current_revision`."
-
-[[text]]
-id = "TXT-0162"
-step = "P4"
-spec = "RUN"
-line = "1822"
-side = "new"
-section = "§9.3.1"
-source = "review"
-class = "behaviour"
-what = "`declaration-unavailable` is produced only by `create_module`, after the conditions of the precondition table, and omits `current_revision`."
-
-[[text]]
-id = "TXT-0163"
-step = "P4"
-spec = "RUN"
-line = "1836"
-side = "new"
-section = "§9.3.1"
-source = "review"
-class = "behaviour"
-what = "When a source Runtime forwards a consumer's `renew_route` or `close_route` request for a route established through a target Runtime, the target Runtime applies this order and the source Runtime does not authorize the method itself."
 
 [[text]]
 id = "TXT-0164"
@@ -749,46 +641,6 @@ source = "n.171a"
 class = "todo"
 guard = true
 what = "For code that the selected execution path cannot restrict, `applied` asserts only that Runtime grants no access beyond the saved settings; it does not claim that such code is contained."
-
-[[text]]
-id = "TXT-0170"
-step = "P4"
-spec = "RUN"
-line = "2599"
-side = "new"
-section = "§9.3.7"
-class = "todo"
-what = "The following CDDL is the complete `logos.runtime_enrollment` supporting schema:"
-
-[[text]]
-id = "TXT-0171"
-step = "P4"
-spec = "RUN"
-line = "2630"
-side = "new"
-section = "§9.3.7"
-class = "todo"
-what = "The Runtime Control contract does not import this schema, so a change to enrollment records does not change the Runtime Control contract identity."
-
-[[text]]
-id = "TXT-0172"
-step = "P4"
-spec = "RUN"
-line = "2631"
-side = "new"
-section = "§9.3.7"
-class = "todo"
-what = "`logos.runtime_enrollment.runtime_instance_id` restates `logos.runtime.runtime_instance_id` from Section 9.2, because a supporting schema cannot import another supporting schema; the two definitions are identical, and values of the two types are equal when their text strings are equal."
-
-[[text]]
-id = "TXT-0173"
-step = "P4"
-spec = "RUN"
-line = "2632"
-side = "new"
-section = "§9.3.7"
-class = "todo"
-what = "A provisioning tool obtains this schema from this specification; Runtime Control introspection does not return it."
 
 [[text]]
 id = "TXT-0179"
@@ -982,58 +834,6 @@ source = "n.195"
 class = "todo"
 guard = true
 what = "When policy is externalized through LOGOS-MODULE-CAPABILITY-AUTHORITY, that observation authority is an allow decision for the requested method with a `runtime_control_scope` that contains neither `instances` nor `providers` and whose `modules`, when present, includes the module name."
-
-[[text]]
-id = "TXT-0207"
-step = "P4"
-spec = "RUN"
-line = "4156"
-side = "new"
-section = "App B.5"
-class = "todo"
-what = "The `target_provider` identifies the resolved provider in the remote Runtime."
-
-[[text]]
-id = "TXT-0208"
-step = "P4"
-spec = "RUN"
-line = "4157"
-side = "new"
-section = "App B.5"
-class = "todo"
-guard = true
-what = "The `route` is scoped to that Runtime and is retained for materialization, renewal, and closure."
-
-[[text]]
-id = "TXT-0209"
-step = "P4"
-spec = "RUN"
-line = "4159"
-side = "new"
-section = "App B.5"
-class = "todo"
-what = "This consumer-facing record includes the remote invocation descriptor and expiry."
-
-[[text]]
-id = "TXT-0210"
-step = "P4"
-spec = "RUN"
-line = "4160"
-side = "new"
-section = "App B.5"
-class = "todo"
-what = "Materialization through the consumer's Runtime Control binding performs the required remote authentication and Hello exchange."
-
-[[text]]
-id = "TXT-0211"
-step = "P4"
-spec = "RUN"
-line = "4161"
-side = "new"
-section = "App B.5"
-class = "todo"
-guard = true
-what = "`list_routes` omits `invocation`, including its one-time route ticket."
 
 [[text]]
 id = "TXT-0213"
@@ -1352,26 +1152,6 @@ section = "§9.3"
 class = "todo"
 guard = true
 what = "The initial classifications are `startup-timeout`, `initialization-failed`, `reported-by-module`, `host-terminated`, `authority-denied`, `authority-expired`, `authority-revoked`, `authority-evaluation-failed`, `permission-enforcement-failed`, `configuration-indeterminate`, `cleanup-failed`, `cleanup-timeout`, `remote-state-unknown`, and `other`."
-
-[[text]]
-id = "TXT-0271"
-step = "P4"
-spec = "RUN"
-line = "4284"
-side = "old"
-section = "App B.5"
-class = "todo"
-what = "The `target_provider` is the local remote-facade provider."
-
-[[text]]
-id = "TXT-0272"
-step = "P4"
-spec = "RUN"
-line = "4287"
-side = "old"
-section = "App B.5"
-class = "todo"
-what = "This is an observation record, so it omits the invocation information and its one-time route ticket."
 
 [[text]]
 id = "TXT-0420"
@@ -1789,17 +1569,6 @@ side = "new"
 section = "§9.3.17"
 class = "todo"
 what = "An observer obtains the changed failure, selection, and realization through `get_execution_summary`."
-
-[[text]]
-id = "TXT-0198"
-step = "P4"
-spec = "RUN"
-line = "3488"
-side = "new"
-section = "§9.3.18"
-source = "review"
-class = "behaviour"
-what = "Every other caller receives the ordinary non-revealing `NOT_AUTHORISED`."
 
 [[text]]
 id = "TXT-0201"

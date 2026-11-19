@@ -131,8 +131,9 @@ proc updateOf(
     target: LogosNSRuntimeModuleInstanceAddress,
     revision: uint64,
     permissions: seq[LogosNSRuntimeControlPermissionSetting] = @[],
+    refusal = false,
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "update_permission_settings",
     encode(
@@ -141,11 +142,12 @@ proc updateOf(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc retireOf(
-    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string
+    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string, refusal = false
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "retire_module",
     encode(
@@ -155,6 +157,7 @@ proc retireOf(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc latestClient(): ptr LogosRuntimeControlBinding =
   ## The Runtime Control binding of the latest client initialization.
@@ -186,7 +189,7 @@ proc slows(e: Engine, names: varargs[string]) =
 # list_modules -------------------------------------------------------------------------
 
 suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
-  test "[RUN-0282] [RUN-0283] [RUN-0401] [RUN-0414] [RUN-0415] [RUN-0627] [RUN-0972] [RUN-0973] [RUN-0975] every local instance, instance keys before provider keys, each as one committed view":
+  test "[RUN-0282] [RUN-0283] [RUN-0414] [RUN-0415] [RUN-0627] [RUN-0972] [RUN-0973] [RUN-0975] [RUN-1128] every local instance, instance keys before provider keys, each as one committed view":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     e.slows("s")
@@ -711,8 +714,9 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
       "client_module",
       instance = someText("w"),
       expected = Opt.some(during.execution.revision),
+      refusal = true,
     )
-    check stale.code == ecInvalidParams
+    check stale.refused.get.stale == Opt.some(after.execution.revision)
     check e.view("w").tryGet.execution.revision == after.execution.revision
     let fresh = rc.lifecycle(
       "start_module",
@@ -866,15 +870,14 @@ suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DE
         LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Applied
     e.finish()
 
-  test "[RUN-0468] [RUN-0470] [RUN-0474] [RUN-0475] [RUN-0481] [RUN-0892] [RUN-0875] an empty replacement at revision 1 returns that state; a permission or another revision is INVALID_PARAMS without detail":
+  test "[RUN-0468] [RUN-0470] [RUN-0474] [RUN-0475] [RUN-0481] [RUN-0892] [RUN-0875] an empty replacement at revision 1 returns that state; a permission is INVALID_PARAMS without detail, another revision `stale-revision`":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")
     let before = e.view("m").tryGet
     let same = rc.updateOf(e.address("m"), 1)
     check same.code == ecOk
-    let s =
-      LogosNSRuntimeControlUpdatePermissionSettingsResponse.decode(same.response).tryGet
+    let s = same.accepted(LogosNSRuntimeControlUpdatePermissionSettingsResponse)
     check s.target == e.address("m")
     check s.state.revision == 1 and s.state.permissions.len == 0
     check s.state.application.kind ==
@@ -888,8 +891,9 @@ suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DE
     )
     check named.code == ecInvalidParams and named.detail.len == 0
     for revision in [0'u64, 2]:
-      let stale = rc.updateOf(e.address("m"), revision)
-      check stale.code == ecInvalidParams and stale.detail.len == 0
+      let stale = rc.updateOf(e.address("m"), revision, refusal = true)
+      check stale.code == ecOk and stale.detail.len == 0
+      check stale.refused.get.stale == Opt.some(1'u64)
     # Nothing changed, the instance included.
     let after = e.view("m").tryGet
     check after.execution.revision == before.execution.revision

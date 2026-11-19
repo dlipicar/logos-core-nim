@@ -434,6 +434,46 @@ when defined(posix):
       check "NOT_AUTHORISED" in r.stderr
       check d.stopped == 0
 
+    test "[RUN-1113] [RUN-1114] module start --if-revision with a stale revision: the code and the current revision, exit 4, and --json carries the error arm":
+      # [re-pin P4a] A typed error is a successful call whose response holds
+      # the error arm; logosctl exits as for any Runtime Control refusal.
+      let c = newCase()
+      check c.initDefault().code == 0
+      let d = c.start()
+      c.expectReady(d)
+      let (made, j) = c.ctlJson("module", "create", "sensor_module")
+      check made == 0
+      let instance = j["result"]["instance"].getStr
+      let (listed, ls) = c.ctlJson("module", "ls", "--module", "sensor_module")
+      check listed == 0
+      # A revision above 2^53 is a JSON string (G89); a persistent engine's
+      # revisions start at its epoch shifted left by 32.
+      proc uintOf(n: JsonNode): uint64 =
+        if n.kind == JString:
+          parseBiggestUInt(n.getStr).uint64
+        else:
+          n.getBiggestInt.uint64
+
+      let rev = uintOf(ls["result"]["modules"][0]["execution"]["revision"])
+      let args = @[
+        "module",
+        "start",
+        "sensor_module",
+        "--instance",
+        instance,
+        "--if-revision",
+        $(rev + 1),
+      ]
+      let r = c.ctl(args)
+      check r.code == 4
+      check ("stale-revision: current revision " & $rev) in r.stderr
+      let (code, answer) = c.ctlJson(args)
+      check code == 4
+      check answer["result"]["error"]["code"].getStr == "stale-revision"
+      check uintOf(answer["result"]["error"]["current_revision"]) == rev
+      check c.state(instance) == "unloaded"
+      check d.stopped == 0
+
     test "[PKG-0418] [PKG-0419] [PKG-0420] [PKG-0421] trust continuity across starts":
       let c = newCase()
       check c.initDefault().code == 0

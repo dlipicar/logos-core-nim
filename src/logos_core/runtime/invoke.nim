@@ -38,6 +38,7 @@ import results
 import logos_sdk/cbor
 import logos_sdk/abi/[checks, types]
 import logos_sdk/iface/[accept, outcome, payload, surface]
+import logos_sdk/kit/rc_arms
 import ../transport/boundary
 import ./[callside, events, plumbing, rcaddress]
 
@@ -587,22 +588,60 @@ proc lifecycleResponse(m: RcMethod, v: InstanceView): Result[seq[byte], string] 
   )
   if m == rmStartModule:
     encode(
-      LogosNSRuntimeControlStartModuleResponse(
-        module: v.module, instance: Opt.some(v.instance), state: state
+      LogosNSRuntimeControlStartModuleResponse.accepted(
+        LogosNSRuntimeControlStartModuleResponseARMapModuleStateMap(
+          module: v.module, instance: Opt.some(v.instance), state: state
+        )
       )
     )
   elif m == rmRecoverModule:
     encode(
-      LogosNSRuntimeControlRecoverModuleResponse(
-        module: v.module, instance: v.instance, state: state
+      LogosNSRuntimeControlRecoverModuleResponse.accepted(
+        LogosNSRuntimeControlRecoverModuleResponseARMapInstanceModuleStateMap(
+          module: v.module, instance: v.instance, state: state
+        )
       )
     )
   else:
     encode(
-      LogosNSRuntimeControlStopModuleResponse(
-        module: v.module, instance: Opt.some(v.instance), state: state
+      LogosNSRuntimeControlStopModuleResponse.accepted(
+        LogosNSRuntimeControlStopModuleResponseARMapModuleStateMap(
+          module: v.module, instance: Opt.some(v.instance), state: state
+        )
       )
     )
+
+proc typedResponse(m: RcMethod, t: TypedError): Result[seq[byte], string] =
+  ## [SPEC RUNTIME l.1818-1822] A typed outcome as the method's error arm.
+  let e = rcError(
+    case t.code
+    of recStaleRevision:
+      LogosNSRuntimeControlErrorCodeKind.Stale_revision
+    of recConfigurationRejected:
+      LogosNSRuntimeControlErrorCodeKind.Configuration_rejected
+    of recDeclarationUnavailable:
+      LogosNSRuntimeControlErrorCodeKind.Declaration_unavailable,
+    t.currentRevision,
+  )
+  case m
+  of rmCreateModule:
+    encode(LogosNSRuntimeControlCreateModuleResponse.refused(e))
+  of rmStartModule:
+    encode(LogosNSRuntimeControlStartModuleResponse.refused(e))
+  of rmStopModule:
+    encode(LogosNSRuntimeControlStopModuleResponse.refused(e))
+  of rmRecoverModule:
+    encode(LogosNSRuntimeControlRecoverModuleResponse.refused(e))
+  of rmRetireModule:
+    encode(LogosNSRuntimeControlRetireModuleResponse.refused(e))
+  of rmUpdatePermissionSettings:
+    encode(LogosNSRuntimeControlUpdatePermissionSettingsResponse.refused(e))
+  of rmUpdateConfiguration:
+    encode(LogosNSRuntimeControlUpdateConfigurationResponse.refused(e))
+  of rmApplyConfiguration:
+    encode(LogosNSRuntimeControlApplyConfigurationResponse.refused(e))
+  else:
+    err($m & " has no error arm")
 
 proc configResponse(
     m: RcMethod, target: LogosNSRuntimeModuleInstanceAddress, s: ConfigState
@@ -622,12 +661,12 @@ proc configResponse(
     )
   else:
     # [SPEC CONFIG l.208] the complete staged record, if any
-    var r = LogosNSRuntimeControlUpdateConfigurationResponse(
+    var r = LogosNSRuntimeControlUpdateConfigurationResponseARMapStateRevisionTargetMap(
       target: target, state_revision: s.revision
     )
     if s.staged.isSome:
       r.staged = Opt.some(toRc(s.staged.get))
-    encode(r)
+    encode(LogosNSRuntimeControlUpdateConfigurationResponse.accepted(r))
 
 proc checkedResponse(
     bare: string, bytes: seq[byte], depth: int, trail: var CallTrail
@@ -689,7 +728,8 @@ proc stage(
     )
   )
   drop(u.value) # the Runtime thread took its own reference when it staged
-  if reply.error.isSome:
+  if reply.error.isSome and not reply.error.get.isTyped:
+    # a typed outcome goes back to `rcInvoke` as phase 1's would
     var held = reply.config
     held.release()
     e.record(reply.capture, trail)
@@ -738,16 +778,25 @@ proc rcInvoke*(
   var held = reply.config # [I87] references this thread releases
   defer:
     held.release()
-  if reply.error.isSome:
+  if reply.error.isSome and not reply.error.get.isTyped:
     e.record(reply.capture, trail)
     return err(failureOf(reply.error.get))
-  if m == rmUpdateConfiguration and rc.cfgUpdate.stage:
+  if reply.error.isNone and m == rmUpdateConfiguration and rc.cfgUpdate.stage:
     reply = e.stage(instance, attempt, rc.cfgUpdate, reply, value, trail).valueOr:
       return err(error)
     held.release()
     held = reply.config
+  # [SPEC RUNTIME l.1818-1822; re-pin P4a] A typed outcome is a successful
+  # response holding the method's error arm, checked and recorded as one.
+  let typed =
+    if reply.error.isSome:
+      reply.error.get.typed
+    else:
+      Opt.none(TypedError)
   let encoded =
-    if m in {rmStartModule, rmStopModule, rmRecoverModule}:
+    if typed.isSome:
+      typedResponse(m, typed.get)
+    elif m in {rmStartModule, rmStopModule, rmRecoverModule}:
       lifecycleResponse(m, reply.view)
     elif m in {rmGetConfigurationSchema, rmGetConfiguration, rmUpdateConfiguration}:
       let target = if m == rmUpdateConfiguration: rc.cfgUpdate.target else: rc.cfgTarget

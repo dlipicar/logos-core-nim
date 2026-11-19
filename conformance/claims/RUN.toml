@@ -32,6 +32,10 @@ default = "claimed"
 [units]
 # Stay deferred past the re-pin to 6cac8335; work item 5-7a owns them (spec/repin-pending.toml [deferred]).
 "RUN-1163" = "deferred:tier-5"
+# Re-pin P4a (DECISIONS I108): Runtime Control served to or forwarded through another Runtime
+# (l.1835) comes with remote Runtime Control, 5-7a.
+"RUN-1124" = "deferred:tier-5"
+"RUN-1125" = "deferred:tier-5"
 # RUN-0007, RUN-0008 and RUN-0014 (the same contract across execution modes) are claimed with step
 # 4b-2b: one scripted sequence through a direct and a transported handle (DECISIONS I90).
 # Remote only (fable-scope §7): `connect_remote` (l.234-241) and the rule that a local route never

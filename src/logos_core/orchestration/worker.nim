@@ -33,7 +33,7 @@ import results
 import ../durable
 import logos_sdk/base/perthread
 import ../runtime/bell
-import logos_sdk/kit/rcclient
+import logos_sdk/kit/[rc_arms, rcclient]
 import ../loader/contract
 import ./[accounting, policy, settings]
 
@@ -854,41 +854,45 @@ proc takeAnswers(w: var Worker) =
         diag("the answer of " & methodOf(c.step) & " " & c.instance & " was dropped")
         w.phase = phaseHalted
         return
-    var stateText = ""
+    var answered =
+      if code == ecOk:
+        ""
+      else:
+        $code
+    var typedRefusal = false
     if code == ecOk:
-      let st =
-        case c.step
-        of stepRecover:
-          decodeShared(response, LogosNSRuntimeControlRecoverModuleResponse).map(
-            proc(x: LogosNSRuntimeControlRecoverModuleResponse): string =
-              toLowerAscii($x.state.kind)
-          )
-        of stepStart:
-          decodeShared(response, LogosNSRuntimeControlStartModuleResponse).map(
-            proc(x: LogosNSRuntimeControlStartModuleResponse): string =
-              toLowerAscii($x.state.kind)
-          )
-        of stepStop:
-          decodeShared(response, LogosNSRuntimeControlStopModuleResponse).map(
-            proc(x: LogosNSRuntimeControlStopModuleResponse): string =
-              toLowerAscii($x.state.kind)
-          )
-        of stepNone:
-          Result[string, string].err("")
-      stateText = st.get("")
+      # [SPEC RUNTIME l.1818-1822; re-pin P4a] A response's error arm is a
+      # refusal (the worker sends `expected_execution_revision`, so
+      # `stale-revision` can come back), handled as INVALID_PARAMS was.
+      template read(T: typedesc) =
+        let r = decodeShared(response, T)
+        if r.isOk:
+          let accepted = r.get.accepted
+          if accepted.isSome:
+            answered = toLowerAscii($accepted.get.state.kind)
+          else:
+            answered = $r.get.refusal.get
+            typedRefusal = true
+
+      case c.step
+      of stepRecover:
+        read(LogosNSRuntimeControlRecoverModuleResponse)
+      of stepStart:
+        read(LogosNSRuntimeControlStartModuleResponse)
+      of stepStop:
+        read(LogosNSRuntimeControlStopModuleResponse)
+      of stepNone:
+        discard
     free(response)
     if c.step == stepRecover and c.charged:
-      let a = classifyRecover(code)
+      let a = classifyRecover(code, typedRefusal)
       var settled = false
       w.acc.entries.withValue(c.instance, e):
         e[].settle(a)
         settled = true
       if settled:
         discard w.save()
-    diag(
-      methodOf(c.step) & " " & c.instance & ": answered " &
-        (if code == ecOk: stateText else: $code)
-    )
+    diag(methodOf(c.step) & " " & c.instance & ": answered " & answered)
     w.queueRead(c.instance)
   if w.blocked.len > 0 and w.freeSlot() >= 0:
     var b: seq[string]

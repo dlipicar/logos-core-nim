@@ -808,14 +808,51 @@ section = "§9.2"
 out = "RNT/9.3.runtime-control.cddl"
 package = "sdk"
 file = "spec-module-runtime.md"
-section = "§9.3"
+section = "§9.3.2"
 
-# RUNTIME §9.3.7: remote enrollment, new at 6cac8335. Written by re-pin step P4.
+# RUNTIME §9.3.7: remote enrollment, new at 6cac8335 (re-pin P4a).
 [[mirror]]
 out = "RNT/9.3.7.runtime-enrollment.cddl"
 package = "sdk"
 file = "spec-module-runtime.md"
 section = "§9.3.7"
+
+# RUNTIME App B: the Runtime Control record examples, each decoded by
+# sdk/tests/test_rc_schema.nim (re-pin P4a; RUN-1203 to RUN-1206, RUN-1208).
+[[mirror]]
+out = "RNT/app-b.1.runtime-endpoint.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.1"
+lang = "text"
+
+[[mirror]]
+out = "RNT/app-b.2.provider-address.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.2"
+lang = "text"
+
+[[mirror]]
+out = "RNT/app-b.3.local-module-record.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.3"
+lang = "text"
+
+[[mirror]]
+out = "RNT/app-b.4.facade-module-record.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.4"
+lang = "text"
+
+[[mirror]]
+out = "RNT/app-b.5.facade-route.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.5"
+lang = "text"
 
 [[mirror]]
 out = "RNT/13.host-handle.h"

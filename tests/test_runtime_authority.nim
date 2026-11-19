@@ -651,7 +651,9 @@ suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
       proc(): bool =
         e.view(Ca).tryGet.execution.revision > failed.execution.revision
     )
-    check orch.rcCall("recover_module", recover).code == ecInvalidParams
+    let stale = orch.rcCall("recover_module", recover)
+    check stale.code == ecOk
+    check stale.refused.get.stale == Opt.some(e.view(Ca).tryGet.execution.revision)
     let current = encode(
       LogosNSRuntimeControlRecoverModuleRequest(
         module: CaModuleName,

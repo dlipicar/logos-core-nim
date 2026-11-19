@@ -17,7 +17,7 @@ when defined(posix):
   import unittest2
   import logos_sdk/crypto/blake3
   import ../src/logos_core/permissions
-  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/rc_types
+  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/[rc_arms, rc_types]
   from ../src/logos_core/runtime/plumbing import
     DefaultStartupDeadline, DefaultLoaderStartupDeadline, DefaultStopDeadline,
     DefaultShutdownGrace, DefaultApplyDeadline, MaxDiagnostics
@@ -463,7 +463,7 @@ when defined(posix):
             ),
           ).okBytes
         )
-        .expect("the created instance")
+        .expect("the created instance").accepted.get
       let started = l.rc(
         LcnCtlMethodKind.Start_module,
         LogosNSRuntimeControlStartModuleRequest(

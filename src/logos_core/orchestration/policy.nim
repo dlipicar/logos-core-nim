@@ -177,15 +177,21 @@ func delay*(b: Backoff, n: int64): int64 =
     inc i
   min(d, cap)
 
-func classifyRecover*(code: ErrorCode): Answer =
+func classifyRecover*(code: ErrorCode, typedRefusal: bool): Answer =
   ## [SPEC RUNTIME l.3537-3544; I94, plan §2.7] What a `recover_module`
   ## answer means for the accounting. Every code the table does not list is a
-  ## lost answer.
+  ## lost answer. [RUNTIME l.1818-1822; re-pin P4a] `typedRefusal`: the
+  ## response held its error arm (`stale-revision`), which is a refusal
+  ## though the call succeeded.
   case code
-  of ecOk: answerAccepted
-  of ecInvalidParams, ecNotReady, ecNotAuthorised, ecModule: answerRefused
-  of ecCancelled: answerCancelled
-  else: answerLost
+  of ecOk:
+    if typedRefusal: answerRefused else: answerAccepted
+  of ecInvalidParams, ecNotReady, ecNotAuthorised, ecModule:
+    answerRefused
+  of ecCancelled:
+    answerCancelled
+  else:
+    answerLost
 
 func monoOfLastCall*(lastCallAt, delayMs, nowWall, nowMono: int64): int64 =
   ## [IMPL; I94] The monotonic moment standing for a loaded `last_call_at`:

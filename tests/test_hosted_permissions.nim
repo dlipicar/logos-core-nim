@@ -175,7 +175,7 @@ when defined(posix):
     )
     check r.code == ecOk
     if r.code == ecOk:
-      result = LogosNSRuntimeControlUpdatePermissionSettingsResponse.decode(r.response).tryGet.state
+      result = r.accepted(LogosNSRuntimeControlUpdatePermissionSettingsResponse).state
 
   proc statusIs(rc: ptr LogosRuntimeControlBinding, e: Engine, id, s: string): bool =
     waitUntil(

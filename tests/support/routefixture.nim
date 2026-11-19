@@ -25,11 +25,55 @@ var
   clientAccessState, clientCurrent: Atomic[pointer]
     ## the invocation access of the latest initialization
 
+import logos_sdk/kit/rc_arms
+
 type RcResult = object
   code: ErrorCode
   message: string
   detail: seq[byte]
   response: seq[byte]
+  refused: Opt[LogosNSRuntimeControlError]
+    ## [re-pin P4a] the response's error arm (`kit/rc_arms`): a typed refusal
+    ## comes back with LOGOS_OK
+
+proc refusalIn(name: string, bytes: seq[byte]): Opt[LogosNSRuntimeControlError] =
+  ## The error arm of a response of one of the eight methods that have one.
+  template read(T: typedesc) =
+    let x = T.decode(bytes)
+    if x.isOk:
+      return x.get.refusal
+
+  case name
+  of "create_module":
+    read(LogosNSRuntimeControlCreateModuleResponse)
+  of "start_module":
+    read(LogosNSRuntimeControlStartModuleResponse)
+  of "stop_module":
+    read(LogosNSRuntimeControlStopModuleResponse)
+  of "recover_module":
+    read(LogosNSRuntimeControlRecoverModuleResponse)
+  of "retire_module":
+    read(LogosNSRuntimeControlRetireModuleResponse)
+  of "update_permission_settings":
+    read(LogosNSRuntimeControlUpdatePermissionSettingsResponse)
+  of "update_configuration":
+    read(LogosNSRuntimeControlUpdateConfigurationResponse)
+  of "apply_configuration":
+    read(LogosNSRuntimeControlApplyConfigurationResponse)
+  else:
+    discard
+  Opt.none(LogosNSRuntimeControlError)
+
+proc accepting(r: RcResult, refusal: bool): RcResult =
+  ## [re-pin P4a] A helper's answer: an error arm fails here unless the caller
+  ## expects one (`refusal`), so a status-only check cannot take a typed
+  ## refusal for acceptance.
+  doAssert refusal or r.refused.isNone, "refused: " & $r.refused.get
+  r
+
+func isAccepted(r: RcResult): bool =
+  ## [re-pin P4a] The call succeeded and its response holds the result arm.
+  r.code == ecOk and r.refused.isNone
 
 proc copyBytes(p: ptr UncheckedArray[uint8], n: csize_t): seq[byte] =
   result = newSeq[byte](int(n))
@@ -71,6 +115,30 @@ proc rcCall(
   if buf != nil:
     result.response = copyBytes(buf, len)
     rc.vtable.releaseResponse(rc, buf, len)
+  if result.code == ecOk:
+    result.refused = refusalIn(name, result.response)
+
+proc accepted[T](r: RcResult, _: typedesc[T]): auto =
+  ## [re-pin P4a] The result arm of a response that has an error arm
+  ## (`kit/rc_arms`); a failed call or a refusal fails here.
+  doAssert r.code == ecOk, $r.code & " " & r.message
+  let x = T.decode(r.response).tryGet
+  doAssert x.refusal.isNone, "refused: " & $x.refusal.get
+  x.accepted.get
+
+proc refusal[T](r: RcResult, _: typedesc[T]): LogosNSRuntimeControlError =
+  ## [re-pin P4a] The error arm of a successful call's response.
+  doAssert r.code == ecOk, $r.code & " " & r.message
+  let x = T.decode(r.response).tryGet
+  doAssert x.refusal.isSome, "the response holds its result arm"
+  x.refusal.get
+
+func stale(e: LogosNSRuntimeControlError): Opt[uint64] =
+  ## The current revision of a `stale-revision`; none for another code.
+  if e.code.kind == LogosNSRuntimeControlErrorCodeKind.Stale_revision:
+    Opt.some(e.current_revision.get(0))
+  else:
+    Opt.none(uint64)
 
 proc clientName(): cstring {.cdecl.} =
   "client_module"
@@ -524,6 +592,7 @@ proc lifecycle(
     instance = Opt.none(string),
     provider = Opt.none(LogosNSRuntimeModuleProviderAddress),
     expected = Opt.none(uint64),
+    refusal = false,
 ): RcResult =
   let bytes =
     if name == "start_module":
@@ -544,7 +613,7 @@ proc lifecycle(
           expected_execution_revision: expected,
         )
       ).tryGet
-  rcCall(rc, name, bytes)
+  rcCall(rc, name, bytes).accepting(refusal)
 
 proc readiness(
     rc: ptr LogosRuntimeControlBinding,
