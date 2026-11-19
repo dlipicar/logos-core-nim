@@ -14,7 +14,10 @@
 ##
 ## The audit build renames `free` and `realloc` in all the C it compiles
 ## (`wipeaudit.c`). The scan sees the Nim heap only with `-d:useMalloc` under
-## orc or arc: refc's heap never reaches `free` (`wipeAuditScans`).
+## orc or arc: refc's heap never reaches `free` (`wipeAuditScans`). The scan
+## covers the C the build compiles, not the C++: C++ blocks (BoringSSL's, the
+## only C++ an audit build compiles) are zeroed and released unscanned
+## (DECISIONS G276; re-pin P4 §4.2).
 
 {.used.}
 

@@ -3496,6 +3496,14 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Queued event deliveries** (re-pin P3a, G176 replaced): their copies are freed unerased. Events
   cannot be marked sensitive: `_sensitive` names only method request and response declarations
   (INTERFACE §1.2.1 l.215).
+- **The free scan's reach** ([IMPL], re-pin P4d; I92's audit build): `free` and `realloc` are renamed in
+  the C the build compiles; C++ blocks are zeroed and released without a scan (`lcn_wipe_free_cxx`,
+  `lcn_wipe_realloc_cxx`). The only C++ an audit build compiles is BoringSSL's (nim-boringssl 0.0.16
+  builds C++ and assembly, no C), whose record buffers keep plaintext. The C++ variants still zero, so a
+  Nim block that reuses that memory without writing all of it holds no stale plaintext the scan would
+  blame on its owner. Shown before the zeroing went, with the narrowed header and without the define:
+  `test_remote_tls`'s scan case found nothing under orc and orc-release on the Mac and under orc and
+  orc-release on framework.lan, and with C++ scanned it found 16 blocks (the Mac, orc).
 - **Status:** decided and built 2026-11-15 (I92). `test_wipe` (W-12), `test_wipe_routes`.
 
 ### G277 — The paths a contract that marks a payload is routed on (`G-marked-paths`)
