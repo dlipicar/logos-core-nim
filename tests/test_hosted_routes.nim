@@ -405,6 +405,41 @@ when defined(posix):
       Answer,
     )
 
+  type SubEnds = object ## [G225] What a handle's subscription-end handler saw.
+    count: Atomic[int]
+    id: Atomic[uint64]
+    reason: Atomic[int]
+
+  var subEnds: SubEnds
+
+  proc onSubEnd(
+      id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+  ) {.cdecl, gcsafe, raises: [].} =
+    let e = cast[ptr SubEnds](userData)
+    e.id.store(uint64(id))
+    e.reason.store(int(reason))
+    e.count += 1
+
+  proc observeSubEnd(h: var LogosRouteHandle): ErrorCode =
+    subEnds.count.store(0)
+    toResult(h.vtable.observeSubscriptionEnd(addr h, onSubEnd, addr subEnds)).code
+
+  proc unsubscribe(h: var LogosRouteHandle, id: LogosSubscriptionId): ErrorCode =
+    toResult(h.vtable.unsubscribe(addr h, id)).code
+
+  proc underAuthority(): EngineConfig =
+    ## `hosted` with the fake Capability Authority bound (instance "ca").
+    resetFake()
+    result = hosted()
+    result.statics.add(fakeCaRegistration())
+    result.authority = Opt.some(
+      AuthorityPolicy(instance: "ca", evaluationDeadline: initDuration(seconds = 60))
+    )
+
+  proc startAuthority(e: Engine) =
+    discard e.create(fakeCaRecord(), "ca").tryGet
+    doAssert e.start("ca").tryGet.state == msReady
+
   # P-1 to P-5 -------------------------------------------------------------------------
 
   suite "run.hosted: a hosted provider's endpoint (LOADER §5.3; RUNTIME §3.4; TRANSPORT §8.2)":
@@ -730,6 +765,39 @@ when defined(posix):
       check failedHost.request == failedDirect.request
       hh.release()
       hd.release()
+      e.finish()
+
+    test "[TRN-0392] [RUN-1095] [TXT-0088] [IMPL-DECISION G175] [IMPL-DECISION G225] P-15 under a Capability Authority, a subscribe-event deny at a hosted provider's delivery ends the subscription: the host's session sends the SubscriptionEnd, the subscriber's handle reports NOT_AUTHORISED once and its unsubscribe is LOGOS_OK once":
+      let cfg = underAuthority()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      e.startAuthority()
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      var k = rc.handle(rc.establish("k").recordOf.route)
+      heard[0].count.store(0)
+      check k.observeSubEnd() == ecOk
+      var a: LogosSubscriptionId
+      check k.hear(0, a) == ecOk
+      check k.read(15).isOk
+      check heardAt(0, 1)
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(0, 1))
+      check k.read(15).isOk
+      check waitUntil(
+        proc(): bool =
+          subEnds.count.load >= 1,
+        Answer,
+      )
+      sleep(100 * Slow)
+      check heard[0].count.load == 1
+      check subEnds.count.load == 1
+      check subEnds.id.load == uint64(a)
+      check subEnds.reason.load == ord(ecNotAuthorised)
+      check k.unsubscribe(a) == ecOk
+      check k.unsubscribe(a) == ecInvalidParams
+      setScript()
+      k.release()
       e.finish()
 
     test "[RUN-0226] [IMPL-DECISION G244] P-7 per-call admission at a hosted provider: a method outside the route's access is NOT_AUTHORISED and reaches no provider":
@@ -1432,9 +1500,38 @@ when defined(posix):
       # installed: the same refusal again.
       check codeIn(c.run("sub-end 1 s4")) == Opt.some(ecNotReady)
       check codeIn(c.run("sub-end 1 s5")) == Opt.some(ecNotReady)
-      check c.linesOf("subends").len == 0 # [I105] registration only until P3
+      # [IF l.1474] A route's end is not a binding end: nothing is reported.
+      check c.linesOf("subends").len == 0
       check codeIn(c.run("release 0")) == Opt.some(ecOk)
       check codeIn(c.run("release 1")) == Opt.some(ecOk)
+      e.finish()
+
+    test "[TRN-0392] [RUN-1095] [TXT-0088] [IMPL-DECISION G225] C-11 under a Capability Authority, a hosted consumer's subscription ended by a subscribe-event deny at delivery is reported once by its handle, in the host, with NOT_AUTHORISED; its unsubscribe is LOGOS_OK once":
+      let cfg = underAuthority()
+      discard cfg.stateOf()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      e.startAuthority()
+      discard e.started(meter(), "m")
+      check e.started(consumerRecord(), "c").state == msReady
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      check codeIn(c.run("sub-end 0 s1")) == Opt.some(ecOk)
+      let sub = c.run("subscribe 0 meter.changed_event d1")
+      check codeIn(sub) == Opt.some(ecOk)
+      discard c.readVia(0, 21)
+      check c.noted("deliveries", "d1 meter.changed_event ")
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(0, 1))
+      discard c.readVia(0, 21)
+      check c.noted("subends", "s1 " & valueIn(sub) & " " & $ord(ecNotAuthorised))
+      sleep(50 * Slow)
+      check c.linesOf("deliveries").len == 1
+      check c.linesOf("subends").len == 1
+      check codeIn(c.run("unsubscribe 0 " & valueIn(sub))) == Opt.some(ecOk)
+      check codeIn(c.run("unsubscribe 0 " & valueIn(sub))) == Opt.some(ecInvalidParams)
+      setScript()
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
     test "[IFC-0729] [RUN-0181] [IMPL-DECISION G267] C-8 prepared calls from a hosted consumer to a hosted provider: a response, a timeout that cancels the provider's call, an expiry at submission, a cancellation before it, and the connection kept until the last completes":

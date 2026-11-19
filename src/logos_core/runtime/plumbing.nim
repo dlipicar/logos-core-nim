@@ -953,6 +953,9 @@ type
     rjLinkDrain
       ## [I90] one drain of a transported subscription (`events.linkDrain`),
       ## holding one reference to its `SubState`
+    rjSubEnd
+      ## [G225] one report of a binding-ended subscription
+      ## (`rcevents.runReport`)
 
   RcJob* = object
     ## [G178] What an event worker runs: one drain of one Runtime Control
@@ -960,6 +963,14 @@ type
     case kind*: RcJobKind
     of rjDrain, rjLinkDrain:
       sub*: pointer
+    of rjSubEnd:
+      report*: int ## the Runtime thread's number for it (`mkSubEndDone`)
+      owner*: pointer
+        ## a route handle's `HandleState`, holding one reference, or a
+        ## binding's `AttemptServices`
+      onHandle*: bool
+      subId*: uint64
+      reason*: ErrorCode
     of rjQuit:
       discard
 
@@ -1001,6 +1012,7 @@ type
     mkHostEnded
       ## [I91; R27] a Module Host's end, before the Loader reports anything
       ## that follows from it (`host`, `hostEnd`)
+    mkSubEndDone ## [G225] a subscription-end report job ended (`job`)
 
   HostEndNote* = object
     ## [R7] How a Module Host ended, as plain values (`hostsup.HostEnd`).
@@ -1019,7 +1031,7 @@ type
     of mkInitialized, mkApplied:
       res*: LogosResult
       context*: ptr LogosModuleContext ## mkInitialized
-    of mkDestroyed, mkJobDone:
+    of mkDestroyed, mkJobDone, mkSubEndDone:
       discard
     of mkCallDone:
       provider*: string

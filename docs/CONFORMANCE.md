@@ -188,9 +188,9 @@ providers over local transport. What a consumer sees differently, and why:
   The suites wait for deliveries; the cases about what a handler does inside the publication are
   skipped (a nested provider entry on the publishing thread, a handler that closes the destination
   of that publication, a publication still in its handler when its invocation is released).
-- An explicit `subscribe-event` deny at delivery skips that Event and keeps the subscription: the
-  provider side cannot end one subscription of a session (K40), where a direct route's subscription
-  ends (CA l.913-915).
+- A `subscribe-event` decision at delivery that does not allow ends the subscription as on a direct
+  route: the provider's session sends a SubscriptionEnd, and the handle reports it (re-pin P3a,
+  DECISIONS G175 amended; K40 is gone). The report runs on an event worker, as on a direct route.
 
 ### What Tier 4b step 4b-3 changes
 

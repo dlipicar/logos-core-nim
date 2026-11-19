@@ -482,7 +482,10 @@ and routes already established are never moved (RUNTIME l.940).
   its Event arrives, not on the publishing thread, one at a time per subscription and in the order
   the Events were published. A provider's `publish` returns once each subscriber connection has its
   Event, not once the handlers ran. What happens when a subscriber does not keep up, or an Event is
-  too large for it, is under "Event output" below.
+  too large for it, is under "Event output" below. A subscription the provider ends (its authority
+  to receive ended) is reported once through the handle's `observe_subscription_end`, on an event
+  worker, when a handler is registered at that moment; release of the handle suppresses a report not
+  yet begun and waits for one that runs (DECISIONS G225).
 
 #### Event output
 
@@ -1134,8 +1137,11 @@ Runtime's life: a host that cycles many distinct artifacts through one Runtime s
   clock never extends authority and a forward step ends it early. There is no skew tolerance.
 - **Events.** A subscription is decided when it is activated and again at each delivery, and a
   publication at each delivery (DECISIONS G175). Under an authority that issues only single-use
-  decisions, every delivery costs two evaluations on the publishing thread. An explicit deny of a
-  subscription at delivery ends it.
+  decisions, every delivery costs two evaluations on the publishing thread. A subscription whose
+  delivery decision does not allow it (a deny, or an evaluation that fails) ends, on a direct route
+  and over local transport alike; its handle reports the end with `LOGOS_ERR_NOT_AUTHORISED` through
+  `observe_subscription_end`, and its `unsubscribe` returns `LOGOS_OK` once. An idle subscription
+  learns that its authority ended at its next event, not when the policy changes (DECISIONS G175).
 - **Grants.** A grant comes from a module that a policy `issue` rule allows, or from the embedding
   host through the authority's protected path. An in-process host reaches the authority with
   `authorityFor(state_root/<state_assignment>)` and calls `issueProtected` and `revokeProtected`

@@ -274,13 +274,15 @@ proc routeObserveEndOp(
   LogosResult()
 
 proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
-  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1503-1506, §5.2 l.3895-3897,
+  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1484, l.1503-1506, §5.2 l.3895-3897,
   ## l.3912-3916] The handle's subscriptions are deactivated and no callback
-  ## begins after release; a handler or terminal callback already running on
-  ## another thread is waited for. The logical route and the calls prepared
-  ## through the handle stay as they are.
+  ## begins after release; a handler, terminal callback or subscription-end
+  ## report already running on another thread is waited for (G225). The
+  ## logical route and the calls prepared through the handle stay as they
+  ## are.
   bindingEnter()
   let h = handleOf(route)
+  h.subEnd.suppress()
   let reply = h.engine.call(
     Request(
       kind: rqReleaseHandle,
@@ -294,7 +296,7 @@ proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
   withLock h.lock:
     if h.cb == cbScheduled:
       h.cb = cbSuppressed
-    while h.cb == cbRunning:
+    while h.cb == cbRunning or h.subEnd.busy:
       wait(h.cond, h.lock)
   dropHandle(h)
 

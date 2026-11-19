@@ -141,7 +141,8 @@ import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
     execauth, hostlock, hostsup, inventory, invoke, loaderbinding, observe, plumbing,
-    rcevents, served, sessionauth, settings, sidetable, statexfer, store, transported,
+    rcevents, served, sessionauth, settings, sidetable, statexfer, store, subend,
+    transported,
   ]
 
 export plumbing
@@ -628,7 +629,11 @@ type
       ## [G178] subscriptions with entries, waiting for a worker slot of their
       ## subscriber
     rcRunning: CountTable[string] ## [G178] per subscriber: its drains dispatched
-    rcBusy: int ## [G178] drains dispatched and not yet ended
+    rcBusy: int ## [G178] event-worker jobs dispatched and not yet ended
+    reports: Table[int, (string, pointer)]
+      ## [G225] subscription-end reports dispatched and not ended, by number:
+      ## the instance each counts in (`rcHandlers`) and the route handle it
+      ## holds a reference to (nil for a binding's)
     rcHints: array[InvKind, RcBlob] ## [G178] the hint values, encoded once
     side: SideTable ## [D14; C-10] the private handoffs to and from the Loader
     ldr: LoaderLink ## [I89] the Module Loader and its binding
@@ -1041,8 +1046,9 @@ proc freeRcAttempt(st: State, x: Inst, token: string) =
   for rec in gone:
     st.removeRc(rec)
 
-proc dispatchRc(st: State, rec: RcRec) =
-  ## One drain of `rec` for an event worker; spawned on demand.
+proc sendRcJob(st: State, job: sink RcJob) =
+  ## One job for an event worker, counted in `rcBusy` until it ends; a worker
+  ## is spawned on demand.
   inc st.rcBusy
   let s = st.shared
   if st.rcBusy > s.rcSpawned and s.rcSpawned < MaxEventWorkers:
@@ -1050,12 +1056,56 @@ proc dispatchRc(st: State, rec: RcRec) =
       createThread(s.rcWorkers[s.rcSpawned], rcWorkerMain, s)
       inc s.rcSpawned
     except ResourceExhaustedError:
-      discard # the drain waits for a busy event worker
-  retain(rcSubOf(rec.sub))
+      discard # the job waits for a busy event worker
   try:
-    s.rcJobs.send(RcJob(kind: rjDrain, sub: rec.sub))
+    s.rcJobs.send(job)
   except Exception:
     discard
+
+proc dispatchRc(st: State, rec: RcRec) =
+  ## One drain of `rec` for an event worker; the job holds its own reference.
+  retain(rcSubOf(rec.sub))
+  st.sendRcJob(RcJob(kind: rjDrain, sub: rec.sub))
+
+proc dispatchReport(
+    st: State,
+    subscriber: string,
+    owner: pointer,
+    onHandle: bool,
+    id: uint64,
+    reason: ErrorCode,
+) =
+  ## [SPEC INTERFACE l.1478-1481; DECISIONS G225] One report of a
+  ## binding-ended subscription, whose slot had a registration installed when
+  ## it ended, on an event worker (`rcevents.runReport`): never inline and
+  ## never on the Runtime thread. It counts toward the subscriber as an event
+  ## handler does (`rcHandlers`), so the release or destroy of its realization
+  ## waits for it; a route handle's job holds a reference to the handle.
+  let x = st.instances.getOrDefault(subscriber)
+  if x != nil:
+    inc x.rcHandlers
+  if onHandle:
+    discard cast[ptr HandleState](owner).refs.fetchAdd(1)
+  let n = st.nextJobId()
+  st.reports[n] = ((if x.isNil: "" else: subscriber), (if onHandle: owner else: nil))
+  st.sendRcJob(
+    RcJob(
+      kind: rjSubEnd,
+      report: n,
+      owner: owner,
+      onHandle: onHandle,
+      subId: id,
+      reason: reason,
+    )
+  )
+
+proc reportOnHandle(
+    st: State, consumer: string, handle: pointer, id: uint64, reason: ErrorCode
+) =
+  ## [SPEC INTERFACE l.1476-1481] A route handle's subscription ended: its
+  ## handle reports it when a registration is installed now (`subend.owed`).
+  if handle != nil and cast[ptr HandleState](handle).subEnd.owed:
+    st.dispatchReport(consumer, handle, true, id, reason)
 
 proc pumpRc(st: State) =
   ## [G178 (C1 point 3)] A subscription with entries gets a drain while its
@@ -8638,7 +8688,8 @@ proc unsubscribe(st: State, q: Request) =
   ## [SPEC INTERFACE §2.5 l.1446-1459; RUNTIME §7.5 l.1341-1347] An ended
   ## route answers with its code first; an id that names no active
   ## subscription of this handle is INVALID_PARAMS (TRANSPORT l.748 through
-  ## RUNTIME l.1012-1016) and changes nothing.
+  ## RUNTIME l.1012-1016) and changes nothing. [SPEC INTERFACE l.1482; G225]
+  ## One the Runtime ended answers LOGOS_OK once (`endDirect`).
   let r = st.route(q.route)
   if r.isNil or r.consumer != q.origin.instance:
     q.reply.answerError(ecNotAuthorised, "not authorised")
@@ -8648,7 +8699,7 @@ proc unsubscribe(st: State, q: Request) =
     return
   for i, p in r.subs:
     let s = subOf(p)
-    if s.id == q.subId and s.generation == q.generation and s.isActive:
+    if s.id == q.subId and s.generation == q.generation and (s.isActive or s.ended):
       deactivate(s)
       r.subs.delete(i)
       q.reply.answer(Reply(subs: @[p]))
@@ -8711,6 +8762,22 @@ proc scoped(st: State, q: Request) =
         reply.subs.add(p)
   q.reply.answer(reply)
 
+proc endDirect(st: State, r: Route, s: ptr SubState) =
+  ## [SPEC RUNTIME l.947-951 (RUN-1095); INTERFACE l.1472-1482; DECISIONS
+  ## G175, G225] The consumer's authority to receive the event ended while
+  ## the route stays ready: the Runtime ends the subscription. No handler of
+  ## it begins from now on; its handle reports the end with NOT_AUTHORISED,
+  ## and `unsubscribe` of it answers LOGOS_OK once. The handle is the route's
+  ## pinned one with the subscription's path generation.
+  if not s.isActive:
+    return
+  deactivate(s)
+  s.ended = true
+  for p in r.pins:
+    if cast[ptr HandleState](p.handle).generation == s.generation:
+      st.reportOnHandle(r.consumer, p.handle, s.id, ecNotAuthorised)
+      break
+
 proc deliver(st: State, q: Request) =
   ## [SPEC RUNTIME l.1229-1231, l.1275-1283; CA l.973-975; G175] The admission
   ## of one handler invocation, decided afresh for each: the subscription is
@@ -8719,6 +8786,10 @@ proc deliver(st: State, q: Request) =
   ## publication skips what fails; an invocation-scoped one stops on a revoked
   ## route or a denied publish-event decision (NOT_AUTHORISED) or a closed
   ## destination (NOT_READY), and skips what only concerns the subscriber.
+  ## [G175 amended] When the subscriber's authority to receive the event
+  ## cannot be established (a failed re-authorization of the route, or a
+  ## subscribe-event decision that is not an allow covering the event), the
+  ## subscription ends (`endDirect`).
   let s = subOf(q.handle)
   let r = st.route(s.routeId)
   let name = q.bare
@@ -8751,11 +8822,13 @@ proc deliver(st: State, q: Request) =
   if c.isNil or c.state notin {msLoaded, msReady} or not r.allowsSubscribe(name):
     skip()
   # [CAP-0174, CAP-0188] A new delivery commitment waits for the route's
-  # re-authorization, and is not made when it fails.
+  # re-authorization, and is not made when it fails; the subscription ends
+  # (G175 amended).
   let refused = st.routeAuthorized(r)
   if refused.isSome:
     if refused.get.parked:
       return
+    st.endDirect(r, s)
     if q.scoped:
       stop(ecNotAuthorised, "the route is not authorised")
     skip()
@@ -8798,10 +8871,11 @@ proc deliver(st: State, q: Request) =
   ).valueOr:
     return
   if not received[0].allows:
-    if received[0].outcome == azDeny:
-      # [G175 extended (TF-24); CA l.913-915; CAP-0191] An explicit deny ends
-      # the subscription: continuing it would exceed current authority.
-      deactivate(s)
+    # [SPEC RUNTIME l.947-951; INTERFACE l.1479; G175 amended (P3 ruling 1);
+    # CA l.913-915; CAP-0191] A deny, a failed evaluation, a refusal or a
+    # narrowed allow that excludes the event: authority to receive it ended
+    # or can no longer be established, so the subscription ends.
+    st.endDirect(r, s)
     skip()
   q.reply.answer(Reply(admitted: true))
 
@@ -8812,19 +8886,8 @@ proc dispatchLinkDrain(st: State, ls: LinkSub) =
   ## worker, spawned on demand; the job holds its own reference.
   ls.draining = true
   ls.served = 0
-  inc st.rcBusy
-  let s = st.shared
-  if st.rcBusy > s.rcSpawned and s.rcSpawned < MaxEventWorkers:
-    try:
-      createThread(s.rcWorkers[s.rcSpawned], rcWorkerMain, s)
-      inc s.rcSpawned
-    except ResourceExhaustedError:
-      discard # the drain waits for a busy event worker
   retain(subOf(ls.sub))
-  try:
-    s.rcJobs.send(RcJob(kind: rjLinkDrain, sub: ls.sub))
-  except Exception:
-    discard
+  st.sendRcJob(RcJob(kind: rjLinkDrain, sub: ls.sub))
 
 func deliverable(ls: LinkSub): bool =
   ls.active and not ls.paused and ls.queue.len > 0
@@ -8915,6 +8978,13 @@ proc linkUnsubscribe(st: State, q: Request) =
     q.reply.answerError(code.get, "the handle's connection has ended")
     return
   let ls = l.subs.getOrDefault(q.subId)
+  if ls != nil and ls.ended and ls.unsubscribing.isNil:
+    # [SPEC INTERFACE l.1482; G225] The provider ended it: LOGOS_OK once, and
+    # the caller waits for a handler still running on another thread.
+    l.subs.del(ls.id)
+    st.linkSubs.del(ls.sub)
+    q.reply.answer(Reply(subs: @[ls.sub]))
+    return
   if ls.isNil or not ls.active or ls.paused:
     q.reply.answerError(
       ecInvalidParams, "no active subscription of this handle has that id"
@@ -8980,6 +9050,28 @@ proc linkSubscription(st: State, ev: IoEvent) =
     reply.answerError(f.get.code, f.get.message.get("the unsubscription was refused"))
     if ls.deliverable and not ls.draining:
       st.dispatchLinkDrain(ls)
+
+proc linkSubscriptionEnd(st: State, ev: IoEvent) =
+  ## [SPEC TRANSPORT l.752-756; INTERFACE l.1472-1482; DECISIONS G225] The
+  ## provider ended an active subscription of a link (the session checked
+  ## it): no handler of it begins from now on, its queued Events go, and its
+  ## handle reports the end with the session's reason. An Unsubscribe still
+  ## pending gets its result from the provider (l.755). The subscription
+  ## stays with the link, ended, so `unsubscribe` answers LOGOS_OK once.
+  let l = st.links.getOrDefault(ev.conn)
+  if l.isNil:
+    return
+  let ls = l.subs.getOrDefault(ev.subscriptionId)
+  if ls.isNil or not ls.active:
+    return
+  deactivate(subOf(ls.sub))
+  ls.active = false
+  ls.ended = true
+  while ls.queue.len > 0:
+    st.releaseCredit(l, ls.queue.popFirst().credit)
+  let reason =
+    if ev.subscriptionFailure.isSome: ev.subscriptionFailure.get.code else: ecModule
+  st.reportOnHandle(l.consumer, l.handle, ls.id, reason)
 
 proc linkEvent(st: State, ev: sink IoEvent) =
   ## [SPEC RUNTIME l.1184; TRANSPORT §5.2, l.721-725; plan §2.7] An Event for
@@ -9131,17 +9223,34 @@ proc servedUnsubscribe(st: State, ev: IoEvent) =
     s.subs.del(ev.subscribeId)
   st.subscriptionResult(ev.conn, ev.subscribeId, Opt.none(InvocationFailure))
 
+proc endServed(st: State, s: Session, event: string) =
+  ## [SPEC TRANSPORT l.750-756 (TRN-0392); RUNTIME l.947-951 (RUN-1095);
+  ## DECISIONS G175] The consumer's authority to receive `event` ended while
+  ## the route stays ready: each subscription of the session to it ends, by
+  ## its id, through the session's own output order (`cmdEndSubscription`),
+  ## so the Events committed for it before stay delivered and none follows.
+  ## The same path carries a hosted provider's session to its host's loop.
+  var ids: seq[uint64]
+  for id, name in s.subs:
+    if name == event:
+      ids.add(id)
+  for id in ids:
+    s.subs.del(id)
+    discard st.shared.tport.submitOwner(
+      IoCommand(conn: s.conn, kind: IoCommandKind.cmdEndSubscription, subId: id)
+    )
+
 proc deliverConn(st: State, q: Request) =
   ## [SPEC RUNTIME l.1229-1231, l.1275-1283; G175; plan §2.7] The admission
   ## of one Event to one transported subscriber connection, decided afresh
   ## as a direct handler invocation is (`deliver`): the session open, the
   ## route ready, both access scopes, the consumer live, the route's
-  ## re-authorization and both event decisions. [K40, Rev R9 (a)] A
-  ## subscriber's deny skips this Event only: the provider side cannot end
-  ## one subscription of a session. A scoped publication stops on an
-  ## authority end or a denied publish-event decision (NOT_AUTHORISED) and on
-  ## a closed destination (NOT_READY); once admitted, its verdict is awaited
-  ## by tag (E2).
+  ## re-authorization and both event decisions. [G175 amended] When the
+  ## subscriber's authority to receive the event cannot be established, the
+  ## session's subscriptions to it end (`endServed`) and the Event is not
+  ## sent. A scoped publication stops on an authority end or a denied
+  ## publish-event decision (NOT_AUTHORISED) and on a closed destination
+  ## (NOT_READY); once admitted, its verdict is awaited by tag (E2).
   let r = st.route(q.route)
   let s = st.sv.session(q.conn)
   let name = q.bare
@@ -9179,6 +9288,8 @@ proc deliverConn(st: State, q: Request) =
   if refused.isSome:
     if refused.get.parked:
       return
+    if s != nil:
+      st.endServed(s, name)
     if q.scoped:
       stop(ecNotAuthorised, "the route is not authorised")
     skip()
@@ -9221,6 +9332,9 @@ proc deliverConn(st: State, q: Request) =
   ).valueOr:
     return
   if not received[0].allows:
+    # [G175 amended (P3 ruling 1)] As `deliver`: the subscriptions end.
+    if s != nil:
+      st.endServed(s, name)
     skip()
   var reply = Reply(admitted: true)
   if q.scoped:
@@ -9488,6 +9602,8 @@ proc deliverRc(st: State, q: Request) =
       reply.answer(Reply()),
   )
 
+proc handlerReturned(st: State, subscriber: string) {.gcsafe.}
+
 proc rcHandled(st: State, p: pointer) =
   ## [G178] A handler returned: a release or destroy of its subscriber's
   ## realization waiting for it may go on. [I90] So for a transported
@@ -9498,6 +9614,22 @@ proc rcHandled(st: State, p: pointer) =
     subscriber = rec.subscriber
   elif not st.linkHandling.pop(p, subscriber):
     return
+  st.handlerReturned(subscriber)
+
+proc reportDone(st: State, n: int) =
+  ## [G225] A subscription-end report job ended: it no longer counts toward
+  ## its subscriber, and a handle's reference goes.
+  var held: (string, pointer)
+  if not st.reports.pop(n, held):
+    return
+  dec st.rcBusy
+  if held[1] != nil:
+    dropHandle(cast[ptr HandleState](held[1]))
+  st.handlerReturned(held[0])
+
+proc handlerReturned(st: State, subscriber: string) {.gcsafe.} =
+  ## A handler or report counted toward `subscriber` returned: a release or
+  ## destroy of its realization waiting for it may go on.
   let x = st.instances.getOrDefault(subscriber)
   if x.isNil or x.rcHandlers == 0:
     return
@@ -10590,6 +10722,8 @@ proc ioEvent(st: State, ev: sink IoEvent) =
     st.servedUnsubscribe(ev)
   of IoEventKind.evSubscription:
     st.linkSubscription(ev)
+  of IoEventKind.evSubscriptionEnd:
+    st.linkSubscriptionEnd(ev)
   of IoEventKind.evEvent:
     st.linkEvent(ev)
   of IoEventKind.evPublishResult:
@@ -10632,7 +10766,7 @@ proc handle(st: State, m: sink Msg) =
     dec st.busy
     st.jobClock = getMonoTime()
   of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle, mkEvaluated,
-      mkRcHandled, mkIo, mkHostEnded:
+      mkRcHandled, mkIo, mkHostEnded, mkSubEndDone:
     discard
   case m.kind
   of mkBound:
@@ -10677,6 +10811,8 @@ proc handle(st: State, m: sink Msg) =
     st.evaluated(m.job, m.evaluated)
   of mkRcHandled:
     st.rcHandled(m.target)
+  of mkSubEndDone:
+    st.reportDone(m.job)
   of mkApplied:
     st.applied(m.job, m.res)
   of mkLoaderReply:

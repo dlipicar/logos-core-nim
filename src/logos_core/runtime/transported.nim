@@ -78,6 +78,9 @@ type
     sub*: pointer ## its `events.SubState`, with one reference held here
     event*: string
     active*: bool ## the successful SubscriptionResult came; not unsubscribed
+    ended*: bool
+      ## [SPEC TRANSPORT l.752-756; DECISIONS G225] the provider ended it:
+      ## `unsubscribe` answers LOGOS_OK once
     paused*: bool ## [IF l.1446-1449] an Unsubscribe is pending: no handler begins
     subscribing*: ReplyChannel ## the subscriber, until the SubscriptionResult
     outId*: ptr LogosSubscriptionId ## written before the subscriber returns

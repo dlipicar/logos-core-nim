@@ -65,6 +65,10 @@ type SubState* = object
   lock: Lock
   cond: Cond
   active: bool
+  ended*: bool
+    ## [DECISIONS G175, G225] Runtime thread: the Runtime ended it while its
+    ## route stayed ready (`engine.endDirect`); `unsubscribe` answers
+    ## LOGOS_OK once
   owner: int ## the thread holding the gate; 0: none
   depth: int ## the owner's nested holds
 

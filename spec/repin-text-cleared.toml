@@ -634,3 +634,13 @@ test = "tests/test_transport.nim"
 id = "TXT-0125"
 step = "P3"
 test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0087"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0088"
+step = "P3"
+test = "tests/test_events.nim"

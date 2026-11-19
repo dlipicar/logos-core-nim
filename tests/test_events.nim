@@ -14,6 +14,7 @@ import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
 import ../src/logos_core/runtime/[bindings, callside, events, native, realizer]
+from ../src/logos_core/runtime/rcevents import setReportDelayForTests
 import logos_sdk/hash/hashinput
 import logos_sdk/abi/types
 import logos_sdk/cbor
@@ -134,6 +135,51 @@ proc reaches(s: ptr Seen, n: int): bool =
       s.count.load >= n
   )
   s.count.load == n
+
+type Ends = object ## [G225] What a handle's subscription-end handler saw.
+  count: Atomic[int] ## reports that returned
+  id: Atomic[uint64]
+  reason: Atomic[int]
+  thread: Atomic[int]
+  running: Atomic[bool]
+  hold: Atomic[bool] ## the handler waits while it is true
+
+var ends: array[2, Ends]
+
+proc clearEnds() =
+  for e in ends.mitems:
+    e.count.store(0)
+    e.id.store(0)
+    e.reason.store(0)
+    e.thread.store(0)
+    e.running.store(false)
+    e.hold.store(false)
+
+proc onSubEnd(
+    id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  let e = cast[ptr Ends](userData)
+  e.running.store(true)
+  e.thread.store(getThreadId())
+  while e.hold.load:
+    sleep(1)
+  e.id.store(uint64(id))
+  e.reason.store(int(reason))
+  e.count += 1
+  e.running.store(false)
+
+proc observeSubEnd(h: var LogosRouteHandle, e: ptr Ends): ErrorCode =
+  toResult(h.vtable.observeSubscriptionEnd(addr h, onSubEnd, e)).code
+
+proc reported(e: ptr Ends, n: int): bool =
+  ## The subscription-end handler has returned `n` times. A report runs on a
+  ## Runtime event worker on every route kind, so this always waits for it.
+  discard waitUntil(
+    proc(): bool =
+      e.count.load >= n
+  )
+  settled()
+  e.count.load == n
 
 proc payloadOf(s: var Seen): seq[byte] =
   s.payload[0 ..< s.payloadLen.load]
@@ -819,7 +865,7 @@ when declared(caParity):
     setup:
       clearAll()
 
-    test "[RUN-0819] [RUN-0822] [CAP-0288] [CAP-0289] [CAP-0191] activation and each delivery are decided by the authority through its cache; after policy_changed the next delivery is decided afresh; an explicit subscribe-event deny ends the subscription":
+    test "[RUN-0819] [RUN-0822] [CAP-0288] [CAP-0289] [CAP-0191] [RUN-1095] [TRN-0392] [IFC-0965] [TXT-0088] [IMPL-DECISION G175] activation and each delivery are decided by the authority through its cache; after policy_changed the next delivery is decided afresh; a subscribe-event deny or failed evaluation at delivery ends the subscription, reported once with NOT_AUTHORISED":
       let e = fixtureEngine(config(extra = @[dmeterStatic]))
       resetDeferred()
       discard e.started(dmeter())
@@ -841,27 +887,110 @@ when declared(caParity):
       check reaches(addr seen[0], 3)
       check evaluations("subscribe-event") == 2
       check evaluations("publish-event") == 2
-      # Denied for the subscriber: skipped, and on a direct route the
-      # subscription ends. Over local transport the provider side cannot end
-      # one subscription of a session (K40; plan Rev R9 (a)): the Event is
-      # skipped with no signal and the subscription stays.
-      const ended = not declared(transportParity)
+      # Denied for the subscriber: the Event is not delivered and the
+      # subscription ends, on a direct route and over local transport (the
+      # provider's session sends a SubscriptionEnd, TRANSPORT l.750-756). The
+      # handle reports it once with NOT_AUTHORISED, on a Runtime event worker,
+      # never on the publishing thread (G175 amended, G225).
+      clearEnds()
+      check h.observeSubEnd(addr ends[0]) == ecOk
       setScript(rule(vDeny, "subscribe-event"))
       check publish(PolicyChangedName, policyChanged(1, 2))
       publishRaw(cstring(Changed), payload)
-      settled()
+      check reported(addr ends[0], 1)
       check seen[0].count.load == 3
+      check ends[0].id.load == uint64(id)
+      check ends[0].reason.load == ord(ecNotAuthorised)
+      check ends[0].thread.load != getThreadId()
       check evaluations("subscribe-event") == 3
       setScript()
       check publish(PolicyChangedName, policyChanged(2, 3))
       publishRaw(cstring(Changed), payload)
-      check reaches(addr seen[0], (if ended: 3 else: 4))
-      check evaluations("subscribe-event") == (if ended: 3 else: 4)
+      settled()
+      # Ended, it is neither delivered to nor decided again, and reported
+      # once.
+      check seen[0].count.load == 3
+      check evaluations("subscribe-event") == 3
+      check ends[0].count.load == 1
+      # [IF l.1482] Its unsubscribe is LOGOS_OK once; then the id names no
+      # active subscription.
+      check h.unsubscribe(id) == ecOk
+      check h.unsubscribe(id) == ecInvalidParams
       # A new subscription, allowed again, delivers.
       var id2: LogosSubscriptionId
       check h.subscribe(addr seen[1], id2) == ecOk
       publishRaw(cstring(Changed), payload)
       check reaches(addr seen[1], 1)
-      check reaches(addr seen[0], (if ended: 3 else: 5))
+      check seen[0].count.load == 3
+      # [IF l.1479; P3 ruling 1] A subscribe-event decision that cannot be
+      # established ends it too, with NOT_AUTHORISED.
+      setScript(rule(vStatus, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(3, 4))
+      publishRaw(cstring(Changed), payload)
+      check reported(addr ends[0], 2)
+      check seen[1].count.load == 1
+      check ends[0].id.load == uint64(id2)
+      check ends[0].reason.load == ord(ecNotAuthorised)
+      setScript()
       h.release()
+      e.finish()
+
+    test "[IFC-0669] [TXT-0087] [IMPL-DECISION G225] an end with no registration is not reported later; release waits for a running subscription-end report and suppresses one not begun":
+      let e = fixtureEngine(config(extra = @[dmeterStatic]))
+      resetDeferred()
+      discard e.started(dmeter())
+      let (_, rc) = e.startClient()
+      clearEnds()
+      let payload = encodeCbor(parseDiag("{\"value\": 7}").get)
+      # [IF l.1481] Ended while no registration is installed: never reported.
+      var h = rc.handle(rc.routeId("k"))
+      var id: LogosSubscriptionId
+      check h.subscribe(addr seen[0], id) == ecOk
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(0, 1))
+      publishRaw(cstring(Changed), payload)
+      settled()
+      sleep(200) # over local transport the end arrives on the wire
+      check seen[0].count.load == 0
+      check h.observeSubEnd(addr ends[0]) == ecOk
+      check h.unsubscribe(id) == ecOk
+      settled()
+      check ends[0].count.load == 0
+      # [IF l.1484] A report that is running: release waits for it.
+      setScript()
+      check publish(PolicyChangedName, policyChanged(1, 2))
+      check h.subscribe(addr seen[1], id) == ecOk
+      ends[0].hold.store(true)
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(2, 3))
+      publishRaw(cstring(Changed), payload)
+      check waitUntil(
+        proc(): bool =
+          ends[0].running.load
+      )
+      var j = Job(route: addr h)
+      var t: Thread[ptr Job]
+      createThread(t, releases, addr j)
+      check j.stillRunning()
+      ends[0].hold.store(false)
+      joinThread(t)
+      check ends[0].count.load == 1
+      # A report that has not begun when the handle is released never runs.
+      setScript()
+      check publish(PolicyChangedName, policyChanged(3, 4))
+      var h2 = rc.handle(rc.routeId("k"))
+      check h2.observeSubEnd(addr ends[1]) == ecOk
+      check h2.subscribe(addr seen[2], id) == ecOk
+      setReportDelayForTests(1500)
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(4, 5))
+      publishRaw(cstring(Changed), payload)
+      sleep(300) # over local transport the end arrives on the wire
+      h2.release()
+      sleep(1700)
+      settled()
+      check ends[1].count.load == 0
+      check not ends[1].running.load
+      setReportDelayForTests(0)
+      setScript()
       e.finish()

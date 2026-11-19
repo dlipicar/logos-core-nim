@@ -245,6 +245,9 @@ type
     userData: pointer
     outId: ptr LogosSubscriptionId
     active, paused, gone: bool
+    ended: bool
+      ## [SPEC TRANSPORT l.752-756; DECISIONS G225] the provider ended it:
+      ## `unsubscribe` answers LOGOS_OK once
     keep: bool ## gone, and its unsubscriber frees it, not its drain
     subscribing, unsubscribing: ptr Outcome
     head, tail: ptr QEvent
@@ -329,12 +332,15 @@ type
     jkComplete
     jkSubmit
     jkClosed
+    jkSubEnd ## [G225] one subscription-end report (`subId`, `reason`)
 
   Job = object
     kind: JobKind
     link: ptr HLink
     sub: ptr LSub
     call: ptr HAsync
+    subId: uint64
+    reason: ErrorCode
 
   Workers = object
     ch: Channel[Job]
@@ -815,6 +821,45 @@ proc onSubscription(l: ptr HLink, ev: IoEvent) =
         post(Job(kind: jkDrain, link: l, sub: s))
     return
 
+proc onSubscriptionEnd(l: ptr HLink, ev: IoEvent) =
+  ## Under `cl`: [SPEC TRANSPORT l.752-756; INTERFACE l.1472-1482; DECISIONS
+  ## G225] as `engine.linkSubscriptionEnd`: the provider ended an active
+  ## subscription (the session checked it). No handler of it begins from now
+  ## on, its queued Events go, and the handle reports the end on a host
+  ## worker when a registration is installed now. An Unsubscribe still
+  ## pending gets its result from the provider (l.755); otherwise the
+  ## subscription stays on the handle, ended, so `unsubscribe` answers
+  ## LOGOS_OK once.
+  var s = l.subs
+  while s != nil and s.id != ev.subscriptionId:
+    s = s.next
+  if s == nil or not s.active:
+    return
+  s.active = false
+  s.ended = true
+  while s.head != nil:
+    let e = s.head
+    s.head = e.next
+    release(l, e.credit)
+    freeText(e.name)
+    freeBytes(e.data, e.len)
+    freeShared(e)
+  s.tail = nil
+  if l.subEnd.owed:
+    retainLocked(l)
+    post(
+      Job(
+        kind: jkSubEnd,
+        link: l,
+        subId: s.id,
+        reason:
+          if ev.subscriptionFailure.isSome:
+            ev.subscriptionFailure.get.code
+          else:
+            ecModule,
+      )
+    )
+
 proc onEvent(l: ptr HLink, ev: sink IoEvent) =
   ## Under `cl`: [SPEC RUNTIME l.1184; plan §2.7] an Event, queued while its
   ## subscription is active (also while an Unsubscribe is pending, in case it
@@ -898,6 +943,8 @@ proc consumerEvent(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: []
       done = l.onClosed(ev)
     of IoEventKind.evSubscription:
       l.onSubscription(ev)
+    of IoEventKind.evSubscriptionEnd:
+      l.onSubscriptionEnd(ev)
     of IoEventKind.evEvent:
       l.onEvent(ev)
     else:
@@ -1088,6 +1135,13 @@ proc runJob(j: Job) =
     dropLink(j.link)
   of jkClosed:
     reportClosed(j.link)
+    dropLink(j.link)
+  of jkSubEnd:
+    # [SPEC INTERFACE l.1478, l.1484] Once, unless the release suppressed it
+    # first; a release waiting for it is woken.
+    discard j.link.subEnd.report(LogosSubscriptionId(j.subId), j.reason)
+    withLock cl:
+      broadcast(cc)
     dropLink(j.link)
   of jkComplete:
     runCompletion(j.call)
@@ -1431,28 +1485,39 @@ proc routeUnsubscribeOp(
     return status(failureOf(a))
   let o = newOutcome()
   var s: ptr LSub
+  var ended = false
   withLock cl:
-    var p = l.subs
-    while p != nil:
-      if p.id == uint64(id) and p.active and not p.paused:
-        s = p
+    var p = addr l.subs
+    while p[] != nil:
+      let x = p[]
+      if x.id == uint64(id) and x.ended and x.unsubscribing == nil:
+        # [SPEC INTERFACE l.1482; G225] The provider ended it: LOGOS_OK once.
+        p[] = x.next
+        x.gone = true
+        x.keep = true
+        s = x
+        ended = true
         break
-      p = p.next
-    if s != nil:
+      if x.id == uint64(id) and x.active and not x.paused:
+        s = x
+        break
+      p = addr x.next
+    if s != nil and not ended:
       s.paused = true
       s.unsubscribing = o
   if s == nil:
     freeOutcome(o)
     return status(ecInvalidParams, "no active subscription of this handle has that id")
-  var cmd = IoCommand(conn: l.num, kind: IoCommandKind.cmdUnsubscribe, subId: s.id)
-  if submitCmd(cmd) != sbOk:
-    withLock cl:
-      if s.unsubscribing == o:
-        s.unsubscribing = nil
-        s.paused = false
-        o.failLocked(ecNotReady, "the transport is stopping")
-  waitFor(o)
-  if o.ok:
+  if not ended:
+    var cmd = IoCommand(conn: l.num, kind: IoCommandKind.cmdUnsubscribe, subId: s.id)
+    if submitCmd(cmd) != sbOk:
+      withLock cl:
+        if s.unsubscribing == o:
+          s.unsubscribing = nil
+          s.paused = false
+          o.failLocked(ecNotReady, "the transport is stopping")
+    waitFor(o)
+  if ended or o.ok:
     # Gone from the handle: no handler of it runs on another thread when this
     # returns; one running on this thread keeps it until it returns.
     let me = getThreadId()
@@ -1543,10 +1608,11 @@ proc routeObserveEndOp(
   LogosResult()
 
 proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
-  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1503-1506, §5.2 l.3895-3897] As
-  ## `bindings.routeReleaseOp`: subscriptions abandoned, no callback begins
-  ## after the release, one running on another thread is waited for; the
-  ## logical route and the calls prepared through the handle stay.
+  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1484, l.1503-1506, §5.2 l.3895-3897]
+  ## As `bindings.routeReleaseOp`: subscriptions abandoned, no callback or
+  ## subscription-end report begins after the release, one running on another
+  ## thread is waited for; the logical route and the calls prepared through
+  ## the handle stay.
   bindingEnter()
   let l = linkOf(route)
   if l == nil:
@@ -1561,6 +1627,11 @@ proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
     if l.obs == obScheduled or l.obs == obInstalled:
       l.obs = obSuppressed
     while l.obs == obRunning and l.obsRunner != me:
+      wait(cc, cl)
+    # [SPEC INTERFACE l.1484; G225] No subscription-end report begins after
+    # this, and a running one is waited for.
+    l.subEnd.suppress()
+    while l.subEnd.busy:
       wait(cc, cl)
     while l.subs != nil:
       let s = l.subs
