@@ -195,8 +195,9 @@ proc init(
     publishes += 1
   kitInit(input, outContext)
 
-proc publishRaw*(name: cstring, payload: openArray[byte]) =
-  ## The module's own publish callback, as its code would call it.
+proc publishRaw*(name: cstring, payload: openArray[byte]): CErrorCode {.discardable.} =
+  ## The module's own publish callback, as its code would call it, and the
+  ## status it returns.
   let f = cast[LogosPublishFn](publishFn.load)
   f(
     publishData.load,

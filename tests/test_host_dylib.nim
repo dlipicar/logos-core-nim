@@ -93,6 +93,9 @@ proc torDestroysSeen(): cint {.importc: "tor_destroys_seen", cdecl.}
 proc torAutostartDone(): cint {.importc: "tor_autostart_done", cdecl.}
 proc torStartedCode(i: cint): cint {.importc: "tor_started_code", cdecl.}
 proc torShutdownRuntime(): cint {.importc: "tor_shutdown_runtime", cdecl.}
+proc torPublish(
+  name: cstring, data: ptr uint8, len: csize_t
+): cint {.importc: "tor_publish", cdecl.}
 
 let
   repo = currentSourcePath().parentDir.parentDir
@@ -387,6 +390,20 @@ suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
     var r: HhResult
     hhWaitEnd(r)
     check r.ec == ecOk
+    check call(hhDestroy, rt).ec == ecOk
+
+  test "[RUN-0242] [TXT-0569] a C module's publish callback returns the publisher's status":
+    # [SPEC INTERFACE §5.2; RUNTIME §7.3; DECISIONS I105] Called from C through
+    # the `logos_publish_fn` typedef: a refused publication is INVALID_PARAMS.
+    torReset(TorPlain)
+    let rt = registered(deployment())
+    check call(hhStart, rt).ec == ecOk
+    var payload = [0xA0'u8]
+    check torPublish(nil, addr payload[0], 1) == ord(ecInvalidParams)
+    check torPublish("", addr payload[0], 1) == ord(ecInvalidParams)
+    check torPublish("orchestrator.changed_event", nil, 0) == ord(ecInvalidParams)
+    check call(hhRequestShutdown, rt).ec == ecOk
+    check call(hhWaitForShutdown, rt).ec == ecOk
     check call(hhDestroy, rt).ec == ecOk
 
   test "[CFG-0063] [CFG-0068] [G141] [IMPL-DECISION G190] a provisioned value reaches a direct_dynamic configured kit as the orchestration instance starts":

@@ -1,9 +1,8 @@
 ## lcn-gen: the canonical C type headers of an accepted Logos schema set or
-## module binding (INTERFACE §2, §2.1-§2.3, §2.5, §3.2; C mapping revision 3),
+## module binding (INTERFACE §2, §2.1-§2.3, §2.5, §3.2; C mapping revision 4),
 ## `logos_types.h` (§5.2) and `logos_runtime.h` (RUNTIME §13): C types, method
 ## typedefs and, for a module binding, its provider functions and module
-## symbols (§2.4, §2.6). Every header is stamped PROVISIONAL ABI. In the other
-## direction, `lcn-gen cddl` reconstructs the schema documents and the module
+## symbols (§2.4, §2.6). In the other direction, `lcn-gen cddl` reconstructs the schema documents and the module
 ## binding of an explicit C header set (INTERFACE §3; DECISIONS G321).
 
 import std/[os, parseopt, strutils]
@@ -28,7 +27,7 @@ Usage:
                [--live-reconfiguration]]
   lcn-gen calls [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
                 [--interface:FILE]... [--supporting:FILE]...
-  lcn-gen cddl [--out:DIR] [--system] [--module:NAME | --subject:NS] [--header]
+  lcn-gen cddl [--out:DIR] [--system] (--module:NAME | --subject:NS) [--header]
                [LOGICAL=]HEADER...
 
 logos-types  writes DIR/logos_types.h
@@ -59,9 +58,9 @@ cddl         reads exactly the C headers named, without a preprocessor, and
              writes DIR/<namespace>.cddl for each document it reconstructs
              (INTERFACE §3); prints the module binding. An include resolves
              against the logical names of those headers only; a header's
-             logical name is LOGICAL, or else its file name. Without
-             --module or --subject, the set must hold one module, or one
-             document
+             logical name is LOGICAL, or else its file name. The subject
+             is input, never inferred: --module or --subject names it
+             exactly
 
 --import-prefix:P  how Nim output imports this library (default: """ &
   SdkImportRoot & """)
@@ -265,6 +264,9 @@ proc main(): int =
       return fail("cddl takes headers, not --interface or --supporting\n" & usage)
     if module.len > 0 and subject.len > 0:
       return fail("--module and --subject exclude each other\n" & usage)
+    # [SPEC INTERFACE §3.2 l.2245] The subject is mapper input, never inferred.
+    if module.len == 0 and subject.len == 0:
+      return fail("cddl needs --module or --subject\n" & usage)
     if headers.len == 0:
       return fail("no header\n" & usage)
     reverse(

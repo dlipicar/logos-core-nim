@@ -331,19 +331,25 @@ proc publishOp*(
     eventName: cstring,
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
-) {.cdecl.} =
-  ## [SPEC RUNTIME §7.3, §7.4; INTERFACE §2.8] The publish callback every
-  ## execution attempt gets. Every admitted handler returns before it does; a
-  ## publication that cannot be delivered is recorded as a diagnostic and
-  ## dropped, since the callback has no result (RUNTIME l.1227).
+): CErrorCode {.cdecl.} =
+  ## [SPEC RUNTIME §7.3, §7.4; INTERFACE §2.8, §5.2] The publish callback every
+  ## execution attempt gets. Every admitted handler returns before it does. A
+  ## failure for one subscriber route is recorded as a diagnostic and drops
+  ## the event for that route only (RUNTIME l.1148-1149).
+  ## [DECISIONS I105, interim until re-pin P3] The result: INVALID_PARAMS for
+  ## a null user data, an event name that fails INTERFACE §1.5 and a null or
+  ## empty payload, LOGOS_OK otherwise; P3 adds the check against the publisher's own
+  ## contracts (INTERFACE l.3351).
   bindingEnter()
   let a = cast[ptr AttemptServices](userData)
   if a == nil:
-    return
+    # [SPEC INTERFACE §5.2 l.3351; DECISIONS I105] a call without the
+    # `publish_user_data` this Runtime gave is the caller's error
+    return CErrorCode(ord(ecInvalidParams))
   let e = a.engine
   let name = checkEventName(eventName).valueOr:
-    e.diagnose("a publication from " & $a.instance & " was dropped: " & describe(error))
-    return
+    e.diagnose("a publication from " & $a.instance & " was refused: " & describe(error))
+    return CErrorCode(ord(ecInvalidParams))
   if name in [GrantChangedName, PolicyChangedName]:
     # [SPEC CA §8; RUNTIME l.1660-1667; I85] Under the Capability Authority
     # policy the authority's notices go to the Runtime thread on the
@@ -363,12 +369,12 @@ proc publishOp*(
       )
     )
     if consumed.admitted:
-      return
+      return CErrorCode(ord(ecOk))
   if cborData == nil or cborDataLen == 0:
     e.diagnose(
-      "a publication of " & name & " from " & $a.instance & " was dropped: no payload"
+      "a publication of " & name & " from " & $a.instance & " was refused: no payload"
     )
-    return
+    return CErrorCode(ord(ecInvalidParams))
   let bytes = view(cborData, cborDataLen)
   let reply = e.call(
     Request(
@@ -444,6 +450,7 @@ proc publishOp*(
         )
         stopped = sent == SubmitResult.sbStopped
     drop(blob)
+  CErrorCode(ord(ecOk))
 
 # A hosted publisher (part 4b-3.2; plan §2.7) ------------------------------------------
 #

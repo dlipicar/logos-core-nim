@@ -32,6 +32,9 @@
 ##   `unsubscribe <slot> <id>`;
 ## - `observe-end <slot> <tag>`, the end appended to `ends` as
 ##   `<tag> <code>`;
+## - `sub-end <slot or rc> <tag or null>`: `observe_subscription_end` on that
+##   route handle or the probe's binding, with a null handler for `null`; a
+##   reported end would be appended to `subends` as `<tag> <id> <code>`;
 ## - `prepare <slot> <call> <method> <hex params> <timeout ms or ->`, its
 ##   completion appended to `done` as `<call> <code> <hex value or message>`;
 ##   `submit <call>`, `cancel <call>`, `release-call <call>`;
@@ -186,6 +189,13 @@ proc onRouteEnd(reason: CErrorCode, userData: pointer) {.cdecl.} =
   let t = cast[ptr Tag](userData)
   t.probe.note("ends", t.label & " " & $int64(reason))
 
+proc onSubEnd(
+    id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+) {.cdecl.} =
+  kitEnter()
+  let t = cast[ptr Tag](userData)
+  t.probe.note("subends", t.label & " " & $id & " " & $int64(reason))
+
 proc onDone(
     userData: pointer,
     res: LogosResult,
@@ -271,6 +281,15 @@ proc command(p: ptr Probe, line: string): string =
       if h.vtable == nil:
         return "no route"
       return resultLine(h.vtable.observeEnd(h, onRouteEnd, p.newTag(w[2])))
+    of "sub-end":
+      let handler: LogosSubscriptionEndHandler = (if w[2] == "null": nil else: onSubEnd)
+      if w[1] == "rc":
+        return
+          resultLine(p.rc.vtable.observeSubscriptionEnd(p.rc, handler, p.newTag(w[2])))
+      let h = addr p.routes[parseInt(w[1])]
+      if h.vtable == nil:
+        return "no route"
+      return resultLine(h.vtable.observeSubscriptionEnd(h, handler, p.newTag(w[2])))
     of "prepare":
       let h = addr p.routes[parseInt(w[1])]
       if h.vtable == nil:

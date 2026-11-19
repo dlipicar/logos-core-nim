@@ -306,14 +306,16 @@ lcn.carrier_rc_link_result = {
 
 ; One operation through the handle `link`, admitted before anything is sent
 ; on its connection: `op` 0 a call (`name`, the method), 1 a subscribe
-; (`name`, the event), 2 an unsubscribe, 3 an `observe_end` installation.
+; (`name`, the event), 2 an unsubscribe, 3 an `observe_end` installation,
+; 4 an `observe_subscription_end` registration (refused only on a terminal
+; handle; the host keeps the registration).
 ; `closed`: the host's connection ended with that code and the Runtime has
 ; not been told yet (`rc_link_closed`).
 lcn.carrier_rc_link_admit = {
   kind: "rc_link_admit",
   id: uint64,
   link: uint64,
-  op: uint8, ; 0 to 3; any other value is refused as MODULE_ERROR
+  op: uint8, ; 0 to 4; any other value is refused as MODULE_ERROR
   ? name: bstr, ; the module's bytes, checked by the Runtime as given
   ? closed: uint8,
 }

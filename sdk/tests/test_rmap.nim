@@ -16,6 +16,7 @@ import logos_sdk/hash/hashinput
 import logos_sdk/cbor
 import ./support/ccompile, logos_sdk/testing/specdata
 from ./support/genfixtures import nimFixtures, rcPrimary, rcSupporting
+from logos_sdk/iface/cmap import CMappingRevision
 
 const outDir = "build/rmap"
 
@@ -726,7 +727,7 @@ proc accepted(
     checkpoint r.error
   r.get
 
-proc rebuilt(sources: openArray[HeaderSource], opts = RmapOptions()): Reconstruction =
+proc rebuilt(sources: openArray[HeaderSource], opts: RmapOptions): Reconstruction =
   let r = reconstruct(sources, opts)
   if r.isErr:
     checkpoint $r.error
@@ -734,7 +735,7 @@ proc rebuilt(sources: openArray[HeaderSource], opts = RmapOptions()): Reconstruc
     return Reconstruction()
   r.get
 
-proc refusal(sources: openArray[HeaderSource], opts = RmapOptions()): RejectReason =
+proc refusal(sources: openArray[HeaderSource], opts: RmapOptions): RejectReason =
   ## The reason the set is rejected: no document comes back (INTERFACE §3.9.5
   ## l.2941).
   let r = reconstruct(sources, opts)
@@ -822,7 +823,11 @@ proc roundTrip(
   let cs = s.get.cSchemaSet
   let h = contractHeader(cs).get
   var o = RmapOptions(system: system)
-  if cs.module.isNone:
+  # [SPEC INTERFACE §3.2 l.2245] The subject is input: S's module, else its
+  # primary document's namespace.
+  if cs.module.isSome:
+    o.module = cs.module.get
+  else:
     o.subject = s.get.primary.model.namespace
   let r = reconstruct(one(h), o)
   if r.isErr:
@@ -901,6 +906,24 @@ let
   )
   types393 = generated(cddl393)
 
+# [SPEC INTERFACE §3.2 l.2245] The subject is mapper input, never inferred (M3):
+# every reconstruction below names it, from this table of what the fixtures
+# hold, or with `byModule` / `bySubject` where a test builds its own header.
+func byModule(name: string): RmapOptions =
+  RmapOptions(module: name)
+
+func bySubject(namespace: string): RmapOptions =
+  RmapOptions(subject: namespace)
+
+let
+  meterModule = byModule("meter_module") # h391, cddl391
+  sensorModule = byModule("sensor_module") # h392, mod392, a sensor binding
+  storageModule = byModule("storage_module") # `halves`, the §2.4 and §3.3 mirrors
+  demoModule = byModule("demo_module") # `module(body)`
+  demoSubject = bySubject("demo") # a `demo` document without `_module`
+  xSubject = bySubject("x") # `getNode` and the hand-written `x` headers
+  recursiveSubject = bySubject("recursive") # h393, cddl393, types393
+
 suite "ifc.c-reverse: validation, repeats and packaging (INTERFACE §3.2)":
   test "T1.6 [IFC-0799] [IFC-0800] every body is validated before a repeat is suppressed, behind an include guard or a declared identity":
     let s = getNode.replace("INCLUDES", "#include \"types.h\"\n#include \"types.h\"\n")
@@ -952,7 +975,7 @@ suite "ifc.c-reverse: validation, repeats and packaging (INTERFACE §3.2)":
 
   test "T1.8 [IFC-0786] [IFC-0787] [IFC-0819] one header, reusable headers included by two providers, any logical prefix: the same documents":
     let whole = generated(mod392, [ifc392], [sup392])
-    let single = rebuilt(one(whole))
+    let single = rebuilt(one(whole), sensorModule)
     let supH = generated(sup392)
     let ifaceH = generated(ifc392)
     let provider = whole
@@ -980,32 +1003,41 @@ suite "ifc.c-reverse: validation, repeats and packaging (INTERFACE §3.2)":
 suite "ifc.c-reverse: checks in the frame (INTERFACE §2, §3.2)":
   test "T2.6 [IFC-0601] the revision check may be omitted; a supplied one must agree":
     let h = generated(cddl391)
-    let want = rebuilt(one(h391)).roots
-    check rebuilt(one(h)).roots == want
-    check rebuilt(
-      one(swapped(h, "LOGOS_C_MAPPING_REVISION != 3u", "LOGOS_C_MAPPING_REVISION != 3"))
-    ).roots == want
+    let want = rebuilt(one(h391), meterModule).roots
+    check rebuilt(one(h), meterModule).roots == want
+    let revision = "LOGOS_C_MAPPING_REVISION != " & $CMappingRevision
+    check rebuilt(one(swapped(h, revision & "u", revision)), meterModule).roots == want
     check refusal(
       one(
-        swapped(h, "LOGOS_C_MAPPING_REVISION != 3u", "LOGOS_C_MAPPING_REVISION != 4u")
-      )
+        swapped(
+          h,
+          revision & "u",
+          "LOGOS_C_MAPPING_REVISION != " & $(CMappingRevision - 1) & "u",
+        )
+      ),
+      meterModule,
     ) == rkRevisionCheck
 
   test "T2.7 [IFC-0607] the context checks may be omitted; supplied ones must name the pinned context and compare with 1":
     let h = generated(cddl391)
     let marker = contextMarkers()[0]
-    check refusal(one(swapped(h, marker, marker[0 ..^ 2] & "1"))) == rkContextCheck
-    check refusal(one(swapped(h, marker & " != 1", marker & " != 2"))) == rkContextCheck
+    check refusal(one(swapped(h, marker, marker[0 ..^ 2] & "1")), meterModule) ==
+      rkContextCheck
+    check refusal(one(swapped(h, marker & " != 1", marker & " != 2")), meterModule) ==
+      rkContextCheck
 
   test "T2.8 [IFC-0608] [IFC-0804] [IFC-0805] [IFC-0806] checks never change identity; a disagreeing identity is rejected":
     let h = generated(cddl391)
-    check rebuilt(one(withoutChecks(h))).roots == rebuilt(one(h)).roots
-    check rebuilt(one(h391)).roots == rebuilt(one(h)).roots # no checks, no guards
+    check rebuilt(one(withoutChecks(h)), meterModule).roots ==
+      rebuilt(one(h), meterModule).roots
+    check rebuilt(one(h391), meterModule).roots == rebuilt(one(h), meterModule).roots
+      # no checks, no guards
     let r2 = h.split("ROOT_2 0x")[1][0 ..< 16]
-    check refusal(one(swapped(h, r2, "fedcba9876543210"))) == rkIdentity
+    check refusal(one(swapped(h, r2, "fedcba9876543210")), meterModule) == rkIdentity
     # the checked and the defined literals must agree too
     let checked = "ROOT_2 != 0x" & r2
-    check refusal(one(swapped(h, checked, "ROOT_2 != 0xfedcba9876543210"))) == rkIdentity
+    check refusal(one(swapped(h, checked, "ROOT_2 != 0xfedcba9876543210")), meterModule) ==
+      rkIdentity
 
   test "T2.11 [IFC-0893] [IFC-0785] declaration placement and the linkage wrapper do not matter":
     let event =
@@ -1013,30 +1045,32 @@ suite "ifc.c-reverse: checks in the frame (INTERFACE §2, §3.2)":
     let name = "const char* logos_meter_module_MODULE_name(void);\n"
     let moved = swapped(swapped(h391, event, ""), name, "") & event
     let reordered = name & moved
-    check rebuilt(one(reordered)).roots == rebuilt(one(h391)).roots
+    check rebuilt(one(reordered), meterModule).roots ==
+      rebuilt(one(h391), meterModule).roots
     let h = generated(cddl391)
     let bare = swapped(
       swapped(h, "#ifdef __cplusplus\nextern \"C\" {\n#endif\n", ""),
       "#ifdef __cplusplus\n}\n#endif\n",
       "",
     )
-    let a = rebuilt(one(h))
-    let b = rebuilt(one(bare))
+    let a = rebuilt(one(h), meterModule)
+    let b = rebuilt(one(bare), meterModule)
     check a.roots == b.roots
     check a.module == b.module
     check a.header == b.header
 
 suite "ifc.c-reverse: literals in headers (INTERFACE §3.5)":
   test "T3.4 [IFC-0845] [IFC-0871] equivalent literal spellings keep the scalar, the model and the identity":
-    let want = rebuilt(one(h392)).roots
+    let want = rebuilt(one(h392), sensorModule).roots
     for spelling in [
       "\"sen\" \"sor\"", "\"\\163ensor\"", "\"\\x73\" \"ensor\"", "(\"sensor\")",
       "/* c */ \"sensor\"",
     ]:
       checkpoint spelling
-      check rebuilt(one(swapped(h392, "\"sensor\"", spelling))).roots == want
+      check rebuilt(one(swapped(h392, "\"sensor\"", spelling)), sensorModule).roots ==
+        want
     let ints = generated("demo.k = { a: 7, b: -2, c: true }\n")
-    let base = rebuilt(one(ints)).roots
+    let base = rebuilt(one(ints), demoSubject).roots
     for (field, generatedForm, spelling) in [
       ("A", "UINT64_C(7)", "7"),
       ("A", "UINT64_C(7)", "07"),
@@ -1053,54 +1087,63 @@ suite "ifc.c-reverse: literals in headers (INTERFACE §3.5)":
     ]:
       let m = "#define LOGOS_LITERAL_demo_K_" & field & " "
       checkpoint m & spelling
-      check rebuilt(one(swapped(ints, m & generatedForm, m & spelling))).roots == base
+      check rebuilt(one(swapped(ints, m & generatedForm, m & spelling)), demoSubject).roots ==
+        base
 
   test "T3.4 [IFC-0347] a missing literal macro, one of the wrong scalar type, one naming another arm":
     let flag = generated("demo.flag = \"on\" / \"off\"\n")
     check refusal(
-      one(swapped(flag, "#define LOGOS_LITERAL_demo_Flag_AR_On \"on\"\n", ""))
+      one(swapped(flag, "#define LOGOS_LITERAL_demo_Flag_AR_On \"on\"\n", "")),
+      demoSubject,
     ) == rkLiteralMissing
     check refusal(
       one(
         swapped(
           flag, "LOGOS_LITERAL_demo_Flag_AR_On ", "LOGOS_LITERAL_demo_Flag_AR_Of "
         )
-      )
+      ),
+      demoSubject,
     ) == rkLiteralMissing
     let ints = generated("demo.k = { a: 7 }\n")
-    check refusal(one(swapped(ints, "UINT64_C(7)", "\"7\""))) == rkLiteralKind
+    check refusal(one(swapped(ints, "UINT64_C(7)", "\"7\"")), demoSubject) ==
+      rkLiteralKind
     # A map field without its macro reads as a plain field of another schema: the
     # root macros the header keeps then reject it.
     check refusal(
-      one(swapped(ints, "#define LOGOS_LITERAL_demo_K_A UINT64_C(7)\n", ""))
+      one(swapped(ints, "#define LOGOS_LITERAL_demo_K_A UINT64_C(7)\n", "")),
+      demoSubject,
     ) == rkIdentity
 
 suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3.7)":
   test "T4.1 [IFC-0298] [IFC-0820] [IFC-0821] [IFC-0822] [IFC-0918] one group and no constant: the role and namespace are inferred":
-    let m = rebuilt(one(h391))
+    let m = rebuilt(one(h391), meterModule)
     check m.module == Opt.some("meter_module")
     check m.primary.get.role == srModule
     let i = rebuilt(
       one(
         "typedef logos_result_t (*logos_a_NS_b_Ping_FN_t)(\n" &
           "    logos_module_context_t* module,\n    logos_response_owner_t* response_owner\n);\n"
-      )
+      ),
+      bySubject("a.b"),
     )
     check i.module.isNone
     check i.primary.get.role == srInterface
     check i.primary.get.namespace == "a.b"
-    let s = rebuilt(one("typedef uint64_t logos_a_b_Value_t;\n"))
+    let s = rebuilt(one("typedef uint64_t logos_a_b_Value_t;\n"), bySubject("a_b"))
     check s.primary.get.role == srSupporting
     check s.primary.get.namespace == "a_b"
     # a declaration of another namespace makes a second group: no inference
     check refusal(
-      one("typedef uint64_t logos_a_b_Value_t;\ntypedef uint64_t logos_a_c_Value_t;\n")
+      one("typedef uint64_t logos_a_b_Value_t;\ntypedef uint64_t logos_a_c_Value_t;\n"),
+      bySubject("a_b"),
     ) == rkRoleConstant
 
   test "T4.2 [IFC-0611] a constant may be left out only where inference applies; a types-only interface needs its own":
     let types = "typedef uint64_t logos_a_b_Value_t;\n"
-    check rebuilt(one(types)).primary.get.role == srSupporting
-    let i = rebuilt(one("#define LOGOS_INTERFACE_NAMESPACE_a_b \"a_b\"\n" & types))
+    check rebuilt(one(types), bySubject("a_b")).primary.get.role == srSupporting
+    let i = rebuilt(
+      one("#define LOGOS_INTERFACE_NAMESPACE_a_b \"a_b\"\n" & types), bySubject("a_b")
+    )
     check i.primary.get.role == srInterface
     check refusal(
       one(swapped(h395, "#define LOGOS_INTERFACE_NAMESPACE_a_NS_b \"a.b\"\n", "")),
@@ -1109,20 +1152,23 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
 
   test "T4.3 [IFC-0302] [IFC-0303] [IFC-0304] [IFC-0823] [IFC-0824] [IFC-0859] explicit constants are accepted and checked; lifecycle symbols never override them":
     let explicit = "#define LOGOS_PRIMARY_NAMESPACE_meter_module \"meter\"\n" & h391
-    check rebuilt(one(explicit)).roots == rebuilt(one(h391)).roots
+    check rebuilt(one(explicit), meterModule).roots ==
+      rebuilt(one(h391), meterModule).roots
     # the primary constant's module component is the family's
     check refusal(
-      one("#define LOGOS_PRIMARY_NAMESPACE_other_module \"meter\"\n" & h391)
+      one("#define LOGOS_PRIMARY_NAMESPACE_other_module \"meter\"\n" & h391),
+      meterModule,
     ) == rkModuleName
     # an explicit interface role stays one beside a lifecycle family
     let iface =
       "#define LOGOS_INTERFACE_NAMESPACE_meter \"meter\"\n" &
       "#define LOGOS_IMPLEMENTS_meter_module_INDEX0 \"meter\"\n" & h391
-    let r = rebuilt(one(iface))
+    let r = rebuilt(one(iface), meterModule)
     check r.primary.isNone
     check r.interfaces.len == 1 and r.interfaces[0].role == srInterface
-    check refusal(one("#define LOGOS_INTERFACE_NAMESPACE_meter \"meter\"\n" & h391)) ==
-      rkMissingImplements
+    check refusal(
+      one("#define LOGOS_INTERFACE_NAMESPACE_meter \"meter\"\n" & h391), meterModule
+    ) == rkMissingImplements
 
   test "T4.4 [IFC-0306] [IFC-0307] an incomplete namespace group":
     check refusal(
@@ -1132,26 +1178,32 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
           "struct logos_recursive_Right_MAP {\n    bool                         has_left;\n    const logos_recursive_Left_t* left;\n};\n",
           "",
         )
-      )
+      ),
+      recursiveSubject,
     ) == rkIncompleteGroup
-    check refusal(one("typedef logos_x_Missing_t logos_x_V_t;\n")) == rkIncompleteGroup
+    check refusal(one("typedef logos_x_Missing_t logos_x_V_t;\n"), xSubject) ==
+      rkIncompleteGroup
 
   test "T4.5 [IFC-0306] [IFC-0308] two conflicting definitions of one qualified name; an identical repeat is no conflict":
-    check refusal(one("typedef uint64_t logos_x_V_t;\ntypedef uint32_t logos_x_V_t;\n")) ==
-      rkConflictingDefinition
-    check rebuilt(one("typedef uint64_t logos_x_V_t;\ntypedef uint64_t logos_x_V_t;\n")).roots ==
-      rebuilt(one("typedef uint64_t logos_x_V_t;\n")).roots
+    check refusal(
+      one("typedef uint64_t logos_x_V_t;\ntypedef uint32_t logos_x_V_t;\n"), xSubject
+    ) == rkConflictingDefinition
+    check rebuilt(
+      one("typedef uint64_t logos_x_V_t;\ntypedef uint64_t logos_x_V_t;\n"), xSubject
+    ).roots == rebuilt(one("typedef uint64_t logos_x_V_t;\n"), xSubject).roots
     check refusal(
       one(
         "#define LOGOS_LITERAL_x_V UINT64_C(1)\n#define LOGOS_LITERAL_x_V UINT64_C(2)\n" &
           "typedef uint64_t logos_x_V_t;\n"
-      )
+      ),
+      xSubject,
     ) == rkConflictingDefinition
     check refusal(
       one(
         "typedef struct logos_x_V_MAP {\n    uint64_t a;\n} logos_x_V_t;\n" &
           "typedef struct logos_x_V_LIST {\n    const uint64_t* items;\n    size_t count;\n} logos_x_V_t;\n"
-      )
+      ),
+      xSubject,
     ) == rkConflictingDefinition
 
   test "T4.6 [IFC-0306] [IFC-0309] a method half without its method":
@@ -1160,7 +1212,7 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
       dropped(h, "typedef logos_result_t (*logos_storage_Resolve_FN_t)("),
       "logos_result_t logos_storage_module_CALL_storage_Resolve(",
     )
-    check refusal(one(noFn)) == rkHalfMissing
+    check refusal(one(noFn), storageModule) == rkHalfMissing
 
   test "T4.7 [IFC-0306] [IFC-0310] a missing required or a conflicting role constant":
     check refusal(
@@ -1168,7 +1220,8 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
         swapped(
           h392, "#define LOGOS_PRIMARY_NAMESPACE_sensor_module \"sensor.control\"\n", ""
         )
-      )
+      ),
+      sensorModule,
     ) == rkRoleConstant
     check refusal(
       one(h395 & "#define LOGOS_SUPPORTING_NAMESPACE_a_NS_b \"a.b\"\n"),
@@ -1176,8 +1229,9 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
     ) == rkRoleConstant
 
   test "T4.8 [IFC-0306] [IFC-0311] a role constant whose value, projection, prefix or role does not match its group":
-    check refusal(one(swapped(h392, "\"sensor.control\"", "\"sensor.runtime\""))) ==
-      rkRoleMismatch
+    check refusal(
+      one(swapped(h392, "\"sensor.control\"", "\"sensor.runtime\"")), sensorModule
+    ) == rkRoleMismatch
     check refusal(
       one(
         swapped(
@@ -1197,20 +1251,24 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
     ) == rkRoleMismatch
 
   test "T4.9 [IFC-0306] [IFC-0828] inconsistent runtime module names in one module reconstruction":
-    check refusal(one(h391 & "const char* logos_other_module_MODULE_name(void);\n")) ==
-      rkModuleName
+    check refusal(
+      one(h391 & "const char* logos_other_module_MODULE_name(void);\n"), meterModule
+    ) == rkModuleName
 
   test "T4.10 [IFC-0306] [IFC-0312] an implements constant without one complete matching interface group":
     check refusal(
-      one(swapped(h392, "INDEX0 \"metrics_provider\"", "INDEX0 \"metrics_types\""))
+      one(swapped(h392, "INDEX0 \"metrics_provider\"", "INDEX0 \"metrics_types\"")),
+      sensorModule,
     ) == rkImplements
     check refusal(
-      one(swapped(h392, "INDEX0 \"metrics_provider\"", "INDEX0 \"nothing\""))
+      one(swapped(h392, "INDEX0 \"metrics_provider\"", "INDEX0 \"nothing\"")),
+      sensorModule,
     ) == rkImplements
 
   test "T4.11 [IFC-0306] [IFC-0829] a duplicate implemented interface":
     check refusal(
-      one(h392 & "#define LOGOS_IMPLEMENTS_sensor_module_INDEX1 \"metrics_provider\"\n")
+      one(h392 & "#define LOGOS_IMPLEMENTS_sensor_module_INDEX1 \"metrics_provider\"\n"),
+      sensorModule,
     ) == rkDuplicateImplements
 
   test "T4.12 [IFC-0306] [IFC-0313] a provider function of a non-primary contract without its implements constant":
@@ -1220,16 +1278,19 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
           h392, "#define LOGOS_IMPLEMENTS_sensor_module_INDEX0 \"metrics_provider\"\n",
           "",
         )
-      )
+      ),
+      sensorModule,
     ) == rkMissingImplements
 
   test "T4.13 [IFC-0306] [IFC-0314] a supporting group with a method or an event":
-    check refusal(one("#define LOGOS_SUPPORTING_NAMESPACE_meter \"meter\"\n" & h391)) ==
-      rkSupportingCallable
+    check refusal(
+      one("#define LOGOS_SUPPORTING_NAMESPACE_meter \"meter\"\n" & h391), meterModule
+    ) == rkSupportingCallable
     check refusal(
       one(
         "typedef struct logos_x_Done_event_EVENT {\n    uint64_t v;\n} logos_x_Done_event_t;\n#define LOGOS_SUPPORTING_NAMESPACE_x \"x\"\n"
-      )
+      ),
+      xSubject,
     ) == rkSupportingCallable
 
   test "T4.14 [IFC-0306] [IFC-0830] a supporting group supplied as a dependency and not referenced":
@@ -1266,11 +1327,12 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
       .mapIt(it.namespace) == @["recursive"]
 
   test "T4.15 [IFC-0306] [IFC-0305] [IFC-0316] implements indices: contiguous from 0, in ascending raw root order":
-    check refusal(one(swapped(h392, "INDEX0", "INDEX1"))) == rkImplementsIndex
+    check refusal(one(swapped(h392, "INDEX0", "INDEX1")), sensorModule) ==
+      rkImplementsIndex
     let second =
       "_interface = \"other_iface\"\nother_iface.go_request = {}\nother_iface.go_response = {}\n"
     let (b, h) = boundHeader("two_module", [ifc392, second])
-    check rebuilt(one(h)).interfaces.mapIt(it.contract.root) ==
+    check rebuilt(one(h), byModule("two_module")).interfaces.mapIt(it.contract.root) ==
       b.interfaces.mapIt(it.root)
     let n0 = "INDEX0 \"" & b.interfaces[0].model.namespace & "\""
     let n1 = "INDEX1 \"" & b.interfaces[1].model.namespace & "\""
@@ -1279,7 +1341,7 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
       .replace(n1, n0.replace("INDEX0", "INDEX1"))
       .replace("@@", n1.replace("INDEX1", "INDEX0"))
     check swappedOrder != h
-    check refusal(one(swappedOrder)) == rkImplementsIndex
+    check refusal(one(swappedOrder), byModule("two_module")) == rkImplementsIndex
 
   test "T4.16 [IFC-0306] [IFC-0317] look-alike names and the dotted and underscored namespaces never collide":
     # The §2.1 projections are injective and each inline stem is derived from one
@@ -1299,10 +1361,11 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
           h392, "LOGOS_IMPLEMENTS_sensor_module_INDEX0",
           "LOGOS_IMPLEMENTS_other_module_INDEX0",
         )
-      )
+      ),
+      sensorModule,
     ) == rkModuleName
     let (b, h) = boundHeader("sensor_module", [ifc392])
-    let r = rebuilt(one(h))
+    let r = rebuilt(one(h), sensorModule)
     check r.primary.isNone
     check r.interfaces.mapIt(it.contract.root) == b.interfaces.mapIt(it.root)
     check "_module" notin r.interfaces[0].cddl and
@@ -1335,45 +1398,61 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
   test "T4.18 [IFC-0858] [IFC-0860] [IFC-0788] [IFC-0789] [IFC-0790] module names decoded, a lifecycle-only module, selection and the retained binding":
     for name in ["a__b", "a_", "a___b_"]:
       check roundTrip(module(ping, name))
-      check rebuilt(one(generated(module(ping, name)))).module == Opt.some(name)
+      check rebuilt(one(generated(module(ping, name))), byModule(name)).module ==
+        Opt.some(name)
     let bare =
       "const char* logos_bare_module_MODULE_name(void);\n" &
       "logos_result_t logos_bare_module_MODULE_init(const logos_module_init_input_t* input, logos_module_context_t** out_context);\n" &
       "void logos_bare_module_MODULE_destroy(logos_module_context_t* module);\n"
-    let r = rebuilt(one(bare))
+    let r = rebuilt(one(bare), byModule("bare_module"))
     check r.module == Opt.some("bare_module")
     check r.primary.isNone and r.interfaces.len == 0 and r.supporting.len == 0
     # [IMPL-DECISION G322] provider symbols on a module that is not a provider
     let withProvider =
       bare & "const uint8_t* logos_bare_module_MODULE_call_surface(size_t* out_len);\n" &
       "void logos_bare_module_MODULE_free(logos_module_context_t* m, void* p);\n"
-    check rebuilt(one(withProvider)).module == Opt.some("bare_module")
-    check refusal(one(swapped(withProvider, "size_t* out_len", "size_t out_len"))) ==
-      rkLifecycle
+    check rebuilt(one(withProvider), byModule("bare_module")).module ==
+      Opt.some("bare_module")
+    check refusal(
+      one(swapped(withProvider, "size_t* out_len", "size_t out_len")),
+      byModule("bare_module"),
+    ) == rkLifecycle
     # the 3.9.2 header: the module with its documents, or one document alone
-    let m = rebuilt(one(h392))
+    let m = rebuilt(one(h392), sensorModule)
     check m.module == Opt.some("sensor_module")
     check m.primary.get.namespace == "sensor.control"
     check m.interfaces.mapIt(it.namespace) == @["metrics_provider"]
     check m.supporting.mapIt(it.namespace) == @["metrics_types"]
     let i = rebuilt(one(h392), RmapOptions(subject: "metrics_provider"))
     check i.module.isNone and i.primary.get.namespace == "metrics_provider"
-    check rebuilt(one(h392 & h395)).module == Opt.some("sensor_module")
+    check rebuilt(one(h392 & h395), sensorModule).module == Opt.some("sensor_module")
     check rebuilt(one(h392 & h395), RmapOptions(subject: "a.b")).primary.get.namespace ==
       "a.b"
-    check refusal(one(h395)) == rkSelection
-    check refusal(one(h392), RmapOptions(module: "nothing_module")) == rkSelection
+
+  test "T4.18b [IFC-0971] [IFC-0972] [TXT-0055] the subject is mapper input: none, or one that matches no supplied document, is refused (INTERFACE §3.2 l.2244-2245)":
+    # one module family, one document group, several: never inferred
+    check refusal(one(h391), RmapOptions()) == rkSelection
+    check refusal(one(generated(sup392)), RmapOptions()) == rkSelection
+    check refusal(one(h395), RmapOptions()) == rkSelection
+    # exact names: a selection names a supplied document or is refused
+    check refusal(one(h392), byModule("nothing_module")) == rkSelection
+    check refusal(one(h392), bySubject("sensor.other")) == rkSelection
+    check refusal(one(h392), bySubject("sensor_control")) == rkSelection
+    # [G318] a subject that is a module's primary document reconstructs the
+    # module its own `_module` names
+    check rebuilt(one(h392), bySubject("sensor.control")).module ==
+      Opt.some("sensor_module")
 
   test "T4.19 [IFC-0876] [IFC-0877] [IFC-0878] [IFC-0879] [IFC-0881] the §3.9.2 cases":
-    let whole = rebuilt(one(h392))
+    let whole = rebuilt(one(h392), sensorModule)
     # each document alone, and as a dependency of the module
-    check rebuilt(one(generated(sup392))).primary.get.contract.root ==
+    check rebuilt(one(generated(sup392)), bySubject("metrics_types")).primary.get.contract.root ==
       whole.supporting[0].contract.root
     check rebuilt(one(generated(ifc392)), RmapOptions(subject: "metrics_provider")).primary.get.contract.root ==
       whole.interfaces[0].contract.root
     # the interface-only provider
     let (b, h) = boundHeader("sensor_module", [ifc392])
-    let r = rebuilt(one(h))
+    let r = rebuilt(one(h), sensorModule)
     check r.primary.isNone
     check r.interfaces.mapIt(it.contract.root) == @[accepted(ifc392).primary.root]
     check r.header == h
@@ -1384,13 +1463,13 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
       "typedef logos_result_t (*logos_metrics_provider_Snapshot_FN_t)(\n" &
       "    logos_module_context_t* module,\n    logos_response_owner_t* response_owner,\n" &
       "    uint64_t*               out_count\n);\n"
-    let a = rebuilt(one(alone))
+    let a = rebuilt(one(alone), bySubject("metrics_provider"))
     check a.module.isNone
     check a.primary.get.contract.root == accepted(ifc392).primary.root
     # events only, a types-only primary with an implemented interface, lifecycle only
     let events = "_interface = \"ev\"\nev.ticked_event = { n: uint64 }\n"
     let (_, eh) = boundHeader("ev_module", [events])
-    check rebuilt(one(eh)).interfaces.mapIt(it.contract.root) ==
+    check rebuilt(one(eh), byModule("ev_module")).interfaces.mapIt(it.contract.root) ==
       @[accepted(events).primary.root]
     let typesOnly = rebuilt(
       one(
@@ -1399,20 +1478,34 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
             toHex(accepted(ifc392).primary.root) & "']\n" & "t.v = uint64\n",
           [ifc392],
         )
-      )
+      ),
+      byModule("t_module"),
     )
     check typesOnly.primary.get.namespace == "t"
     check typesOnly.interfaces.len == 1
     let (_, lh) = boundHeader("bare_module")
-    let l = rebuilt(one(lh))
+    let l = rebuilt(one(lh), byModule("bare_module"))
     check l.primary.isNone and l.interfaces.len == 0
 
-  test "T4.20 [IFC-0884] [IFC-0885] the §3.9.5 pair: either namespace as the subject; the renamed constant is rejected":
-    let a = rebuilt(one(h395), RmapOptions(subject: "a.b"))
-    check a.primary.get.namespace == "a.b" and a.primary.get.role == srInterface
-    check a.supporting.len == 0
-    let b = rebuilt(one(h395), RmapOptions(subject: "a_b"))
-    check b.primary.get.namespace == "a_b" and b.primary.get.role == srSupporting
+  test "T4.20 [IFC-0975] [IFC-0885] the §3.9.5 pair: each namespace as the subject, alone or together; the renamed constant is rejected":
+    # [SPEC INTERFACE §3.9.5 l.2936] Neither document depends on the other, so
+    # exactly its dependency set is its own declarations.
+    let onlyDotted = h395.splitLines.filterIt("a_NS_b" in it).join("\n") & "\n"
+    let onlyFlat = h395.splitLines.filterIt("a_NS_b" notin it).join("\n") & "\n"
+    check "a_b" notin onlyDotted.replace("a_NS_b", "") and "a_NS_b" notin onlyFlat
+    for (text, ns, role) in [
+      (onlyDotted, "a.b", srInterface),
+      (onlyFlat, "a_b", srSupporting),
+      (h395, "a.b", srInterface),
+      (h395, "a_b", srSupporting),
+    ]:
+      checkpoint ns
+      let r = rebuilt(one(text), RmapOptions(subject: ns))
+      check r.primary.get.namespace == ns and r.primary.get.role == role
+      check r.supporting.len == 0
+    # Each exact namespace selects only itself (IFC-0972).
+    check refusal(one(onlyDotted), RmapOptions(subject: "a_b")) == rkSelection
+    check refusal(one(onlyFlat), RmapOptions(subject: "a.b")) == rkSelection
     check refusal(
       one(
         swapped(
@@ -1423,7 +1516,7 @@ suite "ifc.c-reverse: groups, roles and the module binding (INTERFACE §3.2, §3
     ) == rkRoleMismatch
 
 suite "ifc.c-reverse: method typedefs and provider functions (INTERFACE §3.3)":
-  test "T5.1 [IFC-0327] [IFC-0328] [IFC-0329] the §3.3 provider prototype, completed, reconstructs the §3.3 request and response":
+  test "T5.1 [IFC-0973] [IFC-0328] [IFC-0329] the §3.3 provider prototype, completed, reconstructs the §3.3 request and response":
     let source = module(mirror("IFC/2.4.upload_url.cddl"), "storage_module")
     let h = generated(source)
     let fragment = mirror("IFC/3.3.upload_url.h")
@@ -1435,48 +1528,51 @@ suite "ifc.c-reverse: method typedefs and provider functions (INTERFACE §3.3)":
     check inH == render(call)
     # the fragment completes the header the same CDDL generates
     let completed = dropped(h, "logos_result_t " & call.name & "(") & fragment
-    let r = rebuilt(one(completed))
+    let r = rebuilt(one(completed), storageModule)
     let spec = accepted(module(mirror("IFC/3.3.upload_url.cddl"), "storage_module"))
     check r.primary.get.contract.root == spec.primary.root
 
   test "T5.2 [IFC-0320] [IFC-0831] [IFC-0832] the method typedef and provider function patterns":
     let h = generated(module(mirror("IFC/2.4.upload_url.cddl"), "storage_module"))
-    check rebuilt(one(h)).primary.isSome
+    check rebuilt(one(h), storageModule).primary.isSome
     check refusal(
       one(
         swapped(
           h, "logos_response_owner_t* response_owner", "logos_response_owner_t* owner"
         )
-      )
+      ),
+      storageModule,
     ) == rkFunction
-    check refusal(one(swapped(h, "logos_response_owner_t* response_owner,\n", ""))) ==
-      rkFunction
+    check refusal(
+      one(swapped(h, "logos_response_owner_t* response_owner,\n", "")), storageModule
+    ) == rkFunction
     check refusal(
       one(
         swapped(
           h, "typedef logos_result_t (*logos_storage_Upload_url_FN_t)",
           "typedef int32_t (*logos_storage_Upload_url_FN_t)",
         )
-      )
+      ),
+      storageModule,
     ) == rkFunction
 
   test "T5.3 [IFC-0322] [IFC-0323] in_ and out_ prefixes, inputs before outputs":
     let h = generated(module(mirror("IFC/2.4.upload_url.cddl"), "storage_module"))
     let ordered = swapped(
-      h,
-      "    uint64_t in_chunk_size,\n    const char* in_url,\n    bool* out_accepted\n",
-      "    uint64_t in_chunk_size,\n    bool* out_accepted,\n    const char* in_url\n",
+      h, "    const char* in_url,\n    const char** out_cid\n",
+      "    const char** out_cid,\n    const char* in_url\n",
     )
-    check refusal(one(ordered)) == rkParamOrder
-    check refusal(one(swapped(h, "in_url", "url"))) == rkParamOrder
+    check refusal(one(ordered), storageModule) == rkParamOrder
+    check refusal(one(swapped(h, "in_url", "url")), storageModule) == rkParamOrder
 
   test "T5.4 [IFC-0324] [IFC-0325] a choice wrapper mixed with flattened parameters, or a choice no wrapper consumes":
     let h = generated(halves)
-    check rebuilt(one(h)).primary.isSome
+    check rebuilt(one(h), storageModule).primary.isSome
     check refusal(
       one(
         swapped(h, "const logos_storage_Resolve_request_t* in_request", "uint64_t in_x")
-      )
+      ),
+      storageModule,
     ) == rkWrapper
     check refusal(
       one(
@@ -1484,7 +1580,8 @@ suite "ifc.c-reverse: method typedefs and provider functions (INTERFACE §3.3)":
           h, "const logos_storage_Resolve_request_t* in_request,",
           "const logos_storage_Resolve_request_t* in_request,\n    uint64_t in_zz,",
         )
-      )
+      ),
+      storageModule,
     ) == rkWrapper
 
   test "T5.5 [IFC-0326] a provider function that differs from its typedef":
@@ -1492,34 +1589,48 @@ suite "ifc.c-reverse: method typedefs and provider functions (INTERFACE §3.3)":
     let call = "logos_storage_module_CALL_storage_Upload_url("
     let a = h.find(call)
     let mutated = h[0 ..< a] & h[a .. ^1].replace("in_chunk_size", "in_chunk")
-    check refusal(one(mutated)) == rkProviderMismatch
+    check refusal(one(mutated), storageModule) == rkProviderMismatch
 
   test "T5.6 [IFC-0330] [IFC-0331] [IFC-0332] [IFC-0333] parameter order, unmatched members, the presence pairs":
     let h = generated(allForms)
-    check rebuilt(one(h)).primary.isSome
+    check rebuilt(one(h), demoModule).primary.isSome
     check refusal(
       one(
         swapped(
           h, "    uint32_t in_a,\n    bool in_has_b,\n    const char* in_b,\n",
           "    bool in_has_b,\n    const char* in_b,\n    uint32_t in_a,\n",
         )
-      )
+      ),
+      demoModule,
     ) == rkFieldOrder
-    check refusal(one(swapped(h, "    size_t in_d_len,\n", ""))) == rkMember
-    check refusal(one(swapped(h, "    size_t* out_h_count,\n", ""))) == rkMember
-    check refusal(one(swapped(h, "uint32_t* out_a", "uint32_t out_a"))) == rkMember
-    check refusal(one(swapped(h, "bool in_has_b", "uint32_t in_has_b"))) == rkPresence
-    check refusal(one(swapped(h, "bool* out_has_b", "bool out_has_b"))) == rkPresence
+    check refusal(one(swapped(h, "    size_t in_d_len,\n", "")), demoModule) == rkMember
+    check refusal(one(swapped(h, "    size_t* out_h_count,\n", "")), demoModule) ==
+      rkMember
+    check refusal(one(swapped(h, "uint32_t* out_a", "uint32_t out_a")), demoModule) ==
+      rkMember
+    check refusal(one(swapped(h, "bool in_has_b", "uint32_t in_has_b")), demoModule) ==
+      rkPresence
+    check refusal(one(swapped(h, "bool* out_has_b", "bool out_has_b")), demoModule) ==
+      rkPresence
     check refusal(
       one(
         swapped(h, "    bool in_has_b,\n", "    bool in_has_b,\n    bool in_has_zz,\n")
-      )
+      ),
+      demoModule,
     ) == rkPresence
 
   test "T5.7 [IFC-0833] [IFC-0834] [IFC-0902] module-C decoded (a_Ub rejected), in_class_ rejected, underscored module names kept":
-    check refusal(one(swapped(h391, "meter_module", "a_Ub"))) == rkName
+    check refusal(
+      one(
+        "#define LOGOS_PRIMARY_NAMESPACE_a_Ub \"meter\"\n" &
+          swapped(h391, "meter_module", "a_Ub")
+      ),
+      bySubject("meter"),
+    ) == rkName
     let h = generated(allForms)
-    check refusal(one(swapped(h, "uint8_t in_class,", "uint8_t in_class_,"))) == rkEscape
+    check refusal(
+      one(swapped(h, "uint8_t in_class,", "uint8_t in_class_,")), demoModule
+    ) == rkEscape
     for name in ["single_module", "a__b", "a_", "a___b_"]:
       check roundTrip(module(ping, name))
 
@@ -1535,7 +1646,7 @@ suite "ifc.c-reverse: method typedefs and provider functions (INTERFACE §3.3)":
       check ("(*logos_demo_" & m & "_FN_t)") in h
       check ("logos_x_module_CALL_demo_" & m & "(") in h
     check "logos_x_module_MODULE_init(" in h and "logos_x_module_MODULE_destroy(" in h
-    let r = rebuilt(one(h))
+    let r = rebuilt(one(h), byModule("x_module"))
     check r.primary.get.contract.root == accepted(source).primary.root
     var methods: seq[string]
     for d in r.primary.get.contract.model.declarations:
@@ -1545,12 +1656,12 @@ suite "ifc.c-reverse: method typedefs and provider functions (INTERFACE §3.3)":
 
 suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4-§3.6, §3.9.9-§3.9.10)":
   test "T6.1 [IFC-0335] [IFC-0336] the §3.4 struct reconstructs the §3.4 map":
-    let r = rebuilt(one(mirror("IFC/3.4.space_info.h")))
+    let r = rebuilt(one(mirror("IFC/3.4.space_info.h")), bySubject("storage"))
     check r.primary.get.contract.root ==
       accepted(mirror("IFC/3.4.space_info.cddl")).primary.root
 
   test "T6.2 [IFC-0349] [IFC-0350] the §3.6 event struct reconstructs the §3.6 event":
-    let r = rebuilt(one(mirror("IFC/3.6.event.h")))
+    let r = rebuilt(one(mirror("IFC/3.6.event.h")), bySubject("storage"))
     check r.primary.get.role == srInterface
     check r.primary.get.contract.root ==
       accepted("_interface = \"storage\"\n" & mirror("IFC/3.6.event.cddl")).primary.root
@@ -1564,7 +1675,8 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
           h391, reading,
           "    uint64_t    value;\n    bool        has_label;\n    const char* label;\n",
         )
-      )
+      ),
+      meterModule,
     ) == rkFieldOrder
     check refusal(
       one(
@@ -1572,17 +1684,19 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
           h391, reading,
           "    const char* label;\n    bool        has_label;\n    uint64_t    value;\n",
         )
-      )
+      ),
+      meterModule,
     ) == rkPresence
     for bad in ["uint64_t a_len;", "uint64_t a_count;", "uint64_t a_5;", "bool has_;"]:
       checkpoint bad
       check refusal(
-        one("typedef struct logos_x_S_MAP {\n    " & bad & "\n} logos_x_S_t;\n")
+        one("typedef struct logos_x_S_MAP {\n    " & bad & "\n} logos_x_S_t;\n"),
+        xSubject,
       ) in {rkMember, rkPresence, rkEscape}
     let opt = "demo.x = { ? p: [uint64, tstr], ? e: [], n: [uint64, [uint64, bstr]] }\n"
     check roundTrip(opt)
     let h = generated(opt)
-    check refusal(one(swapped(h, "    uint64_t n_0;\n", ""))) == rkMember
+    check refusal(one(swapped(h, "    uint64_t n_0;\n", "")), demoSubject) == rkMember
       # a missing position
     check refusal(
       one(
@@ -1590,10 +1704,12 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
           h, "    logos_demo_X_N_TU1_t n_1;\n",
           "    bool has_n_1;\n    logos_demo_X_N_TU1_t n_1;\n",
         )
-      )
+      ),
+      demoSubject,
     ) == rkPresence # a presence flag on a later position
     check refusal(
-      one(swapped(h, "    uint64_t n_0;\n", "    uint64_t n_0;\n    uint64_t m;\n"))
+      one(swapped(h, "    uint64_t n_0;\n", "    uint64_t n_0;\n    uint64_t m;\n")),
+      demoSubject,
     ) in {rkMember, rkFieldOrder} # an interleaved field
     check roundTrip(allForms) # optional tuples as parameters, every field form
 
@@ -1607,7 +1723,7 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
       "typedef struct logos_x_A_MAP {\n    uint8_t _empty;\n    uint64_t b;\n} logos_x_A_t;\n",
     ]:
       checkpoint bad
-      check refusal(one(bad)) == rkAggregate
+      check refusal(one(bad), xSubject) == rkAggregate
     check roundTrip(
       "demo.e = {}\ndemo.t = []\ndemo.b = bstr .size 0\ndemo.u = { a: {} }\n"
     )
@@ -1623,7 +1739,7 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
       "demo.k = { class: uint64, class0: uint64, ? for: bstr, ? int: [* uint64], " &
       "? do: [uint64, tstr], ordinary: bool }\n"
     check roundTrip(k)
-    let r = rebuilt(one(generated(k)))
+    let r = rebuilt(one(generated(k)), demoSubject)
     check r.primary.get.contract.model.declarations[0].body.fields.mapIt(it.name) ==
       @["class", "class0", "do", "for", "int", "ordinary"]
 
@@ -1633,7 +1749,8 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
     ]:
       checkpoint bad
       check refusal(
-        one("typedef struct logos_x_S_MAP {\n    " & bad & "\n} logos_x_S_t;\n")
+        one("typedef struct logos_x_S_MAP {\n    " & bad & "\n} logos_x_S_t;\n"),
+        xSubject,
       ) == rkEscape
 
   test "T6.7 [IFC-0841] [IFC-0842] [IFC-0843] [IFC-0909] choices: forms, discriminants, constants, members, storage":
@@ -1662,34 +1779,38 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
         "arm_1",
       )
     check "arm_1" in indexed
-    check refusal(one(indexed)) == rkChoice
+    check refusal(one(indexed), demoModule) == rkChoice
     # symbolic form where indexed fallback is required
     let d = generated("demo.dup = \"a-b\" / \"a_b\"\n")
     let symbolic = d
       .replace("LOGOS_ARM_demo_Dup_CASE0", "LOGOS_ARM_demo_Dup_CASE_A_b")
       .replace("LOGOS_LITERAL_demo_Dup_AR0", "LOGOS_LITERAL_demo_Dup_AR_A_b")
-    check refusal(one(symbolic)) == rkChoice
+    check refusal(one(symbolic), demoSubject) == rkChoice
     check refusal(
       one(
         swapped(h, "LOGOS_ARM_demo_Num_CASE_Tstr 1u", "LOGOS_ARM_demo_Num_CASE_Tstr 2u")
-      )
+      ),
+      demoModule,
     ) == rkChoice # an out-of-range tag
     check refusal(
       one(
         swapped(h, "LOGOS_ARM_demo_Num_CASE_Tstr 1u", "LOGOS_ARM_demo_Num_CASE_Tstr 0u")
-      )
+      ),
+      demoModule,
     ) == rkChoice # a duplicate tag
-    check refusal(one(swapped(h, "#define LOGOS_ARM_demo_Num_CASE_Tstr 1u\n", ""))) ==
-      rkChoice # a missing tag
-    check refusal(one(swapped(h, "\"off-line\"", "\"off-lime\""))) == rkChoice
-      # a wrong literal
+    check refusal(
+      one(swapped(h, "#define LOGOS_ARM_demo_Num_CASE_Tstr 1u\n", "")), demoModule
+    ) == rkChoice # a missing tag
+    check refusal(one(swapped(h, "\"off-line\"", "\"off-lime\"")), demoModule) ==
+      rkChoice # a wrong literal
     check refusal(
       one(
         swapped(
           h, "typedef uint32_t logos_demo_Num_KIND_t;",
           "typedef uint16_t logos_demo_Num_KIND_t;",
         )
-      )
+      ),
+      demoModule,
     ) == rkChoice
     check refusal(
       one(
@@ -1697,11 +1818,13 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
           h, "typedef uint32_t logos_demo_Num_KIND_t;",
           "typedef int logos_demo_Num_KIND_t;",
         )
-      )
+      ),
+      demoModule,
     ) == rkOutsideSubset
     # an inconsistent support path
     check refusal(
-      one(h.replace("logos_demo_Shape_AR_Map_h_w_", "logos_demo_Shape_AR_Map_w_h_"))
+      one(h.replace("logos_demo_Shape_AR_Map_h_w_", "logos_demo_Shape_AR_Map_w_h_")),
+      demoModule,
     ) == rkPath
     # a union member a direct literal arm must omit
     let f = generated("demo.flag = \"on\" / \"off\"\n")
@@ -1711,13 +1834,14 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
           f, "    logos_demo_Flag_KIND_t kind;\n",
           "    logos_demo_Flag_KIND_t kind;\n    union {\n        const char* arm_On;\n    } value;\n",
         )
-      )
+      ),
+      demoSubject,
     ) == rkChoice
 
   test "T6.8 [IFC-0344] [IFC-0345] [IFC-0346] [IFC-0614] [IFC-0615] [IFC-0616] [IFC-0917] [IFC-0318] paths from containment; recursion":
     check roundTrip(paths)
     let h = generated(paths)
-    let r = rebuilt(one(h))
+    let r = rebuilt(one(h), demoSubject)
     check r.primary.get.contract.model.declarations.mapIt(it.name).sorted ==
       @["demo.deep", "demo.left", "demo.left_right", "demo.two"]
     # no path reaches an inline definition
@@ -1725,25 +1849,31 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
       one(
         h &
           "typedef struct logos_demo_Two_C_MAP {\n    uint64_t x;\n} logos_demo_Two_C_t;\n"
-      )
+      ),
+      demoSubject,
     ) == rkPath
     # a member typed as another path's inline type
     check refusal(
-      one(swapped(h, "    logos_demo_Two_B_t b;", "    logos_demo_Two_A_t b;"))
+      one(swapped(h, "    logos_demo_Two_B_t b;", "    logos_demo_Two_A_t b;")),
+      demoSubject,
     ) == rkPath
     # omitted steps, altered capitalization, a noncanonical index, a wrong family
-    check refusal(one(h.replace("logos_demo_Deep_A_LI_TU1_", "logos_demo_Deep_A_TU1_"))) ==
-      rkPath
-    check refusal(one(h.replace("logos_demo_Left_Right_", "logos_demo_Left_RIght_"))) ==
-      rkPath
+    check refusal(
+      one(h.replace("logos_demo_Deep_A_LI_TU1_", "logos_demo_Deep_A_TU1_")), demoSubject
+    ) == rkPath
+    check refusal(
+      one(h.replace("logos_demo_Left_Right_", "logos_demo_Left_RIght_")), demoSubject
+    ) == rkPath
     let t = generated("demo.x = { n: [uint64, [uint64, bstr]] }\n")
-    check refusal(one(t.replace("logos_demo_X_N_TU1_", "logos_demo_X_N_TU01_"))) ==
-      rkPath
-    check refusal(one(swapped(h, "logos_demo_Two_A_MAP", "logos_demo_Two_A_LIST"))) ==
-      rkAggregate
+    check refusal(
+      one(t.replace("logos_demo_X_N_TU1_", "logos_demo_X_N_TU01_")), demoSubject
+    ) == rkPath
+    check refusal(
+      one(swapped(h, "logos_demo_Two_A_MAP", "logos_demo_Two_A_LIST")), demoSubject
+    ) == rkAggregate
     # recursion: a required recursive pointer adds no optionality
     check roundTrip(kitchen)
-    let tree = rebuilt(one(generated(kitchen)))
+    let tree = rebuilt(one(generated(kitchen)), demoSubject)
     for d in tree.primary.get.contract.model.declarations:
       if d.name == "demo.tree":
         check d.body.fields.filterIt(it.name == "t")[0].optional == false
@@ -1755,20 +1885,23 @@ suite "ifc.c-reverse: structs, choices, events and paths (INTERFACE §2.1, §3.4
           "#define LOGOS_ARM_demo_Changed_event_CASE_Uint64 0u\n" &
           "typedef struct logos_demo_Changed_event_CHOICE {\n    logos_demo_Changed_event_KIND_t kind;\n" &
           "    union {\n        uint64_t arm_Uint64;\n    } value;\n} logos_demo_Changed_event_t;\n"
-      )
+      ),
+      demoSubject,
     ) == rkSchema
     check refusal(
-      one(mirror("IFC/3.6.event.h").replace("Upload_progress_event", "Upload_progress"))
+      one(mirror("IFC/3.6.event.h").replace("Upload_progress_event", "Upload_progress")),
+      bySubject("storage"),
     ) == rkEvent
     check refusal(
       one(
         "typedef struct logos_demo_Changed_event_LIST {\n    const uint64_t* items;\n    size_t count;\n" &
           "} logos_demo_Changed_event_t;\n"
-      )
+      ),
+      demoSubject,
     ) == rkEvent
 
 suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
-  test "T7.1 [IFC-0356] [IFC-0357] [IFC-0368] [IFC-0381] [IFC-0389] [IFC-0393] [IMPL-DECISION G158] S -> C -> S′ over the forward corpus and the IFC mirrors":
+  test "T7.1 [IFC-0356] [IFC-0357] [IFC-0368] [IFC-0381] [IFC-0389] [IFC-0393] [IFC-0974] S -> C -> S′ over the forward corpus and the IFC mirrors":
     check roundTrip(cddl391)
     check roundTrip(mod392, [ifc392], [sup392])
     check roundTrip(ifc392)
@@ -1786,6 +1919,16 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
     )
     check roundTrip("demo.node = { kids: [* demo.node], v: uint64 }\n")
     check roundTrip("demo.a = { bs: [* demo.b] }\ndemo.b = { a: demo.a }\n")
+    # [IFC-0974] a type used through a list before its complete definition
+    let listed = "demo.a = { bs: [* demo.b] }\ndemo.b = { v: uint64 }\n"
+    # [SPEC INTERFACE l.1046] before the list's use, B is either complete or
+    # forward-declared (the generator orders definitions, so here complete)
+    let lh = generated(listed)
+    let use = lh.find("const logos_demo_B_t*")
+    let complete = lh.find("} logos_demo_B_t;")
+    let fwd = lh.find("typedef struct logos_demo_B_MAP logos_demo_B_t;")
+    check use >= 0 and ((complete >= 0 and complete < use) or (fwd >= 0 and fwd < use))
+    check roundTrip(listed)
     check roundTrip(
       "demo.x = { code: logos.error_code, d: logos.error_detail, c: logos.schema_commitment }\n"
     )
@@ -1840,7 +1983,8 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
           check roundTrip(readFile(f.configuration))
 
   test "T7.2 [IFC-0366] the spec's §3.9.1 C block reconstructs the spec's §3.9.1 schema":
-    check rebuilt(one(h391)).primary.get.contract.root == accepted(cddl391).primary.root
+    check rebuilt(one(h391), meterModule).primary.get.contract.root ==
+      accepted(cddl391).primary.root
 
   test "T7.3 [IFC-0355] [IFC-0861] [IFC-0862] [IFC-0863] H -> (S, binding) -> H′ -> S″":
     let completed = block:
@@ -1849,12 +1993,12 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
         mirror("IFC/3.3.upload_url.h")
     let (_, bound1) = boundHeader("sensor_module", [ifc392])
     for (h, o) in [
-      (h391, RmapOptions()),
-      (h392, RmapOptions()),
-      (h393, RmapOptions()),
-      (completed, RmapOptions()),
-      (bound1, RmapOptions()),
-      (h395, RmapOptions(subject: "a.b")),
+      (h391, meterModule),
+      (h392, sensorModule),
+      (h393, recursiveSubject),
+      (completed, storageModule),
+      (bound1, sensorModule),
+      (h395, bySubject("a.b")),
     ]:
       let r = rebuilt(one(h), o)
       let again = rebuilt(one(r.header), o)
@@ -1862,12 +2006,12 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
       check again.module == r.module
       check again.header == r.header
     # H′ is the metadata-extended form: it has the role constant the input left out
-    let r391 = rebuilt(one(h391))
+    let r391 = rebuilt(one(h391), meterModule)
     check "LOGOS_PRIMARY_NAMESPACE_meter_module" notin h391
     check "#define LOGOS_PRIMARY_NAMESPACE_meter_module \"meter\"" in r391.header
     # and for §3.9.2 it holds the spec's block item by item
     var got: seq[string]
-    for it in parsedOk(rebuilt(one(h392)).header).items:
+    for it in parsedOk(rebuilt(one(h392), sensorModule).header).items:
       if it.kind == ciDocumentGuard:
         for c in it.children:
           got.add(render(c))
@@ -1879,8 +2023,9 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
 
   test "T7.4 [IFC-0873] the §3.9.1 header with its primary constant":
     check rebuilt(
-      one("#define LOGOS_PRIMARY_NAMESPACE_meter_module \"meter\"\n" & h391)
-    ).roots == rebuilt(one(h391)).roots
+      one("#define LOGOS_PRIMARY_NAMESPACE_meter_module \"meter\"\n" & h391),
+      meterModule,
+    ).roots == rebuilt(one(h391), meterModule).roots
 
   test "T7.5 [IFC-0868] an event with a choice body keeps its role, map arms and identity":
     let ev =
@@ -1894,10 +2039,10 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
   test "T7.6 [IFC-0003] [IFC-0004] [IMPL-DECISION G158] from either side: the same model, the same canonical C, the same CBOR bytes":
     let s = accepted(cddl391)
     let fromCddl = contractHeader(s.cSchemaSet).get
-    let r = rebuilt(one(h391)) # C first
+    let r = rebuilt(one(h391), meterModule) # C first
     check r.primary.get.contract.root == s.primary.root
     check r.header == fromCddl
-    let rs = rebuilt(one(fromCddl)) # CDDL first, then C
+    let rs = rebuilt(one(fromCddl), meterModule) # CDDL first, then C
     check rs.roots == r.roots and rs.header == r.header
     # a schema-typed value validates and encodes the same under S and S′
     let again = accepted(r.primary.get.cddl)
@@ -1913,23 +2058,28 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
     check validator(again).checkParams("read", bad).isErr
 
   test "T7.7 [IFC-0293] metadata only where the declarations cannot say it":
-    check rebuilt(one(h391)).primary.isSome # no constant at all
+    check rebuilt(one(h391), meterModule).primary.isSome # no constant at all
     check refusal(
-      one(h391 & "#define LOGOS_EVENT_NAME_meter_Changed \"meter.changed_event\"\n")
+      one(h391 & "#define LOGOS_EVENT_NAME_meter_Changed \"meter.changed_event\"\n"),
+      meterModule,
     ) == rkRestatedFact
-    check refusal(one(h391 & "#define LOGOS_LITERAL_meter_Reading_Extra UINT64_C(1)\n")) ==
-      rkRestatedFact
+    check refusal(
+      one(h391 & "#define LOGOS_LITERAL_meter_Reading_Extra UINT64_C(1)\n"), meterModule
+    ) == rkRestatedFact
 
   test "[IMPL-DECISION G319] every name is declared, and every by-value type complete, before its use":
     let fwds =
       "typedef struct logos_recursive_Left_MAP logos_recursive_Left_t;\n" &
       "typedef struct logos_recursive_Node_MAP logos_recursive_Node_t;\n" &
       "typedef struct logos_recursive_Right_MAP logos_recursive_Right_t;\n"
-    check refusal(one(swapped(h393, fwds, "") & fwds)) == rkDeclareOrder
+    check refusal(one(swapped(h393, fwds, "") & fwds), recursiveSubject) ==
+      rkDeclareOrder
     let branch =
       "typedef struct logos_recursive_Branch_MAP {\n    logos_recursive_Node_t node;\n} logos_recursive_Branch_t;\n"
-    check refusal(one(fwds & branch & swapped(swapped(h393, fwds, ""), branch, ""))) ==
-      rkDeclareOrder
+    check refusal(
+      one(fwds & branch & swapped(swapped(h393, fwds, ""), branch, "")),
+      recursiveSubject,
+    ) == rkDeclareOrder
 
   test "accepted inputs and every H′ compile as C17, C23, C++17, C++20 and C++23":
     var files: seq[(string, string)]
@@ -1939,7 +2089,7 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
     ]:
       files.add((n, h))
       includes.add("#include \"" & n & "\"\n")
-    let hp = rebuilt(one(generated(allForms))).header
+    let hp = rebuilt(one(generated(allForms)), demoModule).header
     files.add(("forms.h", hp))
     includes.add("#include \"forms.h\"\n")
     files.add(("all.h", includes))
@@ -1951,15 +2101,18 @@ suite "ifc.c-reverse: the §3.9.5 required rejections (INTERFACE §3.9.5)":
   let h394 = generated(halves)
 
   test "T8.1 [IFC-0395] [IFC-0306] [IFC-0838] C-DECL-WRONG-PRESENCE-TYPE":
-    check refusal(one(swapped(h391, "bool        has_label", "uint32_t    has_label"))) ==
-      rkPresence
+    check refusal(
+      one(swapped(h391, "bool        has_label", "uint32_t    has_label")), meterModule
+    ) == rkPresence
 
   test "T8.2 [IFC-0395] [IFC-0306] [IFC-0838] C-DECL-UNMATCHED-PRESENCE-MEMBER":
-    check refusal(one(swapped(h391, "    const char* label;\n", ""))) == rkPresence
+    check refusal(one(swapped(h391, "    const char* label;\n", "")), meterModule) ==
+      rkPresence
 
   test "T8.3 [IFC-0395] [IFC-0306] [IFC-0314] C-DECL-CONFLICTING-ROLE":
-    check refusal(one(h391 & "#define LOGOS_SUPPORTING_NAMESPACE_meter \"meter\"\n")) ==
-      rkSupportingCallable
+    check refusal(
+      one(h391 & "#define LOGOS_SUPPORTING_NAMESPACE_meter \"meter\"\n"), meterModule
+    ) == rkSupportingCallable
 
   test "T8.4 [IFC-0395] [IFC-0306] [IFC-0310] C-EXT-MISSING-PRIMARY":
     check refusal(
@@ -1967,12 +2120,14 @@ suite "ifc.c-reverse: the §3.9.5 required rejections (INTERFACE §3.9.5)":
         swapped(
           h392, "#define LOGOS_PRIMARY_NAMESPACE_sensor_module \"sensor.control\"\n", ""
         )
-      )
+      ),
+      sensorModule,
     ) == rkRoleConstant
 
   test "T8.5 [IFC-0395] [IFC-0306] [IFC-0311] C-EXT-BAD-PRIMARY-PROJECTION":
-    check refusal(one(swapped(h392, "\"sensor.control\"", "\"sensor.runtime\""))) ==
-      rkRoleMismatch
+    check refusal(
+      one(swapped(h392, "\"sensor.control\"", "\"sensor.runtime\"")), sensorModule
+    ) == rkRoleMismatch
 
   test "T8.6 [IFC-0395] [IFC-0306] [IFC-0310] C-EXT-MISSING-INTERFACE-ROLE":
     check refusal(
@@ -1982,7 +2137,8 @@ suite "ifc.c-reverse: the §3.9.5 required rejections (INTERFACE §3.9.5)":
           "#define LOGOS_INTERFACE_NAMESPACE_metrics_provider \"metrics_provider\"\n",
           "",
         )
-      )
+      ),
+      sensorModule,
     ) == rkRoleConstant
 
   test "T8.7 [IFC-0395] [IFC-0306] [IFC-0313] C-EXT-MISSING-IMPLEMENTS":
@@ -1992,15 +2148,18 @@ suite "ifc.c-reverse: the §3.9.5 required rejections (INTERFACE §3.9.5)":
           h392, "#define LOGOS_IMPLEMENTS_sensor_module_INDEX0 \"metrics_provider\"\n",
           "",
         )
-      )
+      ),
+      sensorModule,
     ) == rkMissingImplements
 
   test "T8.8 [IFC-0395] [IFC-0306] [IFC-0347] C-EXT-WRONG-LITERAL-TYPE":
-    check refusal(one(swapped(h392, "\"sensor\"", "7u"))) == rkLiteralKind
+    check refusal(one(swapped(h392, "\"sensor\"", "7u")), sensorModule) == rkLiteralKind
 
   test "T8.9 [IFC-0395] [IFC-0306] [IFC-0784] C-EXT-UNSUPPORTED-DOUBLE":
-    check refusal(one(h392 & "typedef double logos_sensor_NS_control_Temperature_t;\n")) ==
-      rkOutsideSubset
+    check refusal(
+      one(h392 & "typedef double logos_sensor_NS_control_Temperature_t;\n"),
+      sensorModule,
+    ) == rkOutsideSubset
 
   test "T8.10 [IFC-0395] [IFC-0306] [IFC-0318] C-RECURSIVE-EMBEDDED-SELF":
     check refusal(
@@ -2008,7 +2167,8 @@ suite "ifc.c-reverse: the §3.9.5 required rejections (INTERFACE §3.9.5)":
         swapped(
           h393, "const logos_recursive_Node_t* next;", "logos_recursive_Node_t next;"
         )
-      )
+      ),
+      recursiveSubject,
     ) == rkRecursiveEmbedded
 
   test "T8.11 [IFC-0395] [IFC-0306] [IFC-0318] C-RECURSIVE-POINTER-NONRECURSIVE":
@@ -2017,11 +2177,13 @@ suite "ifc.c-reverse: the §3.9.5 required rejections (INTERFACE §3.9.5)":
         swapped(
           h393, "logos_recursive_Node_t node;", "const logos_recursive_Node_t* node;"
         )
-      )
+      ),
+      recursiveSubject,
     ) == rkRecursivePointer
 
   test "T8.12 [IFC-0395] [IFC-0306] [IFC-0324] C-CHOICE-WRONG-WRAPPER-NAME (§3.9.4, generated)":
-    check refusal(one(swapped(h394, "in_request", "in_value"))) == rkWrapper
+    check refusal(one(swapped(h394, "in_request", "in_value")), storageModule) ==
+      rkWrapper
 
   test "T8.13 [IFC-0395] [IFC-0306] [IFC-0324] C-CHOICE-MIXED-REQUEST-FORM (§3.9.4, generated)":
     check refusal(
@@ -2030,7 +2192,8 @@ suite "ifc.c-reverse: the §3.9.5 required rejections (INTERFACE §3.9.5)":
           h394, "const logos_storage_Resolve_request_t* in_request,",
           "const logos_storage_Resolve_request_t* in_request,\n    uint64_t in_extra,",
         )
-      )
+      ),
+      storageModule,
     ) == rkWrapper
 
 # `lcn-gen cddl` ---------------------------------------------------------------------
@@ -2072,14 +2235,15 @@ proc fresh(name: string, files: openArray[(string, string)] = []): string =
     writeFile(result / n, t)
 
 suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
-  test "T9.1 [IMPL-DECISION G321] the command writes one .cddl per document and prints the binding":
+  test "T9.1 [IMPL-DECISION G321] [TXT-0055] the command writes one .cddl per document and prints the binding; it needs a selection":
     when deviceTarget:
       skip()
     else:
       let dir = fresh("t91", [("in/m.h", h392)])
-      let (output, code) = cli(["cddl", "--out:" & dir / "out", dir / "in/m.h"])
+      let (output, code) =
+        cli(["cddl", "--out:" & dir / "out", "--module:sensor_module", dir / "in/m.h"])
       check code == 0
-      let r = rebuilt(one(h392))
+      let r = rebuilt(one(h392), sensorModule)
       for d in [r.primary.get, r.interfaces[0], r.supporting[0]]:
         check readFile(dir / "out" / d.namespace & ".cddl") == d.cddl
       check toSeq(walkDir(dir / "out")).len == 3
@@ -2102,8 +2266,11 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
       check fileExists(d2 / "out/x.cddl") and fileExists(d2 / "out/recursive.cddl")
       check cli(["cddl", "--out:" & d2 / "no", "--subject:x", d2 / "a.h"])[1] == 1
       check not dirExists(d2 / "no")
-      # usage errors
+      # usage errors; the subject is input, never inferred (INTERFACE §3.2 l.2245)
       check cli(["cddl"])[1] == 1
+      let (unselected, failed) = cli(["cddl", "--out:" & dir / "none", dir / "in/m.h"])
+      check failed == 1 and "--module or --subject" in unselected
+      check not dirExists(dir / "none")
       check cli(["cddl", "--module:a", "--subject:b", dir / "in/m.h"])[1] == 1
       check cli(["cddl", "--interface:x.cddl", dir / "in/m.h"])[1] == 1
       check cli(["types", "--subject:b", "x.cddl"])[1] == 1
@@ -2115,7 +2282,15 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
     else:
       check "ROOT_0" notin h392
       let dir = fresh("t92", [("m.h", h392)])
-      check cli(["cddl", "--out:" & dir / "out", "--header", dir / "m.h"])[1] == 0
+      check cli(
+        [
+          "cddl",
+          "--out:" & dir / "out",
+          "--header",
+          "--module:sensor_module",
+          dir / "m.h",
+        ]
+      )[1] == 0
       let header = readFile(dir / "out/sensor_module_types.h")
       check "LOGOS_DOCUMENT_sensor_NS_control_ROOT_0" in header
       check cli(
@@ -2138,13 +2313,22 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
     else:
       let bad = swapped(h391, "bool        has_label", "uint32_t    has_label")
       let dir = fresh("t93", [("bad.h", bad)])
-      let (output, code) =
-        cli(["cddl", "--out:" & dir / "out", "--header", dir / "bad.h"])
+      let (output, code) = cli(
+        [
+          "cddl",
+          "--out:" & dir / "out",
+          "--header",
+          "--module:meter_module",
+          dir / "bad.h",
+        ]
+      )
       check code == 1
       check "[" & $rkPresence & "]" in output
       check not dirExists(dir / "out")
       createDir(dir / "kept")
-      check cli(["cddl", "--out:" & dir / "kept", dir / "bad.h"])[1] == 1
+      check cli(
+        ["cddl", "--out:" & dir / "kept", "--module:meter_module", dir / "bad.h"]
+      )[1] == 1
       check toSeq(walkDir(dir / "kept")).len == 0
 
   test "T9.4 [IFC-0625] [IMPL-DECISION G321] each documented limit, exceeded once, fails explicitly":
@@ -2152,7 +2336,8 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
       skip()
     else:
       proc refused(dir: string, files: openArray[string]) =
-        let (output, code) = cli(@["cddl", "--out:" & dir / "out"] & @files)
+        let (output, code) =
+          cli(@["cddl", "--out:" & dir / "out", "--subject:x"] & @files)
         check code == 1
         check "[" & $rkLimit & "]" in output
         check not dirExists(dir / "out")
@@ -2213,7 +2398,7 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
     let header = generated(doc)
     check doc.len <= MaxDocumentBytes
     check header.len > 1_048_576
-    let r = rebuilt(one(header))
+    let r = rebuilt(one(header), demoModule)
     check r.primary.get.contract.root == acceptedOne(doc).root
     check r.header == header
 
@@ -2239,7 +2424,7 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
     check count > 27_000
     let header = generated(doc)
     check header.len < MaxSetBytes
-    let r = rebuilt(one(header))
+    let r = rebuilt(one(header), byModule("d_module"))
     check r.primary.get.contract.root == acceptedOne(doc).root
     check r.header == header
 
@@ -2251,14 +2436,14 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
     let header = generated(doc)
     check doc.len <= MaxDocumentBytes
     check header.len > MaxSetBytes
-    check refusal(one(header)) == rkLimit
+    check refusal(one(header), demoModule) == rkLimit
 
   test "T9.7 [IFC-0356] [IMPL-DECISION G320] a document of exactly 1 MiB is printed without layout":
     let head = "_module=\"demo_module\"\ndemo.t={"
     let tail = ":uint8}\n"
     let doc = head & repeat('a', MaxDocumentBytes - head.len - tail.len) & tail
     check doc.len == MaxDocumentBytes
-    let r = rebuilt(one(generated(doc)))
+    let r = rebuilt(one(generated(doc)), demoModule)
     check r.primary.get.cddl == doc
     check r.primary.get.contract.root == acceptedOne(doc).root
 
@@ -2272,7 +2457,7 @@ suite "ifc.c-reverse: lcn-gen cddl (INTERFACE §3; G321)":
       )
     check ifaces.mapIt(it.len).foldl(a + b) <= MaxInputSetBytes
     let (b, header) = boundHeader("set_module", ifaces)
-    let r = rebuilt(one(header))
+    let r = rebuilt(one(header), byModule("set_module"))
     check r.module.get == "set_module"
     check r.interfaces.mapIt(it.contract.root) == b.interfaces.mapIt(it.root)
     check r.interfaces.allIt(it.cddl in ifaces)

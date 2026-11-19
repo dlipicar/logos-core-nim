@@ -501,6 +501,9 @@ type
       ## [I90] a synchronous call through a transported route handle: sent on
       ## its link, answered when the Response comes (`transported.nim`)
     rqObserveEnd ## a route handle's `observe_end`
+    rqSubEndAdmit
+      ## a route handle's `observe_subscription_end`: refused with a terminal
+      ## handle's retained code (DECISIONS I105)
     rqReleaseHandle ## a route handle's `release`
     rqRoutes ## every route record (observation for the host and tests)
     rqIdentity ## this Runtime's identity

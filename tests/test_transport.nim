@@ -31,6 +31,14 @@ let
 proc params(cid = "bafy"): CborValue =
   cborMap((cbor("cid"), cbor(cid)))
 
+proc progressData(session: string): CborValue =
+  ## `storage.upload_progress_event` data; `session` sets its size.
+  cborMap(
+    (cbor("session"), cbor(session)),
+    (cbor("bytes_sent"), cbor(1'u64)),
+    (cbor("bytes_total"), cbor(2'u64)),
+  )
+
 proc subtreeOf(declaration: string): Digest =
   let m = storage.primary.model
   declarationRoot(m, m.find(declaration).get)
@@ -1289,13 +1297,13 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     check evs.filterIt(it.kind == ceResponse).len == 1
     # An Event: the same, and no ceEvent.
     var (caller2, callee2) = pair()
-    active(caller2, callee2, 1, "storage.upload_done_event")
+    active(caller2, callee2, 1, "storage.upload_progress_event")
     discard caller2.request("exists", params()).get
     let ev = rawEvent(
       1,
-      "storage.upload_done_event",
-      cborMap((cbor("cid"), cbor(7'u64))),
-      PayloadCommitment(subtreeRoot: subtreeOf("storage.upload_done_event")),
+      "storage.upload_progress_event",
+      cborMap((cbor("session"), cbor(7'u64))),
+      PayloadCommitment(subtreeRoot: subtreeOf("storage.upload_progress_event")),
     )
     let evs2 = caller2.receive(ev)
     check evs2.filterIt(it.kind == ceEvent).len == 0
@@ -1503,7 +1511,6 @@ suite "trn.cancel: cancellation (TRANSPORT §6)":
     var (caller, callee) = pair()
     active(caller, callee, 1, "storage.upload_progress_event")
     active(caller, callee, 2, "storage.upload_progress_event")
-    active(caller, callee, 3, "storage.started_event")
     let progress = cborMap(
       (cbor("session"), cbor("s")),
       (cbor("bytes_sent"), cbor(1'u64)),
@@ -1511,6 +1518,9 @@ suite "trn.cancel: cancellation (TRANSPORT §6)":
     )
     let (a, ra) = caller.request("exists", params()).get
     discard callee.receive(ra)
+    # No subscription to an event: no Event.
+    check callee.publishScoped(a, "storage.started_event", cborMap()).get.len == 0
+    active(caller, callee, 3, "storage.started_event")
     # Every active subscription to that event on this connection, and no other.
     let frames = callee.publishScoped(a, "storage.upload_progress_event", progress).get
     check frames.len == 2
@@ -1520,9 +1530,8 @@ suite "trn.cancel: cancellation (TRANSPORT §6)":
       check e.commitment == commitmentOf("storage.upload_progress_event", progress)
       let evs = caller.receive(f)
       check evs[0].kind == ceEvent and evs[0].id == uint64(i + 1)
-    check callee.publishScoped(
-      a, "storage.upload_done_event", cborMap((cbor("cid"), cbor("c")))
-    ).get.len == 0
+    let started = callee.publishScoped(a, "storage.started_event", cborMap()).get
+    check started.len == 1 and decodeMessage(started[0]).get.event.sub == 3
     # The terminal Response closes the destination; the subscriptions stay.
     discard callee.respond(a, okExists()).get
     let after = callee.publishScoped(a, "storage.upload_progress_event", progress)
@@ -1676,10 +1685,10 @@ suite "trn.subscribe: subscriptions (TRANSPORT §5.1)":
   test "[TRN-0111] [TRN-0112] the route's event-subscription scope is enforced before activation":
     let scoped = storageBoundary.withAccess([], ["storage.started_event"])
     check scoped.allowsEvent("storage.started_event")
-    check not scoped.allowsEvent("storage.upload_done_event")
+    check not scoped.allowsEvent("storage.upload_progress_event")
     var callee = calleeConn(scoped)
     check callee.receive(subscribeMsg(1, "storage.started_event"))[0].kind == caSubscribe
-    let r = sent(callee.receive(subscribeMsg(2, "storage.upload_done_event")))[0]
+    let r = sent(callee.receive(subscribeMsg(2, "storage.upload_progress_event")))[0]
     check r.subscriptionResult.failure.get.code == ecNotAuthorised
     check callee.subscriptions == 1
     # A name outside the selected contract fails the same way.
@@ -1802,7 +1811,7 @@ suite "trn.correlation: Response, SubscriptionResult and Event correlation (TRAN
     check closeCode(caller.receive(ev)) == Opt.some(ecInvalidParams)
     # Another event than the subscription's.
     var (caller2, callee2) = pair()
-    active(caller2, callee2, 3, "storage.upload_done_event")
+    active(caller2, callee2, 3, "storage.upload_progress_event")
     check closeCode(caller2.receive(ev)) == Opt.some(ecInvalidParams)
     # While Unsubscribe is outstanding: still valid; after it completes: not.
     var (caller3, callee3) = pair()
@@ -1851,23 +1860,23 @@ suite "trn.correlation: Response, SubscriptionResult and Event correlation (TRAN
 
   test "[TRN-0287] [TRN-0288] [TRN-0289] an abandoned subscription: results still update state, Events are validated but not delivered, Unsubscribe stops it":
     var (caller, callee) = pair()
-    discard callee.receive(caller.subscribe(1, "storage.upload_done_event").get)
+    discard callee.receive(caller.subscribe(1, "storage.upload_progress_event").get)
     check caller.abandonSubscription(1)
     check not caller.abandonSubscription(9)
     # The late successful result still activates it.
     check caller.receive(callee.subscriptionResult(1).get)[0].op == mkSubscribe
-    let ev = callee.publish(1, cborMap((cbor("cid"), cbor("c")))).get
+    let ev = callee.publish(1, progressData("s")).get
     check caller.receive(ev).len == 0
     check caller.state == csOpen
     # An invalid Event for it still closes.
     let bad = rawEvent(
       1,
-      "storage.upload_done_event",
-      cborMap((cbor("cid"), cbor(1'u64))),
-      PayloadCommitment(subtreeRoot: subtreeOf("storage.upload_done_event")),
+      "storage.upload_progress_event",
+      cborMap((cbor("session"), cbor(1'u64))),
+      PayloadCommitment(subtreeRoot: subtreeOf("storage.upload_progress_event")),
     )
     var (caller2, callee2) = pair()
-    active(caller2, callee2, 1, "storage.upload_done_event")
+    active(caller2, callee2, 1, "storage.upload_progress_event")
     check caller2.abandonSubscription(1)
     check closeCode(caller2.receive(bad)) == Opt.some(ecInvalidParams)
     # Unsubscribe ends it; after that its Events are uncorrelated.
@@ -1951,21 +1960,21 @@ suite "trn.size: the sender's frame check (TRANSPORT §2.1)":
     check callee2.respond(0, space()).get == full
 
   test "[TRN-0265] [TRN-0266] an oversized Event is not committed and its publication reports failure":
-    let data = cborMap((cbor("cid"), cbor("c".repeat(64))))
+    let data = progressData("c".repeat(64))
     var (caller, callee0) = pair()
-    active(caller, callee0, 1, "storage.upload_done_event")
+    active(caller, callee0, 1, "storage.upload_progress_event")
     let full = callee0.publish(1, data).get
     var callee = calleeConn(storageBoundary, smallPeer(uint32(full.len - 1)))
-    discard callee.receive(subscribeMsg(1, "storage.upload_done_event"))
+    discard callee.receive(subscribeMsg(1, "storage.upload_progress_event"))
     discard callee.subscriptionResult(1).get
     let e = callee.publish(1, data).error
     check e.kind == peTooLarge and e.code == ecModule
     check callee.state == csOpen
     # A smaller Event still goes.
-    check callee.publish(1, cborMap((cbor("cid"), cbor("c")))).isOk
+    check callee.publish(1, progressData("c")).isOk
     # Scoped publication: nothing is committed on the connection.
     discard callee.receive(requestFor(0))
-    check callee.publishScoped(0, "storage.upload_done_event", data).error.kind ==
+    check callee.publishScoped(0, "storage.upload_progress_event", data).error.kind ==
       peTooLarge
 
 suite "trn.termination: route expiry or revocation on a live session (TRANSPORT §8.1)":
@@ -2201,7 +2210,7 @@ suite "trn.access: the route's access scope (TRANSPORT §8.1; RUNTIME §9.3)":
   test "[TRN-0158] absent lists are the whole contract, empty ones nothing":
     let all = storageBoundary.applyAccess(RouteAccess())
     check all.boundary.allowsMethod("space") and all.boundary.allowsMethod("schema")
-    check all.boundary.allowsEvent("storage.upload_done_event")
+    check all.boundary.allowsEvent("storage.upload_progress_event")
     check all.publishScope.isNone
     let none = storageBoundary.applyAccess(
       RouteAccess(
@@ -2221,7 +2230,7 @@ suite "trn.access: the route's access scope (TRANSPORT §8.1; RUNTIME §9.3)":
     check events.boundary.allowsMethod("exists") and
       events.boundary.allowsMethod("schema")
     check events.boundary.allowsEvent("storage.started_event")
-    check not events.boundary.allowsEvent("storage.upload_done_event")
+    check not events.boundary.allowsEvent("storage.upload_progress_event")
 
   test "[TRN-0158] a root that names nothing under the selected contract narrows the scope and is reported":
     let stray = sensor.primary.root

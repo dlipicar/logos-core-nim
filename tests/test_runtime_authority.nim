@@ -337,7 +337,7 @@ suite "run.authority: bootstrap and recovery rules (RUNTIME l.1635-1650, l.1674-
     e.finish()
 
 suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
-  test "[CAP-0011] [CAP-0012] [CAP-0013] [CAP-0014] [CAP-0428] [RUN-0322] [RUN-0324] [RUN-0811] [RUN-0858] [RUN-0823] [IFC-0781] evaluate runs off the Runtime thread with a system-service caller; the consumer is the module, never the engine":
+  test "[CAP-0011] [CAP-0012] [CAP-0013] [CAP-0014] [CAP-0428] [RUN-0322] [RUN-0324] [RUN-0811] [RUN-0858] [RUN-0823] [IFC-0781] [TXT-0293] evaluate runs off the Runtime thread with a system-service caller and no module-instance address; the consumer is the module, never the engine":
     let (e, orch) = ready()
     check orch.observe().code == ecOk
     let got = received()
@@ -345,6 +345,10 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
     check got[0].what == "rc:get_readiness"
     check got[0].consumer == Orch
     check got[0].callerKind == CallerSystemService
+    # [SPEC RUNTIME §4.1 l.835; G163] the invoking Runtime, without a
+    # module-instance address
+    check got[0].callerRuntimeLen > 0
+    check got[0].callerModuleLen == 0
     check got[0].thread != getThreadId()
     # The host's protected input decides alone: no evaluation.
     forget()

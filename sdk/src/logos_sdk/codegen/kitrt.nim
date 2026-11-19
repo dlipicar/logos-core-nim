@@ -481,21 +481,26 @@ proc encodedResponse*(
 proc publishEncoded*(
     s: ModuleServices, eventId: string, data: openArray[byte]
 ): Result[void, InvocationFailure] =
-  ## [SPEC INTERFACE §2.5, §2.6, App A.4] Publishes one encoded event through
-  ## the instance's publish callback. NOT_READY when the instance has none (a
-  ## null callback must not be called). The callback returns nothing, so
-  ## success says only that the event was handed over.
+  ## [SPEC INTERFACE §2.5, §2.6, §5.2, App A.4] Publishes one encoded event
+  ## through the instance's publish callback and returns its result, which is
+  ## the publisher-side check and never a delivery report. NOT_READY when the
+  ## instance has none (a null callback must not be called); a result outside
+  ## the shared registry is MODULE_ERROR (§5.1).
   if s.publishFn.isNil:
     return err(failure(ecNotReady, "this instance has no publish callback"))
   if data.len == 0:
     return err(moduleError("an event payload is one CBOR map"))
-  s.publishFn(
+  let rc = s.publishFn(
     s.publishUserData,
     system.cstring(eventId),
     cast[ptr UncheckedArray[uint8]](addr data[0]),
     csize_t(data.len),
   )
-  ok()
+  let code = errorCode(int64(rc)).valueOr:
+    return err(moduleError("the publish callback returned code " & $int64(rc)))
+  if code == ecOk:
+    return ok()
+  err(failure(code, "the publish callback refused " & eventId))
 
 proc currentInvocation(s: ModuleServices): ptr LogosInvocationContext =
   s.invocationAccess.current(s.invocationAccess.state)

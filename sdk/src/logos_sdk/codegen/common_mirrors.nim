@@ -22,32 +22,32 @@ type
 
   logos_bstr_size_1_4096_t* = ptr UncheckedArray[uint8]
 
-  logos_error_detail_t* = object ## `logos_error_detail_BSTR`
+  logos_error_detail_t* = object ## `logos_bstr_error_detail`
     m0*: logos_bstr_size_1_4096_t ## data
     m1*: csize_t ## len
 
-  logos_invalid_params_detail_t* = object ## `logos_invalid_params_detail_MAP`
+  logos_invalid_params_detail_t* = object ## `logos_map_invalid_params_detail`
     m0*: bool ## has_path
     m1*: ptr UncheckedArray[logos_invalid_params_path_segment_t] ## path
     m2*: csize_t ## path_count
     m3*: logos_invalid_params_reason_t ## reason
 
-  logos_invalid_params_path_segment_KIND_t* = uint32
+  logos_invalid_params_path_segment_kind_t* = uint32
 
   logos_invalid_params_path_segment_t_value* {.union.} = object
-    m0*: cstring ## arm_Tstr
-    m1*: uint64 ## arm_Uint64
+    m0*: cstring ## arm_0
+    m1*: uint64 ## arm_1
 
-  logos_invalid_params_path_segment_t* = object ## `logos_invalid_params_path_segment_CHOICE`
-    kind*: logos_invalid_params_path_segment_KIND_t
+  logos_invalid_params_path_segment_t* = object ## `logos_choice_invalid_params_path_segment`
+    kind*: logos_invalid_params_path_segment_kind_t
     value*: logos_invalid_params_path_segment_t_value
 
-  logos_invalid_params_reason_KIND_t* = uint32
+  logos_invalid_params_reason_kind_t* = uint32
 
-  logos_invalid_params_reason_t* = object ## `logos_invalid_params_reason_CHOICE`
-    kind*: logos_invalid_params_reason_KIND_t
+  logos_invalid_params_reason_t* = object ## `logos_choice_invalid_params_reason`
+    kind*: logos_invalid_params_reason_kind_t
 
-  logos_schema_commitment_t* = object ## `logos_schema_commitment_MAP`
+  logos_schema_commitment_t* = object ## `logos_map_schema_commitment`
     m0*: cstring ## commitment_model
     m1*: cstring ## hash_profile
     m2*: cstring ## hash_suite
@@ -208,13 +208,13 @@ proc cOutStep_logos_invalid_params_reason_t*(a: var CallArena, f: var OutFrame, 
     f.pc = 1
     ?depthCheck(depth)
     case commonSchema().arm("logos.invalid_params_reason#", v)
-    of 3:
-      dst.kind = 0'u32
     of 0:
+      dst.kind = 0'u32
+    of 1:
       dst.kind = 1'u32
     of 2:
       dst.kind = 2'u32
-    of 1:
+    of 3:
       dst.kind = 3'u32
     else:
       return err("no arm of logos.invalid_params_reason")
@@ -228,13 +228,13 @@ proc cInStep_logos_invalid_params_reason_t*(f: var InFrame, child: var InFrame):
     ?depthCheck(depth)
     case src.kind
     of 0'u32:
-      f.dst[] = cbor("configuration-schema-mismatch")
-    of 1'u32:
       f.dst[] = cbor("malformed-cbor")
+    of 1'u32:
+      f.dst[] = cbor("schema-mismatch")
     of 2'u32:
       f.dst[] = cbor("non-deterministic-cbor")
     of 3'u32:
-      f.dst[] = cbor("schema-mismatch")
+      f.dst[] = cbor("configuration-schema-mismatch")
     else:
       return err("the discriminant " & $src.kind & " names no arm of logos.invalid_params_reason")
   ok(false)

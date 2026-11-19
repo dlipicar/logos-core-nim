@@ -38,7 +38,11 @@ proc roundTrip(
   let cs = s.get.cSchemaSet
   let h = contractHeader(cs).get
   var o = RmapOptions(system: system)
-  if cs.module.isNone:
+  # [SPEC INTERFACE §3.2 l.2245] The subject is input: S's module, else its
+  # primary document's namespace.
+  if cs.module.isSome:
+    o.module = cs.module.get
+  else:
     o.subject = s.get.primary.model.namespace
   let r = reconstruct(@[HeaderSource(name: "h.h", text: h)], o)
   if r.isErr:

@@ -249,3 +249,308 @@ step = "P1"
 kind = "removed"
 reading = "The sentence limiting the runtime and transport layers to envelopes and routing fields is gone. Our transport session already validates payloads against the schema at its boundary."
 compared = "INTERFACE l.3132 at 6a4dfa28 against l.3087 at 6cac8335, and the tests tagged IFC-0977 in test_transport."
+
+# P2: the INTERFACE ABI --------------------------------------------------------------------------------------------
+
+[[units]]
+id = "IFC-0107"
+compared = "INTERFACE §1.8 l.571 at 6a4dfa28 against l.542 at 6cac8335: storage.upload_url_request gains `session: tstr`. The §1.8 mirror is rewritten from the text, and test_iface accepts the new example."
+
+[[units]]
+id = "IFC-0108"
+compared = "INTERFACE §1.8 l.575 at 6a4dfa28 against l.547 at 6cac8335: storage.upload_url_response answers `cid: tstr` instead of `accepted: bool`. The §1.8 mirror is rewritten from the text, and test_iface accepts the new example."
+
+[[units]]
+id = "IFC-0168"
+compared = "INTERFACE §2.4 l.1373 at 6a4dfa28 against l.1338 at 6cac8335: the request gains `session: tstr`. The §2.4 mirror is rewritten, and test_codegen's canonical-order test derives the new parameters from it."
+
+[[units]]
+id = "IFC-0169"
+compared = "INTERFACE §2.4 l.1377 at 6a4dfa28 against l.1343 at 6cac8335: the response is `cid: tstr`. The §2.4 mirror is rewritten, and test_codegen's canonical-order test derives `out_cid` from it."
+
+[[units]]
+id = "IFC-0328"
+compared = "INTERFACE §3.3 l.2462 at 6a4dfa28 against l.2427 at 6cac8335: the request gains `session: tstr`. The §3.3 mirror is rewritten, and T5.1 in test_rmap reconstructs it from the §3.3 prototype."
+
+[[units]]
+id = "IFC-0329"
+compared = "INTERFACE §3.3 l.2466 at 6a4dfa28 against l.2432 at 6cac8335: the response is `cid: tstr`. The §3.3 mirror is rewritten, and T5.1 in test_rmap reconstructs it from the §3.3 prototype."
+
+[[units]]
+id = "IFC-0599"
+compared = "INTERFACE §2 l.659 at 6a4dfa28 against l.627 at 6cac8335: the revision check compares with `4u`. CMappingRevision is 4, every generated header was regenerated, and test_codegen's revision-check test is tagged [TXT-0046] [TXT-0047]."
+
+[[units]]
+id = "IFC-0934"
+compared = "The INTERFACE §5.2 listing, l.3432 at 6a4dfa28 against l.3373 at 6cac8335: revision `4u`, ABI version 3, `logos_publish_fn` returning `logos_error_code_t`, `observe_subscription_end` on both vtables, and the common section stated in full. `logos_types.h` is the listing copied; test_abi and test_kit compare every struct and mirror layout with it."
+
+[[units]]
+id = "RUN-0242"
+compared = "RUNTIME §7.3 l.1209 at 6a4dfa28 against l.1133 at 6cac8335: the typedef returns `logos_error_code_t`. abi/types.nim's LogosPublishFn returns CErrorCode; test_codegen reads the typedef in logos_types.h, test_kit shows the kit helper returning the callback's result, and test_host_dylib has a C module return what its callback returned."
+
+[[stale]]
+id = "IFC-0083"
+compared = "INTERFACE §1.5 at 6cac8335 no longer declares storage.upload_done_event (l.419 at 6a4dfa28). The §1.5 mirror is rewritten and test_iface drops the tag. Tests that needed a second event use storage.started_event, or storage.upload_progress_event where it must be non-empty."
+
+[[stale]]
+id = "IFC-0112"
+compared = "INTERFACE §1.8 at 6cac8335 no longer declares storage.upload_done_event (l.589 at 6a4dfa28). The §1.8 mirror is rewritten and test_iface drops the tag."
+
+[[stale]]
+id = "IFC-0170"
+compared = "Replaced by IFC-0959, the §2.4 prototype with `in_session` and `out_cid` (l.1348 at 6cac8335). test_codegen's canonical-order test is retagged, and the id leaves conformance/claims/IFC.toml."
+
+[[stale]]
+id = "IFC-0327"
+compared = "Replaced by IFC-0973, the §3.3 prototype with `in_session` and `out_cid` (l.2413 at 6cac8335). T5.1 in test_rmap is retagged."
+
+[[stale]]
+id = "IFC-0884"
+compared = "Replaced by IFC-0975 (l.2936 at 6cac8335), which adds that each document is supplied with exactly its required dependency set. T4.20 in test_rmap is retagged and supplies each namespace alone and both together."
+
+[[stale]]
+id = "IFC-0935"
+compared = "Replaced by IFC-0981 (l.3841 at 6cac8335): the route vtable needs `observe_end` and `observe_subscription_end`, the Runtime Control vtable `observe_subscription_end`, and a shorter vtable is VERSION_MISMATCH. The two test_abi tests are retagged, and the id leaves conformance/claims/IFC.toml."
+
+[[moved]]
+id = "TXT-0080"
+from = "P2"
+to = "P3"
+reason = "Its replacement, TXT-0078 on what the publish callback returns, is P3's. Under the I105 interim the Runtime still records a failed publication as a diagnostic and drops the event, so the sentence is not yet false."
+
+[[moved]]
+id = "TXT-0085"
+from = "P3"
+to = "P2"
+reason = "P2 builds the observe_subscription_end slot as a registration with observe_end's rules (I105), so the registration rules are tested in P2. P3 keeps the reporting of binding-ended subscriptions."
+
+[[text]]
+id = "TXT-0044"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0045"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0046"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0047"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0048"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0049"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0050"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0051"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0052"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0053"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0054"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0565"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0055"
+step = "P2"
+test = "sdk/tests/test_rmap.nim"
+
+[[text]]
+id = "TXT-0056"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0057"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0578"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0059"
+step = "P2"
+test = "sdk/tests/test_abi.nim"
+
+[[text]]
+id = "TXT-0060"
+step = "P2"
+test = "sdk/tests/test_abi.nim"
+
+[[text]]
+id = "TXT-0568"
+step = "P2"
+test = "sdk/tests/test_kit.nim"
+
+[[text]]
+id = "TXT-0061"
+step = "P2"
+test = "sdk/tests/test_kit.nim"
+
+[[text]]
+id = "TXT-0293"
+step = "P2"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0569"
+step = "P2"
+test = "tests/test_host_dylib.nim"
+
+[[text]]
+id = "TXT-0085"
+step = "P2"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0062"
+step = "P2"
+kind = "removed"
+reading = "The rule that a schema file is named `<module-name>.cddl` becomes a convention (TXT-0041). Nothing here reads a schema file's name: lcn-gen takes schema documents by any path, and a module's name comes from its binding."
+compared = "INTERFACE l.86 at 6a4dfa28 against l.78 at 6cac8335, and the commands of src/lcn_gen.nim, which read PRIMARY.cddl and the other documents from the paths given."
+
+[[text]]
+id = "TXT-0041"
+step = "P2"
+kind = "reword"
+pair = "TXT-0062"
+reading = "The file name is now a convention, not a rule, and nothing reads it, so nothing changes."
+compared = "INTERFACE l.86 at 6a4dfa28 against l.78 at 6cac8335, and the commands of src/lcn_gen.nim."
+
+[[text]]
+id = "TXT-0042"
+step = "P2"
+kind = "informative"
+reading = "A note on what a future revision may permit. It states no requirement of this revision, under which a supporting schema still imports nothing."
+compared = "INTERFACE l.97-105 at 6cac8335 against §1.1's rule that supporting schemas have no imports, which acceptance enforces."
+
+[[text]]
+id = "TXT-0063"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0043, which adds the cdCDDLe §5 string-literal grammar to what decides validity."
+compared = "INTERFACE l.505 at 6a4dfa28 against l.479 at 6cac8335."
+
+[[text]]
+id = "TXT-0043"
+step = "P2"
+kind = "reword"
+pair = "TXT-0063"
+reading = "The sentence now names the cdCDDLe §5 string-literal grammar, which acceptance already applies: the lexer reads text and byte-string literals by RFC 9682, as cdCDDLe §5 takes it (G157, settled in P1)."
+compared = "INTERFACE l.505 at 6a4dfa28 against l.479 at 6cac8335, and lexQuoted and readEscape in sdk/src/logos_sdk/cddl/syntax.nim."
+
+[[text]]
+id = "TXT-0064"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0046: the revision is `4u`."
+compared = "INTERFACE l.650 at 6a4dfa28 against l.620 at 6cac8335, and CMappingRevision in iface/cmap.nim."
+
+[[text]]
+id = "TXT-0065"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0047: the check compares with `4u`."
+compared = "INTERFACE l.655 at 6a4dfa28 against l.625 at 6cac8335, and the revision check every generated header carries."
+
+[[text]]
+id = "TXT-0066"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0051 and TXT-0052, which say the names and layouts are the ones the §5.2 listing states."
+compared = "INTERFACE l.843 at 6a4dfa28 against l.813-814 at 6cac8335."
+
+[[text]]
+id = "TXT-0067"
+step = "P2"
+kind = "removed"
+site = "sdk/src/logos_sdk/iface/cmap.nim:1011"
+reading = "Rule 8 at 6a4dfa28 gave no output form for an unbounded or ranged byte string. 6cac8335 adds both (TXT-0054, TXT-0565), and they are the forms memberParam already emitted under I64."
+compared = "INTERFACE l.1278-1281 at 6a4dfa28 against l.1247-1252 at 6cac8335, and memberParam in iface/cmap.nim."
+
+[[text]]
+id = "TXT-0069"
+step = "P2"
+kind = "removed"
+reading = "`logos_common.cddl` is gone from the text, and no such artifact exists here: the common schema is the IFC/5.1.common-schema.cddl mirror, recomputed from the §5.1 text."
+compared = "INTERFACE l.3195 at 6a4dfa28, which 6cac8335 drops, and spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0070"
+step = "P2"
+kind = "removed"
+reading = "The precedence of the text over the extracted artifact goes with the artifact (TXT-0069). Our mirrors are recomputed from the text, which `spectrace mirror` checks."
+compared = "INTERFACE l.3196 at 6a4dfa28, which 6cac8335 drops."
+
+[[text]]
+id = "TXT-0071"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0056: the common declarations are those of the six common types §2.1 names and their support declarations, not of every named type of §5.1."
+compared = "INTERFACE l.3382 at 6a4dfa28 against l.3324 at 6cac8335."
+
+[[text]]
+id = "TXT-0072"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0057: the declarations are copied from the listing, not derived through a common-name projection (G158 settled)."
+compared = "INTERFACE l.3383 at 6a4dfa28 against l.3325 at 6cac8335."
+
+[[text]]
+id = "TXT-0073"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0059: the initialization struct uses version 3."
+compared = "INTERFACE l.3797 at 6a4dfa28 against l.3829 at 6cac8335, and ModuleInitAbiVersion in abi/types.nim."
+
+[[text]]
+id = "TXT-0074"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0060: both vtables use version 3."
+compared = "INTERFACE l.3810 at 6a4dfa28 against l.3841 at 6cac8335, and the two vtable versions in abi/types.nim."
+
+[[text]]
+id = "TXT-0076"
+step = "P2"
+kind = "removed"
+site = "sdk/src/logos_sdk/codegen/kitrt.nim:481"
+reading = "Replaced by TXT-0061: the helper now returns the callback's result, and publishEncoded returns it."
+compared = "INTERFACE l.4094 at 6a4dfa28 against l.4113-4115 at 6cac8335, and publishEncoded in codegen/kitrt.nim."

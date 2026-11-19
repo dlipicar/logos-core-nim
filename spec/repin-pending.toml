@@ -18,17 +18,9 @@
 # sub-step only with a [[moved]] record in spec/repin-text-cleared.toml.
 #   [deferred]        unit that stays deferred past the re-pin = the work item that owns it
 
-closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
+closed = ["P1", "P2"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
 
 [mirror]
-"IFC/5.2.logos_types.h" = "P2"
-"IFC/1.5.events.cddl" = "P2"
-"IFC/1.8.module.cddl" = "P2"
-"IFC/2.4.upload_url.cddl" = "P2"
-"IFC/2.4.upload_url.h" = "P2"
-"IFC/3.3.upload_url.h" = "P2"
-"IFC/3.3.upload_url.cddl" = "P2"
-"IFC/2.revision-check.h" = "P2"
 "TRN/1.1.envelope-primitives.cddl" = "P3"
 "TRN/1.3.envelopes.cddl" = "P3"
 "RNT/9.3.runtime-control.cddl" = "P4"
@@ -124,7 +116,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "CMT-0242" = "P8"
 "IFC-0957" = "P8"
 "IFC-0958" = "P8"
-"IFC-0959" = "P2"
 "IFC-0960" = "P3"
 "IFC-0961" = "P3"
 "IFC-0962" = "P3"
@@ -136,14 +127,8 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "IFC-0968" = "P8"
 "IFC-0969" = "P8"
 "IFC-0970" = "P3"
-"IFC-0971" = "P2"
-"IFC-0972" = "P2"
-"IFC-0973" = "P2"
-"IFC-0974" = "P2"
-"IFC-0975" = "P2"
 "IFC-0979" = "P4"
 "IFC-0980" = "P4"
-"IFC-0981" = "P2"
 "LDR-0167" = "P6"
 "LDR-0168" = "P6"
 "LDR-0169" = "P6"
@@ -358,21 +343,13 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "CAP-0305" = "P4"
 "CAP-0393" = "P6"
 "CAP-0422" = "P6"
-"IFC-0107" = "P2"
-"IFC-0108" = "P2"
-"IFC-0168" = "P2"
-"IFC-0169" = "P2"
 "IFC-0226" = "P8"
 "IFC-0230" = "P8"
 "IFC-0245" = "P8"
 "IFC-0246" = "P8"
 "IFC-0280" = "P3"
-"IFC-0328" = "P2"
-"IFC-0329" = "P2"
 "IFC-0581" = "P4"
-"IFC-0599" = "P2"
 "IFC-0712" = "P3"
-"IFC-0934" = "P2"
 "PKG-0043" = "P7"
 "PKG-0044" = "P7"
 "PKG-0048" = "P7"
@@ -391,7 +368,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "RUN-0100" = "P5"
 "RUN-0121" = "P5"
 "RUN-0227" = "P5"
-"RUN-0242" = "P2"
 "RUN-0258" = "P8"
 "RUN-0265" = "P8"
 "RUN-0267" = "P8"
@@ -412,13 +388,7 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "BCP-0098" = "P6"
 "CFG-0046" = "P6"
 "CFG-0145" = "P6"
-"IFC-0083" = "P2"
-"IFC-0112" = "P2"
-"IFC-0170" = "P2"
 "IFC-0186" = "P3"
-"IFC-0327" = "P2"
-"IFC-0884" = "P2"
-"IFC-0935" = "P2"
 "PKG-0110" = "P7"
 "PKG-0215" = "P7"
 "PKG-0275" = "P7"
@@ -492,410 +462,8 @@ class = "todo"
 what = "The invocation status passes through unchanged."
 
 [[text]]
-id = "TXT-0041"
-step = "P2"
-spec = "IFC"
-line = "78"
-side = "new"
-section = "§1.1"
-source = "n.103a"
-class = "todo"
-what = "The file is conventionally named `<module-name>.cddl` (e.g."
-
-[[text]]
-id = "TXT-0042"
-step = "P2"
-spec = "IFC"
-line = "97"
-side = "new"
-section = "§1.1"
-source = "n.103b"
-class = "todo"
-what = "> **Note:** A future revision may permit a supporting schema to import named types from another supporting schema, provided that the imports form no cycle and that all imports of one schema within a construction resolve to the same document. > Shared record types could then reuse the declarations of another supporting schema instead of restating them. > This revision does not permit it because of four costs. > Schemas built against different versions of a schema they both import could not be combined until one of them is rebuilt. > The dependencies of every declaration in an imported schema, including declarations the importer does not use, would become required construction input and would be disclosed by schema introspection. > A change to a transitively imported schema would change the identity of existing declarations and could prevent a contract from extending an earlier contract. > Provider descriptors and schema introspection responses would carry complete import chains. > Permitting such imports later would not change the identity of any schema that is valid under this revision."
-
-[[text]]
-id = "TXT-0043"
-step = "P2"
-spec = "IFC"
-line = "479"
-side = "new"
-section = "§1.7"
-source = "n.106"
-class = "todo"
-what = "RFC 8610 with the string-literal grammar required by `cdCDDLe` Section 5, Sections 1.1 through 1.7 of this specification, and the resolution boundary in Section 5.3 determine whether source text is a valid Logos schema document."
-
-[[text]]
-id = "TXT-0044"
-step = "P2"
-spec = "IFC"
-line = "582"
-side = "new"
-section = "§2"
-source = "n.107a"
-class = "todo"
-guard = true
-what = "`logos_error_code_t` uses the target C ABI's default enumeration representation and has the size of `int`."
-
-[[text]]
-id = "TXT-0045"
-step = "P2"
-spec = "IFC"
-line = "583"
-side = "new"
-section = "§2"
-source = "n.107a"
-class = "todo"
-what = "Compiler options that change enumeration storage are outside the supported native ABI."
-
-[[text]]
-id = "TXT-0046"
-step = "P2"
-spec = "IFC"
-line = "620"
-side = "new"
-section = "§2"
-class = "todo"
-what = "Its value in this specification is `4u`."
-
-[[text]]
-id = "TXT-0047"
-step = "P2"
-spec = "IFC"
-line = "625"
-side = "new"
-section = "§2"
-class = "todo"
-what = "For generation `4u`, the check is:"
-
-[[text]]
-id = "TXT-0048"
-step = "P2"
-spec = "IFC"
-line = "807"
-side = "new"
-section = "§2.1"
-source = "n.108a"
-class = "todo"
-guard = true
-what = "`logos.invalid_params_reason` | `logos_invalid_params_reason_t`"
-
-[[text]]
-id = "TXT-0049"
-step = "P2"
-spec = "IFC"
-line = "808"
-side = "new"
-section = "§2.1"
-source = "n.108a"
-class = "todo"
-guard = true
-what = "`logos.invalid_params_path_segment` | `logos_invalid_params_path_segment_t`"
-
-[[text]]
-id = "TXT-0050"
-step = "P2"
-spec = "IFC"
-line = "809"
-side = "new"
-section = "§2.1"
-source = "n.108a"
-class = "todo"
-guard = true
-what = "`logos.invalid_params_detail` | `logos_invalid_params_detail_t`"
-
-[[text]]
-id = "TXT-0051"
-step = "P2"
-spec = "IFC"
-line = "813"
-side = "new"
-section = "§2.1"
-class = "todo"
-what = "The fixed common declarations, including their aggregate tags, discriminant types, arm constants, and literal constants, are those listed in Section 5.2."
-
-[[text]]
-id = "TXT-0052"
-step = "P2"
-spec = "IFC"
-line = "814"
-side = "new"
-section = "§2.1"
-class = "todo"
-what = "They retain those names and layouts rather than receiving generated stem names."
-
-[[text]]
-id = "TXT-0053"
-step = "P2"
-spec = "IFC"
-line = "815"
-side = "new"
-section = "§2.1"
-class = "todo"
-what = "`logos.schema_request` and `logos.schema_response` have no C declaration; the C interface carries a `logos.schema_response` value as Logos deterministic CBOR."
-
-[[text]]
-id = "TXT-0054"
-step = "P2"
-spec = "IFC"
-line = "1247"
-side = "new"
-section = "§2.4"
-class = "todo"
-guard = true
-what = "Unbounded and ranged `bstr` fields expand to adjacent pointer-and-length parameters. A ranged byte string uses its canonical constrained pointer typedef. An unbounded byte-string response field uses `const uint8_t** out_<name>` and `size_t* out_<name>_len`. A ranged byte-string response field uses a pointer to its constrained pointer typedef, such as `logos_bstr_size_1_4096_t* out_<name>`, and `size_t* out_<name>_len`. A positive exact-size byte-string input uses `const uint8_t (*in_<name>)[N]`, and its caller-allocated output uses `uint8_t (*out_<name>)[N]`. An exact-size byte string has no length parameter."
-
-[[text]]
-id = "TXT-0565"
-step = "P2"
-spec = "IFC"
-line = "1249,1250"
-side = "new"
-source = "n.109"
-class = "todo"
-what = "byte-string response fields"
-
-[[text]]
-id = "TXT-0055"
-step = "P2"
-spec = "IFC"
-line = "2245"
-side = "new"
-source = "M3"
-class = "behaviour"
-what = "The reverse mapper takes its subject as input and may not infer it from the headers"
-
-[[text]]
-id = "TXT-0056"
-step = "P2"
-spec = "IFC"
-line = "3324"
-side = "new"
-section = "§5.2"
-class = "todo"
-what = "`logos_types.h` also supplies the canonical C declarations for the six common types named in Section 2.1 and the support declarations those types require."
-
-[[text]]
-id = "TXT-0057"
-step = "P2"
-spec = "IFC"
-line = "3325"
-side = "new"
-section = "§5.2"
-source = "M2a"
-class = "behaviour"
-note = "The common types are a fixed listing that a tool copies and does not derive"
-what = "The listing below states those declarations completely; a tool copies them and does not derive them."
-
-[[text]]
-id = "TXT-0578"
-step = "P2"
-spec = "IFC"
-line = "3420-3443"
-side = "new"
-source = "M2b"
-class = "behaviour"
-what = "The reason values change (malformed-cbor 0, schema-mismatch 1, configuration-schema-mismatch 3)"
-
-[[text]]
-id = "TXT-0059"
-step = "P2"
-spec = "IFC"
-line = "3829"
-side = "new"
-section = "§5.2"
-class = "todo"
-what = "The versioned initialization struct uses `abi_version == 3` in this revision."
-
-[[text]]
-id = "TXT-0060"
-step = "P2"
-spec = "IFC"
-line = "3841"
-side = "new"
-section = "§5.2"
-class = "todo"
-what = "The Runtime Control and route vtables use ABI version `3` in this revision."
-
-[[text]]
-id = "TXT-0568"
-step = "P2"
-spec = "IFC"
-line = "4102"
-side = "new"
-section = "App A.4"
-class = "todo"
-guard = true
-what = "Fenced c block of 7 lines changed, and no mirror follows it: /* From: storage.upload_progress_event = { session: tstr, bytes_sent: uint64, bytes_total: uint64 } */"
-
-[[text]]
-id = "TXT-0061"
-step = "P2"
-spec = "IFC"
-line = "4113"
-side = "new"
-section = "App A.4"
-class = "todo"
-guard = true
-what = "The implementation deterministic-CBOR-encodes `{bytes_sent, bytes_total, session}` per section 4.2 and calls the `publish` callback and `publish_user_data` retained in `module` with event name `\"storage.upload_progress_event\"`, returning its result."
-
-[[text]]
-id = "TXT-0062"
-step = "P2"
-spec = "IFC"
-line = "86"
-side = "old"
-section = "§1.1"
-class = "todo"
-what = "The file is named `<module-name>.cddl` (e.g."
-
-[[text]]
-id = "TXT-0063"
-step = "P2"
-spec = "IFC"
-line = "505"
-side = "old"
-section = "§1.7"
-class = "todo"
-what = "RFC 8610, Sections 1.1 through 1.7 of this specification, and the resolution boundary in Section 5.3 determine whether source text is a valid Logos schema document."
-
-[[text]]
-id = "TXT-0064"
-step = "P2"
-spec = "IFC"
-line = "650"
-side = "old"
-section = "§2"
-class = "todo"
-what = "Its value in this specification is `3u`."
-
-[[text]]
-id = "TXT-0065"
-step = "P2"
-spec = "IFC"
-line = "655"
-side = "old"
-section = "§2"
-class = "todo"
-what = "For generation `3u`, the check is:"
-
-[[text]]
-id = "TXT-0066"
-step = "P2"
-spec = "IFC"
-line = "843"
-side = "old"
-section = "§2.1"
-class = "todo"
-what = "The fixed common declarations retain their specified names and layouts rather than receiving generated stem names."
-
-[[text]]
-id = "TXT-0067"
-step = "P2"
-spec = "IFC"
-line = "1280"
-side = "old"
-section = "§2.4"
-class = "todo"
-guard = true
-what = "Unbounded and ranged `bstr` fields expand to adjacent pointer-and-length parameters. A ranged byte string uses its canonical constrained pointer typedef. A positive exact-size byte-string input uses `const uint8_t (*in_<name>)[N]`, and its caller-allocated output uses `uint8_t (*out_<name>)[N]`. An exact-size byte string has no length parameter."
-
-[[text]]
-id = "TXT-0069"
-step = "P2"
-spec = "IFC"
-line = "3195"
-side = "old"
-section = "§5"
-class = "todo"
-what = "`logos_common.cddl` is an extracted machine-readable mirror for source-authoring convenience."
-
-[[text]]
-id = "TXT-0070"
-step = "P2"
-spec = "IFC"
-line = "3196"
-side = "old"
-section = "§5"
-class = "todo"
-what = "If the extracted artifact differs from this specification, this specification governs."
-
-[[text]]
-id = "TXT-0071"
-step = "P2"
-spec = "IFC"
-line = "3382"
-side = "old"
-section = "§5.2"
-class = "todo"
-what = "`logos_types.h` also supplies the canonical C declarations for every named type in the pinned common schema surface from Section 5.1 and any constraint or inline support declarations required by those types."
-
-[[text]]
-id = "TXT-0072"
-step = "P2"
-spec = "IFC"
-line = "3383"
-side = "old"
-section = "§5.2"
-class = "todo"
-what = "Those declarations are derived by Sections 2.1 through 2.3, including the dedicated common-name projection and the `logos.error_code` exception."
-
-[[text]]
-id = "TXT-0073"
-step = "P2"
-spec = "IFC"
-line = "3797"
-side = "old"
-section = "§5.2"
-class = "todo"
-what = "The versioned initialization struct uses `abi_version == 2` in this revision."
-
-[[text]]
-id = "TXT-0074"
-step = "P2"
-spec = "IFC"
-line = "3810"
-side = "old"
-section = "§5.2"
-class = "todo"
-what = "The Runtime Control and route vtables use ABI version `2` in this revision."
-
-[[text]]
-id = "TXT-0076"
-step = "P2"
-spec = "IFC"
-line = "4094"
-side = "old"
-section = "App A.4"
-class = "todo"
-guard = true
-what = "The implementation deterministic-CBOR-encodes `{bytes_sent, bytes_total, session}` per section 4.2 and calls the `publish` callback and `publish_user_data` retained in `module` with event name `\"storage.upload_progress_event\"`."
-
-[[text]]
-id = "TXT-0293"
-step = "P2"
-spec = "RUN"
-line = "835"
-side = "new"
-section = "§4.1"
-source = "n.142a"
-class = "todo"
-guard = true
-what = "For an engine system-service binding it identifies the invoking Runtime with caller kind `LOGOS_CALLER_SYSTEM_SERVICE`, without a module-instance address."
-
-[[text]]
-id = "TXT-0569"
-step = "P2"
-spec = "RUN"
-line = "1133"
-side = "new"
-section = "§7.3"
-class = "todo"
-guard = true
-what = "Fenced c block of 6 lines changed, and no mirror follows it: typedef logos_error_code_t (*logos_publish_fn)("
-
-[[text]]
 id = "TXT-0080"
-step = "P2"
+step = "P3"
 spec = "RUN"
 line = "1226"
 side = "old"
@@ -944,17 +512,6 @@ side = "new"
 section = "§2.5"
 class = "todo"
 what = "The Runtime Control binding and the route handle each provide `observe_subscription_end` to report binding-ended subscriptions."
-
-[[text]]
-id = "TXT-0085"
-step = "P3"
-spec = "IFC"
-line = "1477"
-side = "new"
-section = "§2.5"
-class = "todo"
-guard = true
-what = "It accepts one non-null `logos_subscription_end_handler_t` and its user state, and follows the registration rules of `observe_end`: one registration, no synchronous invocation on the registering thread, `INVALID_PARAMS` for a null handler or a second registration, and `MODULE_ERROR` for unavailable registration capacity."
 
 [[text]]
 id = "TXT-0086"

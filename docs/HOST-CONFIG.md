@@ -484,9 +484,10 @@ and routes already established are never moved (RUNTIME l.940).
 
 #### Event output
 
-A provider publishes through a callback with no result (RUNTIME §7.3), so a transported subscriber
-that cannot take an Event is handled at its connection (TRANSPORT §5.2 l.804-817, §2.1 l.388-391;
-DECISIONS D3 (a), G165, G261):
+A provider's publish callback returns only the publisher-side result: a failure for one subscriber
+route does not change it (RUNTIME §7.3 l.1148-1149; DECISIONS I105). So a transported subscriber that
+cannot take an Event is handled at its connection (TRANSPORT §5.2 l.804-817, §2.1 l.388-391; RUNTIME
+l.1150; DECISIONS D3 (a), G165, G261):
 
 | Condition | Action |
 |---|---|

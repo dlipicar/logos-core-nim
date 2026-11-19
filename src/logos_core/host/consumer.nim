@@ -62,7 +62,7 @@ import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
 import ../transport/io/loop
-import ../runtime/[callcheck, entryframe, hostio], logos_sdk/kit/rc_types
+import ../runtime/[callcheck, entryframe, hostio, subend], logos_sdk/kit/rc_types
 import ./state
 
 const
@@ -308,6 +308,7 @@ type
     observer: LogosRouteEndHandler
     observerData: pointer
     obs: ObserverState
+    subEnd: SubscriptionEndSlot ## [SPEC INTERFACE §2.5 l.1476] (`subend`)
     obsRunner: int
     held: bool ## returned to the module and not released
     closeSent: bool
@@ -1602,6 +1603,24 @@ proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
   if last:
     freeLink(l)
 
+proc routeObserveSubscriptionEndOp(
+    route: ptr LogosRouteHandle, handler: LogosSubscriptionEndHandler, userData: pointer
+): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE §2.5 l.1476-1484] The handle's one registration, kept in
+  ## the host, with `observe_end`'s rules: a null handler is INVALID_PARAMS, and
+  ## a terminal handle returns its retained code from the Runtime and installs
+  ## nothing (l.1459; DECISIONS I105).
+  bindingEnter()
+  if handler.isNil:
+    return status(ecInvalidParams, "a null subscription-end handler")
+  let l = linkOf(route)
+  if l == nil:
+    return nullRoute()
+  let a = l.admit(4, "")
+  if a.failed:
+    return status(failureOf(a))
+  l.subEnd.register(handler, userData)
+
 var routeVtable = LogosRouteVtable(
   abiVersion: RouteVtableAbiVersion,
   structSize: csize_t(sizeof(LogosRouteVtable)),
@@ -1612,6 +1631,7 @@ var routeVtable = LogosRouteVtable(
   release: routeReleaseOp,
   prepareCall: routePrepareCallOp,
   observeEnd: routeObserveEndOp,
+  observeSubscriptionEnd: routeObserveSubscriptionEndOp,
 )
 
 # Materialization ------------------------------------------------------------------------------

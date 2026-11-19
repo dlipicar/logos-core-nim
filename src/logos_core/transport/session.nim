@@ -157,9 +157,11 @@ type
 func code*(e: PublishError): ErrorCode =
   ## [SPEC INTERFACE §2.9.3] The result of a publication boundary that has one;
   ## an oversized Event is MODULE_ERROR there, as an oversized Request is
-  ## (TRANSPORT §2.1) [IMPL]. Without a result channel (`logos_publish_fn`),
-  ## `peTooLarge` is TRANSPORT §2.1's ProtocolError TRANSPORT_ERROR and close;
-  ## whether RUNTIME §7.3's drop covers it is an open question to the owner.
+  ## (TRANSPORT §2.1) [IMPL]. On the ordinary path (`logos_publish_fn`) a
+  ## failure for one subscriber route does not change the publisher's result
+  ## (RUNTIME §7.3 l.1149); an oversized Event follows TRANSPORT §2.1 for that
+  ## destination (l.1150), today ProtocolError TRANSPORT_ERROR and close
+  ## [DECISIONS I105, interim until re-pin P3].
   case e.kind
   of peClosed: ecTransport
   of peEnded: ecNotAuthorised

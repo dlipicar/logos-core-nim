@@ -7,12 +7,17 @@
 ## - A named map or choice (types, method halves, events) is an object or a case
 ##   object named by the PascalCase of its C stem (`storage.space_info` →
 ##   `StorageSpaceInfo`, `sensor.control.settings` → `SensorNSControlSettings`;
-##   common types use their local name, as `logos_types.h` does under G158). An
+##   common types use their local name, as `logos_types.h` does; a Nim name is
+##   this binding's own, so their kinds keep symbolic labels where the §5.2
+##   listing numbers C arms by canonical index). An
 ##   inline map or choice adds its C path and `Map` / `Choice`
 ##   (`StorageEntryARFileMap`, `StorageRecordSubInnerChoice`).
 ## - A choice's kind enum lists the C arm labels in C discriminant order
 ##   (`ValueKind.Bool`, `.Tstr`, `.Uint64`), or `Case<i>` in indexed form; an
-##   arm's payload field is `arm_<label>` / `arm_<i>`.
+##   arm's payload field is `arm_<label>` / `arm_<i>`. The common schema's
+##   kinds are the exception: they keep the symbolic labels in that order,
+##   while the §5.2 listing numbers its C arms by canonical index, and the
+##   common mirrors convert between the two.
 ## - Any other named declaration is a type alias with `enc<Name>` / `dec<Name>`.
 ## - Scalars map to `bool`, `uint8`..`uint64`, `int8`..`int64`, `string` and
 ##   `seq[byte]`; lists to `seq`; tuples to anonymous tuples (`[]` to
@@ -137,7 +142,7 @@ proc claim(g: var NGen, id, origin: string) =
     g.idents[k] = origin
 
 func stemOf(g: NGen, doc: int, name: string): string =
-  ## The C stem (§2.1; G158 interim for the common schema).
+  ## The C stem (§2.1; the common schema's is its local name, l.801-814).
   let v = g.docs[doc]
   if v.common:
     localName(name, v.model.namespace)

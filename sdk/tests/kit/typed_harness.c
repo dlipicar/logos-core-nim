@@ -523,9 +523,9 @@ static void reflect_full(reflect_store_t* st)
     in->h_0 = 9;
     in->h_1.data = H2;
     in->h_1.len = 2;
-    in->i.commitment_model = LOGOS_LITERAL_schema_commitment_Commitment_model;
-    in->i.hash_profile = LOGOS_LITERAL_schema_commitment_Hash_profile;
-    in->i.hash_suite = LOGOS_LITERAL_schema_commitment_Hash_suite;
+    in->i.commitment_model = LOGOS_SCHEMA_COMMITMENT_COMMITMENT_MODEL_LITERAL;
+    in->i.hash_profile = LOGOS_SCHEMA_COMMITMENT_HASH_PROFILE_LITERAL;
+    in->i.hash_suite = LOGOS_SCHEMA_COMMITMENT_HASH_SUITE_LITERAL;
     for (int k = 0; k < 32; k++)
         in->i.schema_root[k] = (uint8_t)(0xFF - k);
     in->m = -5;
