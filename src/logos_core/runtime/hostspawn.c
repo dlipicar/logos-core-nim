@@ -8,7 +8,7 @@
      sanitizer's reports) reach the daemon's log;
    - fd 3 the carrier, fd 4 the transferred listener and fd 5 the restart lock,
      each only when given (>= 0);
-   - no other descriptor: POSIX_SPAWN_CLOEXEC_DEFAULT on Darwin,
+   - no other descriptor: POSIX_SPAWN_CLOEXEC_DEFAULT on Darwin only,
      posix_spawn_file_actions_addclosefrom_np(6) on glibc 2.34 and later, and
      everywhere the daemon's own close-on-exec descriptors;
    - a process group of its own (its pid), so ending the group reaches what
@@ -29,6 +29,14 @@
 
 #if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
 #define LCN_HAVE_CLOSEFROM 1
+#endif
+
+/* Darwin's flag closes every descriptor no file action names, so fds 1 and 2
+   are named with posix_spawn_file_actions_addinherit_np. Bionic defines a flag
+   of the same name with other semantics and has no addinherit_np: Android
+   takes the close-on-exec path. */
+#if defined(__APPLE__) && defined(POSIX_SPAWN_CLOEXEC_DEFAULT)
+#define LCN_HAVE_CLOEXEC_DEFAULT 1
 #endif
 
 /* A close-on-exec copy above every fd the child is given, so dup2 onto 3, 4
@@ -54,7 +62,7 @@ int lcn_host_spawn(const char *path, char *const argv[], char *const envp[],
     goto out;
   }
   short flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
-#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
+#ifdef LCN_HAVE_CLOEXEC_DEFAULT
   flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
 #endif
   sigset_t empty, dflt;
@@ -70,7 +78,7 @@ int lcn_host_spawn(const char *path, char *const argv[], char *const envp[],
   if ((r = posix_spawnattr_setsigdefault(&at, &dflt)) != 0) goto done;
   if ((r = posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0)) != 0)
     goto done;
-#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
+#ifdef LCN_HAVE_CLOEXEC_DEFAULT
   if ((r = posix_spawn_file_actions_addinherit_np(&fa, 1)) != 0) goto done;
   if ((r = posix_spawn_file_actions_addinherit_np(&fa, 2)) != 0) goto done;
 #endif
