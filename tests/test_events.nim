@@ -326,7 +326,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     h.release()
     e.finish()
 
-  test "[IFC-0962] [IFC-0187] [IFC-0652] [IFC-0653] [IFC-0654] unsubscribe waits for a handler on another thread, returns at once from its own handler, and a failure changes nothing":
+  test "[IFC-0962] [IFC-0187] [IFC-0652] [IFC-0653] [IFC-0654] [TXT-0081] unsubscribe waits for a handler on another thread, returns at once from its own handler, and a failure changes nothing":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -589,7 +589,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
         freeAttemptServices(s)
       e.finish()
 
-  test "[RUN-0819] [CAP-0288] [CAP-0289] [IMPL-DECISION G175] delivery is authorized for each subscriber route: publish-event and subscribe-event, and both event lists":
+  test "[RUN-0819] [CAP-0288] [CAP-0289] [RUN-1094] [IMPL-DECISION G175] delivery is authorized for each subscriber route: publish-event and subscribe-event, and both event lists":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     resetDeferred()
     let m = e.started(dmeter())
@@ -1331,7 +1331,7 @@ when declared(caParity):
     setup:
       clearAll()
 
-    test "[RUN-0819] [RUN-0822] [CAP-0288] [CAP-0289] [CAP-0191] [RUN-1095] [TRN-0392] [IFC-0965] [TXT-0088] [IMPL-DECISION G175] activation and each delivery are decided by the authority through its cache; after policy_changed the next delivery is decided afresh; a subscribe-event deny or failed evaluation at delivery ends the subscription, reported once with NOT_AUTHORISED":
+    test "[RUN-0819] [RUN-0822] [CAP-0288] [CAP-0289] [CAP-0191] [RUN-1095] [TRN-0392] [IFC-0965] [TXT-0088] [TXT-0123] [IMPL-DECISION G175] activation and each delivery are decided by the authority through its cache; after policy_changed the next delivery is decided afresh; a subscribe-event deny or failed evaluation at delivery ends the subscription, reported once with NOT_AUTHORISED":
       let e = fixtureEngine(config(extra = @[dmeterStatic]))
       resetDeferred()
       discard e.started(dmeter())

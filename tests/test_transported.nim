@@ -1019,7 +1019,7 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
       h.release()
       e.finish()
 
-  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] calls in flight at the route's end: revoked, NOT_AUTHORISED; closed, their results":
+  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] [TXT-0092] calls in flight at the route's end: revoked, NOT_AUTHORISED; closed, their results; a lost connection, TRANSPORT_ERROR":
     block revoked:
       let e = fixtureEngine(transported(denyRenew()))
       discard e.started(meter())
@@ -1064,6 +1064,33 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
       check bgCode.load == 0
       check done[0].finished
       check done[0].codeOf == ecOk
+      c.vtable.release(addr c)
+      h.release()
+      e.finish()
+    block lost:
+      # [TXT-0092] A binding failure that ends admitted calls: TRANSPORT_ERROR,
+      # which says nothing of whether the provider ran them (it still holds
+      # them here).
+      done[0].reset()
+      let e = fixtureEngine(transported())
+      discard e.started(meter())
+      let (_, rc) = e.startClient()
+      let route = rc.establish("k").recordOf.route
+      var h = rc.handle(route)
+      gate.store(true)
+      let before = held.load
+      bgDone.store(false)
+      var t: Thread[ptr LogosRouteHandle]
+      createThread(t, background, addr h)
+      var c = h.submitted(readReq(19), addr done[0])
+      check heldAt(before + 2)
+      check e.closeSessionsForTests(route).isOk
+      joinThread(t)
+      check bgCode.load == ord(ecTransport)
+      check done[0].finished
+      check done[0].codeOf == ecTransport
+      gate.store(false)
+      check heldAt(before)
       c.vtable.release(addr c)
       h.release()
       e.finish()
@@ -1511,7 +1538,7 @@ suite "run.transported: events (I90 part 4b-2c)":
     k2.release()
     d.finish()
 
-  ltTest "[IMPL-DECISION G165] [TRN-0278] an Event larger than the subscriber's frame limit: a direct subscriber gets it; the transported subscriber's connection closes TRANSPORT_ERROR, its route stays ready, and renew_route gives a working handle":
+  ltTest "[IMPL-DECISION G165] [TRN-0278] [TXT-0079] [TXT-0118] an Event larger than the subscriber's frame limit: a direct subscriber gets it; the transported subscriber's connection closes TRANSPORT_ERROR, its route stays ready, and renew_route gives a working handle":
     let (e, rc, twin) = bulkEngine()
     var (route, far) = rc.bulkHandle("far")
     let near = twin.establish("near", root = bulkRoot).recordOf.route

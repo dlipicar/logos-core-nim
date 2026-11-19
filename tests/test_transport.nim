@@ -631,7 +631,7 @@ suite "trn.framing: stream framing (TRANSPORT §2.1, §8.3)":
     check r.finish.error.kind == feTruncated
 
 suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
-  test "[TRN-0061] [TRN-0200] non-deterministic envelopes are rejected":
+  test "[TRN-0061] [TRN-0395] non-deterministic CBOR is rejected anywhere in the message, params, result and data included":
     let cases = [
       "a262696407" & "0007", # keys out of order
       "a2001807" & "62696407", # kind 7 not in shortest form
@@ -645,6 +645,52 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
     for m in samples():
       let b = encodeMessage(m).get
       check encodeCbor(decodeValue(b).get) == b
+    # Inside `params`, `result` and `data`: the map {"a": 1, "b": 2}, its keys
+    # swapped in the encoded message.
+    let ab = cborMap((cbor("a"), cbor(1'u64)), (cbor("b"), cbor(2'u64)))
+    let sorted = hexBytes("a2616101616202")
+    let swapped = hexBytes("a2616202616101")
+    let inside = [
+      Message(
+        kind: mkRequest,
+        request: Request(
+          id: 1,
+          methodName: "exists",
+          params: ab,
+          commitment: commitmentOf("storage.exists_request", ab),
+        ),
+      ),
+      Message(
+        kind: mkResponse,
+        response: Response(
+          id: 1,
+          ok: true,
+          resultMap: ab,
+          commitment: commitmentOf("storage.exists_response", ab),
+        ),
+      ),
+      Message(
+        kind: mkEvent,
+        event: Event(
+          sub: 3,
+          event: "storage.started_event",
+          data: ab,
+          commitment: commitmentOf("storage.started_event", ab),
+        ),
+      ),
+    ]
+    for m in inside:
+      var b = encodeMessage(m).get
+      var at = -1
+      for i in 0 .. b.len - sorted.len:
+        if b[i ..< i + sorted.len] == sorted:
+          at = i
+          break
+      check at >= 0
+      check decodeMessage(b).isOk
+      for j in 0 ..< swapped.len:
+        b[at + j] = swapped[j]
+      check decodeMessage(b).error.kind == eeNonDeterministic
 
   test "[TRN-0198] malformed CBOR is rejected":
     for h in ["", "a2", "a20007626964", "a2000762696407" & "00", "ff"]:
@@ -910,7 +956,7 @@ suite "trn.hello: Hello and route tickets (TRANSPORT §3.1, §3.3, §8.1)":
     check store.len == 1
     check store.validate(t, Second).isOk
 
-  test "[TRN-0074] [TRN-0071] [TRN-0254] [TRN-0318] a schema that differs or is malformed is VERSION_MISMATCH, after the token check":
+  test "[TRN-0074] [TRN-0071] [TRN-0254] [TRN-0318] [TXT-0126] a schema that differs or is malformed is VERSION_MISMATCH, after the token check":
     var store: TicketStore[RouteBinding]
     let t = store.issue(routeBinding(), 0, 100 * Second).get
     let other = sensor.primary.root
@@ -937,6 +983,20 @@ suite "trn.hello: Hello and route tickets (TRANSPORT §3.1, §3.3, §8.1)":
     check acceptHello(
       endpoint, store, wire(helloMap(module = cbor("")).with("x", cbor(1'u64))), Second
     ).error.reason == hrEnvelope
+    # [TXT-0126] Only the top-level map's keys are checked as unknown fields: an
+    # unknown key inside `schema` fails the schema check, and a token of the
+    # wrong type the token check.
+    let inner = acceptHello(
+      endpoint,
+      store,
+      helloWith(t, schemaCommitment(root).with("x", cbor(1'u64))),
+      Second,
+    ).error
+    check inner.code == ecVersionMismatch and inner.reason == hrSchema
+    let typed =
+      acceptHello(endpoint, store, wire(helloMap(token = cbor(1'u64))), Second).error
+    check typed.code == ecNotAuthorised and typed.reason == hrToken
+    check store.validate(t, Second).isOk
 
   test "[TRN-0145] [TRN-0146] [I90] E4: the owner's state check runs after every Hello check and before redemption; its refusal consumes nothing":
     var store: TicketStore[RouteBinding]

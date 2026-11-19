@@ -220,7 +220,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "RUN-1091" = "P5"
 "RUN-1092" = "P5"
 "RUN-1093" = "P5"
-"RUN-1094" = "P3"
 "RUN-1096" = "P5"
 "RUN-1097" = "P5"
 "RUN-1100" = "P5"
@@ -270,7 +269,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "RUN-1153" = "P3"
 "RUN-1154" = "P3"
 "RUN-1155" = "P3"
-"RUN-1159" = "P3"
 "RUN-1161" = "P4"
 "RUN-1162" = "P4"
 "RUN-1164" = "P4"
@@ -310,7 +308,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "RUN-1205" = "P4"
 "RUN-1206" = "P4"
 "RUN-1208" = "P4"
-"TRN-0395" = "P3"
 "TRN-0396" = "P3"
 "TRN-0397" = "P3"
 "TRN-0399" = "P3"
@@ -328,7 +325,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "IFC-0245" = "P8"
 "IFC-0246" = "P8"
 "IFC-0581" = "P4"
-"IFC-0712" = "P3"
 "PKG-0043" = "P7"
 "PKG-0044" = "P7"
 "PKG-0048" = "P7"
@@ -407,7 +403,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "RUN-1053" = "P4"
 "SEC-0021" = "P6"
 "SEC-0057" = "P6"
-"TRN-0200" = "P3"
 
 [deploydoc]
 "BCP-0093" = "P9"
@@ -434,139 +429,8 @@ class = "todo"
 what = "The invocation status passes through unchanged."
 
 [[text]]
-id = "TXT-0080"
-step = "P3"
-spec = "RUN"
-line = "1226"
-side = "old"
-section = "§7.3"
-class = "todo"
-what = "Because `logos_publish_fn` has no result channel, Runtime records that failure as an implementation diagnostic and drops the event."
-
-[[text]]
-id = "TXT-0081"
-step = "P3"
-spec = "IFC"
-line = "1396"
-side = "new"
-section = "§2.5"
-source = "n.110"
-class = "todo"
-guard = true
-what = "The subscription is operated only through the route handle whose `subscribe` operation created it."
-
-[[text]]
-id = "TXT-0090"
-step = "P3"
-spec = "IFC"
-line = "1992"
-side = "new"
-section = "§2.9.1"
-source = "n.118, review"
-class = "behaviour"
-what = "A null `options` or `callbacks` pointer is malformed input."
-
-[[text]]
-id = "TXT-0092"
-step = "P3"
-spec = "IFC"
-line = "2026"
-side = "new"
-section = "§2.9.1"
-source = "n.119a"
-class = "todo"
-guard = true
-what = "A binding failure that ends an admitted call produces `TRANSPORT_ERROR`, which does not prove that the provider did not execute the call."
-
-[[text]]
-id = "TXT-0093"
-step = "P3"
-spec = "IFC"
-line = "2146"
-side = "new"
-section = "§2.9.3"
-source = "n.120"
-class = "todo"
-what = "The caller view does not describe placement: neither equal nor different Runtime identifiers establish that consumer and provider share a process, a host, a filesystem or another local namespace."
-
-[[text]]
-id = "TXT-0094"
-step = "P3"
-spec = "IFC"
-line = "2147"
-side = "new"
-section = "§2.9.3"
-source = "n.120"
-class = "todo"
-what = "Whether a value that refers to a local namespace, such as a file path, is meaningful to both sides is defined by the contract that carries it."
-
-[[text]]
-id = "TXT-0095"
-step = "P3"
-spec = "IFC"
-line = "2154"
-side = "new"
-section = "§2.9.3"
-source = "n.121a, review"
-class = "behaviour"
-what = "A valid event outside the selected contract or the route's `publish_events` scope produces `NOT_AUTHORISED`."
-
-[[text]]
-id = "TXT-0097"
-step = "P3"
-spec = "IFC"
-line = "2157"
-side = "new"
-section = "§2.9.3"
-source = "n.121b, review"
-class = "behaviour"
-what = "A known failure of the publisher's authority produces `NOT_AUTHORISED`; otherwise a closed invocation destination produces `NOT_READY`."
-
-[[text]]
-id = "TXT-0103"
-step = "P3"
-spec = "IFC"
-line = "2193"
-side = "old"
-section = "§2.9.3"
-class = "todo"
-guard = true
-what = "A valid event outside the selected contract or permitted event scope produces `NOT_AUTHORISED`."
-
-[[text]]
-id = "TXT-0104"
-step = "P3"
-spec = "IFC"
-line = "2195"
-side = "old"
-section = "§2.9.3"
-class = "todo"
-guard = true
-what = "A known authority failure produces `NOT_AUTHORISED`; otherwise a closed invocation destination produces `NOT_READY`."
-
-[[text]]
-id = "TXT-0078"
-step = "P3"
-spec = "RUN"
-line = "1149"
-side = "new"
-section = "§7.3"
-class = "todo"
-what = "A failure for an individual subscriber route does not change that result; Runtime records it as an implementation diagnostic and drops the event for that route."
-
-[[text]]
-id = "TXT-0079"
-step = "P3"
-spec = "RUN"
-line = "1150"
-side = "new"
-section = "§7.3"
-class = "todo"
-what = "An event that exceeds the size limit of a Transport destination follows LOGOS-MODULE-TRANSPORT Section 2.1 for that destination."
-
-[[text]]
 id = "TXT-0168"
-step = "P3"
+step = "P5"
 spec = "RUN"
 line = "2587"
 side = "new"
@@ -577,7 +441,7 @@ what = "Runtime generates the id only when the host's protected configuration pe
 
 [[text]]
 id = "TXT-0169"
-step = "P3"
+step = "P5"
 spec = "RUN"
 line = "2588"
 side = "new"
@@ -687,114 +551,6 @@ class = "todo"
 what = "It does not by itself authorize Runtime Control operations or ordinary module routes."
 
 [[text]]
-id = "TXT-0178"
-step = "P3"
-spec = "RUN"
-line = "2896"
-side = "new"
-section = "§9.3.11"
-source = "n.177b"
-class = "todo"
-guard = true
-what = "The reported deadline does not prevent earlier route failure, including a `route-timeout`, or authority withdrawal, and does not extend in-flight completion policy."
-
-[[text]]
-id = "TXT-0112"
-step = "P3"
-spec = "TRN"
-line = "none"
-side = "new"
-source = "n.47"
-class = "todo"
-what = "mirror-file sentence removed (SO-10)"
-
-[[text]]
-id = "TXT-0113"
-step = "P3"
-spec = "TRN"
-line = "21"
-side = "new"
-section = "Abstract"
-class = "todo"
-what = "**Transport binding** — Unix domain socket and TCP stream bindings (sections 8 and 9)"
-
-[[text]]
-id = "TXT-0114"
-step = "P3"
-spec = "TRN"
-line = "40"
-side = "new"
-section = "Abstract"
-class = "todo"
-what = "This spec is ONLY relevant when modules communicate over sockets (inter-process or remote)."
-
-[[text]]
-id = "TXT-0117"
-step = "P3"
-spec = "TRN"
-line = "373"
-side = "new"
-section = "§2.1"
-source = "n.37"
-class = "todo"
-what = "A schema that admits larger values does not raise that limit."
-
-[[text]]
-id = "TXT-0118"
-step = "P3"
-spec = "TRN"
-line = "374"
-side = "new"
-section = "§2.1"
-source = "n.37, review"
-class = "behaviour"
-what = "A schema-valid value whose message exceeds the limit fails under the sender rules below even when the same call succeeds in direct mode; that failure reports a resource limit and does not change the meaning of the contract's results."
-
-[[text]]
-id = "TXT-0119"
-step = "P3"
-spec = "TRN"
-line = "375"
-side = "new"
-section = "§2.1"
-source = "n.37"
-class = "todo"
-what = "A contract whose values can exceed the limit should bound them with `.size` or transfer them in parts."
-
-[[text]]
-id = "TXT-0123"
-step = "P3"
-spec = "TRN"
-line = "756"
-side = "new"
-section = "§5.1"
-class = "todo"
-what = "The caller's binding reports the end under LOGOS-MODULE-INTERFACE Section 2.5."
-
-[[text]]
-id = "TXT-0126"
-step = "P3"
-spec = "TRN"
-line = "1167"
-side = "new"
-section = "§8.3"
-source = "n.41a, review"
-class = "behaviour"
-what = "The unknown-field check applies to the top-level Hello map; an unknown key inside `schema` or a wrongly typed `token` is a failure of that field's check."
-
-[[text]]
-id = "TXT-0127"
-step = "P3"
-spec = "TRN"
-line = "1169"
-side = "new"
-section = "§8.3"
-source = "n.41b"
-class = "todo"
-guard = true
-what = "Envelope validation under Section 2.3 does not include validation of `params`, `result`, or `data` against their declarations."
-
-[[text]]
 id = "TXT-0128"
 step = "P3"
 spec = "TRN"
@@ -805,79 +561,6 @@ source = "n.42"
 class = "todo"
 guard = true
 what = "For the remote Runtime addresses defined by LOGOS-MODULE-RUNTIME, `tls-tcp` selects `logos.remote.tls-tcp` and `quic` selects `logos.remote.quic`."
-
-[[text]]
-id = "TXT-0130"
-step = "P3"
-spec = "TRN"
-line = "24"
-side = "old"
-section = "Abstract"
-class = "todo"
-what = "**Transport binding** — Unix domain socket and TCP stream bindings (section 9)"
-
-[[text]]
-id = "TXT-0131"
-step = "P3"
-spec = "TRN"
-line = "31"
-side = "old"
-section = "Abstract"
-class = "todo"
-what = "`logos_transport.cddl` is an extracted machine-readable mirror."
-
-[[text]]
-id = "TXT-0132"
-step = "P3"
-spec = "TRN"
-line = "32"
-side = "old"
-section = "Abstract"
-class = "todo"
-what = "If the extracted artifact differs from this specification, this specification governs."
-
-[[text]]
-id = "TXT-0133"
-step = "P3"
-spec = "TRN"
-line = "48"
-side = "old"
-section = "Abstract"
-class = "todo"
-what = "This spec is ONLY relevant when modules communicate over sockets (inter- process or remote)."
-
-[[text]]
-id = "TXT-0135"
-step = "P3"
-spec = "TRN"
-line = "808"
-side = "old"
-section = "§5.2"
-class = "todo"
-guard = true
-what = "send `logos.transport.protocol-error` with `LOGOS_ERR_TRANSPORT` when the connection remains writable and close the connection."
-
-[[text]]
-id = "TXT-0137"
-step = "P3"
-spec = "TRN"
-line = "1180"
-side = "old"
-section = "§8.3"
-class = "todo"
-guard = true
-what = "Reject non-deterministic envelope CBOR (unsorted keys, non-shortest integers) with `INVALID_PARAMS`"
-
-[[text]]
-id = "TXT-0138"
-step = "P3"
-spec = "TRN"
-line = "1188"
-side = "old"
-section = "§8.3"
-class = "todo"
-guard = true
-what = "LOGOS-MODULE-TRANSPORT does not require validation of `params`, `result`, or `data` against the module's CDDL schema as part of local or remote transport message handling."
 
 [[text]]
 id = "TXT-0139"
@@ -900,16 +583,6 @@ section = "§8.4.2"
 class = "todo"
 guard = true
 what = "The endpoint address MUST use transport `quic` and ALPN [RFC 7301] value `logos.remote.quic`."
-
-[[text]]
-id = "TXT-0141"
-step = "P3"
-spec = "TRN"
-line = "1446"
-side = "old"
-section = "References/Normative"
-class = "todo"
-what = "[RFC 5280] -- Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile. https://www.rfc-editor.org/rfc/rfc5280"
 
 [[text]]
 id = "TXT-0361"

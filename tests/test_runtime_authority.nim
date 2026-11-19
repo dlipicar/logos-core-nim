@@ -916,7 +916,7 @@ suite "run.authority: execution (RUNTIME §3.6, §9.3)":
     e.finish()
 
 suite "run.authority: route validity (RUNTIME l.3157-3190; TL-03 interim)":
-  test "[RUN-0566] [RUN-0938] [CAP-0049] a route allow without valid_until is refused; expires_at is the allow's valid_until, at establishment and at renewal":
+  test "[RUN-0566] [RUN-0938] [RUN-1159] [CAP-0049] a route allow without valid_until is refused; expires_at is the allow's valid_until, at establishment and at renewal":
     let (e, orch) = ready()
     setScript(rule(vNoValidity, "establish-route"))
     check orch.establish("k0").code == ecNotAuthorised

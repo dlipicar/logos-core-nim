@@ -690,3 +690,231 @@ compared = "INTERFACE l.1918 at 6cac8335 against l.1961-1967 at 6a4dfa28: a dire
 [[stale]]
 id = "IFC-0186"
 compared = "INTERFACE l.1446 at 6a4dfa28 (a handler unsubscribing its own subscription through the same handle) is replaced by IFC-0962 (l.1416 at 6cac8335: any unsubscribe while a handler of that subscription is active on the calling thread). The route behaviour is unchanged (the N1 reading). The citations in test_events, test_rcevents, rcevents.nim and the IFC claims moved to IFC-0962 or went."
+
+[[text]]
+id = "TXT-0081"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0090"
+step = "P3"
+test = "tests/test_async.nim"
+
+[[text]]
+id = "TXT-0092"
+step = "P3"
+test = "tests/test_transported.nim"
+
+[[text]]
+id = "TXT-0095"
+step = "P3"
+test = "tests/test_async.nim"
+
+[[text]]
+id = "TXT-0097"
+step = "P3"
+test = "tests/test_async.nim"
+
+[[text]]
+id = "TXT-0118"
+step = "P3"
+test = "tests/test_transported.nim"
+
+[[text]]
+id = "TXT-0079"
+step = "P3"
+test = "tests/test_transported.nim"
+
+[[text]]
+id = "TXT-0123"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0126"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0078"
+step = "P3"
+reading = "A failure for one subscriber route leaves the publication's result as decided before fan-out, and drops the event for that route with a diagnostic."
+compared = "RUNTIME l.1149 at 6cac8335 against events.publishOp: the result is decided by publishedBy before candidates are named, and a route whose selected contract refuses the payload gets the diagnostic 'was not delivered on route' and no delivery. A transported destination that cannot take the Event closes its connection under TRANSPORT §2.1 (TXT-0079) and the call that published still succeeds (test_transported, the oversized Event)."
+kind = "holds"
+site = "tests/test_transported.nim"
+named = "an Event larger than the subscriber's frame limit"
+
+[[text]]
+id = "TXT-0080"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/runtime/events.nim"
+reading = "The publish callback has a result now (INTERFACE l.3351, TXT-0099, TXT-0077): the publisher's own failure is INVALID_PARAMS and no longer only a diagnostic. A failure for one subscriber route is TXT-0078."
+compared = "RUNTIME l.1226 at 6a4dfa28 against l.1140-1150 at 6cac8335, and events.publishOp (G165 replaced, I106)."
+
+[[text]]
+id = "TXT-0093"
+step = "P3"
+kind = "informative"
+reading = "The caller view's Runtime identifiers say nothing about placement. Nothing in the Runtime or the kit infers placement from them."
+compared = "INTERFACE l.2146 at 6cac8335 against invoke.callerOp, which reports the identifiers only; nothing compares them to decide a path."
+
+[[text]]
+id = "TXT-0094"
+step = "P3"
+kind = "informative"
+reading = "Whether a local-namespace value means the same on both sides is the contract's business, not the Runtime's."
+compared = "INTERFACE l.2147 at 6cac8335: the Runtime forwards payloads unchanged on every path."
+
+[[text]]
+id = "TXT-0103"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/runtime/events.nim"
+reading = "Reworded as TXT-0095: the permitted event scope is now named as the route's publish_events."
+compared = "INTERFACE l.2193 at 6a4dfa28 against l.2154 at 6cac8335, and events.scopedPublish (knowsEvent, then the route's allowsPublish in engine.scoped)."
+
+[[text]]
+id = "TXT-0104"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/runtime/events.nim"
+reading = "Reworded as TXT-0097: the publisher's authority failure, then a closed destination."
+compared = "INTERFACE l.2195 at 6a4dfa28 against l.2157 at 6cac8335, and events.scopedPublish."
+
+[[text]]
+id = "TXT-0112"
+step = "P3"
+kind = "informative"
+reading = "The sentence pointing at an extracted mirror file is gone (SO-10); the mirror is ours, recomputed from the spec text."
+compared = "TRANSPORT Abstract at 6cac8335 against spec/mirrors/TRN, which spectrace mirror rebuilds from the text."
+
+[[text]]
+id = "TXT-0113"
+step = "P3"
+kind = "reword"
+pair = "TXT-0130"
+reading = "The abstract now cites sections 8 and 9 for the stream bindings; nothing it states changed."
+compared = "TRANSPORT l.24 at 6a4dfa28 against l.21 at 6cac8335."
+
+[[text]]
+id = "TXT-0130"
+step = "P3"
+kind = "removed"
+reading = "Replaced by TXT-0113, which cites sections 8 and 9 for the stream bindings; nothing it states changed."
+compared = "TRANSPORT l.24 at 6a4dfa28 against l.21 at 6cac8335."
+
+[[text]]
+id = "TXT-0114"
+step = "P3"
+kind = "reword"
+pair = "TXT-0133"
+reading = "Only the line break inside 'inter-process' moved."
+compared = "TRANSPORT l.48 at 6a4dfa28 against l.40 at 6cac8335."
+
+[[text]]
+id = "TXT-0133"
+step = "P3"
+kind = "removed"
+reading = "Replaced by TXT-0114, in which only the line break inside 'inter-process' moved."
+compared = "TRANSPORT l.48 at 6a4dfa28 against l.40 at 6cac8335."
+
+[[text]]
+id = "TXT-0131"
+step = "P3"
+kind = "removed"
+reading = "The mirror-file sentences are gone (SO-10); see TXT-0112."
+compared = "TRANSPORT l.31 at 6a4dfa28 against the 6cac8335 abstract."
+
+[[text]]
+id = "TXT-0132"
+step = "P3"
+kind = "removed"
+reading = "As TXT-0131."
+compared = "TRANSPORT l.32 at 6a4dfa28 against the 6cac8335 abstract."
+
+[[text]]
+id = "TXT-0117"
+step = "P3"
+kind = "holds"
+reading = "The frame limit does not depend on any schema: a contract that admits a larger value does not raise it."
+compared = "TRANSPORT l.373 at 6cac8335 against transport/frame.nim, whose limit is the peer's frame maximum only."
+site = "tests/test_transport.nim"
+named = "a length over the limit fails before the body is read or allocated"
+
+[[text]]
+id = "TXT-0119"
+step = "P3"
+kind = "informative"
+reading = "Advice to contract authors; nothing for the Runtime."
+compared = "TRANSPORT l.375 at 6cac8335."
+
+[[text]]
+id = "TXT-0127"
+step = "P3"
+kind = "holds"
+reading = "Envelope validation does not check params, result or data against their declarations: the schema check comes after it."
+compared = "TRANSPORT l.1169 at 6cac8335 against transport/envelope.nim and the boundary's schema check."
+site = "tests/test_transport.nim"
+named = "invalid UTF-8 inside a payload passes the envelope and fails at the schema"
+
+[[text]]
+id = "TXT-0135"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/transport/io/callee.nim"
+reading = "Only the code's name changed: LOGOS_ERR_TRANSPORT is the C name of the wire's TRANSPORT_ERROR, which the overflow already sent."
+compared = "TRANSPORT l.808 at 6a4dfa28 against l.795-796 at 6cac8335, and callee.overflow."
+
+[[text]]
+id = "TXT-0137"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/transport/envelope.nim"
+reading = "Replaced by TRN-0395: non-deterministic CBOR is refused anywhere in the message, which the decoder already checked over the whole message."
+compared = "TRANSPORT l.1180 at 6a4dfa28 against l.1161 at 6cac8335, and decodeMessage."
+
+[[text]]
+id = "TXT-0138"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/transport/envelope.nim"
+reading = "Replaced by TXT-0127, which says the same of envelope validation."
+compared = "TRANSPORT l.1188 at 6a4dfa28 against l.1169 at 6cac8335."
+
+[[text]]
+id = "TXT-0141"
+step = "P3"
+kind = "removed"
+reading = "A duplicate: the old normative references listed RFC 5280 twice. 6cac8335 keeps one entry."
+compared = "TRANSPORT l.1431 and l.1446 at 6a4dfa28 against l.1413 at 6cac8335."
+
+[[text]]
+id = "TXT-0178"
+step = "P3"
+kind = "holds"
+reading = "expires_at does not prevent an earlier end: an authority withdrawal revokes the route before it."
+compared = "RUNTIME l.2896 at 6cac8335 against engine's re-authorization after policy_changed: a deny or narrowing revokes the route at once, whatever expires_at says. Nothing produces route-timeout (routes.nim); a later idle policy would map it to NOT_READY (R l.1263)."
+site = "tests/test_runtime_authority.nim"
+named = "a deny or narrowing revo"
+
+[[units]]
+id = "IFC-0712"
+compared = "INTERFACE l.2012 at 6a4dfa28 ('the version-2 vtables') against l.1968 at 6cac8335 ('the vtables in Section 5.2'). P2 moved the vtables to ABI version 3; both still carry prepare_call (test_async)."
+
+[[stale]]
+id = "TRN-0200"
+compared = "The envelope-only determinism rule (T l.1180 at 6a4dfa28) is replaced by TRN-0395 (T l.1161 at 6cac8335: anywhere in the message, including params, result and data). The decoder already checked the whole message; test_transport moved to TRN-0395 and gained cases inside params, result and data."
+
+[[moved]]
+id = "TXT-0168"
+from = "P3"
+to = "P5"
+reason = "RUNTIME l.2587, the host's protected configuration permitting a generated id, belongs to the generated-id work P5 owns with G192; P3 builds nothing of that path."
+
+[[moved]]
+id = "TXT-0169"
+from = "P3"
+to = "P5"
+reason = "As TXT-0168: RUNTIME l.2588 on not disclosing a generated id through the Host Embedding API goes with G192 in P5."
