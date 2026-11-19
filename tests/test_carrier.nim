@@ -234,8 +234,10 @@ proc samples(): seq[LcnCarrierMessage] =
       LcnCarrierIoRespond(conn: 7, request: 1, failure: failure(), work_ended: false)
     ),
     toMessage(LcnCarrierIoClose(conn: 7)),
-    toMessage(LcnCarrierIoTerminate(conn: 7)),
+    toMessage(LcnCarrierIoTerminate(conn: 7, code: 4, phase: 0)),
+    toMessage(LcnCarrierIoTerminate(conn: 7, code: 8, phase: 2)),
     toMessage(LcnCarrierIoWorkEnded(conn: 7, request: 1)),
+    toMessage(LcnCarrierIoEndSubscription(conn: 7, sub: 2)),
     toMessage(LcnCarrierIoSubscriptionResult(conn: 7, sub: 2)),
     toMessage(
       LcnCarrierIoSubscriptionResult(conn: 7, sub: 2, failure: Opt.some(failure()))
@@ -548,6 +550,38 @@ suite "run.carrier: a hosted provider's loop over lane 2 (G273) [IMPL]":
     for k in [IoCommandKind.cmdClose, IoCommandKind.cmdTerminate]:
       let cmd = roundTrip(IoCommand(conn: runtimeConn, kind: k))
       check cmd.kind == k and cmd.conn == HostConn
+    # [TXT-0124] The termination code and phase cross as they are.
+    for code in [ecNotAuthorised, ecNotReady]:
+      for phase in TermPhase:
+        let cmd = roundTrip(
+          IoCommand(
+            conn: runtimeConn,
+            kind: IoCommandKind.cmdTerminate,
+            termCode: code,
+            termPhase: phase,
+          )
+        )
+        check cmd.termCode == code and cmd.termPhase == phase
+    block:
+      let cmd = roundTrip(
+        IoCommand(conn: runtimeConn, kind: IoCommandKind.cmdEndSubscription, subId: 6)
+      )
+      check cmd.kind == IoCommandKind.cmdEndSubscription
+      check cmd.conn == HostConn and cmd.subId == 6
+    # Any other code or phase breaks the carrier.
+    for (code, phase) in [(0'u64, 0'u64), (3, 0), (9, 0), (4, 3), (8, 255)]:
+      check toCommand(
+        decodeMessage(
+          encodeCbor(
+            cborMap(
+              (cbor("kind"), cbor("io_terminate")),
+              (cbor("conn"), cbor(7'u64)),
+              (cbor("code"), cbor(code)),
+              (cbor("phase"), cbor(phase)),
+            )
+          )
+        ).tryGet
+      ).isErr
     block:
       let cmd = roundTrip(
         IoCommand(conn: runtimeConn, kind: IoCommandKind.cmdWorkEnded, endedId: 9)

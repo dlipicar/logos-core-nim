@@ -15,7 +15,7 @@
 ;                             rc_link_closed, rc_link_released
 ;   lane 2, the boundary:     io_admit_*, io_respond, io_close, io_terminate,
 ;                             io_work_ended, io_subscription_result,
-;                             io_stop_serving, admit_verdict, call_cancel,
+;                             io_end_subscription, io_stop_serving, admit_verdict, call_cancel,
 ;                             scoped_result / io_hello, io_established, io_dispatch, io_stop,
 ;                             io_closed, io_subscribe, io_unsubscribe,
 ;                             io_publish_failed, io_publish_result,
@@ -78,6 +78,7 @@ lcn.carrier_message =
   lcn.carrier_io_terminate /
   lcn.carrier_io_work_ended /
   lcn.carrier_io_subscription_result /
+  lcn.carrier_io_end_subscription /
   lcn.carrier_io_stop_serving /
   lcn.carrier_admit_verdict /
   lcn.carrier_call_cancel /
@@ -574,9 +575,15 @@ lcn.carrier_io_close = {
   conn: uint64,
 }
 
+; [SPEC TRANSPORT §8.1] `code` is NOT_AUTHORISED (4) or NOT_READY (8, l.977);
+; `phase` the loop's `TermPhase` by its position: 0 the whole termination, 1
+; stop admission only, 2 the ProtocolError and close. Any other value breaks
+; the carrier.
 lcn.carrier_io_terminate = {
   kind: "io_terminate",
   conn: uint64,
+  code: uint8,
+  phase: uint8,
 }
 
 lcn.carrier_io_work_ended = {
@@ -590,6 +597,14 @@ lcn.carrier_io_subscription_result = {
   conn: uint64,
   sub: uint64,
   ? failure: lcn.carrier_failure,
+}
+
+; [SPEC TRANSPORT §5.1 l.752-756] End active subscription `sub` of `conn` with
+; a SubscriptionEnd NOT_AUTHORISED while the session continues.
+lcn.carrier_io_end_subscription = {
+  kind: "io_end_subscription",
+  conn: uint64,
+  sub: uint64,
 }
 
 lcn.carrier_io_stop_serving = {

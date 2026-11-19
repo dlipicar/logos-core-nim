@@ -154,6 +154,10 @@ arm(
   arm_lcn_Carrier_io_subscription_result,
 )
 arm(LcnCarrierIoTerminate, lcn_Carrier_io_terminate, arm_lcn_Carrier_io_terminate)
+arm(
+  LcnCarrierIoEndSubscription, lcn_Carrier_io_end_subscription,
+  arm_lcn_Carrier_io_end_subscription,
+)
 arm(LcnCarrierIoUnsubscribe, lcn_Carrier_io_unsubscribe, arm_lcn_Carrier_io_unsubscribe)
 arm(LcnCarrierIoWorkEnded, lcn_Carrier_io_work_ended, arm_lcn_Carrier_io_work_ended)
 arm(LcnCarrierScopedCheck, lcn_Carrier_scoped_check, arm_lcn_Carrier_scoped_check)

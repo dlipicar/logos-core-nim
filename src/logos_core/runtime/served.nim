@@ -345,20 +345,20 @@ proc respondFailure*(sv: Served, conn: ConnId, requestId: uint64, code: ErrorCod
     )
   )
 
-proc close*(sv: Served, s: Session)
+proc finishDrain(sv: Served, s: Session)
 
 proc callEnded*(sv: Served, conn: ConnId, requestId: uint64) =
   ## [SPEC TRANSPORT §6, §8.6] Nothing of the served invocation runs any more:
   ## its slot is released (a no-op when its Response said so). [Rev R1] A
-  ## draining session whose last served call ended closes, with no
-  ## ProtocolError (K13).
+  ## draining session whose last served call ended finishes its termination
+  ## (TRANSPORT l.977).
   sv.submit(IoCommand(conn: conn, kind: cmdWorkEnded, endedId: requestId))
   let s = sv.sessions.getOrDefault(conn)
   if s == nil:
     return
   s.calls.del(requestId)
   if s.draining and s.calls.len == 0:
-    sv.close(s)
+    sv.finishDrain(s)
 
 # Orders -----------------------------------------------------------------------------
 
@@ -367,8 +367,9 @@ proc terminate*(sv: Served, s: Session): seq[CallRef] =
   ## authority end. Every in-flight served Request is answered NOT_AUTHORISED
   ## (uncharged; the I/O thread ignores one already answered), then the
   ## session terminates: ProtocolError NOT_AUTHORISED when writable, then close
-  ## (TRANSPORT l.987-991). The loop's order puts the Responses first. Returns
-  ## the served invocations, which now commit nothing.
+  ## (TRANSPORT l.966-971). The loop's order puts the Responses first. Returns
+  ## the served invocations, which now commit nothing. A draining session is
+  ## raised to NOT_AUTHORISED (RUNTIME l.1267).
   if s.ended:
     return
   s.ended = true
@@ -384,19 +385,43 @@ proc terminate*(sv: Served, s: Session): seq[CallRef] =
         workEnded: false,
       )
     )
-  sv.submit(IoCommand(conn: s.conn, kind: cmdTerminate))
+  sv.submit(
+    IoCommand(
+      conn: s.conn, kind: cmdTerminate, termCode: ecNotAuthorised, termPhase: tpWhole
+    )
+  )
 
 proc drain*(sv: Served, s: Session, deadline: MonoTime) =
-  ## [Rev R1] `EndpointOrders.drain`: a readiness end. The session admits
-  ## nothing new (the route is terminal, so `admit` refuses NOT_READY);
-  ## in-flight Requests commit their own results; it closes once its last
-  ## served call ended, or at `deadline`.
+  ## [Rev R1; SPEC TRANSPORT l.977] `EndpointOrders.drain`: a readiness end
+  ## terminates with NOT_READY. The session stops admitting at once: a new
+  ## Request gets response-err NOT_READY without dispatch, a Subscribe or
+  ## Unsubscribe a failed result NOT_READY, and every subscription ends.
+  ## In-flight Requests commit their own results (G174, the permitted bounded
+  ## completion); once its last served call ended, or at `deadline`,
+  ## ProtocolError NOT_READY and close.
   if s.ended or s.draining:
     return
   s.draining = true
   s.drainUntil = Opt.some(deadline)
+  sv.submit(
+    IoCommand(
+      conn: s.conn, kind: cmdTerminate, termCode: ecNotReady, termPhase: tpBegin
+    )
+  )
   if s.calls.len == 0:
-    sv.close(s)
+    sv.finishDrain(s)
+
+proc finishDrain(sv: Served, s: Session) =
+  ## [SPEC TRANSPORT l.977] The drain's end: ProtocolError NOT_READY (or
+  ## NOT_AUTHORISED when an authority end raised it) and close.
+  if s.ended:
+    return
+  s.ended = true
+  sv.submit(
+    IoCommand(
+      conn: s.conn, kind: cmdTerminate, termCode: ecNotReady, termPhase: tpFinish
+    )
+  )
 
 proc close*(sv: Served, s: Session) =
   ## `EndpointOrders.close`: at once, with no ProtocolError.
@@ -412,7 +437,7 @@ proc checkDrains*(sv: Served, now: MonoTime) =
     if s.draining and not s.ended and s.drainUntil.isSome and now >= s.drainUntil.get:
       due.add(s)
   for s in due:
-    sv.close(s)
+    sv.finishDrain(s)
 
 proc nextDrain*(sv: Served): Opt[MonoTime] =
   var t = Opt.none(MonoTime)

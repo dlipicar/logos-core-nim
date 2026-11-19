@@ -149,7 +149,10 @@ when unixStream:
         io.introspect(z, cmd.introspectId)
     of cmdTerminate:
       if not c.isNil:
-        io.terminate(c)
+        io.terminate(c, cmd.termCode, cmd.termPhase)
+    of cmdEndSubscription:
+      if not c.isNil:
+        io.endSubscription(c, cmd.subId)
     of cmdSubscribe:
       io.subscribe(c, cmd)
     of cmdUnsubscribe:

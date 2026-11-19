@@ -467,9 +467,11 @@ and routes already established are never moved (RUNTIME l.940).
   ticket; no other answer, list, event, record or diagnostic does. A replay of the same request key
   returns the route without `invocation`: renew it for a new ticket (DECISIONS G255).
 - When such a route ends, its unused tickets die with it, and its sessions end by cause (DECISIONS
-  G260): a revocation or expiry answers each call in flight `NOT_AUTHORISED`; `close_route`, a
-  provider stop or shutdown lets calls in flight finish within `stop_deadline_ms` (or the shutdown
-  grace), then closes.
+  G260): a revocation or expiry answers each call in flight `NOT_AUTHORISED`, then the session closes
+  with ProtocolError `NOT_AUTHORISED`; `close_route`, a provider stop or shutdown refuses new calls
+  `NOT_READY`, lets calls in flight finish within `stop_deadline_ms` (or the shutdown grace), then
+  closes with ProtocolError `NOT_READY` (TRANSPORT l.977). A consumer whose provider ends a session
+  that way sees `NOT_READY` on its handle.
 - A consumer's `materialize_route` on such a route connects to the endpoint with the route's ticket
   and returns once the provider holds the session. One ticket opens one handle: a further handle on the
   same route needs `renew_route` first, and a handle whose connection failed is not retried

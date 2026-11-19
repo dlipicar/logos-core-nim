@@ -24,7 +24,7 @@ logos.transport.value-root        = bstr .size 32
 
 ; This block is the owning registry for transport message-kind values.
 ; Other Logos specifications may cite these values but do not allocate them.
-logos.transport.message-kind      = 0..8
+logos.transport.message-kind      = 0..9
 
 logos.transport.message-kind-hello       = 0
 logos.transport.message-kind-request     = 1
@@ -35,6 +35,7 @@ logos.transport.message-kind-event       = 5
 logos.transport.message-kind-error       = 6
 logos.transport.message-kind-cancel      = 7
 logos.transport.message-kind-subscription-result = 8
+logos.transport.message-kind-subscription-end = 9
 """
   # spec-module-transport.md §1.3, spec/mirrors/TRN/1.3.envelopes.cddl
   TransportEnvelopesDocument* = """
@@ -142,6 +143,16 @@ logos.transport.subscription-result-err = {
 }
 
 
+; -- Subscription End --
+; End one active subscription while the session continues.
+
+logos.transport.subscription-end = {
+    0:     logos.transport.message-kind-subscription-end,
+    id:    logos.transport.subscription-id,
+    error: logos.transport.error-payload,
+}
+
+
 ; -- Event --
 ; Async event notification to a subscriber. Data is a CBOR map whose
 ; concrete schema is defined by the module's .cddl file (see
@@ -200,6 +211,7 @@ logos.transport.message = logos.transport.hello
         / logos.transport.subscribe
         / logos.transport.unsubscribe
         / logos.transport.subscription-result
+        / logos.transport.subscription-end
         / logos.transport.event
         / logos.transport.protocol-error
         / logos.transport.cancel

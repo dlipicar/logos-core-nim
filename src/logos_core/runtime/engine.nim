@@ -9257,8 +9257,9 @@ proc scopedConn(st: State, q: Request) =
 proc publishFailure(st: State, route: string, f: PublishFailure): InvocationFailure =
   ## [SPEC INTERFACE l.2189-2196; plan §2.7, Rev R17] The code of a scoped
   ## publication the session did not commit: a closed destination or
-  ## connection is NOT_READY, or NOT_AUTHORISED after an authority end; an
-  ## oversized Event MODULE_ERROR; the others I54's mapping.
+  ## connection is NOT_READY, or NOT_AUTHORISED after an authority end; a
+  ## terminating session its termination code (TRANSPORT §8.1); an oversized
+  ## Event MODULE_ERROR; the others I54's mapping.
   let r = st.route(route)
   let authorityEnd = r != nil and r.isTerminal and r.endCode == ecNotAuthorised
   case f.kind
@@ -9268,7 +9269,7 @@ proc publishFailure(st: State, route: string, f: PublishFailure): InvocationFail
       "the invocation's destination is closed",
     )
   of peEnded:
-    failure(ecNotAuthorised, "the route's access ended")
+    failure(f.code, "the route's access ended")
   else:
     InvocationFailure(code: f.code, message: Opt.some(f.msg))
 

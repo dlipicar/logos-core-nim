@@ -487,7 +487,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check e.stop(meterView.instance).tryGet.state == msUnloaded
     e.finish()
 
-  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] close_route drains: the in-flight Request gets its result, a new one is NOT_READY, then the session closes with no ProtocolError":
+  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] [TXT-0124] close_route drains: the in-flight Request gets its result, a new one is NOT_READY, then ProtocolError NOT_READY and close":
     let e = fixtureEngine(transported())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -509,7 +509,8 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     let closed = o.closedOf(conn)
     check closed.isSome
     if closed.isSome:
-      check closed.get.cause == ccPeerClosed
+      check closed.get.cause == ccPeerError
+      check closed.get.code == ecNotReady
     e.finish()
 
   ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] a provider stop drains to the stop deadline, then closes; the provider is destroyed only after its call returns":
@@ -531,9 +532,12 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     var t: Thread[(Engine, string)]
     check e.stopping(meterView.instance, t)
     # The stop deadline (`PassingStop`) passes with the call held: the session
-    # closes, so the caller's call fails TRANSPORT_ERROR (TRANSPORT l.543).
+    # terminates with NOT_READY (TRANSPORT l.977), so the caller's call fails
+    # TRANSPORT_ERROR (l.979-980).
     check o.outcome(conn, tag, 3 * Wait).codeOf == Opt.some(ecTransport)
-    check o.closedOf(conn).isSome
+    let closed = o.closedOf(conn)
+    check closed.isSome and closed.get.cause == ccPeerError
+    check closed.isSome and closed.get.code == ecNotReady
     check destroyed.load == gone
     gate.store(false)
     joinThread(t)
@@ -545,7 +549,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     )
     e.finish()
 
-  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] a consumer stop and a provider failure drain: an admitted Request answers, marked cancelled; a new one is NOT_READY; then the session closes":
+  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] [TXT-0124] a consumer stop and a provider failure drain: an admitted Request answers, marked cancelled; a new one is NOT_READY; then ProtocolError NOT_READY and close":
     let e = fixtureEngine(transported())
     let meterView = e.started(meter())
     let o = newOwner()
@@ -575,7 +579,8 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
       if got.codeOf == Opt.some(ecOk):
         check got.reading.reading.value == 1 # marked cancelled at the route's end
       let closed = o.closedOf(conn)
-      check closed.isSome and closed.get.cause == ccPeerClosed
+      check closed.isSome and closed.get.cause == ccPeerError
+      check closed.isSome and closed.get.code == ecNotReady
 
     # The provider fails: the session drains; its result is delivered, then
     # the session closes and the release follows the call's return.
@@ -592,7 +597,8 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
       gate.store(false)
       check o.outcome(conn, tag).codeOf == Opt.some(ecOk)
       let closed = o.closedOf(conn)
-      check closed.isSome and closed.get.cause == ccPeerClosed
+      check closed.isSome and closed.get.cause == ccPeerError
+      check closed.isSome and closed.get.code == ecNotReady
       check waitUntil(
         proc(): bool =
           destroyed.load == gone + 1
@@ -618,9 +624,11 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check e.view(v.instance).tryGet.state == msError
     check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecNotReady)
     # The bound (`stop_deadline` from the route's end, `PassingStop`) passes
-    # with the call held: the session closes.
+    # with the call held: ProtocolError NOT_READY and close (TRANSPORT l.977).
     check o.outcome(conn, tag, 3 * Wait).codeOf == Opt.some(ecTransport)
-    check o.closedOf(conn).isSome
+    let closed = o.closedOf(conn)
+    check closed.isSome and closed.get.cause == ccPeerError
+    check closed.isSome and closed.get.code == ecNotReady
     gate.store(false)
     e.finish()
 
@@ -933,7 +941,7 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
     h.release()
     e.finish()
 
-  test "[RUN-0804] [RUN-0805] [IFC-0948] [IMPL-DECISION G259] a failed connection's cause decides the materialization's code; a peer mismatch fails the route":
+  test "[RUN-0804] [RUN-0805] [IFC-0948] [IMPL-DECISION G259] [IMPL-DECISION G256] a failed connection's cause decides the materialization's code; a peer mismatch fails the route; a peer's ProtocolError NOT_READY is NOT_READY":
     check connectOutcome(cfHello, ecNotAuthorised) == (ecNotAuthorised, false)
     check connectOutcome(cfHello, ecVersionMismatch) == (ecVersionMismatch, false)
     check connectOutcome(cfHello, ecModule) == (ecModule, false)
@@ -945,6 +953,10 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
     check connectOutcome(cfUnsupported, ecTransport) == (ecModule, false)
     check connectOutcome(cfShutdown, ecTransport) == (ecNotReady, false)
     check closedCode(ccPeerError, ecNotAuthorised) == ecNotAuthorised
+    # [P3 ruling 5] A peer's ProtocolError NOT_READY is a known readiness end.
+    check closedCode(ccPeerError, ecNotReady) == ecNotReady
+    for cause in [ccPeerClosed, ccProtocol, ccNotWritable, ccOverflow]:
+      check closedCode(cause, ecNotReady) == ecTransport
     for cause in [ccPeerClosed, ccPeerError, ccProtocol, ccNotWritable, ccOverflow]:
       check closedCode(cause, ecTransport) == ecTransport
     check closedCode(ccPeerClosed, ecOk) == ecTransport

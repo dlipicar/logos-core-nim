@@ -144,11 +144,16 @@ func connectOutcome*(
     (code: ecNotReady, transportFailed: false)
 
 func closedCode*(cause: CloseCause, code: ErrorCode): ErrorCode =
-  ## [plan §2.6; TRANSPORT l.991, l.996; TF-15, G256] What a closed connection
-  ## tells the handle when the route has not ended: a session the provider
-  ## terminated with ProtocolError NOT_AUTHORISED is a known authorization
-  ## failure; any other end is TRANSPORT_ERROR, never an inferred NOT_READY.
-  if cause == ccPeerError and code == ecNotAuthorised: ecNotAuthorised else: ecTransport
+  ## [plan §2.6; TRANSPORT l.971-981; TF-15, G256; P3 ruling 5] What a closed
+  ## connection tells the handle when the route has not ended: a session the
+  ## provider terminated with ProtocolError NOT_AUTHORISED is a known
+  ## authorization failure, and one it terminated with NOT_READY a known loss
+  ## of readiness (RUNTIME l.1262-1265, INTERFACE l.1455); any other end is
+  ## TRANSPORT_ERROR, never an inferred NOT_READY.
+  if cause == ccPeerError and code in {ecNotAuthorised, ecNotReady}:
+    code
+  else:
+    ecTransport
 
 proc observe*(l: Link, code: ErrorCode): bool =
   ## [Rev R4] Sets the first terminal cause; true when this was it.

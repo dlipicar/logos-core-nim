@@ -751,7 +751,7 @@ when defined(posix):
         check rec.code in {ecInvalidParams, ecNotAuthorised}
       e.finish()
 
-    test "[TRN-0317] [IMPL-DECISION G174] [IMPL-DECISION G260] P-11 revocation answers a hosted provider's in-flight Request NOT_AUTHORISED, then ends the session NOT_AUTHORISED; close_route drains without a ProtocolError":
+    test "[TRN-0317] [IMPL-DECISION G174] [IMPL-DECISION G260] P-11 [TXT-0124] revocation answers a hosted provider's in-flight Request NOT_AUTHORISED, then ends the session NOT_AUTHORISED; close_route drains, then ProtocolError NOT_READY":
       let cfg =
         hosted(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
       let dir = cfg.stateOf()
@@ -805,7 +805,8 @@ when defined(posix):
         let closed = o.closedOf(conn)
         check closed.isSome
         if closed.isSome:
-          check closed.get.cause == ccPeerClosed
+          check closed.get.cause == ccPeerError
+          check closed.get.code == ecNotReady
       e.finish()
 
     test "[TRN-0317] [IMPL-DECISION G174] P-11b a revoked route's NOT_AUTHORISED reaches a hosted provider's host before its call's cancel: the provider, which returns once cancelled, commits nothing, even while the Runtime thread is slow to go on after marking the call cancelled":

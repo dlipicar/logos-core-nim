@@ -554,3 +554,83 @@ kind = "removed"
 site = "sdk/src/logos_sdk/codegen/kitrt.nim:481"
 reading = "Replaced by TXT-0061: the helper now returns the callback's result, and publishEncoded returns it."
 compared = "INTERFACE l.4094 at 6a4dfa28 against l.4113-4115 at 6cac8335, and publishEncoded in codegen/kitrt.nim."
+
+# P3: wire, SubscriptionEnd, event delivery and the remote profiles -----------------------------------------------
+
+[[units]]
+id = "TRN-0016"
+compared = "TRANSPORT §1.1 l.96 at 6a4dfa28 ('message-kind = 0..8') against l.84 at 6cac8335 ('0..9'): kind 9 is SubscriptionEnd. The §1.1 mirror and the pins are regenerated from the text; transport/envelope.nim gains mkSubscriptionEnd, which loadEnvelope checks against the pinned CDDL, and test_transport's kind-registry test accepts 9 and refuses 10."
+
+[[units]]
+id = "TRN-0040"
+compared = "TRANSPORT §1.3 l.230 at 6a4dfa28 against l.220 at 6cac8335: the subscription-result-err rule is unchanged; the extracted text now ends in the comment that opens the new subscription-end rule. The §1.3 mirror is regenerated; the rule's tests in test_transport are unchanged."
+
+[[units]]
+id = "TRN-0045"
+compared = "TRANSPORT §1.3 l.290 at 6a4dfa28 against l.290 at 6cac8335: the message union gains logos.transport.subscription-end. The envelope decodes and encodes it (decode typed by failureOf, toCbor with id and error); test_transport's samples carry one, which round-trips, fails with an extra field, a zero code and in the wrong direction."
+
+[[units]]
+id = "TRN-0125"
+compared = "TRANSPORT l.808 at 6a4dfa28 against l.796 at 6cac8335: the error code is named TRANSPORT_ERROR instead of LOGOS_ERR_TRANSPORT, the same code (INTERFACE §5.2 names one by the other). Event output overflow is unchanged (G261); test_transport_io's overflow tests stand."
+
+[[units]]
+id = "TRN-0163"
+compared = "TRANSPORT l.981 at 6a4dfa28 ('When the route expires or is revoked') against l.963 at 6cac8335 ('When route authority expires or is revoked'): the same end, now named as the route's authority. Unchanged in code; the readiness end the new l.977 adds is TXT-0124. test_transport's termination test keeps the tag."
+
+[[units]]
+id = "TRN-0274"
+compared = "TRANSPORT l.417 at 6a4dfa28 ('received before that point') against l.410 at 6cac8335 ('processed before that point'): the check applies when the message is processed, which is where session.receive makes it. Unchanged in code; SubscriptionEnd joins the caller-bound kinds a callee refuses (test_transport, trn.direction)."
+
+[[text]]
+id = "TXT-0077"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0096"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0099"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0115"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0116"
+step = "P3"
+reading = "The §1.3 list of callee-to-caller messages gains SubscriptionEnd."
+compared = "TRANSPORT l.331 at 6cac8335 against KindRule in transport/envelope.nim, where subscription-end is callee to caller, and session.receive on both sides: the callee refuses it as a wrong-direction message, the caller takes it (test_transport, trn.direction)."
+kind = "holds"
+site = "tests/test_transport.nim"
+named = "the callee closes on caller-bound kinds"
+
+[[text]]
+id = "TXT-0120"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0121"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0122"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0124"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0125"
+step = "P3"
+test = "tests/test_transport.nim"

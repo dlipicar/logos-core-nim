@@ -111,11 +111,14 @@ func codeOf(c: uint8): ErrorCode =
   errorCodeOf(c).get(ecModule)
 
 func closedCodeOf(cause: CloseCause, code: ErrorCode): ErrorCode =
-  ## [plan §2.6; TRANSPORT l.991, l.996; TF-15, G256] As
+  ## [plan §2.6; TRANSPORT l.971-981; TF-15, G256; P3 ruling 5] As
   ## `transported.closedCode`: a session the provider terminated with
-  ## ProtocolError NOT_AUTHORISED is a known authorization failure; any other
+  ## ProtocolError NOT_AUTHORISED or NOT_READY reports that code; any other
   ## end is TRANSPORT_ERROR, never an inferred NOT_READY.
-  if cause == ccPeerError and code == ecNotAuthorised: ecNotAuthorised else: ecTransport
+  if cause == ccPeerError and code in {ecNotAuthorised, ecNotReady}:
+    code
+  else:
+    ecTransport
 
 # Retained material (RUN-0174) ----------------------------------------------------------
 

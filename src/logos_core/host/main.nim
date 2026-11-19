@@ -333,8 +333,9 @@ proc route(f: var seq[byte]) =
   of K.lcn_Carrier_io_admit_established, K.lcn_Carrier_io_admit_failed,
       K.lcn_Carrier_io_admit_unavailable, K.lcn_Carrier_io_respond,
       K.lcn_Carrier_io_close, K.lcn_Carrier_io_terminate, K.lcn_Carrier_io_work_ended,
-      K.lcn_Carrier_io_subscription_result, K.lcn_Carrier_io_stop_serving,
-      K.lcn_Carrier_admit_verdict, K.lcn_Carrier_call_cancel:
+      K.lcn_Carrier_io_subscription_result, K.lcn_Carrier_io_end_subscription,
+      K.lcn_Carrier_io_stop_serving, K.lcn_Carrier_admit_verdict,
+      K.lcn_Carrier_call_cancel:
     # [K38 interim] In the order the Runtime gave, on one thread: a verdict,
     # a cancellation and a session order apply as they came.
     order(f)
