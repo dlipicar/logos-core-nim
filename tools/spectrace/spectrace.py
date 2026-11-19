@@ -290,7 +290,7 @@ PENDING_STEP_RE = re.compile(r"P[0-9]")
 TEXT_ID_RE = re.compile(r"TXT-\d{4}")
 TEXT_CLASSES = {"behaviour", "todo"}
 READING_KINDS = {"reword", "removed", "informative", "holds"}
-WORK_ITEMS = {"5-5", "5-7a", "5-12"}  # the work items that may own a unit after the re-pin
+WORK_ITEMS = {"5-5", "5-7a", "5-7b", "5-12"}  # the work items that may own a unit after the re-pin
 SITE_ROOTS = ("src/", "sdk/src/", "tests/", "sdk/tests/", "docs/")
 TEST_TEMPLATES = "test|ltTest|peerTest|sceneTest"
 # Conditions a test may sit under and still run somewhere: platforms, and the one build switch the suites use.
@@ -301,7 +301,8 @@ HELD_STATUS = "deferred:tier-5"
 @dataclass
 class Pending:
     """What still follows the previous spec revision. Each section maps an item to its sub-step,
-    and `deferred` maps a unit to the work item that owns it after the re-pin."""
+    and `deferred` maps a unit, or a text entry that rides on a deferred unit, to the work item
+    that owns it after the re-pin."""
 
     mirror: dict = field(default_factory=dict)
     pin: dict = field(default_factory=dict)
@@ -848,7 +849,9 @@ def pending_gate_findings(
 ) -> list[str]:
     """The list can only shrink honestly: an entry that no longer holds anything back is an error."""
     findings = []
-    for uid in sorted(set(pending.added) | set(pending.changed) | set(pending.deferred)):
+    # [re-pin P4a] A text entry in [deferred] is no unit: `spectrace pending` checks the unit it rides on.
+    units = {uid for uid in pending.deferred if not TEXT_ID_RE.fullmatch(uid)}
+    for uid in sorted(set(pending.added) | set(pending.changed) | units):
         if uid not in gated:
             findings.append(f"{PENDING_FILE}: {uid} is not a live gated requirement")
     for uid in sorted(pending.added):
@@ -1325,9 +1328,20 @@ def baseline_findings(root: Path, pending: Pending, cleared: dict, state) -> lis
     for uid in base.get("deferred", {}):
         if uid not in pending.deferred and state(uid)[0] != "claimed":
             findings.append(f"{uid} left [deferred] without being claimed")
+    riders = {r.get("id"): r for r in cleared.get("deferred", [])}
     for uid in set(pending.deferred) - set(base.get("deferred", {})):
-        if not decided(uid, records.get(uid, {})):
+        record = riders.get(uid, {}) if TEXT_ID_RE.fullmatch(uid) else records.get(uid, {})
+        if not decided(uid, record):
             findings.append(f"{uid} joined [deferred] with no decision row in {CLEARED_FILE}")
+    sections: dict[str, str] = {}
+
+    def section_of(uid: str) -> str | None:
+        """The section of a unit in its spec's ledger."""
+        if not sections:
+            for path in ledger_files(root):
+                for u in load_ledger(path)[1]:
+                    sections[u.id] = u.section
+        return sections.get(uid)
 
     open_text = {e.get("id"): e for e in pending.text}
     done = {e.get("id"): e for e in cleared.get("text", [])}
@@ -1335,10 +1349,21 @@ def baseline_findings(root: Path, pending: Pending, cleared: dict, state) -> lis
     tests = list(real_tests(root))
     for b in base.get("text", []):
         tid = b["id"]
+        rider = riders.get(tid, {})
+        unit = str(rider.get("rides", "")).strip()
         if tid in open_text:
             same_step(tid, b["step"], open_text[tid].get("step", ""))
             if b["class"] == "behaviour" and open_text[tid].get("class") != "behaviour" and tid not in lowered:
                 findings.append(f"{tid}: a behaviour entry is lowered only with a [[lowered]] record and a decision row that names it")
+        elif tid in pending.deferred:
+            # [re-pin P4a] A text entry defers only riding on a unit deferred to the same work item, of
+            # the same spec and section, with a decision row that names the entry.
+            if not unit:
+                findings.append(f"{tid} is in [deferred] with no [[deferred]] record naming the unit it rides on in {CLEARED_FILE}")
+            elif pending.deferred.get(unit) != pending.deferred[tid]:
+                findings.append(f"{tid} rides on {unit}, which is not deferred to {pending.deferred[tid]}")
+            elif not unit.startswith(str(b.get("spec", "")) + "-") or section_of(unit) != b.get("section"):
+                findings.append(f"{tid} ({b.get('spec')} {b.get('section')}) rides on {unit}, of another spec or section")
         elif tid not in done:
             findings.append(f"{tid} is neither open nor cleared")
         else:
@@ -1365,6 +1390,12 @@ def baseline_findings(root: Path, pending: Pending, cleared: dict, state) -> lis
                 wanted = str(e.get("named", "")).strip()
                 if kind == "holds" and not (wanted and any(suite == path and wanted in name for suite, name in tests)):
                     findings.append(f"{tid}: `holds` names the suite in `site` and a test of it in `named`")
+            if unit:
+                # It was deferred: it leaves once its unit is claimed by a test that carries its tag.
+                suite = str(e.get("test", "")).strip()
+                carried = any(s == suite and f"[{tid}]" in n and f"[{unit}]" in n for s, n in tests)
+                if not (state(unit)[0] == "claimed" and carried):
+                    findings.append(f"{tid} left [deferred] before a test of {unit} that carries [{tid}] claimed it")
     return findings
 
 
@@ -1407,6 +1438,9 @@ def pending_findings(root: Path, step: str | None = None, digest: str | None = N
     for uid, owner in pending.deferred.items():
         if owner not in WORK_ITEMS:
             findings.append(f"[deferred] {uid}: {owner!r} is not one of the work items {sorted(WORK_ITEMS)}")
+        if TEXT_ID_RE.fullmatch(uid):
+            # A text entry rides on a deferred unit (`baseline_findings` checks which).
+            continue
         status, named = state(uid)
         if not (named and status.startswith("deferred:")):
             findings.append(f"[deferred] {uid}: its claims file must defer it by name, in [units]")
@@ -1433,6 +1467,8 @@ def pending_findings(root: Path, step: str | None = None, digest: str | None = N
             findings.append(f"[[text]] {tid} still belongs to {entry.get('step')}")
         if tid in tags:
             findings.append(f"[[text]] {tid} is named by {sorted(tags[tid])}; move it to {CLEARED_FILE}")
+        if tid in pending.deferred:
+            findings.append(f"[[text]] {tid} is also in [deferred]")
 
     cleared = load_toml(root / CLEARED_FILE)
     findings.extend(baseline_findings(root, pending, cleared, state))
@@ -1533,6 +1569,17 @@ def pending_self_test() -> int:
     commented = '#[\ntest "[TXT-0001] x":\n  check true\n]#\n'
     cites = 'test "[RUN-0001] it holds":\n  check true\n'
     two = 'test "[TXT-0001] [TXT-0002] both hold":\n  check true\n'
+    # A text deferral: TXT-0001 (RUN §1) rides on RUN-0001, deferred to 5-7a.
+    rides = '[deferred]\n"RUN-0001" = "5-7a"\n"TXT-0001" = "5-7a"\n'
+    behind = '[[text]]\n' + todo + 'section = "§1"\n'
+    rider = '[[deferred]]\nid = "TXT-0001"\nrides = "RUN-0001"\ndecision = "G8"\n'
+    unit_line = '{"id": "RUN-0001", "kind": "kw", "section": "§1", "heading": "One", "line": 1, "fingerprint": "", "text": "x"}'
+    ledger = {
+        "conformance/requirements/RUN.jsonl": '{"spec": "s.md", "rev": "x", "next": 2}\n' + unit_line + "\n",
+        "docs/DECISIONS.md": "### G7 a decision on RUN-0001\n### G8 TXT-0001 waits for 5-7a\n",
+    }
+    leaves = 'id = "TXT-0001"\nstep = "P3"\ntest = "tests/test_a.nim"\n'
+    both = 'test "[RUN-0001] [TXT-0001] it holds":\n  check true\n'
     edited = tree("")
     (edited / BASELINE_FILE).write_text("# changed\n", encoding="utf-8")
     cases = [
@@ -1582,6 +1629,13 @@ def pending_self_test() -> int:
         ("[deferred] without a named deferral fails", clean(frozen('[deferred]\n"RUN-0001" = "5-5"\n', ""), ("deferred:tier-5", False)), False),
         ("[deferred] with a named deferral and a decision passes", clean(frozen('[deferred]\n"RUN-0001" = "5-5"\n', "", ruled, files=rows), ("deferred:tier-5", True)), True),
         ("[deferred] with a vague owner fails", clean(frozen('[deferred]\n"RUN-0001" = "later"\n', "", ruled, files=rows), ("deferred:tier-5", True)), False),
+        ("a text entry riding on a unit of its section passes", clean(frozen(rides, behind, ruled + rider, files=ledger), ("deferred:tier-5", True)), True),
+        ("a text entry deferred with no rider record fails", clean(frozen(rides, behind, ruled, files=ledger), ("deferred:tier-5", True)), False),
+        ("a text deferral with no decision row fails", clean(frozen(rides, behind, ruled + rider, files={**ledger, "docs/DECISIONS.md": "### G7 a decision on RUN-0001\n"}), ("deferred:tier-5", True)), False),
+        ("a text entry riding on another section's unit fails", clean(frozen(rides, behind.replace("§1", "§2"), ruled + rider, files=ledger), ("deferred:tier-5", True)), False),
+        ("a text entry riding on another work item's unit fails", clean(frozen(rides.replace('"TXT-0001" = "5-7a"', '"TXT-0001" = "5-7b"'), behind, ruled + rider, files=ledger), ("deferred:tier-5", True)), False),
+        ("a deferred text entry leaving with its unit's test passes", clean(frozen("", behind, ruled + rider + "[[text]]\n" + leaves, tests=both, files=ledger)), True),
+        ("a deferred text entry leaving by a test without its unit fails", clean(frozen("", behind, ruled + rider + "[[text]]\n" + leaves, tests=named, files=ledger)), False),
         ("a closed sub-step that owns an entry fails", clean(frozen('closed = ["P3"]\n[[text]]\n' + todo, "[[text]]\n" + todo)), False),
         ("a baseline mirror dropped from the configuration fails", clean(frozen("", '[mirror]\n"gone.cddl" = "P2"\n')), False),
         ("a baseline pin dropped from the pins fails", clean(frozen("", '[pin]\ngone = "P7"\n')), False),
@@ -1600,6 +1654,8 @@ def pending_self_test() -> int:
         ("a retired unit still cited is held", not gate(Pending(stale={"RUN-0002": "P4"}), ["RUN-0002"]), True),
         ("a stale entry nothing cites fails", not gate(Pending(stale={"RUN-0002": "P4"}), []), False),
         ("a stale entry for a live unit fails", not gate(Pending(stale={"RUN-0001": "P4"}), ["RUN-0001"]), False),
+        ("a deferred unit that is not live fails", not gate(Pending(deferred={"RUN-0009": "5-7a"}), []), False),
+        ("a deferred text entry is no unit of the gate", not gate(Pending(deferred={"TXT-0001": "5-7a"}), []), True),
         ("a listed deploydoc failure is held", not split_deploydoc_failures(fails, Pending(deploydoc={"BCP-0001": "P9"}))[0], True),
         ("a deploydoc entry that passes fails", not split_deploydoc_failures([], Pending(deploydoc={"BCP-0001": "P9"}))[0], False),
         ("an open text entry is well formed", not pending_findings(tree(entry)), True),
