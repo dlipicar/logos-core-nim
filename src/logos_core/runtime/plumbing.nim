@@ -555,7 +555,7 @@ type
     rqDiagnostics ## the retained diagnostics
     rqBootstrap
       ## [SPEC RUNTIME l.1640, §13.2] the configured instances, then the
-      ## orchestration instance realized to `ready` (G190)
+      ## orchestration instance realized to `ready` (l.3838-3840, l.3939)
     rqRequestShutdown ## [SPEC RUNTIME §13.2] accept shutdown and answer at once
     rqAwaitShutdown ## wait for shutdown without initiating it (RUN-0728)
     rqRecover ## [SPEC RUNTIME §9.3 recover_module] from the host or a test

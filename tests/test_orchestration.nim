@@ -1241,6 +1241,8 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
       ("engine.nim", "settingsRefusal"), # G284: a start or recovery the settings refuse
       ("engine.nim", "settleSettings"),
         # G281, G285: settings settled failed while unloaded
+      ("engine.nim", "startupFailure"),
+        # reads: the code startup returns for a denial or a settings refusal
       ("engine.nim", "stopForAuthority"),
         # an enforcement stop; its kind is an AuthorityEnding
       ("plumbing.nim", ""), # the enumeration and AuthorityEndings

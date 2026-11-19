@@ -767,6 +767,30 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     check unloadedAt[2][0] == LoaderInstanceId
     check e.close()
 
+  test "[RUN-1198] [TXT-0311] the drain deadline starts at the first shutdown request; a later request joins it without restarting or extending it":
+    var cfg = config()
+    cfg.shutdownGrace = initDuration(milliseconds = 300 * Slow)
+    let e = newEngine(cfg)
+    discard e.create(gated(), "g").tryGet
+    discard e.start("g").tryGet
+    destroyGate.store(true)
+    check e.shutdownDeadlineForTests() == 0
+    e.requestShutdown()
+    let first = e.shutdownDeadlineForTests()
+    check first > 0
+    sleep(150)
+    e.requestShutdown()
+    check e.shutdownDeadlineForTests() == first
+    let r = e.awaitShutdown()
+    check r.isErr and r.error.code == ecModule
+    check e.shutdownDeadlineForTests() == first
+    destroyGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msUnloaded
+    )
+    check e.close()
+
   test "[RUN-1072] [RUN-1073] [TXT-0312] a destroy that outlives the shutdown grace is recorded, not forced; it completes the stop when it returns":
     var cfg = config()
     cfg.shutdownGrace = initDuration(milliseconds = 150)
@@ -971,7 +995,7 @@ func deployment(): seq[BootstrapInstance] =
     BootstrapInstance(instance: "m", record: meter()),
   ]
 
-suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G190] [G60]":
+suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2, l.3939-3940) [G60]":
   setup:
     reset()
 
@@ -989,7 +1013,7 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     check e.bootstrap(deployment(), "o").error.code == ecNotReady
     e.finish()
 
-  test "[IMPL-DECISION G190] a failed bootstrap: NOT_AUTHORISED for a denial, MODULE_ERROR for an init failure or the startup deadline; nothing is stopped":
+  test "[RUN-1201] a failed bootstrap: NOT_AUTHORISED for a denial, MODULE_ERROR for an init failure, TIMEOUT for the startup deadline; nothing is stopped":
     var e = newEngine(
       config(
         denying(AuthzRule(action: Opt.some(aaExecute), target: "o", outcome: azDeny))
@@ -1016,7 +1040,7 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     e = newEngine(cfg)
     initGate.store(true)
     r = e.bootstrap(deployment(), "o")
-    check r.error.code == ecModule and "startup-timeout" in r.error.message
+    check r.error.code == ecTimeout and "startup-timeout" in r.error.message
     # [RUN-0737] Here too the engine takes a start. Every start of this engine has
     # the short deadline, which a loaded machine can let pass (TSan in CI), so
     # the test does not ask for `ready`: only that the start ran.
@@ -1024,7 +1048,40 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     check m.isOk and (m.get.state == msReady or m.get.failureOf == "startup-timeout")
     e.finish()
 
-  test "[RUN-0759] [IMPL-DECISION G190] a shutdown accepted before ready gives CANCELLED, and it stays CANCELLED":
+  test "[RUN-1201] [RUN-1202] startup answers from this run only: a retained startup-timeout gives no TIMEOUT, and a refusal that records no failure answers NOT_READY at once":
+    var cfg = config()
+    # The store keeps `o` for the second run.
+    cfg.runtimeInstanceId = ""
+    cfg.storeDir = Opt.some(work / "boot-run-store")
+    cfg.startupDeadline = initDuration(milliseconds = 250 * Slow)
+    cfg.loaderStartupDeadline = DefaultLoaderStartupDeadline
+    var e = openEngine(cfg).tryGet
+    initGate.store(true)
+    check e.bootstrap(deployment(), "o").error.code == ecTimeout
+    # The late init's realization is torn down before shutdown, so shutdown
+    # has nothing of `o` to stop and keeps it `error` (a completed stop would
+    # clear its failure, l.3611).
+    initGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("o")
+    )
+    e.finish()
+    reset()
+    # The next run keeps `o` in `error` with `startup-timeout`. The ordering
+    # now has it wait for `m`, which nothing starts: its recovery is refused,
+    # which records nothing on an `error` instance (l.3612).
+    cfg.ordering = @[("m", "o")]
+    e = openEngine(cfg).tryGet
+    let r = e.bootstrap(deployment(), "o")
+    check r.isErr and r.error.code == ecNotReady
+    check "prerequisite" in r.error.message
+    let v = e.view("o").tryGet
+    check v.state == msError and v.failureOf == "startup-timeout"
+    check inits.load == 0
+    e.finish()
+
+  test "[RUN-0759] [RUN-1202] a shutdown accepted before ready gives CANCELLED, and it stays CANCELLED":
     let e = newEngine(config())
     initGate.store(true)
     bootstrapCode.store(-1)

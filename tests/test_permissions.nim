@@ -849,7 +849,7 @@ suite "run.permissions: admission (CA l.343-345, l.364, l.417; RUNTIME l.2538)":
     e.finish()
 
   when not declared(caParity):
-    test "[IMPL-DECISION G284] [IMPL-DECISION G110] an orchestration instance provisioned without host-ambient fails the bootstrap NOT_AUTHORISED":
+    test "[RUN-1201] [IMPL-DECISION G284] [IMPL-DECISION G110] an orchestration instance provisioned without host-ambient fails the bootstrap NOT_AUTHORISED (the shared code, l.3955)":
       let e = fixtureEngine(
         pconfig(
           entries =

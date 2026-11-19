@@ -2243,13 +2243,13 @@ compared = "Old l.3750 (a typed Module Loader error with no more specific classi
 id = "TXT-0205"
 rides = "RUN-1190"
 decision = "G355"
-reason = "The facade classifications (RUNTIME l.3615) are reported only by a facade, which no Runtime has before 5-7b; RUN-1190 is the requirement in §9.3.19 it rides on, and G355 records the conflict with B6 to settle before 5-7b builds."
+reason = "The facade classifications (RUNTIME l.3615) are reported only by a facade, which no Runtime has before 5-7b; RUN-1190 is the requirement in §9.3.19 it rides on, and l.3615-3616 govern, as owner row 37 / Q1 settled (G355, corrected at P5c); 5-7b builds them."
 
 [[deferred]]
 id = "TXT-0206"
 rides = "RUN-1190"
 decision = "G355"
-reason = "A started facade's `loaded` or `error` when unavailable (RUNTIME l.3616) is reported only by a facade, which no Runtime has before 5-7b; RUN-1190 is the requirement in §9.3.19 it rides on, and G355 records the conflict with B6 to settle before 5-7b builds."
+reason = "A started facade's `loaded` or `error` when unavailable (RUNTIME l.3616) is reported only by a facade, which no Runtime has before 5-7b; RUN-1190 is the requirement in §9.3.19 it rides on, and l.3615-3616 govern, as owner row 37 / Q1 settled (G355, corrected at P5c); 5-7b builds them."
 
 [[text]]
 id = "TXT-0203"
@@ -2328,3 +2328,121 @@ site = "tests/test_observe.nim"
 named = "an unknown or refused target is NOT_AUTHORISED"
 reading = "Every sentence that moved from §9.3 into §9.3.17 to §9.3.19 was read in its new place and applies to the same subject; the claims and tests follow the units, not the headings. Two references are left behind by the split, editorial remarks the Fable session put to the spec owner (logos-lips b426ec40; nothing sent by this session): l.3454 'identity rules in this section' now sits in §9.3.17 while the identity rules are §9.3.6, and l.3508 'this section's non-disclosure rules' now sits in §9.3.18 while those rules are mostly §9.3.1. The Runtime applies §9.3.6's identity rules and §9.3.1's non-disclosure as before; the named test shows the non-disclosure for an observation method."
 compared = "RUNTIME §9.3 at 6a4dfa28 against §9.3.17 to §9.3.19 at 6cac8335 (l.3352-3640), with l.3454 and l.3508 read against §9.3.1 and §9.3.6."
+
+# P5c: Loader loss, shutdown and startup -------------------------------------------------------------------------
+
+[[text]]
+id = "TXT-0168"
+step = "P5"
+test = "tests/test_host.nim"
+
+[[text]]
+id = "TXT-0308"
+step = "P5"
+test = "tests/test_loader_engine.nim"
+
+[[text]]
+id = "TXT-0309"
+step = "P5"
+test = "tests/test_loader_engine.nim"
+
+[[text]]
+id = "TXT-0311"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0314"
+step = "P5"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0315"
+step = "P5"
+test = "tests/test_loader_engine.nim"
+
+[[text]]
+id = "TXT-0316"
+step = "P5"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0169"
+step = "P5"
+kind = "holds"
+site = "tests/test_host_dylib.nim"
+named = "a program that includes only logos_runtime.h builds against the library and runs"
+reading = "The Host Embedding API is the six functions of logos_runtime.h (create, register_binding, start, request_shutdown, wait_for_shutdown, destroy), which src/liblogos_runtime.nim exports and no more; none returns or reports the Runtime's id. A generated id is kept in the store only (G192 settled)."
+compared = "RUNTIME l.2588 at 6cac8335 against the exports of src/liblogos_runtime.nim and the generated logos_runtime.h; old l.2665-2667 asked the host to accept a generated id before use."
+
+[[text]]
+id = "TXT-0302"
+step = "P5"
+kind = "holds"
+site = "tests/test_persist.nim"
+named = "bootstrap resumes host-origin orchestration and re-establishes any other"
+reading = "A retained host-origin intent is resumed through the recovery path with the host as origin (engine.bootstrap); its execution decision asks for consumer '' (engine.decideExec), which engine.immediate allows under bootstrap policy in authority mode, the policy current at that decision, and decides by the host's configured policy otherwise (G191 settled)."
+compared = "RUNTIME l.1558 at 6cac8335 against engine.bootstrap, engine.decideExec and engine.immediate in src/logos_core/runtime/engine.nim; old §9 had no such sentence."
+
+[[text]]
+id = "TXT-0317"
+step = "P5"
+kind = "holds"
+site = "tests/test_ctl_module.nim"
+named = "daemon-info and get_self: the logosctl instance's own address"
+reading = "logosctl, the application code logosd serves, is an admitted direct_static module instance (src/logos_core/daemon/ctlmodule.nim) that calls the Runtime only through its own Runtime Control binding; the test reads its own address through that binding. App A is informative (conformance/claims/RUN.toml)."
+compared = "RUNTIME l.3971 at 6cac8335 against src/logos_core/daemon/ctlmodule.nim and the logosctl instance logosd creates."
+
+[[text]]
+id = "TXT-0318"
+step = "P5"
+kind = "holds"
+site = "tests/test_host_dylib.nim"
+named = "a program that includes only logos_runtime.h builds against the library and runs"
+reading = "A module's calls go through the Runtime Control binding it receives at _MODULE_init; the Host Embedding API (logos_runtime.h, the six exports of src/liblogos_runtime.nim) has no call surface. App A is informative."
+compared = "RUNTIME l.3972 at 6cac8335 against src/liblogos_runtime.nim and the generated logos_runtime.h."
+
+[[text]]
+id = "TXT-0319"
+step = "P5"
+kind = "reword"
+pair = "TXT-0340"
+reading = "Reworded from TXT-0340: a facade without the runtime components is only a direct-call wrapper, now also outside these specifications and providing none of their Runtime behaviour. App A is informative (conformance/claims/RUN.toml); nothing is built on it."
+compared = "RUNTIME l.4130 at 6a4dfa28 against l.3992 at 6cac8335."
+
+[[text]]
+id = "TXT-0340"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0319."
+compared = "RUNTIME l.4130 at 6a4dfa28 against l.3992 at 6cac8335."
+
+[[text]]
+id = "TXT-0320"
+step = "P5"
+kind = "reword"
+pair = "TXT-0341"
+reading = "Reworded from TXT-0341: the application uses the Host Embedding API of Section 13 explicitly, where the old text said the runtime API. App A is informative (conformance/claims/RUN.toml); nothing is built on it."
+compared = "RUNTIME l.4139 at 6a4dfa28 against l.3998 at 6cac8335."
+
+[[text]]
+id = "TXT-0341"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0320."
+compared = "RUNTIME l.4139 at 6a4dfa28 against l.3998 at 6cac8335."
+
+[[text]]
+id = "TXT-0321"
+step = "P5"
+kind = "reword"
+pair = "TXT-0342"
+reading = "Reworded from TXT-0342: the options the application chooses are those the Host Embedding API exposes, where the old text said the runtime API. App A is informative (conformance/claims/RUN.toml); nothing is built on it."
+compared = "RUNTIME l.4144 at 6a4dfa28 against l.4002 at 6cac8335."
+
+[[text]]
+id = "TXT-0342"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0321."
+compared = "RUNTIME l.4144 at 6a4dfa28 against l.4002 at 6cac8335."

@@ -1100,6 +1100,143 @@ when defined(posix):
       e.confirmTerminationForTests() # the client, realized directly
       e.finish()
 
+  # M16 item 3 and case 3 (P5 §3.1; IMPL-DECISION G360) ---------------------------------
+
+  var lossStart: Atomic[int] ## the state `lossStartOn` got, or -1; -2 while it waits
+
+  proc lossStartOn(arg: (Engine, string)) {.thread.} =
+    let r = arg[0].start(arg[1])
+    lossStart.store(
+      if r.isOk:
+        ord(r.get.state)
+      else:
+        -1
+    )
+
+  proc endReached(e: Engine, h: Host): bool =
+    ## `h`'s end is confirmed, and the Runtime thread has handled it: the end
+    ## is posted before it is confirmed, and a request after it is answered
+    ## after it.
+    result = waitUntil(
+      proc(): bool =
+        h.ended
+    )
+    discard e.view(LoaderInstanceId)
+
+  suite "run.hosted: a Module Host that ended before its Loader failed (RUNTIME l.3686; G360)":
+    teardown:
+      if live != nil:
+        live.clearLoaderFaultsForTests()
+        live.releaseLoaderStallForTests()
+      leftover()
+      check noHostLeft()
+
+    test "[TXT-0308] [IMPL-DECISION G360] S-15c the Loader fails after a host ended in order under a release it has not answered: the instance resolves at once, nothing is terminated, and the Loader is released":
+      var cfg = hostedConfig()
+      cfg.stopDeadline = initDuration(seconds = 30 * Slow)
+      discard cfg.prepare()
+      let e = fixtureEngine(cfg)
+      discard e.create(probe(), "p").tryGet
+      check e.start("p").tryGet.state == msReady
+      let h = e.hostOf("p")
+      check h != nil
+      # The Loader's release ends the host in order; only its reply is held.
+      check e.setLoaderFaultsForTests(LoaderFaults(stall: {lmRelease})).isOk
+      var t: Thread[(Engine, string)]
+      check e.stopping("p", t)
+      check waitUntil(
+        proc(): bool =
+          e.stalledLoaderCallsForTests() == 1
+      )
+      check e.endReached(h)
+      dropHost(h)
+      check e.cleanupPending("p")
+      check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
+      joinThread(t)
+      let v = e.view("p").tryGet
+      check v.state == msError and v.failure.get.reason == "its Module Loader failed"
+      # [G360] Its host's end already reached the Runtime: nothing is left.
+      check not e.cleanupPending("p")
+      check not e.diagnostics().anyIt("termination required" in it)
+      # Owning nothing, the Loader is released once its held call returns.
+      e.releaseLoaderStallForTests()
+      check waitUntil(
+        proc(): bool =
+          not e.cleanupPending(LoaderInstanceId)
+      )
+      e.requestShutdown()
+      check e.awaitShutdown().isOk
+      live = nil
+      check e.close(initDuration(seconds = 10 * Slow))
+
+    test "[TXT-0308] [IMPL-DECISION G360] S-15d the Loader fails after a host was killed under a realize it has not answered: the instance resolves at once, and the late answer changes nothing":
+      var cfg = hostedConfig()
+      cfg.startupDeadline = initDuration(seconds = 30 * Slow)
+      discard cfg.prepare()
+      let e = fixtureEngine(cfg)
+      discard e.create(probe(), "p").tryGet
+      check e.setLoaderFaultsForTests(LoaderFaults(stall: {lmRealize})).isOk
+      lossStart.store(-2)
+      var t: Thread[(Engine, string)]
+      createThread(t, lossStartOn, (e, "p"))
+      check waitUntil(
+        proc(): bool =
+          e.stalledLoaderCallsForTests() == 1
+      )
+      let h = e.hostOf("p")
+      check h != nil
+      check e.killHost("p")
+      check e.endReached(h)
+      dropHost(h)
+      check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
+      joinThread(t)
+      check lossStart.load == ord(msError)
+      check e.view("p").tryGet.state == msError
+      check not e.cleanupPending("p")
+      check not e.diagnostics().anyIt("termination required" in it)
+      e.releaseLoaderStallForTests()
+      check waitUntil(
+        proc(): bool =
+          e.stalledLoaderCallsForTests() == 0
+      )
+      check not e.cleanupPending("p") and e.releases("p") == 0
+      check waitUntil(
+        proc(): bool =
+          not e.cleanupPending(LoaderInstanceId)
+      )
+      e.requestShutdown()
+      check e.awaitShutdown().isOk
+      live = nil
+      check e.close(initDuration(seconds = 10 * Slow))
+
+    test "[IMPL-DECISION G360] S-15e a hosted instance whose Loader failed is `error` while its carrier still lives; its cleanup resolves at the host's end":
+      let cfg = hostedConfig()
+      discard cfg.prepare()
+      let e = fixtureEngine(cfg)
+      discard e.create(probe(), "p").tryGet
+      check e.start("p").tryGet.state == msReady
+      let h = e.hostOf("p")
+      check h != nil
+      holdKill(h, true)
+      check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
+      let v = e.view("p").tryGet
+      check v.state == msError and v.failure.get.reason == "its Module Loader failed"
+      sleep(200 * Slow)
+      check hostsLeft().len == 1 # the carrier is alive
+      check not h.ended
+      check e.cleanupPending("p")
+      holdKill(h, false)
+      dropHost(h)
+      check noHostLeft()
+      check waitUntil(
+        proc(): bool =
+          not e.cleanupPending("p")
+      )
+      e.requestShutdown()
+      check e.awaitShutdown().isOk
+      live = nil
+      check e.close(initDuration(seconds = 10 * Slow))
+
   # S-16 ---------------------------------------------------------------------------------
 
   proc crash(dir: string, ids: openArray[string]) =

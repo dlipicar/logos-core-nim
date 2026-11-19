@@ -315,8 +315,8 @@ proc release*(d: var Daemon) =
 
 proc startDaemon*(d: var Daemon): Result[void, StartError] =
   ## Step 10: `runtimeStart`, which returns once orchestration is `ready`
-  ## (G190). A failed start runs G190's host sequence before it reports:
-  ## request shutdown, wait, destroy (RUNTIME l.3989, l.3837).
+  ## (RUNTIME l.3838, l.3939). A failed start runs the host sequence before it
+  ## reports: request shutdown, wait, destroy (RUNTIME l.3989, l.3837).
   let r = runtimeStart(d.rt)
   if r.ok:
     logInfo(

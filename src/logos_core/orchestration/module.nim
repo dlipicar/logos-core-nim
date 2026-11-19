@@ -4,7 +4,7 @@
 ## `initModule` checks the value (`settings.settingsOf`), locks the state
 ## directory and loads the accounting (failing closed), then starts the worker
 ## as its last step, after everything that can fail. It makes no Runtime
-## Control call: the orchestration start answers at `ready` (G190) and never
+## Control call: the orchestration start answers at `ready` (RUNTIME l.3838) and never
 ## waits for the module. `destroyModule` ends the worker, which leaves nothing
 ## armed and makes no call afterwards, then releases the lock (RUNTIME l.3806).
 

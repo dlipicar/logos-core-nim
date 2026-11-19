@@ -752,7 +752,7 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check lastDir() == base / "state" / "k1-a"
     e.finish()
 
-  test "[RUN-0698] [RUN-0646] [IMPL-DECISION G191] bootstrap resumes host-origin orchestration and re-establishes any other":
+  test "[RUN-0698] [RUN-0646] [RUN-1108] [RUN-1109] [IMPL-DECISION G191] bootstrap resumes host-origin orchestration and re-establishes any other":
     let base = freshBase()
     var e = openAt(base)
     let first = e.bootstrap(
@@ -778,7 +778,7 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check e.diagnosed("re-established orchestration whose intent was stopped")
     e.finish()
 
-  test "[IMPL-DECISION G192] the store keeps the Runtime's identity":
+  test "[TXT-0168] [IMPL-DECISION G192] the store keeps the Runtime's identity":
     let base = freshBase()
     var e = openAt(base)
     let id = e.runtimeInstanceId

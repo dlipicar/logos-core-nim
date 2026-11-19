@@ -591,7 +591,8 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   l.3611-3613), the intent stays `requested`, nothing runs, and a later update does not start the
   module. The reference orchestration module probes it and resumes it once a value is eligible (RUNTIME
   l.3665; DECISIONS G162, settled); a host without it starts it again. For the orchestration instance,
-  `start` returns `LOGOS_ERR_MODULE` (DECISIONS G190, interim).
+  `start` returns `LOGOS_ERR_MODULE` at once: a startup failure other than one before `ready`
+  (RUNTIME l.3955).
 - **Replacing the provisioned value.** On each `start` with a `store_dir`, a provisioned value whose
   value root differs from the last one accepted for that instance is staged again as
   `protected-provisioning`; an equal one is not. Removing `provisioned_configuration` leaves the last
@@ -647,16 +648,26 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
 - **Runtime identity.** Without `store_dir`, each `logos_runtime_start` gives the Runtime a fresh
   lowercase UUIDv4 as its `runtime_instance_id`. With `store_dir`, the identity is
   `runtime_instance_id` if given, or a UUIDv4 generated when the store is created, kept with the
-  store. RUNTIME l.2666-2667 require the host to accept a Runtime-generated id before it is used:
-  choosing this format, or a store without `runtime_instance_id`, is that acceptance (DECISIONS G192,
-  interim).
+  store. The Runtime generates the id only because this protected configuration permits it, and
+  choosing this format, or a store without `runtime_instance_id`, is the host's acceptance (RUNTIME
+  l.2587; DECISIONS G192, settled). The Host Embedding API discloses no generated id (l.2588).
 - **What `start` waits for.** `start` returns once the Module Loader is bound and then the
-  orchestration instance is `ready` (DECISIONS G190, interim; "The Module Loader"). Other modules need not be ready (RUNTIME l.3973-3974), and their later failures do
-  not affect it. `start` returns `LOGOS_ERR_NOT_AUTHORISED` if the policy denies starting the
-  orchestration instance, `LOGOS_ERR_CANCELLED` if a Runtime Control `shutdown_runtime` was accepted
-  first (RUN-0759), and `LOGOS_ERR_MODULE` for any other failure, the startup deadline included, with
-  the failure classification in the message. A failed `start` stops and destroys nothing: request
-  shutdown, wait for it, then destroy (RUNTIME l.4075-4079).
+  orchestration instance is `ready` (RUNTIME l.3838; "The Module Loader"). Other modules need not be
+  ready (RUNTIME l.3837), and their later failures do not affect it. `start` decides its
+  result once (l.3940) and only from what happens in this start, never from a failure a store kept:
+  - `LOGOS_ERR_CANCELLED` if a Runtime Control `shutdown_runtime` was accepted first (RUN-0759);
+  - `LOGOS_ERR_TIMEOUT` if the orchestration instance's startup deadline, or the Module Loader's,
+    passed (l.3939, l.3955);
+  - `LOGOS_ERR_NOT_AUTHORISED` if starting the orchestration instance is denied, its evaluation
+    fails, or its permission settings refuse it (l.3955);
+  - `LOGOS_ERR_NOT_READY` if its start is refused at once without a failure being recorded: a held
+    restart lock, permission settings still being reconciled, or a prerequisite in the ordering
+    that is not ready while the instance is `error` (l.3955);
+  - `LOGOS_ERR_MODULE` for any other failure, a missing configuration value or a static binding
+    mismatch included, with the failure classification in the message (l.3939, l.3955).
+
+  A failed `start` stops and destroys nothing: request shutdown, wait for it, then destroy (RUNTIME
+  l.3942, l.3945).
 - **The host cannot interrupt `start`.** Only `request_shutdown` and `wait_for_shutdown` may overlap
   on one handle (RUNTIME l.4082), so a host serializes `start` against both. What bounds `start` is
   the Module Loader's startup deadline, then the orchestration instance's. (A `request_shutdown` that overlaps anyway is accepted and `start` returns
@@ -1220,7 +1231,7 @@ identity, and every configured instance is new.
 - **Identity.** A configuration whose `runtime_instance_id` differs from the store's makes `start`
   return `LOGOS_ERR_INVALID_PARAMS`, and nothing is written. A store that is deleted, or replaced by
   another, under a host-chosen `runtime_instance_id` needs a new `runtime_instance_id`: addresses and
-  revisions under the old one may already be known elsewhere (DECISIONS G192, interim).
+  revisions under the old one may already be known elsewhere (DECISIONS G192).
 - **What survives a restart.** For each instance: its id, its provider id, the record it was created
   from, its lifecycle state, its failure classification and reason, its execution intent, the
   intent's revision and its origin; for a configurable instance, its configuration binding, state
@@ -1413,7 +1424,7 @@ be removed whenever convenient.
 A held restart lock stays refused until the process holding it is gone: nothing ends a host of an
 earlier run. Find it with `lsof <file>` or `fuser <file>`, end it, and start again (RUNTIME l.2641,
 l.977). For an intent that names `a`, stop or retire that instance while the Runtime runs, then
-start again. A refused start runs nothing (DECISIONS G190) and leaves the store and both directories
+start again. A refused start runs nothing (RUNTIME l.3955) and leaves the store and both directories
 as they were; a `LOGOS_ERR_MODULE` after the write leaves the rename to the next start.
 
 ## Observation

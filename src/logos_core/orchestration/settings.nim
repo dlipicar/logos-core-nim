@@ -6,7 +6,7 @@
 ## schema does not say [IMPL]: the bounds of each number, unique instances, the
 ## ordering graph (no self-edge, no duplicate, no cycle), and an authority that
 ## is not the Module Loader. A violation fails the orchestration start with
-## MODULE_ERROR and the rule's text (G190).
+## MODULE_ERROR and the rule's text (RUNTIME l.3939).
 ##
 ## For a host (4b-6): `OrchestratorSettings` is the typed value,
 ## `validateSettings` the same checks, `encodeSettings` its deterministic CBOR
