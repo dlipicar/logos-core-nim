@@ -24,62 +24,118 @@
 ## thread admits it, and an invocation-scoped one on a served invocation goes
 ## to its session with its verdict (E2).
 ##
-## [IMPL] The gate. One thread at a time may be inside a subscription's handler
-## or admitting one; the same thread may re-enter it through nested direct
-## publication (INTERFACE l.1434-1439). `unsubscribe` and handle release
-## deactivate on the Runtime thread and then wait until no other thread holds
-## the gate, so no handler can begin after they return; a gate held by the
-## calling thread further down its stack is not waited for (the N1 reading of
-## l.1454-1458). A thread waiting for a gate stops waiting once the
-## subscription is deactivated, and records a diagnostic when the wait is long:
-## two threads that each publish to the other's subscription from inside a
-## handler wait for each other until one subscription ends [G176].
+## [SPEC INTERFACE l.1402-1408; DECISIONS G176] The gate. One thread at a
+## time may be inside a subscription's handler or admitting one; the same
+## thread may re-enter it through nested direct publication (l.1404). A
+## publication that finds the gate held by another thread does not wait: it
+## queues a copy of the delivery (`Queued`: the name, the data and the
+## publication's identifiers, never its call ticket or anything freed with
+## its call or attempt) and moves on. The thread holding the gate runs the
+## queued deliveries in publication order before it lets go, each admitted
+## afresh as it begins (G175). A nested publication on that thread joins the
+## queue when deliveries published before it wait there, so order holds. Up
+## to `eventQueue` deliveries or `eventQueueBytes` of copied data wait per
+## subscription (the first is always taken); one more ends the subscription
+## with MODULE_ERROR (l.1469-1470, l.1479). Deactivation discards the queue.
+## `unsubscribe` and handle release deactivate on the Runtime thread and then
+## wait until no other thread holds the gate, so no handler can begin after
+## they return; a gate held by the calling thread further down its stack is
+## not waited for (the N1 reading of l.1454-1458).
 
 {.push raises: [], gcsafe.}
 
-import std/[atomics, locks, monotimes, tables, times]
+import std/[atomics, locks, tables]
 import results
 import logos_sdk/abi/types
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[outcome, payload]
 import ../transport/boundary
 from ../transport/io/api import IoCommand, IoCommandKind, SubmitResult, TooLargeAction
-import ./[bell, callside, plumbing]
+import ./[callside, plumbing]
 from ./tport import submitWait
 
-const
-  GateSlice = 200 ## milliseconds between checks of a long gate wait
-  LongGateWait = initDuration(seconds = 2) ## [G176] a wait worth a diagnostic
+type
+  Queued = object
+    ## [SPEC INTERFACE l.1405-1406; P3 F1] One delivery waiting for the
+    ## thread that holds the gate, on the shared heap: copied values and
+    ## identifiers only, so it outlives its publication, call and attempt.
+    next: ptr Queued
+    scoped: bool
+    origin: FixedText ## the publishing instance
+    attempt: FixedText ## an ordinary publication's attempt token
+    call: uint64
+      ## a scoped one's call, by its ticket's number: the Runtime thread
+      ## resolves it at admission, and a call that left is a closed
+      ## destination
+    name: FixedText
+    len: int
+    data: UncheckedArray[byte]
 
-type SubState* = object
-  ## One subscription made through one route handle (INTERFACE §2.5).
-  refs: Atomic[int]
-  engine: Engine
-  id*: LogosSubscriptionId ## written by the Runtime thread before activation
-  route*: FixedText
-  generation*: uint64 ## the handle's path generation [G177]
-  event*: FixedText
-  blob*: ptr SchemaBlob ## the selected contract, retained
-  handler: LogosEventHandler
-  userData: pointer
-  lock: Lock
-  cond: Cond
-  active: bool
-  ended*: bool
-    ## [DECISIONS G175, G225] Runtime thread: the Runtime ended it while its
-    ## route stayed ready (`engine.endDirect`); `unsubscribe` answers
-    ## LOGOS_OK once
-  owner: int ## the thread holding the gate; 0: none
-  depth: int ## the owner's nested holds
+  SubState* = object
+    ## One subscription made through one route handle (INTERFACE §2.5).
+    refs: Atomic[int]
+    engine: Engine
+    id*: LogosSubscriptionId ## written by the Runtime thread before activation
+    route*: FixedText
+    generation*: uint64 ## the handle's path generation [G177]
+    event*: FixedText
+    blob*: ptr SchemaBlob ## the selected contract, retained
+    handler: LogosEventHandler
+    userData: pointer
+    lock: Lock
+    cond: Cond
+    active: bool
+    ended*: bool
+      ## [DECISIONS G175, G225] Runtime thread: the Runtime ended it while its
+      ## route stayed ready (`engine.endDirect`); `unsubscribe` answers
+      ## LOGOS_OK once
+    owner: int ## the thread holding the gate; 0: none
+    depth: int ## the owner's nested holds
+    head, tail: ptr Queued ## [G176] deliveries waiting for the owner, in order
+    queued, queuedBytes: int ## their number and copied data
+    maxQueued, maxQueuedBytes: int ## the bound, set at activation
+
+  Entry = enum
+    enEntered ## this thread holds the gate: deliver, then `leaveGate`
+    enBusy ## another thread holds it, or deliveries wait: queue a copy
+    enQueued ## the copy waits in the queue, which owns it now
+    enBound ## the queue is at its bound: the subscription ends
+    enInactive ## the subscription is inactive
 
 proc subOf*(p: pointer): ptr SubState =
   cast[ptr SubState](p)
+
+proc newQueued(
+    scoped: bool,
+    origin, attempt: string,
+    call: uint64,
+    name: string,
+    data: openArray[byte],
+): ptr Queued =
+  result = cast[ptr Queued](allocShared0(sizeof(Queued) + data.len))
+  result.scoped = scoped
+  result.origin = fixed(origin)
+  result.attempt = fixed(attempt)
+  result.call = call
+  result.name = fixed(name)
+  result.len = data.len
+  if data.len > 0:
+    copyMem(addr result.data[0], unsafeAddr data[0], data.len)
+
+proc freeQueued(q: ptr Queued) =
+  ## [DECISIONS G276] Events are not sensitive: no wipe.
+  var q = q
+  while q != nil:
+    let next = q.next
+    deallocShared(q)
+    q = next
 
 proc retain*(s: ptr SubState) =
   discard s.refs.fetchAdd(1)
 
 proc drop*(s: ptr SubState) =
   if s.refs.fetchSub(1) == 1:
+    freeQueued(s.head)
     drop(s.blob)
     deinitCond(s.cond)
     deinitLock(s.lock)
@@ -87,18 +143,31 @@ proc drop*(s: ptr SubState) =
 
 # The Runtime thread's side -----------------------------------------------------------
 
-proc activate*(s: ptr SubState, id: LogosSubscriptionId) =
+proc activate*(
+    s: ptr SubState, id: LogosSubscriptionId, maxQueued = 0, maxQueuedBytes = 0
+) =
   ## [SPEC INTERFACE l.1427-1429] The id is set (and written for the caller)
-  ## before the subscription becomes active.
+  ## before the subscription becomes active. A direct subscription gets its
+  ## queue bound (G176); a transported one never queues.
   withLock s.lock:
     s.id = id
+    s.maxQueued = maxQueued
+    s.maxQueuedBytes = maxQueuedBytes
     s.active = true
 
 proc deactivate*(s: ptr SubState) =
-  ## No handler invocation is admitted after this; gate waiters stop waiting.
+  ## No handler invocation is admitted after this, and the deliveries still
+  ## queued go (INTERFACE l.1408).
+  var gone: ptr Queued
   withLock s.lock:
     s.active = false
+    gone = s.head
+    s.head = nil
+    s.tail = nil
+    s.queued = 0
+    s.queuedBytes = 0
     broadcast(s.cond)
+  freeQueued(gone)
 
 proc isActive*(s: ptr SubState): bool =
   withLock s.lock:
@@ -112,34 +181,120 @@ func routeId*(s: ptr SubState): string =
 
 # The gate ------------------------------------------------------------------------------
 
-proc enterGate(s: ptr SubState): bool =
-  ## Takes the gate for one handler invocation; false once the subscription is
-  ## inactive.
+proc enterGate(s: ptr SubState, copy: ptr Queued = nil): Entry =
+  ## [SPEC INTERFACE l.1402-1406] A publication's delivery: the gate when it
+  ## is free, or held by this thread with nothing queued (nested
+  ## publication); otherwise `copy`, when given, joins the queue unless the
+  ## queue is at its bound. The first queued delivery is always taken.
   let me = getThreadId()
-  var reported = false
-  let since = getMonoTime()
+  withLock s.lock:
+    if not s.active:
+      return enInactive
+    if s.owner == 0 or (s.owner == me and s.head == nil):
+      s.owner = me
+      inc s.depth
+      return enEntered
+    if copy == nil:
+      return enBusy
+    if s.queued > 0 and
+        (s.queued >= s.maxQueued or s.queuedBytes + copy.len > s.maxQueuedBytes):
+      return enBound
+    if s.tail == nil:
+      s.head = copy
+    else:
+      s.tail.next = copy
+    s.tail = copy
+    inc s.queued
+    s.queuedBytes += copy.len
+  enQueued
+
+proc waitGate(s: ptr SubState): bool =
+  ## [P3 revision 3] The transported drain's entry: it never queues. Only
+  ## its own drain delivers to a transported subscription, so this does not
+  ## wait in practice; false once the subscription is inactive.
+  let me = getThreadId()
   withLock s.lock:
     while s.active and s.owner != 0 and s.owner != me:
-      timedWait(s.cond, s.lock, GateSlice)
-      if not reported and s.active and s.owner != 0 and s.owner != me and
-          getMonoTime() - since >= LongGateWait:
-        reported = true
-        s.engine.diagnose(
-          "a publication has waited over 2 s for subscription " & $s.id & " on route " &
-            $s.route & " (G176)"
-        )
+      wait(s.cond, s.lock)
     if not s.active:
       return false
     s.owner = me
     inc s.depth
   true
 
+proc run(s: ptr SubState, name: string, data: openArray[byte]) =
+  ## [SPEC INTERFACE l.1441-1444, l.2170] The event name and payload are
+  ## borrowed for the invocation; the handler sees no provider entry.
+  barrier:
+    s.handler(
+      cstring(name),
+      cast[ptr UncheckedArray[uint8]](unsafeAddr data[0]),
+      csize_t(data.len),
+      s.userData,
+    )
+
+proc runQueued(s: ptr SubState, q: ptr Queued) =
+  ## [SPEC INTERFACE l.1406-1407; G175; P3 F1] One queued delivery on the
+  ## gate's owner: admitted as it begins, as if published now by its
+  ## publisher (an ordinary one needs that publisher's same attempt, ready; a
+  ## scoped one its call still open), then its handler.
+  let name = $q.name
+  let r = s.engine.call(
+    Request(
+      kind: rqDeliver,
+      scoped: q.scoped,
+      origin: moduleOrigin($q.origin),
+      attempt: $q.attempt,
+      handle: s,
+      bare: name,
+      callId: q.call,
+    )
+  )
+  if r.admitted:
+    s.run(name, toOpenArray(cast[ptr UncheckedArray[byte]](addr q.data), 0, q.len - 1))
+
 proc leaveGate(s: ptr SubState) =
-  withLock s.lock:
-    dec s.depth
-    if s.depth == 0:
-      s.owner = 0
-      broadcast(s.cond)
+  ## [SPEC INTERFACE l.1406-1407] The outermost hold runs the queued
+  ## deliveries in publication order before the gate opens; deactivation
+  ## discards those not begun.
+  while true:
+    var q: ptr Queued
+    withLock s.lock:
+      if s.depth > 1 or not s.active or s.head == nil:
+        dec s.depth
+        if s.depth == 0:
+          s.owner = 0
+          broadcast(s.cond)
+        return
+      q = s.head
+      s.head = q.next
+      if s.head == nil:
+        s.tail = nil
+      q.next = nil
+      dec s.queued
+      s.queuedBytes -= q.len
+    s.runQueued(q)
+    freeQueued(q)
+
+proc deliverOrQueue(
+    s: ptr SubState,
+    scoped: bool,
+    origin, attempt: string,
+    call: uint64,
+    name: string,
+    data: openArray[byte],
+): Entry =
+  ## [SPEC INTERFACE l.1402-1406] Takes the gate, or queues a copy of the
+  ## delivery; at the bound the Runtime thread ends the subscription
+  ## (`rqQueueBound`, MODULE_ERROR) and the copy goes.
+  result = s.enterGate()
+  if result == enBusy:
+    let copy = newQueued(scoped, origin, attempt, call, name, data)
+    result = s.enterGate(copy)
+    if result != enQueued:
+      freeQueued(copy)
+  if result == enBound:
+    discard s.engine.call(Request(kind: rqQueueBound, handle: s))
 
 proc quiesce*(s: ptr SubState) =
   ## [SPEC INTERFACE l.1446-1449, l.1465] Waits until no other thread is inside
@@ -155,17 +310,6 @@ proc quiesce*(subs: seq[pointer]) =
   for p in subs:
     quiesce(subOf(p))
     drop(subOf(p))
-
-proc run(s: ptr SubState, name: string, data: openArray[byte]) =
-  ## [SPEC INTERFACE l.1441-1444, l.2170] The event name and payload are
-  ## borrowed for the invocation; the handler sees no provider entry.
-  barrier:
-    s.handler(
-      cstring(name),
-      cast[ptr UncheckedArray[uint8]](unsafeAddr data[0]),
-      csize_t(data.len),
-      s.userData,
-    )
 
 # Subscribing ---------------------------------------------------------------------------
 
@@ -303,7 +447,7 @@ proc linkDrain*(e: Engine, p: pointer) =
   let s = subOf(p)
   var credit = 0
   while true:
-    let gated = s.enterGate()
+    let gated = s.waitGate()
     let r = e.call(Request(kind: rqLinkNext, handle: p, gated: gated, credit: credit))
     credit = 0
     if r.admitted:
@@ -407,7 +551,8 @@ proc publishOp*(
           "a publication of " & name & " from " & $a.instance &
             " was not delivered on route " & $s.route & ": " & describe(c.error)
         )
-    if checked.getOrDefault(root, false) and s.enterGate():
+    if checked.getOrDefault(root, false) and
+        s.deliverOrQueue(false, $a.instance, $a.attempt, 0, name, bytes) == enEntered:
       let r = e.call(
         Request(
           kind: rqDeliver,
@@ -653,10 +798,13 @@ proc scopedPublish*(
   ## INVALID_PARAMS; an event outside the selected contract or the route's
   ## `publish_events`, or a revoked route, NOT_AUTHORISED; a payload that is not
   ## a value of the event's type INVALID_PARAMS; a closed destination
-  ## NOT_READY. Each admitted handler returns before this does; a denied
-  ## publish-event decision, a revocation or a closing destination stops the
-  ## fan-out after the active handler, and a subscriber the decisions or its
-  ## scope exclude is skipped.
+  ## NOT_READY. Each handler this publication admitted returns before this
+  ## does; a denied publish-event decision, a revocation or a closing
+  ## destination stops the fan-out after the active handler, and a subscriber
+  ## the decisions or its scope exclude is skipped. [G176; P3 F1] A delivery
+  ## queued behind another thread's handler is admitted when it begins, and
+  ## not delivered if the call's destination closed by then (INTERFACE
+  ## l.2153: those this publication ran).
   let name = checkEventName(eventName).valueOr:
     return status(error)
   if cborData == nil or cborDataLen == 0:
@@ -693,20 +841,20 @@ proc scopedPublish*(
   if failed.isNone and not reply.ready:
     failed = Opt.some(failure(ecNotReady, "the invocation's destination is closed"))
   var skipped = false
+  let call = (if inv.ticket == nil: 0'u64 else: inv.ticket.id)
   for p in reply.subs:
     let s = subOf(p)
     if failed.isNone:
-      if s.enterGate():
+      case s.deliverOrQueue(true, $inv.provider, "", call, name, bytes)
+      of enEntered:
         let r = e.call(
           Request(
             kind: rqDeliver,
             scoped: true,
             origin: moduleOrigin($inv.provider),
-            route: $inv.route,
             handle: s,
             bare: name,
-            ticket: inv.ticket,
-            generation: inv.generation,
+            callId: call,
           )
         )
         if r.admitted:
@@ -714,8 +862,10 @@ proc scopedPublish*(
         s.leaveGate()
         if r.error.isSome:
           failed = Opt.some(failureOf(r.error.get))
-      else:
+      of enInactive:
         skipped = true
+      of enBusy, enQueued, enBound:
+        discard
     drop(s)
   if failed.isNone and skipped:
     # A subscription went inactive during the fan-out: if its destination
@@ -730,7 +880,8 @@ proc scopedPublish*(
         ticket: inv.ticket,
       )
     )
-    quiesce(again.subs)
+    for p in again.subs:
+      drop(subOf(p))
     if again.error.isSome:
       failed = Opt.some(failureOf(again.error.get))
     elif not again.ready:

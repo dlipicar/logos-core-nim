@@ -339,6 +339,13 @@ type
       ## [G178, G225] judged Runtime Control events waiting for one
       ## subscription's handler; one more loses the subscription; default 256,
       ## at least 2
+    eventQueue*: int
+      ## [G176] direct deliveries one subscription's queue holds while its
+      ## handler runs on another thread; one more ends the subscription with
+      ## MODULE_ERROR (INTERFACE l.1469-1470); default 1024
+    eventQueueBytes*: int
+      ## [G176] their copied event data; the first queued delivery is taken
+      ## whatever its size; default 16 MiB
     rcUnjudged*: int
       ## [G178] events waiting for a decision before they can join one
       ## subscription's queue; one more loses the subscription; default 256
@@ -515,6 +522,9 @@ type
     rqCandidates ## the subscriptions an ordinary publication may reach
     rqScoped ## the subscriptions an invocation-scoped publication may reach
     rqDeliver ## the admission of one event handler invocation
+    rqQueueBound
+      ## [G176] a publisher found a direct subscription's delivery queue at
+      ## its bound: the subscription ends with MODULE_ERROR
     rqDiagnostics ## the retained diagnostics
     rqBootstrap
       ## [SPEC RUNTIME l.1640, §13.2] the configured instances, then the
@@ -681,6 +691,10 @@ type
     ## it cancelled when its route or consumer ends, or the asynchronous call
     ## is cancelled or times out (INTERFACE l.2101-2102), and frees it when the
     ## call has left the provider.
+    id*: uint64
+      ## [P3 F1] a route call's number, set before admission and never reused:
+      ## what a queued scoped delivery names its call by, since the ticket
+      ## may be freed before it runs
     cancelled*: Atomic[bool]
     closed*: Atomic[bool]
       ## its invocation-scoped destination is closed: a terminal outcome was
@@ -818,7 +832,11 @@ type
     outId*: ptr LogosSubscriptionId
       ## rqSubscribe: written before the subscription becomes active
     call*: pointer ## rqAdmit: the asynchronous call being admitted, if any
-    ticket*: ptr CallTicket ## rqScoped, rqDeliver: the invocation's ticket
+    ticket*: ptr CallTicket
+      ## rqScoped, rqScopedConn, rqDeliverConn: the invocation's ticket
+    callId*: uint64
+      ## [P3 F1] rqDeliver, scoped: the invocation's call by its ticket's
+      ## number, which the Runtime thread resolves on the route; 0: none
     scoped*: bool ## rqDeliver, rqDeliverConn: an invocation-scoped publication
     credit*: int ## [I90] rqLinkNext: the credit of the Event its handler finished
     pubTag*: uint64 ## [I90] rqPublishVerdict
@@ -1171,6 +1189,8 @@ func effective*(l: EngineLimits): EngineLimits =
   fill(endRegsPerConsumer, 1024)
   fill(endRegsTotal, 16384)
   fill(rcQueue, 256)
+  fill(eventQueue, 1024)
+  fill(eventQueueBytes, 16 * 1024 * 1024)
   fill(rcUnjudged, 256)
   fill(rcHintFacts, 1024)
   fill(rcSubsPerSubscriber, 32)

@@ -471,7 +471,7 @@ suite "run.rc: subscribe and unsubscribe (INTERFACE §2.5, l.3837) [IMPL-DECISIO
     check rc.unsubscribe(id) == ecInvalidParams # unsubscribed already
     e.finish()
 
-  test "[IFC-0186] a handler unsubscribing its own subscription returns without waiting for its own frame":
+  test "[IFC-0962] a handler unsubscribing its own subscription returns without waiting for its own frame":
     let e = fixtureEngine(rcConfig())
     let (_, rc) = e.startClient("c")
     var id: LogosSubscriptionId

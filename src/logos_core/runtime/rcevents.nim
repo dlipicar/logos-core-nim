@@ -16,11 +16,12 @@
 ##
 ## A subscription (`RcSub`) lives on the shared heap and holds only its
 ## handler, its activation and its gate; its queue and authority state stay on
-## the Runtime thread. The gate is `events.nim`'s: one thread at a time admits
-## or runs the subscription's handler, `unsubscribe` deactivates on the Runtime
-## thread and then waits until no other thread holds the gate (IFC-0186,
-## IFC-0187), and a handler unsubscribing its own subscription does not wait
-## for its own frame.
+## the Runtime thread. The gate is as `events.nim`'s but never queues (its
+## queue is the Runtime thread's): one thread at a time admits or runs the
+## subscription's handler, `unsubscribe` deactivates on the Runtime thread and
+## then waits until no other thread holds the gate (IFC-0187), and a handler
+## unsubscribing its own subscription does not wait for its own frame
+## (IFC-0962).
 
 {.push raises: [], gcsafe.}
 

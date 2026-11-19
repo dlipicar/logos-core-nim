@@ -8545,6 +8545,7 @@ proc admit(st: State, q: Request) =
     return
   inc p.inflight
   let ticket = newTicket()
+  ticket.id = uint64(st.nextJobId()) # [P3 F1] a queued scoped delivery's name for it
   r.calls.add(ticket)
   if q.call != nil:
     let a = st.asyncCalls.getOrDefault(q.call)
@@ -8741,7 +8742,7 @@ proc subscribe(st: State, q: Request) =
   q.outId[] = r.nextSub
   let s = subOf(q.handle)
   retain(s)
-  activate(s, r.nextSub)
+  activate(s, r.nextSub, st.limits.eventQueue, st.limits.eventQueueBytes)
   r.subs.add(q.handle)
   q.reply.answer(Reply())
 
@@ -8823,21 +8824,38 @@ proc scoped(st: State, q: Request) =
         reply.subs.add(p)
   q.reply.answer(reply)
 
-proc endDirect(st: State, r: Route, s: ptr SubState) =
-  ## [SPEC RUNTIME l.947-951 (RUN-1095); INTERFACE l.1472-1482; DECISIONS
-  ## G175, G225] The consumer's authority to receive the event ended while
-  ## the route stays ready: the Runtime ends the subscription. No handler of
-  ## it begins from now on; its handle reports the end with NOT_AUTHORISED,
-  ## and `unsubscribe` of it answers LOGOS_OK once. The handle is the route's
-  ## pinned one with the subscription's path generation.
+proc endDirect(st: State, r: Route, s: ptr SubState, reason = ecNotAuthorised) =
+  ## [SPEC RUNTIME l.947-951 (RUN-1095); INTERFACE l.1469-1482; DECISIONS
+  ## G175, G176, G225] The Runtime ends a subscription while its route stays
+  ## ready: the consumer's authority to receive the event ended
+  ## (NOT_AUTHORISED), or its delivery queue reached its bound
+  ## (MODULE_ERROR). No handler of it begins from now on and its queue goes;
+  ## its handle reports the end, and `unsubscribe` of it answers LOGOS_OK
+  ## once. The handle is the route's pinned one with the subscription's path
+  ## generation.
   if not s.isActive:
     return
   deactivate(s)
   s.ended = true
   for p in r.pins:
     if cast[ptr HandleState](p.handle).generation == s.generation:
-      st.reportOnHandle(r.consumer, p.handle, s.id, ecNotAuthorised)
+      st.reportOnHandle(r.consumer, p.handle, s.id, reason)
       break
+
+proc queueBound(st: State, q: Request) =
+  ## [SPEC INTERFACE l.1469-1470, l.1479; DECISIONS G176] A publisher found
+  ## the subscription's delivery queue at its bound: the subscription ends
+  ## with MODULE_ERROR and a diagnostic, unless something ended it first.
+  let s = subOf(q.handle)
+  let r = st.route(s.routeId)
+  if r != nil and s.isActive and q.handle in r.subs:
+    st.diagnose(
+      "subscription " & $s.id & " to " & s.eventName & " on route " & r.id &
+        " ended: its delivery queue reached " & $st.limits.eventQueue & " deliveries or " &
+        $st.limits.eventQueueBytes & " bytes (G176)"
+    )
+    st.endDirect(r, s, ecModule)
+  q.reply.answer(Reply())
 
 proc deliver(st: State, q: Request) =
   ## [SPEC RUNTIME l.1229-1231, l.1275-1283; CA l.973-975; G175] The admission
@@ -8868,7 +8886,15 @@ proc deliver(st: State, q: Request) =
   if q.scoped:
     if r.isTerminal and r.endCode == ecNotAuthorised:
       stop(ecNotAuthorised, "the route is " & $r.state)
-    if r.isTerminal or q.ticket == nil or q.ticket.cancelled.load or q.ticket.closed.load:
+    # [P3 F1] The call by its number: one that left its provider (its ticket
+    # freed) is a closed destination.
+    var t: ptr CallTicket
+    if q.callId != 0:
+      for c in r.calls:
+        if cast[ptr CallTicket](c).id == q.callId:
+          t = cast[ptr CallTicket](c)
+          break
+    if r.isTerminal or t == nil or t.cancelled.load or t.closed.load:
       stop(ecNotReady, "the invocation's destination is closed")
     if not r.allowsPublish(name):
       stop(ecNotAuthorised, "the event is outside the route's access")
@@ -9944,6 +9970,8 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.scoped(q)
   of rqDeliver:
     st.deliver(q)
+  of rqQueueBound:
+    st.queueBound(q)
   of rqRcSubscribe:
     st.subscribeRc(q)
   of rqRcUnsubscribe:

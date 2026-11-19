@@ -664,7 +664,7 @@ test = "tests/test_rcevents.nim"
 id = "TXT-0083"
 step = "P3"
 reading = "A binding-ended subscription is every end the Runtime makes other than unsubscription, its route's terminal state and the release of its binding or handle."
-compared = "INTERFACE l.1474 at 6cac8335 against the Runtime's ends: engine.endDirect, engine.endServed and the consumers' SubscriptionEnd (a route subscription whose authority to receive ended) and engine.endRc (a Runtime Control subscription past one of the three bounds, or whose event decision no longer allows) are reported. Unsubscription, a route's end (the terminal observer, P3 reading 1), a handle's or binding's release, and a subscriber leaving its live states (P3 reading 3) are not."
+compared = "INTERFACE l.1474 at 6cac8335 against the Runtime's ends: engine.endDirect, engine.endServed and the consumers' SubscriptionEnd (a route subscription whose authority to receive ended) and engine.endRc (a Runtime Control subscription past one of the three bounds, or whose event decision no longer allows) are reported, and so is engine.queueBound (a direct route subscription whose delivery queue reached its bound, G176, commit 4). Unsubscription, a route's end (the terminal observer, P3 reading 1), a handle's or binding's release, and a subscriber leaving its live states (P3 reading 3) are not."
 kind = "holds"
 site = "tests/test_rcevents.nim"
 named = "reported once by the binding with MODULE_ERROR"
@@ -677,3 +677,16 @@ compared = "INTERFACE l.1476 at 6cac8335 against the vtables (I105): the direct 
 kind = "holds"
 site = "tests/test_rcevents.nim"
 named = "reported once by the binding with MODULE_ERROR"
+
+[[text]]
+id = "TXT-0082"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[units]]
+id = "IFC-0280"
+compared = "INTERFACE l.1918 at 6cac8335 against l.1961-1967 at 6a4dfa28: a direct callback still runs on the publishing thread before publication returns, except a delivery queued under §2.5 (l.1405), which the thread holding the subscription's gate runs. test_events shows both: the handler on the publishing thread with nothing queued, and the queued deliveries run on the busy thread after the publications returned (G176 replaced)."
+
+[[stale]]
+id = "IFC-0186"
+compared = "INTERFACE l.1446 at 6a4dfa28 (a handler unsubscribing its own subscription through the same handle) is replaced by IFC-0962 (l.1416 at 6cac8335: any unsubscribe while a handler of that subscription is active on the calling thread). The route behaviour is unchanged (the N1 reading). The citations in test_events, test_rcevents, rcevents.nim and the IFC claims moved to IFC-0962 or went."

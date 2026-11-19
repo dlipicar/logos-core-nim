@@ -448,6 +448,18 @@ the rule for any consumer; with no matching rule the route is direct, as in ever
 l.3006-3007; DECISIONS G272). The mode is fixed when the route is established: `renew_route` keeps it,
 and routes already established are never moved (RUNTIME l.940).
 
+- Events on a direct route (INTERFACE §2.5, §2.8; DECISIONS G176): a provider's `publish` runs each
+  subscriber's handler on the publishing thread before it returns. When another thread is running a
+  subscription's handler, the delivery is not waited for: a copy of the event is queued, and that
+  thread runs the queued deliveries in publication order before it lets the subscription go, each
+  decided afresh (a scoped event whose call has returned by then is not delivered). Each subscription
+  queues at most 1,024 deliveries or 16 MiB of event data, whichever comes first (its first queued
+  delivery is taken whatever its size); one more ends the subscription: its queue is discarded, the
+  Runtime records the diagnostic "subscription *id* to *event* on route *route* ended: its delivery
+  queue reached ...", and the handle reports the end with `LOGOS_ERR_MODULE` to the handler registered
+  with `observe_subscription_end`, once, on an event worker (INTERFACE l.1469-1481). The bound limits
+  the queue, not how long the thread that holds it spends running it: a publication that reaches a
+  handler which itself publishes into busy handlers may run many deliveries before it returns.
 - Two rules for the same `caller` and `callee` are refused, as is a rule naming the Module Loader
   (`logos_module_loader`) as caller or callee (every route to the Loader is refused, G251) and a rule
   whose callee is `logos_runtime_control`, which is not a provider.
@@ -1070,6 +1082,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | Runtime Control event workers (`MaxEventWorkers`) | 64 | fixed |
 | observation: pages, snapshots, `observe_end` registrations | "Observation", Limits | fixed |
 | Runtime Control subscriptions and their queues | "Runtime Control subscriptions", Limits | fixed |
+| direct event deliveries queued for one subscription while another thread runs its handler (`eventQueue`, `eventQueueBytes`) | 1,024 deliveries or 16 MiB of event data; one more ends the subscription with `LOGOS_ERR_MODULE` (`routing`, "Events on a direct route"; DECISIONS G176) | fixed |
 | ended route records kept per consumer | 4096 | fixed |
 | committed changes and diagnostics kept for observation | 4096 each | fixed |
 | payload depth (`max_payload_depth`) | 128 to 1024, default 1024 | here |
