@@ -8774,12 +8774,42 @@ proc subscribe(st: State, q: Request) =
   r.subs.add(q.handle)
   q.reply.answer(Reply())
 
+proc markEnded(st: State, r: Route, s: ptr SubState, reason: ErrorCode) =
+  ## [SPEC RUNTIME l.947-951 (RUN-1095); INTERFACE l.1469-1482; DECISIONS
+  ## G175, G176, G225] The Runtime ends a subscription while its route stays
+  ## ready. No handler of it begins from now on and its queue goes; its
+  ## handle reports the end, and `unsubscribe` of it answers LOGOS_OK once.
+  ## The handle is the route's pinned one with the subscription's path
+  ## generation.
+  deactivate(s)
+  s.ended = true
+  for p in r.pins:
+    if cast[ptr HandleState](p.handle).generation == s.generation:
+      st.reportOnHandle(r.consumer, p.handle, s.id, reason)
+      break
+
+proc endAtBound(st: State, r: Route, s: ptr SubState) =
+  ## [SPEC INTERFACE l.1469-1470, l.1479; DECISIONS G176; P3 §10.2] A
+  ## publisher found the subscription's delivery queue at its bound and
+  ## deactivated it there: it ends with MODULE_ERROR and a diagnostic, once.
+  if s.ended or not s.atBound:
+    return
+  st.diagnose(
+    "subscription " & $s.id & " to " & s.eventName & " on route " & r.id &
+      " ended: its delivery queue reached " & $st.limits.eventQueue & " deliveries or " &
+      $st.limits.eventQueueBytes & " bytes (G176)"
+  )
+  st.markEnded(r, s, ecModule)
+
 proc unsubscribe(st: State, q: Request) =
   ## [SPEC INTERFACE §2.5 l.1446-1459; RUNTIME §7.5 l.1341-1347] An ended
   ## route answers with its code first; an id that names no active
   ## subscription of this handle is INVALID_PARAMS (TRANSPORT l.748 through
   ## RUNTIME l.1012-1016) and changes nothing. [SPEC INTERFACE l.1482; G225]
-  ## One the Runtime ended answers LOGOS_OK once (`endDirect`).
+  ## One the Runtime ended answers LOGOS_OK once (`endDirect`). [P3 §12.1]
+  ## So does one a publisher deactivated at its queue's bound before the
+  ## Runtime thread heard of it: the binding ended it first, so this ends and
+  ## reports it as the bound would have (`endAtBound`).
   let r = st.route(q.route)
   if r.isNil or r.consumer != q.origin.instance:
     q.reply.answerError(ecNotAuthorised, "not authorised")
@@ -8789,7 +8819,9 @@ proc unsubscribe(st: State, q: Request) =
     return
   for i, p in r.subs:
     let s = subOf(p)
-    if s.id == q.subId and s.generation == q.generation and (s.isActive or s.ended):
+    if s.id == q.subId and s.generation == q.generation and
+        (s.isActive or s.ended or s.atBound):
+      st.endAtBound(r, s)
       deactivate(s)
       r.subs.delete(i)
       q.reply.answer(Reply(subs: @[p]))
@@ -8853,36 +8885,23 @@ proc scoped(st: State, q: Request) =
   q.reply.answer(reply)
 
 proc endDirect(st: State, r: Route, s: ptr SubState, reason = ecNotAuthorised) =
-  ## [SPEC RUNTIME l.947-951 (RUN-1095); INTERFACE l.1469-1482; DECISIONS
-  ## G175, G176, G225] The Runtime ends a subscription while its route stays
-  ## ready: the consumer's authority to receive the event ended
-  ## (NOT_AUTHORISED), or its delivery queue reached its bound
-  ## (MODULE_ERROR). No handler of it begins from now on and its queue goes;
-  ## its handle reports the end, and `unsubscribe` of it answers LOGOS_OK
-  ## once. The handle is the route's pinned one with the subscription's path
-  ## generation.
+  ## [SPEC RUNTIME l.947-951 (RUN-1095); G175] The consumer's authority to
+  ## receive the event ended (NOT_AUTHORISED) while the route stays ready
+  ## (`markEnded`). [P3 §12.1] One a publisher already deactivated at its
+  ## queue's bound is not active: its first cause, MODULE_ERROR, stays.
   if not s.isActive:
     return
-  deactivate(s)
-  s.ended = true
-  for p in r.pins:
-    if cast[ptr HandleState](p.handle).generation == s.generation:
-      st.reportOnHandle(r.consumer, p.handle, s.id, reason)
-      break
+  st.markEnded(r, s, reason)
 
 proc queueBound(st: State, q: Request) =
-  ## [SPEC INTERFACE l.1469-1470, l.1479; DECISIONS G176] A publisher found
-  ## the subscription's delivery queue at its bound: the subscription ends
-  ## with MODULE_ERROR and a diagnostic, unless something ended it first.
+  ## [SPEC INTERFACE l.1469-1470, l.1479; DECISIONS G176] The publisher's
+  ## word that it found the bound: the end (`endAtBound`), unless the route
+  ## ended or the subscription left it first (an `unsubscribe` in between
+  ## ended it itself, P3 §12.1).
   let s = subOf(q.handle)
   let r = st.route(s.routeId)
-  if r != nil and s.isActive and q.handle in r.subs:
-    st.diagnose(
-      "subscription " & $s.id & " to " & s.eventName & " on route " & r.id &
-        " ended: its delivery queue reached " & $st.limits.eventQueue & " deliveries or " &
-        $st.limits.eventQueueBytes & " bytes (G176)"
-    )
-    st.endDirect(r, s, ecModule)
+  if r != nil and not r.isTerminal and q.handle in r.subs:
+    st.endAtBound(r, s)
   q.reply.answer(Reply())
 
 proc deliver(st: State, q: Request) =

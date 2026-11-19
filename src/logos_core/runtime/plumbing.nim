@@ -1161,6 +1161,27 @@ when defined(lcnTestHooks):
       sleep(1)
     rcAnswersHeld -= 1
 
+  var
+    queueBoundHold: Atomic[bool]
+    queueBoundsHeld: Atomic[int] ## publishers waiting at the hold
+
+  proc holdQueueBoundForTests*(on: bool) =
+    ## [P3 §12.1] A publisher that found a subscription's delivery queue at
+    ## its bound, and deactivated the subscription, waits before it tells
+    ## the Runtime thread (`events.deliverOrQueue`).
+    queueBoundHold.store(on)
+
+  proc queueBoundHeldForTests*(): bool =
+    queueBoundsHeld.load > 0
+
+  proc waitAtQueueBoundHold*() =
+    if not queueBoundHold.load:
+      return
+    queueBoundsHeld += 1
+    while queueBoundHold.load:
+      sleep(1)
+    queueBoundsHeld -= 1
+
 const AuthorityEndings* = {
   fkAuthorityDenied, fkAuthorityExpired, fkAuthorityRevoked, fkAuthorityEvaluationFailed
 } ## [SPEC RUNTIME l.3753; G168 extended] what an authority stop leaves

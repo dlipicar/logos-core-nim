@@ -452,9 +452,12 @@ and routes already established are never moved (RUNTIME l.940).
   subscriber's handler on the publishing thread before it returns. When another thread is running a
   subscription's handler, the delivery is not waited for: a copy of the event is queued, and that
   thread runs the queued deliveries in publication order before it lets the subscription go, each
-  decided afresh (a scoped event whose call has returned by then is not delivered). Each subscription
+  decided afresh (a scoped event whose call has returned by then is not delivered). A handler that
+  publishes into its own subscription while deliveries wait for it takes its place behind them: its
+  publish runs them and then its own delivery before it returns. Each subscription
   queues at most 1,024 deliveries or 16 MiB of event data, whichever comes first (its first queued
-  delivery is taken whatever its size); one more ends the subscription: its queue is discarded, the
+  delivery is taken whatever its size); one more ends the subscription at once, so nothing published
+  after it reaches the handler: its queue is discarded, the
   Runtime records the diagnostic "subscription *id* to *event* on route *route* ended: its delivery
   queue reached ...", and the handle reports the end with `LOGOS_ERR_MODULE` to the handler registered
   with `observe_subscription_end`, once, on an event worker (INTERFACE l.1469-1481). The bound limits

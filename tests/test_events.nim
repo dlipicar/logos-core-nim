@@ -241,6 +241,8 @@ type Job = object
   id: LogosSubscriptionId
   code: Atomic[int]
   done: Atomic[bool]
+  doneAt: ptr Atomic[int] ## a handler's returned invocations, read on return
+  doneSeen: Atomic[int]
 
 proc reads(j: ptr Job) {.thread.} =
   var code = 0
@@ -253,6 +255,8 @@ proc reads(j: ptr Job) {.thread.} =
 
 proc unsubscribes(j: ptr Job) {.thread.} =
   j.code.store(int(j.route.vtable.unsubscribe(j.route, j.id).code))
+  if j.doneAt != nil:
+    j.doneSeen.store(j.doneAt[].load)
   j.done.store(true)
 
 proc releases(j: ptr Job) {.thread.} =
@@ -869,7 +873,11 @@ type Trace = object
   values: array[16, int] ## each invocation's `value` (a payload `{"value": n}`)
   threads: array[16, int] ## and its thread
   hold: Atomic[bool] ## an invocation waits while it is true
-  nest: Atomic[int] ## > 0: the first invocation publishes this value when let go
+  nestOf: array[24, int]
+    ## > 0: the invocation of value `v` publishes `nestOf[v]` when let go,
+    ## set before the publications
+  nestCode: array[24, int] ## the nested publication of `n`: its result
+  afterNest: array[24, int] ## and the invocations returned when it did
   partner: ptr Trace ## [TF-21] the other crossing handler
   holding: Atomic[bool] ## the first invocation is inside, crossing
   sawPartner: Atomic[bool] ## it found its partner inside too
@@ -884,7 +892,10 @@ proc clearTraces() =
     t.current.store(0)
     t.overlaps.store(0)
     t.hold.store(false)
-    t.nest.store(0)
+    for v in 0 ..< t.nestOf.len:
+      t.nestOf[v] = 0
+      t.nestCode[v] = -1
+      t.afterNest[v] = -1
     t.partner = nil
     t.holding.store(false)
     t.sawPartner.store(false)
@@ -902,15 +913,18 @@ proc onTrace(
     t.overlaps += 1
   t.current.store(getThreadId())
   let i = t.started.fetchAdd(1)
+  let v = int(data[int(len) - 1])
   if i < t.values.len:
-    t.values[i] = int(data[int(len) - 1])
+    t.values[i] = v
     t.threads[i] = getThreadId()
   while t.hold.load:
     sleep(1)
+  if v < t.nestOf.len and t.nestOf[v] > 0:
+    let n = t.nestOf[v]
+    let code = publishRaw(cstring(Changed), valuePayload(n))
+    t.nestCode[n] = int(code)
+    t.afterNest[n] = t.done.load
   if i == 0:
-    let n = t.nest.load
-    if n > 0:
-      discard publishRaw(cstring(Changed), valuePayload(n))
     if t.partner != nil:
       # [TF-21] Inside, wait for the partner to be inside its own handler,
       # then publish into both subscriptions.
@@ -945,8 +959,9 @@ suite "run.events: queued delivery (INTERFACE §2.5 l.1402-1408, l.1469-1470; G1
     clearAll()
     clearTraces()
     clearEnds()
+    holdQueueBoundForTests(false)
 
-  test "[IFC-0960] [IFC-0961] [IFC-0280] [IFC-0182] [IMPL-DECISION G176] a publication reaching a handler active on another thread queues a copy and returns; that thread runs the queue in publication order before it lets go, a nested publication behind it":
+  test "[IFC-0960] [IFC-0961] [IFC-0280] [IFC-0279] [IFC-0181] [IFC-0182] [IMPL-DECISION G176] a publication reaching a handler active on another thread queues a copy and returns; that thread runs the queue in publication order before it lets go, and a nested publication behind it runs the queue up to its own handler before it returns":
     # [plan §2.13, difference 5] Over local transport handlers run on event
     # workers: no publication reaches a handler on another publishing thread.
     directOnly()
@@ -958,7 +973,7 @@ suite "run.events: queued delivery (INTERFACE §2.5 l.1402-1408, l.1469-1470; G1
     var id: LogosSubscriptionId
     check h.subscribeTrace(addr traces[0], id) == ecOk
     traces[0].hold.store(true)
-    traces[0].nest.store(4)
+    traces[0].nestOf[1] = 4
     var first = Pub(value: 1)
     var t: Thread[ptr Pub]
     createThread(t, publishes, addr first)
@@ -976,10 +991,14 @@ suite "run.events: queued delivery (INTERFACE §2.5 l.1402-1408, l.1469-1470; G1
     joinThread(t)
     # `t`'s publication returned only after it ran the queue (l.1406-1407).
     # The handler's own nested publication (4) came after 2 and 3 were
-    # queued, so it waits behind them instead of re-entering at once.
+    # queued: it took its place behind them and ran 2, 3 and then its own
+    # handler before it returned (l.1402, l.1918-1920; P3 §10.1), with the
+    # handler of 1 still active.
     check first.code.load == ord(ecOk)
     check traces[0].done.load == 4
     check traces[0].values[0 .. 3] == @[1, 2, 3, 4]
+    check traces[0].nestCode[4] == ord(ecOk)
+    check traces[0].afterNest[4] == 3
     for i in 1 .. 3:
       check traces[0].threads[i] == traces[0].threads[0]
     check traces[0].threads[0] != getThreadId()
@@ -989,6 +1008,86 @@ suite "run.events: queued delivery (INTERFACE §2.5 l.1402-1408, l.1469-1470; G1
     check publishedOk(5)
     check traces[0].done.load == 5
     check traces[0].threads[4] == getThreadId()
+    h.release()
+    e.finish()
+
+  test "[IFC-0181] [IFC-0279] [IFC-0280] [IMPL-DECISION G176] nested publications behind queued deliveries, one inside the other, run in publication order, each handler before its own publish returns (P3 §10.1)":
+    directOnly() # as above
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    resetDeferred()
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var id: LogosSubscriptionId
+    check h.subscribeTrace(addr traces[0], id) == ecOk
+    # 1 runs on `t`, 2 and 3 queue behind it; the handler of 1 publishes 4,
+    # which runs 2, whose handler publishes 5. 5 runs 3, then 4 for the
+    # publication below it, then itself; 4 then finds its own begun.
+    traces[0].hold.store(true)
+    traces[0].nestOf[1] = 4
+    traces[0].nestOf[2] = 5
+    var first = Pub(value: 1)
+    var t: Thread[ptr Pub]
+    createThread(t, publishes, addr first)
+    check waitUntil(
+      proc(): bool =
+        traces[0].started.load == 1
+    )
+    check publishedOk(2)
+    check publishedOk(3)
+    traces[0].hold.store(false)
+    joinThread(t)
+    check first.code.load == ord(ecOk)
+    check traces[0].done.load == 5
+    check traces[0].values[0 .. 4] == @[1, 2, 3, 4, 5]
+    for i in 1 .. 4:
+      check traces[0].threads[i] == traces[0].threads[0]
+    check traces[0].overlaps.load == 0
+    # When 5 returned, 3, 4 and 5 had returned (1 and 2 still active); when
+    # 4 returned, 2 to 5 had.
+    check traces[0].nestCode[5] == ord(ecOk)
+    check traces[0].afterNest[5] == 3
+    check traces[0].nestCode[4] == ord(ecOk)
+    check traces[0].afterNest[4] == 4
+    h.release()
+    e.finish()
+
+  test "[IFC-0782] [IFC-0181] [IMPL-DECISION G176] a scoped event from a nested call behind queued deliveries is delivered while its call is open (P3 §10.1)":
+    directOnly() # as above
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let route = rc.routeId("k")
+    var h = rc.handle(route)
+    var other = rc.handle(route)
+    var id: LogosSubscriptionId
+    check h.subscribe(addr seen[0], id) == ecOk
+    # An ordinary publication (channel 15) holds the handler on `t`; once let
+    # go, the handler calls the provider through `h` on channel 17, which
+    # publishes into that call's destination: this subscription.
+    seen[0].hold.store(true)
+    seen[0].callRoute = addr h
+    seen[0].callChannel = 17
+    var pub = Job(route: addr other, channel: 15, times: 1)
+    var t: Thread[ptr Job]
+    createThread(t, reads, addr pub)
+    check waitUntil(
+      proc(): bool =
+        seen[0].inside.load == 1
+    )
+    # A second ordinary publication from this thread queues behind it.
+    check other.read(15).isOk
+    check seen[0].count.load == 0
+    seen[0].hold.store(false)
+    joinThread(t)
+    # The scoped event joined the queue behind the second publication and
+    # ran inside the nested call, before it returned: admitted while its
+    # call was open (RUNTIME l.1196-1200), so all three were delivered.
+    check pub.code.load == 0
+    check seen[0].callCode.load == 0
+    check seen[0].count.load == 3
+    check seen[0].overlaps.load == 0
+    other.release()
     h.release()
     e.finish()
 
@@ -1025,7 +1124,7 @@ suite "run.events: queued delivery (INTERFACE §2.5 l.1402-1408, l.1469-1470; G1
     h.release()
     e.finish()
 
-  test "[IFC-0963] [IFC-0964] [IMPL-DECISION G176] [IMPL-DECISION G225] a queue at its bound ends the subscription with MODULE_ERROR, reported once, and the queue goes; the first queued delivery is taken whatever its size":
+  test "[IFC-0963] [IFC-0964] [IFC-0187] [IMPL-DECISION G176] [IMPL-DECISION G225] a queue at its bound ends the subscription with MODULE_ERROR, reported once while the handler is active, and the queue goes; an unsubscribe from another thread answers LOGOS_OK once that handler returned; the first queued delivery is taken whatever its size":
     directOnly() # as above
     for bytes in [false, true]:
       clearTraces()
@@ -1068,17 +1167,87 @@ suite "run.events: queued delivery (INTERFACE §2.5 l.1402-1408, l.1469-1470; G1
         "subscription " & $id & " to " & Changed & " on route " & rc.routeId("k") &
           " ended: its delivery queue reached"
       )
+      # [IF l.1418, l.1436, l.1482; P3 §10.3] The report does not wait for
+      # the handler; what keeps the handler's state valid is unsubscribe,
+      # which answers LOGOS_OK once, only after that handler returned.
+      var unsub = Job(route: addr h, id: id, doneAt: addr traces[0].done)
+      var u: Thread[ptr Job]
+      createThread(u, unsubscribes, addr unsub)
+      check unsub.stillRunning()
       traces[0].hold.store(false)
+      joinThread(u)
       joinThread(t)
+      check unsub.code.load == ord(ecOk)
+      check unsub.doneSeen.load == 1
       check traces[0].done.load == 1 # the queue went with the subscription
       check publishedOk(5)
       check traces[0].done.load == 1
       check ends[0].count.load == 1
-      # [IF l.1482] Its unsubscribe is LOGOS_OK once.
-      check h.unsubscribe(id) == ecOk
       check h.unsubscribe(id) == ecInvalidParams
       h.release()
       e.finish()
+
+  test "[IFC-0963] [IFC-0964] [IMPL-DECISION G176] [IMPL-DECISION G225] the publisher that finds the bound deactivates the subscription at once; an unsubscribe before the Runtime thread ends it answers LOGOS_OK and the end is reported once (P3 §10.2, §12.1)":
+    directOnly() # as above
+    var cfg = config(extra = @[dmeterStatic])
+    cfg.limits.eventQueue = 2
+    let e = fixtureEngine(cfg)
+    resetDeferred()
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    check h.observeSubEnd(addr ends[0]) == ecOk
+    var id: LogosSubscriptionId
+    check h.subscribeTrace(addr traces[0], id) == ecOk
+    traces[0].hold.store(true)
+    var first = Pub(value: 1)
+    var t: Thread[ptr Pub]
+    createThread(t, publishes, addr first)
+    check waitUntil(
+      proc(): bool =
+        traces[0].started.load == 1
+    )
+    check publishedOk(2)
+    check publishedOk(3)
+    # 4 finds the bound: the subscription is inactive from then on, and its
+    # publisher is held before the Runtime thread hears of it.
+    holdQueueBoundForTests(true)
+    var over = Pub(value: 4)
+    var p: Thread[ptr Pub]
+    createThread(p, publishes, addr over)
+    check waitUntil(
+      proc(): bool =
+        queueBoundHeldForTests()
+    )
+    # Nothing published after the refused delivery reaches the handler
+    # (IF l.1472).
+    check publishedOk(5)
+    check ends[0].count.load == 0
+    # The unsubscribe ends it as the bound would have, reported once with
+    # MODULE_ERROR while the handler is held, and waits for that handler.
+    var unsub = Job(route: addr h, id: id, doneAt: addr traces[0].done)
+    var u: Thread[ptr Job]
+    createThread(u, unsubscribes, addr unsub)
+    check reported(addr ends[0], 1)
+    check ends[0].id.load == uint64(id)
+    check ends[0].reason.load == ord(ecModule)
+    check unsub.stillRunning()
+    traces[0].hold.store(false)
+    joinThread(u)
+    joinThread(t)
+    check unsub.code.load == ord(ecOk)
+    check unsub.doneSeen.load == 1
+    # The held bound request then finds nothing left to end.
+    holdQueueBoundForTests(false)
+    joinThread(p)
+    check over.code.load == ord(ecOk)
+    check first.code.load == ord(ecOk)
+    check ends[0].count.load == 1
+    check e.diagnostics().countIt("ended: its delivery queue reached" in it) == 1
+    check traces[0].done.load == 1
+    check h.unsubscribe(id) == ecInvalidParams
+    h.release()
+    e.finish()
 
   test "[IFC-0960] [IMPL-DECISION G176] two publishers, each inside one subscription's handler, publish into the other's: both queue, and both return (TF-21)":
     directOnly() # as above

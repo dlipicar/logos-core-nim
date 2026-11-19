@@ -32,11 +32,17 @@
 ## publication's identifiers, never its call ticket or anything freed with
 ## its call or attempt) and moves on. The thread holding the gate runs the
 ## queued deliveries in publication order before it lets go, each admitted
-## afresh as it begins (G175). A nested publication on that thread joins the
-## queue when deliveries published before it wait there, so order holds. Up
-## to `eventQueue` deliveries or `eventQueueBytes` of copied data wait per
-## subscription (the first is always taken); one more ends the subscription
-## with MODULE_ERROR (l.1469-1470, l.1479). Deactivation discards the queue.
+## afresh as it begins (G175). [P3 §10.1] A nested publication on that thread
+## while deliveries published before it wait there takes its place in the
+## queue, and runs the queue from the head, inside its publish, until its own
+## delivery has begun: order holds (l.1402), and its handler returns before
+## its publish does (l.1918-1920, l.2153). Up to `eventQueue` deliveries or
+## `eventQueueBytes` of copied data wait per subscription (the first is
+## always taken); one more ends the subscription with MODULE_ERROR
+## (l.1469-1470, l.1479): the publisher that finds the bound deactivates it
+## there, under the gate's lock, so nothing published after the refused
+## delivery runs (l.1472), and the Runtime thread ends and reports it
+## (`rqQueueBound`). Deactivation discards the queue.
 ## `unsubscribe` and handle release deactivate on the Runtime thread and then
 ## wait until no other thread holds the gate, so no handler can begin after
 ## they return; a gate held by the calling thread further down its stack is
@@ -55,11 +61,24 @@ import ./[callside, plumbing]
 from ./tport import submitWait
 
 type
+  Outcome = object
+    ## [P3 §10.1] A nested publication's own delivery, on its publisher's
+    ## stack: whoever runs it from the queue is that same thread, in a frame
+    ## above the publisher's, so the frame is live when it is written.
+    begun: bool
+    admitted: bool
+    error: Opt[EngineError] ## a scoped delivery that stopped its publication
+
   Queued = object
     ## [SPEC INTERFACE l.1405-1406; P3 F1] One delivery waiting for the
     ## thread that holds the gate, on the shared heap: copied values and
     ## identifiers only, so it outlives its publication, call and attempt.
     next: ptr Queued
+    number: uint64 ## [P3 §10.1] its place: entries join and begin in order
+    outcome: ptr Outcome
+      ## a nested publication's own delivery: its result for the publisher's
+      ## frame; nil for one another thread published. Deactivation frees an
+      ## entry without reading this.
     scoped: bool
     origin: FixedText ## the publishing instance
     attempt: FixedText ## an ordinary publication's attempt token
@@ -94,12 +113,22 @@ type
     head, tail: ptr Queued ## [G176] deliveries waiting for the owner, in order
     queued, queuedBytes: int ## their number and copied data
     maxQueued, maxQueuedBytes: int ## the bound, set at activation
+    joined, begun: uint64
+      ## [P3 §10.1] the last number given to an entry, and that of the last
+      ## entry taken from the head
+    bound: bool
+      ## [P3 §10.2, §12.1] a publisher found the queue at its bound and
+      ## deactivated the subscription; the Runtime thread ends it
+      ## (`engine.endAtBound`)
 
   Entry = enum
     enEntered ## this thread holds the gate: deliver, then `leaveGate`
     enBusy ## another thread holds it, or deliveries wait: queue a copy
     enQueued ## the copy waits in the queue, which owns it now
-    enBound ## the queue is at its bound: the subscription ends
+    enNested
+      ## this thread holds the gate and deliveries wait: the copy joined the
+      ## queue, and this thread runs it up to the copy (`runNested`)
+    enBound ## the queue was at its bound: the subscription is inactive now
     enInactive ## the subscription is inactive
 
 proc subOf*(p: pointer): ptr SubState =
@@ -173,6 +202,12 @@ proc isActive*(s: ptr SubState): bool =
   withLock s.lock:
     result = s.active
 
+proc atBound*(s: ptr SubState): bool =
+  ## [P3 §10.2, §12.1] Deactivated by a publisher at the queue's bound: the
+  ## end the Runtime thread still owes it.
+  withLock s.lock:
+    result = s.bound
+
 func eventName*(s: ptr SubState): string =
   $s.event
 
@@ -181,12 +216,21 @@ func routeId*(s: ptr SubState): string =
 
 # The gate ------------------------------------------------------------------------------
 
-proc enterGate(s: ptr SubState, copy: ptr Queued = nil): Entry =
+proc enterGate(
+    s: ptr SubState,
+    copy: ptr Queued = nil,
+    outcome: ptr Outcome = nil,
+    number: ptr uint64 = nil,
+): Entry =
   ## [SPEC INTERFACE l.1402-1406] A publication's delivery: the gate when it
   ## is free, or held by this thread with nothing queued (nested
-  ## publication); otherwise `copy`, when given, joins the queue unless the
-  ## queue is at its bound. The first queued delivery is always taken.
+  ## publication); otherwise `copy`, when given, joins the queue with the
+  ## next number, written to `number`, unless the queue is at its bound. On
+  ## the gate's own thread it carries `outcome` (`enNested`). The first queued
+  ## delivery is always taken. [P3 §10.2] At the bound the subscription is
+  ## deactivated here, so nothing published after the refused delivery runs.
   let me = getThreadId()
+  var gone: ptr Queued
   withLock s.lock:
     if not s.active:
       return enInactive
@@ -198,15 +242,32 @@ proc enterGate(s: ptr SubState, copy: ptr Queued = nil): Entry =
       return enBusy
     if s.queued > 0 and
         (s.queued >= s.maxQueued or s.queuedBytes + copy.len > s.maxQueuedBytes):
-      return enBound
-    if s.tail == nil:
-      s.head = copy
+      s.active = false
+      s.bound = true
+      gone = s.head
+      s.head = nil
+      s.tail = nil
+      s.queued = 0
+      s.queuedBytes = 0
+      broadcast(s.cond)
+      result = enBound
     else:
-      s.tail.next = copy
-    s.tail = copy
-    inc s.queued
-    s.queuedBytes += copy.len
-  enQueued
+      inc s.joined
+      copy.number = s.joined
+      number[] = s.joined
+      if s.owner == me:
+        copy.outcome = outcome
+        result = enNested
+      else:
+        result = enQueued
+      if s.tail == nil:
+        s.head = copy
+      else:
+        s.tail.next = copy
+      s.tail = copy
+      inc s.queued
+      s.queuedBytes += copy.len
+  freeQueued(gone)
 
 proc waitGate(s: ptr SubState): bool =
   ## [P3 revision 3] The transported drain's entry: it never queues. Only
@@ -237,7 +298,8 @@ proc runQueued(s: ptr SubState, q: ptr Queued) =
   ## [SPEC INTERFACE l.1406-1407; G175; P3 F1] One queued delivery on the
   ## gate's owner: admitted as it begins, as if published now by its
   ## publisher (an ordinary one needs that publisher's same attempt, ready; a
-  ## scoped one its call still open), then its handler.
+  ## scoped one its call still open), then its handler. A nested
+  ## publication's own delivery reports to its frame (`Outcome`).
   let name = $q.name
   let r = s.engine.call(
     Request(
@@ -250,8 +312,39 @@ proc runQueued(s: ptr SubState, q: ptr Queued) =
       callId: q.call,
     )
   )
+  if q.outcome != nil:
+    q.outcome.begun = true
+    q.outcome.admitted = r.admitted
+    q.outcome.error = r.error
   if r.admitted:
     s.run(name, toOpenArray(cast[ptr UncheckedArray[byte]](addr q.data), 0, q.len - 1))
+
+proc takeHead(s: ptr SubState): ptr Queued =
+  ## Under the gate's lock, on its owner: the next delivery, which begins now.
+  result = s.head
+  s.head = result.next
+  if s.head == nil:
+    s.tail = nil
+  result.next = nil
+  dec s.queued
+  s.queuedBytes -= result.len
+  s.begun = result.number
+
+proc runNested(s: ptr SubState, number: uint64) =
+  ## [SPEC INTERFACE l.1402-1407, l.1918-1920, l.2153; P3 §10.1] A nested
+  ## publication whose delivery joined the queue as `number`: its thread
+  ## holds the gate, so it runs the queue from the head, in order, until that
+  ## delivery has begun (here, or in a deeper nested publication that ran it)
+  ## or the subscription is inactive. What joined after it waits for the
+  ## outermost hold (`leaveGate`).
+  while true:
+    var q: ptr Queued
+    withLock s.lock:
+      if not s.active or s.begun >= number or s.head == nil:
+        return
+      q = s.takeHead()
+    s.runQueued(q)
+    freeQueued(q)
 
 proc leaveGate(s: ptr SubState) =
   ## [SPEC INTERFACE l.1406-1407] The outermost hold runs the queued
@@ -266,13 +359,7 @@ proc leaveGate(s: ptr SubState) =
           s.owner = 0
           broadcast(s.cond)
         return
-      q = s.head
-      s.head = q.next
-      if s.head == nil:
-        s.tail = nil
-      q.next = nil
-      dec s.queued
-      s.queuedBytes -= q.len
+      q = s.takeHead()
     s.runQueued(q)
     freeQueued(q)
 
@@ -283,17 +370,25 @@ proc deliverOrQueue(
     call: uint64,
     name: string,
     data: openArray[byte],
+    outcome: var Outcome,
 ): Entry =
   ## [SPEC INTERFACE l.1402-1406] Takes the gate, or queues a copy of the
   ## delivery; at the bound the Runtime thread ends the subscription
-  ## (`rqQueueBound`, MODULE_ERROR) and the copy goes.
+  ## (`rqQueueBound`, MODULE_ERROR) and the copy goes. [P3 §10.1] A nested
+  ## publication behind queued deliveries runs them and its own here, its
+  ## own's result in `outcome` (`enNested`).
   result = s.enterGate()
   if result == enBusy:
     let copy = newQueued(scoped, origin, attempt, call, name, data)
-    result = s.enterGate(copy)
-    if result != enQueued:
+    var number: uint64
+    result = s.enterGate(copy, addr outcome, addr number)
+    if result notin {enQueued, enNested}:
       freeQueued(copy)
+    if result == enNested:
+      s.runNested(number)
   if result == enBound:
+    when defined(lcnTestHooks):
+      waitAtQueueBoundHold()
     discard s.engine.call(Request(kind: rqQueueBound, handle: s))
 
 proc quiesce*(s: ptr SubState) =
@@ -551,8 +646,10 @@ proc publishOp*(
           "a publication of " & name & " from " & $a.instance &
             " was not delivered on route " & $s.route & ": " & describe(c.error)
         )
+    var nested: Outcome # an ordinary publication reports no delivery
     if checked.getOrDefault(root, false) and
-        s.deliverOrQueue(false, $a.instance, $a.attempt, 0, name, bytes) == enEntered:
+        s.deliverOrQueue(false, $a.instance, $a.attempt, 0, name, bytes, nested) ==
+        enEntered:
       let r = e.call(
         Request(
           kind: rqDeliver,
@@ -804,7 +901,9 @@ proc scopedPublish*(
   ## the decisions or its scope exclude is skipped. [G176; P3 F1] A delivery
   ## queued behind another thread's handler is admitted when it begins, and
   ## not delivered if the call's destination closed by then (INTERFACE
-  ## l.2153: those this publication ran).
+  ## l.2153: those this publication ran). [P3 §10.1] One behind deliveries
+  ## queued for this thread's own handler runs here, before this returns, so
+  ## its call is open when it is admitted.
   let name = checkEventName(eventName).valueOr:
     return status(error)
   if cborData == nil or cborDataLen == 0:
@@ -845,7 +944,8 @@ proc scopedPublish*(
   for p in reply.subs:
     let s = subOf(p)
     if failed.isNone:
-      case s.deliverOrQueue(true, $inv.provider, "", call, name, bytes)
+      var nested: Outcome
+      case s.deliverOrQueue(true, $inv.provider, "", call, name, bytes, nested)
       of enEntered:
         let r = e.call(
           Request(
@@ -862,6 +962,13 @@ proc scopedPublish*(
         s.leaveGate()
         if r.error.isSome:
           failed = Opt.some(failureOf(r.error.get))
+      of enNested:
+        # [P3 §10.1] Run from the queue on this thread, inside this publish:
+        # its admission stops the fan-out as above (l.2157, l.2160).
+        if not nested.begun:
+          skipped = true
+        elif nested.error.isSome:
+          failed = Opt.some(failureOf(nested.error.get))
       of enInactive:
         skipped = true
       of enBusy, enQueued, enBound:
