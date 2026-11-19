@@ -16,11 +16,12 @@
 ##
 ## A subscription (`RcSub`) lives on the shared heap and holds only its
 ## handler, its activation and its gate; its queue and authority state stay on
-## the Runtime thread. The gate is `events.nim`'s: one thread at a time admits
-## or runs the subscription's handler, `unsubscribe` deactivates on the Runtime
-## thread and then waits until no other thread holds the gate (IFC-0186,
-## IFC-0187), and a handler unsubscribing its own subscription does not wait
-## for its own frame.
+## the Runtime thread. The gate is as `events.nim`'s but never queues (its
+## queue is the Runtime thread's): one thread at a time admits or runs the
+## subscription's handler, `unsubscribe` deactivates on the Runtime thread and
+## then waits until no other thread holds the gate (IFC-0187), and a handler
+## unsubscribing its own subscription does not wait for its own frame
+## (IFC-0962).
 
 {.push raises: [], gcsafe.}
 
@@ -29,7 +30,7 @@ import results
 import logos_sdk/abi/types
 import logos_sdk/base/perthread
 import logos_sdk/iface/outcome
-import ./[callside, events, plumbing]
+import ./[callside, events, plumbing, subend]
 
 when defined(lcnTestHooks):
   import std/os
@@ -40,6 +41,13 @@ when defined(lcnTestHooks):
     ## Each drain an event worker takes starts `ms` late, so its entries stay
     ## queued meanwhile (a loaded host's event workers); 0 turns it off.
     drainDelayMs.store(ms)
+
+  var reportDelayMs: Atomic[int]
+
+  proc setReportDelayForTests*(ms: int) =
+    ## [G225] Each subscription-end report job starts `ms` late, so a release
+    ## or destroy can come before it begins; 0 turns it off.
+    reportDelayMs.store(ms)
 
 const
   RcPrefix = "logos.runtime_control."
@@ -225,6 +233,26 @@ proc drain(e: Engine, s: ptr RcSub) =
       break
   drop(s)
 
+proc runReport(e: Engine, job: RcJob) =
+  ## [SPEC INTERFACE l.1478-1484; G225] One subscription-end report on this
+  ## event worker, never inline and never on the Runtime thread: the handler
+  ## once unless release or destroy suppressed it first. A handle's release
+  ## waiting for it is woken; the Runtime thread then lets go of what the job
+  ## held (`mkSubEndDone`).
+  when defined(lcnTestHooks):
+    let late = reportDelayMs.load
+    if late > 0:
+      sleep(late)
+  let id = LogosSubscriptionId(job.subId)
+  if job.onHandle:
+    let h = cast[ptr HandleState](job.owner)
+    discard h.subEnd.report(id, job.reason)
+    withLock h.lock:
+      broadcast(h.cond)
+  else:
+    discard cast[ptr AttemptServices](job.owner).subEnd.report(id, job.reason)
+  e.post(Msg(kind: mkSubEndDone, job: job.report))
+
 proc rcWorkerLoop(e: Engine) =
   while true:
     var job: RcJob
@@ -243,6 +271,8 @@ proc rcWorkerLoop(e: Engine) =
       drain(e, rcSubOf(job.sub))
     of rjLinkDrain:
       linkDrain(e, job.sub)
+    of rjSubEnd:
+      runReport(e, job)
 
 proc rcWorkerMain*(e: Engine) {.thread.} =
   ## A Runtime-owned thread: `wait_for_shutdown` from a handler is NOT_READY,

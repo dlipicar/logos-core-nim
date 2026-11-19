@@ -167,6 +167,16 @@ G352 and G354 (DECISIONS, "Open items").
   `logos_error_code_t` (interim result, I105), `logos_types.h` as the copied §5.2 listing (G158 settled: the
   limit of IFC-0003, IFC-0004 and the §3.8 units is gone) and the reverse mapper's subject as input (G318).
   IFC-0959 and IFC-0971 to IFC-0975 and IFC-0981 claimed; IFC-0170, IFC-0884 and IFC-0935 retired.
+- 2026-11-19, re-pin P3a (I106), events and subscription ends at 6cac8335: one event-name check on
+  every binding operation and carrier name; the publish result of IF l.3351 (I105's interim completed);
+  SubscriptionEnd and coded termination on the session; the Runtime's ends of route and Runtime
+  Control subscriptions, reported through `observe_subscription_end` (G225 settled by spec text);
+  direct delivery behind a busy handler queued with a copy, a nested publication behind it run in
+  place, the bound ending the subscription at once (G176 settled by spec text). 29 units claimed:
+  IFC-0960 to IFC-0967, IFC-0970, RUN-1094, RUN-1095, RUN-1098, RUN-1099, RUN-1159, TRN-0388,
+  TRN-0389, TRN-0391 to TRN-0395, and the changed IFC-0280, IFC-0712, TRN-0016, TRN-0040, TRN-0045,
+  TRN-0125, TRN-0163, TRN-0274; stale IFC-0186 and TRN-0200 re-evidenced; 48 text entries cleared,
+  TXT-0168 and TXT-0169 moved to P5. P3b's 23 entries remain.
 
 ## Tiers at f4f83471 (the original plan)
 

@@ -1,4 +1,4 @@
-## TRANSPORT §1, §2.3, §8.3, §10: the nine message kinds as typed values, a
+## TRANSPORT §1, §2.3, §8.3, §10: the ten message kinds as typed values, a
 ## strict decoder, and an encoder that checks what it emits against the same
 ## rules.
 ##
@@ -38,6 +38,7 @@ type
     mkProtocolError = 6
     mkCancel = 7
     mkSubscriptionResult = 8
+    mkSubscriptionEnd = 9
 
   PayloadCommitment* = object ## [SPEC TRANSPORT §1.3, §4.1]
     subtreeRoot*: Digest ## `schema_subtree_root`
@@ -84,6 +85,12 @@ type
   Cancel* = object
     id*: uint64
 
+  SubscriptionEnd* = object
+    ## [SPEC TRANSPORT §1.3, §5.1 l.751-755] The callee ends one active
+    ## subscription while the session continues.
+    id*: uint64
+    failure*: InvocationFailure ## `error`
+
   Message* = object
     case kind*: MessageKind
     of mkHello:
@@ -104,6 +111,8 @@ type
       cancel*: Cancel
     of mkSubscriptionResult:
       subscriptionResult*: SubscriptionResult
+    of mkSubscriptionEnd:
+      subscriptionEnd*: SubscriptionEnd
 
   EnvelopeErrorKind* = enum
     eeMalformed ## not one well-formed CBOR item
@@ -133,7 +142,7 @@ const KindRule*: array[MessageKind, string] = [
   "logos.transport.hello", "logos.transport.request", "logos.transport.response",
   "logos.transport.subscribe", "logos.transport.unsubscribe", "logos.transport.event",
   "logos.transport.protocol-error", "logos.transport.cancel",
-  "logos.transport.subscription-result",
+  "logos.transport.subscription-result", "logos.transport.subscription-end",
 ]
 
 type Envelope = object
@@ -389,6 +398,14 @@ proc typed(v: CborValue, mk: MessageKind): Result[Message, EnvelopeError] =
     if v.lookup("error").isSome:
       r.failure = Opt.some(?failureOf(v.get("error"), mk, "error"))
     ok(Message(kind: mkSubscriptionResult, subscriptionResult: r))
+  of mkSubscriptionEnd:
+    let f = ?failureOf(v.get("error"), mk, "error")
+    ok(
+      Message(
+        kind: mkSubscriptionEnd,
+        subscriptionEnd: SubscriptionEnd(id: v.get("id").uint, failure: f),
+      )
+    )
 
 proc checkMessage*(v: CborValue): Result[Message, EnvelopeError] =
   ## [SPEC TRANSPORT §1.3, §2.3, §8.3] A decoded message as its typed view, or
@@ -569,6 +586,9 @@ func toCbor*(m: Message): CborValue =
     e.add(entry("operation", cbor(uint64(r.operation.ord))))
     if r.failure.isSome:
       e.add(entry("error", cborMap(failureEntries(r.failure.get))))
+  of mkSubscriptionEnd:
+    e.add(entry("id", cbor(m.subscriptionEnd.id)))
+    e.add(entry("error", cborMap(failureEntries(m.subscriptionEnd.failure))))
   cborMap(e)
 
 func payloadOf(m: Message): CborValue =

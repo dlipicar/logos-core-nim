@@ -274,13 +274,15 @@ proc routeObserveEndOp(
   LogosResult()
 
 proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
-  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1503-1506, §5.2 l.3895-3897,
+  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1484, l.1503-1506, §5.2 l.3895-3897,
   ## l.3912-3916] The handle's subscriptions are deactivated and no callback
-  ## begins after release; a handler or terminal callback already running on
-  ## another thread is waited for. The logical route and the calls prepared
-  ## through the handle stay as they are.
+  ## begins after release; a handler, terminal callback or subscription-end
+  ## report already running on another thread is waited for (G225). The
+  ## logical route and the calls prepared through the handle stay as they
+  ## are.
   bindingEnter()
   let h = handleOf(route)
+  h.subEnd.suppress()
   let reply = h.engine.call(
     Request(
       kind: rqReleaseHandle,
@@ -294,7 +296,7 @@ proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
   withLock h.lock:
     if h.cb == cbScheduled:
       h.cb = cbSuppressed
-    while h.cb == cbRunning:
+    while h.cb == cbRunning or h.subEnd.busy:
       wait(h.cond, h.lock)
   dropHandle(h)
 
@@ -436,6 +438,12 @@ proc freeAttemptServices*(s: ptr AttemptServices) =
   ## A hosted attempt's go with its host, which may still be reaped.
   if s == nil:
     return
+  # [SPEC INTERFACE l.1954] No subscription-end report of the binding begins
+  # now; a direct binding's report jobs have all ended (`rcHandlers`, and no
+  # job before `_MODULE_init` returned), and a hosted binding's ends go to
+  # its host with no job (`engine.endRc`).
+  s.subEnd.suppress()
+  freeContracts(s)
   if s.host != nil:
     let h = cast[Host](s.host)
     s.host = nil
@@ -447,6 +455,21 @@ proc freeAttemptServices*(s: ptr AttemptServices) =
 func attemptOf*(s: ptr AttemptServices): string =
   $s.attempt
 
+proc declareContractOp(
+    publishUserData: pointer,
+    root: ptr ContractRoot,
+    schema: ptr UncheckedArray[uint8],
+    schemaLen: csize_t,
+) {.cdecl.} =
+  ## [SPEC INTERFACE l.3351; DECISIONS I106] `InitServices.declareContract`:
+  ## the realizer, before `_MODULE_init`.
+  let s = cast[ptr AttemptServices](publishUserData)
+  if s == nil or root == nil or schema == nil:
+    return
+  s.declareContract(
+    Digest(root[]), schema.toOpenArray(0, int(schemaLen) - 1), s.engine.payloadDepth
+  )
+
 proc fill*(services: var InitServices, s: ptr AttemptServices) =
   ## [SPEC RUNTIME §7.4 l.1305-1323] The attempt's Runtime Control binding, the
   ## engine's publish callback and invocation access: every attempt gets the
@@ -455,6 +478,7 @@ proc fill*(services: var InitServices, s: ptr AttemptServices) =
   services.publish = publishOp
   services.publishUserData = s
   services.invocationAccess = LogosInvocationAccess(state: s, current: currentOp)
+  services.declareContract = declareContractOp
 
 func linkOf*(handle: pointer): uint64 =
   ## [I90] Runtime thread: a handle's link; 0 for a direct handle.

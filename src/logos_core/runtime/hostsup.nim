@@ -58,7 +58,7 @@ import logos_sdk/abi/[checks, cstatus, types]
 import logos_sdk/base/[perthread, testhooks]
 import logos_sdk/iface/[accept, surface]
 import ../transport/io/api except decodeMessage
-import ./[carrier, callside, events, hostio]
+import ./[carrier, callside, events, hostio, subend]
 import ./plumbing except Request
 from ./plumbing import nil
 
@@ -543,6 +543,14 @@ when defined(posix):
       status: int
       reason, lost: FixedText
 
+    var ordersGiven, ordersWritten: Atomic[int]
+      ## [P3 §12.2] lane-2 orders given to the hosts' senders, and written
+
+    proc hostOrdersWrittenForTests*(): bool =
+      ## Every lane-2 order given to a host's sender so far is written to its
+      ## carrier (or dropped with its host).
+      ordersWritten.load == ordersGiven.load
+
     var hookLock: Lock
     var heldHosts, brokenHosts: array[64, uint] ## [plan §2.3] under `hookLock`
     var holdingAll: bool ## [plan §2.3] under `hookLock`: every host's end is held
@@ -807,6 +815,8 @@ when defined(posix):
         break
       if alive(h):
         discard h.writer.sendFrame(f, alive, h)
+      when defined(lcnTestHooks):
+        ordersWritten += 1
     releasePerThread()
 
   proc queueOut(h: Host, f: sink seq[byte]): SubmitResult =
@@ -828,6 +838,8 @@ when defined(posix):
         h.outQ.send(f)
       except Exception:
         return sbStopped
+      when defined(lcnTestHooks):
+        ordersGiven += 1
     sbOk
 
   proc notify*(h: Host, m: LcnCarrierMessage) =
@@ -838,6 +850,33 @@ when defined(posix):
     let f = frameOf(m)
     if f.isOk:
       discard h.queueOut(f.get)
+
+  proc forwardSubscriptionEnd*(h: Host, id: uint64, reason: ErrorCode) =
+    ## [DECISIONS G225] A Runtime Control subscription the Runtime ended, from
+    ## the Runtime thread: the end goes to the host, queued behind what was
+    ## already sent and never a write from this thread, and the host reports
+    ## it when its module's registration is installed as it reads it (P3
+    ## reading against INTERFACE l.1481), during `_MODULE_init` too.
+    notify(
+      h, toMessage(LcnCarrierRcSubscriptionEnded(sub: id, code: uint8(ord(reason))))
+    )
+
+  proc forwardSubEnd(
+      id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+  ) {.cdecl.} =
+    ## The registration `forwardSubscriptionEnds` keeps: the engine sends a
+    ## hosted binding's ends itself (`engine.endRc`), so no report job runs
+    ## this; it forwards as the engine would.
+    bindingEnter()
+    cast[Host](userData).forwardSubscriptionEnd(uint64(id), ErrorCode(int64(reason)))
+
+  proc forwardSubscriptionEnds*(h: Host) =
+    ## [G225] At the launch: the attempt's binding has a registration
+    ## installed until release or destroy suppresses it, so an end is owed to
+    ## the host while the binding is live (`engine.endRc`), whatever its module
+    ## registers there; the module's registration is the host's
+    ## (`host/rcbinding`).
+    discard cast[ptr AttemptServices](h.rc.state).subEnd.register(forwardSubEnd, h)
 
   proc stopSender(h: Host) =
     ## Supervision thread, once the carrier is down: the sender's write ends
@@ -1158,6 +1197,12 @@ when defined(posix):
       h.reply(r)
     of K.lcn_Carrier_rc_subscribe:
       let c = m.arm_lcn_Carrier_rc_subscribe
+      # [SPEC INTERFACE §1.5; I106] Every byte of the host's name, before the
+      # C string below could cut it at a NUL.
+      let name = checkEventName(c.event)
+      if name.isErr:
+        h.reply(LcnCarrierRcReply(id: c.id, failure: Opt.some(toCarrier(name.error))))
+        return
       let p = createShared(ProxySubObj)
       p.host = h
       p.local = c.local
@@ -1165,9 +1210,8 @@ when defined(posix):
       withLock h.lock:
         p.next = h.subs
         h.subs = p
-      let name = textOf(c.event)
       var id: LogosSubscriptionId
-      let res = h.rc.vtable.subscribe(h.rc, cstring(name), forwardEvent, p, addr id)
+      let res = h.rc.vtable.subscribe(h.rc, cstring(name.get), forwardEvent, p, addr id)
       var r = LcnCarrierRcReply(id: c.id, failure: failed(res))
       if r.failure.isNone:
         r.sub = Opt.some(uint64(id))
@@ -1226,10 +1270,15 @@ when defined(posix):
         let n = hostedConn(h.index, x.conn)
         if n.isSome:
           dropped.add((n.get, errorCodeOf(x.code).get(ecInvalidParams)))
+      # [SPEC INTERFACE §1.5; I106] The host's name, checked as given.
+      let name = checkEventName(c.event)
+      if name.isErr:
+        h.reply(LcnCarrierRcReply(id: c.id, failure: Opt.some(toCarrier(name.error))))
+        return
       var admitted: seq[uint64]
       if h.publishUserData != nil:
         for conn in hostedDeliver(
-          cast[ptr AttemptServices](h.publishUserData), c.event, conns, dropped
+          cast[ptr AttemptServices](h.publishUserData), name.get, conns, dropped
         ):
           admitted.add(hostConnOf(conn))
       h.reply(LcnCarrierRcReply(id: c.id, admitted: Opt.some(admitted)))
@@ -1843,6 +1892,12 @@ else:
 
   proc sendMsg*(h: Host, m: LcnCarrierMessage): Result[void, string] =
     err(Unsupported)
+
+  proc forwardSubscriptionEnds*(h: Host) =
+    discard
+
+  proc forwardSubscriptionEnd*(h: Host, id: uint64, reason: ErrorCode) =
+    discard
 
   proc notify*(h: Host, m: LcnCarrierMessage) =
     discard

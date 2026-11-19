@@ -46,8 +46,12 @@
 ## Other commands: `fail-init` (MODULE_ERROR), `fail-init-context` (a failure
 ## with a context: no destroy may follow), `ok-null` (LOGOS_OK without a
 ## context), `block-init` and `block-destroy` (wait until `<state_dir>/go`
-## exists), `block-handler` (each handler, a route's Event handler included,
-## waits until `<state_dir>/go-handler` exists), `quit-init <n>` (exit from
+## exists), `sub-end-rc <tag>` (`observe_subscription_end` on the binding
+## during `_MODULE_init`, reports appended to `subends` as for `sub-end`; its
+## result appended to `inits`), `block-handler` (each handler, a route's Event handler included,
+## waits until `<state_dir>/go-handler` exists), `block-subend` (each
+## subscription-end handler, after its line, waits until `<state_dir>/go-subend`
+## exists), `quit-init <n>` (exit from
 ## module code), `quit-handler` (exit from the first event handler),
 ## `rc-destroy <method> <hex params>` (a Runtime Control call from
 ## `_MODULE_destroy`, its result in `rc-destroy`).
@@ -71,7 +75,7 @@ type
     dirBuf: array[1024, char] ## the state directory; empty: none
     dirLen: int
     rc: ptr LogosRuntimeControlBinding
-    blockDestroy, blockHandler, quitHandler: bool
+    blockDestroy, blockHandler, blockSubEnd, quitHandler: bool
     handled, inside: Atomic[int]
     serving: Atomic[bool]
     served: bool
@@ -195,6 +199,8 @@ proc onSubEnd(
   kitEnter()
   let t = cast[ptr Tag](userData)
   t.probe.note("subends", t.label & " " & $id & " " & $int64(reason))
+  if t.probe.blockSubEnd:
+    waitGo(t.probe.dir, "go-subend")
 
 proc onDone(
     userData: pointer,
@@ -435,6 +441,8 @@ proc probeInit(
       p.blockDestroy = true
     of "block-handler":
       p.blockHandler = true
+    of "block-subend":
+      p.blockSubEnd = true
     of "quit-handler":
       p.quitHandler = true
     of "quit-init":
@@ -462,6 +470,10 @@ proc probeInit(
       var id: LogosSubscriptionId
       let r = p.rc.vtable.subscribe(p.rc, cstring(w[1]), onEvent, p, addr id)
       p.note("events", "subscribed " & resultLine(r))
+    of "sub-end-rc":
+      # Before `serve`, so the command thread is not making tags yet.
+      let r = p.rc.vtable.observeSubscriptionEnd(p.rc, onSubEnd, p.newTag(w[1]))
+      p.note("inits", "sub-end-rc " & resultLine(r))
     of "serve":
       p.serving.store(true)
       try:

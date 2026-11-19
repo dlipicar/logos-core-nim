@@ -135,7 +135,9 @@ Tier 4b step 4b-2 (DECISIONS I90) builds transported local routes: a host routin
   RUN-0552 and IFC-0010 are remote-only and move to Tier 5.
 - **TRANSPORT**: the session is bound to the Runtime's authority decision and ends with it, also
   after a renewal (TRN-0153, TRN-0317); the ticket goes only to the consumer (TRN-0195). The end of a
-  route terminates, drains or closes its sessions by cause (G260; G174 amended).
+  route terminates, drains or closes its sessions by cause (G260; G174 amended). At 6cac8335 a drain
+  terminates too: admission stops with `NOT_READY`, then ProtocolError `NOT_READY` and close (TRANSPORT
+  l.977, DECISIONS I106).
 - **CAPABILITY AUTHORITY**: the ticket binds the decision, its freshness and revocation (CAP-0254).
 - **LOADER**: the MAY of l.193 is taken (LDR-0021 leaves inspection).
 
@@ -186,9 +188,9 @@ providers over local transport. What a consumer sees differently, and why:
   The suites wait for deliveries; the cases about what a handler does inside the publication are
   skipped (a nested provider entry on the publishing thread, a handler that closes the destination
   of that publication, a publication still in its handler when its invocation is released).
-- An explicit `subscribe-event` deny at delivery skips that Event and keeps the subscription: the
-  provider side cannot end one subscription of a session (K40), where a direct route's subscription
-  ends (CA l.913-915).
+- A `subscribe-event` decision at delivery that does not allow ends the subscription as on a direct
+  route: the provider's session sends a SubscriptionEnd, and the handle reports it (re-pin P3a,
+  DECISIONS G175 amended; K40 is gone). The report runs on an event worker, as on a direct route.
 
 ### What Tier 4b step 4b-3 changes
 
@@ -613,7 +615,7 @@ admitted, and `connOutputBytes` at least `peerFrameLimit` plus `controlReserve`.
 | `maxInputBytes` (frame bodies held after establishment: being read, queued for an execution slot, or Events not yet released by the caller's owner) | loop | 256 MiB | reading pauses up to `admissionTimeout` (10 s; room freed by the deadline counts, as for `helloTimeout`), then ProtocolError `TRANSPORT_ERROR`, close |
 | `maxOutputBytes` (committed output) | loop | 256 MiB | as `connOutputBytes` |
 | `connOutputBytes` | conn | 2 × `peerFrameLimit` + `controlReserve` | Event: overflow (below); success Response: waits, not committed; control frame: the reserve, then ProtocolError `TRANSPORT_ERROR`, close |
-| `controlReserve` (error Responses, SubscriptionResults, the Hello response) | conn | 64 KiB | ProtocolError `TRANSPORT_ERROR` from the final slot, close |
+| `controlReserve` (error Responses, SubscriptionResults, SubscriptionEnds, the Hello response) | conn | 64 KiB | ProtocolError `TRANSPORT_ERROR` from the final slot, close |
 | `writeStallTimeout` (output pending, no byte written; at the deadline a write is tried first, and a socket that accepts nothing is judged one dispatcher turn later, after the sockets that were ready) | conn | 30 s | close without ProtocolError |
 | `closeLinger` (flushing a final ProtocolError) | conn | 1 s | close without finishing the flush |
 | `terminationDrain` (in-flight work after a session's authorization ends) | conn | 0 s | — |

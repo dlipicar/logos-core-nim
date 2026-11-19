@@ -6,7 +6,8 @@
 ; lcn.carrier_message (runtime/carrier.nim). Its `kind` fixes its lane:
 ;   lane 0, the Loader:       init, apply, release / initialized, init_failed,
 ;                             applied, released, fatal
-;   lane 1, Runtime Control:  rc_reply, rc_event, async_done, route_ended /
+;   lane 1, Runtime Control:  rc_reply, rc_event, async_done, route_ended,
+;                             rc_subscription_ended /
 ;                             rc_call, rc_subscribe, rc_unsubscribe,
 ;                             rc_delivered, rc_connect_remote, rc_publish,
 ;                             rc_deliver, rc_prepare, rc_async_submit,
@@ -15,7 +16,7 @@
 ;                             rc_link_closed, rc_link_released
 ;   lane 2, the boundary:     io_admit_*, io_respond, io_close, io_terminate,
 ;                             io_work_ended, io_subscription_result,
-;                             io_stop_serving, admit_verdict, call_cancel,
+;                             io_end_subscription, io_stop_serving, admit_verdict, call_cancel,
 ;                             scoped_result / io_hello, io_established, io_dispatch, io_stop,
 ;                             io_closed, io_subscribe, io_unsubscribe,
 ;                             io_publish_failed, io_publish_result,
@@ -56,6 +57,7 @@ lcn.carrier_message =
   lcn.carrier_rc_delivery /
   lcn.carrier_async_done /
   lcn.carrier_route_ended /
+  lcn.carrier_rc_subscription_ended /
   lcn.carrier_io_hello /
   lcn.carrier_io_established /
   lcn.carrier_io_dispatch /
@@ -78,6 +80,7 @@ lcn.carrier_message =
   lcn.carrier_io_terminate /
   lcn.carrier_io_work_ended /
   lcn.carrier_io_subscription_result /
+  lcn.carrier_io_end_subscription /
   lcn.carrier_io_stop_serving /
   lcn.carrier_admit_verdict /
   lcn.carrier_call_cancel /
@@ -389,6 +392,17 @@ lcn.carrier_link_first = {
   first: uint8,
 }
 
+; [SPEC INTERFACE l.1472-1481; DECISIONS G225] The Runtime ended the host's
+; Runtime Control subscription `sub` with `code`, NOT_AUTHORISED (4) or
+; MODULE_ERROR (3); any other value breaks the carrier. Sent whatever the
+; module registered: the host reports it when its binding has a registration
+; installed as it reads this (P3 reading against l.1481).
+lcn.carrier_rc_subscription_ended = {
+  kind: "rc_subscription_ended",
+  sub: uint64,
+  code: uint8,
+}
+
 ; Lane 2, the boundary (part 4b-3.2; G267, plan §2.7) ------------------------------
 ;
 ; A hosted provider's endpoint is served by the host's own I/O loop on the
@@ -574,9 +588,15 @@ lcn.carrier_io_close = {
   conn: uint64,
 }
 
+; [SPEC TRANSPORT §8.1] `code` is NOT_AUTHORISED (4) or NOT_READY (8, l.977);
+; `phase` the loop's `TermPhase` by its position: 0 the whole termination, 1
+; stop admission only, 2 the ProtocolError and close. Any other value breaks
+; the carrier.
 lcn.carrier_io_terminate = {
   kind: "io_terminate",
   conn: uint64,
+  code: uint8,
+  phase: uint8,
 }
 
 lcn.carrier_io_work_ended = {
@@ -590,6 +610,14 @@ lcn.carrier_io_subscription_result = {
   conn: uint64,
   sub: uint64,
   ? failure: lcn.carrier_failure,
+}
+
+; [SPEC TRANSPORT §5.1 l.752-756] End active subscription `sub` of `conn` with
+; a SubscriptionEnd NOT_AUTHORISED while the session continues.
+lcn.carrier_io_end_subscription = {
+  kind: "io_end_subscription",
+  conn: uint64,
+  sub: uint64,
 }
 
 lcn.carrier_io_stop_serving = {

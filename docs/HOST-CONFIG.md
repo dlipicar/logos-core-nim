@@ -448,6 +448,21 @@ the rule for any consumer; with no matching rule the route is direct, as in ever
 l.3006-3007; DECISIONS G272). The mode is fixed when the route is established: `renew_route` keeps it,
 and routes already established are never moved (RUNTIME l.940).
 
+- Events on a direct route (INTERFACE §2.5, §2.8; DECISIONS G176): a provider's `publish` runs each
+  subscriber's handler on the publishing thread before it returns. When another thread is running a
+  subscription's handler, the delivery is not waited for: a copy of the event is queued, and that
+  thread runs the queued deliveries in publication order before it lets the subscription go, each
+  decided afresh (a scoped event whose call has returned by then is not delivered). A handler that
+  publishes into its own subscription while deliveries wait for it takes its place behind them: its
+  publish runs them and then its own delivery before it returns. Each subscription
+  queues at most 1,024 deliveries or 16 MiB of event data, whichever comes first (its first queued
+  delivery is taken whatever its size); one more ends the subscription at once, so nothing published
+  after it reaches the handler: its queue is discarded, the
+  Runtime records the diagnostic "subscription *id* to *event* on route *route* ended: its delivery
+  queue reached ...", and the handle reports the end with `LOGOS_ERR_MODULE` to the handler registered
+  with `observe_subscription_end`, once, on an event worker (INTERFACE l.1469-1481). The bound limits
+  the queue, not how long the thread that holds it spends running it: a publication that reaches a
+  handler which itself publishes into busy handlers may run many deliveries before it returns.
 - Two rules for the same `caller` and `callee` are refused, as is a rule naming the Module Loader
   (`logos_module_loader`) as caller or callee (every route to the Loader is refused, G251) and a rule
   whose callee is `logos_runtime_control`, which is not a provider.
@@ -467,9 +482,11 @@ and routes already established are never moved (RUNTIME l.940).
   ticket; no other answer, list, event, record or diagnostic does. A replay of the same request key
   returns the route without `invocation`: renew it for a new ticket (DECISIONS G255).
 - When such a route ends, its unused tickets die with it, and its sessions end by cause (DECISIONS
-  G260): a revocation or expiry answers each call in flight `NOT_AUTHORISED`; `close_route`, a
-  provider stop or shutdown lets calls in flight finish within `stop_deadline_ms` (or the shutdown
-  grace), then closes.
+  G260): a revocation or expiry answers each call in flight `NOT_AUTHORISED`, then the session closes
+  with ProtocolError `NOT_AUTHORISED`; `close_route`, a provider stop or shutdown refuses new calls
+  `NOT_READY`, lets calls in flight finish within `stop_deadline_ms` (or the shutdown grace), then
+  closes with ProtocolError `NOT_READY` (TRANSPORT l.977). A consumer whose provider ends a session
+  that way sees `NOT_READY` on its handle.
 - A consumer's `materialize_route` on such a route connects to the endpoint with the route's ticket
   and returns once the provider holds the session. One ticket opens one handle: a further handle on the
   same route needs `renew_route` first, and a handle whose connection failed is not retried
@@ -480,12 +497,17 @@ and routes already established are never moved (RUNTIME l.940).
   its Event arrives, not on the publishing thread, one at a time per subscription and in the order
   the Events were published. A provider's `publish` returns once each subscriber connection has its
   Event, not once the handlers ran. What happens when a subscriber does not keep up, or an Event is
-  too large for it, is under "Event output" below.
+  too large for it, is under "Event output" below. A subscription the provider ends (its authority
+  to receive ended) is reported once through the handle's `observe_subscription_end`, on an event
+  worker, when a handler is registered at that moment; release of the handle suppresses a report not
+  yet begun and waits for one that runs (DECISIONS G225).
 
 #### Event output
 
-A provider's publish callback returns only the publisher-side result: a failure for one subscriber
-route does not change it (RUNTIME §7.3 l.1148-1149; DECISIONS I105). So a transported subscriber that
+A provider's publish callback returns only the publisher-side result: `LOGOS_OK` for an event its
+own contracts declare with a payload of that event's type, `LOGOS_ERR_INVALID_PARAMS` otherwise,
+decided before any subscriber is tried; a failure for one subscriber route does not change it
+(INTERFACE §5.2 l.3351; RUNTIME §7.3 l.1148-1149; DECISIONS I106). So a transported subscriber that
 cannot take an Event is handled at its connection (TRANSPORT §5.2 l.804-817, §2.1 l.388-391; RUNTIME
 l.1150; DECISIONS D3 (a), G165, G261):
 
@@ -1063,6 +1085,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | Runtime Control event workers (`MaxEventWorkers`) | 64 | fixed |
 | observation: pages, snapshots, `observe_end` registrations | "Observation", Limits | fixed |
 | Runtime Control subscriptions and their queues | "Runtime Control subscriptions", Limits | fixed |
+| direct event deliveries queued for one subscription while another thread runs its handler (`eventQueue`, `eventQueueBytes`) | 1,024 deliveries or 16 MiB of event data; one more ends the subscription with `LOGOS_ERR_MODULE` (`routing`, "Events on a direct route"; DECISIONS G176) | fixed |
 | ended route records kept per consumer | 4096 | fixed |
 | committed changes and diagnostics kept for observation | 4096 each | fixed |
 | payload depth (`max_payload_depth`) | 128 to 1024, default 1024 | here |
@@ -1130,8 +1153,11 @@ Runtime's life: a host that cycles many distinct artifacts through one Runtime s
   clock never extends authority and a forward step ends it early. There is no skew tolerance.
 - **Events.** A subscription is decided when it is activated and again at each delivery, and a
   publication at each delivery (DECISIONS G175). Under an authority that issues only single-use
-  decisions, every delivery costs two evaluations on the publishing thread. An explicit deny of a
-  subscription at delivery ends it.
+  decisions, every delivery costs two evaluations on the publishing thread. A subscription whose
+  delivery decision does not allow it (a deny, or an evaluation that fails) ends, on a direct route
+  and over local transport alike; its handle reports the end with `LOGOS_ERR_NOT_AUTHORISED` through
+  `observe_subscription_end`, and its `unsubscribe` returns `LOGOS_OK` once. An idle subscription
+  learns that its authority ended at its next event, not when the policy changes (DECISIONS G175).
 - **Grants.** A grant comes from a module that a policy `issue` rule allows, or from the embedding
   host through the authority's protected path. An in-process host reaches the authority with
   `authorityFor(state_root/<state_assignment>)` and calls `issueProtected` and `revokeProtected`
@@ -1494,14 +1520,18 @@ summary and never a value.
   call Runtime Control. The Runtime runs handlers on its own pool of event workers (up to 64 threads,
   started on demand), one handler at a time per subscription, in commit order. Several hints of one
   collection waiting for a busy handler become one.
-- **A handler that falls behind loses its subscription** (DECISIONS G225, interim). Each subscription
+- **A handler that falls behind loses its subscription** (DECISIONS G225). Each subscription
   queues at most 256 events for its handler (and 256 waiting for an authority's decision); one more
   ends the subscription: its queued events are discarded, nothing more is delivered, and the Runtime
   records the diagnostic "Runtime Control subscription *id* of *instance* lost: its handler fell
-  behind (G225)". The subscriber gets no signal: `unsubscribe` of it is `LOGOS_OK`. An observer that
-  cannot be sure it saw every event must query (`list_modules`, `list_routes`,
-  `get_execution_summary`) and resubscribe, periodically when it cannot rule out a loss (RUNTIME
-  l.3425-3428). An `inventory_changed` subscription holds at most one pending hint per collection, so a
+  behind (G225)". The binding reports the end with `MODULE_ERROR` to the handler registered with
+  `observe_subscription_end`, once, on an event worker (INTERFACE l.1472-1481); `unsubscribe` of it is
+  `LOGOS_OK` once. An event decision that no longer allows the event at all (a deny, a refusal, a
+  failed evaluation) ends the subscription the same way with `NOT_AUTHORISED`; one that allows only
+  some subjects filters them. A Module Host reports the end in the host, as in process. An observer
+  that lost a subscription, or cannot be sure it saw every event, must query (`list_modules`,
+  `list_routes`, `get_execution_summary`) and resubscribe, periodically when it cannot rule out a
+  loss (RUNTIME l.3425-3428). An `inventory_changed` subscription holds at most one pending hint per collection, so a
   slow handler alone never loses it; past 1024 distinct affected records behind one pending hint the
   hint is still delivered while one of them stays visible, and the subscription is lost when none is.
 - **Limits.**

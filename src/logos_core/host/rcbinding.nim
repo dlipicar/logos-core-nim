@@ -190,10 +190,22 @@ proc unlink(s: ptr LocalSub) =
       return
     p = addr p[].next
 
+var bindingSubEnd: SubscriptionEndSlot
+  ## [SPEC INTERFACE §2.5 l.1476] the binding's registration; the host has one
+  ## instance and one binding
+
 proc runDelivery(f: seq[byte]) =
-  ## An event worker: one entry, then `rc_delivered`.
+  ## An event worker: one entry, then `rc_delivered`; or one subscription-end
+  ## report (`subscriptionEnded`).
   let m = decodeMessage(f).valueOr:
     carrierLost("a delivery does not decode")
+  if m.kind == LcnCarrierMessageKind.lcn_Carrier_rc_subscription_ended:
+    # [SPEC INTERFACE l.1478-1479, l.1484] Once, unless the release
+    # suppressed it before it began.
+    let e = m.arm_lcn_Carrier_rc_subscription_ended
+    {.cast(gcsafe).}:
+      discard bindingSubEnd.report(LogosSubscriptionId(e.sub), ErrorCode(e.code))
+    return
   let d = m.arm_lcn_Carrier_rc_delivery
   var s: ptr LocalSub
   withLock subLock:
@@ -412,6 +424,8 @@ proc rcSubscribeOp(
   bindingEnter()
   if eventName == nil or handler.isNil or outId == nil:
     return status(ecInvalidParams, "a null event name, handler or subscription output")
+  discard checkEventName(eventName).valueOr:
+    return status(error)
   let s = createShared(LocalSub)
   s.local = nextLocal.fetchAdd(1) + 1
   s.handler = handler
@@ -566,10 +580,6 @@ proc rcPrepareCallOp(
   outCall.state = c
   LogosResult()
 
-var bindingSubEnd: SubscriptionEndSlot
-  ## [SPEC INTERFACE §2.5 l.1476] the binding's registration; the host has one
-  ## instance and one binding
-
 proc rcObserveSubscriptionEndOp(
     binding: ptr LogosRuntimeControlBinding,
     handler: LogosSubscriptionEndHandler,
@@ -607,32 +617,25 @@ proc publishOp(
   ## payload and whose delivery the Runtime admits; one that cannot be
   ## delivered is the Runtime's diagnostic for that session only. Returns once
   ## every admitted Event is taken by the loop.
-  ## [DECISIONS I105, interim until re-pin P3] The result, as `events.publishOp`
-  ## gives it: INVALID_PARAMS when the Runtime refused the event name as
-  ## INVALID_PARAMS, or for a null or empty payload; LOGOS_OK otherwise.
+  ## [SPEC INTERFACE l.3351; DECISIONS I106] The result, as
+  ## `events.publishOp` gives it, decided here before the Runtime hears of the
+  ## publication: INVALID_PARAMS for a malformed name, no payload, or an
+  ## event the module's contracts do not declare or whose data is not a value
+  ## of its type; LOGOS_OK otherwise. The Runtime records no refused one.
   bindingEnter()
-  let id = nextId()
-  let a = request(
-    toMessage(
-      LcnCarrierRcPublish(
-        id: id, event: (if eventName == nil: @[] else: bytesOf(eventName))
-      )
-    ),
-    id,
-  )
-  if a.failed:
-    return CErrorCode(
-      if a.code == uint8(ord(ecInvalidParams)):
-        ord(ecInvalidParams)
-      else:
-        ord(ecOk)
-    )
+  let name = checkEventName(eventName).valueOr:
+    return CErrorCode(ord(ecInvalidParams))
   if cborData == nil or cborDataLen == 0:
     return CErrorCode(ord(ecInvalidParams))
-  if a.targets.len == 0:
-    return CErrorCode(ord(ecOk))
-  let name = $eventName # the Runtime checked it
   let data = bytesOf(cborData, cborDataLen)
+  publishedBy(name, data).isOkOr:
+    return CErrorCode(ord(ecInvalidParams))
+  let id = nextId()
+  let a = request(toMessage(LcnCarrierRcPublish(id: id, event: bytesOf(eventName))), id)
+  if a.failed or a.targets.len == 0:
+    # [IMPL] The Runtime checked the name again; its refusal of a name this
+    # host took is no fault of the publication's.
+    return CErrorCode(ord(ecOk))
   var checked: Table[Digest, ErrorCode]
   var conns: seq[uint64]
   var dropped: seq[LcnCarrierDropped]
@@ -640,16 +643,13 @@ proc publishOp(
     let root = digestOf(contract).valueOr:
       carrierLost("a publication target whose contract is not a digest")
     if root notin checked:
-      checked[root] =
-        if data.len == 0:
-          ecInvalidParams
+      checked[root] = block:
+        let sel = selectedFor(root)
+        if sel.isErr:
+          ecModule
         else:
-          let sel = selectedFor(root)
-          if sel.isErr:
-            ecModule
-          else:
-            let c = sel.get.checkEvent(name, data)
-            if c.isErr: c.error.code else: ecOk
+          let c = sel.get.checkEvent(name, data)
+          if c.isErr: c.error.code else: ecOk
     let code = checked.getOrDefault(root, ecModule)
     if code == ecOk:
       conns.add(conn)
@@ -704,6 +704,25 @@ proc completed*(f: seq[byte]) =
   ## Main thread: an `async_done`.
   completions.post(f)
 
+proc subscriptionEnded*(f: seq[byte], m: LcnCarrierRcSubscriptionEnded) =
+  ## Main thread: an `rc_subscription_ended` [DECISIONS G225]. The Runtime
+  ## sends every end; the host reports one only when its module's
+  ## registration is installed now (P3 reading against INTERFACE l.1481), on
+  ## an event worker, never on the registering thread.
+  if m.code notin [uint8(ord(ecNotAuthorised)), uint8(ord(ecModule))]:
+    carrierLost("a subscription end with another code")
+  {.cast(gcsafe).}:
+    if bindingSubEnd.owed:
+      events.post(f)
+
+proc suppressReports*() =
+  ## Lifecycle thread, before `_MODULE_destroy` [SPEC INTERFACE l.1949-1954
+  ## (M5)]: no subscription-end report of the binding begins from now on, and
+  ## one running returns first.
+  {.cast(gcsafe).}:
+    bindingSubEnd.suppress()
+  events.awaitIdle()
+
 proc awaitCallbacks*() =
   ## Lifecycle thread, at the release, before `_MODULE_destroy` (DECISIONS
   ## G267; INTERFACE l.1465, l.1503, l.1999): every event handler and
@@ -711,7 +730,9 @@ proc awaitCallbacks*() =
   ## for a direct module's (`engine.releaseRealization`). The main thread keeps
   ## serving their Runtime Control calls meanwhile; a callback that never
   ## returns leaves the release to the stop deadline, which ends the host.
-  events.awaitIdle()
+  ## The binding's subscription-end reports not begun are suppressed first
+  ## (M5).
+  suppressReports()
   completions.awaitIdle()
   awaitConsumer()
 

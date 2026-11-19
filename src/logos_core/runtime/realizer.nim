@@ -43,8 +43,10 @@
 import std/[os, strutils, sysrand, tables]
 import results
 import logos_sdk/abi/[checks, types]
+import logos_sdk/cbor
 import logos_sdk/cbor/utf8
-import logos_sdk/iface/[accept, names, outcome]
+import logos_sdk/hash/hashinput
+import logos_sdk/iface/[accept, names, outcome, surface]
 import logos_sdk/pins
 import ./[artifact, config, native]
 
@@ -91,6 +93,17 @@ type
     message*: string ## at most 512 bytes; names no host path
     cause*: Opt[AbiFailure]
 
+  DeclareContractFn* = proc(
+    publishUserData: pointer,
+    root: ptr ContractRoot,
+    schema: ptr UncheckedArray[uint8],
+    schemaLen: csize_t,
+  ) {.cdecl, gcsafe, raises: [].}
+    ## [SPEC INTERFACE l.3351; DECISIONS I106] Before `_MODULE_init`: one
+    ## contract the module's validated call surface exposes (its primary or an
+    ## implemented interface), as its `logos.schema_response` construction
+    ## input, for the publish callback's check. Borrowed for the call.
+
   InitServices* = object
     ## [SPEC LOADER §6 steps 5-6] The instance-bound bindings the Runtime
     ## supplies: they must stay valid until `_MODULE_destroy` returns.
@@ -98,6 +111,9 @@ type
     publish*: LogosPublishFn
     publishUserData*: pointer
     invocationAccess*: LogosInvocationAccess
+    declareContract*: DeclareContractFn
+      ## [DECISIONS I106] nil: the publish callback needs no contracts (a
+      ## Module Host keeps its own; test doubles)
 
   ConfigurationHandoff* = object
     ## [SPEC LOADER §5.2, §6; CONFIG §6] The attempt's configuration snapshot:
@@ -672,6 +688,38 @@ proc begin*(r: Realizer, req: RealizeRequest): Result[Step, LoaderError] =
     return ok(Step(kind: skInit, binding: b))
   ok(Step(kind: skBind, spec: spec))
 
+func providerRoots*(c: ModuleBinding): seq[Digest] =
+  ## [SPEC INTERFACE l.1712-1717] The exact contract set a provider exposes:
+  ## its primary contract, then each implemented interface.
+  if c.primary.isSome:
+    result.add(c.primary.get.root)
+  for i in c.interfaces:
+    result.add(i.root)
+
+proc declareContracts*(
+    services: InitServices, b: NativeBinding
+): Result[void, LoaderError] =
+  ## [SPEC INTERFACE l.3351; DECISIONS I106] Before `_MODULE_init`, so that a
+  ## declared event published during initialization is not refused: each
+  ## contract the call surface exposes, to the services' `declareContract`.
+  if services.declareContract.isNil or not b.provider:
+    return ok()
+  for root in providerRoots(b.contracts):
+    let v = schemaResponse(b.contracts, root).valueOr:
+      return fail(
+        lecRealizationFailed,
+        "a contract's construction input cannot be built: " & error,
+      )
+    var schema = encodeCbor(v)
+    var r = ContractRoot(root)
+    services.declareContract(
+      services.publishUserData,
+      addr r,
+      cast[ptr UncheckedArray[uint8]](addr schema[0]),
+      csize_t(schema.len),
+    )
+  ok()
+
 proc prepareInit*(
     r: Realizer, req: RealizeRequest, b: ref NativeBinding
 ): Result[InitHandoff, LoaderError] =
@@ -695,6 +743,7 @@ proc prepareInit*(
     cfgLen,
     b.declaresEvents,
   )
+  ?declareContracts(req.services, b[])
   ok(h)
 
 proc initModule*(

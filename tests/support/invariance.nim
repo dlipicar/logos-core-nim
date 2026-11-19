@@ -50,9 +50,11 @@ proc meterLines(): seq[string] =
     call("read", read(13)),
     call("read", read(14)),
     call("read", read(16)),
-    # Events: an unknown event, then one subscription, which sees a
-    # publication, an invocation-scoped one (17) and one from a call that
-    # names its caller (21), in order; none after it ends.
+    # Events: a name that fails INTERFACE §1.5 (I106), an unknown event, then
+    # one subscription, which sees a publication, an invocation-scoped one
+    # (17) and one from a call that names its caller (21), in order; none
+    # after it ends.
+    "subscribe 0 meter.nope s9",
     "subscribe 0 meter.nope_event s0",
     "subscribe 0 meter.changed_event s1",
     call("read", read(15)),

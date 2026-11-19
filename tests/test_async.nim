@@ -340,7 +340,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     h.release()
     e.finish()
 
-  test "[IFC-0717] [IFC-0718] [IFC-0719] preparation copies its inputs and runs nothing; bad options or callbacks leave the outputs null":
+  test "[IFC-0717] [IFC-0718] [IFC-0719] [TXT-0090] preparation copies its inputs and runs nothing; bad options or callbacks leave the outputs null":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -896,7 +896,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     h.release()
     e.finish()
 
-  test "[IFC-0782] [IFC-0742] [RUN-0824] [RUN-0829] [RUN-0835] scoped publication through a deferred invocation's context, before and after its terminal outcome":
+  test "[IFC-0782] [IFC-0742] [RUN-0824] [RUN-0829] [RUN-0835] [TXT-0095] [TXT-0097] scoped publication through a deferred invocation's context, before and after its terminal outcome":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()

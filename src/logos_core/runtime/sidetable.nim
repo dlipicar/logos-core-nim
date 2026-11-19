@@ -68,6 +68,8 @@ type
     publish*: LogosPublishFn
     publishUserData*: pointer
     invocationAccess*: LogosInvocationAccess
+    declareContract*: pointer
+      ## [DECISIONS I106] the realizer's `InitServices.declareContract`
     host*: pointer
       ## [plan §2.4, §2.5; C-10] a hosted attempt's `hostsup.Host`: its
       ## carrier, launch state and (4b-3.2) transferred listener; nil for a

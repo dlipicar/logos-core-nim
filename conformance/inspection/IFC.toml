@@ -110,3 +110,8 @@ reason = "A permission for a provider's response storage, taken by the kit: type
 [[item]]
 ids = ["IFC-0777"]
 reason = "A permission for the module: it may run caller, is_cancelled and publish on one context concurrently while it holds the borrow. The Runtime's operations allow it: each admits itself through the invocation's entry guard (callside.enterGuard, leaveGuard), whose lock is held only to count the entry; callerOp reads identity fixed at the invocation's creation and isCancelledOp an atomic flag (invoke.nim), and publishOp delivers outside that lock. Whether a module uses the permission is its choice; current and caller from many threads at once are tested ([IFC-0771])."
+
+# I-subend-callback (re-pin P3a; DECISIONS G225)
+[[item]]
+ids = ["IFC-0966", "IFC-0967"]
+reason = "Duties of the module that registers observe_subscription_end, which bind the registering code and which no Runtime path can show. IFC-0966: the callback must not operate on or release the binding or handle that reports the end. The Runtime runs a report on a Runtime event worker (rcevents.runReport) or on a Module Host worker (host/consumer, jkSubEnd), never on the registering thread, and release waits for a running report (subend.busy), so a callback that released its own handle would wait for itself; not doing so is the module's duty. IFC-0967: there is no unregister operation, and the Runtime uses the registered user data only until release of the binding or handle returns: release suppresses reports that have not begun and waits for a running one (bindings.routeReleaseOp, host/consumer routeReleaseOp; test [IFC-0669]). Keeping that state valid until then is the module's duty."
