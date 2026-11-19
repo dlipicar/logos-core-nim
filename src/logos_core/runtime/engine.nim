@@ -45,7 +45,7 @@
 ## caller's thread. A provider that leaves `ready` fails its routes at once,
 ## and its `_MODULE_destroy` waits until its in-flight count is zero. A
 ## consumer's routes close when it is stopped and fail when it fails (§3.4
-## l.624-626).
+## l.589-591).
 ##
 ## [IMPL] Route retention (§9.3 l.3180, l.3249: a deployment concern). An
 ## ended route keeps its record while anything can still reach it by its id:
@@ -304,11 +304,10 @@ type
     apply: ApplyRun
       ## [I87] the live configuration application in flight; its realization
       ## is not released before the hook returns (LDR-0136, CFG-0138)
-    indeterminateStop: bool
-      ## [IMPL-DECISION G237 interim (TF-28)] an explicit or shutdown stop is
-      ## in progress although the instance is `error`: an application's
-      ## outcome became indeterminate while it was `stopping`. The stop still
-      ## completes it, to `unloaded`, within its stop deadline.
+    when defined(lcnTestHooks):
+      tableState: ModuleState
+        ## [RUN-1091] the state of the last commit, for the lifecycle table
+        ## check (`tableCheck`)
     prevHost: bool
       ## [G275; plan R6] restored after an unclean end with its restart lock
       ## still held: a Module Host of the previous run may still be running,
@@ -535,6 +534,10 @@ type
     shutdownWaiters: seq[ReplyChannel]
     shutdownDone: bool
     shutdownResult: Opt[EngineError] ## [G60] set when shutdown completes
+    completedShutdown: bool
+      ## [IMPL-DECISION G357] shutdown completed in this run: every snapshot
+      ## written from then on carries the completed-shutdown record. False
+      ## at open, whatever the snapshot read says, so the first write drops it.
     bootstrapped: bool ## a bootstrap was requested
     bootstrapReply: ReplyChannel ## the bootstrap waiting for its outcome
     orchestrator: Inst ## the orchestration instance, once bootstrapped
@@ -1664,9 +1667,10 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
   st.settle(r)
 
 proc routesFollow(st: State, x: Inst) =
-  ## [SPEC RUNTIME §3.4 l.620-626, §9.3 l.3225] A provider that is no longer
+  ## [SPEC RUNTIME §3.4 l.589-591, §9.3 l.3225] A provider that is no longer
   ## `ready` fails its routes; a consumer that is no longer live closes its
-  ## routes after an authorized stop and fails them after a failure.
+  ## routes during any stop (explicit, enforcement, reconciliation or
+  ## shutdown; RUN-1093) and fails them when it enters `error`.
   if x.state != msReady:
     # [plan §2.5] Its endpoints take no new connection (L3).
     st.sv.stopServingRealization(x.id)
@@ -1724,7 +1728,11 @@ proc releaseCallers(st: State, x: Inst) =
 
 proc snapshot(st: State): Snapshot =
   ## The persistent state as it is now (store.cddl).
-  result = Snapshot(runtimeInstanceId: st.runtimeId, epoch: st.epoch)
+  result = Snapshot(
+    runtimeInstanceId: st.runtimeId,
+    epoch: st.epoch,
+    completedShutdown: st.completedShutdown,
+  )
   for x in st.instances.values:
     var s = StoredInstance(
       instance: x.id,
@@ -1739,6 +1747,9 @@ proc snapshot(st: State): Snapshot =
     if x.intent == inRequested:
       s.intentRevision = x.intentRevision
       s.origin = x.intentOrigin
+    if x.state == msStopping:
+      # [G357] so a stop completed at the next open keeps it (l.3613)
+      s.enforced = x.enforced
     result.instances.add(s)
   for id, assignment in st.tombstones:
     result.retired.add(RetiredId(instance: id, stateAssignment: assignment))
@@ -1791,6 +1802,66 @@ proc retryStore(st: State) =
   else:
     st.written(nil)
 
+when defined(lcnTestHooks):
+  import std/exitprocs
+
+  const LifecycleTable = [
+    # [SPEC RUNTIME §3.4 l.517-526] the ten transitions; RUN-1091: no other.
+    (msUnloaded, msLoaded),
+    (msLoaded, msReady),
+    (msLoaded, msError),
+    (msLoaded, msStopping),
+    (msReady, msStopping),
+    (msReady, msError),
+    (msStopping, msUnloaded),
+    (msStopping, msError),
+    (msError, msLoaded),
+    (msError, msStopping),
+  ]
+
+  var
+    offTable: Atomic[int] ## commits whose pair is outside the table
+    firstOffTable: Atomic[int] ## the first such pair: from * 8 + to + 1
+
+  proc lifecycleOffTableForTests*(): int =
+    ## [RUN-1091] How many commits in this process made a transition the
+    ## lifecycle table does not list; every test binary exits 1 when any did.
+    offTable.load
+
+  proc offTableReport() {.noconv.} =
+    let n = offTable.load
+    if n > 0:
+      let f = firstOffTable.load - 1
+      try:
+        stderr.writeLine(
+          "[RUN-1091] " & $n &
+            " commit(s) made a transition outside the lifecycle table; the first: " &
+            $ModuleState(f div 8) & " -> " & $ModuleState(f mod 8)
+        )
+      except IOError:
+        discard
+      setProgramResult(1)
+
+  addExitProc(offTableReport)
+
+  proc tableCheck(st: State, x: Inst) =
+    ## [RUN-1091; P5a §1.5] Every committed state change is a row of the
+    ## table. A commit with no state change, and `accept`'s rollback, are not
+    ## transitions; restore is not one of a live instance (Q-r A5).
+    if x.state == x.tableState:
+      return
+    if (x.tableState, x.state) notin LifecycleTable:
+      discard offTable.fetchAdd(1)
+      var none = 0
+      discard
+        firstOffTable.compareExchange(none, ord(x.tableState) * 8 + ord(x.state) + 1)
+      st.diagnose(
+        "[RUN-1091] " & x.id & ": " & $x.tableState & " -> " & $x.state &
+          " is not in the lifecycle table",
+        warn = true,
+      )
+    x.tableState = x.state
+
 proc commit(st: State, x: Inst) =
   ## Records one committed change that follows from an operation, a failure
   ## or cleanup: the execution revision advances (§9.3 l.3504-3505), the
@@ -1800,7 +1871,9 @@ proc commit(st: State, x: Inst) =
   ## change is held back (I82).
   inc x.revision
   st.stepCommitted.incl(x.id)
-  if x.state != msStopping and not x.indeterminateStop:
+  when defined(lcnTestHooks):
+    st.tableCheck(x)
+  if x.state != msStopping:
     x.stopDeadline = Opt.none(MonoTime)
   x.pending = true
   st.routesFollow(x)
@@ -1862,6 +1935,8 @@ proc accept(st: State, x: Inst, saved: Saved, exempt = false): Opt[EngineError] 
     st.storeFailure(w.error)
     return Opt.some(engineError(ecModule, NotPersisted))
   st.stepCommitted.incl(x.id)
+  when defined(lcnTestHooks):
+    st.tableCheck(x)
   if x.state != msStopping:
     x.stopDeadline = Opt.none(MonoTime)
   if x.state notin {msLoaded, msReady}:
@@ -1949,6 +2024,13 @@ proc persistSettings(st: State, x: Inst, next: SettingsState): Opt[EngineError] 
   st.publishSettings(x)
   Opt.none(EngineError)
 
+func overran(x: Inst): bool =
+  ## [SPEC RUNTIME l.575, l.3702, l.3732; P5a §1.1] `cleanup-timeout` is
+  ## recorded: on a stop still in progress past its deadline (`stopping`), or
+  ## on `error` (a store an earlier build wrote, G357).
+  x.state in {msStopping, msError} and x.failure.isSome and
+    x.failure.get.kind == fkCleanupTimeout
+
 func forcedEnd(st: State, x: Inst): bool =
   ## [IMPL-DECISION G285 amended; G269; 4b-4 plan R25] The Runtime's supervision
   ## ends `x`'s Module Host by force, in the same engine turn as what it
@@ -1957,7 +2039,7 @@ func forcedEnd(st: State, x: Inst): bool =
   ## the Module Loader's loss (`loaderLost` ends every host it owned).
   if not x.hosted or x.hostOf.isNil:
     return false
-  if x.state == msError and x.failure.isSome and x.failure.get.kind == fkCleanupTimeout:
+  if x.overran:
     return true
   x.realization != nil and x.realization.lost and st.ldr.lost
 
@@ -1981,8 +2063,9 @@ func remainsOf(st: State, x: Inst): Remains =
     return rmRunning
   if x.realization != nil and x.realization.lost:
     return rmOverrun
-  if x.state == msError and x.failure.isSome and
-      x.failure.get.kind in {fkCleanupTimeout, fkCleanupFailed}:
+  if x.overran or (
+    x.state == msError and x.failure.isSome and x.failure.get.kind == fkCleanupFailed
+  ):
     return rmOverrun
   rmRunning
 
@@ -2106,6 +2189,41 @@ proc takeEnforced(x: Inst): Opt[Failure] =
   result = x.enforced
   x.enforced = Opt.none(Failure)
 
+proc completeStop(st: State, x: Inst) =
+  ## [SPEC RUNTIME l.576, l.3611, l.3613] A stop whose cleanup completed,
+  ## past its deadline or not: `unloaded`, committed. Its failure is the
+  ## classification an enforcement stop leaves (`takeEnforced`); for a
+  ## reconciliation stop whose settings settled `failed` at its overrun,
+  ## `permission-enforcement-failed` (C4; settled on a `stopping` instance,
+  ## `settleSettings` could not set it); otherwise none.
+  x.state = msUnloaded
+  x.failure = x.takeEnforced()
+  if x.failure.isNone and x.intent == inRequested and st.profiled and
+      x.settings.application == saFailed:
+    x.failure = Opt.some(Failure(kind: fkPermissionEnforcementFailed))
+  x.current = ""
+  st.commit(x)
+
+proc recordOverrun(st: State, x: Inst, reason: string) =
+  ## [SPEC RUNTIME l.575-577, l.3702, l.3732; P5a §1.1, §1.4] A stop past its
+  ## deadline, or still `stopping` when the shutdown grace ends: the instance
+  ## stays `stopping` and reports `cleanup-timeout` until the stop completes
+  ## (`unloaded`, l.576) or its cleanup fails (`error`, l.577); nothing still
+  ## in use is released. The revision advances (l.3368) and the stop waiters
+  ## get the `stopping` view (G173); pending settings settle, as at any
+  ## overrun (`releaseWaiters`, G285). Forced cleanup is requested: a hosted
+  ## instance's Module Host is ended (l.3723); a direct one is named in the
+  ## shutdown result (Q-r D4). An enforcement stop's classification is kept
+  ## for its completion (l.3613; G168's replacing clause is gone).
+  x.failure = Opt.some(Failure(kind: fkCleanupTimeout, reason: reason))
+  x.stopDeadline = Opt.none(MonoTime)
+  st.commit(x)
+  for w in x.stopWaiters:
+    w.reply.answerView(x)
+  x.stopWaiters.setLen(0)
+  st.releaseWaiters(x)
+  x.endHost(reason)
+
 func isLoader(st: State, x: Inst): bool =
   not st.ldr.inst.isNil and x == st.ldr.inst
 
@@ -2146,14 +2264,9 @@ proc finishAttempt(st: State, a: Attempt) =
   if st.isLoader(x) and x.realization.isNil:
     st.unwire()
   if a.cancelled and x.state == msStopping:
-    # [SPEC RUNTIME §3.4] A completed explicit stop: `unloaded`, failure
-    # cleared (an authority stop's classification kept). A stop whose deadline
-    # passed already left `error`, which the end of its cleanup does not
-    # change (l.611).
-    x.state = msUnloaded
-    x.failure = x.takeEnforced()
-    x.current = ""
-    st.commit(x)
+    # [SPEC RUNTIME §3.4 l.576] A completed stop, past its deadline or not:
+    # `unloaded`, failure cleared (an enforcement stop's classification kept).
+    st.completeStop(x)
   st.releaseWaiters(x)
 
 proc failAttempt(st: State, a: Attempt, f: Failure) =
@@ -2405,7 +2518,6 @@ proc orphan(st: State, x: Inst, reason: string) =
   x.realization.lost = true
   x.teardown = 0
   x.releasePending = false
-  x.indeterminateStop = false
   x.state = msError
   x.failure = Opt.some(Failure(kind: fkOther, reason: reason))
   x.enforced = Opt.none(Failure)
@@ -4272,7 +4384,7 @@ proc stopInstance(
 ) =
   ## [SPEC RUNTIME §3.4, §9.1, §10.2] Moves `x` toward `unloaded`; replies
   ## once it is there, or once the stop deadline passes and the instance is
-  ## `error` with `cleanup-timeout` [G61]. [I85] A start or recovery waiting
+  ## `stopping` with `cleanup-timeout` (l.575; `recordOverrun`). [I85] A start or recovery waiting
   ## for its execution decision is cancelled: it and the starts that joined
   ## it get the view after the stop, or NOT_READY at shutdown. An
   ## `enforcement` stop (`stopForAuthority`) keeps intent, as a shutdown stop
@@ -4304,10 +4416,6 @@ proc stopInstance(
     # classification an authority refusal or stop left is cleared.
     x.failure = Opt.none(Failure)
     st.commit(x)
-  if x.indeterminateStop:
-    # [G237 interim] The stop in progress completes it, as `stopping` would.
-    reply.answerView(x)
-    return
   case x.state
   of msUnloaded, msStopping:
     reply.answerView(x)
@@ -4332,33 +4440,24 @@ proc stopInstance(
     st.commit(x)
     st.releaseRealization(x)
   of msError:
-    if x.realization != nil and x.realization.lost:
-      # [plan §2.11 step 5 (R4)] Accepted: the intent is cancelled (l.1838);
-      # nothing can be released, so it stays `error`.
-      reply.answerView(x)
-      return
+    # [SPEC RUNTIME l.526, RUN-1110; P5a M10] Every stop of an `error`
+    # instance goes through `stopping`; its failure stays until the stop
+    # completes (l.3611). A lost or unresolved realization is not released
+    # again: the stop completes when its host's end is confirmed
+    # (`hostGone`), or at the next open after a completed shutdown (G357).
     if x.attempt != nil:
       x.attempt.cancelled = true
       if x.attempt.ticket != nil:
         x.attempt.ticket.cancelled.store(true)
       x.state = msStopping
       st.commit(x)
-    elif x.teardown != 0 or x.realization != nil:
+    else:
+      # Nothing to clean too (Q-r B10): `stopping`, then `unloaded` below.
       x.state = msStopping
       st.commit(x)
-    else:
-      x.state = msUnloaded
-      x.failure = x.takeEnforced()
-      x.current = ""
-      st.commit(x)
-      reply.answerView(x)
-      return
   if x.state == msStopping and x.teardown == 0 and x.attempt.isNil and
       x.realization.isNil:
-    x.state = msUnloaded
-    x.failure = x.takeEnforced()
-    x.current = ""
-    st.commit(x)
+    st.completeStop(x)
   if x.state == msUnloaded:
     reply.answerView(x)
     return
@@ -4386,7 +4485,7 @@ proc stop(st: State, q: Request) =
     # [SPEC RUNTIME l.3551-3556] Success means the stop is accepted and the
     # instance is `stopping` or `unloaded`; completion is reported through
     # `module_state_changed_event` and `get_readiness`. An instance in `error`
-    # whose realization was lost answers `error` (G173). [IMPL; re-pin P4 R8]
+    # whose realization was lost answers `stopping` too (G173; P5a M10). [IMPL; re-pin P4 R8]
     # The engine API's stop still answers at `unloaded`.
     st.stopInstance(x, nil, keepIntent = false)
     q.reply.answerView(x)
@@ -4671,28 +4770,35 @@ proc create(st: State, q: Request) =
 
 # Shutdown -----------------------------------------------------------------------
 
+proc releasable(st: State, x: Inst): bool =
+  ## [SPEC RUNTIME §10.2, l.3729, l.3732] Whether shutdown initiates `x`'s
+  ## release: not one already initiated or done, nor the Loader's while it
+  ## owns a realization or runs a call (R3; a lost one only as §2.11 says),
+  ## nor an orphaned realization's (§2.11 step 4: nothing releases it), nor
+  ## an `error` instance's with nothing left.
+  if x.state in {msUnloaded, msStopping}:
+    return false
+  if st.isLoader(x) and (st.loaderOwns() or x.inflight > 0 or st.ldr.lost):
+    return false
+  if x.realization != nil and x.realization.lost:
+    return false
+  not (
+    x.state == msError and x.attempt.isNil and x.teardown == 0 and x.realization.isNil
+  )
+
+proc shutdownOrder(st: State): seq[Inst] =
+  ## Reverse creation order.
+  for x in st.instances.values:
+    result.insert(x, 0)
+
 proc shutdownStep(st: State) =
   ## [SPEC RUNTIME §10.2 step 3] Releases dependents before prerequisites, in
   ## reverse creation order otherwise; execution intent is preserved.
   var progress = true
   while progress:
     progress = false
-    var order: seq[Inst]
-    for x in st.instances.values:
-      order.insert(x, 0)
-    for x in order:
-      if x.state in {msUnloaded, msStopping} or x.indeterminateStop:
-        continue
-      if st.isLoader(x) and (st.loaderOwns() or x.inflight > 0 or st.ldr.lost):
-        # [SPEC RUNTIME l.3847-3849, l.3863; plan §2.10 (R3)] The Loader is
-        # released last, once it owns no realization and runs no call; a
-        # lost one only as §2.11 says.
-        continue
-      if x.realization != nil and x.realization.lost:
-        # [plan §2.11 step 4] Nothing releases an orphaned realization.
-        continue
-      if x.state == msError and x.attempt.isNil and x.teardown == 0 and
-          x.realization.isNil:
+    for x in st.shutdownOrder():
+      if not st.releasable(x):
         continue
       var dependentLive = false
       for (pre, dep) in st.cfg.ordering:
@@ -4711,8 +4817,7 @@ proc shutdownComplete(st: State): bool =
       # [plan §2.10 (R3)] Shutdown completes with the failure; the Loader
       # stays, narrowed to `release` and `get_status`.
       continue
-    if x.state in {msLoaded, msReady, msStopping} or x.indeterminateStop or
-        x.apply != nil:
+    if x.state in {msLoaded, msReady, msStopping} or x.apply != nil:
       # [I87] An application in flight is waited for as a call is.
       return false
     if st.isLoader(x) and x.teardown != 0:
@@ -4727,16 +4832,25 @@ proc shutdownOutcome(st: State): Opt[EngineError] =
   ## or with some cleanup unresolved or failed: an attempt or a release still
   ## outstanding, `cleanup-timeout` or `cleanup-failed`. The second is
   ## MODULE_ERROR, naming the instances.
-  var unresolved: seq[string]
+  var unresolved, forced: seq[string]
   for x in st.instances.values:
     let failed =
       x.failure.isSome and x.failure.get.kind in {fkCleanupTimeout, fkCleanupFailed}
     if failed or x.attempt != nil or x.teardown != 0 or x.realization != nil:
       unresolved.add(x.id)
+    if x.state == msStopping and not x.hosted:
+      forced.add(x.id)
   if unresolved.len == 0:
     return Opt.none(EngineError)
   var message =
     "shutdown completed with cleanup unresolved or failed: " & unresolved.join(", ")
+  if forced.len > 0:
+    # [SPEC RUNTIME l.3732; Q-r D4] Forced cleanup of a direct realization
+    # still `stopping` is requested of the host: it shares this process.
+    message.add(
+      "; forced cleanup of " & forced.join(", ") &
+        " is requested: the host process must end"
+    )
   if st.ldr.termination.len > 0:
     # [IMPL-DECISION G249; plan §2.11 step 6] S4b1-1 (a): a C host learns here.
     message.add("; the Module Loader failed: the host process must end")
@@ -4747,9 +4861,16 @@ proc finishShutdown(st: State) =
   ## lifecycle requests and still cleans contexts that module code returns
   ## late, until `close`. Every waiter gets the one stored result (RUN-0760).
   ## [IMPL] A state that could not be written is tried once more; if it still
-  ## fails the result is MODULE_ERROR (G60 extended; I82).
+  ## fails the result is MODULE_ERROR (G60 extended; I82). [IMPL-DECISION
+  ## G357] That write carries the completed-shutdown record, and so does every
+  ## later one in this run; if it fails, the next open sees an unclean end.
   st.shutdownResult = st.shutdownOutcome()
-  st.retryStore()
+  st.completedShutdown = true
+  let w = st.persist()
+  if w.isErr:
+    st.storeFailure(w.error)
+  else:
+    st.written(nil)
   if st.storeFailed:
     var message = NotPersisted
     if st.shutdownResult.isSome:
@@ -5889,7 +6010,7 @@ proc realizationStatus(x: Inst): RealizationStatus =
     return rsCurrent
   if x.realization != nil or x.teardown != 0 or
       (a != nil and a.phase in {apReadyPending, apCleanup}):
-    if x.state == msError and x.failure.isSome and x.failure.get.kind == fkCleanupTimeout:
+    if x.overran:
       return rsUnknown
     return rsCurrent
   rsAbsent
@@ -6491,8 +6612,8 @@ proc profiledSettings(st: State, q: Request, x: Inst) =
     return
   case next.application
   of saPending:
-    # [SPEC RUNTIME l.2518 (RUN-1142; P5 claims it); RUN-0914, RUN-1066; G281] Stop and
-    # re-realize: a running realization is stopped as an enforcement stop with
+    # [SPEC RUNTIME l.2518 (RUN-1142); RUN-0914, RUN-1066; G281] Stop the
+    # realization: a running realization is stopped as an enforcement stop with
     # no classification, intent and origin kept, asking no stop grant (CA
     # l.338-339); a stop or cleanup already running is awaited. The engine
     # never restarts it (RUN-0915).
@@ -6879,8 +7000,8 @@ proc applyFailed(st: State, x: Inst, f: Failure) =
   ## outcome is indeterminate, or whose success could not be recorded:
   ## `error`, no further provider work, the realization released once the
   ## hook has returned. A later cause replaces an earlier one (RUNTIME
-  ## l.3757). [IMPL-DECISION G237 interim (TF-28)] During a stop the
-  ## instance enters `error` too, and the stop still completes it.
+  ## l.3757). [SPEC CONFIG l.327-329; G237 settled] During a stop nothing
+  ## changes: the stop continues, and the caller already has MODULE_ERROR.
   case x.state
   of msReady:
     x.state = msError
@@ -6889,10 +7010,7 @@ proc applyFailed(st: State, x: Inst, f: Failure) =
     st.commit(x)
     st.releaseRealization(x)
   of msStopping:
-    x.indeterminateStop = true
-    x.state = msError
-    x.failure = Opt.some(f)
-    st.commit(x)
+    discard
   of msError:
     x.failure = Opt.some(f)
     st.commit(x)
@@ -10135,7 +10253,7 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     q.reply.answer(
       Reply(
         pending:
-          not x.isNil and x.state in {msUnloaded, msError} and (
+          not x.isNil and x.state in {msUnloaded, msStopping, msError} and (
             x.attempt != nil or x.teardown != 0 or x.realization != nil or x.prevHost
               # [G275]
           )
@@ -10195,14 +10313,9 @@ proc teardownDone(st: State, x: Inst) =
   let a = x.attempt
   if a != nil and a.phase == apCleanup:
     st.finishAttempt(a)
-  elif x.state == msStopping or x.indeterminateStop:
-    # [G237 interim] A stop during which an application's outcome became
-    # indeterminate completes as any stop does.
-    x.indeterminateStop = false
-    x.state = msUnloaded
-    x.failure = x.takeEnforced()
-    x.current = ""
-    st.commit(x)
+  elif x.state == msStopping:
+    # [SPEC RUNTIME l.576] The stop completes, past its deadline or not.
+    st.completeStop(x)
     st.releaseWaiters(x)
   else:
     # [I93; R11] An `error` realization's release completed: its pending
@@ -10227,7 +10340,6 @@ proc cleanupFailed(st: State, x: Inst, reason: string) =
   x.teardown = 0
   if x.realization != nil:
     x.realization.unresolved = true
-  x.indeterminateStop = false
   x.state = msError
   x.failure = Opt.some(Failure(kind: fkCleanupFailed, reason: reason))
   x.enforced = Opt.none(Failure)
@@ -10285,7 +10397,6 @@ proc hostFailed(st: State, x: Inst, f: Failure) =
       )
   if x.realization != nil:
     x.realization.failed = true
-  x.indeterminateStop = false
   x.state = msError
   x.failure = Opt.some(f)
   x.enforced = Opt.none(Failure)
@@ -10297,6 +10408,25 @@ proc hostFailed(st: State, x: Inst, f: Failure) =
   st.releaseWaiters(x)
 
 proc servedClosed(st: State, conn: ConnId) {.gcsafe.}
+
+proc hostGone(st: State, x: Inst) =
+  ## [SPEC RUNTIME l.3821-3822, l.576, l.3606; plan §2.9; P5 Q5, Q6] The
+  ## confirmed end of the Module Host of a realization whose cleanup was
+  ## ordered before, and which nothing will release (its Loader was lost, or
+  ## its cleanup failed or went unanswered): absent now. An `error` instance
+  ## stays `error` (l.611); a `stopping` one completes its stop (l.576).
+  ## P5c's `loaderLost` calls it for a host already gone.
+  x.realization = nil
+  x.teardown = 0
+  st.endServices(x.services, x.id)
+  freeAttemptServices(x.services)
+  x.services = nil
+  if x.state == msStopping and x.attempt.isNil:
+    st.completeStop(x)
+  st.releaseWaiters(x)
+  let l = st.ldr.inst
+  if st.ldr.lost and l != nil and not st.loaderOwns():
+    st.releaseRealization(l)
 
 proc hostEnded(st: State, h: Host, e: HostEndNote) =
   ## [R27; plan §2.9; G268] Every end of a Module Host reaches the Runtime
@@ -10339,19 +10469,8 @@ proc hostEnded(st: State, h: Host, e: HostEndNote) =
   elif unexpected:
     st.diagnose("the Module Host of " & x.id & " ended unexpectedly (" & e.how & ")")
   let a = x.attempt
-  if x.realization != nil and x.realization.lost:
-    # [SPEC RUNTIME l.3821-3822; plan §2.9] The protected supervision's
-    # confirmation for a realization its failed Loader owned: absent now, the
-    # instance staying `error` (l.611).
-    x.realization = nil
-    x.teardown = 0
-    st.endServices(x.services, x.id)
-    freeAttemptServices(x.services)
-    x.services = nil
-    st.releaseWaiters(x)
-    let l = st.ldr.inst
-    if st.ldr.lost and l != nil and not st.loaderOwns():
-      st.releaseRealization(l)
+  if x.realization != nil and (x.realization.lost or x.realization.unresolved):
+    st.hostGone(x)
     return
   if a != nil and a.phase == apRealize:
     # The Loader's `realize` answers once the end is confirmed; an attempt
@@ -11164,14 +11283,18 @@ proc nextTransported(st: State): Opt[MonoTime] =
 proc retryLocks(st: State, now: MonoTime) =
   ## [G275; plan R6] Once a restart lock held after an unclean end can be
   ## taken, the earlier host is gone: the realization is `absent`, committed.
-  ## [G275 amended; 4b-4 plan R26] Its `pending` permission settings then
-  ## settle, published after that commit.
+  ## [G357; SPEC RUNTIME l.3637] A stop a completed shutdown left `stopping`
+  ## completes then (`unloaded`). [G275 amended; 4b-4 plan R26] Its
+  ## `pending` permission settings then settle, published after that commit.
   st.nextLockTry = now + initDuration(seconds = 1)
   var freed: seq[Inst]
   for x in st.instances.values:
     if x.prevHost and lockFree(st.cfg.workDir, x.id):
       x.prevHost = false
-      st.commit(x)
+      if x.state == msStopping:
+        st.completeStop(x)
+      else:
+        st.commit(x)
       freed.add(x)
   for x in freed:
     st.settleSettings(x)
@@ -11229,43 +11352,26 @@ proc checkDeadlines(st: State) =
     if run != nil and run.hostKill.isSome and now >= run.hostKill.get:
       run.hostKill = Opt.none(MonoTime)
       x.endHost("the configuration hook did not return in time") # [G269]
-    if (x.state == msStopping or x.indeterminateStop) and x.stopDeadline.isSome and
-        now >= x.stopDeadline.get:
-      # [G61, revised by A18; SPEC RUNTIME §10.2 l.3835-3838, l.3873-3874]
-      # The cleanup failure is recorded; nothing still in use is released.
-      # [G168 extended] It replaces an authority stop's classification.
-      # [G237] So it does an indeterminate application's.
-      x.indeterminateStop = false
-      x.state = msError
-      x.failure =
-        Opt.some(Failure(kind: fkCleanupTimeout, reason: "the stop deadline passed"))
-      x.enforced = Opt.none(Failure)
-      st.commit(x)
-      st.releaseWaiters(x)
-      # [G61 "Only hosted realizations may be terminated"; G269; G180 (a)
-      # extended] The host is ended; the Loader's `release` then succeeds and
-      # the realization is `absent`, the instance staying `error`.
-      x.endHost("the stop deadline passed")
+    if x.state == msStopping and x.stopDeadline.isSome and now >= x.stopDeadline.get:
+      # [SPEC RUNTIME l.575-577; G61 replaced (P5a)] `stopping` stays, with
+      # `cleanup-timeout`; a hosted instance's host is ended, after which the
+      # Loader's `release` succeeds and the stop completes `unloaded`.
+      st.recordOverrun(x, "the stop deadline passed")
   if st.shuttingDown and not st.shutdownDone and now >= st.shutdownDeadline:
-    # [SPEC RUNTIME §10.2 step 6] The cleanup failure is recorded and shutdown
-    # continues; nothing still in use is released. [plan §2.10 (R3)] A Loader
-    # that still owns a realization or runs a call stays `ready` and bound.
-    let keepLoader =
-      st.loaderOwns() or (st.ldr.inst != nil and st.ldr.inst.inflight > 0)
+    # [SPEC RUNTIME l.3702, l.3732; P5a M11] Release is initiated for every
+    # realization not yet released, the ordering no longer held (a Loader
+    # that owns a realization or runs a call stays `ready` and bound, R3);
+    # then every instance still `stopping` records `cleanup-timeout` and its
+    # forced cleanup is requested. Shutdown completes with that recorded
+    # cleanup failure.
+    for x in st.shutdownOrder():
+      if st.releasable(x):
+        st.stopInstance(x, nil, keepIntent = true)
+    for x in st.shutdownOrder():
+      if x.state == msStopping:
+        st.recordOverrun(x, "the shutdown grace period passed")
     for x in st.instances.values:
-      if st.isLoader(x) and x.state == msReady and keepLoader:
-        continue
-      if x.state in {msLoaded, msReady, msStopping} or x.indeterminateStop:
-        x.indeterminateStop = false
-        x.state = msError
-        x.failure = Opt.some(
-          Failure(kind: fkCleanupTimeout, reason: "the shutdown grace period passed")
-        )
-        x.enforced = Opt.none(Failure)
-        st.commit(x)
-        st.releaseWaiters(x) # [I93; R11]
-    for x in st.instances.values:
-      # [G269; SPEC RUNTIME l.3860-3861] Every Module Host left is ended; its
+      # [G269; SPEC RUNTIME l.3732] Every Module Host left is ended; its
       # release completes after shutdown, before `close`.
       x.endHost("the shutdown grace period passed")
     st.finishShutdown()
@@ -11291,7 +11397,7 @@ proc nextDeadline(st: State): Opt[MonoTime] =
         else:
           getMonoTime()
       )
-    if (x.state == msStopping or x.indeterminateStop) and x.stopDeadline.isSome:
+    if x.state == msStopping and x.stopDeadline.isSome:
       consider(x.stopDeadline.get)
     if x.apply != nil and not x.apply.expired:
       consider(x.apply.deadline)
@@ -11330,14 +11436,28 @@ proc nextDeadline(st: State): Opt[MonoTime] =
 
 # Opening ------------------------------------------------------------------------
 
-const UncleanEnd = "the Runtime ended without completing shutdown"
+const
+  UncleanEnd = "the Runtime ended without completing shutdown"
+  StopAcrossRuns = "the stop did not complete before the previous run ended"
 
 proc restore(st: State, snap: Snapshot) =
   ## [SPEC RUNTIME §9.3 l.3500-3506; IMPL] The retained instances, each with
   ## its id, provider id, record, intent, intent revision, origin and failure
   ## (RUN-0646), and a revision past every value exposed before (l.3506): the
-  ## epoch's first. No realization survives the previous process (the store
-  ## lock is the evidence), so cleanup is complete for every one of them.
+  ## epoch's first. No direct realization survives the previous process (the
+  ## store lock is the evidence: its open file description is the holder, so
+  ## no second open reaches here while a direct cleanup is outstanding, and
+  ## `close` refuses while module code runs), so its cleanup is complete; a
+  ## hosted one's may not be until its restart lock is free (G275).
+  ##
+  ## [SPEC RUNTIME l.3606, l.3634-3637; IMPL-DECISION G357 (TF-58 interim)]
+  ## `loaded` and `ready` records restore as `error` with `host-terminated`:
+  ## the envelope ended without ordering their cleanup. A `stopping` record
+  ## does so too after an unclean end (no completed-shutdown record: a crash,
+  ## or a v1 store); its enforced classification goes. After a completed
+  ## shutdown its cleanup was ordered and forced (l.3732): the stop completes
+  ## now (`unloaded`, l.576), or for a hosted one whose lock is still held,
+  ## when it is free (`retryLocks`), `stopping` with `cleanup-timeout` till then.
   for s in snap.instances:
     let x = Inst(
       id: s.instance,
@@ -11352,13 +11472,23 @@ proc restore(st: State, snap: Snapshot) =
     if s.intent == inRequested:
       x.intentRevision = s.intentRevision
       x.intentOrigin = s.origin
-    if s.state in {msLoaded, msReady, msStopping}:
-      # [IMPL-DECISION G193 (TF-29)] A completed shutdown leaves only
-      # `unloaded` and `error` (G180), so the Runtime ended uncleanly: `error`
-      # with `other`, intent kept. Resuming it is not a retry after failure.
+    let held =
+      s.record.strategy == stHostedDynamic and not lockFree(st.cfg.workDir, x.id)
+    if s.state in {msLoaded, msReady} or
+        (s.state == msStopping and not snap.completedShutdown):
+      # [SPEC RUNTIME l.3634 (RUN-1194, RUN-1195)] An unclean end: `error`
+      # with `host-terminated`, intent and origin kept (G193 replaced).
       x.state = msError
-      x.failure = Opt.some(Failure(kind: fkOther, reason: UncleanEnd))
-    if s.record.strategy == stHostedDynamic and not lockFree(st.cfg.workDir, x.id):
+      x.failure = Opt.some(Failure(kind: fkHostTerminated, reason: UncleanEnd))
+    elif s.state == msStopping:
+      x.enforced = s.enforced
+      if held:
+        if x.failure.isNone or x.failure.get.kind != fkCleanupTimeout:
+          x.failure = Opt.some(Failure(kind: fkCleanupTimeout, reason: StopAcrossRuns))
+      else:
+        x.state = msUnloaded
+        x.failure = x.takeEnforced()
+    if held:
       # [G275, amends G193 for hosts; plan R6] Its Module Host may outlive the
       # previous run: nothing is realized for it until the lock can be taken.
       x.prevHost = true
@@ -11366,6 +11496,8 @@ proc restore(st: State, snap: Snapshot) =
     # [G178] Created in an earlier process: its next exposure is a change.
     x.seen = true
     x.seenState = x.state
+    when defined(lcnTestHooks):
+      x.tableState = x.state
     st.instances[x.id] = x
     st.putFacts(x)
   for r in snap.retired:

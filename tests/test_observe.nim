@@ -682,7 +682,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     check rc.summaryOf(e.address("m")).code == ecOk
     e.finish()
 
-  test "[RUN-0640] [RUN-0630] [IMPL-DECISION G180] [IMPL-DECISION G227] a cleanup past its deadline is unknown; its end is absent at a new revision, and a revision read before it is stale":
+  test "[RUN-0640] [RUN-0630] [IMPL-DECISION G180] [IMPL-DECISION G227] [RUN-1092] a cleanup past its deadline is unknown; its end is absent at a new revision, the stop completed, and a revision read before it is stale":
     var cfg = config()
     cfg.stopDeadline = PassingStop
     let e = fixtureEngine(cfg)
@@ -690,7 +690,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     discard e.started(client(), "w")
     clientDestroyGate.store(true)
     let stopped = e.stop("w").tryGet
-    check stopped.state == msError
+    check stopped.state == msStopping
     check stopped.failure.get.classification == "cleanup-timeout"
     const Unknown =
       LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown
@@ -706,7 +706,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     )
     let after = rc.summaryOf(e.address("w")).summarized
     check after.execution.revision > during.execution.revision
-    check after.state.kind == LogosNSRuntimeControlStateKind.Error
+    check after.state.kind == LogosNSRuntimeControlStateKind.Unloaded
     # A guarded request prepared before the commit is refused, without
     # mutation; one at the current revision is accepted.
     let stale = rc.lifecycle(

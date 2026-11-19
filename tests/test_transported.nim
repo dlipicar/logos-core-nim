@@ -541,11 +541,13 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check destroyed.load == gone
     gate.store(false)
     joinThread(t)
-    # The stop failed `cleanup-timeout`; the release follows the call's return.
-    check stopReply.load == ord(msError)
+    # The stop answered `stopping` with `cleanup-timeout` at its deadline
+    # (RUNTIME l.575); the release follows the call's return and completes it.
+    check stopReply.load == ord(msStopping)
     check waitUntil(
       proc(): bool =
-        destroyed.load == gone + 1
+        destroyed.load == gone + 1 and
+          e.view(meterView.instance).tryGet.state == msUnloaded
     )
     e.finish()
 

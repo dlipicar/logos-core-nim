@@ -724,7 +724,7 @@ when defined(posix):
       leftover()
       check noHostLeft()
 
-    test "[RUN-0812] [RUN-0813] [IMPL-DECISION G268] S-7 a host whose module exits, or that is killed from outside: `error` with `host-terminated`, its routes failed, its record released, intent kept, nothing restarted":
+    test "[RUN-0812] [RUN-0813] [TXT-0283] [IMPL-DECISION G268] S-7 a host whose module exits, or that is killed from outside: `error` with `host-terminated`, its routes failed, its record released, intent kept, nothing restarted":
       for how in ["quit", "kill"]:
         let cfg = hostedConfig()
         var commands = @["rc establish_route " & hex(establishReq("k"))]
@@ -845,7 +845,7 @@ when defined(posix):
       check e.start("p").tryGet.state == msReady
       e.finish()
 
-    test "[IMPL-DECISION G269] [IMPL-DECISION G180] S-10 past the stop deadline with `_MODULE_destroy` blocked: `cleanup-timeout`, the host ended, the release succeeds, `absent`; a later stop gives `unloaded`":
+    test "[IMPL-DECISION G269] [IMPL-DECISION G180] [RUN-1092] [TXT-0290] S-10 past the stop deadline with `_MODULE_destroy` blocked: `stopping` with `cleanup-timeout`, the host ended, the release succeeds, `absent`, and the stop completes `unloaded`":
       var cfg = hostedConfig()
       cfg.stopDeadline = PassingStop
       let dir = cfg.prepare("block-destroy")
@@ -854,16 +854,21 @@ when defined(posix):
       discard e.create(probe(), "p").tryGet
       check e.start("p").tryGet.state == msReady
       let v = e.stop("p").tryGet
-      check v.state == msError and v.failureOf == "cleanup-timeout"
+      check v.state == msStopping and v.failureOf == "cleanup-timeout"
       check e.absentAgain(rc, "p")
       check e.releases("p") == 1
       check lines(dir, "destroyed").len == 0 # ended inside destroy
       check hostEnds()[^1].byRuntime
-      check e.view("p").tryGet.failureOf == "cleanup-timeout"
+      # [SPEC RUNTIME l.576] The forced end completed the cleanup, so the stop.
+      check waitUntil(
+        proc(): bool =
+          e.view("p").tryGet.state == msUnloaded
+      )
+      check e.view("p").tryGet.failure.isNone
       check e.stop("p").tryGet.state == msUnloaded
       e.finish()
 
-    test "[IMPL-DECISION G269] S-11 shutdown with a host whose `_MODULE_destroy` blocks completes after the grace period; the host is ended":
+    test "[IMPL-DECISION G269] [RUN-1200] [TXT-0583] S-11 shutdown with a host whose `_MODULE_destroy` blocks completes after the grace period with `cleanup-timeout` recorded; the host is ended and the stop completes":
       var cfg = hostedConfig()
       cfg.shutdownGrace = PassingStop
       discard cfg.prepare("block-destroy")
@@ -872,10 +877,17 @@ when defined(posix):
       check e.start("p").tryGet.state == msReady
       let began = getMonoTime()
       e.requestShutdown()
-      discard e.awaitShutdown()
+      let r = e.awaitShutdown()
       check getMonoTime() - began >= PassingStop
+      # [SPEC RUNTIME l.3732] Still `stopping` at expiry: `cleanup-timeout`,
+      # a recorded cleanup failure, and its forced cleanup is the host's end.
+      check r.isErr and r.error.code == ecModule and "p" in r.error.message
       check noHostLeft()
-      check e.view("p").tryGet.failureOf == "cleanup-timeout"
+      check waitUntil(
+        proc(): bool =
+          e.view("p").tryGet.state == msUnloaded
+      )
+      check e.view("p").tryGet.failure.isNone
       live = nil
       check e.close(initDuration(seconds = 10 * Slow))
 
@@ -1056,6 +1068,38 @@ when defined(posix):
       e.confirmTerminationForTests() # the client, realized directly
       e.finish()
 
+    test "[RUN-1110] [TXT-0304] [TXT-0579] [TXT-0288] S-15b a stop of an instance the failed Loader left `error`, its host's end not yet confirmed: `stopping`, nothing released, and the stop completes `unloaded` at that end":
+      let cfg = hostedConfig()
+      discard cfg.prepare()
+      let e = fixtureEngine(cfg)
+      discard e.startClient("c")
+      discard e.create(probe(), "p").tryGet
+      check e.start("p").tryGet.state == msReady
+      let h = e.hostOf("p")
+      holdEnd(h, true)
+      check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
+      check e.view("p").tryGet.state == msError
+      # [SPEC RUNTIME l.526] The stop moves `error` to `stopping`; l.1730 starts
+      # no release of the lost realization, whose cleanup is unresolved.
+      var t: Thread[(Engine, string)]
+      check e.stopping("p", t)
+      let v = e.view("p").tryGet
+      check v.execution.intent == inStopped
+      check v.failure.isSome # kept until the stop completes (l.3611)
+      check e.cleanupPending("p")
+      check stopReply.load == -2
+      # [SPEC RUNTIME l.1730] The host's end resolves that cleanup, so the stop
+      # completes.
+      holdEnd(h, false)
+      dropHost(h)
+      joinThread(t)
+      check stopReply.load == ord(msUnloaded)
+      check e.view("p").tryGet.failure.isNone
+      check e.releases("p") == 0
+      check not e.cleanupPending("p")
+      e.confirmTerminationForTests() # the client, realized directly
+      e.finish()
+
   # S-16 ---------------------------------------------------------------------------------
 
   proc crash(dir: string, ids: openArray[string]) =
@@ -1069,12 +1113,12 @@ when defined(posix):
     s.write(x).tryGet
     s.close()
 
-  suite "run.hosted: after an unclean end (G193; G275)":
+  suite "run.hosted: after an unclean end (RUNTIME l.3634-3637; G275)":
     teardown:
       leftover()
       check noHostLeft()
 
-    test "[RUN-0814] [IMPL-DECISION G275] [IMPL-DECISION G193] S-16 a hosted instance restored with its restart lock held is `unknown` and not started until the lock is free; with the lock free G193 holds":
+    test "[RUN-0814] [RUN-1195] [RUN-1197] [IMPL-DECISION G275] S-16 a hosted instance restored with its restart lock held is `unknown` and not started until the lock is free; with the lock free it is `error` with `host-terminated`":
       var cfg = hostedConfig()
       cfg.storeDir = Opt.some(cfg.workDir / "store")
       discard cfg.prepare()
@@ -1096,7 +1140,7 @@ when defined(posix):
         live = e
         let (_, rc) = e.startClient("c" & $held)
         let v = e.view("p").tryGet
-        check v.state == msError and v.failureOf == "other"
+        check v.state == msError and v.failureOf == "host-terminated"
         if held:
           check rc.realization(e, "p") == R.Unknown
           let r = e.start("p")
@@ -1114,6 +1158,62 @@ when defined(posix):
           check rc.realization(e, "p") == R.Absent
         check e.start("p").tryGet.state == msReady
         e.finish()
+
+    test "[RUN-1197] [IMPL-DECISION G357] [IMPL-DECISION G275] S-16b a completed shutdown's store with the restart lock held: the host's end is not inferred from it; a `stopping` record completes once the lock is free":
+      var cfg = hostedConfig()
+      cfg.storeDir = Opt.some(cfg.workDir / "store")
+      discard cfg.prepare()
+      discard cfg.prepareAt("q")
+      block:
+        let e = openEngine(cfg).tryGet
+        live = e
+        discard e.create(probe(), "p").tryGet
+        discard e.create(probe(state = "q"), "q").tryGet
+        check e.start("p").tryGet.state == msReady
+        e.finish()
+      # The last snapshot of a completed shutdown: `p` stopped, `q` still
+      # `stopping` past the grace, its host ended but not yet confirmed.
+      block:
+        var (s, snap) = openStore(cfg.storeDir.get).tryGet
+        var x = snap.get
+        x.completedShutdown = true
+        for i in 0 ..< x.instances.len:
+          if x.instances[i].instance == "q":
+            x.instances[i].state = msStopping
+            x.instances[i].failure = Opt.some(
+              Failure(
+                kind: fkCleanupTimeout, reason: "the shutdown grace period passed"
+              )
+            )
+        s.write(x).tryGet
+        s.close()
+      var fds: seq[cint]
+      for id in ["p", "q"]:
+        let (taken, lock) = takeHostLock(cfg.workDir, id)
+        check taken == loTaken
+        fds.add(lock)
+      let e = openEngine(cfg).tryGet
+      live = e
+      let (_, rc) = e.startClient("c")
+      # [SPEC RUNTIME l.3637] The record does not confirm that a host outside
+      # this process ended: both are `unknown` and NOT_READY while held.
+      check e.view("p").tryGet.state == msUnloaded
+      let q = e.view("q").tryGet
+      check q.state == msStopping and q.failureOf == "cleanup-timeout"
+      for id in ["p", "q"]:
+        check rc.realization(e, id) == R.Unknown
+        check e.start(id).error.code == ecNotReady
+        check e.cleanupPending(id)
+      for fd in fds:
+        closeLock(fd)
+      check waitUntil(
+        proc(): bool =
+          rc.realization(e, "p") == R.Absent and e.view("q").tryGet.state == msUnloaded
+      )
+      check e.view("q").tryGet.failure.isNone
+      check e.view("q").tryGet.execution.intent == inUninitialized
+      check e.start("q").tryGet.state == msReady
+      e.finish()
 else:
   import unittest2
 

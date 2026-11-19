@@ -257,9 +257,12 @@ Item 9.
   kept"). Nothing removes it but `logosctl state purge` (§19).
 - **Cleanup.** At start the Runtime removes the `+transfer-…` and `+purge-…` names an interrupted
   transfer or purge left. Restart-lock files under `work/hosts/` hold no data and stay.
-- **Recovery.** After a run that did not complete shutdown, each stored instance is restored as
-  `error` (`other`); bringing it back is a resumption, not a retry, and is not charged to the restart
-  policy (DECISIONS G193, G289; RUNTIME l.3775). A hosted instance whose Module Host of the previous
+- **Recovery.** After a run that did not complete shutdown, each stored instance that was `loaded`,
+  `ready` or `stopping` is restored as `error` (`host-terminated`; RUNTIME l.3634); bringing it back is a
+  resumption, not a retry, and is not charged to the restart policy (DECISIONS G193, G289; RUNTIME
+  l.3638). After a completed shutdown that left an instance `stopping` past the shutdown grace, a direct
+  one completes its stop at the next start and a hosted one completes it once its restart lock is free
+  (DECISIONS G357). A hosted instance whose Module Host of the previous
   run may still be alive keeps `realization` `unknown`, and its start and recovery answer NOT_READY,
   until its restart lock can be taken (DECISIONS G275). After a Module Loader loss logosd exits 4 and a
   service manager starts it again ([DAEMON.md](DAEMON.md) §15).
@@ -313,17 +316,20 @@ Item 13. Five deadlines, in milliseconds, each 1 to 3,600,000 where configurable
 |---|---|---|---|---|---|
 | The Module Loader's startup | 120000 | fixed | when `start` begins | binding, `_MODULE_init`, readiness, the contract and capability checks | the Loader is `error` `startup-timeout`; logosd exits 2 |
 | Startup | 120000 | `runtime.startup_deadline_ms` | when the execution attempt is accepted, after its ordering prerequisites | binding, `_MODULE_init`, readiness | `error` `startup-timeout` |
-| Application | 120000 | `runtime.apply_deadline_ms` | when `apply_configuration` is accepted | until the module answers | the outcome is unknown: `error` `configuration-indeterminate` |
-| Stop (drain) | 10000 | `runtime.stop_deadline_ms` | when the stop begins | the stop, through the module's `_MODULE_destroy` and its release | `error` `cleanup-timeout`; a later stop gives `unloaded` (DECISIONS G180) |
-| Shutdown grace (cleanup) | 10000 | `runtime.shutdown_grace_ms` | when shutdown begins | in-flight work and every release | shutdown completes with an error; logosd exits 3 |
+| Application | 120000 | `runtime.apply_deadline_ms` | when `apply_configuration` is accepted | until the module answers | the outcome is unknown: `error` `configuration-indeterminate`; an instance already `stopping` stays `stopping` (CONFIG l.328) |
+| Stop (drain) | 10000 | `runtime.stop_deadline_ms` | when the stop begins | the stop, through the module's `_MODULE_destroy` and its release | `stopping` with `cleanup-timeout` until the cleanup ends, then `unloaded` (RUNTIME l.575-576; DECISIONS G180) |
+| Shutdown grace (cleanup) | 10000 | `runtime.shutdown_grace_ms` | when shutdown begins | in-flight work and every release | an instance still `stopping` reports `cleanup-timeout`; shutdown completes with an error; logosd exits 3 |
 
 - **Escalation.** A Module Host still running past its startup, stop or shutdown deadline is ended by
   force: SIGKILL to its process group (DECISIONS G269). Past the application deadline, a host whose hook
-  has not returned one stop deadline later is ended the same way. The state stays `error` with the
-  deadline's classification, and `realization` is `unknown` until the end is confirmed.
+  has not returned one stop deadline later is ended the same way. Past the startup or application
+  deadline the state stays `error` with the deadline's classification; past the stop or shutdown
+  deadline it stays `stopping` with `cleanup-timeout`, and the confirmed end completes the stop
+  (`unloaded`). `realization` is `unknown` until the end is confirmed.
 - **Shared-process limitation.** A direct realization is never ended by force: its code shares
   logosd's process, so past a deadline the failure is recorded and its code may run on (DECISIONS G61,
-  G173). At shutdown logosd retries the Runtime's destruction for `shutdown_grace_ms` plus 5 s; ending
+  G173). A shutdown that leaves one `stopping` says so in its result ("forced cleanup of … is requested:
+  the host process must end"). At shutdown logosd retries the Runtime's destruction for `shutdown_grace_ms` plus 5 s; ending
   the process is the remaining escalation, which a service manager's stop timeout (90 s) performs.
 - **Loader loss** ends logosd with exit 4 ([DAEMON.md](DAEMON.md) §15).
 

@@ -1124,7 +1124,7 @@ suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10
     check e.view("m4").tryGet.state == msReady
     e.finish()
 
-  test "[RUN-1066] [RUN-0692] [RUN-0904] [RUN-0699] [CAP-0291] [CAP-0170] [CAP-0185] [CAP-0359] an ended grant stops the executions that used it, keeping intent and origin; their routes follow; recovery under a new grant starts afresh":
+  test "[RUN-1066] [RUN-0692] [RUN-0904] [RUN-0699] [RUN-1093] [CAP-0291] [CAP-0170] [CAP-0185] [CAP-0359] an ended grant stops the executions that used it, keeping intent and origin; their routes follow; recovery under a new grant starts afresh":
     let (e, orch) = ready(meter = false)
     let id = e.runtimeInstanceId
     check e.create(client(), "m1").isOk

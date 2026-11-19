@@ -14,6 +14,7 @@
 import std/[atomics, monotimes, os, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
+import ../src/logos_core/loader/contract
 import logos_sdk/abi/types
 import logos_sdk/iface/[accept, names, outcome]
 import logos_sdk/crypto/blake3
@@ -142,6 +143,25 @@ proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10): bool =
 proc failureOf(v: InstanceView): string =
   if v.failure.isSome: v.failure.get.classification else: ""
 
+func failureRuleHolds(v: InstanceView): bool =
+  ## [SPEC RUNTIME l.3611, l.3613; P5a §0.2 item 4] `error` has a failure;
+  ## `loaded` and `ready` have none; `stopping` has none, the classification
+  ## it kept from `error`, or `cleanup-timeout`; `unloaded` has none or the
+  ## cause that prevents its intent (an enforcement outcome).
+  case v.state
+  of msError:
+    v.failure.isSome
+  of msLoaded, msReady:
+    v.failure.isNone
+  of msStopping:
+    true
+  of msUnloaded:
+    v.failure.isNone or
+      v.failure.get.kind in {
+        fkAuthorityDenied, fkAuthorityEvaluationFailed, fkAuthorityExpired,
+        fkAuthorityRevoked, fkPermissionEnforcementFailed,
+      }
+
 proc statesSince(e: Engine, instance: string, serial: uint64): seq[ModuleState] =
   ## The states `instance` committed after the change `serial`, in order.
   for c in e.changes():
@@ -230,7 +250,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
   setup:
     reset()
 
-  test "[RUN-0667] [RUN-0629] [RUN-0630] [RUN-0355] [RUN-0669] start makes the instance ready; a repeated start changes nothing":
+  test "[RUN-0667] [RUN-0629] [RUN-0630] [RUN-0355] [RUN-0669] [TXT-0279] start makes the instance ready; a repeated start changes nothing":
     let e = newEngine(config())
     let c = e.create(gated(), "g").tryGet
     let v = e.start("g").tryGet
@@ -245,7 +265,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     e.finish()
     check live.load == 0
 
-  test "[RUN-0357] [RUN-0356] [RUN-1030] stop destroys the context once and cancels intent; a later start makes a new context":
+  test "[RUN-0357] [RUN-0356] [RUN-1030] [TXT-0282] [TXT-0284] stop destroys the context once and cancels intent; a later start makes a new context":
     let e = newEngine(config())
     discard e.create(gated(), "g").tryGet
     discard e.start("g").tryGet
@@ -277,7 +297,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     check e.view("g").tryGet.state == msReady
     e.finish()
 
-  test "[RUN-0358] [RUN-0796] a stop ordered after an incomplete start keeps it from becoming ready":
+  test "[RUN-0358] [RUN-0796] [TXT-0281] [RUN-1092] [TXT-0290] a stop ordered after an incomplete start keeps it from becoming ready":
     var cfg = config()
     cfg.stopDeadline = initDuration(milliseconds = 100)
     let e = newEngine(cfg)
@@ -290,23 +310,20 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
       proc(): bool =
         inits.load == 1
     )
-    # [G61] `_MODULE_init` outlives the stop deadline: the cleanup failure is
-    # recorded and nothing is interrupted.
+    # [SPEC RUNTIME l.575] `_MODULE_init` outlives the stop deadline: still
+    # `stopping`, `cleanup-timeout` reported, nothing interrupted.
     let s = e.stop("g").tryGet
-    check s.state == msError and s.failureOf == "cleanup-timeout"
+    check s.state == msStopping and s.failureOf == "cleanup-timeout"
     check s.execution.intent == inStopped
     joinThread(t)
     check started.load == ord(msStopping)
     initGate.store(false)
+    # [SPEC RUNTIME l.576] The pending cleanup completes the stop.
     check waitUntil(
       proc(): bool =
-        destroys.load == 1 and live.load == 0
+        destroys.load == 1 and live.load == 0 and e.view("g").tryGet.state == msUnloaded
     )
-    # [SPEC RUNTIME l.611] The end of the cleanup does not leave `error`.
-    let after = e.view("g").tryGet
-    check after.state == msError and after.failureOf == "cleanup-timeout"
-    let again = e.stop("g").tryGet
-    check again.state == msUnloaded and again.failure.isNone
+    check e.view("g").tryGet.failure.isNone
     e.finish()
 
   test "[RUN-0359] a start ordered while the instance is stopping fails":
@@ -331,7 +348,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     check inits.load == 1
     e.finish()
 
-  test "[RUN-0791] [RUN-0792] [RUN-0793] [RUN-1056] [RUN-1072] [RUN-1073] a stop past its deadline records cleanup-timeout and releases nothing [IMPL-DECISION G61] [IMPL-DECISION G180] [IMPL-DECISION G227]":
+  test "[RUN-0791] [RUN-0792] [RUN-0793] [RUN-1056] [RUN-1072] [RUN-1073] [RUN-1092] [TXT-0290] a stop past its deadline stays stopping with cleanup-timeout, releases nothing, and completes when its cleanup does [IMPL-DECISION G180] [IMPL-DECISION G227]":
     var cfg = config()
     cfg.stopDeadline = initDuration(milliseconds = 100)
     let e = newEngine(cfg)
@@ -339,8 +356,10 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     discard e.start("g").tryGet
     let before = e.changes()[^1].serial
     destroyGate.store(true)
+    # [SPEC RUNTIME l.575] The stop answers at its deadline: `stopping`, with
+    # `cleanup-timeout` reported.
     let s = e.stop("g").tryGet
-    check s.state == msError and s.failureOf == "cleanup-timeout"
+    check s.state == msStopping and s.failureOf == "cleanup-timeout"
     check s.execution.intent == inStopped
     check live.load == 1 # destroy is still running; nothing was forced
     # While the cleanup is unresolved a start is NOT_READY and keeps the
@@ -349,49 +368,38 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     check r.isErr and r.error.code == ecNotReady
     check e.view("g").tryGet.execution.intent == inStopped
     destroyGate.store(false)
-    # [G227] The end of the cleanup moves the realization from `unknown` to
-    # `absent`: one more commit, still `error`. The Runtime thread makes it
-    # only after `_MODULE_destroy` returned and the release was answered, so
-    # the case waits for that commit, not for the destroy.
+    # [SPEC RUNTIME l.576] When the pending cleanup completes, the stop
+    # completes: `unloaded`, failure cleared. The Runtime thread commits it
+    # after `_MODULE_destroy` returned and the release was answered.
     check waitUntil(
       proc(): bool =
-        let s = e.statesSince("g", before)
-        s.len >= 3 and s[^2] == msError and s[^1] == msError
+        e.view("g").tryGet.state == msUnloaded
     )
     check destroys.load == 1 and live.load == 0
-    let states = e.statesSince("g", before)
-    check states.len >= 3 and states[^3] == msStopping and states[^2] == msError and
-      states[^1] == msError
-    # The end of the cleanup leaves the instance in `error` with its cause.
-    let v = e.view("g").tryGet
-    check v.state == msError and v.failureOf == "cleanup-timeout"
-    # A later stop finds nothing left to clean: `unloaded`, failure cleared.
-    let again = e.stop("g").tryGet
-    check again.state == msUnloaded and again.failure.isNone
+    # The stop's accept (intent `stopped`, state kept) comes first.
+    check e.statesSince("g", before) == @[msReady, msStopping, msStopping, msUnloaded]
+    check e.view("g").tryGet.failure.isNone
     # And a start is accepted again.
     check e.start("g").tryGet.state == msReady
     e.finish()
 
-  test "[RUN-0791] [RUN-0793] [IMPL-DECISION G180] a stop during the cleanup a deadline overran completes at its end":
+  test "[RUN-0791] [RUN-0793] [RUN-1092] [IMPL-DECISION G180] a stop ordered while stopping past its deadline joins it: no second destruction, and its end completes the stop":
     var cfg = config()
-    cfg.stopDeadline = initDuration(seconds = 1)
+    cfg.stopDeadline = initDuration(milliseconds = 100)
     let e = newEngine(cfg)
     discard e.create(gated(), "g").tryGet
     discard e.start("g").tryGet
     destroyGate.store(true)
     check e.stop("g").tryGet.failureOf == "cleanup-timeout"
-    # A new explicit stop starts no second destruction: it waits for the
-    # running one, and its completion makes the instance `unloaded` (l.612).
-    var t: Thread[(Engine, string)]
-    stopped.store(-2)
-    createThread(t, stopOn, (e, "g"))
+    # A new explicit stop is accepted while the instance is `stopping`: it
+    # starts no second destruction and reports the stop in progress.
+    let again = e.stop("g").tryGet
+    check again.state == msStopping and again.failureOf == "cleanup-timeout"
+    destroyGate.store(false)
     check waitUntil(
       proc(): bool =
-        e.view("g").tryGet.state == msStopping
+        e.view("g").tryGet.state == msUnloaded
     )
-    destroyGate.store(false)
-    joinThread(t)
-    check stopped.load == ord(msUnloaded)
     check destroys.load == 1
     check e.view("g").tryGet.failure.isNone
     e.finish()
@@ -444,7 +452,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check live.load == 0
     e.finish()
 
-  test "[RUN-0296] [RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [RUN-0885] a failed start is classified (a Loader error is `loader-<code>`), cleaned, and leaves other instances running":
+  test "[RUN-0296] [RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [RUN-0885] [TXT-0280] a failed start is classified (a Loader error is `loader-<code>`), cleaned, and leaves other instances running":
     let e = newEngine(config())
     discard e.create(meter(), "m").tryGet
     check e.start("m").tryGet.state == msReady
@@ -671,7 +679,7 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     check unloadedAt[2][0] == LoaderInstanceId
     check e.close()
 
-  test "[RUN-1072] [RUN-1073] a destroy that outlives the shutdown grace is recorded, not forced":
+  test "[RUN-1072] [RUN-1073] [TXT-0312] a destroy that outlives the shutdown grace is recorded, not forced; it completes the stop when it returns":
     var cfg = config()
     cfg.shutdownGrace = initDuration(milliseconds = 150)
     let e = newEngine(cfg)
@@ -679,13 +687,19 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     discard e.start("g").tryGet
     destroyGate.store(true)
     e.shutdown()
+    # [SPEC RUNTIME l.3702] Still `stopping`, `cleanup-timeout` reported.
     let v = e.view("g").tryGet
-    check v.state == msError and v.failureOf == "cleanup-timeout"
+    check v.state == msStopping and v.failureOf == "cleanup-timeout"
     check live.load == 1 # the context was not touched
+    let r = e.awaitShutdown()
+    check r.isErr and r.error.code == ecModule
+    # [Q-r D4] Its forced cleanup is the host's: it shares this process.
+    check "forced cleanup of g is requested: the host process must end" in
+      r.error.message
     destroyGate.store(false)
     check waitUntil(
       proc(): bool =
-        destroys.load == 1
+        destroys.load == 1 and e.view("g").tryGet.state == msUnloaded
     )
     check e.close()
 
@@ -703,7 +717,140 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     for c in cs:
       check (c.view.execution.intent == inRequested) ==
         c.view.execution.intentRevision.isSome
-      check (c.view.state == msError) == c.view.failure.isSome
+      check c.view.failureRuleHolds
+    e.finish()
+
+suite "run.engine: the lifecycle table (RUNTIME §3.4 l.515-528, §9.1 l.1730-1734)":
+  setup:
+    reset()
+
+  test "[RUN-1110] [TXT-0304] [TXT-0579] [TXT-0288] a stop of an error instance goes through stopping: with nothing to clean, in two state changes; with a release in flight, no second one, and the stop completes when that one does":
+    let e = newEngine(config())
+    # Nothing to clean: after the stop's accept (intent `stopped`, state kept),
+    # `stopping`, then `unloaded`.
+    mode.store(ord(gmFail))
+    discard e.create(gated(), "f").tryGet
+    check e.start("f").tryGet.state == msError
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("f")
+    )
+    var before = e.changes()[^1].serial
+    let s = e.stop("f").tryGet
+    check s.state == msUnloaded and s.failure.isNone
+    check e.statesSince("f", before) == @[msError, msStopping, msUnloaded]
+    # A release in flight: a failure report, its destroy held.
+    mode.store(ord(gmOk))
+    discard e.create(gated(), "g").tryGet
+    let v = e.start("g").tryGet
+    destroyGate.store(true)
+    check e.reportFailure("g", v.attempt, "gone").isOk
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msError
+    )
+    before = e.changes()[^1].serial
+    var t: Thread[(Engine, string)]
+    stopped.store(-2)
+    createThread(t, stopOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msStopping
+    )
+    # [SPEC RUNTIME l.3611] Its failure stays until the stop completes.
+    check e.view("g").tryGet.failureOf == "reported-by-module"
+    destroyGate.store(false)
+    joinThread(t)
+    check stopped.load == ord(msUnloaded)
+    check destroys.load == 1 # no second destruction
+    check e.statesSince("g", before) == @[msError, msStopping, msUnloaded]
+    check e.view("g").tryGet.failure.isNone
+    e.finish()
+
+  test "[RUN-1091] [TXT-0277] [TXT-0278] [TXT-0279] [TXT-0280] [TXT-0281] [TXT-0282] [TXT-0283] [TXT-0284] [TXT-0285] [TXT-0286] [TXT-0288] the lifecycle table: each of its ten transitions, and no other":
+    let e = newEngine(config())
+    discard e.create(gated(), "g").tryGet
+    let before = e.changes()[^1].serial
+    var t, u: Thread[(Engine, string)]
+    # unloaded -> loaded -> ready.
+    initGate.store(true)
+    started.store(-2)
+    createThread(t, startOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        inits.load == 1
+    )
+    initGate.store(false)
+    joinThread(t)
+    check started.load == ord(msReady)
+    # ready -> stopping -> unloaded.
+    destroyGate.store(true)
+    stopped.store(-2)
+    createThread(u, stopOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msStopping
+    )
+    destroyGate.store(false)
+    joinThread(u)
+    check stopped.load == ord(msUnloaded)
+    # unloaded -> loaded -> stopping -> unloaded: a stop before readiness.
+    initGate.store(true)
+    started.store(-2)
+    createThread(t, startOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        inits.load == 2
+    )
+    stopped.store(-2)
+    createThread(u, stopOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msStopping
+    )
+    initGate.store(false)
+    joinThread(t)
+    joinThread(u)
+    check stopped.load == ord(msUnloaded)
+    # unloaded -> loaded -> error: initialization fails.
+    mode.store(ord(gmFail))
+    check e.start("g").tryGet.state == msError
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("g")
+    )
+    # error -> loaded -> ready: a new accepted attempt.
+    mode.store(ord(gmOk))
+    let v = e.start("g").tryGet
+    check v.state == msReady
+    # ready -> error: an accepted failure report.
+    check e.reportFailure("g", v.attempt).isOk
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msError and not e.cleanupPending("g")
+    )
+    # error -> stopping -> unloaded.
+    check e.stop("g").tryGet.state == msUnloaded
+    # unloaded -> loaded -> ready -> stopping -> error: the cleanup fails.
+    check e.start("g").tryGet.state == msReady
+    check e.setLoaderFaultsForTests(LoaderFaults(failInvocation: {lmRelease})).isOk
+    let f = e.stop("g").tryGet
+    check f.state == msError and f.failureOf == "cleanup-failed"
+    var states = @[msUnloaded]
+    for s in e.statesSince("g", before):
+      if s != states[^1]:
+        states.add(s)
+    check states ==
+      @[
+        msUnloaded, msLoaded, msReady, msStopping, msUnloaded, msLoaded, msStopping,
+        msUnloaded, msLoaded, msError, msLoaded, msReady, msError, msStopping,
+        msUnloaded, msLoaded, msReady, msStopping, msError,
+      ]
+    # [RUN-1091] Every commit of every instance in this process so far was a
+    # row of the table (the test-hook check in `commit` and `accept`).
+    check lifecycleOffTableForTests() == 0
+    e.clearLoaderFaultsForTests()
+    e.confirmTerminationForTests()
     e.finish()
 
 # The host's bootstrap and shutdown -------------------------------------------------

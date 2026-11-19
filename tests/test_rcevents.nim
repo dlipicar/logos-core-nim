@@ -1450,25 +1450,28 @@ suite "run.rc: realization changes (G227)":
 
   test "[RUN-0630] [IMPL-DECISION G227] the late end of a cleanup gives `execution_state_changed` at a new revision and no state change":
     var cfg = rcConfig()
-    cfg.stopDeadline = PassingStop
+    # [SPEC RUNTIME l.573] An initialization past the startup deadline: the
+    # attempt is `error`, and the end of its late cleanup does not leave it.
+    cfg.startupDeadline = initDuration(milliseconds = 150 * Slow)
     let e = fixtureEngine(cfg)
     let (_, rc) = e.startClient("c")
-    discard e.started(client(), "w")
+    e.slows("w")
     var a, b: LogosSubscriptionId
     check rc.subscribe(ExecutionState, addr watches[0], a) == ecOk
     check rc.subscribe(ModuleState, addr watches[1], b) == ecOk
-    clientDestroyGate.store(true)
-    let stopped = e.stop("w").tryGet
-    check stopped.state == msError
+    slowGate.store(true)
+    let failed = e.start("w").tryGet
+    check failed.state == msError and
+      failed.failure.get.classification == "startup-timeout"
     check watches[1].reached(2)
     let states = watches[1].quiet()
-    check watches[1].transitions("w") == @["ready>stopping", "stopping>error"]
+    check watches[1].transitions("w") == @["unloaded>loaded", "loaded>error"]
     var errorRevision = 0'u64
     for i in 0 ..< watches[0].count.load:
       let ev = watches[0].execEv(i)
       if ev.instance == "w":
         errorRevision = ev.execution.revision
-    clientDestroyGate.store(false)
+    slowGate.store(false)
     check waitUntil(
       proc(): bool =
         var later = false
