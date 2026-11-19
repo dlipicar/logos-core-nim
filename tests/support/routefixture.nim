@@ -473,11 +473,13 @@ proc renew(rc: ptr LogosRuntimeControlBinding, key, route: string): RcResult =
     encode(LogosNSRuntimeControlRenewRouteRequest(request_key: key, route: route)).tryGet,
   )
 
-proc close(rc: ptr LogosRuntimeControlBinding, route: string): RcResult =
+proc close(
+    rc: ptr LogosRuntimeControlBinding, route: string, reason = Opt.none(string)
+): RcResult =
   rcCall(
     rc,
     "close_route",
-    encode(LogosNSRuntimeControlCloseRouteRequest(route: route)).tryGet,
+    encode(LogosNSRuntimeControlCloseRouteRequest(route: route, reason: reason)).tryGet,
   )
 
 proc providerAddress(

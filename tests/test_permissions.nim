@@ -996,6 +996,32 @@ when declared(caParity):
       check rc.now(e, "t").perms == @[setting(Quota, quota(10)), ambient()]
       e.finish()
 
+    test "[IMPL-DECISION G170] an execution renewal whose allow narrows an installed permission ends the execution as authority-denied, as a narrowed route renewal is (CA l.940; re-pin P4c M9); intent and origin kept":
+      let e = fixtureEngine(quotaTen())
+      let (_, rc) = e.startClient("c")
+      discard e.create(client(), "t").tryGet
+      # [IMPL] The renewal comes at the end − min(30 s, a third of the
+      # lifetime): 600 ms in, on the real clock.
+      setScript(
+        allow("execute", validMs = 900),
+        Rule(
+          what: "renew-execution",
+          verdict: vAllow,
+          validMs: Everything,
+          permName: Quota,
+          permConstraints: quota(5),
+        ),
+      )
+      check rc.startBy("t") == ecOk
+      check latestBinding().installed ==
+        Opt.some(@[setting(Quota, quota(10)), ambient()])
+      check e.stateIs("t", msUnloaded)
+      let v = e.view("t").tryGet
+      check v.failure.isSome and v.failure.get.kind == fkAuthorityDenied
+      check v.execution.intent == inRequested
+      check v.intentOrigin.instance == "c"
+      e.finish()
+
     test "[CAP-0084] [CAP-0068] [BCP-0049] [BCP-0081] [IMPL-DECISION G282] an allow broadening a permission, leaving one out, or allowing another is an evaluation failure":
       let e = fixtureEngine(quotaTen())
       let (_, rc) = e.startClient("c")

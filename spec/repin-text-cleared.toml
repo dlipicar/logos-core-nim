@@ -1343,3 +1343,570 @@ id = "RUN-1053"
 from = "P4"
 to = "P5"
 reason = "Its successor RUN-1191 (l.3602) is P5's pending unit; P5 retags the test and the inspection item when it claims it."
+
+# P4c: route states, M7, M9 and G169 (DECISIONS I108) ------------------------------------------------------------
+
+[[units]]
+id = "CAP-0305"
+compared = "CA l.577 at 6a4dfa28 against l.569 at 6cac8335: the rejection of `execution_renewal` from an ordinary caller is now NOT_AUTHORISED without dispatch. hostcall.authorityRefusal already answers it so; the test [CAP-0305] in test_runtime_authority checks the code and that nothing reaches the authority."
+
+[[units]]
+id = "IFC-0581"
+compared = "INTERFACE l.395 at 6a4dfa28 against l.375 at 6cac8335: the rejection of a call whose decision retains a marked value is now NOT_AUTHORISED. The engine's retention refusal already answers it so before dispatch; the [IFC-0581] tests in test_wipe_routes check the code on a direct, a local-transport and a hosted route."
+
+[[units]]
+id = "RUN-0289"
+compared = "RUNTIME l.1528 at 6a4dfa28 against l.1454 at 6cac8335: 'reject or quarantine' becomes 'reject'. Nothing quarantines: a malformed record is refused before any registry entry exists (test [RUN-0289] in test_engine)."
+
+[[units]]
+id = "RUN-0326"
+compared = "RUNTIME l.1737 at 6a4dfa28 against l.1646 at 6cac8335: 'runtime API error channel' becomes 'Runtime Control binding error channel', a renaming. A denied Runtime Control operation is NOT_AUTHORISED on the binding that carried it (tests [RUN-0326] in test_engine and test_runtime_authority)."
+
+[[units]]
+id = "RUN-0360"
+compared = "RUNTIME l.1844 at 6a4dfa28 against l.1741 at 6cac8335: expiry joins the ways a route becomes terminal. An expired route is revoked with authority-expired and a later renew_route is NOT_AUTHORISED (test [RUN-0360] [RUN-1164] in test_runtime_authority); closed, revoked and failed routes stay as they were (tests [RUN-0360] in test_routes)."
+
+[[units]]
+id = "RUN-1167"
+decision = "G356"
+compared = "RUNTIME l.3019 at 6cac8335: a resolved continuation whose route id equals another route the consumer holds fails with TRANSPORT_ERROR. No Runtime resolves a continuation before 5-7b (G356)."
+
+[[units]]
+id = "RUN-1174"
+decision = "G355"
+compared = "RUNTIME l.3175 at 6cac8335, the successor of RUN-0599: a facade is ready only when the reflected remote target is ready and satisfies the selected exact contract. No facade exists before 5-7b (G355)."
+
+[[units]]
+id = "RUN-1175"
+decision = "G355"
+compared = "RUNTIME l.3175 at 6cac8335, the successor of RUN-0602: what a facade record keeps of the remote records it maps. No facade exists before 5-7b (G355)."
+
+[[units]]
+id = "RUN-1176"
+decision = "G355"
+compared = "RUNTIME l.3193 at 6cac8335, the successor of RUN-0606: a facade stops reporting ready once the remote module stops, fails, no longer satisfies the exact contract or is unreachable. No facade exists before 5-7b (G355)."
+
+[[stale]]
+id = "RUN-0491"
+compared = "RUNTIME l.2665 at 6a4dfa28 (the host accepts a Runtime-generated id before it is used) has no unit at 6cac8335: l.2587 says the host's protected configuration permitting generation is its acceptance, with no requirement keyword (G192's interim, as built). The inspection item for RUN-0846 drops it; the host's acceptance stays as built (G192)."
+
+[[stale]]
+id = "RUN-0504"
+compared = "RUNTIME l.2741 at 6a4dfa28 (a QUIC profile's ALPN carried by the address or supplied by the profile) is replaced by l.2705 at 6cac8335, which fixes `alpn` to `logos.remote.quic` and lets the profile supply it. No QUIC transport exists (5-12); the claims entry leaves and SPEC-STATUS's E2 row drops it."
+
+[[stale]]
+id = "RUN-0505"
+compared = "RUNTIME l.2750 at 6a4dfa28 is reworded as RUN-1154 (l.2709 at 6cac8335), which P3 cleared by an inspection item. Its claims entry leaves."
+
+[[stale]]
+id = "RUN-0506"
+compared = "RUNTIME l.2750 at 6a4dfa28 (transport authentication authorizes nothing without a deployment profile) is replaced by l.2707-2708 at 6cac8335: the selected remote profile's authentication authorizes no Runtime Control operation or route, with no requirement keyword. Nothing authorizes from transport authentication (RUN-1154's inspection item). Its claims entry leaves."
+
+[[stale]]
+id = "RUN-0507"
+compared = "RUNTIME l.2759 at 6a4dfa28 (QUIC migration changes no identity or authorization) is gone at 6cac8335: l.2712 hands QUIC stream use, datagrams and migration to the selected remote profile (TRANSPORT §8.4, 5-12). The claims entry leaves and SPEC-STATUS's E2 row drops it."
+
+[[stale]]
+id = "RUN-0541"
+compared = "Replaced by RUN-1161 (RUNTIME l.2914 at 6cac8335), which adds the idempotent-replay exception G255 already built. test_transported, test_routes, the RUN claims comment, CONFORMANCE.md, SPEC-STATUS.md and I90 now cite RUN-1161."
+
+[[stale]]
+id = "RUN-0579"
+compared = "Replaced by RUN-1173 (RUNTIME l.3121 at 6cac8335): a provider or session that no longer satisfies the route's exact contract replaces 'incompatible schema change'. A stopped provider still fails its routes (test [RUN-1173] in test_routes); the inspection item for RUN-0167 cites that test."
+
+[[stale]]
+id = "RUN-0599"
+compared = "Replaced by RUN-1174 (RUNTIME l.3175 at 6cac8335), deferred to 5-7b with G355. Its claims entry becomes RUN-1174's."
+
+[[stale]]
+id = "RUN-0602"
+compared = "Replaced by RUN-1175 (RUNTIME l.3175 at 6cac8335), deferred to 5-7b with G355. Its claims entry becomes RUN-1175's."
+
+[[stale]]
+id = "RUN-0606"
+compared = "Replaced by RUN-1176 (RUNTIME l.3193 at 6cac8335), deferred to 5-7b with G355. Its claims entry becomes RUN-1176's."
+
+[[stale]]
+id = "RUN-0623"
+compared = "Replaced by RUN-1179 (RUNTIME l.3327 at 6cac8335), which adds the idempotent-replay exception (G255). The tests in test_transported, the RUN claims comment, CONFORMANCE.md, SPEC-STATUS.md and I90 now cite RUN-1179."
+
+[[stale]]
+id = "RUN-0624"
+compared = "Replaced by RUN-1180 (RUNTIME l.3327 at 6cac8335): the direct route's consumer obtains its handle through `materialize_route` rather than 'the Runtime handle API', the same operation. test_routes and test_transported cite RUN-1180."
+
+[[stale]]
+id = "RUN-0626"
+compared = "Replaced by RUN-1181 (RUNTIME l.3346 at 6cac8335), limited to a route not in a terminal state; a terminal one is TXT-0194. The close_route test in test_routes cites RUN-1181 and TXT-0194."
+
+[[deferred]]
+id = "TXT-0182"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0183"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0184"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0185"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0186"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0187"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0188"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[text]]
+id = "TXT-0142"
+step = "P4"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0396"
+step = "P4"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0150"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0180"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0194"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0395"
+step = "P4"
+kind = "holds"
+site = "tests/test_runtime_authority.nim"
+named = "after policy_changed each route is re-authorized at once with renew-route"
+reading = "A dependent route is re-evaluated with a decision for its bound scope, as for renewal, with no consumer request: the Runtime asks `renew-route` for the route's id and bound access itself (G216), as the interim did."
+compared = "CA l.937 at 6cac8335 against engine.reauthRoutes and engine.startReauth, and the test, where the authority receives `renew-route` for each route after policy_changed with no renew_route call."
+
+[[text]]
+id = "TXT-0228"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/runtime/engine.nim"
+reading = "Reworded as TXT-0166: a consumer that stopped is no longer `consumer-unavailable`; only a failed realization is. routesFollow already closed a stopped consumer's routes and failed a failed one's (G170)."
+compared = "RUNTIME l.2508 at 6a4dfa28 against l.2432 at 6cac8335, and engine.routesFollow."
+
+[[text]]
+id = "TXT-0166"
+step = "P4"
+kind = "reword"
+pair = "TXT-0228"
+site = "src/logos_core/runtime/engine.nim"
+reading = "`consumer-unavailable` now means only that the consumer's realization has failed. routesFollow sets it only for a consumer in `error`; a stopped consumer's routes close with no failure."
+compared = "RUNTIME l.2432 at 6cac8335 against engine.routesFollow (rfConsumerUnavailable only when the consumer's state is msError) and the test [IMPL-DECISION G170] in test_routes that checks both."
+
+[[text]]
+id = "TXT-0257"
+step = "P4"
+kind = "removed"
+reading = "Reworded as TXT-0192: route and instance failures are reported as `failure` classifications, not reason strings."
+compared = "RUNTIME l.3333 at 6a4dfa28 against l.3200 at 6cac8335."
+
+[[text]]
+id = "TXT-0192"
+step = "P4"
+kind = "reword"
+pair = "TXT-0257"
+site = "src/logos_core/runtime/routes.nim"
+reading = "A route's failure is a `failure` record whose code is a defined classification (RouteFailureCode), and an instance's is a classification too; a diagnostic reason never replaces the code."
+compared = "RUNTIME l.3200 at 6cac8335 against routes.nim RouteFailureCode and the route records list_routes and the route events carry (`route_failure`: a `code`, then an optional `message`)."
+
+[[text]]
+id = "TXT-0248"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/runtime/routes.nim"
+reading = "`draining` left the route states at 6cac8335. routes.nim never had a draining state, and the regenerated rc_types (P4a) has no `draining` arm."
+compared = "RUNTIME l.3057 at 6a4dfa28 against l.2959-2963 at 6cac8335, and routes.nim RouteState."
+
+[[text]]
+id = "TXT-0146"
+step = "P4"
+kind = "holds"
+site = "tests/test_routes.nim"
+named = "a single route to a ready provider"
+reading = "`establish` never reads the consumer's `requires`: it takes the providers of the requested contract by `expects` and `selectContract` and decides each route from the consumer, the provider, the contract and the access. The test's consumer (`client` in tests/support/routefixture.nim) declares no `requires` and gets a ready route. That authority policy may use declared requirements (l.1361) is RUN-1106, an inspection item: no policy input takes them."
+compared = "RUNTIME l.1364 at 6cac8335 (no sentence at 6a4dfa28), `establish` and `expects` in src/logos_core/runtime/engine.nim, and the RUN-1106 item in conformance/inspection/RUN.toml."
+
+[[text]]
+id = "TXT-0148"
+step = "P4"
+kind = "reword"
+pair = "TXT-0217"
+site = "src/logos_core/runtime/engine.nim"
+reading = "TXT-0217's rule with 'or continuation' added. `establish` sets `partial` to `all and omitted`: an `all` request is partial when a candidate it decided was hidden or got no route. No continuation is returned before 5-7b (G356): the response's `continuations` is always empty, so a returned ready route is still the only way a provider counts."
+compared = "RUNTIME l.1416 at 6cac8335 against l.1489 at 6a4dfa28, and `establish` in src/logos_core/runtime/engine.nim with the tests 'all-runtime-visible and single selection' (partial and full `all` answers) and 'a single route to a ready provider' (no continuations) in tests/test_routes.nim."
+
+[[text]]
+id = "TXT-0151"
+step = "P4"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "a record the caller may not observe is omitted"
+reading = "Observation authority is decided per record for the method or event that observes it: each observation method asks its own Runtime Control scope (`methodScope`), each event its own (`eventScope`), and a list method's allow is applied to each record with that record's selectors (`admits`). The test shows a record the caller may not observe omitted. This is G161's interim (TF-09), which the text now states, as G161's re-pin P4c bullet records."
+compared = "RUNTIME l.1542 at 6cac8335 (no sentence at 6a4dfa28; G161 read l.3665 there), `methodScope` and `eventScope` in src/logos_core/runtime/observe.nim and `admits` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0152"
+step = "P4"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "a record is shown only when one alternative admits it whole"
+reading = "Under the Capability Authority a record is observable when one allow for the method or event carries a `runtime_control_scope` whose present constraints match the record: `admitsScope` accepts an allowed scope only when it covers the record's exact scope (G226). The test shows a record shown when one alternative covers it and hidden when none covers it whole."
+compared = "RUNTIME l.1543 at 6cac8335 (no sentence at 6a4dfa28), and `admitsScope` and `subjectScope` in src/logos_core/runtime/observe.nim."
+
+[[text]]
+id = "TXT-0153"
+step = "P4"
+kind = "holds"
+site = "tests/test_events.nim"
+named = "activation and each delivery are decided by the authority through its cache"
+reading = "Event subscription activation and event delivery join the list of operations that need an allow. A module event subscription is decided at activation (`subscribe-event`) and each delivery through the cached decision, decided afresh after `policy_changed`; a deny at delivery ends the subscription. Runtime Control events are decided the same way (G161, step 7b). The test shows the activation and each delivery decided by the authority."
+compared = "RUNTIME l.1633 at 6cac8335, a list item added to the list at l.1720-1730 at 6a4dfa28, and the event authorization of G161 (step 7b) and G175."
+
+[[text]]
+id = "TXT-0154"
+step = "P4"
+kind = "reword"
+pair = "TXT-0220"
+reading = "'runtime API error channels' becomes 'Runtime Control binding error channels'. The binding operations that act outside a Runtime Control method answer an authority result in their own LogosResult: `rcMaterializeOp` (same-process `materialize_route`) answers NOT_AUTHORISED with no handle for another consumer's route or a used ticket, and `rcConnectRemoteOp` answers NOT_AUTHORISED for a Runtime it has no enrollment for. There is no other runtime API."
+compared = "RUNTIME l.1655 at 6cac8335 against l.1750 at 6a4dfa28, and `rcMaterializeOp` and `rcConnectRemoteOp` in src/logos_core/runtime/bindings.nim with `materialize` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0155"
+step = "P4"
+kind = "reword"
+pair = "TXT-0223"
+reading = "The sentence naming the extracted `logos_runtime_types.cddl` (TXT-0223) becomes one saying the block is the complete `logos.runtime` supporting schema. Our copy, RNT/9.2.runtime-types.cddl, is recomputed from that block alone, and the Runtime Control contract takes the `logos.runtime` types from it (§9.3.2); nothing defines another `logos.runtime` rule."
+compared = "RUNTIME l.1774 at 6cac8335 against l.1877 at 6a4dfa28, and the §9.2 entry of spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0164"
+step = "P4"
+kind = "reword"
+pair = "TXT-0227"
+reading = "The subject is named. Old 'It uses' followed the error-classification paragraph (old l.1919) in the same paragraph, so 'It' read as that paragraph's subject; the new sentence opens §9.3.2's address table and names the Runtime Control contract. The objects are those of the table, defined by the §9.2 and §9.3.2 CDDL that the generated Runtime Control types follow."
+compared = "RUNTIME l.1841 at 6cac8335 against l.1920 at 6a4dfa28 (after l.1919)."
+
+[[text]]
+id = "TXT-0165"
+step = "P4"
+kind = "holds"
+site = "sdk/tests/test_rc_schema.nim"
+named = "logos.runtime.route_id (§9.2"
+reading = "`route_id` is `tstr .size (1..128)`: the schema test holds the `logos.runtime.route_id` rule in the §9.2 mirror. It is opaque and owned by the Runtime that allocates it: `newRouteId` makes 'route-', a 32-hex-digit prefix drawn per Runtime start and a counter (at most 59 bytes), never reused by that Runtime; `rcMaterializeOp` takes only 1 to 128 UTF-8 bytes. A consumer learns nothing from its form."
+compared = "RUNTIME l.1853 at 6cac8335 (the address table row; the CDDL rule was l.1863 at 6a4dfa28), `newRouteId` in src/logos_core/runtime/engine.nim and `rcMaterializeOp` in src/logos_core/runtime/bindings.nim."
+
+[[text]]
+id = "TXT-0167"
+step = "P4"
+kind = "holds"
+site = "tests/test_permissions.nim"
+named = "host-ambient stands for every facility class, claims no containment"
+reading = "`applied` means the saved settings are enforced where the Runtime admits a use (`saApplied` in src/logos_core/runtime/settings.nim; `epRuntimeAdmission`, the only active enforcement point). The shipped permission definitions claim no containment (`containment` false in src/logos_core/permissions.nim), so `applied` claims none for code the execution path cannot restrict. The test shows host-ambient claiming no containment (G283, CA l.366)."
+compared = "RUNTIME l.2477 at 6cac8335 (no sentence at 6a4dfa28), `saApplied` in src/logos_core/runtime/settings.nim and the definitions in src/logos_core/permissions.nim."
+
+[[text]]
+id = "TXT-0179"
+step = "P4"
+kind = "reword"
+pair = "TXT-0246"
+reading = "'acquires that route through the Runtime handle API' becomes 'obtains a route handle for that route through `materialize_route`'. That is the only way in the code: a same-process consumer materializes through its Runtime Control binding (`rcMaterializeOp`, then `materialize` on the Runtime thread). An out-of-process caller uses a local transport route (a hosted module); remote is 5-7a."
+compared = "RUNTIME l.2916 at 6cac8335 against l.3006 at 6a4dfa28, and `rcMaterializeOp` in src/logos_core/runtime/bindings.nim."
+
+[[text]]
+id = "TXT-0181"
+step = "P4"
+kind = "reword"
+pair = "TXT-0249"
+reading = "The 'runtime API surface' is dropped from where authority inputs arrive. In the code they arrive only through Runtime Control methods and, on a transported route, through the ticket the session presents; `materialize_route` takes no authority input but the route id. Decisions are evaluated through the authority policy and kept per route as before."
+compared = "RUNTIME l.2984 at 6cac8335 against l.3081 at 6a4dfa28, and `rcMaterializeOp` in src/logos_core/runtime/bindings.nim."
+
+[[text]]
+id = "TXT-0189"
+step = "P4"
+kind = "reword"
+pair = "TXT-0251"
+reading = "'them' is named: route establishment and renewal. Modules reach both only through `establish_route` and `renew_route` (`establish` and `renew` in src/logos_core/runtime/engine.nim, served on the Runtime Control binding); nothing else establishes or renews a route."
+compared = "RUNTIME l.3032 at 6cac8335 against l.3129 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0190"
+step = "P4"
+kind = "holds"
+site = "tests/test_transported.nim"
+named = "a ticket opens one handle"
+reading = "A replayed establishment answers without `invocation` (G255), and a consumer that needs a ticket calls `renew_route`, which issues a fresh one (`renew`). The test replays the establishment, finds no invocation, cannot materialize, renews, and then materializes."
+compared = "RUNTIME l.3081 at 6cac8335 (new; l.3080 says a replayed record omits `invocation`), and `renew` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0191"
+step = "P4"
+kind = "reword"
+pair = "TXT-0253"
+reading = "'expected module name' becomes 'selected provider's module name'. The route's material (`record` in src/logos_core/runtime/routes.nim, carried by route records and `route_state_changed`) sets `module` from the route's selected contract, whose module is the provider binding's module that `selectContract` chose. So it already was the selected provider's module name."
+compared = "RUNTIME l.3133 at 6cac8335 against l.3243 at 6a4dfa28, and `record` and `selectContract` in src/logos_core/runtime/routes.nim."
+
+[[text]]
+id = "TXT-0193"
+step = "P4"
+kind = "reword"
+pair = "TXT-0258"
+reading = "'the existing route-revocation policy' becomes 'the in-flight call policy of this section'. §9.3.15 states no in-flight policy: the only one is l.3123 in §9.3.14 (profile or implementation policy), which was the same section before §9.3 was split, so the reading is that one (an editorial remark, I108). Ours is G174 and G260: a revoked route ends an admitted call NOT_AUTHORISED without committing its result, and a transported session answers in-flight Requests NOT_AUTHORISED, then closes. The sentence's case, a disabled listener or export, has no instance here: none can be enabled (G298)."
+compared = "RUNTIME l.3317 at 6cac8335 against l.3459 at 6a4dfa28, l.3123 at 6cac8335, and `endRoute` in src/logos_core/runtime/engine.nim (G174, G260)."
+
+[[text]]
+id = "TXT-0213"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/runtime/engine.nim"
+reading = "Replaced by TXT-0548 (l.1340, P8), which adds `extends` to the expected contract facts. `checkContracts` checks `primary_contract` and `implements` as expected facts against the validated call surface; `extends` is P8's."
+compared = "RUNTIME l.1414 at 6a4dfa28 against l.1340 at 6cac8335, and `checkContracts` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0217"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/runtime/engine.nim"
+reading = "Replaced by TXT-0148 (l.1416), which adds 'or continuation'."
+compared = "RUNTIME l.1489 at 6a4dfa28 against l.1416 at 6cac8335, and `establish` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0220"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0154: 'runtime API error channels' becomes 'Runtime Control binding error channels'."
+compared = "RUNTIME l.1750 at 6a4dfa28 against l.1655 at 6cac8335."
+
+[[text]]
+id = "TXT-0223"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0155: §9.2 names no extracted `logos_runtime_types.cddl`; its block is the complete `logos.runtime` schema. Our mirror is extracted from the text by spec/mirrors.toml, not taken from a published artifact."
+compared = "RUNTIME l.1877 at 6a4dfa28 against l.1774 at 6cac8335, and spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0224"
+step = "P4"
+kind = "removed"
+reading = "Precedence over an extracted artifact goes with the artifact sentences (TXT-0223, TXT-0225): 6cac8335 names no extracted CDDL file in RUNTIME. The same sentence at old l.1895 goes too. Our mirrors are recomputed from the spec text, so the text governs by construction."
+compared = "RUNTIME l.1878 and l.1895 at 6a4dfa28 against l.1774 and l.1788 at 6cac8335 (no 'extracted' left in RUNTIME)."
+
+[[text]]
+id = "TXT-0225"
+step = "P4"
+kind = "removed"
+reading = "`logos_runtime_control.cddl` is no longer named; l.1788 keeps 'The CDDL in this section defines the normative machine-readable contract'. Our §9.3.2 and §9.3.7 mirrors come from that CDDL (spec/mirrors.toml)."
+compared = "RUNTIME l.1894 at 6a4dfa28 against l.1788 at 6cac8335."
+
+[[text]]
+id = "TXT-0227"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0164, which names the Runtime Control contract as the subject."
+compared = "RUNTIME l.1920 at 6a4dfa28 against l.1841 at 6cac8335."
+
+[[text]]
+id = "TXT-0232"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/transport/tls/stream.nim"
+reading = "Successors TXT-0108 and TXT-0109 (l.2707-2708, cleared in P3): the selected remote profile authenticates the enrolled Runtime identity before the Hello, and that authentication authorizes nothing more. The TLS stream's handshake yields the peer's enrolled identity (`establish`, `peer`) and grants nothing; QUIC is 5-12 (I107)."
+compared = "RUNTIME l.2750-2751 at 6a4dfa28 against l.2707-2708 at 6cac8335, and `establish` and `peer` in src/logos_core/transport/tls/stream.nim."
+
+[[text]]
+id = "TXT-0233"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0109 (l.2708): authentication does not authorize Runtime Control operations or ordinary module routes, or establish package identity, schema compatibility or route authority."
+compared = "RUNTIME l.2752-2753 at 6a4dfa28 against l.2708 at 6cac8335."
+
+[[text]]
+id = "TXT-0236"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0111 (l.2712): the selected remote profile governs QUIC stream use under TRANSPORT §8.4, which carries one provider session on the first client-initiated bidirectional stream (TRANSPORT l.1300-1301). No QUIC before 5-12 (I107)."
+compared = "RUNTIME l.2759-2760 at 6a4dfa28 against l.2712 at 6cac8335 and TRANSPORT l.1300-1302."
+
+[[text]]
+id = "TXT-0237"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0111 (l.2712) and TRANSPORT l.1302: the QUIC profile uses no QUIC datagrams. No QUIC before 5-12 (I107)."
+compared = "RUNTIME l.2761-2762 at 6a4dfa28 against l.2712 at 6cac8335 and TRANSPORT l.1302."
+
+[[text]]
+id = "TXT-0239"
+step = "P4"
+kind = "removed"
+reading = "Successors RUN-1155 (l.2713: Runtime policy MAY prohibit migration), an inspection item, and TRANSPORT l.1309-1312 (migration only after path validation, keeping the Runtime identity, provider and route bindings). No QUIC before 5-12 (I107)."
+compared = "RUNTIME l.2765 at 6a4dfa28 against l.2713 at 6cac8335 and TRANSPORT l.1309-1312."
+
+[[text]]
+id = "TXT-0240"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0175 (l.2751, cleared in P3): the `runtime_instance_id` in Runtime Control records does not itself authenticate the peer. The clause on deployment or enrollment policy goes; enrollment is §9.3.7."
+compared = "RUNTIME l.2808-2809 at 6a4dfa28 against l.2751 at 6cac8335."
+
+[[text]]
+id = "TXT-0241"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0176 (l.2752, cleared in P3): a successful Hello for `logos_runtime_control` establishes a compatible endpoint schema after the authentication."
+compared = "RUNTIME l.2810-2812 at 6a4dfa28 against l.2752 at 6cac8335."
+
+[[text]]
+id = "TXT-0242"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0177 (l.2753, cleared in P3), the same sentence with 'Runtime Control operations' for 'runtime-control operations'."
+compared = "RUNTIME l.2813 at 6a4dfa28 against l.2753 at 6cac8335."
+
+[[text]]
+id = "TXT-0243"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0553 (l.2852, P8), which adds the extended contract. `record` sets `expected_contract` from the route's selected contract, primary or implemented; `extends` is P8's."
+compared = "RUNTIME l.2935 at 6a4dfa28 against l.2852 at 6cac8335, and `record` in src/logos_core/runtime/routes.nim."
+
+[[text]]
+id = "TXT-0244"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0178 (l.2896, cleared in P3), which names `route-timeout` among the earlier failures."
+compared = "RUNTIME l.2984 at 6a4dfa28 against l.2896 at 6cac8335."
+
+[[text]]
+id = "TXT-0246"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0179: the Runtime handle API becomes `materialize_route`."
+compared = "RUNTIME l.3006 at 6a4dfa28 against l.2916 at 6cac8335."
+
+[[text]]
+id = "TXT-0249"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0181, which drops the 'runtime API surface'."
+compared = "RUNTIME l.3081 at 6a4dfa28 against l.2984 at 6cac8335."
+
+[[text]]
+id = "TXT-0250"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0554 (l.2995, P8): the Runtime validates that the provider exposes the selected contract commitment as its primary, implemented or extended contract. The code already selects by commitment, not by name and namespace: `expects` takes candidates by root and `selectContract` picks the contract; `extends` is P8's."
+compared = "RUNTIME l.3097 at 6a4dfa28 against l.2995 at 6cac8335, `expects` in src/logos_core/runtime/engine.nim and `selectContract` in src/logos_core/runtime/routes.nim."
+
+[[text]]
+id = "TXT-0251"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0189, which names what 'them' was: route establishment and renewal."
+compared = "RUNTIME l.3129 at 6a4dfa28 against l.3032 at 6cac8335."
+
+[[text]]
+id = "TXT-0253"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0191: 'expected module name' becomes 'selected provider's module name'."
+compared = "RUNTIME l.3243 at 6a4dfa28 against l.3133 at 6cac8335."
+
+[[text]]
+id = "TXT-0258"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0193: 'the existing route-revocation policy' becomes 'the in-flight call policy of this section'."
+compared = "RUNTIME l.3459 at 6a4dfa28 against l.3317 at 6cac8335."
+
+[[text]]
+id = "TXT-0262"
+step = "P4"
+kind = "removed"
+reading = "`close_route`'s in-flight sentence becomes l.3351 in §9.3.16, the same text as TXT-0193 (l.3317), which the diff listed once; its policy is l.3123 in §9.3.14, as for TXT-0193. Our close drains (G174, G260): admitted calls complete with their results and new ones are NOT_READY, as the test 'close_route drains' in tests/test_transported.nim shows."
+compared = "RUNTIME l.3490 at 6a4dfa28 against l.3351 at 6cac8335, and `closeRoute` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0264"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0196 (l.3373, P5, behaviour): the event reports each execution-revision change, adding failure, selection and realization changes. P5 builds and tests it."
+compared = "RUNTIME l.3509 at 6a4dfa28 against l.3373 at 6cac8335."
+
+[[text]]
+id = "TXT-0361"
+step = "P4"
+kind = "holds"
+site = "tests/test_runtime_authority.nim"
+named = "a routed call naming another consumer"
+reading = "A request naming a consumer other than the authenticated one is refused at the Runtime boundary before any evaluation: `authorityRefusal` answers NOT_AUTHORISED without dispatch, and `refusal` keeps it as `azRefused` with source `psBoundary`, neither a deny nor a failed evaluation. Nothing reaches the Capability Authority, so it writes no audit record. The test shows the refusal kept, while a matching call reaches the authority."
+compared = "CAP l.94 at 6cac8335 (no sentence at 6a4dfa28), `authorityRefusal` in src/logos_core/runtime/invoke.nim and `refusal` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0572"
+step = "P4"
+kind = "holds"
+site = "sdk/tests/test_rc_schema.nim"
+named = "the Runtime Control contract no longer defines or imports the enrollment records"
+reading = "Read sentence by sentence: §9.3.1 to §9.3.16 keep old §9.3's sentences in order, split at paragraph breaks (one exception, §9.3.1/§9.3.2, which TXT-0164's named subject resolves). Each subsection opening names its subject, and each 'below', 'above', 'these' and 'this section' resolves in its own subsection or the one it names, except 'the in-flight call policy of this section' at l.3317 (§9.3.15) and l.3351 (§9.3.16), whose policy is l.3123 in §9.3.14 (TXT-0193, TXT-0262; an editorial remark, I108). The split the code depends on, the enrollment CDDL moved out of the Runtime Control contract into §9.3.7, the test shows."
+compared = "RUNTIME §9.3 to §9.3.16 (l.1783-3355) at 6cac8335 against §9.3 (l.1888-3492) at 6a4dfa28, and the §9.3.2 and §9.3.7 entries of spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0195"
+step = "P4"
+kind = "holds"
+site = "tests/test_routes.nim"
+named = "close_route's reason is diagnostic"
+reading = "`closeRoute` never reads `reason`: nothing records it, sends it to the provider or lets it choose the outcome, which the authority decision, the route's existence, readiness and the route's state decide alone. [IMPL] The Runtime keeps no copy for observation or audit: no route record, event or audit field carries one at 6cac8335. The test closes one route with a reason and one without and gets the same answer but for the route id, then closes again with another reason and gets the same bytes, every route closed with no failure."
+compared = "RUNTIME l.3353 at 6cac8335 (no sentence at 6a4dfa28), and `closeRoute` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0199"
+step = "P4"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "a name-only selection needs an allow whose scope names no instance or provider"
+reading = "A request that omits both selectors is decided first over its name scope, `modules: [name]` with no instances or providers (G161's interim, which l.3535 now states), and `admitsScope` takes an allowed scope only when it covers that scope whole (G226). So an allowed scope naming instances or providers refuses the name-only request: the Capability Authority may only narrow (CA l.565-567), and a narrower scope does not cover the name scope. Under the Capability Authority the test reads the name scope `get_readiness` asks for, `modules: [meter_module]` alone, and shows allows narrowed to the instance or to its provider refusing the name-only request while the instance one admits the exact selector."
+compared = "RUNTIME l.3535 at 6cac8335 (no sentence at 6a4dfa28; l.3532-3534 kept), the name-scope decision in `selectLifecycle` (src/logos_core/runtime/engine.nim) and `admitsScope` in src/logos_core/runtime/observe.nim."
+
+[[moved]]
+id = "TXT-0269"
+from = "P4"
+to = "P5"
+reason = "Its replacement, TXT-0203 (l.3605), adds `configuration-missing`, `static-binding-mismatch` and `prerequisite-unavailable` to the initial classifications and is P5's; the old list is not false until P5 builds them."

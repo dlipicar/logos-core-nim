@@ -526,7 +526,8 @@ proc keepsInstalled*(
 ): bool =
   ## [I93; plan §2.6] A renewal's allow keeps what admission installed: each
   ## installed setting is contained in an allowed permission scope of its
-  ## name. Otherwise it narrowed the execution and ends it (`eeRevoked`).
+  ## name. Otherwise it narrowed the execution and ends it (`eeDenied`, re-pin
+  ## P4c M9).
   if x.source != psAuthority:
     return true
   let allowed = x.allowedScopes

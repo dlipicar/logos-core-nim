@@ -242,7 +242,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
   teardown:
     leftover()
 
-  ltTest "[RUN-0541] [RUN-0623] [BCP-0028] [IMPL-DECISION G254] [IMPL-DECISION G257] a local-transport route's answer carries the invocation descriptor; the endpoint is private; renewal issues a fresh ticket":
+  ltTest "[RUN-1161] [RUN-1179] [BCP-0028] [IMPL-DECISION G254] [IMPL-DECISION G257] a local-transport route's answer carries the invocation descriptor; the endpoint is private; renewal issues a fresh ticket":
     let e = fixtureEngine(transported())
     let dir = shortBase / ("e" & $engines)
     discard e.started(meter())
@@ -272,7 +272,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check again.get.ticket != inv.ticket
     e.finish()
 
-  ltTest "[RUN-0541] [IMPL-DECISION G254] a direct route, or one no rule selects, has no invocation descriptor":
+  ltTest "[RUN-1161] [RUN-1180] [IMPL-DECISION G254] a direct route, or one no rule selects, has no invocation descriptor":
     block:
       let e = fixtureEngine(config())
       discard e.started(meter())
@@ -292,7 +292,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
       check r.recordOf.invocation.isNone
       e.finish()
 
-  ltTest "[RUN-0543] [RUN-0544] [TRN-0195] [CAP-0257] [IMPL-DECISION G255] no list, record, retained answer, diagnostic or stored file holds a ticket; a replay answers without the invocation":
+  ltTest "[RUN-0543] [RUN-0544] [RUN-1170] [TRN-0195] [CAP-0257] [IMPL-DECISION G255] no list, record, retained answer, diagnostic or stored file holds a ticket; a replay answers without the invocation":
     var cfg = transported()
     let root = cfg.workDir
     cfg.storeDir = Opt.some(root / "store") # the persistent Runtime state (I82)
@@ -406,7 +406,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check o.refusal(fresh) == ecNotAuthorised
     e.finish()
 
-  ltTest "[TRN-0153] [RUN-0623] [LDR-0021] [IMPL-DECISION G257] an unused ticket dies with its route; the Runtime-served endpoint of a direct provider goes with its realization and a restart serves a new one":
+  ltTest "[TRN-0153] [RUN-1179] [LDR-0021] [IMPL-DECISION G257] an unused ticket dies with its route; the Runtime-served endpoint of a direct provider goes with its realization and a restart serves a new one":
     let e = fixtureEngine(transported())
     let meterView = e.started(meter())
     let (_, rc) = e.startClient()
@@ -683,7 +683,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     )
     e.finish()
 
-  ltTest "[RUN-0623] [IMPL-DECISION G257] an endpoint that cannot be created fails the establishment MODULE_ERROR and makes no route":
+  ltTest "[RUN-1179] [IMPL-DECISION G257] an endpoint that cannot be created fails the establishment MODULE_ERROR and makes no route":
     # 120 bytes of directory: no socket path under it fits `sun_path`.
     let long = shortBase / repeat('d', 120)
     let e = fixtureEngine(transported(dir = long))

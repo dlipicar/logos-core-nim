@@ -945,7 +945,7 @@ suite "run.authority: route validity (RUNTIME l.3157-3190; TL-03 interim)":
     check renewed.decision_id != rec.decision_id
     e.finish()
 
-  test "[RUN-0550] [CAP-0050] [CAP-0342] [RUN-0836] [RUN-0838] at expires_at the route is revoked with authority-expired: calls and observers get NOT_AUTHORISED and it cannot be renewed":
+  test "[RUN-0550] [RUN-1164] [RUN-0360] [CAP-0050] [CAP-0342] [RUN-0836] [RUN-0838] at expires_at the route is revoked with authority-expired: calls and observers get NOT_AUTHORISED and it cannot be renewed":
     let (e, orch) = ready()
     setScript(allow("establish-route", validMs = 1000))
     let route = orch.routeId("k")
@@ -1219,14 +1219,14 @@ proc isReady(e: Engine, route: string): bool =
   e.routeState(route).state.kind == LogosNSRuntimeControlRouteStateKind.Ready
 
 suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
-  test "[RUN-0567] [RUN-0946] [CAP-0174] [CAP-0189] a renewal narrowed below the bound access revokes with authority-revoked, a denied one with authority-denied; a failed one leaves the route ready and unusable until a later decision; a replay renews nothing":
+  test "[RUN-0567] [RUN-0946] [RUN-1171] [CAP-0174] [CAP-0189] [CAP-0433] [CAP-0434] [TXT-0142] a renewal narrowed below the bound access revokes with authority-denied, as a denied one does (CA l.940); a failed one leaves the route ready and unusable until a later decision; a replay renews nothing":
     let (e, orch) = ready()
     var narrowed = allow("renew-route")
     narrowed.narrowMethods = Opt.some(@[declRoot("meter.read")])
     let ra = orch.routeId("a")
     setScript(narrowed)
     check orch.renew("ra", ra).code == ecNotAuthorised
-    check e.ended(ra, "authority-revoked")
+    check e.ended(ra, "authority-denied")
     let rb = orch.routeId("b")
     setScript(rule(vDeny, "renew-route"))
     check orch.renew("rb", rb).code == ecNotAuthorised
@@ -1257,7 +1257,7 @@ suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
     h.release()
     e.finish()
 
-  test "[CAP-0188] [CAP-0189] [CAP-0174] [CAP-0173] after policy_changed each route is re-authorized at once with renew-route while its operations wait; an allow keeps it without extending expires_at; a deny or narrowing revokes it; a failure leaves it ready and unusable until a later re-authorization succeeds":
+  test "[CAP-0188] [CAP-0189] [CAP-0174] [CAP-0173] [CAP-0432] [CAP-0433] [TXT-0396] after policy_changed each route is re-authorized at once with renew-route while its operations wait; an allow keeps it without extending expires_at; a deny or narrowing revokes it with authority-denied (CA l.940); a failure leaves it ready and unusable until a later re-authorization succeeds":
     let (e, orch) = ready()
     let c1 = e.client("m1")
     let c2 = e.client("m2")
@@ -1298,13 +1298,13 @@ suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
     # A later re-authorization makes the failed one usable again.
     setScript()
     check h3.read(1).isOk
-    # A shorter valid_until shortens it; a narrowed allow revokes.
+    # A shorter valid_until shortens it; a narrowed allow revokes, as a deny.
     var narrowed = allow("renew-route", consumer = "m1")
     narrowed.narrowMethods = Opt.some(@[declRoot("meter.read")])
     setScript(narrowed, allow("renew-route", consumer = "m3", validMs = 1000))
     let now = uint64(clk.wallMs)
     check publish(PolicyChangedName, policyChanged(1, 2))
-    check e.ended(r1, "authority-revoked")
+    check e.ended(r1, "authority-denied")
     check waitUntil(
       proc(): bool =
         e.routeState(r3).expires_at == Opt.some(now + 1000)
@@ -1386,7 +1386,7 @@ proc evalReq(e: Engine, consumer: string, renewal = false): seq[byte] =
   ).tryGet
 
 suite "run.authority: routed calls to the authority (CA l.88-91, l.579; S8b-1 interim)":
-  test "[CAP-0013] [CAP-0305] [CAP-0248] [CAP-0306] [RUN-0324] [RUN-0852] a routed call naming another consumer, or an evaluate carrying execution_renewal, is NOT_AUTHORISED without dispatch and kept as a refusal; a matching call reaches the authority with a module caller":
+  test "[CAP-0013] [CAP-0429] [CAP-0305] [CAP-0248] [CAP-0306] [RUN-0324] [RUN-0852] a routed call naming another consumer, or an evaluate carrying execution_renewal, is NOT_AUTHORISED without dispatch and kept as a refusal; a matching call reaches the authority with a module caller":
     let (e, orch) = ready()
     let caSet = block:
       let d = caDocuments()

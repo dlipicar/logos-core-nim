@@ -591,7 +591,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     e.finish()
 
 suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
-  test "[RUN-0557] [RUN-0943] [RUN-0542] [RUN-0624] [RUN-0184] [RUN-0536] [RUN-0593] [RUN-0782] [RUN-0942] a single route to a ready provider (§9.3 l.3135-3146)":
+  test "[RUN-0557] [RUN-0943] [RUN-0542] [RUN-1180] [RUN-0184] [RUN-0536] [RUN-0593] [RUN-0782] [RUN-0942] a single route to a ready provider (§9.3 l.3135-3146)":
     let e = fixtureEngine(config())
     let m = e.started(meter())
     let (c, rc) = e.startClient()
@@ -613,7 +613,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check rec.decision_id.isSome
     check rec.failure.isNone
     when declared(transportParity):
-      # [G254; RUN-0541] A transported route's answer carries its invocation;
+      # [G254; RUN-1161] A transported route's answer carries its invocation;
       # its record never does (RUN-0543).
       check rec.invocation.isSome
       var kept = rec
@@ -624,12 +624,12 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
       check e.routes().mapIt(encode(it).tryGet) == @[encode(rec).tryGet]
     e.finish()
 
-  test "[IMPL-DECISION G169] [RUN-0556] [RUN-0188] [RUN-0121] [RUN-0546] establishment failures":
+  test "[IMPL-DECISION G169] [RUN-1169] [RUN-0556] [RUN-0188] [RUN-0121] [RUN-0546] establishment failures":
     let e = fixtureEngine(config())
     let idle = e.create(meter()).tryGet
     let (_, rc) = e.startClient()
     var zero: Digest
-    # [G169 interim (TF-16)] A `discover` allow, and no provider offers it.
+    # [G169; l.3063] A `discover` allow, and no provider offers it.
     check rc.establish("a", root = zero).code == ecNotReady
     # An allowed provider that is not ready.
     check rc.establish("b").code == ecNotReady
@@ -695,7 +695,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check up.routesOf.routes[0].access == scope
     e.finish()
 
-  test "[IMPL-DECISION G52] [IMPL-DECISION G169] [RUN-0162] [RUN-0850] [RUN-0186] [RUN-0278] [RUN-0553] [RUN-0563] [RUN-0564] [RUN-0573] [CAP-0041] authorization at establishment (§9 l.1626, l.3138; G52)":
+  test "[IMPL-DECISION G52] [IMPL-DECISION G169] [RUN-1168] [RUN-0162] [RUN-0850] [RUN-0186] [RUN-0278] [RUN-0553] [RUN-0563] [RUN-0564] [RUN-0573] [CAP-0041] authorization at establishment (§9 l.1626, l.3138; G52)":
     for rule in [
       deny(action = Opt.some(aaRuntimeControl), operation = "establish_route"),
       deny(action = Opt.some(aaRoute)),
@@ -712,7 +712,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     let (_, rc) = e.startClient()
     check rc.establish("k", all = true).code == ecNotAuthorised
     var zero: Digest
-    # [G169 interim (TF-16)] No route allow and no `discover` allow.
+    # [G169; l.3060-3061] No route allow and no `discover` allow.
     check rc.establish("z", root = zero).code == ecNotAuthorised
     check rc.establish("k").code == ecOk
     e.finish()
@@ -760,6 +760,53 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check chosen.routes[0].target_provider.provider == b.providerId
     e.finish()
 
+  test "[RUN-1107] [TXT-0150] [RUN-1168] [RUN-1169] [IMPL-DECISION G169] a single request never selects a provider its route decision hides: the first allowed candidate, ready ones first; none allowed is NOT_AUTHORISED, an allowed one not ready NOT_READY (l.1423-1424, l.3060-3063)":
+    # A rule that matches nothing keeps the internal policy in the parity
+    # passes; `setPolicyForTests` then names the providers the engine made.
+    let e = fixtureEngine(config(denying(deny(operation = "no-such-operation"))))
+    let idle = e.create(meter()).tryGet
+    let a = e.started(meter())
+    let b = e.started(meter())
+    let (_, rc) = e.startClient()
+    proc hide(outcome: AuthzOutcome, providers: varargs[string]) =
+      var rules: seq[AuthzRule]
+      for p in providers:
+        rules.add(deny(action = Opt.some(aaRoute), target = p, outcome = outcome))
+      check e.setPolicyForTests(denying(rules)).isOk
+
+    proc names(r: RcResult, provider: string): bool =
+      ## `provider` appears anywhere in the answer.
+      let text = (r.response & r.detail).mapIt(char(it)).join("") & r.message
+      provider in text
+
+    # Ready ones first: `a`, though created after `idle`.
+    hide(azDeny)
+    let first = rc.establish("k1")
+    check first.code == ecOk
+    check first.routesOf.routes[0].target_provider.provider == a.providerId
+    # `a` hidden by a deny, then by a failed evaluation: `b`, and the response
+    # names only `b`.
+    for (key, outcome) in [("k2", azDeny), ("k3", azEvaluationFailed)]:
+      hide(outcome, a.providerId)
+      let r = rc.establish(key)
+      check r.code == ecOk
+      check r.routesOf.routes.len == 1
+      check r.routesOf.routes[0].target_provider.provider == b.providerId
+      check not r.names(a.providerId)
+    # Every ready one hidden, the idle one allowed: NOT_READY.
+    hide(azDeny, a.providerId, b.providerId)
+    let waiting = rc.establish("k4")
+    check waiting.code == ecNotReady
+    check not waiting.names(idle.providerId)
+    # Every one hidden: NOT_AUTHORISED, naming none.
+    hide(azDeny, a.providerId, b.providerId, idle.providerId)
+    let none = rc.establish("k5")
+    check none.code == ecNotAuthorised
+    check none.message == "not authorised"
+    check not none.names(a.providerId) and not none.names(b.providerId)
+    check e.routes().len == 3
+    e.finish()
+
   test "[RUN-0570] [RUN-0625] [RUN-0360] renew_route (§9.3 l.3183-3190, l.3471-3484)":
     let e = fixtureEngine(
       config(
@@ -783,7 +830,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check rc.renew("r3", first.route).code == ecNotReady
     e.finish()
 
-  test "[IMPL-DECISION G170] [RUN-0887] [RUN-0836] [RUN-0990] [RUN-0580] [IFC-0662] a denied renewal revokes the route [IMPL-DECISION G170] (TF-17)":
+  test "[IMPL-DECISION G170] [RUN-1171] [TXT-0180] [TXT-0194] [RUN-0887] [RUN-0836] [RUN-0990] [RUN-0580] [IFC-0662] a denied renewal revokes the route [IMPL-DECISION G170] (TF-17)":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
@@ -805,15 +852,18 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check seen.code.load == ord(ecNotAuthorised)
     check h.read(5).error.code == ecNotAuthorised
     check rc.renew("r2", first.route).code == ecNotAuthorised
-    # A terminal route is reported as it is.
+    # A terminal route is reported as it is: closing it changes neither its
+    # state nor its failure record (l.3350).
     let closed = rc.close(first.route)
     check closed.code == ecOk
     check LogosNSRuntimeControlCloseRouteResponse.decode(closed.response).tryGet.state.kind ==
       LogosNSRuntimeControlRouteStateKind.Revoked
+    check e.routes()[0].state.kind == LogosNSRuntimeControlRouteStateKind.Revoked
+    check e.routes()[0].failure.get.code == "authority-denied"
     h.release()
     e.finish()
 
-  test "[IMPL-DECISION G170] [RUN-0626] close_route (§9.3 l.3486-3492)":
+  test "[IMPL-DECISION G170] [RUN-1181] [TXT-0194] close_route (§9.3 l.3486-3492)":
     let e = fixtureEngine(
       config(
         denying(
@@ -841,6 +891,30 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check refused.close(theirs).code == ecNotAuthorised
     check other.renew("o", theirs).code == ecNotAuthorised
     check other.close(theirs).code == ecOk
+    for rec in e.routes():
+      check rec.state.kind == LogosNSRuntimeControlRouteStateKind.Closed
+      check rec.failure.isNone
+    e.finish()
+
+  test "[IMPL-DECISION G170] [RUN-1181] close_route's reason is diagnostic: it changes neither the answer nor the route (§9.3.16 l.3353)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient("c1")
+    let plain = rc.routeId("k1")
+    let reasoned = rc.routeId("k2")
+    let a = rc.close(plain)
+    let b = rc.close(reasoned, Opt.some("operator request"))
+    check a.code == ecOk and b.code == ecOk
+    let closed = LogosNSRuntimeControlCloseRouteResponse.decode(b.response).tryGet
+    check closed.route == reasoned
+    check closed.state.kind == LogosNSRuntimeControlRouteStateKind.Closed
+    # The same answer as without a reason, but for the route id.
+    check encode(
+      LogosNSRuntimeControlCloseRouteResponse(route: plain, state: closed.state)
+    ).tryGet == a.response
+    # Closing again with another reason answers the same bytes.
+    let again = rc.close(reasoned, Opt.some("another reason"))
+    check again.code == ecOk and again.response == b.response
     for rec in e.routes():
       check rec.state.kind == LogosNSRuntimeControlRouteStateKind.Closed
       check rec.failure.isNone
@@ -1320,7 +1394,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     e.finish()
 
 suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9.3)":
-  test "[RUN-1118] [RUN-1122] [RUN-0165] [RUN-0579] [RUN-0580] [RUN-0360] [RUN-0574] [RUN-0841] [RUN-0887] [IFC-0665] a stopped provider fails its routes":
+  test "[RUN-1118] [RUN-1122] [RUN-0165] [RUN-1173] [RUN-0580] [RUN-0360] [TXT-0180] [RUN-0574] [RUN-0841] [RUN-0887] [IFC-0665] a stopped provider fails its routes":
     let e = fixtureEngine(config())
     let m = e.started(meter())
     let (_, rc) = e.startClient()

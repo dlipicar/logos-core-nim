@@ -20,7 +20,7 @@
 #                     rides on one (same spec and section, same work item), with a [[deferred]] record in
 #                     spec/repin-text-cleared.toml naming the unit and a decision row (DECISIONS I108)
 
-closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
+closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
 
 [mirror]
 "PKG/4.manifest.cddl" = "P7"
@@ -39,12 +39,8 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "BCP-0102" = "P9"
 "BCP-0103" = "P9"
 "BCP-0104" = "P6"
-"CAP-0429" = "P4"
 "CAP-0430" = "P6"
 "CAP-0431" = "P6"
-"CAP-0432" = "P4"
-"CAP-0433" = "P4"
-"CAP-0434" = "P4"
 "CAP-0435" = "P6"
 "CAP-0436" = "P6"
 "CAP-0437" = "P6"
@@ -223,27 +219,10 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-1103" = "P5"
 "RUN-1104" = "P8"
 "RUN-1105" = "P8"
-"RUN-1106" = "P4"
-"RUN-1107" = "P4"
 "RUN-1108" = "P5"
 "RUN-1109" = "P5"
 "RUN-1110" = "P5"
 "RUN-1142" = "P5"
-"RUN-1161" = "P4"
-"RUN-1164" = "P4"
-"RUN-1165" = "P4"
-"RUN-1167" = "P4"
-"RUN-1168" = "P4"
-"RUN-1169" = "P4"
-"RUN-1170" = "P4"
-"RUN-1171" = "P4"
-"RUN-1173" = "P4"
-"RUN-1174" = "P4"
-"RUN-1175" = "P4"
-"RUN-1176" = "P4"
-"RUN-1179" = "P4"
-"RUN-1180" = "P4"
-"RUN-1181" = "P4"
 "RUN-1183" = "P5"
 "RUN-1184" = "P5"
 "RUN-1190" = "P5"
@@ -261,14 +240,12 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-1202" = "P5"
 
 [units.changed]
-"CAP-0305" = "P4"
 "CAP-0393" = "P6"
 "CAP-0422" = "P6"
 "IFC-0226" = "P8"
 "IFC-0230" = "P8"
 "IFC-0245" = "P8"
 "IFC-0246" = "P8"
-"IFC-0581" = "P4"
 "PKG-0043" = "P7"
 "PKG-0044" = "P7"
 "PKG-0048" = "P7"
@@ -290,9 +267,6 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-0258" = "P8"
 "RUN-0265" = "P8"
 "RUN-0267" = "P8"
-"RUN-0289" = "P4"
-"RUN-0326" = "P4"
-"RUN-0360" = "P4"
 "RUN-0696" = "P5"
 "RUN-0707" = "P5"
 
@@ -310,19 +284,6 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-0109" = "P5"
 "RUN-0111" = "P5"
 "RUN-0268" = "P8"
-"RUN-0491" = "P4"
-"RUN-0504" = "P4"
-"RUN-0505" = "P4"
-"RUN-0506" = "P4"
-"RUN-0507" = "P4"
-"RUN-0541" = "P4"
-"RUN-0579" = "P4"
-"RUN-0599" = "P4"
-"RUN-0602" = "P4"
-"RUN-0606" = "P4"
-"RUN-0623" = "P4"
-"RUN-0624" = "P4"
-"RUN-0626" = "P4"
 "RUN-0630" = "P5"
 "RUN-0639" = "P5"
 "RUN-0675" = "P5"
@@ -345,12 +306,23 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-1124" = "5-7a"
 "RUN-1125" = "5-7a"
 "RUN-1163" = "5-7a"
+"RUN-1167" = "5-7b"
+"RUN-1174" = "5-7b"
+"RUN-1175" = "5-7b"
+"RUN-1176" = "5-7b"
 "TRN-0397" = "5-7a"
 "TRN-0398" = "5-7a"
 "TRN-0401" = "5-12"
 "TRN-0402" = "5-12"
 "TRN-0403" = "5-12"
 "TXT-0163" = "5-7a"
+"TXT-0182" = "5-7b"
+"TXT-0183" = "5-7b"
+"TXT-0184" = "5-7b"
+"TXT-0185" = "5-7b"
+"TXT-0186" = "5-7b"
+"TXT-0187" = "5-7b"
+"TXT-0188" = "5-7b"
 
 [[text]]
 id = "TXT-0168"
@@ -375,148 +347,6 @@ class = "todo"
 what = "The Host Embedding API does not disclose a generated id."
 
 [[text]]
-id = "TXT-0361"
-step = "P4"
-spec = "CAP"
-line = "94"
-side = "new"
-section = "§2"
-source = "n.50"
-class = "todo"
-what = "Such a rejection is an invocation-authorization failure at the Runtime boundary, not a policy denial or evaluation failure, and requires no Capability Authority audit record."
-
-[[text]]
-id = "TXT-0395"
-step = "P4"
-spec = "CAP"
-line = "937"
-side = "new"
-section = "§8"
-source = "n.56"
-class = "todo"
-what = "Runtime re-evaluates a dependent route by requesting a decision for the route's bound scope as for renewal, without a consumer request."
-
-[[text]]
-id = "TXT-0396"
-step = "P4"
-spec = "CAP"
-line = "939"
-side = "new"
-section = "§8"
-source = "n.56, review"
-class = "behaviour"
-what = "An allow decision covering the bound scope keeps the route, replaces its `decision_id`, and sets `expires_at` to the earlier of its current value and the new validity end."
-
-[[text]]
-id = "TXT-0142"
-step = "P4"
-spec = "CAP"
-line = "940"
-side = "new"
-source = "M9"
-class = "behaviour"
-what = "An allow narrower than the bound scope ends the route as revoked with authority-denied"
-
-[[text]]
-id = "TXT-0146"
-step = "P4"
-spec = "RUN"
-line = "1364"
-side = "new"
-section = "§8"
-source = "n.153"
-class = "todo"
-guard = true
-what = "Absence of a contract from `requires` does not by itself cause Runtime to reject `establish_route`."
-
-[[text]]
-id = "TXT-0148"
-step = "P4"
-spec = "RUN"
-line = "1416"
-side = "new"
-section = "§8"
-source = "n.155"
-class = "todo"
-guard = true
-what = "The response's `partial` field is `false` only when every provider visible through that discovery decision has a returned ready route or continuation."
-
-[[text]]
-id = "TXT-0150"
-step = "P4"
-spec = "RUN"
-line = "1423-1424"
-side = "new"
-source = "M7"
-class = "behaviour"
-what = "A single request treats a provider whose route decision is a denial as hidden, selects among the others, and fails without disclosure when none is left (RG-11)"
-
-[[text]]
-id = "TXT-0151"
-step = "P4"
-spec = "RUN"
-line = "1542"
-side = "new"
-section = "§9"
-source = "n.158"
-class = "todo"
-what = "Runtime Control observation authority over a record is authority under active policy to observe that record through the requested method or event."
-
-[[text]]
-id = "TXT-0152"
-step = "P4"
-spec = "RUN"
-line = "1543"
-side = "new"
-section = "§9"
-source = "n.158"
-class = "todo"
-what = "When policy is externalized through LOGOS-MODULE-CAPABILITY-AUTHORITY, it is an allow decision for that method or event with a `runtime_control_scope` whose present constraints match the record."
-
-[[text]]
-id = "TXT-0153"
-step = "P4"
-spec = "RUN"
-line = "1633"
-side = "new"
-section = "§9"
-class = "todo"
-what = "activating an event subscription and delivering an event;"
-
-[[text]]
-id = "TXT-0154"
-step = "P4"
-spec = "RUN"
-line = "1655"
-side = "new"
-section = "§9"
-source = "n.161"
-class = "todo"
-what = "Runtime owns enforcement of the authority result and its mapping to method, Transport, Runtime Control, and Runtime Control binding error channels."
-
-[[text]]
-id = "TXT-0572"
-step = "P4"
-spec = "RUN"
-line = "1772"
-side = "new"
-section = "§9.3.1 to §9.3.16"
-source = "review 3"
-class = "todo"
-guard = true
-what = "RUNTIME §9.3 is split into subsections. Check that no sentence moved into §9.3.1 to §9.3.16 now applies to something else."
-
-[[text]]
-id = "TXT-0155"
-step = "P4"
-spec = "RUN"
-line = "1774"
-side = "new"
-section = "§9.2"
-class = "todo"
-what = "The preceding CDDL block is the complete `logos.runtime` supporting schema."
-
-[[text]]
 id = "TXT-0161"
 step = "P6"
 spec = "RUN"
@@ -528,530 +358,8 @@ class = "behaviour"
 what = "`configuration-rejected` is produced only by `apply_configuration` under LOGOS-MODULE-CONFIGURATION and omits `current_revision`."
 
 [[text]]
-id = "TXT-0164"
-step = "P4"
-spec = "RUN"
-line = "1841"
-side = "new"
-section = "§9.3.2"
-class = "todo"
-what = "The Runtime Control contract uses the following Runtime and Runtime Control addressing objects:"
-
-[[text]]
-id = "TXT-0165"
-step = "P4"
-spec = "RUN"
-line = "1853"
-side = "new"
-section = "§9.3.2"
-class = "todo"
-guard = true
-what = "`route_id` | Opaque identity for a logical route. | `tstr .size (1..128)` | Runtime instance that owns the route."
-
-[[text]]
-id = "TXT-0166"
-step = "P4"
-spec = "RUN"
-line = "2432"
-side = "new"
-section = "§9.3.3"
-class = "todo"
-guard = true
-what = "`consumer-unavailable` | The route consumer's realization has failed."
-
-[[text]]
-id = "TXT-0167"
-step = "P4"
-spec = "RUN"
-line = "2477"
-side = "new"
-section = "§9.3.4"
-source = "n.171a"
-class = "todo"
-guard = true
-what = "For code that the selected execution path cannot restrict, `applied` asserts only that Runtime grants no access beyond the saved settings; it does not claim that such code is contained."
-
-[[text]]
-id = "TXT-0179"
-step = "P4"
-spec = "RUN"
-line = "2916"
-side = "new"
-section = "§9.3.12"
-source = "n.179"
-class = "todo"
-what = "A same-process caller obtains a route handle for that route through `materialize_route`, and an out-of-process caller requires a local or remote transport route."
-
-[[text]]
-id = "TXT-0180"
-step = "P4"
-spec = "RUN"
-line = "2965"
-side = "new"
-section = "§9.3.12"
-class = "todo"
-guard = true
-what = "`revoked`, `failed`, and `closed` are terminal states."
-
-[[text]]
-id = "TXT-0181"
-step = "P4"
-spec = "RUN"
-line = "2984"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-what = "Callers present authority inputs through the selected method or transport; the runtime evaluates those inputs through authority policy and records the resulting decision identifier when needed."
-
-[[text]]
-id = "TXT-0182"
-step = "P4"
-spec = "RUN"
-line = "3021"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-what = "After resolving a continuation, Runtime returns the ready route established for the final target provider."
-
-[[text]]
-id = "TXT-0183"
-step = "P4"
-spec = "RUN"
-line = "3022"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-guard = true
-what = "Its `route` is the identifier allocated by the Runtime owning that provider, and `target_provider` identifies that provider in that Runtime."
-
-[[text]]
-id = "TXT-0184"
-step = "P4"
-spec = "RUN"
-line = "3023"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-guard = true
-what = "For a remote-transport path, `invocation` contains that Runtime's remote-transport descriptor bound to the original authenticated consumer."
-
-[[text]]
-id = "TXT-0185"
-step = "P4"
-spec = "RUN"
-line = "3024"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-what = "When the consumer materializes the route through its Runtime Control binding, the Runtime-controlled invocation boundary performs the profile-required Runtime authentication and Hello exchange under Section 4.1."
-
-[[text]]
-id = "TXT-0186"
-step = "P4"
-spec = "RUN"
-line = "3027"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-what = "A route established by resolving a continuation depends only on its final target provider and the authorization of that route."
-
-[[text]]
-id = "TXT-0187"
-step = "P4"
-spec = "RUN"
-line = "3028"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-what = "Stopping, replacing, or withdrawing a facade traversed during resolution does not by itself end that route."
-
-[[text]]
-id = "TXT-0188"
-step = "P4"
-spec = "RUN"
-line = "3031"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-guard = true
-what = "A response received through a `connect_remote` binding is an inter-Runtime response; the module may follow a continuation with a new `single` request through a binding to the continuation target."
-
-[[text]]
-id = "TXT-0189"
-step = "P4"
-spec = "RUN"
-line = "3032"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-what = "Runtime exposes route establishment and renewal to modules only through the typed Runtime Control `establish_route` and `renew_route` methods."
-
-[[text]]
-id = "TXT-0190"
-step = "P4"
-spec = "RUN"
-line = "3081"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-what = "A consumer that needs an invocation descriptor for a replayed route obtains one through `renew_route`."
-
-[[text]]
-id = "TXT-0191"
-step = "P4"
-spec = "RUN"
-line = "3133"
-side = "new"
-section = "§9.3.14"
-class = "todo"
-what = "The minimum material is the route identity, consumer reference, selected provider address, selected provider's module name, selected contract when known, authority result reference when present, route state transition, and failure code when present."
-
-[[text]]
-id = "TXT-0192"
-step = "P4"
-spec = "RUN"
-line = "3200"
-side = "new"
-section = "§9.3.14"
-class = "todo"
-guard = true
-what = "Runtime Control reports these classifications through readiness state, route state, `failure` classifications, and runtime-control events."
-
-[[text]]
-id = "TXT-0193"
-step = "P4"
-spec = "RUN"
-line = "3317"
-side = "new"
-section = "§9.3.15"
-source = "n.189"
-class = "todo"
-what = "In-flight call behavior follows the in-flight call policy of this section."
-
-[[text]]
-id = "TXT-0194"
-step = "P4"
-spec = "RUN"
-line = "3350"
-side = "new"
-section = "§9.3.16"
-source = "n.189"
-class = "todo"
-guard = true
-what = "Closing a route that is already `closed`, `failed`, or `revoked` succeeds without changing its state or failure record."
-
-[[text]]
-id = "TXT-0195"
-step = "P4"
-spec = "RUN"
-line = "3353"
-side = "new"
-section = "§9.3.16"
-source = "n.190b"
-class = "todo"
-guard = true
-what = "`reason` is diagnostic text for Runtime observation and audit; it is not delivered to the provider and does not change the closure outcome."
-
-[[text]]
-id = "TXT-0199"
-step = "P4"
-spec = "RUN"
-line = "3535"
-side = "new"
-section = "§9.3.18"
-source = "n.195"
-class = "todo"
-guard = true
-what = "When policy is externalized through LOGOS-MODULE-CAPABILITY-AUTHORITY, that observation authority is an allow decision for the requested method with a `runtime_control_scope` that contains neither `instances` nor `providers` and whose `modules`, when present, includes the module name."
-
-[[text]]
-id = "TXT-0213"
-step = "P4"
-spec = "RUN"
-line = "1414"
-side = "old"
-section = "§8"
-class = "todo"
-guard = true
-what = "`primary_contract` and `implements` in accepted module facts are expected contract facts supplied by the input source."
-
-[[text]]
-id = "TXT-0217"
-step = "P4"
-spec = "RUN"
-line = "1489"
-side = "old"
-section = "§8"
-class = "todo"
-guard = true
-what = "The response's `partial` field is `false` only when every provider visible through that discovery decision has a returned ready route."
-
-[[text]]
-id = "TXT-0220"
-step = "P4"
-spec = "RUN"
-line = "1750"
-side = "old"
-section = "§9"
-class = "todo"
-what = "Runtime owns enforcement of the authority result and its mapping to method, Transport, Runtime Control, and runtime API error channels."
-
-[[text]]
-id = "TXT-0223"
-step = "P4"
-spec = "RUN"
-line = "1877"
-side = "old"
-section = "§9.2"
-class = "todo"
-what = "`logos_runtime_types.cddl` is an extracted machine-readable mirror of this block."
-
-[[text]]
-id = "TXT-0224"
-step = "P4"
-spec = "RUN"
-line = "1878"
-side = "old"
-section = "§9.2"
-class = "todo"
-what = "If the extracted artifact differs from this specification, this specification governs."
-
-[[text]]
-id = "TXT-0225"
-step = "P4"
-spec = "RUN"
-line = "1894"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "`logos_runtime_control.cddl` is an extracted machine-readable mirror."
-
-[[text]]
-id = "TXT-0227"
-step = "P4"
-spec = "RUN"
-line = "1920"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "It uses the following Runtime and Runtime Control addressing objects:"
-
-[[text]]
-id = "TXT-0228"
-step = "P4"
-spec = "RUN"
-line = "2508"
-side = "old"
-section = "§9.3"
-class = "todo"
-guard = true
-what = "`consumer-unavailable` | The route consumer has stopped or its realization has failed."
-
-[[text]]
-id = "TXT-0232"
-step = "P4"
-spec = "RUN"
-line = "2750"
-side = "old"
-section = "§9.3"
-class = "todo"
-guard = true
-what = "For `tls-tcp` and `quic`, transport authentication establishes transport trust only."
-
-[[text]]
-id = "TXT-0233"
-step = "P4"
-spec = "RUN"
-line = "2752"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "Transport trust does not by itself prove runtime authorization, module authorization, package identity, schema compatibility, or route authority."
-
-[[text]]
-id = "TXT-0236"
-step = "P4"
-spec = "RUN"
-line = "2759"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "Logos Transport messages over QUIC use bidirectional QUIC streams in this revision."
-
-[[text]]
-id = "TXT-0237"
-step = "P4"
-spec = "RUN"
-line = "2761"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "QUIC datagrams are out of scope unless a later route or data-plane profile defines them."
-
-[[text]]
-id = "TXT-0239"
-step = "P4"
-spec = "RUN"
-line = "2765"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "Runtime policy decides whether migration is allowed for a deployment."
-
-[[text]]
-id = "TXT-0240"
-step = "P4"
-spec = "RUN"
-line = "2808"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "Runtime identity remains the opaque `runtime_instance_id` carried in Runtime Control records and interpreted under deployment or enrollment policy."
-
-[[text]]
-id = "TXT-0241"
-step = "P4"
-spec = "RUN"
-line = "2810"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "A successful Transport Hello for `logos_runtime_control` proves only that the peer presented a compatible Runtime Control endpoint schema under the selected transport policy."
-
-[[text]]
-id = "TXT-0242"
-step = "P4"
-spec = "RUN"
-line = "2813"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "It does not by itself authorize runtime-control operations or ordinary module routes."
-
-[[text]]
-id = "TXT-0243"
-step = "P4"
-spec = "RUN"
-line = "2935"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "On a `route_record`, `expected_contract` names the exact concrete module contract or implemented interface contract that the route was established to satisfy."
-
-[[text]]
-id = "TXT-0244"
-step = "P4"
-spec = "RUN"
-line = "2984"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "The reported deadline does not prevent earlier route failure or authority withdrawal and does not extend in-flight completion policy."
-
-[[text]]
-id = "TXT-0246"
-step = "P4"
-spec = "RUN"
-line = "3006"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "A same-process caller acquires that route through the Runtime handle API, and an out-of-process caller requires a local or remote transport route."
-
-[[text]]
-id = "TXT-0248"
-step = "P4"
-spec = "RUN"
-line = "3057"
-side = "old"
-section = "§9.3"
-class = "todo"
-guard = true
-what = "`draining`: rejects new calls but may allow bounded in-flight work to complete according to runtime policy;"
-
-[[text]]
-id = "TXT-0249"
-step = "P4"
-spec = "RUN"
-line = "3081"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "Callers present authority inputs through the selected method, transport, or runtime API surface; the runtime evaluates those inputs through authority policy and records the resulting decision identifier when needed."
-
-[[text]]
-id = "TXT-0250"
-step = "P4"
-spec = "RUN"
-line = "3097"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "For each selected provider, the runtime validates the selected contract using the module name, schema namespace, schema commitment, and compatibility metadata."
-
-[[text]]
-id = "TXT-0251"
-step = "P4"
-spec = "RUN"
-line = "3129"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "Runtime exposes them to modules only through the typed Runtime Control `establish_route` and `renew_route` methods."
-
-[[text]]
-id = "TXT-0253"
-step = "P4"
-spec = "RUN"
-line = "3243"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "The minimum material is the route identity, consumer reference, selected provider address, expected module name, selected contract when known, authority result reference when present, route state transition, and failure code when present."
-
-[[text]]
-id = "TXT-0257"
-step = "P4"
-spec = "RUN"
-line = "3333"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "Runtime Control reports these classifications through readiness state, route state, reason strings, and runtime-control events."
-
-[[text]]
-id = "TXT-0258"
-step = "P4"
-spec = "RUN"
-line = "3459"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "In-flight call behavior follows the existing route-revocation policy."
-
-[[text]]
-id = "TXT-0262"
-step = "P4"
-spec = "RUN"
-line = "3490"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "In-flight call behavior is governed by runtime authority policy."
-
-[[text]]
-id = "TXT-0264"
-step = "P4"
-spec = "RUN"
-line = "3509"
-side = "old"
-section = "§9.3"
-class = "todo"
-what = "`execution_state_changed_event` reports execution-summary changes in committed order, including intent changes without a lifecycle transition."
-
-[[text]]
 id = "TXT-0269"
-step = "P4"
+step = "P5"
 spec = "RUN"
 line = "3753"
 side = "old"
