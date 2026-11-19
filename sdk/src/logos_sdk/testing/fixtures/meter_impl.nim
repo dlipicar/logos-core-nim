@@ -18,8 +18,11 @@
 ## in the invocation's scope with value 0x6C636E33 (payloads a carrier trace
 ## looks for), 25 publishes `meter.changed_event` with value 250 from a thread
 ## of the module's own runtime, then joins it (DECISIONS G342: a module thread
-## calling the host's publish callback); any other channel `c` reads `ch<c>`
-## with value `10 c`.
+## calling the host's publish callback), 26 publishes `meter.unknown_event`,
+## `meter.changed_event` with a text value and then with value 260, and reads
+## `ch26` with a value whose bits 0, 1 and 2 say that the callback refused the
+## first two with INVALID_PARAMS and took the third (INTERFACE l.3351);
+## any other channel `c` reads `ch<c>` with value `10 c`.
 
 {.used.} # imported by the tests for the C symbols it exports
 import std/[atomics, monotimes, os, times]
@@ -141,6 +144,22 @@ proc `read`(
       return err(moduleError("channel 25 has no thread: " & e.msg))
     joinThread(t)
     ok(MeterReadResponse(label: "ch25", reading: MeterReading(value: 250)))
+  of 26:
+    # {}; {"value": "x"}; {"value": 260}
+    let
+      unknown = m.services.publishEncoded("meter.unknown_event", [0xA0'u8])
+      text = m.services.publishEncoded(
+        "meter.changed_event", [0xA1'u8, 0x65, 0x76, 0x61, 0x6C, 0x75, 0x65, 0x61, 0x78]
+      )
+      valid = m.services.publish(MeterChangedEvent(value: 260))
+    var bits = 0'u64
+    if unknown.isErr and unknown.error.code == ecInvalidParams:
+      bits = bits or 1
+    if text.isErr and text.error.code == ecInvalidParams:
+      bits = bits or 2
+    if valid.isOk:
+      bits = bits or 4
+    ok(MeterReadResponse(label: "ch26", reading: MeterReading(value: bits)))
   of 21:
     ?m.services.publish(MeterChangedEvent(value: 210))
     let who = ?m.services.caller() # after the handlers' nested entries returned

@@ -918,8 +918,8 @@ proc serveEndpoint*(
     return err("the provider's schema response cannot be built: " & error)
   let system = module.startsWith("logos_")
   let input = encodeCbor(schema)
-  let served = ?acceptSchemaResponse(input, roots[0], AcceptOptions(system: system))
-  ?keepContracts(c, roots, served, depth)
+  # [DECISIONS I106] The contracts are kept already, before `_MODULE_init`
+  # (`selected.keepProvider`).
   sv = createShared(Served)
   initLock(sv.lock)
   initCond(sv.cond)

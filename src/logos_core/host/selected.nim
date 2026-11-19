@@ -13,10 +13,11 @@
 
 import std/tables
 import results
+import logos_sdk/abi/cstatus
 import logos_sdk/cbor
 import logos_sdk/base/perthread
 import logos_sdk/hash/hashinput
-import logos_sdk/iface/[accept, surface]
+import logos_sdk/iface/[accept, outcome, payload, surface]
 import ../runtime/callcheck
 
 export callcheck
@@ -100,6 +101,41 @@ proc selectedFor*(root: Digest): Result[Selected, string] =
   let s = ?buildSelected(x.schema.toOpenArray(0, x.schemaLen - 1), root, inputs.depth)
   cache[root] = s
   ok(s)
+
+proc keepProvider*(c: ModuleBinding, system: bool, depth: int): Result[void, string] =
+  ## [SPEC INTERFACE l.3351; DECISIONS I106] Lifecycle thread, before
+  ## `_MODULE_init`: the provider's contracts (its primary, then each
+  ## implemented interface), for its publications and, once it serves, its
+  ## sessions; `logos.schema` answers from the set built from the first.
+  var roots: seq[Digest]
+  if c.primary.isSome:
+    roots.add(c.primary.get.root)
+  for i in c.interfaces:
+    roots.add(i.root)
+  if roots.len == 0:
+    return err("the provider has no contract")
+  let input = encodeCbor(?schemaResponse(c, roots[0]))
+  let served = ?acceptSchemaResponse(input, roots[0], AcceptOptions(system: system))
+  keepContracts(c, roots, served, depth)
+
+proc publishedBy*(
+    name: string, data: openArray[byte]
+): Result[void, InvocationFailure] =
+  ## [SPEC INTERFACE l.3351, l.1712-1717; DECISIONS I106] As
+  ## `callside.publishedBy`, under the contracts `keepProvider` kept: a
+  ## module that kept none declares no event.
+  if inputs != nil:
+    for i in 0 ..< inputs.count:
+      let sel = selectedFor(inputs.items[i].root).valueOr:
+        return
+          err(failure(ecInvalidParams, "the publisher's contract cannot be loaded"))
+      if sel.boundary.knowsEvent(name):
+        discard sel.validator.checkEvent(name, data).valueOr:
+          let f = toFailure(error)
+          return
+            err(failure(ecInvalidParams, f.message.get("the event data is invalid")))
+        return ok()
+  err(failure(ecInvalidParams, name & " is not declared by the publisher's contracts"))
 
 proc schemaAnswer*(root: Digest): seq[byte] =
   ## `logos.schema`'s answer under `root`; empty for an unknown root.

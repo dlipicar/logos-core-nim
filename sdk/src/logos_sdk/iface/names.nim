@@ -76,6 +76,20 @@ func checkNamespace*(ns: string): Result[void, string] =
     return err("namespace " & ns & " is longer than 128 bytes")
   ok()
 
+func checkEventId*(id: string): Result[void, string] =
+  ## [SPEC INTERFACE §1.3, §1.5] A complete event identifier: a namespace and a
+  ## local name ending in `_event`, every dot-separated segment a schema
+  ## identifier, at most 128 bytes (so ASCII).
+  if id.len > MaxEventIdBytes:
+    return err("an event identifier is longer than 128 bytes")
+  let dot = id.rfind('.')
+  if dot <= 0:
+    return err("an event identifier has no namespace (INTERFACE §1.5)")
+  ?checkQualifiedName(id)
+  if not id.endsWith("_event"):
+    return err("an event identifier does not end in _event (INTERFACE §1.5)")
+  ok()
+
 func isReservedName*(name: string): bool =
   ## [SPEC INTERFACE §1.3] Begins with `logos.`, `logos-` or `logos_`.
   for p in ReservedNamePrefixes:

@@ -342,11 +342,12 @@ suite "run.rc: subscribe and unsubscribe (INTERFACE §2.5, l.3837) [IMPL-DECISIO
       ecInvalidParams
     check rc.subscribe("", addr watches[0], id) == ecInvalidParams
     check id == 77
-    for name in [
-      "logos.runtime_control.nothing_changed_event", "meter.changed_event",
-      "module_state_changed", "logos.runtime_control.module_state_changed",
-    ]:
+    for name in ["logos.runtime_control.nothing_changed_event", "meter.changed_event"]:
       check rc.subscribe(name, addr watches[0], id) == ecNotAuthorised
+    # [SPEC INTERFACE l.2156; DECISIONS I106] Names that fail §1.5 are
+    # malformed: the bare name, the qualified one without `_event`.
+    for name in ["module_state_changed", "logos.runtime_control.module_state_changed"]:
+      check rc.subscribe(name, addr watches[0], id) == ecInvalidParams
     check id == 77
     for i, name in [
       ModuleState, ExecutionState, RouteStateEv, Inventory, PermissionSettings,

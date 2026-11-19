@@ -436,6 +436,7 @@ proc freeAttemptServices*(s: ptr AttemptServices) =
   ## A hosted attempt's go with its host, which may still be reaped.
   if s == nil:
     return
+  freeContracts(s)
   if s.host != nil:
     let h = cast[Host](s.host)
     s.host = nil
@@ -447,6 +448,21 @@ proc freeAttemptServices*(s: ptr AttemptServices) =
 func attemptOf*(s: ptr AttemptServices): string =
   $s.attempt
 
+proc declareContractOp(
+    publishUserData: pointer,
+    root: ptr ContractRoot,
+    schema: ptr UncheckedArray[uint8],
+    schemaLen: csize_t,
+) {.cdecl.} =
+  ## [SPEC INTERFACE l.3351; DECISIONS I106] `InitServices.declareContract`:
+  ## the realizer, before `_MODULE_init`.
+  let s = cast[ptr AttemptServices](publishUserData)
+  if s == nil or root == nil or schema == nil:
+    return
+  s.declareContract(
+    Digest(root[]), schema.toOpenArray(0, int(schemaLen) - 1), s.engine.payloadDepth
+  )
+
 proc fill*(services: var InitServices, s: ptr AttemptServices) =
   ## [SPEC RUNTIME §7.4 l.1305-1323] The attempt's Runtime Control binding, the
   ## engine's publish callback and invocation access: every attempt gets the
@@ -455,6 +471,7 @@ proc fill*(services: var InitServices, s: ptr AttemptServices) =
   services.publish = publishOp
   services.publishUserData = s
   services.invocationAccess = LogosInvocationAccess(state: s, current: currentOp)
+  services.declareContract = declareContractOp
 
 func linkOf*(handle: pointer): uint64 =
   ## [I90] Runtime thread: a handle's link; 0 for a direct handle.

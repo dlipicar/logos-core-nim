@@ -412,6 +412,8 @@ proc rcSubscribeOp(
   bindingEnter()
   if eventName == nil or handler.isNil or outId == nil:
     return status(ecInvalidParams, "a null event name, handler or subscription output")
+  discard checkEventName(eventName).valueOr:
+    return status(error)
   let s = createShared(LocalSub)
   s.local = nextLocal.fetchAdd(1) + 1
   s.handler = handler
@@ -607,32 +609,25 @@ proc publishOp(
   ## payload and whose delivery the Runtime admits; one that cannot be
   ## delivered is the Runtime's diagnostic for that session only. Returns once
   ## every admitted Event is taken by the loop.
-  ## [DECISIONS I105, interim until re-pin P3] The result, as `events.publishOp`
-  ## gives it: INVALID_PARAMS when the Runtime refused the event name as
-  ## INVALID_PARAMS, or for a null or empty payload; LOGOS_OK otherwise.
+  ## [SPEC INTERFACE l.3351; DECISIONS I106] The result, as
+  ## `events.publishOp` gives it, decided here before the Runtime hears of the
+  ## publication: INVALID_PARAMS for a malformed name, no payload, or an
+  ## event the module's contracts do not declare or whose data is not a value
+  ## of its type; LOGOS_OK otherwise. The Runtime records no refused one.
   bindingEnter()
-  let id = nextId()
-  let a = request(
-    toMessage(
-      LcnCarrierRcPublish(
-        id: id, event: (if eventName == nil: @[] else: bytesOf(eventName))
-      )
-    ),
-    id,
-  )
-  if a.failed:
-    return CErrorCode(
-      if a.code == uint8(ord(ecInvalidParams)):
-        ord(ecInvalidParams)
-      else:
-        ord(ecOk)
-    )
+  let name = checkEventName(eventName).valueOr:
+    return CErrorCode(ord(ecInvalidParams))
   if cborData == nil or cborDataLen == 0:
     return CErrorCode(ord(ecInvalidParams))
-  if a.targets.len == 0:
-    return CErrorCode(ord(ecOk))
-  let name = $eventName # the Runtime checked it
   let data = bytesOf(cborData, cborDataLen)
+  publishedBy(name, data).isOkOr:
+    return CErrorCode(ord(ecInvalidParams))
+  let id = nextId()
+  let a = request(toMessage(LcnCarrierRcPublish(id: id, event: bytesOf(eventName))), id)
+  if a.failed or a.targets.len == 0:
+    # [IMPL] The Runtime checked the name again; its refusal of a name this
+    # host took is no fault of the publication's.
+    return CErrorCode(ord(ecOk))
   var checked: Table[Digest, ErrorCode]
   var conns: seq[uint64]
   var dropped: seq[LcnCarrierDropped]
@@ -640,16 +635,13 @@ proc publishOp(
     let root = digestOf(contract).valueOr:
       carrierLost("a publication target whose contract is not a digest")
     if root notin checked:
-      checked[root] =
-        if data.len == 0:
-          ecInvalidParams
+      checked[root] = block:
+        let sel = selectedFor(root)
+        if sel.isErr:
+          ecModule
         else:
-          let sel = selectedFor(root)
-          if sel.isErr:
-            ecModule
-          else:
-            let c = sel.get.checkEvent(name, data)
-            if c.isErr: c.error.code else: ecOk
+          let c = sel.get.checkEvent(name, data)
+          if c.isErr: c.error.code else: ecOk
     let code = checked.getOrDefault(root, ecModule)
     if code == ecOk:
       conns.add(conn)

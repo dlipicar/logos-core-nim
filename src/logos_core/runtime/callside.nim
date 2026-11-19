@@ -51,6 +51,16 @@ type
       ## request
     subEnd*: SubscriptionEndSlot
       ## [SPEC INTERFACE §2.5 l.1476] the binding's `observe_subscription_end`
+    contracts*: Atomic[ptr PublisherContract]
+      ## [SPEC INTERFACE l.3351; DECISIONS I106] the publishing module's
+      ## contracts, declared before `_MODULE_init` and immutable after
+
+  PublisherContract* = object
+    ## One contract a publishing module's call surface exposes (its primary or
+    ## an implemented interface): the construction input its publications are
+    ## checked under.
+    blob*: ptr SchemaBlob
+    next*: ptr PublisherContract
 
   CallbackState* = enum
     cbNone
@@ -165,6 +175,51 @@ proc selectedOf*(b: ptr SchemaBlob): Result[Selected, string] =
   let s = ?buildSelected(b.data.toOpenArray(0, b.len - 1), b.root, b.depth)
   selectedCache[key] = s
   ok(s)
+
+proc declareContract*(
+    s: ptr AttemptServices, root: Digest, schema: openArray[byte], depth: int
+) =
+  ## [SPEC INTERFACE l.3351; DECISIONS I106] One thread, before
+  ## `_MODULE_init`: a contract of the publishing module. Each thread that
+  ## publishes reads the list after it (`publishedBy`).
+  if schema.len == 0:
+    return
+  let p = createShared(PublisherContract)
+  p.blob = newBlob(
+    root, cast[ptr UncheckedArray[uint8]](unsafeAddr schema[0]), schema.len, depth
+  )
+  p.next = s.contracts.load(moAcquire)
+  s.contracts.store(p, moRelease)
+
+proc freeContracts*(s: ptr AttemptServices) =
+  ## With the services, once no publish can run.
+  var p = s.contracts.exchange(nil, moAcquire)
+  while p != nil:
+    let next = p.next
+    drop(p.blob)
+    freeShared(p)
+    p = next
+
+proc publishedBy*(
+    s: ptr AttemptServices, name: string, data: openArray[byte]
+): Result[void, InvocationFailure] =
+  ## [SPEC INTERFACE l.3351, l.1712-1717; DECISIONS I106] The publisher-side
+  ## result: the event is declared by one of the publishing module's
+  ## contracts (its primary or an implemented interface; `extends` adds none),
+  ## and `data` is one value of that event's data type within the §5.3
+  ## limits. Any other publication is INVALID_PARAMS, before any fan-out.
+  ## Event identifiers are namespaced, so at most one contract declares it.
+  var p = s.contracts.load(moAcquire)
+  while p != nil:
+    let sel = selectedOf(p.blob).valueOr:
+      return err(failure(ecInvalidParams, "the publisher's contract cannot be loaded"))
+    if sel.boundary.knowsEvent(name):
+      discard sel.validator.checkEvent(name, data).valueOr:
+        let f = toFailure(error)
+        return err(failure(ecInvalidParams, f.message.get("the event data is invalid")))
+      return ok()
+    p = p.next
+  err(failure(ecInvalidParams, name & " is not declared by the publisher's contracts"))
 
 proc cacheSelected*(root: Digest, set: ContractSet, depth: int) =
   ## Keeps the set `materialize_route` just validated for this thread.

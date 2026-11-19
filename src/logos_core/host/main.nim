@@ -32,7 +32,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[atomics, posix]
+import std/[atomics, posix, strutils]
 import results
 import logos_sdk/abi/[checks, types]
 import logos_sdk/base/[perthread, wipe]
@@ -41,7 +41,7 @@ import ../runtime/realizer
 when defined(lcnWipeAudit):
   import logos_sdk/base/wipeaudit
 import ../transport/io/sock
-import ./[consumer, endpoint, rcbinding, state]
+import ./[consumer, endpoint, rcbinding, selected, state]
 
 when defined(linux):
   proc prctl(
@@ -134,6 +134,13 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
       refuse(loaderError(lecRealizationFailed, MarkedUnsupportedByHost), P.Bind)
   checkLive(m.live, b[]).isOkOr:
     refuse(error, P.Bind)
+  if b.provider:
+    # [SPEC INTERFACE l.3351; DECISIONS I106] Before `_MODULE_init`: the
+    # publish callback checks under these from the first publication.
+    keepProvider(b.contracts, m.module.startsWith("logos_"), maxPayloadDepth).isOkOr:
+      refuse(
+        loaderError(lecRealizationFailed, "the provider's contracts: " & error), P.Bind
+      )
   let (rc, publish, publishUserData, access) = hostServices()
   let services = InitServices(
     runtimeControl: rc,

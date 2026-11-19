@@ -348,6 +348,28 @@ when defined(posix):
       check direct.anyIt(it.startsWith("rc "))
       check hosted == direct
 
+    test "[TXT-0096] [IMPL-DECISION I106] S-5 a host's Runtime Control subscribe refuses a name that fails INTERFACE §1.5 with INVALID_PARAMS and an unknown one with NOT_AUTHORISED, as in process":
+      proc run(hosted: bool): seq[string] =
+        let cfg = hostedConfig(hosted)
+        let dir = cfg.prepare(
+          "subscribe module_state_changed",
+          "subscribe logos.runtime_control.module_state_changed",
+          "subscribe logos.runtime_control.nothing_changed_event",
+        )
+        let e = fixtureEngine(cfg)
+        discard e.create(probe(hosted), "p").tryGet
+        check e.start("p").tryGet.state == msReady
+        result = lines(dir, "events")
+        e.finish()
+
+      let direct = run(false)
+      let hosted = run(true)
+      check direct.len == 3
+      check direct[0].startsWith("subscribed " & $ord(ecInvalidParams) & " ")
+      check direct[1].startsWith("subscribed " & $ord(ecInvalidParams) & " ")
+      check direct[2].startsWith("subscribed " & $ord(ecNotAuthorised) & " ")
+      check hosted == direct
+
     test "[IMPL-DECISION G225] S-5 a host's handler past the queue bound loses its subscription with the in-process diagnostic":
       var cfg = hostedConfig()
       cfg.limits.rcQueue = 4

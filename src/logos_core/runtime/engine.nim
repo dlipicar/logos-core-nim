@@ -3985,6 +3985,7 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       publish: s.publish,
       publishUserData: s.publishUserData,
       invocationAccess: s.invocationAccess,
+      declareContract: cast[pointer](s.declareContract),
       host: host,
     ),
   ).isOkOr:

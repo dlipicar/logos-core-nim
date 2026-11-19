@@ -1158,6 +1158,12 @@ when defined(posix):
       h.reply(r)
     of K.lcn_Carrier_rc_subscribe:
       let c = m.arm_lcn_Carrier_rc_subscribe
+      # [SPEC INTERFACE §1.5; I106] Every byte of the host's name, before the
+      # C string below could cut it at a NUL.
+      let name = checkEventName(c.event)
+      if name.isErr:
+        h.reply(LcnCarrierRcReply(id: c.id, failure: Opt.some(toCarrier(name.error))))
+        return
       let p = createShared(ProxySubObj)
       p.host = h
       p.local = c.local
@@ -1165,9 +1171,8 @@ when defined(posix):
       withLock h.lock:
         p.next = h.subs
         h.subs = p
-      let name = textOf(c.event)
       var id: LogosSubscriptionId
-      let res = h.rc.vtable.subscribe(h.rc, cstring(name), forwardEvent, p, addr id)
+      let res = h.rc.vtable.subscribe(h.rc, cstring(name.get), forwardEvent, p, addr id)
       var r = LcnCarrierRcReply(id: c.id, failure: failed(res))
       if r.failure.isNone:
         r.sub = Opt.some(uint64(id))
@@ -1226,10 +1231,15 @@ when defined(posix):
         let n = hostedConn(h.index, x.conn)
         if n.isSome:
           dropped.add((n.get, errorCodeOf(x.code).get(ecInvalidParams)))
+      # [SPEC INTERFACE §1.5; I106] The host's name, checked as given.
+      let name = checkEventName(c.event)
+      if name.isErr:
+        h.reply(LcnCarrierRcReply(id: c.id, failure: Opt.some(toCarrier(name.error))))
+        return
       var admitted: seq[uint64]
       if h.publishUserData != nil:
         for conn in hostedDeliver(
-          cast[ptr AttemptServices](h.publishUserData), c.event, conns, dropped
+          cast[ptr AttemptServices](h.publishUserData), name.get, conns, dropped
         ):
           admitted.add(hostConnOf(conn))
       h.reply(LcnCarrierRcReply(id: c.id, admitted: Opt.some(admitted)))

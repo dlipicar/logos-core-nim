@@ -889,6 +889,29 @@ when defined(posix):
       k2.release()
       e.finish()
 
+    test "[TXT-0099] [IMPL-DECISION I106] P-10b a hosted provider's publish result is decided in its Module Host: an undeclared event and a nonconforming payload INVALID_PARAMS, unheard of by the Runtime; a valid one LOGOS_OK and delivered":
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      var k = rc.handle(rc.establish("k").recordOf.route)
+      heard[0].count.store(0)
+      heard[0].last.store(0)
+      var a: LogosSubscriptionId
+      check k.hear(0, a) == ecOk
+      # Channel 26: bit 0 the undeclared event refused, bit 1 the text value
+      # refused, bit 2 the valid one taken.
+      let r = k.read(26)
+      check r.isOk and r.get.reading.value == 7
+      check heardAt(0, 1)
+      check heard[0].last.load == 260
+      sleep(100 * Slow)
+      check heard[0].count.load == 1
+      check not e.diagnostics().anyIt("meter.unknown_event" in it)
+      k.release()
+      e.finish()
+
     test "[RUN-0815] [IMPL-DECISION G273] [IMPL-DECISION G274] P-13 payloads go between the consumer's process and the host directly: no carrier frame holds a request, a response or an event payload, and the call, its events and its schema answer still pass":
       # [plan §2.7; the owner's direct layout] Distinct payloads: the request
       # (channel 0x6C636E31), its response label, and the two events channel

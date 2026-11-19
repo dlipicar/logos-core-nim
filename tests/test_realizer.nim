@@ -16,6 +16,8 @@ when defined(posix):
 import unittest2
 import ../src/logos_core/runtime/realizer
 import logos_sdk/crypto/blake3
+import logos_sdk/abi/types
+import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, names]
 import logos_sdk/pins
 import ../src/logos_core/runtime/config
@@ -375,6 +377,38 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
       diag("{\"label\": \"ch3\", \"reading\": {\"value\": 30}}")
     check meterCall(b, 4).status.isOk
     check r.release(a.id, "m1").isOk and r.release(b.id, "m2").isOk
+
+var declaredRoots: seq[(Digest, int)]
+
+proc declareStub(
+    publishUserData: pointer,
+    root: ptr ContractRoot,
+    schema: ptr UncheckedArray[uint8],
+    schemaLen: csize_t,
+) {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    declaredRoots.add((Digest(root[]), int(schemaLen)))
+
+suite "run.realizer: the publisher's contracts (INTERFACE l.3351; DECISIONS I106)":
+  test "[TXT-0099] each contract the call surface exposes is declared before _MODULE_init can run":
+    declaredRoots.setLen(0)
+    let r = fresh()
+    r.registerStatic("meter", meterModuleStaticSymbols()).tryGet
+    var req = staticRequest("p1", "meter_module", "meter")
+    req.services.declareContract = declareStub
+    let step = r.begin(req).tryGet
+    check step.kind == skBind
+    let b = r.storeBinding(runBind(step.spec)).tryGet
+    check declaredRoots.len == 0
+    # `prepareInit` makes the input `_MODULE_init` needs; the declarations
+    # come with it, so none can follow initialization.
+    discard r.prepareInit(req, b).tryGet
+    check declaredRoots.mapIt(it[0]) == providerRoots(b.contracts)
+    check declaredRoots.allIt(it[1] > 0)
+    # No hook (a Module Host, a test double): nothing to declare.
+    declaredRoots.setLen(0)
+    check declareContracts(InitServices(), b[]).isOk
+    check declaredRoots.len == 0
 
 # Realize --------------------------------------------------------------------------
 

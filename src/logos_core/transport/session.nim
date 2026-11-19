@@ -160,8 +160,7 @@ func code*(e: PublishError): ErrorCode =
   ## (TRANSPORT §2.1) [IMPL]. On the ordinary path (`logos_publish_fn`) a
   ## failure for one subscriber route does not change the publisher's result
   ## (RUNTIME §7.3 l.1149); an oversized Event follows TRANSPORT §2.1 for that
-  ## destination (l.1150), today ProtocolError TRANSPORT_ERROR and close
-  ## [DECISIONS I105, interim until re-pin P3].
+  ## destination (l.1150): ProtocolError TRANSPORT_ERROR and close (G165).
   case e.kind
   of peClosed: ecTransport
   of peEnded: ecNotAuthorised

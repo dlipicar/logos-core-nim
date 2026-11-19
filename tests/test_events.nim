@@ -13,6 +13,8 @@
 import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
+import ../src/logos_core/runtime/[bindings, callside, events, native, realizer]
+import logos_sdk/hash/hashinput
 import logos_sdk/abi/types
 import logos_sdk/cbor
 import logos_sdk/commitment
@@ -221,7 +223,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
   setup:
     clearAll()
 
-  test "[IFC-0174] [IFC-0175] [RUN-0191] [RUN-0549] subscribe resolves the event under the selected contract and the route's subscribe scope":
+  test "[IFC-0174] [IFC-0175] [RUN-0191] [RUN-0549] [TXT-0096] subscribe resolves the event under the selected contract and the route's subscribe scope":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -234,7 +236,14 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     var wide = rc.handle(listed.routesOf.routes[0].route)
     var id: LogosSubscriptionId
     check all.subscribe(addr seen[0], id, "meter.unknown_event") == ecNotAuthorised
-    check all.subscribe(addr seen[0], id, "meter.reading") == ecNotAuthorised
+    # [SPEC INTERFACE l.2156; DECISIONS I106] A name that fails §1.5 is
+    # malformed, not unknown: no `_event` suffix, no namespace, a capital,
+    # doubled underscores, a byte outside ASCII.
+    for bad in [
+      "meter.reading", "changed_event", "Meter.changed_event", "meter.x__y_event",
+      "meter._event", "meter.chang\xC3\xA9d_event",
+    ]:
+      check all.subscribe(addr seen[0], id, bad) == ecInvalidParams
     check narrow.subscribe(addr seen[0], id) == ecNotAuthorised
     check wide.subscribe(addr seen[0], id) == ecOk
     check all.subscribe(addr seen[1], id) == ecOk
@@ -430,7 +439,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     h.release()
     e.finish()
 
-  test "[RUN-0243] [RUN-0244] [RUN-0245] [IFC-0184] a publication that cannot be validated is dropped with a diagnostic; a valid one arrives byte for byte":
+  test "[RUN-0243] [RUN-0244] [RUN-0245] [IFC-0184] [TXT-0099] [TXT-0077] a publication that cannot be validated is refused with a diagnostic; a valid one arrives byte for byte":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     resetDeferred()
     discard e.started(dmeter())
@@ -442,20 +451,93 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     check publishRaw(cstring(Changed), valid) == CErrorCode(ord(ecOk))
     check reaches(addr seen[0], 1)
     check seen[0].payloadOf == valid
-    publishRaw(cstring(Changed), encodeCbor(parseDiag("{\"value\": \"seven\"}").get))
-    publishRaw(cstring(Changed), encodeCbor(parseDiag("[7]").get))
-    publishRaw(cstring(Changed), [0xA1'u8, 0x65]) # truncated
-    # [SPEC INTERFACE §5.2 l.3351; DECISIONS I105] the publisher's own result
-    check publishRaw(cstring(Changed), []) == CErrorCode(ord(ecInvalidParams))
-    check publishRaw(cstring(""), valid) == CErrorCode(ord(ecInvalidParams))
-    check publishRaw(nil, valid) == CErrorCode(ord(ecInvalidParams))
+    # [SPEC INTERFACE §5.2 l.3351; RUNTIME l.1148; DECISIONS I106] The
+    # publisher's own result, before any subscriber route: data that is not a
+    # value of the event's type, an event its contracts do not declare, a
+    # malformed name, no payload.
+    let refused = CErrorCode(ord(ecInvalidParams))
+    check publishRaw(
+      cstring(Changed), encodeCbor(parseDiag("{\"value\": \"seven\"}").get)
+    ) == refused
+    check publishRaw(cstring(Changed), encodeCbor(parseDiag("[7]").get)) == refused
+    check publishRaw(cstring(Changed), [0xA1'u8, 0x65]) == refused # truncated
+    check publishRaw(cstring("meter.unknown_event"), valid) == refused
+    check publishRaw(cstring(Changed), []) == refused
+    check publishRaw(cstring(""), valid) == refused
+    check publishRaw(nil, valid) == refused
     settled()
     check seen[0].count.load == 1
     check e.published("no payload")
-    check e.published("was not delivered on route")
+    check e.published("is not declared by the publisher's contracts")
+    check not e.published("was not delivered on route")
     check e.published("was refused")
     h.release()
     e.finish()
+
+  test "[TXT-0099] [TXT-0077] the publish callback's result: an undeclared event and a nonconforming payload are INVALID_PARAMS, a declared valid one LOGOS_OK; it reports no delivery":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var id: LogosSubscriptionId
+    check h.subscribe(addr seen[0], id) == ecOk
+    # Channel 26: bit 0 the undeclared event refused, bit 1 the text value
+    # refused, bit 2 the valid one taken.
+    let r = h.read(26)
+    check r.isOk and r.get.reading.value == 7
+    check reaches(addr seen[0], 1)
+    settled()
+    check seen[0].count.load == 1
+    check seen[0].payloadOf == encodeCbor(parseDiag("{\"value\": 260}").get)
+    check e.published(
+      "meter.unknown_event is not declared by the publisher's contracts"
+    )
+    h.release()
+    e.finish()
+
+  when not declared(transportParity):
+    test "[TXT-0099] [IMPL-DECISION I106] the publisher's contracts are its primary and every implemented interface: an interface's event, an interface-only provider, a module with none":
+      let e = fixtureEngine(config())
+      let
+        watchIface = "_interface = \"watch\"\nwatch.tick_event = {\n  n: uint64,\n}\n"
+        watchRoot = acceptContractSet(watchIface).get.primary.root
+        watchModule =
+          "_module = \"watcher\"\n_implements = [\n  h'" &
+          watchRoot.mapIt(it.toHex(2)).join.toLowerAscii &
+          "',\n]\nwatcher.alarm_event = {}\n"
+        tick = encodeCbor(parseDiag("{\"n\": 1}").get)
+        empty = encodeCbor(parseDiag("{}").get)
+      proc declaring(b: ModuleBinding): ptr AttemptServices =
+        result = newAttemptServices(e, "w", "a")
+        var services = InitServices()
+        services.fill(result)
+        check declareContracts(services, NativeBinding(provider: true, contracts: b)).isOk
+
+      # The primary contract and the interface it implements declare an event
+      # each; `extends` adds none.
+      let full =
+        declaring(acceptBinding("watcher", Opt.some(watchModule), [watchIface]).get)
+      check full.publishedBy("watch.tick_event", tick).isOk
+      check full.publishedBy("watcher.alarm_event", empty).isOk
+      check full.publishedBy("watch.tick_event", empty).error.code == ecInvalidParams
+      check full.publishedBy("watch.tock_event", tick).error.code == ecInvalidParams
+      # A provider with no primary contract: its interface's event only.
+      let only = declaring(acceptBinding("ticker", Opt.none(string), [watchIface]).get)
+      check only.publishedBy("watch.tick_event", tick).isOk
+      check only.publishedBy("watcher.alarm_event", empty).isErr
+      # A module with no provider contract declares no event; the callback
+      # refuses before the Runtime thread hears of the publication.
+      let none = newAttemptServices(e, "c", "a")
+      check none.publishedBy("watch.tick_event", tick).error.code == ecInvalidParams
+      check events.publishOp(
+        none,
+        cstring("watch.tick_event"),
+        cast[ptr UncheckedArray[uint8]](unsafeAddr tick[0]),
+        csize_t(tick.len),
+      ) == CErrorCode(ord(ecInvalidParams))
+      for s in [full, only, none]:
+        freeAttemptServices(s)
+      e.finish()
 
   test "[RUN-0819] [CAP-0288] [CAP-0289] [IMPL-DECISION G175] delivery is authorized for each subscriber route: publish-event and subscribe-event, and both event lists":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))

@@ -509,6 +509,7 @@ proc `realize`(
       publish: h.publish,
       publishUserData: h.publishUserData,
       invocationAccess: h.invocationAccess,
+      declareContract: cast[DeclareContractFn](h.declareContract),
     )
   let host = (if handoff.isSome: handoff.get.host else: nil)
   if request.configuration.isSome:

@@ -1674,7 +1674,7 @@ suite "run.transported: events (I90 part 4b-2c)":
       h2.release()
       e.finish()
 
-  ltTest "[RUN-0243] an ordinary publication that cannot be validated is dropped with a diagnostic and leaves the connections as they were":
+  ltTest "[RUN-0243] an ordinary publication that cannot be validated is refused with a diagnostic and leaves the connections as they were":
     let e = fixtureEngine(transported(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -1683,9 +1683,15 @@ suite "run.transported: events (I90 part 4b-2c)":
     check h.observe(addr seen) == ecOk
     var a: LogosSubscriptionId
     check h.hear(0, a) == ecOk
-    publishRaw(cstring(Changed), encodeCbor(cborMap((cbor("value"), cbor("seven")))))
-    publishRaw(cstring(Changed), [0xA1'u8, 0x65])
-    check e.diagnostics().anyIt("was not delivered on route" in it)
+    # [SPEC INTERFACE l.3351; DECISIONS I106] Refused by the publisher's own
+    # contract, before any subscriber connection.
+    check publishRaw(
+      cstring(Changed), encodeCbor(cborMap((cbor("value"), cbor("seven"))))
+    ) == CErrorCode(ord(ecInvalidParams))
+    check publishRaw(cstring(Changed), [0xA1'u8, 0x65]) ==
+      CErrorCode(ord(ecInvalidParams))
+    check e.diagnostics().anyIt("was refused" in it)
+    check not e.diagnostics().anyIt("was not delivered on route" in it)
     check h.read(4).isOk
     publishRaw(cstring(Changed), changed(7))
     check heardAt(0, 1)

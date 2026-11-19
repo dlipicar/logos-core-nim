@@ -138,11 +138,16 @@ proc runHosted*(
     of K.lcn_Carrier_scoped_admit:
       let p = m.arm_lcn_Carrier_scoped_admit
       var r = LcnCarrierScopedResult(id: p.id)
-      let tag = scopedAdmit(addr inv, p.event)
-      if tag.isErr:
-        r.failure = Opt.some(toCarrier(tag.error))
+      # [SPEC INTERFACE §1.5; I106] The host's name, checked as given.
+      let name = checkEventName(p.event)
+      if name.isErr:
+        r.failure = Opt.some(toCarrier(name.error))
       else:
-        r.tag = tag.get
+        let tag = scopedAdmit(addr inv, name.get)
+        if tag.isErr:
+          r.failure = Opt.some(toCarrier(tag.error))
+        else:
+          r.tag = tag.get
       discard h.sendMsg(toMessage(r))
     of K.lcn_Carrier_scoped_done:
       let p = m.arm_lcn_Carrier_scoped_done

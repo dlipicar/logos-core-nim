@@ -336,46 +336,53 @@ proc publishOp*(
   ## execution attempt gets. Every admitted handler returns before it does. A
   ## failure for one subscriber route is recorded as a diagnostic and drops
   ## the event for that route only (RUNTIME l.1148-1149).
-  ## [DECISIONS I105, interim until re-pin P3] The result: INVALID_PARAMS for
-  ## a null user data, an event name that fails INTERFACE §1.5 and a null or
-  ## empty payload, LOGOS_OK otherwise; P3 adds the check against the publisher's own
-  ## contracts (INTERFACE l.3351).
+  ## [SPEC INTERFACE l.3351; DECISIONS I106] The result: LOGOS_OK when the
+  ## event is declared by the publishing module's contracts and the data is
+  ## one value of its data type within the §5.3 limits (`publishedBy`), and
+  ## INVALID_PARAMS otherwise (a null user data, a malformed name, no payload),
+  ## decided before the notice path and any fan-out. It reports no delivery.
   bindingEnter()
   let a = cast[ptr AttemptServices](userData)
   if a == nil:
-    # [SPEC INTERFACE §5.2 l.3351; DECISIONS I105] a call without the
-    # `publish_user_data` this Runtime gave is the caller's error
+    # [SPEC INTERFACE §5.2 l.3351] a call without the `publish_user_data`
+    # this Runtime gave is the caller's error
     return CErrorCode(ord(ecInvalidParams))
   let e = a.engine
   let name = checkEventName(eventName).valueOr:
     e.diagnose("a publication from " & $a.instance & " was refused: " & describe(error))
     return CErrorCode(ord(ecInvalidParams))
+  var bytes: seq[byte]
+  if cborData != nil:
+    bytes = view(cborData, cborDataLen)
+  let declared =
+    if bytes.len == 0:
+      Result[void, InvocationFailure].err(failure(ecInvalidParams, "no payload"))
+    else:
+      a.publishedBy(name, bytes)
   if name in [GrantChangedName, PolicyChangedName]:
     # [SPEC CA §8; RUNTIME l.1660-1667; I85] Under the Capability Authority
     # policy the authority's notices go to the Runtime thread on the
     # protected path, in order with every admission, and to no subscriber; a
-    # dropped one (no payload) is notification-path loss there. Under
-    # internal policy they are ordinary publications.
-    var payload: seq[byte]
-    if cborData != nil:
-      payload = view(cborData, cborDataLen)
+    # malformed or missing one is notification-path loss there, reported
+    # whatever this callback answers (I106). Under internal policy they are
+    # ordinary publications.
     let consumed = e.call(
       Request(
         kind: rqAuthorityNotice,
         origin: moduleOrigin($a.instance),
         attempt: $a.attempt,
         bare: name,
-        payload: payload,
+        payload: bytes,
       )
     )
-    if consumed.admitted:
+    if consumed.admitted and declared.isOk:
       return CErrorCode(ord(ecOk))
-  if cborData == nil or cborDataLen == 0:
+  if declared.isErr:
     e.diagnose(
-      "a publication of " & name & " from " & $a.instance & " was refused: no payload"
+      "a publication of " & name & " from " & $a.instance & " was refused: " &
+        describe(declared.error)
     )
     return CErrorCode(ord(ecInvalidParams))
-  let bytes = view(cborData, cborDataLen)
   let reply = e.call(
     Request(
       kind: rqCandidates,
