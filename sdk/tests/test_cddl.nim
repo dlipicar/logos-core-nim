@@ -252,8 +252,63 @@ suite "cddl: self vectors (sdk/tests/vectors/cddl/vectors.cbor)":
   test "[CDE-0012] text that is not RFC 8610 CDDL is a syntax error":
     runAll("syntax", 20)
 
-  test "[CDE-0054] [CDE-0055] [CDE-0056] [CDE-0057] [CDE-0183] names must resolve, be unique and not redefine the prelude":
+  test "[CDE-0054] [CDE-0055] [CDE-0213] [CDE-0057] [CDE-0183] names must resolve, be unique and not redefine the prelude":
     runAll("resolution", 6)
+
+  test "[CDE-0213] no rule is named an RFC 8610 prelude name, in source or in canonical bytes":
+    for name in PreludeNames:
+      checkpoint name
+      check parseCddl(name & " = [uint]\n").error.class == ecResolution
+      let doc = CddlDocument(
+        rules: @[Rule(name: name, typ: CddlType(kind: tkPrimitive, primitive: pUint))]
+      )
+      check encodeCddl(doc).isErr
+      check decodeCddl(encodeCbor(toCbor(doc))).isErr
+
+  test "[CDE-0214] [TXT-0002] [TXT-0003] [IMPL-DECISION G14] [IMPL-DECISION G16] a prelude name resolves only through an external context, and stays a reference":
+    # Out of scope it does not resolve.
+    for src in ["a = int\n", "a = [* any]\n", "a = {x: nil}\n"]:
+      checkpoint src
+      let e = parseCddl(src).error
+      check e.class == ecResolution
+      check "outside the cdCDDLe" in e.msg
+    # Supplied by the scope it is a reference node, and no rule is added.
+    let doc = parseCddl("a = [* int]\n", ["int"])
+    check doc.isOk
+    check doc.get.rules.len == 1 and doc.get.rules[0].name == "a"
+    let item = doc.get.rules[0].typ.members[0].typ
+    check item.kind == tkReference and item.name == "int"
+    let bytes = encodeCddl(doc.get).get
+    check decodeCddl(bytes).get.rules[0].typ.members[0].typ.name == "int"
+    # A primitive and the Boolean literals always mean themselves.
+    for name in ["uint", "bool", "tstr", "bstr", "true", "false"]:
+      checkpoint name
+      check parseCddl("a = uint\n", [name]).error.class == ecResolution
+      let bad = CddlDocument(
+        rules: @[Rule(name: "a", typ: CddlType(kind: tkReference, name: name))]
+      )
+      check encodeCddl(bad).isErr
+    # The scope does not free the name for a rule.
+    check parseCddl("int = uint\n", ["int"]).error.class == ecResolution
+
+  test "[CDE-0210] [IMPL-DECISION G157] an unprefixed byte string holding a raw line break is refused":
+    check parseCddl("a = 'x\ny'\n").error.class == ecUnsupported
+    check parseCddl("a = 'x\r\ny'\n").isErr
+    check parseCddl("a = 'xy'\n").isOk
+
+  test "[CDE-0211] [CDE-0212] [TXT-0001] [IMPL-DECISION G151] .size applies directly to uint, tstr or bstr, and a range controller is parenthesized":
+    for src in [
+      "a = tstr .size (1..5)\n", "a = bstr .size (0..4)\n", "a = uint .size 4\n",
+      "a = (tstr) .size 3\n",
+    ]:
+      checkpoint src
+      check parseCddl(src).isOk
+    for src in [
+      "a = tstr .size 1..5\n", "a = b .size 3\nb = tstr\n", "a = bool .size 1\n",
+      "a = tstr .size -1\n", "a = bstr .size (0...4)\n",
+    ]:
+      checkpoint src
+      check parseCddl(src).isErr
 
   test "[CDE-0094] [CDE-0128] [CDE-0129] canonicalization rejects duplicate keys, also between a bareword and a text key, and invalid .size":
     runAll("canonical", 6)
@@ -286,7 +341,7 @@ suite "cddl: stages, scope and the encoder":
     check classOf("a = 10..1\nb = undefined_name\n") == "resolution"
     check classOf("a = [+ uint]\nb = (\n") == "unsupported"
     check classOf("a = (\nb = [+ uint]\n") == "syntax"
-    check classOf("a = int\nb = c\n") == "unsupported"
+    check classOf("a = int\nb = c\n") == "resolution"
     check classOf("a = c\nb = int\n") == "resolution"
     let e = parseCddl("a = uint\n\nb = [\n  uint,\n  + tstr]\n").error
     check e.class == ecUnsupported and e.line == 5 and e.col == 3
@@ -306,7 +361,7 @@ suite "cddl: stages, scope and the encoder":
     check parseCddl("a = logos.error\n").error.class == ecResolution
     check parseCddl("logos.error = uint\n", scope).error.class == ecResolution
     check parseCddl("a = uint\n", ["1bad"]).error.class == ecResolution
-    check parseCddl("a = uint\n", ["int"]).error.class == ecResolution
+    check parseCddl("a = uint\n", ["uint"]).error.class == ecResolution
 
   test "[CDE-0159] [CDE-0160] [CDE-0161] [CDE-0162] the encoder refuses models that break §8":
     let

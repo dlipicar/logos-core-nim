@@ -1,8 +1,9 @@
 ## CBOR data model (RFC 8949 §2) as decoded and encoded by `logos_core/cbor`.
 ##
-## The model keeps everything a well-formed deterministic item can carry, including
-## tags, floats and simple values: INTERFACE §4.4 restricts encodings, not values, and
-## G38 makes such values a schema mismatch, decided above this layer.
+## The model keeps everything a well-formed item can carry, including tags, floats
+## and every simple value, for the formats outside the module boundary that use them
+## (COSE_Sign1, diagnostic display). Logos deterministic CBOR excludes them (INTERFACE
+## §4.4 item 5), so `decodeCbor` returns them only when asked [DECISIONS G38].
 
 {.push raises: [].}
 

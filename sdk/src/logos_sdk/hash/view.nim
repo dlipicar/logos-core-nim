@@ -10,16 +10,20 @@
 ## only through a `choice-arm` segment naming the selected arm. A path crosses an
 ## imported reference without a segment (none is defined). [IMPL-DECISION G120]
 ## `verifyView` takes the schema document and recomputes its root (HASH §8
-## l.1214-1215). `verifyPhysicalProof` checks only the physical proof, for the
-## synthetic HASH App B identities (TF-13); it is not a §8 verification and
-## cannot descend a branched map.
+## l.1214-1215). `verifyPhysicalProof` checks only the physical proof; it is not a
+## §8 verification and cannot descend a branched map. The HASH App B.1 and B.2
+## views name synthetic identities that no schema computes, so only a test build
+## verifies them, through `verifySyntheticView` (App B l.1234-1237).
 
 {.push raises: [].}
 
 import std/algorithm
 import ../cbor
+import ../base/testhooks
 import ./[hashinput, layout, check]
 import ../commitment/[value, schema, choice, normalize]
+
+testHooksMarker("hash_view")
 
 type
   SegmentKind* = enum
@@ -84,6 +88,26 @@ type
     ## The schema a verifier checks a view against [IMPL-DECISION G120].
     set*: SchemaSet
     doc*: int
+    when defined(lcnTestHooks):
+      synthetic: seq[(Digest, Digest)]
+        ## (computed, synthetic) identities: HASH App B.1 and B.2 only
+
+func named(s: ViewSchema, computed: Digest): Digest =
+  ## The identity a verifier compares for `computed`. It is `computed` itself,
+  ## except in a test build's `verifySyntheticView`.
+  when defined(lcnTestHooks):
+    for (real, synthetic) in s.synthetic:
+      if real == computed:
+        return synthetic
+  computed
+
+func computedOf(s: ViewSchema, identity: Digest): Digest =
+  ## The inverse of `named`.
+  when defined(lcnTestHooks):
+    for (real, synthetic) in s.synthetic:
+      if synthetic == identity:
+        return real
+  identity
 
 func `$`*(e: ViewError): string =
   $e.kind & ": " & e.msg
@@ -529,7 +553,7 @@ func finish(rp: Replay): Result[void, ViewError] =
 func identityAt(rp: Replay, site: Site): Opt[Digest] =
   if rp.schema.isNone:
     return Opt.none(Digest)
-  Opt.some(rp.schema.get.set.identityOf(site))
+  Opt.some(rp.schema.get.named(rp.schema.get.set.identityOf(site)))
 
 func needSchema(
     rp: Replay, got: Digest, site: Site, what: string
@@ -554,6 +578,7 @@ func disclosedValue(
     let again = s.set.normalizeAt(site, plainValue(node)).valueOr:
       return
         fail[void](veDisclosed, "the disclosed value does not fit the schema: " & error)
+    again.schema = s.named(again.schema)
     if toCbor(again) != d.value:
       return fail[void](veDisclosed, "the disclosed value is not its normalized form")
     node = again
@@ -577,10 +602,10 @@ func verifyAgainst(
   if schema.isSome:
     let s = schema.get
     if s.doc < 0 or s.doc >= s.set.docs.len or
-        schemaRoot(s.set.docs[s.doc]) != view.schemaRoot:
+        s.named(schemaRoot(s.set.docs[s.doc])) != view.schemaRoot:
       return
         fail[void](veSchema, "the supplied schema does not have the view's schema root")
-    let d = s.set.docs[s.doc].declarationBySubtree(view.subtreeRoot)
+    let d = s.set.docs[s.doc].declarationBySubtree(s.computedOf(view.subtreeRoot))
     if d.isNone or d.get.kind == dkMethod:
       return fail[void](veSchema, "the schema subtree root names no value declaration")
     site = declSite(s.doc, d.get)
@@ -746,6 +771,7 @@ func verifyAgainst(
           if has:
             let again = schema.get.set.normalizeAt(esite, plainValue(node)).valueOr:
               return fail[void](veDisclosed, error)
+            again.schema = schema.get.named(again.schema)
             if toCbor(again) != view.disclosed.value:
               return fail[void](
                 veDisclosed, "the disclosed value is not its normalized form"
@@ -876,8 +902,22 @@ func verifyPhysicalProof*(
     view: VerifiedView, profile = SpecProfile
 ): Result[void, ViewError] =
   ## Replays only the physical proof of `view`, with no schema. This is not a
-  ## HASH §8 verification (l.1214-1215 requires the schema construction input):
-  ## it exists for the synthetic HASH App B.1-B.3 identities, whose schema roots
-  ## name no schema (TF-13), and cannot descend a branched map. Production code
-  ## calls `verifyView`.
+  ## HASH §8 verification (l.1214-1215 requires the schema construction input)
+  ## and it cannot descend a branched map. Production code calls `verifyView`.
   verifyAgainst(view, Opt.none(ViewSchema), profile)
+
+when defined(lcnTestHooks):
+  func verifySyntheticView*(
+      view: VerifiedView,
+      schema: ViewSchema,
+      identities: openArray[(Digest, Digest)],
+      profile = SpecProfile,
+  ): Result[void, ViewError] =
+    ## [SPEC HASH App B l.1234-1237] The B.1 and B.2 views: `schema` is the typed
+    ## schema of the value, and `identities` pairs each identity it computes with
+    ## the synthetic one the appendix compares instead. Every other §8 check runs
+    ## unchanged. A test build only: HASH l.1084-1085 make a verifier compute the
+    ## roots itself, so no deployed entry takes them from its caller [DECISIONS G120].
+    var s = schema
+    s.synthetic = @identities
+    verifyAgainst(view, Opt.some(s), profile)

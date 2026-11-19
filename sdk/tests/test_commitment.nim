@@ -320,6 +320,17 @@ suite "commitment: schema-model construction":
     check m.body("demo.node").fields[0].node.target == "demo.node"
     check m.declarations.len == 3
 
+  test "[CMT-0240] [IMPL-DECISION G153] following local references reaches a node or an import without revisiting a declaration":
+    check buildErr(module("demo.a = demo.a")).contains("form a cycle")
+    check buildErr(module("demo.a = demo.b\ndemo.b = demo.a")).contains("form a cycle")
+    check buildErr(module("demo.a = demo.b\ndemo.b = demo.c\ndemo.c = demo.b")).contains(
+      "form a cycle"
+    )
+    # A chain that ends, and recursion through a structure, revisit nothing.
+    check buildSchema(module("demo.a = demo.b\ndemo.b = uint8"), pinnedContext()).isOk
+    check buildSchema(module("demo.a = logos.error_code"), pinnedContext()).isOk
+    check buildSchema(module("demo.a = demo.b\ndemo.b = [* demo.a]"), pinnedContext()).isOk
+
   test "[CMT-0215] [CMT-0219] references: local types, common types (qualified in logos) and supplied supporting types only":
     check buildErr(
       module("demo.x_request = {}\ndemo.x_response = {}\ndemo.t = {r: demo.x_request}")
@@ -352,7 +363,7 @@ suite "commitment: schema-model construction":
     ctx.supporting = @[iface.get]
     check buildErr(module("demo.t = uint8"), ctx).contains("role")
 
-  test "[CMT-0022] [CMT-0107] [CMT-0108] [CMT-0109] _implements: ascending 32-byte roots, each one supplied interface document, none unused":
+  test "[TXT-0006] [CMT-0022] [CMT-0107] [CMT-0108] [CMT-0109] _implements: ascending 32-byte roots, each one supplied interface document, none unused":
     let one = iface.get
     let two = build(
       "_interface = \"status_provider\"\nstatus_provider.status_request = {}\nstatus_provider.status_response = {up: bool}"
@@ -722,6 +733,25 @@ suite "commitment: choice selection plans":
     check tagged.test == ptFieldLiteral and tagged.field == "kind"
     check buildErr(module("demo.a = demo.b\ndemo.b = demo.a\ndemo.t = demo.a / demo.b")).len >
       0
+
+  test "[TXT-0008] arms that differ only in a field's presence are separated by the absent outcome of the one map-field test":
+    let p = planOf("demo.t = { a: uint8, b: uint8 } / { a: uint8 }")
+    check p.test == ptFieldLiteral and p.field == "b"
+    let
+      absent = p.branches.filterIt(it[0].kind == ocAbsent)
+      present = p.branches.filterIt(it[0].kind == ocOther)
+    check absent.len == 1 and present.len == 1
+    check absent[0][1].leaf and present[0][1].leaf
+    check absent[0][1].arm != present[0][1].arm
+
+  test "[CMT-0241] [TXT-0011] [TXT-0012] [TXT-0013] [TXT-0014] an unknown outcome keeps its arm: a recursive branch proves nothing about what it rejects":
+    # Structural outcome computation is no inhabitance proof: the type is valid.
+    check buildSchema(module("demo.never = [demo.never]"), pinnedContext()).isOk
+    # It does not establish that the arm rejects a one-element tuple.
+    check buildErr(
+      module("demo.never = [demo.never]\ndemo.choice = demo.never / [uint64]")
+    )
+      .contains("selection plan")
 
   test "[CMT-0032] references are followed into imported and supporting documents":
     check planOf("demo.t = logos.error_code / tstr").test == ptMajorType

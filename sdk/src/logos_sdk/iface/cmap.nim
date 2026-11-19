@@ -25,8 +25,8 @@
 ## largest discriminant would not fit `uint32_t` fails explicitly. Running out
 ## of memory aborts the process; no partial header is ever returned.
 ##
-## Every header is stamped PROVISIONAL ABI: the common-name projection (G158) and
-## G153 are open.
+## Every header is stamped PROVISIONAL ABI: the common-name projection (G158) is
+## open.
 
 {.push raises: [].}
 

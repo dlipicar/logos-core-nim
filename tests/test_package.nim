@@ -467,6 +467,13 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
           "constraints", cbor(@[0xb8'u8, 0x00])
         )
     ) == "invalid-package"
+    # [IFC-0976] A tag or null is no part of a Logos deterministic-CBOR value.
+    for prohibited in [@[0xf6'u8], @[0xc0'u8, 0x00], @[0x81'u8, 0xf7]]:
+      let bytes = prohibited
+      check mutated(
+        proc(m: CborValue) =
+          m.alpha["requested_permissions"].items[0].put("constraints", cbor(bytes))
+      ) == "invalid-package"
 
   test "[PKG-0268] a schema commitment record must match logos.schema_commitment":
     check mutated(

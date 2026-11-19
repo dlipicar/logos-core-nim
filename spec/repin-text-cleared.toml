@@ -1,0 +1,251 @@
+# What left spec/repin-pending.toml, and the evidence for each entry (DECISIONS I104).
+#
+#   [[text]]     a cleared sentence: `test` names the suite whose test carries [TXT-nnnn], or `reading`, `compared`
+#                and `kind` record what was read. `kind`: reword, removed, informative or holds
+#   [[units]]    what was compared for a changed unit, or the decision row of a unit that is not claimed
+#   [[stale]]    what replaced a retired id's rule, or what became of its code
+#   [[moved]]    an entry that changed sub-step, and why
+#   [[lowered]]  a behaviour entry lowered by a decision row that names it
+
+# P1: encoding ---------------------------------------------------------------------------------------------------
+
+[[units]]
+id = "CMT-0050"
+compared = "COMMITMENT l.732 at 6a4dfa28 ('a different extracted mirror') against l.605 at 6cac8335 ('a different rule set'). The rule is wider, the code is unchanged: test_commitment recomputes every pinned root from the mirrored INTERFACE §5.1 text, and an imported common reference keeps the pinned registry roots when another common document is supplied."
+
+[[units]]
+id = "IFC-0920"
+compared = "INTERFACE l.3139 at 6a4dfa28 (floating-point items only) against l.3090 at 6cac8335 (any value §4.4 item 5 prohibits). decodeCbor and checkPayload now refuse tags, null, undefined and other simple values too; test_transport, test_iface and test_cbor show each at the envelope and at the direct-mode boundary."
+
+[[stale]]
+id = "CDE-0056"
+compared = "The rule refused only the four primitives as rule names. CDE-0213 replaces it with every RFC 8610 prelude name, enforced in cddl/canon.nim and now in cddl/codec.nim and oracle/cdcddle.py. The citation in test_cddl moved to CDE-0213."
+
+[[stale]]
+id = "IFC-0423"
+compared = "The sentence that tags and null pass the envelope and fail at the schema is gone: they are Transport failures (IFC-0920). Forwarding without a schema remains at INTERFACE l.3092, which has no unit, so the test in test_transport keeps that behaviour and cites none. Invalid UTF-8 stays under TRN-0203."
+
+[[stale]]
+id = "IFC-0919"
+compared = "The floats-only sentence is replaced by IFC-0976, which prohibits tags, floats, null, undefined and other simple values at any depth. The citations in test_cbor, test_iface and docs moved to IFC-0976."
+
+[[moved]]
+id = "TXT-0040"
+from = "P1"
+to = "P4"
+reason = "Its replacement, TXT-0034 on provider-result validation in direct mode, is owned by P4, and P1 reads nothing of that path."
+
+[[text]]
+id = "TXT-0001"
+step = "P1"
+test = "sdk/tests/test_cddl.nim"
+
+[[text]]
+id = "TXT-0002"
+step = "P1"
+test = "sdk/tests/test_cddl.nim"
+
+[[text]]
+id = "TXT-0003"
+step = "P1"
+test = "sdk/tests/test_cddl.nim"
+
+[[text]]
+id = "TXT-0004"
+step = "P1"
+kind = "removed"
+reading = "The old subset bullet named only the controller of `.size`. TXT-0001 replaces it and also limits the target to uint, tstr or bstr."
+compared = "cdCDDLe l.166 at 6a4dfa28 against l.157 at 6cac8335, and the `.size` cases of test_cddl."
+
+[[text]]
+id = "TXT-0006"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0007"
+step = "P1"
+kind = "reword"
+pair = "TXT-0019"
+reading = "Only the list punctuation moved: the tuple-length observation is the same."
+compared = "COMMITMENT l.452 at 6a4dfa28 against l.358 at 6cac8335, and ptTupleLength in commitment/choice.nim."
+
+[[text]]
+id = "TXT-0008"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0009"
+step = "P1"
+kind = "reword"
+pair = "TXT-0023"
+reading = "One map-field test kind is left, so the order within each kind becomes one canonical field-name order."
+compared = "COMMITMENT l.460 at 6a4dfa28 against l.364 at 6cac8335, and `plan` in commitment/choice.nim, which tries the fields in sorted order."
+
+[[text]]
+id = "TXT-0010"
+step = "P1"
+kind = "reword"
+pair = "TXT-0024"
+reading = "The not-applicable outcome now names the one map-field test. Its meaning for a non-map value is unchanged."
+compared = "COMMITMENT l.467 at 6a4dfa28 against l.371 at 6cac8335, and `outcomes` and `observe` in commitment/choice.nim."
+
+[[text]]
+id = "TXT-0011"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0012"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0013"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0014"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0015"
+step = "P1"
+kind = "reword"
+pair = "TXT-0027"
+reading = "The common schema is presented in INTERFACE §5.1 rather than in an extracted mirror file. Our document is built from that block and checked against the pinned roots."
+compared = "COMMITMENT l.734 at 6a4dfa28 against l.609 at 6cac8335, and the first two tests of the suite 'commitment: pinned roots'."
+
+[[text]]
+id = "TXT-0016"
+step = "P1"
+kind = "reword"
+pair = "TXT-0028"
+reading = "The same rule, now said of the presentation: prelude aliases normalize to primitives and common names stay references."
+compared = "COMMITMENT l.735 at 6a4dfa28 against l.610 at 6cac8335, and how commitment/construct.nim translates `uint64` and `logos.error_code`."
+
+[[text]]
+id = "TXT-0534"
+step = "P1"
+test = "sdk/tests/test_values.nim"
+
+[[text]]
+id = "TXT-0017"
+step = "P1"
+kind = "removed"
+reading = "Methods and events are top-level declarations, which the new list still orders by qualified name, so nothing is left unordered."
+compared = "COMMITMENT l.260 at 6a4dfa28 against l.202 at 6cac8335, and the sort of model.declarations in commitment/construct.nim."
+
+[[text]]
+id = "TXT-0018"
+step = "P1"
+kind = "removed"
+reading = "The model has no collection of imports or references to order: an imported reference is a schema node in place."
+compared = "COMMITMENT l.263 at 6a4dfa28 against l.202-205 at 6cac8335, and the sorts in commitment/construct.nim and commitment/schema.nim, which cover declarations, map fields and choice arms."
+
+[[text]]
+id = "TXT-0019"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0007, which differs only in punctuation."
+compared = "COMMITMENT l.452 at 6a4dfa28 against l.358 at 6cac8335."
+
+[[text]]
+id = "TXT-0020"
+step = "P1"
+kind = "removed"
+reading = "Merged with TXT-0021 into TXT-0008: one observation covers absence and the exact scalar value."
+compared = "COMMITMENT l.453 at 6a4dfa28 against l.359 at 6cac8335, and the test of TXT-0008."
+
+[[text]]
+id = "TXT-0021"
+step = "P1"
+kind = "removed"
+reading = "Merged with TXT-0020 into TXT-0008."
+compared = "COMMITMENT l.454 at 6a4dfa28 against l.359 at 6cac8335, and the test of TXT-0008."
+
+[[text]]
+id = "TXT-0022"
+step = "P1"
+kind = "removed"
+reading = "The separate presence test is gone from the spec and from the code: ptFieldPresence, ocPresent and the presence observation were removed. The literal test runs on every field first and refines the presence outcomes, so no plan changes."
+compared = "COMMITMENT l.459 at 6a4dfa28 against l.356-371 at 6cac8335, and commitment/choice.nim."
+
+[[text]]
+id = "TXT-0023"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0009."
+compared = "COMMITMENT l.460 at 6a4dfa28 against l.364 at 6cac8335."
+
+[[text]]
+id = "TXT-0024"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0010."
+compared = "COMMITMENT l.467 at 6a4dfa28 against l.371 at 6cac8335."
+
+[[text]]
+id = "TXT-0025"
+step = "P1"
+kind = "removed"
+reading = "The remark about an extracted logos_common.cddl mirror is gone. Our common schema document is the INTERFACE §5.1 block."
+compared = "COMMITMENT l.714 at 6a4dfa28 against §5 at 6cac8335, and CommonSchemaDocument in pins.nim, which test_commitment compares with the mirrored block."
+
+[[text]]
+id = "TXT-0027"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0015."
+compared = "COMMITMENT l.734 at 6a4dfa28 against l.609 at 6cac8335."
+
+[[text]]
+id = "TXT-0028"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0016."
+compared = "COMMITMENT l.735 at 6a4dfa28 against l.610 at 6cac8335."
+
+[[text]]
+id = "TXT-0029"
+step = "P1"
+kind = "removed"
+reading = "The remark that the mirror is an authoring convenience went with the mirror. Nothing in the code depends on it."
+compared = "COMMITMENT l.739 at 6a4dfa28 against §5 at 6cac8335."
+
+[[text]]
+id = "TXT-0030"
+step = "P1"
+test = "sdk/tests/test_values.nim"
+
+[[text]]
+id = "TXT-0031"
+step = "P1"
+test = "sdk/tests/test_values.nim"
+
+[[text]]
+id = "TXT-0032"
+step = "P1"
+test = "sdk/tests/test_values.nim"
+
+[[text]]
+id = "TXT-0143"
+step = "P1"
+test = "sdk/tests/test_cbor.nim"
+
+[[text]]
+id = "TXT-0036"
+step = "P1"
+kind = "removed"
+reading = "The sentence giving validation to the module dispatch layer is replaced by IFC-0977 and IFC-0978: payloads are validated before provider code runs, the boundary's spec assigns it, and the dispatch layer may repeat it."
+compared = "INTERFACE l.3130 at 6a4dfa28 against l.3087 at 6cac8335, and the tests tagged IFC-0977 and IFC-0978 in test_transport and test_kit."
+
+[[text]]
+id = "TXT-0037"
+step = "P1"
+kind = "removed"
+reading = "The sentence limiting the runtime and transport layers to envelopes and routing fields is gone. Our transport session already validates payloads against the schema at its boundary."
+compared = "INTERFACE l.3132 at 6a4dfa28 against l.3087 at 6cac8335, and the tests tagged IFC-0977 in test_transport."

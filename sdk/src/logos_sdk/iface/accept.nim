@@ -219,26 +219,6 @@ proc checkSource(source: string, opts: AcceptOptions): Result[void, string] =
         return err(r.name & " uses a reserved Logos name (INTERFACE §1.3)")
   ok()
 
-func checkAliasCycles(m: SchemaModel): Result[void, string] =
-  ## [IMPL-DECISION G153] A chain of local aliases must reach a structure, a
-  ## scalar or an import: `a = b`, `b = a` has no C representation (INTERFACE §2
-  ## requires every accepted set to have one) and no value.
-  for d in m.declarations:
-    if d.kind == dkMethod or d.body.kind != snLocalRef:
-      continue
-    var
-      seen = @[d.name]
-      cur = d.body
-    while cur.kind == snLocalRef:
-      if cur.target in seen:
-        return err("the aliases " & seen.join(", ") & " form a cycle (G153)")
-      seen.add(cur.target)
-      let next = m.find(cur.target)
-      if next.isNone or next.get.kind == dkMethod:
-        break
-      cur = next.get.body
-  ok()
-
 proc checkModel(
     m: SchemaModel, ctx: SchemaContext, opts: AcceptOptions
 ): Result[void, string] =
@@ -276,7 +256,6 @@ proc checkModel(
       ?checkFields(d.body, d.name)
     of dkRequest, dkResponse:
       ?checkFields(d.body, d.name)
-  ?checkAliasCycles(m)
   if m.nestingOf > MaxSchemaNesting:
     return err("the schema nests deeper than 128 levels (INTERFACE §5.3)")
   if m.nodesOf.len > MaxSchemaNodes:

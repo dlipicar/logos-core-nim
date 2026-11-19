@@ -1030,7 +1030,7 @@ suite "iface: payload validation (INTERFACE §4.4, §4.5)":
     check e.reason == Opt.some(iprSchemaMismatch)
     check e.path == @[cbor("cid")]
 
-  test "[IFC-0919] [IFC-0920] a floating-point item at any depth is non-deterministic CBOR, never a schema question":
+  test "[IFC-0976] [IFC-0920] a floating-point item at any depth is non-deterministic CBOR, never a schema question":
     let v = storage()
     for x in [
       cborFloatBits(fw16, 0x3c00),
@@ -1044,12 +1044,29 @@ suite "iface: payload validation (INTERFACE §4.4, §4.5)":
       check v.checkResult("exists", encodeCbor(cborMap((cbor("exists"), x)))).error.code ==
         ecModule
 
-  test "[IMPL-DECISION G38] tags, null, undefined and other simple values are schema mismatches":
+  test "[IFC-0976] [IFC-0920] [TXT-0143] [IMPL-DECISION G38] tags, null, undefined and other simple values are non-deterministic CBOR, never a schema question":
     let v = storage()
-    for x in [cborTag(1, cbor(1'u64)), cborNull(), cborUndefined(), cborSimple(16)]:
+    for x in [
+      cborTag(1, cbor(1'u64)),
+      cborNull(),
+      cborUndefined(),
+      cborSimple(16),
+      cborSimple(32),
+      cborArray(cborArray(cborNull())),
+      cborMap((cborNull(), cbor(1'u64))),
+    ]:
       let e = v.paramsError("exists", encodeCbor(cborMap((cbor("cid"), x))))
-      check e.reason == Opt.some(iprSchemaMismatch)
-      check e.path == @[cbor("cid")]
+      check e.code == ecInvalidParams
+      check e.reason == Opt.some(iprNonDeterministicCbor)
+      check e.path.len == 0
+      check detailOf(e).lookup("reason").get.text == "non-deterministic-cbor"
+      check v.checkResult("exists", encodeCbor(cborMap((cbor("exists"), x)))).error.code ==
+        ecModule
+    # false and true are the two simple values a payload may hold: a wrong type
+    # here is a schema question, with its path.
+    let e = v.paramsError("exists", encodeCbor(cborMap((cbor("cid"), cbor(true)))))
+    check e.reason == Opt.some(iprSchemaMismatch)
+    check e.path == @[cbor("cid")]
 
   test "[IFC-0923] [IFC-0926] [IFC-0928] [IFC-0929] the payload depth limit: configurable, at least 128, failing without detail":
     let s = accepted(

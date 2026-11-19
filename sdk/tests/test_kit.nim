@@ -451,7 +451,7 @@ suite "ifc.kit: dispatch (INTERFACE §2.6, §2.7, §4.5, App A.3) [IMPL]":
       check m.reads.load == 1
     meterDestroy(ctx)
 
-  test "[IFC-0250] a rejected request never reaches the handler and leaves the outputs null":
+  test "[IFC-0250] [IFC-0977] [IFC-0978] the module dispatch layer repeats the validation: a rejected request never reaches the handler and leaves the outputs null":
     let ctx = newMeter(input())
     check meterCall(ctx, "write", read(1)).code == ecMethodNotFound
     check meterCall(ctx, "schema", diag("{}")).code == ecMethodNotFound # App A.3

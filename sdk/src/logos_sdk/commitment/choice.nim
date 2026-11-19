@@ -2,8 +2,9 @@
 ##
 ## A choice schema is valid only when a structural selection plan separates its
 ## arms: a finite decision tree over the decoded value's CBOR major type, exact
-## scalar literal, fixed tuple length, and closed-map field literals and presence,
-## whose every leaf holds at most one arm [SPEC COMMITMENT §3.1]. The plan is
+## scalar literal, fixed tuple length, and closed-map fields (absent, or present
+## with an exact scalar literal or another value), whose every leaf holds at most
+## one arm [SPEC COMMITMENT §3.1]. The plan is
 ## derived from the canonical arm nodes and is never an identity input; a decoder
 ## follows it to the one candidate arm and then validates the whole value against
 ## that arm.
@@ -37,14 +38,12 @@ type
     ptScalarLiteral = "scalar literal"
     ptTupleLength = "tuple length"
     ptFieldLiteral = "map-field literal"
-    ptFieldPresence = "map-field presence"
 
   OutcomeKind* = enum
     ocMajor ## the value's CBOR major type is `major`
     ocLiteral ## the observed scalar is exactly `literal`
     ocLength ## the array has `length` elements
     ocAbsent ## the map has no such field
-    ocPresent ## the map has the field
     ocOther ## any other scalar, array length or present field value
     ocNotApplicable ## the observation does not exist for this value
 
@@ -68,7 +67,7 @@ type
       arm*: int
     of false:
       test*: PlanTest
-      field*: string ## the map field the two map-field tests observe
+      field*: string ## the map field the map-field-literal test observes
       branches*: seq[(Outcome, SelectionPlan)]
 
   ObsKind = enum
@@ -82,7 +81,6 @@ type
     obFieldAbsent
     obFieldIs
     obFieldOther
-    obFieldPresent
     obNonMap
 
   Obs = object
@@ -366,8 +364,6 @@ func accepts(p: var Planner, doc: int, n: SchemaNode, o: Obs): bool =
     n.kind notin {snList, snTuple}
   of obFieldAbsent:
     n.kind == snMap and (let f = n.fieldOf(o.field); f.isNone or f.get.optional)
-  of obFieldPresent:
-    n.kind == snMap and n.fieldOf(o.field).isSome
   of obFieldIs:
     if n.kind != snMap or n.fieldOf(o.field).isNone:
       return false
@@ -487,10 +483,6 @@ func outcomes(test: PlanTest, f: Facts, field: string): seq[(Outcome, Obs)] =
       )
     )
     res.add((Outcome(kind: ocNotApplicable), Obs(kind: obNonMap)))
-  of ptFieldPresence:
-    res.add((Outcome(kind: ocPresent), Obs(kind: obFieldPresent, field: field)))
-    res.add((Outcome(kind: ocAbsent), Obs(kind: obFieldAbsent, field: field)))
-    res.add((Outcome(kind: ocNotApplicable), Obs(kind: obNonMap)))
   res
 
 func plan(
@@ -503,8 +495,6 @@ func plan(
     @[(ptMajorType, ""), (ptScalarLiteral, ""), (ptTupleLength, "")]
   for f in top.fields:
     tests.add((ptFieldLiteral, f))
-  for f in top.fields:
-    tests.add((ptFieldPresence, f))
   for (test, field) in tests:
     let f =
       if test == ptFieldLiteral:
@@ -569,7 +559,7 @@ func observe(test: PlanTest, field: string, v: CborValue, o: Outcome): bool =
       v.kind != ckArray
     else:
       v.kind == ckArray
-  of ptFieldLiteral, ptFieldPresence:
+  of ptFieldLiteral:
     if v.kind != ckMap:
       return o.kind == ocNotApplicable
     var value: CborValue = nil
@@ -579,7 +569,7 @@ func observe(test: PlanTest, field: string, v: CborValue, o: Outcome): bool =
     case o.kind
     of ocAbsent:
       value.isNil
-    of ocPresent, ocOther:
+    of ocOther:
       not value.isNil
     of ocLiteral:
       not value.isNil and matches(value, o.literal)

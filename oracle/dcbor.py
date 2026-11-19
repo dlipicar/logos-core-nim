@@ -5,14 +5,17 @@ reusing the Nim code. Errors are classified like the Nim decoder:
 
   malformed          not one well-formed data item (checked over the whole input first)
   non-deterministic  well-formed, but not the deterministic encoding (§4.4), which
-                     includes any floating-point item (§4.4 item 5)
+                     includes any floating-point item, tag, null, undefined or other
+                     simple value except false and true (§4.4 item 5)
   invalid-utf8       a text string that is not UTF-8 (§4.5 reports it as schema-mismatch)
   too-deep           arrays and maps nested deeper than the payload-depth limit
-                     (§4.5.1; G59), or tags deeper than their own bound
+                     (§4.5.1; G59), or, with `allow_extended`, tags deeper than
+                     their own bound
 
-`allow_floats` decodes the generic CBOR data model instead, where floats are
-values in their shortest width. Tags and simple values decode. Values: int,
-bytes, str, list, dict (insertion order = encoded order), Tag, Simple, Float.
+`allow_floats` and `allow_extended` together decode the generic CBOR data model
+instead: floats are values in their shortest width, and tags and every simple
+value decode. Values: int, bytes, str, list, dict (insertion order = encoded
+order), Tag, Simple, Float.
 """
 
 from __future__ import annotations
@@ -220,7 +223,7 @@ def _valid_utf8(b: bytes) -> bool:
     return True
 
 
-def _decode(data: bytes, allow_invalid_utf8: bool, allow_floats: bool):
+def _decode(data: bytes, allow_invalid_utf8: bool, allow_floats: bool, allow_extended: bool):
     pos = 0
 
     def head():
@@ -272,6 +275,8 @@ def _decode(data: bytes, allow_invalid_utf8: bool, allow_floats: bool):
                 out[_hashable(k)] = item()
             return out
         if major == 6:
+            if not allow_extended:
+                raise DcborError("non-deterministic", "tag")
             return Tag(val, item())
         if ai in (25, 26, 27):
             if not allow_floats:
@@ -284,6 +289,8 @@ def _decode(data: bytes, allow_invalid_utf8: bool, allow_floats: bool):
             return False
         if val == 21:
             return True
+        if not allow_extended:
+            raise DcborError("non-deterministic", "simple value other than false and true")
         if val == 22:
             return None
         return Simple(val)
@@ -305,14 +312,19 @@ def decode(
     allow_invalid_utf8: bool = False,
     allow_floats: bool = False,
     max_tag_depth: int = MAX_TAG_DEPTH,
+    allow_extended: bool = False,
 ):
-    _well_formed(bytes(data), max_depth, max_tag_depth)
-    return _decode(bytes(data), allow_invalid_utf8, allow_floats)
+    # Without `allow_extended` a tag is refused whatever its depth, so the tag
+    # bound applies only to a decode that keeps tags.
+    _well_formed(bytes(data), max_depth, max_tag_depth if allow_extended else sys.maxsize)
+    return _decode(bytes(data), allow_invalid_utf8, allow_floats, allow_extended)
 
 
-def classify(data: bytes, max_depth: int = MAX_DEPTH, allow_floats: bool = False) -> str:
+def classify(
+    data: bytes, max_depth: int = MAX_DEPTH, allow_floats: bool = False, allow_extended: bool = False
+) -> str:
     try:
-        decode(data, max_depth, allow_floats=allow_floats)
+        decode(data, max_depth, allow_floats=allow_floats, allow_extended=allow_extended)
     except DcborError as e:
         return e.kind
     return "ok"

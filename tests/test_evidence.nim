@@ -203,9 +203,15 @@ let
     signedDeterministic(encodeCbor(v))
 signer.clear()
 
+func coseValue(container: openArray[byte]): CborValue =
+  ## The tagged COSE_Sign1 item, read as the generic data model it is.
+  var opts = defaultDecodeOptions()
+  opts.allowExtended = true
+  decodeCbor(container, opts).get
+
 func swapped(container: openArray[byte], f: proc(a: var CborValue)): seq[byte] =
   ## `container` with its COSE array changed by `f`, re-encoded.
-  var v = decodeCbor(container).get
+  var v = coseValue(container)
   {.cast(noSideEffect).}:
     f(v.content)
   encodeCbor(v)
@@ -220,7 +226,7 @@ suite "run.evidence: the container (CA §9.1 l.1219-1287)":
       check v.get.kid == Kid
       check v.get.producer == Producer
       check encode(v.get.record).tryGet == encode(callRecord()).tryGet
-      let d = decodeCbor(c).tryGet
+      let d = coseValue(c)
       check d.kind == ckTag and d.tag == 18
       let s = decodeCoseSign1Structure(c).tryGet
       check s.protectedBytes == encodeCbor(cborMap((cbor(4'u64), cbor(Kid))))
@@ -254,7 +260,7 @@ suite "run.evidence: the container (CA §9.1 l.1219-1287)":
     proc rejects(c: openArray[byte]): bool =
       verifyEvidence(c, ctx).isErr
 
-    let untagged = encodeCbor(decodeCbor(plain).get.content)
+    let untagged = encodeCbor(coseValue(plain).content)
     check rejects(untagged)
     check rejects(
       plain.swapped(
