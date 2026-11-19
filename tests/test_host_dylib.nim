@@ -119,14 +119,14 @@ when defined(posix):
   var signalsAfterLoad = default(array[3, pointer])
   block:
     var own = default(array[3, Sigaction])
-    var mark = Sigaction()
+    var mark: Sigaction
     mark.sa_handler = sentinel
     discard sigemptyset(mark.sa_mask)
     for i, (name, sig) in watchedSignals:
       doAssert sigactionOf(sig, addr mark, addr own[i]) == 0, name
     doAssert hhLoad(cstring(library)) == 0, "cannot load " & library
     for i, (name, sig) in watchedSignals:
-      var now = Sigaction()
+      var now: Sigaction
       doAssert sigactionOf(sig, addr own[i], addr now) == 0, name
       signalsAfterLoad[i] = cast[pointer](now.sa_handler)
 else:
