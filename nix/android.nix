@@ -97,9 +97,12 @@ let
       installPhase = ''
         runHook preInstall
         for b in build/bin/*; do
-          ${ndkBin}/llvm-readelf -h "$b" | grep -q 'Machine: *${a.machine}' \
+          # Read whole, then searched: under stdenv's pipefail, `readelf | grep -q`
+          # fails whenever grep stops reading before readelf has written it all.
+          header=$(${ndkBin}/llvm-readelf -h "$b")
+          grep -q 'Machine: *${a.machine}' <<<"$header" \
             || { echo "$b: not ${abi}"; exit 1; }
-          ${ndkBin}/llvm-readelf -h "$b" | grep -q 'Type: *DYN' \
+          grep -q 'Type: *DYN' <<<"$header" \
             || { echo "$b: not a PIE"; exit 1; }
           extra=$(${ndkBin}/llvm-readelf -d "$b" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' \
             | grep -vxE 'lib(c|m|dl|log)\.so' || true)
