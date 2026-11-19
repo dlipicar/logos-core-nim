@@ -20,10 +20,12 @@
 ##    the Runtime owns, and the provider's buffer is released at once with its
 ##    `_MODULE_free` (response copy), so a provider never waits on a
 ##    consumer's buffers to stop (RUNTIME l.1581-1583).
-## 5. [G174] The result is committed only after the route's end cause is read
-##    under the ticket's lock, the lock the Runtime thread takes to record it:
-##    a route revoked while the provider ran turns the result into
-##    NOT_AUTHORISED; a closed or failed route lets it complete.
+## 5. The result is committed only after the route's end cause is read under
+##    the ticket's lock, the lock the Runtime thread takes to record it
+##    (RUNTIME l.1212): a route revoked or expired while the provider ran ends
+##    the call TRANSPORT_ERROR and drops the result (l.1271); a closed or
+##    failed route lets it complete, unless the result is the CANCELLED the
+##    end's own cancellation caused, which is TRANSPORT_ERROR too.
 ## 6. The call leaves the in-flight count; a provider being stopped is
 ##    destroyed only once its count is zero.
 ##
@@ -324,20 +326,37 @@ proc systemCall*(
   ok(bytes)
 
 proc revokedResult*(): InvocationFailure =
-  ## [G174] X1 interim: a route revoked while the call ran ends it with the
-  ## handle's retained termination code.
+  ## [SPEC RUNTIME l.1261; TRANSPORT l.971] A call its route's revocation or
+  ## expiry found not yet admitted is a new operation: NOT_AUTHORISED.
   failure(ecNotAuthorised, "the route was revoked")
+
+proc routeEndedResult*(): InvocationFailure =
+  ## [SPEC RUNTIME l.1271-1272] An admitted call that its route's end ended
+  ## before a valid final result was accepted; the code does not say whether
+  ## the provider ran it.
+  failure(ecTransport, "the route ended before the call's result was accepted")
+
+func endedByRoute*(endCode: int, r: Result[seq[byte], InvocationFailure]): bool =
+  ## [SPEC RUNTIME l.1271, l.1212; INTERFACE l.2024] Read under the ticket's
+  ## lock: whether the route's end decides an admitted call instead of `r`. A
+  ## revoked or expired route commits no result of a call it ends. After any
+  ## other end a CANCELLED result is the end's doing (P5 reading d4): the end
+  ## marked the invocation cancelled, and a cancellation by the caller, a
+  ## timeout or the session decides the call before its provider returns.
+  endCode == ord(ecNotAuthorised) or
+    (endCode != ord(ecOk) and r.isErr and r.error.code == ecCancelled)
 
 proc commitSync*(
     t: ptr CallTicket, r: var Result[seq[byte], InvocationFailure]
 ): Result[seq[byte], InvocationFailure] =
-  ## [G174] Step 5: the commit decision, ordered with the route's revocation.
-  ## A response the revocation keeps from its caller is zeroed [DECISIONS G276].
+  ## Step 5: the commit decision, ordered with the route's end (RUNTIME l.1212,
+  ## l.1271). A response the end keeps from its caller is zeroed
+  ## [DECISIONS G276].
   withLock t.lock:
-    if t.endCode == ord(ecNotAuthorised):
+    if endedByRoute(t.endCode, r):
       if r.isOk:
         wipe(r.value)
-      return err(revokedResult())
+      return err(routeEndedResult())
   move r
 
 proc leave*(e: Engine, adm: Admission) =

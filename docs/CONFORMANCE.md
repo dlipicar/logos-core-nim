@@ -135,7 +135,9 @@ Tier 4b step 4b-2 (DECISIONS I90) builds transported local routes: a host routin
   RUN-0552 and IFC-0010 are remote-only and move to Tier 5.
 - **TRANSPORT**: the session is bound to the Runtime's authority decision and ends with it, also
   after a renewal (TRN-0153, TRN-0317); the ticket goes only to the consumer (TRN-0195). The end of a
-  route terminates, drains or closes its sessions by cause (G260; G174 amended). At 6cac8335 a drain
+  route terminates, drains or closes its sessions by cause (G260). An authority end answers the Requests
+  not yet admitted `NOT_AUTHORISED` and leaves the admitted ones unanswered, which the consumer fails
+  `TRANSPORT_ERROR` at the close (RUNTIME l.1271, TRANSPORT l.979; G174 replaced at re-pin P5d). At 6cac8335 a drain
   terminates too: admission stops with `NOT_READY`, then ProtocolError `NOT_READY` and close (TRANSPORT
   l.977, DECISIONS I106).
 - **CAPABILITY AUTHORITY**: the ticket binds the decision, its freshness and revocation (CAP-0254).

@@ -2446,3 +2446,22 @@ step = "P5"
 kind = "removed"
 reading = "Reworded as TXT-0321."
 compared = "RUNTIME l.4144 at 6a4dfa28 against l.4002 at 6cac8335."
+
+# P5d: route ends --------------------------------------------------------------------------------------------
+
+[[text]]
+id = "TXT-0091"
+step = "P5"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0297"
+step = "P5"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0298"
+step = "P5"
+kind = "informative"
+reading = "A caveat for the caller: TRANSPORT_ERROR from a route's end says the call's result was not accepted, not that the provider did not run it. The Runtime claims nothing more: invoke.routeEndedResult's message says the route ended before the result was accepted, and the provider's code already running is marked cancelled, not stopped (INTERFACE l.2101; CA l.917-918). DECISIONS G174 says so."
+compared = "RUNTIME l.1272 at 6cac8335 against invoke.routeEndedResult, engine.endRoute's marking and the G174 row."

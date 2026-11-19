@@ -378,7 +378,7 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     h.release()
     e.finish()
 
-  test "[CAP-0391] [CAP-0392] a cached call decision is named as itself; renewing or revoking the route while a call runs does not change what it captured at admission":
+  test "[CAP-0391] [CAP-0392] [RUN-1101] a cached call decision is named as itself; renewing or revoking the route while a call runs does not change what it captured at admission; the revoked call is TRANSPORT_ERROR":
     let (e, orch) = ready()
     let route = orch.routeTo(e, Meter, "k")
     var h = orch.handle(route)
@@ -409,8 +409,8 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     check bgCode.load == 0
     var v = e.kept[^1].view
     check v.success and v.decision == applied
-    # Revoked while the call runs: it ends NOT_AUTHORISED, recorded as a
-    # failure under what it captured.
+    # Revoked while the call runs: it ends TRANSPORT_ERROR (RUNTIME l.1271),
+    # recorded as a failure under what it captured.
     gate.store(true)
     bgDone.store(false)
     createThread(t, background, addr h)
@@ -430,7 +430,7 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     )
     gate.store(false)
     joinThread(t)
-    check ErrorCode(bgCode.load) == ecNotAuthorised
+    check ErrorCode(bgCode.load) == ecTransport
     v = e.kept[^1].view
     check not v.success
     check v.decision == second

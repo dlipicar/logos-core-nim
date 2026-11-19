@@ -647,7 +647,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     h.release()
     e.finish()
 
-  test "[IMPL-DECISION G174] [RUN-0829] [IFC-0740] [IFC-0741] a route that ends cancels the invocation; closed, it completes with its result; revoked, NOT_AUTHORISED at once":
+  test "[RUN-1101] [RUN-0829] [IFC-0740] [IFC-0741] a route that ends cancels the invocation; closed, it completes with its result; revoked, TRANSPORT_ERROR at once":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
@@ -668,7 +668,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     check rc.close(closing).code == ecOk
     check rc.renew("r", revoking).code == ecNotAuthorised
     check done[1].finished
-    check done[1].codeOf == ecNotAuthorised
+    check done[1].codeOf == ecTransport
     check done[0].count.load == 0
     gate.store(false)
     check done[0].finished
@@ -890,6 +890,30 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     sleep(20)
     check hooks.load == 1
     second.release()
+    h.release()
+    e.finish()
+
+  test "[RUN-1101] a route's end cancels a deferred invocation, whose provider then completes it CANCELLED: the call is TRANSPORT_ERROR, since its caller did not cancel it (INTERFACE l.2024; RUNTIME l.1271)":
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    let route = rc.routeId("k")
+    var h = rc.handle(route)
+    mode.store(ord(dmHold))
+    settleOnCancel.store(true)
+    var call = h.started(req(5), addr done[0])
+    let (_, inv) = takeHeld()
+    check inv != nil
+    check rc.close(route).code == ecOk
+    check waitUntil(
+      proc(): bool =
+        hooks.load == 1
+    )
+    check done[0].finished
+    check done[0].codeOf == ecTransport
+    sleep(20)
+    check done[0].count.load == 1
+    call.release()
     h.release()
     e.finish()
 
@@ -1317,6 +1341,63 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
     for c in calls.mitems:
       c.release()
     h.release()
+    e.finish()
+
+  test "[RUN-1101] a revoked route: an admitted call, asynchronous or synchronous, is TRANSPORT_ERROR while its provider still runs it; a call that no call worker had admitted is a new operation, NOT_AUTHORISED (RUNTIME l.1261, l.1271-1272)":
+    # [plan §2.13] Over local transport a consumer's call goes on its link at
+    # once, so none of the consumer's calls waits for a call worker.
+    directOnly()
+    var cfg =
+      config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
+    cfg.limits.refuseDelay = initDuration(seconds = 600) # no queued call is refused
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let revoking = rc.routeId("k1")
+    var hr = rc.handle(revoking)
+    var ho = rc.handle(rc.routeId("k2"))
+    gate.store(true)
+    let before = held.load
+    const Workers = MaxCallWorkers + MaxNestedCallWorkers
+    var calls: seq[LogosAsyncCall]
+    calls.add(hr.started(req(19), addr many[0]))
+    for i in 1 ..< Workers:
+      calls.add(ho.started(req(19), addr many[i]))
+    bgDone.store(false)
+    var t: Thread[ptr LogosRouteHandle]
+    createThread(t, background, addr hr) # synchronous, on its own thread
+    check waitUntil(
+      proc(): bool =
+        held.load == before + Workers + 1
+    )
+    # Every call worker is busy: this one waits, not admitted.
+    calls.add(hr.started(req(19), addr many[Workers]))
+    sleep(50 * Slow)
+    check many[Workers].count.load == 0
+    check rc.renew("r", revoking).code == ecNotAuthorised
+    check many[0].finished
+    check many[0].codeOf == ecTransport
+    check many[Workers].finished
+    check many[Workers].codeOf == ecNotAuthorised
+    check held.load == before + Workers + 1 # their providers still run them (l.1272)
+    check not bgDone.load
+    gate.store(false)
+    joinThread(t)
+    check bgCode.load == ord(ecTransport)
+    for i in 1 ..< Workers:
+      check many[i].finished(seconds = 60 * Slow)
+      check many[i].codeOf == ecOk
+    check waitUntil(
+      proc(): bool =
+        held.load == before
+    )
+    sleep(20)
+    check many[0].count.load == 1
+    check many[Workers].count.load == 1
+    for c in calls.mitems:
+      c.release()
+    hr.release()
+    ho.release()
     e.finish()
 
   test "[IFC-0725] [IMPL-DECISION G242] completion callbacks that each wait for the next completion, deeper than 64, all complete":

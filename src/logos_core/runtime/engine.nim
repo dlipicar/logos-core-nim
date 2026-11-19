@@ -75,8 +75,9 @@
 ## call workers apart from the lifecycle workers (`asynccall.nim`); its
 ## completion callback, and a deferred provider's `request_cancel`, run on a
 ## lifecycle worker. A route that ends deactivates its subscriptions and marks
-## the invocations admitted through it cancelled; what becomes of their
-## results is G174's policy. A realization that ends suppresses the completion
+## the invocations admitted through it cancelled; an admitted call that the
+## end ends is TRANSPORT_ERROR (RUNTIME l.1271; `endByRoute`,
+## `invoke.endedByRoute`). A realization that ends suppresses the completion
 ## callbacks of its calls that have not begun.
 ##
 ## [IMPL] The host (step 5, `host.nim`). `bootstrap` creates the configured
@@ -1427,9 +1428,34 @@ proc asyncTerminal(st: State, a: AsyncRec) =
 
 proc endCall(st: State, a: AsyncRec, f: InvocationFailure, kind: CallEnd) =
   ## A terminal decision the Runtime thread makes: a timeout, or the end of
-  ## the call's route or of a realization [G174].
+  ## the call's route or of a realization.
   if not a.terminal and asyncOf(a.call).decide(f, kind):
     st.asyncTerminal(a)
+
+func admitted(a: AsyncRec): bool =
+  ## [P5 d2] Admitted into a provider, direct or served: its ticket, or once
+  ## the ticket went with the call's leaving, the provider's name it keeps.
+  a.ticket != nil or a.provider.len > 0
+
+proc endUnanswered(st: State, a: AsyncRec, f: InvocationFailure) =
+  ## [SPEC RUNTIME l.1271; TRANSPORT l.979; P5 Q3 (a)] An end decides the
+  ## call. A served one's Request is left unanswered: the session's end fails
+  ## it TRANSPORT_ERROR at its consumer, which a Response could not do (a
+  ## provider's own NOT_AUTHORISED is legitimate).
+  if a.session:
+    markSent(asyncOf(a.call))
+  st.endCall(a, f, okEnded)
+
+proc endByRoute(st: State, a: AsyncRec) =
+  ## [SPEC RUNTIME l.1261, l.1271; TRANSPORT l.971; P5 d2] A revoked or
+  ## expired route ends its asynchronous calls at once, by three facts: one
+  ## admitted into a provider, or sent on a link (`linkTag`), completes
+  ## TRANSPORT_ERROR; one not yet admitted is a new operation and gets
+  ## NOT_AUTHORISED, which a served one is answered with (l.971).
+  if a.admitted or a.linkTag != 0:
+    st.endUnanswered(a, routeEndedResult())
+  else:
+    st.endCall(a, revokedResult(), okEnded)
 
 proc refuseQueuedCall(st: State) =
   ## [IMPL; I88, deviation 5] The oldest call no call worker has begun is
@@ -1505,7 +1531,8 @@ proc endServices(st: State, s: ptr AttemptServices, instance: string) =
   ## The realization an attempt made is gone, or the attempt made none: its
   ## bindings are invalid. Its calls are cancelled and their completions not
   ## yet begun suppressed; calls admitted into it as a provider and still
-  ## without an outcome end NOT_READY, the bound of G174.
+  ## without an outcome end TRANSPORT_ERROR, since their routes fail with it
+  ## (RUNTIME l.1271), a served one unanswered (`endUnanswered`).
   if s == nil:
     return
   let token = attemptOf(s)
@@ -1532,7 +1559,7 @@ proc endServices(st: State, s: ptr AttemptServices, instance: string) =
       else:
         st.endCall(a, failure(ecNotReady, "the consumer's realization ended"), okEnded)
     elif a.provider == instance and not a.terminal:
-      st.endCall(a, failure(ecNotReady, "the provider's realization ended"), okEnded)
+      st.endUnanswered(a, failure(ecTransport, "the provider's realization ended"))
 
 proc endRegsGone(st: State, consumer: string, n: int) =
   ## [I86] `n` of the consumer's `observe_end` registrations fired or were
@@ -1599,10 +1626,12 @@ proc endTransported(st: State, r: Route) =
   ## [plan §2.8 steps 1 and 4; owner batch B 7; G260] A transported route
   ## ended: its tickets are revoked, then each of its sessions is ordered as
   ## the end's row of `ports.EndPolicies` says. An authority end terminates:
-  ## the in-flight Requests are answered NOT_AUTHORISED, then ProtocolError
-  ## NOT_AUTHORISED and close (TRANSPORT l.987-991). An end that leaves no
-  ## usable session closes at once. A readiness end drains: no new admission,
-  ## what was admitted answers until the bound, then close (K13).
+  ## `endRoute` answered the Requests not yet admitted NOT_AUTHORISED and left
+  ## the admitted ones unanswered, then ProtocolError NOT_AUTHORISED and close,
+  ## at which the consumer fails those TRANSPORT_ERROR (TRANSPORT l.966-979;
+  ## RUNTIME l.1271; P5 Q3 (a)). An end that leaves no usable session closes at
+  ## once. A readiness end drains: no new admission, what was admitted answers
+  ## until the bound, then ProtocolError NOT_READY and close (l.977; K13).
   discard st.tickets.revokeRoute(r.id)
   if r.sessions.len == 0:
     return
@@ -1627,17 +1656,18 @@ when defined(lcnTestHooks):
   proc setCancelMarkDelayForTests*(ms: int) =
     ## Once a route's end has marked its admitted calls cancelled, the Runtime
     ## thread waits `ms` before it goes on; 0 turns it off. A cancel forwarded
-    ## to a hosted provider meanwhile must not overtake what the end answered.
+    ## to a hosted provider meanwhile must not overtake what the end ordered.
     cancelMarkDelayMs.store(ms)
 
 proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229; INTERFACE §2.5] The route takes no
   ## new calls, its subscriptions are deactivated, and each handle observing
-  ## it gets its terminal callback once, on a worker. [G174] The invocations
-  ## admitted through it are marked cancelled (INTERFACE l.2101-2102) and
-  ## learn its end cause under their ticket's lock; a revoked route ends its
-  ## asynchronous calls NOT_AUTHORISED at once, a closed or failed one lets
-  ## them complete.
+  ## it gets its terminal callback once, on a worker. The invocations admitted
+  ## through it are marked cancelled (INTERFACE l.2101-2102) and learn its end
+  ## cause under their ticket's lock (RUNTIME l.1212). A revoked or expired
+  ## route ends its asynchronous calls at once (`endByRoute`: an admitted one
+  ## TRANSPORT_ERROR, l.1271); a closed or failed one lets them complete
+  ## (`invoke.endedByRoute`).
   if r.isTerminal:
     return
   let before = r.state
@@ -1661,13 +1691,14 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
     deactivate(subOf(p))
   # [IMPL; I91] What the Runtime answers and orders for the route's calls goes
   # out before any of them is marked cancelled: a hosted provider's host gets
-  # its call's cancel behind them (`hostcall`), so a provider that returns
+  # its call's cancel behind the session's terminate (`hostcall`), which ends
+  # the host's own invocations (`host/endpoint`), so a provider that returns
   # because it was cancelled cannot commit its own Response through a revoked
-  # route first (CA l.917-918; TRANSPORT l.987-991).
+  # route (RUNTIME l.1212; TRANSPORT l.966-979).
   if r.state == rtRevoked:
     for a in st.records:
-      if not a.rc and a.route == r.id:
-        st.endCall(a, revokedResult(), okEnded)
+      if not a.rc and a.route == r.id and not a.terminal:
+        st.endByRoute(a)
   if r.mode == rmLocalTransport:
     st.endTransported(r)
   for t in r.calls:
@@ -8603,15 +8634,17 @@ proc linkResponse(st: State, conn: ConnId, tag: uint64, o: sink CallOutcome) =
 
 proc linkLocalFailure(st: State, ev: IoEvent) =
   ## [plan §2.6 step 3] A Request the caller session refused: nothing was
-  ## sent. [G22] A connection already gone gives the handle's code. An
-  ## INVALID_PARAMS gets its validation detail from the selected contract.
+  ## sent. [SPEC RUNTIME l.1270-1271; P5 Q-r B2] A connection already ending
+  ## or gone is TRANSPORT_ERROR: `linkAdmits` admitted the call, so a cause
+  ## that ended it since is no new operation's. An INVALID_PARAMS gets its
+  ## validation detail from the selected contract.
   let l = st.links.getOrDefault(ev.conn)
   if l.isNil:
     st.diagnose("transport: " & ev.localMsg)
     return
   var code = ev.localCode
   if code == ecNotReady:
-    code = l.routeCause.get(l.observed.get(ecTransport))
+    code = ecTransport
   let f = InvocationFailure(code: code, message: Opt.some(ev.localMsg))
   var reply: ReplyChannel
   var p: pointer
@@ -11539,25 +11572,31 @@ proc handle(st: State, m: sink Msg) =
   st.settle()
 
 proc sessionExpired(st: State, s: Session) =
-  ## [Rev R1; TRN-0317; TRANSPORT l.929-930] A session ends with the decision
-  ## it was bound to, also after its route was renewed: its in-flight served
-  ## invocations end NOT_AUTHORISED and it terminates; the route stays as it
-  ## is, and a later session gets the renewed decision.
+  ## [Rev R1; TRN-0317; TRANSPORT l.966-979] A session ends with the decision
+  ## it was bound to, also after its route was renewed, in `endRoute`'s order:
+  ## its served invocations learn the end under their ticket's lock and end
+  ## (`endByRoute`: an admitted one unanswered, TRANSPORT_ERROR at its
+  ## consumer, RUNTIME l.1271), the session terminates, and only then are they
+  ## marked cancelled. The route stays as it is, and a later session gets the
+  ## renewed decision.
   var calls: seq[CallRef] # ending one may drop it from the session
   for c in s.calls.values:
     calls.add(c)
   for c in calls:
     let a = st.asyncCalls.getOrDefault(c)
-    if a.isNil:
-      continue
-    if a.ticket != nil:
+    if a != nil and a.ticket != nil:
       withLock a.ticket.lock:
         a.ticket.endCode = ord(ecNotAuthorised)
-      a.ticket.cancelled.store(true)
-    st.cancelInvocation(a)
-    st.endCall(a, revokedResult(), okEnded)
+  for c in calls:
+    let a = st.asyncCalls.getOrDefault(c)
+    if a != nil and not a.terminal:
+      st.endByRoute(a)
   for c in st.sv.terminate(s):
     markSent(asyncOf(c))
+  for c in calls:
+    let a = st.asyncCalls.getOrDefault(c)
+    if a != nil:
+      st.cancelInvocation(a)
 
 proc checkTransported(st: State, now: MonoTime) =
   ## [Rev R17] Expired tickets are deleted (TRANSPORT l.963, l.1062); sessions
@@ -12291,7 +12330,8 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
     return err(engineError(ecInvalidParams, "routing: " & error))
   var tcfg = cfg.transport.get(defaultTransportConfig())
   tcfg.maxPayloadDepth = depth # [G241] one payload depth for every decoder
-  tcfg.terminationDrain = 0 # [plan §2.8] the Runtime answers before terminating
+  tcfg.terminationDrain = 0
+    # [plan §2.8] the Runtime decides every call before it terminates a session
   let tp = newTransportPorts(tcfg).valueOr:
     return err(engineError(ecInvalidParams, "transport: " & error))
   let e = createShared(Shared)

@@ -20,7 +20,7 @@
 #                     rides on one (same spec and section, same work item), with a [[deferred]] record in
 #                     spec/repin-text-cleared.toml naming the unit and a decision row (DECISIONS I108)
 
-closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
+closed = ["P1", "P2", "P3", "P4", "P5"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
 
 [mirror]
 "PKG/4.manifest.cddl" = "P7"
@@ -204,8 +204,6 @@ closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pend
 "PKG-0648" = "P7"
 "PKG-0649" = "P7"
 "PKG-0650" = "P7"
-"RUN-1100" = "P5"
-"RUN-1101" = "P5"
 "RUN-1104" = "P8"
 "RUN-1105" = "P8"
 
@@ -295,18 +293,6 @@ class = "behaviour"
 what = "`configuration-rejected` is produced only by `apply_configuration` under LOGOS-MODULE-CONFIGURATION and omits `current_revision`."
 
 [[text]]
-id = "TXT-0091"
-step = "P5"
-spec = "IFC"
-line = "2025"
-side = "new"
-section = "§2.9.1"
-source = "M17, n.119a"
-class = "behaviour"
-note = "Any other deadline on an invocation gives TIMEOUT; a route end stays TRANSPORT_ERROR under R l.1271"
-what = "Expiration of any other deadline imposed on that invocation also produces `TIMEOUT`."
-
-[[text]]
 id = "TXT-0275"
 step = "P8"
 spec = "RUN"
@@ -315,27 +301,6 @@ side = "new"
 section = "Abstract/Terminology"
 class = "todo"
 what = "**Module provider:** The Runtime-known, route-facing exposure of schema-defined method or event behavior from a module instance. One provider record may expose the module's primary concrete contract, exact implemented interface contract views, and exact extended contract views. Every route selects exactly one of those contracts. A local provider is backed by a local module instance. A remote module facade is a local provider record that represents a module instance owned by another Runtime. A provider does not introduce a separate module implementation or lifecycle."
-
-[[text]]
-id = "TXT-0297"
-step = "P5"
-spec = "RUN"
-line = "1263"
-side = "new"
-section = "§7.5"
-class = "todo"
-guard = true
-what = "A `route-timeout` failure is a loss of route readiness, not an authorization failure."
-
-[[text]]
-id = "TXT-0298"
-step = "P5"
-spec = "RUN"
-line = "1272"
-side = "new"
-section = "§7.5"
-class = "todo"
-what = "That code does not prove that the provider did not execute the call."
 
 [[text]]
 id = "TXT-0323"

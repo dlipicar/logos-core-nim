@@ -925,6 +925,65 @@ suite "run.authority: execution (RUNTIME §3.6, §9.3)":
     check got.anyIt(it.what == "execute" and it.consumer == Orch)
     e.finish()
 
+# Asynchronous calls ----------------------------------------------------------------------
+
+type Completion = object
+  count: Atomic[int]
+  code: Atomic[int]
+
+proc onCompletion(
+    userData: pointer,
+    r: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+) {.cdecl, gcsafe, raises: [].} =
+  let d = cast[ptr Completion](userData)
+  if not owner.release.isNil:
+    owner.release(owner.state)
+  d.code.store(int(r.code))
+  d.count += 1
+
+proc submitRead(
+    h: var LogosRouteHandle,
+    c: var LogosAsyncCall,
+    channel: uint32,
+    d: ptr Completion,
+    timeoutMs = -1,
+) =
+  ## One asynchronous `read` on `channel`, prepared on `h` and submitted.
+  let params = encode(MeterReadRequest(channel: channel)).tryGet
+  var o = LogosAsyncOptions(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncOptions)),
+    hasTimeout: timeoutMs >= 0,
+    timeoutMs: uint64(max(timeoutMs, 0)),
+  )
+  var cb = LogosAsyncCallbacks(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncCallbacks)),
+    complete: onCompletion,
+    userData: d,
+  )
+  check toResult(
+    h.vtable.prepareCall(
+      addr h,
+      "read",
+      cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]),
+      csize_t(params.len),
+      addr o,
+      addr cb,
+      addr c,
+    )
+  ).code == ecOk
+  c.vtable.submit(addr c)
+
+proc completed(d: ptr Completion): bool =
+  waitUntil(
+    proc(): bool =
+      d.count.load >= 1
+  )
+
 suite "run.authority: route validity (RUNTIME l.3157-3190; TL-03 interim)":
   test "[RUN-0566] [RUN-0938] [RUN-1159] [CAP-0049] a route allow without valid_until is refused; expires_at is the allow's valid_until, at establishment and at renewal":
     let (e, orch) = ready()
@@ -965,6 +1024,57 @@ suite "run.authority: route validity (RUNTIME l.3157-3190; TL-03 interim)":
     check ErrorCode(seen.code.load) == ecNotAuthorised
     check orch.renew("k2", route).code == ecNotAuthorised
     h.release()
+    e.finish()
+
+  test "[RUN-1101] [TXT-0091] at expires_at the calls the route admitted, synchronous and asynchronous, are TRANSPORT_ERROR while the provider still runs them; a new call is NOT_AUTHORISED; only a deadline imposed on the invocation itself, the caller's timeout, is TIMEOUT":
+    let (e, orch) = ready()
+    setScript(allow("establish-route", validMs = 1000))
+    let route = orch.routeId("k")
+    var h = orch.handle(route)
+    var h2 = orch.handle(route)
+    check h2.read(1).isOk
+    gate.store(true)
+    defer:
+      gate.store(false)
+    let before = held.load
+    # [SPEC INTERFACE l.2025 (TXT-0091)] The caller's own deadline on an
+    # admitted invocation: TIMEOUT, though the provider still holds it.
+    var timed: Completion
+    var tc = LogosAsyncCall()
+    h2.submitRead(tc, 19, addr timed, timeoutMs = 50)
+    check completed(addr timed)
+    check ErrorCode(timed.code.load) == ecTimeout
+    # Two more admitted calls held by the provider: one asynchronous, one
+    # synchronous on its own thread.
+    var running: Completion
+    var rc = LogosAsyncCall()
+    h2.submitRead(rc, 19, addr running)
+    bgDone.store(false)
+    var t: Thread[ptr LogosRouteHandle]
+    createThread(t, background, addr h)
+    check waitUntil(
+      proc(): bool =
+        held.load == before + 3
+    )
+    check running.count.load == 0
+    # [RUNTIME l.1261, l.1271-1272] The route's end is no deadline of the
+    # invocation: the calls it admitted are TRANSPORT_ERROR, and a new one
+    # is NOT_AUTHORISED.
+    clk.advance(1500)
+    check h2.read(1).error.code == ecNotAuthorised
+    let rec = e.routes().filterIt(it.route == route)[0]
+    check rec.state.kind == LogosNSRuntimeControlRouteStateKind.Revoked
+    check rec.failure.get.code == "authority-expired"
+    check completed(addr running)
+    check ErrorCode(running.code.load) == ecTransport
+    gate.store(false)
+    joinThread(t)
+    check ErrorCode(bgCode.load) == ecTransport
+    check running.count.load == 1 and timed.count.load == 1
+    tc.vtable.release(addr tc)
+    rc.vtable.release(addr rc)
+    h.release()
+    h2.release()
     e.finish()
 
 # Execution authorization over time ------------------------------------------------------
@@ -1381,7 +1491,7 @@ suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
     h.release()
     e.finish()
 
-  test "[RUN-0833] [CAP-0193] [CAP-0194] a call in flight across a policy change commits its response when its route is kept; when the route is revoked it gets NOT_AUTHORISED, its invocation is marked cancelled and the limitation is recorded":
+  test "[RUN-1101] [RUN-0833] [CAP-0193] [CAP-0194] a call in flight across a policy change commits its response when its route is kept; when the route is revoked it gets TRANSPORT_ERROR, its invocation is marked cancelled and the limitation is recorded":
     let (e, orch) = ready()
     let route = orch.routeId("k")
     var h = orch.handle(route)
@@ -1413,7 +1523,7 @@ suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
     check e.ended(route, "authority-denied")
     gate.store(false)
     joinThread(t)
-    check ErrorCode(bgCode.load) == ecNotAuthorised
+    check ErrorCode(bgCode.load) == ecTransport
     check e.diagnostics().anyIt("authority was withdrawn" in it)
     h.release()
     h2.release()

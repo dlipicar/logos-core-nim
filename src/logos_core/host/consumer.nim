@@ -40,7 +40,8 @@
 ##   Event's credit goes back once its handler returned (TRANSPORT l.721-725).
 ## - **Ends [R4, R11].** The Runtime's `route_ended` gives each of the route's
 ##   handles the route's cause and its first terminal cause; a revoked route
-##   ends the calls still running (G174). The connection's own end is reported
+##   ends the calls still running, a sent one TRANSPORT_ERROR (RUNTIME
+##   l.1271). The connection's own end is reported
 ##   (`rc_link_closed`), and the Runtime answers with the handle's first cause
 ##   (its route's when that came first, else TF-15's TRANSPORT_ERROR or the
 ##   provider's NOT_AUTHORISED). This replaces plan R11's `route_ended_ack`
@@ -663,8 +664,10 @@ proc endSubsLocked(l: ptr HLink, code: ErrorCode) =
 proc routeEnded*(m: LcnCarrierRouteEnded) =
   ## Main thread: [plan §2.8 steps 1-2] a route the consumer holds ended. Its
   ## retained ticket goes; each of its handles takes the route's cause, which
-  ## its subscriptions end with, and its first terminal cause; a revoked
-  ## route ends the calls still running through them (G174).
+  ## its subscriptions end with, and its first terminal cause; a revoked or
+  ## expired route ends the calls still running through them: a sent one
+  ## TRANSPORT_ERROR (RUNTIME l.1271), one not yet sent the route's cause
+  ## (l.1261).
   dropMaterial(m.route)
   let code = codeOf(m.code)
   var done: seq[ptr HAsync]
@@ -682,7 +685,14 @@ proc routeEnded*(m: LcnCarrierRouteEnded) =
       if m.revoked:
         var c = l.asyncs
         while c != nil:
-          if c.decideLocked(ecNotAuthorised, "the route was revoked"):
+          let won =
+            if c.sent:
+              c.decideLocked(
+                ecTransport, "the route ended before the call's result was accepted"
+              )
+            else:
+              c.decideLocked(code, "the route was revoked")
+          if won:
             done.add(c)
           c = c.next
       scheduleObserverLocked(l)
@@ -718,17 +728,13 @@ proc onResponse(
     localMsg: string,
 ): ptr HAsync =
   ## Under `cl`: a call's terminal outcome; the prepared call it decided, if
-  ## any. [plan §2.6 step 3; G22] A Request the session refused locally with
-  ## NOT_READY gives the handle's code.
+  ## any. [plan §2.6 step 3; SPEC RUNTIME l.1270-1271; P5 Q-r B2] A Request
+  ## the session refused locally with NOT_READY is TRANSPORT_ERROR: the
+  ## Runtime admitted it (`rc_link_admit`), so a cause that ended its
+  ## connection since is no new operation's.
   var code = localCode
   if local and code == ecNotReady:
-    code =
-      if l.hasRouteCause:
-        l.routeCause
-      elif l.hasFirst:
-        l.first
-      else:
-        ecTransport
+    code = ecTransport
   var p = addr l.calls
   while p[] != nil:
     let w = p[]

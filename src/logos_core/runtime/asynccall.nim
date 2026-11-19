@@ -18,7 +18,8 @@
 ## [IMPL] Terminal decisions. Under the call's lock the first terminal decision
 ## wins (l.2065-2071): a result (from a call worker or a deferred `complete`),
 ## a local rejection, `cancel`, `release`, the timeout (the Runtime thread),
-## or the end of its route or consumer [G174]. Each completion callback runs on
+## or the end of its route or consumer (RUNTIME l.1271: an admitted call that
+## its route's end ends is TRANSPORT_ERROR). Each completion callback runs on
 ## a lifecycle worker, never inline in `submit` or in a provider's `complete`;
 ## it is suppressed once the consumer's realization has ended. Its response
 ## owner frees a Runtime copy, so it outlives the call and the handle
@@ -36,13 +37,15 @@
 ## [IMPL; DECISIONS I90, plan §2.5] A served invocation of a transported route
 ## is an `AsyncCall` with a session origin: the Runtime thread makes it at
 ## `evDispatch`, holds its one reference, and a call worker admits and runs it
-## as above. Its outcome is a Response on the session, never a callback. The
-## G174 discipline, adapted (owner batch B 7): under the ticket's lock, an end
-## code NOT_AUTHORISED means the Runtime answers the Request; otherwise the
-## worker submits the Response while still holding the lock, and on a full
-## output budget releases it, waits 1 ms and tries again. Every other end is
-## answered by the Runtime thread (`unsentFailure`), unless the session
-## already committed it (`markSent`: a Cancel, a closed session).
+## as above. Its outcome is a Response on the session, never a callback. Under
+## the ticket's lock, a route's end that decides the call (`endedByRoute`)
+## leaves its Request unanswered, so the session's end fails it
+## TRANSPORT_ERROR at the consumer (RUNTIME l.1271, TRANSPORT l.979; P5 Q3
+## (a)); otherwise the worker submits the Response while still holding the
+## lock, and on a full output budget releases it, waits 1 ms and tries again.
+## Every other decision is answered by the Runtime thread (`unsentFailure`),
+## unless nothing is to be answered (`markSent`: a Cancel or a closed session
+## committed it, or a route's end decided an admitted call).
 ##
 ## [plan §2.7; part 4b-3.2; G273] A served invocation on a hosted provider's
 ## endpoint carries no params: its Module Host keeps them, checks them, runs
@@ -77,7 +80,7 @@ type
     okResult ## the call's own result or failure
     okCancelled ## `cancel` or `release`
     okTimeout
-    okEnded ## its route or its consumer's realization ended [G174]
+    okEnded ## its route or its consumer's realization ended (RUNTIME l.1271)
 
   Owned = object ## What one completion's response owner frees (INTERFACE l.2091-2093).
     message: cstring
@@ -253,12 +256,14 @@ proc sessionCommit(
     r: Result[seq[byte], InvocationFailure],
     workEnded: bool,
 ): bool =
-  ## [I90; plan §2.5; owner batch B 7] A served invocation's own outcome: the
-  ## Response is submitted under the ticket's lock (when admitted) and the
-  ## call's lock, and the decision made with it, so it is ordered with the
-  ## route's revocation through the loop (RUNTIME l.1292-1296). A full output
-  ## budget releases both locks before waiting (l.1298). True when `r` is the
-  ## call's outcome and a success.
+  ## [I90; plan §2.5] A served invocation's own outcome: the Response is
+  ## submitted under the ticket's lock (when admitted) and the call's lock,
+  ## and the decision made with it, so it is ordered with the route's end
+  ## through the loop (RUNTIME l.1212). A full output budget releases both
+  ## locks before waiting. True when `r` is the call's outcome and a success.
+  ## [SPEC RUNTIME l.1271; TRANSPORT l.979; P5 Q3 (a)] When the route's end
+  ## decides it instead (`endedByRoute`), nothing is answered: the session's
+  ## end fails the Request TRANSPORT_ERROR at its consumer.
   let ok = r.isOk
   var cmd = IoCommand(
     conn: c.conn,
@@ -269,12 +274,16 @@ proc sessionCommit(
   )
   while true:
     var state = 0
-      # 0: lost; 1: decided and sent; 2: busy; 3: decided, the Runtime answers
+      # 0: lost; 1: decided and sent; 2: busy; 3: decided, nothing is answered
     if t != nil:
       acquire(t.lock)
-    if t != nil and t.endCode == ord(ecNotAuthorised):
-      if c.decide(failed(revokedResult()), okEnded):
+    if t != nil and endedByRoute(t.endCode, r):
+      acquire(c.lock)
+      if c.phase == cpSubmitted:
+        c.decideLocked(failed(routeEndedResult()), okEnded)
+        c.sent = true
         state = 3
+      release(c.lock)
     else:
       acquire(c.lock)
       if c.phase == cpSubmitted:
@@ -330,17 +339,18 @@ proc offerCommitted(
     r: Result[seq[byte], InvocationFailure],
     workEnded = false,
 ): bool {.discardable.} =
-  ## [G174] A provider's result, decided under the ticket's lock so the commit
-  ## is ordered with the route's revocation (RUNTIME l.1292-1293); true when
-  ## it is the call's outcome and a success. `workEnded`: a served
-  ## invocation's provider work ended with it (the synchronous path).
+  ## A provider's result, decided under the ticket's lock so the commit is
+  ## ordered with the route's end (RUNTIME l.1212): `endedByRoute` makes it
+  ## TRANSPORT_ERROR (l.1271). True when it is the call's outcome and a
+  ## success. `workEnded`: a served invocation's provider work ended with it
+  ## (the synchronous path).
   if c.session:
     return c.sessionCommit(t, r, workEnded)
   let ok = r.isOk
   var won = false
   withLock t.lock:
-    if t.endCode == ord(ecNotAuthorised):
-      won = c.decide(failed(revokedResult()), okEnded)
+    if endedByRoute(t.endCode, r):
+      won = c.decide(failed(routeEndedResult()), okEnded)
       result = false
     else:
       won = c.decide(r, okResult)

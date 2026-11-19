@@ -282,6 +282,18 @@ G352 and G354 (DECISIONS, "Open items").
 
   Claimed: RUN-1108, RUN-1109, RUN-1198, RUN-1199, RUN-1201 and RUN-1202. 17 text entries cleared,
   App A's by typed readings.
+- 2026-11-19, re-pin P5d (I109), route ends at 6cac8335:
+  - An admitted call that its route's end ends is TRANSPORT_ERROR (l.1271; G174 replaced), and a call
+    a revocation or expiry finds not yet admitted is NOT_AUTHORISED (l.1261). This reverses the batch
+    B 7 amendment the owner saw: a transported or hosted provider's in-flight Request is no longer
+    answered NOT_AUTHORISED; its session ends and the caller fails it TRANSPORT_ERROR at the close
+    (P5 Q3 (a); TRANSPORT l.979). G260's revoked row follows.
+  - A provider realization's end and a local refusal after the Runtime admitted the call are
+    TRANSPORT_ERROR too; a CANCELLED that a route's end caused completes TRANSPORT_ERROR (reading d4).
+  - M17 conforms on reading: only the caller's own deadline on an invocation is TIMEOUT
+    (INTERFACE l.2025); a `route-timeout` end is a loss of readiness, NOT_READY (l.1263).
+
+  Claimed: RUN-1100 and RUN-1101. 3 text entries cleared. P5 closed.
 
 ## Tiers at f4f83471 (the original plan)
 
