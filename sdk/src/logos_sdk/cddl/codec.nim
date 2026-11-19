@@ -124,11 +124,21 @@ func textField(v: CborValue, k: uint64, path: string): Result[string, CddlError]
     return err(fail(path, "field " & $k & " must be a text string"))
   ok(t.get)
 
-func checkName(name, path: string): Result[void, CddlError] =
+func checkRuleName(name, path: string): Result[void, CddlError] =
+  ## [SPEC cdCDDLe §6, §8] A bound rule name is no RFC 8610 prelude name.
   if not name.isIdentifier:
     return err(fail(path, "invalid name " & name))
-  if name.parsePrimitive.isSome:
-    return err(fail(path, "a rule or reference cannot be named " & name))
+  if name.isPreludeName:
+    return err(fail(path, "a rule cannot be named " & name))
+  ok()
+
+func checkReferenceName(name, path: string): Result[void, CddlError] =
+  ## A reference may carry a prelude name an external context supplies (cdCDDLe
+  ## §6), but a §5.1 primitive or `true`/`false` has its own node [G14].
+  if not name.isIdentifier:
+    return err(fail(path, "invalid name " & name))
+  if name.isReservedReference:
+    return err(fail(path, "a reference cannot be named " & name))
   ok()
 
 func decodeLiteral(v: CborValue, path: string): Result[Literal, CddlError] =
@@ -257,7 +267,7 @@ func decodeType(v: CborValue, path: string): Result[CddlType, CddlError] =
   of 3:
     ?v.checkFields(path, [0'u64, 1])
     let name = ?v.textField(1, path)
-    ?checkName(name, path)
+    ?checkReferenceName(name, path)
     ok(CddlType(kind: tkReference, name: name))
   of 5:
     let primitive = ?decodePrimitive(v, path)
@@ -335,7 +345,7 @@ func fromCbor*(v: CborValue): Result[CddlDocument, CddlError] =
       return err(fail(path, "expected a type-rule node"))
     ?item.checkFields(path, [0'u64, 1, 3])
     let name = ?item.textField(1, path)
-    ?checkName(name, path)
+    ?checkRuleName(name, path)
     if doc.rules.len > 0:
       let order = cmp(doc.rules[^1].name, name)
       if order == 0:

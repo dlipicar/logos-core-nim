@@ -96,7 +96,7 @@ const
   CanonicalModelId* = "cdcddle"
   PreludeNames* = [
     # RFC 8610 Appendix D. Only the four primitives and `true`/`false` are in the
-    # cdCDDLe §5.1 subset; a document may not redefine any of them.
+    # cdCDDLe §5.1 subset; no rule may be named any of them (cdCDDLe §6).
     "any", "uint", "nint", "int", "bstr", "bytes", "tstr", "text", "tdate", "time",
     "number", "biguint", "bignint", "bigint", "integer", "unsigned", "decfrac",
     "bigfloat", "eb64url", "eb64legacy", "eb16", "encoded-cbor", "uri", "b64url",
@@ -120,6 +120,11 @@ func parsePrimitive*(name: string): Opt[Primitive] =
 
 func isPreludeName*(name: string): bool =
   name in PreludeNames
+
+func isReservedReference*(name: string): bool =
+  ## [G14] A §5.1 primitive or `true`/`false`: a name that always means itself,
+  ## so no type-reference node carries it and no external scope supplies it.
+  name.parsePrimitive.isSome or name in ["true", "false"]
 
 func uintLiteral*(v: uint64): Literal =
   Literal(kind: lkUint, uint: v)

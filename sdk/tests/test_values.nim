@@ -198,7 +198,7 @@ proc verdict(w: CborValue, schema = Opt.none(ViewSchema)): Result[void, ViewErro
   if schema.isSome:
     verifyView(v.get, schema.get)
   else:
-    verifyPhysicalProof(v.get) # HASH App B and the proof-only cases (TF-13)
+    verifyPhysicalProof(v.get) # the proof-only cases
 
 proc accepted(w: CborValue, schema = Opt.none(ViewSchema)): bool =
   let r = verdict(w, schema)
@@ -211,6 +211,40 @@ proc failure(w: CborValue, schema = Opt.none(ViewSchema)): Opt[ViewErrorKind] =
   if r.isOk:
     return Opt.none(ViewErrorKind)
   Opt.some(r.error.kind)
+
+type AppBSchema = object
+  ## [SPEC HASH App B l.1234-1237] The typed schema of an App B.1 or B.2 value, and
+  ## the synthetic identity that stands for each identity it computes.
+  schema: ViewSchema
+  identities: seq[(Digest, Digest)]
+
+proc appBList(element: string, synthetic = [0x10'u8, 0x11, 0x12]): AppBSchema =
+  ## A list of `element`, as App B.1 has it.
+  let m = build(module("demo.values = [* " & element & "]\n"))
+  let r = m.typed("demo.values", "[1]")
+  AppBSchema(
+    schema: ViewSchema(set: setOf(m), doc: 0),
+    identities: @[
+      (schemaRoot(m), ident(synthetic[0])),
+      (r.subtreeRoot, ident(synthetic[1])),
+      (r.node.elementSchema, ident(synthetic[2])),
+    ],
+  )
+
+proc appBBytes(): AppBSchema =
+  ## A byte string, as App B.2 has it.
+  let m = build(module("demo.blob = bstr\n"))
+  let r = m.typed("demo.blob", "h'00'")
+  AppBSchema(
+    schema: ViewSchema(set: setOf(m), doc: 0),
+    identities: @[(schemaRoot(m), ident(0x10)), (r.subtreeRoot, ident(0x13))],
+  )
+
+proc verdict(w: CborValue, s: AppBSchema): Result[void, ViewError] =
+  let v = parseView(w)
+  if v.isErr:
+    return err(v.error)
+  verifySyntheticView(v.get, s.schema, s.identities)
 
 proc domains(v: VerifiedView): seq[Domain] =
   v.proof.mapIt(it.domain)
@@ -793,10 +827,10 @@ suite "hash: verified views":
     check v.stepHashes ==
       @[pin("hsh-b1-final-chunk"), pin("hsh-b1-list"), pin("hsh-b1-value-root")]
     check toHex(v.valueRoot) == pin("hsh-b1-value-root")
-    check accepted(wire(v))
+    check verdict(wire(v), appBList("uint16")).isOk
     let first = viewAt(hashAppB1(), [listIndex(3)])
     check first.stepHashes[0] == pin("hsh-b1-first-chunk")
-    check accepted(wire(first))
+    check verdict(wire(first), appBList("uint16")).isOk
 
   test "[HSH-0175] [HSH-0155] [HSH-0166] App B.2: the view of bytes 4096..4097 discloses the final byte over the final chunk, the aggregate and the value root":
     let v = viewAt(hashAppB2(), [bstrRange(4096, 1)])
@@ -808,11 +842,71 @@ suite "hash: verified views":
     check v.domains == @[dBstrChunk, dBstr, dValueRoot]
     check v.stepHashes ==
       @[pin("hsh-b2-final-chunk"), pin("hsh-b2-aggregate"), pin("hsh-b2-value-root")]
-    check accepted(wire(v))
+    check verdict(wire(v), appBBytes()).isOk
     let first = viewAt(hashAppB2(), [bstrRange(10, 20)])
     check first.stepHashes[0] == pin("hsh-b2-first-chunk")
     check first.disclosed.bytes == toSeq(10 ..< 30).mapIt(byte(it))
-    check accepted(wire(first))
+    check verdict(wire(first), appBBytes()).isOk
+
+  test "[HSH-0210] a disclosed value is a value root exactly when the path is empty":
+    let r = appB.typed("demo.ping_response", """{"ok": true}""")
+    let
+      whole = wire(viewAt(r, noPath))
+      inner = wire(viewAt(r, [fieldSegment("ok")]))
+    check accepted(whole, viewSchema(appB))
+    check accepted(inner, viewSchema(appB))
+    # A value root at a non-empty path, and a value node at the empty path.
+    check failure(inner.put([8], whole.lookup(8'u64).get), viewSchema(appB)).isSome
+    check failure(whole.put([8], inner.lookup(8'u64).get), viewSchema(appB)).isSome
+
+  test "[TXT-0534] a normalized value node at the empty path carries the declaration's subtree root, not its leaf hash":
+    let m = build(module("demo.id = uint8\n"))
+    let d = m.find("demo.id").get
+    let r = m.typed("demo.id", "5")
+    check r.node.schema == declarationRoot(m, d)
+    check r.node.schema != leafHash(m, d, []).get
+
+  test "[HSH-0211] [TXT-0030] the App B.1 and B.2 synthetic identities are the computed roots of step 2, and no schema computes them":
+    let
+      b1 = wire(viewAt(hashAppB1(), [listIndex(256)]))
+      b2 = wire(viewAt(hashAppB2(), [bstrRange(4096, 1)]))
+    check verdict(b1, appBList("uint16")).isOk
+    check verdict(b2, appBBytes()).isOk
+    # The same typed schema without the table computes other roots.
+    check failure(b1, Opt.some(appBList("uint16").schema)) == Opt.some(veSchema)
+    check failure(b2, Opt.some(appBBytes().schema)) == Opt.some(veSchema)
+    # Another set of identities is not the appendix's.
+    check verdict(b1, appBList("uint16", [0x20'u8, 0x21, 0x22])).error.kind == veSchema
+    check verdict(b1, appBList("uint16", [0x10'u8, 0x21, 0x12])).error.kind == veSchema
+    check verdict(b1, appBList("uint16", [0x10'u8, 0x11, 0x22])).error.kind == veSchema
+
+  test "[TXT-0031] steps 3 and 4 use the typed schema: a list of uint16 in B.1 and a byte string in B.2":
+    let
+      b1 = wire(viewAt(hashAppB1(), [listIndex(256)]))
+      b2 = wire(viewAt(hashAppB2(), [bstrRange(4096, 1)]))
+    # The right identities over another element type.
+    check verdict(b1, appBList("uint32")).isErr
+    check verdict(b1, appBList("uint8")).isErr
+    # B.1's value is no byte string, and B.2's path is no list index.
+    check verdict(b1, appBBytes()).isErr
+    check verdict(b2, appBList("uint16")).isErr
+    let listPath = b2.put([7, 0], diag("""{0: "list-index", 1: 0}"""))
+    check verdict(listPath, appBBytes()).error.kind == vePath
+
+  test "[TXT-0032] every other check of HASH §8 applies to the App B views unchanged":
+    let
+      b1 = wire(viewAt(hashAppB1(), [listIndex(256)]))
+      b2 = wire(viewAt(hashAppB2(), [bstrRange(4096, 1)]))
+    check verdict(b1.put([3], cbor(ident(0x55))), appBList("uint16")).error.kind ==
+      veRoot
+    check verdict(b1.put([4], cbor("x")), appBList("uint16")).error.kind == veProfile
+    # A changed byte in a proof step, and a step the path does not need.
+    check verdict(b1.put([9, 0, 1, 7, 0], cbor(255'u64)), appBList("uint16")).isErr
+    check verdict(b2.put([9, 0, 1, 6], cbor(@[0x51'u8])), appBBytes()).isErr
+    let steps = b1.lookup(9'u64).get.items
+    check verdict(b1.put([9], cborArray(@[steps[0]] & steps)), appBList("uint16")).isErr
+    # The disclosed value is normalized under the typed schema.
+    check verdict(b1.put([8, 1, 3], cbor(255'u64)), appBList("uint16")).isErr
 
   test "[HSH-0166] [HSH-0159] [HSH-0147] [HSH-0146] App B views: every mutation of a value, path, range, label, count, identity, kind, digest, discriminator, domain tag, step or root is rejected":
     let b1 = wire(viewAt(hashAppB1(), [listIndex(256)]))

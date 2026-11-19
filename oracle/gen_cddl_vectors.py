@@ -294,10 +294,6 @@ INVALID = [
     ("unsupported-text-range-bound", 'a = "a" .. "z"\n'),
     ("unsupported-range-parenthesized-bounds", "a = (1)..(2)\n"),  # §5.1 l.181
     ("unsupported-size-parenthesized-bound", "a = tstr .size ((1)..8)\n"),
-    ("unsupported-prelude-int", "a = int\n"),
-    ("unsupported-prelude-text", "a = text\n"),
-    ("unsupported-prelude-any", "a = [* any]\n"),
-    ("unsupported-prelude-nil", "a = nil\n"),
     ("unsupported-size-named-target", "a = b .size 3\nb = tstr\n"),
     ("unsupported-size-literal-target", 'a = "x" .size 1\n'),
     ("unsupported-size-named-controller", "a = tstr .size n\nn = 3\n"),
@@ -347,6 +343,12 @@ INVALID = [
     ("resolution-primitive-name", "uint = tstr\n"),
     ("resolution-primitive-name-bool", "bool = uint\n"),
     ("resolution-prelude-name", "int = uint\n"),
+    ("resolution-prelude-name-tdate", "tdate = uint\n"),
+    # another prelude name resolves only through an external context (§6; G16)
+    ("resolution-prelude-reference-int", "a = int\n"),
+    ("resolution-prelude-reference-text", "a = text\n"),
+    ("resolution-prelude-reference-any", "a = [* any]\n"),
+    ("resolution-prelude-reference-nil", "a = nil\n"),
     ("resolution-prelude-name-true", "true = uint\n"),
     # canonical-model rules (§7.4, §8)
     ("unsupported-range-reversed", "a = 10..1\n"),
@@ -398,10 +400,14 @@ DECODE_INVALID = [
     ("decode-rule-name-trailing-dash", one(UINT, "a-")),
     ("decode-rule-name-space", one(UINT, "a b")),
     ("decode-rule-name-primitive", one(TSTR, "uint")),
+    ("decode-rule-name-prelude-int", one(UINT, "int")),
+    ("decode-rule-name-prelude-tdate", one(UINT, "tdate")),
+    ("decode-rule-name-prelude-null", one(UINT, "null")),
     ("decode-rule-name-not-text", doc({0: 1, 1: b"a", 3: UINT})),
     ("decode-reference-name-empty", one(ref(""))),
     ("decode-reference-name-digit", one(ref("9"))),
     ("decode-reference-name-trailing-dot", one(ref("a."))),
+    ("decode-reference-name-true", one(ref("true")), "G14"),
     ("decode-reference-name-primitive", one(ref("tstr"))),
     # literal kind and value pairs (§8)
     ("decode-literal-uint-negative", one(lit("uint", -1))),
@@ -515,7 +521,8 @@ def build() -> list[dict]:
         out.append(record(name, "invalid", item[2] if len(item) > 2 else "", **{"input-cddl": src, "error-class": cls}))
     app_a = bytes.fromhex("".join((ROOT / "spec/mirrors/CDE/app-a.cbor.hex").read_text().split()))
     for name, data in (("decode-app-a", app_a), ("decode-minimal", dcbor.encode(MINI)),
-                       ("decode-every-kind", dcbor.encode(EVERY_KIND))):
+                       ("decode-every-kind", dcbor.encode(EVERY_KIND)),
+                       ("decode-reference-prelude-int", dcbor.encode(one(ref("int"))))):
         cdcddle.check(data)
         out.append(record(
             name, "valid", "accepted by oracle/cdcddle.py",

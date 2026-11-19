@@ -342,6 +342,21 @@ when defined(posix):
       check c.lockFree
       check c.ctl("status").code == 2
 
+    test "[IMPL-DECISION G38] a value file is held to Logos deterministic CBOR when it is read, in either notation":
+      let c = newCase()
+      for (name, text) in [
+        ("null.diag", "null"),
+        ("undefined.diag", "undefined"),
+        ("tag.diag", "1(2)"),
+        ("null.cbor", "\xf6"),
+        ("tag.cbor", "\xc1\x02"),
+      ]:
+        checkpoint name
+        writeFile(c.dir / name, text)
+        let r = c.ctl("init", "--config", "@" & (c.dir / name))
+        check r.code != 0
+        check "is not deterministic CBOR" in r.stdout & r.stderr
+
     test "daemon stop --wait: the daemon exits 0":
       let c = newCase()
       check c.initDefault().code == 0

@@ -3,7 +3,7 @@
 ## tickets, correlation, requests, cancellation, multiplexing, subscriptions,
 ## route termination, per-connection limits and protocol evolution.
 
-import std/[importutils, sequtils, sets, strutils]
+import std/[importutils, os, sequtils, sets, strutils]
 import unittest2
 import logos_sdk/[cbor, hash, commitment], ../src/logos_core/transport
 import logos_sdk/iface/[accept, surface, outcome, payload]
@@ -443,13 +443,13 @@ suite "trn.envelope: message kinds and fields (TRANSPORT §1, §1.1, §1.3)":
       eeForm
     check envelopeError(ok.without("result").without("commitment")).kind == eeForm
 
-  test "[IFC-0423] envelopes decode and re-encode without any payload schema":
+  test "envelopes decode and re-encode without any payload schema":
     # A forwarder needs no contract: the payload maps pass through unchanged,
-    # whatever schema they would fail (floats aside: they fail the envelope).
+    # whatever schema they would fail (values INTERFACE §4.4 item 5 prohibits
+    # aside: they fail the envelope).
     let invalidText = CborValue(kind: ckText, text: "\xff", validUtf8: false)
     let odd = cborMap(
-      (cbor("cid"), cborTag(42, cbor(1'u64))),
-      (cbor("x"), cborArray(cborNull(), invalidText)),
+      (cbor("cid"), cbor(42'u64)), (cbor("x"), cborArray(cbor(true), invalidText))
     )
     let m = toCbor(samples()[1]).with("params", odd)
     let b = wire(m)
@@ -695,16 +695,10 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
     check transportLimits(payloadDepth = MinMaxDepth - 1).isErr
     check transportLimits(payloadDepth = MaxPayloadDepth + 1).isErr
     check defaultLimits().payloadDepth == DefaultMaxDepth
-    # Empty containers count; tags and byte-string contents do not.
+    # Empty containers count; byte-string contents do not.
     let empties = cborMap((cbor("cid"), nest(cborArray(), MinMaxDepth - 1)))
     check decodeMessage(rawRequest(0, "exists", empties, start), MinMaxDepth).error.kind ==
       eeTooDeep
-    var tagged = cbor(1'u64)
-    for _ in 0 ..< 10:
-      tagged = cborTag(1, tagged)
-    let t = cborMap((cbor("cid"), nest(tagged, MinMaxDepth - 1)))
-    check decodeMessage(rawRequest(0, "exists", t, start), MinMaxDepth).isOk
-    check checkPayload(t, MinMaxDepth).isOk
     check checkPayload(atDepth(MinMaxDepth + 1), MinMaxDepth).error.kind == eeTooDeep
 
   test "[TRN-0062] [TRN-0063] [TRN-0064] [TRN-0065] [IFC-0920] a float anywhere, payloads included, fails the envelope: INVALID_PARAMS, then close":
@@ -751,22 +745,84 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
       check checkPayload(cborMap((cbor("cid"), cborTag(1, x))), MinMaxDepth).error.kind ==
         eeNonDeterministic
 
-  test "[TRN-0203] [IFC-0423] tags, null and invalid UTF-8 inside payloads pass the envelope and fail at the schema":
+  test "[IFC-0976] [IFC-0920] [TXT-0143] a tag, null, undefined or other simple value anywhere in a payload fails the envelope: INVALID_PARAMS, then close":
+    let start = PayloadCommitment(subtreeRoot: subtreeOf("storage.exists_request"))
+    let prohibited = [
+      cborTag(1, cbor(1'u64)),
+      cborNull(),
+      cborUndefined(),
+      cborSimple(16),
+      cborSimple(32),
+    ]
+    for x in prohibited:
+      for p in [
+        cborMap((cbor("cid"), x)),
+        cborMap((cbor("cid"), cbor("a")), (cbor("x"), cborArray(cborArray(x)))),
+        cborMap((cbor("cid"), cbor("a")), (cbor("x"), cborMap((x, cbor(1'u64))))),
+      ]:
+        let b = rawRequest(0, "exists", p, start)
+        check decodeMessage(b).error.kind == eeNonDeterministic
+        var (_, callee) = pair()
+        let acts = callee.receive(b)
+        check dispatched(acts).len == 0
+        check closeCode(acts) == Opt.some(ecInvalidParams)
+        check callee.state == csClosed
+        # Not deferred to the schema: no correlated response-err.
+        check sent(acts).len == 0
+        # Senders never emit one.
+        check checkPayload(p, MinMaxDepth).error.kind == eeNonDeterministic
+        var (caller3, _) = pair()
+        check caller3.request("exists", p).error.code == ecInvalidParams
+        check caller3.pendingCalls == 0
+      # In result: the caller closes, and the pending call fails with it.
+      var (caller, _) = pair()
+      let (id, _) = caller.request("exists", params()).get
+      let evs = caller.receive(rawResponse(id, cborMap((cbor("exists"), x)), start))
+      check evs[0].outcome.failure.code == ecTransport
+      check closeCode(evs) == Opt.some(ecInvalidParams)
+      check caller.state == csClosed
+      # In data: the event is not delivered.
+      var (caller2, callee2) = pair()
+      active(caller2, callee2, 1, "storage.started_event")
+      check closeCode(
+        caller2.receive(
+          rawEvent(1, "storage.started_event", cborMap((cbor("x"), x)), start)
+        )
+      ) == Opt.some(ecInvalidParams)
+    # false and true stay payload values.
+    let allowed = cborMap((cbor("cid"), cbor("a")), (cbor("x"), cbor(true)))
+    check checkPayload(allowed, MinMaxDepth).isOk
+    check decodeMessage(rawRequest(0, "exists", allowed, start)).isOk
+
+  test "[IMPL-DECISION G38] only COSE_Sign1 and the diagnostic display ask for the generic data model":
+    # Relative to the repository root, where the suites run.
+    let allowed = ["crypto/cose.nim", "daemon/render.nim", "cbor/decode.nim"]
+    var scanned = 0
+    for root in [repoPath("src"), repoPath("sdk/src")]:
+      for f in walkDirRec(root):
+        if not f.endsWith(".nim"):
+          continue
+        inc scanned
+        if allowed.anyIt(f.endsWith(it)):
+          continue
+        checkpoint f
+        check "allowExtended" notin readFile(f)
+    check scanned > 100
+
+  test "[TRN-0203] invalid UTF-8 inside a payload passes the envelope and fails at the schema":
     let invalidText = CborValue(kind: ckText, text: "\xff", validUtf8: false)
-    for x in [invalidText, cborTag(1, cbor(1'u64)), cborNull()]:
-      let p = cborMap((cbor("cid"), x))
-      let b = rawRequest(
-        0,
-        "exists",
-        p,
-        PayloadCommitment(subtreeRoot: subtreeOf("storage.exists_request")),
-      )
-      check decodeMessage(b).isOk
-      var (_, callee) = pair()
-      let acts = callee.receive(b)
-      check callee.state == csOpen
-      let resp = sent(acts)[0].response
-      check not resp.ok and resp.failure.code == ecInvalidParams
+    let b = rawRequest(
+      0,
+      "exists",
+      cborMap((cbor("cid"), invalidText)),
+      PayloadCommitment(subtreeRoot: subtreeOf("storage.exists_request")),
+    )
+    check decodeMessage(b).isOk
+    var (_, callee) = pair()
+    let acts = callee.receive(b)
+    check callee.state == csOpen
+    let resp = sent(acts)[0].response
+    check not resp.ok and resp.failure.code == ecInvalidParams
     # In an envelope field, invalid UTF-8 is a field-type failure.
     let m = toCbor(samples()[1]).with("method", invalidText)
     check envelopeError(m).field == "method"
@@ -1161,7 +1217,7 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     check envelopeError(short).field == "commitment"
     check envelopeError(toCbor(samples()[1]).without("commitment")).field == "commitment"
 
-  test "[TRN-0159] [TRN-0292] [TRN-0293] [TRN-0294] [TRN-0297] [TRN-0298] the subtree root first, then the schema: a schema-invalid Request fails its call and keeps the session":
+  test "[IFC-0977] [TRN-0159] [TRN-0292] [TRN-0293] [TRN-0294] [TRN-0297] [TRN-0298] the subtree root first, then the schema: a schema-invalid Request fails its call and keeps the session":
     let bad = cborMap((cbor("cid"), cbor(5'u64)))
     var (_, callee) = pair()
     # The value root is garbage: a schema-invalid payload has no value root to
@@ -1220,7 +1276,7 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     check sent(acts)[0].response.failure == direct
     check sent(acts)[0].response.id == 3
 
-  test "[TRN-0097] [TRN-0300] [TRN-0296] a schema-invalid response-ok or Event closes; the call gets TRANSPORT_ERROR and the Event is not delivered":
+  test "[IFC-0977] [TRN-0097] [TRN-0300] [TRN-0296] a schema-invalid response-ok or Event closes; the call gets TRANSPORT_ERROR and the Event is not delivered":
     var (caller, _) = pair()
     let (id, _) = caller.request("exists", params()).get
     let bad = cborMap((cbor("exists"), cbor(5'u64)))
@@ -1342,7 +1398,8 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     check dispatched(acts).len == 0
     # An unknown name fails before its payload is looked at.
     var (_, callee2) = pair()
-    let garbage = cborMap((cbor("x"), cborTag(9, cborNull())))
+    let garbage =
+      cborMap((cbor("x"), CborValue(kind: ckText, text: "\xff", validUtf8: false)))
     let r2 = sent(callee2.receive(rawRequest(0, "nope", garbage, PayloadCommitment())))
     check r2[0].response.failure.code == ecMethodNotFound
     let full = boundary(sensor, sensor.primary.root).get

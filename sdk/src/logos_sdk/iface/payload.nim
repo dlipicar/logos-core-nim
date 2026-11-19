@@ -70,8 +70,9 @@ func decodePayload*(
 ): Result[CborValue, PayloadError] =
   ## [SPEC INTERFACE §4.4, §4.5] One complete Logos deterministic-CBOR item.
   ## Text that is not UTF-8 decodes, so the schema check can reject it as a
-  ## schema mismatch at its path (§4.5). A floating-point item at any depth is
-  ## non-deterministic CBOR and never reaches the schema check (§4.4, §4.5).
+  ## schema mismatch at its path (§4.5). A floating-point item, tag, `null`,
+  ## `undefined` or other simple value except `false` and `true`, at any depth,
+  ## is non-deterministic CBOR and never reaches the schema check (§4.4, §4.5).
   ## Containers nest at most `maxDepth` levels (§4.5.1); [IMPL] a value below
   ## 128 is raised to 128.
   var opts = defaultDecodeOptions()

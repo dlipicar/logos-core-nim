@@ -74,12 +74,11 @@ proc encodeTable(
 ): Result[seq[byte], string] =
   var inst: seq[CborEntry]
   for id, f in instances:
-    let sel =
-      if f.selection.isSome:
-        cbor(?encode(f.selection.get))
-      else:
-        cborNull()
-    inst.add((cbor(id), cborArray(cbor(f.module), sel)))
+    # An instance is `[module]`, or `[module, selection]` when it has one.
+    var entry = cborArray(cbor(f.module))
+    if f.selection.isSome:
+      entry.items.add(cbor(?encode(f.selection.get)))
+    inst.add((cbor(id), entry))
   var prov: seq[CborEntry]
   for p, i in providers:
     prov.add((cbor(p), cbor(i)))
@@ -101,11 +100,13 @@ proc decodeTable(
   if inst.isNone or prov.isNone or inst.get.kind != ckMap or prov.get.kind != ckMap:
     return err("facts: malformed table")
   for (k, e) in inst.get.entries:
-    if k.kind != ckText or e.kind != ckArray or e.items.len != 2 or
+    if k.kind != ckText or e.kind != ckArray or e.items.len notin 1 .. 2 or
         e.items[0].kind != ckText:
       return err("facts: malformed instance")
     var f = InstanceFacts(module: e.items[0].text)
-    if e.items[1].kind == ckBytes:
+    if e.items.len == 2:
+      if e.items[1].kind != ckBytes:
+        return err("facts: malformed instance")
       f.selection = Opt.some(?decode(ExecutionSelection, e.items[1].bytes))
     instances[k.text] = f
   for (k, e) in prov.get.entries:

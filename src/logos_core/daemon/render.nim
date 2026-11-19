@@ -75,9 +75,15 @@ proc jsonOf*(v: CborValue): JsonNode =
   of ckFloat:
     newJString(toDiag(v))
 
+func displayOptions(): DecodeOptions =
+  ## A display shows whatever bytes it is given, so it reads the generic data
+  ## model; nothing here is validated or acted on [DECISIONS G38].
+  result = defaultDecodeOptions()
+  result.allowExtended = true
+
 proc jsonOfBytes*(bytes: openArray[byte]): JsonNode =
   ## A response's bytes as JSON; bytes that do not decode as their hex.
-  let v = decodeCbor(bytes)
+  let v = decodeCbor(bytes, displayOptions())
   if v.isErr:
     return %*{"hex": toHex(bytes).toLowerAscii}
   jsonOf(v.get)
@@ -85,13 +91,13 @@ proc jsonOfBytes*(bytes: openArray[byte]): JsonNode =
 proc valueJson*(bytes: openArray[byte]): JsonNode =
   ## A configuration value, schema or daemon-config: hex and diag.
   var o = %*{"hex": toHex(bytes).toLowerAscii}
-  let v = decodeCbor(bytes)
+  let v = decodeCbor(bytes, displayOptions())
   if v.isOk:
     o["diag"] = newJString(toDiag(v.get))
   o
 
 proc diagOf*(bytes: openArray[byte]): string =
-  let v = decodeCbor(bytes)
+  let v = decodeCbor(bytes, displayOptions())
   if v.isErr:
     return "h'" & toHex(bytes).toLowerAscii & "'"
   toDiag(v.get)

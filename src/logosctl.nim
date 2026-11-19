@@ -176,7 +176,11 @@ offline (the session's files; writers hold its lock):
     if path.endsWith(".diag"):
       let v = parseDiag(text).valueOr:
         return err(fail(ExitUsage, path & ": " & error))
-      return ok(encodeCbor(v))
+      # The notation can spell what the wire refuses: held to the `.cbor` rule.
+      let bytes = encodeCbor(v)
+      discard decodeCbor(bytes).valueOr:
+        return err(fail(ExitUsage, path & " is not deterministic CBOR: " & error.msg))
+      return ok(bytes)
     err(usage(path & ": a value file ends in .cbor or .diag"))
 
   proc writeOut(path: string, data: openArray[byte]): Result[void, Fail] =
