@@ -27,7 +27,9 @@
 ##   by the loop from the selected contract once its request checks.
 ## - **Commit (K38 interim, G273).** Each Request has one Response: the
 ##   first of the host's own and the Runtime's (`io_respond`) to reach the
-##   loop; a Cancel the loop committed, or a closed session, ends it too.
+##   loop; a Cancel the loop committed, a closed session, or an order that
+##   terminates the session (`io_terminate`, P5 Q3 (a)) ends it too, and a
+##   CANCELLED the Runtime's cancel caused is not committed (P5 d4).
 ##   `call_ended` reports whether the host's success was committed, with the
 ##   request and response commitments only where the admission asks to retain
 ##   them (G274; IFC-0581). A deferred call (INTERFACE §2.9.2) reports once
@@ -235,6 +237,16 @@ proc respond(
   ## [DECISIONS G276] The outcome moves into the command; what the loop did not
   ## take, and `r`, are wiped.
   let ok = r.isOk
+  if not ok and r.error.code == ecCancelled and d.cancelled.load:
+    # [SPEC RUNTIME l.1271; INTERFACE l.2024; P5 d4] The Runtime's cancel of a
+    # call whose Request is still open is its route's or consumer's end (the
+    # loop commits a consumer's Cancel itself): a CANCELLED that end caused
+    # is not the caller's, so nothing is committed and the session's end
+    # fails the Request TRANSPORT_ERROR at its consumer.
+    withLock sv.lock:
+      d.answered = true
+    wipe(r)
+    return
   var cmd = IoCommand(
     conn: d.conn,
     kind: IoCommandKind.cmdRespond,
@@ -761,6 +773,20 @@ proc cancelCall(call: uint64) =
   if hook != nil:
     post(Job(inv: cast[int](hook), hook: true))
 
+proc endedByTerminate(conn: uint64) =
+  ## Ordering thread: [SPEC RUNTIME l.1212, l.1271; TRANSPORT l.979; P5 Q3 (a)]
+  ## the session's termination is ordered, after which no Response reaches its
+  ## consumer, who fails each admitted Request TRANSPORT_ERROR at the close;
+  ## the Runtime answers none of them. Each admitted call on it is ended
+  ## here, so a provider that returns later commits nothing and its call is
+  ## not recorded as a success.
+  withLock sv.lock:
+    var p = sv.calls
+    while p != nil:
+      if p.conn == conn and p.admitted:
+        p.answered = true
+      p = p.next
+
 proc runtimeAnswer(cmd: var IoCommand) =
   ## Ordering thread: [K38 interim] the Runtime's failure for a Request, which
   ## takes effect unless a Response is committed already. One never admitted
@@ -815,6 +841,8 @@ proc submitLoop() =
     if cmd.kind == IoCommandKind.cmdRespond:
       runtimeAnswer(cmd)
       continue
+    if cmd.kind == IoCommandKind.cmdTerminate and cmd.termPhase != tpBegin:
+      endedByTerminate(cmd.conn)
     while true:
       let r = sv.loop.trySubmit(cmd)
       if r != sbBusy:

@@ -728,9 +728,10 @@ type
       ## decided (RUNTIME l.1275-1283)
     lock*: Lock
     endCode*: int
-      ## [G174] under `lock`: the termination code of the route the call came
+      ## under `lock`: the termination code of the route the call came
       ## through, once it ended (0 while it is ready); a result is committed
-      ## only after reading it under the same lock (RUNTIME l.1292-1293)
+      ## only after reading it under the same lock (RUNTIME l.1212, l.1271;
+      ## `invoke.endedByRoute`)
 
   Admission* = object
     ## What a route call needs once the Runtime thread admitted it: the

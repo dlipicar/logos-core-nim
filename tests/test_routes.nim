@@ -1610,6 +1610,20 @@ suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
     h.release() # nothing reaches it any more; releasing finds no record
     e.finish()
 
+  test "[TXT-0297] a route-timeout failure is a loss of readiness, not an authorization failure: a new operation gets NOT_READY and an admitted call's result is still accepted; an expired authority is NOT_AUTHORISED and ends the call (RUNTIME l.1261-1263, l.1271)":
+    let answered = Result[seq[byte], InvocationFailure].ok(@[1'u8])
+    let timedOut = Route(id: "t", state: rtReady)
+    timedOut.terminate(rtFailed, Opt.some(rfRouteTimeout))
+    check timedOut.endCode == ecNotReady
+    check not endedByRoute(ord(timedOut.endCode), answered)
+    let expired = Route(id: "x", state: rtReady)
+    expired.terminate(rtRevoked, Opt.some(rfAuthorityExpired))
+    check expired.endCode == ecNotAuthorised
+    check endedByRoute(ord(expired.endCode), answered)
+    # Only the first terminal transition counts.
+    timedOut.terminate(rtRevoked, Opt.some(rfAuthorityExpired))
+    check timedOut.endCode == ecNotReady
+
 suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)":
   test "[RUN-0664] [RUN-1031] [RUN-1032] [RUN-1033] [RUN-1034] [RUN-1035] [RUN-1036] [RUN-1037] [RUN-1042] selection by instance, by name and by provider":
     let e = fixtureEngine(config())

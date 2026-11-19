@@ -363,28 +363,18 @@ proc callEnded*(sv: Served, conn: ConnId, requestId: uint64) =
 # Orders -----------------------------------------------------------------------------
 
 proc terminate*(sv: Served, s: Session): seq[CallRef] =
-  ## [plan §2.8 step 4; owner batch B 7] `EndpointOrders.terminate`: an
-  ## authority end. Every in-flight served Request is answered NOT_AUTHORISED
-  ## (uncharged; the I/O thread ignores one already answered), then the
+  ## [plan §2.8 step 4] `EndpointOrders.terminate`: an authority end. The
   ## session terminates: ProtocolError NOT_AUTHORISED when writable, then close
-  ## (TRANSPORT l.966-971). The loop's order puts the Responses first. Returns
-  ## the served invocations, which now commit nothing. A draining session is
-  ## raised to NOT_AUTHORISED (RUNTIME l.1267).
+  ## (TRANSPORT l.966-979). Its served invocations were decided before (a
+  ## Request not yet admitted answered NOT_AUTHORISED, l.971; an admitted one
+  ## left unanswered, which its consumer fails TRANSPORT_ERROR at the close,
+  ## l.979, RUNTIME l.1271; P5 Q3 (a)). Returns them: they commit nothing any
+  ## more. A draining session is raised to NOT_AUTHORISED (RUNTIME l.1267).
   if s.ended:
     return
   s.ended = true
-  for id, c in s.calls:
+  for c in s.calls.values:
     result.add(c)
-    sv.submit(
-      IoCommand(
-        conn: s.conn,
-        kind: cmdRespond,
-        requestId: id,
-        outcome:
-          CallOutcome(ok: false, failure: InvocationFailure(code: ecNotAuthorised)),
-        workEnded: false,
-      )
-    )
   sv.submit(
     IoCommand(
       conn: s.conn, kind: cmdTerminate, termCode: ecNotAuthorised, termPhase: tpWhole
@@ -396,9 +386,10 @@ proc drain*(sv: Served, s: Session, deadline: MonoTime) =
   ## terminates with NOT_READY. The session stops admitting at once: a new
   ## Request gets response-err NOT_READY without dispatch, a Subscribe or
   ## Unsubscribe a failed result NOT_READY, and every subscription ends.
-  ## In-flight Requests commit their own results (G174, the permitted bounded
-  ## completion); once its last served call ended, or at `deadline`,
-  ## ProtocolError NOT_READY and close.
+  ## In-flight Requests commit their own results (the permitted bounded
+  ## completion, l.974; one the end's cancellation made CANCELLED is left
+  ## unanswered, `invoke.endedByRoute`); once its last served call ended, or
+  ## at `deadline`, ProtocolError NOT_READY and close.
   if s.ended or s.draining:
     return
   s.draining = true

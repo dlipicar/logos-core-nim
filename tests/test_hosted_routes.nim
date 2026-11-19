@@ -363,6 +363,12 @@ when defined(posix):
     success: bool
     request, response: Opt[LogosNSCapabilityAuthorityAuditValueCommitment]
 
+  proc routeOf(e: Engine, route: string): Opt[LogosNSRuntimeControlRouteRecord] =
+    for rec in e.routes():
+      if rec.route == route:
+        return Opt.some(rec)
+    Opt.none(LogosNSRuntimeControlRouteRecord)
+
   proc keptReach(e: Engine, n: int): bool =
     waitUntil(
       proc(): bool =
@@ -821,7 +827,7 @@ when defined(posix):
         check rec.code in {ecInvalidParams, ecNotAuthorised}
       e.finish()
 
-    test "[TRN-0317] [IMPL-DECISION G174] [IMPL-DECISION G260] P-11 [TXT-0124] revocation answers a hosted provider's in-flight Request NOT_AUTHORISED, then ends the session NOT_AUTHORISED; close_route drains, then ProtocolError NOT_READY":
+    test "[TRN-0317] [RUN-1101] [IMPL-DECISION G260] P-11 [TXT-0124] revocation leaves a hosted provider's in-flight Request unanswered and ends the session NOT_AUTHORISED, at which the caller fails it TRANSPORT_ERROR; close_route drains, then ProtocolError NOT_READY":
       let cfg =
         hosted(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
       let dir = cfg.stateOf()
@@ -837,12 +843,13 @@ when defined(posix):
         let tag = o.send(conn, 22)
         check dir.heldAt(1)
         check rc.renew("r", rec.route).code == ecNotAuthorised
-        check o.outcome(conn, tag).codeOf == Opt.some(ecNotAuthorised)
+        check o.outcome(conn, tag).codeOf == Opt.some(ecTransport)
         let closed = o.closedOf(conn)
         check closed.isSome
         if closed.isSome:
           check closed.get.cause == ccPeerError
           check closed.get.code == ecNotAuthorised
+          check tag in closed.get.ids # [P5 Q3 (a)] the close failed it
         dir.open()
         o.settle(50 * Slow)
         check o.responses(conn, tag) == 1
@@ -850,7 +857,8 @@ when defined(posix):
       removeFile(dir / "held")
       block closing:
         # Channel 23: the provider goes on after its invocation is marked
-        # cancelled, as G174 marks the route's admitted calls at its end.
+        # cancelled, as every route's end marks its admitted calls (INTERFACE
+        # l.2101).
         let rec = rc.establish("k2").recordOf
         let conn = o.session(rec.invocationOf.get)
         let tag = o.send(conn, 23)
@@ -879,12 +887,13 @@ when defined(posix):
           check closed.get.code == ecNotReady
       e.finish()
 
-    test "[TRN-0317] [IMPL-DECISION G174] P-11b a revoked route's NOT_AUTHORISED reaches a hosted provider's host before its call's cancel: the provider, which returns once cancelled, commits nothing, even while the Runtime thread is slow to go on after marking the call cancelled":
+    test "[TRN-0317] [RUN-1101] P-11b a revoked route's termination reaches a hosted provider's host before its call's cancel: the provider, which returns once cancelled, commits nothing, even while the Runtime thread is slow to go on after marking the call cancelled; the caller fails the Request TRANSPORT_ERROR at the close":
       # [IMPL; I91] The Runtime thread waits after it marks the route's call
       # cancelled, so the call worker forwards the cancel long before the
-      # thread goes on. The meter returns on the cancel (channel 22), and the
-      # host must still have committed the NOT_AUTHORISED first (CI on dc2e7ef:
-      # P-11 under refc got the provider's OK).
+      # thread goes on. The meter returns on the cancel (channel 22). No
+      # Runtime answer comes any more (P5 Q3 (a)): the host must have ended
+      # the call at the terminate order, which comes first, so the provider's
+      # OK is not committed (CI on dc2e7ef: P-11 under refc got it).
       let cfg =
         hosted(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
       let dir = cfg.stateOf()
@@ -902,7 +911,7 @@ when defined(posix):
       check rc.renew("r", rec.route).code == ecNotAuthorised
       let got = o.outcome(conn, tag)
       setCancelMarkDelayForTests(0)
-      check got.codeOf == Opt.some(ecNotAuthorised)
+      check got.codeOf == Opt.some(ecTransport)
       if got.codeOf == Opt.some(ecOk):
         checkpoint "the provider's own result was committed: value " &
           $got.reading.reading.value
@@ -911,6 +920,69 @@ when defined(posix):
       if closed.isSome:
         check closed.get.cause == ccPeerError
         check closed.get.code == ecNotAuthorised
+        check tag in closed.get.ids
+      o.settle(50 * Slow)
+      check o.responses(conn, tag) == 1
+      e.finish()
+
+    test "[TRN-0317] [CAP-0254] [RUN-1101] P-11c under a Capability Authority a hosted provider's session ends with the decision its ticket carried while the renewed route stays ready: the in-flight Request gets no Response, the caller fails it TRANSPORT_ERROR at the close, and the call is not recorded as a success though the provider returned one":
+      resetFake()
+      var clock = newTestClock()
+      useClock(clock)
+      defer:
+        useClock(systemClock())
+        clock.freeClock()
+      var cfg = hosted(clock = clock)
+      cfg.statics.add(fakeCaRegistration())
+      cfg.authority = Opt.some(
+        AuthorityPolicy(instance: "ca", evaluationDeadline: initDuration(seconds = 60))
+      )
+      let dir = cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.create(fakeCaRecord(), "ca").tryGet
+      check e.start("ca").tryGet.state == msReady
+      check e.authorityBound()[0]
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      # A call decision that retains a side, so the call is recorded (CA
+      # l.1176-1180).
+      var retained = allow("call", validMs = 0)
+      retained.retainRequest = true
+      setScript(
+        allow("establish-route", validMs = 1000),
+        allow("renew-route", validMs = 10_000),
+        retained,
+      )
+      let rec = rc.establish("k").recordOf
+      let o = newOwner(roomy())
+      defer:
+        o.stop()
+      let conn = o.session(rec.invocationOf.get)
+      check rc.renew("r", rec.route).code == ecOk
+      let kept = e.audit.records.len
+      # Channel 22 returns its reading once the call is cancelled.
+      let tag = o.send(conn, 22)
+      check dir.heldAt(1)
+      clock.advance(1500)
+      # Each look is a request, after which the Runtime thread checks its
+      # deadlines on the test clock.
+      check waitUntil(
+        proc(): bool =
+          discard e.routes()
+          o.pump(1) or o.responses(conn, tag) > 0,
+        Answer,
+      )
+      check o.outcome(conn, tag).codeOf == Opt.some(ecTransport)
+      let closed = o.closedOf(conn)
+      check closed.isSome
+      if closed.isSome:
+        check closed.get.cause == ccPeerError
+        check closed.get.code == ecNotAuthorised
+        check tag in closed.get.ids
+      check e.routeOf(rec.route).get.state.kind ==
+        LogosNSRuntimeControlRouteStateKind.Ready
+      check e.keptReach(kept + 1)
+      check not e.lastKept.success
       o.settle(50 * Slow)
       check o.responses(conn, tag) == 1
       e.finish()
@@ -1248,6 +1320,18 @@ when defined(posix):
   proc readVia(c: var Consumer, slot: int, channel: uint32): string =
     c.run(readLine(slot, channel))
 
+  proc prepareLine(call: int, channel: uint32, timeout: string): string =
+    ## Prepares call `call` on slot 0's handle; `timeout` in ms, or `-`.
+    "prepare 0 " & $call & " read " &
+      hexOf(encode(MeterReadRequest(channel: channel)).tryGet) & " " & timeout
+
+  proc doneOf(c: Consumer, call: int): string =
+    ## Prepared call `call`'s completion, `<code> <hex value or message>`.
+    for line in c.linesOf("done"):
+      if line.startsWith($call & " "):
+        return line.split(' ', 1)[1]
+    "none"
+
   let malformedRead = hexOf(encodeCbor(cborMap(@[(cbor("channel"), cbor("x"))])))
     ## a `read` request whose `channel` is not a uint
 
@@ -1278,12 +1362,6 @@ when defined(posix):
       Opt.none(MeterReadResponse)
     else:
       Opt.some(r.get)
-
-  proc routeOf(e: Engine, route: string): Opt[LogosNSRuntimeControlRouteRecord] =
-    for rec in e.routes():
-      if rec.route == route:
-        return Opt.some(rec)
-    Opt.none(LogosNSRuntimeControlRouteRecord)
 
   proc failedWith(e: Engine, route: string, code: string): bool =
     waitUntil(
@@ -1490,7 +1568,7 @@ when defined(posix):
       check codeIn(c.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
-    test "[RUN-0805] [RUN-0256] [RUN-0837] [RUN-0838] C-5 a hosted provider's host killed during a hosted consumer's call: the call is TRANSPORT_ERROR, the end is reported once and never changes, and the failed route answers NOT_READY":
+    test "[RUN-0805] [RUN-0256] [RUN-0837] [RUN-0838] [RUN-1101] C-5 a hosted provider's host killed during a hosted consumer's call: the call is TRANSPORT_ERROR, the end is reported once and never changes, and the failed route answers NOT_READY":
       let cfg = hosted()
       let mdir = cfg.stateOf()
       var c = cfg.serving()
@@ -1659,16 +1737,6 @@ when defined(posix):
       discard e.started(consumerRecord(), "c")
       let route = c.establishVia("k")
       check c.materializeVia(0, route) == Opt.some(ecOk)
-      proc prepareLine(call: int, channel: uint32, timeout: string): string =
-        "prepare 0 " & $call & " read " &
-          hexOf(encode(MeterReadRequest(channel: channel)).tryGet) & " " & timeout
-
-      proc doneOf(c: Consumer, call: int): string =
-        for line in c.linesOf("done"):
-          if line.startsWith($call & " "):
-            return line.split(' ', 1)[1]
-        "none"
-
       check codeIn(c.run(prepareLine(1, 4, "-"))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(3, 4, "0"))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(4, 4, "-"))) == Opt.some(ecOk)
@@ -1713,6 +1781,38 @@ when defined(posix):
       for i in 1 .. 5:
         check codeIn(c.run("release-call " & $i)) == Opt.some(ecOk)
       check e.routeOf(route).get.state.kind == LogosNSRuntimeControlRouteStateKind.Ready
+      e.finish()
+
+    test "[RUN-1101] [IMPL-DECISION G260] H-1 a route revoked under a hosted consumer: its prepared call that a hosted provider runs is TRANSPORT_ERROR, though the provider returns once cancelled; a call submitted after the revocation is NOT_AUTHORISED":
+      let cfg =
+        hosted(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
+      let mdir = cfg.stateOf()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      discard e.started(consumerRecord(), "c")
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      # Channel 22 holds the call in the provider until it is cancelled.
+      check codeIn(c.run(prepareLine(1, 22, "-"))) == Opt.some(ecOk)
+      check codeIn(c.run(prepareLine(2, 4, "-"))) == Opt.some(ecOk)
+      check codeIn(c.run("submit 1")) == Opt.some(ecOk)
+      check mdir.heldAt(1)
+      # [G260] A denied renewal revokes the route.
+      check c.renewVia("r", route) == Opt.some(ecNotAuthorised)
+      check c.noted("done", "1 ")
+      check codeIn(c.doneOf(1)) == Opt.some(ecTransport)
+      # [RUNTIME l.1261] A new operation on the revoked route.
+      check codeIn(c.run("submit 2")) == Opt.some(ecOk)
+      check c.noted("done", "2 ")
+      check codeIn(c.doneOf(2)) == Opt.some(ecNotAuthorised)
+      check e.routeOf(route).get.state.kind ==
+        LogosNSRuntimeControlRouteStateKind.Revoked
+      sleep(50 * Slow)
+      check c.linesOf("done").len == 2
+      for i in 1 .. 2:
+        check codeIn(c.run("release-call " & $i)) == Opt.some(ecOk)
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
     test "[RUN-0234] [IMPL-DECISION G261] [IMPL-DECISION G267] C-9 a hosted consumer whose route handler does not keep up: the publisher is not held, the connection closes TRANSPORT_ERROR and the host's end handler is called once":

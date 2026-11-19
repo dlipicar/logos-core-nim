@@ -376,8 +376,9 @@ lcn.carrier_async_done = {
 
 ; [plan §2.8 steps 1-2; K13] A route the host's consumer holds ended with
 ; `code`, which every new operation on its handles reports from now on;
-; `revoked`: it was revoked, which ends the calls still running through them
-; (G174). The host wipes the route's retained ticket. `links`: each handle of
+; `revoked`: it was revoked or expired, which ends the calls still running
+; through them: a sent one TRANSPORT_ERROR (RUNTIME l.1271), one not yet sent
+; `code`. The host wipes the route's retained ticket. `links`: each handle of
 ; the route and its first terminal cause (INTERFACE l.1486-1490).
 lcn.carrier_route_ended = {
   kind: "route_ended",

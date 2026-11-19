@@ -456,7 +456,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecOk)
     e.finish()
 
-  ltTest "[TRN-0317] [IMPL-DECISION G174] [IMPL-DECISION G260] revoked: an in-flight Request is answered NOT_AUTHORISED, then the session ends NOT_AUTHORISED; the late result is not sent":
+  ltTest "[TRN-0317] [RUN-1101] [IMPL-DECISION G260] revoked: an in-flight Request gets no Response; the session ends NOT_AUTHORISED and the caller fails the Request TRANSPORT_ERROR; the late result is not sent":
     let e = fixtureEngine(
       transported(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
@@ -473,17 +473,19 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     let tag = o.send(conn, 19)
     check heldAt(before + 1)
     check rc.renew("r", rec.route).code == ecNotAuthorised
-    check o.outcome(conn, tag).codeOf == Opt.some(ecNotAuthorised)
+    check o.outcome(conn, tag).codeOf == Opt.some(ecTransport)
     let closed = o.closedOf(conn)
     check closed.isSome
     if closed.isSome:
       check closed.get.cause == ccPeerError
       check closed.get.code == ecNotAuthorised
+      # [P5 Q3 (a)] The close failed it: no Response came (TRANSPORT l.979).
+      check tag in closed.get.ids
     gate.store(false)
     check heldAt(before)
     o.settle(50 * Slow)
     check o.responses(conn, tag) == 1
-    # The provider is destroyed only after the call returned (G174).
+    # The provider is destroyed only after the call returned.
     check e.stop(meterView.instance).tryGet.state == msUnloaded
     e.finish()
 
@@ -634,7 +636,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     gate.store(false)
     e.finish()
 
-  ltTest "[TRN-0317] [CAP-0254] [IMPL-DECISION G174] under the Capability Authority a session ends with the decision its ticket carried, also after renewal moved the route's end; its in-flight Request is answered NOT_AUTHORISED first":
+  ltTest "[TRN-0317] [CAP-0254] [RUN-1101] under the Capability Authority a session ends with the decision its ticket carried, also after renewal moved the route's end; its in-flight Request gets no Response and fails TRANSPORT_ERROR at the close":
     let e = underAuthority()
     setScript(
       allow("establish-route", validMs = 1000), allow("renew-route", validMs = 10_000)
@@ -660,12 +662,13 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
         discard e.routes()
         o.pump(1) or o.responses(conn, tag) > 0
     )
-    check o.outcome(conn, tag).codeOf == Opt.some(ecNotAuthorised)
+    check o.outcome(conn, tag).codeOf == Opt.some(ecTransport)
     let closed = o.closedOf(conn)
     check closed.isSome
     if closed.isSome:
       check closed.get.cause == ccPeerError
       check closed.get.code == ecNotAuthorised
+      check tag in closed.get.ids # [P5 Q3 (a)] the close failed it
     # The route itself runs to its renewed end: a later session works.
     let now = e.routes().filterIt(it.route == rec.route)
     check now.len == 1 and now[0].isState(LogosNSRuntimeControlRouteStateKind.Ready)
@@ -1021,7 +1024,7 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
       h.release()
       e.finish()
 
-  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] [TXT-0092] calls in flight at the route's end: revoked, NOT_AUTHORISED; closed, their results; a lost connection, TRANSPORT_ERROR":
+  ltTest "[RUN-1101] [IMPL-DECISION G260] [TXT-0092] calls in flight at the route's end: revoked, TRANSPORT_ERROR; closed, their results; a lost connection, TRANSPORT_ERROR":
     block revoked:
       let e = fixtureEngine(transported(denyRenew()))
       discard e.started(meter())
@@ -1037,9 +1040,10 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
       check heldAt(before + 2)
       check rc.renew("r", route).code == ecNotAuthorised
       check done[0].finished
-      check done[0].codeOf == ecNotAuthorised
+      check done[0].codeOf == ecTransport
+      # The provider still holds it (RUNTIME l.1272).
       joinThread(t)
-      check bgCode.load == ord(ecNotAuthorised)
+      check bgCode.load == ord(ecTransport)
       gate.store(false)
       check heldAt(before)
       c.vtable.release(addr c)
@@ -1097,7 +1101,7 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
       h.release()
       e.finish()
 
-  ltTest "[TRN-0278] [IMPL-DECISION G256] a lost connection is TRANSPORT_ERROR and leaves the route ready; the route's later end still decides new calls; renew_route gives a working handle":
+  ltTest "[TRN-0278] [RUN-1100] [IMPL-DECISION G256] a lost connection is TRANSPORT_ERROR and leaves the route ready; the route's later end still decides new calls; renew_route gives a working handle":
     block revoked:
       let e = fixtureEngine(transported(denyRenew()))
       discard e.started(meter())
@@ -1618,7 +1622,7 @@ suite "run.transported: events (I90 part 4b-2c)":
     direct.release()
     e.finish()
 
-  ltTest "[RUN-0832] [IMPL-DECISION G175] scoped publication over a session: only that connection's subscriptions; after Cancel NOT_READY; through a revoked route NOT_AUTHORISED; after the connection closed NOT_READY, and a new connection does not inherit the destination":
+  ltTest "[RUN-0832] [RUN-1101] [IMPL-DECISION G175] scoped publication over a session: only that connection's subscriptions; after Cancel NOT_READY; through a revoked route NOT_AUTHORISED, and the call the revocation ended is TRANSPORT_ERROR; after the connection closed NOT_READY, and a new connection does not inherit the destination":
     let valid = changed(3)
     block cutoff:
       let e = fixtureEngine(transported(extra = @[dmeterStatic]))
@@ -1673,7 +1677,7 @@ suite "run.transported: events (I90 part 4b-2c)":
       check inv != nil
       check rc.renew("r", route).code == ecNotAuthorised
       check done[0].finished
-      check done[0].codeOf == ecNotAuthorised
+      check done[0].codeOf == ecTransport
       check ctxPublish(inv, Changed, valid) == ecNotAuthorised
       settled()
       check heard[0].count.load == 0
