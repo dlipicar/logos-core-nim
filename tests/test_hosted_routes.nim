@@ -963,6 +963,10 @@ when defined(posix):
       # Channel 22 returns its reading once the call is cancelled.
       let tag = o.send(conn, 22)
       check dir.heldAt(1)
+      # [IMPL; I91] The Runtime thread waits after it decides the session's
+      # call and after it marks it cancelled: a cancel forwarded to the host
+      # meanwhile must not overtake the terminate order (as in P-11b).
+      setCancelMarkDelayForTests(300 * Slow)
       clock.advance(1500)
       # Each look is a request, after which the Runtime thread checks its
       # deadlines on the test clock.
@@ -972,7 +976,12 @@ when defined(posix):
           o.pump(1) or o.responses(conn, tag) > 0,
         Answer,
       )
-      check o.outcome(conn, tag).codeOf == Opt.some(ecTransport)
+      let got = o.outcome(conn, tag)
+      setCancelMarkDelayForTests(0)
+      check got.codeOf == Opt.some(ecTransport)
+      if got.codeOf == Opt.some(ecOk):
+        checkpoint "the provider's own result was committed: value " &
+          $got.reading.reading.value
       let closed = o.closedOf(conn)
       check closed.isSome
       if closed.isSome:
