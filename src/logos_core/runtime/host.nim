@@ -419,17 +419,12 @@ proc launch(h: ptr HostRuntime): LogosResult =
     # registration that may use the reserved `logos` names.
     statics.add(caStaticRegistration())
     ids.incl(AuthorityModule)
-  # [IMPL-DECISION S4] A static record naming a binding that was never
-  # registered: the protected input is inconsistent before anything runs.
-  for m in c.modules:
-    if m.record.strategy == stDirectStatic and m.record.binding notin ids:
-      return answer(
-        ecInvalidParams,
-        "module instance " & m.instance & " names static binding " & m.record.binding &
-          ", which is not registered",
-      )
+  # [IMPL-DECISION S4 changed] A declaration naming a static binding that was
+  # never registered: what `create_module` may create (G55) is inconsistent
+  # before anything runs. A configured instance's binding is checked by the
+  # engine once the store is open, where retained instances are known: a new
+  # one is refused there, a retained one is mismatched (RUNTIME l.1321).
   for d in c.declarations:
-    # The same for what `create_module` may create (G55).
     if d.record.strategy == stDirectStatic and d.record.binding notin ids:
       return answer(
         ecInvalidParams,

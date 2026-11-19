@@ -651,7 +651,7 @@ suite "run.rc: the events (RUNTIME §9.3 l.3496-3511, l.3715-3735)":
         check ev.failure.isNone and ev.reason.isNone
     e.finish()
 
-  test "[RUN-0630] [RUN-0463] `execution_state_changed` reports an intent change without a lifecycle transition, in revision order":
+  test "[RUN-1183] [RUN-0463] `execution_state_changed` reports an intent change without a lifecycle transition, in revision order":
     let e = fixtureEngine(rcConfig())
     let (_, rc) = e.startClient("c")
     var a, b: LogosSubscriptionId
@@ -671,6 +671,48 @@ suite "run.rc: the events (RUNTIME §9.3 l.3496-3511, l.3715-3735)":
     check ev.execution.intent.kind ==
       LogosNSRuntimeControlExecutionStateIntentChoiceKind.Stopped
     check watches[1].count.load == 0
+    e.finish()
+
+  test "[RUN-1183] [TXT-0196] [TXT-0197] [RUN-1193] a start refused for want of configuration gives `execution_state_changed` at a new revision without a lifecycle transition, and `get_execution_summary` shows the failure; the same refusal again reports nothing":
+    let e = fixtureEngine(rcConfig())
+    let (_, rc) = e.startClient("c")
+    var a, b: LogosSubscriptionId
+    check rc.subscribe(ExecutionState, addr watches[0], a) == ecOk
+    check rc.subscribe(ModuleState, addr watches[1], b) == ecOk
+    let acc = tunerAccepted()
+    var configured = meter()
+    configured.configuration = Opt.some(acc.digest)
+    let made = e.create(configured, "m", configuration = Opt.some(acc)).tryGet
+    let r = e.start("m")
+    check r.isErr and r.error.code == ecNotReady
+    let v = e.view("m").tryGet
+    check v.state == msUnloaded and v.failure.get.kind == fkConfigurationMissing
+    check v.execution.revision > made.execution.revision
+    check watches[0].reached(1)
+    let n = watches[0].quiet()
+    check n >= 1
+    let last = watches[0].execEv(n - 1)
+    check last.instance == "m" and last.module == "meter_module"
+    check last.execution.revision == v.execution.revision
+    check last.execution.intent.kind ==
+      LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested
+    check watches[1].count.load == 0
+    let s = LogosNSRuntimeControlGetExecutionSummaryResponse.decode(
+      rcCall(
+        rc,
+        "get_execution_summary",
+        encode(LogosNSRuntimeControlGetExecutionSummaryRequest(target: e.target("m"))).tryGet,
+      ).response
+    ).tryGet
+    check s.state.kind == LogosNSRuntimeControlStateKind.Unloaded
+    check s.failure == Opt.some("configuration-missing")
+    check s.execution.revision == v.execution.revision
+    # [P5 §0.3 item 3] A recovery refused for the same cause commits nothing.
+    let again = e.recover("m", v.execution.revision)
+    check again.isErr and again.error.code == ecNotReady
+    sleep(100 * Slow)
+    check watches[0].count.load == n
+    check e.view("m").tryGet.execution.revision == v.execution.revision
     e.finish()
 
   test "[RUN-0465] `route_state_changed` on close, provider failure and revocation, with the target's module and provider; none on establishment":
@@ -1448,7 +1490,7 @@ suite "run.rc: realization changes (G227)":
   teardown:
     leftover()
 
-  test "[RUN-0630] [IMPL-DECISION G227] the late end of a cleanup gives `execution_state_changed` at a new revision and no state change":
+  test "[RUN-1183] [IMPL-DECISION G227] the late end of a cleanup gives `execution_state_changed` at a new revision and no state change":
     var cfg = rcConfig()
     # [SPEC RUNTIME l.573] An initialization past the startup deadline: the
     # attempt is `error`, and the end of its late cleanup does not leave it.

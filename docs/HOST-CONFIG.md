@@ -355,7 +355,7 @@ holds is not created again: it keeps its state and intent (below).
 |---|---|
 | `instance` | The instance's protected `module_instance_id`, unique in the configuration. Names of the form the Runtime gives what it creates (`m-`, `s-` or `p-`, 32 lowercase hexadecimal digits, `-`, a decimal number) are refused, here and as `state_assignment`. |
 | `module` | The flat runtime module name (RUNTIME §1.3). |
-| `implementation` | `direct_static` with a `binding` identifier the host registers with `logos_runtime_register_binding` before `start`; `direct_dynamic` with an `artifact` (`id`, absolute `local_path`, BLAKE3-256 `hash`), verified against the exact bytes before mapping; or `hosted_dynamic` with `placement: "process"` and an `artifact`, verified the same way and mapped in a Module Host process of its own (needs `runtime.module_host`; below, "Module Hosts"). A static binding no entry names is kept until `destroy`; one named but never registered makes `start` fail with `LOGOS_ERR_INVALID_PARAMS` before anything runs. A hosted implementation never names a static binding (RUNTIME l.1514), and `sandbox` and `container` placements are not offered. |
+| `implementation` | `direct_static` with a `binding` identifier the host registers with `logos_runtime_register_binding` before `start`; `direct_dynamic` with an `artifact` (`id`, absolute `local_path`, BLAKE3-256 `hash`), verified against the exact bytes before mapping; or `hosted_dynamic` with `placement: "process"` and an `artifact`, verified the same way and mapped in a Module Host process of its own (needs `runtime.module_host`; below, "Module Hosts"). A static binding no entry names is kept until `destroy`; one a new instance names but never registered makes `start` fail with `LOGOS_ERR_INVALID_PARAMS` before anything runs, and a retained instance whose binding is no longer registered starts up mismatched (below, *Instances and the configuration*). A hosted implementation never names a static binding (RUNTIME l.1514), and `sandbox` and `container` placements are not offered. |
 | `primary_contract`, `implements` | Expected contract commitments. They are checked against what the implementation reports at binding; they prove nothing on their own (RUNTIME §8 l.1414-1418). Implemented commitments must be unique. |
 | `requires` | Provider requirements: a contract and a cardinality. They select and grant nothing. |
 | `requested_permissions` | Module-declared policy inputs, as in a package manifest (PM §4): names unique, `constraints` one deterministic-CBOR value. They grant nothing. |
@@ -368,7 +368,13 @@ holds is not created again: it keeps its state and intent (below).
 
 Lifecycle-ordering constraints (RUNTIME §3.7): a `dependent` starts only once its `prerequisite` is
 `ready`. Both must be listed instances; a constraint may not name one instance twice, and the
-constraints may not form a cycle.
+constraints may not form a cycle. A start or recovery of a dependent whose prerequisite is not `ready`
+returns `LOGOS_ERR_NOT_READY`. When the prerequisite is not in an accepted start either (it is
+`unloaded`, `stopping` or `error`), an `unloaded` dependent reports `prerequisite-unavailable`
+(RUNTIME l.3613), and the Runtime marks every `unloaded` dependent with `requested` intent so as soon
+as a change leaves its prerequisite in that condition. A prerequisite in an accepted start (`loaded`)
+makes the dependent wait without a failure. The classification stays until the dependent's next
+accepted start or its explicit stop (DECISIONS G359, interim).
 
 ### `declarations`
 
@@ -377,7 +383,9 @@ DECISIONS G55): for each module name, the one accepted declaration, with the fie
 entry except `instance`, `state_assignment` and `provisioned_configuration` (a provisioned value
 belongs to one instance, never to a module name: RUN-0923). No two declarations name one module. A
 `direct_static` declaration names a binding the host registers, or `start` returns
-`LOGOS_ERR_INVALID_PARAMS`. With `persistent_state: true` each created instance gets a fresh state
+`LOGOS_ERR_INVALID_PARAMS`: a declaration is input for new instances, so it must be edited when a
+build drops its binding, while a retained instance on that binding starts up mismatched (DECISIONS
+G243 as changed). With `persistent_state: true` each created instance gets a fresh state
 assignment of its own (`s-…`), which needs `state_root`.
 
 - `create_module` for a module with no declaration is refused exactly as a denied request is
@@ -579,9 +587,11 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   current.
 - **Starting without a value.** `start_module`, `recover_module`, and the bootstrap start of the
   orchestration instance, need an eligible value. Without one the start is `LOGOS_ERR_NOT_READY`, the
-  intent stays `requested`, nothing runs, and a later update does not start the module: start it
-  again (DECISIONS G162, interim). For the orchestration instance, `start` returns `LOGOS_ERR_MODULE`
-  (DECISIONS G190, interim).
+  instance reports `configuration-missing` (`unloaded`, or `error` whose cause it replaces; RUNTIME
+  l.3611-3613), the intent stays `requested`, nothing runs, and a later update does not start the
+  module. The reference orchestration module probes it and resumes it once a value is eligible (RUNTIME
+  l.3665; DECISIONS G162, settled); a host without it starts it again. For the orchestration instance,
+  `start` returns `LOGOS_ERR_MODULE` (DECISIONS G190, interim).
 - **Replacing the provisioned value.** On each `start` with a `store_dir`, a provisioned value whose
   value root differs from the last one accepted for that instance is staged again as
   `protected-provisioning`; an equal one is not. Removing `provisioned_configuration` leaves the last
@@ -664,8 +674,10 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   again when the call returns; the code at those addresses must stay loaded, with the signatures
   INTERFACE requires, until `logos_runtime_destroy` succeeds (RUNTIME l.4043, l.4054-4058).
   Registration is closed by the first `start`, even one that fails, and by a shutdown request. A
-  binding that no module names is kept, unused, until `destroy`. Every static record must name a
-  registered binding, or `start` returns `LOGOS_ERR_INVALID_PARAMS` before anything runs.
+  binding that no module names is kept, unused, until `destroy`. A new configured instance and every
+  declaration must name a registered binding, or `start` returns `LOGOS_ERR_INVALID_PARAMS` before
+  anything runs; a retained instance whose binding is gone starts up mismatched ("Instances and the
+  configuration", below).
 - **Calls on one handle.** The host serializes every call on a handle except `request_shutdown` and
   `wait_for_shutdown`, and never overlaps `destroy` with another call (RUNTIME l.3983, l.4082).
   `wait_for_shutdown` from a module callback or a Runtime thread returns `LOGOS_ERR_NOT_READY`
@@ -826,14 +838,17 @@ lcn_orchestrator.override = {
   An invalid value fails the module's start with `LOGOS_ERR_MODULE`, and the diagnostic says which
   field.
 - **What it decides from.** Each instance's lifecycle state and intent, read with `list_modules` and
-  `get_readiness`. From a failure classification it reads only whether it is one of four that name an
-  enforcement outcome, which make an `error` a resumption, not a live failure (RUNTIME l.3775;
-  DECISIONS G291 as amended): `cleanup-timeout` (an enforcement stop overran its deadline, in a record
-  an earlier build stored: an overrun now stays `stopping` and completes `unloaded`, RUNTIME l.575-576),
+  `get_readiness`. From a failure classification it reads only whether it is one of six that make an
+  `error` a resumption, not a live failure (RUNTIME l.3632, l.3663-3666; DECISIONS G291 as amended):
+  `cleanup-timeout` (an enforcement stop overran its deadline, in a record an earlier build stored: an
+  overrun now stays `stopping` and completes `unloaded`, RUNTIME l.575-576),
   `permission-enforcement-failed`, `authority-denied` and `authority-evaluation-failed` (a start or
-  recovery the permission settings refused or the authority denied). The engine sets the last three
-  only for such refusals and denials, settings that failed, and stops for authority, never for a
-  failure of an accepted attempt. Every other classification, known or not, is a live failure, and no
+  recovery the permission settings refused or the authority denied), `configuration-missing` and
+  `static-binding-mismatch` (a start or recovery refused for want of configuration or for a static
+  binding mismatch, which replaces an `error` instance's cause; RUNTIME l.3611-3613). The engine sets
+  the last five only for such refusals and denials, settings that failed, and stops for authority,
+  never for a failure of an accepted attempt. A static binding mismatch cannot end within a run, so its
+  probes are refused, changing nothing, until the next `start`. Every other classification, known or not, is a live failure, and no
   restart policy is derived from its spelling (RUNTIME l.3756). Its own instance and the Module
   Loader are always left out; every other instance with `requested` intent is the module's, whoever
   its origin is, and keeps that origin (l.3774).
@@ -860,7 +875,7 @@ lcn_orchestrator.override = {
   module starts, and not again.
 - **Probes** (l.3801-3804; DECISIONS G288). An instance with `requested` intent that is `unloaded`
   (its start was refused for authority or by its permission settings, a settings replacement stopped
-  it, a configuration is missing, or a prerequisite was not ready) or `error` with one of the four
+  it, a configuration is missing, or a prerequisite was not ready) or `error` with one of the six
   classifications above (an enforcement stop that overran its deadline, then perhaps a probe refused
   or denied, G291), and a start or stop default that was refused, is retried by uncharged probes on the policy's spacing (`delay(n)` after the last probe;
   the package default's under `disabled`), never exhausted. The authority's return to `ready`, and a
@@ -1222,12 +1237,26 @@ identity, and every configured instance is new.
   `LOGOS_ERR_MODULE` naming it, and nothing is written. Not kept: routes and their keys (a route id from an earlier run is
   unknown), realizations, authorization answers and the change log. Every execution revision after a
   restart is larger than any the Runtime exposed before (RUNTIME l.3506).
-- **Instances and the configuration** (DECISIONS G160, interim).
+- **Instances and the configuration** (RUNTIME l.1316-1322; DECISIONS G160 as changed, G243 as changed).
   - A configured instance the store holds is the same instance while its declaration facts are
     equal: its record, leaving out the artifact's `local_path` and the permissions' `reason` texts,
-    which it takes from the configuration. If other facts differ, `start` returns
-    `LOGOS_ERR_INVALID_PARAMS` naming the instance, before anything runs: give the changed module a new
-    instance id, and retire the old one once it is no longer configured.
+    which it takes from the configuration.
+  - *A static binding mismatch.* A retained `direct_static` instance is mismatched for the run when
+    its facts differ from the configured ones, when its binding is not registered for its module, or
+    when nothing supplies its facts (a configured instance the configuration no longer names). An
+    instance `create_module` made is compared with its module's declaration, with its own state
+    assignment. A mismatched instance keeps its retained record and state, is not realized, and
+    `start` does not fail: an `unloaded` one with `requested` intent reports
+    `static-binding-mismatch`, and `start_module` or `recover_module` on it returns
+    `LOGOS_ERR_NOT_READY` with that classification, before any module code or Module Loader call. An
+    instance restored as `error` keeps its classification until such a refusal replaces it. A later
+    `start` with the same facts and binding makes it realizable again. Supplying the same binding
+    identifier asserts implementation continuity: a build whose implementation is not compatible with
+    the retained state registers it under a different binding identifier and configures a replacement
+    instance (RUNTIME l.1320), which can take the old one's state through `state_transfers` (above).
+  - For a `direct_dynamic` or `hosted_dynamic` instance, different facts still make `start` return
+    `LOGOS_ERR_INVALID_PARAMS` naming the instance, before anything runs (DECISIONS G160, interim):
+    give the changed module a new instance id, and retire the old one once it is no longer configured.
   - An id that was retired cannot be configured again, and a state assignment a retired instance
     keeps cannot be given to another instance (`LOGOS_ERR_INVALID_PARAMS`).
   - An instance dropped from the configuration stays known, with its state, until it is retired.

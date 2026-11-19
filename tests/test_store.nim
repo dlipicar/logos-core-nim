@@ -158,11 +158,31 @@ suite "run.store: the Runtime state store [IMPL]":
     check LcnRsState.decode(encodeSnapshot(old).tryGet).tryGet.format.kind ==
       LcnRsStateFormatChoiceKind.Case1
 
-  test "every classification RUNTIME l.3753 lists is stored and read back":
+  test "[TXT-0203] every classification RUNTIME l.3605 lists, in its order, is stored and read back":
+    # [SPEC RUNTIME l.3605] The list as the re-pin's frozen baseline holds
+    # the sentence (spec/repin-baseline.toml, TXT-0203), not typed here.
+    let text = readFile(repo / "spec" / "repin-baseline.toml")
+    let at = text.find("id = \"TXT-0203\"")
+    let w = text.find("what = \"", at)
+    check at >= 0 and w > at
+    let sentence = text[w ..< text.find('\n', w)]
+    var listed: seq[string]
+    var i = 0
+    while true:
+      let a = sentence.find('`', i)
+      if a < 0:
+        break
+      let b = sentence.find('`', a + 1)
+      listed.add(sentence[a + 1 ..< b])
+      i = b + 1
+    var ours: seq[string]
     for k in FailureKind:
       if k != fkLoader:
+        ours.add($k)
         check classificationOf($k).tryGet.kind == k
-    # [I89] `loader-<code>` for each typed Module Loader error (l.3754).
+    check listed.len == 17
+    check ours == listed
+    # [I89] `loader-<code>` for each typed Module Loader error (l.3607).
     for c in LoaderErrorCode:
       let f = classificationOf("loader-" & $c).tryGet
       check f.kind == fkLoader and f.loader == c

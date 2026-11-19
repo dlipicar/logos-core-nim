@@ -249,6 +249,25 @@ G352 and G354 (DECISIONS, "Open items").
   RUN-1200, with RUN-1089, RUN-1096 and RUN-1097 also by inspection; RUN-0070, RUN-0100, RUN-0121,
   RUN-0227 and RUN-0707 compared. Stale ids RUN-0061, RUN-0109, RUN-0111 and RUN-0912 replaced. 39
   text entries cleared, and TXT-0275 and TXT-0323 moved to P8.
+- 2026-11-19, re-pin P5b (I109), classifications and recovery at 6cac8335:
+  - Three classifications join `FailureKind` in l.3605's order: `configuration-missing`,
+    `static-binding-mismatch` and `prerequisite-unavailable`. An older build refuses a store that
+    holds one.
+  - An `unloaded` instance with `requested` intent reports what keeps it from starting (M13, l.3613):
+    missing configuration at refusal (G162 settled), an unready prerequisite at refusal and after each
+    committed step (G359, the UF-42 interim), the denial and enforcement causes as before (G168
+    settled). A refusal for configuration or a mismatch replaces an `error` instance's cause, and both
+    join orchestration's resumable set (G291 amended).
+  - A retained static instance whose facts or binding no longer match is not refused at `start`: it
+    keeps its record, is never realized that run, and reports `static-binding-mismatch` (M14,
+    l.1319-1322; G160 changed, G243 changed). A dynamic one keeps G160's startup refusal.
+  - Every failure change commits and is reported by `execution_state_changed_event` (G227 settled);
+    G268 to G270 and G275 are settled by l.3606 and l.3634-3637, behaviour unchanged.
+
+  Claimed: RUN-1102, RUN-1103, RUN-1183, RUN-1184, RUN-1191, RUN-1192 and RUN-1193, with RUN-1102
+  also by inspection; RUN-0696 compared. RUN-1190 deferred to 5-7b with G355, with TXT-0205 and
+  TXT-0206 riding on it. Stale ids RUN-0630, RUN-0639, RUN-0675 and RUN-1053 replaced. 13 text
+  entries cleared.
 
 ## Tiers at f4f83471 (the original plan)
 

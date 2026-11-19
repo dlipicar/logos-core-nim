@@ -763,7 +763,7 @@ suite "cfg.startup: sources, selection, delivery and promotion (CONFIG §4, §6;
     check provenanceOf(st.staged.get.provenance) == pvProtectedProvisioning
     e.finish()
 
-  test "[CFG-0026] [CFG-0042] [CFG-0128] [CFG-0009] [G162] without a value a start is NOT_READY with intent requested and no module code run; an update starts nothing":
+  test "[CFG-0026] [CFG-0042] [CFG-0128] [CFG-0009] [RUN-1193] [TXT-0580] [IMPL-DECISION G162] without a value a start is NOT_READY with intent requested, `configuration-missing` and no module code run; an update starts nothing, and the accepted start clears it":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     discard e.createTuner("t1", tunerAccepted())
@@ -771,14 +771,22 @@ suite "cfg.startup: sources, selection, delivery and promotion (CONFIG §4, §6;
     check rc.summary(t).state_revision == 0
     let r = e.start("t1")
     check r.isErr and r.error.code == ecNotReady
-    let v = e.view("t1").tryGet
-    check v.state == msUnloaded and v.failure.isNone
+    var v = e.view("t1").tryGet
+    check v.state == msUnloaded and v.failure.get.kind == fkConfigurationMissing
     check v.execution.intent == inRequested
+    let refused = v.execution.revision
+    # [P5 §0.3 item 3] A recovery refused for the same cause (orchestration's
+    # probe) commits nothing.
+    check e.recover("t1", refused).error.code == ecNotReady
+    check e.view("t1").tryGet.execution.revision == refused
     check tunerInits.load == 0
     check rc.stage(t, 0, tunerValue()).updated.state_revision == 1
-    check e.view("t1").tryGet.state == msUnloaded
+    v = e.view("t1").tryGet
+    # [IMPL-DECISION G359] It stays until the next accepted attempt (l.3611).
+    check v.state == msUnloaded and v.failure.get.kind == fkConfigurationMissing
     check tunerInits.load == 0
-    check e.start("t1").tryGet.state == msReady
+    v = e.start("t1").tryGet
+    check v.state == msReady and v.failure.isNone
     check lastInput() == Opt.some(inputFor(tunerValue(), 1))
     e.finish()
 
@@ -1170,14 +1178,22 @@ suite "cfg.sources: configuration state across restarts (CONFIG §4, §7; G141; 
     check latestClient().state(e.target("t1")).staged.get.value == a
     e.finish()
 
-  test "[CFG-0132] [CFG-0029] a changed binding or a lost configuration record does not restore the instance":
+  test "[CFG-0132] [CFG-0029] [RUN-1103] a changed binding or a lost configuration record does not restore the instance":
     let dir = work / "store-changed"
     var e = storeEngine(dir)
     check e.boot(@[tunerAt("t1", tunerAccepted(default = Opt.some(tunerValue())))]).isOk
     e.finish()
+    # [SPEC RUNTIME l.1319-1321; M14] A static instance under another
+    # declaration is not refused at startup but never realized: the retained
+    # record stays, and a start is NOT_READY with `static-binding-mismatch`.
     e = storeEngine(dir)
-    let r = e.boot(@[tunerAt("t1", tunerAccepted(live = true), "tuner_live")])
-    check r.isErr and r.error.code == ecInvalidParams and "t1" in r.error.message
+    check e.boot(@[tunerAt("t1", tunerAccepted(live = true), "tuner_live")]).isOk
+    let s = latestClient().summary(e.target("t1"))
+    check s.state_revision == 1 and s.staged.isSome # the retained state, untouched
+    let r = e.start("t1")
+    check r.isErr and r.error.code == ecNotReady
+    check e.view("t1").tryGet.failure.get.kind == fkStaticBindingMismatch
+    check tunerInits.load == 0
     e.finish()
     for f in sideFiles(dir):
       removeFile(f)
@@ -1232,27 +1248,27 @@ suite "cfg.sources: configuration state across restarts (CONFIG §4, §7; G141; 
     check sideFiles(dir).len == 0
     e.finish()
 
-  test "[G162] [G168] a start refused for want of a configuration value keeps intent and clears a retained execution refusal":
+  test "[RUN-1193] [TXT-0580] [IMPL-DECISION G162] [IMPL-DECISION G168] a start refused for want of a configuration value keeps intent, and `configuration-missing` replaces a retained execution refusal":
     let dir = work / "store-g162"
     var cfg = storeConfig(dir)
     cfg.policy =
       denying(AuthzRule(action: Opt.some(aaExecute), target: "t1", outcome: azDeny))
     var e = openEngine(cfg).tryGet
     live = e
-    check e.boot(@[]).isOk
-    discard e.createTuner("t1", tunerAccepted())
+    check e.boot(@[tunerAt("t1", tunerAccepted())]).isOk
     let denied = e.start("t1")
     check denied.isErr and denied.error.code == ecNotAuthorised
     check e.view("t1").tryGet.failure.get.kind == fkAuthorityDenied
     e.finish()
-    # Allowed now, and still without a value.
+    # Allowed now, and still without a value: the current cause replaces the
+    # denial (l.3611).
     e = storeEngine(dir)
-    check e.boot(@[]).isOk
+    check e.boot(@[tunerAt("t1", tunerAccepted())]).isOk
     check e.view("t1").tryGet.failure.get.kind == fkAuthorityDenied
     let r = e.start("t1")
     check r.isErr and r.error.code == ecNotReady
     let v = e.view("t1").tryGet
-    check v.failure.isNone
+    check v.failure.get.kind == fkConfigurationMissing
     check v.state == msUnloaded and v.execution.intent == inRequested
     check tunerInits.load == 0
     e.finish()

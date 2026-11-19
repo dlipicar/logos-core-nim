@@ -460,7 +460,7 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
   teardown:
     leftover()
 
-  test "[RUN-0914] [RUN-1066] [RUN-1142] [RUN-0916] [RUN-0917] [RUN-0475] narrowing a running instance: pending while its stop runs, then unloaded with no failure, intent and origin kept, then applied":
+  test "[RUN-0914] [RUN-1066] [TXT-0581] [RUN-1142] [RUN-0916] [RUN-0917] [RUN-0475] narrowing a running instance: pending while its stop runs, then unloaded with no failure, intent and origin kept, then applied":
     let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     let t = e.client2("t")
@@ -469,7 +469,8 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
     let p = rc.writeSettings(e.target("t"), 1, @[]).written
     check p.revision == 2 and p.status == "pending"
     # [RUN-0917] The stop began before the reply, and with it the realization
-    # lost its admission: `pending` is no grace period.
+    # lost its admission: `pending` is no grace period. [TXT-0581] An
+    # enforcement stop takes the ordinary rows: `ready` → `stopping` → `unloaded`.
     check e.view("t").tryGet.state == msStopping
     check rcCall(t, "get_execution_permissions", [0xA0'u8]).code == ecNotReady
     # [RUN-0475] Repeating pending settings: the state, no second stop.
