@@ -120,23 +120,23 @@ proc rcConnectRemoteOp(
     )
   # [SPEC INTERFACE l.3874-3876; IFC-0939] A schema-valid endpoint that
   # omits the Runtime identity, selects a non-remote address or names this
-  # Runtime is INVALID_PARAMS without validation detail; so is a remote
-  # address whose `profile` or `alpn` contradicts its transport [reading:
-  # RUNTIME l.2704, Fable synthesis §14.2]. All before anything that can
-  # answer NOT_AUTHORISED.
+  # Runtime is INVALID_PARAMS without validation detail, in that order; after
+  # those three, so is a remote address whose `profile` or `alpn`
+  # contradicts its transport [reading: RUNTIME l.2704, Fable synthesis
+  # §14.2]. All before anything that can answer NOT_AUTHORISED.
   let ep = fromChecked(LogosNSRuntimeControlRuntimeEndpoint, v)
   let remote = ep.address.remoteAddress
   if ep.runtime_instance_id.isNone:
     return status(ecInvalidParams, "the endpoint names no Runtime")
   if remote.isNone:
     return status(ecInvalidParams, "the endpoint's address is not remote")
+  let s = servicesOf(binding)
+  if ep.runtime_instance_id.get == s.engine.call(Request(kind: rqIdentity)).id:
+    return status(ecInvalidParams, "the endpoint names this Runtime")
   if remote.get.mismatching:
     return status(
       ecInvalidParams, "the address does not match the profile its transport selects"
     )
-  let s = servicesOf(binding)
-  if ep.runtime_instance_id.get == s.engine.call(Request(kind: rqIdentity)).id:
-    return status(ecInvalidParams, "the endpoint names this Runtime")
   # [SPEC RUNTIME l.1783-1784] A valid endpoint names no enrolled Runtime:
   # this Runtime has no enrollments yet. [IFC-0941 deferred] Authentication
   # and transport failures keep their codes once a connect path exists.

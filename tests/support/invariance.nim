@@ -166,9 +166,11 @@ proc remoteAddressCases*(ownRuntime: string): seq[(string, RemoteOutcome)] =
   result = @[
     ("connect-remote a0", roDetail),
     (connect(Opt.none(string), tlsAddress()), roPlain),
+    (connect(Opt.none(string), tlsAddress(Opt.some(RemoteTlsTcp))), roPlain),
     (connect(other, unixAddress()), roPlain),
     (connect(other, unixAddress(Opt.some("logos.local.unix-stream"))), roPlain),
     (connect(Opt.some(ownRuntime), tlsAddress()), roPlain),
+    (connect(Opt.some(ownRuntime), tlsAddress(Opt.some(RemoteTlsTcp))), roPlain),
     (connect(other, tlsAddress(Opt.some(RemoteTlsTcp))), roDenied),
     (connect(other, quicAddress(Opt.some(RemoteQuic), Opt.some(RemoteQuic))), roDenied),
     ("rc set_remote_listener a0", roDetail),

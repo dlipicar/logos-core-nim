@@ -169,7 +169,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check toResult(r).code == ecInvalidParams
     e.finish()
 
-  test "[RUN-0043] [RUN-0044] [IFC-0501] [IFC-0939] [IFC-0940] [RUN-1152] [RUN-1153] [TXT-0106] connect_remote: a schema failure carries its detail; no Runtime identity, a non-remote address, this Runtime or a profile its transport does not select is INVALID_PARAMS without it; a valid endpoint names no enrolled Runtime (§4.4)":
+  test "[RUN-0043] [RUN-0044] [IFC-0501] [IFC-0939] [IFC-0940] [RUN-1152] [RUN-1153] [TXT-0106] connect_remote: a schema failure carries its detail; no Runtime identity, a non-remote address, this Runtime and then a profile its transport does not select are INVALID_PARAMS without it, in that order and with or without a profile; a valid endpoint names no enrolled Runtime (§4.4)":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient()
     var acquired = LogosRuntimeControlBinding()
@@ -189,25 +189,71 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check schemaFailure.code == ecInvalidParams
     check schemaFailure.detail.len > 0
     let other = Opt.some(OtherRuntime)
-    for (name, bytes) in [
-      ("no Runtime identity", endpointOf(Opt.none(string), tlsAddress())),
-      ("unix-stream", endpointOf(other, unixAddress())),
+    let own = Opt.some(e.runtimeInstanceId)
+    const
+      noRuntime = "the endpoint names no Runtime"
+      notRemote = "the endpoint's address is not remote"
+      thisRuntime = "the endpoint names this Runtime"
+      mismatch = "the address does not match the profile its transport selects"
+    # Each IFC-0939 condition with no profile, with the profile its transport
+    # selects and with one it does not: the message names the first that
+    # applies, so the profile mismatch never hides one of the three.
+    for (name, bytes, message) in [
+      ("no Runtime identity", endpointOf(Opt.none(string), tlsAddress()), noRuntime),
+      (
+        "no Runtime identity, tls-tcp's profile",
+        endpointOf(Opt.none(string), tlsAddress(Opt.some(RemoteTlsTcp))),
+        noRuntime,
+      ),
+      (
+        "no Runtime identity, quic's profile on tls-tcp",
+        endpointOf(Opt.none(string), tlsAddress(Opt.some(RemoteQuic))),
+        noRuntime,
+      ),
+      (
+        "no Runtime identity, unix-stream",
+        endpointOf(Opt.none(string), unixAddress()),
+        noRuntime,
+      ),
+      ("unix-stream", endpointOf(other, unixAddress()), notRemote),
       (
         "unix-stream with a profile",
         endpointOf(other, unixAddress(Opt.some("logos.local.unix-stream"))),
+        notRemote,
       ),
-      ("this Runtime", endpointOf(Opt.some(e.runtimeInstanceId), tlsAddress())),
-      ("tls-tcp naming quic", endpointOf(other, tlsAddress(Opt.some(RemoteQuic)))),
+      ("unix-stream naming this Runtime", endpointOf(own, unixAddress()), notRemote),
+      ("this Runtime", endpointOf(own, tlsAddress()), thisRuntime),
+      (
+        "this Runtime, tls-tcp's profile",
+        endpointOf(own, tlsAddress(Opt.some(RemoteTlsTcp))),
+        thisRuntime,
+      ),
+      (
+        "this Runtime, tls-tcp's profile on quic",
+        endpointOf(own, quicAddress(profile = Opt.some(RemoteTlsTcp))),
+        thisRuntime,
+      ),
+      (
+        "tls-tcp naming quic",
+        endpointOf(other, tlsAddress(Opt.some(RemoteQuic))),
+        mismatch,
+      ),
       (
         "quic naming tls-tcp",
         endpointOf(other, quicAddress(profile = Opt.some(RemoteTlsTcp))),
+        mismatch,
       ),
-      ("quic with another alpn", endpointOf(other, quicAddress(alpn = Opt.some("h3")))),
+      (
+        "quic with another alpn",
+        endpointOf(other, quicAddress(alpn = Opt.some("h3"))),
+        mismatch,
+      ),
     ]:
       checkpoint name
       let r = connect(bytes)
       check r.code == ecInvalidParams
       check r.detail.len == 0
+      check r.message == message
     for bytes in [
       endpointOf(other, tlsAddress()),
       endpointOf(other, tlsAddress(Opt.some(RemoteTlsTcp))),
