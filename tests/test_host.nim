@@ -1794,13 +1794,15 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check rt.state("orch") == msReady
     rt.finish()
 
-  test "[IMPL-DECISION G243] [IMPL] R2: a static binding never registered fails start before anything runs":
+  test "[IMPL-DECISION G243] [IMPL-DECISION S4] [IMPL] R2: a static binding never registered fails start before any module runs":
     let rt = create(deployment())
     check rt.register("orchestrator", orchTable()).ec == ecOk
     let r = runtimeStart(rt)
     check r.ec == ecInvalidParams
     check "meter-1" in r.text and "meter" in r.text
-    check engineOf(rt) == nil and orchNames.load == 0
+    # [S4 changed] The engine refuses it once the store is open, since only
+    # there is a retained instance told apart (RUNTIME l.1321).
+    check orchNames.load == 0 and orchInits.load == 0
     # The attempt is spent: registration is closed and destroy needs a shutdown.
     check rt.register("meter", meterModuleStaticSymbols()).ec == ecNotReady
     check runtimeDestroy(rt).ec == ecNotReady
@@ -1983,21 +1985,44 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check selfId() == "rt-named"
     rt.finish()
 
-  test "[IMPL-DECISION G160] a configured instance whose declaration changed is refused before anything runs":
+  test "[RUN-1103] [TXT-0299] [TXT-0300] [IMPL-DECISION G160] a configured static instance whose declaration changed is not refused: start is OK, its retained record stays, and it remains `unloaded` with `static-binding-mismatch`":
     let base = work / "restart-5"
+    orchMode.store(ord(omAutostart))
     var rt = registered(persistent(deployment(), base))
     check runtimeStart(rt).ec == ecOk
+    check waitUntil(
+      proc(): bool =
+        orchThreadDone.load
+    )
+    check rt.state("meter-1") == msReady
     rt.finish()
+    resetOrchestrator()
     var c = persistent(deployment(), base)
     c.modules[1].primary_contract = Opt.some(root(7))
     rt = registered(c)
-    let r = runtimeStart(rt)
-    check r.ec == ecInvalidParams
-    check "meter-1" in r.text
+    check runtimeStart(rt).ec == ecOk
     check orchInits.load == 1
+    let v = engineOf(rt).view("meter-1").tryGet
+    check v.state == msUnloaded and v.execution.intent == inRequested
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
+    check v.primaryContract.isNone # the retained record, not the changed one
+    let (code, _) =
+      rcCall(orchBinding(), "recover_module", recoverRequest("meter-1", v))
+    check code == ecNotReady
+    check rt.state("meter-1") == msUnloaded
+    rt.finish()
+    # The same facts again: the same instance is realizable.
+    rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    let w = engineOf(rt).view("meter-1").tryGet
+    let (again, _) =
+      rcCall(orchBinding(), "recover_module", recoverRequest("meter-1", w))
+    check again == ecOk
+    check rt.state("meter-1") == msReady
+    check rt.failureOf("meter-1") == ""
     rt.finish()
 
-  test "[IMPL] a retained instance whose static binding is no longer registered: start is OK, its recovery fails in the loader":
+  test "[RUN-1103] [RUN-1191] [TXT-0300] a retained instance whose static binding is no longer registered: start is OK, its recovery is NOT_READY with `static-binding-mismatch`, never a `loader-` classification":
     let base = work / "restart-unbound"
     orchMode.store(ord(omAutostart))
     var rt = registered(persistent(deployment(), base))
@@ -2017,13 +2042,50 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check runtimeStart(rt).ec == ecOk
     let v = engineOf(rt).view("meter-1").tryGet
     check v.state == msUnloaded and v.execution.intent == inRequested
-    let (code, response) =
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
+    let (code, _) =
       rcCall(orchBinding(), "recover_module", recoverRequest("meter-1", v))
-    check code == ecOk
-    check LogosNSRuntimeControlRecoverModuleResponse.decode(response).tryGet.accepted.get.state.kind ==
-      LogosNSRuntimeControlStateKind.Error
-    # [I89] The Loader knows no registration with that binding.
-    check rt.failureOf("meter-1") == "loader-invalid-request"
+    check code == ecNotReady
+    # [SPEC RUNTIME l.3607] The more specific classification; the Loader is
+    # never asked.
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
+    check rt.state("meter-1") == msUnloaded
+    rt.finish()
+
+  test "[RUN-1102] [RUN-1103] [TXT-0300] an implementation incompatible with the retained state, registered under another binding id for a replacement instance: the replacement starts; the retained instance keeps its record, `unloaded` with `static-binding-mismatch`":
+    let base = work / "restart-replaced"
+    orchMode.store(ord(omAutostart))
+    var rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    check waitUntil(
+      proc(): bool =
+        orchThreadDone.load
+    )
+    check rt.state("meter-1") == msReady
+    rt.finish()
+    resetOrchestrator()
+    # The deployment registers the new implementation as `meter-v2` and
+    # configures the replacement `meter-2` on it; `meter` is not registered,
+    # and meter-1 is still configured on it.
+    let c = persistent(
+      deployment(@[staticModule("meter-2", "meter_module", "meter-v2")]), base
+    )
+    rt = create(c)
+    check rt.register("orchestrator", orchTable()).ec == ecOk
+    check rt.register("meter-v2", meterModuleStaticSymbols()).ec == ecOk
+    check runtimeStart(rt).ec == ecOk
+    let v = engineOf(rt).view("meter-1").tryGet
+    check v.state == msUnloaded and v.execution.intent == inRequested
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
+    let r = engineOf(rt).view("meter-2").tryGet
+    check r.state == msUnloaded and r.failure.isNone
+    check orchBinding().startModule(
+      "meter_module", "meter-2", Opt.some(r.execution.revision)
+    ) == ord(ecOk)
+    check rt.state("meter-2") == msReady
+    check rt.failureOf("meter-2") == ""
+    check rt.state("meter-1") == msUnloaded
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
     rt.finish()
 
   test "[IMPL] two handles on one store: the second start is MODULE_ERROR":

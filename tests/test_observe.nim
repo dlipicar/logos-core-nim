@@ -611,7 +611,7 @@ suite "run.rc: list_routes (RUNTIME §9.3 l.3359-3365, l.3372-3413)":
 # get_execution_summary ----------------------------------------------------------------
 
 suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
-  test "[RUN-0441] [RUN-0442] [RUN-0440] [RUN-0634] [RUN-0636] [RUN-0637] [RUN-0639] [RUN-0642] [RUN-0994] a ready instance: one committed view, a current realization, its strategy as the selection":
+  test "[RUN-0441] [RUN-0442] [RUN-0440] [RUN-0634] [RUN-0636] [RUN-0637] [RUN-1184] [RUN-0642] [RUN-0994] a ready instance: one committed view, a current realization, its strategy as the selection":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")
@@ -682,7 +682,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     check rc.summaryOf(e.address("m")).code == ecOk
     e.finish()
 
-  test "[RUN-0640] [RUN-0630] [IMPL-DECISION G180] [IMPL-DECISION G227] [RUN-1092] a cleanup past its deadline is unknown; its end is absent at a new revision, the stop completed, and a revision read before it is stale":
+  test "[RUN-0640] [RUN-1183] [IMPL-DECISION G180] [IMPL-DECISION G227] [RUN-1092] a cleanup past its deadline is unknown; its end is absent at a new revision, the stop completed, and a revision read before it is stale":
     var cfg = config()
     cfg.stopDeadline = PassingStop
     let e = fixtureEngine(cfg)

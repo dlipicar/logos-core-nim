@@ -222,7 +222,7 @@ suite "run.loader: the Loader instance (LOADER §1-§2; RUNTIME l.1635-1650) [IM
       deadline = deadline * 2
     check stallSeen.load
 
-  test "[RUN-0639] [IMPL-DECISION G57] its summary is implementation-specific; what it realizes reports the strategy":
+  test "[RUN-1184] [IMPL-DECISION G57] its summary is implementation-specific; what it realizes reports the strategy":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient("c")
     check rc.summaryOf(e, LoaderInstanceId).selection.get.implementation.kind ==
@@ -351,7 +351,7 @@ suite "run.loader: classifications of a Loader realization (RUNTIME §9.3 l.3750
   teardown:
     leftover()
 
-  test "[RUN-1053] [LDR-0133] a typed Loader error is loader-<code>, a start that is answered, never NOT_AUTHORISED":
+  test "[RUN-1191] [LDR-0133] a typed Loader error is loader-<code>, a start that is answered, never NOT_AUTHORISED":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient("c")
     discard e.create(

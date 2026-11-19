@@ -2211,3 +2211,120 @@ site = "tests/test_observe.nim"
 named = "every local instance, instance keys before provider keys"
 reading = "The registry sketch now maps a module name to a list of instance records. The engine keeps instances by instance id (State.instances), several may share a module name, and list_modules reports one record per instance with its state, provider and instance from one committed view; the test lists every local instance. The sketch prescribes no storage representation (l.454)."
 compared = "RUNTIME l.456-470 at 6cac8335 against State.instances and moduleRecord in src/logos_core/runtime/engine.nim."
+
+# P5b: classifications and recovery -------------------------------------------------------------------------------
+
+[[units]]
+id = "RUN-0696"
+compared = "RUNTIME l.3803 at 6a4dfa28 ('When required permissions become available ... initially blocked by missing permissions') against l.3665 at 6cac8335, which adds eligible configuration. The reference orchestration module already resumes both: rule 4g probes every `unloaded` instance with `requested` intent, uncharged, and `configuration_state_changed` brings the probe forward (G288, G162 settled). A refusal for want of configuration now also reports `configuration-missing`, which replaces an `error` instance's cause and is in G291's resumable set. Tests [RUN-0696] [TXT-0582] in tests/test_orchestration.nim (a missing configuration, then resumed) and tests/test_orch_policy.nim (retry accounting kept across the replaced cause)."
+
+[[units]]
+id = "RUN-1190"
+decision = "G355"
+compared = "RUNTIME l.3575 at 6cac8335, the successor of RUN-0675: a Runtime that cannot determine fresh remote state reports the uncertainty through `state` and `failure`, never as `ready`. Only a facade or a remote provider has remote state, and none exists before 5-7b (G355); the claim stays deferred to 5-7b."
+
+[[stale]]
+id = "RUN-0630"
+compared = "Old l.3504 (`execution.revision` advances when intent is established, replaced or cancelled, an attempt is accepted, or the lifecycle state changes) is RUN-1183 at l.3368, which adds a change of the failure, retained selection or realization ownership `get_execution_summary` reports. engine.commit advances the revision for every committed change, those without a lifecycle transition included (G227 settled). The five tests that cited RUN-0630 (tests/test_engine.nim, tests/test_persist.nim, tests/test_rcevents.nim twice, tests/test_observe.nim) now cite RUN-1183, and a new test [RUN-1183] [TXT-0196] in tests/test_rcevents.nim shows a failure change with no lifecycle transition."
+
+[[stale]]
+id = "RUN-0639"
+compared = "Old l.3519 ('Other realization mechanisms MUST use `implementation-specific` ...') is RUN-1184 at 6cac8335 with the same rule. engine.summary reports `implementation-specific` only for the Module Loader instance, which the bootstrap mechanism realizes (G57). The two tests (tests/test_observe.nim, tests/test_loader_engine.nim) and their citations in the inspection item of RUN-0638 moved to RUN-1184."
+
+[[stale]]
+id = "RUN-0675"
+compared = "Old l.3710 (uncertainty through `state` and `reason`) is RUN-1190 at l.3575, which reports it through `state` and `failure`. Its claim in conformance/claims/RUN.toml moved to RUN-1190, deferred to 5-7b with G355: no facade or remote provider exists before 5-7b."
+
+[[stale]]
+id = "RUN-1053"
+compared = "Old l.3750 (a typed Module Loader error with no more specific classification is `loader-<code>`) is RUN-1191 at l.3607, limited to a bound Module Loader provider's typed error; RUN-1192 (l.3608) adds that an implementation-local mechanism never reports `loader-`. engine.classify alone builds `loader-` from a LoaderError the Loader answered, and a static-binding mismatch is decided before any Loader call, so the more specific classification wins. The test in tests/test_loader_engine.nim moved to RUN-1191, and so did its citation in the inspection items of RUN-0565, RUN-0888 and RUN-0889 and of the realization fields; a source scan [RUN-1192] in tests/test_orchestration.nim pins the construction sites."
+
+[[deferred]]
+id = "TXT-0205"
+rides = "RUN-1190"
+decision = "G355"
+reason = "The facade classifications (RUNTIME l.3615) are reported only by a facade, which no Runtime has before 5-7b; RUN-1190 is the requirement in §9.3.19 it rides on, and G355 records the conflict with B6 to settle before 5-7b builds."
+
+[[deferred]]
+id = "TXT-0206"
+rides = "RUN-1190"
+decision = "G355"
+reason = "A started facade's `loaded` or `error` when unavailable (RUNTIME l.3616) is reported only by a facade, which no Runtime has before 5-7b; RUN-1190 is the requirement in §9.3.19 it rides on, and G355 records the conflict with B6 to settle before 5-7b builds."
+
+[[text]]
+id = "TXT-0203"
+step = "P5"
+test = "tests/test_store.nim"
+
+[[text]]
+id = "TXT-0580"
+step = "P5"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0582"
+step = "P5"
+test = "tests/test_orchestration.nim"
+
+[[text]]
+id = "TXT-0299"
+step = "P5"
+test = "tests/test_host.nim"
+
+[[text]]
+id = "TXT-0300"
+step = "P5"
+test = "tests/test_host.nim"
+
+[[text]]
+id = "TXT-0196"
+step = "P5"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0197"
+step = "P5"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0581"
+step = "P5"
+test = "tests/test_permissions.nim"
+
+[[text]]
+id = "TXT-0307"
+step = "P5"
+test = "tests/test_orchestration_host.nim"
+
+[[text]]
+id = "TXT-0269"
+step = "P5"
+kind = "removed"
+site = "src/logos_core/runtime/plumbing.nim"
+reading = "Replaced by TXT-0203 (l.3605), which adds `configuration-missing`, `static-binding-mismatch` and `prerequisite-unavailable` to the initial classifications. FailureKind holds all seventeen in l.3605's order, and test [TXT-0203] in tests/test_store.nim reads the list from the frozen baseline and checks the enumeration and the store's round trip against it."
+compared = "RUNTIME l.3753 at 6a4dfa28 against l.3605 at 6cac8335, and FailureKind in src/logos_core/runtime/plumbing.nim."
+
+[[text]]
+id = "TXT-0303"
+step = "P5"
+kind = "informative"
+reading = "The sentence that concurrent invocations from the same or different consumers do not share consumer identity, authority decisions or request-key scope (old l.1824) is gone from §9.1; l.1719 keeps the rule that each invocation is authenticated and authorized independently (RUN-0346, claimed). Nothing was built on the removed sentence alone, and nothing changes."
+compared = "RUNTIME l.1823-1824 at 6a4dfa28 against l.1718-1720 at 6cac8335."
+
+[[text]]
+id = "TXT-0204"
+step = "P5"
+kind = "holds"
+site = "tests/test_persist.nim"
+named = "an unclean end leaves error with host-terminated"
+reading = "The engine sets `host-terminated` only where the execution envelope or the Runtime process ended without cleanup the Runtime ordered: at open after an unclean end (engine.restore, P5a), for a Module Host's unexpected end (engine.hostEnded, G268 (d)) and for a live application whose host ends (G270). A deadline kill, a Loader-loss end and an end while a release is outstanding are cleanup the Runtime ordered, so they keep their own classification (G268 (b), (c), G269)."
+compared = "RUNTIME l.3606 at 6cac8335 against engine.restore and engine.hostEnded in src/logos_core/runtime/engine.nim (G268-G270, G275 settled, behaviour unchanged)."
+
+[[text]]
+id = "TXT-0574"
+step = "P5"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "an unknown or refused target is NOT_AUTHORISED"
+reading = "Every sentence that moved from §9.3 into §9.3.17 to §9.3.19 was read in its new place and applies to the same subject; the claims and tests follow the units, not the headings. Two references are left behind by the split, editorial remarks the Fable session put to the spec owner (logos-lips b426ec40; nothing sent by this session): l.3454 'identity rules in this section' now sits in §9.3.17 while the identity rules are §9.3.6, and l.3508 'this section's non-disclosure rules' now sits in §9.3.18 while those rules are mostly §9.3.1. The Runtime applies §9.3.6's identity rules and §9.3.1's non-disclosure as before; the named test shows the non-disclosure for an observation method."
+compared = "RUNTIME §9.3 at 6a4dfa28 against §9.3.17 to §9.3.19 at 6cac8335 (l.3352-3640), with l.3454 and l.3508 read against §9.3.1 and §9.3.6."

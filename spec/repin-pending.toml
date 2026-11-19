@@ -206,18 +206,10 @@ closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pend
 "PKG-0650" = "P7"
 "RUN-1100" = "P5"
 "RUN-1101" = "P5"
-"RUN-1102" = "P5"
-"RUN-1103" = "P5"
 "RUN-1104" = "P8"
 "RUN-1105" = "P8"
 "RUN-1108" = "P5"
 "RUN-1109" = "P5"
-"RUN-1183" = "P5"
-"RUN-1184" = "P5"
-"RUN-1190" = "P5"
-"RUN-1191" = "P5"
-"RUN-1192" = "P5"
-"RUN-1193" = "P5"
 "RUN-1198" = "P5"
 "RUN-1199" = "P5"
 "RUN-1201" = "P5"
@@ -247,7 +239,6 @@ closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pend
 "RUN-0258" = "P8"
 "RUN-0265" = "P8"
 "RUN-0267" = "P8"
-"RUN-0696" = "P5"
 
 [stale]
 "BCP-0093" = "P9"
@@ -260,10 +251,6 @@ closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pend
 "PKG-0317" = "P7"
 "PKG-0479" = "P7"
 "RUN-0268" = "P8"
-"RUN-0630" = "P5"
-"RUN-0639" = "P5"
-"RUN-0675" = "P5"
-"RUN-1053" = "P5"
 "SEC-0021" = "P6"
 "SEC-0057" = "P6"
 
@@ -285,6 +272,7 @@ closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pend
 "RUN-1174" = "5-7b"
 "RUN-1175" = "5-7b"
 "RUN-1176" = "5-7b"
+"RUN-1190" = "5-7b"
 "TRN-0397" = "5-7a"
 "TRN-0398" = "5-7a"
 "TRN-0401" = "5-12"
@@ -298,6 +286,8 @@ closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pend
 "TXT-0186" = "5-7b"
 "TXT-0187" = "5-7b"
 "TXT-0188" = "5-7b"
+"TXT-0205" = "5-7b"
+"TXT-0206" = "5-7b"
 
 [[text]]
 id = "TXT-0168"
@@ -331,17 +321,6 @@ section = "§9.3.1"
 source = "review"
 class = "behaviour"
 what = "`configuration-rejected` is produced only by `apply_configuration` under LOGOS-MODULE-CONFIGURATION and omits `current_revision`."
-
-[[text]]
-id = "TXT-0269"
-step = "P5"
-spec = "RUN"
-line = "3753"
-side = "old"
-section = "§9.3"
-class = "todo"
-guard = true
-what = "The initial classifications are `startup-timeout`, `initialization-failed`, `reported-by-module`, `host-terminated`, `authority-denied`, `authority-expired`, `authority-revoked`, `authority-evaluation-failed`, `permission-enforcement-failed`, `configuration-indeterminate`, `cleanup-failed`, `cleanup-timeout`, `remote-state-unknown`, and `other`."
 
 [[text]]
 id = "TXT-0091"
@@ -387,30 +366,6 @@ class = "todo"
 what = "That code does not prove that the provider did not execute the call."
 
 [[text]]
-id = "TXT-0299"
-step = "P5"
-spec = "RUN"
-line = "1319"
-side = "new"
-section = "§8"
-source = "M14, n.151"
-class = "behaviour"
-note = "A static-binding mismatch is an outcome of that instance, not a refused startup"
-what = "A retained instance whose implementation selection is a static binding remains realizable only while protected registration supplies that binding identifier with declaration facts equal to the instance's retained accepted declaration."
-
-[[text]]
-id = "TXT-0300"
-step = "P5"
-spec = "RUN"
-line = "1322"
-side = "new"
-section = "§8"
-source = "M14, n.151"
-class = "behaviour"
-note = "A static-binding mismatch is an outcome of that instance, not a refused startup"
-what = "An instance that is `unloaded` with retained `requested` intent then remains `unloaded` with the `static-binding-mismatch` failure classification."
-
-[[text]]
 id = "TXT-0302"
 step = "P5"
 spec = "RUN"
@@ -420,136 +375,6 @@ section = "§9"
 source = "n.159"
 class = "todo"
 what = "Recovery or resumption of that intent uses the bootstrap policy current at that time as the origin's execution authority."
-
-[[text]]
-id = "TXT-0303"
-step = "P5"
-spec = "RUN"
-line = "1720"
-side = "new"
-source = "n.162"
-class = "todo"
-what = "removed sentence on concurrent invocations sharing identity/decisions/request-key scope"
-
-[[text]]
-id = "TXT-0574"
-step = "P5"
-spec = "RUN"
-line = "1772"
-side = "new"
-section = "§9.3.17 to §9.3.19"
-source = "review 3"
-class = "todo"
-guard = true
-what = "RUNTIME §9.3 is split into subsections. Check that no sentence moved into §9.3.17 to §9.3.19 now applies to something else."
-
-[[text]]
-id = "TXT-0196"
-step = "P5"
-spec = "RUN"
-line = "3373"
-side = "new"
-section = "§9.3.17"
-source = "M15"
-class = "behaviour"
-note = "The execution revision and event also advance on failure, selection and realization changes"
-what = "`execution_state_changed_event` reports each execution-revision change in committed order, including intent, failure, selection, and realization changes without a lifecycle transition."
-
-[[text]]
-id = "TXT-0197"
-step = "P5"
-spec = "RUN"
-line = "3374"
-side = "new"
-section = "§9.3.17"
-class = "todo"
-what = "An observer obtains the changed failure, selection, and realization through `get_execution_summary`."
-
-[[text]]
-id = "TXT-0203"
-step = "P5"
-spec = "RUN"
-line = "3605"
-side = "new"
-section = "§9.3.19"
-source = "M13a, n.197a"
-class = "behaviour"
-note = "Three new failure classifications"
-what = "The initial classifications are `startup-timeout`, `initialization-failed`, `reported-by-module`, `host-terminated`, `authority-denied`, `authority-expired`, `authority-revoked`, `authority-evaluation-failed`, `permission-enforcement-failed`, `configuration-missing`, `configuration-indeterminate`, `static-binding-mismatch`, `prerequisite-unavailable`, `cleanup-failed`, `cleanup-timeout`, `remote-state-unknown`, and `other`."
-
-[[text]]
-id = "TXT-0204"
-step = "P5"
-spec = "RUN"
-line = "3606"
-side = "new"
-section = "§9.3.19"
-source = "n.197a"
-class = "todo"
-guard = true
-what = "`host-terminated` means that the realization's execution envelope, or the Runtime process containing it, ended without cleanup ordered by Runtime."
-
-[[text]]
-id = "TXT-0580"
-step = "P5"
-spec = "RUN"
-line = "3613"
-side = "new"
-source = "M13b"
-class = "behaviour"
-what = "A blocked unloaded instance with retained intent reports failure"
-
-[[text]]
-id = "TXT-0205"
-step = "P5"
-spec = "RUN"
-line = "3615"
-side = "new"
-section = "§9.3.19"
-class = "todo"
-guard = true
-what = "For a facade, `facade-failed`, `remote-unreachable`, `remote-not-ready`, `remote-stopped`, `remote-failed`, and `contract-mismatch` are also defined classifications, with the causes defined for `route_failure.code`."
-
-[[text]]
-id = "TXT-0206"
-step = "P5"
-spec = "RUN"
-line = "3616"
-side = "new"
-section = "§9.3.19"
-class = "todo"
-guard = true
-what = "A started facade that is unavailable reports `loaded` when its target is known to be not ready, stopped, or unloaded, and `error` for every other classified cause."
-
-[[text]]
-id = "TXT-0307"
-step = "P5"
-spec = "RUN"
-line = "3638"
-side = "new"
-section = "§10.1"
-class = "todo"
-what = "Recovery of such an instance is resumption after Runtime restart."
-
-[[text]]
-id = "TXT-0581"
-step = "P5"
-spec = "RUN"
-line = "3663"
-side = "new"
-source = "M10c"
-class = "behaviour"
-what = "An enforcement stop uses the same rows and keeps the execution intent and its origin (RG-1)"
-
-[[text]]
-id = "TXT-0582"
-step = "P5"
-spec = "RUN"
-line = "3665"
-side = "new"
-source = "M13c"
-class = "behaviour"
-what = "Orchestration resumes retained intent when eligible permissions or configuration appear"
 
 [[text]]
 id = "TXT-0308"

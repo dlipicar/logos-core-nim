@@ -201,10 +201,11 @@ type
     inStopped = "stopped"
 
   FailureKind* = enum
-    ## [SPEC RUNTIME §9.3 l.3750-3756] The initial classifications;
-    ## `fkLoader` is `loader-` followed by the typed Module Loader error code
-    ## (l.3754; I89: the bound Module Loader realizes every instance but its
-    ## own).
+    ## [SPEC RUNTIME §9.3.19 l.3605] The initial classifications, in the
+    ## spec's order; `fkLoader` is `loader-` followed by the typed Module
+    ## Loader error code (l.3607; I89: the bound Module Loader realizes every
+    ## instance but its own). Nothing persists the ordinals: the store and
+    ## Runtime Control carry the spelling.
     fkStartupTimeout = "startup-timeout"
     fkInitializationFailed = "initialization-failed"
     fkReportedByModule = "reported-by-module"
@@ -214,7 +215,15 @@ type
     fkAuthorityRevoked = "authority-revoked"
     fkAuthorityEvaluationFailed = "authority-evaluation-failed"
     fkPermissionEnforcementFailed = "permission-enforcement-failed"
+    fkConfigurationMissing = "configuration-missing"
+      ## [SPEC RUNTIME l.3613] no eligible configuration (CONFIG l.142-145)
     fkConfigurationIndeterminate = "configuration-indeterminate"
+    fkStaticBindingMismatch = "static-binding-mismatch"
+      ## [SPEC RUNTIME l.1319-1322] registration no longer supplies the binding
+      ## with the retained declaration's facts
+    fkPrerequisiteUnavailable = "prerequisite-unavailable"
+      ## [SPEC RUNTIME l.3613] a prerequisite not ready, with no attempt in
+      ## progress
     fkCleanupFailed = "cleanup-failed"
     fkCleanupTimeout = "cleanup-timeout"
     fkRemoteStateUnknown = "remote-state-unknown"

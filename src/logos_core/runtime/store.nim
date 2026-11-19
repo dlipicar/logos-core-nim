@@ -326,7 +326,7 @@ proc xferOf*(data: openArray[byte]): Result[XferRecord, string] =
   )
 
 func classificationOf*(text: string): Result[Failure, string] =
-  ## The failure a stored classification names (RUNTIME l.3753).
+  ## The failure a stored classification names (RUNTIME l.3605, l.3607).
   if text.startsWith("loader-"):
     let code = text[7 ..^ 1]
     for c in LoaderErrorCode:

@@ -250,7 +250,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
   setup:
     reset()
 
-  test "[RUN-0667] [RUN-0629] [RUN-0630] [RUN-0355] [RUN-0669] [TXT-0279] start makes the instance ready; a repeated start changes nothing":
+  test "[RUN-0667] [RUN-0629] [RUN-1183] [RUN-0355] [RUN-0669] [TXT-0279] start makes the instance ready; a repeated start changes nothing":
     let e = newEngine(config())
     let c = e.create(gated(), "g").tryGet
     let v = e.start("g").tryGet
@@ -641,7 +641,7 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
   setup:
     reset()
 
-  test "[RUN-0140] [RUN-0141] [RUN-0683] a dependent starts only after its prerequisite is ready":
+  test "[RUN-0140] [RUN-0141] [RUN-0683] [RUN-1193] [TXT-0580] a dependent starts only after its prerequisite is ready; meanwhile it is `unloaded` with `prerequisite-unavailable`":
     var cfg = config()
     cfg.ordering = @[("a", "b")]
     let e = newEngine(cfg)
@@ -649,10 +649,95 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     discard e.create(gated(), "b").tryGet
     let early = e.start("b")
     check early.isErr and early.error.code == ecNotReady
-    check e.view("b").tryGet.execution.intent == inRequested
+    var v = e.view("b").tryGet
+    check v.execution.intent == inRequested
+    check v.state == msUnloaded and v.failureOf == "prerequisite-unavailable"
     check inits.load == 0
     check e.start("a").tryGet.state == msReady
+    # [IMPL-DECISION G359] It clears at the next accepted attempt (l.3611).
+    check e.view("b").tryGet.failureOf == "prerequisite-unavailable"
+    v = e.start("b").tryGet
+    check v.state == msReady and v.failure.isNone
+    e.finish()
+
+  test "[RUN-1193] [TXT-0580] a prerequisite in an accepted attempt makes a dependent wait without a failure (P5 reading C3)":
+    var cfg = config()
+    cfg.ordering = @[("a", "b")]
+    let e = newEngine(cfg)
+    discard e.create(gated(), "a").tryGet
+    discard e.create(gated(), "b").tryGet
+    initGate.store(true)
+    var t: Thread[(Engine, string)]
+    started.store(-2)
+    createThread(t, startOn, (e, "a"))
+    check waitUntil(
+      proc(): bool =
+        inits.load == 1
+    )
+    check e.view("a").tryGet.state == msLoaded
+    let early = e.start("b")
+    check early.isErr and early.error.code == ecNotReady
+    let v = e.view("b").tryGet
+    check v.state == msUnloaded and v.failure.isNone
+    check v.execution.intent == inRequested
+    initGate.store(false)
+    joinThread(t)
+    check started.load == ord(msReady)
     check e.start("b").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-1193] [TXT-0580] a prerequisite whose attempt fails marks the dependent waiting on it, though nobody asks (P5 Q2, the proactive pass)":
+    var cfg = config()
+    cfg.ordering = @[("a", "b")]
+    cfg.startupDeadline = initDuration(milliseconds = 150 * Slow)
+    let e = newEngine(cfg)
+    discard e.create(gated(), "a").tryGet
+    discard e.create(gated(), "b").tryGet
+    initGate.store(true)
+    var t: Thread[(Engine, string)]
+    started.store(-2)
+    createThread(t, startOn, (e, "a"))
+    check waitUntil(
+      proc(): bool =
+        inits.load == 1
+    )
+    check e.start("b").error.code == ecNotReady
+    check e.view("b").tryGet.failure.isNone # a is in its attempt
+    joinThread(t)
+    check started.load == ord(msError) # the startup deadline
+    let v = e.view("b").tryGet
+    check v.state == msUnloaded and v.execution.intent == inRequested
+    check v.failureOf == "prerequisite-unavailable"
+    initGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        destroys.load == 1
+    )
+    e.finish()
+
+  test "[RUN-1193] [TXT-0580] the proactive mark fills and never replaces another cause; a refusal reports the first cause in one order, prerequisites first (P5 §0.3 item 1)":
+    var cfg = config(
+      denying(AuthzRule(action: Opt.some(aaExecute), target: "c", outcome: azDeny))
+    )
+    cfg.ordering = @[("a", "c")]
+    let e = newEngine(cfg)
+    discard e.create(gated(), "a").tryGet
+    discard e.create(gated(), "c").tryGet
+    check e.start("a").tryGet.state == msReady
+    check e.start("c").error.code == ecNotAuthorised
+    check e.view("c").tryGet.failureOf == "authority-denied"
+    # a leaves `ready`: c keeps the denial the pass may not replace.
+    check e.stop("a").tryGet.state == msUnloaded
+    var v = e.view("c").tryGet
+    check v.state == msUnloaded and v.failureOf == "authority-denied"
+    # A recovery now meets the prerequisite first, the current cause (l.3611).
+    check e.recover("c", v.execution.revision).error.code == ecNotReady
+    v = e.view("c").tryGet
+    check v.failureOf == "prerequisite-unavailable"
+    # With a ready again, the denial is the cause once more.
+    check e.start("a").tryGet.state == msReady
+    check e.recover("c", v.execution.revision).error.code == ecNotAuthorised
+    check e.view("c").tryGet.failureOf == "authority-denied"
     e.finish()
 
   test "[RUN-0705] [RUN-0706] [RUN-0142] [RUN-1074] shutdown releases dependents first, keeps intent and closes admission":
@@ -668,6 +753,9 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     check destroys.load == 2 and live.load == 0
     for v in e.list():
       check v.state == msUnloaded and v.execution.intent == inRequested
+      # [P5 §0.3 item 1, rule 3] No `prerequisite-unavailable` once shutdown
+      # is accepted: b stopped first, then a.
+      check v.failure.isNone
     check e.start("a").error.code == ecNotReady
     check e.create(gated(), "c").error.code == ecNotReady
     var unloadedAt: seq[(string, uint64)]

@@ -48,6 +48,9 @@ default = "claimed"
 "RUN-1174" = "deferred:tier-5"
 "RUN-1175" = "deferred:tier-5"
 "RUN-1176" = "deferred:tier-5"
+# Re-pin P5b (DECISIONS G355): uncertain remote state reported through `state` and `failure`
+# (l.3575, the successor of RUN-0675) comes with remote providers, 5-7b.
+"RUN-1190" = "deferred:tier-5"
 # RUN-0007, RUN-0008 and RUN-0014 (the same contract across execution modes) are claimed with step
 # 4b-2b: one scripted sequence through a direct and a transported handle (DECISIONS I90).
 # Remote only (fable-scope §7): `connect_remote` (l.234-241) and the rule that a local route never
@@ -188,7 +191,6 @@ default = "claimed"
 "RUN-0989" = "deferred:tier-5"
 "RUN-0628" = "deferred:tier-5"
 "RUN-0992" = "deferred:tier-5"
-"RUN-0675" = "deferred:tier-5"
 "RUN-0898" = "deferred:tier-5"
 "RUN-1043" = "deferred:tier-5"
 "RUN-1044" = "deferred:tier-5"

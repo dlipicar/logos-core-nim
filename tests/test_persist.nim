@@ -13,6 +13,7 @@ when defined(posix):
 import unittest2
 import ../src/logos_core/runtime/[engine, store, store_types]
 from logos_sdk/base/logtext import ForeignTextLimit
+from logos_sdk/pins import HashSuiteId
 import logos_sdk/abi/types
 import logos_sdk/cbor
 import logos_sdk/commitment
@@ -189,7 +190,7 @@ const
 # Tests ----------------------------------------------------------------------------------
 
 suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)":
-  test "[RUN-0631] [RUN-0630] [RUN-1196] a change is in the store before it is exposed or its attempt runs":
+  test "[RUN-0631] [RUN-1183] [RUN-1196] a change is in the store before it is exposed or its attempt runs":
     let base = freshBase()
     var e = openAt(base)
     let v = e.create(keeper(), "k1").tryGet
@@ -439,7 +440,7 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check e.start("k").tryGet.state == msReady
     e.finish()
 
-  test "[IMPL-DECISION G160] [RUN-0258] [RUN-0486] [RUN-0919] [RUN-0920] [RUN-0921] [RUN-0924] a configured instance keeps its id while its declaration facts are equal":
+  test "[IMPL-DECISION G160] [RUN-0258] [RUN-0486] [RUN-0919] [RUN-0920] [RUN-0921] [RUN-0924] [RUN-1103] a configured instance keeps its id while its declaration facts are equal":
     let base = freshBase()
     var old = keeper(Opt.some("gone-state"))
     var k1 = keeper()
@@ -481,13 +482,13 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     let held = boot(@[BootstrapInstance(instance: "k9", record: old)])
     check held.isErr and held.error.code == ecInvalidParams
     check "held by gone" in held.error.message
-    # Other facts: refused, naming the instance; the retained record stays.
+    # Other facts of a static instance: not refused but mismatched [SPEC
+    # RUNTIME l.1319-1321; M14]; the retained record stays.
     var changed = k1
     changed.requires =
       @[ProviderRequirement(contract: meterRoot, cardinality: cardSingle)]
     let differs = boot(@[BootstrapInstance(instance: "k1", record: changed)])
-    check differs.isErr and differs.error.code == ecInvalidParams
-    check "instance k1" in differs.error.message
+    check differs.isOk
     check recordBytes(storedOf(base, "k1").record) == recordBytes(before)
     # Equal facts: the same instance, which takes the configured reason.
     var reason = k1
@@ -496,6 +497,48 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check storedOf(base, "k1").record.requestedPermissions[0].reason ==
       Opt.some("another reason")
     check stored(base).runtimeInstanceId == "rt-g160"
+
+  test "[IMPL-DECISION G160] [RUN-1103] a retained dynamic instance whose configured facts changed is still refused, naming it (P5 reading B4: l.1319-1322 name static bindings only)":
+    let base = freshBase()
+    var hash: array[32, byte]
+    hash[0] = 9
+    let dyn = ModuleRecord(
+      module: "dyn_module",
+      strategy: stDirectDynamic,
+      artifact: ArtifactRecord(
+        id: "dyn", localPath: "/nonexistent/dyn.lib", hash: hash, hashSuite: HashSuiteId
+      ),
+    )
+    writeSnapshot(
+      base,
+      Snapshot(
+        runtimeInstanceId: "rt-b4",
+        epoch: 3,
+        instances: @[
+          StoredInstance(
+            instance: "d1",
+            record: dyn,
+            state: msUnloaded,
+            revision: (3'u64 shl 32) + 1,
+            intent: inUninitialized,
+          )
+        ],
+      ),
+    )
+    var changed = dyn
+    changed.primaryContract = Opt.some(meterRoot)
+    let e = openAt(base)
+    let r = e.bootstrap(
+      @[
+        BootstrapInstance(instance: "orch", record: client()),
+        BootstrapInstance(instance: "d1", record: changed),
+      ],
+      "orch",
+    )
+    check r.isErr and r.error.code == ecInvalidParams and
+      "instance d1" in r.error.message
+    e.finish()
+    check recordBytes(storedOf(base, "d1").record) == recordBytes(dyn)
 
   test "[RUN-0922] [RUN-0947] [RUN-0948] [RUN-0949] names made after a restart never repeat earlier ones":
     let base = freshBase()
@@ -686,19 +729,26 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check e.view("r").tryGet.execution.intentRevision == Opt.some((ep shl 32) + 2)
     e.finish()
 
-  test "[RUN-1030] a retained instance no longer configured starts from its stored record":
+  test "[RUN-1030] [RUN-1103] a retained static instance no longer configured has no facts to compare, so it is not realized; configured again with the same facts it starts from its stored record (P5 reading B5)":
     let base = freshBase()
     var e = openAt(base)
-    check e.bootstrap(
-      @[
-        BootstrapInstance(instance: "orch", record: client()),
-        BootstrapInstance(instance: "k1", record: keeper(Opt.some("k1-a"))),
-      ],
-      "orch",
-    ).isOk
+    let configured = @[
+      BootstrapInstance(instance: "orch", record: client()),
+      BootstrapInstance(instance: "k1", record: keeper(Opt.some("k1-a"))),
+    ]
+    check e.bootstrap(configured, "orch").isOk
     e.restart(base)
     check e.bootstrap(@[BootstrapInstance(instance: "orch", record: client())], "orch").isOk
-    check e.start("k1").tryGet.state == msReady
+    # [SPEC RUNTIME l.1321] Nothing supplies its declaration facts this run.
+    let r = e.start("k1")
+    check r.isErr and r.error.code == ecNotReady
+    var v = e.view("k1").tryGet
+    check v.state == msUnloaded and v.failure.get.kind == fkStaticBindingMismatch
+    check v.execution.intent == inRequested
+    e.restart(base)
+    check e.bootstrap(configured, "orch").isOk
+    v = e.start("k1").tryGet
+    check v.state == msReady and v.failure.isNone
     check lastDir() == base / "state" / "k1-a"
     e.finish()
 

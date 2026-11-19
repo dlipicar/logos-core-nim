@@ -263,6 +263,10 @@ type
     orchestration: bool ## [G53] the instance the bootstrap input names
     created: bool ## made by `create_module`, not named by the host
     configured: bool ## named by the host configuration at bootstrap
+    mismatched: bool
+      ## [SPEC RUNTIME l.1319-1322; M14] a retained `direct_static` instance
+      ## this run's registration does not supply with its retained facts
+      ## (`staticMismatches`): never realized in this run
     pending: bool ## [IMPL] a committed change not yet written, so not yet exposed (I82)
     shown: InstanceView ## the view last exposed, which observers see while `pending`
     pendingExec: PendingExec
@@ -2875,13 +2879,64 @@ proc bound(st: State, a: Attempt, res: sink BindResult) =
     return
   st.beginInit(a, b.get)
 
-proc prerequisitesReady(st: State, x: Inst): bool =
+type Prerequisites = enum
+  prReady ## every prerequisite is `ready`
+  prWaiting ## each one not `ready` is `loaded` with its accepted attempt
+  prBlocked ## one is missing, or neither `ready` nor in an attempt
+
+proc prerequisites(st: State, x: Inst): Prerequisites =
+  ## [SPEC RUNTIME §3.7, §10.1; l.3613] What the lifecycle ordering says of
+  ## `x`'s start. [P5 reading C3] "An execution attempt in progress" is an
+  ## accepted one (`loaded`); a start waiting for its execution decision is
+  ## not.
+  result = prReady
   for (pre, dep) in st.cfg.ordering:
     if dep == x.id:
       let p = st.instances.getOrDefault(pre)
-      if p.isNil or p.state != msReady:
-        return false
-  true
+      if p.isNil or (p.state != msReady and (p.state != msLoaded or p.attempt.isNil)):
+        return prBlocked
+      if p.state != msReady:
+        result = prWaiting
+
+proc blockedBy(st: State, x: Inst, kind: FailureKind) =
+  ## [SPEC RUNTIME l.3611, l.3613; P5 §0.3 item 3] A start or recovery
+  ## refused for a cause of l.3613 records that cause: it replaces the one
+  ## recorded (a later failure supplies the current cause), committed only
+  ## when it changes, so orchestration's repeated probes publish nothing new
+  ## (l.3368 still holds: a change is a new revision).
+  if x.failure.isNone or x.failure.get.kind != kind:
+    x.failure = Opt.some(Failure(kind: kind))
+    st.commit(x)
+
+proc prerequisiteRefusal(st: State, x: Inst, p: Prerequisites) =
+  ## [SPEC RUNTIME l.3613; P5 §2.2] A start or recovery the ordering refuses:
+  ## `prerequisite-unavailable` on an `unloaded` instance when a prerequisite
+  ## blocks it; nothing while every unready one is in an accepted attempt
+  ## (reading C3), and nothing on an `error` one, whose cause stays (l.3612;
+  ## orchestration's rule 4d does not recover it meanwhile, G287).
+  if p == prBlocked and x.state == msUnloaded:
+    st.blockedBy(x, fkPrerequisiteUnavailable)
+
+proc followPrerequisites(st: State) =
+  ## [SPEC RUNTIME l.3613; P5 Q2 ruling, §0.3 item 1] The `unloaded`
+  ## failure is kept current for the ordering even when nobody asks: after a
+  ## step that committed a state or an intent, an `unloaded` instance with
+  ## `requested` intent, no recorded cause and a blocking prerequisite gets
+  ## `prerequisite-unavailable`. It fills and never replaces, so an
+  ## enforcement stop's classification, a settings refusal, a missing
+  ## configuration or a mismatch stays (and no cause alternates with a
+  ## probe's), and it does not run once shutdown is accepted, since shutdown
+  ## stops dependents first and keeps their intent. It runs before
+  ## `followRealizations`, so its commits are that step's. [IMPL-DECISION G359]
+  ## Like every l.3613 cause it clears at the next accepted attempt or a
+  ## completed explicit stop (l.3611).
+  if st.stepCommitted.len == 0 or st.shuttingDown or st.cfg.ordering.len == 0:
+    return
+  for x in st.instances.values:
+    if x.state == msUnloaded and x.intent == inRequested and x.failure.isNone and
+        x.pendingExec.isNil and st.prerequisites(x) == prBlocked:
+      x.failure = Opt.some(Failure(kind: fkPrerequisiteUnavailable))
+      st.commit(x)
 
 # Authority (step 8b; DECISIONS I85) ------------------------------------------------------
 #
@@ -3901,13 +3956,15 @@ proc cancelExec(st: State, x: Inst, pe: PendingExec) =
 proc selectConfig(st: State, x: Inst, pe: PendingExec): Opt[Opt[ValueRecord]] =
   ## [SPEC CONFIG §3 l.123-126, §4 l.142-145; I87 C6, C17] For an otherwise
   ## authorized startup attempt, before it is accepted: the staged record,
-  ## else the current one. None, or an ineligible one, is NOT_READY [G162
-  ## interim (TF-10)]: intent stays `requested`, nothing is accepted, and a
-  ## retained execution refusal (G168) is cleared, since the decision now
-  ## allows. A staged record whose promotion could not advance the revision
-  ## is MODULE_ERROR [G234]. For the orchestration instance at bootstrap
-  ## either fails the bootstrap with MODULE_ERROR [G190 (TF-25 point 4)].
-  ## Returns none once the start is answered.
+  ## else the current one. [SPEC RUNTIME l.3613, l.3611; G162 changed] None,
+  ## or an ineligible one (reading C6), is NOT_READY with
+  ## `configuration-missing`: intent stays `requested`, nothing is accepted,
+  ## and the cause replaces the one recorded, on an `error` instance too
+  ## (P5 §0.3 item 3: as a denial or a settings refusal does; G291 reads it
+  ## as resumable). A staged record whose promotion could not advance the
+  ## revision is MODULE_ERROR [G234]. For the orchestration instance at
+  ## bootstrap either fails the bootstrap with MODULE_ERROR [G190 (TF-25
+  ## point 4)]. Returns none once the start is answered.
   if not x.configurable:
     return Opt.some(Opt.none(ValueRecord))
   var refusal: EngineError
@@ -3921,11 +3978,7 @@ proc selectConfig(st: State, x: Inst, pe: PendingExec): Opt[Opt[ValueRecord]] =
   of selNone, selIneligible:
     refusal =
       engineError(ecNotReady, "the module instance has no eligible configuration value")
-    if x.failure.isSome and
-        x.failure.get.kind in
-        {fkAuthorityDenied, fkAuthorityEvaluationFailed, fkPermissionEnforcementFailed}:
-      x.failure = Opt.none(Failure)
-      st.commit(x)
+    st.blockedBy(x, fkConfigurationMissing)
   if x.orchestration and st.bootstrapReply != nil:
     st.bootstrapReply.answerError(
       ecModule, "the orchestration instance cannot start: " & refusal.message
@@ -3970,13 +4023,27 @@ proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
       st.rerun(op)
     return
   if x.state notin {msUnloaded, msError} or x.attempt != nil or x.teardown != 0 or
-      x.realization != nil or x.intent != inRequested or not st.prerequisitesReady(x):
+      x.realization != nil or x.intent != inRequested:
+    pe.answerExec(ecNotReady, "the module instance can no longer start")
+    return
+  let ordering = st.prerequisites(x)
+  if ordering != prReady:
+    st.prerequisiteRefusal(x, ordering)
     pe.answerExec(ecNotReady, "the module instance can no longer start")
     return
   let selected = st.selectConfig(x, pe).valueOr:
     return
-  # The attempt is accepted: `loaded`, failure cleared (§9.3 l.3758-3759),
-  # written before the attempt begins (l.3505).
+  if x.mismatched:
+    # [SPEC RUNTIME l.1321-1322, l.3607; M14; P5 §0.3 item 1] Last of the
+    # causes, before any Loader call, so never a `loader-` classification.
+    st.blockedBy(x, fkStaticBindingMismatch)
+    pe.answerExec(
+      ecNotReady,
+      "the static binding registered does not match the instance's retained declaration",
+    )
+    return
+  # The attempt is accepted: `loaded`, failure cleared (§9.3 l.3611), written
+  # before the attempt begins (l.3505).
   var waiters = pe.waiters
   for op in pe.joined:
     waiters.add(Waiter(reply: op.q.reply, origin: op.q.origin.instance))
@@ -4014,11 +4081,15 @@ proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
 
 proc execute(st: State, x: Inst, reply: ReplyChannel, origin: string) {.gcsafe.} =
   ## [SPEC RUNTIME §3.6, §9.3] What `start` and `recover` share once intent is
-  ## `requested`: prerequisites, execution authorization for the retained
-  ## origin (pending meanwhile, `PendingExec`), the accepting commit, then
-  ## the attempt (`beginAttempt`).
-  if not st.prerequisitesReady(x):
+  ## `requested`, in one order of the causes of l.3613 (P5 §0.3 item 1):
+  ## prerequisites, execution authorization for the retained origin (the
+  ## settings first, pending meanwhile, `PendingExec`), configuration, the
+  ## static binding, then the accepting commit and the attempt
+  ## (`beginAttempt`).
+  let ordering = st.prerequisites(x)
+  if ordering != prReady:
     # [SPEC RUNTIME §3.7, §10.1] A dependent waits for every prerequisite.
+    st.prerequisiteRefusal(x, ordering)
     reply.answerError(ecNotReady, "a lifecycle prerequisite is not ready")
     return
   st.decideExec(x, PendingExec(waiters: @[Waiter(reply: reply, origin: origin)]))
@@ -7332,7 +7403,8 @@ proc reprovision(st: State, configured: seq[BootstrapInstance]): Opt[EngineError
   ## differs from the last one accepted for it; a value removed from the
   ## host configuration leaves that root as it was. Every one is checked
   ## (frame size [G233], revision headroom [G234]: MODULE_ERROR naming the
-  ## instance) before any is staged.
+  ## instance) before any is staged. A mismatched instance is left out: the
+  ## configured value belongs to other declaration facts (M14).
   var todo: seq[(Inst, ConfigState, Blob)]
   template unwind() =
     for (_, _, blob) in todo:
@@ -7340,7 +7412,7 @@ proc reprovision(st: State, configured: seq[BootstrapInstance]): Opt[EngineError
 
   for b in configured:
     let x = st.instances.getOrDefault(b.instance)
-    if x.isNil or not x.configurable or b.configuration.isNone:
+    if x.isNil or x.mismatched or not x.configurable or b.configuration.isNone:
       continue
     let p = b.configuration.get.provisioned
     if p.isNone or x.config.lastProvisioned == Opt.some(p.get.valueRoot):
@@ -7372,14 +7444,26 @@ proc reprovision(st: State, configured: seq[BootstrapInstance]): Opt[EngineError
     drop(blob)
   failed
 
+func registered(st: State): HashSet[string] =
+  for reg in st.cfg.statics:
+    result.incl(reg.binding)
+
 proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] =
-  ## [IMPL-DECISION G160 interim (TF-08)] The configured instances against the
+  ## [IMPL-DECISION G160 (TF-08)] The configured instances against the
   ## retained ones, all checked before any is changed. A retired id is
-  ## refused (l.3582); a retained id is the same logical instance while its
+  ## refused (l.3582). A retained id is the same logical instance while its
   ## declaration facts are equal (the record without `local_path` and
-  ## permission reasons, `store.factBytes`), and refused, naming it, when
-  ## they differ: the host names a new id. A configured state assignment that
-  ## another instance, live or retired, holds is refused (l.1468, l.3587).
+  ## permission reasons, `store.factBytes`). When they differ: a retained
+  ## `direct_static` instance is not refused but mismatched
+  ## (`staticMismatches`; SPEC RUNTIME l.1319-1322 settle the static path);
+  ## any other is refused, naming it, and the host names a new id (the
+  ## interim, P5 reading B4: l.1319-1322 name static bindings only).
+  ## [IMPL-DECISION S4 changed] A configured instance not yet retained that
+  ## names a static binding never registered is refused here, as the host
+  ## did before the store was open; a retained one is mismatched instead
+  ## (l.1321). A configured state assignment that another instance, live or
+  ## retired, holds is refused (l.1468, l.3587).
+  let registered = st.registered
   for b in configured:
     if namesLoader(b.instance, b.record):
       # [IMPL-DECISION G246] Only the Runtime's bootstrap names the Loader.
@@ -7394,7 +7478,17 @@ proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] 
         engineError(ecInvalidParams, "instance " & b.instance & " was retired")
       )
     let x = st.instances.getOrDefault(b.instance)
-    if x != nil and factBytes(x.record) != factBytes(b.record):
+    if x.isNil:
+      if b.record.strategy == stDirectStatic and b.record.binding notin registered:
+        return Opt.some(
+          engineError(
+            ecInvalidParams,
+            "module instance " & b.instance & " names static binding " & b.record.binding &
+              ", which is not registered",
+          )
+        )
+    elif x.record.strategy != stDirectStatic and
+        factBytes(x.record) != factBytes(b.record):
       return Opt.some(
         engineError(
           ecInvalidParams,
@@ -7413,6 +7507,54 @@ proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] 
           )
         )
   Opt.none(EngineError)
+
+proc declaredFacts(
+    st: State, x: Inst, named: Table[string, ModuleRecord]
+): Opt[seq[byte]] =
+  ## [P5 §0.3 item 4; Fable condition 4] Where a retained static instance's
+  ## declaration facts come from in this run: a configured instance's from
+  ## its configured record; a `create_module` instance's from its module's
+  ## declaration (the last one naming it, as `createModule` selects), with
+  ## the instance's own state assignment, provided the declaration still
+  ## gives it one exactly when it has one. None otherwise: an instance the
+  ## configuration no longer names, or whose declaration is gone (reading B5).
+  if x.id in named:
+    return Opt.some(factBytes(named.getOrDefault(x.id)))
+  if not x.created:
+    return Opt.none(seq[byte])
+  var found = Opt.none(ModuleDeclaration)
+  for d in st.cfg.declarations:
+    if d.record.module == x.record.module:
+      found = Opt.some(d)
+  if found.isNone or found.get.persistentState != x.record.stateAssignment.isSome:
+    return Opt.none(seq[byte])
+  var r = found.get.record
+  r.stateAssignment = x.record.stateAssignment
+  Opt.some(factBytes(r))
+
+proc staticMismatches(st: State, configured: seq[BootstrapInstance]) =
+  ## [SPEC RUNTIME l.1319-1321; M14] Before this run realizes anything: a
+  ## retained `direct_static` instance is realizable only while this run's
+  ## registration supplies its binding id, for its module, and its declaration
+  ## facts (`declaredFacts`) equal its retained record's. Otherwise it is
+  ## mismatched for the whole run: its retained record is kept (no adoption,
+  ## no reprovisioning) and every start or recovery is refused with
+  ## `static-binding-mismatch` (`executeDecided`). The Loader's record is
+  ## construction input this start re-establishes (l.1554, l.1557), so these
+  ## lines do not reach it (a reading; S4's row). Nothing is committed here.
+  var bindings: Table[string, string]
+  for reg in st.cfg.statics:
+    bindings[reg.binding] = reg.module
+  var named: Table[string, ModuleRecord]
+  for b in configured:
+    named[b.instance] = b.record
+  for x in st.instances.values:
+    if x.id == LoaderInstanceId or x.record.strategy != stDirectStatic:
+      continue
+    let facts = st.declaredFacts(x, named)
+    x.mismatched =
+      bindings.getOrDefault(x.record.binding, "") != x.record.module or facts.isNone or
+      facts.get != factBytes(x.record)
 
 # State transfer (Tier 4b step 4b-7; DECISIONS I96) ---------------------------------
 
@@ -7805,6 +7947,7 @@ proc bootstrap(st: State, q: Request) =
   if refused.isSome:
     q.reply.answerError(refused.get.code, refused.get.message)
     return
+  st.staticMismatches(q.bootstrap)
   let todo = st.checkTransfers(q.bootstrap, q.transfers).valueOr:
     q.reply.answerError(error.code, error.message)
     return
@@ -7825,9 +7968,10 @@ proc bootstrap(st: State, q: Request) =
       ).valueOr:
         q.reply.answerError(error.code, error.message)
         return
-    elif recordBytes(x.record) != recordBytes(b.record):
+    elif not x.mismatched and recordBytes(x.record) != recordBytes(b.record):
       # [IMPL-DECISION G160] Equal facts: the retained record takes the
-      # configured artifact path and permission reasons.
+      # configured artifact path and permission reasons. A mismatched one
+      # keeps its retained record (l.1319).
       let saved = x.save
       x.record = b.record
       let failed = st.accept(x, saved, exempt = true)
@@ -7838,6 +7982,11 @@ proc bootstrap(st: State, q: Request) =
     if b.instance == q.instance:
       x.orchestration = true
       st.orchestrator = x
+  for y in st.instances.values:
+    if y.mismatched and y.state == msUnloaded and y.intent == inRequested:
+      # [SPEC RUNTIME l.1322] It remains `unloaded` with the classification.
+      # An `error` one keeps its cause until a recovery is refused (l.3612).
+      st.blockedBy(y, fkStaticBindingMismatch)
   let x = st.orchestrator
   st.bootstrapReply = q.reply
   if x.intent == inRequested and x.intentOrigin.host:
@@ -11824,12 +11973,14 @@ proc runtimeLoop(s: ptr Shared) =
       if not got.dataAvailable:
         break
       st.handle(move got.msg)
+      st.followPrerequisites()
       st.followRealizations()
       if st.done:
         break
     if st.done:
       break
     st.checkDeadlines()
+    st.followPrerequisites()
     st.followRealizations()
     st.checkBinding()
     st.checkLoader()
