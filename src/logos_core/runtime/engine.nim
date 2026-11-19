@@ -1378,10 +1378,11 @@ proc maybeForget(st: State, a: AsyncRec) =
         dec r.pending
         st.settle(r)
 
-proc asyncTerminal(st: State, a: AsyncRec) =
+proc asyncTerminal(st: State, a: AsyncRec, cancel = true) =
   ## The call's terminal outcome is decided: its invocation-scoped destination
   ## closes (RUNTIME l.1281); a cancellation, a timeout or an end also cancels
-  ## the invocation; the completion callback runs on a worker while the
+  ## the invocation, unless `cancel` is false because the caller marks it
+  ## later (`endByRoute`); the completion callback runs on a worker while the
   ## consumer's realization lasts, and is suppressed after it [IMPL].
   if a.terminal:
     return
@@ -1408,7 +1409,8 @@ proc asyncTerminal(st: State, a: AsyncRec) =
         )
       )
   if c.callEnd != okResult:
-    st.cancelInvocation(a)
+    if cancel:
+      st.cancelInvocation(a)
     if a.linkTag != 0 and c.callEnd in {okCancelled, okTimeout}:
       # [IFC-0729; TRANSPORT §3.4] A sent call cancelled or timed out: Cancel
       # on its link; its late Response is discarded (`linkResponse`).
@@ -1426,25 +1428,27 @@ proc asyncTerminal(st: State, a: AsyncRec) =
     c.suppress()
   st.maybeForget(a)
 
-proc endCall(st: State, a: AsyncRec, f: InvocationFailure, kind: CallEnd) =
+proc endCall(
+    st: State, a: AsyncRec, f: InvocationFailure, kind: CallEnd, cancel = true
+) =
   ## A terminal decision the Runtime thread makes: a timeout, or the end of
   ## the call's route or of a realization.
   if not a.terminal and asyncOf(a.call).decide(f, kind):
-    st.asyncTerminal(a)
+    st.asyncTerminal(a, cancel)
 
 func admitted(a: AsyncRec): bool =
   ## [P5 d2] Admitted into a provider, direct or served: its ticket, or once
   ## the ticket went with the call's leaving, the provider's name it keeps.
   a.ticket != nil or a.provider.len > 0
 
-proc endUnanswered(st: State, a: AsyncRec, f: InvocationFailure) =
+proc endUnanswered(st: State, a: AsyncRec, f: InvocationFailure, cancel = true) =
   ## [SPEC RUNTIME l.1271; TRANSPORT l.979; P5 Q3 (a)] An end decides the
   ## call. A served one's Request is left unanswered: the session's end fails
   ## it TRANSPORT_ERROR at its consumer, which a Response could not do (a
   ## provider's own NOT_AUTHORISED is legitimate).
   if a.session:
     markSent(asyncOf(a.call))
-  st.endCall(a, f, okEnded)
+  st.endCall(a, f, okEnded, cancel)
 
 proc endByRoute(st: State, a: AsyncRec) =
   ## [SPEC RUNTIME l.1261, l.1271; TRANSPORT l.971; P5 d2] A revoked or
@@ -1452,10 +1456,16 @@ proc endByRoute(st: State, a: AsyncRec) =
   ## admitted into a provider, or sent on a link (`linkTag`), completes
   ## TRANSPORT_ERROR; one not yet admitted is a new operation and gets
   ## NOT_AUTHORISED, which a served one is answered with (l.971).
+  ##
+  ## [IMPL; I91] It marks nothing cancelled: `endRoute` and `sessionExpired`
+  ## do, once they have ordered the sessions' ends. Under P5 Q3 (a) no
+  ## Runtime answer goes before a hosted call's cancel any more, so the
+  ## terminate order must: a provider that returns because it was cancelled
+  ## then finds its Request ended at the host (`host/endpoint`).
   if a.admitted or a.linkTag != 0:
-    st.endUnanswered(a, routeEndedResult())
+    st.endUnanswered(a, routeEndedResult(), cancel = false)
   else:
-    st.endCall(a, revokedResult(), okEnded)
+    st.endCall(a, revokedResult(), okEnded, cancel = false)
 
 proc refuseQueuedCall(st: State) =
   ## [IMPL; I88, deviation 5] The oldest call no call worker has begun is
@@ -1654,10 +1664,16 @@ when defined(lcnTestHooks):
   var cancelMarkDelayMs: Atomic[int]
 
   proc setCancelMarkDelayForTests*(ms: int) =
-    ## Once a route's end has marked its admitted calls cancelled, the Runtime
-    ## thread waits `ms` before it goes on; 0 turns it off. A cancel forwarded
-    ## to a hosted provider meanwhile must not overtake what the end ordered.
+    ## Once a route's or a session's end has decided its admitted calls, and
+    ## again once it has marked them cancelled, the Runtime thread waits `ms`
+    ## before it goes on; 0 turns it off. A cancel forwarded to a hosted
+    ## provider meanwhile must not overtake what the end ordered.
     cancelMarkDelayMs.store(ms)
+
+  proc endOrderPause(calls: int) =
+    let late = cancelMarkDelayMs.load
+    if late > 0 and calls > 0:
+      sleep(late)
 
 proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229; INTERFACE §2.5] The route takes no
@@ -1699,6 +1715,8 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
     for a in st.records:
       if not a.rc and a.route == r.id and not a.terminal:
         st.endByRoute(a)
+  when defined(lcnTestHooks):
+    endOrderPause(r.calls.len)
   if r.mode == rmLocalTransport:
     st.endTransported(r)
   for t in r.calls:
@@ -1707,9 +1725,7 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
     if not a.rc and a.route == r.id:
       st.cancelInvocation(a)
   when defined(lcnTestHooks):
-    let late = cancelMarkDelayMs.load
-    if late > 0 and r.calls.len > 0:
-      sleep(late)
+    endOrderPause(r.calls.len)
   for h in r.handles:
     scheduleEnd(h, r.endCode)
     st.dispatch(Job(id: st.nextJobId(), kind: jkObserveEnd, handle: h))
@@ -11591,12 +11607,16 @@ proc sessionExpired(st: State, s: Session) =
     let a = st.asyncCalls.getOrDefault(c)
     if a != nil and not a.terminal:
       st.endByRoute(a)
+  when defined(lcnTestHooks):
+    endOrderPause(calls.len)
   for c in st.sv.terminate(s):
     markSent(asyncOf(c))
   for c in calls:
     let a = st.asyncCalls.getOrDefault(c)
     if a != nil:
       st.cancelInvocation(a)
+  when defined(lcnTestHooks):
+    endOrderPause(calls.len)
 
 proc checkTransported(st: State, now: MonoTime) =
   ## [Rev R17] Expired tickets are deleted (TRANSPORT l.963, l.1062); sessions
