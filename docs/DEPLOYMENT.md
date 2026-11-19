@@ -428,7 +428,10 @@ permission or carrier falls back to a weaker one.
 The packaged `logosd`, `logosctl` and `logos-module-host` are orc builds (`--mm:orc -d:release`) without
 test hooks (flake check `no-test-hooks`). A refc build of the Runtime or the Module Host refuses every
 contract with a marked field (DECISIONS G277): under refc a channel message's copy is freed unerased.
-The erasure claim and its five non-claims are in CONFORMANCE, "Properties not claimed".
+The erasure claim and its five non-claims are in CONFORMANCE, "Properties not claimed". The
+`logos.remote.tls-tcp` carrier is built on upstream BoringSSL, which frees decrypted TLS records unerased:
+`tls-tcp` gives no erasure and carries no marked payload, and a route on it or on `quic` whose permitted
+methods include a marked one is refused (RUNTIME l.1808; DECISIONS G277, G327).
 
 A module library logosd maps (`direct_dynamic`) or a Module Host loads may be built with either memory
 manager (DECISIONS G342; measured with the Runtime and the Module Host on macOS, Linux pending). Build

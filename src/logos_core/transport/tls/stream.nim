@@ -18,7 +18,7 @@ import chronos
 import results
 import ../framing
 import logos_sdk/base/[testhooks, wipe]
-import ./[boring, engine, params, signing]
+import ./[engine, params, signing]
 
 export chronos, results, engine, params, signing
 
@@ -83,35 +83,6 @@ type
     refusedOverBound: int
     failedHandshakes: int
     lastFailure: string
-
-# Erasure -----------------------------------------------------------------------------
-
-when defined(lcnTestHooks):
-  var recordErasureMissingForTests* = false
-    ## Test hook (D27): behave as a build whose BoringSSL frees decrypted
-    ## records unerased. It can only add the refusal, never lift it.
-
-proc carrierErases*(): bool =
-  ## [DECISIONS G277, G327] Whether the carrier erases what it holds of a
-  ## marked payload: BoringSSL's record buffers (`recordBuffersErased`, the
-  ## BORINGSSL_ZERO_RECORD_BUFFERS build) and the carrier's own copies, which
-  ## it always wipes (`wipePlaintext`, `sealFrame`). A frame `readFrame`
-  ## returns and a body given to `writeFrame` are the caller's. The TLS
-  ## processes add their own conditions (5-7a); until they are shown, remote
-  ## paths refuse marked contracts whatever this says.
-  result = recordBuffersErased
-  when defined(lcnTestHooks):
-    if recordErasureMissingForTests:
-      result = false
-
-proc requireErasure*(): Result[void, string] =
-  ## The refusal a marked payload meets on a carrier that does not erase.
-  if carrierErases():
-    return ok()
-  err(
-    MarkedUnsupported &
-      ": this build's TLS library frees decrypted records unerased (BORINGSSL_ZERO_RECORD_BUFFERS)"
-  )
 
 # The registry ------------------------------------------------------------------------
 
@@ -236,7 +207,7 @@ proc handshake(s: TlsStream) {.async: (raises: [CancelledError, TlsError]).} =
       raise newException(TlsError, why)
 
 proc wipePlaintext(s: TlsStream) =
-  ## [DECISIONS G327; INTERFACE l.381] The carrier's own copies of decrypted
+  ## [DECISIONS G276; INTERFACE l.381] The carrier's own copies of decrypted
   ## data, erased before they are released: the read buffer, a partial frame
   ## and frames read but not taken. A frame `readFrame` returned is the
   ## caller's.
@@ -487,8 +458,6 @@ proc connect*(
   ## ends the attempt: nothing else is tried (l.1219-1221).
   ?config.check()
   ?address.check()
-  if config.carriesMarked:
-    ?requireErasure()
   if ctx == nil or ctx.role != tlsClient:
     return err("a client stream needs a client context")
   let e = ?newEngine(ctx, peerCheck, address.serverName)
@@ -591,8 +560,6 @@ proc serve*(
   ## A listener on `host`:`port` (0: any free port) that hands each
   ## authenticated stream to `onStream`.
   ?config.check()
-  if config.carriesMarked:
-    ?requireErasure()
   if ctx == nil or ctx.role != tlsServer:
     return err("a listener needs a server context")
   if peerCheck == nil or signer == nil or onStream == nil:

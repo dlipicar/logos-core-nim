@@ -641,17 +641,6 @@ guard = true
 what = "A target module-instance address names a Runtime other than the one exposing the invoked contract. | `INVALID_PARAMS`"
 
 [[text]]
-id = "TXT-0157"
-step = "P4"
-spec = "RUN"
-line = "1808"
-side = "new"
-section = "§9.3.1"
-source = "review"
-class = "behaviour"
-what = "A requested remote route permits a marked method that the selected remote profile cannot carry. | `INVALID_PARAMS`"
-
-[[text]]
 id = "TXT-0158"
 step = "P4"
 spec = "RUN"
@@ -1383,16 +1372,6 @@ side = "old"
 section = "App B.5"
 class = "todo"
 what = "This is an observation record, so it omits the invocation information and its one-time route ticket."
-
-[[text]]
-id = "TXT-0129"
-step = "P4"
-spec = "TRN"
-line = "1189"
-side = "new"
-section = "§8.4"
-class = "todo"
-what = "Another remote profile may carry marked payloads when it satisfies that section."
 
 [[text]]
 id = "TXT-0420"

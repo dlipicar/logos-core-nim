@@ -18,6 +18,13 @@
  * the bytes of a copy released earlier while the scan was off, and the scan
  * reported them at the later release (CI on eed9d58; DECISIONS I92).
  *
+ * C++ releases through `lcn_wipe_free_cxx` and `lcn_wipe_realloc_cxx`: the
+ * same zeroing, no scan (DECISIONS G276; re-pin P4 §4.2). The only C++ an
+ * audit build compiles is BoringSSL's, whose record buffers keep the plaintext
+ * they carried (G327 re-decided). The zeroing still matters: without it a Nim
+ * block that reuses the memory and is not fully written would carry that
+ * plaintext, and the scan would blame the Nim block's owner.
+ *
  * Not on Windows: the scanner stays off there (`lcn_wipe_supported`). */
 #undef free
 #undef realloc
@@ -176,6 +183,32 @@ void *lcn_wipe_realloc(void *p, size_t n) {
   return q;
 }
 
+/* The C++ variants: zeroed and released, never scanned. */
+void lcn_wipe_free_cxx(void *p) {
+  if (p == NULL)
+    return;
+  lcn_memset(p, 0, lcn_block_size(p));
+  free(p);
+}
+
+void *lcn_wipe_realloc_cxx(void *p, size_t n) {
+  if (p == NULL)
+    return malloc(n);
+  if (n == 0) {
+    lcn_wipe_free_cxx(p);
+    return NULL;
+  }
+  size_t old = lcn_block_size(p);
+  if (n <= old)
+    return p;
+  void *q = malloc(n);
+  if (q == NULL)
+    return NULL;
+  memcpy(q, p, old);
+  lcn_wipe_free_cxx(p);
+  return q;
+}
+
 int lcn_wipe_supported(void) { return 1; }
 
 void lcn_wipe_arm(const unsigned char *patterns, const size_t *lens,
@@ -266,6 +299,8 @@ void lcn_wipe_report(int fd) {
 
 void lcn_wipe_free(void *p) { free(p); }
 void *lcn_wipe_realloc(void *p, size_t n) { return realloc(p, n); }
+void lcn_wipe_free_cxx(void *p) { free(p); }
+void *lcn_wipe_realloc_cxx(void *p, size_t n) { return realloc(p, n); }
 int lcn_wipe_supported(void) { return 0; }
 void lcn_wipe_arm(const unsigned char *patterns, const size_t *lens,
                   int count) {

@@ -281,7 +281,10 @@ host; a refc build of either never carries a marked payload. So:
 - **Paths** (G277, re-deciding G244): a contract that marks a payload is routed on `direct` and
   `local-transport` paths, hosted ends included, and refused MODULE_ERROR only on a path kind without
   erasure (a remote mode, once Tier 5 adds one); no switch turns the refusal off (IFC-0578,
-  IFC-0579).
+  IFC-0579). The remote profiles `logos.remote.tls-tcp` and `logos.remote.quic` carry no marked payload:
+  a route on either whose permitted scope includes a marked method is refused INVALID_PARAMS (RUNTIME
+  l.1808, l.2939; TRANSPORT l.1188-1189; re-pin P4d, `runtime/remotemarked`), a check 5-7a calls where it
+  builds remote routes.
 - **Builds** (G277's build condition, IF l.388-389): a participant erases only in an orc or arc
   build, where a channel moves a message's heap parts; under refc a channel deep-copies each message
   and frees the copy unerased. A refc Runtime refuses every marked route, with G244's code, message
@@ -500,15 +503,18 @@ the facade process that passes the invocation's Runtime as the one expected (5-7
 also run the carrier against pyOpenSSL (G128, suite `tls.independent peer`); where `LCN_TLS_PEER_PYTHON` is
 not set, as under `nimble test`, those five cases are skipped.
 
-Part 5-2d pins nim-boringssl 0.0.16 and turns on its `BORINGSSL_ZERO_RECORD_BUFFERS` (G327): BoringSSL
-zeroes its TLS record buffers before freeing them, and the carrier erases its own copies of decrypted
-data (the stream's read buffer, partial frames, frames not taken, the framed copy of a body it sends).
-A frame read is the caller's (`TlsFrame`), as is a body given to `writeFrame`. `test_remote_tls`'s free
-scan finds no released block holding the plaintext of 256 KiB sent through two streams. A stream set
-to carry marked payloads is refused where this does not hold (`carrierErases`, `requireErasure`).
+Part 5-2d pinned nim-boringssl 0.0.16 and turned on its `BORINGSSL_ZERO_RECORD_BUFFERS` (G327). The re-pin
+to 6cac8335 took the option off again (P4d): the new text forbids marked payloads on `tls-tcp` and `quic`
+whatever the library does (TRANSPORT l.1188-1189; RUNTIME l.1808, l.2939), so the build is upstream's
+BoringSSL, whose TLS record buffers keep the plaintext they carried. The carrier still erases its own
+copies of decrypted data (G276: the stream's read buffer, partial frames, frames not taken, the framed
+copy of a body it sends). A frame read is the caller's (`TlsFrame`), as is a body given to `writeFrame`.
+`test_remote_tls`'s free scan finds no released block of the carrier's holding the plaintext of 256 KiB
+sent through two streams; BoringSSL's blocks, all C++, are zeroed and released unscanned (G276).
 
-Not claimed: erasure on remote paths. The facade and listener processes' own erasure comes with 5-7a;
-until it is shown, remote paths refuse marked contracts (G277), as any build without the option will.
+Not claimed: erasure on remote paths. `tls-tcp` gives none and carries no marked payload; a route on it
+or on `quic` whose permitted scope includes a marked method is refused (G277, `runtime/remotemarked`,
+called from 5-7a; RUN-1163 and TRN-0398 are deferred to it).
 
 ## Properties not claimed
 
@@ -767,9 +773,7 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
 - The tls-tcp carrier (I99): `testsigner.keySigner` holds the TLS key in the process (owner decision
   B1: tests only); `engine.newTlsContextForTests` makes settings no conforming peer has (TLS 1.2
   allowed, or no certificate) to show the refusals; `stream.abortForTests` ends a connection without
-  close_notify; `stream.recordErasureMissingForTests` makes the carrier behave as a build whose
-  BoringSSL frees records unerased (it only adds G277's refusal). All are called by `test_remote_tls`,
-  which is also an audit build (`base/wipeaudit`).
+  close_notify. All are called by `test_remote_tls`, which is also an audit build (`base/wipeaudit`).
 
 No deployment binary contains them.
 

@@ -26,7 +26,8 @@ default = "claimed"
 # Marked payloads (DECISIONS I88, I92; G276-G278): `_sensitive` acceptance and its C constants,
 # erasure by every participant the Runtime controls and by generated code, no marked value or
 # value root in logs, audit or diagnostics, the retention refusal, and paths refused only on a
-# path kind without erasure (G277, re-deciding G244). Non-claims in docs/CONFORMANCE.md.
+# path kind without erasure (G277, re-deciding G244); the remote profiles carry no marked payload
+# (G277, re-pin P4d). Non-claims in docs/CONFORMANCE.md.
 "§1.4.1" = "claimed"
 "§2" = "claimed"
 "§2.4" = "claimed"

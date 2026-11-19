@@ -46,10 +46,6 @@ type
     frameLimit*: uint32 ## the largest frame body accepted (TRANSPORT §2.1)
     peerFrameLimit*: uint32 ## the largest frame body sent (TRANSPORT §2.1)
     closeWaitMs*: int ## how long teardown waits for the reader to end
-    carriesMarked*: bool
-      ## [DECISIONS G277, G327] the streams are to carry marked payloads
-      ## (INTERFACE §1.4.1): `connect` and `serve` refuse unless the carrier
-      ## erases (`stream.carrierErases`)
 
 func defaultTlsConfig*(): TlsConfig =
   TlsConfig(
