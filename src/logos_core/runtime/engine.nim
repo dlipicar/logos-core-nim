@@ -118,6 +118,7 @@ import logos_sdk/cbor/[decode, utf8]
 import logos_sdk/commitment
 from ../durable import syncDir
 import logos_sdk/iface/[accept, outcome, surface]
+import logos_sdk/kit/rc_arms
 import ../loader/contract
 from ../loader/provider import
   LoaderWiring, wireLoader, unwireLoader, loaderStaticRegistration
@@ -957,7 +958,16 @@ proc answer(r: ReplyChannel, reply: sink Reply) =
       discard
 
 proc answerError(r: ReplyChannel, code: ErrorCode, message: string) =
+  # `ecOk` is the parked marker, never an answer: one would read as success.
+  let code = if code == ecOk: ecModule else: code
   r.answer(Reply(error: Opt.some(engineError(code, message))))
+
+proc answerTyped(r: ReplyChannel, code: RcErrorCode, current = Opt.none(uint64)) =
+  ## [SPEC RUNTIME l.1818-1822; re-pin P4a] A typed outcome: the caller's
+  ## thread encodes the method's error arm as a successful response
+  ## (`invoke.rcInvoke`); the engine API returns it as an error whose `typed`
+  ## is set.
+  r.answer(Reply(error: Opt.some(typedError(code, current))))
 
 proc answerView(r: ReplyChannel, x: Inst) =
   ## The state an operation reached; MODULE_ERROR while that state is not
@@ -3245,10 +3255,12 @@ const Parked = EngineError(code: ecOk, message: "parked")
   ## [IMPL] what a check gives when its operation was parked or answered
 
 func parked(e: EngineError): bool =
-  e.code == ecOk
+  e.code == ecOk and e.typed.isNone
 
 proc answerFailure(q: Request, e: EngineError) =
-  if not e.parked:
+  if e.isTyped:
+    q.reply.answer(Reply(error: Opt.some(e)))
+  elif not e.parked:
     q.reply.answerError(e.code, e.message)
 
 func notAuthorised(): EngineError =
@@ -3935,6 +3947,16 @@ proc joinExec(st: State, x: Inst): bool =
   pe.joined.add(st.op)
   true
 
+proc staleExecution(x: Inst): EngineError =
+  ## [SPEC RUNTIME l.1818-1819] A stale expected execution revision. While the
+  ## write of a committed transition is held back (I82), the revision held is
+  ## not yet written: MODULE_ERROR then, as `answerView` answers (row 7; re-pin
+  ## P4 §0.2).
+  if x.pending:
+    engineError(ecModule, NotPersisted)
+  else:
+    typedError(recStaleRevision, Opt.some(x.revision))
+
 proc lookup(st: State, q: Request, operation: string): Result[Inst, EngineError] =
   ## [SPEC RUNTIME §9.3 l.3661-3662] For a module consumer, an unknown target
   ## and a refused one are the same NOT_AUTHORISED; a module-name mismatch is
@@ -3978,7 +4000,7 @@ proc lookup(st: State, q: Request, operation: string): Result[Inst, EngineError]
     return err(engineError(ecInvalidParams, "the module name does not match"))
   if q.expectedRevision.isSome and q.expectedRevision.get != x.revision:
     # [SPEC RUNTIME §9.1 l.1832-1833] compared atomically with acceptance
-    return err(engineError(ecInvalidParams, "execution revision mismatch"))
+    return err(x.staleExecution)
   ok(x)
 
 proc originReady(st: State, q: Request): Opt[EngineError] =
@@ -5076,7 +5098,7 @@ proc retire(st: State, q: Request, x: Inst) =
     return
   if req.expected_execution_revision != y.revision:
     # [SPEC RUNTIME l.3559-3560] no mutation
-    q.reply.answerError(ecInvalidParams, "execution revision mismatch")
+    q.answerFailure(y.staleExecution)
     return
   st.requireReady(q)
   if not st.ownsNothing(y):
@@ -5110,7 +5132,13 @@ proc retire(st: State, q: Request, x: Inst) =
   st.dropFacts(y)
   # [SPEC RUNTIME l.3591] The retirement stands whether or not the answer
   # arrives.
-  q.reply.answerEncoded(encode(LogosNSRuntimeControlRetireModuleResponse()))
+  q.reply.answerEncoded(
+    encode(
+      LogosNSRuntimeControlRetireModuleResponse.accepted(
+        LogosNSRuntimeControlRetireModuleResponseARMapMap()
+      )
+    )
+  )
 
 proc createModule(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §9.3 create_module, l.3613-3634] A fresh instance from the
@@ -5138,8 +5166,10 @@ proc createModule(st: State, q: Request, x: Inst) =
       else:
         q.reply.answerEncoded(
           encode(
-            LogosNSRuntimeControlCreateModuleResponse(
-              module: k.module, instance: k.instance
+            LogosNSRuntimeControlCreateModuleResponse.accepted(
+              LogosNSRuntimeControlCreateModuleResponseARMapInstanceModuleMap(
+                module: k.module, instance: k.instance
+              )
             )
           )
         )
@@ -5151,9 +5181,11 @@ proc createModule(st: State, q: Request, x: Inst) =
       d = c
       found = true
   if not found:
-    # [G195 interim (TF-30 point 2)] No accepted declaration: the answer a
-    # denial gives, and nothing created (l.3619).
-    q.reply.answerError(ecNotAuthorised, "not authorised")
+    # [SPEC RUNTIME l.1822, l.3485; G195 replaced] No selectable declaration:
+    # `declaration-unavailable`, to a caller authorized to create `module`
+    # (the `require` above answered any other NOT_AUTHORISED, TXT-0198).
+    # Nothing is created or retained, so a replay is evaluated afresh.
+    q.reply.answerTyped(recDeclarationUnavailable)
     return
   if st.instances.len >= MaxInstances:
     # [SPEC RUNTIME l.3442-3443; BCP l.369] a resource bound, not readiness
@@ -5176,7 +5208,11 @@ proc createModule(st: State, q: Request, x: Inst) =
     return
   q.reply.answerEncoded(
     encode(
-      LogosNSRuntimeControlCreateModuleResponse(module: y.record.module, instance: y.id)
+      LogosNSRuntimeControlCreateModuleResponse.accepted(
+        LogosNSRuntimeControlCreateModuleResponseARMapInstanceModuleMap(
+          module: y.record.module, instance: y.id
+        )
+      )
     )
   )
 
@@ -6324,8 +6360,10 @@ proc settingsAnswer(st: State, q: Request, y: Inst, update: bool) =
   if update:
     q.reply.answerEncoded(
       encode(
-        LogosNSRuntimeControlUpdatePermissionSettingsResponse(
-          target: address, state: y.settings.toRc
+        LogosNSRuntimeControlUpdatePermissionSettingsResponse.accepted(
+          LogosNSRuntimeControlUpdatePermissionSettingsResponseARMapStateTargetMap(
+            target: address, state: y.settings.toRc
+          )
         )
       )
     )
@@ -6366,7 +6404,9 @@ proc profiledSettings(st: State, q: Request, x: Inst) =
     q.reply.answerError(ecInvalidParams, "the permission settings are not valid")
     return
   if req.expected_revision != y.settings.revision:
-    q.reply.answerError(ecInvalidParams, "permission settings revision mismatch")
+    # [SPEC RUNTIME l.1818-1819] settings write before they are adopted, so the
+    # revision held is the one written
+    q.reply.answerTyped(recStaleRevision, Opt.some(y.settings.revision))
     return
   if st.isLoader(y) and st.ldr.bound:
     # [IMPL-DECISION G253 (K37)] Reconciliation would stop it, which is
@@ -6428,7 +6468,8 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
       )
       return
     if req.expected_revision != 1:
-      q.reply.answerError(ecInvalidParams, "permission settings revision mismatch")
+      # a constant profile's settings stay at revision 1
+      q.reply.answerTyped(recStaleRevision, Opt.some(1'u64))
       return
   st.requireReady(q)
   let state = LogosNSRuntimeControlPermissionSettingsState(
@@ -6443,8 +6484,10 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
   if update:
     q.reply.answerEncoded(
       encode(
-        LogosNSRuntimeControlUpdatePermissionSettingsResponse(
-          target: address, state: state
+        LogosNSRuntimeControlUpdatePermissionSettingsResponse.accepted(
+          LogosNSRuntimeControlUpdatePermissionSettingsResponseARMapStateTargetMap(
+            target: address, state: state
+          )
         )
       )
     )
@@ -6494,12 +6537,8 @@ proc updateRefusal(
   if not y.configurable:
     return Opt.some(noBinding())
   if expectedRevision != y.config.revision:
-    # [G19; CFG-0059]
-    return Opt.some(
-      engineError(
-        ecInvalidParams, "the configuration state revision is not the current one"
-      )
-    )
+    # [G19; CFG-0059; RUNTIME l.1818-1819] configuration writes before it adopts
+    return Opt.some(typedError(recStaleRevision, Opt.some(y.config.revision)))
   let c = fromRc(expected)
   if c.isErr or c.get != y.config.binding.commitment:
     # [G21, revised B2]
@@ -6562,7 +6601,7 @@ proc configUpdate(st: State, q: Request, x: Inst) =
     return
   let refused = y.updateRefusal(u.expectedRevision, u.expectedCommitment)
   if refused.isSome:
-    q.reply.answerError(refused.get.code, refused.get.message)
+    q.answerFailure(refused.get)
     return
   if u.stage:
     var r = Reply(
@@ -6604,7 +6643,7 @@ proc configCommit(st: State, q: Request) =
     return
   let refused = y.updateRefusal(u.expectedRevision, u.expectedCommitment)
   if refused.isSome:
-    q.reply.answerError(refused.get.code, refused.get.message)
+    q.answerFailure(refused.get)
     return
   if u.mismatch:
     let d = st.decide(
@@ -6656,7 +6695,8 @@ proc applyRefusal(y: Inst, expectedRevision: uint64): Opt[EngineError] =
   if not y.configurable:
     return Opt.some(noBinding())
   if expectedRevision != y.config.revision:
-    refuse(ecInvalidParams, "the configuration state revision is not the current one")
+    # [RUNTIME l.1818-1819]
+    return Opt.some(typedError(recStaleRevision, Opt.some(y.config.revision)))
   if y.config.staged.isNone:
     refuse(ecInvalidParams, "no configuration value is staged")
   if not y.config.binding.live:
@@ -6694,7 +6734,7 @@ proc configApply(st: State, q: Request, x: Inst) =
     return
   let refused = y.applyRefusal(r.expected_state_revision)
   if refused.isSome:
-    q.reply.answerError(refused.get.code, refused.get.message)
+    q.answerFailure(refused.get)
     return
   let staged = y.config.staged.get
   let rz = y.realization
@@ -6883,10 +6923,12 @@ proc applyDone(
       else:
         run.reply.answerEncoded(
           encode(
-            LogosNSRuntimeControlApplyConfigurationResponse(
-              target: st.addressOf(x.id),
-              state_revision: x.config.revision,
-              applied_value_revision: run.valueRevision,
+            LogosNSRuntimeControlApplyConfigurationResponse.accepted(
+              LogosNSRuntimeControlApplyConfigurationResponseARMapAppliedValueRevisionStateRevisionTargetMap(
+                target: st.addressOf(x.id),
+                state_revision: x.config.revision,
+                applied_value_revision: run.valueRevision,
+              )
             )
           )
         )

@@ -330,9 +330,9 @@ proc slows(e: Engine, ids: varargs[string]) =
     discard e.create(slow(), id).tryGet
 
 proc retireOf(
-    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string
+    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string, refusal = false
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "retire_module",
     encode(
@@ -344,6 +344,7 @@ proc retireOf(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 var
   unsubThread: Thread[(ptr LogosRuntimeControlBinding, LogosSubscriptionId)]
@@ -786,7 +787,8 @@ suite "run.rc: the events (RUNTIME §9.3 l.3496-3511, l.3715-3735)":
     check rc.stage(t, 1, tunerValue("b")).updated.state_revision == 2
     check rc.discardStaged(t, 2).updated.state_revision == 3
     # A refused update changes nothing, and is not reported.
-    check rc.stage(t, 1, tunerValue("c")).code == ecInvalidParams
+    check rc.stage(t, 1, tunerValue("c"), refusal = true).refused.get.stale ==
+      Opt.some(3'u64)
     check watches[0].reached(3)
     check watches[0].quiet() == 3
     var evs: seq[LogosNSRuntimeControlConfigurationStateChangedEvent]

@@ -124,7 +124,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-8 | TF-44 (G351); a D9 stop | the plan's §6 wording | open (D2) |
 | 5-8 | how a package-backed instance comes to exist | configured entries with pins written offline (recommended) | open (D1) |
 | 5-8 | TF-04, TS-06, TP-07 | `requires` stays advisory; a pin is protected input; `create_module` carries none | open (D3) |
-| 5-8 | TF-30 point 2 (G195) | G195's answer; a Package Manager not ready is a transient failure | open (D7) |
+| 5-8 | TF-30 point 2 (G195) | G195's answer; a Package Manager not ready is a transient failure | open (D7); G195's answer settled by spec text at 6cac8335 (re-pin P4a): `declaration-unavailable` |
 | 5-4, 5-9 | the Windows readings: logosd's own user; the build key | one user is not a security boundary (G58's non-claim); keyed on the OS and `afunix.sys` builds (5-4's G332, G333) | decided 2026-11-17 (owner) |
 | 5-11 | NP-13 | provenance attests the assembled archive | open (E3) |
 | 5-13 | TF-43 (G310); the units still deferred | the member set of E1; E2's relabels | open (E1, E2, E3) |
@@ -190,6 +190,16 @@ G352 and G354 (DECISIONS, "Open items").
   5-7a calls; G277); nim-boringssl's `BORINGSSL_ZERO_RECORD_BUFFERS` is off again and the carrier's
   conditional refusal gone (G327); the free scan leaves BoringSSL's C++ out (G276). TXT-0157 and TXT-0129
   cleared; RUN-1163 and TRN-0398 stay deferred to 5-7a.
+- 2026-11-19, re-pin P4a (I108), Runtime Control's typed errors at 6cac8335: a stale revision at the
+  seven guarded methods is a successful response holding the error arm, `stale-revision` with the
+  current revision, and changes nothing; `create_module` with no declaration is `declaration-unavailable`
+  to a caller authorized to create the module and NOT_AUTHORISED to any other (G195 replaced);
+  `configuration-rejected` is the type and the arm only (P6 produces it). logosctl exits 4 with the code,
+  and orchestration counts the error arm as a refusal. `rc_types` regenerated, the enrollment rules
+  mirrored from §9.3.7, App B decoded. RUN-1113, RUN-1114, RUN-1127 to RUN-1138, RUN-1146 to RUN-1150,
+  RUN-1185, RUN-1187, RUN-1203 to RUN-1206 and RUN-1208 claimed, with CFG-0152, CFG-0154 and CFG-0155
+  (moved from P6); RUN-1124, RUN-1125 and TXT-0163 deferred to 5-7a; 17 text entries cleared and 15
+  stale ids replaced.
 
 ## Tiers at f4f83471 (the original plan)
 

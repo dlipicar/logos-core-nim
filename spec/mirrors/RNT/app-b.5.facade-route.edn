@@ -1,0 +1,35 @@
+{
+  route: "route-storage-remote-001",
+  consumer: {
+    runtime_instance_id: "de1d7cd9-4e0d-4f68-89fa-460fc3332e00",
+    module_instance_id: "instance-consumer-example-001"
+  },
+  target_provider: {
+    runtime_instance_id: "32f85d68-6b4d-45a2-9a06-c0d56f75c3dc",
+    provider: "provider-storage-remote"
+  },
+  module: "storage_module",
+  expected_contract: {
+    commitment_model: "logos.commitment-model.2026-10",
+    schema_root: h'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff',
+    hash_profile: "logos.hash-profile.2026-08.choice-index",
+    hash_suite: "logos.hash-suite.blake3-256"
+  },
+  access: {},
+  state: "ready",
+  invocation: {
+    kind: "remote-transport",
+    runtime: "32f85d68-6b4d-45a2-9a06-c0d56f75c3dc",
+    provider: "provider-storage-remote",
+    endpoint: {
+      transport: "tls-tcp",
+      host: "remote.example",
+      port: 443,
+      server_name: "remote.example",
+      profile: "logos.remote.tls-tcp"
+    },
+    ticket: h'000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f'
+  },
+  decision_id: "decision-route-001",
+  expires_at: 2000000000000
+}

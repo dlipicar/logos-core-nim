@@ -18,7 +18,7 @@ when defined(posix):
   from ../src/logos_core/runtime/plumbing import
     RcMethod, holdRcAnswerForTests, rcAnswerHeldForTests, releaseRcAnswerForTests
   import logos_sdk/abi/host as abihost
-  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/rc_types
+  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/[rc_arms, rc_types]
   from ../src/logos_core/durable import DurableLock, release
   from ../src/logos_core/loader/contract import LoaderInstanceId
   from ../src/logos_core/transport/io/peercred import effectiveUid
@@ -479,13 +479,13 @@ when defined(posix):
       check made.len == 9
       let shared = LogosNSRuntimeControlCreateModuleResponse
         .decode(l.createKeyed("lcli-shared").okBytes)
-        .expect("created")
+        .expect("created").accepted.get
       let s = l.s
       finish(l)
       l = boot(s)
       let again = LogosNSRuntimeControlCreateModuleResponse
         .decode(l.createKeyed("lcli-shared").okBytes)
-        .expect("created")
+        .expect("created").accepted.get
       check again.instance == shared.instance
 
     test "[RUN-0698] the system instances: stop and update_configuration NOT_AUTHORISED for logosctl; recover_module on a failed orchestrator succeeds":
@@ -528,7 +528,7 @@ when defined(posix):
       )
       # [RUNTIME l.613, l.3538] The instance is `error` before its realization's
       # cleanup ends, and that cleanup commits again: a revision read before it
-      # would be stale (INVALID_PARAMS), and a recovery before it NOT_READY.
+      # would be stale (`stale-revision`), and a recovery before it NOT_READY.
       check waitUntil(
         proc(): bool =
           not e.cleanupPending("orchestrator")

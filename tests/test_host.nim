@@ -10,6 +10,7 @@ import logos_sdk/cbor
 import logos_sdk/abi/[host, types]
 import logos_sdk/crypto/blake3
 import logos_sdk/iface/outcome
+from logos_sdk/kit/rc_arms import accepted, refusal
 import
   ../src/logos_core/runtime/[engine, host, host_config, host_config_types],
   logos_sdk/kit/rc_types
@@ -1122,10 +1123,15 @@ proc rcCall(
     result[1] = copyBytes(buf, len)
     rc.vtable.releaseResponse(rc, buf, len)
 
+const StaleAnswer = -4
+  ## [re-pin P4a] a start answered with the typed `stale-revision`: a
+  ## successful call whose response holds the error arm
+
 proc startModule(
     rc: ptr LogosRuntimeControlBinding, module, instance: string, expected: Opt[uint64]
-): ErrorCode {.gcsafe.} =
-  rcCall(
+): int {.gcsafe.} =
+  ## The start's code, or `StaleAnswer`.
+  let (code, response) = rcCall(
     rc,
     "start_module",
     encode(
@@ -1135,7 +1141,11 @@ proc startModule(
         expected_execution_revision: expected,
       )
     ).tryGet,
-  )[0]
+  )
+  if code == ecOk and
+      LogosNSRuntimeControlStartModuleResponse.decode(response).tryGet.refusal.isSome:
+    return StaleAnswer
+  ord(code)
 
 proc readiness(
     rc: ptr LogosRuntimeControlBinding, module, instance: string
@@ -1168,10 +1178,10 @@ proc orchestrate(rc: ptr LogosRuntimeControlBinding) {.thread.} =
     if x.intent.kind != LogosNSRuntimeControlExecutionStateIntentChoiceKind.Uninitialized:
       orchResults[i].store(AlreadyRequested)
       continue
-    orchResults[i].store(ord(rc.startModule(module, instance, Opt.some(x.revision))))
+    orchResults[i].store(rc.startModule(module, instance, Opt.some(x.revision)))
   # The revision read before the start is stale now.
   orchResults[Targets.len].store(
-    ord(rc.startModule("meter_module", "meter-1", Opt.some(meterRevision)))
+    rc.startModule("meter_module", "meter-1", Opt.some(meterRevision))
   )
   orchThreadDone.store(true)
 
@@ -1196,9 +1206,7 @@ proc orchInit(
       )
     of omStartBroken:
       orchInitCode.store(
-        ord(
-          input.runtimeControl.startModule("meter_module", "broken-1", Opt.none(uint64))
-        )
+        input.runtimeControl.startModule("meter_module", "broken-1", Opt.none(uint64))
       )
     of omWaitProbe:
       orchInitCode.store(
@@ -1695,7 +1703,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check orchResults[0].load == AlreadyRequested # itself: not restarted
     check orchResults[1].load == ord(ecOk)
     check orchResults[2].load == ord(ecOk)
-    check orchResults[3].load == ord(ecInvalidParams) # a stale revision
+    check orchResults[3].load == StaleAnswer # a stale revision
     check rt.state("meter-1") == msReady
     check rt.state("sensor-1") == msReady # direct_dynamic, verified by its digest
     rt.finish()
@@ -2012,7 +2020,7 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     let (code, response) =
       rcCall(orchBinding(), "recover_module", recoverRequest("meter-1", v))
     check code == ecOk
-    check LogosNSRuntimeControlRecoverModuleResponse.decode(response).tryGet.state.kind ==
+    check LogosNSRuntimeControlRecoverModuleResponse.decode(response).tryGet.accepted.get.state.kind ==
       LogosNSRuntimeControlStateKind.Error
     # [I89] The Loader knows no registration with that binding.
     check rt.failureOf("meter-1") == "loader-invalid-request"

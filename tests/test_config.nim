@@ -129,7 +129,7 @@ suite "cfg.types: CONFIG §9 and the Runtime Control configuration types":
     flagged.live_reconfiguration = Opt.some(false)
     check encode(flagged).tryGet == encode(tunerBinding(live = true)).tryGet
 
-  test "[RUN-0452] [RUN-0453] [RUN-0454] [RUN-0455] [RUN-0456] [RUN-0457] [RUN-0458] [RUN-0459] [RUN-0460] [RUN-0461] [RUN-0462] [RUN-0466] the five methods and the event round-trip, the commitment carrying a subtree root":
+  test "[RUN-0452] [RUN-0453] [RUN-0454] [RUN-0455] [RUN-0456] [RUN-0457] [RUN-0458] [RUN-0460] [RUN-0462] [RUN-0466] [RUN-1137] [RUN-1138] the five methods and the event round-trip, the commitment carrying a subtree root":
     rcRoundTrip(
       LogosNSRuntimeControlGetConfigurationSchemaRequest(target: target),
       "logos.runtime_control.get_configuration_schema_request",
@@ -185,8 +185,10 @@ suite "cfg.types: CONFIG §9 and the Runtime Control configuration types":
     )
     rcRoundTrip(drop, "logos.runtime_control.update_configuration_request")
     rcRoundTrip(
-      LogosNSRuntimeControlUpdateConfigurationResponse(
-        target: target, state_revision: 1, staged: Opt.some(record)
+      LogosNSRuntimeControlUpdateConfigurationResponse.accepted(
+        LogosNSRuntimeControlUpdateConfigurationResponseARMapStateRevisionTargetMap(
+          target: target, state_revision: 1, staged: Opt.some(record)
+        )
       ),
       "logos.runtime_control.update_configuration_response",
     )
@@ -197,8 +199,10 @@ suite "cfg.types: CONFIG §9 and the Runtime Control configuration types":
       "logos.runtime_control.apply_configuration_request",
     )
     rcRoundTrip(
-      LogosNSRuntimeControlApplyConfigurationResponse(
-        target: target, state_revision: 2, applied_value_revision: 1
+      LogosNSRuntimeControlApplyConfigurationResponse.accepted(
+        LogosNSRuntimeControlApplyConfigurationResponseARMapAppliedValueRevisionStateRevisionTargetMap(
+          target: target, state_revision: 2, applied_value_revision: 1
+        )
       ),
       "logos.runtime_control.apply_configuration_response",
     )
@@ -944,8 +948,11 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     check staged.target == t
     # An equal value is staged again, at a new revision (l.205).
     check rc.stage(t, 1, v).updated.state_revision == 2
-    var r = rc.stage(t, 1, v)
-    check r.code == ecInvalidParams and r.detail.len == 0
+    # [re-pin P4a] A stale revision is the typed `stale-revision` with the
+    # current state revision, and no detail.
+    var r = rc.stage(t, 1, v, refusal = true)
+    check r.code == ecOk and r.detail.len == 0
+    check r.refused.get.stale == Opt.some(2'u64)
     var other = tunerCommitment()
     other.schema_root[0] = other.schema_root[0] xor 1
     r = rc.stage(t, 2, v, other)
@@ -955,7 +962,7 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     # Nothing staged: nothing changes (l.207).
     check rc.discardStaged(t, 3).updated.state_revision == 3
     check rc.summary(t).state_revision == 3
-    check rc.discardStaged(t, 2).code == ecInvalidParams
+    check rc.discardStaged(t, 2, refusal = true).refused.get.stale == Opt.some(3'u64)
     e.finish()
 
   test "[CFG-0022] [CFG-0023] [CFG-0048] [CFG-0049] [IFC-0441] a malformed value is INVALID_PARAMS without detail; one not of the root carries configuration-schema-mismatch and its path":
@@ -1280,7 +1287,7 @@ proc applyOn(arg: ApplyArg) {.thread.} =
   let r = arg[0].applyOf(arg[1], arg[2])
   if r.code == ecOk:
     let a = LogosNSRuntimeControlApplyConfigurationResponse.decode(r.response)
-    applyRevision.store(int(a.get.applied_value_revision))
+    applyRevision.store(int(a.get.accepted.get.applied_value_revision))
   applyReply.store(ord(r.code))
 
 proc applying(
@@ -1417,7 +1424,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.applyOf(t, 4).code == ecInvalidParams
     e.finish()
 
-  test "[CFG-0093] [CFG-0141] [CFG-0142] [CFG-0143] [CFG-0090] [CFG-0006] [G171] [G228] the preconditions, in their row order, refuse without invoking the hook or changing anything":
+  test "[CFG-0093] [CFG-0141] [CFG-0142] [CFG-0143] [CFG-0090] [CFG-0006] [CFG-0155] [G171] [G228] the preconditions, in their row order, refuse without invoking the hook or changing anything":
     let e = tunerEngine()
     let (c, rc) = e.startClient("c")
     var r = rc.applyOf(e.target(c.instance), 0)
@@ -1426,9 +1433,12 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     away.runtime_instance_id = "another-runtime"
     check rc.applyOf(away, 3).code == ecInvalidParams
     let t = e.readyLive(rc, "t1")
-    r = rc.applyOf(t, 2)
-    check r.code == ecInvalidParams and r.detail.len == 0
+    r = rc.applyOf(t, 2, refusal = true)
+    check r.code == ecOk and r.detail.len == 0
+    check r.refused.get.stale == Opt.some(3'u64)
     check rc.discardStaged(t, 3).updated.state_revision == 4
+    # [CFG-0155] The revision is compared before this table's rows.
+    check rc.applyOf(t, 3, refusal = true).refused.get.stale == Opt.some(4'u64)
     r = rc.applyOf(t, 4)
     check r.code == ecInvalidParams and r.detail.len == 0
     # A startup-only binding.
@@ -1436,13 +1446,14 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check e.start("t2").tryGet.state == msReady
     let t2 = e.target("t2")
     check rc.stage(t2, 2, tunerValue("radio-2")).code == ecOk
+    check rc.applyOf(t2, 2, refusal = true).refused.get.stale == Opt.some(3'u64)
     r = rc.applyOf(t2, 3)
     check r.code == ecInvalidParams and r.detail.len == 0
     # Not ready: after the request's own rows.
     let a = tunerAccepted(default = Opt.some(tunerValue()), live = true)
     discard e.createTuner("t3", a, binding = "tuner_live")
     let t3 = e.target("t3")
-    check rc.applyOf(t3, 0).code == ecInvalidParams
+    check rc.applyOf(t3, 0, refusal = true).refused.get.stale == Opt.some(1'u64)
     check rc.applyOf(t3, 1).code == ecNotReady
     check applyEntered.load == 0
     check rc.summary(t).state_revision == 4
@@ -1779,4 +1790,68 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     let now = h.nowOf()
     check now.station == "hold" and now.volume == 6'u32 and now.applied == 1
     h.release()
+    e.finish()
+
+  test "[RUN-1113] [RUN-1114] [TXT-0160] [CFG-0152] [CFG-0154] a stale revision at each guarded method is its response's error arm, with the current revision, and changes nothing":
+    # [re-pin P4a] RUNTIME l.1818-1822: start, stop and recover (the execution
+    # revision), retire (the same), update_permission_settings (the settings
+    # revision), update_configuration and apply_configuration (the
+    # configuration-state revision). Each is a successful call; RUNTIME l.1815:
+    # no mutation after a failed revision check.
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    let before = e.view("t1").tryGet
+    let exec = before.execution.revision
+    let stateRevision = rc.summary(t).state_revision
+    let settingsOf =
+      encode(LogosNSRuntimeControlGetPermissionSettingsRequest(target: t)).tryGet
+    let settings = LogosNSRuntimeControlGetPermissionSettingsResponse.decode(
+      rcCall(rc, "get_permission_settings", settingsOf).response
+    ).tryGet.state.revision
+    proc staleIn(r: RcResult): Opt[uint64] =
+      check r.code == ecOk and r.detail.len == 0
+      if r.refused.isSome:
+        r.refused.get.stale
+      else:
+        Opt.none(uint64)
+
+    for m in ["start_module", "stop_module"]:
+      checkpoint m
+      check rc.lifecycle(
+        m, "tuner_module", Opt.some("t1"), expected = Opt.some(exec + 1), refusal = true
+      ).staleIn == Opt.some(exec)
+    let recover = encode(
+      LogosNSRuntimeControlRecoverModuleRequest(
+        module: "tuner_module", instance: "t1", expected_execution_revision: exec + 1
+      )
+    ).tryGet
+    check rcCall(rc, "recover_module", recover).staleIn == Opt.some(exec)
+    let retire = encode(
+      LogosNSRuntimeControlRetireModuleRequest(
+        target: t, expected_execution_revision: exec - 1
+      )
+    ).tryGet
+    check rcCall(rc, "retire_module", retire).staleIn == Opt.some(exec)
+    let update = encode(
+      LogosNSRuntimeControlUpdatePermissionSettingsRequest(
+        target: t, expected_revision: settings + 1, permissions: @[]
+      )
+    ).tryGet
+    check rcCall(rc, "update_permission_settings", update).staleIn == Opt.some(settings)
+    check rc.stage(t, stateRevision - 1, tunerValue("radio-4"), refusal = true).staleIn ==
+      Opt.some(stateRevision)
+    check rc.discardStaged(t, stateRevision + 1, refusal = true).staleIn ==
+      Opt.some(stateRevision)
+    check rc.applyOf(t, stateRevision - 1, refusal = true).staleIn ==
+      Opt.some(stateRevision)
+    # Nothing changed.
+    let after = e.view("t1").tryGet
+    check after.execution.revision == exec and after.state == msReady
+    check after.execution.intent == before.execution.intent
+    check rc.summary(t).state_revision == stateRevision
+    check LogosNSRuntimeControlGetPermissionSettingsResponse.decode(
+      rcCall(rc, "get_permission_settings", settingsOf).response
+    ).tryGet.state.revision == settings
+    check applyEntered.load == 0
     e.finish()

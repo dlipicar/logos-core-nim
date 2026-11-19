@@ -130,8 +130,9 @@ proc recoverOn(
     instance: string,
     expected: uint64,
     module = "counter_module",
+    refusal = false,
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "recover_module",
     encode(
@@ -140,11 +141,15 @@ proc recoverOn(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc retireOn(
-    rc: ptr LogosRuntimeControlBinding, runtime, instance: string, expected: uint64
+    rc: ptr LogosRuntimeControlBinding,
+    runtime, instance: string,
+    expected: uint64,
+    refusal = false,
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "retire_module",
     encode(
@@ -156,28 +161,37 @@ proc retireOn(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
-proc retire(rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string): RcResult =
+proc retire(
+    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string, refusal = false
+): RcResult =
   ## Retires `instance` of `e` at its current revision.
   let v = e.view(instance)
   rc.retireOn(
-    e.runtimeInstanceId, instance, (if v.isOk: v.get.execution.revision else: 0'u64)
+    e.runtimeInstanceId,
+    instance,
+    (if v.isOk: v.get.execution.revision else: 0'u64),
+    refusal,
   )
 
-proc createOn(rc: ptr LogosRuntimeControlBinding, module, key: string): RcResult =
-  rcCall(
+proc createOn(
+    rc: ptr LogosRuntimeControlBinding, module, key: string, refusal = false
+): RcResult =
+  result = rcCall(
     rc,
     "create_module",
     encode(LogosNSRuntimeControlCreateModuleRequest(module: module, request_key: key)).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc createdId(r: RcResult): string =
-  let c = LogosNSRuntimeControlCreateModuleResponse.decode(r.response).tryGet
+  let c = r.accepted(LogosNSRuntimeControlCreateModuleResponse)
   check c.module.len > 0
   c.instance
 
 proc stateIn(r: RcResult): LogosNSRuntimeControlStateKind =
-  LogosNSRuntimeControlRecoverModuleResponse.decode(r.response).tryGet.state.kind
+  r.accepted(LogosNSRuntimeControlRecoverModuleResponse).state.kind
 
 proc rev(e: Engine, instance: string): uint64 =
   e.view(instance).tryGet.execution.revision
@@ -238,10 +252,17 @@ type RecoverArg = object
 
 var raceCodes: array[2, Atomic[int]]
 
+const RaceStale = -3 ## a race's answer that was the typed `stale-revision`
+
 proc recoverRace(arg: (RecoverArg, int)) {.thread.} =
   {.cast(gcsafe).}:
-    let r = arg[0].rc.recoverOn(arg[0].instance, arg[0].expected)
-    raceCodes[arg[1]].store(ord(r.code))
+    let r = arg[0].rc.recoverOn(arg[0].instance, arg[0].expected, refusal = true)
+    raceCodes[arg[1]].store(
+      if r.refused.isSome:
+        RaceStale
+      else:
+        ord(r.code)
+    )
 
 var createdIds: array[2, Atomic[pointer]]
 
@@ -249,8 +270,7 @@ proc createRace(arg: (ptr LogosRuntimeControlBinding, int)) {.thread.} =
   {.cast(gcsafe).}:
     let r = arg[0].createOn("counter_module", "same-key")
     if r.code == ecOk:
-      let id =
-        LogosNSRuntimeControlCreateModuleResponse.decode(r.response).tryGet.instance
+      let id = r.accepted(LogosNSRuntimeControlCreateModuleResponse).instance
       let p = cast[ptr UncheckedArray[char]](allocShared0(id.len + 1))
       for i, c in id:
         p[i] = c
@@ -308,9 +328,9 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     let r = e.rev("w")
     check arc.recoverOn("w", r).code == ecNotReady
     # What comes before readiness (G171): authority, the module name, the revision.
-    let stale = arc.recoverOn("w", r - 1)
-    check stale.code == ecInvalidParams
-    check stale.detail.len == 0
+    let stale = arc.recoverOn("w", r - 1, refusal = true)
+    check stale.code == ecOk and stale.detail.len == 0
+    check stale.refused.get.stale == Opt.some(r)
     check arc.recoverOn("w", r, "meter_module").code == ecInvalidParams
     check arc.recoverOn("nobody", 0).code == ecNotAuthorised
     check drc.recoverOn("w", r).code == ecNotAuthorised
@@ -333,7 +353,7 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     # retries until a recovery is accepted.
     check waitUntil(
       proc(): bool =
-        arc.recoverOn("w", e.rev("w")).code == ecOk
+        arc.recoverOn("w", e.rev("w"), refusal = true).isAccepted
     )
     check e.view("w").tryGet.state == msReady
     e.finish()
@@ -488,7 +508,9 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     e.failed("w")
     var r = e.rev("w")
     check arc.recoverOn("w", r).code == ecOk
-    check arc.recoverOn("w", r).code == ecInvalidParams
+    check arc.recoverOn("w", r, refusal = true).refused.get.stale == Opt.some(
+      e.rev("w")
+    )
     check counterInits.load == inits + 1
     # (2) An answer the caller never read: readiness shows the attempt ran.
     e.failed("w")
@@ -503,7 +525,8 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     ).tryGet
     check seen.execution.get.revision > r
     check seen.state.kind == LogosNSRuntimeControlStateKind.Ready
-    check arc.recoverOn("w", r).code == ecInvalidParams
+    check arc.recoverOn("w", r, refusal = true).refused.get.stale ==
+      Opt.some(seen.execution.get.revision)
     check counterInits.load == inits + 1
     # (3) A change between reading R and recovering: the caller reads again.
     e.failed("w")
@@ -513,7 +536,9 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     counterFail.store(false)
     check theirs.code == ecOk
     check theirs.stateIn == LogosNSRuntimeControlStateKind.Error
-    check arc.recoverOn("w", r).code == ecInvalidParams
+    check arc.recoverOn("w", r, refusal = true).refused.get.stale == Opt.some(
+      e.rev("w")
+    )
     check arc.recoverOn("w", e.rev("w")).code == ecOk
     # (4) Two recoveries with one R at once: one attempt.
     e.failed("w")
@@ -530,7 +555,7 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     joinThreads(u)
     let codes = @[raceCodes[0].load, raceCodes[1].load]
     check codes.count(ord(ecOk)) == 1
-    check codes.count(ord(ecInvalidParams)) == 1
+    check codes.count(RaceStale) == 1
     check counterInits.load == inits + 1
     e.finish()
 
@@ -586,16 +611,16 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     check e.view("w").isOk
     e.finish()
 
-  test "[RUN-1004] [RUN-1005] a stale revision is INVALID_PARAMS and changes nothing":
+  test "[RUN-1004] [RUN-1185] a stale revision is `stale-revision` with the current revision, and changes nothing":
     let base = freshBase()
     let e = openEngine(pconfig(base)).tryGet
     let (_, arc) = e.startClient("a")
     discard e.create(counter(), "w").tryGet
     let changes = e.changes.len
     let before = readFile(base / "store" / SnapshotName)
-    let r = arc.retireOn(e.runtimeInstanceId, "w", e.rev("w") + 1)
-    check r.code == ecInvalidParams
-    check r.detail.len == 0
+    let r = arc.retireOn(e.runtimeInstanceId, "w", e.rev("w") + 1, refusal = true)
+    check r.code == ecOk and r.detail.len == 0
+    check r.refused.get.stale == Opt.some(e.rev("w"))
     check e.changes.len == changes
     check readFile(base / "store" / SnapshotName) == before
     check e.view("w").isOk
@@ -605,7 +630,7 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     var cfg = rconfig(denying(deny(action = Opt.some(aaExecute), target = "denied")))
     # `w` stays `stopping` meanwhile: when the stop deadline passes, the instance
     # is `error` at a new revision, and a retirement that read the old one is
-    # INVALID_PARAMS.
+    # `stale-revision`.
     cfg.stopDeadline = initDuration(seconds = 30)
     let e = newEngine(cfg)
     let (_, arc) = e.startClient("a")
@@ -660,7 +685,7 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     counterDestroyGate.store(false)
     check waitUntil(
       proc(): bool =
-        frc.retire(f, "v").code == ecOk
+        frc.retire(f, "v", refusal = true).isAccepted
     )
     # A call still in progress in a provider that failed.
     let m = f.started(meter(), "m")
@@ -682,7 +707,7 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     h.release()
     check waitUntil(
       proc(): bool =
-        frc.retire(f, "m").code == ecOk
+        frc.retire(f, "m", refusal = true).isAccepted
     )
     check m.instance == "m"
     f.finish()
@@ -793,7 +818,7 @@ suite "run.rc: create_module (RUNTIME §9.3 l.3613-3634)":
   setup:
     reset()
 
-  test "[IMPL-DECISION G195] [RUN-0658] [RUN-1026] [IFC-0472] a module with no declaration is refused as a denial is":
+  test "[RUN-1187] [TXT-0162] [TXT-0198] [RUN-0658] [RUN-1026] [IFC-0472] a module with no declaration is `declaration-unavailable` for a caller authorized to create it, NOT_AUTHORISED for another":
     let e = newEngine(
       rconfig(
         denying(deny(operation = "create_module", consumer = "d")),
@@ -803,12 +828,19 @@ suite "run.rc: create_module (RUNTIME §9.3 l.3613-3634)":
     let (_, arc) = e.startClient("a")
     let (_, drc) = e.startClient("d")
     let count = e.list.len
-    let missing = arc.createOn("meter_module", "k")
+    let missing = arc.createOn("meter_module", "k", refusal = true)
+    check missing.code == ecOk and missing.detail.len == 0
+    let unavailable = missing.refusal(LogosNSRuntimeControlCreateModuleResponse)
+    check unavailable.code.kind ==
+      LogosNSRuntimeControlErrorCodeKind.Declaration_unavailable
+    check unavailable.current_revision.isNone
+    # [TXT-0198] Every other caller: the ordinary NOT_AUTHORISED, the same
+    # whether or not a declaration exists.
     let denied = drc.createOn("counter_module", "k")
-    check missing.code == ecNotAuthorised
-    check denied.code == ecNotAuthorised
-    check missing.message == denied.message
-    check missing.detail.len == 0 and denied.detail.len == 0
+    let deniedMissing = drc.createOn("meter_module", "k")
+    check denied.code == ecNotAuthorised and deniedMissing.code == ecNotAuthorised
+    check denied.message == deniedMissing.message
+    check denied.detail.len == 0 and deniedMissing.detail.len == 0
     check e.list.len == count
     # Nothing was kept for the key.
     check arc.createOn("counter_module", "k").code == ecOk

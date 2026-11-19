@@ -189,8 +189,9 @@ proc writeSettings(
     t: LogosNSRuntimeModuleInstanceAddress,
     revision: uint64,
     xs: seq[PermissionSetting],
+    refusal = false,
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "update_permission_settings",
     encode(
@@ -199,6 +200,7 @@ proc writeSettings(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 type SettingsView = LogosNSRuntimeControlPermissionSettingsState
 
@@ -211,7 +213,7 @@ proc read(r: RcResult): SettingsView =
 proc written(r: RcResult): SettingsView =
   check r.code == ecOk
   if r.code == ecOk:
-    result = LogosNSRuntimeControlUpdatePermissionSettingsResponse.decode(r.response).tryGet.state
+    result = r.accepted(LogosNSRuntimeControlUpdatePermissionSettingsResponse).state
 
 func status(s: SettingsView): string =
   ($s.application.kind).toLowerAscii
@@ -343,10 +345,13 @@ suite "run.permissions: settings under a selected profile (RUNTIME l.2526-2587)"
     let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     discard e.create(slow(), "s").tryGet
-    check rc.writeSettings(e.target("s"), 5, @[]).code == ecInvalidParams
+    # [re-pin P4a] `stale-revision`, carrying the settings revision.
+    check rc.writeSettings(e.target("s"), 5, @[], refusal = true).refused.get.stale ==
+      Opt.some(1'u64)
     check rc.writeSettings(e.target("s"), 1, @[]).written.revision == 2
-    let stale = rc.writeSettings(e.target("s"), 1, @[ambient()])
-    check stale.code == ecInvalidParams and stale.detail.len == 0
+    let stale = rc.writeSettings(e.target("s"), 1, @[ambient()], refusal = true)
+    check stale.code == ecOk and stale.detail.len == 0
+    check stale.refused.get.stale == Opt.some(2'u64)
     check rc.now(e, "s").revision == 2
     check rc.now(e, "s").perms.len == 0
     e.finish()

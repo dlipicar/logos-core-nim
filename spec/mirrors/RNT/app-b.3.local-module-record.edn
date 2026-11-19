@@ -1,0 +1,21 @@
+{
+  module: "storage_module",
+  provider: {
+    runtime_instance_id: "de1d7cd9-4e0d-4f68-89fa-460fc3332e00",
+    provider: "provider-storage-local"
+  },
+  instance: "instance-storage-001",
+  execution: {
+    revision: 1,
+    intent: "requested",
+    intent_revision: 1
+  },
+  state: "ready",
+  mode: "direct",
+  primary_contract: {
+    commitment_model: "logos.commitment-model.2026-10",
+    schema_root: h'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff',
+    hash_profile: "logos.hash-profile.2026-08.choice-index",
+    hash_suite: "logos.hash-suite.blake3-256"
+  }
+}

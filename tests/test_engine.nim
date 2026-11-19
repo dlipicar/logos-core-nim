@@ -396,11 +396,15 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     check e.view("g").tryGet.failure.isNone
     e.finish()
 
-  test "[RUN-0352] [RUN-0353] an expected execution revision is compared with acceptance":
+  test "[RUN-0352] [RUN-0353] an expected execution revision is compared with acceptance: a stale one is `stale-revision` with the current revision":
     let e = newEngine(config())
     let c = e.create(gated(), "g").tryGet
     let stale = e.start("g", expectedRevision = Opt.some(c.execution.revision + 7))
-    check stale.isErr and stale.error.code == ecInvalidParams
+    check stale.isErr and stale.error.isTyped
+    check stale.error.typed.get ==
+      TypedError(
+        code: recStaleRevision, currentRevision: Opt.some(c.execution.revision)
+      )
     check e.view("g").tryGet.execution == c.execution and inits.load == 0
     check e.start("g", expectedRevision = Opt.some(c.execution.revision)).tryGet.state ==
       msReady

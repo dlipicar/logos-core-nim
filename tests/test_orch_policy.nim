@@ -192,16 +192,18 @@ suite "orch: backoff and attempts (RUNTIME l.3786-3789) [IMPL-DECISION G289]":
     # A lost answer at runtime: the charge stays.
     var e2 = Opt.none(Entry)
     e2.charge(view(lifeError), 10, 10)
-    e2.get.settle(classifyRecover(ecTimeout))
+    e2.get.settle(classifyRecover(ecTimeout, false))
     check e2.get.attempts == 1 and e2.get.pending.isNone
 
-  test "[RUN-0686] [IMPL-DECISION G289] a recover_module answered with a code the table does not list is lost: charge kept; a prepare that fails is refunded":
-    check classifyRecover(ecOk) == answerAccepted
+  test "[RUN-0686] [IMPL-DECISION G289] a recover_module answered with a code the table does not list is lost: charge kept; a prepare that fails is refunded; a stale-revision error arm is refused":
+    check classifyRecover(ecOk, false) == answerAccepted
+    # [RUNTIME l.1818-1819; re-pin P4a] the response held its error arm
+    check classifyRecover(ecOk, true) == answerRefused
     for c in [ecInvalidParams, ecNotReady, ecNotAuthorised, ecModule]:
-      check classifyRecover(c) == answerRefused
-    check classifyRecover(ecCancelled) == answerCancelled
+      check classifyRecover(c, false) == answerRefused
+    check classifyRecover(ecCancelled, false) == answerCancelled
     for c in [ecTimeout, ecTransport, ecVersionMismatch, ecMethodNotFound]:
-      check classifyRecover(c) == answerLost
+      check classifyRecover(c, false) == answerLost
     var e = Opt.none(Entry)
     e.charge(view(lifeError), 10, 10)
     e.get.settle(answerLost)

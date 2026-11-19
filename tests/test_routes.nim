@@ -1284,7 +1284,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     let (c, rc) = e.startClient()
     let s = rc.lifecycle("start_module", "meter_module", Opt.some("m1"))
     check s.code == ecOk
-    let started = LogosNSRuntimeControlStartModuleResponse.decode(s.response).tryGet
+    let started = s.accepted(LogosNSRuntimeControlStartModuleResponse)
     check started.instance == Opt.some("m1")
     check started.provider.isNone
     check started.state.kind == LogosNSRuntimeControlStateKind.Ready
@@ -1292,7 +1292,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     check v.intentOrigin.instance == c.instance
     let stop = rc.lifecycle("stop_module", "meter_module")
     check stop.code == ecOk
-    check LogosNSRuntimeControlStopModuleResponse.decode(stop.response).tryGet.instance ==
+    check stop.accepted(LogosNSRuntimeControlStopModuleResponse).instance ==
       Opt.some("m1")
     let prov = Opt.some(providerAddress(m.providerId))
     check rc.lifecycle("start_module", "meter_module", Opt.some("m1"), prov).code ==
@@ -1314,9 +1314,17 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
       ecNotAuthorised
     check rc.lifecycle("start_module", "other_module", Opt.some("m1")).code ==
       ecInvalidParams
-    check rc.lifecycle(
-      "start_module", "meter_module", Opt.some("m1"), expected = Opt.some(999'u64)
-    ).code == ecInvalidParams
+    # [re-pin P4a] A stale revision is the typed `stale-revision`, carrying
+    # the instance's current execution revision (RUNTIME l.1818-1822).
+    let stale = rc.lifecycle(
+      "start_module",
+      "meter_module",
+      Opt.some("m1"),
+      expected = Opt.some(999'u64),
+      refusal = true,
+    )
+    check stale.code == ecOk
+    check stale.refused.get.stale == Opt.some(e.view("m1").tryGet.execution.revision)
     discard e.create(meter(), "m2").tryGet
     check rc.lifecycle("start_module", "meter_module").code == ecInvalidParams
     check rc.lifecycle("start_module", "nothing_module").code == ecInvalidParams
@@ -1342,15 +1350,16 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     let (_, rc) = e.startClient()
     let s = rc.lifecycle("start_module", "sensor_module")
     check s.code == ecOk
-    check LogosNSRuntimeControlStartModuleResponse.decode(s.response).tryGet.instance ==
-      Opt.some("s1")
+    check s.accepted(LogosNSRuntimeControlStartModuleResponse).instance == Opt.some(
+      "s1"
+    )
     # Both contracts route to the one provider.
     let a = rc.establish("p", primary).routesOf.routes[0]
     let i = rc.establish("i", iface).routesOf.routes[0]
     check a.target_provider == i.target_provider and a.instance == i.instance
     let stop = rc.lifecycle("stop_module", "sensor_module")
     check stop.code == ecOk
-    check LogosNSRuntimeControlStopModuleResponse.decode(stop.response).tryGet.instance ==
+    check stop.accepted(LogosNSRuntimeControlStopModuleResponse).instance ==
       Opt.some("s1")
     e.finish()
 
@@ -1382,7 +1391,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     let r = rc.lifecycle("stop_module", "meter_module", Opt.some(m.instance))
     check getMonoTime() - begun < initDuration(seconds = 5 * Slow)
     check r.code == ecOk
-    check LogosNSRuntimeControlStopModuleResponse.decode(r.response).tryGet.state.kind ==
+    check r.accepted(LogosNSRuntimeControlStopModuleResponse).state.kind ==
       LogosNSRuntimeControlStateKind.Stopping
     check held.load == 1
     gate.store(false)
@@ -1403,7 +1412,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     clientDestroyGate.store(true)
     let r = rc.lifecycle("stop_module", "client_module", Opt.some(c.instance))
     check r.code == ecOk
-    check LogosNSRuntimeControlStopModuleResponse.decode(r.response).tryGet.state.kind ==
+    check r.accepted(LogosNSRuntimeControlStopModuleResponse).state.kind ==
       LogosNSRuntimeControlStateKind.Stopping
     clientDestroyGate.store(false)
     check waitUntil(
@@ -1464,10 +1473,17 @@ suite "run.rc: get_readiness (RUNTIME §9.3 l.3494-3496, l.3656-3675, l.3702-371
     check g.execution.get.intent.kind ==
       LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested
     check g.execution.get.intent_revision == v.execution.intentRevision
-    # A stale revision no longer starts it.
-    check rc.lifecycle(
-      "start_module", "meter_module", Opt.some("m1"), expected = Opt.some(rev)
-    ).code == ecInvalidParams
+    # A stale revision no longer starts it: the typed `stale-revision` names
+    # the revision the snapshot now reports.
+    let stale = rc.lifecycle(
+      "start_module",
+      "meter_module",
+      Opt.some("m1"),
+      expected = Opt.some(rev),
+      refusal = true,
+    )
+    check stale.code == ecOk
+    check stale.refused.get.stale == Opt.some(v.execution.revision)
     e.finish()
 
   test "a failed instance reports its classification and reason":

@@ -2,12 +2,14 @@
 ## rule (DECISIONS I88, W2): values built from the accepted model validate and
 ## round-trip byte for byte through `kit/rc_types.nim`; values outside a
 ## bound are refused (`support/schemasuite`). One test per rule, named by its
-## requirement id.
+## requirement id. Then the enrollment schema (§9.3.7), which is not part of
+## the contract, and the App B examples (re-pin P4a; DECISIONS I108).
 
-import std/strutils
+import std/[sequtils, strutils]
 import unittest2
-import logos_sdk/kit/rc_types
-import logos_sdk/testing/schemasuite
+import logos_sdk/cddl
+import logos_sdk/kit/[rc_arms, rc_types]
+import logos_sdk/testing/[schemasuite, specdata]
 
 const Rules = [
   "logos.runtime.module_name", "logos.runtime.runtime_instance_id",
@@ -24,16 +26,13 @@ const Rules = [
   "logos.runtime_control.tls_tcp_runtime_address",
   "logos.runtime_control.quic_runtime_address", "logos.runtime_control.runtime_address",
   "logos.runtime_control.runtime_endpoint",
-  "logos.runtime_control.remote_identity_profile",
-  "logos.runtime_control.trust_anchor_id",
-  "logos.runtime_control.subject_public_key_info",
-  "logos.runtime_control.remote_runtime_enrollment",
   "logos.runtime_control.remote_listener_address",
   "logos.runtime_control.remote_listener_record",
   "logos.runtime_control.provider_export_record",
   "logos.runtime_control.remote_provider_target",
   "logos.runtime_control.execution_state", "logos.runtime_control.module_record",
   "logos.runtime_control.invocation_descriptor", "logos.runtime_control.route_failure",
+  "logos.runtime_control.error_code", "logos.runtime_control.error",
   "logos.runtime_control.route_access",
   "logos.runtime_control.provider_requirement_cardinality",
   "logos.runtime_control.route_record", "logos.runtime_control.establish_route_request",
@@ -114,6 +113,36 @@ template holds(name: string) =
     checkpoint name & ": " & p
   check problems.len == 0
 
+template armsHold(T: typedesc, name: string) =
+  ## [SPEC RUNTIME l.1818-1822] A response that is a choice of its result
+  ## and `{ error }`: the rule holds, and its error arm, with and without
+  ## `current_revision`, validates and decodes to the same error.
+  holds name
+  for current in [Opt.some(3'u64), Opt.none(uint64)]:
+    let e = rcError(LogosNSRuntimeControlErrorCodeKind.Stale_revision, current)
+    let bytes = encode(T.refused(e)).tryGet
+    check model.g.check(name, decodeCbor(bytes).tryGet).isOk
+    let back = T.decode(bytes).tryGet
+    check back.accepted.isNone
+    check back.refusal.get.code.kind == e.code.kind
+    check back.refusal.get.current_revision == current
+
+proc appB(name: string): CborValue =
+  ## An App B example, mirrored from the spec text (`spec/mirrors.toml`), as a
+  ## CBOR value. The examples write member names bare; quoting them is all
+  ## that separates their notation from diagnostic notation.
+  var text = ""
+  for line in mirror("RNT/" & name).splitLines:
+    let body = line.strip(trailing = false)
+    let colon = body.find(':')
+    if colon > 0 and body[0 ..< colon].allCharsInSet({'a' .. 'z', '_'}):
+      text.add(line[0 ..< line.len - body.len] & '"' & body[0 ..< colon] & '"')
+      text.add(body[colon .. ^1])
+    else:
+      text.add(line)
+    text.add('\n')
+  parseDiag(text).tryGet
+
 suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
   test "every rule of the contract has its test here":
     for r in model.names:
@@ -189,8 +218,11 @@ suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
   test "[RUN-0385] logos.runtime_control.mode (§9.3 l.1959)":
     holds "logos.runtime_control.mode"
 
-  test "[RUN-0386] logos.runtime_control.route_state (§9.3 l.1964)":
+  test "[RUN-1127] logos.runtime_control.route_state, without `draining` (§9.3.2 l.1886)":
     holds "logos.runtime_control.route_state"
+    for state in ["establishing", "ready", "revoked", "failed", "closed"]:
+      check model.g.check("logos.runtime_control.route_state", cbor(state)).isOk
+    check model.g.check("logos.runtime_control.route_state", cbor("draining")).isErr
 
   test "[RUN-0387] logos.runtime_control.unix_stream_runtime_address (§9.3 l.1972)":
     holds "logos.runtime_control.unix_stream_runtime_address"
@@ -207,18 +239,6 @@ suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
   test "[RUN-0391] logos.runtime_control.runtime_endpoint (§9.3 l.2000)":
     holds "logos.runtime_control.runtime_endpoint"
 
-  test "[RUN-0392] logos.runtime_control.remote_identity_profile (§9.3 l.2005)":
-    holds "logos.runtime_control.remote_identity_profile"
-
-  test "[RUN-0393] logos.runtime_control.trust_anchor_id (§9.3 l.2009)":
-    holds "logos.runtime_control.trust_anchor_id"
-
-  test "[RUN-0394] logos.runtime_control.subject_public_key_info (§9.3 l.2010)":
-    holds "logos.runtime_control.subject_public_key_info"
-
-  test "[RUN-0395] logos.runtime_control.remote_runtime_enrollment (§9.3 l.2012)":
-    holds "logos.runtime_control.remote_runtime_enrollment"
-
   test "[RUN-0396] logos.runtime_control.remote_listener_address (§9.3 l.2030)":
     holds "logos.runtime_control.remote_listener_address"
 
@@ -234,14 +254,35 @@ suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
   test "[RUN-0400] logos.runtime_control.execution_state (§9.3 l.2052)":
     holds "logos.runtime_control.execution_state"
 
-  test "[RUN-0401] logos.runtime_control.module_record (§9.3 l.2058)":
+  test "[RUN-1128] logos.runtime_control.module_record, with `? extends` (§9.3.2 l.1954)":
     holds "logos.runtime_control.module_record"
+    check LogosNSRuntimeControlModuleRecord().extends.isNone
 
   test "[RUN-0402] logos.runtime_control.invocation_descriptor (§9.3 l.2073)":
     holds "logos.runtime_control.invocation_descriptor"
 
   test "[RUN-0403] logos.runtime_control.route_failure (§9.3 l.2088)":
     holds "logos.runtime_control.route_failure"
+
+  test "[RUN-1129] logos.runtime_control.error_code (§9.3.2 l.1990)":
+    holds "logos.runtime_control.error_code"
+    for code in ["stale-revision", "configuration-rejected", "declaration-unavailable"]:
+      check model.g.check("logos.runtime_control.error_code", cbor(code)).isOk
+    check model.g.check("logos.runtime_control.error_code", cbor("revision-mismatch")).isErr
+
+  test "[RUN-1130] logos.runtime_control.error, with and without current_revision (§9.3.2 l.1995)":
+    holds "logos.runtime_control.error"
+    for e in [
+      rcError(LogosNSRuntimeControlErrorCodeKind.Stale_revision, Opt.some(9'u64)),
+      rcError(LogosNSRuntimeControlErrorCodeKind.Configuration_rejected),
+      rcError(LogosNSRuntimeControlErrorCodeKind.Declaration_unavailable),
+    ]:
+      let bytes = encode(e).tryGet
+      check model.g.check("logos.runtime_control.error", decodeCbor(bytes).tryGet).isOk
+      let back = LogosNSRuntimeControlError.decode(bytes).tryGet
+      check back.code.kind == e.code.kind
+      check back.current_revision == e.current_revision
+      check back.codeText == e.codeText
 
   test "[RUN-0404] logos.runtime_control.route_access (§9.3 l.2093)":
     holds "logos.runtime_control.route_access"
@@ -318,26 +359,38 @@ suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
   test "[RUN-0428] logos.runtime_control.create_module_request (§9.3 l.2233)":
     holds "logos.runtime_control.create_module_request"
 
-  test "[RUN-0429] logos.runtime_control.create_module_response (§9.3 l.2238)":
-    holds "logos.runtime_control.create_module_response"
+  test "[RUN-1131] logos.runtime_control.create_module_response, its result or an error (§9.3.2 l.2145)":
+    armsHold(
+      LogosNSRuntimeControlCreateModuleResponse,
+      "logos.runtime_control.create_module_response",
+    )
 
   test "[RUN-0430] logos.runtime_control.start_module_request (§9.3 l.2243)":
     holds "logos.runtime_control.start_module_request"
 
-  test "[RUN-0431] logos.runtime_control.start_module_response (§9.3 l.2250)":
-    holds "logos.runtime_control.start_module_response"
+  test "[RUN-1132] logos.runtime_control.start_module_response, its result or an error (§9.3.2 l.2159)":
+    armsHold(
+      LogosNSRuntimeControlStartModuleResponse,
+      "logos.runtime_control.start_module_response",
+    )
 
   test "[RUN-0432] logos.runtime_control.stop_module_request (§9.3 l.2257)":
     holds "logos.runtime_control.stop_module_request"
 
-  test "[RUN-0433] logos.runtime_control.stop_module_response (§9.3 l.2264)":
-    holds "logos.runtime_control.stop_module_response"
+  test "[RUN-1133] logos.runtime_control.stop_module_response, its result or an error (§9.3.2 l.2175)":
+    armsHold(
+      LogosNSRuntimeControlStopModuleResponse,
+      "logos.runtime_control.stop_module_response",
+    )
 
   test "[RUN-0434] logos.runtime_control.recover_module_request (§9.3 l.2271)":
     holds "logos.runtime_control.recover_module_request"
 
-  test "[RUN-0435] logos.runtime_control.recover_module_response (§9.3 l.2277)":
-    holds "logos.runtime_control.recover_module_response"
+  test "[RUN-1134] logos.runtime_control.recover_module_response, its result or an error (§9.3.2 l.2190)":
+    armsHold(
+      LogosNSRuntimeControlRecoverModuleResponse,
+      "logos.runtime_control.recover_module_response",
+    )
 
   test "[RUN-0436] logos.runtime_control.report_failure_request (§9.3 l.2290)":
     holds "logos.runtime_control.report_failure_request"
@@ -381,8 +434,11 @@ suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
   test "[RUN-0449] logos.runtime_control.update_permission_settings_request (§9.3 l.2378)":
     holds "logos.runtime_control.update_permission_settings_request"
 
-  test "[RUN-0450] logos.runtime_control.update_permission_settings_response (§9.3 l.2384)":
-    holds "logos.runtime_control.update_permission_settings_response"
+  test "[RUN-1136] logos.runtime_control.update_permission_settings_response, its result or an error (§9.3.2 l.2301)":
+    armsHold(
+      LogosNSRuntimeControlUpdatePermissionSettingsResponse,
+      "logos.runtime_control.update_permission_settings_response",
+    )
 
   test "[RUN-0451] logos.runtime_control.permission_settings_changed_event (§9.3 l.2389)":
     holds "logos.runtime_control.permission_settings_changed_event"
@@ -408,14 +464,20 @@ suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
   test "[RUN-0458] logos.runtime_control.update_configuration_request (§9.3 l.2422)":
     holds "logos.runtime_control.update_configuration_request"
 
-  test "[RUN-0459] logos.runtime_control.update_configuration_response (§9.3 l.2437)":
-    holds "logos.runtime_control.update_configuration_response"
+  test "[RUN-1137] logos.runtime_control.update_configuration_response, its result or an error (§9.3.2 l.2356)":
+    armsHold(
+      LogosNSRuntimeControlUpdateConfigurationResponse,
+      "logos.runtime_control.update_configuration_response",
+    )
 
   test "[RUN-0460] logos.runtime_control.apply_configuration_request (§9.3 l.2443)":
     holds "logos.runtime_control.apply_configuration_request"
 
-  test "[RUN-0461] logos.runtime_control.apply_configuration_response (§9.3 l.2448)":
-    holds "logos.runtime_control.apply_configuration_response"
+  test "[RUN-1138] logos.runtime_control.apply_configuration_response, its result or an error (§9.3.2 l.2369)":
+    armsHold(
+      LogosNSRuntimeControlApplyConfigurationResponse,
+      "logos.runtime_control.apply_configuration_response",
+    )
 
   test "[RUN-0462] logos.runtime_control.configuration_state_changed_event (§9.3 l.2454)":
     holds "logos.runtime_control.configuration_state_changed_event"
@@ -444,8 +506,11 @@ suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
   test "[RUN-0880] logos.runtime_control.retire_module_request (§9.3 l.2283)":
     holds "logos.runtime_control.retire_module_request"
 
-  test "[RUN-0881] logos.runtime_control.retire_module_response (§9.3 l.2288)":
-    holds "logos.runtime_control.retire_module_response"
+  test "[RUN-1135] logos.runtime_control.retire_module_response, its result or an error (§9.3.2 l.2203)":
+    armsHold(
+      LogosNSRuntimeControlRetireModuleResponse,
+      "logos.runtime_control.retire_module_response",
+    )
 
   test "[RUN-0882] logos.runtime_control.get_execution_permissions_request (§9.3 l.2353)":
     holds "logos.runtime_control.get_execution_permissions_request"
@@ -491,3 +556,63 @@ suite "run.schema: Runtime Types and Runtime Control (RUNTIME §9.2, §9.3)":
         check model.g.check(rule, v).isErr
       check LogosNSRuntimeControlUnixStreamRuntimeAddress.decode(encodeCbor(v)).isErr
       check LogosNSRuntimeControlRuntimeAddress.decode(encodeCbor(v)).isErr
+
+suite "run.schema: remote Runtime enrollment (RUNTIME §9.3.7 l.2599-2632)":
+  test "[RUN-1146] [RUN-1147] [RUN-1148] [RUN-1149] [RUN-1150] [TXT-0170] [TXT-0172] the enrollment rules are their own schema, with the names l.2602-2611 gives; its instance id restates §9.2's":
+    # `uint64` is the common model's (INTERFACE §5.1), outside this schema.
+    let doc = parseCddl(mirror("RNT/9.3.7.runtime-enrollment.cddl"), ["uint64"]).tryGet
+    check doc.rules.mapIt(it.name) ==
+      @[
+        "logos.runtime_enrollment.remote_identity_profile",
+        "logos.runtime_enrollment.remote_runtime_enrollment",
+        "logos.runtime_enrollment.runtime_instance_id",
+        "logos.runtime_enrollment.subject_public_key_info",
+        "logos.runtime_enrollment.trust_anchor_id",
+      ]
+    let types = parseCddl(mirror("RNT/9.2.runtime-types.cddl")).tryGet
+    let restated =
+      doc.rules.filterIt(it.name == "logos.runtime_enrollment.runtime_instance_id")
+    let original = types.rules.filterIt(it.name == "logos.runtime.runtime_instance_id")
+    check restated.len == 1 and original.len == 1
+    check toCbor(restated[0].typ) == toCbor(original[0].typ)
+
+  test "[TXT-0171] [TXT-0173] the Runtime Control contract no longer defines or imports the enrollment records, so its introspection does not return them":
+    for r in model.names:
+      checkpoint r
+      check "enrollment" notin r and "trust_anchor" notin r and
+        "subject_public_key" notin r and "identity_profile" notin r
+    check "runtime_enrollment" notin rcDocuments()[0]
+
+suite "run.schema: the App B examples decode against the generated types (RUNTIME App B)":
+  test "[RUN-1203] B.1, a Runtime endpoint":
+    let v = appB("app-b.1.runtime-endpoint.edn")
+    check model.g.check("logos.runtime_control.runtime_endpoint", v).isOk
+    let e = LogosNSRuntimeControlRuntimeEndpoint.decode(encodeCbor(v)).tryGet
+    check e.runtime_instance_id == Opt.some("de1d7cd9-4e0d-4f68-89fa-460fc3332e00")
+
+  test "[RUN-1204] B.2, a module provider address":
+    let v = appB("app-b.2.provider-address.edn")
+    check model.g.check("logos.runtime.module_provider_address", v).isOk
+    let a = LogosNSRuntimeModuleProviderAddress.decode(encodeCbor(v)).tryGet
+    check a.provider == "provider-storage-local"
+
+  test "[RUN-1205] [TXT-0145] [TXT-0570] B.3, a local module record with its execution":
+    let v = appB("app-b.3.local-module-record.edn")
+    check model.g.check("logos.runtime_control.module_record", v).isOk
+    let r = LogosNSRuntimeControlModuleRecord.decode(encodeCbor(v)).tryGet
+    check r.execution.get.revision == 1
+    check r.instance == Opt.some("instance-storage-001")
+
+  test "[RUN-1206] B.4, a remote facade module record":
+    let v = appB("app-b.4.facade-module-record.edn")
+    check model.g.check("logos.runtime_control.module_record", v).isOk
+    let r = LogosNSRuntimeControlModuleRecord.decode(encodeCbor(v)).tryGet
+    check r.remote.get.provider == Opt.some("provider-storage-remote")
+    check r.instance.isNone
+
+  test "[RUN-1208] [TXT-0571] B.5, a route resolved through a remote facade, with its invocation":
+    let v = appB("app-b.5.facade-route.edn")
+    check model.g.check("logos.runtime_control.route_record", v).isOk
+    let r = LogosNSRuntimeControlRouteRecord.decode(encodeCbor(v)).tryGet
+    check r.target_provider.provider == "provider-storage-remote"
+    check r.invocation.isSome and r.expires_at == Opt.some(2000000000000'u64)

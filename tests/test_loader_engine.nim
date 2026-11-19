@@ -58,9 +58,9 @@ proc summaryOf(
   LogosNSRuntimeControlGetExecutionSummaryResponse.decode(r.response).tryGet
 
 proc retireOf(
-    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string
+    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string, refusal = false
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "retire_module",
     encode(
@@ -70,6 +70,7 @@ proc retireOf(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc loaderOf(e: Engine): InstanceView =
   e.view(LoaderInstanceId).tryGet

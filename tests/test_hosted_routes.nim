@@ -1398,6 +1398,55 @@ when defined(posix):
       check codeIn(first.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
+    test "[RUN-1113] [RUN-1114] [TXT-0160] C-3b a hosted consumer's stale start and retire: the carrier brings back the response's error arm with the current revision, and nothing changes":
+      # [re-pin P4a] A typed outcome is a successful response (RUNTIME
+      # l.1818-1822): the host's binding carries its bytes back unchanged.
+      let cfg = hosted()
+      var c = cfg.serving("c")
+      let e = fixtureEngine(cfg)
+      discard e.create(meter(), "m").tryGet
+      discard e.started(consumerRecord(state = "c"), "c")
+      let rev = e.view("m").tryGet.execution.revision
+      let start = c.run(
+        "rc start_module " &
+          hexOf(
+            encode(
+              LogosNSRuntimeControlStartModuleRequest(
+                module: "meter_module",
+                instance: Opt.some("m"),
+                expected_execution_revision: Opt.some(rev + 1),
+              )
+            ).tryGet
+          )
+      )
+      check codeIn(start) == Opt.some(ecOk)
+      let started =
+        LogosNSRuntimeControlStartModuleResponse.decode(unhexOf(valueIn(start))).tryGet
+      check started.refusal.get.code.kind ==
+        LogosNSRuntimeControlErrorCodeKind.Stale_revision
+      check started.refusal.get.current_revision == Opt.some(rev)
+      let retire = c.run(
+        "rc retire_module " &
+          hexOf(
+            encode(
+              LogosNSRuntimeControlRetireModuleRequest(
+                target: LogosNSRuntimeModuleInstanceAddress(
+                  runtime_instance_id: e.runtimeInstanceId, module_instance_id: "m"
+                ),
+                expected_execution_revision: rev + 1,
+              )
+            ).tryGet
+          )
+      )
+      check codeIn(retire) == Opt.some(ecOk)
+      let retired = LogosNSRuntimeControlRetireModuleResponse.decode(
+        unhexOf(valueIn(retire))
+      ).tryGet
+      check retired.refusal.get.current_revision == Opt.some(rev)
+      let v = e.view("m").tryGet
+      check v.execution.revision == rev and v.state == msUnloaded
+      e.finish()
+
     test "[RUN-0182] [RUN-0837] C-4 a provider restarted under a hosted consumer's open handle: the handle ends NOT_READY and is never retargeted":
       let cfg = hosted()
       var c = cfg.serving()

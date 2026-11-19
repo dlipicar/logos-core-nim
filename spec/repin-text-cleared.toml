@@ -6,6 +6,9 @@
 #   [[stale]]    what replaced a retired id's rule, or what became of its code
 #   [[moved]]    an entry that changed sub-step, and why
 #   [[lowered]]  a behaviour entry lowered by a decision row that names it
+#   [[deferred]] a text entry in the pending file's [deferred]: the deferred unit it `rides` on (same spec,
+#                section and work item) and the decision row that names it; it leaves once a test of that
+#                unit that carries its tag claims the unit
 
 # P1: encoding ---------------------------------------------------------------------------------------------------
 
@@ -1036,3 +1039,208 @@ test = "tests/test_routes.nim"
 id = "TXT-0129"
 step = "P4"
 test = "tests/test_routes.nim"
+
+# P4a: Runtime Control's typed errors and schema (DECISIONS I108) ---------------------------------------------------
+
+[[units]]
+id = "RUN-1124"
+decision = "I108"
+compared = "RUNTIME l.1835 at 6cac8335: a Runtime serving Runtime Control to another Runtime. None does before 5-7a (no remote Runtime Control session; `connect_remote` answers before connecting, I107)."
+
+[[units]]
+id = "RUN-1125"
+decision = "I108"
+compared = "RUNTIME l.1835 at 6cac8335: the source Runtime of a forwarded request. Nothing forwards one before 5-7a."
+
+[[deferred]]
+id = "TXT-0163"
+rides = "RUN-1124"
+decision = "I108"
+reason = "A forwarded `renew_route` or `close_route` (l.1836) needs a source and a target Runtime, which 5-7a builds; the target's order is RUN-1124's."
+
+[[moved]]
+id = "TXT-0161"
+from = "P4"
+to = "P6"
+reason = "`configuration-rejected` (l.1821) is produced by `apply_configuration`'s outcome, which P6 builds; P4a builds only the error arm. A P6 test clears it."
+
+[[moved]]
+id = "CFG-0152"
+from = "P6"
+to = "P4"
+reason = "A stale configuration-state revision at `update_configuration` is `stale-revision`: P4a builds it, and the test [CFG-0152] in tests/test_config.nim claims it."
+
+[[moved]]
+id = "CFG-0154"
+from = "P6"
+to = "P4"
+reason = "A stale revision at `apply_configuration` is `stale-revision`: P4a builds it, and the test [CFG-0154] in tests/test_config.nim claims it."
+
+[[moved]]
+id = "CFG-0155"
+from = "P6"
+to = "P4"
+reason = "The revision is compared before the rows of CONFIG §8's table: the preconditions test [CFG-0155] in tests/test_config.nim claims it."
+
+[[stale]]
+id = "RUN-0386"
+compared = "`route_state` without `draining`: RUN-1127. The schema test moved to it."
+
+[[stale]]
+id = "RUN-0392"
+compared = "The enrollment rules left the Runtime Control schema for `logos.runtime_enrollment` (§9.3.7): RUN-1147 replaces `remote_identity_profile`. The schema test moved to RUN-1146 to RUN-1150."
+
+[[stale]]
+id = "RUN-0393"
+compared = "As RUN-0392: `trust_anchor_id` is RUN-1148."
+
+[[stale]]
+id = "RUN-0394"
+compared = "As RUN-0392: `subject_public_key_info` is RUN-1149."
+
+[[stale]]
+id = "RUN-0395"
+compared = "As RUN-0392: `remote_runtime_enrollment` is RUN-1150. transport/tls/trust.nim keeps its own record (P4 plan §1.1)."
+
+[[stale]]
+id = "RUN-0401"
+compared = "`module_record` gains `? extends`: RUN-1128. The schema test moved to it."
+
+[[stale]]
+id = "RUN-0429"
+compared = "`create_module_response` is a choice of its result and `{ error }`: RUN-1131."
+
+[[stale]]
+id = "RUN-0431"
+compared = "`start_module_response`, the same: RUN-1132."
+
+[[stale]]
+id = "RUN-0433"
+compared = "`stop_module_response`, the same: RUN-1133."
+
+[[stale]]
+id = "RUN-0435"
+compared = "`recover_module_response`, the same: RUN-1134."
+
+[[stale]]
+id = "RUN-0881"
+compared = "`retire_module_response` is `{}` or `{ error }`: RUN-1135."
+
+[[stale]]
+id = "RUN-0450"
+compared = "`update_permission_settings_response`, the same: RUN-1136."
+
+[[stale]]
+id = "RUN-0459"
+compared = "`update_configuration_response`, the same: RUN-1137."
+
+[[stale]]
+id = "RUN-0461"
+compared = "`apply_configuration_response`, the same: RUN-1138."
+
+[[stale]]
+id = "RUN-1005"
+compared = "A revision mismatch at `retire_module` is `stale-revision` without mutation, no longer INVALID_PARAMS: RUN-1185. The test in test_recovery moved to it."
+
+[[text]]
+id = "TXT-0160"
+step = "P4"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0162"
+step = "P4"
+test = "tests/test_recovery.nim"
+
+[[text]]
+id = "TXT-0198"
+step = "P4"
+test = "tests/test_recovery.nim"
+
+[[text]]
+id = "TXT-0170"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0171"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0172"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0173"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0145"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0570"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0571"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0207"
+step = "P4"
+kind = "informative"
+reading = "Prose under an informative example: the route of B.5 names the provider it resolved to in the remote Runtime. No route resolves through a facade before 5-7b; the example decodes as a route record (test [RUN-1208])."
+compared = "RUNTIME App B.5 l.4156 at 6cac8335 against l.4284 at 6a4dfa28 (TXT-0271) and sdk/tests/test_rc_schema.nim."
+
+[[text]]
+id = "TXT-0208"
+step = "P4"
+kind = "holds"
+site = "tests/test_routes.nim:594"
+named = "renew_route (§9.3 l.3183-3190"
+reading = "A route's identifier is the one its Runtime allocated and is kept for renewal and closure: the test renews the route by its id, closes it by the same id, and a renewal after the close is NOT_READY. Materialization by id is RUN-0173 and RUN-0800."
+compared = "RUNTIME App B.5 l.4157 at 6cac8335 against tests/test_routes.nim renew_route and runtime/engine.nim newRouteId."
+
+[[text]]
+id = "TXT-0209"
+step = "P4"
+kind = "informative"
+reading = "The example carries `invocation` and `expires_at`, as an establish answer does (RUN-0541, RUN-0623); B.5 decodes with both (test [RUN-1208])."
+compared = "RUNTIME App B.5 l.4159 at 6cac8335 against sdk/tests/test_rc_schema.nim and tests/test_transported.nim."
+
+[[text]]
+id = "TXT-0210"
+step = "P4"
+kind = "informative"
+reading = "Remote materialization (authentication, then the Hello) is 5-7a's; for local transport, materialization through the binding performs the Hello (RUN-0800 to RUN-0806)."
+compared = "RUNTIME App B.5 l.4160 at 6cac8335 against runtime/bindings.nim materialize_route and TRANSPORT §8.4."
+
+[[text]]
+id = "TXT-0211"
+step = "P4"
+kind = "holds"
+site = "tests/test_transported.nim:295"
+named = "no list, record, retained answer, diagnostic or stored file holds a ticket"
+reading = "`list_routes` returns no `invocation`, so no ticket: the test lists the routes after an establish and finds no ticket in them, nor in a replayed answer."
+compared = "RUNTIME App B.5 l.4161 at 6cac8335 against tests/test_transported.nim and runtime/engine.nim listRoutes."
+
+[[text]]
+id = "TXT-0271"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0207: B.5 now shows the route resolved through the facade, whose target is the remote provider, not the local facade."
+compared = "RUNTIME App B.5 l.4284 at 6a4dfa28 against l.4156 at 6cac8335."
+
+[[text]]
+id = "TXT-0272"
+step = "P4"
+kind = "removed"
+reading = "B.5 is now the consumer-facing record with its invocation (TXT-0209); that `list_routes` omits the invocation is TXT-0211."
+compared = "RUNTIME App B.5 l.4287 at 6a4dfa28 against l.4159-4161 at 6cac8335."
