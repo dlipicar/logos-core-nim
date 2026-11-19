@@ -421,6 +421,52 @@ when defined(posix):
       check direct == @["t1 1 " & $ord(ecModule)]
       check hosted == direct
 
+    test "[TXT-0087] [IMPL-DECISION G225] S-5 an end during `_MODULE_init` before the module registers on its binding, later in the same init, is never reported, as in process":
+      proc run(hosted: bool): seq[string] =
+        let cfg = hostedConfig(hosted)
+        let dir = cfg.prepare(
+          "subscribe " & ModuleStateEv, "block-init", "rc get_self a0", "sub-end-rc t0"
+        )
+        let e = fixtureEngine(cfg)
+        discard e.create(probe(hosted), "p").tryGet
+        var starting: Thread[(Engine, string)]
+        proc startOn(arg: (Engine, string)) {.thread.} =
+          discard arg[0].start(arg[1])
+
+        createThread(starting, startOn, (e, "p"))
+        check waitUntil(
+          proc(): bool =
+            lines(dir, "events").anyIt(it.startsWith("subscribed 0 "))
+        )
+        check e.loseRcForTests("p", 0).isOk
+        check waitUntil(
+          proc(): bool =
+            e.diagnostics().anyIt(" of p lost: a test ended it (G225)" in it)
+        )
+        # [Fable §12.2] The host's sender has written the end before the
+        # module goes on, and the module's Runtime Control call before it
+        # registers is answered on the same carrier after it: the host's main
+        # thread, which reads frames in order, has read the end by then. That
+        # is what makes this exact; the transit window itself stays G225's
+        # reading.
+        check waitUntil(
+          proc(): bool =
+            hostOrdersWrittenForTests()
+        )
+        writeFile(dir / "go", "")
+        joinThread(starting)
+        check e.view("p").tryGet.state == msReady
+        check lines(dir, "inits") == @["init", "sub-end-rc 0 "]
+        check lines(dir, "rc").len == 1 and lines(dir, "rc")[0].startsWith("0 ")
+        sleep(300 * Slow)
+        result = lines(dir, "subends")
+        e.finish()
+
+      let direct = run(false)
+      let hosted = run(true)
+      check direct.len == 0
+      check hosted == direct
+
     test "[IMPL-DECISION G267] S-19 a stop releases the host only once an event handler still running has returned: `_MODULE_destroy` comes after it":
       var cfg = hostedConfig()
       let dir = cfg.prepare("subscribe " & ModuleStateEv, "block-handler")

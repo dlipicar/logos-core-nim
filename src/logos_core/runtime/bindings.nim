@@ -439,7 +439,9 @@ proc freeAttemptServices*(s: ptr AttemptServices) =
   if s == nil:
     return
   # [SPEC INTERFACE l.1954] No subscription-end report of the binding begins
-  # now; one already dispatched holds the host its binding goes with.
+  # now; a direct binding's report jobs have all ended (`rcHandlers`, and no
+  # job before `_MODULE_init` returned), and a hosted binding's ends go to
+  # its host with no job (`engine.endRc`).
   s.subEnd.suppress()
   freeContracts(s)
   if s.host != nil:

@@ -183,6 +183,11 @@ type
     services: ptr AttemptServices
       ## its Runtime Control binding and invocation access, until the
       ## realization it made takes them over or its outcome is final
+    initSeen: bool
+      ## [G225] its `_MODULE_init` returned a context the Runtime took
+      ## (`adoptRealization`); until then the ends of its binding's
+      ## subscriptions wait in `ends`
+    ends: seq[(uint64, ErrorCode)]
     selected: Opt[ValueRecord]
       ## [I87] the configuration record selected before the attempt was
       ## accepted, borrowed from the instance's state until `beginAttempt`
@@ -630,11 +635,11 @@ type
       ## subscriber
     rcRunning: CountTable[string] ## [G178] per subscriber: its drains dispatched
     rcBusy: int ## [G178] event-worker jobs dispatched and not yet ended
-    reports: Table[int, (string, pointer, pointer)]
+    reports: Table[int, (string, pointer)]
       ## [G225] subscription-end reports dispatched and not ended, by number:
-      ## the instance each counts in (`rcHandlers`), the route handle it holds
-      ## a reference to (nil for a binding's), and the Module Host whose
-      ## binding reports it, also held (nil for a direct one)
+      ## the instance each counts in (`rcHandlers`) and the route handle it
+      ## holds a reference to (nil for a direct binding's; a hosted binding's
+      ## ends go to its host with no job, `endRc`)
     rcHints: array[InvKind, RcBlob] ## [G178] the hint values, encoded once
     side: SideTable ## [D14; C-10] the private handoffs to and from the Loader
     ldr: LoaderLink ## [I89] the Module Loader and its binding
@@ -1026,7 +1031,25 @@ proc endRc(st: State, rec: RcRec, reason: ErrorCode) =
     return
   st.deactivateRc(rec)
   let s = st.rcBinding(rec)
-  if s != nil and s.subEnd.owed:
+  if s.isNil or not s.subEnd.owed:
+    return
+  if s.host != nil:
+    # [G225] A hosted binding: the end goes to the host now, from this thread
+    # and with no job, and the host reports it when its module's registration
+    # is installed as it reads it (P3 reading against l.1481), during
+    # `_MODULE_init` too. The host suppresses and waits before its destroys.
+    forwardSubscriptionEnd(cast[Host](s.host), rec.id, reason)
+    return
+  let a = st.instances.getOrDefault(rec.subscriber).attempt
+  if a != nil and a.services == s and not a.initSeen:
+    # [G225; SPEC INTERFACE l.1954] A direct binding: an end while
+    # `_MODULE_init` runs, decided owed above, is reported once it returned a
+    # context the Runtime took (`adoptRealization`): no report job holds the
+    # binding of an attempt whose context the Module Loader may destroy, or
+    # whose binding a failure frees. An attempt that fails first reports none
+    # (a reading: a failed initialization has no destroy to suppress at).
+    a.ends.add((rec.id, reason))
+  else:
     st.dispatchReport(rec.subscriber, s, false, rec.id, reason)
 
 proc loseRc(st: State, rec: RcRec, why: string) =
@@ -1113,21 +1136,15 @@ proc dispatchReport(
   ## it ended, on an event worker (`rcevents.runReport`): never inline and
   ## never on the Runtime thread. It counts toward the subscriber as an event
   ## handler does (`rcHandlers`), so the release or destroy of its realization
-  ## waits for it; a route handle's job holds a reference to the handle, and a
-  ## hosted binding's to its Module Host, which its binding goes with.
+  ## waits for it; a route handle's job holds a reference to the handle. A
+  ## binding's job is a direct binding's (a hosted one's ends go with no job).
   let x = st.instances.getOrDefault(subscriber)
   if x != nil:
     inc x.rcHandlers
-  var host: pointer
   if onHandle:
     discard cast[ptr HandleState](owner).refs.fetchAdd(1)
-  else:
-    host = cast[ptr AttemptServices](owner).host
-    if host != nil:
-      retain(cast[Host](host))
   let n = st.nextJobId()
-  st.reports[n] =
-    ((if x.isNil: "" else: subscriber), (if onHandle: owner else: nil), host)
+  st.reports[n] = ((if x.isNil: "" else: subscriber), (if onHandle: owner else: nil))
   st.sendRcJob(
     RcJob(
       kind: rjSubEnd,
@@ -2284,6 +2301,10 @@ proc releaseRealization(st: State, x: Inst) =
     # binding begins from now on; a running one counts in `rcHandlers`, which
     # `_MODULE_destroy` waits for below.
     x.services.subEnd.suppress()
+  if x.attempt != nil and x.attempt.services != nil:
+    # [M5; G225] So for the binding of the attempt that made the realization,
+    # when it has not handed it over yet (`adoptRealization` failing).
+    x.attempt.services.subEnd.suppress()
   if x.inflight > 0 or x.rcHandlers > 0 or x.apply != nil:
     # [IMPL] Calls already inside the provider finish first (§3.4 l.623), and
     # so do its Runtime Control handlers [G178] (INTERFACE l.1465, l.1999)
@@ -2590,6 +2611,13 @@ proc adoptRealization(st: State, a: Attempt, r: RealizationView) =
   ## checks before `ready`.
   let x = a.inst
   x.realization = r
+  # [G225] The ends held while `_MODULE_init` ran are reported now; a failure
+  # below releases the realization, which suppresses them first.
+  a.initSeen = true
+  if a.services != nil:
+    for (id, reason) in a.ends:
+      st.dispatchReport(x.id, a.services, false, id, reason)
+  a.ends.setLen(0)
   if r.provider:
     x.surface = r.callSurface
     x.surfaceContracts.setLen(0)
@@ -9709,15 +9737,13 @@ proc rcHandled(st: State, p: pointer) =
 
 proc reportDone(st: State, n: int) =
   ## [G225] A subscription-end report job ended: it no longer counts toward
-  ## its subscriber, and the reference to a handle or a host goes.
-  var held: (string, pointer, pointer)
+  ## its subscriber, and the reference to a handle goes.
+  var held: (string, pointer)
   if not st.reports.pop(n, held):
     return
   dec st.rcBusy
   if held[1] != nil:
     dropHandle(cast[ptr HandleState](held[1]))
-  if held[2] != nil:
-    dropHost(cast[Host](held[2]))
   st.handlerReturned(held[0])
 
 proc handlerReturned(st: State, subscriber: string) {.gcsafe.} =
@@ -9774,6 +9800,16 @@ when defined(lcnTestHooks):
       q.reply.answer(Reply())
     of "startup-deadline":
       st.cfg.startupDeadline = initDuration(milliseconds = int64(q.generation))
+      q.reply.answer(Reply())
+    of "lose-rc":
+      # [G225] `loseRcForTests`: `q.instance`'s active Runtime Control
+      # subscription `q.generation`, or every one for 0, is lost, as one past
+      # a bound is.
+      let x = st.instances.getOrDefault(q.instance)
+      if x != nil:
+        for rec in x.rcSubs:
+          if rec.active and q.generation in [0'u64, rec.id]:
+            st.loseRc(rec, "a test ended it")
       q.reply.answer(Reply())
     of "hosted-endpoint":
       # [4b-3 plan §4.3 P-1, P-5] The path of `q.instance`'s hosted endpoint,
@@ -11709,6 +11745,21 @@ when defined(lcnTestHooks):
     let r = e.call(
       Request(
         kind: rqTransportHook, reason: "connect-fault", generation: uint64(ord(cause))
+      )
+    )
+    if r.error.isSome:
+      return err(r.error.get)
+    ok()
+
+  proc loseRcForTests*(
+      e: Engine, instance: string, id: uint64
+  ): Result[void, EngineError] =
+    ## A test hook (G225): `instance`'s active Runtime Control subscription `id`,
+    ## or every one for 0, is lost, as one past a bound is, whatever its
+    ## binding is doing.
+    let r = e.call(
+      Request(
+        kind: rqTransportHook, reason: "lose-rc", instance: instance, generation: id
       )
     )
     if r.error.isSome:

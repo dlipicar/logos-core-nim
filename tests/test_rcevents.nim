@@ -266,6 +266,13 @@ var
   watcherUnsubCode: Atomic[int]
   watcherDestroyBegan: Atomic[bool]
   watcherInsideAtDestroy: Atomic[int] ## handlers running when its destroy began
+  watcherInitMode: Atomic[int]
+    ## [G225] 0: plain; 1: `_MODULE_init` subscribes on `watches[2]`,
+    ## registers `ends[1]`, waits for `watcherInitGo` and makes a context;
+    ## 2: the same, then it fails and makes none
+  watcherInitSub: Atomic[uint64] ## the subscription its init made; 0: none
+  watcherInitHeld: Atomic[bool] ## its init waits
+  watcherInitGo: Atomic[bool]
 
 proc watcherName(): cstring {.cdecl.} =
   "watcher_module"
@@ -274,6 +281,18 @@ proc watcherInit(
     input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
 ): LogosResult {.cdecl.} =
   watcherRc.store(input.runtimeControl)
+  let mode = watcherInitMode.load
+  if mode != 0:
+    let rc = input.runtimeControl
+    var id: LogosSubscriptionId
+    if rc.subscribe(ExecutionState, addr watches[2], id) == ecOk and
+        rc.observeSubEnd(addr ends[1]) == ecOk:
+      watcherInitSub.store(uint64(id))
+    watcherInitHeld.store(true)
+    while not watcherInitGo.load:
+      sleep(1)
+    if mode == 2:
+      return LogosResult(code: CErrorCode(ord(ecModule)))
   outContext[] = cast[ptr LogosModuleContext](allocShared0(16))
 
 proc watcherDestroy(module: ptr LogosModuleContext) {.cdecl.} =
@@ -1231,13 +1250,83 @@ proc loseOne(e: Engine, rc: ptr LogosRuntimeControlBinding): LogosSubscriptionId
   )
   watches[3].hold.store(false)
 
+var startReply: Atomic[int] ## the state `startOn` got, or -1; -2 while it waits
+
+proc startOn(arg: (Engine, string)) {.thread.} =
+  let r = arg[0].start(arg[1])
+  startReply.store(
+    if r.isOk:
+      ord(r.get.state)
+    else:
+      -1
+  )
+
+proc initHeld(e: Engine, mode: int, t: var Thread[(Engine, string)]): uint64 =
+  ## Starts the watcher "w" from `t` with its `_MODULE_init` in `mode` and
+  ## waits until the init waits; the subscription it made, lost meanwhile.
+  watcherInitMode.store(mode)
+  watcherInitGo.store(false)
+  watcherInitHeld.store(false)
+  watcherInitSub.store(0)
+  discard e.create(watcher(), "w").tryGet
+  startReply.store(-2)
+  createThread(t, startOn, (e, "w"))
+  check waitUntil(
+    proc(): bool =
+      watcherInitHeld.load
+  )
+  let id = watcherInitSub.load
+  check id != 0
+  check e.loseRcForTests("w", id).isOk
+  check waitUntil(
+    proc(): bool =
+      e.diagnostics().anyIt(
+        it.startsWith("Runtime Control subscription " & $id & " of w lost")
+      )
+  )
+  id
+
 suite "run.rc: the binding's subscription-end reports and destroy (INTERFACE l.1949-1954) [IMPL-DECISION G225]":
   setup:
     clearAll()
 
   teardown:
     setReportDelayForTests(0)
+    watcherInitGo.store(true)
+    watcherInitMode.store(0)
     leftover()
+
+  test "[IFC-0965] [IMPL-DECISION G225] an end while `_MODULE_init` runs is reported once the init returned a context":
+    let e = fixtureEngine(rcConfig())
+    var t: Thread[(Engine, string)]
+    let id = e.initHeld(1, t)
+    sleep(200 * Slow)
+    check ends[1].count.load == 0 # held while the init runs
+    check not ends[1].running.load
+    watcherInitGo.store(true)
+    joinThread(t)
+    check startReply.load == ord(msReady)
+    check waitUntil(
+      proc(): bool =
+        ends[1].count.load == 1
+    )
+    check ends[1].id.load == id
+    check ends[1].reason.load == ord(ecModule)
+    check ends[1].thread.load != getThreadId()
+    e.finish()
+
+  test "[IFC-0970] [TXT-0089] [IMPL-DECISION G225] an end while `_MODULE_init` runs is not reported when the init fails":
+    let e = fixtureEngine(rcConfig())
+    var t: Thread[(Engine, string)]
+    discard e.initHeld(2, t)
+    watcherInitGo.store(true)
+    joinThread(t)
+    check startReply.load != ord(msReady)
+    check e.view("w").tryGet.state == msError
+    sleep(300 * Slow)
+    check ends[1].count.load == 0
+    check not ends[1].running.load
+    e.finish()
 
   test "[IFC-0970] [TXT-0089] [IMPL-DECISION G225] the subscriber's destroy waits for its binding's running subscription-end report":
     var cfg = rcConfig()
