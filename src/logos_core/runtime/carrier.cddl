@@ -628,7 +628,7 @@ lcn.carrier_io_stop_serving = {
 ; the dispatched Request `request` of `conn`, under the session's selected
 ; `contract`:
 ; - `failure`: refused. The host commits it, or INVALID_PARAMS when it is
-;   NOT_READY and the params do not validate (G171).
+;   NOT_READY and the params do not validate (RUNTIME l.1828, l.1832).
 ; - otherwise admitted as `call`: the host validates the params, runs the
 ;   provider with an invocation context whose caller is `consumer` (or
 ;   answers `logos.schema` itself) and ends with `call_ended`, which carries

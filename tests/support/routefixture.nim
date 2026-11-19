@@ -631,6 +631,33 @@ proc readiness(
     ).tryGet,
   )
 
+proc unloadedNow(
+    rc: ptr LogosRuntimeControlBinding, module: string, instance: Opt[string]
+): bool =
+  ## [SPEC RUNTIME l.3556] Completion of a stop is reported through
+  ## `get_readiness` (and `module_state_changed_event`).
+  let r = rc.readiness(module, instance)
+  if r.code != ecOk:
+    return false
+  let v = LogosNSRuntimeControlGetReadinessResponse.decode(r.response)
+  v.isOk and v.get.state.kind == LogosNSRuntimeControlStateKind.Unloaded
+
+proc stoppedVia(
+    rc: ptr LogosRuntimeControlBinding,
+    module: string,
+    instance = Opt.none(string),
+    expected = Opt.none(uint64),
+): RcResult =
+  ## [SPEC RUNTIME l.3551-3556; re-pin P4b] `stop_module` answers once the
+  ## stop is accepted (`stopping` or `unloaded`); this waits for `unloaded`
+  ## through `get_readiness` and returns the stop's own answer.
+  result = rc.lifecycle("stop_module", module, instance, expected = expected)
+  if result.code == ecOk and result.refused.isNone:
+    check waitUntil(
+      proc(): bool =
+        rc.unloadedNow(module, instance)
+    )
+
 type EndSeen = object
   count: Atomic[int]
   code: Atomic[int]

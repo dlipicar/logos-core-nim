@@ -184,6 +184,13 @@ proc reported(e: ptr Ends, n: int): bool =
 proc payloadOf(s: var Seen): seq[byte] =
   s.payload[0 ..< s.payloadLen.load]
 
+proc refusal(r: Result[MeterReadResponse, InvocationFailure]): Opt[ErrorCode] =
+  ## The code of a publication the meter's channel 17 reports refused.
+  if r.isOk and r.get.label == "refused":
+    errorCode(int64(r.get.reading.value))
+  else:
+    Opt.none(ErrorCode)
+
 proc subscribe(
     h: var LogosRouteHandle,
     s: ptr Seen,
@@ -786,8 +793,8 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     var h = rc.handle(r.routesOf.routes[0].route)
     var a: LogosSubscriptionId
     check h.subscribe(addr seen[0], a) == ecOk
-    # The meter returns the publish failure as its own.
-    check h.read(17).error.code == ecNotAuthorised
+    # The meter reports the publication's code (a provider may not return it).
+    check h.read(17).refusal == Opt.some(ecNotAuthorised)
     settled()
     check seen[0].count.load == 0
     h.release()
@@ -807,8 +814,8 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     check h.subscribe(addr seen[0], a) == ecOk
     check h.subscribe(addr seen[1], b) == ecOk
     seen[0].closeFrom(rc, route)
-    # [G174] The call itself completes; the meter returns publish's NOT_READY.
-    check h.read(17).error.code == ecNotReady
+    # [G174] The call itself completes; the meter reports publish's NOT_READY.
+    check h.read(17).refusal == Opt.some(ecNotReady)
     check seen[0].count.load == 1
     check seen[1].count.load == 0
     h.release()
@@ -854,8 +861,8 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     let (_, rd) = d.startClient("denied")
     var k = rd.handle(rd.routeId("k"))
     check k.subscribe(addr seen[1], a) == ecOk
-    # The meter returns the publication's NOT_AUTHORISED as its own.
-    check k.read(17).error.code == ecNotAuthorised
+    # The meter reports the publication's NOT_AUTHORISED.
+    check k.read(17).refusal == Opt.some(ecNotAuthorised)
     settled()
     check seen[1].count.load == 0
     k.release()

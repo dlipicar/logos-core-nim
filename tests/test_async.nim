@@ -583,6 +583,70 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     h.release()
     e.finish()
 
+  test "[IMPL-DECISION G171] [RUN-1117] [RUN-1118] [RUN-1122] an asynchronous ordinary call: its authorization before its payload, readiness after it (l.1824-1832)":
+    var cfg = config(
+      denying(
+        deny(action = Opt.some(aaCall), consumer = "denied"),
+        deny(
+          action = Opt.some(aaRoute), operation = "renew_route", consumer = "revoked"
+        ),
+      )
+    )
+    cfg.stopDeadline = initDuration(seconds = 30) # `late` stays `stopping` meanwhile
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient("allowed")
+    let (_, denied) = e.startClient("denied")
+    let (_, revoking) = e.startClient("revoked")
+    let (late, lateRc) = e.startClient("late")
+    let malformed = encodeCbor(cborMap(@[(cbor("channel"), cbor("x"))]))
+    proc asyncCode(h: var LogosRouteHandle, params: openArray[byte]): Opt[ErrorCode] =
+      done[0].clear()
+      var (code, call) = h.prepare(params, addr done[0])
+      check code == ecOk
+      call.submit()
+      check done[0].finished
+      result = done[0].codeOf
+      call.release()
+
+    var h = rc.handle(rc.routeId("a"))
+    check h.asyncCode(malformed) == Opt.some(ecInvalidParams)
+    # Step 2's route access checks (TRANSPORT §8.1), which the consumer's side
+    # owns in every placement: a method outside the route's access, then a
+    # revoked route.
+    let narrow =
+      rc.establish("n", scope = access(methods = Opt.some(newSeq[seq[byte]]())))
+    var n = rc.handle(narrow.routesOf.routes[0].route)
+    check n.asyncCode(malformed) == Opt.some(ecNotAuthorised)
+    n.release()
+    let route = revoking.routeId("k")
+    var v = revoking.handle(route)
+    check revoking.renew("r1", route).code == ecNotAuthorised
+    check v.asyncCode(malformed) == Opt.some(ecNotAuthorised)
+    v.release()
+    # Step 2's call decision.
+    var d = denied.handle(denied.routeId("d"))
+    if overTransport:
+      # [DECISIONS G171, interim reading] The consumer's own session refuses a
+      # payload it cannot commit (TRANSPORT §4.1) before the provider's side
+      # decides the call: INVALID_PARAMS here, NOT_AUTHORISED when direct.
+      check d.asyncCode(malformed) == Opt.some(ecInvalidParams)
+    else:
+      check d.asyncCode(malformed) == Opt.some(ecNotAuthorised)
+    d.release()
+    # Step 7 after step 3: the consumer's side is not ready.
+    var l = lateRc.handle(lateRc.routeId("l"))
+    clientDestroyGate.store(true)
+    var t: Thread[(Engine, string)]
+    check e.stopping(late.instance, t)
+    check l.asyncCode(malformed) == Opt.some(ecInvalidParams)
+    check l.asyncCode(req(5)) == Opt.some(ecNotReady)
+    l.release()
+    clientDestroyGate.store(false)
+    joinThread(t)
+    h.release()
+    e.finish()
+
   test "[IMPL-DECISION G174] [RUN-0829] [IFC-0740] [IFC-0741] a route that ends cancels the invocation; closed, it completes with its result; revoked, NOT_AUTHORISED at once":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
@@ -737,6 +801,27 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
       d.hold.store(false) # a held callback would keep `close` waiting
     reentry.gate.store(false)
     leftover()
+
+  test "[IFC-0979] [IFC-0980] [TXT-0034] a deferred provider's completion with a status outside the provider set is MODULE_ERROR without its message; its MODULE_ERROR passes through":
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var broken = h.started(req(13), addr done[0])
+    check done[0].finished
+    check done[0].codeOf == ecModule
+    check done[0].messageOf == "channel 13 is broken"
+    broken.release()
+    for channel in 9001 .. 9005:
+      checkpoint("channel " & $channel)
+      done[1].clear()
+      var c = h.started(req(channel), addr done[1])
+      check done[1].finished
+      check done[1].codeOf == ecModule
+      check done[1].messageOf == ""
+      c.release()
+    h.release()
+    e.finish()
 
   test "[IFC-0738] [IFC-0753] [IFC-0755] [IFC-0773] [IFC-0749] submit, then complete inline or from another thread; current is the invocation's context; synchronous calls still dispatch":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))

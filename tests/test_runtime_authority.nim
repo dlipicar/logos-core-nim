@@ -365,7 +365,7 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
     var h = orch.handle(route)
     check h.read(1).isOk
     check orch.establish("k2", all = true).code == ecOk
-    check orch.lifecycle("stop_module", "meter_module", Opt.some(Meter)).code == ecOk
+    check orch.stoppedVia("meter_module", Opt.some(Meter)).code == ecOk
     check orch.lifecycle("start_module", "meter_module", Opt.some(Meter)).code == ecOk
     h.release()
     let seen = whats()
@@ -393,7 +393,7 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
         check false
     e.finish()
 
-  test "[CAP-0025] [CAP-0098] [CAP-0108] [CAP-0109] [CAP-0110] [CAP-0111] [CAP-0112] [CAP-0113] [CAP-0114] [CAP-0118] [CAP-0153] [CAP-0260] [CAP-0261] [CAP-0084] [CAP-0068] [RUN-0038] [RUN-0325] [RUN-0327] [RUN-0329] a malformed decision, an error arm or a failed dispatch is an evaluation failure, never a deny":
+  test "[CAP-0025] [CAP-0098] [CAP-0108] [CAP-0109] [CAP-0110] [CAP-0111] [CAP-0112] [CAP-0113] [CAP-0114] [CAP-0118] [CAP-0153] [CAP-0260] [CAP-0261] [CAP-0084] [CAP-0068] [RUN-0038] [RUN-0325] [RUN-0327] [RUN-0329] [IFC-0979] [IFC-0980] a malformed decision, an error arm or a failed dispatch is an evaluation failure, never a deny":
     let (e, orch) = ready()
     for v in [
       vError, vStatus, vWrongConsumer, vOtherScopes, vBroadened, vUncovered, vUnordered,
@@ -413,11 +413,19 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
     )
     check orch.observe().code == ecNotAuthorised
     check e.lastFor(aaObserve).errorCode == "internal-error"
+    # [SPEC INTERFACE l.3306-3311; re-pin P4b R4b] The authority's provider
+    # returns a status outside the provider set: MODULE_ERROR at the ABI
+    # caller, so a failed evaluation, never a deny, NOT_AUTHORISED included.
+    for status in [ecTimeout, ecNotReady, ecNotAuthorised, ecTransport, ecCancelled]:
+      checkpoint $status
+      setScript(rule(vStatus, "rc:get_readiness", code = ord(status)))
+      check orch.observe().code == ecNotAuthorised
+      check e.lastFor(aaObserve).outcome == azEvaluationFailed
     # A route allow without valid_until, an execution allow with placements.
     setScript(rule(vNoValidity, "establish-route"), rule(vPlacements, "execute"))
     check orch.establish("k").code == ecNotAuthorised
     check e.lastFor(aaRoute).outcome == azEvaluationFailed
-    check orch.lifecycle("stop_module", "meter_module", Opt.some(Meter)).code == ecOk
+    check orch.stoppedVia("meter_module", Opt.some(Meter)).code == ecOk
     check orch.lifecycle("start_module", "meter_module", Opt.some(Meter)).code ==
       ecNotAuthorised
     let v = e.view(Meter).tryGet
@@ -876,7 +884,7 @@ suite "run.authority: execution (RUNTIME §3.6, §9.3)":
     forget()
     park(orch, "start_module", startReq("m1"), slot = 0)
     check waitHanging()
-    check orch.lifecycle("stop_module", "client_module", Opt.some("m1")).code == ecOk
+    check orch.stoppedVia("client_module", Opt.some("m1")).code == ecOk
     check parkedCode(0) == ecOk
     let v = e.view("m1").tryGet
     check v.state == msUnloaded
@@ -1188,7 +1196,7 @@ suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10
     check e.stopForAuthority("m1", fkAuthorityDenied).tryGet.failure.get.kind ==
       fkAuthorityRevoked
     # An explicit stop clears the classification.
-    check orch.lifecycle("stop_module", "client_module", Opt.some("m1")).code == ecOk
+    check orch.stoppedVia("client_module", Opt.some("m1")).code == ecOk
     check e.view("m1").tryGet.failure.isNone
     e.finish()
 
@@ -1532,7 +1540,7 @@ suite "run.authority: remote listeners and exports without remote transport (K19
     check rcCall(orch, "set_provider_export", exportReq(pid)).code == ecInvalidParams
     e.finish()
 
-  test "[RUN-0346] [IFC-0416] a malformed request is INVALID_PARAMS with its detail; set_remote_listener, naming no target, is authorized first (G171 interim)":
+  test "[RUN-0346] [IFC-0416] [RUN-1117] [RUN-1118] a malformed request is INVALID_PARAMS with its detail; set_remote_listener, naming no target, is authorized first (l.1827-1828)":
     let (e, orch) = ready()
     setScript(
       rule(

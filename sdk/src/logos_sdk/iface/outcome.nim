@@ -184,14 +184,12 @@ proc checkStatus*(
     return ok()
   checkFailure(InvocationFailure(code: code, message: message, detail: detail))
 
-proc checkedProviderStatus*(
-    code: int64, message: Opt[string], detail: Opt[seq[byte]]
-): (ErrorCode, Opt[string], Opt[seq[byte]]) =
-  ## [SPEC INTERFACE §5.1] What an ABI caller forwards for a native provider's
-  ## status, message and detail: them unchanged when they are valid, else
-  ## `LOGOS_ERR_MODULE` with neither diagnostics nor detail. A caller that gets
-  ## MODULE_ERROR back for an `OK` status forwards no contract-response output.
-  let c = errorCode(code)
-  if c.isNone or checkStatus(c.get, message, detail).isErr:
-    return (ecModule, Opt.none(string), Opt.none(seq[byte]))
-  (c.get, message, detail)
+func providerStatusAllowed*(code: ErrorCode, cancelKnown: bool): bool =
+  ## [SPEC INTERFACE l.3306-3311] The statuses provider code may return or
+  ## complete with: LOGOS_OK, METHOD_NOT_FOUND, INVALID_PARAMS and MODULE, and
+  ## CANCELLED only for an invocation whose cancellation is known at the
+  ## provider boundary (`cancelKnown`). Any other is a violation, which the
+  ## ABI caller reports as MODULE_ERROR. Only for a provider's own result:
+  ## consumer-side and lifecycle results legitimately carry other codes.
+  code in {ecOk, ecMethodNotFound, ecInvalidParams, ecModule} or
+    (code == ecCancelled and cancelKnown)

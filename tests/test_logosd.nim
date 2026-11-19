@@ -366,7 +366,7 @@ when defined(posix):
       check r.code == 0
       check waitExit(d, StopMs) == 0
 
-    test "[RUN-0347] kill -9, then a restart: the stale socket does not block, and module create --request-key returns the same instance":
+    test "[IMPL] kill -9, then a restart: the stale socket does not block, and module create --request-key returns the same instance":
       let c = newCase()
       check c.initDefault().code == 0
       var d = c.start()
@@ -535,7 +535,7 @@ when defined(posix):
       check c.ctl("trust", "evidence-keys", "ls").code == 0
       check d.stopped == 0
 
-    test "[RUN-0347] [BCP-0092] 8 concurrent shells, module create with distinct keys: 8 instances; retire says the state is kept":
+    test "[BCP-0092] 8 concurrent shells, module create with distinct keys: 8 instances; retire says the state is kept":
       let c = newCase()
       check c.initDefault().code == 0
       let d = c.start()

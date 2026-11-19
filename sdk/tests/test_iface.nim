@@ -4,6 +4,7 @@ import std/[algorithm, sequtils, strutils]
 import unittest2
 import logos_sdk/[cbor, hash, commitment]
 import logos_sdk/iface/accept
+from logos_sdk/abi/checks import AbiCheck, AbiFailure, providerChecked
 import logos_sdk/base/hex
 import logos_sdk/testing/specdata
 
@@ -1223,15 +1224,27 @@ suite "iface: shared error codes and invocation failures (INTERFACE §5.1)":
         (cbor("reason"), cbor("configuration-schema-mismatch")),
       )
 
+  proc forwarded(
+      code: int64, message: Opt[string], d: Opt[seq[byte]], cancelKnown = false
+  ): (ErrorCode, Opt[string], Opt[seq[byte]]) =
+    ## What an ABI caller forwards for a native provider's status, as
+    ## `readStatus` and `providerChecked` compose it.
+    let c = errorCode(code)
+    if c.isNone or checkStatus(c.get, message, d).isErr or
+        not providerStatusAllowed(c.get, cancelKnown):
+      return (ecModule, Opt.none(string), Opt.none(seq[byte]))
+    (c.get, message, d)
+
   test "[IFC-0932] [IFC-0933] a native provider status that breaks the rules is MODULE_ERROR, without its diagnostics":
     let detail = invalidParamsDetail(iprSchemaMismatch)
     for (code, message, d) in [
       (0'i64, Opt.none(string), Opt.none(seq[byte])),
       (2'i64, Opt.some("bad cid"), Opt.some(detail)),
-      (6'i64, Opt.some("slow"), Opt.none(seq[byte])),
+      (3'i64, Opt.some("broken"), Opt.none(seq[byte])),
     ]:
-      check checkedProviderStatus(code, message, d) == (ErrorCode(code), message, d)
+      check forwarded(code, message, d) == (ErrorCode(code), message, d)
     for (code, message, d) in [
+      (6'i64, Opt.some("slow"), Opt.none(seq[byte])), # not a provider status (IFC-0980)
       (10'i64, Opt.none(string), Opt.none(seq[byte])), # not allocated
       (-1'i64, Opt.none(string), Opt.none(seq[byte])),
       (0'i64, Opt.some("ok?"), Opt.none(seq[byte])), # OK carries no message
@@ -1241,5 +1254,31 @@ suite "iface: shared error codes and invocation failures (INTERFACE §5.1)":
       (2'i64, Opt.some("x".repeat(513)), Opt.none(seq[byte])),
       (2'i64, Opt.some("\xff"), Opt.none(seq[byte])),
     ]:
-      check checkedProviderStatus(code, message, d) ==
+      check forwarded(code, message, d) ==
         (ecModule, Opt.none(string), Opt.none(seq[byte]))
+
+  test "[IFC-0979] [IFC-0980] [TXT-0034] provider code returns OK, METHOD_NOT_FOUND, INVALID_PARAMS or MODULE_ERROR, and CANCELLED only when its cancellation is known; any other status is MODULE_ERROR without diagnostics":
+    for code in ErrorCode:
+      let allowed = code in {ecOk, ecMethodNotFound, ecInvalidParams, ecModule}
+      check providerStatusAllowed(code, false) == allowed
+      check providerStatusAllowed(code, true) == (allowed or code == ecCancelled)
+      if code == ecOk:
+        check AbiCheck.ok().providerChecked(false).isOk
+        continue
+      for known in [false, true]:
+        let c = AbiCheck
+          .err(
+            AbiFailure(
+              code: code, message: Opt.some("why"), detail: Opt.none(seq[byte])
+            )
+          )
+          .providerChecked(known)
+        check c.isErr
+        if allowed or (code == ecCancelled and known):
+          # passes through unchanged (INTERFACE l.3134: the status passes through)
+          check c.error.code == code
+          check c.error.message == Opt.some("why")
+        else:
+          check c.error.code == ecModule
+          check c.error.message.isNone
+          check c.error.detail.isNone

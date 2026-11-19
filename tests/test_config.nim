@@ -1424,7 +1424,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.applyOf(t, 4).code == ecInvalidParams
     e.finish()
 
-  test "[CFG-0093] [CFG-0141] [CFG-0142] [CFG-0143] [CFG-0090] [CFG-0006] [CFG-0155] [G171] [G228] the preconditions, in their row order, refuse without invoking the hook or changing anything":
+  test "[CFG-0093] [CFG-0141] [CFG-0142] [CFG-0143] [CFG-0090] [CFG-0006] [CFG-0155] [RUN-1121] [G228] the preconditions, in their row order, refuse without invoking the hook or changing anything":
     let e = tunerEngine()
     let (c, rc) = e.startClient("c")
     var r = rc.applyOf(e.target(c.instance), 0)

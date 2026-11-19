@@ -198,7 +198,7 @@ proc linkCall*(
   ## codes in the order of a direct call's admission, sends the Request on the
   ## link and answers when its Response comes; the provider side authorizes.
   ## The selected contract's own checks (an INVALID_PARAMS the session refused
-  ## locally, and G171's validation before a NOT_READY) are run again here,
+  ## locally, and the validation before a NOT_READY of RUNTIME l.1828) are run again here,
   ## where the construction input is loaded, so the failure carries the same
   ## detail as on a direct route.
   # [DECISIONS G276] The Request's copy of `params` moves to the I/O thread;

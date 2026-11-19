@@ -288,7 +288,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     check now.modules[3].state.kind == LogosNSRuntimeControlStateKind.Ready
     e.finish()
 
-  test "[RUN-0347] [RUN-0960] [RUN-0961] [RUN-0963] a cursor answers its own query only; any other is INVALID_PARAMS with one message and no detail":
+  test "[RUN-0960] [RUN-0961] [RUN-0963] a cursor answers its own query only; any other is INVALID_PARAMS with one message and no detail":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient("c")
     let (_, other) = e.startClient("d")
@@ -473,7 +473,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     check rc.modules(instance = someText("a2")).listed.modules.len == 0
     e.finish()
 
-  test "[RUN-0346] [RUN-0850] [RUN-0874] [IMPL-DECISION G171] a refused list method is NOT_AUTHORISED before its payload is judged":
+  test "[RUN-0346] [RUN-0850] [RUN-0874] [RUN-1117] [RUN-1118] a refused list method is NOT_AUTHORISED before its payload is judged (l.1827-1828)":
     let e = fixtureEngine(
       config(
         denying(

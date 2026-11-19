@@ -41,7 +41,7 @@ proc meterLines(): seq[string] =
   @[
     # Calls: a value, introspection, validation, an unknown method, and the
     # provider's own failure, a response outside its schema and an invalid
-    # status (G172).
+    # status, and statuses outside the provider set (INTERFACE l.3306-3311).
     call("read", read(4)),
     call("schema", [0xA0'u8]),
     call("schema", [0xA1'u8, 0x61, 0x78, 0x01]),
@@ -51,6 +51,8 @@ proc meterLines(): seq[string] =
     call("read", read(13)),
     call("read", read(14)),
     call("read", read(16)),
+    call("read", read(9001)),
+    call("read", read(9005)),
     # Events: a name that fails INTERFACE §1.5 (I106), an unknown event, then
     # one subscription, which sees a publication, an invocation-scoped one
     # (17) and one from a call that names its caller (21), in order; none

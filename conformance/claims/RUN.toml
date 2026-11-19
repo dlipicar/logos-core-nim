@@ -29,6 +29,12 @@ default = "claimed"
 # A MAY convenience mode not provided (l.1094); l.1122 steers multi-instance code to handles.
 "§5.2.1" = "out-of-scope:a MAY convenience mode not provided (singleton direct calls, l.1094)"
 
+# Re-pin P4b: the order of checks (l.1824-1833) is claimed by default. For an ordinary transported
+# call, RUN-1117 before RUN-1118 is claimed under DECISIONS G171's interim reading: each side applies
+# the order to the checks it owns. The consumer's side makes its route access checks before the
+# payload, and the provider's side makes the call decision before it. A call that is both malformed
+# and denied therefore answers INVALID_PARAMS where direct answers NOT_AUTHORISED (l.1257).
+
 [units]
 # Stay deferred past the re-pin to 6cac8335; work item 5-7a owns them (spec/repin-pending.toml [deferred]).
 "RUN-1163" = "deferred:tier-5"

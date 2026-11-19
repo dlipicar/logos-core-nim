@@ -1146,7 +1146,12 @@ suite "run.rc: delivery (G178) [IMPL-DECISION G178]":
     )
     check watches[0].readinessCode.load == ord(ecOk)
     check watches[0].stopCode.load == ord(ecOk)
-    check e.view("m").tryGet.state == msUnloaded
+    # [SPEC RUNTIME l.3551-3556] The stop answered once accepted; the event
+    # reports its completion.
+    check waitUntil(
+      proc(): bool =
+        e.view("m").tryGet.state == msUnloaded
+    )
     check watches[0].reached(4)
     check watches[0].transitions("m") ==
       @["unloaded>loaded", "loaded>ready", "ready>stopping", "stopping>unloaded"]

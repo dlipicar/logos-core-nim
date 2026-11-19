@@ -46,7 +46,7 @@ type
     vDeny
     vError ## the `error` arm
     vHang ## waits until `release`, then allows
-    vStatus ## a non-OK status, no response
+    vStatus ## a non-OK status (`code`, else MODULE_ERROR), no response
     vWrongConsumer ## an allow naming another consumer
     vOtherScopes ## an allow answering other requested scopes
     vBroadened ## an allowed scope wider than the request
@@ -84,7 +84,9 @@ type
     narrowControl*: seq[RcNarrow]
       ## allow: the allowed Runtime Control scopes, one per alternative
     retainRequest*, retainResponse*: bool ## allow: `commitment`
-    code*: int ## deny: the denial code; error: the error code (enum ordinal)
+    code*: int
+      ## deny: the denial code; error: the error code (enum ordinal); status:
+      ## the status, when not 0
     permName*: string
       ## [I93] allow: the allowed permission scope of this name gets
       ## `permConstraints` (or is dropped when they are empty)
@@ -708,7 +710,14 @@ proc fakeDispatch(
       r.verdict = vAllow
     case r.verdict
     of vStatus:
-      return LogosResult(code: CErrorCode(ord(ecModule)))
+      return LogosResult(
+        code: CErrorCode(
+          if r.code != 0:
+            r.code
+          else:
+            ord(ecModule)
+        )
+      )
     of vBadCbor:
       respond([0xFF'u8], outResp, outLen)
       return LogosResult()

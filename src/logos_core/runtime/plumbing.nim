@@ -1242,6 +1242,11 @@ func effective*(l: EngineLimits): EngineLimits =
   # `inventory_changed` handler never loses its subscription.
   result.rcQueue = max(result.rcQueue, 2)
 
+proc ticketCancelled*(t: ptr CallTicket): bool =
+  ## [SPEC INTERFACE l.3308] Whether the call's cancellation is known at the
+  ## provider boundary: the Runtime thread marked its ticket cancelled.
+  t != nil and t.cancelled.load
+
 proc newRuntimeInstanceId*(): string =
   ## A lowercase canonical UUID version 4 (RFC 9562), the form the remote
   ## profiles require (RUNTIME l.2669-2670).

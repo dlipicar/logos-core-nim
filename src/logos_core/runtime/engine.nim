@@ -57,11 +57,16 @@
 ## (l.3157-3159, l.3188); a `request_key` replay still returns its retained
 ## result (l.3175-3176).
 ##
-## [G171 interim (TF-18)] The order of checks for a Runtime Control request:
-## the caller's association (NOT_AUTHORISED), the method's own authority where
-## it names no target from the payload, the payload (INVALID_PARAMS), the
-## target's authority, then readiness, including whether the caller's binding
-## is still current (`originReady`), and last the contract root.
+## [SPEC RUNTIME l.1824-1833] The order of checks for a Runtime Control
+## request: the method (1); the caller's association and the method's own
+## authority where it names no target from the payload (2); the payload (3);
+## the target's authority and non-disclosure (4); the expected revision (5);
+## the precondition table's rows in order (6); readiness, including whether
+## the caller's binding is still current (`originReady`; 7), which every
+## success passes, a replay or a join included; last the contract root (8).
+## Under a Capability Authority a shutting-down Runtime answers NOT_READY at
+## the first decision that needs an evaluation (G171: a check that cannot be
+## evaluated is not a failure that applies).
 ##
 ## [IMPL] Events and asynchronous calls (step 4). Subscriptions are activated,
 ## deactivated and admitted here, one handler invocation at a time; the
@@ -137,7 +142,8 @@ from ./tport import
   newTransportPorts, freeTransportPorts, ensureStarted, closeTransport, releaseOwner,
   closing, submit, submitOwner, newConnId, started, setHosted
 from ../permissions import
-  PermissionProfile, build, selected, checkProfile, checkSettings, activeIn, missing
+  PermissionProfile, build, selected, checkProfile, checkSettings, checkOrder,
+  checkDefined, activeIn, missing
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
@@ -1833,6 +1839,8 @@ proc restore(x: Inst, s: Saved) =
   x.provider = s.provider
   x.pending = s.pending
 
+const Exhausted = "the execution revision is exhausted"
+
 func exhausted(st: State, revision: uint64): bool =
   ## [SPEC RUNTIME l.3507; IMPL] This start's accepting commits for the
   ## instance reached the budget (I82).
@@ -1845,7 +1853,7 @@ proc accept(st: State, x: Inst, saved: Saved, exempt = false): Opt[EngineError] 
   ## fails, `x` is as it was (`saved`) and the error is returned (I82).
   if not exempt and st.exhausted(saved.revision):
     x.restore(saved)
-    return Opt.some(engineError(ecModule, "the execution revision is exhausted"))
+    return Opt.some(engineError(ecModule, Exhausted))
   inc x.revision
   x.pending = true
   let w = st.persist()
@@ -3937,14 +3945,18 @@ proc decideExec(st: State, x: Inst, pe: PendingExec) =
       st.cancelExec(x, pe),
   )
 
+func joinable(st: State, x: Inst): bool =
+  ## [I85] A start or recovery is waiting for its execution decision.
+  let pe = x.pendingExec
+  not (pe.isNil or pe.cancelled or st.op.isNil)
+
 proc joinExec(st: State, x: Inst): bool =
   ## [I85] A start or recovery while one is waiting for its execution
   ## decision joins it: answered with its attempt's outcome, or taken again
   ## from the top when the decision refuses.
-  let pe = x.pendingExec
-  if pe.isNil or pe.cancelled or st.op.isNil:
+  if not st.joinable(x):
     return false
-  pe.joined.add(st.op)
+  x.pendingExec.joined.add(st.op)
   true
 
 proc staleExecution(x: Inst): EngineError =
@@ -4004,8 +4016,8 @@ proc lookup(st: State, q: Request, operation: string): Result[Inst, EngineError]
   ok(x)
 
 proc originReady(st: State, q: Request): Opt[EngineError] =
-  ## [SPEC RUNTIME §3.4 l.629-631, §10.2; G171 interim (TF-18)] Checked after
-  ## the request's authorization: a Runtime Control binding that is
+  ## [SPEC RUNTIME §3.4 l.629-631, §10.2; l.1832, step 7] Checked after the
+  ## table's rows, before a success: a Runtime Control binding that is
   ## invalidated, or a Runtime that is shutting down, is NOT_READY. A request
   ## that comes through no binding (the host API) has only the second.
   if q.attempt.len > 0:
@@ -4025,13 +4037,16 @@ template requireReady(st: State, q: Request) =
 
 proc start(st: State, q: Request) =
   ## [SPEC RUNTIME §9.1, §9.3 start_module; §3.6] Replies once the attempt
-  ## is ready or failed, or once its deadline passed.
+  ## is ready or failed, or once its deadline passed. [SPEC RUNTIME
+  ## l.1826-1833] The target and the revision (`lookup`, steps 4 and 5), the
+  ## table's rows in order (step 6), then readiness (step 7), which every
+  ## success passes, a view or a join included.
   let x = st.lookup(q, "start_module").valueOr:
     q.answerFailure(error)
     return
-  st.requireReady(q)
   case x.state
   of msLoaded, msReady:
+    st.requireReady(q)
     q.reply.answerView(x) # §9.1 l.1837: no new realization, intent unchanged
     return
   of msStopping:
@@ -4052,8 +4067,15 @@ proc start(st: State, q: Request) =
   if missing.isSome:
     q.reply.answerError(ecNotReady, missing.get)
     return
-  if st.joinExec(x):
+  if st.joinable(x):
+    st.requireReady(q)
+    discard st.joinExec(x)
     return
+  if st.exhausted(x.revision):
+    # [SPEC RUNTIME l.1812, row 7; re-pin P4 R1] in row order, before readiness
+    q.reply.answerError(ecModule, Exhausted)
+    return
+  st.requireReady(q)
   # [SPEC RUNTIME §9.3 l.3644-3647] Acceptance establishes `requested` intent
   # with this origin, before execution authorization or startup.
   let saved = x.save
@@ -4347,31 +4369,25 @@ proc stopInstance(
   if reply != nil:
     x.stopWaiters.add(StopWaiter(reply: reply, origin: origin))
 
-proc callsInto(st: State, consumer, provider: string): bool =
-  ## Whether `consumer` has an admitted call in progress through a route to
-  ## `provider`.
-  for r in st.routes.values:
-    if r.consumer == consumer and r.providerInstance == provider and r.calls.len > 0:
-      return true
-  false
-
 proc stop(st: State, q: Request) =
-  ## [SPEC RUNTIME §9.1, §9.3 stop_module]
+  ## [SPEC RUNTIME §9.1, §9.3 stop_module; l.1826-1833] The target and the
+  ## revision, the Loader's row, then readiness.
   let x = st.lookup(q, "stop_module").valueOr:
     q.answerFailure(error)
     return
-  st.requireReady(q)
   if st.isLoader(x) and st.loaderOwns():
     # [plan §2.10 (K5, decision 5); RUNTIME l.3563-3569 by analogy] Not while
     # it owns a realization; owning none, it is stopped as any instance and
     # the binding ends (l.3816-3817).
     q.reply.answerError(ecNotReady, "the Module Loader still owns realizations")
     return
-  if not q.origin.host and
-      (q.origin.instance == x.id or st.callsInto(q.origin.instance, x.id)):
-    # [G173 interim (TF-20)] A module that stops itself, or that has a call in
-    # progress in the target, gets the state at once: waiting would hold that
-    # call, and so the target's release (l.3687 permits `stopping`).
+  st.requireReady(q)
+  if q.kind == rqRc:
+    # [SPEC RUNTIME l.3551-3556] Success means the stop is accepted and the
+    # instance is `stopping` or `unloaded`; completion is reported through
+    # `module_state_changed_event` and `get_readiness`. An instance in `error`
+    # whose realization was lost answers `error` (G173). [IMPL; re-pin P4 R8]
+    # The engine API's stop still answers at `unloaded`.
     st.stopInstance(x, nil, keepIntent = false)
     q.reply.answerView(x)
     return
@@ -4381,16 +4397,16 @@ proc recover(st: State, q: Request) =
   ## [SPEC RUNTIME §9.3 recover_module, l.3537-3544; §10.1] A new attempt for
   ## retained `requested` intent, its origin and its record unchanged, once
   ## the earlier realization is cleaned. Execution is authorized for the
-  ## retained origin, not the requester (l.3540). Answers as `start` does
-  ## [G173 interim (TF-20)]. The check order is G171's: authority, then the
-  ## module name and revision (`lookup`), then readiness.
+  ## retained origin, not the requester (l.3540). Answers as `start` does.
+  ## [SPEC RUNTIME l.1826-1833] Authority, the module name and the revision
+  ## (`lookup`), the table's rows in order, then readiness before the join
+  ## or the new attempt.
   if q.expectedRevision.isNone:
     q.reply.answerError(ecInvalidParams, "an expected execution revision is required")
     return
   let x = st.lookup(q, "recover_module").valueOr:
     q.answerFailure(error)
     return
-  st.requireReady(q)
   if x.intent != inRequested:
     # [SPEC RUNTIME l.3538, l.1914] after an explicit stop (l.3790) or before
     # any start
@@ -4410,11 +4426,14 @@ proc recover(st: State, q: Request) =
   if missing.isSome:
     q.reply.answerError(ecNotReady, missing.get)
     return
-  if st.joinExec(x):
+  if st.joinable(x):
+    st.requireReady(q)
+    discard st.joinExec(x)
     return
   if st.exhausted(x.revision):
-    q.reply.answerError(ecModule, "the execution revision is exhausted")
+    q.reply.answerError(ecModule, Exhausted) # row 7, in row order (R1)
     return
+  st.requireReady(q)
   st.execute(x, q.reply, q.origin.instance)
 
 proc reportFailure(st: State, q: Request, success = Reply()) =
@@ -4782,9 +4801,10 @@ func listRequest(st: State, x: Inst, operation: string): AuthzRequest =
   AuthzRequest(action: aaObserve, operation: operation, consumer: x.id, filters: true)
 
 proc rcPrecheck(st: State, q: Request) =
-  ## [G171 interim (TF-18)] Before a Runtime Control request whose payload
-  ## failed validation is answered INVALID_PARAMS: the caller's association,
-  ## and the method's authority where it names no target from the payload.
+  ## [SPEC RUNTIME l.1827-1828, steps 2 and 3] Before a Runtime Control
+  ## request whose payload failed validation is answered INVALID_PARAMS: the
+  ## caller's association, and the method's authority where it names no
+  ## target from the payload.
   let x = st.caller(q).valueOr:
     q.reply.answerError(error.code, error.message)
     return
@@ -5066,9 +5086,10 @@ proc ownsNothing(st: State, y: Inst): bool =
 
 proc retire(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §9.3 retire_module, l.3556-3595] Removes a stopped
-  ## instance's record for good. The check order is G171's: the target's
-  ## Runtime, this method's own authority (l.3557), the revision, readiness,
-  ## then the absence of every realization, cleanup, call and dependency.
+  ## instance's record for good. [SPEC RUNTIME l.1826-1833] The target's
+  ## Runtime and this method's own authority (l.3557; step 4), the revision
+  ## (5), the absence of every realization, cleanup, call and dependency
+  ## (the table's rows, 6), then readiness (7).
   let req = q.rc.retire
   if req.target.runtime_instance_id != st.runtimeId:
     # [G194 interim (TF-30 point 1)] INVALID_PARAMS without detail, as l.3659
@@ -5100,7 +5121,6 @@ proc retire(st: State, q: Request, x: Inst) =
     # [SPEC RUNTIME l.3559-3560] no mutation
     q.answerFailure(y.staleExecution)
     return
-  st.requireReady(q)
   if not st.ownsNothing(y):
     q.reply.answerError(ecNotReady, "the module instance still has a realization")
     return
@@ -5125,6 +5145,7 @@ proc retire(st: State, q: Request, x: Inst) =
     # [SPEC RUNTIME l.3581-3582] The host configuration still names it.
     q.reply.answerError(ecNotReady, "the host configuration names the module instance")
     return
+  st.requireReady(q)
   st.retireInst(y).isOkOr:
     st.storeFailure(error)
     q.reply.answerError(ecModule, NotPersisted)
@@ -5143,6 +5164,10 @@ proc retire(st: State, q: Request, x: Inst) =
 proc createModule(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §9.3 create_module, l.3613-3634] A fresh instance from the
   ## one accepted declaration for `module` (G55), once per request key.
+  ## [SPEC RUNTIME l.1826-1833] Authority (step 4), a key reused for another
+  ## module (row 2), readiness (step 7), then the replay, or
+  ## `declaration-unavailable` after the table (l.1822; reading R2), the
+  ## resource bound and the creation.
   let req = q.rc.createModule
   st.require(
     q,
@@ -5153,7 +5178,6 @@ proc createModule(st: State, q: Request, x: Inst) =
       module: req.module,
     ),
   )
-  st.requireReady(q)
   # [SPEC RUNTIME l.3627-3631] The key's scope is this method, this consumer
   # and this Runtime; the Runtime thread serializes requests, so one key
   # creates one instance (RUN-0663).
@@ -5164,6 +5188,7 @@ proc createModule(st: State, q: Request, x: Inst) =
           ecInvalidParams, "the request key was used for another module"
         )
       else:
+        st.requireReady(q)
         q.reply.answerEncoded(
           encode(
             LogosNSRuntimeControlCreateModuleResponse.accepted(
@@ -5174,6 +5199,7 @@ proc createModule(st: State, q: Request, x: Inst) =
           )
         )
       return
+  st.requireReady(q)
   var found = false
   var d: ModuleDeclaration
   for c in st.cfg.declarations:
@@ -5310,17 +5336,21 @@ proc establish(st: State, q: Request, x: Inst) =
     # l.426). The Loader serves only a SYSTEM_SERVICE caller as well.
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
+  if req.provider.isSome and req.provider.get.runtime_instance_id.isSome and
+      req.provider.get.runtime_instance_id.get != st.runtimeId:
+    # [IMPL] No remote Runtime is reachable: an unknown target.
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  # [SPEC RUNTIME l.1826-1833; re-pin P4 R4] The key (row 2) after the target
+  # checks of step 4 and before the route decision and discovery, which are
+  # the operation: a replay answers its retained result, behind readiness,
+  # without a new decision (l.3072).
   let replayed = st.keys.replay(x.id, req.request_key, op, q.rc.request).valueOr:
     q.reply.answerError(ecInvalidParams, error)
     return
   if replayed.isSome:
     st.requireReady(q)
     q.reply.answer(Reply(bytes: replayed.get))
-    return
-  if req.provider.isSome and req.provider.get.runtime_instance_id.isSome and
-      req.provider.get.runtime_instance_id.get != st.runtimeId:
-    # [IMPL] No remote Runtime is reachable: an unknown target.
-    q.reply.answerError(ecNotAuthorised, "not authorised")
     return
   let contract = @root
   let access = accessBytes(req.access)
@@ -5693,16 +5723,26 @@ proc renew(st: State, q: Request, x: Inst) =
       route: req.route,
     ),
   )
-  let replayed = st.keys.replay(x.id, req.request_key, op, q.rc.request).valueOr:
-    q.reply.answerError(ecInvalidParams, error)
-    return
-  if replayed.isSome:
+  # [SPEC RUNTIME l.1826-1833; re-pin P4 R4, R7] The same request replayed,
+  # behind readiness (a dropped route's replay keeps working, l.3074); then
+  # the route's ownership (step 4), a key reused with other fields (row 2),
+  # a closed or failed route (row 5), the decision, and readiness (step 7).
+  let replayed = st.keys.replay(x.id, req.request_key, op, q.rc.request)
+  if replayed.isOk and replayed.get.isSome:
     st.requireReady(q)
-    q.reply.answer(Reply(bytes: replayed.get))
+    q.reply.answer(Reply(bytes: replayed.get.get))
     return
   let r = st.route(req.route)
   if r.isNil or r.consumer != x.id:
     q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if replayed.isErr:
+    q.reply.answerError(ecInvalidParams, replayed.error)
+    return
+  if r.state in {rtClosed, rtFailed}:
+    # [SPEC RUNTIME l.1810, row 5] before the decision: a renewal that would
+    # be denied answers NOT_READY too (reading R4)
+    q.reply.answerError(ecNotReady, "the route is " & $r.state)
     return
   st.expireIfDue(r)
   if r.state == rtRevoked and r.endCode == ecNotAuthorised:
@@ -5747,8 +5787,7 @@ proc renew(st: State, q: Request, x: Inst) =
     return
   st.requireReady(q)
   if r.isTerminal:
-    # [SPEC RUNTIME §9.3 l.1915, l.3482-3483] Closed or failed: NOT_READY;
-    # revoked: by its cause (§7.5).
+    # [SPEC RUNTIME l.3482-3483] Revoked: by its cause (§7.5).
     q.reply.answerError(
       (if r.state == rtRevoked: r.endCode else: ecNotReady), "the route is " & $r.state
     )
@@ -6199,7 +6238,7 @@ proc summary(st: State, q: Request, x: Inst) =
     state: rcState(v.state),
     execution: rcExecution(v),
     realization: rcRealization(y.realizationStatus),
-    # [SPEC RUNTIME l.3523-3528 (RUN-0639); plan §2.7] The strategy the
+    # [SPEC RUNTIME l.3384 (RUN-1184; P5 claims it); plan §2.7] The strategy the
     # Module Loader realizes the instance with; the Loader itself, realized
     # by the bootstrap mechanism, is `implementation-specific` (G57). No
     # selection is package-backed, so no `package` or `signer` (RUN-0637,
@@ -6272,7 +6311,8 @@ proc setExport(st: State, q: Request, x: Inst) =
   if owner.isNil:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
-  st.requireReady(q)
+  # [SPEC RUNTIME l.1831-1832] A failure of the method's own conditions comes
+  # before readiness, which no success here would pass.
   q.reply.answerError(ecInvalidParams, "the export names no remote listener record")
 
 proc describeProvider(st: State, q: Request, x: Inst) =
@@ -6377,30 +6417,39 @@ proc settingsAnswer(st: State, q: Request, y: Inst, update: bool) =
     )
 
 proc profiledSettings(st: State, q: Request, x: Inst) =
-  ## [SPEC RUNTIME §9.3 l.2526-2604; I93; plan §2.4] Under a selected profile,
-  ## in this order: the caller and the target (`localTarget`: authority over
-  ## the exact target, RUN-0473; another Runtime's target INVALID_PARAMS
-  ## without detail, G228, RUN-0910), readiness; then for an update the
-  ## array (unknown, invalid, unordered or repeated: INVALID_PARAMS without
-  ## detail, RUN-0892, RUN-0468), the revision (RUN-0474), the bound Loader
-  ## (NOT_READY, G253 (K37)), a repeat (RUN-0475), and a new replacement:
-  ## saved, published and reconciled (G281, G285), all before the reply
-  ## (RUN-0477). Intent, its origin and the execution revision are not
-  ## touched (RUN-0481); a failed replacement of an `unloaded` instance sets
-  ## its `failure` (R7), an execution change.
+  ## [SPEC RUNTIME §9.3 l.2526-2604; I93; plan §2.4; l.1826-1833] Under a
+  ## selected profile, in this order: an unordered or repeated array
+  ## (INVALID_PARAMS without detail, RUN-1141; step 3, reading R3); the
+  ## caller and the target (`localTarget`: authority over the exact target,
+  ## RUN-0473; another Runtime's target INVALID_PARAMS without detail, G228,
+  ## RUN-0910); for a read, readiness. For an update: a setting the profile
+  ## does not define or admit (INVALID_PARAMS without detail, RUN-0892), the
+  ## revision (RUN-0474), the bound Loader (NOT_READY, G253 (K37)),
+  ## readiness, a repeat (RUN-0475), and a new replacement: saved, published
+  ## and reconciled (G281, G285), all before the reply (RUN-0477). Intent,
+  ## its origin and the execution revision are not touched (RUN-0481); a
+  ## failed replacement of an `unloaded` instance sets its `failure` (R7), an
+  ## execution change.
   let update = q.rc.m == rmUpdatePermissionSettings
   let target = if update: q.rc.updateSettings.target else: q.rc.getSettings.target
+  let xs =
+    if update:
+      fromRc(q.rc.updateSettings.permissions)
+    else:
+      @[]
+  if checkOrder(xs).isErr:
+    q.reply.answerError(ecInvalidParams, "the permission settings are not valid")
+    return
   let y = st.localTarget(
     q, x, target, (if update: aaLifecycle else: aaObserve), $q.rc.m
   ).valueOr:
     return
-  st.requireReady(q)
   if not update:
+    st.requireReady(q)
     st.settingsAnswer(q, y, update)
     return
   let req = q.rc.updateSettings
-  let xs = fromRc(req.permissions)
-  if st.profile.checkSettings(xs).isErr:
+  if st.profile.checkDefined(xs).isErr:
     q.reply.answerError(ecInvalidParams, "the permission settings are not valid")
     return
   if req.expected_revision != y.settings.revision:
@@ -6416,6 +6465,7 @@ proc profiledSettings(st: State, q: Request, x: Inst) =
       "the Module Loader's permission settings cannot change while it is bound",
     )
     return
+  st.requireReady(q)
   if y.settings.repeats(xs):
     st.settingsAnswer(q, y, update)
     return
@@ -6426,7 +6476,7 @@ proc profiledSettings(st: State, q: Request, x: Inst) =
     return
   case next.application
   of saPending:
-    # [SPEC RUNTIME l.2595-2597; RUN-0912, RUN-0914, RUN-1066; G281] Stop and
+    # [SPEC RUNTIME l.2518 (RUN-1142; P5 claims it); RUN-0914, RUN-1066; G281] Stop and
     # re-realize: a running realization is stopped as an enforcement stop with
     # no classification, intent and origin kept, asking no stop grant (CA
     # l.338-339); a stop or cleanup already running is awaited. The engine
@@ -6456,6 +6506,10 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
     return
   let update = q.rc.m == rmUpdatePermissionSettings
   let target = if update: q.rc.updateSettings.target else: q.rc.getSettings.target
+  if update and checkOrder(fromRc(q.rc.updateSettings.permissions)).isErr:
+    # [SPEC RUNTIME l.2461; l.1828] step 3, before the target
+    q.reply.answerError(ecInvalidParams, "the permission settings are not valid")
+    return
   let y = st.localTarget(
     q, x, target, (if update: aaLifecycle else: aaObserve), $q.rc.m
   ).valueOr:
@@ -6502,12 +6556,12 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
 
 # Module configuration operations (CONFIG §5; DECISIONS I87) ------------------------
 #
-# [G171 interim (TF-18), extended (TF-18 point 5)] Each operation checks, in
-# order: the caller's association; a target on another Runtime (INVALID_PARAMS,
-# G228 extended, TF-30 point 1); the method's own authority over the exact
-# target, an unknown target answered as a refused one (CFG-0057); readiness;
-# then CONFIG's table rows in their order; then, for a mutation, frame size
-# [G233], revision headroom [G234] and the write.
+# [SPEC RUNTIME l.1824-1833; CONFIG l.203, l.303-305] Each operation checks,
+# in order: the caller's association; a target on another Runtime
+# (INVALID_PARAMS, G228); the method's own authority over the exact target,
+# an unknown target answered as a refused one (CFG-0057); CONFIG's table rows
+# in their order, the revision after the first; for a mutation, frame size
+# [G233] and revision headroom [G234] (row 7); readiness; the write.
 
 proc configTarget(
     st: State,
@@ -6516,11 +6570,9 @@ proc configTarget(
     target: LogosNSRuntimeModuleInstanceAddress,
     action: AuthzAction,
 ): Opt[Inst] =
+  ## [SPEC RUNTIME l.1829] The target (step 4); each caller tests readiness
+  ## after its own rows (l.1832).
   let y = st.localTarget(q, x, target, action, $q.rc.m).valueOr:
-    return Opt.none(Inst)
-  let notReady = st.originReady(q)
-  if notReady.isSome:
-    q.reply.answerError(notReady.get.code, notReady.get.message)
     return Opt.none(Inst)
   Opt.some(y)
 
@@ -6550,8 +6602,9 @@ proc updateRefusal(
   Opt.none(EngineError)
 
 proc commitConfig(st: State, q: Request, y: Inst, next: ConfigState) =
-  ## A Runtime Control mutation: frame size [G233], headroom [G234], the
-  ## write, then the commit and its event; answered with the state.
+  ## A Runtime Control mutation: frame size [G233], headroom [G234] (row 7,
+  ## before readiness, l.1831-1832), readiness, the write, then the commit and
+  ## its event; answered with the state.
   if not next.admissible:
     q.reply.answerError(
       ecModule, "the configuration state would not fit a get_configuration response"
@@ -6560,6 +6613,7 @@ proc commitConfig(st: State, q: Request, y: Inst, next: ConfigState) =
   if not y.config.canMutate:
     q.reply.answerError(ecModule, "the configuration revision is exhausted")
     return
+  st.requireReady(q)
   let refused = st.persistConfig(y, next)
   if refused.isSome:
     q.reply.answerError(refused.get.code, refused.get.message)
@@ -6571,6 +6625,7 @@ proc configSummary(st: State, q: Request, x: Inst) =
   ## `{state_revision: 0}` [G235 interim (TL-09)].
   let y = st.configTarget(q, x, q.rc.cfgTarget, aaObserve).valueOr:
     return
+  st.requireReady(q)
   let state = (if y.configurable: summary(y.config) else: summaryWithout())
   q.reply.answerEncoded(
     encode(
@@ -6589,13 +6644,15 @@ proc configRead(st: State, q: Request, x: Inst) =
   if not y.configurable:
     q.reply.answerError(noBinding().code, noBinding().message)
     return
+  st.requireReady(q)
   q.reply.answer(Reply(config: retained(y.config)))
 
 proc configUpdate(st: State, q: Request, x: Inst) =
   ## [SPEC CONFIG §5 l.180-213] Rows 1-3 here. A `stage` ends phase 1 with
   ## the binding and the decisions' conditions: its value is validated on
-  ## the caller's thread, then committed by `configCommit` (I87 §2.7). A
-  ## `discard` is one step; with nothing staged it changes nothing (l.207).
+  ## the caller's thread, then committed by `configCommit` (I87 §2.7), which
+  ## tests readiness after every row, so phase 1 does not. A `discard` is one
+  ## step; with nothing staged it changes nothing (l.207).
   let u = q.rc.cfgUpdate
   let y = st.configTarget(q, x, u.target, aaLifecycle).valueOr:
     return
@@ -6613,6 +6670,7 @@ proc configUpdate(st: State, q: Request, x: Inst) =
     q.reply.answer(r)
     return
   if y.config.staged.isNone:
+    st.requireReady(q)
     q.reply.answer(Reply(config: retained(y.config)))
     return
   st.commitConfig(q, y, y.config.discarded)
@@ -6684,11 +6742,13 @@ func applyDeadline(st: State): Duration =
     st.cfg.applyDeadline
 
 proc applyRefusal(y: Inst, expectedRevision: uint64): Opt[EngineError] =
-  ## [SPEC CONFIG §8 l.290-298 (CFG-0093, CFG-0141)] The preconditions, in the
-  ## table's row order [G171 extended (TF-18 point 5)], with the absent
-  ## realization binding placed after NOT_READY, so an instance that is not
-  ## `ready` is NOT_READY. INVALID_PARAMS carries no detail (CFG-0143).
-  ## Nothing is invoked or changed on a refusal (CFG-0142).
+  ## [SPEC CONFIG §8 l.290-298 (CFG-0093, CFG-0141), l.303-305] The first row
+  ## of CONFIG §5's table, the revision, then §8's preconditions in the
+  ## table's row order, with the absent realization binding placed after
+  ## NOT_READY, so an instance that is not `ready` is NOT_READY (G171).
+  ## INVALID_PARAMS carries no detail (CFG-0143). Nothing is invoked or
+  ## changed on a refusal (CFG-0142). The Loader (row 6) and the revision's
+  ## headroom (row 7, `canAdvance`) follow in `configApply` (RUNTIME l.1831).
   template refuse(code: ErrorCode, text: string) =
     return Opt.some(engineError(code, text))
 
@@ -6718,9 +6778,6 @@ proc applyRefusal(y: Inst, expectedRevision: uint64): Opt[EngineError] =
     # [SPEC CONFIG l.296] Unreachable while a binding is fixed for its
     # instance (CONFIG §7); kept for the rule.
     refuse(ecVersionMismatch, "the configuration schema commitments differ")
-  if not y.config.canAdvance:
-    # [IMPL-DECISION G234 (S9-2)] its promotion could not advance the revision
-    refuse(ecModule, "the configuration revision is exhausted")
   Opt.none(EngineError)
 
 proc configApply(st: State, q: Request, x: Inst) =
@@ -6739,12 +6796,20 @@ proc configApply(st: State, q: Request, x: Inst) =
   let staged = y.config.staged.get
   let rz = y.realization
   if rz.mechanism == mLoader:
-    # [SPEC LOADER §8; plan §2.6] Through the Loader, which runs the hook on
-    # the worker that calls it.
+    # [SPEC RUNTIME l.1811, row 6] the Loader, a required system service
     let refused = st.loaderRefusal(lmApplyConfiguration)
     if refused.isSome:
       q.reply.answerError(ecNotReady, refused.get)
       return
+  if not y.config.canAdvance:
+    # [IMPL-DECISION G234 (S9-2); RUNTIME l.1812, row 7] its promotion could
+    # not advance the revision
+    q.reply.answerError(ecModule, "the configuration revision is exhausted")
+    return
+  st.requireReady(q)
+  if rz.mechanism == mLoader:
+    # [SPEC LOADER §8; plan §2.6] Through the Loader, which runs the hook on
+    # the worker that calls it.
     let input = newBlob(encodeInput(staged))
     let bytes = applyBytes(y.id, rz.id, input.bytesOf).valueOr:
       drop(input)

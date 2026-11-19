@@ -30,7 +30,8 @@
 ## - **Operations.** Each call, subscribe, unsubscribe and `observe_end` is
 ##   admitted by the Runtime first (`rc_link_admit`), in a direct transported
 ##   handle's order (RUNTIME l.1343-1347); only then does it go on the
-##   connection. A NOT_READY refusal validates the request first (G171). A
+##   connection. A NOT_READY refusal validates the request first (RUNTIME
+##   l.1828, l.1832). A
 ##   prepared call is admitted and sent from a worker once submitted; its
 ##   timeout, cancellation and first terminal decision are kept here as
 ##   `asynccall.nim` keeps them (INTERFACE l.2050-2087).
@@ -552,7 +553,7 @@ proc admit(l: ptr HLink, op: uint8, name: string): Answer =
 proc recheck(
     l: ptr HLink, bare: string, params: openArray[byte], f: InvocationFailure
 ): InvocationFailure =
-  ## [G171 interim (TF-18); I90] A call refused NOT_READY is validated before
+  ## [SPEC RUNTIME l.1828, l.1832; I90] A call refused NOT_READY is validated before
   ## readiness is reported, and one the session refused as INVALID_PARAMS
   ## gets its detail, under the route's selected contract.
   if f.code notin {ecNotReady, ecInvalidParams}:

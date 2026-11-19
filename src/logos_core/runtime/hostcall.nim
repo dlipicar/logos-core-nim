@@ -12,8 +12,9 @@
 ##    marked-payload refusal, readiness) and sends the verdict
 ##    (`admit_verdict`).
 ## 3. A refused call is answered by the host, which first checks the params
-##    of a NOT_READY one (G171). An admitted one is checked, run and answered
-##    there: the provider's result checked as on the direct path (G172), its
+##    of a NOT_READY one (RUNTIME l.1828, l.1832). An admitted one is checked, run and answered
+##    there: the provider's result checked as on the direct path (INTERFACE
+##    l.3306-3311), its
 ##    response checked against the schema, its Response committed by the
 ##    host's loop (K38 interim, G273).
 ## 4. While it runs, the call worker answers the host's scoped publication

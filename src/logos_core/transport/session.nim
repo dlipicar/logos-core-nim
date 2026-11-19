@@ -322,15 +322,21 @@ proc onRequest(c: var CalleeConn, r: Request, size: int): seq[CalleeAction] =
     return @[send(responseErr(r.id, c.termFailure))]
   let checked = c.boundary.acceptRequest(r)
   if checked.isErr:
-    c.dropParams(r)
     let rj = checked.error
     case rj.kind
     of rjClose:
+      c.dropParams(r)
       return c.close(closing(rj.failure.code, rj.msg))
     of rjRespond:
-      # Committed now: the call fails as it would in direct mode; nothing runs
-      # and no slot is needed.
+      # Committed now: nothing runs and no slot is needed.
+      c.dropParams(r)
       return @[send(responseErr(r.id, rj.failure))]
+    of rjOwner:
+      # [SPEC RUNTIME l.1827-1828; re-pin P4b] The params fail their schema:
+      # dispatched as any Request, so that the call's authorization comes
+      # first; its owner then fails it as in direct mode. No value root was
+      # computed for it.
+      discard
   if c.delayed.len == 0 and c.slotFree:
     c.inFlight[r.id] = r.methodName
     c.take(r.id)
