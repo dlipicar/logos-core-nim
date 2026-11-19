@@ -102,7 +102,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-1 | TL-01 (G158) | recognize the common type names we generate; G158 is the limit of IFC-0003, IFC-0004 and the §3.8 units | decided (A10); settled by spec text at 6cac8335 (re-pin P2): the §5.2 listing states the names, and the limit is gone |
 | 5-2 | TS-04 | follow the text: one connection per route, one per consumer for control, a session reused only by the same route (TRANSPORT l.1289; RUNTIME l.1801) | decided (B9) |
 | 5-2 | G86, real Runtimes' TLS credentials | a P-256 key and a self-signed certificate as a direct anchor (G86 as re-decided; 5-2's G324) | decided (B2) |
-| 5-2, 5-7a | marked payloads on remote paths (G277; 5-2's G327) | G277's refusal stays until the TLS processes' own erasure is shown (5-7a); nim-boringssl 0.0.16, with the opt-in `BORINGSSL_ZERO_RECORD_BUFFERS` our build sets, is pinned and the carrier erases its own copies (5-2d) | decided 2026-11-17 (owner); 5-2's half built |
+| 5-2, 5-7a | marked payloads on remote paths (G277; 5-2's G327) | `tls-tcp` and `quic` carry no marked payload (TRANSPORT l.1188-1189; RUNTIME l.1808, l.2939): re-pin P4d built the refusal (`runtime/remotemarked`), which 5-7a calls, and took 5-2d's opt-in `BORINGSSL_ZERO_RECORD_BUFFERS` off again; the carrier erases its own copies (G276) | decided 2026-11-17 (owner); settled by spec text at 6cac8335 (re-pin P4d) |
 | 5-3a | the package trust file and the remote trust input; provenance continuity | — | open (C2, C3) |
 | 5-3a | the `lcn.storage_fetch` contract has no readiness signal (G91, G136) | 5-3a adds one | planned |
 | 5-3b | NP-12 | no platform tag in the catalog document | open (C7) |
@@ -157,7 +157,8 @@ G352 and G354 (DECISIONS, "Open items").
   5-2d); pyOpenSSL as the independent peer in the suite's Nix checks (G128; 5-2c). 17 TRN units claimed: TRN-0216, TRN-0219 to TRN-0221, TRN-0223 to TRN-0226, TRN-0228,
   TRN-0233, TRN-0370 to TRN-0376. E1's other 19 units are 5-7a's, but for TRN-0222, which is 5-7b's (the
   facade process passes the invocation's Runtime as the one expected); remote paths refuse marked
-  contracts until 5-7a shows the TLS processes' erasure (G277).
+  contracts until 5-7a shows the TLS processes' erasure (G277). The re-pin's P4d removed the option again:
+  `tls-tcp` and `quic` never carry a marked payload (G327).
 - 2026-11-18, step 5-1 (I98), H, the reverse mapper, parts 5-1a to 5-1c: `lcn-gen cddl` reconstructs the
   schema documents and module binding of an explicit C header set (G317 to G322). 152 IFC units claimed,
   IFC-0887 and IFC-0904 re-evidenced in both directions; the gate is IFC 776/776 with 20 units left to 5-7a
@@ -184,6 +185,11 @@ G352 and G354 (DECISIONS, "Open items").
   checks `profile` and sends and selects no ALPN. RUN-1152 to RUN-1155, TRN-0396, TRN-0399, TRN-0400,
   IFC-0939 and IFC-0940 claimed (RUN-1154, RUN-1155 and TRN-0400 by inspection); TRN-0397 deferred to
   5-7a, TRN-0401 to TRN-0403 to step 5-12; 12 text entries cleared. P3 holds no pending entry.
+- 2026-11-19, re-pin P4d (I108), marked payloads on the remote profiles at 6cac8335: a route on `tls-tcp`
+  or `quic` whose permitted scope includes a marked method is INVALID_PARAMS (`runtime/remotemarked`, which
+  5-7a calls; G277); nim-boringssl's `BORINGSSL_ZERO_RECORD_BUFFERS` is off again and the carrier's
+  conditional refusal gone (G327); the free scan leaves BoringSSL's C++ out (G276). TXT-0157 and TXT-0129
+  cleared; RUN-1163 and TRN-0398 stay deferred to 5-7a.
 
 ## Tiers at f4f83471 (the original plan)
 

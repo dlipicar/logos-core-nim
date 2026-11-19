@@ -1364,7 +1364,7 @@ when (defined(linux) or defined(macosx)) and not defined(android) and not define
         waitFor l.close()
         bench.remove()
 
-# G327: erasure of decrypted data -----------------------------------------------------------
+# G276: the carrier's erasure of its own copies of decrypted data ------------------------
 
 proc arm(patterns: sink seq[seq[byte]]) =
   ## The patterns are taken and zeroed once registered: pass copies.
@@ -1397,49 +1397,7 @@ proc wipingHandler(sink: Sink): StreamHandler =
     sink.done = true
 
 suite "tls.erasure":
-  test "[IMPL-DECISION G327] this build's BoringSSL zeroes its record buffers, so the carrier takes marked payloads":
-    check recordBuffersErased
-    check carrierErases()
-    check requireErasure().isOk
-    var cfg = fastConfig()
-    cfg.carriesMarked = true
-    let seen = Seen()
-    let l = listen(b, seen, [a], config = cfg)
-    let s = l.dial(a, b, config = cfg).get
-    check s.roundTrip(@[1'u8]).isOk
-    waitFor s.close()
-    waitFor l.close()
-
-  test "[IMPL-DECISION G277] [IMPL-DECISION G327] a carrier whose TLS library leaves records unerased refuses marked payloads, on both sides":
-    recordErasureMissingForTests = true
-    var cfg = fastConfig()
-    cfg.carriesMarked = true
-    check not carrierErases()
-    let r = serve(
-      "127.0.0.1",
-      0,
-      serverContext(b),
-      pinnedCheck([a]),
-      keySigner(b.key, tlsServer),
-      cfg,
-      echoHandler(Seen()),
-    )
-    check r.isErr
-    check "BORINGSSL_ZERO_RECORD_BUFFERS" in r.error
-    let seen = Seen()
-    let l = listen(b, seen, [a])
-    let refused = l.dial(a, b, config = cfg)
-    check refused.isErr
-    check MarkedUnsupported in refused.error
-    # unmarked traffic is unaffected
-    let s = l.dial(a, b).get
-    check s.roundTrip(@[2'u8]).isOk
-    recordErasureMissingForTests = false
-    waitFor s.close()
-    waitFor l.close()
-    check seen.peers == @[IdA]
-
-  test "[IMPL-DECISION G327] no released block holds decrypted data: BoringSSL's record buffers and the carrier's own copies are erased":
+  test "[IMPL-DECISION G276] no released block holds decrypted data from the carrier's own copies (BoringSSL's C++ blocks are zeroed unscanned; its record buffers keep plaintext)":
     if not wipeAuditScans():
       skip()
     else:

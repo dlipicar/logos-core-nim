@@ -1024,3 +1024,15 @@ kind = "removed"
 site = "src/logos_core/runtime/rcaddress.nim"
 reading = "Split into TRN-0401 (transport `quic`) and TRN-0402 (ALPN `logos.remote.quic`), deferred with QUIC to step 5-12 (I107). A Runtime Control `quic` address with another `alpn` is refused by M8 (rcaddress.mismatching, RUN-1153)."
 compared = "TRANSPORT l.1312 at 6a4dfa28 against l.1297-1299 at 6cac8335, and rcaddress.mismatching."
+
+# P4d: the marked-method refusal and the zeroing's removal (DECISIONS I108) ---------------------------------------
+
+[[text]]
+id = "TXT-0157"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0129"
+step = "P4"
+test = "tests/test_routes.nim"

@@ -9,11 +9,11 @@
 ## calls Runtime Control as that module. Module code runs on the engine's
 ## workers, so the test modules keep their state in atomics.
 
-import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
+import std/[atomics, monotimes, os, sequtils, strutils, tables, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
 import logos_sdk/abi/[checks, types]
-import ../src/logos_core/runtime/invoke
+import ../src/logos_core/runtime/[invoke, remotemarked, routes]
 import ./support/rcaddresses
 import logos_sdk/cbor
 import logos_sdk/commitment
@@ -1537,3 +1537,72 @@ suite "run.rc: get_readiness (RUNTIME §9.3 l.3494-3496, l.3656-3675, l.3702-371
     check rc.readiness("other_module", Opt.some("m1")).code == ecNotAuthorised
     check rc.readiness("meter_module").code == ecNotAuthorised
     e.finish()
+
+suite "run.routes: marked methods on the remote profiles (RUNTIME l.1808, l.2939; TRANSPORT l.1188-1189)":
+  # [DECISIONS G277] The check 5-7a calls where remote routes and provider
+  # sessions are made (`runtime/remotemarked.nim`), over the vault contract,
+  # which marks `store`'s request, `fetch`'s response and both of `exchange`.
+  let
+    vaultSet = acceptContractSet(readFile(repo / "tests/kit/vault_module.cddl")).tryGet
+    vault = selectContract(
+      ModuleBinding(module: "vault_module", primary: Opt.some(vaultSet.primary)),
+      vaultSet.primary.root,
+      vaultSet.context,
+    ).get
+    sensorContract = selectContract(
+      ModuleBinding(
+        module: "sensor_module",
+        primary: Opt.some(sensorSet.primary),
+        interfaces: sensorSet.interfaces,
+      ),
+      sensorSet.primary.root,
+      sensorSet.context,
+    ).get
+
+  proc scope(
+      c: SelectedContract, names: varargs[string]
+  ): LogosNSRuntimeControlRouteAccess =
+    ## A method list of these methods' roots (`schema`: the well-known one).
+    var roots: seq[seq[byte]]
+    for n in names:
+      roots.add(@(c.methodRoot(n).get))
+    LogosNSRuntimeControlRouteAccess(methods: Opt.some(roots))
+
+  test "[TXT-0157] a tls-tcp or quic route whose permitted scope includes a marked method is refused, whichever payload is marked, and an absent list permits every method":
+    check vault.sensitive.len == 3
+    for profile in [RemoteTlsTcp, RemoteQuic]:
+      check withoutMarked(profile)
+      for marked in ["store", "fetch", "exchange"]:
+        check refusesMarked(profile, vault.scope(marked), vault)
+        check refusesMarked(profile, vault.scope("peek", marked, "schema"), vault)
+      check refusesMarked(profile, LogosNSRuntimeControlRouteAccess(), vault)
+      # the events lists do not matter
+      check refusesMarked(
+        profile,
+        LogosNSRuntimeControlRouteAccess(
+          publish_events: Opt.some(newSeq[seq[byte]]()),
+          subscribe_events: Opt.some(newSeq[seq[byte]]()),
+        ),
+        vault,
+      )
+
+  test "[TXT-0157] a scope without a marked method passes: narrowed by the request or by a renewal's decision, empty, or over a contract that marks nothing":
+    for profile in [RemoteTlsTcp, RemoteQuic]:
+      check not refusesMarked(profile, vault.scope("peek"), vault)
+      check not refusesMarked(profile, vault.scope("peek", "schema"), vault)
+      check not refusesMarked(profile, vault.scope("schema"), vault)
+      check not refusesMarked(profile, vault.scope(), vault)
+      # a renewal narrowed from the whole contract to the unmarked method: the
+      # caller passes the scope after the decision, so the same answer
+      check refusesMarked(profile, LogosNSRuntimeControlRouteAccess(), vault)
+      check not refusesMarked(profile, vault.scope("peek"), vault)
+      check sensorContract.sensitive.len == 0
+      check not refusesMarked(
+        profile, LogosNSRuntimeControlRouteAccess(), sensorContract
+      )
+
+  test "[TXT-0129] another remote profile may carry marked payloads: the check refuses only tls-tcp and quic":
+    for profile in ["logos.remote.erasing", "logos.remote.tls-tcp.v2", ""]:
+      check not withoutMarked(profile)
+      check not refusesMarked(profile, LogosNSRuntimeControlRouteAccess(), vault)
+      check not refusesMarked(profile, vault.scope("store", "exchange"), vault)
