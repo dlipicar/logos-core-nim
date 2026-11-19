@@ -14,6 +14,7 @@ import unittest2
 import ../src/logos_core/runtime/engine
 import logos_sdk/abi/[checks, types]
 import ../src/logos_core/runtime/invoke
+import ./support/rcaddresses
 import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, provider, surface]
@@ -168,41 +169,176 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check toResult(r).code == ecInvalidParams
     e.finish()
 
-  test "[RUN-0043] [RUN-0044] [IFC-0501] connect_remote: a valid endpoint names no enrolled Runtime (§4.4)":
+  test "[RUN-0043] [RUN-0044] [IFC-0501] [IFC-0939] [IFC-0940] [RUN-1152] [RUN-1153] [TXT-0106] connect_remote: a schema failure carries its detail; no Runtime identity, a non-remote address, this Runtime and then a profile its transport does not select are INVALID_PARAMS without it, in that order and with or without a profile; a valid endpoint names no enrolled Runtime (§4.4)":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient()
     var acquired = LogosRuntimeControlBinding()
     var root: ContractRoot
-    let bad = [0xA0'u8]
-    check toResult(
-      rc.vtable.connectRemote(
-        rc,
-        cast[ptr UncheckedArray[uint8]](unsafeAddr bad[0]),
-        1,
-        addr root,
-        addr acquired,
-      )
-    ).code == ecInvalidParams
-    let good = encode(
-      LogosNSRuntimeControlRuntimeEndpoint(
-        address: LogosNSRuntimeControlRuntimeAddress(
-          kind:
-            LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Unix_stream_runtime_address,
-          arm_logos_NS_runtime_control_Unix_stream_runtime_address:
-            LogosNSRuntimeControlUnixStreamRuntimeAddress(path: "/run/logos.sock"),
+    proc connect(bytes: seq[byte]): RcResult =
+      toResult(
+        rc.vtable.connectRemote(
+          rc,
+          cast[ptr UncheckedArray[uint8]](unsafeAddr bytes[0]),
+          csize_t(bytes.len),
+          addr root,
+          addr acquired,
         )
       )
-    ).tryGet
-    check toResult(
-      rc.vtable.connectRemote(
-        rc,
-        cast[ptr UncheckedArray[uint8]](unsafeAddr good[0]),
-        csize_t(good.len),
-        addr root,
-        addr acquired,
-      )
-    ).code == ecNotAuthorised
+
+    let schemaFailure = connect(@[0xA0'u8])
+    check schemaFailure.code == ecInvalidParams
+    check schemaFailure.detail.len > 0
+    let other = Opt.some(OtherRuntime)
+    let own = Opt.some(e.runtimeInstanceId)
+    const
+      noRuntime = "the endpoint names no Runtime"
+      notRemote = "the endpoint's address is not remote"
+      thisRuntime = "the endpoint names this Runtime"
+      mismatch = "the address does not match the profile its transport selects"
+    # Each IFC-0939 condition with no profile, with the profile its transport
+    # selects and with one it does not: the message names the first that
+    # applies, so the profile mismatch never hides one of the three.
+    for (name, bytes, message) in [
+      ("no Runtime identity", endpointOf(Opt.none(string), tlsAddress()), noRuntime),
+      (
+        "no Runtime identity, tls-tcp's profile",
+        endpointOf(Opt.none(string), tlsAddress(Opt.some(RemoteTlsTcp))),
+        noRuntime,
+      ),
+      (
+        "no Runtime identity, quic's profile on tls-tcp",
+        endpointOf(Opt.none(string), tlsAddress(Opt.some(RemoteQuic))),
+        noRuntime,
+      ),
+      (
+        "no Runtime identity, unix-stream",
+        endpointOf(Opt.none(string), unixAddress()),
+        noRuntime,
+      ),
+      ("unix-stream", endpointOf(other, unixAddress()), notRemote),
+      (
+        "unix-stream with a profile",
+        endpointOf(other, unixAddress(Opt.some("logos.local.unix-stream"))),
+        notRemote,
+      ),
+      ("unix-stream naming this Runtime", endpointOf(own, unixAddress()), notRemote),
+      ("this Runtime", endpointOf(own, tlsAddress()), thisRuntime),
+      (
+        "this Runtime, tls-tcp's profile",
+        endpointOf(own, tlsAddress(Opt.some(RemoteTlsTcp))),
+        thisRuntime,
+      ),
+      (
+        "this Runtime, tls-tcp's profile on quic",
+        endpointOf(own, quicAddress(profile = Opt.some(RemoteTlsTcp))),
+        thisRuntime,
+      ),
+      (
+        "tls-tcp naming quic",
+        endpointOf(other, tlsAddress(Opt.some(RemoteQuic))),
+        mismatch,
+      ),
+      (
+        "quic naming tls-tcp",
+        endpointOf(other, quicAddress(profile = Opt.some(RemoteTlsTcp))),
+        mismatch,
+      ),
+      (
+        "quic with another alpn",
+        endpointOf(other, quicAddress(alpn = Opt.some("h3"))),
+        mismatch,
+      ),
+    ]:
+      checkpoint name
+      let r = connect(bytes)
+      check r.code == ecInvalidParams
+      check r.detail.len == 0
+      check r.message == message
+    for bytes in [
+      endpointOf(other, tlsAddress()),
+      endpointOf(other, tlsAddress(Opt.some(RemoteTlsTcp))),
+      endpointOf(other, quicAddress(Opt.some(RemoteQuic), Opt.some(RemoteQuic))),
+    ]:
+      check connect(bytes).code == ecNotAuthorised
     check acquired.vtable == nil and acquired.state == nil
+    e.finish()
+
+  test "[RUN-1152] [RUN-1153] [TXT-0106] [IMPL-DECISION G171] M8: a listener address whose profile or alpn contradicts its transport is INVALID_PARAMS without detail, after what is authorized without the payload":
+    let e = fixtureEngine(
+      config(
+        denying(
+          deny(
+            action = Opt.some(aaRuntimeControl),
+            operation = "set_remote_listener",
+            consumer = "c2",
+          ),
+          deny(
+            action = Opt.some(aaObserve),
+            operation = "list_provider_exports",
+            consumer = "c2",
+          ),
+        )
+      )
+    )
+    let (_, rc) = e.startClient("c1")
+    let (_, refused) = e.startClient("c2")
+    let good = listenerAddress(tlsAddress(Opt.some(RemoteTlsTcp)))
+    let goodQuic =
+      listenerAddress(quicAddress(Opt.some(RemoteQuic), Opt.some(RemoteQuic)))
+    let bad = [
+      listenerAddress(tlsAddress(Opt.some(RemoteQuic))),
+      listenerAddress(quicAddress(profile = Opt.some(RemoteTlsTcp))),
+      listenerAddress(quicAddress(alpn = Opt.some("h3"))),
+    ]
+    proc setListener(a: LogosNSRuntimeControlRemoteListenerAddress): seq[byte] =
+      encode(
+        LogosNSRuntimeControlSetRemoteListenerRequest(
+          listener: LogosNSRuntimeControlRemoteListenerRecord(
+            address: a, enabled: false, runtime_control_enabled: false
+          )
+        )
+      ).tryGet
+
+    proc listExports(a: LogosNSRuntimeControlRemoteListenerAddress): seq[byte] =
+      encode(LogosNSRuntimeControlListProviderExportsRequest(listener: Opt.some(a))).tryGet
+
+    proc setExport(a: LogosNSRuntimeControlRemoteListenerAddress): seq[byte] =
+      encode(
+        LogosNSRuntimeControlSetProviderExportRequest(
+          `export`: LogosNSRuntimeControlProviderExportRecord(
+            enabled: true,
+            listener: a,
+            provider: LogosNSRuntimeModuleProviderAddress(provider: "no_such_provider"),
+          )
+        )
+      ).tryGet
+
+    # A matching address keeps the outcomes it had: a disabled listener is
+    # the default state, the export list is empty, an unknown provider is not
+    # disclosed.
+    for a in [good, goodQuic]:
+      check rcCall(rc, "set_remote_listener", setListener(a)).code == ecOk
+      check rcCall(rc, "list_provider_exports", listExports(a)).code == ecOk
+      check rcCall(rc, "set_provider_export", setExport(a)).code == ecNotAuthorised
+    for a in bad:
+      for (m, bytes) in [
+        ("set_remote_listener", setListener(a)),
+        ("list_provider_exports", listExports(a)),
+        ("set_provider_export", setExport(a)),
+      ]:
+        checkpoint m
+        let r = rcCall(rc, m, bytes)
+        check r.code == ecInvalidParams
+        check r.detail.len == 0
+        # The method's own authority first where it names no target from the
+        # payload; `set_provider_export`'s names one, so the address is
+        # judged before it [reading, Fable synthesis §14.3].
+        let denied = rcCall(refused, m, bytes)
+        if m == "set_provider_export":
+          check denied.code == ecInvalidParams
+          check denied.detail.len == 0
+        else:
+          check denied.code == ecNotAuthorised
     e.finish()
 
   test "[RUN-0794] [RUN-0900] a binding that is stopping is NOT_READY (§3.4 l.629-631)":

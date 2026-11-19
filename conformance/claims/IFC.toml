@@ -343,8 +343,9 @@ default = "claimed"
 "IFC-0506" = "deferred:tier-5"
 "IFC-0507" = "deferred:tier-5"
 "IFC-0508" = "deferred:tier-5"
-"IFC-0939" = "deferred:tier-5"
-"IFC-0940" = "deferred:tier-5"
+# IFC-0939 and IFC-0940 (the endpoint's identity, address and schema checks) need no connection and are
+# claimed with the re-pin's P3b (DECISIONS I107). IFC-0941 (authentication and transport failures keep
+# their codes) waits for a connect path (5-7a).
 "IFC-0941" = "deferred:tier-5"
 # §5.2: the borrowed Runtime Control binding is never released by the module.
 "IFC-0509" = "out-of-scope:a requirement on modules"

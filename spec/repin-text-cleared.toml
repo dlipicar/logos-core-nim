@@ -918,3 +918,109 @@ id = "TXT-0169"
 from = "P3"
 to = "P5"
 reason = "As TXT-0168: RUNTIME l.2588 on not disclosing a generated id through the Host Embedding API goes with G192 in P5."
+
+# P3b: the remote profiles (DECISIONS I107) -------------------------------------------------------------------------
+
+[[units]]
+id = "TRN-0397"
+decision = "I107"
+
+[[units]]
+id = "TRN-0401"
+decision = "I107"
+
+[[units]]
+id = "TRN-0402"
+decision = "I107"
+
+[[units]]
+id = "TRN-0403"
+decision = "I107"
+
+[[text]]
+id = "TXT-0106"
+step = "P3"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0128"
+step = "P3"
+test = "tests/test_remote_tls.nim"
+
+[[text]]
+id = "TXT-0108"
+step = "P3"
+kind = "holds"
+site = "tests/test_remote_tls.nim"
+named = "both ends authenticate through their enrollments before any Transport data"
+reading = "The selected profile authenticates the enrolled Runtime before the Transport Hello: the 5-2 carrier hands a stream to its owner only after the handshake and the enrollment check passed, so the Hello is the first frame on an authenticated stream."
+compared = "RUNTIME l.2707 at 6cac8335 against transport/tls/stream.nim (connect and serve return a stream only once the peer check passed, G328) and the named test, where neither end reads a frame before both are authenticated."
+
+[[text]]
+id = "TXT-0109"
+step = "P3"
+kind = "informative"
+reading = "What remote authentication does not establish. Nothing here treats the carrier's peer identity as authorization, package identity, schema compatibility or route authority: no Runtime or Module Host code receives it (inspection item RUN-1154)."
+compared = "RUNTIME l.2708 at 6cac8335 against the importers of transport/tls (the TLS programs and test_remote_tls only; tools/lint/layers.py keeps it out of logosd) and runtime/authz.nim, whose requests carry the consumer instance and the request."
+
+[[text]]
+id = "TXT-0110"
+step = "P3"
+kind = "informative"
+reading = "A cross-reference: those claims have their own checks under TRANSPORT §8.4 and the Runtime and contract rules, which every call already meets whatever path carried it."
+compared = "RUNTIME l.2710 at 6cac8335 against TRANSPORT §8.4 l.1183-1186 and the per-call authorization of runtime/engine.nim (require, rcPrecheck)."
+
+[[text]]
+id = "TXT-0111"
+step = "P3"
+kind = "informative"
+reading = "QUIC stream use, datagrams and migration are the QUIC profile's, which is not built (step 5-12, I107): no behaviour exists here for it to govern."
+compared = "RUNTIME l.2712 at 6cac8335 against TRANSPORT §8.4.2 and conformance/claims/TRN.toml, where TRN-0401 to TRN-0403 are deferred by name."
+
+[[text]]
+id = "TXT-0174"
+step = "P3"
+kind = "holds"
+site = "tests/test_remote_tls.nim"
+named = "both ends authenticate through their enrollments before any Transport data"
+reading = "As TXT-0108, for the Runtime Control endpoint: authentication under TRANSPORT §8.4 comes before the Transport Hello."
+compared = "RUNTIME l.2750 at 6cac8335 against the same carrier and test as TXT-0108."
+
+[[text]]
+id = "TXT-0175"
+step = "P3"
+kind = "holds"
+site = "tests/test_remote_tls.nim"
+named = "the caller refuses a target that is not the Runtime it named"
+reading = "A `runtime_instance_id` is what the caller expects, never evidence: the peer is authenticated by its certificate under an active enrollment, and a peer that authenticates as another Runtime is refused."
+compared = "RUNTIME l.2751 at 6cac8335 against transport/tls/verify.nim (expectRuntime: the named Runtime's active record, its anchor and SPKI) and the named test."
+
+[[text]]
+id = "TXT-0176"
+step = "P3"
+kind = "informative"
+reading = "No remote Runtime Control session exists yet: `connect_remote` answers before any connection (I107). The Transport Hello of every session already checks the endpoint's schema root (TRANSPORT §3.1), which a remote one will do after authentication."
+compared = "RUNTIME l.2752 at 6cac8335 against bindings.rcConnectRemoteOp and the Hello check of transport/session.nim."
+
+[[text]]
+id = "TXT-0177"
+step = "P3"
+kind = "informative"
+reading = "A successful Hello authorizes nothing: every Runtime Control method is authorized on each call against its consumer, whatever binding or session carried it."
+compared = "RUNTIME l.2753 at 6cac8335 against runtime/engine.nim (require on each method; rcPrecheck before a payload that fails validation)."
+
+[[text]]
+id = "TXT-0139"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/transport/tls/params.nim"
+reading = "Replaced by TXT-0128 and TRN-0396: the transport selects the profile, and a present `profile` must name that one; TlsTcpAddress.check refuses another."
+compared = "TRANSPORT l.1204 at 6a4dfa28 against l.1183-1184 at 6cac8335, and TlsTcpAddress.check."
+
+[[text]]
+id = "TXT-0140"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/runtime/rcaddress.nim"
+reading = "Split into TRN-0401 (transport `quic`) and TRN-0402 (ALPN `logos.remote.quic`), deferred with QUIC to step 5-12 (I107). A Runtime Control `quic` address with another `alpn` is refused by M8 (rcaddress.mismatching, RUN-1153)."
+compared = "TRANSPORT l.1312 at 6a4dfa28 against l.1297-1299 at 6cac8335, and rcaddress.mismatching."

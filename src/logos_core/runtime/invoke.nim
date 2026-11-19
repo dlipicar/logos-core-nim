@@ -39,7 +39,7 @@ import logos_sdk/cbor
 import logos_sdk/abi/[checks, types]
 import logos_sdk/iface/[accept, outcome, payload, surface]
 import ../transport/boundary
-import ./[callside, events, plumbing]
+import ./[callside, events, plumbing, rcaddress]
 
 const RcNamespace = "logos.runtime_control."
 
@@ -385,9 +385,16 @@ proc rcRequest(
   ## method's request schema (a configuration value over 8 MiB included,
   ## CFG-0025). [K19 interim; G298] The four remote listener and export
   ## methods are decoded like the others and answered after their
-  ## authorization (`engine.remoteList`, `engine.setExport`). A method this
-  ## Runtime does not perform yet is MODULE_ERROR [IMPL]. A staged configuration value is taken out into `value`: it stays
-  ## on this thread (I87).
+  ## authorization (`engine.remoteList`, `engine.setExport`). [SPEC RUNTIME
+  ## l.2704-2705; M8] A listener address whose `profile` does not name the one
+  ## its `transport` selects, or a `quic` one whose `alpn` is not
+  ## `logos.remote.quic`, is INVALID_PARAMS without validation detail. It is
+  ## answered as a payload that fails validation: what is authorized without
+  ## the payload comes first (`rcInvoke`, step 2 of l.1824-1833), a target the
+  ## payload names after it [reading, Fable synthesis §14.3]. A method this
+  ## Runtime does not perform yet is MODULE_ERROR [IMPL]. A staged
+  ## configuration value is taken out into `value`: it stays on this thread
+  ## (I87).
   let declaration = RcNamespace & bare & "_request"
   if bare.len == 0 or not rcSchema().declares(declaration) or
       not rcSchema().declares(RcNamespace & bare & "_response"):
@@ -415,6 +422,15 @@ proc rcRequest(
   else: @params)
   template call(which: RcMethod): RcCall =
     RcCall(m: which, request: request)
+
+  template mismatched(): Result[RcCall, InvocationFailure] =
+    err(
+      InvocationFailure(
+        code: ecInvalidParams,
+        message:
+          Opt.some("the address does not match the profile its transport selects"),
+      )
+    )
 
   case bare
   of $rmGetSelf:
@@ -534,14 +550,20 @@ proc rcRequest(
   of $rmSetRemoteListener:
     var c = call(rmSetRemoteListener)
     c.setListener = fromChecked(LogosNSRuntimeControlSetRemoteListenerRequest, v)
+    if c.setListener.listener.address.mismatching:
+      return mismatched()
     ok(c)
   of $rmListProviderExports:
     var c = call(rmListProviderExports)
     c.listExports = fromChecked(LogosNSRuntimeControlListProviderExportsRequest, v)
+    if c.listExports.listener.isSome and c.listExports.listener.get.mismatching:
+      return mismatched()
     ok(c)
   of $rmSetProviderExport:
     var c = call(rmSetProviderExport)
     c.setExport = fromChecked(LogosNSRuntimeControlSetProviderExportRequest, v)
+    if c.setExport.export.listener.mismatching:
+      return mismatched()
     ok(c)
   else:
     err(

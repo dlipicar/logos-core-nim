@@ -20,3 +20,7 @@ reason = "A rule about promises (§8.6 l.1357). No API, comment or document make
 [[item]]
 ids = ["TRN-0127"]
 reason = "A rule about reply paths (§5.2 l.831). The only way the callee's owner answers a call is cmdRespond (io/api.nim), which commits a Response; the caller's owner learns a call's outcome only from evResponse or evLocalFailure. An Event carries no Request identifier (the envelope has none, and publishScoped adds none), so no API can treat an Event as a call's reply."
+
+[[item]]
+ids = ["TRN-0400"]
+reason = "A conditional rule (§8.4.1 l.1245: an implementation that does not support the direct-anchor case must refuse to provision an end-entity certificate as an anchor), and its condition does not hold: this carrier supports the case (DECISIONS G324, B2). transport/tls/trust.nim takes each provisioned anchor as a certificate's complete DER, and transport/tls/verify.nim accepts a presented end-entity certificate as the anchor only by equality with that DER (l.1244), with the validity period checked (l.1243). Tested under [TRN-0224] [TRN-0370] [TRN-0374] [TRN-0375] in tests/test_remote_tls.nim ('one certificate, the direct anchor')."

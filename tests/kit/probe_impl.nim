@@ -24,6 +24,8 @@
 ## validation detail:
 ##
 ## - `rc <method> <hex params>`;
+## - `connect-remote <hex endpoint>`, `connect_remote`'s status (` acquired`
+##   after it if a binding came back);
 ## - `materialize <slot> <route> <hex root> <hex schema>`, the handle in
 ##   `slot` (0-15);
 ## - `call <slot> <method> <hex params>`;
@@ -228,6 +230,16 @@ proc command(p: ptr Probe, line: string): string =
     case w[0]
     of "rc":
       return p.rcLine(w[1], (if w.len > 2: w[2] else: ""))
+    of "connect-remote":
+      # [IFC-0939, IFC-0940] The status of `connect_remote` for the endpoint
+      # `w[1]`, its validation detail included.
+      let endpoint = unhex(w[1])
+      var root: ContractRoot
+      var acquired = LogosRuntimeControlBinding()
+      let r = p.rc.vtable.connectRemote(
+        p.rc, ptrOf(endpoint), csize_t(endpoint.len), addr root, addr acquired
+      )
+      return fullLine(r) & (if acquired.vtable == nil: "" else: " acquired")
     of "materialize":
       let root = unhex(w[3])
       let schema = unhex(w[4])

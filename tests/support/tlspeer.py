@@ -5,8 +5,8 @@ certificate it made itself, so that a mistake the carrier shares with its own te
 Test only: nothing in the core imports or ships this file.
 
     tlspeer.py keygen DIR
-    tlspeer.py server DIR PEER_CERT [--tls12] [--p256-only]
-    tlspeer.py client DIR PEER_CERT PORT [--tls12] [--no-cert] [--body-len N]
+    tlspeer.py server DIR PEER_CERT [--tls12] [--p256-only] [--alpn]
+    tlspeer.py client DIR PEER_CERT PORT [--tls12] [--no-cert] [--body-len N] [--alpn]
 
 `keygen` writes `DIR/key.pem` and `DIR/cert.der`. `server` prints `port=N` once it listens and serves
 one connection, echoing what it reads. `client` sends one frame (TRANSPORT §2.1: a 4-byte big-endian
@@ -18,6 +18,12 @@ length, then the body) and expects it back. Both end by printing a report of `ke
     group      the negotiated key-exchange group
     binding    RFC 9266 `tls-exporter`, in hex (TRANSPORT §8.4.1 l.1279-1282)
     sni        the server name a server received
+    alpn_offered  server with --alpn: the ALPN protocols the client offered, comma-separated, or none
+    alpn       client with --alpn: the protocol the server selected, or none
+
+With `--alpn` a server would select `logos.remote.tls-tcp` if a client offered it, and a client offers
+`logos.remote.tls-tcp` and `h2` (TRANSPORT §8.4.1 l.1217: that profile must not send, negotiate or
+require ALPN).
     echo       client: ok, or why the frame did not come back
     close      clean when the peer ended with close_notify, else why not
 """
@@ -37,6 +43,7 @@ from OpenSSL import SSL, crypto
 
 EXPORTER_LABEL = b"EXPORTER-Channel-Binding"
 EXPORTER_LEN = 32
+ALPN_OFFERED = [b"logos.remote.tls-tcp", b"h2"]
 DEADLINE_S = 600  # the suite kills a peer far sooner; this only stops an orphan
 
 
@@ -93,12 +100,28 @@ def context(args):
     ctx.set_verify(SSL.VERIFY_PEER | SSL.VERIFY_FAIL_IF_NO_PEER_CERT, pinned)
     if getattr(args, "p256_only", False):
         ctx.set_tmp_ecdh(ec.SECP256R1())
+    if getattr(args, "alpn", False):
+        if args.command == "server":
+            ctx.set_alpn_select_callback(select_alpn)
+        else:
+            ctx.set_alpn_protos(ALPN_OFFERED)
     if not getattr(args, "no_cert", False):
         with open(os.path.join(args.dir, "key.pem"), "rb") as f:
             ctx.use_privatekey(crypto.load_privatekey(crypto.FILETYPE_PEM, f.read()))
         with open(os.path.join(args.dir, "cert.der"), "rb") as f:
             ctx.use_certificate(crypto.load_certificate(crypto.FILETYPE_ASN1, f.read()))
     return ctx
+
+
+offered = []
+
+
+def select_alpn(_conn, options):
+    """Records what the client offered; selects the tls-tcp name if it is there."""
+    offered.extend(o.decode(errors="replace") for o in options)
+    if b"logos.remote.tls-tcp" in options:
+        return b"logos.remote.tls-tcp"
+    return SSL.NO_OVERLAPPING_PROTOCOLS
 
 
 def say(key, value):
@@ -147,6 +170,8 @@ def run_server(args):
         return
     name = conn.get_servername()
     say("sni", name.decode() if name else "")
+    if args.alpn:
+        say("alpn_offered", ",".join(offered) if offered else "none")
     try:
         while True:
             conn.sendall(conn.recv(65536))
@@ -163,6 +188,9 @@ def run_client(args):
     conn.set_connect_state()
     if not handshake(conn):
         return
+    if args.alpn:
+        selected = conn.get_alpn_proto_negotiated()
+        say("alpn", selected.decode(errors="replace") if selected else "none")
     body = bytes(i % 251 for i in range(args.body_len))
     frame = struct.pack(">I", len(body)) + body
     try:
@@ -192,6 +220,7 @@ def main():
         p.add_argument("dir")
         p.add_argument("peer_cert")
         p.add_argument("--tls12", action="store_true")
+        p.add_argument("--alpn", action="store_true")
     server.add_argument("--p256-only", action="store_true")
     client.add_argument("port", type=int)
     client.add_argument("--no-cert", action="store_true")

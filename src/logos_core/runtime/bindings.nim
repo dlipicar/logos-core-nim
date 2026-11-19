@@ -26,7 +26,11 @@ import logos_sdk/abi/[checks, types]
 import logos_sdk/cbor/utf8
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, outcome, payload, surface]
-import ./[asynccall, callside, events, hostsup, invoke, plumbing, rcevents, subend]
+import logos_sdk/kit/rc_types
+import
+  ./[
+    asynccall, callside, events, hostsup, invoke, plumbing, rcaddress, rcevents, subend
+  ]
 import ./transported
 
 export callside.AttemptServices
@@ -103,8 +107,8 @@ proc rcConnectRemoteOp(
     outBinding.state = nil
   checkConnectRemoteInput(endpoint, endpointLen, expectedRoot).isOkOr:
     return status(error)
-  # [SPEC RUNTIME l.1783-1784] A valid endpoint names no enrolled Runtime:
-  # this Runtime has no enrollments yet.
+  # [SPEC INTERFACE l.3877; IFC-0940] Decoding and schema failures carry
+  # their validation detail.
   let v = decodePayload(view(endpoint, endpointLen)).valueOr:
     return status(toFailure(error))
   rcSchema().checkPath("logos.runtime_control.runtime_endpoint", v).isOkOr:
@@ -114,6 +118,28 @@ proc rcConnectRemoteOp(
         detail: Opt.some(invalidParamsDetail(iprSchemaMismatch, Opt.some(error))),
       )
     )
+  # [SPEC INTERFACE l.3874-3876; IFC-0939] A schema-valid endpoint that
+  # omits the Runtime identity, selects a non-remote address or names this
+  # Runtime is INVALID_PARAMS without validation detail, in that order; after
+  # those three, so is a remote address whose `profile` or `alpn`
+  # contradicts its transport [reading: RUNTIME l.2704, Fable synthesis
+  # §14.2]. All before anything that can answer NOT_AUTHORISED.
+  let ep = fromChecked(LogosNSRuntimeControlRuntimeEndpoint, v)
+  let remote = ep.address.remoteAddress
+  if ep.runtime_instance_id.isNone:
+    return status(ecInvalidParams, "the endpoint names no Runtime")
+  if remote.isNone:
+    return status(ecInvalidParams, "the endpoint's address is not remote")
+  let s = servicesOf(binding)
+  if ep.runtime_instance_id.get == s.engine.call(Request(kind: rqIdentity)).id:
+    return status(ecInvalidParams, "the endpoint names this Runtime")
+  if remote.get.mismatching:
+    return status(
+      ecInvalidParams, "the address does not match the profile its transport selects"
+    )
+  # [SPEC RUNTIME l.1783-1784] A valid endpoint names no enrolled Runtime:
+  # this Runtime has no enrollments yet. [IFC-0941 deferred] Authentication
+  # and transport failures keep their codes once a connect path exists.
   status(ecNotAuthorised, "not authorised")
 
 proc rcReleaseOp(binding: ptr LogosRuntimeControlBinding) {.cdecl.} =
