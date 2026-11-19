@@ -4,7 +4,7 @@
 #!fmt: off
 const
   # conformance/requirements/*.jsonl: the spec revision
-  SpecRevision* = "6a4dfa2846ab9f1f679ad285f8caa848ee8544ad"
+  SpecRevision* = "6cac8335af8cea0e5d4e2f9ccb2e584c5b27a7c2"
   # spec-module-hash-profile.md §2
   HashProfileId* = "logos.hash-profile.2026-08.choice-index"
   # spec-module-commitment-model.md §6

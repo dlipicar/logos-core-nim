@@ -30,6 +30,8 @@ default = "claimed"
 "§5.2.1" = "out-of-scope:a MAY convenience mode not provided (singleton direct calls, l.1094)"
 
 [units]
+# Stay deferred past the re-pin to 6cac8335; work item 5-7a owns them (spec/repin-pending.toml [deferred]).
+"RUN-1163" = "deferred:tier-5"
 # RUN-0007, RUN-0008 and RUN-0014 (the same contract across execution modes) are claimed with step
 # 4b-2b: one scripted sequence through a direct and a transported handle (DECISIONS I90).
 # Remote only (fable-scope §7): `connect_remote` (l.234-241) and the rule that a local route never

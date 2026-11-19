@@ -675,6 +675,13 @@ package = "core"
 file = "spec-module-package-manager.md"
 section = "§15"
 
+# PM §12: the Runtime handoff records, new at 6cac8335. Written by re-pin step P8.
+[[mirror]]
+out = "PKG/12.runtime-handoff.cddl"
+package = "core"
+file = "spec-module-package-manager.md"
+section = "§12"
+
 # PM §14: the package error codes the package/ modules report.
 [[mirror]]
 out = "PKG/14.package-errors.cddl"
@@ -802,6 +809,13 @@ out = "RNT/9.3.runtime-control.cddl"
 package = "sdk"
 file = "spec-module-runtime.md"
 section = "§9.3"
+
+# RUNTIME §9.3.7: remote enrollment, new at 6cac8335. Written by re-pin step P4.
+[[mirror]]
+out = "RNT/9.3.7.runtime-enrollment.cddl"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "§9.3.7"
 
 [[mirror]]
 out = "RNT/13.host-handle.h"
