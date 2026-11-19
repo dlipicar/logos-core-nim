@@ -99,7 +99,7 @@
           testFiles = testFilesIn "tests" ++ testFilesIn "sdk/tests";
           # Both memory managers (refc modules link this code), and a release
           # build: INTERFACE §4.5 forbids build-mode-dependent bytes.
-          testVariants = [
+          baseVariants = [
             {
               suffix = "orc";
               flags = "--mm:orc";
@@ -112,11 +112,11 @@
               suffix = "orc-release";
               flags = "--mm:orc -d:release";
             }
-          ]
+          ];
           # Sanitizers (switches in config.nims) on Linux: macOS has no MemorySanitizer, and
           # nixpkgs' clang 21 sanitizer runtimes do not start on macOS 27, so the Mac runs
           # `nimble test_asan` and `nimble test_tsan` with the Xcode toolchain instead.
-          ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+          sanitizerVariants = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             {
               suffix = "asan";
               flags = "--mm:orc -d:asan";
@@ -167,6 +167,7 @@
                 ];
             }
           ];
+          testVariants = baseVariants ++ sanitizerVariants;
           testChecks = lib.listToAttrs (
             lib.concatMap (
               file:
@@ -411,8 +412,11 @@
                   nimDerivation
                   nimSources
                   testFiles
-                  testVariants
                   ;
+                # Not the host's sanitizers (DECISIONS I46): the NDK's clang has no
+                # MemorySanitizer for Android, and links the others' runtimes as shared
+                # libraries, which the suites' static check refuses (G124).
+                testVariants = baseVariants;
               }
             else
               null;

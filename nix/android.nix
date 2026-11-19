@@ -59,9 +59,9 @@ let
     };
   };
 
-  # Every suite, under every host variant, for one ABI. nixpkgs' Nim takes the C
-  # and C++ compilers from $CC and $CXX and links with $CC; the NDK's clang finds
-  # its own sysroot.
+  # Every suite, under orc, refc and orc-release (the flake's baseVariants), for
+  # one ABI. nixpkgs' Nim takes the C and C++ compilers from $CC and $CXX and
+  # links with $CC; the NDK's clang finds its own sysroot.
   suites =
     abi:
     let
