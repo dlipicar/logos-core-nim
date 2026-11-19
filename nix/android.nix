@@ -42,8 +42,10 @@ let
     includeCmake = false;
   };
 
-  # [IMPL] The oldest Android the binaries target: 10 (API 29).
-  minApi = "29";
+  # The oldest Android the binaries target: 13 (API 33), the owner's floor (I46,
+  # revised 2026-11-19). Bionic has backtrace(), which the wipe audit
+  # (sdk/src/logos_sdk/base/wipeaudit.c) needs, only from API 33.
+  minApi = "33";
   ndkBin = "${sdk.ndk-bundle}/libexec/android-sdk/ndk-bundle/toolchains/llvm/prebuilt/linux-x86_64/bin";
 
   abis = {
