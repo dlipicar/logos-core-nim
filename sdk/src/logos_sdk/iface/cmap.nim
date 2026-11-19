@@ -1,5 +1,5 @@
 ## INTERFACE §2, §2.1-§2.6, §3.2, §5.2: the canonical C mapping of an accepted
-## schema set or module binding, C mapping revision 3.
+## schema set or module binding, C mapping revision 4.
 ##
 ## Derived here: semantic stems and their families (`_MAP`, `_BSTR`, `_LIST`,
 ## `_TUPLE`, `_CHOICE`, `_EVENT`, `_KIND_t`), choice arm labels in symbolic or
@@ -8,8 +8,8 @@
 ## role, implementation and sensitivity constants, the keyword escape, the
 ## contract-header frame (mapping-revision and commitment-context checks,
 ## document guards with their root macros, the C++ linkage wrapper), and
-## `logos_types.h` (the fixed §5.2 and §2.3 blocks plus the common schema's
-## named types), each method's `_FN_t` typedef (§2.4), and for a module
+## `logos_types.h` (the §5.2 listing, copied, with the §2.3 empty types and
+## the common schema's types in it), each method's `_FN_t` typedef (§2.4), and for a module
 ## binding its `_CALL_` provider functions and `_MODULE_` symbols (§2.4, §2.6).
 ## The fixed block carries the response owner (§2.7.1) and the asynchronous
 ## and invocation-context ABI (§2.9); optional helpers (App A) are not derived.
@@ -25,8 +25,8 @@
 ## largest discriminant would not fit `uint32_t` fails explicitly. Running out
 ## of memory aborts the process; no partial header is ever returned.
 ##
-## Every header is stamped PROVISIONAL ABI: the common-name projection (G158) is
-## open.
+## No header carries a PROVISIONAL stamp: the common names it stood for (G158)
+## are the §5.2 listing's at 6cac8335 (DECISIONS I26).
 
 {.push raises: [].}
 
@@ -37,11 +37,9 @@ import ../pins
 import ../commitment
 import ./names
 
-const
-  ProvisionalStamp* = "PROVISIONAL ABI (spec " & SpecRevision[0 .. 7] & ")"
-  CMappingRevision* = 3
-    ## [SPEC INTERFACE §2] `LOGOS_C_MAPPING_REVISION` of this mapping (tests
-    ## compare it with the §2 and §5.2 mirrors)
+const CMappingRevision* = 4
+  ## [SPEC INTERFACE §2] `LOGOS_C_MAPPING_REVISION` of this mapping (tests
+  ## compare it with the §2 and §5.2 mirrors)
 
 type
   CDocument* = object
@@ -106,7 +104,7 @@ type
 
   DocView = object
     model: SchemaModel
-    common: bool ## the pinned common document (G158 names)
+    common: bool ## the pinned common document (the §5.2 listing's names)
     external: bool ## declared by `logos_types.h`, not by this header
     cns: string ## the C namespace component
 
@@ -230,9 +228,11 @@ func contextMarkers*(): seq[string] =
 func stemOf(g: Gen, doc: int, name: string): string =
   ## [SPEC INTERFACE §2.1] A named declaration's stem: the C namespace component,
   ## one underscore and the capitalized local name.
-  ## [IMPL-DECISION G158, pending] The pinned common document's stem is its
-  ## local name unchanged, which gives the three names §2.1 fixes
-  ## (`logos_error_code_t`, `logos_error_detail_t`, `logos_schema_commitment_t`).
+  ## [SPEC INTERFACE §2.1 l.801-814] The pinned common document's stem is its
+  ## local name unchanged, which gives the six names §2.1 fixes; its tags,
+  ## discriminant types, arm constants and literal macros are the §5.2
+  ## listing's (`structDef`, `choiceDef`, `literalMacro`), checked against the
+  ## listing (`buildCommonGen`).
   let v = g.docs[doc]
   let local = localName(name, v.model.namespace)
   if v.common:
@@ -418,8 +418,13 @@ func exactBstr(n: SchemaNode): Opt[uint64] =
 
 proc literalMacro(g: var Gen, o: Owner, path: openArray[string], d: ScalarData) =
   ## [SPEC INTERFACE §2.1, §2.3] `LOGOS_LITERAL_<stem>`, with the literal's
-  ## complete path.
-  let name = "LOGOS_LITERAL_" & stemPath(o.stem, path)
+  ## complete path; in the pinned common document the listing's
+  ## `LOGOS_<STEM AND PATH>_LITERAL` (§2.1 l.813-814, §5.2).
+  let name =
+    if g.docs[o.doc].common:
+      "LOGOS_" & stemPath(o.stem, path).toUpperAscii & "_LITERAL"
+    else:
+      "LOGOS_LITERAL_" & stemPath(o.stem, path)
   if name in g.macros:
     g.errors.add("C identifier collision: " & name & " is derived twice")
   g.macros[name] = (o.doc, literalC(d)[1])
@@ -560,7 +565,12 @@ proc structDef(
       key: key,
       doc: o.doc,
       typeName: "logos_" & stem & "_t",
-      tag: "logos_" & stem & "_" & family,
+      tag:
+        # [SPEC INTERFACE §2.1 l.813-814, §5.2] the listing's fixed tags
+        if g.docs[o.doc].common:
+          "logos_" & family.toLowerAscii & "_" & stem
+        else:
+          "logos_" & stem & "_" & family,
       members: emptied(ms),
     )
   )
@@ -573,13 +583,22 @@ proc choiceDef(
   ## `kind` member and, when any arm has payload storage, the `value` union.
   ## Symbolic form numbers the labels in ASCII order; indexed form uses the
   ## canonical arm index. A direct literal arm has a literal macro and no member.
+  ## [SPEC INTERFACE §2.1 l.813-814, §5.2] The pinned common document's
+  ## choices keep the listing's names instead: `logos_<stem>_kind_t`,
+  ## `LOGOS_<STEM>_ARM_<k>`, `arm_<k>` and tag `logos_choice_<stem>`, where `k`
+  ## is the canonical arm index and the discriminant value.
   if n.arms.len > 0 and uint64(n.arms.len - 1) > uint64(high(uint32)):
     g.errors.add(
       "mapping limit: the choice " & stem & " has more arms than a uint32_t " &
         "discriminant numbers"
     )
     return
-  let (symbolic, steps) = g.armSteps(o.doc, n)
+  let common = g.docs[o.doc].common
+  let (symbolic, steps) =
+    if common:
+      (false, toSeq(0 ..< n.arms.len).mapIt($it))
+    else:
+      g.armSteps(o.doc, n)
   let order = discriminantOrder(symbolic, steps)
   var cases: seq[(string, uint64)]
   var caseArms: seq[int]
@@ -587,11 +606,18 @@ proc choiceDef(
   for value, i in order:
     let a = n.arms[i]
     let (step, constant, member) =
-      if symbolic:
+      if common:
+        ("_ARM_" & steps[i], "", "arm_" & steps[i])
+      elif symbolic:
         ("_AR_" & steps[i], "_CASE_" & steps[i], "arm_" & steps[i])
       else:
         ("_AR" & steps[i], "_CASE" & steps[i], "arm_" & steps[i])
-    cases.add(("LOGOS_ARM_" & stem & constant, uint64(value)))
+    cases.add(
+      if common:
+        ("LOGOS_" & stemPath(stem, [step]).toUpperAscii, uint64(value))
+      else:
+        ("LOGOS_ARM_" & stem & constant, uint64(value))
+    )
     caseArms.add(i)
     if a.kind == snLiteral:
       g.literalMacro(o, path & step, a.literal)
@@ -603,9 +629,9 @@ proc choiceDef(
       key: key,
       doc: o.doc,
       typeName: "logos_" & stem & "_t",
-      tag: "logos_" & stem & "_CHOICE",
+      tag: (if common: "logos_choice_" & stem else: "logos_" & stem & "_CHOICE"),
       members: arms,
-      kindName: "logos_" & stem & "_KIND_t",
+      kindName: "logos_" & stem & (if common: "_kind_t" else: "_KIND_t"),
       cases: cases,
       caseArms: caseArms,
     )
@@ -1123,8 +1149,22 @@ proc newGen(views: seq[DocView], roots: seq[Digest]): Gen =
         g.byImport[importKey(roots[i], declarationRoot(v.model, d))] = (i, d.name)
   g
 
+proc declarationsOf(g: Gen): seq[string] =
+  ## The declarations of a common-schema `Gen`: constraint typedefs, then the
+  ## literal macros and definitions in dependency order.
+  doAssert g.errors.len == 0, "the pinned common schema maps to C"
+  var res: seq[string]
+  for name in toSeq(g.constraints.keys).sorted:
+    res.add(g.constraints.at(name))
+  let gs = g.groups(@[]).valueOr:
+    raiseAssert "the pinned common schema has a dependency order"
+  res & gs[0].flat
+
 proc commonGen(): Gen =
-  ## The pinned common schema's named types, which `logos_types.h` declares.
+  ## The pinned common schema's named types. Their structure is derived here,
+  ## since `cmirror` and `rmap` need to know which schema node each C item
+  ## stands for; their names follow the §5.2 listing (l.801-814), and a test
+  ## and the generation of the common mirrors check that the two agree.
   let ctx = pinnedContext()
   var g = newGen(
     @[DocView(model: ctx.commonModel, common: true, external: false, cns: "logos")],
@@ -1138,18 +1178,10 @@ proc commonGen(): Gen =
   g
 
 proc commonDeclarations*(): seq[string] =
-  ## [SPEC INTERFACE §5.2] The canonical declarations of every named type in the
-  ## pinned common schema except `logos.error_code`, with their constraint and
-  ## inline support declarations. [IMPL-DECISION G158, pending] Their names use
-  ## the local name as the stem.
-  let g = commonGen()
-  doAssert g.errors.len == 0, "the pinned common schema maps to C"
-  var res: seq[string]
-  for name in toSeq(g.constraints.keys).sorted:
-    res.add(g.constraints.at(name))
-  let gs = g.groups(@[]).valueOr:
-    raiseAssert "the pinned common schema has a dependency order"
-  res & gs[0].flat
+  ## [IMPL] The mapped common schema's declarations (the structure `cmirror`
+  ## and `rmap` use), which equal the listing's common section without the
+  ## §2.3 empty types; `logos_types.h` prints the listing itself.
+  commonGen().declarationsOf
 
 func fixedBlock(): (string, string) =
   ## [SPEC INTERFACE §5.2] The fixed C block without its per-module
@@ -1175,15 +1207,12 @@ func fixedBlock(): (string, string) =
   (head.join("\n"), lines[close .. ^1].join("\n"))
 
 proc logosTypesHeader*(): string =
-  ## [SPEC INTERFACE §5.2] `logos_types.h`: the fixed block, the §2.3 empty
-  ## types and the common schema's types, inside the C++ linkage wrapper.
+  ## [SPEC INTERFACE §5.2] `logos_types.h` is the fixed listing, copied and
+  ## never derived (M2): its §2.3 empty types and the common schema's types
+  ## are part of it, so nothing is appended (they would be declared twice).
   let (head, close) = fixedBlock()
-  "/* logos_types.h: generated by lcn-gen from INTERFACE §2.3, §5.1 and §5.2.\n" &
-    " * " & ProvisionalStamp & ". Do not edit. */\n" & "#ifndef LOGOS_TYPES_H\n" &
-    "#define LOGOS_TYPES_H\n\n" & head &
-    "\n\n/* -- Empty values (INTERFACE §2.3) -- */\n\n" & LogosTypesEmpty.strip & "\n\n" &
-    "/* -- Common schema types (INTERFACE §5.1; names: G158 interim) -- */\n\n" &
-    commonDeclarations().join("\n\n") & "\n\n" & close &
+  "/* logos_types.h: copied by lcn-gen from INTERFACE §5.2. Do not edit. */\n" &
+    "#ifndef LOGOS_TYPES_H\n" & "#define LOGOS_TYPES_H\n\n" & head & "\n\n" & close &
     "\n\n#endif /* LOGOS_TYPES_H */\n"
 
 # Contract headers ----------------------------------------------------------------
@@ -1470,7 +1499,7 @@ proc contractHeader*(s: CSchemaSet): Result[string, string] =
   let gen = ?generate(s)
   let name = s.headerName
   var h =
-    "/* " & name & "_types.h: generated by lcn-gen. " & ProvisionalStamp & ".\n" &
+    "/* " & name & "_types.h: generated by lcn-gen.\n" &
     " * INTERFACE §2.1-§2.6, §3.2: C types, method typedefs and, for a module\n" &
     " * binding, its provider functions and module symbols. Do not edit. */\n\n" &
     "#include \"logos_types.h\"\n" & revisionCheck() & "\n"
@@ -1529,7 +1558,7 @@ proc callsHeader*(s: CSchemaSet): Result[string, string] =
   let name = s.headerName
   let guard = "LCN_" & name.toUpperAscii & "_CALLS_H"
   var h =
-    "/* " & name & "_calls.h: generated by lcn-gen. " & ProvisionalStamp & ".\n" &
+    "/* " & name & "_calls.h: generated by lcn-gen.\n" &
     " * INTERFACE §2.7.2, App A.5: a typed call helper over a route handle and its\n" &
     " * cleanup helper for each method of " & name & "_types.h's exposed contracts.\n" &
     " * Derived helpers (§2.1), not part of the header set for schema\n" &

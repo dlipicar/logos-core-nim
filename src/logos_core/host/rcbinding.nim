@@ -33,7 +33,7 @@ import results
 import logos_sdk/abi/[checks, cstatus, types]
 import logos_sdk/base/perthread
 import logos_sdk/hash/hashinput
-import ../runtime/[entryframe, hostio]
+import ../runtime/[entryframe, hostio, subend]
 import ../transport/io/api except decodeMessage
 import ./[consumer, endpoint, selected, state]
 
@@ -566,6 +566,20 @@ proc rcPrepareCallOp(
   outCall.state = c
   LogosResult()
 
+var bindingSubEnd: SubscriptionEndSlot
+  ## [SPEC INTERFACE §2.5 l.1476] the binding's registration; the host has one
+  ## instance and one binding
+
+proc rcObserveSubscriptionEndOp(
+    binding: ptr LogosRuntimeControlBinding,
+    handler: LogosSubscriptionEndHandler,
+    userData: pointer,
+): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE §2.5 l.1476-1484] Kept in the host (`subend`).
+  bindingEnter()
+  {.cast(gcsafe).}:
+    bindingSubEnd.register(handler, userData)
+
 var rcVtable = LogosRuntimeControlVtable(
   abiVersion: RuntimeControlVtableAbiVersion,
   structSize: csize_t(sizeof(LogosRuntimeControlVtable)),
@@ -577,6 +591,7 @@ var rcVtable = LogosRuntimeControlVtable(
   connectRemote: rcConnectRemoteOp,
   release: rcReleaseOp,
   prepareCall: rcPrepareCallOp,
+  observeSubscriptionEnd: rcObserveSubscriptionEndOp,
 )
 
 # Publish and invocation access -------------------------------------------------------------
@@ -586,12 +601,15 @@ proc publishOp(
     eventName: cstring,
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
-) {.cdecl.} =
-  ## [SPEC RUNTIME §7.3, l.1221-1231] An ordinary publication: delivered to
-  ## each subscriber session whose selected contract takes the payload and
-  ## whose delivery the Runtime admits; one that cannot be delivered is the
-  ## Runtime's diagnostic. Returns once every admitted Event is taken by the
-  ## loop (no result).
+): CErrorCode {.cdecl.} =
+  ## [SPEC RUNTIME §7.3 l.1140-1150; INTERFACE §5.2] An ordinary publication:
+  ## delivered to each subscriber session whose selected contract takes the
+  ## payload and whose delivery the Runtime admits; one that cannot be
+  ## delivered is the Runtime's diagnostic for that session only. Returns once
+  ## every admitted Event is taken by the loop.
+  ## [DECISIONS I105, interim until re-pin P3] The result, as `events.publishOp`
+  ## gives it: INVALID_PARAMS when the Runtime refused the event name as
+  ## INVALID_PARAMS, or for a null or empty payload; LOGOS_OK otherwise.
   bindingEnter()
   let id = nextId()
   let a = request(
@@ -602,8 +620,17 @@ proc publishOp(
     ),
     id,
   )
-  if a.failed or a.targets.len == 0:
-    return
+  if a.failed:
+    return CErrorCode(
+      if a.code == uint8(ord(ecInvalidParams)):
+        ord(ecInvalidParams)
+      else:
+        ord(ecOk)
+    )
+  if cborData == nil or cborDataLen == 0:
+    return CErrorCode(ord(ecInvalidParams))
+  if a.targets.len == 0:
+    return CErrorCode(ord(ecOk))
   let name = $eventName # the Runtime checked it
   let data = bytesOf(cborData, cborDataLen)
   var checked: Table[Digest, ErrorCode]
@@ -634,10 +661,11 @@ proc publishOp(
     id2,
   )
   if b.failed:
-    return
+    return CErrorCode(ord(ecOk))
   for conn in b.admitted:
     if publishConn(conn, name, data) == sbStopped:
-      return
+      break
+  CErrorCode(ord(ecOk))
 
 var
   bindingState: int ## [SPEC INTERFACE §5.2] non-null; the host has one instance

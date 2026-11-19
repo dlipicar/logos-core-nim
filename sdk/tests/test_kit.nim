@@ -10,7 +10,9 @@ import logos_sdk/cbor
 import logos_sdk/iface/[accept, provider]
 from logos_sdk/codegen/callrt import
   arenaBlocks, failArenaAllocation, CallArena, text, release
-from logos_sdk/codegen/common_mirrors import commonMirrorLayout
+from logos_sdk/codegen/common_mirrors import
+  commonMirrorLayout, logos_invalid_params_reason_t, cIn_logos_invalid_params_reason_t,
+  cOut_logos_invalid_params_reason_t
 from logos_sdk/codegen/sdkroot import SdkImportRoot
 import logos_sdk/testing/[kitruntime, specdata, tunerconfig], ./support/typedharness
 import logos_sdk/testing/testdirs
@@ -567,6 +569,23 @@ suite "ifc.kit: events and the invocation context (INTERFACE §2.5, §2.9.3, App
     withLock publishedLock:
       check published.len == 0
 
+  test "[TXT-0061] [TXT-0568] [RUN-0242] the typed publish helper returns the callback's result":
+    ## [SPEC INTERFACE App A.4 l.4113; RUNTIME §7.3] `meter` channel 15 returns
+    ## its publish helper's failure as the read's; a code outside the shared
+    ## registry is MODULE_ERROR (§5.1).
+    let ctx = newMeter(input())
+    publishResult.store(int32(ord(ecInvalidParams)))
+    let refused = meterCall(ctx, "read", read(15))
+    check refused.code == ecInvalidParams
+    publishResult.store(42)
+    check meterCall(ctx, "read", read(15)).code == ecModule
+    publishResult.store(int32(ord(ecOk)))
+    check meterCall(ctx, "read", read(15)).status.isOk
+    meterDestroy(ctx)
+    withLock publishedLock:
+      check published.len == 3
+      published.setLen(0)
+
   test "the caller, cancellation and scoped publication come from the current invocation":
     withLock publishedLock:
       published.setLen(0)
@@ -916,8 +935,9 @@ proc cExpr(key: string): string =
   else:
     "offsetof(" & t & ", " & m & ")"
 
-proc cFacts(facts: seq[(string, int)]): Result[seq[string], string] =
-  ## Each fact as the C compiler computes it from the generated headers.
+proc cRun(statements: seq[string], name = "layout"): Result[seq[string], string] =
+  ## The output lines of `statements` run in `main`, compiled against the
+  ## generated headers.
   let cc = cCompiler()
   if cc.len == 0:
     return err("no C compiler on PATH")
@@ -927,10 +947,10 @@ proc cFacts(facts: seq[(string, int)]): Result[seq[string], string] =
     "#include <stdio.h>\n#include <stddef.h>\n" &
     "#include \"meter_module_types.h\"\n#include \"sensor_module_types.h\"\n" &
     "#include \"shapes_module_types.h\"\nint main(void) {\n"
-  for (key, _) in facts:
-    src.add "  printf(\"" & key & " %zu\\n\", (size_t)" & cExpr(key) & ");\n"
+  for stmt in statements:
+    src.add "  " & stmt & "\n"
   src.add "  return 0;\n}\n"
-  let base = dir / "layout"
+  let base = dir / name
   writeFile(base & ".c", src)
   let exe = base & (when defined(windows): ".exe" else: "")
   let generated = repoDir / generatedDir
@@ -944,6 +964,50 @@ proc cFacts(facts: seq[(string, int)]): Result[seq[string], string] =
   if rc2 != 0:
     return err(run)
   ok(run.strip.splitLines)
+
+proc cFacts(facts: seq[(string, int)]): Result[seq[string], string] =
+  ## Each fact as the C compiler computes it from the generated headers.
+  var statements: seq[string]
+  for (key, _) in facts:
+    statements.add "printf(\"" & key & " %zu\\n\", (size_t)" & cExpr(key) & ");"
+  cRun(statements)
+
+suite "ifc.kit: the common choices' discriminants (INTERFACE §2.3, §5.2)":
+  test "[TXT-0578] invalid_params_reason: the listing's arm constants, its literals and the converters agree":
+    ## [SPEC INTERFACE §2.3 l.1128, §5.2] The common choices use the canonical arm
+    ## index as the discriminant: malformed-cbor 0, schema-mismatch 1,
+    ## non-deterministic-cbor 2, configuration-schema-mismatch 3.
+    const literals = [
+      "malformed-cbor", "schema-mismatch", "non-deterministic-cbor",
+      "configuration-schema-mismatch",
+    ]
+    var want: seq[string]
+    var statements: seq[string]
+    for k, lit in literals:
+      let c = cIn_logos_invalid_params_reason_t(
+        logos_invalid_params_reason_t(kind: uint32(k)), 0
+      )
+      check c.isOk and c.get == cbor(lit)
+      var a: CallArena
+      var dst: logos_invalid_params_reason_t
+      check cOut_logos_invalid_params_reason_t(a, cbor(lit), dst, 0).isOk
+      check dst.kind == uint32(k)
+      a.release()
+      want.add($k & " " & lit)
+      statements.add(
+        "printf(\"%u %s\\n\", (unsigned)LOGOS_INVALID_PARAMS_REASON_ARM_" & $k &
+          ", LOGOS_INVALID_PARAMS_REASON_ARM_" & $k & "_LITERAL);"
+      )
+    check cIn_logos_invalid_params_reason_t(logos_invalid_params_reason_t(kind: 4), 0).isErr
+    when deviceTarget:
+      skip()
+    else:
+      let got = cRun(statements, "reasons")
+      if got.isErr:
+        checkpoint got.error
+        fail()
+      else:
+        check got.get == want
 
 suite "ifc.kit: the converters' C layout (INTERFACE §2.3) [IMPL]":
   test "[IFC-0934] every mirror's size, alignment and member offsets match the generated headers":

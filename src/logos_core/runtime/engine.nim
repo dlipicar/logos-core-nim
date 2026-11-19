@@ -8208,6 +8208,16 @@ proc hostedAdmit(st: State, q: Request) =
     if code.isSome:
       q.reply.answerError(code.get, "the handle's connection has ended")
       return
+  of 4:
+    # [SPEC INTERFACE l.1459, l.1477; DECISIONS I105] A subscription-end
+    # registration: refused as `observe_end` would be on a terminal handle;
+    # the registration is the host's.
+    if l.observed.isSome:
+      q.reply.answerError(l.observed.get, "the handle's path has ended")
+      return
+    if r.isTerminal:
+      q.reply.answerError(r.endCode, "the route is " & $r.state)
+      return
   of 3:
     if l.observed.isSome:
       q.reply.answerError(l.observed.get, "the handle's path has ended")
@@ -8486,6 +8496,24 @@ proc observeEnd(st: State, q: Request) =
   r.handles.add(q.handle)
   st.endRegs.inc(r.consumer)
   inc st.endRegsTotal
+  q.reply.answer(Reply())
+
+proc subEndAdmit(st: State, q: Request) =
+  ## [SPEC INTERFACE §2.5 l.1459, l.1477; DECISIONS I105] A subscription-end
+  ## registration on a terminal route handle returns the code `observe_end`
+  ## would, and nothing is installed. The registration itself is the handle's
+  ## (`subend`); the Runtime keeps nothing of it.
+  let r = st.route(q.route)
+  if r.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  let l = st.links.getOrDefault(linkOf(q.handle))
+  if l != nil and l.observed.isSome:
+    q.reply.answerError(l.observed.get, "the handle's path has ended")
+    return
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
   q.reply.answer(Reply())
 
 proc releaseHandle(st: State, q: Request) =
@@ -9680,6 +9708,8 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.admit(q)
   of rqObserveEnd:
     st.observeEnd(q)
+  of rqSubEndAdmit:
+    st.subEndAdmit(q)
   of rqReleaseHandle:
     st.releaseHandle(q)
   of rqHostedResult:
@@ -10563,9 +10593,9 @@ proc ioEvent(st: State, ev: sink IoEvent) =
   of IoEventKind.evPublishResult:
     st.publishResult(ev)
   of IoEventKind.evPublishFailed:
-    # [SPEC RUNTIME l.1227] An ordinary publication has no result: one not
-    # committed on a connection is recorded (G165: an oversized one closed
-    # that connection).
+    # [SPEC RUNTIME §7.3 l.1148-1150] A failure for one subscriber route does
+    # not change the publisher's result: it is recorded and the event dropped
+    # for that route (G165: an oversized one closed that connection).
     st.diagnose(
       "a publication of " & ev.pubFailEvent & " was not delivered on connection " &
         $ev.conn & ": " & supplied(ev.pubFailMsg, st.servedBy(ev.conn))

@@ -1015,7 +1015,6 @@ proc rootOf(set: ContractSet, declaration: string): Digest =
 const
   Progress = "storage.upload_progress_event"
   Started = "storage.started_event"
-  Done = "storage.upload_done_event"
 
 suite "trnio.calls: calls over sockets (TRANSPORT §4, §6, §7, §8.1, §8.6; A21)":
   test "[TRN-0141] [TRN-0136] responses may come out of order; each reaches its call":
@@ -1303,27 +1302,35 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
 
   test "[TRN-0158] the route's subscription and publication scopes":
     let (o, ep) = served()
-    let access = RouteAccess(
-      subscribeEvents:
-        Opt.some(@[storageSet.rootOf(Started), storageSet.rootOf(Progress)]),
+    # The storage contract has two events: route 1 may subscribe to Started
+    # and publish Progress only; route 2 has Progress both ways.
+    let only = RouteAccess(
+      subscribeEvents: Opt.some(@[storageSet.rootOf(Started)]),
       publishEvents: Opt.some(@[storageSet.rootOf(Progress)]),
     )
-    let callee = o.attach(ep, 1, binding(access = access))
-    o.subscribe(1, 1, Done)
+    let callee = o.attach(ep, 1, binding(access = only))
+    o.subscribe(1, 1, Progress)
     let denied = o.waitN(evSubscription, 1)
     check denied.len == 1 and denied[0].subscriptionFailure.get.code == ecNotAuthorised
     check o.events(evSubscribe, callee).len == 0
     o.subscribe(1, 2, Started)
-    o.subscribe(1, 3, Progress)
-    check o.waitN(evSubscription, 1, 3).len == 3
+    check o.waitN(evSubscription, 1, 2).len == 2
     # Started may be subscribed to, but not published.
     o.publish(1, Started, cborMap())
     let f = o.waitN(evPublishFailed, callee)
     check f.len == 1 and f[0].pubFailKind == peNotInContract
     check f.len == 1 and f[0].pubFailCode == ecNotAuthorised
+    let both = RouteAccess(
+      subscribeEvents: Opt.some(@[storageSet.rootOf(Progress)]),
+      publishEvents: Opt.some(@[storageSet.rootOf(Progress)]),
+    )
+    discard o.attach(ep, 2, binding(route = "route-2", access = both))
+    o.subscribe(2, 1, Progress)
+    check o.waitN(evSubscription, 2).len == 1
     o.publish(1, Progress, progress(1))
-    let e = o.waitN(evEvent, 1)
+    let e = o.waitN(evEvent, 2)
     check e.len == 1 and e[0].eventName == Progress
+    check o.events(evEvent, 1).len == 0
     o.done(ep)
 
   test "[TRN-0121] [TRN-0122] [TRN-0267] buffered Events arrive in order, none lost while open":

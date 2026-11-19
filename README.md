@@ -9,9 +9,8 @@ The specs are being revised, so the work is ordered by how settled each area is
 
 - Tier 1: deterministic CBOR, BLAKE3, cdCDDLe, the hash profile and the commitment model.
 - Tier 2: INTERFACE schema acceptance, call surfaces, payload validation and outcomes, the common
-  schema, and `lcn-gen`, which generates C headers (C mapping revision 3: types, method typedefs and, for a module
-  binding, its provider functions and module symbols) and Nim types with codecs. Generated C headers are stamped
-  `PROVISIONAL ABI`. `lcn-gen cddl` goes the other way, from an explicit C header set back to its CDDL documents
+  schema, and `lcn-gen`, which generates C headers (C mapping revision 4: types, method typedefs and, for a module
+  binding, its provider functions and module symbols) and Nim types with codecs. `lcn-gen cddl` goes the other way, from an explicit C header set back to its CDDL documents
   and module binding (Tier 5 step 5-1).
 - Tier 3, without I/O: the TRANSPORT envelope, framing, Hello and route tickets, payload
   commitments, cancellation and multiplexing as codecs and state machines; and the Package Manager's

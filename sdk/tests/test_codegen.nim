@@ -7,7 +7,7 @@ import unittest2
 import logos_sdk/[hash, pins]
 import logos_sdk/iface/accept
 import logos_sdk/base/hex
-import ./support/ccompile, logos_sdk/testing/specdata
+import ./support/[ccompile, clisting], logos_sdk/testing/specdata
 import logos_sdk/testing/testdirs
 from logos_sdk/codegen/hostgen import logosRuntimeHeader
 from logos_sdk/abi/host import AppConfigFormat
@@ -393,7 +393,7 @@ storage.report_response =
     )
 
 suite "ifc.c-types: the header frame (INTERFACE §2, §3.2)":
-  test "[IFC-0597] [IFC-0598] [IFC-0599] [IFC-0600] [IFC-0603] [IFC-0604] [IFC-0605] [IFC-0606] [IFC-0816] [IFC-0817] mapping and context checks precede every guard":
+  test "[IFC-0597] [IFC-0598] [IFC-0599] [IFC-0600] [IFC-0603] [IFC-0604] [IFC-0605] [IFC-0606] [IFC-0816] [IFC-0817] [TXT-0046] [TXT-0047] mapping and context checks precede every guard":
     let h = header(accepted(mod392, [ifc392], [sup392]))
     let fixed = cItems(mirror("IFC/5.2.logos_types.h"))
     # The revision this mapping implements is the one logos_types.h defines.
@@ -870,18 +870,26 @@ suite "ifc.c-types: choices (INTERFACE §2.3, §3.9.9)":
     check "#define LOGOS_LITERAL_demo_Changed_event_AR_A_Kind \"a\"" in got
     check "_EVENT" notin got.text
 
-  test "[IFC-0635] [IFC-0912] the discriminant stays uint32_t whatever the enum storage":
+  test "[IFC-0635] [IFC-0912] [TXT-0044] [TXT-0045] the discriminant stays uint32_t whatever the enum storage":
     let s = accepted(mirror("IFC/2.3.value.cddl"))
     createDir(outDir)
     writeFile(outDir / "kind_types.h", header(s))
-    checkCompiles compileUnit(
-      "kind_width",
+    let unit =
       "#include \"kind_types.h\"\n" & staticAssert &
-        "CHECK(sizeof(logos_storage_Value_KIND_t) == 4);\n" &
-        "CHECK((logos_storage_Value_KIND_t)-1 > 0);\n" &
-        "CHECK(LOGOS_ARM_storage_Value_CASE_Uint64 == 2);\n",
-      " -fshort-enums",
-    )
+      "CHECK(sizeof(logos_storage_Value_KIND_t) == 4);\n" &
+      "CHECK((logos_storage_Value_KIND_t)-1 > 0);\n" &
+      "CHECK(LOGOS_ARM_storage_Value_CASE_Uint64 == 2);\n"
+    checkCompiles compileUnit("kind_width", unit)
+    # [SPEC INTERFACE §5.2 l.3325-3327; DECISIONS I60] Under short enum storage
+    # the copied listing's assertion that `logos_error_code_t` has the size of
+    # `int` fails, and it is the only failure: the compiler still evaluates the
+    # unit's own assertions, so the discriminant kept its width and sign.
+    when not deviceTarget:
+      let failed = compileUnit("kind_width", unit, " -fshort-enums")
+      let errors = failed.splitLines.filterIt("error:" in it)
+      check errors.len == 1
+      check errors.len > 0 and "logos_types.h" in errors[0] and
+        "logos_error_code_t" in failed
 
 suite "ifc.c-types: paths and aggregates (INTERFACE §2.1, §2.3, §3.9.10)":
   test "[IFC-0632] tuples, lists and byte strings as choice arms or list elements are one aggregate value":
@@ -958,31 +966,78 @@ suite "ifc.c-types: paths and aggregates (INTERFACE §2.1, §2.3, §3.9.10)":
     )
 
 suite "ifc.c-types: logos_types.h and compiled headers (INTERFACE §3.9.6, §5.2)":
-  test "[IFC-0603] [IFC-0681] [IFC-0682] [IFC-0695] [IFC-0696] [IFC-0934] [RUN-0242] logos_types.h holds the §5.2 block, the §2.3 empty types and the common types":
+  test "[IFC-0603] [IFC-0681] [IFC-0682] [IFC-0695] [IFC-0696] [IFC-0934] [RUN-0242] [TXT-0048] [TXT-0049] [TXT-0050] [TXT-0051] [TXT-0052] [TXT-0056] [TXT-0057] logos_types.h is the §5.2 listing, copied: its §2.3 empty types and common types included":
     let h = logosTypesHeader()
     let fixed = cItems(h)
-    for item in cItems(mirror("IFC/5.2.logos_types.h")):
-      if "<module-C>" notin item:
-        check item in fixed
-    # [IMPL-DECISION G158, pending] The common types' interim names.
+    # [SPEC INTERFACE §5.2 l.3324-3326] Line for line the listing without its
+    # per-module `<module-C>` lines; nothing derived is appended.
+    var want: seq[string]
+    for l in mirror("IFC/5.2.logos_types.h").splitLines:
+      if l.strip.len > 0 and "<module-C>" notin l and
+          l.strip notin [
+            "/* -- Memory management -- */",
+            "/* Optional provider completion capability. */",
+          ]:
+        want.add(l)
+    var got: seq[string]
+    var body = false
+    for l in h.splitLines:
+      if l == "#define LOGOS_TYPES_H":
+        body = true
+      elif l == "#endif /* LOGOS_TYPES_H */":
+        body = false
+      elif body and l.strip.len > 0:
+        got.add(l)
+    check got == want
+    # [SPEC INTERFACE §2.1] The six common types keep their fixed names.
     for name in [
       "logos_error_detail_t", "logos_invalid_params_reason_t",
       "logos_invalid_params_path_segment_t", "logos_invalid_params_detail_t",
       "logos_schema_commitment_t",
     ]:
       check fixed.anyIt(it.endsWith("}" & name & ";"))
+    check fixed.anyIt(it.endsWith("}logos_error_code_t;"))
     # [SPEC INTERFACE §2.1] No choice declaration for logos.error_code.
-    check "LOGOS_ARM_error_code" notin h
-    check "#define LOGOS_LITERAL_schema_commitment_Hash_suite \"logos.hash-suite.blake3-256\"" in
-      fixed
-    check ("PROVISIONAL ABI (spec " & SpecRevision[0 .. 7] & ")") in h
+    check "error_code_kind_t" notin h and "ERROR_CODE_ARM" notin h
+    check "LOGOS_SCHEMA_COMMITMENT_HASH_SUITE_LITERAL" in h
+    check "PROVISIONAL" notin h # [DECISIONS I26] no stamp at 6cac8335
     checkCompiles compileUnit("logos_types_only", "#include \"logos_types.h\"\n")
+
+  test "[TXT-0051] [TXT-0052] [TXT-0057] [TXT-0578] the mapped common schema is the listing's common section, name for name":
+    # [SPEC INTERFACE §2.1 l.813-814, §5.2 l.3325] What `cmirror` and `rmap`
+    # read must be the listing: the same typedefs, tags, members, discriminant
+    # types, arm constants and values, and literal macros.
+    let mapped = mappedCommon()
+    check listingDifferences(mapped).get == newSeq[string]()
+    check commonListingCheck().isOk
+    check "#define LOGOS_INVALID_PARAMS_REASON_ARM_3 3u" in mapped.join("\n")
+    # Any departure in one item is found on both sides.
+    for (a, b) in [
+      ("arm_0;", "arm_Tstr;"),
+      ("logos_map_schema_commitment", "logos_schema_commitment_MAP"),
+      ("LOGOS_INVALID_PARAMS_REASON_ARM_3 3u", "LOGOS_INVALID_PARAMS_REASON_ARM_3 0u"),
+      ("_ARM_1_LITERAL \"schema-mismatch\"", "_ARM_1_LITERAL \"schema_mismatch\""),
+    ]:
+      checkpoint a
+      check mapped.join("\n").count(a) == 1
+      check listingDifferences(mapped.mapIt(it.replace(a, b))).get.len == 2
+
+  test "[TXT-0053] logos.schema_request and logos.schema_response have no C declaration":
+    # [SPEC INTERFACE §2.1 l.815] The C interface carries a logos.schema_response
+    # value as deterministic CBOR; neither half is declared, in logos_types.h or
+    # in a generated contract header.
+    for h in [
+      logosTypesHeader(),
+      header(accepted(mod392, [ifc392], [sup392])),
+      header(accepted(mirror("IFC/1.8.module.cddl"))),
+    ]:
+      check "schema_request" notin h and "schema_response" notin h
 
   test "[IFC-0297] [IFC-0475] contract headers include logos_types.h and redeclare none of its types":
     let s = accepted(mod392, [ifc392], [sup392])
     let h = header(s)
     check "#include \"logos_types.h\"" in h
-    check ("PROVISIONAL ABI (spec " & SpecRevision[0 .. 7] & ")") in h
+    check "PROVISIONAL" notin h # [DECISIONS I26] no stamp at 6cac8335
     check s.cSchemaSet.headerName == "sensor_module"
     var fixedNames: seq[string]
     for item in cItems(logosTypesHeader()):
@@ -1061,7 +1116,7 @@ suite "run.host-header: logos_runtime.h (RUNTIME §13, §13.3)":
         checkpoint item
         check item in items
     check "#include \"logos_types.h\"" in h
-    check ("PROVISIONAL ABI (spec " & SpecRevision[0 .. 7] & ")") in h
+    check "PROVISIONAL" notin h # [DECISIONS I26] no stamp at 6cac8335
     # [G76] The one configuration format this implementation documents.
     check ("#define LCN_RUNTIME_CONFIG_FORMAT_APP_V1 \"" & AppConfigFormat & "\"") in h
 
@@ -1136,7 +1191,7 @@ storage.report_response =
 );"""
     ) in got
 
-  test "[IFC-0168] [IFC-0169] [IFC-0170] §2.4: parameters follow canonical field order, not source order":
+  test "[IFC-0168] [IFC-0169] [IFC-0959] §2.4: parameters follow canonical field order, not source order":
     let got = decls(module(mirror("IFC/2.4.upload_url.cddl"), "storage_module"))
     check cItems(mirror("IFC/2.4.upload_url.h"))[0] in got
     check cItems(mirror("IFC/3.3.upload_url.h"))[0] in got
@@ -1149,7 +1204,7 @@ storage.report_response =
 );"""
     ) in empty
 
-  test "[IFC-0864] [IFC-0888] §2.4 rules 2-10: every field form as an input and as an output":
+  test "[IFC-0864] [IFC-0888] [TXT-0054] [TXT-0565] §2.4 rules 2-10: every field form as an input and as an output":
     const fields = """{
   a: uint32,
   ? b: tstr,

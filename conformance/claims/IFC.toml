@@ -39,8 +39,8 @@ default = "claimed"
 # The asynchronous call ABI and the protected invocation context (I78, I88).
 "§2.9" = "claimed"
 # The C-to-CDDL reverse mapper (D30, G139, I98) and the §3.9 cases in both directions.
-# Limit: IFC-0003, IFC-0004 and the §3.8 units hold under G158's common-name projection
-# (TL-01, open). See docs/CONFORMANCE.md.
+# The common names are the §5.2 listing's at 6cac8335 (G158 settled, re-pin P2), and the
+# subject is mapper input (G318). See docs/CONFORMANCE.md.
 "§3" = "claimed"
 "§4" = "claimed"
 "§4.6" = "claimed"
@@ -164,7 +164,6 @@ default = "claimed"
 "IFC-0167" = "claimed"
 "IFC-0168" = "claimed"
 "IFC-0169" = "claimed"
-"IFC-0170" = "claimed"
 "IFC-0205" = "claimed"
 "IFC-0225" = "claimed"
 # §3.9.4 wrapper parameters, §3.9 optional tuples and §3.9.6 escapes as method
@@ -199,7 +198,6 @@ default = "claimed"
 "IFC-0684" = "claimed"
 "IFC-0744" = "claimed"
 "IFC-0745" = "claimed"
-"IFC-0935" = "claimed"
 "IFC-0936" = "claimed"
 "IFC-0937" = "claimed"
 "IFC-0949" = "claimed"

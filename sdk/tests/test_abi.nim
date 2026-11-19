@@ -62,12 +62,17 @@ let somewhere = cast[pointer](addr stateByte)
 proc rcVtable(): LogosRuntimeControlVtable =
   armed(
     LogosRuntimeControlVtable(
-      abiVersion: 2, structSize: csize_t(sizeof(LogosRuntimeControlVtable))
+      abiVersion: RuntimeControlVtableAbiVersion,
+      structSize: csize_t(sizeof(LogosRuntimeControlVtable)),
     )
   )
 
 proc routeVtable(): LogosRouteVtable =
-  armed(LogosRouteVtable(abiVersion: 2, structSize: csize_t(sizeof(LogosRouteVtable))))
+  armed(
+    LogosRouteVtable(
+      abiVersion: RouteVtableAbiVersion, structSize: csize_t(sizeof(LogosRouteVtable))
+    )
+  )
 
 proc ctxVtable(): LogosInvocationContextVtable =
   armed(
@@ -211,15 +216,25 @@ suite "ifc.abi-types: the §5.2 structs in Nim (INTERFACE §5.2)":
             checkpoint "C: " & got.get[i] & "  Nim: " & want
             fail()
 
+  test "[TXT-0044] logos_error_code_t has the size of int":
+    # [SPEC INTERFACE §2 l.582] Nim's binding is `cint`; on the C side every
+    # compile of logos_types.h runs the listing's static assertion.
+    check sizeof(CErrorCode) == sizeof(cint)
+    check "_Static_assert(sizeof(logos_error_code_t) == sizeof(int)," in
+      logosTypesHeader()
+    check "static_assert(sizeof(logos_error_code_t) == sizeof(int)," in
+      logosTypesHeader()
+
   test "each version's minimum struct_size is its last field's end":
-    check InitInputV2Extent == sizeof(LogosModuleInitInput)
-    check RouteVtableV2Extent == sizeof(LogosRouteVtable)
-    check RuntimeControlVtableV2Extent == sizeof(LogosRuntimeControlVtable)
+    check InitInputV3Extent == sizeof(LogosModuleInitInput)
+    check RouteVtableV3Extent == sizeof(LogosRouteVtable)
+    check RuntimeControlVtableV3Extent == sizeof(LogosRuntimeControlVtable)
     # A bool before a uint64 leaves padding, but the last field ends the struct.
     check AsyncOptionsV1Extent == sizeof(LogosAsyncOptions)
-    check RouteVtableV2Extent - sizeof(pointer) == offsetOf(
-      LogosRouteVtable, observeEnd
-    )
+    check RouteVtableV3Extent - sizeof(pointer) ==
+      offsetOf(LogosRouteVtable, observeSubscriptionEnd)
+    check RuntimeControlVtableV3Extent - sizeof(pointer) ==
+      offsetOf(LogosRuntimeControlVtable, observeSubscriptionEnd)
 
 proc hostLayoutFacts(): seq[(string, string)] =
   result.add describe("logos_runtime_config_t", LogosRuntimeConfig())
@@ -275,7 +290,7 @@ suite "ifc.abi-bindings: Runtime Control, route and call bindings (INTERFACE §5
     var noState = LogosRuntimeControlBinding(vtable: addr vt, state: nil)
     check checkRuntimeControl(addr noState).code == ecModule
     let names = opNames(vt)
-    check names.len == 8
+    check names.len == 9
     for k in 0 ..< names.len:
       var w = nulled(vt, k)
       var wb = LogosRuntimeControlBinding(vtable: addr w, state: somewhere)
@@ -285,18 +300,21 @@ suite "ifc.abi-bindings: Runtime Control, route and call bindings (INTERFACE §5
       check snake(names[k]) in r.error.reason
     check calls == 0
 
-  test "[IFC-0486] [IFC-0936] [IFC-0482] [IFC-0487] an unsupported version or short extent is VERSION_MISMATCH, decided before any operation is read":
+  test "[IFC-0486] [IFC-0936] [IFC-0482] [IFC-0487] [IFC-0981] [TXT-0060] an unsupported version or short extent is VERSION_MISMATCH, decided before any operation is read":
     var vt = rcVtable()
     var b = LogosRuntimeControlBinding(vtable: addr vt, state: somewhere)
-    for v in [0'u32, 1, 3]:
+    for v in [0'u32, 1, 2, 4]:
       vt.abiVersion = v
       check checkRuntimeControl(addr b).code == ecVersionMismatch
-    vt.abiVersion = 2
-    vt.structSize = csize_t(RuntimeControlVtableV2Extent - 1)
+    vt.abiVersion = 3
+    vt.structSize = csize_t(RuntimeControlVtableV3Extent - 1)
+    check checkRuntimeControl(addr b).code == ecVersionMismatch
+    # The version-2 extent, which ends before observe_subscription_end.
+    vt.structSize = csize_t(offsetOf(LogosRuntimeControlVtable, observeSubscriptionEnd))
     check checkRuntimeControl(addr b).code == ecVersionMismatch
     # Past the extent every operation is null: still VERSION_MISMATCH, so no
     # field beyond struct_size decided the outcome.
-    var short = nulled(nulled(rcVtable(), 7), 6)
+    var short = nulled(nulled(nulled(rcVtable(), 8), 7), 6)
     short.structSize = csize_t(offsetOf(LogosRuntimeControlVtable, release))
     var sb = LogosRuntimeControlBinding(vtable: addr short, state: somewhere)
     check checkRuntimeControl(addr sb).code == ecVersionMismatch
@@ -307,19 +325,25 @@ suite "ifc.abi-bindings: Runtime Control, route and call bindings (INTERFACE §5
     var b = LogosRuntimeControlBinding(vtable: addr vt, state: somewhere)
     check checkRuntimeControl(addr b).isOk
 
-  test "[IFC-0935] [IFC-0486] [IFC-0937] a route handle needs observe_end; a version-2 vtable without it is VERSION_MISMATCH":
+  test "[IFC-0981] [IFC-0486] [IFC-0937] [TXT-0060] a route handle needs observe_end and observe_subscription_end; a shorter vtable is VERSION_MISMATCH":
     calls = 0
     var vt = routeVtable()
     var r = LogosRouteHandle(vtable: addr vt, state: somewhere)
     check checkRoute(addr r).isOk
+    # The version-2 extent, and a version-2 vtable of any size.
+    vt.structSize = csize_t(offsetOf(LogosRouteVtable, observeSubscriptionEnd))
+    check checkRoute(addr r).code == ecVersionMismatch
     vt.structSize = csize_t(offsetOf(LogosRouteVtable, observeEnd))
+    check checkRoute(addr r).code == ecVersionMismatch
+    vt = routeVtable()
+    vt.abiVersion = 2
     check checkRoute(addr r).code == ecVersionMismatch
     vt = routeVtable()
     let names = opNames(vt)
     check names ==
       @[
         "call", "releaseResponse", "subscribe", "unsubscribe", "release", "prepareCall",
-        "observeEnd",
+        "observeEnd", "observeSubscriptionEnd",
       ]
     for k in 0 ..< names.len:
       var w = nulled(vt, k)
@@ -351,7 +375,7 @@ suite "ifc.abi-init: the module initialization input (INTERFACE §2.6, §5.2)":
     var rc {.inject.} = LogosRuntimeControlBinding(vtable: addr vt, state: somewhere)
     var input {.inject.} = armed(
       LogosModuleInitInput(
-        abiVersion: 2,
+        abiVersion: ModuleInitAbiVersion,
         structSize: csize_t(sizeof(LogosModuleInitInput)),
         runtimeControl: addr rc,
         invocationAccess: LogosInvocationAccess(state: somewhere),
@@ -359,15 +383,15 @@ suite "ifc.abi-init: the module initialization input (INTERFACE §2.6, §5.2)":
     )
     input.invocationAccess = armed(input.invocationAccess)
 
-  test "a complete version-2 input passes, with or without events":
+  test "a complete version-3 input passes, with or without events":
     check checkInitInput(addr input, declaresEvents = false).isOk
     check checkInitInput(addr input, declaresEvents = true).isOk
 
-  test "[IFC-0485] an unsupported version or too small an input is VERSION_MISMATCH":
-    for v in [1'u32, 3]:
+  test "[IFC-0485] [TXT-0059] an unsupported version, version 2 included, or too small an input is VERSION_MISMATCH":
+    for v in [1'u32, 2, 4]:
       input.abiVersion = v
       check checkInitInput(addr input, false).code == ecVersionMismatch
-    input.abiVersion = 2
+    input.abiVersion = 3
     input.structSize = csize_t(offsetOf(LogosModuleInitInput, invocationAccess))
     check checkInitInput(addr input, false).code == ecVersionMismatch
     input.structSize = csize_t(sizeof(LogosModuleInitInput) + 16)

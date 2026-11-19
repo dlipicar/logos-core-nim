@@ -123,7 +123,9 @@ proc routeReleaseOp(
 
 var routeVtable = block:
   var v = armed(
-    LogosRouteVtable(abiVersion: 2, structSize: csize_t(sizeof(LogosRouteVtable)))
+    LogosRouteVtable(
+      abiVersion: RouteVtableAbiVersion, structSize: csize_t(sizeof(LogosRouteVtable))
+    )
   )
   v.call = routeCallOp
   v.releaseResponse = routeReleaseOp

@@ -22,7 +22,7 @@ import logos_sdk/iface/[accept, outcome, payload, surface]
 import ../transport/boundary
 import ./[callcheck, plumbing]
 import logos_sdk/abi/cstatus
-import ./entryframe
+import ./[entryframe, subend]
 
 export callcheck, cstatus, entryframe
 
@@ -49,6 +49,8 @@ type
       ## [plan §2.6] a hosted attempt's `hostsup.Host`, whose requests use
       ## `binding`: the host frees these services with itself, after its last
       ## request
+    subEnd*: SubscriptionEndSlot
+      ## [SPEC INTERFACE §2.5 l.1476] the binding's `observe_subscription_end`
 
   CallbackState* = enum
     cbNone
@@ -75,6 +77,8 @@ type
     handler*: LogosRouteEndHandler
     userData*: pointer
     code*: CErrorCode
+    subEnd*: SubscriptionEndSlot
+      ## [SPEC INTERFACE §2.5 l.1476] the handle's `observe_subscription_end`
 
   InvocationState* = object
     ## The state behind one invocation context (INTERFACE §2.9.3): a

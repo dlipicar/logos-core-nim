@@ -7,6 +7,7 @@ import results
 import logos_sdk/iface/accept
 import logos_sdk/codegen/[cmirror, kitgen, nimgen, sdkroot]
 import logos_sdk/testing/fixturegen
+import ./clisting
 
 export fixturegen
 
@@ -200,6 +201,9 @@ proc generatedCommon*(): Result[string, string] =
   commonNimModule(NimOptions(importPrefix: SdkImportRoot))
 
 proc generatedCommonMirrors*(): Result[string, string] =
+  ## [SPEC INTERFACE §5.2 l.3325] The mirrors read the derived common model, so
+  ## it must be the listing's before they are written.
+  ?commonListingCheck()
   commonMirrorModule(SdkImportRoot)
 
 const

@@ -26,7 +26,8 @@ import logos_sdk/abi/[checks, types]
 import logos_sdk/cbor/utf8
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, outcome, payload, surface]
-import ./[asynccall, callside, events, hostsup, invoke, plumbing, rcevents, transported]
+import ./[asynccall, callside, events, hostsup, invoke, plumbing, rcevents, subend]
+import ./transported
 
 export callside.AttemptServices
 
@@ -297,6 +298,26 @@ proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
       wait(h.cond, h.lock)
   dropHandle(h)
 
+proc routeObserveSubscriptionEndOp(
+    route: ptr LogosRouteHandle, handler: LogosSubscriptionEndHandler, userData: pointer
+): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE §2.5 l.1476-1484] The handle's one registration
+  ## (`subend`), with `observe_end`'s rules: a null handler is INVALID_PARAMS,
+  ## and a terminal handle returns its retained code and installs nothing
+  ## (l.1459; DECISIONS I105).
+  bindingEnter()
+  if handler.isNil:
+    return status(ecInvalidParams, "a null subscription-end handler")
+  let h = handleOf(route)
+  let reply = h.engine.call(
+    Request(
+      kind: rqSubEndAdmit, origin: moduleOrigin($h.consumer), route: $h.route, handle: h
+    )
+  )
+  if reply.error.isSome:
+    return status(reply.error.get)
+  h.subEnd.register(handler, userData)
+
 var routeVtable = LogosRouteVtable(
   abiVersion: RouteVtableAbiVersion,
   structSize: csize_t(sizeof(LogosRouteVtable)),
@@ -307,6 +328,7 @@ var routeVtable = LogosRouteVtable(
   release: routeReleaseOp,
   prepareCall: routePrepareCallOp,
   observeEnd: routeObserveEndOp,
+  observeSubscriptionEnd: routeObserveSubscriptionEndOp,
 )
 
 proc rcMaterializeOp(
@@ -371,6 +393,15 @@ proc rcMaterializeOp(
   outRoute.state = h
   LogosResult()
 
+proc rcObserveSubscriptionEndOp(
+    binding: ptr LogosRuntimeControlBinding,
+    handler: LogosSubscriptionEndHandler,
+    userData: pointer,
+): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE §2.5 l.1476-1484] The binding's one registration (`subend`).
+  bindingEnter()
+  servicesOf(binding).subEnd.register(handler, userData)
+
 var rcVtable = LogosRuntimeControlVtable(
   abiVersion: RuntimeControlVtableAbiVersion,
   structSize: csize_t(sizeof(LogosRuntimeControlVtable)),
@@ -382,6 +413,7 @@ var rcVtable = LogosRuntimeControlVtable(
   connectRemote: rcConnectRemoteOp,
   release: rcReleaseOp,
   prepareCall: rcPrepareCallOp,
+  observeSubscriptionEnd: rcObserveSubscriptionEndOp,
 )
 
 # What the engine uses ----------------------------------------------------------------

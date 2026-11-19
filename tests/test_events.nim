@@ -439,20 +439,21 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     var id: LogosSubscriptionId
     check h.subscribe(addr seen[0], id) == ecOk
     let valid = encodeCbor(parseDiag("{\"value\": 7}").get)
-    publishRaw(cstring(Changed), valid)
+    check publishRaw(cstring(Changed), valid) == CErrorCode(ord(ecOk))
     check reaches(addr seen[0], 1)
     check seen[0].payloadOf == valid
     publishRaw(cstring(Changed), encodeCbor(parseDiag("{\"value\": \"seven\"}").get))
     publishRaw(cstring(Changed), encodeCbor(parseDiag("[7]").get))
     publishRaw(cstring(Changed), [0xA1'u8, 0x65]) # truncated
-    publishRaw(cstring(Changed), [])
-    publishRaw(cstring(""), valid)
-    publishRaw(nil, valid)
+    # [SPEC INTERFACE §5.2 l.3351; DECISIONS I105] the publisher's own result
+    check publishRaw(cstring(Changed), []) == CErrorCode(ord(ecInvalidParams))
+    check publishRaw(cstring(""), valid) == CErrorCode(ord(ecInvalidParams))
+    check publishRaw(nil, valid) == CErrorCode(ord(ecInvalidParams))
     settled()
     check seen[0].count.load == 1
     check e.published("no payload")
     check e.published("was not delivered on route")
-    check e.published("was dropped")
+    check e.published("was refused")
     h.release()
     e.finish()
 

@@ -9,7 +9,9 @@
  *   given (Runtime-owned code: NOT_READY);
  * - TOR_AUTOSTART: starts a thread of its own that calls start_module for
  *   meter-1 and sensor-1, as an orchestrator does after its own start.
- * Its destroy waits while the destroy gate is closed, then joins that thread. */
+ * Its destroy waits while the destroy gate is closed, then joins that thread.
+ * Every initialization keeps its publish callback, which tor_publish calls as
+ * module code would. */
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -38,6 +40,8 @@ static atomic_int tor_thread_done;
  * included: a module releases every response before its destroy returns. */
 static atomic_int tor_calls;
 static _Atomic(const logos_runtime_control_binding_t *) tor_rc;
+static _Atomic(logos_publish_fn) tor_publish_fn;
+static _Atomic(void *) tor_publish_data;
 static tor_wait_fn tor_wait;
 static logos_runtime_t *tor_handle;
 static int tor_thread_live;
@@ -113,6 +117,8 @@ logos_result_t logos_test_orchestrator_MODULE_init(
   logos_result_t r = {LOGOS_OK, NULL, NULL, 0};
   atomic_fetch_add(&tor_inits, 1);
   atomic_store(&tor_rc, input->runtime_control);
+  atomic_store(&tor_publish_data, input->publish_user_data);
+  atomic_store(&tor_publish_fn, input->publish);
   switch (atomic_load(&tor_mode)) {
   case TOR_SHUTDOWN: {
     const uint8_t empty[1] = {0xA0};
@@ -168,6 +174,8 @@ void tor_reset(int mode) {
   atomic_store(&tor_started[1], -1);
   atomic_store(&tor_thread_done, 0);
   atomic_store(&tor_rc, NULL);
+  atomic_store(&tor_publish_fn, NULL);
+  atomic_store(&tor_publish_data, NULL);
 }
 
 void tor_set_wait(tor_wait_fn wait, logos_runtime_t *handle) {
@@ -186,6 +194,14 @@ int tor_started_code(int i) { return atomic_load(&tor_started[i]); }
 int tor_shutdown_runtime(void) {
   const uint8_t empty[1] = {0xA0};
   return (int)tor_call(atomic_load(&tor_rc), "shutdown_runtime", empty, 1);
+}
+
+/* The latest initialization's publish callback and the status it returns
+ * (INTERFACE §5.2), or -1 when there is none. */
+int tor_publish(const char *event_name, const uint8_t *data, size_t len) {
+  logos_publish_fn f = atomic_load(&tor_publish_fn);
+  if (f == NULL) return -1;
+  return (int)f(atomic_load(&tor_publish_data), event_name, data, len);
 }
 
 /* The module's symbol table, for logos_runtime_register_binding. */

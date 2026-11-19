@@ -116,9 +116,10 @@ proc publishOp(
     eventName: cstring,
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
-) {.cdecl, gcsafe, raises: [].} =
+): CErrorCode {.cdecl, gcsafe, raises: [].} =
   doAssert userData == addr publishState
   record(eventName, cborData, cborDataLen, false, [])
+  CErrorCode(ord(ecOk))
 
 # The invocation context ---------------------------------------------------------------
 

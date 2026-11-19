@@ -1384,6 +1384,35 @@ when defined(posix):
       check codeIn(c.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
+    test "[IFC-0981] [TXT-0085] C-7b observe_subscription_end under a hosted consumer: one registration per binding and per handle, none called, none on a terminal handle (DECISIONS I105)":
+      let cfg = hosted()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      discard e.started(consumerRecord(), "c")
+      check codeIn(c.run("sub-end rc null")) == Opt.some(ecInvalidParams)
+      check codeIn(c.run("sub-end rc s0")) == Opt.some(ecOk)
+      check codeIn(c.run("sub-end rc s1")) == Opt.some(ecInvalidParams)
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      # A second handle on the route needs a fresh ticket (RUNTIME l.3468).
+      check codeIn(c.renewLine("r", route)) == Opt.some(ecOk)
+      check c.materializeVia(1, route) == Opt.some(ecOk)
+      check codeIn(c.run("sub-end 0 null")) == Opt.some(ecInvalidParams)
+      check codeIn(c.run("sub-end 0 s2")) == Opt.some(ecOk)
+      check codeIn(c.run("sub-end 0 s3")) == Opt.some(ecInvalidParams)
+      check codeIn(c.run("observe-end 0 e1")) == Opt.some(ecOk)
+      check c.closeVia(route) == Opt.some(ecOk)
+      check c.noted("ends", "e1 ")
+      # [SPEC INTERFACE l.1459; I105] the Runtime's retained code, and nothing
+      # installed: the same refusal again.
+      check codeIn(c.run("sub-end 1 s4")) == Opt.some(ecNotReady)
+      check codeIn(c.run("sub-end 1 s5")) == Opt.some(ecNotReady)
+      check c.linesOf("subends").len == 0 # [I105] registration only until P3
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      check codeIn(c.run("release 1")) == Opt.some(ecOk)
+      e.finish()
+
     test "[IFC-0729] [RUN-0181] [IMPL-DECISION G267] C-8 prepared calls from a hosted consumer to a hosted provider: a response, a timeout that cancels the provider's call, an expiry at submission, a cancellation before it, and the connection kept until the last completes":
       let cfg = hosted()
       let mdir = cfg.stateOf()

@@ -60,6 +60,23 @@ func responseOf(schema: string, ifaces, supporting: seq[Contract]): seq[byte] =
     )
   )
 
+var subEndCalls: Atomic[int]
+
+proc onSubEnd(
+    id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  subEndCalls.atomicInc
+
+proc registerSubEnd(
+    h: var LogosRouteHandle, handler: LogosSubscriptionEndHandler = onSubEnd
+): ErrorCode =
+  toResult(h.vtable.observeSubscriptionEnd(addr h, handler, nil)).code
+
+proc registerSubEnd(
+    rc: ptr LogosRuntimeControlBinding, handler: LogosSubscriptionEndHandler = onSubEnd
+): ErrorCode =
+  toResult(rc.vtable.observeSubscriptionEnd(rc, handler, nil)).code
+
 # Tests --------------------------------------------------------------------------------
 
 suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)":
@@ -97,7 +114,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check initSelfCode.load == ord(ecOk)
     e.finish()
 
-  test "[RUN-0293] the binding a module receives at initialization is the complete version-2 table (§8.1 l.1556)":
+  test "[RUN-0293] the binding a module receives at initialization is the complete version-3 table (§8.1 l.1478)":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient()
     check checkRuntimeControl(rc).isOk
@@ -825,6 +842,39 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     sleep(20)
     check seen.count.load == 1
     check lateSeen.count.load == 0
+    h.release()
+    late.release()
+    e.finish()
+
+  test "[IFC-0981] [TXT-0085] observe_subscription_end: one handler per binding and per handle, never called on registration; a terminal handle installs nothing (INTERFACE §2.5 l.1476-1484; DECISIONS I105)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    subEndCalls.store(0)
+    # The Runtime Control binding's registration.
+    check rc.registerSubEnd(nil) == ecInvalidParams
+    check rc.registerSubEnd() == ecOk
+    check rc.registerSubEnd() == ecInvalidParams
+    # A route handle's, with observe_end's rules.
+    let route = rc.routeId("k")
+    var h = rc.handle(route)
+    var late = rc.handle(route)
+    var seen: EndSeen
+    check h.registerSubEnd(nil) == ecInvalidParams
+    check h.registerSubEnd() == ecOk
+    check h.registerSubEnd() == ecInvalidParams
+    check h.observe(addr seen) == ecOk
+    check rc.close(route).code == ecOk
+    check waitUntil(
+      proc(): bool =
+        seen.count.load == 1
+    )
+    # [SPEC INTERFACE l.1459; I105] the retained code, and nothing installed:
+    # the same refusal again, never INVALID_PARAMS for a second registration.
+    check late.registerSubEnd() == ecNotReady
+    check late.registerSubEnd() == ecNotReady
+    sleep(20)
+    check subEndCalls.load == 0 # [I105] registration only until re-pin P3
     h.release()
     late.release()
     e.finish()

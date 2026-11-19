@@ -5,7 +5,7 @@
 ## binding consumer or producer applies are in `checks.nim`.
 ##
 ## Version-delimited structs: the module initialization input, the Runtime
-## Control and route vtables (ABI version 2), the async call, option and
+## Control and route vtables (ABI version 3), the async call, option and
 ## callback structs (`LOGOS_ASYNC_CALL_ABI_VERSION`), the provider descriptor
 ## and provider invocation (`LOGOS_ASYNC_PROVIDER_ABI_VERSION`) and the
 ## invocation-context vtable (`LOGOS_INVOCATION_CONTEXT_ABI_VERSION`).
@@ -13,9 +13,9 @@
 {.push raises: [].}
 
 const
-  ModuleInitAbiVersion* = 2'u32 ## `LOGOS_MODULE_INIT_ABI_VERSION`
-  RuntimeControlVtableAbiVersion* = 2'u32 ## `LOGOS_RUNTIME_CONTROL_VTABLE_ABI_VERSION`
-  RouteVtableAbiVersion* = 2'u32 ## `LOGOS_ROUTE_VTABLE_ABI_VERSION`
+  ModuleInitAbiVersion* = 3'u32 ## `LOGOS_MODULE_INIT_ABI_VERSION`
+  RuntimeControlVtableAbiVersion* = 3'u32 ## `LOGOS_RUNTIME_CONTROL_VTABLE_ABI_VERSION`
+  RouteVtableAbiVersion* = 3'u32 ## `LOGOS_ROUTE_VTABLE_ABI_VERSION`
   AsyncCallAbiVersion* = 1'u32 ## `LOGOS_ASYNC_CALL_ABI_VERSION`
   AsyncProviderAbiVersion* = 1'u32 ## `LOGOS_ASYNC_PROVIDER_ABI_VERSION`
   InvocationContextAbiVersion* = 1'u32 ## `LOGOS_INVOCATION_CONTEXT_ABI_VERSION`
@@ -141,7 +141,9 @@ type
     eventName: cstring,
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
-  ) {.cdecl, gcsafe, raises: [].} ## `logos_publish_fn`
+  ): CErrorCode {.cdecl, gcsafe, raises: [].}
+    ## `logos_publish_fn`: [SPEC INTERFACE §5.2; RUNTIME §7.3] the publisher-side
+    ## result, never a delivery report
 
   LogosModuleInitInput* {.bycopy.} = object ## `logos_module_init_input_t`
     abiVersion*: uint32
@@ -166,6 +168,10 @@ type
   LogosRouteEndHandler* =
     proc(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises: [].}
     ## `logos_route_end_handler_t`
+
+  LogosSubscriptionEndHandler* = proc(
+    subscriptionId: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+  ) {.cdecl, gcsafe, raises: [].} ## `logos_subscription_end_handler_t`
 
   LogosRuntimeControlBinding* {.bycopy.} = object ## `logos_runtime_control_binding_t`
     vtable*: ptr LogosRuntimeControlVtable
@@ -229,6 +235,11 @@ type
       callbacks: ptr LogosAsyncCallbacks,
       outCall: ptr LogosAsyncCall,
     ): LogosResult {.cdecl, gcsafe, raises: [].}
+    observeSubscriptionEnd*: proc(
+      binding: ptr LogosRuntimeControlBinding,
+      handler: LogosSubscriptionEndHandler,
+      userData: pointer,
+    ): LogosResult {.cdecl, gcsafe, raises: [].}
 
   LogosRouteVtable* {.bycopy.} = object ## `logos_route_vtable_t`
     abiVersion*: uint32
@@ -268,6 +279,11 @@ type
     ): LogosResult {.cdecl, gcsafe, raises: [].}
     observeEnd*: proc(
       route: ptr LogosRouteHandle, handler: LogosRouteEndHandler, userData: pointer
+    ): LogosResult {.cdecl, gcsafe, raises: [].}
+    observeSubscriptionEnd*: proc(
+      route: ptr LogosRouteHandle,
+      handler: LogosSubscriptionEndHandler,
+      userData: pointer,
     ): LogosResult {.cdecl, gcsafe, raises: [].}
 
 type
@@ -310,11 +326,14 @@ template extentOf*(T: typedesc, last: untyped): int =
   offsetOf(T, last) + sizeof(default(T).last)
 
 const
-  InitInputV2Extent* = extentOf(LogosModuleInitInput, invocationAccess)
-    ## [SPEC INTERFACE §5.2] the least `struct_size` of an ABI version 2 input
-  RuntimeControlVtableV2Extent* = extentOf(LogosRuntimeControlVtable, prepareCall)
-  RouteVtableV2Extent* = extentOf(LogosRouteVtable, observeEnd)
-    ## includes the required `observe_end` (§5.2 l.3817)
+  InitInputV3Extent* = extentOf(LogosModuleInitInput, invocationAccess)
+    ## [SPEC INTERFACE §5.2] the least `struct_size` of an ABI version 3 input
+  RuntimeControlVtableV3Extent* =
+    extentOf(LogosRuntimeControlVtable, observeSubscriptionEnd)
+    ## includes the required `observe_subscription_end` (§5.2 l.3841)
+  RouteVtableV3Extent* = extentOf(LogosRouteVtable, observeSubscriptionEnd)
+    ## includes the required `observe_end` and `observe_subscription_end`
+    ## (§5.2 l.3841)
   AsyncOptionsV1Extent* = extentOf(LogosAsyncOptions, timeoutMs)
   AsyncCallbacksV1Extent* = extentOf(LogosAsyncCallbacks, userData)
   AsyncCallVtableV1Extent* = extentOf(LogosAsyncCallVtable, release)

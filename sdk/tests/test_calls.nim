@@ -419,9 +419,10 @@ suite "ifc.calls: what a helper rejects from its route (INTERFACE §2.7.2, §5.2
       var h = base.handle
       case change
       of "version":
-        bad.abiVersion = 3
+        bad.abiVersion = 4
       of "extent":
-        bad.structSize = csize_t(offsetOf(LogosRouteVtable, observeEnd))
+        # the version-2 extent under version 3
+        bad.structSize = csize_t(offsetOf(LogosRouteVtable, observeSubscriptionEnd))
       of "call":
         bad.call = nil
       else:

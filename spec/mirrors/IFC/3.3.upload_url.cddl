@@ -1,7 +1,8 @@
 storage.upload_url_request = {
     chunk_size: uint64,
+    session: tstr,
     url: tstr,
 }
 storage.upload_url_response = {
-    accepted: bool,
+    cid: tstr,
 }

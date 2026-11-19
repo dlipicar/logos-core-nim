@@ -73,7 +73,7 @@ let
   sup392 = mirror("IFC/3.9.2.supporting.cddl")
 
 suite "iface: schema files and metadata (INTERFACE §1.1, §1.2)":
-  test "[IFC-0018] [IFC-0097] [IFC-0098] [IFC-0099] [IFC-0100] [IFC-0101] [IFC-0102] [IFC-0103] [IFC-0104] [IFC-0105] [IFC-0106] [IFC-0107] [IFC-0108] [IFC-0109] [IFC-0110] [IFC-0111] [IFC-0112] [IFC-0113] the §1.8 storage module is one complete document":
+  test "[IFC-0018] [IFC-0097] [IFC-0098] [IFC-0099] [IFC-0100] [IFC-0101] [IFC-0102] [IFC-0103] [IFC-0104] [IFC-0105] [IFC-0106] [IFC-0107] [IFC-0108] [IFC-0109] [IFC-0110] [IFC-0111] [IFC-0113] the §1.8 storage module is one complete document":
     let s = accepted(mirror("IFC/1.8.module.cddl"))
     let m = s.primary.model
     check m.role == srModule
@@ -85,10 +85,7 @@ suite "iface: schema files and metadata (INTERFACE §1.1, §1.2)":
         "storage.start", "storage.upload_url",
       ]
     check m.events.mapIt(it.name) ==
-      @[
-        "storage.started_event", "storage.upload_done_event",
-        "storage.upload_progress_event",
-      ]
+      @["storage.started_event", "storage.upload_progress_event"]
 
   test "[IFC-0094] [IFC-0095] [IFC-0096] [IFC-0032] [IFC-0031] the §1.8 metrics_provider interface":
     let m = accepted(mirror("IFC/1.8.interface.cddl")).primary.model
@@ -450,10 +447,9 @@ suite "iface: methods, events and types (INTERFACE §1.4-§1.7)":
     check "duplicate" in rejection(module("demo.t = { cid: tstr, \"cid\": tstr }\n")) or
       "twice" in rejection(module("demo.t = { cid: tstr, \"cid\": tstr }\n"))
 
-  test "[IFC-0081] [IFC-0082] [IFC-0083] [IFC-0084] events are map-valued, at most 128 bytes":
+  test "[IFC-0081] [IFC-0082] [IFC-0084] events are map-valued, at most 128 bytes":
     let m = accepted(module(mirror("IFC/1.5.events.cddl"))).primary.model
-    check m.events.mapIt(it.name) ==
-      @["storage.upload_done_event", "storage.upload_progress_event"]
+    check m.events.mapIt(it.name) == @["storage.upload_progress_event"]
     check "must be a map or a choice of maps" in
       rejection(module("demo.tick_event = uint8\n"))
     discard accepted(module("demo.a_event = { kind: \"a\" } / { kind: \"b\" }\n"))
@@ -607,10 +603,7 @@ suite "iface: call surfaces (INTERFACE §1.4, §1.5, §2.1)":
     check c.methods.mapIt(it.bare) ==
       @["destroy", "exists", "init", "space", "start", "upload_url"]
     check c.events.mapIt(it.id) ==
-      @[
-        "storage.started_event", "storage.upload_done_event",
-        "storage.upload_progress_event",
-      ]
+      @["storage.started_event", "storage.upload_progress_event"]
     let e = c.findMethod("exists").get
     check e.name == "storage.exists"
     check e.request == "storage.exists_request"
