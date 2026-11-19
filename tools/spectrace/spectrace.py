@@ -17,12 +17,17 @@ kind is one of:
   cddl     one CDDL rule, keyed by rule name
   block    any other fenced block (vectors, C declarations, examples)
   heading  a section heading (used for section coverage)
+
+While a spec re-pin is in progress, spec/repin-pending.toml lists what still follows the old text:
+`mirror`, `pins`, `gate` and `deploydoc` accept a listed difference and fail on a listed item that no
+longer differs, so the list can only shrink honestly. `pending` checks the list itself.
 """
 
 from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -275,6 +280,58 @@ def rule_unit(name: str, text: list[str], line: int, section: str, heading: str)
     return Unit("cddl", section, heading, line, "\n".join(text), rule=name).finish()
 
 
+# The re-pin's pending list ---------------------------------------------------------
+
+PENDING_FILE = Path("spec") / "repin-pending.toml"
+CLEARED_FILE = Path("spec") / "repin-text-cleared.toml"
+BASELINE_FILE = Path("spec") / "repin-baseline.toml"
+BASELINE_SHA256 = "3a1e52f94e36f1406d097f1f67f3ff45a0b2693a8a3fe123cb89f579a8d71103"
+PENDING_STEP_RE = re.compile(r"P[0-9]")
+TEXT_ID_RE = re.compile(r"TXT-\d{4}")
+TEXT_CLASSES = {"behaviour", "todo"}
+READING_KINDS = {"reword", "removed", "informative", "holds"}
+WORK_ITEMS = {"5-5", "5-7a"}  # the work items that may own a unit after the re-pin
+SITE_ROOTS = ("src/", "sdk/src/", "tests/", "sdk/tests/", "docs/")
+TEST_TEMPLATES = "test|ltTest|peerTest|sceneTest"
+# Conditions a test may sit under and still run somewhere: platforms, and the one build switch the suites use.
+LIVE_CONDITION = re.compile(r"defined\((?:posix|windows|linux|macosx|android|ios)\)|declared\(caParity\)")
+HELD_STATUS = "deferred:tier-5"
+
+
+@dataclass
+class Pending:
+    """What still follows the previous spec revision. Each section maps an item to its sub-step,
+    and `deferred` maps a unit to the work item that owns it after the re-pin."""
+
+    mirror: dict = field(default_factory=dict)
+    pin: dict = field(default_factory=dict)
+    added: dict = field(default_factory=dict)
+    changed: dict = field(default_factory=dict)
+    stale: dict = field(default_factory=dict)
+    deploydoc: dict = field(default_factory=dict)
+    text: list = field(default_factory=list)
+    deferred: dict = field(default_factory=dict)
+
+    def holds(self, uid: str) -> bool:
+        """The unit is new or changed and its sub-step has not cleared it, or it stays deferred."""
+        return uid in self.added or uid in self.changed or uid in self.deferred
+
+
+def load_pending(root: Path) -> Pending:
+    data = load_toml(root / PENDING_FILE)
+    units = data.get("units", {})
+    return Pending(
+        mirror=data.get("mirror", {}),
+        pin=data.get("pin", {}),
+        added=units.get("added", {}),
+        changed=units.get("changed", {}),
+        stale=data.get("stale", {}),
+        deploydoc=data.get("deploydoc", {}),
+        text=data.get("text", []),
+        deferred=data.get("deferred", {}),
+    )
+
+
 # Ledger -------------------------------------------------------------------------
 
 
@@ -477,7 +534,8 @@ def load_toml(path: Path) -> dict:
 def cmd_mirror(args) -> int:
     root, specs = Path(args.root), Path(args.specs)
     cfg = load_toml(root / "spec" / "mirrors.toml")
-    bad = 0
+    pending = load_pending(root)
+    bad = held = 0
     for m in cfg.get("mirror", []):
         if m.get("package") not in PINS_NIM:
             print(f"{m['out']}: `package` must be one of {sorted(PINS_NIM)}")
@@ -491,11 +549,23 @@ def cmd_mirror(args) -> int:
         ]
         ordinal = m.get("ordinal", 1)
         out = root / "spec" / "mirrors" / m["out"]
+        listed = m["out"] in pending.mirror
         if not blocks or ordinal > len(blocks):
+            if listed:
+                held += 1
+                continue
             print(f"{m['out']}: {m['file']} {m['section']} has no block #{ordinal}")
             bad += 1
             continue
         want = "\n".join(blocks) if ordinal == 0 else blocks[ordinal - 1]
+        if listed:
+            # Its sub-step moves the mirror, the pin and the parser together: `--write` leaves it.
+            if out.exists() and out.read_text(encoding="utf-8") == want:
+                print(f"{m['out']}: matches the spec but is still listed in {PENDING_FILE}")
+                bad += 1
+            else:
+                held += 1
+            continue
         if args.write:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(want, encoding="utf-8")
@@ -514,7 +584,8 @@ def cmd_mirror(args) -> int:
     if bad:
         print("run `spectrace mirror --write`, review the diff, and re-derive spec/pins.toml")
         return 1
-    print("%s %d mirrors" % ("wrote" if args.write else "checked", len(cfg.get("mirror", []))))
+    note = f", {held} held by {PENDING_FILE}" if held else ""
+    print("%s %d mirrors%s" % ("wrote" if args.write else "checked", len(cfg.get("mirror", [])), note))
     return 0
 
 
@@ -588,7 +659,11 @@ def cmd_pins(args) -> int:
     pins.nim must be generated from the current pins."""
     root, specs = Path(args.root), Path(args.specs)
     pins = load_toml(root / "spec" / "pins.toml")
-    bad = 0
+    pending = load_pending(root)
+    bad = held = 0
+    for name in sorted(set(pending.pin) - set(pins)):
+        print(f"pin {name}: listed in {PENDING_FILE} but not in spec/pins.toml")
+        bad += 1
     for name, p in pins.items():
         if "code" in p and p.get("package") not in PINS_NIM:
             print(f"pin {name}: `package` must be one of {sorted(PINS_NIM)}")
@@ -607,6 +682,13 @@ def cmd_pins(args) -> int:
         if "registry" in p:
             # A registry row: definition, kind and root on one table row.
             found = f"| `{p['definition']}` | {p['declaration']} | `{value}` |" in text
+        if name in pending.pin:
+            if found:
+                print(f"pin {name}: found in {p['file']} {p['section']} but still listed in {PENDING_FILE}")
+                bad += 1
+            else:
+                held += 1
+            continue
         if not found:
             print(f"pin {name}: {value} not found in {p['file']} {p['section']}")
             bad += 1
@@ -620,7 +702,8 @@ def cmd_pins(args) -> int:
             bad += 1
     if bad:
         return 1
-    print(f"checked {len(pins)} pins and {', '.join(str(p) for p in PINS_NIM.values())}")
+    note = f", {held} held by {PENDING_FILE}" if held else ""
+    print(f"checked {len(pins)} pins and {', '.join(str(p) for p in PINS_NIM.values())}{note}")
     return 0
 
 
@@ -669,6 +752,7 @@ def cmd_gate(args) -> int:
     """Every live unit in a claimed section is referenced by a test or an inspection
     item; an inspected unit is claimed; no status defers to a closed tier."""
     root = Path(args.root)
+    pending = load_pending(root)
     referenced: set[str] = set()
     for tree in TEST_TREES:
         for test in (root / tree).rglob("*.nim"):
@@ -690,6 +774,12 @@ def cmd_gate(args) -> int:
         failures += 1
     closed = {f"deferred:tier-{t}" for t in args.closed_tier}
     live_ids: set[str] = set()
+    gated_all: set[str] = set()
+    named_all: set[str] = set()
+
+    def status_of(claim_sets: list[dict], unit) -> str:
+        return HELD_STATUS if pending.holds(unit.id) else status_across(claim_sets, unit)
+
     for fname, prefix in SPECS.items():
         claim_sets = claims_of(root, prefix)
         bad_status = [
@@ -717,23 +807,25 @@ def cmd_gate(args) -> int:
         live = [u for u in units if not u.retired and u.kind in GATED_KINDS]
         live_ids.update(u.id for u in units if not u.retired)
         gated_ids = {u.id for u in live}
+        gated_all |= gated_ids
         named = {uid for claims in claim_sets for uid in claims.get("units", {})}
-        for uid in sorted(named - gated_ids):
+        named_all |= named
+        for uid in sorted(named - gated_ids - set(pending.stale)):
             print(f"{prefix}: [units] names {uid}, which is not a live gated requirement")
             failures += 1
         by_status: dict[str, int] = {}
         by_label: dict[str, int] = {}
         for u in live:
-            full = status_across(claim_sets, u)
+            full = status_of(claim_sets, u)
             st = full.split(":")[0]
             by_status[st] = by_status.get(st, 0) + 1
             if st == "deferred":
                 by_label[full] = by_label.get(full, 0) + 1
             # [W1] Inspection stands for a test, so it covers claimed units only.
-            if u.id in inspected and full != "claimed":
+            if u.id in inspected and full != "claimed" and not pending.holds(u.id):
                 print(f"{prefix}: {u.id} is inspected ({inspected[u.id]}) but not claimed ({full})")
                 failures += 1
-        claimed = [u for u in live if status_across(claim_sets, u) == "claimed"]
+        claimed = [u for u in live if status_of(claim_sets, u) == "claimed"]
         missing = [u for u in claimed if u.id not in referenced]
         summary = ", ".join(f"{v} {k}" for k, v in sorted(by_status.items()))
         print(f"{prefix}: {len(claimed) - len(missing)}/{len(claimed)} claimed units tested ({summary})")
@@ -742,10 +834,32 @@ def cmd_gate(args) -> int:
         for u in missing[: args.show]:
             print(f"  untested {u.id} ({u.section} l.{u.line}): {u.text[:100]!r}")
         failures += len(missing)
-    stale = sorted(i for i in referenced if i[:3] in PREFIX_FILE and i not in live_ids)
+    stale = sorted(i for i in referenced if i[:3] in PREFIX_FILE and i not in live_ids and i not in pending.stale)
     for i in stale:
         print(f"a test references unknown or retired requirement {i}")
+    for finding in pending_gate_findings(pending, referenced, named_all, live_ids, gated_all):
+        print(finding)
+        failures += 1
     return 1 if failures or stale else 0
+
+
+def pending_gate_findings(
+    pending: Pending, referenced: set[str], named: set[str], live: set[str], gated: set[str]
+) -> list[str]:
+    """The list can only shrink honestly: an entry that no longer holds anything back is an error."""
+    findings = []
+    for uid in sorted(set(pending.added) | set(pending.changed) | set(pending.deferred)):
+        if uid not in gated:
+            findings.append(f"{PENDING_FILE}: {uid} is not a live gated requirement")
+    for uid in sorted(pending.added):
+        if uid in referenced:
+            findings.append(f"{PENDING_FILE}: {uid} is evidenced now; clear its [units] entry")
+    for uid in sorted(pending.stale):
+        if uid in live:
+            findings.append(f"{PENDING_FILE}: {uid} is listed as stale but is live")
+        elif uid not in referenced and uid not in named:
+            findings.append(f"{PENDING_FILE}: nothing references {uid} any more; clear its [stale] entry")
+    return findings
 
 
 # One owner per unit ------------------------------------------------------------------
@@ -1005,13 +1119,558 @@ def cmd_deploydoc(args) -> int:
         except json.JSONDecodeError as e:
             failures.append(f"the facts block is not JSON: {e}")
 
+    failures, held = split_deploydoc_failures(failures, load_pending(root))
     for f in failures:
         print(f)
+    note = f", {held} held by {PENDING_FILE}" if held else ""
     print(
         f"{DEPLOY_DOC}: {len(items)} item rows, {len(duties)} duty rows, "
-        f"{len(answered)}/{len(gated)} BCP §5.4 units answered, {len(failures)} failures"
+        f"{len(answered)}/{len(gated)} BCP §5.4 units answered, {len(failures)} failures{note}"
     )
     return 1 if failures else 0
+
+
+DEPLOY_HELD_RE = re.compile(r"is in no row|is not a gated unit of")
+
+
+def split_deploydoc_failures(failures: list[str], pending: Pending) -> tuple[list[str], int]:
+    """(what still fails, how many the pending list holds). A listed unit must still fail, and only the
+    failure the list expects is held: a row that is missing or names a unit not yet gated."""
+    mentions = lambda uid, f: re.search(rf"\b{uid}\b", f) is not None and DEPLOY_HELD_RE.search(f) is not None
+    rest = [f for f in failures if not any(mentions(uid, f) for uid in pending.deploydoc)]
+    for uid in sorted(pending.deploydoc):
+        if not any(mentions(uid, f) for f in failures):
+            rest.append(f"{PENDING_FILE}: {uid} no longer fails; clear its [deploydoc] entry")
+    return rest, len(failures) - len([f for f in rest if f in failures])
+
+
+# The pending list's own rules --------------------------------------------------------
+
+
+def code_lines(lines: list[str]) -> list[bool]:
+    """Whether each line of a Nim file starts as code: not inside a long string or a block comment."""
+    out, long_string, depth = [], False, 0
+    for line in lines:
+        out.append(not long_string and depth == 0)
+        i = 0
+        while i < len(line):
+            if long_string:
+                if line.startswith('"""', i):
+                    long_string, i = False, i + 3
+                else:
+                    i += 1
+            elif depth:
+                if line.startswith("]#", i):
+                    depth, i = depth - 1, i + 2
+                elif line.startswith("#[", i):
+                    depth, i = depth + 1, i + 2
+                else:
+                    i += 1
+            elif line.startswith('"""', i):
+                long_string, i = True, i + 3
+            elif line.startswith(("#[", "##["), i):
+                depth, i = 1, i + (3 if line[i + 1] == "#" else 2)
+            elif line[i] == "#":
+                break
+            elif line.startswith("'\"'", i):
+                i += 3
+            elif line[i] == '"':
+                i += 1
+                while i < len(line) and line[i] != '"':
+                    i += 2 if line[i] == "\\" else 1
+                i += 1
+            else:
+                i += 1
+    return out
+
+
+def real_tests(root: Path):
+    """(suite path, test name) of each test that can run: in a suite file, not under `when false:`, and with a
+    body that does more than `skip()` or `discard`. Re-pin evidence counts only these."""
+    name_re = re.compile(rf'^(\s*)(?:{TEST_TEMPLATES})\s+"([^"]*)"')
+
+    def live(condition: str) -> bool:
+        """A `when` on platforms only. Any other `when`, `if`, `elif` or `else` above a test may never run."""
+        m = re.fullmatch(r"when\s+(.*):", condition)
+        return m is not None and re.fullmatch(r"(?:T|and|or|not|[()\s])*", LIVE_CONDITION.sub("T", m.group(1))) is not None
+
+    for tree in ("tests", "sdk/tests"):
+        paths = [p for p in sorted((root / tree).glob("*.nim")) if not p.name.startswith(".")] if (root / tree).is_dir() else []
+        suites = [p for p in paths if p.name.startswith("test_")]
+        for path in paths:
+            if path not in suites and not (
+                path.name.endswith("_body.nim")
+                and any(re.search(rf"^\s*include\s+.*\b{path.stem}\b", q.read_text(encoding="utf-8"), re.M) for q in suites)
+            ):
+                continue  # helpers, and bodies no suite includes
+            lines = path.read_text(encoding="utf-8").splitlines()
+            code = code_lines(lines)
+            for i, line in enumerate(lines):
+                m = name_re.match(line)
+                if not m or not code[i]:
+                    continue
+                indent, outer, dead = len(m.group(1)), len(m.group(1)), False
+                for before in reversed(lines[:i]):
+                    width = len(before) - len(before.lstrip())
+                    if before.strip() and width < outer:
+                        outer = width
+                        above = before.strip()
+                        if re.match(r"(?:when|if|elif|else)\b", above) and not live(above):
+                            dead = True
+                body = []
+                for after in lines[i + 1 :]:
+                    if after.strip() and len(after) - len(after.lstrip()) <= indent:
+                        break
+                    if after.strip() and not after.strip().startswith("#"):
+                        body.append(after.strip())
+                if not dead and body and body[0] not in ("skip()", "skip") and not all(b == "discard" for b in body):
+                    yield path.relative_to(root).as_posix(), m.group(2)
+
+
+def text_tags(root: Path) -> dict[str, set[str]]:
+    """Each [TXT-nnnn] tag named by a test that can run, with the suites that name it."""
+    found: dict[str, set[str]] = {}
+    for suite, name in real_tests(root):
+        for tag in TEXT_ID_RE.findall(name):
+            found.setdefault(tag, set()).add(suite)
+    return found
+
+
+def unit_evidence(root: Path) -> set[str]:
+    """Units named by a test that can run, or by an inspection item with a real reason."""
+    found = {uid for _, name in real_tests(root) for uid in TEST_ID_RE.findall(name)}
+    for extra in inspection_files(root):
+        for item in load_toml(extra).get("item", []):
+            if len(str(item.get("reason", "")).strip()) >= 20:
+                found.update(item.get("ids", []))
+    return found
+
+
+def claim_state(root: Path, uid: str) -> tuple[str, bool]:
+    """The unit's status, and whether a claims file names the unit itself rather than its section."""
+    claim_sets = claims_of(root, uid[:3])
+    unit = next((u for u in load_ledger(ledger_path(root, uid[:3]))[1] if u.id == uid), None)
+    if unit is None:
+        return "unknown", False
+    return status_across(claim_sets, unit), any(uid in c.get("units", {}) for c in claim_sets)
+
+
+def decision_rows(root: Path) -> dict[str, str]:
+    """Each decision's text by id: a `### G12` section up to the next heading, or a `| I12 |` table row."""
+    path = root / "docs" / "DECISIONS.md"
+    rows: dict[str, str] = {}
+    current = None
+    for line in path.read_text(encoding="utf-8").splitlines() if path.is_file() else []:
+        heading = re.match(r"#{1,6}\s+([DGI]\d+)\b", line)
+        table = re.match(r"\|\s*([DGIR]\d+)\s*\|", line)
+        if heading:
+            current = heading.group(1)
+            rows[current] = line
+        elif line.startswith("#"):
+            current = None
+        elif table:
+            rows[table.group(1)] = rows.get(table.group(1), "") + line
+        elif current:
+            rows[current] += "\n" + line
+    return rows
+
+
+def baseline_findings(root: Path, pending: Pending, cleared: dict, state) -> list[str]:
+    """Every entry of the frozen list is still open on its sub-step, or left with the evidence its kind needs."""
+    base = load_toml(root / BASELINE_FILE)
+    findings: list[str] = []
+    moved = {m.get("id"): m for m in cleared.get("moved", [])}
+
+    def same_step(item: str, was: str, now: str) -> None:
+        m = moved.get(item, {})
+        if now != was and not (m.get("from") == was and m.get("to") == now and str(m.get("reason", "")).strip()):
+            findings.append(f"{item}: sub-step {was} became {now} with no [[moved]] record in {CLEARED_FILE}")
+
+    for name, now in (("mirror", pending.mirror), ("pin", pending.pin), ("stale", pending.stale), ("deploydoc", pending.deploydoc)):
+        # An entry that left is checked by that section's own command, which must still know the item.
+        for item, was in base.get(name, {}).items():
+            if item in now:
+                same_step(item, was, now[item])
+    mirrors = {m.get("out") for m in load_toml(root / "spec" / "mirrors.toml").get("mirror", [])}
+    gone = {r.get("id"): r for r in cleared.get("stale", [])}
+    for item in set(base.get("stale", {})) - set(pending.stale):
+        if not str(gone.get(item, {}).get("compared", "")).strip():
+            findings.append(f"{item} left [stale] with no record of what replaced the rule, or what became of its code, in {CLEARED_FILE}")
+    for item in set(base.get("mirror", {})) - mirrors:
+        findings.append(f"{item}: a baseline mirror is no longer configured in spec/mirrors.toml")
+    for item in set(base.get("pin", {})) - set(load_toml(root / "spec" / "pins.toml")):
+        findings.append(f"{item}: a baseline pin is no longer in spec/pins.toml")
+
+    evidence = unit_evidence(root)
+    rows = decision_rows(root)
+
+    def decided(uid: str, record: dict) -> bool:
+        """A row of docs/DECISIONS.md that names this unit, not merely any row."""
+        return re.search(rf"\b{uid}\b", rows.get(str(record.get("decision", "")).strip(), "")) is not None
+
+    records = {r.get("id"): r for r in cleared.get("units", [])}
+    for kind, now in (("added", pending.added), ("changed", pending.changed)):
+        for uid, was in base.get("units", {}).get(kind, {}).items():
+            if uid in now:
+                same_step(uid, was, now[uid])
+                continue
+            status, named = state(uid)
+            record = records.get(uid, {})
+            if status != "claimed" and not (named and decided(uid, record)):
+                findings.append(f"{uid} left [units.{kind}] as {status}: claim it, or name it in its claims file with a decision row")
+            if status == "claimed" and uid not in evidence:
+                findings.append(f"{uid} left [units.{kind}] with no test that can run and no inspection item with a reason")
+            if kind == "changed" and not str(record.get("compared", "")).strip():
+                findings.append(f"{uid} left [units.changed] with no record of what was compared in {CLEARED_FILE}")
+    for uid in base.get("deferred", {}):
+        if uid not in pending.deferred and state(uid)[0] != "claimed":
+            findings.append(f"{uid} left [deferred] without being claimed")
+    for uid in set(pending.deferred) - set(base.get("deferred", {})):
+        if not decided(uid, records.get(uid, {})):
+            findings.append(f"{uid} joined [deferred] with no decision row in {CLEARED_FILE}")
+
+    open_text = {e.get("id"): e for e in pending.text}
+    done = {e.get("id"): e for e in cleared.get("text", [])}
+    lowered = {r.get("id") for r in cleared.get("lowered", []) if decided(r.get("id", ""), r)}
+    tests = list(real_tests(root))
+    for b in base.get("text", []):
+        tid = b["id"]
+        if tid in open_text:
+            same_step(tid, b["step"], open_text[tid].get("step", ""))
+            if b["class"] == "behaviour" and open_text[tid].get("class") != "behaviour" and tid not in lowered:
+                findings.append(f"{tid}: a behaviour entry is lowered only with a [[lowered]] record and a decision row that names it")
+        elif tid not in done:
+            findings.append(f"{tid} is neither open nor cleared")
+        else:
+            e = done[tid]
+            same_step(tid, b["step"], e.get("step", ""))
+            if str(e.get("reading", "")).strip():
+                site, kind = str(e.get("site", "")).strip(), e.get("kind")
+                path = site.split(":")[0]
+                site_ok = path.startswith(SITE_ROOTS) and (root / path).exists()
+                if b["class"] == "behaviour" and tid not in lowered:
+                    findings.append(f"{tid}: a behaviour entry clears only by a test")
+                if not str(e.get("compared", "")).strip():
+                    findings.append(f"{tid}: a reading says what was compared")
+                if kind not in READING_KINDS:
+                    findings.append(f"{tid}: a reading has a kind, one of {sorted(READING_KINDS)}")
+                if b.get("guard") and (kind == "informative" or not site_ok):
+                    findings.append(f"{tid}: this entry names a code, state or table row: name the test or code site that was read")
+                old = next((x for x in base.get("text", []) if x["id"] == e.get("pair")), {})
+                paired = old.get("side") == "old" and old.get("spec") == b.get("spec") and e.get("pair") in done and e.get("pair") != tid
+                if kind == "reword" and (b.get("side") != "new" or not paired):
+                    findings.append(f"{tid}: a reword names the cleared old-side entry of its spec that it replaces, in `pair`")
+                if kind == "removed" and b.get("side") != "old":
+                    findings.append(f"{tid}: only a removed sentence clears as `removed`")
+                wanted = str(e.get("named", "")).strip()
+                if kind == "holds" and not (wanted and any(suite == path and wanted in name for suite, name in tests)):
+                    findings.append(f"{tid}: `holds` names the suite in `site` and a test of it in `named`")
+    return findings
+
+
+def pending_findings(root: Path, step: str | None = None, digest: str | None = None, state=None) -> list[str]:
+    """The structure of the list, the evidence of each entry that left it and, with `step`, what that
+    sub-step has not cleared yet. `digest` is the frozen list's expected SHA-256."""
+    data = load_toml(root / PENDING_FILE)
+    findings: list[str] = []
+    if digest is not None:
+        path = root / BASELINE_FILE
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            findings.append(f"{BASELINE_FILE} is missing or was edited")
+    known = {"closed", "mirror", "pin", "units", "stale", "deploydoc", "text", "deferred"}
+    for key in sorted(set(data) - known):
+        findings.append(f"{PENDING_FILE}: unknown section [{key}]")
+    pending = load_pending(root)
+    closed = set(data.get("closed", []))  # sub-steps that have merged: they own nothing any more
+    # P6 and P7 may merge in either order; otherwise a sub-step closes only after every earlier one.
+    rank = {f"P{n}": n if n < 7 else n - 1 for n in range(1, 10)}
+    for name in sorted(closed):
+        if name not in rank:
+            findings.append(f"closed: {name!r} is not a sub-step")
+        elif any(rank[other] < rank[name] and other not in closed for other in rank):
+            findings.append(f"closed: {name} is closed while an earlier sub-step is open")
+    sections = {
+        "mirror": pending.mirror,
+        "pin": pending.pin,
+        "units.added": pending.added,
+        "units.changed": pending.changed,
+        "stale": pending.stale,
+        "deploydoc": pending.deploydoc,
+    }
+    for name, entries in sections.items():
+        for item, value in entries.items():
+            if not (isinstance(value, str) and PENDING_STEP_RE.fullmatch(value)):
+                findings.append(f"[{name}] {item}: {value!r} is not a sub-step")
+            elif value == step or value in closed:
+                findings.append(f"[{name}] {item} still belongs to {value}")
+    state = state or (lambda uid: claim_state(root, uid))
+    for uid, owner in pending.deferred.items():
+        if owner not in WORK_ITEMS:
+            findings.append(f"[deferred] {uid}: {owner!r} is not one of the work items {sorted(WORK_ITEMS)}")
+        status, named = state(uid)
+        if not (named and status.startswith("deferred:")):
+            findings.append(f"[deferred] {uid}: its claims file must defer it by name, in [units]")
+    both = set(pending.added) & set(pending.changed)
+    for uid in sorted(both):
+        findings.append(f"[units] {uid} is both added and changed")
+    for uid in sorted((set(pending.added) | set(pending.changed)) & set(pending.deferred)):
+        findings.append(f"{uid} is in both [units] and [deferred]")
+
+    tags = text_tags(root)
+    seen: set[str] = set()
+    for entry in pending.text:
+        tid = entry.get("id", "")
+        if not TEXT_ID_RE.fullmatch(tid) or tid in seen:
+            findings.append(f"[[text]] {tid!r}: a missing, malformed or repeated id")
+        seen.add(tid)
+        if not all(str(entry.get(k, "")).strip() for k in ("step", "spec", "line", "what")):
+            findings.append(f"[[text]] {tid}: step, spec, line and what are required")
+        if not PENDING_STEP_RE.fullmatch(str(entry.get("step", ""))):
+            findings.append(f"[[text]] {tid}: {entry.get('step')!r} is not a sub-step")
+        if entry.get("class") not in TEXT_CLASSES:
+            findings.append(f"[[text]] {tid}: class {entry.get('class')!r} is not one of {sorted(TEXT_CLASSES)}")
+        if entry.get("step") == step or entry.get("step") in closed:
+            findings.append(f"[[text]] {tid} still belongs to {entry.get('step')}")
+        if tid in tags:
+            findings.append(f"[[text]] {tid} is named by {sorted(tags[tid])}; move it to {CLEARED_FILE}")
+
+    cleared = load_toml(root / CLEARED_FILE)
+    findings.extend(baseline_findings(root, pending, cleared, state))
+    for entry in cleared.get("text", []):
+        tid = entry.get("id", "")
+        if not TEXT_ID_RE.fullmatch(tid) or tid in seen:
+            findings.append(f"{CLEARED_FILE}: {tid!r} is malformed, repeated or still pending")
+        seen.add(tid)
+        suite, reading = str(entry.get("test", "")).strip(), str(entry.get("reading", "")).strip()
+        if bool(suite) == bool(reading):
+            findings.append(f"{CLEARED_FILE}: {tid} needs exactly one of `test` and `reading`")
+        elif suite and suite not in tags.get(tid, set()):
+            findings.append(f"{CLEARED_FILE}: no test of {suite} names [{tid}]")
+    return findings
+
+
+def pending_self_test() -> int:
+    """Each rule of the list passes its clean case and catches its planted violation."""
+    import contextlib
+    import io
+    import tempfile
+
+    spec_text = "# 1. One\n\n```cddl\na = 1\n```\n\nThe value abc is pinned.\n"
+
+    def tree(pending: str, mirror: str = "a = 1\n", pin: str = "abc", tests: str = "") -> Path:
+        root = Path(tempfile.mkdtemp())
+        (root / "spec" / "mirrors").mkdir(parents=True)
+        (root / "specs").mkdir()
+        (root / "specs" / "s.md").write_text(spec_text, encoding="utf-8")
+        (root / "spec" / "mirrors" / "m.cddl").write_text(mirror, encoding="utf-8")
+        (root / "spec" / "mirrors.toml").write_text(
+            '[[mirror]]\nfile = "s.md"\nsection = "§1"\nout = "m.cddl"\npackage = "core"\n', encoding="utf-8"
+        )
+        (root / "spec" / "pins.toml").write_text(
+            f'[p]\nfile = "s.md"\nsection = "§1"\nvalue = "{pin}"\n', encoding="utf-8"
+        )
+        (root / PENDING_FILE).write_text(pending, encoding="utf-8")
+        (root / "tests").mkdir()
+        (root / "tests" / "test_a.nim").write_text(tests, encoding="utf-8")
+        for path in PINS_NIM.values():
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
+            (root / path).write_text("", encoding="utf-8")
+        return root
+
+    def ok(fn, root: Path, **kw) -> bool:
+        args = argparse.Namespace(root=str(root), specs=str(root / "specs"), write=False, **kw)
+        with contextlib.redirect_stdout(io.StringIO()):
+            return fn(args) == 0
+
+    def pins_ok(root: Path) -> bool:
+        # Only the pin rules: the generated modules are not part of this tree's story.
+        save = dict(PINS_NIM)
+        PINS_NIM.clear()
+        try:
+            return ok(cmd_pins, root)
+        finally:
+            PINS_NIM.update(save)
+
+    entry = '[[text]]\nid = "TXT-0001"\nstep = "P3"\nspec = "RUN"\nline = "1"\nwhat = "x"\nclass = "todo"\n'
+    cleared = '[[text]]\nid = "TXT-0001"\nstep = "P3"\nspec = "RUN"\nline = "1"\nwhat = "x"\ntest = "tests/test_a.nim"\n'
+    named = 'test "[TXT-0001] it holds":\n  check true\n'
+
+    def with_cleared(body: str, tests: str) -> Path:
+        root = tree("", tests=tests)
+        (root / CLEARED_FILE).write_text(body, encoding="utf-8")
+        return root
+
+    gate = lambda p, refd, named_ids=frozenset(), live=frozenset({"RUN-0001"}): pending_gate_findings(
+        p, set(refd), set(named_ids), set(live), set(live)
+    )
+    fails = ["l.1: BCP-0001 is in no row"]
+
+
+    def frozen(open_list: str, base: str, done: str = "", tests: str = "", files: dict | None = None) -> Path:
+        root = tree(open_list, tests=tests)
+        (root / BASELINE_FILE).write_text(base, encoding="utf-8")
+        (root / CLEARED_FILE).write_text(done, encoding="utf-8")
+        for name, body in (files or {}).items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(body, encoding="utf-8")
+        return root
+
+    def clean(root: Path, status: tuple[str, bool] = ("claimed", False), step: str | None = None) -> bool:
+        return not pending_findings(root, step, state=lambda uid: status)
+
+    todo = 'id = "TXT-0001"\nstep = "P3"\nspec = "RUN"\nline = "1"\nwhat = "x"\nclass = "todo"\n'
+    must = todo.replace('"todo"', '"behaviour"')
+    watch = todo + "guard = true\n"
+    read = 'id = "TXT-0001"\nstep = "P3"\nkind = "informative"\nreading = "no change"\ncompared = "old and new text"\n'
+    moved = '[[moved]]\nid = "TXT-0001"\nfrom = "P3"\nto = "P4"\nreason = "belongs to P4"\n'
+    added, changed = '[units.added]\n"RUN-0001" = "P4"\n', '[units.changed]\n"RUN-0001" = "P4"\n'
+    record = '[[units]]\nid = "RUN-0001"\ncompared = "the test against the new text"\n'
+    ruled = '[[units]]\nid = "RUN-0001"\ndecision = "G7"\ncompared = "the claim against the new text"\n'
+    rows = {"docs/DECISIONS.md": "### G7 a decision on RUN-0001\n"}
+    other = {"docs/DECISIONS.md": "### G7 a decision on something else\n"}
+    plain = 'test "the rule holds":\n  check true\n'
+    quoted = 'const text = """\ntest "[TXT-0001] x":\n  check true\n"""\n'
+    commented = '#[\ntest "[TXT-0001] x":\n  check true\n]#\n'
+    cites = 'test "[RUN-0001] it holds":\n  check true\n'
+    two = 'test "[TXT-0001] [TXT-0002] both hold":\n  check true\n'
+    edited = tree("")
+    (edited / BASELINE_FILE).write_text("# changed\n", encoding="utf-8")
+    cases = [
+        ("a deleted text entry fails", clean(frozen("", "[[text]]\n" + todo)), False),
+        ("an entry on another sub-step fails", clean(frozen("[[text]]\n" + todo.replace("P3", "P4"), "[[text]]\n" + todo)), False),
+        ("a recorded move passes", clean(frozen("[[text]]\n" + todo.replace("P3", "P4"), "[[text]]\n" + todo, moved)), True),
+        ("a move away does not pass --step", clean(frozen("[[text]]\n" + todo.replace("P3", "P4"), "[[text]]\n" + todo), step="P3"), False),
+        ("a behaviour entry cleared by reading fails", clean(frozen("", "[[text]]\n" + must, "[[text]]\n" + read)), False),
+        ("a behaviour entry cannot be lowered", clean(frozen("[[text]]\n" + todo, "[[text]]\n" + must)), False),
+        ("a todo entry cleared by reading passes", clean(frozen("", "[[text]]\n" + todo, "[[text]]\n" + read)), True),
+        ("a reading without what was compared fails", clean(frozen("", "[[text]]\n" + todo, "[[text]]\n" + read.replace('compared = "old and new text"\n', ""))), False),
+        ("a guarded reading without a site fails", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read)), False),
+        ("a guarded entry cannot be informative", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read + 'site = "tests/test_a.nim:1"\n')), False),
+        ("a guarded reading that holds passes", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read.replace("informative", "holds") + 'site = "tests/test_a.nim:1"\nnamed = "the rule"\n', tests=plain)), True),
+        ("`holds` naming no real test fails", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read.replace("informative", "holds") + 'site = "tests/test_a.nim:1"\nnamed = "another rule"\n', tests=plain)), False),
+        ("a guarded site outside the code fails", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read.replace("informative", "removed") + 'site = "spec/pins.toml"\n')), False),
+        ("a stale id leaving with no record fails", clean(frozen("", '[stale]\n"RUN-0002" = "P4"\n')), False),
+        ("a stale id leaving with a record passes", clean(frozen("", '[stale]\n"RUN-0002" = "P4"\n', '[[stale]]\nid = "RUN-0002"\ncompared = "replaced by RUN-0003"\n')), True),
+        ("lowering with a decision row passes", clean(frozen("[[text]]\n" + todo, "[[text]]\n" + must, '[[lowered]]\nid = "TXT-0001"\ndecision = "G7"\n', files={"docs/DECISIONS.md": "### G7 on TXT-0001\n"})), True),
+        ("a test under if false is no evidence", clean(frozen("", added, tests='if false:\n  test "[RUN-0001] x":\n    check true\n')), False),
+        ("a test under an unknown define is no evidence", clean(frozen("", added, tests='when defined(neverSet):\n  test "[RUN-0001] x":\n    check true\n')), False),
+        ("a test under a platform condition counts", clean(frozen("", added, tests='when defined(posix):\n  test "[RUN-0001] x":\n    check true\n')), True),
+        ("a test that starts by skipping is no evidence", clean(frozen("", added, tests='test "[RUN-0001] x":\n  skip()\n  check true\n')), False),
+        ("a body file no suite includes is no evidence", clean(frozen("", added, files={"tests/zz_body.nim": cites})), False),
+        ("a body file a suite includes counts", clean(frozen("", added, tests="include zz_body\n", files={"tests/zz_body.nim": cites})), True),
+        ("an unknown work item fails", clean(frozen('[deferred]\n"RUN-0001" = "9-9"\n', "", ruled, files=rows), ("deferred:tier-5", True)), False),
+        ("a reading with no kind fails", clean(frozen("", "[[text]]\n" + todo, "[[text]]\n" + read.replace('kind = "informative"\n', ""))), False),
+        ("`holds` outside the tests fails", clean(frozen("", "[[text]]\n" + todo, "[[text]]\n" + read.replace("informative", "holds") + 'site = "spec/pins.toml"\n')), False),
+        ("a reword without its pair fails", clean(frozen("", "[[text]]\n" + todo + 'side = "new"\n', "[[text]]\n" + read.replace("informative", "reword"))), False),
+        ("`removed` on a new sentence fails", clean(frozen("", "[[text]]\n" + todo + 'side = "new"\n', "[[text]]\n" + read.replace("informative", "removed"))), False),
+        ("a unit leaving by its deferred section fails", clean(frozen("", added), ("deferred:tier-5", False)), False),
+        ("a unit deferred by name with no decision fails", clean(frozen("", added), ("deferred:tier-5", True)), False),
+        ("a unit deferred by name with a decision passes", clean(frozen("", added, ruled, files=rows), ("deferred:tier-5", True)), True),
+        ("a decision row that does not exist fails", clean(frozen("", added, ruled), ("deferred:tier-5", True)), False),
+        ("a decision row about another matter fails", clean(frozen("", added, ruled, files=other), ("deferred:tier-5", True)), False),
+        ("a test inside a long string is no evidence", bool(text_tags(tree("", tests=quoted))), False),
+        ("a test inside a block comment is no evidence", bool(text_tags(tree("", tests=commented))), False),
+        ("a reword naming itself fails", clean(frozen("", "[[text]]\n" + todo + 'side = "new"\n', "[[text]]\n" + read.replace("informative", "reword") + 'pair = "TXT-0001"\n')), False),
+        ("closing a sub-step before an earlier one fails", clean(frozen('closed = ["P2"]\n', "")), False),
+        ("P7 may close before P6", clean(frozen('closed = ["P1", "P2", "P3", "P4", "P5", "P7"]\n', "")), True),
+        ("a claimed unit with a test passes", clean(frozen("", added, tests=cites)), True),
+        ("a claimed unit cited only in a comment fails", clean(frozen("", added, tests="# [RUN-0001]\n")), False),
+        ("a test that only skips is no evidence", clean(frozen("", added, tests='test "[RUN-0001] x":\n  skip()\n')), False),
+        ("a test under when false is no evidence", clean(frozen("", added, tests='when false:\n  test "[RUN-0001] x":\n    check true\n')), False),
+        ("a changed unit with no record fails", clean(frozen("", changed, tests=cites)), False),
+        ("a changed unit with a record passes", clean(frozen("", changed, record, tests=cites)), True),
+        ("[deferred] without a named deferral fails", clean(frozen('[deferred]\n"RUN-0001" = "5-5"\n', ""), ("deferred:tier-5", False)), False),
+        ("[deferred] with a named deferral and a decision passes", clean(frozen('[deferred]\n"RUN-0001" = "5-5"\n', "", ruled, files=rows), ("deferred:tier-5", True)), True),
+        ("[deferred] with a vague owner fails", clean(frozen('[deferred]\n"RUN-0001" = "later"\n', "", ruled, files=rows), ("deferred:tier-5", True)), False),
+        ("a closed sub-step that owns an entry fails", clean(frozen('closed = ["P3"]\n[[text]]\n' + todo, "[[text]]\n" + todo)), False),
+        ("a baseline mirror dropped from the configuration fails", clean(frozen("", '[mirror]\n"gone.cddl" = "P2"\n')), False),
+        ("a baseline pin dropped from the pins fails", clean(frozen("", '[pin]\ngone = "P7"\n')), False),
+        ("an edited baseline fails", not pending_findings(edited, digest="0" * 64, state=lambda uid: ("claimed", False)), False),
+        ("every tag in a test name counts", text_tags(tree("", tests=two)).keys() == {"TXT-0001", "TXT-0002"}, True),
+        ("a tag outside a test name does not count", bool(text_tags(tree("", tests='echo "[TXT-0001]"\n'))), False),
+        ("another failure of a listed unit is not held", not split_deploydoc_failures(["l.1: BCP-0001 has no Answer"], Pending(deploydoc={"BCP-0001": "P9"}))[0], False),
+        ("a listed mirror that differs is held", ok(cmd_mirror, tree('[mirror]\n"m.cddl" = "P2"\n', "a = 2\n")), True),
+        ("an unlisted mirror that differs fails", ok(cmd_mirror, tree("", "a = 2\n")), False),
+        ("a listed mirror that matches fails", ok(cmd_mirror, tree('[mirror]\n"m.cddl" = "P2"\n')), False),
+        ("a listed pin that is gone is held", pins_ok(tree('[pin]\np = "P7"\n', pin="zzz")), True),
+        ("an unlisted pin that is gone fails", pins_ok(tree("", pin="zzz")), False),
+        ("a listed pin that is found fails", pins_ok(tree('[pin]\np = "P7"\n')), False),
+        ("an untested added unit is held", not gate(Pending(added={"RUN-0001": "P4"}), []), True),
+        ("an added unit with evidence fails", not gate(Pending(added={"RUN-0001": "P4"}), ["RUN-0001"]), False),
+        ("a retired unit still cited is held", not gate(Pending(stale={"RUN-0002": "P4"}), ["RUN-0002"]), True),
+        ("a stale entry nothing cites fails", not gate(Pending(stale={"RUN-0002": "P4"}), []), False),
+        ("a stale entry for a live unit fails", not gate(Pending(stale={"RUN-0001": "P4"}), ["RUN-0001"]), False),
+        ("a listed deploydoc failure is held", not split_deploydoc_failures(fails, Pending(deploydoc={"BCP-0001": "P9"}))[0], True),
+        ("a deploydoc entry that passes fails", not split_deploydoc_failures([], Pending(deploydoc={"BCP-0001": "P9"}))[0], False),
+        ("an open text entry is well formed", not pending_findings(tree(entry)), True),
+        ("a named test must move its entry", not pending_findings(tree(entry, tests=named)), False),
+        ("--step reports what it still owns", not pending_findings(tree(entry), "P3"), False),
+        ("a cleared entry names its test", not pending_findings(with_cleared(cleared, named)), True),
+        ("a cleared entry without that test fails", not pending_findings(with_cleared(cleared, "")), False),
+    ]
+    failed = [name for name, got, want in cases if got != want]
+    for name in failed:
+        print(f"pending self-test: {name} went wrong")
+    if not failed:
+        print(f"pending self-test: {len(cases)} cases")
+    return 1 if failed else 0
+
+
+def cmd_pending(args) -> int:
+    """The re-pin's pending list is well formed; with --step, that sub-step has cleared its entries."""
+    if args.self_test:
+        return pending_self_test()
+    root = Path(args.root)
+    findings = pending_findings(root, args.step, digest=BASELINE_SHA256)
+    for f in findings:
+        print(f)
+    pending = load_pending(root)
+    if args.step:
+        # What the sub-step's review reads in one place.
+        cleared = load_toml(root / CLEARED_FILE)
+        for e in cleared.get("text", []):
+            if e.get("step") == args.step and e.get("reading"):
+                carrier = f" [carried by {e['carrier']}]" if e.get("carrier") else ""
+                print(f"reading {e['id']}: compared {e.get('compared')}: {e['reading']}{carrier}")
+        for m in cleared.get("moved", []):
+            if args.step in (m.get("from"), m.get("to")):
+                print(f"moved {m['id']}: {m.get('from')} to {m.get('to')}: {m.get('reason')}")
+        records = {r.get("id"): r for r in cleared.get("units", [])}
+        tests = list(real_tests(root))
+        base = load_toml(root / BASELINE_FILE)
+        reasons: dict[str, list[str]] = {}
+        for extra in inspection_files(root):
+            for item in load_toml(extra).get("item", []):
+                for uid in item.get("ids", []):
+                    reasons.setdefault(uid, []).append(str(item.get("reason", "")))
+        for kind, now in (("added", pending.added), ("changed", pending.changed)):
+            for uid, was in sorted(base.get("units", {}).get(kind, {}).items()):
+                if was != args.step or uid in now:
+                    continue
+                record = records.get(uid, {})
+                print(f"unit {uid} ({kind}): compared {record.get('compared', 'nothing recorded')}; decision {record.get('decision', 'none')}")
+                for suite, name in tests:
+                    if re.search(rf"\[{uid}\]", name):
+                        print(f"  test {suite}: {name}")
+                for reason in reasons.get(uid, []):
+                    print(f"  inspection: {reason}")
+        for r in cleared.get("stale", []):
+            if base.get("stale", {}).get(r.get("id")) == args.step:
+                print(f"stale {r.get('id')}: {r.get('compared')}")
+        for e in cleared.get("text", []):
+            if e.get("step") == args.step and e.get("test"):
+                for suite, name in tests:
+                    if suite == e["test"] and f"[{e['id']}]" in name:
+                        print(f"text {e['id']}: {suite}: {name}")
+    counts: dict[str, int] = {}
+    for section in (pending.mirror, pending.pin, pending.added, pending.changed, pending.stale, pending.deploydoc):
+        for step in section.values():
+            counts[step] = counts.get(step, 0) + 1
+    for entry in pending.text:
+        counts[str(entry.get("step"))] = counts.get(str(entry.get("step")), 0) + 1
+    by_step = ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "nothing open"
+    print(f"{PENDING_FILE}: {by_step}; {len(pending.deferred)} deferred; {len(findings)} findings")
+    return 1 if findings else 0
 
 
 def main() -> int:
@@ -1039,6 +1698,9 @@ def main() -> int:
     sub.add_parser("deploydoc", help="check docs/DEPLOYMENT.md against the claims (DECISIONS G309)")
     o = sub.add_parser("owners", help="each unit has one owning package")
     o.add_argument("--self-test", action="store_true", help="check the lint on planted violations")
+    n = sub.add_parser("pending", help="check the re-pin's pending list")
+    n.add_argument("--step", help="fail if this sub-step still owns an entry")
+    n.add_argument("--self-test", action="store_true", help="check the list's rules on planted violations")
     g = sub.add_parser("gate")
     g.add_argument("--show", type=int, default=20, help="missing units listed per spec")
     g.add_argument(
@@ -1057,6 +1719,7 @@ def main() -> int:
         "gate": cmd_gate,
         "deploydoc": cmd_deploydoc,
         "owners": cmd_owners,
+        "pending": cmd_pending,
     }[args.cmd](args)
 
 

@@ -3,17 +3,17 @@
     "logos-lips": {
       "flake": false,
       "locked": {
-        "lastModified": 1794335447,
-        "narHash": "sha256-yr/mQgg6O2WnpHZ+DJOA4G7K8hXOap8iEy1A1LBB7Tc=",
+        "lastModified": 1794946157,
+        "narHash": "sha256-wX+sqcR8YtAmZj24Wg8Gq+7TB310IGU4E/W9apHc0C4=",
         "ref": "draft/logos-core-module-specs",
-        "rev": "6a4dfa2846ab9f1f679ad285f8caa848ee8544ad",
-        "revCount": 499,
+        "rev": "6cac8335af8cea0e5d4e2f9ccb2e584c5b27a7c2",
+        "revCount": 500,
         "type": "git",
         "url": "https://github.com/logos-co/logos-lips"
       },
       "original": {
         "ref": "draft/logos-core-module-specs",
-        "rev": "6a4dfa2846ab9f1f679ad285f8caa848ee8544ad",
+        "rev": "6cac8335af8cea0e5d4e2f9ccb2e584c5b27a7c2",
         "type": "git",
         "url": "https://github.com/logos-co/logos-lips"
       }

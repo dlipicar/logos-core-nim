@@ -43,6 +43,11 @@ default = "deferred:tier-5"
 "§17" = "deferred:tier-5"
 
 [units]
+# Stay deferred past the re-pin to 6cac8335; work item 5-5 owns them (spec/repin-pending.toml [deferred]).
+"PKG-0608" = "deferred:tier-5"
+"PKG-0609" = "deferred:tier-5"
+"PKG-0610" = "deferred:tier-5"
+"PKG-0611" = "deferred:tier-5"
 # §2: the Nix profile, and the catalog, Storage and backend metadata a manifest
 # must win over, come with fetch and the Nix profile.
 "PKG-0017" = "deferred:tier-5"

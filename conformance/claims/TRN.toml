@@ -51,6 +51,8 @@ default = "claimed"
 "§10" = "claimed"
 
 [units]
+# Stay deferred past the re-pin to 6cac8335; work item 5-7a owns them (spec/repin-pending.toml [deferred]).
+"TRN-0398" = "deferred:tier-5"
 # §3.2, §3.4: the native binding of a transported route. TRN-0278 (connection loss ends the
 # handle's invocation path for its observer) is claimed with step 4b-2b, TRN-0290 (abandonment and
 # released application state) with the subscriptions of step 4b-2c.
