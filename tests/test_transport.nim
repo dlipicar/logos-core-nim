@@ -646,36 +646,26 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
       let b = encodeMessage(m).get
       check encodeCbor(decodeValue(b).get) == b
     # Inside `params`, `result` and `data`: the map {"a": 1, "b": 2}, its keys
-    # swapped in the encoded message.
+    # swapped in the encoded message. The envelope check does not compare the
+    # commitment with the payload (no schema here), so any well-formed one does.
     let ab = cborMap((cbor("a"), cbor(1'u64)), (cbor("b"), cbor(2'u64)))
+    let anyCommitment = commitmentOf("storage.started_event", cborMap())
     let sorted = hexBytes("a2616101616202")
     let swapped = hexBytes("a2616202616101")
     let inside = [
       Message(
         kind: mkRequest,
-        request: Request(
-          id: 1,
-          methodName: "exists",
-          params: ab,
-          commitment: commitmentOf("storage.exists_request", ab),
-        ),
+        request:
+          Request(id: 1, methodName: "exists", params: ab, commitment: anyCommitment),
       ),
       Message(
         kind: mkResponse,
-        response: Response(
-          id: 1,
-          ok: true,
-          resultMap: ab,
-          commitment: commitmentOf("storage.exists_response", ab),
-        ),
+        response: Response(id: 1, ok: true, resultMap: ab, commitment: anyCommitment),
       ),
       Message(
         kind: mkEvent,
         event: Event(
-          sub: 3,
-          event: "storage.started_event",
-          data: ab,
-          commitment: commitmentOf("storage.started_event", ab),
+          sub: 3, event: "storage.started_event", data: ab, commitment: anyCommitment
         ),
       ),
     ]
