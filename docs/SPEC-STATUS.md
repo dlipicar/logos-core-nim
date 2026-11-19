@@ -200,6 +200,22 @@ G352 and G354 (DECISIONS, "Open items").
   RUN-1185, RUN-1187, RUN-1203 to RUN-1206 and RUN-1208 claimed, with CFG-0152, CFG-0154 and CFG-0155
   (moved from P6); RUN-1124, RUN-1125 and TXT-0163 deferred to 5-7a; 17 text entries cleared and 15
   stale ids replaced.
+- 2026-11-19, re-pin P4b (I108), the order of checks at 6cac8335:
+  - What is authorized without the payload comes before payload validation, for Runtime Control
+    and for ordinary calls.
+  - Readiness comes after each handler's expected revision and precondition rows, in row order,
+    and before every success.
+  - A transported Request whose params fail their schema goes to its owner, which checks it after
+    admission. An ordinary transported call that is both malformed and denied answers
+    INVALID_PARAMS, not NOT_AUTHORISED (G171's interim reading, Fable synthesis §8).
+  - `stop_module` answers on acceptance (`stopping`).
+  - The provider status set is checked at the five ABI call sites, and a Capability Authority
+    status outside it is a failed evaluation.
+
+  G171, G172, G173, G194 and G228 are settled by spec text. Claimed: RUN-1115 to RUN-1123,
+  RUN-1141, RUN-1162, RUN-1188, IFC-0979 and IFC-0980. Stale ids: RUN-0347 and RUN-0548 replaced;
+  RUN-0268 moved to P8, and RUN-0630, RUN-0639, RUN-0675, RUN-0912 and RUN-1053 to P5, where their
+  successors are claimed. 9 text entries cleared.
 
 ## Tiers at f4f83471 (the original plan)
 

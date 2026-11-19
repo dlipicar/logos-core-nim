@@ -510,7 +510,9 @@ proc completionOf(
   ## boundary checks a result, copied before its owner is released.
   ## A copy that is not returned is zeroed [DECISIONS G276].
   let shape = completionShape(response, len, owner)
-  var checked = checkOutcome(res, shape)
+  # [SPEC INTERFACE l.3306-3311] a provider's own completion status
+  var checked =
+    checkOutcome(res, shape).providerChecked(ticketCancelled(d.state.ticket))
   if checked.isErr:
     if ownerValid(owner):
       releaseOwner(owner)
@@ -817,7 +819,8 @@ proc runHostedRoute(c: ptr AsyncCall, bare: string) =
     if h != nil:
       dropHost(h)
   if reply.error.isSome:
-    # [G171] The host checks the params of a NOT_READY refusal first.
+    # [SPEC RUNTIME l.1828, l.1832] The host checks the params of a NOT_READY
+    # refusal first.
     let f = failureOf(reply.error.get)
     if h != nil:
       h.refuseHosted(c.conn, c.requestId, c.blob.root, f)

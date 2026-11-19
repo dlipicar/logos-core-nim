@@ -401,7 +401,7 @@ suite "run.permissions: settings under a selected profile (RUNTIME l.2526-2587)"
     check rc.now(e, "s").revision == 1
     e.finish()
 
-  test "[RUN-0473] [RUN-0481] settings authority is per method and target: it changes no intent, and grants no start":
+  test "[RUN-0473] [RUN-0481] [RUN-1141] settings authority is per method and target: it changes no intent, and grants no start":
     # The internal policy's rules decide, in the parity pass too.
     let e = fixtureEngine(
       pconfig(
@@ -426,6 +426,13 @@ suite "run.permissions: settings under a selected profile (RUNTIME l.2526-2587)"
     discard e.create(slow(), "y").tryGet
     let before = e.view("x").tryGet
     check rc.writeSettings(e.target("y"), 1, @[]).code == ecNotAuthorised
+    # [SPEC RUNTIME l.2461; l.1828-1829, step 3 before 4] An unordered or
+    # duplicate array is INVALID_PARAMS without detail, before the refused
+    # target, and is never sorted.
+    for xs in [@[ambient(), setting(Quota, quota(1))], @[ambient(), ambient()]]:
+      let r = rc.writeSettings(e.target("y"), 1, xs)
+      check r.code == ecInvalidParams
+      check r.detail.len == 0
     check rc.now(e, "y").revision == 1
     check rc.writeSettings(e.target("x"), 1, @[]).written.revision == 2
     let after = e.view("x").tryGet

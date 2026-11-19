@@ -715,10 +715,12 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
       let pe = closeMessage(acts).get
       check pe.code == ecInvalidParams and pe.detail.isNone and pe.message.isNone
       check callee.state == csClosed
-      # Within P, the envelope passes; the schema decides (cid is a tstr).
+      # Within P, the envelope passes; the schema decides (cid is a tstr): the
+      # Request goes to its owner, which fails the call after admission
+      # (re-pin P4b).
       var callee2 = calleeConn(storageBoundary, l)
-      let r = sent(callee2.receive(fitsP))
-      check r[0].response.failure.code == ecInvalidParams and callee2.state == csOpen
+      let r = callee2.receive(fitsP)
+      check dispatched(r).len == 1 and sent(r).len == 0 and callee2.state == csOpen
       # result and data
       check decodeMessage(rawResponse(0, atDepth(p), start), p).isOk
       check decodeMessage(rawResponse(0, atDepth(p + 1), start), p).error.kind ==
@@ -875,8 +877,11 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
     var (_, callee) = pair()
     let acts = callee.receive(b)
     check callee.state == csOpen
-    let resp = sent(acts)[0].response
-    check not resp.ok and resp.failure.code == ecInvalidParams
+    # Dispatched: its owner's check fails it after admission (re-pin P4b).
+    check dispatched(acts).len == 1 and sent(acts).len == 0
+    let owner =
+      validator(storage).checkParams("exists", encodeCbor(dispatched(acts)[0].params))
+    check owner.isErr and owner.error.toFailure.code == ecInvalidParams
     # In an envelope field, invalid UTF-8 is a field-type failure.
     let m = toCbor(samples()[1]).with("method", invalidText)
     check envelopeError(m).field == "method"
@@ -1285,7 +1290,7 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     check envelopeError(short).field == "commitment"
     check envelopeError(toCbor(samples()[1]).without("commitment")).field == "commitment"
 
-  test "[IFC-0977] [TRN-0159] [TRN-0292] [TRN-0293] [TRN-0294] [TRN-0297] [TRN-0298] the subtree root first, then the schema: a schema-invalid Request fails its call and keeps the session":
+  test "[IFC-0977] [TRN-0159] [TRN-0292] [TRN-0293] [TRN-0294] [TRN-0297] [TRN-0298] [RUN-1118] the subtree root first, then the schema: a schema-invalid Request keeps the session and goes to its owner, which fails the call after its authorization":
     let bad = cborMap((cbor("cid"), cbor(5'u64)))
     var (_, callee) = pair()
     # The value root is garbage: a schema-invalid payload has no value root to
@@ -1299,10 +1304,11 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
       )
     )
     check callee.state == csOpen
-    check dispatched(acts).len == 0
-    let resp = sent(acts)[0].response
-    check not resp.ok and resp.failure.code == ecInvalidParams
-    check resp.failure.detail.isSome
+    # [SPEC RUNTIME l.1827-1828; re-pin P4b] Not answered here: the call's
+    # authorization (step 2) comes before the payload's check (step 3).
+    check sent(acts).len == 0
+    check dispatched(acts).len == 1
+    check dispatched(acts)[0].params == bad
     let r = storageBoundary.acceptRequest(
       decodeMessage(
         rawRequest(
@@ -1313,7 +1319,7 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
         )
       ).get.request
     )
-    check r.error.cause == rcSchema and r.error.kind == rjRespond
+    check r.error.cause == rcSchema and r.error.kind == rjOwner
     # The session goes on.
     check dispatched(callee.receive(requestFor(1))).len == 1
     var (_, callee2) = pair()
@@ -1329,6 +1335,9 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     ) == Opt.some(ecInvalidParams)
 
   test "[TRN-0003] a rejected payload fails as it would in direct mode":
+    # [re-pin P4b] The session hands it on unchanged; its owner runs the
+    # direct-mode check (tests/test_routes.nim runs the end to end case over
+    # local transport, and tests/test_hosted_routes.nim in a Module Host).
     let bad = cborMap((cbor("cid"), cbor(5'u64)))
     var (_, callee) = pair()
     let acts = callee.receive(
@@ -1339,10 +1348,10 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
         PayloadCommitment(subtreeRoot: subtreeOf("storage.exists_request")),
       )
     )
-    let direct =
-      validator(storage).checkParams("exists", encodeCbor(bad)).error.toFailure
-    check sent(acts)[0].response.failure == direct
-    check sent(acts)[0].response.id == 3
+    check sent(acts).len == 0
+    let d = dispatched(acts)
+    check d.len == 1 and d[0].id == 3 and d[0].params == bad
+    check validator(storage).checkParams("exists", encodeCbor(d[0].params)).isErr
 
   test "[IFC-0977] [TRN-0097] [TRN-0300] [TRN-0296] a schema-invalid response-ok or Event closes; the call gets TRANSPORT_ERROR and the Event is not delivered":
     var (caller, _) = pair()

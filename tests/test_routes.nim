@@ -263,7 +263,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check acquired.vtable == nil and acquired.state == nil
     e.finish()
 
-  test "[RUN-1152] [RUN-1153] [TXT-0106] [IMPL-DECISION G171] M8: a listener address whose profile or alpn contradicts its transport is INVALID_PARAMS without detail, after what is authorized without the payload":
+  test "[RUN-1152] [RUN-1153] [TXT-0106] [RUN-1117] [RUN-1118] M8: a listener address whose profile or alpn contradicts its transport is INVALID_PARAMS without detail, after what is authorized without the payload":
     let e = fixtureEngine(
       config(
         denying(
@@ -355,7 +355,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check stopReply.load == ord(msUnloaded)
     e.finish()
 
-  test "[IMPL-DECISION G171] [RUN-0039] [RUN-0850] [RUN-0874] what needs no payload is authorized first, readiness last [IMPL-DECISION G171] (TF-18)":
+  test "[RUN-1117] [RUN-1118] [RUN-1122] [RUN-0039] [RUN-0850] [RUN-0874] what needs no payload is authorized first, readiness last (l.1827-1832)":
     var cfg = config(
       denying(
         deny(
@@ -391,6 +391,173 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     clientDestroyGate.store(false)
     joinThread(t)
     check stopReply.load == ord(msUnloaded)
+    e.finish()
+
+  test "[RUN-1115] [RUN-1116] [RUN-1117] [RUN-1118] [RUN-1119] [RUN-1120] [TXT-0156] the order of checks, steps 1 to 5: the method, what is authorized without the payload, the payload, the target, the revision (l.1824-1830)":
+    let e = fixtureEngine(
+      config(
+        denying(
+          deny(action = Opt.some(aaRuntimeControl), consumer = "c2"),
+          deny(action = Opt.some(aaLifecycle), consumer = "c1", target = "hidden"),
+        )
+      )
+    )
+    discard e.started(meter(), "m")
+    discard e.started(meter(), "hidden")
+    let (_, rc) = e.startClient("c1")
+    let (_, refused) = e.startClient("c2")
+    # 1 before 2: an unknown method from a caller that may call none.
+    check rcCall(refused, "no_such_method", [0xA0'u8]).code == ecMethodNotFound
+    # 2 before 3: a malformed payload for a method the caller may not call.
+    check rcCall(refused, "shutdown_runtime", [0x01'u8]).code == ecNotAuthorised
+    check rcCall(rc, "shutdown_runtime", [0x01'u8]).code == ecInvalidParams
+    # A lifecycle method's authority depends on its target (step 4): nothing
+    # precedes the payload's check.
+    check rcCall(refused, "start_module", [0xA0'u8]).code == ecInvalidParams
+    # 3 before 4: a malformed request naming another Runtime's instance is the
+    # schema failure, with its detail; well-formed, it is the foreign target,
+    # without detail (TXT-0156).
+    let foreign = "00000000-0000-4000-8000-000000000000"
+    check foreign != e.runtimeInstanceId
+    let target = cborMap(
+      @[
+        (cbor("module_instance_id"), cbor("m")),
+        (cbor("runtime_instance_id"), cbor(foreign)),
+      ]
+    )
+    let malformed = rcCall(
+      rc,
+      "get_execution_summary",
+      encodeCbor(cborMap(@[(cbor("target"), target), (cbor("x"), cbor(1'u64))])),
+    )
+    check malformed.code == ecInvalidParams
+    check malformed.detail.len > 0
+    let elsewhere = rcCall(
+      rc, "get_execution_summary", encodeCbor(cborMap(@[(cbor("target"), target)]))
+    )
+    check elsewhere.code == ecInvalidParams
+    check elsewhere.detail.len == 0
+    # 4 before 5: a stale revision for an instance the caller may not see, or
+    # one that does not exist, is NOT_AUTHORISED without a current revision.
+    for instance in ["hidden", "nobody"]:
+      let r = rc.lifecycle(
+        "start_module",
+        "meter_module",
+        Opt.some(instance),
+        expected = Opt.some(999'u64),
+        refusal = true,
+      )
+      check r.code == ecNotAuthorised
+      check r.refused.isNone
+    # 5 before 6: a stale revision on an instance whose state prohibits the
+    # operation (a ready instance cannot be recovered) is `stale-revision`.
+    proc recoverReq(instance: string, revision: uint64): seq[byte] =
+      encode(
+        LogosNSRuntimeControlRecoverModuleRequest(
+          module: "meter_module",
+          instance: instance,
+          expected_execution_revision: revision,
+        )
+      ).tryGet
+
+    let current = e.view("m").tryGet.execution.revision
+    let prohibited = rcCall(rc, "recover_module", recoverReq("m", current))
+    check prohibited.code == ecNotReady
+    check prohibited.refused.isNone
+    let stale = rcCall(rc, "recover_module", recoverReq("m", current + 7))
+    check stale.code == ecOk
+    check stale.refused.get.stale == Opt.some(current)
+    e.finish()
+
+  test "[RUN-1121] [TXT-0159] step 6 in row order: a reused request key (row 2) before a closed route (row 5)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let a = rc.routeId("a")
+    let b = rc.routeId("b")
+    check rc.renew("rk", b).code == ecOk
+    check rc.close(a).code == ecOk
+    # Row 5 alone, then both: the key was used for `b`'s renewal.
+    check rc.renew("fresh", a).code == ecNotReady
+    let both = rc.renew("rk", a)
+    check both.code == ecInvalidParams
+    check both.detail.len == 0
+    # The same request again is its replay.
+    check rc.renew("rk", b).code == ecOk
+    e.finish()
+
+  test "[RUN-1121] [TXT-0158] step 6 in row order: a recovery that the state prohibits (row 4) and whose revision cannot advance (row 7) is NOT_READY":
+    var cfg = config()
+    cfg.revisionBudget = 4
+    let e = fixtureEngine(cfg)
+    let (_, rc) = e.startClient()
+    let m = e.started(meter(), "m")
+    discard e.started(meter(), "n")
+    check e.stop("n").tryGet.state == msUnloaded # withdrawal is never refused
+    let mask = 0xFFFF_FFFF'u64
+    checkpoint "m's revision: " & $(m.execution.revision and mask)
+    check (m.execution.revision and mask) >= cfg.revisionBudget
+    # Row 7 alone: a start of `n` needs a revision that cannot advance.
+    let exhausted = rc.lifecycle("start_module", "meter_module", Opt.some("n"))
+    check exhausted.code == ecModule
+    check "exhausted" in exhausted.message
+    let both = rcCall(
+      rc,
+      "recover_module",
+      encode(
+        LogosNSRuntimeControlRecoverModuleRequest(
+          module: "meter_module",
+          instance: "m",
+          expected_execution_revision: e.view("m").tryGet.execution.revision,
+        )
+      ).tryGet,
+    )
+    check both.code == ecNotReady
+    check both.message == "the module instance is ready"
+    e.finish()
+
+  test "[RUN-1121] [RUN-1122] [RUN-1123] [TXT-0159] steps 5 to 8 from an invalidated binding: the revision and a table row before readiness, readiness before the contract root (l.1830-1833)":
+    var cfg = config()
+    cfg.stopDeadline = initDuration(seconds = 30) # both stay `stopping` meanwhile
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, ready) = e.startClient("c1")
+    let (t, _) = e.startClient("t")
+    let (c2, rc) = e.startClient("c2")
+    let unknown = newSeqWith(32, 0x5A'u8)
+    let scope = access(methods = Opt.some(@[unknown]))
+    # Step 8 alone: an access root the contract does not declare.
+    check ready.establish("k1", scope = scope).code == ecInvalidParams
+    clientDestroyGate.store(true)
+    var t1, t2: Thread[(Engine, string)]
+    check e.stopping(t.instance, t1)
+    check e.stopping(c2.instance, t2)
+    # Step 7 alone.
+    let alone = rcCall(rc, "get_self", [0xA0'u8])
+    check alone.code == ecNotReady
+    check alone.message == "the Runtime Control binding is invalidated"
+    # 6 before 7: a start that the target's state prohibits.
+    let prohibited = rc.lifecycle("start_module", "client_module", Opt.some(t.instance))
+    check prohibited.code == ecNotReady
+    check prohibited.message == "the module instance is stopping"
+    # 5 before 6 and 7: the same start with a stale revision.
+    let stale = rc.lifecycle(
+      "start_module",
+      "client_module",
+      Opt.some(t.instance),
+      expected = Opt.some(999'u64),
+      refusal = true,
+    )
+    check stale.code == ecOk
+    check stale.refused.get.stale ==
+      Opt.some(e.view(t.instance).tryGet.execution.revision)
+    # 7 before 8.
+    let late = rc.establish("k2", scope = scope)
+    check late.code == ecNotReady
+    check late.message == "the Runtime Control binding is invalidated"
+    clientDestroyGate.store(false)
+    joinThread(t1)
+    joinThread(t2)
     e.finish()
 
   test "[RUN-0113] [RUN-0794] a caller waiting in start_module is released when its binding ends (§3.4)":
@@ -493,7 +660,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check e.routes().len == 2
     e.finish()
 
-  test "[RUN-0547] [RUN-0548] access lists must be strictly ascending without duplicates; nothing is sorted or deduplicated (§9.3 l.3024-3025)":
+  test "[RUN-0547] [RUN-1162] access lists must be strictly ascending without duplicates, INVALID_PARAMS without validation detail; nothing is sorted or deduplicated (l.2932)":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -518,7 +685,9 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
       ("twice", access(methods = Opt.some(@[read, read]))),
       ("events", access(subscribe = Opt.some(@[event, event]))),
     ]:
-      check rc.establish(key, scope = scope).code == ecInvalidParams
+      let r = rc.establish(key, scope = scope)
+      check r.code == ecInvalidParams
+      check r.detail.len == 0
       check e.routes().len == before
     let scope = access(methods = Opt.some(@[lo, hi]), subscribe = Opt.some(@[event]))
     let up = rc.establish("up", scope = scope)
@@ -752,6 +921,23 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     h.release()
     e.finish()
 
+  test "[IFC-0979] [IFC-0980] [TXT-0034] a provider's TIMEOUT, NOT_READY, NOT_AUTHORISED, TRANSPORT_ERROR or CANCELLED without a known cancellation is MODULE_ERROR without its message; its MODULE_ERROR passes through (INTERFACE l.3306-3311)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    check h.read(13).error.message == Opt.some("channel 13 is broken")
+    for channel in 9001'u32 .. 9005'u32:
+      checkpoint("channel " & $channel)
+      let f = h.read(channel)
+      check f.isErr
+      if f.isErr:
+        check f.error.code == ecModule
+        check f.error.message.isNone
+    check h.read(5).isOk
+    h.release()
+    e.finish()
+
   test "[RUN-0154] [RUN-0866] [RUN-0188] the access scope and the per-call decision (§9.3 l.3003-3004; l.1732)":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaCall), consumer = "denied")))
@@ -774,6 +960,75 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     var d = denied.handle(denied.routeId("d"))
     check d.read(5).error.code == ecNotAuthorised
     d.release()
+    e.finish()
+
+  test "[IMPL-DECISION G171] [RUN-1115] [RUN-1117] [RUN-1118] [RUN-1122] an ordinary call: its authorization before its payload, readiness after it (l.1824-1832)":
+    var cfg = config(
+      denying(
+        deny(action = Opt.some(aaCall), consumer = "denied"),
+        deny(
+          action = Opt.some(aaRoute), operation = "renew_route", consumer = "revoked"
+        ),
+      )
+    )
+    cfg.stopDeadline = initDuration(seconds = 30) # `late` stays `stopping` meanwhile
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient("allowed")
+    let (_, denied) = e.startClient("denied")
+    let (_, revoking) = e.startClient("revoked")
+    let (late, lateRc) = e.startClient("late")
+    let malformed = encodeCbor(cborMap(@[(cbor("channel"), cbor("x"))]))
+    var h = rc.handle(rc.routeId("a"))
+    let bad = h.raw("read", malformed)
+    check bad.code == ecInvalidParams
+    check bad.detail.len > 0
+    # Step 2's route access checks (TRANSPORT §8.1), which the consumer's side
+    # owns in every placement: a method outside the route's access, then a
+    # revoked route.
+    let narrow =
+      rc.establish("n", scope = access(methods = Opt.some(newSeq[seq[byte]]())))
+    var n = rc.handle(narrow.routesOf.routes[0].route)
+    let outside = n.raw("read", malformed)
+    check outside.code == ecNotAuthorised
+    check outside.detail.len == 0
+    n.release()
+    let route = revoking.routeId("k")
+    var v = revoking.handle(route)
+    check revoking.renew("r1", route).code == ecNotAuthorised
+    let gone = v.raw("read", malformed)
+    check gone.code == ecNotAuthorised
+    check gone.detail.len == 0
+    v.release()
+    # Step 2's call decision.
+    var d = denied.handle(denied.routeId("d"))
+    let refused = d.raw("read", malformed)
+    if overTransport:
+      # [DECISIONS G171, interim reading] The provider's side makes the call
+      # decision, after its session dispatches the Request (`rjOwner`,
+      # tests/test_transport.nim). The consumer's own session cannot commit the
+      # payload (TRANSPORT §4.1, l.640) and refuses it first, so a call that is
+      # both malformed and denied is INVALID_PARAMS here and NOT_AUTHORISED when
+      # direct (l.1257 not met in this corner).
+      check refused.code == ecInvalidParams
+      check refused.detail.len > 0
+    else:
+      check refused.code == ecNotAuthorised
+      check refused.detail.len == 0
+    d.release()
+    # Step 7 after step 3: the consumer's side is not ready.
+    var l = lateRc.handle(lateRc.routeId("l"))
+    clientDestroyGate.store(true)
+    var t: Thread[(Engine, string)]
+    check e.stopping(late.instance, t)
+    let notLive = l.raw("read", malformed)
+    check notLive.code == ecInvalidParams
+    check notLive.detail.len > 0
+    check l.read(5).error.code == ecNotReady
+    l.release()
+    clientDestroyGate.store(false)
+    joinThread(t)
+    h.release()
     e.finish()
 
   test "[IFC-0512] [IFC-0513] [IFC-0514] [IFC-0515] [IFC-0943] [IFC-0945] [IFC-0946] [IFC-0947] [RUN-0146] [RUN-0147] [RUN-0184] [RUN-0531] materialize_route failures (INTERFACE §5.2 l.3884-3890)":
@@ -1065,7 +1320,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     e.finish()
 
 suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9.3)":
-  test "[IMPL-DECISION G171] [RUN-0165] [RUN-0579] [RUN-0580] [RUN-0360] [RUN-0574] [RUN-0841] [RUN-0887] [IFC-0665] a stopped provider fails its routes":
+  test "[RUN-1118] [RUN-1122] [RUN-0165] [RUN-0579] [RUN-0580] [RUN-0360] [RUN-0574] [RUN-0841] [RUN-0887] [IFC-0665] a stopped provider fails its routes":
     let e = fixtureEngine(config())
     let m = e.started(meter())
     let (_, rc) = e.startClient()
@@ -1080,7 +1335,8 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     )
     check seen.code.load == ord(ecNotReady)
     check h.read(5).error.code == ecNotReady
-    # [G171 interim (TF-18)] The payload is validated before readiness.
+    # [SPEC RUNTIME l.1828, l.1832] The payload is validated (step 3) before
+    # readiness (step 7).
     let bad = h.raw("read", encodeCbor(cborMap(@[(cbor("channel"), cbor("x"))])))
     check bad.code == ecInvalidParams
     check bad.detail.len > 0
@@ -1290,7 +1546,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     check started.state.kind == LogosNSRuntimeControlStateKind.Ready
     let v = e.view("m1").tryGet
     check v.intentOrigin.instance == c.instance
-    let stop = rc.lifecycle("stop_module", "meter_module")
+    let stop = rc.stoppedVia("meter_module")
     check stop.code == ecOk
     check stop.accepted(LogosNSRuntimeControlStopModuleResponse).instance ==
       Opt.some("m1")
@@ -1372,7 +1628,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     check rc.lifecycle("start_module", "meter_module", Opt.some("m1")).code == ecOk
     e.finish()
 
-  test "[IMPL-DECISION G173] a caller with a call in progress in the target gets the state at once (TF-20)":
+  test "[RUN-1188] [TXT-0201] a caller with a call in progress in the target gets `stopping` at once, as every Runtime Control stop does (l.3551-3556)":
     var cfg = config()
     cfg.stopDeadline = initDuration(seconds = 30) # waiting would take this long
     let e = fixtureEngine(cfg)
@@ -1404,7 +1660,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     h.release()
     e.finish()
 
-  test "[IMPL-DECISION G173] a module stopping itself gets the state at once (TF-20)":
+  test "[RUN-1188] [TXT-0201] a module stopping itself gets `stopping` at once":
     var cfg = config()
     cfg.stopDeadline = initDuration(seconds = 30) # the destroy ends well before
     let e = fixtureEngine(cfg)
@@ -1418,6 +1674,31 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     check waitUntil(
       proc(): bool =
         e.view(c.instance).tryGet.state == msUnloaded
+    )
+    e.finish()
+
+  test "[RUN-1188] [TXT-0201] [TXT-0202] stop_module answers `stopping` while the target's destroy is held, without waiting for it; get_readiness reports `unloaded` once it completes (l.3551-3556)":
+    var cfg = config()
+    cfg.stopDeadline = initDuration(seconds = 30) # the destroy ends well before
+    let e = fixtureEngine(cfg)
+    let (_, rc) = e.startClient()
+    let (t, _) = e.startClient("target")
+    clientDestroyGate.store(true)
+    let begun = getMonoTime()
+    let r = rc.lifecycle("stop_module", "client_module", Opt.some(t.instance))
+    check getMonoTime() - begun < initDuration(seconds = 5 * Slow)
+    check r.code == ecOk
+    check r.accepted(LogosNSRuntimeControlStopModuleResponse).state.kind ==
+      LogosNSRuntimeControlStateKind.Stopping
+    let held = LogosNSRuntimeControlGetReadinessResponse.decode(
+      rc.readiness("client_module", Opt.some(t.instance)).response
+    )
+    check held.isOk and held.get.state.kind == LogosNSRuntimeControlStateKind.Stopping
+    check not rc.unloadedNow("client_module", Opt.some(t.instance))
+    clientDestroyGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        rc.unloadedNow("client_module", Opt.some(t.instance))
     )
     e.finish()
 

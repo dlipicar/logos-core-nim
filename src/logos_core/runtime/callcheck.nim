@@ -103,8 +103,9 @@ proc notReadyAfter*(
     params: openArray[byte],
     f: InvocationFailure,
 ): InvocationFailure =
-  ## [G171 interim (TF-18)] A call the Runtime thread answered NOT_READY is
-  ## authorized; its payload is validated before readiness is reported.
+  ## [SPEC RUNTIME l.1828, l.1832] A call the Runtime thread answered
+  ## NOT_READY is authorized; its payload is validated (step 3) before
+  ## readiness (step 7) is reported.
   if f.code == ecNotReady and sel.isOk:
     let r = checkRequest(sel.get, bare, params)
     if r.isErr:

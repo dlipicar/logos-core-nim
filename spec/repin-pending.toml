@@ -113,8 +113,6 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "IFC-0958" = "P8"
 "IFC-0968" = "P8"
 "IFC-0969" = "P8"
-"IFC-0979" = "P4"
-"IFC-0980" = "P4"
 "LDR-0167" = "P6"
 "LDR-0168" = "P6"
 "LDR-0169" = "P6"
@@ -230,19 +228,8 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-1108" = "P5"
 "RUN-1109" = "P5"
 "RUN-1110" = "P5"
-"RUN-1115" = "P4"
-"RUN-1116" = "P4"
-"RUN-1117" = "P4"
-"RUN-1118" = "P4"
-"RUN-1119" = "P4"
-"RUN-1120" = "P4"
-"RUN-1121" = "P4"
-"RUN-1122" = "P4"
-"RUN-1123" = "P4"
-"RUN-1141" = "P4"
 "RUN-1142" = "P5"
 "RUN-1161" = "P4"
-"RUN-1162" = "P4"
 "RUN-1164" = "P4"
 "RUN-1165" = "P4"
 "RUN-1167" = "P4"
@@ -259,7 +246,6 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-1181" = "P4"
 "RUN-1183" = "P5"
 "RUN-1184" = "P5"
-"RUN-1188" = "P4"
 "RUN-1190" = "P5"
 "RUN-1191" = "P5"
 "RUN-1192" = "P5"
@@ -323,15 +309,13 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-0061" = "P5"
 "RUN-0109" = "P5"
 "RUN-0111" = "P5"
-"RUN-0268" = "P4"
-"RUN-0347" = "P4"
+"RUN-0268" = "P8"
 "RUN-0491" = "P4"
 "RUN-0504" = "P4"
 "RUN-0505" = "P4"
 "RUN-0506" = "P4"
 "RUN-0507" = "P4"
 "RUN-0541" = "P4"
-"RUN-0548" = "P4"
 "RUN-0579" = "P4"
 "RUN-0599" = "P4"
 "RUN-0602" = "P4"
@@ -339,11 +323,11 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "RUN-0623" = "P4"
 "RUN-0624" = "P4"
 "RUN-0626" = "P4"
-"RUN-0630" = "P4"
-"RUN-0639" = "P4"
-"RUN-0675" = "P4"
-"RUN-0912" = "P4"
-"RUN-1053" = "P4"
+"RUN-0630" = "P5"
+"RUN-0639" = "P5"
+"RUN-0675" = "P5"
+"RUN-0912" = "P5"
+"RUN-1053" = "P5"
 "SEC-0021" = "P6"
 "SEC-0057" = "P6"
 
@@ -367,16 +351,6 @@ closed = ["P1", "P2", "P3"]  # sub-steps that have merged; `spectrace pending` f
 "TRN-0402" = "5-12"
 "TRN-0403" = "5-12"
 "TXT-0163" = "5-7a"
-
-[[text]]
-id = "TXT-0040"
-step = "P4"
-spec = "IFC"
-line = "3180"
-side = "old"
-section = "§4.6"
-class = "todo"
-what = "The invocation status passes through unchanged."
 
 [[text]]
 id = "TXT-0168"
@@ -442,17 +416,6 @@ side = "new"
 source = "M9"
 class = "behaviour"
 what = "An allow narrower than the bound scope ends the route as revoked with authority-denied"
-
-[[text]]
-id = "TXT-0034"
-step = "P4"
-spec = "IFC"
-line = "3134"
-side = "new"
-section = "§4.6"
-source = "n.128"
-class = "todo"
-what = "The invocation status passes through unchanged after the provider-result validation required by Section 5.1."
 
 [[text]]
 id = "TXT-0146"
@@ -552,40 +515,6 @@ side = "new"
 section = "§9.2"
 class = "todo"
 what = "The preceding CDDL block is the complete `logos.runtime` supporting schema."
-
-[[text]]
-id = "TXT-0156"
-step = "P4"
-spec = "RUN"
-line = "1806"
-side = "new"
-section = "§9.3.1"
-source = "n.165a"
-class = "todo"
-guard = true
-what = "A target module-instance address names a Runtime other than the one exposing the invoked contract. | `INVALID_PARAMS`"
-
-[[text]]
-id = "TXT-0158"
-step = "P4"
-spec = "RUN"
-line = "1812"
-side = "new"
-section = "§9.3.1"
-source = "n.165c, review"
-class = "behaviour"
-what = "A required execution, configuration-state, or permission-settings revision cannot advance, or the resulting state cannot be persisted. | `MODULE_ERROR`"
-
-[[text]]
-id = "TXT-0159"
-step = "P4"
-spec = "RUN"
-line = "1816"
-side = "new"
-section = "§9.3.1"
-class = "todo"
-guard = true
-what = "The conditions in this table are failures of the invocation itself: a foreign target address, a reused request key, a route scope that the remote profile cannot carry, and a prohibited lifecycle operation are caller errors, the `NOT_READY` conditions are Runtime-owned readiness failures, and the `MODULE_ERROR` condition is a Runtime failure."
 
 [[text]]
 id = "TXT-0161"
@@ -898,17 +827,6 @@ class = "todo"
 what = "`logos_runtime_control.cddl` is an extracted machine-readable mirror."
 
 [[text]]
-id = "TXT-0226"
-step = "P4"
-spec = "RUN"
-line = "1913"
-side = "old"
-section = "§9.3"
-class = "todo"
-guard = true
-what = "An expected execution, permission-settings, or configuration-state revision does not equal the current revision. | `INVALID_PARAMS`"
-
-[[text]]
 id = "TXT-0227"
 step = "P4"
 spec = "RUN"
@@ -1130,17 +1048,6 @@ side = "old"
 section = "§9.3"
 class = "todo"
 what = "`execution_state_changed_event` reports execution-summary changes in committed order, including intent changes without a lifecycle transition."
-
-[[text]]
-id = "TXT-0267"
-step = "P4"
-spec = "RUN"
-line = "3687"
-side = "old"
-section = "§9.3"
-class = "todo"
-guard = true
-what = "For a local module implementation, success means Runtime has performed the lifecycle work needed to move the selected module instance toward `stopping` or `unloaded`, including lifecycle destruction where applicable."
 
 [[text]]
 id = "TXT-0269"
@@ -1569,27 +1476,6 @@ side = "new"
 section = "§9.3.17"
 class = "todo"
 what = "An observer obtains the changed failure, selection, and realization through `get_execution_summary`."
-
-[[text]]
-id = "TXT-0201"
-step = "P4"
-spec = "RUN"
-line = "3554"
-side = "new"
-section = "§9.3.18"
-class = "todo"
-guard = true
-what = "For a local module implementation, success means Runtime has accepted the stop and the selected module instance is `stopping` or `unloaded`."
-
-[[text]]
-id = "TXT-0202"
-step = "P4"
-spec = "RUN"
-line = "3556"
-side = "new"
-section = "§9.3.18"
-class = "todo"
-what = "Completion of the stop is reported through `module_state_changed_event` and `get_readiness`."
 
 [[text]]
 id = "TXT-0203"

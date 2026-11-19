@@ -469,8 +469,9 @@ suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (
     check v.request ==
       Opt.some(ValueCommitment(schema_subtree_root: @subtree, value_root: @root))
     check v.response.isSome
-    # [G171 interim] establish_route's authority comes before its payload's
-    # validation, so its decision applies to a call that then fails.
+    # [SPEC RUNTIME l.1827-1828] establish_route's authority (step 2) comes
+    # before its payload's validation (step 3), so its decision applies to a
+    # call that then fails.
     setScript(retaining("rc:establish_route"))
     check rcCall(orch, "establish_route", @[0xA0'u8]).code == ecInvalidParams
     let w = e.kept[^1].view

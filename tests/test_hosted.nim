@@ -191,6 +191,19 @@ when defined(posix):
     for c in e.changes().withoutLoader:
       result.add((c.view.instance, $c.view.state, c.view.failureOf))
 
+  proc byInstance(t: seq[Transition]): seq[Transition] =
+    ## Each instance's transitions, in their order, instance after instance.
+    ## A stop is answered once accepted (RUNTIME l.3551-3556), so its
+    ## completion may come before or after another instance's transition.
+    var order: seq[string]
+    for x in t:
+      if x[0] notin order:
+        order.add(x[0])
+    for i in order:
+      for x in t:
+        if x[0] == i:
+          result.add(x)
+
   # S-2, S-3 ---------------------------------------------------------------------------
 
   suite "run.hosted: a hosted consumer (RUNTIME §4.2.1; LOADER §5.2, §12)":
@@ -301,7 +314,12 @@ when defined(posix):
         discard e.started(meter(), "m")
         discard e.create(probe(hosted), "p").tryGet
         check e.start("p").tryGet.state == msReady
-        check e.view("m").tryGet.state == msUnloaded # stopped by the probe
+        # Stopped by the probe; the stop answered once accepted, so its
+        # completion is waited for (RUNTIME l.3551-3556).
+        check waitUntil(
+          proc(): bool =
+            e.view("m").tryGet.state == msUnloaded
+        )
         result = (lines(dir, "rc"), e.transitions)
         e.finish()
 
@@ -317,7 +335,7 @@ when defined(posix):
         check self.get.consumer.module_instance_id == "p"
       check direct[4].startsWith($ord(ecInvalidParams) & " ")
       check hosted == direct
-      check hostedChanges == directChanges
+      check hostedChanges.byInstance == directChanges.byInstance
 
   # S-5 ---------------------------------------------------------------------------------
 
@@ -617,7 +635,7 @@ when defined(posix):
         check me.modes.get(@[]).mapIt(it.kind) == @[ExecModeKind.Local_transport]
         check me.placements.get(@[]).mapIt(it.kind) == @[PlacementKind.Process]
       check lines(dir, "inits") == @["init"]
-      check orch.lifecycle("stop_module", "probe_module", Opt.some("p")).code == ecOk
+      check orch.stoppedVia("probe_module", Opt.some("p")).code == ecOk
       check noHostLeft()
       let before = e.realizations
       setScript(

@@ -18,11 +18,11 @@
 ##   ordering thread that waits while the loop's output budget is full.
 ## - **Calls.** A Request's params stay here (`HostInv`). A refused one is
 ##   answered here, its params checked first when the refusal is NOT_READY
-##   (G171). An admitted one runs on a dispatch worker: its params are checked
+##   (RUNTIME l.1828, l.1832). An admitted one runs on a dispatch worker: its params are checked
 ##   under the session's selected contract (`selected.nim`, with the
 ##   Runtime's own `callcheck`), the provider runs with an invocation context
 ##   made from the verdict (its caller is the consumer the Runtime names), its
-##   status is checked as on the direct path (G172) and its response against
+##   status is checked as on the direct path (INTERFACE l.3306-3311) and its response against
 ##   the schema, and the loop commits the Response. `logos.schema` is answered
 ##   by the loop from the selected contract once its request checks.
 ## - **Commit (K38 interim, G273).** Each Request has one Response: the
@@ -461,8 +461,8 @@ proc leave(d: ptr HostInv) =
 
 proc runSync(d: ptr HostInv) =
   ## [SPEC INTERFACE l.2013-2017] `_MODULE_dispatch` with the context current;
-  ## the status checked as on the direct path (G172), the buffer copied and
-  ## freed at once.
+  ## the status checked as on the direct path (l.3306-3311, in this process),
+  ## the buffer copied and freed at once.
   var buf: ptr UncheckedArray[uint8] = nil
   var len: csize_t = 0
   var f = Frame(context: addr d.context, access: sv.access)
@@ -474,7 +474,8 @@ proc runSync(d: ptr HostInv) =
   # [DECISIONS G276] The provider's text and bytes are copied once, then the
   # copies are wiped where they end (`respond`); its buffer is its own to wipe.
   var outcome = block:
-    var checked = checkOutcome(r, bufferShape(buf, len))
+    var checked =
+      checkOutcome(r, bufferShape(buf, len)).providerChecked(d.cancelled.load)
     if checked.isErr:
       if transfersBuffer(r, buf):
         sv.free(sv.module, buf)
@@ -519,7 +520,10 @@ proc completeOp(
   if not first:
     releaseOwner(owner)
     return
-  var checked = checkOutcome(res, completionShape(response, len, owner))
+  # [SPEC INTERFACE l.3306-3311] the invocation's own cancellation flag
+  var checked = checkOutcome(res, completionShape(response, len, owner)).providerChecked(
+      d.cancelled.load
+    )
   var outcome =
     if checked.isErr:
       if ownerValid(owner):
@@ -716,8 +720,8 @@ proc verdict(v: LcnCarrierAdmitVerdict) =
     if d == nil:
       return # its session ended, or the Runtime answered it
     if not answered:
-      # [G171 interim (TF-18)] A NOT_READY refusal is reported only once the
-      # params validate.
+      # [SPEC RUNTIME l.1828, l.1832] A NOT_READY refusal is reported only once
+      # the params validate.
       var params = d.paramsOf
       let f = notReadyAfter(
         selectedFor(root), $d.methodName, params, toInvocation(v.failure.get)

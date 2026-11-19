@@ -36,6 +36,10 @@ type
   RejectKind* = enum
     rjRespond ## answer with this failure (the call fails, the session stays)
     rjClose ## ProtocolError with `failure.code` and close the provider session
+    rjOwner
+      ## [SPEC RUNTIME l.1827-1828; re-pin P4b] a Request whose params fail
+      ## their schema: dispatched all the same, for its owner to fail the call
+      ## as in direct mode, after the call's authorization
 
   RejectCause* = enum
     ## Which receiving check failed (§4.1, §8.1), in the order they run.
@@ -255,6 +259,8 @@ func recheckIn(
   ## For a marked payload (`marked`, in the marked scope) the recomputed value
   ## root is zeroed after the comparison, and the validator's INVALID_PARAMS
   ## path stops before its first payload-derived segment [DECISIONS G276, G278].
+  ## With `onSchema` `rjOwner` a schema failure carries no failure: the owner
+  ## computes its own; a resource failure is still answered here.
   if c.subtreeRoot != t.subtreeRoot:
     return err(
       reject(rjClose, rcSubtreeRoot, ecInvalidParams, "schema_subtree_root differs")
@@ -277,7 +283,10 @@ func recheckIn(
   var mine = t.commit(v).valueOr:
     return err(
       reject(
-        onSchema, rcResource, ecModule, "the commitment cannot be computed: " & error
+        (if onSchema == rjOwner: rjRespond else: onSchema),
+        rcResource,
+        ecModule,
+        "the commitment cannot be computed: " & error,
       )
     )
   let same = mine.valueRoot == c.valueRoot
@@ -298,6 +307,12 @@ func acceptRequest*(b: Boundary, r: Request): Result[void, Reject] =
   ## resolved under the selected contract only (unknown: METHOD_NOT_FOUND), then
   ## the route's method scope (outside: NOT_AUTHORISED), then the commitment and
   ## schema checks of `recheck`. No provider code runs on any failure.
+  ## [SPEC RUNTIME l.1824-1828; TRANSPORT §4.1 (2); re-pin P4b] A schema failure
+  ## is `rjOwner`: the call fails "as in direct mode", where the Runtime's
+  ## authorization of the call (step 2) comes before the payload's check (step
+  ## 3). Its owner admits it, then checks the params under the same selected
+  ## contract (`callProvider`, the Module Host's `runAdmitted`); the params go
+  ## nowhere they would not go for a valid Request.
   let t = b.requestTarget(r.methodName, false).valueOr:
     return err(
       reject(
@@ -316,7 +331,7 @@ func acceptRequest*(b: Boundary, r: Request): Result[void, Reject] =
         r.methodName & " is outside the route scope",
       )
     )
-  t.recheck(r.params, r.commitment, rjRespond, b.marked(r.methodName).request)
+  t.recheck(r.params, r.commitment, rjOwner, b.marked(r.methodName).request)
 
 func acceptResponse*(
     b: Boundary, methodName: string, r: Response

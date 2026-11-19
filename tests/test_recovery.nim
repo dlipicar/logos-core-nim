@@ -327,7 +327,8 @@ suite "run.rc: recover_module (RUNTIME §9.3 l.3537-3544, §10.1)":
     check e.cleanupPending("w")
     let r = e.rev("w")
     check arc.recoverOn("w", r).code == ecNotReady
-    # What comes before readiness (G171): authority, the module name, the revision.
+    # What comes before readiness (RUNTIME l.1829-1830, steps 4 and 5):
+    # authority, the module name, the revision.
     let stale = arc.recoverOn("w", r - 1, refusal = true)
     check stale.code == ecOk and stale.detail.len == 0
     check stale.refused.get.stale == Opt.some(r)
@@ -593,7 +594,7 @@ suite "run.rc: retire_module (RUNTIME §9.3 l.3556-3595)":
     discard e.create(counter(), "w").tryGet
     check arc.retire(e, "w").code == ecNotAuthorised
     check arc.lifecycle("start_module", "counter_module", Opt.some("w")).code == ecOk
-    check arc.lifecycle("stop_module", "counter_module", Opt.some("w")).code == ecOk
+    check arc.stoppedVia("counter_module", Opt.some("w")).code == ecOk
     check arc.createOn("counter_module", "k").code == ecOk
     check arc.retire(e, "w").code == ecNotAuthorised
     check e.view("w").isOk

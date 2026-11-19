@@ -684,7 +684,7 @@ when defined(posix):
       check o.outcome(cd, o.send(cd, 13)).codeOf == Opt.some(ecModule)
       e.finish()
 
-    test "[IMPL-DECISION G172] [RUN-0815] [IMPL-DECISION G274] P-9 a hosted provider's failure passes through; an invalid status or a response outside the schema is MODULE_ERROR, as direct":
+    test "[IFC-0979] [IFC-0980] [TXT-0034] [RUN-0815] [IMPL-DECISION G274] P-9 a hosted provider's failure passes through; an invalid status, a status outside the provider set or a response outside the schema is MODULE_ERROR, as direct, checked in the Module Host":
       let cfg = hosted()
       discard cfg.stateOf()
       let e = fixtureEngine(cfg)
@@ -699,7 +699,7 @@ when defined(posix):
       var hd = rc.handle(
         rc.establish("kd", provider = Opt.some(providerAddress(dm.providerId))).recordOf.route
       )
-      for channel in [13'u32, 14, 16]:
+      for channel in [13'u32, 14, 16, 9001, 9002, 9003, 9004, 9005]:
         checkpoint("channel " & $channel)
         let viaHost = hh.read(channel)
         let direct = hd.read(channel)
@@ -708,6 +708,8 @@ when defined(posix):
           check viaHost.error.code == direct.error.code
           check viaHost.error.code == ecModule
           check viaHost.error.message == direct.error.message
+          if channel >= 9001:
+            check viaHost.error.message.isNone
       hh.release()
       hd.release()
       e.finish()
@@ -1246,6 +1248,28 @@ when defined(posix):
   proc readVia(c: var Consumer, slot: int, channel: uint32): string =
     c.run(readLine(slot, channel))
 
+  let malformedRead = hexOf(encodeCbor(cborMap(@[(cbor("channel"), cbor("x"))])))
+    ## a `read` request whose `channel` is not a uint
+
+  proc malformedVia(
+      c: var Consumer, slot, call: int
+  ): (Opt[ErrorCode], Opt[ErrorCode]) =
+    ## The codes of a malformed `read` through slot `slot`: called, then
+    ## prepared as call `call` and submitted (a refused preparation's code).
+    let sync = codeIn(c.run("call " & $slot & " read " & malformedRead))
+    let prepared =
+      codeIn(c.run("prepare " & $slot & " " & $call & " read " & malformedRead & " -"))
+    if prepared != Opt.some(ecOk):
+      return (sync, prepared)
+    check codeIn(c.run("submit " & $call)) == Opt.some(ecOk)
+    check c.noted("done", $call & " ")
+    var outcome = Opt.none(ErrorCode)
+    for line in c.linesOf("done"):
+      if line.startsWith($call & " "):
+        outcome = codeIn(line.split(' ', 1)[1])
+    check codeIn(c.run("release-call " & $call)) == Opt.some(ecOk)
+    (sync, outcome)
+
   proc readingOf(line: string): Opt[MeterReadResponse] =
     if codeIn(line) != Opt.some(ecOk):
       return Opt.none(MeterReadResponse)
@@ -1583,6 +1607,49 @@ when defined(posix):
       check codeIn(c.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
+    test "[IMPL-DECISION G171] [RUN-1117] [RUN-1118] C-12 a hosted consumer's malformed call, synchronous and prepared: the Runtime's route access checks come before the host validates it; a call the provider's side denies is INVALID_PARAMS, as over local transport (l.1824-1828)":
+      let cfg = hosted(
+        denying(
+          deny(action = Opt.some(aaCall), operation = "read", consumer = "c"),
+          deny(action = Opt.some(aaRoute), operation = "renew_route", consumer = "c"),
+        )
+      )
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      check e.started(consumerRecord(), "c").state == msReady
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      # [DECISIONS G171, interim reading] The provider's side decides the call
+      # after its session dispatches the Request; the host's session cannot
+      # commit a malformed payload (TRANSPORT §4.1) and refuses it first.
+      check codeIn(c.readVia(0, 4)) == Opt.some(ecNotAuthorised)
+      check c.malformedVia(0, 1) ==
+        (Opt.some(ecInvalidParams), Opt.some(ecInvalidParams))
+      # Step 2's route access checks, the Runtime's admission (`rc_link_admit`)
+      # before the host's session: a method outside the route's access, then
+      # a revoked route.
+      let narrow = c.run(
+        "rc establish_route " &
+          hexOf(
+            establishReq("n", scope = access(methods = Opt.some(newSeq[seq[byte]]())))
+          )
+      )
+      check codeIn(narrow) == Opt.some(ecOk)
+      let narrowed =
+        LogosNSRuntimeControlEstablishRouteResponse.decode(unhexOf(valueIn(narrow)))
+      check narrowed.isOk
+      if narrowed.isOk:
+        check c.materializeVia(1, narrowed.get.routes[0].route) == Opt.some(ecOk)
+        check c.malformedVia(1, 2) ==
+          (Opt.some(ecNotAuthorised), Opt.some(ecNotAuthorised))
+        check codeIn(c.run("release 1")) == Opt.some(ecOk)
+      check c.renewVia("r1", route) == Opt.some(ecNotAuthorised)
+      check c.malformedVia(0, 3) ==
+        (Opt.some(ecNotAuthorised), Opt.some(ecNotAuthorised))
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      e.finish()
+
     test "[IFC-0729] [RUN-0181] [IMPL-DECISION G267] C-8 prepared calls from a hosted consumer to a hosted provider: a response, a timeout that cancels the provider's call, an expiry at submission, a cancellation before it, and the connection kept until the last completes":
       let cfg = hosted()
       let mdir = cfg.stateOf()
@@ -1734,8 +1801,9 @@ when defined(posix):
       e.finish()
       check noHostLeft()
 
-    test "[RUN-0111] [RUN-0794] [RUN-0181] S-18 a stopping consumer's calls through its routes are refused from stop step 1, NOT_READY, hosted as direct":
+    test "[RUN-0111] [RUN-0794] [RUN-0181] [RUN-1118] [RUN-1122] S-18 a stopping consumer's calls through its routes are refused from stop step 1, NOT_READY, hosted as direct; a malformed one, called or prepared, INVALID_PARAMS first (l.1828, l.1832)":
       var codes: seq[Opt[ErrorCode]]
+      var malformed: seq[(Opt[ErrorCode], Opt[ErrorCode])]
       for hostedConsumer in [true, false]:
         let cfg = hosted()
         var c = cfg.serving(extra = "block-destroy\n")
@@ -1749,6 +1817,7 @@ when defined(posix):
         check e.stopping("c", t)
         # `_MODULE_destroy` waits for `go`; the command thread still serves.
         codes.add(codeIn(c.readVia(0, 4)))
+        malformed.add(c.malformedVia(0, 1))
         check codeIn(c.run("release 0")) == Opt.some(ecOk)
         writeFile(c.dir / "go", "")
         joinThread(t)
@@ -1756,6 +1825,8 @@ when defined(posix):
         e.finish()
         check noHostLeft()
       check codes == @[Opt.some(ecNotReady), Opt.some(ecNotReady)]
+      let invalid = (Opt.some(ecInvalidParams), Opt.some(ecInvalidParams))
+      check malformed == @[invalid, invalid]
 
   # M-1 to M-3: a module built with the other memory manager ---------------------------
 

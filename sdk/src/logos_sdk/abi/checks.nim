@@ -264,7 +264,7 @@ proc readStatus*(r: LogosResult): AbiCheck =
   ## LOGOS_OK with no message and no detail; a valid failure status (allocated
   ## nonzero code, message of at most 512 UTF-8 bytes, only the detail its code
   ## allows) with its diagnostics copied; anything else MODULE_ERROR with
-  ## neither, as `checkedProviderStatus` does.
+  ## neither.
   ## The copies a rejected status leaves are zeroed [DECISIONS G276].
   var msg = readMessage(r.message)
   if msg.isErr:
@@ -308,6 +308,19 @@ proc checkOutcome*(r: LogosResult, outputs: OutputShape): AbiCheck =
   if not outputs.failure:
     return moduleFailure("a failure that wrote its outputs")
   readStatus(r)
+
+proc providerChecked*(c: sink AbiCheck, cancelKnown: bool): AbiCheck =
+  ## [SPEC INTERFACE l.3306-3311; re-pin P4b] A provider's own result, after
+  ## `checkOutcome`: a status outside the provider set is MODULE_ERROR with
+  ## no message and no detail, the dropped copies zeroed [DECISIONS G276].
+  ## The caller then forwards no response output (it releases a buffer the
+  ## result handed over, as for any rejected result).
+  if c.isOk or providerStatusAllowed(c.error.code, cancelKnown):
+    return c
+  var f = c.error
+  let code = f.code
+  wipe(f)
+  moduleFailure("a provider status outside the set: " & $code)
 
 func transfersBuffer*(r: LogosResult, buffer: pointer): bool =
   ## [SPEC INTERFACE §5.1 l.3364-3368, §5.2 l.3831] A result with code LOGOS_OK

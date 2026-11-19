@@ -241,7 +241,7 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check e.view("k1").tryGet.execution.revision > exposed
     e.finish()
 
-  test "[RUN-0633] [IMPL] a failed write holds changes back and refuses new attempts, and withdrawal does not wait":
+  test "[RUN-0633] [TXT-0158] [IMPL] a failed write holds changes back and refuses new attempts, and withdrawal does not wait":
     if asRoot():
       skip()
     else:
@@ -266,6 +266,11 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
       # [I95 amended 2026-11-16] A failed requirement: logosd logs it as a
       # warning.
       check e.diagnosticsAfter(0).entries.anyIt(it.warn and NotPersisted in it.text)
+      # [SPEC RUNTIME l.1812, row 7] Through Runtime Control the same.
+      let viaRc = rc.lifecycle("start_module", "keeper_module", Opt.some("k2"))
+      check viaRc.code == ecModule and NotPersisted in viaRc.message
+      check e.view("k2").tryGet.execution == k2.execution
+      check e.changes.len == entries
       # A stop still withdraws and cleans at once; its answer is MODULE_ERROR.
       let s = e.stop("m")
       check s.isErr and s.error.code == ecModule and NotPersisted in s.error.message
@@ -411,14 +416,18 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
       check e.start("s").tryGet.state == msReady
       e.finish()
 
-  test "[RUN-0633] [IMPL] an exhausted revision refuses new attempts, not their withdrawal":
+  test "[RUN-0633] [TXT-0158] [IMPL] an exhausted revision refuses new attempts, not their withdrawal":
     let base = freshBase()
     var e = openAt(base, budget = 4)
+    let (_, rc) = e.startClient("c")
     discard e.create(keeper(), "k").tryGet
     check e.start("k").tryGet.state == msReady
     check e.stop("k").tryGet.state == msUnloaded
     let r = e.start("k")
     check r.isErr and r.error.code == ecModule and "exhausted" in r.error.message
+    # [SPEC RUNTIME l.1812, row 7] Through Runtime Control the same.
+    let viaRc = rc.lifecycle("start_module", "keeper_module", Opt.some("k"))
+    check viaRc.code == ecModule and "exhausted" in viaRc.message
     check e.view("k").tryGet.execution.intent == inStopped
     # A new start brings a new epoch, and the budget is whole again.
     e.restart(base)

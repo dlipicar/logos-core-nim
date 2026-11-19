@@ -301,7 +301,7 @@ when defined(posix):
         let perms = req.scopes.filterIt(it.kind == skPermission)
         check perms.mapIt(it.pm.permission).sorted == @[Quota, HostAmbient].sorted
       check lines(dir, "inits") == @["init"]
-      check orch.lifecycle("stop_module", "probe_module", Opt.some("p")).code == ecOk
+      check orch.stoppedVia("probe_module", Opt.some("p")).code == ecOk
       check noHostLeft()
       let before = e.realizes("p")
       setScript(

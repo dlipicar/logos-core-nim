@@ -36,7 +36,7 @@ when defined(posix):
     Timeout = 15_000 * Slow ## a client's wait for a reply, ms
     IdleMs = min(60_000 * Slow, 600_000)
       ## `ctl.idle_timeout_ms` where no case is about it, at most what the
-      ## daemon-config takes: at 2 s times Slow, RUN-0347's 16 clients under
+      ## daemon-config takes: at 2 s times Slow, RUN-0663's 16 clients under
       ## ASan at load 400 were closed before they sent their command (send:
       ## Broken pipe; 4b-8's load fix)
 
@@ -456,7 +456,7 @@ when defined(posix):
         check readReply(a).outcome.kind == LcnCtlOutcomeKind.lcn_Ctl_ok
         setCommandDelayForTests(0)
 
-    test "[RUN-0347] create_module: 16 concurrent commands, 8 with distinct keys and 8 with one shared key, make 9 instances with 8 equal answers; the key holds across a restart":
+    test "[RUN-0663] create_module: 16 concurrent commands, 8 with distinct keys and 8 with one shared key, make 9 instances with 8 equal answers; the key holds across a restart":
       l = boot(
         newSession(
           proc(dc: var LcnDaemonConfig) =

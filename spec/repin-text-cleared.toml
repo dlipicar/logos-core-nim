@@ -1244,3 +1244,102 @@ step = "P4"
 kind = "removed"
 reading = "B.5 is now the consumer-facing record with its invocation (TXT-0209); that `list_routes` omits the invocation is TXT-0211."
 compared = "RUNTIME App B.5 l.4287 at 6a4dfa28 against l.4159-4161 at 6cac8335."
+
+# P4b: the order of checks, stop on acceptance, the provider status set (DECISIONS I108) -------------------------
+
+[[text]]
+id = "TXT-0034"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0040"
+step = "P4"
+kind = "removed"
+reading = "'Passes through unchanged' now holds only after the provider-result validation (TXT-0034), which limits the provider statuses to a set (INTERFACE l.3306-3311); any other is MODULE_ERROR."
+compared = "INTERFACE l.3180 at 6a4dfa28 against l.3134 and l.3306-3311 at 6cac8335, and `providerChecked` (sdk/src/logos_sdk/abi/checks.nim) at its five call sites."
+
+[[text]]
+id = "TXT-0156"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0158"
+step = "P4"
+test = "tests/test_persist.nim"
+
+[[text]]
+id = "TXT-0159"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0201"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0202"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0226"
+step = "P4"
+kind = "removed"
+reading = "The old row made a stale revision INVALID_PARAMS. It is now the typed `stale-revision` (l.1818-1822, P4a), compared before the precondition table's rows (step 5, l.1830)."
+compared = "RUNTIME l.1913 at 6a4dfa28 against l.1818-1822 and l.1830 at 6cac8335, and the stale cases of the order tests in tests/test_routes.nim."
+site = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0267"
+step = "P4"
+kind = "removed"
+reading = "The old success meant the lifecycle work toward `stopping` or `unloaded` was done. TXT-0201 replaces it: success is the accepted stop, at `stopping` or `unloaded`, and completion is reported apart (TXT-0202)."
+compared = "RUNTIME l.3687 at 6a4dfa28 against l.3551-3556 at 6cac8335, and `stop` in src/logos_core/runtime/engine.nim with the RUN-1188 tests of tests/test_routes.nim."
+site = "tests/test_routes.nim"
+
+[[stale]]
+id = "RUN-0347"
+compared = "Concurrent invocations sharing no identity, decision or key scope (old l.1823) has no successor at 6cac8335. Its tags are dropped; the test about one key's concurrent requests carries RUN-0663."
+
+[[stale]]
+id = "RUN-0548"
+compared = "Unordered or duplicate `route_access` lists: RUN-1162 (l.2932), which adds INVALID_PARAMS without validation detail. The test moved to it and checks the detail."
+
+[[moved]]
+id = "RUN-0268"
+from = "P4"
+to = "P8"
+reason = "Its successor RUN-1105 (implemented and extended commitments unique, l.1349) is P8's pending unit; the gate fails a test citing a pending unit, so P8 retags the citation when it claims RUN-1105."
+
+[[moved]]
+id = "RUN-0630"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1183 (l.3368) is P5's pending unit; P5 retags the tests when it claims it (the gate fails a test citing a pending unit)."
+
+[[moved]]
+id = "RUN-0639"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1184 (l.3384) is P5's pending unit; P5 retags the tests and the inspection item when it claims it. The engine comment cites RUN-1184 already."
+
+[[moved]]
+id = "RUN-0675"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1190 (l.3571) is P5's pending unit; P5 retags the claim when it claims it."
+
+[[moved]]
+id = "RUN-0912"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1142 (l.2518) is P5's pending unit; P5 retags the tests when it claims it. The engine comment cites RUN-1142 already."
+
+[[moved]]
+id = "RUN-1053"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1191 (l.3602) is P5's pending unit; P5 retags the test and the inspection item when it claims it."

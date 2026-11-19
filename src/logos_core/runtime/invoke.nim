@@ -2,7 +2,7 @@
 ## synchronous call and an asynchronous one share, and the invocation context.
 ##
 ## [IMPL] A direct route call (RUNTIME §4.1, §6.4, §7.5):
-## 1. The Runtime thread admits it, in the order of G171's interim (TF-18):
+## 1. The Runtime thread admits it, in the order of RUNTIME l.1824-1833:
 ##    the method resolves under the selected contract (METHOD_NOT_FOUND), it
 ##    is inside the route's method scope and the per-call decision allows it
 ##    (NOT_AUTHORISED, RUNTIME l.1732, G52; a route revoked for its authority
@@ -130,8 +130,9 @@ proc record*(e: Engine, c: CallCapture, trail: var CallTrail) =
 proc notReadyAfter*(
     b: ptr SchemaBlob, bare: string, params: openArray[byte], e: EngineError
 ): InvocationFailure =
-  ## [G171 interim (TF-18)] A call the Runtime thread answered NOT_READY is
-  ## authorized; its payload is validated before readiness is reported.
+  ## [SPEC RUNTIME l.1828, l.1832] A call the Runtime thread answered
+  ## NOT_READY is authorized; its payload is validated (step 3) before
+  ## readiness (step 7) is reported.
   if e.code != ecNotReady:
     return failureOf(e)
   notReadyAfter(selectedOf(b), bare, params, failureOf(e))
@@ -252,7 +253,9 @@ proc callProvider*(
     addr len,
   )
   pop(f)
-  var outcome = checkOutcome(r, bufferShape(buf, len))
+  # [SPEC INTERFACE l.3306-3311] a provider's own status
+  var outcome =
+    checkOutcome(r, bufferShape(buf, len)).providerChecked(ticketCancelled(adm.ticket))
   if outcome.isErr:
     if transfersBuffer(r, buf):
       adm.free(adm.context, buf)
@@ -305,7 +308,10 @@ proc systemCall*(
     addr len,
   )
   pop(f)
-  checkOutcome(r, bufferShape(buf, len)).isOkOr:
+  # [SPEC INTERFACE l.3306-3311; re-pin P4 R4b] The Capability Authority is
+  # provider code behind the ABI too: a status outside the set is
+  # MODULE_ERROR, a failed evaluation (G172).
+  checkOutcome(r, bufferShape(buf, len)).providerChecked(ticketCancelled(ticket)).isOkOr:
     if transfersBuffer(r, buf):
       free(context, buf)
     return err(failureOf(error))
@@ -757,8 +763,8 @@ proc rcInvoke*(
   var value: seq[byte]
   let rc = rcRequest(bare, params, e.payloadDepth, trail, value).valueOr:
     if error.code == ecInvalidParams:
-      # [G171 interim (TF-18)] What is authorized without the payload comes
-      # before its validation.
+      # [SPEC RUNTIME l.1827-1828] What is authorized without the payload
+      # (step 2) comes before its validation (step 3).
       let pre = e.call(
         Request(
           kind: rqRcPrecheck,
