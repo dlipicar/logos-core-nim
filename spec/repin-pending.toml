@@ -265,10 +265,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "RUN-1148" = "P4"
 "RUN-1149" = "P4"
 "RUN-1150" = "P4"
-"RUN-1152" = "P3"
-"RUN-1153" = "P3"
-"RUN-1154" = "P3"
-"RUN-1155" = "P3"
 "RUN-1161" = "P4"
 "RUN-1162" = "P4"
 "RUN-1164" = "P4"
@@ -308,13 +304,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "RUN-1205" = "P4"
 "RUN-1206" = "P4"
 "RUN-1208" = "P4"
-"TRN-0396" = "P3"
-"TRN-0397" = "P3"
-"TRN-0399" = "P3"
-"TRN-0400" = "P3"
-"TRN-0401" = "P3"
-"TRN-0402" = "P3"
-"TRN-0403" = "P3"
 
 [units.changed]
 "CAP-0305" = "P4"
@@ -416,7 +405,11 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "PKG-0610" = "5-5"
 "PKG-0611" = "5-5"
 "RUN-1163" = "5-7a"
+"TRN-0397" = "5-7a"
 "TRN-0398" = "5-7a"
+"TRN-0401" = "5-12"
+"TRN-0402" = "5-12"
+"TRN-0403" = "5-12"
 
 [[text]]
 id = "TXT-0040"
@@ -449,140 +442,6 @@ section = "§9.3.6"
 source = "n.172"
 class = "todo"
 what = "The Host Embedding API does not disclose a generated id."
-
-[[text]]
-id = "TXT-0106"
-step = "P3"
-spec = "RUN"
-line = "2703"
-side = "new"
-section = "§9.3.8"
-source = "M8, n.174a"
-class = "behaviour"
-note = "A Runtime Control request whose address has a mismatching profile, or a QUIC alpn other than logos.remote.quic, gets INVALID_PARAMS without detail"
-what = "For the remote profiles defined by LOGOS-MODULE-TRANSPORT Section 8.4, `tls-tcp` selects `logos.remote.tls-tcp` and `quic` selects `logos.remote.quic`."
-
-[[text]]
-id = "TXT-0108"
-step = "P3"
-spec = "RUN"
-line = "2707"
-side = "new"
-section = "§9.3.8"
-source = "n.174b"
-class = "todo"
-what = "The selected remote profile authenticates the enrolled Runtime identity before the Transport Hello."
-
-[[text]]
-id = "TXT-0109"
-step = "P3"
-spec = "RUN"
-line = "2708"
-side = "new"
-section = "§9.3.8"
-source = "n.174b"
-class = "todo"
-what = "That authentication does not authorize Runtime Control operations or ordinary module routes, or establish package identity, schema compatibility, or route authority."
-
-[[text]]
-id = "TXT-0110"
-step = "P3"
-spec = "RUN"
-line = "2710"
-side = "new"
-section = "§9.3.8"
-source = "n.174b"
-class = "todo"
-what = "Those claims require their separate checks under LOGOS-MODULE-TRANSPORT Section 8.4 and the applicable Runtime and contract rules."
-
-[[text]]
-id = "TXT-0111"
-step = "P3"
-spec = "RUN"
-line = "2712"
-side = "new"
-section = "§9.3.8"
-source = "n.174b"
-class = "todo"
-what = "The selected remote profile governs QUIC stream use, datagrams, and migration under LOGOS-MODULE-TRANSPORT Section 8.4."
-
-[[text]]
-id = "TXT-0174"
-step = "P3"
-spec = "RUN"
-line = "2750"
-side = "new"
-section = "§9.3.9"
-source = "n.176"
-class = "todo"
-what = "The selected remote profile authenticates the enrolled Runtime identity under LOGOS-MODULE-TRANSPORT Section 8.4 before the Transport Hello."
-
-[[text]]
-id = "TXT-0175"
-step = "P3"
-spec = "RUN"
-line = "2751"
-side = "new"
-section = "§9.3.9"
-source = "n.176"
-class = "todo"
-what = "The `runtime_instance_id` carried in Runtime Control records does not itself authenticate the peer."
-
-[[text]]
-id = "TXT-0176"
-step = "P3"
-spec = "RUN"
-line = "2752"
-side = "new"
-section = "§9.3.9"
-source = "n.176"
-class = "todo"
-what = "A successful Transport Hello for `logos_runtime_control` establishes compatible endpoint schema after that authentication."
-
-[[text]]
-id = "TXT-0177"
-step = "P3"
-spec = "RUN"
-line = "2753"
-side = "new"
-section = "§9.3.9"
-source = "n.176"
-class = "todo"
-what = "It does not by itself authorize Runtime Control operations or ordinary module routes."
-
-[[text]]
-id = "TXT-0128"
-step = "P3"
-spec = "TRN"
-line = "1183"
-side = "new"
-section = "§8.4"
-source = "n.42"
-class = "todo"
-guard = true
-what = "For the remote Runtime addresses defined by LOGOS-MODULE-RUNTIME, `tls-tcp` selects `logos.remote.tls-tcp` and `quic` selects `logos.remote.quic`."
-
-[[text]]
-id = "TXT-0139"
-step = "P3"
-spec = "TRN"
-line = "1204"
-side = "old"
-section = "§8.4"
-class = "todo"
-guard = true
-what = "The `profile` field of a remote Runtime address selects the complete remote transport and security profile."
-
-[[text]]
-id = "TXT-0140"
-step = "P3"
-spec = "TRN"
-line = "1312"
-side = "old"
-section = "§8.4.2"
-class = "todo"
-guard = true
-what = "The endpoint address MUST use transport `quic` and ALPN [RFC 7301] value `logos.remote.quic`."
 
 [[text]]
 id = "TXT-0361"

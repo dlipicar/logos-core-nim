@@ -20,14 +20,17 @@ const
     ## [IMPL] G326: the pinned default first, then RFC 8446 §9.1's recommended
     ## X25519 and mandatory secp256r1, for other peers.
   MaxServerNameLen* = 253 ## a DNS name's longest text form, without the final dot
+  TlsTcpProfile* = "logos.remote.tls-tcp"
+    ## [SPEC TRANSPORT §8.4] the profile `tls-tcp` selects (l.1183)
 
 type
   TlsTcpAddress* = object
-    ## RUNTIME l.1978-1984: `host`, `port`, an optional `server_name`; `tls-tcp`
-    ## has no `alpn`.
+    ## RUNTIME l.1899-1905: `host`, `port`, an optional `server_name` and an
+    ## optional `profile`; `tls-tcp` has no `alpn`.
     host*: string
     port*: uint16
     serverName*: string ## "" when the address has none
+    profile*: string ## "" when the address has none; else `TlsTcpProfile`
 
   TlsConfig* = object
     ## [IMPL] I99: the carrier's limits, checked by `check` before use.
@@ -114,6 +117,10 @@ func check*(a: TlsTcpAddress): Result[void, string] =
     return err("port 0 names no listener")
   if a.serverName.len > 0:
     ?checkServerName(a.serverName)
+  # [SPEC TRANSPORT §8.4] l.1184: a present `profile` names the selected one,
+  # and a peer rejects a mismatch rather than substitute another (l.1186).
+  if a.profile.len > 0 and a.profile != TlsTcpProfile:
+    return err("profile " & a.profile & " is not the one tls-tcp selects")
   ok()
 
 {.pop.}

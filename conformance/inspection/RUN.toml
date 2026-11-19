@@ -221,3 +221,11 @@ reason = "A negative over the Module Host (RUNTIME l.958-961; DECISIONS I91, G26
 [[item]]
 ids = ["RUN-0844"]
 reason = "A conditional rule (RUNTIME §8 l.1394: 'A deployment retaining signed package declarations for a static module MUST verify those declarations'), and its condition does not hold here: no deployment built on this library retains signed package declarations for any module. Declarations come only from host configuration (app-config.v1 and daemon-config.v1 `declarations` and the configured modules; G55 as built in I82, I87), unsigned protected input; the statically linked modules (the Loader, the Capability Authority, the orchestration module, the logosctl instance) are registered by the host program itself. No Package Manager is deployed (Tier 5, owner decision 1 (a)), lcn-pkg's signed manifests are never read by the Runtime, and no selection carries a package or signer (engine.putFacts). When package-backed selection lands (Tier 5) the condition can hold and this item is re-examined."
+
+# Re-pin P3b (DECISIONS I107): two permissions of §9.3.8 that nothing here uses.
+[[item]]
+ids = ["RUN-1154"]
+reason = "A permission (RUNTIME l.2709: transport authentication material MAY be used as input to Runtime, capability, enrollment or route policy), not used. No remote session exists yet (5-7a). The tls-tcp carrier's result, the peer's Runtime id with the revision and anchor of the enrollment that admitted it (transport/tls/engine.nim PeerIdentity) and the channel binding, reaches no Runtime code: nothing under src/logos_core/runtime or src/logos_core/host imports transport/tls (tools/lint/layers.py keeps it out of logosd), and authorization takes the consumer instance and the request (runtime/authz.nim AuthzRequest)."
+[[item]]
+ids = ["RUN-1155"]
+reason = "A permission (RUNTIME l.2713: Runtime policy MAY prohibit migration) about QUIC connection migration. No QUIC transport exists (TRANSPORT §8.4.2 is deferred to step 5-12, DECISIONS I107), so there is no migration to allow or prohibit."

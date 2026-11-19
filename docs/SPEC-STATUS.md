@@ -177,6 +177,13 @@ G352 and G354 (DECISIONS, "Open items").
   TRN-0389, TRN-0391 to TRN-0395, and the changed IFC-0280, IFC-0712, TRN-0016, TRN-0040, TRN-0045,
   TRN-0125, TRN-0163, TRN-0274; stale IFC-0186 and TRN-0200 re-evidenced; 48 text entries cleared,
   TXT-0168 and TXT-0169 moved to P5. P3b's 23 entries remain.
+- 2026-11-19, re-pin P3b (I107), the remote profiles at 6cac8335: a Runtime Control listener address
+  whose `profile` or `alpn` contradicts its transport is INVALID_PARAMS without detail after what is
+  authorized without the payload (M8); `connect_remote` refuses an endpoint with no Runtime identity, a
+  non-remote address, this Runtime or a mismatching profile before NOT_AUTHORISED; the `tls-tcp` carrier
+  checks `profile` and sends and selects no ALPN. RUN-1152 to RUN-1155, TRN-0396, TRN-0399, TRN-0400,
+  IFC-0939 and IFC-0940 claimed (RUN-1154, RUN-1155 and TRN-0400 by inspection); TRN-0397 deferred to
+  5-7a, TRN-0401 to TRN-0403 to step 5-12; 12 text entries cleared. P3 holds no pending entry.
 
 ## Tiers at f4f83471 (the original plan)
 

@@ -454,6 +454,20 @@ proc sessionsOffered*(e: TlsEngine): int =
   ## Sessions the peer offered for resumption (none with a conforming peer).
   e.sessionsOffered
 
+proc alpnSelected*(e: TlsEngine): string =
+  ## [SPEC TRANSPORT §8.4.1] l.1217: the ALPN protocol the handshake selected,
+  ## "" when none. `logos.remote.tls-tcp` sets no ALPN list and no selection
+  ## callback on either side, so it is always "".
+  if e.ssl == nil:
+    return ""
+  var data: ptr uint8
+  var n: cuint
+  SSL_get0_alpn_selected(e.ssl, addr data, addr n)
+  if data == nil or n == 0:
+    return ""
+  result = newString(int(n))
+  copyMem(addr result[0], data, int(n))
+
 proc serverNameSeen*(e: TlsEngine): string =
   ## A server's view of the client's SNI `host_name`, "" when none was sent.
   if e.ssl == nil:
