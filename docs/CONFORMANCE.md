@@ -128,7 +128,7 @@ Tier 4b step 4b-2 (DECISIONS I90) builds transported local routes: a host routin
 (G257). Part 4b-2a builds the provider side:
 
 - **RUNTIME**: a transported route's live `establish_route` and `renew_route` answers carry the
-  `local-transport` invocation descriptor and a one-time ticket (RUN-0541, RUN-0623); no observation,
+  `local-transport` invocation descriptor and a one-time ticket (RUN-1161, RUN-1179); no observation,
   record, retained answer or stored file holds a ticket (RUN-0543, RUN-0544; a replay carries no
   `invocation`, G255). Four §6.2 units are claimed for the Runtime-served endpoint (RUN-0220,
   RUN-0226, RUN-0229, RUN-0230); the rest of §6.2 and §4.2.1 wait for the Module Host. RUN-0045,

@@ -181,6 +181,11 @@ func denying*(rules: varargs[AuthzRule]): AuthzPolicy =
   ## The test authorizer: allow-all except the given rules.
   AuthzPolicy(rules: @rules)
 
+when defined(lcnTestHooks):
+  func replacePolicy*(a: var Authorizer, policy: AuthzPolicy) =
+    ## A test hook: the rules that decide from now on.
+    a.policy = policy
+
 func deny*(
     action = Opt.none(AuthzAction),
     operation = "",

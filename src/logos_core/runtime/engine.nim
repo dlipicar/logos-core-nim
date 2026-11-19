@@ -5254,6 +5254,10 @@ func expects(y: Inst, root: Digest): bool =
   (y.record.primaryContract.isSome and y.record.primaryContract.get == root) or
     root in y.record.implements
 
+func routable(y: Inst): bool =
+  ## A ready provider that a route can select now.
+  y.state == msReady and y.provider and not y.realization.isNil
+
 proc accessBytes(a: LogosNSRuntimeControlRouteAccess): seq[byte] =
   ## A route access as an `AuthzRequest` carries it: empty when it
   ## constrains nothing.
@@ -5380,14 +5384,19 @@ proc establish(st: State, q: Request, x: Inst) =
       continue
     candidates.add(y)
   if not all and candidates.len > 1:
-    # [IMPL] `single` selects first and then authorizes only the selected
-    # provider (l.3093-3094): the first ready candidate, else the first.
-    var pick = candidates[0]
+    # [SPEC RUNTIME l.1423-1424; re-pin P4c M7, RG-11] `single` never selects
+    # a provider that the consumer's route decision hides. Every candidate is
+    # decided in one batch, so no pass limit hides an allowed one. The order
+    # is creation order with the ready ones first, and the first allowed one
+    # is selected. The others' route identifiers are never used again.
+    var ordered: seq[Inst]
     for y in candidates:
-      if y.state == msReady:
-        pick = y
-        break
-    candidates = @[pick]
+      if y.routable:
+        ordered.add(y)
+    for y in candidates:
+      if not y.routable:
+        ordered.add(y)
+    candidates = ordered
   var reqs: seq[AuthzRequest]
   for y in candidates:
     # [SPEC RUNTIME l.3155] The identifier is allocated before evaluation,
@@ -5421,12 +5430,17 @@ proc establish(st: State, q: Request, x: Inst) =
   for i, y in candidates:
     if answers[i].allows:
       allowed.add((y, reqs[i], answers[i]))
+      if not all:
+        # [M7] The first allowed candidate. A failed evaluation is skipped
+        # like a deny, and the response names no skipped candidate.
+        break
     else:
       omitted = true
   if allowed.len == 0:
-    # [SPEC RUNTIME l.3157-3159; G169 interim (TF-16)] Nothing the caller may
-    # route to: NOT_AUTHORISED, unless a `discover` allow covers the contract
-    # and no provider offers it, which the caller may learn.
+    # [SPEC RUNTIME l.3060-3063; G169] Nothing the caller may route to:
+    # NOT_AUTHORISED with a non-revealing diagnostic, unless a `discover`
+    # allow covers the contract and no provider offers it, which the caller
+    # may learn (NOT_READY below).
     var discoverable = candidates.len == 0
     if discoverable and not all:
       let d = st.decide([discover]).valueOr:
@@ -5438,7 +5452,7 @@ proc establish(st: State, q: Request, x: Inst) =
   st.requireReady(q)
   for (y, rq, ans) in allowed:
     let sel =
-      if y.state == msReady and y.provider and not y.realization.isNil:
+      if y.routable:
         selectContract(y.realization.contracts, root, st.ctx)
       else:
         Opt.none(SelectedContract)
@@ -5514,8 +5528,10 @@ proc establish(st: State, q: Request, x: Inst) =
       )
     )
   if made.len == 0:
-    # [G169 interim (TF-16)] The caller holds a route allow for a provider, or
-    # a `discover` allow and no provider offers the contract.
+    # [SPEC RUNTIME l.3063; G169] The caller holds a route allow for a
+    # provider and none it may route to is ready (with M7's order, a `single`
+    # request's first allowed candidate is not), or a `discover` allow and no
+    # provider offers the contract.
     q.reply.answerError(ecNotReady, "no selected provider is ready")
     return
   # [plan §2.4] The live answer carries each transported route's ticket; the
@@ -5594,12 +5610,12 @@ proc shorten(st: State, r: Route, a: AuthzAnswer) =
 proc pumpReauth(st: State) {.gcsafe.}
 
 proc reauthorized(st: State, r: Route, attempt: int, a: AuthzAnswer) =
-  ## [SPEC CA l.906-911; CAP-0189; S8b-2 interim] An allow covering the bound
-  ## access makes the route usable again with the new decision; a deny
-  ## revokes it with `authority-denied`, a narrowed allow with
-  ## `authority-revoked` (G170 extended); an evaluation failure leaves it
-  ## `ready` and unusable (CAP-0174). TL-04: the outcome decides, never a
-  ## code.
+  ## [SPEC CA l.937-941; CAP-0189, CAP-0433; S8b-2 interim] An allow covering
+  ## the bound access makes the route usable again with the new decision; a
+  ## deny, or an allow narrower than the bound scope, revokes it with
+  ## `authority-denied` (l.940; re-pin P4c M9); an evaluation failure leaves
+  ## it `ready` and unusable (l.941; CAP-0174). TL-04: the outcome decides,
+  ## never a code.
   dec st.reauthBusy
   if r.reauthTry == attempt and r.reauth == raPending and not r.isTerminal:
     if a.allows:
@@ -5611,9 +5627,7 @@ proc reauthorized(st: State, r: Route, attempt: int, a: AuthzAnswer) =
       st.routeChangedRc(r, decision, expires)
     else:
       case a.outcome
-      of azAllow:
-        st.endRoute(r, rtRevoked, Opt.some(rfAuthorityRevoked))
-      of azDeny:
+      of azAllow, azDeny:
         st.endRoute(r, rtRevoked, Opt.some(rfAuthorityDenied))
       of azEvaluationFailed, azRefused:
         r.reauth = raFailed
@@ -5707,8 +5721,10 @@ proc renew(st: State, q: Request, x: Inst) =
   ## an existing ready route. An allow replaces the decision and, from the
   ## Capability Authority, `expires_at`, and makes a route waiting for its
   ## re-authorization usable again; a deny makes the route unusable [G170
-  ## interim (TF-17)], and so does a narrowed allow, with `authority-revoked`
-  ## [G170 extended, I85]. [S8b-2 interim] An evaluation failure is what it
+  ## interim (TF-17)], and so does a narrowed allow, both with
+  ## `authority-denied` [SPEC CA l.940; re-pin P4c M9; G170, I85]; an
+  ## explicit withdrawal stays `authority-revoked` (RUNTIME l.2429).
+  ## [S8b-2 interim] An evaluation failure is what it
   ## is for the Runtime's own re-authorization: the route stays `ready` and
   ## unusable until a later decision allows it.
   const op = "renew_route"
@@ -5770,11 +5786,10 @@ proc renew(st: State, q: Request, x: Inst) =
   if not ans.allows:
     # [G170 interim (TF-17)] No call is served under a decision a later check
     # withdrew (CA l.906-911); a terminal route keeps its first end. TL-04:
-    # the outcome, never its code, picks the failure.
+    # the outcome, never its code, picks the failure; a narrowed allow is
+    # `authority-denied` as a deny is (CA l.940; re-pin P4c M9).
     case ans.outcome
-    of azAllow:
-      st.endRoute(r, rtRevoked, Opt.some(rfAuthorityRevoked))
-    of azDeny:
+    of azAllow, azDeny:
       st.endRoute(r, rtRevoked, Opt.some(rfAuthorityDenied))
     of azEvaluationFailed, azRefused:
       if r.authority and not r.isTerminal:
@@ -9927,6 +9942,10 @@ when defined(lcnTestHooks):
     of "startup-deadline":
       st.cfg.startupDeadline = initDuration(milliseconds = int64(q.generation))
       q.reply.answer(Reply())
+    of "policy":
+      # `setPolicyForTests`: the internal authorizer's rules from now on.
+      st.authorizer.replacePolicy(q.config.policy)
+      q.reply.answer(Reply())
     of "lose-rc":
       # [G225] `loseRcForTests`: `q.instance`'s active Runtime Control
       # subscription `q.generation`, or every one for 0, is lost, as one past
@@ -11949,6 +11968,16 @@ when defined(lcnTestHooks):
         generation: uint64(d.inMilliseconds),
       )
     )
+    if r.error.isSome:
+      return err(r.error.get)
+    ok()
+
+  proc setPolicyForTests*(e: Engine, policy: AuthzPolicy): Result[void, EngineError] =
+    ## A test hook: the internal authorizer's rules from now on, so a case can
+    ## name an identifier the engine allocated, such as a provider's.
+    var cfg = EngineConfig()
+    cfg.policy = policy
+    let r = e.call(Request(kind: rqTransportHook, reason: "policy", config: cfg))
     if r.error.isSome:
       return err(r.error.get)
     ok()

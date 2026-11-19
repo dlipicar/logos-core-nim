@@ -42,6 +42,12 @@ default = "claimed"
 # (l.1835) comes with remote Runtime Control, 5-7a.
 "RUN-1124" = "deferred:tier-5"
 "RUN-1125" = "deferred:tier-5"
+# Re-pin P4c (DECISIONS G355, G356): a continuation's resolved route (l.3019) and a facade
+# provider's readiness and mapping (l.3175, l.3193) come with facades and continuations, 5-7b.
+"RUN-1167" = "deferred:tier-5"
+"RUN-1174" = "deferred:tier-5"
+"RUN-1175" = "deferred:tier-5"
+"RUN-1176" = "deferred:tier-5"
 # RUN-0007, RUN-0008 and RUN-0014 (the same contract across execution modes) are claimed with step
 # 4b-2b: one scripted sequence through a direct and a transported handle (DECISIONS I90).
 # Remote only (fable-scope §7): `connect_remote` (l.234-241) and the rule that a local route never
@@ -52,9 +58,10 @@ default = "claimed"
 # readiness and calls; G267, G273, G274), RUN-0200 (§5.1, the endpoint made before the host
 # starts) and RUN-0284 (§8, a hosted record names an artifact) are claimed; the gates were parts
 # 4b-3.1a to 4b-3.3, the claims part 4b-3.4. RUN-0173 and RUN-0179 are also inspection items.
-# RUN-0501 (l.2741), RUN-0541, RUN-0543, RUN-0544 and RUN-0623 are claimed with step 4b-2a
-# (DECISIONS I90). RUN-0541: a replayed establish or renew answer carries no `invocation`, so its
-# retained bytes hold no ticket (the NA-04 interim, G255); the consumer renews. RUN-0800 to RUN-0806
+# RUN-0501 (l.2741), RUN-1161, RUN-0543, RUN-0544 and RUN-1179 are claimed with step 4b-2a
+# (DECISIONS I90; RUN-1161 and RUN-1179 since re-pin P4c). RUN-1161: a replayed establish or renew
+# answer carries no `invocation`, so its retained bytes hold no ticket (G255, l.2914 at 6cac8335);
+# the consumer renews. RUN-0800 to RUN-0806
 # (materializing a transported route) are claimed with step 4b-2b (G164, G258, G259). RUN-0192,
 # RUN-0234, RUN-0246 and RUN-0832 (subscriptions, delivery and scoped publication over a session)
 # are claimed with step 4b-2c.
@@ -104,10 +111,6 @@ default = "claimed"
 "RUN-0929" = "deferred:tier-5"
 "RUN-0502" = "deferred:tier-5"
 "RUN-0503" = "deferred:tier-5"
-"RUN-0504" = "deferred:tier-5"
-"RUN-0505" = "deferred:tier-5"
-"RUN-0506" = "deferred:tier-5"
-"RUN-0507" = "deferred:tier-5"
 "RUN-0508" = "deferred:tier-5"
 "RUN-0509" = "deferred:tier-5"
 "RUN-0510" = "deferred:tier-5"
@@ -157,14 +160,11 @@ default = "claimed"
 "RUN-0596" = "deferred:tier-5"
 "RUN-0597" = "deferred:tier-5"
 "RUN-0598" = "deferred:tier-5"
-"RUN-0599" = "deferred:tier-5"
 "RUN-0600" = "deferred:tier-5"
 "RUN-0601" = "deferred:tier-5"
-"RUN-0602" = "deferred:tier-5"
 "RUN-0603" = "deferred:tier-5"
 "RUN-0604" = "deferred:tier-5"
 "RUN-0605" = "deferred:tier-5"
-"RUN-0606" = "deferred:tier-5"
 "RUN-0607" = "deferred:tier-5"
 "RUN-0608" = "deferred:tier-5"
 "RUN-0609" = "deferred:tier-5"

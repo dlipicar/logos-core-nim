@@ -106,14 +106,15 @@ func renewed*(
 ): ExecEnding =
   ## [SPEC CA §5.1 l.578-602; plan §2.9] What a renewal's answer does. An
   ## allow replaces the record, for the same request, so never wider. A deny
-  ## ends it. An allow narrowed below the execution ends it as revoked [IMPL,
-  ## as a narrowed route renewal, G170]. An evaluation failure leaves it as
-  ## it is, to be asked again (`retryLater`).
+  ## ends it. An allow narrowed below the execution ends it as denied [IMPL,
+  ## as a narrowed route renewal is (CA l.940; re-pin P4c M9); G170, I85].
+  ## An evaluation failure leaves it as it is, to be asked again
+  ## (`retryLater`).
   x.renewing = false
   case a.outcome
   of azAllow:
     if a.narrowed:
-      return eeRevoked
+      return eeDenied
     let request = x.request
     x = authorization(a, generation, wallNow, monoNow)
     x.request = request

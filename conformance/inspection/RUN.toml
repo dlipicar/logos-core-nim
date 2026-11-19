@@ -140,8 +140,8 @@ reason = "A MAY that never applies in Tier 4 (RUNTIME l.2650). Every provider re
 
 # R-m (DECISIONS I88)
 [[item]]
-ids = ["RUN-0491", "RUN-0846"]
-reason = "Deployment duties stated in docs/HOST-CONFIG.md. RUN-0491: a Runtime-generated id is accepted by the host under G192's interim: choosing `logos-core-nim.app-config.v1` without `runtime_instance_id`, or a `store_dir` without one, is that acceptance ('Runtime identity'), made before `start` uses the id (tests [IMPL-DECISION G192] in tests/test_host.nim and tests/test_persist.nim). RUN-0846: the deployment's state facility is the host configuration: the request carrier is a `modules` entry's `state_assignment` or a declaration's `persistent_state: true`, both protected host input that is itself the approval (a module's `requested_permissions` request nothing and grant nothing), and the mapping is `state_root/<state_assignment>`, made 0700 before init (test [RUN-0270] ... [LDR-0039] in tests/test_persist.nim)."
+ids = ["RUN-0846"]
+reason = "Deployment duties stated in docs/HOST-CONFIG.md. RUN-0846: the deployment's state facility is the host configuration: the request carrier is a `modules` entry's `state_assignment` or a declaration's `persistent_state: true`, both protected host input that is itself the approval (a module's `requested_permissions` request nothing and grant nothing), and the mapping is `state_root/<state_assignment>`, made 0700 before init (test [RUN-0270] ... [LDR-0039] in tests/test_persist.nim)."
 
 # R-n (DECISIONS I88)
 [[item]]
@@ -201,7 +201,7 @@ reason = "Negatives about package and artifact inputs (RUNTIME l.684, l.690, l.7
 # R-f (DECISIONS I88)
 [[item]]
 ids = ["RUN-0160", "RUN-0161", "RUN-0163", "RUN-0164", "RUN-0166", "RUN-0167"]
-reason = "Routing-selection MAYs (RUNTIME l.907, l.932) in an implementation with only local direct providers. RUN-0160/RUN-0161: selection policy is internal to the engine (runtime/engine.nim establish: instances whose binding expects the root, an optional provider address, and the providers a discover allow shows; test [CAP-0041] in tests/test_routes.nim); no external routing policy input exists. RUN-0163: routes are acquired lazily, only by a consumer's establish_route. RUN-0164/RUN-0166: selection is recomputed for each request from current state and nothing is kept between acquisitions (tests [RUN-0556] and [RUN-0558] in tests/test_routes.nim). RUN-0167: there is no automatic re-acquisition or reselection; a failed route stays failed, restarting its provider does not revive it, and a new route needs a new establish_route with a new id (test [RUN-0579] in tests/test_routes.nim)."
+reason = "Routing-selection MAYs (RUNTIME l.907, l.932) in an implementation with only local direct providers. RUN-0160/RUN-0161: selection policy is internal to the engine (runtime/engine.nim establish: instances whose binding expects the root, an optional provider address, the providers a discover allow shows and, for a `single` request, the first candidate its route decision allows (re-pin P4c M7); test [CAP-0041] in tests/test_routes.nim); no external routing policy input exists. RUN-0163: routes are acquired lazily, only by a consumer's establish_route. RUN-0164/RUN-0166: selection is recomputed for each request from current state and nothing is kept between acquisitions (tests [RUN-0556] and [RUN-0558] in tests/test_routes.nim). RUN-0167: there is no automatic re-acquisition or reselection; a failed route stays failed, restarting its provider does not revive it, and a new route needs a new establish_route with a new id (test [RUN-1173] in tests/test_routes.nim)."
 
 # R-commit (DECISIONS I88)
 [[item]]
@@ -229,3 +229,11 @@ reason = "A permission (RUNTIME l.2709: transport authentication material MAY be
 [[item]]
 ids = ["RUN-1155"]
 reason = "A permission (RUNTIME l.2713: Runtime policy MAY prohibit migration) about QUIC connection migration. No QUIC transport exists (TRANSPORT §8.4.2 is deferred to step 5-12, DECISIONS I107), so there is no migration to allow or prohibit."
+
+# Re-pin P4c (DECISIONS I108): a permission not used, and a rule whose condition never holds.
+[[item]]
+ids = ["RUN-1106"]
+reason = "A permission (RUNTIME l.1361: authority policy MAY use declared provider requirements as decision input), not used. Neither the internal authorizer (runtime/authz.nim AuthzRequest) nor the Capability Authority's policy input (docs/AUTHORITY-POLICY.md, lcn.ap_subject: instances, modules, signers, packages) takes a consumer's declared requirements (ModuleRecord.requires, runtime/records.nim) as input. establish in runtime/engine.nim decides each route from the consumer, the provider, the contract and the requested access, so a contract missing from `requires` rejects nothing (l.1364)."
+[[item]]
+ids = ["RUN-1165"]
+reason = "A rule whose condition never holds (RUNTIME l.2965: a route lifetime or idle-time policy ending the route places it in `failed` with `route-timeout`). No route lifetime or idle-time policy exists: a route ends only by close_route, its provider's or consumer's end, an authority decision or its authority's validity end (the endRoute callers in runtime/engine.nim), and rfRouteTimeout (runtime/routes.nim) is never set. A policy added later must end the route with endRoute(r, rtFailed, Opt.some(rfRouteTimeout))."

@@ -941,6 +941,12 @@ suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DE
 # The Capability Authority's narrowing ---------------------------------------------------
 
 when declared(caParity):
+  import ../src/logos_core/authority/scopes except
+    LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
+    LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
+    LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
+    LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
+
   proc narrowing(what: string, alternatives: varargs[RcNarrow]): Rule =
     Rule(what: what, verdict: vAllow, validMs: Everything, narrowControl: @alternatives)
 
@@ -985,6 +991,47 @@ when declared(caParity):
       setScript(narrowing("rc:list_modules", RcNarrow(providers: only(p1))))
       changePolicy(3)
       check rc.modules().listed.ids == @["b1"]
+      e.finish()
+
+    test "[RUN-1038] [IMPL-DECISION G161] a name-only selection needs an allow whose scope names no instance or provider (RUNTIME l.3535)":
+      let e = fixtureEngine(config())
+      discard e.create(meter(), "m1").tryGet
+      let (_, rc) = e.startClient("c")
+      let p1 = e.view("m1").tryGet.providerId
+      setScript()
+      forget()
+      check rc.readiness("meter_module").code == ecOk
+      # The name scope is asked first: the module alone, with no instance or
+      # provider; then the exact record.
+      let asked = received().filterIt(it.what == "rc:get_readiness")
+      check asked.len == 2
+      if asked.len == 2:
+        let first =
+          LogosNSCapabilityAuthorityEvaluateRequest.decode(asked[0].request).tryGet
+        check first.scopes.len == 1 and first.scopes[0].kind == skControl
+        if first.scopes.len == 1 and first.scopes[0].kind == skControl:
+          let s = first.scopes[0].rc
+          check s.modules == Opt.some(@["meter_module"])
+          check s.instances.isNone and s.providers.isNone
+      # An allow limited to the instance or to its provider does not cover the
+      # name scope; the instance one covers the exact selector.
+      setScript(
+        narrowing(
+          "rc:get_readiness",
+          RcNarrow(modules: only("meter_module"), instances: only("m1")),
+        )
+      )
+      changePolicy(1)
+      check rc.readiness("meter_module").code == ecNotAuthorised
+      check rc.readiness("meter_module", Opt.some("m1")).code == ecOk
+      setScript(
+        narrowing(
+          "rc:get_readiness",
+          RcNarrow(modules: only("meter_module"), providers: only(p1)),
+        )
+      )
+      changePolicy(2)
+      check rc.readiness("meter_module").code == ecNotAuthorised
       e.finish()
 
     test "[RUN-0962] [RUN-0964] [RUN-0969] each page applies the current decision to the facts kept with its records, after a retirement too":
