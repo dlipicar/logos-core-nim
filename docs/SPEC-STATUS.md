@@ -268,6 +268,20 @@ G352 and G354 (DECISIONS, "Open items").
   also by inspection; RUN-0696 compared. RUN-1190 deferred to 5-7b with G355, with TXT-0205 and
   TXT-0206 riding on it. Stale ids RUN-0630, RUN-0639, RUN-0675 and RUN-1053 replaced. 13 text
   entries cleared.
+- 2026-11-19, re-pin P5c (I109), Loader loss, shutdown and startup at 6cac8335:
+  - The Module Loader has failed only when its instance leaves `ready` (M16, l.3686-3687). An invalid
+    answer no longer fails it: the operation goes the way a failed invocation of it goes (G252
+    narrowed). An authority ending of a Loader that owns realizations is its failure (reading D1). A
+    Module Host that ended before its Loader failed now resolves when the Loader fails. G360 records the
+    TF-57 interim in Fable's wording, the reproductions, the lost-answer dead end and the UF-47 interim.
+  - During shutdown the authority keeps renewing executions and is released after them (M12, l.3731;
+    I85 amended).
+  - `start` answers from this run only (l.3838, l.3938-3940, l.3955; G190 replaced): TIMEOUT for an
+    expired startup deadline, the orchestration's or the Loader's (G61), and its own code at once for
+    a refusal that records no failure. G191 and G192 are settled by l.1557-1559 and l.2587-2588.
+
+  Claimed: RUN-1108, RUN-1109, RUN-1198, RUN-1199, RUN-1201 and RUN-1202. 17 text entries cleared,
+  App A's by typed readings.
 
 ## Tiers at f4f83471 (the original plan)
 

@@ -1,7 +1,7 @@
 ## The Host Embedding API in process (RUNTIME §13; `runtime/host.nim`): the
 ## `logos-core-nim.app-config.v1` configuration (G76), the §13.1 version and
 ## size checks, the §13.4 call order, registration, the start path to the
-## orchestration instance's `ready` (G190), shutdown, waiting and destruction,
+## orchestration instance's `ready` (RUNTIME l.3838), shutdown, waiting and destruction,
 ## and Runtime Control `get_readiness`.
 
 import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads, unicode]
@@ -1666,7 +1666,7 @@ suite "run.host-api: registration (RUNTIME §13.3)":
 
 # Startup ------------------------------------------------------------------------------
 
-suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
+suite "run.host-api: startup (RUNTIME §13.2, l.1640, l.3838-3940) [G191]":
   setup:
     resetOrchestrator()
 
@@ -1720,7 +1720,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check runtimeWaitForShutdown(rt).ec == ecOk
     check runtimeDestroy(rt).ec == ecOk
 
-  test "[RUN-0759] [IMPL-DECISION G190] a shutdown accepted before ready is CANCELLED, and stays CANCELLED when the init then fails":
+  test "[RUN-0759] [RUN-1202] a shutdown accepted before ready is CANCELLED, and stays CANCELLED when the init then fails":
     for fail in [false, true]:
       resetOrchestrator()
       orchMode.store(ord(omShutdown))
@@ -1756,7 +1756,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check runtimeWaitForShutdown(rt).ec == ecOk
     check runtimeDestroy(rt).ec == ecOk
 
-  test "[IMPL-DECISION G190] [RUN-0737] [RUN-0765] a failed start: MODULE_ERROR or NOT_AUTHORISED, nothing stopped, and the handle shuts down":
+  test "[RUN-1201] [RUN-0737] [RUN-0765] a failed start: MODULE_ERROR, TIMEOUT for the startup deadline, or NOT_AUTHORISED; nothing stopped, and the handle shuts down":
     orchFail.store(true)
     var rt = registered(deployment())
     var r = runtimeStart(rt)
@@ -1773,7 +1773,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     c.runtime.startup_deadline_ms = Opt.some(uint32(250 * Slow))
     rt = registered(c)
     r = runtimeStart(rt)
-    check r.ec == ecModule and "startup-timeout" in r.text
+    check r.ec == ecTimeout and "startup-timeout" in r.text
     rt.finish()
     resetOrchestrator()
     rt = registered(deployment())
@@ -1947,7 +1947,7 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check meter3.execution.intentRevision == meter1.execution.intentRevision
     rt.finish()
 
-  test "[RUN-0698] [IMPL-DECISION G191] orchestration stopped before shutdown is started again, with a diagnostic":
+  test "[RUN-0698] [RUN-1109] [IMPL-DECISION G191] orchestration stopped before shutdown is started again, with a diagnostic":
     let base = work / "restart-2"
     var rt = registered(persistent(deployment(), base))
     check runtimeStart(rt).ec == ecOk
@@ -1962,7 +1962,7 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check engineOf(rt).diagnostics.anyIt("whose intent was stopped" in it)
     rt.finish()
 
-  test "[IMPL-DECISION G192] the Runtime's identity is the store's, or the configured one":
+  test "[TXT-0168] [IMPL-DECISION G192] the Runtime's identity is the store's, or the configured one":
     let base = work / "restart-3"
     var rt = registered(persistent(deployment(), base))
     check runtimeStart(rt).ec == ecOk

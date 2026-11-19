@@ -1219,7 +1219,7 @@ suite "cfg.sources: configuration state across restarts (CONFIG §4, §7; G141; 
     check s.state_revision == 2 and s.staged.isNone
     e.finish()
 
-  test "[G190] an orchestration instance with no configuration value fails the bootstrap with MODULE_ERROR":
+  test "[RUN-1201] an orchestration instance with no configuration value fails the bootstrap with MODULE_ERROR (an other failure, l.3955)":
     let e = tunerEngine()
     let r = e.bootstrap(@[tunerAt("t1", tunerAccepted())], "t1")
     check r.isErr and r.error.code == ecModule
@@ -1566,6 +1566,25 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     applyMode.store(0)
     check e.start("t1").tryGet.state == msReady
     check lastInput() == Opt.some(inputFor(tunerValue("radio-2", 9), 3))
+    e.finish()
+
+  test "[TXT-0309] [CFG-0147] [IMPL-DECISION G360] an invalid apply_configuration response from a ready Loader is indeterminate: MODULE_ERROR, `error` with configuration-indeterminate, nothing promoted; the Loader stays ready":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    check e.setLoaderFaultsForTests(LoaderFaults(garble: {lmApplyConfiguration})).isOk
+    check rc.applyOf(t, 3).code == ecModule
+    let v = e.view("t1").tryGet
+    check v.state == msError
+    check v.failure.get.kind == fkConfigurationIndeterminate
+    check "invalid response" in e.diagnostics().join("\n")
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("t1")
+    )
+    let s = rc.summary(t)
+    check s.current.get.value_revision == 1 and s.staged.get.value_revision == 3
+    check e.view(LoaderInstanceId).tryGet.state == msReady
     e.finish()
 
   test "[CFG-0095] [CFG-0100] [CFG-0040] one application at a time; an update during it is admitted and stays staged when the promotion does not clear it":

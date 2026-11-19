@@ -247,7 +247,7 @@ suite "run.authority: the binding (RUNTIME l.1652-1680; CA §1)":
     e.finish()
 
 suite "run.authority: bootstrap and recovery rules (RUNTIME l.1635-1650, l.1674-1680)":
-  test "[RUN-0022] [RUN-0305] [RUN-0306] [RUN-0311] [RUN-0312] [RUN-0050] [RUN-0051] [RUN-0859] [CAP-0062] before the binding, orchestration starts the authority without an evaluation; everything else fails closed as an evaluation failure":
+  test "[RUN-0022] [RUN-0305] [RUN-0306] [RUN-0311] [RUN-0312] [RUN-0050] [RUN-0051] [RUN-0859] [CAP-0062] [TXT-0316] before the binding, orchestration starts the authority without an evaluation; everything else fails closed as an evaluation failure":
     fresh()
     let e = newEngine(caConfig())
     let orch = e.boot()
@@ -762,7 +762,7 @@ suite "run.authority: parked operations (CA §8; I75)":
     release()
     e.finish()
 
-  test "[I85] shutdown answers parked operations NOT_READY and begins no evaluation":
+  test "[I85] shutdown answers parked operations NOT_READY and begins no evaluation other than a renewal":
     let (e, orch) = ready()
     hold()
     setScript(rule(vHang, "rc:get_readiness"))
@@ -1088,6 +1088,52 @@ suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10
     clk.advance(1)
     check e.stoppedFor("m2", fkAuthorityExpired)
     e.finish()
+
+  test "[RUN-1199] [TXT-0314] during shutdown an execution the ordering keeps `ready` is renewed, not stopped at its old end; the authority is held for it and released after it":
+    fresh()
+    var cfg = caConfig()
+    cfg.ordering = @[("m1", "m2")]
+    cfg.shutdownGrace = initDuration(seconds = 60 * Slow)
+    let e = newEngine(cfg)
+    live = e
+    let orch = e.boot()
+    e.startCa(orch)
+    check e.create(client(), "m1").isOk
+    check e.create(client(), "m2").isOk
+    setScript(allow("execute", validMs = 60_000))
+    orch.startBy("m1")
+    orch.startBy("m2")
+    setScript()
+    forget()
+    # m2's destroy is held, so the ordering keeps m1 `ready` during shutdown.
+    clientDestroyGate.store(true)
+    e.requestShutdown()
+    check e.reaches("m2", msStopping)
+    # [IMPL] renewal at end − min(30 s, lifetime / 3): 40 s into 60 s.
+    clk.advance(41_000)
+    check e.counted("renew-execution", 1)
+    check waitUntil(
+      proc(): bool =
+        e.answers().anyIt(it.request.renewal and it.outcome == azAllow)
+    )
+    # Its allow carries m1 past the old end; the authority stays for it.
+    clk.advance(20_000)
+    discard e.list()
+    check e.view("m1").tryGet.state == msReady
+    check e.view(Ca).tryGet.state == msReady and e.bound
+    let before = e.changes()[^1].serial
+    clientDestroyGate.store(false)
+    check e.awaitShutdown().isOk
+    let m1 = e.view("m1").tryGet
+    check m1.state == msUnloaded and m1.failure.isNone
+    var order: seq[string]
+    for c in e.changes():
+      if c.serial > before and c.view.state == msUnloaded and
+          c.view.instance in ["m1", Ca]:
+        order.add(c.view.instance)
+    check order == @["m1", Ca]
+    check e.close(initDuration(seconds = 10 * Slow))
+    live = nil
 
   test "[CAP-0166] [CAP-0167] [CAP-0168] [CAP-0169] policy_changed keeps an execution only when its previous revision is the authorization's and a present affected_executions leaves it out":
     let (e, orch) = ready()

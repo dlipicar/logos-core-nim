@@ -143,6 +143,9 @@ type
     carrierDown: bool
     lostReason: FixedText
     released: bool
+    endHandled: bool
+      ## [G360] the Runtime thread has handled its end (`noteEnd`); read and
+      ## written on the Runtime thread only
     closedOps: bool
     ops: int
     rc: ptr LogosRuntimeControlBinding
@@ -379,6 +382,16 @@ when defined(posix):
   func index*(h: Host): uint64 =
     ## [G273] Its number in hosted connection and endpoint ids.
     h.index
+
+  proc noteEnd*(h: Host) =
+    ## [P5 §0.4 item 2; G360] Runtime thread: the end of `h` reached the
+    ## Runtime (`engine.hostEnded`). Kept on the host, so a new host of the
+    ## same instance is never taken as ended.
+    h.endHandled = true
+
+  func endHandled*(h: Host): bool =
+    ## Runtime thread: `noteEnd` was called for `h`.
+    h.endHandled
 
   proc setTransport*(h: Host, transport: TransportConfig): Result[void, string] =
     ## [plan §2.8; part 4b-3.3] Before the spawn: the Transport limits the
@@ -621,6 +634,27 @@ when defined(posix):
       withLock hookLock:
         brokenHosts.mark(h, true)
 
+    var killHeld: array[64, uint] ## [G360] under `hookLock`
+
+    proc testKillHeld(h: Host): bool =
+      withLock hookLock:
+        result = killHeld.marked(h)
+
+    proc holdKill*(h: Host, hold: bool) =
+      ## [P5 §3.1 item 4; IMPL-DECISION G360] Defers the kill `terminate`
+      ## sends `h`, so its carrier outlives a termination the Runtime ordered;
+      ## released, a deferred kill is sent.
+      withLock hookLock:
+        killHeld.mark(h, hold)
+      if not hold:
+        var pid: cint = -1
+        withLock h.lock:
+          if h.terminating and h.spawned and not h.confirmed:
+            pid = h.pid
+        if pid > 0:
+          discard kill(Pid(-pid), SIGKILL)
+        h.sup.wakeUp()
+
     var dropListener: Atomic[bool]
 
     proc dropNextListener*() =
@@ -727,23 +761,32 @@ when defined(posix):
       return err("the Module Host cannot be started: " & $strerror(-req.rc))
     ok()
 
-  proc terminate*(h: Host, reason: string, byRuntime = false) =
+  proc terminate*(h: Host, reason: string, byRuntime = false): bool {.discardable.} =
     ## [SPEC RUNTIME l.669; G61] Ends the host's process group; idempotent,
     ## returns at once. `awaitEnd` waits for the confirmation. `byRuntime`
     ## [R7 (d)]: the Runtime ends it at a deadline or after its Loader's loss,
     ## also when the host is already ending for another reason.
+    ##
+    ## [P5 §0.4 item 2; G360] True when `h` was not spawned yet: none of its
+    ## module code ever runs, since a spawn asked for later is refused and one
+    ## already under way kills the process before `spawn` returns (before the
+    ## Loader sends `init`); only such a spawn's end is still confirmed.
     var pid: cint = -1
     withLock h.lock:
       if h.confirmed:
-        return
+        return false
       if byRuntime and not h.carrierDown:
         h.byRuntime = true
+      result = not h.spawned
       if h.terminating:
         return
       h.terminating = true
       h.termReason = clipText(reason)
       if h.spawned:
         pid = h.pid
+    when defined(lcnTestHooks):
+      if testKillHeld(h):
+        pid = -1 # `holdKill` sends it
     if pid > 0:
       discard kill(Pid(-pid), SIGKILL)
     h.sup.wakeUp()
@@ -1914,8 +1957,14 @@ else:
   proc spawn*(h: Host, listener: cint = -1, lock: cint = -1): Result[void, string] =
     err(Unsupported)
 
-  proc terminate*(h: Host, reason: string, byRuntime = false) =
+  proc terminate*(h: Host, reason: string, byRuntime = false): bool {.discardable.} =
+    true
+
+  proc noteEnd*(h: Host) =
     discard
+
+  func endHandled*(h: Host): bool =
+    false
 
   proc awaitEnd*(h: Host): HostEnd =
     HostEnd()

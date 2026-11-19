@@ -208,12 +208,6 @@ closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pend
 "RUN-1101" = "P5"
 "RUN-1104" = "P8"
 "RUN-1105" = "P8"
-"RUN-1108" = "P5"
-"RUN-1109" = "P5"
-"RUN-1198" = "P5"
-"RUN-1199" = "P5"
-"RUN-1201" = "P5"
-"RUN-1202" = "P5"
 
 [units.changed]
 "CAP-0393" = "P6"
@@ -290,28 +284,6 @@ closed = ["P1", "P2", "P3", "P4"]  # sub-steps that have merged; `spectrace pend
 "TXT-0206" = "5-7b"
 
 [[text]]
-id = "TXT-0168"
-step = "P5"
-spec = "RUN"
-line = "2587"
-side = "new"
-section = "§9.3.6"
-source = "n.172, review"
-class = "behaviour"
-what = "Runtime generates the id only when the host's protected configuration permits generation, and that configuration is the host's acceptance of the generated id."
-
-[[text]]
-id = "TXT-0169"
-step = "P5"
-spec = "RUN"
-line = "2588"
-side = "new"
-section = "§9.3.6"
-source = "n.172"
-class = "todo"
-what = "The Host Embedding API does not disclose a generated id."
-
-[[text]]
 id = "TXT-0161"
 step = "P6"
 spec = "RUN"
@@ -366,139 +338,6 @@ class = "todo"
 what = "That code does not prove that the provider did not execute the call."
 
 [[text]]
-id = "TXT-0302"
-step = "P5"
-spec = "RUN"
-line = "1558"
-side = "new"
-section = "§9"
-source = "n.159"
-class = "todo"
-what = "Recovery or resumption of that intent uses the bootstrap policy current at that time as the origin's execution authority."
-
-[[text]]
-id = "TXT-0308"
-step = "P5"
-spec = "RUN"
-line = "3686"
-side = "new"
-section = "§10.1"
-source = "M16, n.202"
-class = "behaviour"
-note = "A Loader has failed only when its provider leaves ready; failed operations while it is ready are temporary"
-what = "The owning Loader has failed when its provider module instance leaves `ready` because its realization ended or failed."
-
-[[text]]
-id = "TXT-0309"
-step = "P5"
-spec = "RUN"
-line = "3687"
-side = "new"
-section = "§10.1"
-source = "M16, n.202"
-class = "behaviour"
-note = "A Loader has failed only when its provider leaves ready; failed operations while it is ready are temporary"
-what = "Failed Loader operations or loss of its binding while that provider instance remains `ready` are temporary service unavailability."
-
-[[text]]
-id = "TXT-0311"
-step = "P5"
-spec = "RUN"
-line = "3700"
-side = "new"
-section = "§10.2"
-source = "n.203a, review"
-class = "behaviour"
-what = "For Runtime shutdown, the drain deadline is one absolute deadline for the whole shutdown, starting when Runtime accepts the first shutdown request."
-
-[[text]]
-id = "TXT-0314"
-step = "P5"
-spec = "RUN"
-line = "3731"
-side = "new"
-source = "M12"
-class = "behaviour"
-what = "The execution-authorization service stays usable for renewal during shutdown"
-
-[[text]]
-id = "TXT-0315"
-step = "P5"
-spec = "RUN"
-line = "3838"
-side = "new"
-section = "§13.2"
-source = "review"
-class = "behaviour"
-what = "Startup completes when every system-service binding established from protected input has passed the checks of Section 9 and the initial orchestration instance is `ready`."
-
-[[text]]
-id = "TXT-0316"
-step = "P5"
-spec = "RUN"
-line = "3839"
-side = "new"
-section = "§13.2"
-source = "review"
-class = "behaviour"
-what = "A system-service binding that orchestration establishes under Section 9 after it becomes `ready` is not part of startup."
-
-[[text]]
-id = "TXT-0317"
-step = "P5"
-spec = "RUN"
-line = "3971"
-side = "new"
-section = "App A.1"
-source = "n.205"
-class = "todo"
-what = "In both patterns below, application code that calls modules or receives their events runs as an admitted module instance."
-
-[[text]]
-id = "TXT-0318"
-step = "P5"
-spec = "RUN"
-line = "3972"
-side = "new"
-section = "App A.1"
-source = "n.205"
-class = "todo"
-what = "Its calls use the Runtime Control binding supplied to that instance at initialization, and the Host Embedding API does not provide a call surface."
-
-[[text]]
-id = "TXT-0319"
-step = "P5"
-spec = "RUN"
-line = "3992"
-side = "new"
-section = "App A.1"
-source = "n.205"
-class = "todo"
-what = "A facade that omits those runtime components is only a generated direct-call wrapper; it is outside these specifications and provides none of the Runtime behavior they define."
-
-[[text]]
-id = "TXT-0320"
-step = "P5"
-spec = "RUN"
-line = "3998"
-side = "new"
-section = "App A.1"
-source = "n.205"
-class = "todo"
-what = "The application uses the Host Embedding API in Section 13 explicitly."
-
-[[text]]
-id = "TXT-0321"
-step = "P5"
-spec = "RUN"
-line = "4002"
-side = "new"
-section = "App A.1"
-source = "n.205"
-class = "todo"
-what = "The application can choose the registered module set, initialization order, policy configuration, test bindings, and other runtime options exposed by that API."
-
-[[text]]
 id = "TXT-0323"
 step = "P8"
 spec = "RUN"
@@ -507,36 +346,6 @@ side = "old"
 section = "Abstract/Terminology"
 class = "todo"
 what = "**Module provider:** The Runtime-known, route-facing exposure of schema-defined method or event behavior from a module instance. One provider record may expose the module's primary concrete contract and exact implemented interface contract views. Every route selects exactly one of those contracts. A local provider is backed by a local module instance. A remote module facade is a local provider record that represents a module instance owned by another Runtime. A provider does not introduce a separate module implementation or lifecycle."
-
-[[text]]
-id = "TXT-0340"
-step = "P5"
-spec = "RUN"
-line = "4130"
-side = "old"
-section = "App A.1"
-class = "todo"
-what = "A facade that omits those runtime components is only a generated direct-call wrapper and does not provide the omitted runtime behavior."
-
-[[text]]
-id = "TXT-0341"
-step = "P5"
-spec = "RUN"
-line = "4139"
-side = "old"
-section = "App A.1"
-class = "todo"
-what = "The application uses the runtime API explicitly."
-
-[[text]]
-id = "TXT-0342"
-step = "P5"
-spec = "RUN"
-line = "4144"
-side = "old"
-section = "App A.1"
-class = "todo"
-what = "The application can choose the registered module set, initialization order, policy configuration, test bindings, and other runtime options exposed by the runtime API."
 
 [[text]]
 id = "TXT-0343"

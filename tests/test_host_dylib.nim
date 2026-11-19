@@ -406,7 +406,7 @@ suite "run.host-dylib: liblogos_runtime from C (RUNTIME §13)":
     check call(hhWaitForShutdown, rt).ec == ecOk
     check call(hhDestroy, rt).ec == ecOk
 
-  test "[CFG-0063] [CFG-0068] [G141] [IMPL-DECISION G190] a provisioned value reaches a direct_dynamic configured kit as the orchestration instance starts":
+  test "[CFG-0063] [CFG-0068] [G141] [RUN-1201] a provisioned value reaches a direct_dynamic configured kit as the orchestration instance starts":
     var c = deployment()
     c.orchestration = "tuner-1"
     for (provisioned, code) in [
