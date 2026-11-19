@@ -233,11 +233,10 @@ jobs:
   # assembles with it (BLAKE3's assembly goes through gcc; BoringSSL builds without assembly
   # there, 5-2). orc only: refc is covered on Linux and macOS (G123 as revised). The probes
   # (tools/winprobe, G107) run beside the suites on windows-2025 and alone on windows-2022, and
-  # compare their facts with the committed ones for that build; they never fail the job.
+  # compare their facts with the committed ones for that build; they never fail the job. The leg
+  # blocks since a run on master was green (44452740346 on 152fd1f; 5-4c, G123 as revised).
   windows:
     name: windows (${{ matrix.os }}, ${{ matrix.shard == 0 && 'probes' || format('{0}/4', matrix.shard) }})
-    # Until a run on master is green; then this line goes and the leg blocks (G123 as revised).
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:

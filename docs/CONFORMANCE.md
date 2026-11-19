@@ -506,6 +506,17 @@ to carry marked payloads is refused where this does not hold (`carrierErases`, `
 Not claimed: erasure on remote paths. The facade and listener processes' own erasure comes with 5-7a;
 until it is shown, remote paths refuse marked contracts (G277), as any build without the option will.
 
+### What Tier 5 step 5-4 changes
+
+The Windows spike and the Windows CI leg (DECISIONS I100; G329 to G334). TRN-0352 is claimed: an
+unsupported placement fails without an unprotected fallback or isolation downgrade (TRANSPORT l.1152). On
+Windows, where `logos.local.unix-stream` is not supported until 5-9, the Loader advertises no hosted
+placement and refuses a hosted request before any artifact code is loaded, the module is never realized
+direct instead, the unix-stream entry points fail and leave nothing behind, and a local-transport rule
+is refused (`tests/test_windows_profile.nim`). The evidence runs on the Windows CI leg only, which
+blocks since part 5-4c; elsewhere the suite skips. The other 16 §8.2.1 units, Windows support itself,
+are 5-9's.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there

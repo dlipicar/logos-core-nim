@@ -64,7 +64,7 @@ table (each unit with its reason: the workspace's `tier5-plans/step5-0-pkg-recou
 | E1 | `logos.remote.tls-tcp` (TRANSPORT §8.4, §8.4.1) | TRN 36 | 5-2 |
 | E2 | `logos.remote.quic` (TRANSPORT §8.4.2), droppable | TRN 5; BCP-0032; RUN-0503, RUN-0504, RUN-0507 (counted in F) | 5-12 |
 | F | Remote Runtimes (RUNTIME §9, §9.3; INTERFACE §5.2) | RUN 126; IFC 20 | 5-7a, 5-7b |
-| G | Windows local transport (TRANSPORT §8.2.1) | TRN 17 | 5-4 (the spike: go on three builds, no chronos fork, G329-G333; TRN-0352's test), 5-9 |
+| G | Windows local transport (TRANSPORT §8.2.1) | TRN 17 | 5-4 (the spike: go on three builds, no chronos fork, G329-G333; TRN-0352, claimed), 5-9 |
 | H | The reverse mapper (INTERFACE §3) | IFC 152, and IFC-0887, IFC-0904 to re-evidence; **claimed by 5-1 (I98)** | 5-1 |
 | K | iOS baseline (SEC-0044); sandbox and container placements and OS-enforced permissions have no gated unit | SEC 1 | outside Tier 5: M12 |
 | | **Total** | **676**: PKG 308, RUN 133, IFC 172, TRN 58, BCP 4, SEC 1 | |
@@ -162,6 +162,10 @@ G352 and G354 (DECISIONS, "Open items").
   schema documents and module binding of an explicit C header set (G317 to G322). 152 IFC units claimed,
   IFC-0887 and IFC-0904 re-evidenced in both directions; the gate is IFC 776/776 with 20 units left to 5-7a
   and 5-7b. G158's interim stays the limit of IFC-0003, IFC-0004 and the §3.8 units.
+- 2026-11-19, step 5-4 (I100), G, the Windows spike and the Windows CI leg, parts 5-4a to 5-4c: the
+  probes (go on three builds, no chronos fork; G329 to G333) and the `windows` job (G334), blocking since
+  5-4c. 1 TRN unit claimed: TRN-0352, whose evidence runs on the Windows leg only; the other 16 G units
+  are 5-9's.
 
 ## Tiers at f4f83471 (the original plan)
 
