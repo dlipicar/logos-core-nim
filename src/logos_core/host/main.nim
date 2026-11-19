@@ -171,7 +171,9 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
   if outcome.isErr:
     if returnedOk and ctx != nil:
       # [IMPL; realizer `completeInitChecked`] LOGOS_OK with an invalid
-      # status: the instance exists and is destroyed exactly once.
+      # status: the instance exists and is destroyed exactly once, its
+      # binding's subscription-end reports suppressed first (M5).
+      suppressReports()
       b.destroy(ctx)
     refuse(initFailure(outcome.error), P.Init)
   if m.endpoint.isSome:
@@ -189,6 +191,7 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
           m.transport.get, ListenerFd, maxPayloadDepth,
         )
     if served.isErr:
+      suppressReports() # [M5]
       b.destroy(ctx)
       refuse(
         loaderError(
@@ -330,6 +333,8 @@ proc route(f: var seq[byte]) =
     answered(r.id, answerOf(r))
   of K.lcn_Carrier_route_ended:
     routeEnded(m.arm_lcn_Carrier_route_ended)
+  of K.lcn_Carrier_rc_subscription_ended:
+    subscriptionEnded(f, m.arm_lcn_Carrier_rc_subscription_ended)
   of K.lcn_Carrier_io_admit_established, K.lcn_Carrier_io_admit_failed,
       K.lcn_Carrier_io_admit_unavailable, K.lcn_Carrier_io_respond,
       K.lcn_Carrier_io_close, K.lcn_Carrier_io_terminate, K.lcn_Carrier_io_work_ended,

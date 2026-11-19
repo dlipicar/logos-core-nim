@@ -630,10 +630,11 @@ type
       ## subscriber
     rcRunning: CountTable[string] ## [G178] per subscriber: its drains dispatched
     rcBusy: int ## [G178] event-worker jobs dispatched and not yet ended
-    reports: Table[int, (string, pointer)]
+    reports: Table[int, (string, pointer, pointer)]
       ## [G225] subscription-end reports dispatched and not ended, by number:
-      ## the instance each counts in (`rcHandlers`) and the route handle it
-      ## holds a reference to (nil for a binding's)
+      ## the instance each counts in (`rcHandlers`), the route handle it holds
+      ## a reference to (nil for a binding's), and the Module Host whose
+      ## binding reports it, also held (nil for a direct one)
     rcHints: array[InvKind, RcBlob] ## [G178] the hint values, encoded once
     side: SideTable ## [D14; C-10] the private handoffs to and from the Loader
     ldr: LoaderLink ## [I89] the Module Loader and its binding
@@ -995,17 +996,49 @@ proc deactivateRc(st: State, rec: RcRec) =
   if i >= 0:
     st.rcByEvent[rec.event].delete(i)
 
+proc dispatchReport(
+  st: State,
+  subscriber: string,
+  owner: pointer,
+  onHandle: bool,
+  id: uint64,
+  reason: ErrorCode,
+) {.gcsafe.}
+
+proc rcBinding(st: State, rec: RcRec): ptr AttemptServices =
+  ## The Runtime Control binding `rec` was made through, while it exists: the
+  ## realization's, or its attempt's before the realization takes it over.
+  let x = st.instances.getOrDefault(rec.subscriber)
+  if x.isNil:
+    return nil
+  if x.services != nil and x.current == rec.attempt:
+    return x.services
+  if x.attempt != nil and x.attempt.token == rec.attempt:
+    return x.attempt.services
+  nil
+
+proc endRc(st: State, rec: RcRec, reason: ErrorCode) =
+  ## [SPEC INTERFACE l.1472-1481; DECISIONS G225] The Runtime ends an active
+  ## subscription: nothing of it is judged, queued or delivered again, and
+  ## its binding reports it once with `reason` when a registration is
+  ## installed now. `unsubscribe` of it stays LOGOS_OK once.
+  if not rec.active:
+    return
+  st.deactivateRc(rec)
+  let s = st.rcBinding(rec)
+  if s != nil and s.subEnd.owed:
+    st.dispatchReport(rec.subscriber, s, false, rec.id, reason)
+
 proc loseRc(st: State, rec: RcRec, why: string) =
-  ## [IMPL-DECISION G225 (TF-35)] The Runtime ends the subscription without a
-  ## signal to its subscriber: its entries are discarded and a diagnostic
-  ## records it; `unsubscribe` of it is LOGOS_OK, and the subscriber
+  ## [DECISIONS G225; SPEC INTERFACE l.1479] One of the Runtime's bounds
+  ## ends the subscription: MODULE_ERROR, with a diagnostic. The subscriber
   ## resynchronizes by query (RUNTIME l.3426, l.3428).
   if rec.active:
     st.diagnose(
       "Runtime Control subscription " & $rec.id & " of " & rec.subscriber & " lost: " &
         why & " (G225)"
     )
-    st.deactivateRc(rec)
+    st.endRc(rec, ecModule)
 
 proc freeRc(st: State, rec: RcRec) =
   st.rcSubs.del(rec.sub)
@@ -1074,20 +1107,27 @@ proc dispatchReport(
     onHandle: bool,
     id: uint64,
     reason: ErrorCode,
-) =
+) {.gcsafe.} =
   ## [SPEC INTERFACE l.1478-1481; DECISIONS G225] One report of a
   ## binding-ended subscription, whose slot had a registration installed when
   ## it ended, on an event worker (`rcevents.runReport`): never inline and
   ## never on the Runtime thread. It counts toward the subscriber as an event
   ## handler does (`rcHandlers`), so the release or destroy of its realization
-  ## waits for it; a route handle's job holds a reference to the handle.
+  ## waits for it; a route handle's job holds a reference to the handle, and a
+  ## hosted binding's to its Module Host, which its binding goes with.
   let x = st.instances.getOrDefault(subscriber)
   if x != nil:
     inc x.rcHandlers
+  var host: pointer
   if onHandle:
     discard cast[ptr HandleState](owner).refs.fetchAdd(1)
+  else:
+    host = cast[ptr AttemptServices](owner).host
+    if host != nil:
+      retain(cast[Host](host))
   let n = st.nextJobId()
-  st.reports[n] = ((if x.isNil: "" else: subscriber), (if onHandle: owner else: nil))
+  st.reports[n] =
+    ((if x.isNil: "" else: subscriber), (if onHandle: owner else: nil), host)
   st.sendRcJob(
     RcJob(
       kind: rjSubEnd,
@@ -2103,6 +2143,10 @@ proc destroyContext(st: State, a: Attempt, ctx: ptr LogosModuleContext) =
   ## A context the attempt made that must not become ready.
   a.phase = apCleanup
   let x = a.inst
+  if a.services != nil:
+    # [SPEC INTERFACE l.1949-1954 (M5)] No report of the initialization
+    # binding begins from now on; a running one counts in `rcHandlers`.
+    a.services.subEnd.suppress()
   if x.rcHandlers > 0:
     # [G178; INTERFACE l.1999] Its Runtime Control handlers return first.
     x.heldAttempt = a
@@ -2235,6 +2279,11 @@ proc releaseRealization(st: State, x: Inst) =
   let r = x.realization
   if r.isNil or x.teardown != 0:
     return
+  if x.services != nil:
+    # [SPEC INTERFACE l.1949-1954 (M5)] No report of the initialization
+    # binding begins from now on; a running one counts in `rcHandlers`, which
+    # `_MODULE_destroy` waits for below.
+    x.services.subEnd.suppress()
   if x.inflight > 0 or x.rcHandlers > 0 or x.apply != nil:
     # [IMPL] Calls already inside the provider finish first (§3.4 l.623), and
     # so do its Runtime Control handlers [G178] (INTERFACE l.1465, l.1999)
@@ -3001,10 +3050,21 @@ proc addFact(st: State, rec: RcRec, e: RcEntry) =
       p.keys.incl(key)
       p.facts.add(e.subject)
 
+proc eventRefused(answers: seq[AuthzAnswer]): bool =
+  ## [P3 ruling R6; SPEC INTERFACE l.1479] The event's own decision is no
+  ## allow of any scope (a deny, a refusal, a failed evaluation): authority
+  ## to receive the event has ended or cannot be established. A filtered
+  ## allow only filters subjects (`rcAdmits`).
+  answers.len > 0 and answers[0].outcome != azAllow
+
 proc judged(st: State, rec: RcRec, e: RcEntry, answers: seq[AuthzAnswer]) =
-  ## [G178 (D3)] Admitted, the entry joins the queue or its pending hint;
-  ## refused, it is dropped.
+  ## [G178 (D3)] Admitted, the entry joins the queue or its pending hint; a
+  ## subject the decisions do not admit is dropped. [G225] An event decision
+  ## that does not allow ends the subscription with NOT_AUTHORISED.
   if not rec.active:
+    return
+  if eventRefused(answers):
+    st.endRc(rec, ecNotAuthorised)
     return
   st.judgedBy(e, answers)
   if not st.rcAdmits(e.subject, answers):
@@ -4007,6 +4067,7 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       st.diagnose("the Module Host carrier of " & x.id & " cannot be made: " & error)
       fail("the Module Host carrier cannot be made")
     a.services.adoptHost(h)
+    h.forwardSubscriptionEnds()
     host = h
     # [plan §2.8; part 4b-3.3] Every host's own loop connects its consumer's
     # handles with the Runtime's Transport limits.
@@ -9567,8 +9628,9 @@ proc deliverRc(st: State, q: Request) =
   ## subscription is active, its binding current and live, and current
   ## authority admits it: judged again when the decisions it was judged by may
   ## have changed (G161). An entry not admitted is dropped and the worker asks
-  ## again; the drain ends with the queue, the subscription or its quota
-  ## (`rcDrainQuota`).
+  ## again; an event decision that no longer allows ends the subscription
+  ## (`eventRefused`, G225). The drain ends with the queue, the subscription
+  ## or its quota (`rcDrainQuota`).
   let rec = st.rcSubs.getOrDefault(q.handle)
   if rec.isNil:
     q.reply.answer(Reply(drained: true))
@@ -9594,7 +9656,10 @@ proc deliverRc(st: State, q: Request) =
     rcRequests(rec, e),
     proc(answers: seq[AuthzAnswer]) =
       let y = st.rcLive(rec)
-      if y != nil and st.deliverable(rec, e, answers):
+      if y != nil and eventRefused(answers):
+        st.endRc(rec, ecNotAuthorised)
+        reply.answer(Reply())
+      elif y != nil and st.deliverable(rec, e, answers):
         handOver(y, e, reply)
       else:
         reply.answer(Reply()),
@@ -9618,13 +9683,15 @@ proc rcHandled(st: State, p: pointer) =
 
 proc reportDone(st: State, n: int) =
   ## [G225] A subscription-end report job ended: it no longer counts toward
-  ## its subscriber, and a handle's reference goes.
-  var held: (string, pointer)
+  ## its subscriber, and the reference to a handle or a host goes.
+  var held: (string, pointer, pointer)
   if not st.reports.pop(n, held):
     return
   dec st.rcBusy
   if held[1] != nil:
     dropHandle(cast[ptr HandleState](held[1]))
+  if held[2] != nil:
+    dropHost(cast[Host](held[2]))
   st.handlerReturned(held[0])
 
 proc handlerReturned(st: State, subscriber: string) {.gcsafe.} =

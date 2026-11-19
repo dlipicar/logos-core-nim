@@ -58,7 +58,7 @@ import logos_sdk/abi/[checks, cstatus, types]
 import logos_sdk/base/[perthread, testhooks]
 import logos_sdk/iface/[accept, surface]
 import ../transport/io/api except decodeMessage
-import ./[carrier, callside, events, hostio]
+import ./[carrier, callside, events, hostio, subend]
 import ./plumbing except Request
 from ./plumbing import nil
 
@@ -532,6 +532,27 @@ when defined(posix):
         if f.isOk:
           trace(f.get)
     h.writer.send(m, alive, h)
+
+  proc forwardSubEnd(
+      id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+  ) {.cdecl.} =
+    ## [DECISIONS G225] The attempt's binding reports a Runtime Control
+    ## subscription the Runtime ended, on a Runtime event worker: the end goes
+    ## to the host, which reports it when its module's registration is
+    ## installed as it reads it (P3 reading against INTERFACE l.1481). The
+    ## report job holds the host (`engine.dispatchReport`).
+    bindingEnter()
+    discard cast[Host](userData).sendMsg(
+      toMessage(
+        LcnCarrierRcSubscriptionEnded(sub: uint64(id), code: uint8(int64(reason)))
+      )
+    )
+
+  proc forwardSubscriptionEnds*(h: Host) =
+    ## [G225] At the launch: the attempt's binding forwards every end to the
+    ## host, whatever its module registers there; the module's registration
+    ## is the host's (`host/rcbinding`).
+    discard cast[ptr AttemptServices](h.rc.state).subEnd.register(forwardSubEnd, h)
 
   # Test hooks ------------------------------------------------------------------------------
 
@@ -1853,6 +1874,9 @@ else:
 
   proc sendMsg*(h: Host, m: LcnCarrierMessage): Result[void, string] =
     err(Unsupported)
+
+  proc forwardSubscriptionEnds*(h: Host) =
+    discard
 
   proc notify*(h: Host, m: LcnCarrierMessage) =
     discard

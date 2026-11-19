@@ -13,6 +13,7 @@
 import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
+from ../src/logos_core/runtime/rcevents import setReportDelayForTests
 from logos_sdk/kit/rc_types import rcSchema
 import logos_sdk/abi/types
 import logos_sdk/cbor
@@ -90,9 +91,42 @@ proc clear(w: var Watch) =
   w.stopCode.store(-1)
   w.armed.store(true)
 
+type Ends = object ## [G225] What a binding's subscription-end handler saw.
+  count: Atomic[int] ## reports that returned
+  id: Atomic[uint64]
+  reason: Atomic[int]
+  thread: Atomic[int]
+  running: Atomic[bool]
+  hold: Atomic[bool] ## the handler waits while it is true
+
+var ends: array[2, Ends]
+
 proc clearAll() =
   for w in watches.mitems:
     w.clear()
+  for e in ends.mitems:
+    e.count.store(0)
+    e.id.store(0)
+    e.reason.store(0)
+    e.thread.store(0)
+    e.running.store(false)
+    e.hold.store(false)
+
+proc onSubEnd(
+    id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  let e = cast[ptr Ends](userData)
+  e.running.store(true)
+  e.thread.store(getThreadId())
+  e.id.store(uint64(id))
+  e.reason.store(int(reason))
+  while e.hold.load:
+    sleep(1)
+  e.count += 1
+  e.running.store(false)
+
+proc observeSubEnd(rc: ptr LogosRuntimeControlBinding, e: ptr Ends): ErrorCode =
+  toResult(rc.vtable.observeSubscriptionEnd(rc, onSubEnd, e)).code
 
 proc onEvent(
     name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
@@ -879,9 +913,10 @@ when declared(caParity):
     teardown:
       leftover()
 
-    test "[RUN-0993] [CAP-0055] [IMPL-DECISION G161] queued entries are judged again at delivery once the policy changed; none is delivered while denied, and the subscription lives on":
+    test "[RUN-0993] [CAP-0055] [TXT-0086] [IMPL-DECISION G161] [IMPL-DECISION G225] queued entries are judged again at delivery once the policy changed; a deny of the event ends the subscription, reported once with NOT_AUTHORISED, and nothing is delivered after it":
       let e = fixtureEngine(rcConfig())
       let (_, rc) = e.startClient("c")
+      check rc.observeSubEnd(addr ends[0]) == ecOk
       var id: LogosSubscriptionId
       check rc.subscribe(ModuleState, addr watches[0], id) == ecOk
       watches[0].hold.store(true)
@@ -895,29 +930,57 @@ when declared(caParity):
       setScript(rule(vDeny, "rcev:module_state_changed", code = 1))
       changePolicy(1)
       watches[0].hold.store(false)
-      # The three entries queued behind the held one are judged again at
-      # delivery, each by an evaluation the CA answers by its script then. The
-      # case waits for those three refusals, and then for the two of the next
-      # start's entries at fan-out, so no entry is still to be judged when the
-      # script allows again.
+      # [P3 ruling R6] The first entry queued behind the held one is judged
+      # again at delivery and denied: the subscription ends, and its binding
+      # reports it once.
       check waitUntil(
         proc(): bool =
-          e.refusals("c", "module_state_changed") >= 3
+          ends[0].count.load == 1
       )
-      check watches[0].count.load == 1
-      check e.start("s").tryGet.state == msReady # refused at fan-out
-      check waitUntil(
-        proc(): bool =
-          e.refusals("c", "module_state_changed") >= 5
-      )
+      check ends[0].id.load == uint64(id)
+      check ends[0].reason.load == ord(ecNotAuthorised)
+      check ends[0].thread.load != getThreadId()
       check watches[0].count.load == 1
       setScript()
       changePolicy(2)
+      check e.start("s").tryGet.state == msReady
       check e.stop("s").tryGet.state == msUnloaded
-      check watches[0].reached(3)
-      check watches[0].transitions("s") ==
-        @["unloaded>loaded", "ready>stopping", "stopping>unloaded"]
+      sleep(100 * Slow)
+      check watches[0].count.load == 1
+      check ends[0].count.load == 1
+      check rc.unsubscribe(id) == ecOk
+      check rc.unsubscribe(id) == ecInvalidParams
       check not e.diagnostics().anyIt("G225" in it)
+      e.finish()
+
+    test "[TXT-0086] [IMPL-DECISION G225] an event decision that denies at fan-out ends the subscription with NOT_AUTHORISED; a filtered allow only filters":
+      let e = fixtureEngine(rcConfig())
+      let (_, rc) = e.startClient("c")
+      check rc.observeSubEnd(addr ends[0]) == ecOk
+      var x, y: LogosSubscriptionId
+      check rc.subscribe(ModuleState, addr watches[0], x) == ecOk
+      check rc.subscribe(ExecutionState, addr watches[1], y) == ecOk
+      setScript(
+        rule(vDeny, "rcev:module_state_changed", code = 1),
+        narrowing(
+          "rcev:execution_state_changed", RcNarrow(modules: only("meter_module"))
+        ),
+      )
+      changePolicy(1)
+      discard e.started(slow(), "s")
+      discard e.started(meter(), "m")
+      check waitUntil(
+        proc(): bool =
+          ends[0].count.load == 1
+      )
+      check ends[0].id.load == uint64(x)
+      check ends[0].reason.load == ord(ecNotAuthorised)
+      check watches[0].count.load == 0
+      check watches[1].reached(1)
+      sleep(100 * Slow)
+      check ends[0].count.load == 1 # the filtered subscription lives on
+      for i in 0 ..< watches[1].count.load:
+        check watches[1].execEv(i).module == "meter_module"
       e.finish()
 
 # Inventory hints --------------------------------------------------------------------------
@@ -1068,11 +1131,12 @@ suite "run.rc: delivery (G178) [IMPL-DECISION G178]":
       @["unloaded>loaded", "loaded>ready", "ready>stopping", "stopping>unloaded"]
     e.finish()
 
-  test "[IMPL-DECISION G178] [IMPL-DECISION G225] a handler past the queue bound loses its subscription with a diagnostic; unsubscribing it is LOGOS_OK and a new one works":
+  test "[TXT-0086] [TXT-0088] [IMPL-DECISION G178] [IMPL-DECISION G225] a handler past the queue bound loses its subscription with a diagnostic, reported once by the binding with MODULE_ERROR on an event worker; unsubscribing it is LOGOS_OK once and a new one works":
     var cfg = rcConfig()
     cfg.limits.rcQueue = 4
     let e = fixtureEngine(cfg)
     let (_, rc) = e.startClient("c")
+    check rc.observeSubEnd(addr ends[0]) == ecOk
     var id: LogosSubscriptionId
     check rc.subscribe(ExecutionState, addr watches[0], id) == ecOk
     watches[0].hold.store(true)
@@ -1095,6 +1159,15 @@ suite "run.rc: delivery (G178) [IMPL-DECISION G178]":
             " of c lost: its handler fell behind (G225)"
         )
     )
+    # [SPEC INTERFACE l.1478-1479] Reported while the handler is still held:
+    # on another event worker, never on this thread.
+    check waitUntil(
+      proc(): bool =
+        ends[0].count.load == 1
+    )
+    check ends[0].id.load == uint64(id)
+    check ends[0].reason.load == ord(ecModule)
+    check ends[0].thread.load != getThreadId()
     watches[0].hold.store(false)
     discard watches[0].quiet()
     check watches[0].count.load == 1 # the one held; the queue went
@@ -1108,6 +1181,118 @@ suite "run.rc: delivery (G178) [IMPL-DECISION G178]":
     check again == id + 1
     check e.stop("s").tryGet.state == msUnloaded
     check watches[1].reached(1)
+    check ends[0].count.load == 1
+    e.finish()
+
+  test "[RUN-1098] [RUN-1099] [TXT-0105] [IMPL-DECISION G178] a Runtime Control operation of the subscriber that commits a change returns while its handler is held, and the handler never runs on its thread":
+    let e = fixtureEngine(rcConfig())
+    let (_, rc) = e.startClient("c")
+    discard e.create(meter(), "m").tryGet
+    var id: LogosSubscriptionId
+    check rc.subscribe(ModuleState, addr watches[0], id) == ecOk
+    watches[0].hold.store(true)
+    # The handler of the start's first change waits until released: a start
+    # that waited for it would never return.
+    check rc.lifecycle("start_module", "meter_module", instance = Opt.some("m")).code ==
+      ecOk
+    check waitUntil(
+      proc(): bool =
+        watches[0].held.load == 1
+    )
+    check watches[0].thread.load != getThreadId()
+    watches[0].hold.store(false)
+    check watches[0].reached(2)
+    check watches[0].transitions("m") == @["unloaded>loaded", "loaded>ready"]
+    check watches[0].thread.load != getThreadId()
+    check watches[0].overlaps.load == 0
+    e.finish()
+
+proc loseOne(e: Engine, rc: ptr LogosRuntimeControlBinding): LogosSubscriptionId =
+  ## A subscription of `rc` past the queue bound (4): its first handler is
+  ## held on `watches[3]` until the loss, then released.
+  check rc.subscribe(ExecutionState, addr watches[3], result) == ecOk
+  watches[3].hold.store(true)
+  e.slows("s")
+  check e.start("s").tryGet.state == msReady
+  check waitUntil(
+    proc(): bool =
+      watches[3].held.load == 1
+  )
+  check e.stop("s").tryGet.state == msUnloaded
+  for i in 1 ..< 4:
+    check e.start("s").tryGet.state == msReady
+    check e.stop("s").tryGet.state == msUnloaded
+  let id = result
+  check waitUntil(
+    proc(): bool =
+      e.diagnostics().anyIt(
+        it.startsWith("Runtime Control subscription " & $id & " of w lost")
+      )
+  )
+  watches[3].hold.store(false)
+
+suite "run.rc: the binding's subscription-end reports and destroy (INTERFACE l.1949-1954) [IMPL-DECISION G225]":
+  setup:
+    clearAll()
+
+  teardown:
+    setReportDelayForTests(0)
+    leftover()
+
+  test "[IFC-0970] [TXT-0089] [IMPL-DECISION G225] the subscriber's destroy waits for its binding's running subscription-end report":
+    var cfg = rcConfig()
+    cfg.limits.rcQueue = 4
+    cfg.stopDeadline = initDuration(seconds = 10 * Slow)
+    let e = fixtureEngine(cfg)
+    watcherUnsub.store(0)
+    watcherDestroyBegan.store(false)
+    let wrc = e.startWatcher("w")
+    check wrc.observeSubEnd(addr ends[0]) == ecOk
+    ends[0].hold.store(true)
+    let id = e.loseOne(wrc)
+    check waitUntil(
+      proc(): bool =
+        ends[0].running.load
+    )
+    var t: Thread[(Engine, string)]
+    stopReply.store(-2)
+    createThread(t, stopOn, (e, "w"))
+    check waitUntil(
+      proc(): bool =
+        e.view("w").tryGet.state == msStopping
+    )
+    sleep(100 * Slow)
+    check not watcherDestroyBegan.load # the running report holds it back
+    ends[0].hold.store(false)
+    joinThread(t)
+    check stopReply.load == ord(msUnloaded)
+    check watcherDestroyBegan.load
+    check ends[0].count.load == 1
+    check ends[0].id.load == uint64(id)
+    check ends[0].reason.load == ord(ecModule)
+    e.finish()
+
+  test "[IFC-0970] [TXT-0089] [IMPL-DECISION G225] the subscriber's stop suppresses its binding's subscription-end report that has not begun":
+    var cfg = rcConfig()
+    cfg.limits.rcQueue = 4
+    cfg.stopDeadline = initDuration(seconds = 10 * Slow)
+    let e = fixtureEngine(cfg)
+    watcherUnsub.store(0)
+    watcherDestroyBegan.store(false)
+    let wrc = e.startWatcher("w")
+    check wrc.observeSubEnd(addr ends[0]) == ecOk
+    setReportDelayForTests(1500 * Slow)
+    discard e.loseOne(wrc)
+    # The report job waits on its worker; the stop suppresses it, and the
+    # destroy waits for the job to end without running the handler: the stop
+    # of an idle subscriber takes far less than the job's wait.
+    let began = getMonoTime()
+    check e.stop("w").tryGet.state == msUnloaded
+    check getMonoTime() - began >= initDuration(milliseconds = 300)
+    check watcherDestroyBegan.load
+    sleep(200 * Slow)
+    check ends[0].count.load == 0
+    check not ends[0].running.load
     e.finish()
 
   test "[IMPL] a stalled `inventory_changed` handler never loses its subscription":

@@ -121,7 +121,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "IFC-0964" = "P3"
 "IFC-0968" = "P8"
 "IFC-0969" = "P8"
-"IFC-0970" = "P3"
 "IFC-0979" = "P4"
 "IFC-0980" = "P4"
 "LDR-0167" = "P6"
@@ -229,8 +228,6 @@ closed = ["P1"]  # sub-steps that have merged; `spectrace pending` fails if one 
 "RUN-1094" = "P3"
 "RUN-1096" = "P5"
 "RUN-1097" = "P5"
-"RUN-1098" = "P3"
-"RUN-1099" = "P3"
 "RUN-1100" = "P5"
 "RUN-1101" = "P5"
 "RUN-1102" = "P5"
@@ -476,47 +473,6 @@ class = "todo"
 what = "Deactivation of the subscription discards its queued deliveries."
 
 [[text]]
-id = "TXT-0083"
-step = "P3"
-spec = "IFC"
-line = "1474"
-side = "new"
-section = "§2.5"
-class = "todo"
-what = "A subscription that ends for a reason other than unsubscription, the terminal state of its route, or release of its binding or handle is a binding-ended subscription."
-
-[[text]]
-id = "TXT-0084"
-step = "P3"
-spec = "IFC"
-line = "1476"
-side = "new"
-section = "§2.5"
-class = "todo"
-what = "The Runtime Control binding and the route handle each provide `observe_subscription_end` to report binding-ended subscriptions."
-
-[[text]]
-id = "TXT-0086"
-step = "P3"
-spec = "IFC"
-line = "1479"
-side = "new"
-section = "§2.5"
-source = "review"
-class = "behaviour"
-what = "The reason is `NOT_AUTHORISED` when authority to receive the event has ended or can no longer be established, and `MODULE_ERROR` for every other cause, including a reached pending-delivery bound."
-
-[[text]]
-id = "TXT-0089"
-step = "P3"
-spec = "IFC"
-line = "1954"
-side = "new"
-source = "M5"
-class = "behaviour"
-what = "Before destroy, suppress subscription-end callbacks of the initialization binding and wait for an active one"
-
-[[text]]
 id = "TXT-0090"
 step = "P3"
 spec = "IFC"
@@ -604,16 +560,6 @@ section = "§2.9.3"
 class = "todo"
 guard = true
 what = "A known authority failure produces `NOT_AUTHORISED`; otherwise a closed invocation destination produces `NOT_READY`."
-
-[[text]]
-id = "TXT-0105"
-step = "P3"
-spec = "RUN"
-line = "1107"
-side = "new"
-section = "§6.3"
-class = "todo"
-what = "Runtime Control events delivered through a local Runtime Control binding have no publishing thread, and Runtime schedules their handler invocations in committed order for each subscription."
 
 [[text]]
 id = "TXT-0078"

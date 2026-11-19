@@ -174,6 +174,7 @@ proc samples(): seq[LcnCarrierMessage] =
       )
     ),
     toMessage(LcnCarrierAsyncDone(call: 1)),
+    toMessage(LcnCarrierRcSubscriptionEnded(sub: 3, code: uint8(ord(ecNotAuthorised)))),
     toMessage(
       LcnCarrierAsyncDone(
         call: 2, value: Opt.some(@[0xA0'u8]), failure: Opt.some(failure())

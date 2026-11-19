@@ -190,10 +190,22 @@ proc unlink(s: ptr LocalSub) =
       return
     p = addr p[].next
 
+var bindingSubEnd: SubscriptionEndSlot
+  ## [SPEC INTERFACE §2.5 l.1476] the binding's registration; the host has one
+  ## instance and one binding
+
 proc runDelivery(f: seq[byte]) =
-  ## An event worker: one entry, then `rc_delivered`.
+  ## An event worker: one entry, then `rc_delivered`; or one subscription-end
+  ## report (`subscriptionEnded`).
   let m = decodeMessage(f).valueOr:
     carrierLost("a delivery does not decode")
+  if m.kind == LcnCarrierMessageKind.lcn_Carrier_rc_subscription_ended:
+    # [SPEC INTERFACE l.1478-1479, l.1484] Once, unless the release
+    # suppressed it before it began.
+    let e = m.arm_lcn_Carrier_rc_subscription_ended
+    {.cast(gcsafe).}:
+      discard bindingSubEnd.report(LogosSubscriptionId(e.sub), ErrorCode(e.code))
+    return
   let d = m.arm_lcn_Carrier_rc_delivery
   var s: ptr LocalSub
   withLock subLock:
@@ -568,10 +580,6 @@ proc rcPrepareCallOp(
   outCall.state = c
   LogosResult()
 
-var bindingSubEnd: SubscriptionEndSlot
-  ## [SPEC INTERFACE §2.5 l.1476] the binding's registration; the host has one
-  ## instance and one binding
-
 proc rcObserveSubscriptionEndOp(
     binding: ptr LogosRuntimeControlBinding,
     handler: LogosSubscriptionEndHandler,
@@ -696,6 +704,25 @@ proc completed*(f: seq[byte]) =
   ## Main thread: an `async_done`.
   completions.post(f)
 
+proc subscriptionEnded*(f: seq[byte], m: LcnCarrierRcSubscriptionEnded) =
+  ## Main thread: an `rc_subscription_ended` [DECISIONS G225]. The Runtime
+  ## sends every end; the host reports one only when its module's
+  ## registration is installed now (P3 reading against INTERFACE l.1481), on
+  ## an event worker, never on the registering thread.
+  if m.code notin [uint8(ord(ecNotAuthorised)), uint8(ord(ecModule))]:
+    carrierLost("a subscription end with another code")
+  {.cast(gcsafe).}:
+    if bindingSubEnd.owed:
+      events.post(f)
+
+proc suppressReports*() =
+  ## Lifecycle thread, before `_MODULE_destroy` [SPEC INTERFACE l.1949-1954
+  ## (M5)]: no subscription-end report of the binding begins from now on, and
+  ## one running returns first.
+  {.cast(gcsafe).}:
+    bindingSubEnd.suppress()
+  events.awaitIdle()
+
 proc awaitCallbacks*() =
   ## Lifecycle thread, at the release, before `_MODULE_destroy` (DECISIONS
   ## G267; INTERFACE l.1465, l.1503, l.1999): every event handler and
@@ -703,7 +730,9 @@ proc awaitCallbacks*() =
   ## for a direct module's (`engine.releaseRealization`). The main thread keeps
   ## serving their Runtime Control calls meanwhile; a callback that never
   ## returns leaves the release to the stop deadline, which ends the host.
-  events.awaitIdle()
+  ## The binding's subscription-end reports not begun are suppressed first
+  ## (M5).
+  suppressReports()
   completions.awaitIdle()
   awaitConsumer()
 

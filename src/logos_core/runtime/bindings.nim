@@ -438,6 +438,9 @@ proc freeAttemptServices*(s: ptr AttemptServices) =
   ## A hosted attempt's go with its host, which may still be reaped.
   if s == nil:
     return
+  # [SPEC INTERFACE l.1954] No subscription-end report of the binding begins
+  # now; one already dispatched holds the host its binding goes with.
+  s.subEnd.suppress()
   freeContracts(s)
   if s.host != nil:
     let h = cast[Host](s.host)

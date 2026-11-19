@@ -1504,14 +1504,18 @@ summary and never a value.
   call Runtime Control. The Runtime runs handlers on its own pool of event workers (up to 64 threads,
   started on demand), one handler at a time per subscription, in commit order. Several hints of one
   collection waiting for a busy handler become one.
-- **A handler that falls behind loses its subscription** (DECISIONS G225, interim). Each subscription
+- **A handler that falls behind loses its subscription** (DECISIONS G225). Each subscription
   queues at most 256 events for its handler (and 256 waiting for an authority's decision); one more
   ends the subscription: its queued events are discarded, nothing more is delivered, and the Runtime
   records the diagnostic "Runtime Control subscription *id* of *instance* lost: its handler fell
-  behind (G225)". The subscriber gets no signal: `unsubscribe` of it is `LOGOS_OK`. An observer that
-  cannot be sure it saw every event must query (`list_modules`, `list_routes`,
-  `get_execution_summary`) and resubscribe, periodically when it cannot rule out a loss (RUNTIME
-  l.3425-3428). An `inventory_changed` subscription holds at most one pending hint per collection, so a
+  behind (G225)". The binding reports the end with `MODULE_ERROR` to the handler registered with
+  `observe_subscription_end`, once, on an event worker (INTERFACE l.1472-1481); `unsubscribe` of it is
+  `LOGOS_OK` once. An event decision that no longer allows the event at all (a deny, a refusal, a
+  failed evaluation) ends the subscription the same way with `NOT_AUTHORISED`; one that allows only
+  some subjects filters them. A Module Host reports the end in the host, as in process. An observer
+  that lost a subscription, or cannot be sure it saw every event, must query (`list_modules`,
+  `list_routes`, `get_execution_summary`) and resubscribe, periodically when it cannot rule out a
+  loss (RUNTIME l.3425-3428). An `inventory_changed` subscription holds at most one pending hint per collection, so a
   slow handler alone never loses it; past 1024 distinct affected records behind one pending hint the
   hint is still delivered while one of them stays visible, and the subscription is lost when none is.
 - **Limits.**

@@ -644,3 +644,36 @@ test = "tests/test_events.nim"
 id = "TXT-0088"
 step = "P3"
 test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0086"
+step = "P3"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0089"
+step = "P3"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0105"
+step = "P3"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0083"
+step = "P3"
+reading = "A binding-ended subscription is every end the Runtime makes other than unsubscription, its route's terminal state and the release of its binding or handle."
+compared = "INTERFACE l.1474 at 6cac8335 against the Runtime's ends: engine.endDirect, engine.endServed and the consumers' SubscriptionEnd (a route subscription whose authority to receive ended) and engine.endRc (a Runtime Control subscription past one of the three bounds, or whose event decision no longer allows) are reported. Unsubscription, a route's end (the terminal observer, P3 reading 1), a handle's or binding's release, and a subscriber leaving its live states (P3 reading 3) are not."
+kind = "holds"
+site = "tests/test_rcevents.nim"
+named = "reported once by the binding with MODULE_ERROR"
+
+[[text]]
+id = "TXT-0084"
+step = "P3"
+reading = "The Runtime Control binding and every route handle carry one observe_subscription_end registration and report their binding-ended subscriptions through it."
+compared = "INTERFACE l.1476 at 6cac8335 against the vtables (I105): the direct binding's rcObserveSubscriptionEndOp and route handle's observe operation (runtime/bindings.nim), the host's (host/rcbinding.nim, host/consumer.nim), each over a SubscriptionEndSlot (runtime/subend.nim). Reports reach a handle (test_events_ca, test_hosted_routes) and the binding (test_rcevents, test_hosted)."
+kind = "holds"
+site = "tests/test_rcevents.nim"
+named = "reported once by the binding with MODULE_ERROR"

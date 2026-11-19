@@ -110,6 +110,10 @@ arm(
   arm_lcn_Carrier_rc_link_released,
 )
 arm(LcnCarrierRouteEnded, lcn_Carrier_route_ended, arm_lcn_Carrier_route_ended)
+arm(
+  LcnCarrierRcSubscriptionEnded, lcn_Carrier_rc_subscription_ended,
+  arm_lcn_Carrier_rc_subscription_ended,
+)
 
 # Lane 2 (4b-3.2): a hosted provider's endpoint and its calls.
 arm(LcnCarrierAdmitVerdict, lcn_Carrier_admit_verdict, arm_lcn_Carrier_admit_verdict)

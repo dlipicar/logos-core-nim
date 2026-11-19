@@ -370,14 +370,17 @@ when defined(posix):
       check direct[2].startsWith("subscribed " & $ord(ecNotAuthorised) & " ")
       check hosted == direct
 
-    test "[IMPL-DECISION G225] S-5 a host's handler past the queue bound loses its subscription with the in-process diagnostic":
-      var cfg = hostedConfig()
-      cfg.limits.rcQueue = 4
-      let dir = cfg.prepare("subscribe " & ModuleStateEv, "block-handler")
-      let e = fixtureEngine(cfg)
-      discard e.create(probe(), "p").tryGet
-      check e.start("p").tryGet.state == msReady
-      # The probe's own `loaded` to `ready` is held in its handler.
+    proc registered(dir: string) =
+      ## The probe's `serve` thread ran `sub-end rc t1` (`cmd-1`).
+      check waitUntil(
+        proc(): bool =
+          fileExists(dir / "out-1")
+      )
+      check readFile(dir / "out-1").strip == "0"
+
+    proc loseHeld(e: Engine, dir: string) =
+      ## The probe's own `loaded` to `ready` is held in its handler; four
+      ## starts and stops of `s` pass the queue bound (4) behind it.
       check waitUntil(
         proc(): bool =
           lines(dir, "events").anyIt(it.startsWith(ModuleStateEv))
@@ -390,14 +393,33 @@ when defined(posix):
         proc(): bool =
           e.diagnostics().anyIt(" of p lost: its handler fell behind (G225)" in it)
       )
-      writeFile(dir / "go-handler", "")
-      sleep(150 * Slow)
-      let delivered = lines(dir, "events").countIt(it.startsWith(ModuleStateEv))
-      check delivered == 1 # the one held; the queue went
-      check e.start("s").tryGet.state == msReady
-      sleep(150 * Slow)
-      check lines(dir, "events").countIt(it.startsWith(ModuleStateEv)) == delivered
-      e.finish()
+
+    test "[TXT-0086] [IMPL-DECISION G225] S-5 a host's handler past the queue bound loses its subscription with the in-process diagnostic, and the host's binding reports it once with MODULE_ERROR, as in process":
+      proc run(hosted: bool): seq[string] =
+        var cfg = hostedConfig(hosted)
+        cfg.limits.rcQueue = 4
+        let dir = cfg.prepare("subscribe " & ModuleStateEv, "block-handler", "serve")
+        writeFile(dir / "cmd-1", "sub-end rc t1")
+        let e = fixtureEngine(cfg)
+        discard e.create(probe(hosted), "p").tryGet
+        check e.start("p").tryGet.state == msReady
+        registered(dir)
+        e.loseHeld(dir)
+        result = settled(dir, "subends", 1)
+        writeFile(dir / "go-handler", "")
+        sleep(150 * Slow)
+        let delivered = lines(dir, "events").countIt(it.startsWith(ModuleStateEv))
+        check delivered == 1 # the one held; the queue went
+        check e.start("s").tryGet.state == msReady
+        sleep(150 * Slow)
+        check lines(dir, "events").countIt(it.startsWith(ModuleStateEv)) == delivered
+        check lines(dir, "subends") == result
+        e.finish()
+
+      let direct = run(false)
+      let hosted = run(true)
+      check direct == @["t1 1 " & $ord(ecModule)]
+      check hosted == direct
 
     test "[IMPL-DECISION G267] S-19 a stop releases the host only once an event handler still running has returned: `_MODULE_destroy` comes after it":
       var cfg = hostedConfig()
@@ -423,6 +445,42 @@ when defined(posix):
       check e.view("p").tryGet.state == msUnloaded
       check lines(dir, "destroyed") == @["destroyed"]
       e.finish()
+
+    test "[IFC-0970] [TXT-0089] [IMPL-DECISION G225] S-19 a stop releases the host only once its binding's running subscription-end report has returned, as in process":
+      proc run(hosted: bool): seq[string] =
+        var cfg = hostedConfig(hosted)
+        cfg.limits.rcQueue = 4
+        let dir = cfg.prepare(
+          "subscribe " & ModuleStateEv, "block-handler", "block-subend", "serve"
+        )
+        writeFile(dir / "cmd-1", "sub-end rc t1")
+        let e = fixtureEngine(cfg)
+        discard e.create(probe(hosted), "p").tryGet
+        check e.start("p").tryGet.state == msReady
+        registered(dir)
+        e.loseHeld(dir)
+        writeFile(dir / "go-handler", "")
+        # The report wrote its line and waits for `go-subend`.
+        result = settled(dir, "subends", 1)
+        var stopping: Thread[(Engine, string)]
+        proc stopOn(arg: (Engine, string)) {.thread.} =
+          discard arg[0].stop(arg[1])
+
+        createThread(stopping, stopOn, (e, "p"))
+        sleep(300 * Slow)
+        check lines(dir, "destroyed").len == 0
+        check e.view("p").tryGet.state == msStopping
+        writeFile(dir / "go-subend", "")
+        joinThread(stopping)
+        check e.view("p").tryGet.state == msUnloaded
+        check lines(dir, "destroyed") == @["destroyed"]
+        check lines(dir, "subends") == result
+        e.finish()
+
+      let direct = run(false)
+      let hosted = run(true)
+      check direct == @["t1 1 " & $ord(ecModule)]
+      check hosted == direct
 
   # S-6 ---------------------------------------------------------------------------------
 
