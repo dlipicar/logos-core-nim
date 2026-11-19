@@ -7,7 +7,8 @@
 ##   the drive's cache), renamed over `<name>`, and the directory is flushed
 ##   too, so after a crash the name holds either the old bytes or the new ones.
 ##   On Windows: `FlushFileBuffers`, then `MoveFileExW` with
-##   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`.
+##   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`, retried for about two
+##   seconds while another handle holds the file open.
 ## - **Bounded read.** A file larger than the caller's bound is refused before
 ##   it is read. Its integrity is the caller's check: the store decodes one
 ##   deterministic-CBOR value and checks it against its schema.
@@ -92,6 +93,12 @@ elif defined(windows):
   const
     LOCKFILE_FAIL_IMMEDIATELY = 0x1'i32
     LOCKFILE_EXCLUSIVE_LOCK = 0x2'i32
+    ErrorAccessDenied = 5'i32
+    ErrorSharingViolation = 32'i32
+    ReplaceRetryMs = 2_000
+      ## [IMPL] How long a replace waits for whoever has the file open: Windows
+      ## refuses to replace a file open without `FILE_SHARE_DELETE`, as a reader,
+      ## an indexer or a virus scanner may briefly have it.
 
   proc lockFileEx(
     hFile: Handle, dwFlags, dwReserved, nLow, nHigh: DWORD, lpOverlapped: pointer
@@ -243,10 +250,17 @@ proc writeAtomic*(dir, name: string, data: openArray[byte]): Result[void, string
       discard deleteFileW(wtmp)
       return err(describe("cannot flush", tmp, e))
     discard closeHandle(h)
-    if moveFileExW(wtmp, wpath, MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) == 0:
+    var waited = 0
+    var pause = 1
+    while moveFileExW(wtmp, wpath, MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) ==
+        0:
       let e = int32(getLastError())
-      discard deleteFileW(wtmp)
-      return err(describe("cannot replace", path, e))
+      if e notin [ErrorAccessDenied, ErrorSharingViolation] or waited >= ReplaceRetryMs:
+        discard deleteFileW(wtmp)
+        return err(describe("cannot replace", path, e))
+      sleep(pause)
+      waited += pause
+      pause = min(pause * 2, 50)
     ok()
 
 proc removeDurably*(dir, name: string): Result[void, string] =

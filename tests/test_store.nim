@@ -19,6 +19,14 @@ createDir(work)
 
 var dirs = 0
 
+when defined(windows):
+  var heldOpen: File
+
+  proc closeHeldAfter(ms: int) {.thread.} =
+    sleep(ms)
+    {.cast(gcsafe).}:
+      close(heldOpen)
+
 proc freshDir(): string =
   inc dirs
   work / ("s" & $dirs)
@@ -450,3 +458,32 @@ suite "run.store: the Runtime state store [IMPL]":
     var d = b
     d.requestedPermissions[0].constraints = encodeCbor(cbor(2'u64))
     check factBytes(d) != factBytes(b)
+
+  test "[IMPL] on Windows a reader that holds the file open delays a replace and does not fail it":
+    when defined(windows):
+      let dir = freshDir()
+      check ensurePrivateDir(dir).isOk
+      check writeAtomic(dir, "state", [1'u8]).isOk
+      check heldOpen.open(dir / "state", fmRead)
+      var closer: Thread[int]
+      createThread(closer, closeHeldAfter, 200)
+      check writeAtomic(dir, "state", [2'u8]).isOk
+      joinThread(closer)
+      check readBounded(dir / "state", 16).get.get == @[2'u8]
+    else:
+      skip()
+
+  test "[IMPL] on Windows a reader that never closes the file fails the replace within its bound and keeps the old bytes":
+    when defined(windows):
+      let dir = freshDir()
+      check ensurePrivateDir(dir).isOk
+      check writeAtomic(dir, "state", [1'u8]).isOk
+      check heldOpen.open(dir / "state", fmRead)
+      let r = writeAtomic(dir, "state", [2'u8])
+      close(heldOpen)
+      check r.isErr
+      check "cannot replace" in r.error
+      check not fileExists(dir / ("state" & TmpSuffix))
+      check readBounded(dir / "state", 16).get.get == @[1'u8]
+    else:
+      skip()
