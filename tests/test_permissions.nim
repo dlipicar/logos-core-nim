@@ -460,7 +460,7 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
   teardown:
     leftover()
 
-  test "[RUN-0914] [RUN-1066] [RUN-0912] [RUN-0916] [RUN-0917] [RUN-0475] narrowing a running instance: pending while its stop runs, then unloaded with no failure, intent and origin kept, then applied":
+  test "[RUN-0914] [RUN-1066] [RUN-1142] [RUN-0916] [RUN-0917] [RUN-0475] narrowing a running instance: pending while its stop runs, then unloaded with no failure, intent and origin kept, then applied":
     let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     let t = e.client2("t")
@@ -488,7 +488,7 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
     check rc.now(e, "t").revision == 2
     e.finish()
 
-  test "[RUN-0911] [RUN-0913] [RUN-0915] [RUN-0912] [RUN-0909] [IMPL-DECISION G217] widening stops the instance too; the engine does not restart it, and its recovery is decided with the widened scopes":
+  test "[RUN-0911] [RUN-0913] [RUN-0915] [RUN-1142] [RUN-0909] [IMPL-DECISION G217] widening stops the instance too; the engine does not restart it, and its recovery is decided with the widened scopes":
     let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     let t = e.client2("t")
@@ -510,7 +510,7 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
     check latestBinding().installed == Opt.some(wide)
     e.finish()
 
-  test "[RUN-0479] [RUN-0890] [RUN-0480] [RUN-0476] [RUN-0469] [RUN-0917] [IMPL-DECISION G285] [IMPL-DECISION G284] a reconciliation stop past its deadline: failed, the instance stopped; the late cleanup restores nothing; a start is refused until an accepted replacement applies":
+  test "[RUN-0479] [RUN-0890] [RUN-0480] [RUN-0476] [RUN-0469] [RUN-0917] [IMPL-DECISION G285] [IMPL-DECISION G284] [RUN-1092] a reconciliation stop past its deadline: failed, the instance stopping; the late cleanup completes the stop with permission-enforcement-failed; a start is refused until an accepted replacement applies":
     var cfg = pconfig()
     cfg.stopDeadline = PassingStop
     let e = fixtureEngine(cfg)
@@ -519,8 +519,12 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
     clientDestroyGate.store(true)
     check rc.writeSettings(e.target("t"), 1, @[]).written.status == "pending"
     # [RUN-0917] No grace period: the stop deadline applies as to any stop.
-    check e.stateIs("t", msError)
-    check e.view("t").tryGet.failure.get.kind == fkCleanupTimeout
+    check waitUntil(
+      proc(): bool =
+        let v = e.view("t").tryGet
+        v.state == msStopping and v.failure.isSome and
+          v.failure.get.kind == fkCleanupTimeout
+    )
     check rc.statusIs(e, "t", "failed")
     let f = rc.now(e, "t")
     check f.revision == 2 and f.failure == Opt.some("enforcement-failed")
@@ -533,10 +537,11 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
       proc(): bool =
         not e.cleanupPending("t")
     )
-    # [RUN-0480] The cleanup's end leaves it failed and the instance stopped.
+    # [RUN-0480] The cleanup's end leaves the settings failed; it completes
+    # the stop, and the classification is the enforcement's (RUNTIME l.3613).
+    check e.stateIs("t", msUnloaded)
     sleep(50 * Slow)
     check rc.now(e, "t").status == "failed"
-    check e.view("t").tryGet.state == msError
     let refused = e.start("t")
     check refused.isErr and refused.error.code == ecNotAuthorised
     let v = e.view("t").tryGet

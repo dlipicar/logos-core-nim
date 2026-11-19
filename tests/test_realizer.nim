@@ -362,7 +362,7 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
     check b.binding.asyncApi == addr goodAsync
     check r.release(b.id, "g1").isOk
 
-  test "[RUN-0072] [RUN-0082] [RUN-0199] [LDR-0080] one binding serves every instance; each call gets its own context":
+  test "[RUN-0072] [RUN-0082] [RUN-0199] [LDR-0080] [RUN-1090] one binding serves every instance; each call gets its own context":
     asyncCalls = 0
     let r = fresh()
     r.registerStatic(

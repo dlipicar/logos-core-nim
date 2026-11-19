@@ -131,6 +131,33 @@ suite "run.store: the Runtime state store [IMPL]":
     s.close()
     check encodeSnapshot(reopen(dir)).tryGet == bytes
 
+  test "[IMPL-DECISION G357] v2: completed_shutdown and enforced round-trip; a v1 store reads without them":
+    var a = sample()
+    a.completedShutdown = true
+    a.instances[0].state = msStopping
+    a.instances[0].enforced = Opt.some(Failure(kind: fkAuthorityDenied, reason: "gone"))
+    let bytes = encodeSnapshot(a).tryGet
+    let x = LcnRsState.decode(bytes).tryGet
+    check x.format.kind == LcnRsStateFormatChoiceKind.Case1
+    check x.completed_shutdown == Opt.some(true)
+    let b = decodeSnapshot(bytes).tryGet
+    check b.completedShutdown
+    check b.instances[0].enforced.get.kind == fkAuthorityDenied
+    check b.instances[0].enforced.get.reason == "gone"
+    check b.instances[1].enforced.isNone
+    # Without the record the field is absent, not false.
+    a.completedShutdown = false
+    check LcnRsState.decode(encodeSnapshot(a).tryGet).tryGet.completed_shutdown.isNone
+    # A store an earlier build wrote (format v1) reads as v2 without them, and
+    # is written back as v2.
+    var v1 = LcnRsState.decode(encodeSnapshot(sample()).tryGet).tryGet
+    v1.format = LcnRsStateFormatChoice(kind: LcnRsStateFormatChoiceKind.Case0)
+    let old = decodeSnapshot(encodeCbor(toCbor(v1))).tryGet
+    check not old.completedShutdown
+    check old.instances.len == 3
+    check LcnRsState.decode(encodeSnapshot(old).tryGet).tryGet.format.kind ==
+      LcnRsStateFormatChoiceKind.Case1
+
   test "every classification RUNTIME l.3753 lists is stored and read back":
     for k in FailureKind:
       if k != fkLoader:
@@ -176,20 +203,20 @@ suite "run.store: the Runtime state store [IMPL]":
     cases.add(
       ("schema mismatch", encodeCbor(cborMap(@[(cbor("format"), cbor(1'u64))])))
     )
-    var v2 = LcnRsState.decode(good).tryGet
-    let v2bytes = encodeCbor(
+    var v3 = LcnRsState.decode(good).tryGet
+    let v3bytes = encodeCbor(
       cborMap(
         @[
-          (cbor("format"), cbor("logos-core-nim.runtime-state.v2")),
-          (cbor("runtime_instance_id"), cbor(v2.runtime_instance_id)),
-          (cbor("epoch"), cbor(v2.epoch)),
+          (cbor("format"), cbor("logos-core-nim.runtime-state.v3")),
+          (cbor("runtime_instance_id"), cbor(v3.runtime_instance_id)),
+          (cbor("epoch"), cbor(v3.epoch)),
           (cbor("instances"), cborArray(@[])),
           (cbor("retired"), cborArray(@[])),
           (cbor("create_keys"), cborArray(@[])),
         ]
       )
     )
-    cases.add(("another format", v2bytes))
+    cases.add(("another format", v3bytes))
     # Hand-built invariant failures, encoded without the store's checks.
     proc raw(s: Snapshot): seq[byte] =
       var x = LcnRsState.decode(encodeSnapshot(sample()).tryGet).tryGet
@@ -238,6 +265,22 @@ suite "run.store: the Runtime state store [IMPL]":
     var errNoFailure = LcnRsState.decode(good).tryGet
     errNoFailure.instances[1].failure = Opt.none(LcnRsFailure)
     cases.add(("error without a failure", encodeCbor(toCbor(errNoFailure))))
+    # [G357] `enforced` only beside `stopping`; neither v2 field in a v1 store.
+    var strayEnforced = LcnRsState.decode(good).tryGet
+    strayEnforced.instances[0].enforced =
+      Opt.some(LcnRsFailure(classification: "authority-denied"))
+    cases.add(("enforced out of stopping", encodeCbor(toCbor(strayEnforced))))
+    var v1Done = LcnRsState.decode(good).tryGet
+    v1Done.format = LcnRsStateFormatChoice(kind: LcnRsStateFormatChoiceKind.Case0)
+    v1Done.completed_shutdown = Opt.some(true)
+    cases.add(("a v1 store with completed_shutdown", encodeCbor(toCbor(v1Done))))
+    var v1Enforced = LcnRsState.decode(good).tryGet
+    v1Enforced.format = LcnRsStateFormatChoice(kind: LcnRsStateFormatChoiceKind.Case0)
+    v1Enforced.instances[0].state =
+      LcnRsInstanceStateChoice(kind: LcnRsInstanceStateChoiceKind.Stopping)
+    v1Enforced.instances[0].enforced =
+      Opt.some(LcnRsFailure(classification: "authority-denied"))
+    cases.add(("a v1 store with enforced", encodeCbor(toCbor(v1Enforced))))
     let expected = {
       "truncated": "malformed-cbor",
       "non-deterministic": "non-deterministic-cbor",
@@ -250,6 +293,10 @@ suite "run.store: the Runtime state store [IMPL]":
       "a key naming an unknown instance": "unknown instance",
       "an intent revision without requested intent": "without requested intent",
       "error without a failure": "error without a failure",
+      "enforced out of stopping": "an enforced classification out of stopping",
+      "a v1 store with completed_shutdown":
+        "a v1 state store carries completed_shutdown",
+      "a v1 store with enforced": "a v1 state store carries an enforced classification",
     }.toTable
     check expected.len == cases.len
     for (name, bytes) in cases:

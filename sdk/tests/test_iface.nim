@@ -325,7 +325,7 @@ suite "iface: prelude, names and reservations (INTERFACE §1.3)":
       iface("logos.demo", "logos.demo.t = uint8\n"), opts = AcceptOptions(system: true)
     )
 
-  test "[RUN-0061] module names follow the RUNTIME §1.3 grammar":
+  test "[RUN-1087] module names follow the RUNTIME §1.3 grammar":
     for bad in [
       "",
       "Demo",

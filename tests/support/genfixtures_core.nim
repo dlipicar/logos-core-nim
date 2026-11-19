@@ -263,7 +263,7 @@ const
   storePrimary* = "src/logos_core/runtime/store.cddl"
 
 proc generatedStoreTypes*(): Result[string, string] =
-  ## The Runtime state store's types (`logos-core-nim.runtime-state.v1`,
+  ## The Runtime state store's types (`logos-core-nim.runtime-state.v2`,
   ## DECISIONS I82), for `runtime/store.nim`.
   try:
     let set = ?acceptContractSet(readFile(storePrimary), [], [], AcceptOptions())

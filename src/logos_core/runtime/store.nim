@@ -33,7 +33,10 @@ import ./[plumbing, store_types]
 export results
 
 const
-  StoreFormat* = "logos-core-nim.runtime-state.v1"
+  StoreFormat* = "logos-core-nim.runtime-state.v2"
+    ## [IMPL] (DECISIONS G357) what `write` writes; a v1 store is read as a v2
+    ## store without `completed_shutdown` and `enforced`
+  StoreFormatV1* = "logos-core-nim.runtime-state.v1"
   SnapshotName* = "runtime-state.cbor"
   MaxStoreBytes* = 64 * 1024 * 1024
     ## [IMPL] the largest snapshot or side record written or read; records may
@@ -52,6 +55,9 @@ type
     intent*: Intent
     intentRevision*: uint64 ## when `intent` is `requested`
     origin*: Origin ## when `intent` is `requested`
+    enforced*: Opt[Failure]
+      ## [G357] when `state` is `stopping`: the classification an enforcement
+      ## stop leaves when it completes (RUNTIME l.3613)
 
   RetiredId* = object ## A tombstone: a retired host-assigned instance id.
     instance*: string
@@ -69,6 +75,10 @@ type
     instances*: seq[StoredInstance]
     retired*: seq[RetiredId]
     createKeys*: seq[CreateKey]
+    completedShutdown*: bool
+      ## [G357] this snapshot is the last one of a completed shutdown (RUNTIME
+      ## l.3637): its `stopping` records ended cleanly. Only the snapshot
+      ## `finishShutdown` writes carries it; the next run's first write drops it.
 
   Store* = object
     dir: string ## empty: in memory
@@ -328,6 +338,25 @@ func classificationOf*(text: string): Result[Failure, string] =
       return ok(Failure(kind: k))
   err("unknown failure classification " & text)
 
+func rsFailure(f: Failure): LcnRsFailure =
+  # [IMPL] A realizer's text may name host paths: it is not stored.
+  var reason = (if f.internal: "" else: f.reason)
+  if reason.len > 512:
+    # `lcn.rs_failure.reason`: cut at a character boundary.
+    var n = 512
+    while n > 0 and (uint8(reason[n]) and 0xC0'u8) == 0x80'u8:
+      dec n
+    reason = reason[0 ..< n]
+  LcnRsFailure(
+    classification: f.classification,
+    reason: (if reason.len > 0: Opt.some(reason) else: Opt.none(string)),
+  )
+
+func failureOf(f: LcnRsFailure): Result[Failure, string] =
+  var r = ?classificationOf(f.classification)
+  r.reason = f.reason.get("")
+  ok(r)
+
 func toRs(x: StoredInstance): LcnRsInstance =
   result = LcnRsInstance(
     instance: x.instance,
@@ -359,21 +388,9 @@ func toRs(x: StoredInstance): LcnRsInstance =
   if x.providerId.len > 0:
     result.provider = Opt.some(x.providerId)
   if x.failure.isSome:
-    let f = x.failure.get
-    # [IMPL] A realizer's text may name host paths: it is not stored.
-    var reason = (if f.internal: "" else: f.reason)
-    if reason.len > 512:
-      # `lcn.rs_failure.reason`: cut at a character boundary.
-      var n = 512
-      while n > 0 and (uint8(reason[n]) and 0xC0'u8) == 0x80'u8:
-        dec n
-      reason = reason[0 ..< n]
-    result.failure = Opt.some(
-      LcnRsFailure(
-        classification: f.classification,
-        reason: (if reason.len > 0: Opt.some(reason) else: Opt.none(string)),
-      )
-    )
+    result.failure = Opt.some(rsFailure(x.failure.get))
+  if x.enforced.isSome:
+    result.enforced = Opt.some(rsFailure(x.enforced.get))
   if x.intent == inRequested:
     result.intent_revision = Opt.some(x.intentRevision)
     result.origin = Opt.some(
@@ -408,9 +425,12 @@ func fromRs(x: LcnRsInstance): Result[StoredInstance, string] =
     of LcnRsInstanceIntentChoiceKind.Requested: inRequested
     of LcnRsInstanceIntentChoiceKind.Stopped: inStopped
   if x.failure.isSome:
-    var f = ?classificationOf(x.failure.get.classification)
-    f.reason = x.failure.get.reason.get("")
-    s.failure = Opt.some(f)
+    s.failure = Opt.some(?failureOf(x.failure.get))
+  if x.enforced.isSome:
+    if s.state != msStopping:
+      return
+        err("instance " & x.instance & ": an enforced classification out of stopping")
+    s.enforced = Opt.some(?failureOf(x.enforced.get))
   if s.intent == inRequested:
     if x.intent_revision.isNone or x.origin.isNone:
       return err(
@@ -437,8 +457,12 @@ func fromRs(x: LcnRsInstance): Result[StoredInstance, string] =
 
 proc encodeSnapshot*(snap: Snapshot): Result[seq[byte], string] =
   var x = LcnRsState(
-    format: StoreFormat, runtime_instance_id: snap.runtimeInstanceId, epoch: snap.epoch
+    format: LcnRsStateFormatChoice(kind: LcnRsStateFormatChoiceKind.Case1),
+    runtime_instance_id: snap.runtimeInstanceId,
+    epoch: snap.epoch,
   )
+  if snap.completedShutdown:
+    x.completed_shutdown = Opt.some(true)
   for i in snap.instances:
     x.instances.add(toRs(i))
   for r in snap.retired:
@@ -498,9 +522,20 @@ proc decodeSnapshot*(data: openArray[byte]): Result[Snapshot, string] =
   ## One snapshot: deterministic CBOR, `lcn.rs_state`, and its invariants.
   let x = LcnRsState.decode(data).valueOr:
     return err("the state store does not decode: " & error)
-  var s = Snapshot(runtimeInstanceId: x.runtime_instance_id, epoch: x.epoch)
+  var s = Snapshot(
+    runtimeInstanceId: x.runtime_instance_id,
+    epoch: x.epoch,
+    completedShutdown: x.completed_shutdown.isSome,
+  )
   for i in x.instances:
     s.instances.add(?fromRs(i))
+  if x.format.kind == LcnRsStateFormatChoiceKind.Case0:
+    # [G357] v1 has neither field.
+    if s.completedShutdown:
+      return err("a v1 state store carries completed_shutdown")
+    for i in s.instances:
+      if i.enforced.isSome:
+        return err("a v1 state store carries an enforced classification")
   for r in x.retired:
     s.retired.add(RetiredId(instance: r.instance, stateAssignment: r.state_assignment))
   for k in x.create_keys:

@@ -249,7 +249,7 @@ execution scope `local-transport` in a `process` (G272). So:
   RUN-0179), and admits each call, subscription change and end observer in a direct handle's
   order, so codes, ends and their causes are a direct consumer's, and a handle is never retargeted
   (RUN-0181, RUN-0182, RUN-0256, RUN-0837); a stopping hosted consumer's calls are refused
-  NOT_READY from stop step 1 as a direct one's (RUN-0111, RUN-0794). `test_hosted_routes` (C-1 to
+  NOT_READY from stop step 1 as a direct one's (RUN-1093, RUN-0794). `test_hosted_routes` (C-1 to
   C-10, S-18) shows it with the probe kit library in a host, to direct and hosted providers. The
   host waits for its handlers, end observers and completions before `_MODULE_destroy`.
 - **Boundary invariance** (part 4b-3.4; RUNTIME l.51-53, l.161, l.970; INTERFACE Abstract):

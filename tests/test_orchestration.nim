@@ -868,7 +868,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     check waitUntil(e.isReady(flakyInstance(0)))
     e.finish()
 
-  test "[RUN-0696] [RUN-1065] [IMPL-DECISION G291] an enforcement stop past its deadline is resumed by an uncharged probe, under disabled too":
+  test "[RUN-0696] [RUN-1065] [RUN-1092] [IMPL-DECISION G291] an enforcement stop past its deadline completes `unloaded` with its classification when its cleanup ends, and is resumed by an uncharged probe, under disabled too":
     let e = boot(value(defaults = starts(0), restart = Opt.some(disabled())))
     check waitUntil(e.isReady(flakyInstance(0)))
     flaky[0].destroyGate.store(true)
@@ -876,7 +876,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     check waitUntil(
       proc(): bool =
         let v = e.view(flakyInstance(0)).tryGet
-        v.state == msError and v.failure.isSome and
+        v.state == msStopping and v.failure.isSome and
           v.failure.get.kind == fkCleanupTimeout
     )
     flaky[0].destroyGate.store(false)
@@ -1061,7 +1061,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check recovers(flakyInstance(0)) == n
     e.finish()
 
-  test "[RUN-0696] [RUN-1055] [IMPL-DECISION G291] under disabled, settings that failed when the reconciliation stop overran: probes go on through the refusal, and an accepted replacement resumes it":
+  test "[RUN-0696] [RUN-1055] [RUN-1092] [IMPL-DECISION G291] under disabled, settings that failed when the reconciliation stop overran: the stop completes `unloaded` with permission-enforcement-failed, probes go on through the refusal, and an accepted replacement resumes it":
     let e = boot(
       value(defaults = starts(0, 1), restart = Opt.some(disabled())),
       slots = @[0, 1],
@@ -1071,11 +1071,12 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check waitUntil(e.isReady(flakyInstance(1)))
     flaky[0].destroyGate.store(true)
     check e.replaceSettings(1, flakyInstance(0), @[]).status == "pending"
-    # [G285] The stop overruns its deadline: settings failed, cleanup-timeout.
+    # [G285] The stop overruns its deadline: settings failed, still
+    # `stopping` with cleanup-timeout (RUNTIME l.575).
     check waitUntil(
       proc(): bool =
         let v = e.view(flakyInstance(0)).tryGet
-        v.state == msError and v.failure.isSome and
+        v.state == msStopping and v.failure.isSome and
           v.failure.get.kind == fkCleanupTimeout
     )
     check waitUntil(
@@ -1091,7 +1092,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
         let v = e.view(flakyInstance(0)).tryGet
         v.failure.isSome and v.failure.get.kind == fkPermissionEnforcementFailed
     )
-    check e.state(flakyInstance(0)) == msError
+    check e.state(flakyInstance(0)) == msUnloaded
     check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
     check waitUntil(e.isReady(flakyInstance(0)))
     check "the restart policy is disabled" notin diagText()
@@ -1099,7 +1100,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check entryOf(flakyInstance(0)).isNone
     e.finish()
 
-  test "[RUN-0696] [RUN-1055] [IMPL-DECISION G291] under disabled, a recovery the authority denies after an authority stop overran: probes go on, and once allowed it is resumed":
+  test "[RUN-0696] [RUN-1055] [RUN-1092] [IMPL-DECISION G291] under disabled, a recovery the authority denies after an authority stop overran and completed: probes go on, and once allowed it is resumed":
     let e = boot(
       value(defaults = starts(0), authority = true, restart = Opt.some(disabled()))
     )
@@ -1109,7 +1110,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check waitUntil(
       proc(): bool =
         let v = e.view(flakyInstance(0)).tryGet
-        v.state == msError and v.failure.isSome and
+        v.state == msStopping and v.failure.isSome and
           v.failure.get.kind == fkCleanupTimeout
     )
     setScript(rule(vDeny, what = "execute", consumer = Orch))
@@ -1121,7 +1122,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
         let v = e.view(flakyInstance(0)).tryGet
         v.failure.isSome and v.failure.get.kind == fkAuthorityDenied
     )
-    check e.state(flakyInstance(0)) == msError
+    check e.state(flakyInstance(0)) == msUnloaded
     setScript()
     check waitUntil(e.isReady(flakyInstance(0)))
     check "the restart policy is disabled" notin diagText()
@@ -1189,6 +1190,8 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     # be read against G291 before it joins the list.
     let expected = @[
       ("engine.nim", "checkBootstrap"), # reads: the orchestration start refused
+      ("engine.nim", "completeStop"),
+        # C4: a reconciliation stop whose settings settled failed at its overrun
       ("engine.nim", "executeDecided"), # G168: a denied execution decision
       ("engine.nim", "failureKind"),
         # CA §8: what an ended authorization's stop records

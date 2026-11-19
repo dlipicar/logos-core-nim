@@ -232,6 +232,23 @@ G352 and G354 (DECISIONS, "Open items").
   RUN-0289, RUN-0326 and RUN-0360 compared. RUN-1167 and RUN-1174 to RUN-1176 deferred to 5-7b, with
   TXT-0182 to TXT-0188 riding on RUN-1167. Thirteen stale ids replaced or recorded. 56 text entries
   cleared and TXT-0269 moved to P5. P4 holds no pending entry.
+- 2026-11-19, re-pin P5a (I109), the lifecycle at 6cac8335:
+  - A stop past its deadline, or past the shutdown deadline, stays `stopping` with `cleanup-timeout`
+    until its cleanup ends, which completes it `unloaded` (or `error` if the cleanup fails); a Module
+    Host is ended then. G180 is settled by RUNTIME l.575-577, its interim reversed.
+  - An indeterminate configuration application during a stop leaves the instance `stopping` (G237
+    settled by CONFIGURATION l.327-329).
+  - A stop of an `error` instance goes through `stopping` (M10), and every state change fits the
+    lifecycle table (RUN-1091; G358, checked under `lcnTestHooks` in every suite).
+  - Shutdown expiry releases what ordering held back and reports what is still `stopping` (M11).
+  - An unclean end restores `error` with `host-terminated` (G193 replaced); the store, format v2,
+    marks a completed shutdown's last record (G357, the TF-58 interim). An older build refuses a v2
+    store.
+
+  Claimed: RUN-1087 to RUN-1093, RUN-1096, RUN-1097, RUN-1110, RUN-1142, RUN-1194 to RUN-1197 and
+  RUN-1200, with RUN-1089, RUN-1096 and RUN-1097 also by inspection; RUN-0070, RUN-0100, RUN-0121,
+  RUN-0227 and RUN-0707 compared. Stale ids RUN-0061, RUN-0109, RUN-0111 and RUN-0912 replaced. 39
+  text entries cleared, and TXT-0275 and TXT-0323 moved to P8.
 
 ## Tiers at f4f83471 (the original plan)
 

@@ -1801,7 +1801,7 @@ when defined(posix):
       e.finish()
       check noHostLeft()
 
-    test "[RUN-0111] [RUN-0794] [RUN-0181] [RUN-1118] [RUN-1122] S-18 a stopping consumer's calls through its routes are refused from stop step 1, NOT_READY, hosted as direct; a malformed one, called or prepared, INVALID_PARAMS first (l.1828, l.1832)":
+    test "[RUN-1093] [RUN-0794] [RUN-0181] [RUN-1118] [RUN-1122] S-18 a stopping consumer's calls through its routes are refused from stop step 1, NOT_READY, hosted as direct; a malformed one, called or prepared, INVALID_PARAMS first (l.1828, l.1832)":
       var codes: seq[Opt[ErrorCode]]
       var malformed: seq[(Opt[ErrorCode], Opt[ErrorCode])]
       for hostedConsumer in [true, false]:

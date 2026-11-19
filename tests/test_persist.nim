@@ -11,7 +11,7 @@ import std/[algorithm, atomics, monotimes, os, sequtils, strutils, times, typedt
 when defined(posix):
   import std/posix
 import unittest2
-import ../src/logos_core/runtime/[engine, store]
+import ../src/logos_core/runtime/[engine, store, store_types]
 from logos_sdk/base/logtext import ForeignTextLimit
 import logos_sdk/abi/types
 import logos_sdk/cbor
@@ -34,6 +34,8 @@ include ./support/routefixture
 
 var
   keeperInits, keeperDestroys: Atomic[int]
+  keeperHold: Atomic[bool] ## `_MODULE_destroy` waits while true
+  keeperDestroyCalls: Atomic[int] ## destroys begun
   seenDir: array[1024, char] ## the state directory of the latest initialization
   seenDirLen: Atomic[int]
   probe: array[1024, char] ## a store file `keeper` reads at initialization
@@ -81,6 +83,9 @@ proc keeperInit(
   outContext[] = cast[ptr LogosModuleContext](allocShared0(16))
 
 proc keeperDestroy(module: ptr LogosModuleContext) {.cdecl.} =
+  keeperDestroyCalls += 1
+  while keeperHold.load:
+    sleep(1)
   keeperDestroys += 1
   deallocShared(module)
 
@@ -184,7 +189,7 @@ const
 # Tests ----------------------------------------------------------------------------------
 
 suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)":
-  test "[RUN-0631] [RUN-0630] a change is in the store before it is exposed or its attempt runs":
+  test "[RUN-0631] [RUN-0630] [RUN-1196] a change is in the store before it is exposed or its attempt runs":
     let base = freshBase()
     var e = openAt(base)
     let v = e.create(keeper(), "k1").tryGet
@@ -630,7 +635,7 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
       check v.state == msUnloaded
     e.finish()
 
-  test "[IMPL-DECISION G193] an unclean end leaves error with other, intent kept, and nothing to clean":
+  test "[RUN-1194] [RUN-1195] an unclean end leaves error with host-terminated, intent kept, and nothing to clean":
     let base = freshBase()
     let ep = 1_000_000'u64
     proc inst(id: string, s: ModuleState, intent: Intent): StoredInstance =
@@ -666,7 +671,7 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     for id in ["r", "l", "s"]:
       let v = e.view(id).tryGet
       check v.state == msError
-      check v.failure.get.kind == fkOther and v.failure.get.reason == Unclean
+      check v.failure.get.kind == fkHostTerminated and v.failure.get.reason == Unclean
       check v.execution.revision > (ep + 1) shl 32
     check e.view("r").tryGet.execution.intentRevision == Opt.some((ep shl 32) + 2)
     check e.view("s").tryGet.execution.intent == inStopped
@@ -768,4 +773,168 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check e.view("k").tryGet.state == msError
     check e.view("k").tryGet.execution.intent == inRequested
     check keeperInits.load == inits
+    e.finish()
+
+suite "run.persist: the completed-shutdown record (RUNTIME l.3634-3637, l.3702, l.3732) [IMPL-DECISION G357]":
+  setup:
+    keeperHold.store(false)
+
+  test "[RUN-1200] [TXT-0583] [TXT-0312] [IMPL-DECISION G357] at shutdown expiry a release the ordering held is initiated and every instance still stopping reports cleanup-timeout; a restart from that store completes their stops":
+    let base = freshBase()
+    var cfg = pconfig(base)
+    cfg.ordering = @[("a", "b")]
+    cfg.shutdownGrace = initDuration(milliseconds = 300 * Slow)
+    var e = openEngine(cfg).tryGet
+    discard e.started(keeper(), "a")
+    discard e.started(keeper(), "b")
+    let calls = keeperDestroyCalls.load
+    keeperHold.store(true)
+    e.shutdown()
+    # `b`, the dependent, was released first and its destroy is held, so the
+    # ordering held `a` back until the grace ended; then `a`'s release was
+    # initiated anyway (l.3732), and it overran too (releases are
+    # asynchronous). Both stay `stopping` with `cleanup-timeout` (l.3702).
+    check waitUntil(
+      proc(): bool =
+        keeperDestroyCalls.load == calls + 2
+    )
+    for id in ["a", "b"]:
+      let v = e.view(id).tryGet
+      check v.state == msStopping and v.failure.get.kind == fkCleanupTimeout
+      check v.execution.intent == inRequested
+    let r = e.awaitShutdown()
+    check r.isErr and r.error.code == ecModule
+    check "a" in r.error.message and "b" in r.error.message
+    check "is requested: the host process must end" in r.error.message
+    # The last snapshot of the completed shutdown carries the record, beside
+    # the `stopping` records.
+    check stored(base).completedShutdown
+    check storedOf(base, "a").state == msStopping
+    check storedOf(base, "b").state == msStopping
+    let atShutdown = readFile(storeOf(base) / SnapshotName)
+    keeperHold.store(false)
+    check waitUntil(
+      proc(): bool =
+        e.view("a").tryGet.state == msUnloaded and e.view("b").tryGet.state == msUnloaded
+    )
+    # [SPEC RUNTIME l.576] Each stop completed when its destroy returned, and
+    # the later writes of that run keep the record.
+    check e.view("b").tryGet.failure.isNone
+    check stored(base).completedShutdown
+    e.finish()
+    # The process ends with the store as the shutdown left it (direct
+    # cleanup ends with the process, l.3635): the stops complete at open,
+    # intent kept.
+    writeFile(storeOf(base) / SnapshotName, atShutdown)
+    var next = pconfig(base)
+    next.stopDeadline = initDuration(milliseconds = 100)
+    e = openEngine(next).tryGet
+    for id in ["a", "b"]:
+      let v = e.view(id).tryGet
+      check v.state == msUnloaded and v.failure.isNone
+      check v.execution.intent == inRequested
+    # [§0.9 item 1] The first write of this run dropped the record, so a
+    # `stopping` record written later never sits beside it.
+    check not stored(base).completedShutdown
+    check e.recover("a", e.view("a").tryGet.execution.revision).tryGet.state == msReady
+    keeperHold.store(true)
+    check e.stop("a").tryGet.state == msStopping
+    check storedOf(base, "a").state == msStopping
+    check not stored(base).completedShutdown
+    keeperHold.store(false)
+    check waitUntil(
+      proc(): bool =
+        e.view("a").tryGet.state == msUnloaded
+    )
+    e.finish()
+
+  test "[RUN-1194] [RUN-1195] [IMPL-DECISION G357] a stop that overran, then an unclean end: error with host-terminated":
+    let base = freshBase()
+    var cfg = pconfig(base)
+    cfg.stopDeadline = initDuration(milliseconds = 100)
+    var e = openEngine(cfg).tryGet
+    discard e.started(keeper(), "k")
+    keeperHold.store(true)
+    check e.stop("k").tryGet.state == msStopping
+    check storedOf(base, "k").state == msStopping
+    let crashed = readFile(storeOf(base) / SnapshotName)
+    check not stored(base).completedShutdown
+    keeperHold.store(false)
+    e.finish()
+    writeFile(storeOf(base) / SnapshotName, crashed)
+    e = openAt(base)
+    let v = e.view("k").tryGet
+    check v.state == msError and v.failure.get.kind == fkHostTerminated
+    check v.failure.get.reason == Unclean
+    check v.execution.intent == inStopped
+    check not e.cleanupPending("k")
+    check e.start("k").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-1194] [IMPL-DECISION G357] a stored enforcement classification is kept by a stop completed at open after a completed shutdown; after an unclean end, or from a v1 store, the instance is error with host-terminated":
+    let ep = 1_000_000'u64
+    proc snap(done: bool): Snapshot =
+      var x = StoredInstance(
+        instance: "x",
+        record: keeper(),
+        state: msStopping,
+        failure:
+          Opt.some(Failure(kind: fkCleanupTimeout, reason: "the stop deadline passed")),
+        revision: (ep shl 32) + 9,
+        intent: inRequested,
+        intentRevision: (ep shl 32) + 2,
+        origin: hostOrigin(),
+        enforced: Opt.some(Failure(kind: fkAuthorityRevoked)),
+      )
+      var y = x
+      y.instance = "y"
+      y.state = msReady
+      y.failure = Opt.none(Failure)
+      y.enforced = Opt.none(Failure)
+      Snapshot(
+        runtimeInstanceId: "rt-g357",
+        epoch: ep,
+        instances: @[x, y],
+        completedShutdown: done,
+      )
+
+    # After a completed shutdown: the stop completes with its classification
+    # (l.3613); a `ready` record is an unclean end of that instance (l.3606).
+    var base = freshBase()
+    writeSnapshot(base, snap(true))
+    var e = openAt(base)
+    var v = e.view("x").tryGet
+    check v.state == msUnloaded and v.failure.get.kind == fkAuthorityRevoked
+    check v.execution.intent == inRequested
+    v = e.view("y").tryGet
+    check v.state == msError and v.failure.get.kind == fkHostTerminated
+    e.finish()
+    # After an unclean end.
+    base = freshBase()
+    writeSnapshot(base, snap(false))
+    e = openAt(base)
+    for id in ["x", "y"]:
+      v = e.view(id).tryGet
+      check v.state == msError and v.failure.get.kind == fkHostTerminated
+      check v.execution.intent == inRequested
+    e.finish()
+    # A store an earlier build wrote (v1) has no record: an unclean end.
+    base = freshBase()
+    var old = snap(false)
+    old.instances[0].enforced = Opt.none(Failure)
+    writeSnapshot(base, old)
+    var raw = LcnRsState.decode(encodeSnapshot(old).tryGet).tryGet
+    raw.format = LcnRsStateFormatChoice(kind: LcnRsStateFormatChoiceKind.Case0)
+    let bytes = encodeCbor(toCbor(raw))
+    var text = newString(bytes.len)
+    for i, b in bytes:
+      text[i] = char(b)
+    writeFile(storeOf(base) / SnapshotName, text)
+    e = openAt(base)
+    v = e.view("x").tryGet
+    check v.state == msError and v.failure.get.kind == fkHostTerminated
+    # It is written back as v2.
+    let back = readFile(storeOf(base) / SnapshotName)
+    check LcnRsState.decode(back.toOpenArrayByte(0, back.high)).tryGet.format.kind ==
+      LcnRsStateFormatChoiceKind.Case1
     e.finish()

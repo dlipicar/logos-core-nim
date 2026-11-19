@@ -269,9 +269,9 @@ one exception is the `permissions` array of a `permissions.initial` entry, which
 | `store_dir` | Optional absolute path of the directory that holds the Runtime's persistent state (below, "Persistent Runtime state"). It must be apart from `work_dir` and `state_root`: neither inside the other nor equal. [IMPL] The comparison is by path text and case-sensitive, so on a case-insensitive filesystem (Windows, and macOS by default) paths that differ only in case are not detected. Without it nothing persists. |
 | `runtime_instance_id` | Optional `runtime_instance_id` for the Runtime, 1 to 128 bytes of text; only with `store_dir`. Without it, the identity is generated when the store is created and kept with it. |
 | `startup_deadline_ms` | How long one module realization may take from authorization to `ready`, including its `_MODULE_init` (RUNTIME §3.4; G61). Default 120000. It does not bound the Module Loader's start, which has its own deadline (below, "The Module Loader"). |
-| `stop_deadline_ms` | How long a stop may take before the realization is abandoned. Default 10000. |
+| `stop_deadline_ms` | How long a stop may take. Past it the instance stays `stopping` and reports `cleanup-timeout` until its cleanup ends, which completes the stop (RUNTIME l.575-577; DECISIONS G180); a Module Host is ended then. Default 10000. |
 | `shutdown_grace_ms` | How long shutdown waits for in-flight work before cleanup is left unresolved (RUNTIME §10.2). Default 10000. |
-| `apply_deadline_ms` | How long a live configuration application (`apply_configuration`) may take, from its acceptance to the module's answer (CONFIG §8; DECISIONS G61, I87). When it passes, the outcome is unknown and the instance enters `error` with `configuration-indeterminate`, so the default is long: 120000. |
+| `apply_deadline_ms` | How long a live configuration application (`apply_configuration`) may take, from its acceptance to the module's answer (CONFIG §8; DECISIONS G61, I87). When it passes, the outcome is unknown and the instance enters `error` with `configuration-indeterminate` (one already `stopping` stays `stopping`, CONFIG l.328), so the default is long: 120000. |
 | `max_payload_depth` | The Runtime's one payload depth limit (INTERFACE §4.5.1 l.3150; DECISIONS G241, I88): how many arrays and maps may nest on any path of a payload, counted from the payload's own root (the root map is depth 1; byte-string contents are not traversed). It applies to every payload the Runtime decodes or validates: route call requests and responses, asynchronous calls, events, Runtime Control requests and responses, and configuration values (defaults, provisioned and updated). A payload one level deeper is refused before it is dispatched, accepted or delivered, with `LOGOS_ERR_INVALID_PARAMS` and no detail for a request (a provider's too-deep response or event is a `LOGOS_ERR_MODULE` failure or a dropped publication). 128 to 1024; default 1024. A transported route (Tier 4b) gives its frame decoder this limit plus the envelope's own levels. Modules built with lcn-gen's kit check their own inputs at 1024. |
 | `endpoint_dir` | Absolute path of the directory under which the Runtime creates the endpoints of transported routes (TRANSPORT §8.2; DECISIONS G58, I90): one fresh `<8 hex>` directory of mode 0700 per served provider, holding the socket `logos_<module>.sock`. Default `<work_dir>/endpoints`. Used only when a `routing` rule selects `local-transport`: then it is created with mode 0700 at `start` if missing, and it must be a real directory of the Runtime's user that no one else can write to, or a root-owned sticky directory such as `/tmp`. Keep it short: a socket path longer than the platform's `sun_path` (104 bytes on macOS, 108 on Linux) cannot be created, and the route that needed it fails with `LOGOS_ERR_MODULE`. Directories a crashed Runtime left behind are not removed. |
 
@@ -601,7 +601,9 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   unknown: the call returns `LOGOS_ERR_MODULE` and the instance enters `error` with
   `configuration-indeterminate`, and is released once the module's hook returns. Start it again to
   continue; the staged value is still there. A stop or shutdown during an application waits for the
-  module's answer. One application runs per instance at a time.
+  module's answer; if the deadline passes during a stop, the instance stays `stopping`, only the caller
+  gets `LOGOS_ERR_MODULE`, and the stop goes on (CONFIG l.328-329). One application runs per instance
+  at a time.
 - **Size.** A state whose maximal `get_configuration` response would not fit a 16 MiB frame is refused
   with `LOGOS_ERR_MODULE` and nothing changes: two values near 8 MiB cannot both be kept (DECISIONS
   G233, interim). The state revision never wraps; one step is kept free while a start's or an
@@ -826,7 +828,8 @@ lcn_orchestrator.override = {
 - **What it decides from.** Each instance's lifecycle state and intent, read with `list_modules` and
   `get_readiness`. From a failure classification it reads only whether it is one of four that name an
   enforcement outcome, which make an `error` a resumption, not a live failure (RUNTIME l.3775;
-  DECISIONS G291 as amended): `cleanup-timeout` (an enforcement stop overran its deadline),
+  DECISIONS G291 as amended): `cleanup-timeout` (an enforcement stop overran its deadline, in a record
+  an earlier build stored: an overrun now stays `stopping` and completes `unloaded`, RUNTIME l.575-576),
   `permission-enforcement-failed`, `authority-denied` and `authority-evaluation-failed` (a start or
   recovery the permission settings refused or the authority denied). The engine sets the last three
   only for such refusals and denials, settings that failed, and stops for authority, never for a
@@ -1019,10 +1022,12 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
   classified by the Loader's answer, as for a direct module.
 - **Deadlines** (DECISIONS G269). Past the startup deadline the instance enters `error` with
   `startup-timeout` and a host still in `_MODULE_init` is ended; `realization` is `unknown` until
-  its end is confirmed, then `absent`. Past the stop deadline (`cleanup-timeout`) and the shutdown
-  grace period, the host is ended and its release completes. Past the apply deadline
+  its end is confirmed, then `absent`. Past the stop deadline and the shutdown grace period, the
+  instance stays `stopping` with `cleanup-timeout`, the host is ended, and its release completes the
+  stop (`unloaded`; RUNTIME l.575-576, l.3732). Past the apply deadline
   (`configuration-indeterminate`), a hook that still has not returned one stop deadline later has
-  its host ended. In every case the state stays `error` with the deadline's classification.
+  its host ended. Past the startup and apply deadlines the state stays `error` with the deadline's
+  classification.
 - **Live configuration** runs `_MODULE_apply_configuration` in the host. A host that ends while it
   runs answers the `apply_configuration` caller `LOGOS_ERR_MODULE` and leaves the instance `error`
   with `host-terminated` (DECISIONS G270).
@@ -1034,8 +1039,9 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
   the Runtime ended without completing shutdown, a stored hosted instance whose lock is still held
   reports `realization` `unknown`, and `start_module` and `recover_module` answer
   `LOGOS_ERR_NOT_READY` ("a Module Host of the previous run may still be running"); the Runtime
-  tries the lock again every second and the instance is restored as any other (`error`, `other`)
-  once it can take it. Nothing ever connects to a host of an earlier run. The files are not removed;
+  tries the lock again every second and the instance is restored as any other (`error`,
+  `host-terminated`) once it can take it. After a completed shutdown that left it `stopping`
+  (DECISIONS G357) it stays `stopping`, `unknown`, until the lock is free, then completes its stop. Nothing ever connects to a host of an earlier run. The files are not removed;
   they hold no data.
 - **A hosted provider** (an instance whose record names a contract; DECISIONS G267, G273, G274):
   before its host starts, the Runtime creates its endpoint under `runtime.endpoint_dir` exactly as
@@ -1179,7 +1185,8 @@ l.3500-3507, l.3775). Without it nothing persists: every `start` is a new Runtim
 identity, and every configured instance is new.
 
 - **Where it is.** `store_dir` holds `runtime-state.cbor` (one deterministic-CBOR value, format
-  `logos-core-nim.runtime-state.v1`), one `cfg-<hash>.cbor` side record per configurable instance
+  `logos-core-nim.runtime-state.v2`, which a build older than the re-pin's P5a cannot read; a v1 store
+  is read as one written by a run that did not complete shutdown), one `cfg-<hash>.cbor` side record per configurable instance
   (its configuration binding and state, up to about 17 MiB), while a permission profile is selected
   one `prm-<hash>.cbor` side record per instance (its permission settings: revision, permissions and
   status, `store.cddl`'s `lcn.prm_record`; DECISIONS I93), one `xfer-<hash>.cbor` side record per
@@ -1232,10 +1239,13 @@ identity, and every configured instance is new.
     diagnostic says so (DECISIONS G191, interim; I89). The Runtime starts nothing else. Any other instance's retained `requested` intent is
     acted on only if the orchestration module resumes it, by `recover_module` (RUNTIME l.3774).
   - *How instances come back.* An instance that was running when the Runtime ended cleanly comes back
-    `unloaded`, with its intent. One that was running when the Runtime ended without completing
-    shutdown (a crash, a kill) comes back `error` with the classification `other` and the reason "the
-    Runtime ended without completing shutdown" (DECISIONS G193, interim). An instance that was already
-    `error` keeps its classification.
+    `unloaded`, with its intent. One that was `loaded`, `ready` or `stopping` when the Runtime ended
+    without completing shutdown (a crash, a kill) comes back `error` with the classification
+    `host-terminated` (RUNTIME l.3634; DECISIONS G193). An instance that was already `error` keeps its
+    classification. A completed shutdown marks its last record (DECISIONS G357): an instance it left
+    `stopping` past the grace period completes its stop at the next `start` (`unloaded`, with an
+    enforcement classification it kept), or, if hosted with its restart lock still held, once the lock
+    is free. The next write removes the mark.
   - *Resuming is not a retry.* Bringing an instance back after a restart, clean or not, is a
     resumption: it counts as no restart attempt against any restart policy. A restart policy counts
     the `recover_module` calls made after the instance failed while the Runtime was running, and an
@@ -1422,8 +1432,8 @@ them to be documented).
   within its deadline included; `unknown` while a `realize` has not been answered, a bind,
   initialization or cleanup has outlived its deadline (DECISIONS G180), or the Loader's answer about
   the realization was lost or its Loader failed (DECISIONS G246, G252); `absent` otherwise.
-- **A realization change is a commit.** When `realization` changes without a lifecycle transition (a
-  late cleanup ending, a dynamic bind returning), the instance's execution revision advances and the
+- **A realization change is a commit.** When `realization` changes without a lifecycle transition (the
+  late end of a startup past its deadline, a dynamic bind returning), the instance's execution revision advances and the
   change is persisted (DECISIONS G227, interim). A guarded `start_module`, `recover_module` or
   `retire_module` prepared with the revision read before it is `LOGOS_ERR_INVALID_PARAMS`: read the
   revision again (`get_readiness`, `get_execution_summary`) and retry.
@@ -1460,20 +1470,21 @@ them to be documented).
     (`unloaded`, or `error` with its cleanup complete) `applied` at once, to be enforced at the next
     start; `loaded` or `ready` `pending`, and the instance is stopped at once, keeping its intent and
     origin, with no failure classification; `stopping`, or `error` with its cleanup running,
-    `pending` until that stop or cleanup ends; `error` with `cleanup-timeout` or `cleanup-failed`
-    `failed` at once. Widening and narrowing alike stop the instance. The engine never restarts it:
+    `pending` until that stop or cleanup ends; `stopping` past its stop deadline (`cleanup-timeout`)
+    or `error` with `cleanup-failed` `failed` at once. Widening and narrowing alike stop the instance. The engine never restarts it:
     resumption is `recover_module` by orchestration ("Orchestration duties").
   - *Settlement.* `pending` becomes `applied` once nothing of the realization is left, and `failed`
     (with `failure: "enforcement-failed"`) when its stop passes the stop deadline: the old
-    realization may persist with its old access, so the instance stays stopped and the late end of
-    its cleanup restores nothing. A permission no active point enforces makes the settings `failed`
+    realization may persist with its old access, so the late end of its cleanup completes the stop,
+    `unloaded` with `permission-enforcement-failed`, and restores nothing. A permission no active point enforces makes the settings `failed`
     once nothing is left. `failed` stays until a replacement is accepted; an `unloaded` instance whose
     settings fail gets the classification `permission-enforcement-failed`.
   - *Hosted instances* (DECISIONS G285, G275; part 4b-4c). A `hosted_dynamic` instance whose stop
     passes its deadline has its Module Host ended by force. Its realization stays until that end is
     confirmed, so a replacement meanwhile is `pending`, and the settings become `applied`, not
     `failed`, once the release completes. The same holds at the shutdown grace and after the Module
-    Loader's loss. The instance keeps `cleanup-timeout`. When a hosted release fails and nothing ends
+    Loader's loss. Past a deadline the instance is `stopping` with `cleanup-timeout` until then, and
+    `unloaded` after. When a hosted release fails and nothing ends
     its host (`cleanup-failed`), the settings are `failed` as for a direct one. A hosted instance
     restored with its restart lock held keeps `pending` settings until the lock is taken; they settle
     then and the event is published.
@@ -1554,6 +1565,6 @@ summary and never a value.
   is observable, so a module never receives the event of its own stop; `unsubscribe` of it stays
   `LOGOS_OK`, also inside `_MODULE_destroy`. The Runtime waits for a running handler before it calls
   the subscriber's `_MODULE_destroy` and before it shuts down; that wait counts toward the stop's
-  deadline, so a handler that does not return in time ends the stop in `error` with
-  `cleanup-timeout`, as a call still running does (DECISIONS G180). A subscription never
+  deadline, so a handler that does not return in time leaves the stop `stopping` with
+  `cleanup-timeout` until it returns, as a call still running does (DECISIONS G180). A subscription never
   unsubscribed is freed when its subscriber's execution attempt ends. Nothing here is persisted.

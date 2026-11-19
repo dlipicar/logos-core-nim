@@ -1452,7 +1452,7 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     check next.routesOf.routes[0].target_provider.provider == b.providerId
     e.finish()
 
-  test "[RUN-0111] [RUN-0112] a stopped consumer closes its routes; a failed one fails them (l.624-626)":
+  test "[RUN-1093] [RUN-0112] [TXT-0283] a stopped consumer closes its routes; a failed one fails them (l.589-591)":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (c1, rc1) = e.startClient()
@@ -1495,10 +1495,11 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
       proc(): bool =
         held.load == 1
     )
-    # The stop deadline passes with the call still inside the provider: the
-    # cleanup failure is recorded and the provider is not released [G61].
+    # The stop deadline passes with the call still inside the provider: still
+    # `stopping`, `cleanup-timeout` reported, the provider not released
+    # (RUNTIME l.575).
     let s = e.stop(m.instance).tryGet
-    check s.state == msError
+    check s.state == msStopping
     check s.failure.isSome and s.failure.get.classification == "cleanup-timeout"
     check destroyed.load == before
     check e.routes()[0].state.kind == LogosNSRuntimeControlRouteStateKind.Failed
@@ -1515,10 +1516,12 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
       proc(): bool =
         destroyed.load == before + 1
     )
-    # [SPEC RUNTIME l.611] The release that followed does not leave `error`; a
-    # later stop does.
-    check e.view(m.instance).tryGet.state == msError
-    check e.stop(m.instance).tryGet.state == msUnloaded
+    # [SPEC RUNTIME l.576] The release that followed completes the stop.
+    check waitUntil(
+      proc(): bool =
+        e.view(m.instance).tryGet.state == msUnloaded
+    )
+    check e.view(m.instance).tryGet.failure.isNone
     h.release()
     e.finish()
 

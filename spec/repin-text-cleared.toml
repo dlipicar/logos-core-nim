@@ -1910,3 +1910,304 @@ id = "TXT-0269"
 from = "P4"
 to = "P5"
 reason = "Its replacement, TXT-0203 (l.3605), adds `configuration-missing`, `static-binding-mismatch` and `prerequisite-unavailable` to the initial classifications and is P5's; the old list is not false until P5 builds them."
+
+# P5a: the lifecycle ------------------------------------------------------------------------------------------------
+
+[[units]]
+id = "RUN-0070"
+compared = "RUNTIME l.366 at 6a4dfa28 ('invoke `logos_<module-C>_MODULE_name()` and return the expected module name') against l.346 at 6cac8335 ('... and require it to return the expected module name'). The caller now requires the value, which runtime/native.nim already did: a library whose `_MODULE_name()` returns another name is refused before init. The claim stays on test [RUN-0070] in tests/test_realizer.nim."
+
+[[units]]
+id = "RUN-0100"
+compared = "RUNTIME l.484 at 6a4dfa28 (`module_name -> { ... }`) against l.456-470 at 6cac8335 (`module_name -> [ { ... } ]`): a module name now maps to a list of instance records. The engine keeps instances by instance id and several may share one module name (runtime/engine.nim `State.instances`), and list_modules reports one record per instance (test [RUN-1128] in tests/test_observe.nim). Inspection item R-c keeps the claim; its reason was re-read and now says so."
+
+[[units]]
+id = "RUN-0121"
+compared = "RUNTIME l.660 at 6a4dfa28 against l.624 at 6cac8335: `LOGOS_ERR_NOT_READY` becomes `NOT_READY` (P4's code names); the rule is unchanged. The Runtime answers NOT_READY only for lifecycle, provider or route readiness: route establishment, a stopping consumer's calls, a start while `stopping` or while a cleanup is unresolved. The claim stays on test [RUN-0121] 'establishment failures' in tests/test_routes.nim."
+
+[[units]]
+id = "RUN-0227"
+compared = "RUNTIME l.1162 at 6a4dfa28 ('startup timeout') against l.1084 at 6cac8335 ('startup deadline'): terminology only. engine.checkDeadlines moves an instance not ready at its startup deadline to `error` with `startup-timeout`, and its provider and routes never become ready. The claim stays on test [RUN-0227] S-9 in tests/test_hosted.nim."
+
+[[units]]
+id = "RUN-0707"
+compared = "RUNTIME l.3857 at 6a4dfa28 ('within the active grace period') against l.3723 at 6cac8335 ('before the drain deadline expires'): terminology; the MAY to request forced cleanup through the realization, host or deployment mechanism is unchanged. P5a takes it for hosted realizations at both the stop and the shutdown deadline (engine.recordOverrun ends the Module Host); a shared-process realization is never force-released (l.3705). Inspection item R-o's reason is rewritten to say so."
+
+[[stale]]
+id = "RUN-0061"
+compared = "Old l.301 (module names must not contain `_call_` or `_publish_`, with the reason that they separate generated symbols) is RUN-1087 at l.284 without the reason. checkModuleName (sdk/src/logos_sdk/iface/names.nim) refuses both substrings. The only citation, in sdk/tests/test_iface.nim, moved to RUN-1087."
+
+[[stale]]
+id = "RUN-0109"
+compared = "The ASCII state diagram (old l.553) is replaced by the transition table at l.515-526 and its closing rule RUN-1091 (l.528). Every state assignment in runtime/engine.nim was audited against the table (DECISIONS G358); the lifecycle-table test in tests/test_engine.nim names RUN-1091 and TXT-0277 to TXT-0288, and with lcnTestHooks every commit of every suite is checked against the table. RUN-0109 left inspection item R-c; no test cited it."
+
+[[stale]]
+id = "RUN-0111"
+compared = "'During an authorized stop' (old l.624) became 'During a stop other than an unexpected realization failure' (RUN-1093, l.589), which takes in enforcement, reconciliation and shutdown stops. engine.routesFollow already closed a consumer's routes in every stop. The citations in tests/test_routes.nim, tests/test_hosted_routes.nim and docs/CONFORMANCE.md moved to RUN-1093, and the enforcement-stop test in tests/test_runtime_authority.nim carries it too."
+
+[[stale]]
+id = "RUN-0912"
+compared = "Old l.2590 ('... or stop and re-realize when necessary') became RUN-1142 at l.2518 ('... or stop the realization when necessary'): the Runtime no longer re-realizes. engine applies a pending permission application by an enforcement stop with intent and origin kept and never restarts it (RUN-0915, G281); orchestration may. The citations in tests/test_permissions.nim and tests/test_hosted_permissions.nim moved to RUN-1142, and the engine comment says 'stop the realization'."
+
+[[moved]]
+id = "TXT-0275"
+from = "P5"
+to = "P8"
+reason = "The new sentence adds exact extended contract views to a provider record; extended views (`extends`, the extended-view selection) are P8's work, and the rest of the sentence is unchanged."
+
+[[moved]]
+id = "TXT-0323"
+from = "P5"
+to = "P8"
+reason = "The old side of TXT-0275, which moves to P8 with it."
+
+[[text]]
+id = "TXT-0277"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0278"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0279"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0280"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0281"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0282"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0283"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0284"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0285"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0286"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0288"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0290"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0291"
+step = "P5"
+test = "tests/test_loader_engine.nim"
+
+[[text]]
+id = "TXT-0304"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0579"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0312"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0583"
+step = "P5"
+test = "tests/test_persist.nim"
+
+[[text]]
+id = "TXT-0420"
+step = "P5"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0421"
+step = "P5"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0422"
+step = "P5"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0322"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0274: a module may also provide implemented interface contracts with no primary contract."
+compared = "RUNTIME l.82 at 6a4dfa28 against l.76 at 6cac8335."
+
+[[text]]
+id = "TXT-0274"
+step = "P5"
+kind = "reword"
+pair = "TXT-0322"
+site = "sdk/src/logos_sdk/iface/accept.nim"
+reading = "A module may provide no contract, a primary contract, interface contracts alone, or both. An interfaces-only module is accepted: ModuleBinding.primary is an Opt, and a binding with only implemented interfaces exposes them (test [IFC-0231] 'an interfaces-only descriptor' in sdk/tests/test_call_surface.nim); a consumer-only module provides none (test [RUN-0057] in tests/test_realizer.nim)."
+compared = "RUNTIME l.76 at 6cac8335 against ModuleBinding in sdk/src/logos_sdk/iface/accept.nim and the realizer's binding acceptance."
+
+[[text]]
+id = "TXT-0325"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0276: the C prefix goes through the module-name projection, not the raw name."
+compared = "RUNTIME l.318 at 6a4dfa28 against l.298 at 6cac8335."
+
+[[text]]
+id = "TXT-0276"
+step = "P5"
+kind = "reword"
+pair = "TXT-0325"
+site = "src/logos_core/runtime/native.nim"
+reading = "Symbol prefixes are `logos_<module-C>_*`, where module-C is the INTERFACE §2.1 projection: bindNative projects the module name with projectModule (sdk/src/logos_sdk/iface/names.nim) and builds every symbol with symbolName (test [IFC-0901] 'module-name projection' in sdk/tests/test_codegen.nim)."
+compared = "RUNTIME l.298 at 6cac8335 against runtime/native.nim bindNative and symbolName, and iface/names.nim projectModule."
+
+[[text]]
+id = "TXT-0327"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0289: `loaded` begins when the attempt is accepted, not once the realization is acquired."
+compared = "RUNTIME l.566 at 6a4dfa28 against l.531 at 6cac8335."
+
+[[text]]
+id = "TXT-0289"
+step = "P5"
+kind = "reword"
+pair = "TXT-0327"
+site = "src/logos_core/runtime/engine.nim"
+reading = "`loaded` covers acquiring or attaching the realization as well as initialization and readiness checks. The engine commits `loaded` when it accepts the attempt (`execute`), before the realization exists, and the Loader's own realization is `loaded` while it is being made (the bootstrap); test [RUN-0643] in tests/test_recovery.nim sees `loaded` while the Loader realizes."
+compared = "RUNTIME l.531 at 6cac8335 against engine.execute's accepting commit and the Loader bootstrap in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0331"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0292: only the line-break hyphen in 'execution-boundary' changed."
+compared = "RUNTIME l.801 at 6a4dfa28 against l.758 at 6cac8335."
+
+[[text]]
+id = "TXT-0292"
+step = "P5"
+kind = "reword"
+pair = "TXT-0331"
+reading = "The same sentence with 'execution-boundary' no longer broken across a line; nothing to build."
+compared = "RUNTIME l.758 at 6cac8335 against l.801 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0333"
+step = "P5"
+kind = "removed"
+site = "src/logos_core/runtime/engine.nim"
+reading = "Reworded as TXT-0294: the Capability Authority is a system service provider selected by local policy, no longer a privileged runtime module."
+compared = "RUNTIME l.905 at 6a4dfa28 against l.850 at 6cac8335, and engine.checkBinding."
+
+[[text]]
+id = "TXT-0294"
+step = "P5"
+kind = "reword"
+pair = "TXT-0333"
+site = "src/logos_core/runtime/engine.nim"
+reading = "The Runtime binds the Capability Authority as a system-service provider that local policy selects: checkBinding binds the instance the host configuration names once it is `ready` and passes the binding checks, and the host configuration authorizes it, never the candidate (RUN-0307, RUN-0308). The Runtime calls it through the engine system-service binding (runtime/invoke.nim CallerSystemService), in direct mode; it is not a privileged part of the Runtime."
+compared = "RUNTIME l.850 at 6cac8335 against engine.checkBinding and runtime/invoke.nim's system-service caller identity."
+
+[[text]]
+id = "TXT-0334"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0295: the selected contract is no longer derived from deployment metadata; a caller without a generated helper names it in `establish_route`."
+compared = "RUNTIME l.923 at 6a4dfa28 against l.867 at 6cac8335."
+
+[[text]]
+id = "TXT-0295"
+step = "P5"
+kind = "reword"
+pair = "TXT-0334"
+site = "src/logos_core/runtime/routes.nim"
+reading = "`establish_route_request` requires `contract` (spec/mirrors/RNT/9.3.runtime-control.cddl), so every caller supplies the selected contract; routes.selectContract matches it against the provider's contracts and nothing is derived from deployment metadata (test [RUN-0087] in tests/test_routes.nim)."
+compared = "RUNTIME l.867 at 6cac8335 against the mirrored establish_route_request and routes.selectContract."
+
+[[text]]
+id = "TXT-0329"
+step = "P5"
+kind = "removed"
+site = "src/logos_core/orchestration/policy.nim"
+reading = "The provider-side rule (no NOT_READY for application state) is RUN-0119, a requirement on provider modules (out of scope in conformance/claims/RUN.toml); the Runtime's own use is RUN-0121 (l.624). No module this repository ships answers NOT_READY for application state, and orchestration's policy reads NOT_READY only as the Runtime's readiness answer."
+compared = "RUNTIME l.652 at 6a4dfa28 against l.624 at 6cac8335, and the NOT_READY case in orchestration/policy.nim."
+
+[[text]]
+id = "TXT-0332"
+step = "P5"
+kind = "removed"
+site = "src/logos_core/runtime/invoke.nim"
+reading = "Its new form, TXT-0293, was cleared in P2: the engine system-service binding's caller identity names the Runtime and the service kind, without a module-instance address (CallerSystemService)."
+compared = "RUNTIME l.888 at 6a4dfa28 against TXT-0293 at 6cac8335 and runtime/invoke.nim."
+
+[[text]]
+id = "TXT-0335"
+step = "P5"
+kind = "removed"
+reading = "§5.2.1 (generated helpers without a route handle) is gone at 6cac8335. The mode was never provided: conformance/claims/RUN.toml marks §5.2.1 out of scope, and generated helpers always take a route handle."
+compared = "RUNTIME l.1101 at 6a4dfa28; no counterpart at 6cac8335."
+
+[[text]]
+id = "TXT-0336"
+step = "P5"
+kind = "removed"
+reading = "Goes with §5.2.1 (TXT-0335): no no-handle helper exists, so there is no failure mode to state."
+compared = "RUNTIME l.1117 at 6a4dfa28; no counterpart at 6cac8335."
+
+[[text]]
+id = "TXT-0541"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0537: the directory mapping lasts until `_MODULE_destroy()` returns, not until destruction begins."
+compared = "INTERFACE l.1623 at 6a4dfa28 against l.1596 at 6cac8335."
+
+[[text]]
+id = "TXT-0537"
+step = "P5"
+kind = "reword"
+pair = "TXT-0541"
+site = "src/logos_core/runtime/realizer.nim"
+reading = "Holds more strongly than required: the state directory is persistent per assignment (realizer.stateDirFor) and is never unmapped while a context lives; retire_module refuses an instance with a live realization, and assignment transfers happen only at open."
+compared = "INTERFACE l.1596 at 6cac8335 against realizer.stateDirFor and engine's retire and open paths."
+
+[[text]]
+id = "TXT-0573"
+step = "P5"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "every local instance, instance keys before provider keys"
+reading = "The registry sketch now maps a module name to a list of instance records. The engine keeps instances by instance id (State.instances), several may share a module name, and list_modules reports one record per instance with its state, provider and instance from one committed view; the test lists every local instance. The sketch prescribes no storage representation (l.454)."
+compared = "RUNTIME l.456-470 at 6cac8335 against State.instances and moduleRecord in src/logos_core/runtime/engine.nim."

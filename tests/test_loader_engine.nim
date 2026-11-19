@@ -487,7 +487,7 @@ suite "run.loader: shutdown (RUNTIME §10.2 l.3847-3864)":
     live = nil
     check e.close()
 
-  test "[R3] a release held past the shutdown grace: shutdown completes with MODULE_ERROR and the Loader stays until the release returns":
+  test "[R3] [RUN-1200] [TXT-0312] a release held past the shutdown grace: still stopping with cleanup-timeout, shutdown completes with MODULE_ERROR and the Loader stays until the release returns":
     var cfg = config()
     cfg.shutdownGrace = initDuration(milliseconds = 200)
     let e = fixtureEngine(cfg)
@@ -501,14 +501,17 @@ suite "run.loader: shutdown (RUNTIME §10.2 l.3847-3864)":
     # [SPEC RUNTIME l.3863; IF l.1997, l.1999] The Loader stays ready and
     # bound while its call runs; the engine cannot close.
     check e.loaderOf.state == msReady
+    check e.view("m").tryGet.state == msStopping
     check e.view("m").tryGet.failureOf == "cleanup-timeout"
     check e.tryClose().error.code == ecNotReady
     e.releaseLoaderStallForTests()
-    # The late reply establishes absence; then the Loader is released.
+    # The late reply establishes absence and completes the stop (l.576);
+    # then the Loader is released.
     check waitUntil(
       proc(): bool =
         e.loaderOf.state == msUnloaded
     )
+    check e.view("m").tryGet.state == msUnloaded
     check not e.cleanupPending("m")
     # The stored result does not change (RUN-0760).
     check e.awaitShutdown().error.message == r.error.message
@@ -605,7 +608,7 @@ suite "run.loader: resolving a lost Loader answer (RUNTIME l.3793; plan §2.9) [
     check not e.cleanupPending("m") and e.loaderOf.state == msReady
     e.finish()
 
-  test "[RUN-0689] a release whose invocation failed before it released: get_status finds the realization, cleanup-failed":
+  test "[RUN-0689] [TXT-0285] [TXT-0291] a release whose invocation failed before it released: get_status finds the realization, cleanup-failed":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     e.faults(LoaderFaults(failInvocation: {lmRelease}))
@@ -616,6 +619,36 @@ suite "run.loader: resolving a lost Loader answer (RUNTIME l.3793; plan §2.9) [
     # Not a Loader failure: it stays bound and realizes others.
     check e.loaderOf.state == msReady
     discard e.started(meter(), "n")
+    e.clearLoaderFaultsForTests()
+    e.confirmTerminationForTests()
+    e.finish()
+
+  test "[TXT-0291] [RUN-1092] a cleanup that fails after the stop deadline passed: stopping with cleanup-timeout, then error with cleanup-failed":
+    var cfg = config()
+    cfg.stopDeadline = initDuration(milliseconds = 150 * Slow)
+    let e = fixtureEngine(cfg)
+    discard e.started(meter(), "m")
+    let before = e.changes()[^1].serial
+    # The release fails before any work; the status query that resolves it
+    # is held past the stop deadline.
+    e.faults(LoaderFaults(failInvocation: {lmRelease}, stall: {lmGetStatus}))
+    let v = e.stop("m").tryGet
+    check v.state == msStopping and v.failureOf == "cleanup-timeout"
+    e.releaseLoaderStallForTests()
+    # [SPEC RUNTIME l.577] The status shows the realization still there: the
+    # cleanup failed, and the stop ends in `error`.
+    check waitUntil(
+      proc(): bool =
+        e.view("m").tryGet.state == msError
+    )
+    check e.view("m").tryGet.failureOf == "cleanup-failed"
+    var states: seq[ModuleState]
+    for c in e.changes():
+      if c.serial > before and c.view.instance == "m":
+        states.add(c.view.state)
+    # The stop's accept (intent `stopped`, state kept) comes first.
+    check states == @[msReady, msStopping, msStopping, msError]
+    check e.cleanupPending("m")
     e.clearLoaderFaultsForTests()
     e.confirmTerminationForTests()
     e.finish()
@@ -638,15 +671,21 @@ suite "run.loader: resolving a lost Loader answer (RUNTIME l.3793; plan §2.9) [
     check e.start("m").error.code == ecNotReady
     check e.recover("m", e.view("m").tryGet.execution.revision).error.code == ecNotReady
     check rc.retireOf(e, "m").code == ecNotReady
-    # [R4] A stop is accepted: the intent is cancelled, nothing is released.
-    let stopped = e.stop("m").tryGet
-    check stopped.state == msError and stopped.execution.intent == inStopped
+    # [RUN-1110] A stop is accepted: `stopping`, the intent cancelled,
+    # nothing released; it waits for the cleanup.
+    var t: Thread[(Engine, string)]
+    check e.stopping("m", t)
+    let stopped = e.view("m").tryGet
+    check stopped.execution.intent == inStopped
     check e.journal(lmRelease).len == 0
     # The Loader stays bound: it owns that realization, and realizes others.
     check e.loaderOf.state == msReady
     check e.stop(LoaderInstanceId).error.code == ecNotReady
     discard e.started(meter(), "n")
+    # The protected mechanism's confirmation completes the stop.
     e.confirmTerminationForTests()
+    joinThread(t)
+    check stopReply.load == ord(msUnloaded)
     check not e.cleanupPending("m")
     e.finish()
 
@@ -727,15 +766,31 @@ suite "run.loader: Loader loss (RUNTIME l.3813-3825; plan §2.11) [IMPL-DECISION
     live = nil
     check e.close(initDuration(seconds = 10 * Slow))
 
-  test "[R4] a stop of an instance the lost Loader owned is accepted: intent cancelled, still error, nothing released":
+  test "[RUN-1110] [TXT-0304] [TXT-0579] [TXT-0288] a stop of an instance the lost Loader owned: stopping, intent cancelled, its classification kept, nothing released; the confirmed end completes it":
     let e = fixtureEngine(lossConfig())
     discard e.started(meter(), "m")
     e.faults(LoaderFaults(reportFailure: true))
-    let v = e.stop("m").tryGet
-    check v.state == msError and v.execution.intent == inStopped
+    let before = e.changes()[^1].serial
+    var t: Thread[(Engine, string)]
+    check e.stopping("m", t)
+    let v = e.view("m").tryGet
+    check v.execution.intent == inStopped
+    # [SPEC RUNTIME l.3611] The failure stays until the stop completes.
     check v.failure.get.reason == "its Module Loader failed"
     check e.journal(lmRelease).len == 0 and e.cleanupPending("m")
+    # [RUN-1110] No second release while the cleanup is unresolved; the
+    # protected mechanism's confirmation completes the stop (l.576).
     e.confirmTerminationForTests()
+    joinThread(t)
+    check stopReply.load == ord(msUnloaded)
+    check e.journal(lmRelease).mapIt(it.instance) == @["m"]
+    check e.view("m").tryGet.failure.isNone
+    var states: seq[ModuleState]
+    for c in e.changes():
+      if c.serial > before and c.view.instance == "m":
+        states.add(c.view.state)
+    # The stop's accept (intent `stopped`, state kept) comes first.
+    check states == @[msError, msStopping, msUnloaded]
     e.finish()
 
   test "[IMPL-DECISION G252] an invalid realize response fails the Loader; the realization it made is orphaned, never used":

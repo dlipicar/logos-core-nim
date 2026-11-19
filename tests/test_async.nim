@@ -823,7 +823,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     h.release()
     e.finish()
 
-  test "[IFC-0738] [IFC-0753] [IFC-0755] [IFC-0773] [IFC-0749] submit, then complete inline or from another thread; current is the invocation's context; synchronous calls still dispatch":
+  test "[IFC-0738] [IFC-0753] [IFC-0755] [IFC-0773] [IFC-0749] [RUN-1088] submit, then complete inline or from another thread; current is the invocation's context; synchronous calls still dispatch":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()

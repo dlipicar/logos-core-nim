@@ -1,4 +1,4 @@
-; logos-core-nim.runtime-state.v1: the Runtime's persistent state (DECISIONS
+; logos-core-nim.runtime-state.v2: the Runtime's persistent state (DECISIONS
 ; I82). One Logos deterministic-CBOR lcn.rs_state value in
 ; <store_dir>/runtime-state.cbor, written by runtime/store.nim and nothing else.
 ;
@@ -10,13 +10,18 @@
 ; without `instance` and the configuration inputs (test_nimgen compares
 ; them), plus the accepted configuration binding's digest (DECISIONS I87).
 
+; v2 (re-pin P5a; DECISIONS G357): completed_shutdown and enforced. A v1 store
+; is read as a v2 store without them; it is always written as v2, which older
+; builds refuse. completed_shutdown is present only in the snapshots a
+; completed shutdown writes (RUNTIME l.3637): the next run's first write drops it.
 lcn.rs_state = {
-  format: "logos-core-nim.runtime-state.v1",
+  format: "logos-core-nim.runtime-state.v1" / "logos-core-nim.runtime-state.v2",
   runtime_instance_id: tstr .size (1..128),
   epoch: uint64,
   instances: [* lcn.rs_instance],
   retired: [* lcn.rs_retired],
   create_keys: [* lcn.rs_create_key],
+  ? completed_shutdown: true,
 }
 
 lcn.rs_instance = {
@@ -30,9 +35,12 @@ lcn.rs_instance = {
   intent: "uninitialized" / "requested" / "stopped",
   ? intent_revision: uint64,
   ? origin: lcn.rs_origin,
+  ? enforced: lcn.rs_failure,
 }
 
-; a classification as RUNTIME l.3753 spells it, loader-<code> included
+; a classification as RUNTIME l.3605 spells it, loader-<code> included (l.3607).
+; enforced: the classification an enforcement stop leaves when it completes
+; (RUNTIME l.3613), kept aside while the instance is `stopping`.
 lcn.rs_failure = {
   classification: tstr .size (1..64),
   ? reason: tstr .size (1..512),

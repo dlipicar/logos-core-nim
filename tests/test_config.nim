@@ -1479,7 +1479,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.summary(t).state_revision == 3
     e.finish()
 
-  test "[CFG-0145] [CFG-0146] a valid rejection is MODULE_ERROR without the hook's status; nothing changes and the instance stays ready":
+  test "[CFG-0145] [CFG-0146] [TXT-0420] a valid rejection is MODULE_ERROR without the hook's status; nothing changes and the instance stays ready":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1529,7 +1529,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
       call.vtable.release(addr call)
     e.finish()
 
-  test "[CFG-0101] [CFG-0147] [CFG-0148] [RUN-1052] an invalid hook result is indeterminate: MODULE_ERROR, `error` with configuration-indeterminate, the realization released and nothing promoted":
+  test "[CFG-0101] [CFG-0147] [CFG-0148] [RUN-1052] [TXT-0420] an invalid hook result is indeterminate: MODULE_ERROR, `error` with configuration-indeterminate, the realization released and nothing promoted":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1655,7 +1655,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check s.current.get.value_revision == 3 and s.staged.isNone
     e.finish()
 
-  test "[G237] [CFG-0136] [CFG-0138] past the apply deadline during a stop: `error` with configuration-indeterminate, then `unloaded` once the stop completes in time":
+  test "[TXT-0421] [TXT-0422] [CFG-0136] [CFG-0138] past the apply deadline during a stop: the instance stays `stopping`, only the caller learns the outcome, and the stop completes `unloaded` in time":
     let e = liveEngine(applyMs = 1000, stopMs = 10_000)
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1668,12 +1668,14 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
         applyReply.load != -2
     )
     check applyReply.load == ord(ecModule)
+    # [SPEC CONFIG l.328-329] Still `stopping`, no failure recorded: the
+    # indeterminate outcome is in the `apply_configuration` response only.
     var v = e.view("t1").tryGet
-    check v.state == msError
-    check v.failure.get.kind == fkConfigurationIndeterminate
+    check v.state == msStopping
+    check v.failure.isNone
     check stopReply.load == -2
     # A second stop is answered with the state at once, as during `stopping`.
-    check e.stop("t1").tryGet.state == msError
+    check e.stop("t1").tryGet.state == msStopping
     applyHold.store(false)
     joinThread(th)
     joinThread(st)
@@ -1684,7 +1686,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.summary(t).current.get.value_revision == 1
     e.finish()
 
-  test "[G237] [G180] past the stop deadline as well, the stop answers with cleanup-timeout and the instance stays `error` when the hook returns":
+  test "[TXT-0421] [RUN-1092] [G180] past the stop deadline as well, the stop answers `stopping` with cleanup-timeout and completes when the hook returns":
     let e = liveEngine(applyMs = 500, stopMs = 1500)
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1696,13 +1698,14 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
       proc(): bool =
         applyReply.load != -2
     )
-    check e.view("t1").tryGet.failure.get.kind == fkConfigurationIndeterminate
+    check e.view("t1").tryGet.state == msStopping
+    check e.view("t1").tryGet.failure.isNone
     check waitUntil(
       proc(): bool =
         stopReply.load != -2
     )
     joinThread(st)
-    check stopReply.load == ord(msError)
+    check stopReply.load == ord(msStopping)
     check e.view("t1").tryGet.failure.get.kind == fkCleanupTimeout
     applyHold.store(false)
     joinThread(th)
@@ -1711,7 +1714,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
         not e.cleanupPending("t1")
     )
     let v = e.view("t1").tryGet
-    check v.state == msError and v.failure.get.kind == fkCleanupTimeout
+    check v.state == msUnloaded and v.failure.isNone
     check rc.summary(t).current.get.value_revision == 1
     e.finish()
 
