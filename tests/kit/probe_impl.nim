@@ -28,7 +28,10 @@
 ##   after it if a binding came back);
 ## - `materialize <slot> <route> <hex root> <hex schema>`, the handle in
 ##   `slot` (0-15);
-## - `call <slot> <method> <hex params>`;
+## - `call <slot> <method> <hex params>`; `call-quiet` the same, except that a
+##   failure is answered `<code> message=<length> detail=<length>`, its text
+##   never copied (the erasure tests: a provider's failure may quote a
+##   marked payload);
 ## - `subscribe <slot> <event> <tag>` (its id as the value), each delivery
 ##   appended to `deliveries` as `<tag> <name> <hex data>`;
 ##   `unsubscribe <slot> <id>`;
@@ -257,7 +260,7 @@ proc command(p: ptr Probe, line: string): string =
           addr p.routes[parseInt(w[1])],
         )
       )
-    of "call":
+    of "call", "call-quiet":
       let h = addr p.routes[parseInt(w[1])]
       if h.vtable == nil:
         return "no route" # not materialized: an answer, not a crash
@@ -278,6 +281,11 @@ proc command(p: ptr Probe, line: string): string =
       if int64(r.code) == 0:
         result = "0 " & hex(outBuf, outLen)
         h.vtable.releaseResponse(h, outBuf, outLen)
+      elif w[0] == "call-quiet":
+        # [DECISIONS G276] A failure whose text may quote a marked payload:
+        # only the lengths, read in place, so the probe keeps no copy.
+        let n = (if r.message == nil: 0 else: len(r.message))
+        result = $int64(r.code) & " message=" & $n & " detail=" & $int(r.detailLen)
       else:
         result = fullLine(r)
       return

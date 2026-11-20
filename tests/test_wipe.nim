@@ -16,7 +16,7 @@ import logos_sdk/cbor
 import logos_sdk/crypto/blake3
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/accept
-import ../src/logos_core/transport/[boundary, envelope]
+import ../src/logos_core/transport/[boundary, envelope, hello, session]
 import logos_sdk/abi/cstatus
 
 let canary = urandom(32)
@@ -360,6 +360,103 @@ suite "wipe: encoder and decoder (W-2)":
       var v = decodeCbor(good).get
       wipe(good)
       wipe(v)
+      check hits() == 0
+      disarmWipeAudit()
+
+suite "wipe: refused transport messages (W-2)":
+  # [DECISIONS G276] A message refused before its method is known is zeroed
+  # whole, as `decodeMessage` zeroes an invalid envelope: its payload, value
+  # root and failure text, which may quote a marked payload. The letters are a
+  # copy of the canary that is valid UTF-8, for a failure's message.
+
+  let letters = block:
+    var l = newSeq[byte](canary.len)
+    for i, b in canary:
+      l[i] = byte(ord('a') + int(b) mod 26)
+    l
+
+  proc lettersText(n: int): string =
+    ## `n` bytes that begin with the letters, made at their final size.
+    result = newString(n)
+    for i in 0 ..< n:
+      result[i] = (if i < letters.len: char(letters[i]) else: 'x')
+
+  proc frameOf(m: Message): seq[byte] =
+    ## The encoding of `m`; its tree, which shares `m`'s payload, is zeroed.
+    let t = toCbor(m)
+    result = encodeCbor(t)
+    wipe(t)
+
+  proc failed(code: ErrorCode, message: string, detail: seq[byte] = @[]): Message =
+    var f = InvocationFailure(code: code, message: Opt.some(message))
+    if detail.len > 0:
+      f.detail = Opt.some(detail)
+    Message(kind: mkResponse, response: Response(id: 7, ok: false, failure: f))
+
+  test "[IFC-0575] a Response whose failure the envelope refuses leaves no copy of its message or detail":
+    if not scans:
+      skip()
+    else:
+      arm(@[canary, letters])
+      # A detail its code does not allow, then an INVALID_PARAMS detail that is
+      # no `logos.invalid_params_detail` (INTERFACE §5.1): the envelope's form
+      # takes both, its rule refuses them. The message and the detail each
+      # hold a pattern.
+      var text = lettersText(40)
+      for code in [ecModule, ecInvalidParams]:
+        var m = failed(code, text, canary)
+        var frame = frameOf(m)
+        wipe(m.response.failure)
+        check decodeMessage(frame).error.kind == eeRule
+        wipe(frame)
+      wipe(text)
+      check hits() == 0
+      disarmWipeAudit()
+
+  test "[IFC-0575] a first message that is not a Hello leaves no copy of its payload or failure text":
+    if not scans:
+      skip()
+    else:
+      arm(@[canary, letters])
+      # A Request before the Hello (TRANSPORT §2.3), refused by the callee.
+      let ep = CalleeEndpoint(endpoint: "ep-1", provider: "vault_module")
+      var tickets: TicketStore[RouteBinding]
+      var params = cborMap((cbor("secret"), cbor(canary)))
+      var m = Message(
+        kind: mkRequest, request: Request(id: 1, methodName: "store", params: params)
+      )
+      var frame = frameOf(m)
+      let refused = acceptHello(ep, tickets, frame, 0)
+      check refused.isErr and refused.error.msg == "the first message is not a Hello"
+      wipe(frame)
+      wipe(params)
+      # A Response as the answer to a Hello, refused by the caller.
+      var text = lettersText(40)
+      m = failed(ecModule, text)
+      frame = frameOf(m)
+      wipe(m.response.failure)
+      wipe(text)
+      let answer = acceptHelloResponse(Hello(module: "vault_module"), frame)
+      check answer.isErr and answer.error.msg == "the first answer is not a Hello"
+      wipe(frame)
+      check hits() == 0
+      disarmWipeAudit()
+
+  test "[IFC-0575] a Response for no outstanding request leaves no copy of its failure text":
+    if not scans:
+      skip()
+    else:
+      let s = acceptContractSet(VaultDoc).get
+      var c = callerConn(boundary(s, s.primary.root).get)
+      arm(@[canary, letters])
+      var text = lettersText(40)
+      var m = failed(ecModule, text)
+      var frame = frameOf(m)
+      wipe(m.response.failure)
+      wipe(text)
+      let events = c.receive(frame)
+      check events.len > 0 and c.state == csClosed
+      wipe(frame)
       check hits() == 0
       disarmWipeAudit()
 

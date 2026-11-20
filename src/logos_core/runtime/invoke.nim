@@ -350,12 +350,12 @@ proc commitSync*(
     t: ptr CallTicket, r: var Result[seq[byte], InvocationFailure]
 ): Result[seq[byte], InvocationFailure] =
   ## Step 5: the commit decision, ordered with the route's end (RUNTIME l.1212,
-  ## l.1271). A response the end keeps from its caller is zeroed
+  ## l.1271). A response the end keeps from its caller is zeroed, and so is a
+  ## provider's failure text, which may quote a marked request
   ## [DECISIONS G276].
   withLock t.lock:
     if endedByRoute(t.endCode, r):
-      if r.isOk:
-        wipe(r.value)
+      wipe(r)
       return err(routeEndedResult())
   move r
 

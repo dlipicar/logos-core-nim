@@ -19,10 +19,13 @@
 
 import
   std/[
-    atomics, exitprocs, monotimes, os, sequtils, strutils, sysrand, times, typedthreads
+    atomics, exitprocs, locks, monotimes, os, sequtils, strutils, sysrand, times,
+    typedthreads,
   ]
 import unittest2
 import ../src/logos_core/runtime/[engine, routing]
+from ../src/logos_core/runtime/invoke import commitSync
+from ../src/logos_core/runtime/plumbing import CallTicket
 import logos_sdk/abi/types
 import logos_sdk/base/[wipe, wipeaudit]
 import logos_sdk/cbor
@@ -336,6 +339,22 @@ proc matrix(h: var LogosRouteHandle, local = true) =
   check r.code == ecModule
   check canaryText in r.message
   wipe(r)
+  # The same message with a status outside the provider set: MODULE_ERROR
+  # without it (l.3306-3311), and the copy it was checked in is zeroed.
+  b = storeReq(slot = 3, note = "outside")
+  r = h.raw("store", b)
+  wipe(b)
+  check r.code == ecModule
+  check finds(r.message) == 0
+  wipe(r)
+  # A provider's INVALID_PARAMS whose detail path holds the canary: forwarded
+  # to the caller only, and every check of the detail zeroes its decoded copy.
+  b = storeReq(slot = 3, note = "detail")
+  r = h.raw("store", b)
+  wipe(b)
+  check r.code == ecInvalidParams
+  check finds(r.detail) > 0
+  wipe(r)
   # A response outside its schema that holds the canary: MODULE_ERROR, and
   # the message says nothing of it.
   b = storeReq(slot = BadSlot)
@@ -368,6 +387,34 @@ suite "wipe: a direct route (W-4)":
     else:
       skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
+  test "[IFC-0575] [IMPL-DECISION G276] a synchronous call that its route's end decides is TRANSPORT_ERROR, and what the provider gave is zeroed, a failure's text included":
+    # The decision `routeCall` makes once the provider returned (RUNTIME
+    # l.1212, l.1271), with the ticket as the Runtime thread leaves it: the
+    # route revoked (NOT_AUTHORISED), or ended otherwise while the provider
+    # answered CANCELLED. Reaching it through a route needs the end to land
+    # inside the provider's call: the decision is the same.
+    if not scans:
+      skip()
+    else:
+      let t = cast[ptr CallTicket](allocShared0(sizeof(CallTicket)))
+      initLock(t.lock)
+      arm()
+      for (ended, code) in [(ecNotAuthorised, ecModule), (ecNotReady, ecCancelled)]:
+        t.endCode = ord(ended)
+        var r = Result[seq[byte], InvocationFailure].err(
+          InvocationFailure(code: code, message: Opt.some("refused " & canaryText))
+        )
+        let decided = commitSync(t, r)
+        check decided.isErr and decided.error.code == ecTransport
+        check r.isErr and r.error.message.isNone
+      t.endCode = ord(ecNotAuthorised) # a revocation decides a success too
+      var answered = Result[seq[byte], InvocationFailure].ok(canary)
+      let decided = commitSync(t, answered)
+      check decided.isErr and decided.error.code == ecTransport
+      deinitLock(t.lock)
+      deallocShared(t)
+      check hits() == 0
+
 var typedFetched: Atomic[int] ## 1 once `onTypedFetch` saw the canary, 2 otherwise
 
 proc onTypedFetch(
@@ -376,6 +423,19 @@ proc onTypedFetch(
   ## Reads the decoded response and keeps nothing: the helper erases it.
   {.cast(gcsafe).}:
     typedFetched.store(if o.isOk and o.get.secret == canary: 1 else: 2)
+
+var typedRefused: Atomic[int]
+  ## 1 once `onTypedStore` saw the canary in the failure's text, 2 otherwise
+
+proc onTypedStore(
+    o: Result[VaultStoreResponse, InvocationFailure], user: pointer
+) {.nimcall, gcsafe, raises: [].} =
+  ## Reads the failure's text and keeps nothing: the helper erases it.
+  {.cast(gcsafe).}:
+    typedRefused.store(
+      if o.isErr and o.unsafeError.message.isSome and
+          canaryText in o.unsafeError.message.get: 1 else: 2
+    )
 
 suite "wipe: generated code (W-8)":
   teardown:
@@ -558,6 +618,39 @@ suite "wipe: generated code (W-8)":
           typedFetched.load != 0
       )
       check typedFetched.load == 1 # the canary, decoded
+      check c.release().isOk
+      check rh.release().isOk
+      e.finish()
+      if scans:
+        check hits() == 0
+    else:
+      skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
+
+  test "[IFC-0577] [IMPL-DECISION G276] the typed prepareInvoke erases a provider's failure text once onDone returns, and the copy it was checked in":
+    # `store` marks its request, and a provider may echo it in its failure
+    # (vault `echo`): neither the completion's checked status nor the failure
+    # handed to onDone is released unzeroed.
+    when ChannelsMove:
+      let (e, orch) = ready(wipeConfig())
+      var h = orch.vaultHandle(e, Vault, "w8f")
+      arm()
+      let rh = wrapRoute(h).valueOr:
+        check false
+        return
+      typedRefused.store(0)
+      var rq =
+        VaultStoreRequest(slot: uint32(Slot), secret: canary, note: Opt.some("echo"))
+      let prepared = rh.prepareInvoke(rq, onTypedStore)
+      wipeTyped(rq)
+      let c = prepared.valueOr:
+        check false
+        return
+      c.submit()
+      check waitUntil(
+        proc(): bool =
+          typedRefused.load != 0
+      )
+      check typedRefused.load == 1 # the canary, in the failure's text
       check c.release().isOk
       check rh.release().isOk
       e.finish()
@@ -1395,11 +1488,20 @@ when defined(posix):
     result = lookupBytes(b, key)
     wipe(b)
 
+  proc callQuiet(
+      c: var Consumer, slot: int, meth: string, params: var seq[byte]
+  ): string =
+    ## As `callVia`, but a failure is answered with the lengths of its message
+    ## and detail only (`call-quiet`): the probe keeps no copy of its text.
+    let line = "call-quiet " & $slot & " " & meth & " " & hexOf(params)
+    wipe(params)
+    c.run(line)
+
   proc probeMatrix(c: var Consumer, slot: int, hold: string) =
-    ## The W-4 matrix through the probe's handle `slot`, except a provider
-    ## failure that holds the canary (the probe writes a failure's message to
-    ## its answer file: its own copy), then a held `exchange` the probe
-    ## cancels. `hold`: the called vault's state directory.
+    ## The W-4 matrix through the probe's handle `slot`, its provider failures
+    ## that hold the canary read by their lengths only (`callQuiet`), then a
+    ## held `exchange` the probe cancels. `hold`: the called vault's state
+    ## directory.
     var b = storeReq()
     check codeIn(c.callVia(slot, "store", b)) == Opt.some(ecOk)
     b = slotReq()
@@ -1421,6 +1523,22 @@ when defined(posix):
     line = c.callVia(slot, "store", b)
     check codeIn(line) == Opt.some(ecInvalidParams)
     check canaryText notin line and hexOf(canary) notin line
+    # [DECISIONS G276] A provider failure whose message holds the canary
+    # reaches the consumer whole (its length), and the consumer's host keeps
+    # no copy of it; with a status outside the provider set it is replaced;
+    # an INVALID_PARAMS whose detail holds it is forwarded.
+    b = storeReq(slot = 3, note = "echo")
+    line = c.callQuiet(slot, "store", b)
+    check codeIn(line) == Opt.some(ecModule)
+    check ("message=" & $("refused ".len + canary.len) & " ") in line
+    b = storeReq(slot = 3, note = "outside")
+    line = c.callQuiet(slot, "store", b)
+    check codeIn(line) == Opt.some(ecModule)
+    check ("message=" & $("refused ".len + canary.len) & " ") notin line
+    b = storeReq(slot = 3, note = "detail")
+    line = c.callQuiet(slot, "store", b)
+    check codeIn(line) == Opt.some(ecInvalidParams)
+    check "detail=0" notin line
     b = storeReq(slot = BadSlot)
     check codeIn(c.callVia(slot, "store", b)) == Opt.some(ecOk)
     b = slotReq(BadSlot)
