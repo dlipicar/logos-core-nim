@@ -55,8 +55,9 @@
 ## **Marked responses** (DECISIONS G276). The generated `prepareInvoke` of a
 ## method whose response `_sensitive` marks passes `marked`: the decoded
 ## response is erased (`wipeTyped`) once `onDone` returns, so `onDone` copies
-## what it keeps. `_sensitive` marks method payloads only (§1.2.1), so an
-## event is never erased.
+## what it keeps. A failure's text is erased then too, for every method: a
+## provider's may echo a marked request. `_sensitive` marks method payloads
+## only (§1.2.1), so an event is never erased.
 ##
 ## **Runtime Control subscriptions.** `BindingEvents` gives the same typed
 ## subscriptions over a module's Runtime Control binding (l.3868), one per
@@ -1109,9 +1110,13 @@ proc checkCompletion(
 ): Result[void, InvocationFailure] =
   ## A completion's status and response shape, read on the thread that got
   ## them (IFC-0260).
-  let st = checkOutcome(status, completionShape(response, len, owner))
+  var st = checkOutcome(status, completionShape(response, len, owner))
   if st.isErr:
-    return err(toFailure(st.error, "completion"))
+    result = err(toFailure(st.unsafeError, "completion"))
+    # [DECISIONS G276] A provider's failure text goes to the receiver only: the
+    # copy it was checked in is zeroed (it may hold a marked request).
+    wipe(st.eResultPrivate)
+    return
   ok()
 
 proc onCompleteCb(
@@ -1143,10 +1148,12 @@ proc onCompleteCb(
     c.doneTask.counted = false
     discard c.dispatch.post(c.dispatch.context, addr c.doneTask)
     return
+  var st = checkCompletion(status, response, len, owner)
   let outer = currentCall
   currentCall = c
-  c.complete(c, checkCompletion(status, response, len, owner), response, len, owner)
+  c.complete(c, st, response, len, owner)
   currentCall = outer
+  wipeError(st)
 
 proc completeTyped[R](
     c: ptr CallObj,
@@ -1158,6 +1165,7 @@ proc completeTyped[R](
   mixin decode
   type Outcome = Result[R, InvocationFailure]
   var outcome: Outcome
+  # `st` is the caller's, which zeroes it once this returns (DECISIONS G276).
   if st.isErr:
     outcome = Outcome.err(st.unsafeError)
   else:
@@ -1182,9 +1190,11 @@ proc completeTyped[R](
   if ownerValid(owner) and owner.release != nil:
     owner.release(owner.state)
   cast[CallDone[R]](c.onDone)(outcome, c.user)
-  # [DECISIONS G276] A marked response is erased once its receiver returns.
+  # [DECISIONS G276] A marked response is erased once its receiver returns,
+  # and so is a failure's text, which may hold a marked request or response.
   if c.marked and outcome.isOk:
     wipeTyped(outcome.get)
+  wipeError(outcome)
 
 proc prepareWith(
     h: RouteHandle,
