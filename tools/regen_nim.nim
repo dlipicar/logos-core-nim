@@ -71,5 +71,7 @@ proc main() =
   for f in exportFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath
+  writeFile(storageFetchRootPath, generatedStorageFetchRoot().get)
+  echo storageFetchRootPath
 
 main()

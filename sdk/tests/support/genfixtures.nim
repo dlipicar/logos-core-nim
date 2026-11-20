@@ -2,14 +2,24 @@
 ## sdk/tests/test_nimgen.nim: the common types and mirrors, the Runtime Control types, and the fixtures
 ## of the SDK's own contracts.
 
-import std/[os, sequtils]
+import std/[os, sequtils, strutils]
 import results
+import logos_sdk/pins
 import logos_sdk/iface/accept
 import logos_sdk/codegen/[cmirror, kitgen, nimgen, sdkroot]
 import logos_sdk/testing/fixturegen
 import ./clisting
 
 export fixturegen
+
+const
+  contractDir* = "sdk/src/logos_sdk/contracts"
+    ## [DECISIONS G395] the SDK's interface contracts, which modules implement and call
+  contractGeneratedDir* = contractDir & "/generated"
+    ## their generated types, calls and roots
+  storageFetchDocument* = contractDir & "/lcn_storage_fetch.cddl"
+  storageFetchRootPath* = contractGeneratedDir & "/lcn_storage_fetch_root.nim"
+  fetchFakeDocument* = fixtureDir & "/fetch_fake_module.cddl"
 
 const nimFixtures* = [
   NimFixture(
@@ -115,6 +125,34 @@ const nimFixtures* = [
     primary: "spec/mirrors/IFC/3.9.2.interface.cddl",
     calls: true,
   ),
+  NimFixture(
+    module: "lcn_NS_storage_fetch_types.nim",
+    home: contractGeneratedDir,
+    primary: storageFetchDocument,
+  ),
+  NimFixture(
+    module: "lcn_NS_storage_fetch_calls.nim",
+    home: contractGeneratedDir,
+    primary: storageFetchDocument,
+    calls: true,
+  ),
+  NimFixture(
+    module: "fetch_fake_module_types.nim",
+    primary: fetchFakeDocument,
+    interfaces: @[storageFetchDocument],
+  ),
+  NimFixture(
+    module: "fetch_fake_module_kit.nim",
+    primary: fetchFakeDocument,
+    interfaces: @[storageFetchDocument],
+    kit: true,
+  ),
+  NimFixture(
+    module: "fetch_fake_module_calls.nim",
+    primary: fetchFakeDocument,
+    interfaces: @[storageFetchDocument],
+    calls: true,
+  ),
 ]
 
 type ExportFixture* = object
@@ -132,6 +170,8 @@ const exportFixtures* = [
   ExportFixture(kit: "shapes_module_kit.nim", kind: elGnu),
   ExportFixture(kit: "tuner_module_kit.nim", kind: elDarwin),
   ExportFixture(kit: "tuner_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "fetch_fake_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "fetch_fake_module_kit.nim", kind: elGnu),
 ]
 
 proc fixtureName(f: ExportFixture): string =
@@ -195,6 +235,17 @@ const headerFixtures* = [
     primary: "spec/mirrors/IFC/3.9.2.interface.cddl",
     calls: true,
   ),
+  HeaderFixture(
+    header: "lcn_NS_storage_fetch_types.h",
+    home: contractGeneratedDir,
+    primary: storageFetchDocument,
+  ),
+  HeaderFixture(
+    header: "lcn_NS_storage_fetch_calls.h",
+    home: contractGeneratedDir,
+    primary: storageFetchDocument,
+    calls: true,
+  ),
 ]
 
 proc generatedCommon*(): Result[string, string] =
@@ -234,6 +285,24 @@ proc generatedRcTypes*(): Result[string, string] =
         documentsAccessor: "rcDocuments",
       ),
       true,
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedStorageFetchRoot*(): Result[string, string] =
+  ## [DECISIONS G395] `lcn.storage_fetch`'s schema root, computed from its document by the
+  ## commitment code and written as data: no root is typed by hand.
+  try:
+    let set = ?acceptContractSet(readFile(storageFetchDocument))
+    var bytes: seq[string]
+    for b in set.primary.root:
+      bytes.add("0x" & toHex(b, 2) & "'u8")
+    ok(
+      "## lcn_storage_fetch_root.nim: written by `nimble regen` from lcn_storage_fetch.cddl.\n" &
+        "## " & "PROVISIONAL (spec " & SpecRevision[0 .. 7] & "). Do not edit.\n\n" &
+        "#!fmt: off\n" & "const LcnStorageFetchRoot*: array[32, byte] = [\n  " &
+        bytes[0 .. 15].join(", ") & ",\n  " & bytes[16 .. 31].join(", ") &
+        ",\n] ## [DECISIONS G395] the schema root of `lcn.storage_fetch` (INTERFACE §1.2)\n"
     )
   except IOError as e:
     err(e.msg)

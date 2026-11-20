@@ -1,0 +1,29 @@
+; -- metadata --
+_module = "fetch_fake_module"
+_implements = [
+  h'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429',
+]
+
+; The reference fake provider of `lcn.storage_fetch` (DECISIONS G395; sdk/docs/
+; STORAGE-FETCH.md). `_implements` names the contract's root, and acceptance
+; fails when that root changes and this literal does not. Objects derive from
+; their locators; these methods set what the contract only reports.
+
+; Moves to `readiness`, publishing `fetch_readiness_changed_event` when it
+; changes; `held` are the locators served while not `ready`.
+fetch_fake.set_readiness_request = {
+  readiness: "starting" / "ready" / "offline",
+  held: [* bstr .size (1..4096)],
+}
+
+fetch_fake.set_readiness_response = {}
+
+; For one locator: answer `unavailable` to its next `unavailable` reads and
+; stats, and hold each read `delay_ms` milliseconds before it answers.
+fetch_fake.set_fault_request = {
+  object: bstr .size (1..4096),
+  unavailable: uint32,
+  delay_ms: uint32,
+}
+
+fetch_fake.set_fault_response = {}
