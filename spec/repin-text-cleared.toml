@@ -2662,7 +2662,7 @@ compared = "PM l.1100 at 6a4dfa28 against l.1098-1099 at 6cac8335."
 id = "TXT-0518"
 step = "P7"
 kind = "removed"
-reading = "Replaced by PKG-0587 (a path that breaks the path rules is invalid-package) and PKG-0274 (a resolved location outside the realized output, deferred to 5-10)."
+reading = "Replaced by PKG-0587 (a path that breaks the path rules is invalid-package) and PKG-0274 (a resolved location outside its variant directory or the realized output, deferred to 5-5 with the extraction check, G362)."
 compared = "PM l.1101 at 6a4dfa28 against l.1082 and l.1100 at 6cac8335."
 
 [[text]]
@@ -2744,3 +2744,169 @@ reading = "Each variant's paths are resolved under variants/<that variant's id>/
 compared = "PM l.963 at 6cac8335 against lgx.nim openLgx, which joins VariantsDir, the declaring variant's id and the path for every variant's artifacts (M24's path check and M25's file check); the test removes a file from a variant that is not the host's and still fails."
 site = "tests/test_lgx.nim"
 named = "a declared artifact that is not a regular file, in any variant"
+
+[[moved]]
+id = "PKG/12.runtime-handoff.cddl"
+from = "P8"
+to = "P7"
+reason = "The App A test compares the appendix with every section excerpt, §12's included, so P7a writes the mirror; no code reads it, and P8 builds the handoff records against it (both reviews of the P7 plan, Q3)."
+
+# P7a: Appendix A ----------------------------------------------------------------------------------------------
+
+[[units]]
+id = "PKG-0568"
+decision = "G362"
+
+[[units]]
+id = "PKG-0618"
+decision = "G363"
+
+[[units]]
+id = "PKG-0619"
+decision = "G363"
+
+[[units]]
+id = "PKG-0620"
+decision = "G363"
+
+[[units]]
+id = "PKG-0624"
+decision = "G363"
+
+[[units]]
+id = "PKG-0628"
+decision = "G363"
+
+[[units]]
+id = "PKG-0626"
+decision = "G363"
+
+[[units]]
+id = "PKG-0627"
+decision = "G363"
+
+[[units]]
+id = "PKG-0630"
+decision = "G363"
+
+[[units]]
+id = "PKG-0631"
+decision = "G363"
+
+[[units]]
+id = "PKG-0632"
+decision = "G363"
+
+[[units]]
+id = "PKG-0633"
+decision = "G363"
+
+[[units]]
+id = "PKG-0634"
+decision = "G363"
+
+[[units]]
+id = "PKG-0635"
+decision = "G363"
+
+[[units]]
+id = "PKG-0636"
+decision = "G363"
+
+[[units]]
+id = "PKG-0637"
+decision = "G363"
+
+[[units]]
+id = "PKG-0638"
+decision = "G363"
+
+[[units]]
+id = "PKG-0639"
+decision = "G363"
+
+[[units]]
+id = "PKG-0640"
+decision = "G363"
+
+[[units]]
+id = "PKG-0641"
+decision = "G363"
+
+[[units]]
+id = "PKG-0642"
+decision = "G363"
+
+[[units]]
+id = "PKG-0643"
+decision = "G363"
+
+[[units]]
+id = "PKG-0644"
+decision = "G363"
+
+[[units]]
+id = "PKG-0645"
+decision = "G363"
+
+[[units]]
+id = "PKG-0646"
+decision = "G363"
+
+[[units]]
+id = "PKG-0647"
+decision = "G363"
+
+[[units]]
+id = "PKG-0648"
+decision = "G363"
+
+[[units]]
+id = "PKG-0649"
+decision = "G363"
+
+[[units]]
+id = "PKG-0650"
+decision = "G363"
+
+[[deferred]]
+id = "TXT-0497"
+rides = "PKG-0568"
+decision = "G362"
+reason = "What each progress phase covers (PM l.1787): nothing publishes progress before 5-6b, so nothing shows a phase's coverage; PKG-0568 is the unit of its paragraph."
+
+[[deferred]]
+id = "TXT-0498"
+rides = "PKG-0568"
+decision = "G362"
+reason = "What the installing and removing phases cover and that phases have no order (PM l.1788): nothing publishes progress before 5-6b; PKG-0568 is the unit of its paragraph."
+
+[[text]]
+id = "TXT-0454"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0501"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0502"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0503"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0564"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0577"
+step = "P7"
+test = "tests/test_package.nim"

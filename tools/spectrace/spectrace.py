@@ -290,7 +290,7 @@ PENDING_STEP_RE = re.compile(r"P[0-9]")
 TEXT_ID_RE = re.compile(r"TXT-\d{4}")
 TEXT_CLASSES = {"behaviour", "todo"}
 READING_KINDS = {"reword", "removed", "informative", "holds"}
-WORK_ITEMS = {"5-3a", "5-5", "5-7a", "5-7b", "5-10", "5-12"}  # the work items that may own a unit after the re-pin
+WORK_ITEMS = {"5-3a", "5-5", "5-6a", "5-6b", "5-7a", "5-7b", "5-8", "5-10", "5-12"}  # the work items that may own a unit after the re-pin
 SITE_ROOTS = ("src/", "sdk/src/", "tests/", "sdk/tests/", "docs/")
 TEST_TEMPLATES = "test|ltTest|peerTest|sceneTest"
 # Conditions a test may sit under and still run somewhere: platforms, and the one build switch the suites use.

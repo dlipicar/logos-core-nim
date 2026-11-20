@@ -90,7 +90,9 @@ The 308 PKG units by step (`PKG-` omitted):
 
 **Re-pin P7a (2026-11-19, I110):** PKG-0275 is stale (G156 settled), PKG-0365 (`_module`) now heads PM §4.3
 and is claimed with it. PKG-0273, which names only the realized output at 6cac8335, is deferred to 5-10, and
-PKG-0274, whose LGX half is the extraction check, to 5-5 (G362). The total stays 308.
+PKG-0274, whose LGX half is the extraction check, to 5-5 (G362). App A's 38 rules are new units, copies of rules
+the sections state: ten are claimed and 28 are deferred by name with their twins, five to 5-5, two to 5-8 and 21 to 5-6a
+(G363). PKG-0568 is now deferred by name to 5-6b (G362). The count by step above is still that of 6a4dfa28.
 
 A dropped area's units that bind without it stay and are claimed in their own steps: TRN-0352, PKG-0190,
 PKG-0166, PKG-0167, PKG-0169, the `nix` and `quic` refusals (plan A1). At the close (5-13) every unit
@@ -309,10 +311,12 @@ G352 and G354 (DECISIONS, "Open items").
     files are checked, and a file missing from any variant is `artifact-integrity-failed` (M23 to M25;
     I37, G40, G41).
   - G156 is settled. PKG-0273 is deferred to 5-10 and PKG-0274 to 5-5, and TXT-0463 and TXT-0472 ride PKG-0418
-    (5-3a) and PKG-0293 (5-5) (G362).
+    (5-3a) and PKG-0293 (5-5); TXT-0497 and TXT-0498 ride PKG-0568 (5-6b) (G362).
+  - App A: the §10, §12 and appendix blocks are mirrored and pinned, and one test compares the appendix's 38 rules
+    with the section excerpts in spec order. A copy takes its twin's status (G363).
 
-  Claimed: PKG-0576, PKG-0581 to PKG-0588 and PKG-0591; PKG-0365 moved to §4.3. 30 text entries cleared
-  and 2 deferred.
+  Claimed: PKG-0576, PKG-0581 to PKG-0588 and PKG-0591; PKG-0365 moved to §4.3; App A's PKG-0613 to PKG-0617,
+  PKG-0621 to PKG-0623, PKG-0625 and PKG-0629, with 28 copies deferred. 36 text entries cleared and 4 deferred.
 
 ## Tiers at f4f83471 (the original plan)
 
