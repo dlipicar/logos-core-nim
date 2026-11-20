@@ -374,6 +374,48 @@ suite "trnio.endpoint: endpoint placement and validation (TRANSPORT §8.2, G58)"
     discard posix.close(fds[1])
     check removeEndpoint(ep).isOk
 
+  test "[IMPL] a connection whose peer closed before accept is no accept failure":
+    # `lcn_accept` (sock.c): Darwin refuses SO_NOSIGPIPE with EINVAL on such a
+    # socket, so it is closed and the next connection taken. Elsewhere it is
+    # accepted and its first read is end of input.
+    let ep = newEndpoint()
+    discard fdClose(rawConnect(ep.path))
+    let live = rawConnect(ep.path)
+    var accepted: seq[cint]
+    while true:
+      let fd = sockAccept(ep.listener)
+      if fd < 0:
+        check wouldBlock(fd)
+        break
+      accepted.add fd
+    when defined(macosx) or defined(ios):
+      check accepted.len == 1
+    else:
+      check accepted.len == 2
+      if accepted.len == 2:
+        var gone: byte
+        check waitReadable(accepted[0], 2000)
+        check sockRecv(accepted[0], addr gone, 1) == 0
+    if accepted.len > 0:
+      # The last one accepted is the live connection.
+      var sent = byte(7)
+      var got: byte
+      check sockSend(live, addr sent, 1) == 1
+      check waitReadable(accepted[^1], 2000)
+      check sockRecv(accepted[^1], addr got, 1) == 1
+      check got == 7
+    for fd in accepted:
+      discard fdClose(fd)
+    discard fdClose(live)
+    check removeEndpoint(ep).isOk
+
+  test "[IMPL] accept's own EINVAL is still returned":
+    # Only the case above is skipped: accepting on a socket that is not
+    # listening still fails with EINVAL.
+    let idle = unixSocket()
+    check sockAccept(idle) == -posix.EINVAL
+    discard fdClose(idle)
+
 suite "trnio.peer: the peer's operating-system identity (TRANSPORT §8.2, §9.1)":
   peerTest "[TRN-0188] [TRN-0189] [TRN-0192] a child serves the parent's listener; the peer check passes":
     let ep = newEndpoint()
