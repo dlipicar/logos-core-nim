@@ -726,6 +726,11 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
 - **Results.** A result's message and detail stay in the calling thread's storage until that
   thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
   is silent); `LOGOS_OK` carries neither.
+- **Test hooks** (DECISIONS D27). The library has none: `build_runtime_lib` builds it without
+  `lcnTestHooks`, and none of its six functions selects a hook. A Nim host built with the define
+  selects one by an in-process call ([CONFORMANCE.md](CONFORMANCE.md), "Test hooks"); that call is its
+  Runtime's protected input, and a host that makes it is a non-production deployment and owes the
+  designation of BCP l.404 in its documentation and its operator-facing diagnostics.
 
 ## Orchestration duties
 

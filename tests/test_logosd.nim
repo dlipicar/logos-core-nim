@@ -385,7 +385,7 @@ when defined(posix):
       check j2["request_key"].getStr == "lcli-k1"
       check d.stopped == 0
 
-    test "[BCP-0093] [BCP-0094] [BCP-0095] allow-all needs the switch; on, the banner shows in the log and in online and offline output; test_hooks needs it too":
+    test "[BCP-0103] [BCP-0094] [BCP-0095] allow-all needs the switch; on, the banner shows in the log and in online and offline output; test_hooks needs it too":
       let c = newCase()
       check c.initDefault().code == 0
       c.editConfig(

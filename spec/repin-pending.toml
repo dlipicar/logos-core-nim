@@ -27,20 +27,12 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"]  # sub-steps that have
 [pin]
 
 [units.added]
-"BCP-0101" = "P9"
-"BCP-0102" = "P9"
-"BCP-0103" = "P9"
 
 [units.changed]
 
 [stale]
-"BCP-0093" = "P9"
 
 [deploydoc]
-"BCP-0093" = "P9"
-"BCP-0101" = "P9"
-"BCP-0102" = "P9"
-"BCP-0103" = "P9"
 
 [deferred]
 "PKG-0273" = "5-10"
@@ -126,13 +118,3 @@ section = "§5.1"
 source = "n.7"
 class = "todo"
 what = "A claim of conformance to LOGOS-MODULE-RUNTIME covers a Runtime instance including its orchestration module; an engine supplied without that module claims conformance jointly with the orchestration module that the deployment supplies."
-
-[[text]]
-id = "TXT-0555"
-step = "P9"
-spec = "BCP"
-line = "374, 383"
-side = "new"
-source = "M30"
-class = "behaviour"
-what = "The deployment and authority documents take the new duties (BCP l.374, l.383; CA l.1208)"

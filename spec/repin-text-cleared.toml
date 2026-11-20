@@ -3953,3 +3953,14 @@ compared = "IF l.1745-1746 at 6a4dfa28 required a supplied primary contract and 
 id = "RUN-0258"
 decision = "G393"
 compared = "RUNTIME l.1381 at 6a4dfa28 preserved the module name, primary_contract, implements, requires and requested_permissions without addition or widening; l.1303 at 6cac8335 adds extends. The sentence's subject is the Package Manager handoff (l.1300-1302), whose path is 5-8's, and 5-8's handoff test carries the id. The evidence here is the stored record of a host-configuration input: lcn.rs_record carries extends and factBytes compares it, and test_persist's [RUN-0258] test keeps the instance and its provider id while extends is equal and keeps the retained record when it changes (G160 note). The claim rests on G393's strict rule: an omitted field is none or empty, so no view a record does not state is exposed."
+
+# P9: Credential Store scope, claims, docs and close (BCP §5.1, §5.4; G159, G309) ------------------------------
+
+[[stale]]
+id = "BCP-0093"
+compared = "BCP l.398 at 6a4dfa28 required the non-production mechanisms identified in SECURITY §13 to be selected explicitly through protected deployment configuration; BCP l.403 at 6cac8335 names them (development trust anchors, relaxed debugging entitlements, implementation-local Transport test hooks under TRANSPORT §8.5, unknown-artifact analysis), the list of SEC l.533, which equals old SEC l.532. The rule is the same and BCP-0103 carries it. test_logosd's test is retagged [BCP-0103], the id leaves conformance/claims/BCP.toml, and docs/DEPLOYMENT.md row 22 cites BCP l.403-406 with §20 answering each of the four (D27's P9 note). CONFORMANCE's record of step 4b-6 keeps the old id, dated."
+
+[[text]]
+id = "TXT-0555"
+step = "P9"
+test = "tests/test_deployment.nim"

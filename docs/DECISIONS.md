@@ -500,6 +500,24 @@ had chosen" (A5) and added rows it found settled or changed without a note.
 - **Built 2026-11-15 (I95, parts 4b-6a and 4b-6b):** the switch is in the trust file (G299); it gates
   allow-all and `test_hooks`; logosd selects hooks by in-process calls after reading it, and says
   NON-PRODUCTION in its log and in every `logosctl` output (G300).
+- **Note at re-pin P9 (2026-11-20, 6cac8335; BCP l.403-406; BCP-0103):** BCP l.403 names the
+  mechanisms that old l.398 took from SECURITY §13 (SEC l.533 lists the same four). Under its names, a
+  deployed logosd has none:
+  - development trust anchors: the trust file holds no anchors; Tier 5's development anchor is accepted
+    only with the switch on (above);
+  - relaxed debugging entitlements: none exist;
+  - Transport test hooks: the hooks under `lcnTestHooks`, which exist only in test builds;
+  - unknown-artifact analysis: none; an artifact loads only with its daemon-config digest.
+  What the switch gates, allow-all and `test_hooks`, are this implementation's own mechanisms, held to
+  the same rule. BCP-0103 is claimed on these grounds, not on "a test build is not a deployment" (BCP
+  l.405 makes build mode the wrong test, and that reading would let an environment variable select a
+  hook, which this row forbids): a hook's code and the procedures that select one exist only under the
+  define; the C library exports six functions and none selects a hook (`src/liblogos_runtime.nim`); a
+  Nim host that selects one is its Runtime's host, so its call is that Runtime's protected input, and
+  such a host owes BCP l.404's designation (HOST-CONFIG, "What the host can expect", Test hooks); the
+  define alone enables nothing. The flake check `no-test-hooks` does not scan the C library: the flake
+  has no output for `liblogos_runtime`, which only nimble's `build_runtime_lib` task builds, without the
+  define. `DEPLOYMENT.md` §20 says the same.
 
 ### D28 — TLS and QUIC stack
 - **Kind:** FREE · **Specs:** TRANSPORT §8.4.1 (TLS 1.3 only, mutual TLS, RFC 9266 tls-exporter, no
@@ -6150,6 +6168,25 @@ their history.
 - **Status:** decided 2026-11-15; recorded 2026-11-16 (I97, part 4b-8a) before `spectrace deploydoc`,
   which encodes it (part 4b-8b). Behind it is TF-43 point 4, in the comments document; not sent to the
   spec owner.
+- **Note at re-pin P9 (2026-11-20, 6cac8335; BCP l.360-410):** the rule is unchanged and applies to
+  the items `6cac8335` adds. They are rows 24 and 25 of `DEPLOYMENT.md`, the next free numbers, placed in
+  BCP-line order so that no row number the inspection reasons quote moves:
+  - row 24, BCP l.374 (BCP-0101): the Credential Store's choices, answered *none*, with no tier, since none
+    is deployed or planned (owner row 38; G159). Item `bcp-deploy-credential-store`.
+  - row 25, BCP l.383 (BCP-0102): for each finite admission pool shared by more than one consumer or
+    provider, whether a per-consumer or per-provider limit applies. The term is used only there and in
+    SEC l.394, which names seven examples. Our reading: a pool counts when it is finite, shared, and its
+    exhaustion refuses or ends a request; one that queues, evicts or drops is no pool (the lifecycle
+    workers, G242; the Module Host proxy workers; the Transport's execution slots; ended route records;
+    call records; the evidence store's queue). SEC l.394's examples are answered first, "no pool"
+    included (native borrows, routes, route tickets). `DEPLOYMENT.md` §12, "Admission pools", lists each
+    pool with its total and per-consumer limit (none has a per-provider limit), and test_deployment's
+    [BCP-0102] test compares the facts block with the code.
+  - row 22 cites BCP l.403-406, whose unit is now BCP-0103 (BCP-0093 retired; D27's P9 note).
+  The item and duty tables cite `6cac8335`. The duty search was run again over the lines the revision
+  changed: IF l.1473 (IFC-0964) is a new row with its own item (`bcp-deploy-duty-if1473`); PM l.1727 and
+  CS l.319, l.370 and l.476 are duties of a Package Manager and a Credential Store, which are not
+  deployed.
 
 ### G310 — Which deployments BCP §5.1 and §5.4 bind
 - **Kind:** GAP, interim (S4b8-1, with K18 and K50) · **Specs:** BCP l.123, l.282-283, l.287-290, l.340,

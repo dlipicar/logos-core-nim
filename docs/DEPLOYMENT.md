@@ -15,14 +15,16 @@ CONFORMANCE and `conformance/`.
 ## 0. This document
 
 - **What logosd claims.** logosd follows BCP §5.1's bootstrap: it binds a Module Loader first and
-  realizes every other instance through it (BCP l.287-291). It claims no complete Logos module system:
+  realizes every other instance through it (BCP l.292-296). It claims no complete Logos module system:
   it deploys no Package Manager (owner decision 10 (a); DECISIONS G310; CONFORMANCE, "Properties not
   claimed"). It still answers every §5.4 item, as a deployment that owes this document would.
 - **The item table** has one row per §5.4 item, split where one part is supported and another is not.
   *Verdict* says what this deployment does: `Supported` (it makes the choice and implements it), `None`
   (it has no subject for the item), `Not supported` (it offers nothing, and an operation that needs it
-  fails, BCP l.403-405). *Changes in* names the tier expected to change a `None` or `Not supported`
-  answer, `—` when none is expected. *Units* are the BCP requirement units the row answers.
+  fails, BCP l.408-410). *Changes in* names the tier expected to change a `None` or `Not supported`
+  answer, `—` when none is expected. *Units* are the BCP requirement units the row answers. Rows 24
+  and 25 answer the items added at logos-lips `6cac8335`; they keep the next free numbers and sit in
+  BCP-line order, so a row's number is not its section's.
 - **The label rule** (DECISIONS G309): a §5.4 unit is claimed by inspection when this document
   answers every part of its item truthfully, *none* included; its inspection reason lists the *none*
   and *not supported* parts and the tier that changes them. The Verdict does not decide a label.
@@ -36,78 +38,84 @@ CONFORMANCE and `conformance/`.
 
 | Item | BCP | Part | Verdict | Changes in | Answer | Section | Units |
 |---|---|---|---|---|---|---|---|
-| 0 | l.355-356 | this document, its two tables, every applicable choice indexed | Supported | — | this page; the second table sweeps the other specifications | [§0](#0-this-document) | BCP-0038, BCP-0039 |
-| 1 | l.358 | Package Manager source kinds; provenance profiles | None | Tier 5 | no Package Manager is deployed; no source kind, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
-| 2 | l.359 | protected inputs: representations, provisioning, validation, replacement, revocation | Supported | — | owner-only session files, checked at start, replaced offline for the next start | [§2](#2-protected-inputs) | BCP-0074 |
-| 3 | l.360 | authority-policy format, administration, permissions of bootstrap and system instances | Supported | — | `authority-policy.v1` in daemon-config; system rules S1–S5; host-ambient for system instances | [§3](#3-authority-policy) | BCP-0075 |
-| 4a | l.361 | local transport profile | Supported | — | `logos.local.unix-stream` | [§4](#4-transport) | BCP-0041 |
-| 4b | l.361 | remote transport profiles | None | Tier 5 | none enabled; no listener, no export, no enrollment | [§4](#4-transport) | BCP-0041 |
-| 5a | l.362 | call-evidence signing trust | Supported | — | one evidence key per session, bound to the Runtime, rotated offline | [§5](#5-trust-inputs) | BCP-0042 |
-| 5b | l.362 | package-signing trust | None | Tier 5 | the revisioned trust file exists and holds no anchors | [§5](#5-trust-inputs) | BCP-0042 |
-| 5c | l.362 | package-provenance and source-evidence requirements | None | Tier 5 | none selected | [§5](#5-trust-inputs) | BCP-0042 |
-| 5d | l.362 | remote Runtime enrollment | None | Tier 5 | no enrollment trust | [§5](#5-trust-inputs) | BCP-0042 |
-| 6a | l.363 | Module Loader mappings; the `process` mechanism | Supported | — | `direct_static`, `direct_dynamic`, `hosted_dynamic` with placement `process` | [§6](#6-module-loader-mappings) | BCP-0043 |
-| 6b | l.363 | `sandbox` and `container` mechanisms | Not supported | — | not advertised; a request for one is `unsupported-strategy`; outside Tier 5 (D16) | [§6](#6-module-loader-mappings) | BCP-0043 |
-| 7 | l.364 | permission definitions, constraint mappings, enforcers | Supported | — | one definition, host-ambient, empty constraints, enforced by Runtime admission | [§7](#7-permission-definitions) | BCP-0044 |
-| 8a | l.365 | isolation and process behaviour | Supported | — | separate address spaces for hosted modules, one OS user, a process group per host | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
-| 8b | l.365 | filesystem, network, device, credential and resource controls | Not supported | — | none: a module has its OS user's access; outside Tier 5 (D16) | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
-| 9 | l.366 | directories, state, retention, cleanup, recovery, migration | Supported | — | the session tree; state kept after retirement; restart lock; `state_transfers` | [§9](#9-directories-and-state) | BCP-0046 |
-| 10a | l.367 | accepted-declaration selection | Supported | — | daemon-config `modules` and `declarations`, one declaration per module name | [§10](#10-declaration-selection) | BCP-0076 |
-| 10b | l.367 | exact package/version pinning | None | Tier 5 | no package-backed creation | [§10](#10-declaration-selection) | BCP-0076 |
-| 11 | l.368 | attribute-source integration | Supported | — | the Runtime's registry, in process: instance id and module name | [§11](#11-the-attribute-source) | BCP-0077 |
-| 12a | l.369-370 | bounds of the Runtime, Transport, Module Loader and schema processing | Supported | — | finite, listed with their scope and exhaustion behaviour | [§12](#12-resource-bounds) | BCP-0047 |
-| 12b | l.369 | Package Manager bounds, dependency resolution | None | Tier 5 | no Package Manager | [§12](#12-resource-bounds) | BCP-0047 |
-| 13 | l.372 | deadlines: start points, phases, effects, escalation, shared-process limits | Supported | — | five deadlines; a Module Host may be ended by force; a direct realization never | [§13](#13-deadlines) | BCP-0078 |
-| 14 | l.373 | configuration-preserving upgrade; verified defaults | Supported | — | the operator carries configuration; defaults come from accepted declarations | [§14](#14-upgrade-and-verified-defaults) | BCP-0079 |
-| 15 | l.374 | presentation profile | None | — | none selected (BCP l.341) | [§15](#15-presentation) | BCP-0048 |
-| 16a | l.376 | Package Manager installation, inventory, shared state | None | Tier 5 | no Package Manager | [§1](#1-package-manager) | BCP-0080 |
-| 16b | l.376 | operating-system integration material | Supported | — | a systemd user unit and a launchd agent, owner-installed | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0080 |
-| 17 | l.376-378 | a facility or constraint that cannot be supplied fails | Supported | — | the dependent realization fails; nothing falls back | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0081 |
-| 18a | l.380 | the administrative path and its authentication | Supported | — | offline edits of owner-only files; the OS authenticates | [§17](#17-approval-and-activation) | BCP-0082 |
-| 18b | l.380-381 | approval presentation | None | — | no user-facing approval | [§17](#17-approval-and-activation) | BCP-0083 |
-| 18c | l.382 | requester provenance kept apart | Supported | — | peer uid and pid logged, never the consumer | [§17](#17-approval-and-activation) | BCP-0084 |
-| 19 | l.384-390 | activation: mechanism, admission, selection, presentation handoff, failure | Supported | — | the `logosctl` socket and its instance | [§17](#17-approval-and-activation) | BCP-0085, BCP-0086, BCP-0087, BCP-0088, BCP-0089 |
-| 20 | l.392 | deployment representations keep Core meaning | Supported | — | the ctl wire and CLI carry Core values unchanged | [§18](#18-deployment-representations) | BCP-0090 |
-| 21 | l.394-396 | state at rest, principals, secrets, backup, restore and rollback, retention and deletion | Supported | — | file modes only; no secret store; `state purge` is the deletion | [§19](#19-state-at-rest) | BCP-0091, BCP-0092 |
-| 22 | l.398-401 | non-production mechanisms | Supported | — | the trust file's development switch, announced everywhere | [§20](#20-non-production) | BCP-0093, BCP-0094, BCP-0095, BCP-0096 |
-| 23 | l.403-405 | fail closed, no weaker mechanism | Supported | — | every refusal below; no fallback anywhere | [§21](#21-failing-closed) | BCP-0049, BCP-0050 |
+| 0 | l.360-361 | this document, its two tables, every applicable choice indexed | Supported | — | this page; the second table sweeps the other specifications | [§0](#0-this-document) | BCP-0038, BCP-0039 |
+| 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | no Package Manager is deployed; no source kind, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
+| 2 | l.364 | protected inputs: representations, provisioning, validation, replacement, revocation | Supported | — | owner-only session files, checked at start, replaced offline for the next start | [§2](#2-protected-inputs) | BCP-0074 |
+| 3 | l.365 | authority-policy format, administration, permissions of bootstrap and system instances | Supported | — | `authority-policy.v1` in daemon-config; system rules S1–S5; host-ambient for system instances | [§3](#3-authority-policy) | BCP-0075 |
+| 4a | l.366 | local transport profile | Supported | — | `logos.local.unix-stream` | [§4](#4-transport) | BCP-0041 |
+| 4b | l.366 | remote transport profiles | None | Tier 5 | none enabled; no listener, no export, no enrollment | [§4](#4-transport) | BCP-0041 |
+| 5a | l.367 | call-evidence signing trust | Supported | — | one evidence key per session, bound to the Runtime, rotated offline | [§5](#5-trust-inputs) | BCP-0042 |
+| 5b | l.367 | package-signing trust | None | Tier 5 | the revisioned trust file exists and holds no anchors | [§5](#5-trust-inputs) | BCP-0042 |
+| 5c | l.367 | package-provenance and source-evidence requirements | None | Tier 5 | none selected | [§5](#5-trust-inputs) | BCP-0042 |
+| 5d | l.367 | remote Runtime enrollment | None | Tier 5 | no enrollment trust | [§5](#5-trust-inputs) | BCP-0042 |
+| 6a | l.368 | Module Loader mappings; the `process` mechanism | Supported | — | `direct_static`, `direct_dynamic`, `hosted_dynamic` with placement `process` | [§6](#6-module-loader-mappings) | BCP-0043 |
+| 6b | l.368 | `sandbox` and `container` mechanisms | Not supported | — | not advertised; a request for one is `unsupported-strategy`; outside Tier 5 (D16) | [§6](#6-module-loader-mappings) | BCP-0043 |
+| 7 | l.369 | permission definitions, constraint mappings, enforcers | Supported | — | one definition, host-ambient, empty constraints, enforced by Runtime admission | [§7](#7-permission-definitions) | BCP-0044 |
+| 8a | l.370 | isolation and process behaviour | Supported | — | separate address spaces for hosted modules, one OS user, a process group per host | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
+| 8b | l.370 | filesystem, network, device, credential and resource controls | Not supported | — | none: a module has its OS user's access; outside Tier 5 (D16) | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
+| 9 | l.371 | directories, state, retention, cleanup, recovery, migration | Supported | — | the session tree; state kept after retirement; restart lock; `state_transfers` | [§9](#9-directories-and-state) | BCP-0046 |
+| 10a | l.372 | accepted-declaration selection | Supported | — | daemon-config `modules` and `declarations`, one declaration per module name | [§10](#10-declaration-selection) | BCP-0076 |
+| 10b | l.372 | exact package/version pinning | None | Tier 5 | no package-backed creation | [§10](#10-declaration-selection) | BCP-0076 |
+| 11 | l.373 | attribute-source integration | Supported | — | the Runtime's registry, in process: instance id and module name | [§11](#11-the-attribute-source) | BCP-0077 |
+| 24 | l.374 | Credential Store: credential, format and sealing profiles; backend durability and recovery; operation-record retention; protected delivery and activation | None | — | no Credential Store is deployed or claimed | [§25](#25-credential-store) | BCP-0101 |
+| 12a | l.375 | bounds of the Runtime, Transport, Module Loader and schema processing | Supported | — | finite, listed with their scope and exhaustion behaviour | [§12](#12-resource-bounds) | BCP-0047 |
+| 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | no Package Manager | [§12](#12-resource-bounds) | BCP-0047 |
+| 13 | l.376 | deadlines: start points, phases, effects, escalation, shared-process limits | Supported | — | five deadlines; a Module Host may be ended by force; a direct realization never | [§13](#13-deadlines) | BCP-0078 |
+| 14 | l.377 | configuration-preserving upgrade; verified defaults | Supported | — | the operator carries configuration; defaults come from accepted declarations | [§14](#14-upgrade-and-verified-defaults) | BCP-0079 |
+| 15 | l.378 | presentation profile | None | — | none selected (BCP l.346) | [§15](#15-presentation) | BCP-0048 |
+| 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | no Package Manager | [§1](#1-package-manager) | BCP-0080 |
+| 16b | l.380 | operating-system integration material | Supported | — | a systemd user unit and a launchd agent, owner-installed | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0080 |
+| 17 | l.380-382 | a facility or constraint that cannot be supplied fails | Supported | — | the dependent realization fails; nothing falls back | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0081 |
+| 25 | l.383 | each finite admission pool shared by consumers or providers: whether a per-consumer or per-provider limit applies | Supported | — | each pool with its total and its per-consumer or per-provider limit, or none | [§12](#admission-pools) | BCP-0102 |
+| 18a | l.385 | the administrative path and its authentication | Supported | — | offline edits of owner-only files; the OS authenticates | [§17](#17-approval-and-activation) | BCP-0082 |
+| 18b | l.385-386 | approval presentation | None | — | no user-facing approval | [§17](#17-approval-and-activation) | BCP-0083 |
+| 18c | l.387 | requester provenance kept apart | Supported | — | peer uid and pid logged, never the consumer | [§17](#17-approval-and-activation) | BCP-0084 |
+| 19 | l.389-395 | activation: mechanism, admission, selection, presentation handoff, failure | Supported | — | the `logosctl` socket and its instance | [§17](#17-approval-and-activation) | BCP-0085, BCP-0086, BCP-0087, BCP-0088, BCP-0089 |
+| 20 | l.397 | deployment representations keep Core meaning | Supported | — | the ctl wire and CLI carry Core values unchanged | [§18](#18-deployment-representations) | BCP-0090 |
+| 21 | l.399-401 | state at rest, principals, secrets, backup, restore and rollback, retention and deletion | Supported | — | file modes only; no secret store; `state purge` is the deletion | [§19](#19-state-at-rest) | BCP-0091, BCP-0092 |
+| 22 | l.403-406 | non-production mechanisms: development trust anchors, relaxed debugging entitlements, Transport test hooks, unknown-artifact analysis | Supported | — | none of the four in a deployed logosd; what the trust file's development switch gates is announced everywhere | [§20](#20-non-production) | BCP-0103, BCP-0094, BCP-0095, BCP-0096 |
+| 23 | l.408-410 | fail closed, no weaker mechanism | Supported | — | every refusal below; no fallback anywhere | [§21](#21-failing-closed) | BCP-0049, BCP-0050 |
 
 ### Choices the other specifications assign to deployment
 
-BCP l.355 asks for *every* applicable choice. This table is the result of a search of the pinned
-specifications (logos-lips `6a4dfa28`) for `MUST document`, `MUST be documented`, `documentation MUST`,
+BCP l.360 asks for *every* applicable choice. This table is the result of a search of the pinned
+specifications (logos-lips `6cac8335`) for `MUST document`, `MUST be documented`, `documentation MUST`,
 `MUST identify`, `MUST state`, `MUST describe` and `documented`, read hit by hit; the hits that assign
 a choice to a deployment or an implementation are rows. R is RUNTIME, T TRANSPORT, CA CAPABILITY
-AUTHORITY, IF INTERFACE, CFG CONFIGURATION, PM PACKAGE MANAGER.
+AUTHORITY, IF INTERFACE, CFG CONFIGURATION, PM PACKAGE MANAGER. At `6cac8335` the search was run again
+over the lines the revision changed: it added IF l.1473 and PM l.1727, the Credential Store's duties
+(below) and BCP l.374 and l.383 (rows 24 and 25).
 
 | Spec | Line | Duty | Answer | Units |
 |---|---|---|---|---|
-| R | l.187, l.191 | bind the orchestration role to a local instance and identify it | instance `orchestrator`, module `lcn_orchestrator`, `direct_static` in logosd ([DAEMON.md](DAEMON.md) §4) | RUN-0023, RUN-0784 |
-| R | l.1395 | verify retained signed package declarations of a static module | none retained: logosd registers two native bindings and keeps no package declaration ([§10](#10-declaration-selection)) | RUN-0844 |
-| R | l.3037 | the time assurance authority and certificate policies need | the host's wall clock, each validity also held on a monotonic clock, no skew tolerance; no certificate policy ([HOST-CONFIG.md](HOST-CONFIG.md), "Under `capability-authority`") | RUN-0940 |
-| R | l.3394, l.3397 | snapshot capacity, retention, reclamation and overload | [HOST-CONFIG.md](HOST-CONFIG.md), "Observation", Limits | RUN-0965, RUN-0967 |
-| R | l.3775 | resumption after a restart apart from retries after a failure | [§9](#9-directories-and-state), recovery; [HOST-CONFIG.md](HOST-CONFIG.md), "The reference orchestration module" | RUN-1064 |
-| R | l.4035 | each configuration format and how protected inputs are supplied | `logos-core-nim.app-config.v1` ([HOST-CONFIG.md](HOST-CONFIG.md)); logosd derives it from `daemon-config.v1` ([DAEMON.md](DAEMON.md) §3) | RUN-0740 |
-| IF | l.881 | code-generation tooling's identifier-length and resource limits | lcn-gen's usage text, `Limits`, for both directions (`lcn-gen cddl` included) | IFC-0624 |
-| IF | l.3150 | a documented, finite, configurable payload depth | `max_payload_depth`, 128 to 1024, default 1024 ([§12](#12-resource-bounds)) | IFC-0923, IFC-0924, IFC-0925 |
-| CA | l.101-103 | a protected attribute-source integration | [§11](#11-the-attribute-source) | CAP-0274, CAP-0275, CAP-0276, CAP-0277, CAP-0278 |
-| CA | l.406-407 | each permission's enforcement component and behaviour | [§7](#7-permission-definitions) | CAP-0083 |
-| CA | l.408 | the consent principal of a profile claiming per-module device restrictions | no such claim ([PERMISSIONS.md](PERMISSIONS.md)) | CAP-0292, CAP-0293 |
-| CA | l.760 | historical retention when the Authority contract is replaced | a different contract refuses to start ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), "State") | CAP-0339 |
+| R | l.178, l.182 | bind the orchestration role to a local instance and identify it | instance `orchestrator`, module `lcn_orchestrator`, `direct_static` in logosd ([DAEMON.md](DAEMON.md) §4) | RUN-0023, RUN-0784 |
+| R | l.1317 | verify retained signed package declarations of a static module | none retained: logosd registers two native bindings and keeps no package declaration ([§10](#10-declaration-selection)) | RUN-0844 |
+| R | l.2946 | the time assurance authority and certificate policies need | the host's wall clock, each validity also held on a monotonic clock, no skew tolerance; no certificate policy ([HOST-CONFIG.md](HOST-CONFIG.md), "Under `capability-authority`") | RUN-0940 |
+| R | l.3252, l.3255 | snapshot capacity, retention, reclamation and overload | [HOST-CONFIG.md](HOST-CONFIG.md), "Observation", Limits | RUN-0965, RUN-0967 |
+| R | l.3632 | resumption after a restart apart from retries after a failure | [§9](#9-directories-and-state), recovery; [HOST-CONFIG.md](HOST-CONFIG.md), "The reference orchestration module" | RUN-1064 |
+| R | l.3900 | each configuration format and how protected inputs are supplied | `logos-core-nim.app-config.v1` ([HOST-CONFIG.md](HOST-CONFIG.md)); logosd derives it from `daemon-config.v1` ([DAEMON.md](DAEMON.md) §3) | RUN-0740 |
+| IF | l.853 | code-generation tooling's identifier-length and resource limits | lcn-gen's usage text, `Limits`, for both directions (`lcn-gen cddl` included) | IFC-0624 |
+| IF | l.1473 | the bound on a subscription's pending deliveries at which a binding ends it | a direct route's subscription: `eventQueue`, 1,024 deliveries or 16 MiB, then it ends with `LOGOS_ERR_MODULE` ([HOST-CONFIG.md](HOST-CONFIG.md), "Runtime limits"; DECISIONS G176); a Runtime Control subscription: 256 queued events ("Runtime Control subscriptions", Limits; G178, G225) | IFC-0964 |
+| IF | l.3104 | a documented, finite, configurable payload depth | `max_payload_depth`, 128 to 1024, default 1024 ([§12](#12-resource-bounds)) | IFC-0923, IFC-0924, IFC-0925 |
+| CA | l.104-106 | a protected attribute-source integration | [§11](#11-the-attribute-source) | CAP-0274, CAP-0275, CAP-0276, CAP-0277, CAP-0278 |
+| CA | l.404-405 | each permission's enforcement component and behaviour | [§7](#7-permission-definitions) | CAP-0083 |
+| CA | l.406 | the consent principal of a profile claiming per-module device restrictions | no such claim ([PERMISSIONS.md](PERMISSIONS.md)) | CAP-0292, CAP-0293 |
+| CA | l.752 | historical retention when the Authority contract is replaced | a different contract refuses to start ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), "State") | CAP-0339 |
 | CA | l.1207-1208 | the point at which an evaluation audit record counts as retained | at its append in memory under the backlog bound, with no audit write failing ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), "Audit retention") | CAP-0439 |
-| CA | l.1320 | evidence export: selection, authorization, limits, delivery | [DAEMON.md](DAEMON.md) §9, "Export" and "Limits" | CAP-0415 |
-| T | l.815-816 | event output overflow actions, waits, closure | [CONFORMANCE.md](CONFORMANCE.md), "Event output overflow" | TRN-0309, TRN-0310 |
-| T | l.1343-1345 | finite Transport limits, their scope and exhaustion | [CONFORMANCE.md](CONFORMANCE.md), "Transport limits" | TRN-0378, TRN-0379, TRN-0380 |
+| CA | l.1364 | evidence export: selection, authorization, limits, delivery | [DAEMON.md](DAEMON.md) §9, "Export" and "Limits" | CAP-0415 |
+| T | l.803-804 | event output overflow actions, waits, closure | [CONFORMANCE.md](CONFORMANCE.md), "Event output overflow" | TRN-0309, TRN-0310 |
+| T | l.1329-1331 | finite Transport limits, their scope and exhaustion | [CONFORMANCE.md](CONFORMANCE.md), "Transport limits" | TRN-0378, TRN-0379, TRN-0380 |
 | CFG | l.134 | whether package defaults are accepted; a verified default for reset | [§14](#14-upgrade-and-verified-defaults) | CFG-0129 |
 | PM | l.1252 | the maximum value supported for each resolver limit | [CONFORMANCE.md](CONFORMANCE.md), "Resolver limits" | PKG-0597 |
-| CFG | l.261 | the configuration-preserving upgrade workflow | [§14](#14-upgrade-and-verified-defaults) | CFG-0134, CFG-0135 |
-| PM | l.402 | whether continued execution depends on current package-signing trust | no ([§1](#1-package-manager)) | PKG-0422 |
+| CFG | l.266 | the configuration-preserving upgrade workflow | [§14](#14-upgrade-and-verified-defaults) | CFG-0134, CFG-0135 |
+| PM | l.408 | whether continued execution depends on current package-signing trust | no ([§1](#1-package-manager)) | PKG-0422 |
 
-The Package Manager's own documentation duties (PM l.836 catalogs, l.859 retrieval, l.934
-installation scope, l.1191 resource access, l.1705 retention) belong to a Package Manager, which this
-deployment does not have; they come with it in Tier 5. The other hits of the search are duties of a
-specification, a record or a message (for example HASH l.43, R l.3407, T l.580), not choices of a
-deployment.
+The Package Manager's own documentation duties (PM l.834 catalogs, l.857 retrieval, l.931
+installation scope, l.1183 resource access, l.1727 the storage failure model, l.1731 retention) belong
+to a Package Manager, which this deployment does not have; they come with it in Tier 5. The Credential
+Store's (CS l.319, l.370, l.476) belong to a Credential Store, which it does not have either (§25).
+The other hits of the search are duties of a specification, a record or a message (for example HASH
+l.35, R l.3265, T l.564), not choices of a deployment.
 
 ## 1. Package Manager
 
@@ -297,7 +305,7 @@ Item 11 (CA l.101-103; DECISIONS G47).
 
 ## 12. Resource bounds
 
-Items 12a and 12b. Every bound is finite and listed with its scope and what happens when it is
+Items 12a, 12b and 25. Every bound is finite and listed with its scope and what happens when it is
 reached:
 
 - the Runtime: [HOST-CONFIG.md](HOST-CONFIG.md), "Runtime limits" (instances, workers, store snapshot,
@@ -309,6 +317,44 @@ reached:
 - the daemon: [DAEMON.md](DAEMON.md) §7 "Limits" and §9 "Limits";
 - the Package Manager's resolver: [CONFORMANCE.md](CONFORMANCE.md), "Resolver limits" (the protected
   policy supplies the values; these are their maxima).
+
+### Admission pools
+
+Item 25 (BCP l.383). A pool counts here when it is finite, shared by more than one consumer or
+provider, and its exhaustion refuses or ends a request (DECISIONS G309). SECURITY l.394 names seven
+examples; each is answered first, a "no pool" included. No pool has a per-provider limit. The facts
+block lists each pool's total and per-consumer limit (`admission_pools`; the audit storage's under
+`authority_audit`), and a test compares them with the code.
+
+| Pool | Total | Per consumer or provider | When it is exhausted |
+|---|---|---|---|
+| prepared calls: asynchronous calls prepared and not released (`MaxAsyncCalls`) | 4,096 per Runtime | none | preparing one more is `LOGOS_ERR_MODULE` |
+| native borrows | no pool: a borrow lasts for the one call or callback that lends it | — | — |
+| sessions: Transport connections | per I/O loop: 1,024 accepted, at most 64 of them before their Hello completes; 1,024 outbound | none; each connection has its own limits | below, Transport |
+| routes | no pool: routes are not counted; a transported route's session takes the Transport totals | — | — |
+| route tickets | no pool: tickets are not counted; each expires within 60 s of its issue (`MaxTicketLifetime`), sooner if its route's authorization ends | — | — |
+| grants | 16,384 kept | none | the oldest revoked or expired grant goes; with all active, issuance is `authority-unavailable` |
+| audit storage: unwritten evaluation records | 4,096 | none | evaluations fail closed, `authority-unavailable` ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), "Audit retention") |
+| audit storage: retained records (`audit.records`) | 65,536 by default | none | no pool: the oldest written records go and nothing is refused, so one consumer's evaluations can push out others' records ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), "State") |
+| module instances, retained ones included (`MaxInstances`) | 1,024 | none | `create_module` is `LOGOS_ERR_MODULE` |
+| call workers for asynchronous calls | 64, then 64 more | none | with all 128 busy for 1 s, the oldest call not started completes `LOGOS_ERR_MODULE` |
+| evaluations waiting for an evaluation worker (`EvalQueue`) | 256, behind 4 workers | none | one more is an evaluation failure at once |
+| observation snapshots | 256 and 64 MiB | 8 and 8 MiB per consumer | past the total, `LOGOS_ERR_MODULE`; past a consumer's own, its oldest snapshot goes |
+| `observe_end` registrations | 16,384 | 1,024 per consumer | `LOGOS_ERR_MODULE` |
+| Runtime Control subscriptions | 1,024 | 32 per module instance | `subscribe` is `LOGOS_ERR_MODULE` |
+| the Runtime store's snapshot (`MaxStoreBytes`) | 64 MiB | none | a change that would pass it fails |
+| the authority's queued module requests | 1,024 | none | `authority-unavailable` |
+| the authority's watches | 64 | 8 per consumer | `watch_changes` is `authority-unavailable` |
+| Transport, per I/O loop (the Runtime's, and each hosted provider's Module Host) | the connections above; 16,384 outbound calls, 16,384 callee subscriptions, 65,536 subscription ids; 32 MiB of frames before a Hello completes, 256 MiB held after, 256 MiB of committed output, 64 MiB of output not yet committed | none; each connection has its own limits | [CONFORMANCE.md](CONFORMANCE.md), "Transport limits" |
+| the reference orchestrator's open restart episodes | 4,096 | none (one per instance) | no new retry is made, with a diagnostic ([HOST-CONFIG.md](HOST-CONFIG.md), "The reference orchestration module", Limits) |
+
+- **Not pools:** they queue, evict or drop, and refuse nothing: the lifecycle workers (G242), the
+  Module Host proxy workers, the Transport's execution slots, the ended route records kept per
+  consumer, the call records and diagnostics kept in memory, and the call-evidence store's queue (off
+  by default). A subscription's own event queue is not shared.
+- **The `logosctl` socket's workers** (`ctl.workers`, [DAEMON.md](DAEMON.md) §7) serve shell clients,
+  which reach the Runtime as one consumer, the `logosctl` instance.
+- **No Package Manager** is deployed, so it has no pool.
 
 ## 13. Deadlines
 
@@ -418,11 +464,25 @@ Item 21.
 
 ## 20. Non-production
 
-Item 22 (DECISIONS D27, G299). The only non-production mechanism is the trust file's development
-switch, set offline with `logosctl trust development on`. With it on this deployment is
-**non-production**: logosd's start log warns `NON-PRODUCTION`, every `logosctl` output and socket reply
-says so, and `policy: allow-all` is accepted. The build mode enables nothing: a packaged logosd has no
-test hooks and refuses the field. The switch weakens nothing else.
+Item 22 (BCP l.403-406; DECISIONS D27, G299). BCP l.403 names four non-production mechanisms. A
+deployed logosd has none of them:
+
+- **Development trust anchors:** the trust file holds no anchors (§5). When Tier 5 adds package-signing
+  anchors, a development one is accepted only with the switch below on (D27).
+- **Relaxed debugging entitlements:** none exist.
+- **Transport test hooks** (TRANSPORT §8.5): hook code exists only in test builds (the `lcnTestHooks`
+  define; the flake check `no-test-hooks` searches every packaged binary for its marker), and a hook
+  stays inert until its Runtime's host selects it by an in-process call ([CONFORMANCE.md](CONFORMANCE.md),
+  "Test hooks").
+- **Unknown-artifact analysis:** none: an artifact is loaded only with its daemon-config digest.
+
+What the trust file's development switch gates are mechanisms of this implementation, held to the
+same rule: `policy: allow-all`, and `test_hooks` in a test build of logosd. The switch is protected
+input, set offline with `logosctl trust development on`. With it on this deployment is
+**non-production**: logosd's start log warns `NON-PRODUCTION`, and every `logosctl` output and socket
+reply says so. The build mode enables nothing (BCP l.405): a packaged logosd has no test hooks and
+refuses `test_hooks`, and a test build selects one only with the switch on. The switch weakens nothing
+else (BCP l.406).
 
 ## 21. Failing closed
 
@@ -474,6 +534,31 @@ SECURITY §13 (l.516-532) lists defaults a production deployment should begin fr
 | cached results invalidated when their basis changes | grants and policy re-evaluated; trust read once per start |
 | development trust and test hooks explicit non-production configuration | §20 |
 
+## 25. Credential Store
+
+Item 24 (BCP l.374; DECISIONS G159). The Credential Store is optional to implement and deploy, and
+neither lower-layer nor complete-system conformance requires it (BCP l.287-288). This deployment
+deploys none and claims no conformance to the CREDENTIAL STORE specification, so no part of the item
+has a subject: no credential, format or sealing profile, no backend to state the durability and
+recovery of, no operation records, no protected delivery or activation. The Runtime and the authority
+start without one (BCP l.290). A Credential Store's own documentation duties (CS l.319, l.370, l.476)
+would come with one.
+
+- **None by construction.** The Credential Store contract fixes its provider's module name,
+  `logos_credential_store` (CS l.162; BCP l.280), and names beginning with `logos_` are reserved for
+  Logos-defined modules (RUNTIME l.292). logosd's composition holds no such module. logosd does not
+  refuse an operator's module of that name: it refuses only its own instances' names and an operator
+  `direct_static` ([DAEMON.md](DAEMON.md) §3). The module fails at its start instead: a provider is
+  bound only once its call surface is accepted, a `logos_` module name is accepted only for a Logos
+  system module, and the Runtime treats as one only its own static registrations (the Module Loader's
+  and the authority's). A Module Host, and the realizer of a `direct_dynamic` artifact, bind without
+  that option, so the start fails `abi-invalid`: the name "is reserved for Logos system modules".
+- **What is not refused.** A module that provides no contract has no call surface to accept, so one
+  named `logos_credential_store` binds. It serves no Credential Store operation, so it is no Credential
+  Store.
+- `tests/test_deployment.nim` checks the facts' `credential_store`, the default composition, logosd's
+  acceptance of the operator module and its refusal at binding.
+
 ## Facts
 
 The values `tests/test_deployment.nim` checks against the code. Times are milliseconds, modes octal.
@@ -515,6 +600,33 @@ The values `tests/test_deployment.nim` checks against the code. Times are millis
     "segment_bytes": 16777216
   },
   "diagnostics_retained": 4096,
-  "memory_manager": "orc"
+  "memory_manager": "orc",
+  "admission_pools": {
+    "prepared_calls": {"total": 4096, "per_consumer": null},
+    "module_instances": {"total": 1024, "per_consumer": null},
+    "call_workers": {"total": 128, "per_consumer": null},
+    "evaluation_queue": {"total": 256, "per_consumer": null},
+    "observation_snapshots": {"total": 256, "per_consumer": 8},
+    "observation_snapshot_bytes": {"total": 67108864, "per_consumer": 8388608},
+    "observe_end_registrations": {"total": 16384, "per_consumer": 1024},
+    "runtime_control_subscriptions": {"total": 1024, "per_consumer": 32},
+    "store_snapshot_bytes": {"total": 67108864, "per_consumer": null},
+    "authority_queued_requests": {"total": 1024, "per_consumer": null},
+    "authority_grants": {"total": 16384, "per_consumer": null},
+    "authority_watches": {"total": 64, "per_consumer": 8},
+    "transport_inbound": {"total": 1024, "per_consumer": null},
+    "transport_pending_hellos": {"total": 64, "per_consumer": null},
+    "transport_outbound": {"total": 1024, "per_consumer": null},
+    "transport_calls": {"total": 16384, "per_consumer": null},
+    "transport_subscriptions": {"total": 16384, "per_consumer": null},
+    "transport_subscription_ids": {"total": 65536, "per_consumer": null},
+    "transport_hello_input_bytes": {"total": 33554432, "per_consumer": null},
+    "transport_input_bytes": {"total": 268435456, "per_consumer": null},
+    "transport_output_bytes": {"total": 268435456, "per_consumer": null},
+    "transport_pending_output_bytes": {"total": 67108864, "per_consumer": null},
+    "orchestrator_open_episodes": {"total": 4096, "per_consumer": null}
+  },
+  "authority_audit": {"acknowledged": "append", "unwritten_bound": 4096, "retained_records": 65536},
+  "credential_store": "none"
 }
 ```
