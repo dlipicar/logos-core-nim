@@ -1,0 +1,1103 @@
+## lcn-gen's thread-confined module kit [IMPL] (DECISIONS G335-G337), in
+## process: the ledger fixture (`testing/fixtures/ledger_impl.nim`) is called
+## through its exported C symbols, as an ABI caller makes the calls, and every
+## entry that uses the instance runs on the context's module thread. The
+## Runtime stand-in here gives each caller an identity of its own and lets the
+## publish callbacks re-enter the module, as a direct subscriber does
+## (INTERFACE l.1918-1928, IFC-0281/0282).
+
+import std/[os, strutils]
+import unittest2
+import logos_sdk/codegen/callrt
+import logos_sdk/testing/kitruntime
+import logos_sdk/testing/fixtures/ledger_impl
+import logos_sdk/testing/generated/[ledger_module_types, meter_module_types]
+
+# The exported symbols, as an ABI caller declares them -------------------------------
+
+proc ledgerInit(
+  input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+): LogosResult {.importc: "logos_ledger_module_MODULE_init", cdecl, gcsafe, raises: [].}
+
+proc ledgerDestroy(
+  module: ptr LogosModuleContext
+) {.importc: "logos_ledger_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
+
+proc ledgerFree(
+  module: ptr LogosModuleContext, p: pointer
+) {.importc: "logos_ledger_module_MODULE_free", cdecl, gcsafe, raises: [].}
+
+proc ledgerDispatch(
+  module: ptr LogosModuleContext,
+  methodName: cstring,
+  params: ptr UncheckedArray[uint8],
+  paramsLen: csize_t,
+  outResponse: ptr ptr UncheckedArray[uint8],
+  outResponseLen: ptr csize_t,
+): LogosResult {.
+  importc: "logos_ledger_module_MODULE_dispatch", cdecl, gcsafe, raises: []
+.}
+
+proc ledgerPost(
+  module: ptr LogosModuleContext,
+  owner: ptr LogosResponseOwner,
+  amount: uint64,
+  key: cstring,
+  thread: ptr uint64,
+  total: ptr uint64,
+): LogosResult {.
+  importc: "logos_ledger_module_CALL_ledger_Post", cdecl, gcsafe, raises: []
+.}
+
+proc ledgerWait(
+  module: ptr LogosModuleContext,
+  owner: ptr LogosResponseOwner,
+  channel: uint32,
+  millis: uint32,
+  value: uint64,
+  note: ptr cstring,
+  thread: ptr uint64,
+  outValue: ptr uint64,
+): LogosResult {.
+  importc: "logos_ledger_module_CALL_ledger_Wait", cdecl, gcsafe, raises: []
+.}
+
+proc ledgerSeal(
+  module: ptr LogosModuleContext,
+  owner: ptr LogosResponseOwner,
+  secret: ptr UncheckedArray[uint8],
+  secretLen: csize_t,
+  sealed: ptr ptr UncheckedArray[uint8],
+  sealedLen: ptr csize_t,
+): LogosResult {.
+  importc: "logos_ledger_module_CALL_ledger_Seal", cdecl, gcsafe, raises: []
+.}
+
+# A Runtime stand-in whose callers have identities -------------------------------------
+
+type
+  Who = object
+    id: cstring ## the caller's module instance
+
+  Note = object
+    ## Text written on one thread and read on another: no GC'd memory, which
+    ## refc's per-thread heaps would not let another thread touch.
+    len: int
+    text: array[64, char]
+
+  Seen = object ## one event a publish callback got
+    scoped: bool ## the context's callback, not the instance's
+    key: Note
+    thread: uint64
+
+const seenCap = 4096
+
+var
+  reenterModule: Atomic[pointer]
+    ## the module a publish callback re-enters, as a direct subscriber does; nil for none
+  reentries: Atomic[int] ## re-entries that read the re-entering caller
+  reentryFailures: Atomic[int]
+  publishDelay: Atomic[int] ## milliseconds each callback waits before it records
+  holdPublish: Atomic[bool] ## the instance callback waits while this is set
+  holding: Atomic[bool] ## the instance callback is waiting on `holdPublish`
+  callbackCode: Atomic[int32] ## what the instance callback returns
+  seenLock: Lock
+  seenLen: int
+  seen: array[seenCap, Seen]
+initLock(seenLock)
+
+proc note(s: string): Note =
+  result.len = min(s.len, result.text.len)
+  for i in 0 ..< result.len:
+    result.text[i] = s[i]
+
+proc `$`(n: Note): string =
+  result = newString(n.len)
+  for i in 0 ..< n.len:
+    result[i] = n.text[i]
+
+proc here(): uint64 =
+  uint64(getThreadId())
+
+proc view(s: cstring): LogosUtf8View =
+  LogosUtf8View(data: cast[ptr UncheckedArray[uint8]](s), len: csize_t(s.len))
+
+proc whoCaller(
+    invocation: ptr LogosInvocationContext, outCaller: ptr LogosCallerView
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  let who = cast[ptr Who](invocation.state)
+  outCaller[] = LogosCallerView(
+    kind: CallerModule,
+    runtimeInstanceId: view(cstring(runtimeId)),
+    moduleInstanceId: view(who.id),
+  )
+  LogosResult()
+
+proc see(scoped: bool, name: cstring, data: ptr UncheckedArray[uint8], len: csize_t) =
+  var bytes = newSeq[byte](int(len))
+  for i in 0 ..< int(len):
+    bytes[i] = data[i]
+  let key =
+    if $name == "ledger.posted_event":
+      LedgerPostedEvent.decode(bytes).get.key
+    else:
+      $name
+  {.cast(gcsafe).}:
+    withLock seenLock:
+      doAssert seenLen < seenCap
+      seen[seenLen] = Seen(scoped: scoped, key: note(key), thread: here())
+      inc seenLen
+
+proc whoPublish(
+  invocation: ptr LogosInvocationContext,
+  eventName: cstring,
+  cborData: ptr UncheckedArray[uint8],
+  cborDataLen: csize_t,
+): LogosResult {.cdecl, gcsafe, raises: [].}
+
+var
+  whoA = Who(id: "caller-a")
+  whoB = Who(id: "caller-b")
+  whoC = Who(id: "caller-c")
+  whoR = Who(id: "reentry")
+  whoVtable = LogosInvocationContextVtable(
+    abiVersion: 1,
+    structSize: csize_t(sizeof(LogosInvocationContextVtable)),
+    caller: whoCaller,
+    isCancelled: cancelledOp,
+    publish: whoPublish,
+  )
+  ctxA = LogosInvocationContext(vtable: addr whoVtable, state: addr whoA)
+  ctxB = LogosInvocationContext(vtable: addr whoVtable, state: addr whoB)
+  ctxC = LogosInvocationContext(vtable: addr whoVtable, state: addr whoC)
+  ctxR = LogosInvocationContext(vtable: addr whoVtable, state: addr whoR)
+
+proc request[T](v: T): seq[byte] =
+  encode(v).get
+
+proc probe(
+    ctx: ptr LogosModuleContext, channel: uint32, value = 0'u64
+): (ErrorCode, LedgerProbeResponse) {.gcsafe.} =
+  let c = call(
+    ledgerDispatch,
+    ledgerFree,
+    ctx,
+    "probe",
+    request(LedgerProbeRequest(channel: channel, value: value)),
+  )
+  if c.code != ecOk:
+    return (c.code, LedgerProbeResponse())
+  (ecOk, LedgerProbeResponse.decode(c.response).get)
+
+proc wait(
+    ctx: ptr LogosModuleContext, channel: uint32, millis = 0'u32, value = 0'u64
+): (ErrorCode, LedgerWaitResponse) {.gcsafe.} =
+  let c = call(
+    ledgerDispatch,
+    ledgerFree,
+    ctx,
+    "wait",
+    request(LedgerWaitRequest(channel: channel, millis: millis, value: value)),
+  )
+  if c.code != ecOk:
+    return (c.code, LedgerWaitResponse())
+  (ecOk, LedgerWaitResponse.decode(c.response).get)
+
+proc post(
+    ctx: ptr LogosModuleContext, key: string, amount = 1'u64
+): (ErrorCode, LedgerPostResponse) {.gcsafe.} =
+  let c = call(
+    ledgerDispatch,
+    ledgerFree,
+    ctx,
+    "post",
+    request(LedgerPostRequest(key: key, amount: amount)),
+  )
+  if c.code != ecOk:
+    return (c.code, LedgerPostResponse())
+  (ecOk, LedgerPostResponse.decode(c.response).get)
+
+proc reenter() {.gcsafe, raises: [].} =
+  ## A direct subscriber that calls back into the module from the callback's
+  ## thread, with a caller of its own made current around the entry.
+  let m = cast[ptr LogosModuleContext](reenterModule.load)
+  if m == nil:
+    return
+  {.cast(gcsafe).}:
+    let saved = activeContext
+    activeContext = addr ctxR
+    let (code, r) = probe(m, 1)
+    activeContext = saved
+  if code == ecOk and r.note == "reentry":
+    reentries += 1
+  else:
+    reentryFailures += 1
+
+proc instancePublish(
+    userData: pointer,
+    eventName: cstring,
+    cborData: ptr UncheckedArray[uint8],
+    cborDataLen: csize_t,
+): CErrorCode {.cdecl, gcsafe, raises: [].} =
+  while holdPublish.load:
+    holding.store(true)
+    sleep(1)
+  holding.store(false)
+  let d = publishDelay.load
+  if d > 0:
+    sleep(d)
+  see(false, eventName, cborData, cborDataLen)
+  reenter()
+  CErrorCode(callbackCode.load)
+
+proc whoPublish(
+    invocation: ptr LogosInvocationContext,
+    eventName: cstring,
+    cborData: ptr UncheckedArray[uint8],
+    cborDataLen: csize_t,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  let d = publishDelay.load
+  if d > 0:
+    sleep(d)
+  see(true, eventName, cborData, cborDataLen)
+  reenter()
+  LogosResult()
+
+proc ledgerInput(stateDir: cstring = nil): LogosModuleInitInput =
+  result = input(stateDir = stateDir)
+  result.publish = instancePublish
+
+proc openLedger(): ptr LogosModuleContext =
+  var inp = ledgerInput()
+  let r = ledgerInit(addr inp, addr result)
+  doAssert r.code == CErrorCode(0), "init failed: " & $r.code
+
+proc resetRuntime() =
+  reenterModule.store(nil)
+  reentries.store(0)
+  reentryFailures.store(0)
+  publishDelay.store(0)
+  holdPublish.store(false)
+  callbackCode.store(0)
+  cancelled.store(false)
+  activeContext = nil
+  probeHook = nil
+  withLock seenLock:
+    seenLen = 0
+
+proc seenKeys(how: string): seq[string] =
+  withLock seenLock:
+    for i in 0 ..< seenLen:
+      if seen[i].scoped == (how == "scoped"):
+        result.add($seen[i].key)
+
+proc seenCount(key: string): int =
+  withLock seenLock:
+    for i in 0 ..< seenLen:
+      if $seen[i].key == key:
+        inc result
+
+proc seenThreads(key: string): seq[uint64] =
+  withLock seenLock:
+    for i in 0 ..< seenLen:
+      if $seen[i].key == key:
+        result.add(seen[i].thread)
+
+proc clearOwner(owner: var LogosResponseOwner) =
+  let previous = owner
+  owner = LogosResponseOwner()
+  if not previous.release.isNil:
+    previous.release(previous.state)
+
+proc openDescriptors(): int =
+  when defined(linux):
+    for _ in walkDir("/proc/self/fd"):
+      inc result
+  else:
+    for _ in walkDir("/dev/fd"):
+      inc result
+
+# Threads the tests start ------------------------------------------------------------
+
+const
+  workers = 16
+  rounds = 40
+
+var
+  shared: ptr LogosModuleContext
+  workerIds: array[workers, string]
+  workerWho: array[workers, Who]
+  workerCtx: array[workers, LogosInvocationContext]
+  workerFailures: Atomic[int]
+  moduleThread: Atomic[uint64]
+  ticket: Atomic[int]
+  asyncDone: Atomic[int] ## the ticket the first async caller took when it returned
+  asyncNote: array[2, Note]
+  waitedRoom: Atomic[bool]
+  roomNote: Note
+
+for i in 0 ..< workers:
+  workerIds[i] = "worker-" & $i
+  workerWho[i] = Who(id: cstring(workerIds[i]))
+  workerCtx[i] =
+    LogosInvocationContext(vtable: addr whoVtable, state: addr workerWho[i])
+
+proc sameModuleThread(t: uint64) =
+  var expected = 0'u64
+  if not moduleThread.compareExchange(expected, t) and expected != t:
+    workerFailures += 1
+
+proc worker(i: int) {.thread.} =
+  {.cast(gcsafe).}:
+    activeContext = addr workerCtx[i]
+    let key = workerIds[i]
+    for r in 0 ..< rounds:
+      if r mod 2 == 0:
+        let (code, resp) = post(shared, key)
+        if code != ecOk or resp.total != uint64(r + 1):
+          workerFailures += 1
+        sameModuleThread(resp.thread)
+      else:
+        var owner: LogosResponseOwner
+        var total, thread: uint64
+        if ledgerPost(shared, addr owner, 1, cstring(key), addr thread, addr total).code !=
+            CErrorCode(0) or total != uint64(r + 1):
+          workerFailures += 1
+        sameModuleThread(thread)
+        clearOwner(owner)
+      if r mod 8 == 3:
+        # An async handler: it reads its own caller after an await, while the
+        # other workers' jobs run on the same thread.
+        let (code, w) = wait(shared, 1, millis = 1)
+        if code != ecOk or w.note != key:
+          workerFailures += 1
+      if r mod 8 == 5:
+        let (code, p) = probe(shared, 1)
+        if code != ecOk or p.note != key:
+          workerFailures += 1
+    activeContext = nil
+
+proc asyncCaller(i: int) {.thread.} =
+  ## One async handler that sleeps, then reads its caller.
+  {.cast(gcsafe).}:
+    activeContext =
+      if i == 0:
+        addr ctxA
+      else:
+        addr ctxB
+    let (code, w) = wait(shared, 1, millis = (if i == 0: 60'u32 else: 20'u32))
+    asyncNote[i] = note(
+      if code == ecOk:
+        w.note
+      else:
+        $code
+    )
+    if i == 0:
+      asyncDone.store(ticket.fetchAdd(1))
+    activeContext = nil
+
+proc roomCaller(i: int) {.thread.} =
+  {.cast(gcsafe).}:
+    let (code, w) = wait(shared, 3, value = 7)
+    roomNote = note(
+      if code == ecOk:
+        w.note
+      else:
+        $code
+    )
+    waitedRoom.store(true)
+
+proc inlineEntry(m: Ledger, value: uint64): string {.nimcall, gcsafe, raises: [].} =
+  ## The module's own entry called on its module thread, as a Runtime makes it:
+  ## a caller of its own current on that thread around the entry.
+  {.cast(gcsafe).}:
+    let saved = activeContext
+    activeContext = addr ctxC
+    result =
+      if value == 0:
+        let (code, r) = probe(shared, 1)
+        if code == ecOk:
+          r.note
+        else:
+          $code
+      else:
+        let (code, w) = wait(shared, 1, millis = uint32(value))
+        if code == ecOk:
+          w.note
+        else:
+          $code
+    activeContext = saved
+
+# A route binding the test drives (DECISIONS G339) ----------------------------------
+#
+# The ledger wraps it with its kit's dispatcher; the test delivers events, ends the
+# subscription or the route and completes a prepared call from its own threads, as
+# a binding's threads do.
+
+type FakeSub = object
+  id: uint64
+  handler: LogosEventHandler
+  user: pointer
+  active: bool
+  ended: bool
+
+var
+  fakeLock: Lock
+  fakeSubs: array[8, FakeSub]
+  fakeNextId: uint64
+  fakeEnd: LogosRouteEndHandler
+  fakeEndUser: pointer
+  fakeSubEnd: LogosSubscriptionEndHandler
+  fakeSubEndUser: pointer
+  fakeCallbacks: LogosAsyncCallbacks
+  fakeState: byte
+  fakeReleased: Atomic[bool]
+  fakeUnsubscribes: Atomic[int]
+  fakeUnsubscribesInside: Atomic[int] ## made from inside a delivery
+  fakeCompleteInSubmit: Atomic[bool]
+  fakeCallReleases: Atomic[int]
+  ownerReleases: Atomic[int]
+  ownerReleaseThread: Atomic[uint64]
+  delivering {.threadvar.}: bool
+initLock(fakeLock)
+
+proc fakeCallOp(
+    route: ptr LogosRouteHandle,
+    m: cstring,
+    params: ptr UncheckedArray[uint8],
+    paramsLen: csize_t,
+    outResponse: ptr ptr UncheckedArray[uint8],
+    outResponseLen: ptr csize_t,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  LogosResult(code: CErrorCode(ord(ecModule)))
+
+proc fakeReleaseResponseOp(
+    route: ptr LogosRouteHandle, r: ptr UncheckedArray[uint8], n: csize_t
+) {.cdecl, gcsafe, raises: [].} =
+  discard
+
+proc fakeSubscribeOp(
+    route: ptr LogosRouteHandle,
+    eventName: cstring,
+    handler: LogosEventHandler,
+    userData: pointer,
+    outId: ptr LogosSubscriptionId,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    withLock fakeLock:
+      for f in fakeSubs.mitems:
+        if not f.active and not f.ended:
+          inc fakeNextId
+          f = FakeSub(id: fakeNextId, handler: handler, user: userData, active: true)
+          outId[] = fakeNextId
+          return LogosResult()
+  LogosResult(code: CErrorCode(ord(ecModule)))
+
+proc fakeUnsubscribeOp(
+    route: ptr LogosRouteHandle, id: LogosSubscriptionId
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  fakeUnsubscribes += 1
+  if delivering:
+    fakeUnsubscribesInside += 1
+  {.cast(gcsafe).}:
+    withLock fakeLock:
+      for f in fakeSubs.mitems:
+        if f.id == id and (f.active or f.ended):
+          f = FakeSub()
+          return LogosResult()
+  LogosResult(code: CErrorCode(ord(ecInvalidParams)))
+
+proc fakeReleaseOp(route: ptr LogosRouteHandle) {.cdecl, gcsafe, raises: [].} =
+  fakeReleased.store(true)
+
+proc ownerRelease(state: pointer) {.cdecl, gcsafe, raises: [].} =
+  ownerReleases += 1
+  ownerReleaseThread.store(here())
+
+proc completeFake(label: string) {.gcsafe.} =
+  ## The prepared call's one completion, from this thread, with an owner.
+  var response =
+    encode(MeterReadResponse(label: label, reading: MeterReading(value: 1))).get
+  let owner = LogosResponseOwner(state: addr fakeState, release: ownerRelease)
+  {.cast(gcsafe).}:
+    let cb = fakeCallbacks
+  cb.complete(
+    cb.userData,
+    LogosResult(),
+    cast[ptr UncheckedArray[uint8]](addr response[0]),
+    csize_t(response.len),
+    owner,
+  )
+
+proc fakeSubmitOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
+  if fakeCompleteInSubmit.load:
+    completeFake("inline")
+
+proc fakeCancelOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
+  discard
+
+proc fakeCallReleaseOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
+  fakeCallReleases += 1
+
+var fakeCallVtable = LogosAsyncCallVtable(
+  abiVersion: AsyncCallAbiVersion,
+  structSize: csize_t(sizeof(LogosAsyncCallVtable)),
+  submit: fakeSubmitOp,
+  cancel: fakeCancelOp,
+  release: fakeCallReleaseOp,
+)
+
+proc fakePrepareOp(
+    route: ptr LogosRouteHandle,
+    m: cstring,
+    params: ptr UncheckedArray[uint8],
+    paramsLen: csize_t,
+    options: ptr LogosAsyncOptions,
+    callbacks: ptr LogosAsyncCallbacks,
+    outCall: ptr LogosAsyncCall,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    fakeCallbacks = callbacks[]
+    outCall[] = LogosAsyncCall(vtable: addr fakeCallVtable, state: addr fakeState)
+  LogosResult()
+
+proc fakeObserveEndOp(
+    route: ptr LogosRouteHandle, handler: LogosRouteEndHandler, userData: pointer
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    fakeEnd = handler
+    fakeEndUser = userData
+  LogosResult()
+
+proc fakeObserveSubEndOp(
+    route: ptr LogosRouteHandle, handler: LogosSubscriptionEndHandler, userData: pointer
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    fakeSubEnd = handler
+    fakeSubEndUser = userData
+  LogosResult()
+
+var fakeVtable = LogosRouteVtable(
+  abiVersion: RouteVtableAbiVersion,
+  structSize: csize_t(sizeof(LogosRouteVtable)),
+  call: fakeCallOp,
+  releaseResponse: fakeReleaseResponseOp,
+  subscribe: fakeSubscribeOp,
+  unsubscribe: fakeUnsubscribeOp,
+  release: fakeReleaseOp,
+  prepareCall: fakePrepareOp,
+  observeEnd: fakeObserveEndOp,
+  observeSubscriptionEnd: fakeObserveSubEndOp,
+)
+
+proc resetFake() =
+  withLock fakeLock:
+    for f in fakeSubs.mitems:
+      f = FakeSub()
+  fakeEnd = nil
+  fakeSubEnd = nil
+  fakeReleased.store(false)
+  fakeUnsubscribes.store(0)
+  fakeUnsubscribesInside.store(0)
+  fakeCompleteInSubmit.store(false)
+  fakeCallReleases.store(0)
+  ownerReleases.store(0)
+  routeToWrap = LogosRouteHandle(vtable: addr fakeVtable, state: addr fakeState)
+
+proc deliver(value: uint64) {.gcsafe.} =
+  ## `meter.changed_event` to every active subscription, from this thread.
+  var payload = encode(MeterChangedEvent(value: value)).get
+  var targets: seq[(LogosEventHandler, pointer)]
+  {.cast(gcsafe).}:
+    withLock fakeLock:
+      for f in fakeSubs:
+        if f.active:
+          targets.add((f.handler, f.user))
+  for (handler, user) in targets:
+    delivering = true
+    handler(
+      "meter.changed_event",
+      cast[ptr UncheckedArray[uint8]](addr payload[0]),
+      csize_t(payload.len),
+      user,
+    )
+    delivering = false
+
+proc endSubscription(reason: ErrorCode) =
+  ## The binding ends the first active subscription (INTERFACE l.1472-1483).
+  var id: uint64
+  withLock fakeLock:
+    for f in fakeSubs.mitems:
+      if f.active:
+        f.active = false
+        f.ended = true
+        id = f.id
+        break
+  fakeSubEnd(id, CErrorCode(ord(reason)), fakeSubEndUser)
+
+proc endRoute(reason: ErrorCode) =
+  fakeEnd(CErrorCode(ord(reason)), fakeEndUser)
+
+var
+  gate: Atomic[bool]
+  gateEntered: Atomic[bool]
+
+proc holdHook(m: Ledger, value: uint64): string {.nimcall, gcsafe, raises: [].} =
+  ## Keeps the module thread busy until the test opens the gate.
+  gateEntered.store(true)
+  while gate.load:
+    sleep(1)
+  "held"
+
+proc holder(i: int) {.thread.} =
+  {.cast(gcsafe).}:
+    discard probe(shared, 8)
+
+proc deliverInsideHook(
+    m: Ledger, value: uint64
+): string {.nimcall, gcsafe, raises: [].} =
+  ## On the module thread: the binding delivers here (INTERFACE l.1405), then the
+  ## handler unsubscribes before those deliveries ran.
+  let before = m.seenCount
+  deliver(5)
+  deliver(6)
+  let ran = m.seenCount - before
+  $ran & " " & m.unsubscribeChanged()
+
+proc report(ctx: ptr LogosModuleContext): string =
+  probe(ctx, 14)[1].note
+
+# Tests --------------------------------------------------------------------------------
+
+suite "confined kit: handoff (DECISIONS G335)":
+  setup:
+    resetRuntime()
+
+  test "[IMPL-DECISION G335] init, dispatch and typed calls run on one module thread, not the caller's":
+    let ctx = openLedger()
+    let (code, r) = probe(ctx, 1)
+    check code == ecOk
+    check r.thread != here()
+    var owner: LogosResponseOwner
+    var total, thread: uint64
+    check ledgerPost(ctx, addr owner, 5, "a", addr thread, addr total).code ==
+      CErrorCode(0)
+    check total == 5
+    check thread == r.thread
+    clearOwner(owner)
+    check ledgerPost(ctx, addr owner, 7, "a", addr thread, addr total).code ==
+      CErrorCode(0)
+    check total == 12
+    clearOwner(owner)
+    let (wcode, w) = wait(ctx, 1, millis = 1)
+    check wcode == ecOk
+    check w.thread == r.thread
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G335] a typed call to an async handler and to a marked one; the owner holds the outputs":
+    let ctx = openLedger()
+    activeContext = addr ctxA
+    let base = arenaBlocks()
+    var owner: LogosResponseOwner
+    var note: cstring
+    var thread, value: uint64
+    check ledgerWait(ctx, addr owner, 1, 1, 9, addr note, addr thread, addr value).code ==
+      CErrorCode(0)
+    check $note == "caller-a"
+    check value == 9
+    check thread != here()
+    check arenaBlocks() > base
+    clearOwner(owner)
+    check arenaBlocks() == base
+    var secret = @[1'u8, 2, 3]
+    var sealed: ptr UncheckedArray[uint8]
+    var sealedLen: csize_t
+    check ledgerSeal(
+      ctx,
+      addr owner,
+      cast[ptr UncheckedArray[uint8]](addr secret[0]),
+      csize_t(secret.len),
+      addr sealed,
+      addr sealedLen,
+    ).code == CErrorCode(0)
+    check sealedLen == 3
+    check [sealed[0], sealed[1], sealed[2]] == [3'u8 xor 0x5A, 2 xor 0x5A, 1 xor 0x5A]
+    clearOwner(owner)
+    check arenaBlocks() == base
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G335] a failure's message is read on the calling thread":
+    let ctx = openLedger()
+    let c = call(
+      ledgerDispatch,
+      ledgerFree,
+      ctx,
+      "probe",
+      request(LedgerProbeRequest(channel: 3, value: 0)),
+    )
+    check c.code == ecModule
+    check c.status.error.message == Opt.some("probe 3 fails")
+    let w = call(
+      ledgerDispatch,
+      ledgerFree,
+      ctx,
+      "wait",
+      request(LedgerWaitRequest(channel: 5, millis: 0, value: 0)),
+    )
+    check w.code == ecModule
+    check w.status.error.message == Opt.some("wait 5 fails")
+    let unknown = call(ledgerDispatch, ledgerFree, ctx, "nothing", diag("{}"))
+    check unknown.code == ecMethodNotFound
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G335] calls from 16 threads at once, plain, typed and async, each with its own caller":
+    shared = openLedger()
+    moduleThread.store(0)
+    workerFailures.store(0)
+    var threads: array[workers, Thread[int]]
+    for i in 0 ..< workers:
+      createThread(threads[i], worker, i)
+    joinThreads(threads)
+    check workerFailures.load == 0
+    check moduleThread.load != 0 and moduleThread.load != here()
+    for i in 0 ..< workers:
+      let (code, r) = post(shared, workerIds[i], 0)
+      check code == ecOk and r.total == rounds
+    ledgerDestroy(shared)
+    shared = nil
+
+  test "[IMPL-DECISION G335] two contexts have two module threads and two instances":
+    let one = openLedger()
+    let two = openLedger()
+    let (_, a) = post(one, "x", 3)
+    let (_, b) = post(two, "x", 4)
+    check a.total == 3 and b.total == 4
+    check a.thread != b.thread
+    check a.thread != here() and b.thread != here()
+    ledgerDestroy(one)
+    let (_, c) = post(two, "x", 1)
+    check c.total == 5
+    ledgerDestroy(two)
+
+suite "confined kit: invocation context (DECISIONS G336)":
+  setup:
+    resetRuntime()
+
+  test "[IMPL-DECISION G336] a plain handler reads its job's caller; an async task's plain API is NOT_READY":
+    let ctx = openLedger()
+    activeContext = addr ctxA
+    let (_, r) = probe(ctx, 1)
+    check r.note == "caller-a"
+    let (_, w) = wait(ctx, 1, millis = 2)
+    check w.note == "caller-a"
+    let (_, w6) = wait(ctx, 6)
+    check w6.note == $ecNotReady
+    activeContext = nil
+    let (_, none) = probe(ctx, 1)
+    check none.note == $ecNotReady
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G336] isCancelled from a plain and from an async handler":
+    let ctx = openLedger()
+    activeContext = addr ctxA
+    check probe(ctx, 4)[1].note == "live"
+    check wait(ctx, 8)[1].note == "live"
+    cancelled.store(true)
+    check probe(ctx, 4)[1].note == "cancelled"
+    check wait(ctx, 8)[1].note == "cancelled"
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G336] an Invocation is refused once its job ended":
+    let ctx = openLedger()
+    activeContext = addr ctxA
+    let (_, w) = wait(ctx, 4)
+    check w.note == "kept"
+    let (_, r) = probe(ctx, 6)
+    check r.note == $ecNotReady
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G336] two interleaved async handlers each see only their own caller":
+    shared = openLedger()
+    ticket.store(0)
+    var threads: array[2, Thread[int]]
+    createThread(threads[0], asyncCaller, 0)
+    sleep(5)
+    createThread(threads[1], asyncCaller, 1)
+    joinThreads(threads)
+    check $asyncNote[0] == "caller-a"
+    check $asyncNote[1] == "caller-b"
+    ledgerDestroy(shared)
+    shared = nil
+
+  test "[IMPL-DECISION G336] an inline nested entry restores the outer handler's caller":
+    shared = openLedger()
+    probeHook = inlineEntry
+    activeContext = addr ctxB
+    let (code, r) = probe(shared, 8, 0)
+    check code == ecOk
+    check r.note == "caller-c|caller-b"
+    ledgerDestroy(shared)
+    shared = nil
+
+  test "[IMPL-DECISION G336] P4: a plain handler re-enters an async handler inline while another async task resumes and reads its caller":
+    shared = openLedger()
+    probeHook = inlineEntry
+    ticket.store(0)
+    var t: Thread[int]
+    createThread(t, asyncCaller, 0) # sleeps 60 ms, then reads caller-a
+    sleep(15)
+    activeContext = addr ctxB
+    # The inline async entry sleeps 150 ms on the module thread: the task above
+    # resumes inside that nested poll.
+    let (code, r) = probe(shared, 8, 150)
+    let mainDone = ticket.fetchAdd(1)
+    joinThread(t)
+    check code == ecOk
+    check r.note == "caller-c|caller-b"
+    check $asyncNote[0] == "caller-a"
+    check asyncDone.load < mainDone # it returned while the plain handler was inside
+    ledgerDestroy(shared)
+    shared = nil
+
+suite "confined kit: publication (DECISIONS G337)":
+  setup:
+    resetRuntime()
+
+  test "[IMPL-DECISION G337] publish is queued and delivered in order on the publisher thread, not the module's or the caller's":
+    let ctx = openLedger()
+    var module: uint64
+    for i in 1 .. 5:
+      let (code, r) = post(ctx, "k" & $i)
+      check code == ecOk
+      module = r.thread
+    let (_, w) = wait(ctx, 3, value = 1) # publishAsync: after the five
+    check w.note == "ok"
+    check seenKeys("plain") == @["k1", "k2", "k3", "k4", "k5", "async"]
+    for t in seenThreads("k1") & seenThreads("async"):
+      check t != module and t != here()
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G337] P3: publishScoped from a plain handler runs on the entry thread while a subscriber re-enters from it":
+    let ctx = openLedger()
+    reenterModule.store(ctx)
+    activeContext = addr ctxB
+    let (code, r) = probe(ctx, 2, 4)
+    check code == ecOk
+    check r.note == "ok"
+    check seenThreads("scoped") == @[here()]
+    check reentries.load == 1
+    check reentryFailures.load == 0
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G337] [IFC-0281] [IFC-0282] a subscriber re-enters during each publication path, plain and async":
+    let ctx = openLedger()
+    reenterModule.store(ctx)
+    activeContext = addr ctxB
+    check post(ctx, "queued")[0] == ecOk # publish: the publisher thread
+    check wait(ctx, 3)[1].note == "ok" # publishAsync: the publisher thread
+    check wait(ctx, 7)[1].note == "ok"
+      # an async handler's publishScoped: the publisher thread
+    check probe(ctx, 2)[1].note == "ok" # a plain handler's publishScoped: this thread
+    check reentries.load == 4
+    check reentryFailures.load == 0
+    check seenKeys("plain") == @["queued", "async"]
+    check seenKeys("scoped") == @["scoped-async", "scoped"]
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G337] an entry with queued scoped events returns only after they were delivered":
+    let ctx = openLedger()
+    activeContext = addr ctxA
+    publishDelay.store(30)
+    let (code, w) = wait(ctx, 2, value = 1)
+    check code == ecOk and w.note == "sent"
+    check seenKeys("scoped") == @["unawaited"]
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G337] ABI 3: the callback's refusals show in publishRefusals, lastPublishRefusal and publishAsync's result":
+    let ctx = openLedger()
+    check probe(ctx, 9)[1].note == "0"
+    callbackCode.store(int32(ord(ecNotAuthorised)))
+    check post(ctx, "refused")[0] == ecOk # queued: OK is not acceptance
+    check wait(ctx, 3)[1].note == $ecNotAuthorised
+    check probe(ctx, 9)[1].note == "2 " & $ord(ecNotAuthorised) & " ledger.posted_event"
+    callbackCode.store(0)
+    check wait(ctx, 3)[1].note == "ok"
+    check probe(ctx, 9)[1].note.startsWith("2 ")
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G337] a full queue: publish answers the kit's NOT_READY, publishAsync waits for room":
+    shared = openLedger()
+    holdPublish.store(true)
+    check post(shared, "first")[0] == ecOk
+    while not holding.load:
+      sleep(1)
+    # The callback holds `first`; the queue takes 64 more.
+    let (_, flood) = probe(shared, 5, 100)
+    check flood.note == "36"
+    check probe(shared, 9)[1].note == "0" # the kit's refusals are not the callback's
+    waitedRoom.store(false)
+    var t: Thread[int]
+    createThread(t, roomCaller, 0)
+    sleep(30)
+    check not waitedRoom.load
+    holdPublish.store(false)
+    joinThread(t)
+    check waitedRoom.load
+    check $roomNote == "ok"
+    check seenCount("flood") == 64
+    check seenCount("async") == 1
+    ledgerDestroy(shared)
+    shared = nil
+
+  test "[IMPL-DECISION G337] destroy delivers the queued events before it returns, never after":
+    let ctx = openLedger()
+    publishDelay.store(2)
+    let (_, flood) = probe(ctx, 5, 30)
+    check flood.note == "0"
+    check seenCount("flood") < 30
+    let before = destroyed.load
+    ledgerDestroy(ctx)
+    check destroyed.load == before + 1
+    check seenCount("flood") == 30
+    sleep(20)
+    check seenCount("flood") == 30
+
+suite "confined kit: lifecycle and foreign threads (DECISIONS G335)":
+  setup:
+    resetRuntime()
+
+  test "[IMPL-DECISION G335] callbacks posted from C threads the Nim runtime never saw run on the module thread":
+    let ctx = openLedger()
+    posts.store(0)
+    postThreads.store(0)
+    let (code, r) = probe(ctx, 7, 4)
+    check code == ecOk and r.note == "posted"
+    discard probe(ctx, 1) # queued after the 40 callbacks
+    check posts.load == 40
+    check postThreads.load == 0
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G335] a failed init joins its threads and leaves no context":
+    var inp = ledgerInput(stateDir = "/refuse")
+    var ctx: ptr LogosModuleContext
+    let r = ledgerInit(addr inp, addr ctx)
+    check r.code == CErrorCode(ord(ecModule))
+    check ctx == nil
+
+  test "[IMPL-DECISION G335] 100 create and destroy cycles and 20 failed inits keep the open-descriptor count":
+    when defined(windows):
+      skip()
+    else:
+      block warm:
+        let ctx = openLedger()
+        discard post(ctx, "warm")
+        ledgerDestroy(ctx)
+      let fds = openDescriptors()
+      for i in 0 ..< 100:
+        let ctx = openLedger()
+        discard post(ctx, "cycle")
+        discard wait(ctx, 1, millis = 0)
+        ledgerDestroy(ctx)
+      for i in 0 ..< 20:
+        var inp = ledgerInput(stateDir = "/refuse")
+        var ctx: ptr LogosModuleContext
+        discard ledgerInit(addr inp, addr ctx)
+      check openDescriptors() == fds
+
+suite "confined kit: consumer helpers on the module thread (DECISIONS G339)":
+  setup:
+    resetRuntime()
+    resetFake()
+
+  test "[IMPL-DECISION G339] handlers, end reports and completions run on the module thread, never in the delivery":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    deliver(1)
+    deliver(2)
+    deliver(3)
+    check ctx.report.startsWith("seen=1,2,3 ")
+    endSubscription(ecModule)
+    check " end=MODULE_ERROR " in ctx.report
+    check probe(ctx, 11)[1].note == "ok" # after the binding ended it (l.1482)
+    check probe(ctx, 13, 4)[1].note == "submitted"
+    completeFake("ch4")
+    check ownerReleases.load == 1
+    check ownerReleaseThread.load == here() # cleared where it was delivered (l.2052)
+    check " done=ok:ch4 " in ctx.report
+    endRoute(ecNotReady)
+    check " route=NOT_READY " in ctx.report
+    check probe(ctx, 15)[1].note == "ok"
+    check probe(ctx, 12)[1].note == "ok"
+    check fakeReleased.load
+    check ctx.report.endsWith(" off=0")
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G339] P1: a delivery that finds the bound reached ends its subscription from inside the delivery; the queued events come first, then onEnd(MODULE_ERROR)":
+    shared = openLedger()
+    check probe(shared, 10)[1].note == "subscribed"
+    check probe(shared, 16, 2)[1].note == "bound"
+    probeHook = holdHook
+    gate.store(true)
+    gateEntered.store(false)
+    var t: Thread[int]
+    createThread(t, holder, 0)
+    while not gateEntered.load:
+      sleep(1)
+    deliver(1)
+    deliver(2) # the bound: two queued
+    deliver(3) # ends the subscription
+    deliver(4) # nothing to deliver to
+    check fakeUnsubscribes.load == 1
+    check fakeUnsubscribesInside.load == 1
+    gate.store(false)
+    joinThread(t)
+    let r = shared.report
+    check r.startsWith("seen=1,2 end=MODULE_ERROR ")
+    check probe(shared, 11)[1].note == "ok" # already unsubscribed from the binding
+    check fakeUnsubscribes.load == 1
+    check r.endsWith(" off=0")
+    ledgerDestroy(shared)
+    shared = nil
+
+  test "[IMPL-DECISION G339] a delivery on the module thread itself is queued, never run inline; an unsubscription drops what is queued for it":
+    shared = openLedger()
+    check probe(shared, 10)[1].note == "subscribed"
+    deliver(1)
+    probeHook = deliverInsideHook
+    check probe(shared, 8)[1].note.startsWith("0 ok|")
+    check shared.report.startsWith("seen=1 ")
+    deliver(7) # unsubscribed: nothing reaches the handler
+    check shared.report.startsWith("seen=1 ")
+    ledgerDestroy(shared)
+    shared = nil
+
+  test "[IMPL-DECISION G339] the handler rule on the module thread: an operation on the handler's own handle is NOT_READY, its own unsubscription succeeds":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    deliver(98)
+    check " rule=NOT_READY " in ctx.report
+    deliver(99)
+    check " rule=ok " in ctx.report
+    check fakeUnsubscribes.load == 1
+    deliver(7)
+    check ctx.report.startsWith("seen= ")
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G339] a completion inside submit is queued, not run inline; a call released before it ran never completes":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    fakeCompleteInSubmit.store(true)
+    check probe(ctx, 17, 2)[1].note == "none ok"
+    check ownerReleases.load == 1
+    check fakeCallReleases.load == 1
+    check " done= " in ctx.report
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G339] destroy releases a handle with an outstanding call and a live subscription":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    check probe(ctx, 13, 1)[1].note == "submitted"
+    deliver(1)
+    ledgerDestroy(ctx)
+    check fakeReleased.load
+    check fakeCallReleases.load == 1
