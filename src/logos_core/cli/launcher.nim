@@ -24,8 +24,9 @@
 ##     execution revision in `error`) → 4 with its classification.
 ##   It acts again whenever the record is `unloaded` or `error` again, with
 ##   backoff (20 to 500 ms) until the timeout, then 2 naming the last state
-##   read. It does not depend on when `start_module` answers (TF-20): it waits
-##   for the socket. No record: this logosd has no CLI module.
+##   read; a readable `cancelFd` during a backoff is 130. It does not depend
+##   on when `start_module` answers (TF-20): it waits for the socket. No
+##   record: this logosd has no CLI module.
 ## - **Send.** One request, its descriptors (stdout, stderr, each `@FILE`) on
 ##   the frame's first byte; `deadline_ms` is what remains of the timeout
 ##   after activation. `busy` is retried until the timeout; `closing` goes
@@ -61,7 +62,9 @@ type
     stdoutFd*, stderrFd*: cint
     files*: seq[cint] ## one per `@FILE` argument, at indices 2, 3, …
     timeoutMs*: int ## connection, activation and busy retries
-    cancelFd*: cint ## readable: the user interrupted; -1: none
+    cancelFd*: cint
+      ## readable: the user interrupted (130 before the command is taken, the
+      ## half-close after); -1: none
     credOf*: CredFn ## the listener's credentials; nil: `peerOf`
 
   LaunchFailure* = object ## What the launcher prints itself.
@@ -75,13 +78,36 @@ func failure(exit: int, message: string, code = ""): LaunchFailure =
 proc left(deadline: MonoTime): int =
   max(1, int(inMilliseconds(deadline - getMonoTime())))
 
-proc pause(ms: var int, deadline: MonoTime): bool =
-  ## Sleeps `ms` (then doubles it, at most 500) unless that passes the deadline.
+type Paused = enum
+  psSlept
+  psDeadline ## the pause would pass the deadline
+  psCancelled ## `cancelFd` is readable: the user interrupted
+
+proc pause(ms: var int, deadline: MonoTime, cancelFd: cint): Paused =
+  ## Waits `ms` (then doubles it, at most 500) unless that passes the
+  ## deadline; a readable `cancelFd` ends the wait.
   if getMonoTime() + initDuration(milliseconds = ms) >= deadline:
-    return false
+    return psDeadline
+  when defined(posix):
+    if cancelFd >= 0:
+      let until = getMonoTime() + initDuration(milliseconds = ms)
+      ms = min(ms * 2, 500)
+      while true:
+        let wait = int(inMilliseconds(until - getMonoTime()))
+        if wait <= 0:
+          return psSlept
+        var p = TPollfd(fd: cancelFd, events: POLLIN)
+        let n = poll(addr p, 1, cint(wait))
+        if n > 0:
+          return psCancelled
+        if n == 0 or errno != EINTR:
+          return psSlept
   sleep(ms)
   ms = min(ms * 2, 500)
-  true
+  psSlept
+
+func interrupted(): LaunchFailure =
+  failure(ExitInterrupted, "interrupted")
 
 proc connectCli(l: Launch, deadline: MonoTime): Result[cint, string] =
   let cred = if l.credOf.isNil: peerOf else: l.credOf
@@ -270,7 +296,12 @@ proc activate(l: Launch, deadline: MonoTime): Result[cint, LaunchFailure] =
     of akStart, akRecover:
       if ?l.lifecycle(act, deadline):
         acted = Opt.some(act.revision)
-    if not pause(ms, deadline):
+    case pause(ms, deadline, l.cancelFd)
+    of psSlept:
+      discard
+    of psCancelled:
+      return err(interrupted())
+    of psDeadline:
       return err(
         failure(
           ExitUnreachable,
@@ -382,13 +413,15 @@ proc launch*(l: Launch): Result[int, LaunchFailure] =
         "lcn_call refused (" & reasonText(e.reason.kind) & ")" &
         (if e.message.isSome: ": " & e.message.get else: "")
       case e.reason.kind
-      of LcnCliRefusedReasonChoiceKind.Busy:
-        if not pause(ms, deadline):
-          return err(failure(ExitUnreachable, text & " until the timeout"))
-      of LcnCliRefusedReasonChoiceKind.Closing:
-        # [G344; plan §3.3] Through activation: wait on `stopping`, start
-        # from `unloaded`.
-        if not pause(ms, deadline):
+      of LcnCliRefusedReasonChoiceKind.Busy, LcnCliRefusedReasonChoiceKind.Closing:
+        # [G344; plan §3.3] `busy` is retried; `closing` goes through
+        # activation again: wait on `stopping`, start from `unloaded`.
+        case pause(ms, deadline, l.cancelFd)
+        of psSlept:
+          discard
+        of psCancelled:
+          return err(interrupted())
+        of psDeadline:
           return err(failure(ExitUnreachable, text & " until the timeout"))
       else:
         return err(failure(ExitRefused, text))

@@ -258,6 +258,25 @@ proc generatedLcnCallKit*(): Result[string, string] =
   let (set, opts) = ?lcnCallKitParts()
   kitModule(set, opts, false)
 
+const lcnCallExportsDir* = "src/logos_core/cli"
+
+func lcnCallExportsPath*(kind: ExportListKind): string =
+  ## [DECISIONS G341] Where its export list for `kind` is committed.
+  lcnCallExportsDir & "/lcn_call_kit." & (
+    case kind
+    of elDarwin: "exports"
+    of elGnu: "map"
+  )
+
+proc generatedLcnCallExports*(kind: ExportListKind): Result[string, string] =
+  ## [DECISIONS G341] The export list `liblcn_call` links with: the module ABI
+  ## and nothing else.
+  let (set, opts) = ?lcnCallKitParts()
+  let name = exportListName(set, kind)
+  if lcnCallExportsDir & "/" & name != lcnCallExportsPath(kind):
+    return err("lcn-gen names it " & name)
+  ok(exportList(name, ?kitSymbols(set, opts, false), kind))
+
 const
   storeTypesPath* = "src/logos_core/runtime/store_types.nim"
   storePrimary* = "src/logos_core/runtime/store.cddl"
