@@ -33,7 +33,9 @@
 ##   less than the command's deadline, `renew_route` and a new handle: a
 ##   renewal does not extend an existing session (R l.3337-3338), so new
 ##   operations go to the new handle and the old one is released once its
-##   operations have ended.
+##   operations have ended. One command renews at a time; another that needs
+##   the renewal waits for it rather than lease a handle whose session may
+##   end before its deadline.
 ## - **End (G348; plan §3.5 step 8, rule 1).** An ended handle is not leased:
 ##   the next command establishes a new route. `drop` takes a route out of use
 ##   for a retry (rule 2) and has it closed by `reap`.
@@ -93,6 +95,7 @@ type
 
   TableObj = object
     lock: Lock
+    renewed: Cond ## signalled, under `lock`, when a slot's renewal ends
     establishing: Lock ## one establishment at a time
     subHook: LogosSubscriptionEndHandler ## N-2c's streams; nil in N-2b
     subHookData: pointer
@@ -164,6 +167,7 @@ proc requestKey*(): Result[string, Failure] =
 proc newRouteTable*(rc: ptr LogosRuntimeControlBinding, idleMs: int): RouteTable =
   result = cast[RouteTable](allocShared0(sizeof(TableObj)))
   initLock(result.lock)
+  initCond(result.renewed)
   initLock(result.establishing)
   result.rc = rc
   result.idleMs = idleMs
@@ -438,6 +442,7 @@ proc renew(t: RouteTable, i: int) =
   withLock t.lock:
     let s = addr t.slots[i]
     s.renewing = false
+    broadcast(t.renewed)
     if fresh != nil:
       var placed = false
       for r in s.retired.mitems:
@@ -468,10 +473,14 @@ proc acquire*(
   var renewSlot = -1
   withLock t.lock:
     let i = t.find(spec.key)
-    if i >= 0:
-      let s = addr t.slots[i]
-      if not s.renewing and s[].needsRenewal(wallMs(), deadlineMs):
-        s.renewing = true
+    if i >= 0 and t.slots[i].needsRenewal(wallMs(), deadlineMs):
+      if t.slots[i].renewing:
+        # [G348] Another command renews it: wait for that renewal, which
+        # always ends (`renew` clears the flag on every path).
+        while t.slots[i].renewing:
+          wait(t.renewed, t.lock)
+      else:
+        t.slots[i].renewing = true
         renewSlot = i
   if renewSlot >= 0:
     t.renew(renewSlot)
@@ -592,6 +601,7 @@ proc closeTable*(t: RouteTable) =
   for d in detached.mitems:
     t.finish(d)
   deinitLock(t.establishing)
+  deinitCond(t.renewed)
   deinitLock(t.lock)
   deallocShared(t)
 

@@ -2,7 +2,7 @@
 ## DECISIONS G343-G350; docs/DAEMON.md §7a; plan §5, L-1 to L-10 and L-13).
 ##
 ## Each case makes a session with `logosctl init`'s library function: the
-## meter, shapes, vault and bulk kit modules hosted as operator providers,
+## meter, shapes, vault (orc and arc only, G277) and bulk kit modules hosted as operator providers,
 ## operator rules granting `lcn_call` the first three (and `discover` alone on
 ## bulk), and `cli.artifact` naming the library `support/clibuild` builds. It
 ## runs `assembleDaemon` and `startDaemon` as logosd's `main` does, and runs
@@ -30,6 +30,7 @@ when defined(posix):
   import logos_sdk/cbor
   import logos_sdk/crypto/blake3
   from logos_sdk/base/perthread import releasePerThread
+  from logos_sdk/base/wipe import ChannelsMove
   from logos_sdk/iface/accept import acceptContractSet
   import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/[rc_arms, rc_types]
   from ../src/logos_core/durable import DurableLock, release
@@ -60,7 +61,13 @@ when defined(posix):
     VaultInstance = "vault-1"
     BulkInstance = "bulk-1"
     MeterState = "meter-state"
-    Providers = [MeterInstance, ShapesInstance, VaultInstance, BulkInstance]
+    # Started at boot. [DECISIONS G277] A refc Runtime or Module Host starts no
+    # marked provider, so `vault-1` is only declared there and L-5 skips.
+    Providers =
+      when ChannelsMove:
+        @[MeterInstance, ShapesInstance, VaultInstance, BulkInstance]
+      else:
+        @[MeterInstance, ShapesInstance, BulkInstance]
     ZeroHex32 = repeat("00", 32)
     ReflectRequest =
       "{\"a\": 7, \"b\": -5, \"c\": \"hi\", \"d\": \"" & ZeroHex32 &
@@ -208,7 +215,7 @@ when defined(posix):
       ]
     )
     var o = dc.orchestration.get(LcnDcOrchestration())
-    o.start = Opt.some(@Providers)
+    o.start = Opt.some(Providers)
     dc.orchestration = Opt.some(o)
     var rules =
       @[grant(meterRoot, Full), grant(shapesRoot, Full), grant(vaultRoot, Full)]
@@ -656,22 +663,26 @@ when defined(posix):
       check "  read " in t.output
 
     test "L-5: a marked method is refused before any route; an unmarked one of the same provider is called":
-      l = boot(newSession())
-      let d = l.run(describeOf("vault_module"))
-      check d.exit == 0
-      check d.env{"result", "methods"}.getElems.anyIt(
-        it{"method"}.getStr == "store" and it{"marked"}.getBool
-      )
-      let s = l.run(callOf("vault_module", "store", [("slot", "1"), ("secret", "00")]))
-      checkpoint s.said
-      check s.exit == 1
-      check "store" in s.env{"message"}.getStr
-      check l.cliRoutes.len == 0
-      let p = l.run(callOf("vault_module", "peek", [("slot", "1")]))
-      checkpoint p.said
-      check p.exit == 0
-      check p.env{"result", "stored"}.getBool == false
-      check l.cliRoutes.len == 1
+      when ChannelsMove:
+        l = boot(newSession())
+        let d = l.run(describeOf("vault_module"))
+        check d.exit == 0
+        check d.env{"result", "methods"}.getElems.anyIt(
+          it{"method"}.getStr == "store" and it{"marked"}.getBool
+        )
+        let s =
+          l.run(callOf("vault_module", "store", [("slot", "1"), ("secret", "00")]))
+        checkpoint s.said
+        check s.exit == 1
+        check "store" in s.env{"message"}.getStr
+        check l.cliRoutes.len == 0
+        let p = l.run(callOf("vault_module", "peek", [("slot", "1")]))
+        checkpoint p.said
+        check p.exit == 0
+        check p.env{"result", "stored"}.getBool == false
+        check l.cliRoutes.len == 1
+      else:
+        skip() # [DECISIONS G277] a refc build starts no marked provider
 
     test "[BCP-0089] L-6: the route is lcn_call's, to the hosted provider; the launcher gets an exit status and the output, no route":
       l = boot(newSession())
@@ -771,8 +782,12 @@ when defined(posix):
         check mine[0] notin hostPids()
 
     test "L-10: calls past a short decision validity, concurrent calls on one route, an idle close, and a call after the provider restarted":
-      let validity = 2_000 * Slow
-      let idle = 3 * validity
+      # [IMPL] A decision takes up to about 1.5 s on a loaded host (refc, or a
+      # load of 100), and its validity runs from it. With 8 s and a command
+      # every second, the next command renews the route before it ends; the
+      # idle close comes only after the calls stop.
+      let validity = 8_000 * Slow
+      let idle = validity
       l = boot(newSession(Shape(validityMs: validity, routeIdleMs: idle)))
       check l.run(meterRead(7)).exit == 0
       let first = l.cliRoutes
@@ -787,7 +802,7 @@ when defined(posix):
         checkpoint r.said
         check r.exit == 0
         inc calls
-        sleep(validity div 4)
+        sleep(validity div 8)
       let renewed = l.cliRoutes
       check renewed.len == 1
       if first.len == 1 and renewed.len == 1:
