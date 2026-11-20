@@ -9,7 +9,7 @@ import logos_sdk/testing/testdirs
 type Vector = object
   hex, expect, note, diag: string
   dataModel: string
-    ## the class in the generic data model (`allowFloats`), where it differs
+    ## the class in the generic data model (`genericOptions`), where it differs
 
 proc vectors(): seq[Vector] =
   let root = parseJson(readRepoFile(vectorDir / "cbor/decode.json"))
@@ -38,15 +38,21 @@ proc classOf(r: Result[CborValue, CborError]): string =
 proc enc(v: CborValue): string =
   encodeCbor(v).toHex
 
+func genericOptions(): DecodeOptions =
+  ## The generic CBOR data model: floats, tags and every simple value decode.
+  result = defaultDecodeOptions()
+  result.allowFloats = true
+  result.allowExtended = true
+
 suite "cbor: oracle vectors (sdk/tests/vectors/cbor/decode.json)":
   let all = vectors()
 
   test "[IFC-0408] [IFC-0417] [CDE-0136] [CDE-0137] every accepted item re-encodes to the same bytes":
     var n = 0
     for v in all:
-      if v.expect != "ok":
+      if v.dataModel != "ok":
         continue
-      let r = decodeCbor(hexBytes(v.hex))
+      let r = decodeCbor(hexBytes(v.hex), genericOptions())
       check r.isOk
       if r.isOk:
         check enc(r.get) == v.hex
@@ -93,21 +99,66 @@ suite "cbor: oracle vectors (sdk/tests/vectors/cbor/decode.json)":
           check text.kind == ckText and not text.validUtf8
           check text.getText.isNone
 
-  test "[IFC-0919] a floating-point item is rejected at any depth; the generic data model decodes it":
+  test "[IFC-0976] a float, tag, null, undefined or other simple value is rejected at any depth; the generic data model decodes it":
     var n = 0
     for v in all:
       if v.dataModel != v.expect:
         checkpoint v.hex & " (" & v.note & ")"
         let data = hexBytes(v.hex)
         check classOf(decodeCbor(data)) == "non-deterministic"
-        var opts = defaultDecodeOptions()
-        opts.allowFloats = true
-        let generic = decodeCbor(data, opts)
+        let generic = decodeCbor(data, genericOptions())
         check classOf(generic) == v.dataModel
         if generic.isOk:
           check enc(generic.get) == v.hex
         inc n
     check n >= 20
+
+  test "[IFC-0976] [TXT-0143] each prohibited value is non-deterministic alone, nested and as a map key; false and true decode":
+    for hexItem in ["c000", "d81800", "f6", "f7", "f0", "f820"]:
+      checkpoint hexItem
+      for wrapped in [
+        hexItem,
+        "81" & hexItem,
+        "8181" & hexItem,
+        "a16161" & hexItem,
+        "a1" & hexItem & "00",
+      ]:
+        check classOf(decodeCbor(hexBytes(wrapped))) == "non-deterministic"
+        check classOf(decodeCbor(hexBytes(wrapped), genericOptions())) == "ok"
+    check decodeCbor(hexBytes("f4")).get == cbor(false)
+    check decodeCbor(hexBytes("f5")).get == cbor(true)
+    check decodeCbor(hexBytes("82f4f5")).isOk
+
+  test "[IFC-0976] floats and the other prohibited values are asked for apart":
+    let taggedFloat = hexBytes("c1fb41d452d9ec200000")
+    var floats = defaultDecodeOptions()
+    floats.allowFloats = true
+    var extended = defaultDecodeOptions()
+    extended.allowExtended = true
+    check classOf(decodeCbor(taggedFloat, floats)) == "non-deterministic"
+    check classOf(decodeCbor(taggedFloat, extended)) == "non-deterministic"
+    check classOf(decodeCbor(taggedFloat, genericOptions())) == "ok"
+    check classOf(decodeCbor(hexBytes("f6"), floats)) == "non-deterministic"
+    check classOf(decodeCbor(hexBytes("f93e00"), extended)) == "non-deterministic"
+
+  test "[IFC-0976] a break is never a tag's content, and malformed input wins over a prohibited value":
+    for h in ["9fc0ff", "bfc0ff", "9fd9d9f7ff", "bf00c0ff", "c0ff", "81c0ff", "c0"]:
+      checkpoint h
+      check classOf(decodeCbor(hexBytes(h))) == "malformed"
+      check classOf(decodeCbor(hexBytes(h), genericOptions())) == "malformed"
+    # A prohibited value ahead of a malformed item does not hide it.
+    check classOf(decodeCbor(hexBytes("82c000ff"))) == "malformed"
+    check classOf(decodeCbor(hexBytes("82f61c"))) == "malformed"
+
+  test "[IFC-0976] a chain of tags costs a strict decode no bound: it is non-deterministic at any length":
+    var chain: seq[byte]
+    for _ in 0 ..< 20_000:
+      chain.add(0xc0'u8)
+    chain.add(0x00'u8)
+    check classOf(decodeCbor(chain)) == "non-deterministic"
+    check classOf(decodeCbor(chain, genericOptions())) == "too-deep"
+    # With nothing after the tags the item is incomplete.
+    check classOf(decodeCbor(chain[0 .. ^2])) == "malformed"
 
   test "[IMPL-DECISION G59] [IFC-0923] [IFC-0926] arrays and maps nest at most 1024 deep by default; tags are bounded apart":
     check DefaultMaxDepth >= MinMaxDepth
@@ -115,7 +166,8 @@ suite "cbor: oracle vectors (sdk/tests/vectors/cbor/decode.json)":
       if v.expect == "too-deep" or v.note.contains("nested"):
         checkpoint v.note
         check classOf(decodeCbor(hexBytes(v.hex))) == v.expect
-    var opts = defaultDecodeOptions()
+        check classOf(decodeCbor(hexBytes(v.hex), genericOptions())) == v.dataModel
+    var opts = genericOptions()
     opts.maxDepth = 2
     check classOf(decodeCbor(hexBytes("818100"), opts)) == "ok"
     check classOf(decodeCbor(hexBytes("81818100"), opts)) == "too-deep"
@@ -301,8 +353,7 @@ suite "cbor: fuzz smoke (fixed seed)":
       else:
         cborFloat(rng.rand(1e6) - 5e5)
 
-    var opts = defaultDecodeOptions()
-    opts.allowFloats = true # the generator draws floats too
+    let opts = genericOptions() # the generator draws floats and tags too
     for _ in 0 ..< 2_000:
       let v = gen(0)
       let bytes = encodeCbor(v)

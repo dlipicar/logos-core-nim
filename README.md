@@ -1,17 +1,16 @@
 # logos-core-nim
 
 A Nim implementation of the Logos Core module specs: logos-lips, branch
-`draft/logos-core-module-specs`, files `docs/logos-core/raw/spec-*.md`, pinned at `6a4dfa28` (since 2026-11-10; the work
-before that was built against `f4f83471`).
+`draft/logos-core-module-specs`, files `docs/logos-core/raw/spec-*.md`, pinned at `6cac8335` (since the re-pin,
+2026-11-18 to 2026-11-20; `6a4dfa28` from 2026-11-10, and the work before that was built against `f4f83471`).
 
 The specs are being revised, so the work is ordered by how settled each area is
 ([docs/SPEC-STATUS.md](docs/SPEC-STATUS.md)). Built so far:
 
 - Tier 1: deterministic CBOR, BLAKE3, cdCDDLe, the hash profile and the commitment model.
 - Tier 2: INTERFACE schema acceptance, call surfaces, payload validation and outcomes, the common
-  schema, and `lcn-gen`, which generates C headers (C mapping revision 3: types, method typedefs and, for a module
-  binding, its provider functions and module symbols) and Nim types with codecs. Generated C headers are stamped
-  `PROVISIONAL ABI`. `lcn-gen cddl` goes the other way, from an explicit C header set back to its CDDL documents
+  schema, and `lcn-gen`, which generates C headers (C mapping revision 4: types, method typedefs and, for a module
+  binding, its provider functions and module symbols) and Nim types with codecs. `lcn-gen cddl` goes the other way, from an explicit C header set back to its CDDL documents
   and module binding (Tier 5 step 5-1).
 - Tier 3, without I/O: the TRANSPORT envelope, framing, Hello and route tickets, payload
   commitments, cancellation and multiplexing as codecs and state machines; and the Package Manager's
@@ -78,7 +77,7 @@ The specs are being revised, so the work is ordered by how settled each area is
   it and its value roots out of diagnostics, records and the carrier, and refuse a call whose
   decision would retain one; a contract that marks a payload is routed on every local path, hosted
   ends included, in an orc build (I92). A refc build of the Runtime or the host refuses it instead.
-  INTERFACE §1.4.1 and SEC-0057 are claimed for orc builds, with the non-claims in
+  INTERFACE §1.4.1 is claimed for orc builds, with the non-claims in
   [docs/CONFORMANCE.md](docs/CONFORMANCE.md).
 - Tier 4b, step 4b-6: `logosd` and `logosctl`. `logosd` hosts one Runtime for a session directory
   (`$HOME/.logos-core` by default): it checks `daemon-config.v1` and the trust file, composes the

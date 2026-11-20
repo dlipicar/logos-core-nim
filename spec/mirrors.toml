@@ -631,6 +631,9 @@ package = "core"
 file = "spec-module-package-manager.md"
 section = "§4"
 
+# PM §4.3: the signing profile. Its block opens with the Package Manager's
+# `_module` rule (PM l.493), which heads the record and claim schemas the
+# package/ modules validate against.
 [[mirror]]
 out = "PKG/4.3.signing-profile.cddl"
 package = "core"
@@ -660,6 +663,13 @@ package = "core"
 file = "spec-module-package-manager.md"
 section = "§6"
 
+# PM §10: the installed artifact record.
+[[mirror]]
+out = "PKG/10.installed-artifact.cddl"
+package = "core"
+file = "spec-module-package-manager.md"
+section = "§10"
+
 # PM §11: the resolved dependency edge an installed record keeps.
 [[mirror]]
 out = "PKG/11.resolved-dependency.cddl"
@@ -667,13 +677,20 @@ package = "core"
 file = "spec-module-package-manager.md"
 section = "§11"
 
-# PM §15: the Package Manager module document; its `_module` rule heads the
-# record schema the package/ modules validate against.
+# PM §15: the Package Manager's methods.
 [[mirror]]
 out = "PKG/15.methods.cddl"
 package = "core"
 file = "spec-module-package-manager.md"
 section = "§15"
+
+# PM §12: the Runtime handoff records, new at 6cac8335. Written by re-pin step P7a for the
+# App A test (moved from P8, which builds the records).
+[[mirror]]
+out = "PKG/12.runtime-handoff.cddl"
+package = "core"
+file = "spec-module-package-manager.md"
+section = "§12"
 
 # PM §14: the package error codes the package/ modules report.
 [[mirror]]
@@ -681,6 +698,15 @@ out = "PKG/14.package-errors.cddl"
 package = "core"
 file = "spec-module-package-manager.md"
 section = "§14"
+
+# PM App A: the complete `logos.package_manager` contract schema in one block. The
+# section blocks above are excerpts of it, in the same order, and it governs (PM
+# l.1842-1845); test_package's pkg.appendix suite compares them.
+[[mirror]]
+out = "PKG/app-a.contract.cddl"
+package = "core"
+file = "spec-module-package-manager.md"
+section = "App A"
 
 # HASH App B.4: imported reference context (spec 6a4dfa28) ---------------------
 
@@ -801,7 +827,51 @@ section = "§9.2"
 out = "RNT/9.3.runtime-control.cddl"
 package = "sdk"
 file = "spec-module-runtime.md"
-section = "§9.3"
+section = "§9.3.2"
+
+# RUNTIME §9.3.7: remote enrollment, new at 6cac8335 (re-pin P4a).
+[[mirror]]
+out = "RNT/9.3.7.runtime-enrollment.cddl"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "§9.3.7"
+
+# RUNTIME App B: the Runtime Control record examples, each decoded by
+# sdk/tests/test_rc_schema.nim (re-pin P4a; RUN-1203 to RUN-1206, RUN-1208).
+[[mirror]]
+out = "RNT/app-b.1.runtime-endpoint.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.1"
+lang = "text"
+
+[[mirror]]
+out = "RNT/app-b.2.provider-address.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.2"
+lang = "text"
+
+[[mirror]]
+out = "RNT/app-b.3.local-module-record.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.3"
+lang = "text"
+
+[[mirror]]
+out = "RNT/app-b.4.facade-module-record.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.4"
+lang = "text"
+
+[[mirror]]
+out = "RNT/app-b.5.facade-route.edn"
+package = "sdk"
+file = "spec-module-runtime.md"
+section = "App B.5"
+lang = "text"
 
 [[mirror]]
 out = "RNT/13.host-handle.h"
@@ -879,6 +949,14 @@ package = "core"
 file = "spec-module-capability-authority.md"
 section = "§9.1"
 
+# Appendix A, the whole contract in one block (CA l.1512-1514). Not generated from: the
+# nine blocks above are, and test_ca_schema checks they are its excerpts, in order.
+[[mirror]]
+out = "CAP/app-a.contract.cddl"
+package = "core"
+file = "spec-module-capability-authority.md"
+section = "App A"
+
 # MODULE LOADER (Tier 4b step 4b-1; DECISIONS I89) ----------------------------------
 # The contract's CDDL blocks in spec order: `_module` (Abstract), then §3 to §10. The
 # generated types and kit join them as one primary document (tests/support/genfixtures_core.nim).
@@ -948,3 +1026,12 @@ out = "LDR/10.errors.cddl"
 package = "core"
 file = "spec-module-loader.md"
 section = "§10"
+
+# Appendix A, the whole contract in one block (LOADER l.737-739). Not generated from, and
+# not one of the pinned roots' parts: test_ldr_schema checks the blocks above are its
+# excerpts, in order, with the same root.
+[[mirror]]
+out = "LDR/app-a.contract.cddl"
+package = "core"
+file = "spec-module-loader.md"
+section = "App A"

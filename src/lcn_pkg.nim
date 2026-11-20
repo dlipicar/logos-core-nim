@@ -177,14 +177,20 @@ proc canonicalize(m: CborValue) =
   let byText = proc(field: string): proc(x: CborValue): seq[byte] =
     proc(x: CborValue): seq[byte] =
       bytesOf(x.text(field))
+  let byBytes = proc(x: CborValue): seq[byte] =
+    encodeCbor(x)
   m.sortItems("modules", byText("module"))
   m.sortItems("dependencies", byText("package"))
+  for d in m.lookup("dependencies").get(cborArray()).items:
+    d.sortItems("contracts", byBytes)
+  m.sortItems(
+    "contract_documents",
+    proc(x: CborValue): seq[byte] =
+      encodeCbor(x.lookup("commitment").get(cborNull())),
+  ) # `input_artifacts` keep the order written (UF-15)
   for d in m.lookup("modules").get(cborArray()).items:
-    d.sortItems(
-      "implements",
-      proc(x: CborValue): seq[byte] =
-        encodeCbor(x),
-    )
+    d.sortItems("implements", byBytes)
+    d.sortItems("extends", byBytes)
     d.sortItems(
       "requires",
       proc(x: CborValue): seq[byte] =

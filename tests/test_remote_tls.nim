@@ -26,6 +26,7 @@ type Seen = ref object
   peers: seq[string]
   bindings: seq[seq[byte]]
   sni: seq[string]
+  alpn: seq[string]
   versions: seq[int]
   readErrors: seq[string]
   frames: int
@@ -35,6 +36,7 @@ proc echoHandler(seen: Seen): StreamHandler =
   result = proc(s: TlsStream): Future[void] {.async: (raises: []), gcsafe.} =
     seen.peers.add(s.peer.runtime)
     seen.sni.add(s.engine.serverNameSeen)
+    seen.alpn.add(s.engine.alpnSelected)
     seen.versions.add(s.engine.version)
     let b = s.takeChannelBinding()
     seen.bindings.add(
@@ -274,6 +276,20 @@ suite "tls.params":
     cfg.frameLimit = 1024
     check cfg.check().isErr
 
+  test "[TRN-0396] [TXT-0128] tls-tcp selects logos.remote.tls-tcp: an address naming another profile is refused":
+    let base = TlsTcpAddress(host: "127.0.0.1", port: 9)
+    check base.check().isOk
+    var named = base
+    named.profile = TlsTcpProfile
+    check TlsTcpProfile == "logos.remote.tls-tcp"
+    check named.check().isOk
+    for other in [
+      "logos.remote.quic", "logos.local.unix-stream", "logos.remote.tls-tcp "
+    ]:
+      var wrong = base
+      wrong.profile = other
+      check wrong.check().isErr
+
 suite "tls.handshake":
   test "[TRN-0219] [TRN-0220] [TRN-0228] [TRN-0233] [IMPL-DECISION G326] mutual TLS 1.3 with ecdsa_secp256r1_sha256 both ways; each side learns the other's Runtime; a 32-byte channel binding equal at both ends and new per connection":
     let seen = Seen()
@@ -448,6 +464,47 @@ suite "tls.handshake":
     check seen.peers.len == 2
     waitFor s1.close()
     waitFor s2.close()
+    waitFor l.close()
+
+  test "[TRN-0399] tls-tcp negotiates no ALPN: neither end selects a protocol":
+    let seen = Seen()
+    let l = listen(b, seen, [a])
+    let s = l.dial(a, b).get
+    check s.roundTrip(@[1'u8]).isOk
+    check s.engine.alpnSelected == ""
+    check seen.alpn == @[""]
+    waitFor s.close()
+    waitFor l.close()
+
+  test "[TRN-0396] [TXT-0128] a client refuses an address whose profile tls-tcp does not select, before connecting; the selected one connects":
+    let seen = Seen()
+    let l = listen(b, seen, [a])
+    var address = l.addressOf()
+    address.profile = "logos.remote.quic"
+    let r = waitFor connect(
+      address,
+      clientContext(a),
+      expectCheck(b),
+      keySigner(a.key, tlsClient),
+      fastConfig(),
+    )
+    check r.isErr
+    if r.isErr:
+      check "profile" in r.error
+    address.profile = TlsTcpProfile
+    let s = waitFor connect(
+      address,
+      clientContext(a),
+      expectCheck(b),
+      keySigner(a.key, tlsClient),
+      fastConfig(),
+    )
+    check s.isOk
+    if s.isOk:
+      check s.get.roundTrip(@[2'u8]).isOk
+      waitFor s.get.close()
+    check seen.peers == @[IdA]
+    check l.failedHandshakes == 0
     waitFor l.close()
 
 suite "tls.streams":
@@ -1260,7 +1317,54 @@ when (defined(linux) or defined(macosx)) and not defined(android) and not define
         check report.getOrDefault("binding") == hexOf(binding)
         bench.remove()
 
-# G327: erasure of decrypted data -----------------------------------------------------------
+    test "[TRN-0399] [IMPL-DECISION G128] our client offers no ALPN to a pyOpenSSL server that would select one":
+      if peerPython().len == 0:
+        skip()
+      else:
+        let bench = newPeerBench(a.cert)
+        var peer = bench.startServer(["--alpn"])
+        let r = peer.dialPeer(a, peerTrust(a, bench.cert))
+        checkpoint(if r.isErr: r.error else: "connected")
+        check r.isOk
+        if r.isOk:
+          let s = r.get
+          check s.engine.alpnSelected == ""
+          let echoed = s.roundTrip(@[3'u8])
+          check echoed.isOk and echoed.get == @[3'u8]
+          waitFor s.close()
+        let report = peer.finish()
+        checkpoint $report
+        check report.getOrDefault("exit") == "0"
+        check report.getOrDefault("handshake") == "ok"
+        check report.getOrDefault("alpn_offered") == "none"
+        bench.remove()
+
+    test "[TRN-0399] [IMPL-DECISION G128] a pyOpenSSL client that offers ALPN to our server gets none selected and still connects":
+      if peerPython().len == 0:
+        skip()
+      else:
+        let bench = newPeerBench(a.cert)
+        let seen = Seen()
+        let l = listen(
+          a,
+          seen,
+          [],
+          config = fastConfig(10_000 * Slow),
+          check = anyEnrolled(peerTrust(a, bench.cert), fixedClock(nowPosix())),
+        )
+        var peer = bench.startClient(l.localPort, ["--alpn"])
+        let report = peer.finish()
+        checkpoint $report
+        check report.getOrDefault("exit") == "0"
+        check report.getOrDefault("handshake") == "ok"
+        check report.getOrDefault("alpn") == "none"
+        check report.getOrDefault("echo") == "ok"
+        check seen.peers == @[PeerId]
+        check seen.alpn == @[""]
+        waitFor l.close()
+        bench.remove()
+
+# G276: the carrier's erasure of its own copies of decrypted data ------------------------
 
 proc arm(patterns: sink seq[seq[byte]]) =
   ## The patterns are taken and zeroed once registered: pass copies.
@@ -1293,49 +1397,7 @@ proc wipingHandler(sink: Sink): StreamHandler =
     sink.done = true
 
 suite "tls.erasure":
-  test "[IMPL-DECISION G327] this build's BoringSSL zeroes its record buffers, so the carrier takes marked payloads":
-    check recordBuffersErased
-    check carrierErases()
-    check requireErasure().isOk
-    var cfg = fastConfig()
-    cfg.carriesMarked = true
-    let seen = Seen()
-    let l = listen(b, seen, [a], config = cfg)
-    let s = l.dial(a, b, config = cfg).get
-    check s.roundTrip(@[1'u8]).isOk
-    waitFor s.close()
-    waitFor l.close()
-
-  test "[IMPL-DECISION G277] [IMPL-DECISION G327] a carrier whose TLS library leaves records unerased refuses marked payloads, on both sides":
-    recordErasureMissingForTests = true
-    var cfg = fastConfig()
-    cfg.carriesMarked = true
-    check not carrierErases()
-    let r = serve(
-      "127.0.0.1",
-      0,
-      serverContext(b),
-      pinnedCheck([a]),
-      keySigner(b.key, tlsServer),
-      cfg,
-      echoHandler(Seen()),
-    )
-    check r.isErr
-    check "BORINGSSL_ZERO_RECORD_BUFFERS" in r.error
-    let seen = Seen()
-    let l = listen(b, seen, [a])
-    let refused = l.dial(a, b, config = cfg)
-    check refused.isErr
-    check MarkedUnsupported in refused.error
-    # unmarked traffic is unaffected
-    let s = l.dial(a, b).get
-    check s.roundTrip(@[2'u8]).isOk
-    recordErasureMissingForTests = false
-    waitFor s.close()
-    waitFor l.close()
-    check seen.peers == @[IdA]
-
-  test "[IMPL-DECISION G327] no released block holds decrypted data: BoringSSL's record buffers and the carrier's own copies are erased":
+  test "[IMPL-DECISION G276] no released block holds decrypted data from the carrier's own copies (BoringSSL's C++ blocks are zeroed unscanned; its record buffers keep plaintext)":
     if not wipeAuditScans():
       skip()
     else:

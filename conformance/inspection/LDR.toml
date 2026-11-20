@@ -6,7 +6,7 @@
 
 [[item]]
 ids = ["LDR-0006"]
-reason = "A negative over what can be bound (LOADER l.23). The engine binds only the instance it established itself from its reserved registration (runtime/engine.nim `establishLoader`, `checkLoader`, `loaderBindingRefusal`: a local `ready` instance whose primary contract is the pinned Module Loader contract). Host configuration, `create_module` and module declarations cannot name the reserved instance id, module name or static binding (runtime/plumbing.nim `namesLoader`, checked in runtime/host_config.nim and runtime/engine.nim), and no remote facade or external host service exists in this revision (inspection item RUN-0019). Tests [LDR-0006] in tests/test_loader_engine.nim and tests/test_host.nim show the reserved names refused and routes to the Loader refused; the absence of any other binding path is a property of the code."
+reason = "A negative over what can be bound (LOADER l.25). The engine binds only the instance it established itself from its reserved registration (runtime/engine.nim `establishLoader`, `checkLoader`, `loaderBindingRefusal`: a local `ready` instance whose primary contract is the pinned Module Loader contract). Host configuration, `create_module` and module declarations cannot name the reserved instance id, module name or static binding (runtime/plumbing.nim `namesLoader`, checked in runtime/host_config.nim and runtime/engine.nim), and no remote facade or external host service exists in this revision (inspection item RUN-0019). Tests [LDR-0006] in tests/test_loader_engine.nim and tests/test_host.nim show the reserved names refused and routes to the Loader refused; the absence of any other binding path is a property of the code."
 
 [[item]]
 ids = ["LDR-0010"]
@@ -14,7 +14,7 @@ reason = "A negative over the Loader's code (LOADER l.102). src/logos_core/loade
 
 [[item]]
 ids = ["LDR-0022"]
-reason = "A duty of the language implementation (LOADER l.202). Nim exports the canonical C ABI only through an adapter: lcn-gen's kit (sdk/src/logos_sdk/codegen/kitgen.nim) generates the `_MODULE_*` exports for the Loader (src/logos_core/loader/logos_module_loader_kit.nim) and for every test fixture built with a kit (sdk/src/logos_sdk/testing/kitbuild.nim). The kit's own tests show the exported ABI; that this is the adapter the rule asks for is a fact about the build."
+reason = "A duty of the language implementation (LOADER l.203). Nim exports the canonical C ABI only through an adapter: lcn-gen's kit (sdk/src/logos_sdk/codegen/kitgen.nim) generates the `_MODULE_*` exports for the Loader (src/logos_core/loader/logos_module_loader_kit.nim) and for every test fixture built with a kit (sdk/src/logos_sdk/testing/kitbuild.nim). The kit's own tests show the exported ABI; that this is the adapter the rule asks for is a fact about the build."
 
 [[item]]
 ids = ["LDR-0042"]
@@ -26,12 +26,12 @@ reason = "Where constraints come from (LOADER l.425). Requests reach the Loader 
 
 [[item]]
 ids = ["LDR-0118"]
-reason = "A MAY about forced termination of the execution envelope (LOADER l.570). Nothing in this revision forces termination: `force_release` is never advertised (K7; the refusal is tested as LDR-0120 and LDR-0121 in tests/test_loader.nim), and direct execution has no envelope apart from the host process."
+reason = "A MAY about forced termination of the execution envelope (LOADER l.568). Nothing in this revision forces termination: `force_release` is never advertised (K7; the refusal is tested as LDR-0120 and LDR-0121 in tests/test_loader.nim), and direct execution has no envelope apart from the host process."
 
 [[item]]
 ids = ["LDR-0152"]
-reason = "A negative over the contract's encoding (LOADER l.699). The generated contract types (src/logos_core/loader/logos_module_loader_types.nim) hold no pointer or handle field: every field is a CBOR-mapped value (the pointers in that file are only its codec procedures' work arguments). Contexts and bindings cross between the Loader and the engine only in the side table (runtime/sidetable.nim; test [LDR-0152] [IMPL-DECISION G250] in tests/test_loader.nim), never in a request or response."
+reason = "A negative over the contract's encoding (LOADER l.698). The generated contract types (src/logos_core/loader/logos_module_loader_types.nim) hold no pointer or handle field: every field is a CBOR-mapped value (the pointers in that file are only its codec procedures' work arguments). Contexts and bindings cross between the Loader and the engine only in the side table (runtime/sidetable.nim; test [LDR-0152] [IMPL-DECISION G250] in tests/test_loader.nim), never in a request or response."
 
 [[item]]
 ids = ["LDR-0125"]
-reason = "A rule for a cleanup that cannot establish absence (LOADER l.586). The direct strategies establish it by `_MODULE_destroy` returning (DECISIONS I89). A hosted realization's release (src/logos_core/loader/hosted.nim `releaseHosted`) and a failed hosted start (`endHost`, l.418-421) return only once the host's end is confirmed: the host reaped and its process group gone (`kill(-pgid, 0)` is ESRCH), after SIGKILL to the group at the deadline (src/logos_core/runtime/hostsup.nim `awaitEnd`; DECISIONS G268, G275). So cleanup never returns without absence, and no failed realization is retained or returned for it. Tests S-9 ([RUN-0227]) and S-10 ([IMPL-DECISION G269]) in tests/test_hosted.nim show a host ended at a deadline: the realization is `unknown` until its end is confirmed, then `absent`, and the release succeeds."
+reason = "A rule for a cleanup that cannot establish absence (LOADER l.583). The direct strategies establish it by `_MODULE_destroy` returning (DECISIONS I89). A hosted realization's release (src/logos_core/loader/hosted.nim `releaseHosted`) and a failed hosted start (`endHost`, l.418-421) return only once the host's end is confirmed: the host reaped and its process group gone (`kill(-pgid, 0)` is ESRCH), after SIGKILL to the group at the deadline (src/logos_core/runtime/hostsup.nim `awaitEnd`; DECISIONS G268, G275). So cleanup never returns without absence, and no failed realization is retained or returned for it. Tests S-9 ([RUN-0227]) and S-10 ([IMPL-DECISION G269]) in tests/test_hosted.nim show a host ended at a deadline: the realization is `unknown` until its end is confirmed, then `absent`, and the release succeeds."

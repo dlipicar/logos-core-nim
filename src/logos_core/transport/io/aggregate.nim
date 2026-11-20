@@ -17,7 +17,7 @@
 ## | `maxInputBytes` (frame bodies held after establishment: being read, in a delayed-admission queue, or Events not yet released by the caller's owner) | loop | 256 MiB | reading pauses up to `admissionTimeout` (10 s), then ProtocolError TRANSPORT_ERROR, close |
 ## | `maxOutputBytes` (committed Responses and Events, and control frames while they fit) | loop | 256 MiB | as `connOutputBytes` |
 ## | `connOutputBytes` | conn | 2 × `peerFrameLimit` + `controlReserve` | Event: overflow, ProtocolError TRANSPORT_ERROR from the final slot, flush up to `closeLinger`, close; ok-Response: waits, not committed; control: the reserve, then ProtocolError TRANSPORT_ERROR and close |
-## | `controlReserve` (error Responses, SubscriptionResults, the Hello response) | conn | 64 KiB | ProtocolError TRANSPORT_ERROR from the final slot, close |
+## | `controlReserve` (error Responses, SubscriptionResults, SubscriptionEnds, the Hello response) | conn | 64 KiB | ProtocolError TRANSPORT_ERROR from the final slot, close |
 ## | `writeStallTimeout` | conn | 30 s | close without ProtocolError (not writable) |
 ## | `closeLinger` | conn | 1 s | close without finishing the flush |
 ## | `terminationDrain` (in-flight work after the session's authorization ends) | conn | 0 s: termination finishes at once | — |

@@ -419,17 +419,12 @@ proc launch(h: ptr HostRuntime): LogosResult =
     # registration that may use the reserved `logos` names.
     statics.add(caStaticRegistration())
     ids.incl(AuthorityModule)
-  # [IMPL-DECISION S4] A static record naming a binding that was never
-  # registered: the protected input is inconsistent before anything runs.
-  for m in c.modules:
-    if m.record.strategy == stDirectStatic and m.record.binding notin ids:
-      return answer(
-        ecInvalidParams,
-        "module instance " & m.instance & " names static binding " & m.record.binding &
-          ", which is not registered",
-      )
+  # [IMPL-DECISION S4 changed] A declaration naming a static binding that was
+  # never registered: what `create_module` may create (G55) is inconsistent
+  # before anything runs. A configured instance's binding is checked by the
+  # engine once the store is open, where retained instances are known: a new
+  # one is refused there, a retained one is mismatched (RUNTIME l.1321).
   for d in c.declarations:
-    # The same for what `create_module` may create (G55).
     if d.record.strategy == stDirectStatic and d.record.binding notin ids:
       return answer(
         ecInvalidParams,
@@ -508,7 +503,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
     # [C9] Wired before bootstrap initializes the authority, at the directory
     # the realizer gives its state assignment, with the identity the engine
     # settled (the configured one or the store's). The engine exists, so a
-    # failure here is a failed start (G190, interim).
+    # failure here is a failed start (RUNTIME l.3939, l.3955).
     let a = c.authority.get
     var dir = ""
     for m in c.modules:
@@ -528,15 +523,16 @@ proc launch(h: ptr HostRuntime): LogosResult =
     copyMem(h.wired, unsafeAddr dir[0], dir.len)
   let r = e.bootstrap(instances, c.orchestration, c.transfers)
   if r.isErr:
-    # [IMPL-DECISION G190, interim] A failed start stops and destroys nothing
-    # (RUN-0737).
+    # [SPEC RUNTIME l.3939-3940, l.3955] A failed start stops and destroys
+    # nothing (RUN-0737); its code is the engine's (`checkBootstrap`).
     return answer(r.error.code, r.error.message)
   answer(ecOk)
 
 proc runtimeStart*(rt: ptr LogosRuntimeHandle): LogosResult =
   ## [SPEC RUNTIME §13.2, §13.4; l.1640] Bootstraps the configured deployment
   ## and returns once the orchestration instance is `ready`, or with why it is
-  ## not (G190). Attempted once per handle; never after a shutdown request.
+  ## not (RUNTIME l.3838, l.3939-3940). Attempted once per handle; never after
+  ## a shutdown request.
   entry()
   if rt == nil:
     return answer(ecInvalidParams, "runtime is null")

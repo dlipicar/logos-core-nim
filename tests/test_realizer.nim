@@ -16,6 +16,8 @@ when defined(posix):
 import unittest2
 import ../src/logos_core/runtime/realizer
 import logos_sdk/crypto/blake3
+import logos_sdk/abi/types
+import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, names]
 import logos_sdk/pins
 import ../src/logos_core/runtime/config
@@ -360,7 +362,7 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
     check b.binding.asyncApi == addr goodAsync
     check r.release(b.id, "g1").isOk
 
-  test "[RUN-0072] [RUN-0082] [RUN-0199] [LDR-0080] one binding serves every instance; each call gets its own context":
+  test "[RUN-0072] [RUN-0082] [RUN-0199] [LDR-0080] [RUN-1090] one binding serves every instance; each call gets its own context":
     asyncCalls = 0
     let r = fresh()
     r.registerStatic(
@@ -375,6 +377,38 @@ suite "run.realizer: implementation binding (RUNTIME §1.2, §2.2-§2.4; LOADER 
       diag("{\"label\": \"ch3\", \"reading\": {\"value\": 30}}")
     check meterCall(b, 4).status.isOk
     check r.release(a.id, "m1").isOk and r.release(b.id, "m2").isOk
+
+var declaredRoots: seq[(Digest, int)]
+
+proc declareStub(
+    publishUserData: pointer,
+    root: ptr ContractRoot,
+    schema: ptr UncheckedArray[uint8],
+    schemaLen: csize_t,
+) {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    declaredRoots.add((Digest(root[]), int(schemaLen)))
+
+suite "run.realizer: the publisher's contracts (INTERFACE l.3351; DECISIONS I106)":
+  test "[TXT-0099] each contract the call surface exposes is declared before _MODULE_init can run":
+    declaredRoots.setLen(0)
+    let r = fresh()
+    r.registerStatic("meter", meterModuleStaticSymbols()).tryGet
+    var req = staticRequest("p1", "meter_module", "meter")
+    req.services.declareContract = declareStub
+    let step = r.begin(req).tryGet
+    check step.kind == skBind
+    let b = r.storeBinding(runBind(step.spec)).tryGet
+    check declaredRoots.len == 0
+    # `prepareInit` makes the input `_MODULE_init` needs; the declarations
+    # come with it, so none can follow initialization.
+    discard r.prepareInit(req, b).tryGet
+    check declaredRoots.mapIt(it[0]) == providerRoots(b.contracts)
+    check declaredRoots.allIt(it[1] > 0)
+    # No hook (a Module Host, a test double): nothing to declare.
+    declaredRoots.setLen(0)
+    check declareContracts(InitServices(), b[]).isOk
+    check declaredRoots.len == 0
 
 # Realize --------------------------------------------------------------------------
 
@@ -472,7 +506,7 @@ suite "run.realizer: verified dynamic libraries (RUNTIME §2.1, §3.6; LOADER §
     check x.error.code == lecArtifactUnavailable
     check path notin x.error.message and work notin x.error.message
 
-  test "[LDR-0144] [SEC-0021] [PKG-0220] [BCP-0049] [BCP-0050] [BCP-0081] a staging control it cannot establish is realization-failed; an unreadable source stays artifact-unavailable":
+  test "[LDR-0144] [PKG-0220] [BCP-0049] [BCP-0050] [BCP-0081] a staging control it cannot establish is realization-failed; an unreadable source stays artifact-unavailable":
     # [SPEC LOADER l.628, l.622; C-08, I88] The private copy is the control that
     # maps the verified bytes without a path-replacement gap (l.214). Code runs
     # only from that verified copy, never from the source path (PKG-0220).

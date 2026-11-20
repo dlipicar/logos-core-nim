@@ -1,0 +1,9 @@
+{
+  runtime_instance_id: "de1d7cd9-4e0d-4f68-89fa-460fc3332e00",
+  address: {
+    transport: "tls-tcp",
+    host: "runtime.example",
+    port: 7443,
+    profile: "logos.remote.tls-tcp"
+  }
+}

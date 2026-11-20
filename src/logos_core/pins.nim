@@ -4,9 +4,9 @@
 #!fmt: off
 const
   # spec-module-package-manager.md §4
-  PackageManifestSchemaRoot* = "b3a53cea950337515b843333795c53c58288702e5bf72ad98930e02c7581e0eb"
+  PackageManifestSchemaRoot* = "d517cf20219ced88528df307c1631b2785abf04157a8b3caa9ac351e95a705f6"
   # spec-module-package-manager.md §4
-  PackageManifestSubtreeRoot* = "fbee48aef4b669bd9e4dfec0126f56513f8c626da858121082e5f25b0e236879"
+  PackageManifestSubtreeRoot* = "23de138c1edb5437388a419928f73901ad7ada309b9a357c35ff6690c06f6d78"
   # spec-module-transport.md §1.1, spec/mirrors/TRN/1.1.envelope-primitives.cddl
   TransportPrimitivesDocument* = """
 ; -- primitive types used in the envelope --
@@ -24,7 +24,7 @@ logos.transport.value-root        = bstr .size 32
 
 ; This block is the owning registry for transport message-kind values.
 ; Other Logos specifications may cite these values but do not allocate them.
-logos.transport.message-kind      = 0..8
+logos.transport.message-kind      = 0..9
 
 logos.transport.message-kind-hello       = 0
 logos.transport.message-kind-request     = 1
@@ -35,6 +35,7 @@ logos.transport.message-kind-event       = 5
 logos.transport.message-kind-error       = 6
 logos.transport.message-kind-cancel      = 7
 logos.transport.message-kind-subscription-result = 8
+logos.transport.message-kind-subscription-end = 9
 """
   # spec-module-transport.md §1.3, spec/mirrors/TRN/1.3.envelopes.cddl
   TransportEnvelopesDocument* = """
@@ -142,6 +143,16 @@ logos.transport.subscription-result-err = {
 }
 
 
+; -- Subscription End --
+; End one active subscription while the session continues.
+
+logos.transport.subscription-end = {
+    0:     logos.transport.message-kind-subscription-end,
+    id:    logos.transport.subscription-id,
+    error: logos.transport.error-payload,
+}
+
+
 ; -- Event --
 ; Async event notification to a subscriber. Data is a CBOR map whose
 ; concrete schema is defined by the module's .cddl file (see
@@ -200,6 +211,7 @@ logos.transport.message = logos.transport.hello
         / logos.transport.subscribe
         / logos.transport.unsubscribe
         / logos.transport.subscription-result
+        / logos.transport.subscription-end
         / logos.transport.event
         / logos.transport.protocol-error
         / logos.transport.cancel
@@ -217,6 +229,13 @@ logos.package_manifest.manifest = {
   modules: [* logos.package_manifest.module_declaration],
   variants: [* logos.package_manifest.package_variant],
   ? dependencies: [* logos.package_manifest.package_dependency],
+  ? contract_documents: [* logos.package_manifest.contract_document],
+}
+
+logos.package_manifest.contract_document = {
+  commitment: logos.schema_commitment,
+  schema_artifact: logos.package_manifest.artifact_id,
+  ? input_artifacts: [* logos.package_manifest.artifact_id],
 }
 
 logos.package_manifest.module_declaration = {
@@ -224,6 +243,7 @@ logos.package_manifest.module_declaration = {
   artifact: logos.package_manifest.artifact_id,
   ? primary_contract: logos.schema_commitment,
   ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
   ? requires: [* logos.package_manifest.provider_requirement],
   ? requested_permissions: [* logos.package_manifest.requested_permission],
   ? configuration: logos.package_manifest.configuration_declaration,
@@ -251,6 +271,7 @@ logos.package_manifest.requested_permission = {
 logos.package_manifest.package_dependency = {
   package: logos.package_manifest.package_name,
   requirement: logos.package_manifest.package_version_requirement,
+  ? contracts: [* logos.schema_commitment],
 }
 
 logos.package_manifest.package_version_requirement = {
@@ -279,6 +300,8 @@ logos.package_manifest.manifest_artifact = {
 """
   # spec-module-package-manager.md §4.3, spec/mirrors/PKG/4.3.signing-profile.cddl
   PackageSigningProfileDocument* = """
+_module = "logos_package_manager"
+
 logos.package_manager.package_signing_profile =
   "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"
 
@@ -360,7 +383,255 @@ logos.package_manager.resolved_package_dependency = {
 """
   # spec-module-package-manager.md §15, spec/mirrors/PKG/15.methods.cddl
   PackageManagerMethodsDocument* = """
+logos.package_manager.cursor = tstr .size (1..512)
+logos.package_manager.progress_key = tstr .size (1..128)
+logos.package_manager.progress_phase =
+  "resolving" / "fetching" / "verifying" / "installing" / "removing"
+
+logos.package_manager.watch_installed_packages_request = {}
+
+logos.package_manager.watch_installed_packages_response =
+  {} /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.installed_packages_changed_event = {}
+
+logos.package_manager.operation_progress_event = {
+  progress_key: logos.package_manager.progress_key,
+  phase: logos.package_manager.progress_phase,
+  ? bytes_completed: uint64,
+  ? bytes_total: uint64,
+}
+
+logos.package_manager.list_packages_request = {
+  ? package: logos.package_manifest.package_name,
+  ? cursor: logos.package_manager.cursor,
+  ? limit: uint16,
+}
+
+logos.package_manager.list_packages_response =
+  {
+    packages: [* logos.package_manager.package_catalog_entry],
+    ? next_cursor: logos.package_manager.cursor,
+  } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.inspect_package_request = {
+  ? package: logos.package_manifest.package_name,
+  ? version: logos.package_manifest.package_version,
+  ? source: logos.package_manager.package_source,
+}
+
+logos.package_manager.inspect_package_response =
+  { inspection: logos.package_manager.package_inspect_record } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.install_package_request = {
+  package: logos.package_manifest.package_name,
+  ? version: logos.package_manifest.package_version,
+  ? source: logos.package_manager.package_source,
+  ? progress_key: logos.package_manager.progress_key,
+}
+
+logos.package_manager.install_package_response =
+  { installed: logos.package_manager.installed_package_record } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.remove_package_request = {
+  identity: logos.package_manager.package_identity,
+  ? progress_key: logos.package_manager.progress_key,
+}
+
+logos.package_manager.remove_package_response =
+  {} /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.update_package_request = {
+  current: logos.package_manager.package_identity,
+  ? target_version: logos.package_manifest.package_version,
+  ? source: logos.package_manager.package_source,
+  ? progress_key: logos.package_manager.progress_key,
+}
+
+logos.package_manager.update_package_response =
+  { installed: logos.package_manager.installed_package_record } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.list_installed_packages_request = {
+  ? package: logos.package_manifest.package_name,
+  ? cursor: logos.package_manager.cursor,
+  ? limit: uint16,
+}
+
+logos.package_manager.list_installed_packages_response =
+  {
+    packages: [* logos.package_manager.installed_package_record],
+    ? next_cursor: logos.package_manager.cursor,
+  } /
+  { error: logos.package_manager.package_error }
+
+logos.package_manager.get_runtime_handoff_request = {
+  package: logos.package_manager.package_identity,
+  module: tstr .size (1..64),
+}
+
+logos.package_manager.get_runtime_handoff_response =
+  { handoff: logos.package_manager.runtime_handoff } /
+  { error: logos.package_manager.package_error }
+"""
+  # spec-module-package-manager.md §10, spec/mirrors/PKG/10.installed-artifact.cddl
+  PackageInstalledArtifactDocument* = """
+logos.package_manager.installed_artifact = {
+  id: logos.package_manifest.artifact_id,
+  kind: "module-binary" / "resource" / "schema" / "data",
+  local_path: tstr .size (1..4096),
+  hash: bstr .size 32,
+}
+"""
+  # spec-module-package-manager.md §12, spec/mirrors/PKG/12.runtime-handoff.cddl
+  PackageRuntimeHandoffDocument* = """
+logos.package_manager.runtime_artifact = {
+  id: logos.package_manifest.artifact_id,
+  local_path: tstr .size (1..4096),
+  hash: bstr .size 32,
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+
+logos.package_manager.runtime_handoff = {
+  signer: logos.package_manager.package_signer,
+  module: tstr .size (1..64),
+  package: logos.package_manager.package_identity,
+  artifact: logos.package_manager.runtime_artifact,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+  ? primary_contract: logos.schema_commitment,
+  ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
+  ? requires: [* logos.package_manifest.provider_requirement],
+  ? requested_permissions: [* logos.package_manifest.requested_permission],
+  ? configuration: logos.module_configuration.configuration_declaration,
+}
+"""
+  # spec-module-package-manager.md App A, spec/mirrors/PKG/app-a.contract.cddl
+  PackageManagerContractDocument* = """
 _module = "logos_package_manager"
+
+logos.package_manager.package_signing_profile =
+  "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"
+
+logos.package_manager.package_signing_key_id = bstr .size (1..128)
+
+logos.package_manager.package_signer = {
+  profile: logos.package_manager.package_signing_profile,
+  public_key: bstr .size 48,
+}
+
+logos.package_manager.package_signature_claim = {
+  profile: logos.package_manager.package_signing_profile,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+}
+
+logos.package_manager.package_identity = {
+  package: logos.package_manifest.package_name,
+  version: logos.package_manifest.package_version,
+}
+
+logos.package_manager.installed_package_record = {
+  signer: logos.package_manager.package_signer,
+  identity: logos.package_manager.package_identity,
+  source: logos.package_manager.package_source,
+  variant: logos.package_manifest.package_variant_id,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+  modules: [* logos.package_manifest.module_declaration],
+  artifacts: [* logos.package_manager.installed_artifact],
+  resolved_dependencies: [* logos.package_manager.resolved_package_dependency],
+}
+
+logos.package_manager.package_source =
+  {
+    kind: "lgx",
+    storage: tstr .size (1..128),
+    object: bstr .size (1..4096),
+    ? provenance_object: bstr .size (1..4096),
+  } /
+  {
+    kind: "nix",
+    flake_ref: tstr .size (1..4096),
+    ? attr: tstr .size (1..255),
+    ? locked_ref: tstr .size (1..4096),
+  }
+
+logos.package_manager.manifest_commitment = {
+  commitment_model: "logos.commitment-model.2026-10",
+  schema_root: bstr .size 32,
+  schema_subtree_root: bstr .size 32,
+  value_root: bstr .size 32,
+  hash_profile: "logos.hash-profile.2026-08.choice-index",
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+
+logos.package_manager.package_catalog_entry = {
+  identity: logos.package_manager.package_identity,
+  source: logos.package_manager.package_source,
+}
+
+logos.package_manager.package_inspect_record = {
+  signer: logos.package_manager.package_signer,
+  source: logos.package_manager.package_source,
+  manifest: logos.package_manifest.manifest,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+}
+
+logos.package_manager.installed_artifact = {
+  id: logos.package_manifest.artifact_id,
+  kind: "module-binary" / "resource" / "schema" / "data",
+  local_path: tstr .size (1..4096),
+  hash: bstr .size 32,
+}
+
+logos.package_manager.resolved_package_dependency = {
+  identity: logos.package_manager.package_identity,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+}
+
+logos.package_manager.runtime_artifact = {
+  id: logos.package_manifest.artifact_id,
+  local_path: tstr .size (1..4096),
+  hash: bstr .size 32,
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+
+logos.package_manager.runtime_handoff = {
+  signer: logos.package_manager.package_signer,
+  module: tstr .size (1..64),
+  package: logos.package_manager.package_identity,
+  artifact: logos.package_manager.runtime_artifact,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+  ? primary_contract: logos.schema_commitment,
+  ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
+  ? requires: [* logos.package_manifest.provider_requirement],
+  ? requested_permissions: [* logos.package_manifest.requested_permission],
+  ? configuration: logos.module_configuration.configuration_declaration,
+}
+
+logos.package_manager.package_error = {
+  code: logos.package_manager.package_error_code,
+  ? message: tstr .size (0..512),
+}
+
+logos.package_manager.package_error_code =
+  "invalid-request" /
+  "unsupported-source" /
+  "package-unavailable" /
+  "package-not-installed" /
+  "package-conflict" /
+  "package-in-use" /
+  "invalid-package" /
+  "incompatible-platform" /
+  "dependency-unavailable" /
+  "artifact-integrity-failed" /
+  "signature-verification-failed" /
+  "unsupported-manifest"
 
 logos.package_manager.cursor = tstr .size (1..512)
 logos.package_manager.progress_key = tstr .size (1..128)
@@ -476,5 +747,6 @@ logos.package_manager.package_error_code =
   "incompatible-platform" /
   "dependency-unavailable" /
   "artifact-integrity-failed" /
-  "signature-verification-failed"
+  "signature-verification-failed" /
+  "unsupported-manifest"
 """

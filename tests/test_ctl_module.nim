@@ -18,7 +18,7 @@ when defined(posix):
   from ../src/logos_core/runtime/plumbing import
     RcMethod, holdRcAnswerForTests, rcAnswerHeldForTests, releaseRcAnswerForTests
   import logos_sdk/abi/host as abihost
-  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/rc_types
+  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/[rc_arms, rc_types]
   from ../src/logos_core/durable import DurableLock, release
   from ../src/logos_core/loader/contract import LoaderInstanceId
   from ../src/logos_core/transport/io/peercred import effectiveUid
@@ -36,7 +36,7 @@ when defined(posix):
     Timeout = 15_000 * Slow ## a client's wait for a reply, ms
     IdleMs = min(60_000 * Slow, 600_000)
       ## `ctl.idle_timeout_ms` where no case is about it, at most what the
-      ## daemon-config takes: at 2 s times Slow, RUN-0347's 16 clients under
+      ## daemon-config takes: at 2 s times Slow, RUN-0663's 16 clients under
       ## ASan at load 400 were closed before they sent their command (send:
       ## Broken pipe; 4b-8's load fix)
 
@@ -456,7 +456,7 @@ when defined(posix):
         check readReply(a).outcome.kind == LcnCtlOutcomeKind.lcn_Ctl_ok
         setCommandDelayForTests(0)
 
-    test "[RUN-0347] create_module: 16 concurrent commands, 8 with distinct keys and 8 with one shared key, make 9 instances with 8 equal answers; the key holds across a restart":
+    test "[RUN-0663] create_module: 16 concurrent commands, 8 with distinct keys and 8 with one shared key, make 9 instances with 8 equal answers; the key holds across a restart":
       l = boot(
         newSession(
           proc(dc: var LcnDaemonConfig) =
@@ -479,13 +479,13 @@ when defined(posix):
       check made.len == 9
       let shared = LogosNSRuntimeControlCreateModuleResponse
         .decode(l.createKeyed("lcli-shared").okBytes)
-        .expect("created")
+        .expect("created").accepted.get
       let s = l.s
       finish(l)
       l = boot(s)
       let again = LogosNSRuntimeControlCreateModuleResponse
         .decode(l.createKeyed("lcli-shared").okBytes)
-        .expect("created")
+        .expect("created").accepted.get
       check again.instance == shared.instance
 
     test "[RUN-0698] the system instances: stop and update_configuration NOT_AUTHORISED for logosctl; recover_module on a failed orchestrator succeeds":
@@ -528,7 +528,7 @@ when defined(posix):
       )
       # [RUNTIME l.613, l.3538] The instance is `error` before its realization's
       # cleanup ends, and that cleanup commits again: a revision read before it
-      # would be stale (INVALID_PARAMS), and a recovery before it NOT_READY.
+      # would be stale (`stale-revision`), and a recovery before it NOT_READY.
       check waitUntil(
         proc(): bool =
           not e.cleanupPending("orchestrator")

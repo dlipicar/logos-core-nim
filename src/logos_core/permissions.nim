@@ -183,17 +183,31 @@ proc validate*(
 ): Result[void, PermissionError] =
   p.validate(s.permission, s.constraints)
 
+func checkOrder*(xs: openArray[PermissionSetting]): Result[void, PermissionError] =
+  ## [SPEC RUNTIME l.2461, l.2535] Names unique and ordered by their UTF-8
+  ## bytes: the request's own validity, checked before its target (l.1828;
+  ## re-pin P4 R3).
+  for i in 1 ..< xs.len:
+    if not (xs[i - 1].permission < xs[i].permission):
+      return err(peUnordered)
+  ok()
+
+proc checkDefined*(
+    p: PermissionProfile, xs: openArray[PermissionSetting]
+): Result[void, PermissionError] =
+  ## [SPEC RUNTIME l.2462, l.2536-2537] Every setting defined by the profile
+  ## and conforming.
+  for s in xs:
+    ?p.validate(s)
+  ok()
+
 proc checkSettings*(
     p: PermissionProfile, xs: openArray[PermissionSetting]
 ): Result[void, PermissionError] =
   ## [SPEC RUNTIME l.2535-2537] Names unique and ordered by their UTF-8 bytes,
   ## then every setting defined and conforming.
-  for i in 1 ..< xs.len:
-    if not (xs[i - 1].permission < xs[i].permission):
-      return err(peUnordered)
-  for s in xs:
-    ?p.validate(s)
-  ok()
+  ?checkOrder(xs)
+  p.checkDefined(xs)
 
 proc contained*(
     p: PermissionProfile, name: string, narrow, broad: openArray[byte]

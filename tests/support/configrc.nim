@@ -55,8 +55,9 @@ proc stage(
     revision: uint64,
     value: seq[byte],
     commitment = tunerCommitment(),
+    refusal = false,
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "update_configuration",
     encode(
@@ -71,13 +72,15 @@ proc stage(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc discardStaged(
     rc: ptr LogosRuntimeControlBinding,
     t: LogosNSRuntimeModuleInstanceAddress,
     revision: uint64,
+    refusal = false,
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "update_configuration",
     encode(
@@ -91,13 +94,15 @@ proc discardStaged(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc applyOf(
     rc: ptr LogosRuntimeControlBinding,
     t: LogosNSRuntimeModuleInstanceAddress,
     revision: uint64,
+    refusal = false,
 ): RcResult {.gcsafe.} =
-  rcCall(
+  result = rcCall(
     rc,
     "apply_configuration",
     encode(
@@ -106,14 +111,17 @@ proc applyOf(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
-proc applied(r: RcResult): LogosNSRuntimeControlApplyConfigurationResponse =
-  doAssert r.code == ecOk, r.message
-  LogosNSRuntimeControlApplyConfigurationResponse.decode(r.response).tryGet
+proc applied(
+    r: RcResult
+): LogosNSRuntimeControlApplyConfigurationResponseARMapAppliedValueRevisionStateRevisionTargetMap =
+  r.accepted(LogosNSRuntimeControlApplyConfigurationResponse)
 
-proc updated(r: RcResult): LogosNSRuntimeControlUpdateConfigurationResponse =
-  doAssert r.code == ecOk, r.message
-  LogosNSRuntimeControlUpdateConfigurationResponse.decode(r.response).tryGet
+proc updated(
+    r: RcResult
+): LogosNSRuntimeControlUpdateConfigurationResponseARMapStateRevisionTargetMap =
+  r.accepted(LogosNSRuntimeControlUpdateConfigurationResponse)
 
 func provenanceOf(p: LogosNSModuleConfigurationProvenance): Provenance =
   case p.kind

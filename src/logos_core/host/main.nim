@@ -32,7 +32,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[atomics, posix]
+import std/[atomics, posix, strutils]
 import results
 import logos_sdk/abi/[checks, types]
 import logos_sdk/base/[perthread, wipe]
@@ -41,7 +41,7 @@ import ../runtime/realizer
 when defined(lcnWipeAudit):
   import logos_sdk/base/wipeaudit
 import ../transport/io/sock
-import ./[consumer, endpoint, rcbinding, state]
+import ./[consumer, endpoint, rcbinding, selected, state]
 
 when defined(linux):
   proc prctl(
@@ -134,6 +134,15 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
       refuse(loaderError(lecRealizationFailed, MarkedUnsupportedByHost), P.Bind)
   checkLive(m.live, b[]).isOkOr:
     refuse(error, P.Bind)
+  if b.provider:
+    # [SPEC INTERFACE l.3351; DECISIONS I106] Before `_MODULE_init`: the
+    # publish callback checks under these from the first publication.
+    keepProvider(
+      b.contracts, m.module.startsWith("logos_"), maxPayloadDepth, b.callSurface
+    ).isOkOr:
+      refuse(
+        loaderError(lecRealizationFailed, "the provider's contracts: " & error), P.Bind
+      )
   let (rc, publish, publishUserData, access) = hostServices()
   let services = InitServices(
     runtimeControl: rc,
@@ -164,7 +173,9 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
   if outcome.isErr:
     if returnedOk and ctx != nil:
       # [IMPL; realizer `completeInitChecked`] LOGOS_OK with an invalid
-      # status: the instance exists and is destroyed exactly once.
+      # status: the instance exists and is destroyed exactly once, its
+      # binding's subscription-end reports suppressed first (M5).
+      suppressReports()
       b.destroy(ctx)
     refuse(initFailure(outcome.error), P.Init)
   if m.endpoint.isSome:
@@ -182,6 +193,7 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
           m.transport.get, ListenerFd, maxPayloadDepth,
         )
     if served.isErr:
+      suppressReports() # [M5]
       b.destroy(ctx)
       refuse(
         loaderError(
@@ -323,11 +335,14 @@ proc route(f: var seq[byte]) =
     answered(r.id, answerOf(r))
   of K.lcn_Carrier_route_ended:
     routeEnded(m.arm_lcn_Carrier_route_ended)
+  of K.lcn_Carrier_rc_subscription_ended:
+    subscriptionEnded(f, m.arm_lcn_Carrier_rc_subscription_ended)
   of K.lcn_Carrier_io_admit_established, K.lcn_Carrier_io_admit_failed,
       K.lcn_Carrier_io_admit_unavailable, K.lcn_Carrier_io_respond,
       K.lcn_Carrier_io_close, K.lcn_Carrier_io_terminate, K.lcn_Carrier_io_work_ended,
-      K.lcn_Carrier_io_subscription_result, K.lcn_Carrier_io_stop_serving,
-      K.lcn_Carrier_admit_verdict, K.lcn_Carrier_call_cancel:
+      K.lcn_Carrier_io_subscription_result, K.lcn_Carrier_io_end_subscription,
+      K.lcn_Carrier_io_stop_serving, K.lcn_Carrier_admit_verdict,
+      K.lcn_Carrier_call_cancel:
     # [K38 interim] In the order the Runtime gave, on one thread: a verdict,
     # a cancellation and a session order apply as they came.
     order(f)

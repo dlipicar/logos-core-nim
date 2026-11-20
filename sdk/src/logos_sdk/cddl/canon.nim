@@ -17,21 +17,23 @@ func fail(c: Canon, pos: int, class: CddlErrorClass, msg: string): CddlError =
 
 func checkNames(c: Canon, n: SrcNode): Result[void, CddlError] =
   ## Every name resolves: a §5.1 primitive, `true`/`false`, a rule of this
-  ## document, or a name of the external scope [G14].
+  ## document, or a name of the external scope [G14]. Another RFC 8610 prelude
+  ## name resolves only through that scope (cdCDDLe §6) [G16].
   case n.kind
   of skName:
     if n.name.parsePrimitive.isSome or n.name in ["true", "false"]:
+      return ok()
+    if n.name in c.defined or n.name in c.scope:
       return ok()
     if n.name.isPreludeName:
       return err(
         c.fail(
           n.pos,
-          ecUnsupported,
+          ecResolution,
           "the RFC 8610 prelude type " & n.name & " is outside the cdCDDLe §5.1 subset",
         )
       )
-    if n.name notin c.defined and n.name notin c.scope:
-      return err(c.fail(n.pos, ecResolution, "undefined name " & n.name))
+    return err(c.fail(n.pos, ecResolution, "undefined name " & n.name))
   of skLiteral:
     discard
   of skArray, skMap:
@@ -149,10 +151,12 @@ proc canonicalize*(
     src: string, rules: openArray[SrcRule], scope: openArray[string] = []
 ): Result[CddlDocument, CddlError] =
   ## Resolves and canonicalizes parsed rules. `scope` names rules defined outside
-  ## this document (G14); references to them stay reference nodes.
+  ## this document (G14); references to them stay reference nodes, and their
+  ## targets join no rule array. A scope may supply an RFC 8610 prelude name, but
+  ## not a §5.1 primitive or `true`/`false`, which always mean themselves.
   var c = Canon(src: src)
   for name in scope:
-    if not name.isIdentifier or name.isPreludeName or name[0] == '$':
+    if not name.isIdentifier or name.isReservedReference or name[0] == '$':
       return err(cddlError(ecResolution, "invalid external scope name " & name))
     c.scope.incl(name)
   for r in rules:

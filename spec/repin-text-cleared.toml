@@ -1,0 +1,3974 @@
+# What left spec/repin-pending.toml, and the evidence for each entry (DECISIONS I104).
+#
+#   [[text]]     a cleared sentence: `test` names the suite whose test carries [TXT-nnnn], or `reading`, `compared`
+#                and `kind` record what was read. `kind`: reword, removed, informative or holds
+#   [[units]]    what was compared for a changed unit, or the decision row of a unit that is not claimed
+#   [[stale]]    what replaced a retired id's rule, or what became of its code
+#   [[moved]]    an entry that changed sub-step, and why
+#   [[lowered]]  a behaviour entry lowered by a decision row that names it
+#   [[deferred]] a text entry in the pending file's [deferred]: the deferred unit it `rides` on (same spec,
+#                section and work item) and the decision row that names it; it leaves once a test of that
+#                unit that carries its tag claims the unit
+
+# P1: encoding ---------------------------------------------------------------------------------------------------
+
+[[units]]
+id = "CMT-0050"
+compared = "COMMITMENT l.732 at 6a4dfa28 ('a different extracted mirror') against l.605 at 6cac8335 ('a different rule set'). The rule is wider, the code is unchanged: test_commitment recomputes every pinned root from the mirrored INTERFACE §5.1 text, and an imported common reference keeps the pinned registry roots when another common document is supplied."
+
+[[units]]
+id = "IFC-0920"
+compared = "INTERFACE l.3139 at 6a4dfa28 (floating-point items only) against l.3090 at 6cac8335 (any value §4.4 item 5 prohibits). decodeCbor and checkPayload now refuse tags, null, undefined and other simple values too; test_transport, test_iface and test_cbor show each at the envelope and at the direct-mode boundary."
+
+[[stale]]
+id = "CDE-0056"
+compared = "The rule refused only the four primitives as rule names. CDE-0213 replaces it with every RFC 8610 prelude name, enforced in cddl/canon.nim and now in cddl/codec.nim and oracle/cdcddle.py. The citation in test_cddl moved to CDE-0213."
+
+[[stale]]
+id = "IFC-0423"
+compared = "The sentence that tags and null pass the envelope and fail at the schema is gone: they are Transport failures (IFC-0920). Forwarding without a schema remains at INTERFACE l.3092, which has no unit, so the test in test_transport keeps that behaviour and cites none. Invalid UTF-8 stays under TRN-0203."
+
+[[stale]]
+id = "IFC-0919"
+compared = "The floats-only sentence is replaced by IFC-0976, which prohibits tags, floats, null, undefined and other simple values at any depth. The citations in test_cbor, test_iface and docs moved to IFC-0976."
+
+[[moved]]
+id = "TXT-0040"
+from = "P1"
+to = "P4"
+reason = "Its replacement, TXT-0034 on provider-result validation in direct mode, is owned by P4, and P1 reads nothing of that path."
+
+[[text]]
+id = "TXT-0001"
+step = "P1"
+test = "sdk/tests/test_cddl.nim"
+
+[[text]]
+id = "TXT-0002"
+step = "P1"
+test = "sdk/tests/test_cddl.nim"
+
+[[text]]
+id = "TXT-0003"
+step = "P1"
+test = "sdk/tests/test_cddl.nim"
+
+[[text]]
+id = "TXT-0004"
+step = "P1"
+kind = "removed"
+reading = "The old subset bullet named only the controller of `.size`. TXT-0001 replaces it and also limits the target to uint, tstr or bstr."
+compared = "cdCDDLe l.166 at 6a4dfa28 against l.157 at 6cac8335, and the `.size` cases of test_cddl."
+
+[[text]]
+id = "TXT-0006"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0007"
+step = "P1"
+kind = "reword"
+pair = "TXT-0019"
+reading = "Only the list punctuation moved: the tuple-length observation is the same."
+compared = "COMMITMENT l.452 at 6a4dfa28 against l.358 at 6cac8335, and ptTupleLength in commitment/choice.nim."
+
+[[text]]
+id = "TXT-0008"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0009"
+step = "P1"
+kind = "reword"
+pair = "TXT-0023"
+reading = "One map-field test kind is left, so the order within each kind becomes one canonical field-name order."
+compared = "COMMITMENT l.460 at 6a4dfa28 against l.364 at 6cac8335, and `plan` in commitment/choice.nim, which tries the fields in sorted order."
+
+[[text]]
+id = "TXT-0010"
+step = "P1"
+kind = "reword"
+pair = "TXT-0024"
+reading = "The not-applicable outcome now names the one map-field test. Its meaning for a non-map value is unchanged."
+compared = "COMMITMENT l.467 at 6a4dfa28 against l.371 at 6cac8335, and `outcomes` and `observe` in commitment/choice.nim."
+
+[[text]]
+id = "TXT-0011"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0012"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0013"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0014"
+step = "P1"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0015"
+step = "P1"
+kind = "reword"
+pair = "TXT-0027"
+reading = "The common schema is presented in INTERFACE §5.1 rather than in an extracted mirror file. Our document is built from that block and checked against the pinned roots."
+compared = "COMMITMENT l.734 at 6a4dfa28 against l.609 at 6cac8335, and the first two tests of the suite 'commitment: pinned roots'."
+
+[[text]]
+id = "TXT-0016"
+step = "P1"
+kind = "reword"
+pair = "TXT-0028"
+reading = "The same rule, now said of the presentation: prelude aliases normalize to primitives and common names stay references."
+compared = "COMMITMENT l.735 at 6a4dfa28 against l.610 at 6cac8335, and how commitment/construct.nim translates `uint64` and `logos.error_code`."
+
+[[text]]
+id = "TXT-0534"
+step = "P1"
+test = "sdk/tests/test_values.nim"
+
+[[text]]
+id = "TXT-0017"
+step = "P1"
+kind = "removed"
+reading = "Methods and events are top-level declarations, which the new list still orders by qualified name, so nothing is left unordered."
+compared = "COMMITMENT l.260 at 6a4dfa28 against l.202 at 6cac8335, and the sort of model.declarations in commitment/construct.nim."
+
+[[text]]
+id = "TXT-0018"
+step = "P1"
+kind = "removed"
+reading = "The model has no collection of imports or references to order: an imported reference is a schema node in place."
+compared = "COMMITMENT l.263 at 6a4dfa28 against l.202-205 at 6cac8335, and the sorts in commitment/construct.nim and commitment/schema.nim, which cover declarations, map fields and choice arms."
+
+[[text]]
+id = "TXT-0019"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0007, which differs only in punctuation."
+compared = "COMMITMENT l.452 at 6a4dfa28 against l.358 at 6cac8335."
+
+[[text]]
+id = "TXT-0020"
+step = "P1"
+kind = "removed"
+reading = "Merged with TXT-0021 into TXT-0008: one observation covers absence and the exact scalar value."
+compared = "COMMITMENT l.453 at 6a4dfa28 against l.359 at 6cac8335, and the test of TXT-0008."
+
+[[text]]
+id = "TXT-0021"
+step = "P1"
+kind = "removed"
+reading = "Merged with TXT-0020 into TXT-0008."
+compared = "COMMITMENT l.454 at 6a4dfa28 against l.359 at 6cac8335, and the test of TXT-0008."
+
+[[text]]
+id = "TXT-0022"
+step = "P1"
+kind = "removed"
+reading = "The separate presence test is gone from the spec and from the code: ptFieldPresence, ocPresent and the presence observation were removed. The literal test runs on every field first and refines the presence outcomes, so no plan changes."
+compared = "COMMITMENT l.459 at 6a4dfa28 against l.356-371 at 6cac8335, and commitment/choice.nim."
+
+[[text]]
+id = "TXT-0023"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0009."
+compared = "COMMITMENT l.460 at 6a4dfa28 against l.364 at 6cac8335."
+
+[[text]]
+id = "TXT-0024"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0010."
+compared = "COMMITMENT l.467 at 6a4dfa28 against l.371 at 6cac8335."
+
+[[text]]
+id = "TXT-0025"
+step = "P1"
+kind = "removed"
+reading = "The remark about an extracted logos_common.cddl mirror is gone. Our common schema document is the INTERFACE §5.1 block."
+compared = "COMMITMENT l.714 at 6a4dfa28 against §5 at 6cac8335, and CommonSchemaDocument in pins.nim, which test_commitment compares with the mirrored block."
+
+[[text]]
+id = "TXT-0027"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0015."
+compared = "COMMITMENT l.734 at 6a4dfa28 against l.609 at 6cac8335."
+
+[[text]]
+id = "TXT-0028"
+step = "P1"
+kind = "removed"
+reading = "Replaced by TXT-0016."
+compared = "COMMITMENT l.735 at 6a4dfa28 against l.610 at 6cac8335."
+
+[[text]]
+id = "TXT-0029"
+step = "P1"
+kind = "removed"
+reading = "The remark that the mirror is an authoring convenience went with the mirror. Nothing in the code depends on it."
+compared = "COMMITMENT l.739 at 6a4dfa28 against §5 at 6cac8335."
+
+[[text]]
+id = "TXT-0030"
+step = "P1"
+test = "sdk/tests/test_values.nim"
+
+[[text]]
+id = "TXT-0031"
+step = "P1"
+test = "sdk/tests/test_values.nim"
+
+[[text]]
+id = "TXT-0032"
+step = "P1"
+test = "sdk/tests/test_values.nim"
+
+[[text]]
+id = "TXT-0143"
+step = "P1"
+test = "sdk/tests/test_cbor.nim"
+
+[[text]]
+id = "TXT-0036"
+step = "P1"
+kind = "removed"
+reading = "The sentence giving validation to the module dispatch layer is replaced by IFC-0977 and IFC-0978: payloads are validated before provider code runs, the boundary's spec assigns it, and the dispatch layer may repeat it."
+compared = "INTERFACE l.3130 at 6a4dfa28 against l.3087 at 6cac8335, and the tests tagged IFC-0977 and IFC-0978 in test_transport and test_kit."
+
+[[text]]
+id = "TXT-0037"
+step = "P1"
+kind = "removed"
+reading = "The sentence limiting the runtime and transport layers to envelopes and routing fields is gone. Our transport session already validates payloads against the schema at its boundary."
+compared = "INTERFACE l.3132 at 6a4dfa28 against l.3087 at 6cac8335, and the tests tagged IFC-0977 in test_transport."
+
+# P2: the INTERFACE ABI --------------------------------------------------------------------------------------------
+
+[[units]]
+id = "IFC-0107"
+compared = "INTERFACE §1.8 l.571 at 6a4dfa28 against l.542 at 6cac8335: storage.upload_url_request gains `session: tstr`. The §1.8 mirror is rewritten from the text, and test_iface accepts the new example."
+
+[[units]]
+id = "IFC-0108"
+compared = "INTERFACE §1.8 l.575 at 6a4dfa28 against l.547 at 6cac8335: storage.upload_url_response answers `cid: tstr` instead of `accepted: bool`. The §1.8 mirror is rewritten from the text, and test_iface accepts the new example."
+
+[[units]]
+id = "IFC-0168"
+compared = "INTERFACE §2.4 l.1373 at 6a4dfa28 against l.1338 at 6cac8335: the request gains `session: tstr`. The §2.4 mirror is rewritten, and test_codegen's canonical-order test derives the new parameters from it."
+
+[[units]]
+id = "IFC-0169"
+compared = "INTERFACE §2.4 l.1377 at 6a4dfa28 against l.1343 at 6cac8335: the response is `cid: tstr`. The §2.4 mirror is rewritten, and test_codegen's canonical-order test derives `out_cid` from it."
+
+[[units]]
+id = "IFC-0328"
+compared = "INTERFACE §3.3 l.2462 at 6a4dfa28 against l.2427 at 6cac8335: the request gains `session: tstr`. The §3.3 mirror is rewritten, and T5.1 in test_rmap reconstructs it from the §3.3 prototype."
+
+[[units]]
+id = "IFC-0329"
+compared = "INTERFACE §3.3 l.2466 at 6a4dfa28 against l.2432 at 6cac8335: the response is `cid: tstr`. The §3.3 mirror is rewritten, and T5.1 in test_rmap reconstructs it from the §3.3 prototype."
+
+[[units]]
+id = "IFC-0599"
+compared = "INTERFACE §2 l.659 at 6a4dfa28 against l.627 at 6cac8335: the revision check compares with `4u`. CMappingRevision is 4, every generated header was regenerated, and test_codegen's revision-check test is tagged [TXT-0046] [TXT-0047]."
+
+[[units]]
+id = "IFC-0934"
+compared = "The INTERFACE §5.2 listing, l.3432 at 6a4dfa28 against l.3373 at 6cac8335: revision `4u`, ABI version 3, `logos_publish_fn` returning `logos_error_code_t`, `observe_subscription_end` on both vtables, and the common section stated in full. `logos_types.h` is the listing copied; test_abi and test_kit compare every struct and mirror layout with it."
+
+[[units]]
+id = "RUN-0242"
+compared = "RUNTIME §7.3 l.1209 at 6a4dfa28 against l.1133 at 6cac8335: the typedef returns `logos_error_code_t`. abi/types.nim's LogosPublishFn returns CErrorCode; test_codegen reads the typedef in logos_types.h, test_kit shows the kit helper returning the callback's result, and test_host_dylib has a C module return what its callback returned."
+
+[[stale]]
+id = "IFC-0083"
+compared = "INTERFACE §1.5 at 6cac8335 no longer declares storage.upload_done_event (l.419 at 6a4dfa28). The §1.5 mirror is rewritten and test_iface drops the tag. Tests that needed a second event use storage.started_event, or storage.upload_progress_event where it must be non-empty."
+
+[[stale]]
+id = "IFC-0112"
+compared = "INTERFACE §1.8 at 6cac8335 no longer declares storage.upload_done_event (l.589 at 6a4dfa28). The §1.8 mirror is rewritten and test_iface drops the tag."
+
+[[stale]]
+id = "IFC-0170"
+compared = "Replaced by IFC-0959, the §2.4 prototype with `in_session` and `out_cid` (l.1348 at 6cac8335). test_codegen's canonical-order test is retagged, and the id leaves conformance/claims/IFC.toml."
+
+[[stale]]
+id = "IFC-0327"
+compared = "Replaced by IFC-0973, the §3.3 prototype with `in_session` and `out_cid` (l.2413 at 6cac8335). T5.1 in test_rmap is retagged."
+
+[[stale]]
+id = "IFC-0884"
+compared = "Replaced by IFC-0975 (l.2936 at 6cac8335), which adds that each document is supplied with exactly its required dependency set. T4.20 in test_rmap is retagged and supplies each namespace alone and both together."
+
+[[stale]]
+id = "IFC-0935"
+compared = "Replaced by IFC-0981 (l.3841 at 6cac8335): the route vtable needs `observe_end` and `observe_subscription_end`, the Runtime Control vtable `observe_subscription_end`, and a shorter vtable is VERSION_MISMATCH. The two test_abi tests are retagged, and the id leaves conformance/claims/IFC.toml."
+
+[[moved]]
+id = "TXT-0080"
+from = "P2"
+to = "P3"
+reason = "Its replacement, TXT-0078 on what the publish callback returns, is P3's. Under the I105 interim the Runtime still records a failed publication as a diagnostic and drops the event, so the sentence is not yet false."
+
+[[moved]]
+id = "TXT-0085"
+from = "P3"
+to = "P2"
+reason = "P2 builds the observe_subscription_end slot as a registration with observe_end's rules (I105), so the registration rules are tested in P2. P3 keeps the reporting of binding-ended subscriptions."
+
+[[text]]
+id = "TXT-0044"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0045"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0046"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0047"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0048"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0049"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0050"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0051"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0052"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0053"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0054"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0565"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0055"
+step = "P2"
+test = "sdk/tests/test_rmap.nim"
+
+[[text]]
+id = "TXT-0056"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0057"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0578"
+step = "P2"
+test = "sdk/tests/test_codegen.nim"
+
+[[text]]
+id = "TXT-0059"
+step = "P2"
+test = "sdk/tests/test_abi.nim"
+
+[[text]]
+id = "TXT-0060"
+step = "P2"
+test = "sdk/tests/test_abi.nim"
+
+[[text]]
+id = "TXT-0568"
+step = "P2"
+test = "sdk/tests/test_kit.nim"
+
+[[text]]
+id = "TXT-0061"
+step = "P2"
+test = "sdk/tests/test_kit.nim"
+
+[[text]]
+id = "TXT-0293"
+step = "P2"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0569"
+step = "P2"
+test = "tests/test_host_dylib.nim"
+
+[[text]]
+id = "TXT-0085"
+step = "P2"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0062"
+step = "P2"
+kind = "removed"
+reading = "The rule that a schema file is named `<module-name>.cddl` becomes a convention (TXT-0041). Nothing here reads a schema file's name: lcn-gen takes schema documents by any path, and a module's name comes from its binding."
+compared = "INTERFACE l.86 at 6a4dfa28 against l.78 at 6cac8335, and the commands of src/lcn_gen.nim, which read PRIMARY.cddl and the other documents from the paths given."
+
+[[text]]
+id = "TXT-0041"
+step = "P2"
+kind = "reword"
+pair = "TXT-0062"
+reading = "The file name is now a convention, not a rule, and nothing reads it, so nothing changes."
+compared = "INTERFACE l.86 at 6a4dfa28 against l.78 at 6cac8335, and the commands of src/lcn_gen.nim."
+
+[[text]]
+id = "TXT-0042"
+step = "P2"
+kind = "informative"
+reading = "A note on what a future revision may permit. It states no requirement of this revision, under which a supporting schema still imports nothing."
+compared = "INTERFACE l.97-105 at 6cac8335 against §1.1's rule that supporting schemas have no imports, which acceptance enforces."
+
+[[text]]
+id = "TXT-0063"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0043, which adds the cdCDDLe §5 string-literal grammar to what decides validity."
+compared = "INTERFACE l.505 at 6a4dfa28 against l.479 at 6cac8335."
+
+[[text]]
+id = "TXT-0043"
+step = "P2"
+kind = "reword"
+pair = "TXT-0063"
+reading = "The sentence now names the cdCDDLe §5 string-literal grammar, which acceptance already applies: the lexer reads text and byte-string literals by RFC 9682, as cdCDDLe §5 takes it (G157, settled in P1)."
+compared = "INTERFACE l.505 at 6a4dfa28 against l.479 at 6cac8335, and lexQuoted and readEscape in sdk/src/logos_sdk/cddl/syntax.nim."
+
+[[text]]
+id = "TXT-0064"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0046: the revision is `4u`."
+compared = "INTERFACE l.650 at 6a4dfa28 against l.620 at 6cac8335, and CMappingRevision in iface/cmap.nim."
+
+[[text]]
+id = "TXT-0065"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0047: the check compares with `4u`."
+compared = "INTERFACE l.655 at 6a4dfa28 against l.625 at 6cac8335, and the revision check every generated header carries."
+
+[[text]]
+id = "TXT-0066"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0051 and TXT-0052, which say the names and layouts are the ones the §5.2 listing states."
+compared = "INTERFACE l.843 at 6a4dfa28 against l.813-814 at 6cac8335."
+
+[[text]]
+id = "TXT-0067"
+step = "P2"
+kind = "removed"
+site = "sdk/src/logos_sdk/iface/cmap.nim:1011"
+reading = "Rule 8 at 6a4dfa28 gave no output form for an unbounded or ranged byte string. 6cac8335 adds both (TXT-0054, TXT-0565), and they are the forms memberParam already emitted under I64."
+compared = "INTERFACE l.1280-1283 at 6a4dfa28 against l.1247-1252 at 6cac8335, and memberParam in iface/cmap.nim."
+
+[[text]]
+id = "TXT-0069"
+step = "P2"
+kind = "removed"
+reading = "`logos_common.cddl` is gone from the text, and no such artifact exists here: the common schema is the IFC/5.1.common-schema.cddl mirror, recomputed from the §5.1 text."
+compared = "INTERFACE l.3195 at 6a4dfa28, which 6cac8335 drops, and spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0070"
+step = "P2"
+kind = "removed"
+reading = "The precedence of the text over the extracted artifact goes with the artifact (TXT-0069). Our mirrors are recomputed from the text, which `spectrace mirror` checks."
+compared = "INTERFACE l.3196 at 6a4dfa28, which 6cac8335 drops."
+
+[[text]]
+id = "TXT-0071"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0056: the common declarations are those of the six common types §2.1 names and their support declarations, not of every named type of §5.1."
+compared = "INTERFACE l.3382 at 6a4dfa28 against l.3324 at 6cac8335."
+
+[[text]]
+id = "TXT-0072"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0057: the declarations are copied from the listing, not derived through a common-name projection (G158 settled)."
+compared = "INTERFACE l.3383 at 6a4dfa28 against l.3325 at 6cac8335."
+
+[[text]]
+id = "TXT-0073"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0059: the initialization struct uses version 3."
+compared = "INTERFACE l.3797 at 6a4dfa28 against l.3829 at 6cac8335, and ModuleInitAbiVersion in abi/types.nim."
+
+[[text]]
+id = "TXT-0074"
+step = "P2"
+kind = "removed"
+reading = "Replaced by TXT-0060: both vtables use version 3."
+compared = "INTERFACE l.3810 at 6a4dfa28 against l.3841 at 6cac8335, and the two vtable versions in abi/types.nim."
+
+[[text]]
+id = "TXT-0076"
+step = "P2"
+kind = "removed"
+site = "sdk/src/logos_sdk/codegen/kitrt.nim:481"
+reading = "Replaced by TXT-0061: the helper now returns the callback's result, and publishEncoded returns it."
+compared = "INTERFACE l.4094 at 6a4dfa28 against l.4113-4115 at 6cac8335, and publishEncoded in codegen/kitrt.nim."
+
+# P3: wire, SubscriptionEnd, event delivery and the remote profiles -----------------------------------------------
+
+[[units]]
+id = "TRN-0016"
+compared = "TRANSPORT §1.1 l.96 at 6a4dfa28 ('message-kind = 0..8') against l.84 at 6cac8335 ('0..9'): kind 9 is SubscriptionEnd. The §1.1 mirror and the pins are regenerated from the text; transport/envelope.nim gains mkSubscriptionEnd, which loadEnvelope checks against the pinned CDDL, and test_transport's kind-registry test accepts 9 and refuses 10."
+
+[[units]]
+id = "TRN-0040"
+compared = "TRANSPORT §1.3 l.230 at 6a4dfa28 against l.220 at 6cac8335: the subscription-result-err rule is unchanged; the extracted text now ends in the comment that opens the new subscription-end rule. The §1.3 mirror is regenerated; the rule's tests in test_transport are unchanged."
+
+[[units]]
+id = "TRN-0045"
+compared = "TRANSPORT §1.3 l.290 at 6a4dfa28 against l.290 at 6cac8335: the message union gains logos.transport.subscription-end. The envelope decodes and encodes it (decode typed by failureOf, toCbor with id and error); test_transport's samples carry one, which round-trips, fails with an extra field, a zero code and in the wrong direction."
+
+[[units]]
+id = "TRN-0125"
+compared = "TRANSPORT l.808 at 6a4dfa28 against l.796 at 6cac8335: the error code is named TRANSPORT_ERROR instead of LOGOS_ERR_TRANSPORT, the same code (INTERFACE §5.2 names one by the other). Event output overflow is unchanged (G261); test_transport_io's overflow tests stand."
+
+[[units]]
+id = "TRN-0163"
+compared = "TRANSPORT l.981 at 6a4dfa28 ('When the route expires or is revoked') against l.963 at 6cac8335 ('When route authority expires or is revoked'): the same end, now named as the route's authority. Unchanged in code; the readiness end the new l.977 adds is TXT-0124. test_transport's termination test keeps the tag."
+
+[[units]]
+id = "TRN-0274"
+compared = "TRANSPORT l.417 at 6a4dfa28 ('received before that point') against l.410 at 6cac8335 ('processed before that point'): the check applies when the message is processed, which is where session.receive makes it. Unchanged in code; SubscriptionEnd joins the caller-bound kinds a callee refuses (test_transport, trn.direction)."
+
+[[text]]
+id = "TXT-0077"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0096"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0099"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0115"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0116"
+step = "P3"
+reading = "The §1.3 list of callee-to-caller messages gains SubscriptionEnd."
+compared = "TRANSPORT l.331 at 6cac8335 against KindRule in transport/envelope.nim, where subscription-end is callee to caller, and session.receive on both sides: the callee refuses it as a wrong-direction message, the caller takes it (test_transport, trn.direction)."
+kind = "holds"
+site = "tests/test_transport.nim"
+named = "the callee closes on caller-bound kinds"
+
+[[text]]
+id = "TXT-0120"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0121"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0122"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0124"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0125"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0087"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0088"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0086"
+step = "P3"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0089"
+step = "P3"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0105"
+step = "P3"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0083"
+step = "P3"
+reading = "A binding-ended subscription is every end the Runtime makes other than unsubscription, its route's terminal state and the release of its binding or handle."
+compared = "INTERFACE l.1474 at 6cac8335 against the Runtime's ends. Reported: engine.endRc (a Runtime Control subscription lost to one of the bounds, loseRc, or whose event decision denies), engine.endDirect, engine.endServed and the consumers' SubscriptionEnd (a route subscription whose authority to receive ended), and engine.queueBound (a direct route subscription whose delivery queue reached its bound, G176). Not reported: engine.removeRc (unsubscription, the binding's end) and endRcSubs (the subscriber leaving loaded/ready) only deactivate, and a route's end goes to observe_end (engine.endRoute). The named test shows one reported end (MODULE_ERROR, once); no test shows an excluded end going unreported, which rests on reading those procs."
+kind = "holds"
+site = "tests/test_rcevents.nim"
+named = "reported once by the binding with MODULE_ERROR"
+
+[[text]]
+id = "TXT-0084"
+step = "P3"
+reading = "The Runtime Control binding and every route handle carry one observe_subscription_end registration and report their binding-ended subscriptions through it."
+compared = "INTERFACE l.1476 at 6cac8335 against the vtables (I105): the direct binding's rcObserveSubscriptionEndOp and route handle's observe operation (runtime/bindings.nim), the host's (host/rcbinding.nim, host/consumer.nim), each over a SubscriptionEndSlot (runtime/subend.nim). Reports reach a handle (test_events_ca, test_hosted_routes) and the binding (test_rcevents, test_hosted)."
+kind = "holds"
+site = "tests/test_rcevents.nim"
+named = "reported once by the binding with MODULE_ERROR"
+
+[[text]]
+id = "TXT-0082"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[units]]
+id = "IFC-0280"
+compared = "INTERFACE l.1918 at 6cac8335 against l.1961-1967 at 6a4dfa28: a direct callback still runs on the publishing thread before publication returns, except a delivery queued under §2.5 (l.1405), which the thread holding the subscription's gate runs. test_events shows both: the handler on the publishing thread with nothing queued, and the queued deliveries run on the busy thread after the publications returned (G176 replaced)."
+
+[[stale]]
+id = "IFC-0186"
+compared = "INTERFACE l.1446 at 6a4dfa28 (a handler unsubscribing its own subscription through the same handle) is replaced by IFC-0962 (l.1416 at 6cac8335: any unsubscribe while a handler of that subscription is active on the calling thread). The route behaviour is unchanged (the N1 reading). The citations in test_events, test_rcevents, rcevents.nim and the IFC claims moved to IFC-0962 or went."
+
+[[text]]
+id = "TXT-0081"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0090"
+step = "P3"
+test = "tests/test_async.nim"
+
+[[text]]
+id = "TXT-0092"
+step = "P3"
+test = "tests/test_transported.nim"
+
+[[text]]
+id = "TXT-0095"
+step = "P3"
+test = "tests/test_async.nim"
+
+[[text]]
+id = "TXT-0097"
+step = "P3"
+test = "tests/test_async.nim"
+
+[[text]]
+id = "TXT-0118"
+step = "P3"
+test = "tests/test_transported.nim"
+
+[[text]]
+id = "TXT-0079"
+step = "P3"
+test = "tests/test_transported.nim"
+
+[[text]]
+id = "TXT-0123"
+step = "P3"
+test = "tests/test_events.nim"
+
+[[text]]
+id = "TXT-0126"
+step = "P3"
+test = "tests/test_transport.nim"
+
+[[text]]
+id = "TXT-0078"
+step = "P3"
+reading = "A failure for one subscriber route leaves the publication's result as decided before fan-out, and drops the event for that route with a diagnostic."
+compared = "RUNTIME l.1149 at 6cac8335 against events.publishOp: the result is decided by publishedBy before candidates are named, and a route whose selected contract refuses the payload gets the diagnostic 'was not delivered on route' and no delivery (both fan-out loops); no test makes a route's contract refuse a payload the publisher's accepted, so the diagnostic rests on reading the code. The named test shows the rest for a Transport destination (l.1150): an Event over the subscriber's frame limit closes that connection (TRANSPORT §2.1, TXT-0079), that route gets nothing, the direct subscriber gets it, and `send`, which fails if its publish fails, still succeeds."
+kind = "holds"
+site = "tests/test_transported.nim"
+named = "an Event larger than the subscriber's frame limit"
+
+[[text]]
+id = "TXT-0080"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/runtime/events.nim"
+reading = "The publish callback has a result now (INTERFACE l.3351, TXT-0099, TXT-0077): the publisher's own failure is INVALID_PARAMS and no longer only a diagnostic. A failure for one subscriber route is TXT-0078."
+compared = "RUNTIME l.1226 at 6a4dfa28 against l.1140-1150 at 6cac8335, and events.publishOp (G165 replaced, I106)."
+
+[[text]]
+id = "TXT-0093"
+step = "P3"
+kind = "informative"
+reading = "The caller view's Runtime identifiers say nothing about placement. Nothing in the Runtime or the kit infers placement from them."
+compared = "INTERFACE l.2146 at 6cac8335 against invoke.callerOp, which reports the identifiers only; nothing compares them to decide a path."
+
+[[text]]
+id = "TXT-0094"
+step = "P3"
+kind = "informative"
+reading = "Whether a local-namespace value means the same on both sides is the contract's business, not the Runtime's."
+compared = "INTERFACE l.2147 at 6cac8335: the Runtime forwards payloads unchanged on every path."
+
+[[text]]
+id = "TXT-0103"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/runtime/events.nim"
+reading = "Reworded as TXT-0095: the permitted event scope is now named as the route's publish_events."
+compared = "INTERFACE l.2193 at 6a4dfa28 against l.2154 at 6cac8335, and events.scopedPublish (knowsEvent, then the route's allowsPublish in engine.scoped)."
+
+[[text]]
+id = "TXT-0104"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/runtime/events.nim"
+reading = "Reworded as TXT-0097: the publisher's authority failure, then a closed destination."
+compared = "INTERFACE l.2195 at 6a4dfa28 against l.2157 at 6cac8335, and events.scopedPublish."
+
+[[text]]
+id = "TXT-0112"
+step = "P3"
+kind = "informative"
+reading = "The sentence pointing at an extracted mirror file is gone (SO-10); the mirror is ours, recomputed from the spec text."
+compared = "TRANSPORT Abstract at 6cac8335 against spec/mirrors/TRN, which spectrace mirror rebuilds from the text."
+
+[[text]]
+id = "TXT-0113"
+step = "P3"
+kind = "reword"
+pair = "TXT-0130"
+reading = "The abstract now cites sections 8 and 9 for the stream bindings; nothing it states changed."
+compared = "TRANSPORT l.24 at 6a4dfa28 against l.21 at 6cac8335."
+
+[[text]]
+id = "TXT-0130"
+step = "P3"
+kind = "removed"
+reading = "Replaced by TXT-0113, which cites sections 8 and 9 for the stream bindings; nothing it states changed."
+compared = "TRANSPORT l.24 at 6a4dfa28 against l.21 at 6cac8335."
+
+[[text]]
+id = "TXT-0114"
+step = "P3"
+kind = "reword"
+pair = "TXT-0133"
+reading = "Only the line break inside 'inter-process' moved."
+compared = "TRANSPORT l.48 at 6a4dfa28 against l.40 at 6cac8335."
+
+[[text]]
+id = "TXT-0133"
+step = "P3"
+kind = "removed"
+reading = "Replaced by TXT-0114, in which only the line break inside 'inter-process' moved."
+compared = "TRANSPORT l.48 at 6a4dfa28 against l.40 at 6cac8335."
+
+[[text]]
+id = "TXT-0131"
+step = "P3"
+kind = "removed"
+reading = "The mirror-file sentences are gone (SO-10); see TXT-0112."
+compared = "TRANSPORT l.31 at 6a4dfa28 against the 6cac8335 abstract."
+
+[[text]]
+id = "TXT-0132"
+step = "P3"
+kind = "removed"
+reading = "As TXT-0131."
+compared = "TRANSPORT l.32 at 6a4dfa28 against the 6cac8335 abstract."
+
+[[text]]
+id = "TXT-0117"
+step = "P3"
+kind = "holds"
+reading = "The frame limit does not depend on any schema: a contract that admits a larger value does not raise it."
+compared = "TRANSPORT l.373 at 6cac8335 against transport/framing.nim and transport/limits.nim, whose limits are the configured frame maximum and the peer's, never a schema's, and the named test: `bulk.carried_event`'s `data` is an unbounded bstr (tests/kit/bulk_module.cddl), yet a 17 MiB Event is not carried to a peer with a 16 MiB limit (that connection closes TRANSPORT_ERROR) while a direct subscriber gets it."
+site = "tests/test_transported.nim"
+named = "an Event larger than the subscriber's frame limit"
+
+[[text]]
+id = "TXT-0119"
+step = "P3"
+kind = "informative"
+reading = "Advice to contract authors; nothing for the Runtime."
+compared = "TRANSPORT l.375 at 6cac8335."
+
+[[text]]
+id = "TXT-0127"
+step = "P3"
+kind = "holds"
+reading = "Envelope validation does not check params, result or data against their declarations: the schema check comes after it."
+compared = "TRANSPORT l.1169 at 6cac8335 against transport/envelope.nim and the boundary's schema check."
+site = "tests/test_transport.nim"
+named = "invalid UTF-8 inside a payload passes the envelope and fails at the schema"
+
+[[text]]
+id = "TXT-0135"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/transport/io/callee.nim"
+reading = "Only the code's name changed: LOGOS_ERR_TRANSPORT is the C name of the wire's TRANSPORT_ERROR, which the overflow already sent."
+compared = "TRANSPORT l.808 at 6a4dfa28 against l.795-796 at 6cac8335, and callee.overflow."
+
+[[text]]
+id = "TXT-0137"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/transport/envelope.nim"
+reading = "Replaced by TRN-0395: non-deterministic CBOR is refused anywhere in the message, which the decoder already checked over the whole message."
+compared = "TRANSPORT l.1180 at 6a4dfa28 against l.1161 at 6cac8335, and decodeMessage."
+
+[[text]]
+id = "TXT-0138"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/transport/envelope.nim"
+reading = "Replaced by TXT-0127, which says the same of envelope validation."
+compared = "TRANSPORT l.1188 at 6a4dfa28 against l.1169 at 6cac8335."
+
+[[text]]
+id = "TXT-0141"
+step = "P3"
+kind = "removed"
+reading = "A duplicate: the old normative references listed RFC 5280 twice. 6cac8335 keeps one entry."
+compared = "TRANSPORT l.1431 and l.1446 at 6a4dfa28 against l.1413 at 6cac8335."
+
+[[text]]
+id = "TXT-0178"
+step = "P3"
+kind = "holds"
+reading = "expires_at does not prevent an earlier end: an authority withdrawal revokes the route before it."
+compared = "RUNTIME l.2896 at 6cac8335 against engine's re-authorization after policy_changed: a deny or narrowing revokes the route at once, whatever expires_at says. Nothing produces route-timeout (routes.nim); a later idle policy would map it to NOT_READY (R l.1263)."
+site = "tests/test_runtime_authority.nim"
+named = "a deny or narrowing revo"
+
+[[units]]
+id = "IFC-0712"
+compared = "INTERFACE l.2012 at 6a4dfa28 ('the version-2 vtables') against l.1968 at 6cac8335 ('the vtables in Section 5.2'). P2 moved the vtables to ABI version 3; both still carry prepare_call (test_async)."
+
+[[stale]]
+id = "TRN-0200"
+compared = "The envelope-only determinism rule (T l.1180 at 6a4dfa28) is replaced by TRN-0395 (T l.1161 at 6cac8335: anywhere in the message, including params, result and data). The decoder already checked the whole message; test_transport moved to TRN-0395 and gained cases inside params, result and data."
+
+[[moved]]
+id = "TXT-0168"
+from = "P3"
+to = "P5"
+reason = "RUNTIME l.2587, the host's protected configuration permitting a generated id, belongs to the generated-id work P5 owns with G192; P3 builds nothing of that path."
+
+[[moved]]
+id = "TXT-0169"
+from = "P3"
+to = "P5"
+reason = "As TXT-0168: RUNTIME l.2588 on not disclosing a generated id through the Host Embedding API goes with G192 in P5."
+
+# P3b: the remote profiles (DECISIONS I107) -------------------------------------------------------------------------
+
+[[units]]
+id = "TRN-0397"
+decision = "I107"
+
+[[units]]
+id = "TRN-0401"
+decision = "I107"
+
+[[units]]
+id = "TRN-0402"
+decision = "I107"
+
+[[units]]
+id = "TRN-0403"
+decision = "I107"
+
+[[text]]
+id = "TXT-0106"
+step = "P3"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0128"
+step = "P3"
+test = "tests/test_remote_tls.nim"
+
+[[text]]
+id = "TXT-0108"
+step = "P3"
+kind = "holds"
+site = "tests/test_remote_tls.nim"
+named = "both ends authenticate through their enrollments before any Transport data"
+reading = "The selected profile authenticates the enrolled Runtime before the Transport Hello: the 5-2 carrier hands a stream to its owner only after the handshake and the enrollment check passed, so the Hello is the first frame on an authenticated stream."
+compared = "RUNTIME l.2707 at 6cac8335 against transport/tls/stream.nim (connect and serve return a stream only once the peer check passed, G328) and the named test, where neither end reads a frame before both are authenticated."
+
+[[text]]
+id = "TXT-0109"
+step = "P3"
+kind = "informative"
+reading = "What remote authentication does not establish. Nothing here treats the carrier's peer identity as authorization, package identity, schema compatibility or route authority: no Runtime or Module Host code receives it (inspection item RUN-1154)."
+compared = "RUNTIME l.2708 at 6cac8335 against the importers of transport/tls (the TLS programs and test_remote_tls only; tools/lint/layers.py keeps it out of logosd) and runtime/authz.nim, whose requests carry the consumer instance and the request."
+
+[[text]]
+id = "TXT-0110"
+step = "P3"
+kind = "informative"
+reading = "A cross-reference: those claims have their own checks under TRANSPORT §8.4 and the Runtime and contract rules, which every call already meets whatever path carried it."
+compared = "RUNTIME l.2710 at 6cac8335 against TRANSPORT §8.4 l.1183-1186 and the per-call authorization of runtime/engine.nim (require, rcPrecheck)."
+
+[[text]]
+id = "TXT-0111"
+step = "P3"
+kind = "informative"
+reading = "QUIC stream use, datagrams and migration are the QUIC profile's, which is not built (step 5-12, I107): no behaviour exists here for it to govern."
+compared = "RUNTIME l.2712 at 6cac8335 against TRANSPORT §8.4.2 and conformance/claims/TRN.toml, where TRN-0401 to TRN-0403 are deferred by name."
+
+[[text]]
+id = "TXT-0174"
+step = "P3"
+kind = "holds"
+site = "tests/test_remote_tls.nim"
+named = "both ends authenticate through their enrollments before any Transport data"
+reading = "As TXT-0108, for the Runtime Control endpoint: authentication under TRANSPORT §8.4 comes before the Transport Hello."
+compared = "RUNTIME l.2750 at 6cac8335 against the same carrier and test as TXT-0108."
+
+[[text]]
+id = "TXT-0175"
+step = "P3"
+kind = "holds"
+site = "tests/test_remote_tls.nim"
+named = "the caller refuses a target that is not the Runtime it named"
+reading = "A `runtime_instance_id` is what the caller expects, never evidence: the peer is authenticated by its certificate under an active enrollment, and a peer that authenticates as another Runtime is refused."
+compared = "RUNTIME l.2751 at 6cac8335 against transport/tls/verify.nim (expectRuntime: the named Runtime's active record, its anchor and SPKI) and the named test."
+
+[[text]]
+id = "TXT-0176"
+step = "P3"
+kind = "informative"
+reading = "No remote Runtime Control session exists yet: `connect_remote` answers before any connection (I107). The Transport Hello of every session already checks the endpoint's schema root (TRANSPORT §3.1), which a remote one will do after authentication."
+compared = "RUNTIME l.2752 at 6cac8335 against bindings.rcConnectRemoteOp and the Hello check of transport/session.nim."
+
+[[text]]
+id = "TXT-0177"
+step = "P3"
+kind = "informative"
+reading = "A successful Hello authorizes nothing: every Runtime Control method is authorized on each call against its consumer, whatever binding or session carried it."
+compared = "RUNTIME l.2753 at 6cac8335 against runtime/engine.nim (require on each method; rcPrecheck before a payload that fails validation)."
+
+[[text]]
+id = "TXT-0139"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/transport/tls/params.nim"
+reading = "Replaced by TXT-0128 and TRN-0396: the transport selects the profile, and a present `profile` must name that one; TlsTcpAddress.check refuses another."
+compared = "TRANSPORT l.1204 at 6a4dfa28 against l.1183-1184 at 6cac8335, and TlsTcpAddress.check."
+
+[[text]]
+id = "TXT-0140"
+step = "P3"
+kind = "removed"
+site = "src/logos_core/runtime/rcaddress.nim"
+reading = "Split into TRN-0401 (transport `quic`) and TRN-0402 (ALPN `logos.remote.quic`), deferred with QUIC to step 5-12 (I107). A Runtime Control `quic` address with another `alpn` is refused by M8 (rcaddress.mismatching, RUN-1153)."
+compared = "TRANSPORT l.1312 at 6a4dfa28 against l.1297-1299 at 6cac8335, and rcaddress.mismatching."
+
+# P4d: the marked-method refusal and the zeroing's removal (DECISIONS I108) ---------------------------------------
+
+[[text]]
+id = "TXT-0157"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0129"
+step = "P4"
+test = "tests/test_routes.nim"
+
+# P4a: Runtime Control's typed errors and schema (DECISIONS I108) ---------------------------------------------------
+
+[[units]]
+id = "RUN-1124"
+decision = "I108"
+compared = "RUNTIME l.1835 at 6cac8335: a Runtime serving Runtime Control to another Runtime. None does before 5-7a (no remote Runtime Control session; `connect_remote` answers before connecting, I107)."
+
+[[units]]
+id = "RUN-1125"
+decision = "I108"
+compared = "RUNTIME l.1835 at 6cac8335: the source Runtime of a forwarded request. Nothing forwards one before 5-7a."
+
+[[deferred]]
+id = "TXT-0163"
+rides = "RUN-1124"
+decision = "I108"
+reason = "A forwarded `renew_route` or `close_route` (l.1836) needs a source and a target Runtime, which 5-7a builds; the target's order is RUN-1124's."
+
+[[moved]]
+id = "TXT-0161"
+from = "P4"
+to = "P6"
+reason = "`configuration-rejected` (l.1821) is produced by `apply_configuration`'s outcome, which P6 builds; P4a builds only the error arm. A P6 test clears it."
+
+[[moved]]
+id = "CFG-0152"
+from = "P6"
+to = "P4"
+reason = "A stale configuration-state revision at `update_configuration` is `stale-revision`: P4a builds it, and the test [CFG-0152] in tests/test_config.nim claims it."
+
+[[moved]]
+id = "CFG-0154"
+from = "P6"
+to = "P4"
+reason = "A stale revision at `apply_configuration` is `stale-revision`: P4a builds it, and the test [CFG-0154] in tests/test_config.nim claims it."
+
+[[moved]]
+id = "CFG-0155"
+from = "P6"
+to = "P4"
+reason = "The revision is compared before the rows of CONFIG §8's table: the preconditions test [CFG-0155] in tests/test_config.nim claims it."
+
+[[stale]]
+id = "RUN-0386"
+compared = "`route_state` without `draining`: RUN-1127. The schema test moved to it."
+
+[[stale]]
+id = "RUN-0392"
+compared = "The enrollment rules left the Runtime Control schema for `logos.runtime_enrollment` (§9.3.7): RUN-1147 replaces `remote_identity_profile`. The schema test moved to RUN-1146 to RUN-1150."
+
+[[stale]]
+id = "RUN-0393"
+compared = "As RUN-0392: `trust_anchor_id` is RUN-1148."
+
+[[stale]]
+id = "RUN-0394"
+compared = "As RUN-0392: `subject_public_key_info` is RUN-1149."
+
+[[stale]]
+id = "RUN-0395"
+compared = "As RUN-0392: `remote_runtime_enrollment` is RUN-1150. transport/tls/trust.nim keeps its own record (P4 plan §1.1)."
+
+[[stale]]
+id = "RUN-0401"
+compared = "`module_record` gains `? extends`: RUN-1128. The schema test moved to it."
+
+[[stale]]
+id = "RUN-0429"
+compared = "`create_module_response` is a choice of its result and `{ error }`: RUN-1131."
+
+[[stale]]
+id = "RUN-0431"
+compared = "`start_module_response`, the same: RUN-1132."
+
+[[stale]]
+id = "RUN-0433"
+compared = "`stop_module_response`, the same: RUN-1133."
+
+[[stale]]
+id = "RUN-0435"
+compared = "`recover_module_response`, the same: RUN-1134."
+
+[[stale]]
+id = "RUN-0881"
+compared = "`retire_module_response` is `{}` or `{ error }`: RUN-1135."
+
+[[stale]]
+id = "RUN-0450"
+compared = "`update_permission_settings_response`, the same: RUN-1136."
+
+[[stale]]
+id = "RUN-0459"
+compared = "`update_configuration_response`, the same: RUN-1137."
+
+[[stale]]
+id = "RUN-0461"
+compared = "`apply_configuration_response`, the same: RUN-1138."
+
+[[stale]]
+id = "RUN-1005"
+compared = "A revision mismatch at `retire_module` is `stale-revision` without mutation, no longer INVALID_PARAMS: RUN-1185. The test in test_recovery moved to it."
+
+[[text]]
+id = "TXT-0160"
+step = "P4"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0162"
+step = "P4"
+test = "tests/test_recovery.nim"
+
+[[text]]
+id = "TXT-0198"
+step = "P4"
+test = "tests/test_recovery.nim"
+
+[[text]]
+id = "TXT-0170"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0171"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0172"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0173"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0145"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0570"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0571"
+step = "P4"
+test = "sdk/tests/test_rc_schema.nim"
+
+[[text]]
+id = "TXT-0207"
+step = "P4"
+kind = "informative"
+reading = "Prose under an informative example: the route of B.5 names the provider it resolved to in the remote Runtime. No route resolves through a facade before 5-7b; the example decodes as a route record (test [RUN-1208])."
+compared = "RUNTIME App B.5 l.4156 at 6cac8335 against l.4284 at 6a4dfa28 (TXT-0271) and sdk/tests/test_rc_schema.nim."
+
+[[text]]
+id = "TXT-0208"
+step = "P4"
+kind = "holds"
+site = "tests/test_routes.nim:594"
+named = "renew_route (§9.3 l.3183-3190"
+reading = "A route's identifier is the one its Runtime allocated and is kept for renewal and closure: the test renews the route by its id, closes it by the same id, and a renewal after the close is NOT_READY. Materialization by id is RUN-0173 and RUN-0800."
+compared = "RUNTIME App B.5 l.4157 at 6cac8335 against tests/test_routes.nim renew_route and runtime/engine.nim newRouteId."
+
+[[text]]
+id = "TXT-0209"
+step = "P4"
+kind = "informative"
+reading = "The example carries `invocation` and `expires_at`, as an establish answer does (RUN-0541, RUN-0623); B.5 decodes with both (test [RUN-1208])."
+compared = "RUNTIME App B.5 l.4159 at 6cac8335 against sdk/tests/test_rc_schema.nim and tests/test_transported.nim."
+
+[[text]]
+id = "TXT-0210"
+step = "P4"
+kind = "informative"
+reading = "Remote materialization (authentication, then the Hello) is 5-7a's; for local transport, materialization through the binding performs the Hello (RUN-0800 to RUN-0806)."
+compared = "RUNTIME App B.5 l.4160 at 6cac8335 against runtime/bindings.nim materialize_route and TRANSPORT §8.4."
+
+[[text]]
+id = "TXT-0211"
+step = "P4"
+kind = "holds"
+site = "tests/test_transported.nim:295"
+named = "no list, record, retained answer, diagnostic or stored file holds a ticket"
+reading = "`list_routes` returns no `invocation`, so no ticket: the test lists the routes after an establish and finds no ticket in them, nor in a replayed answer."
+compared = "RUNTIME App B.5 l.4161 at 6cac8335 against tests/test_transported.nim and runtime/engine.nim listRoutes."
+
+[[text]]
+id = "TXT-0271"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0207: B.5 now shows the route resolved through the facade, whose target is the remote provider, not the local facade."
+compared = "RUNTIME App B.5 l.4284 at 6a4dfa28 against l.4156 at 6cac8335."
+
+[[text]]
+id = "TXT-0272"
+step = "P4"
+kind = "removed"
+reading = "B.5 is now the consumer-facing record with its invocation (TXT-0209); that `list_routes` omits the invocation is TXT-0211."
+compared = "RUNTIME App B.5 l.4287 at 6a4dfa28 against l.4159-4161 at 6cac8335."
+
+# P4b: the order of checks, stop on acceptance, the provider status set (DECISIONS I108) -------------------------
+
+[[text]]
+id = "TXT-0034"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0040"
+step = "P4"
+kind = "removed"
+reading = "'Passes through unchanged' now holds only after the provider-result validation (TXT-0034), which limits the provider statuses to a set (INTERFACE l.3306-3311); any other is MODULE_ERROR."
+compared = "INTERFACE l.3180 at 6a4dfa28 against l.3134 and l.3306-3311 at 6cac8335, and `providerChecked` (sdk/src/logos_sdk/abi/checks.nim) at its five call sites."
+
+[[text]]
+id = "TXT-0156"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0158"
+step = "P4"
+test = "tests/test_persist.nim"
+
+[[text]]
+id = "TXT-0159"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0201"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0202"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0226"
+step = "P4"
+kind = "removed"
+reading = "The old row made a stale revision INVALID_PARAMS. It is now the typed `stale-revision` (l.1818-1822, P4a), compared before the precondition table's rows (step 5, l.1830)."
+compared = "RUNTIME l.1913 at 6a4dfa28 against l.1818-1822 and l.1830 at 6cac8335, and the stale cases of the order tests in tests/test_routes.nim."
+site = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0267"
+step = "P4"
+kind = "removed"
+reading = "The old success meant the lifecycle work toward `stopping` or `unloaded` was done. TXT-0201 replaces it: success is the accepted stop, at `stopping` or `unloaded`, and completion is reported apart (TXT-0202)."
+compared = "RUNTIME l.3687 at 6a4dfa28 against l.3551-3556 at 6cac8335, and `stop` in src/logos_core/runtime/engine.nim with the RUN-1188 tests of tests/test_routes.nim."
+site = "tests/test_routes.nim"
+
+[[stale]]
+id = "RUN-0347"
+compared = "Concurrent invocations sharing no identity, decision or key scope (old l.1823) has no successor at 6cac8335. Its tags are dropped; the test about one key's concurrent requests carries RUN-0663."
+
+[[stale]]
+id = "RUN-0548"
+compared = "Unordered or duplicate `route_access` lists: RUN-1162 (l.2932), which adds INVALID_PARAMS without validation detail. The test moved to it and checks the detail."
+
+[[moved]]
+id = "RUN-0268"
+from = "P4"
+to = "P8"
+reason = "Its successor RUN-1105 (implemented and extended commitments unique, l.1349) is P8's pending unit; the gate fails a test citing a pending unit, so P8 retags the citation when it claims RUN-1105."
+
+[[moved]]
+id = "RUN-0630"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1183 (l.3368) is P5's pending unit; P5 retags the tests when it claims it (the gate fails a test citing a pending unit)."
+
+[[moved]]
+id = "RUN-0639"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1184 (l.3384) is P5's pending unit; P5 retags the tests and the inspection item when it claims it. The engine comment cites RUN-1184 already."
+
+[[moved]]
+id = "RUN-0675"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1190 (l.3571) is P5's pending unit; P5 retags the claim when it claims it."
+
+[[moved]]
+id = "RUN-0912"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1142 (l.2518) is P5's pending unit; P5 retags the tests when it claims it. The engine comment cites RUN-1142 already."
+
+[[moved]]
+id = "RUN-1053"
+from = "P4"
+to = "P5"
+reason = "Its successor RUN-1191 (l.3602) is P5's pending unit; P5 retags the test and the inspection item when it claims it."
+
+# P4c: route states, M7, M9 and G169 (DECISIONS I108) ------------------------------------------------------------
+
+[[units]]
+id = "CAP-0305"
+compared = "CA l.577 at 6a4dfa28 against l.569 at 6cac8335: the rejection of `execution_renewal` from an ordinary caller is now NOT_AUTHORISED without dispatch. hostcall.authorityRefusal already answers it so; the test [CAP-0305] in test_runtime_authority checks the code and that nothing reaches the authority."
+
+[[units]]
+id = "IFC-0581"
+compared = "INTERFACE l.395 at 6a4dfa28 against l.375 at 6cac8335: the rejection of a call whose decision retains a marked value is now NOT_AUTHORISED. The engine's retention refusal already answers it so before dispatch; the [IFC-0581] tests in test_wipe_routes check the code on a direct, a local-transport and a hosted route."
+
+[[units]]
+id = "RUN-0289"
+compared = "RUNTIME l.1528 at 6a4dfa28 against l.1454 at 6cac8335: 'reject or quarantine' becomes 'reject'. Nothing quarantines: a malformed record is refused before any registry entry exists (test [RUN-0289] in test_engine)."
+
+[[units]]
+id = "RUN-0326"
+compared = "RUNTIME l.1737 at 6a4dfa28 against l.1646 at 6cac8335: 'runtime API error channel' becomes 'Runtime Control binding error channel', a renaming. A denied Runtime Control operation is NOT_AUTHORISED on the binding that carried it (tests [RUN-0326] in test_engine and test_runtime_authority)."
+
+[[units]]
+id = "RUN-0360"
+compared = "RUNTIME l.1844 at 6a4dfa28 against l.1741 at 6cac8335: expiry joins the ways a route becomes terminal. An expired route is revoked with authority-expired and a later renew_route is NOT_AUTHORISED (test [RUN-0360] [RUN-1164] in test_runtime_authority); closed, revoked and failed routes stay as they were (tests [RUN-0360] in test_routes)."
+
+[[units]]
+id = "RUN-1167"
+decision = "G356"
+compared = "RUNTIME l.3019 at 6cac8335: a resolved continuation whose route id equals another route the consumer holds fails with TRANSPORT_ERROR. No Runtime resolves a continuation before 5-7b (G356)."
+
+[[units]]
+id = "RUN-1174"
+decision = "G355"
+compared = "RUNTIME l.3175 at 6cac8335, the successor of RUN-0599: a facade is ready only when the reflected remote target is ready and satisfies the selected exact contract. No facade exists before 5-7b (G355)."
+
+[[units]]
+id = "RUN-1175"
+decision = "G355"
+compared = "RUNTIME l.3175 at 6cac8335, the successor of RUN-0602: what a facade record keeps of the remote records it maps. No facade exists before 5-7b (G355)."
+
+[[units]]
+id = "RUN-1176"
+decision = "G355"
+compared = "RUNTIME l.3193 at 6cac8335, the successor of RUN-0606: a facade stops reporting ready once the remote module stops, fails, no longer satisfies the exact contract or is unreachable. No facade exists before 5-7b (G355)."
+
+[[stale]]
+id = "RUN-0491"
+compared = "RUNTIME l.2665 at 6a4dfa28 (the host accepts a Runtime-generated id before it is used) has no unit at 6cac8335: l.2587 says the host's protected configuration permitting generation is its acceptance, with no requirement keyword (G192's interim, as built). The inspection item for RUN-0846 drops it; the host's acceptance stays as built (G192)."
+
+[[stale]]
+id = "RUN-0504"
+compared = "RUNTIME l.2741 at 6a4dfa28 (a QUIC profile's ALPN carried by the address or supplied by the profile) is replaced by l.2705 at 6cac8335, which fixes `alpn` to `logos.remote.quic` and lets the profile supply it. No QUIC transport exists (5-12); the claims entry leaves and SPEC-STATUS's E2 row drops it."
+
+[[stale]]
+id = "RUN-0505"
+compared = "RUNTIME l.2750 at 6a4dfa28 is reworded as RUN-1154 (l.2709 at 6cac8335), which P3 cleared by an inspection item. Its claims entry leaves."
+
+[[stale]]
+id = "RUN-0506"
+compared = "RUNTIME l.2750 at 6a4dfa28 (transport authentication authorizes nothing without a deployment profile) is replaced by l.2707-2708 at 6cac8335: the selected remote profile's authentication authorizes no Runtime Control operation or route, with no requirement keyword. Nothing authorizes from transport authentication (RUN-1154's inspection item). Its claims entry leaves."
+
+[[stale]]
+id = "RUN-0507"
+compared = "RUNTIME l.2759 at 6a4dfa28 (QUIC migration changes no identity or authorization) is gone at 6cac8335: l.2712 hands QUIC stream use, datagrams and migration to the selected remote profile (TRANSPORT §8.4, 5-12). The claims entry leaves and SPEC-STATUS's E2 row drops it."
+
+[[stale]]
+id = "RUN-0541"
+compared = "Replaced by RUN-1161 (RUNTIME l.2914 at 6cac8335), which adds the idempotent-replay exception G255 already built. test_transported, test_routes, the RUN claims comment, CONFORMANCE.md, SPEC-STATUS.md and I90 now cite RUN-1161."
+
+[[stale]]
+id = "RUN-0579"
+compared = "Replaced by RUN-1173 (RUNTIME l.3121 at 6cac8335): a provider or session that no longer satisfies the route's exact contract replaces 'incompatible schema change'. A stopped provider still fails its routes (test [RUN-1173] in test_routes); the inspection item for RUN-0167 cites that test."
+
+[[stale]]
+id = "RUN-0599"
+compared = "Replaced by RUN-1174 (RUNTIME l.3175 at 6cac8335), deferred to 5-7b with G355. Its claims entry becomes RUN-1174's."
+
+[[stale]]
+id = "RUN-0602"
+compared = "Replaced by RUN-1175 (RUNTIME l.3175 at 6cac8335), deferred to 5-7b with G355. Its claims entry becomes RUN-1175's."
+
+[[stale]]
+id = "RUN-0606"
+compared = "Replaced by RUN-1176 (RUNTIME l.3193 at 6cac8335), deferred to 5-7b with G355. Its claims entry becomes RUN-1176's."
+
+[[stale]]
+id = "RUN-0623"
+compared = "Replaced by RUN-1179 (RUNTIME l.3327 at 6cac8335), which adds the idempotent-replay exception (G255). The tests in test_transported, the RUN claims comment, CONFORMANCE.md, SPEC-STATUS.md and I90 now cite RUN-1179."
+
+[[stale]]
+id = "RUN-0624"
+compared = "Replaced by RUN-1180 (RUNTIME l.3327 at 6cac8335): the direct route's consumer obtains its handle through `materialize_route` rather than 'the Runtime handle API', the same operation. test_routes and test_transported cite RUN-1180."
+
+[[stale]]
+id = "RUN-0626"
+compared = "Replaced by RUN-1181 (RUNTIME l.3346 at 6cac8335), limited to a route not in a terminal state; a terminal one is TXT-0194. The close_route test in test_routes cites RUN-1181 and TXT-0194."
+
+[[deferred]]
+id = "TXT-0182"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0183"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0184"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0185"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0186"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0187"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[deferred]]
+id = "TXT-0188"
+rides = "RUN-1167"
+decision = "G356"
+reason = "Continuation resolution for a local module consumer (RUNTIME l.3019-3031), which no Runtime performs before 5-7b; RUN-1167 is its requirement."
+
+[[text]]
+id = "TXT-0142"
+step = "P4"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0396"
+step = "P4"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0150"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0180"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0194"
+step = "P4"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0395"
+step = "P4"
+kind = "holds"
+site = "tests/test_runtime_authority.nim"
+named = "after policy_changed each route is re-authorized at once with renew-route"
+reading = "A dependent route is re-evaluated with a decision for its bound scope, as for renewal, with no consumer request: the Runtime asks `renew-route` for the route's id and bound access itself (G216), as the interim did."
+compared = "CA l.937 at 6cac8335 against engine.reauthRoutes and engine.startReauth, and the test, where the authority receives `renew-route` for each route after policy_changed with no renew_route call."
+
+[[text]]
+id = "TXT-0228"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/runtime/engine.nim"
+reading = "Reworded as TXT-0166: a consumer that stopped is no longer `consumer-unavailable`; only a failed realization is. routesFollow already closed a stopped consumer's routes and failed a failed one's (G170)."
+compared = "RUNTIME l.2508 at 6a4dfa28 against l.2432 at 6cac8335, and engine.routesFollow."
+
+[[text]]
+id = "TXT-0166"
+step = "P4"
+kind = "reword"
+pair = "TXT-0228"
+site = "src/logos_core/runtime/engine.nim"
+reading = "`consumer-unavailable` now means only that the consumer's realization has failed. routesFollow sets it only for a consumer in `error`; a stopped consumer's routes close with no failure."
+compared = "RUNTIME l.2432 at 6cac8335 against l.2508 at 6a4dfa28, engine.routesFollow (rfConsumerUnavailable only when the consumer's state is msError; a consumer leaving loaded/ready otherwise closes its routes with no failure), and the test 'a stopped consumer closes its routes; a failed one fails them' in tests/test_routes.nim, which checks both."
+
+[[text]]
+id = "TXT-0257"
+step = "P4"
+kind = "removed"
+reading = "Reworded as TXT-0192: route and instance failures are reported as `failure` classifications, not reason strings."
+compared = "RUNTIME l.3333 at 6a4dfa28 against l.3200 at 6cac8335."
+
+[[text]]
+id = "TXT-0192"
+step = "P4"
+kind = "reword"
+pair = "TXT-0257"
+site = "src/logos_core/runtime/routes.nim"
+reading = "A route's failure is a `failure` record whose code is a defined classification (RouteFailureCode), and an instance's is a classification too; a diagnostic reason never replaces the code."
+compared = "RUNTIME l.3200 at 6cac8335 against routes.nim RouteFailureCode and the route records list_routes and the route events carry (`route_failure`: a `code`, then an optional `message`)."
+
+[[text]]
+id = "TXT-0248"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/runtime/routes.nim"
+reading = "`draining` left the route states at 6cac8335. routes.nim never had a draining state, and the regenerated rc_types (P4a) has no `draining` arm."
+compared = "RUNTIME l.3057 at 6a4dfa28 against l.2959-2963 at 6cac8335, and routes.nim RouteState."
+
+[[text]]
+id = "TXT-0146"
+step = "P4"
+kind = "holds"
+site = "tests/test_routes.nim"
+named = "a single route to a ready provider"
+reading = "`establish` never reads the consumer's `requires`: it takes the providers of the requested contract by `expects` and `selectContract` and decides each route from the consumer, the provider, the contract and the access. The test's consumer (`client` in tests/support/routefixture.nim) declares no `requires` and gets a ready route. That authority policy may use declared requirements (l.1361) is RUN-1106, an inspection item: no policy input takes them."
+compared = "RUNTIME l.1364 at 6cac8335 (no sentence at 6a4dfa28), `establish` and `expects` in src/logos_core/runtime/engine.nim, and the RUN-1106 item in conformance/inspection/RUN.toml."
+
+[[text]]
+id = "TXT-0148"
+step = "P4"
+kind = "reword"
+pair = "TXT-0217"
+site = "src/logos_core/runtime/engine.nim"
+reading = "TXT-0217's rule with 'or continuation' added. `establish` sets `partial` to `all and omitted`: an `all` request is partial when a candidate it decided was hidden or got no route. No continuation is returned before 5-7b (G356): the response's `continuations` is always empty, so a returned ready route is still the only way a provider counts."
+compared = "RUNTIME l.1416 at 6cac8335 against l.1489 at 6a4dfa28, and `establish` in src/logos_core/runtime/engine.nim with the tests 'all-runtime-visible and single selection' (partial and full `all` answers) and 'a single route to a ready provider' (no continuations) in tests/test_routes.nim."
+
+[[text]]
+id = "TXT-0151"
+step = "P4"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "a record the caller may not observe is omitted"
+reading = "Observation authority is decided per record for the method or event that observes it: each observation method asks its own Runtime Control scope (`methodScope`), each event its own (`eventScope`), and a list method's allow is applied to each record with that record's selectors (`admits`). The test shows a record the caller may not observe omitted. This is G161's interim (TF-09), which the text now states, as G161's re-pin P4c bullet records."
+compared = "RUNTIME l.1542 at 6cac8335 (no sentence at 6a4dfa28; G161 read l.3665 there), `methodScope` and `eventScope` in src/logos_core/runtime/observe.nim and `admits` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0152"
+step = "P4"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "a record is shown only when one alternative admits it whole"
+reading = "Under the Capability Authority a record is observable when one allow for the method or event carries a `runtime_control_scope` whose present constraints match the record: `admitsScope` accepts an allowed scope only when it covers the record's exact scope (G226). The test shows a record shown when one alternative covers it and hidden when none covers it whole."
+compared = "RUNTIME l.1543 at 6cac8335 (no sentence at 6a4dfa28), and `admitsScope` and `subjectScope` in src/logos_core/runtime/observe.nim."
+
+[[text]]
+id = "TXT-0153"
+step = "P4"
+kind = "holds"
+site = "tests/test_events.nim"
+named = "activation and each delivery are decided by the authority through its cache"
+reading = "Event subscription activation and event delivery join the list of operations that need an allow. A module event subscription is decided at activation (`subscribe-event`) and each delivery through the cached decision, decided afresh after `policy_changed`; a deny at delivery ends the subscription. Runtime Control events are decided the same way (G161, step 7b). The test shows the activation and each delivery decided by the authority."
+compared = "RUNTIME l.1633 at 6cac8335, a list item added to the list at l.1720-1730 at 6a4dfa28, and the event authorization of G161 (step 7b) and G175."
+
+[[text]]
+id = "TXT-0154"
+step = "P4"
+kind = "reword"
+pair = "TXT-0220"
+reading = "'runtime API error channels' becomes 'Runtime Control binding error channels'. The binding operations that act outside a Runtime Control method answer an authority result in their own LogosResult: `rcMaterializeOp` (same-process `materialize_route`) answers NOT_AUTHORISED with no handle for another consumer's route or a used ticket, and `rcConnectRemoteOp` answers NOT_AUTHORISED for a Runtime it has no enrollment for. There is no other runtime API."
+compared = "RUNTIME l.1655 at 6cac8335 against l.1750 at 6a4dfa28, and `rcMaterializeOp` and `rcConnectRemoteOp` in src/logos_core/runtime/bindings.nim with `materialize` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0155"
+step = "P4"
+kind = "reword"
+pair = "TXT-0223"
+reading = "The sentence naming the extracted `logos_runtime_types.cddl` (TXT-0223) becomes one saying the block is the complete `logos.runtime` supporting schema. Our copy, RNT/9.2.runtime-types.cddl, is recomputed from that block alone, and the Runtime Control contract takes the `logos.runtime` types from it (§9.3.2); nothing defines another `logos.runtime` rule."
+compared = "RUNTIME l.1774 at 6cac8335 against l.1877 at 6a4dfa28, and the §9.2 entry of spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0164"
+step = "P4"
+kind = "reword"
+pair = "TXT-0227"
+reading = "The subject is named. Old 'It uses' followed the error-classification paragraph (old l.1919) in the same paragraph, so 'It' read as that paragraph's subject; the new sentence opens §9.3.2's address table and names the Runtime Control contract. The objects are those of the table, defined by the §9.2 and §9.3.2 CDDL that the generated Runtime Control types follow."
+compared = "RUNTIME l.1841 at 6cac8335 against l.1920 at 6a4dfa28 (after l.1919)."
+
+[[text]]
+id = "TXT-0165"
+step = "P4"
+kind = "holds"
+site = "sdk/tests/test_rc_schema.nim"
+named = "logos.runtime.route_id (§9.2"
+reading = "`route_id` is `tstr .size (1..128)`: the schema test holds the `logos.runtime.route_id` rule in the §9.2 mirror. It is opaque and owned by the Runtime that allocates it: `newRouteId` makes 'route-', a 32-hex-digit prefix drawn per Runtime start and a counter (at most 59 bytes), never reused by that Runtime; `rcMaterializeOp` takes only 1 to 128 UTF-8 bytes. A consumer learns nothing from its form."
+compared = "RUNTIME l.1853 at 6cac8335 (the address table row; the CDDL rule was l.1863 at 6a4dfa28), `newRouteId` in src/logos_core/runtime/engine.nim and `rcMaterializeOp` in src/logos_core/runtime/bindings.nim."
+
+[[text]]
+id = "TXT-0167"
+step = "P4"
+kind = "holds"
+site = "tests/test_permissions.nim"
+named = "host-ambient stands for every facility class, claims no containment"
+reading = "`applied` means the saved settings are enforced where the Runtime admits a use (`saApplied` in src/logos_core/runtime/settings.nim; `epRuntimeAdmission`, the only active enforcement point). The shipped permission definitions claim no containment (`containment` false in src/logos_core/permissions.nim), so `applied` claims none for code the execution path cannot restrict. The test shows host-ambient claiming no containment (G283, CA l.366)."
+compared = "RUNTIME l.2477 at 6cac8335 (no sentence at 6a4dfa28), `saApplied` in src/logos_core/runtime/settings.nim and the definitions in src/logos_core/permissions.nim."
+
+[[text]]
+id = "TXT-0179"
+step = "P4"
+kind = "reword"
+pair = "TXT-0246"
+reading = "'acquires that route through the Runtime handle API' becomes 'obtains a route handle for that route through `materialize_route`'. That is the only way in the code: a same-process consumer materializes through its Runtime Control binding (`rcMaterializeOp`, then `materialize` on the Runtime thread). An out-of-process caller uses a local transport route (a hosted module); remote is 5-7a."
+compared = "RUNTIME l.2916 at 6cac8335 against l.3006 at 6a4dfa28, and `rcMaterializeOp` in src/logos_core/runtime/bindings.nim."
+
+[[text]]
+id = "TXT-0181"
+step = "P4"
+kind = "reword"
+pair = "TXT-0249"
+reading = "The 'runtime API surface' is dropped from where authority inputs arrive. In the code they arrive only through Runtime Control methods and, on a transported route, through the ticket the session presents; `materialize_route` takes no authority input but the route id. Decisions are evaluated through the authority policy and kept per route as before."
+compared = "RUNTIME l.2984 at 6cac8335 against l.3081 at 6a4dfa28, and `rcMaterializeOp` in src/logos_core/runtime/bindings.nim."
+
+[[text]]
+id = "TXT-0189"
+step = "P4"
+kind = "reword"
+pair = "TXT-0251"
+reading = "'them' is named: route establishment and renewal. Modules reach both only through `establish_route` and `renew_route` (`establish` and `renew` in src/logos_core/runtime/engine.nim, served on the Runtime Control binding); nothing else establishes or renews a route."
+compared = "RUNTIME l.3032 at 6cac8335 against l.3129 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0190"
+step = "P4"
+kind = "holds"
+site = "tests/test_transported.nim"
+named = "a ticket opens one handle"
+reading = "A replayed establishment answers without `invocation` (G255), and a consumer that needs a ticket calls `renew_route`, which issues a fresh one (`renew`). The test replays the establishment, finds no invocation, cannot materialize, renews, and then materializes."
+compared = "RUNTIME l.3081 at 6cac8335 (new; l.3080 says a replayed record omits `invocation`), and `renew` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0191"
+step = "P4"
+kind = "reword"
+pair = "TXT-0253"
+reading = "'expected module name' becomes 'selected provider's module name'. The route's material (`record` in src/logos_core/runtime/routes.nim, carried by route records and `route_state_changed`) sets `module` from the route's selected contract, whose module is the provider binding's module that `selectContract` chose. So it already was the selected provider's module name."
+compared = "RUNTIME l.3133 at 6cac8335 against l.3243 at 6a4dfa28, and `record` and `selectContract` in src/logos_core/runtime/routes.nim."
+
+[[text]]
+id = "TXT-0193"
+step = "P4"
+kind = "reword"
+pair = "TXT-0258"
+reading = "'the existing route-revocation policy' becomes 'the in-flight call policy of this section'. §9.3.15 states no in-flight policy: the only one is l.3123 in §9.3.14 (profile or implementation policy), which was the same section before §9.3 was split, so the reading is that one (an editorial remark, I108). Ours, since re-pin P5d replaced G174's interim by RUNTIME l.1271 (G174's P5d note; G260): an admitted call that its route's closure, failure, revocation or expiry ends before a valid final result completes TRANSPORT_ERROR, and a transported session no longer answers in-flight Requests NOT_AUTHORISED (at P4 this reading stated that interim; corrected at P9, Q11). The sentence's case, a disabled listener or export, has no instance here: none can be enabled (G298)."
+compared = "RUNTIME l.3317 at 6cac8335 against l.3459 at 6a4dfa28, l.3123 and l.1271 at 6cac8335, and `endRoute` in src/logos_core/runtime/engine.nim (G174 with its P5d note, G260)."
+
+[[text]]
+id = "TXT-0213"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/runtime/engine.nim"
+reading = "Replaced by TXT-0548 (l.1340, P8), which adds `extends` to the expected contract facts. `checkContracts` checks `primary_contract` and `implements` as expected facts against the validated call surface; `extends` is P8's."
+compared = "RUNTIME l.1414 at 6a4dfa28 against l.1340 at 6cac8335, and `checkContracts` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0217"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/runtime/engine.nim"
+reading = "Replaced by TXT-0148 (l.1416), which adds 'or continuation'."
+compared = "RUNTIME l.1489 at 6a4dfa28 against l.1416 at 6cac8335, and `establish` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0220"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0154: 'runtime API error channels' becomes 'Runtime Control binding error channels'."
+compared = "RUNTIME l.1750 at 6a4dfa28 against l.1655 at 6cac8335."
+
+[[text]]
+id = "TXT-0223"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0155: §9.2 names no extracted `logos_runtime_types.cddl`; its block is the complete `logos.runtime` schema. Our mirror is extracted from the text by spec/mirrors.toml, not taken from a published artifact."
+compared = "RUNTIME l.1877 at 6a4dfa28 against l.1774 at 6cac8335, and spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0224"
+step = "P4"
+kind = "removed"
+reading = "Precedence over an extracted artifact goes with the artifact sentences (TXT-0223, TXT-0225): 6cac8335 names no extracted CDDL file in RUNTIME. The same sentence at old l.1895 goes too. Our mirrors are recomputed from the spec text, so the text governs by construction."
+compared = "RUNTIME l.1878 and l.1895 at 6a4dfa28 against l.1774 and l.1788 at 6cac8335 (no 'extracted' left in RUNTIME)."
+
+[[text]]
+id = "TXT-0225"
+step = "P4"
+kind = "removed"
+reading = "`logos_runtime_control.cddl` is no longer named; l.1788 keeps 'The CDDL in this section defines the normative machine-readable contract'. Our §9.3.2 and §9.3.7 mirrors come from that CDDL (spec/mirrors.toml)."
+compared = "RUNTIME l.1894 at 6a4dfa28 against l.1788 at 6cac8335."
+
+[[text]]
+id = "TXT-0227"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0164, which names the Runtime Control contract as the subject."
+compared = "RUNTIME l.1920 at 6a4dfa28 against l.1841 at 6cac8335."
+
+[[text]]
+id = "TXT-0232"
+step = "P4"
+kind = "removed"
+site = "src/logos_core/transport/tls/stream.nim"
+reading = "Successors TXT-0108 and TXT-0109 (l.2707-2708, cleared in P3): the selected remote profile authenticates the enrolled Runtime identity before the Hello, and that authentication authorizes nothing more. The TLS stream's handshake yields the peer's enrolled identity (`establish`, `peer`) and grants nothing; QUIC is 5-12 (I107)."
+compared = "RUNTIME l.2750-2751 at 6a4dfa28 against l.2707-2708 at 6cac8335, and `establish` and `peer` in src/logos_core/transport/tls/stream.nim."
+
+[[text]]
+id = "TXT-0233"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0109 (l.2708): authentication does not authorize Runtime Control operations or ordinary module routes, or establish package identity, schema compatibility or route authority."
+compared = "RUNTIME l.2752-2753 at 6a4dfa28 against l.2708 at 6cac8335."
+
+[[text]]
+id = "TXT-0236"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0111 (l.2712): the selected remote profile governs QUIC stream use under TRANSPORT §8.4, which carries one provider session on the first client-initiated bidirectional stream (TRANSPORT l.1300-1301). No QUIC before 5-12 (I107)."
+compared = "RUNTIME l.2759-2760 at 6a4dfa28 against l.2712 at 6cac8335 and TRANSPORT l.1300-1302."
+
+[[text]]
+id = "TXT-0237"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0111 (l.2712) and TRANSPORT l.1302: the QUIC profile uses no QUIC datagrams. No QUIC before 5-12 (I107)."
+compared = "RUNTIME l.2761-2762 at 6a4dfa28 against l.2712 at 6cac8335 and TRANSPORT l.1302."
+
+[[text]]
+id = "TXT-0239"
+step = "P4"
+kind = "removed"
+reading = "Successors RUN-1155 (l.2713: Runtime policy MAY prohibit migration), an inspection item, and TRANSPORT l.1309-1312 (migration only after path validation, keeping the Runtime identity, provider and route bindings). No QUIC before 5-12 (I107)."
+compared = "RUNTIME l.2765 at 6a4dfa28 against l.2713 at 6cac8335 and TRANSPORT l.1309-1312."
+
+[[text]]
+id = "TXT-0240"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0175 (l.2751, cleared in P3): the `runtime_instance_id` in Runtime Control records does not itself authenticate the peer. The clause on deployment or enrollment policy goes; enrollment is §9.3.7."
+compared = "RUNTIME l.2808-2809 at 6a4dfa28 against l.2751 at 6cac8335."
+
+[[text]]
+id = "TXT-0241"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0176 (l.2752, cleared in P3): a successful Hello for `logos_runtime_control` establishes a compatible endpoint schema after the authentication."
+compared = "RUNTIME l.2810-2812 at 6a4dfa28 against l.2752 at 6cac8335."
+
+[[text]]
+id = "TXT-0242"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0177 (l.2753, cleared in P3), the same sentence with 'Runtime Control operations' for 'runtime-control operations'."
+compared = "RUNTIME l.2813 at 6a4dfa28 against l.2753 at 6cac8335."
+
+[[text]]
+id = "TXT-0243"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0553 (l.2852, P8), which adds the extended contract. `record` sets `expected_contract` from the route's selected contract, primary or implemented; `extends` is P8's."
+compared = "RUNTIME l.2935 at 6a4dfa28 against l.2852 at 6cac8335, and `record` in src/logos_core/runtime/routes.nim."
+
+[[text]]
+id = "TXT-0244"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0178 (l.2896, cleared in P3), which names `route-timeout` among the earlier failures."
+compared = "RUNTIME l.2984 at 6a4dfa28 against l.2896 at 6cac8335."
+
+[[text]]
+id = "TXT-0246"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0179: the Runtime handle API becomes `materialize_route`."
+compared = "RUNTIME l.3006 at 6a4dfa28 against l.2916 at 6cac8335."
+
+[[text]]
+id = "TXT-0249"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0181, which drops the 'runtime API surface'."
+compared = "RUNTIME l.3081 at 6a4dfa28 against l.2984 at 6cac8335."
+
+[[text]]
+id = "TXT-0250"
+step = "P4"
+kind = "removed"
+reading = "Successor TXT-0554 (l.2995, P8): the Runtime validates that the provider exposes the selected contract commitment as its primary, implemented or extended contract. The code already selects by commitment, not by name and namespace: `expects` takes candidates by root and `selectContract` picks the contract; `extends` is P8's."
+compared = "RUNTIME l.3097 at 6a4dfa28 against l.2995 at 6cac8335, `expects` in src/logos_core/runtime/engine.nim and `selectContract` in src/logos_core/runtime/routes.nim."
+
+[[text]]
+id = "TXT-0251"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0189, which names what 'them' was: route establishment and renewal."
+compared = "RUNTIME l.3129 at 6a4dfa28 against l.3032 at 6cac8335."
+
+[[text]]
+id = "TXT-0253"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0191: 'expected module name' becomes 'selected provider's module name'."
+compared = "RUNTIME l.3243 at 6a4dfa28 against l.3133 at 6cac8335."
+
+[[text]]
+id = "TXT-0258"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0193: 'the existing route-revocation policy' becomes 'the in-flight call policy of this section'."
+compared = "RUNTIME l.3459 at 6a4dfa28 against l.3317 at 6cac8335."
+
+[[text]]
+id = "TXT-0262"
+step = "P4"
+kind = "holds"
+reading = "Reworded, not removed: `close_route`'s in-flight sentence stays in §9.3.16 at l.3351 with the text of TXT-0193 (l.3317), which the diff listed once; its policy is l.3123 in §9.3.14, as for TXT-0193 (I108). Our close drains (G174 with its P5d note, G260): the closure does not end an admitted call, which completes with its result (l.1271 gives TRANSPORT_ERROR only to a call that an end cuts off), and a new call is NOT_READY. The frozen list has no new-side entry for l.3351, so no `reword` pair. (Recorded as `removed` at P4; corrected at P9, Q11.)"
+compared = "RUNTIME l.3490 at 6a4dfa28 against l.3351, l.3317, l.3123 and l.1271 at 6cac8335, `closeRoute` in src/logos_core/runtime/engine.nim, and the named test."
+site = "tests/test_transported.nim"
+named = "close_route drains"
+
+[[text]]
+id = "TXT-0264"
+step = "P4"
+kind = "removed"
+reading = "Replaced by TXT-0196 (l.3373, P5, behaviour): the event reports each execution-revision change, adding failure, selection and realization changes. P5 builds and tests it."
+compared = "RUNTIME l.3509 at 6a4dfa28 against l.3373 at 6cac8335."
+
+[[text]]
+id = "TXT-0361"
+step = "P4"
+kind = "holds"
+site = "tests/test_runtime_authority.nim"
+named = "a routed call naming another consumer"
+reading = "A request naming a consumer other than the authenticated one is refused at the Runtime boundary before any evaluation: `authorityRefusal` answers NOT_AUTHORISED without dispatch, and `refusal` keeps it as `azRefused` with source `psBoundary`, neither a deny nor a failed evaluation. Nothing reaches the Capability Authority, so it writes no audit record. The test shows the refusal kept, while a matching call reaches the authority."
+compared = "CAP l.94 at 6cac8335 (no sentence at 6a4dfa28), `authorityRefusal` in src/logos_core/runtime/invoke.nim and `refusal` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0572"
+step = "P4"
+kind = "holds"
+site = "sdk/tests/test_rc_schema.nim"
+named = "the Runtime Control contract no longer defines or imports the enrollment records"
+reading = "Read sentence by sentence: §9.3.1 to §9.3.16 keep old §9.3's sentences in order, split at paragraph breaks (one exception, §9.3.1/§9.3.2, which TXT-0164's named subject resolves). Each subsection opening names its subject, and each 'below', 'above', 'these' and 'this section' resolves in its own subsection or the one it names, except 'the in-flight call policy of this section' at l.3317 (§9.3.15) and l.3351 (§9.3.16), whose policy is l.3123 in §9.3.14 (TXT-0193, TXT-0262; an editorial remark, I108). The split the code depends on, the enrollment CDDL moved out of the Runtime Control contract into §9.3.7, the test shows."
+compared = "RUNTIME §9.3 to §9.3.16 (l.1783-3355) at 6cac8335 against §9.3 (l.1888-3492) at 6a4dfa28, and the §9.3.2 and §9.3.7 entries of spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0195"
+step = "P4"
+kind = "holds"
+site = "tests/test_routes.nim"
+named = "close_route's reason is diagnostic"
+reading = "`closeRoute` never reads `reason`: nothing records it, sends it to the provider or lets it choose the outcome, which the authority decision, the route's existence, readiness and the route's state decide alone. [IMPL] The Runtime keeps no copy for observation or audit: no route record, event or audit field carries one at 6cac8335. The test closes one route with a reason and one without and gets the same answer but for the route id, then closes again with another reason and gets the same bytes, every route closed with no failure."
+compared = "RUNTIME l.3353 at 6cac8335 (no sentence at 6a4dfa28), and `closeRoute` in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0199"
+step = "P4"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "a name-only selection needs an allow whose scope names no instance or provider"
+reading = "A request that omits both selectors is decided first over its name scope, `modules: [name]` with no instances or providers (G161's interim, which l.3535 now states), and `admitsScope` takes an allowed scope only when it covers that scope whole (G226). So an allowed scope naming instances or providers refuses the name-only request: the Capability Authority may only narrow (CA l.565-567), and a narrower scope does not cover the name scope. Under the Capability Authority the test reads the name scope `get_readiness` asks for, `modules: [meter_module]` alone, and shows allows narrowed to the instance or to its provider refusing the name-only request while the instance one admits the exact selector."
+compared = "RUNTIME l.3535 at 6cac8335 (no sentence at 6a4dfa28; l.3532-3534 kept), the name-scope decision in `selectLifecycle` (src/logos_core/runtime/engine.nim) and `admitsScope` in src/logos_core/runtime/observe.nim."
+
+[[moved]]
+id = "TXT-0269"
+from = "P4"
+to = "P5"
+reason = "Its replacement, TXT-0203 (l.3605), adds `configuration-missing`, `static-binding-mismatch` and `prerequisite-unavailable` to the initial classifications and is P5's; the old list is not false until P5 builds them."
+
+# P5a: the lifecycle ------------------------------------------------------------------------------------------------
+
+[[units]]
+id = "RUN-0070"
+compared = "RUNTIME l.366 at 6a4dfa28 ('invoke `logos_<module-C>_MODULE_name()` and return the expected module name') against l.346 at 6cac8335 ('... and require it to return the expected module name'). The caller now requires the value, which runtime/native.nim already did: a library whose `_MODULE_name()` returns another name is refused before init. The claim stays on test [RUN-0070] in tests/test_realizer.nim."
+
+[[units]]
+id = "RUN-0100"
+compared = "RUNTIME l.484 at 6a4dfa28 (`module_name -> { ... }`) against l.456-470 at 6cac8335 (`module_name -> [ { ... } ]`): a module name now maps to a list of instance records. The engine keeps instances by instance id and several may share one module name (runtime/engine.nim `State.instances`), and list_modules reports one record per instance (test [RUN-1128] in tests/test_observe.nim). Inspection item R-c keeps the claim; its reason was re-read and now says so."
+
+[[units]]
+id = "RUN-0121"
+compared = "RUNTIME l.660 at 6a4dfa28 against l.624 at 6cac8335: `LOGOS_ERR_NOT_READY` becomes `NOT_READY` (P4's code names); the rule is unchanged. The Runtime answers NOT_READY only for lifecycle, provider or route readiness: route establishment, a stopping consumer's calls, a start while `stopping` or while a cleanup is unresolved. The claim stays on test [RUN-0121] 'establishment failures' in tests/test_routes.nim."
+
+[[units]]
+id = "RUN-0227"
+compared = "RUNTIME l.1162 at 6a4dfa28 ('startup timeout') against l.1084 at 6cac8335 ('startup deadline'): terminology only. engine.checkDeadlines moves an instance not ready at its startup deadline to `error` with `startup-timeout`, and its provider and routes never become ready. The claim stays on test [RUN-0227] S-9 in tests/test_hosted.nim."
+
+[[units]]
+id = "RUN-0707"
+compared = "RUNTIME l.3857 at 6a4dfa28 ('within the active grace period') against l.3723 at 6cac8335 ('before the drain deadline expires'): terminology; the MAY to request forced cleanup through the realization, host or deployment mechanism is unchanged. P5a takes it for hosted realizations at both the stop and the shutdown deadline (engine.recordOverrun ends the Module Host); a shared-process realization is never force-released (l.3705). Inspection item R-o's reason is rewritten to say so."
+
+[[stale]]
+id = "RUN-0061"
+compared = "Old l.301 (module names must not contain `_call_` or `_publish_`, with the reason that they separate generated symbols) is RUN-1087 at l.284 without the reason. checkModuleName (sdk/src/logos_sdk/iface/names.nim) refuses both substrings. The only citation, in sdk/tests/test_iface.nim, moved to RUN-1087."
+
+[[stale]]
+id = "RUN-0109"
+compared = "The ASCII state diagram (old l.553) is replaced by the transition table at l.515-526 and its closing rule RUN-1091 (l.528). Every state assignment in runtime/engine.nim was audited against the table (DECISIONS G358); the lifecycle-table test in tests/test_engine.nim names RUN-1091 and TXT-0277 to TXT-0288, and with lcnTestHooks every commit of every suite is checked against the table. RUN-0109 left inspection item R-c; no test cited it."
+
+[[stale]]
+id = "RUN-0111"
+compared = "'During an authorized stop' (old l.624) became 'During a stop other than an unexpected realization failure' (RUN-1093, l.589), which takes in enforcement, reconciliation and shutdown stops. engine.routesFollow already closed a consumer's routes in every stop. The citations in tests/test_routes.nim, tests/test_hosted_routes.nim and docs/CONFORMANCE.md moved to RUN-1093, and the enforcement-stop test in tests/test_runtime_authority.nim carries it too."
+
+[[stale]]
+id = "RUN-0912"
+compared = "Old l.2590 ('... or stop and re-realize when necessary') became RUN-1142 at l.2518 ('... or stop the realization when necessary'): the Runtime no longer re-realizes. engine applies a pending permission application by an enforcement stop with intent and origin kept and never restarts it (RUN-0915, G281); orchestration may. The citations in tests/test_permissions.nim and tests/test_hosted_permissions.nim moved to RUN-1142, and the engine comment says 'stop the realization'."
+
+[[moved]]
+id = "TXT-0275"
+from = "P5"
+to = "P8"
+reason = "The new sentence adds exact extended contract views to a provider record; extended views (`extends`, the extended-view selection) are P8's work, and the rest of the sentence is unchanged."
+
+[[moved]]
+id = "TXT-0323"
+from = "P5"
+to = "P8"
+reason = "The old side of TXT-0275, which moves to P8 with it."
+
+[[text]]
+id = "TXT-0277"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0278"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0279"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0280"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0281"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0282"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0283"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0284"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0285"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0286"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0288"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0290"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0291"
+step = "P5"
+test = "tests/test_loader_engine.nim"
+
+[[text]]
+id = "TXT-0304"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0579"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0312"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0583"
+step = "P5"
+test = "tests/test_persist.nim"
+
+[[text]]
+id = "TXT-0420"
+step = "P5"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0421"
+step = "P5"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0422"
+step = "P5"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0322"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0274: a module may also provide implemented interface contracts with no primary contract."
+compared = "RUNTIME l.82 at 6a4dfa28 against l.76 at 6cac8335."
+
+[[text]]
+id = "TXT-0274"
+step = "P5"
+kind = "reword"
+pair = "TXT-0322"
+site = "sdk/src/logos_sdk/iface/accept.nim"
+reading = "A module may provide no contract, a primary contract, interface contracts alone, or both. An interfaces-only module is accepted: ModuleBinding.primary is an Opt, and a binding with only implemented interfaces exposes them (test [IFC-0231] 'an interfaces-only descriptor' in sdk/tests/test_call_surface.nim); a consumer-only module provides none (test [RUN-0057] in tests/test_realizer.nim)."
+compared = "RUNTIME l.76 at 6cac8335 against ModuleBinding in sdk/src/logos_sdk/iface/accept.nim and the realizer's binding acceptance."
+
+[[text]]
+id = "TXT-0325"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0276: the C prefix goes through the module-name projection, not the raw name."
+compared = "RUNTIME l.318 at 6a4dfa28 against l.298 at 6cac8335."
+
+[[text]]
+id = "TXT-0276"
+step = "P5"
+kind = "reword"
+pair = "TXT-0325"
+site = "src/logos_core/runtime/native.nim"
+reading = "Symbol prefixes are `logos_<module-C>_*`, where module-C is the INTERFACE §2.1 projection: bindNative projects the module name with projectModule (sdk/src/logos_sdk/iface/names.nim) and builds every symbol with symbolName (test [IFC-0901] 'module-name projection' in sdk/tests/test_codegen.nim)."
+compared = "RUNTIME l.298 at 6cac8335 against runtime/native.nim bindNative and symbolName, and iface/names.nim projectModule."
+
+[[text]]
+id = "TXT-0327"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0289: `loaded` begins when the attempt is accepted, not once the realization is acquired."
+compared = "RUNTIME l.566 at 6a4dfa28 against l.531 at 6cac8335."
+
+[[text]]
+id = "TXT-0289"
+step = "P5"
+kind = "reword"
+pair = "TXT-0327"
+site = "src/logos_core/runtime/engine.nim"
+reading = "`loaded` covers acquiring or attaching the realization as well as initialization and readiness checks. The engine commits `loaded` when it accepts the attempt (`execute`), before the realization exists, and the Loader's own realization is `loaded` while it is being made (the bootstrap); test [RUN-0643] in tests/test_recovery.nim sees `loaded` while the Loader realizes."
+compared = "RUNTIME l.531 at 6cac8335 against engine.execute's accepting commit and the Loader bootstrap in src/logos_core/runtime/engine.nim."
+
+[[text]]
+id = "TXT-0331"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0292: only the line-break hyphen in 'execution-boundary' changed."
+compared = "RUNTIME l.801 at 6a4dfa28 against l.758 at 6cac8335."
+
+[[text]]
+id = "TXT-0292"
+step = "P5"
+kind = "reword"
+pair = "TXT-0331"
+reading = "The same sentence with 'execution-boundary' no longer broken across a line; nothing to build."
+compared = "RUNTIME l.758 at 6cac8335 against l.801 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0333"
+step = "P5"
+kind = "removed"
+site = "src/logos_core/runtime/engine.nim"
+reading = "Reworded as TXT-0294: the Capability Authority is a system service provider selected by local policy, no longer a privileged runtime module."
+compared = "RUNTIME l.905 at 6a4dfa28 against l.850 at 6cac8335, and engine.checkBinding."
+
+[[text]]
+id = "TXT-0294"
+step = "P5"
+kind = "reword"
+pair = "TXT-0333"
+site = "src/logos_core/runtime/engine.nim"
+reading = "The Runtime binds the Capability Authority as a system-service provider that local policy selects: checkBinding binds the instance the host configuration names once it is `ready` and passes the binding checks, and the host configuration authorizes it, never the candidate (RUN-0307, RUN-0308). The Runtime calls it through the engine system-service binding (runtime/invoke.nim CallerSystemService), in direct mode; it is not a privileged part of the Runtime."
+compared = "RUNTIME l.850 at 6cac8335 against engine.checkBinding and runtime/invoke.nim's system-service caller identity."
+
+[[text]]
+id = "TXT-0334"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0295: the selected contract is no longer derived from deployment metadata; a caller without a generated helper names it in `establish_route`."
+compared = "RUNTIME l.923 at 6a4dfa28 against l.867 at 6cac8335."
+
+[[text]]
+id = "TXT-0295"
+step = "P5"
+kind = "reword"
+pair = "TXT-0334"
+site = "src/logos_core/runtime/routes.nim"
+reading = "`establish_route_request` requires `contract` (spec/mirrors/RNT/9.3.runtime-control.cddl), so every caller supplies the selected contract; routes.selectContract matches it against the provider's contracts and nothing is derived from deployment metadata (test [RUN-0087] in tests/test_routes.nim)."
+compared = "RUNTIME l.867 at 6cac8335 against the mirrored establish_route_request and routes.selectContract."
+
+[[text]]
+id = "TXT-0329"
+step = "P5"
+kind = "holds"
+site = "sdk/tests/test_kit.nim"
+reading = "Reworded, not removed: l.616 keeps the provider-side rule with `NOT_READY` for `LOGOS_ERR_NOT_READY`. It is RUN-0119, a requirement on provider modules (out of scope in conformance/claims/RUN.toml); the Runtime's own use is RUN-0121 (l.624). What this repository's provider code answers: the module kit's own NOT_READY arises only when no provider entry is active on the thread, never from application state (codegen/kitrt.nim activeInvocation, the named test), and the Capability Authority never returns NOT_READY (IFC's I-app-setup inspection item, IFC-0252 to IFC-0254). The frozen list has no new-side entry for l.616, so no `reword` pair. (Recorded as `removed` at P5; corrected at P9, Q11.)"
+compared = "RUNTIME l.652 at 6a4dfa28 against l.616 (RUN-0119) and l.624 (RUN-0121) at 6cac8335, activeInvocation in sdk/src/logos_sdk/codegen/kitrt.nim, and the named test, which shows the kit's NOT_READY for a call with no active provider entry; the Capability Authority's answers rest on reading src/logos_core/authority/."
+named = "the caller, cancellation and scoped publication come from the current invocation"
+
+[[text]]
+id = "TXT-0332"
+step = "P5"
+kind = "removed"
+site = "src/logos_core/runtime/invoke.nim"
+reading = "Replaced by TXT-0293 (l.835, cleared in P2 by test): the engine system-service binding's caller context identifies the invoking Runtime with caller kind `LOGOS_CALLER_SYSTEM_SERVICE`, without a module-instance address; the protected system-service kind is no longer named. invoke.callerOp gives CallerSystemService, the Runtime's id and an empty module-instance id. (corrected at P9, Q11.)"
+compared = "RUNTIME l.888 at 6a4dfa28 against l.835 at 6cac8335, and callerOp in src/logos_core/runtime/invoke.nim."
+
+[[text]]
+id = "TXT-0335"
+step = "P5"
+kind = "informative"
+reading = "Reworded, not removed: §5.2.1 (the singleton direct-call convenience mode) stays at 6cac8335, and l.1027 routes a no-handle helper's call through the calling module instance's route to the single live instance, where l.1101 used the runtime's default binding for the module name. Nothing changes here: the mode was never provided, conformance/claims/RUN.toml marks §5.2.1 out of scope, and generated helpers always take a route handle. (Recorded as `removed` at P5; corrected at P9, Q11. The frozen list has no new-side entry for l.1027, so no `reword` pair.)"
+compared = "RUNTIME l.1101 at 6a4dfa28 against l.1021-1042 (l.1027) at 6cac8335."
+
+[[text]]
+id = "TXT-0336"
+step = "P5"
+kind = "informative"
+reading = "Reworded with §5.2.1 (TXT-0335): l.1038 asks how no-handle helpers fail when that route is not ready, where l.1117 said the default module binding. No no-handle helper exists, so there is no failure mode to state. (Recorded as `removed` at P5; corrected at P9, Q11.)"
+compared = "RUNTIME l.1117 at 6a4dfa28 against l.1038 at 6cac8335."
+
+[[text]]
+id = "TXT-0541"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0537: the directory mapping lasts until `_MODULE_destroy()` returns, not until destruction begins."
+compared = "INTERFACE l.1623 at 6a4dfa28 against l.1596 at 6cac8335."
+
+[[text]]
+id = "TXT-0537"
+step = "P5"
+kind = "reword"
+pair = "TXT-0541"
+site = "src/logos_core/runtime/realizer.nim"
+reading = "'Until destruction begins' becomes 'until `_MODULE_destroy()` returns': the module-visible state-directory mapping now lasts through destroy. Holds more strongly than required: the state directory is persistent per assignment (realizer.stateDirFor) and is never unmapped while a context lives; retire_module refuses an instance with a live realization (engine.ownsNothing), and state transfers are applied only when start bootstraps (engine.applyTransfers). (P5 did not say what changed; corrected at P9, Q11.)"
+compared = "INTERFACE l.1596 at 6cac8335 against l.1623 at 6a4dfa28, and realizer.stateDirFor, engine.ownsNothing (retire) and engine.applyTransfers."
+
+[[text]]
+id = "TXT-0573"
+step = "P5"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "every local instance, instance keys before provider keys"
+reading = "The registry sketch now maps a module name to a list of instance records. The engine keeps instances by instance id (State.instances), several may share a module name, and list_modules reports one record per instance with its state, provider and instance from one committed view; the test lists every local instance. The sketch prescribes no storage representation (l.454)."
+compared = "RUNTIME l.456-470 at 6cac8335 against State.instances and moduleRecord in src/logos_core/runtime/engine.nim."
+
+# P5b: classifications and recovery -------------------------------------------------------------------------------
+
+[[units]]
+id = "RUN-0696"
+compared = "RUNTIME l.3803 at 6a4dfa28 ('When required permissions become available ... initially blocked by missing permissions') against l.3665 at 6cac8335, which adds eligible configuration. The reference orchestration module already resumes both: rule 4g probes every `unloaded` instance with `requested` intent, uncharged, and `configuration_state_changed` brings the probe forward (G288, G162 settled). A refusal for want of configuration now also reports `configuration-missing`, which replaces an `error` instance's cause and is in G291's resumable set. Tests [RUN-0696] [TXT-0582] in tests/test_orchestration.nim (a missing configuration, then resumed) and tests/test_orch_policy.nim (retry accounting kept across the replaced cause)."
+
+[[units]]
+id = "RUN-1190"
+decision = "G355"
+compared = "RUNTIME l.3575 at 6cac8335, the successor of RUN-0675: a Runtime that cannot determine fresh remote state reports the uncertainty through `state` and `failure`, never as `ready`. Only a facade or a remote provider has remote state, and none exists before 5-7b (G355); the claim stays deferred to 5-7b."
+
+[[stale]]
+id = "RUN-0630"
+compared = "Old l.3504 (`execution.revision` advances when intent is established, replaced or cancelled, an attempt is accepted, or the lifecycle state changes) is RUN-1183 at l.3368, which adds a change of the failure, retained selection or realization ownership `get_execution_summary` reports. engine.commit advances the revision for every committed change, those without a lifecycle transition included (G227 settled). The five tests that cited RUN-0630 (tests/test_engine.nim, tests/test_persist.nim, tests/test_rcevents.nim twice, tests/test_observe.nim) now cite RUN-1183, and a new test [RUN-1183] [TXT-0196] in tests/test_rcevents.nim shows a failure change with no lifecycle transition."
+
+[[stale]]
+id = "RUN-0639"
+compared = "Old l.3519 ('Other realization mechanisms MUST use `implementation-specific` ...') is RUN-1184 at 6cac8335 with the same rule. engine.summary reports `implementation-specific` only for the Module Loader instance, which the bootstrap mechanism realizes (G57). The two tests (tests/test_observe.nim, tests/test_loader_engine.nim) and their citations in the inspection item of RUN-0638 moved to RUN-1184."
+
+[[stale]]
+id = "RUN-0675"
+compared = "Old l.3710 (uncertainty through `state` and `reason`) is RUN-1190 at l.3575, which reports it through `state` and `failure`. Its claim in conformance/claims/RUN.toml moved to RUN-1190, deferred to 5-7b with G355: no facade or remote provider exists before 5-7b."
+
+[[stale]]
+id = "RUN-1053"
+compared = "Old l.3750 (a typed Module Loader error with no more specific classification is `loader-<code>`) is RUN-1191 at l.3607, limited to a bound Module Loader provider's typed error; RUN-1192 (l.3608) adds that an implementation-local mechanism never reports `loader-`. engine.classify alone builds `loader-` from a LoaderError the Loader answered, and a static-binding mismatch is decided before any Loader call, so the more specific classification wins. The test in tests/test_loader_engine.nim moved to RUN-1191, and so did its citation in the inspection items of RUN-0565, RUN-0888 and RUN-0889 and of the realization fields; a source scan [RUN-1192] in tests/test_orchestration.nim pins the construction sites."
+
+[[deferred]]
+id = "TXT-0205"
+rides = "RUN-1190"
+decision = "G355"
+reason = "The facade classifications (RUNTIME l.3615) are reported only by a facade, which no Runtime has before 5-7b; RUN-1190 is the requirement in §9.3.19 it rides on, and l.3615-3616 govern, as owner row 37 / Q1 settled (G355, corrected at P5c); 5-7b builds them."
+
+[[deferred]]
+id = "TXT-0206"
+rides = "RUN-1190"
+decision = "G355"
+reason = "A started facade's `loaded` or `error` when unavailable (RUNTIME l.3616) is reported only by a facade, which no Runtime has before 5-7b; RUN-1190 is the requirement in §9.3.19 it rides on, and l.3615-3616 govern, as owner row 37 / Q1 settled (G355, corrected at P5c); 5-7b builds them."
+
+[[text]]
+id = "TXT-0203"
+step = "P5"
+test = "tests/test_store.nim"
+
+[[text]]
+id = "TXT-0580"
+step = "P5"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0582"
+step = "P5"
+test = "tests/test_orchestration.nim"
+
+[[text]]
+id = "TXT-0299"
+step = "P5"
+test = "tests/test_host.nim"
+
+[[text]]
+id = "TXT-0300"
+step = "P5"
+test = "tests/test_host.nim"
+
+[[text]]
+id = "TXT-0196"
+step = "P5"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0197"
+step = "P5"
+test = "tests/test_rcevents.nim"
+
+[[text]]
+id = "TXT-0581"
+step = "P5"
+test = "tests/test_permissions.nim"
+
+[[text]]
+id = "TXT-0307"
+step = "P5"
+test = "tests/test_orchestration_host.nim"
+
+[[text]]
+id = "TXT-0269"
+step = "P5"
+kind = "removed"
+site = "src/logos_core/runtime/plumbing.nim"
+reading = "Replaced by TXT-0203 (l.3605), which adds `configuration-missing`, `static-binding-mismatch` and `prerequisite-unavailable` to the initial classifications. FailureKind holds all seventeen in l.3605's order, and test [TXT-0203] in tests/test_store.nim reads the list from the frozen baseline and checks the enumeration and the store's round trip against it."
+compared = "RUNTIME l.3753 at 6a4dfa28 against l.3605 at 6cac8335, and FailureKind in src/logos_core/runtime/plumbing.nim."
+
+[[text]]
+id = "TXT-0303"
+step = "P5"
+kind = "informative"
+reading = "The sentence that concurrent invocations from the same or different consumers do not share consumer identity, authority decisions or request-key scope (old l.1824) is gone from §9.1; l.1719 keeps the rule that each invocation is authenticated and authorized independently (RUN-0346, claimed). Nothing was built on the removed sentence alone, and nothing changes."
+compared = "RUNTIME l.1823-1824 at 6a4dfa28 against l.1718-1720 at 6cac8335."
+
+[[text]]
+id = "TXT-0204"
+step = "P5"
+kind = "holds"
+site = "tests/test_persist.nim"
+named = "an unclean end leaves error with host-terminated"
+reading = "The engine sets `host-terminated` only where the execution envelope or the Runtime process ended without cleanup the Runtime ordered: at open after an unclean end (engine.restore, P5a), for a Module Host's unexpected end (engine.hostEnded, G268 (d)) and for a live application whose host ends (G270). A deadline kill, a Loader-loss end and an end while a release is outstanding are cleanup the Runtime ordered, so they keep their own classification (G268 (b), (c), G269)."
+compared = "RUNTIME l.3606 at 6cac8335 against engine.restore and engine.hostEnded in src/logos_core/runtime/engine.nim (G268-G270, G275 settled, behaviour unchanged)."
+
+[[text]]
+id = "TXT-0574"
+step = "P5"
+kind = "holds"
+site = "tests/test_observe.nim"
+named = "an unknown or refused target is NOT_AUTHORISED"
+reading = "Every sentence that moved from §9.3 into §9.3.17 to §9.3.19 was read in its new place and applies to the same subject; the claims and tests follow the units, not the headings. Two references are left behind by the split, editorial remarks the Fable session put to the spec owner (logos-lips b426ec40; nothing sent by this session): l.3454 'identity rules in this section' now sits in §9.3.17 while the identity rules are §9.3.6, and l.3508 'this section's non-disclosure rules' now sits in §9.3.18 while those rules are mostly §9.3.1. The Runtime applies §9.3.6's identity rules and §9.3.1's non-disclosure as before; the named test shows the non-disclosure for an observation method."
+compared = "RUNTIME §9.3 at 6a4dfa28 against §9.3.17 to §9.3.19 at 6cac8335 (l.3352-3640), with l.3454 and l.3508 read against §9.3.1 and §9.3.6."
+
+# P5c: Loader loss, shutdown and startup -------------------------------------------------------------------------
+
+[[text]]
+id = "TXT-0168"
+step = "P5"
+test = "tests/test_host.nim"
+
+[[text]]
+id = "TXT-0308"
+step = "P5"
+test = "tests/test_loader_engine.nim"
+
+[[text]]
+id = "TXT-0309"
+step = "P5"
+test = "tests/test_loader_engine.nim"
+
+[[text]]
+id = "TXT-0311"
+step = "P5"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0314"
+step = "P5"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0315"
+step = "P5"
+test = "tests/test_loader_engine.nim"
+
+[[text]]
+id = "TXT-0316"
+step = "P5"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0169"
+step = "P5"
+kind = "holds"
+site = "tests/test_host_dylib.nim"
+named = "a program that includes only logos_runtime.h builds against the library and runs"
+reading = "The Host Embedding API is the six functions of logos_runtime.h (create, register_binding, start, request_shutdown, wait_for_shutdown, destroy), which src/liblogos_runtime.nim exports and no more; none returns or reports the Runtime's id. A generated id is kept in the store only (G192 settled)."
+compared = "RUNTIME l.2588 at 6cac8335 against the six exports of src/liblogos_runtime.nim, whose signatures are the mirrored §13.3 functions (RNT/13.3.host-api.h; sdk/tests/test_codegen.nim checks logos_runtime.h holds them verbatim): none has an output that carries the Runtime's id. Old l.2665-2667 asked the host to accept a generated id before use. The named test only builds and runs a program against the header; that no id is disclosed rests on reading the exports."
+
+[[text]]
+id = "TXT-0302"
+step = "P5"
+kind = "holds"
+site = "tests/test_persist.nim"
+named = "bootstrap resumes host-origin orchestration and re-establishes any other"
+reading = "A retained host-origin intent is resumed through the recovery path with the host as origin (engine.bootstrap); its execution decision asks for consumer '' (engine.decideExec), which engine.immediate allows under bootstrap policy in authority mode, the policy current at that decision, and decides by the host's configured policy otherwise (G191 settled)."
+compared = "RUNTIME l.1558 at 6cac8335 against engine.bootstrap, engine.decideExec (consumer '' for a host origin) and engine.immediate (an allow with the bootstrap source under the Capability Authority, the host's configured policy otherwise); old §9 had no such sentence. The named test shows a retained host-origin intent resumed and a stopped one re-established; no test inspects the execution decision a host-origin resumption gets, so the policy it uses rests on reading those procs."
+
+[[text]]
+id = "TXT-0317"
+step = "P5"
+kind = "holds"
+site = "tests/test_ctl_module.nim"
+named = "daemon-info and get_self: the logosctl instance's own address"
+reading = "logosctl, the application code logosd serves, is an admitted direct_static module instance (src/logos_core/daemon/ctlmodule.nim) that calls the Runtime only through its own Runtime Control binding; the test reads its own address through that binding. App A is informative (conformance/claims/RUN.toml)."
+compared = "RUNTIME l.3971 at 6cac8335 against src/logos_core/daemon/ctlmodule.nim and the logosctl instance logosd creates."
+
+[[text]]
+id = "TXT-0318"
+step = "P5"
+kind = "holds"
+site = "tests/test_host_dylib.nim"
+named = "a program that includes only logos_runtime.h builds against the library and runs"
+reading = "A module's calls go through the Runtime Control binding it receives at _MODULE_init; the Host Embedding API (logos_runtime.h, the six exports of src/liblogos_runtime.nim) has no call surface. App A is informative."
+compared = "RUNTIME l.3972 at 6cac8335 against the six exports of src/liblogos_runtime.nim, the mirrored §13.3 functions (RNT/13.3.host-api.h): create, register_binding, start, request_shutdown, wait_for_shutdown and destroy, none of which invokes a module or carries a call. The named test only builds and runs a program against the header; that there is no call surface rests on reading the exports."
+
+[[text]]
+id = "TXT-0319"
+step = "P5"
+kind = "reword"
+pair = "TXT-0340"
+reading = "Reworded from TXT-0340: a facade without the runtime components is only a direct-call wrapper, now also outside these specifications and providing none of their Runtime behaviour. App A is informative (conformance/claims/RUN.toml); nothing is built on it."
+compared = "RUNTIME l.4130 at 6a4dfa28 against l.3992 at 6cac8335."
+
+[[text]]
+id = "TXT-0340"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0319."
+compared = "RUNTIME l.4130 at 6a4dfa28 against l.3992 at 6cac8335."
+
+[[text]]
+id = "TXT-0320"
+step = "P5"
+kind = "reword"
+pair = "TXT-0341"
+reading = "Reworded from TXT-0341: the application uses the Host Embedding API of Section 13 explicitly, where the old text said the runtime API. App A is informative (conformance/claims/RUN.toml); nothing is built on it."
+compared = "RUNTIME l.4139 at 6a4dfa28 against l.3998 at 6cac8335."
+
+[[text]]
+id = "TXT-0341"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0320."
+compared = "RUNTIME l.4139 at 6a4dfa28 against l.3998 at 6cac8335."
+
+[[text]]
+id = "TXT-0321"
+step = "P5"
+kind = "reword"
+pair = "TXT-0342"
+reading = "Reworded from TXT-0342: the options the application chooses are those the Host Embedding API exposes, where the old text said the runtime API. App A is informative (conformance/claims/RUN.toml); nothing is built on it."
+compared = "RUNTIME l.4144 at 6a4dfa28 against l.4002 at 6cac8335."
+
+[[text]]
+id = "TXT-0342"
+step = "P5"
+kind = "removed"
+reading = "Reworded as TXT-0321."
+compared = "RUNTIME l.4144 at 6a4dfa28 against l.4002 at 6cac8335."
+
+# P5d: route ends --------------------------------------------------------------------------------------------
+
+[[text]]
+id = "TXT-0091"
+step = "P5"
+test = "tests/test_runtime_authority.nim"
+
+[[text]]
+id = "TXT-0297"
+step = "P5"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0298"
+step = "P5"
+kind = "informative"
+reading = "A caveat for the caller: TRANSPORT_ERROR from a route's end says the call's result was not accepted, not that the provider did not run it. The Runtime claims nothing more: invoke.routeEndedResult's message says the route ended before the result was accepted, and the provider's code already running is marked cancelled, not stopped (INTERFACE l.2101; CA l.917-918). DECISIONS G174 says so."
+compared = "RUNTIME l.1272 at 6cac8335 against invoke.routeEndedResult, engine.endRoute's marking and the G174 row."
+
+# P7a: manifest, signing, LGX ----------------------------------------------------------------------------------
+
+[[units]]
+id = "PKG-0043"
+compared = "PM §4 l.247 at 6cac8335: logos.package_manifest.manifest gains `? contract_documents`. The §4 mirror is rewritten from the text; toManifest reads the field and the TP decode test checks it."
+
+[[units]]
+id = "PKG-0044"
+compared = "PM §4 l.262 at 6cac8335: module_declaration gains `? extends`. The mirror is rewritten; toManifest reads it, and checkManifest requires it non-empty, unique and in commitment order (TP)."
+
+[[units]]
+id = "PKG-0048"
+compared = "PM §4 l.292 at 6cac8335: package_dependency gains `? contracts`. The mirror is rewritten; checkManifest requires it non-empty, unique and in commitment order (TP)."
+
+[[units]]
+id = "PKG-0055"
+compared = "PM l.339 at 6a4dfa28 against 6cac8335: extended contract commitments join the uniqueness rule. checkManifest checks extends with implements; the TP uniqueness test has extends cases."
+
+[[units]]
+id = "PKG-0059"
+compared = "PM l.364 at 6cac8335: unchanged rule (a missing artifact or a hash mismatch is artifact-integrity-failed), now judged in every variant (M25). TL's missing-file test fails for a variant that is not the host's."
+
+[[units]]
+id = "PKG-0111"
+compared = "PM l.550 at 6cac8335: any other failure is still signature-verification-failed before material is accepted. With M26 verifyPackage judges schema support after the signature and the profile; a broken signature under an unsupported claim stays signature-verification-failed (TP's M26 test)."
+
+[[units]]
+id = "PKG-0286"
+compared = "PM l.1129 at 6cac8335: `extends` joins the arrays that must be non-empty when present. checkManifest's list has it, and the TP non-empty test covers it."
+
+[[units]]
+id = "PKG-0358"
+compared = "PM §14 l.1478 at 6cac8335: the error enum gains `unsupported-manifest`. The §14 mirror is rewritten, errors.nim has pecUnsupportedManifest, and TP checks the code against the mirror."
+
+[[units]]
+id = "PKG-0365"
+compared = "PM §4.3 l.493 at 6cac8335: `_module = \"logos_package_manager\"` now heads the §4.3 block, not §15's. records.nim builds the records document from the signing-profile document, which carries `_module`; TP checks where it sits."
+
+[[units]]
+id = "PKG-0273"
+decision = "G362"
+compared = "PM l.1099 at 6cac8335 names only the realized output (the LGX half is PKG-0588). The Nix realization profile is 5-10's, so the unit is deferred there (G362)."
+
+[[units]]
+id = "PKG-0274"
+decision = "G362"
+compared = "PM l.1100 at 6cac8335 names a resolved location outside the variant directory or realized output. In an LGX archive a bad path is invalid-package first (PKG-0587) and the archive holds no links, but an extracted path's resolved location is checked at installation (l.933, l.1503; PKG-0204), so the unit is deferred to 5-5, and 5-10 extends it to the Nix output (G362; Fable's P7 review Q2)."
+
+[[units]]
+id = "PKG-0418"
+decision = "G362"
+
+[[units]]
+id = "PKG-0293"
+decision = "G362"
+
+[[stale]]
+id = "PKG-0110"
+compared = "PM l.549 at 6a4dfa28 is replaced by PKG-0582 (l.550 at 6cac8335), which adds unsupported-manifest between the profile and the commitment. The tags in test_package moved to PKG-0582."
+
+[[stale]]
+id = "PKG-0215"
+compared = "PM l.963 at 6a4dfa28 ('every declared artifact path MUST identify one regular file') is replaced by PKG-0585, which says the same of every variant. The tag in test_lgx moved to PKG-0585."
+
+[[stale]]
+id = "PKG-0275"
+compared = "PM l.1102 at 6a4dfa28 is gone: a missing `hash` fails the manifest's CDDL, invalid-package (l.1074), as G156's interim already did. G156 is settled; TP's test is tagged [PKG-0258]. No successor."
+
+[[stale]]
+id = "PKG-0479"
+compared = "PM l.906 at 6a4dfa28 (an explicit variant-directory entry) is gone (TXT-0464). The writer still emits one directory per variant, and the reader accepts implied directories; TL's directory test keeps G41's tag."
+
+[[deferred]]
+id = "TXT-0463"
+rides = "PKG-0418"
+decision = "G362"
+reason = "A name added to a signer's set is a trust revision (PM l.420): trust continuity is PKG-0418's, which 5-3a builds with the Package Manager's trust input (batch C C2)."
+
+[[deferred]]
+id = "TXT-0472"
+rides = "PKG-0293"
+decision = "G362"
+reason = "A packaged native library is bound to its verified bytes at its installed path (PM l.1185): installation is PKG-0293's, which 5-5 builds."
+
+[[text]]
+id = "TXT-0456"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0561"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0462"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0461"
+step = "P7"
+kind = "informative"
+reading = "A duty of a later revision: this one lists no earlier manifest schema roots, so only the pinned pair is supported."
+compared = "PM l.373 at 6cac8335 against package/manifest.nim supportsManifestSchema, which accepts only PackageManifestSchemaRoot with PackageManifestSubtreeRoot (TP's M26 test)."
+
+[[text]]
+id = "TXT-0492"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0465"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0468"
+step = "P7"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0469"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0470"
+step = "P7"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0562"
+step = "P7"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0504"
+step = "P7"
+kind = "removed"
+reading = "The extracted `logos_package_manager.cddl` file is gone; App A now lists the contract schema in one block (TXT-0454)."
+compared = "PM l.45 at 6a4dfa28 against l.43 and App A at 6cac8335. Our mirrors are cut from the spec text by spectrace, never from a published file."
+
+[[text]]
+id = "TXT-0505"
+step = "P7"
+kind = "removed"
+reading = "The governing rule moved from the extracted file to App A: if an excerpt differs from the appendix, the appendix governs (TXT-0503)."
+compared = "PM l.46 at 6a4dfa28 against l.1845 at 6cac8335."
+
+[[text]]
+id = "TXT-0506"
+step = "P7"
+kind = "removed"
+reading = "Reworded as TXT-0455: the block is called the complete normative Package Manifest schema."
+compared = "PM l.249 at 6a4dfa28 against l.239 at 6cac8335."
+
+[[text]]
+id = "TXT-0507"
+step = "P7"
+kind = "removed"
+reading = "The extracted `logos_package_manifest.cddl` file is gone; §4's block is the schema."
+compared = "PM l.324 at 6a4dfa28 against l.239 at 6cac8335, and spec/mirrors/PKG/4.manifest.cddl, cut from the block by spectrace."
+
+[[text]]
+id = "TXT-0509"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0456, which adds extended contracts, a dependency's contracts and contract documents to the commitment-ordered lists."
+compared = "PM l.355 at 6a4dfa28 against l.350 at 6cac8335."
+
+[[text]]
+id = "TXT-0511"
+step = "P7"
+kind = "removed"
+reading = "The old roots are replaced by TXT-0561's: the manifest schema changed (extends, a dependency's contracts, contract_documents)."
+compared = "PM l.364 at 6a4dfa28 against l.368 at 6cac8335; spec/pins.toml and the generated pins.nim carry the new roots, recomputed from the mirror by test_package."
+
+[[text]]
+id = "TXT-0515"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0467: paths are relative to the directory of the variant that declares them, not to the selected one, so every variant's paths are judged."
+compared = "PM l.963 at 6a4dfa28 against l.963 at 6cac8335."
+
+[[text]]
+id = "TXT-0517"
+step = "P7"
+kind = "removed"
+reading = "Replaced by PKG-0588 (an LGX archive lacks the file of an artifact declared by any variant) and PKG-0273 (the realized output, deferred to 5-10)."
+compared = "PM l.1100 at 6a4dfa28 against l.1098-1099 at 6cac8335."
+
+[[text]]
+id = "TXT-0518"
+step = "P7"
+kind = "removed"
+reading = "Replaced by PKG-0587 (a path that breaks the path rules is invalid-package) and PKG-0274 (a resolved location outside its variant directory or the realized output, deferred to 5-5 with the extraction check, G362)."
+compared = "PM l.1101 at 6a4dfa28 against l.1082 and l.1100 at 6cac8335."
+
+[[text]]
+id = "TXT-0519"
+step = "P7"
+kind = "removed"
+reading = "The bullet is gone: a missing `hash` fails the manifest's CDDL and is invalid-package (l.1074), which settles G156."
+compared = "PM l.1102 at 6a4dfa28 against l.1096-1101 at 6cac8335, and decodeManifest's schema check (TP's [PKG-0258] test)."
+
+[[text]]
+id = "TXT-0521"
+step = "P7"
+kind = "removed"
+reading = "Reworded as TXT-0471: LOGOS-MODULE-LOADER no longer defines the dynamic-linker integration."
+compared = "PM l.1192 at 6a4dfa28 against l.1184 at 6cac8335."
+
+[[text]]
+id = "TXT-0525"
+step = "P7"
+kind = "removed"
+reading = "Reworded as TXT-0499: other specifications obtain package facts through the contract or their own projections."
+compared = "PM l.1777 at 6a4dfa28 against l.1805 at 6cac8335."
+
+[[text]]
+id = "TXT-0455"
+step = "P7"
+kind = "reword"
+pair = "TXT-0506"
+reading = "Only the name of the block changed: §4's CDDL block is still the one manifest schema."
+compared = "PM l.239 at 6cac8335 against l.249 at 6a4dfa28, and package/manifest.nim loadManifestSchema, which accepts the mirrored block and checks its root against the pin."
+
+[[text]]
+id = "TXT-0471"
+step = "P7"
+kind = "reword"
+pair = "TXT-0521"
+reading = "The dynamic-linker integration is still the deployment's; the sentence only stops naming LOGOS-MODULE-LOADER as the document that defines it."
+compared = "PM l.1184 at 6cac8335 against l.1192 at 6a4dfa28, and runtime/artifact.nim mapLibrary (dlopen with RTLD_NOW or RTLD_LOCAL on POSIX, loadLib elsewhere): the platform loader resolves a library's own dependencies (DECISIONS G93)."
+
+[[text]]
+id = "TXT-0499"
+step = "P7"
+kind = "reword"
+pair = "TXT-0525"
+reading = "'Consume them by schema reference' becomes 'obtain package facts through the Package Manager contract or define their own wire projections'. This repository is not a specification, but its host configuration projects two PM records: runtime/host_config.cddl restates PM §4's `provider_requirement` and `requested_permission` as `lcn.app_requirement` and `lcn.app_permission`, rules of its own schema, and docs/HOST-CONFIG.md keeps PM's meaning (they grant nothing and create no route, PM l.1129-1131). The Package Manager contract and its Runtime handoff are Tier 5 (PKG.toml; app-config v1 carries module declarations directly, I87). (P7 said nothing here projects the records and that the Runtime takes package facts through handoff records; corrected at P9, Q11.)"
+compared = "PM l.1805 at 6cac8335 against l.1777 at 6a4dfa28, and PM l.281-290 and l.1129-1131 at 6cac8335, against runtime/host_config.cddl (lcn.app_requirement, lcn.app_permission), the `requires` and `requested_permissions` rows of docs/HOST-CONFIG.md, and conformance/claims/PKG.toml (handoffs Tier 5); package/records.nim builds no handoff."
+
+[[text]]
+id = "TXT-0459"
+step = "P7"
+kind = "informative"
+reading = "A manifest carries no realization strategy or placement: the schema has no such field."
+compared = "PM l.361 at 6cac8335 against spec/mirrors/PKG/4.manifest.cddl: no rule of logos.package_manifest names a strategy or a placement, and the schema refuses unknown keys."
+
+[[text]]
+id = "TXT-0460"
+step = "P7"
+kind = "informative"
+reading = "A note on a future revision; nothing to build."
+compared = "PM l.362 at 6cac8335."
+
+[[text]]
+id = "TXT-0500"
+step = "P7"
+kind = "informative"
+reading = "A projection's own root and meaning bind the specification that defines it. This repository is not one, but its host configuration has two such projections: runtime/host_config.cddl restates PM §4's `provider_requirement` and `requested_permission` as `lcn.app_requirement` and `lcn.app_permission`, rules with their own roots in its own schema, and docs/HOST-CONFIG.md keeps PM's meaning (they grant nothing and create no route, PM l.1129-1131). Nothing is to change. (P7 said this repository defines none; corrected at P9, Q11.)"
+compared = "PM l.1806 at 6cac8335, with PM l.281-290 and l.1129-1131, against runtime/host_config.cddl and the `requires` and `requested_permissions` rows of docs/HOST-CONFIG.md."
+
+[[text]]
+id = "TXT-0464"
+step = "P7"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0467"
+step = "P7"
+kind = "holds"
+reading = "Each variant's paths are resolved under variants/<that variant's id>/."
+compared = "PM l.963 at 6cac8335 against lgx.nim openLgx, which joins VariantsDir, the declaring variant's id and the path for every variant's artifacts (M24's path check and M25's file check); the test removes a file from a variant that is not the host's and still fails."
+site = "tests/test_lgx.nim"
+named = "a declared artifact that is not a regular file, in any variant"
+
+[[moved]]
+id = "PKG/12.runtime-handoff.cddl"
+from = "P8"
+to = "P7"
+reason = "The App A test compares the appendix with every section excerpt, §12's included, so P7a writes the mirror; no code reads it, and P8 builds the handoff records against it (both reviews of the P7 plan, Q3)."
+
+# P7a: Appendix A ----------------------------------------------------------------------------------------------
+
+[[units]]
+id = "PKG-0568"
+decision = "G362"
+
+[[units]]
+id = "PKG-0618"
+decision = "G363"
+
+[[units]]
+id = "PKG-0619"
+decision = "G363"
+
+[[units]]
+id = "PKG-0620"
+decision = "G363"
+
+[[units]]
+id = "PKG-0624"
+decision = "G363"
+
+[[units]]
+id = "PKG-0628"
+decision = "G363"
+
+[[units]]
+id = "PKG-0626"
+decision = "G363"
+
+[[units]]
+id = "PKG-0627"
+decision = "G363"
+
+[[units]]
+id = "PKG-0630"
+decision = "G363"
+
+[[units]]
+id = "PKG-0631"
+decision = "G363"
+
+[[units]]
+id = "PKG-0632"
+decision = "G363"
+
+[[units]]
+id = "PKG-0633"
+decision = "G363"
+
+[[units]]
+id = "PKG-0634"
+decision = "G363"
+
+[[units]]
+id = "PKG-0635"
+decision = "G363"
+
+[[units]]
+id = "PKG-0636"
+decision = "G363"
+
+[[units]]
+id = "PKG-0637"
+decision = "G363"
+
+[[units]]
+id = "PKG-0638"
+decision = "G363"
+
+[[units]]
+id = "PKG-0639"
+decision = "G363"
+
+[[units]]
+id = "PKG-0640"
+decision = "G363"
+
+[[units]]
+id = "PKG-0641"
+decision = "G363"
+
+[[units]]
+id = "PKG-0642"
+decision = "G363"
+
+[[units]]
+id = "PKG-0643"
+decision = "G363"
+
+[[units]]
+id = "PKG-0644"
+decision = "G363"
+
+[[units]]
+id = "PKG-0645"
+decision = "G363"
+
+[[units]]
+id = "PKG-0646"
+decision = "G363"
+
+[[units]]
+id = "PKG-0647"
+decision = "G363"
+
+[[units]]
+id = "PKG-0648"
+decision = "G363"
+
+[[units]]
+id = "PKG-0649"
+decision = "G363"
+
+[[units]]
+id = "PKG-0650"
+decision = "G363"
+
+[[deferred]]
+id = "TXT-0497"
+rides = "PKG-0568"
+decision = "G362"
+reason = "What each progress phase covers (PM l.1787): nothing publishes progress before 5-6b, so nothing shows a phase's coverage; PKG-0568 is the unit of its paragraph."
+
+[[deferred]]
+id = "TXT-0498"
+rides = "PKG-0568"
+decision = "G362"
+reason = "What the installing and removing phases cover and that phases have no order (PM l.1788): nothing publishes progress before 5-6b; PKG-0568 is the unit of its paragraph."
+
+[[text]]
+id = "TXT-0454"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0501"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0502"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0503"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0564"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0577"
+step = "P7"
+test = "tests/test_package.nim"
+
+# P7b: the resolver --------------------------------------------------------------------------------------------
+
+[[units]]
+id = "PKG-0594"
+decision = "I110"
+
+[[units]]
+id = "PKG-0595"
+decision = "I110"
+
+[[units]]
+id = "PKG-0596"
+decision = "I110"
+
+[[stale]]
+id = "PKG-0317"
+compared = "PM l.1280 at 6a4dfa28 ('exclude a candidate that fails this requirement before ordering candidate versions') is replaced by PKG-0600 (l.1294 at 6cac8335): eligibility is established when a candidate is reached in the required order, and a failing one is excluded before assignment. The test tagged [PKG-0317] is retagged [PKG-0600], and the ineligible record is now charged (TXT-0482)."
+
+[[deferred]]
+id = "TXT-0493"
+rides = "PKG-0608"
+decision = "G166"
+reason = "Which signature counts for the signer replacement of a request without a source (PM l.1687): the replacement is PKG-0608's, which 5-5 builds with install_package. The resolver already keeps the root's selected source (TXT-0489)."
+
+[[deferred]]
+id = "TXT-0494"
+rides = "PKG-0608"
+decision = "G166"
+reason = "The replacement applies to the identity the request names and not to its installed dependencies (PM l.1688): PKG-0608's, which 5-5 builds."
+
+[[deferred]]
+id = "TXT-0495"
+rides = "PKG-0608"
+decision = "G166"
+reason = "The replacement is an installed-state change under §15.1 (PM l.1690): installed state is 5-5's."
+
+[[text]]
+id = "TXT-0473"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0474"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0475"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0476"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0478"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0479"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0481"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0482"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0483"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0484"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0485"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0486"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0487"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0489"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0496"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0522"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0479 and PKG-0599: a name's depth is the greatest number of edges on any path from the root, rechecked when an added edge deepens it."
+compared = "PM l.1250 at 6a4dfa28 against l.1256-1260 at 6cac8335; resolver.nim computeDepths and settleDepths replace the breadth-first depthOf (I69 as revised in I110)."
+
+[[text]]
+id = "TXT-0523"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0481 to TXT-0483: a consideration is the examination of one record whose version satisfies the requirements, an ineligible one and a root one included."
+compared = "PM l.1254 at 6a4dfa28 against l.1262-1264 at 6cac8335; resolver.nim charges before evaluating, in the dependency loop and in selectRoot."
+
+[[text]]
+id = "TXT-0477"
+step = "P7"
+kind = "informative"
+reading = "Interchangeability is a statement about producers' releases; the Package Manager does not verify it (l.1239) and resolution compares contracts by commitment only."
+compared = "PM l.1238 at 6cac8335 against resolver.nim meets and dependencyCandidate, which check a listed contract by its encoding against what the candidate provides."
+
+[[text]]
+id = "TXT-0491"
+step = "P7"
+kind = "holds"
+reading = "The Capability Authority, not the Package Manager, checks a requested permission against its definition's CDDL; the Package Manager decodes an unknown permission (PKG-0607)."
+compared = "PM l.1369 at 6cac8335 against authority/scopes.nim validateScopes with the selected profile (unknown-permission, invalid-constraints), and package/manifest.nim, which consults no permission definition (test_package's [PKG-0607] case)."
+site = "tests/test_authority.nim"
+named = "a defined permission passes; an undefined one is unknown-permission"
+
+# P6a: the Capability Authority -----------------------------------------------------------------------------------------
+
+[[units]]
+id = "CAP-0393"
+compared = "CA l.1222 at 6cac8335 adds that the enforced call scope is the requested call scope narrowed by every allowed scope. An allow that would narrow a call excludes it (runtime/authscopes.nim narrowedFor), so the enforced scope is the requested one; the claim stays on TAU's boundary-commitment test (TXT-0401)."
+
+[[units]]
+id = "CAP-0422"
+compared = "CA l.1386 at 6cac8335 names the code, authority-unavailable. The evaluate half is unreachable: no shipped permission definition marks a constraint value sensitive. The issue_grant half is unchanged, and the claim stays on TA's issue_grant test."
+
+[[deferred]]
+id = "TXT-0360"
+rides = "RUN-1125"
+decision = "G81"
+reason = "A grant to a target on another Runtime supports authority only for a consumer accepted under RUNTIME §9's forwarding rules (CA l.78, which names that section): forwarding is RUN-1125's, which 5-7a builds with remote enrollment."
+
+[[text]]
+id = "TXT-0358"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0359"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0575"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0364"
+step = "P6"
+test = "tests/test_observe.nim"
+
+[[text]]
+id = "TXT-0367"
+step = "P6"
+test = "tests/test_permissions.nim"
+
+[[text]]
+id = "TXT-0373"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0374"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0375"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0376"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0378"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0379"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0381"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0382"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0385"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0388"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0389"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0390"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0391"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0393"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0398"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0402"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0404"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0405"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0406"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0362"
+step = "P6"
+kind = "holds"
+reading = "Each selector is compared with the subject's own field: routes, providers, modules and instances (G226)."
+compared = "CA l.303 at 6cac8335 against runtime/observe.nim's selector match (the module header, G226). The named test matches `routes`, `providers` and `instances` on route records; `modules` (with `instances` and `providers`) is matched on module records in the test 'a record is shown only when one alternative admits it whole'."
+site = "tests/test_observe.nim"
+named = "a route is matched by its own facts, never by its consumer"
+
+[[text]]
+id = "TXT-0363"
+step = "P6"
+kind = "holds"
+reading = "A route record is matched on its target provider, module and instance, never on its consumer (G226)."
+compared = "CA l.304 at 6cac8335 against runtime/observe.nim routeSubject, which engine.nim gives the route's selected module, provider instance and target provider and never its consumer (G226). The named test shows `providers` and `instances` matched on the target and an `instances` selector naming the consumer matching no route; a `modules` selector on list_routes is tested nowhere and rests on reading routeSubject's callers."
+site = "tests/test_observe.nim"
+named = "a route is matched by its own facts, never by its consumer"
+
+[[text]]
+id = "TXT-0365"
+step = "P6"
+kind = "holds"
+reading = "A route record the caller may observe is returned whole, its consumer included; one it may not observe is omitted (G161, G226)."
+compared = "CA l.306 at 6cac8335 against runtime/observe.nim, which judges a route by its route, module, instance and provider only and then returns the whole record (routes.record sets `consumer`), and omits it otherwise. The named test shows the omission; 'every route record by route id, ended ones included' shows a listed record carrying its consumer, but there the caller is that consumer, so disclosure to another observer rests on reading the code."
+site = "tests/test_observe.nim"
+named = "a route the caller may not observe is omitted"
+
+[[text]]
+id = "TXT-0366"
+step = "P6"
+kind = "holds"
+reading = "An execution decision's permission scopes are the target instance's saved settings, mapped one per setting (G217)."
+compared = "CA l.368 at 6cac8335 against runtime/authscopes.nim evaluateRequest (one permission scope per saved setting, TF-32 interim), and the TP test."
+site = "tests/test_permissions.nim"
+named = "the execution request carries the execution scope and one permission scope per saved setting"
+
+[[text]]
+id = "TXT-0370"
+step = "P6"
+kind = "informative"
+reading = "A note on a future revision; nothing to build."
+compared = "CA l.391 at 6cac8335."
+
+[[text]]
+id = "TXT-0371"
+step = "P6"
+kind = "informative"
+reading = "The sentence introduces the denial table, whose rows clear one by one."
+compared = "CA l.779 at 6cac8335 against l.781-789."
+
+[[text]]
+id = "TXT-0372"
+step = "P6"
+kind = "holds"
+reading = "The table's header: each denial code has one meaning, and the authority answers the first that applies (G377)."
+compared = "CA l.781 at 6cac8335 against core.nim doEvaluate (the codes in table order) and the TA test, which reaches each produced code in turn."
+site = "tests/test_authority.nim"
+named = "the first applicable denial in table order"
+
+[[text]]
+id = "TXT-0377"
+step = "P6"
+kind = "holds"
+reading = "`approval-required` is never produced: there is no approval step, so the row never applies (AUTHORITY-POLICY.md, Error codes)."
+compared = "CA l.787 at 6cac8335 against authority/core.nim doEvaluate, whose step 4 (l.1041) produces nothing; no source names `approval-required` but the generated kit's encoder. The named test shows the codes doEvaluate does produce in table order, the lapsed-grant codes then scope-denied; that this row never applies rests on reading doEvaluate."
+site = "tests/test_authority.nim"
+named = "the first applicable denial in table order"
+
+[[text]]
+id = "TXT-0380"
+step = "P6"
+kind = "holds"
+reading = "evaluate and issue_grant answer with these codes; revoke_grant has no denial arm."
+compared = "CA l.791 at 6cac8335 against core.nim doEvaluate and doIssue (G377, under UF-53) and the revoke_grant_response arms in App A; the TA test for evaluate, and TA's issuance-policy test for issue_grant."
+site = "tests/test_authority.nim"
+named = "the first applicable denial in table order"
+
+[[text]]
+id = "TXT-0383"
+step = "P6"
+kind = "informative"
+reading = "The sentence introduces the error table, whose rows clear one by one."
+compared = "CA l.796 at 6cac8335 against l.798-808."
+
+[[text]]
+id = "TXT-0384"
+step = "P6"
+kind = "holds"
+reading = "invalid-request is the code for a rule no more specific code covers: unordered or duplicate set arrays, combined operations and bad cursors among them."
+compared = "CA l.800 at 6cac8335 against scopes.nim validateScopes and cursor.nim, with the TA test (sets) and TA's cursor test (stale, foreign and tampered cursors fail alike)."
+site = "tests/test_authority.nim"
+named = "an empty or unordered set array or a duplicate is invalid-request"
+
+[[text]]
+id = "TXT-0386"
+step = "P6"
+kind = "holds"
+reading = "A permission no accepted specification or selected profile defines is unknown-permission."
+compared = "CA l.802 at 6cac8335 against scopes.nim's permission check through the selected profile, and the TA test."
+site = "tests/test_authority.nim"
+named = "a defined permission passes; an undefined one is unknown-permission"
+
+[[text]]
+id = "TXT-0387"
+step = "P6"
+kind = "holds"
+reading = "Constraints that do not conform to their permission's definition are invalid-constraints."
+compared = "CA l.803 at 6cac8335 against scopes.nim's permission check through the selected profile, and the TA test."
+site = "tests/test_authority.nim"
+named = "a defined permission passes; an undefined one is unknown-permission"
+
+[[text]]
+id = "TXT-0392"
+step = "P6"
+kind = "holds"
+reading = "internal-error is the code no other covers: here, an audit record that cannot be made for issue_grant or revoke_grant."
+compared = "CA l.808 at 6cac8335 against core.nim commitIssue and revokeEntry (a newRecord failure), reached in the TA test through the injectWriteFailures(records = true) seam."
+site = "tests/test_authority.nim"
+named = "internal-error: an audit record that cannot be made"
+
+[[text]]
+id = "TXT-0397"
+step = "P6"
+kind = "holds"
+reading = "With `scopes` and `allowed_scopes` each at most 4,194,304 bytes, a decision fits the Transport frame; the response budget is 15 MiB."
+compared = "CA l.1201 at 6cac8335 against scopes.nim MaxScopesBytes (the `scopes` bound, checked before evaluation), core.nim's allow, whose `allowed_scopes` is the request's own `scopes` and so has the same bound, and core.nim's 15 MiB responseBudget for list and query responses. The named test asserts only the `scopes` limit; that each single decision, grant, audit record and notification fits one Transport message rests on those two bounds, not on a test."
+site = "tests/test_authority.nim"
+named = "a scopes array over 4,194,304 encoded bytes"
+
+[[text]]
+id = "TXT-0399"
+step = "P6"
+kind = "holds"
+reading = "No medium or durability level is prescribed: the acknowledgement point is the append under the backlog bound (G376)."
+compared = "CA l.1209 at 6cac8335 against AUTHORITY-POLICY.md, Audit retention, and core.nim recordBehind; the TA test shows a decision only after the append."
+site = "tests/test_authority.nim"
+named = "a decision only after its record is acknowledged"
+
+[[text]]
+id = "TXT-0400"
+step = "P6"
+kind = "holds"
+reading = "A failure record that can be retained by leaving out unvalidated or sensitive scopes is retained."
+compared = "CA l.1213 at 6cac8335 against core.nim doEvaluate's fail template, which writes the scopes only once validated; the TA test keeps the failure record without them."
+site = "tests/test_authority.nim"
+named = "without a permission profile a permission scope is unknown-permission, recorded without scopes"
+
+[[text]]
+id = "TXT-0401"
+step = "P6"
+kind = "holds"
+reading = "The enforced call scope is the requested call scope: an allow whose scopes would narrow a call excludes it, so each allowed scope covers it whole."
+compared = "CA l.1222 at 6cac8335 against runtime/authscopes.nim narrowedFor (a call allow whose allowed scopes do not fit the requested call scope whole excludes the call). The named test shows a call allow narrowed to no method refused NOT_AUTHORISED and marked narrowed; test_audit's 'every call commits its request and successful response at the boundary' shows the `call` record's scope is the requested call scope under one non-narrowing allow. A call to which several allowed scopes apply is not run."
+site = "tests/test_runtime_authority.nim"
+named = "an allow that excludes the operation is refused and marked narrowed"
+
+[[text]]
+id = "TXT-0407"
+step = "P6"
+kind = "removed"
+reading = "The extracted `logos_capability_authority.cddl` file is gone; App A now lists the contract schema in one block (TXT-0358, TXT-0404)."
+compared = "CA l.32 at 6a4dfa28 against l.32 and l.1512-1514 at 6cac8335. Our mirrors are cut from the spec text by spectrace, and TCS ties them to the appendix."
+
+[[text]]
+id = "TXT-0408"
+step = "P6"
+kind = "removed"
+reading = "The governing rule moved from the extracted file to App A: if an excerpt differs from the appendix, the appendix governs (TXT-0406)."
+compared = "CA l.33 at 6a4dfa28 against l.1514 at 6cac8335."
+
+# P6b: Configuration, the Loader, BCP and SECURITY ----------------------------------------------------------------------
+
+[[stale]]
+id = "BCP-0098"
+compared = "BCP l.559 at 6cac8335 is descriptive (TXT-0352), so no unit replaces it. Its claims line and the bcp-logging inspection item go."
+
+[[stale]]
+id = "CFG-0046"
+compared = "Replaced by CFG-0151 (CFG l.141 at 6cac8335): a default only when no record has existed before. TC's startup test is retagged, and a test of its own shows a discarded default is not staged again across a restart."
+
+[[stale]]
+id = "CFG-0145"
+compared = "Replaced by CFG-0156 (CFG l.323 at 6cac8335): a rejection is the `configuration-rejected` error arm, not MODULE_ERROR. TC's two tests are retagged and check the arm."
+
+[[stale]]
+id = "SEC-0021"
+compared = "SEC l.240 at 6cac8335 is descriptive (TXT-0445): BCP-0049, BCP-0050 and BCP-0081, which test_realizer's staging test already carries, state the rule. The tag and the claims line go."
+
+[[stale]]
+id = "SEC-0057"
+compared = "SEC l.404 at 6cac8335 is descriptive (TXT-0448): IFC-0575 to IFC-0581, which test_wipe_routes carries, state the rule. The four tags and the claims line go; CONFORMANCE and README are reworded."
+
+[[text]]
+id = "TXT-0161"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0411"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0413"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0414"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0415"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0418"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0419"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0576"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0432"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0439"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0440"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0441"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0351"
+step = "P6"
+test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0349"
+step = "P6"
+test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0368"
+step = "P6"
+test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0369"
+step = "P6"
+test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0343"
+step = "P6"
+kind = "reword"
+pair = "TXT-0353"
+reading = "The Interface row for the Runtime adds §1.3 and §5.1 and 'Runtime Control listings': Interface depends upward on the Runtime for them (§1.3 l.253 relies on the Runtime module-name grammar; §5.1 l.3254 leaves runtime module listings to the Runtime Control contract). Ours: the SDK's Interface code imports nothing from the core and takes the Runtime's definitions only as mirrored RUNTIME blocks (spec/mirrors.toml, package sdk; sdk/src/logos_sdk/kit/rc_types.nim), and the core serves the listings over Runtime Control (runtime/invoke.nim). (P6 stated the dependency the other way round; corrected at P9, Q11.)"
+compared = "BCP l.81 at 6cac8335 against l.81 at 6a4dfa28, and INTERFACE l.253 and l.3254 at 6cac8335; no module under sdk/src imports logos_core, the Runtime Control types the SDK uses are generated from the RNT mirrors (kit/rc_types.nim), and runtime/invoke.nim dispatches Runtime Control over them."
+site = "src/logos_core/runtime/invoke.nim"
+
+[[text]]
+id = "TXT-0344"
+step = "P6"
+kind = "reword"
+pair = "TXT-0354"
+reading = "The Interface row for Transport adds §2.1 and §5.1: method-name carriage and the response envelope and frame capacity."
+compared = "BCP l.82 at 6cac8335 against l.82 at 6a4dfa28, and transport/boundary.nim, which carries the method name and checks the envelope with the SDK's Interface code."
+site = "src/logos_core/transport/boundary.nim"
+
+[[text]]
+id = "TXT-0346"
+step = "P6"
+kind = "reword"
+pair = "TXT-0355"
+reading = "The Runtime row for the Capability Authority adds §8 and §10.1: execution-authorization renewal and invalidation."
+compared = "BCP l.84 at 6cac8335 against l.83 at 6a4dfa28, and runtime/execauth.nim, where the Runtime renews and invalidates execution authorization."
+site = "src/logos_core/runtime/execauth.nim"
+
+[[text]]
+id = "TXT-0347"
+step = "P6"
+kind = "reword"
+pair = "TXT-0356"
+reading = "The Runtime row for the Module Loader adds §4.2.1, §10.1 and §10.2: binding loss and cleanup, release ordering and the Loader's error codes."
+compared = "BCP l.86 at 6cac8335 against l.85 at 6a4dfa28, and runtime/realizer.nim (LoaderErrorCode, release); binding loss and cleanup (RUNTIME §4.2.1 l.909-912) are runtime/hostsup.nim carrierLost and engine.loaderLost."
+site = "src/logos_core/runtime/realizer.nim"
+
+[[text]]
+id = "TXT-0353"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0343, which adds §1.3 and §5.1."
+compared = "BCP l.81 at 6a4dfa28 against l.81 at 6cac8335."
+site = "src/logos_core/runtime/invoke.nim"
+
+[[text]]
+id = "TXT-0354"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0344, which adds §2.1 and §5.1."
+compared = "BCP l.82 at 6a4dfa28 against l.82 at 6cac8335."
+site = "src/logos_core/transport/boundary.nim"
+
+[[text]]
+id = "TXT-0355"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0346, which adds §8 and §10.1."
+compared = "BCP l.83 at 6a4dfa28 against l.84 at 6cac8335."
+site = "src/logos_core/runtime/execauth.nim"
+
+[[text]]
+id = "TXT-0356"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0347, which adds §4.2.1, §10.1 and §10.2."
+compared = "BCP l.85 at 6a4dfa28 against l.86 at 6cac8335."
+site = "src/logos_core/runtime/realizer.nim"
+
+[[text]]
+id = "TXT-0345"
+step = "P6"
+kind = "holds"
+reading = "Interface §5.1 depends on Configuration for the accepted configuration-schema semantics behind `configuration-schema-mismatch`'s validation detail (an upward exception). Ours: the reason and its detail are Interface §5.1's (sdk/src/logos_sdk/iface/outcome.nim), staged against the accepted configuration schema and given only to a caller that may see the schema. (P6 stated the dependency the other way round; corrected at P9, Q11.)"
+compared = "BCP l.83 at 6cac8335 against runtime/invoke.nim stage and engine.nim's detail check, and the TC test."
+site = "tests/test_config.nim"
+named = "one not of the root carries configuration-schema-mismatch"
+
+[[text]]
+id = "TXT-0348"
+step = "P6"
+kind = "informative"
+reading = "Why the spec keeps call-audit and call-evidence out of the shared Runtime types schema; our mirrors follow the text (RNT/9.2.runtime-types.cddl has neither, CAP/9.audit.cddl and CAP/9.1.evidence.cddl hold them)."
+compared = "BCP l.91 at 6cac8335 against spec/mirrors."
+
+[[text]]
+id = "TXT-0557"
+step = "P6"
+kind = "holds"
+reading = "`lgx` is a source kind of a catalog entry (package/records.nim SourceKind), decoded only under that name; installing from it is Tier 5."
+compared = "BCP l.274 at 6cac8335 against package/records.nim and pins.nim, and the TR test, which round-trips an lgx entry."
+site = "tests/test_resolver.nim"
+named = "catalog entries, sources and resolved edges are the mirrored records"
+
+[[text]]
+id = "TXT-0558"
+step = "P6"
+kind = "holds"
+reading = "`nix` is a source kind of a catalog entry (package/records.nim SourceKind), decoded only under that name; installing from it is Tier 5."
+compared = "BCP l.275 at 6cac8335 against package/records.nim and pins.nim, and the TR test, which round-trips a nix entry."
+site = "tests/test_resolver.nim"
+named = "catalog entries, sources and resolved edges are the mirrored records"
+
+[[text]]
+id = "TXT-0352"
+step = "P6"
+kind = "informative"
+reading = "Descriptive at 6cac8335 (BCP-0098 retired). Optional logging here is logosd's log and the Runtime's diagnostics that logosd drains into it (daemon/logging.nim, daemon/diagdrain.nim); neither is required audit or an enforcement input, and call records (runtime/callaudit.nim) and the authority's audit (authority/audit.nim) never wait on them."
+compared = "BCP l.559 at 6cac8335 against l.550 at 6a4dfa28, and the bcp-logging reason it replaces."
+
+[[text]]
+id = "TXT-0416"
+step = "P6"
+kind = "holds"
+reading = "Differing commitments arise only from restored or inconsistent state, and the VERSION_MISMATCH row still applies to them (engine.applyRefusal)."
+compared = "CFG l.258 at 6cac8335 against engine.nim applyRefusal (commitmentsAgree) and TC:1181, where a changed binding is not restored, and the TC test."
+site = "tests/test_config.nim"
+named = "the binding's, the staged record's and the realization's commitments must agree"
+
+[[text]]
+id = "TXT-0423"
+step = "P6"
+kind = "informative"
+reading = "The sentence introduces the §9 block; spec/mirrors/CFG/9.configuration-types.cddl is that whole block, cut from the text and checked by `spectrace mirror`."
+compared = "CFG l.359 at 6cac8335 against spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0425"
+step = "P6"
+kind = "removed"
+reading = "The stale revision left CONFIG §5's table: it is `stale-revision` (CFG l.201; RUNTIME l.1819), as P4a built."
+compared = "CFG l.195 at 6a4dfa28 against l.201 at 6cac8335, and engine.nim updateRefusal, which answers the typed arm; TC's [CFG-0152] test."
+site = "src/logos_core/runtime/engine.nim"
+
+[[text]]
+id = "TXT-0426"
+step = "P6"
+kind = "removed"
+reading = "The stale revision left §8's table for `stale-revision` (CFG l.304), and the absent binding became l.299's row (TXT-0418)."
+compared = "CFG l.294 at 6a4dfa28 against l.299-305 at 6cac8335, and engine.nim applyRefusal; TC's [CFG-0154] and [TXT-0418] tests."
+site = "src/logos_core/runtime/engine.nim"
+
+[[text]]
+id = "TXT-0428"
+step = "P6"
+kind = "removed"
+reading = "The extracted `logos_module_configuration_types.cddl` file is gone; the block itself is the schema (TXT-0423)."
+compared = "CFG l.419 at 6a4dfa28 against l.359 at 6cac8335."
+
+[[text]]
+id = "TXT-0429"
+step = "P6"
+kind = "removed"
+reading = "With no extracted file, nothing can differ from the specification."
+compared = "CFG l.420 at 6a4dfa28 against l.359 at 6cac8335."
+
+[[text]]
+id = "TXT-0430"
+step = "P6"
+kind = "informative"
+reading = "What the contract standardizes; each part is a unit of §3-§10."
+compared = "LDR l.15 at 6cac8335."
+
+[[text]]
+id = "TXT-0431"
+step = "P6"
+kind = "informative"
+reading = "A statement about substitutability across Runtimes: our realization handoffs are engine-internal (runtime/realizer.nim, hostsup.nim), as the sentence allows."
+compared = "LDR l.16 at 6cac8335."
+
+[[text]]
+id = "TXT-0433"
+step = "P6"
+kind = "informative"
+reading = "Other specifications use the descriptor through the contract or a projection of their own; the host configuration's `lcn.app_implementation` is such a projection (TXT-0434)."
+compared = "LDR l.142 at 6cac8335 against runtime/host_config.cddl."
+
+[[text]]
+id = "TXT-0434"
+step = "P6"
+kind = "reword"
+pair = "TXT-0444"
+reading = "A projection has its own subtree root and keeps LOADER's meaning: `lcn.app_implementation` is a rule of the host configuration's own schema, with LOADER's strategy names and fields."
+compared = "LDR l.143 at 6cac8335 against l.143-144 at 6a4dfa28, and runtime/host_config.cddl (lcn.app_implementation, lcn.app_artifact)."
+
+[[text]]
+id = "TXT-0444"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0433 and TXT-0434: consumption by schema reference became the contract or a projection with its own root."
+compared = "LDR l.143-144 at 6a4dfa28 against l.142-143 at 6cac8335."
+
+[[text]]
+id = "TXT-0435"
+step = "P6"
+kind = "holds"
+reading = "Each hosted attempt gets its own Module Host (hostsup.nim, host/main.nim)."
+compared = "LDR l.200 at 6cac8335 against runtime/hostsup.nim (one Host per hosted attempt, newHost) and host/main.nim. The named test starts two hosted instances and finds two host processes; 'is ready in a process of its own' shows one instance in one host."
+site = "tests/test_hosted.nim"
+named = "the Loader fails with two live hosts"
+
+[[text]]
+id = "TXT-0436"
+step = "P6"
+kind = "informative"
+reading = "A note on a future revision; nothing to build."
+compared = "LDR l.201 at 6cac8335."
+
+[[text]]
+id = "TXT-0437"
+step = "P6"
+kind = "holds"
+reading = "Only the selected artifact is hashed and compared (runtime/artifact.nim)."
+compared = "LDR l.658 at 6cac8335 against runtime/artifact.nim, and the TH test."
+site = "tests/test_hosted.nim"
+named = "an artifact whose bytes do not match its digest fails"
+
+[[text]]
+id = "TXT-0438"
+step = "P6"
+kind = "informative"
+reading = "Libraries the linker loads are deployment inputs, not verified by the Loader; a packaged one against the private copy is UF-18, with the spec owner."
+compared = "LDR l.659 at 6cac8335 against runtime/artifact.nim, which hashes and copies the selected artifact only."
+
+[[text]]
+id = "TXT-0442"
+step = "P6"
+kind = "removed"
+reading = "The extracted `logos_module_loader.cddl` file is gone; Appendix A lists the schema (TXT-0432)."
+compared = "LDR l.38 at 6a4dfa28 against l.39 at 6cac8335."
+
+[[text]]
+id = "TXT-0443"
+step = "P6"
+kind = "removed"
+reading = "The governing rule moved to Appendix A (TXT-0441)."
+compared = "LDR l.39 at 6a4dfa28 against l.739 at 6cac8335."
+
+[[text]]
+id = "TXT-0445"
+step = "P6"
+kind = "informative"
+reading = "Descriptive at 6cac8335 (SEC-0021 retired): BCP-0049, BCP-0050 and BCP-0081 state the rule, and the C-08 staging test claims them."
+compared = "SEC l.240 at 6cac8335 against l.240 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0446"
+step = "P6"
+kind = "informative"
+reading = "A threat statement; the Loader verifies the selected artifact only (TXT-0437), and UF-18 is with the spec owner."
+compared = "SEC l.391 at 6cac8335."
+
+[[text]]
+id = "TXT-0447"
+step = "P6"
+kind = "informative"
+reading = "A threat statement; the pools are bounded under their own specs."
+compared = "SEC l.394 at 6cac8335."
+
+[[text]]
+id = "TXT-0448"
+step = "P6"
+kind = "informative"
+reading = "Descriptive at 6cac8335 (SEC-0057 retired): IFC-0575 to IFC-0581 state and claim the rule."
+compared = "SEC l.404 at 6cac8335 against l.403 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0449"
+step = "P6"
+kind = "reword"
+pair = "TXT-0453"
+reading = "The iOS baseline bullet moved one line (old l.473-475, new l.474-476), and its last sentence is no longer a requirement: a conforming deployment 'cannot rely on' arbitrary post-install native module loading, where the old text said it 'MUST NOT assume' it is available (TXT-0566; SEC-0044 retired). It binds nothing, and nothing here is built for iOS. (P6 read it as binding deployments; corrected at P9, Q11.)"
+compared = "SEC l.474-476 at 6cac8335 against l.473-475 at 6a4dfa28, and SEC-0044 (retired) in conformance/requirements/SEC.jsonl."
+
+[[text]]
+id = "TXT-0453"
+step = "P6"
+kind = "removed"
+reading = "Reworded as TXT-0449, one line down (l.474-476): the first two sentences are unchanged, and the third, 'MUST NOT assume that arbitrary post-install native module loading is available', becomes the descriptive 'cannot rely on arbitrary post-install native module loading' (SEC-0044 retired; TXT-0566). It binds nothing, and nothing here is built for iOS. (corrected at P9, Q11.)"
+compared = "SEC l.473-475 at 6a4dfa28 against l.474-476 at 6cac8335."
+
+[[text]]
+id = "TXT-0566"
+step = "P6"
+kind = "informative"
+reading = "Descriptive at 6cac8335: an iOS deployment cannot rely on arbitrary post-install native module loading (was MUST NOT; SEC-0044 retired). It binds nothing, and nothing here is built for iOS. (P6 read it as binding iOS deployments; corrected at P9, Q11.)"
+compared = "SEC l.476 at 6cac8335 against l.475 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0450"
+step = "P6"
+kind = "informative"
+reading = "A reference entry."
+compared = "SEC l.588 at 6cac8335."
+
+# P8a: the descriptor mirror --------------------------------------------------------------------------------------
+
+[[units]]
+id = "IFC-0226"
+compared = "IF l.1683-1686 at 6a4dfa28 had no `extends`; l.1654-1658 at 6cac8335 add `? extends: [+ provider-contract-schema]`. spec/mirrors/IFC/2.6.call-surface.cddl is rewritten from the text; test_call_surface's [IFC-0226] test reads the regenerated mirror and checks its required and optional keys against DescriptorRequired and DescriptorOptional, which the descriptor's closed-map check uses."
+
+# P8a: contract extension (CMT §9.1) ------------------------------------------------------------------------------
+
+[[text]]
+id = "TXT-0526"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0527"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0528"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0529"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0530"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0531"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0532"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0533"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+# P8a: the descriptor's extends (IF §2.6) -------------------------------------------------------------------------
+
+[[units]]
+id = "IFC-0230"
+compared = "IF l.1704 at 6a4dfa28 limited `interfaces` to 256 entries; l.1675-1676 at 6cac8335 limit `extends` too. provider.nim's MaxDescriptorExtends is checked before the entries are parsed and when a binding is encoded; test_call_surface's [IFC-0230] test refuses 257 of each."
+
+[[units]]
+id = "IFC-0245"
+compared = "IF l.1740 at 6a4dfa28 rejected a bare-name collision across the described contracts; l.1712-1715 at 6cac8335 name the `primary` and `interfaces` contracts, so an `extends` entry, which repeats its successor's bare names, is not a collision, and duplicate contract identity is read across all three arrays (G392). The eight existing [IFC-0245] cases stand; a new one shows both."
+
+[[text]]
+id = "TXT-0536"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+[[text]]
+id = "TXT-0538"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+[[text]]
+id = "TXT-0539"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+[[text]]
+id = "TXT-0540"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+# P8a: contract documents and extensions in the Package Manager (PM §4, §9) ---------------------------------------
+
+[[text]]
+id = "TXT-0457"
+step = "P8"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0458"
+step = "P8"
+test = "tests/test_lgx.nim"
+
+# P8b: records, host configuration and the store (RUNTIME §8) -----------------------------------------------------
+
+[[units]]
+id = "RUN-0267"
+compared = "RUNTIME l.1428 at 6a4dfa28 required `implements`, `requires` and `requested_permissions` to be non-empty when present; l.1357 at 6cac8335 adds `extends`. The host configuration (lcn.app_module, lcn.app_declaration) and the stored record (lcn.rs_record) gain `? extends`, refused when present and empty; test_host's [RUN-0267] test refuses an empty `extends`, and test_engine's malformed-record test keeps its other cases."
+
+[[stale]]
+id = "RUN-0268"
+compared = "RUNTIME l.1429 at 6a4dfa28 (its unit's paragraph starts at l.1420) required unique implemented commitments. It became RUN-1105 (l.1358 at 6cac8335), which adds extended commitments, unique over both arrays together (G394 r10), and a distinct contract for each `requires` entry (M29). checkRecord enforces both; test_engine's malformed-record test is retagged from RUN-0268 to RUN-1105."
+
+[[text]]
+id = "TXT-0548"
+step = "P8"
+test = "tests/test_host.nim"
+
+[[text]]
+id = "TXT-0552"
+step = "P8"
+test = "tests/test_engine.nim"
+
+# P8b: exact matching and the relation before exposure (INTERFACE §2.6, RUNTIME §8) -------------------------------
+
+[[units]]
+id = "RUN-0265"
+compared = "RUNTIME l.1416-1418 at 6a4dfa28 forbade using an unvalidated `implements` claim to satisfy a provider requirement; l.1341-1343 at 6cac8335 add `extends`. checkContracts now compares every set a record states with the validated descriptor through matchesContracts (the primary root, the implemented and the extended roots as sets), so an `extends` claim the descriptor does not validate fails the start and makes no provider; test_engine's [RUN-0265] test adds a meter record claiming an extended root and a relay record claiming one more than its descriptor, and the stated-set test covers smaller, larger and other sets."
+
+[[text]]
+id = "TXT-0549"
+step = "P8"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0550"
+step = "P8"
+test = "tests/test_engine.nim"
+
+# P8b: routes, views, local transport and the Module Host (RUNTIME §8, §9.3; INTERFACE §1.2) ----------------------
+
+[[text]]
+id = "TXT-0535"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0551"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0553"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0554"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0147"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0275"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0323"
+step = "P8"
+kind = "removed"
+reading = "The old sentence let a provider record expose its primary contract and implemented interface views only. TXT-0275 replaces it and adds exact extended contract views; it clears by test."
+compared = "RUNTIME l.96 at 6a4dfa28 against l.90 at 6cac8335, and test_routes's [TXT-0275] test."
+
+# P8b: M28, the handoff's extends deferred to 5-8 (PACKAGE MANAGER §12; G391) -------------------------------------
+
+[[units]]
+id = "PKG-0338"
+decision = "G391"
+compared = "PM §12 l.1401 at 6cac8335 adds `? extends` to the handoff schema; the mirror `PKG/12.runtime-handoff.cddl` (P7a) has it. No handoff exists before 5-5 and 5-8, so the unit is deferred to 5-8 (G391)."
+
+[[units]]
+id = "PKG-0347"
+decision = "G391"
+compared = "PM l.1434-1435 at 6cac8335 add `extends` to the declaration fields the handoff preserves. 5-5 builds the handoff's construction, which carries `extends` from the manifest's module declaration; 5-8 checks it (G391)."
+
+[[units]]
+id = "PKG-0351"
+decision = "G391"
+compared = "PM l.1441 at 6cac8335 adds the extended-contract set to the exact match of the handoff with the validated descriptor. P8b builds that comparison for host-configuration and static records (`matchesContracts` with the extended set); 5-8 applies it to the handoff (G391)."
+
+[[deferred]]
+id = "TXT-0545"
+rides = "PKG-0351"
+decision = "G391"
+reason = "The handoff carries `extends` (PM l.1401) and the Runtime matches the descriptor's extended set with it exactly (l.1441): both are the handoff's, which 5-5 constructs and 5-8 checks; PKG-0351 is its requirement."
+
+# P8c: the items held on TF-62 (INTERFACE §2.6, RUNTIME §8; G393) -------------------------------------------------
+
+[[units]]
+id = "IFC-0246"
+decision = "G393"
+compared = "IF l.1745-1746 at 6a4dfa28 required a supplied primary contract and implemented-interface set to match the validated descriptor exactly; l.1717 at 6cac8335 names the sources (a package, Runtime input, static registration or protected built-in declaration) and adds the extended-contract set. The helper half (P8a): matchesContracts takes the extended set, compared as a set (test_call_surface's [IFC-0246] test). The engine half (P8b, P8c): checkContracts compares a record's primary, implements and extends with the descriptor through matchesContracts, and once a record supplies any reference an omitted primary is none and an omitted array empty (engine.references; G393, the interim on TF-62); test_engine's stated-set test (smaller, larger, other sets) and its [IFC-0246] [G393] test (a primary alone, no extends, no implements, implements alone, no primary: each fails; the full statement is bound)."
+
+[[units]]
+id = "RUN-0258"
+decision = "G393"
+compared = "RUNTIME l.1381 at 6a4dfa28 preserved the module name, primary_contract, implements, requires and requested_permissions without addition or widening; l.1303 at 6cac8335 adds extends. The sentence's subject is the Package Manager handoff (l.1300-1302), whose path is 5-8's, and 5-8's handoff test carries the id. The evidence here is the stored record of a host-configuration input: lcn.rs_record carries extends and factBytes compares it, and test_persist's [RUN-0258] test keeps the instance and its provider id while extends is equal and keeps the retained record when it changes (G160 note). The claim rests on G393's strict rule: an omitted field is none or empty, so no view a record does not state is exposed."
+
+# P9: Credential Store scope, claims, docs and close (BCP §5.1, §5.4; G159, G309) ------------------------------
+
+[[stale]]
+id = "BCP-0093"
+compared = "BCP l.398 at 6a4dfa28 required the non-production mechanisms identified in SECURITY §13 to be selected explicitly through protected deployment configuration; BCP l.403 at 6cac8335 names them (development trust anchors, relaxed debugging entitlements, implementation-local Transport test hooks under TRANSPORT §8.5, unknown-artifact analysis), the list of SEC l.533, which equals old SEC l.532. The rule is the same and BCP-0103 carries it. test_logosd's test is retagged [BCP-0103], the id leaves conformance/claims/BCP.toml, and docs/DEPLOYMENT.md row 22 cites BCP l.403-406 with §20 answering each of the four (D27's P9 note). CONFORMANCE's record of step 4b-6 keeps the old id, dated."
+
+[[text]]
+id = "TXT-0555"
+step = "P9"
+test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0350"
+step = "P9"
+test = "tests/test_deployment.nim"

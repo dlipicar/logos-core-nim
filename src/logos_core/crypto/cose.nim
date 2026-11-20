@@ -95,8 +95,12 @@ func decodeCoseSign1Structure*(data: openArray[byte]): Result[CoseSign1, CoseFai
   ## The structural checks both profiles share: deterministic CBOR, tag 18,
   ## four elements, a protected header of exactly a 1..128-byte `kid` (an
   ## explicit `alg` is refused, whatever it names), an empty unprotected
-  ## header, an embedded payload, and a 16,224-byte signature.
-  let v = decodeCbor(data).valueOr:
+  ## header, an embedded payload, and a 16,224-byte signature. COSE_Sign1 is a
+  ## tagged item outside the module boundary, so it asks for the generic data
+  ## model [DECISIONS G38].
+  var opts = defaultDecodeOptions()
+  opts.allowExtended = true
+  let v = decodeCbor(data, opts).valueOr:
     return err(failure(ceNotCbor, $error))
   if v.kind != ckTag or v.tag != CoseSign1Tag:
     return err(failure(ceNotTagged))

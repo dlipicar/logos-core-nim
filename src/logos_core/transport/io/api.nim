@@ -114,6 +114,11 @@ type
       response*: seq[byte] ## the encoded Hello response
       binding*: RouteBinding ## never the ticket
       endsIn*: Opt[int64] ## when the session's authorization ends, from now
+      earlier*: Opt[ContractInput]
+        ## [G394; synthesis §3] with a session on an earlier contract: that
+        ## contract's input, accepted at the endpoint's first such session
+        ## and kept; [IMPL] it rides every one, so a first session that ends
+        ## before its verdict lands leaves nothing unaccepted
     of avFailed:
       code*: ErrorCode
       peer*: bool ## the caller reported it with a ProtocolError: send nothing
@@ -144,7 +149,12 @@ type
     cmdCancel ## send Cancel for a call
     cmdAbandon ## stop awaiting a call (§3.4)
     cmdClose ## close a connection
-    cmdTerminate ## callee: the route was revoked; terminate the session (§8.1)
+    cmdTerminate
+      ## callee: the route's authority or readiness ended; terminate the
+      ## session with `termCode` (§8.1), in the phases `termPhase` names
+    cmdEndSubscription
+      ## callee: end active subscription `subId` with a SubscriptionEnd
+      ## NOT_AUTHORISED while the session continues (§5.1)
     cmdWorkEnded ## callee: the provider's work for a Request ended
     cmdSubscriptionResult ## callee: the result of an `evSubscribe` or `evUnsubscribe`
     cmdPublish ## callee: an Event to every subscriber at an endpoint
@@ -160,11 +170,24 @@ type
       ## callee: answer a dispatched `logos.schema` Request from the selected
       ## contract, once the owner authorized it (E3, DECISIONS I90)
 
+  TermPhase* = enum
+    ## [SPEC TRANSPORT §8.1] Which part of a termination `cmdTerminate` runs.
+    tpWhole ## stop admission, then, after `terminationDrain`, ProtocolError and close
+    tpBegin
+      ## stop admission only: the owner bounds the in-flight work's completion
+      ## and sends `tpFinish` (G174)
+    tpFinish ## ProtocolError and close, admission stopped or not
+
   IoCommand* = object
     conn*: ConnId
     case kind*: IoCommandKind
-    of cmdShutdown, cmdClose, cmdTerminate:
+    of cmdShutdown, cmdClose:
       discard
+    of cmdTerminate:
+      termCode*: ErrorCode
+        ## NOT_READY for a readiness end (§8.1 l.977); any other value,
+        ## the zero default included, is an authority end: NOT_AUTHORISED
+      termPhase*: TermPhase
     of cmdServe:
       endpoint*: EndpointId
       listener*: cint ## an adopted listening fd; the I/O thread owns this copy
@@ -193,7 +216,8 @@ type
       callTag*: uint64
     of cmdWorkEnded:
       endedId*: uint64
-    of cmdSubscriptionResult, cmdSubscribe, cmdUnsubscribe, cmdAbandonSubscription:
+    of cmdSubscriptionResult, cmdSubscribe, cmdUnsubscribe, cmdAbandonSubscription,
+        cmdEndSubscription:
       subId*: uint64
       subEvent*: string ## cmdSubscribe: the event
       subFailure*: Opt[InvocationFailure]
@@ -226,7 +250,9 @@ type
     ccOwner ## `cmdClose`
     ccShutdown ## `stopTransport`
     ccOverflow ## Event output overflow: ProtocolError TRANSPORT_ERROR (§5.2)
-    ccTerminated ## the route ended: ProtocolError NOT_AUTHORISED (§8.1)
+    ccTerminated
+      ## the route ended: ProtocolError NOT_AUTHORISED or NOT_READY, in `code`
+      ## (§8.1)
 
   ConnectFailure* = enum
     cfCapacity ## `maxOutbound` connections are open: nothing was opened
@@ -258,6 +284,9 @@ type
       ## not committed on `conn`
     evEvent ## caller: an Event; release its `credit` with `cmdRelease`
     evSubscription ## caller: a Subscribe or Unsubscribe completed
+    evSubscriptionEnd
+      ## caller: the callee ended a subscription (§5.1): its failure is
+      ## NOT_AUTHORISED, or MODULE_ERROR for any other code received
     evPublishResult
       ## callee: the outcome of one `cmdPublishScoped`, committed or not (E2,
       ## DECISIONS I90)
@@ -325,9 +354,10 @@ type
       eventName*: string
       eventData*: seq[byte] ## the encoded, validated data
       credit*: int ## bytes held until `cmdRelease`
-    of evSubscription:
+    of evSubscription, evSubscriptionEnd:
       subscriptionId*: uint64
-      subscriptionOp*: MessageKind ## mkSubscribe or mkUnsubscribe
+      subscriptionOp*: MessageKind
+        ## mkSubscribe or mkUnsubscribe; mkSubscriptionEnd for evSubscriptionEnd
       subscriptionFailure*: Opt[InvocationFailure]
     of evPublishResult:
       pubResultTag*: uint64 ## the command's `pubTag`

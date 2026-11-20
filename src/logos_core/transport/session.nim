@@ -18,8 +18,8 @@ type
   ConnState* = enum
     csOpen
     csTerminating
-      ## callee only: the route expired or was revoked; admission has stopped
-      ## and `finishTermination` closes (§8.1)
+      ## callee only: the route's authority or readiness ended; admission has
+      ## stopped and `finishTermination` closes (§8.1)
     csClosed
 
   CloseReason* = object
@@ -106,6 +106,9 @@ type
     event: string
     active: bool ## its subscription-result-ok is committed
     pending: Opt[MessageKind] ## an operation whose result is not committed yet
+    ended: bool
+      ## a SubscriptionEnd is committed while its Unsubscribe was outstanding:
+      ## that Unsubscribe succeeds (§5.1)
 
   PublishErrorKind* = enum
     ## Why an Event was not committed. `code` maps each to the INTERFACE §2.9.3
@@ -122,6 +125,7 @@ type
   PublishError* = object
     kind*: PublishErrorKind
     msg*: string
+    ended*: ErrorCode ## `peEnded`: the termination code (§8.1)
 
   SlotPool* = ref object
     ## [SPEC TRANSPORT §8.6] The execution slots shared by the connections of
@@ -153,16 +157,23 @@ type
     subs: Table[uint64, CalleeSub]
     usedSubIds: HashSet[uint64]
       ## every id of a valid Subscribe on this connection (§5.1)
+    ended: HashSet[uint64]
+      ## ids ended by a committed SubscriptionEnd whose Unsubscribe has not come
+      ## yet: a subset of `usedSubIds`, so bounded by the same history (§5.1)
+    termCode: ErrorCode
+      ## while terminating: NOT_AUTHORISED (authority ended) or NOT_READY
+      ## (readiness ended) (§8.1)
 
 func code*(e: PublishError): ErrorCode =
   ## [SPEC INTERFACE §2.9.3] The result of a publication boundary that has one;
   ## an oversized Event is MODULE_ERROR there, as an oversized Request is
-  ## (TRANSPORT §2.1) [IMPL]. Without a result channel (`logos_publish_fn`),
-  ## `peTooLarge` is TRANSPORT §2.1's ProtocolError TRANSPORT_ERROR and close;
-  ## whether RUNTIME §7.3's drop covers it is an open question to the owner.
+  ## (TRANSPORT §2.1) [IMPL]. On the ordinary path (`logos_publish_fn`) a
+  ## failure for one subscriber route does not change the publisher's result
+  ## (RUNTIME §7.3 l.1149); an oversized Event follows TRANSPORT §2.1 for that
+  ## destination (l.1150): ProtocolError TRANSPORT_ERROR and close (G165).
   case e.kind
   of peClosed: ecTransport
-  of peEnded: ecNotAuthorised
+  of peEnded: e.ended
   of peNoDestination: ecNotReady
   of peNotInContract: ecNotAuthorised
   of peInvalid: ecInvalidParams
@@ -170,6 +181,9 @@ func code*(e: PublishError): ErrorCode =
 
 func publishError(kind: PublishErrorKind, msg: string): PublishError =
   PublishError(kind: kind, msg: msg)
+
+func termFailure(c: CalleeConn): InvocationFailure =
+  failureOf(c.termCode)
 
 func calleeConn*(
     b: Boundary,
@@ -279,6 +293,7 @@ proc close(c: var CalleeConn, r: CloseReason): seq[CalleeAction] =
   c.state = csClosed
   c.inFlight.clear()
   c.subs.clear()
+  c.ended.clear()
   c.dropDelayed()
   @[CalleeAction(kind: caClose, close: r)]
 
@@ -301,21 +316,27 @@ proc onRequest(c: var CalleeConn, r: Request, size: int): seq[CalleeAction] =
     return c.close(closing(ecInvalidParams, "a Request id did not increase"))
   c.highestId = Opt.some(r.id)
   if c.state == csTerminating:
-    # [SPEC TRANSPORT §8.1] Committed now, without dispatch, and with nothing
-    # that discloses the authorization condition.
+    # [SPEC TRANSPORT §8.1] Committed now, without dispatch, with the
+    # termination code and nothing that discloses its condition.
     c.dropParams(r)
-    return @[send(responseErr(r.id, failureOf(ecNotAuthorised)))]
+    return @[send(responseErr(r.id, c.termFailure))]
   let checked = c.boundary.acceptRequest(r)
   if checked.isErr:
-    c.dropParams(r)
     let rj = checked.error
     case rj.kind
     of rjClose:
+      c.dropParams(r)
       return c.close(closing(rj.failure.code, rj.msg))
     of rjRespond:
-      # Committed now: the call fails as it would in direct mode; nothing runs
-      # and no slot is needed.
+      # Committed now: nothing runs and no slot is needed.
+      c.dropParams(r)
       return @[send(responseErr(r.id, rj.failure))]
+    of rjOwner:
+      # [SPEC RUNTIME l.1827-1828; re-pin P4b] The params fail their schema:
+      # dispatched as any Request, so that the call's authorization comes
+      # first; its owner then fails it as in direct mode. No value root was
+      # computed for it.
+      discard
   if c.delayed.len == 0 and c.slotFree:
     c.inFlight[r.id] = r.methodName
     c.take(r.id)
@@ -380,20 +401,23 @@ proc workEnded*(c: var CalleeConn, id: uint64): seq[CalleeAction] =
 proc onSubscribe(c: var CalleeConn, s: Subscribe): seq[CalleeAction] =
   ## [SPEC TRANSPORT §5.1] The overlap check, then the identifier check, before
   ## the event name is resolved or its access checked. The id is used from here
-  ## on, whatever the outcome.
+  ## on, whatever the outcome. [SPEC TRANSPORT §8.1 l.972; P3 ruling F8] During
+  ## termination the result is the termination code, right after the overlap
+  ## check, and nothing is recorded.
   if c.pendingOp(s.id):
     return
       c.close(closing(ecInvalidParams, "a Subscribe overlaps an uncommitted result"))
+  if c.state == csTerminating:
+    return @[send(subResult(s.id, mkSubscribe, Opt.some(c.termFailure)))]
   if s.id in c.usedSubIds:
     return @[send(subResult(s.id, mkSubscribe, Opt.some(failureOf(ecInvalidParams))))]
   if c.usedSubIds.len >= c.limits.maxSubscriptionIds:
     # [SPEC TRANSPORT §5.1, §8.6] Close rather than forget an id.
     return c.close(closing(ecTransport, "the subscription-id history is full"))
   c.usedSubIds.incl(s.id)
-  if c.state == csTerminating or not c.boundary.knowsEvent(s.event) or
-      not c.boundary.allowsEvent(s.event):
+  if not c.boundary.knowsEvent(s.event) or not c.boundary.allowsEvent(s.event):
     # Resolved under the selected contract only, then the route's subscription
-    # scope (§8.1); during termination that access has ended [IMPL].
+    # scope (§8.1).
     return @[send(subResult(s.id, mkSubscribe, Opt.some(failureOf(ecNotAuthorised))))]
   c.subs[s.id] = CalleeSub(event: s.event, pending: Opt.some(mkSubscribe))
   @[CalleeAction(kind: caSubscribe, subId: s.id, event: s.event)]
@@ -401,10 +425,18 @@ proc onSubscribe(c: var CalleeConn, s: Subscribe): seq[CalleeAction] =
 proc onUnsubscribe(c: var CalleeConn, id: uint64): seq[CalleeAction] =
   ## [SPEC TRANSPORT §5.1] An operation over an uncommitted result closes; an
   ## id with no active subscription fails with INVALID_PARAMS and changes
-  ## nothing.
+  ## nothing. During termination the result is the termination code and
+  ## nothing changes (§8.1 l.972). The first Unsubscribe of a subscription the
+  ## callee ended with a SubscriptionEnd succeeds (l.755); it then names no
+  ## active subscription [P3 reading].
   if c.pendingOp(id):
     return
       c.close(closing(ecInvalidParams, "an Unsubscribe overlaps an uncommitted result"))
+  if c.state == csTerminating:
+    return @[send(subResult(id, mkUnsubscribe, Opt.some(c.termFailure)))]
+  if id in c.ended:
+    c.ended.excl(id)
+    return @[send(subResult(id, mkUnsubscribe, Opt.none(InvocationFailure)))]
   var found = false
   c.subs.withValue(id, s):
     if s.active:
@@ -456,7 +488,7 @@ proc receive*(c: var CalleeConn, frame: openArray[byte]): seq[CalleeAction] =
   of mkProtocolError:
     # [SPEC TRANSPORT §2.3] Close without sending another ProtocolError.
     c.close(peerClosed(m.protocolError.code, "the caller reported an error"))
-  of mkResponse, mkEvent, mkSubscriptionResult:
+  of mkResponse, mkEvent, mkSubscriptionResult, mkSubscriptionEnd:
     # [SPEC TRANSPORT §1.4, §2.3] A callee-to-caller kind from the caller.
     c.close(closing(ecInvalidParams, "a message in the wrong direction"))
 
@@ -519,14 +551,19 @@ proc subscriptionResult*(
     c: var CalleeConn, id: uint64, failure = Opt.none(InvocationFailure)
 ): Opt[seq[byte]] =
   ## [SPEC TRANSPORT §5.1] Completes the outstanding operation of `id`. A failure
-  ## leaves the active subscription state unchanged; the id stays used.
+  ## leaves the active subscription state unchanged; the id stays used. The
+  ## Unsubscribe of a subscription ended while it was outstanding succeeds
+  ## (l.755).
   if c.state == csClosed:
     return Opt.none(seq[byte])
   var op = Opt.none(MessageKind)
   var drop = false
+  var failure = failure
   c.subs.withValue(id, s):
     op = s.pending
     s.pending = Opt.none(MessageKind)
+    if s.ended:
+      failure = Opt.none(InvocationFailure)
     if op.isSome and failure.isNone:
       if op.get == mkSubscribe:
         s.active = true
@@ -539,6 +576,38 @@ proc subscriptionResult*(
   if drop:
     c.subs.del(id)
   Opt.some(subResult(id, op.get, failure))
+
+proc endSubscription*(c: var CalleeConn, id: uint64): Opt[seq[byte]] =
+  ## [SPEC TRANSPORT §5.1 l.752-756] Ends active subscription `id` while the
+  ## session continues: a SubscriptionEnd NOT_AUTHORISED, the only cause this
+  ## revision defines (the caller's authority to receive the event ended),
+  ## committed after the last Event committed for `id`; none is committed after
+  ## it. The id stays used, and the next Unsubscribe for it succeeds. With an
+  ## Unsubscribe outstanding the end is still sent and that Unsubscribe then
+  ## succeeds. None when `id` is not active (a Subscribe whose result is not
+  ## committed is failed by its own result) or the session is not open.
+  if c.state != csOpen:
+    return Opt.none(seq[byte])
+  var active, pending = false
+  c.subs.withValue(id, s):
+    active = s.active
+    pending = s.pending.isSome
+    if active and pending:
+      s.active = false
+      s.ended = true
+  if not active:
+    return Opt.none(seq[byte])
+  if not pending:
+    c.subs.del(id)
+    c.ended.incl(id)
+  Opt.some(
+    encoded(
+      Message(
+        kind: mkSubscriptionEnd,
+        subscriptionEnd: SubscriptionEnd(id: id, failure: failureOf(ecNotAuthorised)),
+      )
+    )
+  )
 
 func eventBytes(
     c: CalleeConn, sub: uint64, event: string, data: CborValue, cm: PayloadCommitment
@@ -575,7 +644,11 @@ func checkOpen(c: CalleeConn): Result[void, PublishError] =
   of csClosed:
     err(publishError(peClosed, "the connection is closed"))
   of csTerminating:
-    err(publishError(peEnded, "the route's access has ended"))
+    err(
+      PublishError(
+        kind: peEnded, msg: "the route's access has ended", ended: c.termCode
+      )
+    )
   of csOpen:
     ok()
 
@@ -637,52 +710,88 @@ proc publishScoped*(
     frames.add(?c.eventBytes(id, event, data, cm))
   ok(frames)
 
-proc beginTermination*(c: var CalleeConn): seq[CalleeAction] =
-  ## [SPEC TRANSPORT §8.1, §8.1.2] The route (or system-service binding)
-  ## expired or was revoked: admission stops. A new Request gets a committed
-  ## response-err NOT_AUTHORISED without dispatch; a new Subscribe a failed
-  ## result NOT_AUTHORISED [IMPL]. Every subscription ends and no Event is
-  ## committed after this; an outstanding Subscribe fails with NOT_AUTHORISED
-  ## and an outstanding Unsubscribe succeeds [IMPL], so each operation still
-  ## gets its one result (§5.1). In-flight Requests stay for the Runtime's
-  ## in-flight policy (RUNTIME §9.3): they can still be answered or cancelled.
-  ## Queued Requests had not been dispatched when admission stopped: each gets
-  ## response-err NOT_AUTHORISED and is never dispatched (F2).
-  ## `finishTermination` then closes; it waits for no further input.
-  if c.state != csOpen:
+func terminationCode*(c: CalleeConn): ErrorCode =
+  ## While terminating: NOT_AUTHORISED or NOT_READY.
+  c.termCode
+
+func risen(a, b: ErrorCode): ErrorCode =
+  ## [SPEC RUNTIME l.1267] An authority end outranks a readiness end; the code
+  ## never falls back.
+  if a == ecNotAuthorised or b == ecNotAuthorised: ecNotAuthorised else: a
+
+proc beginTermination*(c: var CalleeConn, code = ecNotAuthorised): seq[CalleeAction] =
+  ## [SPEC TRANSPORT §8.1, §8.1.2] The route (or system-service binding) ended:
+  ## `code` is NOT_AUTHORISED when its authority expired or was revoked,
+  ## NOT_READY when its readiness ended (l.977). Admission stops: a new Request
+  ## gets a committed response-err with the code without dispatch; a new
+  ## Subscribe or Unsubscribe a failed result with the code, and no state
+  ## changes (l.972). Every subscription ends and no Event is committed after
+  ## this; an outstanding Subscribe or Unsubscribe fails with the code, so each
+  ## operation still gets its one result (§5.1), except the Unsubscribe of a
+  ## subscription already ended by a SubscriptionEnd, which succeeds (l.755).
+  ## In-flight Requests stay for the Runtime's in-flight policy (RUNTIME §9.3):
+  ## they can still be answered or cancelled. Queued Requests had not been
+  ## dispatched when admission stopped: each gets response-err with the code
+  ## and is never dispatched (F2). `finishTermination` then closes; it waits for
+  ## no further input. On a session already terminating, an authority end
+  ## raises a readiness code to NOT_AUTHORISED (RUNTIME l.1267).
+  case c.state
+  of csClosed:
     return @[]
+  of csTerminating:
+    c.termCode = risen(c.termCode, code)
+    return @[]
+  of csOpen:
+    discard
   c.state = csTerminating
+  c.termCode = code
   var acts: seq[CalleeAction]
   for d in c.delayed:
     c.inFlight.del(d.request.id)
-    acts.add(send(responseErr(d.request.id, failureOf(ecNotAuthorised))))
+    acts.add(send(responseErr(d.request.id, c.termFailure)))
   c.dropDelayed()
-  var ops: seq[(uint64, MessageKind)]
+  var ops: seq[(uint64, MessageKind, bool)]
   for id, s in c.subs:
     if s.pending.isSome:
-      ops.add((id, s.pending.get))
+      ops.add((id, s.pending.get, s.ended))
   ops.sort()
-  for (id, op) in ops:
+  for (id, op, ended) in ops:
     acts.add(
       send(
-        if op == mkSubscribe:
-          subResult(id, op, Opt.some(failureOf(ecNotAuthorised)))
-        else:
+        if ended:
           subResult(id, op, Opt.none(InvocationFailure))
+        else:
+          subResult(id, op, Opt.some(c.termFailure))
       )
     )
   c.subs.clear()
+  c.ended.clear()
   acts
 
-proc finishTermination*(c: var CalleeConn): seq[CalleeAction] =
-  ## [SPEC TRANSPORT §8.1] ProtocolError NOT_AUTHORISED, with no message or
-  ## detail, when writable, then close. Callable at once after
-  ## `beginTermination`: termination neither waits for another Request nor
-  ## reads the unread ones. Requests still in flight are abandoned; their callers
-  ## get TRANSPORT_ERROR (§3.2).
-  if c.state == csClosed:
-    return @[]
-  c.close(closing(ecNotAuthorised, "the route's authorization ended"))
+proc finishTermination*(c: var CalleeConn, code = ecNotAuthorised): seq[CalleeAction] =
+  ## [SPEC TRANSPORT §8.1] ProtocolError with the termination code (`code`
+  ## raised by the code `beginTermination` set), with no message or detail,
+  ## when writable, then close. Callable at once after `beginTermination`:
+  ## termination neither waits for another Request nor reads the unread ones.
+  ## Requests still in flight are abandoned; their callers get TRANSPORT_ERROR
+  ## (§3.2).
+  let ending =
+    case c.state
+    of csClosed:
+      return @[]
+    of csTerminating:
+      risen(c.termCode, code)
+    of csOpen:
+      code
+  c.close(
+    closing(
+      ending,
+      if ending == ecNotAuthorised:
+        "the route's authorization ended"
+      else:
+        "the route is no longer ready",
+    )
+  )
 
 # Caller ----------------------------------------------------------------------------
 
@@ -691,6 +800,9 @@ type
     ceResponse ## request `id` finished with `outcome`
     ceEvent ## an Event for subscription `id`
     ceSubscription ## the operation `op` on subscription `id` completed
+    ceSubscriptionEnd
+      ## the callee ended subscription `id` (§5.1): `op` is mkSubscriptionEnd,
+      ## `failure` NOT_AUTHORISED as received, any other code MODULE_ERROR
     ceClose ## the connection closed; pending calls are reported as ceResponse
 
   CallerEvent* = object
@@ -702,7 +814,7 @@ type
     of ceEvent:
       event*: string
       data*: CborValue
-    of ceSubscription:
+    of ceSubscription, ceSubscriptionEnd:
       op*: MessageKind
       failure*: Opt[InvocationFailure]
     of ceClose:
@@ -958,6 +1070,45 @@ proc onEvent(c: var CallerConn, e: Event): seq[CallerEvent] =
     return @[]
   @[CallerEvent(id: e.sub, kind: ceEvent, event: e.event, data: e.data)]
 
+proc onSubscriptionEnd(c: var CallerConn, e: var SubscriptionEnd): seq[CallerEvent] =
+  ## [SPEC TRANSPORT §3.4, §5.1 l.752-756] A SubscriptionEnd must name an
+  ## active subscription; one that does not (a second end included) is a
+  ## correlation violation. The subscription is no longer active, so a later
+  ## Event for it is one too. With an Unsubscribe outstanding the end is valid
+  ## and that operation stays, so its result still matches. An abandoned
+  ## subscription's end updates the state only. NOT_AUTHORISED is reported as
+  ## it is; any other code, which this revision does not define, as
+  ## MODULE_ERROR [P3 §0].
+  var active, abandoned, pending = false
+  c.subs.withValue(e.id, s):
+    active = s.active
+    abandoned = s.abandoned
+    pending = s.pending.isSome
+    s.active = false
+  if not active:
+    wipe(e.failure)
+    return
+      c.shut(closing(ecInvalidParams, "a SubscriptionEnd for no active subscription"))
+  if not pending:
+    c.subs.del(e.id)
+  if abandoned:
+    wipe(e.failure)
+    return @[]
+  let failure =
+    if e.failure.code == ecNotAuthorised:
+      move e.failure
+    else:
+      wipe(e.failure)
+      failureOf(ecModule)
+  @[
+    CallerEvent(
+      id: e.id,
+      kind: ceSubscriptionEnd,
+      op: mkSubscriptionEnd,
+      failure: Opt.some(failure),
+    )
+  ]
+
 proc onSubscriptionResult(c: var CallerConn, r: SubscriptionResult): seq[CallerEvent] =
   ## [SPEC TRANSPORT §3.4, §5.1] It must match the id and operation of an
   ## outstanding Subscribe or Unsubscribe; it updates the protocol state even
@@ -1002,6 +1153,8 @@ proc receive*(c: var CallerConn, frame: openArray[byte]): seq[CallerEvent] =
     c.onEvent(m.event)
   of mkSubscriptionResult:
     c.onSubscriptionResult(m.subscriptionResult)
+  of mkSubscriptionEnd:
+    c.onSubscriptionEnd(m.subscriptionEnd)
   of mkHello:
     # [SPEC TRANSPORT §3.3]
     c.shut(closing(ecInvalidParams, "a Hello after establishment"))

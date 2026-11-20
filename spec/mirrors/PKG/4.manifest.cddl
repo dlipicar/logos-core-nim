@@ -9,6 +9,13 @@ logos.package_manifest.manifest = {
   modules: [* logos.package_manifest.module_declaration],
   variants: [* logos.package_manifest.package_variant],
   ? dependencies: [* logos.package_manifest.package_dependency],
+  ? contract_documents: [* logos.package_manifest.contract_document],
+}
+
+logos.package_manifest.contract_document = {
+  commitment: logos.schema_commitment,
+  schema_artifact: logos.package_manifest.artifact_id,
+  ? input_artifacts: [* logos.package_manifest.artifact_id],
 }
 
 logos.package_manifest.module_declaration = {
@@ -16,6 +23,7 @@ logos.package_manifest.module_declaration = {
   artifact: logos.package_manifest.artifact_id,
   ? primary_contract: logos.schema_commitment,
   ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
   ? requires: [* logos.package_manifest.provider_requirement],
   ? requested_permissions: [* logos.package_manifest.requested_permission],
   ? configuration: logos.package_manifest.configuration_declaration,
@@ -43,6 +51,7 @@ logos.package_manifest.requested_permission = {
 logos.package_manifest.package_dependency = {
   package: logos.package_manifest.package_name,
   requirement: logos.package_manifest.package_version_requirement,
+  ? contracts: [* logos.schema_commitment],
 }
 
 logos.package_manifest.package_version_requirement = {

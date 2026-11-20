@@ -1,13 +1,13 @@
 ## RUNTIME §13.3; G76: `logos-core-nim.app-config.v1`, the one configuration
 ## format `logos_runtime_create` accepts. Its schema is `host_config.cddl`
 ## (generated codecs in `host_config_types.nim`); `docs/HOST-CONFIG.md`
-## documents it, as RUNTIME l.4033 requires.
+## documents it, as RUNTIME l.3898 requires.
 ##
 ## Everything here runs at `create`: no file is opened, no thread started and no
 ## module code run. Every failure is INVALID_PARAMS (RUN-0741); only the two
 ## CBOR failures carry a `logos.invalid_params_detail`, since `schema-mismatch`
 ## names a request schema and `configuration-schema-mismatch` CONFIG's
-## (INTERFACE l.3351-3355), and the detail is optional.
+## (INTERFACE l.3292-3297), and the detail is optional.
 
 {.push raises: [].}
 
@@ -58,7 +58,7 @@ type
     shutdownGrace*: Duration
     applyDeadline*: Duration ## [G61, fourth deadline; I87] `apply_configuration`
     maxPayloadDepth*: int
-      ## [SPEC INTERFACE §4.5.1 l.3150; IF-02, I88] `max_payload_depth`: 128 to
+      ## [SPEC INTERFACE §4.5.1 l.3104; IF-02, I88] `max_payload_depth`: 128 to
       ## 1024, default 1024
     policy*: AuthzPolicy ## the internal policy: allow-all
     authority*: Opt[AuthorityPolicy]
@@ -89,9 +89,9 @@ type
       ## [I93; G279] `permissions.profile`, resolved to a profile this
       ## library ships; nil: none (G229)
     initialSettings*: seq[InitialSettings]
-      ## [SPEC RUNTIME l.2543; I93] `permissions.initial`, checked
+      ## [SPEC RUNTIME l.2470; I93] `permissions.initial`, checked
     transfers*: seq[StateTransfer]
-      ## [SPEC RUNTIME l.3546-3553; I96; G306] `state_transfers`, checked as
+      ## [SPEC RUNTIME l.3411-3418; I96; G306] `state_transfers`, checked as
       ## far as the configuration alone allows; bootstrap checks the rest
       ## against the store
 
@@ -186,12 +186,17 @@ func record(m: LcnAppModule | LcnAppDeclaration): Result[ModuleRecord, ConfigErr
     )
   if m.primary_contract.isSome:
     r.primaryContract = Opt.some(rootOf(m.primary_contract.get))
-  # [SPEC RUNTIME §8 l.1428] A present array is non-empty.
+  # [SPEC RUNTIME §8 l.1357] A present array is non-empty.
   if m.implements.isSome:
     if m.implements.get.len == 0:
       return err(configError("implements is present but empty"))
     for c in m.implements.get:
       r.implements.add(rootOf(c))
+  if m.extends.isSome:
+    if m.extends.get.len == 0:
+      return err(configError("extends is present but empty"))
+    for c in m.extends.get:
+      r.extends.add(rootOf(c))
   if m.requires.isSome:
     if m.requires.get.len == 0:
       return err(configError("requires is present but empty"))
@@ -258,7 +263,7 @@ func checkOrdering(c: HostConfig, ids: HashSet[string]): Result[void, ConfigErro
 proc configurationOf(
     what: string, declaration, provisioned: Opt[seq[byte]], depth: int
 ): Result[Opt[AcceptedConfiguration], ConfigError] =
-  ## [SPEC RUNTIME §8 l.1386-1387 (RUN-0259); CONFIG §2] A configuration
+  ## [SPEC RUNTIME §8 l.1308-1309 (RUN-0259); CONFIG §2] A configuration
   ## declaration, accepted before any record names it, with the instance's
   ## protected value (CONFIG l.142; G141). An invalid declaration, default or
   ## provisioned value is INVALID_PARAMS at create (RUN-0741).
@@ -302,13 +307,13 @@ proc checkAuthority(
       r = m.record
   if not found:
     return err(configError("policy.authority names no instance in modules"))
-  # [SPEC CA l.143] The Capability Authority's module. A configured module is
+  # [SPEC CA l.145] The Capability Authority's module. A configured module is
   # direct_static or direct_dynamic, so a local module instance (CAP-0003,
   # CAP-0006).
   if r.module != AuthorityModule:
     return err(configError("policy.authority's module is not " & AuthorityModule))
   # [IMPL] The authority is the Capability Authority this library links (8a),
-  # wired in process (RUNTIME l.1681): its `direct_static` binding
+  # wired in process (RUNTIME l.1597): its `direct_static` binding
   # `logos_capability_authority`, which the library registers itself, since a
   # host-registered table cannot use the reserved `logos` names (I84). A
   # library loaded apart would not see the wiring.
@@ -318,7 +323,7 @@ proc checkAuthority(
         "policy.authority must be the direct_static binding " & AuthorityModule
       )
     )
-  # [SPEC RUNTIME l.1652-1655; RUN-0316] The realized contract is checked
+  # [SPEC RUNTIME l.1568-1571; RUN-0316] The realized contract is checked
   # again at binding.
   if r.primaryContract.isSome and @(r.primaryContract.get) != caRoots().contract:
     return err(
@@ -326,16 +331,16 @@ proc checkAuthority(
         "policy.authority's primary_contract is not the pinned Capability Authority contract"
       )
     )
-  # [SPEC RUNTIME l.165-173, l.1647; DECISIONS I88] A system service provider
+  # [SPEC RUNTIME l.156-164, l.1563; DECISIONS I88] A system service provider
   # is a provider backed by its instance, and a record that declares no
-  # contract gets no provider record (l.1420-1421): an authority record
+  # contract gets no provider record (l.1349-1350): an authority record
   # without `primary_contract` declares the pinned contract.
   if r.primaryContract.isNone:
     for m in c.modules.mitems:
       if m.instance == p.authority:
         m.record.primaryContract =
           Opt.some(rootOf(SchemaCommitment(schema_root: caRoots().contract)))
-  # [SPEC RUNTIME l.1637] A candidate does not bind or authorize itself: the
+  # [SPEC RUNTIME l.1550] A candidate does not bind or authorize itself: the
   # authority is never the orchestration instance, whose module name is outside
   # the reserved prefix (checked above).
   # [C8] The authority keeps grants and audit in its state; the Runtime keeps
@@ -377,7 +382,7 @@ proc checkPermissions(
   ## instances. Each entry is unique by (module, instance); an `instance`
   ## names a configured instance of that module; neither names the Module
   ## Loader, whose settings are its construction's (G246, G253); each array is
-  ## ascending, defined and conforming (R l.2536-2537) and names only
+  ## ascending, defined and conforming (R l.2462-2463) and names only
   ## permissions the Runtime enforces (G280). [Rev R3] The orchestration
   ## instance, and under `capability-authority` the authority instance, are
   ## provisioned with the profile's minimum, since bootstrap starts them
@@ -627,10 +632,10 @@ proc checkModuleHost(c: var HostConfig, r: LcnAppRuntime): Result[void, ConfigEr
 proc checkTransfers(
     c: var HostConfig, entries: Opt[seq[LcnAppStateTransfer]]
 ): Result[void, ConfigError] =
-  ## [SPEC RUNTIME l.3546-3553; IMPL-DECISION I96; G305-G307] `state_transfers`
+  ## [SPEC RUNTIME l.3411-3418; IMPL-DECISION I96; G305-G307] `state_transfers`
   ## as far as the configuration decides it: a store and a state root; `to`
   ## a listed instance with a state assignment and `from` not listed (RUNTIME
-  ## l.3581), so no chain; one entry per instance on each side; never the
+  ## l.3446), so no chain; one entry per instance on each side; never the
   ## authority instance (wired to its directory before bootstrap) nor the
   ## Loader; no name of the Runtime's form; `max_bytes` only with `copy`.
   ## Bootstrap checks the rest against the store (engine `checkTransfers`).
@@ -658,7 +663,7 @@ proc checkTransfers(
     if e.`from` == e.to:
       return err(configError(what & ": from and to are the same instance"))
     if e.`from` in listed:
-      # [SPEC RUNTIME l.3581] The source is retired by the transfer.
+      # [SPEC RUNTIME l.3446] The source is retired by the transfer.
       return err(configError(what & ": from is listed in modules"))
     if e.to notin listed:
       return err(configError(what & ": to is not listed in modules"))
@@ -696,7 +701,7 @@ proc decodeHostConfig*(
   ## yet: for tests of the checks themselves.
   if format != AppConfigFormat:
     return err(configError("unsupported configuration format"))
-  # [SPEC RUNTIME §8 l.1410-1411] One deterministic-CBOR value, nothing after it.
+  # [SPEC RUNTIME §8 l.1336-1337] One deterministic-CBOR value, nothing after it.
   let v = decodeCbor(data).valueOr:
     return err(cborFailure(error))
   # [S5] Name an unknown policy kind before the schema's generic answer.
@@ -730,7 +735,7 @@ proc decodeHostConfig*(
     ?deadline("shutdown_grace_ms", cfg.runtime.shutdown_grace_ms, DefaultShutdownGrace)
   c.applyDeadline =
     ?deadline("apply_deadline_ms", cfg.runtime.apply_deadline_ms, DefaultApplyDeadline)
-  # [SPEC INTERFACE §4.5.1 l.3150; IF-02, I88] The one payload depth setting.
+  # [SPEC INTERFACE §4.5.1 l.3104; IF-02, I88] The one payload depth setting.
   c.maxPayloadDepth = int(cfg.runtime.max_payload_depth.get(uint16(DefaultMaxDepth)))
   if c.maxPayloadDepth < MinMaxDepth or c.maxPayloadDepth > DefaultMaxDepth:
     return err(
@@ -765,7 +770,7 @@ proc decodeHostConfig*(
         )
       )
     if r.stateAssignment.isSome:
-      # [SPEC RUNTIME §8 l.1451] Distinct instances do not share one.
+      # [SPEC RUNTIME §8 l.1383] Distinct instances do not share one.
       if r.stateAssignment.get in assignments:
         return err(configError("two module instances share a state assignment"))
       assignments.incl(r.stateAssignment.get)
@@ -802,7 +807,7 @@ proc decodeHostConfig*(
       c.ordering.add((o.prerequisite, o.dependent))
   ?checkOrdering(c, ids)
   if cfg.declarations.isSome:
-    # [G55] One accepted declaration per module name (RUNTIME l.3614).
+    # [G55] One accepted declaration per module name (RUNTIME l.3481).
     if cfg.declarations.get.len == 0:
       return err(configError("declarations is present but empty"))
     var modules = initHashSet[string]()

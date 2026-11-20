@@ -33,7 +33,7 @@ default = "claimed"
 "§6" = "claimed"
 "§7" = "claimed"
 "§8.1" = "claimed"
-# §8.1.2: system-service sessions over unix-stream, a MAY profile (l.1075). G48(a)
+# §8.1.2: system-service sessions over unix-stream, a MAY profile (l.1056). G48(a)
 # keeps the Loader and the Capability Authority direct, so nothing uses it.
 "§8.1.2" = "out-of-scope:a MAY profile left unused: G48(a) binds the Loader and Capability Authority directly"
 # §8.2 (tier 4, transport I/O): endpoints, peer credentials checked before any
@@ -51,6 +51,20 @@ default = "claimed"
 "§10" = "claimed"
 
 [units]
+# Stay deferred past the re-pin to 6cac8335; work item 5-7a owns them (spec/repin-pending.toml [deferred]).
+"TRN-0398" = "deferred:tier-5"
+# Re-pin P3b (DECISIONS I107): the invocation endpoint's profile (TRN-0397) comes with remote routes, 5-7a;
+# QUIC (TRN-0401 to TRN-0403, §8.4.2) with step 5-12.
+"TRN-0397" = "deferred:tier-5"
+"TRN-0401" = "deferred:tier-5"
+"TRN-0402" = "deferred:tier-5"
+"TRN-0403" = "deferred:tier-5"
+# Re-pin P3b (DECISIONS I107): the tls-tcp carrier refuses an address whose `profile` is not the one
+# `tls-tcp` selects (TRN-0396) and sends, negotiates and requires no ALPN (TRN-0399). TRN-0400 is an
+# inspection item: the direct-anchor case is supported, so its refusal never applies.
+"TRN-0396" = "claimed"
+"TRN-0399" = "claimed"
+"TRN-0400" = "claimed"
 # §3.2, §3.4: the native binding of a transported route. TRN-0278 (connection loss ends the
 # handle's invocation path for its observer) is claimed with step 4b-2b, TRN-0290 (abandonment and
 # released application state) with the subscriptions of step 4b-2c.

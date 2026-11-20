@@ -45,7 +45,9 @@ type
     ## `asynccall.AsyncCall`; in a host, the host's own served call.
 
   SessionOrder* = enum
-    soTerminate ## NOT_AUTHORISED to each in-flight Request, ProtocolError, close
+    soTerminate
+      ## ProtocolError NOT_AUTHORISED and close; the admitted Requests stay
+      ## unanswered, so their consumer fails them TRANSPORT_ERROR (P5 Q3 (a))
     soDrain ## admit nothing new; close once admitted calls answered, or at the deadline
     soClose ## close at once, no ProtocolError
 
@@ -82,16 +84,19 @@ type
     order*: SessionOrder
     bound*: DrainBound
 
-# [G260; G174 (a); owner batch B 7] What each end of a transported route
-# orders its sessions, one row per end.
+# [G260; owner batch B 7] What each end of a transported route orders its
+# sessions, one row per end.
 #
-# An authority end terminates (TRANSPORT l.987-991). An end that leaves no
-# usable session closes at once: a transport failure, a serve failure and K12
-# (TRANSPORT l.543). Every readiness end drains. Batch B 7 named the
-# provider stop, shutdown and `close_route`. Fable's reading (2026-11-13)
-# adds the consumer's stop and failure and the provider's failure, as our
-# choice within G174 (a) (RUNTIME l.623, l.1065, l.3226-3227, l.3850). It
-# sets three conditions:
+# An authority end terminates (TRANSPORT l.966-979): the Requests not yet
+# admitted are answered NOT_AUTHORISED (l.971), the admitted ones get no
+# Response, and the consumer fails them TRANSPORT_ERROR at the close (l.979;
+# RUNTIME l.1271; P5 Q3 (a), which reverses batch B 7's NOT_AUTHORISED
+# answers). An end that leaves no usable session closes at once: a transport
+# failure, a serve failure and K12 (TRANSPORT l.543). Every readiness end
+# drains. Batch B 7 named the provider stop, shutdown and `close_route`.
+# Fable's reading (2026-11-13) adds the consumer's stop and failure and the
+# provider's failure, as our choice within G260 (RUNTIME l.623, l.1065,
+# l.3226-3227, l.3850). It sets three conditions:
 # - drain only while the session is intact: a side whose process or host is
 #   gone closes at once (`reSideGone`, TRANSPORT l.543);
 # - every in-flight invocation is still marked cancelled at the route's end

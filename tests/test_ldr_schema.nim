@@ -5,8 +5,10 @@
 ## requirement id; the module name and the pinned roots (`loader/contract.nim`)
 ## are checked against the same mirrored text.
 
+import std/[os, strutils]
 import unittest2
 import ../src/logos_core/loader/[contract, logos_module_loader_types]
+import logos_sdk/iface/accept
 import ../src/logos_core/loader/logos_module_loader_kit as kit
 import logos_sdk/testing/schemasuite
 
@@ -50,6 +52,39 @@ suite "ldr.schema: the Module Loader contract (LOADER §3-§10)":
         check codec(r, model.samples(r)[0]).isSome
         inc objects
     check objects > 0
+
+  test "[LDR-0167] [LDR-0168] [LDR-0169] [LDR-0170] [LDR-0171] [LDR-0172] [LDR-0173] [LDR-0174] [LDR-0175] [LDR-0176] [LDR-0177] [LDR-0178] [LDR-0179] [LDR-0180] [LDR-0181] [LDR-0182] [LDR-0183] [LDR-0184] [LDR-0185] [LDR-0186] [LDR-0187] [LDR-0188] [LDR-0189] [LDR-0190] [LDR-0191] [TXT-0576] [TXT-0432] [TXT-0439] [TXT-0440] [TXT-0441] Appendix A is the Abstract's and §3-§10's blocks, rule for rule and in order, with the same root":
+    # [SPEC LOADER l.737-739] The appendix governs; the eleven blocks the types
+    # are generated from are its excerpts in the same order.
+    let mirrors = currentSourcePath().parentDir.parentDir / "spec" / "mirrors" / "LDR"
+    proc lines(text: string): seq[string] =
+      for l in text.splitLines:
+        if l.strip.len > 0:
+          result.add l.strip
+
+    let appendix = readFile(mirrors / "app-a.contract.cddl")
+    var body: seq[string]
+    for part in [
+      "0.module", "3.descriptors", "4.capabilities", "5.1.state", "5.2.configuration",
+      "5.3.endpoint", "6.realize", "7.records", "8.live", "9.release", "10.errors",
+    ]:
+      body.add lines(readFile(mirrors / (part & ".cddl")))
+    check lines(appendix) == body
+    let (primary, interfaces, supporting) = ldrDocuments()
+    let generated = acceptContractSet(
+      primary, interfaces, supporting, AcceptOptions(system: true)
+    ).get
+    let app = acceptContractSet(
+      appendix, interfaces, supporting, AcceptOptions(system: true)
+    ).get
+    check app.primary.root == generated.primary.root
+    check @(app.primary.root) == @(loaderRoots().contract)
+    var a, g: seq[string]
+    for d in app.primary.model.declarations:
+      a.add d.name
+    for d in generated.primary.model.declarations:
+      g.add d.name
+    check a == g and a.len > 0
 
   test "[LDR-0007] the contract is the logos_module_loader module (Abstract l.42)":
     check model.moduleName == "logos_module_loader"

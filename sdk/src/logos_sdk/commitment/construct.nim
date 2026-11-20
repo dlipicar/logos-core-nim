@@ -302,6 +302,26 @@ func schemaSetFor*(m: SchemaModel, ctx: SchemaContext): SchemaSet =
       )
   set
 
+func checkAliasCycles(m: SchemaModel): Result[void, string] =
+  ## [SPEC COMMITMENT §3] Following local references from a declaration's body
+  ## reaches a non-reference node or an imported reference without revisiting a
+  ## declaration: `a = b`, `b = a` has no value.
+  for d in m.declarations:
+    if d.kind == dkMethod or d.body.kind != snLocalRef:
+      continue
+    var
+      seen = @[d.name]
+      cur = d.body
+    while cur.kind == snLocalRef:
+      if cur.target in seen:
+        return err("the aliases " & seen.join(", ") & " form a cycle (G153)")
+      seen.add(cur.target)
+      let next = m.find(cur.target)
+      if next.isNone or next.get.kind == dkMethod:
+        break
+      cur = next.get.body
+  ok()
+
 proc buildSchema*(
     source: string, ctx: SchemaContext, role = Opt.none(SchemaRole)
 ): Result[SchemaModel, string] =
@@ -443,6 +463,7 @@ proc buildSchema*(
     proc(a, c: Declaration): int =
       cmp(a.name, c.name)
   )
+  ?checkAliasCycles(model)
   # Every choice is separable by a structural selection plan, following
   # references into the documents this one imports from.
   ?checkChoices(schemaSetFor(model, ctx))

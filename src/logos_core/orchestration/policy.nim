@@ -41,17 +41,26 @@ const
   DefaultResyncMs* = 30_000'i64 ## [IMPL] `resync_ms` when the value leaves it out
   ResumableFailures* = [
     "cleanup-timeout", "permission-enforcement-failed", "authority-denied",
-    "authority-evaluation-failed",
+    "authority-evaluation-failed", "configuration-missing", "static-binding-mismatch",
   ]
-    ## [SPEC RUNTIME l.3754, l.3801-3804; G180, G284, G291 as amended
-    ## 2026-11-14] The failure classifications the rules read, a closed set:
-    ## `error` with one of them is an enforcement outcome, resumed by probes.
-    ## The engine sets the last three only when it refuses or denies a start or
-    ## recovery, settles settings `failed`, or stops for authority; never for a
-    ## failure of an accepted attempt (`test_orchestration` pins the sites).
+    ## [SPEC RUNTIME l.3605, l.3663-3666; G180, G284, G291 as amended
+    ## 2026-11-14 and at the re-pin's P5b] The failure classifications the
+    ## rules read, a closed set: `error` with one of them is an enforcement
+    ## outcome, resumed by probes. `cleanup-timeout` comes only from a store an
+    ## earlier build wrote (G180 settled). The engine sets the others only when
+    ## it refuses or denies a start or recovery, settles settings `failed`, or
+    ## stops for authority; never for a failure of an accepted attempt
+    ## (`test_orchestration` pins the sites). [P5 §0.3 item 3] A start or
+    ## recovery refused for want of configuration replaces an `error`
+    ## instance's cause, which then waits for the configuration as an
+    ## `unloaded` one does (l.3665). [P5 synthesis §8 item 2] So does one
+    ## refused for a static-binding mismatch (RUNTIME l.1321-1322); that
+    ## cause cannot end within a run (registration closes at the first
+    ## startup attempt, l.3934), so its probes are refused, committing
+    ## nothing, until the next start.
 
 func resumable*(failure: Opt[string]): bool =
-  ## [SPEC RUNTIME l.3756; G291 as amended] True only for a classification in
+  ## [SPEC RUNTIME l.3610; G291 as amended] True only for a classification in
   ## `ResumableFailures`: every other one, recognized or not, and none, leave
   ## an `error` a live failure, and no restart policy is derived from a
   ## spelling outside the set.
@@ -177,15 +186,21 @@ func delay*(b: Backoff, n: int64): int64 =
     inc i
   min(d, cap)
 
-func classifyRecover*(code: ErrorCode): Answer =
+func classifyRecover*(code: ErrorCode, typedRefusal: bool): Answer =
   ## [SPEC RUNTIME l.3537-3544; I94, plan §2.7] What a `recover_module`
   ## answer means for the accounting. Every code the table does not list is a
-  ## lost answer.
+  ## lost answer. [RUNTIME l.1818-1822; re-pin P4a] `typedRefusal`: the
+  ## response held its error arm (`stale-revision`), which is a refusal
+  ## though the call succeeded.
   case code
-  of ecOk: answerAccepted
-  of ecInvalidParams, ecNotReady, ecNotAuthorised, ecModule: answerRefused
-  of ecCancelled: answerCancelled
-  else: answerLost
+  of ecOk:
+    if typedRefusal: answerRefused else: answerAccepted
+  of ecInvalidParams, ecNotReady, ecNotAuthorised, ecModule:
+    answerRefused
+  of ecCancelled:
+    answerCancelled
+  else:
+    answerLost
 
 func monoOfLastCall*(lastCallAt, delayMs, nowWall, nowMono: int64): int64 =
   ## [IMPL; I94] The monotonic moment standing for a loaded `last_call_at`:

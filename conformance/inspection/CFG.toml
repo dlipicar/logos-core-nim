@@ -7,7 +7,7 @@ reason = "A rule on what a value means, which the Runtime cannot see: it checks 
 
 [[item]]
 ids = ["CFG-0129"]
-reason = "A documentation requirement: docs/HOST-CONFIG.md, Module configuration, states that app-config v1 accepts package defaults ('The first value', 'Package defaults and reset') and names the reset path (the package's declaration, checked against get_configuration_schema's commitment, staged with update_configuration, which validates it). Tests [CFG-0046] show a default staged as package-default (DECISIONS I87)."
+reason = "A documentation requirement: docs/HOST-CONFIG.md, Module configuration, states that app-config v1 accepts package defaults ('The first value', 'Package defaults and reset') and names the reset path (the package's declaration, checked against get_configuration_schema's commitment, staged with update_configuration, which validates it). Tests [CFG-0151] show a default staged as package-default, and never again once a record has existed (DECISIONS I87)."
 
 [[item]]
 ids = ["CFG-0134"]

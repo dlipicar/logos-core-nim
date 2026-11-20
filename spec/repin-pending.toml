@@ -1,0 +1,89 @@
+# What stays deferred past the re-pin to logos-lips 6cac8335 (tier5-plans/repin-6cac8335.md §2). Sub-steps P0 to P9
+# have merged, and what they cleared left this list with its evidence, recorded in spec/repin-text-cleared.toml
+# against the frozen list spec/repin-baseline.toml. `spectrace pending` checks this file, and the file holds [deferred] only
+# (DECISIONS I104, note at re-pin P9):
+#
+#   [deferred]   unit = the work item that owns it after the re-pin. Its claims file defers it by name, in [units],
+#                and the unit is a live gated requirement. Or a text entry that rides on a deferred unit (same spec
+#                and section, or a spec and section its sentence names, and the same work item), with a [[deferred]]
+#                record in spec/repin-text-cleared.toml naming the unit and a decision row (DECISIONS I108)
+#
+# A unit whose claims file still defers it stays here. A unit of the frozen list's [deferred] leaves only claimed;
+# any other unit the re-pin tracked leaves claimed, or with another status named in its claims file and a decision
+# row that names it. A claimed unit needs a test that can run or an inspection item with a reason. A text entry
+# leaves when a test of its unit carries its tag: its [[text]] record in spec/repin-text-cleared.toml gives id,
+# step (the work item) and test (the suite).
+
+[deferred]
+"PKG-0273" = "5-10"
+"PKG-0274" = "5-5"
+"PKG-0293" = "5-5"
+"PKG-0338" = "5-8"
+"PKG-0347" = "5-8"
+"PKG-0351" = "5-8"
+"PKG-0418" = "5-3a"
+"PKG-0568" = "5-6b"
+"PKG-0608" = "5-5"
+"PKG-0609" = "5-5"
+"PKG-0610" = "5-5"
+"PKG-0611" = "5-5"
+"PKG-0618" = "5-5"
+"PKG-0619" = "5-5"
+"PKG-0620" = "5-5"
+"PKG-0624" = "5-5"
+"PKG-0626" = "5-8"
+"PKG-0627" = "5-8"
+"PKG-0628" = "5-5"
+"PKG-0630" = "5-6a"
+"PKG-0631" = "5-6a"
+"PKG-0632" = "5-6a"
+"PKG-0633" = "5-6a"
+"PKG-0634" = "5-6a"
+"PKG-0635" = "5-6a"
+"PKG-0636" = "5-6a"
+"PKG-0637" = "5-6a"
+"PKG-0638" = "5-6a"
+"PKG-0639" = "5-6a"
+"PKG-0640" = "5-6a"
+"PKG-0641" = "5-6a"
+"PKG-0642" = "5-6a"
+"PKG-0643" = "5-6a"
+"PKG-0644" = "5-6a"
+"PKG-0645" = "5-6a"
+"PKG-0646" = "5-6a"
+"PKG-0647" = "5-6a"
+"PKG-0648" = "5-6a"
+"PKG-0649" = "5-6a"
+"PKG-0650" = "5-6a"
+"RUN-1124" = "5-7a"
+"RUN-1125" = "5-7a"
+"RUN-1163" = "5-7a"
+"RUN-1167" = "5-7b"
+"RUN-1174" = "5-7b"
+"RUN-1175" = "5-7b"
+"RUN-1176" = "5-7b"
+"RUN-1190" = "5-7b"
+"TRN-0397" = "5-7a"
+"TRN-0398" = "5-7a"
+"TRN-0401" = "5-12"
+"TRN-0402" = "5-12"
+"TRN-0403" = "5-12"
+"TXT-0163" = "5-7a"
+"TXT-0182" = "5-7b"
+"TXT-0183" = "5-7b"
+"TXT-0184" = "5-7b"
+"TXT-0185" = "5-7b"
+"TXT-0186" = "5-7b"
+"TXT-0187" = "5-7b"
+"TXT-0188" = "5-7b"
+"TXT-0205" = "5-7b"
+"TXT-0206" = "5-7b"
+"TXT-0360" = "5-7a"
+"TXT-0463" = "5-3a"
+"TXT-0472" = "5-5"
+"TXT-0493" = "5-5"
+"TXT-0494" = "5-5"
+"TXT-0495" = "5-5"
+"TXT-0497" = "5-6b"
+"TXT-0498" = "5-6b"
+"TXT-0545" = "5-8"

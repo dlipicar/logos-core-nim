@@ -1015,7 +1015,6 @@ proc rootOf(set: ContractSet, declaration: string): Digest =
 const
   Progress = "storage.upload_progress_event"
   Started = "storage.started_event"
-  Done = "storage.upload_done_event"
 
 suite "trnio.calls: calls over sockets (TRANSPORT §4, §6, §7, §8.1, §8.6; A21)":
   test "[TRN-0141] [TRN-0136] responses may come out of order; each reaches its call":
@@ -1303,27 +1302,35 @@ suite "trnio.events: subscriptions and Events over sockets (TRANSPORT §5.1, §5
 
   test "[TRN-0158] the route's subscription and publication scopes":
     let (o, ep) = served()
-    let access = RouteAccess(
-      subscribeEvents:
-        Opt.some(@[storageSet.rootOf(Started), storageSet.rootOf(Progress)]),
+    # The storage contract has two events: route 1 may subscribe to Started
+    # and publish Progress only; route 2 has Progress both ways.
+    let only = RouteAccess(
+      subscribeEvents: Opt.some(@[storageSet.rootOf(Started)]),
       publishEvents: Opt.some(@[storageSet.rootOf(Progress)]),
     )
-    let callee = o.attach(ep, 1, binding(access = access))
-    o.subscribe(1, 1, Done)
+    let callee = o.attach(ep, 1, binding(access = only))
+    o.subscribe(1, 1, Progress)
     let denied = o.waitN(evSubscription, 1)
     check denied.len == 1 and denied[0].subscriptionFailure.get.code == ecNotAuthorised
     check o.events(evSubscribe, callee).len == 0
     o.subscribe(1, 2, Started)
-    o.subscribe(1, 3, Progress)
-    check o.waitN(evSubscription, 1, 3).len == 3
+    check o.waitN(evSubscription, 1, 2).len == 2
     # Started may be subscribed to, but not published.
     o.publish(1, Started, cborMap())
     let f = o.waitN(evPublishFailed, callee)
     check f.len == 1 and f[0].pubFailKind == peNotInContract
     check f.len == 1 and f[0].pubFailCode == ecNotAuthorised
+    let both = RouteAccess(
+      subscribeEvents: Opt.some(@[storageSet.rootOf(Progress)]),
+      publishEvents: Opt.some(@[storageSet.rootOf(Progress)]),
+    )
+    discard o.attach(ep, 2, binding(route = "route-2", access = both))
+    o.subscribe(2, 1, Progress)
+    check o.waitN(evSubscription, 2).len == 1
     o.publish(1, Progress, progress(1))
-    let e = o.waitN(evEvent, 1)
+    let e = o.waitN(evEvent, 2)
     check e.len == 1 and e[0].eventName == Progress
+    check o.events(evEvent, 1).len == 0
     o.done(ep)
 
   test "[TRN-0121] [TRN-0122] [TRN-0267] buffered Events arrive in order, none lost while open":
@@ -1606,6 +1613,88 @@ suite "trnio.termination: the session's end (TRANSPORT §8.1)":
     check o.response(1, 1).code == ecOk
     check o.waitN(evClosed, callee, timeoutMs = 6000 * Slow).len == 1
     check o.events(evDispatch, callee).len == 1
+    o.done(ep)
+
+  test "[TXT-0124] a readiness end in two orders: admission stops with NOT_READY, then ProtocolError NOT_READY once the work ended":
+    var cfg = fastConfig()
+    cfg.terminationDrain = 60_000 * Ms # the owner bounds the work (tpBegin)
+    let (o, ep) = served(cfg)
+    o.respond = false
+    let start = o.log.len
+    let callee = o.attach(ep, 1)
+    o.subscribe(1, 1, Started)
+    check o.waitN(evSubscription, 1).len == 1
+    o.callExists(1, 1)
+    let a = o.waitN(evDispatch, callee)[0].requestId
+    o.terminate(callee, ecNotReady, tpBegin)
+    o.callExists(1, 2)
+    check o.response(1, 2).code == ecNotReady
+    o.subscribe(1, 2, Started)
+    let s2 = o.waitN(evSubscription, 1, 2)
+    check s2.len == 2 and s2[1].subscriptionFailure.get.code == ecNotReady
+    o.publish(1, Started, cborMap())
+    o.respondTo(callee, a)
+    check o.response(1, 1).code == ecOk
+    o.settle(100)
+    check o.events(evClosed, callee, start).len == 0
+    o.terminate(callee, ecNotReady, tpFinish)
+    let closed = o.waitN(evClosed, callee, timeoutMs = 6000 * Slow)
+    check closed.len == 1 and closed[0].cause == ccTerminated
+    check closed[0].code == ecNotReady
+    let cc = o.waitN(evClosed, 1)
+    check cc.len == 1 and cc[0].cause == ccPeerError and cc[0].code == ecNotReady
+    check o.events(evEvent, 1).len == 0
+    check o.events(evDispatch, callee).len == 1
+    o.done(ep)
+
+  test "[TRN-0392] cmdEndSubscription: the subscriber gets the end after the Events committed before it; the caller then knows it is not active":
+    let (o, ep) = served(fastConfig())
+    let callee = o.attach(ep, 1)
+    o.subscribe(1, 1, Started)
+    o.subscribe(1, 2, Started)
+    check o.waitN(evSubscription, 1, 2).len == 2
+    o.publish(1, Started, cborMap())
+    o.endSubscription(callee, 1)
+    o.publish(1, Started, cborMap())
+    let ended = o.waitN(evSubscriptionEnd, 1)
+    check ended.len == 1 and ended[0].subscriptionId == 1
+    check ended[0].subscriptionOp == mkSubscriptionEnd
+    check ended[0].subscriptionFailure.get.code == ecNotAuthorised
+    let evs = o.waitN(evEvent, 1, 3)
+    check evs.len == 3
+    check evs.filterIt(it.eventSub == 1).len == 1
+    check evs.filterIt(it.eventSub == 2).len == 2
+    for e in evs:
+      o.release(1, e.credit)
+    # Nothing is sent for an ended subscription: the caller refuses locally.
+    o.unsubscribe(1, 1)
+    let f = o.waitN(evLocalFailure, 1)
+    check f.len == 1 and f[0].localTag == 1 and f[0].localCode == ecInvalidParams
+    check o.events(evUnsubscribe, callee).len == 0
+    o.done(ep)
+
+  test "[TRN-0393] an Unsubscribe sent before the caller read the end gets a successful result, after the end":
+    let (o, ep) = served(fastConfig())
+    var raw = o.rawSession(ep)
+    raw.put(raw.caller.subscribe(1, Started).get)
+    let sub = o.waitN(evSubscribe, high(uint64))
+    check sub.len == 1
+    let callee = sub[0].conn
+    let r = raw.readMsgs(o, 1)
+    check r.len == 1 and r[0].kind == mkSubscriptionResult
+    discard raw.caller.receive(encodeMessage(r[0]).get)
+    o.endSubscription(callee, 1)
+    o.settle(50)
+    # The raw caller has not read the end: its Unsubscribe goes out.
+    raw.put(raw.caller.unsubscribe(1).get)
+    let ms = raw.readMsgs(o, 2)
+    check ms.len == 2
+    check ms[0].kind == mkSubscriptionEnd and ms[0].subscriptionEnd.id == 1
+    check ms[1].kind == mkSubscriptionResult
+    check ms[1].subscriptionResult.operation == mkUnsubscribe
+    check ms[1].subscriptionResult.failure.isNone
+    check o.events(evUnsubscribe, callee).len == 0
+    discard fdClose(raw.fd)
     o.done(ep)
 
   test "[TRN-0325] [TRN-0322] termination with a caller that reads nothing finishes within closeLinger":

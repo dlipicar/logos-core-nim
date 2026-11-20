@@ -89,8 +89,8 @@ template requireOps(what: string, code: ErrorCode, ops: openArray[(string, point
 
 func checkRuntimeControl*(b: ptr LogosRuntimeControlBinding): AbiCheck =
   ## [SPEC INTERFACE §5.2] A Runtime Control binding as its consumer must check
-  ## it before any use: vtable, state, version 2, the full version-2 extent and
-  ## every operation. A rejected binding is not used, not even to `release` it.
+  ## it before any use: vtable, state, version 3, the full version-3 extent and
+  ## every operation, `observe_subscription_end` included (§5.2 l.3841). A rejected binding is not used, not even to `release` it.
   const what = "Runtime Control binding"
   if b == nil or b.vtable == nil:
     return reject(ecModule, what & ": null vtable")
@@ -99,7 +99,7 @@ func checkRuntimeControl*(b: ptr LogosRuntimeControlBinding): AbiCheck =
   let v = b.vtable
   ?versioned(
     what, v.abiVersion, v.structSize, RuntimeControlVtableAbiVersion,
-    RuntimeControlVtableV2Extent,
+    RuntimeControlVtableV3Extent,
   )
   requireOps(
     what,
@@ -113,14 +113,15 @@ func checkRuntimeControl*(b: ptr LogosRuntimeControlBinding): AbiCheck =
       ("connect_remote", cast[pointer](v.connectRemote)),
       ("release", cast[pointer](v.release)),
       ("prepare_call", cast[pointer](v.prepareCall)),
+      ("observe_subscription_end", cast[pointer](v.observeSubscriptionEnd)),
     ],
   )
   ok()
 
 func checkRoute*(r: ptr LogosRouteHandle): AbiCheck =
   ## [SPEC INTERFACE §5.2] A route handle as its consumer must check it; a
-  ## version-2 vtable too short to hold the required `observe_end` is
-  ## VERSION_MISMATCH.
+  ## version-3 vtable too short to hold the required `observe_end` and
+  ## `observe_subscription_end` is VERSION_MISMATCH (§5.2 l.3841).
   const what = "route handle"
   if r == nil or r.vtable == nil:
     return reject(ecModule, what & ": null vtable")
@@ -128,7 +129,7 @@ func checkRoute*(r: ptr LogosRouteHandle): AbiCheck =
     return reject(ecModule, what & ": null state")
   let v = r.vtable
   ?versioned(
-    what, v.abiVersion, v.structSize, RouteVtableAbiVersion, RouteVtableV2Extent
+    what, v.abiVersion, v.structSize, RouteVtableAbiVersion, RouteVtableV3Extent
   )
   requireOps(
     what,
@@ -141,6 +142,7 @@ func checkRoute*(r: ptr LogosRouteHandle): AbiCheck =
       ("release", cast[pointer](v.release)),
       ("prepare_call", cast[pointer](v.prepareCall)),
       ("observe_end", cast[pointer](v.observeEnd)),
+      ("observe_subscription_end", cast[pointer](v.observeSubscriptionEnd)),
     ],
   )
   ok()
@@ -206,7 +208,7 @@ func checkInitInput*(input: ptr LogosModuleInitInput, declaresEvents: bool): Abi
   if input == nil:
     return reject(ecModule, what & ": null")
   ?versioned(
-    what, input.abiVersion, input.structSize, ModuleInitAbiVersion, InitInputV2Extent
+    what, input.abiVersion, input.structSize, ModuleInitAbiVersion, InitInputV3Extent
   )
   if input.runtimeControl == nil:
     return reject(ecModule, what & ": null runtime_control")
@@ -262,7 +264,7 @@ proc readStatus*(r: LogosResult): AbiCheck =
   ## LOGOS_OK with no message and no detail; a valid failure status (allocated
   ## nonzero code, message of at most 512 UTF-8 bytes, only the detail its code
   ## allows) with its diagnostics copied; anything else MODULE_ERROR with
-  ## neither, as `checkedProviderStatus` does.
+  ## neither.
   ## The copies a rejected status leaves are zeroed [DECISIONS G276].
   var msg = readMessage(r.message)
   if msg.isErr:
@@ -306,6 +308,19 @@ proc checkOutcome*(r: LogosResult, outputs: OutputShape): AbiCheck =
   if not outputs.failure:
     return moduleFailure("a failure that wrote its outputs")
   readStatus(r)
+
+proc providerChecked*(c: sink AbiCheck, cancelKnown: bool): AbiCheck =
+  ## [SPEC INTERFACE l.3306-3311; re-pin P4b] A provider's own result, after
+  ## `checkOutcome`: a status outside the provider set is MODULE_ERROR with
+  ## no message and no detail, the dropped copies zeroed [DECISIONS G276].
+  ## The caller then forwards no response output (it releases a buffer the
+  ## result handed over, as for any rejected result).
+  if c.isOk or providerStatusAllowed(c.error.code, cancelKnown):
+    return c
+  var f = c.error
+  let code = f.code
+  wipe(f)
+  moduleFailure("a provider status outside the set: " & $code)
 
 func transfersBuffer*(r: LogosResult, buffer: pointer): bool =
   ## [SPEC INTERFACE §5.1 l.3364-3368, §5.2 l.3831] A result with code LOGOS_OK

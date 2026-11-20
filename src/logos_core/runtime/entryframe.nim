@@ -11,8 +11,7 @@
 
 import results
 import logos_sdk/abi/[cstatus, types]
-import logos_sdk/cbor/utf8
-import logos_sdk/iface/outcome
+import logos_sdk/iface/[names, outcome]
 
 const
   TextCapacity* = 160 ## instance ids are at most 128 bytes; tokens are shorter
@@ -50,24 +49,31 @@ func utf8View*(t: var FixedText): LogosUtf8View =
     len: csize_t(t.len),
   )
 
-proc checkEventName*(name: cstring): Result[string, InvocationFailure] =
-  ## [SPEC INTERFACE §1.5, §2.5, §2.9.3] A malformed event identifier is
-  ## INVALID_PARAMS: null, empty, longer than 128 bytes or not UTF-8.
-  if name == nil:
-    return err(failure(ecInvalidParams, "a null event name"))
-  let s = $name
-  if s.len == 0 or s.len > MaxEventNameBytes or not isValidUtf8(s):
-    return err(failure(ecInvalidParams, "an event name has 1 to 128 UTF-8 bytes"))
+proc checkEventName*(s: string): Result[string, InvocationFailure] =
+  ## [SPEC INTERFACE §1.5, §2.9.3 l.2155-2156] A malformed event identifier is
+  ## INVALID_PARAMS: one that is not a §1.5 identifier (a namespace, a local
+  ## name ending in `_event`, identifier segments, at most 128 ASCII bytes, so
+  ## no NUL). Every binding operation and every name a Module Host sends uses
+  ## this check (I106). A Transport Subscribe does not: TRANSPORT l.719 answers
+  ## a name outside the selected contract with NOT_AUTHORISED.
+  if s.len == 0 or s.len > MaxEventNameBytes or checkEventId(s).isErr:
+    return err(
+      failure(ecInvalidParams, "an event name is not an INTERFACE §1.5 identifier")
+    )
   ok(s)
 
+proc checkEventName*(name: cstring): Result[string, InvocationFailure] =
+  ## The same check for a module's name; null is malformed.
+  if name == nil:
+    return err(failure(ecInvalidParams, "a null event name"))
+  checkEventName($name)
+
 proc checkEventName*(name: openArray[byte]): Result[string, InvocationFailure] =
-  ## The same check for a name a Module Host sent as bytes.
+  ## The same check for a name a Module Host sent as bytes, every byte of it.
   var s = newString(name.len)
   for i, b in name:
-    if b == 0:
-      return err(failure(ecInvalidParams, "an event name has 1 to 128 UTF-8 bytes"))
     s[i] = char(b)
-  checkEventName(cstring(s))
+  checkEventName(s)
 
 # The invocation-context stack ---------------------------------------------------------
 

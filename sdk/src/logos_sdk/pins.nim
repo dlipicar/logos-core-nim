@@ -4,7 +4,7 @@
 #!fmt: off
 const
   # conformance/requirements/*.jsonl: the spec revision
-  SpecRevision* = "6a4dfa2846ab9f1f679ad285f8caa848ee8544ad"
+  SpecRevision* = "6cac8335af8cea0e5d4e2f9ccb2e584c5b27a7c2"
   # spec-module-hash-profile.md §2
   HashProfileId* = "logos.hash-profile.2026-08.choice-index"
   # spec-module-commitment-model.md §6
@@ -81,7 +81,7 @@ logos.schema_response = {
 #include <stdbool.h>
 #include <stddef.h>
 
-#define LOGOS_C_MAPPING_REVISION 3u
+#define LOGOS_C_MAPPING_REVISION 4u
 
 #define LOGOS_C_CONTEXT_MODEL_6c6f676f732e636f6d6d69746d656e742d6d6f64656c2e323032362d3130 1
 #define LOGOS_C_CONTEXT_PROFILE_6c6f676f732e686173682d70726f66696c652e323032362d30382e63686f6963652d696e646578 1
@@ -105,6 +105,79 @@ typedef enum {
     LOGOS_ERR_NOT_READY         = 8,
     LOGOS_ERR_CANCELLED         = 9,
 } logos_error_code_t;
+
+#ifdef __cplusplus
+static_assert(sizeof(logos_error_code_t) == sizeof(int),
+              "logos_error_code_t must have the size of int");
+#else
+_Static_assert(sizeof(logos_error_code_t) == sizeof(int),
+               "logos_error_code_t must have the size of int");
+#endif
+
+/* -- Common schema value types -- */
+
+typedef struct logos_bstr_size_0 {
+    uint8_t _empty;
+} logos_bstr_size_0_t;
+
+typedef struct logos_tuple_size_0 {
+    uint8_t _empty;
+} logos_tuple_size_0_t;
+
+#define LOGOS_INVALID_PARAMS_REASON_ARM_0_LITERAL "malformed-cbor"
+#define LOGOS_INVALID_PARAMS_REASON_ARM_1_LITERAL "schema-mismatch"
+#define LOGOS_INVALID_PARAMS_REASON_ARM_2_LITERAL "non-deterministic-cbor"
+#define LOGOS_INVALID_PARAMS_REASON_ARM_3_LITERAL "configuration-schema-mismatch"
+
+#define LOGOS_SCHEMA_COMMITMENT_COMMITMENT_MODEL_LITERAL \
+    "logos.commitment-model.2026-10"
+#define LOGOS_SCHEMA_COMMITMENT_HASH_PROFILE_LITERAL \
+    "logos.hash-profile.2026-08.choice-index"
+#define LOGOS_SCHEMA_COMMITMENT_HASH_SUITE_LITERAL \
+    "logos.hash-suite.blake3-256"
+
+typedef const uint8_t* logos_bstr_size_1_4096_t;
+
+typedef struct logos_bstr_error_detail {
+    logos_bstr_size_1_4096_t data;
+    size_t len;
+} logos_error_detail_t;
+
+typedef uint32_t logos_invalid_params_reason_kind_t;
+#define LOGOS_INVALID_PARAMS_REASON_ARM_0 0u
+#define LOGOS_INVALID_PARAMS_REASON_ARM_1 1u
+#define LOGOS_INVALID_PARAMS_REASON_ARM_2 2u
+#define LOGOS_INVALID_PARAMS_REASON_ARM_3 3u
+
+typedef struct logos_choice_invalid_params_reason {
+    logos_invalid_params_reason_kind_t kind;
+} logos_invalid_params_reason_t;
+
+typedef uint32_t logos_invalid_params_path_segment_kind_t;
+#define LOGOS_INVALID_PARAMS_PATH_SEGMENT_ARM_0 0u
+#define LOGOS_INVALID_PARAMS_PATH_SEGMENT_ARM_1 1u
+
+typedef struct logos_choice_invalid_params_path_segment {
+    logos_invalid_params_path_segment_kind_t kind;
+    union {
+        const char* arm_0;
+        uint64_t arm_1;
+    } value;
+} logos_invalid_params_path_segment_t;
+
+typedef struct logos_map_invalid_params_detail {
+    bool has_path;
+    const logos_invalid_params_path_segment_t* path;
+    size_t path_count;
+    logos_invalid_params_reason_t reason;
+} logos_invalid_params_detail_t;
+
+typedef struct logos_map_schema_commitment {
+    const char* commitment_model;
+    const char* hash_profile;
+    const char* hash_suite;
+    uint8_t schema_root[32];
+} logos_schema_commitment_t;
 
 /* -- Result type -- */
 
@@ -261,9 +334,9 @@ typedef struct {
     );
 } logos_async_provider_api_t;
 
-#define LOGOS_MODULE_INIT_ABI_VERSION 2u
+#define LOGOS_MODULE_INIT_ABI_VERSION 3u
 
-typedef void (*logos_publish_fn)(
+typedef logos_error_code_t (*logos_publish_fn)(
     void*          user_data,
     const char*    event_name,
     const uint8_t* cbor_data,
@@ -284,8 +357,8 @@ typedef struct {
 
 /* -- Runtime Control binding and route handle -- */
 
-#define LOGOS_RUNTIME_CONTROL_VTABLE_ABI_VERSION 2u
-#define LOGOS_ROUTE_VTABLE_ABI_VERSION 2u
+#define LOGOS_RUNTIME_CONTROL_VTABLE_ABI_VERSION 3u
+#define LOGOS_ROUTE_VTABLE_ABI_VERSION 3u
 
 typedef uint64_t logos_subscription_id_t;
 
@@ -299,6 +372,12 @@ typedef void (*logos_event_handler_t)(
 typedef void (*logos_route_end_handler_t)(
     logos_error_code_t reason,
     void* user_data
+);
+
+typedef void (*logos_subscription_end_handler_t)(
+    logos_subscription_id_t subscription_id,
+    logos_error_code_t      reason,
+    void*                   user_data
 );
 
 struct logos_runtime_control_binding {
@@ -373,6 +452,12 @@ struct logos_runtime_control_vtable {
         const logos_async_callbacks_t* callbacks,
         logos_async_call_t* out_call
     );
+
+    logos_result_t (*observe_subscription_end)(
+        const logos_runtime_control_binding_t* binding,
+        logos_subscription_end_handler_t       handler,
+        void*                                  user_data
+    );
 };
 
 struct logos_route_vtable {
@@ -423,6 +508,12 @@ struct logos_route_vtable {
         logos_route_handle_t* route,
         logos_route_end_handler_t handler,
         void* user_data
+    );
+
+    logos_result_t (*observe_subscription_end)(
+        logos_route_handle_t*            route,
+        logos_subscription_end_handler_t handler,
+        void*                            user_data
     );
 };
 

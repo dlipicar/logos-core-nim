@@ -13,8 +13,9 @@
 import std/strutils
 import results
 import logos_sdk/cbor
+import logos_sdk/kit/rc_types
 import logos_sdk/testing/generated/[meter_module_types, shapes_module_types]
-import ./slowdown
+import ./[rcaddresses, slowdown]
 
 type Script* = object
   kit*: string ## the provider's source under `tests/kit/`
@@ -40,7 +41,7 @@ proc meterLines(): seq[string] =
   @[
     # Calls: a value, introspection, validation, an unknown method, and the
     # provider's own failure, a response outside its schema and an invalid
-    # status (G172).
+    # status, and statuses outside the provider set (INTERFACE l.3306-3311).
     call("read", read(4)),
     call("schema", [0xA0'u8]),
     call("schema", [0xA1'u8, 0x61, 0x78, 0x01]),
@@ -50,9 +51,13 @@ proc meterLines(): seq[string] =
     call("read", read(13)),
     call("read", read(14)),
     call("read", read(16)),
-    # Events: an unknown event, then one subscription, which sees a
-    # publication, an invocation-scoped one (17) and one from a call that
-    # names its caller (21), in order; none after it ends.
+    call("read", read(9001)),
+    call("read", read(9005)),
+    # Events: a name that fails INTERFACE §1.5 (I106), an unknown event, then
+    # one subscription, which sees a publication, an invocation-scoped one
+    # (17) and one from a call that names its caller (21), in order; none
+    # after it ends.
+    "subscribe 0 meter.nope s9",
     "subscribe 0 meter.nope_event s0",
     "subscribe 0 meter.changed_event s1",
     call("read", read(15)),
@@ -101,6 +106,91 @@ proc deferredScript*(): Script =
     deliveries: 3,
     completions: 3,
   )
+
+type RemoteOutcome* = enum
+  roDetail ## INVALID_PARAMS with validation detail
+  roPlain ## INVALID_PARAMS without validation detail
+  roDenied ## NOT_AUTHORISED
+  roOk
+
+proc remoteAddressCases*(ownRuntime: string): seq[(string, RemoteOutcome)] =
+  ## [IFC-0939, IFC-0940; RUN-1152, RUN-1153; M8] `connect_remote`'s
+  ## endpoint checks and the listener address of the three remote methods,
+  ## each line with what it must answer in every placement.
+  let other = Opt.some(OtherRuntime)
+  proc connect(id: Opt[string], a: LogosNSRuntimeControlRuntimeAddress): string =
+    "connect-remote " & hexOf(endpointOf(id, a))
+
+  proc listener(a: LogosNSRuntimeControlRuntimeAddress): string =
+    "rc set_remote_listener " &
+      hexOf(
+        encode(
+          LogosNSRuntimeControlSetRemoteListenerRequest(
+            listener: LogosNSRuntimeControlRemoteListenerRecord(
+              address: listenerAddress(a),
+              enabled: false,
+              runtime_control_enabled: false,
+            )
+          )
+        ).tryGet
+      )
+
+  proc exports(a: LogosNSRuntimeControlRuntimeAddress): string =
+    "rc list_provider_exports " &
+      hexOf(
+        encode(
+          LogosNSRuntimeControlListProviderExportsRequest(
+            listener: Opt.some(listenerAddress(a))
+          )
+        ).tryGet
+      )
+
+  proc exportLine(a: LogosNSRuntimeControlRuntimeAddress): string =
+    "rc set_provider_export " &
+      hexOf(
+        encode(
+          LogosNSRuntimeControlSetProviderExportRequest(
+            `export`: LogosNSRuntimeControlProviderExportRecord(
+              enabled: true,
+              listener: listenerAddress(a),
+              provider:
+                LogosNSRuntimeModuleProviderAddress(provider: "no_such_provider"),
+            )
+          )
+        ).tryGet
+      )
+
+  let mismatched = [
+    tlsAddress(Opt.some(RemoteQuic)),
+    quicAddress(profile = Opt.some(RemoteTlsTcp)),
+    quicAddress(alpn = Opt.some("h3")),
+  ]
+  result = @[
+    ("connect-remote a0", roDetail),
+    (connect(Opt.none(string), tlsAddress()), roPlain),
+    (connect(Opt.none(string), tlsAddress(Opt.some(RemoteTlsTcp))), roPlain),
+    (connect(other, unixAddress()), roPlain),
+    (connect(other, unixAddress(Opt.some("logos.local.unix-stream"))), roPlain),
+    (connect(Opt.some(ownRuntime), tlsAddress()), roPlain),
+    (connect(Opt.some(ownRuntime), tlsAddress(Opt.some(RemoteTlsTcp))), roPlain),
+    (connect(other, tlsAddress(Opt.some(RemoteTlsTcp))), roDenied),
+    (connect(other, quicAddress(Opt.some(RemoteQuic), Opt.some(RemoteQuic))), roDenied),
+    ("rc set_remote_listener a0", roDetail),
+    (listener(tlsAddress(Opt.some(RemoteTlsTcp))), roOk),
+    (exports(tlsAddress(Opt.some(RemoteTlsTcp))), roOk),
+    (exportLine(tlsAddress(Opt.some(RemoteTlsTcp))), roDenied),
+  ]
+  for a in mismatched:
+    result.add((connect(other, a), roPlain))
+    result.add((listener(a), roPlain))
+    result.add((exports(a), roPlain))
+    result.add((exportLine(a), roPlain))
+
+proc remoteAddressScript*(ownRuntime: string): Script =
+  ## The cases of `remoteAddressCases`, from a consumer of the meter kit.
+  result = Script(kit: "meter_impl.nim", module: "meter_module")
+  for (line, _) in remoteAddressCases(ownRuntime):
+    result.lines.add(line)
 
 proc reflectReq*(b: int, levels: int): seq[byte] =
   ## A valid `reflect` request whose deepest container is at `levels`, the

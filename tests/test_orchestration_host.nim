@@ -353,7 +353,7 @@ suite "orch.host: the reference orchestration module behind the Host Embedding A
       check e.view(id).tryGet.intentOrigin.instance == Orch
     rt.finish()
 
-  test "[RUN-1063] [RUN-1064] [RUN-0686] [IMPL-DECISION G289] an unclean end: a survivor is resumed once, uncharged; an open episode continues charged and ends at max_attempts":
+  test "[RUN-1063] [RUN-1064] [RUN-0686] [TXT-0307] [IMPL-DECISION G289] an unclean end: a survivor is resumed once, uncharged; an open episode continues charged and ends at max_attempts":
     let dir = work / "unclean"
     flaky[1].failInits.store(1000)
     let c = deployment(

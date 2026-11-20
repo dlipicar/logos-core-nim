@@ -30,7 +30,8 @@
 ## - **Operations.** Each call, subscribe, unsubscribe and `observe_end` is
 ##   admitted by the Runtime first (`rc_link_admit`), in a direct transported
 ##   handle's order (RUNTIME l.1343-1347); only then does it go on the
-##   connection. A NOT_READY refusal validates the request first (G171). A
+##   connection. A NOT_READY refusal validates the request first (RUNTIME
+##   l.1828, l.1832). A
 ##   prepared call is admitted and sent from a worker once submitted; its
 ##   timeout, cancellation and first terminal decision are kept here as
 ##   `asynccall.nim` keeps them (INTERFACE l.2050-2087).
@@ -39,7 +40,8 @@
 ##   Event's credit goes back once its handler returned (TRANSPORT l.721-725).
 ## - **Ends [R4, R11].** The Runtime's `route_ended` gives each of the route's
 ##   handles the route's cause and its first terminal cause; a revoked route
-##   ends the calls still running (G174). The connection's own end is reported
+##   ends the calls still running, a sent one TRANSPORT_ERROR (RUNTIME
+##   l.1271). The connection's own end is reported
 ##   (`rc_link_closed`), and the Runtime answers with the handle's first cause
 ##   (its route's when that came first, else TF-15's TRANSPORT_ERROR or the
 ##   provider's NOT_AUTHORISED). This replaces plan R11's `route_ended_ack`
@@ -62,7 +64,7 @@ import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
 import ../transport/io/loop
-import ../runtime/[callcheck, entryframe, hostio], logos_sdk/kit/rc_types
+import ../runtime/[callcheck, entryframe, hostio, subend], logos_sdk/kit/rc_types
 import ./state
 
 const
@@ -111,11 +113,14 @@ func codeOf(c: uint8): ErrorCode =
   errorCodeOf(c).get(ecModule)
 
 func closedCodeOf(cause: CloseCause, code: ErrorCode): ErrorCode =
-  ## [plan §2.6; TRANSPORT l.991, l.996; TF-15, G256] As
+  ## [plan §2.6; TRANSPORT l.971-981; TF-15, G256; P3 ruling 5] As
   ## `transported.closedCode`: a session the provider terminated with
-  ## ProtocolError NOT_AUTHORISED is a known authorization failure; any other
+  ## ProtocolError NOT_AUTHORISED or NOT_READY reports that code; any other
   ## end is TRANSPORT_ERROR, never an inferred NOT_READY.
-  if cause == ccPeerError and code == ecNotAuthorised: ecNotAuthorised else: ecTransport
+  if cause == ccPeerError and code in {ecNotAuthorised, ecNotReady}:
+    code
+  else:
+    ecTransport
 
 # Retained material (RUN-0174) ----------------------------------------------------------
 
@@ -242,6 +247,9 @@ type
     userData: pointer
     outId: ptr LogosSubscriptionId
     active, paused, gone: bool
+    ended: bool
+      ## [SPEC TRANSPORT l.752-756; DECISIONS G225] the provider ended it:
+      ## `unsubscribe` answers LOGOS_OK once
     keep: bool ## gone, and its unsubscriber frees it, not its drain
     subscribing, unsubscribing: ptr Outcome
     head, tail: ptr QEvent
@@ -308,6 +316,7 @@ type
     observer: LogosRouteEndHandler
     observerData: pointer
     obs: ObserverState
+    subEnd: SubscriptionEndSlot ## [SPEC INTERFACE §2.5 l.1476] (`subend`)
     obsRunner: int
     held: bool ## returned to the module and not released
     closeSent: bool
@@ -325,12 +334,15 @@ type
     jkComplete
     jkSubmit
     jkClosed
+    jkSubEnd ## [G225] one subscription-end report (`subId`, `reason`)
 
   Job = object
     kind: JobKind
     link: ptr HLink
     sub: ptr LSub
     call: ptr HAsync
+    subId: uint64
+    reason: ErrorCode
 
   Workers = object
     ch: Channel[Job]
@@ -542,7 +554,7 @@ proc admit(l: ptr HLink, op: uint8, name: string): Answer =
 proc recheck(
     l: ptr HLink, bare: string, params: openArray[byte], f: InvocationFailure
 ): InvocationFailure =
-  ## [G171 interim (TF-18); I90] A call refused NOT_READY is validated before
+  ## [SPEC RUNTIME l.1828, l.1832; I90] A call refused NOT_READY is validated before
   ## readiness is reported, and one the session refused as INVALID_PARAMS
   ## gets its detail, under the route's selected contract.
   if f.code notin {ecNotReady, ecInvalidParams}:
@@ -652,8 +664,10 @@ proc endSubsLocked(l: ptr HLink, code: ErrorCode) =
 proc routeEnded*(m: LcnCarrierRouteEnded) =
   ## Main thread: [plan §2.8 steps 1-2] a route the consumer holds ended. Its
   ## retained ticket goes; each of its handles takes the route's cause, which
-  ## its subscriptions end with, and its first terminal cause; a revoked
-  ## route ends the calls still running through them (G174).
+  ## its subscriptions end with, and its first terminal cause; a revoked or
+  ## expired route ends the calls still running through them: a sent one
+  ## TRANSPORT_ERROR (RUNTIME l.1271), one not yet sent the route's cause
+  ## (l.1261).
   dropMaterial(m.route)
   let code = codeOf(m.code)
   var done: seq[ptr HAsync]
@@ -671,7 +685,14 @@ proc routeEnded*(m: LcnCarrierRouteEnded) =
       if m.revoked:
         var c = l.asyncs
         while c != nil:
-          if c.decideLocked(ecNotAuthorised, "the route was revoked"):
+          let won =
+            if c.sent:
+              c.decideLocked(
+                ecTransport, "the route ended before the call's result was accepted"
+              )
+            else:
+              c.decideLocked(code, "the route was revoked")
+          if won:
             done.add(c)
           c = c.next
       scheduleObserverLocked(l)
@@ -707,17 +728,13 @@ proc onResponse(
     localMsg: string,
 ): ptr HAsync =
   ## Under `cl`: a call's terminal outcome; the prepared call it decided, if
-  ## any. [plan §2.6 step 3; G22] A Request the session refused locally with
-  ## NOT_READY gives the handle's code.
+  ## any. [plan §2.6 step 3; SPEC RUNTIME l.1270-1271; P5 Q-r B2] A Request
+  ## the session refused locally with NOT_READY is TRANSPORT_ERROR: the
+  ## Runtime admitted it (`rc_link_admit`), so a cause that ended its
+  ## connection since is no new operation's.
   var code = localCode
   if local and code == ecNotReady:
-    code =
-      if l.hasRouteCause:
-        l.routeCause
-      elif l.hasFirst:
-        l.first
-      else:
-        ecTransport
+    code = ecTransport
   var p = addr l.calls
   while p[] != nil:
     let w = p[]
@@ -811,6 +828,45 @@ proc onSubscription(l: ptr HLink, ev: IoEvent) =
         post(Job(kind: jkDrain, link: l, sub: s))
     return
 
+proc onSubscriptionEnd(l: ptr HLink, ev: IoEvent) =
+  ## Under `cl`: [SPEC TRANSPORT l.752-756; INTERFACE l.1472-1482; DECISIONS
+  ## G225] as `engine.linkSubscriptionEnd`: the provider ended an active
+  ## subscription (the session checked it). No handler of it begins from now
+  ## on, its queued Events go, and the handle reports the end on a host
+  ## worker when a registration is installed now. An Unsubscribe still
+  ## pending gets its result from the provider (l.755); otherwise the
+  ## subscription stays on the handle, ended, so `unsubscribe` answers
+  ## LOGOS_OK once.
+  var s = l.subs
+  while s != nil and s.id != ev.subscriptionId:
+    s = s.next
+  if s == nil or not s.active:
+    return
+  s.active = false
+  s.ended = true
+  while s.head != nil:
+    let e = s.head
+    s.head = e.next
+    release(l, e.credit)
+    freeText(e.name)
+    freeBytes(e.data, e.len)
+    freeShared(e)
+  s.tail = nil
+  if l.subEnd.owed:
+    retainLocked(l)
+    post(
+      Job(
+        kind: jkSubEnd,
+        link: l,
+        subId: s.id,
+        reason:
+          if ev.subscriptionFailure.isSome:
+            ev.subscriptionFailure.get.code
+          else:
+            ecModule,
+      )
+    )
+
 proc onEvent(l: ptr HLink, ev: sink IoEvent) =
   ## Under `cl`: [SPEC RUNTIME l.1184; plan §2.7] an Event, queued while its
   ## subscription is active (also while an Unsubscribe is pending, in case it
@@ -894,6 +950,8 @@ proc consumerEvent(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: []
       done = l.onClosed(ev)
     of IoEventKind.evSubscription:
       l.onSubscription(ev)
+    of IoEventKind.evSubscriptionEnd:
+      l.onSubscriptionEnd(ev)
     of IoEventKind.evEvent:
       l.onEvent(ev)
     else:
@@ -1084,6 +1142,13 @@ proc runJob(j: Job) =
     dropLink(j.link)
   of jkClosed:
     reportClosed(j.link)
+    dropLink(j.link)
+  of jkSubEnd:
+    # [SPEC INTERFACE l.1478, l.1484] Once, unless the release suppressed it
+    # first; a release waiting for it is woken.
+    discard j.link.subEnd.report(LogosSubscriptionId(j.subId), j.reason)
+    withLock cl:
+      broadcast(cc)
     dropLink(j.link)
   of jkComplete:
     runCompletion(j.call)
@@ -1427,28 +1492,39 @@ proc routeUnsubscribeOp(
     return status(failureOf(a))
   let o = newOutcome()
   var s: ptr LSub
+  var ended = false
   withLock cl:
-    var p = l.subs
-    while p != nil:
-      if p.id == uint64(id) and p.active and not p.paused:
-        s = p
+    var p = addr l.subs
+    while p[] != nil:
+      let x = p[]
+      if x.id == uint64(id) and x.ended and x.unsubscribing == nil:
+        # [SPEC INTERFACE l.1482; G225] The provider ended it: LOGOS_OK once.
+        p[] = x.next
+        x.gone = true
+        x.keep = true
+        s = x
+        ended = true
         break
-      p = p.next
-    if s != nil:
+      if x.id == uint64(id) and x.active and not x.paused:
+        s = x
+        break
+      p = addr x.next
+    if s != nil and not ended:
       s.paused = true
       s.unsubscribing = o
   if s == nil:
     freeOutcome(o)
     return status(ecInvalidParams, "no active subscription of this handle has that id")
-  var cmd = IoCommand(conn: l.num, kind: IoCommandKind.cmdUnsubscribe, subId: s.id)
-  if submitCmd(cmd) != sbOk:
-    withLock cl:
-      if s.unsubscribing == o:
-        s.unsubscribing = nil
-        s.paused = false
-        o.failLocked(ecNotReady, "the transport is stopping")
-  waitFor(o)
-  if o.ok:
+  if not ended:
+    var cmd = IoCommand(conn: l.num, kind: IoCommandKind.cmdUnsubscribe, subId: s.id)
+    if submitCmd(cmd) != sbOk:
+      withLock cl:
+        if s.unsubscribing == o:
+          s.unsubscribing = nil
+          s.paused = false
+          o.failLocked(ecNotReady, "the transport is stopping")
+    waitFor(o)
+  if ended or o.ok:
     # Gone from the handle: no handler of it runs on another thread when this
     # returns; one running on this thread keeps it until it returns.
     let me = getThreadId()
@@ -1539,10 +1615,11 @@ proc routeObserveEndOp(
   LogosResult()
 
 proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
-  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1503-1506, §5.2 l.3895-3897] As
-  ## `bindings.routeReleaseOp`: subscriptions abandoned, no callback begins
-  ## after the release, one running on another thread is waited for; the
-  ## logical route and the calls prepared through the handle stay.
+  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1484, l.1503-1506, §5.2 l.3895-3897]
+  ## As `bindings.routeReleaseOp`: subscriptions abandoned, no callback or
+  ## subscription-end report begins after the release, one running on another
+  ## thread is waited for; the logical route and the calls prepared through
+  ## the handle stay.
   bindingEnter()
   let l = linkOf(route)
   if l == nil:
@@ -1557,6 +1634,11 @@ proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
     if l.obs == obScheduled or l.obs == obInstalled:
       l.obs = obSuppressed
     while l.obs == obRunning and l.obsRunner != me:
+      wait(cc, cl)
+    # [SPEC INTERFACE l.1484; G225] No subscription-end report begins after
+    # this, and a running one is waited for.
+    l.subEnd.suppress()
+    while l.subEnd.busy:
       wait(cc, cl)
     while l.subs != nil:
       let s = l.subs
@@ -1602,6 +1684,24 @@ proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
   if last:
     freeLink(l)
 
+proc routeObserveSubscriptionEndOp(
+    route: ptr LogosRouteHandle, handler: LogosSubscriptionEndHandler, userData: pointer
+): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE §2.5 l.1476-1484] The handle's one registration, kept in
+  ## the host, with `observe_end`'s rules: a null handler is INVALID_PARAMS, and
+  ## a terminal handle returns its retained code from the Runtime and installs
+  ## nothing (l.1459; DECISIONS I105).
+  bindingEnter()
+  if handler.isNil:
+    return status(ecInvalidParams, "a null subscription-end handler")
+  let l = linkOf(route)
+  if l == nil:
+    return nullRoute()
+  let a = l.admit(4, "")
+  if a.failed:
+    return status(failureOf(a))
+  l.subEnd.register(handler, userData)
+
 var routeVtable = LogosRouteVtable(
   abiVersion: RouteVtableAbiVersion,
   structSize: csize_t(sizeof(LogosRouteVtable)),
@@ -1612,6 +1712,7 @@ var routeVtable = LogosRouteVtable(
   release: routeReleaseOp,
   prepareCall: routePrepareCallOp,
   observeEnd: routeObserveEndOp,
+  observeSubscriptionEnd: routeObserveSubscriptionEndOp,
 )
 
 # Materialization ------------------------------------------------------------------------------

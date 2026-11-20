@@ -192,16 +192,18 @@ suite "orch: backoff and attempts (RUNTIME l.3786-3789) [IMPL-DECISION G289]":
     # A lost answer at runtime: the charge stays.
     var e2 = Opt.none(Entry)
     e2.charge(view(lifeError), 10, 10)
-    e2.get.settle(classifyRecover(ecTimeout))
+    e2.get.settle(classifyRecover(ecTimeout, false))
     check e2.get.attempts == 1 and e2.get.pending.isNone
 
-  test "[RUN-0686] [IMPL-DECISION G289] a recover_module answered with a code the table does not list is lost: charge kept; a prepare that fails is refunded":
-    check classifyRecover(ecOk) == answerAccepted
+  test "[RUN-0686] [IMPL-DECISION G289] a recover_module answered with a code the table does not list is lost: charge kept; a prepare that fails is refunded; a stale-revision error arm is refused":
+    check classifyRecover(ecOk, false) == answerAccepted
+    # [RUNTIME l.1818-1819; re-pin P4a] the response held its error arm
+    check classifyRecover(ecOk, true) == answerRefused
     for c in [ecInvalidParams, ecNotReady, ecNotAuthorised, ecModule]:
-      check classifyRecover(c) == answerRefused
-    check classifyRecover(ecCancelled) == answerCancelled
+      check classifyRecover(c, false) == answerRefused
+    check classifyRecover(ecCancelled, false) == answerCancelled
     for c in [ecTimeout, ecTransport, ecVersionMismatch, ecMethodNotFound]:
-      check classifyRecover(c) == answerLost
+      check classifyRecover(c, false) == answerLost
     var e = Opt.none(Entry)
     e.charge(view(lifeError), 10, 10)
     e.get.settle(answerLost)
@@ -253,18 +255,21 @@ suite "orch: the decision rules (RUNTIME l.3774-3790) [IMPL-DECISION G287] [IMPL
     check entry.isNone # the old episode went; nothing charged yet in the new one
     check d.dueAt.get == 30
 
-  test "[RUN-1055] [IMPL-DECISION G291] four classifications are read, a closed set; every other one, recognized or not, and none, is a live failure":
-    # [SPEC RUNTIME l.3754] the initial classifications, a Loader error, an
-    # unrecognized spelling, and none.
+  test "[RUN-1055] [IMPL-DECISION G291] six classifications are read, a closed set; every other one, recognized or not, and none, is a live failure":
+    # [SPEC RUNTIME l.3605, l.3607, l.3610] the initial classifications, a
+    # Loader error, an unrecognized spelling, and none.
     let others = @[
       "startup-timeout", "initialization-failed", "reported-by-module",
       "host-terminated", "authority-expired", "authority-revoked",
-      "configuration-indeterminate", "cleanup-failed", "remote-state-unknown", "other",
-      "loader-foo", "x-unheard-of", "CLEANUP-TIMEOUT", "authority-denied ", "",
+      "configuration-indeterminate", "prerequisite-unavailable", "cleanup-failed",
+      "remote-state-unknown", "other", "loader-foo", "x-unheard-of", "CLEANUP-TIMEOUT",
+      "authority-denied ", "",
     ]
     for f in ResumableFailures:
       check resumable(Opt.some(f))
-    check ResumableFailures.len == 4
+    check ResumableFailures.len == 6
+    check "configuration-missing" in ResumableFailures
+    check "static-binding-mismatch" in ResumableFailures
     check not resumable(Opt.none(string))
     for f in others:
       check not resumable(Opt.some(f))
@@ -458,6 +463,46 @@ suite "orch: the decision rules (RUNTIME l.3774-3790) [IMPL-DECISION G287] [IMPL
     var entry = Opt.none(Entry)
     var memo = Memo()
     check decideNow(view(lifeError), entry, memo, disabledRestart(), 0).step == stepNone
+
+  test "[RUN-0696] [TXT-0582] [IMPL-DECISION G291] an `error` instance charged twice, then refused for want of configuration and probed uncharged, still has two charged attempts when it fails again (P5 §0.3 item 3, Fable's condition 3)":
+    var entry = Opt.none(Entry)
+    var memo = Memo()
+    let r = backoff(attempts = 4)
+    var t = 1_000'i64
+    var charged = 0
+    while charged < 2:
+      let d = decideNow(view(lifeError), entry, memo, r, t)
+      if d.step == stepRecover:
+        check d.charged
+        entry.charge(view(lifeError), t, t)
+        entry.get.settle(answerAccepted)
+        inc charged
+      t += 10_000
+    check entry.get.attempts == 2
+    # The next recovery is refused for want of configuration: the engine
+    # replaces the cause, and the view is resumable (l.3665).
+    var probes = 0
+    for i in 0 ..< 5:
+      let d = decideNow(view(lifeError, resumable = true), entry, memo, r, t)
+      if d.step == stepRecover:
+        check not d.charged
+        memo.noteProbe(t)
+        inc probes
+      t += 100_000
+    check probes > 0
+    check entry.isSome and entry.get.attempts == 2 and not entry.get.exhausted
+    # The configuration came back, the accepted recovery failed: a live
+    # failure again, charged from where it stood.
+    var d = decideNow(view(lifeError), entry, memo, r, t)
+    for i in 0 ..< 100:
+      if d.step == stepRecover:
+        break
+      t += 10_000
+      d = decideNow(view(lifeError), entry, memo, r, t)
+    check d.step == stepRecover and d.charged
+    entry.charge(view(lifeError), t, t)
+    entry.get.settle(answerAccepted)
+    check entry.get.attempts == 3
 
   test "[RUN-1065] [IMPL-DECISION G288] a hint brings the next probe forward to last call + initial, and stays in force until that probe is made":
     let r = backoff(initial = 50, maxMs = 5000, mult = 16)

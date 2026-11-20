@@ -355,7 +355,7 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     d.release()
     e.finish()
 
-  test "[CAP-0211] [CAP-0213] [CAP-0214] a failed call is a failure record holding only the sides that were committed, and none when nothing required was":
+  test "[CAP-0211] [CAP-0213] [CAP-0214] [CAP-0444] a failed call is a failure record holding only the sides that were committed, and none when nothing required was":
     let (e, orch) = ready()
     var h = orch.handle(orch.routeTo(e, Meter, "k"))
     setScript(retaining("call"))
@@ -374,11 +374,19 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     check h.raw("read", readReq(13)).code == ecModule
     v = e.kept[^1].view
     check not v.success and not v.commitments
-    check e.kept.len == 3
+    # [SPEC CA l.1238] Only the request was required and it was committed:
+    # every required value is in the record, and the outcome is still failure.
+    setScript(retaining("call", response = false))
+    check h.raw("read", readReq(13)).code == ecModule
+    v = e.kept[^1].view
+    check not v.success
+    check v.request == Opt.some(meterRoots("meter.read_request", readReq(13)))
+    check v.response.isNone
+    check e.kept.len == 4
     h.release()
     e.finish()
 
-  test "[CAP-0391] [CAP-0392] a cached call decision is named as itself; renewing or revoking the route while a call runs does not change what it captured at admission":
+  test "[CAP-0391] [CAP-0392] [RUN-1101] a cached call decision is named as itself; renewing or revoking the route while a call runs does not change what it captured at admission; the revoked call is TRANSPORT_ERROR":
     let (e, orch) = ready()
     let route = orch.routeTo(e, Meter, "k")
     var h = orch.handle(route)
@@ -409,8 +417,8 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     check bgCode.load == 0
     var v = e.kept[^1].view
     check v.success and v.decision == applied
-    # Revoked while the call runs: it ends NOT_AUTHORISED, recorded as a
-    # failure under what it captured.
+    # Revoked while the call runs: it ends TRANSPORT_ERROR (RUNTIME l.1271),
+    # recorded as a failure under what it captured.
     gate.store(true)
     bgDone.store(false)
     createThread(t, background, addr h)
@@ -430,7 +438,7 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     )
     gate.store(false)
     joinThread(t)
-    check ErrorCode(bgCode.load) == ecNotAuthorised
+    check ErrorCode(bgCode.load) == ecTransport
     v = e.kept[^1].view
     check not v.success
     check v.decision == second
@@ -469,8 +477,9 @@ suite "run.audit: Runtime Control, logos.schema, sensitive payloads, retention (
     check v.request ==
       Opt.some(ValueCommitment(schema_subtree_root: @subtree, value_root: @root))
     check v.response.isSome
-    # [G171 interim] establish_route's authority comes before its payload's
-    # validation, so its decision applies to a call that then fails.
+    # [SPEC RUNTIME l.1827-1828] establish_route's authority (step 2) comes
+    # before its payload's validation (step 3), so its decision applies to a
+    # call that then fails.
     setScript(retaining("rc:establish_route"))
     check rcCall(orch, "establish_route", @[0xA0'u8]).code == ecInvalidParams
     let w = e.kept[^1].view

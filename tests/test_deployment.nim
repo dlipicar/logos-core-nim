@@ -13,25 +13,36 @@
 ## `spectrace deploydoc` checks the document's tables against the claims.
 
 when defined(posix):
-  import std/[json, locks, monotimes, os, sequtils, strutils, times]
+  import std/[json, locks, monotimes, os, sequtils, strutils, tables, times]
   import unittest2
   import logos_sdk/crypto/blake3
   import ../src/logos_core/permissions
-  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/rc_types
+  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/[rc_arms, rc_types]
   from ../src/logos_core/runtime/plumbing import
     DefaultStartupDeadline, DefaultLoaderStartupDeadline, DefaultStopDeadline,
     DefaultShutdownGrace, DefaultApplyDeadline, MaxDiagnostics
   from ../src/logos_core/runtime/routing import RouteMode
-  from ../src/logos_core/runtime/realizer import LoaderErrorCode, lecUnsupportedStrategy
-  from logos_sdk/iface/accept import acceptContractSet
+  from ../src/logos_core/runtime/realizer import
+    LoaderErrorCode, lecUnsupportedStrategy, lecAbiInvalid, ModuleCode, CodeKind,
+    codeStatic, probeCode, completeProbe
+  from ../src/logos_core/runtime/store import MaxStoreBytes
+  from ../src/logos_core/authority/core import AuthorityLimits
+  from ../src/logos_core/authority/policy import DefaultAuditRecords
+  from ../src/logos_core/transport/io/api import defaultTransportConfig
+  from ../src/logos_core/orchestration/accounting import nil
+  from logos_sdk/iface/accept import acceptContractSet, acceptBinding, AcceptOptions
+  from logos_sdk/iface/provider import callSurfaceDescriptor
   from ../src/logos_core/durable import DurableLock, release
   from ../src/logos_core/daemon/config import
-    DefaultStoreQueue, DefaultStoreRecords, DefaultStoreAgeDays
+    DefaultStoreQueue, DefaultStoreRecords, DefaultStoreAgeDays, OrchestratorInstance
+  from ../src/logos_core/orchestration/settings import OrchestratorModule
   from ../src/logos_core/daemon/evstore import
     DefaultSegmentEntries, DefaultSegmentBytes
   import
     ../src/logos_core/daemon/
       [assemble, ctlwire, daemon_config_types, logging, session, sessioninit]
+  from ../src/logos_core/daemon/compose import prepareDaemon
+  from ../src/logos_core/daemon/trustfile import TrustInput, floorFile
   import
     logos_sdk/testing/kitbuild,
     ./support/[loaderharness, modulehostbuild, shortdir, slowdown]
@@ -307,6 +318,51 @@ when defined(posix):
     doAssert lstat(cstring(path), st) == 0, "lstat " & path
     (int(st.st_mode) and 0o7777, int(st.st_uid))
 
+  # A module named as the Credential Store ------------------------------------------------
+
+  const
+    CredentialStoreModule = "logos_credential_store" ## CS l.162; BCP l.280
+    CredentialStoreDoc =
+      "_module = \"logos_credential_store\"\n\nstore.changed_event = {\n  n: uint64,\n}\n"
+      ## a provider of one event, so it needs no per-method function
+
+  let credSurfaceBytes = callSurfaceDescriptor(
+      acceptBinding(
+        CredentialStoreModule,
+        Opt.some(CredentialStoreDoc),
+        opts = AcceptOptions(system: true),
+      )
+        .expect("the call surface, as a system module's")
+    )
+    .expect("its descriptor")
+  let credSurface = cast[ptr UncheckedArray[uint8]](allocShared0(credSurfaceBytes.len))
+  for i, b in credSurfaceBytes:
+    credSurface[i] = b
+  let credSurfaceLen = credSurfaceBytes.len
+
+  proc credName(): cstring {.cdecl, gcsafe, raises: [].} =
+    CredentialStoreModule
+
+  proc credCallSurface(outLen: ptr csize_t): ptr uint8 {.cdecl, gcsafe, raises: [].} =
+    {.cast(gcsafe).}:
+      outLen[] = csize_t(credSurfaceLen)
+      cast[ptr uint8](credSurface)
+
+  proc credNever() {.cdecl, gcsafe, raises: [].} =
+    ## init, destroy, free and dispatch: binding calls none of them
+    doAssert false
+
+  proc credentialStoreCode(): ModuleCode =
+    ## The module's code as a static table: the symbols a Module Host or the
+    ## realizer of a `direct_dynamic` artifact would find in its library.
+    var t = initTable[string, pointer]()
+    t["logos_logos_credential_store_MODULE_name"] = cast[pointer](credName)
+    t["logos_logos_credential_store_MODULE_call_surface"] =
+      cast[pointer](credCallSurface)
+    for s in ["init", "destroy", "free", "dispatch"]:
+      t["logos_logos_credential_store_MODULE_" & s] = cast[pointer](credNever)
+    ModuleCode(kind: codeStatic, table: t)
+
   # Cases ---------------------------------------------------------------------------------
 
   suite "bcp.deployment: docs/DEPLOYMENT.md's facts against the code (BCP §5.4; DECISIONS I97, G309)":
@@ -417,6 +473,45 @@ when defined(posix):
       if perms.isSome:
         check perms.get.profile == f["profile"].getStr
 
+    test "[BCP-0104] [TXT-0351] [TXT-0349] [TXT-0368] [TXT-0369] every `logos.` identifier the code names is one a Logos specification assigns: a mirrored name or its namespace, or one listed with its line; none names a provenance profile":
+      const
+        NameChars = {'A' .. 'Z', 'a' .. 'z', '0' .. '9', '_', '.', '-'}
+        Assigned =
+          [("logos.route-ticket.random-256", "TRANSPORT l.1004, outside a CDDL block")]
+      proc tokens(text: string, quoted: bool): seq[string] =
+        ## Each whole `logos.` token: starting a string literal (`quoted`), or
+        ## not inside a longer name; a trailing dot, as in the bare prefix
+        ## `"logos."`, leaves a namespace.
+        var i = text.find("logos.")
+        while i >= 0:
+          var j = i + "logos.".len
+          while j < text.len and text[j] in NameChars:
+            inc j
+          let before = (if i == 0: ' ' else: text[i - 1])
+          if (quoted and before == '"') or (not quoted and before notin NameChars):
+            result.add text[i ..< j].strip(leading = false, chars = {'.'})
+          i = text.find("logos.", j)
+
+      var mirrored: seq[string]
+      for f in walkDirRec(repoDir / "spec" / "mirrors"):
+        mirrored.add readFile(f).tokens(quoted = false)
+      var seen = 0
+      for root in ["src", "sdk" / "src"]:
+        for f in walkDirRec(repoDir / root):
+          var found: seq[string]
+          if f.endsWith(".nim"):
+            found = readFile(f).tokens(quoted = true)
+          elif f.endsWith(".cddl"):
+            for line in readFile(f).splitLines:
+              found.add line.split(';', 1)[0].tokens(quoted = false)
+          for t in found:
+            checkpoint f & ": " & t
+            check t in mirrored or mirrored.anyIt(it.startsWith(t & ".")) or
+              Assigned.anyIt(it[0] == t)
+            check not t.startsWith("logos.package-provenance")
+            inc seen
+      check seen > 0
+
     test "[BCP-0045] a hosted module's Module Host runs under the daemon's user, in a process group of its own":
       check facts["hosts_run_as"].getStr == "the daemon's user"
       l = hostedBoot()
@@ -463,7 +558,7 @@ when defined(posix):
             ),
           ).okBytes
         )
-        .expect("the created instance")
+        .expect("the created instance").accepted.get
       let started = l.rc(
         LcnCtlMethodKind.Start_module,
         LogosNSRuntimeControlStartModuleRequest(
@@ -521,6 +616,108 @@ when defined(posix):
       check DefaultSegmentEntries == f["segment_entries"].getInt
       check DefaultSegmentBytes == f["segment_bytes"].getInt
       check MaxDiagnostics == facts["diagnostics_retained"].getInt
+
+    test "[BCP-0102] [TXT-0555] [TXT-0350] the admission pools' totals and per-consumer limits are the facts', and so is the authority's audit bound; logosd's Runtime instance is the engine with the facts' orchestration module and instance; logosd composes no Credential Store, accepts an operator module named logos_credential_store, and its start fails at binding":
+      # The pools (DEPLOYMENT.md §12, "Admission pools"), with logosd's
+      # defaults: it sets no engine, authority or Transport limit.
+      proc pool(total: int, perConsumer = -1): JsonNode =
+        result = newJObject()
+        result["total"] = %total
+        result["per_consumer"] =
+          if perConsumer < 0:
+            newJNull()
+          else:
+            %perConsumer
+
+      let
+        el = EngineLimits().effective
+        al = AuthorityLimits()
+        tc = defaultTransportConfig()
+        pools = {
+          "prepared_calls": pool(MaxAsyncCalls),
+          "module_instances": pool(MaxInstances),
+          "call_workers": pool(MaxCallWorkers + MaxNestedCallWorkers),
+          "evaluation_queue": pool(EvalQueue),
+          "observation_snapshots": pool(el.snapshotsTotal, el.snapshotsPerConsumer),
+          "observation_snapshot_bytes":
+            pool(el.snapshotBytesTotal, el.snapshotBytesPerConsumer),
+          "observe_end_registrations": pool(el.endRegsTotal, el.endRegsPerConsumer),
+          "runtime_control_subscriptions": pool(el.rcSubsTotal, el.rcSubsPerSubscriber),
+          "store_snapshot_bytes": pool(MaxStoreBytes),
+          "authority_queued_requests": pool(al.moduleQueue),
+          "authority_grants": pool(al.maxGrants),
+          "authority_watches": pool(al.maxWatches, al.watchesPerConsumer),
+          "transport_inbound": pool(tc.maxInbound),
+          "transport_pending_hellos": pool(tc.maxPendingHellos),
+          "transport_outbound": pool(tc.maxOutbound),
+          "transport_calls": pool(tc.maxTotalCalls),
+          "transport_subscriptions": pool(tc.maxTotalSubscriptions),
+          "transport_subscription_ids": pool(tc.maxTotalSubscriptionIds),
+          "transport_hello_input_bytes": pool(tc.maxHelloInputBytes),
+          "transport_input_bytes": pool(tc.maxInputBytes),
+          "transport_output_bytes": pool(tc.maxOutputBytes),
+          "transport_pending_output_bytes": pool(tc.maxPendingOutputBytes),
+          "orchestrator_open_episodes": pool(accounting.MaxEntries),
+        }
+        f = facts["admission_pools"]
+      check f.len == pools.len
+      for (name, want) in pools:
+        checkpoint name
+        check f.hasKey(name) and f[name] == want
+      let dc = defaultDaemonConfig("assigned-by-init")
+      check dc.transport.isNone
+      # [CA l.1208; DECISIONS G376] acknowledged at the append, under this
+      # bound (test_authority's G376 cases hold the behaviour).
+      let a = facts["authority_audit"]
+      check a["acknowledged"].getStr == "append"
+      check a["unwritten_bound"].getInt == al.maxUnwritten
+      check a["retained_records"].getInt == int(DefaultAuditRecords)
+
+      # No Credential Store (§25): none in init's composition; an operator's
+      # module of the name passes logosd's checks, and binding refuses it as a
+      # provider that is no Logos system module.
+      check facts["credential_store"].getStr == "none"
+      let floor = TrustInput(file: floorFile())
+      let s = Session(dir: makeShortBase("dplcs") / "s")
+      let plain = prepareDaemon(s, dc.encode.get, floor).expect("init's configuration")
+      check plain.composition.appConfig.modules.allIt(
+        it.module != CredentialStoreModule
+      )
+      # [BCP l.286; RUNTIME l.66] The RUNTIME claim covers logosd's Runtime
+      # instance: the engine with this orchestration module, by the code's names.
+      let claim = facts["runtime_claim"]
+      let orch = claim["orchestration_instance"].getStr
+      check orch == OrchestratorInstance
+      check claim["orchestration_module"].getStr == OrchestratorModule
+      let app = plain.composition.appConfig
+      check app.orchestration == orch
+      check app.modules.anyIt(
+        it.instance == orch and it.module == OrchestratorModule and
+          it.implementation.kind == LcnAppImplementationKind.Direct_static
+      )
+      var op = dc
+      var m = chatterModule()
+      m.instance = "credential-store"
+      m.module = CredentialStoreModule
+      m.state_assignment = Opt.none(string)
+      op.modules = Opt.some(@[m])
+      op.runtime.module_host = Opt.some(hostExe)
+      let p = prepareDaemon(s, op.encode.get, floor)
+      check p.isOk
+      if p.isOk:
+        let mods = p.get.composition.appConfig.modules
+        check mods.anyIt(
+          it.module == CredentialStoreModule and
+            it.implementation.kind == LcnAppImplementationKind.Process_hosted_dynamic
+        )
+      let cs = credentialStoreCode()
+      let bound = completeProbe(cs, probeCode(cs, CredentialStoreModule), false)
+      check bound.isErr
+      if bound.isErr:
+        check bound.error.code == lecAbiInvalid
+        check "reserved for Logos system modules" in bound.error.message
+      # The same code as a Logos system module binds: the name alone refuses it.
+      check completeProbe(cs, probeCode(cs, CredentialStoreModule), true).isOk
 
     test "[PKG-0422] a hosted instance's execution summary names its implementation and no signer or package: no execution depends on package-signing trust":
       l = hostedBoot()

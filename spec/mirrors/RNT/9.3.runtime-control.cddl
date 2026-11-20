@@ -30,7 +30,6 @@ logos.runtime_control.mode =
 logos.runtime_control.route_state =
     "establishing" /
     "ready" /
-    "draining" /
     "revoked" /
     "failed" /
     "closed"
@@ -67,31 +66,6 @@ logos.runtime_control.runtime_endpoint = {
     ? runtime_instance_id: logos.runtime.runtime_instance_id,
     address: logos.runtime_control.runtime_address,
 }
-
-logos.runtime_control.remote_identity_profile =
-    "logos.remote.tls-tcp" /
-    "logos.remote.quic"
-
-logos.runtime_control.trust_anchor_id = bstr .size (1..128)
-logos.runtime_control.subject_public_key_info = bstr .size (1..8192)
-
-logos.runtime_control.remote_runtime_enrollment =
-    {
-        runtime_instance_id: logos.runtime.runtime_instance_id,
-        profile: logos.runtime_control.remote_identity_profile,
-        revision: uint64,
-        status: "active",
-        trust_anchor: logos.runtime_control.trust_anchor_id,
-        subject_public_keys: [logos.runtime_control.subject_public_key_info] /
-                             [logos.runtime_control.subject_public_key_info,
-                              logos.runtime_control.subject_public_key_info],
-    } /
-    {
-        runtime_instance_id: logos.runtime.runtime_instance_id,
-        profile: logos.runtime_control.remote_identity_profile,
-        revision: uint64,
-        status: "revoked",
-    }
 
 logos.runtime_control.remote_listener_address =
     logos.runtime_control.tls_tcp_runtime_address /
@@ -133,6 +107,7 @@ logos.runtime_control.module_record = {
     mode: logos.runtime_control.mode,
     ? primary_contract: logos.schema_commitment,
     ? implements: [* logos.schema_commitment],
+    ? extends: [* logos.schema_commitment],
     ? reason: logos.runtime_control.reason,
 }
 
@@ -154,6 +129,16 @@ logos.runtime_control.invocation_descriptor =
 logos.runtime_control.route_failure = {
     code: logos.runtime_control.failure_code,
     ? message: logos.runtime_control.reason,
+}
+
+logos.runtime_control.error_code =
+    "stale-revision" /
+    "configuration-rejected" /
+    "declaration-unavailable"
+
+logos.runtime_control.error = {
+    code: logos.runtime_control.error_code,
+    ? current_revision: uint64,
 }
 
 logos.runtime_control.route_access = {
@@ -301,10 +286,12 @@ logos.runtime_control.create_module_request = {
     module: logos.runtime.module_name,
 }
 
-logos.runtime_control.create_module_response = {
-    module: logos.runtime.module_name,
-    instance: logos.runtime.module_instance_id,
-}
+logos.runtime_control.create_module_response =
+    {
+        module: logos.runtime.module_name,
+        instance: logos.runtime.module_instance_id,
+    } /
+    { error: logos.runtime_control.error }
 
 logos.runtime_control.start_module_request = {
     module: logos.runtime.module_name,
@@ -313,12 +300,14 @@ logos.runtime_control.start_module_request = {
     ? expected_execution_revision: uint64,
 }
 
-logos.runtime_control.start_module_response = {
-    module: logos.runtime.module_name,
-    ? instance: logos.runtime.module_instance_id,
-    ? provider: logos.runtime.module_provider_address,
-    state: logos.runtime_control.state,
-}
+logos.runtime_control.start_module_response =
+    {
+        module: logos.runtime.module_name,
+        ? instance: logos.runtime.module_instance_id,
+        ? provider: logos.runtime.module_provider_address,
+        state: logos.runtime_control.state,
+    } /
+    { error: logos.runtime_control.error }
 
 logos.runtime_control.stop_module_request = {
     module: logos.runtime.module_name,
@@ -327,12 +316,14 @@ logos.runtime_control.stop_module_request = {
     ? expected_execution_revision: uint64,
 }
 
-logos.runtime_control.stop_module_response = {
-    module: logos.runtime.module_name,
-    ? instance: logos.runtime.module_instance_id,
-    ? provider: logos.runtime.module_provider_address,
-    state: logos.runtime_control.state,
-}
+logos.runtime_control.stop_module_response =
+    {
+        module: logos.runtime.module_name,
+        ? instance: logos.runtime.module_instance_id,
+        ? provider: logos.runtime.module_provider_address,
+        state: logos.runtime_control.state,
+    } /
+    { error: logos.runtime_control.error }
 
 logos.runtime_control.recover_module_request = {
     module: logos.runtime.module_name,
@@ -340,18 +331,22 @@ logos.runtime_control.recover_module_request = {
     expected_execution_revision: uint64,
 }
 
-logos.runtime_control.recover_module_response = {
-    module: logos.runtime.module_name,
-    instance: logos.runtime.module_instance_id,
-    state: logos.runtime_control.state,
-}
+logos.runtime_control.recover_module_response =
+    {
+        module: logos.runtime.module_name,
+        instance: logos.runtime.module_instance_id,
+        state: logos.runtime_control.state,
+    } /
+    { error: logos.runtime_control.error }
 
 logos.runtime_control.retire_module_request = {
     target: logos.runtime.module_instance_address,
     expected_execution_revision: uint64,
 }
 
-logos.runtime_control.retire_module_response = {}
+logos.runtime_control.retire_module_response =
+    {} /
+    { error: logos.runtime_control.error }
 
 logos.runtime_control.report_failure_request = {
     ? reason: logos.runtime_control.reason,
@@ -447,10 +442,12 @@ logos.runtime_control.update_permission_settings_request = {
     permissions: [* logos.runtime_control.permission_setting],
 }
 
-logos.runtime_control.update_permission_settings_response = {
-    target: logos.runtime.module_instance_address,
-    state: logos.runtime_control.permission_settings_state,
-}
+logos.runtime_control.update_permission_settings_response =
+    {
+        target: logos.runtime.module_instance_address,
+        state: logos.runtime_control.permission_settings_state,
+    } /
+    { error: logos.runtime_control.error }
 
 logos.runtime_control.permission_settings_changed_event = {
     target: logos.runtime.module_instance_address,
@@ -500,22 +497,26 @@ logos.runtime_control.update_configuration_request =
         action: "discard",
     }
 
-logos.runtime_control.update_configuration_response = {
-    target: logos.runtime.module_instance_address,
-    state_revision: uint64,
-    ? staged: logos.module_configuration.value_record,
-}
+logos.runtime_control.update_configuration_response =
+    {
+        target: logos.runtime.module_instance_address,
+        state_revision: uint64,
+        ? staged: logos.module_configuration.value_record,
+    } /
+    { error: logos.runtime_control.error }
 
 logos.runtime_control.apply_configuration_request = {
     target: logos.runtime.module_instance_address,
     expected_state_revision: uint64,
 }
 
-logos.runtime_control.apply_configuration_response = {
-    target: logos.runtime.module_instance_address,
-    state_revision: uint64,
-    applied_value_revision: uint64,
-}
+logos.runtime_control.apply_configuration_response =
+    {
+        target: logos.runtime.module_instance_address,
+        state_revision: uint64,
+        applied_value_revision: uint64,
+    } /
+    { error: logos.runtime_control.error }
 
 logos.runtime_control.configuration_state_changed_event = {
     target: logos.runtime.module_instance_address,

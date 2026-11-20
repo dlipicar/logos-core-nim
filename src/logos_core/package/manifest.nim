@@ -61,6 +61,9 @@ type
     artifact*: string ## the implementation artifact
     primaryContract*: Opt[CborValue] ## a `logos.schema_commitment`
     implements*: seq[CborValue] ## `logos.schema_commitment`s
+    extends*: seq[CborValue]
+      ## `logos.schema_commitment`s; parsed and ordered here, the extension
+      ## relation itself is checked by contract extension (PM l.355-360)
     requires*: seq[CborValue] ## `provider_requirement`s
     requestedPermissions*: seq[RequestedPermission]
     configuration*: Opt[ConfigurationDeclaration]
@@ -74,6 +77,14 @@ type
     package*: string
     kind*: RequirementKind
     version*: string
+    contracts*: seq[CborValue]
+      ## [SPEC PM §11] the `logos.schema_commitment`s it needs from the package
+
+  ContractDocument* = object
+    ## [SPEC PM §4] `logos.package_manifest.contract_document`.
+    commitment*: CborValue ## a `logos.schema_commitment`
+    schemaArtifact*: string
+    inputArtifacts*: seq[string] ## [IMPL; UF-15] kept as written
 
   Manifest* = object
     package*: string
@@ -81,6 +92,7 @@ type
     modules*: seq[ModuleDeclaration]
     variants*: seq[PackageVariant] ## in declared order: it decides selection
     dependencies*: seq[PackageDependency]
+    contractDocuments*: seq[ContractDocument]
     value*: CborValue ## the decoded manifest
     encoded*: seq[byte] ## its Logos deterministic-CBOR bytes (`manifest.cbor`)
 
@@ -136,9 +148,6 @@ func manifestContracts*(): ContractSet =
 
 func invalid(msg: string): PackageError =
   packageError(pecInvalidPackage, msg)
-
-func integrity(msg: string): PackageError =
-  packageError(pecArtifactIntegrity, msg)
 
 func pathText(path: seq[CborValue]): string =
   var s = ""
@@ -197,6 +206,7 @@ func toManifest(v: CborValue, encoded: seq[byte]): Manifest =
       artifact: x.text("artifact"),
       primaryContract: x.lookup("primary_contract"),
       implements: x.list("implements"),
+      extends: x.list("extends"),
       requires: x.list("requires"),
       value: x,
     )
@@ -248,8 +258,16 @@ func toManifest(v: CborValue, encoded: seq[byte]): Manifest =
         package: x.text("package"),
         kind: (if r.text("kind") == "exact": rkExact else: rkCompatible),
         version: r.text("version"),
+        contracts: x.list("contracts"),
       )
     )
+  for x in v.list("contract_documents"):
+    var d = ContractDocument(
+      commitment: x.field("commitment"), schemaArtifact: x.text("schema_artifact")
+    )
+    for a in x.list("input_artifacts"):
+      d.inputArtifacts.add(a.getText.get)
+    m.contractDocuments.add(d)
   m
 
 # Validation ------------------------------------------------------------------------
@@ -283,6 +301,14 @@ func checkArtifactPath*(path: string): Result[void, string] =
     return err("a parent-directory segment in an artifact path: " & path)
   ok()
 
+func inCommitmentOrder(commitments: openArray[CborValue]): bool =
+  ## [SPEC PM §4] Strictly increasing by the Logos deterministic-CBOR bytes of
+  ## each schema commitment: canonical order and no repeat.
+  var keys: seq[seq[byte]]
+  for c in commitments:
+    keys.add(encodeCbor(c))
+  keys.increasing
+
 func checkVersion(what, v: string): Result[SemVer, PackageError] =
   parseSemVer(v).mapErr(
     proc(e: string): PackageError =
@@ -307,7 +333,7 @@ func checkManifest*(m: Manifest): Result[void, PackageError] =
     for a in v.artifacts:
       ids.add(a.id)
       checkArtifactPath(a.path).isOkOr:
-        return err(integrity("variant " & v.id & ": " & error))
+        return err(invalid("variant " & v.id & ": " & error))
       where.mgetOrPut(a.id, @[]).add((vi, a.kind))
     if not ids.increasing:
       return err(
@@ -328,25 +354,45 @@ func checkManifest*(m: Manifest): Result[void, PackageError] =
     for (_, kind) in occurs:
       if kind != akModuleBinary:
         return err(
-          integrity(
+          invalid(
             "module " & d.module & ": artifact " & d.artifact & " has kind " & $kind
           )
         )
-    for field in ["implements", "requires", "requested_permissions"]:
+    for field in ["implements", "extends", "requires", "requested_permissions"]:
       let present = d.value.lookup(field)
       if present.isSome and present.get.items.len == 0:
         return err(invalid("module " & d.module & ": " & field & " is empty"))
-    var keys: seq[seq[byte]]
-    for c in d.implements:
-      keys.add(encodeCbor(c))
-    if not keys.increasing:
+    for (name, commitments) in [("implements", d.implements), ("extends", d.extends)]:
+      if not commitments.inCommitmentOrder:
+        return err(
+          invalid(
+            "module " & d.module & ": " & name &
+              " is not in commitment-byte order, or a commitment repeats"
+          )
+        )
+    # [SPEC PM §9 l.1142] An earlier contract needs one of the module's own.
+    if d.extends.len > 0 and d.primaryContract.isNone and d.implements.len == 0:
       return err(
         invalid(
-          "module " & d.module &
-            ": implements is not in commitment-byte order, or a commitment repeats"
+          "module " & d.module & ": extends with neither primary_contract nor implements"
         )
       )
-    keys.setLen(0)
+    # [IMPL-DECISION G392] (UF-38) An extended contract is not one the
+    # declaration provides: the Package Manager side of IF l.1712's identity.
+    var provided = initHashSet[seq[byte]]()
+    for c in d.implements:
+      provided.incl(encodeCbor(c))
+    if d.primaryContract.isSome:
+      provided.incl(encodeCbor(d.primaryContract.get))
+    for c in d.extends:
+      if encodeCbor(c) in provided:
+        return err(
+          invalid(
+            "module " & d.module &
+              ": an extends commitment is also its primary contract or an implements entry"
+          )
+        )
+    var keys: seq[seq[byte]]
     for r in d.requires:
       keys.add(encodeCbor(r.field("contract")))
     if not keys.increasing:
@@ -387,7 +433,7 @@ func checkManifest*(m: Manifest): Result[void, PackageError] =
               found = true
               if a.kind != kind:
                 return err(
-                  integrity(
+                  invalid(
                     "module " & d.module & ": artifact " & id & " has kind " & $a.kind &
                       ", not " & $kind
                   )
@@ -405,15 +451,67 @@ func checkManifest*(m: Manifest): Result[void, PackageError] =
   if m.value.lookup("dependencies").isSome and m.dependencies.len == 0:
     return err(invalid("the dependencies array is empty"))
   var deps: seq[string]
-  for d in m.dependencies:
+  let rawDependencies = m.value.list("dependencies")
+  for i, d in m.dependencies:
     deps.add(d.package)
     let v = ?checkVersion("the requirement of " & d.package, d.version)
     if d.kind == rkCompatible and v.isPrerelease:
       return err(
         invalid("a compatible requirement on " & d.package & " names a pre-release")
       )
+    # [SPEC PM §11 l.1214] non-empty and unique when present; [SPEC PM §4 l.350]
+    # in commitment-byte order
+    let listed = rawDependencies[i].lookup("contracts")
+    if listed.isSome and listed.get.items.len == 0:
+      return err(invalid("dependency " & d.package & ": contracts is empty"))
+    if not d.contracts.inCommitmentOrder:
+      return err(
+        invalid(
+          "dependency " & d.package &
+            ": contracts is not in commitment-byte order, or a commitment repeats"
+        )
+      )
   if not deps.increasing:
     return err(invalid("dependencies are not in name order, or a name repeats"))
+
+  # [SPEC PM §4 l.355] non-empty when present.
+  if m.value.lookup("contract_documents").isSome and m.contractDocuments.len == 0:
+    return err(invalid("the contract_documents array is empty"))
+  # [SPEC PM §4 l.350, l.355] in commitment-byte order, one entry per commitment
+  var documents: seq[CborValue]
+  for c in m.contractDocuments:
+    documents.add(c.commitment)
+  if not documents.inCommitmentOrder:
+    return err(
+      invalid(
+        "contract_documents are not in commitment-byte order, or a commitment repeats"
+      )
+    )
+  # [SPEC PM §4 l.356-357] Each entry's document and inputs are `schema`
+  # artifacts present in every variant (the document content is checked when
+  # the archive opens, PM l.358-360).
+  for c in m.contractDocuments:
+    for id in @[c.schemaArtifact] & c.inputArtifacts:
+      let occurs = where.getOrDefault(id)
+      for (vi, kind) in occurs:
+        if kind != akSchema:
+          return err(
+            invalid(
+              "contract document artifact " & id & " has kind " & $kind & " in variant " &
+                m.variants[vi].id
+            )
+          )
+      if occurs.len != m.variants.len:
+        var have = initHashSet[int]()
+        for (vi, _) in occurs:
+          have.incl(vi)
+        for vi, v in m.variants:
+          if vi notin have:
+            return err(
+              invalid(
+                "contract document artifact " & id & " is missing from variant " & v.id
+              )
+            )
   ok()
 
 proc decodeManifest*(data: openArray[byte]): Result[Manifest, PackageError] =
@@ -445,6 +543,14 @@ func checkIdentity*(m: Manifest, package, version: string): Result[void, Package
   ok()
 
 # The manifest value commitment ------------------------------------------------------
+
+func supportsManifestSchema*(c: ManifestCommitment): bool =
+  ## [SPEC PM §4 l.371-373, §4.3 l.565, §11 l.1217-1218] The commitment names the
+  ## manifest schema this revision supports: both of its roots are the pinned PM
+  ## §4 roots (l.368-369). [IMPL; P7 Q4] Any other pair is unsupported, a pair
+  ## with one pinned root among them; this revision lists no earlier roots.
+  c.schemaRoot.toHex == PackageManifestSchemaRoot and
+    c.schemaSubtreeRoot.toHex == PackageManifestSubtreeRoot
 
 func commitment*(m: Manifest): Result[ManifestCommitment, PackageError] =
   ## [SPEC PM §4] The value commitment of the decoded manifest: the commitment

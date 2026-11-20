@@ -58,9 +58,9 @@ proc summaryOf(
   LogosNSRuntimeControlGetExecutionSummaryResponse.decode(r.response).tryGet
 
 proc retireOf(
-    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string
+    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string, refusal = false
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "retire_module",
     encode(
@@ -70,6 +70,7 @@ proc retireOf(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc loaderOf(e: Engine): InstanceView =
   e.view(LoaderInstanceId).tryGet
@@ -150,13 +151,13 @@ suite "run.loader: the Loader instance (LOADER §1-§2; RUNTIME l.1635-1650) [IM
     let b = openEngine(cfg)
     check b.isErr and b.error.code == ecInvalidParams
 
-  test "[IMPL-DECISION G190] [IMPL-DECISION G61] a Loader that cannot be established fails the open with MODULE_ERROR, leaving nothing running":
+  test "[RUN-1201] [IMPL-DECISION G61] a Loader whose startup deadline passes fails the open with TIMEOUT, leaving nothing running":
     # The Loader's own startup deadline (G61, amended 2026-11-14) bounds its
     # start; one that passes at once cannot be met.
     var cfg = config()
     cfg.loaderStartupDeadline = initDuration(nanoseconds = 1)
     let r = openEngine(cfg)
-    check r.isErr and r.error.code == ecModule
+    check r.isErr and r.error.code == ecTimeout
     check r.error.message.startsWith("the Module Loader cannot start: startup-timeout")
     # The open released what it started: a new engine opens on the same
     # directories.
@@ -190,7 +191,7 @@ suite "run.loader: the Loader instance (LOADER §1-§2; RUNTIME l.1635-1650) [IM
     check e.loaderOf.state == msReady
     e.finish()
 
-  test "[IMPL-DECISION G61] [IMPL-DECISION G190] the Loader's startup deadline covers its binding checks":
+  test "[RUN-1201] [TXT-0315] [IMPL-DECISION G61] the Loader's startup deadline covers its binding checks: the open fails TIMEOUT (l.3955)":
     # The binding's `list_capabilities` is held until the deadline has passed:
     # the binding is not made, and the open fails once the call has returned
     # and the Loader is released. [IMPL] An attempt counts only if the call
@@ -212,7 +213,7 @@ suite "run.loader: the Loader instance (LOADER §1-§2; RUNTIME l.1635-1650) [IM
       openDone.store(true)
       joinThread(t)
       freeLoaderFaultBox(box)
-      check r.isErr and r.error.code == ecModule
+      check r.isErr and r.error.code == ecTimeout
       check r.error.message ==
         "the Module Loader cannot start: startup-timeout: the startup deadline passed"
       if stallSeen.load:
@@ -221,7 +222,7 @@ suite "run.loader: the Loader instance (LOADER §1-§2; RUNTIME l.1635-1650) [IM
       deadline = deadline * 2
     check stallSeen.load
 
-  test "[RUN-0639] [IMPL-DECISION G57] its summary is implementation-specific; what it realizes reports the strategy":
+  test "[RUN-1184] [IMPL-DECISION G57] its summary is implementation-specific; what it realizes reports the strategy":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient("c")
     check rc.summaryOf(e, LoaderInstanceId).selection.get.implementation.kind ==
@@ -235,7 +236,7 @@ suite "run.loader: realization through the bound Loader (RUNTIME l.1641; BOOTSTR
   teardown:
     leftover()
 
-  test "[RUN-0309] [RUN-0310] [BCP-0022] the Loader is bound first, then realizes the orchestration instance":
+  test "[RUN-0309] [RUN-0310] [BCP-0022] [TXT-0315] the Loader is bound first, then realizes the orchestration instance":
     let e = fixtureEngine(config())
     let v = e.bootstrap(
       @[
@@ -327,7 +328,7 @@ suite "run.loader: realization through the bound Loader (RUNTIME l.1641; BOOTSTR
     check e.journal(lmRealize).len == 0
     e.finish()
 
-  test "[IMPL-DECISION G191] a store re-establishes the Loader at every open, with the host's intent":
+  test "[RUN-1108] [IMPL-DECISION G191] a store re-establishes the Loader at every open, with the host's intent":
     var cfg = config()
     cfg.storeDir = Opt.some(work / "store-reopen")
     removeDir(cfg.storeDir.get)
@@ -350,7 +351,7 @@ suite "run.loader: classifications of a Loader realization (RUNTIME §9.3 l.3750
   teardown:
     leftover()
 
-  test "[RUN-1053] [LDR-0133] a typed Loader error is loader-<code>, a start that is answered, never NOT_AUTHORISED":
+  test "[RUN-1191] [LDR-0133] a typed Loader error is loader-<code>, a start that is answered, never NOT_AUTHORISED":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient("c")
     discard e.create(
@@ -486,7 +487,7 @@ suite "run.loader: shutdown (RUNTIME §10.2 l.3847-3864)":
     live = nil
     check e.close()
 
-  test "[R3] a release held past the shutdown grace: shutdown completes with MODULE_ERROR and the Loader stays until the release returns":
+  test "[R3] [RUN-1200] [TXT-0312] a release held past the shutdown grace: still stopping with cleanup-timeout, shutdown completes with MODULE_ERROR and the Loader stays until the release returns":
     var cfg = config()
     cfg.shutdownGrace = initDuration(milliseconds = 200)
     let e = fixtureEngine(cfg)
@@ -500,14 +501,17 @@ suite "run.loader: shutdown (RUNTIME §10.2 l.3847-3864)":
     # [SPEC RUNTIME l.3863; IF l.1997, l.1999] The Loader stays ready and
     # bound while its call runs; the engine cannot close.
     check e.loaderOf.state == msReady
+    check e.view("m").tryGet.state == msStopping
     check e.view("m").tryGet.failureOf == "cleanup-timeout"
     check e.tryClose().error.code == ecNotReady
     e.releaseLoaderStallForTests()
-    # The late reply establishes absence; then the Loader is released.
+    # The late reply establishes absence and completes the stop (l.576);
+    # then the Loader is released.
     check waitUntil(
       proc(): bool =
         e.loaderOf.state == msUnloaded
     )
+    check e.view("m").tryGet.state == msUnloaded
     check not e.cleanupPending("m")
     # The stored result does not change (RUN-0760).
     check e.awaitShutdown().error.message == r.error.message
@@ -604,7 +608,7 @@ suite "run.loader: resolving a lost Loader answer (RUNTIME l.3793; plan §2.9) [
     check not e.cleanupPending("m") and e.loaderOf.state == msReady
     e.finish()
 
-  test "[RUN-0689] a release whose invocation failed before it released: get_status finds the realization, cleanup-failed":
+  test "[RUN-0689] [TXT-0285] [TXT-0291] a release whose invocation failed before it released: get_status finds the realization, cleanup-failed":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     e.faults(LoaderFaults(failInvocation: {lmRelease}))
@@ -615,6 +619,36 @@ suite "run.loader: resolving a lost Loader answer (RUNTIME l.3793; plan §2.9) [
     # Not a Loader failure: it stays bound and realizes others.
     check e.loaderOf.state == msReady
     discard e.started(meter(), "n")
+    e.clearLoaderFaultsForTests()
+    e.confirmTerminationForTests()
+    e.finish()
+
+  test "[TXT-0291] [RUN-1092] a cleanup that fails after the stop deadline passed: stopping with cleanup-timeout, then error with cleanup-failed":
+    var cfg = config()
+    cfg.stopDeadline = initDuration(milliseconds = 150 * Slow)
+    let e = fixtureEngine(cfg)
+    discard e.started(meter(), "m")
+    let before = e.changes()[^1].serial
+    # The release fails before any work; the status query that resolves it
+    # is held past the stop deadline.
+    e.faults(LoaderFaults(failInvocation: {lmRelease}, stall: {lmGetStatus}))
+    let v = e.stop("m").tryGet
+    check v.state == msStopping and v.failureOf == "cleanup-timeout"
+    e.releaseLoaderStallForTests()
+    # [SPEC RUNTIME l.577] The status shows the realization still there: the
+    # cleanup failed, and the stop ends in `error`.
+    check waitUntil(
+      proc(): bool =
+        e.view("m").tryGet.state == msError
+    )
+    check e.view("m").tryGet.failureOf == "cleanup-failed"
+    var states: seq[ModuleState]
+    for c in e.changes():
+      if c.serial > before and c.view.instance == "m":
+        states.add(c.view.state)
+    # The stop's accept (intent `stopped`, state kept) comes first.
+    check states == @[msReady, msStopping, msStopping, msError]
+    check e.cleanupPending("m")
     e.clearLoaderFaultsForTests()
     e.confirmTerminationForTests()
     e.finish()
@@ -637,15 +671,21 @@ suite "run.loader: resolving a lost Loader answer (RUNTIME l.3793; plan §2.9) [
     check e.start("m").error.code == ecNotReady
     check e.recover("m", e.view("m").tryGet.execution.revision).error.code == ecNotReady
     check rc.retireOf(e, "m").code == ecNotReady
-    # [R4] A stop is accepted: the intent is cancelled, nothing is released.
-    let stopped = e.stop("m").tryGet
-    check stopped.state == msError and stopped.execution.intent == inStopped
+    # [RUN-1110] A stop is accepted: `stopping`, the intent cancelled,
+    # nothing released; it waits for the cleanup.
+    var t: Thread[(Engine, string)]
+    check e.stopping("m", t)
+    let stopped = e.view("m").tryGet
+    check stopped.execution.intent == inStopped
     check e.journal(lmRelease).len == 0
     # The Loader stays bound: it owns that realization, and realizes others.
     check e.loaderOf.state == msReady
     check e.stop(LoaderInstanceId).error.code == ecNotReady
     discard e.started(meter(), "n")
+    # The protected mechanism's confirmation completes the stop.
     e.confirmTerminationForTests()
+    joinThread(t)
+    check stopReply.load == ord(msUnloaded)
     check not e.cleanupPending("m")
     e.finish()
 
@@ -726,31 +766,111 @@ suite "run.loader: Loader loss (RUNTIME l.3813-3825; plan §2.11) [IMPL-DECISION
     live = nil
     check e.close(initDuration(seconds = 10 * Slow))
 
-  test "[R4] a stop of an instance the lost Loader owned is accepted: intent cancelled, still error, nothing released":
+  test "[RUN-1110] [TXT-0304] [TXT-0579] [TXT-0288] a stop of an instance the lost Loader owned: stopping, intent cancelled, its classification kept, nothing released; the confirmed end completes it":
     let e = fixtureEngine(lossConfig())
     discard e.started(meter(), "m")
     e.faults(LoaderFaults(reportFailure: true))
-    let v = e.stop("m").tryGet
-    check v.state == msError and v.execution.intent == inStopped
+    let before = e.changes()[^1].serial
+    var t: Thread[(Engine, string)]
+    check e.stopping("m", t)
+    let v = e.view("m").tryGet
+    check v.execution.intent == inStopped
+    # [SPEC RUNTIME l.3611] The failure stays until the stop completes.
     check v.failure.get.reason == "its Module Loader failed"
     check e.journal(lmRelease).len == 0 and e.cleanupPending("m")
+    # [RUN-1110] No second release while the cleanup is unresolved; the
+    # protected mechanism's confirmation completes the stop (l.576).
     e.confirmTerminationForTests()
+    joinThread(t)
+    check stopReply.load == ord(msUnloaded)
+    check e.journal(lmRelease).mapIt(it.instance) == @["m"]
+    check e.view("m").tryGet.failure.isNone
+    var states: seq[ModuleState]
+    for c in e.changes():
+      if c.serial > before and c.view.instance == "m":
+        states.add(c.view.state)
+    # The stop's accept (intent `stopped`, state kept) comes first.
+    check states == @[msError, msStopping, msUnloaded]
     e.finish()
 
-  test "[IMPL-DECISION G252] an invalid realize response fails the Loader; the realization it made is orphaned, never used":
+  test "[TXT-0308] [IMPL-DECISION G360] an authority ending of a Loader that owns realizations is its failure: the Loader error with that classification, what it owns error and unresolved, its routes failed, termination requested":
+    let e = fixtureEngine(lossConfig())
+    discard e.started(meter(), "m")
+    let (_, rc) = e.startClient("c")
+    let route = rc.routeId("k")
+    discard e.stopForAuthority(LoaderInstanceId, fkAuthorityRevoked).tryGet
+    let l = e.loaderOf
+    check l.state == msError and l.failureOf == "authority-revoked"
+    for id in ["m", "c"]:
+      let v = e.view(id).tryGet
+      check v.state == msError and v.failure.get.reason == "its Module Loader failed"
+      check e.cleanupPending(id)
+    let rec = e.routes().filterIt(it.route == route)
+    check rec.len == 1 and
+      rec[0].state.kind == LogosNSRuntimeControlRouteStateKind.Failed
+    check e.start("m").error.code == ecNotReady
+    # Nothing went through a Loader leaving `ready`.
+    check e.journal(lmRelease).len == 0
+    check terminations.load == 1 and terminationNames.load == 2
+    e.confirmTerminationForTests()
+    check e.journal(lmRelease).mapIt(it.instance).sorted == @["c", "m"]
+    check not e.cleanupPending("m")
+    e.finish()
+
+  test "[TXT-0309] [IMPL-DECISION G360] an invalid realize response is a failed operation of a ready Loader: get_status finds what it made, which is released; the Loader stays ready and bound, and no termination is requested":
     let e = fixtureEngine(lossConfig())
     discard e.create(meter(), "m").tryGet
     e.faults(LoaderFaults(garble: {lmRealize}))
     let v = e.start("m").tryGet
-    check v.state == msError and v.failure.get.reason == "its Module Loader failed"
-    let l = e.loaderOf
-    check l.state == msError and l.failureOf == "other"
-    check l.failure.get.reason == "the Module Loader gave an invalid response"
+    check v.state == msError and v.failureOf == "other"
+    check v.failure.get.reason == "the realize call failed"
     check e.diagnostics().anyIt("invalid response" in it)
-    check e.journal(lmRealize).len == 1 and e.journal(lmRelease).len == 0
-    check terminations.load == 1
-    e.confirmTerminationForTests()
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("m")
+    )
+    check e.journal(lmRealize).len == 1
+    check e.journal(lmGetStatus).mapIt(it.instance) == @["m"]
     check e.journal(lmRelease).mapIt(it.instance) == @["m"]
+    let l = e.loaderOf
+    check l.state == msReady and l.failure.isNone
+    check terminations.load == 0
+    check e.start("m").tryGet.state == msReady
+    e.finish()
+
+  test "[TXT-0309] [IMPL-DECISION G360] an invalid release response: get_status finds nothing, so the stop completes; the Loader stays ready":
+    let e = fixtureEngine(lossConfig())
+    discard e.started(meter(), "m")
+    e.faults(LoaderFaults(garble: {lmRelease}))
+    check e.stop("m").tryGet.state == msUnloaded
+    let asked = e.journal(lmGetStatus)
+    check asked.len == 1 and asked[0].instance == "m" and asked[0].realization.len > 0
+    check e.diagnostics().anyIt("invalid response" in it)
+    check not e.cleanupPending("m") and e.loaderOf.state == msReady
+    check terminations.load == 0
+    check e.start("m").tryGet.state == msReady
+    e.finish()
+
+  test "[TXT-0309] [RUN-1067] [IMPL-DECISION G360] an invalid get_status response leaves the question with its instance: error, unknown, its cleanup unresolved; the Loader stays ready and bound":
+    let e = fixtureEngine(lossConfig())
+    let (_, rc) = e.startClient("c")
+    discard e.create(meter(), "m").tryGet
+    e.faults(LoaderFaults(loseReply: {lmRealize}, garble: {lmGetStatus}))
+    let v = e.start("m").tryGet
+    check v.state == msError and v.failureOf == "other"
+    check v.failure.get.reason ==
+      "the Module Loader's answer was lost and could not be resolved"
+    check rc.summaryOf(e, "m").realization.kind ==
+      LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown
+    check e.diagnostics().anyIt("invalid response" in it)
+    check e.cleanupPending("m") and e.journal(lmRelease).len == 0
+    # [G360] Not a Loader failure: it stays bound and realizes others; the
+    # instance's cleanup stays unresolved in this process (the TF-57 interim).
+    check e.loaderOf.state == msReady
+    check terminations.load == 0
+    discard e.started(meter(), "n")
+    e.confirmTerminationForTests()
+    check not e.cleanupPending("m")
     e.finish()
 
   test "[RUN-1068] a Loader that fails while a realize is held: the late realization is recorded unresolved, never used":

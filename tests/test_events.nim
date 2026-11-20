@@ -13,6 +13,9 @@
 import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
+import ../src/logos_core/runtime/[bindings, callside, events, native, realizer]
+from ../src/logos_core/runtime/rcevents import setReportDelayForTests
+import logos_sdk/hash/hashinput
 import logos_sdk/abi/types
 import logos_sdk/cbor
 import logos_sdk/commitment
@@ -133,8 +136,60 @@ proc reaches(s: ptr Seen, n: int): bool =
   )
   s.count.load == n
 
+type Ends = object ## [G225] What a handle's subscription-end handler saw.
+  count: Atomic[int] ## reports that returned
+  id: Atomic[uint64]
+  reason: Atomic[int]
+  thread: Atomic[int]
+  running: Atomic[bool]
+  hold: Atomic[bool] ## the handler waits while it is true
+
+var ends: array[2, Ends]
+
+proc clearEnds() =
+  for e in ends.mitems:
+    e.count.store(0)
+    e.id.store(0)
+    e.reason.store(0)
+    e.thread.store(0)
+    e.running.store(false)
+    e.hold.store(false)
+
+proc onSubEnd(
+    id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  let e = cast[ptr Ends](userData)
+  e.running.store(true)
+  e.thread.store(getThreadId())
+  while e.hold.load:
+    sleep(1)
+  e.id.store(uint64(id))
+  e.reason.store(int(reason))
+  e.count += 1
+  e.running.store(false)
+
+proc observeSubEnd(h: var LogosRouteHandle, e: ptr Ends): ErrorCode =
+  toResult(h.vtable.observeSubscriptionEnd(addr h, onSubEnd, e)).code
+
+proc reported(e: ptr Ends, n: int): bool =
+  ## The subscription-end handler has returned `n` times. A report runs on a
+  ## Runtime event worker on every route kind, so this always waits for it.
+  discard waitUntil(
+    proc(): bool =
+      e.count.load >= n
+  )
+  settled()
+  e.count.load == n
+
 proc payloadOf(s: var Seen): seq[byte] =
   s.payload[0 ..< s.payloadLen.load]
+
+proc refusal(r: Result[MeterReadResponse, InvocationFailure]): Opt[ErrorCode] =
+  ## The code of a publication the meter's channel 17 reports refused.
+  if r.isOk and r.get.label == "refused":
+    errorCode(int64(r.get.reading.value))
+  else:
+    Opt.none(ErrorCode)
 
 proc subscribe(
     h: var LogosRouteHandle,
@@ -193,6 +248,8 @@ type Job = object
   id: LogosSubscriptionId
   code: Atomic[int]
   done: Atomic[bool]
+  doneAt: ptr Atomic[int] ## a handler's returned invocations, read on return
+  doneSeen: Atomic[int]
 
 proc reads(j: ptr Job) {.thread.} =
   var code = 0
@@ -205,6 +262,8 @@ proc reads(j: ptr Job) {.thread.} =
 
 proc unsubscribes(j: ptr Job) {.thread.} =
   j.code.store(int(j.route.vtable.unsubscribe(j.route, j.id).code))
+  if j.doneAt != nil:
+    j.doneSeen.store(j.doneAt[].load)
   j.done.store(true)
 
 proc releases(j: ptr Job) {.thread.} =
@@ -221,7 +280,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
   setup:
     clearAll()
 
-  test "[IFC-0174] [IFC-0175] [RUN-0191] [RUN-0549] subscribe resolves the event under the selected contract and the route's subscribe scope":
+  test "[IFC-0174] [IFC-0175] [RUN-0191] [RUN-0549] [TXT-0096] subscribe resolves the event under the selected contract and the route's subscribe scope":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -234,7 +293,14 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     var wide = rc.handle(listed.routesOf.routes[0].route)
     var id: LogosSubscriptionId
     check all.subscribe(addr seen[0], id, "meter.unknown_event") == ecNotAuthorised
-    check all.subscribe(addr seen[0], id, "meter.reading") == ecNotAuthorised
+    # [SPEC INTERFACE l.2156; DECISIONS I106] A name that fails §1.5 is
+    # malformed, not unknown: no `_event` suffix, no namespace, a capital,
+    # doubled underscores, a byte outside ASCII.
+    for bad in [
+      "meter.reading", "changed_event", "Meter.changed_event", "meter.x__y_event",
+      "meter._event", "meter.chang\xC3\xA9d_event",
+    ]:
+      check all.subscribe(addr seen[0], id, bad) == ecInvalidParams
     check narrow.subscribe(addr seen[0], id) == ecNotAuthorised
     check wide.subscribe(addr seen[0], id) == ecOk
     check all.subscribe(addr seen[1], id) == ecOk
@@ -267,7 +333,7 @@ suite "run.events: route subscriptions (INTERFACE §2.5; RUNTIME §4.4)":
     h.release()
     e.finish()
 
-  test "[IFC-0186] [IFC-0187] [IFC-0652] [IFC-0653] [IFC-0654] unsubscribe waits for a handler on another thread, returns at once from its own handler, and a failure changes nothing":
+  test "[IFC-0962] [IFC-0187] [IFC-0652] [IFC-0653] [IFC-0654] [TXT-0081] unsubscribe waits for a handler on another thread, returns at once from its own handler, and a failure changes nothing":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -430,7 +496,7 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     h.release()
     e.finish()
 
-  test "[RUN-0243] [RUN-0244] [RUN-0245] [IFC-0184] a publication that cannot be validated is dropped with a diagnostic; a valid one arrives byte for byte":
+  test "[RUN-0243] [RUN-0244] [RUN-0245] [IFC-0184] [TXT-0099] [TXT-0077] a publication that cannot be validated is refused with a diagnostic; a valid one arrives byte for byte":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     resetDeferred()
     discard e.started(dmeter())
@@ -439,24 +505,98 @@ suite "run.events: publication (RUNTIME §7.3, §7.4; INTERFACE §2.8)":
     var id: LogosSubscriptionId
     check h.subscribe(addr seen[0], id) == ecOk
     let valid = encodeCbor(parseDiag("{\"value\": 7}").get)
-    publishRaw(cstring(Changed), valid)
+    check publishRaw(cstring(Changed), valid) == CErrorCode(ord(ecOk))
     check reaches(addr seen[0], 1)
     check seen[0].payloadOf == valid
-    publishRaw(cstring(Changed), encodeCbor(parseDiag("{\"value\": \"seven\"}").get))
-    publishRaw(cstring(Changed), encodeCbor(parseDiag("[7]").get))
-    publishRaw(cstring(Changed), [0xA1'u8, 0x65]) # truncated
-    publishRaw(cstring(Changed), [])
-    publishRaw(cstring(""), valid)
-    publishRaw(nil, valid)
+    # [SPEC INTERFACE §5.2 l.3351; RUNTIME l.1148; DECISIONS I106] The
+    # publisher's own result, before any subscriber route: data that is not a
+    # value of the event's type, an event its contracts do not declare, a
+    # malformed name, no payload.
+    let refused = CErrorCode(ord(ecInvalidParams))
+    check publishRaw(
+      cstring(Changed), encodeCbor(parseDiag("{\"value\": \"seven\"}").get)
+    ) == refused
+    check publishRaw(cstring(Changed), encodeCbor(parseDiag("[7]").get)) == refused
+    check publishRaw(cstring(Changed), [0xA1'u8, 0x65]) == refused # truncated
+    check publishRaw(cstring("meter.unknown_event"), valid) == refused
+    check publishRaw(cstring(Changed), []) == refused
+    check publishRaw(cstring(""), valid) == refused
+    check publishRaw(nil, valid) == refused
     settled()
     check seen[0].count.load == 1
     check e.published("no payload")
-    check e.published("was not delivered on route")
-    check e.published("was dropped")
+    check e.published("is not declared by the publisher's contracts")
+    check not e.published("was not delivered on route")
+    check e.published("was refused")
     h.release()
     e.finish()
 
-  test "[RUN-0819] [CAP-0288] [CAP-0289] [IMPL-DECISION G175] delivery is authorized for each subscriber route: publish-event and subscribe-event, and both event lists":
+  test "[TXT-0099] [TXT-0077] the publish callback's result: an undeclared event and a nonconforming payload are INVALID_PARAMS, a declared valid one LOGOS_OK; it reports no delivery":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var id: LogosSubscriptionId
+    check h.subscribe(addr seen[0], id) == ecOk
+    # Channel 26: bit 0 the undeclared event refused, bit 1 the text value
+    # refused, bit 2 the valid one taken.
+    let r = h.read(26)
+    check r.isOk and r.get.reading.value == 7
+    check reaches(addr seen[0], 1)
+    settled()
+    check seen[0].count.load == 1
+    check seen[0].payloadOf == encodeCbor(parseDiag("{\"value\": 260}").get)
+    check e.published(
+      "meter.unknown_event is not declared by the publisher's contracts"
+    )
+    h.release()
+    e.finish()
+
+  when not declared(transportParity):
+    test "[TXT-0099] [IMPL-DECISION I106] the publisher's contracts are its primary and every implemented interface: an interface's event, an interface-only provider, a module with none":
+      let e = fixtureEngine(config())
+      let
+        watchIface = "_interface = \"watch\"\nwatch.tick_event = {\n  n: uint64,\n}\n"
+        watchRoot = acceptContractSet(watchIface).get.primary.root
+        watchModule =
+          "_module = \"watcher\"\n_implements = [\n  h'" &
+          watchRoot.mapIt(it.toHex(2)).join.toLowerAscii &
+          "',\n]\nwatcher.alarm_event = {}\n"
+        tick = encodeCbor(parseDiag("{\"n\": 1}").get)
+        empty = encodeCbor(parseDiag("{}").get)
+      proc declaring(b: ModuleBinding): ptr AttemptServices =
+        result = newAttemptServices(e, "w", "a")
+        var services = InitServices()
+        services.fill(result)
+        check declareContracts(services, NativeBinding(provider: true, contracts: b)).isOk
+
+      # The primary contract and the interface it implements declare an event
+      # each; `extends` adds none.
+      let full =
+        declaring(acceptBinding("watcher", Opt.some(watchModule), [watchIface]).get)
+      check full.publishedBy("watch.tick_event", tick).isOk
+      check full.publishedBy("watcher.alarm_event", empty).isOk
+      check full.publishedBy("watch.tick_event", empty).error.code == ecInvalidParams
+      check full.publishedBy("watch.tock_event", tick).error.code == ecInvalidParams
+      # A provider with no primary contract: its interface's event only.
+      let only = declaring(acceptBinding("ticker", Opt.none(string), [watchIface]).get)
+      check only.publishedBy("watch.tick_event", tick).isOk
+      check only.publishedBy("watcher.alarm_event", empty).isErr
+      # A module with no provider contract declares no event; the callback
+      # refuses before the Runtime thread hears of the publication.
+      let none = newAttemptServices(e, "c", "a")
+      check none.publishedBy("watch.tick_event", tick).error.code == ecInvalidParams
+      check events.publishOp(
+        none,
+        cstring("watch.tick_event"),
+        cast[ptr UncheckedArray[uint8]](unsafeAddr tick[0]),
+        csize_t(tick.len),
+      ) == CErrorCode(ord(ecInvalidParams))
+      for s in [full, only, none]:
+        freeAttemptServices(s)
+      e.finish()
+
+  test "[RUN-0819] [CAP-0288] [CAP-0289] [RUN-1094] [IMPL-DECISION G175] delivery is authorized for each subscriber route: publish-event and subscribe-event, and both event lists":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     resetDeferred()
     let m = e.started(dmeter())
@@ -653,8 +793,8 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     var h = rc.handle(r.routesOf.routes[0].route)
     var a: LogosSubscriptionId
     check h.subscribe(addr seen[0], a) == ecOk
-    # The meter returns the publish failure as its own.
-    check h.read(17).error.code == ecNotAuthorised
+    # The meter reports the publication's code (a provider may not return it).
+    check h.read(17).refusal == Opt.some(ecNotAuthorised)
     settled()
     check seen[0].count.load == 0
     h.release()
@@ -674,8 +814,8 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     check h.subscribe(addr seen[0], a) == ecOk
     check h.subscribe(addr seen[1], b) == ecOk
     seen[0].closeFrom(rc, route)
-    # [G174] The call itself completes; the meter returns publish's NOT_READY.
-    check h.read(17).error.code == ecNotReady
+    # [G174] The call itself completes; the meter reports publish's NOT_READY.
+    check h.read(17).refusal == Opt.some(ecNotReady)
     check seen[0].count.load == 1
     check seen[1].count.load == 0
     h.release()
@@ -721,12 +861,503 @@ suite "run.events: invocation-scoped publication (RUNTIME §7.3.1; INTERFACE §2
     let (_, rd) = d.startClient("denied")
     var k = rd.handle(rd.routeId("k"))
     check k.subscribe(addr seen[1], a) == ecOk
-    # The meter returns the publication's NOT_AUTHORISED as its own.
-    check k.read(17).error.code == ecNotAuthorised
+    # The meter reports the publication's NOT_AUTHORISED.
+    check k.read(17).refusal == Opt.some(ecNotAuthorised)
     settled()
     check seen[1].count.load == 0
     k.release()
     d.finish()
+
+# Queued delivery (G176) ---------------------------------------------------------------
+
+type Trace = object
+  ## [G176] What one subscription's handler saw, in the order it began.
+  started: Atomic[int] ## invocations begun
+  done: Atomic[int] ## invocations that returned
+  inside: Atomic[int]
+  current: Atomic[int] ## the thread of the latest invocation begun
+  overlaps: Atomic[int] ## invocations begun while another thread's was active
+  values: array[16, int] ## each invocation's `value` (a payload `{"value": n}`)
+  threads: array[16, int] ## and its thread
+  hold: Atomic[bool] ## an invocation waits while it is true
+  nestOf: array[24, int]
+    ## > 0: the invocation of value `v` publishes `nestOf[v]` when let go,
+    ## set before the publications
+  nestCode: array[24, int] ## the nested publication of `n`: its result
+  afterNest: array[24, int] ## and the invocations returned when it did
+  partner: ptr Trace ## [TF-21] the other crossing handler
+  holding: Atomic[bool] ## the first invocation is inside, crossing
+  sawPartner: Atomic[bool] ## it found its partner inside too
+
+var traces: array[2, Trace]
+
+proc clearTraces() =
+  for t in traces.mitems:
+    t.started.store(0)
+    t.done.store(0)
+    t.inside.store(0)
+    t.current.store(0)
+    t.overlaps.store(0)
+    t.hold.store(false)
+    for v in 0 ..< t.nestOf.len:
+      t.nestOf[v] = 0
+      t.nestCode[v] = -1
+      t.afterNest[v] = -1
+    t.partner = nil
+    t.holding.store(false)
+    t.sawPartner.store(false)
+
+proc valuePayload(n: int): seq[byte] =
+  ## `{"value": n}` for n < 24, in deterministic CBOR.
+  @[0xA1'u8, 0x65, byte('v'), byte('a'), byte('l'), byte('u'), byte('e'), byte(n)]
+
+proc onTrace(
+    name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  let t = cast[ptr Trace](userData)
+  # Same-thread re-entry through nested publication is no overlap (l.1404).
+  if t.inside.fetchAdd(1) > 0 and t.current.load != getThreadId():
+    t.overlaps += 1
+  t.current.store(getThreadId())
+  let i = t.started.fetchAdd(1)
+  let v = int(data[int(len) - 1])
+  if i < t.values.len:
+    t.values[i] = v
+    t.threads[i] = getThreadId()
+  while t.hold.load:
+    sleep(1)
+  if v < t.nestOf.len and t.nestOf[v] > 0:
+    let n = t.nestOf[v]
+    let code = publishRaw(cstring(Changed), valuePayload(n))
+    t.nestCode[n] = int(code)
+    t.afterNest[n] = t.done.load
+  if i == 0:
+    if t.partner != nil:
+      # [TF-21] Inside, wait for the partner to be inside its own handler,
+      # then publish into both subscriptions.
+      t.holding.store(true)
+      let until = getMonoTime() + initDuration(seconds = 5)
+      while not t.partner.holding.load and getMonoTime() < until:
+        sleep(1)
+      t.sawPartner.store(t.partner.holding.load)
+      discard publishRaw(cstring(Changed), valuePayload(9))
+  t.inside -= 1
+  t.done += 1
+
+proc subscribeTrace(
+    h: var LogosRouteHandle, t: ptr Trace, id: var LogosSubscriptionId
+): ErrorCode =
+  toResult(h.vtable.subscribe(addr h, cstring(Changed), onTrace, t, addr id)).code
+
+type Pub = object
+  value: int
+  code: Atomic[int]
+  done: Atomic[bool]
+
+proc publishes(p: ptr Pub) {.thread.} =
+  p.code.store(int(publishRaw(cstring(Changed), valuePayload(p.value))))
+  p.done.store(true)
+
+proc publishedOk(n: int): bool =
+  publishRaw(cstring(Changed), valuePayload(n)) == CErrorCode(ord(ecOk))
+
+suite "run.events: routes to an earlier contract (RUNTIME §8 l.1347; INTERFACE §1.2) [IMPL-DECISION G394]":
+  setup:
+    clearAll()
+
+  test "[TXT-0551] a route to an earlier view resolves only that contract's events: A2 refuses the event it drops and delivers the one it keeps, A1 delivers both; the provider publishes under B (RUNTIME l.1347; G394 r16)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    discard e.started(relayRecord(), "r")
+    let (_, rc) = e.startClient()
+    var (c1, a1) = rc.relayHandle("a1", relayA1Root)
+    var (c2, a2) = rc.relayHandle("a2", relayA2Root)
+    require c1 == ecOk and c2 == ecOk
+    var id: LogosSubscriptionId
+    check a2.subscribe(addr seen[0], id, ClearedDecl) == ecNotAuthorised
+    check a2.subscribe(addr seen[0], id, ChangedDecl) == ecOk
+    check a1.subscribe(addr seen[1], id, ChangedDecl) == ecOk
+    check a1.subscribe(addr seen[2], id, ClearedDecl) == ecOk
+    check relayPublish(ChangedDecl, 4) == CErrorCode(ord(ecOk))
+    check relayPublish(ClearedDecl, 5) == CErrorCode(ord(ecOk))
+    check reaches(addr seen[0], 1)
+    check reaches(addr seen[1], 1)
+    check reaches(addr seen[2], 1)
+    settled()
+    check seen[0].count.load == 1
+    check seen[0].payloadOf == encodeCbor(cborMap((cbor("channel"), cbor(4'u64))))
+    check seen[2].payloadOf == encodeCbor(cborMap((cbor("channel"), cbor(5'u64))))
+    a1.release()
+    a2.release()
+    e.finish()
+
+suite "run.events: queued delivery (INTERFACE §2.5 l.1402-1408, l.1469-1470; G176)":
+  setup:
+    clearAll()
+    clearTraces()
+    clearEnds()
+    holdQueueBoundForTests(false)
+
+  test "[IFC-0960] [IFC-0961] [IFC-0280] [IFC-0279] [IFC-0181] [IFC-0182] [IMPL-DECISION G176] a publication reaching a handler active on another thread queues a copy and returns; that thread runs the queue in publication order before it lets go, and a nested publication behind it runs the queue up to its own handler before it returns":
+    # [plan §2.13, difference 5] Over local transport handlers run on event
+    # workers: no publication reaches a handler on another publishing thread.
+    directOnly()
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    resetDeferred()
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var id: LogosSubscriptionId
+    check h.subscribeTrace(addr traces[0], id) == ecOk
+    traces[0].hold.store(true)
+    traces[0].nestOf[1] = 4
+    var first = Pub(value: 1)
+    var t: Thread[ptr Pub]
+    createThread(t, publishes, addr first)
+    check waitUntil(
+      proc(): bool =
+        traces[0].started.load == 1
+    )
+    # Two more publications from this thread: each returns LOGOS_OK at once,
+    # its delivery queued while the handler is held on `t` (IF l.1405).
+    check publishedOk(2)
+    check publishedOk(3)
+    check traces[0].started.load == 1
+    check not first.done.load
+    traces[0].hold.store(false)
+    joinThread(t)
+    # `t`'s publication returned only after it ran the queue (l.1406-1407).
+    # The handler's own nested publication (4) came after 2 and 3 were
+    # queued: it took its place behind them and ran 2, 3 and then its own
+    # handler before it returned (l.1402, l.1918-1920; P3 §10.1), with the
+    # handler of 1 still active.
+    check first.code.load == ord(ecOk)
+    check traces[0].done.load == 4
+    check traces[0].values[0 .. 3] == @[1, 2, 3, 4]
+    check traces[0].nestCode[4] == ord(ecOk)
+    check traces[0].afterNest[4] == 3
+    for i in 1 .. 3:
+      check traces[0].threads[i] == traces[0].threads[0]
+    check traces[0].threads[0] != getThreadId()
+    check traces[0].overlaps.load == 0
+    # Nothing waits now: a publication from this thread runs here, before
+    # publish returns (IFC-0280).
+    check publishedOk(5)
+    check traces[0].done.load == 5
+    check traces[0].threads[4] == getThreadId()
+    h.release()
+    e.finish()
+
+  test "[IFC-0181] [IFC-0279] [IFC-0280] [IMPL-DECISION G176] nested publications behind queued deliveries, one inside the other, run in publication order, each handler before its own publish returns (P3 §10.1)":
+    directOnly() # as above
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    resetDeferred()
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var id: LogosSubscriptionId
+    check h.subscribeTrace(addr traces[0], id) == ecOk
+    # 1 runs on `t`, 2 and 3 queue behind it; the handler of 1 publishes 4,
+    # which runs 2, whose handler publishes 5. 5 runs 3, then 4 for the
+    # publication below it, then itself; 4 then finds its own begun.
+    traces[0].hold.store(true)
+    traces[0].nestOf[1] = 4
+    traces[0].nestOf[2] = 5
+    var first = Pub(value: 1)
+    var t: Thread[ptr Pub]
+    createThread(t, publishes, addr first)
+    check waitUntil(
+      proc(): bool =
+        traces[0].started.load == 1
+    )
+    check publishedOk(2)
+    check publishedOk(3)
+    traces[0].hold.store(false)
+    joinThread(t)
+    check first.code.load == ord(ecOk)
+    check traces[0].done.load == 5
+    check traces[0].values[0 .. 4] == @[1, 2, 3, 4, 5]
+    for i in 1 .. 4:
+      check traces[0].threads[i] == traces[0].threads[0]
+    check traces[0].overlaps.load == 0
+    # When 5 returned, 3, 4 and 5 had returned (1 and 2 still active); when
+    # 4 returned, 2 to 5 had.
+    check traces[0].nestCode[5] == ord(ecOk)
+    check traces[0].afterNest[5] == 3
+    check traces[0].nestCode[4] == ord(ecOk)
+    check traces[0].afterNest[4] == 4
+    h.release()
+    e.finish()
+
+  test "[IFC-0782] [IFC-0181] [IMPL-DECISION G176] a scoped event from a nested call behind queued deliveries is delivered while its call is open (P3 §10.1)":
+    directOnly() # as above
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let route = rc.routeId("k")
+    var h = rc.handle(route)
+    var other = rc.handle(route)
+    var id: LogosSubscriptionId
+    check h.subscribe(addr seen[0], id) == ecOk
+    # An ordinary publication (channel 15) holds the handler on `t`; once let
+    # go, the handler calls the provider through `h` on channel 17, which
+    # publishes into that call's destination: this subscription.
+    seen[0].hold.store(true)
+    seen[0].callRoute = addr h
+    seen[0].callChannel = 17
+    var pub = Job(route: addr other, channel: 15, times: 1)
+    var t: Thread[ptr Job]
+    createThread(t, reads, addr pub)
+    check waitUntil(
+      proc(): bool =
+        seen[0].inside.load == 1
+    )
+    # A second ordinary publication from this thread queues behind it.
+    check other.read(15).isOk
+    check seen[0].count.load == 0
+    seen[0].hold.store(false)
+    joinThread(t)
+    # The scoped event joined the queue behind the second publication and
+    # ran inside the nested call, before it returned: admitted while its
+    # call was open (RUNTIME l.1196-1200), so all three were delivered.
+    check pub.code.load == 0
+    check seen[0].callCode.load == 0
+    check seen[0].count.load == 3
+    check seen[0].overlaps.load == 0
+    other.release()
+    h.release()
+    e.finish()
+
+  test "[TXT-0082] [IFC-0187] [IMPL-DECISION G176] deactivation discards the queued deliveries; unsubscribe from another thread waits only for the active invocation":
+    directOnly() # as above
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    resetDeferred()
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var id: LogosSubscriptionId
+    check h.subscribeTrace(addr traces[0], id) == ecOk
+    traces[0].hold.store(true)
+    var first = Pub(value: 1)
+    var t: Thread[ptr Pub]
+    createThread(t, publishes, addr first)
+    check waitUntil(
+      proc(): bool =
+        traces[0].started.load == 1
+    )
+    check publishedOk(2)
+    check publishedOk(3)
+    var unsub = Job(route: addr h, id: id)
+    var u: Thread[ptr Job]
+    createThread(u, unsubscribes, addr unsub)
+    check unsub.stillRunning()
+    traces[0].hold.store(false)
+    joinThread(u)
+    joinThread(t)
+    check unsub.code.load == ord(ecOk)
+    check traces[0].done.load == 1 # 2 and 3 went with the subscription
+    check publishedOk(4)
+    check traces[0].done.load == 1
+    h.release()
+    e.finish()
+
+  test "[IFC-0963] [IFC-0964] [IFC-0187] [IMPL-DECISION G176] [IMPL-DECISION G225] a queue at its bound ends the subscription with MODULE_ERROR, reported once while the handler is active, and the queue goes; an unsubscribe from another thread answers LOGOS_OK once that handler returned; the first queued delivery is taken whatever its size":
+    directOnly() # as above
+    for bytes in [false, true]:
+      clearTraces()
+      clearEnds()
+      var cfg = config(extra = @[dmeterStatic])
+      if bytes:
+        cfg.limits.eventQueueBytes = 1
+      else:
+        cfg.limits.eventQueue = 2
+      let e = fixtureEngine(cfg)
+      resetDeferred()
+      discard e.started(dmeter())
+      let (_, rc) = e.startClient()
+      var h = rc.handle(rc.routeId("k"))
+      check h.observeSubEnd(addr ends[0]) == ecOk
+      var id: LogosSubscriptionId
+      check h.subscribeTrace(addr traces[0], id) == ecOk
+      traces[0].hold.store(true)
+      var first = Pub(value: 1)
+      var t: Thread[ptr Pub]
+      createThread(t, publishes, addr first)
+      check waitUntil(
+        proc(): bool =
+          traces[0].started.load == 1
+      )
+      # Two queued deliveries, or one of 8 bytes past a 1-byte bound: the
+      # first is always taken. The next one ends the subscription.
+      check publishedOk(2)
+      if not bytes:
+        check publishedOk(3)
+      check ends[0].count.load == 0
+      check publishedOk(4)
+      # [IF l.1478-1479] Reported with MODULE_ERROR on an event worker, while
+      # the handler is still held.
+      check reported(addr ends[0], 1)
+      check ends[0].id.load == uint64(id)
+      check ends[0].reason.load == ord(ecModule)
+      check ends[0].thread.load != getThreadId()
+      check e.published(
+        "subscription " & $id & " to " & Changed & " on route " & rc.routeId("k") &
+          " ended: its delivery queue reached"
+      )
+      # [IF l.1418, l.1436, l.1482; P3 §10.3] The report does not wait for
+      # the handler; what keeps the handler's state valid is unsubscribe,
+      # which answers LOGOS_OK once, only after that handler returned.
+      var unsub = Job(route: addr h, id: id, doneAt: addr traces[0].done)
+      var u: Thread[ptr Job]
+      createThread(u, unsubscribes, addr unsub)
+      check unsub.stillRunning()
+      traces[0].hold.store(false)
+      joinThread(u)
+      joinThread(t)
+      check unsub.code.load == ord(ecOk)
+      check unsub.doneSeen.load == 1
+      check traces[0].done.load == 1 # the queue went with the subscription
+      check publishedOk(5)
+      check traces[0].done.load == 1
+      check ends[0].count.load == 1
+      check h.unsubscribe(id) == ecInvalidParams
+      h.release()
+      e.finish()
+
+  test "[IFC-0963] [IFC-0964] [IMPL-DECISION G176] [IMPL-DECISION G225] the publisher that finds the bound deactivates the subscription at once; an unsubscribe before the Runtime thread ends it answers LOGOS_OK and the end is reported once (P3 §10.2, §12.1)":
+    directOnly() # as above
+    var cfg = config(extra = @[dmeterStatic])
+    cfg.limits.eventQueue = 2
+    let e = fixtureEngine(cfg)
+    resetDeferred()
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    check h.observeSubEnd(addr ends[0]) == ecOk
+    var id: LogosSubscriptionId
+    check h.subscribeTrace(addr traces[0], id) == ecOk
+    traces[0].hold.store(true)
+    var first = Pub(value: 1)
+    var t: Thread[ptr Pub]
+    createThread(t, publishes, addr first)
+    check waitUntil(
+      proc(): bool =
+        traces[0].started.load == 1
+    )
+    check publishedOk(2)
+    check publishedOk(3)
+    # 4 finds the bound: the subscription is inactive from then on, and its
+    # publisher is held before the Runtime thread hears of it.
+    holdQueueBoundForTests(true)
+    var over = Pub(value: 4)
+    var p: Thread[ptr Pub]
+    createThread(p, publishes, addr over)
+    check waitUntil(
+      proc(): bool =
+        queueBoundHeldForTests()
+    )
+    # Nothing published after the refused delivery reaches the handler
+    # (IF l.1472).
+    check publishedOk(5)
+    check ends[0].count.load == 0
+    # The unsubscribe ends it as the bound would have, reported once with
+    # MODULE_ERROR while the handler is held, and waits for that handler.
+    var unsub = Job(route: addr h, id: id, doneAt: addr traces[0].done)
+    var u: Thread[ptr Job]
+    createThread(u, unsubscribes, addr unsub)
+    check reported(addr ends[0], 1)
+    check ends[0].id.load == uint64(id)
+    check ends[0].reason.load == ord(ecModule)
+    check unsub.stillRunning()
+    traces[0].hold.store(false)
+    joinThread(u)
+    joinThread(t)
+    check unsub.code.load == ord(ecOk)
+    check unsub.doneSeen.load == 1
+    # The held bound request then finds nothing left to end.
+    holdQueueBoundForTests(false)
+    joinThread(p)
+    check over.code.load == ord(ecOk)
+    check first.code.load == ord(ecOk)
+    check ends[0].count.load == 1
+    check e.diagnostics().countIt("ended: its delivery queue reached" in it) == 1
+    check traces[0].done.load == 1
+    check h.unsubscribe(id) == ecInvalidParams
+    h.release()
+    e.finish()
+
+  test "[IFC-0960] [IMPL-DECISION G176] two publishers, each inside one subscription's handler, publish into the other's: both queue, and both return (TF-21)":
+    directOnly() # as above
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    resetDeferred()
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var s, u: LogosSubscriptionId
+    check h.subscribeTrace(addr traces[0], s) == ecOk
+    check h.subscribeTrace(addr traces[1], u) == ecOk
+    traces[0].partner = addr traces[1]
+    traces[1].partner = addr traces[0]
+    # `a` reaches the first subscription's handler and waits there for the
+    # second's; `b`'s delivery to the first is queued, so it reaches the
+    # second's handler. Each then publishes into both subscriptions.
+    var a = Pub(value: 1)
+    var b = Pub(value: 2)
+    var ta, tb: Thread[ptr Pub]
+    createThread(ta, publishes, addr a)
+    check waitUntil(
+      proc(): bool =
+        traces[0].holding.load
+    )
+    createThread(tb, publishes, addr b)
+    joinThread(ta)
+    joinThread(tb)
+    check traces[0].sawPartner.load
+    check traces[1].sawPartner.load
+    check a.code.load == ord(ecOk)
+    check b.code.load == ord(ecOk)
+    # Four publications, each delivered to both subscriptions once.
+    check traces[0].done.load == 4
+    check traces[1].done.load == 4
+    check traces[0].overlaps.load == 0
+    check traces[1].overlaps.load == 0
+    check not e.published("G176")
+    h.release()
+    e.finish()
+
+  test "[IMPL-DECISION G176] a scoped delivery queued behind another thread's handler is not delivered once its call has returned (P3 F1)":
+    # The queued copy names the call by number, never by its ticket, which
+    # the call's return frees: under ASan this would be a use after free.
+    directOnly() # as above
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let route = rc.routeId("k")
+    var h = rc.handle(route)
+    var other = rc.handle(route)
+    var id: LogosSubscriptionId
+    check h.subscribeTrace(addr traces[0], id) == ecOk
+    traces[0].hold.store(true)
+    # An ordinary publication (channel 15) holds the handler on `t`.
+    var pub = Job(route: addr other, channel: 15, times: 1)
+    var t: Thread[ptr Job]
+    createThread(t, reads, addr pub)
+    check waitUntil(
+      proc(): bool =
+        traces[0].started.load == 1
+    )
+    # The scoped one (channel 17, through `h`) is queued; the call returns.
+    check h.read(17).isOk
+    check traces[0].started.load == 1
+    traces[0].hold.store(false)
+    joinThread(t)
+    check pub.code.load == 0
+    check traces[0].done.load == 1
+    # A scoped publication with nothing queued is delivered as before.
+    check h.read(17).isOk
+    check traces[0].done.load == 2
+    other.release()
+    h.release()
+    e.finish()
 
 when declared(caParity):
   proc evaluations(what: string): int =
@@ -736,7 +1367,7 @@ when declared(caParity):
     setup:
       clearAll()
 
-    test "[RUN-0819] [RUN-0822] [CAP-0288] [CAP-0289] [CAP-0191] activation and each delivery are decided by the authority through its cache; after policy_changed the next delivery is decided afresh; an explicit subscribe-event deny ends the subscription":
+    test "[RUN-0819] [RUN-0822] [CAP-0288] [CAP-0289] [CAP-0191] [RUN-1095] [TRN-0392] [IFC-0965] [TXT-0088] [TXT-0123] [IMPL-DECISION G175] activation and each delivery are decided by the authority through its cache; after policy_changed the next delivery is decided afresh; a subscribe-event deny or failed evaluation at delivery ends the subscription, reported once with NOT_AUTHORISED":
       let e = fixtureEngine(config(extra = @[dmeterStatic]))
       resetDeferred()
       discard e.started(dmeter())
@@ -758,27 +1389,110 @@ when declared(caParity):
       check reaches(addr seen[0], 3)
       check evaluations("subscribe-event") == 2
       check evaluations("publish-event") == 2
-      # Denied for the subscriber: skipped, and on a direct route the
-      # subscription ends. Over local transport the provider side cannot end
-      # one subscription of a session (K40; plan Rev R9 (a)): the Event is
-      # skipped with no signal and the subscription stays.
-      const ended = not declared(transportParity)
+      # Denied for the subscriber: the Event is not delivered and the
+      # subscription ends, on a direct route and over local transport (the
+      # provider's session sends a SubscriptionEnd, TRANSPORT l.750-756). The
+      # handle reports it once with NOT_AUTHORISED, on a Runtime event worker,
+      # never on the publishing thread (G175 amended, G225).
+      clearEnds()
+      check h.observeSubEnd(addr ends[0]) == ecOk
       setScript(rule(vDeny, "subscribe-event"))
       check publish(PolicyChangedName, policyChanged(1, 2))
       publishRaw(cstring(Changed), payload)
-      settled()
+      check reported(addr ends[0], 1)
       check seen[0].count.load == 3
+      check ends[0].id.load == uint64(id)
+      check ends[0].reason.load == ord(ecNotAuthorised)
+      check ends[0].thread.load != getThreadId()
       check evaluations("subscribe-event") == 3
       setScript()
       check publish(PolicyChangedName, policyChanged(2, 3))
       publishRaw(cstring(Changed), payload)
-      check reaches(addr seen[0], (if ended: 3 else: 4))
-      check evaluations("subscribe-event") == (if ended: 3 else: 4)
+      settled()
+      # Ended, it is neither delivered to nor decided again, and reported
+      # once.
+      check seen[0].count.load == 3
+      check evaluations("subscribe-event") == 3
+      check ends[0].count.load == 1
+      # [IF l.1482] Its unsubscribe is LOGOS_OK once; then the id names no
+      # active subscription.
+      check h.unsubscribe(id) == ecOk
+      check h.unsubscribe(id) == ecInvalidParams
       # A new subscription, allowed again, delivers.
       var id2: LogosSubscriptionId
       check h.subscribe(addr seen[1], id2) == ecOk
       publishRaw(cstring(Changed), payload)
       check reaches(addr seen[1], 1)
-      check reaches(addr seen[0], (if ended: 3 else: 5))
+      check seen[0].count.load == 3
+      # [IF l.1479; P3 ruling 1] A subscribe-event decision that cannot be
+      # established ends it too, with NOT_AUTHORISED.
+      setScript(rule(vStatus, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(3, 4))
+      publishRaw(cstring(Changed), payload)
+      check reported(addr ends[0], 2)
+      check seen[1].count.load == 1
+      check ends[0].id.load == uint64(id2)
+      check ends[0].reason.load == ord(ecNotAuthorised)
+      setScript()
       h.release()
+      e.finish()
+
+    test "[IFC-0669] [TXT-0087] [IMPL-DECISION G225] an end with no registration is not reported later; release waits for a running subscription-end report and suppresses one not begun":
+      let e = fixtureEngine(config(extra = @[dmeterStatic]))
+      resetDeferred()
+      discard e.started(dmeter())
+      let (_, rc) = e.startClient()
+      clearEnds()
+      let payload = encodeCbor(parseDiag("{\"value\": 7}").get)
+      # [IF l.1481] Ended while no registration is installed: never reported.
+      var h = rc.handle(rc.routeId("k"))
+      var id: LogosSubscriptionId
+      check h.subscribe(addr seen[0], id) == ecOk
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(0, 1))
+      publishRaw(cstring(Changed), payload)
+      settled()
+      sleep(200) # over local transport the end arrives on the wire
+      check seen[0].count.load == 0
+      check h.observeSubEnd(addr ends[0]) == ecOk
+      check h.unsubscribe(id) == ecOk
+      settled()
+      check ends[0].count.load == 0
+      # [IF l.1484] A report that is running: release waits for it.
+      setScript()
+      check publish(PolicyChangedName, policyChanged(1, 2))
+      check h.subscribe(addr seen[1], id) == ecOk
+      ends[0].hold.store(true)
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(2, 3))
+      publishRaw(cstring(Changed), payload)
+      check waitUntil(
+        proc(): bool =
+          ends[0].running.load
+      )
+      var j = Job(route: addr h)
+      var t: Thread[ptr Job]
+      createThread(t, releases, addr j)
+      check j.stillRunning()
+      ends[0].hold.store(false)
+      joinThread(t)
+      check ends[0].count.load == 1
+      # A report that has not begun when the handle is released never runs.
+      setScript()
+      check publish(PolicyChangedName, policyChanged(3, 4))
+      var h2 = rc.handle(rc.routeId("k"))
+      check h2.observeSubEnd(addr ends[1]) == ecOk
+      check h2.subscribe(addr seen[2], id) == ecOk
+      setReportDelayForTests(1500)
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(4, 5))
+      publishRaw(cstring(Changed), payload)
+      sleep(300) # over local transport the end arrives on the wire
+      h2.release()
+      sleep(1700)
+      settled()
+      check ends[1].count.load == 0
+      check not ends[1].running.load
+      setReportDelayForTests(0)
+      setScript()
       e.finish()

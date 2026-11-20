@@ -3,7 +3,7 @@
 ## tickets, correlation, requests, cancellation, multiplexing, subscriptions,
 ## route termination, per-connection limits and protocol evolution.
 
-import std/[importutils, sequtils, sets, strutils]
+import std/[importutils, os, sequtils, sets, strutils]
 import unittest2
 import logos_sdk/[cbor, hash, commitment], ../src/logos_core/transport
 import logos_sdk/iface/[accept, surface, outcome, payload]
@@ -30,6 +30,14 @@ let
 
 proc params(cid = "bafy"): CborValue =
   cborMap((cbor("cid"), cbor(cid)))
+
+proc progressData(session: string): CborValue =
+  ## `storage.upload_progress_event` data; `session` sets its size.
+  cborMap(
+    (cbor("session"), cbor(session)),
+    (cbor("bytes_sent"), cbor(1'u64)),
+    (cbor("bytes_total"), cbor(2'u64)),
+  )
 
 proc subtreeOf(declaration: string): Digest =
   let m = storage.primary.model
@@ -133,6 +141,11 @@ proc samples(): seq[Message] =
         operation: mkUnsubscribe,
         failure: Opt.some(InvocationFailure(code: ecInvalidParams)),
       ),
+    ),
+    Message(
+      kind: mkSubscriptionEnd,
+      subscriptionEnd:
+        SubscriptionEnd(id: 3, failure: InvocationFailure(code: ecNotAuthorised)),
     ),
   ]
 
@@ -293,12 +306,12 @@ proc helloWith(t: openArray[byte], schema = schemaCommitment(root)): seq[byte] =
 # Suites --------------------------------------------------------------------------------
 
 suite "trn.envelope: message kinds and fields (TRANSPORT §1, §1.1, §1.3)":
-  test "[TRN-0016] [TRN-0017] [TRN-0018] [TRN-0019] [TRN-0020] [TRN-0021] [TRN-0022] [TRN-0023] [TRN-0024] [TRN-0025] [TRN-0045] the kind registry and the message union come from the mirrored CDDL":
+  test "[TRN-0016] [TRN-0017] [TRN-0018] [TRN-0019] [TRN-0020] [TRN-0021] [TRN-0022] [TRN-0023] [TRN-0024] [TRN-0025] [TRN-0045] [TRN-0388] [TXT-0115] the kind registry and the message union come from the mirrored CDDL":
     let s = envelopeSchema()
     let kinds = s.rule("logos.transport.message-kind").get
-    for n in 0'i64 .. 8:
+    for n in 0'i64 .. 9:
       check s.matches(kinds, cbor(n))
-    for n in [-1'i64, 9, 255]:
+    for n in [-1'i64, 10, 255]:
       check not s.matches(kinds, cbor(n))
     for k in MessageKind:
       let arms = messageArms(k)
@@ -308,6 +321,8 @@ suite "trn.envelope: message kinds and fields (TRANSPORT §1, §1.1, §1.3)":
     check messageArms(mkResponse).len == 2
     check messageArms(mkSubscriptionResult).len == 2
     check KindRule[mkProtocolError] == "logos.transport.protocol-error"
+    check KindRule[mkSubscriptionEnd] == "logos.transport.subscription-end"
+    check messageArms(mkSubscriptionEnd).len == 1
 
   test "[TRN-0008] [TRN-0009] [TRN-0010] [TRN-0011] [TRN-0012] [TRN-0013] [TRN-0014] [TRN-0015] the §1.1 primitive types and their bounds":
     let s = envelopeSchema()
@@ -371,7 +386,7 @@ suite "trn.envelope: message kinds and fields (TRANSPORT §1, §1.1, §1.3)":
     check envelopeError(cancel).field == "method"
 
   test "[TRN-0201] [TRN-0251] an unknown or unallocated kind is rejected":
-    for k in [cbor(9'u64), cbor(255'u64), cbor(-1'i64), cbor("hello"), cbor(true)]:
+    for k in [cbor(10'u64), cbor(255'u64), cbor(-1'i64), cbor("hello"), cbor(true)]:
       check envelopeError(cborMap((cbor(0'u64), k), (cbor("id"), cbor(1'u64)))).kind ==
         eeUnknownKind
 
@@ -406,6 +421,9 @@ suite "trn.envelope: message kinds and fields (TRANSPORT §1, §1.1, §1.3)":
         kind: mkSubscriptionResult,
         subscriptionResult:
           SubscriptionResult(id: 1, operation: mkSubscribe, failure: Opt.some(zero)),
+      ),
+      Message(
+        kind: mkSubscriptionEnd, subscriptionEnd: SubscriptionEnd(id: 1, failure: zero)
       ),
     ]:
       check encodeMessage(m).isErr
@@ -443,13 +461,13 @@ suite "trn.envelope: message kinds and fields (TRANSPORT §1, §1.1, §1.3)":
       eeForm
     check envelopeError(ok.without("result").without("commitment")).kind == eeForm
 
-  test "[IFC-0423] envelopes decode and re-encode without any payload schema":
+  test "envelopes decode and re-encode without any payload schema":
     # A forwarder needs no contract: the payload maps pass through unchanged,
-    # whatever schema they would fail (floats aside: they fail the envelope).
+    # whatever schema they would fail (values INTERFACE §4.4 item 5 prohibits
+    # aside: they fail the envelope).
     let invalidText = CborValue(kind: ckText, text: "\xff", validUtf8: false)
     let odd = cborMap(
-      (cbor("cid"), cborTag(42, cbor(1'u64))),
-      (cbor("x"), cborArray(cborNull(), invalidText)),
+      (cbor("cid"), cbor(42'u64)), (cbor("x"), cborArray(cbor(true), invalidText))
     )
     let m = toCbor(samples()[1]).with("params", odd)
     let b = wire(m)
@@ -465,7 +483,7 @@ suite "trn.envelope: message kinds and fields (TRANSPORT §1, §1.1, §1.3)":
 suite "trn.direction: who sends what (TRANSPORT §1.2, §1.4, §2.3)":
   test "[TRN-0062] [TRN-0272] [TRN-0274] the callee closes on caller-bound kinds":
     for m in samples():
-      if m.kind notin {mkResponse, mkEvent, mkSubscriptionResult}:
+      if m.kind notin {mkResponse, mkEvent, mkSubscriptionResult, mkSubscriptionEnd}:
         continue
       var (_, callee) = pair()
       let acts = callee.receive(encodeMessage(m).get)
@@ -613,7 +631,7 @@ suite "trn.framing: stream framing (TRANSPORT §2.1, §8.3)":
     check r.finish.error.kind == feTruncated
 
 suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
-  test "[TRN-0061] [TRN-0200] non-deterministic envelopes are rejected":
+  test "[TRN-0061] [TRN-0395] non-deterministic CBOR is rejected anywhere in the message, params, result and data included":
     let cases = [
       "a262696407" & "0007", # keys out of order
       "a2001807" & "62696407", # kind 7 not in shortest form
@@ -627,6 +645,42 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
     for m in samples():
       let b = encodeMessage(m).get
       check encodeCbor(decodeValue(b).get) == b
+    # Inside `params`, `result` and `data`: the map {"a": 1, "b": 2}, its keys
+    # swapped in the encoded message. The envelope check does not compare the
+    # commitment with the payload (no schema here), so any well-formed one does.
+    let ab = cborMap((cbor("a"), cbor(1'u64)), (cbor("b"), cbor(2'u64)))
+    let anyCommitment = commitmentOf("storage.started_event", cborMap())
+    let sorted = hexBytes("a2616101616202")
+    let swapped = hexBytes("a2616202616101")
+    let inside = [
+      Message(
+        kind: mkRequest,
+        request:
+          Request(id: 1, methodName: "exists", params: ab, commitment: anyCommitment),
+      ),
+      Message(
+        kind: mkResponse,
+        response: Response(id: 1, ok: true, resultMap: ab, commitment: anyCommitment),
+      ),
+      Message(
+        kind: mkEvent,
+        event: Event(
+          sub: 3, event: "storage.started_event", data: ab, commitment: anyCommitment
+        ),
+      ),
+    ]
+    for m in inside:
+      var b = encodeMessage(m).get
+      var at = -1
+      for i in 0 .. b.len - sorted.len:
+        if b[i ..< i + sorted.len] == sorted:
+          at = i
+          break
+      check at >= 0
+      check decodeMessage(b).isOk
+      for j in 0 ..< swapped.len:
+        b[at + j] = swapped[j]
+      check decodeMessage(b).error.kind == eeNonDeterministic
 
   test "[TRN-0198] malformed CBOR is rejected":
     for h in ["", "a2", "a20007626964", "a2000762696407" & "00", "ff"]:
@@ -661,10 +715,12 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
       let pe = closeMessage(acts).get
       check pe.code == ecInvalidParams and pe.detail.isNone and pe.message.isNone
       check callee.state == csClosed
-      # Within P, the envelope passes; the schema decides (cid is a tstr).
+      # Within P, the envelope passes; the schema decides (cid is a tstr): the
+      # Request goes to its owner, which fails the call after admission
+      # (re-pin P4b).
       var callee2 = calleeConn(storageBoundary, l)
-      let r = sent(callee2.receive(fitsP))
-      check r[0].response.failure.code == ecInvalidParams and callee2.state == csOpen
+      let r = callee2.receive(fitsP)
+      check dispatched(r).len == 1 and sent(r).len == 0 and callee2.state == csOpen
       # result and data
       check decodeMessage(rawResponse(0, atDepth(p), start), p).isOk
       check decodeMessage(rawResponse(0, atDepth(p + 1), start), p).error.kind ==
@@ -695,16 +751,10 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
     check transportLimits(payloadDepth = MinMaxDepth - 1).isErr
     check transportLimits(payloadDepth = MaxPayloadDepth + 1).isErr
     check defaultLimits().payloadDepth == DefaultMaxDepth
-    # Empty containers count; tags and byte-string contents do not.
+    # Empty containers count; byte-string contents do not.
     let empties = cborMap((cbor("cid"), nest(cborArray(), MinMaxDepth - 1)))
     check decodeMessage(rawRequest(0, "exists", empties, start), MinMaxDepth).error.kind ==
       eeTooDeep
-    var tagged = cbor(1'u64)
-    for _ in 0 ..< 10:
-      tagged = cborTag(1, tagged)
-    let t = cborMap((cbor("cid"), nest(tagged, MinMaxDepth - 1)))
-    check decodeMessage(rawRequest(0, "exists", t, start), MinMaxDepth).isOk
-    check checkPayload(t, MinMaxDepth).isOk
     check checkPayload(atDepth(MinMaxDepth + 1), MinMaxDepth).error.kind == eeTooDeep
 
   test "[TRN-0062] [TRN-0063] [TRN-0064] [TRN-0065] [IFC-0920] a float anywhere, payloads included, fails the envelope: INVALID_PARAMS, then close":
@@ -751,22 +801,87 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
       check checkPayload(cborMap((cbor("cid"), cborTag(1, x))), MinMaxDepth).error.kind ==
         eeNonDeterministic
 
-  test "[TRN-0203] [IFC-0423] tags, null and invalid UTF-8 inside payloads pass the envelope and fail at the schema":
+  test "[IFC-0976] [IFC-0920] [TXT-0143] a tag, null, undefined or other simple value anywhere in a payload fails the envelope: INVALID_PARAMS, then close":
+    let start = PayloadCommitment(subtreeRoot: subtreeOf("storage.exists_request"))
+    let prohibited = [
+      cborTag(1, cbor(1'u64)),
+      cborNull(),
+      cborUndefined(),
+      cborSimple(16),
+      cborSimple(32),
+    ]
+    for x in prohibited:
+      for p in [
+        cborMap((cbor("cid"), x)),
+        cborMap((cbor("cid"), cbor("a")), (cbor("x"), cborArray(cborArray(x)))),
+        cborMap((cbor("cid"), cbor("a")), (cbor("x"), cborMap((x, cbor(1'u64))))),
+      ]:
+        let b = rawRequest(0, "exists", p, start)
+        check decodeMessage(b).error.kind == eeNonDeterministic
+        var (_, callee) = pair()
+        let acts = callee.receive(b)
+        check dispatched(acts).len == 0
+        check closeCode(acts) == Opt.some(ecInvalidParams)
+        check callee.state == csClosed
+        # Not deferred to the schema: no correlated response-err.
+        check sent(acts).len == 0
+        # Senders never emit one.
+        check checkPayload(p, MinMaxDepth).error.kind == eeNonDeterministic
+        var (caller3, _) = pair()
+        check caller3.request("exists", p).error.code == ecInvalidParams
+        check caller3.pendingCalls == 0
+      # In result: the caller closes, and the pending call fails with it.
+      var (caller, _) = pair()
+      let (id, _) = caller.request("exists", params()).get
+      let evs = caller.receive(rawResponse(id, cborMap((cbor("exists"), x)), start))
+      check evs[0].outcome.failure.code == ecTransport
+      check closeCode(evs) == Opt.some(ecInvalidParams)
+      check caller.state == csClosed
+      # In data: the event is not delivered.
+      var (caller2, callee2) = pair()
+      active(caller2, callee2, 1, "storage.started_event")
+      check closeCode(
+        caller2.receive(
+          rawEvent(1, "storage.started_event", cborMap((cbor("x"), x)), start)
+        )
+      ) == Opt.some(ecInvalidParams)
+    # false and true stay payload values.
+    let allowed = cborMap((cbor("cid"), cbor("a")), (cbor("x"), cbor(true)))
+    check checkPayload(allowed, MinMaxDepth).isOk
+    check decodeMessage(rawRequest(0, "exists", allowed, start)).isOk
+
+  test "[IMPL-DECISION G38] only COSE_Sign1 and the diagnostic display ask for the generic data model":
+    # Relative to the repository root, where the suites run.
+    let allowed = ["crypto/cose.nim", "daemon/render.nim", "cbor/decode.nim"]
+    var scanned = 0
+    for root in [repoPath("src"), repoPath("sdk/src")]:
+      for f in walkDirRec(root):
+        if not f.endsWith(".nim"):
+          continue
+        inc scanned
+        if allowed.anyIt(f.endsWith(it)):
+          continue
+        checkpoint f
+        check "allowExtended" notin readFile(f)
+    check scanned > 100
+
+  test "[TRN-0203] invalid UTF-8 inside a payload passes the envelope and fails at the schema":
     let invalidText = CborValue(kind: ckText, text: "\xff", validUtf8: false)
-    for x in [invalidText, cborTag(1, cbor(1'u64)), cborNull()]:
-      let p = cborMap((cbor("cid"), x))
-      let b = rawRequest(
-        0,
-        "exists",
-        p,
-        PayloadCommitment(subtreeRoot: subtreeOf("storage.exists_request")),
-      )
-      check decodeMessage(b).isOk
-      var (_, callee) = pair()
-      let acts = callee.receive(b)
-      check callee.state == csOpen
-      let resp = sent(acts)[0].response
-      check not resp.ok and resp.failure.code == ecInvalidParams
+    let b = rawRequest(
+      0,
+      "exists",
+      cborMap((cbor("cid"), invalidText)),
+      PayloadCommitment(subtreeRoot: subtreeOf("storage.exists_request")),
+    )
+    check decodeMessage(b).isOk
+    var (_, callee) = pair()
+    let acts = callee.receive(b)
+    check callee.state == csOpen
+    # Dispatched: its owner's check fails it after admission (re-pin P4b).
+    check dispatched(acts).len == 1 and sent(acts).len == 0
+    let owner =
+      validator(storage).checkParams("exists", encodeCbor(dispatched(acts)[0].params))
+    check owner.isErr and owner.error.toFailure.code == ecInvalidParams
     # In an envelope field, invalid UTF-8 is a field-type failure.
     let m = toCbor(samples()[1]).with("method", invalidText)
     check envelopeError(m).field == "method"
@@ -836,7 +951,7 @@ suite "trn.hello: Hello and route tickets (TRANSPORT §3.1, §3.3, §8.1)":
     check store.len == 1
     check store.validate(t, Second).isOk
 
-  test "[TRN-0074] [TRN-0071] [TRN-0254] [TRN-0318] a schema that differs or is malformed is VERSION_MISMATCH, after the token check":
+  test "[TRN-0074] [TRN-0071] [TRN-0254] [TRN-0318] [TXT-0126] a schema that differs or is malformed is VERSION_MISMATCH, after the token check":
     var store: TicketStore[RouteBinding]
     let t = store.issue(routeBinding(), 0, 100 * Second).get
     let other = sensor.primary.root
@@ -863,6 +978,20 @@ suite "trn.hello: Hello and route tickets (TRANSPORT §3.1, §3.3, §8.1)":
     check acceptHello(
       endpoint, store, wire(helloMap(module = cbor("")).with("x", cbor(1'u64))), Second
     ).error.reason == hrEnvelope
+    # [TXT-0126] Only the top-level map's keys are checked as unknown fields: an
+    # unknown key inside `schema` fails the schema check, and a token of the
+    # wrong type the token check.
+    let inner = acceptHello(
+      endpoint,
+      store,
+      helloWith(t, schemaCommitment(root).with("x", cbor(1'u64))),
+      Second,
+    ).error
+    check inner.code == ecVersionMismatch and inner.reason == hrSchema
+    let typed =
+      acceptHello(endpoint, store, wire(helloMap(token = cbor(1'u64))), Second).error
+    check typed.code == ecNotAuthorised and typed.reason == hrToken
+    check store.validate(t, Second).isOk
 
   test "[TRN-0145] [TRN-0146] [I90] E4: the owner's state check runs after every Hello check and before redemption; its refusal consumes nothing":
     var store: TicketStore[RouteBinding]
@@ -1161,7 +1290,7 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     check envelopeError(short).field == "commitment"
     check envelopeError(toCbor(samples()[1]).without("commitment")).field == "commitment"
 
-  test "[TRN-0159] [TRN-0292] [TRN-0293] [TRN-0294] [TRN-0297] [TRN-0298] the subtree root first, then the schema: a schema-invalid Request fails its call and keeps the session":
+  test "[IFC-0977] [TRN-0159] [TRN-0292] [TRN-0293] [TRN-0294] [TRN-0297] [TRN-0298] [RUN-1118] the subtree root first, then the schema: a schema-invalid Request keeps the session and goes to its owner, which fails the call after its authorization":
     let bad = cborMap((cbor("cid"), cbor(5'u64)))
     var (_, callee) = pair()
     # The value root is garbage: a schema-invalid payload has no value root to
@@ -1175,10 +1304,11 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
       )
     )
     check callee.state == csOpen
-    check dispatched(acts).len == 0
-    let resp = sent(acts)[0].response
-    check not resp.ok and resp.failure.code == ecInvalidParams
-    check resp.failure.detail.isSome
+    # [SPEC RUNTIME l.1827-1828; re-pin P4b] Not answered here: the call's
+    # authorization (step 2) comes before the payload's check (step 3).
+    check sent(acts).len == 0
+    check dispatched(acts).len == 1
+    check dispatched(acts)[0].params == bad
     let r = storageBoundary.acceptRequest(
       decodeMessage(
         rawRequest(
@@ -1189,7 +1319,7 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
         )
       ).get.request
     )
-    check r.error.cause == rcSchema and r.error.kind == rjRespond
+    check r.error.cause == rcSchema and r.error.kind == rjOwner
     # The session goes on.
     check dispatched(callee.receive(requestFor(1))).len == 1
     var (_, callee2) = pair()
@@ -1205,6 +1335,9 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     ) == Opt.some(ecInvalidParams)
 
   test "[TRN-0003] a rejected payload fails as it would in direct mode":
+    # [re-pin P4b] The session hands it on unchanged; its owner runs the
+    # direct-mode check (tests/test_routes.nim runs the end to end case over
+    # local transport, and tests/test_hosted_routes.nim in a Module Host).
     let bad = cborMap((cbor("cid"), cbor(5'u64)))
     var (_, callee) = pair()
     let acts = callee.receive(
@@ -1215,12 +1348,12 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
         PayloadCommitment(subtreeRoot: subtreeOf("storage.exists_request")),
       )
     )
-    let direct =
-      validator(storage).checkParams("exists", encodeCbor(bad)).error.toFailure
-    check sent(acts)[0].response.failure == direct
-    check sent(acts)[0].response.id == 3
+    check sent(acts).len == 0
+    let d = dispatched(acts)
+    check d.len == 1 and d[0].id == 3 and d[0].params == bad
+    check validator(storage).checkParams("exists", encodeCbor(d[0].params)).isErr
 
-  test "[TRN-0097] [TRN-0300] [TRN-0296] a schema-invalid response-ok or Event closes; the call gets TRANSPORT_ERROR and the Event is not delivered":
+  test "[IFC-0977] [TRN-0097] [TRN-0300] [TRN-0296] a schema-invalid response-ok or Event closes; the call gets TRANSPORT_ERROR and the Event is not delivered":
     var (caller, _) = pair()
     let (id, _) = caller.request("exists", params()).get
     let bad = cborMap((cbor("exists"), cbor(5'u64)))
@@ -1233,13 +1366,13 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     check evs.filterIt(it.kind == ceResponse).len == 1
     # An Event: the same, and no ceEvent.
     var (caller2, callee2) = pair()
-    active(caller2, callee2, 1, "storage.upload_done_event")
+    active(caller2, callee2, 1, "storage.upload_progress_event")
     discard caller2.request("exists", params()).get
     let ev = rawEvent(
       1,
-      "storage.upload_done_event",
-      cborMap((cbor("cid"), cbor(7'u64))),
-      PayloadCommitment(subtreeRoot: subtreeOf("storage.upload_done_event")),
+      "storage.upload_progress_event",
+      cborMap((cbor("session"), cbor(7'u64))),
+      PayloadCommitment(subtreeRoot: subtreeOf("storage.upload_progress_event")),
     )
     let evs2 = caller2.receive(ev)
     check evs2.filterIt(it.kind == ceEvent).len == 0
@@ -1342,7 +1475,8 @@ suite "trn.request: calls and payload commitments (TRANSPORT §4.1, §4.2, §8.3
     check dispatched(acts).len == 0
     # An unknown name fails before its payload is looked at.
     var (_, callee2) = pair()
-    let garbage = cborMap((cbor("x"), cborTag(9, cborNull())))
+    let garbage =
+      cborMap((cbor("x"), CborValue(kind: ckText, text: "\xff", validUtf8: false)))
     let r2 = sent(callee2.receive(rawRequest(0, "nope", garbage, PayloadCommitment())))
     check r2[0].response.failure.code == ecMethodNotFound
     let full = boundary(sensor, sensor.primary.root).get
@@ -1446,7 +1580,6 @@ suite "trn.cancel: cancellation (TRANSPORT §6)":
     var (caller, callee) = pair()
     active(caller, callee, 1, "storage.upload_progress_event")
     active(caller, callee, 2, "storage.upload_progress_event")
-    active(caller, callee, 3, "storage.started_event")
     let progress = cborMap(
       (cbor("session"), cbor("s")),
       (cbor("bytes_sent"), cbor(1'u64)),
@@ -1454,6 +1587,9 @@ suite "trn.cancel: cancellation (TRANSPORT §6)":
     )
     let (a, ra) = caller.request("exists", params()).get
     discard callee.receive(ra)
+    # No subscription to an event: no Event.
+    check callee.publishScoped(a, "storage.started_event", cborMap()).get.len == 0
+    active(caller, callee, 3, "storage.started_event")
     # Every active subscription to that event on this connection, and no other.
     let frames = callee.publishScoped(a, "storage.upload_progress_event", progress).get
     check frames.len == 2
@@ -1463,9 +1599,8 @@ suite "trn.cancel: cancellation (TRANSPORT §6)":
       check e.commitment == commitmentOf("storage.upload_progress_event", progress)
       let evs = caller.receive(f)
       check evs[0].kind == ceEvent and evs[0].id == uint64(i + 1)
-    check callee.publishScoped(
-      a, "storage.upload_done_event", cborMap((cbor("cid"), cbor("c")))
-    ).get.len == 0
+    let started = callee.publishScoped(a, "storage.started_event", cborMap()).get
+    check started.len == 1 and decodeMessage(started[0]).get.event.sub == 3
     # The terminal Response closes the destination; the subscriptions stay.
     discard callee.respond(a, okExists()).get
     let after = callee.publishScoped(a, "storage.upload_progress_event", progress)
@@ -1619,10 +1754,10 @@ suite "trn.subscribe: subscriptions (TRANSPORT §5.1)":
   test "[TRN-0111] [TRN-0112] the route's event-subscription scope is enforced before activation":
     let scoped = storageBoundary.withAccess([], ["storage.started_event"])
     check scoped.allowsEvent("storage.started_event")
-    check not scoped.allowsEvent("storage.upload_done_event")
+    check not scoped.allowsEvent("storage.upload_progress_event")
     var callee = calleeConn(scoped)
     check callee.receive(subscribeMsg(1, "storage.started_event"))[0].kind == caSubscribe
-    let r = sent(callee.receive(subscribeMsg(2, "storage.upload_done_event")))[0]
+    let r = sent(callee.receive(subscribeMsg(2, "storage.upload_progress_event")))[0]
     check r.subscriptionResult.failure.get.code == ecNotAuthorised
     check callee.subscriptions == 1
     # A name outside the selected contract fails the same way.
@@ -1745,7 +1880,7 @@ suite "trn.correlation: Response, SubscriptionResult and Event correlation (TRAN
     check closeCode(caller.receive(ev)) == Opt.some(ecInvalidParams)
     # Another event than the subscription's.
     var (caller2, callee2) = pair()
-    active(caller2, callee2, 3, "storage.upload_done_event")
+    active(caller2, callee2, 3, "storage.upload_progress_event")
     check closeCode(caller2.receive(ev)) == Opt.some(ecInvalidParams)
     # While Unsubscribe is outstanding: still valid; after it completes: not.
     var (caller3, callee3) = pair()
@@ -1794,23 +1929,23 @@ suite "trn.correlation: Response, SubscriptionResult and Event correlation (TRAN
 
   test "[TRN-0287] [TRN-0288] [TRN-0289] an abandoned subscription: results still update state, Events are validated but not delivered, Unsubscribe stops it":
     var (caller, callee) = pair()
-    discard callee.receive(caller.subscribe(1, "storage.upload_done_event").get)
+    discard callee.receive(caller.subscribe(1, "storage.upload_progress_event").get)
     check caller.abandonSubscription(1)
     check not caller.abandonSubscription(9)
     # The late successful result still activates it.
     check caller.receive(callee.subscriptionResult(1).get)[0].op == mkSubscribe
-    let ev = callee.publish(1, cborMap((cbor("cid"), cbor("c")))).get
+    let ev = callee.publish(1, progressData("s")).get
     check caller.receive(ev).len == 0
     check caller.state == csOpen
     # An invalid Event for it still closes.
     let bad = rawEvent(
       1,
-      "storage.upload_done_event",
-      cborMap((cbor("cid"), cbor(1'u64))),
-      PayloadCommitment(subtreeRoot: subtreeOf("storage.upload_done_event")),
+      "storage.upload_progress_event",
+      cborMap((cbor("session"), cbor(1'u64))),
+      PayloadCommitment(subtreeRoot: subtreeOf("storage.upload_progress_event")),
     )
     var (caller2, callee2) = pair()
-    active(caller2, callee2, 1, "storage.upload_done_event")
+    active(caller2, callee2, 1, "storage.upload_progress_event")
     check caller2.abandonSubscription(1)
     check closeCode(caller2.receive(bad)) == Opt.some(ecInvalidParams)
     # Unsubscribe ends it; after that its Events are uncorrelated.
@@ -1894,25 +2029,25 @@ suite "trn.size: the sender's frame check (TRANSPORT §2.1)":
     check callee2.respond(0, space()).get == full
 
   test "[TRN-0265] [TRN-0266] an oversized Event is not committed and its publication reports failure":
-    let data = cborMap((cbor("cid"), cbor("c".repeat(64))))
+    let data = progressData("c".repeat(64))
     var (caller, callee0) = pair()
-    active(caller, callee0, 1, "storage.upload_done_event")
+    active(caller, callee0, 1, "storage.upload_progress_event")
     let full = callee0.publish(1, data).get
     var callee = calleeConn(storageBoundary, smallPeer(uint32(full.len - 1)))
-    discard callee.receive(subscribeMsg(1, "storage.upload_done_event"))
+    discard callee.receive(subscribeMsg(1, "storage.upload_progress_event"))
     discard callee.subscriptionResult(1).get
     let e = callee.publish(1, data).error
     check e.kind == peTooLarge and e.code == ecModule
     check callee.state == csOpen
     # A smaller Event still goes.
-    check callee.publish(1, cborMap((cbor("cid"), cbor("c")))).isOk
+    check callee.publish(1, progressData("c")).isOk
     # Scoped publication: nothing is committed on the connection.
     discard callee.receive(requestFor(0))
-    check callee.publishScoped(0, "storage.upload_done_event", data).error.kind ==
+    check callee.publishScoped(0, "storage.upload_progress_event", data).error.kind ==
       peTooLarge
 
 suite "trn.termination: route expiry or revocation on a live session (TRANSPORT §8.1)":
-  test "[TRN-0163] [TRN-0321] [TRN-0323] [TRN-0324] [TRN-0326] admission stops, subscriptions end, then ProtocolError NOT_AUTHORISED and close":
+  test "[TRN-0163] [TRN-0321] [TRN-0323] [TRN-0324] [TRN-0326] [TRN-0394] admission stops, subscriptions end, then ProtocolError NOT_AUTHORISED and close":
     var (caller, callee) = pair()
     let (a, ra) = caller.request("exists", params()).get
     check dispatched(callee.receive(ra)).len == 1
@@ -1920,7 +2055,8 @@ suite "trn.termination: route expiry or revocation on a live session (TRANSPORT 
     discard callee.receive(caller.subscribe(2, "storage.started_event").get)
     active(caller, callee, 3, "storage.started_event")
     discard callee.receive(caller.unsubscribe(3).get)
-    # Begin: each outstanding subscription operation gets its one result.
+    # Begin: each outstanding subscription operation gets its one result, a
+    # failure with the termination code.
     let begun = sent(callee.beginTermination())
     check callee.state == csTerminating
     check begun.len == 2
@@ -1928,7 +2064,7 @@ suite "trn.termination: route expiry or revocation on a live session (TRANSPORT 
     check begun[0].subscriptionResult.failure.get.code == ecNotAuthorised
     check begun[1].subscriptionResult.id == 3
     check begun[1].subscriptionResult.operation == mkUnsubscribe
-    check begun[1].subscriptionResult.failure.isNone
+    check begun[1].subscriptionResult.failure.get.code == ecNotAuthorised
     for m in begun:
       check caller.receive(encodeMessage(m).get)[0].kind == ceSubscription
     check callee.subscriptions == 0
@@ -1999,6 +2135,210 @@ suite "trn.termination: route expiry or revocation on a live session (TRANSPORT 
     check caller.receive(callee.respond(a, okExists()).get)[0].outcome.ok
     check callee.workEnded(a).len == 0 and callee.admitDelayed().len == 0
     check callee.executing == 0
+
+  test "[TRN-0394] [TXT-0125] during termination a Subscribe or Unsubscribe gets the termination code and changes nothing, a reused id included":
+    var (caller, callee) = pair()
+    active(caller, callee, 1, "storage.started_event")
+    discard callee.receive(caller.subscribe(2, "storage.upload_progress_event").get)
+    discard callee.beginTermination()
+    let used = callee.usedSubscriptionIds
+    # A reused id, a new id and an unknown event: the code, before the
+    # identifier and contract checks; no id is recorded.
+    for (id, event) in [
+      (1'u64, "storage.started_event"),
+      (9'u64, "storage.started_event"),
+      (10'u64, "storage.nope_event"),
+    ]:
+      let r = sent(callee.receive(subscribeMsg(id, event)))
+      check r.len == 1
+      check r[0].subscriptionResult.operation == mkSubscribe
+      check r[0].subscriptionResult.failure.get.code == ecNotAuthorised
+    check callee.usedSubscriptionIds == used
+    # An Unsubscribe of the ended subscription and of an id never used.
+    for id in [1'u64, 77]:
+      let r = sent(callee.receive(unsubscribeMsg(id)))
+      check r[0].subscriptionResult.operation == mkUnsubscribe
+      check r[0].subscriptionResult.failure.get.code == ecNotAuthorised
+    check callee.subscriptions == 0 and callee.state == csTerminating
+    # The overlap check keeps precedence: Subscribe 2's result was committed
+    # at the beginning, so this one is not an overlap; a pending one would be.
+    var (_, callee2) = pair()
+    discard callee2.receive(subscribeMsg(5, "storage.started_event"))
+    check callee2.subscriptionResult(5).isSome
+    discard callee2.receive(unsubscribeMsg(5))
+    discard callee2.beginTermination()
+    check callee2.subscriptions == 0
+    var (_, callee3) = pair()
+    discard callee3.receive(subscribeMsg(5, "storage.started_event"))
+    check closeCode(callee3.receive(unsubscribeMsg(5))) == Opt.some(ecInvalidParams)
+
+  test "[TXT-0124] a readiness end terminates with NOT_READY in place of NOT_AUTHORISED":
+    let l = transportLimits(maxInFlight = 1).get
+    var caller = callerConn(storageBoundary)
+    var callee = calleeConn(storageBoundary, l)
+    let (a, ra) = caller.request("exists", params()).get
+    discard callee.receive(ra)
+    let (b, rb) = caller.request("exists", params("b")).get
+    discard callee.receive(rb) # queued
+    active(caller, callee, 1, "storage.started_event")
+    discard callee.receive(caller.subscribe(2, "storage.started_event").get)
+    let begun = sent(callee.beginTermination(ecNotReady))
+    check callee.terminationCode == ecNotReady
+    check begun.mapIt(
+      if it.kind == mkResponse:
+        (it.response.id, it.response.failure.code)
+      else:
+        (it.subscriptionResult.id, it.subscriptionResult.failure.get.code)
+    ) == @[(b, ecNotReady), (2'u64, ecNotReady)]
+    let p = callee.publish(1, cborMap())
+    check p.error.kind == peEnded and p.error.code == ecNotReady
+    let (_, rc) = caller.request("exists", params("c")).get
+    check sent(callee.receive(rc))[0].response.failure.code == ecNotReady
+    check sent(callee.receive(subscribeMsg(3, "storage.started_event")))[0].subscriptionResult.failure.get.code ==
+      ecNotReady
+    check sent(callee.receive(unsubscribeMsg(1)))[0].subscriptionResult.failure.get.code ==
+      ecNotReady
+    # In-flight work completes, then ProtocolError NOT_READY and close.
+    check caller.receive(callee.respond(a, okExists()).get)[0].outcome.ok
+    let fin = callee.finishTermination(ecNotReady)
+    let pe = closeMessage(fin).get
+    check pe.code == ecNotReady and pe.message.isNone and pe.detail.isNone
+    check callee.state == csClosed
+
+  test "[TXT-0124] an authority end raises a readiness termination to NOT_AUTHORISED, which never falls":
+    var (_, callee) = pair()
+    discard callee.beginTermination(ecNotReady)
+    check callee.beginTermination(ecNotAuthorised).len == 0
+    check callee.terminationCode == ecNotAuthorised
+    check sent(callee.receive(subscribeMsg(1, "storage.started_event")))[0].subscriptionResult.failure.get.code ==
+      ecNotAuthorised
+    discard callee.beginTermination(ecNotReady)
+    check callee.terminationCode == ecNotAuthorised
+    check closeCode(callee.finishTermination(ecNotReady)) == Opt.some(ecNotAuthorised)
+    # A readiness finish on an authority termination stays NOT_AUTHORISED, and
+    # an authority finish raises a readiness termination.
+    var (_, callee2) = pair()
+    discard callee2.beginTermination(ecNotReady)
+    check closeCode(callee2.finishTermination(ecNotAuthorised)) ==
+      Opt.some(ecNotAuthorised)
+    var (_, callee3) = pair()
+    check closeCode(callee3.finishTermination(ecNotReady)) == Opt.some(ecNotReady)
+
+suite "trn.subscription-end: the callee ends one subscription (TRANSPORT §3.4, §5.1)":
+  test "[TRN-0388] [TRN-0389] [TXT-0121] [TXT-0122] the end follows the last Event committed for it, carries NOT_AUTHORISED and no commitment, and keeps the id used":
+    var (caller, callee) = pair()
+    active(caller, callee, 1, "storage.started_event")
+    active(caller, callee, 2, "storage.started_event")
+    let ev = callee.publish(1, cborMap()).get
+    let e = callee.endSubscription(1).get
+    let m = decodeMessage(e).get
+    check m.kind == mkSubscriptionEnd
+    check m.subscriptionEnd.id == 1
+    check m.subscriptionEnd.failure.code == ecNotAuthorised
+    check m.subscriptionEnd.failure.message.isNone
+    check toCbor(m).lookup("commitment").isNone
+    # Nothing is committed for it afterwards; the other subscription goes on.
+    check callee.publish(1, cborMap()).error.kind == peNoDestination
+    check callee.subscribersOf("storage.started_event") == @[2'u64]
+    check callee.endSubscription(1).isNone
+    # The caller saw the Event, then the end.
+    check caller.receive(ev)[0].kind == ceEvent
+    let got = caller.receive(e)
+    check got.len == 1 and got[0].kind == ceSubscriptionEnd
+    check got[0].id == 1 and got[0].op == mkSubscriptionEnd
+    check got[0].failure.get.code == ecNotAuthorised
+    # The id stays used on both sides.
+    check caller.subscribe(1, "storage.started_event").error.code == ecInvalidParams
+    check sent(callee.receive(subscribeMsg(1, "storage.started_event")))[0].subscriptionResult.failure.get.code ==
+      ecInvalidParams
+    # Only an active subscription ends; a pending Subscribe fails by its result.
+    discard callee.receive(subscribeMsg(5, "storage.started_event"))
+    check callee.endSubscription(5).isNone
+    check callee.endSubscription(99).isNone
+
+  test "[TRN-0393] the next Unsubscribe of an ended subscription succeeds; a second names no active subscription":
+    var (caller, callee) = pair()
+    active(caller, callee, 1, "storage.started_event")
+    discard caller.receive(callee.endSubscription(1).get)
+    let r = sent(callee.receive(unsubscribeMsg(1)))
+    check r.len == 1
+    check r[0].subscriptionResult.operation == mkUnsubscribe
+    check r[0].subscriptionResult.failure.isNone
+    let r2 = sent(callee.receive(unsubscribeMsg(1)))
+    check r2[0].subscriptionResult.failure.get.code == ecInvalidParams
+    check callee.state == csOpen
+
+  test "[TRN-0393] an end while the Unsubscribe is outstanding: the end is sent, then the Unsubscribe succeeds":
+    var (caller, callee) = pair()
+    active(caller, callee, 1, "storage.started_event")
+    discard callee.receive(caller.unsubscribe(1).get)
+    let e = callee.endSubscription(1).get
+    check callee.publish(1, cborMap()).error.kind == peNoDestination
+    # The owner's answer to the Unsubscribe cannot fail it now.
+    let r =
+      callee.subscriptionResult(1, Opt.some(InvocationFailure(code: ecModule))).get
+    check decodeMessage(r).get.subscriptionResult.failure.isNone
+    check callee.subscriptions == 0
+    # The caller takes the end while its Unsubscribe is outstanding, then the
+    # result still matches.
+    check caller.receive(e)[0].kind == ceSubscriptionEnd
+    let done = caller.receive(r)
+    check done[0].kind == ceSubscription and done[0].failure.isNone
+    check caller.state == csOpen
+    # Termination with such an Unsubscribe outstanding answers it successfully.
+    var (caller2, callee2) = pair()
+    active(caller2, callee2, 1, "storage.started_event")
+    discard callee2.receive(caller2.unsubscribe(1).get)
+    discard callee2.endSubscription(1)
+    let begun = sent(callee2.beginTermination())
+    check begun.len == 1 and begun[0].subscriptionResult.failure.isNone
+
+  test "[TRN-0391] [TXT-0120] a SubscriptionEnd must name an active subscription; an Event after it is invalid":
+    # No such subscription.
+    var (caller, callee) = pair()
+    let stray = encodeMessage(samples()[^1]).get # id 3
+    check closeCode(caller.receive(stray)) == Opt.some(ecInvalidParams)
+    # A Subscribe whose result is not received yet.
+    var (caller2, callee2) = pair()
+    discard callee2.receive(caller2.subscribe(3, "storage.started_event").get)
+    check closeCode(caller2.receive(stray)) == Opt.some(ecInvalidParams)
+    # A second end for the same id.
+    var (caller3, callee3) = pair()
+    active(caller3, callee3, 3, "storage.started_event")
+    check caller3.receive(stray)[0].kind == ceSubscriptionEnd
+    check closeCode(caller3.receive(stray)) == Opt.some(ecInvalidParams)
+    # An Event for it after its end.
+    var (caller4, callee4) = pair()
+    active(caller4, callee4, 3, "storage.started_event")
+    discard caller4.receive(stray)
+    let late = encodeMessage(samples()[6]).get # sub 3, storage.started_event
+    check closeCode(caller4.receive(late)) == Opt.some(ecInvalidParams)
+    check caller4.state == csClosed
+    discard callee
+    discard callee2
+
+  test "[TRN-0391] an abandoned subscription's end updates the state only; a code other than NOT_AUTHORISED is reported as MODULE_ERROR":
+    var (caller, callee) = pair()
+    active(caller, callee, 1, "storage.started_event")
+    check caller.abandonSubscription(1)
+    check caller.receive(callee.endSubscription(1).get).len == 0
+    check caller.unsubscribe(1).error.code == ecInvalidParams
+    for code in [ecNotReady, ecModule, ecTransport]:
+      var (caller2, callee2) = pair()
+      active(caller2, callee2, 1, "storage.started_event")
+      let other = encodeMessage(
+        Message(
+          kind: mkSubscriptionEnd,
+          subscriptionEnd: SubscriptionEnd(
+            id: 1, failure: InvocationFailure(code: code, message: Opt.some("why"))
+          ),
+        )
+      ).get
+      let got = caller2.receive(other)
+      check got[0].kind == ceSubscriptionEnd
+      check got[0].failure.get.code == ecModule
+      check got[0].failure.get.message.isNone
+      discard callee2
 
 suite "trn.limits: per-connection resource limits (TRANSPORT §6, §8.6)":
   test "[TRN-0381] [TRN-0383] [TRN-0385] [TRN-0386] admission comes before the resource; at the cap a Request waits in a bounded queue; a full queue closes, and nothing accepted is dropped":
@@ -2144,7 +2484,7 @@ suite "trn.access: the route's access scope (TRANSPORT §8.1; RUNTIME §9.3)":
   test "[TRN-0158] absent lists are the whole contract, empty ones nothing":
     let all = storageBoundary.applyAccess(RouteAccess())
     check all.boundary.allowsMethod("space") and all.boundary.allowsMethod("schema")
-    check all.boundary.allowsEvent("storage.upload_done_event")
+    check all.boundary.allowsEvent("storage.upload_progress_event")
     check all.publishScope.isNone
     let none = storageBoundary.applyAccess(
       RouteAccess(
@@ -2164,7 +2504,7 @@ suite "trn.access: the route's access scope (TRANSPORT §8.1; RUNTIME §9.3)":
     check events.boundary.allowsMethod("exists") and
       events.boundary.allowsMethod("schema")
     check events.boundary.allowsEvent("storage.started_event")
-    check not events.boundary.allowsEvent("storage.upload_done_event")
+    check not events.boundary.allowsEvent("storage.upload_progress_event")
 
   test "[TRN-0158] a root that names nothing under the selected contract narrows the scope and is reported":
     let stray = sensor.primary.root
@@ -2206,7 +2546,7 @@ suite "trn.evolution: protocol evolution (TRANSPORT §10, §10.1)":
   test "[TRN-0251] unknown fields and kinds are INVALID_PARAMS, then close":
     for v in [
       toCbor(samples()[8]).with("v2", cbor(1'u64)),
-      cborMap((cbor(0'u64), cbor(9'u64)), (cbor("id"), cbor(1'u64))),
+      cborMap((cbor(0'u64), cbor(10'u64)), (cbor("id"), cbor(1'u64))),
     ]:
       var (_, callee) = pair()
       check closeCode(callee.receive(wire(v))) == Opt.some(ecInvalidParams)

@@ -2,7 +2,7 @@
 ## synchronous call and an asynchronous one share, and the invocation context.
 ##
 ## [IMPL] A direct route call (RUNTIME §4.1, §6.4, §7.5):
-## 1. The Runtime thread admits it, in the order of G171's interim (TF-18):
+## 1. The Runtime thread admits it, in the order of RUNTIME l.1824-1833:
 ##    the method resolves under the selected contract (METHOD_NOT_FOUND), it
 ##    is inside the route's method scope and the per-call decision allows it
 ##    (NOT_AUTHORISED, RUNTIME l.1732, G52; a route revoked for its authority
@@ -20,10 +20,12 @@
 ##    the Runtime owns, and the provider's buffer is released at once with its
 ##    `_MODULE_free` (response copy), so a provider never waits on a
 ##    consumer's buffers to stop (RUNTIME l.1581-1583).
-## 5. [G174] The result is committed only after the route's end cause is read
-##    under the ticket's lock, the lock the Runtime thread takes to record it:
-##    a route revoked while the provider ran turns the result into
-##    NOT_AUTHORISED; a closed or failed route lets it complete.
+## 5. The result is committed only after the route's end cause is read under
+##    the ticket's lock, the lock the Runtime thread takes to record it
+##    (RUNTIME l.1212): a route revoked or expired while the provider ran ends
+##    the call TRANSPORT_ERROR and drops the result (l.1271); a closed or
+##    failed route lets it complete, unless the result is the CANCELLED the
+##    end's own cancellation caused, which is TRANSPORT_ERROR too.
 ## 6. The call leaves the in-flight count; a provider being stopped is
 ##    destroyed only once its count is zero.
 ##
@@ -38,8 +40,9 @@ import results
 import logos_sdk/cbor
 import logos_sdk/abi/[checks, types]
 import logos_sdk/iface/[accept, outcome, payload, surface]
+import logos_sdk/kit/rc_arms
 import ../transport/boundary
-import ./[callside, events, plumbing]
+import ./[callside, events, plumbing, rcaddress]
 
 const RcNamespace = "logos.runtime_control."
 
@@ -129,8 +132,9 @@ proc record*(e: Engine, c: CallCapture, trail: var CallTrail) =
 proc notReadyAfter*(
     b: ptr SchemaBlob, bare: string, params: openArray[byte], e: EngineError
 ): InvocationFailure =
-  ## [G171 interim (TF-18)] A call the Runtime thread answered NOT_READY is
-  ## authorized; its payload is validated before readiness is reported.
+  ## [SPEC RUNTIME l.1828, l.1832] A call the Runtime thread answered
+  ## NOT_READY is authorized; its payload is validated (step 3) before
+  ## readiness (step 7) is reported.
   if e.code != ecNotReady:
     return failureOf(e)
   notReadyAfter(selectedOf(b), bare, params, failureOf(e))
@@ -251,7 +255,9 @@ proc callProvider*(
     addr len,
   )
   pop(f)
-  var outcome = checkOutcome(r, bufferShape(buf, len))
+  # [SPEC INTERFACE l.3306-3311] a provider's own status
+  var outcome =
+    checkOutcome(r, bufferShape(buf, len)).providerChecked(ticketCancelled(adm.ticket))
   if outcome.isErr:
     if transfersBuffer(r, buf):
       adm.free(adm.context, buf)
@@ -304,7 +310,10 @@ proc systemCall*(
     addr len,
   )
   pop(f)
-  checkOutcome(r, bufferShape(buf, len)).isOkOr:
+  # [SPEC INTERFACE l.3306-3311; re-pin P4 R4b] The Capability Authority is
+  # provider code behind the ABI too: a status outside the set is
+  # MODULE_ERROR, a failed evaluation (G172).
+  checkOutcome(r, bufferShape(buf, len)).providerChecked(ticketCancelled(ticket)).isOkOr:
     if transfersBuffer(r, buf):
       free(context, buf)
     return err(failureOf(error))
@@ -317,20 +326,37 @@ proc systemCall*(
   ok(bytes)
 
 proc revokedResult*(): InvocationFailure =
-  ## [G174] X1 interim: a route revoked while the call ran ends it with the
-  ## handle's retained termination code.
+  ## [SPEC RUNTIME l.1261; TRANSPORT l.971] A call its route's revocation or
+  ## expiry found not yet admitted is a new operation: NOT_AUTHORISED.
   failure(ecNotAuthorised, "the route was revoked")
+
+proc routeEndedResult*(): InvocationFailure =
+  ## [SPEC RUNTIME l.1271-1272] An admitted call that its route's end ended
+  ## before a valid final result was accepted; the code does not say whether
+  ## the provider ran it.
+  failure(ecTransport, "the route ended before the call's result was accepted")
+
+func endedByRoute*(endCode: int, r: Result[seq[byte], InvocationFailure]): bool =
+  ## [SPEC RUNTIME l.1271, l.1212; INTERFACE l.2024] Read under the ticket's
+  ## lock: whether the route's end decides an admitted call instead of `r`. A
+  ## revoked or expired route commits no result of a call it ends. After any
+  ## other end a CANCELLED result is the end's doing (P5 reading d4): the end
+  ## marked the invocation cancelled, and a cancellation by the caller, a
+  ## timeout or the session decides the call before its provider returns.
+  endCode == ord(ecNotAuthorised) or
+    (endCode != ord(ecOk) and r.isErr and r.error.code == ecCancelled)
 
 proc commitSync*(
     t: ptr CallTicket, r: var Result[seq[byte], InvocationFailure]
 ): Result[seq[byte], InvocationFailure] =
-  ## [G174] Step 5: the commit decision, ordered with the route's revocation.
-  ## A response the revocation keeps from its caller is zeroed [DECISIONS G276].
+  ## Step 5: the commit decision, ordered with the route's end (RUNTIME l.1212,
+  ## l.1271). A response the end keeps from its caller is zeroed
+  ## [DECISIONS G276].
   withLock t.lock:
-    if t.endCode == ord(ecNotAuthorised):
+    if endedByRoute(t.endCode, r):
       if r.isOk:
         wipe(r.value)
-      return err(revokedResult())
+      return err(routeEndedResult())
   move r
 
 proc leave*(e: Engine, adm: Admission) =
@@ -385,9 +411,16 @@ proc rcRequest(
   ## method's request schema (a configuration value over 8 MiB included,
   ## CFG-0025). [K19 interim; G298] The four remote listener and export
   ## methods are decoded like the others and answered after their
-  ## authorization (`engine.remoteList`, `engine.setExport`). A method this
-  ## Runtime does not perform yet is MODULE_ERROR [IMPL]. A staged configuration value is taken out into `value`: it stays
-  ## on this thread (I87).
+  ## authorization (`engine.remoteList`, `engine.setExport`). [SPEC RUNTIME
+  ## l.2704-2705; M8] A listener address whose `profile` does not name the one
+  ## its `transport` selects, or a `quic` one whose `alpn` is not
+  ## `logos.remote.quic`, is INVALID_PARAMS without validation detail. It is
+  ## answered as a payload that fails validation: what is authorized without
+  ## the payload comes first (`rcInvoke`, step 2 of l.1824-1833), a target the
+  ## payload names after it [reading, Fable synthesis §14.3]. A method this
+  ## Runtime does not perform yet is MODULE_ERROR [IMPL]. A staged
+  ## configuration value is taken out into `value`: it stays on this thread
+  ## (I87).
   let declaration = RcNamespace & bare & "_request"
   if bare.len == 0 or not rcSchema().declares(declaration) or
       not rcSchema().declares(RcNamespace & bare & "_response"):
@@ -415,6 +448,15 @@ proc rcRequest(
   else: @params)
   template call(which: RcMethod): RcCall =
     RcCall(m: which, request: request)
+
+  template mismatched(): Result[RcCall, InvocationFailure] =
+    err(
+      InvocationFailure(
+        code: ecInvalidParams,
+        message:
+          Opt.some("the address does not match the profile its transport selects"),
+      )
+    )
 
   case bare
   of $rmGetSelf:
@@ -534,14 +576,20 @@ proc rcRequest(
   of $rmSetRemoteListener:
     var c = call(rmSetRemoteListener)
     c.setListener = fromChecked(LogosNSRuntimeControlSetRemoteListenerRequest, v)
+    if c.setListener.listener.address.mismatching:
+      return mismatched()
     ok(c)
   of $rmListProviderExports:
     var c = call(rmListProviderExports)
     c.listExports = fromChecked(LogosNSRuntimeControlListProviderExportsRequest, v)
+    if c.listExports.listener.isSome and c.listExports.listener.get.mismatching:
+      return mismatched()
     ok(c)
   of $rmSetProviderExport:
     var c = call(rmSetProviderExport)
     c.setExport = fromChecked(LogosNSRuntimeControlSetProviderExportRequest, v)
+    if c.setExport.export.listener.mismatching:
+      return mismatched()
     ok(c)
   else:
     err(
@@ -565,22 +613,60 @@ proc lifecycleResponse(m: RcMethod, v: InstanceView): Result[seq[byte], string] 
   )
   if m == rmStartModule:
     encode(
-      LogosNSRuntimeControlStartModuleResponse(
-        module: v.module, instance: Opt.some(v.instance), state: state
+      LogosNSRuntimeControlStartModuleResponse.accepted(
+        LogosNSRuntimeControlStartModuleResponseARMapModuleStateMap(
+          module: v.module, instance: Opt.some(v.instance), state: state
+        )
       )
     )
   elif m == rmRecoverModule:
     encode(
-      LogosNSRuntimeControlRecoverModuleResponse(
-        module: v.module, instance: v.instance, state: state
+      LogosNSRuntimeControlRecoverModuleResponse.accepted(
+        LogosNSRuntimeControlRecoverModuleResponseARMapInstanceModuleStateMap(
+          module: v.module, instance: v.instance, state: state
+        )
       )
     )
   else:
     encode(
-      LogosNSRuntimeControlStopModuleResponse(
-        module: v.module, instance: Opt.some(v.instance), state: state
+      LogosNSRuntimeControlStopModuleResponse.accepted(
+        LogosNSRuntimeControlStopModuleResponseARMapModuleStateMap(
+          module: v.module, instance: Opt.some(v.instance), state: state
+        )
       )
     )
+
+proc typedResponse(m: RcMethod, t: TypedError): Result[seq[byte], string] =
+  ## [SPEC RUNTIME l.1818-1822] A typed outcome as the method's error arm.
+  let e = rcError(
+    case t.code
+    of recStaleRevision:
+      LogosNSRuntimeControlErrorCodeKind.Stale_revision
+    of recConfigurationRejected:
+      LogosNSRuntimeControlErrorCodeKind.Configuration_rejected
+    of recDeclarationUnavailable:
+      LogosNSRuntimeControlErrorCodeKind.Declaration_unavailable,
+    t.currentRevision,
+  )
+  case m
+  of rmCreateModule:
+    encode(LogosNSRuntimeControlCreateModuleResponse.refused(e))
+  of rmStartModule:
+    encode(LogosNSRuntimeControlStartModuleResponse.refused(e))
+  of rmStopModule:
+    encode(LogosNSRuntimeControlStopModuleResponse.refused(e))
+  of rmRecoverModule:
+    encode(LogosNSRuntimeControlRecoverModuleResponse.refused(e))
+  of rmRetireModule:
+    encode(LogosNSRuntimeControlRetireModuleResponse.refused(e))
+  of rmUpdatePermissionSettings:
+    encode(LogosNSRuntimeControlUpdatePermissionSettingsResponse.refused(e))
+  of rmUpdateConfiguration:
+    encode(LogosNSRuntimeControlUpdateConfigurationResponse.refused(e))
+  of rmApplyConfiguration:
+    encode(LogosNSRuntimeControlApplyConfigurationResponse.refused(e))
+  else:
+    err($m & " has no error arm")
 
 proc configResponse(
     m: RcMethod, target: LogosNSRuntimeModuleInstanceAddress, s: ConfigState
@@ -600,12 +686,12 @@ proc configResponse(
     )
   else:
     # [SPEC CONFIG l.208] the complete staged record, if any
-    var r = LogosNSRuntimeControlUpdateConfigurationResponse(
+    var r = LogosNSRuntimeControlUpdateConfigurationResponseARMapStateRevisionTargetMap(
       target: target, state_revision: s.revision
     )
     if s.staged.isSome:
       r.staged = Opt.some(toRc(s.staged.get))
-    encode(r)
+    encode(LogosNSRuntimeControlUpdateConfigurationResponse.accepted(r))
 
 proc checkedResponse(
     bare: string, bytes: seq[byte], depth: int, trail: var CallTrail
@@ -629,13 +715,13 @@ proc stage(
     value: seq[byte],
     trail: var CallTrail,
 ): Result[Reply, InvocationFailure] =
-  ## [SPEC CONFIG §5 l.197-200; I87 §2.7 step 2] Phase 2 of a `stage`, on
+  ## [SPEC CONFIG §5 l.196-200; I87 §2.7 step 2] Phase 2 of a `stage`, on
   ## this thread: the value decoded, validated and its value root computed
   ## against the binding phase 1 returned, then committed by the Runtime
   ## thread (`rqConfigCommit`). Malformed or too deep is INVALID_PARAMS
-  ## without detail, answered here (row 4 follows rows 1-3, which phase 1
-  ## checked); a value not of the root goes to the Runtime thread, which
-  ## decides whether its detail may be disclosed.
+  ## without detail, answered here (row 3 follows rows 1-2 and the revision,
+  ## which phase 1 checked); a value not of the root (row 4) goes to the
+  ## Runtime thread, which decides whether its detail may be disclosed.
   let b = phase1.config.binding
   var u = update
   var path: seq[CborValue]
@@ -667,7 +753,8 @@ proc stage(
     )
   )
   drop(u.value) # the Runtime thread took its own reference when it staged
-  if reply.error.isSome:
+  if reply.error.isSome and not reply.error.get.isTyped:
+    # a typed outcome goes back to `rcInvoke` as phase 1's would
     var held = reply.config
     held.release()
     e.record(reply.capture, trail)
@@ -695,8 +782,8 @@ proc rcInvoke*(
   var value: seq[byte]
   let rc = rcRequest(bare, params, e.payloadDepth, trail, value).valueOr:
     if error.code == ecInvalidParams:
-      # [G171 interim (TF-18)] What is authorized without the payload comes
-      # before its validation.
+      # [SPEC RUNTIME l.1827-1828] What is authorized without the payload
+      # (step 2) comes before its validation (step 3).
       let pre = e.call(
         Request(
           kind: rqRcPrecheck,
@@ -716,16 +803,25 @@ proc rcInvoke*(
   var held = reply.config # [I87] references this thread releases
   defer:
     held.release()
-  if reply.error.isSome:
+  if reply.error.isSome and not reply.error.get.isTyped:
     e.record(reply.capture, trail)
     return err(failureOf(reply.error.get))
-  if m == rmUpdateConfiguration and rc.cfgUpdate.stage:
+  if reply.error.isNone and m == rmUpdateConfiguration and rc.cfgUpdate.stage:
     reply = e.stage(instance, attempt, rc.cfgUpdate, reply, value, trail).valueOr:
       return err(error)
     held.release()
     held = reply.config
+  # [SPEC RUNTIME l.1818-1822; re-pin P4a] A typed outcome is a successful
+  # response holding the method's error arm, checked and recorded as one.
+  let typed =
+    if reply.error.isSome:
+      reply.error.get.typed
+    else:
+      Opt.none(TypedError)
   let encoded =
-    if m in {rmStartModule, rmStopModule, rmRecoverModule}:
+    if typed.isSome:
+      typedResponse(m, typed.get)
+    elif m in {rmStartModule, rmStopModule, rmRecoverModule}:
       lifecycleResponse(m, reply.view)
     elif m in {rmGetConfigurationSchema, rmGetConfiguration, rmUpdateConfiguration}:
       let target = if m == rmUpdateConfiguration: rc.cfgUpdate.target else: rc.cfgTarget

@@ -26,7 +26,8 @@ const HarnessRuntime* = "rt-loader-test"
 var
   loaderRcVtable = armed(
     LogosRuntimeControlVtable(
-      abiVersion: 2, structSize: csize_t(sizeof(LogosRuntimeControlVtable))
+      abiVersion: RuntimeControlVtableAbiVersion,
+      structSize: csize_t(sizeof(LogosRuntimeControlVtable)),
     )
   )
   loaderRcState: byte

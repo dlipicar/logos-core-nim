@@ -17,12 +17,17 @@ kind is one of:
   cddl     one CDDL rule, keyed by rule name
   block    any other fenced block (vectors, C declarations, examples)
   heading  a section heading (used for section coverage)
+
+spec/repin-pending.toml lists what stays deferred past the re-pin to 6cac8335: each unit with the work
+item that owns it, and each text entry that rides on one. `pending` checks it, and checks that what left
+the re-pin's frozen list (spec/repin-baseline.toml) has its evidence in spec/repin-text-cleared.toml.
 """
 
 from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -273,6 +278,21 @@ def rule_unit(name: str, text: list[str], line: int, section: str, heading: str)
     while text and not text[-1].strip():
         text.pop()
     return Unit("cddl", section, heading, line, "\n".join(text), rule=name).finish()
+
+
+# The re-pin's pending list ---------------------------------------------------------
+
+PENDING_FILE = Path("spec") / "repin-pending.toml"
+CLEARED_FILE = Path("spec") / "repin-text-cleared.toml"
+BASELINE_FILE = Path("spec") / "repin-baseline.toml"
+BASELINE_SHA256 = "3a1e52f94e36f1406d097f1f67f3ff45a0b2693a8a3fe123cb89f579a8d71103"
+TEXT_ID_RE = re.compile(r"TXT-\d{4}")
+READING_KINDS = {"reword", "removed", "informative", "holds"}
+WORK_ITEMS = {"5-3a", "5-5", "5-6a", "5-6b", "5-7a", "5-7b", "5-8", "5-10", "5-12"}  # the work items that may own a unit after the re-pin
+SITE_ROOTS = ("src/", "sdk/src/", "tests/", "sdk/tests/", "docs/")
+TEST_TEMPLATES = "test|ltTest|peerTest|sceneTest"
+# Conditions a test may sit under and still run somewhere: platforms, and the one build switch the suites use.
+LIVE_CONDITION = re.compile(r"defined\((?:posix|windows|linux|macosx|android|ios)\)|declared\(caParity\)")
 
 
 # Ledger -------------------------------------------------------------------------
@@ -987,7 +1007,7 @@ def cmd_deploydoc(args) -> int:
             if uid[:3] != DEPLOY_SPECS[spec]:
                 failures.append(f"{where}: {uid} is not a unit of {spec}")
             check_claimed(where, uid)
-        if not any(cite in r for r in doc_reasons):
+        if not any(names_cite(r, cite) for r in doc_reasons):
             failures.append(f"{where}: no inspection item of BCP-0038 names {cite}")
 
     fence = [i for i, line in enumerate(lines) if line.strip() == DEPLOY_FACTS_FENCE]
@@ -1012,6 +1032,541 @@ def cmd_deploydoc(args) -> int:
         f"{len(answered)}/{len(gated)} BCP §5.4 units answered, {len(failures)} failures"
     )
     return 1 if failures else 0
+
+
+def names_cite(reason: str, cite: str) -> bool:
+    """[re-pin P9] Whether `reason` names the duty row's citation whole: "BCP l.36" is not named by
+    "BCP l.360" or by the range "BCP l.36-40"."""
+    return re.search(rf"(?<!\w){re.escape(cite)}(?![\d-])", reason) is not None
+
+
+# The pending list's own rules --------------------------------------------------------
+
+
+def code_lines(lines: list[str]) -> list[bool]:
+    """Whether each line of a Nim file starts as code: not inside a long string or a block comment."""
+    out, long_string, depth = [], False, 0
+    for line in lines:
+        out.append(not long_string and depth == 0)
+        i = 0
+        while i < len(line):
+            if long_string:
+                if line.startswith('"""', i):
+                    long_string, i = False, i + 3
+                else:
+                    i += 1
+            elif depth:
+                if line.startswith("]#", i):
+                    depth, i = depth - 1, i + 2
+                elif line.startswith("#[", i):
+                    depth, i = depth + 1, i + 2
+                else:
+                    i += 1
+            elif line.startswith('"""', i):
+                long_string, i = True, i + 3
+            elif line.startswith(("#[", "##["), i):
+                depth, i = 1, i + (3 if line[i + 1] == "#" else 2)
+            elif line[i] == "#":
+                break
+            elif line.startswith("'\"'", i):
+                i += 3
+            elif line[i] == '"':
+                i += 1
+                while i < len(line) and line[i] != '"':
+                    i += 2 if line[i] == "\\" else 1
+                i += 1
+            else:
+                i += 1
+    return out
+
+
+def real_tests(root: Path):
+    """(suite path, test name) of each test that can run: in a suite file, not under `when false:`, and with a
+    body that does more than `skip()` or `discard`. Re-pin evidence counts only these."""
+    name_re = re.compile(rf'^(\s*)(?:{TEST_TEMPLATES})\s+"([^"]*)"')
+
+    def live(condition: str) -> bool:
+        """A `when` on platforms only. Any other `when`, `if`, `elif` or `else` above a test may never run."""
+        m = re.fullmatch(r"when\s+(.*):", condition)
+        return m is not None and re.fullmatch(r"(?:T|and|or|not|[()\s])*", LIVE_CONDITION.sub("T", m.group(1))) is not None
+
+    for tree in ("tests", "sdk/tests"):
+        paths = [p for p in sorted((root / tree).glob("*.nim")) if not p.name.startswith(".")] if (root / tree).is_dir() else []
+        suites = [p for p in paths if p.name.startswith("test_")]
+        for path in paths:
+            if path not in suites and not (
+                path.name.endswith("_body.nim")
+                and any(re.search(rf"^\s*include\s+.*\b{path.stem}\b", q.read_text(encoding="utf-8"), re.M) for q in suites)
+            ):
+                continue  # helpers, and bodies no suite includes
+            lines = path.read_text(encoding="utf-8").splitlines()
+            code = code_lines(lines)
+            for i, line in enumerate(lines):
+                m = name_re.match(line)
+                if not m or not code[i]:
+                    continue
+                indent, outer, dead = len(m.group(1)), len(m.group(1)), False
+                for before in reversed(lines[:i]):
+                    width = len(before) - len(before.lstrip())
+                    if before.strip() and width < outer:
+                        outer = width
+                        above = before.strip()
+                        if re.match(r"(?:when|if|elif|else)\b", above) and not live(above):
+                            dead = True
+                body = []
+                for after in lines[i + 1 :]:
+                    if after.strip() and len(after) - len(after.lstrip()) <= indent:
+                        break
+                    if after.strip() and not after.strip().startswith("#"):
+                        body.append(after.strip())
+                if not dead and body and body[0] not in ("skip()", "skip") and not all(b == "discard" for b in body):
+                    yield path.relative_to(root).as_posix(), m.group(2)
+
+
+def text_tags(root: Path) -> dict[str, set[str]]:
+    """Each [TXT-nnnn] tag named by a test that can run, with the suites that name it."""
+    found: dict[str, set[str]] = {}
+    for suite, name in real_tests(root):
+        for tag in TEXT_ID_RE.findall(name):
+            found.setdefault(tag, set()).add(suite)
+    return found
+
+
+def unit_evidence(root: Path) -> set[str]:
+    """Units named by a test that can run, or by an inspection item with a real reason."""
+    found = {uid for _, name in real_tests(root) for uid in TEST_ID_RE.findall(name)}
+    for extra in inspection_files(root):
+        for item in load_toml(extra).get("item", []):
+            if len(str(item.get("reason", "")).strip()) >= 20:
+                found.update(item.get("ids", []))
+    return found
+
+
+def claim_state(root: Path, uid: str) -> tuple[str, bool]:
+    """The unit's status, and whether a claims file names the unit itself rather than its section."""
+    claim_sets = claims_of(root, uid[:3])
+    unit = next((u for u in load_ledger(ledger_path(root, uid[:3]))[1] if u.id == uid), None)
+    if unit is None:
+        return "unknown", False
+    return status_across(claim_sets, unit), any(uid in c.get("units", {}) for c in claim_sets)
+
+
+def decision_rows(root: Path) -> dict[str, str]:
+    """Each decision's text by id: a `### G12` section up to the next heading, or a `| I12 |` table row."""
+    path = root / "docs" / "DECISIONS.md"
+    rows: dict[str, str] = {}
+    current = None
+    for line in path.read_text(encoding="utf-8").splitlines() if path.is_file() else []:
+        heading = re.match(r"#{1,6}\s+([DGI]\d+)\b", line)
+        table = re.match(r"\|\s*([DGIR]\d+)\s*\|", line)
+        if heading:
+            current = heading.group(1)
+            rows[current] = line
+        elif line.startswith("#"):
+            current = None
+        elif table:
+            rows[table.group(1)] = rows.get(table.group(1), "") + line
+        elif current:
+            rows[current] += "\n" + line
+    return rows
+
+
+def spec_title(prefix: str) -> str:
+    """The name one spec uses for another, such as `LOGOS-MODULE-RUNTIME` for RUN."""
+    return "LOGOS-" + PREFIX_FILE.get(prefix, "").removeprefix("spec-").removesuffix(".md").upper()
+
+
+def rides_within(entry: dict, unit: str, unit_section: str | None) -> bool:
+    """[re-pin P6 Q5] Whether a deferred text entry may ride on `unit`: a unit of its own spec and
+    section, or a unit of another spec when the entry's own sentence (`what`) names that spec and a
+    section the unit belongs to, such as "LOGOS-MODULE-RUNTIME Section 9" for a unit of §9.3.1."""
+    spec, prefix = str(entry.get("spec", "")), unit.split("-")[0]
+    if prefix == spec:
+        return unit_section == entry.get("section")
+    if prefix not in PREFIX_FILE or not unit_section:
+        return False
+    named = re.finditer(re.escape(spec_title(prefix)) + r" Section (\d+(?:\.\d+)*)", str(entry.get("what", "")))
+    return any(unit_section == f"§{m.group(1)}" or unit_section.startswith(f"§{m.group(1)}.") for m in named)
+
+
+LINE_PART_RE = re.compile(r"(\d+)(?:-(\d+))?")
+
+
+def derived_section(entry: dict, units: list[Unit]) -> str | None:
+    """[re-pin P8b Q1] The section of a text entry: its `section`, else, for a new-side entry, the
+    section of the last unit of its spec's ledger (`units`) at or before each of its lines, when
+    every line gives the same one. A `line` part that is not a line or a range, such as "none",
+    gives none, and so does an old-side entry."""
+    if entry.get("section"):
+        return str(entry["section"])
+    if entry.get("side") != "new":
+        return None
+    lines: list[int] = []
+    for part in str(entry.get("line", "")).split(","):
+        m = LINE_PART_RE.fullmatch(part.strip())
+        if not m:
+            return None
+        lines += [int(m.group(1)), int(m.group(2) or m.group(1))]
+    ordered = sorted((u for u in units if not u.retired), key=lambda u: u.line)
+    found = set()
+    for n in lines:
+        before = [u.section for u in ordered if u.line <= n]
+        if not before:
+            return None
+        found.add(before[-1])
+    return found.pop() if len(found) == 1 else None
+
+
+def baseline_findings(root: Path, deferred: dict, cleared: dict, state) -> list[str]:
+    """[re-pin P9] Every unit and text entry of the frozen list is still in [deferred], or left with the
+    evidence its kind needs (DECISIONS I104, note at re-pin P9).
+
+    The units are those of the frozen list's [units] and [deferred], and those of a [[units]] record. A
+    unit whose claims file still defers it (any `deferred:` status; the gate closes tiers 1 to 4b, so
+    only deferred:tier-5 is left) belongs in [deferred]. A unit of the frozen list's [deferred] leaves
+    only claimed. Any other leaves claimed, or with another status named in its claims file and a
+    decision row that names it, as the [units] rule allowed when it joined [deferred]."""
+    base = load_toml(root / BASELINE_FILE)
+    findings: list[str] = []
+    evidence = unit_evidence(root)
+    rows = decision_rows(root)
+
+    def decided(uid: str, record: dict) -> bool:
+        """A row of docs/DECISIONS.md that names this unit, not merely any row."""
+        return re.search(rf"\b{uid}\b", rows.get(str(record.get("decision", "")).strip(), "")) is not None
+
+    records = {r.get("id"): r for r in cleared.get("units", [])}
+    base_units, base_held = base.get("units", {}), set(base.get("deferred", {}))
+    tracked = set(base_units.get("added", {})) | set(base_units.get("changed", {})) | base_held | (set(records) - {None})
+    for uid in sorted(tracked - set(deferred)):
+        status, named = state(uid)
+        record = records.get(uid, {})
+        if status.startswith("deferred:"):
+            findings.append(f"{uid}: its claims file still defers it ({status}), so it belongs in [deferred]")
+        elif uid in base_held and status != "claimed":
+            findings.append(f"{uid} left [deferred] without being claimed")
+        elif status != "claimed" and not (named and decided(uid, record)):
+            findings.append(f"{uid} left the list as {status}: claim it, or name it in its claims file with a decision row")
+        if status == "claimed" and uid not in evidence:
+            findings.append(f"{uid} is claimed with no test that can run and no inspection item with a reason")
+        if uid in base_units.get("changed", {}) and not str(record.get("compared", "")).strip():
+            findings.append(f"{uid} left [units.changed] with no record of what was compared in {CLEARED_FILE}")
+    riders = {r.get("id"): r for r in cleared.get("deferred", [])}
+    for uid in sorted(set(deferred) - base_held):
+        record = riders.get(uid, {}) if TEXT_ID_RE.fullmatch(uid) else records.get(uid, {})
+        if not decided(uid, record):
+            findings.append(f"{uid} joined [deferred] with no decision row in {CLEARED_FILE}")
+    sections: dict[str, str] = {}
+
+    def section_of(uid: str) -> str | None:
+        """The section of a unit in its spec's ledger."""
+        if not sections:
+            for path in ledger_files(root):
+                for u in load_ledger(path)[1]:
+                    sections[u.id] = u.section
+        return sections.get(uid)
+
+    def entry_section(entry: dict) -> str | None:
+        """A text entry's section, derived from its lines when it names none (Q1)."""
+        units = [u for path in ledger_files(root) if path.stem == entry.get("spec") for u in load_ledger(path)[1]]
+        return derived_section(entry, units)
+
+    done = {e.get("id"): e for e in cleared.get("text", [])}
+    lowered = {r.get("id") for r in cleared.get("lowered", []) if decided(r.get("id", ""), r)}
+    tests = list(real_tests(root))
+    for b in base.get("text", []):
+        tid = b["id"]
+        rider = riders.get(tid, {})
+        unit = str(rider.get("rides", "")).strip()
+        if tid in deferred:
+            # [re-pin P4a] A text entry defers only riding on a unit deferred to the same work item, of
+            # the same spec and section, with a decision row that names the entry. [re-pin P6 Q5] Or of
+            # another spec, when the entry's own sentence names that spec and a section the unit is in.
+            if not unit:
+                findings.append(f"{tid} is in [deferred] with no [[deferred]] record naming the unit it rides on in {CLEARED_FILE}")
+            elif deferred.get(unit) != deferred[tid]:
+                findings.append(f"{tid} rides on {unit}, which is not deferred to {deferred[tid]}")
+            elif not rides_within({**b, "section": entry_section(b)}, unit, section_of(unit)):
+                derived = "" if b.get("section") else ", derived from its lines"
+                findings.append(
+                    f"{tid} ({b.get('spec')} {entry_section(b) or 'no section'}{derived}) rides on {unit},"
+                    " of another section, or of another spec its sentence does not name with that section"
+                )
+        elif tid not in done:
+            findings.append(f"{tid} is neither deferred nor cleared")
+        else:
+            e = done[tid]
+            if str(e.get("reading", "")).strip():
+                site, kind = str(e.get("site", "")).strip(), e.get("kind")
+                path = site.split(":")[0]
+                site_ok = path.startswith(SITE_ROOTS) and (root / path).exists()
+                if b["class"] == "behaviour" and tid not in lowered:
+                    findings.append(f"{tid}: a behaviour entry clears only by a test")
+                if not str(e.get("compared", "")).strip():
+                    findings.append(f"{tid}: a reading says what was compared")
+                if kind not in READING_KINDS:
+                    findings.append(f"{tid}: a reading has a kind, one of {sorted(READING_KINDS)}")
+                if b.get("guard") and (kind == "informative" or not site_ok):
+                    findings.append(f"{tid}: this entry names a code, state or table row: name the test or code site that was read")
+                old = next((x for x in base.get("text", []) if x["id"] == e.get("pair")), {})
+                paired = old.get("side") == "old" and old.get("spec") == b.get("spec") and e.get("pair") in done and e.get("pair") != tid
+                if kind == "reword" and (b.get("side") != "new" or not paired):
+                    findings.append(f"{tid}: a reword names the cleared old-side entry of its spec that it replaces, in `pair`")
+                if kind == "removed" and b.get("side") != "old":
+                    findings.append(f"{tid}: only a removed sentence clears as `removed`")
+                wanted = str(e.get("named", "")).strip()
+                if kind == "holds" and not (wanted and any(suite == path and wanted in name for suite, name in tests)):
+                    findings.append(f"{tid}: `holds` names the suite in `site` and a test of it in `named`")
+            if unit:
+                # It was deferred: it leaves once its unit is claimed by a test that carries its tag. Its
+                # record is id, step (the work item that claimed the unit) and test (the suite).
+                suite = str(e.get("test", "")).strip()
+                carried = any(s == suite and f"[{tid}]" in n and f"[{unit}]" in n for s, n in tests)
+                if not (state(unit)[0] == "claimed" and carried):
+                    findings.append(f"{tid} left [deferred] before a test of {unit} that carries [{tid}] claimed it")
+    return findings
+
+
+def pending_findings(root: Path, digest: str | None = None, state=None, gated: set[str] | None = None) -> list[str]:
+    """[re-pin P9] The list holds only [deferred], each unit in it is a live gated requirement that its
+    claims file defers by name, each owner is a work item, and every entry of the frozen list that left
+    has its evidence. `digest` is the frozen list's expected SHA-256; `state` (a unit's status) and
+    `gated` (the live gated units) stand in for the claims files and the ledgers in the self-test."""
+    data = load_toml(root / PENDING_FILE)
+    findings: list[str] = []
+    if digest is not None:
+        path = root / BASELINE_FILE
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            findings.append(f"{BASELINE_FILE} is missing or was edited")
+    for key in sorted(set(data) - {"deferred"}):
+        findings.append(f"{PENDING_FILE}: [{key}]: every sub-step has closed, so the list holds only [deferred]")
+    deferred = data.get("deferred", {})
+    state = state or (lambda uid: claim_state(root, uid))
+    if gated is None:
+        gated = {u.id for path in ledger_files(root) for u in load_ledger(path)[1] if not u.retired and u.kind in GATED_KINDS}
+    for uid, owner in deferred.items():
+        if owner not in WORK_ITEMS:
+            findings.append(f"[deferred] {uid}: {owner!r} is not one of the work items {sorted(WORK_ITEMS)}")
+        if TEXT_ID_RE.fullmatch(uid):
+            # A text entry rides on a deferred unit (`baseline_findings` checks which).
+            continue
+        status, named = state(uid)
+        if uid not in gated:
+            findings.append(f"[deferred] {uid} is not a live gated requirement")
+        elif not (named and status.startswith("deferred:")):
+            findings.append(f"[deferred] {uid}: its claims file must defer it by name, in [units]")
+
+    tags = text_tags(root)
+    cleared = load_toml(root / CLEARED_FILE)
+    findings.extend(baseline_findings(root, deferred, cleared, state))
+    seen: set[str] = set()
+    for entry in cleared.get("text", []):
+        tid = entry.get("id", "")
+        if not TEXT_ID_RE.fullmatch(tid) or tid in seen or tid in deferred:
+            findings.append(f"{CLEARED_FILE}: {tid!r} is malformed, repeated or still in [deferred]")
+        seen.add(tid)
+        suite, reading = str(entry.get("test", "")).strip(), str(entry.get("reading", "")).strip()
+        if bool(suite) == bool(reading):
+            findings.append(f"{CLEARED_FILE}: {tid} needs exactly one of `test` and `reading`")
+        elif suite and suite not in tags.get(tid, set()):
+            findings.append(f"{CLEARED_FILE}: no test of {suite} names [{tid}]")
+    return findings
+
+
+def pending_self_test() -> int:
+    """Each rule of the list passes its clean case and catches its planted violation."""
+    import tempfile
+
+    def tree(pending: str, tests: str = "") -> Path:
+        root = Path(tempfile.mkdtemp())
+        (root / "spec").mkdir()
+        (root / PENDING_FILE).write_text(pending, encoding="utf-8")
+        (root / "tests").mkdir()
+        (root / "tests" / "test_a.nim").write_text(tests, encoding="utf-8")
+        return root
+
+    def frozen(open_list: str, base: str, done: str = "", tests: str = "", files: dict | None = None) -> Path:
+        root = tree(open_list, tests=tests)
+        (root / BASELINE_FILE).write_text(base, encoding="utf-8")
+        (root / CLEARED_FILE).write_text(done, encoding="utf-8")
+        for name, body in (files or {}).items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(body, encoding="utf-8")
+        return root
+
+    live = {"RUN-0001"}
+    deferred = ("deferred:tier-5", True)
+    out = ("out-of-scope:a recorded reason", True)
+
+    def clean(root: Path, status: tuple[str, bool] = ("claimed", False)) -> bool:
+        return not pending_findings(root, state=lambda uid: status, gated=live)
+
+    def says(root: Path, text: str, status: tuple[str, bool] = deferred) -> bool:
+        return any(text in f for f in pending_findings(root, state=lambda uid: status, gated=live))
+
+    cleared = '[[text]]\nid = "TXT-0001"\nstep = "P3"\nspec = "RUN"\nline = "1"\nwhat = "x"\ntest = "tests/test_a.nim"\n'
+    named = 'test "[TXT-0001] it holds":\n  check true\n'
+
+    def with_cleared(body: str, tests: str) -> Path:
+        root = tree("", tests=tests)
+        (root / CLEARED_FILE).write_text(body, encoding="utf-8")
+        return root
+
+    todo = 'id = "TXT-0001"\nstep = "P3"\nspec = "RUN"\nline = "1"\nwhat = "x"\nclass = "todo"\n'
+    must = todo.replace('"todo"', '"behaviour"')
+    watch = todo + "guard = true\n"
+    read = 'id = "TXT-0001"\nstep = "P3"\nkind = "informative"\nreading = "no change"\ncompared = "old and new text"\n'
+    added, changed = '[units.added]\n"RUN-0001" = "P4"\n', '[units.changed]\n"RUN-0001" = "P4"\n'
+    held = '[deferred]\n"RUN-0001" = "5-5"\n'
+    record = '[[units]]\nid = "RUN-0001"\ncompared = "the test against the new text"\n'
+    ruled = '[[units]]\nid = "RUN-0001"\ndecision = "G7"\ncompared = "the claim against the new text"\n'
+    rows = {"docs/DECISIONS.md": "### G7 a decision on RUN-0001\n"}
+    other = {"docs/DECISIONS.md": "### G7 a decision on something else\n"}
+    plain = 'test "the rule holds":\n  check true\n'
+    quoted = 'const text = """\ntest "[TXT-0001] x":\n  check true\n"""\n'
+    commented = '#[\ntest "[TXT-0001] x":\n  check true\n]#\n'
+    cites = 'test "[RUN-0001] it holds":\n  check true\n'
+    two = 'test "[TXT-0001] [TXT-0002] both hold":\n  check true\n'
+    # A text deferral: TXT-0001 (RUN §1) rides on RUN-0001, deferred to 5-7a.
+    rides = '[deferred]\n"RUN-0001" = "5-7a"\n"TXT-0001" = "5-7a"\n'
+    behind = '[[text]]\n' + todo + 'section = "§1"\n'
+    rider = '[[deferred]]\nid = "TXT-0001"\nrides = "RUN-0001"\ndecision = "G8"\n'
+    unit_line = '{"id": "RUN-0001", "kind": "kw", "section": "§1", "heading": "One", "line": 1, "fingerprint": "", "text": "x"}'
+    ledger = {
+        "conformance/requirements/RUN.jsonl": '{"spec": "s.md", "rev": "x", "next": 2}\n' + unit_line + "\n",
+        "docs/DECISIONS.md": "### G7 a decision on RUN-0001\n### G8 TXT-0001 waits for 5-7a\n",
+    }
+    # A rider that left: its record is id, step (the work item that claimed its unit) and test.
+    leaves = 'id = "TXT-0001"\nstep = "5-7a"\ntest = "tests/test_a.nim"\n'
+
+    def abroad(what: str) -> str:
+        """`behind` as an entry of CAP whose sentence is `what`: RUN-0001 is then of another spec."""
+        return behind.replace('spec = "RUN"', 'spec = "CAP"').replace('what = "x"', f'what = "{what}"')
+
+    both = 'test "[RUN-0001] [TXT-0001] it holds":\n  check true\n'
+    # [re-pin P8b Q1] An entry with no section rides by the sections of its lines: RUN-0001 opens §1
+    # at l.1 and RUN-0002 opens §2 at l.10.
+    opens = '{"id": "RUN-0002", "kind": "kw", "section": "§2", "heading": "Two", "line": 10, "fingerprint": "", "text": "y"}'
+    sectioned = {**ledger, "conformance/requirements/RUN.jsonl": ledger["conformance/requirements/RUN.jsonl"] + opens + "\n"}
+
+    def unsectioned(lines: str, side: str = "new") -> str:
+        return "[[text]]\n" + todo.replace('line = "1"', f'line = "{lines}"') + f'side = "{side}"\n'
+
+    def derived(lines: str, side: str = "new") -> Path:
+        return frozen(rides, unsectioned(lines, side), ruled + rider, files=sectioned)
+
+    edited = tree("")
+    (edited / BASELINE_FILE).write_text("# changed\n", encoding="utf-8")
+    nine = '[deferred]\n"RUN-0009" = "5-5"\n'
+    nine_ruled = {"docs/DECISIONS.md": "### G7 a decision on RUN-0009\n"}
+    cases = [
+        # The list after the re-pin: [deferred] alone.
+        ("[deferred] with a named deferral and a decision passes", clean(frozen(held, "", ruled, files=rows), deferred), True),
+        ("a `closed` list fails", says(frozen('closed = ["P1"]\n', ""), "[closed]"), True),
+        ("an empty section left in the list fails", says(frozen("[mirror]\n", ""), "[mirror]"), True),
+        ("an open text entry fails", says(frozen("[[text]]\n" + todo, "[[text]]\n" + todo), "[text]"), True),
+        ("an edited baseline fails", not pending_findings(edited, digest="0" * 64, state=lambda uid: ("claimed", False), gated=live), False),
+        # [deferred]: owned by a work item, live, gated and deferred by name.
+        ("[deferred] without a named deferral fails", clean(frozen(held, "", ruled, files=rows), ("deferred:tier-5", False)), False),
+        ("[deferred] holding a unit its claims file no longer defers fails", says(frozen(held, "", ruled, files=rows), "must defer it by name", ("claimed", True)), True),
+        ("[deferred] with a vague owner fails", clean(frozen('[deferred]\n"RUN-0001" = "later"\n', "", ruled, files=rows), deferred), False),
+        ("an unknown work item fails", clean(frozen('[deferred]\n"RUN-0001" = "9-9"\n', "", ruled, files=rows), deferred), False),
+        ("a deferred unit that is not live fails", says(frozen(nine, "", ruled.replace("0001", "0009"), files=nine_ruled), "RUN-0009 is not a live gated requirement"), True),
+        ("a unit joining [deferred] with no decision row fails", says(frozen(held, "", record), "joined [deferred]"), True),
+        # A unit that still defers belongs in [deferred] (the gap rule).
+        ("a unit still deferred by name fails outside [deferred], even with a decision", says(frozen("", added, ruled, files=rows), "belongs in [deferred]"), True),
+        ("a unit still deferred by its section fails outside [deferred]", says(frozen("", added), "belongs in [deferred]", ("deferred:tier-5", False)), True),
+        ("a unit known by its [[units]] record alone, still deferred, fails outside [deferred]", says(frozen("", "", ruled, files=rows), "belongs in [deferred]"), True),
+        # Leaving: the frozen list's [deferred] only claimed; any other unit claimed, or named with a decision row.
+        ("a unit of the frozen [deferred] leaving claimed with a test passes", clean(frozen("", held, tests=cites)), True),
+        ("a unit of the frozen [deferred] leaving out of scope fails, even with a decision", says(frozen("", held, ruled, files=rows), "without being claimed", out), True),
+        ("a unit leaving out of scope by name with a decision passes", clean(frozen("", added, ruled, files=rows), out), True),
+        ("a unit leaving out of scope with no decision fails", says(frozen("", added, record), "left the list as out-of-scope", out), True),
+        ("a unit leaving out of scope by its section fails", clean(frozen("", added, ruled, files=rows), (out[0], False)), False),
+        ("a unit of a [[units]] record leaving out of scope with no decision fails", clean(frozen("", "", record), out), False),
+        ("a decision row that does not exist fails", clean(frozen("", added, ruled), out), False),
+        ("a decision row about another matter fails", clean(frozen("", added, ruled, files=other), out), False),
+        # A claimed unit's evidence.
+        ("a claimed unit with a test passes", clean(frozen("", added, tests=cites)), True),
+        ("a claimed unit cited only in a comment fails", clean(frozen("", added, tests="# [RUN-0001]\n")), False),
+        ("a test that only skips is no evidence", clean(frozen("", added, tests='test "[RUN-0001] x":\n  skip()\n')), False),
+        ("a test that starts by skipping is no evidence", clean(frozen("", added, tests='test "[RUN-0001] x":\n  skip()\n  check true\n')), False),
+        ("a test under when false is no evidence", clean(frozen("", added, tests='when false:\n  test "[RUN-0001] x":\n    check true\n')), False),
+        ("a test under if false is no evidence", clean(frozen("", added, tests='if false:\n  test "[RUN-0001] x":\n    check true\n')), False),
+        ("a test under an unknown define is no evidence", clean(frozen("", added, tests='when defined(neverSet):\n  test "[RUN-0001] x":\n    check true\n')), False),
+        ("a test under a platform condition counts", clean(frozen("", added, tests='when defined(posix):\n  test "[RUN-0001] x":\n    check true\n')), True),
+        ("a body file no suite includes is no evidence", clean(frozen("", added, files={"tests/zz_body.nim": cites})), False),
+        ("a body file a suite includes counts", clean(frozen("", added, tests="include zz_body\n", files={"tests/zz_body.nim": cites})), True),
+        ("a changed unit with no record fails", clean(frozen("", changed, tests=cites)), False),
+        ("a changed unit with a record passes", clean(frozen("", changed, record, tests=cites)), True),
+        ("a test inside a long string is no evidence", bool(text_tags(tree("", tests=quoted))), False),
+        ("a test inside a block comment is no evidence", bool(text_tags(tree("", tests=commented))), False),
+        ("every tag in a test name counts", text_tags(tree("", tests=two)).keys() == {"TXT-0001", "TXT-0002"}, True),
+        ("a tag outside a test name does not count", bool(text_tags(tree("", tests='echo "[TXT-0001]"\n'))), False),
+        # A text entry of the frozen list: deferred, or cleared with its evidence.
+        ("a deleted text entry fails", says(frozen("", "[[text]]\n" + todo), "neither deferred nor cleared", ("claimed", False)), True),
+        ("a todo entry cleared by reading passes", clean(frozen("", "[[text]]\n" + todo, "[[text]]\n" + read)), True),
+        ("a behaviour entry cleared by reading fails", clean(frozen("", "[[text]]\n" + must, "[[text]]\n" + read)), False),
+        ("a lowered behaviour entry may clear by reading", clean(frozen("", "[[text]]\n" + must, "[[text]]\n" + read + '[[lowered]]\nid = "TXT-0001"\ndecision = "G7"\n', files={"docs/DECISIONS.md": "### G7 on TXT-0001\n"})), True),
+        ("a reading without what was compared fails", clean(frozen("", "[[text]]\n" + todo, "[[text]]\n" + read.replace('compared = "old and new text"\n', ""))), False),
+        ("a reading with no kind fails", clean(frozen("", "[[text]]\n" + todo, "[[text]]\n" + read.replace('kind = "informative"\n', ""))), False),
+        ("a guarded reading without a site fails", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read)), False),
+        ("a guarded entry cannot be informative", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read + 'site = "tests/test_a.nim:1"\n')), False),
+        ("a guarded reading that holds passes", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read.replace("informative", "holds") + 'site = "tests/test_a.nim:1"\nnamed = "the rule"\n', tests=plain)), True),
+        ("`holds` naming no real test fails", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read.replace("informative", "holds") + 'site = "tests/test_a.nim:1"\nnamed = "another rule"\n', tests=plain)), False),
+        ("`holds` outside the tests fails", clean(frozen("", "[[text]]\n" + todo, "[[text]]\n" + read.replace("informative", "holds") + 'site = "spec/pins.toml"\n')), False),
+        ("a guarded site outside the code fails", clean(frozen("", "[[text]]\n" + watch, "[[text]]\n" + read.replace("informative", "removed") + 'site = "spec/pins.toml"\n')), False),
+        ("a reword without its pair fails", clean(frozen("", "[[text]]\n" + todo + 'side = "new"\n', "[[text]]\n" + read.replace("informative", "reword"))), False),
+        ("a reword naming itself fails", clean(frozen("", "[[text]]\n" + todo + 'side = "new"\n', "[[text]]\n" + read.replace("informative", "reword") + 'pair = "TXT-0001"\n')), False),
+        ("`removed` on a new sentence fails", clean(frozen("", "[[text]]\n" + todo + 'side = "new"\n', "[[text]]\n" + read.replace("informative", "removed"))), False),
+        ("a cleared entry names its test", not pending_findings(with_cleared(cleared, named), gated=live), True),
+        ("a cleared entry without that test fails", not pending_findings(with_cleared(cleared, ""), gated=live), False),
+        ("a cleared entry still in [deferred] fails", says(frozen('[deferred]\n"TXT-0001" = "5-7a"\n', "", cleared, tests=named), "still in [deferred]"), True),
+        # A text entry that rides on a deferred unit.
+        ("a text entry riding on a unit of its section passes", clean(frozen(rides, behind, ruled + rider, files=ledger), deferred), True),
+        ("a text entry deferred with no rider record fails", clean(frozen(rides, behind, ruled, files=ledger), deferred), False),
+        ("a text deferral with no decision row fails", clean(frozen(rides, behind, ruled + rider, files={**ledger, "docs/DECISIONS.md": "### G7 a decision on RUN-0001\n"}), deferred), False),
+        ("a text entry riding on another section's unit fails", clean(frozen(rides, behind.replace("§1", "§2"), ruled + rider, files=ledger), deferred), False),
+        ("a text entry riding on another work item's unit fails", clean(frozen(rides.replace('"TXT-0001" = "5-7a"', '"TXT-0001" = "5-7b"'), behind, ruled + rider, files=ledger), deferred), False),
+        ("a text entry riding on a unit of another spec its sentence names, in the section named, passes", clean(frozen(rides, abroad("see LOGOS-MODULE-RUNTIME Section 1."), ruled + rider, files=ledger), deferred), True),
+        ("a text entry riding on a unit of another spec its sentence does not name fails", clean(frozen(rides, abroad("x"), ruled + rider, files=ledger), deferred), False),
+        ("a text entry riding on a unit of a spec its sentence names, outside the section named, fails", clean(frozen(rides, abroad("see LOGOS-MODULE-RUNTIME Section 2."), ruled + rider, files=ledger), deferred), False),
+        ("an entry with no section whose lines are in one section rides on its unit", clean(derived("3, 5"), deferred), True),
+        ("an entry with no section whose lines are in two sections fails", clean(derived("3, 12"), deferred), False),
+        ("an old-side entry with no section fails", clean(derived("3, 5", "old"), deferred), False),
+        ("an entry with no section and the line \"none\" fails", clean(derived("none"), deferred), False),
+        ("the finding names the derived section", says(derived("12"), "(RUN §2, derived from its lines)"), True),
+        ("a deferred text entry leaving with its unit's test passes", clean(frozen("", behind, ruled + rider + "[[text]]\n" + leaves, tests=both, files=ledger)), True),
+        ("a deferred text entry leaving by a test without its unit fails", clean(frozen("", behind, ruled + rider + "[[text]]\n" + leaves, tests=named, files=ledger)), False),
+        ("a deferred text entry leaving before its unit is claimed fails", says(frozen("", behind, ruled + rider + "[[text]]\n" + leaves, tests=both, files=ledger), "left [deferred] before", ("out-of-scope:x", True)), True),
+        # deploydoc: a duty row's citation is named whole.
+        ("a duty citation is named whole", names_cite("(IF l.1473; BCP l.360)", "BCP l.360"), True),
+        ("a citation ending a sentence is named", names_cite("as BCP l.360.", "BCP l.360"), True),
+        ("a longer line number does not name a shorter one", names_cite("BCP l.3600", "BCP l.360"), False),
+        ("a range does not name the line it starts at", names_cite("BCP l.360-410", "BCP l.360"), False),
+        ("another spec's citation does not name it", names_cite("RCA l.1", "CA l.1"), False),
+    ]
+    failed = [name for name, got, want in cases if got != want]
+    for name in failed:
+        print(f"pending self-test: {name} went wrong")
+    if not failed:
+        print(f"pending self-test: {len(cases)} cases")
+    return 1 if failed else 0
+
+
+def cmd_pending(args) -> int:
+    """[re-pin P9] The list of what stays deferred past the re-pin is well formed, and what left the
+    re-pin's frozen list has its evidence."""
+    if args.self_test:
+        return pending_self_test()
+    root = Path(args.root)
+    findings = pending_findings(root, digest=BASELINE_SHA256)
+    for f in findings:
+        print(f)
+    deferred = load_toml(root / PENDING_FILE).get("deferred", {})
+    riders = sum(1 for uid in deferred if TEXT_ID_RE.fullmatch(uid))
+    print(f"{PENDING_FILE}: {len(deferred) - riders} units and {riders} text entries deferred; {len(findings)} findings")
+    return 1 if findings else 0
 
 
 def main() -> int:
@@ -1039,6 +1594,8 @@ def main() -> int:
     sub.add_parser("deploydoc", help="check docs/DEPLOYMENT.md against the claims (DECISIONS G309)")
     o = sub.add_parser("owners", help="each unit has one owning package")
     o.add_argument("--self-test", action="store_true", help="check the lint on planted violations")
+    n = sub.add_parser("pending", help="check the list of what stays deferred past the re-pin")
+    n.add_argument("--self-test", action="store_true", help="check the list's rules on planted violations")
     g = sub.add_parser("gate")
     g.add_argument("--show", type=int, default=20, help="missing units listed per spec")
     g.add_argument(
@@ -1057,6 +1614,7 @@ def main() -> int:
         "gate": cmd_gate,
         "deploydoc": cmd_deploydoc,
         "owners": cmd_owners,
+        "pending": cmd_pending,
     }[args.cmd](args)
 
 

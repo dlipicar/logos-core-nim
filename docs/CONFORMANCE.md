@@ -61,6 +61,19 @@ heading under a numbered one.
 "Deferred" means not built. Behaviour that is built and differs from the text is a deviation: it is
 recorded in `docs/DECISIONS.md`, and its unit is deferred only when the text's behaviour is not built.
 
+**What a RUNTIME claim covers (BCP l.286).** A claim of conformance to RUNTIME covers a Runtime
+instance with its orchestration module (RUNTIME l.66). This repository's RUNTIME claim is for the
+engine with the reference orchestration module, `lcn_orchestrator`, wherever a host names it
+(DECISIONS I94). logosd does: its Runtime instance is the engine with `lcn_orchestrator` as instance
+`orchestrator` (`docs/DAEMON.md` §4; the facts block of `docs/DEPLOYMENT.md`, which
+`tests/test_deployment.nim` compares with logosd's composition). A host embedding `liblogos_runtime`
+that names another orchestration module supplies an engine without this one, so its claim is joint
+with the module it supplies, which carries the orchestration duties (`docs/HOST-CONFIG.md`,
+"Orchestration duties").
+
+The sections from here to "Properties not claimed" are dated records, except "What is claimed at the end of Tier 4b":
+each keeps the ids and spec lines of the revision it was written at (4b-6's BCP-0093 is BCP-0103 at 6cac8335).
+
 ### What is claimed at the end of Tier 4
 
 Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --closed-tier 3
@@ -128,14 +141,18 @@ Tier 4b step 4b-2 (DECISIONS I90) builds transported local routes: a host routin
 (G257). Part 4b-2a builds the provider side:
 
 - **RUNTIME**: a transported route's live `establish_route` and `renew_route` answers carry the
-  `local-transport` invocation descriptor and a one-time ticket (RUN-0541, RUN-0623); no observation,
+  `local-transport` invocation descriptor and a one-time ticket (RUN-1161, RUN-1179); no observation,
   record, retained answer or stored file holds a ticket (RUN-0543, RUN-0544; a replay carries no
   `invocation`, G255). Four §6.2 units are claimed for the Runtime-served endpoint (RUN-0220,
   RUN-0226, RUN-0229, RUN-0230); the rest of §6.2 and §4.2.1 wait for the Module Host. RUN-0045,
   RUN-0552 and IFC-0010 are remote-only and move to Tier 5.
 - **TRANSPORT**: the session is bound to the Runtime's authority decision and ends with it, also
   after a renewal (TRN-0153, TRN-0317); the ticket goes only to the consumer (TRN-0195). The end of a
-  route terminates, drains or closes its sessions by cause (G260; G174 amended).
+  route terminates, drains or closes its sessions by cause (G260). An authority end answers the Requests
+  not yet admitted `NOT_AUTHORISED` and leaves the admitted ones unanswered, which the consumer fails
+  `TRANSPORT_ERROR` at the close (RUNTIME l.1271, TRANSPORT l.979; G174 replaced at re-pin P5d). At 6cac8335 a drain
+  terminates too: admission stops with `NOT_READY`, then ProtocolError `NOT_READY` and close (TRANSPORT
+  l.977, DECISIONS I106).
 - **CAPABILITY AUTHORITY**: the ticket binds the decision, its freshness and revocation (CAP-0254).
 - **LOADER**: the MAY of l.193 is taken (LDR-0021 leaves inspection).
 
@@ -186,9 +203,9 @@ providers over local transport. What a consumer sees differently, and why:
   The suites wait for deliveries; the cases about what a handler does inside the publication are
   skipped (a nested provider entry on the publishing thread, a handler that closes the destination
   of that publication, a publication still in its handler when its invocation is released).
-- An explicit `subscribe-event` deny at delivery skips that Event and keeps the subscription: the
-  provider side cannot end one subscription of a session (K40), where a direct route's subscription
-  ends (CA l.913-915).
+- A `subscribe-event` decision at delivery that does not allow ends the subscription as on a direct
+  route: the provider's session sends a SubscriptionEnd, and the handle reports it (re-pin P3a,
+  DECISIONS G175 amended; K40 is gone). The report runs on an event worker, as on a direct route.
 
 ### What Tier 4b step 4b-3 changes
 
@@ -247,7 +264,7 @@ execution scope `local-transport` in a `process` (G272). So:
   RUN-0179), and admits each call, subscription change and end observer in a direct handle's
   order, so codes, ends and their causes are a direct consumer's, and a handle is never retargeted
   (RUN-0181, RUN-0182, RUN-0256, RUN-0837); a stopping hosted consumer's calls are refused
-  NOT_READY from stop step 1 as a direct one's (RUN-0111, RUN-0794). `test_hosted_routes` (C-1 to
+  NOT_READY from stop step 1 as a direct one's (RUN-1093, RUN-0794). `test_hosted_routes` (C-1 to
   C-10, S-18) shows it with the probe kit library in a host, to direct and hosted providers. The
   host waits for its handlers, end observers and completions before `_MODULE_destroy`.
 - **Boundary invariance** (part 4b-3.4; RUNTIME l.51-53, l.161, l.970; INTERFACE Abstract):
@@ -265,7 +282,8 @@ execution scope `local-transport` in a `process` (G272). So:
 
 Tier 4b step 4b-3b (DECISIONS I92) builds the erasure of marked payloads (INTERFACE §1.4.1), so the
 **INTERFACE** entry changes: IFC-0575 to IFC-0577, IFC-0580 and IFC-0581 are claimed, and
-**SECURITY CONSIDERATIONS** claims SEC-0057. IFC-0575 is claimed for orc builds of the Runtime and the
+**SECURITY CONSIDERATIONS** claimed SEC-0057 until re-pin P6b, where SEC l.404 became descriptive and
+the IFC units carry it. IFC-0575 is claimed for orc builds of the Runtime and the
 host; a refc build of either never carries a marked payload. So:
 
 - **Who erases** (G277, the owner's reading of l.388): each participant answers for its own copies.
@@ -279,7 +297,10 @@ host; a refc build of either never carries a marked payload. So:
 - **Paths** (G277, re-deciding G244): a contract that marks a payload is routed on `direct` and
   `local-transport` paths, hosted ends included, and refused MODULE_ERROR only on a path kind without
   erasure (a remote mode, once Tier 5 adds one); no switch turns the refusal off (IFC-0578,
-  IFC-0579).
+  IFC-0579). The remote profiles `logos.remote.tls-tcp` and `logos.remote.quic` carry no marked payload:
+  a route on either whose permitted scope includes a marked method is refused INVALID_PARAMS (RUNTIME
+  l.1808, l.2939; TRANSPORT l.1188-1189; re-pin P4d, `runtime/remotemarked`), a check 5-7a calls where it
+  builds remote routes.
 - **Builds** (G277's build condition, IF l.388-389): a participant erases only in an orc or arc
   build, where a channel moves a message's heap parts; under refc a channel deep-copies each message
   and frees the copy unerased. A refc Runtime refuses every marked route, with G244's code, message
@@ -290,7 +311,7 @@ host; a refc build of either never carries a marked payload. So:
 - **Diagnostics** (G278): for a marked request the INVALID_PARAMS path stops before the first key
   taken from the payload; generated messages for a marked declaration carry no path; a provider's
   failure text is forwarded to its caller only; no marked value or value root reaches a diagnostic,
-  an audit record, an observation result or the carrier (IFC-0580, SEC-0057).
+  an audit record, an observation result or the carrier (IFC-0580).
 - **Retention** (IFC-0581): a decision that retains a marked side refuses the call NOT_AUTHORISED
   before dispatch, recorded as `sensitive-retention` without a value root, on direct, transported
   and hosted paths alike; an unmarked method of the same contract keeps its retention.
@@ -428,7 +449,7 @@ status that still defers to one of them. The sections above say what each step c
 claim as it stands.
 
 - **RUNTIME** is claimed for the Runtime instance that `logosd` runs: the engine plus the reference
-  orchestration module (RUNTIME l.72; DECISIONS I94), in direct and local-transport mode, with hosted
+  orchestration module (RUNTIME l.66; DECISIONS I94), in direct and local-transport mode, with hosted
   realizations through the Module Host (I91). A host that embeds `liblogos_runtime` without `logosd`
   names the reference module or carries its duties itself (`docs/HOST-CONFIG.md`, "Orchestration
   duties"). Tier 5: remote mode, facades, enrollment, listeners and exports, and package-backed
@@ -457,7 +478,9 @@ claim as it stands.
   `tests/test_deployment.nim` checks its facts against the code. **No complete Logos module system is
   claimed** (below). Tier 5: the QUIC and Package Manager realization profiles.
 - **SECURITY CONSIDERATIONS**: as at the end of Tier 4, plus SEC-0057 (marked-payload erasure, orc
-  builds).
+  builds). At 6cac8335 `conformance/claims/SEC.toml` claims no unit: SEC-0021 and SEC-0057 were
+  retired, their rules descriptive and carried by BCP-0049, BCP-0050, BCP-0081 and IFC-0575 to
+  IFC-0581 (re-pin P6b).
 
 The gate at the close: RUN 829/829, LDR 131/131, CFG 122/122, CAP 385/385, TRN 242/242, IFC 624/624,
 PKG 212/212, BCP 49/49, SEC 2/2, with nothing deferred to Tier 4b and to Tier 5 RUN 133, TRN 58,
@@ -469,10 +492,12 @@ The C-to-CDDL reverse mapper, `lcn-gen cddl` (DECISIONS I98, D30, G139; G317 to 
 claimed in both directions, with IFC-0003 and IFC-0004: IFC 776/776, with 20 units left for Tier 5
 (IFC-0010 and the remote bindings of §5.2).
 
-**Limits of the claim.** IFC-0003, IFC-0004 and the §3.8 units (IFC-0355 to IFC-0357, IFC-0861 to
-IFC-0863) hold under G158's interim common-name projection, which the specs do not define (TL-01,
-open): the mapper recognizes the common types by the names this repository's `logos_types.h` declares.
-`lcn-gen cddl` refuses a header set over 16 MiB (G321). A schema set within the §5.3 limits can generate
+Since 6cac8335 (re-pin P2) the common names are the ones the INTERFACE §5.2 listing states, and
+`logos_types.h` is that listing copied (G158 settled, I26), so IFC-0003, IFC-0004 and the §3.8 units
+(IFC-0355 to IFC-0357, IFC-0861 to IFC-0863) no longer hold under an interim. The subject is mapper
+input: `lcn-gen cddl` needs `--module` or `--subject` (INTERFACE §3.2 l.2244-2246; G318).
+
+**Limits of the claim.** `lcn-gen cddl` refuses a header set over 16 MiB (G321). A schema set within the §5.3 limits can generate
 a larger one, for example when inline declarations are nested deeply, and the §3.8 round trip is not
 provided for such a set. The refusal is explicit and nothing is written. At this limit the tool can need
 about 3 GB of memory.
@@ -496,15 +521,66 @@ the facade process that passes the invocation's Runtime as the one expected (5-7
 also run the carrier against pyOpenSSL (G128, suite `tls.independent peer`); where `LCN_TLS_PEER_PYTHON` is
 not set, as under `nimble test`, those five cases are skipped.
 
-Part 5-2d pins nim-boringssl 0.0.16 and turns on its `BORINGSSL_ZERO_RECORD_BUFFERS` (G327): BoringSSL
-zeroes its TLS record buffers before freeing them, and the carrier erases its own copies of decrypted
-data (the stream's read buffer, partial frames, frames not taken, the framed copy of a body it sends).
-A frame read is the caller's (`TlsFrame`), as is a body given to `writeFrame`. `test_remote_tls`'s free
-scan finds no released block holding the plaintext of 256 KiB sent through two streams. A stream set
-to carry marked payloads is refused where this does not hold (`carrierErases`, `requireErasure`).
+Part 5-2d pinned nim-boringssl 0.0.16 and turned on its `BORINGSSL_ZERO_RECORD_BUFFERS` (G327). The re-pin
+to 6cac8335 took the option off again (P4d): the new text forbids marked payloads on `tls-tcp` and `quic`
+whatever the library does (TRANSPORT l.1188-1189; RUNTIME l.1808, l.2939), so the build is upstream's
+BoringSSL, whose TLS record buffers keep the plaintext they carried. The carrier still erases its own
+copies of decrypted data (G276: the stream's read buffer, partial frames, frames not taken, the framed
+copy of a body it sends). A frame read is the caller's (`TlsFrame`), as is a body given to `writeFrame`.
+`test_remote_tls`'s free scan finds no released block of the carrier's holding the plaintext of 256 KiB
+sent through two streams; BoringSSL's blocks, all C++, are zeroed and released unscanned (G276).
 
-Not claimed: erasure on remote paths. The facade and listener processes' own erasure comes with 5-7a;
-until it is shown, remote paths refuse marked contracts (G277), as any build without the option will.
+Not claimed: erasure on remote paths. `tls-tcp` gives none and carries no marked payload; a route on it
+or on `quic` whose permitted scope includes a marked method is refused (G277, `runtime/remotemarked`,
+called from 5-7a; RUN-1163 and TRN-0398 are deferred to it).
+
+### What the re-pin's P8a changes
+
+Contract extension at 6cac8335 (DECISIONS I112, G392), in the SDK and the Package Manager:
+
+- **The relation** (COMMITMENT §9.1): claimed for two documents this implementation constructs. A claim alone never
+  establishes it (CMT-0242).
+- **The descriptor's `extends`** (INTERFACE §2.6): limits, order, identity across the three arrays, each entry built by the
+  rules of its role and related to the described contract of its namespace (IFC-0968, IFC-0969). IFC-0246's comparison of
+  supplied references is claimed with the Runtime's use of it (P8b, P8c).
+- **Schema answers** for an earlier root (IFC-0958): claimed by the binding's answer. No route selects an earlier root until
+  P8b lets a record state `extends`.
+- **The Package Manager** (PM §4, §9): every contract document is built from the selected variant and compared with its
+  commitment, and each `extends` entry is checked against the declaration's contracts when the Package Manager can build the
+  pair (PKG-0577 to PKG-0580, PKG-0589, PKG-0590). When it cannot, the Runtime validates the provider (PM l.1143); that half
+  is P8b's.
+
+### What the re-pin's P8b changes
+
+Contract extension in the Runtime at 6cac8335 (DECISIONS I112 part b, G394, G391):
+
+- **Records** (RUNTIME §8): `extends` in the host configuration, the store and static records; unique with `implements`,
+  never without a primary contract or `implements` (RUN-1105, G394 r10, r11). Each set a record states must equal the
+  validated descriptor's; a claimed relation the descriptor does not establish fails the bind (RUN-0265, RUN-1104). Once a
+  record supplies any reference, an omitted primary is none and an omitted `implements` or `extends` is empty, each
+  compared (IFC-0246; G393, the interim on TF-62; re-pin P8c).
+- **Preserved facts** (RUNTIME l.1303; RUN-0258): claimed for the stored record of a host-configuration input, which keeps
+  `extends` with the other facts and compares it when the instance comes back. The handoff path is 5-8's, and 5-8's
+  handoff test carries the id. The claim rests on G393's strict rule: nothing a record does not state is exposed.
+- **Routes to an earlier view** (RUNTIME l.90-91, l.1347, l.1368, l.2852, l.2995; INTERFACE §1.2): claimed over direct
+  routes, the Runtime's local-transport endpoint and a hosted consumer's session (IFC-0957, IFC-0958's route half). A
+  hosted provider that extends is checked in process only: no kit or generator takes `extends`.
+- **Discovery** (CA l.249-256): one `discover` decision per extended view (G394 r15).
+- **The handoff's `extends`** (PM §12; PKG-0338, PKG-0347, PKG-0351): deferred by name to 5-8 (G391).
+
+### What the re-pin's P9 changes
+
+The Credential Store scope, the claim statement and the close at 6cac8335 (DECISIONS I113, G159, G309, D27, I94, I104):
+
+- **The deployment document's new items** (BCP §5.4): BCP-0101 (the Credential Store, `None`, by inspection) and BCP-0102
+  (admission pools, by the test_deployment test) are claimed. BCP-0103 (non-production mechanisms identified by name)
+  is claimed by the logosd test that carried BCP-0093, which is retired at 6cac8335.
+- **The Credential Store** (LOGOS-MODULE-CREDENTIAL-STORE) is not claimed (owner row 38; G159 settled): "Properties not
+  claimed".
+- **The claim statement** (BCP l.286; TXT-0350): "Claims" above; test_deployment compares the facts' composition with
+  logosd's.
+- **The pending file** holds only the 53 units and 19 text entries that stay deferred past the re-pin, each owned by a
+  Tier 5 work item (I104's note); nothing else follows `6a4dfa28`.
 
 ### What Tier 5 step 5-4 changes
 
@@ -523,17 +599,21 @@ are 5-9's.
   is no Package Manager, so no package is installed, selected or trusted, and BCP's units that bind
   the whole are claimed only where `logosd` meets them on its own. `docs/DEPLOYMENT.md` answers each
   missing facility "None" or "Not supported", with the tier that changes it where one is planned.
+- The Credential Store (BCP l.287-289; owner row 38, 2026-11-18; DECISIONS G159): optional to
+  implement and deploy, and not claimed. Its provider would have to answer `NOT_AUTHORISED`, which
+  provider code may not return (TF-53). logosd deploys none (`docs/DEPLOYMENT.md` row 24, §25), and the
+  specification has no ledger, claims file or mirror here.
 - Operating-system isolation of hosted modules (SEC l.207-209): a Module Host is a process of the
   daemon's user with the daemon's view of the file system, the network and devices; placements
   `sandbox` and `container` are not offered (`docs/DEPLOYMENT.md` §8; DECISIONS G265 for what a module
   starts, below).
 
-- Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
+- Protection between processes of the same OS identity (TRANSPORT §8.2 l.1088-1092): Module Hosts
   run as the daemon's user, so a process running as that user can replace a socket pathname or
   impersonate an endpoint. Deployments that need that protection must run hosts under distinct OS
   identities, which this implementation does not set up (DECISIONS G58). The same holds on Windows
   once the profile is built there (step 5-9): a consumer of the Runtime's own user can delete,
-  rename or re-secure the endpoint, and TRANSPORT l.1156 is read as not reaching it (DECISIONS G332,
+  rename or re-secure the endpoint, and TRANSPORT l.1137 is read as not reaching it (DECISIONS G332,
   the owner's reading, 2026-11-17).
 - Containment of what a hosted module starts: a Module Host's process group is killed after every
   end of the host, but a process the module moved into another group or session outlives it
@@ -552,7 +632,7 @@ are 5-9's.
 - Erasure of a marked payload (INTERFACE §1.4.1; DECISIONS I92) where no wipe can run or reach:
   - **A Module Host ended by force**: SIGKILL at a startup, stop or apply deadline (G269), or
     `_exit(70)` on a broken carrier (G266), ends the process without running any wipe. This is a
-    non-claim for that host's own buffers only (LOADER l.573 permits the forced end); the Runtime's
+    non-claim for that host's own buffers only (LOADER l.571 permits the forced end); the Runtime's
     and the peer's keep their claim.
   - **A refc build of the Runtime or the Module Host**: under refc, Nim's `Channel[T]` deep-copies
     each message into the channel's region and frees that copy inside the standard library,
@@ -622,7 +702,7 @@ admitted, and `connOutputBytes` at least `peerFrameLimit` plus `controlReserve`.
 | `maxInputBytes` (frame bodies held after establishment: being read, queued for an execution slot, or Events not yet released by the caller's owner) | loop | 256 MiB | reading pauses up to `admissionTimeout` (10 s; room freed by the deadline counts, as for `helloTimeout`), then ProtocolError `TRANSPORT_ERROR`, close |
 | `maxOutputBytes` (committed output) | loop | 256 MiB | as `connOutputBytes` |
 | `connOutputBytes` | conn | 2 × `peerFrameLimit` + `controlReserve` | Event: overflow (below); success Response: waits, not committed; control frame: the reserve, then ProtocolError `TRANSPORT_ERROR`, close |
-| `controlReserve` (error Responses, SubscriptionResults, the Hello response) | conn | 64 KiB | ProtocolError `TRANSPORT_ERROR` from the final slot, close |
+| `controlReserve` (error Responses, SubscriptionResults, SubscriptionEnds, the Hello response) | conn | 64 KiB | ProtocolError `TRANSPORT_ERROR` from the final slot, close |
 | `writeStallTimeout` (output pending, no byte written; at the deadline a write is tried first, and a socket that accepts nothing is judged one dispatcher turn later, after the sockets that were ready) | conn | 30 s | close without ProtocolError |
 | `closeLinger` (flushing a final ProtocolError) | conn | 1 s | close without finishing the flush |
 | `terminationDrain` (in-flight work after a session's authorization ends) | conn | 0 s | — |
@@ -671,6 +751,25 @@ A listener's connections hold at most `maxConnections` × (`readBound` + `writeB
 bytes of Transport input and output, and each listener process has one listener (owner decision B1).
 A caller's outbound connections have no count here: the facade process opens one for each consumer
 route and bounds them with its routes (5-7b).
+
+## Resolver limits
+
+PACKAGE MANAGER §11 (PKG-0597, PKG-0598) as built in `src/logos_core/package/resolver.nim`
+(DECISIONS G361). Protected policy supplies every limit; `resolverLimits` and
+`decodeResolverLimits` refuse a missing, non-positive or larger value before any root operation, and
+no package, manifest, catalog, source or caller can change one. These are the greatest values
+supported (`MaxResolverLimits`):
+
+| Limit | Maximum | Counts |
+|---|---|---|
+| `partial_closure_names` | 4,096 | distinct package names in one partial closure, the root included |
+| `dependency_depth` | 4,095 | the greatest number of edges on a path from the root (4,096 names make no longer path) |
+| `candidates_per_name` | 4,096 | records charged for one package name: one per name and version (DECISIONS I110, B3) |
+| `assignment_attempts` | 1,048,576 | tentative bindings in one root operation, never decreasing |
+
+At these values a chain of 4,096 names resolves in each build mode (`tests/test_resolver.nim`). Each
+bind recomputes every depth, so the worst case is about 4.3e9 edge visits: slow, with no time-out to
+reach. Exceeding a limit ends the root operation with `dependency-unavailable` and changes nothing.
 
 ## Event output overflow
 
@@ -723,7 +822,7 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   invocation that fails before any work, a reply lost or garbled after the work, a reply held), or
   the Loader's report of its own failure (DECISIONS I89 part 4b-1d).
 - `engine.confirmTerminationForTests`: stands in for the protected mechanism that confirms a lost
-  Loader's realizations are gone (RUNTIME l.3825; G249), which a deployment does by ending the host
+  Loader's realizations are gone (RUNTIME l.3689; G249), which a deployment does by ending the host
   process.
 - `orchestration/testhooks.nim` (DECISIONS I94): `setOrchestratorFaultsForTests` and
   `clearOrchestratorFaultsForTests` select faults in the reference orchestration module (the next
@@ -774,9 +873,7 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
 - The tls-tcp carrier (I99): `testsigner.keySigner` holds the TLS key in the process (owner decision
   B1: tests only); `engine.newTlsContextForTests` makes settings no conforming peer has (TLS 1.2
   allowed, or no certificate) to show the refusals; `stream.abortForTests` ends a connection without
-  close_notify; `stream.recordErasureMissingForTests` makes the carrier behave as a build whose
-  BoringSSL frees records unerased (it only adds G277's refusal). All are called by `test_remote_tls`,
-  which is also an audit build (`base/wipeaudit`).
+  close_notify. All are called by `test_remote_tls`, which is also an audit build (`base/wipeaudit`).
 
 No deployment binary contains them.
 

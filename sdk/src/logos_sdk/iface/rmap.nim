@@ -8,8 +8,8 @@
 ##    C namespace component its identifier decodes to, §2.1 l.791-795) or an
 ##    item of one module family (`logos_<module-C>_…`). Anything else is
 ##    rejected (l.2224).
-## 2. **Select.** `--module` or `--subject`, else the only module family, else
-##    the only group (l.2282-2286). The reconstruction input is the selecting
+## 2. **Select.** `--module` or `--subject`, an exact name that is mapper input
+##    and never inferred (l.2244-2246). The reconstruction input is the selecting
 ##    header and its include closure; a group reached through a contract-header
 ##    include is supplied as a dependency (l.2325, l.2385), and a group merely
 ##    present is another document (G318).
@@ -31,8 +31,9 @@
 ## printed in step 4 is an intermediate in memory: nothing is returned before
 ## every check has passed (IF l.2941).
 ##
-## [IMPL-DECISION G158, pending] The fixed common types are recognized by the
-## names this repository's `logos_types.h` declares (`cmap.commonLayout`).
+## [SPEC INTERFACE §5.2 l.3324-3327] The fixed common types are mapping inputs:
+## recognized by the names the copied §5.2 listing declares
+## (`cmap.commonLayout`, checked against the listing), never reconstructed.
 
 {.push raises: [].}
 
@@ -505,8 +506,10 @@ proc checkFrame(h: ParsedHeader): Result[void, Rejection] =
       if v.kind != cskInt or v.negative or v.magnitude != uint64(CMappingRevision):
         return err(
           fail(
-            rkRevisionCheck, h.name, it.line,
-            "the C mapping revision check must compare with 3u",
+            rkRevisionCheck,
+            h.name,
+            it.line,
+            "the C mapping revision check must compare with " & $CMappingRevision & "u",
           )
         )
     of ciContextCheck:
@@ -1421,7 +1424,7 @@ proc rootLiteral(s: string): Opt[string] =
   Opt.some(t)
 
 proc reconstruct*(
-    hs: HeaderSet, opts = RmapOptions()
+    hs: HeaderSet, opts: RmapOptions
 ): Result[Reconstruction, Rejection] {.gcsafe.} =
   ## [SPEC INTERFACE §3] The subject document or module a header set
   ## reconstructs, with its dependencies, binding and canonical header `H'`.
@@ -1429,65 +1432,45 @@ proc reconstruct*(
   let aopts = AcceptOptions(system: opts.system)
   var views: seq[HeaderView] = @[]
   var allCns: OrderedSet[string]
-  var allModules: OrderedSet[string]
   for i, h in hs.headers:
     ?checkFrame(h)
     let v = ?view(c, h, i)
     for k in v.occs.keys:
       allCns.incl(k)
-    for k in v.modules.keys:
-      allModules.incl(k)
     views.add(v)
 
-  # Selection (INTERFACE §3.2 l.2282-2286; IMPL-DECISION G318)
+  # Selection (INTERFACE §3.2 l.2244-2246; IMPL-DECISION G318): the subject is
+  # mapper input, never inferred from the headers.
   var moduleC = ""
   var subjectCns = ""
   var subjectHeader = -1
+  # The selection is an exact name: one that is not a valid runtime module name
+  # or namespace, or that a projection does not give back, matches no supplied
+  # document (l.2246).
   if opts.module.len > 0:
     moduleC = projectModule(opts.module)
+    let back = decodeModule(moduleC)
+    if back.isErr or back.get != opts.module:
+      return err(
+        fail(rkSelection, "", 0, "no supplied header declares module " & opts.module)
+      )
   elif opts.subject.len > 0:
     subjectCns = projectNamespace(opts.subject)
-  elif allModules.len == 1:
-    for m in allModules:
-      moduleC = m
-  elif allModules.len == 0 and allCns.len == 1:
-    for k in allCns:
-      subjectCns = k
-  else:
-    # the more specific reason first: several families in one body are one
-    # inconsistent module reconstruction (l.2380); several groups without
-    # role constants cannot be inferred (l.2349-2351)
-    for i, v in views:
-      if v.modules.len > 1:
-        return err(
-          fail(
-            rkModuleName,
-            hs.headers[i].name,
-            0,
-            "module families " & toSeq(v.modules.keys).join(", ") &
-              " in one header (INTERFACE §3.2 l.2380)",
-          )
+    let back = decodeNamespace(subjectCns)
+    if back.isErr or back.get != opts.subject:
+      return err(
+        fail(
+          rkSelection, "", 0, "no supplied header declares namespace " & opts.subject
         )
-    if allModules.len == 0:
-      for i, v in views:
-        for cns, o in v.occs:
-          if not o.items.anyIt(it.kind == ciDefine and isRoleConstant(it.name)):
-            return err(
-              fail(
-                rkRoleConstant,
-                hs.headers[i].name,
-                0,
-                o.ns &
-                  " needs its document-role constant: the set has more than one group (INTERFACE §3.2 l.2349-2351)",
-              )
-            )
+      )
+  else:
     return err(
       fail(
         rkSelection,
         "",
         0,
-        "the set holds " & $allCns.len & " groups and " & $allModules.len &
-          " module families: select one with --module or --subject",
+        "the subject is mapper input: select it with --module or --subject " &
+          "(INTERFACE §3.2 l.2245)",
       )
     )
   for i, v in views:
@@ -1502,9 +1485,10 @@ proc reconstruct*(
         rkSelection,
         "",
         0,
-        "no supplied header declares " &
-          (if moduleC.len > 0: "module " & opts.module
-          else: "namespace " & subjectCns),
+        "no supplied header declares " & (
+          if moduleC.len > 0: "module " & opts.module
+          else: "namespace " & opts.subject
+        ),
       )
     )
   let closure = hs.closure(subjectHeader)
@@ -2153,7 +2137,7 @@ proc reconstruct*(
   ok(res)
 
 proc reconstruct*(
-    sources: openArray[HeaderSource], opts = RmapOptions()
+    sources: openArray[HeaderSource], opts: RmapOptions
 ): Result[Reconstruction, Rejection] {.gcsafe.} =
   ## [SPEC INTERFACE §3] `readSet`, then `reconstruct`.
   let hs = ?readSet(sources)

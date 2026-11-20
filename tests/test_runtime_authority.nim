@@ -247,7 +247,7 @@ suite "run.authority: the binding (RUNTIME l.1652-1680; CA §1)":
     e.finish()
 
 suite "run.authority: bootstrap and recovery rules (RUNTIME l.1635-1650, l.1674-1680)":
-  test "[RUN-0022] [RUN-0305] [RUN-0306] [RUN-0311] [RUN-0312] [RUN-0050] [RUN-0051] [RUN-0859] [CAP-0062] before the binding, orchestration starts the authority without an evaluation; everything else fails closed as an evaluation failure":
+  test "[RUN-0022] [RUN-0305] [RUN-0306] [RUN-0311] [RUN-0312] [RUN-0050] [RUN-0051] [RUN-0859] [CAP-0062] [TXT-0316] before the binding, orchestration starts the authority without an evaluation; everything else fails closed as an evaluation failure":
     fresh()
     let e = newEngine(caConfig())
     let orch = e.boot()
@@ -337,7 +337,7 @@ suite "run.authority: bootstrap and recovery rules (RUNTIME l.1635-1650, l.1674-
     e.finish()
 
 suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
-  test "[CAP-0011] [CAP-0012] [CAP-0013] [CAP-0014] [CAP-0428] [RUN-0322] [RUN-0324] [RUN-0811] [RUN-0858] [RUN-0823] [IFC-0781] evaluate runs off the Runtime thread with a system-service caller; the consumer is the module, never the engine":
+  test "[CAP-0011] [CAP-0012] [CAP-0013] [CAP-0014] [CAP-0428] [RUN-0322] [RUN-0324] [RUN-0811] [RUN-0858] [RUN-0823] [IFC-0781] [TXT-0293] evaluate runs off the Runtime thread with a system-service caller and no module-instance address; the consumer is the module, never the engine":
     let (e, orch) = ready()
     check orch.observe().code == ecOk
     let got = received()
@@ -345,6 +345,10 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
     check got[0].what == "rc:get_readiness"
     check got[0].consumer == Orch
     check got[0].callerKind == CallerSystemService
+    # [SPEC RUNTIME §4.1 l.835; G163] the invoking Runtime, without a
+    # module-instance address
+    check got[0].callerRuntimeLen > 0
+    check got[0].callerModuleLen == 0
     check got[0].thread != getThreadId()
     # The host's protected input decides alone: no evaluation.
     forget()
@@ -361,7 +365,7 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
     var h = orch.handle(route)
     check h.read(1).isOk
     check orch.establish("k2", all = true).code == ecOk
-    check orch.lifecycle("stop_module", "meter_module", Opt.some(Meter)).code == ecOk
+    check orch.stoppedVia("meter_module", Opt.some(Meter)).code == ecOk
     check orch.lifecycle("start_module", "meter_module", Opt.some(Meter)).code == ecOk
     h.release()
     let seen = whats()
@@ -389,7 +393,7 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
         check false
     e.finish()
 
-  test "[CAP-0025] [CAP-0098] [CAP-0108] [CAP-0109] [CAP-0110] [CAP-0111] [CAP-0112] [CAP-0113] [CAP-0114] [CAP-0118] [CAP-0153] [CAP-0260] [CAP-0261] [CAP-0084] [CAP-0068] [RUN-0038] [RUN-0325] [RUN-0327] [RUN-0329] a malformed decision, an error arm or a failed dispatch is an evaluation failure, never a deny":
+  test "[CAP-0025] [CAP-0098] [CAP-0108] [CAP-0109] [CAP-0110] [CAP-0111] [CAP-0112] [CAP-0113] [CAP-0114] [CAP-0118] [CAP-0153] [CAP-0260] [CAP-0261] [CAP-0084] [CAP-0068] [RUN-0038] [RUN-0325] [RUN-0327] [RUN-0329] [IFC-0979] [IFC-0980] a malformed decision, an error arm or a failed dispatch is an evaluation failure, never a deny":
     let (e, orch) = ready()
     for v in [
       vError, vStatus, vWrongConsumer, vOtherScopes, vBroadened, vUncovered, vUnordered,
@@ -409,11 +413,19 @@ suite "run.authority: evaluation (CA §5, §7; RUNTIME l.1737-1748)":
     )
     check orch.observe().code == ecNotAuthorised
     check e.lastFor(aaObserve).errorCode == "internal-error"
+    # [SPEC INTERFACE l.3306-3311; re-pin P4b R4b] The authority's provider
+    # returns a status outside the provider set: MODULE_ERROR at the ABI
+    # caller, so a failed evaluation, never a deny, NOT_AUTHORISED included.
+    for status in [ecTimeout, ecNotReady, ecNotAuthorised, ecTransport, ecCancelled]:
+      checkpoint $status
+      setScript(rule(vStatus, "rc:get_readiness", code = ord(status)))
+      check orch.observe().code == ecNotAuthorised
+      check e.lastFor(aaObserve).outcome == azEvaluationFailed
     # A route allow without valid_until, an execution allow with placements.
     setScript(rule(vNoValidity, "establish-route"), rule(vPlacements, "execute"))
     check orch.establish("k").code == ecNotAuthorised
     check e.lastFor(aaRoute).outcome == azEvaluationFailed
-    check orch.lifecycle("stop_module", "meter_module", Opt.some(Meter)).code == ecOk
+    check orch.stoppedVia("meter_module", Opt.some(Meter)).code == ecOk
     check orch.lifecycle("start_module", "meter_module", Opt.some(Meter)).code ==
       ecNotAuthorised
     let v = e.view(Meter).tryGet
@@ -647,7 +659,9 @@ suite "run.authority: losing the binding (CA §8 l.825-832; RUNTIME l.1652)":
       proc(): bool =
         e.view(Ca).tryGet.execution.revision > failed.execution.revision
     )
-    check orch.rcCall("recover_module", recover).code == ecInvalidParams
+    let stale = orch.rcCall("recover_module", recover)
+    check stale.code == ecOk
+    check stale.refused.get.stale == Opt.some(e.view(Ca).tryGet.execution.revision)
     let current = encode(
       LogosNSRuntimeControlRecoverModuleRequest(
         module: CaModuleName,
@@ -748,7 +762,7 @@ suite "run.authority: parked operations (CA §8; I75)":
     release()
     e.finish()
 
-  test "[I85] shutdown answers parked operations NOT_READY and begins no evaluation":
+  test "[I85] shutdown answers parked operations NOT_READY and begins no evaluation other than a renewal":
     let (e, orch) = ready()
     hold()
     setScript(rule(vHang, "rc:get_readiness"))
@@ -870,7 +884,7 @@ suite "run.authority: execution (RUNTIME §3.6, §9.3)":
     forget()
     park(orch, "start_module", startReq("m1"), slot = 0)
     check waitHanging()
-    check orch.lifecycle("stop_module", "client_module", Opt.some("m1")).code == ecOk
+    check orch.stoppedVia("client_module", Opt.some("m1")).code == ecOk
     check parkedCode(0) == ecOk
     let v = e.view("m1").tryGet
     check v.state == msUnloaded
@@ -911,8 +925,67 @@ suite "run.authority: execution (RUNTIME §3.6, §9.3)":
     check got.anyIt(it.what == "execute" and it.consumer == Orch)
     e.finish()
 
+# Asynchronous calls ----------------------------------------------------------------------
+
+type Completion = object
+  count: Atomic[int]
+  code: Atomic[int]
+
+proc onCompletion(
+    userData: pointer,
+    r: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+) {.cdecl, gcsafe, raises: [].} =
+  let d = cast[ptr Completion](userData)
+  if not owner.release.isNil:
+    owner.release(owner.state)
+  d.code.store(int(r.code))
+  d.count += 1
+
+proc submitRead(
+    h: var LogosRouteHandle,
+    c: var LogosAsyncCall,
+    channel: uint32,
+    d: ptr Completion,
+    timeoutMs = -1,
+) =
+  ## One asynchronous `read` on `channel`, prepared on `h` and submitted.
+  let params = encode(MeterReadRequest(channel: channel)).tryGet
+  var o = LogosAsyncOptions(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncOptions)),
+    hasTimeout: timeoutMs >= 0,
+    timeoutMs: uint64(max(timeoutMs, 0)),
+  )
+  var cb = LogosAsyncCallbacks(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncCallbacks)),
+    complete: onCompletion,
+    userData: d,
+  )
+  check toResult(
+    h.vtable.prepareCall(
+      addr h,
+      "read",
+      cast[ptr UncheckedArray[uint8]](unsafeAddr params[0]),
+      csize_t(params.len),
+      addr o,
+      addr cb,
+      addr c,
+    )
+  ).code == ecOk
+  c.vtable.submit(addr c)
+
+proc completed(d: ptr Completion): bool =
+  waitUntil(
+    proc(): bool =
+      d.count.load >= 1
+  )
+
 suite "run.authority: route validity (RUNTIME l.3157-3190; TL-03 interim)":
-  test "[RUN-0566] [RUN-0938] [CAP-0049] a route allow without valid_until is refused; expires_at is the allow's valid_until, at establishment and at renewal":
+  test "[RUN-0566] [RUN-0938] [RUN-1159] [CAP-0049] a route allow without valid_until is refused; expires_at is the allow's valid_until, at establishment and at renewal":
     let (e, orch) = ready()
     setScript(rule(vNoValidity, "establish-route"))
     check orch.establish("k0").code == ecNotAuthorised
@@ -931,7 +1004,7 @@ suite "run.authority: route validity (RUNTIME l.3157-3190; TL-03 interim)":
     check renewed.decision_id != rec.decision_id
     e.finish()
 
-  test "[RUN-0550] [CAP-0050] [CAP-0342] [RUN-0836] [RUN-0838] at expires_at the route is revoked with authority-expired: calls and observers get NOT_AUTHORISED and it cannot be renewed":
+  test "[RUN-0550] [RUN-1164] [RUN-0360] [CAP-0050] [CAP-0342] [RUN-0836] [RUN-0838] at expires_at the route is revoked with authority-expired: calls and observers get NOT_AUTHORISED and it cannot be renewed":
     let (e, orch) = ready()
     setScript(allow("establish-route", validMs = 1000))
     let route = orch.routeId("k")
@@ -951,6 +1024,57 @@ suite "run.authority: route validity (RUNTIME l.3157-3190; TL-03 interim)":
     check ErrorCode(seen.code.load) == ecNotAuthorised
     check orch.renew("k2", route).code == ecNotAuthorised
     h.release()
+    e.finish()
+
+  test "[RUN-1101] [TXT-0091] at expires_at the calls the route admitted, synchronous and asynchronous, are TRANSPORT_ERROR while the provider still runs them; a new call is NOT_AUTHORISED; only a deadline imposed on the invocation itself, the caller's timeout, is TIMEOUT":
+    let (e, orch) = ready()
+    setScript(allow("establish-route", validMs = 1000))
+    let route = orch.routeId("k")
+    var h = orch.handle(route)
+    var h2 = orch.handle(route)
+    check h2.read(1).isOk
+    gate.store(true)
+    defer:
+      gate.store(false)
+    let before = held.load
+    # [SPEC INTERFACE l.2025 (TXT-0091)] The caller's own deadline on an
+    # admitted invocation: TIMEOUT, though the provider still holds it.
+    var timed: Completion
+    var tc = LogosAsyncCall()
+    h2.submitRead(tc, 19, addr timed, timeoutMs = 50)
+    check completed(addr timed)
+    check ErrorCode(timed.code.load) == ecTimeout
+    # Two more admitted calls held by the provider: one asynchronous, one
+    # synchronous on its own thread.
+    var running: Completion
+    var rc = LogosAsyncCall()
+    h2.submitRead(rc, 19, addr running)
+    bgDone.store(false)
+    var t: Thread[ptr LogosRouteHandle]
+    createThread(t, background, addr h)
+    check waitUntil(
+      proc(): bool =
+        held.load == before + 3
+    )
+    check running.count.load == 0
+    # [RUNTIME l.1261, l.1271-1272] The route's end is no deadline of the
+    # invocation: the calls it admitted are TRANSPORT_ERROR, and a new one
+    # is NOT_AUTHORISED.
+    clk.advance(1500)
+    check h2.read(1).error.code == ecNotAuthorised
+    let rec = e.routes().filterIt(it.route == route)[0]
+    check rec.state.kind == LogosNSRuntimeControlRouteStateKind.Revoked
+    check rec.failure.get.code == "authority-expired"
+    check completed(addr running)
+    check ErrorCode(running.code.load) == ecTransport
+    gate.store(false)
+    joinThread(t)
+    check ErrorCode(bgCode.load) == ecTransport
+    check running.count.load == 1 and timed.count.load == 1
+    tc.vtable.release(addr tc)
+    rc.vtable.release(addr rc)
+    h.release()
+    h2.release()
     e.finish()
 
 # Execution authorization over time ------------------------------------------------------
@@ -1075,6 +1199,52 @@ suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10
     check e.stoppedFor("m2", fkAuthorityExpired)
     e.finish()
 
+  test "[RUN-1199] [TXT-0314] during shutdown an execution the ordering keeps `ready` is renewed, not stopped at its old end; the authority is held for it and released after it":
+    fresh()
+    var cfg = caConfig()
+    cfg.ordering = @[("m1", "m2")]
+    cfg.shutdownGrace = initDuration(seconds = 60 * Slow)
+    let e = newEngine(cfg)
+    live = e
+    let orch = e.boot()
+    e.startCa(orch)
+    check e.create(client(), "m1").isOk
+    check e.create(client(), "m2").isOk
+    setScript(allow("execute", validMs = 60_000))
+    orch.startBy("m1")
+    orch.startBy("m2")
+    setScript()
+    forget()
+    # m2's destroy is held, so the ordering keeps m1 `ready` during shutdown.
+    clientDestroyGate.store(true)
+    e.requestShutdown()
+    check e.reaches("m2", msStopping)
+    # [IMPL] renewal at end − min(30 s, lifetime / 3): 40 s into 60 s.
+    clk.advance(41_000)
+    check e.counted("renew-execution", 1)
+    check waitUntil(
+      proc(): bool =
+        e.answers().anyIt(it.request.renewal and it.outcome == azAllow)
+    )
+    # Its allow carries m1 past the old end; the authority stays for it.
+    clk.advance(20_000)
+    discard e.list()
+    check e.view("m1").tryGet.state == msReady
+    check e.view(Ca).tryGet.state == msReady and e.bound
+    let before = e.changes()[^1].serial
+    clientDestroyGate.store(false)
+    check e.awaitShutdown().isOk
+    let m1 = e.view("m1").tryGet
+    check m1.state == msUnloaded and m1.failure.isNone
+    var order: seq[string]
+    for c in e.changes():
+      if c.serial > before and c.view.state == msUnloaded and
+          c.view.instance in ["m1", Ca]:
+        order.add(c.view.instance)
+    check order == @["m1", Ca]
+    check e.close(initDuration(seconds = 10 * Slow))
+    live = nil
+
   test "[CAP-0166] [CAP-0167] [CAP-0168] [CAP-0169] policy_changed keeps an execution only when its previous revision is the authorization's and a present affected_executions leaves it out":
     let (e, orch) = ready()
     let id = e.runtimeInstanceId
@@ -1110,7 +1280,7 @@ suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10
     check e.view("m4").tryGet.state == msReady
     e.finish()
 
-  test "[RUN-1066] [RUN-0692] [RUN-0904] [RUN-0699] [CAP-0291] [CAP-0170] [CAP-0185] [CAP-0359] an ended grant stops the executions that used it, keeping intent and origin; their routes follow; recovery under a new grant starts afresh":
+  test "[RUN-1066] [RUN-0692] [RUN-0904] [RUN-0699] [RUN-1093] [CAP-0291] [CAP-0170] [CAP-0185] [CAP-0359] an ended grant stops the executions that used it, keeping intent and origin; their routes follow; recovery under a new grant starts afresh":
     let (e, orch) = ready(meter = false)
     let id = e.runtimeInstanceId
     check e.create(client(), "m1").isOk
@@ -1182,7 +1352,7 @@ suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10
     check e.stopForAuthority("m1", fkAuthorityDenied).tryGet.failure.get.kind ==
       fkAuthorityRevoked
     # An explicit stop clears the classification.
-    check orch.lifecycle("stop_module", "client_module", Opt.some("m1")).code == ecOk
+    check orch.stoppedVia("client_module", Opt.some("m1")).code == ecOk
     check e.view("m1").tryGet.failure.isNone
     e.finish()
 
@@ -1205,14 +1375,14 @@ proc isReady(e: Engine, route: string): bool =
   e.routeState(route).state.kind == LogosNSRuntimeControlRouteStateKind.Ready
 
 suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
-  test "[RUN-0567] [RUN-0946] [CAP-0174] [CAP-0189] a renewal narrowed below the bound access revokes with authority-revoked, a denied one with authority-denied; a failed one leaves the route ready and unusable until a later decision; a replay renews nothing":
+  test "[RUN-0567] [RUN-0946] [RUN-1171] [CAP-0174] [CAP-0189] [CAP-0433] [CAP-0434] [TXT-0142] a renewal narrowed below the bound access revokes with authority-denied, as a denied one does (CA l.940); a failed one leaves the route ready and unusable until a later decision; a replay renews nothing":
     let (e, orch) = ready()
     var narrowed = allow("renew-route")
     narrowed.narrowMethods = Opt.some(@[declRoot("meter.read")])
     let ra = orch.routeId("a")
     setScript(narrowed)
     check orch.renew("ra", ra).code == ecNotAuthorised
-    check e.ended(ra, "authority-revoked")
+    check e.ended(ra, "authority-denied")
     let rb = orch.routeId("b")
     setScript(rule(vDeny, "renew-route"))
     check orch.renew("rb", rb).code == ecNotAuthorised
@@ -1243,7 +1413,7 @@ suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
     h.release()
     e.finish()
 
-  test "[CAP-0188] [CAP-0189] [CAP-0174] [CAP-0173] after policy_changed each route is re-authorized at once with renew-route while its operations wait; an allow keeps it without extending expires_at; a deny or narrowing revokes it; a failure leaves it ready and unusable until a later re-authorization succeeds":
+  test "[CAP-0188] [CAP-0189] [CAP-0174] [CAP-0173] [CAP-0432] [CAP-0433] [TXT-0396] after policy_changed each route is re-authorized at once with renew-route while its operations wait; an allow keeps it without extending expires_at; a deny or narrowing revokes it with authority-denied (CA l.940); a failure leaves it ready and unusable until a later re-authorization succeeds":
     let (e, orch) = ready()
     let c1 = e.client("m1")
     let c2 = e.client("m2")
@@ -1284,13 +1454,13 @@ suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
     # A later re-authorization makes the failed one usable again.
     setScript()
     check h3.read(1).isOk
-    # A shorter valid_until shortens it; a narrowed allow revokes.
+    # A shorter valid_until shortens it; a narrowed allow revokes, as a deny.
     var narrowed = allow("renew-route", consumer = "m1")
     narrowed.narrowMethods = Opt.some(@[declRoot("meter.read")])
     setScript(narrowed, allow("renew-route", consumer = "m3", validMs = 1000))
     let now = uint64(clk.wallMs)
     check publish(PolicyChangedName, policyChanged(1, 2))
-    check e.ended(r1, "authority-revoked")
+    check e.ended(r1, "authority-denied")
     check waitUntil(
       proc(): bool =
         e.routeState(r3).expires_at == Opt.some(now + 1000)
@@ -1321,7 +1491,7 @@ suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
     h.release()
     e.finish()
 
-  test "[RUN-0833] [CAP-0193] [CAP-0194] a call in flight across a policy change commits its response when its route is kept; when the route is revoked it gets NOT_AUTHORISED, its invocation is marked cancelled and the limitation is recorded":
+  test "[RUN-1101] [RUN-0833] [CAP-0193] [CAP-0194] a call in flight across a policy change commits its response when its route is kept; when the route is revoked it gets TRANSPORT_ERROR, its invocation is marked cancelled and the limitation is recorded":
     let (e, orch) = ready()
     let route = orch.routeId("k")
     var h = orch.handle(route)
@@ -1353,7 +1523,7 @@ suite "run.authority: route re-authorization (CA l.869-914; S8b-2 interim)":
     check e.ended(route, "authority-denied")
     gate.store(false)
     joinThread(t)
-    check ErrorCode(bgCode.load) == ecNotAuthorised
+    check ErrorCode(bgCode.load) == ecTransport
     check e.diagnostics().anyIt("authority was withdrawn" in it)
     h.release()
     h2.release()
@@ -1372,7 +1542,7 @@ proc evalReq(e: Engine, consumer: string, renewal = false): seq[byte] =
   ).tryGet
 
 suite "run.authority: routed calls to the authority (CA l.88-91, l.579; S8b-1 interim)":
-  test "[CAP-0013] [CAP-0305] [CAP-0248] [CAP-0306] [RUN-0324] [RUN-0852] a routed call naming another consumer, or an evaluate carrying execution_renewal, is NOT_AUTHORISED without dispatch and kept as a refusal; a matching call reaches the authority with a module caller":
+  test "[CAP-0013] [CAP-0429] [CAP-0305] [CAP-0248] [CAP-0306] [RUN-0324] [RUN-0852] a routed call naming another consumer, or an evaluate carrying execution_renewal, is NOT_AUTHORISED without dispatch and kept as a refusal; a matching call reaches the authority with a module caller":
     let (e, orch) = ready()
     let caSet = block:
       let d = caDocuments()
@@ -1526,7 +1696,7 @@ suite "run.authority: remote listeners and exports without remote transport (K19
     check rcCall(orch, "set_provider_export", exportReq(pid)).code == ecInvalidParams
     e.finish()
 
-  test "[RUN-0346] [IFC-0416] a malformed request is INVALID_PARAMS with its detail; set_remote_listener, naming no target, is authorized first (G171 interim)":
+  test "[RUN-0346] [IFC-0416] [RUN-1117] [RUN-1118] a malformed request is INVALID_PARAMS with its detail; set_remote_listener, naming no target, is authorized first (l.1827-1828)":
     let (e, orch) = ready()
     setScript(
       rule(

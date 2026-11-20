@@ -137,12 +137,26 @@ proc onAcceptable(arg: pointer) {.gcsafe, raises: [].} =
 
 proc onEnd(arg: pointer) {.gcsafe, raises: [].}
 
-proc boundaryFor(s: Serve, contract: Digest): Result[Boundary, string] =
+proc boundaryFor(
+    s: Serve, contract: Digest, earlier: Opt[ContractInput]
+): Result[Boundary, string] =
+  ## The session's boundary, kept per selected contract. The primary and its
+  ## interfaces are built from the set `serve` accepted; an earlier contract
+  ## (re-pin P8b; DECISIONS G394) from its own input, which comes with each
+  ## session that selects it and is accepted at the first, never in `serve`:
+  ## the payload commitment is then taken under its own root (TRANSPORT
+  ## l.634; INTERFACE l.1722).
   var b: Boundary
   if s.boundaries.pop(contract, b):
     s.boundaries[contract] = b
     return ok(b)
-  b = ?boundary(s.contracts, contract)
+  if earlier.isSome and earlier.get.root == contract:
+    let set = ?acceptSchemaResponse(
+      earlier.get.schema, contract, AcceptOptions(system: earlier.get.system)
+    )
+    b = ?boundary(set, contract)
+  else:
+    b = ?boundary(s.contracts, contract)
   s.boundaries[contract] = b
   ok(b)
 
@@ -159,7 +173,7 @@ proc admit*(io: Io, c: Conn, v: AdmitVerdict) =
       if s.isNil:
         Result[Boundary, string].err("the endpoint is no longer served")
       else:
-        s.boundaryFor(v.binding.contract)
+        s.boundaryFor(v.binding.contract, v.earlier)
     if b.isErr:
       io.closeConn(c, ccProtocol, ecModule, Opt.some(protocolErrorBody(ecModule)))
       return
@@ -404,6 +418,19 @@ proc respond*(
   if workEnded:
     io.workEnded(c, id)
 
+proc endSubscription*(io: Io, c: Conn, id: uint64) =
+  ## [SPEC TRANSPORT §5.1 l.752-756] `cmdEndSubscription`: a SubscriptionEnd,
+  ## a control frame using the control reserve, committed after every Event
+  ## already committed for `id`, which is then no longer active. Nothing when
+  ## `id` is not active.
+  if c.role != roCallee or not c.established:
+    return
+  let r = c.callee.endSubscription(id)
+  if r.isSome:
+    io.commitControl(c, r.get)
+  if not c.closed:
+    io.account(c)
+
 proc subscriptionResult*(io: Io, c: Conn, id: uint64, failure: Opt[InvocationFailure]) =
   ## [SPEC TRANSPORT §5.1] The owner's answer to `evSubscribe` or
   ## `evUnsubscribe`: completes the outstanding operation of `id`.
@@ -575,14 +602,16 @@ proc publishScoped*(io: Io, c: Conn, cmd: IoCommand) =
 
 # The session's end -----------------------------------------------------------------
 
-proc finishTermination(io: Io, c: Conn) =
-  ## [SPEC TRANSPORT §8.1] ProtocolError NOT_AUTHORISED from the final slot, a
-  ## flush bounded by `closeLinger`, then close (TRN-0323, TRN-0325).
+proc finishTermination(io: Io, c: Conn, code: ErrorCode) =
+  ## [SPEC TRANSPORT §8.1] ProtocolError with the termination code from the
+  ## final slot, a flush bounded by `closeLinger`, then close (TRN-0323,
+  ## TRN-0325).
   if c.closed:
     return
-  for a in c.callee.finishTermination():
+  cancelTimer(c.drainTimer)
+  for a in c.callee.finishTermination(code):
     if a.kind == caClose:
-      io.closeConn(c, ccTerminated, ecNotAuthorised, a.close.send)
+      io.closeConn(c, ccTerminated, a.close.code, a.close.send)
 
 proc onDrain(arg: pointer) {.gcsafe, raises: [].} =
   let io = theIo
@@ -592,23 +621,30 @@ proc onDrain(arg: pointer) {.gcsafe, raises: [].} =
   if c.isNil or c.closed:
     return
   c.drainTimer = nil
-  io.finishTermination(c)
+  io.finishTermination(c, c.callee.terminationCode)
 
-proc terminate*(io: Io, c: Conn) =
-  ## [SPEC TRANSPORT §8.1] The route expired or was revoked: admission stops,
-  ## queued Requests get NOT_AUTHORISED without dispatch, subscriptions end;
-  ## in-flight work gets `terminationDrain`, then the session closes. Nothing
-  ## waits for another Request or reads unread input (TRN-0322).
-  if c.role != roCallee or not c.established or c.callee.state != csOpen:
+proc terminate*(io: Io, c: Conn, code = ecNotAuthorised, phase = tpWhole) =
+  ## [SPEC TRANSPORT §8.1] The route's authority (NOT_AUTHORISED) or
+  ## readiness (NOT_READY, l.977) ended: admission stops, queued Requests get
+  ## the code without dispatch, subscriptions end; in-flight work gets
+  ## `terminationDrain` (`tpWhole`) or the owner's bounded completion
+  ## (`tpBegin`, then `tpFinish`), then the session closes. Nothing waits for
+  ## another Request or reads unread input (TRN-0322). An authority end on a
+  ## session terminating for readiness raises its code (RUNTIME l.1267).
+  if c.role != roCallee or not c.established or c.closed:
     return
-  cancelTimer(c.endTimer)
-  io.act(c, c.callee.beginTermination())
-  if c.closed:
-    return
-  if io.config.terminationDrain <= 0:
-    io.finishTermination(c)
-  else:
-    c.drainTimer = setTimer(fromNow(io.config.terminationDrain), onDrain, keyArg(c.key))
+  let code = if code == ecNotReady: ecNotReady else: ecNotAuthorised
+  if phase != tpFinish:
+    cancelTimer(c.endTimer)
+    io.act(c, c.callee.beginTermination(code))
+    if c.closed or phase == tpBegin:
+      return
+    if io.config.terminationDrain > 0:
+      if c.drainTimer.isNil:
+        c.drainTimer =
+          setTimer(fromNow(io.config.terminationDrain), onDrain, keyArg(c.key))
+      return
+  io.finishTermination(c, code)
 
 proc onEnd(arg: pointer) {.gcsafe, raises: [].} =
   let io = theIo

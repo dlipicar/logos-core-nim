@@ -129,7 +129,7 @@ suite "cfg.types: CONFIG §9 and the Runtime Control configuration types":
     flagged.live_reconfiguration = Opt.some(false)
     check encode(flagged).tryGet == encode(tunerBinding(live = true)).tryGet
 
-  test "[RUN-0452] [RUN-0453] [RUN-0454] [RUN-0455] [RUN-0456] [RUN-0457] [RUN-0458] [RUN-0459] [RUN-0460] [RUN-0461] [RUN-0462] [RUN-0466] the five methods and the event round-trip, the commitment carrying a subtree root":
+  test "[RUN-0452] [RUN-0453] [RUN-0454] [RUN-0455] [RUN-0456] [RUN-0457] [RUN-0458] [RUN-0460] [RUN-0462] [RUN-0466] [RUN-1137] [RUN-1138] the five methods and the event round-trip, the commitment carrying a subtree root":
     rcRoundTrip(
       LogosNSRuntimeControlGetConfigurationSchemaRequest(target: target),
       "logos.runtime_control.get_configuration_schema_request",
@@ -185,8 +185,10 @@ suite "cfg.types: CONFIG §9 and the Runtime Control configuration types":
     )
     rcRoundTrip(drop, "logos.runtime_control.update_configuration_request")
     rcRoundTrip(
-      LogosNSRuntimeControlUpdateConfigurationResponse(
-        target: target, state_revision: 1, staged: Opt.some(record)
+      LogosNSRuntimeControlUpdateConfigurationResponse.accepted(
+        LogosNSRuntimeControlUpdateConfigurationResponseARMapStateRevisionTargetMap(
+          target: target, state_revision: 1, staged: Opt.some(record)
+        )
       ),
       "logos.runtime_control.update_configuration_response",
     )
@@ -197,8 +199,10 @@ suite "cfg.types: CONFIG §9 and the Runtime Control configuration types":
       "logos.runtime_control.apply_configuration_request",
     )
     rcRoundTrip(
-      LogosNSRuntimeControlApplyConfigurationResponse(
-        target: target, state_revision: 2, applied_value_revision: 1
+      LogosNSRuntimeControlApplyConfigurationResponse.accepted(
+        LogosNSRuntimeControlApplyConfigurationResponseARMapAppliedValueRevisionStateRevisionTargetMap(
+          target: target, state_revision: 2, applied_value_revision: 1
+        )
       ),
       "logos.runtime_control.apply_configuration_response",
     )
@@ -392,7 +396,7 @@ suite "cfg.state: configuration state and its transitions (CONFIG §3, §4, §6)
     check crafted.select == selIneligible
     s.release()
 
-  test "[CFG-0072] [CFG-0073] [CFG-0094] [CFG-0054] promotion clears the staged record only at the attempted value revision":
+  test "[CFG-0072] [CFG-0073] [CFG-0094] [CFG-0054] [TXT-0415] promotion clears the staged record only at the attempted value revision":
     # Staged unchanged: promoted and cleared.
     var s = stateFor(acc)
     let r = s.stageValue(tunerValue(), pvProtectedProvisioning)
@@ -721,7 +725,7 @@ suite "cfg.startup: sources, selection, delivery and promotion (CONFIG §4, §6;
     leftover()
     check liveConfigBlobs() == blobs
 
-  test "[CFG-0046] [CFG-0051] [CFG-0063] [CFG-0064] [CFG-0066] [CFG-0072] [CFG-0076] [CFG-0027] [RUN-0291] [IFC-0519] a new instance stages its default; its first start delivers it as one configuration_input and promotes it":
+  test "[CFG-0151] [CFG-0051] [CFG-0063] [CFG-0064] [CFG-0066] [CFG-0072] [CFG-0076] [CFG-0027] [RUN-0291] [IFC-0519] a new instance stages its default; its first start delivers it as one configuration_input and promotes it":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let a = tunerAccepted(default = Opt.some(tunerValue()))
@@ -759,7 +763,7 @@ suite "cfg.startup: sources, selection, delivery and promotion (CONFIG §4, §6;
     check provenanceOf(st.staged.get.provenance) == pvProtectedProvisioning
     e.finish()
 
-  test "[CFG-0026] [CFG-0042] [CFG-0128] [CFG-0009] [G162] without a value a start is NOT_READY with intent requested and no module code run; an update starts nothing":
+  test "[CFG-0026] [CFG-0042] [CFG-0128] [CFG-0009] [RUN-1193] [TXT-0580] [IMPL-DECISION G162] without a value a start is NOT_READY with intent requested, `configuration-missing` and no module code run; an update starts nothing, and the accepted start clears it":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     discard e.createTuner("t1", tunerAccepted())
@@ -767,14 +771,22 @@ suite "cfg.startup: sources, selection, delivery and promotion (CONFIG §4, §6;
     check rc.summary(t).state_revision == 0
     let r = e.start("t1")
     check r.isErr and r.error.code == ecNotReady
-    let v = e.view("t1").tryGet
-    check v.state == msUnloaded and v.failure.isNone
+    var v = e.view("t1").tryGet
+    check v.state == msUnloaded and v.failure.get.kind == fkConfigurationMissing
     check v.execution.intent == inRequested
+    let refused = v.execution.revision
+    # [P5 §0.3 item 3] A recovery refused for the same cause (orchestration's
+    # probe) commits nothing.
+    check e.recover("t1", refused).error.code == ecNotReady
+    check e.view("t1").tryGet.execution.revision == refused
     check tunerInits.load == 0
     check rc.stage(t, 0, tunerValue()).updated.state_revision == 1
-    check e.view("t1").tryGet.state == msUnloaded
+    v = e.view("t1").tryGet
+    # [IMPL-DECISION G359] It stays until the next accepted attempt (l.3611).
+    check v.state == msUnloaded and v.failure.get.kind == fkConfigurationMissing
     check tunerInits.load == 0
-    check e.start("t1").tryGet.state == msReady
+    v = e.start("t1").tryGet
+    check v.state == msReady and v.failure.isNone
     check lastInput() == Opt.some(inputFor(tunerValue(), 1))
     e.finish()
 
@@ -882,7 +894,7 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     leftover()
     check liveConfigBlobs() == blobs
 
-  test "[CFG-0006] [CFG-0058] [CFG-0107] [G235] an instance without a binding: a summary at revision 0, the other methods INVALID_PARAMS":
+  test "[CFG-0006] [CFG-0058] [CFG-0107] [TXT-0411] an instance without a binding: a summary at revision 0, the other methods INVALID_PARAMS":
     let e = tunerEngine()
     let (c, rc) = e.startClient("c")
     let t = e.target(c.instance)
@@ -944,8 +956,11 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     check staged.target == t
     # An equal value is staged again, at a new revision (l.205).
     check rc.stage(t, 1, v).updated.state_revision == 2
-    var r = rc.stage(t, 1, v)
-    check r.code == ecInvalidParams and r.detail.len == 0
+    # [re-pin P4a] A stale revision is the typed `stale-revision` with the
+    # current state revision, and no detail.
+    var r = rc.stage(t, 1, v, refusal = true)
+    check r.code == ecOk and r.detail.len == 0
+    check r.refused.get.stale == Opt.some(2'u64)
     var other = tunerCommitment()
     other.schema_root[0] = other.schema_root[0] xor 1
     r = rc.stage(t, 2, v, other)
@@ -955,7 +970,7 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     # Nothing staged: nothing changes (l.207).
     check rc.discardStaged(t, 3).updated.state_revision == 3
     check rc.summary(t).state_revision == 3
-    check rc.discardStaged(t, 2).code == ecInvalidParams
+    check rc.discardStaged(t, 2, refusal = true).refused.get.stale == Opt.some(3'u64)
     e.finish()
 
   test "[CFG-0022] [CFG-0023] [CFG-0048] [CFG-0049] [IFC-0441] a malformed value is INVALID_PARAMS without detail; one not of the root carries configuration-schema-mismatch and its path":
@@ -1023,7 +1038,7 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     check rc.stage(t, 0, tunerValue()).code == ecOk
     e.finish()
 
-  test "[CFG-0037] [CFG-0038] [CFG-0039] [G233] a value that with the current one would not fit a get_configuration response is MODULE_ERROR, nothing changed":
+  test "[CFG-0037] [CFG-0038] [CFG-0039] [TXT-0413] a value that with the current one would not fit a get_configuration response is INVALID_PARAMS without detail, nothing changed":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     discard e.createTuner("t1", tunerAccepted())
@@ -1034,9 +1049,44 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     check e.start("t1").tryGet.state == msReady
     check rc.summary(t).state_revision == 2
     let r = rc.stage(t, 2, tunerValue("radio-9", pad = 8_388_500))
-    check r.code == ecModule
+    check r.code == ecInvalidParams and r.detail.len == 0
     check rc.summary(t).state_revision == 2
     check rc.stage(t, 2, tunerValue()).updated.state_revision == 3
+    e.finish()
+
+  test "[CFG-0153] [TXT-0414] where several rows of CONFIG §5's table apply, the first is reported, the first row before the revision; nothing changes":
+    let e = tunerEngine()
+    let (c, rc) = e.startClient("c")
+    discard e.createTuner("t1", tunerAccepted())
+    let t = e.target("t1")
+    check rc.stage(t, 0, tunerValue(pad = 8_388_500)).updated.state_revision == 1
+    check e.start("t1").tryGet.state == msReady
+    var other = tunerCommitment()
+    other.schema_root[0] = other.schema_root[0] xor 1
+    # No binding, and a stale revision: INVALID_PARAMS, not `stale-revision`.
+    var r = rc.stage(e.target(c.instance), 7, tunerValue())
+    check r.code == ecInvalidParams and r.detail.len == 0
+    # A stale revision and a wrong commitment.
+    check rc.stage(t, 9, tunerValue(), other, refusal = true).refused.get.stale ==
+      Opt.some(2'u64)
+    # A wrong commitment and a malformed value.
+    r = rc.stage(t, 2, @[0x18'u8], other)
+    check r.code == ecVersionMismatch and r.detail.len == 0
+    # A value not of the root that would also not fit beside the current one.
+    let wrong = encodeCbor(
+      cborMap(
+        @[
+          (cbor("station"), cbor(5'u64)),
+          (cbor("volume"), cbor(1'u64)),
+          (cbor("pad"), cbor(newSeq[byte](8_388_500))),
+        ]
+      )
+    )
+    r = rc.stage(t, 2, wrong)
+    check r.code == ecInvalidParams
+    check reasonOf(r.detail) == "configuration-schema-mismatch"
+    check rc.summary(t).state_revision == 2
+    check rc.summary(e.target(c.instance)).state_revision == 0
     e.finish()
 
   test "[RUN-0642] [I87] get_execution_summary and list_modules report a configured instance without its configuration":
@@ -1163,14 +1213,41 @@ suite "cfg.sources: configuration state across restarts (CONFIG §4, §7; G141; 
     check latestClient().state(e.target("t1")).staged.get.value == a
     e.finish()
 
-  test "[CFG-0132] [CFG-0029] a changed binding or a lost configuration record does not restore the instance":
+  test "[CFG-0151] a default discarded before the first start is not staged again, after a restart either: the start reports `configuration-missing`":
+    let dir = work / "store-default"
+    let declared = tunerAt("t1", tunerAccepted(default = Opt.some(tunerValue())))
+    var e = storeEngine(dir)
+    check e.boot(@[declared]).isOk
+    check latestClient().discardStaged(e.target("t1"), 1).updated.state_revision == 2
+    for restarted in [false, true]:
+      if restarted:
+        e.finish()
+        e = storeEngine(dir)
+        check e.boot(@[declared]).isOk
+      let s = latestClient().summary(e.target("t1"))
+      check s.state_revision == 2 and s.staged.isNone and s.current.isNone
+      let r = e.start("t1")
+      check r.isErr and r.error.code == ecNotReady
+      check e.view("t1").tryGet.failure.get.kind == fkConfigurationMissing
+    check tunerInits.load == 0
+    e.finish()
+
+  test "[CFG-0132] [CFG-0029] [RUN-1103] a changed binding or a lost configuration record does not restore the instance":
     let dir = work / "store-changed"
     var e = storeEngine(dir)
     check e.boot(@[tunerAt("t1", tunerAccepted(default = Opt.some(tunerValue())))]).isOk
     e.finish()
+    # [SPEC RUNTIME l.1319-1321; M14] A static instance under another
+    # declaration is not refused at startup but never realized: the retained
+    # record stays, and a start is NOT_READY with `static-binding-mismatch`.
     e = storeEngine(dir)
-    let r = e.boot(@[tunerAt("t1", tunerAccepted(live = true), "tuner_live")])
-    check r.isErr and r.error.code == ecInvalidParams and "t1" in r.error.message
+    check e.boot(@[tunerAt("t1", tunerAccepted(live = true), "tuner_live")]).isOk
+    let s = latestClient().summary(e.target("t1"))
+    check s.state_revision == 1 and s.staged.isSome # the retained state, untouched
+    let r = e.start("t1")
+    check r.isErr and r.error.code == ecNotReady
+    check e.view("t1").tryGet.failure.get.kind == fkStaticBindingMismatch
+    check tunerInits.load == 0
     e.finish()
     for f in sideFiles(dir):
       removeFile(f)
@@ -1196,7 +1273,7 @@ suite "cfg.sources: configuration state across restarts (CONFIG §4, §7; G141; 
     check s.state_revision == 2 and s.staged.isNone
     e.finish()
 
-  test "[G190] an orchestration instance with no configuration value fails the bootstrap with MODULE_ERROR":
+  test "[RUN-1201] an orchestration instance with no configuration value fails the bootstrap with MODULE_ERROR (an other failure, l.3955)":
     let e = tunerEngine()
     let r = e.bootstrap(@[tunerAt("t1", tunerAccepted())], "t1")
     check r.isErr and r.error.code == ecModule
@@ -1225,27 +1302,27 @@ suite "cfg.sources: configuration state across restarts (CONFIG §4, §7; G141; 
     check sideFiles(dir).len == 0
     e.finish()
 
-  test "[G162] [G168] a start refused for want of a configuration value keeps intent and clears a retained execution refusal":
+  test "[RUN-1193] [TXT-0580] [IMPL-DECISION G162] [IMPL-DECISION G168] a start refused for want of a configuration value keeps intent, and `configuration-missing` replaces a retained execution refusal":
     let dir = work / "store-g162"
     var cfg = storeConfig(dir)
     cfg.policy =
       denying(AuthzRule(action: Opt.some(aaExecute), target: "t1", outcome: azDeny))
     var e = openEngine(cfg).tryGet
     live = e
-    check e.boot(@[]).isOk
-    discard e.createTuner("t1", tunerAccepted())
+    check e.boot(@[tunerAt("t1", tunerAccepted())]).isOk
     let denied = e.start("t1")
     check denied.isErr and denied.error.code == ecNotAuthorised
     check e.view("t1").tryGet.failure.get.kind == fkAuthorityDenied
     e.finish()
-    # Allowed now, and still without a value.
+    # Allowed now, and still without a value: the current cause replaces the
+    # denial (l.3611).
     e = storeEngine(dir)
-    check e.boot(@[]).isOk
+    check e.boot(@[tunerAt("t1", tunerAccepted())]).isOk
     check e.view("t1").tryGet.failure.get.kind == fkAuthorityDenied
     let r = e.start("t1")
     check r.isErr and r.error.code == ecNotReady
     let v = e.view("t1").tryGet
-    check v.failure.isNone
+    check v.failure.get.kind == fkConfigurationMissing
     check v.state == msUnloaded and v.execution.intent == inRequested
     check tunerInits.load == 0
     e.finish()
@@ -1280,7 +1357,7 @@ proc applyOn(arg: ApplyArg) {.thread.} =
   let r = arg[0].applyOf(arg[1], arg[2])
   if r.code == ecOk:
     let a = LogosNSRuntimeControlApplyConfigurationResponse.decode(r.response)
-    applyRevision.store(int(a.get.applied_value_revision))
+    applyRevision.store(int(a.get.accepted.get.applied_value_revision))
   applyReply.store(ord(r.code))
 
 proc applying(
@@ -1395,7 +1472,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     leftover()
     check liveConfigBlobs() == blobs
 
-  test "[CFG-0089] [CFG-0092] [CFG-0094] [CFG-0102] [CFG-0103] [CFG-0144] [G236] apply hands the staged record to the hook as one configuration_input, makes it current and answers its value revision; the lifecycle does not change":
+  test "[CFG-0089] [CFG-0092] [CFG-0094] [CFG-0102] [CFG-0103] [CFG-0144] [TXT-0419] apply hands the staged record to the hook as one configuration_input, makes it current and answers its value revision; the lifecycle does not change":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1417,7 +1494,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.applyOf(t, 4).code == ecInvalidParams
     e.finish()
 
-  test "[CFG-0093] [CFG-0141] [CFG-0142] [CFG-0143] [CFG-0090] [CFG-0006] [G171] [G228] the preconditions, in their row order, refuse without invoking the hook or changing anything":
+  test "[CFG-0093] [CFG-0141] [CFG-0142] [CFG-0143] [CFG-0090] [CFG-0006] [CFG-0155] [RUN-1121] [TXT-0418] [G228] the preconditions, in their row order, refuse without invoking the hook or changing anything":
     let e = tunerEngine()
     let (c, rc) = e.startClient("c")
     var r = rc.applyOf(e.target(c.instance), 0)
@@ -1426,9 +1503,12 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     away.runtime_instance_id = "another-runtime"
     check rc.applyOf(away, 3).code == ecInvalidParams
     let t = e.readyLive(rc, "t1")
-    r = rc.applyOf(t, 2)
-    check r.code == ecInvalidParams and r.detail.len == 0
+    r = rc.applyOf(t, 2, refusal = true)
+    check r.code == ecOk and r.detail.len == 0
+    check r.refused.get.stale == Opt.some(3'u64)
     check rc.discardStaged(t, 3).updated.state_revision == 4
+    # [CFG-0155] The revision is compared before this table's rows.
+    check rc.applyOf(t, 3, refusal = true).refused.get.stale == Opt.some(4'u64)
     r = rc.applyOf(t, 4)
     check r.code == ecInvalidParams and r.detail.len == 0
     # A startup-only binding.
@@ -1436,18 +1516,23 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check e.start("t2").tryGet.state == msReady
     let t2 = e.target("t2")
     check rc.stage(t2, 2, tunerValue("radio-2")).code == ecOk
+    check rc.applyOf(t2, 2, refusal = true).refused.get.stale == Opt.some(3'u64)
     r = rc.applyOf(t2, 3)
     check r.code == ecInvalidParams and r.detail.len == 0
     # Not ready: after the request's own rows.
     let a = tunerAccepted(default = Opt.some(tunerValue()), live = true)
     discard e.createTuner("t3", a, binding = "tuner_live")
     let t3 = e.target("t3")
-    check rc.applyOf(t3, 0).code == ecInvalidParams
+    check rc.applyOf(t3, 0, refusal = true).refused.get.stale == Opt.some(1'u64)
     check rc.applyOf(t3, 1).code == ecNotReady
+    # [TXT-0418] With nothing staged, the first row comes before NOT_READY.
+    check rc.discardStaged(t3, 1).updated.state_revision == 2
+    r = rc.applyOf(t3, 2)
+    check r.code == ecInvalidParams and r.detail.len == 0
     check applyEntered.load == 0
     check rc.summary(t).state_revision == 4
     check rc.summary(t2).state_revision == 3
-    check rc.summary(t3).state_revision == 1
+    check rc.summary(t3).state_revision == 2
     e.finish()
 
   test "[CFG-0141] the binding's, the staged record's and the realization's commitments must agree (the VERSION_MISMATCH row)":
@@ -1468,14 +1553,14 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.summary(t).state_revision == 3
     e.finish()
 
-  test "[CFG-0145] [CFG-0146] a valid rejection is MODULE_ERROR without the hook's status; nothing changes and the instance stays ready":
+  test "[CFG-0156] [CFG-0146] [TXT-0161] [TXT-0420] a valid rejection is the `configuration-rejected` error arm, without `current_revision` or the hook's status; nothing changes and the instance stays ready":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
     applyMode.store(1)
-    let r = rc.applyOf(t, 3)
-    check r.code == ecModule
-    check "secret" notin r.message and r.detail.len == 0
+    let r = rc.applyOf(t, 3, refusal = true)
+    check r.rejected
+    check "secret" notin r.message
     check applyCalls.load == 1
     let s = rc.summary(t)
     check s.state_revision == 3 and s.current.get.value_revision == 1
@@ -1518,7 +1603,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
       call.vtable.release(addr call)
     e.finish()
 
-  test "[CFG-0101] [CFG-0147] [CFG-0148] [RUN-1052] an invalid hook result is indeterminate: MODULE_ERROR, `error` with configuration-indeterminate, the realization released and nothing promoted":
+  test "[CFG-0101] [CFG-0147] [CFG-0148] [RUN-1052] [TXT-0420] an invalid hook result is indeterminate: MODULE_ERROR, `error` with configuration-indeterminate, the realization released and nothing promoted":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1541,7 +1626,26 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check lastInput() == Opt.some(inputFor(tunerValue("radio-2", 9), 3))
     e.finish()
 
-  test "[CFG-0095] [CFG-0100] [CFG-0040] one application at a time; an update during it is admitted and stays staged when the promotion does not clear it":
+  test "[TXT-0309] [CFG-0147] [IMPL-DECISION G360] an invalid apply_configuration response from a ready Loader is indeterminate: MODULE_ERROR, `error` with configuration-indeterminate, nothing promoted; the Loader stays ready":
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    check e.setLoaderFaultsForTests(LoaderFaults(garble: {lmApplyConfiguration})).isOk
+    check rc.applyOf(t, 3).code == ecModule
+    let v = e.view("t1").tryGet
+    check v.state == msError
+    check v.failure.get.kind == fkConfigurationIndeterminate
+    check "invalid response" in e.diagnostics().join("\n")
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("t1")
+    )
+    let s = rc.summary(t)
+    check s.current.get.value_revision == 1 and s.staged.get.value_revision == 3
+    check e.view(LoaderInstanceId).tryGet.state == msReady
+    e.finish()
+
+  test "[CFG-0095] [CFG-0100] [CFG-0040] [TXT-0418] one application at a time, a live realization passing the first row; an update during it is admitted and stays staged when the promotion does not clear it":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1644,7 +1748,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check s.current.get.value_revision == 3 and s.staged.isNone
     e.finish()
 
-  test "[G237] [CFG-0136] [CFG-0138] past the apply deadline during a stop: `error` with configuration-indeterminate, then `unloaded` once the stop completes in time":
+  test "[TXT-0421] [TXT-0422] [CFG-0136] [CFG-0138] past the apply deadline during a stop: the instance stays `stopping`, only the caller learns the outcome, and the stop completes `unloaded` in time":
     let e = liveEngine(applyMs = 1000, stopMs = 10_000)
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1657,12 +1761,14 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
         applyReply.load != -2
     )
     check applyReply.load == ord(ecModule)
+    # [SPEC CONFIG l.328-329] Still `stopping`, no failure recorded: the
+    # indeterminate outcome is in the `apply_configuration` response only.
     var v = e.view("t1").tryGet
-    check v.state == msError
-    check v.failure.get.kind == fkConfigurationIndeterminate
+    check v.state == msStopping
+    check v.failure.isNone
     check stopReply.load == -2
     # A second stop is answered with the state at once, as during `stopping`.
-    check e.stop("t1").tryGet.state == msError
+    check e.stop("t1").tryGet.state == msStopping
     applyHold.store(false)
     joinThread(th)
     joinThread(st)
@@ -1673,7 +1779,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.summary(t).current.get.value_revision == 1
     e.finish()
 
-  test "[G237] [G180] past the stop deadline as well, the stop answers with cleanup-timeout and the instance stays `error` when the hook returns":
+  test "[TXT-0421] [RUN-1092] [G180] past the stop deadline as well, the stop answers `stopping` with cleanup-timeout and completes when the hook returns":
     let e = liveEngine(applyMs = 500, stopMs = 1500)
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1685,13 +1791,14 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
       proc(): bool =
         applyReply.load != -2
     )
-    check e.view("t1").tryGet.failure.get.kind == fkConfigurationIndeterminate
+    check e.view("t1").tryGet.state == msStopping
+    check e.view("t1").tryGet.failure.isNone
     check waitUntil(
       proc(): bool =
         stopReply.load != -2
     )
     joinThread(st)
-    check stopReply.load == ord(msError)
+    check stopReply.load == ord(msStopping)
     check e.view("t1").tryGet.failure.get.kind == fkCleanupTimeout
     applyHold.store(false)
     joinThread(th)
@@ -1700,7 +1807,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
         not e.cleanupPending("t1")
     )
     let v = e.view("t1").tryGet
-    check v.state == msError and v.failure.get.kind == fkCleanupTimeout
+    check v.state == msUnloaded and v.failure.isNone
     check rc.summary(t).current.get.value_revision == 1
     e.finish()
 
@@ -1725,7 +1832,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check e.view("t1").tryGet.state == msUnloaded
     e.finish()
 
-  test "[CFG-0092] [CFG-0096] [CFG-0097] [CFG-0098] [CFG-0145] a generated kit applies the typed value; its refusal leaves the value in force":
+  test "[CFG-0092] [CFG-0096] [CFG-0097] [CFG-0098] [CFG-0156] a generated kit applies the typed value; its refusal leaves the value in force":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let a = tunerAccepted(default = Opt.some(tunerValue("kit-1", 4)), live = true)
@@ -1736,7 +1843,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.applyOf(t, 3).applied.applied_value_revision == 3
     check tunerAppliedVolume.load == 6'u32
     check rc.stage(t, 4, tunerValue("refuse", 8)).code == ecOk
-    check rc.applyOf(t, 5).code == ecModule
+    check rc.applyOf(t, 5, refusal = true).rejected
     check tunerAppliedVolume.load == 6'u32
     check e.view("k").tryGet.state == msReady
     let s = rc.summary(t)
@@ -1779,4 +1886,68 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     let now = h.nowOf()
     check now.station == "hold" and now.volume == 6'u32 and now.applied == 1
     h.release()
+    e.finish()
+
+  test "[RUN-1113] [RUN-1114] [TXT-0160] [CFG-0152] [CFG-0154] a stale revision at each guarded method is its response's error arm, with the current revision, and changes nothing":
+    # [re-pin P4a] RUNTIME l.1818-1822: start, stop and recover (the execution
+    # revision), retire (the same), update_permission_settings (the settings
+    # revision), update_configuration and apply_configuration (the
+    # configuration-state revision). Each is a successful call; RUNTIME l.1815:
+    # no mutation after a failed revision check.
+    let e = tunerEngine()
+    let (_, rc) = e.startClient()
+    let t = e.readyLive(rc, "t1")
+    let before = e.view("t1").tryGet
+    let exec = before.execution.revision
+    let stateRevision = rc.summary(t).state_revision
+    let settingsOf =
+      encode(LogosNSRuntimeControlGetPermissionSettingsRequest(target: t)).tryGet
+    let settings = LogosNSRuntimeControlGetPermissionSettingsResponse.decode(
+      rcCall(rc, "get_permission_settings", settingsOf).response
+    ).tryGet.state.revision
+    proc staleIn(r: RcResult): Opt[uint64] =
+      check r.code == ecOk and r.detail.len == 0
+      if r.refused.isSome:
+        r.refused.get.stale
+      else:
+        Opt.none(uint64)
+
+    for m in ["start_module", "stop_module"]:
+      checkpoint m
+      check rc.lifecycle(
+        m, "tuner_module", Opt.some("t1"), expected = Opt.some(exec + 1), refusal = true
+      ).staleIn == Opt.some(exec)
+    let recover = encode(
+      LogosNSRuntimeControlRecoverModuleRequest(
+        module: "tuner_module", instance: "t1", expected_execution_revision: exec + 1
+      )
+    ).tryGet
+    check rcCall(rc, "recover_module", recover).staleIn == Opt.some(exec)
+    let retire = encode(
+      LogosNSRuntimeControlRetireModuleRequest(
+        target: t, expected_execution_revision: exec - 1
+      )
+    ).tryGet
+    check rcCall(rc, "retire_module", retire).staleIn == Opt.some(exec)
+    let update = encode(
+      LogosNSRuntimeControlUpdatePermissionSettingsRequest(
+        target: t, expected_revision: settings + 1, permissions: @[]
+      )
+    ).tryGet
+    check rcCall(rc, "update_permission_settings", update).staleIn == Opt.some(settings)
+    check rc.stage(t, stateRevision - 1, tunerValue("radio-4"), refusal = true).staleIn ==
+      Opt.some(stateRevision)
+    check rc.discardStaged(t, stateRevision + 1, refusal = true).staleIn ==
+      Opt.some(stateRevision)
+    check rc.applyOf(t, stateRevision - 1, refusal = true).staleIn ==
+      Opt.some(stateRevision)
+    # Nothing changed.
+    let after = e.view("t1").tryGet
+    check after.execution.revision == exec and after.state == msReady
+    check after.execution.intent == before.execution.intent
+    check rc.summary(t).state_revision == stateRevision
+    check LogosNSRuntimeControlGetPermissionSettingsResponse.decode(
+      rcCall(rc, "get_permission_settings", settingsOf).response
+    ).tryGet.state.revision == settings
+    check applyEntered.load == 0
     e.finish()

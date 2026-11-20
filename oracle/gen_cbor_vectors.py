@@ -100,9 +100,15 @@ SELF = [
     ("a161ff00", "invalid-utf8", "invalid UTF-8 in a map key"),
     ("63efbfbf", "ok", "U+FFFF"),
     ("64f48fbfbf", "ok", "U+10FFFF"),
-    # tags and simple values are data-model values (G38)
+    # tags and simple values are generic data-model values, outside Logos
+    # deterministic CBOR (INTERFACE §4.4 item 5; G38)
     ("d9d9f700", "ok", "self-described CBOR tag"),
     ("f820", "ok", "simple(32)"),
+    # a break is not a tag's content, whether or not tags are decoded
+    ("9fc0ff", "malformed", "a break as the content of a tag in an indefinite array"),
+    ("bfc0ff", "malformed", "a break as the content of a tag where a map key belongs"),
+    ("9fd9d9f7ff", "malformed", "a break as the content of a two-byte tag"),
+    ("bf00c0ff", "malformed", "a break as the content of a tag where a map value belongs"),
     # well-formedness wins over determinism anywhere in the item
     ("821817ff", "malformed", "non-shortest uint, then a stray break"),
     ("82a2616201616102", "malformed", "unsorted map inside a truncated array"),
@@ -153,12 +159,13 @@ def main() -> int:
         cases.append((h, "malformed", "RFC 8949 App F"))
     cases += SELF
 
-    # `want` is the class in the generic data model, where floats decode;
-    # `expect` is the class under Logos deterministic CBOR, where they never do.
+    # `want` is the class in the generic data model, where floats, tags and every
+    # simple value decode; `expect` is the class under Logos deterministic CBOR,
+    # where they never do (INTERFACE §4.4 item 5).
     out, bad = [], 0
     for h, want, note in cases:
         data = bytes.fromhex(h)
-        got = dcbor.classify(data, allow_floats=True)
+        got = dcbor.classify(data, allow_floats=True, allow_extended=True)
         if got != want:
             print(f"oracle says {got}, expected {want}: {h[:40]} ({note})")
             bad += 1
@@ -167,11 +174,11 @@ def main() -> int:
         rec = {"hex": h, "expect": logos, "note": note}
         if logos != want:
             if logos != "non-deterministic":
-                print(f"a float changes {h[:40]} to {logos}, not non-deterministic")
+                print(f"the strict rule changes {h[:40]} to {logos}, not non-deterministic")
                 bad += 1
             rec["data_model"] = want
         if want == "ok":
-            v = dcbor.decode(data, allow_floats=True)
+            v = dcbor.decode(data, allow_floats=True, allow_extended=True)
             if dcbor.encode(v) != data:
                 print(f"oracle re-encoding differs: {h}")
                 bad += 1

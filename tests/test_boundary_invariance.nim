@@ -254,11 +254,36 @@ when defined(posix):
       leftover()
       check noHostLeft()
 
-    test "[RUN-0007] [RUN-0008] [RUN-0014] [RUN-0181] [IFC-0007] [IFC-0008] [IFC-0009] [IFC-0011] [IFC-0012] [IFC-0013] [IFC-0014] [IFC-0015] the meter kit: calls, introspection, validation, failures, events and asynchronous calls are the same in four placements":
+    test "[RUN-0007] [RUN-0008] [RUN-0014] [RUN-0181] [RUN-1096] [IFC-0007] [IFC-0008] [IFC-0009] [IFC-0011] [IFC-0012] [IFC-0013] [IFC-0014] [IFC-0015] the meter kit: calls, introspection, validation, failures, events and asynchronous calls are the same in four placements":
       compare(meterScript())
 
-    test "[RUN-0181] [IFC-0011] [IFC-0014] a deferred provider (INTERFACE §2.9.2): the same in four placements":
+    test "[RUN-0181] [RUN-1088] [RUN-1096] [IFC-0011] [IFC-0014] a deferred provider (INTERFACE §2.9.2): the same in four placements":
       compare(deferredScript())
 
-    test "[RUN-0181] [IFC-0013] [IFC-0014] [IFC-0923] the shapes kit: every C shape, a value outside the schema and the payload depth limit are the same in four placements":
+    test "[RUN-0181] [RUN-1096] [IFC-0013] [IFC-0014] [IFC-0923] the shapes kit: every C shape, a value outside the schema and the payload depth limit are the same in four placements":
       compare(shapesScript(Depth))
+
+    test "[IFC-0939] [IFC-0940] [RUN-1152] [RUN-1153] [TXT-0106] connect_remote's endpoint checks and M8 on the listener methods: the same answers from a direct and a hosted consumer, with validation detail only for a schema failure":
+      # Only the consumer's placement carries `connect_remote` and Runtime
+      # Control; the provider's adds nothing here.
+      let cases = remoteAddressCases(RuntimeId)
+      let s = remoteAddressScript(RuntimeId)
+      for at in [Placements[0], Placements[2]]:
+        checkpoint $at
+        let got = observe(s, at)
+        for (line, outcome) in cases:
+          let prefix = line & " => "
+          var answer = "missing"
+          for g in got:
+            if g.startsWith(prefix):
+              answer = g[prefix.len .. ^1]
+          checkpoint line[0 ..< min(line.len, 60)] & " => " & answer
+          case outcome
+          of roDetail:
+            check answer.startsWith("2 ") and " detail=" in answer
+          of roPlain:
+            check answer.startsWith("2 ") and "detail=" notin answer
+          of roDenied:
+            check answer.startsWith("4 ") and "acquired" notin answer
+          of roOk:
+            check answer.startsWith("0 ")

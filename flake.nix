@@ -9,7 +9,7 @@
     nixpkgs-nph.url = "github:NixOS/nixpkgs/f4a03c008967841f2a0b3cb7c436fc6fc31671f6";
     # The specs under implementation.
     logos-lips = {
-      url = "git+https://github.com/logos-co/logos-lips?ref=draft/logos-core-module-specs&rev=6a4dfa2846ab9f1f679ad285f8caa848ee8544ad";
+      url = "git+https://github.com/logos-co/logos-lips?ref=draft/logos-core-module-specs&rev=6cac8335af8cea0e5d4e2f9ccb2e584c5b27a7c2";
       flake = false;
     };
   };
@@ -83,6 +83,8 @@
               ./docs/DAEMON.md
               # test_deployment checks the deployment document's facts block.
               ./docs/DEPLOYMENT.md
+              # test_resolver checks the documented resolver maxima are the ones in src (G361).
+              ./docs/CONFORMANCE.md
               # The service-manager units for logosd (DAEMON.md §13).
               ./contrib
             ];
@@ -236,15 +238,31 @@
               ./docs/DEPLOYMENT.md
             ];
           };
-          specCheck =
-            name: command:
+          # `spectrace pending` also reads the code a reading names and the decision rows (DECISIONS I104).
+          pendingSources = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./spec
+              ./conformance
+              ./tests
+              ./sdk/tests
+              ./sdk/conformance
+              ./src
+              ./sdk/src
+              ./docs/DECISIONS.md
+              ./docs/DEPLOYMENT.md
+            ];
+          };
+          specCheckIn =
+            sources: name: command:
             pkgs.runCommand name { nativeBuildInputs = [ spectrace python ]; } ''
-              cd ${specSources}
+              cd ${sources}
               # A subshell: under `set -e` a failure before the last step of an
               # `a && b` list would not stop the script, and the check would pass.
               ( ${command} ) || exit 1
               touch $out
             '';
+          specCheck = specCheckIn specSources;
           specChecks = {
             spec-mirrors = specCheck "spec-mirrors" "spectrace mirror";
             spec-pins = specCheck "spec-pins" "spectrace pins";
@@ -252,6 +270,7 @@
             spec-owners = specCheck "spec-owners" "spectrace owners --self-test && spectrace owners";
             spec-gate = specCheck "spec-gate" "spectrace gate --closed-tier 1 --closed-tier 2 --closed-tier 3 --closed-tier 4 --closed-tier 4b";
             spec-deploydoc = specCheck "spec-deploydoc" "spectrace deploydoc";
+            spec-pending = specCheckIn pendingSources "spec-pending" "spectrace pending --self-test && spectrace pending";
             oracle-selftest = specCheck "oracle-selftest" "python3 oracle/selftest.py && python3 oracle/gen_cddl_vectors.py --check && python3 oracle/gen_hash_vectors.py --check && python3 oracle/gen_cose_vectors.py --check && python3 oracle/gen_nfc_tables.py --check";
           };
 

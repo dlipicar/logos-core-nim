@@ -46,7 +46,7 @@ type
     vDeny
     vError ## the `error` arm
     vHang ## waits until `release`, then allows
-    vStatus ## a non-OK status, no response
+    vStatus ## a non-OK status (`code`, else MODULE_ERROR), no response
     vWrongConsumer ## an allow naming another consumer
     vOtherScopes ## an allow answering other requested scopes
     vBroadened ## an allowed scope wider than the request
@@ -84,7 +84,9 @@ type
     narrowControl*: seq[RcNarrow]
       ## allow: the allowed Runtime Control scopes, one per alternative
     retainRequest*, retainResponse*: bool ## allow: `commitment`
-    code*: int ## deny: the denial code; error: the error code (enum ordinal)
+    code*: int
+      ## deny: the denial code; error: the error code (enum ordinal); status:
+      ## the status, when not 0
     permName*: string
       ## [I93] allow: the allowed permission scope of this name gets
       ## `permConstraints` (or is dropped when they are empty)
@@ -94,6 +96,8 @@ type
     what*: string
     consumer*: string
     callerKind*: uint32
+    callerRuntimeLen*: int ## the caller view's runtime instance id, in bytes
+    callerModuleLen*: int ## the caller view's module instance id, in bytes
     thread*: int
     order*: int
     request*: seq[byte]
@@ -343,6 +347,8 @@ proc received*(): seq[Received] =
           thread: parseInt(f[3]),
           order: parseInt(f[4]),
           request: unhex(f[5]),
+          callerRuntimeLen: parseInt(f[6]),
+          callerModuleLen: parseInt(f[7]),
         )
       )
     except ValueError:
@@ -370,7 +376,7 @@ proc publish*(name: string, payload: openArray[byte]): bool =
     let n = LogosNSCapabilityAuthorityPolicyChangedEvent.decode(@payload)
     if n.isOk:
       revision.store(max(revision.load, n.get.policy_revision))
-  f(
+  discard f(
     publishData.load,
     cstring(name),
     (
@@ -677,8 +683,16 @@ proc fakeDispatch(
     withLock lock:
       let text = script.getText()
       records.addText(
-        [what, consumer, $view.kind, $getThreadId(), $tick(), hexOf(bytes)].join("\x1F") &
-          "\x1E"
+        [
+          what,
+          consumer,
+          $view.kind,
+          $getThreadId(),
+          $tick(),
+          hexOf(bytes),
+          $view.runtimeInstanceId.len,
+          $view.moduleInstanceId.len,
+        ].join("\x1F") & "\x1E"
       )
       for part in text.split('\x1E'):
         if part.len > 0:
@@ -696,7 +710,14 @@ proc fakeDispatch(
       r.verdict = vAllow
     case r.verdict
     of vStatus:
-      return LogosResult(code: CErrorCode(ord(ecModule)))
+      return LogosResult(
+        code: CErrorCode(
+          if r.code != 0:
+            r.code
+          else:
+            ord(ecModule)
+        )
+      )
     of vBadCbor:
       respond([0xFF'u8], outResp, outLen)
       return LogosResult()

@@ -8,17 +8,11 @@
 
 # Security considerations are claimed through the specifications that state them; the units this
 # file adds come with the profiles they name: platform isolation and the iOS profile are Tier 5
-# (DECISIONS I88).
+# (DECISIONS I88). At 6cac8335 the fail-closed rule (SEC l.240) and the value-derived identifiers
+# (SEC l.404) are descriptive: BCP-0049, BCP-0050, BCP-0081 and IFC-0575 to IFC-0581 state them,
+# and this file claims no unit (re-pin P6b, DECISIONS I111).
 default = "deferred:tier-5"
 
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
-
-[units]
-# Fail closed when a profile's control cannot be established (the C-08 staging test).
-"SEC-0021" = "claimed"
-# Sensitive-payload restrictions on value-derived identifiers: a marked side's value roots are
-# erased with the payload, kept in no record or diagnostic, and their retention refused (DECISIONS
-# I92, G276, G278).
-"SEC-0057" = "claimed"

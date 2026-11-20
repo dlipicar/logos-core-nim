@@ -26,7 +26,12 @@ import logos_sdk/abi/[checks, types]
 import logos_sdk/cbor/utf8
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, outcome, payload, surface]
-import ./[asynccall, callside, events, hostsup, invoke, plumbing, rcevents, transported]
+import logos_sdk/kit/rc_types
+import
+  ./[
+    asynccall, callside, events, hostsup, invoke, plumbing, rcaddress, rcevents, subend
+  ]
+import ./transported
 
 export callside.AttemptServices
 
@@ -102,8 +107,8 @@ proc rcConnectRemoteOp(
     outBinding.state = nil
   checkConnectRemoteInput(endpoint, endpointLen, expectedRoot).isOkOr:
     return status(error)
-  # [SPEC RUNTIME l.1783-1784] A valid endpoint names no enrolled Runtime:
-  # this Runtime has no enrollments yet.
+  # [SPEC INTERFACE l.3877; IFC-0940] Decoding and schema failures carry
+  # their validation detail.
   let v = decodePayload(view(endpoint, endpointLen)).valueOr:
     return status(toFailure(error))
   rcSchema().checkPath("logos.runtime_control.runtime_endpoint", v).isOkOr:
@@ -113,6 +118,28 @@ proc rcConnectRemoteOp(
         detail: Opt.some(invalidParamsDetail(iprSchemaMismatch, Opt.some(error))),
       )
     )
+  # [SPEC INTERFACE l.3874-3876; IFC-0939] A schema-valid endpoint that
+  # omits the Runtime identity, selects a non-remote address or names this
+  # Runtime is INVALID_PARAMS without validation detail, in that order; after
+  # those three, so is a remote address whose `profile` or `alpn`
+  # contradicts its transport [reading: RUNTIME l.2704, Fable synthesis
+  # §14.2]. All before anything that can answer NOT_AUTHORISED.
+  let ep = fromChecked(LogosNSRuntimeControlRuntimeEndpoint, v)
+  let remote = ep.address.remoteAddress
+  if ep.runtime_instance_id.isNone:
+    return status(ecInvalidParams, "the endpoint names no Runtime")
+  if remote.isNone:
+    return status(ecInvalidParams, "the endpoint's address is not remote")
+  let s = servicesOf(binding)
+  if ep.runtime_instance_id.get == s.engine.call(Request(kind: rqIdentity)).id:
+    return status(ecInvalidParams, "the endpoint names this Runtime")
+  if remote.get.mismatching:
+    return status(
+      ecInvalidParams, "the address does not match the profile its transport selects"
+    )
+  # [SPEC RUNTIME l.1783-1784] A valid endpoint names no enrolled Runtime:
+  # this Runtime has no enrollments yet. [IFC-0941 deferred] Authentication
+  # and transport failures keep their codes once a connect path exists.
   status(ecNotAuthorised, "not authorised")
 
 proc rcReleaseOp(binding: ptr LogosRuntimeControlBinding) {.cdecl.} =
@@ -273,13 +300,15 @@ proc routeObserveEndOp(
   LogosResult()
 
 proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
-  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1503-1506, §5.2 l.3895-3897,
+  ## [SPEC INTERFACE §2.5 l.1461-1468, l.1484, l.1503-1506, §5.2 l.3895-3897,
   ## l.3912-3916] The handle's subscriptions are deactivated and no callback
-  ## begins after release; a handler or terminal callback already running on
-  ## another thread is waited for. The logical route and the calls prepared
-  ## through the handle stay as they are.
+  ## begins after release; a handler, terminal callback or subscription-end
+  ## report already running on another thread is waited for (G225). The
+  ## logical route and the calls prepared through the handle stay as they
+  ## are.
   bindingEnter()
   let h = handleOf(route)
+  h.subEnd.suppress()
   let reply = h.engine.call(
     Request(
       kind: rqReleaseHandle,
@@ -293,9 +322,29 @@ proc routeReleaseOp(route: ptr LogosRouteHandle) {.cdecl.} =
   withLock h.lock:
     if h.cb == cbScheduled:
       h.cb = cbSuppressed
-    while h.cb == cbRunning:
+    while h.cb == cbRunning or h.subEnd.busy:
       wait(h.cond, h.lock)
   dropHandle(h)
+
+proc routeObserveSubscriptionEndOp(
+    route: ptr LogosRouteHandle, handler: LogosSubscriptionEndHandler, userData: pointer
+): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE §2.5 l.1476-1484] The handle's one registration
+  ## (`subend`), with `observe_end`'s rules: a null handler is INVALID_PARAMS,
+  ## and a terminal handle returns its retained code and installs nothing
+  ## (l.1459; DECISIONS I105).
+  bindingEnter()
+  if handler.isNil:
+    return status(ecInvalidParams, "a null subscription-end handler")
+  let h = handleOf(route)
+  let reply = h.engine.call(
+    Request(
+      kind: rqSubEndAdmit, origin: moduleOrigin($h.consumer), route: $h.route, handle: h
+    )
+  )
+  if reply.error.isSome:
+    return status(reply.error.get)
+  h.subEnd.register(handler, userData)
 
 var routeVtable = LogosRouteVtable(
   abiVersion: RouteVtableAbiVersion,
@@ -307,6 +356,7 @@ var routeVtable = LogosRouteVtable(
   release: routeReleaseOp,
   prepareCall: routePrepareCallOp,
   observeEnd: routeObserveEndOp,
+  observeSubscriptionEnd: routeObserveSubscriptionEndOp,
 )
 
 proc rcMaterializeOp(
@@ -371,6 +421,15 @@ proc rcMaterializeOp(
   outRoute.state = h
   LogosResult()
 
+proc rcObserveSubscriptionEndOp(
+    binding: ptr LogosRuntimeControlBinding,
+    handler: LogosSubscriptionEndHandler,
+    userData: pointer,
+): LogosResult {.cdecl.} =
+  ## [SPEC INTERFACE §2.5 l.1476-1484] The binding's one registration (`subend`).
+  bindingEnter()
+  servicesOf(binding).subEnd.register(handler, userData)
+
 var rcVtable = LogosRuntimeControlVtable(
   abiVersion: RuntimeControlVtableAbiVersion,
   structSize: csize_t(sizeof(LogosRuntimeControlVtable)),
@@ -382,6 +441,7 @@ var rcVtable = LogosRuntimeControlVtable(
   connectRemote: rcConnectRemoteOp,
   release: rcReleaseOp,
   prepareCall: rcPrepareCallOp,
+  observeSubscriptionEnd: rcObserveSubscriptionEndOp,
 )
 
 # What the engine uses ----------------------------------------------------------------
@@ -404,6 +464,12 @@ proc freeAttemptServices*(s: ptr AttemptServices) =
   ## A hosted attempt's go with its host, which may still be reaped.
   if s == nil:
     return
+  # [SPEC INTERFACE l.1954] No subscription-end report of the binding begins
+  # now; a direct binding's report jobs have all ended (`rcHandlers`, and no
+  # job before `_MODULE_init` returned), and a hosted binding's ends go to
+  # its host with no job (`engine.endRc`).
+  s.subEnd.suppress()
+  freeContracts(s)
   if s.host != nil:
     let h = cast[Host](s.host)
     s.host = nil
@@ -415,6 +481,21 @@ proc freeAttemptServices*(s: ptr AttemptServices) =
 func attemptOf*(s: ptr AttemptServices): string =
   $s.attempt
 
+proc declareContractOp(
+    publishUserData: pointer,
+    root: ptr ContractRoot,
+    schema: ptr UncheckedArray[uint8],
+    schemaLen: csize_t,
+) {.cdecl.} =
+  ## [SPEC INTERFACE l.3351; DECISIONS I106] `InitServices.declareContract`:
+  ## the realizer, before `_MODULE_init`.
+  let s = cast[ptr AttemptServices](publishUserData)
+  if s == nil or root == nil or schema == nil:
+    return
+  s.declareContract(
+    Digest(root[]), schema.toOpenArray(0, int(schemaLen) - 1), s.engine.payloadDepth
+  )
+
 proc fill*(services: var InitServices, s: ptr AttemptServices) =
   ## [SPEC RUNTIME §7.4 l.1305-1323] The attempt's Runtime Control binding, the
   ## engine's publish callback and invocation access: every attempt gets the
@@ -423,6 +504,7 @@ proc fill*(services: var InitServices, s: ptr AttemptServices) =
   services.publish = publishOp
   services.publishUserData = s
   services.invocationAccess = LogosInvocationAccess(state: s, current: currentOp)
+  services.declareContract = declareContractOp
 
 func linkOf*(handle: pointer): uint64 =
   ## [I90] Runtime thread: a handle's link; 0 for a direct handle.

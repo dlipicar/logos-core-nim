@@ -1,4 +1,4 @@
-## TRANSPORT §1, §2.3, §8.3, §10: the nine message kinds as typed values, a
+## TRANSPORT §1, §2.3, §8.3, §10: the ten message kinds as typed values, a
 ## strict decoder, and an encoder that checks what it emits against the same
 ## rules.
 ##
@@ -38,6 +38,7 @@ type
     mkProtocolError = 6
     mkCancel = 7
     mkSubscriptionResult = 8
+    mkSubscriptionEnd = 9
 
   PayloadCommitment* = object ## [SPEC TRANSPORT §1.3, §4.1]
     subtreeRoot*: Digest ## `schema_subtree_root`
@@ -84,6 +85,12 @@ type
   Cancel* = object
     id*: uint64
 
+  SubscriptionEnd* = object
+    ## [SPEC TRANSPORT §1.3, §5.1 l.751-755] The callee ends one active
+    ## subscription while the session continues.
+    id*: uint64
+    failure*: InvocationFailure ## `error`
+
   Message* = object
     case kind*: MessageKind
     of mkHello:
@@ -104,6 +111,8 @@ type
       cancel*: Cancel
     of mkSubscriptionResult:
       subscriptionResult*: SubscriptionResult
+    of mkSubscriptionEnd:
+      subscriptionEnd*: SubscriptionEnd
 
   EnvelopeErrorKind* = enum
     eeMalformed ## not one well-formed CBOR item
@@ -133,7 +142,7 @@ const KindRule*: array[MessageKind, string] = [
   "logos.transport.hello", "logos.transport.request", "logos.transport.response",
   "logos.transport.subscribe", "logos.transport.unsubscribe", "logos.transport.event",
   "logos.transport.protocol-error", "logos.transport.cancel",
-  "logos.transport.subscription-result",
+  "logos.transport.subscription-result", "logos.transport.subscription-end",
 ]
 
 type Envelope = object
@@ -389,6 +398,14 @@ proc typed(v: CborValue, mk: MessageKind): Result[Message, EnvelopeError] =
     if v.lookup("error").isSome:
       r.failure = Opt.some(?failureOf(v.get("error"), mk, "error"))
     ok(Message(kind: mkSubscriptionResult, subscriptionResult: r))
+  of mkSubscriptionEnd:
+    let f = ?failureOf(v.get("error"), mk, "error")
+    ok(
+      Message(
+        kind: mkSubscriptionEnd,
+        subscriptionEnd: SubscriptionEnd(id: v.get("id").uint, failure: f),
+      )
+    )
 
 proc checkMessage*(v: CborValue): Result[Message, EnvelopeError] =
   ## [SPEC TRANSPORT §1.3, §2.3, §8.3] A decoded message as its typed view, or
@@ -400,15 +417,16 @@ func decodeValue*(
     data: openArray[byte], payloadDepth = DefaultMaxDepth
 ): Result[CborValue, EnvelopeError] =
   ## [SPEC TRANSPORT §2.3, §8.3] One frame body as one Logos deterministic-CBOR
-  ## item (INTERFACE §4.4): no floating-point item at any depth, the payload maps
+  ## item (INTERFACE §4.4): no floating-point item, tag, `null`, `undefined` or
+  ## other simple value except `false` and `true` at any depth, the payload maps
   ## included (INTERFACE §4.5). The whole message nests at most
   ## `payloadDepth + 1` arrays and maps: the envelope map adds exactly one level
   ## above `params`, `result` and `data`, and its other fields nest two at most,
   ## so this is the payload-depth check of INTERFACE §4.5.1, made before any
   ## container beyond it is allocated. `payloadDepth` is P, at least 128
-  ## (`TransportLimits`). Text inside the payload maps may be invalid UTF-8: like
-  ## a tag or null there, that is a schema mismatch at the schema-aware boundary
-  ## (INTERFACE §4.5), as in direct mode [IMPL].
+  ## (`TransportLimits`). Text inside the payload maps may be invalid UTF-8: that
+  ## alone is a schema mismatch at the schema-aware boundary (INTERFACE §4.5), as
+  ## in direct mode.
   var opts = defaultDecodeOptions()
   opts.allowInvalidUtf8 = true
   opts.maxDepth = payloadDepth + 1
@@ -454,8 +472,8 @@ proc decodeMessage*(
 func checkPayload*(v: CborValue, payloadDepth: int): Result[void, EnvelopeError] =
   ## [SPEC TRANSPORT §2.3; INTERFACE §4.4 item 5, §4.5.1] What a receiver's
   ## envelope check asks of a `params`, `result` or `data` value about to be sent:
-  ## no floating-point item, and at most `payloadDepth` arrays and maps on any
-  ## path (the root map is depth one; tags and scalars add none). Iterative.
+  ## none of the values item 5 prohibits, and at most `payloadDepth` arrays and
+  ## maps on any path (the root map is depth one; scalars add none). Iterative.
   var stack: seq[(CborValue, int)] = @[(v, 1)]
   while stack.len > 0:
     let (x, depth) = stack.pop()
@@ -473,7 +491,15 @@ func checkPayload*(v: CborValue, payloadDepth: int): Result[void, EnvelopeError]
           stack.add((k, depth + 1))
           stack.add((val, depth + 1))
     of ckTag:
-      stack.add((x.content, depth))
+      return err(fail(eeNonDeterministic, "a tag in the payload"))
+    of ckSimple:
+      if x.simple notin {SimpleFalse, SimpleTrue}:
+        return err(
+          fail(
+            eeNonDeterministic,
+            "a simple value other than false and true in the payload",
+          )
+        )
     of ckFloat:
       return err(fail(eeNonDeterministic, "a floating-point item in the payload"))
     else:
@@ -560,6 +586,9 @@ func toCbor*(m: Message): CborValue =
     e.add(entry("operation", cbor(uint64(r.operation.ord))))
     if r.failure.isSome:
       e.add(entry("error", cborMap(failureEntries(r.failure.get))))
+  of mkSubscriptionEnd:
+    e.add(entry("id", cbor(m.subscriptionEnd.id)))
+    e.add(entry("error", cborMap(failureEntries(m.subscriptionEnd.failure))))
   cborMap(e)
 
 func payloadOf(m: Message): CborValue =

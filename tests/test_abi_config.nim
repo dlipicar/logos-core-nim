@@ -31,7 +31,8 @@ let somewhere = cast[pointer](addr stateByte)
 proc rcVtable(): LogosRuntimeControlVtable =
   armed(
     LogosRuntimeControlVtable(
-      abiVersion: 2, structSize: csize_t(sizeof(LogosRuntimeControlVtable))
+      abiVersion: RuntimeControlVtableAbiVersion,
+      structSize: csize_t(sizeof(LogosRuntimeControlVtable)),
     )
   )
 
@@ -44,7 +45,7 @@ suite "cfg.abi-init: the configuration a Runtime delivers (CONFIG §6, INTERFACE
     var rc {.inject.} = LogosRuntimeControlBinding(vtable: addr vt, state: somewhere)
     var input {.inject.} = armed(
       LogosModuleInitInput(
-        abiVersion: 2,
+        abiVersion: ModuleInitAbiVersion,
         structSize: csize_t(sizeof(LogosModuleInitInput)),
         runtimeControl: addr rc,
         invocationAccess: LogosInvocationAccess(state: somewhere),

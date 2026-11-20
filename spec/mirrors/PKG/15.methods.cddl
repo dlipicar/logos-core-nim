@@ -1,5 +1,3 @@
-_module = "logos_package_manager"
-
 logos.package_manager.cursor = tstr .size (1..512)
 logos.package_manager.progress_key = tstr .size (1..128)
 logos.package_manager.progress_phase =

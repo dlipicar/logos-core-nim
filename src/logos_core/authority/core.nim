@@ -1,5 +1,5 @@
 ## The Capability Authority: one thread that owns all of its state [IMPL]
-## (CA §2-§10; DECISIONS I84, G205-G207).
+## (CA §2-§10; DECISIONS I84, G205-G207, G377).
 ##
 ## - **Threading.** Requests and replies are plain values over channels, so no
 ##   garbage-collected memory crosses threads under ORC or refc. Requests from
@@ -18,10 +18,11 @@
 ## - **The CA thread never waits on the Runtime thread.** Facts come from
 ##   `SharedFacts` under its own lock, and engine notifications go through the
 ##   sink, which step 8b handles without waiting on the CA.
-## - **The order of checks** is §2.14 of the step 8a plan (G205, the S8a-1
-##   interim, "TL-04, extended"): caller, admission, form, locality,
+## - **The order of checks** is §2.14 of the step 8a plan (G205, settled in
+##   part by CA l.783-794 and l.810): caller, admission, form, locality,
 ##   permission, availability, the issuer check (`issue_grant`), resolution,
-##   visibility, policy, state.
+##   visibility, policy, state. Among denials, the first in the table's order
+##   (l.794; G377).
 
 {.push raises: [].}
 
@@ -176,6 +177,7 @@ type
     of rqInject:
       failNext: int
       failAll: bool
+      failRecords: bool
     of rqWatch:
       watchConsumer: Address
     of rqUnwatch:
@@ -456,6 +458,10 @@ type Ca = object
   metaPending: bool
   flushDue: Opt[int64] ## monotonic ns
   watches: seq[WatchEntry]
+  failRecords: bool ## tests: no audit record can be made while set
+  auditFailing: bool
+    ## [G376] the last flush left audit state unwritten: evaluation fails
+    ## closed until a flush completes
 
 proc now(ca: Ca): uint64 =
   let ms = ca.cfg.clock.wallMs
@@ -491,6 +497,8 @@ proc writeGrantDoc(ca: var Ca, e: GrantEntry): Result[void, string] =
 proc newRecord(
     ca: var Ca, r: AuditRecord, subject: Opt[FactsSnapshot]
 ): Result[StoredRecord, string] =
+  if ca.failRecords:
+    return err("injected")
   let bytes = ?encodeRecord(r)
   result = ok(StoredRecord(seq: ca.nextSeq, record: r, bytes: bytes, subject: subject))
   inc ca.nextSeq
@@ -502,6 +510,26 @@ proc unwritten(ca: Ca): int =
     if s.written == s.records.len:
       break
     result += s.records.len - s.written
+
+proc enforceRetention(ca: var Ca) =
+  ## [SPEC CA l.1169; §0.1 U6] At most `policy.audit.records` segment records,
+  ## across all consumers; the oldest whole segment goes first. [G376] Only a
+  ## written one: an acknowledged record is never dropped before it is on
+  ## disk, so while writes fail the backlog bound is reached instead.
+  var dropped: seq[uint64]
+  while ca.log.overBound(int(ca.policy.auditRecords)) and
+      ca.log.segments.peekFirst.written == ca.log.segments.peekFirst.records.len:
+    let seg = ca.log.dropOldest()
+    dropped.add seg.first
+  if dropped.len > 0:
+    ca.auditFloor = ca.log.segments.peekFirst.first
+    if ca.store.writeMeta(ca.metaDoc).isErr:
+      ca.metaPending = true
+      if ca.flushDue.isNone:
+        ca.flushDue = Opt.some(ca.cfg.clock.monoNs + ca.limits.flushMs * 1_000_000)
+    for first in dropped:
+      # A segment below the floor is skipped at load if its removal fails.
+      discard ca.store.removeSegment(first)
 
 proc flush(ca: var Ca): bool =
   ## Writes every segment with unwritten records, and pending meta.
@@ -516,6 +544,9 @@ proc flush(ca: var Ca): bool =
       else:
         good = false
         break
+  if good:
+    # [G376] What waited for its write may go now.
+    ca.enforceRetention()
   if good and ca.metaPending:
     if ca.store.writeMeta(ca.metaDoc).isOk:
       ca.metaPending = false
@@ -525,33 +556,27 @@ proc flush(ca: var Ca): bool =
     ca.flushDue = Opt.none(int64)
   else:
     ca.flushDue = Opt.some(ca.cfg.clock.monoNs + ca.limits.flushMs * 1_000_000)
+  ca.auditFailing = not good
   good
 
-proc enforceRetention(ca: var Ca) =
-  ## [SPEC CA l.1169; §0.1 U6] At most `policy.audit.records` segment records,
-  ## across all consumers; the oldest whole segment goes first.
-  var dropped: seq[uint64]
-  while ca.log.overBound(int(ca.policy.auditRecords)):
-    let seg = ca.log.dropOldest()
-    dropped.add seg.first
-  if dropped.len > 0:
-    ca.auditFloor = ca.log.segments.peekFirst.first
-    if ca.store.writeMeta(ca.metaDoc).isErr:
-      ca.metaPending = true
-      if ca.flushDue.isNone:
-        ca.flushDue = Opt.some(ca.cfg.clock.monoNs + ca.limits.flushMs * 1_000_000)
-    for first in dropped:
-      # A segment below the floor is skipped at load if its removal fails.
-      discard ca.store.removeSegment(first)
-
-proc recordBehind(ca: var Ca, r: AuditRecord, subject: Opt[FactsSnapshot]) =
-  ## A record written behind, within `flushMs` (U6).
+proc recordBehind(
+    ca: var Ca, r: AuditRecord, subject: Opt[FactsSnapshot], bounded = false
+): bool {.discardable.} =
+  ## A record written behind (U6), flushed once `flushMs` has passed. [G376;
+  ## SPEC CA l.1207-1208] An evaluation's record is acknowledged when it is
+  ## appended here while fewer than `maxUnwritten` records are unwritten
+  ## (`bounded`); past the bound nothing is appended (l.1212) and the caller
+  ## fails closed. False also when the record cannot be made.
+  if bounded and ca.unwritten >= ca.limits.maxUnwritten:
+    return false
   let sr = ca.newRecord(r, subject).valueOr:
-    return # [IMPL] cannot happen: every record built here matches its schema
+    return
+      false # [IMPL] only under `failRecords`: every record built here matches its schema
   ca.log.add(sr, ca.limits.segmentRecords)
   if ca.flushDue.isNone:
     ca.flushDue = Opt.some(ca.cfg.clock.monoNs + ca.limits.flushMs * 1_000_000)
   ca.enforceRetention()
+  true
 
 proc retryPending(ca: var Ca): bool =
   ## [§2.13] Retries every write a degraded CA owes; true when none is left.
@@ -660,14 +685,172 @@ proc newDecisionId(ca: var Ca): Opt[string] =
     return Opt.none(string)
   id
 
+proc coversAnAction(
+    ca: Ca,
+    consumerFacts: FactsSnapshot,
+    consumer: Address,
+    scopes: openArray[Scope],
+    now: uint64,
+): bool =
+  ## [SPEC CA l.792-793; G377] Whether an allow rule matching the consumer, or
+  ## an active grant targeting it, covers the action of a requested scope:
+  ## same kind and action, whatever its targets, constraints, methods or events.
+  for r in ca.policy.rules:
+    if r.kind == rkAllow and r.subject.matches(consumerFacts) and
+        r.allow.coversAnAction(scopes):
+      return true
+  for gid in ca.grants.ids:
+    let e = ca.grants.byId.getOrDefault(gid)
+    if e.grant.target != consumer or e.grant.status(now) != GrantStatusKind.Active:
+      continue
+    for held in e.grant.scopes:
+      for s in scopes:
+        if held.coversAction(s):
+          return true
+  false
+
+# `evaluate` for an ordinary consumer (CA l.1416-1421; G378, G379) -------------------
+
+proc patternNamesEvaluate(p: Pattern): bool =
+  p.kind == pkProvider and p.contract == caContract() and p.access.listsEvaluate
+
+proc allowContains(
+    ps: openArray[Pattern], r: Scope, view: FactsView, profile: PermissionProfile
+): bool =
+  ## [G378; SPEC CA l.1419-1420; CAP-0248] Containment for an allow or an
+  ## issue rule: a scope naming `evaluate` only by a pattern naming it too, so
+  ## an absent `access` or method list never contains it. Local to the
+  ## authority: `patternContains`, which the deny path shares, is unchanged,
+  ## so a broad deny still matches a call of `evaluate`.
+  for p in ps:
+    if p.patternContains(r, view, profile) and
+        (not r.namesEvaluate or p.patternNamesEvaluate):
+      return true
+  false
+
+proc allowContainsEach(
+    ps: openArray[Pattern],
+    rs: openArray[Scope],
+    view: FactsView,
+    profile: PermissionProfile,
+): bool =
+  ## `allowContains` for every scope of `rs`: one rule covering a whole
+  ## request (G207 amended).
+  for r in rs:
+    if not ps.allowContains(r, view, profile):
+      return false
+  true
+
+proc grantCoversEach(
+    held, requested: openArray[Scope], localRuntime: string, profile: PermissionProfile
+): bool =
+  ## [G378] `coversEach` for a grant, with a scope naming `evaluate` covered
+  ## only by a held scope naming it too. `covers`, which the Runtime shares, is
+  ## unchanged.
+  for n in requested:
+    var found = false
+    for b in held:
+      if covers(b, n, localRuntime, profile) and (
+        not n.namesEvaluate or b.namesEvaluate
+      ):
+        found = true
+        break
+    if not found:
+      return false
+  true
+
+proc mayEvaluate(
+    ca: Ca, caller: Address, callerFacts: FactsSnapshot, now: uint64
+): bool =
+  ## [G378; SPEC CA l.1419-1421] A module evaluates only under an allow rule
+  ## for it, or an active grant to it, that names a `call` of `evaluate` on
+  ## the CA contract, whatever providers it names, and while no deny rule for
+  ## it could match that call. The authority checks this itself: under the
+  ## internal `allow-all` policy the Runtime never asks it about the route
+  ## call (`runtime/authz.nim`), and over a transport nothing else does.
+  for r in ca.policy.rules:
+    if not r.subject.matches(callerFacts):
+      continue
+    if r.kind == rkDeny:
+      for p in r.deny:
+        if p.kind == pkProvider and p.contract == caContract() and
+            PaActionKind.Call in p.paActions and
+            (p.access.isNone or p.access.get.methods.isNone or p.access.listsEvaluate):
+          return false
+  for r in ca.policy.rules:
+    if r.kind == rkAllow and r.subject.matches(callerFacts):
+      for p in r.allow:
+        if p.patternNamesEvaluate and PaActionKind.Call in p.paActions:
+          return true
+  for gid in ca.grants.ids:
+    let e = ca.grants.byId.getOrDefault(gid)
+    if e.grant.target != caller or e.grant.status(now) != GrantStatusKind.Active:
+      continue
+    for s in e.grant.scopes:
+      if s.namesEvaluate and s.pa.hasAction(PaActionKind.Call):
+        return true
+  false
+
+proc ownTargets(ca: Ca, caller: Address, scopes: openArray[Scope]): bool =
+  ## [G379, an interim on TF-61] A module caller's scopes name no instance and
+  ## no provider but its own, so its answers tell it nothing of other
+  ## instances. Instance ids are compared before any lookup: an unknown
+  ## instance and another module's take one path. A provider is the caller's
+  ## own when the instance backing it is; an unknown provider answers as
+  ## another module's. An execution scope names the caller's own instance.
+  ## The `modules` and `routes` selectors are not resolved (`resolveScopes`),
+  ## so they stay as they are.
+  let own = caller.module_instance_id
+  template ownProvider(p: ProviderAddress): bool =
+    let b = ca.view.backing(p.provider)
+    b.kind == flFound and b.instance == own
+
+  for s in scopes:
+    case s.kind
+    of skProvider:
+      if s.pa.providers.isSome:
+        for p in s.pa.providers.get:
+          if not ownProvider(p):
+            return false
+    of skControl:
+      if s.rc.instances.isSome:
+        for i in s.rc.instances.get:
+          if i != own:
+            return false
+      if s.rc.providers.isSome:
+        for p in s.rc.providers.get:
+          if not ownProvider(p):
+            return false
+    of skExecution:
+      if s.me.instance.isNone or s.me.instance.get != own:
+        return false
+    else:
+      discard
+  true
+
 proc doEvaluate(
     ca: var Ca, caller: CallerInfo, req: EvaluateRequest
 ): EvaluateResponse =
-  if caller.kind != ckSystem:
-    # [SPEC CA l.1375; CAP-0248] Only Runtime's protected path evaluates. Not
-    # audited: refused before evaluation (l.1170).
-    return evaluateError(CaCode.Not_authorised)
   let now = ca.now
+  case caller.kind
+  of ckSystem:
+    discard
+  of ckModule:
+    # [SPEC CA l.1421; G378] An ordinary consumer evaluates only for itself,
+    # never with `execution_renewal` (the Runtime's, RUNTIME §9), and only
+    # under a rule or grant naming `evaluate`. Not audited: refused before
+    # evaluation begins (l.94, l.1203).
+    if req.consumer != caller.address or req.execution_renewal.isSome:
+      return evaluateError(CaCode.Not_authorised)
+    ca.refreshFacts()
+    let own = ca.lookupAddress(caller.address)
+    if own.kind == flUnavailable:
+      return evaluateError(CaCode.Authority_unavailable)
+    if own.kind != flFound or
+        not ca.mayEvaluate(caller.address, snapshot(own.instance, own.facts), now):
+      return evaluateError(CaCode.Not_authorised)
+  of ckNone:
+    return evaluateError(CaCode.Not_authorised)
   var validated = false
   var subject = Opt.none(FactsSnapshot)
 
@@ -675,6 +858,8 @@ proc doEvaluate(
     var failScopes = Opt.none(seq[Scope])
     if validated and failed in {CaCode.Authority_unavailable, CaCode.Internal_error}:
       failScopes = Opt.some(req.scopes)
+    # [SPEC CA l.1211-1212; G376] Attempted always; absent only past the
+    # backlog bound, which storage failure fills. Never changes the answer.
     ca.recordBehind(
       auditOf(
         LogosNSCapabilityAuthorityAuditRecordAREvaluateFailureMap(
@@ -685,6 +870,7 @@ proc doEvaluate(
         )
       ),
       (if subject.isSome: subject else: ca.subjectOf(req.consumer)),
+      bounded = true,
     )
     return evaluateError(failed)
 
@@ -695,7 +881,11 @@ proc doEvaluate(
     fail(form.error.code)
   validated = true
   ca.refreshFacts()
-  if not ca.view.available or ca.sinkLost or ca.unwritten > ca.limits.maxUnwritten:
+  # [G376] No decision while the backlog is full or a write of audit state is
+  # failing: its record could not be acknowledged, or would only add to what
+  # a crash loses.
+  if not ca.view.available or ca.sinkLost or ca.auditFailing or
+      ca.unwritten >= ca.limits.maxUnwritten:
     fail(CaCode.Authority_unavailable)
   let cf = ca.lookupAddress(req.consumer)
   if cf.kind == flUnavailable:
@@ -704,6 +894,11 @@ proc doEvaluate(
     fail(CaCode.Invalid_request)
   let consumerFacts = snapshot(cf.instance, cf.facts)
   subject = Opt.some(consumerFacts)
+  # [G379] A module's scopes are checked against its own ids first, so an
+  # unresolved target and another module's answer alike. The failure record
+  # carries no scopes.
+  if caller.kind == ckModule and not ca.ownTargets(caller.address, req.scopes):
+    fail(CaCode.Invalid_request)
   if ca.resolveScopes(req.scopes).isErr:
     fail(CaCode.Invalid_request)
   var op = req.scopes[0]
@@ -731,7 +926,9 @@ proc doEvaluate(
       kind: LogosNSCapabilityAuthorityDecisionResultKind.Deny
     )
     d.denial = Opt.some(denialValue(denied))
-    ca.recordBehind(
+    # [SPEC CA l.1207, l.1214; G376] No decision before its record is
+    # acknowledged.
+    if not ca.recordBehind(
       auditOf(
         LogosNSCapabilityAuthorityAuditRecordAREvaluateDenyMap(
           timestamp: now,
@@ -742,7 +939,9 @@ proc doEvaluate(
         )
       ),
       subject,
-    )
+      bounded = true,
+    ):
+      fail(CaCode.Authority_unavailable)
     return evaluateDecision(d)
 
   template allow(
@@ -758,33 +957,45 @@ proc doEvaluate(
     if allowGrant.isSome:
       d.grant_ids = Opt.some(@[allowGrant.get])
     d.commitment = allowCommitment
-    ca.recordBehind(
+    if not ca.recordBehind(
       auditOf(
         LogosNSCapabilityAuthorityAuditRecordAREvaluateAllowMap(
           timestamp: now, consumer: req.consumer, decision_id: id, scopes: req.scopes
         )
       ),
       subject,
-    )
+      bounded = true,
+    ):
+      fail(CaCode.Authority_unavailable)
     return evaluateDecision(d)
 
-  if op.isRestrictedOperation:
-    deny(DenialKind.Scope_denied)
-  # [G207, amended by I93] Deny when any deny pattern contains any requested
-  # scope; allow when one rule, or one grant, covers every requested scope.
-  # Permission scopes name no target (CA l.212-216): they are tied to the
-  # start only by standing beside its scope in one rule or grant (l.489).
+  # [SPEC CA l.783-794; G377] The first applicable denial in the order of the
+  # table. 1: explicit denials (l.783-784). Deny overrides allow and every
+  # grant; among the deny rules that match, `consumer-denied` comes before
+  # `target-denied` (l.794), not the first rule found.
+  var explicit = Opt.none(DenialKind)
   for r in ca.policy.rules:
     if r.kind != rkDeny or not r.subject.matches(consumerFacts):
       continue
     for s in req.scopes:
       if r.deny.containsAny(s, ca.view, ca.profile):
-        deny(r.code)
+        if r.code == DenialKind.Consumer_denied:
+          deny(DenialKind.Consumer_denied)
+        explicit = Opt.some(r.code)
+  if explicit.isSome:
+    deny(explicit.get)
+  # [G207, amended by I93] Allow when one rule, or one active grant, contains
+  # every requested scope. Permission scopes name no target (CA l.212-216):
+  # they are tied to the start only by standing beside its scope in one rule
+  # or grant (l.489). No rule or grant contains a restricted operation
+  # (l.1423): it goes on to the codes of steps 5 and 6. A call of `evaluate`
+  # is contained only by one naming it (G378).
+  let restricted = op.isRestrictedOperation
   var byRule = false
   var commitment = req.commitment
   for r in ca.policy.rules:
-    if r.kind == rkAllow and r.subject.matches(consumerFacts) and
-        r.allow.containsEach(req.scopes, ca.view, ca.profile):
+    if not restricted and r.kind == rkAllow and r.subject.matches(consumerFacts) and
+        r.allow.allowContainsEach(req.scopes, ca.view, ca.profile):
       byRule = true
       commitment = union(commitment, r.commitment)
   if byRule:
@@ -793,10 +1004,12 @@ proc doEvaluate(
   var best = Opt.none(string)
   var revoked, expired = false
   for gid in ca.grants.ids:
+    if restricted:
+      break
     let e = ca.grants.byId.getOrDefault(gid)
     if e.grant.target != req.consumer:
       continue
-    if not coversEach(e.grant.scopes, req.scopes, ca.runtimeId, ca.profile):
+    if not grantCoversEach(e.grant.scopes, req.scopes, ca.runtimeId, ca.profile):
       continue
     case e.grant.status(now)
     of GrantStatusKind.Revoked:
@@ -818,10 +1031,18 @@ proc doEvaluate(
     if g.expires_at.isSome:
       until = min(until, g.expires_at.get)
     allow(best, until, union(commitment, g.commitment))
+  # 2 and 3: a lapsed grant that alone contains the whole request (l.785-786
+  # under G207: "together with" has no case while one holder must allow;
+  # TL-04). A revoked one comes first.
   if revoked:
     deny(DenialKind.Grant_revoked)
   if expired:
     deny(DenialKind.Grant_expired)
+  # 4: `approval-required` is never produced (no approval step). 5: active
+  # policy covers the action of a requested scope (l.788, l.792-793).
+  if ca.coversAnAction(consumerFacts, req.consumer, req.scopes, now):
+    deny(DenialKind.Scope_denied)
+  # 6.
   deny(DenialKind.Not_granted)
 
 # issue_grant (§6) -------------------------------------------------------------------
@@ -964,9 +1185,10 @@ proc doIssue(
     )
   let callerFacts = snapshot(cf.instance, cf.facts)
   subject = Opt.some(callerFacts)
-  # [§0.1 U3] The issuer check comes before any target is resolved.
+  # [§0.1 U3] The issuer check comes before any target is resolved. [G377;
+  # SPEC CA l.789] No issue rule for the caller covers any action.
   if not ca.policy.hasIssuer(callerFacts):
-    deny(DenialKind.Consumer_denied)
+    deny(DenialKind.Not_granted)
   let tf = ca.lookupAddress(req.target)
   if tf.kind != flFound:
     fail(
@@ -978,10 +1200,9 @@ proc doIssue(
   let targetFacts = snapshot(tf.instance, tf.facts)
   if ca.resolveScopes(req.scopes).isErr:
     fail(CaCode.Invalid_request)
-  for s in req.scopes:
-    if s.namesRestricted:
-      deny(DenialKind.Scope_denied)
-  var targetMatched = false
+  # [G377; SPEC CA l.1423] No issue rule contains a restricted operation: it is
+  # mapped like any other scope below. A scope naming `evaluate` is contained
+  # only by a pattern naming it (G378).
   var granted = false
   for r in ca.policy.rules:
     if r.kind != rkIssue or not r.subject.matches(callerFacts):
@@ -990,10 +1211,9 @@ proc doIssue(
       caller.address, req.target, targetFacts, Opt.none(Address)
     ):
       continue
-    targetMatched = true
     var all = true
     for s in req.scopes:
-      if not r.issue.containsAny(s, ca.view, ca.profile):
+      if s.namesRestricted or not r.issue.allowContains(s, ca.view, ca.profile):
         all = false
         break
     if not all:
@@ -1004,7 +1224,15 @@ proc doIssue(
     granted = true
     break
   if not granted:
-    deny(if targetMatched: DenialKind.Scope_denied else: DenialKind.Target_denied)
+    # [G377, under UF-53; SPEC CA l.788-789, l.792] An issue rule for the
+    # caller covers a requested action, whatever its targets: scope-denied
+    # (another target, a method, a constraint or `max_validity_ms` exceeds it).
+    deny(
+      if ca.policy.issueCoversAction(callerFacts, req.scopes):
+        DenialKind.Scope_denied
+      else:
+        DenialKind.Not_granted
+    )
   let issuer = LogosNSCapabilityAuthorityGrantIssuer(
     kind: LogosNSCapabilityAuthorityGrantIssuerKind.Module,
     arm_Module: LogosNSCapabilityAuthorityGrantIssuerARModuleMap(module: caller.address),
@@ -1096,16 +1324,8 @@ proc revokeEntry(
   of GrantStatusKind.Expired:
     return err(CaCode.Grant_not_active) # [SPEC CA l.745]
   of GrantStatusKind.Revoked:
-    # Idempotent: the current record, and a second success record (G206
-    # interim, "TL-04, extended"), written behind with the other records.
-    ca.recordBehind(
-      auditOf(
-        LogosNSCapabilityAuthorityAuditRecordARRevokeGrantSuccessMap(
-          timestamp: now, consumer: consumer, target: e.grant.target, grant_id: gid
-        )
-      ),
-      subject,
-    )
+    # [SPEC CA l.736, l.811; G206] Idempotent: the current record, and no
+    # second grant-revocation audit record.
     return ok(e.grant.current(now))
   of GrantStatusKind.Active:
     if not ca.writable:
@@ -1706,6 +1926,7 @@ proc handle(ca: var Ca, q: sink Request) =
     of rqInject:
       ca.store.failNext = q.failNext
       ca.store.failAll = q.failAll
+      ca.failRecords = q.failRecords
       Reply(kind: rqInject)
     of rqWatch:
       Reply(kind: rqWatch, watched: ca.doWatch(q.caller, q.watchConsumer))
@@ -2158,6 +2379,11 @@ proc tick*(a: Authority) =
 proc flushAudit*(a: Authority) =
   discard a.submit(Request(kind: rqFlush), true, nil)
 
-proc injectWriteFailures*(a: Authority, next = 0, all = false) =
-  ## Tests: the next `next` writes fail, or all of them while `all`.
-  discard a.submit(Request(kind: rqInject, failNext: next, failAll: all), true, nil)
+proc injectWriteFailures*(a: Authority, next = 0, all = false, records = false) =
+  ## Tests: the next `next` writes fail, or all of them while `all`; while
+  ## `records`, no audit record can be made (`internal-error`, CA l.808).
+  discard a.submit(
+    Request(kind: rqInject, failNext: next, failAll: all, failRecords: records),
+    true,
+    nil,
+  )

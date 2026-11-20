@@ -175,7 +175,7 @@ when defined(posix):
     )
     check r.code == ecOk
     if r.code == ecOk:
-      result = LogosNSRuntimeControlUpdatePermissionSettingsResponse.decode(r.response).tryGet.state
+      result = r.accepted(LogosNSRuntimeControlUpdatePermissionSettingsResponse).state
 
   proc statusIs(rc: ptr LogosRuntimeControlBinding, e: Engine, id, s: string): bool =
     waitUntil(
@@ -301,7 +301,7 @@ when defined(posix):
         let perms = req.scopes.filterIt(it.kind == skPermission)
         check perms.mapIt(it.pm.permission).sorted == @[Quota, HostAmbient].sorted
       check lines(dir, "inits") == @["init"]
-      check orch.lifecycle("stop_module", "probe_module", Opt.some("p")).code == ecOk
+      check orch.stoppedVia("probe_module", Opt.some("p")).code == ecOk
       check noHostLeft()
       let before = e.realizes("p")
       setScript(
@@ -437,7 +437,7 @@ when defined(posix):
       leftover()
       check noHostLeft()
 
-    test "[RUN-0914] [RUN-1066] [RUN-0912] [RUN-0916] [RUN-0909] S-23 narrowing a ready hosted instance: pending while its host is released, then unloaded with no failure and intent and origin kept, then applied; its recovery is admitted with the narrowed settings":
+    test "[RUN-0914] [RUN-1066] [RUN-1142] [RUN-0916] [RUN-0909] S-23 narrowing a ready hosted instance: pending while its host is released, then unloaded with no failure and intent and origin kept, then applied; its recovery is admitted with the narrowed settings":
       let cfg = hconfig(probeSettings = @[setting(Quota, quota(9)), ambient()])
       let dir = cfg.prepare(Snapshot)
       let e = fixtureEngine(cfg)
@@ -463,7 +463,7 @@ when defined(posix):
         @[Opt.some(@[setting(Quota, quota(9)), ambient()]), Opt.some(@[ambient()])]
       e.finish()
 
-    test "[IMPL-DECISION G285] [IMPL-DECISION G269] [RUN-0916] [RUN-0912] S-24 a hosted reconciliation stop past its deadline: `cleanup-timeout`, the settings pending until the forced end of the host is confirmed, a replacement meanwhile pending too, then applied, the instance staying `error`":
+    test "[IMPL-DECISION G285] [IMPL-DECISION G269] [RUN-0916] [RUN-1142] [RUN-1092] S-24 a hosted reconciliation stop past its deadline: `stopping` with `cleanup-timeout`, the settings pending until the forced end of the host is confirmed, a replacement meanwhile pending too, then applied, and the stop completes `unloaded`":
       var cfg = hconfig()
       cfg.stopDeadline = PassingStop
       let dir = cfg.prepare("block-destroy")
@@ -483,7 +483,7 @@ when defined(posix):
       check waitUntil(
         proc(): bool =
           let v = e.view("p").tryGet
-          v.state == msError and v.failureOf == "cleanup-timeout"
+          v.state == msStopping and v.failureOf == "cleanup-timeout"
       )
       # The host was ended by force; until that end is confirmed the
       # realization remains and nothing is enforced yet.
@@ -499,7 +499,7 @@ when defined(posix):
       check noHostLeft()
       check not e.cleanupPending("p")
       let v = e.view("p").tryGet
-      check v.state == msError and v.failureOf == "cleanup-timeout"
+      check v.state == msUnloaded and v.failure.isNone
       check v.execution.intent == inRequested
       check lines(dir, "destroyed").len == 0 # ended inside destroy
       check hostEnds()[^1].byRuntime
@@ -586,7 +586,7 @@ when defined(posix):
           rc.vtable.subscribe(rc, SettingsEvent, onSettings, addr seen, addr id)
         ).code == ecOk
         let v = e.view("p").tryGet
-        check v.state == msError and v.failureOf == "other"
+        check v.state == msError and v.failureOf == "host-terminated"
         if held:
           let s = rc.settingsOf(e, "p")
           check s.revision == 2 and s.status == "pending"

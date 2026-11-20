@@ -4,6 +4,7 @@ import std/[algorithm, sequtils, strutils]
 import unittest2
 import logos_sdk/[cbor, hash, commitment]
 import logos_sdk/iface/accept
+from logos_sdk/abi/checks import AbiCheck, AbiFailure, providerChecked
 import logos_sdk/base/hex
 import logos_sdk/testing/specdata
 
@@ -73,7 +74,7 @@ let
   sup392 = mirror("IFC/3.9.2.supporting.cddl")
 
 suite "iface: schema files and metadata (INTERFACE §1.1, §1.2)":
-  test "[IFC-0018] [IFC-0097] [IFC-0098] [IFC-0099] [IFC-0100] [IFC-0101] [IFC-0102] [IFC-0103] [IFC-0104] [IFC-0105] [IFC-0106] [IFC-0107] [IFC-0108] [IFC-0109] [IFC-0110] [IFC-0111] [IFC-0112] [IFC-0113] the §1.8 storage module is one complete document":
+  test "[IFC-0018] [IFC-0097] [IFC-0098] [IFC-0099] [IFC-0100] [IFC-0101] [IFC-0102] [IFC-0103] [IFC-0104] [IFC-0105] [IFC-0106] [IFC-0107] [IFC-0108] [IFC-0109] [IFC-0110] [IFC-0111] [IFC-0113] the §1.8 storage module is one complete document":
     let s = accepted(mirror("IFC/1.8.module.cddl"))
     let m = s.primary.model
     check m.role == srModule
@@ -85,10 +86,7 @@ suite "iface: schema files and metadata (INTERFACE §1.1, §1.2)":
         "storage.start", "storage.upload_url",
       ]
     check m.events.mapIt(it.name) ==
-      @[
-        "storage.started_event", "storage.upload_done_event",
-        "storage.upload_progress_event",
-      ]
+      @["storage.started_event", "storage.upload_progress_event"]
 
   test "[IFC-0094] [IFC-0095] [IFC-0096] [IFC-0032] [IFC-0031] the §1.8 metrics_provider interface":
     let m = accepted(mirror("IFC/1.8.interface.cddl")).primary.model
@@ -327,7 +325,7 @@ suite "iface: prelude, names and reservations (INTERFACE §1.3)":
       iface("logos.demo", "logos.demo.t = uint8\n"), opts = AcceptOptions(system: true)
     )
 
-  test "[RUN-0061] module names follow the RUNTIME §1.3 grammar":
+  test "[RUN-1087] module names follow the RUNTIME §1.3 grammar":
     for bad in [
       "",
       "Demo",
@@ -450,10 +448,9 @@ suite "iface: methods, events and types (INTERFACE §1.4-§1.7)":
     check "duplicate" in rejection(module("demo.t = { cid: tstr, \"cid\": tstr }\n")) or
       "twice" in rejection(module("demo.t = { cid: tstr, \"cid\": tstr }\n"))
 
-  test "[IFC-0081] [IFC-0082] [IFC-0083] [IFC-0084] events are map-valued, at most 128 bytes":
+  test "[IFC-0081] [IFC-0082] [IFC-0084] events are map-valued, at most 128 bytes":
     let m = accepted(module(mirror("IFC/1.5.events.cddl"))).primary.model
-    check m.events.mapIt(it.name) ==
-      @["storage.upload_done_event", "storage.upload_progress_event"]
+    check m.events.mapIt(it.name) == @["storage.upload_progress_event"]
     check "must be a map or a choice of maps" in
       rejection(module("demo.tick_event = uint8\n"))
     discard accepted(module("demo.a_event = { kind: \"a\" } / { kind: \"b\" }\n"))
@@ -607,10 +604,7 @@ suite "iface: call surfaces (INTERFACE §1.4, §1.5, §2.1)":
     check c.methods.mapIt(it.bare) ==
       @["destroy", "exists", "init", "space", "start", "upload_url"]
     check c.events.mapIt(it.id) ==
-      @[
-        "storage.started_event", "storage.upload_done_event",
-        "storage.upload_progress_event",
-      ]
+      @["storage.started_event", "storage.upload_progress_event"]
     let e = c.findMethod("exists").get
     check e.name == "storage.exists"
     check e.request == "storage.exists_request"
@@ -701,6 +695,60 @@ suite "iface: schema commitments and logos.schema (INTERFACE §5.1)":
     let leaky =
       response(ifc392, @[], @[entryOf("metrics_types", rootOf(sup392), sup392)])
     check "metrics_types is unused" in acceptSchemaResponse(leaky, ir).error
+
+  test "[IFC-0958] a binding answers logos.schema for an extended root with that contract's documents only":
+    let gaugeTypes = "gauge_types.level = uint32\n"
+    let gaugeOld = iface(
+      "gauge",
+      "gauge.read_request = {}\ngauge.read_response = { n: gauge_types.level }\n",
+    )
+    let gaugeNew = gaugeOld & "gauge.reset_request = {}\ngauge.reset_response = {}\n"
+    let ir = rootOf(ifc392)
+    let gr = accepted(gaugeNew, [], [gaugeTypes]).primary.root
+    let body = "demo.t = { c: metrics_types.counter }\n" & ping
+    let earlier = module(implementing(ir) & body)
+    let later = module(
+      implementing(gr, ir) & body & "demo.pong_request = {}\ndemo.pong_response = {}\n"
+    )
+    let r = acceptBinding(
+      "demo_module",
+      Opt.some(later),
+      [gaugeNew, ifc392],
+      [sup392, gaugeTypes],
+      AcceptOptions(),
+      [earlier, gaugeOld],
+    )
+    if r.isErr:
+      checkpoint r.error
+    let b = r.get
+    let er = accepted(earlier, [ifc392], [sup392]).primary.root
+    let gor = accepted(gaugeOld, [], [gaugeTypes]).primary.root
+    check b.extends.mapIt(it.root) == @[er, gor]
+    proc namespaces(v: CborValue, key: string): seq[string] =
+      v.lookup(key).get.items.mapIt(it.lookup("namespace").get.text)
+
+    # The earlier concrete contract: its document, the interface it selects and
+    # the supporting schema it uses; not gauge or gauge_types, which only its
+    # successor needs.
+    let ev = b.schemaResponse(er).get
+    check commonValidates("logos.schema_response", ev)
+    check ev.lookup("schema").get.text == earlier
+    check ev.lookup("interface_schemas").get.items.mapIt(it.lookup("document").get.text) ==
+      @[ifc392]
+    check namespaces(ev, "supporting_schemas") == @["metrics_types"]
+    check acceptSchemaResponse(encoded(ev), er).get.primary.root == er
+    # The earlier interface: no interface schema, only its own supporting schema.
+    let gv = b.schemaResponse(gor).get
+    check gv.lookup("schema").get.text == gaugeOld
+    check gv.lookup("interface_schemas").get.items.len == 0
+    check namespaces(gv, "supporting_schemas") == @["gauge_types"]
+    check acceptSchemaResponse(encoded(gv), gor).get.primary.root == gor
+    # The current contracts answer as before.
+    let pv = b.schemaResponse(b.primary.get.root).get
+    check pv.lookup("schema").get.text == later
+    check namespaces(pv, "interface_schemas") == @["gauge", "metrics_provider"]
+    check namespaces(pv, "supporting_schemas") == @["gauge_types", "metrics_types"]
+    check b.schemaResponse(gr).get.lookup("schema").get.text == gaugeNew
 
   test "[IFC-0451] [IFC-0452] entries name valid documents with their own namespace and root":
     let
@@ -1030,7 +1078,7 @@ suite "iface: payload validation (INTERFACE §4.4, §4.5)":
     check e.reason == Opt.some(iprSchemaMismatch)
     check e.path == @[cbor("cid")]
 
-  test "[IFC-0919] [IFC-0920] a floating-point item at any depth is non-deterministic CBOR, never a schema question":
+  test "[IFC-0976] [IFC-0920] a floating-point item at any depth is non-deterministic CBOR, never a schema question":
     let v = storage()
     for x in [
       cborFloatBits(fw16, 0x3c00),
@@ -1044,12 +1092,29 @@ suite "iface: payload validation (INTERFACE §4.4, §4.5)":
       check v.checkResult("exists", encodeCbor(cborMap((cbor("exists"), x)))).error.code ==
         ecModule
 
-  test "[IMPL-DECISION G38] tags, null, undefined and other simple values are schema mismatches":
+  test "[IFC-0976] [IFC-0920] [TXT-0143] [IMPL-DECISION G38] tags, null, undefined and other simple values are non-deterministic CBOR, never a schema question":
     let v = storage()
-    for x in [cborTag(1, cbor(1'u64)), cborNull(), cborUndefined(), cborSimple(16)]:
+    for x in [
+      cborTag(1, cbor(1'u64)),
+      cborNull(),
+      cborUndefined(),
+      cborSimple(16),
+      cborSimple(32),
+      cborArray(cborArray(cborNull())),
+      cborMap((cborNull(), cbor(1'u64))),
+    ]:
       let e = v.paramsError("exists", encodeCbor(cborMap((cbor("cid"), x))))
-      check e.reason == Opt.some(iprSchemaMismatch)
-      check e.path == @[cbor("cid")]
+      check e.code == ecInvalidParams
+      check e.reason == Opt.some(iprNonDeterministicCbor)
+      check e.path.len == 0
+      check detailOf(e).lookup("reason").get.text == "non-deterministic-cbor"
+      check v.checkResult("exists", encodeCbor(cborMap((cbor("exists"), x)))).error.code ==
+        ecModule
+    # false and true are the two simple values a payload may hold: a wrong type
+    # here is a schema question, with its path.
+    let e = v.paramsError("exists", encodeCbor(cborMap((cbor("cid"), cbor(true)))))
+    check e.reason == Opt.some(iprSchemaMismatch)
+    check e.path == @[cbor("cid")]
 
   test "[IFC-0923] [IFC-0926] [IFC-0928] [IFC-0929] the payload depth limit: configurable, at least 128, failing without detail":
     let s = accepted(
@@ -1213,15 +1278,27 @@ suite "iface: shared error codes and invocation failures (INTERFACE §5.1)":
         (cbor("reason"), cbor("configuration-schema-mismatch")),
       )
 
+  proc forwarded(
+      code: int64, message: Opt[string], d: Opt[seq[byte]], cancelKnown = false
+  ): (ErrorCode, Opt[string], Opt[seq[byte]]) =
+    ## What an ABI caller forwards for a native provider's status, as
+    ## `readStatus` and `providerChecked` compose it.
+    let c = errorCode(code)
+    if c.isNone or checkStatus(c.get, message, d).isErr or
+        not providerStatusAllowed(c.get, cancelKnown):
+      return (ecModule, Opt.none(string), Opt.none(seq[byte]))
+    (c.get, message, d)
+
   test "[IFC-0932] [IFC-0933] a native provider status that breaks the rules is MODULE_ERROR, without its diagnostics":
     let detail = invalidParamsDetail(iprSchemaMismatch)
     for (code, message, d) in [
       (0'i64, Opt.none(string), Opt.none(seq[byte])),
       (2'i64, Opt.some("bad cid"), Opt.some(detail)),
-      (6'i64, Opt.some("slow"), Opt.none(seq[byte])),
+      (3'i64, Opt.some("broken"), Opt.none(seq[byte])),
     ]:
-      check checkedProviderStatus(code, message, d) == (ErrorCode(code), message, d)
+      check forwarded(code, message, d) == (ErrorCode(code), message, d)
     for (code, message, d) in [
+      (6'i64, Opt.some("slow"), Opt.none(seq[byte])), # not a provider status (IFC-0980)
       (10'i64, Opt.none(string), Opt.none(seq[byte])), # not allocated
       (-1'i64, Opt.none(string), Opt.none(seq[byte])),
       (0'i64, Opt.some("ok?"), Opt.none(seq[byte])), # OK carries no message
@@ -1231,5 +1308,31 @@ suite "iface: shared error codes and invocation failures (INTERFACE §5.1)":
       (2'i64, Opt.some("x".repeat(513)), Opt.none(seq[byte])),
       (2'i64, Opt.some("\xff"), Opt.none(seq[byte])),
     ]:
-      check checkedProviderStatus(code, message, d) ==
+      check forwarded(code, message, d) ==
         (ecModule, Opt.none(string), Opt.none(seq[byte]))
+
+  test "[IFC-0979] [IFC-0980] [TXT-0034] provider code returns OK, METHOD_NOT_FOUND, INVALID_PARAMS or MODULE_ERROR, and CANCELLED only when its cancellation is known; any other status is MODULE_ERROR without diagnostics":
+    for code in ErrorCode:
+      let allowed = code in {ecOk, ecMethodNotFound, ecInvalidParams, ecModule}
+      check providerStatusAllowed(code, false) == allowed
+      check providerStatusAllowed(code, true) == (allowed or code == ecCancelled)
+      if code == ecOk:
+        check AbiCheck.ok().providerChecked(false).isOk
+        continue
+      for known in [false, true]:
+        let c = AbiCheck
+          .err(
+            AbiFailure(
+              code: code, message: Opt.some("why"), detail: Opt.none(seq[byte])
+            )
+          )
+          .providerChecked(known)
+        check c.isErr
+        if allowed or (code == ecCancelled and known):
+          # passes through unchanged (INTERFACE l.3134: the status passes through)
+          check c.error.code == code
+          check c.error.message == Opt.some("why")
+        else:
+          check c.error.code == ecModule
+          check c.error.message.isNone
+          check c.error.detail.isNone

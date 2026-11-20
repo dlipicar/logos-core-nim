@@ -5,7 +5,8 @@
 ## Channels select behaviour: 13 fails with a message, 14 returns a response
 ## outside its schema, 15 publishes `meter.changed_event`, 16 returns a failure
 ## that is not a valid status, 17 reads the caller and publishes in the
-## invocation's scope, 18 reads the caller and whether the invocation is
+## invocation's scope (a refused publication reads `refused` with the
+## publication's code as the value), 18 reads the caller and whether the invocation is
 ## cancelled, 19 does what 18 does once `gate` opens, 20 reads this
 ## instance's own state (the last part of its state directory, or `none`, and
 ## its count of reads), 21 publishes `meter.changed_event` and then reads the
@@ -18,8 +19,14 @@
 ## in the invocation's scope with value 0x6C636E33 (payloads a carrier trace
 ## looks for), 25 publishes `meter.changed_event` with value 250 from a thread
 ## of the module's own runtime, then joins it (DECISIONS G342: a module thread
-## calling the host's publish callback); any other channel `c` reads `ch<c>`
-## with value `10 c`.
+## calling the host's publish callback), 26 publishes `meter.unknown_event`,
+## `meter.changed_event` with a text value and then with value 260, and reads
+## `ch26` with a value whose bits 0, 1 and 2 say that the callback refused the
+## first two with INVALID_PARAMS and took the third (INTERFACE l.3351);
+## 9001 to 9005 fail with a status provider code may not use (INTERFACE
+## l.3306-3311): TIMEOUT, NOT_READY, NOT_AUTHORISED, TRANSPORT_ERROR, and
+## CANCELLED for an invocation whose cancellation is not known;
+## any other channel `c` reads `ch<c>` with value `10 c`.
 
 {.used.} # imported by the tests for the C symbols it exports
 import std/[atomics, monotimes, os, times]
@@ -71,6 +78,16 @@ proc `read`(
     ok(MeterReadResponse(label: "published", reading: MeterReading(value: 15)))
   of 16:
     err(InvocationFailure(code: ecOk))
+  of 9001:
+    err(failure(ecTimeout, "channel 9001 is slow"))
+  of 9002:
+    err(failure(ecNotReady, "channel 9002 is not ready"))
+  of 9003:
+    err(failure(ecNotAuthorised, "channel 9003 says no"))
+  of 9004:
+    err(failure(ecTransport, "channel 9004 lost its link"))
+  of 9005:
+    err(failure(ecCancelled, "channel 9005 was not cancelled"))
   of 18, 19, 22, 23:
     if c == 19:
       held += 1
@@ -112,7 +129,16 @@ proc `read`(
     )
   of 17:
     let who = ?m.services.caller()
-    ?m.services.publishScoped(MeterChangedEvent(value: 170))
+    let published = m.services.publishScoped(MeterChangedEvent(value: 170))
+    if published.isErr:
+      # [SPEC INTERFACE l.3308-3309; re-pin P4b] Not the provider's own status:
+      # the codes publish answers are ones provider code may not return.
+      return ok(
+        MeterReadResponse(
+          label: "refused",
+          reading: MeterReading(value: uint64(ord(published.error.code))),
+        )
+      )
     ok(
       MeterReadResponse(
         label: who.moduleInstance.get("system"),
@@ -141,6 +167,22 @@ proc `read`(
       return err(moduleError("channel 25 has no thread: " & e.msg))
     joinThread(t)
     ok(MeterReadResponse(label: "ch25", reading: MeterReading(value: 250)))
+  of 26:
+    # {}; {"value": "x"}; {"value": 260}
+    let
+      unknown = m.services.publishEncoded("meter.unknown_event", [0xA0'u8])
+      text = m.services.publishEncoded(
+        "meter.changed_event", [0xA1'u8, 0x65, 0x76, 0x61, 0x6C, 0x75, 0x65, 0x61, 0x78]
+      )
+      valid = m.services.publish(MeterChangedEvent(value: 260))
+    var bits = 0'u64
+    if unknown.isErr and unknown.error.code == ecInvalidParams:
+      bits = bits or 1
+    if text.isErr and text.error.code == ecInvalidParams:
+      bits = bits or 2
+    if valid.isOk:
+      bits = bits or 4
+    ok(MeterReadResponse(label: "ch26", reading: MeterReading(value: bits)))
   of 21:
     ?m.services.publish(MeterChangedEvent(value: 210))
     let who = ?m.services.caller() # after the handlers' nested entries returned

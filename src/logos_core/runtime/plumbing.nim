@@ -201,10 +201,11 @@ type
     inStopped = "stopped"
 
   FailureKind* = enum
-    ## [SPEC RUNTIME §9.3 l.3750-3756] The initial classifications;
-    ## `fkLoader` is `loader-` followed by the typed Module Loader error code
-    ## (l.3754; I89: the bound Module Loader realizes every instance but its
-    ## own).
+    ## [SPEC RUNTIME §9.3.19 l.3605] The initial classifications, in the
+    ## spec's order; `fkLoader` is `loader-` followed by the typed Module
+    ## Loader error code (l.3607; I89: the bound Module Loader realizes every
+    ## instance but its own). Nothing persists the ordinals: the store and
+    ## Runtime Control carry the spelling.
     fkStartupTimeout = "startup-timeout"
     fkInitializationFailed = "initialization-failed"
     fkReportedByModule = "reported-by-module"
@@ -214,7 +215,15 @@ type
     fkAuthorityRevoked = "authority-revoked"
     fkAuthorityEvaluationFailed = "authority-evaluation-failed"
     fkPermissionEnforcementFailed = "permission-enforcement-failed"
+    fkConfigurationMissing = "configuration-missing"
+      ## [SPEC RUNTIME l.3613] no eligible configuration (CONFIG l.142-145)
     fkConfigurationIndeterminate = "configuration-indeterminate"
+    fkStaticBindingMismatch = "static-binding-mismatch"
+      ## [SPEC RUNTIME l.1319-1322] registration no longer supplies the binding
+      ## with the retained declaration's facts
+    fkPrerequisiteUnavailable = "prerequisite-unavailable"
+      ## [SPEC RUNTIME l.3613] a prerequisite not ready, with no attempt in
+      ## progress
     fkCleanupFailed = "cleanup-failed"
     fkCleanupTimeout = "cleanup-timeout"
     fkRemoteStateUnknown = "remote-state-unknown"
@@ -250,6 +259,7 @@ type
     stateAssignment*: Opt[string]
     primaryContract*: Opt[Digest]
     implements*: seq[Digest]
+    extends*: seq[Digest] ## [G394 r13] the record's earlier contracts
     provider*: bool ## a provider view passed the §3.3 checks
     providerId*: string
       ## [SPEC RUNTIME §9.3 l.2862-2871] the instance's provider record, kept
@@ -265,9 +275,27 @@ type
     serial*: uint64
     view*: InstanceView
 
+  RcErrorCode* = enum
+    ## [SPEC RUNTIME §9.3.1 l.1818-1822] `error_code`: a typed outcome a
+    ## Runtime Control response carries in its `error` arm.
+    recStaleRevision = "stale-revision"
+    recConfigurationRejected = "configuration-rejected"
+    recDeclarationUnavailable = "declaration-unavailable"
+
+  TypedError* = object
+    ## [SPEC RUNTIME §9.3.2] `error`: the code and, for `stale-revision`, the
+    ## revision the Runtime holds.
+    code*: RcErrorCode
+    currentRevision*: Opt[uint64]
+
   EngineError* = object
     code*: ErrorCode
     message*: string
+    typed*: Opt[TypedError]
+      ## [re-pin P4a; I108] a typed Runtime Control outcome: a successful
+      ## response holding the method's error arm, not an invocation error.
+      ## `code` is then MODULE_ERROR, so one that reaches an invocation-error
+      ## path is loud, and never `ecOk`, the parked marker
 
   BootstrapInstance* = object
     ## [SPEC RUNTIME §8, §13.2] One module instance of the protected bootstrap
@@ -339,6 +367,13 @@ type
       ## [G178, G225] judged Runtime Control events waiting for one
       ## subscription's handler; one more loses the subscription; default 256,
       ## at least 2
+    eventQueue*: int
+      ## [G176] direct deliveries one subscription's queue holds while its
+      ## handler runs on another thread; one more ends the subscription with
+      ## MODULE_ERROR (INTERFACE l.1469-1470); default 1024
+    eventQueueBytes*: int
+      ## [G176] their copied event data; the first queued delivery is taken
+      ## whatever its size; default 16 MiB
     rcUnjudged*: int
       ## [G178] events waiting for a decision before they can join one
       ## subscription's queue; one more loses the subscription; default 256
@@ -501,6 +536,9 @@ type
       ## [I90] a synchronous call through a transported route handle: sent on
       ## its link, answered when the Response comes (`transported.nim`)
     rqObserveEnd ## a route handle's `observe_end`
+    rqSubEndAdmit
+      ## a route handle's `observe_subscription_end`: refused with a terminal
+      ## handle's retained code (DECISIONS I105)
     rqReleaseHandle ## a route handle's `release`
     rqRoutes ## every route record (observation for the host and tests)
     rqIdentity ## this Runtime's identity
@@ -512,10 +550,13 @@ type
     rqCandidates ## the subscriptions an ordinary publication may reach
     rqScoped ## the subscriptions an invocation-scoped publication may reach
     rqDeliver ## the admission of one event handler invocation
+    rqQueueBound
+      ## [G176] a publisher found a direct subscription's delivery queue at
+      ## its bound: the subscription ends with MODULE_ERROR
     rqDiagnostics ## the retained diagnostics
     rqBootstrap
       ## [SPEC RUNTIME l.1640, §13.2] the configured instances, then the
-      ## orchestration instance realized to `ready` (G190)
+      ## orchestration instance realized to `ready` (l.3838-3840, l.3939)
     rqRequestShutdown ## [SPEC RUNTIME §13.2] accept shutdown and answer at once
     rqAwaitShutdown ## wait for shutdown without initiating it (RUN-0728)
     rqRecover ## [SPEC RUNTIME §9.3 recover_module] from the host or a test
@@ -678,15 +719,20 @@ type
     ## it cancelled when its route or consumer ends, or the asynchronous call
     ## is cancelled or times out (INTERFACE l.2101-2102), and frees it when the
     ## call has left the provider.
+    id*: uint64
+      ## [P3 F1] a route call's number, set before admission and never reused:
+      ## what a queued scoped delivery names its call by, since the ticket
+      ## may be freed before it runs
     cancelled*: Atomic[bool]
     closed*: Atomic[bool]
       ## its invocation-scoped destination is closed: a terminal outcome was
       ## decided (RUNTIME l.1275-1283)
     lock*: Lock
     endCode*: int
-      ## [G174] under `lock`: the termination code of the route the call came
+      ## under `lock`: the termination code of the route the call came
       ## through, once it ended (0 while it is ready); a result is committed
-      ## only after reading it under the same lock (RUNTIME l.1292-1293)
+      ## only after reading it under the same lock (RUNTIME l.1212, l.1271;
+      ## `invoke.endedByRoute`)
 
   Admission* = object
     ## What a route call needs once the Runtime thread admitted it: the
@@ -815,7 +861,11 @@ type
     outId*: ptr LogosSubscriptionId
       ## rqSubscribe: written before the subscription becomes active
     call*: pointer ## rqAdmit: the asynchronous call being admitted, if any
-    ticket*: ptr CallTicket ## rqScoped, rqDeliver: the invocation's ticket
+    ticket*: ptr CallTicket
+      ## rqScoped, rqScopedConn, rqDeliverConn: the invocation's ticket
+    callId*: uint64
+      ## [P3 F1] rqDeliver, scoped: the invocation's call by its ticket's
+      ## number, which the Runtime thread resolves on the route; 0: none
     scoped*: bool ## rqDeliver, rqDeliverConn: an invocation-scoped publication
     credit*: int ## [I90] rqLinkNext: the credit of the Event its handler finished
     pubTag*: uint64 ## [I90] rqPublishVerdict
@@ -950,6 +1000,9 @@ type
     rjLinkDrain
       ## [I90] one drain of a transported subscription (`events.linkDrain`),
       ## holding one reference to its `SubState`
+    rjSubEnd
+      ## [G225] one report of a binding-ended subscription
+      ## (`rcevents.runReport`)
 
   RcJob* = object
     ## [G178] What an event worker runs: one drain of one Runtime Control
@@ -957,6 +1010,14 @@ type
     case kind*: RcJobKind
     of rjDrain, rjLinkDrain:
       sub*: pointer
+    of rjSubEnd:
+      report*: int ## the Runtime thread's number for it (`mkSubEndDone`)
+      owner*: pointer
+        ## a route handle's `HandleState`, holding one reference, or a
+        ## binding's `AttemptServices`
+      onHandle*: bool
+      subId*: uint64
+      reason*: ErrorCode
     of rjQuit:
       discard
 
@@ -998,6 +1059,7 @@ type
     mkHostEnded
       ## [I91; R27] a Module Host's end, before the Loader reports anything
       ## that follows from it (`host`, `hostEnd`)
+    mkSubEndDone ## [G225] a subscription-end report job ended (`job`)
 
   HostEndNote* = object
     ## [R7] How a Module Host ended, as plain values (`hostsup.HostEnd`).
@@ -1016,7 +1078,7 @@ type
     of mkInitialized, mkApplied:
       res*: LogosResult
       context*: ptr LogosModuleContext ## mkInitialized
-    of mkDestroyed, mkJobDone:
+    of mkDestroyed, mkJobDone, mkSubEndDone:
       discard
     of mkCallDone:
       provider*: string
@@ -1128,6 +1190,27 @@ when defined(lcnTestHooks):
       sleep(1)
     rcAnswersHeld -= 1
 
+  var
+    queueBoundHold: Atomic[bool]
+    queueBoundsHeld: Atomic[int] ## publishers waiting at the hold
+
+  proc holdQueueBoundForTests*(on: bool) =
+    ## [P3 §12.1] A publisher that found a subscription's delivery queue at
+    ## its bound, and deactivated the subscription, waits before it tells
+    ## the Runtime thread (`events.deliverOrQueue`).
+    queueBoundHold.store(on)
+
+  proc queueBoundHeldForTests*(): bool =
+    queueBoundsHeld.load > 0
+
+  proc waitAtQueueBoundHold*() =
+    if not queueBoundHold.load:
+      return
+    queueBoundsHeld += 1
+    while queueBoundHold.load:
+      sleep(1)
+    queueBoundsHeld -= 1
+
 const AuthorityEndings* = {
   fkAuthorityDenied, fkAuthorityExpired, fkAuthorityRevoked, fkAuthorityEvaluationFailed
 } ## [SPEC RUNTIME l.3753; G168 extended] what an authority stop leaves
@@ -1156,6 +1239,8 @@ func effective*(l: EngineLimits): EngineLimits =
   fill(endRegsPerConsumer, 1024)
   fill(endRegsTotal, 16384)
   fill(rcQueue, 256)
+  fill(eventQueue, 1024)
+  fill(eventQueueBytes, 16 * 1024 * 1024)
   fill(rcUnjudged, 256)
   fill(rcHintFacts, 1024)
   fill(rcSubsPerSubscriber, 32)
@@ -1167,6 +1252,11 @@ func effective*(l: EngineLimits): EngineLimits =
   # [G178 (D2)] Room for one pending hint of each collection: a stalled
   # `inventory_changed` handler never loses its subscription.
   result.rcQueue = max(result.rcQueue, 2)
+
+proc ticketCancelled*(t: ptr CallTicket): bool =
+  ## [SPEC INTERFACE l.3308] Whether the call's cancellation is known at the
+  ## provider boundary: the Runtime thread marked its ticket cancelled.
+  t != nil and t.cancelled.load
 
 proc newRuntimeInstanceId*(): string =
   ## A lowercase canonical UUID version 4 (RFC 9562), the form the remote
@@ -1220,6 +1310,18 @@ func moduleOrigin*(instance: string): Origin =
 
 func engineError*(code: ErrorCode, message: string): EngineError =
   EngineError(code: code, message: message)
+
+func typedError*(code: RcErrorCode, current = Opt.none(uint64)): EngineError =
+  ## [SPEC RUNTIME l.1818-1822] A typed outcome (`EngineError.typed`).
+  EngineError(
+    code: ecModule,
+    message: $code,
+    typed: Opt.some(TypedError(code: code, currentRevision: current)),
+  )
+
+func isTyped*(e: EngineError): bool =
+  ## A typed Runtime Control outcome, which callers must not read by `code`.
+  e.typed.isSome
 
 # Worker threads -----------------------------------------------------------------
 

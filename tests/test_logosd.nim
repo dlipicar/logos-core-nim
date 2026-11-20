@@ -342,6 +342,21 @@ when defined(posix):
       check c.lockFree
       check c.ctl("status").code == 2
 
+    test "[IMPL-DECISION G38] a value file is held to Logos deterministic CBOR when it is read, in either notation":
+      let c = newCase()
+      for (name, text) in [
+        ("null.diag", "null"),
+        ("undefined.diag", "undefined"),
+        ("tag.diag", "1(2)"),
+        ("null.cbor", "\xf6"),
+        ("tag.cbor", "\xc1\x02"),
+      ]:
+        checkpoint name
+        writeFile(c.dir / name, text)
+        let r = c.ctl("init", "--config", "@" & (c.dir / name))
+        check r.code != 0
+        check "is not deterministic CBOR" in r.stdout & r.stderr
+
     test "daemon stop --wait: the daemon exits 0":
       let c = newCase()
       check c.initDefault().code == 0
@@ -351,7 +366,7 @@ when defined(posix):
       check r.code == 0
       check waitExit(d, StopMs) == 0
 
-    test "[RUN-0347] kill -9, then a restart: the stale socket does not block, and module create --request-key returns the same instance":
+    test "[IMPL] kill -9, then a restart: the stale socket does not block, and module create --request-key returns the same instance":
       let c = newCase()
       check c.initDefault().code == 0
       var d = c.start()
@@ -370,7 +385,7 @@ when defined(posix):
       check j2["request_key"].getStr == "lcli-k1"
       check d.stopped == 0
 
-    test "[BCP-0093] [BCP-0094] [BCP-0095] allow-all needs the switch; on, the banner shows in the log and in online and offline output; test_hooks needs it too":
+    test "[BCP-0103] [BCP-0094] [BCP-0095] allow-all needs the switch; on, the banner shows in the log and in online and offline output; test_hooks needs it too":
       let c = newCase()
       check c.initDefault().code == 0
       c.editConfig(
@@ -417,6 +432,46 @@ when defined(posix):
       let r = c.ctl("module", "stop", "logos_module_loader")
       check r.code == 4
       check "NOT_AUTHORISED" in r.stderr
+      check d.stopped == 0
+
+    test "[RUN-1113] [RUN-1114] module start --if-revision with a stale revision: the code and the current revision, exit 4, and --json carries the error arm":
+      # [re-pin P4a] A typed error is a successful call whose response holds
+      # the error arm; logosctl exits as for any Runtime Control refusal.
+      let c = newCase()
+      check c.initDefault().code == 0
+      let d = c.start()
+      c.expectReady(d)
+      let (made, j) = c.ctlJson("module", "create", "sensor_module")
+      check made == 0
+      let instance = j["result"]["instance"].getStr
+      let (listed, ls) = c.ctlJson("module", "ls", "--module", "sensor_module")
+      check listed == 0
+      # A revision above 2^53 is a JSON string (G89); a persistent engine's
+      # revisions start at its epoch shifted left by 32.
+      proc uintOf(n: JsonNode): uint64 =
+        if n.kind == JString:
+          parseBiggestUInt(n.getStr).uint64
+        else:
+          n.getBiggestInt.uint64
+
+      let rev = uintOf(ls["result"]["modules"][0]["execution"]["revision"])
+      let args = @[
+        "module",
+        "start",
+        "sensor_module",
+        "--instance",
+        instance,
+        "--if-revision",
+        $(rev + 1),
+      ]
+      let r = c.ctl(args)
+      check r.code == 4
+      check ("stale-revision: current revision " & $rev) in r.stderr
+      let (code, answer) = c.ctlJson(args)
+      check code == 4
+      check answer["result"]["error"]["code"].getStr == "stale-revision"
+      check uintOf(answer["result"]["error"]["current_revision"]) == rev
+      check c.state(instance) == "unloaded"
       check d.stopped == 0
 
     test "[PKG-0418] [PKG-0419] [PKG-0420] [PKG-0421] trust continuity across starts":
@@ -480,7 +535,7 @@ when defined(posix):
       check c.ctl("trust", "evidence-keys", "ls").code == 0
       check d.stopped == 0
 
-    test "[RUN-0347] [BCP-0092] 8 concurrent shells, module create with distinct keys: 8 instances; retire says the state is kept":
+    test "[BCP-0092] 8 concurrent shells, module create with distinct keys: 8 instances; retire says the state is kept":
       let c = newCase()
       check c.initDefault().code == 0
       let d = c.start()

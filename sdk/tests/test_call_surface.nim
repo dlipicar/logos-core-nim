@@ -55,6 +55,40 @@ proc bound(
 proc full(): ModuleBinding =
   bound("demo_module", Opt.some(moduleDoc), [betaDoc, alphaDoc], [unitsDoc, tagsDoc])
 
+# A provider whose contracts extend earlier ones (COMMITMENT §9.1): the primary
+# adds a method and the interface dial to the earlier concrete contract, which
+# implements alpha only; dial adds a method to the earlier dial.
+const
+  dialOld =
+    "_interface = \"dial\"\n\ndial.turn_request = {\n  by: units.count,\n}\n" &
+    "dial.turn_response = {}\n"
+  dialDoc = dialOld & "dial.reset_request = {}\ndial.reset_response = {}\n"
+
+let
+  dialRoot = rootOf(dialDoc, [unitsDoc])
+  dialOldRoot = rootOf(dialOld, [unitsDoc])
+  oldDoc =
+    "_module = \"demo_module\"\n" & implementing(alphaRoot) &
+    "\ndemo.ping_request = {}\ndemo.ping_response = {\n  label: tags.label,\n}\n"
+  nextDoc =
+    "_module = \"demo_module\"\n" & implementing(alphaRoot, dialRoot) &
+    "\ndemo.ping_request = {}\ndemo.ping_response = {\n  label: tags.label,\n}\n" &
+    "demo.pong_request = {}\ndemo.pong_response = {}\n"
+  oldRoot = acceptContractSet(oldDoc, [alphaDoc], [unitsDoc, tagsDoc]).get.primary.root
+
+proc extended(extends: openArray[string] = [oldDoc, dialOld]): ModuleBinding =
+  let r = acceptBinding(
+    "demo_module",
+    Opt.some(nextDoc),
+    [alphaDoc, dialDoc],
+    [unitsDoc, tagsDoc],
+    AcceptOptions(),
+    extends,
+  )
+  if r.isErr:
+    checkpoint r.error
+  r.get
+
 proc descriptor(b: ModuleBinding): seq[byte] =
   let r = callSurfaceDescriptor(b)
   if r.isErr:
@@ -115,8 +149,9 @@ suite "ifc.call-surface: the provider call-surface descriptor (INTERFACE §2.6)"
           else:
             rules[^1][1].add field[0 ..< colon]
     check rules.len == 3
-    check rules[0] == ("provider-call-surface", @["interfaces"], @["primary"])
-    check DescriptorKeys.toSeq.filterIt(it != "primary") == rules[0][1]
+    check rules[0][0] == "provider-call-surface"
+    check rules[0][1] == DescriptorRequired.toSeq
+    check rules[0][2] == DescriptorOptional.toSeq
     check rules[1][0] == "provider-contract-schema"
     check rules[1][1] == ContractEntryKeys.toSeq
     check rules[2][0] == "provider-supporting-schema"
@@ -176,6 +211,14 @@ suite "ifc.call-surface: the provider call-surface descriptor (INTERFACE §2.6)"
     let one = v.lookup("interfaces").get.items[0]
     v.put("interfaces", cborArray(newSeqWith(MaxDescriptorInterfaces + 1, one)))
     check rejected(v).contains("256")
+    # `extends` too, counted before any entry is parsed (none of these is a map).
+    let w = decoded(full())
+    w.put("extends", cborArray(newSeqWith(MaxDescriptorExtends + 1, cbor(0'u64))))
+    check rejected(w).contains("more than 256 extends entries")
+    w.put("extends", cborArray(newSeqWith(MaxDescriptorExtends, cbor(0'u64))))
+    check rejected(w).contains("not a map")
+    w.put("extends", cborArray())
+    check rejected(w).contains("present and empty")
 
   test "[IFC-0227] [IFC-0228] closed maps and field types":
     var v = decoded(full())
@@ -350,11 +393,171 @@ suite "ifc.call-surface: the provider call-surface descriptor (INTERFACE §2.6)"
   test "[IFC-0246] supplied contract references match the descriptor exactly":
     let b = full()
     let p = Opt.some(b.primary.get.root)
-    check b.matchesContracts(p, [betaRoot, alphaRoot])
-    check b.matchesContracts(p, [alphaRoot, betaRoot])
-    check not b.matchesContracts(p, [alphaRoot])
-    check not b.matchesContracts(Opt.none(Digest), [alphaRoot, betaRoot])
-    check not b.matchesContracts(p, [alphaRoot, betaRoot, rootOf(ticksDoc)])
+    check b.matchesContracts(p, [betaRoot, alphaRoot], [])
+    check b.matchesContracts(p, [alphaRoot, betaRoot], [])
+    check not b.matchesContracts(p, [alphaRoot], [])
+    check not b.matchesContracts(Opt.none(Digest), [alphaRoot, betaRoot], [])
+    check not b.matchesContracts(p, [alphaRoot, betaRoot, rootOf(ticksDoc)], [])
     let t = bound("ticks_module", Opt.none(string), [ticksDoc])
-    check t.matchesContracts(Opt.none(Digest), [rootOf(ticksDoc)])
-    check not t.matchesContracts(Opt.some(rootOf(ticksDoc)), [rootOf(ticksDoc)])
+    check t.matchesContracts(Opt.none(Digest), [rootOf(ticksDoc)], [])
+    check not t.matchesContracts(Opt.some(rootOf(ticksDoc)), [rootOf(ticksDoc)], [])
+    # The extended set, compared as a set like the interfaces.
+    let e = extended()
+    let q = Opt.some(e.primary.get.root)
+    let olds = @[oldRoot, dialOldRoot]
+    check e.matchesContracts(q, [alphaRoot, dialRoot], olds)
+    check e.matchesContracts(q, [dialRoot, alphaRoot], [dialOldRoot, oldRoot])
+    check not e.matchesContracts(q, [alphaRoot, dialRoot], [])
+    check not e.matchesContracts(q, [alphaRoot, dialRoot], [oldRoot])
+    check not e.matchesContracts(q, [alphaRoot, dialRoot], [oldRoot, oldRoot])
+    check not e.matchesContracts(q, [alphaRoot, dialRoot], olds & @[betaRoot])
+    check not b.matchesContracts(p, [alphaRoot, betaRoot], [oldRoot])
+
+# Earlier contracts -------------------------------------------------------------------
+
+proc earlierEntries(v: CborValue): seq[CborValue] =
+  v.lookup("extends").get.items
+
+proc withExtends(docs: varargs[string]): Result[ModuleBinding, string] =
+  ## The extended provider's binding with these earlier documents.
+  acceptBinding(
+    "demo_module",
+    Opt.some(nextDoc),
+    [alphaDoc, dialDoc],
+    [unitsDoc, tagsDoc],
+    AcceptOptions(),
+    docs,
+  )
+
+suite "ifc.call-surface: earlier contracts (`extends`, INTERFACE §2.6, COMMITMENT §9.1)":
+  test "[TXT-0539] [IFC-0968] a binding's earlier contracts round-trip, each with its own inputs":
+    let b = extended()
+    check b.extends.mapIt(it.root) == @[oldRoot, dialOldRoot]
+    let bytes = descriptor(b)
+    let back = acceptCallSurfaceDescriptor(bytes, "demo_module")
+    check back.isOk
+    check back.get.extends.mapIt(it.root) == @[oldRoot, dialOldRoot]
+    let v = decodeCbor(bytes).get
+    let olds = earlierEntries(v)
+    check olds.mapIt(it.lookup("document").get.text) == @[oldDoc, dialOld]
+    check olds[0].lookup("commitment").get == schemaCommitment(oldRoot)
+    proc names(e: CborValue): seq[string] =
+      e.lookup("supporting_schemas").get.items.mapIt(it.lookup("namespace").get.text)
+
+    # The earlier concrete contract selects alpha only: it is built with alpha and
+    # lists the supporting schemas it and alpha use (tags, units); the earlier
+    # interface lists its own (units).
+    check b.interfacesOf(b.extends[0]).mapIt(it.root) == @[alphaRoot]
+    check names(olds[0]) == @["tags", "units"]
+    check names(olds[1]) == @["units"]
+    # A binding without earlier contracts writes no `extends` key, so a kit's
+    # descriptor bytes are unchanged.
+    check decoded(full()).lookup("extends").isNone
+
+  test "[IFC-0968] extends entries have distinct roots, by namespace, then root":
+    var v = decoded(extended())
+    let items = earlierEntries(v)
+    v.put("extends", cborArray(@[items[1], items[0]]))
+    check rejected(v).contains("extends entries are not in namespace, then root order")
+    v = decoded(extended())
+    v.put("extends", cborArray(@[items[0], items[0], items[1]]))
+    check rejected(v).contains("two extends entries claim one schema root")
+    # An earlier contract with the identity of a described one.
+    check withExtends(dialDoc).error.contains("repeats the identity")
+
+  test "[IFC-0969] [TXT-0538] each entry is extended by the described contract of its namespace":
+    # Holds: the primary extends the earlier concrete contract, dial the earlier dial.
+    check rejected(decoded(extended())) == ""
+    # No described contract has the entry's namespace.
+    let gauge =
+      "_interface = \"gauge\"\n\ngauge.read_request = {}\ngauge.read_response = {}\n"
+    var v = decoded(extended())
+    v.put("extends", cborArray(entryOf(gauge, rootOf(gauge), [])))
+    check rejected(v).contains("no described contract has the namespace")
+    # The described contract of the namespace does not extend the entry.
+    let dialOther =
+      "_interface = \"dial\"\n\ndial.turn_request = {}\ndial.turn_response = {}\n"
+    v = decoded(extended())
+    v.put("extends", cborArray(entryOf(dialOther, rootOf(dialOther), [])))
+    let why = rejected(v)
+    check why.contains("does not extend")
+    check why.contains("dial.turn_request has another body")
+
+  test "[TXT-0539] an entry follows the rules of its role":
+    # A concrete entry names the binding's module.
+    let otherModule =
+      "_module = \"other_module\"\n" & implementing(alphaRoot) &
+      "\ndemo.ping_request = {}\ndemo.ping_response = {\n  label: tags.label,\n}\n"
+    var v = decoded(extended())
+    v.put(
+      "extends",
+      cborArray(
+        entryOf(otherModule, Digest.default, [tagsDoc, unitsDoc]),
+        earlierEntries(decoded(extended()))[1],
+      ),
+    )
+    check rejected(v).contains("_module is other_module")
+    # An interface entry declares no `_implements`.
+    let implementingDial =
+      "_interface = \"dial\"\n" & implementing(alphaRoot) &
+      "\ndial.turn_request = {\n  by: units.count,\n}\ndial.turn_response = {}\n"
+    v = decoded(extended())
+    v.put("extends", cborArray(entryOf(implementingDial, Digest.default, [unitsDoc])))
+    check rejected(v).contains("only a concrete module schema has _implements")
+    # A supporting schema is not a contract.
+    v = decoded(extended())
+    v.put("extends", cborArray(entryOf(tagsDoc, rootOf(tagsDoc), [])))
+    check rejected(v).contains("not a contract")
+    # A concrete entry that selects an interface the binding lacks.
+    let selectsBeta =
+      "_module = \"demo_module\"\n" & implementing(betaRoot) &
+      "\ndemo.ping_request = {}\ndemo.ping_response = {\n  label: tags.label,\n}\n"
+    check withExtends(selectsBeta).error.contains(
+      "an interface the binding does not implement"
+    )
+
+  test "[TXT-0540] an entry adds no method or event; the call surface is unchanged":
+    # An entry with a method its successor lacks.
+    let dialMore = dialDoc & "dial.spin_request = {}\ndial.spin_response = {}\n"
+    let v = decoded(extended())
+    v.put(
+      "extends", cborArray(entryOf(dialMore, rootOf(dialMore, [unitsDoc]), [unitsDoc]))
+    )
+    let why = rejected(v)
+    check why.contains("does not extend")
+    check why.contains("omits the declaration dial.spin")
+    # The contract set a binding gives `callSurface`, and its C declarations, are
+    # the same with and without earlier contracts.
+    let with = extended()
+    let without = extended([])
+    proc setOf(b: ModuleBinding): ContractSet =
+      ContractSet(
+        primary: b.primary.get, interfaces: b.interfaces, supporting: b.supporting
+      )
+
+    check callSurface(setOf(with)) == callSurface(setOf(without))
+    check $cDeclarations(with.cSchemaSet).get == $cDeclarations(without.cSchemaSet).get
+    check with.isProvider == without.isProvider
+
+  test "[TXT-0536] [IMPL-DECISION G392] an extension adds declarations and may implement more":
+    # dial has one more method than the earlier dial; the primary has one more
+    # method and one more interface than the earlier concrete contract.
+    check withExtends(oldDoc).isOk
+    check withExtends(dialOld).isOk
+    # A changed declaration is not an extension.
+    let pingChanged =
+      "_module = \"demo_module\"\n" & implementing(alphaRoot) &
+      "\ndemo.ping_request = {}\ndemo.ping_response = {}\n"
+    let r = withExtends(pingChanged)
+    check r.isErr and r.error.contains("demo.ping_response has another body")
+
+  test "[IFC-0245] an entry repeats its successor's bare names without collision; duplicate identity across the arrays":
+    # The earlier contracts repeat ping and turn: no bare-name collision.
+    check withExtends(oldDoc, dialOld).isOk
+    # An `extends` entry with the primary's identity.
+    let v = decoded(extended())
+    v.put(
+      "extends",
+      cborArray(v.lookup("primary").get, earlierEntries(decoded(extended()))[1]),
+    )
+    check rejected(v).contains("repeats the identity")

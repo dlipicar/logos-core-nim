@@ -13,7 +13,7 @@ logos.transport.value-root        = bstr .size 32
 
 ; This block is the owning registry for transport message-kind values.
 ; Other Logos specifications may cite these values but do not allocate them.
-logos.transport.message-kind      = 0..8
+logos.transport.message-kind      = 0..9
 
 logos.transport.message-kind-hello       = 0
 logos.transport.message-kind-request     = 1
@@ -24,3 +24,4 @@ logos.transport.message-kind-event       = 5
 logos.transport.message-kind-error       = 6
 logos.transport.message-kind-cancel      = 7
 logos.transport.message-kind-subscription-result = 8
+logos.transport.message-kind-subscription-end = 9

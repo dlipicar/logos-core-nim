@@ -24,6 +24,8 @@
 ## validation detail:
 ##
 ## - `rc <method> <hex params>`;
+## - `connect-remote <hex endpoint>`, `connect_remote`'s status (` acquired`
+##   after it if a binding came back);
 ## - `materialize <slot> <route> <hex root> <hex schema>`, the handle in
 ##   `slot` (0-15);
 ## - `call <slot> <method> <hex params>`;
@@ -32,6 +34,9 @@
 ##   `unsubscribe <slot> <id>`;
 ## - `observe-end <slot> <tag>`, the end appended to `ends` as
 ##   `<tag> <code>`;
+## - `sub-end <slot or rc> <tag or null>`: `observe_subscription_end` on that
+##   route handle or the probe's binding, with a null handler for `null`; a
+##   reported end would be appended to `subends` as `<tag> <id> <code>`;
 ## - `prepare <slot> <call> <method> <hex params> <timeout ms or ->`, its
 ##   completion appended to `done` as `<call> <code> <hex value or message>`;
 ##   `submit <call>`, `cancel <call>`, `release-call <call>`;
@@ -43,8 +48,12 @@
 ## Other commands: `fail-init` (MODULE_ERROR), `fail-init-context` (a failure
 ## with a context: no destroy may follow), `ok-null` (LOGOS_OK without a
 ## context), `block-init` and `block-destroy` (wait until `<state_dir>/go`
-## exists), `block-handler` (each handler, a route's Event handler included,
-## waits until `<state_dir>/go-handler` exists), `quit-init <n>` (exit from
+## exists), `sub-end-rc <tag>` (`observe_subscription_end` on the binding
+## during `_MODULE_init`, reports appended to `subends` as for `sub-end`; its
+## result appended to `inits`), `block-handler` (each handler, a route's Event handler included,
+## waits until `<state_dir>/go-handler` exists), `block-subend` (each
+## subscription-end handler, after its line, waits until `<state_dir>/go-subend`
+## exists), `quit-init <n>` (exit from
 ## module code), `quit-handler` (exit from the first event handler),
 ## `rc-destroy <method> <hex params>` (a Runtime Control call from
 ## `_MODULE_destroy`, its result in `rc-destroy`).
@@ -68,7 +77,7 @@ type
     dirBuf: array[1024, char] ## the state directory; empty: none
     dirLen: int
     rc: ptr LogosRuntimeControlBinding
-    blockDestroy, blockHandler, quitHandler: bool
+    blockDestroy, blockHandler, blockSubEnd, quitHandler: bool
     handled, inside: Atomic[int]
     serving: Atomic[bool]
     served: bool
@@ -186,6 +195,15 @@ proc onRouteEnd(reason: CErrorCode, userData: pointer) {.cdecl.} =
   let t = cast[ptr Tag](userData)
   t.probe.note("ends", t.label & " " & $int64(reason))
 
+proc onSubEnd(
+    id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+) {.cdecl.} =
+  kitEnter()
+  let t = cast[ptr Tag](userData)
+  t.probe.note("subends", t.label & " " & $id & " " & $int64(reason))
+  if t.probe.blockSubEnd:
+    waitGo(t.probe.dir, "go-subend")
+
 proc onDone(
     userData: pointer,
     res: LogosResult,
@@ -212,6 +230,16 @@ proc command(p: ptr Probe, line: string): string =
     case w[0]
     of "rc":
       return p.rcLine(w[1], (if w.len > 2: w[2] else: ""))
+    of "connect-remote":
+      # [IFC-0939, IFC-0940] The status of `connect_remote` for the endpoint
+      # `w[1]`, its validation detail included.
+      let endpoint = unhex(w[1])
+      var root: ContractRoot
+      var acquired = LogosRuntimeControlBinding()
+      let r = p.rc.vtable.connectRemote(
+        p.rc, ptrOf(endpoint), csize_t(endpoint.len), addr root, addr acquired
+      )
+      return fullLine(r) & (if acquired.vtable == nil: "" else: " acquired")
     of "materialize":
       let root = unhex(w[3])
       let schema = unhex(w[4])
@@ -271,6 +299,15 @@ proc command(p: ptr Probe, line: string): string =
       if h.vtable == nil:
         return "no route"
       return resultLine(h.vtable.observeEnd(h, onRouteEnd, p.newTag(w[2])))
+    of "sub-end":
+      let handler: LogosSubscriptionEndHandler = (if w[2] == "null": nil else: onSubEnd)
+      if w[1] == "rc":
+        return
+          resultLine(p.rc.vtable.observeSubscriptionEnd(p.rc, handler, p.newTag(w[2])))
+      let h = addr p.routes[parseInt(w[1])]
+      if h.vtable == nil:
+        return "no route"
+      return resultLine(h.vtable.observeSubscriptionEnd(h, handler, p.newTag(w[2])))
     of "prepare":
       let h = addr p.routes[parseInt(w[1])]
       if h.vtable == nil:
@@ -416,6 +453,8 @@ proc probeInit(
       p.blockDestroy = true
     of "block-handler":
       p.blockHandler = true
+    of "block-subend":
+      p.blockSubEnd = true
     of "quit-handler":
       p.quitHandler = true
     of "quit-init":
@@ -443,6 +482,10 @@ proc probeInit(
       var id: LogosSubscriptionId
       let r = p.rc.vtable.subscribe(p.rc, cstring(w[1]), onEvent, p, addr id)
       p.note("events", "subscribed " & resultLine(r))
+    of "sub-end-rc":
+      # Before `serve`, so the command thread is not making tags yet.
+      let r = p.rc.vtable.observeSubscriptionEnd(p.rc, onSubEnd, p.newTag(w[1]))
+      p.note("inits", "sub-end-rc " & resultLine(r))
     of "serve":
       p.serving.store(true)
       try:

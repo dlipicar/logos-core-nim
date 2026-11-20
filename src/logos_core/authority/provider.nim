@@ -159,8 +159,11 @@ proc publishNotify(
 ): bool {.nimcall, gcsafe, raises: [].} =
   ## [§2.11] The engine path: the instance's ordinary publish callback, on the
   ## CA thread, with no CA lock held. The kit refuses an instance without the
-  ## callback, so false is an encoding failure; it makes every later
-  ## evaluation `authority-unavailable`.
+  ## callback, so false is an encoding failure or the callback's
+  ## INVALID_PARAMS (INTERFACE l.3351): an event this authority's own contract
+  ## does not declare, a defect the Runtime records as a diagnostic naming the
+  ## reason (DECISIONS I106). Either makes every later evaluation
+  ## `authority-unavailable`.
   let s = cast[ptr SinkEnv](env)
   case ev.kind
   of aeGrantChanged:

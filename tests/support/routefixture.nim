@@ -3,11 +3,12 @@
 ## which define `repo` and `work` first: a consumer module that keeps the
 ## Runtime Control binding of each initialization, so a test calls Runtime
 ## Control as that module; a module whose initialization waits at a gate; the
-## meter kit module as provider; and request and route-handle helpers. Module
-## code runs on the engine's workers, so the test modules keep their state in
-## atomics. Bounds that only limit a wait scale with `Slow`.
+## meter kit module as provider; the relay module, whose contract extends two
+## earlier ones (`relayfixture`, re-pin P8b); and request and route-handle
+## helpers. Module code runs on the engine's workers, so the test modules keep
+## their state in atomics. Bounds that only limit a wait scale with `Slow`.
 
-import ./slowdown
+import ./[relayfixture, slowdown]
 
 # The consumer module --------------------------------------------------------------
 
@@ -25,11 +26,55 @@ var
   clientAccessState, clientCurrent: Atomic[pointer]
     ## the invocation access of the latest initialization
 
+import logos_sdk/kit/rc_arms
+
 type RcResult = object
   code: ErrorCode
   message: string
   detail: seq[byte]
   response: seq[byte]
+  refused: Opt[LogosNSRuntimeControlError]
+    ## [re-pin P4a] the response's error arm (`kit/rc_arms`): a typed refusal
+    ## comes back with LOGOS_OK
+
+proc refusalIn(name: string, bytes: seq[byte]): Opt[LogosNSRuntimeControlError] =
+  ## The error arm of a response of one of the eight methods that have one.
+  template read(T: typedesc) =
+    let x = T.decode(bytes)
+    if x.isOk:
+      return x.get.refusal
+
+  case name
+  of "create_module":
+    read(LogosNSRuntimeControlCreateModuleResponse)
+  of "start_module":
+    read(LogosNSRuntimeControlStartModuleResponse)
+  of "stop_module":
+    read(LogosNSRuntimeControlStopModuleResponse)
+  of "recover_module":
+    read(LogosNSRuntimeControlRecoverModuleResponse)
+  of "retire_module":
+    read(LogosNSRuntimeControlRetireModuleResponse)
+  of "update_permission_settings":
+    read(LogosNSRuntimeControlUpdatePermissionSettingsResponse)
+  of "update_configuration":
+    read(LogosNSRuntimeControlUpdateConfigurationResponse)
+  of "apply_configuration":
+    read(LogosNSRuntimeControlApplyConfigurationResponse)
+  else:
+    discard
+  Opt.none(LogosNSRuntimeControlError)
+
+proc accepting(r: RcResult, refusal: bool): RcResult =
+  ## [re-pin P4a] A helper's answer: an error arm fails here unless the caller
+  ## expects one (`refusal`), so a status-only check cannot take a typed
+  ## refusal for acceptance.
+  doAssert refusal or r.refused.isNone, "refused: " & $r.refused.get
+  r
+
+func isAccepted(r: RcResult): bool =
+  ## [re-pin P4a] The call succeeded and its response holds the result arm.
+  r.code == ecOk and r.refused.isNone
 
 proc copyBytes(p: ptr UncheckedArray[uint8], n: csize_t): seq[byte] =
   result = newSeq[byte](int(n))
@@ -71,6 +116,37 @@ proc rcCall(
   if buf != nil:
     result.response = copyBytes(buf, len)
     rc.vtable.releaseResponse(rc, buf, len)
+  if result.code == ecOk:
+    result.refused = refusalIn(name, result.response)
+
+proc accepted[T](r: RcResult, _: typedesc[T]): auto =
+  ## [re-pin P4a] The result arm of a response that has an error arm
+  ## (`kit/rc_arms`); a failed call or a refusal fails here.
+  doAssert r.code == ecOk, $r.code & " " & r.message
+  let x = T.decode(r.response).tryGet
+  doAssert x.refusal.isNone, "refused: " & $x.refusal.get
+  x.accepted.get
+
+proc refusal[T](r: RcResult, _: typedesc[T]): LogosNSRuntimeControlError =
+  ## [re-pin P4a] The error arm of a successful call's response.
+  doAssert r.code == ecOk, $r.code & " " & r.message
+  let x = T.decode(r.response).tryGet
+  doAssert x.refusal.isSome, "the response holds its result arm"
+  x.refusal.get
+
+func stale(e: LogosNSRuntimeControlError): Opt[uint64] =
+  ## The current revision of a `stale-revision`; none for another code.
+  if e.code.kind == LogosNSRuntimeControlErrorCodeKind.Stale_revision:
+    Opt.some(e.current_revision.get(0))
+  else:
+    Opt.none(uint64)
+
+func rejected(r: RcResult): bool =
+  ## [CFG-0156; RUNTIME l.1821] A successful call whose error arm is
+  ## `configuration-rejected`, without `current_revision` or detail.
+  r.code == ecOk and r.detail.len == 0 and r.refused.isSome and
+    r.refused.get.code.kind == LogosNSRuntimeControlErrorCodeKind.Configuration_rejected and
+    r.refused.get.current_revision.isNone
 
 proc clientName(): cstring {.cdecl.} =
   "client_module"
@@ -200,6 +276,7 @@ proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineCo
     result.routing = @[
       RoutingRule(callee: "meter_module", mode: rmLocalTransport),
       RoutingRule(callee: "sensor_module", mode: rmLocalTransport),
+      RoutingRule(callee: RelayModule, mode: rmLocalTransport),
     ]
     result.endpointDir = parityBase / ("e" & $engines)
   when declared(caParity):
@@ -250,6 +327,11 @@ proc meter(): ModuleRecord =
     binding: "meter",
     primaryContract: Opt.some(meterRoot),
   )
+
+proc relayStatic(): StaticRegistration =
+  ## The relay module's static table, for `config(extra = ...)`; its record
+  ## is `relayRecord`.
+  checkStaticRegistration("relay", relayTable()).tryGet
 
 proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10 * Slow): bool =
   let until = getMonoTime() + initDuration(seconds = seconds)
@@ -405,11 +487,13 @@ proc renew(rc: ptr LogosRuntimeControlBinding, key, route: string): RcResult =
     encode(LogosNSRuntimeControlRenewRouteRequest(request_key: key, route: route)).tryGet,
   )
 
-proc close(rc: ptr LogosRuntimeControlBinding, route: string): RcResult =
+proc close(
+    rc: ptr LogosRuntimeControlBinding, route: string, reason = Opt.none(string)
+): RcResult =
   rcCall(
     rc,
     "close_route",
-    encode(LogosNSRuntimeControlCloseRouteRequest(route: route)).tryGet,
+    encode(LogosNSRuntimeControlCloseRouteRequest(route: route, reason: reason)).tryGet,
   )
 
 proc providerAddress(
@@ -494,6 +578,16 @@ proc handle(rc: ptr LogosRuntimeControlBinding, route: string): LogosRouteHandle
   check code == ecOk
   h
 
+proc relayHandle(
+    rc: ptr LogosRuntimeControlBinding, key: string, root: Digest
+): (ErrorCode, LogosRouteHandle) =
+  ## A route to a relay provider that selects `root`, materialized with that
+  ## contract's own construction input; the first failure's code otherwise.
+  let made = rc.establish(key, root)
+  if made.code != ecOk:
+    return (made.code, LogosRouteHandle())
+  rc.materialize(made.routesOf.routes[0].route, root, relaySchema(root))
+
 proc raw(h: var LogosRouteHandle, name: string, params: openArray[byte]): RcResult =
   var buf: ptr UncheckedArray[uint8]
   var len: csize_t
@@ -524,6 +618,7 @@ proc lifecycle(
     instance = Opt.none(string),
     provider = Opt.none(LogosNSRuntimeModuleProviderAddress),
     expected = Opt.none(uint64),
+    refusal = false,
 ): RcResult =
   let bytes =
     if name == "start_module":
@@ -544,7 +639,7 @@ proc lifecycle(
           expected_execution_revision: expected,
         )
       ).tryGet
-  rcCall(rc, name, bytes)
+  rcCall(rc, name, bytes).accepting(refusal)
 
 proc readiness(
     rc: ptr LogosRuntimeControlBinding,
@@ -561,6 +656,33 @@ proc readiness(
       )
     ).tryGet,
   )
+
+proc unloadedNow(
+    rc: ptr LogosRuntimeControlBinding, module: string, instance: Opt[string]
+): bool =
+  ## [SPEC RUNTIME l.3556] Completion of a stop is reported through
+  ## `get_readiness` (and `module_state_changed_event`).
+  let r = rc.readiness(module, instance)
+  if r.code != ecOk:
+    return false
+  let v = LogosNSRuntimeControlGetReadinessResponse.decode(r.response)
+  v.isOk and v.get.state.kind == LogosNSRuntimeControlStateKind.Unloaded
+
+proc stoppedVia(
+    rc: ptr LogosRuntimeControlBinding,
+    module: string,
+    instance = Opt.none(string),
+    expected = Opt.none(uint64),
+): RcResult =
+  ## [SPEC RUNTIME l.3551-3556; re-pin P4b] `stop_module` answers once the
+  ## stop is accepted (`stopping` or `unloaded`); this waits for `unloaded`
+  ## through `get_readiness` and returns the stop's own answer.
+  result = rc.lifecycle("stop_module", module, instance, expected = expected)
+  if result.code == ecOk and result.refused.isNone:
+    check waitUntil(
+      proc(): bool =
+        rc.unloadedNow(module, instance)
+    )
 
 type EndSeen = object
   count: Atomic[int]

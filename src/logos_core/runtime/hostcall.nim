@@ -12,8 +12,9 @@
 ##    marked-payload refusal, readiness) and sends the verdict
 ##    (`admit_verdict`).
 ## 3. A refused call is answered by the host, which first checks the params
-##    of a NOT_READY one (G171). An admitted one is checked, run and answered
-##    there: the provider's result checked as on the direct path (G172), its
+##    of a NOT_READY one (RUNTIME l.1828, l.1832). An admitted one is checked, run and answered
+##    there: the provider's result checked as on the direct path (INTERFACE
+##    l.3306-3311), its
 ##    response checked against the schema, its Response committed by the
 ##    host's loop (K38 interim, G273).
 ## 4. While it runs, the call worker answers the host's scoped publication
@@ -138,11 +139,16 @@ proc runHosted*(
     of K.lcn_Carrier_scoped_admit:
       let p = m.arm_lcn_Carrier_scoped_admit
       var r = LcnCarrierScopedResult(id: p.id)
-      let tag = scopedAdmit(addr inv, p.event)
-      if tag.isErr:
-        r.failure = Opt.some(toCarrier(tag.error))
+      # [SPEC INTERFACE §1.5; I106] The host's name, checked as given.
+      let name = checkEventName(p.event)
+      if name.isErr:
+        r.failure = Opt.some(toCarrier(name.error))
       else:
-        r.tag = tag.get
+        let tag = scopedAdmit(addr inv, name.get)
+        if tag.isErr:
+          r.failure = Opt.some(toCarrier(tag.error))
+        else:
+          r.tag = tag.get
       discard h.sendMsg(toMessage(r))
     of K.lcn_Carrier_scoped_done:
       let p = m.arm_lcn_Carrier_scoped_done

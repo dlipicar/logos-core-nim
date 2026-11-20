@@ -34,7 +34,8 @@ proc armed*[T](v: T): T =
 var
   rcVtable* = armed(
     LogosRuntimeControlVtable(
-      abiVersion: 2, structSize: csize_t(sizeof(LogosRuntimeControlVtable))
+      abiVersion: RuntimeControlVtableAbiVersion,
+      structSize: csize_t(sizeof(LogosRuntimeControlVtable)),
     )
   )
   rcState*: byte
@@ -55,16 +56,20 @@ proc record*(
     withLock publishedLock:
       published.add(($name, bytes, how))
 
-var publishState*: byte
+var
+  publishState*: byte
+  publishResult*: Atomic[int32]
+    ## what the publish callback returns (LOGOS_OK unless a test sets it)
 
 proc publishOp*(
     userData: pointer,
     eventName: cstring,
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
-) {.cdecl, gcsafe, raises: [].} =
+): CErrorCode {.cdecl, gcsafe, raises: [].} =
   doAssert userData == addr publishState
   record(eventName, cborData, cborDataLen, "plain")
+  CErrorCode(publishResult.load)
 
 # The invocation context a Runtime makes current during a provider entry (§2.9.3).
 

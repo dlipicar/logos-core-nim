@@ -18,16 +18,18 @@
 ##   ordering thread that waits while the loop's output budget is full.
 ## - **Calls.** A Request's params stay here (`HostInv`). A refused one is
 ##   answered here, its params checked first when the refusal is NOT_READY
-##   (G171). An admitted one runs on a dispatch worker: its params are checked
+##   (RUNTIME l.1828, l.1832). An admitted one runs on a dispatch worker: its params are checked
 ##   under the session's selected contract (`selected.nim`, with the
 ##   Runtime's own `callcheck`), the provider runs with an invocation context
 ##   made from the verdict (its caller is the consumer the Runtime names), its
-##   status is checked as on the direct path (G172) and its response against
+##   status is checked as on the direct path (INTERFACE l.3306-3311) and its response against
 ##   the schema, and the loop commits the Response. `logos.schema` is answered
 ##   by the loop from the selected contract once its request checks.
 ## - **Commit (K38 interim, G273).** Each Request has one Response: the
 ##   first of the host's own and the Runtime's (`io_respond`) to reach the
-##   loop; a Cancel the loop committed, or a closed session, ends it too.
+##   loop; a Cancel the loop committed, a closed session, or an order that
+##   terminates the session (`io_terminate`, P5 Q3 (a)) ends it too, and a
+##   CANCELLED the Runtime's cancel caused is not committed (P5 d4).
 ##   `call_ended` reports whether the host's success was committed, with the
 ##   request and response commitments only where the admission asks to retain
 ##   them (G274; IFC-0581). A deferred call (INTERFACE §2.9.2) reports once
@@ -44,7 +46,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[atomics, locks, os, strutils]
+import std/[atomics, locks, os]
 import results
 import logos_sdk/cbor
 import logos_sdk/abi/[checks, cstatus, types]
@@ -53,7 +55,7 @@ import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
 import ../transport/io/[loop, sock]
-import ../runtime/[carrier, entryframe, hostio, native]
+import ../runtime/[carrier, entryframe, hostio, native, servedroots]
 import ./[selected, state]
 
 const
@@ -235,6 +237,16 @@ proc respond(
   ## [DECISIONS G276] The outcome moves into the command; what the loop did not
   ## take, and `r`, are wiped.
   let ok = r.isOk
+  if not ok and r.error.code == ecCancelled and d.cancelled.load:
+    # [SPEC RUNTIME l.1271; INTERFACE l.2024; P5 d4] The Runtime's cancel of a
+    # call whose Request is still open is its route's or consumer's end (the
+    # loop commits a consumer's Cancel itself): a CANCELLED that end caused
+    # is not the caller's, so nothing is committed and the session's end
+    # fails the Request TRANSPORT_ERROR at its consumer.
+    withLock sv.lock:
+      d.answered = true
+    wipe(r)
+    return
   var cmd = IoCommand(
     conn: d.conn,
     kind: IoCommandKind.cmdRespond,
@@ -461,8 +473,8 @@ proc leave(d: ptr HostInv) =
 
 proc runSync(d: ptr HostInv) =
   ## [SPEC INTERFACE l.2013-2017] `_MODULE_dispatch` with the context current;
-  ## the status checked as on the direct path (G172), the buffer copied and
-  ## freed at once.
+  ## the status checked as on the direct path (l.3306-3311, in this process),
+  ## the buffer copied and freed at once.
   var buf: ptr UncheckedArray[uint8] = nil
   var len: csize_t = 0
   var f = Frame(context: addr d.context, access: sv.access)
@@ -474,7 +486,8 @@ proc runSync(d: ptr HostInv) =
   # [DECISIONS G276] The provider's text and bytes are copied once, then the
   # copies are wiped where they end (`respond`); its buffer is its own to wipe.
   var outcome = block:
-    var checked = checkOutcome(r, bufferShape(buf, len))
+    var checked =
+      checkOutcome(r, bufferShape(buf, len)).providerChecked(d.cancelled.load)
     if checked.isErr:
       if transfersBuffer(r, buf):
         sv.free(sv.module, buf)
@@ -519,7 +532,10 @@ proc completeOp(
   if not first:
     releaseOwner(owner)
     return
-  var checked = checkOutcome(res, completionShape(response, len, owner))
+  # [SPEC INTERFACE l.3306-3311] the invocation's own cancellation flag
+  var checked = checkOutcome(res, completionShape(response, len, owner)).providerChecked(
+      d.cancelled.load
+    )
   var outcome =
     if checked.isErr:
       if ownerValid(owner):
@@ -716,8 +732,8 @@ proc verdict(v: LcnCarrierAdmitVerdict) =
     if d == nil:
       return # its session ended, or the Runtime answered it
     if not answered:
-      # [G171 interim (TF-18)] A NOT_READY refusal is reported only once the
-      # params validate.
+      # [SPEC RUNTIME l.1828, l.1832] A NOT_READY refusal is reported only once
+      # the params validate.
       var params = d.paramsOf
       let f = notReadyAfter(
         selectedFor(root), $d.methodName, params, toInvocation(v.failure.get)
@@ -756,6 +772,20 @@ proc cancelCall(call: uint64) =
       p = p.next
   if hook != nil:
     post(Job(inv: cast[int](hook), hook: true))
+
+proc endedByTerminate(conn: uint64) =
+  ## Ordering thread: [SPEC RUNTIME l.1212, l.1271; TRANSPORT l.979; P5 Q3 (a)]
+  ## the session's termination is ordered, after which no Response reaches its
+  ## consumer, who fails each admitted Request TRANSPORT_ERROR at the close;
+  ## the Runtime answers none of them. Each admitted call on it is ended
+  ## here, so a provider that returns later commits nothing and its call is
+  ## not recorded as a success.
+  withLock sv.lock:
+    var p = sv.calls
+    while p != nil:
+      if p.conn == conn and p.admitted:
+        p.answered = true
+      p = p.next
 
 proc runtimeAnswer(cmd: var IoCommand) =
   ## Ordering thread: [K38 interim] the Runtime's failure for a Request, which
@@ -811,6 +841,14 @@ proc submitLoop() =
     if cmd.kind == IoCommandKind.cmdRespond:
       runtimeAnswer(cmd)
       continue
+    if cmd.kind == IoCommandKind.cmdTerminate and cmd.termPhase != tpBegin:
+      endedByTerminate(cmd.conn)
+    if cmd.kind == IoCommandKind.cmdAdmit and cmd.verdict.kind == avEstablished:
+      # [G394; synthesis §3] A session on an earlier contract takes its input
+      # to the loop, which accepts the set at the first and keeps it
+      # (`callee.boundaryFor`); the Runtime's verdict never carries one to a
+      # host.
+      cmd.verdict.earlier = earlierInputOf(cmd.verdict.binding.contract)
     while true:
       let r = sv.loop.trySubmit(cmd)
       if r != sbBusy:
@@ -906,20 +944,12 @@ proc serveEndpoint*(
   let config = ?transportOf(transport)
   if runtimeId.len == 0 or runtimeId.len > TextCapacity:
     return err("the Runtime id is not valid")
-  let c = b.contracts
-  var roots: seq[Digest]
-  if c.primary.isSome:
-    roots.add(c.primary.get.root)
-  for i in c.interfaces:
-    roots.add(i.root)
-  if roots.len == 0:
-    return err("the provider has no contract")
-  let schema = schemaResponse(c, roots[0]).valueOr:
-    return err("the provider's schema response cannot be built: " & error)
-  let system = module.startsWith("logos_")
-  let input = encodeCbor(schema)
-  let served = ?acceptSchemaResponse(input, roots[0], AcceptOptions(system: system))
-  ?keepContracts(c, roots, served, depth)
+  # [synthesis Q4; G394] The roots and the primary input the Runtime's own
+  # endpoint takes (`servedroots`): an earlier contract is served, and its
+  # input goes to the loop with each session that selects it (`submitLoop`).
+  let served = ?servedContracts(b.contracts)
+  # [DECISIONS I106] The contracts are kept already, before `_MODULE_init`
+  # (`selected.keepProvider`).
   sv = createShared(Served)
   initLock(sv.lock)
   initCond(sv.cond)
@@ -938,8 +968,8 @@ proc serveEndpoint*(
     kind: IoCommandKind.cmdServe,
     endpoint: HostEndpoint,
     listener: listener,
-    served: CalleeEndpoint(endpoint: path, provider: module, contracts: roots),
-    contract: ContractInput(root: roots[0], schema: input, system: system),
+    served: CalleeEndpoint(endpoint: path, provider: module, contracts: served.roots),
+    contract: served.primary,
   )
   if sv.loop.trySubmit(cmd) != sbOk:
     return err("the transport loop did not take the listener")

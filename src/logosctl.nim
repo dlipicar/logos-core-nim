@@ -50,7 +50,7 @@ when defined(posix):
   import logos_sdk/cbor
   import ./logos_core/durable
   import logos_sdk/iface/outcome
-  import logos_sdk/kit/rc_types, ./logos_core/runtime/stateadmin
+  import logos_sdk/kit/[rc_arms, rc_types], ./logos_core/runtime/stateadmin
   import
     ./logos_core/daemon/[
       compose, ctlwire, evexport, evkey, evstore, render, session, sessioninit,
@@ -118,6 +118,7 @@ offline (the session's files; writers hold its lock):
       code: string
       message: string
       requestKey: string
+      result: JsonNode ## the response, for a typed refusal (`--json`)
 
     Done = object
       deployment: string
@@ -176,7 +177,11 @@ offline (the session's files; writers hold its lock):
     if path.endsWith(".diag"):
       let v = parseDiag(text).valueOr:
         return err(fail(ExitUsage, path & ": " & error))
-      return ok(encodeCbor(v))
+      # The notation can spell what the wire refuses: held to the `.cbor` rule.
+      let bytes = encodeCbor(v)
+      discard decodeCbor(bytes).valueOr:
+        return err(fail(ExitUsage, path & " is not deterministic CBOR: " & error.msg))
+      return ok(bytes)
     err(usage(path & ": a value file ends in .cbor or .diag"))
 
   proc writeOut(path: string, data: openArray[byte]): Result[void, Fail] =
@@ -321,6 +326,31 @@ offline (the session's files; writers hold its lock):
     let v = Resp.decode(bytes).valueOr:
       return err(fail(ExitRc, "the response does not decode: " & error, $ecModule))
     ok((v, bytes))
+
+  proc refusedFail(e: LogosNSRuntimeControlError, bytes: seq[byte]): Fail =
+    ## [SPEC RUNTIME l.1818-1822; re-pin P4a] A response's error arm: exit 4,
+    ## as any Runtime Control refusal, with the code as the schema spells it
+    ## [IMPL; no exit code is defined for typed errors].
+    result = fail(
+      ExitRc,
+      if e.current_revision.isSome:
+        "current revision " & $e.current_revision.get
+      else:
+        "the Runtime refused the request",
+      e.codeText,
+    )
+    result.result = jsonOfBytes(bytes)
+
+  proc callArm[Req, Resp](
+      cl: var Client, m: LcnCtlMethodKind, req: Req, resp: typedesc[Resp]
+  ): Result[(Resp, seq[byte]), Fail] =
+    ## `callTyped` for a response with an error arm (`kit/rc_arms`): the
+    ## error arm is a failure, so the result arm is there.
+    let (x, bytes) = ?cl.callTyped(m, req, resp)
+    let e = x.refusal
+    if e.isSome:
+      return err(refusedFail(e.get, bytes))
+    ok((x, bytes))
 
   proc info(cl: var Client): Result[LcnCtlDaemonInfo, Fail] =
     let r = cl.exchange(infoMessage()).valueOr:
@@ -475,8 +505,13 @@ offline (the session's files; writers hold its lock):
         var f = error
         f.requestKey = key
         return err(f)
-      let x = LogosNSRuntimeControlCreateModuleResponse.decode(bytes).valueOr:
+      let made = LogosNSRuntimeControlCreateModuleResponse.decode(bytes).valueOr:
         return err(fail(ExitRc, "the response does not decode: " & error, $ecModule))
+      if made.refusal.isSome:
+        var f = refusedFail(made.refusal.get, bytes)
+        f.requestKey = key
+        return err(f)
+      let x = made.accepted.get
       var d = cl.done(
         "module create",
         jsonOfBytes(bytes),
@@ -491,9 +526,10 @@ offline (the session's files; writers hold its lock):
         let req = LogosNSRuntimeControlStartModuleRequest(
           module: module, instance: c.opt("instance"), expected_execution_revision: rev
         )
-        let (x, bytes) = ?cl.callTyped(
+        let (r, bytes) = ?cl.callArm(
           LcnCtlMethodKind.Start_module, req, LogosNSRuntimeControlStartModuleResponse
         )
+        let x = r.accepted.get
         ok(
           cl.done(
             "module start",
@@ -505,9 +541,10 @@ offline (the session's files; writers hold its lock):
         let req = LogosNSRuntimeControlStopModuleRequest(
           module: module, instance: c.opt("instance"), expected_execution_revision: rev
         )
-        let (x, bytes) = ?cl.callTyped(
+        let (r, bytes) = ?cl.callArm(
           LcnCtlMethodKind.Stop_module, req, LogosNSRuntimeControlStopModuleResponse
         )
+        let x = r.accepted.get
         ok(
           cl.done(
             "module stop",
@@ -532,10 +569,11 @@ offline (the session's files; writers hold its lock):
         let req = LogosNSRuntimeControlRecoverModuleRequest(
           instance: instance, module: rec.module, expected_execution_revision: rev.get
         )
-        let (x, bytes) = ?cl.callTyped(
+        let (r, bytes) = ?cl.callArm(
           LcnCtlMethodKind.Recover_module, req,
           LogosNSRuntimeControlRecoverModuleResponse,
         )
+        let x = r.accepted.get
         ok(
           cl.done(
             "module recover", jsonOfBytes(bytes), x.instance & ": " & stateText(x.state)
@@ -546,7 +584,7 @@ offline (the session's files; writers hold its lock):
         let req = LogosNSRuntimeControlRetireModuleRequest(
           target: target, expected_execution_revision: rev.get
         )
-        let (_, bytes) = ?cl.callTyped(
+        let (_, bytes) = ?cl.callArm(
           LcnCtlMethodKind.Retire_module, req, LogosNSRuntimeControlRetireModuleResponse
         )
         # [BCP l.395] Retirement keeps the state.
@@ -676,10 +714,11 @@ offline (the session's files; writers hold its lock):
             target: t, expected_state_revision: rev, expected_schema_commitment: schema
           ),
         )
-      let (x, bytes) = ?cl.callTyped(
+      let (r, bytes) = ?cl.callArm(
         LcnCtlMethodKind.Update_configuration, req,
         LogosNSRuntimeControlUpdateConfigurationResponse,
       )
+      let x = r.accepted.get
       ok(
         cl.done(
           "config " & sub,
@@ -696,13 +735,14 @@ offline (the session's files; writers hold its lock):
           LogosNSRuntimeControlGetConfigurationSummaryResponse,
         )
         rev = Opt.some(s.state.state_revision)
-      let (x, bytes) = ?cl.callTyped(
+      let (r, bytes) = ?cl.callArm(
         LcnCtlMethodKind.Apply_configuration,
         LogosNSRuntimeControlApplyConfigurationRequest(
           target: t, expected_state_revision: rev.get
         ),
         LogosNSRuntimeControlApplyConfigurationResponse,
       )
+      let x = r.accepted.get
       ok(
         cl.done(
           "config apply",
@@ -1401,7 +1441,10 @@ offline (the session's files; writers hold its lock):
 
   proc emitFail(c: Cli, command, deployment: string, f: Fail) =
     if c.json:
-      show($envelope(deployment, command, false, f.code, f.message, f.requestKey))
+      show(
+        $envelope(deployment, command, false, f.code, f.message, f.requestKey)
+          .withResult(f.result)
+      )
     else:
       if deployment == "non-production":
         say("NON-PRODUCTION deployment: the development switch is on")

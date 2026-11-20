@@ -14,12 +14,14 @@
 import std/[atomics, monotimes, os, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
+import ../src/logos_core/loader/contract
 import logos_sdk/abi/types
 import logos_sdk/iface/[accept, names, outcome]
 import logos_sdk/crypto/blake3
 import ../src/logos_core/package/manifest
 import logos_sdk/pins
 import logos_sdk/testing/[kitbuild, kitruntime], ./support/[slowdown, withoutloader]
+import ./support/relayfixture
 import logos_sdk/testing/fixtures/meter_impl
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "engine" / kitVariant
@@ -101,6 +103,8 @@ proc config(policy = allowAll()): EngineConfig =
   result.statics = @[
     checkStaticRegistration("gated", gatedTable()).tryGet,
     checkStaticRegistration("meter", meterModuleStaticSymbols()).tryGet,
+    checkStaticRegistration("relay", relayTable()).tryGet,
+    checkStaticRegistration("relaybad", relayBadTable()).tryGet,
   ]
 
 proc meterRoot(): Digest =
@@ -142,6 +146,25 @@ proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10): bool =
 proc failureOf(v: InstanceView): string =
   if v.failure.isSome: v.failure.get.classification else: ""
 
+func failureRuleHolds(v: InstanceView): bool =
+  ## [SPEC RUNTIME l.3611, l.3613; P5a §0.2 item 4] `error` has a failure;
+  ## `loaded` and `ready` have none; `stopping` has none, the classification
+  ## it kept from `error`, or `cleanup-timeout`; `unloaded` has none or the
+  ## cause that prevents its intent (an enforcement outcome).
+  case v.state
+  of msError:
+    v.failure.isSome
+  of msLoaded, msReady:
+    v.failure.isNone
+  of msStopping:
+    true
+  of msUnloaded:
+    v.failure.isNone or
+      v.failure.get.kind in {
+        fkAuthorityDenied, fkAuthorityEvaluationFailed, fkAuthorityExpired,
+        fkAuthorityRevoked, fkPermissionEnforcementFailed,
+      }
+
 proc statesSince(e: Engine, instance: string, serial: uint64): seq[ModuleState] =
   ## The states `instance` committed after the change `serial`, in order.
   for c in e.changes():
@@ -176,7 +199,7 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
   setup:
     reset()
 
-  test "[RUN-0128] [RUN-0261] [RUN-0262] [RUN-0267] [RUN-0268] [RUN-0281] [RUN-0287] [RUN-0289] [RUN-0845] a malformed record creates nothing":
+  test "[RUN-0128] [RUN-0261] [RUN-0262] [RUN-0267] [RUN-0281] [RUN-0287] [RUN-0289] [RUN-0845] [RUN-1105] [TXT-0552] [G394] a malformed record creates nothing":
     let e = newEngine(config())
     let d = default(Digest)
     var bad = @[
@@ -209,6 +232,39 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
     for r in bad:
       let x = e.create(r)
       check x.isErr and x.error.code == ecInvalidParams
+    # [RUN-1105; G394 r10, r11] Each refused for its own reason: a root in
+    # both `implements` and `extends`, two requirements naming one contract
+    # (TXT-0552), and `extends` with no contract the module provides.
+    var other, earlier: Digest
+    other[0] = 1
+    earlier[0] = 2
+    var across = gated()
+    across.implements = @[d]
+    across.extends = @[other, d]
+    var required = gated()
+    required.requires = @[
+      ProviderRequirement(contract: d, cardinality: cardSingle),
+      ProviderRequirement(contract: d, cardinality: cardAllVisible),
+    ]
+    var bare = gated()
+    bare.extends = @[d]
+    for (r, why) in [
+      (across, "an implemented or extended schema commitment repeats"),
+      (required, "two requires entries name one contract"),
+      (bare, "extends needs a primary_contract or implements"),
+    ]:
+      let x = e.create(r)
+      check x.isErr and x.error.code == ecInvalidParams and x.error.message == why
+    # The same sets, each well formed, are accepted.
+    var fine = gated()
+    fine.primaryContract = Opt.some(other)
+    fine.implements = @[d]
+    fine.extends = @[earlier]
+    fine.requires = @[
+      ProviderRequirement(contract: d, cardinality: cardSingle),
+      ProviderRequirement(contract: other, cardinality: cardAllVisible),
+    ]
+    check checkRecord(fine).isOk
     check e.list().withoutLoader.len == 0
     e.finish()
 
@@ -230,7 +286,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
   setup:
     reset()
 
-  test "[RUN-0667] [RUN-0629] [RUN-0630] [RUN-0355] [RUN-0669] start makes the instance ready; a repeated start changes nothing":
+  test "[RUN-0667] [RUN-0629] [RUN-1183] [RUN-0355] [RUN-0669] [TXT-0279] start makes the instance ready; a repeated start changes nothing":
     let e = newEngine(config())
     let c = e.create(gated(), "g").tryGet
     let v = e.start("g").tryGet
@@ -245,7 +301,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     e.finish()
     check live.load == 0
 
-  test "[RUN-0357] [RUN-0356] [RUN-1030] stop destroys the context once and cancels intent; a later start makes a new context":
+  test "[RUN-0357] [RUN-0356] [RUN-1030] [TXT-0282] [TXT-0284] stop destroys the context once and cancels intent; a later start makes a new context":
     let e = newEngine(config())
     discard e.create(gated(), "g").tryGet
     discard e.start("g").tryGet
@@ -277,7 +333,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     check e.view("g").tryGet.state == msReady
     e.finish()
 
-  test "[RUN-0358] [RUN-0796] a stop ordered after an incomplete start keeps it from becoming ready":
+  test "[RUN-0358] [RUN-0796] [TXT-0281] [RUN-1092] [TXT-0290] a stop ordered after an incomplete start keeps it from becoming ready":
     var cfg = config()
     cfg.stopDeadline = initDuration(milliseconds = 100)
     let e = newEngine(cfg)
@@ -290,23 +346,20 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
       proc(): bool =
         inits.load == 1
     )
-    # [G61] `_MODULE_init` outlives the stop deadline: the cleanup failure is
-    # recorded and nothing is interrupted.
+    # [SPEC RUNTIME l.575] `_MODULE_init` outlives the stop deadline: still
+    # `stopping`, `cleanup-timeout` reported, nothing interrupted.
     let s = e.stop("g").tryGet
-    check s.state == msError and s.failureOf == "cleanup-timeout"
+    check s.state == msStopping and s.failureOf == "cleanup-timeout"
     check s.execution.intent == inStopped
     joinThread(t)
     check started.load == ord(msStopping)
     initGate.store(false)
+    # [SPEC RUNTIME l.576] The pending cleanup completes the stop.
     check waitUntil(
       proc(): bool =
-        destroys.load == 1 and live.load == 0
+        destroys.load == 1 and live.load == 0 and e.view("g").tryGet.state == msUnloaded
     )
-    # [SPEC RUNTIME l.611] The end of the cleanup does not leave `error`.
-    let after = e.view("g").tryGet
-    check after.state == msError and after.failureOf == "cleanup-timeout"
-    let again = e.stop("g").tryGet
-    check again.state == msUnloaded and again.failure.isNone
+    check e.view("g").tryGet.failure.isNone
     e.finish()
 
   test "[RUN-0359] a start ordered while the instance is stopping fails":
@@ -331,7 +384,7 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     check inits.load == 1
     e.finish()
 
-  test "[RUN-0791] [RUN-0792] [RUN-0793] [RUN-1056] [RUN-1072] [RUN-1073] a stop past its deadline records cleanup-timeout and releases nothing [IMPL-DECISION G61] [IMPL-DECISION G180] [IMPL-DECISION G227]":
+  test "[RUN-0791] [RUN-0792] [RUN-0793] [RUN-1056] [RUN-1072] [RUN-1073] [RUN-1092] [TXT-0290] a stop past its deadline stays stopping with cleanup-timeout, releases nothing, and completes when its cleanup does [IMPL-DECISION G180] [IMPL-DECISION G227]":
     var cfg = config()
     cfg.stopDeadline = initDuration(milliseconds = 100)
     let e = newEngine(cfg)
@@ -339,8 +392,10 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     discard e.start("g").tryGet
     let before = e.changes()[^1].serial
     destroyGate.store(true)
+    # [SPEC RUNTIME l.575] The stop answers at its deadline: `stopping`, with
+    # `cleanup-timeout` reported.
     let s = e.stop("g").tryGet
-    check s.state == msError and s.failureOf == "cleanup-timeout"
+    check s.state == msStopping and s.failureOf == "cleanup-timeout"
     check s.execution.intent == inStopped
     check live.load == 1 # destroy is still running; nothing was forced
     # While the cleanup is unresolved a start is NOT_READY and keeps the
@@ -349,58 +404,51 @@ suite "run.engine: start and stop (RUNTIME §3.4, §9.1, §9.3)":
     check r.isErr and r.error.code == ecNotReady
     check e.view("g").tryGet.execution.intent == inStopped
     destroyGate.store(false)
-    # [G227] The end of the cleanup moves the realization from `unknown` to
-    # `absent`: one more commit, still `error`. The Runtime thread makes it
-    # only after `_MODULE_destroy` returned and the release was answered, so
-    # the case waits for that commit, not for the destroy.
+    # [SPEC RUNTIME l.576] When the pending cleanup completes, the stop
+    # completes: `unloaded`, failure cleared. The Runtime thread commits it
+    # after `_MODULE_destroy` returned and the release was answered.
     check waitUntil(
       proc(): bool =
-        let s = e.statesSince("g", before)
-        s.len >= 3 and s[^2] == msError and s[^1] == msError
+        e.view("g").tryGet.state == msUnloaded
     )
     check destroys.load == 1 and live.load == 0
-    let states = e.statesSince("g", before)
-    check states.len >= 3 and states[^3] == msStopping and states[^2] == msError and
-      states[^1] == msError
-    # The end of the cleanup leaves the instance in `error` with its cause.
-    let v = e.view("g").tryGet
-    check v.state == msError and v.failureOf == "cleanup-timeout"
-    # A later stop finds nothing left to clean: `unloaded`, failure cleared.
-    let again = e.stop("g").tryGet
-    check again.state == msUnloaded and again.failure.isNone
+    # The stop's accept (intent `stopped`, state kept) comes first.
+    check e.statesSince("g", before) == @[msReady, msStopping, msStopping, msUnloaded]
+    check e.view("g").tryGet.failure.isNone
     # And a start is accepted again.
     check e.start("g").tryGet.state == msReady
     e.finish()
 
-  test "[RUN-0791] [RUN-0793] [IMPL-DECISION G180] a stop during the cleanup a deadline overran completes at its end":
+  test "[RUN-0791] [RUN-0793] [RUN-1092] [IMPL-DECISION G180] a stop ordered while stopping past its deadline joins it: no second destruction, and its end completes the stop":
     var cfg = config()
-    cfg.stopDeadline = initDuration(seconds = 1)
+    cfg.stopDeadline = initDuration(milliseconds = 100)
     let e = newEngine(cfg)
     discard e.create(gated(), "g").tryGet
     discard e.start("g").tryGet
     destroyGate.store(true)
     check e.stop("g").tryGet.failureOf == "cleanup-timeout"
-    # A new explicit stop starts no second destruction: it waits for the
-    # running one, and its completion makes the instance `unloaded` (l.612).
-    var t: Thread[(Engine, string)]
-    stopped.store(-2)
-    createThread(t, stopOn, (e, "g"))
+    # A new explicit stop is accepted while the instance is `stopping`: it
+    # starts no second destruction and reports the stop in progress.
+    let again = e.stop("g").tryGet
+    check again.state == msStopping and again.failureOf == "cleanup-timeout"
+    destroyGate.store(false)
     check waitUntil(
       proc(): bool =
-        e.view("g").tryGet.state == msStopping
+        e.view("g").tryGet.state == msUnloaded
     )
-    destroyGate.store(false)
-    joinThread(t)
-    check stopped.load == ord(msUnloaded)
     check destroys.load == 1
     check e.view("g").tryGet.failure.isNone
     e.finish()
 
-  test "[RUN-0352] [RUN-0353] an expected execution revision is compared with acceptance":
+  test "[RUN-0352] [RUN-0353] an expected execution revision is compared with acceptance: a stale one is `stale-revision` with the current revision":
     let e = newEngine(config())
     let c = e.create(gated(), "g").tryGet
     let stale = e.start("g", expectedRevision = Opt.some(c.execution.revision + 7))
-    check stale.isErr and stale.error.code == ecInvalidParams
+    check stale.isErr and stale.error.isTyped
+    check stale.error.typed.get ==
+      TypedError(
+        code: recStaleRevision, currentRevision: Opt.some(c.execution.revision)
+      )
     check e.view("g").tryGet.execution == c.execution and inits.load == 0
     check e.start("g", expectedRevision = Opt.some(c.execution.revision)).tryGet.state ==
       msReady
@@ -410,7 +458,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
   setup:
     reset()
 
-  test "[RUN-0104] [RUN-0105] [RUN-0106] [RUN-0114] [RUN-0134] [RUN-0265] [RUN-0266] [RUN-0288] [RUN-0795] [PKG-0288] the call surface is compared with the expected contracts":
+  test "[RUN-0104] [RUN-0105] [RUN-0106] [RUN-0114] [RUN-0134] [RUN-0265] [RUN-0266] [RUN-0288] [RUN-0795] [PKG-0288] [TXT-0549] the call surface is compared with the expected contracts":
     let e = newEngine(config())
     let root = meterRoot()
     var wrong = root
@@ -427,6 +475,21 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check not w.provider
     discard e.create(meter(implements = @[root]), "iface").tryGet
     check e.start("iface").tryGet.failureOf == "initialization-failed"
+    # [RUN-0265; TXT-0549] R l.1343-1344: an `extends` claim the descriptor
+    # does not validate never makes a provider, whether the provider extends
+    # nothing or other contracts; one it validates does.
+    var claims = meter(Opt.some(root))
+    claims.extends = @[wrong]
+    discard e.create(claims, "claims").tryGet
+    let cl = e.start("claims").tryGet
+    check cl.state == msError and cl.failureOf == "initialization-failed"
+    check not cl.provider
+    discard
+      e.create(relayRecord(extends = @[relayA1Root, relayA2Root, wrong]), "more").tryGet
+    check e.start("more").tryGet.failureOf == "initialization-failed"
+    discard e.create(relayRecord(), "relay").tryGet
+    let rv = e.start("relay").tryGet
+    check rv.state == msReady and rv.provider
     # A consumer-only module cannot satisfy an expected contract; its context
     # is destroyed before the instance is reported as failed.
     var g = gated()
@@ -440,7 +503,87 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check live.load == 0
     e.finish()
 
-  test "[RUN-0296] [RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [RUN-0885] a failed start is classified (a Loader error is `loader-<code>`), cleaned, and leaves other instances running":
+  test "[IFC-0246] [RUN-0265] [G394] each contract set a record states equals the validated descriptor's":
+    # [SPEC INTERFACE l.1717] The primary root, and the implemented and
+    # extended roots as sets: a stated set that is smaller, larger or another
+    # fails the start. (An omitted set: the next test, G393.)
+    let e = newEngine(config())
+    var other: Digest
+    other[0] = 5
+    for (name, r) in [
+      ("fewer-extends", relayRecord(extends = @[relayA1Root])),
+      ("other-extends", relayRecord(extends = @[relayA1Root, other])),
+      ("more-implements", relayRecord(implements = @[pulseRoot, other])),
+      ("other-implements", relayRecord(implements = @[other])),
+      ("other-primary", relayRecord(primary = Opt.some(other))),
+      (
+        "earlier-as-primary",
+        relayRecord(primary = Opt.some(relayA1Root), extends = @[relayA2Root]),
+      ),
+    ]:
+      checkpoint name
+      discard e.create(r, name).tryGet
+      let v = e.start(name).tryGet
+      check v.state == msError and v.failureOf == "initialization-failed"
+      check not v.provider
+    # The same sets in another order are equal.
+    discard
+      e.create(relayRecord(extends = @[relayA2Root, relayA1Root]), "reordered").tryGet
+    check e.start("reordered").tryGet.state == msReady
+    e.finish()
+
+  test "[IFC-0246] [G393] once a record supplies a contract reference, an omitted primary is none and an omitted implements or extends is empty":
+    # [SPEC INTERFACE l.1717; RUNTIME l.1349; DECISIONS G393, the owner's
+    # answer to TF-62] Each omitted field is compared with the validated
+    # descriptor as none or empty, so a record that states fewer references
+    # than the descriptor declares is never bound; the full statement is.
+    let e = newEngine(config())
+    const
+      ifaces = "the implemented interface contracts differ from the expected ones"
+      extended = "the extended contracts differ from the expected ones"
+      noPrimary =
+        "the expected contracts name no primary contract, but the module has one"
+    for (name, r, why) in [
+      ("primary-only", relayRecord(implements = @[], extends = @[]), ifaces),
+      ("no-extends", relayRecord(extends = @[]), extended),
+      ("no-implements", relayRecord(implements = @[]), ifaces),
+      (
+        "implements-only",
+        relayRecord(primary = Opt.none(Digest), extends = @[]),
+        noPrimary,
+      ),
+      ("no-primary", relayRecord(primary = Opt.none(Digest)), noPrimary),
+    ]:
+      checkpoint name
+      discard e.create(r, name).tryGet
+      let v = e.start(name).tryGet
+      check v.state == msError and v.failureOf == "initialization-failed"
+      check not v.provider
+      check v.failure.isSome and why in v.failure.get.reason
+    discard e.create(relayRecord(), "full").tryGet
+    let full = e.start("full").tryGet
+    check full.state == msReady and full.provider
+    e.finish()
+
+  test "[RUN-1104] [TXT-0550] a provider whose descriptor's extends entry does not hold is never bound":
+    # [SPEC RUNTIME l.1345-1346] The relation is established from the
+    # descriptor's own entries before any provider path exists: an entry its
+    # contract does not extend fails the bind, whatever the record states.
+    let e = newEngine(config())
+    discard e.create(relayRecord(binding = "relaybad"), "bad").tryGet
+    let v = e.start("bad").tryGet
+    check v.state == msError and not v.provider
+    checkpoint $v.failure
+    check "does not extend" in v.failure.get.reason
+    discard
+      e.create(relayRecord(binding = "relaybad", extends = @[]), "unclaimed").tryGet
+    check e.start("unclaimed").tryGet.state == msError
+    # The descriptor whose entries hold is bound.
+    discard e.create(relayRecord(), "good").tryGet
+    check e.start("good").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-0296] [RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [RUN-0885] [TXT-0280] a failed start is classified (a Loader error is `loader-<code>`), cleaned, and leaves other instances running":
     let e = newEngine(config())
     discard e.create(meter(), "m").tryGet
     check e.start("m").tryGet.state == msReady
@@ -629,7 +772,7 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
   setup:
     reset()
 
-  test "[RUN-0140] [RUN-0141] [RUN-0683] a dependent starts only after its prerequisite is ready":
+  test "[RUN-0140] [RUN-0141] [RUN-0683] [RUN-1193] [TXT-0580] a dependent starts only after its prerequisite is ready; meanwhile it is `unloaded` with `prerequisite-unavailable`":
     var cfg = config()
     cfg.ordering = @[("a", "b")]
     let e = newEngine(cfg)
@@ -637,10 +780,95 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     discard e.create(gated(), "b").tryGet
     let early = e.start("b")
     check early.isErr and early.error.code == ecNotReady
-    check e.view("b").tryGet.execution.intent == inRequested
+    var v = e.view("b").tryGet
+    check v.execution.intent == inRequested
+    check v.state == msUnloaded and v.failureOf == "prerequisite-unavailable"
     check inits.load == 0
     check e.start("a").tryGet.state == msReady
+    # [IMPL-DECISION G359] It clears at the next accepted attempt (l.3611).
+    check e.view("b").tryGet.failureOf == "prerequisite-unavailable"
+    v = e.start("b").tryGet
+    check v.state == msReady and v.failure.isNone
+    e.finish()
+
+  test "[RUN-1193] [TXT-0580] a prerequisite in an accepted attempt makes a dependent wait without a failure (P5 reading C3)":
+    var cfg = config()
+    cfg.ordering = @[("a", "b")]
+    let e = newEngine(cfg)
+    discard e.create(gated(), "a").tryGet
+    discard e.create(gated(), "b").tryGet
+    initGate.store(true)
+    var t: Thread[(Engine, string)]
+    started.store(-2)
+    createThread(t, startOn, (e, "a"))
+    check waitUntil(
+      proc(): bool =
+        inits.load == 1
+    )
+    check e.view("a").tryGet.state == msLoaded
+    let early = e.start("b")
+    check early.isErr and early.error.code == ecNotReady
+    let v = e.view("b").tryGet
+    check v.state == msUnloaded and v.failure.isNone
+    check v.execution.intent == inRequested
+    initGate.store(false)
+    joinThread(t)
+    check started.load == ord(msReady)
     check e.start("b").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-1193] [TXT-0580] a prerequisite whose attempt fails marks the dependent waiting on it, though nobody asks (P5 Q2, the proactive pass)":
+    var cfg = config()
+    cfg.ordering = @[("a", "b")]
+    cfg.startupDeadline = initDuration(milliseconds = 150 * Slow)
+    let e = newEngine(cfg)
+    discard e.create(gated(), "a").tryGet
+    discard e.create(gated(), "b").tryGet
+    initGate.store(true)
+    var t: Thread[(Engine, string)]
+    started.store(-2)
+    createThread(t, startOn, (e, "a"))
+    check waitUntil(
+      proc(): bool =
+        inits.load == 1
+    )
+    check e.start("b").error.code == ecNotReady
+    check e.view("b").tryGet.failure.isNone # a is in its attempt
+    joinThread(t)
+    check started.load == ord(msError) # the startup deadline
+    let v = e.view("b").tryGet
+    check v.state == msUnloaded and v.execution.intent == inRequested
+    check v.failureOf == "prerequisite-unavailable"
+    initGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        destroys.load == 1
+    )
+    e.finish()
+
+  test "[RUN-1193] [TXT-0580] the proactive mark fills and never replaces another cause; a refusal reports the first cause in one order, prerequisites first (P5 §0.3 item 1)":
+    var cfg = config(
+      denying(AuthzRule(action: Opt.some(aaExecute), target: "c", outcome: azDeny))
+    )
+    cfg.ordering = @[("a", "c")]
+    let e = newEngine(cfg)
+    discard e.create(gated(), "a").tryGet
+    discard e.create(gated(), "c").tryGet
+    check e.start("a").tryGet.state == msReady
+    check e.start("c").error.code == ecNotAuthorised
+    check e.view("c").tryGet.failureOf == "authority-denied"
+    # a leaves `ready`: c keeps the denial the pass may not replace.
+    check e.stop("a").tryGet.state == msUnloaded
+    var v = e.view("c").tryGet
+    check v.state == msUnloaded and v.failureOf == "authority-denied"
+    # A recovery now meets the prerequisite first, the current cause (l.3611).
+    check e.recover("c", v.execution.revision).error.code == ecNotReady
+    v = e.view("c").tryGet
+    check v.failureOf == "prerequisite-unavailable"
+    # With a ready again, the denial is the cause once more.
+    check e.start("a").tryGet.state == msReady
+    check e.recover("c", v.execution.revision).error.code == ecNotAuthorised
+    check e.view("c").tryGet.failureOf == "authority-denied"
     e.finish()
 
   test "[RUN-0705] [RUN-0706] [RUN-0142] [RUN-1074] shutdown releases dependents first, keeps intent and closes admission":
@@ -656,6 +884,9 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     check destroys.load == 2 and live.load == 0
     for v in e.list():
       check v.state == msUnloaded and v.execution.intent == inRequested
+      # [P5 §0.3 item 1, rule 3] No `prerequisite-unavailable` once shutdown
+      # is accepted: b stopped first, then a.
+      check v.failure.isNone
     check e.start("a").error.code == ecNotReady
     check e.create(gated(), "c").error.code == ecNotReady
     var unloadedAt: seq[(string, uint64)]
@@ -667,7 +898,31 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     check unloadedAt[2][0] == LoaderInstanceId
     check e.close()
 
-  test "[RUN-1072] [RUN-1073] a destroy that outlives the shutdown grace is recorded, not forced":
+  test "[RUN-1198] [TXT-0311] the drain deadline starts at the first shutdown request; a later request joins it without restarting or extending it":
+    var cfg = config()
+    cfg.shutdownGrace = initDuration(milliseconds = 300 * Slow)
+    let e = newEngine(cfg)
+    discard e.create(gated(), "g").tryGet
+    discard e.start("g").tryGet
+    destroyGate.store(true)
+    check e.shutdownDeadlineForTests() == 0
+    e.requestShutdown()
+    let first = e.shutdownDeadlineForTests()
+    check first > 0
+    sleep(150)
+    e.requestShutdown()
+    check e.shutdownDeadlineForTests() == first
+    let r = e.awaitShutdown()
+    check r.isErr and r.error.code == ecModule
+    check e.shutdownDeadlineForTests() == first
+    destroyGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msUnloaded
+    )
+    check e.close()
+
+  test "[RUN-1072] [RUN-1073] [TXT-0312] a destroy that outlives the shutdown grace is recorded, not forced; it completes the stop when it returns":
     var cfg = config()
     cfg.shutdownGrace = initDuration(milliseconds = 150)
     let e = newEngine(cfg)
@@ -675,13 +930,19 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     discard e.start("g").tryGet
     destroyGate.store(true)
     e.shutdown()
+    # [SPEC RUNTIME l.3702] Still `stopping`, `cleanup-timeout` reported.
     let v = e.view("g").tryGet
-    check v.state == msError and v.failureOf == "cleanup-timeout"
+    check v.state == msStopping and v.failureOf == "cleanup-timeout"
     check live.load == 1 # the context was not touched
+    let r = e.awaitShutdown()
+    check r.isErr and r.error.code == ecModule
+    # [Q-r D4] Its forced cleanup is the host's: it shares this process.
+    check "forced cleanup of g is requested: the host process must end" in
+      r.error.message
     destroyGate.store(false)
     check waitUntil(
       proc(): bool =
-        destroys.load == 1
+        destroys.load == 1 and e.view("g").tryGet.state == msUnloaded
     )
     check e.close()
 
@@ -699,7 +960,140 @@ suite "run.engine: ordering, shutdown and observation (RUNTIME §3.7, §9.1, §1
     for c in cs:
       check (c.view.execution.intent == inRequested) ==
         c.view.execution.intentRevision.isSome
-      check (c.view.state == msError) == c.view.failure.isSome
+      check c.view.failureRuleHolds
+    e.finish()
+
+suite "run.engine: the lifecycle table (RUNTIME §3.4 l.515-528, §9.1 l.1730-1734)":
+  setup:
+    reset()
+
+  test "[RUN-1110] [TXT-0304] [TXT-0579] [TXT-0288] a stop of an error instance goes through stopping: with nothing to clean, in two state changes; with a release in flight, no second one, and the stop completes when that one does":
+    let e = newEngine(config())
+    # Nothing to clean: after the stop's accept (intent `stopped`, state kept),
+    # `stopping`, then `unloaded`.
+    mode.store(ord(gmFail))
+    discard e.create(gated(), "f").tryGet
+    check e.start("f").tryGet.state == msError
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("f")
+    )
+    var before = e.changes()[^1].serial
+    let s = e.stop("f").tryGet
+    check s.state == msUnloaded and s.failure.isNone
+    check e.statesSince("f", before) == @[msError, msStopping, msUnloaded]
+    # A release in flight: a failure report, its destroy held.
+    mode.store(ord(gmOk))
+    discard e.create(gated(), "g").tryGet
+    let v = e.start("g").tryGet
+    destroyGate.store(true)
+    check e.reportFailure("g", v.attempt, "gone").isOk
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msError
+    )
+    before = e.changes()[^1].serial
+    var t: Thread[(Engine, string)]
+    stopped.store(-2)
+    createThread(t, stopOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msStopping
+    )
+    # [SPEC RUNTIME l.3611] Its failure stays until the stop completes.
+    check e.view("g").tryGet.failureOf == "reported-by-module"
+    destroyGate.store(false)
+    joinThread(t)
+    check stopped.load == ord(msUnloaded)
+    check destroys.load == 1 # no second destruction
+    check e.statesSince("g", before) == @[msError, msStopping, msUnloaded]
+    check e.view("g").tryGet.failure.isNone
+    e.finish()
+
+  test "[RUN-1091] [TXT-0277] [TXT-0278] [TXT-0279] [TXT-0280] [TXT-0281] [TXT-0282] [TXT-0283] [TXT-0284] [TXT-0285] [TXT-0286] [TXT-0288] the lifecycle table: each of its ten transitions, and no other":
+    let e = newEngine(config())
+    discard e.create(gated(), "g").tryGet
+    let before = e.changes()[^1].serial
+    var t, u: Thread[(Engine, string)]
+    # unloaded -> loaded -> ready.
+    initGate.store(true)
+    started.store(-2)
+    createThread(t, startOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        inits.load == 1
+    )
+    initGate.store(false)
+    joinThread(t)
+    check started.load == ord(msReady)
+    # ready -> stopping -> unloaded.
+    destroyGate.store(true)
+    stopped.store(-2)
+    createThread(u, stopOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msStopping
+    )
+    destroyGate.store(false)
+    joinThread(u)
+    check stopped.load == ord(msUnloaded)
+    # unloaded -> loaded -> stopping -> unloaded: a stop before readiness.
+    initGate.store(true)
+    started.store(-2)
+    createThread(t, startOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        inits.load == 2
+    )
+    stopped.store(-2)
+    createThread(u, stopOn, (e, "g"))
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msStopping
+    )
+    initGate.store(false)
+    joinThread(t)
+    joinThread(u)
+    check stopped.load == ord(msUnloaded)
+    # unloaded -> loaded -> error: initialization fails.
+    mode.store(ord(gmFail))
+    check e.start("g").tryGet.state == msError
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("g")
+    )
+    # error -> loaded -> ready: a new accepted attempt.
+    mode.store(ord(gmOk))
+    let v = e.start("g").tryGet
+    check v.state == msReady
+    # ready -> error: an accepted failure report.
+    check e.reportFailure("g", v.attempt).isOk
+    check waitUntil(
+      proc(): bool =
+        e.view("g").tryGet.state == msError and not e.cleanupPending("g")
+    )
+    # error -> stopping -> unloaded.
+    check e.stop("g").tryGet.state == msUnloaded
+    # unloaded -> loaded -> ready -> stopping -> error: the cleanup fails.
+    check e.start("g").tryGet.state == msReady
+    check e.setLoaderFaultsForTests(LoaderFaults(failInvocation: {lmRelease})).isOk
+    let f = e.stop("g").tryGet
+    check f.state == msError and f.failureOf == "cleanup-failed"
+    var states = @[msUnloaded]
+    for s in e.statesSince("g", before):
+      if s != states[^1]:
+        states.add(s)
+    check states ==
+      @[
+        msUnloaded, msLoaded, msReady, msStopping, msUnloaded, msLoaded, msStopping,
+        msUnloaded, msLoaded, msError, msLoaded, msReady, msError, msStopping,
+        msUnloaded, msLoaded, msReady, msStopping, msError,
+      ]
+    # [RUN-1091] Every commit of every instance in this process so far was a
+    # row of the table (the test-hook check in `commit` and `accept`).
+    check lifecycleOffTableForTests() == 0
+    e.clearLoaderFaultsForTests()
+    e.confirmTerminationForTests()
     e.finish()
 
 # The host's bootstrap and shutdown -------------------------------------------------
@@ -732,7 +1126,7 @@ func deployment(): seq[BootstrapInstance] =
     BootstrapInstance(instance: "m", record: meter()),
   ]
 
-suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G190] [G60]":
+suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2, l.3939-3940) [G60]":
   setup:
     reset()
 
@@ -750,7 +1144,7 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     check e.bootstrap(deployment(), "o").error.code == ecNotReady
     e.finish()
 
-  test "[IMPL-DECISION G190] a failed bootstrap: NOT_AUTHORISED for a denial, MODULE_ERROR for an init failure or the startup deadline; nothing is stopped":
+  test "[RUN-1201] a failed bootstrap: NOT_AUTHORISED for a denial, MODULE_ERROR for an init failure, TIMEOUT for the startup deadline; nothing is stopped":
     var e = newEngine(
       config(
         denying(AuthzRule(action: Opt.some(aaExecute), target: "o", outcome: azDeny))
@@ -777,7 +1171,7 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     e = newEngine(cfg)
     initGate.store(true)
     r = e.bootstrap(deployment(), "o")
-    check r.error.code == ecModule and "startup-timeout" in r.error.message
+    check r.error.code == ecTimeout and "startup-timeout" in r.error.message
     # [RUN-0737] Here too the engine takes a start. Every start of this engine has
     # the short deadline, which a loaded machine can let pass (TSan in CI), so
     # the test does not ask for `ready`: only that the start ran.
@@ -785,7 +1179,40 @@ suite "run.engine: the host's bootstrap and shutdown (RUNTIME l.1640, §13.2) [G
     check m.isOk and (m.get.state == msReady or m.get.failureOf == "startup-timeout")
     e.finish()
 
-  test "[RUN-0759] [IMPL-DECISION G190] a shutdown accepted before ready gives CANCELLED, and it stays CANCELLED":
+  test "[RUN-1201] [RUN-1202] startup answers from this run only: a retained startup-timeout gives no TIMEOUT, and a refusal that records no failure answers NOT_READY at once":
+    var cfg = config()
+    # The store keeps `o` for the second run.
+    cfg.runtimeInstanceId = ""
+    cfg.storeDir = Opt.some(work / "boot-run-store")
+    cfg.startupDeadline = initDuration(milliseconds = 250 * Slow)
+    cfg.loaderStartupDeadline = DefaultLoaderStartupDeadline
+    var e = openEngine(cfg).tryGet
+    initGate.store(true)
+    check e.bootstrap(deployment(), "o").error.code == ecTimeout
+    # The late init's realization is torn down before shutdown, so shutdown
+    # has nothing of `o` to stop and keeps it `error` (a completed stop would
+    # clear its failure, l.3611).
+    initGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        not e.cleanupPending("o")
+    )
+    e.finish()
+    reset()
+    # The next run keeps `o` in `error` with `startup-timeout`. The ordering
+    # now has it wait for `m`, which nothing starts: its recovery is refused,
+    # which records nothing on an `error` instance (l.3612).
+    cfg.ordering = @[("m", "o")]
+    e = openEngine(cfg).tryGet
+    let r = e.bootstrap(deployment(), "o")
+    check r.isErr and r.error.code == ecNotReady
+    check "prerequisite" in r.error.message
+    let v = e.view("o").tryGet
+    check v.state == msError and v.failureOf == "startup-timeout"
+    check inits.load == 0
+    e.finish()
+
+  test "[RUN-0759] [RUN-1202] a shutdown accepted before ready gives CANCELLED, and it stays CANCELLED":
     let e = newEngine(config())
     initGate.store(true)
     bootstrapCode.store(-1)

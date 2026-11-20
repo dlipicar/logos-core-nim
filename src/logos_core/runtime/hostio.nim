@@ -321,7 +321,15 @@ func toMessage*(cmd: IoCommand): Opt[LcnCarrierMessage] =
     of K.cmdClose:
       toMessage(LcnCarrierIoClose(conn: c))
     of K.cmdTerminate:
-      toMessage(LcnCarrierIoTerminate(conn: c))
+      # Any code but NOT_READY is an authority end (`IoCommand.termCode`).
+      let code = if cmd.termCode == ecNotReady: ecNotReady else: ecNotAuthorised
+      toMessage(
+        LcnCarrierIoTerminate(
+          conn: c, code: uint8(ord(code)), phase: uint8(ord(cmd.termPhase))
+        )
+      )
+    of K.cmdEndSubscription:
+      toMessage(LcnCarrierIoEndSubscription(conn: c, sub: cmd.subId))
     of K.cmdWorkEnded:
       toMessage(LcnCarrierIoWorkEnded(conn: c, request: cmd.endedId))
     of K.cmdSubscriptionResult:
@@ -395,9 +403,20 @@ func toCommand*(m: LcnCarrierMessage): Result[Opt[IoCommand], string] =
     of K.lcn_Carrier_io_close:
       IoCommand(conn: m.arm_lcn_Carrier_io_close.conn, kind: IoCommandKind.cmdClose)
     of K.lcn_Carrier_io_terminate:
+      let x = m.arm_lcn_Carrier_io_terminate
+      if x.code notin [uint8(ord(ecNotAuthorised)), uint8(ord(ecNotReady))]:
+        return err("io_terminate with code " & $x.code)
+      if x.phase > uint8(ord(high(TermPhase))):
+        return err("io_terminate with phase " & $x.phase)
       IoCommand(
-        conn: m.arm_lcn_Carrier_io_terminate.conn, kind: IoCommandKind.cmdTerminate
+        conn: x.conn,
+        kind: IoCommandKind.cmdTerminate,
+        termCode: ErrorCode(x.code),
+        termPhase: TermPhase(x.phase),
       )
+    of K.lcn_Carrier_io_end_subscription:
+      let x = m.arm_lcn_Carrier_io_end_subscription
+      IoCommand(conn: x.conn, kind: IoCommandKind.cmdEndSubscription, subId: x.sub)
     of K.lcn_Carrier_io_work_ended:
       let x = m.arm_lcn_Carrier_io_work_ended
       IoCommand(conn: x.conn, kind: IoCommandKind.cmdWorkEnded, endedId: x.request)

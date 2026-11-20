@@ -19,10 +19,10 @@ default = "claimed"
 "Copyright" = "informative"
 
 [units]
-# The layer diagram, the consumer binding (Tier 4 step 8b) and audit that optional logging never waives.
+# The layer diagram and the consumer binding (Tier 4 step 8b). That optional logging never waives
+# audit (BCP l.559) is descriptive at 6cac8335 (re-pin P6b).
 "BCP-0004" = "claimed"
 "BCP-0073" = "claimed"
-"BCP-0098" = "claimed"
 # Tier 4b step 4b-6b (I95): the logosctl instance as the activation path (G296), its wire
 # (BCP-0090), and the development switch (D27, G299, G300). The other §5.4 units, BCP-0092
 # among them, are claimed by the default with the deployment document (step 4b-8b, I97).
@@ -32,7 +32,6 @@ default = "claimed"
 "BCP-0088" = "claimed"
 "BCP-0089" = "claimed"
 "BCP-0090" = "claimed"
-"BCP-0093" = "claimed"
 "BCP-0094" = "claimed"
 "BCP-0095" = "claimed"
 "BCP-0096" = "claimed"

@@ -9,11 +9,14 @@
 ## calls Runtime Control as that module. Module code runs on the engine's
 ## workers, so the test modules keep their state in atomics.
 
-import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
+import
+  std/
+    [algorithm, atomics, monotimes, os, sequtils, strutils, tables, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
 import logos_sdk/abi/[checks, types]
-import ../src/logos_core/runtime/invoke
+import ../src/logos_core/runtime/[invoke, remotemarked, routes]
+import ./support/rcaddresses
 import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, provider, surface]
@@ -60,6 +63,23 @@ func responseOf(schema: string, ifaces, supporting: seq[Contract]): seq[byte] =
     )
   )
 
+var subEndCalls: Atomic[int]
+
+proc onSubEnd(
+    id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  subEndCalls.atomicInc
+
+proc registerSubEnd(
+    h: var LogosRouteHandle, handler: LogosSubscriptionEndHandler = onSubEnd
+): ErrorCode =
+  toResult(h.vtable.observeSubscriptionEnd(addr h, handler, nil)).code
+
+proc registerSubEnd(
+    rc: ptr LogosRuntimeControlBinding, handler: LogosSubscriptionEndHandler = onSubEnd
+): ErrorCode =
+  toResult(rc.vtable.observeSubscriptionEnd(rc, handler, nil)).code
+
 # Tests --------------------------------------------------------------------------------
 
 suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)":
@@ -97,7 +117,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check initSelfCode.load == ord(ecOk)
     e.finish()
 
-  test "[RUN-0293] the binding a module receives at initialization is the complete version-2 table (§8.1 l.1556)":
+  test "[RUN-0293] the binding a module receives at initialization is the complete version-3 table (§8.1 l.1478)":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient()
     check checkRuntimeControl(rc).isOk
@@ -151,41 +171,176 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check toResult(r).code == ecInvalidParams
     e.finish()
 
-  test "[RUN-0043] [RUN-0044] [IFC-0501] connect_remote: a valid endpoint names no enrolled Runtime (§4.4)":
+  test "[RUN-0043] [RUN-0044] [IFC-0501] [IFC-0939] [IFC-0940] [RUN-1152] [RUN-1153] [TXT-0106] connect_remote: a schema failure carries its detail; no Runtime identity, a non-remote address, this Runtime and then a profile its transport does not select are INVALID_PARAMS without it, in that order and with or without a profile; a valid endpoint names no enrolled Runtime (§4.4)":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient()
     var acquired = LogosRuntimeControlBinding()
     var root: ContractRoot
-    let bad = [0xA0'u8]
-    check toResult(
-      rc.vtable.connectRemote(
-        rc,
-        cast[ptr UncheckedArray[uint8]](unsafeAddr bad[0]),
-        1,
-        addr root,
-        addr acquired,
-      )
-    ).code == ecInvalidParams
-    let good = encode(
-      LogosNSRuntimeControlRuntimeEndpoint(
-        address: LogosNSRuntimeControlRuntimeAddress(
-          kind:
-            LogosNSRuntimeControlRuntimeAddressKind.logos_NS_runtime_control_Unix_stream_runtime_address,
-          arm_logos_NS_runtime_control_Unix_stream_runtime_address:
-            LogosNSRuntimeControlUnixStreamRuntimeAddress(path: "/run/logos.sock"),
+    proc connect(bytes: seq[byte]): RcResult =
+      toResult(
+        rc.vtable.connectRemote(
+          rc,
+          cast[ptr UncheckedArray[uint8]](unsafeAddr bytes[0]),
+          csize_t(bytes.len),
+          addr root,
+          addr acquired,
         )
       )
-    ).tryGet
-    check toResult(
-      rc.vtable.connectRemote(
-        rc,
-        cast[ptr UncheckedArray[uint8]](unsafeAddr good[0]),
-        csize_t(good.len),
-        addr root,
-        addr acquired,
-      )
-    ).code == ecNotAuthorised
+
+    let schemaFailure = connect(@[0xA0'u8])
+    check schemaFailure.code == ecInvalidParams
+    check schemaFailure.detail.len > 0
+    let other = Opt.some(OtherRuntime)
+    let own = Opt.some(e.runtimeInstanceId)
+    const
+      noRuntime = "the endpoint names no Runtime"
+      notRemote = "the endpoint's address is not remote"
+      thisRuntime = "the endpoint names this Runtime"
+      mismatch = "the address does not match the profile its transport selects"
+    # Each IFC-0939 condition with no profile, with the profile its transport
+    # selects and with one it does not: the message names the first that
+    # applies, so the profile mismatch never hides one of the three.
+    for (name, bytes, message) in [
+      ("no Runtime identity", endpointOf(Opt.none(string), tlsAddress()), noRuntime),
+      (
+        "no Runtime identity, tls-tcp's profile",
+        endpointOf(Opt.none(string), tlsAddress(Opt.some(RemoteTlsTcp))),
+        noRuntime,
+      ),
+      (
+        "no Runtime identity, quic's profile on tls-tcp",
+        endpointOf(Opt.none(string), tlsAddress(Opt.some(RemoteQuic))),
+        noRuntime,
+      ),
+      (
+        "no Runtime identity, unix-stream",
+        endpointOf(Opt.none(string), unixAddress()),
+        noRuntime,
+      ),
+      ("unix-stream", endpointOf(other, unixAddress()), notRemote),
+      (
+        "unix-stream with a profile",
+        endpointOf(other, unixAddress(Opt.some("logos.local.unix-stream"))),
+        notRemote,
+      ),
+      ("unix-stream naming this Runtime", endpointOf(own, unixAddress()), notRemote),
+      ("this Runtime", endpointOf(own, tlsAddress()), thisRuntime),
+      (
+        "this Runtime, tls-tcp's profile",
+        endpointOf(own, tlsAddress(Opt.some(RemoteTlsTcp))),
+        thisRuntime,
+      ),
+      (
+        "this Runtime, tls-tcp's profile on quic",
+        endpointOf(own, quicAddress(profile = Opt.some(RemoteTlsTcp))),
+        thisRuntime,
+      ),
+      (
+        "tls-tcp naming quic",
+        endpointOf(other, tlsAddress(Opt.some(RemoteQuic))),
+        mismatch,
+      ),
+      (
+        "quic naming tls-tcp",
+        endpointOf(other, quicAddress(profile = Opt.some(RemoteTlsTcp))),
+        mismatch,
+      ),
+      (
+        "quic with another alpn",
+        endpointOf(other, quicAddress(alpn = Opt.some("h3"))),
+        mismatch,
+      ),
+    ]:
+      checkpoint name
+      let r = connect(bytes)
+      check r.code == ecInvalidParams
+      check r.detail.len == 0
+      check r.message == message
+    for bytes in [
+      endpointOf(other, tlsAddress()),
+      endpointOf(other, tlsAddress(Opt.some(RemoteTlsTcp))),
+      endpointOf(other, quicAddress(Opt.some(RemoteQuic), Opt.some(RemoteQuic))),
+    ]:
+      check connect(bytes).code == ecNotAuthorised
     check acquired.vtable == nil and acquired.state == nil
+    e.finish()
+
+  test "[RUN-1152] [RUN-1153] [TXT-0106] [RUN-1117] [RUN-1118] M8: a listener address whose profile or alpn contradicts its transport is INVALID_PARAMS without detail, after what is authorized without the payload":
+    let e = fixtureEngine(
+      config(
+        denying(
+          deny(
+            action = Opt.some(aaRuntimeControl),
+            operation = "set_remote_listener",
+            consumer = "c2",
+          ),
+          deny(
+            action = Opt.some(aaObserve),
+            operation = "list_provider_exports",
+            consumer = "c2",
+          ),
+        )
+      )
+    )
+    let (_, rc) = e.startClient("c1")
+    let (_, refused) = e.startClient("c2")
+    let good = listenerAddress(tlsAddress(Opt.some(RemoteTlsTcp)))
+    let goodQuic =
+      listenerAddress(quicAddress(Opt.some(RemoteQuic), Opt.some(RemoteQuic)))
+    let bad = [
+      listenerAddress(tlsAddress(Opt.some(RemoteQuic))),
+      listenerAddress(quicAddress(profile = Opt.some(RemoteTlsTcp))),
+      listenerAddress(quicAddress(alpn = Opt.some("h3"))),
+    ]
+    proc setListener(a: LogosNSRuntimeControlRemoteListenerAddress): seq[byte] =
+      encode(
+        LogosNSRuntimeControlSetRemoteListenerRequest(
+          listener: LogosNSRuntimeControlRemoteListenerRecord(
+            address: a, enabled: false, runtime_control_enabled: false
+          )
+        )
+      ).tryGet
+
+    proc listExports(a: LogosNSRuntimeControlRemoteListenerAddress): seq[byte] =
+      encode(LogosNSRuntimeControlListProviderExportsRequest(listener: Opt.some(a))).tryGet
+
+    proc setExport(a: LogosNSRuntimeControlRemoteListenerAddress): seq[byte] =
+      encode(
+        LogosNSRuntimeControlSetProviderExportRequest(
+          `export`: LogosNSRuntimeControlProviderExportRecord(
+            enabled: true,
+            listener: a,
+            provider: LogosNSRuntimeModuleProviderAddress(provider: "no_such_provider"),
+          )
+        )
+      ).tryGet
+
+    # A matching address keeps the outcomes it had: a disabled listener is
+    # the default state, the export list is empty, an unknown provider is not
+    # disclosed.
+    for a in [good, goodQuic]:
+      check rcCall(rc, "set_remote_listener", setListener(a)).code == ecOk
+      check rcCall(rc, "list_provider_exports", listExports(a)).code == ecOk
+      check rcCall(rc, "set_provider_export", setExport(a)).code == ecNotAuthorised
+    for a in bad:
+      for (m, bytes) in [
+        ("set_remote_listener", setListener(a)),
+        ("list_provider_exports", listExports(a)),
+        ("set_provider_export", setExport(a)),
+      ]:
+        checkpoint m
+        let r = rcCall(rc, m, bytes)
+        check r.code == ecInvalidParams
+        check r.detail.len == 0
+        # The method's own authority first where it names no target from the
+        # payload; `set_provider_export`'s names one, so the address is
+        # judged before it [reading, Fable synthesis §14.3].
+        let denied = rcCall(refused, m, bytes)
+        if m == "set_provider_export":
+          check denied.code == ecInvalidParams
+          check denied.detail.len == 0
+        else:
+          check denied.code == ecNotAuthorised
     e.finish()
 
   test "[RUN-0794] [RUN-0900] a binding that is stopping is NOT_READY (§3.4 l.629-631)":
@@ -202,7 +357,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check stopReply.load == ord(msUnloaded)
     e.finish()
 
-  test "[IMPL-DECISION G171] [RUN-0039] [RUN-0850] [RUN-0874] what needs no payload is authorized first, readiness last [IMPL-DECISION G171] (TF-18)":
+  test "[RUN-1117] [RUN-1118] [RUN-1122] [RUN-0039] [RUN-0850] [RUN-0874] what needs no payload is authorized first, readiness last (l.1827-1832)":
     var cfg = config(
       denying(
         deny(
@@ -240,6 +395,173 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     check stopReply.load == ord(msUnloaded)
     e.finish()
 
+  test "[RUN-1115] [RUN-1116] [RUN-1117] [RUN-1118] [RUN-1119] [RUN-1120] [TXT-0156] the order of checks, steps 1 to 5: the method, what is authorized without the payload, the payload, the target, the revision (l.1824-1830)":
+    let e = fixtureEngine(
+      config(
+        denying(
+          deny(action = Opt.some(aaRuntimeControl), consumer = "c2"),
+          deny(action = Opt.some(aaLifecycle), consumer = "c1", target = "hidden"),
+        )
+      )
+    )
+    discard e.started(meter(), "m")
+    discard e.started(meter(), "hidden")
+    let (_, rc) = e.startClient("c1")
+    let (_, refused) = e.startClient("c2")
+    # 1 before 2: an unknown method from a caller that may call none.
+    check rcCall(refused, "no_such_method", [0xA0'u8]).code == ecMethodNotFound
+    # 2 before 3: a malformed payload for a method the caller may not call.
+    check rcCall(refused, "shutdown_runtime", [0x01'u8]).code == ecNotAuthorised
+    check rcCall(rc, "shutdown_runtime", [0x01'u8]).code == ecInvalidParams
+    # A lifecycle method's authority depends on its target (step 4): nothing
+    # precedes the payload's check.
+    check rcCall(refused, "start_module", [0xA0'u8]).code == ecInvalidParams
+    # 3 before 4: a malformed request naming another Runtime's instance is the
+    # schema failure, with its detail; well-formed, it is the foreign target,
+    # without detail (TXT-0156).
+    let foreign = "00000000-0000-4000-8000-000000000000"
+    check foreign != e.runtimeInstanceId
+    let target = cborMap(
+      @[
+        (cbor("module_instance_id"), cbor("m")),
+        (cbor("runtime_instance_id"), cbor(foreign)),
+      ]
+    )
+    let malformed = rcCall(
+      rc,
+      "get_execution_summary",
+      encodeCbor(cborMap(@[(cbor("target"), target), (cbor("x"), cbor(1'u64))])),
+    )
+    check malformed.code == ecInvalidParams
+    check malformed.detail.len > 0
+    let elsewhere = rcCall(
+      rc, "get_execution_summary", encodeCbor(cborMap(@[(cbor("target"), target)]))
+    )
+    check elsewhere.code == ecInvalidParams
+    check elsewhere.detail.len == 0
+    # 4 before 5: a stale revision for an instance the caller may not see, or
+    # one that does not exist, is NOT_AUTHORISED without a current revision.
+    for instance in ["hidden", "nobody"]:
+      let r = rc.lifecycle(
+        "start_module",
+        "meter_module",
+        Opt.some(instance),
+        expected = Opt.some(999'u64),
+        refusal = true,
+      )
+      check r.code == ecNotAuthorised
+      check r.refused.isNone
+    # 5 before 6: a stale revision on an instance whose state prohibits the
+    # operation (a ready instance cannot be recovered) is `stale-revision`.
+    proc recoverReq(instance: string, revision: uint64): seq[byte] =
+      encode(
+        LogosNSRuntimeControlRecoverModuleRequest(
+          module: "meter_module",
+          instance: instance,
+          expected_execution_revision: revision,
+        )
+      ).tryGet
+
+    let current = e.view("m").tryGet.execution.revision
+    let prohibited = rcCall(rc, "recover_module", recoverReq("m", current))
+    check prohibited.code == ecNotReady
+    check prohibited.refused.isNone
+    let stale = rcCall(rc, "recover_module", recoverReq("m", current + 7))
+    check stale.code == ecOk
+    check stale.refused.get.stale == Opt.some(current)
+    e.finish()
+
+  test "[RUN-1121] [TXT-0159] step 6 in row order: a reused request key (row 2) before a closed route (row 5)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let a = rc.routeId("a")
+    let b = rc.routeId("b")
+    check rc.renew("rk", b).code == ecOk
+    check rc.close(a).code == ecOk
+    # Row 5 alone, then both: the key was used for `b`'s renewal.
+    check rc.renew("fresh", a).code == ecNotReady
+    let both = rc.renew("rk", a)
+    check both.code == ecInvalidParams
+    check both.detail.len == 0
+    # The same request again is its replay.
+    check rc.renew("rk", b).code == ecOk
+    e.finish()
+
+  test "[RUN-1121] [TXT-0158] step 6 in row order: a recovery that the state prohibits (row 4) and whose revision cannot advance (row 7) is NOT_READY":
+    var cfg = config()
+    cfg.revisionBudget = 4
+    let e = fixtureEngine(cfg)
+    let (_, rc) = e.startClient()
+    let m = e.started(meter(), "m")
+    discard e.started(meter(), "n")
+    check e.stop("n").tryGet.state == msUnloaded # withdrawal is never refused
+    let mask = 0xFFFF_FFFF'u64
+    checkpoint "m's revision: " & $(m.execution.revision and mask)
+    check (m.execution.revision and mask) >= cfg.revisionBudget
+    # Row 7 alone: a start of `n` needs a revision that cannot advance.
+    let exhausted = rc.lifecycle("start_module", "meter_module", Opt.some("n"))
+    check exhausted.code == ecModule
+    check "exhausted" in exhausted.message
+    let both = rcCall(
+      rc,
+      "recover_module",
+      encode(
+        LogosNSRuntimeControlRecoverModuleRequest(
+          module: "meter_module",
+          instance: "m",
+          expected_execution_revision: e.view("m").tryGet.execution.revision,
+        )
+      ).tryGet,
+    )
+    check both.code == ecNotReady
+    check both.message == "the module instance is ready"
+    e.finish()
+
+  test "[RUN-1121] [RUN-1122] [RUN-1123] [TXT-0159] steps 5 to 8 from an invalidated binding: the revision and a table row before readiness, readiness before the contract root (l.1830-1833)":
+    var cfg = config()
+    cfg.stopDeadline = initDuration(seconds = 30) # both stay `stopping` meanwhile
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, ready) = e.startClient("c1")
+    let (t, _) = e.startClient("t")
+    let (c2, rc) = e.startClient("c2")
+    let unknown = newSeqWith(32, 0x5A'u8)
+    let scope = access(methods = Opt.some(@[unknown]))
+    # Step 8 alone: an access root the contract does not declare.
+    check ready.establish("k1", scope = scope).code == ecInvalidParams
+    clientDestroyGate.store(true)
+    var t1, t2: Thread[(Engine, string)]
+    check e.stopping(t.instance, t1)
+    check e.stopping(c2.instance, t2)
+    # Step 7 alone.
+    let alone = rcCall(rc, "get_self", [0xA0'u8])
+    check alone.code == ecNotReady
+    check alone.message == "the Runtime Control binding is invalidated"
+    # 6 before 7: a start that the target's state prohibits.
+    let prohibited = rc.lifecycle("start_module", "client_module", Opt.some(t.instance))
+    check prohibited.code == ecNotReady
+    check prohibited.message == "the module instance is stopping"
+    # 5 before 6 and 7: the same start with a stale revision.
+    let stale = rc.lifecycle(
+      "start_module",
+      "client_module",
+      Opt.some(t.instance),
+      expected = Opt.some(999'u64),
+      refusal = true,
+    )
+    check stale.code == ecOk
+    check stale.refused.get.stale ==
+      Opt.some(e.view(t.instance).tryGet.execution.revision)
+    # 7 before 8.
+    let late = rc.establish("k2", scope = scope)
+    check late.code == ecNotReady
+    check late.message == "the Runtime Control binding is invalidated"
+    clientDestroyGate.store(false)
+    joinThread(t1)
+    joinThread(t2)
+    e.finish()
+
   test "[RUN-0113] [RUN-0794] a caller waiting in start_module is released when its binding ends (§3.4)":
     let e = fixtureEngine(config())
     let s = e.create(slow()).tryGet
@@ -271,7 +593,7 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     e.finish()
 
 suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
-  test "[RUN-0557] [RUN-0943] [RUN-0542] [RUN-0624] [RUN-0184] [RUN-0536] [RUN-0593] [RUN-0782] [RUN-0942] a single route to a ready provider (§9.3 l.3135-3146)":
+  test "[RUN-0557] [RUN-0943] [RUN-0542] [RUN-1180] [RUN-0184] [RUN-0536] [RUN-0593] [RUN-0782] [RUN-0942] a single route to a ready provider (§9.3 l.3135-3146)":
     let e = fixtureEngine(config())
     let m = e.started(meter())
     let (c, rc) = e.startClient()
@@ -293,7 +615,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check rec.decision_id.isSome
     check rec.failure.isNone
     when declared(transportParity):
-      # [G254; RUN-0541] A transported route's answer carries its invocation;
+      # [G254; RUN-1161] A transported route's answer carries its invocation;
       # its record never does (RUN-0543).
       check rec.invocation.isSome
       var kept = rec
@@ -304,12 +626,12 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
       check e.routes().mapIt(encode(it).tryGet) == @[encode(rec).tryGet]
     e.finish()
 
-  test "[IMPL-DECISION G169] [RUN-0556] [RUN-0188] [RUN-0121] [RUN-0546] establishment failures":
+  test "[IMPL-DECISION G169] [RUN-1169] [RUN-0556] [RUN-0188] [RUN-0121] [RUN-0546] establishment failures":
     let e = fixtureEngine(config())
     let idle = e.create(meter()).tryGet
     let (_, rc) = e.startClient()
     var zero: Digest
-    # [G169 interim (TF-16)] A `discover` allow, and no provider offers it.
+    # [G169; l.3063] A `discover` allow, and no provider offers it.
     check rc.establish("a", root = zero).code == ecNotReady
     # An allowed provider that is not ready.
     check rc.establish("b").code == ecNotReady
@@ -340,7 +662,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check e.routes().len == 2
     e.finish()
 
-  test "[RUN-0547] [RUN-0548] access lists must be strictly ascending without duplicates; nothing is sorted or deduplicated (§9.3 l.3024-3025)":
+  test "[RUN-0547] [RUN-1162] access lists must be strictly ascending without duplicates, INVALID_PARAMS without validation detail; nothing is sorted or deduplicated (l.2932)":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -365,7 +687,9 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
       ("twice", access(methods = Opt.some(@[read, read]))),
       ("events", access(subscribe = Opt.some(@[event, event]))),
     ]:
-      check rc.establish(key, scope = scope).code == ecInvalidParams
+      let r = rc.establish(key, scope = scope)
+      check r.code == ecInvalidParams
+      check r.detail.len == 0
       check e.routes().len == before
     let scope = access(methods = Opt.some(@[lo, hi]), subscribe = Opt.some(@[event]))
     let up = rc.establish("up", scope = scope)
@@ -373,7 +697,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check up.routesOf.routes[0].access == scope
     e.finish()
 
-  test "[IMPL-DECISION G52] [IMPL-DECISION G169] [RUN-0162] [RUN-0850] [RUN-0186] [RUN-0278] [RUN-0553] [RUN-0563] [RUN-0564] [RUN-0573] [CAP-0041] authorization at establishment (§9 l.1626, l.3138; G52)":
+  test "[IMPL-DECISION G52] [IMPL-DECISION G169] [RUN-1168] [RUN-0162] [RUN-0850] [RUN-0186] [RUN-0278] [RUN-0553] [RUN-0563] [RUN-0564] [RUN-0573] [CAP-0041] authorization at establishment (§9 l.1626, l.3138; G52)":
     for rule in [
       deny(action = Opt.some(aaRuntimeControl), operation = "establish_route"),
       deny(action = Opt.some(aaRoute)),
@@ -390,7 +714,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     let (_, rc) = e.startClient()
     check rc.establish("k", all = true).code == ecNotAuthorised
     var zero: Digest
-    # [G169 interim (TF-16)] No route allow and no `discover` allow.
+    # [G169; l.3060-3061] No route allow and no `discover` allow.
     check rc.establish("z", root = zero).code == ecNotAuthorised
     check rc.establish("k").code == ecOk
     e.finish()
@@ -438,6 +762,53 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check chosen.routes[0].target_provider.provider == b.providerId
     e.finish()
 
+  test "[RUN-1107] [TXT-0150] [RUN-1168] [RUN-1169] [IMPL-DECISION G169] a single request never selects a provider its route decision hides: the first allowed candidate, ready ones first; none allowed is NOT_AUTHORISED, an allowed one not ready NOT_READY (l.1423-1424, l.3060-3063)":
+    # A rule that matches nothing keeps the internal policy in the parity
+    # passes; `setPolicyForTests` then names the providers the engine made.
+    let e = fixtureEngine(config(denying(deny(operation = "no-such-operation"))))
+    let idle = e.create(meter()).tryGet
+    let a = e.started(meter())
+    let b = e.started(meter())
+    let (_, rc) = e.startClient()
+    proc hide(outcome: AuthzOutcome, providers: varargs[string]) =
+      var rules: seq[AuthzRule]
+      for p in providers:
+        rules.add(deny(action = Opt.some(aaRoute), target = p, outcome = outcome))
+      check e.setPolicyForTests(denying(rules)).isOk
+
+    proc names(r: RcResult, provider: string): bool =
+      ## `provider` appears anywhere in the answer.
+      let text = (r.response & r.detail).mapIt(char(it)).join("") & r.message
+      provider in text
+
+    # Ready ones first: `a`, though created after `idle`.
+    hide(azDeny)
+    let first = rc.establish("k1")
+    check first.code == ecOk
+    check first.routesOf.routes[0].target_provider.provider == a.providerId
+    # `a` hidden by a deny, then by a failed evaluation: `b`, and the response
+    # names only `b`.
+    for (key, outcome) in [("k2", azDeny), ("k3", azEvaluationFailed)]:
+      hide(outcome, a.providerId)
+      let r = rc.establish(key)
+      check r.code == ecOk
+      check r.routesOf.routes.len == 1
+      check r.routesOf.routes[0].target_provider.provider == b.providerId
+      check not r.names(a.providerId)
+    # Every ready one hidden, the idle one allowed: NOT_READY.
+    hide(azDeny, a.providerId, b.providerId)
+    let waiting = rc.establish("k4")
+    check waiting.code == ecNotReady
+    check not waiting.names(idle.providerId)
+    # Every one hidden: NOT_AUTHORISED, naming none.
+    hide(azDeny, a.providerId, b.providerId, idle.providerId)
+    let none = rc.establish("k5")
+    check none.code == ecNotAuthorised
+    check none.message == "not authorised"
+    check not none.names(a.providerId) and not none.names(b.providerId)
+    check e.routes().len == 3
+    e.finish()
+
   test "[RUN-0570] [RUN-0625] [RUN-0360] renew_route (§9.3 l.3183-3190, l.3471-3484)":
     let e = fixtureEngine(
       config(
@@ -461,7 +832,7 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check rc.renew("r3", first.route).code == ecNotReady
     e.finish()
 
-  test "[IMPL-DECISION G170] [RUN-0887] [RUN-0836] [RUN-0990] [RUN-0580] [IFC-0662] a denied renewal revokes the route [IMPL-DECISION G170] (TF-17)":
+  test "[IMPL-DECISION G170] [RUN-1171] [TXT-0180] [TXT-0194] [RUN-0887] [RUN-0836] [RUN-0990] [RUN-0580] [IFC-0662] a denied renewal revokes the route [IMPL-DECISION G170] (TF-17)":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
@@ -483,15 +854,18 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check seen.code.load == ord(ecNotAuthorised)
     check h.read(5).error.code == ecNotAuthorised
     check rc.renew("r2", first.route).code == ecNotAuthorised
-    # A terminal route is reported as it is.
+    # A terminal route is reported as it is: closing it changes neither its
+    # state nor its failure record (l.3350).
     let closed = rc.close(first.route)
     check closed.code == ecOk
     check LogosNSRuntimeControlCloseRouteResponse.decode(closed.response).tryGet.state.kind ==
       LogosNSRuntimeControlRouteStateKind.Revoked
+    check e.routes()[0].state.kind == LogosNSRuntimeControlRouteStateKind.Revoked
+    check e.routes()[0].failure.get.code == "authority-denied"
     h.release()
     e.finish()
 
-  test "[IMPL-DECISION G170] [RUN-0626] close_route (§9.3 l.3486-3492)":
+  test "[IMPL-DECISION G170] [RUN-1181] [TXT-0194] close_route (§9.3 l.3486-3492)":
     let e = fixtureEngine(
       config(
         denying(
@@ -519,6 +893,30 @@ suite "run.routes: establish, renew and close (RUNTIME §4, §9.3)":
     check refused.close(theirs).code == ecNotAuthorised
     check other.renew("o", theirs).code == ecNotAuthorised
     check other.close(theirs).code == ecOk
+    for rec in e.routes():
+      check rec.state.kind == LogosNSRuntimeControlRouteStateKind.Closed
+      check rec.failure.isNone
+    e.finish()
+
+  test "[IMPL-DECISION G170] [RUN-1181] close_route's reason is diagnostic: it changes neither the answer nor the route (§9.3.16 l.3353)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient("c1")
+    let plain = rc.routeId("k1")
+    let reasoned = rc.routeId("k2")
+    let a = rc.close(plain)
+    let b = rc.close(reasoned, Opt.some("operator request"))
+    check a.code == ecOk and b.code == ecOk
+    let closed = LogosNSRuntimeControlCloseRouteResponse.decode(b.response).tryGet
+    check closed.route == reasoned
+    check closed.state.kind == LogosNSRuntimeControlRouteStateKind.Closed
+    # The same answer as without a reason, but for the route id.
+    check encode(
+      LogosNSRuntimeControlCloseRouteResponse(route: plain, state: closed.state)
+    ).tryGet == a.response
+    # Closing again with another reason answers the same bytes.
+    let again = rc.close(reasoned, Opt.some("another reason"))
+    check again.code == ecOk and again.response == b.response
     for rec in e.routes():
       check rec.state.kind == LogosNSRuntimeControlRouteStateKind.Closed
       check rec.failure.isNone
@@ -599,6 +997,23 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     h.release()
     e.finish()
 
+  test "[IFC-0979] [IFC-0980] [TXT-0034] a provider's TIMEOUT, NOT_READY, NOT_AUTHORISED, TRANSPORT_ERROR or CANCELLED without a known cancellation is MODULE_ERROR without its message; its MODULE_ERROR passes through (INTERFACE l.3306-3311)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    check h.read(13).error.message == Opt.some("channel 13 is broken")
+    for channel in 9001'u32 .. 9005'u32:
+      checkpoint("channel " & $channel)
+      let f = h.read(channel)
+      check f.isErr
+      if f.isErr:
+        check f.error.code == ecModule
+        check f.error.message.isNone
+    check h.read(5).isOk
+    h.release()
+    e.finish()
+
   test "[RUN-0154] [RUN-0866] [RUN-0188] the access scope and the per-call decision (§9.3 l.3003-3004; l.1732)":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaCall), consumer = "denied")))
@@ -621,6 +1036,75 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     var d = denied.handle(denied.routeId("d"))
     check d.read(5).error.code == ecNotAuthorised
     d.release()
+    e.finish()
+
+  test "[IMPL-DECISION G171] [RUN-1115] [RUN-1117] [RUN-1118] [RUN-1122] an ordinary call: its authorization before its payload, readiness after it (l.1824-1832)":
+    var cfg = config(
+      denying(
+        deny(action = Opt.some(aaCall), consumer = "denied"),
+        deny(
+          action = Opt.some(aaRoute), operation = "renew_route", consumer = "revoked"
+        ),
+      )
+    )
+    cfg.stopDeadline = initDuration(seconds = 30) # `late` stays `stopping` meanwhile
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient("allowed")
+    let (_, denied) = e.startClient("denied")
+    let (_, revoking) = e.startClient("revoked")
+    let (late, lateRc) = e.startClient("late")
+    let malformed = encodeCbor(cborMap(@[(cbor("channel"), cbor("x"))]))
+    var h = rc.handle(rc.routeId("a"))
+    let bad = h.raw("read", malformed)
+    check bad.code == ecInvalidParams
+    check bad.detail.len > 0
+    # Step 2's route access checks (TRANSPORT §8.1), which the consumer's side
+    # owns in every placement: a method outside the route's access, then a
+    # revoked route.
+    let narrow =
+      rc.establish("n", scope = access(methods = Opt.some(newSeq[seq[byte]]())))
+    var n = rc.handle(narrow.routesOf.routes[0].route)
+    let outside = n.raw("read", malformed)
+    check outside.code == ecNotAuthorised
+    check outside.detail.len == 0
+    n.release()
+    let route = revoking.routeId("k")
+    var v = revoking.handle(route)
+    check revoking.renew("r1", route).code == ecNotAuthorised
+    let gone = v.raw("read", malformed)
+    check gone.code == ecNotAuthorised
+    check gone.detail.len == 0
+    v.release()
+    # Step 2's call decision.
+    var d = denied.handle(denied.routeId("d"))
+    let refused = d.raw("read", malformed)
+    if overTransport:
+      # [DECISIONS G171, interim reading] The provider's side makes the call
+      # decision, after its session dispatches the Request (`rjOwner`,
+      # tests/test_transport.nim). The consumer's own session cannot commit the
+      # payload (TRANSPORT §4.1, l.640) and refuses it first, so a call that is
+      # both malformed and denied is INVALID_PARAMS here and NOT_AUTHORISED when
+      # direct (l.1257 not met in this corner).
+      check refused.code == ecInvalidParams
+      check refused.detail.len > 0
+    else:
+      check refused.code == ecNotAuthorised
+      check refused.detail.len == 0
+    d.release()
+    # Step 7 after step 3: the consumer's side is not ready.
+    var l = lateRc.handle(lateRc.routeId("l"))
+    clientDestroyGate.store(true)
+    var t: Thread[(Engine, string)]
+    check e.stopping(late.instance, t)
+    let notLive = l.raw("read", malformed)
+    check notLive.code == ecInvalidParams
+    check notLive.detail.len > 0
+    check l.read(5).error.code == ecNotReady
+    l.release()
+    clientDestroyGate.store(false)
+    joinThread(t)
+    h.release()
     e.finish()
 
   test "[IFC-0512] [IFC-0513] [IFC-0514] [IFC-0515] [IFC-0943] [IFC-0945] [IFC-0946] [IFC-0947] [RUN-0146] [RUN-0147] [RUN-0184] [RUN-0531] materialize_route failures (INTERFACE §5.2 l.3884-3890)":
@@ -829,6 +1313,39 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     late.release()
     e.finish()
 
+  test "[IFC-0981] [TXT-0085] observe_subscription_end: one handler per binding and per handle, never called on registration; a terminal handle installs nothing (INTERFACE §2.5 l.1476-1484; DECISIONS I105)":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    subEndCalls.store(0)
+    # The Runtime Control binding's registration.
+    check rc.registerSubEnd(nil) == ecInvalidParams
+    check rc.registerSubEnd() == ecOk
+    check rc.registerSubEnd() == ecInvalidParams
+    # A route handle's, with observe_end's rules.
+    let route = rc.routeId("k")
+    var h = rc.handle(route)
+    var late = rc.handle(route)
+    var seen: EndSeen
+    check h.registerSubEnd(nil) == ecInvalidParams
+    check h.registerSubEnd() == ecOk
+    check h.registerSubEnd() == ecInvalidParams
+    check h.observe(addr seen) == ecOk
+    check rc.close(route).code == ecOk
+    check waitUntil(
+      proc(): bool =
+        seen.count.load == 1
+    )
+    # [SPEC INTERFACE l.1459; I105] the retained code, and nothing installed:
+    # the same refusal again, never INVALID_PARAMS for a second registration.
+    check late.registerSubEnd() == ecNotReady
+    check late.registerSubEnd() == ecNotReady
+    sleep(20)
+    check subEndCalls.load == 0 # [I105] registration only until re-pin P3
+    h.release()
+    late.release()
+    e.finish()
+
   test "[IFC-0660] [SPEC INTERFACE l.1483] observe_end past the local registration capacity is MODULE_ERROR and changes no registration (DECISIONS I86)":
     var cfg = config()
     cfg.limits.endRegsPerConsumer = 2
@@ -878,8 +1395,125 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     check seen.count.load == 0
     e.finish()
 
+suite "run.routes: earlier contracts a provider extends (RUNTIME §8 l.1340-1347, l.1368, §9.3; INTERFACE §1.2) [IMPL-DECISION G394]":
+  # The relay provider (`support/relayfixture`): B with two methods, two
+  # events and the interface `pulse`; A1 drops `reset` and keeps `pulse`; A2
+  # drops `cleared` and does not select `pulse`. In the local-transport
+  # parity pass each route here reaches the Runtime's endpoint for it.
+  proc readParams(channel: uint32): seq[byte] =
+    encodeCbor(cborMap((cbor("channel"), cbor(uint64(channel)))))
+
+  let empty = encodeCbor(cborMap())
+
+  test "[IFC-0957] [TXT-0535] [TXT-0553] [TXT-0275] one provider record serves its primary contract and each earlier view; a route to a view names it and is answered by the same implementation (INTERFACE l.199-203; RUNTIME l.90-91, l.2852)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    let r = e.started(relayRecord(), "r")
+    let (_, rc) = e.startClient()
+    let before = relayCalls.load
+    for (key, root) in [("b", relayRoot), ("a1", relayA1Root), ("a2", relayA2Root)]:
+      let made = rc.establish(key, root)
+      check made.code == ecOk
+      let rec = made.routesOf.routes[0]
+      # Each route selects one contract, and its record names that one.
+      check rec.expected_contract.get.schema_root == @root
+      check rec.target_provider.provider == r.providerId
+      check rec.instance == Opt.some("r")
+      let (code, made2) = rc.materialize(rec.route, root, relaySchema(root))
+      require code == ecOk
+      var h = made2
+      let x = h.raw("read", readParams(3))
+      check x.code == ecOk
+      check decodeCbor(x.response).tryGet.lookup("value").get.getUint64 ==
+        Opt.some(RelayValue)
+      h.release()
+    # B's own dispatch answered all three.
+    check relayCalls.load == before + 3
+    e.finish()
+
+  test "[TXT-0551] a route to an earlier view resolves only that contract's methods: A1 does not know the method it drops, and only a view whose contract selects the interface has its method (RUNTIME l.1347; INTERFACE l.202)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    discard e.started(relayRecord(), "r")
+    let (_, rc) = e.startClient()
+    var (cb, b) = rc.relayHandle("b", relayRoot)
+    var (c1, a1) = rc.relayHandle("a1", relayA1Root)
+    var (c2, a2) = rc.relayHandle("a2", relayA2Root)
+    require cb == ecOk and c1 == ecOk and c2 == ecOk
+    check b.raw("reset", empty).code == ecOk
+    check b.raw("ping", empty).code == ecOk
+    check a1.raw("reset", empty).code == ecMethodNotFound
+    check a1.raw("ping", empty).code == ecOk
+    check a1.raw("read", readParams(1)).code == ecOk
+    check a2.raw("reset", empty).code == ecOk
+    check a2.raw("ping", empty).code == ecMethodNotFound
+    check a2.raw("read", readParams(1)).code == ecOk
+    b.release()
+    a1.release()
+    a2.release()
+    e.finish()
+
+  test "[IFC-0958] logos.schema on a route to an earlier view answers that contract's own documents, never the extending contract's (INTERFACE l.203, l.3227-3234; RUNTIME l.432-434)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    discard e.started(relayRecord(), "r")
+    let (_, rc) = e.startClient()
+    var answers: seq[seq[byte]]
+    for (key, root, doc, ifaces) in [
+      ("b", relayRoot, relayDoc, 1),
+      ("a1", relayA1Root, relayA1Doc, 1),
+      ("a2", relayA2Root, relayA2Doc, 0),
+    ]:
+      var (code, h) = rc.relayHandle(key, root)
+      require code == ecOk
+      let s = h.raw("schema", [0xA0'u8])
+      check s.code == ecOk
+      check s.response == relaySchema(root)
+      check acceptSchemaResponse(s.response, root).isOk
+      let v = decodeCbor(s.response).tryGet
+      check v.lookup("schema").get.text == doc
+      check v.lookup("interface_schemas").get.items.len == ifaces
+      answers.add(s.response)
+      h.release()
+    check answers.deduplicate.len == 3
+    e.finish()
+
+  test "[TXT-0147] a requirement for an earlier view matches every provider that exposes it, by its root alone, and no provider that does not (RUNTIME l.1368)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    let r1 = e.started(relayRecord(), "r1")
+    let r2 = e.started(relayRecord(), "r2")
+    discard e.started(meter(), "m")
+    let (_, rc) = e.startClient()
+    for (key, root) in [("a2", relayA2Root), ("p", pulseRoot)]:
+      let all = rc.establish(key, root, all = true).routesOf
+      check not all.partial
+      check all.routes.mapIt(it.target_provider.provider).sorted ==
+        @[r1.providerId, r2.providerId].sorted
+      check all.routes.allIt(it.module == RelayModule)
+    e.finish()
+
+  test "[TXT-0554] a provider whose record states an earlier view is not selected for it before its bind or once its bind failed; with all-runtime-visible it is omitted (RUNTIME l.2995)":
+    let e = fixtureEngine(
+      config(
+        extra =
+          @[relayStatic(), checkStaticRegistration("relaybad", relayBadTable()).tryGet]
+      )
+    )
+    discard e.create(relayRecord(), "idle").tryGet
+    discard e.create(relayRecord(binding = "relaybad"), "bad").tryGet
+    check e.start("bad").tryGet.state == msError
+    let (_, rc) = e.startClient()
+    # Neither exposes A1: a single request has no provider to select.
+    check rc.establish("k1", relayA1Root).code == ecNotReady
+    let r = e.started(relayRecord(), "r")
+    let single = rc.establish("k2", relayA1Root)
+    check single.code == ecOk
+    check single.routesOf.routes[0].target_provider.provider == r.providerId
+    let all = rc.establish("k3", relayA1Root, all = true).routesOf
+    check all.routes.len == 1
+    check all.routes[0].target_provider.provider == r.providerId
+    check all.partial
+    e.finish()
+
 suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9.3)":
-  test "[IMPL-DECISION G171] [RUN-0165] [RUN-0579] [RUN-0580] [RUN-0360] [RUN-0574] [RUN-0841] [RUN-0887] [IFC-0665] a stopped provider fails its routes":
+  test "[RUN-1118] [RUN-1122] [RUN-0165] [RUN-1173] [RUN-0580] [RUN-0360] [TXT-0180] [RUN-0574] [RUN-0841] [RUN-0887] [IFC-0665] a stopped provider fails its routes":
     let e = fixtureEngine(config())
     let m = e.started(meter())
     let (_, rc) = e.startClient()
@@ -894,7 +1528,8 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     )
     check seen.code.load == ord(ecNotReady)
     check h.read(5).error.code == ecNotReady
-    # [G171 interim (TF-18)] The payload is validated before readiness.
+    # [SPEC RUNTIME l.1828, l.1832] The payload is validated (step 3) before
+    # readiness (step 7).
     let bad = h.raw("read", encodeCbor(cborMap(@[(cbor("channel"), cbor("x"))])))
     check bad.code == ecInvalidParams
     check bad.detail.len > 0
@@ -936,7 +1571,7 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
     check next.routesOf.routes[0].target_provider.provider == b.providerId
     e.finish()
 
-  test "[RUN-0111] [RUN-0112] a stopped consumer closes its routes; a failed one fails them (l.624-626)":
+  test "[RUN-1093] [RUN-0112] [TXT-0283] a stopped consumer closes its routes; a failed one fails them (l.589-591)":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (c1, rc1) = e.startClient()
@@ -979,10 +1614,11 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
       proc(): bool =
         held.load == 1
     )
-    # The stop deadline passes with the call still inside the provider: the
-    # cleanup failure is recorded and the provider is not released [G61].
+    # The stop deadline passes with the call still inside the provider: still
+    # `stopping`, `cleanup-timeout` reported, the provider not released
+    # (RUNTIME l.575).
     let s = e.stop(m.instance).tryGet
-    check s.state == msError
+    check s.state == msStopping
     check s.failure.isSome and s.failure.get.classification == "cleanup-timeout"
     check destroyed.load == before
     check e.routes()[0].state.kind == LogosNSRuntimeControlRouteStateKind.Failed
@@ -999,10 +1635,12 @@ suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9
       proc(): bool =
         destroyed.load == before + 1
     )
-    # [SPEC RUNTIME l.611] The release that followed does not leave `error`; a
-    # later stop does.
-    check e.view(m.instance).tryGet.state == msError
-    check e.stop(m.instance).tryGet.state == msUnloaded
+    # [SPEC RUNTIME l.576] The release that followed completes the stop.
+    check waitUntil(
+      proc(): bool =
+        e.view(m.instance).tryGet.state == msUnloaded
+    )
+    check e.view(m.instance).tryGet.failure.isNone
     h.release()
     e.finish()
 
@@ -1091,6 +1729,20 @@ suite "run.routes: ended route records (RUNTIME §7.5, §9.3)":
     h.release() # nothing reaches it any more; releasing finds no record
     e.finish()
 
+  test "[TXT-0297] a route-timeout failure is a loss of readiness, not an authorization failure: a new operation gets NOT_READY and an admitted call's result is still accepted; an expired authority is NOT_AUTHORISED and ends the call (RUNTIME l.1261-1263, l.1271)":
+    let answered = Result[seq[byte], InvocationFailure].ok(@[1'u8])
+    let timedOut = Route(id: "t", state: rtReady)
+    timedOut.terminate(rtFailed, Opt.some(rfRouteTimeout))
+    check timedOut.endCode == ecNotReady
+    check not endedByRoute(ord(timedOut.endCode), answered)
+    let expired = Route(id: "x", state: rtReady)
+    expired.terminate(rtRevoked, Opt.some(rfAuthorityExpired))
+    check expired.endCode == ecNotAuthorised
+    check endedByRoute(ord(expired.endCode), answered)
+    # Only the first terminal transition counts.
+    timedOut.terminate(rtRevoked, Opt.some(rfAuthorityExpired))
+    check timedOut.endCode == ecNotReady
+
 suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)":
   test "[RUN-0664] [RUN-1031] [RUN-1032] [RUN-1033] [RUN-1034] [RUN-1035] [RUN-1036] [RUN-1037] [RUN-1042] selection by instance, by name and by provider":
     let e = fixtureEngine(config())
@@ -1098,15 +1750,15 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     let (c, rc) = e.startClient()
     let s = rc.lifecycle("start_module", "meter_module", Opt.some("m1"))
     check s.code == ecOk
-    let started = LogosNSRuntimeControlStartModuleResponse.decode(s.response).tryGet
+    let started = s.accepted(LogosNSRuntimeControlStartModuleResponse)
     check started.instance == Opt.some("m1")
     check started.provider.isNone
     check started.state.kind == LogosNSRuntimeControlStateKind.Ready
     let v = e.view("m1").tryGet
     check v.intentOrigin.instance == c.instance
-    let stop = rc.lifecycle("stop_module", "meter_module")
+    let stop = rc.stoppedVia("meter_module")
     check stop.code == ecOk
-    check LogosNSRuntimeControlStopModuleResponse.decode(stop.response).tryGet.instance ==
+    check stop.accepted(LogosNSRuntimeControlStopModuleResponse).instance ==
       Opt.some("m1")
     let prov = Opt.some(providerAddress(m.providerId))
     check rc.lifecycle("start_module", "meter_module", Opt.some("m1"), prov).code ==
@@ -1128,9 +1780,17 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
       ecNotAuthorised
     check rc.lifecycle("start_module", "other_module", Opt.some("m1")).code ==
       ecInvalidParams
-    check rc.lifecycle(
-      "start_module", "meter_module", Opt.some("m1"), expected = Opt.some(999'u64)
-    ).code == ecInvalidParams
+    # [re-pin P4a] A stale revision is the typed `stale-revision`, carrying
+    # the instance's current execution revision (RUNTIME l.1818-1822).
+    let stale = rc.lifecycle(
+      "start_module",
+      "meter_module",
+      Opt.some("m1"),
+      expected = Opt.some(999'u64),
+      refusal = true,
+    )
+    check stale.code == ecOk
+    check stale.refused.get.stale == Opt.some(e.view("m1").tryGet.execution.revision)
     discard e.create(meter(), "m2").tryGet
     check rc.lifecycle("start_module", "meter_module").code == ecInvalidParams
     check rc.lifecycle("start_module", "nothing_module").code == ecInvalidParams
@@ -1156,15 +1816,16 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     let (_, rc) = e.startClient()
     let s = rc.lifecycle("start_module", "sensor_module")
     check s.code == ecOk
-    check LogosNSRuntimeControlStartModuleResponse.decode(s.response).tryGet.instance ==
-      Opt.some("s1")
+    check s.accepted(LogosNSRuntimeControlStartModuleResponse).instance == Opt.some(
+      "s1"
+    )
     # Both contracts route to the one provider.
     let a = rc.establish("p", primary).routesOf.routes[0]
     let i = rc.establish("i", iface).routesOf.routes[0]
     check a.target_provider == i.target_provider and a.instance == i.instance
     let stop = rc.lifecycle("stop_module", "sensor_module")
     check stop.code == ecOk
-    check LogosNSRuntimeControlStopModuleResponse.decode(stop.response).tryGet.instance ==
+    check stop.accepted(LogosNSRuntimeControlStopModuleResponse).instance ==
       Opt.some("s1")
     e.finish()
 
@@ -1177,7 +1838,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     check rc.lifecycle("start_module", "meter_module", Opt.some("m1")).code == ecOk
     e.finish()
 
-  test "[IMPL-DECISION G173] a caller with a call in progress in the target gets the state at once (TF-20)":
+  test "[RUN-1188] [TXT-0201] a caller with a call in progress in the target gets `stopping` at once, as every Runtime Control stop does (l.3551-3556)":
     var cfg = config()
     cfg.stopDeadline = initDuration(seconds = 30) # waiting would take this long
     let e = fixtureEngine(cfg)
@@ -1196,7 +1857,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     let r = rc.lifecycle("stop_module", "meter_module", Opt.some(m.instance))
     check getMonoTime() - begun < initDuration(seconds = 5 * Slow)
     check r.code == ecOk
-    check LogosNSRuntimeControlStopModuleResponse.decode(r.response).tryGet.state.kind ==
+    check r.accepted(LogosNSRuntimeControlStopModuleResponse).state.kind ==
       LogosNSRuntimeControlStateKind.Stopping
     check held.load == 1
     gate.store(false)
@@ -1209,7 +1870,7 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     h.release()
     e.finish()
 
-  test "[IMPL-DECISION G173] a module stopping itself gets the state at once (TF-20)":
+  test "[RUN-1188] [TXT-0201] a module stopping itself gets `stopping` at once":
     var cfg = config()
     cfg.stopDeadline = initDuration(seconds = 30) # the destroy ends well before
     let e = fixtureEngine(cfg)
@@ -1217,12 +1878,37 @@ suite "run.routes: lifecycle through Runtime Control (RUNTIME §9.3 l.3640-3690)
     clientDestroyGate.store(true)
     let r = rc.lifecycle("stop_module", "client_module", Opt.some(c.instance))
     check r.code == ecOk
-    check LogosNSRuntimeControlStopModuleResponse.decode(r.response).tryGet.state.kind ==
+    check r.accepted(LogosNSRuntimeControlStopModuleResponse).state.kind ==
       LogosNSRuntimeControlStateKind.Stopping
     clientDestroyGate.store(false)
     check waitUntil(
       proc(): bool =
         e.view(c.instance).tryGet.state == msUnloaded
+    )
+    e.finish()
+
+  test "[RUN-1188] [TXT-0201] [TXT-0202] stop_module answers `stopping` while the target's destroy is held, without waiting for it; get_readiness reports `unloaded` once it completes (l.3551-3556)":
+    var cfg = config()
+    cfg.stopDeadline = initDuration(seconds = 30) # the destroy ends well before
+    let e = fixtureEngine(cfg)
+    let (_, rc) = e.startClient()
+    let (t, _) = e.startClient("target")
+    clientDestroyGate.store(true)
+    let begun = getMonoTime()
+    let r = rc.lifecycle("stop_module", "client_module", Opt.some(t.instance))
+    check getMonoTime() - begun < initDuration(seconds = 5 * Slow)
+    check r.code == ecOk
+    check r.accepted(LogosNSRuntimeControlStopModuleResponse).state.kind ==
+      LogosNSRuntimeControlStateKind.Stopping
+    let held = LogosNSRuntimeControlGetReadinessResponse.decode(
+      rc.readiness("client_module", Opt.some(t.instance)).response
+    )
+    check held.isOk and held.get.state.kind == LogosNSRuntimeControlStateKind.Stopping
+    check not rc.unloadedNow("client_module", Opt.some(t.instance))
+    clientDestroyGate.store(false)
+    check waitUntil(
+      proc(): bool =
+        rc.unloadedNow("client_module", Opt.some(t.instance))
     )
     e.finish()
 
@@ -1278,10 +1964,17 @@ suite "run.rc: get_readiness (RUNTIME §9.3 l.3494-3496, l.3656-3675, l.3702-371
     check g.execution.get.intent.kind ==
       LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested
     check g.execution.get.intent_revision == v.execution.intentRevision
-    # A stale revision no longer starts it.
-    check rc.lifecycle(
-      "start_module", "meter_module", Opt.some("m1"), expected = Opt.some(rev)
-    ).code == ecInvalidParams
+    # A stale revision no longer starts it: the typed `stale-revision` names
+    # the revision the snapshot now reports.
+    let stale = rc.lifecycle(
+      "start_module",
+      "meter_module",
+      Opt.some("m1"),
+      expected = Opt.some(rev),
+      refusal = true,
+    )
+    check stale.code == ecOk
+    check stale.refused.get.stale == Opt.some(v.execution.revision)
     e.finish()
 
   test "a failed instance reports its classification and reason":
@@ -1351,3 +2044,72 @@ suite "run.rc: get_readiness (RUNTIME §9.3 l.3494-3496, l.3656-3675, l.3702-371
     check rc.readiness("other_module", Opt.some("m1")).code == ecNotAuthorised
     check rc.readiness("meter_module").code == ecNotAuthorised
     e.finish()
+
+suite "run.routes: marked methods on the remote profiles (RUNTIME l.1808, l.2939; TRANSPORT l.1188-1189)":
+  # [DECISIONS G277] The check 5-7a calls where remote routes and provider
+  # sessions are made (`runtime/remotemarked.nim`), over the vault contract,
+  # which marks `store`'s request, `fetch`'s response and both of `exchange`.
+  let
+    vaultSet = acceptContractSet(readFile(repo / "tests/kit/vault_module.cddl")).tryGet
+    vault = selectContract(
+      ModuleBinding(module: "vault_module", primary: Opt.some(vaultSet.primary)),
+      vaultSet.primary.root,
+      vaultSet.context,
+    ).get
+    sensorContract = selectContract(
+      ModuleBinding(
+        module: "sensor_module",
+        primary: Opt.some(sensorSet.primary),
+        interfaces: sensorSet.interfaces,
+      ),
+      sensorSet.primary.root,
+      sensorSet.context,
+    ).get
+
+  proc scope(
+      c: SelectedContract, names: varargs[string]
+  ): LogosNSRuntimeControlRouteAccess =
+    ## A method list of these methods' roots (`schema`: the well-known one).
+    var roots: seq[seq[byte]]
+    for n in names:
+      roots.add(@(c.methodRoot(n).get))
+    LogosNSRuntimeControlRouteAccess(methods: Opt.some(roots))
+
+  test "[TXT-0157] a tls-tcp or quic route whose permitted scope includes a marked method is refused, whichever payload is marked, and an absent list permits every method":
+    check vault.sensitive.len == 3
+    for profile in [RemoteTlsTcp, RemoteQuic]:
+      check withoutMarked(profile)
+      for marked in ["store", "fetch", "exchange"]:
+        check refusesMarked(profile, vault.scope(marked), vault)
+        check refusesMarked(profile, vault.scope("peek", marked, "schema"), vault)
+      check refusesMarked(profile, LogosNSRuntimeControlRouteAccess(), vault)
+      # the events lists do not matter
+      check refusesMarked(
+        profile,
+        LogosNSRuntimeControlRouteAccess(
+          publish_events: Opt.some(newSeq[seq[byte]]()),
+          subscribe_events: Opt.some(newSeq[seq[byte]]()),
+        ),
+        vault,
+      )
+
+  test "[TXT-0157] a scope without a marked method passes: narrowed by the request or by a renewal's decision, empty, or over a contract that marks nothing":
+    for profile in [RemoteTlsTcp, RemoteQuic]:
+      check not refusesMarked(profile, vault.scope("peek"), vault)
+      check not refusesMarked(profile, vault.scope("peek", "schema"), vault)
+      check not refusesMarked(profile, vault.scope("schema"), vault)
+      check not refusesMarked(profile, vault.scope(), vault)
+      # a renewal narrowed from the whole contract to the unmarked method: the
+      # caller passes the scope after the decision, so the same answer
+      check refusesMarked(profile, LogosNSRuntimeControlRouteAccess(), vault)
+      check not refusesMarked(profile, vault.scope("peek"), vault)
+      check sensorContract.sensitive.len == 0
+      check not refusesMarked(
+        profile, LogosNSRuntimeControlRouteAccess(), sensorContract
+      )
+
+  test "[TXT-0129] another remote profile may carry marked payloads: the check refuses only tls-tcp and quic":
+    for profile in ["logos.remote.erasing", "logos.remote.tls-tcp.v2", ""]:
+      check not withoutMarked(profile)
+      check not refusesMarked(profile, LogosNSRuntimeControlRouteAccess(), vault)
+      check not refusesMarked(profile, vault.scope("store", "exchange"), vault)

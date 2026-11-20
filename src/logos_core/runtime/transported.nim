@@ -78,6 +78,9 @@ type
     sub*: pointer ## its `events.SubState`, with one reference held here
     event*: string
     active*: bool ## the successful SubscriptionResult came; not unsubscribed
+    ended*: bool
+      ## [SPEC TRANSPORT l.752-756; DECISIONS G225] the provider ended it:
+      ## `unsubscribe` answers LOGOS_OK once
     paused*: bool ## [IF l.1446-1449] an Unsubscribe is pending: no handler begins
     subscribing*: ReplyChannel ## the subscriber, until the SubscriptionResult
     outId*: ptr LogosSubscriptionId ## written before the subscriber returns
@@ -144,11 +147,16 @@ func connectOutcome*(
     (code: ecNotReady, transportFailed: false)
 
 func closedCode*(cause: CloseCause, code: ErrorCode): ErrorCode =
-  ## [plan §2.6; TRANSPORT l.991, l.996; TF-15, G256] What a closed connection
-  ## tells the handle when the route has not ended: a session the provider
-  ## terminated with ProtocolError NOT_AUTHORISED is a known authorization
-  ## failure; any other end is TRANSPORT_ERROR, never an inferred NOT_READY.
-  if cause == ccPeerError and code == ecNotAuthorised: ecNotAuthorised else: ecTransport
+  ## [plan §2.6; TRANSPORT l.971-981; TF-15, G256; P3 ruling 5] What a closed
+  ## connection tells the handle when the route has not ended: a session the
+  ## provider terminated with ProtocolError NOT_AUTHORISED is a known
+  ## authorization failure, and one it terminated with NOT_READY a known loss
+  ## of readiness (RUNTIME l.1262-1265, INTERFACE l.1455); any other end is
+  ## TRANSPORT_ERROR, never an inferred NOT_READY.
+  if cause == ccPeerError and code in {ecNotAuthorised, ecNotReady}:
+    code
+  else:
+    ecTransport
 
 proc observe*(l: Link, code: ErrorCode): bool =
   ## [Rev R4] Sets the first terminal cause; true when this was it.
@@ -190,7 +198,7 @@ proc linkCall*(
   ## codes in the order of a direct call's admission, sends the Request on the
   ## link and answers when its Response comes; the provider side authorizes.
   ## The selected contract's own checks (an INVALID_PARAMS the session refused
-  ## locally, and G171's validation before a NOT_READY) are run again here,
+  ## locally, and the validation before a NOT_READY of RUNTIME l.1828) are run again here,
   ## where the construction input is loaded, so the failure carries the same
   ## detail as on a direct route.
   # [DECISIONS G276] The Request's copy of `params` moves to the I/O thread;

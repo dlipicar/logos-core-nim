@@ -7,10 +7,11 @@
 ##    violation is `non-deterministic-cbor`.
 ## Invalid UTF-8 text is reported separately: INTERFACE §4.5 rejects it as a
 ## schema mismatch, and the transport must forward it inside opaque payloads.
-## Floating-point items are not part of Logos deterministic CBOR (INTERFACE §4.4
-## item 5) and are rejected as non-deterministic unless `allowFloats` asks for
-## the generic CBOR data model. Tags and simple values decode; whether a schema
-## allows them is decided above this layer.
+## Floating-point items, tags, `null`, `undefined` and every other simple value
+## except `false` and `true` are not part of Logos deterministic CBOR (INTERFACE
+## §4.4 item 5) and are rejected as non-deterministic [DECISIONS G38]. Only data
+## outside the module boundary asks for them: `allowFloats` and `allowExtended`
+## together decode the generic CBOR data model.
 
 {.push raises: [].}
 
@@ -24,7 +25,8 @@ type
     cekNonDeterministic ## well-formed, but violates INTERFACE §4.4
     cekInvalidUtf8 ## a text string that is not UTF-8 (INTERFACE §4.5)
     cekTooDeep
-      ## arrays and maps deeper than `maxDepth`, or tags deeper than `maxTagDepth`
+      ## arrays and maps deeper than `maxDepth`, or, with `allowExtended`, tags
+      ## deeper than `maxTagDepth`
 
   CborError* = object
     kind*: CborErrorKind
@@ -37,11 +39,14 @@ type
       ## a root container is depth one, and scalars and byte-string contents
       ## add none
     maxTagDepth*: int
-      ## [IMPL] tags on any path, bounded apart so they cannot nest without
-      ## limit while adding no payload depth
+      ## [IMPL] tags on any path when `allowExtended` keeps them, bounded apart
+      ## so they cannot nest without limit while adding no payload depth
     allowFloats*: bool
       ## decode floating-point items: the generic CBOR data model, not
       ## Logos deterministic CBOR (INTERFACE §4.4 item 5)
+    allowExtended*: bool
+      ## decode tags and every simple value: the generic CBOR data model, for
+      ## data outside the module boundary (INTERFACE §4.4 item 5) [DECISIONS G38]
     allowInvalidUtf8*: bool
       ## keep invalid text with `validUtf8 = false` instead of failing
 
@@ -118,10 +123,13 @@ func checkWellFormed(
     stack: seq[WfFrame]
     pos = 0
     containers, tags = 0 ## arrays and maps, and tags, open on the stack
+    tagPending = false ## the previous head was a tag that holds no frame
   while true:
     let start = pos
     let h = ?readHead(data, pos)
     pos = h.next
+    let afterTag = tagPending
+    tagPending = false
     var
       complete = true # the item at `start` is finished
       breakHere = false
@@ -171,14 +179,19 @@ func checkWellFormed(
       of 6:
         if h.ai == 31:
           return err(cborError(cekMalformed, start, "indefinite tag"))
-        if tags + 1 > opts.maxTagDepth:
-          return err(tooDeep(start, "tags", opts.maxTagDepth))
-        stack.add(WfFrame(kind: wfDefinite, left: 1, tag: true))
-        inc tags
+        if opts.allowExtended:
+          if tags + 1 > opts.maxTagDepth:
+            return err(tooDeep(start, "tags", opts.maxTagDepth))
+          stack.add(WfFrame(kind: wfDefinite, left: 1, tag: true))
+          inc tags
+        else:
+          # Pass 2 refuses any tag, so its content takes the tag's slot: a chain
+          # of tags costs no memory and needs no bound.
+          tagPending = true
         complete = false
       else:
         if h.ai == 31:
-          if stack.len == 0 or stack[^1].kind != wfIndefinite:
+          if stack.len == 0 or stack[^1].kind != wfIndefinite or afterTag:
             return err(cborError(cekMalformed, start, "unexpected break"))
           breakHere = true
         elif h.ai == 24 and h.arg < 32:
@@ -266,8 +279,12 @@ func decodeInto(
     # Pass 1 already bounded both depths; these keep pass 2 safe on its own.
     if h.major in 4'u8 .. 5'u8 and containers + 1 > opts.maxDepth:
       return err(tooDeep(start, "arrays and maps", opts.maxDepth))
-    if h.major == 6 and tags + 1 > opts.maxTagDepth:
-      return err(tooDeep(start, "tags", opts.maxTagDepth))
+    if h.major == 6:
+      if not opts.allowExtended:
+        # [SPEC INTERFACE §4.4 item 5] no tag at any depth
+        return err(cborError(cekNonDeterministic, start, "tag"))
+      if tags + 1 > opts.maxTagDepth:
+        return err(tooDeep(start, "tags", opts.maxTagDepth))
     st.item = nil
     case h.major
     of 0:
@@ -328,10 +345,16 @@ func decodeInto(
           return
             err(cborError(cekNonDeterministic, start, "float not in shortest form"))
         st.item = CborValue(kind: ckFloat, width: width, floatBits: h.arg)
-      of 24:
-        st.item = CborValue(kind: ckSimple, simple: uint8(h.arg))
       else:
-        st.item = CborValue(kind: ckSimple, simple: h.ai)
+        let simple = uint8(h.arg)
+        if simple notin {SimpleFalse, SimpleTrue} and not opts.allowExtended:
+          # [SPEC INTERFACE §4.4 item 5] of the simple values, only false and true
+          return err(
+            cborError(
+              cekNonDeterministic, start, "simple value other than false and true"
+            )
+          )
+        st.item = CborValue(kind: ckSimple, simple: simple)
     var itemStart = start
     # Attach the finished item, then every container it completes.
     while st.item != nil:

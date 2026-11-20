@@ -29,7 +29,7 @@ Any other identifier, and any configuration this page does not allow, is rejecte
 keeps a copy. `create` opens no file, starts no thread and runs no module code.
 
 The whole configuration is protected bootstrap and deployment input in the sense of RUNTIME §8
-l.1391-1392: whoever can write it decides which code runs and under which authority policy. Supply it
+l.1313-1314: whoever can write it decides which code runs and under which authority policy. Supply it
 from a source only the host's owner can change.
 
 ## Schema
@@ -189,6 +189,7 @@ lcn.app_module = {
   implementation: lcn.app_implementation,
   ? primary_contract: logos.schema_commitment,
   ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
   ? requires: [* lcn.app_requirement],
   ? requested_permissions: [* lcn.app_permission],
   ? state_assignment: tstr .size (1..128),
@@ -247,6 +248,7 @@ lcn.app_declaration = {
   implementation: lcn.app_implementation,
   ? primary_contract: logos.schema_commitment,
   ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
   ? requires: [* lcn.app_requirement],
   ? requested_permissions: [* lcn.app_permission],
   ? persistent_state: true,
@@ -255,7 +257,7 @@ lcn.app_declaration = {
 ```
 
 Maps are closed: an unknown key anywhere is rejected. An array that is present must be non-empty
-(RUNTIME §8 l.1428), even where the CDDL writes `[*`; the CDDL tooling has no `+` occurrence yet. The
+(RUNTIME §8 l.1357), even where the CDDL writes `[*`; the CDDL tooling has no `+` occurrence yet. The
 one exception is the `permissions` array of a `permissions.initial` entry, which may be empty.
 
 ## Fields
@@ -269,10 +271,10 @@ one exception is the `permissions` array of a `permissions.initial` entry, which
 | `store_dir` | Optional absolute path of the directory that holds the Runtime's persistent state (below, "Persistent Runtime state"). It must be apart from `work_dir` and `state_root`: neither inside the other nor equal. [IMPL] The comparison is by path text and case-sensitive, so on a case-insensitive filesystem (Windows, and macOS by default) paths that differ only in case are not detected. Without it nothing persists. |
 | `runtime_instance_id` | Optional `runtime_instance_id` for the Runtime, 1 to 128 bytes of text; only with `store_dir`. Without it, the identity is generated when the store is created and kept with it. |
 | `startup_deadline_ms` | How long one module realization may take from authorization to `ready`, including its `_MODULE_init` (RUNTIME §3.4; G61). Default 120000. It does not bound the Module Loader's start, which has its own deadline (below, "The Module Loader"). |
-| `stop_deadline_ms` | How long a stop may take before the realization is abandoned. Default 10000. |
+| `stop_deadline_ms` | How long a stop may take. Past it the instance stays `stopping` and reports `cleanup-timeout` until its cleanup ends, which completes the stop (RUNTIME l.575-577; DECISIONS G180); a Module Host is ended then. Default 10000. |
 | `shutdown_grace_ms` | How long shutdown waits for in-flight work before cleanup is left unresolved (RUNTIME §10.2). Default 10000. |
-| `apply_deadline_ms` | How long a live configuration application (`apply_configuration`) may take, from its acceptance to the module's answer (CONFIG §8; DECISIONS G61, I87). When it passes, the outcome is unknown and the instance enters `error` with `configuration-indeterminate`, so the default is long: 120000. |
-| `max_payload_depth` | The Runtime's one payload depth limit (INTERFACE §4.5.1 l.3150; DECISIONS G241, I88): how many arrays and maps may nest on any path of a payload, counted from the payload's own root (the root map is depth 1; byte-string contents are not traversed). It applies to every payload the Runtime decodes or validates: route call requests and responses, asynchronous calls, events, Runtime Control requests and responses, and configuration values (defaults, provisioned and updated). A payload one level deeper is refused before it is dispatched, accepted or delivered, with `LOGOS_ERR_INVALID_PARAMS` and no detail for a request (a provider's too-deep response or event is a `LOGOS_ERR_MODULE` failure or a dropped publication). 128 to 1024; default 1024. A transported route (Tier 4b) gives its frame decoder this limit plus the envelope's own levels. Modules built with lcn-gen's kit check their own inputs at 1024. |
+| `apply_deadline_ms` | How long a live configuration application (`apply_configuration`) may take, from its acceptance to the module's answer (CONFIG §8; DECISIONS G61, I87). When it passes, the outcome is unknown and the instance enters `error` with `configuration-indeterminate` (one already `stopping` stays `stopping`, CONFIG l.328), so the default is long: 120000. |
+| `max_payload_depth` | The Runtime's one payload depth limit (INTERFACE §4.5.1 l.3104; DECISIONS G241, I88): how many arrays and maps may nest on any path of a payload, counted from the payload's own root (the root map is depth 1; byte-string contents are not traversed). It applies to every payload the Runtime decodes or validates: route call requests and responses, asynchronous calls, events, Runtime Control requests and responses, and configuration values (defaults, provisioned and updated). A payload one level deeper is refused before it is dispatched, accepted or delivered, with `LOGOS_ERR_INVALID_PARAMS` and no detail for a request (a provider's too-deep response or event is a `LOGOS_ERR_MODULE` failure or a dropped publication). 128 to 1024; default 1024. A transported route (Tier 4b) gives its frame decoder this limit plus the envelope's own levels. Modules built with lcn-gen's kit check their own inputs at 1024. |
 | `endpoint_dir` | Absolute path of the directory under which the Runtime creates the endpoints of transported routes (TRANSPORT §8.2; DECISIONS G58, I90): one fresh `<8 hex>` directory of mode 0700 per served provider, holding the socket `logos_<module>.sock`. Default `<work_dir>/endpoints`. Used only when a `routing` rule selects `local-transport`: then it is created with mode 0700 at `start` if missing, and it must be a real directory of the Runtime's user that no one else can write to, or a root-owned sticky directory such as `/tmp`. Keep it short: a socket path longer than the platform's `sun_path` (104 bytes on macOS, 108 on Linux) cannot be created, and the route that needed it fails with `LOGOS_ERR_MODULE`. Directories a crashed Runtime left behind are not removed. |
 
 | `module_host` | Absolute path of the `logos-module-host` program (DECISIONS G264, I91), which runs each `hosted_dynamic` instance in a process of its own (below, "Module Hosts"). It is protected deployment input like the rest of this file (LOADER l.107-108), and is checked when the configuration is read: the path's last component is not a symbolic link, it is a regular file owned by the Runtime's user or by root, writable by its owner only, and executable by its owner. Its directories are the deployment's to protect. Without it the Module Loader does not advertise `hosted_dynamic` and a `hosted_dynamic` module or declaration is refused ("hosted_dynamic needs module_host"). Not supported on Windows. |
@@ -283,25 +285,25 @@ on the host's working directory.
 
 ### `policy`
 
-The Runtime's authority policy (RUNTIME §9 l.1629-1633): it decides Runtime Control, lifecycle, route
+The Runtime's authority policy (RUNTIME §9 l.1545-1547): it decides Runtime Control, lifecycle, route
 and observation requests, including those of the bootstrap. Two kinds:
 
 - `allow-all`: every request a module makes through its Runtime Control binding is allowed. This is
-  the internal policy RUNTIME l.1633 permits "for local trusted deployments": use it only when every
+  the internal policy RUNTIME l.1547 permits "for local trusted deployments": use it only when every
   configured module is code the host trusts with the whole Runtime. It must be written explicitly;
-  nothing is allowed by default (RUNTIME l.1674, l.1682).
+  nothing is allowed by default (RUNTIME l.1590, l.1598).
 - `capability-authority`: the listed instance `authority` of the Capability Authority module decides
   (RUNTIME §9; CA; DECISIONS I85), from `policy`, an `lcn.authority_policy` value
   (`docs/AUTHORITY-POLICY.md`). `evaluation_deadline_ms` bounds how long a request waits for its
   decisions, from when it is queued for evaluation: 1 to 60000, default 5000, and below
   `startup_deadline_ms`. With `recovery: true` the bootstrap rules apply again after the authority is
-  lost, so the orchestration instance can recover it (RUNTIME l.1674-1680); default false.
+  lost, so the orchestration instance can recover it (RUNTIME l.1590-1596); default false.
 
   Checked at `create`: `authority` names a listed instance whose `module` is
   `logos_capability_authority` and whose implementation is the `direct_static` binding
   `logos_capability_authority`; its `primary_contract`, when given, is the pinned Capability Authority
   contract, and when absent it is set to that contract, so the authority instance has a provider
-  record like any provider (RUNTIME l.165-173, l.1420-1421, l.1647; DECISIONS I88; the realized
+  record like any provider (RUNTIME l.156-164, l.1349-1350, l.1563; DECISIONS I88; the realized
   contract is checked again when the instance is bound, and the Runtime never binds an authority
   instance without a provider record); it has a
   `state_assignment`; `runtime.store_dir` and `runtime.state_root` are set; and `policy` loads as the
@@ -314,14 +316,14 @@ Any other kind is rejected with "this policy kind is not supported yet".
 ### `permissions`
 
 The permission profile and the protected provisioning of new instances' permission settings (RUNTIME
-l.1595, l.2526-2604; DECISIONS I93, G110, G279; `docs/PERMISSIONS.md`). Absent: no profile is selected,
+l.1511, l.2450-2532; DECISIONS I93, G110, G279; `docs/PERMISSIONS.md`). Absent: no profile is selected,
 and every instance has the constant settings of "Permission settings in direct mode" below (DECISIONS
 G229). Present:
 
 | Field | Meaning |
 |---|---|
 | `profile` | The profile this library ships, `logos-core-nim.permission-profile.v1`: one permission, `logos-core-nim.host-ambient`, which every realization must hold. Under `capability-authority` the authority gets the same profile, so a policy can name permissions (`docs/AUTHORITY-POLICY.md`). |
-| `initial` | The settings a new instance is created with (RUNTIME l.2543): the entry naming its `instance`, else the entry for its `module` without `instance`, else revision 1 with no permission (l.2541). Never its `requested_permissions` or a declaration (RUNTIME l.2543). Each entry's `permissions` is ascending by permission name, names only permissions the profile defines and the Runtime enforces, with constraints the definition admits, and may be empty, so an instance entry can withdraw what its module's entry gives. |
+| `initial` | The settings a new instance is created with (RUNTIME l.2470): the entry naming its `instance`, else the entry for its `module` without `instance`, else revision 1 with no permission (l.2468). Never its `requested_permissions` or a declaration (RUNTIME l.2470). Each entry's `permissions` is ascending by permission name, names only permissions the profile defines and the Runtime enforces, with constraints the definition admits, and may be empty, so an instance entry can withdraw what its module's entry gives. |
 
 Checked at `create`, each failure `LOGOS_ERR_INVALID_PARAMS` naming the entry: entries are unique by
 module and instance; an `instance` names a listed instance of that `module`; no entry names the Module
@@ -339,7 +341,7 @@ docs/DAEMON.md §5).
 
 ### `orchestration`
 
-The `instance` of the one listed module that holds the orchestration role (RUNTIME l.187-192;
+The `instance` of the one listed module that holds the orchestration role (RUNTIME l.178-183;
 DECISIONS G53). The role follows this field only: no module name confers it (RUN-0785), and the
 module's name must not start with the reserved `logos_` prefix. The orchestration instance may not be
 an ordering `dependent`, since nothing starts its prerequisites before bootstrap.
@@ -355,11 +357,11 @@ holds is not created again: it keeps its state and intent (below).
 |---|---|
 | `instance` | The instance's protected `module_instance_id`, unique in the configuration. Names of the form the Runtime gives what it creates (`m-`, `s-` or `p-`, 32 lowercase hexadecimal digits, `-`, a decimal number) are refused, here and as `state_assignment`. |
 | `module` | The flat runtime module name (RUNTIME §1.3). |
-| `implementation` | `direct_static` with a `binding` identifier the host registers with `logos_runtime_register_binding` before `start`; `direct_dynamic` with an `artifact` (`id`, absolute `local_path`, BLAKE3-256 `hash`), verified against the exact bytes before mapping; or `hosted_dynamic` with `placement: "process"` and an `artifact`, verified the same way and mapped in a Module Host process of its own (needs `runtime.module_host`; below, "Module Hosts"). A static binding no entry names is kept until `destroy`; one named but never registered makes `start` fail with `LOGOS_ERR_INVALID_PARAMS` before anything runs. A hosted implementation never names a static binding (RUNTIME l.1514), and `sandbox` and `container` placements are not offered. |
-| `primary_contract`, `implements` | Expected contract commitments. They are checked against what the implementation reports at binding; they prove nothing on their own (RUNTIME §8 l.1414-1418). Implemented commitments must be unique. |
-| `requires` | Provider requirements: a contract and a cardinality. They select and grant nothing. |
+| `implementation` | `direct_static` with a `binding` identifier the host registers with `logos_runtime_register_binding` before `start`; `direct_dynamic` with an `artifact` (`id`, absolute `local_path`, BLAKE3-256 `hash`), verified against the exact bytes before mapping; or `hosted_dynamic` with `placement: "process"` and an `artifact`, verified the same way and mapped in a Module Host process of its own (needs `runtime.module_host`; below, "Module Hosts"). A static binding no entry names is kept until `destroy`; one a new instance names but never registered makes `start` fail with `LOGOS_ERR_INVALID_PARAMS` before anything runs, and a retained instance whose binding is no longer registered starts up mismatched (below, *Instances and the configuration*). A hosted implementation never names a static binding (RUNTIME l.1440-1441), and `sandbox` and `container` placements are not offered. |
+| `primary_contract`, `implements`, `extends` | Expected contract commitments: the primary concrete contract, the implemented interfaces, and the earlier contracts that the module's contracts extend (COMMITMENT §9.1). They are checked against the call-surface descriptor the implementation reports at binding and prove nothing on their own (RUNTIME §8 l.1340-1343). Once one is stated, an omitted `primary_contract` means none and an omitted `implements` or `extends` means empty, and all three must equal the descriptor's exactly, so a module that implements an interface or extends a contract needs every one listed (INTERFACE l.1717; DECISIONS G393). With neither `primary_contract` nor `implements` the instance declares no contract and has no provider record. Implemented and extended commitments are unique over both arrays, and `extends` needs `primary_contract` or `implements` (DECISIONS G394). |
+| `requires` | Provider requirements: a contract and a cardinality, each entry naming a distinct contract. They select and grant nothing. |
 | `requested_permissions` | Module-declared policy inputs, as in a package manifest (PM §4): names unique, `constraints` one deterministic-CBOR value. They grant nothing. |
-| `state_assignment` | The instance's state assignment id, `[A-Za-z0-9._-]`; no two instances share one (RUNTIME §8 l.1451). |
+| `state_assignment` | The instance's state assignment id, `[A-Za-z0-9._-]`; no two instances share one (RUNTIME §8 l.1383). |
 | `configuration` | The module's configuration declaration (CONFIG §2): one deterministic-CBOR `logos.module_configuration.configuration_declaration`, its schema binding and an optional package default. See *Module configuration* below. |
 | `provisioned_configuration` | This instance's protected configuration value (CONFIG l.142; DECISIONS G141): one complete value of the binding's root, at most 8 MiB. It needs `configuration`. |
 
@@ -368,23 +370,31 @@ holds is not created again: it keeps its state and intent (below).
 
 Lifecycle-ordering constraints (RUNTIME §3.7): a `dependent` starts only once its `prerequisite` is
 `ready`. Both must be listed instances; a constraint may not name one instance twice, and the
-constraints may not form a cycle.
+constraints may not form a cycle. A start or recovery of a dependent whose prerequisite is not `ready`
+returns `LOGOS_ERR_NOT_READY`. When the prerequisite is not in an accepted start either (it is
+`unloaded`, `stopping` or `error`), an `unloaded` dependent reports `prerequisite-unavailable`
+(RUNTIME l.3613), and the Runtime marks every `unloaded` dependent with `requested` intent so as soon
+as a change leaves its prerequisite in that condition. A prerequisite in an accepted start (`loaded`)
+makes the dependent wait without a failure. The classification stays until the dependent's next
+accepted start or its explicit stop (DECISIONS G359, interim).
 
 ### `declarations`
 
-What a module may create at run time with Runtime Control `create_module` (RUNTIME l.3613-3634;
+What a module may create at run time with Runtime Control `create_module` (RUNTIME l.3480-3503;
 DECISIONS G55): for each module name, the one accepted declaration, with the fields of a `modules`
 entry except `instance`, `state_assignment` and `provisioned_configuration` (a provisioned value
 belongs to one instance, never to a module name: RUN-0923). No two declarations name one module. A
 `direct_static` declaration names a binding the host registers, or `start` returns
-`LOGOS_ERR_INVALID_PARAMS`. With `persistent_state: true` each created instance gets a fresh state
+`LOGOS_ERR_INVALID_PARAMS`: a declaration is input for new instances, so it must be edited when a
+build drops its binding, while a retained instance on that binding starts up mismatched (DECISIONS
+G243 as changed). With `persistent_state: true` each created instance gets a fresh state
 assignment of its own (`s-…`), which needs `state_root`.
 
 - `create_module` for a module with no declaration is refused exactly as a denied request is
   (`LOGOS_ERR_NOT_AUTHORISED`), and creates nothing (DECISIONS G195, interim).
 - A created instance is new each time: a fresh id (`m-…`), `unloaded`, intent `uninitialized`. It
   keeps the declaration it was created from. Changing a declaration in a later configuration changes
-  later creations only (RUNTIME l.3621).
+  later creations only (RUNTIME l.3490).
 - The request key belongs to the requesting module: the same key and module give the same instance
   again, for as long as that instance is known (across restarts too); the same key with another
   module is `LOGOS_ERR_INVALID_PARAMS`. Retiring the instance frees the key.
@@ -412,12 +422,12 @@ evidence names the same Runtime across starts.
   must return at once and never call into the Runtime; `bytes` is valid during the call only. It has no
   C export (DECISIONS G304). logosd's call-evidence store is one (`docs/DAEMON.md` §9).
 - **Marked payloads.** A `_sensitive` payload is never retained: a call whose decision would retain one
-  is refused with `LOGOS_ERR_NOT_AUTHORISED` before dispatch (INTERFACE l.397). Write `commitment`
+  is refused with `LOGOS_ERR_NOT_AUTHORISED` before dispatch (INTERFACE l.377). Write `commitment`
   rules that do not cover such methods, or that retain only their unmarked side.
 - **Exporting evidence.** `exportCallEvidence(rt, index)` signs one retained record as a
   `logos.call-evidence.cose-sign1-slh-dsa-sha2-192s` container (CA §9.1): the complete record, no
   proofs, this Runtime's `runtime_instance_id` as producer. It is the protected export integration
-  (CA l.1316-1328): calling it is the host's decision to disclose that complete record to whoever
+  (CA l.1360-1372): calling it is the host's decision to disclose that complete record to whoever
   receives the container, and which records, how many and to whom are the host's to decide. A record
   no longer retained cannot be exported. A container is a signed statement, never authorization
   (CAP-0256). There is no C export yet.
@@ -439,15 +449,30 @@ evidence names the same Runtime across starts.
 
 ### `routing`
 
-Routing selection (RUNTIME §4.2 l.895-946; DECISIONS I90, G254): whether a route between two
+Routing selection (RUNTIME §4.2 l.842-881; DECISIONS I90, G254): whether a route between two
 modules of this Runtime is direct or uses local transport. Each rule names a `callee` (the provider's
 module name), a `mode` (`direct` or `local-transport`), and optionally a `caller` (the consumer's module
 name; absent: any consumer). For a route, the rule naming both its consumer and its provider wins, then
 the rule for any consumer; with no matching rule the route is direct, as in every configuration without
 `routing`, unless one of its ends runs in a Module Host: then it is `local-transport` (RUNTIME
-l.3006-3007; DECISIONS G272). The mode is fixed when the route is established: `renew_route` keeps it,
-and routes already established are never moved (RUNTIME l.940).
+l.2916; DECISIONS G272). The mode is fixed when the route is established: `renew_route` keeps it,
+and routes already established are never moved (RUNTIME l.879).
 
+- Events on a direct route (INTERFACE §2.5, §2.8; DECISIONS G176): a provider's `publish` runs each
+  subscriber's handler on the publishing thread before it returns. When another thread is running a
+  subscription's handler, the delivery is not waited for: a copy of the event is queued, and that
+  thread runs the queued deliveries in publication order before it lets the subscription go, each
+  decided afresh (a scoped event whose call has returned by then is not delivered). A handler that
+  publishes into its own subscription while deliveries wait for it takes its place behind them: its
+  publish runs them and then its own delivery before it returns. Each subscription
+  queues at most 1,024 deliveries or 16 MiB of event data, whichever comes first (its first queued
+  delivery is taken whatever its size); one more ends the subscription at once, so nothing published
+  after it reaches the handler: its queue is discarded, the
+  Runtime records the diagnostic "subscription *id* to *event* on route *route* ended: its delivery
+  queue reached ...", and the handle reports the end with `LOGOS_ERR_MODULE` to the handler registered
+  with `observe_subscription_end`, once, on an event worker (INTERFACE l.1469-1481). The bound limits
+  the queue, not how long the thread that holds it spends running it: a publication that reaches a
+  handler which itself publishes into busy handlers may run many deliveries before it returns.
 - Two rules for the same `caller` and `callee` are refused, as is a rule naming the Module Loader
   (`logos_module_loader`) as caller or callee (every route to the Loader is refused, G251) and a rule
   whose callee is `logos_runtime_control`, which is not a provider.
@@ -467,9 +492,11 @@ and routes already established are never moved (RUNTIME l.940).
   ticket; no other answer, list, event, record or diagnostic does. A replay of the same request key
   returns the route without `invocation`: renew it for a new ticket (DECISIONS G255).
 - When such a route ends, its unused tickets die with it, and its sessions end by cause (DECISIONS
-  G260): a revocation or expiry answers each call in flight `NOT_AUTHORISED`; `close_route`, a
-  provider stop or shutdown lets calls in flight finish within `stop_deadline_ms` (or the shutdown
-  grace), then closes.
+  G260): a revocation or expiry answers each call in flight `NOT_AUTHORISED`, then the session closes
+  with ProtocolError `NOT_AUTHORISED`; `close_route`, a provider stop or shutdown refuses new calls
+  `NOT_READY`, lets calls in flight finish within `stop_deadline_ms` (or the shutdown grace), then
+  closes with ProtocolError `NOT_READY` (TRANSPORT l.977). A consumer whose provider ends a session
+  that way sees `NOT_READY` on its handle.
 - A consumer's `materialize_route` on such a route connects to the endpoint with the route's ticket
   and returns once the provider holds the session. One ticket opens one handle: a further handle on the
   same route needs `renew_route` first, and a handle whose connection failed is not retried
@@ -480,13 +507,19 @@ and routes already established are never moved (RUNTIME l.940).
   its Event arrives, not on the publishing thread, one at a time per subscription and in the order
   the Events were published. A provider's `publish` returns once each subscriber connection has its
   Event, not once the handlers ran. What happens when a subscriber does not keep up, or an Event is
-  too large for it, is under "Event output" below.
+  too large for it, is under "Event output" below. A subscription the provider ends (its authority
+  to receive ended) is reported once through the handle's `observe_subscription_end`, on an event
+  worker, when a handler is registered at that moment; release of the handle suppresses a report not
+  yet begun and waits for one that runs (DECISIONS G225).
 
 #### Event output
 
-A provider publishes through a callback with no result (RUNTIME §7.3), so a transported subscriber
-that cannot take an Event is handled at its connection (TRANSPORT §5.2 l.804-817, §2.1 l.388-391;
-DECISIONS D3 (a), G165, G261):
+A provider's publish callback returns only the publisher-side result: `LOGOS_OK` for an event its
+own contracts declare with a payload of that event's type, `LOGOS_ERR_INVALID_PARAMS` otherwise,
+decided before any subscriber is tried; a failure for one subscriber route does not change it
+(INTERFACE §5.2 l.3351; RUNTIME §7.3 l.1148-1149; DECISIONS I106). So a transported subscriber that
+cannot take an Event is handled at its connection (TRANSPORT §5.2 l.792-805, §2.1 l.382-385; RUNTIME
+l.1150; DECISIONS D3 (a), G165, G261):
 
 | Condition | Action |
 |---|---|
@@ -504,7 +537,7 @@ The limits of the transport I/O thread (TRANSPORT §5.2, §8.6; DECISIONS I90), 
 
 | Field | Meaning | Default |
 |---|---|---|
-| `frame_limit` | The largest frame this side accepts and the largest it assumes the peer accepts, in bytes; at least 16777216 (TRANSPORT l.380). Raising it raises the buffers below that must hold one maximal frame, unless they are given too. | 16777216 |
+| `frame_limit` | The largest frame this side accepts and the largest it assumes the peer accepts, in bytes; at least 16777216 (TRANSPORT l.371). Raising it raises the buffers below that must hold one maximal frame, unless they are given too. | 16777216 |
 | `hello_timeout_ms` | How long a whole Hello exchange may take (1 to 3600000). | 10000 |
 | `write_stall_timeout_ms` | How long a connection may have output pending with no byte written before it is closed (1 to 3600000). | 30000 |
 | `max_pending_output_bytes` | Response and Event payload bytes submitted by provider code and not yet written, across all connections: a publisher past it waits (TRANSPORT §5.2). | 67108864 |
@@ -521,13 +554,13 @@ naming the limit. The payload depth is `runtime.max_payload_depth`; there is no 
 ### `state_transfers`
 
 A replacement instance's state, taken from the instance it replaces at the next `start` (DECISIONS
-G92 as re-decided 2026-11-15, I96, G306; RUNTIME l.3546-3553). Each entry is one authorization,
+G92 as re-decided 2026-11-15, I96, G306; RUNTIME l.3411-3418). Each entry is one authorization,
 applied once; below, "State transfer to a replacement instance", says what happens. Optional; when
 present, not empty, and only with `store_dir` and `state_root`.
 
 | Field | Meaning |
 |---|---|
-| `from` | The instance replaced: one the store knows, running or retired, and not listed in `modules` (RUNTIME l.3581). |
+| `from` | The instance replaced: one the store knows, running or retired, and not listed in `modules` (RUNTIME l.3446). |
 | `to` | The replacement: listed in `modules` with its own `state_assignment`, and new to the store. |
 | `mode` | `move` (the source's directory becomes the replacement's) or `copy` (the replacement gets a copy and the source's directory stays as it was; not on Windows). Required: there is no default. |
 | `max_bytes` | `copy` only: the most the copied tree's files may hold, 1 to 2^40; 1 GiB when absent. |
@@ -556,9 +589,12 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   current.
 - **Starting without a value.** `start_module`, `recover_module`, and the bootstrap start of the
   orchestration instance, need an eligible value. Without one the start is `LOGOS_ERR_NOT_READY`, the
-  intent stays `requested`, nothing runs, and a later update does not start the module: start it
-  again (DECISIONS G162, interim). For the orchestration instance, `start` returns `LOGOS_ERR_MODULE`
-  (DECISIONS G190, interim).
+  instance reports `configuration-missing` (`unloaded`, or `error` whose cause it replaces; RUNTIME
+  l.3611-3613), the intent stays `requested`, nothing runs, and a later update does not start the
+  module. The reference orchestration module probes it and resumes it once a value is eligible (RUNTIME
+  l.3665; DECISIONS G162, settled); a host without it starts it again. For the orchestration instance,
+  `start` returns `LOGOS_ERR_MODULE` at once: a startup failure other than one before `ready`
+  (RUNTIME l.3955).
 - **Replacing the provisioned value.** On each `start` with a `store_dir`, a provisioned value whose
   value root differs from the last one accepted for that instance is staged again as
   `protected-provisioning`; an equal one is not. Removing `provisioned_configuration` leaves the last
@@ -573,16 +609,20 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
 - **Applying a staged value live.** For a module whose binding declares `live_reconfiguration`,
   Runtime Control `apply_configuration` hands the staged value to the running module's
   `_MODULE_apply_configuration` while it stays `ready`. The call returns once the module has answered:
-  on success the value is current; a refusal changes nothing and is `LOGOS_ERR_MODULE`. If the module
+  on success the value is current; a refusal changes nothing and the call succeeds with the
+  `configuration-rejected` error arm (logosctl exits 4 naming it). If the module
   gives no valid answer within `apply_deadline_ms` (above; 120 s by default), its configuration is
   unknown: the call returns `LOGOS_ERR_MODULE` and the instance enters `error` with
   `configuration-indeterminate`, and is released once the module's hook returns. Start it again to
   continue; the staged value is still there. A stop or shutdown during an application waits for the
-  module's answer. One application runs per instance at a time.
+  module's answer; if the deadline passes during a stop, the instance stays `stopping`, only the caller
+  gets `LOGOS_ERR_MODULE`, and the stop goes on (CONFIG l.328-329). One application runs per instance
+  at a time.
 - **Size.** A state whose maximal `get_configuration` response would not fit a 16 MiB frame is refused
-  with `LOGOS_ERR_MODULE` and nothing changes: two values near 8 MiB cannot both be kept (DECISIONS
-  G233, interim). The state revision never wraps; one step is kept free while a start's or an
-  application's promotion is pending (DECISIONS G234, interim).
+  and nothing changes: two values near 8 MiB cannot both be kept. Through Runtime Control it is
+  `LOGOS_ERR_INVALID_PARAMS` without detail (CONFIG l.198); a provisioned value at creation or at a
+  host start is `LOGOS_ERR_MODULE` (DECISIONS G233). The state revision never wraps; one step is kept
+  free while a start's or an application's promotion is pending (RUNTIME l.1812; DECISIONS G234).
 - **Persistence.** Each configurable instance's binding and state are kept in their own record in
   `store_dir` (below), written before any change is visible. A configuration write that fails is
   `LOGOS_ERR_MODULE` and changes nothing; at a start, the attempt fails with `other`.
@@ -612,23 +652,33 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
 - **Runtime identity.** Without `store_dir`, each `logos_runtime_start` gives the Runtime a fresh
   lowercase UUIDv4 as its `runtime_instance_id`. With `store_dir`, the identity is
   `runtime_instance_id` if given, or a UUIDv4 generated when the store is created, kept with the
-  store. RUNTIME l.2666-2667 require the host to accept a Runtime-generated id before it is used:
-  choosing this format, or a store without `runtime_instance_id`, is that acceptance (DECISIONS G192,
-  interim).
+  store. The Runtime generates the id only because this protected configuration permits it, and
+  choosing this format, or a store without `runtime_instance_id`, is the host's acceptance (RUNTIME
+  l.2587; DECISIONS G192, settled). The Host Embedding API discloses no generated id (l.2588).
 - **What `start` waits for.** `start` returns once the Module Loader is bound and then the
-  orchestration instance is `ready` (DECISIONS G190, interim; "The Module Loader"). Other modules need not be ready (RUNTIME l.3973-3974), and their later failures do
-  not affect it. `start` returns `LOGOS_ERR_NOT_AUTHORISED` if the policy denies starting the
-  orchestration instance, `LOGOS_ERR_CANCELLED` if a Runtime Control `shutdown_runtime` was accepted
-  first (RUN-0759), and `LOGOS_ERR_MODULE` for any other failure, the startup deadline included, with
-  the failure classification in the message. A failed `start` stops and destroys nothing: request
-  shutdown, wait for it, then destroy (RUNTIME l.4075-4079).
+  orchestration instance is `ready` (RUNTIME l.3838; "The Module Loader"). Other modules need not be
+  ready (RUNTIME l.3837), and their later failures do not affect it. `start` decides its
+  result once (l.3940) and only from what happens in this start, never from a failure a store kept:
+  - `LOGOS_ERR_CANCELLED` if a Runtime Control `shutdown_runtime` was accepted first (RUN-0759);
+  - `LOGOS_ERR_TIMEOUT` if the orchestration instance's startup deadline, or the Module Loader's,
+    passed (l.3939, l.3955);
+  - `LOGOS_ERR_NOT_AUTHORISED` if starting the orchestration instance is denied, its evaluation
+    fails, or its permission settings refuse it (l.3955);
+  - `LOGOS_ERR_NOT_READY` if its start is refused at once without a failure being recorded: a held
+    restart lock, permission settings still being reconciled, or a prerequisite in the ordering
+    that is not ready while the instance is `error` (l.3955);
+  - `LOGOS_ERR_MODULE` for any other failure, a missing configuration value or a static binding
+    mismatch included, with the failure classification in the message (l.3939, l.3955).
+
+  A failed `start` stops and destroys nothing: request shutdown, wait for it, then destroy (RUNTIME
+  l.3942, l.3945).
 - **The host cannot interrupt `start`.** Only `request_shutdown` and `wait_for_shutdown` may overlap
-  on one handle (RUNTIME l.4082), so a host serializes `start` against both. What bounds `start` is
+  on one handle (RUNTIME l.3949), so a host serializes `start` against both. What bounds `start` is
   the Module Loader's startup deadline, then the orchestration instance's. (A `request_shutdown` that overlaps anyway is accepted and `start` returns
   `LOGOS_ERR_CANCELLED`.)
 - **Startup defaults belong to the orchestration module.** It applies them only while an instance's
   intent is `uninitialized`, by a conditional `start_module` carrying the `expected_execution_revision`
-  that `get_readiness` reports (RUNTIME l.194). It should do so after its `_MODULE_init` returns:
+  that `get_readiness` reports (RUNTIME l.185). It should do so after its `_MODULE_init` returns:
   starting other modules from inside its own init spends its startup deadline on each of them, so one
   slow module could fail `start`. The orchestration instance's own intent is `requested` once the
   bootstrap starts it (DECISIONS G191, interim).
@@ -637,14 +687,16 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   (DECISIONS G60). Execution intent is kept (RUNTIME §10.2).
 - **Static bindings.** `logos_runtime_register_binding` copies the table, so its memory is the host's
   again when the call returns; the code at those addresses must stay loaded, with the signatures
-  INTERFACE requires, until `logos_runtime_destroy` succeeds (RUNTIME l.4043, l.4054-4058).
+  INTERFACE requires, until `logos_runtime_destroy` succeeds (RUNTIME l.3908, l.3919-3923).
   Registration is closed by the first `start`, even one that fails, and by a shutdown request. A
-  binding that no module names is kept, unused, until `destroy`. Every static record must name a
-  registered binding, or `start` returns `LOGOS_ERR_INVALID_PARAMS` before anything runs.
+  binding that no module names is kept, unused, until `destroy`. A new configured instance and every
+  declaration must name a registered binding, or `start` returns `LOGOS_ERR_INVALID_PARAMS` before
+  anything runs; a retained instance whose binding is gone starts up mismatched ("Instances and the
+  configuration", below).
 - **Calls on one handle.** The host serializes every call on a handle except `request_shutdown` and
-  `wait_for_shutdown`, and never overlaps `destroy` with another call (RUNTIME l.3983, l.4082).
+  `wait_for_shutdown`, and never overlaps `destroy` with another call (RUNTIME l.3848, l.3949).
   `wait_for_shutdown` from a module callback or a Runtime thread returns `LOGOS_ERR_NOT_READY`
-  instead of blocking (RUNTIME l.4083 forbids it; the check is ours).
+  instead of blocking (RUNTIME l.3950 forbids it; the check is ours).
 - **Destruction.** `destroy` succeeds before the first `start`, or once shutdown completed and no
   module code is still running on a Runtime thread; otherwise it returns `LOGOS_ERR_NOT_READY` and
   the handle stays valid, so the host retries. After a `start` that failed, shutdown is requested
@@ -667,53 +719,59 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   `LOGOS_ERR_INVALID_PARAMS`, none having been issued), `set_provider_export` is
   `LOGOS_ERR_INVALID_PARAMS` (it names no listener record), and `set_remote_listener` that enables a
   listener is `LOGOS_ERR_MODULE`, "remote transport is not supported by this Runtime". One that
-  disables a listener assigns the state every listener has by default (RUNTIME l.2830): it succeeds
+  disables a listener assigns the state every listener has by default (RUNTIME l.2769): it succeeds
   with the requested record. This Runtime keeps a listener record only for a state other than the
   default, so the lists stay empty, an export naming that listener still finds no record, and no
   `inventory_changed` hint is sent.
 - **Results.** A result's message and detail stay in the calling thread's storage until that
-  thread's next call into the library, or until the thread exits (our reading where RUNTIME l.4086
+  thread's next call into the library, or until the thread exits (our reading where RUNTIME l.3953
   is silent); `LOGOS_OK` carries neither.
+- **Test hooks** (DECISIONS D27). The library has none: `build_runtime_lib` builds it without
+  `lcnTestHooks`, and none of its six functions selects a hook. A Nim host built with the define
+  selects one by an in-process call ([CONFORMANCE.md](CONFORMANCE.md), "Test hooks"); that call is its
+  Runtime's protected input, and a host that makes it is a non-production deployment and owes the
+  designation of BCP l.404 in its documentation and its operator-facing diagnostics.
 
 ## Orchestration duties
 
-RUNTIME l.72 defines a Runtime instance as the Runtime engine plus an orchestration module. RUNTIME
-is claimed for the engine with the reference orchestration module, `lcn_orchestrator`, wherever a
-host names it (logosd does: docs/DAEMON.md §4; "The reference orchestration module" below;
-DECISIONS I94, docs/CONFORMANCE.md). A host that names another module in `orchestration` carries
-these duties itself, and the engine does not do them for it:
+RUNTIME l.66 defines a Runtime instance as the Runtime engine plus an orchestration module, and a
+RUNTIME claim covers both (BCP l.286). RUNTIME is claimed for the engine with the reference
+orchestration module, `lcn_orchestrator`, wherever a host names it (logosd does: docs/DAEMON.md §4;
+"The reference orchestration module" below; DECISIONS I94, docs/CONFORMANCE.md "Claims"). A host
+that names another module in `orchestration` claims jointly with that module, which carries these
+duties itself; the engine does not do them for it:
 
-- **Startup defaults** (RUNTIME l.194). Apply deployment startup defaults only while an instance's
+- **Startup defaults** (RUNTIME l.185). Apply deployment startup defaults only while an instance's
   intent is `uninitialized`, by conditional `start_module` or `stop_module` requests carrying the
   `expected_execution_revision` that `get_readiness` reports.
-- **Reconciliation** (l.3774-3776). When it becomes operational, including after a Runtime restart,
+- **Reconciliation** (l.3631-3633). When it becomes operational, including after a Runtime restart,
   reconcile the retained `requested` intents and schedule the recoveries active policy permits,
   preserving retained origin, retry accounting, lifecycle ordering, current authority and unresolved
   cleanup obligations. The engine resumes nothing on its own ("Persistent Runtime state",
   Resumption).
-- **Restart policy** (l.3786-3790). Evaluate the active restart policy and schedule permitted
+- **Restart policy** (l.3648-3652). Evaluate the active restart policy and schedule permitted
   recovery through `recover_module`. Disabling automatic restart is a valid policy; an enabled policy
   bounds retry frequency, and its retry accounting survives an orchestration restart and lost
   responses (a lost `recover_module` answer is settled by reading `get_readiness`). An explicit stop
   or a shutdown cancels pending automatic recovery; the engine refuses a recovery prepared before
   either, by the revision guard.
-- **Resumption after a permission or authority stop** (l.3801-3804, l.2598-2599). When required
+- **Resumption after a permission or authority stop** (l.3663-3666, l.2526-2527). When required
   permissions or authority become available again, request resumption of the retained intent through
   `recover_module`; a failed resumption is subject to the restart policy. A permission settings
   replacement stops a running instance with no failure classification: the settings' `applied`
   (`permission_settings_changed_event`) is the moment to recover it, and its recovery is decided for
   the retained origin with the new settings.
-- **Failure classifications** (l.3756). Treat a classification it does not recognize as an
+- **Failure classifications** (l.3610). Treat a classification it does not recognize as an
   unspecified failure, and never derive a restart policy from its spelling.
 
-Stopping or failure of the orchestration module pauses automatic startup and recovery (l.3806).
+Stopping or failure of the orchestration module pauses automatic startup and recovery (l.3668).
 
 ## The reference orchestration module
 
 `lcn_orchestrator` (`src/logos_core/orchestration/`; DECISIONS I94) is a consumer-only module, linked
 into the host, that carries the duties above. Holding the role is the host configuration's doing: its
-name confers nothing (RUNTIME l.189-192, DECISIONS G53). It calls only through the Runtime Control
-binding it receives at initialization (l.184), never the Module Loader, and runs one thread of its
+name confers nothing (RUNTIME l.180-183, DECISIONS G53). It calls only through the Runtime Control
+binding it receives at initialization (l.175), never the Module Loader, and runs one thread of its
 own per instance.
 
 - **Registration.** The host registers the static binding `lcn_orchestrator` with
@@ -786,7 +844,7 @@ lcn_orchestrator.override = {
     the module's own instance, and not the Module Loader.
   - `defaults` (at most 4096): startup defaults, `start` when `action` is absent. Applied only while
     the instance's intent is `uninitialized`, by a conditional request carrying the revision it just
-    read (RUNTIME l.194, l.2247, l.2261): an operator's `stop` between the read and the request wins
+    read (RUNTIME l.185, l.2156, l.2172): an operator's `stop` between the read and the request wins
     (`LOGOS_ERR_INVALID_PARAMS`, and the module reads again). A default that contradicts `authority`
     is refused. An instance not listed is never started by the module.
   - `ordering` (at most 16384 pairs): a dependent's start, by default or by recovery, is issued only
@@ -801,46 +859,50 @@ lcn_orchestrator.override = {
   An invalid value fails the module's start with `LOGOS_ERR_MODULE`, and the diagnostic says which
   field.
 - **What it decides from.** Each instance's lifecycle state and intent, read with `list_modules` and
-  `get_readiness`. From a failure classification it reads only whether it is one of four that name an
-  enforcement outcome, which make an `error` a resumption, not a live failure (RUNTIME l.3775;
-  DECISIONS G291 as amended): `cleanup-timeout` (an enforcement stop overran its deadline),
+  `get_readiness`. From a failure classification it reads only whether it is one of six that make an
+  `error` a resumption, not a live failure (RUNTIME l.3632, l.3663-3666; DECISIONS G291 as amended):
+  `cleanup-timeout` (an enforcement stop overran its deadline, in a record an earlier build stored: an
+  overrun now stays `stopping` and completes `unloaded`, RUNTIME l.575-576),
   `permission-enforcement-failed`, `authority-denied` and `authority-evaluation-failed` (a start or
-  recovery the permission settings refused or the authority denied). The engine sets the last three
-  only for such refusals and denials, settings that failed, and stops for authority, never for a
-  failure of an accepted attempt. Every other classification, known or not, is a live failure, and no
-  restart policy is derived from its spelling (RUNTIME l.3756). Its own instance and the Module
+  recovery the permission settings refused or the authority denied), `configuration-missing` and
+  `static-binding-mismatch` (a start or recovery refused for want of configuration or for a static
+  binding mismatch, which replaces an `error` instance's cause; RUNTIME l.3611-3613). The engine sets
+  the last five only for such refusals and denials, settings that failed, and stops for authority,
+  never for a failure of an accepted attempt. A static binding mismatch cannot end within a run, so its
+  probes are refused, changing nothing, until the next `start`. Every other classification, known or not, is a live failure, and no
+  restart policy is derived from its spelling (RUNTIME l.3610). Its own instance and the Module
   Loader are always left out; every other instance with `requested` intent is the module's, whoever
-  its origin is, and keeps that origin (l.3774).
+  its origin is, and keeps that origin (l.3631).
 - **Events are hints.** It subscribes to the module-state, execution-state, inventory,
   configuration-state and permission-settings events and re-reads what they name before it decides
-  (l.3427). Every
+  (l.3285). Every
   `resync_ms` it subscribes anew, drops the subscriptions made the time before and re-reads every
-  instance (l.3428; DECISIONS G225), so a lost event delays a decision by at most that long. It
+  instance (l.3286; DECISIONS G225), so a lost event delays a decision by at most that long. It
   keeps each generation of subscriptions for one more interval, because dropping a subscription
   discards the events still queued for it (DECISIONS I94). A full ring of hints, or an inventory
   event, makes it re-read everything at once, without subscribing anew.
-- **Recovery and its accounting** (l.3786-3790). A failure seen while the module runs (`error` with
+- **Recovery and its accounting** (l.3648-3652). A failure seen while the module runs (`error` with
   `requested` intent) starts an episode: recoveries on the backoff, each charged, up to
   `max_attempts`, then the diagnostic "restart attempts exhausted after *n* of *m*" and no more. The
   episode closes once the instance has been `ready` for `stable_ms`, or when its intent changes (a
   stop, a new start). A refused recovery is not an attempt (the next is still spaced); a recovery whose
   answer never arrived is one, counted once, and the module reads before it decides again. Under
   `disabled` a failure is never recovered, and the diagnostic says so once.
-- **Resumption is not a retry** (l.3775; DECISIONS G289, amending G193). The module's first decision
+- **Resumption is not a retry** (l.3632; DECISIONS G289, amending G193). The module's first decision
   on an instance after it starts resumes it once, uncharged, when it finds it `unloaded`, or `error`
   with no open episode: after a Runtime restart, clean or not, or after a failure while the
   orchestration module was down. An episode still open continues charged, across any restart. Under
   `disabled` every `requested` instance in `error`, the authority included, is resumed once after the
   module starts, and not again.
-- **Probes** (l.3801-3804; DECISIONS G288). An instance with `requested` intent that is `unloaded`
+- **Probes** (l.3663-3666; DECISIONS G288). An instance with `requested` intent that is `unloaded`
   (its start was refused for authority or by its permission settings, a settings replacement stopped
-  it, a configuration is missing, or a prerequisite was not ready) or `error` with one of the four
+  it, a configuration is missing, or a prerequisite was not ready) or `error` with one of the six
   classifications above (an enforcement stop that overran its deadline, then perhaps a probe refused
   or denied, G291), and a start or stop default that was refused, is retried by uncharged probes on the policy's spacing (`delay(n)` after the last probe;
   the package default's under `disabled`), never exhausted. The authority's return to `ready`, and a
   `configuration_state_changed` or `permission_settings_changed` event for the instance, bring the
   next probe forward, never closer than `initial_delay_ms` after the last.
-- **When permissions become available** (l.3803-3804; DECISIONS G288, G284). The module never learns
+- **When permissions become available** (l.3665-3666; DECISIONS G288, G284). The module never learns
   the moment from the permission profile or the authority; the settings event is its hint. An instance
   a settings replacement stopped is recovered once its settings settle `applied`; one whose start or
   recovery the settings refused (`LOGOS_ERR_NOT_AUTHORISED`, `authority-denied`: they lack
@@ -852,7 +914,7 @@ lcn_orchestrator.override = {
   (`permission-enforcement-failed`) until, once the late cleanup has ended, an accepted replacement
   applies, and then it is resumed, under `disabled` too. A refused probe is not a failed resumption. A
   resumption the Runtime accepts and that then fails is an execution failure: under `backoff` it opens
-  an episode, charged; under `disabled` it is not retried (l.3804). An explicit stop ends the probes.
+  an episode, charged; under `disabled` it is not retried (l.3666). An explicit stop ends the probes.
 - **Under `capability-authority`.** With `authority` set, the module first brings the authority up
   under the derived rules (polling it from 100 ms, doubling to 5 s), then waits for the binding, which
   it infers from the first `list_modules` that succeeds (probing from 50 ms, doubling to 2 s;
@@ -878,7 +940,7 @@ lcn_orchestrator.override = {
 - **What its instance needs from the policy** (`orchestratorNeeds`). `list_modules`,
   `get_readiness` and `recover_module` on every instance, the five events above, and `start_module`
   or `stop_module` with the module as origin for the authority and each default, with those
-  instances' execution. `get_self` needs nothing (RUNTIME l.2555).
+  instances' execution. `get_self` needs nothing (RUNTIME l.2483).
 - **Limits.**
   | Limit | Value |
   |---|---|
@@ -894,19 +956,19 @@ lcn_orchestrator.override = {
 ## The Module Loader
 
 Every module instance but one is realized and released through a Module Loader that the Runtime
-binds as a system service (RUNTIME l.1635-1667; DECISIONS I89). The Loader is the module
+binds as a system service (RUNTIME l.1548-1583; DECISIONS I89). The Loader is the module
 `logos_module_loader`, built into the library as a `direct_static` binding. It advertises the two
 direct strategies, and `hosted_dynamic` with the `process` placement when `runtime.module_host` is set
 (LOADER §4; DECISIONS G264). It never advertises `force_release`. A strategy or placement it does not
 advertise is refused with `unsupported-strategy` before any artifact is read (LOADER l.377).
 
-- **Built in, never configured** (BOOTSTRAP l.287; DECISIONS G246, G253). The Runtime's construction
+- **Built in, never configured** (BCP l.292; DECISIONS G246, G253). The Runtime's construction
   always establishes, authorizes and binds the Loader, before anything else. Its instance id, module
   name and static binding are all `logos_module_loader`, and they are reserved: a `modules` entry,
   a declaration or `orchestration` that names them makes `create` return `LOGOS_ERR_INVALID_PARAMS`, and so does
   `logos_runtime_register_binding` with that binding id. No configuration, registration or module can
   replace or configure the Loader. The policy is not asked about it: no execution decision and no
-  `execute` check is made for it (CAPABILITY AUTHORITY l.343). Its permission settings are its
+  `execute` check is made for it (CAPABILITY AUTHORITY l.339). Its permission settings are its
   construction's: with a profile selected, the profile's minimum (host-ambient), revision 1,
   `applied`, written before the Loader is first exposed; an `update_permission_settings` aimed at it
   is `LOGOS_ERR_NOT_READY` (DECISIONS G253, I93). Without a profile they are the constant form every
@@ -915,7 +977,7 @@ advertise is refused with `unsupported-strategy` before any artifact is read (LO
   the pinned Module Loader contract and binds it, and only then realizes the orchestration instance
   through it. A Loader that cannot be established makes `start` return `LOGOS_ERR_MODULE` "the Module
   Loader cannot start: …", after whatever it started has been released.
-- **Its own startup deadline** (RUNTIME l.664; DECISIONS G61, amended 2026-11-14). The Loader's start
+- **Its own startup deadline** (RUNTIME l.628; DECISIONS G61, amended 2026-11-14). The Loader's start
   has a deadline of its own: 120 s, which `startup_deadline_ms` does not change, and which this format
   has no field for.
   - It starts when `start` begins.
@@ -936,9 +998,11 @@ advertise is refused with `unsupported-strategy` before any artifact is read (LO
   is lost, the Runtime asks the Loader's `get_status` whether the realization exists, and releases it
   or completes the stop accordingly. If that answer is lost too, the instance becomes `error`
   (`other`, "the Module Loader's answer was lost and could not be resolved") with its realization
-  `unknown`; a stop of it is accepted. An answer that breaks the contract fails the Loader.
-- **Loader loss** (RUNTIME l.3813-3825; DECISIONS G249). When the Loader fails (it reports its own
-  failure, or answers invalidly), every instance it realized becomes `error` with the classification
+  `unknown`; a stop of it is accepted. An answer that breaks the contract is diagnosed and taken as a
+  failed call: the Loader stays `ready` (RUNTIME l.3687; DECISIONS G360).
+- **Loader loss** (RUNTIME l.3675-3689; DECISIONS G249, G360). When the Loader fails (its instance
+  leaves `ready` because its realization ended or failed, or an authority ending reaches it while it
+  owns a realization), every instance it realized becomes `error` with the classification
   `other` and the reason "its Module Loader failed", its realization `unknown` and its routes failed;
   execution intent is kept, and a `stop_module` of such an instance is accepted (intent cancelled,
   still `error`). Nothing starts again in this Runtime: every start and recovery is
@@ -952,7 +1016,7 @@ advertise is refused with `unsupported-strategy` before any artifact is read (LO
   `LOGOS_ERR_INVALID_PARAMS` for a nil handle or hook), is called once, on a Runtime thread, with the
   instances left unresolved; it must not call into the Runtime. It has no C export (DECISIONS G304).
   logosd uses it to end its process (`docs/DAEMON.md`).
-- **Shutdown** (RUNTIME l.3847-3864). Every instance the Loader realized is released before the
+- **Shutdown** (RUNTIME l.3714-3730). Every instance the Loader realized is released before the
   Loader. A release still running when the shutdown grace ends makes shutdown complete with
   `LOGOS_ERR_MODULE`; the Loader stays, asked only to release, until that release returns, and
   `destroy` is `LOGOS_ERR_NOT_READY` until then. Keeping the Loader delays no withdrawal: each
@@ -968,7 +1032,7 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
 - **What the module sees.** The same entry points, initialization input and Runtime Control binding
   as in process (RUNTIME §4.2.1): every Runtime Control call, subscription and asynchronous call
   crosses to the Runtime and is answered through the instance's own binding, so values, errors,
-  authority decisions and state transitions are those a direct module gets (RUNTIME l.970). The
+  authority decisions and state transitions are those a direct module gets (RUNTIME l.905). The
   module's `state_dir` is the same directory. Its environment is only `module_host_env`, its
   working directory the Runtime's, and its standard output and error are the Runtime's.
 - **The process.** Started with `posix_spawn`, never `fork`: standard input from `/dev/null`;
@@ -996,10 +1060,12 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
   classified by the Loader's answer, as for a direct module.
 - **Deadlines** (DECISIONS G269). Past the startup deadline the instance enters `error` with
   `startup-timeout` and a host still in `_MODULE_init` is ended; `realization` is `unknown` until
-  its end is confirmed, then `absent`. Past the stop deadline (`cleanup-timeout`) and the shutdown
-  grace period, the host is ended and its release completes. Past the apply deadline
+  its end is confirmed, then `absent`. Past the stop deadline and the shutdown grace period, the
+  instance stays `stopping` with `cleanup-timeout`, the host is ended, and its release completes the
+  stop (`unloaded`; RUNTIME l.575-576, l.3732). Past the apply deadline
   (`configuration-indeterminate`), a hook that still has not returned one stop deadline later has
-  its host ended. In every case the state stays `error` with the deadline's classification.
+  its host ended. Past the startup and apply deadlines the state stays `error` with the deadline's
+  classification.
 - **Live configuration** runs `_MODULE_apply_configuration` in the host. A host that ends while it
   runs answers the `apply_configuration` caller `LOGOS_ERR_MODULE` and leaves the instance `error`
   with `host-terminated` (DECISIONS G270).
@@ -1011,8 +1077,9 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
   the Runtime ended without completing shutdown, a stored hosted instance whose lock is still held
   reports `realization` `unknown`, and `start_module` and `recover_module` answer
   `LOGOS_ERR_NOT_READY` ("a Module Host of the previous run may still be running"); the Runtime
-  tries the lock again every second and the instance is restored as any other (`error`, `other`)
-  once it can take it. Nothing ever connects to a host of an earlier run. The files are not removed;
+  tries the lock again every second and the instance is restored as any other (`error`,
+  `host-terminated`) once it can take it. After a completed shutdown that left it `stopping`
+  (DECISIONS G357) it stays `stopping`, `unknown`, until the lock is free, then completes its stop. Nothing ever connects to a host of an earlier run. The files are not removed;
   they hold no data.
 - **A hosted provider** (an instance whose record names a contract; DECISIONS G267, G273, G274):
   before its host starts, the Runtime creates its endpoint under `runtime.endpoint_dir` exactly as
@@ -1043,7 +1110,7 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
 
 ## Runtime limits
 
-Every limit of the engine in one place (RUNTIME l.3394-3396 and BCP l.369-370 ask for them to be
+Every limit of the engine in one place (RUNTIME l.3252-3254 and BCP l.375 ask for them to be
 documented; DECISIONS I88). Only the ones marked "here" are set in
 this file; the others are fixed (tests set the engine limits smaller).
 
@@ -1056,12 +1123,13 @@ this file; the others are fixed (tests set the engine limits smaller).
 | overflow lifecycle workers (`MaxNestedWorkers`) | 64 more, one per `starvationDelay` (50 ms) while jobs wait behind 64 busy workers and none finishes; nothing is ever refused (DECISIONS G242) | fixed |
 | call workers for asynchronous calls (`MaxCallWorkers`) | 64, started on demand | fixed |
 | overflow call workers (`MaxNestedCallWorkers`) | 64 more, the same way; when calls still wait for `refuseDelay` (1 s) with all 128 busy, the oldest call that has not started completes `LOGOS_ERR_MODULE` "no call worker is available" through its callback (G242) | fixed |
-| asynchronous calls prepared and not released (`MaxAsyncCalls`) | 4096; one more is `LOGOS_ERR_MODULE` (INTERFACE l.2041) | fixed |
+| asynchronous calls prepared and not released (`MaxAsyncCalls`) | 4096; one more is `LOGOS_ERR_MODULE` (INTERFACE l.1998) | fixed |
 | evaluation workers and queue (`EvalWorkers`, `EvalQueue`) | 4 threads, 256 waiting | fixed |
 | handler passes per operation (`MaxPasses`) | 8; more is an evaluation failure | fixed |
 | Runtime Control event workers (`MaxEventWorkers`) | 64 | fixed |
 | observation: pages, snapshots, `observe_end` registrations | "Observation", Limits | fixed |
 | Runtime Control subscriptions and their queues | "Runtime Control subscriptions", Limits | fixed |
+| direct event deliveries queued for one subscription while another thread runs its handler (`eventQueue`, `eventQueueBytes`) | 1,024 deliveries or 16 MiB of event data; one more ends the subscription with `LOGOS_ERR_MODULE` (`routing`, "Events on a direct route"; DECISIONS G176) | fixed |
 | ended route records kept per consumer | 4096 | fixed |
 | committed changes and diagnostics kept for observation | 4096 each | fixed |
 | payload depth (`max_payload_depth`) | 128 to 1024, default 1024 | here |
@@ -1080,43 +1148,43 @@ The Module Loader is the ABI caller for every instance but its own: it binds, in
 destroys module code (LOADER §6), and the Runtime's bootstrap mechanism does so only for the Loader.
 A `direct_dynamic` library, once mapped, stays mapped for the Runtime's life, and a static binding
 stays registered until `logos_runtime_destroy`: bindings are never unloaded (DECISIONS I88, deviation
-1; TF-03). RUNTIME l.387 requires only that a binding be kept until every context made from it has
+1; TF-03). RUNTIME l.368 requires only that a binding be kept until every context made from it has
 been destroyed, and unloading code that a module's own threads or registrations may still reach
-would crash the process (l.3838). The cost is one mapping per (hash suite, digest, module) for the
+would crash the process (l.3705). The cost is one mapping per (hash suite, digest, module) for the
 Runtime's life: a host that cycles many distinct artifacts through one Runtime should restart it.
 
 ## Under `capability-authority`
 
 - **The authority is part of the library.** `liblogos_runtime` links the Capability Authority (CA
-  §1, l.143) and registers its symbol table itself, as binding `logos_capability_authority`: it is a
+  §1, l.145) and registers its symbol table itself, as binding `logos_capability_authority`: it is a
   Logos-defined system module whose call surface uses reserved names, which a host-registered table
   cannot (DECISIONS I84). A host that registers a binding with that identifier anyway gets
   `LOGOS_ERR_INVALID_PARAMS` from `start`. The Runtime hands the instance its inputs in process
-  (RUNTIME l.1681): `policy`, the Runtime identity, the attribute source and the wall clock, keyed by
+  (RUNTIME l.1597): `policy`, the Runtime identity, the attribute source and the wall clock, keyed by
   its state directory `state_root/<state_assignment>`. The authority keeps its grants, audit and
   policy revision there; the Runtime keeps its identity in `store_dir`, so both name the same Runtime
   across starts.
 - **Who starts the authority.** The bootstrap starts the orchestration instance only. Until an
   authority instance is bound, the Runtime answers from rules derived from this configuration, never
-  configurable (BCP l.360; RUNTIME l.1635-1650, RUN-0305, RUN-0306, RUN-0311). They name the
+  configurable (BCP l.365; RUNTIME l.1548-1566, RUN-0305, RUN-0306, RUN-0311). They name the
   orchestration instance as the only consumer and the authority instance as the only target, and allow:
   - Runtime Control `start_module`, `recover_module` and `get_readiness`;
   - `module_execution` `start` in `direct` mode, with the orchestration instance as origin.
 
   Nothing else is allowed before the binding. Once the authority is `ready` and passes the binding
-  checks (RUNTIME l.1652-1667), every module operation is decided by it, and the derived rules lapse:
+  checks (RUNTIME l.1568-1583), every module operation is decided by it, and the derived rules lapse:
   the two never decide the same operation. The authority does not start itself: the reference
   orchestration module starts it when its value names it in `authority` ("The reference
   orchestration module").
 - **Fail closed.** While no binding exists, every operation the authority would decide is refused
   with `LOGOS_ERR_NOT_AUTHORISED`, classified as an evaluation failure; nothing falls back to a less
-  constrained policy (RUNTIME l.1737-1748, RUN-0050). An evaluation that takes longer than
+  constrained policy (RUNTIME l.1646-1653, RUN-0050). An evaluation that takes longer than
   `evaluation_deadline_ms` is an evaluation failure too, never a deny.
 - **Losing the authority.** When the bound instance stops, fails or loses its notification path, every
-  execution it authorized ends (CA l.828): those modules stop, classified as an authority ending,
+  execution it authorized ends (CA l.854): those modules stop, classified as an authority ending,
   with their intent kept. The orchestration and authority instances, authorized by the derived rules,
   keep running. With `recovery: true` the derived rules apply again, so the orchestration instance can
-  recover the authority and then the stopped modules (RUNTIME l.1674-1680). With `recovery: false`
+  recover the authority and then the stopped modules (RUNTIME l.1590-1596). With `recovery: false`
   (the default) only a host restart restores the deployment.
 - **Authority over time.** A module's execution authorization is renewed before its decision's
   `valid_until`, on a lane of its own; one that is not renewed, or whose grant is revoked or expires,
@@ -1129,30 +1197,34 @@ Runtime's life: a host that cycles many distinct artifacts through one Runtime s
   clock never extends authority and a forward step ends it early. There is no skew tolerance.
 - **Events.** A subscription is decided when it is activated and again at each delivery, and a
   publication at each delivery (DECISIONS G175). Under an authority that issues only single-use
-  decisions, every delivery costs two evaluations on the publishing thread. An explicit deny of a
-  subscription at delivery ends it.
+  decisions, every delivery costs two evaluations on the publishing thread. A subscription whose
+  delivery decision does not allow it (a deny, or an evaluation that fails) ends, on a direct route
+  and over local transport alike; its handle reports the end with `LOGOS_ERR_NOT_AUTHORISED` through
+  `observe_subscription_end`, and its `unsubscribe` returns `LOGOS_OK` once. An idle subscription
+  learns that its authority ended at its next event, not when the policy changes (DECISIONS G175).
 - **Grants.** A grant comes from a module that a policy `issue` rule allows, or from the embedding
   host through the authority's protected path. An in-process host reaches the authority with
   `authorityFor(state_root/<state_assignment>)` and calls `issueProtected` and `revokeProtected`
   (`docs/AUTHORITY-POLICY.md`, "Grants"); there is no C export.
-- **The attribute source** (BCP l.368). The authority matches policy subjects against facts the
+- **The attribute source** (BCP l.373). The authority matches policy subjects against facts the
   Runtime keeps for each instance: its id and module name. No instance has a signer or package
   fact, direct or hosted: the Runtime records the module name and no selection for every
   instance, whatever its strategy (DECISIONS I97), so rules naming those match none of them. A
   host does not supply the facts. logosd's deployment document states it
   ([DEPLOYMENT.md](DEPLOYMENT.md) §11).
-- **What the Runtime retains about decisions** (RUNTIME l.1756-1760, RUN-0330). The last 4096
+- **What the Runtime retains about decisions** (RUNTIME l.1661-1663, RUN-0330). The last 4096
   authorization answers, in memory: for each, the consumer, operation, target, decision id, source,
   outcome and the grants it used. They are lost at exit; the authority's own audit is what persists.
 
 ## Persistent Runtime state
 
 With `runtime.store_dir`, the Runtime keeps its own persistent state there (DECISIONS I82; RUNTIME
-l.3500-3507, l.3775). Without it nothing persists: every `start` is a new Runtime with a fresh
+l.3364-3371, l.3632). Without it nothing persists: every `start` is a new Runtime with a fresh
 identity, and every configured instance is new.
 
 - **Where it is.** `store_dir` holds `runtime-state.cbor` (one deterministic-CBOR value, format
-  `logos-core-nim.runtime-state.v1`), one `cfg-<hash>.cbor` side record per configurable instance
+  `logos-core-nim.runtime-state.v2`, which a build older than the re-pin's P5a cannot read; a v1 store
+  is read as one written by a run that did not complete shutdown), one `cfg-<hash>.cbor` side record per configurable instance
   (its configuration binding and state, up to about 17 MiB), while a permission profile is selected
   one `prm-<hash>.cbor` side record per instance (its permission settings: revision, permissions and
   status, `store.cddl`'s `lcn.prm_record`; DECISIONS I93), one `xfer-<hash>.cbor` side record per
@@ -1167,48 +1239,65 @@ identity, and every configured instance is new.
   `destroy`. A second `start` on the same store, in this process or another, returns
   `LOGOS_ERR_MODULE` ("the state store is in use"). Taking the lock is how the Runtime knows that the
   previous process has ended, and with it every realization it ran in that process (direct mode,
-  RUNTIME l.3783). Processes a module started on its own are outside this evidence.
+  RUNTIME l.3645). Processes a module started on its own are outside this evidence.
 - **Identity.** A configuration whose `runtime_instance_id` differs from the store's makes `start`
   return `LOGOS_ERR_INVALID_PARAMS`, and nothing is written. A store that is deleted, or replaced by
   another, under a host-chosen `runtime_instance_id` needs a new `runtime_instance_id`: addresses and
-  revisions under the old one may already be known elsewhere (DECISIONS G192, interim).
+  revisions under the old one may already be known elsewhere (DECISIONS G192).
 - **What survives a restart.** For each instance: its id, its provider id, the record it was created
   from, its lifecycle state, its failure classification and reason, its execution intent, the
   intent's revision and its origin; for a configurable instance, its configuration binding, state
   revision, current and staged values and their provenance; with a profile selected, its permission
   settings, revision and status kept. Settings that were `pending` when the Runtime ended settle as
   it opens, at the same revision: `applied`, or `failed` for a permission no active point enforces
-  (no realization survives the process; RUNTIME l.2590). An instance with no settings record (created
+  (no realization survives the process; RUNTIME l.2518). An instance with no settings record (created
   while no profile was selected) gets revision 1 with no permission. The store must agree with the
   selection: settings saved while a profile was selected make `start` return `LOGOS_ERR_MODULE` when
   no profile is selected, or when they name a permission the selected profile does not define,
-  naming the instance; accepted settings are never dropped silently (RUNTIME l.2544). Also the ids of retired instances with
+  naming the instance; accepted settings are never dropped silently (RUNTIME l.2471). Also the ids of retired instances with
   the state assignments they keep, and `create_module` keys. A configurable instance whose side
   record is missing or does not hold the binding its record names makes `start` return
   `LOGOS_ERR_MODULE` naming it, and nothing is written. Not kept: routes and their keys (a route id from an earlier run is
   unknown), realizations, authorization answers and the change log. Every execution revision after a
-  restart is larger than any the Runtime exposed before (RUNTIME l.3506).
-- **Instances and the configuration** (DECISIONS G160, interim).
+  restart is larger than any the Runtime exposed before (RUNTIME l.3370).
+- **Instances and the configuration** (RUNTIME l.1316-1322; DECISIONS G160 as changed, G243 as changed).
   - A configured instance the store holds is the same instance while its declaration facts are
     equal: its record, leaving out the artifact's `local_path` and the permissions' `reason` texts,
-    which it takes from the configuration. If other facts differ, `start` returns
-    `LOGOS_ERR_INVALID_PARAMS` naming the instance, before anything runs: give the changed module a new
-    instance id, and retire the old one once it is no longer configured.
+    which it takes from the configuration.
+  - *A static binding mismatch.* A retained `direct_static` instance is mismatched for the run when
+    its facts differ from the configured ones, when its binding is not registered for its module, or
+    when nothing supplies its facts (a configured instance the configuration no longer names). An
+    instance `create_module` made is compared with its module's declaration, with its own state
+    assignment. A mismatched instance keeps its retained record and state, is not realized, and
+    `start` does not fail: an `unloaded` one with `requested` intent reports
+    `static-binding-mismatch`, and `start_module` or `recover_module` on it returns
+    `LOGOS_ERR_NOT_READY` with that classification, before any module code or Module Loader call. An
+    instance restored as `error` keeps its classification until such a refusal replaces it. A later
+    `start` with the same facts and binding makes it realizable again. Supplying the same binding
+    identifier asserts implementation continuity: a build whose implementation is not compatible with
+    the retained state registers it under a different binding identifier and configures a replacement
+    instance (RUNTIME l.1320), which can take the old one's state through `state_transfers` (above).
+  - For a `direct_dynamic` or `hosted_dynamic` instance, different facts still make `start` return
+    `LOGOS_ERR_INVALID_PARAMS` naming the instance, before anything runs (DECISIONS G160, interim):
+    give the changed module a new instance id, and retire the old one once it is no longer configured.
   - An id that was retired cannot be configured again, and a state assignment a retired instance
     keeps cannot be given to another instance (`LOGOS_ERR_INVALID_PARAMS`).
   - An instance dropped from the configuration stays known, with its state, until it is retired.
-- **Resumption after a restart, and retries after a failure** (RUNTIME l.3775).
+- **Resumption after a restart, and retries after a failure** (RUNTIME l.3632).
   - *Resumption.* At every `start`, the Runtime re-establishes the Module Loader instance and then
     the orchestration instance, each the same way: a retained `requested` intent whose origin is the
     host is resumed, with its revision and origin kept; otherwise (never started, explicitly
     stopped, or requested by a module) the instance is started anew with the host as origin, and a
     diagnostic says so (DECISIONS G191, interim; I89). The Runtime starts nothing else. Any other instance's retained `requested` intent is
-    acted on only if the orchestration module resumes it, by `recover_module` (RUNTIME l.3774).
+    acted on only if the orchestration module resumes it, by `recover_module` (RUNTIME l.3631).
   - *How instances come back.* An instance that was running when the Runtime ended cleanly comes back
-    `unloaded`, with its intent. One that was running when the Runtime ended without completing
-    shutdown (a crash, a kill) comes back `error` with the classification `other` and the reason "the
-    Runtime ended without completing shutdown" (DECISIONS G193, interim). An instance that was already
-    `error` keeps its classification.
+    `unloaded`, with its intent. One that was `loaded`, `ready` or `stopping` when the Runtime ended
+    without completing shutdown (a crash, a kill) comes back `error` with the classification
+    `host-terminated` (RUNTIME l.3634; DECISIONS G193). An instance that was already `error` keeps its
+    classification. A completed shutdown marks its last record (DECISIONS G357): an instance it left
+    `stopping` past the grace period completes its stop at the next `start` (`unloaded`, with an
+    enforcement classification it kept), or, if hosted with its restart lock still held, once the lock
+    is free. The next write removes the mark.
   - *Resuming is not a retry.* Bringing an instance back after a restart, clean or not, is a
     resumption: it counts as no restart attempt against any restart policy. A restart policy counts
     the `recover_module` calls made after the instance failed while the Runtime was running, and an
@@ -1233,7 +1322,7 @@ identity, and every configured instance is new.
 - **Recovery and retirement** (RUNTIME §9.3). `recover_module` starts a new attempt for an instance
   whose intent is still `requested` and that is `unloaded` or `error` with its cleanup complete,
   given the `expected_execution_revision` the caller read. It keeps the intent, its origin and the
-  record, and execution is authorized for that retained origin, not for the caller (l.3540). One
+  record, and execution is authorized for that retained origin, not for the caller (l.3405). One
   revision value admits at most one attempt: a repeated or concurrent recovery with it is
   `LOGOS_ERR_INVALID_PARAMS`, so a restart policy counts the recoveries it was answered, or reads
   `get_readiness` when an answer was lost. After an explicit stop, and during shutdown, recovery is
@@ -1242,10 +1331,10 @@ identity, and every configured instance is new.
   instance's `requested` intent names it as origin, and the configuration no longer lists it
   (`LOGOS_ERR_NOT_READY` otherwise). A target on another Runtime is `LOGOS_ERR_INVALID_PARAMS`
   (DECISIONS G194, interim). The removal is written before the answer. The instance's permission
-  settings go with it: they stay attributed to its address and pass to no other (RUNTIME l.2637), so a
+  settings go with it: they stay attributed to its address and pass to no other (RUNTIME l.2564), so a
   new instance of the same module is provisioned afresh.
 - **Retention.** Retiring an instance keeps its state directory and reserves its state assignment:
-  retirement is not deletion (BCP l.395). The library deletes no state directory. A host removes a
+  retirement is not deletion (BCP l.400). The library deletes no state directory. A host removes a
   retired instance's directory offline, with the Runtime stopped (logosd's `logosctl state purge`,
   [DAEMON.md](DAEMON.md) §11; DECISIONS G143), and never one a state transfer still owes (its
   replacement's directory missing: start the Runtime once first). The tombstone keeps the
@@ -1258,7 +1347,7 @@ identity, and every configured instance is new.
 ## State transfer to a replacement instance
 
 An instance's module state stays with its state assignment: a new instance, even of the same module,
-starts with its own empty directory (RUNTIME l.3581, l.2638). To replace instance `a` by a new
+starts with its own empty directory (RUNTIME l.3446, l.2565). To replace instance `a` by a new
 instance `b` that continues from `a`'s state (an upgrade under a new id, a changed declaration),
 give `b` its own `state_assignment` in `modules` and add `{from: a, to: b, mode: move}` (or
 `mode: copy`) to `state_transfers`, with the Runtime stopped. The entry is the authorization (DECISIONS G306): no
@@ -1270,30 +1359,30 @@ At the next `start`, before the orchestration instance or anything else starts (
 2. For each entry, in order: for `copy`, `state_root/<a's assignment>` is copied into a staging
    directory `state_root/+transfer-<hash of b's assignment>` and flushed; `b`'s transfer record is
    written; then one write creates `b` (`unloaded`, intent `uninitialized`, its own assignment) and
-   retires `a` if it is still known (RUNTIME l.3548: the deployment's stop; its intent ends with it);
+   retires `a` if it is still known (RUNTIME l.3413: the deployment's stop; its intent ends with it);
    then `state_root/<a's assignment>` (`move`) or the staging directory (`copy`) is renamed to
    `state_root/<b's assignment>` and `state_root` flushed. A diagnostic says "state transfer: a
    (a-state) to b (b-state), move", or "…, copy, N bytes in K files".
 3. `b` starts only the ordinary way (the orchestration module or a Runtime Control `start_module`;
    the bootstrap itself when `b` is the orchestration instance), with its own authorization,
-   initialization and readiness (RUNTIME l.3553).
+   initialization and readiness (RUNTIME l.3418).
 
 `a`'s id and its assignment stay reserved on its tombstone, as for any retirement. After `move` its
 directory name is gone; after `copy` its directory stays as it was, for a later rollback or a purge.
 An applied entry is satisfied: left in the configuration, it changes nothing at later starts, and can
 be removed whenever convenient.
 
-- **What `b` gets.** The files only. Its configuration comes from its own entry (CONFIG l.251-256),
+- **What `b` gets.** The files only. Its configuration comes from its own entry (CONFIG l.255-261),
   its permission settings from its own provisioning, and its grants from the policy; `a`'s
   configuration and settings records are deleted with its retirement, and its grants name `a` and
-  pass to no other instance (CA l.733). No route survives a restart. Read `a`'s configuration while
+  pass to no other instance (CA l.725). No route survives a restart. Read `a`'s configuration while
   it is still known ("Keeping a configuration across an upgrade", above).
 - **No snapshot for `move`.** `move` is one rename on one file system and reads nothing. Back up
   `store_dir` and `state_root` together before a start that applies an entry: the backup is the
-  rollback (RUNTIME l.3549-3550, l.3554; BCP l.394).
+  rollback (RUNTIME l.3414-3415, l.3419; BCP l.399).
 - **`copy`.** The source's directory stays as it was, so it is the rollback: a later entry
   `{from: a, to: c, mode: copy}` gives a new `c` `a`'s state as it was at the transfer (RUNTIME
-  l.3588: `a`'s tombstone keeps its assignment). What is copied:
+  l.3453: `a`'s tombstone keeps its assignment). What is copied:
   - directories and regular files only. Any other entry (a symbolic link, a socket, a FIFO, a
     device) refuses the transfer, naming its path. A link at the root of `a`'s directory is followed;
     inside, none is. Hard links become separate files. Each file keeps its permission bits;
@@ -1308,7 +1397,7 @@ be removed whenever convenient.
   and on every error before it is freed (in orc builds; DECISIONS R5); nothing else of the content is
   kept, logged or recorded. `move` reads nothing. Apart from `copy`, no module state passes through
   the Runtime or logosd.
-- **Quiescence.** The source must have nothing of a realization left (RUNTIME l.3548, l.3563): its
+- **Quiescence.** The source must have nothing of a realization left (RUNTIME l.3413, l.3428): its
   realization is `absent`, and nothing it owned is pending. A direct instance of an earlier run
   qualifies once the Runtime holds the store lock, after a clean end or not. For a `hosted_dynamic`
   source the restart lock is the evidence ("Module Hosts", above): it must exist and be free.
@@ -1325,7 +1414,7 @@ be removed whenever convenient.
   made empty on purpose.
 - **The record.** `xfer-<hash>.cbor` in `store_dir` (`store.cddl`'s `lcn.xfer_record`): the source,
   its assignment, the mode, the bytes and files copied (0 for `move`), the Runtime epoch and the time
-  of the transfer. It stays when `b` is retired: retirement keeps audit history (RUNTIME l.3588).
+  of the transfer. It stays when `b` is retired: retirement keeps audit history (RUNTIME l.3453).
 - **Windows.** `move` renames with `MoveFileExW` (write-through, never replacing). `copy` is not
   supported there: `LOGOS_ERR_MODULE`, nothing changed.
 
@@ -1338,28 +1427,28 @@ be removed whenever convenient.
 | `a` still has a realization or its cleanup | `LOGOS_ERR_NOT_READY` |
 | `a` is `hosted_dynamic` and its restart lock file is missing: an edited `work_dir` or a cleaned `hosts/` is no evidence that its host ended | `LOGOS_ERR_NOT_READY`, naming the file |
 | A Module Host of an earlier run may still hold `a`'s state: its restart lock is held | `LOGOS_ERR_NOT_READY`, naming the file |
-| Another instance's retained `requested` intent names `a` as its origin (RUNTIME l.3568-3570) | `LOGOS_ERR_NOT_READY` |
+| Another instance's retained `requested` intent names `a` as its origin (RUNTIME l.3433-3435) | `LOGOS_ERR_NOT_READY` |
 | `copy`: `a`'s directory holds an entry other than a directory or a regular file ("…: sub/link") | `LOGOS_ERR_INVALID_PARAMS` |
 | `copy`: more than `max_bytes`, 1,000,000 entries or 64 levels, or too little free space | `LOGOS_ERR_MODULE` |
 | `copy` on Windows | `LOGOS_ERR_MODULE` |
 | The store cannot be written, a `copy` cannot read or write a file (the staging directory is removed), or the rename fails | `LOGOS_ERR_MODULE` |
 
 A held restart lock stays refused until the process holding it is gone: nothing ends a host of an
-earlier run. Find it with `lsof <file>` or `fuser <file>`, end it, and start again (RUNTIME l.2641,
-l.977). For an intent that names `a`, stop or retire that instance while the Runtime runs, then
-start again. A refused start runs nothing (DECISIONS G190) and leaves the store and both directories
+earlier run. Find it with `lsof <file>` or `fuser <file>`, end it, and start again (RUNTIME l.2568,
+l.912). For an intent that names `a`, stop or retire that instance while the Runtime runs, then
+start again. A refused start runs nothing (RUNTIME l.3955) and leaves the store and both directories
 as they were; a `LOGOS_ERR_MODULE` after the write leaves the rename to the next start.
 
 ## Observation
 
 What a module sees through Runtime Control's observation methods (DECISIONS I86; RUNTIME §9.3). None
-of it is configurable in this file; the limits below are the Runtime's (RUNTIME l.3394-3396 asks for
+of it is configurable in this file; the limits below are the Runtime's (RUNTIME l.3252-3254 asks for
 them to be documented).
 
 - **Lists.** `list_modules` and `list_routes` answer from one snapshot made when the first page is
   asked for, after the method's authority, the filters and each record's visibility; later pages
   come from that snapshot, so an instance created after it does not appear and nothing is reordered
-  (l.3404-3413). Every page applies the caller's current authority again: a record it may no longer
+  (l.3262-3271). Every page applies the caller's current authority again: a record it may no longer
   observe is left out, and a continuation is given only while a record it may observe remains. A
   route is listed while its record is kept, its ended state included.
 - **Cursors.** A `next_cursor` is a random 43-character token that continues only the query that
@@ -1385,67 +1474,69 @@ them to be documented).
   consumer's snapshot is touched. A page whose first record alone exceeds the page bytes is
   `LOGOS_ERR_MODULE`. A consumer's snapshots end with its execution attempt (a stop, a failure, a
   restart). Past an `observe_end` limit the registration is `LOGOS_ERR_MODULE` and changes nothing
-  (INTERFACE l.1483-1484). Nothing here is persisted.
+  (INTERFACE l.1451-1452). Nothing here is persisted.
 - **Execution summary.** `get_execution_summary` reports `selection.implementation` as the
   strategy the Module Loader realizes the instance with, `direct_static` or `direct_dynamic`. The
   Loader instance itself, which the Runtime's bootstrap mechanism realizes, reports
-  `implementation-specific` (RUNTIME l.212, l.3523-3528; DECISIONS G57, I89). No selection carries
+  `implementation-specific` (RUNTIME l.203, l.3388-3393; DECISIONS G57, I89). No selection carries
   `package` or `signer` yet.
   `realization` is `current` while the Runtime owns a realization for the instance, a cleanup still
   within its deadline included; `unknown` while a `realize` has not been answered, a bind,
   initialization or cleanup has outlived its deadline (DECISIONS G180), or the Loader's answer about
   the realization was lost or its Loader failed (DECISIONS G246, G252); `absent` otherwise.
-- **A realization change is a commit.** When `realization` changes without a lifecycle transition (a
-  late cleanup ending, a dynamic bind returning), the instance's execution revision advances and the
+- **A realization change is a commit.** When `realization` changes without a lifecycle transition (the
+  late end of a startup past its deadline, a dynamic bind returning), the instance's execution revision advances and the
   change is persisted (DECISIONS G227, interim). A guarded `start_module`, `recover_module` or
   `retire_module` prepared with the revision read before it is `LOGOS_ERR_INVALID_PARAMS`: read the
   revision again (`get_readiness`, `get_execution_summary`) and retry.
 - **Failure text.** A module record carries the failure classification. Its `reason` is the
   Runtime's or the module's own text, cut to 512 bytes. A typed Module Loader error is classified
-  `loader-<code>`, `loader-artifact-unavailable` for instance (RUNTIME l.3754), except a failed
+  `loader-<code>`, `loader-artifact-unavailable` for instance (RUNTIME l.3607), except a failed
   `_MODULE_init`, which is `initialization-failed`; neither carries a `reason`, since the Loader's
-  message may name host paths (RUNTIME l.1901-1904). The message stays in the Runtime's diagnostics
+  message may name host paths (RUNTIME l.1793-1796). The message stays in the Runtime's diagnostics
   and is not persisted. A failure of the bootstrap mechanism while it realizes the Loader itself is
   `other` (DECISIONS G57). A consumer of
   module records, readiness results, module-state events or execution summaries must treat a
   classification it does not recognize as an unspecified failure and never derive a restart policy
-  from its spelling (RUNTIME l.3756): later specs may add classifications, as Tier 4b added
+  from its spelling (RUNTIME l.3610): later specs may add classifications, as Tier 4b added
   `host-terminated` (DECISIONS G268).
 - **`describe_provider`** returns the call surface validated when the provider was last bound, kept
-  after it stops (RUNTIME l.540-541); before any bind it is `LOGOS_ERR_NOT_READY`, once the caller
+  after it stops (RUNTIME l.505); before any bind it is `LOGOS_ERR_NOT_READY`, once the caller
   holds a `discover` allow for each contract the record expects (otherwise `LOGOS_ERR_NOT_AUTHORISED`,
   which does not say whether it was bound).
 - **Permission settings in direct mode, without a profile.** Every instance has permission settings at
-  revision 1, with no permission, `applied` (RUNTIME l.2541): no permission profile is selected, so a
-  replacement that names a permission is `LOGOS_ERR_INVALID_PARAMS` (l.2536) and one with `[]` at
+  revision 1, with no permission, `applied` (RUNTIME l.2468): no permission profile is selected, so a
+  replacement that names a permission is `LOGOS_ERR_INVALID_PARAMS` (l.2462) and one with `[]` at
   revision 1 changes nothing (DECISIONS G229). `applied` with `[]` claims no containment: direct
-  modules are trusted in-process code (SECURITY l.204; RUNTIME l.1622, l.2545).
+  modules are trusted in-process code (SECURITY l.204; RUNTIME l.1536, l.2472).
   `get_execution_permissions` is `unavailable`. A target on another Runtime is
   `LOGOS_ERR_INVALID_PARAMS` (DECISIONS G228, interim).
-- **Permission settings with a profile** (RUNTIME l.2526-2604; DECISIONS I93, G281-G285;
+- **Permission settings with a profile** (RUNTIME l.2450-2532; DECISIONS I93, G281-G285;
   `docs/PERMISSIONS.md`). Each instance's settings are its own, saved before any reply.
   - *Replacement.* `update_permission_settings` with an array that is not ascending, repeats a name,
     names a permission the profile does not define or has constraints its definition does not admit,
-    or with a stale `expected_revision`, is `LOGOS_ERR_INVALID_PARAMS` without detail and saves
-    nothing. Repeating the saved `pending` or `applied` array returns the state unchanged. Anything
+    is `LOGOS_ERR_INVALID_PARAMS` without detail and saves nothing. One with a stale
+    `expected_revision` is answered with the response's error arm, `stale-revision` with the current
+    revision (RUNTIME l.1818-1822; DECISIONS I108), and saves nothing. Repeating the saved `pending` or `applied` array returns the state unchanged. Anything
     else is a new revision, and its status follows what is left of the instance's realization: none
     (`unloaded`, or `error` with its cleanup complete) `applied` at once, to be enforced at the next
     start; `loaded` or `ready` `pending`, and the instance is stopped at once, keeping its intent and
     origin, with no failure classification; `stopping`, or `error` with its cleanup running,
-    `pending` until that stop or cleanup ends; `error` with `cleanup-timeout` or `cleanup-failed`
-    `failed` at once. Widening and narrowing alike stop the instance. The engine never restarts it:
+    `pending` until that stop or cleanup ends; `stopping` past its stop deadline (`cleanup-timeout`)
+    or `error` with `cleanup-failed` `failed` at once. Widening and narrowing alike stop the instance. The engine never restarts it:
     resumption is `recover_module` by orchestration ("Orchestration duties").
   - *Settlement.* `pending` becomes `applied` once nothing of the realization is left, and `failed`
     (with `failure: "enforcement-failed"`) when its stop passes the stop deadline: the old
-    realization may persist with its old access, so the instance stays stopped and the late end of
-    its cleanup restores nothing. A permission no active point enforces makes the settings `failed`
+    realization may persist with its old access, so the late end of its cleanup completes the stop,
+    `unloaded` with `permission-enforcement-failed`, and restores nothing. A permission no active point enforces makes the settings `failed`
     once nothing is left. `failed` stays until a replacement is accepted; an `unloaded` instance whose
     settings fail gets the classification `permission-enforcement-failed`.
   - *Hosted instances* (DECISIONS G285, G275; part 4b-4c). A `hosted_dynamic` instance whose stop
     passes its deadline has its Module Host ended by force. Its realization stays until that end is
     confirmed, so a replacement meanwhile is `pending`, and the settings become `applied`, not
     `failed`, once the release completes. The same holds at the shutdown grace and after the Module
-    Loader's loss. The instance keeps `cleanup-timeout`. When a hosted release fails and nothing ends
+    Loader's loss. Past a deadline the instance is `stopping` with `cleanup-timeout` until then, and
+    `unloaded` after. When a hosted release fails and nothing ends
     its host (`cleanup-failed`), the settings are `failed` as for a direct one. A hosted instance
     restored with its restart lock held keeps `pending` settings until the lock is taken; they settle
     then and the event is published.
@@ -1462,17 +1553,17 @@ them to be documented).
     snapshot; it stops the realization. An authority renewal that narrows an installed permission
     ends the execution like a denial.
   - *Revocation.* A grant or policy change that ends the execution authorization stops the instance
-    (`authority-revoked`), whatever its settings' status; `pending` is no grace period (l.2601).
+    (`authority-revoked`), whatever its settings' status; `pending` is no grace period (l.2529).
   - *Authority.* Each method is authorized for its target, as a lifecycle request for an update and
-    an observation for a read (l.2580); settings authority grants no start, and changes no
+    an observation for a read (l.2508); settings authority grants no start, and changes no
     intent. A target on another Runtime is `LOGOS_ERR_INVALID_PARAMS`.
 
 ### Runtime Control subscriptions
 
 A module subscribes to the Runtime Control events through the binding it received at initialization
-(INTERFACE §2.5, applied by l.3837; DECISIONS I86, part 7b). The six event names are accepted.
+(INTERFACE §2.5, applied by l.3868; DECISIONS I86, part 7b). The six event names are accepted.
 `permission_settings_changed_event` follows every committed change of an instance's saved settings or
-their status, in commit order, while a profile is selected (RUNTIME l.2603-2604; DECISIONS I93);
+their status, in commit order, while a profile is selected (RUNTIME l.2531-2532; DECISIONS I93);
 without one it is never produced, the settings being constant (DECISIONS G229).
 `configuration_state_changed_event` follows every committed configuration revision, with the state's
 summary and never a value.
@@ -1480,10 +1571,10 @@ summary and never a value.
 - **Activation.** `subscribe` asks the event's own decision first, without a subject: a denial is
   `LOGOS_ERR_NOT_AUTHORISED`, as is a name that is not a Runtime Control event. A narrowed allow
   activates the subscription and filters what it receives.
-- **What is delivered** (RUNTIME l.3498, l.3732-3735; DECISIONS G161, G226). An event reaches a
+- **What is delivered** (RUNTIME l.3362, l.3589-3591; DECISIONS G161, G226). An event reaches a
   subscriber only while the subscriber may observe its exact subject: an instance event's module and
   instance, a route event's route, provider module and provider. An `inventory_changed` hint also
-  needs the matching list method's authority for at least one affected record (l.3419), and carries
+  needs the matching list method's authority for at least one affected record (l.3277), and carries
   only the collection. Each event is judged when the change is committed and again just before its
   handler runs if the decisions changed meanwhile (a new policy, a revocation, an expiry), so a
   revoked subscriber gets nothing more. Under an authority that issues only single-use decisions, each
@@ -1493,14 +1584,18 @@ summary and never a value.
   call Runtime Control. The Runtime runs handlers on its own pool of event workers (up to 64 threads,
   started on demand), one handler at a time per subscription, in commit order. Several hints of one
   collection waiting for a busy handler become one.
-- **A handler that falls behind loses its subscription** (DECISIONS G225, interim). Each subscription
+- **A handler that falls behind loses its subscription** (DECISIONS G225). Each subscription
   queues at most 256 events for its handler (and 256 waiting for an authority's decision); one more
   ends the subscription: its queued events are discarded, nothing more is delivered, and the Runtime
   records the diagnostic "Runtime Control subscription *id* of *instance* lost: its handler fell
-  behind (G225)". The subscriber gets no signal: `unsubscribe` of it is `LOGOS_OK`. An observer that
-  cannot be sure it saw every event must query (`list_modules`, `list_routes`,
-  `get_execution_summary`) and resubscribe, periodically when it cannot rule out a loss (RUNTIME
-  l.3425-3428). An `inventory_changed` subscription holds at most one pending hint per collection, so a
+  behind (G225)". The binding reports the end with `MODULE_ERROR` to the handler registered with
+  `observe_subscription_end`, once, on an event worker (INTERFACE l.1472-1481); `unsubscribe` of it is
+  `LOGOS_OK` once. An event decision that no longer allows the event at all (a deny, a refusal, a
+  failed evaluation) ends the subscription the same way with `NOT_AUTHORISED`; one that allows only
+  some subjects filters them. A Module Host reports the end in the host, as in process. An observer
+  that lost a subscription, or cannot be sure it saw every event, must query (`list_modules`,
+  `list_routes`, `get_execution_summary`) and resubscribe, periodically when it cannot rule out a
+  loss (RUNTIME l.3283-3286). An `inventory_changed` subscription holds at most one pending hint per collection, so a
   slow handler alone never loses it; past 1024 distinct affected records behind one pending hint the
   hint is still delivered while one of them stays visible, and the subscription is lost when none is.
 - **Limits.**
@@ -1522,6 +1617,6 @@ summary and never a value.
   is observable, so a module never receives the event of its own stop; `unsubscribe` of it stays
   `LOGOS_OK`, also inside `_MODULE_destroy`. The Runtime waits for a running handler before it calls
   the subscriber's `_MODULE_destroy` and before it shuts down; that wait counts toward the stop's
-  deadline, so a handler that does not return in time ends the stop in `error` with
-  `cleanup-timeout`, as a call still running does (DECISIONS G180). A subscription never
+  deadline, so a handler that does not return in time leaves the stop `stopping` with
+  `cleanup-timeout` until it returns, as a call still running does (DECISIONS G180). A subscription never
   unsubscribed is freed when its subscriber's execution attempt ends. Nothing here is persisted.

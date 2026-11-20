@@ -251,6 +251,16 @@ proc callerEvents(io: Io, c: Conn, events: sink seq[CallerEvent], size: int) =
           subscriptionFailure: ev.failure,
         )
       )
+    of ceSubscriptionEnd:
+      io.emit(
+        IoEvent(
+          conn: c.id,
+          kind: evSubscriptionEnd,
+          subscriptionId: ev.id,
+          subscriptionOp: ev.op,
+          subscriptionFailure: ev.failure,
+        )
+      )
     of ceClose:
       # The responses before it in this batch are the synthetic TRANSPORT_ERRORs
       # of the closing (§3.2).

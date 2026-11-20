@@ -583,10 +583,13 @@ suite "wipe: channel messages (W-12)":
     check inlineArrays(plumbing.EvalJob).len == 0
     check inlineArrays(plumbing.CallJob).len == 0
     check inlineArrays(plumbing.RcJob).len == 0
+    # `IoCommand.verdict.earlier`'s root (re-pin P8b, G394) is the selected
+    # earlier contract's root; its input travels on the heap.
     check inlineArrays(ioapi.IoCommand) ==
       @[
         "IoCommand.contract.root", "IoCommand.verdict.binding.contract",
-        "IoCommand.ticket", "IoCommand.selected.root",
+        "IoCommand.verdict.earlier.vResultPrivate.root", "IoCommand.ticket",
+        "IoCommand.selected.root",
       ]
     check inlineArrays(ioapi.IoEvent) == @["IoEvent.binding.contract"]
     check inlineArrays(ioapi.CallOutcome).len == 0

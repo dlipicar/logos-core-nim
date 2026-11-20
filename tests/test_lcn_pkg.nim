@@ -5,6 +5,7 @@ import std/[json, os, strutils]
 import unittest2
 import logos_sdk/base/hex
 import logos_sdk/crypto/blake3
+import logos_sdk/pins
 import ../src/logos_core/package/lgx
 import ../src/lcn_pkg
 
@@ -99,6 +100,48 @@ suite "pkg.cli: lcn-pkg producer commands":
       manifestBuild(missing, variants, work / "missing.cbor") == 1
       manifestBuild(escaping, variants, work / "escaping.cbor") == 1
       not fileExists(work / "missing.cbor")
+
+  test "[PKG-0020] [TXT-0456] manifest build writes extends, a dependency's contracts and the contract documents in commitment order":
+    proc commitment(fill: int): string =
+      "{\"commitment_model\": \"" & CommitmentModelId & "\", \"schema_root\": h'" &
+        toHex(fill, 2).repeat(32) & "', \"hash_profile\": \"" & HashProfileId &
+        "\", \"hash_suite\": \"" & HashSuiteId & "\"}"
+
+    let ordered = work / "ordered"
+    put(ordered / "linux-x86_64" / "lib" / "libalpha.so", "ALPHA for linux")
+    put(ordered / "linux-x86_64" / "schema" / "alpha.cddl", "alpha = uint\n")
+    put(ordered / "linux-x86_64" / "schema" / "beta.cddl", "beta = uint\n")
+    put(ordered / "linux-x86_64" / "schema" / "gamma.cddl", "gamma = uint\n")
+    let src = work / "ordered.edn"
+    put(
+      src,
+      "{\"package\": \"logos.example\", \"version\": \"0.1.0\", " &
+        "\"modules\": [{\"module\": \"alpha_module\", \"artifact\": \"alpha\", " &
+        "\"primary_contract\": " & commitment(7) & ", " & "\"extends\": [" &
+        commitment(2) & ", " & commitment(1) & "]}], " &
+        "\"variants\": [{\"id\": \"linux-x86_64\", \"platform\": {\"os\": \"linux\"}, " &
+        "\"artifacts\": [{\"id\": \"alpha\", \"kind\": \"module-binary\", " &
+        "\"path\": \"lib/libalpha.so\", \"hash\": h''}, {\"id\": \"alpha-schema\", " &
+        "\"kind\": \"schema\", \"path\": \"schema/alpha.cddl\", \"hash\": h''}, " &
+        "{\"id\": \"beta-schema\", \"kind\": \"schema\", \"path\": \"schema/beta.cddl\", " &
+        "\"hash\": h''}, {\"id\": \"gamma-schema\", \"kind\": \"schema\", " &
+        "\"path\": \"schema/gamma.cddl\", \"hash\": h''}]}], " &
+        "\"dependencies\": [{\"package\": \"logos.base\", \"requirement\": " &
+        "{\"kind\": \"compatible\", \"version\": \"1.0.0\"}, \"contracts\": [" &
+        commitment(4) & ", " & commitment(3) & "]}], " & "\"contract_documents\": [" &
+        "{\"commitment\": " & commitment(6) &
+        ", \"schema_artifact\": \"alpha-schema\", \"input_artifacts\": [\"gamma-schema\", \"beta-schema\"]}, " &
+        "{\"commitment\": " & commitment(5) &
+        ", \"schema_artifact\": \"alpha-schema\"}]}",
+    )
+    check manifestBuild(src, ordered, work / "ordered.cbor") == 0
+    # decodeManifest refuses any of these arrays out of order
+    let m = decodeManifest(b(readFile(work / "ordered.cbor"))).get
+    check:
+      m.modules[0].extends.len == 2
+      m.dependencies[0].contracts.len == 2
+      m.contractDocuments.len == 2
+      m.contractDocuments[1].inputArtifacts == @["gamma-schema", "beta-schema"]
 
   test "sign: a local key and an external signer (--emit-tbs, --attach-sig) differ only in the hedged signature":
     let tbs = work / "tbs.bin"

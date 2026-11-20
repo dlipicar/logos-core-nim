@@ -17,6 +17,13 @@ import dcbor  # noqa: E402
 
 IDENTIFIER = re.compile(r"[A-Za-z@_$](?:[-.]*[A-Za-z@_$0-9])*")
 PRIMITIVES = ("uint", "bool", "tstr", "bstr")
+# RFC 8610 Appendix D, the standard prelude.
+PRELUDE = frozenset(
+    """any uint nint int bstr bytes tstr text tdate time number biguint bignint bigint
+    integer unsigned decfrac bigfloat eb64url eb64legacy eb16 encoded-cbor uri b64url
+    b64legacy regexp mime-message cbor-any float16 float32 float64 float16-32 float32-64
+    float false true bool nil null undefined""".split()
+)
 
 
 class CdeError(ValueError):
@@ -41,9 +48,18 @@ def _fields(v: object, kind: int, required: set[int], optional: set[int] = froze
     return v
 
 
-def _name(x: object) -> str:
-    if type(x) is not str or not IDENTIFIER.fullmatch(x) or x in PRIMITIVES:
-        raise CdeError(f"invalid rule or reference name {x!r}")
+def _rule_name(x: object) -> str:
+    """A bound rule name is no prelude name (cdCDDLe §6)."""
+    if type(x) is not str or not IDENTIFIER.fullmatch(x) or x in PRELUDE:
+        raise CdeError(f"invalid rule name {x!r}")
+    return x
+
+
+def _reference_name(x: object) -> str:
+    """A reference may be a prelude name an external context supplies, but the
+    primitives and the Boolean literals have nodes of their own (G14)."""
+    if type(x) is not str or not IDENTIFIER.fullmatch(x) or x in PRIMITIVES or x in ("true", "false"):
+        raise CdeError(f"invalid reference name {x!r}")
     return x
 
 
@@ -122,7 +138,7 @@ def _type(v: object) -> None:
         raise CdeError(f"not a node: {v!r}")
     kind = v[0]
     if kind == 3:
-        _name(_fields(v, 3, {0, 1})[1])
+        _reference_name(_fields(v, 3, {0, 1})[1])
     elif kind == 5:
         _primitive(v)
     elif kind == 6:
@@ -163,7 +179,7 @@ def check_document(v: object) -> None:
     names = []
     for r in v[1]:
         r = _fields(r, 1, {0, 1, 3})
-        names.append(_name(r[1]))
+        names.append(_rule_name(r[1]))
         _type(r[3])
     if any(not a < b for a, b in zip(names, names[1:])):
         raise CdeError("rules must be sorted by name without duplicates")

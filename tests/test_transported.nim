@@ -242,7 +242,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
   teardown:
     leftover()
 
-  ltTest "[RUN-0541] [RUN-0623] [BCP-0028] [IMPL-DECISION G254] [IMPL-DECISION G257] a local-transport route's answer carries the invocation descriptor; the endpoint is private; renewal issues a fresh ticket":
+  ltTest "[RUN-1161] [RUN-1179] [BCP-0028] [IMPL-DECISION G254] [IMPL-DECISION G257] a local-transport route's answer carries the invocation descriptor; the endpoint is private; renewal issues a fresh ticket":
     let e = fixtureEngine(transported())
     let dir = shortBase / ("e" & $engines)
     discard e.started(meter())
@@ -272,7 +272,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check again.get.ticket != inv.ticket
     e.finish()
 
-  ltTest "[RUN-0541] [IMPL-DECISION G254] a direct route, or one no rule selects, has no invocation descriptor":
+  ltTest "[RUN-1161] [RUN-1180] [IMPL-DECISION G254] a direct route, or one no rule selects, has no invocation descriptor":
     block:
       let e = fixtureEngine(config())
       discard e.started(meter())
@@ -292,7 +292,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
       check r.recordOf.invocation.isNone
       e.finish()
 
-  ltTest "[RUN-0543] [RUN-0544] [TRN-0195] [CAP-0257] [IMPL-DECISION G255] no list, record, retained answer, diagnostic or stored file holds a ticket; a replay answers without the invocation":
+  ltTest "[RUN-0543] [RUN-0544] [RUN-1170] [TRN-0195] [CAP-0257] [IMPL-DECISION G255] no list, record, retained answer, diagnostic or stored file holds a ticket; a replay answers without the invocation":
     var cfg = transported()
     let root = cfg.workDir
     cfg.storeDir = Opt.some(root / "store") # the persistent Runtime state (I82)
@@ -406,7 +406,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check o.refusal(fresh) == ecNotAuthorised
     e.finish()
 
-  ltTest "[TRN-0153] [RUN-0623] [LDR-0021] [IMPL-DECISION G257] an unused ticket dies with its route; the Runtime-served endpoint of a direct provider goes with its realization and a restart serves a new one":
+  ltTest "[TRN-0153] [RUN-1179] [LDR-0021] [IMPL-DECISION G257] an unused ticket dies with its route; the Runtime-served endpoint of a direct provider goes with its realization and a restart serves a new one":
     let e = fixtureEngine(transported())
     let meterView = e.started(meter())
     let (_, rc) = e.startClient()
@@ -456,7 +456,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecOk)
     e.finish()
 
-  ltTest "[TRN-0317] [IMPL-DECISION G174] [IMPL-DECISION G260] revoked: an in-flight Request is answered NOT_AUTHORISED, then the session ends NOT_AUTHORISED; the late result is not sent":
+  ltTest "[TRN-0317] [RUN-1101] [IMPL-DECISION G260] revoked: an in-flight Request gets no Response; the session ends NOT_AUTHORISED and the caller fails the Request TRANSPORT_ERROR; the late result is not sent":
     let e = fixtureEngine(
       transported(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
@@ -473,21 +473,23 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     let tag = o.send(conn, 19)
     check heldAt(before + 1)
     check rc.renew("r", rec.route).code == ecNotAuthorised
-    check o.outcome(conn, tag).codeOf == Opt.some(ecNotAuthorised)
+    check o.outcome(conn, tag).codeOf == Opt.some(ecTransport)
     let closed = o.closedOf(conn)
     check closed.isSome
     if closed.isSome:
       check closed.get.cause == ccPeerError
       check closed.get.code == ecNotAuthorised
+      # [P5 Q3 (a)] The close failed it: no Response came (TRANSPORT l.979).
+      check tag in closed.get.ids
     gate.store(false)
     check heldAt(before)
     o.settle(50 * Slow)
     check o.responses(conn, tag) == 1
-    # The provider is destroyed only after the call returned (G174).
+    # The provider is destroyed only after the call returned.
     check e.stop(meterView.instance).tryGet.state == msUnloaded
     e.finish()
 
-  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] close_route drains: the in-flight Request gets its result, a new one is NOT_READY, then the session closes with no ProtocolError":
+  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] [TXT-0124] close_route drains: the in-flight Request gets its result, a new one is NOT_READY, then ProtocolError NOT_READY and close":
     let e = fixtureEngine(transported())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -509,7 +511,8 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     let closed = o.closedOf(conn)
     check closed.isSome
     if closed.isSome:
-      check closed.get.cause == ccPeerClosed
+      check closed.get.cause == ccPeerError
+      check closed.get.code == ecNotReady
     e.finish()
 
   ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] a provider stop drains to the stop deadline, then closes; the provider is destroyed only after its call returns":
@@ -531,21 +534,26 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     var t: Thread[(Engine, string)]
     check e.stopping(meterView.instance, t)
     # The stop deadline (`PassingStop`) passes with the call held: the session
-    # closes, so the caller's call fails TRANSPORT_ERROR (TRANSPORT l.543).
+    # terminates with NOT_READY (TRANSPORT l.977), so the caller's call fails
+    # TRANSPORT_ERROR (l.979-980).
     check o.outcome(conn, tag, 3 * Wait).codeOf == Opt.some(ecTransport)
-    check o.closedOf(conn).isSome
+    let closed = o.closedOf(conn)
+    check closed.isSome and closed.get.cause == ccPeerError
+    check closed.isSome and closed.get.code == ecNotReady
     check destroyed.load == gone
     gate.store(false)
     joinThread(t)
-    # The stop failed `cleanup-timeout`; the release follows the call's return.
-    check stopReply.load == ord(msError)
+    # The stop answered `stopping` with `cleanup-timeout` at its deadline
+    # (RUNTIME l.575); the release follows the call's return and completes it.
+    check stopReply.load == ord(msStopping)
     check waitUntil(
       proc(): bool =
-        destroyed.load == gone + 1
+        destroyed.load == gone + 1 and
+          e.view(meterView.instance).tryGet.state == msUnloaded
     )
     e.finish()
 
-  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] a consumer stop and a provider failure drain: an admitted Request answers, marked cancelled; a new one is NOT_READY; then the session closes":
+  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] [TXT-0124] a consumer stop and a provider failure drain: an admitted Request answers, marked cancelled; a new one is NOT_READY; then ProtocolError NOT_READY and close":
     let e = fixtureEngine(transported())
     let meterView = e.started(meter())
     let o = newOwner()
@@ -575,7 +583,8 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
       if got.codeOf == Opt.some(ecOk):
         check got.reading.reading.value == 1 # marked cancelled at the route's end
       let closed = o.closedOf(conn)
-      check closed.isSome and closed.get.cause == ccPeerClosed
+      check closed.isSome and closed.get.cause == ccPeerError
+      check closed.isSome and closed.get.code == ecNotReady
 
     # The provider fails: the session drains; its result is delivered, then
     # the session closes and the release follows the call's return.
@@ -592,7 +601,8 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
       gate.store(false)
       check o.outcome(conn, tag).codeOf == Opt.some(ecOk)
       let closed = o.closedOf(conn)
-      check closed.isSome and closed.get.cause == ccPeerClosed
+      check closed.isSome and closed.get.cause == ccPeerError
+      check closed.isSome and closed.get.code == ecNotReady
       check waitUntil(
         proc(): bool =
           destroyed.load == gone + 1
@@ -618,13 +628,15 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     check e.view(v.instance).tryGet.state == msError
     check o.outcome(conn, o.send(conn, 4)).codeOf == Opt.some(ecNotReady)
     # The bound (`stop_deadline` from the route's end, `PassingStop`) passes
-    # with the call held: the session closes.
+    # with the call held: ProtocolError NOT_READY and close (TRANSPORT l.977).
     check o.outcome(conn, tag, 3 * Wait).codeOf == Opt.some(ecTransport)
-    check o.closedOf(conn).isSome
+    let closed = o.closedOf(conn)
+    check closed.isSome and closed.get.cause == ccPeerError
+    check closed.isSome and closed.get.code == ecNotReady
     gate.store(false)
     e.finish()
 
-  ltTest "[TRN-0317] [CAP-0254] [IMPL-DECISION G174] under the Capability Authority a session ends with the decision its ticket carried, also after renewal moved the route's end; its in-flight Request is answered NOT_AUTHORISED first":
+  ltTest "[TRN-0317] [CAP-0254] [RUN-1101] under the Capability Authority a session ends with the decision its ticket carried, also after renewal moved the route's end; its in-flight Request gets no Response and fails TRANSPORT_ERROR at the close":
     let e = underAuthority()
     setScript(
       allow("establish-route", validMs = 1000), allow("renew-route", validMs = 10_000)
@@ -650,12 +662,13 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
         discard e.routes()
         o.pump(1) or o.responses(conn, tag) > 0
     )
-    check o.outcome(conn, tag).codeOf == Opt.some(ecNotAuthorised)
+    check o.outcome(conn, tag).codeOf == Opt.some(ecTransport)
     let closed = o.closedOf(conn)
     check closed.isSome
     if closed.isSome:
       check closed.get.cause == ccPeerError
       check closed.get.code == ecNotAuthorised
+      check tag in closed.get.ids # [P5 Q3 (a)] the close failed it
     # The route itself runs to its renewed end: a later session works.
     let now = e.routes().filterIt(it.route == rec.route)
     check now.len == 1 and now[0].isState(LogosNSRuntimeControlRouteStateKind.Ready)
@@ -675,7 +688,7 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     )
     e.finish()
 
-  ltTest "[RUN-0623] [IMPL-DECISION G257] an endpoint that cannot be created fails the establishment MODULE_ERROR and makes no route":
+  ltTest "[RUN-1179] [IMPL-DECISION G257] an endpoint that cannot be created fails the establishment MODULE_ERROR and makes no route":
     # 120 bytes of directory: no socket path under it fits `sun_path`.
     let long = shortBase / repeat('d', 120)
     let e = fixtureEngine(transported(dir = long))
@@ -933,7 +946,7 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
     h.release()
     e.finish()
 
-  test "[RUN-0804] [RUN-0805] [IFC-0948] [IMPL-DECISION G259] a failed connection's cause decides the materialization's code; a peer mismatch fails the route":
+  test "[RUN-0804] [RUN-0805] [IFC-0948] [IMPL-DECISION G259] [IMPL-DECISION G256] a failed connection's cause decides the materialization's code; a peer mismatch fails the route; a peer's ProtocolError NOT_READY is NOT_READY":
     check connectOutcome(cfHello, ecNotAuthorised) == (ecNotAuthorised, false)
     check connectOutcome(cfHello, ecVersionMismatch) == (ecVersionMismatch, false)
     check connectOutcome(cfHello, ecModule) == (ecModule, false)
@@ -945,6 +958,10 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
     check connectOutcome(cfUnsupported, ecTransport) == (ecModule, false)
     check connectOutcome(cfShutdown, ecTransport) == (ecNotReady, false)
     check closedCode(ccPeerError, ecNotAuthorised) == ecNotAuthorised
+    # [P3 ruling 5] A peer's ProtocolError NOT_READY is a known readiness end.
+    check closedCode(ccPeerError, ecNotReady) == ecNotReady
+    for cause in [ccPeerClosed, ccProtocol, ccNotWritable, ccOverflow]:
+      check closedCode(cause, ecNotReady) == ecTransport
     for cause in [ccPeerClosed, ccPeerError, ccProtocol, ccNotWritable, ccOverflow]:
       check closedCode(cause, ecTransport) == ecTransport
     check closedCode(ccPeerClosed, ecOk) == ecTransport
@@ -1007,7 +1024,7 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
       h.release()
       e.finish()
 
-  ltTest "[IMPL-DECISION G174] [IMPL-DECISION G260] calls in flight at the route's end: revoked, NOT_AUTHORISED; closed, their results":
+  ltTest "[RUN-1101] [IMPL-DECISION G260] [TXT-0092] calls in flight at the route's end: revoked, TRANSPORT_ERROR; closed, their results; a lost connection, TRANSPORT_ERROR":
     block revoked:
       let e = fixtureEngine(transported(denyRenew()))
       discard e.started(meter())
@@ -1023,9 +1040,10 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
       check heldAt(before + 2)
       check rc.renew("r", route).code == ecNotAuthorised
       check done[0].finished
-      check done[0].codeOf == ecNotAuthorised
+      check done[0].codeOf == ecTransport
+      # The provider still holds it (RUNTIME l.1272).
       joinThread(t)
-      check bgCode.load == ord(ecNotAuthorised)
+      check bgCode.load == ord(ecTransport)
       gate.store(false)
       check heldAt(before)
       c.vtable.release(addr c)
@@ -1055,8 +1073,35 @@ suite "run.transported: the caller-side handle (I90 part 4b-2b)":
       c.vtable.release(addr c)
       h.release()
       e.finish()
+    block lost:
+      # [TXT-0092] A binding failure that ends admitted calls: TRANSPORT_ERROR,
+      # which says nothing of whether the provider ran them (it still holds
+      # them here).
+      done[0].reset()
+      let e = fixtureEngine(transported())
+      discard e.started(meter())
+      let (_, rc) = e.startClient()
+      let route = rc.establish("k").recordOf.route
+      var h = rc.handle(route)
+      gate.store(true)
+      let before = held.load
+      bgDone.store(false)
+      var t: Thread[ptr LogosRouteHandle]
+      createThread(t, background, addr h)
+      var c = h.submitted(readReq(19), addr done[0])
+      check heldAt(before + 2)
+      check e.closeSessionsForTests(route).isOk
+      joinThread(t)
+      check bgCode.load == ord(ecTransport)
+      check done[0].finished
+      check done[0].codeOf == ecTransport
+      gate.store(false)
+      check heldAt(before)
+      c.vtable.release(addr c)
+      h.release()
+      e.finish()
 
-  ltTest "[TRN-0278] [IMPL-DECISION G256] a lost connection is TRANSPORT_ERROR and leaves the route ready; the route's later end still decides new calls; renew_route gives a working handle":
+  ltTest "[TRN-0278] [RUN-1100] [IMPL-DECISION G256] a lost connection is TRANSPORT_ERROR and leaves the route ready; the route's later end still decides new calls; renew_route gives a working handle":
     block revoked:
       let e = fixtureEngine(transported(denyRenew()))
       discard e.started(meter())
@@ -1499,7 +1544,7 @@ suite "run.transported: events (I90 part 4b-2c)":
     k2.release()
     d.finish()
 
-  ltTest "[IMPL-DECISION G165] [TRN-0278] an Event larger than the subscriber's frame limit: a direct subscriber gets it; the transported subscriber's connection closes TRANSPORT_ERROR, its route stays ready, and renew_route gives a working handle":
+  ltTest "[IMPL-DECISION G165] [TRN-0278] [TXT-0079] [TXT-0118] an Event larger than the subscriber's frame limit: a direct subscriber gets it; the transported subscriber's connection closes TRANSPORT_ERROR, its route stays ready, and renew_route gives a working handle":
     let (e, rc, twin) = bulkEngine()
     var (route, far) = rc.bulkHandle("far")
     let near = twin.establish("near", root = bulkRoot).recordOf.route
@@ -1577,7 +1622,7 @@ suite "run.transported: events (I90 part 4b-2c)":
     direct.release()
     e.finish()
 
-  ltTest "[RUN-0832] [IMPL-DECISION G175] scoped publication over a session: only that connection's subscriptions; after Cancel NOT_READY; through a revoked route NOT_AUTHORISED; after the connection closed NOT_READY, and a new connection does not inherit the destination":
+  ltTest "[RUN-0832] [RUN-1101] [IMPL-DECISION G175] scoped publication over a session: only that connection's subscriptions; after Cancel NOT_READY; through a revoked route NOT_AUTHORISED, and the call the revocation ended is TRANSPORT_ERROR; after the connection closed NOT_READY, and a new connection does not inherit the destination":
     let valid = changed(3)
     block cutoff:
       let e = fixtureEngine(transported(extra = @[dmeterStatic]))
@@ -1632,7 +1677,7 @@ suite "run.transported: events (I90 part 4b-2c)":
       check inv != nil
       check rc.renew("r", route).code == ecNotAuthorised
       check done[0].finished
-      check done[0].codeOf == ecNotAuthorised
+      check done[0].codeOf == ecTransport
       check ctxPublish(inv, Changed, valid) == ecNotAuthorised
       settled()
       check heard[0].count.load == 0
@@ -1674,7 +1719,7 @@ suite "run.transported: events (I90 part 4b-2c)":
       h2.release()
       e.finish()
 
-  ltTest "[RUN-0243] an ordinary publication that cannot be validated is dropped with a diagnostic and leaves the connections as they were":
+  ltTest "[RUN-0243] an ordinary publication that cannot be validated is refused with a diagnostic and leaves the connections as they were":
     let e = fixtureEngine(transported(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -1683,9 +1728,15 @@ suite "run.transported: events (I90 part 4b-2c)":
     check h.observe(addr seen) == ecOk
     var a: LogosSubscriptionId
     check h.hear(0, a) == ecOk
-    publishRaw(cstring(Changed), encodeCbor(cborMap((cbor("value"), cbor("seven")))))
-    publishRaw(cstring(Changed), [0xA1'u8, 0x65])
-    check e.diagnostics().anyIt("was not delivered on route" in it)
+    # [SPEC INTERFACE l.3351; DECISIONS I106] Refused by the publisher's own
+    # contract, before any subscriber connection.
+    check publishRaw(
+      cstring(Changed), encodeCbor(cborMap((cbor("value"), cbor("seven"))))
+    ) == CErrorCode(ord(ecInvalidParams))
+    check publishRaw(cstring(Changed), [0xA1'u8, 0x65]) ==
+      CErrorCode(ord(ecInvalidParams))
+    check e.diagnostics().anyIt("was refused" in it)
+    check not e.diagnostics().anyIt("was not delivered on route" in it)
     check h.read(4).isOk
     publishRaw(cstring(Changed), changed(7))
     check heardAt(0, 1)

@@ -189,8 +189,9 @@ proc writeSettings(
     t: LogosNSRuntimeModuleInstanceAddress,
     revision: uint64,
     xs: seq[PermissionSetting],
+    refusal = false,
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "update_permission_settings",
     encode(
@@ -199,6 +200,7 @@ proc writeSettings(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 type SettingsView = LogosNSRuntimeControlPermissionSettingsState
 
@@ -211,7 +213,7 @@ proc read(r: RcResult): SettingsView =
 proc written(r: RcResult): SettingsView =
   check r.code == ecOk
   if r.code == ecOk:
-    result = LogosNSRuntimeControlUpdatePermissionSettingsResponse.decode(r.response).tryGet.state
+    result = r.accepted(LogosNSRuntimeControlUpdatePermissionSettingsResponse).state
 
 func status(s: SettingsView): string =
   ($s.application.kind).toLowerAscii
@@ -343,10 +345,13 @@ suite "run.permissions: settings under a selected profile (RUNTIME l.2526-2587)"
     let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     discard e.create(slow(), "s").tryGet
-    check rc.writeSettings(e.target("s"), 5, @[]).code == ecInvalidParams
+    # [re-pin P4a] `stale-revision`, carrying the settings revision.
+    check rc.writeSettings(e.target("s"), 5, @[], refusal = true).refused.get.stale ==
+      Opt.some(1'u64)
     check rc.writeSettings(e.target("s"), 1, @[]).written.revision == 2
-    let stale = rc.writeSettings(e.target("s"), 1, @[ambient()])
-    check stale.code == ecInvalidParams and stale.detail.len == 0
+    let stale = rc.writeSettings(e.target("s"), 1, @[ambient()], refusal = true)
+    check stale.code == ecOk and stale.detail.len == 0
+    check stale.refused.get.stale == Opt.some(2'u64)
     check rc.now(e, "s").revision == 2
     check rc.now(e, "s").perms.len == 0
     e.finish()
@@ -396,7 +401,7 @@ suite "run.permissions: settings under a selected profile (RUNTIME l.2526-2587)"
     check rc.now(e, "s").revision == 1
     e.finish()
 
-  test "[RUN-0473] [RUN-0481] settings authority is per method and target: it changes no intent, and grants no start":
+  test "[RUN-0473] [RUN-0481] [RUN-1141] settings authority is per method and target: it changes no intent, and grants no start":
     # The internal policy's rules decide, in the parity pass too.
     let e = fixtureEngine(
       pconfig(
@@ -421,6 +426,13 @@ suite "run.permissions: settings under a selected profile (RUNTIME l.2526-2587)"
     discard e.create(slow(), "y").tryGet
     let before = e.view("x").tryGet
     check rc.writeSettings(e.target("y"), 1, @[]).code == ecNotAuthorised
+    # [SPEC RUNTIME l.2461; l.1828-1829, step 3 before 4] An unordered or
+    # duplicate array is INVALID_PARAMS without detail, before the refused
+    # target, and is never sorted.
+    for xs in [@[ambient(), setting(Quota, quota(1))], @[ambient(), ambient()]]:
+      let r = rc.writeSettings(e.target("y"), 1, xs)
+      check r.code == ecInvalidParams
+      check r.detail.len == 0
     check rc.now(e, "y").revision == 1
     check rc.writeSettings(e.target("x"), 1, @[]).written.revision == 2
     let after = e.view("x").tryGet
@@ -448,7 +460,7 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
   teardown:
     leftover()
 
-  test "[RUN-0914] [RUN-1066] [RUN-0912] [RUN-0916] [RUN-0917] [RUN-0475] narrowing a running instance: pending while its stop runs, then unloaded with no failure, intent and origin kept, then applied":
+  test "[RUN-0914] [RUN-1066] [TXT-0581] [RUN-1142] [RUN-0916] [RUN-0917] [RUN-0475] narrowing a running instance: pending while its stop runs, then unloaded with no failure, intent and origin kept, then applied":
     let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     let t = e.client2("t")
@@ -457,7 +469,8 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
     let p = rc.writeSettings(e.target("t"), 1, @[]).written
     check p.revision == 2 and p.status == "pending"
     # [RUN-0917] The stop began before the reply, and with it the realization
-    # lost its admission: `pending` is no grace period.
+    # lost its admission: `pending` is no grace period. [TXT-0581] An
+    # enforcement stop takes the ordinary rows: `ready` → `stopping` → `unloaded`.
     check e.view("t").tryGet.state == msStopping
     check rcCall(t, "get_execution_permissions", [0xA0'u8]).code == ecNotReady
     # [RUN-0475] Repeating pending settings: the state, no second stop.
@@ -476,7 +489,7 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
     check rc.now(e, "t").revision == 2
     e.finish()
 
-  test "[RUN-0911] [RUN-0913] [RUN-0915] [RUN-0912] [RUN-0909] [IMPL-DECISION G217] widening stops the instance too; the engine does not restart it, and its recovery is decided with the widened scopes":
+  test "[RUN-0911] [RUN-0913] [RUN-0915] [RUN-1142] [RUN-0909] [IMPL-DECISION G217] widening stops the instance too; the engine does not restart it, and its recovery is decided with the widened scopes":
     let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     let t = e.client2("t")
@@ -498,7 +511,7 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
     check latestBinding().installed == Opt.some(wide)
     e.finish()
 
-  test "[RUN-0479] [RUN-0890] [RUN-0480] [RUN-0476] [RUN-0469] [RUN-0917] [IMPL-DECISION G285] [IMPL-DECISION G284] a reconciliation stop past its deadline: failed, the instance stopped; the late cleanup restores nothing; a start is refused until an accepted replacement applies":
+  test "[RUN-0479] [RUN-0890] [RUN-0480] [RUN-0476] [RUN-0469] [RUN-0917] [IMPL-DECISION G285] [IMPL-DECISION G284] [RUN-1092] a reconciliation stop past its deadline: failed, the instance stopping; the late cleanup completes the stop with permission-enforcement-failed; a start is refused until an accepted replacement applies":
     var cfg = pconfig()
     cfg.stopDeadline = PassingStop
     let e = fixtureEngine(cfg)
@@ -507,8 +520,12 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
     clientDestroyGate.store(true)
     check rc.writeSettings(e.target("t"), 1, @[]).written.status == "pending"
     # [RUN-0917] No grace period: the stop deadline applies as to any stop.
-    check e.stateIs("t", msError)
-    check e.view("t").tryGet.failure.get.kind == fkCleanupTimeout
+    check waitUntil(
+      proc(): bool =
+        let v = e.view("t").tryGet
+        v.state == msStopping and v.failure.isSome and
+          v.failure.get.kind == fkCleanupTimeout
+    )
     check rc.statusIs(e, "t", "failed")
     let f = rc.now(e, "t")
     check f.revision == 2 and f.failure == Opt.some("enforcement-failed")
@@ -521,10 +538,11 @@ suite "run.permissions: reconciliation by stop and re-realize (RUNTIME l.2590-26
       proc(): bool =
         not e.cleanupPending("t")
     )
-    # [RUN-0480] The cleanup's end leaves it failed and the instance stopped.
+    # [RUN-0480] The cleanup's end leaves the settings failed; it completes
+    # the stop, and the classification is the enforcement's (RUNTIME l.3613).
+    check e.stateIs("t", msUnloaded)
     sleep(50 * Slow)
     check rc.now(e, "t").status == "failed"
-    check e.view("t").tryGet.state == msError
     let refused = e.start("t")
     check refused.isErr and refused.error.code == ecNotAuthorised
     let v = e.view("t").tryGet
@@ -811,7 +829,7 @@ suite "run.permissions: admission (CA l.343-345, l.364, l.417; RUNTIME l.2538)":
       check evaluateRequest(b[0].request, plain.runtimeInstanceId).tryGet.scopes.len == 1
     plain.finish()
 
-  test "[RUN-0906] [RUN-0907] the snapshot is what admission installed: the saved settings at admission, not the declaration":
+  test "[RUN-0906] [RUN-0907] [TXT-0367] the snapshot is what admission installed: the saved settings at admission, not the declaration":
     let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     var rec = client()
@@ -831,7 +849,7 @@ suite "run.permissions: admission (CA l.343-345, l.364, l.417; RUNTIME l.2538)":
     e.finish()
 
   when not declared(caParity):
-    test "[IMPL-DECISION G284] [IMPL-DECISION G110] an orchestration instance provisioned without host-ambient fails the bootstrap NOT_AUTHORISED":
+    test "[RUN-1201] [IMPL-DECISION G284] [IMPL-DECISION G110] an orchestration instance provisioned without host-ambient fails the bootstrap NOT_AUTHORISED (the shared code, l.3955)":
       let e = fixtureEngine(
         pconfig(
           entries =
@@ -982,6 +1000,32 @@ when declared(caParity):
         @[setting(Quota, quota(5)), ambient()]
       )
       check rc.now(e, "t").perms == @[setting(Quota, quota(10)), ambient()]
+      e.finish()
+
+    test "[IMPL-DECISION G170] an execution renewal whose allow narrows an installed permission ends the execution as authority-denied, as a narrowed route renewal is (CA l.940; re-pin P4c M9); intent and origin kept":
+      let e = fixtureEngine(quotaTen())
+      let (_, rc) = e.startClient("c")
+      discard e.create(client(), "t").tryGet
+      # [IMPL] The renewal comes at the end − min(30 s, a third of the
+      # lifetime): 600 ms in, on the real clock.
+      setScript(
+        allow("execute", validMs = 900),
+        Rule(
+          what: "renew-execution",
+          verdict: vAllow,
+          validMs: Everything,
+          permName: Quota,
+          permConstraints: quota(5),
+        ),
+      )
+      check rc.startBy("t") == ecOk
+      check latestBinding().installed ==
+        Opt.some(@[setting(Quota, quota(10)), ambient()])
+      check e.stateIs("t", msUnloaded)
+      let v = e.view("t").tryGet
+      check v.failure.isSome and v.failure.get.kind == fkAuthorityDenied
+      check v.execution.intent == inRequested
+      check v.intentOrigin.instance == "c"
       e.finish()
 
     test "[CAP-0084] [CAP-0068] [BCP-0049] [BCP-0081] [IMPL-DECISION G282] an allow broadening a permission, leaving one out, or allowing another is an evaluation failure":

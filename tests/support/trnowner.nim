@@ -378,8 +378,11 @@ proc unsubscribe*(o: Owner, conn: ConnId, id: uint64) =
 proc release*(o: Owner, conn: ConnId, n: int) =
   o.send(IoCommand(conn: conn, kind: cmdRelease, releaseBytes: n))
 
-proc terminate*(o: Owner, conn: ConnId) =
-  o.send(IoCommand(conn: conn, kind: cmdTerminate))
+proc terminate*(o: Owner, conn: ConnId, code = ecNotAuthorised, phase = tpWhole) =
+  o.send(IoCommand(conn: conn, kind: cmdTerminate, termCode: code, termPhase: phase))
+
+proc endSubscription*(o: Owner, conn: ConnId, id: uint64) =
+  o.send(IoCommand(conn: conn, kind: cmdEndSubscription, subId: id))
 
 proc publishCmd*(
     endpoint: EndpointId, event: string, data: CborValue, tooLarge = tlReport

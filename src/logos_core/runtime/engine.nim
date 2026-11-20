@@ -45,7 +45,7 @@
 ## caller's thread. A provider that leaves `ready` fails its routes at once,
 ## and its `_MODULE_destroy` waits until its in-flight count is zero. A
 ## consumer's routes close when it is stopped and fail when it fails (§3.4
-## l.624-626).
+## l.589-591).
 ##
 ## [IMPL] Route retention (§9.3 l.3180, l.3249: a deployment concern). An
 ## ended route keeps its record while anything can still reach it by its id:
@@ -57,11 +57,16 @@
 ## (l.3157-3159, l.3188); a `request_key` replay still returns its retained
 ## result (l.3175-3176).
 ##
-## [G171 interim (TF-18)] The order of checks for a Runtime Control request:
-## the caller's association (NOT_AUTHORISED), the method's own authority where
-## it names no target from the payload, the payload (INVALID_PARAMS), the
-## target's authority, then readiness, including whether the caller's binding
-## is still current (`originReady`), and last the contract root.
+## [SPEC RUNTIME l.1824-1833] The order of checks for a Runtime Control
+## request: the method (1); the caller's association and the method's own
+## authority where it names no target from the payload (2); the payload (3);
+## the target's authority and non-disclosure (4); the expected revision (5);
+## the precondition table's rows in order (6); readiness, including whether
+## the caller's binding is still current (`originReady`; 7), which every
+## success passes, a replay or a join included; last the contract root (8).
+## Under a Capability Authority a shutting-down Runtime answers NOT_READY at
+## the first decision that needs an evaluation (G171: a check that cannot be
+## evaluated is not a failure that applies).
 ##
 ## [IMPL] Events and asynchronous calls (step 4). Subscriptions are activated,
 ## deactivated and admitted here, one handler invocation at a time; the
@@ -70,13 +75,14 @@
 ## call workers apart from the lifecycle workers (`asynccall.nim`); its
 ## completion callback, and a deferred provider's `request_cancel`, run on a
 ## lifecycle worker. A route that ends deactivates its subscriptions and marks
-## the invocations admitted through it cancelled; what becomes of their
-## results is G174's policy. A realization that ends suppresses the completion
+## the invocations admitted through it cancelled; an admitted call that the
+## end ends is TRANSPORT_ERROR (RUNTIME l.1271; `endByRoute`,
+## `invoke.endedByRoute`). A realization that ends suppresses the completion
 ## callbacks of its calls that have not begun.
 ##
 ## [IMPL] The host (step 5, `host.nim`). `bootstrap` creates the configured
 ## instances and answers once the orchestration instance is `ready` or its
-## start failed (`checkBootstrap`, G190). Shutdown can be accepted without
+## start failed (`checkBootstrap`; RUNTIME l.3939-3940). Shutdown can be accepted without
 ## waiting and waited for without initiating it; every waiter gets the one
 ## result (G60). `tryClose` refuses while module code runs on a worker and
 ## leaves the Runtime thread running, so it can be tried again.
@@ -118,6 +124,8 @@ import logos_sdk/cbor/[decode, utf8]
 import logos_sdk/commitment
 from ../durable import syncDir
 import logos_sdk/iface/[accept, outcome, surface]
+from logos_sdk/iface/provider import matchesContracts
+import logos_sdk/kit/rc_arms
 import ../loader/contract
 from ../loader/provider import
   LoaderWiring, wireLoader, unwireLoader, loaderStaticRegistration
@@ -136,12 +144,14 @@ from ./tport import
   newTransportPorts, freeTransportPorts, ensureStarted, closeTransport, releaseOwner,
   closing, submit, submitOwner, newConnId, started, setHosted
 from ../permissions import
-  PermissionProfile, build, selected, checkProfile, checkSettings, activeIn, missing
+  PermissionProfile, build, selected, checkProfile, checkSettings, checkOrder,
+  checkDefined, activeIn, missing
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
     execauth, hostlock, hostsup, inventory, invoke, loaderbinding, observe, plumbing,
-    rcevents, served, sessionauth, settings, sidetable, statexfer, store, transported,
+    rcevents, served, servedroots, sessionauth, settings, sidetable, statexfer, store,
+    subend, transported,
   ]
 
 export plumbing
@@ -182,6 +192,11 @@ type
     services: ptr AttemptServices
       ## its Runtime Control binding and invocation access, until the
       ## realization it made takes them over or its outcome is final
+    initSeen: bool
+      ## [G225] its `_MODULE_init` returned a context the Runtime took
+      ## (`adoptRealization`); until then the ends of its binding's
+      ## subscriptions wait in `ends`
+    ends: seq[(uint64, ErrorCode)]
     selected: Opt[ValueRecord]
       ## [I87] the configuration record selected before the attempt was
       ## accepted, borrowed from the instance's state until `beginAttempt`
@@ -250,6 +265,10 @@ type
     orchestration: bool ## [G53] the instance the bootstrap input names
     created: bool ## made by `create_module`, not named by the host
     configured: bool ## named by the host configuration at bootstrap
+    mismatched: bool
+      ## [SPEC RUNTIME l.1319-1322; M14] a retained `direct_static` instance
+      ## this run's registration does not supply with its retained facts
+      ## (`staticMismatches`): never realized in this run
     pending: bool ## [IMPL] a committed change not yet written, so not yet exposed (I82)
     shown: InstanceView ## the view last exposed, which observers see while `pending`
     pendingExec: PendingExec
@@ -264,11 +283,14 @@ type
     surface: seq[byte]
       ## [SPEC RUNTIME l.540-541; I86] the call surface validated at its last
       ## bind, kept for `describe_provider` after the realization ends
-    surfaceContracts: seq[Digest] ## the exact contracts of `surface`
+    surfaceContracts: seq[Digest]
+      ## the exact contracts of `surface`: the primary, its interfaces, then
+      ## the earlier contracts it extends (`servedroots.servedRoots`)
     schemas: Table[Digest, seq[byte]]
       ## [SPEC RUNTIME §2.4 l.432-434] by contract root: the deterministic
-      ## `logos.schema_response` of each contract of `surface`, built from its
-      ## exact documents (DECISIONS I88)
+      ## `logos.schema_response` of the primary and of each interface of
+      ## `surface`, built from its exact documents (DECISIONS I88). An earlier
+      ## contract's is built when used and held by the route (G394).
     realized: RealizationStatus
       ## [IMPL-DECISION G227 (TL-08)] the realization status as of its last
       ## commit
@@ -291,11 +313,10 @@ type
     apply: ApplyRun
       ## [I87] the live configuration application in flight; its realization
       ## is not released before the hook returns (LDR-0136, CFG-0138)
-    indeterminateStop: bool
-      ## [IMPL-DECISION G237 interim (TF-28)] an explicit or shutdown stop is
-      ## in progress although the instance is `error`: an application's
-      ## outcome became indeterminate while it was `stopping`. The stop still
-      ## completes it, to `unloaded`, within its stop deadline.
+    when defined(lcnTestHooks):
+      tableState: ModuleState
+        ## [RUN-1091] the state of the last commit, for the lifecycle table
+        ## check (`tableCheck`)
     prevHost: bool
       ## [G275; plan R6] restored after an unclean end with its restart lock
       ## still held: a Module Host of the previous run may still be running,
@@ -459,6 +480,10 @@ type
     attempt: Attempt ## lcRealize, and lcStatus after a `realize`
     realization: string ## lcStatus after a `release`, lcConfirm
     ticket: ptr CallTicket
+    host: Host
+      ## [G360] lcRealize of a hosted attempt: the call's own reference to
+      ## the attempt's Module Host, which the Loader spawns, given back at the
+      ## reply, so a host resolved while the call is out stays valid for it
 
   LoaderLink = object
     ## [SPEC RUNTIME l.1641-1667; plan §2.6, §2.10] The Module Loader instance
@@ -476,6 +501,9 @@ type
     configure: ReplyChannel
       ## the open, answered once the Loader is bound or cannot start
     cannotStart: Opt[string] ## why the open fails, once known
+    cannotStartCode: ErrorCode
+      ## [SPEC RUNTIME l.3939, l.3955] its code: TIMEOUT for the Loader's
+      ## startup deadline, MODULE_ERROR otherwise
     calls: Table[int, LoaderCall] ## by job id
     issued: HashSet[string] ## [plan §2.8] every realization id this Loader gave
     lost: bool
@@ -522,8 +550,21 @@ type
     shutdownWaiters: seq[ReplyChannel]
     shutdownDone: bool
     shutdownResult: Opt[EngineError] ## [G60] set when shutdown completes
+    completedShutdown: bool
+      ## [IMPL-DECISION G357] shutdown completed in this run: every snapshot
+      ## written from then on carries the completed-shutdown record. False
+      ## at open, whatever the snapshot read says, so the first write drops it.
     bootstrapped: bool ## a bootstrap was requested
     bootstrapReply: ReplyChannel ## the bootstrap waiting for its outcome
+    bootChan: Channel[Reply]
+      ## [SPEC RUNTIME l.3939-3940, l.3955; P5 §0.4 item 4] the answer the
+      ## bootstrap's own start or recovery of orchestration got, on the
+      ## Runtime thread only (open while `bootOpen`)
+    bootOpen: bool
+    bootAnswer: Opt[Reply] ## what `bootChan` delivered
+    bootAttempted: bool ## an attempt of orchestration was accepted in this run
+    bootCause: Opt[FailureKind]
+      ## the l.3613 cause that refused that request in this run, if any
     orchestrator: Inst ## the orchestration instance, once bootstrapped
     done: bool ## `close` asked the Runtime thread to leave
     runtimeId: string
@@ -628,7 +669,12 @@ type
       ## [G178] subscriptions with entries, waiting for a worker slot of their
       ## subscriber
     rcRunning: CountTable[string] ## [G178] per subscriber: its drains dispatched
-    rcBusy: int ## [G178] drains dispatched and not yet ended
+    rcBusy: int ## [G178] event-worker jobs dispatched and not yet ended
+    reports: Table[int, (string, pointer)]
+      ## [G225] subscription-end reports dispatched and not ended, by number:
+      ## the instance each counts in (`rcHandlers`) and the route handle it
+      ## holds a reference to (nil for a direct binding's; a hosted binding's
+      ## ends go to its host with no job, `endRc`)
     rcHints: array[InvKind, RcBlob] ## [G178] the hint values, encoded once
     side: SideTable ## [D14; C-10] the private handoffs to and from the Loader
     ldr: LoaderLink ## [I89] the Module Loader and its binding
@@ -899,6 +945,7 @@ func view(x: Inst): InstanceView =
     stateAssignment: x.record.stateAssignment,
     primaryContract: x.record.primaryContract,
     implements: x.record.implements,
+    extends: x.record.extends,
     provider: x.provider,
     providerId: x.providerId,
     attempt: x.current,
@@ -946,7 +993,16 @@ proc answer(r: ReplyChannel, reply: sink Reply) =
       discard
 
 proc answerError(r: ReplyChannel, code: ErrorCode, message: string) =
+  # `ecOk` is the parked marker, never an answer: one would read as success.
+  let code = if code == ecOk: ecModule else: code
   r.answer(Reply(error: Opt.some(engineError(code, message))))
+
+proc answerTyped(r: ReplyChannel, code: RcErrorCode, current = Opt.none(uint64)) =
+  ## [SPEC RUNTIME l.1818-1822; re-pin P4a] A typed outcome: the caller's
+  ## thread encodes the method's error arm as a successful response
+  ## (`invoke.rcInvoke`); the engine API returns it as an error whose `typed`
+  ## is set.
+  r.answer(Reply(error: Opt.some(typedError(code, current))))
 
 proc answerView(r: ReplyChannel, x: Inst) =
   ## The state an operation reached; MODULE_ERROR while that state is not
@@ -990,17 +1046,67 @@ proc deactivateRc(st: State, rec: RcRec) =
   if i >= 0:
     st.rcByEvent[rec.event].delete(i)
 
+proc dispatchReport(
+  st: State,
+  subscriber: string,
+  owner: pointer,
+  onHandle: bool,
+  id: uint64,
+  reason: ErrorCode,
+) {.gcsafe.}
+
+proc rcBinding(st: State, rec: RcRec): ptr AttemptServices =
+  ## The Runtime Control binding `rec` was made through, while it exists: the
+  ## realization's, or its attempt's before the realization takes it over.
+  let x = st.instances.getOrDefault(rec.subscriber)
+  if x.isNil:
+    return nil
+  if x.services != nil and x.current == rec.attempt:
+    return x.services
+  if x.attempt != nil and x.attempt.token == rec.attempt:
+    return x.attempt.services
+  nil
+
+proc endRc(st: State, rec: RcRec, reason: ErrorCode) =
+  ## [SPEC INTERFACE l.1472-1481; DECISIONS G225] The Runtime ends an active
+  ## subscription: nothing of it is judged, queued or delivered again, and
+  ## its binding reports it once with `reason` when a registration is
+  ## installed now. `unsubscribe` of it stays LOGOS_OK once.
+  if not rec.active:
+    return
+  st.deactivateRc(rec)
+  let s = st.rcBinding(rec)
+  if s.isNil or not s.subEnd.owed:
+    return
+  if s.host != nil:
+    # [G225] A hosted binding: the end goes to the host now, from this thread
+    # and with no job, and the host reports it when its module's registration
+    # is installed as it reads it (P3 reading against l.1481), during
+    # `_MODULE_init` too. The host suppresses and waits before its destroys.
+    forwardSubscriptionEnd(cast[Host](s.host), rec.id, reason)
+    return
+  let a = st.instances.getOrDefault(rec.subscriber).attempt
+  if a != nil and a.services == s and not a.initSeen:
+    # [G225; SPEC INTERFACE l.1954] A direct binding: an end while
+    # `_MODULE_init` runs, decided owed above, is reported once it returned a
+    # context the Runtime took (`adoptRealization`): no report job holds the
+    # binding of an attempt whose context the Module Loader may destroy, or
+    # whose binding a failure frees. An attempt that fails first reports none
+    # (a reading: a failed initialization has no destroy to suppress at).
+    a.ends.add((rec.id, reason))
+  else:
+    st.dispatchReport(rec.subscriber, s, false, rec.id, reason)
+
 proc loseRc(st: State, rec: RcRec, why: string) =
-  ## [IMPL-DECISION G225 (TF-35)] The Runtime ends the subscription without a
-  ## signal to its subscriber: its entries are discarded and a diagnostic
-  ## records it; `unsubscribe` of it is LOGOS_OK, and the subscriber
+  ## [DECISIONS G225; SPEC INTERFACE l.1479] One of the Runtime's bounds
+  ## ends the subscription: MODULE_ERROR, with a diagnostic. The subscriber
   ## resynchronizes by query (RUNTIME l.3426, l.3428).
   if rec.active:
     st.diagnose(
       "Runtime Control subscription " & $rec.id & " of " & rec.subscriber & " lost: " &
         why & " (G225)"
     )
-    st.deactivateRc(rec)
+    st.endRc(rec, ecModule)
 
 proc freeRc(st: State, rec: RcRec) =
   st.rcSubs.del(rec.sub)
@@ -1041,8 +1147,9 @@ proc freeRcAttempt(st: State, x: Inst, token: string) =
   for rec in gone:
     st.removeRc(rec)
 
-proc dispatchRc(st: State, rec: RcRec) =
-  ## One drain of `rec` for an event worker; spawned on demand.
+proc sendRcJob(st: State, job: sink RcJob) =
+  ## One job for an event worker, counted in `rcBusy` until it ends; a worker
+  ## is spawned on demand.
   inc st.rcBusy
   let s = st.shared
   if st.rcBusy > s.rcSpawned and s.rcSpawned < MaxEventWorkers:
@@ -1050,12 +1157,57 @@ proc dispatchRc(st: State, rec: RcRec) =
       createThread(s.rcWorkers[s.rcSpawned], rcWorkerMain, s)
       inc s.rcSpawned
     except ResourceExhaustedError:
-      discard # the drain waits for a busy event worker
-  retain(rcSubOf(rec.sub))
+      discard # the job waits for a busy event worker
   try:
-    s.rcJobs.send(RcJob(kind: rjDrain, sub: rec.sub))
+    s.rcJobs.send(job)
   except Exception:
     discard
+
+proc dispatchRc(st: State, rec: RcRec) =
+  ## One drain of `rec` for an event worker; the job holds its own reference.
+  retain(rcSubOf(rec.sub))
+  st.sendRcJob(RcJob(kind: rjDrain, sub: rec.sub))
+
+proc dispatchReport(
+    st: State,
+    subscriber: string,
+    owner: pointer,
+    onHandle: bool,
+    id: uint64,
+    reason: ErrorCode,
+) {.gcsafe.} =
+  ## [SPEC INTERFACE l.1478-1481; DECISIONS G225] One report of a
+  ## binding-ended subscription, whose slot had a registration installed when
+  ## it ended, on an event worker (`rcevents.runReport`): never inline and
+  ## never on the Runtime thread. It counts toward the subscriber as an event
+  ## handler does (`rcHandlers`), so the release or destroy of its realization
+  ## waits for it; a route handle's job holds a reference to the handle. A
+  ## binding's job is a direct binding's (a hosted one's ends go with no job).
+  let x = st.instances.getOrDefault(subscriber)
+  if x != nil:
+    inc x.rcHandlers
+  if onHandle:
+    discard cast[ptr HandleState](owner).refs.fetchAdd(1)
+  let n = st.nextJobId()
+  st.reports[n] = ((if x.isNil: "" else: subscriber), (if onHandle: owner else: nil))
+  st.sendRcJob(
+    RcJob(
+      kind: rjSubEnd,
+      report: n,
+      owner: owner,
+      onHandle: onHandle,
+      subId: id,
+      reason: reason,
+    )
+  )
+
+proc reportOnHandle(
+    st: State, consumer: string, handle: pointer, id: uint64, reason: ErrorCode
+) =
+  ## [SPEC INTERFACE l.1476-1481] A route handle's subscription ended: its
+  ## handle reports it when a registration is installed now (`subend.owed`).
+  if handle != nil and cast[ptr HandleState](handle).subEnd.owed:
+    st.dispatchReport(consumer, handle, true, id, reason)
 
 proc pumpRc(st: State) =
   ## [G178 (C1 point 3)] A subscription with entries gets a drain while its
@@ -1231,10 +1383,11 @@ proc maybeForget(st: State, a: AsyncRec) =
         dec r.pending
         st.settle(r)
 
-proc asyncTerminal(st: State, a: AsyncRec) =
+proc asyncTerminal(st: State, a: AsyncRec, cancel = true) =
   ## The call's terminal outcome is decided: its invocation-scoped destination
   ## closes (RUNTIME l.1281); a cancellation, a timeout or an end also cancels
-  ## the invocation; the completion callback runs on a worker while the
+  ## the invocation, unless `cancel` is false because the caller marks it
+  ## later (`endByRoute`); the completion callback runs on a worker while the
   ## consumer's realization lasts, and is suppressed after it [IMPL].
   if a.terminal:
     return
@@ -1261,7 +1414,8 @@ proc asyncTerminal(st: State, a: AsyncRec) =
         )
       )
   if c.callEnd != okResult:
-    st.cancelInvocation(a)
+    if cancel:
+      st.cancelInvocation(a)
     if a.linkTag != 0 and c.callEnd in {okCancelled, okTimeout}:
       # [IFC-0729; TRANSPORT §3.4] A sent call cancelled or timed out: Cancel
       # on its link; its late Response is discarded (`linkResponse`).
@@ -1279,11 +1433,44 @@ proc asyncTerminal(st: State, a: AsyncRec) =
     c.suppress()
   st.maybeForget(a)
 
-proc endCall(st: State, a: AsyncRec, f: InvocationFailure, kind: CallEnd) =
+proc endCall(
+    st: State, a: AsyncRec, f: InvocationFailure, kind: CallEnd, cancel = true
+) =
   ## A terminal decision the Runtime thread makes: a timeout, or the end of
-  ## the call's route or of a realization [G174].
+  ## the call's route or of a realization.
   if not a.terminal and asyncOf(a.call).decide(f, kind):
-    st.asyncTerminal(a)
+    st.asyncTerminal(a, cancel)
+
+func admitted(a: AsyncRec): bool =
+  ## [P5 d2] Admitted into a provider, direct or served: its ticket, or once
+  ## the ticket went with the call's leaving, the provider's name it keeps.
+  a.ticket != nil or a.provider.len > 0
+
+proc endUnanswered(st: State, a: AsyncRec, f: InvocationFailure, cancel = true) =
+  ## [SPEC RUNTIME l.1271; TRANSPORT l.979; P5 Q3 (a)] An end decides the
+  ## call. A served one's Request is left unanswered: the session's end fails
+  ## it TRANSPORT_ERROR at its consumer, which a Response could not do (a
+  ## provider's own NOT_AUTHORISED is legitimate).
+  if a.session:
+    markSent(asyncOf(a.call))
+  st.endCall(a, f, okEnded, cancel)
+
+proc endByRoute(st: State, a: AsyncRec) =
+  ## [SPEC RUNTIME l.1261, l.1271; TRANSPORT l.971; P5 d2] A revoked or
+  ## expired route ends its asynchronous calls at once, by three facts: one
+  ## admitted into a provider, or sent on a link (`linkTag`), completes
+  ## TRANSPORT_ERROR; one not yet admitted is a new operation and gets
+  ## NOT_AUTHORISED, which a served one is answered with (l.971).
+  ##
+  ## [IMPL; I91] It marks nothing cancelled: `endRoute` and `sessionExpired`
+  ## do, once they have ordered the sessions' ends. Under P5 Q3 (a) no
+  ## Runtime answer goes before a hosted call's cancel any more, so the
+  ## terminate order must: a provider that returns because it was cancelled
+  ## then finds its Request ended at the host (`host/endpoint`).
+  if a.admitted or a.linkTag != 0:
+    st.endUnanswered(a, routeEndedResult(), cancel = false)
+  else:
+    st.endCall(a, revokedResult(), okEnded, cancel = false)
 
 proc refuseQueuedCall(st: State) =
   ## [IMPL; I88, deviation 5] The oldest call no call worker has begun is
@@ -1359,7 +1546,8 @@ proc endServices(st: State, s: ptr AttemptServices, instance: string) =
   ## The realization an attempt made is gone, or the attempt made none: its
   ## bindings are invalid. Its calls are cancelled and their completions not
   ## yet begun suppressed; calls admitted into it as a provider and still
-  ## without an outcome end NOT_READY, the bound of G174.
+  ## without an outcome end TRANSPORT_ERROR, since their routes fail with it
+  ## (RUNTIME l.1271), a served one unanswered (`endUnanswered`).
   if s == nil:
     return
   let token = attemptOf(s)
@@ -1386,7 +1574,7 @@ proc endServices(st: State, s: ptr AttemptServices, instance: string) =
       else:
         st.endCall(a, failure(ecNotReady, "the consumer's realization ended"), okEnded)
     elif a.provider == instance and not a.terminal:
-      st.endCall(a, failure(ecNotReady, "the provider's realization ended"), okEnded)
+      st.endUnanswered(a, failure(ecTransport, "the provider's realization ended"))
 
 proc endRegsGone(st: State, consumer: string, n: int) =
   ## [I86] `n` of the consumer's `observe_end` registrations fired or were
@@ -1453,10 +1641,12 @@ proc endTransported(st: State, r: Route) =
   ## [plan §2.8 steps 1 and 4; owner batch B 7; G260] A transported route
   ## ended: its tickets are revoked, then each of its sessions is ordered as
   ## the end's row of `ports.EndPolicies` says. An authority end terminates:
-  ## the in-flight Requests are answered NOT_AUTHORISED, then ProtocolError
-  ## NOT_AUTHORISED and close (TRANSPORT l.987-991). An end that leaves no
-  ## usable session closes at once. A readiness end drains: no new admission,
-  ## what was admitted answers until the bound, then close (K13).
+  ## `endRoute` answered the Requests not yet admitted NOT_AUTHORISED and left
+  ## the admitted ones unanswered, then ProtocolError NOT_AUTHORISED and close,
+  ## at which the consumer fails those TRANSPORT_ERROR (TRANSPORT l.966-979;
+  ## RUNTIME l.1271; P5 Q3 (a)). An end that leaves no usable session closes at
+  ## once. A readiness end drains: no new admission, what was admitted answers
+  ## until the bound, then ProtocolError NOT_READY and close (l.977; K13).
   discard st.tickets.revokeRoute(r.id)
   if r.sessions.len == 0:
     return
@@ -1479,19 +1669,26 @@ when defined(lcnTestHooks):
   var cancelMarkDelayMs: Atomic[int]
 
   proc setCancelMarkDelayForTests*(ms: int) =
-    ## Once a route's end has marked its admitted calls cancelled, the Runtime
-    ## thread waits `ms` before it goes on; 0 turns it off. A cancel forwarded
-    ## to a hosted provider meanwhile must not overtake what the end answered.
+    ## Once a route's or a session's end has decided its admitted calls, and
+    ## again once it has marked them cancelled, the Runtime thread waits `ms`
+    ## before it goes on; 0 turns it off. A cancel forwarded to a hosted
+    ## provider meanwhile must not overtake what the end ordered.
     cancelMarkDelayMs.store(ms)
+
+  proc endOrderPause(calls: int) =
+    let late = cancelMarkDelayMs.load
+    if late > 0 and calls > 0:
+      sleep(late)
 
 proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureCode]) =
   ## [SPEC RUNTIME §7.5, §9.3 l.3226-3229; INTERFACE §2.5] The route takes no
   ## new calls, its subscriptions are deactivated, and each handle observing
-  ## it gets its terminal callback once, on a worker. [G174] The invocations
-  ## admitted through it are marked cancelled (INTERFACE l.2101-2102) and
-  ## learn its end cause under their ticket's lock; a revoked route ends its
-  ## asynchronous calls NOT_AUTHORISED at once, a closed or failed one lets
-  ## them complete.
+  ## it gets its terminal callback once, on a worker. The invocations admitted
+  ## through it are marked cancelled (INTERFACE l.2101-2102) and learn its end
+  ## cause under their ticket's lock (RUNTIME l.1212). A revoked or expired
+  ## route ends its asynchronous calls at once (`endByRoute`: an admitted one
+  ## TRANSPORT_ERROR, l.1271); a closed or failed one lets them complete
+  ## (`invoke.endedByRoute`).
   if r.isTerminal:
     return
   let before = r.state
@@ -1515,13 +1712,16 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
     deactivate(subOf(p))
   # [IMPL; I91] What the Runtime answers and orders for the route's calls goes
   # out before any of them is marked cancelled: a hosted provider's host gets
-  # its call's cancel behind them (`hostcall`), so a provider that returns
+  # its call's cancel behind the session's terminate (`hostcall`), which ends
+  # the host's own invocations (`host/endpoint`), so a provider that returns
   # because it was cancelled cannot commit its own Response through a revoked
-  # route first (CA l.917-918; TRANSPORT l.987-991).
+  # route (RUNTIME l.1212; TRANSPORT l.966-979).
   if r.state == rtRevoked:
     for a in st.records:
-      if not a.rc and a.route == r.id:
-        st.endCall(a, revokedResult(), okEnded)
+      if not a.rc and a.route == r.id and not a.terminal:
+        st.endByRoute(a)
+  when defined(lcnTestHooks):
+    endOrderPause(r.calls.len)
   if r.mode == rmLocalTransport:
     st.endTransported(r)
   for t in r.calls:
@@ -1530,9 +1730,7 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
     if not a.rc and a.route == r.id:
       st.cancelInvocation(a)
   when defined(lcnTestHooks):
-    let late = cancelMarkDelayMs.load
-    if late > 0 and r.calls.len > 0:
-      sleep(late)
+    endOrderPause(r.calls.len)
   for h in r.handles:
     scheduleEnd(h, r.endCode)
     st.dispatch(Job(id: st.nextJobId(), kind: jkObserveEnd, handle: h))
@@ -1541,9 +1739,10 @@ proc endRoute(st: State, r: Route, state: RouteState, failure: Opt[RouteFailureC
   st.settle(r)
 
 proc routesFollow(st: State, x: Inst) =
-  ## [SPEC RUNTIME §3.4 l.620-626, §9.3 l.3225] A provider that is no longer
+  ## [SPEC RUNTIME §3.4 l.589-591, §9.3 l.3225] A provider that is no longer
   ## `ready` fails its routes; a consumer that is no longer live closes its
-  ## routes after an authorized stop and fails them after a failure.
+  ## routes during any stop (explicit, enforcement, reconciliation or
+  ## shutdown; RUN-1093) and fails them when it enters `error`.
   if x.state != msReady:
     # [plan §2.5] Its endpoints take no new connection (L3).
     st.sv.stopServingRealization(x.id)
@@ -1601,7 +1800,11 @@ proc releaseCallers(st: State, x: Inst) =
 
 proc snapshot(st: State): Snapshot =
   ## The persistent state as it is now (store.cddl).
-  result = Snapshot(runtimeInstanceId: st.runtimeId, epoch: st.epoch)
+  result = Snapshot(
+    runtimeInstanceId: st.runtimeId,
+    epoch: st.epoch,
+    completedShutdown: st.completedShutdown,
+  )
   for x in st.instances.values:
     var s = StoredInstance(
       instance: x.id,
@@ -1616,6 +1819,9 @@ proc snapshot(st: State): Snapshot =
     if x.intent == inRequested:
       s.intentRevision = x.intentRevision
       s.origin = x.intentOrigin
+    if x.state == msStopping:
+      # [G357] so a stop completed at the next open keeps it (l.3613)
+      s.enforced = x.enforced
     result.instances.add(s)
   for id, assignment in st.tombstones:
     result.retired.add(RetiredId(instance: id, stateAssignment: assignment))
@@ -1668,6 +1874,66 @@ proc retryStore(st: State) =
   else:
     st.written(nil)
 
+when defined(lcnTestHooks):
+  import std/exitprocs
+
+  const LifecycleTable = [
+    # [SPEC RUNTIME §3.4 l.517-526] the ten transitions; RUN-1091: no other.
+    (msUnloaded, msLoaded),
+    (msLoaded, msReady),
+    (msLoaded, msError),
+    (msLoaded, msStopping),
+    (msReady, msStopping),
+    (msReady, msError),
+    (msStopping, msUnloaded),
+    (msStopping, msError),
+    (msError, msLoaded),
+    (msError, msStopping),
+  ]
+
+  var
+    offTable: Atomic[int] ## commits whose pair is outside the table
+    firstOffTable: Atomic[int] ## the first such pair: from * 8 + to + 1
+
+  proc lifecycleOffTableForTests*(): int =
+    ## [RUN-1091] How many commits in this process made a transition the
+    ## lifecycle table does not list; every test binary exits 1 when any did.
+    offTable.load
+
+  proc offTableReport() {.noconv.} =
+    let n = offTable.load
+    if n > 0:
+      let f = firstOffTable.load - 1
+      try:
+        stderr.writeLine(
+          "[RUN-1091] " & $n &
+            " commit(s) made a transition outside the lifecycle table; the first: " &
+            $ModuleState(f div 8) & " -> " & $ModuleState(f mod 8)
+        )
+      except IOError:
+        discard
+      setProgramResult(1)
+
+  addExitProc(offTableReport)
+
+  proc tableCheck(st: State, x: Inst) =
+    ## [RUN-1091; P5a §1.5] Every committed state change is a row of the
+    ## table. A commit with no state change, and `accept`'s rollback, are not
+    ## transitions; restore is not one of a live instance (Q-r A5).
+    if x.state == x.tableState:
+      return
+    if (x.tableState, x.state) notin LifecycleTable:
+      discard offTable.fetchAdd(1)
+      var none = 0
+      discard
+        firstOffTable.compareExchange(none, ord(x.tableState) * 8 + ord(x.state) + 1)
+      st.diagnose(
+        "[RUN-1091] " & x.id & ": " & $x.tableState & " -> " & $x.state &
+          " is not in the lifecycle table",
+        warn = true,
+      )
+    x.tableState = x.state
+
 proc commit(st: State, x: Inst) =
   ## Records one committed change that follows from an operation, a failure
   ## or cleanup: the execution revision advances (§9.3 l.3504-3505), the
@@ -1677,7 +1943,9 @@ proc commit(st: State, x: Inst) =
   ## change is held back (I82).
   inc x.revision
   st.stepCommitted.incl(x.id)
-  if x.state != msStopping and not x.indeterminateStop:
+  when defined(lcnTestHooks):
+    st.tableCheck(x)
+  if x.state != msStopping:
     x.stopDeadline = Opt.none(MonoTime)
   x.pending = true
   st.routesFollow(x)
@@ -1716,6 +1984,8 @@ proc restore(x: Inst, s: Saved) =
   x.provider = s.provider
   x.pending = s.pending
 
+const Exhausted = "the execution revision is exhausted"
+
 func exhausted(st: State, revision: uint64): bool =
   ## [SPEC RUNTIME l.3507; IMPL] This start's accepting commits for the
   ## instance reached the budget (I82).
@@ -1728,7 +1998,7 @@ proc accept(st: State, x: Inst, saved: Saved, exempt = false): Opt[EngineError] 
   ## fails, `x` is as it was (`saved`) and the error is returned (I82).
   if not exempt and st.exhausted(saved.revision):
     x.restore(saved)
-    return Opt.some(engineError(ecModule, "the execution revision is exhausted"))
+    return Opt.some(engineError(ecModule, Exhausted))
   inc x.revision
   x.pending = true
   let w = st.persist()
@@ -1737,6 +2007,8 @@ proc accept(st: State, x: Inst, saved: Saved, exempt = false): Opt[EngineError] 
     st.storeFailure(w.error)
     return Opt.some(engineError(ecModule, NotPersisted))
   st.stepCommitted.incl(x.id)
+  when defined(lcnTestHooks):
+    st.tableCheck(x)
   if x.state != msStopping:
     x.stopDeadline = Opt.none(MonoTime)
   if x.state notin {msLoaded, msReady}:
@@ -1824,6 +2096,13 @@ proc persistSettings(st: State, x: Inst, next: SettingsState): Opt[EngineError] 
   st.publishSettings(x)
   Opt.none(EngineError)
 
+func overran(x: Inst): bool =
+  ## [SPEC RUNTIME l.575, l.3702, l.3732; P5a §1.1] `cleanup-timeout` is
+  ## recorded: on a stop still in progress past its deadline (`stopping`), or
+  ## on `error` (a store an earlier build wrote, G357).
+  x.state in {msStopping, msError} and x.failure.isSome and
+    x.failure.get.kind == fkCleanupTimeout
+
 func forcedEnd(st: State, x: Inst): bool =
   ## [IMPL-DECISION G285 amended; G269; 4b-4 plan R25] The Runtime's supervision
   ## ends `x`'s Module Host by force, in the same engine turn as what it
@@ -1832,7 +2111,7 @@ func forcedEnd(st: State, x: Inst): bool =
   ## the Module Loader's loss (`loaderLost` ends every host it owned).
   if not x.hosted or x.hostOf.isNil:
     return false
-  if x.state == msError and x.failure.isSome and x.failure.get.kind == fkCleanupTimeout:
+  if x.overran:
     return true
   x.realization != nil and x.realization.lost and st.ldr.lost
 
@@ -1856,8 +2135,9 @@ func remainsOf(st: State, x: Inst): Remains =
     return rmRunning
   if x.realization != nil and x.realization.lost:
     return rmOverrun
-  if x.state == msError and x.failure.isSome and
-      x.failure.get.kind in {fkCleanupTimeout, fkCleanupFailed}:
+  if x.overran or (
+    x.state == msError and x.failure.isSome and x.failure.get.kind == fkCleanupFailed
+  ):
     return rmOverrun
   rmRunning
 
@@ -1981,13 +2261,50 @@ proc takeEnforced(x: Inst): Opt[Failure] =
   result = x.enforced
   x.enforced = Opt.none(Failure)
 
+proc completeStop(st: State, x: Inst) =
+  ## [SPEC RUNTIME l.576, l.3611, l.3613] A stop whose cleanup completed,
+  ## past its deadline or not: `unloaded`, committed. Its failure is the
+  ## classification an enforcement stop leaves (`takeEnforced`); for a
+  ## reconciliation stop whose settings settled `failed` at its overrun,
+  ## `permission-enforcement-failed` (C4; settled on a `stopping` instance,
+  ## `settleSettings` could not set it); otherwise none.
+  x.state = msUnloaded
+  x.failure = x.takeEnforced()
+  if x.failure.isNone and x.intent == inRequested and st.profiled and
+      x.settings.application == saFailed:
+    x.failure = Opt.some(Failure(kind: fkPermissionEnforcementFailed))
+  x.current = ""
+  st.commit(x)
+
+proc recordOverrun(st: State, x: Inst, reason: string) =
+  ## [SPEC RUNTIME l.575-577, l.3702, l.3732; P5a §1.1, §1.4] A stop past its
+  ## deadline, or still `stopping` when the shutdown grace ends: the instance
+  ## stays `stopping` and reports `cleanup-timeout` until the stop completes
+  ## (`unloaded`, l.576) or its cleanup fails (`error`, l.577); nothing still
+  ## in use is released. The revision advances (l.3368) and the stop waiters
+  ## get the `stopping` view (G173); pending settings settle, as at any
+  ## overrun (`releaseWaiters`, G285). Forced cleanup is requested: a hosted
+  ## instance's Module Host is ended (l.3723); a direct one is named in the
+  ## shutdown result (Q-r D4). An enforcement stop's classification is kept
+  ## for its completion (l.3613; G168's replacing clause is gone).
+  x.failure = Opt.some(Failure(kind: fkCleanupTimeout, reason: reason))
+  x.stopDeadline = Opt.none(MonoTime)
+  st.commit(x)
+  for w in x.stopWaiters:
+    w.reply.answerView(x)
+  x.stopWaiters.setLen(0)
+  st.releaseWaiters(x)
+  x.endHost(reason)
+
 func isLoader(st: State, x: Inst): bool =
   not st.ldr.inst.isNil and x == st.ldr.inst
 
-proc cannotStart(st: State, why: string, said = "") =
+proc cannotStart(st: State, why: string, said = "", code = ecModule) =
   ## `said`: `why` as a diagnostic gives it, when it holds a module's text.
+  ## `code`: what the open answers [SPEC RUNTIME l.3939, l.3955].
   if st.ldr.cannotStart.isNone:
     st.ldr.cannotStart = Opt.some(why)
+    st.ldr.cannotStartCode = code
     st.diagnose("the Module Loader cannot start: " & (if said.len > 0: said else: why))
 
 proc unwire(st: State) =
@@ -2021,14 +2338,9 @@ proc finishAttempt(st: State, a: Attempt) =
   if st.isLoader(x) and x.realization.isNil:
     st.unwire()
   if a.cancelled and x.state == msStopping:
-    # [SPEC RUNTIME §3.4] A completed explicit stop: `unloaded`, failure
-    # cleared (an authority stop's classification kept). A stop whose deadline
-    # passed already left `error`, which the end of its cleanup does not
-    # change (l.611).
-    x.state = msUnloaded
-    x.failure = x.takeEnforced()
-    x.current = ""
-    st.commit(x)
+    # [SPEC RUNTIME §3.4 l.576] A completed stop, past its deadline or not:
+    # `unloaded`, failure cleared (an enforcement stop's classification kept).
+    st.completeStop(x)
   st.releaseWaiters(x)
 
 proc failAttempt(st: State, a: Attempt, f: Failure) =
@@ -2053,6 +2365,10 @@ proc destroyContext(st: State, a: Attempt, ctx: ptr LogosModuleContext) =
   ## A context the attempt made that must not become ready.
   a.phase = apCleanup
   let x = a.inst
+  if a.services != nil:
+    # [SPEC INTERFACE l.1949-1954 (M5)] No report of the initialization
+    # binding begins from now on; a running one counts in `rcHandlers`.
+    a.services.subEnd.suppress()
   if x.rcHandlers > 0:
     # [G178; INTERFACE l.1999] Its Runtime Control handlers return first.
     x.heldAttempt = a
@@ -2143,15 +2459,18 @@ func classify(e: LoaderError, phase: Opt[FailedPhase]): Failure =
     Failure(kind: fkLoader, loader: e.code, reason: e.message, internal: true)
 
 proc loaderLost(st: State, f: Failure) {.gcsafe.}
+proc hostGone(st: State, x: Inst) {.gcsafe.}
 
 proc loaderInvalid(st: State, reason: string) =
-  ## [SPEC RUNTIME l.3823; plan §2.8, §2.9; IMPL-DECISION G252] A response
-  ## that breaks the contract or the engine's checks, on any call: continued
-  ## realization control cannot be maintained, so the Loader has failed.
+  ## [SPEC RUNTIME l.3686-3687 (TXT-0308, TXT-0309); IMPL-DECISION G252
+  ## narrowed, G360 (the TF-57 interim)] A response that breaks the contract
+  ## or the engine's checks is a failed Loader operation. While the Loader's
+  ## instance stays `ready` that is temporary service unavailability, not a
+  ## Loader failure: it is diagnosed here, and each caller takes the path a
+  ## failed invocation of the same operation takes (`get_status` for
+  ## `realize` and `release`, an unresolved answer for `get_status`, an
+  ## indeterminate outcome for `apply_configuration`).
   st.diagnose("the Module Loader gave an invalid response: " & reason)
-  st.loaderLost(
-    Failure(kind: fkOther, reason: "the Module Loader gave an invalid response")
-  )
 
 func ownedBy(x: Inst, st: State): bool =
   ## The instance has a realization, or one being made, by the Loader.
@@ -2185,6 +2504,15 @@ proc releaseRealization(st: State, x: Inst) =
   let r = x.realization
   if r.isNil or x.teardown != 0:
     return
+  if x.services != nil:
+    # [SPEC INTERFACE l.1949-1954 (M5)] No report of the initialization
+    # binding begins from now on; a running one counts in `rcHandlers`, which
+    # `_MODULE_destroy` waits for below.
+    x.services.subEnd.suppress()
+  if x.attempt != nil and x.attempt.services != nil:
+    # [M5; G225] So for the binding of the attempt that made the realization,
+    # when it has not handed it over yet (`adoptRealization` failing).
+    x.attempt.services.subEnd.suppress()
   if x.inflight > 0 or x.rcHandlers > 0 or x.apply != nil:
     # [IMPL] Calls already inside the provider finish first (§3.4 l.623), and
     # so do its Runtime Control handlers [G178] (INTERFACE l.1465, l.1999)
@@ -2267,7 +2595,6 @@ proc orphan(st: State, x: Inst, reason: string) =
   x.realization.lost = true
   x.teardown = 0
   x.releasePending = false
-  x.indeterminateStop = false
   x.state = msError
   x.failure = Opt.some(Failure(kind: fkOther, reason: reason))
   x.enforced = Opt.none(Failure)
@@ -2336,7 +2663,15 @@ proc loaderLost(st: State, f: Failure) =
     # [SPEC RUNTIME l.3821-3823; plan §2.9] A hosted one's envelope is its
     # Module Host, which the Runtime's own supervision ends; its cleanup
     # resolves once that end is confirmed (`hostEnded`), never by a Loader.
-    x.endHost("its Module Loader failed")
+    # [P5 §0.4 item 2; IMPL-DECISION G360] It resolves now when that end
+    # already reached the Runtime (an end `hostEnded` returned early for:
+    # a `realize` or `release` outstanding, an orderly or Runtime-caused
+    # end), or when the host was never spawned, so none of its code runs.
+    let h = x.hostOf
+    if h.isNil:
+      continue
+    if h.endHandled or h.terminate("its Module Loader failed", byRuntime = true):
+      st.hostGone(x)
   if affected.len == 0:
     # [plan §2.11 step 2] After the calls in flight return, and once no
     # host of a realization it owned remains.
@@ -2386,8 +2721,10 @@ proc resolved(st: State, c: LoaderCall, reply: LoaderReply) =
   ## answered. Not found: nothing was made (`realize`) or absence
   ## (`release`). Found: the engine owns it, so it is released (`realize`)
   ## or kept `current` with `cleanup-failed` (`release`). Another invocation
-  ## failure: the question stays with this one instance (R5). Anything else
-  ## is an invalid response.
+  ## failure, or an invalid response (G360: the Loader stays bound), leaves
+  ## the question unresolved with this one instance (R5): it stays `error`
+  ## with its cleanup unresolved in this process, as the TF-57 interim
+  ## records. A "not found" from a `ready` Loader is authoritative.
   let x = c.inst
   let notFound = reply.kind == lrError and reply.error.code == lecRealizationNotFound
   let found = reply.kind in {lrActive, lrFailedRecord}
@@ -2398,6 +2735,7 @@ proc resolved(st: State, c: LoaderCall, reply: LoaderReply) =
       else:
         "get_status answered " & $reply.kind
     )
+    st.orphan(x, LostAnswer)
     return
   if reply.kind == lrFailed:
     st.diagnose(
@@ -2418,7 +2756,9 @@ proc resolved(st: State, c: LoaderCall, reply: LoaderReply) =
     return
   let rec = reply.record
   if rec.realization in st.ldr.issued:
+    # An unresolvable answer, never a second issue of the id.
     st.loaderInvalid("a realization id was given twice")
+    st.orphan(x, LostAnswer)
     return
   st.ldr.issued.incl(rec.realization)
   x.realization = RealizationView(
@@ -2458,27 +2798,57 @@ proc bootstrapFailure(e: LoaderError): Failure =
       kind: fkOther, reason: "realizer " & $e.code & ": " & e.message, internal: true
     )
 
+func references(
+    rec: ModuleRecord
+): tuple[primary: Opt[Digest], interfaces, extends: seq[Digest]] =
+  ## [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1340-1343, l.1349; DECISIONS
+  ## G393] The contract references a record supplies, as `matchesContracts`
+  ## compares them with the validated descriptor. R l.1349 lets an input omit
+  ## `primary_contract`, `implements` or both, and IF l.1717 requires the
+  ## supplied references to match exactly; the owner's answer to TF-62
+  ## (2026-11-20, "strict"): once a record supplies any reference, an omitted
+  ## primary is none and an omitted `implements` or `extends` is empty, each
+  ## compared. A record that supplies none never reaches here
+  ## (`checkContracts`).
+  (rec.primaryContract, rec.implements, rec.extends)
+
 proc checkContracts(x: Inst, r: RealizationView): Result[bool, string] =
   ## [SPEC RUNTIME §3.3, §3.6] The expected contracts against the validated
   ## call surface. Returns whether the instance exposes a provider view.
   let rec = x.record
   if rec.primaryContract.isNone and rec.implements.len == 0:
-    # [SPEC RUNTIME §8 l.1423-1425] No declared contract: no provider record,
-    # whatever the module exports.
+    # [SPEC RUNTIME §8 l.1350-1351] No declared contract: no provider record,
+    # whatever the module exports. A record with `extends` names one too
+    # (`checkRecord`, G394 r11).
     return ok(false)
   if not r.provider:
     return err("the module exposes no call surface")
-  if rec.primaryContract.isSome:
-    if r.contracts.primary.isNone or
-        r.contracts.primary.get.root != rec.primaryContract.get:
-      return err("the primary contract differs from the expected one")
-  for c in rec.implements:
-    var found = false
-    for i in r.contracts.interfaces:
-      if i.root == c:
-        found = true
-    if not found:
-      return err("an expected interface contract is not implemented")
+  # [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1342-1346; G393] Each set the
+  # record supplies, an omitted one as none or empty, equals the validated
+  # descriptor's: the primary root, and the implemented and extended roots as
+  # sets. The descriptor was accepted on this thread, its `extends` entries
+  # each related to the contract it describes (`acceptCallSurfaceDescriptor`),
+  # so no claim the provider does not validate makes a provider path
+  # (RUN-0265, RUN-1104).
+  let b = r.contracts
+  let s = references(rec)
+  if not b.matchesContracts(s.primary, s.interfaces, s.extends):
+    let own =
+      if b.primary.isSome:
+        Opt.some(b.primary.get.root)
+      else:
+        Opt.none(Digest)
+    return err(
+      if s.primary.isNone and own.isSome:
+        # [G393] An omitted primary is none.
+        "the expected contracts name no primary contract, but the module has one"
+      elif s.primary != own:
+        "the primary contract differs from the expected one"
+      elif not b.matchesContracts(own, s.interfaces, b.extends.mapIt(it.root)):
+        "the implemented interface contracts differ from the expected ones"
+      else:
+        "the extended contracts differ from the expected ones"
+    )
   ok(true)
 
 proc promote(st: State, a: Attempt) {.gcsafe.}
@@ -2491,17 +2861,24 @@ proc adoptRealization(st: State, a: Attempt, r: RealizationView) =
   ## checks before `ready`.
   let x = a.inst
   x.realization = r
+  # [G225] The ends held while `_MODULE_init` ran are reported now; a failure
+  # below releases the realization, which suppresses them first.
+  a.initSeen = true
+  if a.services != nil:
+    for (id, reason) in a.ends:
+      st.dispatchReport(x.id, a.services, false, id, reason)
+  a.ends.setLen(0)
   if r.provider:
     x.surface = r.callSurface
-    x.surfaceContracts.setLen(0)
-    if r.contracts.primary.isSome:
-      x.surfaceContracts.add(r.contracts.primary.get.root)
-    for c in r.contracts.interfaces:
-      x.surfaceContracts.add(c.root)
+    x.surfaceContracts = r.contracts.servedRoots
     # [SPEC RUNTIME §2.4 l.432-434] `logos.schema` answers from these, never
-    # from a consumer's construction input.
+    # from a consumer's construction input. [G394; synthesis §3] An earlier
+    # contract's answer is not stored per entry: the realization keeps the
+    # binding, and a route that selects one builds it (`earlierAnswer`).
     x.schemas.clear()
     for root in x.surfaceContracts:
+      if r.contracts.isEarlier(root):
+        continue
       let v = schemaResponse(r.contracts, root)
       if v.isOk:
         x.schemas[root] = encodeCbor(v.get)
@@ -2618,13 +2995,67 @@ proc bound(st: State, a: Attempt, res: sink BindResult) =
     return
   st.beginInit(a, b.get)
 
-proc prerequisitesReady(st: State, x: Inst): bool =
+type Prerequisites = enum
+  prReady ## every prerequisite is `ready`
+  prWaiting ## each one not `ready` is `loaded` with its accepted attempt
+  prBlocked ## one is missing, or neither `ready` nor in an attempt
+
+proc prerequisites(st: State, x: Inst): Prerequisites =
+  ## [SPEC RUNTIME §3.7, §10.1; l.3613] What the lifecycle ordering says of
+  ## `x`'s start. [P5 reading C3] "An execution attempt in progress" is an
+  ## accepted one (`loaded`); a start waiting for its execution decision is
+  ## not.
+  result = prReady
   for (pre, dep) in st.cfg.ordering:
     if dep == x.id:
       let p = st.instances.getOrDefault(pre)
-      if p.isNil or p.state != msReady:
-        return false
-  true
+      if p.isNil or (p.state != msReady and (p.state != msLoaded or p.attempt.isNil)):
+        return prBlocked
+      if p.state != msReady:
+        result = prWaiting
+
+proc blockedBy(st: State, x: Inst, kind: FailureKind) =
+  ## [SPEC RUNTIME l.3611, l.3613; P5 §0.3 item 3] A start or recovery
+  ## refused for a cause of l.3613 records that cause: it replaces the one
+  ## recorded (a later failure supplies the current cause), committed only
+  ## when it changes, so orchestration's repeated probes publish nothing new
+  ## (l.3368 still holds: a change is a new revision).
+  if x.orchestration and st.bootstrapReply != nil:
+    # [SPEC RUNTIME l.3955; P5 §3.3] What refused the bootstrap's request.
+    st.bootCause = Opt.some(kind)
+  if x.failure.isNone or x.failure.get.kind != kind:
+    x.failure = Opt.some(Failure(kind: kind))
+    st.commit(x)
+
+proc prerequisiteRefusal(st: State, x: Inst, p: Prerequisites) =
+  ## [SPEC RUNTIME l.3613; P5 §2.2] A start or recovery the ordering refuses:
+  ## `prerequisite-unavailable` on an `unloaded` instance when a prerequisite
+  ## blocks it; nothing while every unready one is in an accepted attempt
+  ## (reading C3), and nothing on an `error` one, whose cause stays (l.3612;
+  ## orchestration's rule 4d does not recover it meanwhile, G287).
+  if p == prBlocked and x.state == msUnloaded:
+    st.blockedBy(x, fkPrerequisiteUnavailable)
+
+proc followPrerequisites(st: State) =
+  ## [SPEC RUNTIME l.3613; P5 Q2 ruling, §0.3 item 1] The `unloaded`
+  ## failure is kept current for the ordering even when nobody asks: after a
+  ## step that committed a state or an intent, an `unloaded` instance with
+  ## `requested` intent, no recorded cause and a blocking prerequisite gets
+  ## `prerequisite-unavailable`. It fills and never replaces, so an
+  ## enforcement stop's classification, a settings refusal, a missing
+  ## configuration or a mismatch stays (and no cause alternates with a
+  ## probe's), and it does not run once shutdown is accepted, since shutdown
+  ## stops dependents first and keeps their intent. It runs before
+  ## `followRealizations`, so its commits are that step's. [IMPL-DECISION G359]
+  ## Like every l.3613 cause it clears at the next accepted attempt or a
+  ## completed explicit stop (l.3611).
+  if st.stepCommitted.len == 0 or st.shuttingDown or st.cfg.ordering.len == 0:
+    return
+  for x in st.instances.values:
+    if x.state == msUnloaded and x.intent == inRequested and x.failure.isNone and
+        x.pendingExec.isNil and st.prerequisites(x) == prBlocked:
+      x.failure = Opt.some(Failure(kind: fkPrerequisiteUnavailable))
+      st.commit(x)
 
 # Authority (step 8b; DECISIONS I85) ------------------------------------------------------
 #
@@ -2818,7 +3249,9 @@ proc decideDetached(
   ## [IMPL; C21] Decides `reqs` together, evaluating the ones that need it in
   ## parallel. `then` gets every answer, in order, on the Runtime thread: at
   ## once when none needs an evaluation. After shutdown is accepted no
-  ## evaluation begins and `abort` runs instead (I85).
+  ## evaluation begins and `abort` runs instead (I85), except an execution
+  ## renewal while the binding holds ([SPEC RUNTIME l.3731 (RUN-1199,
+  ## TXT-0314)]; I85 amended).
   let p = Pending(
     reqs: reqs,
     answers: newSeq[AuthzAnswer](reqs.len),
@@ -2849,7 +3282,11 @@ proc decideDetached(
     p.done = true
     then(p.answers)
     return
-  if st.shuttingDown:
+  var renewals = st.caInst != nil
+  for q in reqs:
+    if not q.renewal:
+      renewals = false
+  if st.shuttingDown and not renewals:
     p.done = true
     if abort != nil:
       abort()
@@ -2951,10 +3388,21 @@ proc addFact(st: State, rec: RcRec, e: RcEntry) =
       p.keys.incl(key)
       p.facts.add(e.subject)
 
+proc eventRefused(answers: seq[AuthzAnswer]): bool =
+  ## [P3 ruling R6; SPEC INTERFACE l.1479] The event's own decision is no
+  ## allow of any scope (a deny, a refusal, a failed evaluation): authority
+  ## to receive the event has ended or cannot be established. A filtered
+  ## allow only filters subjects (`rcAdmits`).
+  answers.len > 0 and answers[0].outcome != azAllow
+
 proc judged(st: State, rec: RcRec, e: RcEntry, answers: seq[AuthzAnswer]) =
-  ## [G178 (D3)] Admitted, the entry joins the queue or its pending hint;
-  ## refused, it is dropped.
+  ## [G178 (D3)] Admitted, the entry joins the queue or its pending hint; a
+  ## subject the decisions do not admit is dropped. [G225] An event decision
+  ## that does not allow ends the subscription with NOT_AUTHORISED.
   if not rec.active:
+    return
+  if eventRefused(answers):
+    st.endRc(rec, ecNotAuthorised)
     return
   st.judgedBy(e, answers)
   if not st.rcAdmits(e.subject, answers):
@@ -3107,10 +3555,12 @@ const Parked = EngineError(code: ecOk, message: "parked")
   ## [IMPL] what a check gives when its operation was parked or answered
 
 func parked(e: EngineError): bool =
-  e.code == ecOk
+  e.code == ecOk and e.typed.isNone
 
 proc answerFailure(q: Request, e: EngineError) =
-  if not e.parked:
+  if e.isTyped:
+    q.reply.answer(Reply(error: Opt.some(e)))
+  elif not e.parked:
     q.reply.answerError(e.code, e.message)
 
 func notAuthorised(): EngineError =
@@ -3163,6 +3613,14 @@ proc stopForAuthority(st: State, x: Inst, kind: FailureKind) =
   if x.state notin {msLoaded, msReady}:
     return
   st.diagnose("the execution authorization of " & x.id & " ended: " & $kind)
+  if st.isLoader(x) and st.loaderOwns():
+    # [SPEC RUNTIME l.3686 (TXT-0308); IMPL-DECISION G360, G253] The Module
+    # Loader leaving `ready` while it owns realizations has failed: an
+    # enforcement stop counts as its realization ending. What it owns is
+    # orphaned and termination arranged (`loaderLost`), never a release
+    # through a Loader that is stopping.
+    st.loaderLost(Failure(kind: kind))
+    return
   x.enforced = Opt.some(Failure(kind: kind))
   st.stopInstance(x, nil, keepIntent = true, enforcement = true)
 
@@ -3197,13 +3655,18 @@ proc renewExecution(st: State, x: Inst) =
     proc(got: seq[AuthzAnswer]) =
       st.execRenewed(x, serial, got[0]),
     proc() =
-      discard, # [I85] shutdown; the validity end still applies
+      # [I85 amended] Not begun during shutdown (no binding): the validity
+      # end still applies, and a later renewal falls due.
+      if x.execSerial == serial and x.executing:
+        x.exec.get.renewing = false
+    ,
   )
 
 proc checkExecutions(st: State) =
   ## [SPEC CA l.857-858; CAP-0342, CAP-0352] A validity end reached on either
   ## clock stops the instance as `authority-expired`, with no grace; a
-  ## renewal is asked for when it is due (not after shutdown is accepted).
+  ## renewal is asked for when it is due, during shutdown too [SPEC RUNTIME
+  ## l.3731 (RUN-1199); I85 amended].
   var due: seq[Inst]
   for x in st.instances.values:
     if x.executing:
@@ -3213,7 +3676,7 @@ proc checkExecutions(st: State) =
       continue
     if x.exec.get.expired(st.wallNow, st.monoNow):
       st.stopForAuthority(x, fkAuthorityExpired)
-    elif not st.shuttingDown and x.exec.get.renewalDue(st.monoNow):
+    elif x.exec.get.renewalDue(st.monoNow):
       st.renewExecution(x)
 
 proc nextExecution(st: State): Opt[MonoTime] =
@@ -3222,7 +3685,7 @@ proc nextExecution(st: State): Opt[MonoTime] =
   var t = Opt.none(int64)
   for x in st.instances.values:
     if x.executing:
-      let ev = if st.shuttingDown: x.exec.get.deadline else: x.exec.get.nextEvent
+      let ev = x.exec.get.nextEvent # renewals during shutdown too (RUN-1199)
       if ev.isSome and (t.isNone or ev.get < t.get):
         t = ev
   if t.isNone:
@@ -3266,8 +3729,8 @@ proc bindingRefusal(st: State, x: Inst): string =
   if b.dispatch.isNil:
     return "it has no generic dispatch"
   let primary = b.contracts.primary
-  # A record that names no primary contract is checked by what the
-  # realization exposes (RUN-0316), as host configuration says.
+  # [RUN-0316; G393] The realization's primary is checked here too; a ready
+  # record with a provider record states it (`checkContracts`).
   if root.isNone or
       (x.record.primaryContract.isSome and x.record.primaryContract != root) or
       primary.isNone or primary.get.root != root.get:
@@ -3280,14 +3743,26 @@ proc bindingRefusal(st: State, x: Inst): string =
     return "its notifications do not resolve"
   ""
 
+func renewalOnly(p: Pending): bool =
+  ## Every request of `p` is an execution renewal.
+  result = true
+  for q in p.reqs:
+    if not q.renewal:
+      return false
+
 proc failOutstanding(st: State, reason: string, shutdown = false) =
   ## Every outstanding evaluation is abandoned: its invocation is marked
   ## cancelled and its late result discarded. Its operation gets an
-  ## evaluation failure, or at shutdown its `abort`.
+  ## evaluation failure, or at shutdown its `abort`. [SPEC RUNTIME l.3731;
+  ## I85 amended] At shutdown an execution renewal in flight is spared, both
+  ## its evaluation and its operation: the authority stays usable for it.
   var ps: seq[Pending]
   for p in st.pendings.values:
-    ps.add(p)
+    if not (shutdown and p.renewalOnly):
+      ps.add(p)
   for e in st.evals.values:
+    if shutdown and e.pending != nil and e.pending.renewalOnly:
+      continue
     e.abandoned = true
     e.ticket.cancelled.store(true)
   for p in ps:
@@ -3302,20 +3777,24 @@ proc failOutstanding(st: State, reason: string, shutdown = false) =
         if not p.filled[i]:
           st.fill(p, i, st.failure(p.reqs[i], reason))
 
-proc loseBinding(st: State, reason: string) =
+proc loseBinding(st: State, reason: string, orderly = false) =
   ## [SPEC CA §8 l.826-832, l.872-878; plan §2.3] In one step: admission
   ## under the old generation closes (CAP-0344, CAP-0346), parked evaluations
   ## are answered as evaluation failures and their late results discarded,
-  ## and the cache is cleared (CAP-0172, CAP-0345). [I85] Shutdown is not
-  ## binding loss: parked operations were answered NOT_READY when it was
-  ## accepted.
+  ## and the cache is cleared (CAP-0172, CAP-0345). [I85 amended] Shutdown is
+  ## not binding loss: parked operations were answered NOT_READY when it was
+  ## accepted, and the release shutdown initiates once the authority's hold
+  ## ends (`orderly`) leaves no execution it must end. A real loss during
+  ## shutdown, while the authority is held for renewals (RUN-1199), still
+  ## ends the executions it authorized and fails a renewal spared at
+  ## shutdown.
   if st.caInst.isNil:
     return
   st.caInst = nil
   st.boundToken = ""
   inc st.gen
   st.cache.clear()
-  if st.shuttingDown:
+  if orderly:
     return
   st.diagnose("the Capability Authority binding is lost: " & reason)
   st.failOutstanding("the Capability Authority binding was lost")
@@ -3344,7 +3823,10 @@ proc checkBinding(st: State) {.gcsafe.} =
     x.realization.isNil
   ):
     st.loseBinding(
-      "the authority instance is " & (if x.isNil: "retired" else: $x.state)
+      "the authority instance is " & (if x.isNil: "retired" else: $x.state),
+      orderly =
+        st.shuttingDown and x == st.caInst and x.state == msStopping and
+        x.enforced.isNone,
     )
   if st.caInst.isNil and not st.shuttingDown and x != nil and x.state == msReady and
       not x.pending:
@@ -3631,13 +4113,16 @@ proc cancelExec(st: State, x: Inst, pe: PendingExec) =
 proc selectConfig(st: State, x: Inst, pe: PendingExec): Opt[Opt[ValueRecord]] =
   ## [SPEC CONFIG §3 l.123-126, §4 l.142-145; I87 C6, C17] For an otherwise
   ## authorized startup attempt, before it is accepted: the staged record,
-  ## else the current one. None, or an ineligible one, is NOT_READY [G162
-  ## interim (TF-10)]: intent stays `requested`, nothing is accepted, and a
-  ## retained execution refusal (G168) is cleared, since the decision now
-  ## allows. A staged record whose promotion could not advance the revision
-  ## is MODULE_ERROR [G234]. For the orchestration instance at bootstrap
-  ## either fails the bootstrap with MODULE_ERROR [G190 (TF-25 point 4)].
-  ## Returns none once the start is answered.
+  ## else the current one. [SPEC RUNTIME l.3613, l.3611; G162 changed] None,
+  ## or an ineligible one (reading C6), is NOT_READY with
+  ## `configuration-missing`: intent stays `requested`, nothing is accepted,
+  ## and the cause replaces the one recorded, on an `error` instance too
+  ## (P5 §0.3 item 3: as a denial or a settings refusal does; G291 reads it
+  ## as resumable). A staged record whose promotion could not advance the
+  ## revision is MODULE_ERROR [G234]. For the orchestration instance at
+  ## bootstrap either fails the bootstrap with MODULE_ERROR [SPEC RUNTIME
+  ## l.3955: an other failure; TF-25 point 4]. Returns none once the start is
+  ## answered.
   if not x.configurable:
     return Opt.some(Opt.none(ValueRecord))
   var refusal: EngineError
@@ -3651,11 +4136,7 @@ proc selectConfig(st: State, x: Inst, pe: PendingExec): Opt[Opt[ValueRecord]] =
   of selNone, selIneligible:
     refusal =
       engineError(ecNotReady, "the module instance has no eligible configuration value")
-    if x.failure.isSome and
-        x.failure.get.kind in
-        {fkAuthorityDenied, fkAuthorityEvaluationFailed, fkPermissionEnforcementFailed}:
-      x.failure = Opt.none(Failure)
-      st.commit(x)
+    st.blockedBy(x, fkConfigurationMissing)
   if x.orchestration and st.bootstrapReply != nil:
     st.bootstrapReply.answerError(
       ecModule, "the orchestration instance cannot start: " & refusal.message
@@ -3700,13 +4181,27 @@ proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
       st.rerun(op)
     return
   if x.state notin {msUnloaded, msError} or x.attempt != nil or x.teardown != 0 or
-      x.realization != nil or x.intent != inRequested or not st.prerequisitesReady(x):
+      x.realization != nil or x.intent != inRequested:
+    pe.answerExec(ecNotReady, "the module instance can no longer start")
+    return
+  let ordering = st.prerequisites(x)
+  if ordering != prReady:
+    st.prerequisiteRefusal(x, ordering)
     pe.answerExec(ecNotReady, "the module instance can no longer start")
     return
   let selected = st.selectConfig(x, pe).valueOr:
     return
-  # The attempt is accepted: `loaded`, failure cleared (§9.3 l.3758-3759),
-  # written before the attempt begins (l.3505).
+  if x.mismatched:
+    # [SPEC RUNTIME l.1321-1322, l.3607; M14; P5 §0.3 item 1] Last of the
+    # causes, before any Loader call, so never a `loader-` classification.
+    st.blockedBy(x, fkStaticBindingMismatch)
+    pe.answerExec(
+      ecNotReady,
+      "the static binding registered does not match the instance's retained declaration",
+    )
+    return
+  # The attempt is accepted: `loaded`, failure cleared (§9.3 l.3611), written
+  # before the attempt begins (l.3505).
   var waiters = pe.waiters
   for op in pe.joined:
     waiters.add(Waiter(reply: op.q.reply, origin: op.q.origin.instance))
@@ -3744,11 +4239,15 @@ proc executeDecided(st: State, x: Inst, pe: PendingExec, a: AuthzAnswer) =
 
 proc execute(st: State, x: Inst, reply: ReplyChannel, origin: string) {.gcsafe.} =
   ## [SPEC RUNTIME §3.6, §9.3] What `start` and `recover` share once intent is
-  ## `requested`: prerequisites, execution authorization for the retained
-  ## origin (pending meanwhile, `PendingExec`), the accepting commit, then
-  ## the attempt (`beginAttempt`).
-  if not st.prerequisitesReady(x):
+  ## `requested`, in one order of the causes of l.3613 (P5 §0.3 item 1):
+  ## prerequisites, execution authorization for the retained origin (the
+  ## settings first, pending meanwhile, `PendingExec`), configuration, the
+  ## static binding, then the accepting commit and the attempt
+  ## (`beginAttempt`).
+  let ordering = st.prerequisites(x)
+  if ordering != prReady:
     # [SPEC RUNTIME §3.7, §10.1] A dependent waits for every prerequisite.
+    st.prerequisiteRefusal(x, ordering)
     reply.answerError(ecNotReady, "a lifecycle prerequisite is not ready")
     return
   st.decideExec(x, PendingExec(waiters: @[Waiter(reply: reply, origin: origin)]))
@@ -3787,15 +4286,29 @@ proc decideExec(st: State, x: Inst, pe: PendingExec) =
       st.cancelExec(x, pe),
   )
 
+func joinable(st: State, x: Inst): bool =
+  ## [I85] A start or recovery is waiting for its execution decision.
+  let pe = x.pendingExec
+  not (pe.isNil or pe.cancelled or st.op.isNil)
+
 proc joinExec(st: State, x: Inst): bool =
   ## [I85] A start or recovery while one is waiting for its execution
   ## decision joins it: answered with its attempt's outcome, or taken again
   ## from the top when the decision refuses.
-  let pe = x.pendingExec
-  if pe.isNil or pe.cancelled or st.op.isNil:
+  if not st.joinable(x):
     return false
-  pe.joined.add(st.op)
+  x.pendingExec.joined.add(st.op)
   true
+
+proc staleExecution(x: Inst): EngineError =
+  ## [SPEC RUNTIME l.1818-1819] A stale expected execution revision. While the
+  ## write of a committed transition is held back (I82), the revision held is
+  ## not yet written: MODULE_ERROR then, as `answerView` answers (row 7; re-pin
+  ## P4 §0.2).
+  if x.pending:
+    engineError(ecModule, NotPersisted)
+  else:
+    typedError(recStaleRevision, Opt.some(x.revision))
 
 proc lookup(st: State, q: Request, operation: string): Result[Inst, EngineError] =
   ## [SPEC RUNTIME §9.3 l.3661-3662] For a module consumer, an unknown target
@@ -3840,12 +4353,12 @@ proc lookup(st: State, q: Request, operation: string): Result[Inst, EngineError]
     return err(engineError(ecInvalidParams, "the module name does not match"))
   if q.expectedRevision.isSome and q.expectedRevision.get != x.revision:
     # [SPEC RUNTIME §9.1 l.1832-1833] compared atomically with acceptance
-    return err(engineError(ecInvalidParams, "execution revision mismatch"))
+    return err(x.staleExecution)
   ok(x)
 
 proc originReady(st: State, q: Request): Opt[EngineError] =
-  ## [SPEC RUNTIME §3.4 l.629-631, §10.2; G171 interim (TF-18)] Checked after
-  ## the request's authorization: a Runtime Control binding that is
+  ## [SPEC RUNTIME §3.4 l.629-631, §10.2; l.1832, step 7] Checked after the
+  ## table's rows, before a success: a Runtime Control binding that is
   ## invalidated, or a Runtime that is shutting down, is NOT_READY. A request
   ## that comes through no binding (the host API) has only the second.
   if q.attempt.len > 0:
@@ -3865,13 +4378,16 @@ template requireReady(st: State, q: Request) =
 
 proc start(st: State, q: Request) =
   ## [SPEC RUNTIME §9.1, §9.3 start_module; §3.6] Replies once the attempt
-  ## is ready or failed, or once its deadline passed.
+  ## is ready or failed, or once its deadline passed. [SPEC RUNTIME
+  ## l.1826-1833] The target and the revision (`lookup`, steps 4 and 5), the
+  ## table's rows in order (step 6), then readiness (step 7), which every
+  ## success passes, a view or a join included.
   let x = st.lookup(q, "start_module").valueOr:
     q.answerFailure(error)
     return
-  st.requireReady(q)
   case x.state
   of msLoaded, msReady:
+    st.requireReady(q)
     q.reply.answerView(x) # §9.1 l.1837: no new realization, intent unchanged
     return
   of msStopping:
@@ -3892,8 +4408,15 @@ proc start(st: State, q: Request) =
   if missing.isSome:
     q.reply.answerError(ecNotReady, missing.get)
     return
-  if st.joinExec(x):
+  if st.joinable(x):
+    st.requireReady(q)
+    discard st.joinExec(x)
     return
+  if st.exhausted(x.revision):
+    # [SPEC RUNTIME l.1812, row 7; re-pin P4 R1] in row order, before readiness
+    q.reply.answerError(ecModule, Exhausted)
+    return
+  st.requireReady(q)
   # [SPEC RUNTIME §9.3 l.3644-3647] Acceptance establishes `requested` intent
   # with this origin, before execution authorization or startup.
   let saved = x.save
@@ -3957,6 +4480,7 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       st.diagnose("the Module Host carrier of " & x.id & " cannot be made: " & error)
       fail("the Module Host carrier cannot be made")
     a.services.adoptHost(h)
+    h.forwardSubscriptionEnds()
     host = h
     # [plan §2.8; part 4b-3.3] Every host's own loop connects its consumer's
     # handles with the Runtime's Transport limits.
@@ -3985,6 +4509,7 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       publish: s.publish,
       publishUserData: s.publishUserData,
       invocationAccess: s.invocationAccess,
+      declareContract: cast[pointer](s.declareContract),
       host: host,
     ),
   ).isOkOr:
@@ -3992,8 +4517,11 @@ proc realizeThroughLoader(st: State, a: Attempt) =
     fail("the private handoff cannot be placed")
   a.phase = apRealize
   a.ticket = newTicket()
+  let held = cast[Host](host)
+  if held != nil:
+    retain(held)
   discard st.callLoader(
-    LoaderCall(kind: lcRealize, inst: x, attempt: a, ticket: a.ticket),
+    LoaderCall(kind: lcRealize, inst: x, attempt: a, ticket: a.ticket, host: held),
     lmRealize,
     bytes,
     instance = x.id,
@@ -4007,6 +4535,8 @@ proc beginAttempt(st: State, a: Attempt) {.gcsafe.} =
   ## bootstrap mechanism (BOOTSTRAP l.287-288).
   let x = a.inst
   let id = a.id
+  if x.orchestration and st.bootstrapReply != nil:
+    st.bootAttempted = true # [SPEC RUNTIME l.3939] its outcome is startup's
   x.tokens.incl(a.token)
   var services = InitServices()
   a.services = newAttemptServices(st.shared, x.id, a.token)
@@ -4088,7 +4618,7 @@ proc stopInstance(
 ) =
   ## [SPEC RUNTIME §3.4, §9.1, §10.2] Moves `x` toward `unloaded`; replies
   ## once it is there, or once the stop deadline passes and the instance is
-  ## `error` with `cleanup-timeout` [G61]. [I85] A start or recovery waiting
+  ## `stopping` with `cleanup-timeout` (l.575; `recordOverrun`). [I85] A start or recovery waiting
   ## for its execution decision is cancelled: it and the starts that joined
   ## it get the view after the stop, or NOT_READY at shutdown. An
   ## `enforcement` stop (`stopForAuthority`) keeps intent, as a shutdown stop
@@ -4120,10 +4650,6 @@ proc stopInstance(
     # classification an authority refusal or stop left is cleared.
     x.failure = Opt.none(Failure)
     st.commit(x)
-  if x.indeterminateStop:
-    # [G237 interim] The stop in progress completes it, as `stopping` would.
-    reply.answerView(x)
-    return
   case x.state
   of msUnloaded, msStopping:
     reply.answerView(x)
@@ -4148,33 +4674,24 @@ proc stopInstance(
     st.commit(x)
     st.releaseRealization(x)
   of msError:
-    if x.realization != nil and x.realization.lost:
-      # [plan §2.11 step 5 (R4)] Accepted: the intent is cancelled (l.1838);
-      # nothing can be released, so it stays `error`.
-      reply.answerView(x)
-      return
+    # [SPEC RUNTIME l.526, RUN-1110; P5a M10] Every stop of an `error`
+    # instance goes through `stopping`; its failure stays until the stop
+    # completes (l.3611). A lost or unresolved realization is not released
+    # again: the stop completes when its host's end is confirmed
+    # (`hostGone`), or at the next open after a completed shutdown (G357).
     if x.attempt != nil:
       x.attempt.cancelled = true
       if x.attempt.ticket != nil:
         x.attempt.ticket.cancelled.store(true)
       x.state = msStopping
       st.commit(x)
-    elif x.teardown != 0 or x.realization != nil:
+    else:
+      # Nothing to clean too (Q-r B10): `stopping`, then `unloaded` below.
       x.state = msStopping
       st.commit(x)
-    else:
-      x.state = msUnloaded
-      x.failure = x.takeEnforced()
-      x.current = ""
-      st.commit(x)
-      reply.answerView(x)
-      return
   if x.state == msStopping and x.teardown == 0 and x.attempt.isNil and
       x.realization.isNil:
-    x.state = msUnloaded
-    x.failure = x.takeEnforced()
-    x.current = ""
-    st.commit(x)
+    st.completeStop(x)
   if x.state == msUnloaded:
     reply.answerView(x)
     return
@@ -4185,31 +4702,25 @@ proc stopInstance(
   if reply != nil:
     x.stopWaiters.add(StopWaiter(reply: reply, origin: origin))
 
-proc callsInto(st: State, consumer, provider: string): bool =
-  ## Whether `consumer` has an admitted call in progress through a route to
-  ## `provider`.
-  for r in st.routes.values:
-    if r.consumer == consumer and r.providerInstance == provider and r.calls.len > 0:
-      return true
-  false
-
 proc stop(st: State, q: Request) =
-  ## [SPEC RUNTIME §9.1, §9.3 stop_module]
+  ## [SPEC RUNTIME §9.1, §9.3 stop_module; l.1826-1833] The target and the
+  ## revision, the Loader's row, then readiness.
   let x = st.lookup(q, "stop_module").valueOr:
     q.answerFailure(error)
     return
-  st.requireReady(q)
   if st.isLoader(x) and st.loaderOwns():
     # [plan §2.10 (K5, decision 5); RUNTIME l.3563-3569 by analogy] Not while
     # it owns a realization; owning none, it is stopped as any instance and
     # the binding ends (l.3816-3817).
     q.reply.answerError(ecNotReady, "the Module Loader still owns realizations")
     return
-  if not q.origin.host and
-      (q.origin.instance == x.id or st.callsInto(q.origin.instance, x.id)):
-    # [G173 interim (TF-20)] A module that stops itself, or that has a call in
-    # progress in the target, gets the state at once: waiting would hold that
-    # call, and so the target's release (l.3687 permits `stopping`).
+  st.requireReady(q)
+  if q.kind == rqRc:
+    # [SPEC RUNTIME l.3551-3556] Success means the stop is accepted and the
+    # instance is `stopping` or `unloaded`; completion is reported through
+    # `module_state_changed_event` and `get_readiness`. An instance in `error`
+    # whose realization was lost answers `stopping` too (G173; P5a M10). [IMPL; re-pin P4 R8]
+    # The engine API's stop still answers at `unloaded`.
     st.stopInstance(x, nil, keepIntent = false)
     q.reply.answerView(x)
     return
@@ -4219,16 +4730,16 @@ proc recover(st: State, q: Request) =
   ## [SPEC RUNTIME §9.3 recover_module, l.3537-3544; §10.1] A new attempt for
   ## retained `requested` intent, its origin and its record unchanged, once
   ## the earlier realization is cleaned. Execution is authorized for the
-  ## retained origin, not the requester (l.3540). Answers as `start` does
-  ## [G173 interim (TF-20)]. The check order is G171's: authority, then the
-  ## module name and revision (`lookup`), then readiness.
+  ## retained origin, not the requester (l.3540). Answers as `start` does.
+  ## [SPEC RUNTIME l.1826-1833] Authority, the module name and the revision
+  ## (`lookup`), the table's rows in order, then readiness before the join
+  ## or the new attempt.
   if q.expectedRevision.isNone:
     q.reply.answerError(ecInvalidParams, "an expected execution revision is required")
     return
   let x = st.lookup(q, "recover_module").valueOr:
     q.answerFailure(error)
     return
-  st.requireReady(q)
   if x.intent != inRequested:
     # [SPEC RUNTIME l.3538, l.1914] after an explicit stop (l.3790) or before
     # any start
@@ -4248,11 +4759,14 @@ proc recover(st: State, q: Request) =
   if missing.isSome:
     q.reply.answerError(ecNotReady, missing.get)
     return
-  if st.joinExec(x):
+  if st.joinable(x):
+    st.requireReady(q)
+    discard st.joinExec(x)
     return
   if st.exhausted(x.revision):
-    q.reply.answerError(ecModule, "the execution revision is exhausted")
+    q.reply.answerError(ecModule, Exhausted) # row 7, in row order (R1)
     return
+  st.requireReady(q)
   st.execute(x, q.reply, q.origin.instance)
 
 proc reportFailure(st: State, q: Request, success = Reply()) =
@@ -4490,28 +5004,62 @@ proc create(st: State, q: Request) =
 
 # Shutdown -----------------------------------------------------------------------
 
+proc authorityHeld(st: State): bool =
+  ## [SPEC RUNTIME l.3731 (RUN-1199, TXT-0314); P5 §0.4 item 1; I85 amended]
+  ## The bound authority stays usable for execution renewal while an
+  ## execution it authorized still runs, other than one of the authority's
+  ## own ordering prerequisites, direct or not: the ordering releases those
+  ## after it, so holding it for them would never end.
+  if not st.authorityMode or st.caInst.isNil:
+    return false
+  let ca = st.cfg.authority.get.instance
+  var before: seq[string]
+  var todo = @[ca]
+  while todo.len > 0:
+    let id = todo.pop()
+    for (pre, dep) in st.cfg.ordering:
+      if dep == id and pre notin before:
+        before.add(pre)
+        todo.add(pre)
+  for x in st.instances.values:
+    if x.id != ca and x.id notin before and x.executing:
+      return true
+  false
+
+proc releasable(st: State, x: Inst, expiry = false): bool =
+  ## [SPEC RUNTIME §10.2, l.3729, l.3732] Whether shutdown initiates `x`'s
+  ## release: not one already initiated or done, nor the Loader's while it
+  ## owns a realization or runs a call (R3; a lost one only as §2.11 says),
+  ## nor the authority's while it is held for renewals (l.3731; not at
+  ## `expiry`, where every cleanup still running is a recorded failure,
+  ## l.3732), nor an orphaned realization's (§2.11 step 4: nothing releases
+  ## it), nor an `error` instance's with nothing left.
+  if x.state in {msUnloaded, msStopping}:
+    return false
+  if st.isLoader(x) and (st.loaderOwns() or x.inflight > 0 or st.ldr.lost):
+    return false
+  if not expiry and st.authorityMode and x.id == st.cfg.authority.get.instance and
+      st.authorityHeld():
+    return false
+  if x.realization != nil and x.realization.lost:
+    return false
+  not (
+    x.state == msError and x.attempt.isNil and x.teardown == 0 and x.realization.isNil
+  )
+
+proc shutdownOrder(st: State): seq[Inst] =
+  ## Reverse creation order.
+  for x in st.instances.values:
+    result.insert(x, 0)
+
 proc shutdownStep(st: State) =
   ## [SPEC RUNTIME §10.2 step 3] Releases dependents before prerequisites, in
   ## reverse creation order otherwise; execution intent is preserved.
   var progress = true
   while progress:
     progress = false
-    var order: seq[Inst]
-    for x in st.instances.values:
-      order.insert(x, 0)
-    for x in order:
-      if x.state in {msUnloaded, msStopping} or x.indeterminateStop:
-        continue
-      if st.isLoader(x) and (st.loaderOwns() or x.inflight > 0 or st.ldr.lost):
-        # [SPEC RUNTIME l.3847-3849, l.3863; plan §2.10 (R3)] The Loader is
-        # released last, once it owns no realization and runs no call; a
-        # lost one only as §2.11 says.
-        continue
-      if x.realization != nil and x.realization.lost:
-        # [plan §2.11 step 4] Nothing releases an orphaned realization.
-        continue
-      if x.state == msError and x.attempt.isNil and x.teardown == 0 and
-          x.realization.isNil:
+    for x in st.shutdownOrder():
+      if not st.releasable(x):
         continue
       var dependentLive = false
       for (pre, dep) in st.cfg.ordering:
@@ -4530,8 +5078,7 @@ proc shutdownComplete(st: State): bool =
       # [plan §2.10 (R3)] Shutdown completes with the failure; the Loader
       # stays, narrowed to `release` and `get_status`.
       continue
-    if x.state in {msLoaded, msReady, msStopping} or x.indeterminateStop or
-        x.apply != nil:
+    if x.state in {msLoaded, msReady, msStopping} or x.apply != nil:
       # [I87] An application in flight is waited for as a call is.
       return false
     if st.isLoader(x) and x.teardown != 0:
@@ -4546,16 +5093,25 @@ proc shutdownOutcome(st: State): Opt[EngineError] =
   ## or with some cleanup unresolved or failed: an attempt or a release still
   ## outstanding, `cleanup-timeout` or `cleanup-failed`. The second is
   ## MODULE_ERROR, naming the instances.
-  var unresolved: seq[string]
+  var unresolved, forced: seq[string]
   for x in st.instances.values:
     let failed =
       x.failure.isSome and x.failure.get.kind in {fkCleanupTimeout, fkCleanupFailed}
     if failed or x.attempt != nil or x.teardown != 0 or x.realization != nil:
       unresolved.add(x.id)
+    if x.state == msStopping and not x.hosted:
+      forced.add(x.id)
   if unresolved.len == 0:
     return Opt.none(EngineError)
   var message =
     "shutdown completed with cleanup unresolved or failed: " & unresolved.join(", ")
+  if forced.len > 0:
+    # [SPEC RUNTIME l.3732; Q-r D4] Forced cleanup of a direct realization
+    # still `stopping` is requested of the host: it shares this process.
+    message.add(
+      "; forced cleanup of " & forced.join(", ") &
+        " is requested: the host process must end"
+    )
   if st.ldr.termination.len > 0:
     # [IMPL-DECISION G249; plan §2.11 step 6] S4b1-1 (a): a C host learns here.
     message.add("; the Module Loader failed: the host process must end")
@@ -4566,9 +5122,16 @@ proc finishShutdown(st: State) =
   ## lifecycle requests and still cleans contexts that module code returns
   ## late, until `close`. Every waiter gets the one stored result (RUN-0760).
   ## [IMPL] A state that could not be written is tried once more; if it still
-  ## fails the result is MODULE_ERROR (G60 extended; I82).
+  ## fails the result is MODULE_ERROR (G60 extended; I82). [IMPL-DECISION
+  ## G357] That write carries the completed-shutdown record, and so does every
+  ## later one in this run; if it fails, the next open sees an unclean end.
   st.shutdownResult = st.shutdownOutcome()
-  st.retryStore()
+  st.completedShutdown = true
+  let w = st.persist()
+  if w.isErr:
+    st.storeFailure(w.error)
+  else:
+    st.written(nil)
   if st.storeFailed:
     var message = NotPersisted
     if st.shutdownResult.isSome:
@@ -4620,9 +5183,10 @@ func listRequest(st: State, x: Inst, operation: string): AuthzRequest =
   AuthzRequest(action: aaObserve, operation: operation, consumer: x.id, filters: true)
 
 proc rcPrecheck(st: State, q: Request) =
-  ## [G171 interim (TF-18)] Before a Runtime Control request whose payload
-  ## failed validation is answered INVALID_PARAMS: the caller's association,
-  ## and the method's authority where it names no target from the payload.
+  ## [SPEC RUNTIME l.1827-1828, steps 2 and 3] Before a Runtime Control
+  ## request whose payload failed validation is answered INVALID_PARAMS: the
+  ## caller's association, and the method's authority where it names no
+  ## target from the payload.
   let x = st.caller(q).valueOr:
     q.reply.answerError(error.code, error.message)
     return
@@ -4904,9 +5468,10 @@ proc ownsNothing(st: State, y: Inst): bool =
 
 proc retire(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §9.3 retire_module, l.3556-3595] Removes a stopped
-  ## instance's record for good. The check order is G171's: the target's
-  ## Runtime, this method's own authority (l.3557), the revision, readiness,
-  ## then the absence of every realization, cleanup, call and dependency.
+  ## instance's record for good. [SPEC RUNTIME l.1826-1833] The target's
+  ## Runtime and this method's own authority (l.3557; step 4), the revision
+  ## (5), the absence of every realization, cleanup, call and dependency
+  ## (the table's rows, 6), then readiness (7).
   let req = q.rc.retire
   if req.target.runtime_instance_id != st.runtimeId:
     # [G194 interim (TF-30 point 1)] INVALID_PARAMS without detail, as l.3659
@@ -4936,9 +5501,8 @@ proc retire(st: State, q: Request, x: Inst) =
     return
   if req.expected_execution_revision != y.revision:
     # [SPEC RUNTIME l.3559-3560] no mutation
-    q.reply.answerError(ecInvalidParams, "execution revision mismatch")
+    q.answerFailure(y.staleExecution)
     return
-  st.requireReady(q)
   if not st.ownsNothing(y):
     q.reply.answerError(ecNotReady, "the module instance still has a realization")
     return
@@ -4963,6 +5527,7 @@ proc retire(st: State, q: Request, x: Inst) =
     # [SPEC RUNTIME l.3581-3582] The host configuration still names it.
     q.reply.answerError(ecNotReady, "the host configuration names the module instance")
     return
+  st.requireReady(q)
   st.retireInst(y).isOkOr:
     st.storeFailure(error)
     q.reply.answerError(ecModule, NotPersisted)
@@ -4970,11 +5535,21 @@ proc retire(st: State, q: Request, x: Inst) =
   st.dropFacts(y)
   # [SPEC RUNTIME l.3591] The retirement stands whether or not the answer
   # arrives.
-  q.reply.answerEncoded(encode(LogosNSRuntimeControlRetireModuleResponse()))
+  q.reply.answerEncoded(
+    encode(
+      LogosNSRuntimeControlRetireModuleResponse.accepted(
+        LogosNSRuntimeControlRetireModuleResponseARMapMap()
+      )
+    )
+  )
 
 proc createModule(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §9.3 create_module, l.3613-3634] A fresh instance from the
   ## one accepted declaration for `module` (G55), once per request key.
+  ## [SPEC RUNTIME l.1826-1833] Authority (step 4), a key reused for another
+  ## module (row 2), readiness (step 7), then the replay, or
+  ## `declaration-unavailable` after the table (l.1822; reading R2), the
+  ## resource bound and the creation.
   let req = q.rc.createModule
   st.require(
     q,
@@ -4985,7 +5560,6 @@ proc createModule(st: State, q: Request, x: Inst) =
       module: req.module,
     ),
   )
-  st.requireReady(q)
   # [SPEC RUNTIME l.3627-3631] The key's scope is this method, this consumer
   # and this Runtime; the Runtime thread serializes requests, so one key
   # creates one instance (RUN-0663).
@@ -4996,14 +5570,18 @@ proc createModule(st: State, q: Request, x: Inst) =
           ecInvalidParams, "the request key was used for another module"
         )
       else:
+        st.requireReady(q)
         q.reply.answerEncoded(
           encode(
-            LogosNSRuntimeControlCreateModuleResponse(
-              module: k.module, instance: k.instance
+            LogosNSRuntimeControlCreateModuleResponse.accepted(
+              LogosNSRuntimeControlCreateModuleResponseARMapInstanceModuleMap(
+                module: k.module, instance: k.instance
+              )
             )
           )
         )
       return
+  st.requireReady(q)
   var found = false
   var d: ModuleDeclaration
   for c in st.cfg.declarations:
@@ -5011,9 +5589,11 @@ proc createModule(st: State, q: Request, x: Inst) =
       d = c
       found = true
   if not found:
-    # [G195 interim (TF-30 point 2)] No accepted declaration: the answer a
-    # denial gives, and nothing created (l.3619).
-    q.reply.answerError(ecNotAuthorised, "not authorised")
+    # [SPEC RUNTIME l.1822, l.3485; G195 replaced] No selectable declaration:
+    # `declaration-unavailable`, to a caller authorized to create `module`
+    # (the `require` above answered any other NOT_AUTHORISED, TXT-0198).
+    # Nothing is created or retained, so a replay is evaluated afresh.
+    q.reply.answerTyped(recDeclarationUnavailable)
     return
   if st.instances.len >= MaxInstances:
     # [SPEC RUNTIME l.3442-3443; BCP l.369] a resource bound, not readiness
@@ -5036,7 +5616,11 @@ proc createModule(st: State, q: Request, x: Inst) =
     return
   q.reply.answerEncoded(
     encode(
-      LogosNSRuntimeControlCreateModuleResponse(module: y.record.module, instance: y.id)
+      LogosNSRuntimeControlCreateModuleResponse.accepted(
+        LogosNSRuntimeControlCreateModuleResponseARMapInstanceModuleMap(
+          module: y.record.module, instance: y.id
+        )
+      )
     )
   )
 
@@ -5047,10 +5631,18 @@ proc newRouteId(st: State): string =
   "route-" & st.prefix & "-" & $st.routeCount
 
 func expects(y: Inst, root: Digest): bool =
-  ## The instance's record expects `root` as its primary contract or as an
-  ## implemented interface.
+  ## The instance's record expects `root` as its primary contract, an
+  ## implemented interface or an earlier contract it extends. [SPEC RUNTIME
+  ## l.1368; synthesis Q6] A requirement matches every provider that exposes
+  ## a validated view with the root: under the exact match a bound
+  ## provider's validated views are the sets its record states, so the
+  ## record's sets are the candidates before and after its bind (G394).
   (y.record.primaryContract.isSome and y.record.primaryContract.get == root) or
-    root in y.record.implements
+    root in y.record.implements or root in y.record.extends
+
+func routable(y: Inst): bool =
+  ## A ready provider that a route can select now.
+  y.state == msReady and y.provider and not y.realization.isNil
 
 proc accessBytes(a: LogosNSRuntimeControlRouteAccess): seq[byte] =
   ## A route access as an `AuthzRequest` carries it: empty when it
@@ -5058,6 +5650,17 @@ proc accessBytes(a: LogosNSRuntimeControlRouteAccess): seq[byte] =
   if a.methods.isNone and a.publish_events.isNone and a.subscribe_events.isNone:
     return @[]
   encode(a).get(newSeq[byte]())
+
+func answerOf(r: Route, p: Inst): seq[byte] =
+  ## [SPEC RUNTIME §2.4 l.432-434; INTERFACE §5.1] The schema answer of the
+  ## route's selected contract: an earlier contract's is the route's own
+  ## (G394); the others are the provider's, kept at its bind.
+  if r.answer.len > 0:
+    r.answer
+  elif p.isNil:
+    newSeq[byte]()
+  else:
+    p.schemas.getOrDefault(r.selected.root)
 
 proc servedEndpoint(st: State, y: Inst): Result[ServedEndpoint, string] =
   ## [G257; plan §2.5] The endpoint serving provider `y`'s current
@@ -5071,27 +5674,12 @@ proc servedEndpoint(st: State, y: Inst): Result[ServedEndpoint, string] =
     return err("the Module Host's endpoint does not serve")
   if not st.shared.tport.started:
     return err("the transport is not running")
-  let b = y.realization.contracts
-  var roots: seq[Digest]
-  if b.primary.isSome:
-    roots.add(b.primary.get.root)
-  for i in b.interfaces:
-    roots.add(i.root)
-  if roots.len == 0:
-    return err("the provider has no contract")
-  let primary = roots[0]
-  let schema = y.schemas.getOrDefault(primary)
-  if schema.len == 0:
-    return err("the provider's schema response is missing")
+  # [synthesis Q4; G394] The roots and the primary input a Module Host's
+  # endpoint takes too (`servedroots`): an earlier contract is served, and
+  # its input comes with each session that selects it (`hello`).
+  let served = ?servedContracts(y.realization.contracts)
   st.sv.openEndpoint(
-    key,
-    y.id,
-    y.providerId,
-    y.record.module,
-    roots,
-    ContractInput(
-      root: primary, schema: schema, system: y.record.module.startsWith("logos_")
-    ),
+    key, y.id, y.providerId, y.record.module, served.roots, served.primary
   )
 
 proc issueTicket(
@@ -5134,17 +5722,21 @@ proc establish(st: State, q: Request, x: Inst) =
     # l.426). The Loader serves only a SYSTEM_SERVICE caller as well.
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
+  if req.provider.isSome and req.provider.get.runtime_instance_id.isSome and
+      req.provider.get.runtime_instance_id.get != st.runtimeId:
+    # [IMPL] No remote Runtime is reachable: an unknown target.
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  # [SPEC RUNTIME l.1826-1833; re-pin P4 R4] The key (row 2) after the target
+  # checks of step 4 and before the route decision and discovery, which are
+  # the operation: a replay answers its retained result, behind readiness,
+  # without a new decision (l.3072).
   let replayed = st.keys.replay(x.id, req.request_key, op, q.rc.request).valueOr:
     q.reply.answerError(ecInvalidParams, error)
     return
   if replayed.isSome:
     st.requireReady(q)
     q.reply.answer(Reply(bytes: replayed.get))
-    return
-  if req.provider.isSome and req.provider.get.runtime_instance_id.isSome and
-      req.provider.get.runtime_instance_id.get != st.runtimeId:
-    # [IMPL] No remote Runtime is reachable: an unknown target.
-    q.reply.answerError(ecNotAuthorised, "not authorised")
     return
   let contract = @root
   let access = accessBytes(req.access)
@@ -5174,14 +5766,19 @@ proc establish(st: State, q: Request, x: Inst) =
       continue
     candidates.add(y)
   if not all and candidates.len > 1:
-    # [IMPL] `single` selects first and then authorizes only the selected
-    # provider (l.3093-3094): the first ready candidate, else the first.
-    var pick = candidates[0]
+    # [SPEC RUNTIME l.1423-1424; re-pin P4c M7, RG-11] `single` never selects
+    # a provider that the consumer's route decision hides. Every candidate is
+    # decided in one batch, so no pass limit hides an allowed one. The order
+    # is creation order with the ready ones first, and the first allowed one
+    # is selected. The others' route identifiers are never used again.
+    var ordered: seq[Inst]
     for y in candidates:
-      if y.state == msReady:
-        pick = y
-        break
-    candidates = @[pick]
+      if y.routable:
+        ordered.add(y)
+    for y in candidates:
+      if not y.routable:
+        ordered.add(y)
+    candidates = ordered
   var reqs: seq[AuthzRequest]
   for y in candidates:
     # [SPEC RUNTIME l.3155] The identifier is allocated before evaluation,
@@ -5215,12 +5812,17 @@ proc establish(st: State, q: Request, x: Inst) =
   for i, y in candidates:
     if answers[i].allows:
       allowed.add((y, reqs[i], answers[i]))
+      if not all:
+        # [M7] The first allowed candidate. A failed evaluation is skipped
+        # like a deny, and the response names no skipped candidate.
+        break
     else:
       omitted = true
   if allowed.len == 0:
-    # [SPEC RUNTIME l.3157-3159; G169 interim (TF-16)] Nothing the caller may
-    # route to: NOT_AUTHORISED, unless a `discover` allow covers the contract
-    # and no provider offers it, which the caller may learn.
+    # [SPEC RUNTIME l.3060-3063; G169] Nothing the caller may route to:
+    # NOT_AUTHORISED with a non-revealing diagnostic, unless a `discover`
+    # allow covers the contract and no provider offers it, which the caller
+    # may learn (NOT_READY below).
     var discoverable = candidates.len == 0
     if discoverable and not all:
       let d = st.decide([discover]).valueOr:
@@ -5232,13 +5834,23 @@ proc establish(st: State, q: Request, x: Inst) =
   st.requireReady(q)
   for (y, rq, ans) in allowed:
     let sel =
-      if y.state == msReady and y.provider and not y.realization.isNil:
+      if y.routable:
         selectContract(y.realization.contracts, root, st.ctx)
       else:
         Opt.none(SelectedContract)
     if sel.isNone:
       omitted = true
       continue
+    var answer: seq[byte]
+    if y.realization.contracts.isEarlier(root):
+      # [SPEC INTERFACE §5.1 l.3243-3244; synthesis §3] An earlier contract's
+      # answer is built when a route selects it and held by that route; one
+      # over 8 MiB is never exposed through a ready route.
+      let input = earlierInput(y.realization.contracts, root).valueOr:
+        st.diagnose("no route to " & y.providerId & " was made: " & error)
+        omitted = true
+        continue
+      answer = input.schema
     checkAccessRoots(req.access, sel.get).isOkOr:
       q.reply.answerError(ecInvalidParams, error)
       return
@@ -5303,13 +5915,16 @@ proc establish(st: State, q: Request, x: Inst) =
           mode: mode,
           consumerAttempt: x.current,
           endpoint: endpoint,
+          answer: answer,
         ),
         ans,
       )
     )
   if made.len == 0:
-    # [G169 interim (TF-16)] The caller holds a route allow for a provider, or
-    # a `discover` allow and no provider offers the contract.
+    # [SPEC RUNTIME l.3063; G169] The caller holds a route allow for a
+    # provider and none it may route to is ready (with M7's order, a `single`
+    # request's first allowed candidate is not), or a `discover` allow and no
+    # provider offers the contract.
     q.reply.answerError(ecNotReady, "no selected provider is ready")
     return
   # [plan §2.4] The live answer carries each transported route's ticket; the
@@ -5388,12 +6003,12 @@ proc shorten(st: State, r: Route, a: AuthzAnswer) =
 proc pumpReauth(st: State) {.gcsafe.}
 
 proc reauthorized(st: State, r: Route, attempt: int, a: AuthzAnswer) =
-  ## [SPEC CA l.906-911; CAP-0189; S8b-2 interim] An allow covering the bound
-  ## access makes the route usable again with the new decision; a deny
-  ## revokes it with `authority-denied`, a narrowed allow with
-  ## `authority-revoked` (G170 extended); an evaluation failure leaves it
-  ## `ready` and unusable (CAP-0174). TL-04: the outcome decides, never a
-  ## code.
+  ## [SPEC CA l.937-941; CAP-0189, CAP-0433; S8b-2 interim] An allow covering
+  ## the bound access makes the route usable again with the new decision; a
+  ## deny, or an allow narrower than the bound scope, revokes it with
+  ## `authority-denied` (l.940; re-pin P4c M9); an evaluation failure leaves
+  ## it `ready` and unusable (l.941; CAP-0174). TL-04: the outcome decides,
+  ## never a code.
   dec st.reauthBusy
   if r.reauthTry == attempt and r.reauth == raPending and not r.isTerminal:
     if a.allows:
@@ -5405,9 +6020,7 @@ proc reauthorized(st: State, r: Route, attempt: int, a: AuthzAnswer) =
       st.routeChangedRc(r, decision, expires)
     else:
       case a.outcome
-      of azAllow:
-        st.endRoute(r, rtRevoked, Opt.some(rfAuthorityRevoked))
-      of azDeny:
+      of azAllow, azDeny:
         st.endRoute(r, rtRevoked, Opt.some(rfAuthorityDenied))
       of azEvaluationFailed, azRefused:
         r.reauth = raFailed
@@ -5501,8 +6114,10 @@ proc renew(st: State, q: Request, x: Inst) =
   ## an existing ready route. An allow replaces the decision and, from the
   ## Capability Authority, `expires_at`, and makes a route waiting for its
   ## re-authorization usable again; a deny makes the route unusable [G170
-  ## interim (TF-17)], and so does a narrowed allow, with `authority-revoked`
-  ## [G170 extended, I85]. [S8b-2 interim] An evaluation failure is what it
+  ## interim (TF-17)], and so does a narrowed allow, both with
+  ## `authority-denied` [SPEC CA l.940; re-pin P4c M9; G170, I85]; an
+  ## explicit withdrawal stays `authority-revoked` (RUNTIME l.2429).
+  ## [S8b-2 interim] An evaluation failure is what it
   ## is for the Runtime's own re-authorization: the route stays `ready` and
   ## unusable until a later decision allows it.
   const op = "renew_route"
@@ -5517,16 +6132,26 @@ proc renew(st: State, q: Request, x: Inst) =
       route: req.route,
     ),
   )
-  let replayed = st.keys.replay(x.id, req.request_key, op, q.rc.request).valueOr:
-    q.reply.answerError(ecInvalidParams, error)
-    return
-  if replayed.isSome:
+  # [SPEC RUNTIME l.1826-1833; re-pin P4 R4, R7] The same request replayed,
+  # behind readiness (a dropped route's replay keeps working, l.3074); then
+  # the route's ownership (step 4), a key reused with other fields (row 2),
+  # a closed or failed route (row 5), the decision, and readiness (step 7).
+  let replayed = st.keys.replay(x.id, req.request_key, op, q.rc.request)
+  if replayed.isOk and replayed.get.isSome:
     st.requireReady(q)
-    q.reply.answer(Reply(bytes: replayed.get))
+    q.reply.answer(Reply(bytes: replayed.get.get))
     return
   let r = st.route(req.route)
   if r.isNil or r.consumer != x.id:
     q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if replayed.isErr:
+    q.reply.answerError(ecInvalidParams, replayed.error)
+    return
+  if r.state in {rtClosed, rtFailed}:
+    # [SPEC RUNTIME l.1810, row 5] before the decision: a renewal that would
+    # be denied answers NOT_READY too (reading R4)
+    q.reply.answerError(ecNotReady, "the route is " & $r.state)
     return
   st.expireIfDue(r)
   if r.state == rtRevoked and r.endCode == ecNotAuthorised:
@@ -5554,11 +6179,10 @@ proc renew(st: State, q: Request, x: Inst) =
   if not ans.allows:
     # [G170 interim (TF-17)] No call is served under a decision a later check
     # withdrew (CA l.906-911); a terminal route keeps its first end. TL-04:
-    # the outcome, never its code, picks the failure.
+    # the outcome, never its code, picks the failure; a narrowed allow is
+    # `authority-denied` as a deny is (CA l.940; re-pin P4c M9).
     case ans.outcome
-    of azAllow:
-      st.endRoute(r, rtRevoked, Opt.some(rfAuthorityRevoked))
-    of azDeny:
+    of azAllow, azDeny:
       st.endRoute(r, rtRevoked, Opt.some(rfAuthorityDenied))
     of azEvaluationFailed, azRefused:
       if r.authority and not r.isTerminal:
@@ -5571,8 +6195,7 @@ proc renew(st: State, q: Request, x: Inst) =
     return
   st.requireReady(q)
   if r.isTerminal:
-    # [SPEC RUNTIME §9.3 l.1915, l.3482-3483] Closed or failed: NOT_READY;
-    # revoked: by its cause (§7.5).
+    # [SPEC RUNTIME l.3482-3483] Revoked: by its cause (§7.5).
     q.reply.answerError(
       (if r.state == rtRevoked: r.endCode else: ecNotReady), "the route is " & $r.state
     )
@@ -5659,7 +6282,7 @@ proc realizationStatus(x: Inst): RealizationStatus =
     return rsCurrent
   if x.realization != nil or x.teardown != 0 or
       (a != nil and a.phase in {apReadyPending, apCleanup}):
-    if x.state == msError and x.failure.isSome and x.failure.get.kind == fkCleanupTimeout:
+    if x.overran:
       return rsUnknown
     return rsCurrent
   rsAbsent
@@ -5741,6 +6364,12 @@ proc moduleRecord(st: State, y: Inst): (LogosNSRuntimeControlModuleRecord, Subje
     for c in v.implements:
       cs.add(schemaCommitmentOf(c))
     r.implements = Opt.some(cs)
+  if v.extends.len > 0:
+    # [SPEC RUNTIME l.1966; G394 r13] From the record, as `implements`.
+    var cs: seq[SchemaCommitment]
+    for c in v.extends:
+      cs.add(schemaCommitmentOf(c))
+    r.extends = Opt.some(cs)
   if v.failure.isSome:
     r.failure = Opt.some(v.failure.get.classification)
     r.reason = disclosedReason(v.failure.get)
@@ -6023,7 +6652,7 @@ proc summary(st: State, q: Request, x: Inst) =
     state: rcState(v.state),
     execution: rcExecution(v),
     realization: rcRealization(y.realizationStatus),
-    # [SPEC RUNTIME l.3523-3528 (RUN-0639); plan §2.7] The strategy the
+    # [SPEC RUNTIME l.3384 (RUN-1184; P5 claims it); plan §2.7] The strategy the
     # Module Loader realizes the instance with; the Loader itself, realized
     # by the bootstrap mechanism, is `implementation-specific` (G57). No
     # selection is package-backed, so no `package` or `signer` (RUN-0637,
@@ -6096,7 +6725,8 @@ proc setExport(st: State, q: Request, x: Inst) =
   if owner.isNil:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
-  st.requireReady(q)
+  # [SPEC RUNTIME l.1831-1832] A failure of the method's own conditions comes
+  # before readiness, which no success here would pass.
   q.reply.answerError(ecInvalidParams, "the export names no remote listener record")
 
 proc describeProvider(st: State, q: Request, x: Inst) =
@@ -6142,6 +6772,11 @@ proc describeProvider(st: State, q: Request, x: Inst) =
       contracts.add(owner.record.primaryContract.get)
     for c in owner.record.implements:
       contracts.add(c)
+    # [SPEC CA l.249-256; G394 r15] One `discover` decision per earlier view
+    # too: a consumer whose rules name only the current contract is refused
+    # once the provider states one.
+    for c in owner.record.extends:
+      contracts.add(c)
   var reqs: seq[AuthzRequest]
   for c in contracts:
     reqs.add(
@@ -6184,8 +6819,10 @@ proc settingsAnswer(st: State, q: Request, y: Inst, update: bool) =
   if update:
     q.reply.answerEncoded(
       encode(
-        LogosNSRuntimeControlUpdatePermissionSettingsResponse(
-          target: address, state: y.settings.toRc
+        LogosNSRuntimeControlUpdatePermissionSettingsResponse.accepted(
+          LogosNSRuntimeControlUpdatePermissionSettingsResponseARMapStateTargetMap(
+            target: address, state: y.settings.toRc
+          )
         )
       )
     )
@@ -6199,34 +6836,45 @@ proc settingsAnswer(st: State, q: Request, y: Inst, update: bool) =
     )
 
 proc profiledSettings(st: State, q: Request, x: Inst) =
-  ## [SPEC RUNTIME §9.3 l.2526-2604; I93; plan §2.4] Under a selected profile,
-  ## in this order: the caller and the target (`localTarget`: authority over
-  ## the exact target, RUN-0473; another Runtime's target INVALID_PARAMS
-  ## without detail, G228, RUN-0910), readiness; then for an update the
-  ## array (unknown, invalid, unordered or repeated: INVALID_PARAMS without
-  ## detail, RUN-0892, RUN-0468), the revision (RUN-0474), the bound Loader
-  ## (NOT_READY, G253 (K37)), a repeat (RUN-0475), and a new replacement:
-  ## saved, published and reconciled (G281, G285), all before the reply
-  ## (RUN-0477). Intent, its origin and the execution revision are not
-  ## touched (RUN-0481); a failed replacement of an `unloaded` instance sets
-  ## its `failure` (R7), an execution change.
+  ## [SPEC RUNTIME §9.3 l.2526-2604; I93; plan §2.4; l.1826-1833] Under a
+  ## selected profile, in this order: an unordered or repeated array
+  ## (INVALID_PARAMS without detail, RUN-1141; step 3, reading R3); the
+  ## caller and the target (`localTarget`: authority over the exact target,
+  ## RUN-0473; another Runtime's target INVALID_PARAMS without detail, G228,
+  ## RUN-0910); for a read, readiness. For an update: a setting the profile
+  ## does not define or admit (INVALID_PARAMS without detail, RUN-0892), the
+  ## revision (RUN-0474), the bound Loader (NOT_READY, G253 (K37)),
+  ## readiness, a repeat (RUN-0475), and a new replacement: saved, published
+  ## and reconciled (G281, G285), all before the reply (RUN-0477). Intent,
+  ## its origin and the execution revision are not touched (RUN-0481); a
+  ## failed replacement of an `unloaded` instance sets its `failure` (R7), an
+  ## execution change.
   let update = q.rc.m == rmUpdatePermissionSettings
   let target = if update: q.rc.updateSettings.target else: q.rc.getSettings.target
+  let xs =
+    if update:
+      fromRc(q.rc.updateSettings.permissions)
+    else:
+      @[]
+  if checkOrder(xs).isErr:
+    q.reply.answerError(ecInvalidParams, "the permission settings are not valid")
+    return
   let y = st.localTarget(
     q, x, target, (if update: aaLifecycle else: aaObserve), $q.rc.m
   ).valueOr:
     return
-  st.requireReady(q)
   if not update:
+    st.requireReady(q)
     st.settingsAnswer(q, y, update)
     return
   let req = q.rc.updateSettings
-  let xs = fromRc(req.permissions)
-  if st.profile.checkSettings(xs).isErr:
+  if st.profile.checkDefined(xs).isErr:
     q.reply.answerError(ecInvalidParams, "the permission settings are not valid")
     return
   if req.expected_revision != y.settings.revision:
-    q.reply.answerError(ecInvalidParams, "permission settings revision mismatch")
+    # [SPEC RUNTIME l.1818-1819] settings write before they are adopted, so the
+    # revision held is the one written
+    q.reply.answerTyped(recStaleRevision, Opt.some(y.settings.revision))
     return
   if st.isLoader(y) and st.ldr.bound:
     # [IMPL-DECISION G253 (K37)] Reconciliation would stop it, which is
@@ -6236,6 +6884,7 @@ proc profiledSettings(st: State, q: Request, x: Inst) =
       "the Module Loader's permission settings cannot change while it is bound",
     )
     return
+  st.requireReady(q)
   if y.settings.repeats(xs):
     st.settingsAnswer(q, y, update)
     return
@@ -6246,8 +6895,8 @@ proc profiledSettings(st: State, q: Request, x: Inst) =
     return
   case next.application
   of saPending:
-    # [SPEC RUNTIME l.2595-2597; RUN-0912, RUN-0914, RUN-1066; G281] Stop and
-    # re-realize: a running realization is stopped as an enforcement stop with
+    # [SPEC RUNTIME l.2518 (RUN-1142); RUN-0914, RUN-1066; G281] Stop the
+    # realization: a running realization is stopped as an enforcement stop with
     # no classification, intent and origin kept, asking no stop grant (CA
     # l.338-339); a stop or cleanup already running is awaited. The engine
     # never restarts it (RUN-0915).
@@ -6276,6 +6925,10 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
     return
   let update = q.rc.m == rmUpdatePermissionSettings
   let target = if update: q.rc.updateSettings.target else: q.rc.getSettings.target
+  if update and checkOrder(fromRc(q.rc.updateSettings.permissions)).isErr:
+    # [SPEC RUNTIME l.2461; l.1828] step 3, before the target
+    q.reply.answerError(ecInvalidParams, "the permission settings are not valid")
+    return
   let y = st.localTarget(
     q, x, target, (if update: aaLifecycle else: aaObserve), $q.rc.m
   ).valueOr:
@@ -6288,7 +6941,8 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
       )
       return
     if req.expected_revision != 1:
-      q.reply.answerError(ecInvalidParams, "permission settings revision mismatch")
+      # a constant profile's settings stay at revision 1
+      q.reply.answerTyped(recStaleRevision, Opt.some(1'u64))
       return
   st.requireReady(q)
   let state = LogosNSRuntimeControlPermissionSettingsState(
@@ -6303,8 +6957,10 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
   if update:
     q.reply.answerEncoded(
       encode(
-        LogosNSRuntimeControlUpdatePermissionSettingsResponse(
-          target: address, state: state
+        LogosNSRuntimeControlUpdatePermissionSettingsResponse.accepted(
+          LogosNSRuntimeControlUpdatePermissionSettingsResponseARMapStateTargetMap(
+            target: address, state: state
+          )
         )
       )
     )
@@ -6319,12 +6975,13 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
 
 # Module configuration operations (CONFIG §5; DECISIONS I87) ------------------------
 #
-# [G171 interim (TF-18), extended (TF-18 point 5)] Each operation checks, in
-# order: the caller's association; a target on another Runtime (INVALID_PARAMS,
-# G228 extended, TF-30 point 1); the method's own authority over the exact
-# target, an unknown target answered as a refused one (CFG-0057); readiness;
-# then CONFIG's table rows in their order; then, for a mutation, frame size
-# [G233], revision headroom [G234] and the write.
+# [SPEC RUNTIME l.1824-1833; CONFIG l.203, l.303-305] Each operation checks,
+# in order: the caller's association; a target on another Runtime
+# (INVALID_PARAMS, G228); the method's own authority over the exact target,
+# an unknown target answered as a refused one (CFG-0057); CONFIG's table rows
+# in their order, the revision after the first; for a mutation, frame size
+# (CONFIG l.198) and revision headroom (RUNTIME l.1812, row 7); readiness;
+# the write.
 
 proc configTarget(
     st: State,
@@ -6333,11 +6990,9 @@ proc configTarget(
     target: LogosNSRuntimeModuleInstanceAddress,
     action: AuthzAction,
 ): Opt[Inst] =
+  ## [SPEC RUNTIME l.1829] The target (step 4); each caller tests readiness
+  ## after its own rows (l.1832).
   let y = st.localTarget(q, x, target, action, $q.rc.m).valueOr:
-    return Opt.none(Inst)
-  let notReady = st.originReady(q)
-  if notReady.isSome:
-    q.reply.answerError(notReady.get.code, notReady.get.message)
     return Opt.none(Inst)
   Opt.some(y)
 
@@ -6354,12 +7009,8 @@ proc updateRefusal(
   if not y.configurable:
     return Opt.some(noBinding())
   if expectedRevision != y.config.revision:
-    # [G19; CFG-0059]
-    return Opt.some(
-      engineError(
-        ecInvalidParams, "the configuration state revision is not the current one"
-      )
-    )
+    # [G19; CFG-0059; RUNTIME l.1818-1819] configuration writes before it adopts
+    return Opt.some(typedError(recStaleRevision, Opt.some(y.config.revision)))
   let c = fromRc(expected)
   if c.isErr or c.get != y.config.binding.commitment:
     # [G21, revised B2]
@@ -6371,16 +7022,20 @@ proc updateRefusal(
   Opt.none(EngineError)
 
 proc commitConfig(st: State, q: Request, y: Inst, next: ConfigState) =
-  ## A Runtime Control mutation: frame size [G233], headroom [G234], the
-  ## write, then the commit and its event; answered with the state.
+  ## A Runtime Control mutation: frame size (CONFIG §5's last row, l.198,
+  ## INVALID_PARAMS without detail), headroom (RUNTIME l.1812, row 7, before
+  ## readiness, l.1831-1832), readiness, the write, then the commit and its
+  ## event; answered with the state.
   if not next.admissible:
     q.reply.answerError(
-      ecModule, "the configuration state would not fit a get_configuration response"
+      ecInvalidParams,
+      "the configuration state would not fit a get_configuration response",
     )
     return
   if not y.config.canMutate:
     q.reply.answerError(ecModule, "the configuration revision is exhausted")
     return
+  st.requireReady(q)
   let refused = st.persistConfig(y, next)
   if refused.isSome:
     q.reply.answerError(refused.get.code, refused.get.message)
@@ -6392,6 +7047,7 @@ proc configSummary(st: State, q: Request, x: Inst) =
   ## `{state_revision: 0}` [G235 interim (TL-09)].
   let y = st.configTarget(q, x, q.rc.cfgTarget, aaObserve).valueOr:
     return
+  st.requireReady(q)
   let state = (if y.configurable: summary(y.config) else: summaryWithout())
   q.reply.answerEncoded(
     encode(
@@ -6410,19 +7066,21 @@ proc configRead(st: State, q: Request, x: Inst) =
   if not y.configurable:
     q.reply.answerError(noBinding().code, noBinding().message)
     return
+  st.requireReady(q)
   q.reply.answer(Reply(config: retained(y.config)))
 
 proc configUpdate(st: State, q: Request, x: Inst) =
   ## [SPEC CONFIG §5 l.180-213] Rows 1-3 here. A `stage` ends phase 1 with
   ## the binding and the decisions' conditions: its value is validated on
-  ## the caller's thread, then committed by `configCommit` (I87 §2.7). A
-  ## `discard` is one step; with nothing staged it changes nothing (l.207).
+  ## the caller's thread, then committed by `configCommit` (I87 §2.7), which
+  ## tests readiness after every row, so phase 1 does not. A `discard` is one
+  ## step; with nothing staged it changes nothing (l.207).
   let u = q.rc.cfgUpdate
   let y = st.configTarget(q, x, u.target, aaLifecycle).valueOr:
     return
   let refused = y.updateRefusal(u.expectedRevision, u.expectedCommitment)
   if refused.isSome:
-    q.reply.answerError(refused.get.code, refused.get.message)
+    q.answerFailure(refused.get)
     return
   if u.stage:
     var r = Reply(
@@ -6434,6 +7092,7 @@ proc configUpdate(st: State, q: Request, x: Inst) =
     q.reply.answer(r)
     return
   if y.config.staged.isNone:
+    st.requireReady(q)
     q.reply.answer(Reply(config: retained(y.config)))
     return
   st.commitConfig(q, y, y.config.discarded)
@@ -6464,7 +7123,7 @@ proc configCommit(st: State, q: Request) =
     return
   let refused = y.updateRefusal(u.expectedRevision, u.expectedCommitment)
   if refused.isSome:
-    q.reply.answerError(refused.get.code, refused.get.message)
+    q.answerFailure(refused.get)
     return
   if u.mismatch:
     let d = st.decide(
@@ -6505,18 +7164,22 @@ func applyDeadline(st: State): Duration =
     st.cfg.applyDeadline
 
 proc applyRefusal(y: Inst, expectedRevision: uint64): Opt[EngineError] =
-  ## [SPEC CONFIG §8 l.290-298 (CFG-0093, CFG-0141)] The preconditions, in the
-  ## table's row order [G171 extended (TF-18 point 5)], with the absent
-  ## realization binding placed after NOT_READY, so an instance that is not
-  ## `ready` is NOT_READY. INVALID_PARAMS carries no detail (CFG-0143).
-  ## Nothing is invoked or changed on a refusal (CFG-0142).
+  ## [SPEC CONFIG §8 l.299-306 (CFG-0093, CFG-0141, TXT-0418)] The first row
+  ## of CONFIG §5's table, the revision, then §8's rows in order: a held
+  ## realization whose binding is absent or not live is l.299's first row,
+  ## before NOT_READY; an instance with no realization, or only a failed or
+  ## lost one, is NOT_READY, having none to read (G171). INVALID_PARAMS
+  ## carries no detail (CFG-0143). Nothing is invoked or changed on a refusal
+  ## (CFG-0142). The Loader (row 6) and the revision's headroom (row 7,
+  ## `canAdvance`) follow in `configApply` (RUNTIME l.1811-1812, l.1831).
   template refuse(code: ErrorCode, text: string) =
     return Opt.some(engineError(code, text))
 
   if not y.configurable:
     return Opt.some(noBinding())
   if expectedRevision != y.config.revision:
-    refuse(ecInvalidParams, "the configuration state revision is not the current one")
+    # [RUNTIME l.1818-1819]
+    return Opt.some(typedError(recStaleRevision, Opt.some(y.config.revision)))
   if y.config.staged.isNone:
     refuse(ecInvalidParams, "no configuration value is staged")
   if not y.config.binding.live:
@@ -6524,23 +7187,22 @@ proc applyRefusal(y: Inst, expectedRevision: uint64): Opt[EngineError] =
     refuse(
       ecInvalidParams, "the configuration binding does not declare live reconfiguration"
     )
-  if y.state != msReady:
+  let r = y.realization
+  let held = r != nil and not (r.failed or r.lost or r.unresolved)
+  if held and (not r.live or r.initCommitment.isNone):
+    refuse(ecInvalidParams, "the realization has no live configuration binding")
+  if y.state != msReady or not held:
     refuse(ecNotReady, "the module instance is not ready")
   if y.apply != nil:
     # [CFG-0095] at most one attempt per instance
     refuse(ecNotReady, "a configuration is already being applied")
-  let r = y.realization
-  if r.isNil or not r.live or r.initCommitment.isNone:
-    refuse(ecInvalidParams, "the realization has no live configuration binding")
   if not commitmentsAgree(
     y.config.binding.commitment, y.config.staged.get.commitment, r.initCommitment.get
   ):
-    # [SPEC CONFIG l.296] Unreachable while a binding is fixed for its
-    # instance (CONFIG §7); kept for the rule.
+    # [SPEC CONFIG l.301, l.258 (TXT-0416)] Only restored or inconsistent
+    # state can differ while a binding is fixed for its instance (CONFIG §7);
+    # the rule still applies to it.
     refuse(ecVersionMismatch, "the configuration schema commitments differ")
-  if not y.config.canAdvance:
-    # [IMPL-DECISION G234 (S9-2)] its promotion could not advance the revision
-    refuse(ecModule, "the configuration revision is exhausted")
   Opt.none(EngineError)
 
 proc configApply(st: State, q: Request, x: Inst) =
@@ -6554,17 +7216,25 @@ proc configApply(st: State, q: Request, x: Inst) =
     return
   let refused = y.applyRefusal(r.expected_state_revision)
   if refused.isSome:
-    q.reply.answerError(refused.get.code, refused.get.message)
+    q.answerFailure(refused.get)
     return
   let staged = y.config.staged.get
   let rz = y.realization
   if rz.mechanism == mLoader:
-    # [SPEC LOADER §8; plan §2.6] Through the Loader, which runs the hook on
-    # the worker that calls it.
+    # [SPEC RUNTIME l.1811, row 6] the Loader, a required system service
     let refused = st.loaderRefusal(lmApplyConfiguration)
     if refused.isSome:
       q.reply.answerError(ecNotReady, refused.get)
       return
+  if not y.config.canAdvance:
+    # [SPEC RUNTIME l.1812, row 7] its promotion could not advance the
+    # revision; the one-step headroom is [IMPL] (G234)
+    q.reply.answerError(ecModule, "the configuration revision is exhausted")
+    return
+  st.requireReady(q)
+  if rz.mechanism == mLoader:
+    # [SPEC LOADER §8; plan §2.6] Through the Loader, which runs the hook on
+    # the worker that calls it.
     let input = newBlob(encodeInput(staged))
     let bytes = applyBytes(y.id, rz.id, input.bytesOf).valueOr:
       drop(input)
@@ -6619,8 +7289,8 @@ proc applyFailed(st: State, x: Inst, f: Failure) =
   ## outcome is indeterminate, or whose success could not be recorded:
   ## `error`, no further provider work, the realization released once the
   ## hook has returned. A later cause replaces an earlier one (RUNTIME
-  ## l.3757). [IMPL-DECISION G237 interim (TF-28)] During a stop the
-  ## instance enters `error` too, and the stop still completes it.
+  ## l.3757). [SPEC CONFIG l.327-329; G237 settled] During a stop nothing
+  ## changes: the stop continues, and the caller already has MODULE_ERROR.
   case x.state
   of msReady:
     x.state = msError
@@ -6629,10 +7299,7 @@ proc applyFailed(st: State, x: Inst, f: Failure) =
     st.commit(x)
     st.releaseRealization(x)
   of msStopping:
-    x.indeterminateStop = true
-    x.state = msError
-    x.failure = Opt.some(f)
-    st.commit(x)
+    discard
   of msError:
     x.failure = Opt.some(f)
     st.commit(x)
@@ -6665,11 +7332,12 @@ proc applyDone(
 proc applied(st: State, job: int, res: LogosResult) =
   ## [SPEC CONFIG §8 l.305-319; LOADER §8] The hook returned. Unless its
   ## deadline already passed: success promotes the attempted record, written
-  ## before it is exposed, and answers its value revision [G236 interim
-  ## (TL-10)], without any lifecycle change (CFG-0103), whatever the
+  ## before it is exposed, and answers its value revision (CONFIG l.315;
+  ## G236), without any lifecycle change (CFG-0103), whatever the
   ## instance's state, a stop included (CFG-0140); a valid rejection changes
-  ## nothing and is MODULE_ERROR, its status not forwarded (CFG-0145,
-  ## CFG-0146); an invalid result is indeterminate (CFG-0147, direct mode).
+  ## nothing and is the `configuration-rejected` error arm, its status not
+  ## forwarded (CFG-0156, CFG-0146; RUNTIME l.1821, produced only here); an
+  ## invalid result is indeterminate (CFG-0147, direct mode).
   ## Then a release waiting for the hook goes on.
   var x: Inst
   if not st.applies.pop(job, x):
@@ -6704,21 +7372,15 @@ proc appliedThroughLoader(st: State, job: int, reply: LoaderReply) =
   of lrFailed:
     outcome.err(loaderError(lecRealizationFailed, "the apply call failed"))
   of lrInvalid, lrActive, lrCapabilities, lrNone:
-    # [plan §2.9] The Loader has failed: `x` is orphaned with the rest, and
-    # the application's outcome is unknown.
-    drop(run.input)
-    if not run.expired:
-      x.config.adopt(x.config.withoutAttempt)
-      run.reply.answerError(
-        ecModule, "the configuration application failed: its outcome is unknown"
-      )
+    # [SPEC RUNTIME l.3687; G360] A failed operation of a `ready` Loader: the
+    # application's outcome is indeterminate, as for a failed invocation.
     st.loaderInvalid(
       if reply.kind == lrInvalid:
         reply.reason
       else:
         "apply_configuration answered " & $reply.kind
     )
-    return
+    outcome.err(loaderError(lecRealizationFailed, "the apply call failed"))
   st.applyDone(x, run, outcome)
 
 proc applyDone(
@@ -6743,16 +7405,18 @@ proc applyDone(
       else:
         run.reply.answerEncoded(
           encode(
-            LogosNSRuntimeControlApplyConfigurationResponse(
-              target: st.addressOf(x.id),
-              state_revision: x.config.revision,
-              applied_value_revision: run.valueRevision,
+            LogosNSRuntimeControlApplyConfigurationResponse.accepted(
+              LogosNSRuntimeControlApplyConfigurationResponseARMapAppliedValueRevisionStateRevisionTargetMap(
+                target: st.addressOf(x.id),
+                state_revision: x.config.revision,
+                applied_value_revision: run.valueRevision,
+              )
             )
           )
         )
     elif outcome.error.code == lecConfigurationRejected:
       x.config.adopt(x.config.withoutAttempt)
-      run.reply.answerError(ecModule, "the module rejected the configuration")
+      run.reply.answerTyped(recConfigurationRejected)
     else:
       x.config.adopt(x.config.withoutAttempt)
       run.reply.answerError(
@@ -6895,18 +7559,52 @@ proc rc(st: State, q: Request) =
 
 # Bootstrap ----------------------------------------------------------------------
 
+func startupFailure(f: Failure): Reply =
+  ## [SPEC RUNTIME l.3939, l.3955] A failure of orchestration in this run:
+  ## TIMEOUT for its startup deadline (§3.4), NOT_AUTHORISED for a denial, a
+  ## failed evaluation or a settings refusal (the shared code of l.3955;
+  ## I93, G284), MODULE_ERROR otherwise, with the classification. Never the
+  ## code `_MODULE_init` returned, and never VERSION_MISMATCH, which §13 keeps
+  ## for its own structures (l.3952).
+  if f.kind in
+      {fkAuthorityDenied, fkAuthorityEvaluationFailed, fkPermissionEnforcementFailed}:
+    return Reply(
+      error: Opt.some(
+        engineError(
+          ecNotAuthorised, "starting the orchestration instance is not authorised"
+        )
+      )
+    )
+  var message = "the orchestration instance failed to start: " & f.classification
+  if f.reason.len > 0 and not f.internal:
+    message.add(": " & f.reason)
+  Reply(
+    error: Opt.some(
+      engineError(if f.kind == fkStartupTimeout: ecTimeout else: ecModule, message)
+    )
+  )
+
 proc checkBootstrap(st: State) =
-  ## [IMPL-DECISION G190, interim] Answers the bootstrap once its outcome is
-  ## decided, in this one place. A shutdown accepted before the orchestration
-  ## instance's `ready` was committed is CANCELLED (RUN-0759), and stays so
-  ## whatever the attempt does next; `ready` is OK; a refused execution is
-  ## NOT_AUTHORISED; any other failure, `startup-timeout` included, is
-  ## MODULE_ERROR with the classification in the message. Never the code
-  ## `_MODULE_init` returned, and never VERSION_MISMATCH, which §13 keeps for
-  ## its own structures (l.3952). A failed bootstrap stops nothing.
+  ## [SPEC RUNTIME l.3838, l.3939-3940, l.3955; P5 §0.4 item 4, §3.3]
+  ## Answers the bootstrap once its outcome is decided, in this one place,
+  ## and only from an outcome of this run: a shutdown accepted before the
+  ## orchestration instance's `ready` was committed is CANCELLED (RUN-0759)
+  ## and stays so whatever the attempt does next (RUN-1202); `ready` is OK;
+  ## an attempt accepted in this run that failed gives `startupFailure`; a
+  ## refusal of the bootstrap's own request for a cause of l.3613 is an
+  ## "other failure" (l.3955), MODULE_ERROR with that classification, and
+  ## any other refusal gives its own code (NOT_AUTHORISED for a denial, a
+  ## failed evaluation or a settings refusal; NOT_READY for one that sets no
+  ## failure, such as a held restart lock or pending settings), so startup
+  ## never waits on a refused request. A retained failure never answers. A
+  ## failed bootstrap stops nothing.
   if st.bootstrapReply == nil:
     return
   let x = st.orchestrator
+  if st.bootOpen and st.bootAnswer.isNone:
+    let (got, r) = st.bootChan.tryRecv()
+    if got:
+      st.bootAnswer = Opt.some(r)
   var outcome: Opt[Reply]
   if st.shuttingDown:
     outcome = Opt.some(
@@ -6923,25 +7621,22 @@ proc checkBootstrap(st: State) =
       else:
         Reply(view: x.view)
     )
-  elif x.state == msError or (x.state == msUnloaded and x.failure.isSome):
-    let f = x.failure.get(Failure(kind: fkOther))
-    if f.kind in
-        {fkAuthorityDenied, fkAuthorityEvaluationFailed, fkPermissionEnforcementFailed}:
-      # [I93; G284] a start the permission settings refuse too
-      outcome = Opt.some(
+  elif st.bootAttempted and x.state in {msError, msUnloaded} and x.failure.isSome:
+    outcome = Opt.some(startupFailure(x.failure.get))
+  elif st.bootAnswer.isSome and st.bootAnswer.get.error.isSome:
+    let e = st.bootAnswer.get.error.get
+    outcome = Opt.some(
+      if e.code == ecNotAuthorised:
+        startupFailure(x.failure.get(Failure(kind: fkAuthorityDenied)))
+      elif st.bootCause.isSome:
+        startupFailure(Failure(kind: st.bootCause.get))
+      else:
         Reply(
           error: Opt.some(
-            engineError(
-              ecNotAuthorised, "starting the orchestration instance is not authorised"
-            )
+            engineError(e.code, "the orchestration instance cannot start: " & e.message)
           )
         )
-      )
-    else:
-      var message = "the orchestration instance failed to start: " & f.classification
-      if f.reason.len > 0:
-        message.add(": " & f.reason)
-      outcome = Opt.some(Reply(error: Opt.some(engineError(ecModule, message))))
+    )
   if outcome.isSome:
     st.bootstrapReply.answer(outcome.get)
     st.bootstrapReply = nil
@@ -6952,7 +7647,8 @@ proc reprovision(st: State, configured: seq[BootstrapInstance]): Opt[EngineError
   ## differs from the last one accepted for it; a value removed from the
   ## host configuration leaves that root as it was. Every one is checked
   ## (frame size [G233], revision headroom [G234]: MODULE_ERROR naming the
-  ## instance) before any is staged.
+  ## instance) before any is staged. A mismatched instance is left out: the
+  ## configured value belongs to other declaration facts (M14).
   var todo: seq[(Inst, ConfigState, Blob)]
   template unwind() =
     for (_, _, blob) in todo:
@@ -6960,7 +7656,7 @@ proc reprovision(st: State, configured: seq[BootstrapInstance]): Opt[EngineError
 
   for b in configured:
     let x = st.instances.getOrDefault(b.instance)
-    if x.isNil or not x.configurable or b.configuration.isNone:
+    if x.isNil or x.mismatched or not x.configurable or b.configuration.isNone:
       continue
     let p = b.configuration.get.provisioned
     if p.isNone or x.config.lastProvisioned == Opt.some(p.get.valueRoot):
@@ -6992,14 +7688,26 @@ proc reprovision(st: State, configured: seq[BootstrapInstance]): Opt[EngineError
     drop(blob)
   failed
 
+func registered(st: State): HashSet[string] =
+  for reg in st.cfg.statics:
+    result.incl(reg.binding)
+
 proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] =
-  ## [IMPL-DECISION G160 interim (TF-08)] The configured instances against the
+  ## [IMPL-DECISION G160 (TF-08)] The configured instances against the
   ## retained ones, all checked before any is changed. A retired id is
-  ## refused (l.3582); a retained id is the same logical instance while its
+  ## refused (l.3582). A retained id is the same logical instance while its
   ## declaration facts are equal (the record without `local_path` and
-  ## permission reasons, `store.factBytes`), and refused, naming it, when
-  ## they differ: the host names a new id. A configured state assignment that
-  ## another instance, live or retired, holds is refused (l.1468, l.3587).
+  ## permission reasons, `store.factBytes`). When they differ: a retained
+  ## `direct_static` instance is not refused but mismatched
+  ## (`staticMismatches`; SPEC RUNTIME l.1319-1322 settle the static path);
+  ## any other is refused, naming it, and the host names a new id (the
+  ## interim, P5 reading B4: l.1319-1322 name static bindings only).
+  ## [IMPL-DECISION S4 changed] A configured instance not yet retained that
+  ## names a static binding never registered is refused here, as the host
+  ## did before the store was open; a retained one is mismatched instead
+  ## (l.1321). A configured state assignment that another instance, live or
+  ## retired, holds is refused (l.1468, l.3587).
+  let registered = st.registered
   for b in configured:
     if namesLoader(b.instance, b.record):
       # [IMPL-DECISION G246] Only the Runtime's bootstrap names the Loader.
@@ -7014,7 +7722,17 @@ proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] 
         engineError(ecInvalidParams, "instance " & b.instance & " was retired")
       )
     let x = st.instances.getOrDefault(b.instance)
-    if x != nil and factBytes(x.record) != factBytes(b.record):
+    if x.isNil:
+      if b.record.strategy == stDirectStatic and b.record.binding notin registered:
+        return Opt.some(
+          engineError(
+            ecInvalidParams,
+            "module instance " & b.instance & " names static binding " & b.record.binding &
+              ", which is not registered",
+          )
+        )
+    elif x.record.strategy != stDirectStatic and
+        factBytes(x.record) != factBytes(b.record):
       return Opt.some(
         engineError(
           ecInvalidParams,
@@ -7033,6 +7751,54 @@ proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] 
           )
         )
   Opt.none(EngineError)
+
+proc declaredFacts(
+    st: State, x: Inst, named: Table[string, ModuleRecord]
+): Opt[seq[byte]] =
+  ## [P5 §0.3 item 4; Fable condition 4] Where a retained static instance's
+  ## declaration facts come from in this run: a configured instance's from
+  ## its configured record; a `create_module` instance's from its module's
+  ## declaration (the last one naming it, as `createModule` selects), with
+  ## the instance's own state assignment, provided the declaration still
+  ## gives it one exactly when it has one. None otherwise: an instance the
+  ## configuration no longer names, or whose declaration is gone (reading B5).
+  if x.id in named:
+    return Opt.some(factBytes(named.getOrDefault(x.id)))
+  if not x.created:
+    return Opt.none(seq[byte])
+  var found = Opt.none(ModuleDeclaration)
+  for d in st.cfg.declarations:
+    if d.record.module == x.record.module:
+      found = Opt.some(d)
+  if found.isNone or found.get.persistentState != x.record.stateAssignment.isSome:
+    return Opt.none(seq[byte])
+  var r = found.get.record
+  r.stateAssignment = x.record.stateAssignment
+  Opt.some(factBytes(r))
+
+proc staticMismatches(st: State, configured: seq[BootstrapInstance]) =
+  ## [SPEC RUNTIME l.1319-1321; M14] Before this run realizes anything: a
+  ## retained `direct_static` instance is realizable only while this run's
+  ## registration supplies its binding id, for its module, and its declaration
+  ## facts (`declaredFacts`) equal its retained record's. Otherwise it is
+  ## mismatched for the whole run: its retained record is kept (no adoption,
+  ## no reprovisioning) and every start or recovery is refused with
+  ## `static-binding-mismatch` (`executeDecided`). The Loader's record is
+  ## construction input this start re-establishes (l.1554, l.1557), so these
+  ## lines do not reach it (a reading; S4's row). Nothing is committed here.
+  var bindings: Table[string, string]
+  for reg in st.cfg.statics:
+    bindings[reg.binding] = reg.module
+  var named: Table[string, ModuleRecord]
+  for b in configured:
+    named[b.instance] = b.record
+  for x in st.instances.values:
+    if x.id == LoaderInstanceId or x.record.strategy != stDirectStatic:
+      continue
+    let facts = st.declaredFacts(x, named)
+    x.mismatched =
+      bindings.getOrDefault(x.record.binding, "") != x.record.module or facts.isNone or
+      facts.get != factBytes(x.record)
 
 # State transfer (Tier 4b step 4b-7; DECISIONS I96) ---------------------------------
 
@@ -7425,6 +8191,7 @@ proc bootstrap(st: State, q: Request) =
   if refused.isSome:
     q.reply.answerError(refused.get.code, refused.get.message)
     return
+  st.staticMismatches(q.bootstrap)
   let todo = st.checkTransfers(q.bootstrap, q.transfers).valueOr:
     q.reply.answerError(error.code, error.message)
     return
@@ -7445,9 +8212,10 @@ proc bootstrap(st: State, q: Request) =
       ).valueOr:
         q.reply.answerError(error.code, error.message)
         return
-    elif recordBytes(x.record) != recordBytes(b.record):
+    elif not x.mismatched and recordBytes(x.record) != recordBytes(b.record):
       # [IMPL-DECISION G160] Equal facts: the retained record takes the
-      # configured artifact path and permission reasons.
+      # configured artifact path and permission reasons. A mismatched one
+      # keeps its retained record (l.1319).
       let saved = x.save
       x.record = b.record
       let failed = st.accept(x, saved, exempt = true)
@@ -7458,8 +8226,17 @@ proc bootstrap(st: State, q: Request) =
     if b.instance == q.instance:
       x.orchestration = true
       st.orchestrator = x
+  for y in st.instances.values:
+    if y.mismatched and y.state == msUnloaded and y.intent == inRequested:
+      # [SPEC RUNTIME l.1322] It remains `unloaded` with the classification.
+      # An `error` one keeps its cause until a recovery is refused (l.3612).
+      st.blockedBy(y, fkStaticBindingMismatch)
   let x = st.orchestrator
   st.bootstrapReply = q.reply
+  # [P5 §0.4 item 4] The request's own answer is kept for `checkBootstrap`.
+  st.bootChan.open()
+  st.bootOpen = true
+  let own = addr st.bootChan
   if x.intent == inRequested and x.intentOrigin.host:
     st.recover(
       Request(
@@ -7467,6 +8244,7 @@ proc bootstrap(st: State, q: Request) =
         instance: x.id,
         origin: hostOrigin(),
         expectedRevision: Opt.some(x.revision),
+        reply: own,
       )
     )
   else:
@@ -7477,7 +8255,7 @@ proc bootstrap(st: State, q: Request) =
         "startup re-established orchestration whose intent was requested by " &
           x.intentOrigin.instance
       )
-    st.start(Request(kind: rqStart, instance: x.id, origin: hostOrigin()))
+    st.start(Request(kind: rqStart, instance: x.id, origin: hostOrigin(), reply: own))
   if st.storeFailed and x.attempt.isNil and x.state notin {msLoaded, msReady} and
       st.bootstrapReply != nil:
     # [IMPL] The accepting write failed (I82).
@@ -7936,15 +8714,17 @@ proc linkResponse(st: State, conn: ConnId, tag: uint64, o: sink CallOutcome) =
 
 proc linkLocalFailure(st: State, ev: IoEvent) =
   ## [plan §2.6 step 3] A Request the caller session refused: nothing was
-  ## sent. [G22] A connection already gone gives the handle's code. An
-  ## INVALID_PARAMS gets its validation detail from the selected contract.
+  ## sent. [SPEC RUNTIME l.1270-1271; P5 Q-r B2] A connection already ending
+  ## or gone is TRANSPORT_ERROR: `linkAdmits` admitted the call, so a cause
+  ## that ended it since is no new operation's. An INVALID_PARAMS gets its
+  ## validation detail from the selected contract.
   let l = st.links.getOrDefault(ev.conn)
   if l.isNil:
     st.diagnose("transport: " & ev.localMsg)
     return
   var code = ev.localCode
   if code == ecNotReady:
-    code = l.routeCause.get(l.observed.get(ecTransport))
+    code = ecTransport
   let f = InvocationFailure(code: code, message: Opt.some(ev.localMsg))
   var reply: ReplyChannel
   var p: pointer
@@ -8208,6 +8988,16 @@ proc hostedAdmit(st: State, q: Request) =
     if code.isSome:
       q.reply.answerError(code.get, "the handle's connection has ended")
       return
+  of 4:
+    # [SPEC INTERFACE l.1459, l.1477; DECISIONS I105] A subscription-end
+    # registration: refused as `observe_end` would be on a terminal handle;
+    # the registration is the host's.
+    if l.observed.isSome:
+      q.reply.answerError(l.observed.get, "the handle's path has ended")
+      return
+    if r.isTerminal:
+      q.reply.answerError(r.endCode, "the route is " & $r.state)
+      return
   of 3:
     if l.observed.isSome:
       q.reply.answerError(l.observed.get, "the handle's path has ended")
@@ -8409,11 +9199,8 @@ proc admit(st: State, q: Request) =
       return
     q.reply.answer(
       Reply(
-        admission: Admission(
-          introspection: true,
-          capture: capture,
-          schema: p.schemas.getOrDefault(r.selected.root),
-        )
+        admission:
+          Admission(introspection: true, capture: capture, schema: r.answerOf(p))
       )
     )
     return
@@ -8423,6 +9210,7 @@ proc admit(st: State, q: Request) =
     return
   inc p.inflight
   let ticket = newTicket()
+  ticket.id = uint64(st.nextJobId()) # [P3 F1] a queued scoped delivery's name for it
   r.calls.add(ticket)
   if q.call != nil:
     let a = st.asyncCalls.getOrDefault(q.call)
@@ -8486,6 +9274,24 @@ proc observeEnd(st: State, q: Request) =
   r.handles.add(q.handle)
   st.endRegs.inc(r.consumer)
   inc st.endRegsTotal
+  q.reply.answer(Reply())
+
+proc subEndAdmit(st: State, q: Request) =
+  ## [SPEC INTERFACE §2.5 l.1459, l.1477; DECISIONS I105] A subscription-end
+  ## registration on a terminal route handle returns the code `observe_end`
+  ## would, and nothing is installed. The registration itself is the handle's
+  ## (`subend`); the Runtime keeps nothing of it.
+  let r = st.route(q.route)
+  if r.isNil:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  let l = st.links.getOrDefault(linkOf(q.handle))
+  if l != nil and l.observed.isSome:
+    q.reply.answerError(l.observed.get, "the handle's path has ended")
+    return
+  if r.isTerminal:
+    q.reply.answerError(r.endCode, "the route is " & $r.state)
+    return
   q.reply.answer(Reply())
 
 proc releaseHandle(st: State, q: Request) =
@@ -8601,15 +9407,46 @@ proc subscribe(st: State, q: Request) =
   q.outId[] = r.nextSub
   let s = subOf(q.handle)
   retain(s)
-  activate(s, r.nextSub)
+  activate(s, r.nextSub, st.limits.eventQueue, st.limits.eventQueueBytes)
   r.subs.add(q.handle)
   q.reply.answer(Reply())
+
+proc markEnded(st: State, r: Route, s: ptr SubState, reason: ErrorCode) =
+  ## [SPEC RUNTIME l.947-951 (RUN-1095); INTERFACE l.1469-1482; DECISIONS
+  ## G175, G176, G225] The Runtime ends a subscription while its route stays
+  ## ready. No handler of it begins from now on and its queue goes; its
+  ## handle reports the end, and `unsubscribe` of it answers LOGOS_OK once.
+  ## The handle is the route's pinned one with the subscription's path
+  ## generation.
+  deactivate(s)
+  s.ended = true
+  for p in r.pins:
+    if cast[ptr HandleState](p.handle).generation == s.generation:
+      st.reportOnHandle(r.consumer, p.handle, s.id, reason)
+      break
+
+proc endAtBound(st: State, r: Route, s: ptr SubState) =
+  ## [SPEC INTERFACE l.1469-1470, l.1479; DECISIONS G176; P3 §10.2] A
+  ## publisher found the subscription's delivery queue at its bound and
+  ## deactivated it there: it ends with MODULE_ERROR and a diagnostic, once.
+  if s.ended or not s.atBound:
+    return
+  st.diagnose(
+    "subscription " & $s.id & " to " & s.eventName & " on route " & r.id &
+      " ended: its delivery queue reached " & $st.limits.eventQueue & " deliveries or " &
+      $st.limits.eventQueueBytes & " bytes (G176)"
+  )
+  st.markEnded(r, s, ecModule)
 
 proc unsubscribe(st: State, q: Request) =
   ## [SPEC INTERFACE §2.5 l.1446-1459; RUNTIME §7.5 l.1341-1347] An ended
   ## route answers with its code first; an id that names no active
   ## subscription of this handle is INVALID_PARAMS (TRANSPORT l.748 through
-  ## RUNTIME l.1012-1016) and changes nothing.
+  ## RUNTIME l.1012-1016) and changes nothing. [SPEC INTERFACE l.1482; G225]
+  ## One the Runtime ended answers LOGOS_OK once (`endDirect`). [P3 §12.1]
+  ## So does one a publisher deactivated at its queue's bound before the
+  ## Runtime thread heard of it: the binding ended it first, so this ends and
+  ## reports it as the bound would have (`endAtBound`).
   let r = st.route(q.route)
   if r.isNil or r.consumer != q.origin.instance:
     q.reply.answerError(ecNotAuthorised, "not authorised")
@@ -8619,7 +9456,9 @@ proc unsubscribe(st: State, q: Request) =
     return
   for i, p in r.subs:
     let s = subOf(p)
-    if s.id == q.subId and s.generation == q.generation and s.isActive:
+    if s.id == q.subId and s.generation == q.generation and
+        (s.isActive or s.ended or s.atBound):
+      st.endAtBound(r, s)
       deactivate(s)
       r.subs.delete(i)
       q.reply.answer(Reply(subs: @[p]))
@@ -8682,6 +9521,26 @@ proc scoped(st: State, q: Request) =
         reply.subs.add(p)
   q.reply.answer(reply)
 
+proc endDirect(st: State, r: Route, s: ptr SubState, reason = ecNotAuthorised) =
+  ## [SPEC RUNTIME l.947-951 (RUN-1095); G175] The consumer's authority to
+  ## receive the event ended (NOT_AUTHORISED) while the route stays ready
+  ## (`markEnded`). [P3 §12.1] One a publisher already deactivated at its
+  ## queue's bound is not active: its first cause, MODULE_ERROR, stays.
+  if not s.isActive:
+    return
+  st.markEnded(r, s, reason)
+
+proc queueBound(st: State, q: Request) =
+  ## [SPEC INTERFACE l.1469-1470, l.1479; DECISIONS G176] The publisher's
+  ## word that it found the bound: the end (`endAtBound`), unless the route
+  ## ended or the subscription left it first (an `unsubscribe` in between
+  ## ended it itself, P3 §12.1).
+  let s = subOf(q.handle)
+  let r = st.route(s.routeId)
+  if r != nil and not r.isTerminal and q.handle in r.subs:
+    st.endAtBound(r, s)
+  q.reply.answer(Reply())
+
 proc deliver(st: State, q: Request) =
   ## [SPEC RUNTIME l.1229-1231, l.1275-1283; CA l.973-975; G175] The admission
   ## of one handler invocation, decided afresh for each: the subscription is
@@ -8690,6 +9549,10 @@ proc deliver(st: State, q: Request) =
   ## publication skips what fails; an invocation-scoped one stops on a revoked
   ## route or a denied publish-event decision (NOT_AUTHORISED) or a closed
   ## destination (NOT_READY), and skips what only concerns the subscriber.
+  ## [G175 amended] When the subscriber's authority to receive the event
+  ## cannot be established (a failed re-authorization of the route, or a
+  ## subscribe-event decision that is not an allow covering the event), the
+  ## subscription ends (`endDirect`).
   let s = subOf(q.handle)
   let r = st.route(s.routeId)
   let name = q.bare
@@ -8707,7 +9570,15 @@ proc deliver(st: State, q: Request) =
   if q.scoped:
     if r.isTerminal and r.endCode == ecNotAuthorised:
       stop(ecNotAuthorised, "the route is " & $r.state)
-    if r.isTerminal or q.ticket == nil or q.ticket.cancelled.load or q.ticket.closed.load:
+    # [P3 F1] The call by its number: one that left its provider (its ticket
+    # freed) is a closed destination.
+    var t: ptr CallTicket
+    if q.callId != 0:
+      for c in r.calls:
+        if cast[ptr CallTicket](c).id == q.callId:
+          t = cast[ptr CallTicket](c)
+          break
+    if r.isTerminal or t == nil or t.cancelled.load or t.closed.load:
       stop(ecNotReady, "the invocation's destination is closed")
     if not r.allowsPublish(name):
       stop(ecNotAuthorised, "the event is outside the route's access")
@@ -8722,11 +9593,13 @@ proc deliver(st: State, q: Request) =
   if c.isNil or c.state notin {msLoaded, msReady} or not r.allowsSubscribe(name):
     skip()
   # [CAP-0174, CAP-0188] A new delivery commitment waits for the route's
-  # re-authorization, and is not made when it fails.
+  # re-authorization, and is not made when it fails; the subscription ends
+  # (G175 amended).
   let refused = st.routeAuthorized(r)
   if refused.isSome:
     if refused.get.parked:
       return
+    st.endDirect(r, s)
     if q.scoped:
       stop(ecNotAuthorised, "the route is not authorised")
     skip()
@@ -8769,10 +9642,11 @@ proc deliver(st: State, q: Request) =
   ).valueOr:
     return
   if not received[0].allows:
-    if received[0].outcome == azDeny:
-      # [G175 extended (TF-24); CA l.913-915; CAP-0191] An explicit deny ends
-      # the subscription: continuing it would exceed current authority.
-      deactivate(s)
+    # [SPEC RUNTIME l.947-951; INTERFACE l.1479; G175 amended (P3 ruling 1);
+    # CA l.913-915; CAP-0191] A deny, a failed evaluation, a refusal or a
+    # narrowed allow that excludes the event: authority to receive it ended
+    # or can no longer be established, so the subscription ends.
+    st.endDirect(r, s)
     skip()
   q.reply.answer(Reply(admitted: true))
 
@@ -8783,19 +9657,8 @@ proc dispatchLinkDrain(st: State, ls: LinkSub) =
   ## worker, spawned on demand; the job holds its own reference.
   ls.draining = true
   ls.served = 0
-  inc st.rcBusy
-  let s = st.shared
-  if st.rcBusy > s.rcSpawned and s.rcSpawned < MaxEventWorkers:
-    try:
-      createThread(s.rcWorkers[s.rcSpawned], rcWorkerMain, s)
-      inc s.rcSpawned
-    except ResourceExhaustedError:
-      discard # the drain waits for a busy event worker
   retain(subOf(ls.sub))
-  try:
-    s.rcJobs.send(RcJob(kind: rjLinkDrain, sub: ls.sub))
-  except Exception:
-    discard
+  st.sendRcJob(RcJob(kind: rjLinkDrain, sub: ls.sub))
 
 func deliverable(ls: LinkSub): bool =
   ls.active and not ls.paused and ls.queue.len > 0
@@ -8886,6 +9749,13 @@ proc linkUnsubscribe(st: State, q: Request) =
     q.reply.answerError(code.get, "the handle's connection has ended")
     return
   let ls = l.subs.getOrDefault(q.subId)
+  if ls != nil and ls.ended and ls.unsubscribing.isNil:
+    # [SPEC INTERFACE l.1482; G225] The provider ended it: LOGOS_OK once, and
+    # the caller waits for a handler still running on another thread.
+    l.subs.del(ls.id)
+    st.linkSubs.del(ls.sub)
+    q.reply.answer(Reply(subs: @[ls.sub]))
+    return
   if ls.isNil or not ls.active or ls.paused:
     q.reply.answerError(
       ecInvalidParams, "no active subscription of this handle has that id"
@@ -8951,6 +9821,28 @@ proc linkSubscription(st: State, ev: IoEvent) =
     reply.answerError(f.get.code, f.get.message.get("the unsubscription was refused"))
     if ls.deliverable and not ls.draining:
       st.dispatchLinkDrain(ls)
+
+proc linkSubscriptionEnd(st: State, ev: IoEvent) =
+  ## [SPEC TRANSPORT l.752-756; INTERFACE l.1472-1482; DECISIONS G225] The
+  ## provider ended an active subscription of a link (the session checked
+  ## it): no handler of it begins from now on, its queued Events go, and its
+  ## handle reports the end with the session's reason. An Unsubscribe still
+  ## pending gets its result from the provider (l.755). The subscription
+  ## stays with the link, ended, so `unsubscribe` answers LOGOS_OK once.
+  let l = st.links.getOrDefault(ev.conn)
+  if l.isNil:
+    return
+  let ls = l.subs.getOrDefault(ev.subscriptionId)
+  if ls.isNil or not ls.active:
+    return
+  deactivate(subOf(ls.sub))
+  ls.active = false
+  ls.ended = true
+  while ls.queue.len > 0:
+    st.releaseCredit(l, ls.queue.popFirst().credit)
+  let reason =
+    if ev.subscriptionFailure.isSome: ev.subscriptionFailure.get.code else: ecModule
+  st.reportOnHandle(l.consumer, l.handle, ls.id, reason)
 
 proc linkEvent(st: State, ev: sink IoEvent) =
   ## [SPEC RUNTIME l.1184; TRANSPORT §5.2, l.721-725; plan §2.7] An Event for
@@ -9102,17 +9994,34 @@ proc servedUnsubscribe(st: State, ev: IoEvent) =
     s.subs.del(ev.subscribeId)
   st.subscriptionResult(ev.conn, ev.subscribeId, Opt.none(InvocationFailure))
 
+proc endServed(st: State, s: Session, event: string) =
+  ## [SPEC TRANSPORT l.750-756 (TRN-0392); RUNTIME l.947-951 (RUN-1095);
+  ## DECISIONS G175] The consumer's authority to receive `event` ended while
+  ## the route stays ready: each subscription of the session to it ends, by
+  ## its id, through the session's own output order (`cmdEndSubscription`),
+  ## so the Events committed for it before stay delivered and none follows.
+  ## The same path carries a hosted provider's session to its host's loop.
+  var ids: seq[uint64]
+  for id, name in s.subs:
+    if name == event:
+      ids.add(id)
+  for id in ids:
+    s.subs.del(id)
+    discard st.shared.tport.submitOwner(
+      IoCommand(conn: s.conn, kind: IoCommandKind.cmdEndSubscription, subId: id)
+    )
+
 proc deliverConn(st: State, q: Request) =
   ## [SPEC RUNTIME l.1229-1231, l.1275-1283; G175; plan §2.7] The admission
   ## of one Event to one transported subscriber connection, decided afresh
   ## as a direct handler invocation is (`deliver`): the session open, the
   ## route ready, both access scopes, the consumer live, the route's
-  ## re-authorization and both event decisions. [K40, Rev R9 (a)] A
-  ## subscriber's deny skips this Event only: the provider side cannot end
-  ## one subscription of a session. A scoped publication stops on an
-  ## authority end or a denied publish-event decision (NOT_AUTHORISED) and on
-  ## a closed destination (NOT_READY); once admitted, its verdict is awaited
-  ## by tag (E2).
+  ## re-authorization and both event decisions. [G175 amended] When the
+  ## subscriber's authority to receive the event cannot be established, the
+  ## session's subscriptions to it end (`endServed`) and the Event is not
+  ## sent. A scoped publication stops on an authority end or a denied
+  ## publish-event decision (NOT_AUTHORISED) and on a closed destination
+  ## (NOT_READY); once admitted, its verdict is awaited by tag (E2).
   let r = st.route(q.route)
   let s = st.sv.session(q.conn)
   let name = q.bare
@@ -9150,6 +10059,8 @@ proc deliverConn(st: State, q: Request) =
   if refused.isSome:
     if refused.get.parked:
       return
+    if s != nil:
+      st.endServed(s, name)
     if q.scoped:
       stop(ecNotAuthorised, "the route is not authorised")
     skip()
@@ -9192,6 +10103,9 @@ proc deliverConn(st: State, q: Request) =
   ).valueOr:
     return
   if not received[0].allows:
+    # [G175 amended (P3 ruling 1)] As `deliver`: the subscriptions end.
+    if s != nil:
+      st.endServed(s, name)
     skip()
   var reply = Reply(admitted: true)
   if q.scoped:
@@ -9228,8 +10142,9 @@ proc scopedConn(st: State, q: Request) =
 proc publishFailure(st: State, route: string, f: PublishFailure): InvocationFailure =
   ## [SPEC INTERFACE l.2189-2196; plan §2.7, Rev R17] The code of a scoped
   ## publication the session did not commit: a closed destination or
-  ## connection is NOT_READY, or NOT_AUTHORISED after an authority end; an
-  ## oversized Event MODULE_ERROR; the others I54's mapping.
+  ## connection is NOT_READY, or NOT_AUTHORISED after an authority end; a
+  ## terminating session its termination code (TRANSPORT §8.1); an oversized
+  ## Event MODULE_ERROR; the others I54's mapping.
   let r = st.route(route)
   let authorityEnd = r != nil and r.isTerminal and r.endCode == ecNotAuthorised
   case f.kind
@@ -9239,7 +10154,7 @@ proc publishFailure(st: State, route: string, f: PublishFailure): InvocationFail
       "the invocation's destination is closed",
     )
   of peEnded:
-    failure(ecNotAuthorised, "the route's access ended")
+    failure(f.code, "the route's access ended")
   else:
     InvocationFailure(code: f.code, message: Opt.some(f.msg))
 
@@ -9423,8 +10338,9 @@ proc deliverRc(st: State, q: Request) =
   ## subscription is active, its binding current and live, and current
   ## authority admits it: judged again when the decisions it was judged by may
   ## have changed (G161). An entry not admitted is dropped and the worker asks
-  ## again; the drain ends with the queue, the subscription or its quota
-  ## (`rcDrainQuota`).
+  ## again; an event decision that no longer allows ends the subscription
+  ## (`eventRefused`, G225). The drain ends with the queue, the subscription
+  ## or its quota (`rcDrainQuota`).
   let rec = st.rcSubs.getOrDefault(q.handle)
   if rec.isNil:
     q.reply.answer(Reply(drained: true))
@@ -9450,13 +10366,18 @@ proc deliverRc(st: State, q: Request) =
     rcRequests(rec, e),
     proc(answers: seq[AuthzAnswer]) =
       let y = st.rcLive(rec)
-      if y != nil and st.deliverable(rec, e, answers):
+      if y != nil and eventRefused(answers):
+        st.endRc(rec, ecNotAuthorised)
+        reply.answer(Reply())
+      elif y != nil and st.deliverable(rec, e, answers):
         handOver(y, e, reply)
       else:
         reply.answer(Reply()),
     proc() =
       reply.answer(Reply()),
   )
+
+proc handlerReturned(st: State, subscriber: string) {.gcsafe.}
 
 proc rcHandled(st: State, p: pointer) =
   ## [G178] A handler returned: a release or destroy of its subscriber's
@@ -9468,6 +10389,22 @@ proc rcHandled(st: State, p: pointer) =
     subscriber = rec.subscriber
   elif not st.linkHandling.pop(p, subscriber):
     return
+  st.handlerReturned(subscriber)
+
+proc reportDone(st: State, n: int) =
+  ## [G225] A subscription-end report job ended: it no longer counts toward
+  ## its subscriber, and the reference to a handle goes.
+  var held: (string, pointer)
+  if not st.reports.pop(n, held):
+    return
+  dec st.rcBusy
+  if held[1] != nil:
+    dropHandle(cast[ptr HandleState](held[1]))
+  st.handlerReturned(held[0])
+
+proc handlerReturned(st: State, subscriber: string) {.gcsafe.} =
+  ## A handler or report counted toward `subscriber` returned: a release or
+  ## destroy of its realization waiting for it may go on.
   let x = st.instances.getOrDefault(subscriber)
   if x.isNil or x.rcHandlers == 0:
     return
@@ -9519,6 +10456,31 @@ when defined(lcnTestHooks):
       q.reply.answer(Reply())
     of "startup-deadline":
       st.cfg.startupDeadline = initDuration(milliseconds = int64(q.generation))
+      q.reply.answer(Reply())
+    of "shutdown-deadline":
+      # `shutdownDeadlineForTests`: the drain deadline, 0 before shutdown.
+      q.reply.answer(
+        Reply(
+          generation:
+            if st.shuttingDown:
+              uint64(st.shutdownDeadline.ticks)
+            else:
+              0
+        )
+      )
+    of "policy":
+      # `setPolicyForTests`: the internal authorizer's rules from now on.
+      st.authorizer.replacePolicy(q.config.policy)
+      q.reply.answer(Reply())
+    of "lose-rc":
+      # [G225] `loseRcForTests`: `q.instance`'s active Runtime Control
+      # subscription `q.generation`, or every one for 0, is lost, as one past
+      # a bound is.
+      let x = st.instances.getOrDefault(q.instance)
+      if x != nil:
+        for rec in x.rcSubs:
+          if rec.active and q.generation in [0'u64, rec.id]:
+            st.loseRc(rec, "a test ended it")
       q.reply.answer(Reply())
     of "hosted-endpoint":
       # [4b-3 plan §4.3 P-1, P-5] The path of `q.instance`'s hosted endpoint,
@@ -9680,6 +10642,8 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.admit(q)
   of rqObserveEnd:
     st.observeEnd(q)
+  of rqSubEndAdmit:
+    st.subEndAdmit(q)
   of rqReleaseHandle:
     st.releaseHandle(q)
   of rqHostedResult:
@@ -9697,7 +10661,7 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     q.reply.answer(
       Reply(
         pending:
-          not x.isNil and x.state in {msUnloaded, msError} and (
+          not x.isNil and x.state in {msUnloaded, msStopping, msError} and (
             x.attempt != nil or x.teardown != 0 or x.realization != nil or x.prevHost
               # [G275]
           )
@@ -9713,6 +10677,8 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.scoped(q)
   of rqDeliver:
     st.deliver(q)
+  of rqQueueBound:
+    st.queueBound(q)
   of rqRcSubscribe:
     st.subscribeRc(q)
   of rqRcUnsubscribe:
@@ -9755,14 +10721,9 @@ proc teardownDone(st: State, x: Inst) =
   let a = x.attempt
   if a != nil and a.phase == apCleanup:
     st.finishAttempt(a)
-  elif x.state == msStopping or x.indeterminateStop:
-    # [G237 interim] A stop during which an application's outcome became
-    # indeterminate completes as any stop does.
-    x.indeterminateStop = false
-    x.state = msUnloaded
-    x.failure = x.takeEnforced()
-    x.current = ""
-    st.commit(x)
+  elif x.state == msStopping:
+    # [SPEC RUNTIME l.576] The stop completes, past its deadline or not.
+    st.completeStop(x)
     st.releaseWaiters(x)
   else:
     # [I93; R11] An `error` realization's release completed: its pending
@@ -9787,7 +10748,6 @@ proc cleanupFailed(st: State, x: Inst, reason: string) =
   x.teardown = 0
   if x.realization != nil:
     x.realization.unresolved = true
-  x.indeterminateStop = false
   x.state = msError
   x.failure = Opt.some(Failure(kind: fkCleanupFailed, reason: reason))
   x.enforced = Opt.none(Failure)
@@ -9800,27 +10760,30 @@ proc cleanupFailed(st: State, x: Inst, reason: string) =
 proc releasedThroughLoader(st: State, x: Inst, reply: LoaderReply) =
   ## [SPEC LOADER §9; plan §2.6] `release` returned. `succeeded` is absence;
   ## a failed record is a cleanup failure; an invocation failure is resolved
-  ## by `get_status` (§2.9); `realization-not-found` cannot happen for a pair
-  ## the engine holds (idempotent success is `succeeded`, l.591), so it is an
-  ## invalid response, and the Loader has failed.
+  ## by `get_status` (§2.9). A typed error or any other answer breaks the
+  ## contract for a pair the engine holds (idempotent success is `succeeded`,
+  ## LOADER l.591): [SPEC RUNTIME l.3687; G360] a failed operation of a
+  ## `ready` Loader, resolved by `get_status` like a failed invocation, whose
+  ## "not found" then ends the teardown.
   case reply.kind
   of lrSucceeded:
     st.teardownDone(x)
   of lrFailedRecord:
     st.cleanupFailed(x, "the Module Loader could not establish absence")
-  of lrFailed:
-    st.diagnose(
-      "the release call for " & x.id & " failed with " & $reply.invocation.code
-    )
+  of lrFailed, lrError, lrInvalid, lrActive, lrCapabilities, lrNone:
+    if reply.kind == lrFailed:
+      st.diagnose(
+        "the release call for " & x.id & " failed with " & $reply.invocation.code
+      )
+    else:
+      st.loaderInvalid(
+        if reply.kind == lrInvalid:
+          reply.reason
+        else:
+          "release answered " & $reply.kind
+      )
     let r = x.realization
     st.resolve(LoaderCall(kind: lcStatus, inst: x, realization: r.id))
-  of lrError, lrInvalid, lrActive, lrCapabilities, lrNone:
-    st.loaderInvalid(
-      if reply.kind == lrInvalid:
-        reply.reason
-      else:
-        "release answered " & $reply.kind
-    )
 
 # Module Host ends (Tier 4b step 4b-3; DECISIONS G268-G270) -------------------------
 
@@ -9845,7 +10808,6 @@ proc hostFailed(st: State, x: Inst, f: Failure) =
       )
   if x.realization != nil:
     x.realization.failed = true
-  x.indeterminateStop = false
   x.state = msError
   x.failure = Opt.some(f)
   x.enforced = Opt.none(Failure)
@@ -9857,6 +10819,25 @@ proc hostFailed(st: State, x: Inst, f: Failure) =
   st.releaseWaiters(x)
 
 proc servedClosed(st: State, conn: ConnId) {.gcsafe.}
+
+proc hostGone(st: State, x: Inst) =
+  ## [SPEC RUNTIME l.3821-3822, l.576, l.3606; plan §2.9; P5 Q5, Q6] The
+  ## confirmed end of the Module Host of a realization whose cleanup was
+  ## ordered before, and which nothing will release (its Loader was lost, or
+  ## its cleanup failed or went unanswered): absent now. An `error` instance
+  ## stays `error` (l.611); a `stopping` one completes its stop (l.576).
+  ## P5c's `loaderLost` calls it for a host already gone.
+  x.realization = nil
+  x.teardown = 0
+  st.endServices(x.services, x.id)
+  freeAttemptServices(x.services)
+  x.services = nil
+  if x.state == msStopping and x.attempt.isNil:
+    st.completeStop(x)
+  st.releaseWaiters(x)
+  let l = st.ldr.inst
+  if st.ldr.lost and l != nil and not st.loaderOwns():
+    st.releaseRealization(l)
 
 proc hostEnded(st: State, h: Host, e: HostEndNote) =
   ## [R27; plan §2.9; G268] Every end of a Module Host reaches the Runtime
@@ -9874,6 +10855,12 @@ proc hostEnded(st: State, h: Host, e: HostEndNote) =
   ##
   ## [RUN-0228; G273] Its sessions ended with it, and the endpoint it served
   ## stops serving: it is removed once they are closed (RUNTIME l.1166).
+  ##
+  ## [P5 §0.4 item 2; IMPL-DECISION G360] The end is recorded on the host at
+  ## every end: a Loader that fails later resolves the instance at once
+  ## (`loaderLost`), and the lost branch below stays idempotent when that
+  ## came first, since the instance no longer uses the host.
+  h.noteEnd()
   let ep = hostedEndpoint(h.index)
   var conns: seq[ConnId]
   for conn, s in st.sv.sessions:
@@ -9899,19 +10886,8 @@ proc hostEnded(st: State, h: Host, e: HostEndNote) =
   elif unexpected:
     st.diagnose("the Module Host of " & x.id & " ended unexpectedly (" & e.how & ")")
   let a = x.attempt
-  if x.realization != nil and x.realization.lost:
-    # [SPEC RUNTIME l.3821-3822; plan §2.9] The protected supervision's
-    # confirmation for a realization its failed Loader owned: absent now, the
-    # instance staying `error` (l.611).
-    x.realization = nil
-    x.teardown = 0
-    st.endServices(x.services, x.id)
-    freeAttemptServices(x.services)
-    x.services = nil
-    st.releaseWaiters(x)
-    let l = st.ldr.inst
-    if st.ldr.lost and l != nil and not st.loaderOwns():
-      st.releaseRealization(l)
+  if x.realization != nil and (x.realization.lost or x.realization.unresolved):
+    st.hostGone(x)
     return
   if a != nil and a.phase == apRealize:
     # The Loader's `realize` answers once the end is confirmed; an attempt
@@ -9936,12 +10912,13 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
   let x = a.inst
   let phase = st.side.withdrawInbound(x.id)
   a.ticket = nil
-  template invalid(why: string, made: string) =
-    # [plan §2.9, §2.11 step 3] The Loader has failed; what it made for this
-    # attempt is orphaned with the rest, never used or released.
-    if made.len > 0 and x.realization.isNil:
-      x.realization = st.lostView(made)
+  template invalid(why: string) =
+    # [SPEC RUNTIME l.3687; G360] A failed operation of a `ready` Loader, not
+    # a Loader failure: as for a failed invocation, `get_status` says whether
+    # anything was made. A realization the answer named was not issued, so a
+    # status record naming it is taken and released (`resolved`).
     st.loaderInvalid(why)
+    st.resolve(LoaderCall(kind: lcStatus, inst: x, attempt: a))
     return
 
   case reply.kind
@@ -9949,19 +10926,15 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
     let rec = reply.record
     let handoff = st.side.outbound(rec.realization)
     if rec.realization in st.ldr.issued:
-      invalid("a realization id was given twice", "")
+      invalid("a realization id was given twice")
     if handoff.isNone:
-      invalid("an active realization has no handoff", rec.realization)
-    st.ldr.issued.incl(rec.realization)
+      invalid("an active realization has no handoff")
     var contracts: ModuleBinding
     if rec.callSurface.isSome:
       contracts = acceptSurface(
         rec.callSurface.get, x.record.module, st.systemBinding(x.record)
       ).valueOr:
-        invalid(
-          "the call surface of " & x.id & " is not acceptable: " & error,
-          rec.realization,
-        )
+        invalid("the call surface of " & x.id & " is not acceptable: " & error)
     # [SPEC LOADER §5.3, l.479-480] A hosted provider's record names the
     # endpoint the Runtime made for it; every other record names none. The
     # path is the one made: a shutdown that began while `realize` ran has
@@ -9977,9 +10950,9 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
         if expected.isNone:
           "a realization that serves no endpoint names one"
         else:
-          "a hosted provider's record does not name its endpoint",
-        rec.realization,
+          "a hosted provider's record does not name its endpoint"
       )
+    st.ldr.issued.incl(rec.realization)
     let h = handoff.get
     let v = RealizationView(
       mechanism: mLoader,
@@ -10007,7 +10980,7 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
     # whose realization it holds. The record is kept `current` and released.
     let rec = reply.record
     if rec.realization in st.ldr.issued:
-      invalid("a realization id was given twice", "")
+      invalid("a realization id was given twice")
     st.ldr.issued.incl(rec.realization)
     x.realization = RealizationView(
       mechanism: mLoader,
@@ -10037,8 +11010,7 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
       if reply.kind == lrInvalid:
         reply.reason
       else:
-        "realize answered " & $reply.kind,
-      "",
+        "realize answered " & $reply.kind
     )
 
 func failureText(f: Failure): string =
@@ -10052,8 +11024,9 @@ proc loaderCheckExpired(st: State) =
   ## [IMPL-DECISION G61, amended 2026-11-14; SPEC RUNTIME l.664-665] The
   ## Loader's startup deadline passed during its binding checks, which the
   ## deadline covers: the binding is never made, the record is `error` with
-  ## `startup-timeout`, and the open fails once the realization is released
-  ## (`answerConfigure`; a call inside it returns first, l.623).
+  ## `startup-timeout`, and the open fails TIMEOUT (l.3955) once the
+  ## realization is released (`answerConfigure`; a call inside it returns
+  ## first, l.623).
   let l = st.ldr.inst
   let f = Failure(kind: fkStartupTimeout, reason: "the startup deadline passed")
   l.state = msError
@@ -10064,7 +11037,9 @@ proc loaderCheckExpired(st: State) =
   l.provider = false
   st.commit(l)
   st.releaseWaiters(l)
-  st.cannotStart(f.failureText)
+  # [SPEC RUNTIME l.3955; P5 §0.4 item 4] The Loader is already `ready`, so
+  # this is an other failure, whose shared code is TIMEOUT.
+  st.cannotStart(f.failureText, code = ecTimeout)
 
 proc answerConfigure(st: State) =
   ## [plan §2.6 step 6] The open is answered once the Loader is bound, or
@@ -10086,7 +11061,8 @@ proc answerConfigure(st: State) =
     Reply(
       error: Opt.some(
         engineError(
-          ecModule, "the Module Loader cannot start: " & st.ldr.cannotStart.get
+          st.ldr.cannotStartCode,
+          "the Module Loader cannot start: " & st.ldr.cannotStart.get,
         )
       )
     )
@@ -10162,7 +11138,13 @@ proc checkLoader(st: State) =
         var said = f.classification
         if f.reason.len > 0 and not f.internal:
           said.add(": " & f.diagnosticReason(l.id))
-        st.cannotStart(f.failureText, said)
+        # [SPEC RUNTIME l.3939] Its attempt of this run failed: TIMEOUT when
+        # its startup deadline passed.
+        st.cannotStart(
+          f.failureText,
+          said,
+          code = (if f.kind == fkStartupTimeout: ecTimeout else: ecModule),
+        )
     if st.ldr.bound or st.ldr.cannotStart.isSome:
       st.answerConfigure()
   elif st.shuttingDown and l.state == msReady and not st.loaderOwns() and l.inflight == 0 and
@@ -10242,6 +11224,9 @@ proc loaderReplied(st: State, job: int, reply: sink LoaderReply) =
   if not st.ldr.calls.pop(job, call):
     return
   freeTicket(call.ticket)
+  defer:
+    if call.host != nil:
+      dropHost(call.host)
   let l = st.ldr.inst
   dec l.inflight
   if st.ldr.lost and call.kind in {lcRealize, lcRelease, lcApply, lcStatus}:
@@ -10405,18 +11390,27 @@ proc hello(st: State, ev: IoEvent) =
     st.sv.refused(ev.conn, est.error)
     return
   let r = st.route(est.get.binding.route)
-  discard st.sv.admitted(ev.conn, e, est.get, attempt)
+  var earlier = Opt.none(ContractInput)
+  if r.answer.len > 0:
+    # [synthesis §3; G394] The endpoint accepts an earlier contract's set when
+    # the first session selects it, from the input the route holds. A Module
+    # Host's endpoint takes its own (`host/endpoint.nim`).
+    let p = st.instances.getOrDefault(r.providerInstance)
+    if p != nil and not p.hosted:
+      earlier = Opt.some(
+        ContractInput(
+          root: r.selected.root,
+          schema: r.answer,
+          system: systemModule(r.selected.module),
+        )
+      )
+  discard st.sv.admitted(ev.conn, e, est.get, attempt, earlier)
   r.sessions.add(ev.conn)
 
 proc schemaBlob(st: State, r: Route): ptr SchemaBlob {.gcsafe.} =
   ## [plan §2.5] The provider's construction input for the route's selected
   ## contract (its validated surface), for a served invocation's checks.
-  let p = st.instances.getOrDefault(r.providerInstance)
-  let schema =
-    if p.isNil:
-      newSeq[byte]()
-    else:
-      p.schemas.getOrDefault(r.selected.root)
+  let schema = r.answerOf(st.instances.getOrDefault(r.providerInstance))
   newBlob(
     r.selected.root,
     cast[ptr UncheckedArray[uint8]](if schema.len > 0:
@@ -10558,14 +11552,16 @@ proc ioEvent(st: State, ev: sink IoEvent) =
     st.servedUnsubscribe(ev)
   of IoEventKind.evSubscription:
     st.linkSubscription(ev)
+  of IoEventKind.evSubscriptionEnd:
+    st.linkSubscriptionEnd(ev)
   of IoEventKind.evEvent:
     st.linkEvent(ev)
   of IoEventKind.evPublishResult:
     st.publishResult(ev)
   of IoEventKind.evPublishFailed:
-    # [SPEC RUNTIME l.1227] An ordinary publication has no result: one not
-    # committed on a connection is recorded (G165: an oversized one closed
-    # that connection).
+    # [SPEC RUNTIME §7.3 l.1148-1150] A failure for one subscriber route does
+    # not change the publisher's result: it is recorded and the event dropped
+    # for that route (G165: an oversized one closed that connection).
     st.diagnose(
       "a publication of " & ev.pubFailEvent & " was not delivered on connection " &
         $ev.conn & ": " & supplied(ev.pubFailMsg, st.servedBy(ev.conn))
@@ -10600,7 +11596,7 @@ proc handle(st: State, m: sink Msg) =
     dec st.busy
     st.jobClock = getMonoTime()
   of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle, mkEvaluated,
-      mkRcHandled, mkIo, mkHostEnded:
+      mkRcHandled, mkIo, mkHostEnded, mkSubEndDone:
     discard
   case m.kind
   of mkBound:
@@ -10645,6 +11641,8 @@ proc handle(st: State, m: sink Msg) =
     st.evaluated(m.job, m.evaluated)
   of mkRcHandled:
     st.rcHandled(m.target)
+  of mkSubEndDone:
+    st.reportDone(m.job)
   of mkApplied:
     st.applied(m.job, m.res)
   of mkLoaderReply:
@@ -10660,25 +11658,35 @@ proc handle(st: State, m: sink Msg) =
   st.settle()
 
 proc sessionExpired(st: State, s: Session) =
-  ## [Rev R1; TRN-0317; TRANSPORT l.929-930] A session ends with the decision
-  ## it was bound to, also after its route was renewed: its in-flight served
-  ## invocations end NOT_AUTHORISED and it terminates; the route stays as it
-  ## is, and a later session gets the renewed decision.
+  ## [Rev R1; TRN-0317; TRANSPORT l.966-979] A session ends with the decision
+  ## it was bound to, also after its route was renewed, in `endRoute`'s order:
+  ## its served invocations learn the end under their ticket's lock and end
+  ## (`endByRoute`: an admitted one unanswered, TRANSPORT_ERROR at its
+  ## consumer, RUNTIME l.1271), the session terminates, and only then are they
+  ## marked cancelled. The route stays as it is, and a later session gets the
+  ## renewed decision.
   var calls: seq[CallRef] # ending one may drop it from the session
   for c in s.calls.values:
     calls.add(c)
   for c in calls:
     let a = st.asyncCalls.getOrDefault(c)
-    if a.isNil:
-      continue
-    if a.ticket != nil:
+    if a != nil and a.ticket != nil:
       withLock a.ticket.lock:
         a.ticket.endCode = ord(ecNotAuthorised)
-      a.ticket.cancelled.store(true)
-    st.cancelInvocation(a)
-    st.endCall(a, revokedResult(), okEnded)
+  for c in calls:
+    let a = st.asyncCalls.getOrDefault(c)
+    if a != nil and not a.terminal:
+      st.endByRoute(a)
+  when defined(lcnTestHooks):
+    endOrderPause(calls.len)
   for c in st.sv.terminate(s):
     markSent(asyncOf(c))
+  for c in calls:
+    let a = st.asyncCalls.getOrDefault(c)
+    if a != nil:
+      st.cancelInvocation(a)
+  when defined(lcnTestHooks):
+    endOrderPause(calls.len)
 
 proc checkTransported(st: State, now: MonoTime) =
   ## [Rev R17] Expired tickets are deleted (TRANSPORT l.963, l.1062); sessions
@@ -10720,14 +11728,18 @@ proc nextTransported(st: State): Opt[MonoTime] =
 proc retryLocks(st: State, now: MonoTime) =
   ## [G275; plan R6] Once a restart lock held after an unclean end can be
   ## taken, the earlier host is gone: the realization is `absent`, committed.
-  ## [G275 amended; 4b-4 plan R26] Its `pending` permission settings then
-  ## settle, published after that commit.
+  ## [G357; SPEC RUNTIME l.3637] A stop a completed shutdown left `stopping`
+  ## completes then (`unloaded`). [G275 amended; 4b-4 plan R26] Its
+  ## `pending` permission settings then settle, published after that commit.
   st.nextLockTry = now + initDuration(seconds = 1)
   var freed: seq[Inst]
   for x in st.instances.values:
     if x.prevHost and lockFree(st.cfg.workDir, x.id):
       x.prevHost = false
-      st.commit(x)
+      if x.state == msStopping:
+        st.completeStop(x)
+      else:
+        st.commit(x)
       freed.add(x)
   for x in freed:
     st.settleSettings(x)
@@ -10785,43 +11797,27 @@ proc checkDeadlines(st: State) =
     if run != nil and run.hostKill.isSome and now >= run.hostKill.get:
       run.hostKill = Opt.none(MonoTime)
       x.endHost("the configuration hook did not return in time") # [G269]
-    if (x.state == msStopping or x.indeterminateStop) and x.stopDeadline.isSome and
-        now >= x.stopDeadline.get:
-      # [G61, revised by A18; SPEC RUNTIME §10.2 l.3835-3838, l.3873-3874]
-      # The cleanup failure is recorded; nothing still in use is released.
-      # [G168 extended] It replaces an authority stop's classification.
-      # [G237] So it does an indeterminate application's.
-      x.indeterminateStop = false
-      x.state = msError
-      x.failure =
-        Opt.some(Failure(kind: fkCleanupTimeout, reason: "the stop deadline passed"))
-      x.enforced = Opt.none(Failure)
-      st.commit(x)
-      st.releaseWaiters(x)
-      # [G61 "Only hosted realizations may be terminated"; G269; G180 (a)
-      # extended] The host is ended; the Loader's `release` then succeeds and
-      # the realization is `absent`, the instance staying `error`.
-      x.endHost("the stop deadline passed")
+    if x.state == msStopping and x.stopDeadline.isSome and now >= x.stopDeadline.get:
+      # [SPEC RUNTIME l.575-577; G61 replaced (P5a)] `stopping` stays, with
+      # `cleanup-timeout`; a hosted instance's host is ended, after which the
+      # Loader's `release` succeeds and the stop completes `unloaded`.
+      st.recordOverrun(x, "the stop deadline passed")
   if st.shuttingDown and not st.shutdownDone and now >= st.shutdownDeadline:
-    # [SPEC RUNTIME §10.2 step 6] The cleanup failure is recorded and shutdown
-    # continues; nothing still in use is released. [plan §2.10 (R3)] A Loader
-    # that still owns a realization or runs a call stays `ready` and bound.
-    let keepLoader =
-      st.loaderOwns() or (st.ldr.inst != nil and st.ldr.inst.inflight > 0)
+    # [SPEC RUNTIME l.3702, l.3732; P5a M11] Release is initiated for every
+    # realization not yet released, the ordering and the authority's hold
+    # for renewals no longer held (l.3731; a Loader that owns a realization
+    # or runs a call stays `ready` and bound, R3);
+    # then every instance still `stopping` records `cleanup-timeout` and its
+    # forced cleanup is requested. Shutdown completes with that recorded
+    # cleanup failure.
+    for x in st.shutdownOrder():
+      if st.releasable(x, expiry = true):
+        st.stopInstance(x, nil, keepIntent = true)
+    for x in st.shutdownOrder():
+      if x.state == msStopping:
+        st.recordOverrun(x, "the shutdown grace period passed")
     for x in st.instances.values:
-      if st.isLoader(x) and x.state == msReady and keepLoader:
-        continue
-      if x.state in {msLoaded, msReady, msStopping} or x.indeterminateStop:
-        x.indeterminateStop = false
-        x.state = msError
-        x.failure = Opt.some(
-          Failure(kind: fkCleanupTimeout, reason: "the shutdown grace period passed")
-        )
-        x.enforced = Opt.none(Failure)
-        st.commit(x)
-        st.releaseWaiters(x) # [I93; R11]
-    for x in st.instances.values:
-      # [G269; SPEC RUNTIME l.3860-3861] Every Module Host left is ended; its
+      # [G269; SPEC RUNTIME l.3732] Every Module Host left is ended; its
       # release completes after shutdown, before `close`.
       x.endHost("the shutdown grace period passed")
     st.finishShutdown()
@@ -10847,7 +11843,7 @@ proc nextDeadline(st: State): Opt[MonoTime] =
         else:
           getMonoTime()
       )
-    if (x.state == msStopping or x.indeterminateStop) and x.stopDeadline.isSome:
+    if x.state == msStopping and x.stopDeadline.isSome:
       consider(x.stopDeadline.get)
     if x.apply != nil and not x.apply.expired:
       consider(x.apply.deadline)
@@ -10886,14 +11882,28 @@ proc nextDeadline(st: State): Opt[MonoTime] =
 
 # Opening ------------------------------------------------------------------------
 
-const UncleanEnd = "the Runtime ended without completing shutdown"
+const
+  UncleanEnd = "the Runtime ended without completing shutdown"
+  StopAcrossRuns = "the stop did not complete before the previous run ended"
 
 proc restore(st: State, snap: Snapshot) =
   ## [SPEC RUNTIME §9.3 l.3500-3506; IMPL] The retained instances, each with
   ## its id, provider id, record, intent, intent revision, origin and failure
   ## (RUN-0646), and a revision past every value exposed before (l.3506): the
-  ## epoch's first. No realization survives the previous process (the store
-  ## lock is the evidence), so cleanup is complete for every one of them.
+  ## epoch's first. No direct realization survives the previous process (the
+  ## store lock is the evidence: its open file description is the holder, so
+  ## no second open reaches here while a direct cleanup is outstanding, and
+  ## `close` refuses while module code runs), so its cleanup is complete; a
+  ## hosted one's may not be until its restart lock is free (G275).
+  ##
+  ## [SPEC RUNTIME l.3606, l.3634-3637; IMPL-DECISION G357 (TF-58 interim)]
+  ## `loaded` and `ready` records restore as `error` with `host-terminated`:
+  ## the envelope ended without ordering their cleanup. A `stopping` record
+  ## does so too after an unclean end (no completed-shutdown record: a crash,
+  ## or a v1 store); its enforced classification goes. After a completed
+  ## shutdown its cleanup was ordered and forced (l.3732): the stop completes
+  ## now (`unloaded`, l.576), or for a hosted one whose lock is still held,
+  ## when it is free (`retryLocks`), `stopping` with `cleanup-timeout` till then.
   for s in snap.instances:
     let x = Inst(
       id: s.instance,
@@ -10908,13 +11918,23 @@ proc restore(st: State, snap: Snapshot) =
     if s.intent == inRequested:
       x.intentRevision = s.intentRevision
       x.intentOrigin = s.origin
-    if s.state in {msLoaded, msReady, msStopping}:
-      # [IMPL-DECISION G193 (TF-29)] A completed shutdown leaves only
-      # `unloaded` and `error` (G180), so the Runtime ended uncleanly: `error`
-      # with `other`, intent kept. Resuming it is not a retry after failure.
+    let held =
+      s.record.strategy == stHostedDynamic and not lockFree(st.cfg.workDir, x.id)
+    if s.state in {msLoaded, msReady} or
+        (s.state == msStopping and not snap.completedShutdown):
+      # [SPEC RUNTIME l.3634 (RUN-1194, RUN-1195)] An unclean end: `error`
+      # with `host-terminated`, intent and origin kept (G193 replaced).
       x.state = msError
-      x.failure = Opt.some(Failure(kind: fkOther, reason: UncleanEnd))
-    if s.record.strategy == stHostedDynamic and not lockFree(st.cfg.workDir, x.id):
+      x.failure = Opt.some(Failure(kind: fkHostTerminated, reason: UncleanEnd))
+    elif s.state == msStopping:
+      x.enforced = s.enforced
+      if held:
+        if x.failure.isNone or x.failure.get.kind != fkCleanupTimeout:
+          x.failure = Opt.some(Failure(kind: fkCleanupTimeout, reason: StopAcrossRuns))
+      else:
+        x.state = msUnloaded
+        x.failure = x.takeEnforced()
+    if held:
       # [G275, amends G193 for hosts; plan R6] Its Module Host may outlive the
       # previous run: nothing is realized for it until the lock can be taken.
       x.prevHost = true
@@ -10922,6 +11942,8 @@ proc restore(st: State, snap: Snapshot) =
     # [G178] Created in an earlier process: its next exposure is a change.
     x.seen = true
     x.seenState = x.state
+    when defined(lcnTestHooks):
+      x.tableState = x.state
     st.instances[x.id] = x
     st.putFacts(x)
   for r in snap.retired:
@@ -11248,12 +12270,14 @@ proc runtimeLoop(s: ptr Shared) =
       if not got.dataAvailable:
         break
       st.handle(move got.msg)
+      st.followPrerequisites()
       st.followRealizations()
       if st.done:
         break
     if st.done:
       break
     st.checkDeadlines()
+    st.followPrerequisites()
     st.followRealizations()
     st.checkBinding()
     st.checkLoader()
@@ -11291,6 +12315,11 @@ proc runtimeLoop(s: ptr Shared) =
   st.releaseConfigs()
   st.unwire()
   st.store.close()
+  if st.bootOpen:
+    while st.bootChan.tryRecv()[0]:
+      discard
+    st.bootChan.close()
+    st.bootOpen = false
   st.linksStopped()
   st.sv.removeAll() # [plan §2.9] what is still present
   s.finished = true
@@ -11391,7 +12420,8 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
     return err(engineError(ecInvalidParams, "routing: " & error))
   var tcfg = cfg.transport.get(defaultTransportConfig())
   tcfg.maxPayloadDepth = depth # [G241] one payload depth for every decoder
-  tcfg.terminationDrain = 0 # [plan §2.8] the Runtime answers before terminating
+  tcfg.terminationDrain = 0
+    # [plan §2.8] the Runtime decides every call before it terminates a session
   let tp = newTransportPorts(tcfg).valueOr:
     return err(engineError(ecInvalidParams, "transport: " & error))
   let e = createShared(Shared)
@@ -11446,6 +12476,21 @@ when defined(lcnTestHooks):
     let r = e.call(
       Request(
         kind: rqTransportHook, reason: "connect-fault", generation: uint64(ord(cause))
+      )
+    )
+    if r.error.isSome:
+      return err(r.error.get)
+    ok()
+
+  proc loseRcForTests*(
+      e: Engine, instance: string, id: uint64
+  ): Result[void, EngineError] =
+    ## A test hook (G225): `instance`'s active Runtime Control subscription `id`,
+    ## or every one for 0, is lost, as one past a bound is, whatever its
+    ## binding is doing.
+    let r = e.call(
+      Request(
+        kind: rqTransportHook, reason: "lose-rc", instance: instance, generation: id
       )
     )
     if r.error.isSome:
@@ -11509,6 +12554,22 @@ when defined(lcnTestHooks):
         generation: uint64(d.inMilliseconds),
       )
     )
+    if r.error.isSome:
+      return err(r.error.get)
+    ok()
+
+  proc shutdownDeadlineForTests*(e: Engine): uint64 =
+    ## A test hook [SPEC RUNTIME l.3700-3701 (RUN-1198, TXT-0311)]: the one
+    ## drain deadline of the shutdown in progress, as monotonic ticks; 0
+    ## before shutdown is accepted.
+    e.call(Request(kind: rqTransportHook, reason: "shutdown-deadline")).generation
+
+  proc setPolicyForTests*(e: Engine, policy: AuthzPolicy): Result[void, EngineError] =
+    ## A test hook: the internal authorizer's rules from now on, so a case can
+    ## name an identifier the engine allocated, such as a provider's.
+    var cfg = EngineConfig()
+    cfg.policy = policy
+    let r = e.call(Request(kind: rqTransportHook, reason: "policy", config: cfg))
     if r.error.isSome:
       return err(r.error.get)
     ok()
@@ -11582,7 +12643,7 @@ when defined(lcnTestHooks):
 
 proc newEngine*(cfg: EngineConfig): Engine =
   ## `openEngine` for a configuration without a store, which fails only for an
-  ## invalid configuration or a Module Loader that cannot start (G190).
+  ## invalid configuration or a Module Loader that cannot start (RUNTIME l.3939).
   doAssert cfg.storeDir.isNone, "a persistent engine is opened with openEngine"
   let e = openEngine(cfg)
   doAssert e.isOk, "openEngine failed: " & $e.error.code & " " & e.error.message
@@ -11749,7 +12810,7 @@ proc bootstrap*(
     orchestration: string,
     transfers = newSeq[StateTransfer](),
 ): Result[InstanceView, EngineError] =
-  ## [SPEC RUNTIME l.1640, §13.2; G190 interim] Creates `instances` and starts
+  ## [SPEC RUNTIME l.1640, §13.2, l.3939-3940] Creates `instances` and starts
   ## `orchestration`, one of them; returns once it is `ready`, or with the
   ## code its failure maps to (`checkBootstrap`). [I96] `transfers` are
   ## applied first, once; a refused one fails the bootstrap before anything

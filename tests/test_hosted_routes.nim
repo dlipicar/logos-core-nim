@@ -52,6 +52,10 @@ when defined(posix):
     ./generated/[bulk_module_calls, bulk_module_types],
     logos_sdk/testing/generated/[meter_module_calls, meter_module_types]
   import ./support/trnowner except Provider, now, binding, issue, live, release, gate
+  from ../src/logos_core/host/selected import
+    earlierInputOf, keepProvider, publishedBy, schemaAnswer, selectedFor
+  from ../src/logos_core/transport/limits import MaxPayloadDepth
+  from ../src/logos_core/transport/boundary import knowsEvent
 
   let
     repo = currentSourcePath().parentDir.parentDir
@@ -363,6 +367,12 @@ when defined(posix):
     success: bool
     request, response: Opt[LogosNSCapabilityAuthorityAuditValueCommitment]
 
+  proc routeOf(e: Engine, route: string): Opt[LogosNSRuntimeControlRouteRecord] =
+    for rec in e.routes():
+      if rec.route == route:
+        return Opt.some(rec)
+    Opt.none(LogosNSRuntimeControlRouteRecord)
+
   proc keptReach(e: Engine, n: int): bool =
     waitUntil(
       proc(): bool =
@@ -404,6 +414,41 @@ when defined(posix):
         heard[slot].count.load >= n,
       Answer,
     )
+
+  type SubEnds = object ## [G225] What a handle's subscription-end handler saw.
+    count: Atomic[int]
+    id: Atomic[uint64]
+    reason: Atomic[int]
+
+  var subEnds: SubEnds
+
+  proc onSubEnd(
+      id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+  ) {.cdecl, gcsafe, raises: [].} =
+    let e = cast[ptr SubEnds](userData)
+    e.id.store(uint64(id))
+    e.reason.store(int(reason))
+    e.count += 1
+
+  proc observeSubEnd(h: var LogosRouteHandle): ErrorCode =
+    subEnds.count.store(0)
+    toResult(h.vtable.observeSubscriptionEnd(addr h, onSubEnd, addr subEnds)).code
+
+  proc unsubscribe(h: var LogosRouteHandle, id: LogosSubscriptionId): ErrorCode =
+    toResult(h.vtable.unsubscribe(addr h, id)).code
+
+  proc underAuthority(): EngineConfig =
+    ## `hosted` with the fake Capability Authority bound (instance "ca").
+    resetFake()
+    result = hosted()
+    result.statics.add(fakeCaRegistration())
+    result.authority = Opt.some(
+      AuthorityPolicy(instance: "ca", evaluationDeadline: initDuration(seconds = 60))
+    )
+
+  proc startAuthority(e: Engine) =
+    discard e.create(fakeCaRecord(), "ca").tryGet
+    doAssert e.start("ca").tryGet.state == msReady
 
   # P-1 to P-5 -------------------------------------------------------------------------
 
@@ -649,7 +694,7 @@ when defined(posix):
       check o.outcome(cd, o.send(cd, 13)).codeOf == Opt.some(ecModule)
       e.finish()
 
-    test "[IMPL-DECISION G172] [RUN-0815] [IMPL-DECISION G274] P-9 a hosted provider's failure passes through; an invalid status or a response outside the schema is MODULE_ERROR, as direct":
+    test "[IFC-0979] [IFC-0980] [TXT-0034] [RUN-0815] [IMPL-DECISION G274] P-9 a hosted provider's failure passes through; an invalid status, a status outside the provider set or a response outside the schema is MODULE_ERROR, as direct, checked in the Module Host":
       let cfg = hosted()
       discard cfg.stateOf()
       let e = fixtureEngine(cfg)
@@ -664,7 +709,7 @@ when defined(posix):
       var hd = rc.handle(
         rc.establish("kd", provider = Opt.some(providerAddress(dm.providerId))).recordOf.route
       )
-      for channel in [13'u32, 14, 16]:
+      for channel in [13'u32, 14, 16, 9001, 9002, 9003, 9004, 9005]:
         checkpoint("channel " & $channel)
         let viaHost = hh.read(channel)
         let direct = hd.read(channel)
@@ -673,6 +718,8 @@ when defined(posix):
           check viaHost.error.code == direct.error.code
           check viaHost.error.code == ecModule
           check viaHost.error.message == direct.error.message
+          if channel >= 9001:
+            check viaHost.error.message.isNone
       hh.release()
       hd.release()
       e.finish()
@@ -732,6 +779,39 @@ when defined(posix):
       hd.release()
       e.finish()
 
+    test "[TRN-0392] [RUN-1095] [TXT-0088] [IMPL-DECISION G175] [IMPL-DECISION G225] P-15 under a Capability Authority, a subscribe-event deny at a hosted provider's delivery ends the subscription: the host's session sends the SubscriptionEnd, the subscriber's handle reports NOT_AUTHORISED once and its unsubscribe is LOGOS_OK once":
+      let cfg = underAuthority()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      e.startAuthority()
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      var k = rc.handle(rc.establish("k").recordOf.route)
+      heard[0].count.store(0)
+      check k.observeSubEnd() == ecOk
+      var a: LogosSubscriptionId
+      check k.hear(0, a) == ecOk
+      check k.read(15).isOk
+      check heardAt(0, 1)
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(0, 1))
+      check k.read(15).isOk
+      check waitUntil(
+        proc(): bool =
+          subEnds.count.load >= 1,
+        Answer,
+      )
+      sleep(100 * Slow)
+      check heard[0].count.load == 1
+      check subEnds.count.load == 1
+      check subEnds.id.load == uint64(a)
+      check subEnds.reason.load == ord(ecNotAuthorised)
+      check k.unsubscribe(a) == ecOk
+      check k.unsubscribe(a) == ecInvalidParams
+      setScript()
+      k.release()
+      e.finish()
+
     test "[RUN-0226] [IMPL-DECISION G244] P-7 per-call admission at a hosted provider: a method outside the route's access is NOT_AUTHORISED and reaches no provider":
       let cfg = hosted()
       let dir = cfg.stateOf()
@@ -751,7 +831,7 @@ when defined(posix):
         check rec.code in {ecInvalidParams, ecNotAuthorised}
       e.finish()
 
-    test "[TRN-0317] [IMPL-DECISION G174] [IMPL-DECISION G260] P-11 revocation answers a hosted provider's in-flight Request NOT_AUTHORISED, then ends the session NOT_AUTHORISED; close_route drains without a ProtocolError":
+    test "[TRN-0317] [RUN-1101] [IMPL-DECISION G260] P-11 [TXT-0124] revocation leaves a hosted provider's in-flight Request unanswered and ends the session NOT_AUTHORISED, at which the caller fails it TRANSPORT_ERROR; close_route drains, then ProtocolError NOT_READY":
       let cfg =
         hosted(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
       let dir = cfg.stateOf()
@@ -767,12 +847,13 @@ when defined(posix):
         let tag = o.send(conn, 22)
         check dir.heldAt(1)
         check rc.renew("r", rec.route).code == ecNotAuthorised
-        check o.outcome(conn, tag).codeOf == Opt.some(ecNotAuthorised)
+        check o.outcome(conn, tag).codeOf == Opt.some(ecTransport)
         let closed = o.closedOf(conn)
         check closed.isSome
         if closed.isSome:
           check closed.get.cause == ccPeerError
           check closed.get.code == ecNotAuthorised
+          check tag in closed.get.ids # [P5 Q3 (a)] the close failed it
         dir.open()
         o.settle(50 * Slow)
         check o.responses(conn, tag) == 1
@@ -780,7 +861,8 @@ when defined(posix):
       removeFile(dir / "held")
       block closing:
         # Channel 23: the provider goes on after its invocation is marked
-        # cancelled, as G174 marks the route's admitted calls at its end.
+        # cancelled, as every route's end marks its admitted calls (INTERFACE
+        # l.2101).
         let rec = rc.establish("k2").recordOf
         let conn = o.session(rec.invocationOf.get)
         let tag = o.send(conn, 23)
@@ -805,15 +887,17 @@ when defined(posix):
         let closed = o.closedOf(conn)
         check closed.isSome
         if closed.isSome:
-          check closed.get.cause == ccPeerClosed
+          check closed.get.cause == ccPeerError
+          check closed.get.code == ecNotReady
       e.finish()
 
-    test "[TRN-0317] [IMPL-DECISION G174] P-11b a revoked route's NOT_AUTHORISED reaches a hosted provider's host before its call's cancel: the provider, which returns once cancelled, commits nothing, even while the Runtime thread is slow to go on after marking the call cancelled":
+    test "[TRN-0317] [RUN-1101] P-11b a revoked route's termination reaches a hosted provider's host before its call's cancel: the provider, which returns once cancelled, commits nothing, even while the Runtime thread is slow to go on after marking the call cancelled; the caller fails the Request TRANSPORT_ERROR at the close":
       # [IMPL; I91] The Runtime thread waits after it marks the route's call
       # cancelled, so the call worker forwards the cancel long before the
-      # thread goes on. The meter returns on the cancel (channel 22), and the
-      # host must still have committed the NOT_AUTHORISED first (CI on dc2e7ef:
-      # P-11 under refc got the provider's OK).
+      # thread goes on. The meter returns on the cancel (channel 22). No
+      # Runtime answer comes any more (P5 Q3 (a)): the host must have ended
+      # the call at the terminate order, which comes first, so the provider's
+      # OK is not committed (CI on dc2e7ef: P-11 under refc got it).
       let cfg =
         hosted(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
       let dir = cfg.stateOf()
@@ -831,7 +915,7 @@ when defined(posix):
       check rc.renew("r", rec.route).code == ecNotAuthorised
       let got = o.outcome(conn, tag)
       setCancelMarkDelayForTests(0)
-      check got.codeOf == Opt.some(ecNotAuthorised)
+      check got.codeOf == Opt.some(ecTransport)
       if got.codeOf == Opt.some(ecOk):
         checkpoint "the provider's own result was committed: value " &
           $got.reading.reading.value
@@ -840,6 +924,78 @@ when defined(posix):
       if closed.isSome:
         check closed.get.cause == ccPeerError
         check closed.get.code == ecNotAuthorised
+        check tag in closed.get.ids
+      o.settle(50 * Slow)
+      check o.responses(conn, tag) == 1
+      e.finish()
+
+    test "[TRN-0317] [CAP-0254] [RUN-1101] P-11c under a Capability Authority a hosted provider's session ends with the decision its ticket carried while the renewed route stays ready: the in-flight Request gets no Response, the caller fails it TRANSPORT_ERROR at the close, and the call is not recorded as a success though the provider returned one":
+      resetFake()
+      var clock = newTestClock()
+      useClock(clock)
+      defer:
+        useClock(systemClock())
+        clock.freeClock()
+      var cfg = hosted(clock = clock)
+      cfg.statics.add(fakeCaRegistration())
+      cfg.authority = Opt.some(
+        AuthorityPolicy(instance: "ca", evaluationDeadline: initDuration(seconds = 60))
+      )
+      let dir = cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.create(fakeCaRecord(), "ca").tryGet
+      check e.start("ca").tryGet.state == msReady
+      check e.authorityBound()[0]
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      # A call decision that retains a side, so the call is recorded (CA
+      # l.1176-1180).
+      var retained = allow("call", validMs = 0)
+      retained.retainRequest = true
+      setScript(
+        allow("establish-route", validMs = 1000),
+        allow("renew-route", validMs = 10_000),
+        retained,
+      )
+      let rec = rc.establish("k").recordOf
+      let o = newOwner(roomy())
+      defer:
+        o.stop()
+      let conn = o.session(rec.invocationOf.get)
+      check rc.renew("r", rec.route).code == ecOk
+      let kept = e.audit.records.len
+      # Channel 22 returns its reading once the call is cancelled.
+      let tag = o.send(conn, 22)
+      check dir.heldAt(1)
+      # [IMPL; I91] The Runtime thread waits after it decides the session's
+      # call and after it marks it cancelled: a cancel forwarded to the host
+      # meanwhile must not overtake the terminate order (as in P-11b).
+      setCancelMarkDelayForTests(300 * Slow)
+      clock.advance(1500)
+      # Each look is a request, after which the Runtime thread checks its
+      # deadlines on the test clock.
+      check waitUntil(
+        proc(): bool =
+          discard e.routes()
+          o.pump(1) or o.responses(conn, tag) > 0,
+        Answer,
+      )
+      let got = o.outcome(conn, tag)
+      setCancelMarkDelayForTests(0)
+      check got.codeOf == Opt.some(ecTransport)
+      if got.codeOf == Opt.some(ecOk):
+        checkpoint "the provider's own result was committed: value " &
+          $got.reading.reading.value
+      let closed = o.closedOf(conn)
+      check closed.isSome
+      if closed.isSome:
+        check closed.get.cause == ccPeerError
+        check closed.get.code == ecNotAuthorised
+        check tag in closed.get.ids
+      check e.routeOf(rec.route).get.state.kind ==
+        LogosNSRuntimeControlRouteStateKind.Ready
+      check e.keptReach(kept + 1)
+      check not e.lastKept.success
       o.settle(50 * Slow)
       check o.responses(conn, tag) == 1
       e.finish()
@@ -887,6 +1043,29 @@ when defined(posix):
       check k2.read(4).isOk # skipped, with no signal: the session goes on
       k1.release()
       k2.release()
+      e.finish()
+
+    test "[TXT-0099] [IMPL-DECISION I106] P-10b a hosted provider's publish result is decided in its Module Host: an undeclared event and a nonconforming payload INVALID_PARAMS, unheard of by the Runtime; a valid one LOGOS_OK and delivered":
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      let (_, rc) = e.startClient("c")
+      var k = rc.handle(rc.establish("k").recordOf.route)
+      heard[0].count.store(0)
+      heard[0].last.store(0)
+      var a: LogosSubscriptionId
+      check k.hear(0, a) == ecOk
+      # Channel 26: bit 0 the undeclared event refused, bit 1 the text value
+      # refused, bit 2 the valid one taken.
+      let r = k.read(26)
+      check r.isOk and r.get.reading.value == 7
+      check heardAt(0, 1)
+      check heard[0].last.load == 260
+      sleep(100 * Slow)
+      check heard[0].count.load == 1
+      check not e.diagnostics().anyIt("meter.unknown_event" in it)
+      k.release()
       e.finish()
 
     test "[RUN-0815] [IMPL-DECISION G273] [IMPL-DECISION G274] P-13 payloads go between the consumer's process and the host directly: no carrier frame holds a request, a response or an event payload, and the call, its events and its schema answer still pass":
@@ -1154,6 +1333,40 @@ when defined(posix):
   proc readVia(c: var Consumer, slot: int, channel: uint32): string =
     c.run(readLine(slot, channel))
 
+  proc prepareLine(call: int, channel: uint32, timeout: string): string =
+    ## Prepares call `call` on slot 0's handle; `timeout` in ms, or `-`.
+    "prepare 0 " & $call & " read " &
+      hexOf(encode(MeterReadRequest(channel: channel)).tryGet) & " " & timeout
+
+  proc doneOf(c: Consumer, call: int): string =
+    ## Prepared call `call`'s completion, `<code> <hex value or message>`.
+    for line in c.linesOf("done"):
+      if line.startsWith($call & " "):
+        return line.split(' ', 1)[1]
+    "none"
+
+  let malformedRead = hexOf(encodeCbor(cborMap(@[(cbor("channel"), cbor("x"))])))
+    ## a `read` request whose `channel` is not a uint
+
+  proc malformedVia(
+      c: var Consumer, slot, call: int
+  ): (Opt[ErrorCode], Opt[ErrorCode]) =
+    ## The codes of a malformed `read` through slot `slot`: called, then
+    ## prepared as call `call` and submitted (a refused preparation's code).
+    let sync = codeIn(c.run("call " & $slot & " read " & malformedRead))
+    let prepared =
+      codeIn(c.run("prepare " & $slot & " " & $call & " read " & malformedRead & " -"))
+    if prepared != Opt.some(ecOk):
+      return (sync, prepared)
+    check codeIn(c.run("submit " & $call)) == Opt.some(ecOk)
+    check c.noted("done", $call & " ")
+    var outcome = Opt.none(ErrorCode)
+    for line in c.linesOf("done"):
+      if line.startsWith($call & " "):
+        outcome = codeIn(line.split(' ', 1)[1])
+    check codeIn(c.run("release-call " & $call)) == Opt.some(ecOk)
+    (sync, outcome)
+
   proc readingOf(line: string): Opt[MeterReadResponse] =
     if codeIn(line) != Opt.some(ecOk):
       return Opt.none(MeterReadResponse)
@@ -1162,12 +1375,6 @@ when defined(posix):
       Opt.none(MeterReadResponse)
     else:
       Opt.some(r.get)
-
-  proc routeOf(e: Engine, route: string): Opt[LogosNSRuntimeControlRouteRecord] =
-    for rec in e.routes():
-      if rec.route == route:
-        return Opt.some(rec)
-    Opt.none(LogosNSRuntimeControlRouteRecord)
 
   proc failedWith(e: Engine, route: string, code: string): bool =
     waitUntil(
@@ -1306,6 +1513,55 @@ when defined(posix):
       check codeIn(first.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
+    test "[RUN-1113] [RUN-1114] [TXT-0160] C-3b a hosted consumer's stale start and retire: the carrier brings back the response's error arm with the current revision, and nothing changes":
+      # [re-pin P4a] A typed outcome is a successful response (RUNTIME
+      # l.1818-1822): the host's binding carries its bytes back unchanged.
+      let cfg = hosted()
+      var c = cfg.serving("c")
+      let e = fixtureEngine(cfg)
+      discard e.create(meter(), "m").tryGet
+      discard e.started(consumerRecord(state = "c"), "c")
+      let rev = e.view("m").tryGet.execution.revision
+      let start = c.run(
+        "rc start_module " &
+          hexOf(
+            encode(
+              LogosNSRuntimeControlStartModuleRequest(
+                module: "meter_module",
+                instance: Opt.some("m"),
+                expected_execution_revision: Opt.some(rev + 1),
+              )
+            ).tryGet
+          )
+      )
+      check codeIn(start) == Opt.some(ecOk)
+      let started =
+        LogosNSRuntimeControlStartModuleResponse.decode(unhexOf(valueIn(start))).tryGet
+      check started.refusal.get.code.kind ==
+        LogosNSRuntimeControlErrorCodeKind.Stale_revision
+      check started.refusal.get.current_revision == Opt.some(rev)
+      let retire = c.run(
+        "rc retire_module " &
+          hexOf(
+            encode(
+              LogosNSRuntimeControlRetireModuleRequest(
+                target: LogosNSRuntimeModuleInstanceAddress(
+                  runtime_instance_id: e.runtimeInstanceId, module_instance_id: "m"
+                ),
+                expected_execution_revision: rev + 1,
+              )
+            ).tryGet
+          )
+      )
+      check codeIn(retire) == Opt.some(ecOk)
+      let retired = LogosNSRuntimeControlRetireModuleResponse.decode(
+        unhexOf(valueIn(retire))
+      ).tryGet
+      check retired.refusal.get.current_revision == Opt.some(rev)
+      let v = e.view("m").tryGet
+      check v.execution.revision == rev and v.state == msUnloaded
+      e.finish()
+
     test "[RUN-0182] [RUN-0837] C-4 a provider restarted under a hosted consumer's open handle: the handle ends NOT_READY and is never retargeted":
       let cfg = hosted()
       var c = cfg.serving()
@@ -1325,7 +1581,7 @@ when defined(posix):
       check codeIn(c.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
-    test "[RUN-0805] [RUN-0256] [RUN-0837] [RUN-0838] C-5 a hosted provider's host killed during a hosted consumer's call: the call is TRANSPORT_ERROR, the end is reported once and never changes, and the failed route answers NOT_READY":
+    test "[RUN-0805] [RUN-0256] [RUN-0837] [RUN-0838] [RUN-1101] C-5 a hosted provider's host killed during a hosted consumer's call: the call is TRANSPORT_ERROR, the end is reported once and never changes, and the failed route answers NOT_READY":
       let cfg = hosted()
       let mdir = cfg.stateOf()
       var c = cfg.serving()
@@ -1384,6 +1640,107 @@ when defined(posix):
       check codeIn(c.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
+    test "[IFC-0981] [TXT-0085] C-7b observe_subscription_end under a hosted consumer: one registration per binding and per handle, none called, none on a terminal handle (DECISIONS I105)":
+      let cfg = hosted()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      discard e.started(consumerRecord(), "c")
+      check codeIn(c.run("sub-end rc null")) == Opt.some(ecInvalidParams)
+      check codeIn(c.run("sub-end rc s0")) == Opt.some(ecOk)
+      check codeIn(c.run("sub-end rc s1")) == Opt.some(ecInvalidParams)
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      # A second handle on the route needs a fresh ticket (RUNTIME l.3468).
+      check codeIn(c.renewLine("r", route)) == Opt.some(ecOk)
+      check c.materializeVia(1, route) == Opt.some(ecOk)
+      check codeIn(c.run("sub-end 0 null")) == Opt.some(ecInvalidParams)
+      check codeIn(c.run("sub-end 0 s2")) == Opt.some(ecOk)
+      check codeIn(c.run("sub-end 0 s3")) == Opt.some(ecInvalidParams)
+      check codeIn(c.run("observe-end 0 e1")) == Opt.some(ecOk)
+      check c.closeVia(route) == Opt.some(ecOk)
+      check c.noted("ends", "e1 ")
+      # [SPEC INTERFACE l.1459; I105] the Runtime's retained code, and nothing
+      # installed: the same refusal again.
+      check codeIn(c.run("sub-end 1 s4")) == Opt.some(ecNotReady)
+      check codeIn(c.run("sub-end 1 s5")) == Opt.some(ecNotReady)
+      # [IF l.1474] A route's end is not a binding end: nothing is reported.
+      check c.linesOf("subends").len == 0
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      check codeIn(c.run("release 1")) == Opt.some(ecOk)
+      e.finish()
+
+    test "[TRN-0392] [RUN-1095] [TXT-0088] [IMPL-DECISION G225] C-11 under a Capability Authority, a hosted consumer's subscription ended by a subscribe-event deny at delivery is reported once by its handle, in the host, with NOT_AUTHORISED; its unsubscribe is LOGOS_OK once":
+      let cfg = underAuthority()
+      discard cfg.stateOf()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      e.startAuthority()
+      discard e.started(meter(), "m")
+      check e.started(consumerRecord(), "c").state == msReady
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      check codeIn(c.run("sub-end 0 s1")) == Opt.some(ecOk)
+      let sub = c.run("subscribe 0 meter.changed_event d1")
+      check codeIn(sub) == Opt.some(ecOk)
+      discard c.readVia(0, 21)
+      check c.noted("deliveries", "d1 meter.changed_event ")
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(0, 1))
+      discard c.readVia(0, 21)
+      check c.noted("subends", "s1 " & valueIn(sub) & " " & $ord(ecNotAuthorised))
+      sleep(50 * Slow)
+      check c.linesOf("deliveries").len == 1
+      check c.linesOf("subends").len == 1
+      check codeIn(c.run("unsubscribe 0 " & valueIn(sub))) == Opt.some(ecOk)
+      check codeIn(c.run("unsubscribe 0 " & valueIn(sub))) == Opt.some(ecInvalidParams)
+      setScript()
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      e.finish()
+
+    test "[IMPL-DECISION G171] [RUN-1117] [RUN-1118] C-12 a hosted consumer's malformed call, synchronous and prepared: the Runtime's route access checks come before the host validates it; a call the provider's side denies is INVALID_PARAMS, as over local transport (l.1824-1828)":
+      let cfg = hosted(
+        denying(
+          deny(action = Opt.some(aaCall), operation = "read", consumer = "c"),
+          deny(action = Opt.some(aaRoute), operation = "renew_route", consumer = "c"),
+        )
+      )
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      check e.started(consumerRecord(), "c").state == msReady
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      # [DECISIONS G171, interim reading] The provider's side decides the call
+      # after its session dispatches the Request; the host's session cannot
+      # commit a malformed payload (TRANSPORT §4.1) and refuses it first.
+      check codeIn(c.readVia(0, 4)) == Opt.some(ecNotAuthorised)
+      check c.malformedVia(0, 1) ==
+        (Opt.some(ecInvalidParams), Opt.some(ecInvalidParams))
+      # Step 2's route access checks, the Runtime's admission (`rc_link_admit`)
+      # before the host's session: a method outside the route's access, then
+      # a revoked route.
+      let narrow = c.run(
+        "rc establish_route " &
+          hexOf(
+            establishReq("n", scope = access(methods = Opt.some(newSeq[seq[byte]]())))
+          )
+      )
+      check codeIn(narrow) == Opt.some(ecOk)
+      let narrowed =
+        LogosNSRuntimeControlEstablishRouteResponse.decode(unhexOf(valueIn(narrow)))
+      check narrowed.isOk
+      if narrowed.isOk:
+        check c.materializeVia(1, narrowed.get.routes[0].route) == Opt.some(ecOk)
+        check c.malformedVia(1, 2) ==
+          (Opt.some(ecNotAuthorised), Opt.some(ecNotAuthorised))
+        check codeIn(c.run("release 1")) == Opt.some(ecOk)
+      check c.renewVia("r1", route) == Opt.some(ecNotAuthorised)
+      check c.malformedVia(0, 3) ==
+        (Opt.some(ecNotAuthorised), Opt.some(ecNotAuthorised))
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      e.finish()
+
     test "[IFC-0729] [RUN-0181] [IMPL-DECISION G267] C-8 prepared calls from a hosted consumer to a hosted provider: a response, a timeout that cancels the provider's call, an expiry at submission, a cancellation before it, and the connection kept until the last completes":
       let cfg = hosted()
       let mdir = cfg.stateOf()
@@ -1393,16 +1750,6 @@ when defined(posix):
       discard e.started(consumerRecord(), "c")
       let route = c.establishVia("k")
       check c.materializeVia(0, route) == Opt.some(ecOk)
-      proc prepareLine(call: int, channel: uint32, timeout: string): string =
-        "prepare 0 " & $call & " read " &
-          hexOf(encode(MeterReadRequest(channel: channel)).tryGet) & " " & timeout
-
-      proc doneOf(c: Consumer, call: int): string =
-        for line in c.linesOf("done"):
-          if line.startsWith($call & " "):
-            return line.split(' ', 1)[1]
-        "none"
-
       check codeIn(c.run(prepareLine(1, 4, "-"))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(3, 4, "0"))) == Opt.some(ecOk)
       check codeIn(c.run(prepareLine(4, 4, "-"))) == Opt.some(ecOk)
@@ -1447,6 +1794,38 @@ when defined(posix):
       for i in 1 .. 5:
         check codeIn(c.run("release-call " & $i)) == Opt.some(ecOk)
       check e.routeOf(route).get.state.kind == LogosNSRuntimeControlRouteStateKind.Ready
+      e.finish()
+
+    test "[RUN-1101] [IMPL-DECISION G260] H-1 a route revoked under a hosted consumer: its prepared call that a hosted provider runs is TRANSPORT_ERROR, though the provider returns once cancelled; a call submitted after the revocation is NOT_AUTHORISED":
+      let cfg =
+        hosted(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
+      let mdir = cfg.stateOf()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(hostedMeter(), "hm")
+      discard e.started(consumerRecord(), "c")
+      let route = c.establishVia("k")
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      # Channel 22 holds the call in the provider until it is cancelled.
+      check codeIn(c.run(prepareLine(1, 22, "-"))) == Opt.some(ecOk)
+      check codeIn(c.run(prepareLine(2, 4, "-"))) == Opt.some(ecOk)
+      check codeIn(c.run("submit 1")) == Opt.some(ecOk)
+      check mdir.heldAt(1)
+      # [G260] A denied renewal revokes the route.
+      check c.renewVia("r", route) == Opt.some(ecNotAuthorised)
+      check c.noted("done", "1 ")
+      check codeIn(c.doneOf(1)) == Opt.some(ecTransport)
+      # [RUNTIME l.1261] A new operation on the revoked route.
+      check codeIn(c.run("submit 2")) == Opt.some(ecOk)
+      check c.noted("done", "2 ")
+      check codeIn(c.doneOf(2)) == Opt.some(ecNotAuthorised)
+      check e.routeOf(route).get.state.kind ==
+        LogosNSRuntimeControlRouteStateKind.Revoked
+      sleep(50 * Slow)
+      check c.linesOf("done").len == 2
+      for i in 1 .. 2:
+        check codeIn(c.run("release-call " & $i)) == Opt.some(ecOk)
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
     test "[RUN-0234] [IMPL-DECISION G261] [IMPL-DECISION G267] C-9 a hosted consumer whose route handler does not keep up: the publisher is not held, the connection closes TRANSPORT_ERROR and the host's end handler is called once":
@@ -1535,8 +1914,59 @@ when defined(posix):
       e.finish()
       check noHostLeft()
 
-    test "[RUN-0111] [RUN-0794] [RUN-0181] S-18 a stopping consumer's calls through its routes are refused from stop step 1, NOT_READY, hosted as direct":
+    test "[IFC-0957] [TXT-0535] [TXT-0551] [IMPL-DECISION G394] C-13 a hosted consumer's session on an earlier view of a provider (synthesis Q4): the session selects the earlier root with that contract's own input, B's implementation answers, only the view's methods resolve, and logos.schema answers the view":
+      # As C-10, a scripted static table with a hosted end: the route is
+      # local-transport, and the host connects to the Runtime's endpoint for
+      # the relay with the material it kept.
+      var cfg = hosted()
+      cfg.statics.add(relayStatic())
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(relayRecord(), "r")
+      check e.started(consumerRecord(), "c").state == msReady
+      let rec = c.establishRecVia("k", relayA2Root)
+      require rec.isSome
+      check rec.get.expected_contract.get.schema_root == @relayA2Root
+      let made = c.run(
+        "materialize 0 " & rec.get.route & " " & hexOf(relayA2Root) & " " &
+          hexOf(relaySchema(relayA2Root))
+      )
+      check codeIn(made) == Opt.some(ecOk)
+      let before = relayCalls.load
+      let read = c.run(
+        "call 0 read " & hexOf(encodeCbor(cborMap((cbor("channel"), cbor(2'u64)))))
+      )
+      check codeIn(read) == Opt.some(ecOk)
+      check decodeCbor(unhexOf(valueIn(read))).tryGet.lookup("value").get.getUint64 ==
+        Opt.some(RelayValue)
+      check relayCalls.load == before + 1
+      check codeIn(c.run("call 0 ping a0")) == Opt.some(ecMethodNotFound)
+      let schema = c.run("call 0 schema a0")
+      check codeIn(schema) == Opt.some(ecOk)
+      check unhexOf(valueIn(schema)) == relaySchema(relayA2Root)
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      e.finish()
+      check noHostLeft()
+
+    test "[IMPL-DECISION G394] a Module Host keeps an extending provider's contracts in process (synthesis Q4): an earlier view's input is its own answer, built on first use, and the view adds no publication contract":
+      check keepProvider(relayBinding(), false, MaxPayloadDepth, relayDescriptor).isOk
+      check earlierInputOf(relayRoot).isNone
+      check earlierInputOf(pulseRoot).isNone
+      for root in [relayA1Root, relayA2Root]:
+        let input = earlierInputOf(root)
+        check input.isSome and input.get.schema == relaySchema(root)
+        check schemaAnswer(root) == relaySchema(root)
+        check selectedFor(root).isOk
+      check selectedFor(relayA1Root).get.boundary.knowsEvent(ClearedDecl)
+      check not selectedFor(relayA2Root).get.boundary.knowsEvent(ClearedDecl)
+      # Published under B, which declares both events.
+      let data = encodeCbor(cborMap((cbor("channel"), cbor(1'u64))))
+      check publishedBy(ClearedDecl, data).isOk
+      check publishedBy(ChangedDecl, data).isOk
+
+    test "[RUN-1093] [RUN-0794] [RUN-0181] [RUN-1118] [RUN-1122] S-18 a stopping consumer's calls through its routes are refused from stop step 1, NOT_READY, hosted as direct; a malformed one, called or prepared, INVALID_PARAMS first (l.1828, l.1832)":
       var codes: seq[Opt[ErrorCode]]
+      var malformed: seq[(Opt[ErrorCode], Opt[ErrorCode])]
       for hostedConsumer in [true, false]:
         let cfg = hosted()
         var c = cfg.serving(extra = "block-destroy\n")
@@ -1550,6 +1980,7 @@ when defined(posix):
         check e.stopping("c", t)
         # `_MODULE_destroy` waits for `go`; the command thread still serves.
         codes.add(codeIn(c.readVia(0, 4)))
+        malformed.add(c.malformedVia(0, 1))
         check codeIn(c.run("release 0")) == Opt.some(ecOk)
         writeFile(c.dir / "go", "")
         joinThread(t)
@@ -1557,6 +1988,8 @@ when defined(posix):
         e.finish()
         check noHostLeft()
       check codes == @[Opt.some(ecNotReady), Opt.some(ecNotReady)]
+      let invalid = (Opt.some(ecInvalidParams), Opt.some(ecInvalidParams))
+      check malformed == @[invalid, invalid]
 
   # M-1 to M-3: a module built with the other memory manager ---------------------------
 

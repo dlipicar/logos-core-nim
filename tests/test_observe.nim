@@ -131,8 +131,9 @@ proc updateOf(
     target: LogosNSRuntimeModuleInstanceAddress,
     revision: uint64,
     permissions: seq[LogosNSRuntimeControlPermissionSetting] = @[],
+    refusal = false,
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "update_permission_settings",
     encode(
@@ -141,11 +142,12 @@ proc updateOf(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc retireOf(
-    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string
+    rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string, refusal = false
 ): RcResult =
-  rcCall(
+  result = rcCall(
     rc,
     "retire_module",
     encode(
@@ -155,6 +157,7 @@ proc retireOf(
       )
     ).tryGet,
   )
+  discard result.accepting(refusal)
 
 proc latestClient(): ptr LogosRuntimeControlBinding =
   ## The Runtime Control binding of the latest client initialization.
@@ -186,7 +189,7 @@ proc slows(e: Engine, names: varargs[string]) =
 # list_modules -------------------------------------------------------------------------
 
 suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
-  test "[RUN-0282] [RUN-0283] [RUN-0401] [RUN-0414] [RUN-0415] [RUN-0627] [RUN-0972] [RUN-0973] [RUN-0975] every local instance, instance keys before provider keys, each as one committed view":
+  test "[RUN-0282] [RUN-0283] [RUN-0414] [RUN-0415] [RUN-0627] [RUN-0972] [RUN-0973] [RUN-0975] [RUN-1128] every local instance, instance keys before provider keys, each as one committed view":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     e.slows("s")
@@ -285,7 +288,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     check now.modules[3].state.kind == LogosNSRuntimeControlStateKind.Ready
     e.finish()
 
-  test "[RUN-0347] [RUN-0960] [RUN-0961] [RUN-0963] a cursor answers its own query only; any other is INVALID_PARAMS with one message and no detail":
+  test "[RUN-0960] [RUN-0961] [RUN-0963] a cursor answers its own query only; any other is INVALID_PARAMS with one message and no detail":
     let e = fixtureEngine(config())
     let (_, rc) = e.startClient("c")
     let (_, other) = e.startClient("d")
@@ -470,7 +473,7 @@ suite "run.rc: list_modules (RUNTIME §9.3 l.3350-3357, l.3372-3413)":
     check rc.modules(instance = someText("a2")).listed.modules.len == 0
     e.finish()
 
-  test "[RUN-0346] [RUN-0850] [RUN-0874] [IMPL-DECISION G171] a refused list method is NOT_AUTHORISED before its payload is judged":
+  test "[RUN-0346] [RUN-0850] [RUN-0874] [RUN-1117] [RUN-1118] a refused list method is NOT_AUTHORISED before its payload is judged (l.1827-1828)":
     let e = fixtureEngine(
       config(
         denying(
@@ -608,7 +611,7 @@ suite "run.rc: list_routes (RUNTIME §9.3 l.3359-3365, l.3372-3413)":
 # get_execution_summary ----------------------------------------------------------------
 
 suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
-  test "[RUN-0441] [RUN-0442] [RUN-0440] [RUN-0634] [RUN-0636] [RUN-0637] [RUN-0639] [RUN-0642] [RUN-0994] a ready instance: one committed view, a current realization, its strategy as the selection":
+  test "[RUN-0441] [RUN-0442] [RUN-0440] [RUN-0634] [RUN-0636] [RUN-0637] [RUN-1184] [RUN-0642] [RUN-0994] a ready instance: one committed view, a current realization, its strategy as the selection":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")
@@ -679,7 +682,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     check rc.summaryOf(e.address("m")).code == ecOk
     e.finish()
 
-  test "[RUN-0640] [RUN-0630] [IMPL-DECISION G180] [IMPL-DECISION G227] a cleanup past its deadline is unknown; its end is absent at a new revision, and a revision read before it is stale":
+  test "[RUN-0640] [RUN-1183] [IMPL-DECISION G180] [IMPL-DECISION G227] [RUN-1092] a cleanup past its deadline is unknown; its end is absent at a new revision, the stop completed, and a revision read before it is stale":
     var cfg = config()
     cfg.stopDeadline = PassingStop
     let e = fixtureEngine(cfg)
@@ -687,7 +690,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     discard e.started(client(), "w")
     clientDestroyGate.store(true)
     let stopped = e.stop("w").tryGet
-    check stopped.state == msError
+    check stopped.state == msStopping
     check stopped.failure.get.classification == "cleanup-timeout"
     const Unknown =
       LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind.Unknown
@@ -703,7 +706,7 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
     )
     let after = rc.summaryOf(e.address("w")).summarized
     check after.execution.revision > during.execution.revision
-    check after.state.kind == LogosNSRuntimeControlStateKind.Error
+    check after.state.kind == LogosNSRuntimeControlStateKind.Unloaded
     # A guarded request prepared before the commit is refused, without
     # mutation; one at the current revision is accepted.
     let stale = rc.lifecycle(
@@ -711,8 +714,9 @@ suite "run.rc: get_execution_summary (RUNTIME §9.3 l.3513-3535)":
       "client_module",
       instance = someText("w"),
       expected = Opt.some(during.execution.revision),
+      refusal = true,
     )
-    check stale.code == ecInvalidParams
+    check stale.refused.get.stale == Opt.some(after.execution.revision)
     check e.view("w").tryGet.execution.revision == after.execution.revision
     let fresh = rc.lifecycle(
       "start_module",
@@ -847,6 +851,74 @@ suite "run.rc: describe_provider (RUNTIME §2.4 l.448-458)":
 
 # Permission settings ------------------------------------------------------------------
 
+suite "run.rc: a provider that extends earlier contracts (RUNTIME §2.4 l.411-416, l.1966; CA l.249-256) [IMPL-DECISION G394]":
+  func byBytes(a, b: seq[byte]): int =
+    cmpBytes(a, b)
+
+  proc discovered(e: Engine, provider: string): seq[seq[byte]] =
+    ## The contracts of the `discover` decisions `describe_provider` asked
+    ## about `provider`, sorted.
+    for a in e.answers():
+      if a.request.action == aaDiscover and a.request.target == provider:
+        result.add(a.request.contract)
+    result.sort(byBytes)
+
+  test "describe_provider asks one discover decision per earlier view too, before and after the bind, and returns the validated descriptor with its extends; a deny on one view fails the whole request (G394 r15)":
+    let views = @[@relayRoot, @pulseRoot, @relayA1Root, @relayA2Root].sorted(byBytes)
+    for bound in [true, false]:
+      # One engine each: a Capability Authority's allow would otherwise
+      # answer the second provider's decisions from the cache.
+      let e = fixtureEngine(config(extra = @[relayStatic()]))
+      if bound:
+        discard e.started(relayRecord(), "r")
+      else:
+        discard e.create(relayRecord(), "r").tryGet
+      let (_, rc) = e.startClient("c")
+      let p = e.view("r").tryGet.providerId
+      let r = rc.describeOf(providerAddress(p))
+      check e.discovered(p) == views
+      if bound:
+        check r.code == ecOk
+        let d = LogosNSRuntimeControlDescribeProviderResponse.decode(r.response).tryGet
+        check d.surface == relayDescriptor
+        let b = acceptCallSurfaceDescriptor(d.surface, RelayModule).tryGet
+        check b.extends.mapIt(@(it.root)).sorted(byBytes) ==
+          @[@relayA1Root, @relayA2Root].sorted(byBytes)
+      else:
+        # Never bound: the views of its record.
+        check r.code == ecNotReady
+      e.finish()
+    block:
+      # [SPEC CA l.254-256] A consumer whose rules allow only the current
+      # contract is refused once the provider states an earlier one.
+      let e = fixtureEngine(
+        config(
+          denying(deny(action = Opt.some(aaDiscover), contract = @relayA2Root)),
+          extra = @[relayStatic()],
+        )
+      )
+      discard e.started(relayRecord(), "r")
+      discard e.create(relayRecord(), "idle").tryGet
+      let (_, rc) = e.startClient("c")
+      for instance in ["r", "idle"]:
+        let r = rc.describeOf(providerAddress(e.view(instance).tryGet.providerId))
+        check r.code == ecNotAuthorised and r.detail.len == 0
+      e.finish()
+
+  test "list_modules reports a record's extends as it reports implements (RUNTIME l.1966; G394 r13)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    discard e.started(relayRecord(), "r")
+    discard e.started(meter(), "m")
+    let (_, rc) = e.startClient("c")
+    let got = rc.modules().listed.modules
+    let r = got.filterIt(it.instance == Opt.some("r"))
+    check r.len == 1
+    check r[0].extends.get.mapIt(it.schema_root) == @[@relayA1Root, @relayA2Root]
+    check r[0].implements.get.mapIt(it.schema_root) == @[@pulseRoot]
+    let m = got.filterIt(it.instance == Opt.some("m"))
+    check m.len == 1 and m[0].extends.isNone
+    e.finish()
+
 suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DECISION G229]":
   test "[RUN-0893] [RUN-0910] [RUN-0469] [RUN-0471] every local instance has its settings at revision 1, empty and applied":
     let e = fixtureEngine(config())
@@ -866,15 +938,14 @@ suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DE
         LogosNSRuntimeControlPermissionSettingsStateApplicationChoiceKind.Applied
     e.finish()
 
-  test "[RUN-0468] [RUN-0470] [RUN-0474] [RUN-0475] [RUN-0481] [RUN-0892] [RUN-0875] an empty replacement at revision 1 returns that state; a permission or another revision is INVALID_PARAMS without detail":
+  test "[RUN-0468] [RUN-0470] [RUN-0474] [RUN-0475] [RUN-0481] [RUN-0892] [RUN-0875] an empty replacement at revision 1 returns that state; a permission is INVALID_PARAMS without detail, another revision `stale-revision`":
     let e = fixtureEngine(config())
     discard e.started(meter(), "m")
     let (_, rc) = e.startClient("c")
     let before = e.view("m").tryGet
     let same = rc.updateOf(e.address("m"), 1)
     check same.code == ecOk
-    let s =
-      LogosNSRuntimeControlUpdatePermissionSettingsResponse.decode(same.response).tryGet
+    let s = same.accepted(LogosNSRuntimeControlUpdatePermissionSettingsResponse)
     check s.target == e.address("m")
     check s.state.revision == 1 and s.state.permissions.len == 0
     check s.state.application.kind ==
@@ -888,8 +959,9 @@ suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DE
     )
     check named.code == ecInvalidParams and named.detail.len == 0
     for revision in [0'u64, 2]:
-      let stale = rc.updateOf(e.address("m"), revision)
-      check stale.code == ecInvalidParams and stale.detail.len == 0
+      let stale = rc.updateOf(e.address("m"), revision, refusal = true)
+      check stale.code == ecOk and stale.detail.len == 0
+      check stale.refused.get.stale == Opt.some(1'u64)
     # Nothing changed, the instance included.
     let after = e.view("m").tryGet
     check after.execution.revision == before.execution.revision
@@ -937,6 +1009,12 @@ suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DE
 # The Capability Authority's narrowing ---------------------------------------------------
 
 when declared(caParity):
+  import ../src/logos_core/authority/scopes except
+    LogosNSRuntimeModuleInstanceAddress, LogosNSRuntimeModuleInstanceId,
+    LogosNSRuntimeModuleName, LogosNSRuntimeModuleProviderAddress,
+    LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
+    LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
+
   proc narrowing(what: string, alternatives: varargs[RcNarrow]): Rule =
     Rule(what: what, verdict: vAllow, validMs: Everything, narrowControl: @alternatives)
 
@@ -983,6 +1061,47 @@ when declared(caParity):
       check rc.modules().listed.ids == @["b1"]
       e.finish()
 
+    test "[RUN-1038] [IMPL-DECISION G161] a name-only selection needs an allow whose scope names no instance or provider (RUNTIME l.3535)":
+      let e = fixtureEngine(config())
+      discard e.create(meter(), "m1").tryGet
+      let (_, rc) = e.startClient("c")
+      let p1 = e.view("m1").tryGet.providerId
+      setScript()
+      forget()
+      check rc.readiness("meter_module").code == ecOk
+      # The name scope is asked first: the module alone, with no instance or
+      # provider; then the exact record.
+      let asked = received().filterIt(it.what == "rc:get_readiness")
+      check asked.len == 2
+      if asked.len == 2:
+        let first =
+          LogosNSCapabilityAuthorityEvaluateRequest.decode(asked[0].request).tryGet
+        check first.scopes.len == 1 and first.scopes[0].kind == skControl
+        if first.scopes.len == 1 and first.scopes[0].kind == skControl:
+          let s = first.scopes[0].rc
+          check s.modules == Opt.some(@["meter_module"])
+          check s.instances.isNone and s.providers.isNone
+      # An allow limited to the instance or to its provider does not cover the
+      # name scope; the instance one covers the exact selector.
+      setScript(
+        narrowing(
+          "rc:get_readiness",
+          RcNarrow(modules: only("meter_module"), instances: only("m1")),
+        )
+      )
+      changePolicy(1)
+      check rc.readiness("meter_module").code == ecNotAuthorised
+      check rc.readiness("meter_module", Opt.some("m1")).code == ecOk
+      setScript(
+        narrowing(
+          "rc:get_readiness",
+          RcNarrow(modules: only("meter_module"), providers: only(p1)),
+        )
+      )
+      changePolicy(2)
+      check rc.readiness("meter_module").code == ecNotAuthorised
+      e.finish()
+
     test "[RUN-0962] [RUN-0964] [RUN-0969] each page applies the current decision to the facts kept with its records, after a retirement too":
       let e = fixtureEngine(config())
       let (_, rc) = e.startClient("c")
@@ -1000,7 +1119,7 @@ when declared(caParity):
       check p2.ids == @["a2"] and p2.next_cursor.isNone
       e.finish()
 
-    test "[RUN-0950] [RUN-0951] [CAP-0055] a route is matched by its own facts, never by its consumer":
+    test "[RUN-0950] [RUN-0951] [CAP-0055] [TXT-0364] a route is matched by its own facts, never by its consumer; a selector a record does not carry matches nothing":
       let e = fixtureEngine(config())
       discard e.started(meter(), "m1")
       discard e.started(meter(), "m2")
@@ -1023,4 +1142,9 @@ when declared(caParity):
       setScript(narrowing("rc:list_routes", RcNarrow(instances: only("c"))))
       changePolicy(3)
       check rc.routeList().routesListed.routes.len == 0
+      # [SPEC CA l.305] A module record carries no route: a `routes` selector
+      # on `list_modules` matches none of them.
+      setScript(narrowing("rc:list_modules", RcNarrow(routes: only(r2))))
+      changePolicy(4)
+      check rc.modules().listed.modules.len == 0
       e.finish()

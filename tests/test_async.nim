@@ -340,7 +340,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     h.release()
     e.finish()
 
-  test "[IFC-0717] [IFC-0718] [IFC-0719] preparation copies its inputs and runs nothing; bad options or callbacks leave the outputs null":
+  test "[IFC-0717] [IFC-0718] [IFC-0719] [TXT-0090] preparation copies its inputs and runs nothing; bad options or callbacks leave the outputs null":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
@@ -583,7 +583,71 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     h.release()
     e.finish()
 
-  test "[IMPL-DECISION G174] [RUN-0829] [IFC-0740] [IFC-0741] a route that ends cancels the invocation; closed, it completes with its result; revoked, NOT_AUTHORISED at once":
+  test "[IMPL-DECISION G171] [RUN-1117] [RUN-1118] [RUN-1122] an asynchronous ordinary call: its authorization before its payload, readiness after it (l.1824-1832)":
+    var cfg = config(
+      denying(
+        deny(action = Opt.some(aaCall), consumer = "denied"),
+        deny(
+          action = Opt.some(aaRoute), operation = "renew_route", consumer = "revoked"
+        ),
+      )
+    )
+    cfg.stopDeadline = initDuration(seconds = 30) # `late` stays `stopping` meanwhile
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient("allowed")
+    let (_, denied) = e.startClient("denied")
+    let (_, revoking) = e.startClient("revoked")
+    let (late, lateRc) = e.startClient("late")
+    let malformed = encodeCbor(cborMap(@[(cbor("channel"), cbor("x"))]))
+    proc asyncCode(h: var LogosRouteHandle, params: openArray[byte]): Opt[ErrorCode] =
+      done[0].clear()
+      var (code, call) = h.prepare(params, addr done[0])
+      check code == ecOk
+      call.submit()
+      check done[0].finished
+      result = done[0].codeOf
+      call.release()
+
+    var h = rc.handle(rc.routeId("a"))
+    check h.asyncCode(malformed) == Opt.some(ecInvalidParams)
+    # Step 2's route access checks (TRANSPORT §8.1), which the consumer's side
+    # owns in every placement: a method outside the route's access, then a
+    # revoked route.
+    let narrow =
+      rc.establish("n", scope = access(methods = Opt.some(newSeq[seq[byte]]())))
+    var n = rc.handle(narrow.routesOf.routes[0].route)
+    check n.asyncCode(malformed) == Opt.some(ecNotAuthorised)
+    n.release()
+    let route = revoking.routeId("k")
+    var v = revoking.handle(route)
+    check revoking.renew("r1", route).code == ecNotAuthorised
+    check v.asyncCode(malformed) == Opt.some(ecNotAuthorised)
+    v.release()
+    # Step 2's call decision.
+    var d = denied.handle(denied.routeId("d"))
+    if overTransport:
+      # [DECISIONS G171, interim reading] The consumer's own session refuses a
+      # payload it cannot commit (TRANSPORT §4.1) before the provider's side
+      # decides the call: INVALID_PARAMS here, NOT_AUTHORISED when direct.
+      check d.asyncCode(malformed) == Opt.some(ecInvalidParams)
+    else:
+      check d.asyncCode(malformed) == Opt.some(ecNotAuthorised)
+    d.release()
+    # Step 7 after step 3: the consumer's side is not ready.
+    var l = lateRc.handle(lateRc.routeId("l"))
+    clientDestroyGate.store(true)
+    var t: Thread[(Engine, string)]
+    check e.stopping(late.instance, t)
+    check l.asyncCode(malformed) == Opt.some(ecInvalidParams)
+    check l.asyncCode(req(5)) == Opt.some(ecNotReady)
+    l.release()
+    clientDestroyGate.store(false)
+    joinThread(t)
+    h.release()
+    e.finish()
+
+  test "[RUN-1101] [RUN-0829] [IFC-0740] [IFC-0741] a route that ends cancels the invocation; closed, it completes with its result; revoked, TRANSPORT_ERROR at once":
     let e = fixtureEngine(
       config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
     )
@@ -604,7 +668,7 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     check rc.close(closing).code == ecOk
     check rc.renew("r", revoking).code == ecNotAuthorised
     check done[1].finished
-    check done[1].codeOf == ecNotAuthorised
+    check done[1].codeOf == ecTransport
     check done[0].count.load == 0
     gate.store(false)
     check done[0].finished
@@ -738,7 +802,28 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     reentry.gate.store(false)
     leftover()
 
-  test "[IFC-0738] [IFC-0753] [IFC-0755] [IFC-0773] [IFC-0749] submit, then complete inline or from another thread; current is the invocation's context; synchronous calls still dispatch":
+  test "[IFC-0979] [IFC-0980] [TXT-0034] a deferred provider's completion with a status outside the provider set is MODULE_ERROR without its message; its MODULE_ERROR passes through":
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    var broken = h.started(req(13), addr done[0])
+    check done[0].finished
+    check done[0].codeOf == ecModule
+    check done[0].messageOf == "channel 13 is broken"
+    broken.release()
+    for channel in 9001 .. 9005:
+      checkpoint("channel " & $channel)
+      done[1].clear()
+      var c = h.started(req(channel), addr done[1])
+      check done[1].finished
+      check done[1].codeOf == ecModule
+      check done[1].messageOf == ""
+      c.release()
+    h.release()
+    e.finish()
+
+  test "[IFC-0738] [IFC-0753] [IFC-0755] [IFC-0773] [IFC-0749] [RUN-1088] submit, then complete inline or from another thread; current is the invocation's context; synchronous calls still dispatch":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -805,6 +890,30 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     sleep(20)
     check hooks.load == 1
     second.release()
+    h.release()
+    e.finish()
+
+  test "[RUN-1101] a route's end cancels a deferred invocation, whose provider then completes it CANCELLED: the call is TRANSPORT_ERROR, since its caller did not cancel it (INTERFACE l.2024; RUNTIME l.1271)":
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    discard e.started(dmeter())
+    let (_, rc) = e.startClient()
+    let route = rc.routeId("k")
+    var h = rc.handle(route)
+    mode.store(ord(dmHold))
+    settleOnCancel.store(true)
+    var call = h.started(req(5), addr done[0])
+    let (_, inv) = takeHeld()
+    check inv != nil
+    check rc.close(route).code == ecOk
+    check waitUntil(
+      proc(): bool =
+        hooks.load == 1
+    )
+    check done[0].finished
+    check done[0].codeOf == ecTransport
+    sleep(20)
+    check done[0].count.load == 1
+    call.release()
     h.release()
     e.finish()
 
@@ -896,7 +1005,7 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
     h.release()
     e.finish()
 
-  test "[IFC-0782] [IFC-0742] [RUN-0824] [RUN-0829] [RUN-0835] scoped publication through a deferred invocation's context, before and after its terminal outcome":
+  test "[IFC-0782] [IFC-0742] [RUN-0824] [RUN-0829] [RUN-0835] [TXT-0095] [TXT-0097] scoped publication through a deferred invocation's context, before and after its terminal outcome":
     let e = fixtureEngine(config(extra = @[dmeterStatic]))
     discard e.started(dmeter())
     let (_, rc) = e.startClient()
@@ -1232,6 +1341,63 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
     for c in calls.mitems:
       c.release()
     h.release()
+    e.finish()
+
+  test "[RUN-1101] a revoked route: an admitted call, asynchronous or synchronous, is TRANSPORT_ERROR while its provider still runs it; a call that no call worker had admitted is a new operation, NOT_AUTHORISED (RUNTIME l.1261, l.1271-1272)":
+    # [plan §2.13] Over local transport a consumer's call goes on its link at
+    # once, so none of the consumer's calls waits for a call worker.
+    directOnly()
+    var cfg =
+      config(denying(deny(action = Opt.some(aaRoute), operation = "renew_route")))
+    cfg.limits.refuseDelay = initDuration(seconds = 600) # no queued call is refused
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    let revoking = rc.routeId("k1")
+    var hr = rc.handle(revoking)
+    var ho = rc.handle(rc.routeId("k2"))
+    gate.store(true)
+    let before = held.load
+    const Workers = MaxCallWorkers + MaxNestedCallWorkers
+    var calls: seq[LogosAsyncCall]
+    calls.add(hr.started(req(19), addr many[0]))
+    for i in 1 ..< Workers:
+      calls.add(ho.started(req(19), addr many[i]))
+    bgDone.store(false)
+    var t: Thread[ptr LogosRouteHandle]
+    createThread(t, background, addr hr) # synchronous, on its own thread
+    check waitUntil(
+      proc(): bool =
+        held.load == before + Workers + 1
+    )
+    # Every call worker is busy: this one waits, not admitted.
+    calls.add(hr.started(req(19), addr many[Workers]))
+    sleep(50 * Slow)
+    check many[Workers].count.load == 0
+    check rc.renew("r", revoking).code == ecNotAuthorised
+    check many[0].finished
+    check many[0].codeOf == ecTransport
+    check many[Workers].finished
+    check many[Workers].codeOf == ecNotAuthorised
+    check held.load == before + Workers + 1 # their providers still run them (l.1272)
+    check not bgDone.load
+    gate.store(false)
+    joinThread(t)
+    check bgCode.load == ord(ecTransport)
+    for i in 1 ..< Workers:
+      check many[i].finished(seconds = 60 * Slow)
+      check many[i].codeOf == ecOk
+    check waitUntil(
+      proc(): bool =
+        held.load == before
+    )
+    sleep(20)
+    check many[0].count.load == 1
+    check many[Workers].count.load == 1
+    for c in calls.mitems:
+      c.release()
+    hr.release()
+    ho.release()
     e.finish()
 
   test "[IFC-0725] [IMPL-DECISION G242] completion callbacks that each wait for the next completion, deeper than 64, all complete":

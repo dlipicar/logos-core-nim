@@ -19,7 +19,7 @@ import ../src/logos_core/runtime/[configcheck, engine]
 from ../src/logos_core/runtime/rcevents import setRcDrainDelayForTests
 import ../src/logos_core/orchestration
 import ../src/logos_core/orchestration/[accounting, testhooks]
-import logos_sdk/kit/rcclient
+import logos_sdk/kit/[rc_arms, rcclient]
 import ../src/logos_core/loader/contract
 import ./support/[coretuner, fakeca, permfixture, slowdown]
 import ./kit/flaky_impl, logos_sdk/testing/fixtures/tuner_impl
@@ -348,7 +348,35 @@ proc replaceSettings(
   )
   check r.isOk
   if r.isOk:
-    result = r.get.state
+    result = r.get.accepted.get.state
+
+proc sites(dir: string, hit: proc(line: string): bool): seq[(string, string)] =
+  ## Each (path relative to `dir`, with `/`, routine) under `dir` with a line
+  ## `hit` accepts, comments skipped; a line outside any routine has the
+  ## routine "".
+  const routines = ["proc ", "func ", "template ", "iterator ", "method ", "converter "]
+  for path in walkDirRec(dir):
+    if not path.endsWith(".nim"):
+      continue
+    var routine = ""
+    for raw in readFile(path).splitLines:
+      let line = raw.strip
+      if line.len == 0 or line.startsWith("#"):
+        continue
+      let indent = raw.len - raw.strip(trailing = false).len
+      if indent == 0:
+        routine = ""
+      if indent <= 2:
+        for kw in routines:
+          if line.startsWith(kw):
+            var n = line[kw.len .. ^1]
+            let cut = n.find({'(', '*', '[', ':', ' ', '='})
+            if cut >= 0:
+              n = n[0 ..< cut]
+            routine = n
+      let site = (path.relativePath(dir).replace('\\', '/'), routine)
+      if hit(line) and site notin result:
+        result.add(site)
 
 proc imports(path: string): seq[string] =
   ## The module paths a Nim source's import and include statements name.
@@ -440,7 +468,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     check flaky[2].inits.load == 0 and flaky[3].inits.load == 0
     e.finish()
 
-  test "[RUN-0025] a stop between the read and the guarded request: INVALID_PARAMS, read again, nothing done":
+  test "[RUN-0025] [RUN-1113] [RUN-1114] a stop between the read and the guarded request: `stale-revision` with the current revision, read again, nothing done":
     setOrchestratorFaultsForTests(OrchestratorFaults(pauseBeforeRequest: true))
     let e = boot(value(defaults = starts(4)), slots = @[4])
     check waitUntil(
@@ -448,11 +476,13 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
         pausedForTests() >= 1
     )
     discard e.stop(flakyInstance(4)).tryGet
+    let current = e.view(flakyInstance(4)).tryGet.execution.revision
     let reads = callsForTests("get_readiness", flakyInstance(4))
     openPauseGateForTests()
     check waitUntil(
       proc(): bool =
-        "start_module flaky-4: answered INVALID_PARAMS" in diagText()
+        "start_module flaky-4: answered stale-revision (current revision " & $current &
+          ")" in diagText()
     )
     check waitUntil(
       proc(): bool =
@@ -734,7 +764,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     )
     e.finish()
 
-  test "[RUN-1065] [IMPL-DECISION G288] a missing configuration: the configuration event brings the probe forward":
+  test "[RUN-1065] [RUN-0696] [TXT-0582] [IMPL-DECISION G288] a missing configuration: blocked with `configuration-missing`, the configuration event brings the probe forward":
     let a = tunerAccepted()
     let tuner = ModuleRecord(
       module: "tuner_module",
@@ -767,7 +797,11 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
       proc(): bool =
         recovers("t1") >= 2
     )
-    check e.view("t1").tryGet.execution.intent == inRequested
+    let blocked = e.view("t1").tryGet
+    check blocked.execution.intent == inRequested
+    # [SPEC RUNTIME l.3613] The cause that prevents it, while it waits.
+    check blocked.state == msUnloaded
+    check blocked.failure.get.kind == fkConfigurationMissing
     let rc = flakyBinding(0)
     let t = LogosNSRuntimeModuleInstanceAddress(
       runtime_instance_id: e.runtimeInstanceId(), module_instance_id: "t1"
@@ -866,7 +900,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     check waitUntil(e.isReady(flakyInstance(0)))
     e.finish()
 
-  test "[RUN-0696] [RUN-1065] [IMPL-DECISION G291] an enforcement stop past its deadline is resumed by an uncharged probe, under disabled too":
+  test "[RUN-0696] [RUN-1065] [RUN-1092] [IMPL-DECISION G291] an enforcement stop past its deadline completes `unloaded` with its classification when its cleanup ends, and is resumed by an uncharged probe, under disabled too":
     let e = boot(value(defaults = starts(0), restart = Opt.some(disabled())))
     check waitUntil(e.isReady(flakyInstance(0)))
     flaky[0].destroyGate.store(true)
@@ -874,7 +908,7 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     check waitUntil(
       proc(): bool =
         let v = e.view(flakyInstance(0)).tryGet
-        v.state == msError and v.failure.isSome and
+        v.state == msStopping and v.failure.isSome and
           v.failure.get.kind == fkCleanupTimeout
     )
     flaky[0].destroyGate.store(false)
@@ -1059,7 +1093,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check recovers(flakyInstance(0)) == n
     e.finish()
 
-  test "[RUN-0696] [RUN-1055] [IMPL-DECISION G291] under disabled, settings that failed when the reconciliation stop overran: probes go on through the refusal, and an accepted replacement resumes it":
+  test "[RUN-0696] [RUN-1055] [RUN-1092] [IMPL-DECISION G291] under disabled, settings that failed when the reconciliation stop overran: the stop completes `unloaded` with permission-enforcement-failed, probes go on through the refusal, and an accepted replacement resumes it":
     let e = boot(
       value(defaults = starts(0, 1), restart = Opt.some(disabled())),
       slots = @[0, 1],
@@ -1069,11 +1103,12 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check waitUntil(e.isReady(flakyInstance(1)))
     flaky[0].destroyGate.store(true)
     check e.replaceSettings(1, flakyInstance(0), @[]).status == "pending"
-    # [G285] The stop overruns its deadline: settings failed, cleanup-timeout.
+    # [G285] The stop overruns its deadline: settings failed, still
+    # `stopping` with cleanup-timeout (RUNTIME l.575).
     check waitUntil(
       proc(): bool =
         let v = e.view(flakyInstance(0)).tryGet
-        v.state == msError and v.failure.isSome and
+        v.state == msStopping and v.failure.isSome and
           v.failure.get.kind == fkCleanupTimeout
     )
     check waitUntil(
@@ -1089,7 +1124,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
         let v = e.view(flakyInstance(0)).tryGet
         v.failure.isSome and v.failure.get.kind == fkPermissionEnforcementFailed
     )
-    check e.state(flakyInstance(0)) == msError
+    check e.state(flakyInstance(0)) == msUnloaded
     check e.replaceSettings(1, flakyInstance(0), @[ambient()]).status == "applied"
     check waitUntil(e.isReady(flakyInstance(0)))
     check "the restart policy is disabled" notin diagText()
@@ -1097,7 +1132,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check entryOf(flakyInstance(0)).isNone
     e.finish()
 
-  test "[RUN-0696] [RUN-1055] [IMPL-DECISION G291] under disabled, a recovery the authority denies after an authority stop overran: probes go on, and once allowed it is resumed":
+  test "[RUN-0696] [RUN-1055] [RUN-1092] [IMPL-DECISION G291] under disabled, a recovery the authority denies after an authority stop overran and completed: probes go on, and once allowed it is resumed":
     let e = boot(
       value(defaults = starts(0), authority = true, restart = Opt.some(disabled()))
     )
@@ -1107,7 +1142,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check waitUntil(
       proc(): bool =
         let v = e.view(flakyInstance(0)).tryGet
-        v.state == msError and v.failure.isSome and
+        v.state == msStopping and v.failure.isSome and
           v.failure.get.kind == fkCleanupTimeout
     )
     setScript(rule(vDeny, what = "execute", consumer = Orch))
@@ -1119,7 +1154,7 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
         let v = e.view(flakyInstance(0)).tryGet
         v.failure.isSome and v.failure.get.kind == fkAuthorityDenied
     )
-    check e.state(flakyInstance(0)) == msError
+    check e.state(flakyInstance(0)) == msUnloaded
     setScript()
     check waitUntil(e.isReady(flakyInstance(0)))
     check "the restart policy is disabled" notin diagText()
@@ -1181,21 +1216,33 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     check e.view(flakyInstance(0)).tryGet.execution.intent == inStopped
     e.finish()
 
-  test "[RUN-1055] [IMPL-DECISION G291] the engine sets authority-denied, authority-evaluation-failed and permission-enforcement-failed only where it refuses, denies, fails settings or stops for authority, never for a failure of an accepted attempt":
-    # Every routine in src/logos_core/runtime that names one of the three
-    # kinds, or builds a failure whose kind a variable holds. A new site must
-    # be read against G291 before it joins the list.
+  test "[RUN-1055] [IMPL-DECISION G291] the engine sets the resumable classifications only where it refuses, denies, fails settings or stops for authority, never for a failure of an accepted attempt":
+    # Every routine in src/logos_core/runtime that names one of the kinds of
+    # `ResumableFailures` the engine sets today, or builds a failure whose
+    # kind a variable holds. A new site must be read against G291 before it
+    # joins the list.
     let expected = @[
+      ("engine.nim", "blockedBy"),
+        # P5 §0.3 item 3: a start or recovery refused for an l.3613 cause
+      ("engine.nim", "bootstrap"),
+        # M14: a retained static instance mismatched at open (l.1322)
       ("engine.nim", "checkBootstrap"), # reads: the orchestration start refused
-      ("engine.nim", "executeDecided"), # G168: a denied execution decision
+      ("engine.nim", "completeStop"),
+        # C4: a reconciliation stop whose settings settled failed at its overrun
+      ("engine.nim", "executeDecided"),
+        # G168: a denied execution decision; M14: a start or recovery of a
+        # mismatched instance
       ("engine.nim", "failureKind"),
         # CA §8: what an ended authorization's stop records
       ("engine.nim", "profiledSettings"), # G281: a replacement failed while unloaded
       ("engine.nim", "restoreSettings"), # G281: pending settings settled failed at open
-      ("engine.nim", "selectConfig"), # reads: an allowed start clears it
+      ("engine.nim", "selectConfig"),
+        # M13: a start or recovery refused for want of configuration
       ("engine.nim", "settingsRefusal"), # G284: a start or recovery the settings refuse
       ("engine.nim", "settleSettings"),
         # G281, G285: settings settled failed while unloaded
+      ("engine.nim", "startupFailure"),
+        # reads: the code startup returns for a denial or a settings refusal
       ("engine.nim", "stopForAuthority"),
         # an enforcement stop; its kind is an AuthorityEnding
       ("plumbing.nim", ""), # the enumeration and AuthorityEndings
@@ -1203,40 +1250,35 @@ suite "orch: resumption when permissions become available (RUNTIME l.3801-3804) 
     ]
     const kinds = [
       "fkAuthorityDenied", "fkAuthorityEvaluationFailed",
-      "fkPermissionEnforcementFailed",
+      "fkPermissionEnforcementFailed", "fkConfigurationMissing",
+      "fkStaticBindingMismatch",
     ]
-    const routines =
-      ["proc ", "func ", "template ", "iterator ", "method ", "converter "]
     const built = "Failure(kind: "
-    var found: seq[(string, string)]
-    for f in walkDir(repo / "src" / "logos_core" / "runtime"):
-      if not f.path.endsWith(".nim"):
-        continue
-      var routine = ""
-      for raw in readFile(f.path).splitLines:
-        let line = raw.strip
-        if line.len == 0 or line.startsWith("#"):
-          continue
-        let indent = raw.len - raw.strip(trailing = false).len
-        if indent == 0:
-          routine = ""
-        if indent <= 2:
-          for kw in routines:
-            if line.startsWith(kw):
-              var n = line[kw.len .. ^1]
-              let cut = n.find({'(', '*', '[', ':', ' ', '='})
-              if cut >= 0:
-                n = n[0 ..< cut]
-              routine = n
-        var hit = false
+    let found = sites(
+      repo / "src" / "logos_core" / "runtime",
+      proc(line: string): bool =
         for k in kinds:
           if k in line:
-            hit = true
+            return true
         let i = line.find(built)
-        if i >= 0 and (i == 0 or line[i - 1] notin IdentChars) and
-            not line[i + built.len .. ^1].startsWith("fk"):
-          hit = true
-        let site = (f.path.extractFilename, routine)
-        if hit and site notin found:
-          found.add(site)
+        i >= 0 and (i == 0 or line[i - 1] notin IdentChars) and
+          not line[i + built.len .. ^1].startsWith("fk"),
+    )
     check found.sorted == expected.sorted
+
+  test "[RUN-1192] [RUN-1191] only a typed Module Loader error becomes a `loader-` classification: the engine builds one in `classify` alone, and the store reads a recorded one back":
+    # Every routine under src/ that builds or assigns a `fkLoader` failure.
+    # `classify` takes a `LoaderError` the Module Loader answered (RUNTIME
+    # l.3607); the bootstrap mechanism, the Module Host and the engine's own
+    # checks report `other`, `host-terminated` or a phase classification,
+    # never `loader-` (l.3608).
+    let found = sites(
+      repo / "src",
+      proc(line: string): bool =
+        "kind: fkLoader" in line or "kind = fkLoader" in line,
+    )
+    check found.sorted ==
+      @[
+        ("logos_core/runtime/engine.nim", "classify"),
+        ("logos_core/runtime/store.nim", "classificationOf"),
+      ]

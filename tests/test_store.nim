@@ -139,11 +139,58 @@ suite "run.store: the Runtime state store [IMPL]":
     s.close()
     check encodeSnapshot(reopen(dir)).tryGet == bytes
 
-  test "every classification RUNTIME l.3753 lists is stored and read back":
+  test "[IMPL-DECISION G357] v2: completed_shutdown and enforced round-trip; a v1 store reads without them":
+    var a = sample()
+    a.completedShutdown = true
+    a.instances[0].state = msStopping
+    a.instances[0].enforced = Opt.some(Failure(kind: fkAuthorityDenied, reason: "gone"))
+    let bytes = encodeSnapshot(a).tryGet
+    let x = LcnRsState.decode(bytes).tryGet
+    check x.format.kind == LcnRsStateFormatChoiceKind.Case1
+    check x.completed_shutdown == Opt.some(true)
+    let b = decodeSnapshot(bytes).tryGet
+    check b.completedShutdown
+    check b.instances[0].enforced.get.kind == fkAuthorityDenied
+    check b.instances[0].enforced.get.reason == "gone"
+    check b.instances[1].enforced.isNone
+    # Without the record the field is absent, not false.
+    a.completedShutdown = false
+    check LcnRsState.decode(encodeSnapshot(a).tryGet).tryGet.completed_shutdown.isNone
+    # A store an earlier build wrote (format v1) reads as v2 without them, and
+    # is written back as v2.
+    var v1 = LcnRsState.decode(encodeSnapshot(sample()).tryGet).tryGet
+    v1.format = LcnRsStateFormatChoice(kind: LcnRsStateFormatChoiceKind.Case0)
+    let old = decodeSnapshot(encodeCbor(toCbor(v1))).tryGet
+    check not old.completedShutdown
+    check old.instances.len == 3
+    check LcnRsState.decode(encodeSnapshot(old).tryGet).tryGet.format.kind ==
+      LcnRsStateFormatChoiceKind.Case1
+
+  test "[TXT-0203] every classification RUNTIME l.3605 lists, in its order, is stored and read back":
+    # [SPEC RUNTIME l.3605] The list as the re-pin's frozen baseline holds
+    # the sentence (spec/repin-baseline.toml, TXT-0203), not typed here.
+    let text = readFile(repo / "spec" / "repin-baseline.toml")
+    let at = text.find("id = \"TXT-0203\"")
+    let w = text.find("what = \"", at)
+    check at >= 0 and w > at
+    let sentence = text[w ..< text.find('\n', w)]
+    var listed: seq[string]
+    var i = 0
+    while true:
+      let a = sentence.find('`', i)
+      if a < 0:
+        break
+      let b = sentence.find('`', a + 1)
+      listed.add(sentence[a + 1 ..< b])
+      i = b + 1
+    var ours: seq[string]
     for k in FailureKind:
       if k != fkLoader:
+        ours.add($k)
         check classificationOf($k).tryGet.kind == k
-    # [I89] `loader-<code>` for each typed Module Loader error (l.3754).
+    check listed.len == 17
+    check ours == listed
+    # [I89] `loader-<code>` for each typed Module Loader error (l.3607).
     for c in LoaderErrorCode:
       let f = classificationOf("loader-" & $c).tryGet
       check f.kind == fkLoader and f.loader == c
@@ -184,20 +231,20 @@ suite "run.store: the Runtime state store [IMPL]":
     cases.add(
       ("schema mismatch", encodeCbor(cborMap(@[(cbor("format"), cbor(1'u64))])))
     )
-    var v2 = LcnRsState.decode(good).tryGet
-    let v2bytes = encodeCbor(
+    var v3 = LcnRsState.decode(good).tryGet
+    let v3bytes = encodeCbor(
       cborMap(
         @[
-          (cbor("format"), cbor("logos-core-nim.runtime-state.v2")),
-          (cbor("runtime_instance_id"), cbor(v2.runtime_instance_id)),
-          (cbor("epoch"), cbor(v2.epoch)),
+          (cbor("format"), cbor("logos-core-nim.runtime-state.v3")),
+          (cbor("runtime_instance_id"), cbor(v3.runtime_instance_id)),
+          (cbor("epoch"), cbor(v3.epoch)),
           (cbor("instances"), cborArray(@[])),
           (cbor("retired"), cborArray(@[])),
           (cbor("create_keys"), cborArray(@[])),
         ]
       )
     )
-    cases.add(("another format", v2bytes))
+    cases.add(("another format", v3bytes))
     # Hand-built invariant failures, encoded without the store's checks.
     proc raw(s: Snapshot): seq[byte] =
       var x = LcnRsState.decode(encodeSnapshot(sample()).tryGet).tryGet
@@ -246,6 +293,22 @@ suite "run.store: the Runtime state store [IMPL]":
     var errNoFailure = LcnRsState.decode(good).tryGet
     errNoFailure.instances[1].failure = Opt.none(LcnRsFailure)
     cases.add(("error without a failure", encodeCbor(toCbor(errNoFailure))))
+    # [G357] `enforced` only beside `stopping`; neither v2 field in a v1 store.
+    var strayEnforced = LcnRsState.decode(good).tryGet
+    strayEnforced.instances[0].enforced =
+      Opt.some(LcnRsFailure(classification: "authority-denied"))
+    cases.add(("enforced out of stopping", encodeCbor(toCbor(strayEnforced))))
+    var v1Done = LcnRsState.decode(good).tryGet
+    v1Done.format = LcnRsStateFormatChoice(kind: LcnRsStateFormatChoiceKind.Case0)
+    v1Done.completed_shutdown = Opt.some(true)
+    cases.add(("a v1 store with completed_shutdown", encodeCbor(toCbor(v1Done))))
+    var v1Enforced = LcnRsState.decode(good).tryGet
+    v1Enforced.format = LcnRsStateFormatChoice(kind: LcnRsStateFormatChoiceKind.Case0)
+    v1Enforced.instances[0].state =
+      LcnRsInstanceStateChoice(kind: LcnRsInstanceStateChoiceKind.Stopping)
+    v1Enforced.instances[0].enforced =
+      Opt.some(LcnRsFailure(classification: "authority-denied"))
+    cases.add(("a v1 store with enforced", encodeCbor(toCbor(v1Enforced))))
     let expected = {
       "truncated": "malformed-cbor",
       "non-deterministic": "non-deterministic-cbor",
@@ -258,6 +321,10 @@ suite "run.store: the Runtime state store [IMPL]":
       "a key naming an unknown instance": "unknown instance",
       "an intent revision without requested intent": "without requested intent",
       "error without a failure": "error without a failure",
+      "enforced out of stopping": "an enforced classification out of stopping",
+      "a v1 store with completed_shutdown":
+        "a v1 state store carries completed_shutdown",
+      "a v1 store with enforced": "a v1 state store carries an enforced classification",
     }.toTable
     check expected.len == cases.len
     for (name, bytes) in cases:
@@ -487,3 +554,25 @@ suite "run.store: the Runtime state store [IMPL]":
       check readBounded(dir / "state", 16).get.get == @[1'u8]
     else:
       skip()
+
+  test "[IMPL-DECISION G160] [G394] a record's extends round-trips, is written only when non-empty, and is a declaration fact":
+    var earlier, other: Digest
+    earlier[0] = 1
+    other[0] = 2
+    var a = sample()
+    a.instances[0].record.extends = @[earlier, other]
+    let bytes = encodeSnapshot(a).tryGet
+    let b = decodeSnapshot(bytes).tryGet
+    check b.instances[0].record.extends == @[earlier, other]
+    check encodeSnapshot(b).tryGet == bytes
+    # A record without it keeps its bytes.
+    check toRs(meterRecord()).extends.isNone
+    check encodeSnapshot(sample()).tryGet != bytes
+    # A changed set is a changed declaration fact.
+    var c = a.instances[0].record
+    c.extends = @[earlier]
+    check factBytes(c) != factBytes(a.instances[0].record)
+    # A present but empty array is refused when read.
+    var empty = toRs(meterRecord())
+    empty.extends = Opt.some(newSeq[typeof(empty.implements.get[0])]())
+    check fromRs(empty).error == "a record's extends is present but empty"

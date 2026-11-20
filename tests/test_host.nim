@@ -1,7 +1,7 @@
 ## The Host Embedding API in process (RUNTIME §13; `runtime/host.nim`): the
 ## `logos-core-nim.app-config.v1` configuration (G76), the §13.1 version and
 ## size checks, the §13.4 call order, registration, the start path to the
-## orchestration instance's `ready` (G190), shutdown, waiting and destruction,
+## orchestration instance's `ready` (RUNTIME l.3838), shutdown, waiting and destruction,
 ## and Runtime Control `get_readiness`.
 
 import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads, unicode]
@@ -10,6 +10,7 @@ import logos_sdk/cbor
 import logos_sdk/abi/[host, types]
 import logos_sdk/crypto/blake3
 import logos_sdk/iface/outcome
+from logos_sdk/kit/rc_arms import accepted, refusal
 import
   ../src/logos_core/runtime/[engine, host, host_config, host_config_types],
   logos_sdk/kit/rc_types
@@ -76,6 +77,10 @@ proc withEntry(v: CborValue, key: string, x: CborValue): CborValue =
 
 proc root(b: byte): SchemaCommitment =
   SchemaCommitment(schema_root: newSeqWith(32, b))
+
+func rootOf(c: SchemaCommitment): Digest =
+  for i in 0 ..< result.len:
+    result[i] = c.schema_root[i]
 
 proc authorityPolicy(source = "test"): LcnAuthorityPolicy =
   ## The smallest policy 8a loads: anyone may observe.
@@ -178,7 +183,7 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.modules[0].module = repeat('a', 65)
     check parse(c).rejects("lcn.app_config")
 
-  test "[RUN-0741] present arrays are non-empty (RUNTIME §8 l.1428)":
+  test "[RUN-0741] [RUN-0267] present arrays are non-empty (RUNTIME §8 l.1357)":
     var c = baseConfig()
     c.modules = @[]
     check parse(c).rejects("modules is empty")
@@ -189,11 +194,67 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.modules[1].implements = Opt.some(newSeq[SchemaCommitment]())
     check parse(c).rejects("implements is present but empty")
     c = baseConfig()
+    c.modules[1].primary_contract = Opt.some(root(7))
+    c.modules[1].extends = Opt.some(newSeq[SchemaCommitment]())
+    check parse(c).rejects("extends is present but empty")
+    c = baseConfig()
     c.modules[1].requires = Opt.some(newSeq[LcnAppRequirement]())
     check parse(c).rejects("requires is present but empty")
     c = baseConfig()
     c.modules[1].requested_permissions = Opt.some(newSeq[LcnAppPermission]())
     check parse(c).rejects("requested_permissions is present but empty")
+
+  test "[RUN-1105] [TXT-0548] [TXT-0552] [G394] the expected contract facts are the input's, and each set is checked":
+    # [TXT-0548] `primary_contract`, `implements` and `extends` are carried
+    # into the record as the configuration states them, for an instance and
+    # for a declaration.
+    var c = baseConfig()
+    c.modules[1].primary_contract = Opt.some(root(7))
+    c.modules[1].implements = Opt.some(@[root(8)])
+    c.modules[1].extends = Opt.some(@[root(9), root(10)])
+    var decl = LcnAppDeclaration(
+      module: "other_module",
+      implementation: c.modules[1].implementation,
+      primary_contract: Opt.some(root(11)),
+      extends: Opt.some(@[root(12)]),
+    )
+    c.declarations = Opt.some(@[decl])
+    let h = parse(c).get
+    let r = h.modules[1].record
+    check r.primaryContract == Opt.some(rootOf(root(7)))
+    check r.implements == @[rootOf(root(8))]
+    check r.extends == @[rootOf(root(9)), rootOf(root(10))]
+    check h.declarations[0].record.extends == @[rootOf(root(12))]
+    check h.declarations[0].record.implements.len == 0
+    # [RUN-1105; G394 r10] Unique over `implements` and `extends` together.
+    c = baseConfig()
+    c.modules[1].primary_contract = Opt.some(root(7))
+    c.modules[1].implements = Opt.some(@[root(8)])
+    c.modules[1].extends = Opt.some(@[root(8)])
+    check parse(c).rejects("an implemented or extended schema commitment repeats")
+    # [G394 r11] `extends` needs a contract the module provides.
+    c = baseConfig()
+    c.modules[1].extends = Opt.some(@[root(9)])
+    check parse(c).rejects("extends needs a primary_contract or implements")
+    # [TXT-0552] Each `requires` entry names a distinct contract.
+    c = baseConfig()
+    c.modules[1].requires = Opt.some(
+      @[
+        LcnAppRequirement(
+          contract: root(7),
+          cardinality: LcnAppRequirementCardinalityChoice(
+            kind: LcnAppRequirementCardinalityChoiceKind.Single
+          ),
+        ),
+        LcnAppRequirement(
+          contract: root(7),
+          cardinality: LcnAppRequirementCardinalityChoice(
+            kind: LcnAppRequirementCardinalityChoiceKind.All_runtime_visible
+          ),
+        ),
+      ]
+    )
+    check parse(c).rejects("two requires entries name one contract")
 
   test "[S5] a policy kind other than allow-all is not supported yet":
     var cv = toCbor(baseConfig())
@@ -1122,10 +1183,15 @@ proc rcCall(
     result[1] = copyBytes(buf, len)
     rc.vtable.releaseResponse(rc, buf, len)
 
+const StaleAnswer = -4
+  ## [re-pin P4a] a start answered with the typed `stale-revision`: a
+  ## successful call whose response holds the error arm
+
 proc startModule(
     rc: ptr LogosRuntimeControlBinding, module, instance: string, expected: Opt[uint64]
-): ErrorCode {.gcsafe.} =
-  rcCall(
+): int {.gcsafe.} =
+  ## The start's code, or `StaleAnswer`.
+  let (code, response) = rcCall(
     rc,
     "start_module",
     encode(
@@ -1135,7 +1201,11 @@ proc startModule(
         expected_execution_revision: expected,
       )
     ).tryGet,
-  )[0]
+  )
+  if code == ecOk and
+      LogosNSRuntimeControlStartModuleResponse.decode(response).tryGet.refusal.isSome:
+    return StaleAnswer
+  ord(code)
 
 proc readiness(
     rc: ptr LogosRuntimeControlBinding, module, instance: string
@@ -1168,10 +1238,10 @@ proc orchestrate(rc: ptr LogosRuntimeControlBinding) {.thread.} =
     if x.intent.kind != LogosNSRuntimeControlExecutionStateIntentChoiceKind.Uninitialized:
       orchResults[i].store(AlreadyRequested)
       continue
-    orchResults[i].store(ord(rc.startModule(module, instance, Opt.some(x.revision))))
+    orchResults[i].store(rc.startModule(module, instance, Opt.some(x.revision)))
   # The revision read before the start is stale now.
   orchResults[Targets.len].store(
-    ord(rc.startModule("meter_module", "meter-1", Opt.some(meterRevision)))
+    rc.startModule("meter_module", "meter-1", Opt.some(meterRevision))
   )
   orchThreadDone.store(true)
 
@@ -1196,9 +1266,7 @@ proc orchInit(
       )
     of omStartBroken:
       orchInitCode.store(
-        ord(
-          input.runtimeControl.startModule("meter_module", "broken-1", Opt.none(uint64))
-        )
+        input.runtimeControl.startModule("meter_module", "broken-1", Opt.none(uint64))
       )
     of omWaitProbe:
       orchInitCode.store(
@@ -1658,7 +1726,7 @@ suite "run.host-api: registration (RUNTIME §13.3)":
 
 # Startup ------------------------------------------------------------------------------
 
-suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
+suite "run.host-api: startup (RUNTIME §13.2, l.1640, l.3838-3940) [G191]":
   setup:
     resetOrchestrator()
 
@@ -1695,7 +1763,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check orchResults[0].load == AlreadyRequested # itself: not restarted
     check orchResults[1].load == ord(ecOk)
     check orchResults[2].load == ord(ecOk)
-    check orchResults[3].load == ord(ecInvalidParams) # a stale revision
+    check orchResults[3].load == StaleAnswer # a stale revision
     check rt.state("meter-1") == msReady
     check rt.state("sensor-1") == msReady # direct_dynamic, verified by its digest
     rt.finish()
@@ -1712,7 +1780,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check runtimeWaitForShutdown(rt).ec == ecOk
     check runtimeDestroy(rt).ec == ecOk
 
-  test "[RUN-0759] [IMPL-DECISION G190] a shutdown accepted before ready is CANCELLED, and stays CANCELLED when the init then fails":
+  test "[RUN-0759] [RUN-1202] a shutdown accepted before ready is CANCELLED, and stays CANCELLED when the init then fails":
     for fail in [false, true]:
       resetOrchestrator()
       orchMode.store(ord(omShutdown))
@@ -1748,7 +1816,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check runtimeWaitForShutdown(rt).ec == ecOk
     check runtimeDestroy(rt).ec == ecOk
 
-  test "[IMPL-DECISION G190] [RUN-0737] [RUN-0765] a failed start: MODULE_ERROR or NOT_AUTHORISED, nothing stopped, and the handle shuts down":
+  test "[RUN-1201] [RUN-0737] [RUN-0765] a failed start: MODULE_ERROR, TIMEOUT for the startup deadline, or NOT_AUTHORISED; nothing stopped, and the handle shuts down":
     orchFail.store(true)
     var rt = registered(deployment())
     var r = runtimeStart(rt)
@@ -1765,7 +1833,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     c.runtime.startup_deadline_ms = Opt.some(uint32(250 * Slow))
     rt = registered(c)
     r = runtimeStart(rt)
-    check r.ec == ecModule and "startup-timeout" in r.text
+    check r.ec == ecTimeout and "startup-timeout" in r.text
     rt.finish()
     resetOrchestrator()
     rt = registered(deployment())
@@ -1786,13 +1854,15 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640) [G190] [G191]":
     check rt.state("orch") == msReady
     rt.finish()
 
-  test "[IMPL-DECISION G243] [IMPL] R2: a static binding never registered fails start before anything runs":
+  test "[IMPL-DECISION G243] [IMPL-DECISION S4] [IMPL] R2: a static binding never registered fails start before any module runs":
     let rt = create(deployment())
     check rt.register("orchestrator", orchTable()).ec == ecOk
     let r = runtimeStart(rt)
     check r.ec == ecInvalidParams
     check "meter-1" in r.text and "meter" in r.text
-    check engineOf(rt) == nil and orchNames.load == 0
+    # [S4 changed] The engine refuses it once the store is open, since only
+    # there is a retained instance told apart (RUNTIME l.1321).
+    check orchNames.load == 0 and orchInits.load == 0
     # The attempt is spent: registration is closed and destroy needs a shutdown.
     check rt.register("meter", meterModuleStaticSymbols()).ec == ecNotReady
     check runtimeDestroy(rt).ec == ecNotReady
@@ -1937,7 +2007,7 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check meter3.execution.intentRevision == meter1.execution.intentRevision
     rt.finish()
 
-  test "[RUN-0698] [IMPL-DECISION G191] orchestration stopped before shutdown is started again, with a diagnostic":
+  test "[RUN-0698] [RUN-1109] [IMPL-DECISION G191] orchestration stopped before shutdown is started again, with a diagnostic":
     let base = work / "restart-2"
     var rt = registered(persistent(deployment(), base))
     check runtimeStart(rt).ec == ecOk
@@ -1952,7 +2022,7 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check engineOf(rt).diagnostics.anyIt("whose intent was stopped" in it)
     rt.finish()
 
-  test "[IMPL-DECISION G192] the Runtime's identity is the store's, or the configured one":
+  test "[TXT-0168] [IMPL-DECISION G192] the Runtime's identity is the store's, or the configured one":
     let base = work / "restart-3"
     var rt = registered(persistent(deployment(), base))
     check runtimeStart(rt).ec == ecOk
@@ -1975,21 +2045,44 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check selfId() == "rt-named"
     rt.finish()
 
-  test "[IMPL-DECISION G160] a configured instance whose declaration changed is refused before anything runs":
+  test "[RUN-1103] [TXT-0299] [TXT-0300] [IMPL-DECISION G160] a configured static instance whose declaration changed is not refused: start is OK, its retained record stays, and it remains `unloaded` with `static-binding-mismatch`":
     let base = work / "restart-5"
+    orchMode.store(ord(omAutostart))
     var rt = registered(persistent(deployment(), base))
     check runtimeStart(rt).ec == ecOk
+    check waitUntil(
+      proc(): bool =
+        orchThreadDone.load
+    )
+    check rt.state("meter-1") == msReady
     rt.finish()
+    resetOrchestrator()
     var c = persistent(deployment(), base)
     c.modules[1].primary_contract = Opt.some(root(7))
     rt = registered(c)
-    let r = runtimeStart(rt)
-    check r.ec == ecInvalidParams
-    check "meter-1" in r.text
+    check runtimeStart(rt).ec == ecOk
     check orchInits.load == 1
+    let v = engineOf(rt).view("meter-1").tryGet
+    check v.state == msUnloaded and v.execution.intent == inRequested
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
+    check v.primaryContract.isNone # the retained record, not the changed one
+    let (code, _) =
+      rcCall(orchBinding(), "recover_module", recoverRequest("meter-1", v))
+    check code == ecNotReady
+    check rt.state("meter-1") == msUnloaded
+    rt.finish()
+    # The same facts again: the same instance is realizable.
+    rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    let w = engineOf(rt).view("meter-1").tryGet
+    let (again, _) =
+      rcCall(orchBinding(), "recover_module", recoverRequest("meter-1", w))
+    check again == ecOk
+    check rt.state("meter-1") == msReady
+    check rt.failureOf("meter-1") == ""
     rt.finish()
 
-  test "[IMPL] a retained instance whose static binding is no longer registered: start is OK, its recovery fails in the loader":
+  test "[RUN-1103] [RUN-1191] [TXT-0300] a retained instance whose static binding is no longer registered: start is OK, its recovery is NOT_READY with `static-binding-mismatch`, never a `loader-` classification":
     let base = work / "restart-unbound"
     orchMode.store(ord(omAutostart))
     var rt = registered(persistent(deployment(), base))
@@ -2009,13 +2102,50 @@ suite "run.host-api: persistent Runtime state (I82) [G191] [G192]":
     check runtimeStart(rt).ec == ecOk
     let v = engineOf(rt).view("meter-1").tryGet
     check v.state == msUnloaded and v.execution.intent == inRequested
-    let (code, response) =
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
+    let (code, _) =
       rcCall(orchBinding(), "recover_module", recoverRequest("meter-1", v))
-    check code == ecOk
-    check LogosNSRuntimeControlRecoverModuleResponse.decode(response).tryGet.state.kind ==
-      LogosNSRuntimeControlStateKind.Error
-    # [I89] The Loader knows no registration with that binding.
-    check rt.failureOf("meter-1") == "loader-invalid-request"
+    check code == ecNotReady
+    # [SPEC RUNTIME l.3607] The more specific classification; the Loader is
+    # never asked.
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
+    check rt.state("meter-1") == msUnloaded
+    rt.finish()
+
+  test "[RUN-1102] [RUN-1103] [TXT-0300] an implementation incompatible with the retained state, registered under another binding id for a replacement instance: the replacement starts; the retained instance keeps its record, `unloaded` with `static-binding-mismatch`":
+    let base = work / "restart-replaced"
+    orchMode.store(ord(omAutostart))
+    var rt = registered(persistent(deployment(), base))
+    check runtimeStart(rt).ec == ecOk
+    check waitUntil(
+      proc(): bool =
+        orchThreadDone.load
+    )
+    check rt.state("meter-1") == msReady
+    rt.finish()
+    resetOrchestrator()
+    # The deployment registers the new implementation as `meter-v2` and
+    # configures the replacement `meter-2` on it; `meter` is not registered,
+    # and meter-1 is still configured on it.
+    let c = persistent(
+      deployment(@[staticModule("meter-2", "meter_module", "meter-v2")]), base
+    )
+    rt = create(c)
+    check rt.register("orchestrator", orchTable()).ec == ecOk
+    check rt.register("meter-v2", meterModuleStaticSymbols()).ec == ecOk
+    check runtimeStart(rt).ec == ecOk
+    let v = engineOf(rt).view("meter-1").tryGet
+    check v.state == msUnloaded and v.execution.intent == inRequested
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
+    let r = engineOf(rt).view("meter-2").tryGet
+    check r.state == msUnloaded and r.failure.isNone
+    check orchBinding().startModule(
+      "meter_module", "meter-2", Opt.some(r.execution.revision)
+    ) == ord(ecOk)
+    check rt.state("meter-2") == msReady
+    check rt.failureOf("meter-2") == ""
+    check rt.state("meter-1") == msUnloaded
+    check rt.failureOf("meter-1") == "static-binding-mismatch"
     rt.finish()
 
   test "[IMPL] two handles on one store: the second start is MODULE_ERROR":
