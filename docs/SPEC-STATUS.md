@@ -144,7 +144,7 @@ Unanswered upstream and bearing on Tier 5: NP-12 to NP-14 (NP-11 is settled by t
 NP-15 by PM l.1096-1101 at 6cac8335),
 NE-07, NL-12, NA-12, HC-02, HC-04, HC-07, HC-10; in `claude-spec-comments-3.md` TF-07, TF-43, TF-44,
 TF-45, TF-52, TS-04 to TS-06, TP-07, the TF-06 remarks of G352 and G354, and the items the re-pin opened,
-TF-55 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and TF-30 are resolved at
+TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and TF-30 are resolved at
 6cac8335: the comments document lists them among the items the current specs resolve (re-pin P9).
 
 ### Inspection items that hold only while a feature is absent
