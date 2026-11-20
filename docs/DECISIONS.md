@@ -5585,6 +5585,27 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   only; step 5-6a provisions the Package Manager and Storage instances without records (PKG-0513).
 - **Status:** settled by spec text; no gap. Recorded 2026-11-17 by step 5-0.
 
+### G391 — The handoff's `extends`: deferred to 5-8, its construction built by 5-5 (M28)
+- **Kind:** Choice (re-pin P8; plan `tier5-plans/repin/P8.md` §2.6; STATUS M28; parent plan §5) · **Specs:** PACKAGE
+  MANAGER §12 l.1393-1405 (PKG-0338), l.1434-1435 (PKG-0347), l.1440-1441 (PKG-0351, TXT-0545), l.827; RUNTIME
+  l.1300-1303; INTERFACE l.1717.
+- **Description:** at 6cac8335 the handoff schema carries `? extends` (l.1401), the handoff preserves the declaration's
+  `extends` (l.1434-1435), and the Runtime requires the descriptor's extended-contract set to match the handoff exactly
+  (l.1441). No handoff exists before 5-5 and 5-8 (owner decision 1(a), 2026-11-13).
+- **Decision:**
+  - P8 does not build the handoff. PKG-0338, PKG-0347 and PKG-0351 stay deferred by name to work item 5-8, each with a
+    `compared` record, and TXT-0545 rides PKG-0351 to 5-8.
+  - **The Package Manager's side of the handoff, its construction (PM l.827), is built in 5-5 (TIER5-PLAN §5).** It must
+    carry `extends` from the manifest's module declaration, without adding or widening (l.1434-1435); otherwise 5-8's
+    exact match has nothing to compare.
+  - P8 builds the Runtime's comparison of a supplied contract-reference set with the validated descriptor
+    (`matchesContracts` with the extended set) for host-configuration and static records; 5-8 applies it to the handoff.
+    The rule for a field a record omits waits on TF-62 (IFC-0246).
+  - PKG-0351 and TXT-0545 leave `[deferred]` with a 5-8 test that carries both ids.
+  - TXT-0545's baseline entry names no section; `spectrace` derives it from its lines (l.1401, l.1441: §12), so it rides
+    PKG-0351 (re-pin P8b Q1).
+- **Status:** decided 2026-11-19 by planning; recorded 2026-11-20 (re-pin P8b).
+
 ---
 
 ## 10. logosctl, logosd and the session
@@ -6855,6 +6876,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G377 | the denial codes: coverage, order, format, issuance | Reading and Choice (TL-04, UF-53) | 7 |
 | G378 | an ordinary consumer's `evaluate` | Reading | 7 |
 | G379 | what an evaluating module's scopes may name | GAP (TF-61), interim | 7 |
+| G391 | the handoff's extends: deferred to 5-8, built by 5-5 | Choice | 9 |
 | G392 | contract extension: the SDK and Package Manager readings | Reading | 3 |
 | G394 | contract extension: the Runtime readings | Reading | 6 |
 

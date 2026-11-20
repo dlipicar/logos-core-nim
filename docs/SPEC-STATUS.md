@@ -82,7 +82,7 @@ The 308 PKG units by step (`PKG-` omitted):
 | 5-6a | A2 | 2 | 0513, 0514 |
 | 5-6b | A1 | 49 | 0381, 0383-0387, 0525-0533, 0538-0542, 0544-0562, 0564-0573 |
 | 5-7a | A4 | 1 | 0435 |
-| 5-8 | B | 19 | 0060, 0287, 0289, 0335, 0337-0345, 0347-0351, 0512 |
+| 5-8 | B | 19 | 0060, 0287, 0289, 0335, 0337-0345, 0347-0351, 0512 (and TXT-0545, riding on 0351: G391) |
 | 5-8 | A2 | 1 | 0354 |
 | 5-8 | A4 | 2 | 0423, 0424 |
 | 5-10 | D | 31 | 0017, 0224-0252, 0273 |
@@ -370,6 +370,21 @@ G352 and G354 (DECISIONS, "Open items").
 
   Claimed: CMT-0242, IFC-0958 (its SDK half until P8b), IFC-0968, IFC-0969, PKG-0577 to PKG-0580, PKG-0589 and PKG-0590;
   IFC-0226, IFC-0230 and IFC-0245 compared. 14 text entries cleared. IFC-0246 stays pending until P8b.
+- 2026-11-20, re-pin P8b (I112 part b), contract extension in the Runtime at 6cac8335:
+  - A record may state `extends` (host configuration, store, static records); each set it states must equal the validated
+    descriptor's, and an `extends` entry that does not hold fails the bind (G394 r10, r11).
+  - A route may select an earlier contract the provider extends and resolves only that contract's methods and events
+    (r12); its schema answer is built when the route is made and held by it, with the 8 MiB check (r14). The Runtime's
+    endpoint and a Module Host's serve the earlier roots through one function (Q4), and each session builds its boundary
+    from the selected root's own input, so payloads stay between the caller and the provider.
+  - `describe_provider` asks a discover decision per extended view (r15); `list_modules` reports `extends` (r13).
+  - PKG-0338, PKG-0347 and PKG-0351, the handoff's `extends`, are deferred by name to 5-8, and TXT-0545 rides PKG-0351
+    there (G391); `spectrace` derives a section-less new-side entry's section from its lines (Q1).
+  - Held on TF-62: the rule for a record that omits a field (IFC-0246's engine half) and RUN-0258's record, so P8 stays
+    open.
+
+  Claimed: IFC-0957, RUN-1104 and RUN-1105, and IFC-0958's route half; RUN-0265 and RUN-0267 compared; RUN-0268 stale
+  (RUN-1105). 11 text entries cleared, TXT-0545 deferred.
 
 ## Tiers at f4f83471 (the original plan)
 

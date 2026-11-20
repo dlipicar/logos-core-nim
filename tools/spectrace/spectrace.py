@@ -1296,6 +1296,34 @@ def rides_within(entry: dict, unit: str, unit_section: str | None) -> bool:
     return any(unit_section == f"§{m.group(1)}" or unit_section.startswith(f"§{m.group(1)}.") for m in named)
 
 
+LINE_PART_RE = re.compile(r"(\d+)(?:-(\d+))?")
+
+
+def derived_section(entry: dict, units: list[Unit]) -> str | None:
+    """[re-pin P8b Q1] The section of a text entry: its `section`, else, for a new-side entry, the
+    section of the last unit of its spec's ledger (`units`) at or before each of its lines, when
+    every line gives the same one. A `line` part that is not a line or a range, such as "none",
+    gives none, and so does an old-side entry."""
+    if entry.get("section"):
+        return str(entry["section"])
+    if entry.get("side") != "new":
+        return None
+    lines: list[int] = []
+    for part in str(entry.get("line", "")).split(","):
+        m = LINE_PART_RE.fullmatch(part.strip())
+        if not m:
+            return None
+        lines += [int(m.group(1)), int(m.group(2) or m.group(1))]
+    ordered = sorted((u for u in units if not u.retired), key=lambda u: u.line)
+    found = set()
+    for n in lines:
+        before = [u.section for u in ordered if u.line <= n]
+        if not before:
+            return None
+        found.add(before[-1])
+    return found.pop() if len(found) == 1 else None
+
+
 def baseline_findings(root: Path, pending: Pending, cleared: dict, state) -> list[str]:
     """Every entry of the frozen list is still open on its sub-step, or left with the evidence its kind needs."""
     base = load_toml(root / BASELINE_FILE)
@@ -1361,6 +1389,11 @@ def baseline_findings(root: Path, pending: Pending, cleared: dict, state) -> lis
                     sections[u.id] = u.section
         return sections.get(uid)
 
+    def entry_section(entry: dict) -> str | None:
+        """A text entry's section, derived from its lines when it names none (Q1)."""
+        units = [u for path in ledger_files(root) if path.stem == entry.get("spec") for u in load_ledger(path)[1]]
+        return derived_section(entry, units)
+
     open_text = {e.get("id"): e for e in pending.text}
     done = {e.get("id"): e for e in cleared.get("text", [])}
     lowered = {r.get("id") for r in cleared.get("lowered", []) if decided(r.get("id", ""), r)}
@@ -1381,10 +1414,11 @@ def baseline_findings(root: Path, pending: Pending, cleared: dict, state) -> lis
                 findings.append(f"{tid} is in [deferred] with no [[deferred]] record naming the unit it rides on in {CLEARED_FILE}")
             elif pending.deferred.get(unit) != pending.deferred[tid]:
                 findings.append(f"{tid} rides on {unit}, which is not deferred to {pending.deferred[tid]}")
-            elif not rides_within(b, unit, section_of(unit)):
+            elif not rides_within({**b, "section": entry_section(b)}, unit, section_of(unit)):
+                derived = "" if b.get("section") else ", derived from its lines"
                 findings.append(
-                    f"{tid} ({b.get('spec')} {b.get('section')}) rides on {unit}, of another section,"
-                    " or of another spec its sentence does not name with that section"
+                    f"{tid} ({b.get('spec')} {entry_section(b) or 'no section'}{derived}) rides on {unit},"
+                    " of another section, or of another spec its sentence does not name with that section"
                 )
         elif tid not in done:
             findings.append(f"{tid} is neither open nor cleared")
@@ -1607,6 +1641,20 @@ def pending_self_test() -> int:
         return behind.replace('spec = "RUN"', 'spec = "CAP"').replace('what = "x"', f'what = "{what}"')
 
     both = 'test "[RUN-0001] [TXT-0001] it holds":\n  check true\n'
+    # [re-pin P8b Q1] An entry with no section rides by the sections of its lines: RUN-0001 opens §1
+    # at l.1 and RUN-0002 opens §2 at l.10.
+    opens = '{"id": "RUN-0002", "kind": "kw", "section": "§2", "heading": "Two", "line": 10, "fingerprint": "", "text": "y"}'
+    sectioned = {**ledger, "conformance/requirements/RUN.jsonl": ledger["conformance/requirements/RUN.jsonl"] + opens + "\n"}
+
+    def unsectioned(lines: str, side: str = "new") -> str:
+        return "[[text]]\n" + todo.replace('line = "1"', f'line = "{lines}"') + f'side = "{side}"\n'
+
+    def derived(lines: str, side: str = "new") -> Path:
+        return frozen(rides, unsectioned(lines, side), ruled + rider, files=sectioned)
+
+    def says(root: Path, text: str) -> bool:
+        return any(text in f for f in pending_findings(root, state=lambda uid: ("deferred:tier-5", True)))
+
     edited = tree("")
     (edited / BASELINE_FILE).write_text("# changed\n", encoding="utf-8")
     cases = [
@@ -1664,6 +1712,11 @@ def pending_self_test() -> int:
         ("a text entry riding on a unit of another spec its sentence names, in the section named, passes", clean(frozen(rides, abroad("see LOGOS-MODULE-RUNTIME Section 1."), ruled + rider, files=ledger), ("deferred:tier-5", True)), True),
         ("a text entry riding on a unit of another spec its sentence does not name fails", clean(frozen(rides, abroad("x"), ruled + rider, files=ledger), ("deferred:tier-5", True)), False),
         ("a text entry riding on a unit of a spec its sentence names, outside the section named, fails", clean(frozen(rides, abroad("see LOGOS-MODULE-RUNTIME Section 2."), ruled + rider, files=ledger), ("deferred:tier-5", True)), False),
+        ("an entry with no section whose lines are in one section rides on its unit", clean(derived("3, 5"), ("deferred:tier-5", True)), True),
+        ("an entry with no section whose lines are in two sections fails", clean(derived("3, 12"), ("deferred:tier-5", True)), False),
+        ("an old-side entry with no section fails", clean(derived("3, 5", "old"), ("deferred:tier-5", True)), False),
+        ("an entry with no section and the line \"none\" fails", clean(derived("none"), ("deferred:tier-5", True)), False),
+        ("the finding names the derived section", says(derived("12"), "(RUN §2, derived from its lines)"), True),
         ("a deferred text entry leaving with its unit's test passes", clean(frozen("", behind, ruled + rider + "[[text]]\n" + leaves, tests=both, files=ledger)), True),
         ("a deferred text entry leaving by a test without its unit fails", clean(frozen("", behind, ruled + rider + "[[text]]\n" + leaves, tests=named, files=ledger)), False),
         ("a closed sub-step that owns an entry fails", clean(frozen('closed = ["P3"]\n[[text]]\n' + todo, "[[text]]\n" + todo)), False),

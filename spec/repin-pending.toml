@@ -33,9 +33,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 
 [units.changed]
 "IFC-0246" = "P8"
-"PKG-0338" = "P8"
-"PKG-0347" = "P8"
-"PKG-0351" = "P8"
 "RUN-0258" = "P8"
 
 [stale]
@@ -51,6 +48,9 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "PKG-0273" = "5-10"
 "PKG-0274" = "5-5"
 "PKG-0293" = "5-5"
+"PKG-0338" = "5-8"
+"PKG-0347" = "5-8"
+"PKG-0351" = "5-8"
 "PKG-0418" = "5-3a"
 "PKG-0568" = "5-6b"
 "PKG-0608" = "5-5"
@@ -116,16 +116,7 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "TXT-0495" = "5-5"
 "TXT-0497" = "5-6b"
 "TXT-0498" = "5-6b"
-
-[[text]]
-id = "TXT-0545"
-step = "P8"
-spec = "PKG"
-line = "1401, 1441"
-side = "new"
-source = "M28"
-class = "behaviour"
-what = "The handoff carries extends, and Runtime requires the descriptor's extended-contract set to match it exactly"
+"TXT-0545" = "5-8"
 
 [[text]]
 id = "TXT-0350"

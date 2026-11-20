@@ -537,6 +537,20 @@ Contract extension at 6cac8335 (DECISIONS I112, G392), in the SDK and the Packag
   pair (PKG-0577 to PKG-0580, PKG-0589, PKG-0590). When it cannot, the Runtime validates the provider (PM l.1143); that half
   is P8b's.
 
+### What the re-pin's P8b changes
+
+Contract extension in the Runtime at 6cac8335 (DECISIONS I112 part b, G394, G391):
+
+- **Records** (RUNTIME §8): `extends` in the host configuration, the store and static records; unique with `implements`,
+  never without a primary contract or `implements` (RUN-1105, G394 r10, r11). Each set a record states must equal the
+  validated descriptor's; a claimed relation the descriptor does not establish fails the bind (RUN-0265, RUN-1104). The
+  rule for a record that omits a field is not claimed yet (IFC-0246, held on TF-62).
+- **Routes to an earlier view** (RUNTIME l.90-91, l.1347, l.1368, l.2852, l.2995; INTERFACE §1.2): claimed over direct
+  routes, the Runtime's local-transport endpoint and a hosted consumer's session (IFC-0957, IFC-0958's route half). A
+  hosted provider that extends is checked in process only: no kit or generator takes `extends`.
+- **Discovery** (CA l.249-256): one `discover` decision per extended view (G394 r15).
+- **The handoff's `extends`** (PM §12; PKG-0338, PKG-0347, PKG-0351): deferred by name to 5-8 (G391).
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there

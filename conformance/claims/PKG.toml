@@ -203,5 +203,10 @@ default = "deferred:tier-5"
 "PKG-0595" = "out-of-scope:a requirement on package producers"
 "PKG-0596" = "out-of-scope:a permission for package producers"
 "PKG-0335" = "deferred:tier-5"
+# §12 l.1401, l.1434-1435, l.1441: the handoff's `extends`, which 5-5 constructs and 5-8 checks
+# (re-pin P8b, G391).
+"PKG-0338" = "deferred:tier-5"
+"PKG-0347" = "deferred:tier-5"
+"PKG-0351" = "deferred:tier-5"
 # §14: the error codes are built; method results are not.
 "PKG-0358" = "claimed"
