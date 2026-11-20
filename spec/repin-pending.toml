@@ -30,7 +30,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "BCP-0101" = "P9"
 "BCP-0102" = "P9"
 "BCP-0103" = "P9"
-"CMT-0242" = "P8"
 "IFC-0957" = "P8"
 "IFC-0958" = "P8"
 "IFC-0968" = "P8"
@@ -154,88 +153,6 @@ side = "old"
 section = "Abstract/Terminology"
 class = "todo"
 what = "**Module provider:** The Runtime-known, route-facing exposure of schema-defined method or event behavior from a module instance. One provider record may expose the module's primary concrete contract and exact implemented interface contract views. Every route selects exactly one of those contracts. A local provider is backed by a local module instance. A remote module facade is a local provider record that represents a module instance owned by another Runtime. A provider does not introduce a separate module implementation or lifecycle."
-
-[[text]]
-id = "TXT-0526"
-step = "P8"
-spec = "CMT"
-line = "966"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "**Contract extension.** A contract B extends a contract A when all of the following hold:"
-
-[[text]]
-id = "TXT-0527"
-step = "P8"
-spec = "CMT"
-line = "968"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "both schema roots are constructed under the same semantic commitment-model revision;"
-
-[[text]]
-id = "TXT-0528"
-step = "P8"
-spec = "CMT"
-line = "969"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "both have the same schema namespace;"
-
-[[text]]
-id = "TXT-0529"
-step = "P8"
-spec = "CMT"
-line = "970"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "both are concrete module contracts with the same `_module` value, or both are interface contracts;"
-
-[[text]]
-id = "TXT-0530"
-step = "P8"
-spec = "CMT"
-line = "971"
-side = "new"
-section = "§9.1"
-class = "todo"
-guard = true
-what = "every `schema-declaration` of A is a `schema-declaration` of B with the identical kind, qualified name, and body; and"
-
-[[text]]
-id = "TXT-0531"
-step = "P8"
-spec = "CMT"
-line = "972"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "every implemented-interface root of A is an implemented-interface root of B."
-
-[[text]]
-id = "TXT-0532"
-step = "P8"
-spec = "CMT"
-line = "975"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "Every method and event identity of A is then also a method or event identity of B."
-
-[[text]]
-id = "TXT-0533"
-step = "P8"
-spec = "CMT"
-line = "976"
-side = "new"
-section = "§9.1"
-source = "review"
-class = "behaviour"
-what = "A contract that changes or omits a declaration of A does not extend A."
 
 [[text]]
 id = "TXT-0535"

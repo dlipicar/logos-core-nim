@@ -3759,3 +3759,45 @@ compared = "SEC l.588 at 6cac8335."
 [[units]]
 id = "IFC-0226"
 compared = "IF l.1683-1686 at 6a4dfa28 had no `extends`; l.1654-1658 at 6cac8335 add `? extends: [+ provider-contract-schema]`. spec/mirrors/IFC/2.6.call-surface.cddl is rewritten from the text; test_call_surface's [IFC-0226] test reads the regenerated mirror and checks its required and optional keys against DescriptorRequired and DescriptorOptional, which the descriptor's closed-map check uses."
+
+# P8a: contract extension (CMT §9.1) ------------------------------------------------------------------------------
+
+[[text]]
+id = "TXT-0526"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0527"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0528"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0529"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0530"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0531"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0532"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0533"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"

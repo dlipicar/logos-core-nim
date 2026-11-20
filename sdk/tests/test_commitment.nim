@@ -531,6 +531,141 @@ suite "commitment: sensitivity":
       check buildErr(module(methodSrc & "\ndemo.t = uint8\n" & src)).contains(why)
     check buildErr("demo.t = uint8\n_sensitive = [\"demo.t\"]").contains("supporting")
 
+suite "commitment: contract extension (§9.1)":
+  # B, the later contract: two methods, an event, a type and two interfaces. A, the
+  # earlier one: one method, the event and one interface fewer.
+  const
+    ping = "demo.ping_request = { n: uint8 }\ndemo.ping_response = {}\n"
+    pong =
+      "demo.pong_request = {}\ndemo.pong_response = { t: demo.tag }\ndemo.tag = tstr\n"
+    tick = "demo.tick_event = { n: uint8 }\n"
+    gaugeDoc =
+      "_interface = \"gauge\"\ngauge.read_request = {}\ngauge.read_response = { l: uint8 }\n"
+    dialDoc = "_interface = \"dial\"\ndial.turn_request = {}\ndial.turn_response = {}\n"
+    meterDoc =
+      "_interface = \"meter\"\nmeter.get_request = {}\nmeter.get_response = {}\n"
+
+  let
+    gauge = build(gaugeDoc)
+    dial = build(dialDoc)
+    meter = build(meterDoc)
+
+  proc withIfaces(ifaces: varargs[SchemaModel]): SchemaContext =
+    result = pinnedContext()
+    result.interfaces = @ifaces
+
+  proc implementing(ifaces: varargs[SchemaModel]): string =
+    var roots = ifaces.mapIt(schemaRoot(it))
+    roots.sort(
+      proc(a, b: Digest): int =
+        cmpBytes(a, b)
+    )
+    "_implements = [" & roots.mapIt(bytesLiteral(it)).join(", ") & "]\n"
+
+  proc concrete(body: string, ifaces: varargs[SchemaModel]): SchemaModel =
+    let implements =
+      if ifaces.len > 0:
+        implementing(ifaces)
+      else:
+        ""
+    build(module(implements & body), withIfaces(ifaces))
+
+  proc refusal(b, a: SchemaModel): string =
+    ## The relation's error; "" when B extends A.
+    let r = extendsContract(b, a)
+    if r.isOk: "" else: r.error
+
+  let
+    later = concrete(ping & pong & tick, gauge, dial)
+    earlier = concrete(ping & tick, gauge)
+
+  test "[TXT-0526] B extends A: one revision, one namespace, one _module, A's declarations and interfaces in B":
+    check refusal(later, earlier) == ""
+    check refusal(later, later) == ""
+    check "does not extend: it omits the declaration demo.pong" in
+      refusal(earlier, later)
+    # Interface contracts relate the same way.
+    let wider =
+      build(gaugeDoc & "gauge.reset_request = {}\ngauge.reset_response = {}\n")
+    check refusal(wider, gauge) == ""
+    check "does not extend" in refusal(gauge, wider)
+
+  test "[TXT-0527] both roots under the same commitment-model revision":
+    # Only the pinned revision can be built, so a copy of the model carries another one.
+    var other = earlier
+    other.modelId = "logos.commitment-model.2099-01"
+    check other.modelId.isCommitmentModelRevision
+    check "does not extend: commitment-model revision" in refusal(later, other)
+    check "does not extend: commitment-model revision" in refusal(other, earlier)
+
+  test "[TXT-0528] the same schema namespace":
+    let elsewhere =
+      concrete(ping.replace("demo.", "demo2.") & tick.replace("demo.", "demo2."))
+    check elsewhere.namespace == "demo2"
+    check "does not extend: namespace demo is not demo2" in refusal(later, elsewhere)
+
+  test "[TXT-0529] [IMPL-DECISION G392] both concrete with the same _module, as written, or both interfaces":
+    let asInterface = build("_interface = \"demo\"\n" & ping)
+    check "does not extend: only an interface contract extends an interface" in
+      refusal(later, asInterface)
+    check "does not extend: only a concrete module contract extends a concrete" in
+      refusal(build("_interface = \"demo\"\n" & ping & tick), concrete(ping))
+    let otherModule = build("_module = \"other_module\"\n" & ping & tick)
+    check "does not extend: the two concrete contracts have different _module values" in
+      refusal(later, otherModule)
+    let supporting = build("demo.tag = tstr\n")
+    check "does not extend: a supporting schema is not a contract" in
+      refusal(supporting, supporting)
+
+  test "[TXT-0530] every declaration of A is one of B with the identical kind, qualified name and body":
+    let changedBody = concrete(ping.replace("uint8", "uint16") & tick, gauge)
+    check "does not extend: declaration demo.ping_request has another body" in
+      refusal(later, changedBody)
+    # The sensitivity fields are in the method declaration's body (COMMITMENT l.995-1010).
+    let marked = concrete("_sensitive = [\"demo.ping_request\"]\n" & ping & tick, gauge)
+    check marked.find("demo.ping").get.sensitiveRequest
+    check "does not extend: declaration demo.ping has another body" in
+      refusal(later, marked)
+    let changedKind = concrete(ping & tick & "demo.pong = { t: tstr }\n", gauge)
+    check "does not extend: declaration demo.pong is a method, not a type" in
+      refusal(later, changedKind)
+
+  test "[TXT-0531] [IMPL-DECISION G392] A's implemented interfaces are B's; B may implement more":
+    check earlier.implemented.len == 1 and later.implemented.len == 2
+    check refusal(later, earlier) == ""
+    let elsewhere = concrete(ping & tick, gauge, meter)
+    check "does not extend: it does not implement the interface " &
+      toHex(schemaRoot(meter)) in refusal(later, elsewhere)
+
+  test "[TXT-0532] every method and event identity of A is one of B":
+    proc identities(m: SchemaModel): seq[Digest] =
+      for d in m.declarations:
+        if d.kind in {dkMethod, dkEvent}:
+          result.add(declarationRoot(m, d))
+
+    check refusal(later, earlier) == ""
+    let own = identities(later)
+    check identities(earlier).len == 2
+    check identities(earlier).allIt(it in own)
+    check own.len == 3
+    check schemaRoot(earlier) != schemaRoot(later)
+
+  test "[TXT-0533] a contract that changes or omits a declaration of A does not extend A":
+    let changed = concrete(ping & pong & tick.replace("uint8", "uint16"), gauge, dial)
+    check "does not extend: declaration demo.tick_event has another body" in
+      refusal(changed, earlier)
+    let omitting = concrete(ping & pong, gauge, dial)
+    check "does not extend: it omits the declaration demo.tick_event" in
+      refusal(omitting, earlier)
+
+  test "[CMT-0242] the relation is established from constructed models, never from a claim":
+    # A commitment is no argument, and a model no document built (the placeholder a
+    # schema-response entry carries before its set is accepted) is refused.
+    check not compiles(extendsContract(schemaRoot(later), schemaRoot(earlier)))
+    let claimed = SchemaModel(namespace: "demo", moduleName: Opt.some("demo_module"))
+    check "does not extend: a model was not constructed" in refusal(later, claimed)
+    check "does not extend: a model was not constructed" in refusal(claimed, claimed)
+
 suite "commitment: schema identities":
   test "[CMT-0037] [CMT-0143] [CMT-0038] [CMT-0061] structural roots, leaf hashes and subtree roots of every node":
     let m = build(everyKind)
