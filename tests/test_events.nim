@@ -961,6 +961,35 @@ proc publishes(p: ptr Pub) {.thread.} =
 proc publishedOk(n: int): bool =
   publishRaw(cstring(Changed), valuePayload(n)) == CErrorCode(ord(ecOk))
 
+suite "run.events: routes to an earlier contract (RUNTIME §8 l.1347; INTERFACE §1.2) [IMPL-DECISION G394]":
+  setup:
+    clearAll()
+
+  test "[TXT-0551] a route to an earlier view resolves only that contract's events: A2 refuses the event it drops and delivers the one it keeps, A1 delivers both; the provider publishes under B (RUNTIME l.1347; G394 r16)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    discard e.started(relayRecord(), "r")
+    let (_, rc) = e.startClient()
+    var (c1, a1) = rc.relayHandle("a1", relayA1Root)
+    var (c2, a2) = rc.relayHandle("a2", relayA2Root)
+    require c1 == ecOk and c2 == ecOk
+    var id: LogosSubscriptionId
+    check a2.subscribe(addr seen[0], id, ClearedDecl) == ecNotAuthorised
+    check a2.subscribe(addr seen[0], id, ChangedDecl) == ecOk
+    check a1.subscribe(addr seen[1], id, ChangedDecl) == ecOk
+    check a1.subscribe(addr seen[2], id, ClearedDecl) == ecOk
+    check relayPublish(ChangedDecl, 4) == CErrorCode(ord(ecOk))
+    check relayPublish(ClearedDecl, 5) == CErrorCode(ord(ecOk))
+    check reaches(addr seen[0], 1)
+    check reaches(addr seen[1], 1)
+    check reaches(addr seen[2], 1)
+    settled()
+    check seen[0].count.load == 1
+    check seen[0].payloadOf == encodeCbor(cborMap((cbor("channel"), cbor(4'u64))))
+    check seen[2].payloadOf == encodeCbor(cborMap((cbor("channel"), cbor(5'u64))))
+    a1.release()
+    a2.release()
+    e.finish()
+
 suite "run.events: queued delivery (INTERFACE §2.5 l.1402-1408, l.1469-1470; G176)":
   setup:
     clearAll()

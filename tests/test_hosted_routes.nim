@@ -52,6 +52,10 @@ when defined(posix):
     ./generated/[bulk_module_calls, bulk_module_types],
     logos_sdk/testing/generated/[meter_module_calls, meter_module_types]
   import ./support/trnowner except Provider, now, binding, issue, live, release, gate
+  from ../src/logos_core/host/selected import
+    earlierInputOf, keepProvider, publishedBy, schemaAnswer, selectedFor
+  from ../src/logos_core/transport/limits import MaxPayloadDepth
+  from ../src/logos_core/transport/boundary import knowsEvent
 
   let
     repo = currentSourcePath().parentDir.parentDir
@@ -1909,6 +1913,56 @@ when defined(posix):
         check e.routes().len == 0
       e.finish()
       check noHostLeft()
+
+    test "[IFC-0957] [TXT-0535] [TXT-0551] [IMPL-DECISION G394] C-13 a hosted consumer's session on an earlier view of a provider (synthesis Q4): the session selects the earlier root with that contract's own input, B's implementation answers, only the view's methods resolve, and logos.schema answers the view":
+      # As C-10, a scripted static table with a hosted end: the route is
+      # local-transport, and the host connects to the Runtime's endpoint for
+      # the relay with the material it kept.
+      var cfg = hosted()
+      cfg.statics.add(relayStatic())
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(relayRecord(), "r")
+      check e.started(consumerRecord(), "c").state == msReady
+      let rec = c.establishRecVia("k", relayA2Root)
+      require rec.isSome
+      check rec.get.expected_contract.get.schema_root == @relayA2Root
+      let made = c.run(
+        "materialize 0 " & rec.get.route & " " & hexOf(relayA2Root) & " " &
+          hexOf(relaySchema(relayA2Root))
+      )
+      check codeIn(made) == Opt.some(ecOk)
+      let before = relayCalls.load
+      let read = c.run(
+        "call 0 read " & hexOf(encodeCbor(cborMap((cbor("channel"), cbor(2'u64)))))
+      )
+      check codeIn(read) == Opt.some(ecOk)
+      check decodeCbor(unhexOf(valueIn(read))).tryGet.lookup("value").get.getUint64 ==
+        Opt.some(RelayValue)
+      check relayCalls.load == before + 1
+      check codeIn(c.run("call 0 ping a0")) == Opt.some(ecMethodNotFound)
+      let schema = c.run("call 0 schema a0")
+      check codeIn(schema) == Opt.some(ecOk)
+      check unhexOf(valueIn(schema)) == relaySchema(relayA2Root)
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      e.finish()
+      check noHostLeft()
+
+    test "[IMPL-DECISION G394] a Module Host keeps an extending provider's contracts in process (synthesis Q4): an earlier view's input is its own answer, built on first use, and the view adds no publication contract":
+      check keepProvider(relayBinding(), false, MaxPayloadDepth, relayDescriptor).isOk
+      check earlierInputOf(relayRoot).isNone
+      check earlierInputOf(pulseRoot).isNone
+      for root in [relayA1Root, relayA2Root]:
+        let input = earlierInputOf(root)
+        check input.isSome and input.get.schema == relaySchema(root)
+        check schemaAnswer(root) == relaySchema(root)
+        check selectedFor(root).isOk
+      check selectedFor(relayA1Root).get.boundary.knowsEvent(ClearedDecl)
+      check not selectedFor(relayA2Root).get.boundary.knowsEvent(ClearedDecl)
+      # Published under B, which declares both events.
+      let data = encodeCbor(cborMap((cbor("channel"), cbor(1'u64))))
+      check publishedBy(ClearedDecl, data).isOk
+      check publishedBy(ChangedDecl, data).isOk
 
     test "[RUN-1093] [RUN-0794] [RUN-0181] [RUN-1118] [RUN-1122] S-18 a stopping consumer's calls through its routes are refused from stop step 1, NOT_READY, hosted as direct; a malformed one, called or prepared, INVALID_PARAMS first (l.1828, l.1832)":
       var codes: seq[Opt[ErrorCode]]

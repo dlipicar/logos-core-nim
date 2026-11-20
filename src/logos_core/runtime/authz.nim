@@ -163,6 +163,9 @@ type
     target*: string
     module*: string
     route*: string
+    contract*: seq[byte]
+      ## [IMPL] the request's contract root; a test denies one contract view
+      ## of a provider by it (re-pin P8b)
     outcome*: AuthzOutcome ## what a matching request gets
 
   AuthzPolicy* = object ## Allow-all, except what the first matching rule says.
@@ -194,6 +197,7 @@ func deny*(
     module = "",
     route = "",
     outcome = azDeny,
+    contract: seq[byte] = @[],
 ): AuthzRule =
   AuthzRule(
     action: action,
@@ -202,6 +206,7 @@ func deny*(
     target: target,
     module: module,
     route: route,
+    contract: contract,
     outcome: outcome,
   )
 
@@ -216,7 +221,8 @@ func matches(r: AuthzRule, q: AuthzRequest): bool =
     (r.consumer.len == 0 or r.consumer == q.consumer) and
     (r.target.len == 0 or r.target == q.target) and
     (r.module.len == 0 or r.module == q.module) and
-    (r.route.len == 0 or r.route == q.route)
+    (r.route.len == 0 or r.route == q.route) and
+    (r.contract.len == 0 or r.contract == q.contract)
 
 func scopeOf*(q: AuthzRequest): string =
   ## [IMPL] An internal decision covers exactly the one request it answered.

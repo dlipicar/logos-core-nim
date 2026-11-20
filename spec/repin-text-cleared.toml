@@ -3879,3 +3879,42 @@ test = "tests/test_engine.nim"
 id = "TXT-0550"
 step = "P8"
 test = "tests/test_engine.nim"
+
+# P8b: routes, views, local transport and the Module Host (RUNTIME §8, §9.3; INTERFACE §1.2) ----------------------
+
+[[text]]
+id = "TXT-0535"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0551"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0553"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0554"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0147"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0275"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0323"
+step = "P8"
+kind = "removed"
+reading = "The old sentence let a provider record expose its primary contract and implemented interface views only. TXT-0275 replaces it and adds exact extended contract views; it clears by test."
+compared = "RUNTIME l.96 at 6a4dfa28 against l.90 at 6cac8335, and test_routes's [TXT-0275] test."

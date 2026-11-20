@@ -3,11 +3,12 @@
 ## which define `repo` and `work` first: a consumer module that keeps the
 ## Runtime Control binding of each initialization, so a test calls Runtime
 ## Control as that module; a module whose initialization waits at a gate; the
-## meter kit module as provider; and request and route-handle helpers. Module
-## code runs on the engine's workers, so the test modules keep their state in
-## atomics. Bounds that only limit a wait scale with `Slow`.
+## meter kit module as provider; the relay module, whose contract extends two
+## earlier ones (`relayfixture`, re-pin P8b); and request and route-handle
+## helpers. Module code runs on the engine's workers, so the test modules keep
+## their state in atomics. Bounds that only limit a wait scale with `Slow`.
 
-import ./slowdown
+import ./[relayfixture, slowdown]
 
 # The consumer module --------------------------------------------------------------
 
@@ -275,6 +276,7 @@ proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineCo
     result.routing = @[
       RoutingRule(callee: "meter_module", mode: rmLocalTransport),
       RoutingRule(callee: "sensor_module", mode: rmLocalTransport),
+      RoutingRule(callee: RelayModule, mode: rmLocalTransport),
     ]
     result.endpointDir = parityBase / ("e" & $engines)
   when declared(caParity):
@@ -325,6 +327,11 @@ proc meter(): ModuleRecord =
     binding: "meter",
     primaryContract: Opt.some(meterRoot),
   )
+
+proc relayStatic(): StaticRegistration =
+  ## The relay module's static table, for `config(extra = ...)`; its record
+  ## is `relayRecord`.
+  checkStaticRegistration("relay", relayTable()).tryGet
 
 proc waitUntil(cond: proc(): bool {.closure.}, seconds = 10 * Slow): bool =
   let until = getMonoTime() + initDuration(seconds = seconds)
@@ -570,6 +577,16 @@ proc handle(rc: ptr LogosRuntimeControlBinding, route: string): LogosRouteHandle
   let (code, h) = rc.materialize(route)
   check code == ecOk
   h
+
+proc relayHandle(
+    rc: ptr LogosRuntimeControlBinding, key: string, root: Digest
+): (ErrorCode, LogosRouteHandle) =
+  ## A route to a relay provider that selects `root`, materialized with that
+  ## contract's own construction input; the first failure's code otherwise.
+  let made = rc.establish(key, root)
+  if made.code != ecOk:
+    return (made.code, LogosRouteHandle())
+  rc.materialize(made.routesOf.routes[0].route, root, relaySchema(root))
 
 proc raw(h: var LogosRouteHandle, name: string, params: openArray[byte]): RcResult =
   var buf: ptr UncheckedArray[uint8]

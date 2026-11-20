@@ -30,7 +30,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "BCP-0101" = "P9"
 "BCP-0102" = "P9"
 "BCP-0103" = "P9"
-"IFC-0957" = "P8"
 
 [units.changed]
 "IFC-0246" = "P8"
@@ -119,36 +118,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "TXT-0498" = "5-6b"
 
 [[text]]
-id = "TXT-0275"
-step = "P8"
-spec = "RUN"
-line = "90"
-side = "new"
-section = "Abstract/Terminology"
-class = "todo"
-what = "**Module provider:** The Runtime-known, route-facing exposure of schema-defined method or event behavior from a module instance. One provider record may expose the module's primary concrete contract, exact implemented interface contract views, and exact extended contract views. Every route selects exactly one of those contracts. A local provider is backed by a local module instance. A remote module facade is a local provider record that represents a module instance owned by another Runtime. A provider does not introduce a separate module implementation or lifecycle."
-
-[[text]]
-id = "TXT-0323"
-step = "P8"
-spec = "RUN"
-line = "96"
-side = "old"
-section = "Abstract/Terminology"
-class = "todo"
-what = "**Module provider:** The Runtime-known, route-facing exposure of schema-defined method or event behavior from a module instance. One provider record may expose the module's primary concrete contract and exact implemented interface contract views. Every route selects exactly one of those contracts. A local provider is backed by a local module instance. A remote module facade is a local provider record that represents a module instance owned by another Runtime. A provider does not introduce a separate module implementation or lifecycle."
-
-[[text]]
-id = "TXT-0535"
-step = "P8"
-spec = "IFC"
-line = "202"
-side = "new"
-section = "§1.2"
-class = "todo"
-what = "Such a view selects the earlier schema root and contains only its declarations; each of its methods and events is the same declaration, with the same implementation, as in the extending contract."
-
-[[text]]
 id = "TXT-0545"
 step = "P8"
 spec = "PKG"
@@ -157,47 +126,6 @@ side = "new"
 source = "M28"
 class = "behaviour"
 what = "The handoff carries extends, and Runtime requires the descriptor's extended-contract set to match it exactly"
-
-[[text]]
-id = "TXT-0551"
-step = "P8"
-spec = "RUN"
-line = "1347"
-side = "new"
-section = "§8"
-source = "review"
-class = "behaviour"
-what = "A route that selects an extended contract resolves methods and events under that contract only."
-
-[[text]]
-id = "TXT-0147"
-step = "P8"
-spec = "RUN"
-line = "1368"
-side = "new"
-section = "§8"
-class = "todo"
-what = "A provider requirement matches every provider that exposes a validated contract view with the required schema root, independently of module name."
-
-[[text]]
-id = "TXT-0553"
-step = "P8"
-spec = "RUN"
-line = "2852"
-side = "new"
-section = "§9.3.10"
-class = "todo"
-what = "On a `route_record`, `expected_contract` names the exact concrete module contract, implemented interface contract, or extended contract that the route was established to satisfy."
-
-[[text]]
-id = "TXT-0554"
-step = "P8"
-spec = "RUN"
-line = "2995"
-side = "new"
-section = "§9.3.13"
-class = "todo"
-what = "For each selected provider, the runtime validates that the provider exposes the selected contract commitment as its primary contract, an implemented interface contract, or an extended contract established under Section 8."
 
 [[text]]
 id = "TXT-0350"

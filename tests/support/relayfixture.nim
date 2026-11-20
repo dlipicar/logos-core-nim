@@ -15,7 +15,7 @@
 ## `read` takes another channel type), with that document's own commitment:
 ## no SDK call builds such a descriptor.
 
-import std/[algorithm, atomics, sequtils, strutils]
+import std/[algorithm, atomics, strutils]
 import results
 import logos_sdk/abi/types
 import logos_sdk/base/hex

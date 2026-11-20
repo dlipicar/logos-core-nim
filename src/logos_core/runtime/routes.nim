@@ -131,6 +131,10 @@ type
       ## [I90] the consumer attempt that established it: served calls are
       ## admitted against it, there being no handle (plan §2.5)
     endpoint*: Opt[uint64] ## [G257] a transported route's served endpoint
+    answer*: seq[byte]
+      ## [G394; synthesis §3] when it selects an earlier contract: that
+      ## contract's `logos.schema_response`, built at establishment and held
+      ## here, never kept by the provider per entry; empty otherwise
     sessions*: seq[uint64] ## [I90] its sessions at that endpoint, by `ConnId`
     droppable*: bool ## ended and reachable through nothing: its record may be dropped
     dropped*: bool ## [IMPL] dropped: its id is unknown from then on
@@ -171,8 +175,8 @@ func selectContract*(
     b: ModuleBinding, root: Digest, ctx: SchemaContext
 ): Opt[SelectedContract] =
   ## [SPEC RUNTIME §4.2, §9.3 l.2924-2928] The contract `root` selects on a
-  ## provider with the validated binding `b`: its primary concrete contract or
-  ## one implemented interface, else none.
+  ## provider with the validated binding `b`: its primary concrete contract,
+  ## one implemented interface or one earlier contract it extends, else none.
   var s = SelectedContract(root: root, module: b.module, wellKnown: wellKnownRoots(ctx))
   if b.primary.isSome and b.primary.get.root == root:
     s.addContract(b.primary.get)
@@ -183,17 +187,17 @@ func selectContract*(
     if i.root == root:
       s.addContract(i)
       return Opt.some(s)
+  for e in b.extends:
+    if e.root == root:
+      # [SPEC RUNTIME §8 l.1347; INTERFACE §1.2 l.202; G394 r12] Only that
+      # contract's methods and events: an earlier concrete contract with the
+      # interfaces its own `_implements` selects (as the primary above, R
+      # l.869 noted in the plan's §2.3), an earlier interface alone.
+      s.addContract(e)
+      for i in b.interfacesOf(e):
+        s.addContract(i)
+      return Opt.some(s)
   Opt.none(SelectedContract)
-
-func offers*(b: ModuleBinding, root: Digest): bool =
-  ## Whether `root` names the provider's primary contract or an implemented
-  ## interface.
-  if b.primary.isSome and b.primary.get.root == root:
-    return true
-  for i in b.interfaces:
-    if i.root == root:
-      return true
-  false
 
 func methodRoot*(s: SelectedContract, bare: string): Opt[Digest] =
   ## The declaration root of a method the contract exposes, or of a

@@ -137,7 +137,9 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
   if b.provider:
     # [SPEC INTERFACE l.3351; DECISIONS I106] Before `_MODULE_init`: the
     # publish callback checks under these from the first publication.
-    keepProvider(b.contracts, m.module.startsWith("logos_"), maxPayloadDepth).isOkOr:
+    keepProvider(
+      b.contracts, m.module.startsWith("logos_"), maxPayloadDepth, b.callSurface
+    ).isOkOr:
       refuse(
         loaderError(lecRealizationFailed, "the provider's contracts: " & error), P.Bind
       )
