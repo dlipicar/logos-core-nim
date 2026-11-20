@@ -191,6 +191,17 @@ func schemaResponse*(s: ContractSet, selected: Digest): Result[CborValue, string
 func schemaResponse*(b: ModuleBinding, selected: Digest): Result[CborValue, string] =
   ## [SPEC RUNTIME §2.4 l.432-434, §3.3 l.513-514] The same, from a provider's
   ## validated call surface: the exact documents the provider supplied.
+  ## [SPEC INTERFACE §1.2 l.203, §5.1 l.3227-3234] An earlier contract the
+  ## binding keeps (`extends`) answers with its own construction input set: an
+  ## earlier concrete contract with the interfaces its `_implements` selects
+  ## and the supporting schemas it and they use, an earlier interface with no
+  ## interface schema and only its own supporting schemas.
+  for e in b.extends:
+    if e.root == selected:
+      let earlier = ContractSet(
+        primary: e, interfaces: b.interfacesOf(e), supporting: b.supportingOf(e)
+      )
+      return schemaResponse(earlier, selected)
   var s = ContractSet(interfaces: b.interfaces, supporting: b.supporting)
   if b.primary.isSome:
     s.primary = b.primary.get

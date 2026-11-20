@@ -696,6 +696,60 @@ suite "iface: schema commitments and logos.schema (INTERFACE §5.1)":
       response(ifc392, @[], @[entryOf("metrics_types", rootOf(sup392), sup392)])
     check "metrics_types is unused" in acceptSchemaResponse(leaky, ir).error
 
+  test "[IFC-0958] a binding answers logos.schema for an extended root with that contract's documents only":
+    let gaugeTypes = "gauge_types.level = uint32\n"
+    let gaugeOld = iface(
+      "gauge",
+      "gauge.read_request = {}\ngauge.read_response = { n: gauge_types.level }\n",
+    )
+    let gaugeNew = gaugeOld & "gauge.reset_request = {}\ngauge.reset_response = {}\n"
+    let ir = rootOf(ifc392)
+    let gr = accepted(gaugeNew, [], [gaugeTypes]).primary.root
+    let body = "demo.t = { c: metrics_types.counter }\n" & ping
+    let earlier = module(implementing(ir) & body)
+    let later = module(
+      implementing(gr, ir) & body & "demo.pong_request = {}\ndemo.pong_response = {}\n"
+    )
+    let r = acceptBinding(
+      "demo_module",
+      Opt.some(later),
+      [gaugeNew, ifc392],
+      [sup392, gaugeTypes],
+      AcceptOptions(),
+      [earlier, gaugeOld],
+    )
+    if r.isErr:
+      checkpoint r.error
+    let b = r.get
+    let er = accepted(earlier, [ifc392], [sup392]).primary.root
+    let gor = accepted(gaugeOld, [], [gaugeTypes]).primary.root
+    check b.extends.mapIt(it.root) == @[er, gor]
+    proc namespaces(v: CborValue, key: string): seq[string] =
+      v.lookup(key).get.items.mapIt(it.lookup("namespace").get.text)
+
+    # The earlier concrete contract: its document, the interface it selects and
+    # the supporting schema it uses; not gauge or gauge_types, which only its
+    # successor needs.
+    let ev = b.schemaResponse(er).get
+    check commonValidates("logos.schema_response", ev)
+    check ev.lookup("schema").get.text == earlier
+    check ev.lookup("interface_schemas").get.items.mapIt(it.lookup("document").get.text) ==
+      @[ifc392]
+    check namespaces(ev, "supporting_schemas") == @["metrics_types"]
+    check acceptSchemaResponse(encoded(ev), er).get.primary.root == er
+    # The earlier interface: no interface schema, only its own supporting schema.
+    let gv = b.schemaResponse(gor).get
+    check gv.lookup("schema").get.text == gaugeOld
+    check gv.lookup("interface_schemas").get.items.len == 0
+    check namespaces(gv, "supporting_schemas") == @["gauge_types"]
+    check acceptSchemaResponse(encoded(gv), gor).get.primary.root == gor
+    # The current contracts answer as before.
+    let pv = b.schemaResponse(b.primary.get.root).get
+    check pv.lookup("schema").get.text == later
+    check namespaces(pv, "interface_schemas") == @["gauge", "metrics_provider"]
+    check namespaces(pv, "supporting_schemas") == @["gauge_types", "metrics_types"]
+    check b.schemaResponse(gr).get.lookup("schema").get.text == gaugeNew
+
   test "[IFC-0451] [IFC-0452] entries name valid documents with their own namespace and root":
     let
       ir = rootOf(ifc392)
