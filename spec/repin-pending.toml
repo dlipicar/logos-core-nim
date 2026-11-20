@@ -20,7 +20,7 @@
 #                     rides on one (same spec and section, same work item), with a [[deferred]] record in
 #                     spec/repin-text-cleared.toml naming the unit and a decision row (DECISIONS I108)
 
-closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
+closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
 
 [mirror]
 
