@@ -529,7 +529,7 @@ Contract extension at 6cac8335 (DECISIONS I112, G392), in the SDK and the Packag
   establishes it (CMT-0242).
 - **The descriptor's `extends`** (INTERFACE §2.6): limits, order, identity across the three arrays, each entry built by the
   rules of its role and related to the described contract of its namespace (IFC-0968, IFC-0969). IFC-0246's comparison of
-  supplied references stays pending until P8b, which applies it to records.
+  supplied references is claimed with the Runtime's use of it (P8b, P8c).
 - **Schema answers** for an earlier root (IFC-0958): claimed by the binding's answer. No route selects an earlier root until
   P8b lets a record state `extends`.
 - **The Package Manager** (PM §4, §9): every contract document is built from the selected variant and compared with its
@@ -543,8 +543,12 @@ Contract extension in the Runtime at 6cac8335 (DECISIONS I112 part b, G394, G391
 
 - **Records** (RUNTIME §8): `extends` in the host configuration, the store and static records; unique with `implements`,
   never without a primary contract or `implements` (RUN-1105, G394 r10, r11). Each set a record states must equal the
-  validated descriptor's; a claimed relation the descriptor does not establish fails the bind (RUN-0265, RUN-1104). The
-  rule for a record that omits a field is not claimed yet (IFC-0246, held on TF-62).
+  validated descriptor's; a claimed relation the descriptor does not establish fails the bind (RUN-0265, RUN-1104). Once a
+  record supplies any reference, an omitted primary is none and an omitted `implements` or `extends` is empty, each
+  compared (IFC-0246; G393, the interim on TF-62; re-pin P8c).
+- **Preserved facts** (RUNTIME l.1303; RUN-0258): claimed for the stored record of a host-configuration input, which keeps
+  `extends` with the other facts and compares it when the instance comes back. The handoff path is 5-8's, and 5-8's
+  handoff test carries the id. The claim rests on G393's strict rule: nothing a record does not state is exposed.
 - **Routes to an earlier view** (RUNTIME l.90-91, l.1347, l.1368, l.2852, l.2995; INTERFACE §1.2): claimed over direct
   routes, the Runtime's local-transport endpoint and a hosted consumer's session (IFC-0957, IFC-0958's route half). A
   hosted provider that extends is checked in process only: no kit or generator takes `extends`.

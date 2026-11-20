@@ -506,7 +506,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
   test "[IFC-0246] [RUN-0265] [G394] each contract set a record states equals the validated descriptor's":
     # [SPEC INTERFACE l.1717] The primary root, and the implemented and
     # extended roots as sets: a stated set that is smaller, larger or another
-    # fails the start. (What an omitted set means waits for TF-62.)
+    # fails the start. (An omitted set: the next test, G393.)
     let e = newEngine(config())
     var other: Digest
     other[0] = 5
@@ -530,6 +530,39 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     discard
       e.create(relayRecord(extends = @[relayA2Root, relayA1Root]), "reordered").tryGet
     check e.start("reordered").tryGet.state == msReady
+    e.finish()
+
+  test "[IFC-0246] [G393] once a record supplies a contract reference, an omitted primary is none and an omitted implements or extends is empty":
+    # [SPEC INTERFACE l.1717; RUNTIME l.1349; DECISIONS G393, the owner's
+    # answer to TF-62] Each omitted field is compared with the validated
+    # descriptor as none or empty, so a record that states fewer references
+    # than the descriptor declares is never bound; the full statement is.
+    let e = newEngine(config())
+    const
+      ifaces = "the implemented interface contracts differ from the expected ones"
+      extended = "the extended contracts differ from the expected ones"
+      noPrimary =
+        "the expected contracts name no primary contract, but the module has one"
+    for (name, r, why) in [
+      ("primary-only", relayRecord(implements = @[], extends = @[]), ifaces),
+      ("no-extends", relayRecord(extends = @[]), extended),
+      ("no-implements", relayRecord(implements = @[]), ifaces),
+      (
+        "implements-only",
+        relayRecord(primary = Opt.none(Digest), extends = @[]),
+        noPrimary,
+      ),
+      ("no-primary", relayRecord(primary = Opt.none(Digest)), noPrimary),
+    ]:
+      checkpoint name
+      discard e.create(r, name).tryGet
+      let v = e.start(name).tryGet
+      check v.state == msError and v.failureOf == "initialization-failed"
+      check not v.provider
+      check v.failure.isSome and why in v.failure.get.reason
+    discard e.create(relayRecord(), "full").tryGet
+    let full = e.start("full").tryGet
+    check full.state == msReady and full.provider
     e.finish()
 
   test "[RUN-1104] [TXT-0550] a provider whose descriptor's extends entry does not hold is never bound":

@@ -2799,36 +2799,18 @@ proc bootstrapFailure(e: LoaderError): Failure =
     )
 
 func references(
-    rec: ModuleRecord, b: ModuleBinding
+    rec: ModuleRecord
 ): tuple[primary: Opt[Digest], interfaces, extends: seq[Digest]] =
-  ## [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1340-1343, l.1349] The contract
-  ## references a record supplies, as `matchesContracts` compares them with the
-  ## validated descriptor: a field the record states, as stated.
-  ##
-  ## HELD ON TF-62 (DECISIONS G393 is not written yet): what an OMITTED field
-  ## supplies. R l.1349 lets an input omit `primary_contract`, `implements` or
-  ## both, and IF l.1717 requires an exact match. Until the owner answers, an
-  ## omitted field is not compared: it stands for the descriptor's own value,
-  ## as before P8. The interim put to the owner (synthesis §1, Q2): once a
-  ## record supplies any reference, an omitted primary is none and an omitted
-  ## array is empty. This is the one place that rule lives.
-  result.primary =
-    if rec.primaryContract.isSome:
-      rec.primaryContract
-    elif b.primary.isSome:
-      Opt.some(b.primary.get.root)
-    else:
-      Opt.none(Digest)
-  result.interfaces =
-    if rec.implements.len > 0:
-      rec.implements
-    else:
-      b.interfaces.mapIt(it.root)
-  result.extends =
-    if rec.extends.len > 0:
-      rec.extends
-    else:
-      b.extends.mapIt(it.root)
+  ## [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1340-1343, l.1349; DECISIONS
+  ## G393] The contract references a record supplies, as `matchesContracts`
+  ## compares them with the validated descriptor. R l.1349 lets an input omit
+  ## `primary_contract`, `implements` or both, and IF l.1717 requires the
+  ## supplied references to match exactly; the owner's answer to TF-62
+  ## (2026-11-20, "strict"): once a record supplies any reference, an omitted
+  ## primary is none and an omitted `implements` or `extends` is empty, each
+  ## compared. A record that supplies none never reaches here
+  ## (`checkContracts`).
+  (rec.primaryContract, rec.implements, rec.extends)
 
 proc checkContracts(x: Inst, r: RealizationView): Result[bool, string] =
   ## [SPEC RUNTIME §3.3, §3.6] The expected contracts against the validated
@@ -2841,14 +2823,15 @@ proc checkContracts(x: Inst, r: RealizationView): Result[bool, string] =
     return ok(false)
   if not r.provider:
     return err("the module exposes no call surface")
-  # [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1342-1346] Each set the record
-  # states equals the validated descriptor's: the primary root, and the
-  # implemented and extended roots as sets. The descriptor was accepted on
-  # this thread, its `extends` entries each related to the contract it
-  # describes (`acceptCallSurfaceDescriptor`), so no claim the provider does
-  # not validate makes a provider path (RUN-0265, RUN-1104).
+  # [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1342-1346; G393] Each set the
+  # record supplies, an omitted one as none or empty, equals the validated
+  # descriptor's: the primary root, and the implemented and extended roots as
+  # sets. The descriptor was accepted on this thread, its `extends` entries
+  # each related to the contract it describes (`acceptCallSurfaceDescriptor`),
+  # so no claim the provider does not validate makes a provider path
+  # (RUN-0265, RUN-1104).
   let b = r.contracts
-  let s = references(rec, b)
+  let s = references(rec)
   if not b.matchesContracts(s.primary, s.interfaces, s.extends):
     let own =
       if b.primary.isSome:
@@ -2856,7 +2839,10 @@ proc checkContracts(x: Inst, r: RealizationView): Result[bool, string] =
       else:
         Opt.none(Digest)
     return err(
-      if s.primary != own:
+      if s.primary.isNone and own.isSome:
+        # [G393] An omitted primary is none.
+        "the expected contracts name no primary contract, but the module has one"
+      elif s.primary != own:
         "the primary contract differs from the expected one"
       elif not b.matchesContracts(own, s.interfaces, b.extends.mapIt(it.root)):
         "the implemented interface contracts differ from the expected ones"
@@ -3743,8 +3729,8 @@ proc bindingRefusal(st: State, x: Inst): string =
   if b.dispatch.isNil:
     return "it has no generic dispatch"
   let primary = b.contracts.primary
-  # A record that names no primary contract is checked by what the
-  # realization exposes (RUN-0316), as host configuration says.
+  # [RUN-0316; G393] The realization's primary is checked here too; a ready
+  # record with a provider record states it (`checkContracts`).
   if root.isNone or
       (x.record.primaryContract.isSome and x.record.primaryContract != root) or
       primary.isNone or primary.get.root != root.get:

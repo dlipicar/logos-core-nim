@@ -3941,3 +3941,15 @@ id = "TXT-0545"
 rides = "PKG-0351"
 decision = "G391"
 reason = "The handoff carries `extends` (PM l.1401) and the Runtime matches the descriptor's extended set with it exactly (l.1441): both are the handoff's, which 5-5 constructs and 5-8 checks; PKG-0351 is its requirement."
+
+# P8c: the items held on TF-62 (INTERFACE §2.6, RUNTIME §8; G393) -------------------------------------------------
+
+[[units]]
+id = "IFC-0246"
+decision = "G393"
+compared = "IF l.1745-1746 at 6a4dfa28 required a supplied primary contract and implemented-interface set to match the validated descriptor exactly; l.1717 at 6cac8335 names the sources (a package, Runtime input, static registration or protected built-in declaration) and adds the extended-contract set. The helper half (P8a): matchesContracts takes the extended set, compared as a set (test_call_surface's [IFC-0246] test). The engine half (P8b, P8c): checkContracts compares a record's primary, implements and extends with the descriptor through matchesContracts, and once a record supplies any reference an omitted primary is none and an omitted array empty (engine.references; G393, the interim on TF-62); test_engine's stated-set test (smaller, larger, other sets) and its [IFC-0246] [G393] test (a primary alone, no extends, no implements, implements alone, no primary: each fails; the full statement is bound)."
+
+[[units]]
+id = "RUN-0258"
+decision = "G393"
+compared = "RUNTIME l.1381 at 6a4dfa28 preserved the module name, primary_contract, implements, requires and requested_permissions without addition or widening; l.1303 at 6cac8335 adds extends. The sentence's subject is the Package Manager handoff (l.1300-1302), whose path is 5-8's, and 5-8's handoff test carries the id. The evidence here is the stored record of a host-configuration input: lcn.rs_record carries extends and factBytes compares it, and test_persist's [RUN-0258] test keeps the instance and its provider id while extends is equal and keeps the retained record when it changes (G160 note). The claim rests on G393's strict rule: an omitted field is none or empty, so no view a record does not state is exposed."
