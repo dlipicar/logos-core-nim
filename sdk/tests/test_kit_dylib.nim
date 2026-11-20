@@ -24,7 +24,7 @@ import
 import logos_sdk/testing/testdirs
 import
   logos_sdk/testing/generated/
-    [meter_module_types, sensor_module_types, tuner_module_types]
+    [ledger_module_types, meter_module_types, sensor_module_types, tuner_module_types]
 
 type
   NameFn = proc(): cstring {.cdecl, gcsafe, raises: [].}
@@ -75,6 +75,33 @@ let
   tuner = build("tuner_impl.nim", "kittuner", "tuner_module")
   tunerApply =
     cast[ApplyFn](tuner.handle.symAddr("logos_tuner_module_MODULE_apply_configuration"))
+
+when defined(posix):
+  import std/posix
+
+  proc sigactionOf(
+    sig: cint, act, old: ptr Sigaction
+  ): cint {.importc: "sigaction", header: "<signal.h>".}
+
+  proc sentinel(sig: cint) {.noconv.} =
+    discard
+
+let (ledger, pipeAfterLoad) = block:
+  ## [DECISIONS G340, P5] The confined ledger kit, whose main module imports
+  ## chronos before the kit (`ledger_lib.nim`), loaded with a sentinel
+  ## `SIGPIPE` handler; what is set after the load is kept for the test below,
+  ## then this program's own handler goes back.
+  let path = buildKitLibrary("ledger_lib.nim", "kitledger", exports = "ledger_module")
+  when defined(posix):
+    var mark, own, now: Sigaction
+    mark.sa_handler = sentinel
+    discard sigemptyset(mark.sa_mask)
+    doAssert sigactionOf(SIGPIPE, addr mark, addr own) == 0
+    let lib = load(path, "ledger_module")
+    doAssert sigactionOf(SIGPIPE, addr own, addr now) == 0
+    (lib, cast[pointer](now.sa_handler))
+  else:
+    (load(path, "ledger_module"), pointer(nil))
 
 proc typedSymbol(lib: Library, name: string): pointer =
   ## A typed provider function (INTERFACE §2.4) the library exports.
@@ -455,3 +482,27 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
       check r.counts == (2 * rounds, 2 * rounds, 0) and not r.outstanding
       r.dispose()
     shapes.destroy(ctx)
+
+suite "ifc.kit: a thread-confined kit as a shared library (DECISIONS G335, G340) [IMPL]":
+  test "[IMPL-DECISION G340] a confined kit whose main module imports chronos first leaves the host's SIGPIPE as it was":
+    when defined(posix):
+      check pipeAfterLoad == cast[pointer](sentinel)
+    else:
+      skip()
+
+  test "[IMPL-DECISION G335] the library's own runtime runs the instance on its module thread":
+    var inp = input()
+    var ctx: ptr LogosModuleContext
+    check ledger.init(addr inp, addr ctx).code == CErrorCode(0)
+    let c = call(
+      ledger.dispatch,
+      ledger.free,
+      ctx,
+      "probe",
+      encode(LedgerProbeRequest(channel: 1, value: 0)).get,
+    )
+    check c.code == ecOk
+    let r = LedgerProbeResponse.decode(c.response).get
+    check r.thread != uint64(getThreadId())
+    check r.note == $ecNotReady # no invocation context is current here
+    ledger.destroy(ctx)

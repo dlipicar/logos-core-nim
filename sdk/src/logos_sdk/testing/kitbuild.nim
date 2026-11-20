@@ -139,7 +139,17 @@ proc buildKitLibraryIn*(
   # to its host: without -d:noSignalHandler its NimMain sets handlers for
   # SIGINT, SIGSEGV, SIGABRT, SIGFPE, SIGILL and SIGBUS and ignores SIGPIPE when
   # it is loaded (system/excpt.nim, `registerSignalHandler`).
-  var args = @[compiler, "c", "--hints:off", "--mm:" & mm, "-d:noSignalHandler"]
+  # A library that imports chronos records the host's SIGPIPE first and puts it
+  # back last, whatever its main module imports first (P5): Nim initializes
+  # an `--import:` module before any module of the library.
+  var args = @[
+    compiler,
+    "c",
+    "--hints:off",
+    "--mm:" & mm,
+    "-d:noSignalHandler",
+    "--import:logos_sdk/base/hostsignals",
+  ]
   when defined(release):
     args.add("-d:release")
   when kitSanitizer.len > 0:

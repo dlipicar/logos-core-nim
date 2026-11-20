@@ -20,6 +20,7 @@ const
   storageFetchDocument* = contractDir & "/lcn_storage_fetch.cddl"
   storageFetchRootPath* = contractGeneratedDir & "/lcn_storage_fetch_root.nim"
   fetchFakeDocument* = fixtureDir & "/fetch_fake_module.cddl"
+  ledgerDocument* = fixtureDir & "/ledger_module.cddl"
 
 const nimFixtures* = [
   NimFixture(
@@ -153,6 +154,10 @@ const nimFixtures* = [
     interfaces: @[storageFetchDocument],
     calls: true,
   ),
+  NimFixture(module: "ledger_module_types.nim", primary: ledgerDocument),
+  NimFixture(
+    module: "ledger_module_kit.nim", primary: ledgerDocument, kit: true, confined: true
+  ),
 ]
 
 type ExportFixture* = object
@@ -172,6 +177,8 @@ const exportFixtures* = [
   ExportFixture(kit: "tuner_module_kit.nim", kind: elGnu),
   ExportFixture(kit: "fetch_fake_module_kit.nim", kind: elDarwin),
   ExportFixture(kit: "fetch_fake_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "ledger_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "ledger_module_kit.nim", kind: elGnu),
 ]
 
 proc fixtureName(f: ExportFixture): string =
