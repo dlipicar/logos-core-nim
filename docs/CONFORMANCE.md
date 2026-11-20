@@ -446,7 +446,7 @@ status that still defers to one of them. The sections above say what each step c
 claim as it stands.
 
 - **RUNTIME** is claimed for the Runtime instance that `logosd` runs: the engine plus the reference
-  orchestration module (RUNTIME l.72; DECISIONS I94), in direct and local-transport mode, with hosted
+  orchestration module (RUNTIME l.66; DECISIONS I94), in direct and local-transport mode, with hosted
   realizations through the Module Host (I91). A host that embeds `liblogos_runtime` without `logosd`
   names the reference module or carries its duties itself (`docs/HOST-CONFIG.md`, "Orchestration
   duties"). Tier 5: remote mode, facades, enrollment, listeners and exports, and package-backed
@@ -580,12 +580,12 @@ Contract extension in the Runtime at 6cac8335 (DECISIONS I112 part b, G394, G391
   `sandbox` and `container` are not offered (`docs/DEPLOYMENT.md` §8; DECISIONS G265 for what a module
   starts, below).
 
-- Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
+- Protection between processes of the same OS identity (TRANSPORT §8.2 l.1088-1092): Module Hosts
   run as the daemon's user, so a process running as that user can replace a socket pathname or
   impersonate an endpoint. Deployments that need that protection must run hosts under distinct OS
   identities, which this implementation does not set up (DECISIONS G58). The same holds on Windows
   once the profile is built there (step 5-9): a consumer of the Runtime's own user can delete,
-  rename or re-secure the endpoint, and TRANSPORT l.1156 is read as not reaching it (DECISIONS G332,
+  rename or re-secure the endpoint, and TRANSPORT l.1137 is read as not reaching it (DECISIONS G332,
   the owner's reading, 2026-11-17).
 - Containment of what a hosted module starts: a Module Host's process group is killed after every
   end of the host, but a process the module moved into another group or session outlives it
@@ -604,7 +604,7 @@ Contract extension in the Runtime at 6cac8335 (DECISIONS I112 part b, G394, G391
 - Erasure of a marked payload (INTERFACE §1.4.1; DECISIONS I92) where no wipe can run or reach:
   - **A Module Host ended by force**: SIGKILL at a startup, stop or apply deadline (G269), or
     `_exit(70)` on a broken carrier (G266), ends the process without running any wipe. This is a
-    non-claim for that host's own buffers only (LOADER l.573 permits the forced end); the Runtime's
+    non-claim for that host's own buffers only (LOADER l.571 permits the forced end); the Runtime's
     and the peer's keep their claim.
   - **A refc build of the Runtime or the Module Host**: under refc, Nim's `Channel[T]` deep-copies
     each message into the channel's region and frees that copy inside the standard library,
@@ -794,7 +794,7 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   invocation that fails before any work, a reply lost or garbled after the work, a reply held), or
   the Loader's report of its own failure (DECISIONS I89 part 4b-1d).
 - `engine.confirmTerminationForTests`: stands in for the protected mechanism that confirms a lost
-  Loader's realizations are gone (RUNTIME l.3825; G249), which a deployment does by ending the host
+  Loader's realizations are gone (RUNTIME l.3689; G249), which a deployment does by ending the host
   process.
 - `orchestration/testhooks.nim` (DECISIONS I94): `setOrchestratorFaultsForTests` and
   `clearOrchestratorFaultsForTests` select faults in the reference orchestration module (the next

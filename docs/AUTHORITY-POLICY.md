@@ -1,8 +1,8 @@
 # Capability Authority policy: `logos-core-nim.authority-policy.v1`
 
 The Capability Authority (CA §1-§11) decides route, call and grant requests for the Runtime. Its rules
-are deployment input (BCP l.360): this page is the format, what each rule means, and how a deployment
-runs the authority (BCP l.359, l.368, l.380, l.394-395). The authority is built as the `direct_static`
+are deployment input (BCP l.365): this page is the format, what each rule means, and how a deployment
+runs the authority (BCP l.364, l.373, l.385, l.399-400). The authority is built as the `direct_static`
 module `logos_capability_authority` (DECISIONS I84). The host configuration kind that selects it comes
 with step 8b; until then the host configuration's `policy` is `allow-all` only (HOST-CONFIG.md).
 
@@ -217,22 +217,22 @@ every Runtime-known instance.
 
 The facts come from the engine's own registry, not from deployment input and never from a request's
 fields: for the consumer, the target, and the instance backing each provider, the module name and the
-retained selection (RUNTIME l.3523). The authority reads them over a protected in-process path, not
-through Runtime Control (CA l.104) and not through `evaluate` (l.105).
+retained selection (RUNTIME l.3388). The authority reads them over a protected in-process path, not
+through Runtime Control (CA l.107) and not through `evaluate` (l.108).
 
-- **Freshness.** Name and selection are fixed for an instance's life (RUNTIME l.3546, l.3621). The
+- **Freshness.** Name and selection are fixed for an instance's life (RUNTIME l.3411, l.3490). The
   only change is retirement, which every later evaluation sees: a retired instance is unknown, and a
   request naming it is `invalid-request`.
 - **Failure.** When the facts cannot be read, `evaluate` fails `authority-unavailable`; it is never
-  a deny (CA l.106).
+  a deny (CA l.109).
 - **Tier 4.** Direct implementations have no signer or package, so only `instances` and `modules` can
   match them. A rule with `signers` or `packages` matches no direct instance; that is a known absence,
   not a missing fact.
 - **Trust.** Rules name exact signer keys, not trust anchors. Changing who is trusted is a policy
   revision, with its own `policy_changed` event.
 - **History.** A grant's target and an audit record's subject are matched with the facts as they were
-  when the grant or record was made, so a retired address can still be filtered (CA l.78-79). These
-  snapshots never authenticate anything (l.80). A failure recorded before the consumer's facts could be
+  when the grant or record was made, so a retired address can still be filtered (CA l.79-80). These
+  snapshots never authenticate anything (l.81). A failure recorded before the consumer's facts could be
   read carries its instance id alone, which matches no subject naming modules, signers or packages.
 
 ### Scope patterns
@@ -250,7 +250,7 @@ A pattern covers a requested scope when everything the scope asks for is inside 
   restrict how; `placements` needs `modes` to be exactly `["local-transport"]`.
 - **`permission`.** A permission the selected permission profile defines (`docs/PERMISSIONS.md`), with
   the broadest `constraints` allowed. The pattern covers a requested permission scope of the same name
-  whose constraints are contained in the pattern's under the definition's containment (CA l.129); with
+  whose constraints are contained in the pattern's under the definition's containment (CA l.132); with
   no `constraints`, any conforming value. A pattern naming a permission the profile does not define, or
   constraints that do not conform, refuses the policy.
 
@@ -259,12 +259,12 @@ two symbolic contracts only. Names resolve when the policy is loaded; an unknown
 policy. Event names may omit the `_event` suffix.
 
 **Never narrowing.** The authority allows what was asked or nothing; it never answers with less (CA
-l.214). As modules see it:
+l.124). As modules see it:
 - an `all-runtime-visible` discovery is all or nothing per contract;
 - a route asked for with unconstrained `access` is refused whenever the covering rule or grant
   constrains methods or events. Ask for the methods and events you need.
 
-**Restricted declarations** (CA l.898, l.1423; RUNTIME l.1662). Whatever the rules say, no rule or
+**Restricted declarations** (CA l.924, l.1423; RUNTIME l.1578). Whatever the rules say, no rule or
 grant contains a `subscribe-event` naming `grant_changed` or `policy_changed` on the authority's
 contract (those events go only to the Runtime):
 - such a request is denied `scope-denied` when an allow rule or active grant covers its action (an
@@ -292,7 +292,7 @@ on the authority's contract in `access.methods`:
   older records out of a bounded log, and can fill the backlog so that every evaluation fails closed
   until it drains (Audit retention).
 
-**Permission scopes** (CA l.212-216, l.387-392; DECISIONS I93). The host selects a permission profile
+**Permission scopes** (CA l.214-218, l.383-388; DECISIONS I93). The host selects a permission profile
 in protected configuration (`docs/HOST-CONFIG.md`, `permissions`); the authority gets the same profile
 through its wiring. A permission scope names no target: it is tied to the start it stands beside, and
 only there.
@@ -301,7 +301,7 @@ only there.
   under TL-04). A rule allowing `logos-core-nim.host-ambient` on its own would otherwise lend it to
   every module its subject may start.
 - A permission scope beside anything but one `module-execution` `start` is `invalid-request`, with and
-  without a profile (CA l.484-486).
+  without a profile (CA l.476-478).
 - With no profile selected every permission scope is `unknown-permission`, and a policy with a
   permission pattern does not load. The Runtime then sends none (the constant form of
   `docs/HOST-CONFIG.md`, G229).
@@ -354,7 +354,7 @@ order assigns the rest, and places the denials among the errors; the first that 
 - Steps 6a and 8 are recorded as denials. Steps 3 to 7 and 9, and step 8 of `revoke_grant`, are
   recorded as failures. Steps 1 and 2 are not recorded.
 
-## Explicit permissions for bootstrap and system services (BCP l.360)
+## Explicit permissions for bootstrap and system services (BCP l.365)
 
 Nothing is allowed by default. A deployment needs at least:
 
@@ -481,10 +481,10 @@ records. It is a test input (`tests/test_authority.nim`): it loads as written.
 - **Live replacement.** `replacePolicy` is the only live path, a Nim call for the embedding host. A
   replacement with the same digest changes nothing. Otherwise the revision goes up, the change is
   recorded and made durable, and one `policy_changed` goes to the Runtime.
-- **No approval step.** There is no user-facing approval (BCP l.380 does not apply): whoever writes the
+- **No approval step.** There is no user-facing approval (BCP l.385 does not apply): whoever writes the
   policy decides.
 
-## Limits (BCP l.369)
+## Limits (BCP l.375)
 
 | Limit | Value |
 |---|---|
@@ -502,7 +502,7 @@ records. It is a test input (`tests/test_authority.nim`): it loads as written.
 
 **Where it lives.** The authority's state is its instance's state assignment (under the host's
 `state_root`), not the Runtime store. A replacement authority instance gets a fresh assignment and
-starts with no grants (RUNTIME l.3549).
+starts with no grants (RUNTIME l.3414).
 
 | File | Content | Written |
 |---|---|---|
@@ -521,15 +521,15 @@ starts with no grants (RUNTIME l.3549).
   others can read refuses to start.
 - **Refusal to start**, with every file left as it is: state from another Runtime, written under
   another authority contract, in an unknown format, or a file that does not decode.
-- **Contract replacement** (CA l.757-761). State carries the contract root it was written under. A
+- **Contract replacement** (CA l.749-753). State carries the contract root it was written under. A
   different contract does not start, and Tier 4 has no migration: keep the old directory for its
   records.
-- **Backup and rollback** (BCP l.394). Back up `state_root` and the Runtime store together, with the
+- **Backup and rollback** (BCP l.399). Back up `state_root` and the Runtime store together, with the
   Runtime stopped. Restoring an older directory brings back every grant revoked since the backup, so
   never restore across a revocation.
 - **Retention is one count** (U6). `audit.records` bounds all consumers together, and the oldest go
   first, in whole segments, and only once written: one consumer's evaluations can push others'
-  evaluation records out (CA l.1352 assumes otherwise). Grant records stay with their grant until the
+  evaluation records out (CA l.1396 assumes otherwise). Grant records stay with their grant until the
   grant itself goes.
 
 **Audit retention** (CA l.1207-1214; DECISIONS G376). The point at which an evaluation's audit
@@ -551,10 +551,10 @@ record counts as retained, as CA l.1208 asks the deployment to define:
   needs each record on disk before its decision cannot select that here.
 - **Admission is unchanged.** A request refused before evaluation begins (its form, the 4 MiB scope
   bound, a full queue) gets the same answer whatever the audit state (CA l.1203-1205).
-- **Retirement is not deletion** (BCP l.395). A retired instance's grants and records stay until
+- **Retirement is not deletion** (BCP l.400). A retired instance's grants and records stay until
   retention removes them, and queries can still name its address.
 
-**Call records** are made and kept by the Runtime, not the authority (CA l.1329-1330): `query_audit`
+**Call records** are made and kept by the Runtime, not the authority (CA l.1373-1374): `query_audit`
 returns only the authority's records. Step 8b says where call records are read.
 
 ## `watch_changes`
@@ -583,7 +583,7 @@ returns only the authority's records. Step 8b says where call records are read.
 
 The module is `logos_capability_authority`, a `direct_static` binding of the same name
 (`caStaticRegistration()`), with a state assignment. The embedding host wires each instance before
-starting it (RUNTIME l.1681, l.3075-3077): `wireAuthority(stateDir, wiring)` with the policy bytes, the
+starting it (RUNTIME l.1597, l.2981): `wireAuthority(stateDir, wiring)` with the policy bytes, the
 Runtime id, the facts table, the clock and the limits, keyed by the instance's state directory. An
 instance without wiring does not start (MODULE_ERROR). The wiring stays until `unwireAuthority`, so a
 stopped instance starts again on the same state. Step 8b does this from the host configuration.

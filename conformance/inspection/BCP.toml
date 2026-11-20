@@ -145,7 +145,7 @@ reason = "docs/DEPLOYMENT.md rows 10a and 10b and §10: accepted-declaration sel
 # bcp-deploy-attributes (DECISIONS I97, G309, G47)
 [[item]]
 ids = ["BCP-0077"]
-reason = "docs/DEPLOYMENT.md row 11 and §11: the attribute-source integration of G47 (CA l.101-103): the Runtime's registry as the source, instance id and module name bound to the consumer and target, fixed for an instance's life, a missing fact an evaluation failure, disclosed to the authority only. Supported: a mechanism is described, not a none (G309)."
+reason = "docs/DEPLOYMENT.md row 11 and §11: the attribute-source integration of G47 (CA l.104-106): the Runtime's registry as the source, instance id and module name bound to the consumer and target, fixed for an instance's life, a missing fact an evaluation failure, disclosed to the authority only. Supported: a mechanism is described, not a none (G309)."
 
 # bcp-deploy-credential-store (DECISIONS G309, G159)
 [[item]]
@@ -190,9 +190,9 @@ reason = "docs/DEPLOYMENT.md row 18b and §17: there is no user-facing approval 
 # bcp-deploy-activation (DECISIONS I97, G309, G296)
 [[item]]
 ids = ["BCP-0085"]
-reason = "docs/DEPLOYMENT.md row 19 and §17 index docs/DAEMON.md §7, Activation, which documents the five items BCP l.384 lists for the logosctl socket: mechanism, admission (the peer uid), accepted application selection (one instance, seventeen methods), presentation handoff (what crosses at initialization, nothing that authenticates) and failure behaviour. Supported; BCP-0086 to BCP-0089 are tested (step 4b-6)."
+reason = "docs/DEPLOYMENT.md row 19 and §17 index docs/DAEMON.md §7, Activation, which documents the five items BCP l.389 lists for the logosctl socket: mechanism, admission (the peer uid), accepted application selection (one instance, seventeen methods), presentation handoff (what crosses at initialization, nothing that authenticates) and failure behaviour. Supported; BCP-0086 to BCP-0089 are tested (step 4b-6)."
 
 # bcp-deploy-state-at-rest (DECISIONS I97, G309, G143)
 [[item]]
 ids = ["BCP-0091", "BCP-0092"]
-reason = "docs/DEPLOYMENT.md row 21 and §19: protection at rest (file modes only), other principals and same-user processes, no secret store, backup and synchronization exposure (no sync facility; a copy holds everything, the evidence key included), restore and rollback (continuity, trust reestablish, the operator's backup as move's rollback), retention and deletion (retirement keeps state and is not deletion; logosctl state purge is the separate deletion; no physical erasure claimed, BCP l.396). Supported; tests [BCP-0091] [BCP-0092] in tests/test_deployment.nim check the modes and the state kept after retirement."
+reason = "docs/DEPLOYMENT.md row 21 and §19: protection at rest (file modes only), other principals and same-user processes, no secret store, backup and synchronization exposure (no sync facility; a copy holds everything, the evidence key included), restore and rollback (continuity, trust reestablish, the operator's backup as move's rollback), retention and deletion (retirement keeps state and is not deletion; logosctl state purge is the separate deletion; no physical erasure claimed, BCP l.401). Supported; tests [BCP-0091] [BCP-0092] in tests/test_deployment.nim check the modes and the state kept after retirement."

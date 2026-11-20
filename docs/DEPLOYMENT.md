@@ -128,7 +128,7 @@ Items 1, 5b, 5c, 10b, 12b and 16a.
   I49, I69): nothing in logosd installs, inventories or selects a package. There is no source kind, no
   provenance profile, no installation scope, no inventory and no shared package state. A module comes
   from daemon-config as an artifact path with its digest (§10); no package-backed creation exists.
-- **Does continued execution depend on current package-signing trust acceptance** (PM l.402)? **No.**
+- **Does continued execution depend on current package-signing trust acceptance** (PM l.408)? **No.**
   1. The trust file holds no package-signing anchors: only its revision and the development switch
      ([DAEMON.md](DAEMON.md) §6; DECISIONS G299).
   2. No instance has a signer or package fact, direct or hosted: the Runtime's registry, the only
@@ -188,7 +188,7 @@ Items 5a–5d.
 - **Package provenance and source evidence** (5c): none selected. Tier 5.
 - **Remote Runtime enrollment** (5d): none. Tier 5.
 
-Each trust input has its own file and purpose (SEC l.519).
+Each trust input has its own file and purpose (SEC l.521).
 
 ## 6. Module Loader mappings
 
@@ -216,7 +216,7 @@ permission, `logos-core-nim.host-ambient` (DECISIONS G110, G279, G283):
 
 | Permission | Constraints | Facility classes | Enforced by | When it cannot be enforced | When revoked |
 |---|---|---|---|---|---|
-| `logos-core-nim.host-ambient` | the empty map | all seven (CA l.398-404) | Runtime admission | the start or recovery is refused | the Runtime stops the execution form; intent is kept |
+| `logos-core-nim.host-ambient` | the empty map | all seven (CA l.396-402) | Runtime admission | the start or recovery is refused | the Runtime stops the execution form; intent is kept |
 
 An unknown permission and one that cannot be enforced are refused (CAP-0074, CAP-0084). No per-class or
 per-resource limit can be expressed. Details: [PERMISSIONS.md](PERMISSIONS.md).
@@ -291,12 +291,12 @@ Items 10a and 10b (DECISIONS G55, G311).
   `declarations` (what `logosctl module create` may instantiate): one declaration per module name,
   protected input. `create_module` for a name with no declaration is refused as a denied request; a
   created instance keeps the declaration it was created from. logosd links two bindings and keeps no
-  signed package declaration for them (R l.1395).
+  signed package declaration for them (R l.1317).
 - **10b.** No exact package/version pinning: nothing creates a package-backed module. Tier 5.
 
 ## 11. The attribute source
 
-Item 11 (CA l.101-103; DECISIONS G47).
+Item 11 (CA l.104-106; DECISIONS G47).
 
 - **Source.** The Runtime's own registry, read by the in-process Capability Authority over a protected
   in-process path; not Runtime Control, not `evaluate`, not deployment input.
@@ -386,7 +386,7 @@ Item 13. Five deadlines, in milliseconds, each 1 to 3,600,000 where configurable
 
 ## 14. Upgrade and verified defaults
 
-Item 14 (CFG l.134, l.261).
+Item 14 (CFG l.134, l.266).
 
 - **Configuration-preserving upgrade** is the operator's: read the old instance's configuration with
   `logosctl config get`, turn it into the replacement's `provisioned_configuration` under the new
@@ -405,7 +405,7 @@ Item 14 (CFG l.134, l.261).
 
 ## 15. Presentation
 
-Item 15. No presentation profile is selected and none is assigned (BCP l.341). logosctl is a terminal
+Item 15. No presentation profile is selected and none is assigned (BCP l.346). logosctl is a terminal
 command, not a presentation profile.
 
 ## 16. Facilities that cannot be supplied
@@ -433,7 +433,7 @@ Items 18a–18c and 19.
 - **Approval presentation** (18b): none; nothing asks a user to approve anything.
 - **Requester provenance** (18c): the peer uid and pid of each socket command are logged with it and
   never reach a Runtime Control request or stand for the consumer.
-- **Activation** (19): the `logosctl` socket and instance, with BCP l.384's five items, are documented
+- **Activation** (19): the `logosctl` socket and instance, with BCP l.389's five items, are documented
   in [DAEMON.md](DAEMON.md) §7, "Activation": mechanism, admission (peer uid), selection (one instance,
   seventeen methods), presentation handoff (socket path, worker count, idle timeout, deployment, trust
   revision, version, start time; nothing that authenticates), failure behaviour.
@@ -463,7 +463,7 @@ Item 21.
 - **Retention and deletion:** retirement keeps the state directory and is not deletion. The separately
   authorized deletion is `logosctl state purge`, offline; `logosctl state list` shows what is kept and
   where it came from ([DAEMON.md](DAEMON.md) §11). Physical erasure from storage media, snapshots or
-  backups is not claimed (BCP l.396).
+  backups is not claimed (BCP l.401).
 
 ## 20. Non-production
 
@@ -520,7 +520,7 @@ failure text (DECISIONS G278). A Module Host's own output is inherited and unfil
 
 ## 24. Safe deployment defaults
 
-SECURITY §13 (l.516-532) lists defaults a production deployment should begin from. Informative:
+SECURITY §13 (l.517-533) lists defaults a production deployment should begin from. Informative:
 
 | Default | logosd |
 |---|---|
