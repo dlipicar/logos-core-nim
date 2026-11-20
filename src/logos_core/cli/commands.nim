@@ -442,9 +442,9 @@ proc runDescribe(c: Ctx, sel: LcnCliProvider): Result[void, Stop] =
 
 # call --------------------------------------------------------------------------------------
 
-func findMethod(s: CallSurface, name: string): Opt[SurfaceMethod] =
-  ## By bare name, else by qualified name.
-  let b = s.findMethod(name)
+func methodNamed(s: CallSurface, name: string): Opt[SurfaceMethod] =
+  ## By bare name (the SDK's `findMethod`), else by qualified name.
+  let b = surface.findMethod(s, name)
   if b.isSome:
     return b
   for m in s.methods:
@@ -583,7 +583,7 @@ proc callWithRetry(
 proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
   ## [G348, G349] One typed call through a leased route.
   let p = ?c.provider(cmd.provider)
-  let m = p.surface.findMethod(cmd.`method`).valueOr:
+  let m = p.surface.methodNamed(cmd.`method`).valueOr:
     return err(
       refused(
         p.module & " has no method " & cmd.`method` & "; its methods: " &

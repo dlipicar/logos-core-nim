@@ -28,6 +28,7 @@
 import std/locks
 import results
 import logos_sdk/abi/[checks, types]
+from logos_sdk/abi/cstatus import bindingEnter
 import logos_sdk/iface/outcome
 import logos_sdk/kit/rc_types
 
@@ -116,8 +117,11 @@ proc onComplete(
     owner: LogosResponseOwner,
 ) {.cdecl, gcsafe, raises: [].} =
   ## [SPEC INTERFACE §2.9.1, §2.9.2] Copies the outcome into shared memory and
-  ## releases the owner; it allocates nothing the collector owns, so it may run
-  ## on any Runtime thread.
+  ## releases the owner; it allocates nothing the collector owns. It runs on a
+  ## Runtime or Module Host thread this library did not start, which registers
+  ## with its Nim runtime first: under ORC a C thread has no allocator region
+  ## until then, and `allocShared` crashed on one (N-2b's first run).
+  bindingEnter()
   let slot = cast[ptr CallSlot](userData)
   var code = ecOk
   var resp, msg, det: SharedBuf

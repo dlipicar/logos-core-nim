@@ -768,8 +768,9 @@ logosctl module wait shapes_module --state ready
 - **Idle.** It does not stop itself (an [IMPL] choice, G350: a self-stop would cancel the retained intent,
   R l.1735). What expires is routes: each closes after `cli.route_idle_ms` without a call (R l.3123).
 - **After a crash.** The Module Host exits when its carrier to logosd closes, so a killed logosd leaves no
-  live `lcn_call` socket. The next start empties `run/`, and the launcher recovers `lcn_call` from `error`
-  `host-terminated` (R l.3634).
+  live `lcn_call` socket. The next start empties `run/` and restores `lcn_call` as `error`
+  `host-terminated` (R l.3634) with its requested intent: the orchestrator's first pass resumes it, as it
+  does any such instance (G289), and a command that comes first recovers it itself (Activation, below).
 - **Configuration.** `lcn_call.settings`, provisioned by logosd at every start from `cli` and the trust
   file (socket, workers, streams, idle timeouts, deployment). The logosctl instance may not stage, apply
   or retire it (S8, §5).

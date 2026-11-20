@@ -47,6 +47,7 @@
 import std/[locks, monotimes, sysrand, times]
 import results
 import logos_sdk/abi/[checks, types]
+from logos_sdk/abi/cstatus import bindingEnter
 import logos_sdk/base/hex
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/outcome
@@ -178,7 +179,9 @@ proc setSubscriptionEndHook*(
 
 proc onEnd(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises: [].} =
   ## [SPEC INTERFACE §2.8] The route ended: the handle takes no new command.
-  ## It takes the table's lock only, never a handle's.
+  ## It takes the table's lock only, never a handle's. Like every callback, it
+  ## registers the calling thread first (`rpc.onComplete`).
+  bindingEnter()
   let tag = cast[ptr EndTag](userData)
   withLock tag.table.lock:
     tag.box.ended = true
@@ -188,6 +191,7 @@ proc onSubscriptionEnd(
 ) {.cdecl, gcsafe, raises: [].} =
   ## [SPEC INTERFACE l.1474-1481] A binding-ended subscription on this handle,
   ## for the table's hook; it operates on no handle (l.1480).
+  bindingEnter()
   let tag = cast[ptr EndTag](userData)
   var hook: LogosSubscriptionEndHandler = nil
   var data: pointer = nil
