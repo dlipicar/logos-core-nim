@@ -61,6 +61,16 @@ heading under a numbered one.
 "Deferred" means not built. Behaviour that is built and differs from the text is a deviation: it is
 recorded in `docs/DECISIONS.md`, and its unit is deferred only when the text's behaviour is not built.
 
+**What a RUNTIME claim covers (BCP l.286).** A claim of conformance to RUNTIME covers a Runtime
+instance with its orchestration module (RUNTIME l.66). This repository's RUNTIME claim is for the
+engine with the reference orchestration module, `lcn_orchestrator`, wherever a host names it
+(DECISIONS I94). logosd does: its Runtime instance is the engine with `lcn_orchestrator` as instance
+`orchestrator` (`docs/DAEMON.md` §4; the facts block of `docs/DEPLOYMENT.md`, which
+`tests/test_deployment.nim` compares with logosd's composition). A host embedding `liblogos_runtime`
+that names another orchestration module supplies an engine without this one, so its claim is joint
+with the module it supplies, which carries the orchestration duties (`docs/HOST-CONFIG.md`,
+"Orchestration duties").
+
 ### What is claimed at the end of Tier 4
 
 Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --closed-tier 3
@@ -561,6 +571,10 @@ Contract extension in the Runtime at 6cac8335 (DECISIONS I112 part b, G394, G391
   is no Package Manager, so no package is installed, selected or trusted, and BCP's units that bind
   the whole are claimed only where `logosd` meets them on its own. `docs/DEPLOYMENT.md` answers each
   missing facility "None" or "Not supported", with the tier that changes it where one is planned.
+- The Credential Store (BCP l.287-289; owner row 38, 2026-11-18; DECISIONS G159): optional to
+  implement and deploy, and not claimed. Its provider would have to answer `NOT_AUTHORISED`, which
+  provider code may not return (TF-53). logosd deploys none (`docs/DEPLOYMENT.md` row 24, §25), and the
+  specification has no ledger, claims file or mirror here.
 - Operating-system isolation of hosted modules (SEC l.207-209): a Module Host is a process of the
   daemon's user with the daemon's view of the file system, the network and devices; placements
   `sandbox` and `container` are not offered (`docs/DEPLOYMENT.md` §8; DECISIONS G265 for what a module

@@ -7,11 +7,12 @@
 #   out-of-scope:<why>    normative, but not this repository's to implement
 # A `[units]` entry gives one requirement unit its own status, overriding its section's.
 #
-# The claim is for the Runtime instance logosd runs (DECISIONS I88, I97): RUNTIME l.72 defines it as
-# the engine plus an orchestration module, and logosd runs the engine with the reference orchestration
-# module (I94) in direct and local-transport mode, with hosted realizations through the Module Host
-# (I91). A host embedding liblogos_runtime without logosd supplies orchestration itself or links the
-# reference module (docs/HOST-CONFIG.md "Orchestration duties"). The Runtime binds a
+# The claim is for a Runtime instance (DECISIONS I88, I97): RUNTIME l.66 defines it as the engine plus
+# an orchestration module, and BCP l.286 says a RUNTIME claim covers both. logosd's instance is the
+# engine with the reference orchestration module, lcn_orchestrator (I94), in direct and
+# local-transport mode, with hosted realizations through the Module Host (I91). A host embedding
+# liblogos_runtime that names another orchestration module claims jointly with it (BCP l.286;
+# docs/HOST-CONFIG.md "Orchestration duties"; docs/CONFORMANCE.md "Claims"). The Runtime binds a
 # `logos_module_loader` instance (I89), so the Loader-conditional rules (l.1641, l.3754,
 # l.3820-3825, l.3863) are claimed with it.
 

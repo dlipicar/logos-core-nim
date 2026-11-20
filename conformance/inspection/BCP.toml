@@ -4,7 +4,7 @@
 # bcp-diagram (DECISIONS I88)
 [[item]]
 ids = ["BCP-0004"]
-reason = "An illustrative block: the layer diagram of the specification set and its dependency direction (BCP §1). It states no behaviour a test could check. What this repository claims of each named spec is in conformance/claims/ and docs/CONFORMANCE.md: the layer 1 and 2 specs in direct and local-transport mode, the Capability Authority from layer 3, LOADER for the direct strategies and hosted_dynamic in a process (I89, I91), the Package Manager's artifacts and resolver with its handoff and installation in Tier 5, and the Credential Store undefined by any spec (G159). Re-read for DECISIONS I97 at the end of Tier 4b."
+reason = "An illustrative block: the layer diagram of the specification set and its dependency direction (BCP §1). It states no behaviour a test could check. What this repository claims of each named spec is in conformance/claims/ and docs/CONFORMANCE.md: the layer 1 and 2 specs in direct and local-transport mode, the Capability Authority from layer 3, LOADER for the direct strategies and hosted_dynamic in a process (I89, I91), the Package Manager's artifacts and resolver with its handoff and installation in Tier 5, and the Credential Store, defined by LOGOS-MODULE-CREDENTIAL-STORE at 6cac8335 and not claimed (owner row 38; G159). Re-read for DECISIONS I97 at the end of Tier 4b."
 
 # bcp-non-production-doc (DECISIONS I95, K23, D27)
 [[item]]

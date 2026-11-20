@@ -734,11 +734,12 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
 
 ## Orchestration duties
 
-RUNTIME l.72 defines a Runtime instance as the Runtime engine plus an orchestration module. RUNTIME
-is claimed for the engine with the reference orchestration module, `lcn_orchestrator`, wherever a
-host names it (logosd does: docs/DAEMON.md §4; "The reference orchestration module" below;
-DECISIONS I94, docs/CONFORMANCE.md). A host that names another module in `orchestration` carries
-these duties itself, and the engine does not do them for it:
+RUNTIME l.66 defines a Runtime instance as the Runtime engine plus an orchestration module, and a
+RUNTIME claim covers both (BCP l.286). RUNTIME is claimed for the engine with the reference
+orchestration module, `lcn_orchestrator`, wherever a host names it (logosd does: docs/DAEMON.md §4;
+"The reference orchestration module" below; DECISIONS I94, docs/CONFORMANCE.md "Claims"). A host
+that names another module in `orchestration` claims jointly with that module, which carries these
+duties itself; the engine does not do them for it:
 
 - **Startup defaults** (RUNTIME l.194). Apply deployment startup defaults only while an instance's
   intent is `uninitialized`, by conditional `start_module` or `stop_module` requests carrying the

@@ -107,14 +107,3 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"]  # sub-steps that have
 "TXT-0497" = "5-6b"
 "TXT-0498" = "5-6b"
 "TXT-0545" = "5-8"
-
-[[text]]
-id = "TXT-0350"
-step = "P9"
-spec = "BCP"
-line = "286"
-side = "new"
-section = "§5.1"
-source = "n.7"
-class = "todo"
-what = "A claim of conformance to LOGOS-MODULE-RUNTIME covers a Runtime instance including its orchestration module; an engine supplied without that module claims conformance jointly with the orchestration module that the deployment supplies."

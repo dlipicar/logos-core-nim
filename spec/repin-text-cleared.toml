@@ -3964,3 +3964,8 @@ compared = "BCP l.398 at 6a4dfa28 required the non-production mechanisms identif
 id = "TXT-0555"
 step = "P9"
 test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0350"
+step = "P9"
+test = "tests/test_deployment.nim"

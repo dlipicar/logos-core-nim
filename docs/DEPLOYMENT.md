@@ -17,7 +17,10 @@ CONFORMANCE and `conformance/`.
 - **What logosd claims.** logosd follows BCP §5.1's bootstrap: it binds a Module Loader first and
   realizes every other instance through it (BCP l.292-296). It claims no complete Logos module system:
   it deploys no Package Manager (owner decision 10 (a); DECISIONS G310; CONFORMANCE, "Properties not
-  claimed"). It still answers every §5.4 item, as a deployment that owes this document would.
+  claimed"). It still answers every §5.4 item, as a deployment that owes this document would. Its
+  RUNTIME claim covers its Runtime instance, the engine with the reference orchestration module
+  `lcn_orchestrator` as instance `orchestrator` (BCP l.286; CONFORMANCE, "Claims"; facts
+  `runtime_claim`).
 - **The item table** has one row per §5.4 item, split where one part is supported and another is not.
   *Verdict* says what this deployment does: `Supported` (it makes the choice and implements it), `None`
   (it has no subject for the item), `Not supported` (it offers nothing, and an operation that needs it
@@ -627,6 +630,7 @@ The values `tests/test_deployment.nim` checks against the code. Times are millis
     "orchestrator_open_episodes": {"total": 4096, "per_consumer": null}
   },
   "authority_audit": {"acknowledged": "append", "unwritten_bound": 4096, "retained_records": 65536},
-  "credential_store": "none"
+  "credential_store": "none",
+  "runtime_claim": {"orchestration_module": "lcn_orchestrator", "orchestration_instance": "orchestrator"}
 }
 ```

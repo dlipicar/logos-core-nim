@@ -34,7 +34,8 @@ when defined(posix):
   from logos_sdk/iface/provider import callSurfaceDescriptor
   from ../src/logos_core/durable import DurableLock, release
   from ../src/logos_core/daemon/config import
-    DefaultStoreQueue, DefaultStoreRecords, DefaultStoreAgeDays
+    DefaultStoreQueue, DefaultStoreRecords, DefaultStoreAgeDays, OrchestratorInstance
+  from ../src/logos_core/orchestration/settings import OrchestratorModule
   from ../src/logos_core/daemon/evstore import
     DefaultSegmentEntries, DefaultSegmentBytes
   import
@@ -616,7 +617,7 @@ when defined(posix):
       check DefaultSegmentBytes == f["segment_bytes"].getInt
       check MaxDiagnostics == facts["diagnostics_retained"].getInt
 
-    test "[BCP-0102] [TXT-0555] the admission pools' totals and per-consumer limits are the facts', and so is the authority's audit bound; logosd composes no Credential Store, accepts an operator module named logos_credential_store, and its start fails at binding":
+    test "[BCP-0102] [TXT-0555] [TXT-0350] the admission pools' totals and per-consumer limits are the facts', and so is the authority's audit bound; logosd's Runtime instance is the engine with the facts' orchestration module and instance; logosd composes no Credential Store, accepts an operator module named logos_credential_store, and its start fails at binding":
       # The pools (DEPLOYMENT.md §12, "Admission pools"), with logosd's
       # defaults: it sets no engine, authority or Transport limit.
       proc pool(total: int, perConsumer = -1): JsonNode =
@@ -681,6 +682,18 @@ when defined(posix):
       let plain = prepareDaemon(s, dc.encode.get, floor).expect("init's configuration")
       check plain.composition.appConfig.modules.allIt(
         it.module != CredentialStoreModule
+      )
+      # [BCP l.286; RUNTIME l.66] The RUNTIME claim covers logosd's Runtime
+      # instance: the engine with this orchestration module, by the code's names.
+      let claim = facts["runtime_claim"]
+      let orch = claim["orchestration_instance"].getStr
+      check orch == OrchestratorInstance
+      check claim["orchestration_module"].getStr == OrchestratorModule
+      let app = plain.composition.appConfig
+      check app.orchestration == orch
+      check app.modules.anyIt(
+        it.instance == orch and it.module == OrchestratorModule and
+          it.implementation.kind == LcnAppImplementationKind.Direct_static
       )
       var op = dc
       var m = chatterModule()
