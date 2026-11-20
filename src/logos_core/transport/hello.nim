@@ -106,6 +106,24 @@ type FirstMessage = object
   message: Message
   schemaOk: bool
 
+proc wipeRefused(m: var Message) =
+  ## [DECISIONS G276] A first message that is neither a Hello nor a
+  ## ProtocolError is refused before its method is known (§2.3): its payload,
+  ## value root and failure text are zeroed, as `decodeMessage` zeroes an
+  ## invalid envelope. An Event's data is never marked (INTERFACE §1.2.1).
+  case m.kind
+  of mkRequest:
+    wipe(m.request.params)
+    wipe(m.request.commitment)
+  of mkResponse:
+    if m.response.ok:
+      wipe(m.response.resultMap)
+      wipe(m.response.commitment)
+    else:
+      wipe(m.response.failure)
+  else:
+    discard
+
 proc readFirst(
     frame: openArray[byte], payloadDepth: int
 ): Result[FirstMessage, HelloFailure] =
@@ -113,9 +131,18 @@ proc readFirst(
   ## the Hello fields in the §3.1 order: module, token, schema (§8.3).
   let v = decodeValue(frame, payloadDepth).valueOr:
     return err(failure(ecInvalidParams, hrEnvelope, $error))
-  let m = checkMessage(v)
+  var m = checkMessage(v)
   if m.isOk:
-    return ok(FirstMessage(message: m.get, schemaOk: true))
+    # [DECISIONS G276] As `decodeMessage`: the tree around the payload is
+    # zeroed once the typed view is taken.
+    wipeEnvelope(v)
+    if m.value.kind notin {mkHello, mkProtocolError}:
+      wipeRefused(m.value)
+    return ok(FirstMessage(message: move m.value, schemaOk: true))
+  # [DECISIONS G276] An envelope the Hello checks refuse: all of it, as
+  # `decodeMessage` does. The partial Hello below holds copies.
+  defer:
+    wipe(v)
   let e = m.error
   if e.kind != eeField or e.messageKind != Opt.some(mkHello):
     return err(failure(ecInvalidParams, hrEnvelope, $e))

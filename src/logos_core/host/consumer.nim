@@ -492,7 +492,11 @@ proc setFailure(o: ptr Outcome, f: InvocationFailure) =
   o.ok = false
   o.code = f.code
   if f.message.isSome:
-    o.message = sharedText(clip(f.message.get))
+    # [DECISIONS G276] `clip` returns a copy of the provider's text: zeroed
+    # once it is in the shared outcome, as in `runCompletion`.
+    var t = clip(f.message.get)
+    o.message = sharedText(t)
+    wipe(t)
   if f.detail.isSome:
     o.detail = sharedBytes(f.detail.get)
     o.detailLen = f.detail.get.len

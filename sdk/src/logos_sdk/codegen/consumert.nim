@@ -55,8 +55,9 @@
 ## **Marked responses** (DECISIONS G276). The generated `prepareInvoke` of a
 ## method whose response `_sensitive` marks passes `marked`: the decoded
 ## response is erased (`wipeTyped`) once `onDone` returns, so `onDone` copies
-## what it keeps. `_sensitive` marks method payloads only (§1.2.1), so an
-## event is never erased.
+## what it keeps. A failure's text is erased then too, for every method: a
+## provider's may echo a marked request. `_sensitive` marks method payloads
+## only (§1.2.1), so an event is never erased.
 ##
 ## **Runtime Control subscriptions.** `BindingEvents` gives the same typed
 ## subscriptions over a module's Runtime Control binding (l.3868), one per
@@ -756,10 +757,12 @@ proc completeTyped[R](
   mixin decode
   type Outcome = Result[R, InvocationFailure]
   var outcome: Outcome
-  let st = checkOutcome(status, completionShape(response, len, owner))
+  var st = checkOutcome(status, completionShape(response, len, owner))
   if st.isErr:
-    let f = toFailure(st.error, "completion")
-    outcome = Outcome.err(f)
+    outcome = Outcome.err(toFailure(st.unsafeError, "completion"))
+    # [DECISIONS G276] A provider's failure text goes to the receiver only: the
+    # copy it was checked in is zeroed (it may hold a marked request).
+    wipe(st.eResultPrivate)
   else:
     var d =
       if response.isNil or len == 0:
@@ -782,9 +785,11 @@ proc completeTyped[R](
   if ownerValid(owner) and owner.release != nil:
     owner.release(owner.state)
   cast[CallDone[R]](c.onDone)(outcome, c.user)
-  # [DECISIONS G276] A marked response is erased once its receiver returns.
+  # [DECISIONS G276] A marked response is erased once its receiver returns,
+  # and so is a failure's text, which may hold a marked request or response.
   if c.marked and outcome.isOk:
     wipeTyped(outcome.get)
+  wipeError(outcome)
 
 proc prepareWith(
     h: RouteHandle,

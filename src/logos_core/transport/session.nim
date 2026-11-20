@@ -1025,6 +1025,8 @@ proc onResponse(c: var CallerConn, r: var Response): seq[CallerEvent] =
     if not c.abandoned.pop(r.id, methodName):
       if r.ok:
         wipe(r.resultMap)
+      else:
+        wipe(r.failure) # its method is not known: the text may quote a payload
       return c.shut(closing(ecInvalidParams, "a Response for no outstanding request"))
     awaited = false
   let checked = c.boundary.acceptResponse(methodName, r)
