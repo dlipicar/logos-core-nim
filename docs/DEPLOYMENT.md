@@ -98,6 +98,7 @@ AUTHORITY, IF INTERFACE, CFG CONFIGURATION, PM PACKAGE MANAGER.
 | T | l.815-816 | event output overflow actions, waits, closure | [CONFORMANCE.md](CONFORMANCE.md), "Event output overflow" | TRN-0309, TRN-0310 |
 | T | l.1343-1345 | finite Transport limits, their scope and exhaustion | [CONFORMANCE.md](CONFORMANCE.md), "Transport limits" | TRN-0378, TRN-0379, TRN-0380 |
 | CFG | l.134 | whether package defaults are accepted; a verified default for reset | [§14](#14-upgrade-and-verified-defaults) | CFG-0129 |
+| PM | l.1252 | the maximum value supported for each resolver limit | [CONFORMANCE.md](CONFORMANCE.md), "Resolver limits" | PKG-0597 |
 | CFG | l.261 | the configuration-preserving upgrade workflow | [§14](#14-upgrade-and-verified-defaults) | CFG-0134, CFG-0135 |
 | PM | l.402 | whether continued execution depends on current package-signing trust | no ([§1](#1-package-manager)) | PKG-0422 |
 
@@ -304,9 +305,9 @@ reached:
 - the Transport: [CONFORMANCE.md](CONFORMANCE.md), "Transport limits";
 - the Module Loader: one instance with one thread; its calls run on the lifecycle workers (same table);
 - schema processing: the INTERFACE §5.3 limits (`MaxSchemaNodes` and the others in `iface/accept.nim`);
-- the daemon: [DAEMON.md](DAEMON.md) §7 "Limits" and §9 "Limits".
-
-No Package Manager bound exists (12b, Tier 5).
+- the daemon: [DAEMON.md](DAEMON.md) §7 "Limits" and §9 "Limits";
+- the Package Manager's resolver: [CONFORMANCE.md](CONFORMANCE.md), "Resolver limits" (the protected
+  policy supplies the values; these are their maxima).
 
 ## 13. Deadlines
 

@@ -82,6 +82,11 @@ reason = "T l.1343-1345 (TRN-0378 to TRN-0380): every Transport limit, its scope
 ids = ["BCP-0038"]
 reason = "CA l.1320 (CAP-0415): the evidence export integration (selection by seq, authorization by the owner's offline command on owner-only files, limits, delivery to an O_EXCL 0600 file or a non-terminal stdout) is documented in docs/DAEMON.md §9, Export and Limits, indexed by docs/DEPLOYMENT.md's duty table."
 
+# bcp-deploy-duty-pm1252 (DECISIONS I110, G361)
+[[item]]
+ids = ["BCP-0038"]
+reason = "PM l.1252 (PKG-0597): the maximum value supported for each resolver limit (partial-closure names 4,096, dependency depth 4,095, candidates per name 4,096, assignment attempts 1,048,576) is documented in docs/CONFORMANCE.md, Resolver limits, and indexed by docs/DEPLOYMENT.md's duty table and §12. A configuration above a maximum is refused before any root operation (resolverLimits, decodeResolverLimits)."
+
 # bcp-deploy-pm-sources (DECISIONS I97, G309)
 [[item]]
 ids = ["BCP-0040"]

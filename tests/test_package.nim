@@ -537,7 +537,14 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
         m["dependencies"].items[1].put("package", cbor("logos.base"))
     ) == "invalid-package"
 
-  test "[PKG-0334] permission constraints are one Logos deterministic-CBOR value":
+  test "[PKG-0334] [PKG-0607] permission constraints are one Logos deterministic-CBOR value; a permission the Package Manager does not know is not refused":
+    # PKG-0607: no permission definition is consulted when a manifest decodes.
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha["requested_permissions"].items[0].put(
+          "permission", cbor("example.undefined")
+        )
+    ) == "ok"
     check mutated(
       proc(m: CborValue) =
         m.alpha["requested_permissions"].items[0].put(

@@ -78,3 +78,12 @@ func authorize*(
   if package notin a.packages:
     return err(trNotAuthorized)
   ok(a)
+
+func authorizesKey*(t: TrustInput, key: PublicKey, package: string): bool =
+  ## [SPEC PM §4.1, §4.3] Some accepted anchor holds exactly `key` and
+  ## authorizes exactly `package`. A retained `package_signer` names a key, not
+  ## a kid, and two kids may share one key, so every anchor is tested.
+  for a in t.anchors.values:
+    if a.key == key and package in a.packages:
+      return true
+  false
