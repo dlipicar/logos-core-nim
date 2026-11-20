@@ -417,6 +417,45 @@ when defined(posix):
       if perms.isSome:
         check perms.get.profile == f["profile"].getStr
 
+    test "[BCP-0104] [TXT-0351] [TXT-0349] [TXT-0368] [TXT-0369] every `logos.` identifier the code names is one a Logos specification assigns: a mirrored name or its namespace, or one listed with its line; none names a provenance profile":
+      const
+        NameChars = {'A' .. 'Z', 'a' .. 'z', '0' .. '9', '_', '.', '-'}
+        Assigned =
+          [("logos.route-ticket.random-256", "TRANSPORT l.1004, outside a CDDL block")]
+      proc tokens(text: string, quoted: bool): seq[string] =
+        ## Each whole `logos.` token: starting a string literal (`quoted`), or
+        ## not inside a longer name; a trailing dot, as in the bare prefix
+        ## `"logos."`, leaves a namespace.
+        var i = text.find("logos.")
+        while i >= 0:
+          var j = i + "logos.".len
+          while j < text.len and text[j] in NameChars:
+            inc j
+          let before = (if i == 0: ' ' else: text[i - 1])
+          if (quoted and before == '"') or (not quoted and before notin NameChars):
+            result.add text[i ..< j].strip(leading = false, chars = {'.'})
+          i = text.find("logos.", j)
+
+      var mirrored: seq[string]
+      for f in walkDirRec(repoDir / "spec" / "mirrors"):
+        mirrored.add readFile(f).tokens(quoted = false)
+      var seen = 0
+      for root in ["src", "sdk" / "src"]:
+        for f in walkDirRec(repoDir / root):
+          var found: seq[string]
+          if f.endsWith(".nim"):
+            found = readFile(f).tokens(quoted = true)
+          elif f.endsWith(".cddl"):
+            for line in readFile(f).splitLines:
+              found.add line.split(';', 1)[0].tokens(quoted = false)
+          for t in found:
+            checkpoint f & ": " & t
+            check t in mirrored or mirrored.anyIt(it.startsWith(t & ".")) or
+              Assigned.anyIt(it[0] == t)
+            check not t.startsWith("logos.package-provenance")
+            inc seen
+      check seen > 0
+
     test "[BCP-0045] a hosted module's Module Host runs under the daemon's user, in a process group of its own":
       check facts["hosts_run_as"].getStr == "the daemon's user"
       l = hostedBoot()

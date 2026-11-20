@@ -396,7 +396,7 @@ suite "cfg.state: configuration state and its transitions (CONFIG §3, §4, §6)
     check crafted.select == selIneligible
     s.release()
 
-  test "[CFG-0072] [CFG-0073] [CFG-0094] [CFG-0054] promotion clears the staged record only at the attempted value revision":
+  test "[CFG-0072] [CFG-0073] [CFG-0094] [CFG-0054] [TXT-0415] promotion clears the staged record only at the attempted value revision":
     # Staged unchanged: promoted and cleared.
     var s = stateFor(acc)
     let r = s.stageValue(tunerValue(), pvProtectedProvisioning)
@@ -725,7 +725,7 @@ suite "cfg.startup: sources, selection, delivery and promotion (CONFIG §4, §6;
     leftover()
     check liveConfigBlobs() == blobs
 
-  test "[CFG-0046] [CFG-0051] [CFG-0063] [CFG-0064] [CFG-0066] [CFG-0072] [CFG-0076] [CFG-0027] [RUN-0291] [IFC-0519] a new instance stages its default; its first start delivers it as one configuration_input and promotes it":
+  test "[CFG-0151] [CFG-0051] [CFG-0063] [CFG-0064] [CFG-0066] [CFG-0072] [CFG-0076] [CFG-0027] [RUN-0291] [IFC-0519] a new instance stages its default; its first start delivers it as one configuration_input and promotes it":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let a = tunerAccepted(default = Opt.some(tunerValue()))
@@ -894,7 +894,7 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     leftover()
     check liveConfigBlobs() == blobs
 
-  test "[CFG-0006] [CFG-0058] [CFG-0107] [G235] an instance without a binding: a summary at revision 0, the other methods INVALID_PARAMS":
+  test "[CFG-0006] [CFG-0058] [CFG-0107] [TXT-0411] an instance without a binding: a summary at revision 0, the other methods INVALID_PARAMS":
     let e = tunerEngine()
     let (c, rc) = e.startClient("c")
     let t = e.target(c.instance)
@@ -1038,7 +1038,7 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     check rc.stage(t, 0, tunerValue()).code == ecOk
     e.finish()
 
-  test "[CFG-0037] [CFG-0038] [CFG-0039] [G233] a value that with the current one would not fit a get_configuration response is MODULE_ERROR, nothing changed":
+  test "[CFG-0037] [CFG-0038] [CFG-0039] [TXT-0413] a value that with the current one would not fit a get_configuration response is INVALID_PARAMS without detail, nothing changed":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     discard e.createTuner("t1", tunerAccepted())
@@ -1049,9 +1049,44 @@ suite "cfg.operations: the configuration methods (CONFIG §5; RUNTIME §9.3 l.23
     check e.start("t1").tryGet.state == msReady
     check rc.summary(t).state_revision == 2
     let r = rc.stage(t, 2, tunerValue("radio-9", pad = 8_388_500))
-    check r.code == ecModule
+    check r.code == ecInvalidParams and r.detail.len == 0
     check rc.summary(t).state_revision == 2
     check rc.stage(t, 2, tunerValue()).updated.state_revision == 3
+    e.finish()
+
+  test "[CFG-0153] [TXT-0414] where several rows of CONFIG §5's table apply, the first is reported, the first row before the revision; nothing changes":
+    let e = tunerEngine()
+    let (c, rc) = e.startClient("c")
+    discard e.createTuner("t1", tunerAccepted())
+    let t = e.target("t1")
+    check rc.stage(t, 0, tunerValue(pad = 8_388_500)).updated.state_revision == 1
+    check e.start("t1").tryGet.state == msReady
+    var other = tunerCommitment()
+    other.schema_root[0] = other.schema_root[0] xor 1
+    # No binding, and a stale revision: INVALID_PARAMS, not `stale-revision`.
+    var r = rc.stage(e.target(c.instance), 7, tunerValue())
+    check r.code == ecInvalidParams and r.detail.len == 0
+    # A stale revision and a wrong commitment.
+    check rc.stage(t, 9, tunerValue(), other, refusal = true).refused.get.stale ==
+      Opt.some(2'u64)
+    # A wrong commitment and a malformed value.
+    r = rc.stage(t, 2, @[0x18'u8], other)
+    check r.code == ecVersionMismatch and r.detail.len == 0
+    # A value not of the root that would also not fit beside the current one.
+    let wrong = encodeCbor(
+      cborMap(
+        @[
+          (cbor("station"), cbor(5'u64)),
+          (cbor("volume"), cbor(1'u64)),
+          (cbor("pad"), cbor(newSeq[byte](8_388_500))),
+        ]
+      )
+    )
+    r = rc.stage(t, 2, wrong)
+    check r.code == ecInvalidParams
+    check reasonOf(r.detail) == "configuration-schema-mismatch"
+    check rc.summary(t).state_revision == 2
+    check rc.summary(e.target(c.instance)).state_revision == 0
     e.finish()
 
   test "[RUN-0642] [I87] get_execution_summary and list_modules report a configured instance without its configuration":
@@ -1176,6 +1211,25 @@ suite "cfg.sources: configuration state across restarts (CONFIG §4, §7; G141; 
     e = storeEngine(dir)
     check e.boot(@[declared(Opt.some(a))]).isOk
     check latestClient().state(e.target("t1")).staged.get.value == a
+    e.finish()
+
+  test "[CFG-0151] a default discarded before the first start is not staged again, after a restart either: the start reports `configuration-missing`":
+    let dir = work / "store-default"
+    let declared = tunerAt("t1", tunerAccepted(default = Opt.some(tunerValue())))
+    var e = storeEngine(dir)
+    check e.boot(@[declared]).isOk
+    check latestClient().discardStaged(e.target("t1"), 1).updated.state_revision == 2
+    for restarted in [false, true]:
+      if restarted:
+        e.finish()
+        e = storeEngine(dir)
+        check e.boot(@[declared]).isOk
+      let s = latestClient().summary(e.target("t1"))
+      check s.state_revision == 2 and s.staged.isNone and s.current.isNone
+      let r = e.start("t1")
+      check r.isErr and r.error.code == ecNotReady
+      check e.view("t1").tryGet.failure.get.kind == fkConfigurationMissing
+    check tunerInits.load == 0
     e.finish()
 
   test "[CFG-0132] [CFG-0029] [RUN-1103] a changed binding or a lost configuration record does not restore the instance":
@@ -1418,7 +1472,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     leftover()
     check liveConfigBlobs() == blobs
 
-  test "[CFG-0089] [CFG-0092] [CFG-0094] [CFG-0102] [CFG-0103] [CFG-0144] [G236] apply hands the staged record to the hook as one configuration_input, makes it current and answers its value revision; the lifecycle does not change":
+  test "[CFG-0089] [CFG-0092] [CFG-0094] [CFG-0102] [CFG-0103] [CFG-0144] [TXT-0419] apply hands the staged record to the hook as one configuration_input, makes it current and answers its value revision; the lifecycle does not change":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1440,7 +1494,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.applyOf(t, 4).code == ecInvalidParams
     e.finish()
 
-  test "[CFG-0093] [CFG-0141] [CFG-0142] [CFG-0143] [CFG-0090] [CFG-0006] [CFG-0155] [RUN-1121] [G228] the preconditions, in their row order, refuse without invoking the hook or changing anything":
+  test "[CFG-0093] [CFG-0141] [CFG-0142] [CFG-0143] [CFG-0090] [CFG-0006] [CFG-0155] [RUN-1121] [TXT-0418] [G228] the preconditions, in their row order, refuse without invoking the hook or changing anything":
     let e = tunerEngine()
     let (c, rc) = e.startClient("c")
     var r = rc.applyOf(e.target(c.instance), 0)
@@ -1471,10 +1525,14 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     let t3 = e.target("t3")
     check rc.applyOf(t3, 0, refusal = true).refused.get.stale == Opt.some(1'u64)
     check rc.applyOf(t3, 1).code == ecNotReady
+    # [TXT-0418] With nothing staged, the first row comes before NOT_READY.
+    check rc.discardStaged(t3, 1).updated.state_revision == 2
+    r = rc.applyOf(t3, 2)
+    check r.code == ecInvalidParams and r.detail.len == 0
     check applyEntered.load == 0
     check rc.summary(t).state_revision == 4
     check rc.summary(t2).state_revision == 3
-    check rc.summary(t3).state_revision == 1
+    check rc.summary(t3).state_revision == 2
     e.finish()
 
   test "[CFG-0141] the binding's, the staged record's and the realization's commitments must agree (the VERSION_MISMATCH row)":
@@ -1495,14 +1553,14 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.summary(t).state_revision == 3
     e.finish()
 
-  test "[CFG-0145] [CFG-0146] [TXT-0420] a valid rejection is MODULE_ERROR without the hook's status; nothing changes and the instance stays ready":
+  test "[CFG-0156] [CFG-0146] [TXT-0161] [TXT-0420] a valid rejection is the `configuration-rejected` error arm, without `current_revision` or the hook's status; nothing changes and the instance stays ready":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
     applyMode.store(1)
-    let r = rc.applyOf(t, 3)
-    check r.code == ecModule
-    check "secret" notin r.message and r.detail.len == 0
+    let r = rc.applyOf(t, 3, refusal = true)
+    check r.rejected
+    check "secret" notin r.message
     check applyCalls.load == 1
     let s = rc.summary(t)
     check s.state_revision == 3 and s.current.get.value_revision == 1
@@ -1587,7 +1645,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check e.view(LoaderInstanceId).tryGet.state == msReady
     e.finish()
 
-  test "[CFG-0095] [CFG-0100] [CFG-0040] one application at a time; an update during it is admitted and stays staged when the promotion does not clear it":
+  test "[CFG-0095] [CFG-0100] [CFG-0040] [TXT-0418] one application at a time, a live realization passing the first row; an update during it is admitted and stays staged when the promotion does not clear it":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let t = e.readyLive(rc, "t1")
@@ -1774,7 +1832,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check e.view("t1").tryGet.state == msUnloaded
     e.finish()
 
-  test "[CFG-0092] [CFG-0096] [CFG-0097] [CFG-0098] [CFG-0145] a generated kit applies the typed value; its refusal leaves the value in force":
+  test "[CFG-0092] [CFG-0096] [CFG-0097] [CFG-0098] [CFG-0156] a generated kit applies the typed value; its refusal leaves the value in force":
     let e = tunerEngine()
     let (_, rc) = e.startClient()
     let a = tunerAccepted(default = Opt.some(tunerValue("kit-1", 4)), live = true)
@@ -1785,7 +1843,7 @@ suite "cfg.apply: live reconfiguration (CONFIG §8; LOADER §8, §11; I87)":
     check rc.applyOf(t, 3).applied.applied_value_revision == 3
     check tunerAppliedVolume.load == 6'u32
     check rc.stage(t, 4, tunerValue("refuse", 8)).code == ecOk
-    check rc.applyOf(t, 5).code == ecModule
+    check rc.applyOf(t, 5, refusal = true).rejected
     check tunerAppliedVolume.load == 6'u32
     check e.view("k").tryGet.state == msReady
     let s = rc.summary(t)

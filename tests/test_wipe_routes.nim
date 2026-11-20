@@ -354,7 +354,7 @@ suite "wipe: a direct route (W-4)":
     disarmWipeAudit()
     leftover()
 
-  test "[IFC-0575] [IFC-0580] [SEC-0057] every method and rejection of a marked contract on a direct route leaves no copy of the canary or its value roots, and no diagnostic, record or file holds them":
+  test "[IFC-0575] [IFC-0580] every method and rejection of a marked contract on a direct route leaves no copy of the canary or its value roots, and no diagnostic, record or file holds them":
     when ChannelsMove:
       let (e, orch) = ready(wipeConfig())
       var h = orch.vaultHandle(e, Vault, "w4")
@@ -690,7 +690,7 @@ suite "wipe: retention of a marked payload (W-9)":
     disarmWipeAudit()
     leftover()
 
-  test "[IFC-0581] [SEC-0057] on a direct route a decision that retains a marked side refuses the call NOT_AUTHORISED before dispatch, recorded as sensitive-retention without a value root; an unmarked method keeps its root":
+  test "[IFC-0581] on a direct route a decision that retains a marked side refuses the call NOT_AUTHORISED before dispatch, recorded as sensitive-retention without a value root; an unmarked method keeps its root":
     when ChannelsMove:
       let (e, orch) = caReady()
       e.retention(orch)
@@ -713,7 +713,7 @@ suite "wipe: retention of a marked payload (W-9)":
     else:
       skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
-  test "[IFC-0581] [SEC-0057] the same on a local-transport route: the served endpoint admits through the same check":
+  test "[IFC-0581] the same on a local-transport route: the served endpoint admits through the same check":
     when ChannelsMove:
       when unixStream:
         let (e, orch) = caReady(transported = true)
@@ -1522,7 +1522,7 @@ when defined(posix):
       else:
         skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
-    test "[IFC-0581] [SEC-0057] W-9 on a route to a hosted provider a decision that retains a marked side refuses the call NOT_AUTHORISED before dispatch; the host never runs it":
+    test "[IFC-0581] W-9 on a route to a hosted provider a decision that retains a marked side refuses the call NOT_AUTHORISED before dispatch; the host never runs it":
       when ChannelsMove:
         let since = hostEnds().len
         var cfg = hostedConfig()

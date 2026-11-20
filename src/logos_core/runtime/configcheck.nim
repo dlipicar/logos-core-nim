@@ -233,8 +233,9 @@ proc runtimeBinding*(a: AcceptedConfiguration): Binding =
 proc initialState*(a: AcceptedConfiguration): ConfigState =
   ## [SPEC CONFIG §4 l.139-142; G141] A new instance's state, owning its
   ## blobs: the provisioned value staged as `protected-provisioning`, its
-  ## value root remembered; else the default staged as `package-default`
-  ## (CFG-0046); else revision 0 without a record. [IMPL] A provisioned value
+  ## value root remembered; else the default staged as `package-default`,
+  ## only here, so never once a record has existed (CFG-0151); else revision
+  ## 0 without a record. [IMPL] A provisioned value
   ## replaces the default in the same step, so the default is not staged
   ## first.
   result = newState(runtimeBinding(a))

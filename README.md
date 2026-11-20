@@ -77,7 +77,7 @@ The specs are being revised, so the work is ordered by how settled each area is
   it and its value roots out of diagnostics, records and the carrier, and refuse a call whose
   decision would retain one; a contract that marks a payload is routed on every local path, hosted
   ends included, in an orc build (I92). A refc build of the Runtime or the host refuses it instead.
-  INTERFACE §1.4.1 and SEC-0057 are claimed for orc builds, with the non-claims in
+  INTERFACE §1.4.1 is claimed for orc builds, with the non-claims in
   [docs/CONFORMANCE.md](docs/CONFORMANCE.md).
 - Tier 4b, step 4b-6: `logosd` and `logosctl`. `logosd` hosts one Runtime for a session directory
   (`$HOME/.logos-core` by default): it checks `daemon-config.v1` and the trust file, composes the

@@ -607,7 +607,8 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
 - **Applying a staged value live.** For a module whose binding declares `live_reconfiguration`,
   Runtime Control `apply_configuration` hands the staged value to the running module's
   `_MODULE_apply_configuration` while it stays `ready`. The call returns once the module has answered:
-  on success the value is current; a refusal changes nothing and is `LOGOS_ERR_MODULE`. If the module
+  on success the value is current; a refusal changes nothing and the call succeeds with the
+  `configuration-rejected` error arm (logosctl exits 4 naming it). If the module
   gives no valid answer within `apply_deadline_ms` (above; 120 s by default), its configuration is
   unknown: the call returns `LOGOS_ERR_MODULE` and the instance enters `error` with
   `configuration-indeterminate`, and is released once the module's hook returns. Start it again to
@@ -616,9 +617,10 @@ can apply a new value while it runs) and, optionally, a package `default_value`.
   gets `LOGOS_ERR_MODULE`, and the stop goes on (CONFIG l.328-329). One application runs per instance
   at a time.
 - **Size.** A state whose maximal `get_configuration` response would not fit a 16 MiB frame is refused
-  with `LOGOS_ERR_MODULE` and nothing changes: two values near 8 MiB cannot both be kept (DECISIONS
-  G233, interim). The state revision never wraps; one step is kept free while a start's or an
-  application's promotion is pending (DECISIONS G234, interim).
+  and nothing changes: two values near 8 MiB cannot both be kept. Through Runtime Control it is
+  `LOGOS_ERR_INVALID_PARAMS` without detail (CONFIG l.198); a provisioned value at creation or at a
+  host start is `LOGOS_ERR_MODULE` (DECISIONS G233). The state revision never wraps; one step is kept
+  free while a start's or an application's promotion is pending (RUNTIME l.1812; DECISIONS G234).
 - **Persistence.** Each configurable instance's binding and state are kept in their own record in
   `store_dir` (below), written before any change is visible. A configuration write that fails is
   `LOGOS_ERR_MODULE` and changes nothing; at a start, the attempt fails with `other`.

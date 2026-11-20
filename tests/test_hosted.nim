@@ -936,7 +936,7 @@ when defined(posix):
       leftover()
       check noHostLeft()
 
-    test "[LDR-0111] [LDR-0112] S-12 a live application runs the hook in the host: applied, or rejected with nothing changed":
+    test "[LDR-0111] [LDR-0112] [CFG-0156] S-12 a live application runs the hook in the host: applied, or rejected as `configuration-rejected` with nothing changed":
       let cfg = hostedConfig()
       let dir = cfg.prepare()
       let (e, rc) = liveStart(cfg)
@@ -944,8 +944,7 @@ when defined(posix):
       let ok = rc.applyOf(t, rc.staged(e, "radio-9"))
       check ok.code == ecOk
       check lines(dir, "applied").len == 1
-      let rejected = rc.applyOf(t, rc.staged(e, "reject"))
-      check rejected.code == ecModule
+      check rc.applyOf(t, rc.staged(e, "reject"), refusal = true).rejected
       check lines(dir, "applied").len == 2
       check e.view("p").tryGet.state == msReady
       check e.stop("p").tryGet.state == msUnloaded

@@ -140,6 +140,13 @@ func stale(e: LogosNSRuntimeControlError): Opt[uint64] =
   else:
     Opt.none(uint64)
 
+func rejected(r: RcResult): bool =
+  ## [CFG-0156; RUNTIME l.1821] A successful call whose error arm is
+  ## `configuration-rejected`, without `current_revision` or detail.
+  r.code == ecOk and r.detail.len == 0 and r.refused.isSome and
+    r.refused.get.code.kind == LogosNSRuntimeControlErrorCodeKind.Configuration_rejected and
+    r.refused.get.current_revision.isNone
+
 proc clientName(): cstring {.cdecl.} =
   "client_module"
 
