@@ -310,13 +310,18 @@ def ledger_path(root: Path, prefix: str) -> Path:
     return root / CONFORMANCE_TREES[0] / "requirements" / f"{prefix}.jsonl"
 
 
+def visible(paths) -> list[Path]:
+    """Paths without a leading dot: AppleDouble `._` files on a non-Apple volume, an editor's swap files."""
+    return [p for p in paths if not p.name.startswith(".")]
+
+
 def ledger_files(root: Path) -> list[Path]:
-    return [f for tree in CONFORMANCE_TREES for f in sorted((root / tree / "requirements").glob("*.jsonl"))]
+    return [f for tree in CONFORMANCE_TREES for f in sorted(visible((root / tree / "requirements").glob("*.jsonl")))]
 
 
 def inspection_files(root: Path) -> list[Path]:
     """Every inspection file of both packages, by name."""
-    files = [f for tree in CONFORMANCE_TREES for f in (root / tree / "inspection").glob("*.toml")]
+    files = [f for tree in CONFORMANCE_TREES for f in visible((root / tree / "inspection").glob("*.toml"))]
     return sorted(files, key=lambda f: (f.name, str(f)))
 
 
@@ -691,7 +696,7 @@ def cmd_gate(args) -> int:
     root = Path(args.root)
     referenced: set[str] = set()
     for tree in TEST_TREES:
-        for test in (root / tree).rglob("*.nim"):
+        for test in visible((root / tree).rglob("*.nim")):
             referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
     failures = 0
     inspected: dict[str, str] = {}
@@ -890,7 +895,7 @@ def cmd_deploydoc(args) -> int:
 
     referenced: set[str] = set()
     for tree in TEST_TREES:
-        for test in (root / tree).rglob("*.nim"):
+        for test in visible((root / tree).rglob("*.nim")):
             referenced.update(TEST_ID_RE.findall(test.read_text(encoding="utf-8")))
     reasons: dict[str, list[str]] = {}
     for extra in inspection_files(root):
@@ -1091,7 +1096,7 @@ def real_tests(root: Path):
         return m is not None and re.fullmatch(r"(?:T|and|or|not|[()\s])*", LIVE_CONDITION.sub("T", m.group(1))) is not None
 
     for tree in ("tests", "sdk/tests"):
-        paths = [p for p in sorted((root / tree).glob("*.nim")) if not p.name.startswith(".")] if (root / tree).is_dir() else []
+        paths = sorted(visible((root / tree).glob("*.nim"))) if (root / tree).is_dir() else []
         suites = [p for p in paths if p.name.startswith("test_")]
         for path in paths:
             if path not in suites and not (
