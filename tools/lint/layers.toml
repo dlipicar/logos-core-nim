@@ -33,6 +33,7 @@ daemon_allowlist = [
   "orchestration",
   "orchestration/needs",
   "orchestration/settings",
+  "package/trustdoc",
   "permissions",
   "runtime/authscopes",
   "runtime/bell",
@@ -56,6 +57,7 @@ sdk_binding = [
   "sdk/src/logos_sdk.nim",
   "sdk/src/logos_sdk/kit.nim",
   "sdk/src/logos_sdk/codegen/",
+  "sdk/src/logos_sdk/contracts/",
   "sdk/src/logos_sdk/kit/",
 ]
 sdk_testing = ["sdk/src/logos_sdk/testing/"]

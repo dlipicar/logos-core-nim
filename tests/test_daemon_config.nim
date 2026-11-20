@@ -1,11 +1,12 @@
 ## logosd's daemon-config and its session (Tier 4b step 4b-6; DECISIONS
-## G293-G295, G297, G299, G300, G303; docs/DAEMON.md §2-§9): the schema rules
-## of `daemon_config.cddl` and `trust.cddl`; DAEMON.md §3's checks, in order;
-## the derived host configuration for three daemon-configs through the
-## library's own checks; the system rules S1-S5 decided by the Capability
-## Authority's own evaluator; the trust file's continuity table; the evidence
-## key's binding and rotation; and `logosctl init`'s session. No logosd
-## process and no Runtime: those are `test_logosd` (6b).
+## G293-G295, G297, G299, G300, G303, G396, G398; docs/DAEMON.md §2-§9): the
+## schema rules of `daemon_config.cddl`, `trust.cddl` and
+## `package/trustdoc.cddl`; DAEMON.md §3's checks, in order; the derived host
+## configuration for three daemon-configs through the library's own checks;
+## the system rules S1-S5 decided by the Capability Authority's own evaluator;
+## the trust file's continuity table and logosd's start order over it; the
+## evidence key's binding and rotation; and `logosctl init`'s session. No
+## logosd process and no Runtime: those are `test_logosd` (6b).
 
 import std/[os, sequtils, strutils]
 import unittest2
@@ -22,7 +23,7 @@ from ../src/logos_core/permissions import PermissionSetting, HostAmbient, profil
 from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
 from ../src/logos_core/orchestration/settings import OrchestratorModule
 import logos_sdk/base/clock
-from ../src/logos_core/durable import release
+from ../src/logos_core/durable import release, writeAtomic
 import ./support/authfixture, logos_sdk/testing/[kitbuild, schemasuite]
 
 let work =
@@ -90,8 +91,8 @@ proc staticModule(instance, module: string): string =
     "\", \"implementation\": {\"strategy\": \"direct_static\", \"binding\": \"b\"}}"
 
 let
-  prod = TrustInput(file: floorFile()) ## the floor: switch off
-  dev = TrustInput(file: LcnTrustFile(revision: 2, development: true))
+  prod = TrustFileState(file: floorTrust()) ## the floor: switch off
+  dev = TrustFileState(file: LcnPackageTrust(revision: 2, development: true))
 
 proc checked(
     diag: string, trust = prod, hooksBuild = true
@@ -110,13 +111,19 @@ const
     "lcn.dc_restart", "lcn.dc_override", "lcn.dc_call_audit", "lcn.dc_evidence_store",
     "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_test_hooks", "lcn.dc_test_diagnostics",
   ]
-  TrustRules = ["lcn.trust_file", "lcn.trust_mark", "lcn.ev_key_binding"]
+  TrustRules = ["lcn.trust_mark", "lcn.ev_key_binding"]
+  TrustdocRules = [
+    "lcn.package_trust", "lcn.trust_signing", "lcn.trust_anchor", "lcn.trust_selection",
+    "lcn.trust_file",
+  ] ## [G396] package/trustdoc.cddl: the trust file, v2 and the v1 still read
 
 let
   dcModel = ruleModel(daemonConfigDocuments())
   dcCodec = codecTable("Lcn", DcRules)
   trustModel = ruleModel(trustDocuments())
   trustCodec = codecTable("Lcn", TrustRules)
+  trustdocModel = ruleModel(trustdocDocuments())
+  trustdocCodec = codecTable("Lcn", TrustdocRules)
 
 func ownRule(name: string): bool =
   name == "lcn.daemon_config" or name.startsWith("lcn.dc_")
@@ -127,8 +134,8 @@ template holds(model: RuleModel, codec: untyped, name: string) =
     checkpoint name & ": " & p
   check problems.len == 0
 
-suite "dc.schema: daemon_config.cddl and trust.cddl [IMPL-DECISION G293] [IMPL-DECISION G299]":
-  test "every rule of the two schemas has its test here, and each generated type round-trips":
+suite "dc.schema: daemon_config.cddl, trust.cddl and package/trustdoc.cddl [IMPL-DECISION G293] [IMPL-DECISION G299] [IMPL-DECISION G396]":
+  test "every rule of the three schemas has its test here, and each generated type round-trips":
     for r in dcModel.names:
       if r.ownRule:
         checkpoint r
@@ -142,6 +149,11 @@ suite "dc.schema: daemon_config.cddl and trust.cddl [IMPL-DECISION G293] [IMPL-D
       checkpoint r
       check r in trustModel.names
       check trustCodec(r, trustModel.samples(r)[0]).isSome
+    check trustdocModel.names.len == TrustdocRules.len
+    for r in TrustdocRules:
+      checkpoint r
+      check r in trustdocModel.names
+      check trustdocCodec(r, trustdocModel.samples(r)[0]).isSome
 
   for r in DcRules:
     test r:
@@ -150,6 +162,10 @@ suite "dc.schema: daemon_config.cddl and trust.cddl [IMPL-DECISION G293] [IMPL-D
   for r in TrustRules:
     test r:
       holds(trustModel, trustCodec, r)
+
+  for r in TrustdocRules:
+    test r:
+      holds(trustdocModel, trustdocCodec, r)
 
   test "[BCP-0090] a daemon-config's diagnostic text and its deterministic CBOR round-trip":
     let text = dcText(
@@ -825,12 +841,47 @@ suite "dc.policy: the system rules S1 to S5, decided by the Capability Authority
 
 # dc.trust ---------------------------------------------------------------------------
 
-proc input(revision: uint64, development: bool): TrustInput =
-  let f = LcnTrustFile(revision: revision, development: development)
-  TrustInput(file: f, digest: @(blake3(f.encode.get)), present: true)
+proc stateOf(f: LcnPackageTrust): TrustFileState =
+  TrustFileState(file: f, digest: @(blake3(f.encode.get)), present: true)
 
-proc markOf(t: TrustInput): Opt[LcnTrustMark] =
+proc input(revision: uint64, development: bool): TrustFileState =
+  stateOf(LcnPackageTrust(revision: revision, development: development))
+
+proc markOf(t: TrustFileState): Opt[LcnTrustMark] =
   Opt.some(LcnTrustMark(revision: t.file.revision, digest: t.digest))
+
+proc anchorOf(
+    kid: string, names: openArray[string], development = false, key = newSeq[byte](48)
+): LcnTrustAnchor =
+  LcnTrustAnchor(
+    kid: @(kid.toOpenArrayByte(0, kid.high)),
+    public_key: key,
+    packages: @names,
+    development: development,
+  )
+
+proc docOf(
+    revision: uint64, anchors: openArray[LcnTrustAnchor], development = false
+): LcnPackageTrust =
+  LcnPackageTrust(
+    revision: revision,
+    development: development,
+    signing: LcnTrustSigning(anchors: @anchors),
+  )
+
+proc anchored(revision: uint64, development = false): LcnPackageTrust =
+  ## A file with an operator anchor and a development anchor.
+  docOf(
+    revision,
+    [
+      anchorOf("dev", ["logos.example"], development = true),
+      anchorOf("org", ["logos.storage"]),
+    ],
+    development,
+  )
+
+proc markRevision(s: Session): uint64 =
+  readMark(s).get.get.revision
 
 suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION G299] [D27]":
   test "[PKG-0418] [PKG-0419] [PKG-0420] [PKG-0421] the decision table":
@@ -844,24 +895,45 @@ suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION
     check rollback.error ==
       "the trust file's revision 1 is below the revision 2 already used: rollback is refused"
 
+  test "[PKG-0418] [PKG-0420] [IMPL-DECISION G396] the decision table again, every file with anchors; two digests at one revision are refused":
+    let r2 = stateOf(anchored(2))
+    let r3 = stateOf(anchored(3))
+    check decide(r2, Opt.none(LcnTrustMark)).error == NotEstablished
+    check decide(r3, markOf(r2)).get == cAdvance
+    check decide(r2, markOf(r2)).get == cAccept
+    check "rollback is refused" in decide(r2, markOf(r3)).error
+    var other = anchored(2)
+    other.signing.anchors[1].public_key[0] = 1
+    check stateOf(other).digest != r2.digest
+    check "other contents than the revision recorded" in
+      decide(stateOf(other), markOf(r2)).error
+    check "other contents than the revision recorded" in
+      decide(r2, markOf(stateOf(other))).error
+
   test "without a file the compiled-in floor applies; a file below it is refused":
     let s = freshSession()
     let t = readTrust(s).get
-    check not t.present and t.file.revision == FloorRevision and not t.file.development
+    check not t.present and t.file == floorTrust()
+    check t.file.revision == FloorRevision and not t.file.development
+    check t.digest == stateOf(floorTrust()).digest
     check establishTrust(s).error == NotEstablished # logosd never creates a mark
-    check writeTrustFile(s, LcnTrustFile(revision: 0, development: false)).isOk
-    check readTrust(s).error ==
-      TrustName & " is below the compiled-in floor (revision 1)"
+    check writeTrustFile(s, LcnPackageTrust(revision: 0, development: false)).isOk
+    check readTrust(s).get.file.revision == 0 # decoded: trust show reads it
+    check checkedTrust(s).error ==
+      "revision 0 is below the compiled-in floor (revision 1)"
+    check establishTrust(s).error == checkedTrust(s).error
 
-  test "init writes revision 1, or 2 with the switch, and its mark; a start accepts the identical replay":
+  test "init writes the v2 floor at revision 1, or revision 2 with the switch, and its mark; a start accepts the identical replay":
     let s = freshSession()
     let t = initTrust(s, development = false).get
-    check t.file.revision == 1 and not t.file.development and t.present
+    check t.file == floorTrust() and t.present
+    check readTrust(s).get == t
     check readMark(s).get.get.revision == 1
-    check establishTrust(s).get.digest == t.digest
+    check establishTrust(s).get.state.digest == t.digest
     let d = freshSession()
     let td = initTrust(d, development = true).get
     check td.file.revision == 2 and td.file.development
+    check td.file.signing.anchors.len == 0 and td.file.provenance.selected.isNone
     check readMark(d).get.get.revision == 2
 
   test "[D27] the switch: each change is the next revision; the mark moves at the next start, before it is used":
@@ -870,26 +942,191 @@ suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION
     let on = setDevelopment(s, true).get
     check on.file.revision == 2 and on.file.development
     check readMark(s).get.get.revision == 1 # offline: the file only
-    check establishTrust(s).get.file.development
+    check establishTrust(s).get.state.file.development
     check readMark(s).get.get == LcnTrustMark(revision: 2, digest: on.digest)
     let off = setDevelopment(s, false).get # a withdrawal
     check off.file.revision == 3 and not off.file.development
-    check not establishTrust(s).get.file.development
+    check not establishTrust(s).get.state.file.development
     check readMark(s).get.get.revision == 3
+
+  test "[IMPL-DECISION G137] the switch keeps the anchors, and turning it off withdraws the development anchors":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    check writeTrustFile(s, anchored(2, development = true)).isOk
+    let on = establishTrust(s).get
+    check on.signing.len == 2
+    let off = setDevelopment(s, false).get
+    check off.file.signing == anchored(2).signing
+    let after = establishTrust(s).get
+    check after.signing.len == 1
+    check after.signing.anchor("org".toOpenArrayByte(0, 2)).isSome
+    check after.signing.anchor("dev".toOpenArrayByte(0, 2)).isNone
 
   test "a changed file at the same revision, and a rollback, are refused; reestablish names the file's revision":
     let s = freshSession()
     discard initTrust(s, development = false).get
     discard setDevelopment(s, true).get
     discard establishTrust(s).get
-    check writeTrustFile(s, LcnTrustFile(revision: 2, development: false)).isOk
+    check writeTrustFile(s, LcnPackageTrust(revision: 2, development: false)).isOk
     check "other contents" in establishTrust(s).error
-    check writeTrustFile(s, LcnTrustFile(revision: 1, development: false)).isOk
+    check writeTrustFile(s, LcnPackageTrust(revision: 1, development: false)).isOk
     check "rollback is refused" in establishTrust(s).error
     check reestablish(s, 2).error == "the trust file is at revision 1, not 2"
     check reestablish(s, 1).isOk
     check establishTrust(s).isOk
     check readMark(s).get.get.revision == 1
+
+  test "[PKG-0418] [PKG-0420] [TXT-0463] every field is under the revision: one name added, a marker flipped or a key changed at the same revision is refused":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    check writeTrustFile(s, anchored(2)).isOk
+    check establishTrust(s).isOk
+    check s.markRevision == 2
+    var oneName = anchored(2)
+    oneName.signing.anchors[1].packages.add("logos.wallet")
+    var marker = anchored(2)
+    marker.signing.anchors[1].development = true
+    var key = anchored(2)
+    key.signing.anchors[1].public_key[0] = 1
+    for (what, f) in [
+      ("one name added", oneName), ("a marker flipped", marker), ("a key changed", key)
+    ]:
+      checkpoint what
+      check writeTrustFile(s, f).isOk
+      check "other contents than the revision recorded" in establishTrust(s).error
+      check s.markRevision == 2
+    # The same change at a later revision is accepted (PM l.420).
+    oneName.revision = 3
+    check writeTrustFile(s, oneName).isOk
+    let r = establishTrust(s).get
+    check s.markRevision == 3
+    check r.signing.authorize("org".toOpenArrayByte(0, 2), "logos.wallet").isOk
+
+  test "[IMPL-DECISION G398] [PKG-0169] [PKG-0166] the start order: a file a rule refuses leaves the mark where it was, before continuity; the accepted selection is the decoded one":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    check establishTrust(s).isOk
+    var prov = anchored(2)
+    prov.provenance.selected = Opt.some("logos.package-provenance.slsa-v1.2")
+    var cat = anchored(2)
+    cat.catalog.selected = Opt.some("logos.catalog.any")
+    var unsorted = anchored(2)
+    unsorted.signing.anchors =
+      @[unsorted.signing.anchors[1], unsorted.signing.anchors[0]]
+    for (what, f, refusal) in [
+      (
+        "a provenance profile", prov,
+        "supports no provenance profile; the file selects \"logos.package-provenance.slsa-v1.2\"",
+      ),
+      ("a catalog profile", cat, "supports no catalog profile"),
+      ("kids out of order", unsorted, "not in strictly ascending kid order"),
+    ]:
+      checkpoint what
+      check writeTrustFile(s, f).isOk
+      check readTrust(s).isOk # decoded: trust show and config check read it
+      check refusal in checkedTrust(s).error
+      check refusal in establishTrust(s).error
+      check s.markRevision == 1
+      # At the mark's revision the rule refuses it, not continuity.
+      var same = f
+      same.revision = 1
+      check writeTrustFile(s, same).isOk
+      check refusal in establishTrust(s).error
+      check s.markRevision == 1
+    # A profile string written by hand is refused by the schema.
+    let v = anchored(2).toCbor
+    let signing = v.lookup("signing").get
+    signing.entries.keepItIf(it.key.getText != Opt.some("profile"))
+    signing.entries.add((cbor("profile"), cbor("logos.package-signing.other")))
+    check writeAtomic(s.dir, TrustName, encodeCbor(v)).isOk
+    check "does not match lcn.package_trust" in establishTrust(s).error
+    check s.markRevision == 1
+    # Accepted: the selection is the decoded file's, empty, and nothing else.
+    check writeTrustFile(s, anchored(2)).isOk
+    let bytes = readFile(s.trustPath)
+    let accepted = establishTrust(s).get
+    check accepted.state.file == decodeTrust(bytes.toOpenArrayByte(0, bytes.high)).get
+    check accepted.state.file.provenance.selected.isNone
+    check accepted.state.file.catalog.selected.isNone
+
+  test "the two reads of a start: a change between them is refused before the mark moves":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    check writeTrustFile(s, anchored(2)).isOk
+    let seen = checkedTrust(s).get
+    check writeTrustFile(s, anchored(3)).isOk
+    check establishTrust(s, @[], Opt.some(seen.digest)).error ==
+      "it changed since the first read of this start"
+    check s.markRevision == 1
+    check establishTrust(s, @[], Opt.some(checkedTrust(s).get.digest)).isOk
+    check s.markRevision == 3
+
+  test "[IMPL-DECISION G396] a Tier 4b v1 file reads as its v2 content with the digest of its own bytes, and keeps its continuity":
+    let s = freshSession()
+    let v1 = LcnTrustFile(revision: 2, development: true).encode.get
+    check writeAtomic(s.dir, TrustName, v1).isOk
+    check writeMark(s, TrustFileState(file: input(2, true).file, digest: @(blake3(v1)))).isOk
+    let t = readTrust(s).get
+    check t.file == LcnPackageTrust(revision: 2, development: true)
+    check t.digest == @(blake3(v1)) and t.digest != input(2, true).digest
+    check establishTrust(s).get.state.digest == t.digest
+    check s.markRevision == 2
+    # The first writer writes v2, at the next revision.
+    let off = setDevelopment(s, false).get
+    let written = readFile(s.trustPath)
+    check decodeCbor(written.toOpenArrayByte(0, written.high)).get
+      .lookup("format").get.getText == Opt.some(TrustFormat)
+    check establishTrust(s).get.state.digest == off.digest
+    check s.markRevision == 3
+
+  test "[I114] a session without trust.cbor whose mark holds the Tier 4b floor is refused, naming trust reestablish --revision 1":
+    let s = freshSession()
+    let v1Floor = LcnTrustFile(revision: 1, development: false).encode.get
+    check writeMark(s, TrustFileState(file: floorTrust(), digest: @(blake3(v1Floor)))).isOk
+    let r = establishTrust(s)
+    check r.isErr
+    check "other contents than the revision recorded" in r.error
+    check "run logosctl trust reestablish --revision 1" in r.error
+    check reestablish(s, 1).isOk
+    check establishTrust(s).isOk
+    # An absent file below a higher mark is a rollback.
+    check writeMark(s, input(2, false)).isOk
+    check "rollback is refused" in establishTrust(s).error
+
+  test "[PKG-0435] an anchor whose key is an evidence key of the session, current or retired, is refused at start":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    let old = createEvidenceKey(s.keysDir, "rt-1").get
+    let fresh = rotateEvidenceKey(s.keysDir, old.binding.kid, "rt-1").get
+    let elsewhere = freshDir("k")
+    createDir(elsewhere)
+    let outside = createEvidenceKey(elsewhere, "rt-1").get
+    let keys = sessionEvidenceKeys(s, outside.keyFile, outside.binding.kid).get
+    check keys.len == 3
+    for (what, key) in [
+      ("retired", old.binding.public_key),
+      ("current", fresh.binding.public_key),
+      ("configured elsewhere", outside.binding.public_key),
+    ]:
+      checkpoint what
+      check writeTrustFile(s, docOf(2, [anchorOf("org", ["logos.storage"], key = key)])).isOk
+      check "is a call-evidence key of this session" in establishTrust(s, keys).error
+      check s.markRevision == 1
+    check writeTrustFile(s, anchored(2)).isOk
+    check establishTrust(s, keys).isOk
+
+  test "[IMPL-DECISION G397] a start reads the evidence keys only when the trust file names an anchor, and an unreadable binding then refuses it":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    let k = createEvidenceKey(s.keysDir, "rt-1").get
+    let path = s.keysDir / bindingFileName(k.binding.kid)
+    removeFile(path)
+    writeFile(path, "not a binding")
+    check sessionEvidenceKeys(s).isErr
+    check startEvidenceKeys(s, checkedTrust(s).get).get.len == 0
+    check writeTrustFile(s, anchored(2)).isOk
+    check startEvidenceKeys(s, checkedTrust(s).get).isErr
+    check s.markRevision == 1
 
   posixTest "the trust file is a private regular file: group access or a link is refused":
     let s = freshSession()
@@ -1120,14 +1357,15 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     check getFilePermissions(s.runDir) == {fpUserRead, fpUserWrite, fpUserExec}
 
 suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim":
-  test "every daemon CDDL file, and S1-S5 for init's default configuration, word for word":
+  test "every daemon CDDL file and the package trust file's, and S1-S5 for init's default configuration, word for word":
     let root = currentSourcePath().parentDir.parentDir
     let doc = readFile(root / "docs" / "DAEMON.md")
     for name in [
-      "daemon_config.cddl", "trust.cddl", "ctl.cddl", "logosctl.cddl", "evstore.cddl"
+      "daemon/daemon_config.cddl", "daemon/trust.cddl", "package/trustdoc.cddl",
+      "daemon/ctl.cddl", "daemon/logosctl.cddl", "daemon/evstore.cddl",
     ]:
       checkpoint name
-      let schema = readFile(root / "src/logos_core/daemon" / name)
+      let schema = readFile(root / "src/logos_core" / name)
       check ("```cddl\n" & schema & "```") in doc
     check ("## 3. `" & DaemonConfigFormat & "`") in doc
     let orch = orchestratorValue(defaultDaemonConfig("x")).get

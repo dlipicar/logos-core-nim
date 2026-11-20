@@ -479,7 +479,7 @@ when defined(posix):
       check c.initDefault().code == 0
       proc put(revision: uint64, development: bool) =
         check writeTrustFile(
-          c.s, LcnTrustFile(revision: revision, development: development)
+          c.s, LcnPackageTrust(revision: revision, development: development)
         ).isOk
 
       proc startsWith(code: int): bool =

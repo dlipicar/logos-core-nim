@@ -126,7 +126,7 @@ proc generatedDaemonConfigTypes*(): Result[string, string] =
     err(e.msg)
 
 proc generatedTrustTypes*(): Result[string, string] =
-  ## The trust file, its mark and the evidence key binding (G297, G299).
+  ## The trust mark and the evidence key binding (G297, G299).
   try:
     let set = ?acceptContractSet(readFile(trustPrimary), [], [], AcceptOptions())
     nimModule(
@@ -135,6 +135,27 @@ proc generatedTrustTypes*(): Result[string, string] =
         importPrefix: SdkImportRoot,
         schemaAccessor: "trustSchema",
         documentsAccessor: "trustDocuments",
+      ),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+const
+  trustdocTypesPath* = "src/logos_core/package/trustdoc_types.nim"
+  trustdocPrimary* = "src/logos_core/package/trustdoc.cddl"
+
+proc generatedTrustdocTypes*(): Result[string, string] =
+  ## The package trust file, v2 and the v1 it still reads (G396), for
+  ## `package/trustdoc.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(trustdocPrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(
+        importPrefix: SdkImportRoot,
+        schemaAccessor: "trustdocSchema",
+        documentsAccessor: "trustdocDocuments",
       ),
       false,
     )

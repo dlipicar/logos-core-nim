@@ -16,6 +16,8 @@ proc main() =
   echo daemonConfigTypesPath
   writeFile(trustTypesPath, generatedTrustTypes().get)
   echo trustTypesPath
+  writeFile(trustdocTypesPath, generatedTrustdocTypes().get)
+  echo trustdocTypesPath
   writeFile(evstoreTypesPath, generatedEvstoreTypes().get)
   echo evstoreTypesPath
   writeFile(ctlTypesPath, generatedCtlTypes().get)
@@ -71,5 +73,7 @@ proc main() =
   for f in exportFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath
+  writeFile(storageFetchRootPath, generatedStorageFetchRoot().get)
+  echo storageFetchRootPath
 
 main()

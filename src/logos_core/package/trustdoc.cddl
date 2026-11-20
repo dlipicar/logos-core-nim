@@ -1,0 +1,46 @@
+; The package trust file, and the Tier 4b trust file it replaces (Tier 5 step
+; 5-3a-2; DECISIONS G137, G299, G396, G398; C2, C3). Each is one Logos
+; deterministic-CBOR value; docs/DAEMON.md §6 documents them.
+
+; logos-core-nim.trust.v2, <session>/trust.cbor: the package trust file
+; (PACKAGE MANAGER l.401-449, l.733-745). One revision covers every field.
+; Closed: an unknown field is refused. development is D27's switch.
+lcn.package_trust = {
+  format: "logos-core-nim.trust.v2",
+  revision: uint64,
+  development: bool,
+  signing: lcn.trust_signing,
+  catalog: lcn.trust_selection,
+  provenance: lcn.trust_selection,
+}
+
+; The baseline package-signing profile (PACKAGE MANAGER l.485-488) and every
+; anchor, in strictly ascending kid byte order (by rule).
+lcn.trust_signing = {
+  profile: "logos.package-signing.cose-sign1-slh-dsa-sha2-192s",
+  anchors: [* lcn.trust_anchor],
+}
+
+; One signer: its kid, its key, the exact names it may sign (non-empty and in
+; strictly ascending UTF-8 byte order, by rule), and whether it is a
+; development anchor, in force only while `development` is on (G137).
+lcn.trust_anchor = {
+  kid: bstr .size (1..128),
+  public_key: bstr .size 48,
+  packages: [* tstr .size (1..128)],
+  development: bool,
+}
+
+; A profile selection. An empty section selects none (PACKAGE MANAGER l.736). A
+; selected profile this build does not support is refused (l.745; C3, C9).
+lcn.trust_selection = {
+  ? selected: tstr .size (1..128),
+}
+
+; logos-core-nim.trust.v1: the Tier 4b trust file (G299). Still read, as the
+; v2 content with no anchor and nothing selected; never written.
+lcn.trust_file = {
+  format: "logos-core-nim.trust.v1",
+  revision: uint64,
+  development: bool,
+}

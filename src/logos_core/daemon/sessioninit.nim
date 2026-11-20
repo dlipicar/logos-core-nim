@@ -40,7 +40,7 @@ type
   InitResult* = object
     runtimeId*: string
     key*: EvidenceKeyInfo
-    trust*: TrustInput
+    trust*: TrustFileState
 
 proc newRuntimeId*(): Result[string, string] =
   ## [batch E 19] A lowercase UUID version 4 from the operating-system CSPRNG.
