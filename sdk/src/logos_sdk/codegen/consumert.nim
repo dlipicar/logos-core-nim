@@ -71,8 +71,30 @@
 ## on a different thread from one delivery to the next; a delivery may be one the
 ## binding queued (l.1406-1408). Each callback registers its thread with this
 ## library's Nim runtime first (`kitrt.callbackEnter`), as an exported entry
-## does. Under refc they must not keep GC'd values (DECISIONS I71); a confined
-## kit runs them on its module thread instead (G335, sub-part 3).
+## does. Under refc they must not keep GC'd values (DECISIONS I71).
+##
+## **A confined kit's handles** (DECISIONS G335, G339; P1, P2). A handle
+## wrapped with a confined kit's `Dispatcher` (`ModuleServices.dispatcher`)
+## runs every handler, end report and completion on the kit's module thread.
+## The binding's callback copies what it got into C memory (a completion's
+## status with its message and detail, and its response, whose owner it then
+## clears) and posts it; the module thread decodes and runs it, in arrival
+## order, never inline, even when the delivering thread is the module thread
+## itself (l.1405). Events wait in a bound shared by the kit's subscriptions
+## (1024 [IMPL], `confinedrt.setDeliveryBound`). **A delivery that finds the
+## bound reached ends its subscription**: the callback unsubscribes from inside
+## its own delivery, which never waits (l.1424-1426), drops and erases the
+## event, and the module thread reports `onEnd(MODULE_ERROR)` after the events
+## already queued, as a binding does at its own bound (l.1473, l.1479); a later
+## `unsubscribe` is OK. End reports and completions use storage reserved in
+## the subscription, handle or call, so they never meet the bound. On the
+## module thread an unsubscription, even from the subscription's own handler,
+## and a release are external to the binding, whose callbacks run elsewhere
+## (l.1416-1419, l.1434): the subscription or handle is marked closing first,
+## so a delivery still arriving is dropped, and what is queued for it is
+## dropped when its turn comes; its state goes with the last of them. A
+## prepared call released before its queued completion ran never completes.
+## Use these on the module thread only.
 ##
 ## This module imports neither the Runtime Control types nor chronos
 ## (`tools/lint/layers.toml`, `kit_facade`).
@@ -83,10 +105,11 @@ import std/[atomics, locks]
 import results
 import ../abi/[checks, types]
 import ../iface/outcome
-import ./kitrt
+import ../base/wipe
+import ./[handover, kitrt]
 from ./nimrt import wipeTyped
 
-export results, types, outcome, kitrt
+export results, types, outcome, kitrt, handover
 
 type
   RouteEndProc* = proc(code: ErrorCode, user: pointer) {.nimcall, gcsafe, raises: [].}
@@ -115,7 +138,7 @@ type
 
   CompleteProc = proc(
     c: ptr CallObj,
-    status: LogosResult,
+    st: Result[void, InvocationFailure],
     response: ptr UncheckedArray[uint8],
     len: csize_t,
     owner: LogosResponseOwner,
@@ -129,6 +152,14 @@ type
     onRouteEnd: RouteEndProc
     user: pointer
     endCode: Atomic[int32] ## 0 while the route is live
+    # A confined kit's handle (G339): its callbacks are tasks for the module thread.
+    dispatch: Dispatcher
+    closing: bool ## under `stateLock`: release has begun
+    pending: int ## under `stateLock`: tasks queued for the handle and its subscriptions
+    released: bool
+      ## under `stateLock`: released while tasks were queued; the last frees it
+    endTask: TaskNode ## the route-end report, reserved
+    endQueued: Atomic[bool]
 
   RouteHandle* = ptr HandleObj ## A wrapped route handle; `release` it once.
 
@@ -139,6 +170,10 @@ type
     stateLock: Lock ## the subscription list; never held across a binding call
     subs: ptr SubObj
     nextKept: ptr BindingObj ## in `kept`, once closed with its registration kept
+    dispatch: Dispatcher ## as a handle's
+    closing: bool ## under `stateLock`
+    pending: int ## under `stateLock`
+    released: bool ## under `stateLock`
 
   BindingEvents* = ptr BindingObj
     ## The typed subscriptions of one Runtime Control binding; `close` it once.
@@ -160,8 +195,22 @@ type
     onEnd: SubscriptionEndProc
     onInvalid: InvalidEventProc
     user: pointer
-    frames: int ## handler and end frames running; under the owner's state lock
+    frames: int
+      ## handler and end frames running, and tasks queued for it; under the
+      ## owner's state lock
     dead: bool ## unsubscribed; under the owner's state lock
+    closing: bool ## under the owner's state lock: an unsubscription has begun
+    helperEnded: bool
+      ## under the owner's state lock: ended at a full delivery queue (P1),
+      ## already unsubscribed from the binding
+    endTask: TaskNode ## its end report, reserved
+    endReason: CErrorCode
+    endQueued: Atomic[bool]
+
+  EventTask = object ## One delivery copied for the module thread.
+    task: TaskNode
+    sub: ptr SubObj
+    len: int ## the payload's bytes follow
 
   Subscription* = object ## One subscription of a route handle or binding.
     p: ptr SubObj
@@ -172,6 +221,13 @@ type
     onDone: pointer
     user: pointer
     marked: bool ## the response `_sensitive` marks (G276)
+    dispatch: Dispatcher ## its handle's
+    doneTask: TaskNode ## the completion, reserved
+    status: StatusCopy
+    data: ptr UncheckedArray[uint8] ## the response's copy
+    len: int
+    queued: Atomic[bool] ## the completion's task waits on the module thread
+    released: bool ## module thread: released before that task ran
 
   PreparedCall* = object ## A prepared asynchronous call; `release` it once.
     p: ptr CallObj
@@ -388,6 +444,230 @@ proc freeAll(first: ptr SubObj) =
     freeSub(s)
     s = next
 
+proc freeHandle(h: RouteHandle) =
+  acquire(h.stateLock)
+  let first = h.subs
+  h.subs = nil
+  release(h.stateLock)
+  freeAll(first)
+  deinitLock(h.opLock)
+  deinitLock(h.stateLock)
+  deallocShared(h)
+
+proc freeBinding(b: BindingEvents) =
+  acquire(b.stateLock)
+  let first = b.subs
+  b.subs = nil
+  release(b.stateLock)
+  freeAll(first)
+  deinitLock(b.regLock)
+  deinitLock(b.stateLock)
+  deallocShared(b)
+
+# A confined kit's tasks ----------------------------------------------------------------
+#
+# [DECISIONS G339, P1] Each task queued for the module thread holds a frame of its
+# subscription and counts in its owner's `pending`. A subscription's state goes with
+# the last of its unsubscription and its frames; a released owner's with its last
+# task. All of it is counted under the owner's state lock.
+
+proc dispatcherOf(s: ptr SubObj): Dispatcher =
+  case s.kind
+  of okRoute: s.handle.dispatch
+  of okBinding: s.binding.dispatch
+
+proc pendingOf(s: ptr SubObj): ptr int =
+  case s.kind
+  of okRoute:
+    addr s.handle.pending
+  of okBinding:
+    addr s.binding.pending
+
+proc ownerClosing(s: ptr SubObj): bool =
+  ## Under the owner's state lock.
+  case s.kind
+  of okRoute: s.handle.closing
+  of okBinding: s.binding.closing
+
+proc ownerReleased(s: ptr SubObj): bool =
+  ## Under the owner's state lock.
+  case s.kind
+  of okRoute: s.handle.released
+  of okBinding: s.binding.released
+
+proc live(s: ptr SubObj): bool =
+  ## Whether a queued task of `s` still runs its handler.
+  let l = s.stateLock
+  acquire(l[])
+  result = not s.dead and not s.closing and not s.ownerClosing
+  release(l[])
+
+proc finishTask(s: ptr SubObj) =
+  ## A task of `s` ran or was dropped: its frame and its owner's count go.
+  let (kind, h, b) = (s.kind, s.handle, s.binding)
+  let l = s.stateLock
+  acquire(l[])
+  dec s.frames
+  let pending = s.pendingOf
+  dec pending[]
+  let ownerGone = s.ownerReleased and pending[] == 0
+  var subGone = false
+  if s.frames == 0 and s.dead:
+    unlinkLocked(s)
+    subGone = true
+  release(l[])
+  if subGone:
+    freeSub(s)
+  if ownerGone:
+    case kind
+    of okRoute:
+      freeHandle(h)
+    of okBinding:
+      freeBinding(b)
+
+proc dataOf(e: ptr EventTask): ptr UncheckedArray[uint8] =
+  cast[ptr UncheckedArray[uint8]](cast[uint](e) + uint(sizeof(EventTask)))
+
+proc runEvent(t: ptr TaskNode, drop: bool) {.nimcall, gcsafe, raises: [].} =
+  ## On the module thread: one queued delivery, decoded and handled.
+  let e = cast[ptr EventTask](t)
+  let s = e.sub
+  if not drop and s.live:
+    let h = if s.kind == okRoute: s.handle else: nil
+    if h != nil:
+      enterCallback(h)
+    let outer = currentSub
+    currentSub = s
+    s.deliver(s, (if e.len == 0: nil else: e.dataOf), csize_t(e.len))
+    currentSub = outer
+    if h != nil:
+      leaveCallback(h)
+  if e.len > 0:
+    secureZero(e.dataOf, e.len)
+  deallocShared(e)
+  finishTask(s)
+
+proc runEnd(t: ptr TaskNode, drop: bool) {.nimcall, gcsafe, raises: [].} =
+  ## On the module thread: a subscription's end report, after its queued events.
+  let s = cast[ptr SubObj](cast[uint](t) - uint(offsetOf(SubObj, endTask)))
+  if not drop and s.onEnd != nil and s.live:
+    let h = if s.kind == okRoute: s.handle else: nil
+    if h != nil:
+      enterCallback(h)
+    s.onEnd(Subscription(p: s), codeOf(s.endReason), s.user)
+    if h != nil:
+      leaveCallback(h)
+  finishTask(s)
+
+proc runRouteEnd(t: ptr TaskNode, drop: bool) {.nimcall, gcsafe, raises: [].} =
+  ## On the module thread: the route's end report.
+  let h = cast[RouteHandle](cast[uint](t) - uint(offsetOf(HandleObj, endTask)))
+  acquire(h.stateLock)
+  let open = not h.closing
+  release(h.stateLock)
+  if not drop and open and h.onRouteEnd != nil:
+    enterCallback(h)
+    h.onRouteEnd(codeOf(CErrorCode(h.endCode.load)), h.user)
+    leaveCallback(h)
+  acquire(h.stateLock)
+  dec h.pending
+  let gone = h.released and h.pending == 0
+  release(h.stateLock)
+  if gone:
+    freeHandle(h)
+
+proc runDone(t: ptr TaskNode, drop: bool) {.nimcall, gcsafe, raises: [].} =
+  ## On the module thread: a prepared call's completion, unless the call was
+  ## released first. The response's copy is erased after it.
+  let c = cast[ptr CallObj](cast[uint](t) - uint(offsetOf(CallObj, doneTask)))
+  var st = readCopy(c.status)
+  if not drop and not c.released:
+    let outer = currentCall
+    currentCall = c
+    c.complete(c, st, c.data, csize_t(c.len), LogosResponseOwner())
+    currentCall = outer
+  wipeError(st)
+  if c.data != nil:
+    secureZero(c.data, c.len)
+    deallocShared(c.data)
+    c.data = nil
+    c.len = 0
+  c.queued.store(false)
+  if c.released:
+    deallocShared(c)
+
+proc queueEnd(s: ptr SubObj, d: Dispatcher, reason: CErrorCode): bool =
+  ## Posts the subscription's one end report; a frame the caller holds goes
+  ## with it. False when one was posted already.
+  var expected = false
+  if not s.endQueued.compareExchange(expected, true):
+    return false
+  let l = s.stateLock
+  acquire(l[])
+  inc s.pendingOf[]
+  release(l[])
+  s.endReason = reason
+  s.endTask.run = runEnd
+  s.endTask.counted = false
+  discard d.post(d.context, addr s.endTask)
+  true
+
+proc endAtBound(s: ptr SubObj, d: Dispatcher) =
+  ## [DECISIONS G339, P1] A delivery found the bound reached: from inside that
+  ## delivery the subscription unsubscribes, which never waits (INTERFACE
+  ## l.1424-1426), and its end report follows the events already queued.
+  let l = s.stateLock
+  acquire(l[])
+  let first = not s.helperEnded and not s.dead and not s.closing
+  if first:
+    s.helperEnded = true
+    inc s.frames # for the end report
+  release(l[])
+  if not first:
+    return
+  case s.kind
+  of okRoute:
+    discard s.handle.route.vtable.unsubscribe(addr s.handle.route, s.id)
+  of okBinding:
+    discard s.binding.rc.vtable.unsubscribe(s.binding.rc, s.id)
+  if not queueEnd(s, d, CErrorCode(ord(ecModule))):
+    leaveFrame(s)
+
+proc queueEvent(
+    s: ptr SubObj, d: Dispatcher, data: ptr UncheckedArray[uint8], len: csize_t
+) =
+  ## [DECISIONS G339] A delivery to a confined kit's subscription: copied and
+  ## posted to the module thread, or, at the bound, the subscription's end.
+  let l = s.stateLock
+  acquire(l[])
+  let admitted =
+    not s.dead and not s.closing and not s.helperEnded and not s.ownerClosing
+  if admitted:
+    inc s.frames
+    inc s.pendingOf[]
+  release(l[])
+  if not admitted:
+    return
+  let n =
+    if data.isNil:
+      0
+    else:
+      int(len)
+  let e = cast[ptr EventTask](allocShared0(sizeof(EventTask) + n))
+  e.task.run = runEvent
+  e.task.counted = true
+  e.sub = s
+  e.len = n
+  if n > 0:
+    copyMem(e.dataOf, data, n)
+  if d.post(d.context, addr e.task):
+    return
+  if n > 0:
+    secureZero(e.dataOf, n)
+  deallocShared(e)
+  endAtBound(s, d)
+  finishTask(s)
+
 # Callbacks the binding runs ----------------------------------------------------------
 
 proc onEventCb(
@@ -395,6 +675,10 @@ proc onEventCb(
 ) {.cdecl, gcsafe, raises: [].} =
   callbackEnter()
   let s = cast[ptr SubObj](userData)
+  let d = s.dispatcherOf
+  if d.confined:
+    queueEvent(s, d, data, len)
+    return
   if not enterFrame(s):
     return
   let h = if s.kind == okRoute: s.handle else: nil
@@ -413,7 +697,19 @@ proc onRouteEndCb(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises
   let h = cast[RouteHandle](userData)
   var expected = 0'i32
   discard h.endCode.compareExchange(expected, int32(reason))
-  if h.onRouteEnd != nil:
+  if h.onRouteEnd != nil and h.dispatch.confined:
+    var first = false
+    if h.endQueued.compareExchange(first, true):
+      acquire(h.stateLock)
+      let open = not h.closing
+      if open:
+        inc h.pending
+      release(h.stateLock)
+      if open:
+        h.endTask.run = runRouteEnd
+        h.endTask.counted = false
+        discard h.dispatch.post(h.dispatch.context, addr h.endTask)
+  elif h.onRouteEnd != nil:
     enterCallback(h)
     h.onRouteEnd(codeOf(reason), h.user)
     leaveCallback(h)
@@ -425,6 +721,10 @@ proc onSubscriptionEndCb(
   let h = cast[RouteHandle](userData)
   let s = findLive(addr h.stateLock, h.subs, id)
   if s.isNil:
+    return
+  if h.dispatch.confined:
+    if not queueEnd(s, h.dispatch, reason):
+      leaveFrame(s)
     return
   if s.onEnd != nil:
     enterCallback(h)
@@ -440,6 +740,12 @@ proc onBindingEndCb(
   let s = findLive(addr b.stateLock, b.subs, id)
   if s.isNil:
     return
+  if b.dispatch.confined:
+    # [DECISIONS G339] Runs later on the module thread, outside this callback,
+    # where Runtime Control operations are allowed again (l.1480).
+    if not queueEnd(s, b.dispatch, reason):
+      leaveFrame(s)
+    return
   if s.onEnd != nil:
     let outer = bindingEndOf
     bindingEndOf = b.rc
@@ -450,13 +756,18 @@ proc onBindingEndCb(
 # Wrapping and release ----------------------------------------------------------------
 
 proc wrapRoute*(
-    route: LogosRouteHandle, onRouteEnd: RouteEndProc = nil, user: pointer = nil
+    route: LogosRouteHandle,
+    onRouteEnd: RouteEndProc = nil,
+    user: pointer = nil,
+    dispatcher = Dispatcher(),
 ): Result[RouteHandle, InvocationFailure] =
   ## Takes ownership of a materialized route handle and registers its two end
   ## reports. On failure the handle is released (when it can be) and the
   ## result says why: the route's termination code when it has already ended
   ## (l.1459), INVALID_PARAMS when a registration already exists, MODULE_ERROR
-  ## when the binding has no capacity for one (l.1451).
+  ## when the binding has no capacity for one (l.1451). With a confined kit's
+  ## `dispatcher` (`ModuleServices.dispatcher`), its callbacks run on the
+  ## kit's module thread (G339).
   var probe = route
   checkRoute(addr probe).isOkOr:
     return err(toFailure(error, "route handle"))
@@ -466,6 +777,7 @@ proc wrapRoute*(
   initLock(h.stateLock)
   h.onRouteEnd = onRouteEnd
   h.user = user
+  h.dispatch = dispatcher
   proc fail(h: RouteHandle, r: LogosResult, what: string): InvocationFailure =
     let f = readStatus(r)
     result =
@@ -496,25 +808,32 @@ proc release*(h: RouteHandle): Result[void, InvocationFailure] =
   if insideCallback(h):
     return err(refused("route-handle release"))
   acquire(h.opLock)
+  acquire(h.stateLock)
+  h.closing = true
+  release(h.stateLock)
   h.route.vtable.release(addr h.route)
   release(h.opLock)
   acquire(h.stateLock)
-  let first = h.subs
-  h.subs = nil
+  let later = h.pending > 0
+  if later:
+    # [DECISIONS G339] Tasks are still queued for it: the last one frees it.
+    h.released = true
   release(h.stateLock)
-  freeAll(first)
-  deinitLock(h.opLock)
-  deinitLock(h.stateLock)
-  deallocShared(h)
+  if not later:
+    freeHandle(h)
   ok()
 
 # The Runtime Control binding's subscriptions ------------------------------------------
 
-proc newBindingEvents*(rc: ptr LogosRuntimeControlBinding): BindingEvents =
+proc newBindingEvents*(
+    rc: ptr LogosRuntimeControlBinding, dispatcher = Dispatcher()
+): BindingEvents =
   ## Typed subscriptions through `rc`, which the caller has checked; one per
-  ## binding.
+  ## binding. With a confined kit's `dispatcher`, their handlers and end
+  ## reports run on its module thread (G339).
   result = cast[BindingEvents](allocShared0(sizeof(BindingObj)))
   result.rc = rc
+  result.dispatch = dispatcher
   initLock(result.regLock)
   initLock(result.stateLock)
 
@@ -546,17 +865,24 @@ proc close*(
   if insideBindingEnd(b.rc):
     return err(refusedInEnd())
   var first = Result[void, InvocationFailure].ok()
+  acquire(b.stateLock)
+  b.closing = true
+  release(b.stateLock)
   while true:
     acquire(b.stateLock)
     var s = b.subs
     while s != nil and s.dead:
       s = s.next
+    if s != nil:
+      s.closing = true
+    let ended = s != nil and s.helperEnded
     release(b.stateLock)
     if s.isNil:
       break
-    let st = readStatus(b.rc.vtable.unsubscribe(b.rc, s.id))
-    if st.isErr and first.isOk:
-      first = err(toFailure(st.error, "unsubscribe"))
+    if not ended:
+      let st = readStatus(b.rc.vtable.unsubscribe(b.rc, s.id))
+      if st.isErr and first.isOk:
+        first = err(toFailure(st.error, "unsubscribe"))
     dropSub(s)
   if keepRegistration and b.registered:
     acquire(keptLock)
@@ -564,9 +890,13 @@ proc close*(
     kept = b
     release(keptLock)
     return first
-  deinitLock(b.regLock)
-  deinitLock(b.stateLock)
-  deallocShared(b)
+  acquire(b.stateLock)
+  let later = b.pending > 0
+  if later:
+    b.released = true # the last queued task frees it (G339)
+  release(b.stateLock)
+  if not later:
+    freeBinding(b)
   first
 
 # Subscriptions -------------------------------------------------------------------------
@@ -686,6 +1016,43 @@ proc subscribeTyped*[E](
     b, event, deliverTyped[E], cast[pointer](onEvent), onEnd, onInvalid, user
   )
 
+proc unsubscribeConfined(s: ptr SubObj): Result[void, InvocationFailure] =
+  ## [DECISIONS G339] On a confined kit's module thread: external to the
+  ## binding even from the subscription's own handler, whose frame is not on
+  ## the binding's thread (INTERFACE l.1416-1419). Marked closing first, so a
+  ## delivery still arriving is dropped; a subscription ended at the bound is
+  ## already unsubscribed from the binding, and its unsubscription is OK.
+  let own = currentSub == s
+  var h: RouteHandle = nil
+  if s.kind == okRoute:
+    h = s.handle
+    if insideCallback(h) and not own:
+      return err(refused("unsubscribing another subscription"))
+    if not own:
+      ?h.beginOperation()
+  let l = s.stateLock
+  acquire(l[])
+  s.closing = true
+  let ended = s.helperEnded
+  release(l[])
+  var st = Result[void, AbiFailure].ok()
+  if not ended:
+    st =
+      case s.kind
+      of okRoute:
+        readStatus(h.route.vtable.unsubscribe(addr h.route, s.id))
+      of okBinding:
+        readStatus(s.binding.rc.vtable.unsubscribe(s.binding.rc, s.id))
+  if h != nil and not own:
+    h.endOperation()
+  if st.isErr:
+    acquire(l[])
+    s.closing = false
+    release(l[])
+    return err(toFailure(st.error, "unsubscribe"))
+  dropSub(s)
+  ok()
+
 proc unsubscribe*(sub: Subscription): Result[void, InvocationFailure] =
   ## [SPEC INTERFACE l.1416-1437] From the subscription's own handler, a
   ## self-unsubscription: deactivates without waiting, and the state goes when
@@ -695,6 +1062,8 @@ proc unsubscribe*(sub: Subscription): Result[void, InvocationFailure] =
   let s = sub.p
   if s.isNil:
     return err(failure(ecInvalidParams, "a null subscription"))
+  if s.dispatcherOf.confined:
+    return unsubscribeConfined(s)
   case s.kind
   of okRoute:
     let h = s.handle
@@ -732,6 +1101,19 @@ func id*(sub: Subscription): LogosSubscriptionId =
 
 # Prepared calls ------------------------------------------------------------------------
 
+proc checkCompletion(
+    status: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+): Result[void, InvocationFailure] =
+  ## A completion's status and response shape, read on the thread that got
+  ## them (IFC-0260).
+  let st = checkOutcome(status, completionShape(response, len, owner))
+  if st.isErr:
+    return err(toFailure(st.error, "completion"))
+  ok()
+
 proc onCompleteCb(
     userData: pointer,
     status: LogosResult,
@@ -741,14 +1123,34 @@ proc onCompleteCb(
 ) {.cdecl, gcsafe, raises: [].} =
   callbackEnter()
   let c = cast[ptr CallObj](userData)
+  if c.dispatch.confined:
+    # [DECISIONS G339] Copied here, the owner cleared here (l.2052), decoded
+    # and handled on the module thread.
+    var st = checkCompletion(status, response, len, owner)
+    if st.isErr:
+      copyFailure(c.status, st.unsafeError)
+      wipeError(st)
+    else:
+      c.status.clear()
+      if response != nil and len > 0:
+        c.data = cast[ptr UncheckedArray[uint8]](allocShared0(int(len)))
+        copyMem(c.data, response, int(len))
+        c.len = int(len)
+    if ownerValid(owner) and owner.release != nil:
+      owner.release(owner.state)
+    c.queued.store(true)
+    c.doneTask.run = runDone
+    c.doneTask.counted = false
+    discard c.dispatch.post(c.dispatch.context, addr c.doneTask)
+    return
   let outer = currentCall
   currentCall = c
-  c.complete(c, status, response, len, owner)
+  c.complete(c, checkCompletion(status, response, len, owner), response, len, owner)
   currentCall = outer
 
 proc completeTyped[R](
     c: ptr CallObj,
-    status: LogosResult,
+    st: Result[void, InvocationFailure],
     response: ptr UncheckedArray[uint8],
     len: csize_t,
     owner: LogosResponseOwner,
@@ -756,10 +1158,8 @@ proc completeTyped[R](
   mixin decode
   type Outcome = Result[R, InvocationFailure]
   var outcome: Outcome
-  let st = checkOutcome(status, completionShape(response, len, owner))
   if st.isErr:
-    let f = toFailure(st.error, "completion")
-    outcome = Outcome.err(f)
+    outcome = Outcome.err(st.unsafeError)
   else:
     var d =
       if response.isNil or len == 0:
@@ -804,6 +1204,8 @@ proc prepareWith(
   c.onDone = onDone
   c.user = user
   c.marked = marked
+  c.dispatch = h.dispatch
+  c.status.clear()
   # [SPEC INTERFACE l.1992] Options and callbacks are always passed.
   var options = LogosAsyncOptions(
     abiVersion: AsyncCallAbiVersion,
@@ -896,6 +1298,11 @@ proc release*(c: PreparedCall): Result[void, InvocationFailure] =
       )
     )
   c.p.call.vtable.release(addr c.p.call)
+  if c.p.dispatch.confined and c.p.queued.load:
+    # [DECISIONS G339] Its completion waits on the module thread: it is
+    # dropped there, and the call freed with it.
+    c.p.released = true
+    return ok()
   deallocShared(c.p)
   ok()
 

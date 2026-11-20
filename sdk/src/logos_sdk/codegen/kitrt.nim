@@ -56,9 +56,9 @@ import ../pins
 import ../iface/[accept, outcome, payload]
 import ../abi/[types, checks]
 import ../base/[libvisibility, perthread, wipe]
-import ./nimrt
+import ./[handover, nimrt]
 
-export results, outcome, types, payload, nimrt
+export results, outcome, types, payload, nimrt, handover
 
 proc cMalloc(size: csize_t): pointer {.importc: "malloc", header: "<stdlib.h>".}
 proc cFree(p: pointer) {.importc: "free", header: "<stdlib.h>".}
@@ -75,6 +75,7 @@ type
     invocationAccess: LogosInvocationAccess
     confined: pointer ## a confined kit's context (`confinedrt`), else nil
     confinedPublish: ConfinedPublishFn
+    dispatch: Dispatcher ## where its route handles' callbacks run (G339)
 
   ModuleInit* = object
     ## What `initModule` receives. The state directory and configuration are
@@ -284,12 +285,21 @@ proc moduleServices*(input: ptr LogosModuleInitInput): ModuleServices =
   )
 
 proc withConfined*(
-    s: ModuleServices, confined: pointer, publish: ConfinedPublishFn
+    s: ModuleServices, confined: pointer, publish: ConfinedPublishFn, post: PostTaskFn
 ): ModuleServices =
-  ## [DECISIONS G337] `s` for an instance of the confined context `confined`.
+  ## [DECISIONS G337, G339] `s` for an instance of the confined context
+  ## `confined`: its events are queued by `publish`, and its route handles'
+  ## callbacks are posted to its module thread by `post`.
   result = s
   result.confined = confined
   result.confinedPublish = publish
+  result.dispatch = Dispatcher(context: confined, post: post)
+
+proc dispatcher*(s: ModuleServices): Dispatcher =
+  ## [DECISIONS G339, P2] What the consumer helpers wrap this instance's route
+  ## handles with (`routes.newRouteSet`, `consumert.wrapRoute`): a confined
+  ## kit's module thread, or none (callbacks run in the delivery).
+  s.dispatch
 
 proc confinedOf*(s: ModuleServices): pointer =
   ## The confined context these services belong to; nil for a plain kit.

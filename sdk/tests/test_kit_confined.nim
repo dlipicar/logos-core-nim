@@ -11,7 +11,7 @@ import unittest2
 import logos_sdk/codegen/callrt
 import logos_sdk/testing/kitruntime
 import logos_sdk/testing/fixtures/ledger_impl
-import logos_sdk/testing/generated/ledger_module_types
+import logos_sdk/testing/generated/[ledger_module_types, meter_module_types]
 
 # The exported symbols, as an ABI caller declares them -------------------------------
 
@@ -428,6 +428,245 @@ proc inlineEntry(m: Ledger, value: uint64): string {.nimcall, gcsafe, raises: []
           $code
     activeContext = saved
 
+# A route binding the test drives (DECISIONS G339) ----------------------------------
+#
+# The ledger wraps it with its kit's dispatcher; the test delivers events, ends the
+# subscription or the route and completes a prepared call from its own threads, as
+# a binding's threads do.
+
+type FakeSub = object
+  id: uint64
+  handler: LogosEventHandler
+  user: pointer
+  active: bool
+  ended: bool
+
+var
+  fakeLock: Lock
+  fakeSubs: array[8, FakeSub]
+  fakeNextId: uint64
+  fakeEnd: LogosRouteEndHandler
+  fakeEndUser: pointer
+  fakeSubEnd: LogosSubscriptionEndHandler
+  fakeSubEndUser: pointer
+  fakeCallbacks: LogosAsyncCallbacks
+  fakeState: byte
+  fakeReleased: Atomic[bool]
+  fakeUnsubscribes: Atomic[int]
+  fakeUnsubscribesInside: Atomic[int] ## made from inside a delivery
+  fakeCompleteInSubmit: Atomic[bool]
+  fakeCallReleases: Atomic[int]
+  ownerReleases: Atomic[int]
+  ownerReleaseThread: Atomic[uint64]
+  delivering {.threadvar.}: bool
+initLock(fakeLock)
+
+proc fakeCallOp(
+    route: ptr LogosRouteHandle,
+    m: cstring,
+    params: ptr UncheckedArray[uint8],
+    paramsLen: csize_t,
+    outResponse: ptr ptr UncheckedArray[uint8],
+    outResponseLen: ptr csize_t,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  LogosResult(code: CErrorCode(ord(ecModule)))
+
+proc fakeReleaseResponseOp(
+    route: ptr LogosRouteHandle, r: ptr UncheckedArray[uint8], n: csize_t
+) {.cdecl, gcsafe, raises: [].} =
+  discard
+
+proc fakeSubscribeOp(
+    route: ptr LogosRouteHandle,
+    eventName: cstring,
+    handler: LogosEventHandler,
+    userData: pointer,
+    outId: ptr LogosSubscriptionId,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    withLock fakeLock:
+      for f in fakeSubs.mitems:
+        if not f.active and not f.ended:
+          inc fakeNextId
+          f = FakeSub(id: fakeNextId, handler: handler, user: userData, active: true)
+          outId[] = fakeNextId
+          return LogosResult()
+  LogosResult(code: CErrorCode(ord(ecModule)))
+
+proc fakeUnsubscribeOp(
+    route: ptr LogosRouteHandle, id: LogosSubscriptionId
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  fakeUnsubscribes += 1
+  if delivering:
+    fakeUnsubscribesInside += 1
+  {.cast(gcsafe).}:
+    withLock fakeLock:
+      for f in fakeSubs.mitems:
+        if f.id == id and (f.active or f.ended):
+          f = FakeSub()
+          return LogosResult()
+  LogosResult(code: CErrorCode(ord(ecInvalidParams)))
+
+proc fakeReleaseOp(route: ptr LogosRouteHandle) {.cdecl, gcsafe, raises: [].} =
+  fakeReleased.store(true)
+
+proc ownerRelease(state: pointer) {.cdecl, gcsafe, raises: [].} =
+  ownerReleases += 1
+  ownerReleaseThread.store(here())
+
+proc completeFake(label: string) {.gcsafe.} =
+  ## The prepared call's one completion, from this thread, with an owner.
+  var response =
+    encode(MeterReadResponse(label: label, reading: MeterReading(value: 1))).get
+  let owner = LogosResponseOwner(state: addr fakeState, release: ownerRelease)
+  {.cast(gcsafe).}:
+    let cb = fakeCallbacks
+  cb.complete(
+    cb.userData,
+    LogosResult(),
+    cast[ptr UncheckedArray[uint8]](addr response[0]),
+    csize_t(response.len),
+    owner,
+  )
+
+proc fakeSubmitOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
+  if fakeCompleteInSubmit.load:
+    completeFake("inline")
+
+proc fakeCancelOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
+  discard
+
+proc fakeCallReleaseOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
+  fakeCallReleases += 1
+
+var fakeCallVtable = LogosAsyncCallVtable(
+  abiVersion: AsyncCallAbiVersion,
+  structSize: csize_t(sizeof(LogosAsyncCallVtable)),
+  submit: fakeSubmitOp,
+  cancel: fakeCancelOp,
+  release: fakeCallReleaseOp,
+)
+
+proc fakePrepareOp(
+    route: ptr LogosRouteHandle,
+    m: cstring,
+    params: ptr UncheckedArray[uint8],
+    paramsLen: csize_t,
+    options: ptr LogosAsyncOptions,
+    callbacks: ptr LogosAsyncCallbacks,
+    outCall: ptr LogosAsyncCall,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    fakeCallbacks = callbacks[]
+    outCall[] = LogosAsyncCall(vtable: addr fakeCallVtable, state: addr fakeState)
+  LogosResult()
+
+proc fakeObserveEndOp(
+    route: ptr LogosRouteHandle, handler: LogosRouteEndHandler, userData: pointer
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    fakeEnd = handler
+    fakeEndUser = userData
+  LogosResult()
+
+proc fakeObserveSubEndOp(
+    route: ptr LogosRouteHandle, handler: LogosSubscriptionEndHandler, userData: pointer
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    fakeSubEnd = handler
+    fakeSubEndUser = userData
+  LogosResult()
+
+var fakeVtable = LogosRouteVtable(
+  abiVersion: RouteVtableAbiVersion,
+  structSize: csize_t(sizeof(LogosRouteVtable)),
+  call: fakeCallOp,
+  releaseResponse: fakeReleaseResponseOp,
+  subscribe: fakeSubscribeOp,
+  unsubscribe: fakeUnsubscribeOp,
+  release: fakeReleaseOp,
+  prepareCall: fakePrepareOp,
+  observeEnd: fakeObserveEndOp,
+  observeSubscriptionEnd: fakeObserveSubEndOp,
+)
+
+proc resetFake() =
+  withLock fakeLock:
+    for f in fakeSubs.mitems:
+      f = FakeSub()
+  fakeEnd = nil
+  fakeSubEnd = nil
+  fakeReleased.store(false)
+  fakeUnsubscribes.store(0)
+  fakeUnsubscribesInside.store(0)
+  fakeCompleteInSubmit.store(false)
+  fakeCallReleases.store(0)
+  ownerReleases.store(0)
+  routeToWrap = LogosRouteHandle(vtable: addr fakeVtable, state: addr fakeState)
+
+proc deliver(value: uint64) {.gcsafe.} =
+  ## `meter.changed_event` to every active subscription, from this thread.
+  var payload = encode(MeterChangedEvent(value: value)).get
+  var targets: seq[(LogosEventHandler, pointer)]
+  {.cast(gcsafe).}:
+    withLock fakeLock:
+      for f in fakeSubs:
+        if f.active:
+          targets.add((f.handler, f.user))
+  for (handler, user) in targets:
+    delivering = true
+    handler(
+      "meter.changed_event",
+      cast[ptr UncheckedArray[uint8]](addr payload[0]),
+      csize_t(payload.len),
+      user,
+    )
+    delivering = false
+
+proc endSubscription(reason: ErrorCode) =
+  ## The binding ends the first active subscription (INTERFACE l.1472-1483).
+  var id: uint64
+  withLock fakeLock:
+    for f in fakeSubs.mitems:
+      if f.active:
+        f.active = false
+        f.ended = true
+        id = f.id
+        break
+  fakeSubEnd(id, CErrorCode(ord(reason)), fakeSubEndUser)
+
+proc endRoute(reason: ErrorCode) =
+  fakeEnd(CErrorCode(ord(reason)), fakeEndUser)
+
+var
+  gate: Atomic[bool]
+  gateEntered: Atomic[bool]
+
+proc holdHook(m: Ledger, value: uint64): string {.nimcall, gcsafe, raises: [].} =
+  ## Keeps the module thread busy until the test opens the gate.
+  gateEntered.store(true)
+  while gate.load:
+    sleep(1)
+  "held"
+
+proc holder(i: int) {.thread.} =
+  {.cast(gcsafe).}:
+    discard probe(shared, 8)
+
+proc deliverInsideHook(
+    m: Ledger, value: uint64
+): string {.nimcall, gcsafe, raises: [].} =
+  ## On the module thread: the binding delivers here (INTERFACE l.1405), then the
+  ## handler unsubscribes before those deliveries ran.
+  let before = m.seenCount
+  deliver(5)
+  deliver(6)
+  let ran = m.seenCount - before
+  $ran & " " & m.unsubscribeChanged()
+
+proc report(ctx: ptr LogosModuleContext): string =
+  probe(ctx, 14)[1].note
+
 # Tests --------------------------------------------------------------------------------
 
 suite "confined kit: handoff (DECISIONS G335)":
@@ -764,3 +1003,101 @@ suite "confined kit: lifecycle and foreign threads (DECISIONS G335)":
         var ctx: ptr LogosModuleContext
         discard ledgerInit(addr inp, addr ctx)
       check openDescriptors() == fds
+
+suite "confined kit: consumer helpers on the module thread (DECISIONS G339)":
+  setup:
+    resetRuntime()
+    resetFake()
+
+  test "[IMPL-DECISION G339] handlers, end reports and completions run on the module thread, never in the delivery":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    deliver(1)
+    deliver(2)
+    deliver(3)
+    check ctx.report.startsWith("seen=1,2,3 ")
+    endSubscription(ecModule)
+    check " end=MODULE_ERROR " in ctx.report
+    check probe(ctx, 11)[1].note == "ok" # after the binding ended it (l.1482)
+    check probe(ctx, 13, 4)[1].note == "submitted"
+    completeFake("ch4")
+    check ownerReleases.load == 1
+    check ownerReleaseThread.load == here() # cleared where it was delivered (l.2052)
+    check " done=ok:ch4 " in ctx.report
+    endRoute(ecNotReady)
+    check " route=NOT_READY " in ctx.report
+    check probe(ctx, 15)[1].note == "ok"
+    check probe(ctx, 12)[1].note == "ok"
+    check fakeReleased.load
+    check ctx.report.endsWith(" off=0")
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G339] P1: a delivery that finds the bound reached ends its subscription from inside the delivery; the queued events come first, then onEnd(MODULE_ERROR)":
+    shared = openLedger()
+    check probe(shared, 10)[1].note == "subscribed"
+    check probe(shared, 16, 2)[1].note == "bound"
+    probeHook = holdHook
+    gate.store(true)
+    gateEntered.store(false)
+    var t: Thread[int]
+    createThread(t, holder, 0)
+    while not gateEntered.load:
+      sleep(1)
+    deliver(1)
+    deliver(2) # the bound: two queued
+    deliver(3) # ends the subscription
+    deliver(4) # nothing to deliver to
+    check fakeUnsubscribes.load == 1
+    check fakeUnsubscribesInside.load == 1
+    gate.store(false)
+    joinThread(t)
+    let r = shared.report
+    check r.startsWith("seen=1,2 end=MODULE_ERROR ")
+    check probe(shared, 11)[1].note == "ok" # already unsubscribed from the binding
+    check fakeUnsubscribes.load == 1
+    check r.endsWith(" off=0")
+    ledgerDestroy(shared)
+    shared = nil
+
+  test "[IMPL-DECISION G339] a delivery on the module thread itself is queued, never run inline; an unsubscription drops what is queued for it":
+    shared = openLedger()
+    check probe(shared, 10)[1].note == "subscribed"
+    deliver(1)
+    probeHook = deliverInsideHook
+    check probe(shared, 8)[1].note.startsWith("0 ok|")
+    check shared.report.startsWith("seen=1 ")
+    deliver(7) # unsubscribed: nothing reaches the handler
+    check shared.report.startsWith("seen=1 ")
+    ledgerDestroy(shared)
+    shared = nil
+
+  test "[IMPL-DECISION G339] the handler rule on the module thread: an operation on the handler's own handle is NOT_READY, its own unsubscription succeeds":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    deliver(98)
+    check " rule=NOT_READY " in ctx.report
+    deliver(99)
+    check " rule=ok " in ctx.report
+    check fakeUnsubscribes.load == 1
+    deliver(7)
+    check ctx.report.startsWith("seen= ")
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G339] a completion inside submit is queued, not run inline; a call released before it ran never completes":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    fakeCompleteInSubmit.store(true)
+    check probe(ctx, 17, 2)[1].note == "none ok"
+    check ownerReleases.load == 1
+    check fakeCallReleases.load == 1
+    check " done= " in ctx.report
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G339] destroy releases a handle with an outstanding call and a live subscription":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    check probe(ctx, 13, 1)[1].note == "submitted"
+    deliver(1)
+    ledgerDestroy(ctx)
+    check fakeReleased.load
+    check fakeCallReleases.load == 1

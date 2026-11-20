@@ -144,10 +144,10 @@
               # through TLS descriptors, which bypass the `__tls_get_addr` interceptor that
               # tells MemorySanitizer glibc initialized them: Nim's start-up in every such
               # library reads as uninitialized. x86_64 runs these suites (DECISIONS I77).
-              # Beside them, test_hosted_routes' run.mixed cases skip themselves under
-              # MemorySanitizer on every architecture (DECISIONS G342): their refc module
-              # libraries are built without the sanitizer, and an uninstrumented library's
-              # writes read as uninitialized.
+              # Beside them, test_hosted_routes' run.mixed cases and test_kit_mixed's
+              # cases skip themselves under MemorySanitizer on every architecture (DECISIONS
+              # G342): their refc module libraries are built without the sanitizer, and an
+              # uninstrumented library's writes read as uninitialized.
               skip =
                 file:
                 pkgs.stdenv.hostPlatform.isAarch64
@@ -161,6 +161,7 @@
                   "test_hosted_permissions.nim"
                   "test_hosted_routes.nim"
                   "test_kit_dylib.nim"
+                  "test_kit_mixed.nim"
                   "test_logosd.nim"
                   "test_module_host.nim"
                   "test_realizer.nim"

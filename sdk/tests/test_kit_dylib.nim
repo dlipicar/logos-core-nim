@@ -14,8 +14,9 @@
 ## libraries (`support/testroute`): caller, helpers and provider then each run
 ## on a Nim runtime of their own.
 
-import std/[dynlib, os, typedthreads]
+import std/[dynlib, os, strutils, typedthreads]
 import unittest2
+import logos_sdk/base/perthread
 import logos_sdk/iface/[accept, provider]
 from logos_sdk/kit/rc_types import LogosNSModuleConfigurationConfigurationInput, encode
 import
@@ -102,6 +103,54 @@ let (ledger, pipeAfterLoad) = block:
     (lib, cast[pointer](now.sa_handler))
   else:
     (load(path, "ledger_module"), pointer(nil))
+
+let ledgerOther = load(
+  ## [DECISIONS G342] The same confined kit built with the other memory manager
+  ## (refc beside this orc build, orc beside a refc one).
+  buildKitLibrary("ledger_lib.nim", "kitledgerx", otherMm, exports = "ledger_module"),
+  "ledger_module",
+)
+
+var otherPublished: Atomic[int]
+
+proc countPublish(
+    userData: pointer,
+    eventName: cstring,
+    cborData: ptr UncheckedArray[uint8],
+    cborDataLen: csize_t,
+): CErrorCode {.cdecl, gcsafe, raises: [].} =
+  ## The host's publish callback for `ledgerOther`: it runs on the library's
+  ## publisher thread, which this program's runtime has never seen, so it only
+  ## counts.
+  otherPublished += 1
+  CErrorCode(0)
+
+type OtherPoster = object ## One thread's posts to `ledgerOther`.
+  dispatch: DispatchFn
+  free: FreeFn
+  ctx: ptr LogosModuleContext
+  index: int
+  ok: Atomic[int] ## posts whose total and thread were as expected
+  thread: Atomic[uint64] ## the module thread its first answer named
+
+proc otherPosts(p: ptr OtherPoster) {.thread.} =
+  let key = "t" & $p.index
+  for i in 1 .. 20:
+    let c = call(
+      p.dispatch,
+      p.free,
+      p.ctx,
+      "post",
+      encode(LedgerPostRequest(key: key, amount: 1)).get,
+    )
+    if c.code == ecOk:
+      let r = LedgerPostResponse.decode(c.response)
+      if r.isOk and r.get.total == uint64(i):
+        if p.thread.load == 0:
+          p.thread.store(r.get.thread)
+        if p.thread.load == r.get.thread and r.get.thread != uint64(getThreadId()):
+          p.ok += 1
+  releasePerThread()
 
 proc typedSymbol(lib: Library, name: string): pointer =
   ## A typed provider function (INTERFACE §2.4) the library exports.
@@ -506,3 +555,40 @@ suite "ifc.kit: a thread-confined kit as a shared library (DECISIONS G335, G340)
     check r.thread != uint64(getThreadId())
     check r.note == $ecNotReady # no invocation context is current here
     ledger.destroy(ctx)
+
+  test "[IMPL-DECISION G342] [IMPL-DECISION G335] the confined kit built with the other memory manager: 8 threads post at once, its GC'd table stays on its module thread, and every event its kit did not refuse reaches the host's callback by destroy":
+    # [DECISIONS G342] A refc library is built without the sanitizer.
+    if defined(msan) and otherMm == "refc":
+      skip()
+      break
+    otherPublished.store(0)
+    var inp = input()
+    inp.publish = countPublish
+    inp.publishUserData = nil
+    var ctx: ptr LogosModuleContext
+    check ledgerOther.init(addr inp, addr ctx).code == CErrorCode(0)
+    var posters: array[8, OtherPoster]
+    var threads: array[8, Thread[ptr OtherPoster]]
+    for i in 0 ..< posters.len:
+      posters[i].dispatch = ledgerOther.dispatch
+      posters[i].free = ledgerOther.free
+      posters[i].ctx = ctx
+      posters[i].index = i
+      createThread(threads[i], otherPosts, addr posters[i])
+    joinThreads(threads)
+    for i in 0 ..< posters.len:
+      check posters[i].ok.load == 20
+      check posters[i].thread.load == posters[0].thread.load
+    let c = call(
+      ledgerOther.dispatch,
+      ledgerOther.free,
+      ctx,
+      "probe",
+      encode(LedgerProbeRequest(channel: 22, value: 0)).get,
+    )
+    check c.code == ecOk
+    let note = LedgerProbeResponse.decode(c.response).get.note
+    check note.startsWith("0 0 ")
+    let refused = parseInt(note[4 .. ^1])
+    ledgerOther.destroy(ctx) # delivers what is queued
+    check otherPublished.load + refused == posters.len * 20

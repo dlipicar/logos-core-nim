@@ -61,6 +61,14 @@
 ## directly. C code linked into the module library calls it as
 ## `lcn_kit_post`.
 ##
+## **Consumer callbacks** (G339). The context's dispatcher (`withConfined`,
+## `ModuleServices.dispatcher`) lets the consumer helpers (`consumert`) queue
+## task nodes for the module thread: a copied delivery, counted against the
+## context's bound (1024 events [IMPL], `setDeliveryBound`), and end reports
+## and completions in storage their owners reserved, which are never refused.
+## The module thread runs them in order between jobs; a task queued once the
+## instance is gone is dropped, freeing what it holds.
+##
 ## **Destroy** (INTERFACE l.1949-1962). The author's `destroyModule` and the
 ## instance's release run on the module thread; then the publisher thread
 ## delivers what was queued and exits; then the module thread answers what is
@@ -83,7 +91,7 @@ import ../cbor
 import ../abi/[checks, types]
 import ../iface/[outcome, payload]
 import ../base/[perthread, wipe]
-import ./kitrt
+import ./[handover, kitrt]
 
 when defined(posix):
   import std/posix
@@ -118,104 +126,12 @@ proc die(message: static string) {.noreturn.} =
 const
   DefaultMaxEvents* = 64 ## [IMPL] the publisher queue's bound in events
   DefaultMaxBytes* = 1_048_576 ## [IMPL] and in payload bytes
+  DefaultMaxDeliveries* = 1024
+    ## [IMPL] (DECISIONS G339, P1) events queued for the module thread's
+    ## handlers, across the context's subscriptions
   RefusalNameCap = 256
 
 # Statuses copied across threads ---------------------------------------------------
-
-type StatusCopy = object
-  ## A status or a failure copied into fixed storage on the thread that
-  ## received it (INTERFACE l.1792-1794, l.2161), read on another.
-  code: int64
-  messageLen: int ## -1: none; `MaxMessageBytes + 1`: longer than allowed
-  detailLen: int ## -1: none
-  bad: bool ## not a status a receiver can read: MODULE_ERROR without diagnostics
-  message: array[MaxMessageBytes + 2, char]
-  detail: array[MaxDetailBytes, uint8]
-
-proc clear(s: var StatusCopy) =
-  if s.messageLen > 0:
-    secureZero(addr s.message[0], s.messageLen)
-  if s.detailLen > 0:
-    secureZero(addr s.detail[0], s.detailLen)
-  s.messageLen = -1
-  s.detailLen = -1
-  s.bad = false
-  s.code = 0
-
-proc copyResult(dst: var StatusCopy, r: LogosResult) =
-  ## A `logos_result_t` as received, without the Nim heap.
-  dst.code = int64(r.code)
-  dst.bad = false
-  dst.messageLen = -1
-  dst.detailLen = -1
-  if r.message != nil:
-    var n = 0
-    while n <= MaxMessageBytes and r.message[n] != '\0':
-      dst.message[n] = r.message[n]
-      inc n
-    dst.message[n] = '\0'
-    dst.messageLen = n
-  if r.detail != nil:
-    if int(r.detailLen) > MaxDetailBytes:
-      dst.bad = true
-    else:
-      for i in 0 ..< int(r.detailLen):
-        dst.detail[i] = r.detail[i]
-      dst.detailLen = int(r.detailLen)
-  elif r.detailLen != 0:
-    dst.bad = true
-
-proc copyFailure(dst: var StatusCopy, f: InvocationFailure) =
-  dst.code = int64(ord(f.code))
-  dst.bad = false
-  dst.messageLen = -1
-  dst.detailLen = -1
-  if f.message.isSome:
-    let n = min(f.message.unsafeGet.len, MaxMessageBytes + 1)
-    for i in 0 ..< n:
-      dst.message[i] = f.message.unsafeGet[i]
-    dst.message[n] = '\0'
-    dst.messageLen = n
-  if f.detail.isSome:
-    if f.detail.unsafeGet.len > MaxDetailBytes:
-      dst.bad = true
-    else:
-      for i, b in f.detail.unsafeGet:
-        dst.detail[i] = b
-      dst.detailLen = f.detail.unsafeGet.len
-
-proc readCopy(src: var StatusCopy): Result[void, InvocationFailure] =
-  ## A status copied by `copyResult`, as its receiver reads it (`readStatus`);
-  ## the copy is zeroed.
-  if src.bad:
-    result = err(moduleError("invalid status: its detail cannot be read"))
-  else:
-    let view = LogosResult(
-      code: CErrorCode(src.code),
-      message:
-        if src.messageLen >= 0:
-          cast[cstring](addr src.message[0])
-        else:
-          nil,
-      detail:
-        if src.detailLen >= 0:
-          cast[ptr UncheckedArray[uint8]](addr src.detail[0])
-        else:
-          nil,
-      detailLen: csize_t(max(src.detailLen, 0)),
-    )
-    var r = readStatus(view)
-    if r.isOk:
-      result = ok()
-    else:
-      result = err(
-        InvocationFailure(
-          code: r.unsafeError.code,
-          message: move(r.unsafeError.message),
-          detail: move(r.unsafeError.detail),
-        )
-      )
-  src.clear()
 
 proc toLogosResult(src: var StatusCopy): LogosResult =
   ## The calling thread's `logos_result_t` for a job's outcome (INTERFACE §2.7:
@@ -245,14 +161,6 @@ proc toLogosResult(src: var StatusCopy): LogosResult =
 # Contexts and jobs -----------------------------------------------------------------
 
 type
-  NodeKind = enum
-    nkJob
-    nkPost
-
-  Node = object ## The head of what the module thread's queue holds.
-    next: ptr Node
-    kind: NodeKind
-
   LaunchFn = proc(job: ptr ConfinedJob) {.nimcall, gcsafe, raises: [].}
     ## Starts a job's task on the module thread.
 
@@ -309,6 +217,9 @@ type
     repHead, repTail: ptr PubItem ## answered publications, for the module thread
     room: bool ## the publisher took an event while the module thread wanted room
     stopping: bool
+    closed: bool ## the module thread drained its queue for the last time
+    deliveries: int ## counted tasks queued (G339's delivery bound)
+    maxDeliveries: int
     signal: ThreadSignalPtr
     module: Thread[ptr ConfinedObj]
     services: ModuleServices
@@ -453,6 +364,8 @@ proc takeNode(ctx: ptr ConfinedObj): ptr Node =
     if ctx.head == nil:
       ctx.tail = nil
     result.next = nil
+    if result.kind == nkTask and cast[ptr TaskNode](result).counted:
+      dec ctx.deliveries
 
 # The publisher ----------------------------------------------------------------------
 
@@ -879,6 +792,9 @@ proc runNode(ctx: ptr ConfinedObj, n: ptr Node) =
     cFree(p)
     if not ctx.disposed:
       fn(payload)
+  of nkTask:
+    let t = cast[ptr TaskNode](n)
+    t.run(t, ctx.disposed)
 
 proc serve(ctx: ptr ConfinedObj) =
   ## Runs what is queued, one node at a time, answered publications first; a
@@ -971,6 +887,9 @@ proc teardown(ctx: ptr ConfinedObj) =
     let replies = ctx.repHead
     ctx.repHead = nil
     ctx.repTail = nil
+    if n == nil and replies == nil:
+      # A task posted from now on is dropped where it is posted.
+      ctx.closed = true
     release(ctx.lock)
     var item = replies
     while item != nil:
@@ -978,7 +897,9 @@ proc teardown(ctx: ptr ConfinedObj) =
       ctx.settleReply(item)
       item = next
     if n == nil:
-      break
+      if replies == nil:
+        break
+      continue
     case n.kind
     of nkJob:
       let job = cast[ptr ConfinedJob](n)
@@ -986,6 +907,9 @@ proc teardown(ctx: ptr ConfinedObj) =
       finishJob(job, nil, outcome)
     of nkPost:
       cFree(n)
+    of nkTask:
+      let t = cast[ptr TaskNode](n)
+      t.run(t, true)
   roomWaiters = @[]
   discard ctx.signal.close()
   let disp = getThreadDispatcher()
@@ -1094,6 +1018,8 @@ proc freeContext(ctx: ptr ConfinedObj) =
   secureZero(cast[pointer](ctx), sizeof(ConfinedObj))
   cFree(ctx)
 
+proc postTask(context: pointer, task: ptr TaskNode): bool
+
 proc confinedInit*(
     input: ptr LogosModuleInitInput,
     outContext: ptr ptr LogosModuleContext,
@@ -1124,7 +1050,8 @@ proc confinedInit*(
   initCond(ctx.pubCond)
   ctx.maxEvents = max(maxEvents, 1)
   ctx.maxBytes = max(maxBytes, 1)
-  ctx.services = moduleServices(input).withConfined(ctx, queuePublish)
+  ctx.maxDeliveries = DefaultMaxDeliveries
+  ctx.services = moduleServices(input).withConfined(ctx, queuePublish, postTask)
   try:
     createThread(ctx.publisher, publisherMain, ctx)
   except ResourceExhaustedError:
@@ -1349,9 +1276,48 @@ proc post*(p: Poster, fn: PostFn, payload: pointer) =
   n.fn = fn
   n.payload = payload
   acquire(ctx.lock)
+  if ctx.closed:
+    release(ctx.lock)
+    cFree(n)
+    return
   ctx.enqueue(addr n.node)
-  release(ctx.lock)
+  # Under the lock: the module thread closes its signal only after `closed`.
   fire(ctx.signal)
+  release(ctx.lock)
+
+proc postTask(context: pointer, task: ptr TaskNode): bool =
+  ## [DECISIONS G339, P1] The confined dispatcher's `post`: queues a task its
+  ## owner keeps in C memory for the module thread; false when the task is
+  ## counted and the context's delivery bound is reached. A task posted after
+  ## the module thread's last drain is dropped here. Any thread; never waits
+  ## or allocates.
+  let ctx = cast[ptr ConfinedObj](context)
+  task.node.kind = nkTask
+  acquire(ctx.lock)
+  if ctx.closed:
+    release(ctx.lock)
+    task.run(task, true)
+    return true
+  if task.counted:
+    if ctx.deliveries >= ctx.maxDeliveries:
+      release(ctx.lock)
+      return false
+    inc ctx.deliveries
+  ctx.enqueue(addr task.node)
+  fire(ctx.signal)
+  release(ctx.lock)
+  true
+
+proc setDeliveryBound*(s: ModuleServices, events: int) =
+  ## [DECISIONS G339, P1] How many events may wait for the module thread's
+  ## handlers at once (default 1024); a subscription whose delivery finds the
+  ## bound reached ends with `onEnd(MODULE_ERROR)`. For tests and modules that
+  ## want less.
+  let ctx = cast[ptr ConfinedObj](s.confinedOf)
+  if ctx != nil:
+    acquire(ctx.lock)
+    ctx.maxDeliveries = max(events, 1)
+    release(ctx.lock)
 
 proc lcnKitPost(
     poster: pointer, fn: PostFn, payload: pointer

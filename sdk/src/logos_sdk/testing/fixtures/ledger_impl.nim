@@ -21,10 +21,32 @@
 ## publication in its invocation's scope; 8 reads whether its invocation is
 ## cancelled. `seal` (marked) returns its secret reversed and masked. Every
 ## response names its handler's thread.
+##
+## As a consumer (DECISIONS G339), `probe` by channel: 10 wraps the route
+## handle the test put in `routeToWrap` with the kit's dispatcher and
+## subscribes to `meter.changed_event` through the generated meter helpers; 11
+## unsubscribes; 12 releases the handle; 13 prepares and submits `meter.read`
+## of channel `value`; 14 reports what its handlers recorded; 15 releases the
+## prepared call; 16 sets the delivery bound to `value`; 17 prepares, submits
+## and releases a call in one handler. Its handlers record on the instance,
+## and count any call off its module thread. A changed event of value 98
+## tries an operation on its own handle; 99 unsubscribes its own subscription.
+##
+## Placed by a Runtime (core's mixed-manager suite), `probe` by channel: 18
+## opens a route to the meter through a `RouteSet` over its Runtime Control
+## binding (`<state_dir>/route.cmd`: the meter's contract root and
+## construction input in hex, one per line) and subscribes as 10 does; 19
+## holds the module thread until `<state_dir>/open` exists, after writing
+## `<state_dir>/held`; 20 closes that route through the set and reports the
+## route end seen meanwhile; 21 publishes `ledger.posted_event` (key `timer`)
+## from a chronos timer `value` ms later; 22 reads `posts`, `postThreads` and
+## how many of this instance's `post` publications the kit refused (its queue
+## full).
 
 {.used.} # imported by the tests for the C symbols it exports
-import std/[atomics, tables]
-import ../generated/ledger_module_kit
+import std/[atomics, os, strutils, tables]
+import ../generated/[ledger_module_kit, meter_module_calls]
+import ../../kit/routes
 
 {.compile: "foreign_lib.c".}
 
@@ -37,6 +59,17 @@ type Ledger* = ref object
   entries: Table[string, uint64]
   keys: seq[string]
   kept: Invocation
+  # As a consumer (G339): module thread only, GC'd values included.
+  route: RouteHandle
+  sub: Subscription
+  call: PreparedCall
+  seen: seq[uint64]
+  offThread: int
+  endNote, routeEndNote, doneNote, ruleNote: string
+  stateDir: string
+  refused: int ## `post` publications the kit refused
+  set: RouteSet ## from `probe` 18
+  routeId: string
 
 var
   destroyed*: Atomic[int] ## instances `destroyModule` has seen
@@ -44,6 +77,7 @@ var
   postThreads*: Atomic[int] ## how many of them did not run on a module thread
   probeHook*: proc(m: Ledger, value: uint64): string {.nimcall, gcsafe, raises: [].}
     ## what `probe` 8 calls; the test sets it
+  routeToWrap*: LogosRouteHandle ## what `probe` 10 wraps; the test sets it
 
 proc threadNumber(): uint64 =
   uint64(getThreadId())
@@ -59,10 +93,18 @@ proc initModule(
     await sleepAsync(1.milliseconds)
   except CancelledError:
     discard
-  Result[Ledger, InvocationFailure].ok(Ledger(services: init.services))
+  Result[Ledger, InvocationFailure].ok(
+    Ledger(services: init.services, stateDir: init.stateDir.get(""))
+  )
 
 proc destroyModule(m: Ledger) =
   m.kept = nil
+  if not m.call.isNil:
+    discard m.call.release()
+  if not m.set.isNil:
+    discard m.set.close() # the route it holds too
+  elif not m.route.isNil:
+    discard m.route.release()
   destroyed += 1
 
 proc callerNote(r: Result[Caller, InvocationFailure]): string =
@@ -77,6 +119,118 @@ proc statusNote(r: Result[void, InvocationFailure]): string =
   else:
     $r.unsafeError.code
 
+proc ledgerOf(user: pointer): Ledger =
+  let m = cast[Ledger](user)
+  if not m.services.onItsModuleThread():
+    inc m.offThread
+  m
+
+proc onRead(
+    outcome: Result[MeterReadResponse, InvocationFailure], user: pointer
+) {.nimcall, gcsafe, raises: [].} =
+  let m = ledgerOf(user)
+  m.doneNote =
+    if outcome.isOk:
+      "ok:" & outcome.unsafeGet.label
+    else:
+      $outcome.unsafeError.code
+
+proc onChanged(e: MeterChangedEvent, user: pointer) {.nimcall, gcsafe, raises: [].} =
+  let m = ledgerOf(user)
+  case e.value
+  of 98: # the handler rule (INTERFACE l.1939)
+    let r = m.route.prepareInvoke(MeterReadRequest(channel: 1), onRead, user)
+    m.ruleNote =
+      if r.isOk:
+        discard r.unsafeGet.release()
+        "ok"
+      else:
+        $r.unsafeError.code
+  of 99:
+    m.ruleNote = statusNote(m.sub.unsubscribe())
+  else:
+    m.seen.add(e.value)
+
+proc onSubEnd(
+    sub: Subscription, reason: ErrorCode, user: pointer
+) {.nimcall, gcsafe, raises: [].} =
+  ledgerOf(user).endNote = $reason
+
+proc onRouteEnded(code: ErrorCode, user: pointer) {.nimcall, gcsafe, raises: [].} =
+  ledgerOf(user).routeEndNote = $code
+
+proc seenCount*(m: Ledger): int =
+  ## For a test hook on the module thread.
+  m.seen.len
+
+proc unsubscribeChanged*(m: Ledger): string =
+  ## For a test hook on the module thread.
+  statusNote(m.sub.unsubscribe())
+
+proc unhex(s: string): seq[byte] =
+  try:
+    let raw = parseHexStr(s.strip)
+    @(raw.toOpenArrayByte(0, raw.high))
+  except ValueError:
+    @[]
+
+proc openMeter(m: Ledger): string =
+  ## `probe` 18: a route to the meter through the instance's Runtime Control
+  ## binding, with the kit's dispatcher (`newRouteSet(services)`).
+  let words =
+    try:
+      readFile(m.stateDir / "route.cmd").splitLines()
+    except IOError:
+      return "no route.cmd"
+  if words.len < 2:
+    return "route.cmd: a root and a schema"
+  let rootBytes = unhex(words[0])
+  let schema = unhex(words[1])
+  if rootBytes.len != 32 or schema.len == 0:
+    return "route.cmd: bad hex"
+  var root: ContractRoot
+  copyMem(addr root[0], unsafeAddr rootBytes[0], 32)
+  if m.set.isNil:
+    let s = newRouteSet(m.services)
+    if s.isErr:
+      return "set " & $s.unsafeError.code
+    m.set = s.unsafeGet
+  let user = cast[pointer](m)
+  let opened = m.set.openRoute(root, schema, onRouteEnd = onRouteEnded, user = user)
+  if opened.isErr:
+    return "open " & $opened.unsafeError.code
+  if opened.unsafeGet.routes.len != 1:
+    return "routes " & $opened.unsafeGet.routes.len
+  let o = opened.unsafeGet.routes[0]
+  if o.handle.isErr:
+    return "materialize " & $o.handle.unsafeError.code
+  m.route = o.handle.unsafeGet
+  m.routeId = o.record.route
+  let sub = m.route.subscribe(MeterChangedEvent, onChanged, onSubEnd, nil, user)
+  if sub.isErr:
+    return "subscribe " & $sub.unsafeError.code
+  m.sub = sub.unsafeGet
+  "subscribed"
+
+proc holdUntilOpen(m: Ledger): string =
+  ## `probe` 19: holds the module thread, bounded.
+  try:
+    writeFile(m.stateDir / "held", "")
+  except IOError:
+    return "no held"
+  for _ in 0 ..< 300_000:
+    if fileExists(m.stateDir / "open"):
+      return "opened"
+    sleep(1)
+  "timed out"
+
+proc publishLater(m: Ledger, millis: uint64) {.async: (raises: []).} =
+  try:
+    await sleepAsync(int(millis).milliseconds)
+  except CancelledError:
+    return
+  discard m.services.publish(LedgerPostedEvent(key: "timer", total: millis))
+
 proc onPosted(payload: pointer) {.cdecl, gcsafe, raises: [].} =
   if not onConfinedThread():
     postThreads += 1
@@ -88,7 +242,8 @@ proc `post`(
   let total = m.entries.getOrDefault(request.key) + request.amount
   m.entries[request.key] = total
   m.keys.add(request.key)
-  discard m.services.publish(LedgerPostedEvent(key: request.key, total: total))
+  if m.services.publish(LedgerPostedEvent(key: request.key, total: total)).isErr:
+    inc m.refused
   ok(LedgerPostResponse(total: total, thread: threadNumber()))
 
 proc `probe`(
@@ -134,6 +289,72 @@ proc `probe`(
     note = $m.services.publishRefusals()
     if last.isSome:
       note.add(" " & $last.get.rc & " " & last.get.event)
+  of 10:
+    let user = cast[pointer](m)
+    {.cast(gcsafe).}:
+      let raw = routeToWrap
+    let h = wrapRoute(raw, onRouteEnded, user, m.services.dispatcher)
+    if h.isErr:
+      note = $h.unsafeError.code
+    else:
+      m.route = h.unsafeGet
+      let sub = m.route.subscribe(MeterChangedEvent, onChanged, onSubEnd, nil, user)
+      note =
+        if sub.isOk:
+          m.sub = sub.unsafeGet
+          "subscribed"
+        else:
+          $sub.unsafeError.code
+  of 11:
+    note = statusNote(m.sub.unsubscribe())
+  of 12:
+    note = statusNote(m.route.release())
+    m.route = nil
+  of 13:
+    let c = m.route.prepareInvoke(
+      MeterReadRequest(channel: uint32(request.value)), onRead, cast[pointer](m)
+    )
+    if c.isErr:
+      note = $c.unsafeError.code
+    else:
+      m.call = c.unsafeGet
+      m.call.submit()
+      note = "submitted"
+  of 14:
+    var values: seq[string]
+    for v in m.seen:
+      values.add($v)
+    note =
+      "seen=" & values.join(",") & " end=" & m.endNote & " route=" & m.routeEndNote &
+      " done=" & m.doneNote & " rule=" & m.ruleNote & " off=" & $m.offThread
+  of 15:
+    note = statusNote(m.call.release())
+    m.call = PreparedCall()
+  of 16:
+    m.services.setDeliveryBound(int(request.value))
+    note = "bound"
+  of 17:
+    let c = m.route.prepareInvoke(
+      MeterReadRequest(channel: uint32(request.value)), onRead, cast[pointer](m)
+    )
+    if c.isErr:
+      note = $c.unsafeError.code
+    else:
+      c.unsafeGet.submit()
+      let during = if m.doneNote.len == 0: "none" else: m.doneNote
+      note = during & " " & statusNote(c.unsafeGet.release())
+  of 18:
+    note = m.openMeter()
+  of 19:
+    note = m.holdUntilOpen()
+  of 20:
+    let r = m.set.closeRoute(m.routeId)
+    note = (if r.isOk: "ok" else: $r.unsafeError.code) & " route=" & m.routeEndNote
+  of 21:
+    asyncSpawn m.publishLater(request.value)
+    note = "later"
+  of 22:
+    note = $posts.load & " " & $postThreads.load & " " & $m.refused
   else:
     discard
   ok(LedgerProbeResponse(value: request.value, thread: threadNumber(), note: note))

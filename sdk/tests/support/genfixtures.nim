@@ -158,6 +158,7 @@ const nimFixtures* = [
   NimFixture(
     module: "ledger_module_kit.nim", primary: ledgerDocument, kit: true, confined: true
   ),
+  NimFixture(module: "ledger_module_calls.nim", primary: ledgerDocument, calls: true),
 ]
 
 type ExportFixture* = object

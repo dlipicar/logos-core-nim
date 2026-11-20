@@ -6709,16 +6709,94 @@ their history.
 - **Options offered:** (a) an org-provided VM, with the Storage team or infra running the seeder; owners
   and dates recorded as entry criteria *(recommended)*; (b) framework.lan, if it gets a public IP and port
   forwarding; (c) decide later.
+### G335 — The thread-confined module kit
+- **Kind:** READING + IMPL · **Specs:** INTERFACE §2.6-§2.8 (l.1894, l.1904, l.1924-1928, l.1942-1947,
+  l.1949-1962), §2.9; TIER5-PLAN N-1, §7 A7; plan `tier5-plans/stepN-1-kit.md` §3.1, P3-P5.
+- **Reading.** A provider entry may hand its work to another thread while the caller waits: the
+  entry's obligations (its result, the per-thread diagnostic lifetime, the invocation borrow) are met
+  on the calling thread, and l.1904's "the thread that called" is the thread the Runtime called. A
+  provider may serialize its instance's work on one thread of its own (l.1942-1947 leave the
+  provider's threading to it), provided a call made on that thread itself never waits for that thread
+  (l.1928).
+- **Decision.** `lcn-gen kit --confined` generates a kit over `codegen/confinedrt`, reached through the
+  `logos_sdk/confined` facade (`logos_sdk/kit`, `confinedrt`, `base/hostsignals` and chronos). Each
+  context has one **module thread**, made by the library's own runtime, which runs a chronos
+  dispatcher: the instance is allocated, used and released there only, so under refc its handlers may
+  keep GC'd values in it (lifting I71's limit for such modules, G342). `_MODULE_init`, `_destroy`,
+  `_dispatch`, `_apply_configuration` and the typed `_CALL_` functions build a job on the caller's
+  stack, queue it and wait on the job's own condition; the module thread writes the outcome into the
+  job's fixed storage and the caller builds the `logos_result_t` on its own thread. `_name`,
+  `_call_surface` and `_free` stay on the caller. One chronos task per job, so an `async` handler that
+  awaits lets the thread serve the next job. An entry called on the module thread itself runs inline,
+  polling the dispatcher until it is done; `confinedrt` refuses to compile under
+  `chronosStrictReentrancy`, which forbids that nested poll. **Serving waits (P3):** every wait of the
+  module thread on another kit thread polls the dispatcher, so a job that arrives meanwhile runs.
+  `post` / `lcn_kit_post` hand a C callback to the module thread from any thread, one no Nim runtime has
+  seen included, without the Nim heap. **Destroy:** `destroyModule` and the release run on the module
+  thread, the publisher thread delivers what was queued and exits, the module thread answers what is
+  left NOT_READY and tears down its dispatcher, both threads are joined; a failed initialization joins
+  them the same way, dropping queued events. **The host's SIGPIPE (P5, G340):** confined kit libraries
+  are built with `--import:logos_sdk/base/hostsignals` and the generated export template restores the
+  disposition last.
+- **Tests:** `sdk/tests/test_kit_confined.nim` (in process, all three builds): every entry kind handed
+  off, 16 threads, P3, P4, inline nesting, foreign posts, init failure, destroy with queued events, 100
+  create and destroy cycles and the descriptor count. `sdk/tests/test_kit_dylib.nim`: a library whose
+  main module imports chronos first leaves SIGPIPE as it was. `tests/test_kit_mixed.nim` (G342).
+- **Status:** built 2026-11-20 (N-1 sub-part 3; I101). `_MODULE_async_api` is G338 (sub-part 4).
+
+### G336 — The invocation context of a confined kit
+- **Kind:** READING · **Specs:** INTERFACE §2.9.2 (l.2125-2137), l.2150-2161; claude-spec-comments-3
+  TF-03 (third point).
+- **Reading.** The module thread acting for a blocked entry is not an "unrelated thread" (l.2129): the
+  context the entry captured is borrowed for that job, and its operations may run on any thread while
+  the borrow is held (l.2134).
+- **Decision.** The entry captures `current()` on its own thread before handing off; the module thread
+  uses it for that job only. A plain handler reaches it through a per-thread **confined scope**
+  (`kitrt`), set only while its synchronous segment runs and saved, cleared and restored around every
+  nested poll and serving wait (P4), so a task resumed inside a nested poll never sees another job's
+  context. An `async` handler takes `inv: Invocation` as its third parameter; inside an async task the
+  per-thread API answers NOT_READY, and an `Invocation` refuses use (NOT_READY) once its job has ended
+  (l.2130). An inline entry pushes its context and restores the outer one (l.2128). Before an entry
+  returns, every operation of its job has finished, its scoped publications included; the Runtime's
+  `execution_release` still never waits (l.2137).
+- **Tests:** `sdk/tests/test_kit_confined.nim` "invocation context": interleaved async handlers each see
+  their own caller; NOT_READY in an async task; an `Invocation` kept past its job; nesting.
+- **Status:** built 2026-11-20 (N-1 sub-part 3; I101).
+
+### G337 — Publication from a confined kit
+- **Kind:** IMPL · **Specs:** INTERFACE l.1918-1928, l.2150-2161, l.3351, Appendix A.4 (l.4115);
+  RUNTIME l.1200.
+- **Decision.** `publish` (instance-wide) checks the event as the callback will, copies it into C
+  memory and queues it for the context's **publisher thread**, which calls the publish callback in
+  order. It returns the kit's check, or the kit's own NOT_READY when the queue is full (64 events or
+  1 MiB [IMPL]). **This departs from Appendix A.4**, whose helper returns the callback's result: waiting
+  for the callback would stop the module thread from serving a subscriber that re-enters from the
+  publisher thread, the re-entry IFC-0281/0282 are claimed for. The callback's refusals are plain API
+  (`publishRefusals`, `lastPublishRefusal`). `publishAsync` returns a future of the callback's result
+  and waits for room. A plain handler's `publishScoped` is handed to the entry thread, which holds the
+  provider entry, while the module thread serves (P3); an async handler's goes through the publisher
+  thread with its invocation's context. A failure's message and detail are copied on the thread that
+  ran the context's `publish` (l.2161). Before an entry returns, its scoped events are drained (R
+  l.1200). Destroy delivers what was queued, then joins. Every copy is zeroed after its last use (G276).
+- **For the guide:** `publish` is queued, so an event can reach subscribers after the handler's
+  response, and OK is not acceptance; await `publishAsync` where the order matters.
+- **Tests:** `sdk/tests/test_kit_confined.nim` "publication": re-entry during each publication path
+  from the publisher and the entry thread, plain and async; refusals; a full queue; the drain rule.
+  `tests/test_kit_mixed.nim` MX-1, MX-2 (G342).
+- **Status:** built 2026-11-20 (N-1 sub-part 3; I101).
+
 ### G339 — lcn-gen's consumer helpers and interface-only provider kits
 - **Kind:** IMPL · **Specs:** INTERFACE §2.5 (l.1393-1489: subscriptions, `observe_end`,
   `observe_subscription_end`, the typed event helper of l.1489), §2.8 (l.1934-1940), §2.9.1
   (l.1992-2052), §5.2; RUNTIME §9.3 (l.3017-3082); TIER5-PLAN N-1.
-- **Three runtime modules**, so that generated code never reaches the Runtime Control types and a plain
+- **Runtime modules**, so that generated code never reaches the Runtime Control types and a plain
   module never reaches chronos: `logos_sdk/codegen/consumert.nim`, which every generated
-  `<stem>_calls.nim` imports beside `invokert`; `logos_sdk/kit/routes.nim`, for module code; and, with
-  sub-part 3, `codegen/confinedcalls.nim`. `tools/lint/layers.toml`'s `kit_facade` lists the roots
-  generated code imports (`kit.nim`, `codegen/invokert.nim`, `codegen/consumert.nim`), and the lint
-  fails if any of them reaches `rcclient` or `rc_types`.
+  `<stem>_calls.nim` imports beside `invokert`; `codegen/handover.nim` (what crosses to a confined
+  kit's module thread, chronos-free); and `logos_sdk/kit/routes.nim`, for module code.
+  `tools/lint/layers.toml`'s `kit_facade` lists the roots generated code imports (`kit.nim`,
+  `codegen/invokert.nim`, `codegen/consumert.nim`), and the lint fails if any of them reaches `rcclient`
+  or `rc_types` (`kit-facade`, also for the `confined_facade` root `confined.nim`) or anything in their
+  closure imports chronos (`kit-chronos`).
 - **Wrapped handles (`consumert`).** `wrapRoute(handle, onRouteEnd, user)` takes ownership of a
   materialized handle and registers `observe_end` and `observe_subscription_end` once each, before any
   subscription. A termination code from either registration fails the wrap with that code (l.1459), as
@@ -6772,6 +6850,25 @@ their history.
   unless given) and `closeRoute` (`close_route` takes no key) complete it; `subscribe(set, eventId,
   <Event>, …)` takes a Runtime Control event by its schema event identifier. `rcclient.prepareBytes`
   and `prepare` take the same `timeoutMs`.
+- **Confined mode (sub-part 3).** One calls file serves both modes: a handle, a binding's
+  subscriptions and a prepared call carry an optional **dispatcher** (P2), a context pointer and one C
+  function that queues a task node for a confined kit's module thread. Module code passes the kit's
+  (`services.dispatcher`) to `wrapRoute`, `newBindingEvents` or `newRouteSet(services)`. With one,
+  handlers, end reports and completions run on the module thread, never in the delivery: a delivery is
+  copied into C memory on the delivering thread and decoded on the module thread; a delivery whose
+  callback runs on the module thread itself is queued too, never run inline; end reports and
+  completions use task nodes reserved in the subscription, the handle and the call, so they are never
+  refused. A completion's status, message, detail and response bytes are copied and its response owner
+  cleared on the delivering thread (l.2052); `CompleteProc` takes the status already read. **The queue
+  is bounded (P1)**, per context, 1024 events [IMPL] (`setDeliveryBound` lowers it in tests): a delivery
+  that finds it full ends its subscription from inside its own delivery, a self-unsubscription that never
+  waits (l.1424-1426), drops the event and reports `onEnd(MODULE_ERROR)` on the module thread after the
+  queued events, as a binding does at its bound (l.1473, l.1479); a later `unsubscribe` is OK without a
+  second binding call. An unsubscription or release by the module thread is external (l.1416-1419,
+  l.1434): the subscription or handle is marked closing first, so a delivery still running drops its
+  event, and its memory is freed by the last task that names it. A call released before its queued
+  completion runs never completes. Tasks still queued at destroy are dropped, freeing and erasing what
+  they hold. `invokeAsync` (a future over `prepareInvoke`) comes with the async handlers (G338).
 - **Tests:** `tests/test_consumert.nim` (in process, 19 cases): typed delivery and unsubscribe; the
   handler rule; a handler nested in its own handle's call; an end report while an operation holds the
   lock; a subscription ended at the queue bound; `close_route`; the two wrap failures; an inline typed
@@ -6785,9 +6882,14 @@ their history.
   the vault's marked `fetch` leaves no copy of the canary in a released block (orc). `tests/test_hosted_routes.nim` C-14: a consumer written with
   the helpers (`tests/kit/listener_impl.nim`, the beacon kit's provider) hosted and `direct_dynamic`,
   to a direct and a hosted meter, and its failed initialization. Mac: orc, refc and orc-release.
-- **Not yet:** the handle's dispatcher, the confined delivery queue and `invokeAsync` (sub-part 3);
-  interface-only provider kits (sub-part 5).
-- **Status:** plain consumer helpers built 2026-11-20 (N-1 sub-part 2; I101).
+  Confined: `sdk/tests/test_kit_confined.nim` "consumer helpers on the module thread" (a route binding
+  the test drives: handlers, ends and completions on the module thread, the full queue, a delivery on
+  the module thread queued, the handler rule, a completion inside `submit`, destroy with a live
+  subscription and call) and `tests/test_kit_mixed.nim` MX-3 (through the Runtime, `direct_dynamic` and
+  hosted: deliveries, a completion, an authority-ended and a full-queue-ended subscription, a route end).
+- **Not yet:** `invokeAsync` (sub-part 4); interface-only provider kits (sub-part 5).
+- **Status:** plain consumer helpers built 2026-11-20 (N-1 sub-part 2; I101); the confined mode built
+  2026-11-20 (sub-part 3).
 
 ### G340 — A library leaves its host's signal dispositions alone
 - **Kind:** Choice [IMPL] · **Specs:** none; RUNTIME §13 (a host embeds `liblogos_runtime`) and
@@ -6809,6 +6911,14 @@ their history.
 - **Test:** `tests/test_host_dylib.nim` "[DECISIONS G340] loading the library leaves the host's SIGINT,
   SIGSEGV and SIGPIPE dispositions as they were": a sentinel handler on each before the load, compared
   after it. It fails without the switch (all three) and without the restore (SIGPIPE). POSIX only.
+- **Amended 2026-11-20 (P5, N-1 sub-part 3):** a thread-confined kit imports chronos, whose module
+  initializer ignores SIGPIPE, and an author's main module may import chronos before the kit, so the
+  import order cannot be relied on there. Kit libraries are built with
+  `--import:logos_sdk/base/hostsignals` (`kitbuild`, and the guide's build line), which Nim initializes
+  before any other module of the library, and the generated export template calls
+  `restoreHostSignals()` last in the library's initializer. `sdk/tests/test_kit_dylib.nim`: a confined
+  library whose main module imports chronos first leaves a sentinel SIGPIPE handler in place; it fails
+  without the `--import:`.
 - **Status:** decided 2026-11-16 by the planning session (N-1 sub-part 1; I101); not a spec matter.
 
 ### G341 — The kit's toolchain range, switches, export lists and packaging
@@ -6865,8 +6975,20 @@ their history.
   type in `gc_common.prepareDealloc`, with no other manager in the process). The mixed cases are
   skipped under MemorySanitizer, where the uninstrumented library's writes read as uninitialized (as
   I77's skip list; recorded beside it in `flake.nix`).
-- **Status:** the reduced form built 2026-11-16 (I101, N-1 sub-part 1); the widened test (confined
-  mode, logosd, foreign threads) follows with sub-parts 3 and 6.
+- **The confined pairing** (N-1 sub-part 3): `tests/test_kit_mixed.nim`, the ledger fixture (a
+  `--confined` kit whose handlers keep GC'd state in the instance) built with the other manager. MX-1
+  `direct_dynamic` in this process: two instances at once on their own module threads, 16 threads
+  posting at once, events to a subscriber that re-enters from the publisher thread, in a call's scope,
+  from a chronos timer, foreign C threads' posts, the host's SIGPIPE kept at load, a stop with
+  publications queued, re-creation and 10 start and stop cycles keeping the descriptor count; MX-2 the
+  same through a Module Host, and a restart in a new host; MX-3 its consumer side through the Runtime
+  (G339). The suite's cases run under an orc Runtime and Module Host only: a refc one refuses every
+  route to a contract that marks a payload (G277), as the ledger's `seal` does, so the inverse
+  pairing is `sdk/tests/test_kit_dylib.nim`'s, which loads the ledger built with the other manager in
+  both builds and posts to it from 8 threads. A refc kit module whose handlers run on other threads
+  uses `--confined`.
+- **Status:** the reduced form built 2026-11-16 (I101, N-1 sub-part 1); the confined suite 2026-11-20
+  (sub-part 3); logosd's placements follow with sub-part 6.
 
 - **Decision:** (c). **Status:** OPEN.
 
@@ -7184,6 +7306,9 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G332 | filesystem protection of Windows endpoints; T l.1156 for one user | Reading, FREE | 5 |
 | G333 | the Windows builds the profile is offered on | Reading | 5 |
 | G334 | the Windows CI leg | FREE | 12 |
+| G335 | the thread-confined module kit | READING + IMPL | 12 |
+| G336 | the invocation context of a confined kit | READING | 12 |
+| G337 | publication from a confined kit | IMPL | 12 |
 | G339 | lcn-gen's consumer helpers and interface-only provider kits | IMPL | 12 |
 | G340 | a library leaves its host's signal dispositions alone | Choice | 12 |
 | G341 | the kit's toolchain range, switches, export lists and packaging | Choice | 12 |
@@ -7335,7 +7460,7 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | R5 | SCOPE (G277; INTERFACE §1.4.1) | The claim scope of marked-payload erasure (IFC-0575) | Owner, 2026-11-15: "Let's do the recommended option for now" (the Fable session's recommendation, 4b-3b plan R25 item 7). IFC-0575 is claimed for orc builds of the Runtime and the Module Host, and for generated code under both memory managers. A refc build of the Runtime or the host never carries a marked payload: `ChannelsMove` is false, G244's refusal stands for every marked contract, and a refc host fails a marked provider's `init` and a marked route's materialization (G277's build condition). "For now": erasure in refc builds, which needs channels that carry no payload copies, stays open and is not planned. CONFORMANCE keeps the non-claim wording the Fable session gave. | 2026-11-15 |
 | I99 | IMPL | Tier 5 step 5-2: the `logos.remote.tls-tcp` carrier's library (TRANSPORT §8.4 l.1200-1226, §8.4.1 l.1230-1298; RUNTIME l.1978-1984, l.2669-2706; INTERFACE l.381, l.388-393; CA l.1268; D28, G277; owner decision B1; G323–G328; plan `tier5-plans/step5-2-tls.md`, spike `tier5-plans/step5-2-spike.md`). Parts 5-2b (the connection, the signing seam, credentials), 5-2a (the trust snapshot and enrollment checks, after batch B's B2), 5-2c (pyOpenSSL peers, G128) | **5-2b** (built first: B2 does not gate it). A core-library API under `src/logos_core/transport/tls/`, face `transport/tls.nim`, not exported by `transport.nim`; the TLS processes that run it (facade and listener processes, logosd's signing service, the key holder) are 5-7a's and 5-7b's. `boring.nim` is the only module that imports nim-boringssl, so only the TLS suite and the TLS programs compile BoringSSL (spike §6: about 80 CPU-seconds per cold build); it links I44's `-lstdc++` on Linux and I46's static libc++ on Android, both live again. `params.nim`: the exporter label, `ecdsa_secp256r1_sha256`, the groups (G326), `TlsTcpAddress`, the SNI name check, and `TlsConfig` [IMPL]: handshake deadline 10 s (connect included), 64 handshakes at once per listener and 1024 connections held per listener (more closed at once, unread), 64 KiB of ciphertext taken but not consumed per connection, 16 MiB of ciphertext sealed but not sent per connection (a frame that would pass it while output waits is refused, nothing sealed), the frame limits of TRANSPORT §2.1, 2 s for teardown. `credential.nim`: a P-256 key from BoringSSL's CSPRNG, PKCS#8 in and out (nothing after the key; P-256 only), a self-signed X.509 v3 certificate (random 127-bit serial, one CN, validity and KU/EKU as asked, `ecdsa-with-SHA256`), the DER SPKI an enrollment holds, `signP256`. `signing.nim`: `Signer`, `SignResult`, `checkSignInput` (G323). `engine.nim`: one connection, sans-I/O, between two memory BIOs: `advance` (need input, need a signature, established, failed), the private-key method suspending the handshake until `answerSignature`, the peer's certificates checked inside the handshake by the `PeerCheck` the engine was given (a failure is a `bad_certificate` alert; 5-2a gives the enrollment checks), the RFC 9266 exporter, `close_notify` as a clean end and a transport end without it as a failure. `stream.nim`: the chronos driver (one reader per connection holding back at the bound; one flush routine a reader never waits for, writers waiting their turn; teardown closes the transport first; one acceptor per listening socket), `connect` (the host's addresses in resolver order while TCP connect fails; any TLS failure ends the attempt), `serve`, `TlsStream` (exists only once the handshake and the peer check passed; TRANSPORT §2.1 frames; the channel binding given once and wiped at close), `StreamRegistry.closePeer`. Test hooks (D27, with markers): `testsigner.keySigner` (the key in the process), `newTlsContextForTests` (TLS 1.2 allowed, no certificate), `abortForTests`. On Windows the test builds compile BoringSSL without assembly (`tests/config.nims`): the Windows leg has no nasm (planning, 2026-11-16, departing from I45 for the TLS suite; to revisit at M12 for real Windows deployments). Suite `test_remote_tls` (21 cases; the peer checks are a fixture that pins one SPKI per Runtime id). TRN-0219, TRN-0220, TRN-0228, TRN-0233 and TRN-0376 claimed; the suite also tags TRN-0221, TRN-0222 and TRN-0227 as evidence for 5-2a and 5-7a. **5-2a** (after B2 and B3, decided 2026-11-17). `trust.nim`: the trust snapshot, immutable once built from protected input (anchor identifiers to certificate DER at one anchor-set revision; each Runtime's current tls-tcp record, `active` with its anchor and one or two keys, `revoked`, or `conflicting` holding both records' keys), refusing malformed input, and `isRuntimeId` (lowercase UUIDv4). `x509.nim`: validity, Key Usage, Extended Key Usage, BoringSSL's unprocessed-critical flag and the SPKI of a DER certificate; extensions that do not parse are refused. `verify.nim`: `checkPeer`, G324's nine ordered checks, and the two `PeerCheck`s, `expectRuntime` (client) and `anyEnrolled` (server), with G325's `systemClock` and `TimeFloor`. B3 changes enrollments only at restart, so `closePeer` serves shutdown until something revokes live. A separate commit adds the macOS sanitizer fix to `boring.nim` (the Xcode SDK and libc++ for ASan and TSan; only builds that compile BoringSSL; planning, 2026-11-17). Suite `test_remote_tls`: 35 cases (14 new: the snapshot, the verifier's matrix and order, and enrollment handshakes). TRN-0216, TRN-0221, TRN-0223 to TRN-0226 and TRN-0370 to TRN-0375 claimed (TRN 259/259); TRN-0222 stays deferred until 5-7b, whose facade process passes the invocation's Runtime as the one expected. G327 re-decided by the owner (the library's zeroing as an option, off by default, `BORINGSSL_ZERO_RECORD_BUFFERS`: iftech/boringssl#13 and iftech/nim-boringssl#26; the buffer was never zeroed upstream, c0e15d1d having moved it to plain malloc/free when it introduced zeroing in `OPENSSL_free`). **5-2d** (G327's follow-up, after nim-boringssl 0.0.16). The pin moves to `https://github.com/iftech/nim-boringssl == 0.0.16` (`nimble.lock` from `nimble -y lock` in a clean copy; `nix/nimble-deps.json` from `nix/update-nimble-deps.sh`), which brings upstream BoringSSL `26584e7a`; only `boring.nim` imports it, and the TLS suite passes on it unchanged. `config.nims` turns the option on; `boring.recordBuffersErased`; `stream.carrierErases`, `requireErasure` and `TlsConfig.carriesMarked`; the stream's own plaintext copies erased (G327's entry). `readFrame` now hands over a `TlsFrame` reference and `writeFrame` takes an `openArray` and seals it at once. Test hook `stream.recordErasureMissingForTests` (it can only add the refusal). `test_remote_tls.nims`: `useMalloc` and the audit build (`base/wipeaudit`); three cases in suite `tls.erasure`. Removed by the re-pin's P4d (I108, G327): the option, `recordBuffersErased`, `carrierErases`, `requireErasure`, `carriesMarked` and the hook, with two of the three cases. **5-2c** (G128, 2026-11-18). `tests/support/tlspeer.py` and `tlspeers.nim`, five cases in suite `tls.independent peer`: our client against a pyOpenSSL server and the other way round (TLS 1.3, both certificates through the enrollment checks, the exporter equal at both ends, a clean close), TLS 1.2-only peers refused both ways, a client with no certificate refused, and a P-256-only server reached through HelloRetryRequest. No claim changes. | 2026-11-17 |
 | I100 | IMPL | Tier 5 step 5-4: the Windows spike and the Windows CI leg (TRANSPORT §8.2.1 l.1148-1172; Tier 5 plan A6, A8; G107, G123, G334, R6). Parts 5-4a (the probes), 5-4b (the leg), 5-4c (blocking) | **5-4a. The probes** (`[IMPL]` tools, never part of `nimble test`). `tools/winprobe/winprobe.c` measures what §8.2.1 makes Windows support depend on: AF_UNIX basics and paths, `SIO_AF_UNIX_GETPEERPID` attribution across listener creator and acceptor, listener transfer by handle list and by `WSADuplicateSocketW` and their hygiene, the held process reference, the access right `connect` needs, OWNER RIGHTS, DACLs and owners, the volume, the reparse-tag and file-id check, ancestors, the G108 carrier without `socketpair`, Job Objects, the logosctl socket's peer, and the build with its `afunix.sys`. It reruns itself under a filtered token when elevated. `tools/winprobe/loopprobe.nim` (with `loopprobe.c`) drives AF_UNIX sockets from chronos 4.4.1's Windows dispatcher four ways, through its exported API only, up to the documented connection limit: no chronos fork is needed (A8). The raw facts per build are committed in `tools/winprobe/facts/`, the machine part of account SIDs and the account name replaced: 10.0.26200.9974 (winvm.lan), and from the leg's trial run 10.0.26100.33674 (`windows-2025`, `afunix.sys` 6.2.26100.32684) and 10.0.20348.5870 (`windows-2022`, 6.2.20348.5866). The decisions they support are G329-G333 (G332's reading of T l.1156 and G333's key decided by the owner, 2026-11-17, items 6 and 7). **5-4b. The leg** (G334, R6): `tools/ci/windows.ps1` and the `windows` job; the ci.yml header names R6's legs, and `workflow_dispatch` gains a `windows_only` input for a trial of the leg alone. Guards: `test_transport_io`'s cases move to `tests/transport_io_body.nim`, included where unix-stream exists, else one skipped case; `test_host_authority` checks the evidence key's 0600 mode on POSIX only ([I85]). README's Windows paragraph: the toolchain and the script, no nasm. Revision notes on D12 (R6), G105, G123 and G125. **Found by the leg's first full run on winvm.lan** (every suite under orc, 161 minutes; the two below failed, the rest passed): (1) `artifact.privateDir` made one directory per process on Windows (`lcn-artifacts-<pid>`), so a second Realizer in the process staged `a1` over the first one's mapped copy, which Windows cannot replace or remove: `test_realizer` failed twice with `realization-failed` "cannot create the staged copy". [IMPL] It now makes a new directory per call, `lcn-artifacts-<pid>-<n>` created exclusively, as `mkdtemp` does on POSIX. (2) `test_orchestration` read the module's state file while the module replaced it, which on Windows can fail to open (two cases); the test's read is retried. **TRN-0352's Windows test** (TRANSPORT l.1152; Fable's conditions on the plan): `tests/test_windows_profile.nim`, suite `trn.windows`, Windows only (elsewhere one skipped case): the Loader is wired without a hosted placement (no Module Host supervisor exists on Windows) and advertises the direct strategies only; with a Module Host program configured in code, a `hosted_dynamic` request in each placement is refused `loader-unsupported-strategy`, the Loader's journal holds only `hosted_dynamic` realize requests for it (never a direct one), the marker library's load-time code never runs and no copy is staged; `checkEndpointBase` and `makeEndpointDir` fail `eeUnsupported` and leave the base empty, and a local-transport rule fails `openEngine` with INVALID_PARAMS. Tagged [TRN-0352]; the unit stays `deferred:tier-5` until 5-4c makes the leg block. **5-4c. Blocking** (2026-11-19): run 44452740346 on master (`152fd1f`) passed all 55 jobs, every Windows job included, so the job's `continue-on-error` goes (the probe step keeps its own) and TRN-0352 is claimed, its reason saying the evidence runs on the Windows leg only (`conformance/claims/TRN.toml`). The leg's history before it: six runs, one Windows failure, in 44432718146 (shard 4/4: `test_orchestration`'s RUN-0686 case timed out on a stale entry in the orchestration state), whose likely cause, a durable replace refused while another handle holds the file, `152fd1f` retries (30 runs on winvm.lan did not reproduce the failure). **Status:** 5-4a, 5-4b and 5-4c built; the trial run of the leg was 44077261405 (G334). | 2026-11-16 |
-| I101 | IMPL | Tier 5 step N-1: the module kit's gaps on the node track (INTERFACE §2.4, §2.6-§2.9; TIER5-PLAN N-1, §7 A7; plan `tier5-plans/stepN-1-kit.md`; G339-G342). Parts N-1.1: pairing and toolchain; N-1.2: consumer helpers | **N-1.1.** `run.mixed` in `test_hosted_routes`: modules built with the other memory manager in the Runtime and the Module Host (G342; passes on the Mac in orc, refc, orc-release, ASan and TSan). `lcn-gen kit` writes the library's export lists, and the test libraries link with them (G341). Kit libraries and `liblogos_runtime` are built with `-d:noSignalHandler`, and `liblogos_runtime` restores the SIGPIPE disposition chronos changes (G340). The Nim 2.2.4 probe and the libraries' switch sets (G341). Linux, sub-parts 3-6 and the kit's nimble package wait for framework.lan and the repository split plan. **N-1.2.** lcn-gen's plain consumer helpers (G339): `codegen/consumert.nim` under every generated `<stem>_calls.nim` (wrapped route handles, typed subscriptions with ABI 3 end reports, typed prepared calls with a deadline, the handler rule by thread, `callbackEnter`), `kit/routes.nim` for module code (`RouteSet`, `openRoute`, `renewRoute`, `closeRoute`, typed Runtime Control subscriptions), the regenerated calls fixtures, `rcclient`'s timeout and 6cac8335 citations, `kit_facade` as a list of roots in the layers lint, the IFC-0192/0666 and IFC-0966/0967 inspection items. Tests: `test_consumert`, `test_events`' authority pass, `test_hosted_routes` C-14. | 2026-11-16, 2026-11-20 |
+| I101 | IMPL | Tier 5 step N-1: the module kit's gaps on the node track (INTERFACE §2.4, §2.6-§2.9; TIER5-PLAN N-1, §7 A7; plan `tier5-plans/stepN-1-kit.md`; G339-G342). Parts N-1.1: pairing and toolchain; N-1.2: consumer helpers; N-1.3: the thread-confined mode | **N-1.1.** `run.mixed` in `test_hosted_routes`: modules built with the other memory manager in the Runtime and the Module Host (G342; passes on the Mac in orc, refc, orc-release, ASan and TSan). `lcn-gen kit` writes the library's export lists, and the test libraries link with them (G341). Kit libraries and `liblogos_runtime` are built with `-d:noSignalHandler`, and `liblogos_runtime` restores the SIGPIPE disposition chronos changes (G340). The Nim 2.2.4 probe and the libraries' switch sets (G341). Linux, sub-parts 3-6 and the kit's nimble package wait for framework.lan and the repository split plan. **N-1.2.** lcn-gen's plain consumer helpers (G339): `codegen/consumert.nim` under every generated `<stem>_calls.nim` (wrapped route handles, typed subscriptions with ABI 3 end reports, typed prepared calls with a deadline, the handler rule by thread, `callbackEnter`), `kit/routes.nim` for module code (`RouteSet`, `openRoute`, `renewRoute`, `closeRoute`, typed Runtime Control subscriptions), the regenerated calls fixtures, `rcclient`'s timeout and 6cac8335 citations, `kit_facade` as a list of roots in the layers lint, the IFC-0192/0666 and IFC-0966/0967 inspection items. Tests: `test_consumert`, `test_events`' authority pass, `test_hosted_routes` C-14. **N-1.3.** `lcn-gen kit --confined` (G335-G337): `codegen/confinedrt.nim` (one module thread per context running chronos, jobs handed off while the caller waits, inline re-entry, serving waits, the confined scope, the publisher thread, `publishAsync`, `post`/`lcn_kit_post`, destroy and failed initialization), the `logos_sdk/confined` facade, kitgen's `--confined` template, `kitbuild`'s `--import:logos_sdk/base/hostsignals` and the template's restore (G340, P5). The consumer helpers' dispatcher (G339, P1, P2): `codegen/handover.nim`, the confined paths of `consumert`, `newRouteSet(services)`. The ledger fixture and its generated kit and calls files; the `kit-chronos` rule and the `confined_facade` root in the layers lint; `test_kit_mixed` on the aarch64 MSan skip list; IFC-0281 and IFC-0282 claimed for confined modules. Tests: `test_kit_confined` (27 cases), `test_kit_dylib`'s SIGPIPE case and the ledger built with the other memory manager, `test_kit_mixed` (MX-1 to MX-3; orc Runtime only, G277). | 2026-11-16, 2026-11-20 |
 | I102 | IMPL | Tier 5 step N-2: the CLI module `lcn_call` and its launcher (plan `tier5-plans/stepN-2-cli.md`; G343–G350). Parts N-2a to N-2d | **N-2a.** `src/logos_core/cli/`: the launcher protocol (`cli.cddl`, `wire.nim`), descriptor passing (`fdpass`), argument parsing (`args.nim`), output (`present.nim`), the contract, settings and kit (`lcn_call.cddl`, `settings.cddl`); `tests/test_cli.nim`. Nothing user-visible yet. **Held.** N-2b (the module, the launcher, `call`, `describe`, `module wait`), N-2c (streams) and N-2d (marked payloads, local targets only; owner, 2026-11-17) wait for the repository split plan. | 2026-11-16 |
 | I103 | IMPL | Tier 5 step 5-0: records (TIER5-PLAN §5 row 5-0 and §8; `tier5-plans/evidence/A-remaining-work.md` §6; plan `tier5-plans/step5-0-records.md`; G351-G356) | **Records only:** no file under `src/` or `tests/` changes, and no unit changes status (gate unchanged: Tier 5 RUN 133, TRN 58, IFC 172, PKG 308, BCP 4, SEC 1). **DECISIONS.** D29 (no Rust output; A4 (a)), D30 and G139 (decided, not built; 5-1 builds and claims them, I98; G139's Specs line at `6a4dfa28`: IF l.22-31, §3.8 l.2610-2634, BCP l.442, l.482), G5, G49, G93 (OPEN until `6a4dfa28`), I44 (`crypto/ed25519.nim` left with I68), I77 (the aarch64 `-msan` skip list is `flake.nix`'s). "Open items": the TF items of the comments document from TF-37 on, with their rows, and "not sent" kept apart from "in the comments document"; status lines of G237 (TF-28), G273 (TF-50), G274 (TF-51), G281 (TF-46), G289 (TF-41), G305 and G306 (TF-42), and TF ids on G246, G247, G250, G252, G253, G257, G260, G282. The owner's Tier 5 batch B of 2026-11-16/17 where rows exist: G81 (B5), G86 (B2), G87 (B3), G298 (B8); G91 and G136 (no readiness signal yet; 5-3a). New: G351 (TF-44, open: D2, a D9 stop for 5-8), G352 (K22), G353 (K30, settled by PM l.1442), G354 (a call record that cannot be kept, as built), G355 (NL-07, B6), G356 (NR-04, B7). K18, S4b8-1 and S4b8-2 were already G310 and G311 (I97). **SPEC-STATUS.** The Tier 5 row rewritten to the Tier 5 plan, with a section of its own: areas, units by area and by step (the PKG recount by work: A1 78, A2 13, A3 63, A4 30, B 19 with RUN 7, C 75, D 30; sum 308), the open items with their interims and decisions, the inspection items that hold only while a feature is absent, and a log the steps add to; C-09 declined, not resolved; NL-07 and NR-04 interims. **Other documents.** README's Tier 5 bullet; `docs/DAEMON.md` §7 (provider calls from the command line are `lcn_call`'s, A3); sandbox, container and operating-system enforcement are outside Tier 5 (D16; plan §3, area K) in CONFORMANCE, DEPLOYMENT (rows 6b and 8b, `Changes in` `—`), PERMISSIONS and the BCP-0043 and BCP-0045 inspection reasons; PKG-0435's reason; tracking comments on CAP-0075 to CAP-0082, CAP-0292 to CAP-0297 and RUN-0488. **Left to other steps:** R1 and `ci.yml`'s header (A §6 item 11) and G105, G125 (item 15) to 5-4 (R6); D30 and G139's "implemented and claimed (I98)" to 5-1c; PKG-0275 to 5-5 (C10). | 2026-11-17 |
 | I104 | IMPL | The re-pin to logos-lips `6cac8335`: the pending list (plan `tier5-plans/repin-6cac8335.md` §2, sub-step plan `tier5-plans/repin/P0.md`) | **P0** moves the pin, syncs the ledgers and restamps the generated files; no parser, mirror file, pin value or behaviour changes. What still follows the previous text is listed in `spec/repin-pending.toml`, and `spectrace mirror`, `pins`, `gate` and `deploydoc` accept only what is listed. `spec/repin-baseline.toml` is the frozen copy, with its SHA-256 in `tools/spectrace/spectrace.py`: `spectrace pending` requires each baseline entry to be open on its own sub-step or to have left with the evidence its kind needs. A change of sub-step needs a `[[moved]]` record. A unit leaves as claimed with a test that can run or an inspection item with a reason, or by name in its claims file with a decision row that names it. A stale id leaves with a record of what replaced the rule. A text entry of class `behaviour` clears only by a test tagged `[TXT-nnnn]`, unless a decision row that names it lowers the entry. A `todo` entry may clear by a typed reading (`reword`, `removed`, `informative`, `holds`) that says what was compared, and a guarded entry also names the test or code site that was read. Merged sub-steps go in `closed`, and plain `spectrace pending`, which CI runs, fails while one owns an entry. **Known limit:** no static check can tell a real test from an empty one, so `spectrace pending --step` prints all the evidence a sub-step used for its review. **Note at re-pin P9 (2026-11-20, 6cac8335).** Every sub-step has merged, so `spec/repin-pending.toml` holds `[deferred]` only: the 53 units and 19 text entries that stay deferred past the re-pin. `spectrace pending` refuses any other section, `closed` included. **What went:** the `[mirror]`, `[pin]`, `[units.*]`, `[stale]`, `[deploydoc]` and `[[text]]` sections, and their handling in `spectrace mirror`, `pins`, `gate` (the held status, the stale exemptions and the list's own checks) and `deploydoc`, which are back to their forms before P0; sub-steps, `closed` and their order; `[[moved]]` and the rule that an entry keeps its sub-step; `--step` and its evidence report (each sub-step's output was kept with the P9 report, after the spot-check of the readings). **What stays:** the frozen list and its digest; `[deferred]`'s rules (each owner one of the work items; each unit a live gated requirement that its claims file defers by name; a unit or text entry that joined it has a decision row that names it; a text entry rides on a unit of its spec and section, or of a spec and section its sentence names, deferred to the same work item); "neither deferred nor cleared" for every frozen text entry; the reading checks (what was compared, the kind, the guard's site, the reword's pair, the removed side, a `holds` reading's named test); each cleared entry's suite still names its tag; and a text entry leaves `[deferred]` only when a test of its unit carries its tag. **The leaving rules.** A unit the re-pin tracked (the frozen list's `[units]` and `[deferred]`, and each `[[units]]` record) whose claims file still defers it must be in `[deferred]`; "still defers" is any `deferred:` status, and as the gate closes tiers 1 to 4b only `deferred:tier-5` is left. A unit leaves claimed, with a test that can run or an inspection item with a reason, and a changed unit keeps its record of what was compared. The rules are not symmetric: the six units of the frozen list's `[deferred]` leave only claimed, while the 47 that joined later from `[units]` or by a `[[units]]` record may also leave with another status named in their claims file and a decision row that names them (as when a dropped work item's units go out of scope), which `[units]` allowed when they joined. **A text entry's cleared record, once it leaves `[deferred]`,** is `id`, `step` (the work item that claimed its unit, such as `5-3a`) and `test` (the suite in which one test carries both tags); the tool checks `test`, not `step`. **`deploydoc`** now matches a duty row's citation whole in BCP-0038's reasons, so a short citation is not met by a longer stale number or a range (`names_cite`). The checks on `spec/repin-text-cleared.toml` keep its 221 tags in test names, and its 248 readings checked, until the next revision's pending file replaces them. | 2026-11-18 |
