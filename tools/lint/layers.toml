@@ -28,6 +28,7 @@ daemon_allowlist = [
   "orchestration",
   "orchestration/needs",
   "orchestration/settings",
+  "package/trustdoc",
   "permissions",
   "runtime/authscopes",
   "runtime/bell",

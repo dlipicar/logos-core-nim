@@ -10,7 +10,7 @@ from ./support/genfixtures_core import
   caPrimary, caSupporting, carrierPrimary, cliPrimary, coreNimFixtures, ctlPrimary,
   daemonConfigDocument, evstorePrimary, hostConfigDocument, lcnCallPrimary, ldrPrimary,
   ldrSupporting, logosctlPrimary, orchPrimary, orchStatePrimary, policyPrimary,
-  statePrimary, storePrimary, trustPrimary
+  statePrimary, storePrimary, trustPrimary, trustdocPrimary
 
 const deviceTarget = defined(android) or defined(ios)
   ## The contracts are read from the source tree, which a device does not have.
@@ -71,6 +71,7 @@ suite "core.c-reverse: round trips of core's contracts (INTERFACE §3.8; G158)":
         ("host configuration", hostConfigDocument(), none, false),
         ("daemon configuration", daemonConfigDocument(), none, false),
         ("trust", readFile(trustPrimary), none, false),
+        ("package trust", readFile(trustdocPrimary), none, false),
         ("evidence store", readFile(evstorePrimary), none, false),
         ("ctl", readFile(ctlPrimary), none, false),
         ("logosctl", readFile(logosctlPrimary), none, false),
