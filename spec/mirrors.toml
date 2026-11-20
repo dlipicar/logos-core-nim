@@ -1026,3 +1026,12 @@ out = "LDR/10.errors.cddl"
 package = "core"
 file = "spec-module-loader.md"
 section = "§10"
+
+# Appendix A, the whole contract in one block (LOADER l.737-739). Not generated from, and
+# not one of the pinned roots' parts: test_ldr_schema checks the blocks above are its
+# excerpts, in order, with the same root.
+[[mirror]]
+out = "LDR/app-a.contract.cddl"
+package = "core"
+file = "spec-module-loader.md"
+section = "App A"

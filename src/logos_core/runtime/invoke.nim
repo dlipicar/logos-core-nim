@@ -715,13 +715,13 @@ proc stage(
     value: seq[byte],
     trail: var CallTrail,
 ): Result[Reply, InvocationFailure] =
-  ## [SPEC CONFIG §5 l.197-200; I87 §2.7 step 2] Phase 2 of a `stage`, on
+  ## [SPEC CONFIG §5 l.196-200; I87 §2.7 step 2] Phase 2 of a `stage`, on
   ## this thread: the value decoded, validated and its value root computed
   ## against the binding phase 1 returned, then committed by the Runtime
   ## thread (`rqConfigCommit`). Malformed or too deep is INVALID_PARAMS
-  ## without detail, answered here (row 4 follows rows 1-3, which phase 1
-  ## checked); a value not of the root goes to the Runtime thread, which
-  ## decides whether its detail may be disclosed.
+  ## without detail, answered here (row 3 follows rows 1-2 and the revision,
+  ## which phase 1 checked); a value not of the root (row 4) goes to the
+  ## Runtime thread, which decides whether its detail may be disclosed.
   let b = phase1.config.binding
   var u = update
   var path: seq[CborValue]

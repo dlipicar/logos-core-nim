@@ -269,7 +269,8 @@ execution scope `local-transport` in a `process` (G272). So:
 
 Tier 4b step 4b-3b (DECISIONS I92) builds the erasure of marked payloads (INTERFACE §1.4.1), so the
 **INTERFACE** entry changes: IFC-0575 to IFC-0577, IFC-0580 and IFC-0581 are claimed, and
-**SECURITY CONSIDERATIONS** claims SEC-0057. IFC-0575 is claimed for orc builds of the Runtime and the
+**SECURITY CONSIDERATIONS** claimed SEC-0057 until re-pin P6b, where SEC l.404 became descriptive and
+the IFC units carry it. IFC-0575 is claimed for orc builds of the Runtime and the
 host; a refc build of either never carries a marked payload. So:
 
 - **Who erases** (G277, the owner's reading of l.388): each participant answers for its own copies.
@@ -297,7 +298,7 @@ host; a refc build of either never carries a marked payload. So:
 - **Diagnostics** (G278): for a marked request the INVALID_PARAMS path stops before the first key
   taken from the payload; generated messages for a marked declaration carry no path; a provider's
   failure text is forwarded to its caller only; no marked value or value root reaches a diagnostic,
-  an audit record, an observation result or the carrier (IFC-0580, SEC-0057).
+  an audit record, an observation result or the carrier (IFC-0580).
 - **Retention** (IFC-0581): a decision that retains a marked side refuses the call NOT_AUTHORISED
   before dispatch, recorded as `sensitive-retention` without a value root, on direct, transported
   and hosted paths alike; an unmarked method of the same contract keeps its retention.
@@ -464,7 +465,9 @@ claim as it stands.
   `tests/test_deployment.nim` checks its facts against the code. **No complete Logos module system is
   claimed** (below). Tier 5: the QUIC and Package Manager realization profiles.
 - **SECURITY CONSIDERATIONS**: as at the end of Tier 4, plus SEC-0057 (marked-payload erasure, orc
-  builds).
+  builds). At 6cac8335 `conformance/claims/SEC.toml` claims no unit: SEC-0021 and SEC-0057 were
+  retired, their rules descriptive and carried by BCP-0049, BCP-0050, BCP-0081 and IFC-0575 to
+  IFC-0581 (re-pin P6b).
 
 The gate at the close: RUN 829/829, LDR 131/131, CFG 122/122, CAP 385/385, TRN 242/242, IFC 624/624,
 PKG 212/212, BCP 49/49, SEC 2/2, with nothing deferred to Tier 4b and to Tier 5 RUN 133, TRN 58,

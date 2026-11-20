@@ -3357,3 +3357,399 @@ step = "P6"
 kind = "removed"
 reading = "The governing rule moved from the extracted file to App A: if an excerpt differs from the appendix, the appendix governs (TXT-0406)."
 compared = "CA l.33 at 6a4dfa28 against l.1514 at 6cac8335."
+
+# P6b: Configuration, the Loader, BCP and SECURITY ----------------------------------------------------------------------
+
+[[stale]]
+id = "BCP-0098"
+compared = "BCP l.559 at 6cac8335 is descriptive (TXT-0352), so no unit replaces it. Its claims line and the bcp-logging inspection item go."
+
+[[stale]]
+id = "CFG-0046"
+compared = "Replaced by CFG-0151 (CFG l.141 at 6cac8335): a default only when no record has existed before. TC's startup test is retagged, and a test of its own shows a discarded default is not staged again across a restart."
+
+[[stale]]
+id = "CFG-0145"
+compared = "Replaced by CFG-0156 (CFG l.323 at 6cac8335): a rejection is the `configuration-rejected` error arm, not MODULE_ERROR. TC's two tests are retagged and check the arm."
+
+[[stale]]
+id = "SEC-0021"
+compared = "SEC l.240 at 6cac8335 is descriptive (TXT-0445): BCP-0049, BCP-0050 and BCP-0081, which test_realizer's staging test already carries, state the rule. The tag and the claims line go."
+
+[[stale]]
+id = "SEC-0057"
+compared = "SEC l.404 at 6cac8335 is descriptive (TXT-0448): IFC-0575 to IFC-0581, which test_wipe_routes carries, state the rule. The four tags and the claims line go; CONFORMANCE and README are reworded."
+
+[[text]]
+id = "TXT-0161"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0411"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0413"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0414"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0415"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0418"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0419"
+step = "P6"
+test = "tests/test_config.nim"
+
+[[text]]
+id = "TXT-0576"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0432"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0439"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0440"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0441"
+step = "P6"
+test = "tests/test_ldr_schema.nim"
+
+[[text]]
+id = "TXT-0351"
+step = "P6"
+test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0349"
+step = "P6"
+test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0368"
+step = "P6"
+test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0369"
+step = "P6"
+test = "tests/test_deployment.nim"
+
+[[text]]
+id = "TXT-0343"
+step = "P6"
+kind = "reword"
+pair = "TXT-0353"
+reading = "The Interface row for the Runtime adds §1.3 and §5.1: Runtime Control listings and operation ordering, which the Runtime takes from the SDK's Interface code."
+compared = "BCP l.81 at 6cac8335 against l.81 at 6a4dfa28, and runtime/invoke.nim, which dispatches Runtime Control over the SDK's Interface types; the SDK imports nothing from the core."
+site = "src/logos_core/runtime/invoke.nim"
+
+[[text]]
+id = "TXT-0344"
+step = "P6"
+kind = "reword"
+pair = "TXT-0354"
+reading = "The Interface row for Transport adds §2.1 and §5.1: method-name carriage and the response envelope and frame capacity."
+compared = "BCP l.82 at 6cac8335 against l.82 at 6a4dfa28, and transport/boundary.nim, which carries the method name and checks the envelope with the SDK's Interface code."
+site = "src/logos_core/transport/boundary.nim"
+
+[[text]]
+id = "TXT-0346"
+step = "P6"
+kind = "reword"
+pair = "TXT-0355"
+reading = "The Runtime row for the Capability Authority adds §8 and §10.1: execution-authorization renewal and invalidation."
+compared = "BCP l.84 at 6cac8335 against l.83 at 6a4dfa28, and runtime/execauth.nim, where the Runtime renews and invalidates execution authorization."
+site = "src/logos_core/runtime/execauth.nim"
+
+[[text]]
+id = "TXT-0347"
+step = "P6"
+kind = "reword"
+pair = "TXT-0356"
+reading = "The Runtime row for the Module Loader adds §4.2.1, §10.1 and §10.2: binding loss and cleanup, release ordering and the Loader's error codes."
+compared = "BCP l.86 at 6cac8335 against l.85 at 6a4dfa28, and runtime/realizer.nim (LoaderErrorCode, release and binding loss)."
+site = "src/logos_core/runtime/realizer.nim"
+
+[[text]]
+id = "TXT-0353"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0343, which adds §1.3 and §5.1."
+compared = "BCP l.81 at 6a4dfa28 against l.81 at 6cac8335."
+site = "src/logos_core/runtime/invoke.nim"
+
+[[text]]
+id = "TXT-0354"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0344, which adds §2.1 and §5.1."
+compared = "BCP l.82 at 6a4dfa28 against l.82 at 6cac8335."
+site = "src/logos_core/transport/boundary.nim"
+
+[[text]]
+id = "TXT-0355"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0346, which adds §8 and §10.1."
+compared = "BCP l.83 at 6a4dfa28 against l.84 at 6cac8335."
+site = "src/logos_core/runtime/execauth.nim"
+
+[[text]]
+id = "TXT-0356"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0347, which adds §4.2.1, §10.1 and §10.2."
+compared = "BCP l.85 at 6a4dfa28 against l.86 at 6cac8335."
+site = "src/logos_core/runtime/realizer.nim"
+
+[[text]]
+id = "TXT-0345"
+step = "P6"
+kind = "holds"
+reading = "Configuration takes `configuration-schema-mismatch` and its detail from Interface §5.1 (sdk/src/logos_sdk/iface/outcome.nim), only for a caller that may see the schema."
+compared = "BCP l.83 at 6cac8335 against runtime/invoke.nim stage and engine.nim's detail check, and the TC test."
+site = "tests/test_config.nim"
+named = "one not of the root carries configuration-schema-mismatch"
+
+[[text]]
+id = "TXT-0348"
+step = "P6"
+kind = "informative"
+reading = "Why the spec keeps call-audit and call-evidence out of the shared Runtime types schema; our mirrors follow the text (RNT/9.2.runtime-types.cddl has neither, CAP/9.audit.cddl and CAP/9.1.evidence.cddl hold them)."
+compared = "BCP l.91 at 6cac8335 against spec/mirrors."
+
+[[text]]
+id = "TXT-0557"
+step = "P6"
+kind = "holds"
+reading = "`lgx` is a source kind of a catalog entry (package/records.nim SourceKind), decoded only under that name; installing from it is Tier 5."
+compared = "BCP l.274 at 6cac8335 against package/records.nim and pins.nim, and the TR test, which round-trips an lgx entry."
+site = "tests/test_resolver.nim"
+named = "catalog entries, sources and resolved edges are the mirrored records"
+
+[[text]]
+id = "TXT-0558"
+step = "P6"
+kind = "holds"
+reading = "`nix` is a source kind of a catalog entry (package/records.nim SourceKind), decoded only under that name; installing from it is Tier 5."
+compared = "BCP l.275 at 6cac8335 against package/records.nim and pins.nim, and the TR test, which round-trips a nix entry."
+site = "tests/test_resolver.nim"
+named = "catalog entries, sources and resolved edges are the mirrored records"
+
+[[text]]
+id = "TXT-0352"
+step = "P6"
+kind = "informative"
+reading = "Descriptive at 6cac8335 (BCP-0098 retired). Optional logging here is logosd's log and the Runtime's diagnostics that logosd drains into it (daemon/logging.nim, daemon/diagdrain.nim); neither is required audit or an enforcement input, and call records (runtime/callaudit.nim) and the authority's audit (authority/audit.nim) never wait on them."
+compared = "BCP l.559 at 6cac8335 against l.550 at 6a4dfa28, and the bcp-logging reason it replaces."
+
+[[text]]
+id = "TXT-0416"
+step = "P6"
+kind = "holds"
+reading = "Differing commitments arise only from restored or inconsistent state, and the VERSION_MISMATCH row still applies to them (engine.applyRefusal)."
+compared = "CFG l.258 at 6cac8335 against engine.nim applyRefusal (commitmentsAgree) and TC:1181, where a changed binding is not restored, and the TC test."
+site = "tests/test_config.nim"
+named = "the binding's, the staged record's and the realization's commitments must agree"
+
+[[text]]
+id = "TXT-0423"
+step = "P6"
+kind = "informative"
+reading = "The sentence introduces the §9 block; spec/mirrors/CFG/9.configuration-types.cddl is that whole block, cut from the text and checked by `spectrace mirror`."
+compared = "CFG l.359 at 6cac8335 against spec/mirrors.toml."
+
+[[text]]
+id = "TXT-0425"
+step = "P6"
+kind = "removed"
+reading = "The stale revision left CONFIG §5's table: it is `stale-revision` (CFG l.201; RUNTIME l.1819), as P4a built."
+compared = "CFG l.195 at 6a4dfa28 against l.201 at 6cac8335, and engine.nim updateRefusal, which answers the typed arm; TC's [CFG-0152] test."
+site = "src/logos_core/runtime/engine.nim"
+
+[[text]]
+id = "TXT-0426"
+step = "P6"
+kind = "removed"
+reading = "The stale revision left §8's table for `stale-revision` (CFG l.304), and the absent binding became l.299's row (TXT-0418)."
+compared = "CFG l.294 at 6a4dfa28 against l.299-305 at 6cac8335, and engine.nim applyRefusal; TC's [CFG-0154] and [TXT-0418] tests."
+site = "src/logos_core/runtime/engine.nim"
+
+[[text]]
+id = "TXT-0428"
+step = "P6"
+kind = "removed"
+reading = "The extracted `logos_module_configuration_types.cddl` file is gone; the block itself is the schema (TXT-0423)."
+compared = "CFG l.419 at 6a4dfa28 against l.359 at 6cac8335."
+
+[[text]]
+id = "TXT-0429"
+step = "P6"
+kind = "removed"
+reading = "With no extracted file, nothing can differ from the specification."
+compared = "CFG l.420 at 6a4dfa28 against l.359 at 6cac8335."
+
+[[text]]
+id = "TXT-0430"
+step = "P6"
+kind = "informative"
+reading = "What the contract standardizes; each part is a unit of §3-§10."
+compared = "LDR l.15 at 6cac8335."
+
+[[text]]
+id = "TXT-0431"
+step = "P6"
+kind = "informative"
+reading = "A statement about substitutability across Runtimes: our realization handoffs are engine-internal (runtime/realizer.nim, hostsup.nim), as the sentence allows."
+compared = "LDR l.16 at 6cac8335."
+
+[[text]]
+id = "TXT-0433"
+step = "P6"
+kind = "informative"
+reading = "Other specifications use the descriptor through the contract or a projection of their own; the host configuration's `lcn.app_implementation` is such a projection (TXT-0434)."
+compared = "LDR l.142 at 6cac8335 against runtime/host_config.cddl."
+
+[[text]]
+id = "TXT-0434"
+step = "P6"
+kind = "reword"
+pair = "TXT-0444"
+reading = "A projection has its own subtree root and keeps LOADER's meaning: `lcn.app_implementation` is a rule of the host configuration's own schema, with LOADER's strategy names and fields."
+compared = "LDR l.143 at 6cac8335 against l.143-144 at 6a4dfa28, and runtime/host_config.cddl (lcn.app_implementation, lcn.app_artifact)."
+
+[[text]]
+id = "TXT-0444"
+step = "P6"
+kind = "removed"
+reading = "Replaced by TXT-0433 and TXT-0434: consumption by schema reference became the contract or a projection with its own root."
+compared = "LDR l.143-144 at 6a4dfa28 against l.142-143 at 6cac8335."
+
+[[text]]
+id = "TXT-0435"
+step = "P6"
+kind = "holds"
+reading = "Each hosted attempt gets its own Module Host (hostsup.nim, host/main.nim)."
+compared = "LDR l.200 at 6cac8335 against runtime/hostsup.nim and host/main.nim, and the TH test."
+site = "tests/test_hosted.nim"
+named = "is ready in a process of its own"
+
+[[text]]
+id = "TXT-0436"
+step = "P6"
+kind = "informative"
+reading = "A note on a future revision; nothing to build."
+compared = "LDR l.201 at 6cac8335."
+
+[[text]]
+id = "TXT-0437"
+step = "P6"
+kind = "holds"
+reading = "Only the selected artifact is hashed and compared (runtime/artifact.nim)."
+compared = "LDR l.658 at 6cac8335 against runtime/artifact.nim, and the TH test."
+site = "tests/test_hosted.nim"
+named = "an artifact whose bytes do not match its digest fails"
+
+[[text]]
+id = "TXT-0438"
+step = "P6"
+kind = "informative"
+reading = "Libraries the linker loads are deployment inputs, not verified by the Loader; a packaged one against the private copy is UF-18, with the spec owner."
+compared = "LDR l.659 at 6cac8335 against runtime/artifact.nim, which hashes and copies the selected artifact only."
+
+[[text]]
+id = "TXT-0442"
+step = "P6"
+kind = "removed"
+reading = "The extracted `logos_module_loader.cddl` file is gone; Appendix A lists the schema (TXT-0432)."
+compared = "LDR l.38 at 6a4dfa28 against l.39 at 6cac8335."
+
+[[text]]
+id = "TXT-0443"
+step = "P6"
+kind = "removed"
+reading = "The governing rule moved to Appendix A (TXT-0441)."
+compared = "LDR l.39 at 6a4dfa28 against l.739 at 6cac8335."
+
+[[text]]
+id = "TXT-0445"
+step = "P6"
+kind = "informative"
+reading = "Descriptive at 6cac8335 (SEC-0021 retired): BCP-0049, BCP-0050 and BCP-0081 state the rule, and the C-08 staging test claims them."
+compared = "SEC l.240 at 6cac8335 against l.240 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0446"
+step = "P6"
+kind = "informative"
+reading = "A threat statement; the Loader verifies the selected artifact only (TXT-0437), and UF-18 is with the spec owner."
+compared = "SEC l.391 at 6cac8335."
+
+[[text]]
+id = "TXT-0447"
+step = "P6"
+kind = "informative"
+reading = "A threat statement; the pools are bounded under their own specs."
+compared = "SEC l.394 at 6cac8335."
+
+[[text]]
+id = "TXT-0448"
+step = "P6"
+kind = "informative"
+reading = "Descriptive at 6cac8335 (SEC-0057 retired): IFC-0575 to IFC-0581 state and claim the rule."
+compared = "SEC l.404 at 6cac8335 against l.403 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0449"
+step = "P6"
+kind = "reword"
+pair = "TXT-0453"
+reading = "The iOS baseline moved one line; it binds deployments, and iOS is outside Tier 5."
+compared = "SEC l.474 at 6cac8335 against l.473 at 6a4dfa28."
+
+[[text]]
+id = "TXT-0453"
+step = "P6"
+kind = "removed"
+reading = "Moved to l.474 (TXT-0449)."
+compared = "SEC l.473 at 6a4dfa28 against l.474 at 6cac8335."
+
+[[text]]
+id = "TXT-0566"
+step = "P6"
+kind = "informative"
+reading = "Binds deployments on iOS, outside Tier 5."
+compared = "SEC l.476 at 6cac8335."
+
+[[text]]
+id = "TXT-0450"
+step = "P6"
+kind = "informative"
+reading = "A reference entry."
+compared = "SEC l.588 at 6cac8335."

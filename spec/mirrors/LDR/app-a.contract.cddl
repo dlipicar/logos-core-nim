@@ -1,0 +1,173 @@
+_module = "logos_module_loader"
+
+logos.module_loader.realization_descriptor =
+  {
+    strategy: "direct_static",
+    module: logos.runtime.module_name,
+    static_binding: logos.module_loader.static_binding,
+  } /
+  {
+    strategy: "direct_dynamic",
+    module: logos.runtime.module_name,
+    artifact: logos.module_loader.artifact,
+  } /
+  {
+    strategy: "hosted_dynamic",
+    module: logos.runtime.module_name,
+    artifact: logos.module_loader.artifact,
+    placement: logos.module_loader.hosted_placement,
+  }
+
+logos.module_loader.hosted_placement =
+  "process" /
+  "sandbox" /
+  "container"
+
+logos.module_loader.artifact = {
+  id: tstr .size (1..128),
+  local_path: tstr .size (1..4096),
+  hash: bstr .size 32,
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+
+logos.module_loader.static_binding = {
+  binding: tstr .size (1..128),
+}
+
+logos.module_loader.capabilities = {
+  ? direct_static: true,
+  ? direct_dynamic: true,
+  ? hosted_dynamic: {
+    ? process: true,
+    ? sandbox: true,
+    ? container: true,
+  },
+  ? force_release: true,
+}
+
+logos.module_loader.list_capabilities_request = {}
+
+logos.module_loader.list_capabilities_response = {
+  capabilities: logos.module_loader.capabilities,
+}
+
+logos.module_loader.state_context = {
+  assignment: logos.runtime.module_state_assignment_id,
+}
+
+logos.module_loader.configuration_handoff = {
+  input: logos.module_configuration.configuration_input,
+  ? live_reconfiguration: true,
+}
+
+logos.module_loader.provider_endpoint = {
+  profile: "logos.local.unix-stream",
+  address: tstr .size (1..4096),
+}
+
+logos.module_loader.realize_request = {
+  module_instance: logos.runtime.module_instance_id,
+  descriptor: logos.module_loader.realization_descriptor,
+  ? state: logos.module_loader.state_context,
+  ? configuration: logos.module_loader.configuration_handoff,
+}
+
+logos.module_loader.realize_response =
+  {
+    status: "succeeded",
+    realization: logos.module_loader.active_realization,
+  } /
+  {
+    status: "failed",
+    error: logos.module_loader.error,
+  } /
+  {
+    status: "failed",
+    realization: logos.module_loader.failed_realization,
+  }
+
+logos.module_loader.realization =
+  logos.module_loader.active_realization /
+  logos.module_loader.failed_realization
+
+logos.module_loader.active_realization = {
+  realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+  status: "active",
+  ? call_surface: bstr .size (1..8388608),
+  ? provider_endpoint: logos.module_loader.provider_endpoint,
+}
+
+logos.module_loader.failed_realization = {
+  realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+  status: "failed",
+  failure: logos.module_loader.error,
+}
+
+logos.module_loader.realization_id = tstr .size (1..128)
+
+logos.module_loader.get_status_request = {
+  ? realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+}
+
+logos.module_loader.get_status_response =
+  {
+    status: "succeeded",
+    realization: logos.module_loader.realization,
+  } /
+  {
+    status: "failed",
+    error: logos.module_loader.error,
+  }
+
+logos.module_loader.apply_configuration_request = {
+  realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+  configuration: logos.module_configuration.configuration_input,
+}
+
+logos.module_loader.apply_configuration_response =
+  { status: "succeeded" } /
+  {
+    status: "failed",
+    error: logos.module_loader.error,
+  } /
+  {
+    status: "failed",
+    realization: logos.module_loader.failed_realization,
+  }
+
+logos.module_loader.release_request = {
+  realization: logos.module_loader.realization_id,
+  module_instance: logos.runtime.module_instance_id,
+  ? force: true,
+}
+
+logos.module_loader.release_response =
+  { status: "succeeded" } /
+  {
+    status: "failed",
+    error: logos.module_loader.error,
+  } /
+  {
+    status: "failed",
+    realization: logos.module_loader.failed_realization,
+  }
+
+logos.module_loader.error = {
+  code: logos.module_loader.error_code,
+  ? message: tstr .size (0..512),
+}
+
+logos.module_loader.error_code =
+  "invalid-request" /
+  "unsupported-strategy" /
+  "artifact-unavailable" /
+  "artifact-integrity-failed" /
+  "abi-invalid" /
+  "realization-failed" /
+  "instance-conflict" /
+  "realization-not-found" /
+  "configuration-rejected"

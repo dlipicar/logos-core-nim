@@ -6923,7 +6923,8 @@ proc permissionSettings(st: State, q: Request, x: Inst) =
 # (INVALID_PARAMS, G228); the method's own authority over the exact target,
 # an unknown target answered as a refused one (CFG-0057); CONFIG's table rows
 # in their order, the revision after the first; for a mutation, frame size
-# [G233] and revision headroom [G234] (row 7); readiness; the write.
+# (CONFIG l.198) and revision headroom (RUNTIME l.1812, row 7); readiness;
+# the write.
 
 proc configTarget(
     st: State,
@@ -6964,12 +6965,14 @@ proc updateRefusal(
   Opt.none(EngineError)
 
 proc commitConfig(st: State, q: Request, y: Inst, next: ConfigState) =
-  ## A Runtime Control mutation: frame size [G233], headroom [G234] (row 7,
-  ## before readiness, l.1831-1832), readiness, the write, then the commit and
-  ## its event; answered with the state.
+  ## A Runtime Control mutation: frame size (CONFIG §5's last row, l.198,
+  ## INVALID_PARAMS without detail), headroom (RUNTIME l.1812, row 7, before
+  ## readiness, l.1831-1832), readiness, the write, then the commit and its
+  ## event; answered with the state.
   if not next.admissible:
     q.reply.answerError(
-      ecModule, "the configuration state would not fit a get_configuration response"
+      ecInvalidParams,
+      "the configuration state would not fit a get_configuration response",
     )
     return
   if not y.config.canMutate:
@@ -7104,13 +7107,14 @@ func applyDeadline(st: State): Duration =
     st.cfg.applyDeadline
 
 proc applyRefusal(y: Inst, expectedRevision: uint64): Opt[EngineError] =
-  ## [SPEC CONFIG §8 l.290-298 (CFG-0093, CFG-0141), l.303-305] The first row
-  ## of CONFIG §5's table, the revision, then §8's preconditions in the
-  ## table's row order, with the absent realization binding placed after
-  ## NOT_READY, so an instance that is not `ready` is NOT_READY (G171).
-  ## INVALID_PARAMS carries no detail (CFG-0143). Nothing is invoked or
-  ## changed on a refusal (CFG-0142). The Loader (row 6) and the revision's
-  ## headroom (row 7, `canAdvance`) follow in `configApply` (RUNTIME l.1831).
+  ## [SPEC CONFIG §8 l.299-306 (CFG-0093, CFG-0141, TXT-0418)] The first row
+  ## of CONFIG §5's table, the revision, then §8's rows in order: a held
+  ## realization whose binding is absent or not live is l.299's first row,
+  ## before NOT_READY; an instance with no realization, or only a failed or
+  ## lost one, is NOT_READY, having none to read (G171). INVALID_PARAMS
+  ## carries no detail (CFG-0143). Nothing is invoked or changed on a refusal
+  ## (CFG-0142). The Loader (row 6) and the revision's headroom (row 7,
+  ## `canAdvance`) follow in `configApply` (RUNTIME l.1811-1812, l.1831).
   template refuse(code: ErrorCode, text: string) =
     return Opt.some(engineError(code, text))
 
@@ -7126,19 +7130,21 @@ proc applyRefusal(y: Inst, expectedRevision: uint64): Opt[EngineError] =
     refuse(
       ecInvalidParams, "the configuration binding does not declare live reconfiguration"
     )
-  if y.state != msReady:
+  let r = y.realization
+  let held = r != nil and not (r.failed or r.lost or r.unresolved)
+  if held and (not r.live or r.initCommitment.isNone):
+    refuse(ecInvalidParams, "the realization has no live configuration binding")
+  if y.state != msReady or not held:
     refuse(ecNotReady, "the module instance is not ready")
   if y.apply != nil:
     # [CFG-0095] at most one attempt per instance
     refuse(ecNotReady, "a configuration is already being applied")
-  let r = y.realization
-  if r.isNil or not r.live or r.initCommitment.isNone:
-    refuse(ecInvalidParams, "the realization has no live configuration binding")
   if not commitmentsAgree(
     y.config.binding.commitment, y.config.staged.get.commitment, r.initCommitment.get
   ):
-    # [SPEC CONFIG l.296] Unreachable while a binding is fixed for its
-    # instance (CONFIG §7); kept for the rule.
+    # [SPEC CONFIG l.301, l.258 (TXT-0416)] Only restored or inconsistent
+    # state can differ while a binding is fixed for its instance (CONFIG §7);
+    # the rule still applies to it.
     refuse(ecVersionMismatch, "the configuration schema commitments differ")
   Opt.none(EngineError)
 
@@ -7164,8 +7170,8 @@ proc configApply(st: State, q: Request, x: Inst) =
       q.reply.answerError(ecNotReady, refused.get)
       return
   if not y.config.canAdvance:
-    # [IMPL-DECISION G234 (S9-2); RUNTIME l.1812, row 7] its promotion could
-    # not advance the revision
+    # [SPEC RUNTIME l.1812, row 7] its promotion could not advance the
+    # revision; the one-step headroom is [IMPL] (G234)
     q.reply.answerError(ecModule, "the configuration revision is exhausted")
     return
   st.requireReady(q)
@@ -7269,11 +7275,12 @@ proc applyDone(
 proc applied(st: State, job: int, res: LogosResult) =
   ## [SPEC CONFIG §8 l.305-319; LOADER §8] The hook returned. Unless its
   ## deadline already passed: success promotes the attempted record, written
-  ## before it is exposed, and answers its value revision [G236 interim
-  ## (TL-10)], without any lifecycle change (CFG-0103), whatever the
+  ## before it is exposed, and answers its value revision (CONFIG l.315;
+  ## G236), without any lifecycle change (CFG-0103), whatever the
   ## instance's state, a stop included (CFG-0140); a valid rejection changes
-  ## nothing and is MODULE_ERROR, its status not forwarded (CFG-0145,
-  ## CFG-0146); an invalid result is indeterminate (CFG-0147, direct mode).
+  ## nothing and is the `configuration-rejected` error arm, its status not
+  ## forwarded (CFG-0156, CFG-0146; RUNTIME l.1821, produced only here); an
+  ## invalid result is indeterminate (CFG-0147, direct mode).
   ## Then a release waiting for the hook goes on.
   var x: Inst
   if not st.applies.pop(job, x):
@@ -7352,7 +7359,7 @@ proc applyDone(
         )
     elif outcome.error.code == lecConfigurationRejected:
       x.config.adopt(x.config.withoutAttempt)
-      run.reply.answerError(ecModule, "the module rejected the configuration")
+      run.reply.answerTyped(recConfigurationRejected)
     else:
       x.config.adopt(x.config.withoutAttempt)
       run.reply.answerError(
