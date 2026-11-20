@@ -985,3 +985,45 @@ suite "pkg.ownership: shared type ownership (PM §16)":
       checkpoint layer
       check scanned > 0
     check checked > 20
+
+suite "pkg.appendix: the complete Package Manager contract schema (PM App A)":
+  proc rules(doc: string): seq[(string, string)] =
+    ## The rules of a mirrored CDDL document, in order: each rule's name and its
+    ## text with whitespace collapsed. A rule starts on a line that begins with a
+    ## name in column zero; every other line, a closing brace included, continues
+    ## it.
+    for line in doc.splitLines:
+      if line.strip.len == 0:
+        continue
+      let flat = line.splitWhitespace.join(" ")
+      if line[0] in {'a' .. 'z', 'A' .. 'Z', '_', '$', '@'}:
+        result.add((flat.split({' ', '/', '='})[0], flat))
+      else:
+        doAssert result.len > 0, "a continuation line before any rule"
+        result[^1][1].add " " & flat
+
+  test "[PKG-0613] [PKG-0614] [PKG-0615] [PKG-0616] [PKG-0617] [PKG-0621] [PKG-0622] [PKG-0623] [PKG-0625] [PKG-0629] [TXT-0454] [TXT-0501] [TXT-0502] [TXT-0503] [TXT-0564] [TXT-0577] App A is the section excerpts joined in spec order, rule for rule, and repeats no manifest rule":
+    # PM l.1842-1845: one block; the section blocks are excerpts of it in the
+    # same order, and it governs. Its rules are compared with the mirrored
+    # excerpts of §4.3, §5 (twice), §6, §10, §11, §12, §14 and §15.
+    let excerpts = [
+      core_pins.PackageSigningProfileDocument, core_pins.PackageIdentityDocument,
+      core_pins.PackageRecordsDocument, core_pins.PackageCatalogRecordsDocument,
+      core_pins.PackageInstalledArtifactDocument,
+      core_pins.PackageResolvedDependencyDocument,
+      core_pins.PackageRuntimeHandoffDocument, core_pins.PackageErrorsDocument,
+      core_pins.PackageManagerMethodsDocument,
+    ]
+    var joined: seq[(string, string)]
+    for e in excerpts:
+      joined.add rules(e)
+    let appendix = rules(core_pins.PackageManagerContractDocument)
+    check appendix.len == 38
+    check appendix.mapIt(it[0]) == joined.mapIt(it[0])
+    for i in 0 ..< min(appendix.len, joined.len):
+      checkpoint appendix[i][0]
+      check appendix[i][1] == joined[i][1]
+    check appendix[0] == ("_module", "_module = \"logos_package_manager\"")
+    # TXT-0502: the manifest schema of §4 is separate and is not repeated.
+    check appendix.allIt(not it[0].startsWith("logos.package_manifest."))
+    check appendix[1 ..^ 1].allIt(it[0].startsWith("logos.package_manager."))

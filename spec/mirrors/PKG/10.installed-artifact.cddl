@@ -1,0 +1,6 @@
+logos.package_manager.installed_artifact = {
+  id: logos.package_manifest.artifact_id,
+  kind: "module-binary" / "resource" / "schema" / "data",
+  local_path: tstr .size (1..4096),
+  hash: bstr .size 32,
+}

@@ -294,6 +294,27 @@ mirror = "PKG/15.methods.cddl"
 code = "PackageManagerMethodsDocument"
 package = "core"
 
+[pkg-installed-artifact-document]
+file = "spec-module-package-manager.md"
+section = "§10"
+mirror = "PKG/10.installed-artifact.cddl"
+code = "PackageInstalledArtifactDocument"
+package = "core"
+
+[pkg-runtime-handoff-document]
+file = "spec-module-package-manager.md"
+section = "§12"
+mirror = "PKG/12.runtime-handoff.cddl"
+code = "PackageRuntimeHandoffDocument"
+package = "core"
+
+[pkg-contract-appendix-document]
+file = "spec-module-package-manager.md"
+section = "App A"
+mirror = "PKG/app-a.contract.cddl"
+code = "PackageManagerContractDocument"
+package = "core"
+
 [pkg-errors-document]
 file = "spec-module-package-manager.md"
 section = "§14"

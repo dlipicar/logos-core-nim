@@ -663,6 +663,13 @@ package = "core"
 file = "spec-module-package-manager.md"
 section = "§6"
 
+# PM §10: the installed artifact record.
+[[mirror]]
+out = "PKG/10.installed-artifact.cddl"
+package = "core"
+file = "spec-module-package-manager.md"
+section = "§10"
+
 # PM §11: the resolved dependency edge an installed record keeps.
 [[mirror]]
 out = "PKG/11.resolved-dependency.cddl"
@@ -677,7 +684,8 @@ package = "core"
 file = "spec-module-package-manager.md"
 section = "§15"
 
-# PM §12: the Runtime handoff records, new at 6cac8335. Written by re-pin step P8.
+# PM §12: the Runtime handoff records, new at 6cac8335. Written by re-pin step P7a for the
+# App A test (moved from P8, which builds the records).
 [[mirror]]
 out = "PKG/12.runtime-handoff.cddl"
 package = "core"
@@ -690,6 +698,15 @@ out = "PKG/14.package-errors.cddl"
 package = "core"
 file = "spec-module-package-manager.md"
 section = "§14"
+
+# PM App A: the complete `logos.package_manager` contract schema in one block. The
+# section blocks above are excerpts of it, in the same order, and it governs (PM
+# l.1842-1845); test_package's pkg.appendix suite compares them.
+[[mirror]]
+out = "PKG/app-a.contract.cddl"
+package = "core"
+file = "spec-module-package-manager.md"
+section = "App A"
 
 # HASH App B.4: imported reference context (spec 6a4dfa28) ---------------------
 
