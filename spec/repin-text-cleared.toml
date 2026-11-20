@@ -3863,3 +3863,19 @@ test = "tests/test_host.nim"
 id = "TXT-0552"
 step = "P8"
 test = "tests/test_engine.nim"
+
+# P8b: exact matching and the relation before exposure (INTERFACE §2.6, RUNTIME §8) -------------------------------
+
+[[units]]
+id = "RUN-0265"
+compared = "RUNTIME l.1416-1418 at 6a4dfa28 forbade using an unvalidated `implements` claim to satisfy a provider requirement; l.1341-1343 at 6cac8335 add `extends`. checkContracts now compares every set a record states with the validated descriptor through matchesContracts (the primary root, the implemented and the extended roots as sets), so an `extends` claim the descriptor does not validate fails the start and makes no provider; test_engine's [RUN-0265] test adds a meter record claiming an extended root and a relay record claiming one more than its descriptor, and the stated-set test covers smaller, larger and other sets."
+
+[[text]]
+id = "TXT-0549"
+step = "P8"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0550"
+step = "P8"
+test = "tests/test_engine.nim"

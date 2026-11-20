@@ -124,6 +124,7 @@ import logos_sdk/cbor/[decode, utf8]
 import logos_sdk/commitment
 from ../durable import syncDir
 import logos_sdk/iface/[accept, outcome, surface]
+from logos_sdk/iface/provider import matchesContracts
 import logos_sdk/kit/rc_arms
 import ../loader/contract
 from ../loader/provider import
@@ -2793,27 +2794,71 @@ proc bootstrapFailure(e: LoaderError): Failure =
       kind: fkOther, reason: "realizer " & $e.code & ": " & e.message, internal: true
     )
 
+func references(
+    rec: ModuleRecord, b: ModuleBinding
+): tuple[primary: Opt[Digest], interfaces, extends: seq[Digest]] =
+  ## [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1340-1343, l.1349] The contract
+  ## references a record supplies, as `matchesContracts` compares them with the
+  ## validated descriptor: a field the record states, as stated.
+  ##
+  ## HELD ON TF-62 (DECISIONS G393 is not written yet): what an OMITTED field
+  ## supplies. R l.1349 lets an input omit `primary_contract`, `implements` or
+  ## both, and IF l.1717 requires an exact match. Until the owner answers, an
+  ## omitted field is not compared: it stands for the descriptor's own value,
+  ## as before P8. The interim put to the owner (synthesis §1, Q2): once a
+  ## record supplies any reference, an omitted primary is none and an omitted
+  ## array is empty. This is the one place that rule lives.
+  result.primary =
+    if rec.primaryContract.isSome:
+      rec.primaryContract
+    elif b.primary.isSome:
+      Opt.some(b.primary.get.root)
+    else:
+      Opt.none(Digest)
+  result.interfaces =
+    if rec.implements.len > 0:
+      rec.implements
+    else:
+      b.interfaces.mapIt(it.root)
+  result.extends =
+    if rec.extends.len > 0:
+      rec.extends
+    else:
+      b.extends.mapIt(it.root)
+
 proc checkContracts(x: Inst, r: RealizationView): Result[bool, string] =
   ## [SPEC RUNTIME §3.3, §3.6] The expected contracts against the validated
   ## call surface. Returns whether the instance exposes a provider view.
   let rec = x.record
   if rec.primaryContract.isNone and rec.implements.len == 0:
-    # [SPEC RUNTIME §8 l.1423-1425] No declared contract: no provider record,
-    # whatever the module exports.
+    # [SPEC RUNTIME §8 l.1350-1351] No declared contract: no provider record,
+    # whatever the module exports. A record with `extends` names one too
+    # (`checkRecord`, G394 r11).
     return ok(false)
   if not r.provider:
     return err("the module exposes no call surface")
-  if rec.primaryContract.isSome:
-    if r.contracts.primary.isNone or
-        r.contracts.primary.get.root != rec.primaryContract.get:
-      return err("the primary contract differs from the expected one")
-  for c in rec.implements:
-    var found = false
-    for i in r.contracts.interfaces:
-      if i.root == c:
-        found = true
-    if not found:
-      return err("an expected interface contract is not implemented")
+  # [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1342-1346] Each set the record
+  # states equals the validated descriptor's: the primary root, and the
+  # implemented and extended roots as sets. The descriptor was accepted on
+  # this thread, its `extends` entries each related to the contract it
+  # describes (`acceptCallSurfaceDescriptor`), so no claim the provider does
+  # not validate makes a provider path (RUN-0265, RUN-1104).
+  let b = r.contracts
+  let s = references(rec, b)
+  if not b.matchesContracts(s.primary, s.interfaces, s.extends):
+    let own =
+      if b.primary.isSome:
+        Opt.some(b.primary.get.root)
+      else:
+        Opt.none(Digest)
+    return err(
+      if s.primary != own:
+        "the primary contract differs from the expected one"
+      elif not b.matchesContracts(own, s.interfaces, b.extends.mapIt(it.root)):
+        "the implemented interface contracts differ from the expected ones"
+      else:
+        "the extended contracts differ from the expected ones"
+    )
   ok(true)
 
 proc promote(st: State, a: Attempt) {.gcsafe.}

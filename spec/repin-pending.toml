@@ -31,7 +31,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "BCP-0102" = "P9"
 "BCP-0103" = "P9"
 "IFC-0957" = "P8"
-"RUN-1104" = "P8"
 
 [units.changed]
 "IFC-0246" = "P8"
@@ -39,7 +38,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "PKG-0347" = "P8"
 "PKG-0351" = "P8"
 "RUN-0258" = "P8"
-"RUN-0265" = "P8"
 
 [stale]
 "BCP-0093" = "P9"
@@ -159,27 +157,6 @@ side = "new"
 source = "M28"
 class = "behaviour"
 what = "The handoff carries extends, and Runtime requires the descriptor's extended-contract set to match it exactly"
-
-[[text]]
-id = "TXT-0549"
-step = "P8"
-spec = "RUN"
-line = "1344"
-side = "new"
-section = "§8"
-class = "todo"
-guard = true
-what = "`extends` lists earlier contracts that a contract provided by the module extends under LOGOS-MODULE-COMMITMENT-MODEL."
-
-[[text]]
-id = "TXT-0550"
-step = "P8"
-spec = "RUN"
-line = "1346"
-side = "new"
-section = "§8"
-class = "todo"
-what = "For a native provider those documents are the entries of its call-surface descriptor under LOGOS-MODULE-INTERFACE Section 2.6."
 
 [[text]]
 id = "TXT-0551"
