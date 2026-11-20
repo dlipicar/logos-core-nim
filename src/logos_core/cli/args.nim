@@ -63,17 +63,38 @@ func refusal(msg: string): Conv =
 
 # The request rule --------------------------------------------------------------------
 
-func requestShape*(cs: ContractSet, m: SurfaceMethod): Result[RequestShape, string] =
-  ## [SPEC INTERFACE §1.2] `m`'s request declaration in its defining document's
-  ## schema set (the one the payload validator uses).
+func shapeOf(
+    cs: ContractSet, doc: int, decl, what: string
+): Result[RequestShape, string] =
+  ## [SPEC INTERFACE §1.2] The declaration `decl` in the schema set of the
+  ## document `doc` (the one the payload validator uses).
   let docs = cs.documents
-  if m.doc < 0 or m.doc >= docs.len:
-    return err(m.bare & " names no document of the contract set")
-  let set = schemaSetFor(docs[m.doc].model, cs.context)
-  let d = set.docs[0].find(m.request)
+  if doc < 0 or doc >= docs.len:
+    return err(what & " names no document of the contract set")
+  let set = schemaSetFor(docs[doc].model, cs.context)
+  let d = set.docs[0].find(decl)
   if d.isNone or d.get.kind == dkMethod:
-    return err(m.request & " is not declared")
-  ok(RequestShape(set: set, body: d.get.body, methodName: m.bare))
+    return err(decl & " is not declared")
+  ok(RequestShape(set: set, body: d.get.body, methodName: what))
+
+func requestShape*(cs: ContractSet, m: SurfaceMethod): Result[RequestShape, string] =
+  ## `m`'s request rule.
+  shapeOf(cs, m.doc, m.request, m.bare)
+
+func responseShape*(cs: ContractSet, m: SurfaceMethod): Result[RequestShape, string] =
+  ## `m`'s response rule, for `describe`.
+  shapeOf(cs, m.doc, m.response, m.bare)
+
+func eventShape*(cs: ContractSet, e: SurfaceEvent): Result[RequestShape, string] =
+  ## [SPEC INTERFACE §1.5] `e`'s payload rule: the event declaration's body.
+  let docs = cs.documents
+  if e.doc < 0 or e.doc >= docs.len:
+    return err(e.id & " names no document of the contract set")
+  let set = schemaSetFor(docs[e.doc].model, cs.context)
+  let d = set.docs[0].find(e.id)
+  if d.isNone or d.get.kind != dkEvent:
+    return err(e.id & " is not declared as an event")
+  ok(RequestShape(set: set, body: d.get.body, methodName: e.id))
 
 func deref(s: SchemaSet, doc: int, n: SchemaNode): Result[(int, SchemaNode), string] =
   ## The node a chain of references names, and the document it is in.
@@ -146,6 +167,10 @@ func typeText(s: SchemaSet, doc: int, n: SchemaNode, depth = 0): string =
       parts.join(" / ")
   of snLocalRef, snImportedRef:
     "?"
+
+func ruleText*(sh: RequestShape): string =
+  ## The rule's type, as `describe` shows it.
+  typeText(sh.set, 0, sh.body)
 
 func isStructured(s: SchemaSet, doc: int, n: SchemaNode): bool =
   let r = deref(s, doc, n)
