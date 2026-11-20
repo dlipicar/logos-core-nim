@@ -197,6 +197,11 @@ default = "deferred:tier-5"
 # (G217 as amended); the rule applies once package-backed requests are presented to
 # policy, with package-backed selection (Tier 5).
 "PKG-0502" = "out-of-scope:a permission for package producers"
+# §11 l.1234-1239: obligations and a permission of package producers across releases, which the
+# Package Manager does not verify (l.1239); a dependency that needs a contract lists it (re-pin P7b, I110 Q11).
+"PKG-0594" = "out-of-scope:a requirement on package producers"
+"PKG-0595" = "out-of-scope:a requirement on package producers"
+"PKG-0596" = "out-of-scope:a permission for package producers"
 "PKG-0335" = "deferred:tier-5"
 # §14: the error codes are built; method results are not.
 "PKG-0358" = "claimed"

@@ -282,3 +282,19 @@ func signerRecord*(v: VerifiedPackage): CborValue =
   let s = claims()
   doAssert s.set.validatePath(0, s.signer, r).isOk, "package_signer drifted"
   r
+
+type PackageSigner* = object
+  ## [SPEC PM §4.3] `logos.package_manager.package_signer`: the signing profile
+  ## and the exact public-key bytes, not the kid.
+  profile*: string
+  key*: PublicKey
+
+func packageSigner*(v: VerifiedPackage): PackageSigner =
+  ## The signer the verification that accepted `v` authenticated.
+  PackageSigner(profile: signingProfile(), key: v.signer.key)
+
+func accepts*(t: TrustInput, s: PackageSigner, package: string): bool =
+  ## [SPEC PM §4.1, §11 l.1292-1293] A retained signer is currently accepted
+  ## for `package` when its profile is this verifier's and an accepted anchor
+  ## with exactly its key authorizes exactly that name.
+  s.profile == signingProfile() and t.authorizesKey(s.key, package)

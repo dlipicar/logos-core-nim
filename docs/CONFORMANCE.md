@@ -673,6 +673,25 @@ bytes of Transport input and output, and each listener process has one listener 
 A caller's outbound connections have no count here: the facade process opens one for each consumer
 route and bounds them with its routes (5-7b).
 
+## Resolver limits
+
+PACKAGE MANAGER §11 (PKG-0597, PKG-0598) as built in `src/logos_core/package/resolver.nim`
+(DECISIONS G361). Protected policy supplies every limit; `resolverLimits` and
+`decodeResolverLimits` refuse a missing, non-positive or larger value before any root operation, and
+no package, manifest, catalog, source or caller can change one. These are the greatest values
+supported (`MaxResolverLimits`):
+
+| Limit | Maximum | Counts |
+|---|---|---|
+| `partial_closure_names` | 4,096 | distinct package names in one partial closure, the root included |
+| `dependency_depth` | 4,095 | the greatest number of edges on a path from the root (4,096 names make no longer path) |
+| `candidates_per_name` | 4,096 | records charged for one package name: one per name and version (DECISIONS I110, B3) |
+| `assignment_attempts` | 1,048,576 | tentative bindings in one root operation, never decreasing |
+
+At these values a chain of 4,096 names resolves in each build mode (`tests/test_resolver.nim`). Each
+bind recomputes every depth, so the worst case is about 4.3e9 edge visits: slow, with no time-out to
+reach. Exceeding a limit ends the root operation with `dependency-unavailable` and changes nothing.
+
 ## Event output overflow
 
 TRANSPORT §5.2 (TRN-0309, TRN-0310) as built in `io/callee.nim` and `io/loop.nim`:

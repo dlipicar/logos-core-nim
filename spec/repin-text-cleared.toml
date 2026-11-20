@@ -2910,3 +2910,144 @@ test = "tests/test_package.nim"
 id = "TXT-0577"
 step = "P7"
 test = "tests/test_package.nim"
+
+# P7b: the resolver --------------------------------------------------------------------------------------------
+
+[[units]]
+id = "PKG-0594"
+decision = "I110"
+
+[[units]]
+id = "PKG-0595"
+decision = "I110"
+
+[[units]]
+id = "PKG-0596"
+decision = "I110"
+
+[[stale]]
+id = "PKG-0317"
+compared = "PM l.1280 at 6a4dfa28 ('exclude a candidate that fails this requirement before ordering candidate versions') is replaced by PKG-0600 (l.1294 at 6cac8335): eligibility is established when a candidate is reached in the required order, and a failing one is excluded before assignment. The test tagged [PKG-0317] is retagged [PKG-0600], and the ineligible record is now charged (TXT-0482)."
+
+[[deferred]]
+id = "TXT-0493"
+rides = "PKG-0608"
+decision = "G166"
+reason = "Which signature counts for the signer replacement of a request without a source (PM l.1687): the replacement is PKG-0608's, which 5-5 builds with install_package. The resolver already keeps the root's selected source (TXT-0489)."
+
+[[deferred]]
+id = "TXT-0494"
+rides = "PKG-0608"
+decision = "G166"
+reason = "The replacement applies to the identity the request names and not to its installed dependencies (PM l.1688): PKG-0608's, which 5-5 builds."
+
+[[deferred]]
+id = "TXT-0495"
+rides = "PKG-0608"
+decision = "G166"
+reason = "The replacement is an installed-state change under §15.1 (PM l.1690): installed state is 5-5's."
+
+[[text]]
+id = "TXT-0473"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0474"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0475"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0476"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0478"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0479"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0481"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0482"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0483"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0484"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0485"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0486"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0487"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0489"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0496"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0522"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0479 and PKG-0599: a name's depth is the greatest number of edges on any path from the root, rechecked when an added edge deepens it."
+compared = "PM l.1250 at 6a4dfa28 against l.1256-1260 at 6cac8335; resolver.nim computeDepths and settleDepths replace the breadth-first depthOf (I69 as revised in I110)."
+
+[[text]]
+id = "TXT-0523"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0481 to TXT-0483: a consideration is the examination of one record whose version satisfies the requirements, an ineligible one and a root one included."
+compared = "PM l.1254 at 6a4dfa28 against l.1262-1264 at 6cac8335; resolver.nim charges before evaluating, in the dependency loop and in selectRoot."
+
+[[text]]
+id = "TXT-0477"
+step = "P7"
+kind = "informative"
+reading = "Interchangeability is a statement about producers' releases; the Package Manager does not verify it (l.1239) and resolution compares contracts by commitment only."
+compared = "PM l.1238 at 6cac8335 against resolver.nim meets and dependencyCandidate, which check a listed contract by its encoding against what the candidate provides."
+
+[[text]]
+id = "TXT-0491"
+step = "P7"
+kind = "holds"
+reading = "The Capability Authority, not the Package Manager, checks a requested permission against its definition's CDDL; the Package Manager decodes an unknown permission (PKG-0607)."
+compared = "PM l.1369 at 6cac8335 against authority/scopes.nim validateScopes with the selected profile (unknown-permission, invalid-constraints), and package/manifest.nim, which consults no permission definition (test_package's [PKG-0607] case)."
+site = "tests/test_authority.nim"
+named = "a defined permission passes; an undefined one is unknown-permission"
