@@ -137,12 +137,26 @@ proc onAcceptable(arg: pointer) {.gcsafe, raises: [].} =
 
 proc onEnd(arg: pointer) {.gcsafe, raises: [].}
 
-proc boundaryFor(s: Serve, contract: Digest): Result[Boundary, string] =
+proc boundaryFor(
+    s: Serve, contract: Digest, earlier: Opt[ContractInput]
+): Result[Boundary, string] =
+  ## The session's boundary, kept per selected contract. The primary and its
+  ## interfaces are built from the set `serve` accepted; an earlier contract
+  ## (re-pin P8b; DECISIONS G394) from its own input, which comes with each
+  ## session that selects it and is accepted at the first, never in `serve`:
+  ## the payload commitment is then taken under its own root (TRANSPORT
+  ## l.634; INTERFACE l.1722).
   var b: Boundary
   if s.boundaries.pop(contract, b):
     s.boundaries[contract] = b
     return ok(b)
-  b = ?boundary(s.contracts, contract)
+  if earlier.isSome and earlier.get.root == contract:
+    let set = ?acceptSchemaResponse(
+      earlier.get.schema, contract, AcceptOptions(system: earlier.get.system)
+    )
+    b = ?boundary(set, contract)
+  else:
+    b = ?boundary(s.contracts, contract)
   s.boundaries[contract] = b
   ok(b)
 
@@ -159,7 +173,7 @@ proc admit*(io: Io, c: Conn, v: AdmitVerdict) =
       if s.isNil:
         Result[Boundary, string].err("the endpoint is no longer served")
       else:
-        s.boundaryFor(v.binding.contract)
+        s.boundaryFor(v.binding.contract, v.earlier)
     if b.isErr:
       io.closeConn(c, ccProtocol, ecModule, Opt.some(protocolErrorBody(ecModule)))
       return

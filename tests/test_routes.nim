@@ -9,7 +9,9 @@
 ## calls Runtime Control as that module. Module code runs on the engine's
 ## workers, so the test modules keep their state in atomics.
 
-import std/[atomics, monotimes, os, sequtils, strutils, tables, times, typedthreads]
+import
+  std/
+    [algorithm, atomics, monotimes, os, sequtils, strutils, tables, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
 import logos_sdk/abi/[checks, types]
@@ -1391,6 +1393,123 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     check rc.close(route).code == ecOk
     sleep(20)
     check seen.count.load == 0
+    e.finish()
+
+suite "run.routes: earlier contracts a provider extends (RUNTIME §8 l.1340-1347, l.1368, §9.3; INTERFACE §1.2) [IMPL-DECISION G394]":
+  # The relay provider (`support/relayfixture`): B with two methods, two
+  # events and the interface `pulse`; A1 drops `reset` and keeps `pulse`; A2
+  # drops `cleared` and does not select `pulse`. In the local-transport
+  # parity pass each route here reaches the Runtime's endpoint for it.
+  proc readParams(channel: uint32): seq[byte] =
+    encodeCbor(cborMap((cbor("channel"), cbor(uint64(channel)))))
+
+  let empty = encodeCbor(cborMap())
+
+  test "[IFC-0957] [TXT-0535] [TXT-0553] [TXT-0275] one provider record serves its primary contract and each earlier view; a route to a view names it and is answered by the same implementation (INTERFACE l.199-203; RUNTIME l.90-91, l.2852)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    let r = e.started(relayRecord(), "r")
+    let (_, rc) = e.startClient()
+    let before = relayCalls.load
+    for (key, root) in [("b", relayRoot), ("a1", relayA1Root), ("a2", relayA2Root)]:
+      let made = rc.establish(key, root)
+      check made.code == ecOk
+      let rec = made.routesOf.routes[0]
+      # Each route selects one contract, and its record names that one.
+      check rec.expected_contract.get.schema_root == @root
+      check rec.target_provider.provider == r.providerId
+      check rec.instance == Opt.some("r")
+      let (code, made2) = rc.materialize(rec.route, root, relaySchema(root))
+      require code == ecOk
+      var h = made2
+      let x = h.raw("read", readParams(3))
+      check x.code == ecOk
+      check decodeCbor(x.response).tryGet.lookup("value").get.getUint64 ==
+        Opt.some(RelayValue)
+      h.release()
+    # B's own dispatch answered all three.
+    check relayCalls.load == before + 3
+    e.finish()
+
+  test "[TXT-0551] a route to an earlier view resolves only that contract's methods: A1 does not know the method it drops, and only a view whose contract selects the interface has its method (RUNTIME l.1347; INTERFACE l.202)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    discard e.started(relayRecord(), "r")
+    let (_, rc) = e.startClient()
+    var (cb, b) = rc.relayHandle("b", relayRoot)
+    var (c1, a1) = rc.relayHandle("a1", relayA1Root)
+    var (c2, a2) = rc.relayHandle("a2", relayA2Root)
+    require cb == ecOk and c1 == ecOk and c2 == ecOk
+    check b.raw("reset", empty).code == ecOk
+    check b.raw("ping", empty).code == ecOk
+    check a1.raw("reset", empty).code == ecMethodNotFound
+    check a1.raw("ping", empty).code == ecOk
+    check a1.raw("read", readParams(1)).code == ecOk
+    check a2.raw("reset", empty).code == ecOk
+    check a2.raw("ping", empty).code == ecMethodNotFound
+    check a2.raw("read", readParams(1)).code == ecOk
+    b.release()
+    a1.release()
+    a2.release()
+    e.finish()
+
+  test "[IFC-0958] logos.schema on a route to an earlier view answers that contract's own documents, never the extending contract's (INTERFACE l.203, l.3227-3234; RUNTIME l.432-434)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    discard e.started(relayRecord(), "r")
+    let (_, rc) = e.startClient()
+    var answers: seq[seq[byte]]
+    for (key, root, doc, ifaces) in [
+      ("b", relayRoot, relayDoc, 1),
+      ("a1", relayA1Root, relayA1Doc, 1),
+      ("a2", relayA2Root, relayA2Doc, 0),
+    ]:
+      var (code, h) = rc.relayHandle(key, root)
+      require code == ecOk
+      let s = h.raw("schema", [0xA0'u8])
+      check s.code == ecOk
+      check s.response == relaySchema(root)
+      check acceptSchemaResponse(s.response, root).isOk
+      let v = decodeCbor(s.response).tryGet
+      check v.lookup("schema").get.text == doc
+      check v.lookup("interface_schemas").get.items.len == ifaces
+      answers.add(s.response)
+      h.release()
+    check answers.deduplicate.len == 3
+    e.finish()
+
+  test "[TXT-0147] a requirement for an earlier view matches every provider that exposes it, by its root alone, and no provider that does not (RUNTIME l.1368)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    let r1 = e.started(relayRecord(), "r1")
+    let r2 = e.started(relayRecord(), "r2")
+    discard e.started(meter(), "m")
+    let (_, rc) = e.startClient()
+    for (key, root) in [("a2", relayA2Root), ("p", pulseRoot)]:
+      let all = rc.establish(key, root, all = true).routesOf
+      check not all.partial
+      check all.routes.mapIt(it.target_provider.provider).sorted ==
+        @[r1.providerId, r2.providerId].sorted
+      check all.routes.allIt(it.module == RelayModule)
+    e.finish()
+
+  test "[TXT-0554] a provider whose record states an earlier view is not selected for it before its bind or once its bind failed; with all-runtime-visible it is omitted (RUNTIME l.2995)":
+    let e = fixtureEngine(
+      config(
+        extra =
+          @[relayStatic(), checkStaticRegistration("relaybad", relayBadTable()).tryGet]
+      )
+    )
+    discard e.create(relayRecord(), "idle").tryGet
+    discard e.create(relayRecord(binding = "relaybad"), "bad").tryGet
+    check e.start("bad").tryGet.state == msError
+    let (_, rc) = e.startClient()
+    # Neither exposes A1: a single request has no provider to select.
+    check rc.establish("k1", relayA1Root).code == ecNotReady
+    let r = e.started(relayRecord(), "r")
+    let single = rc.establish("k2", relayA1Root)
+    check single.code == ecOk
+    check single.routesOf.routes[0].target_provider.provider == r.providerId
+    let all = rc.establish("k3", relayA1Root, all = true).routesOf
+    check all.routes.len == 1
+    check all.routes[0].target_provider.provider == r.providerId
+    check all.partial
     e.finish()
 
 suite "run.routes: routes follow their provider and consumer (RUNTIME §3.4, §9.3)":

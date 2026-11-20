@@ -851,6 +851,74 @@ suite "run.rc: describe_provider (RUNTIME §2.4 l.448-458)":
 
 # Permission settings ------------------------------------------------------------------
 
+suite "run.rc: a provider that extends earlier contracts (RUNTIME §2.4 l.411-416, l.1966; CA l.249-256) [IMPL-DECISION G394]":
+  func byBytes(a, b: seq[byte]): int =
+    cmpBytes(a, b)
+
+  proc discovered(e: Engine, provider: string): seq[seq[byte]] =
+    ## The contracts of the `discover` decisions `describe_provider` asked
+    ## about `provider`, sorted.
+    for a in e.answers():
+      if a.request.action == aaDiscover and a.request.target == provider:
+        result.add(a.request.contract)
+    result.sort(byBytes)
+
+  test "describe_provider asks one discover decision per earlier view too, before and after the bind, and returns the validated descriptor with its extends; a deny on one view fails the whole request (G394 r15)":
+    let views = @[@relayRoot, @pulseRoot, @relayA1Root, @relayA2Root].sorted(byBytes)
+    for bound in [true, false]:
+      # One engine each: a Capability Authority's allow would otherwise
+      # answer the second provider's decisions from the cache.
+      let e = fixtureEngine(config(extra = @[relayStatic()]))
+      if bound:
+        discard e.started(relayRecord(), "r")
+      else:
+        discard e.create(relayRecord(), "r").tryGet
+      let (_, rc) = e.startClient("c")
+      let p = e.view("r").tryGet.providerId
+      let r = rc.describeOf(providerAddress(p))
+      check e.discovered(p) == views
+      if bound:
+        check r.code == ecOk
+        let d = LogosNSRuntimeControlDescribeProviderResponse.decode(r.response).tryGet
+        check d.surface == relayDescriptor
+        let b = acceptCallSurfaceDescriptor(d.surface, RelayModule).tryGet
+        check b.extends.mapIt(@(it.root)).sorted(byBytes) ==
+          @[@relayA1Root, @relayA2Root].sorted(byBytes)
+      else:
+        # Never bound: the views of its record.
+        check r.code == ecNotReady
+      e.finish()
+    block:
+      # [SPEC CA l.254-256] A consumer whose rules allow only the current
+      # contract is refused once the provider states an earlier one.
+      let e = fixtureEngine(
+        config(
+          denying(deny(action = Opt.some(aaDiscover), contract = @relayA2Root)),
+          extra = @[relayStatic()],
+        )
+      )
+      discard e.started(relayRecord(), "r")
+      discard e.create(relayRecord(), "idle").tryGet
+      let (_, rc) = e.startClient("c")
+      for instance in ["r", "idle"]:
+        let r = rc.describeOf(providerAddress(e.view(instance).tryGet.providerId))
+        check r.code == ecNotAuthorised and r.detail.len == 0
+      e.finish()
+
+  test "list_modules reports a record's extends as it reports implements (RUNTIME l.1966; G394 r13)":
+    let e = fixtureEngine(config(extra = @[relayStatic()]))
+    discard e.started(relayRecord(), "r")
+    discard e.started(meter(), "m")
+    let (_, rc) = e.startClient("c")
+    let got = rc.modules().listed.modules
+    let r = got.filterIt(it.instance == Opt.some("r"))
+    check r.len == 1
+    check r[0].extends.get.mapIt(it.schema_root) == @[@relayA1Root, @relayA2Root]
+    check r[0].implements.get.mapIt(it.schema_root) == @[@pulseRoot]
+    let m = got.filterIt(it.instance == Opt.some("m"))
+    check m.len == 1 and m[0].extends.isNone
+    e.finish()
+
 suite "run.rc: permission settings in direct mode (RUNTIME l.2526-2604) [IMPL-DECISION G229]":
   test "[RUN-0893] [RUN-0910] [RUN-0469] [RUN-0471] every local instance has its settings at revision 1, empty and applied":
     let e = fixtureEngine(config())

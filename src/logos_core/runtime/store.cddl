@@ -70,6 +70,7 @@ lcn.rs_record = {
   implementation: lcn.rs_implementation,
   ? primary_contract: logos.schema_commitment,
   ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
   ? requires: [* lcn.rs_requirement],
   ? requested_permissions: [* lcn.rs_permission],
   ? state_assignment: tstr .size (1..128),

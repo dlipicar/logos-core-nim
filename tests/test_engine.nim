@@ -21,6 +21,7 @@ import logos_sdk/crypto/blake3
 import ../src/logos_core/package/manifest
 import logos_sdk/pins
 import logos_sdk/testing/[kitbuild, kitruntime], ./support/[slowdown, withoutloader]
+import ./support/relayfixture
 import logos_sdk/testing/fixtures/meter_impl
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "engine" / kitVariant
@@ -102,6 +103,8 @@ proc config(policy = allowAll()): EngineConfig =
   result.statics = @[
     checkStaticRegistration("gated", gatedTable()).tryGet,
     checkStaticRegistration("meter", meterModuleStaticSymbols()).tryGet,
+    checkStaticRegistration("relay", relayTable()).tryGet,
+    checkStaticRegistration("relaybad", relayBadTable()).tryGet,
   ]
 
 proc meterRoot(): Digest =
@@ -196,7 +199,7 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
   setup:
     reset()
 
-  test "[RUN-0128] [RUN-0261] [RUN-0262] [RUN-0267] [RUN-0268] [RUN-0281] [RUN-0287] [RUN-0289] [RUN-0845] a malformed record creates nothing":
+  test "[RUN-0128] [RUN-0261] [RUN-0262] [RUN-0267] [RUN-0281] [RUN-0287] [RUN-0289] [RUN-0845] [RUN-1105] [TXT-0552] [G394] a malformed record creates nothing":
     let e = newEngine(config())
     let d = default(Digest)
     var bad = @[
@@ -229,6 +232,39 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
     for r in bad:
       let x = e.create(r)
       check x.isErr and x.error.code == ecInvalidParams
+    # [RUN-1105; G394 r10, r11] Each refused for its own reason: a root in
+    # both `implements` and `extends`, two requirements naming one contract
+    # (TXT-0552), and `extends` with no contract the module provides.
+    var other, earlier: Digest
+    other[0] = 1
+    earlier[0] = 2
+    var across = gated()
+    across.implements = @[d]
+    across.extends = @[other, d]
+    var required = gated()
+    required.requires = @[
+      ProviderRequirement(contract: d, cardinality: cardSingle),
+      ProviderRequirement(contract: d, cardinality: cardAllVisible),
+    ]
+    var bare = gated()
+    bare.extends = @[d]
+    for (r, why) in [
+      (across, "an implemented or extended schema commitment repeats"),
+      (required, "two requires entries name one contract"),
+      (bare, "extends needs a primary_contract or implements"),
+    ]:
+      let x = e.create(r)
+      check x.isErr and x.error.code == ecInvalidParams and x.error.message == why
+    # The same sets, each well formed, are accepted.
+    var fine = gated()
+    fine.primaryContract = Opt.some(other)
+    fine.implements = @[d]
+    fine.extends = @[earlier]
+    fine.requires = @[
+      ProviderRequirement(contract: d, cardinality: cardSingle),
+      ProviderRequirement(contract: other, cardinality: cardAllVisible),
+    ]
+    check checkRecord(fine).isOk
     check e.list().withoutLoader.len == 0
     e.finish()
 
@@ -422,7 +458,7 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
   setup:
     reset()
 
-  test "[RUN-0104] [RUN-0105] [RUN-0106] [RUN-0114] [RUN-0134] [RUN-0265] [RUN-0266] [RUN-0288] [RUN-0795] [PKG-0288] the call surface is compared with the expected contracts":
+  test "[RUN-0104] [RUN-0105] [RUN-0106] [RUN-0114] [RUN-0134] [RUN-0265] [RUN-0266] [RUN-0288] [RUN-0795] [PKG-0288] [TXT-0549] the call surface is compared with the expected contracts":
     let e = newEngine(config())
     let root = meterRoot()
     var wrong = root
@@ -439,6 +475,21 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
     check not w.provider
     discard e.create(meter(implements = @[root]), "iface").tryGet
     check e.start("iface").tryGet.failureOf == "initialization-failed"
+    # [RUN-0265; TXT-0549] R l.1343-1344: an `extends` claim the descriptor
+    # does not validate never makes a provider, whether the provider extends
+    # nothing or other contracts; one it validates does.
+    var claims = meter(Opt.some(root))
+    claims.extends = @[wrong]
+    discard e.create(claims, "claims").tryGet
+    let cl = e.start("claims").tryGet
+    check cl.state == msError and cl.failureOf == "initialization-failed"
+    check not cl.provider
+    discard
+      e.create(relayRecord(extends = @[relayA1Root, relayA2Root, wrong]), "more").tryGet
+    check e.start("more").tryGet.failureOf == "initialization-failed"
+    discard e.create(relayRecord(), "relay").tryGet
+    let rv = e.start("relay").tryGet
+    check rv.state == msReady and rv.provider
     # A consumer-only module cannot satisfy an expected contract; its context
     # is destroyed before the instance is reported as failed.
     var g = gated()
@@ -450,6 +501,53 @@ suite "run.engine: readiness and failures (RUNTIME §3.3, §3.4, §3.6, §9.3, �
         destroys.load == 1
     )
     check live.load == 0
+    e.finish()
+
+  test "[IFC-0246] [RUN-0265] [G394] each contract set a record states equals the validated descriptor's":
+    # [SPEC INTERFACE l.1717] The primary root, and the implemented and
+    # extended roots as sets: a stated set that is smaller, larger or another
+    # fails the start. (What an omitted set means waits for TF-62.)
+    let e = newEngine(config())
+    var other: Digest
+    other[0] = 5
+    for (name, r) in [
+      ("fewer-extends", relayRecord(extends = @[relayA1Root])),
+      ("other-extends", relayRecord(extends = @[relayA1Root, other])),
+      ("more-implements", relayRecord(implements = @[pulseRoot, other])),
+      ("other-implements", relayRecord(implements = @[other])),
+      ("other-primary", relayRecord(primary = Opt.some(other))),
+      (
+        "earlier-as-primary",
+        relayRecord(primary = Opt.some(relayA1Root), extends = @[relayA2Root]),
+      ),
+    ]:
+      checkpoint name
+      discard e.create(r, name).tryGet
+      let v = e.start(name).tryGet
+      check v.state == msError and v.failureOf == "initialization-failed"
+      check not v.provider
+    # The same sets in another order are equal.
+    discard
+      e.create(relayRecord(extends = @[relayA2Root, relayA1Root]), "reordered").tryGet
+    check e.start("reordered").tryGet.state == msReady
+    e.finish()
+
+  test "[RUN-1104] [TXT-0550] a provider whose descriptor's extends entry does not hold is never bound":
+    # [SPEC RUNTIME l.1345-1346] The relation is established from the
+    # descriptor's own entries before any provider path exists: an entry its
+    # contract does not extend fails the bind, whatever the record states.
+    let e = newEngine(config())
+    discard e.create(relayRecord(binding = "relaybad"), "bad").tryGet
+    let v = e.start("bad").tryGet
+    check v.state == msError and not v.provider
+    checkpoint $v.failure
+    check "does not extend" in v.failure.get.reason
+    discard
+      e.create(relayRecord(binding = "relaybad", extends = @[]), "unclaimed").tryGet
+    check e.start("unclaimed").tryGet.state == msError
+    # The descriptor whose entries hold is bound.
+    discard e.create(relayRecord(), "good").tryGet
+    check e.start("good").tryGet.state == msReady
     e.finish()
 
   test "[RUN-0296] [RUN-0708] [RUN-0709] [RUN-1052] [RUN-1057] [RUN-0681] [RUN-0682] [RUN-0885] [TXT-0280] a failed start is classified (a Loader error is `loader-<code>`), cleaned, and leaves other instances running":

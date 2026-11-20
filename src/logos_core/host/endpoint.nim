@@ -46,7 +46,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[atomics, locks, os, strutils]
+import std/[atomics, locks, os]
 import results
 import logos_sdk/cbor
 import logos_sdk/abi/[checks, cstatus, types]
@@ -55,7 +55,7 @@ import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
 import ../transport/io/[loop, sock]
-import ../runtime/[carrier, entryframe, hostio, native]
+import ../runtime/[carrier, entryframe, hostio, native, servedroots]
 import ./[selected, state]
 
 const
@@ -843,6 +843,12 @@ proc submitLoop() =
       continue
     if cmd.kind == IoCommandKind.cmdTerminate and cmd.termPhase != tpBegin:
       endedByTerminate(cmd.conn)
+    if cmd.kind == IoCommandKind.cmdAdmit and cmd.verdict.kind == avEstablished:
+      # [G394; synthesis §3] A session on an earlier contract takes its input
+      # to the loop, which accepts the set at the first and keeps it
+      # (`callee.boundaryFor`); the Runtime's verdict never carries one to a
+      # host.
+      cmd.verdict.earlier = earlierInputOf(cmd.verdict.binding.contract)
     while true:
       let r = sv.loop.trySubmit(cmd)
       if r != sbBusy:
@@ -938,18 +944,10 @@ proc serveEndpoint*(
   let config = ?transportOf(transport)
   if runtimeId.len == 0 or runtimeId.len > TextCapacity:
     return err("the Runtime id is not valid")
-  let c = b.contracts
-  var roots: seq[Digest]
-  if c.primary.isSome:
-    roots.add(c.primary.get.root)
-  for i in c.interfaces:
-    roots.add(i.root)
-  if roots.len == 0:
-    return err("the provider has no contract")
-  let schema = schemaResponse(c, roots[0]).valueOr:
-    return err("the provider's schema response cannot be built: " & error)
-  let system = module.startsWith("logos_")
-  let input = encodeCbor(schema)
+  # [synthesis Q4; G394] The roots and the primary input the Runtime's own
+  # endpoint takes (`servedroots`): an earlier contract is served, and its
+  # input goes to the loop with each session that selects it (`submitLoop`).
+  let served = ?servedContracts(b.contracts)
   # [DECISIONS I106] The contracts are kept already, before `_MODULE_init`
   # (`selected.keepProvider`).
   sv = createShared(Served)
@@ -970,8 +968,8 @@ proc serveEndpoint*(
     kind: IoCommandKind.cmdServe,
     endpoint: HostEndpoint,
     listener: listener,
-    served: CalleeEndpoint(endpoint: path, provider: module, contracts: roots),
-    contract: ContractInput(root: roots[0], schema: input, system: system),
+    served: CalleeEndpoint(endpoint: path, provider: module, contracts: served.roots),
+    contract: served.primary,
   )
   if sv.loop.trySubmit(cmd) != sbOk:
     return err("the transport loop did not take the listener")

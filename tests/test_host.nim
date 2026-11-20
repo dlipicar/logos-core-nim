@@ -78,6 +78,10 @@ proc withEntry(v: CborValue, key: string, x: CborValue): CborValue =
 proc root(b: byte): SchemaCommitment =
   SchemaCommitment(schema_root: newSeqWith(32, b))
 
+func rootOf(c: SchemaCommitment): Digest =
+  for i in 0 ..< result.len:
+    result[i] = c.schema_root[i]
+
 proc authorityPolicy(source = "test"): LcnAuthorityPolicy =
   ## The smallest policy 8a loads: anyone may observe.
   LcnAuthorityPolicy.fromCbor(
@@ -179,7 +183,7 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.modules[0].module = repeat('a', 65)
     check parse(c).rejects("lcn.app_config")
 
-  test "[RUN-0741] present arrays are non-empty (RUNTIME §8 l.1428)":
+  test "[RUN-0741] [RUN-0267] present arrays are non-empty (RUNTIME §8 l.1357)":
     var c = baseConfig()
     c.modules = @[]
     check parse(c).rejects("modules is empty")
@@ -190,11 +194,67 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
     c.modules[1].implements = Opt.some(newSeq[SchemaCommitment]())
     check parse(c).rejects("implements is present but empty")
     c = baseConfig()
+    c.modules[1].primary_contract = Opt.some(root(7))
+    c.modules[1].extends = Opt.some(newSeq[SchemaCommitment]())
+    check parse(c).rejects("extends is present but empty")
+    c = baseConfig()
     c.modules[1].requires = Opt.some(newSeq[LcnAppRequirement]())
     check parse(c).rejects("requires is present but empty")
     c = baseConfig()
     c.modules[1].requested_permissions = Opt.some(newSeq[LcnAppPermission]())
     check parse(c).rejects("requested_permissions is present but empty")
+
+  test "[RUN-1105] [TXT-0548] [TXT-0552] [G394] the expected contract facts are the input's, and each set is checked":
+    # [TXT-0548] `primary_contract`, `implements` and `extends` are carried
+    # into the record as the configuration states them, for an instance and
+    # for a declaration.
+    var c = baseConfig()
+    c.modules[1].primary_contract = Opt.some(root(7))
+    c.modules[1].implements = Opt.some(@[root(8)])
+    c.modules[1].extends = Opt.some(@[root(9), root(10)])
+    var decl = LcnAppDeclaration(
+      module: "other_module",
+      implementation: c.modules[1].implementation,
+      primary_contract: Opt.some(root(11)),
+      extends: Opt.some(@[root(12)]),
+    )
+    c.declarations = Opt.some(@[decl])
+    let h = parse(c).get
+    let r = h.modules[1].record
+    check r.primaryContract == Opt.some(rootOf(root(7)))
+    check r.implements == @[rootOf(root(8))]
+    check r.extends == @[rootOf(root(9)), rootOf(root(10))]
+    check h.declarations[0].record.extends == @[rootOf(root(12))]
+    check h.declarations[0].record.implements.len == 0
+    # [RUN-1105; G394 r10] Unique over `implements` and `extends` together.
+    c = baseConfig()
+    c.modules[1].primary_contract = Opt.some(root(7))
+    c.modules[1].implements = Opt.some(@[root(8)])
+    c.modules[1].extends = Opt.some(@[root(8)])
+    check parse(c).rejects("an implemented or extended schema commitment repeats")
+    # [G394 r11] `extends` needs a contract the module provides.
+    c = baseConfig()
+    c.modules[1].extends = Opt.some(@[root(9)])
+    check parse(c).rejects("extends needs a primary_contract or implements")
+    # [TXT-0552] Each `requires` entry names a distinct contract.
+    c = baseConfig()
+    c.modules[1].requires = Opt.some(
+      @[
+        LcnAppRequirement(
+          contract: root(7),
+          cardinality: LcnAppRequirementCardinalityChoice(
+            kind: LcnAppRequirementCardinalityChoiceKind.Single
+          ),
+        ),
+        LcnAppRequirement(
+          contract: root(7),
+          cardinality: LcnAppRequirementCardinalityChoice(
+            kind: LcnAppRequirementCardinalityChoiceKind.All_runtime_visible
+          ),
+        ),
+      ]
+    )
+    check parse(c).rejects("two requires entries name one contract")
 
   test "[S5] a policy kind other than allow-all is not supported yet":
     var cv = toCbor(baseConfig())

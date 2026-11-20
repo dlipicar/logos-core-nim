@@ -3843,3 +3843,101 @@ test = "tests/test_lgx.nim"
 id = "TXT-0458"
 step = "P8"
 test = "tests/test_lgx.nim"
+
+# P8b: records, host configuration and the store (RUNTIME §8) -----------------------------------------------------
+
+[[units]]
+id = "RUN-0267"
+compared = "RUNTIME l.1428 at 6a4dfa28 required `implements`, `requires` and `requested_permissions` to be non-empty when present; l.1357 at 6cac8335 adds `extends`. The host configuration (lcn.app_module, lcn.app_declaration) and the stored record (lcn.rs_record) gain `? extends`, refused when present and empty; test_host's [RUN-0267] test refuses an empty `extends`, and test_engine's malformed-record test keeps its other cases."
+
+[[stale]]
+id = "RUN-0268"
+compared = "RUNTIME l.1429 at 6a4dfa28 (its unit's paragraph starts at l.1420) required unique implemented commitments. It became RUN-1105 (l.1358 at 6cac8335), which adds extended commitments, unique over both arrays together (G394 r10), and a distinct contract for each `requires` entry (M29). checkRecord enforces both; test_engine's malformed-record test is retagged from RUN-0268 to RUN-1105."
+
+[[text]]
+id = "TXT-0548"
+step = "P8"
+test = "tests/test_host.nim"
+
+[[text]]
+id = "TXT-0552"
+step = "P8"
+test = "tests/test_engine.nim"
+
+# P8b: exact matching and the relation before exposure (INTERFACE §2.6, RUNTIME §8) -------------------------------
+
+[[units]]
+id = "RUN-0265"
+compared = "RUNTIME l.1416-1418 at 6a4dfa28 forbade using an unvalidated `implements` claim to satisfy a provider requirement; l.1341-1343 at 6cac8335 add `extends`. checkContracts now compares every set a record states with the validated descriptor through matchesContracts (the primary root, the implemented and the extended roots as sets), so an `extends` claim the descriptor does not validate fails the start and makes no provider; test_engine's [RUN-0265] test adds a meter record claiming an extended root and a relay record claiming one more than its descriptor, and the stated-set test covers smaller, larger and other sets."
+
+[[text]]
+id = "TXT-0549"
+step = "P8"
+test = "tests/test_engine.nim"
+
+[[text]]
+id = "TXT-0550"
+step = "P8"
+test = "tests/test_engine.nim"
+
+# P8b: routes, views, local transport and the Module Host (RUNTIME §8, §9.3; INTERFACE §1.2) ----------------------
+
+[[text]]
+id = "TXT-0535"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0551"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0553"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0554"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0147"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0275"
+step = "P8"
+test = "tests/test_routes.nim"
+
+[[text]]
+id = "TXT-0323"
+step = "P8"
+kind = "removed"
+reading = "The old sentence let a provider record expose its primary contract and implemented interface views only. TXT-0275 replaces it and adds exact extended contract views; it clears by test."
+compared = "RUNTIME l.96 at 6a4dfa28 against l.90 at 6cac8335, and test_routes's [TXT-0275] test."
+
+# P8b: M28, the handoff's extends deferred to 5-8 (PACKAGE MANAGER §12; G391) -------------------------------------
+
+[[units]]
+id = "PKG-0338"
+decision = "G391"
+compared = "PM §12 l.1401 at 6cac8335 adds `? extends` to the handoff schema; the mirror `PKG/12.runtime-handoff.cddl` (P7a) has it. No handoff exists before 5-5 and 5-8, so the unit is deferred to 5-8 (G391)."
+
+[[units]]
+id = "PKG-0347"
+decision = "G391"
+compared = "PM l.1434-1435 at 6cac8335 add `extends` to the declaration fields the handoff preserves. 5-5 builds the handoff's construction, which carries `extends` from the manifest's module declaration; 5-8 checks it (G391)."
+
+[[units]]
+id = "PKG-0351"
+decision = "G391"
+compared = "PM l.1441 at 6cac8335 adds the extended-contract set to the exact match of the handoff with the validated descriptor. P8b builds that comparison for host-configuration and static records (`matchesContracts` with the extended set); 5-8 applies it to the handoff (G391)."
+
+[[deferred]]
+id = "TXT-0545"
+rides = "PKG-0351"
+decision = "G391"
+reason = "The handoff carries `extends` (PM l.1401) and the Runtime matches the descriptor's extended set with it exactly (l.1441): both are the handoff's, which 5-5 constructs and 5-8 checks; PKG-0351 is its requirement."

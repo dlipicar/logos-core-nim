@@ -186,12 +186,17 @@ func record(m: LcnAppModule | LcnAppDeclaration): Result[ModuleRecord, ConfigErr
     )
   if m.primary_contract.isSome:
     r.primaryContract = Opt.some(rootOf(m.primary_contract.get))
-  # [SPEC RUNTIME §8 l.1428] A present array is non-empty.
+  # [SPEC RUNTIME §8 l.1357] A present array is non-empty.
   if m.implements.isSome:
     if m.implements.get.len == 0:
       return err(configError("implements is present but empty"))
     for c in m.implements.get:
       r.implements.add(rootOf(c))
+  if m.extends.isSome:
+    if m.extends.get.len == 0:
+      return err(configError("extends is present but empty"))
+    for c in m.extends.get:
+      r.extends.add(rootOf(c))
   if m.requires.isSome:
     if m.requires.get.len == 0:
       return err(configError("requires is present but empty"))

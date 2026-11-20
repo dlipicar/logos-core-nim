@@ -259,6 +259,7 @@ type
     stateAssignment*: Opt[string]
     primaryContract*: Opt[Digest]
     implements*: seq[Digest]
+    extends*: seq[Digest] ## [G394 r13] the record's earlier contracts
     provider*: bool ## a provider view passed the §3.3 checks
     providerId*: string
       ## [SPEC RUNTIME §9.3 l.2862-2871] the instance's provider record, kept

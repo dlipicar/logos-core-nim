@@ -265,10 +265,13 @@ proc admitted*(
     e: ServedEndpoint,
     est: Established,
     consumerAttempt: string,
+    earlier = Opt.none(ContractInput),
 ): Session =
   ## [plan §2.5 Hello steps 3-5] The Hello passed and its ticket was redeemed:
   ## the session is recorded at the verdict. Its end at its decision's expiry
   ## is the Runtime's timer (`endsAt`), so the I/O end timer is not armed.
+  ## `earlier`: the selected earlier contract's input (G394), which the I/O
+  ## thread accepts at the endpoint's first session on it.
   inc sv.nextGeneration
   result = Session(
     conn: conn,
@@ -290,6 +293,7 @@ proc admitted*(
         response: est.response,
         binding: est.binding,
         endsIn: Opt.none(int64),
+        earlier: earlier,
       ),
     )
   )

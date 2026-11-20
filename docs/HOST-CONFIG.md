@@ -189,6 +189,7 @@ lcn.app_module = {
   implementation: lcn.app_implementation,
   ? primary_contract: logos.schema_commitment,
   ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
   ? requires: [* lcn.app_requirement],
   ? requested_permissions: [* lcn.app_permission],
   ? state_assignment: tstr .size (1..128),
@@ -247,6 +248,7 @@ lcn.app_declaration = {
   implementation: lcn.app_implementation,
   ? primary_contract: logos.schema_commitment,
   ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
   ? requires: [* lcn.app_requirement],
   ? requested_permissions: [* lcn.app_permission],
   ? persistent_state: true,
@@ -356,8 +358,8 @@ holds is not created again: it keeps its state and intent (below).
 | `instance` | The instance's protected `module_instance_id`, unique in the configuration. Names of the form the Runtime gives what it creates (`m-`, `s-` or `p-`, 32 lowercase hexadecimal digits, `-`, a decimal number) are refused, here and as `state_assignment`. |
 | `module` | The flat runtime module name (RUNTIME §1.3). |
 | `implementation` | `direct_static` with a `binding` identifier the host registers with `logos_runtime_register_binding` before `start`; `direct_dynamic` with an `artifact` (`id`, absolute `local_path`, BLAKE3-256 `hash`), verified against the exact bytes before mapping; or `hosted_dynamic` with `placement: "process"` and an `artifact`, verified the same way and mapped in a Module Host process of its own (needs `runtime.module_host`; below, "Module Hosts"). A static binding no entry names is kept until `destroy`; one a new instance names but never registered makes `start` fail with `LOGOS_ERR_INVALID_PARAMS` before anything runs, and a retained instance whose binding is no longer registered starts up mismatched (below, *Instances and the configuration*). A hosted implementation never names a static binding (RUNTIME l.1514), and `sandbox` and `container` placements are not offered. |
-| `primary_contract`, `implements` | Expected contract commitments. They are checked against what the implementation reports at binding; they prove nothing on their own (RUNTIME §8 l.1414-1418). Implemented commitments must be unique. |
-| `requires` | Provider requirements: a contract and a cardinality. They select and grant nothing. |
+| `primary_contract`, `implements`, `extends` | Expected contract commitments: the primary concrete contract, the implemented interfaces, and the earlier contracts that the module's contracts extend (COMMITMENT §9.1). They are checked against the call-surface descriptor the implementation reports at binding, and a stated set must equal the descriptor's; they prove nothing on their own (RUNTIME §8 l.1340-1343). Implemented and extended commitments are unique over both arrays, and `extends` needs `primary_contract` or `implements` (DECISIONS G394). |
+| `requires` | Provider requirements: a contract and a cardinality, each entry naming a distinct contract. They select and grant nothing. |
 | `requested_permissions` | Module-declared policy inputs, as in a package manifest (PM §4): names unique, `constraints` one deterministic-CBOR value. They grant nothing. |
 | `state_assignment` | The instance's state assignment id, `[A-Za-z0-9._-]`; no two instances share one (RUNTIME §8 l.1451). |
 | `configuration` | The module's configuration declaration (CONFIG §2): one deterministic-CBOR `logos.module_configuration.configuration_declaration`, its schema binding and an optional package default. See *Module configuration* below. |

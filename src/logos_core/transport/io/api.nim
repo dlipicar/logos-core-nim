@@ -114,6 +114,11 @@ type
       response*: seq[byte] ## the encoded Hello response
       binding*: RouteBinding ## never the ticket
       endsIn*: Opt[int64] ## when the session's authorization ends, from now
+      earlier*: Opt[ContractInput]
+        ## [G394; synthesis §3] with a session on an earlier contract: that
+        ## contract's input, accepted at the endpoint's first such session
+        ## and kept; [IMPL] it rides every one, so a first session that ends
+        ## before its verdict lands leaves nothing unaccepted
     of avFailed:
       code*: ErrorCode
       peer*: bool ## the caller reported it with a ProtocolError: send nothing

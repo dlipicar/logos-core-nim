@@ -124,6 +124,7 @@ import logos_sdk/cbor/[decode, utf8]
 import logos_sdk/commitment
 from ../durable import syncDir
 import logos_sdk/iface/[accept, outcome, surface]
+from logos_sdk/iface/provider import matchesContracts
 import logos_sdk/kit/rc_arms
 import ../loader/contract
 from ../loader/provider import
@@ -149,8 +150,8 @@ import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
     execauth, hostlock, hostsup, inventory, invoke, loaderbinding, observe, plumbing,
-    rcevents, served, sessionauth, settings, sidetable, statexfer, store, subend,
-    transported,
+    rcevents, served, servedroots, sessionauth, settings, sidetable, statexfer, store,
+    subend, transported,
   ]
 
 export plumbing
@@ -282,11 +283,14 @@ type
     surface: seq[byte]
       ## [SPEC RUNTIME l.540-541; I86] the call surface validated at its last
       ## bind, kept for `describe_provider` after the realization ends
-    surfaceContracts: seq[Digest] ## the exact contracts of `surface`
+    surfaceContracts: seq[Digest]
+      ## the exact contracts of `surface`: the primary, its interfaces, then
+      ## the earlier contracts it extends (`servedroots.servedRoots`)
     schemas: Table[Digest, seq[byte]]
       ## [SPEC RUNTIME §2.4 l.432-434] by contract root: the deterministic
-      ## `logos.schema_response` of each contract of `surface`, built from its
-      ## exact documents (DECISIONS I88)
+      ## `logos.schema_response` of the primary and of each interface of
+      ## `surface`, built from its exact documents (DECISIONS I88). An earlier
+      ## contract's is built when used and held by the route (G394).
     realized: RealizationStatus
       ## [IMPL-DECISION G227 (TL-08)] the realization status as of its last
       ## commit
@@ -941,6 +945,7 @@ func view(x: Inst): InstanceView =
     stateAssignment: x.record.stateAssignment,
     primaryContract: x.record.primaryContract,
     implements: x.record.implements,
+    extends: x.record.extends,
     provider: x.provider,
     providerId: x.providerId,
     attempt: x.current,
@@ -2793,27 +2798,71 @@ proc bootstrapFailure(e: LoaderError): Failure =
       kind: fkOther, reason: "realizer " & $e.code & ": " & e.message, internal: true
     )
 
+func references(
+    rec: ModuleRecord, b: ModuleBinding
+): tuple[primary: Opt[Digest], interfaces, extends: seq[Digest]] =
+  ## [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1340-1343, l.1349] The contract
+  ## references a record supplies, as `matchesContracts` compares them with the
+  ## validated descriptor: a field the record states, as stated.
+  ##
+  ## HELD ON TF-62 (DECISIONS G393 is not written yet): what an OMITTED field
+  ## supplies. R l.1349 lets an input omit `primary_contract`, `implements` or
+  ## both, and IF l.1717 requires an exact match. Until the owner answers, an
+  ## omitted field is not compared: it stands for the descriptor's own value,
+  ## as before P8. The interim put to the owner (synthesis §1, Q2): once a
+  ## record supplies any reference, an omitted primary is none and an omitted
+  ## array is empty. This is the one place that rule lives.
+  result.primary =
+    if rec.primaryContract.isSome:
+      rec.primaryContract
+    elif b.primary.isSome:
+      Opt.some(b.primary.get.root)
+    else:
+      Opt.none(Digest)
+  result.interfaces =
+    if rec.implements.len > 0:
+      rec.implements
+    else:
+      b.interfaces.mapIt(it.root)
+  result.extends =
+    if rec.extends.len > 0:
+      rec.extends
+    else:
+      b.extends.mapIt(it.root)
+
 proc checkContracts(x: Inst, r: RealizationView): Result[bool, string] =
   ## [SPEC RUNTIME §3.3, §3.6] The expected contracts against the validated
   ## call surface. Returns whether the instance exposes a provider view.
   let rec = x.record
   if rec.primaryContract.isNone and rec.implements.len == 0:
-    # [SPEC RUNTIME §8 l.1423-1425] No declared contract: no provider record,
-    # whatever the module exports.
+    # [SPEC RUNTIME §8 l.1350-1351] No declared contract: no provider record,
+    # whatever the module exports. A record with `extends` names one too
+    # (`checkRecord`, G394 r11).
     return ok(false)
   if not r.provider:
     return err("the module exposes no call surface")
-  if rec.primaryContract.isSome:
-    if r.contracts.primary.isNone or
-        r.contracts.primary.get.root != rec.primaryContract.get:
-      return err("the primary contract differs from the expected one")
-  for c in rec.implements:
-    var found = false
-    for i in r.contracts.interfaces:
-      if i.root == c:
-        found = true
-    if not found:
-      return err("an expected interface contract is not implemented")
+  # [SPEC INTERFACE §2.6 l.1717; RUNTIME §8 l.1342-1346] Each set the record
+  # states equals the validated descriptor's: the primary root, and the
+  # implemented and extended roots as sets. The descriptor was accepted on
+  # this thread, its `extends` entries each related to the contract it
+  # describes (`acceptCallSurfaceDescriptor`), so no claim the provider does
+  # not validate makes a provider path (RUN-0265, RUN-1104).
+  let b = r.contracts
+  let s = references(rec, b)
+  if not b.matchesContracts(s.primary, s.interfaces, s.extends):
+    let own =
+      if b.primary.isSome:
+        Opt.some(b.primary.get.root)
+      else:
+        Opt.none(Digest)
+    return err(
+      if s.primary != own:
+        "the primary contract differs from the expected one"
+      elif not b.matchesContracts(own, s.interfaces, b.extends.mapIt(it.root)):
+        "the implemented interface contracts differ from the expected ones"
+      else:
+        "the extended contracts differ from the expected ones"
+    )
   ok(true)
 
 proc promote(st: State, a: Attempt) {.gcsafe.}
@@ -2835,15 +2884,15 @@ proc adoptRealization(st: State, a: Attempt, r: RealizationView) =
   a.ends.setLen(0)
   if r.provider:
     x.surface = r.callSurface
-    x.surfaceContracts.setLen(0)
-    if r.contracts.primary.isSome:
-      x.surfaceContracts.add(r.contracts.primary.get.root)
-    for c in r.contracts.interfaces:
-      x.surfaceContracts.add(c.root)
+    x.surfaceContracts = r.contracts.servedRoots
     # [SPEC RUNTIME §2.4 l.432-434] `logos.schema` answers from these, never
-    # from a consumer's construction input.
+    # from a consumer's construction input. [G394; synthesis §3] An earlier
+    # contract's answer is not stored per entry: the realization keeps the
+    # binding, and a route that selects one builds it (`earlierAnswer`).
     x.schemas.clear()
     for root in x.surfaceContracts:
+      if r.contracts.isEarlier(root):
+        continue
       let v = schemaResponse(r.contracts, root)
       if v.isOk:
         x.schemas[root] = encodeCbor(v.get)
@@ -5596,10 +5645,14 @@ proc newRouteId(st: State): string =
   "route-" & st.prefix & "-" & $st.routeCount
 
 func expects(y: Inst, root: Digest): bool =
-  ## The instance's record expects `root` as its primary contract or as an
-  ## implemented interface.
+  ## The instance's record expects `root` as its primary contract, an
+  ## implemented interface or an earlier contract it extends. [SPEC RUNTIME
+  ## l.1368; synthesis Q6] A requirement matches every provider that exposes
+  ## a validated view with the root: under the exact match a bound
+  ## provider's validated views are the sets its record states, so the
+  ## record's sets are the candidates before and after its bind (G394).
   (y.record.primaryContract.isSome and y.record.primaryContract.get == root) or
-    root in y.record.implements
+    root in y.record.implements or root in y.record.extends
 
 func routable(y: Inst): bool =
   ## A ready provider that a route can select now.
@@ -5611,6 +5664,17 @@ proc accessBytes(a: LogosNSRuntimeControlRouteAccess): seq[byte] =
   if a.methods.isNone and a.publish_events.isNone and a.subscribe_events.isNone:
     return @[]
   encode(a).get(newSeq[byte]())
+
+func answerOf(r: Route, p: Inst): seq[byte] =
+  ## [SPEC RUNTIME §2.4 l.432-434; INTERFACE §5.1] The schema answer of the
+  ## route's selected contract: an earlier contract's is the route's own
+  ## (G394); the others are the provider's, kept at its bind.
+  if r.answer.len > 0:
+    r.answer
+  elif p.isNil:
+    newSeq[byte]()
+  else:
+    p.schemas.getOrDefault(r.selected.root)
 
 proc servedEndpoint(st: State, y: Inst): Result[ServedEndpoint, string] =
   ## [G257; plan §2.5] The endpoint serving provider `y`'s current
@@ -5624,27 +5688,12 @@ proc servedEndpoint(st: State, y: Inst): Result[ServedEndpoint, string] =
     return err("the Module Host's endpoint does not serve")
   if not st.shared.tport.started:
     return err("the transport is not running")
-  let b = y.realization.contracts
-  var roots: seq[Digest]
-  if b.primary.isSome:
-    roots.add(b.primary.get.root)
-  for i in b.interfaces:
-    roots.add(i.root)
-  if roots.len == 0:
-    return err("the provider has no contract")
-  let primary = roots[0]
-  let schema = y.schemas.getOrDefault(primary)
-  if schema.len == 0:
-    return err("the provider's schema response is missing")
+  # [synthesis Q4; G394] The roots and the primary input a Module Host's
+  # endpoint takes too (`servedroots`): an earlier contract is served, and
+  # its input comes with each session that selects it (`hello`).
+  let served = ?servedContracts(y.realization.contracts)
   st.sv.openEndpoint(
-    key,
-    y.id,
-    y.providerId,
-    y.record.module,
-    roots,
-    ContractInput(
-      root: primary, schema: schema, system: y.record.module.startsWith("logos_")
-    ),
+    key, y.id, y.providerId, y.record.module, served.roots, served.primary
   )
 
 proc issueTicket(
@@ -5806,6 +5855,16 @@ proc establish(st: State, q: Request, x: Inst) =
     if sel.isNone:
       omitted = true
       continue
+    var answer: seq[byte]
+    if y.realization.contracts.isEarlier(root):
+      # [SPEC INTERFACE §5.1 l.3243-3244; synthesis §3] An earlier contract's
+      # answer is built when a route selects it and held by that route; one
+      # over 8 MiB is never exposed through a ready route.
+      let input = earlierInput(y.realization.contracts, root).valueOr:
+        st.diagnose("no route to " & y.providerId & " was made: " & error)
+        omitted = true
+        continue
+      answer = input.schema
     checkAccessRoots(req.access, sel.get).isOkOr:
       q.reply.answerError(ecInvalidParams, error)
       return
@@ -5870,6 +5929,7 @@ proc establish(st: State, q: Request, x: Inst) =
           mode: mode,
           consumerAttempt: x.current,
           endpoint: endpoint,
+          answer: answer,
         ),
         ans,
       )
@@ -6318,6 +6378,12 @@ proc moduleRecord(st: State, y: Inst): (LogosNSRuntimeControlModuleRecord, Subje
     for c in v.implements:
       cs.add(schemaCommitmentOf(c))
     r.implements = Opt.some(cs)
+  if v.extends.len > 0:
+    # [SPEC RUNTIME l.1966; G394 r13] From the record, as `implements`.
+    var cs: seq[SchemaCommitment]
+    for c in v.extends:
+      cs.add(schemaCommitmentOf(c))
+    r.extends = Opt.some(cs)
   if v.failure.isSome:
     r.failure = Opt.some(v.failure.get.classification)
     r.reason = disclosedReason(v.failure.get)
@@ -6719,6 +6785,11 @@ proc describeProvider(st: State, q: Request, x: Inst) =
     if owner.record.primaryContract.isSome:
       contracts.add(owner.record.primaryContract.get)
     for c in owner.record.implements:
+      contracts.add(c)
+    # [SPEC CA l.249-256; G394 r15] One `discover` decision per earlier view
+    # too: a consumer whose rules name only the current contract is refused
+    # once the provider states one.
+    for c in owner.record.extends:
       contracts.add(c)
   var reqs: seq[AuthzRequest]
   for c in contracts:
@@ -9142,11 +9213,8 @@ proc admit(st: State, q: Request) =
       return
     q.reply.answer(
       Reply(
-        admission: Admission(
-          introspection: true,
-          capture: capture,
-          schema: p.schemas.getOrDefault(r.selected.root),
-        )
+        admission:
+          Admission(introspection: true, capture: capture, schema: r.answerOf(p))
       )
     )
     return
@@ -11336,18 +11404,27 @@ proc hello(st: State, ev: IoEvent) =
     st.sv.refused(ev.conn, est.error)
     return
   let r = st.route(est.get.binding.route)
-  discard st.sv.admitted(ev.conn, e, est.get, attempt)
+  var earlier = Opt.none(ContractInput)
+  if r.answer.len > 0:
+    # [synthesis §3; G394] The endpoint accepts an earlier contract's set when
+    # the first session selects it, from the input the route holds. A Module
+    # Host's endpoint takes its own (`host/endpoint.nim`).
+    let p = st.instances.getOrDefault(r.providerInstance)
+    if p != nil and not p.hosted:
+      earlier = Opt.some(
+        ContractInput(
+          root: r.selected.root,
+          schema: r.answer,
+          system: systemModule(r.selected.module),
+        )
+      )
+  discard st.sv.admitted(ev.conn, e, est.get, attempt, earlier)
   r.sessions.add(ev.conn)
 
 proc schemaBlob(st: State, r: Route): ptr SchemaBlob {.gcsafe.} =
   ## [plan §2.5] The provider's construction input for the route's selected
   ## contract (its validated surface), for a served invocation's checks.
-  let p = st.instances.getOrDefault(r.providerInstance)
-  let schema =
-    if p.isNil:
-      newSeq[byte]()
-    else:
-      p.schemas.getOrDefault(r.selected.root)
+  let schema = r.answerOf(st.instances.getOrDefault(r.providerInstance))
   newBlob(
     r.selected.root,
     cast[ptr UncheckedArray[uint8]](if schema.len > 0:
