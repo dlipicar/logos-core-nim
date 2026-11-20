@@ -96,12 +96,15 @@ proc orchestratorSink(line: string) {.nimcall, gcsafe, raises: [].} =
 proc storeLog(line: string) {.nimcall, gcsafe, raises: [].} =
   logWarn(line)
 
-proc sessionEvidenceKeys(s: Session, c: DaemonConfig): Result[seq[seq[byte]], string] =
-  ## [G397] The session's evidence keys, the configured one included.
+proc startEvidenceKeys(
+    s: Session, c: DaemonConfig, seen: TrustFileState
+): Result[seq[seq[byte]], string] =
+  ## [G397] The session's evidence keys, the configured one included, when
+  ## the trust file names an anchor.
   if c.value.call_audit.isSome and c.value.call_audit.get.evidence.isSome:
     let e = c.value.call_audit.get.evidence.get
-    return sessionEvidenceKeys(s, e.secret_key_file, e.kid)
-  sessionEvidenceKeys(s)
+    return startEvidenceKeys(s, seen, e.secret_key_file, e.kid)
+  startEvidenceKeys(s, seen)
 
 proc openEvidenceStore(s: Session, c: DaemonConfig): Result[EvidenceStore, string] =
   ## [G301] The store `call_audit.store` configures (check 4 made sure the
@@ -198,7 +201,7 @@ proc assembleDaemon*(
     s, bytes, seen, hooksBuild = opts.hooksBuild, checkKey = true, exe = opts.exe
   ).valueOr:
     return err(startError(ExitRefused, error))
-  let evidenceKeys = sessionEvidenceKeys(s, prepared.config).valueOr:
+  let evidenceKeys = startEvidenceKeys(s, prepared.config, seen).valueOr:
     return err(startError(ExitRefused, "the evidence keys: " & error))
   # [G299] The mark moves before the revision is used, never created here,
   # and nothing is refused after it moved (a change since the first read

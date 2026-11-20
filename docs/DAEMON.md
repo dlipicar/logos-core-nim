@@ -440,7 +440,8 @@ What the schema does not say (`package/trustdoc.nim`; key separation is `daemon/
 - **Names are exact.** Compared byte for byte, never folded or normalized; no name is special (`*`
   authorizes only a package named `*`).
 - **Keys** are any 48 bytes; two kids may share a key. No anchor may use a call-evidence key of the
-  session, retired ones included (§9).
+  session, retired ones included (§9). A start reads the bindings for this only when the file names an
+  anchor, and a binding it cannot read then refuses the start.
 - **Bounds.** The file is at most 1 MiB; that is its only bound beyond the schema's.
 - **Revision.** Not below the floor's, 1.
 - **Development anchors** (`development: true`) are in force only while the file's `development` switch

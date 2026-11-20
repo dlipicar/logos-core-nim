@@ -1115,6 +1115,19 @@ suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION
     check writeTrustFile(s, anchored(2)).isOk
     check establishTrust(s, keys).isOk
 
+  test "[IMPL-DECISION G397] a start reads the evidence keys only when the trust file names an anchor, and an unreadable binding then refuses it":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    let k = createEvidenceKey(s.keysDir, "rt-1").get
+    let path = s.keysDir / bindingFileName(k.binding.kid)
+    removeFile(path)
+    writeFile(path, "not a binding")
+    check sessionEvidenceKeys(s).isErr
+    check startEvidenceKeys(s, checkedTrust(s).get).get.len == 0
+    check writeTrustFile(s, anchored(2)).isOk
+    check startEvidenceKeys(s, checkedTrust(s).get).isErr
+    check s.markRevision == 1
+
   posixTest "the trust file is a private regular file: group access or a link is refused":
     let s = freshSession()
     discard initTrust(s, development = false).get

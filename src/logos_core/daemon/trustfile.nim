@@ -137,6 +137,18 @@ proc sessionEvidenceKeys*(
     keys.add((?readBinding(keyFile.parentDir / bindingFileName(kid))).public_key)
   ok(keys)
 
+proc startEvidenceKeys*(
+    s: Session, t: TrustFileState, keyFile = "", kid: openArray[byte] = []
+): Result[seq[seq[byte]], string] =
+  ## [G397] What key separation compares at a start whose first read gave
+  ## `t`: nothing when the file names no anchor, so a session without anchors
+  ## never reads its bindings for it; otherwise `sessionEvidenceKeys`, and a
+  ## binding that cannot be read refuses the start (fail closed). A file that
+  ## gains an anchor after the first read is refused as changed since then.
+  if t.file.signing.anchors.len == 0:
+    return ok(newSeq[seq[byte]]())
+  sessionEvidenceKeys(s, keyFile, kid)
+
 func separateKeys*(
     t: LcnPackageTrust, evidenceKeys: openArray[seq[byte]]
 ): Result[void, string] =
