@@ -370,6 +370,28 @@ func checkManifest*(m: Manifest): Result[void, PackageError] =
               " is not in commitment-byte order, or a commitment repeats"
           )
         )
+    # [SPEC PM §9 l.1142] An earlier contract needs one of the module's own.
+    if d.extends.len > 0 and d.primaryContract.isNone and d.implements.len == 0:
+      return err(
+        invalid(
+          "module " & d.module & ": extends with neither primary_contract nor implements"
+        )
+      )
+    # [IMPL-DECISION G392] (UF-38) An extended contract is not one the
+    # declaration provides: the Package Manager side of IF l.1712's identity.
+    var provided = initHashSet[seq[byte]]()
+    for c in d.implements:
+      provided.incl(encodeCbor(c))
+    if d.primaryContract.isSome:
+      provided.incl(encodeCbor(d.primaryContract.get))
+    for c in d.extends:
+      if encodeCbor(c) in provided:
+        return err(
+          invalid(
+            "module " & d.module &
+              ": an extends commitment is also its primary contract or an implements entry"
+          )
+        )
     var keys: seq[seq[byte]]
     for r in d.requires:
       keys.add(encodeCbor(r.field("contract")))
@@ -452,8 +474,10 @@ func checkManifest*(m: Manifest): Result[void, PackageError] =
   if not deps.increasing:
     return err(invalid("dependencies are not in name order, or a name repeats"))
 
-  # [SPEC PM §4 l.350] contract documents in commitment-byte order; P8 checks
-  # their content (PM l.355-360)
+  # [SPEC PM §4 l.355] non-empty when present.
+  if m.value.lookup("contract_documents").isSome and m.contractDocuments.len == 0:
+    return err(invalid("the contract_documents array is empty"))
+  # [SPEC PM §4 l.350, l.355] in commitment-byte order, one entry per commitment
   var documents: seq[CborValue]
   for c in m.contractDocuments:
     documents.add(c.commitment)
@@ -463,6 +487,31 @@ func checkManifest*(m: Manifest): Result[void, PackageError] =
         "contract_documents are not in commitment-byte order, or a commitment repeats"
       )
     )
+  # [SPEC PM §4 l.356-357] Each entry's document and inputs are `schema`
+  # artifacts present in every variant (the document content is checked when
+  # the archive opens, PM l.358-360).
+  for c in m.contractDocuments:
+    for id in @[c.schemaArtifact] & c.inputArtifacts:
+      let occurs = where.getOrDefault(id)
+      for (vi, kind) in occurs:
+        if kind != akSchema:
+          return err(
+            invalid(
+              "contract document artifact " & id & " has kind " & $kind & " in variant " &
+                m.variants[vi].id
+            )
+          )
+      if occurs.len != m.variants.len:
+        var have = initHashSet[int]()
+        for (vi, _) in occurs:
+          have.incl(vi)
+        for vi, v in m.variants:
+          if vi notin have:
+            return err(
+              invalid(
+                "contract document artifact " & id & " is missing from variant " & v.id
+              )
+            )
   ok()
 
 proc decodeManifest*(data: openArray[byte]): Result[Manifest, PackageError] =

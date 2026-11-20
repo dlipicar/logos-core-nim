@@ -31,6 +31,12 @@ type
     system*: bool
       ## [SPEC INTERFACE §1.3] a Logos-defined system, runtime or common-schema
       ## contract, which may use the reserved `logos` names
+    byOwnName*: bool
+      ## [SPEC PACKAGE MANAGER §4 l.359] [IMPL-DECISION G392] Decide `system`
+      ## for each document from its own contract name instead: Logos-defined
+      ## exactly when its `_module` begins `logos_` or its `_interface` begins
+      ## `logos.`, `logos-` or `logos_` (INTERFACE §1.3 l.251-252). A supporting
+      ## schema defines no contract and is ordinary.
 
   Contract* = object ## One accepted schema document.
     source*: string
@@ -204,12 +210,30 @@ func checkFields(n: SchemaNode, owner: string): Result[void, string] =
     discard
   ok()
 
-proc checkSource(source: string, opts: AcceptOptions): Result[void, string] =
-  ## Rules on the source rules themselves, before construction.
+func ownNameReserved(rules: seq[SrcRule]): bool =
+  ## [SPEC INTERFACE §1.3 l.251-252] The document's own contract name is
+  ## reserved: a `_module` text beginning `logos_`, or an `_interface` text
+  ## beginning `logos.`, `logos-` or `logos_`.
+  for r in rules:
+    let t = r.typ.unwrap
+    if t.kind != skLiteral or t.literal.kind != lkTstr:
+      continue
+    if r.name == "_module" and t.literal.text.startsWith("logos_"):
+      return true
+    if r.name == "_interface" and t.literal.text.isReservedName:
+      return true
+  false
+
+proc checkSource(source: string, opts: AcceptOptions): Result[AcceptOptions, string] =
+  ## Rules on the source rules themselves, before construction. Returns the
+  ## options that apply to this document.
   if source.len > MaxDocumentBytes:
     return err("the document is larger than 1 MiB (INTERFACE §5.3)")
   let rules = parseSource(source).valueOr:
     return err("cdCDDLe: " & $error)
+  var own = opts
+  if opts.byOwnName:
+    own.system = rules.ownNameReserved
   var declarationSeen = false
   for r in rules:
     if r.name in MetadataNames:
@@ -220,9 +244,9 @@ proc checkSource(source: string, opts: AcceptOptions): Result[void, string] =
       declarationSeen = true
       if preludeAlias(r.name).isSome:
         return err("the document redefines the prelude name " & r.name)
-      if r.name.isReservedName and not opts.system:
+      if r.name.isReservedName and not own.system:
         return err(r.name & " uses a reserved Logos name (INTERFACE §1.3)")
-  ok()
+  ok(own)
 
 proc checkModel(
     m: SchemaModel, ctx: SchemaContext, opts: AcceptOptions
@@ -272,9 +296,9 @@ proc acceptDocument*(
 ): Result[Contract, string] =
   ## [SPEC INTERFACE §1, §5.3] One schema document, built against `ctx` (the
   ## dependencies it may use).
-  ?checkSource(source, opts)
+  let own = ?checkSource(source, opts)
   let m = ?buildSchema(source, ctx)
-  ?checkModel(m, ctx, opts)
+  ?checkModel(m, ctx, own)
   ok(Contract(source: source, model: m, root: schemaRoot(m)))
 
 # A construction input set ----------------------------------------------------------
@@ -347,6 +371,21 @@ proc implementsOf*(source: string): seq[Digest] =
         d[i] = x.literal.bytes[i]
       roots.add(d)
   roots
+
+proc declaredRole*(source: string): SchemaRole =
+  ## [SPEC COMMITMENT §3.1 step 1] The role a document's metadata declares, read
+  ## from its source before construction: `_module` a concrete module,
+  ## `_interface` an interface, neither a supporting schema (also when the
+  ## source does not parse; construction then reports the error).
+  let rules = parseSource(source).valueOr:
+    return srSupporting
+  for r in rules:
+    if r.name == "_module":
+      return srModule
+  for r in rules:
+    if r.name == "_interface":
+      return srInterface
+  srSupporting
 
 proc acceptDependencies(
     interfaces, supporting: openArray[string], opts: AcceptOptions
@@ -464,6 +503,41 @@ proc acceptContractSet*(
   ?checkInputBytes(@[primary] & @interfaces & @supporting)
   let (ifaces, supp, ctx) = ?acceptDependencies(interfaces, supporting, opts)
   completeSet(?acceptDocument(primary, ctx, opts), ifaces, supp, ctx)
+
+proc acceptContractSetUsing*(
+    primary: string, interfaces, supporting: openArray[Contract], opts = AcceptOptions()
+): Result[ContractSet, string] =
+  ## [SPEC INTERFACE §1.1, §1.4, §5.3] `acceptContractSet` over dependencies
+  ## already accepted: each supporting schema against the pinned common schema
+  ## alone, and each interface against the pinned common schema and supporting
+  ## schemas among `supporting`. A caller that builds several sets from shared
+  ## documents accepts each of them once.
+  var sources = @[primary]
+  for c in interfaces:
+    sources.add(c.source)
+  for c in supporting:
+    sources.add(c.source)
+  ?checkInputBytes(sources)
+  var supp = @supporting
+  for c in supp:
+    if c.model.role != srSupporting:
+      return err("a supplied supporting schema has role " & $c.model.role)
+  supp.sort(cmpContract)
+  for i in 1 ..< supp.len:
+    if supp[i].model.namespace == supp[i - 1].model.namespace:
+      return err("two supporting schemas declare namespace " & supp[i].model.namespace)
+  let roots = supp.mapIt(it.root).toHashSet
+  for c in interfaces:
+    if c.model.role != srInterface:
+      return err("a supplied interface document has role " & $c.model.role)
+    for r in c.model.importedRoots:
+      if r notin roots:
+        return err(
+          "the interface " & c.model.namespace &
+            " uses a supporting schema that is not supplied"
+        )
+  let ctx = dependencyContext(supp, interfaces)
+  completeSet(?acceptDocument(primary, ctx, opts), interfaces, supp, ctx)
 
 func supportingOf*(s: ContractSet, c: Contract): seq[Contract] =
   ## [SPEC INTERFACE §1.1, §5.1] The supporting schemas of the set that `c`

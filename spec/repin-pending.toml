@@ -31,12 +31,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "BCP-0102" = "P9"
 "BCP-0103" = "P9"
 "IFC-0957" = "P8"
-"PKG-0577" = "P8"
-"PKG-0578" = "P8"
-"PKG-0579" = "P8"
-"PKG-0580" = "P8"
-"PKG-0589" = "P8"
-"PKG-0590" = "P8"
 "RUN-1104" = "P8"
 "RUN-1105" = "P8"
 
@@ -158,27 +152,6 @@ side = "new"
 section = "§1.2"
 class = "todo"
 what = "Such a view selects the earlier schema root and contains only its declarations; each of its methods and events is the same declaration, with the same implementation, as in the extending contract."
-
-[[text]]
-id = "TXT-0457"
-step = "P8"
-spec = "PKG"
-line = "356"
-side = "new"
-section = "§4"
-class = "todo"
-guard = true
-what = "Each entry names the `schema` artifact that holds the contract document for that commitment and, in `input_artifacts`, the `schema` artifacts that hold the interface and supporting schema documents needed to construct it."
-
-[[text]]
-id = "TXT-0458"
-step = "P8"
-spec = "PKG"
-line = "359"
-side = "new"
-section = "§4"
-class = "todo"
-what = "A document that defines a contract under a name reserved by LOGOS-MODULE-INTERFACE Section 1.3 is validated as a Logos-defined contract, and every other document as an ordinary contract; carrying such a document grants no authority to provide that contract."
 
 [[text]]
 id = "TXT-0545"

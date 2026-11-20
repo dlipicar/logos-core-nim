@@ -530,6 +530,101 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
       proc(m: CborValue) =
         m.put("contract_documents", cborArray(document(11), document(11)))
     ) == "invalid-package"
+
+  test "[PKG-0577] contract_documents is non-empty when present, one entry per commitment":
+    check mutated(
+      proc(m: CborValue) =
+        m.put("contract_documents", cborArray())
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        m.drop("contract_documents")
+    ) == "ok"
+    check mutated(
+      proc(m: CborValue) =
+        let entry = m["contract_documents"].items[0]
+        m.put("contract_documents", cborArray(entry, entry))
+    ) == "invalid-package"
+
+  test "[PKG-0578] a contract document's artifacts are schema artifacts in every variant":
+    let entry = proc(m: CborValue): CborValue =
+      m["contract_documents"].items[0]
+    # An input missing from one variant (the darwin one).
+    check mutated(
+      proc(m: CborValue) =
+        m["variants"].items[1]["artifacts"].items.keepItIf(
+          it["id"].text != "alpha-units"
+        )
+    ) == "invalid-package"
+    # The document missing from one variant, while another artifact keeps the
+    # configuration schema.
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha.drop("configuration")
+        m["variants"].items[1]["artifacts"].items.keepItIf(
+          it["id"].text != "alpha-config"
+        )
+    ) == "invalid-package"
+    # In no variant at all.
+    check mutated(
+      proc(m: CborValue) =
+        entry(m).put("input_artifacts", cborArray(cbor("alpha-nowhere")))
+    ) == "invalid-package"
+    # An input, or the document, of kind `data`.
+    check mutated(
+      proc(m: CborValue) =
+        entry(m).put("input_artifacts", cborArray(cbor("alpha-defaults")))
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        entry(m).put("schema_artifact", cbor("alpha-defaults"))
+    ) == "invalid-package"
+    # The module binary as an input.
+    check mutated(
+      proc(m: CborValue) =
+        entry(m).put("input_artifacts", cborArray(cbor("alpha")))
+    ) == "invalid-package"
+    # Schema artifacts present in both variants.
+    check mutated(
+      proc(m: CborValue) =
+        entry(m).put("input_artifacts", cborArray(cbor("alpha-types")))
+    ) == "ok"
+
+  test "[PKG-0590] extends needs the module's primary contract or implements":
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha.drop("primary_contract")
+        m.alpha.drop("implements")
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha.drop("primary_contract")
+    ) == "ok"
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha.drop("implements")
+    ) == "ok"
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha.drop("primary_contract")
+        m.alpha.drop("implements")
+        m.alpha.drop("extends")
+    ) == "ok"
+
+  test "[IMPL-DECISION G392] an extends commitment is not the module's own contract (UF-38)":
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha.put("extends", cborArray(commitmentValue(1)))
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha.put("extends", cborArray(commitmentValue(3)))
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha.put("extends", cborArray(commitmentValue(11)))
+    ) == "ok"
+
   test "[PKG-0265] [PKG-0297] [PKG-0057] dependency names are unique and in order":
     check mutated(
       proc(m: CborValue) =

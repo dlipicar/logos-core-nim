@@ -3831,3 +3831,15 @@ test = "sdk/tests/test_call_surface.nim"
 id = "TXT-0540"
 step = "P8"
 test = "sdk/tests/test_call_surface.nim"
+
+# P8a: contract documents and extensions in the Package Manager (PM §4, §9) ---------------------------------------
+
+[[text]]
+id = "TXT-0457"
+step = "P8"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0458"
+step = "P8"
+test = "tests/test_lgx.nim"
