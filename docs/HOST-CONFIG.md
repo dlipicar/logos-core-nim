@@ -1104,6 +1104,9 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
   Runtime makes every decision of `materialize_route` and of each call, subscription and end
   observer through the handle, as for a direct consumer, so codes, ends and their order are a direct
   consumer's. Every host receives the Runtime's Transport limits, which its own connections use.
+- **The Package Manager and its Storage provider** stay `hosted_dynamic` (C1; DECISIONS G395): their
+  `lcn.storage_fetch` reads then go between the two hosts directly, and a `direct_*` placement of either
+  would put package archives into the Runtime's process (`sdk/docs/STORAGE-FETCH.md` §8).
 - **Exit statuses** of the program, for a log: 0 after an orderly release; 2 when it was not started
   by a Runtime (descriptor 3 is not a connected local stream socket); 70 when its carrier broke the
   protocol or closed unexpectedly. The Windows build is a stub that exits 2.

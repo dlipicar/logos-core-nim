@@ -35,6 +35,7 @@ suite "ifc.nim-types: generated modules (D29)":
     for f in exportFixtures:
       checkpoint f.fixturePath
       check f.generated.get == readFile(f.fixturePath)
+    check generatedStorageFetchRoot().get == readFile(storageFetchRootPath)
 
   test "every generated module carries the provisional stamp of the pinned spec":
     let stamp = "PROVISIONAL (spec " & SpecRevision[0 .. 7] & ")"

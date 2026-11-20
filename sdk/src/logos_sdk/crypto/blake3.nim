@@ -60,6 +60,10 @@ proc cFinalize(
   self: ptr Blake3Hasher, output: ptr byte, outLen: csize_t
 ) {.importc: "blake3_hasher_finalize", header: blake3Header.}
 
+proc cFinalizeSeek(
+  self: ptr Blake3Hasher, seek: uint64, output: ptr byte, outLen: csize_t
+) {.importc: "blake3_hasher_finalize_seek", header: blake3Header.}
+
 proc blake3Version*(): string =
   $cVersion()
 
@@ -86,6 +90,12 @@ proc finish*(h: var Blake3Hasher, output: var openArray[byte]) =
   ## Extendable output: fills `output` with its length's worth of hash.
   if output.len > 0:
     cFinalize(addr h, addr output[0], csize_t(output.len))
+
+proc finish*(h: var Blake3Hasher, seek: uint64, output: var openArray[byte]) =
+  ## Extendable output from position `seek`: `output` holds the bytes the
+  ## unseeked output has at `seek` onwards.
+  if output.len > 0:
+    cFinalizeSeek(addr h, seek, addr output[0], csize_t(output.len))
 
 proc finish*(h: var Blake3Hasher): Blake3Digest =
   var digest: Blake3Digest
