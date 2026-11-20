@@ -422,6 +422,15 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   A hosted consumer reads 4 MiB from a hosted provider and no carrier frame holds the bytes (RUN-0815
   re-tested). No unit changes status: the contract is half of PKG-0474's evidence, which 5-3b claims.
 
+- 2026-11-20, Tier 5 step N-2b (I102), the CLI module `lcn_call` (G343-G350; planning's rulings P1-P6, plan R7):
+  `logosctl call`, `describe` and `module wait`; `lcn_call` hosted and started on demand through the logosctl
+  instance, its socket `logos-core-nim.cli.v1` (DAEMON.md §7a), system rules S6-S8 and the events rule.
+  Payloads go between `lcn_call`'s host and the provider's; logosd sees only the route's control. The
+  first run fixed a Module Host defect: a prepared `establish_route` or `renew_route` kept no route
+  material (RUN-0174), so an asynchronous hosted consumer could not materialize (`test_hosted_routes`
+  C-2b). No unit changes status: BCP-0085 (inspection) and BCP-0086 to BCP-0090 gain the CLI socket as
+  evidence beside the logosctl socket's, and IFC-0942 the projected `describe`.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |

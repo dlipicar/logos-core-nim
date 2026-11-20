@@ -593,6 +593,17 @@ is refused (`tests/test_windows_profile.nim`). The evidence runs on the Windows 
 blocks since part 5-4c; elsewhere the suite skips. The other 16 §8.2.1 units, Windows support itself,
 are 5-9's.
 
+### What Tier 5 step N-2b changes
+
+The CLI module `lcn_call` (DECISIONS I102; G343 to G350). No unit changes status. The CLI socket is a
+second activation surface beside the logosctl instance's, documented with BCP l.389's five items in
+[DAEMON.md](DAEMON.md) §7a: BCP-0085's inspection reason names both, BCP-0090's wire format now covers
+`logos-core-nim.cli.v1` too, and `tests/test_lcn_call.nim` adds evidence for BCP-0086 to BCP-0089 (activation
+through the logosctl instance, a request that cannot select an instance or artifact, the route `lcn_call`
+holds, the launcher's uid check). IFC-0942 gains `describe`, which materializes from the surface projected to
+the selected contract. RUN-0174 is re-tested for a Module Host's prepared `establish_route` and
+`renew_route` (`test_hosted_routes` C-2b), which kept no material before this step.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there

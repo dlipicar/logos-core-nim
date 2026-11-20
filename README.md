@@ -88,6 +88,12 @@ The specs are being revised, so the work is ordered by how settled each area is
   hooks, and marks every output `NON-PRODUCTION`. An optional call-evidence store keeps the call
   records the Runtime retains on disk, and `logosctl audit evidence export` signs one as call
   evidence. [docs/DAEMON.md](docs/DAEMON.md).
+- Tier 5, step N-2b: provider calls from the shell. `logosctl call MODULE METHOD NAME=VALUE …`
+  (or `--request` with the whole request as JSON), `logosctl describe MODULE` and `logosctl module
+  wait` go through `lcn_call`, a hosted CLI instance logosd starts on first use through the logosctl
+  instance; it holds the routes and writes results straight to the terminal, and logosd sees only the
+  route's control. Operator rules grant `lcn_call` the providers it may call.
+  [docs/DAEMON.md](docs/DAEMON.md) §7a.
 - Tier 4b, step 4b-7: state transfer to a replacement instance. A `state_transfers` entry in the
   host configuration (or logosd's daemon-config) gives a new instance, under its own state
   assignment, the state directory of the instance it replaces: at the next start the old instance
@@ -305,6 +311,7 @@ the CLI on core. `tools/lint/layers.py` holds that direction: nothing in `sdk/` 
 | `sdk/src/logos_sdk/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
 | `src/logos_core/runtime/`, `src/liblogos_runtime.nim` | The Runtime: the Loader, the engine (instances, lifecycle, Runtime Control, routes, events, asynchronous calls), transported routes (`routing`, `tport`, `sessionauth`, `served`, `ports`), the host configuration and the Host Embedding API; the `liblogos_runtime` exports. |
 | `src/logos_core/daemon/`, `src/logosd.nim`, `src/logosctl.nim` | logosd and logosctl: `daemon-config.v1` and its checks, the session and trust file, the composition, the `logosctl` instance and its socket protocol, the call-evidence store and its export, the shell's output. |
+| `src/logos_core/cli/`, `src/lcn_call.nim` | The CLI module `lcn_call` (`liblcn_call`, hosted): the launcher protocol `cli.v1` and descriptor passing, arguments typed from the request rule, output, routes, the commands and the launcher `logosctl` runs. |
 | `src/logos_core/orchestration/`, `src/logos_core/orchestration.nim` | The reference orchestration module `lcn_orchestrator`: its configuration (`config.cddl`), decisions (`policy.nim`), retry accounting (`accounting.nim`) and worker; `sdk/src/logos_sdk/kit/rcclient.nim` is the typed Runtime Control client it calls through. |
 | `src/logos_core/transport/` | TRANSPORT: envelope codec, framing, Hello, tickets, sessions, the schema boundary; `io/`, the unix-stream I/O thread. |
 | `src/logos_core/package/`, `src/lcn_pkg.nim` | Package Manager artifacts: manifest, trust input, COSE_Sign1 signing, LGX; catalog and inspection records (`records.nim`) and the sans-I/O dependency resolver (`resolver.nim`); the `lcn-pkg` CLI. |
