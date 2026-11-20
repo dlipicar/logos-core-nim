@@ -1,0 +1,21 @@
+logos.package_manager.runtime_artifact = {
+  id: logos.package_manifest.artifact_id,
+  local_path: tstr .size (1..4096),
+  hash: bstr .size 32,
+  hash_suite: "logos.hash-suite.blake3-256",
+}
+
+logos.package_manager.runtime_handoff = {
+  signer: logos.package_manager.package_signer,
+  module: tstr .size (1..64),
+  package: logos.package_manager.package_identity,
+  artifact: logos.package_manager.runtime_artifact,
+  manifest_commitment: logos.package_manager.manifest_commitment,
+  ? primary_contract: logos.schema_commitment,
+  ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
+  ? requires: [* logos.package_manifest.provider_requirement],
+  ? requested_permissions: [* logos.package_manifest.requested_permission],
+  ? configuration: logos.module_configuration.configuration_declaration,
+}
+

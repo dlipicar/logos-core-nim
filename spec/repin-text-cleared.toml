@@ -2465,3 +2465,589 @@ step = "P5"
 kind = "informative"
 reading = "A caveat for the caller: TRANSPORT_ERROR from a route's end says the call's result was not accepted, not that the provider did not run it. The Runtime claims nothing more: invoke.routeEndedResult's message says the route ended before the result was accepted, and the provider's code already running is marked cancelled, not stopped (INTERFACE l.2101; CA l.917-918). DECISIONS G174 says so."
 compared = "RUNTIME l.1272 at 6cac8335 against invoke.routeEndedResult, engine.endRoute's marking and the G174 row."
+
+# P7a: manifest, signing, LGX ----------------------------------------------------------------------------------
+
+[[units]]
+id = "PKG-0043"
+compared = "PM §4 l.247 at 6cac8335: logos.package_manifest.manifest gains `? contract_documents`. The §4 mirror is rewritten from the text; toManifest reads the field and the TP decode test checks it."
+
+[[units]]
+id = "PKG-0044"
+compared = "PM §4 l.262 at 6cac8335: module_declaration gains `? extends`. The mirror is rewritten; toManifest reads it, and checkManifest requires it non-empty, unique and in commitment order (TP)."
+
+[[units]]
+id = "PKG-0048"
+compared = "PM §4 l.292 at 6cac8335: package_dependency gains `? contracts`. The mirror is rewritten; checkManifest requires it non-empty, unique and in commitment order (TP)."
+
+[[units]]
+id = "PKG-0055"
+compared = "PM l.339 at 6a4dfa28 against 6cac8335: extended contract commitments join the uniqueness rule. checkManifest checks extends with implements; the TP uniqueness test has extends cases."
+
+[[units]]
+id = "PKG-0059"
+compared = "PM l.364 at 6cac8335: unchanged rule (a missing artifact or a hash mismatch is artifact-integrity-failed), now judged in every variant (M25). TL's missing-file test fails for a variant that is not the host's."
+
+[[units]]
+id = "PKG-0111"
+compared = "PM l.550 at 6cac8335: any other failure is still signature-verification-failed before material is accepted. With M26 verifyPackage judges schema support after the signature and the profile; a broken signature under an unsupported claim stays signature-verification-failed (TP's M26 test)."
+
+[[units]]
+id = "PKG-0286"
+compared = "PM l.1129 at 6cac8335: `extends` joins the arrays that must be non-empty when present. checkManifest's list has it, and the TP non-empty test covers it."
+
+[[units]]
+id = "PKG-0358"
+compared = "PM §14 l.1478 at 6cac8335: the error enum gains `unsupported-manifest`. The §14 mirror is rewritten, errors.nim has pecUnsupportedManifest, and TP checks the code against the mirror."
+
+[[units]]
+id = "PKG-0365"
+compared = "PM §4.3 l.493 at 6cac8335: `_module = \"logos_package_manager\"` now heads the §4.3 block, not §15's. records.nim builds the records document from the signing-profile document, which carries `_module`; TP checks where it sits."
+
+[[units]]
+id = "PKG-0273"
+decision = "G362"
+compared = "PM l.1099 at 6cac8335 names only the realized output (the LGX half is PKG-0588). The Nix realization profile is 5-10's, so the unit is deferred there (G362)."
+
+[[units]]
+id = "PKG-0274"
+decision = "G362"
+compared = "PM l.1100 at 6cac8335 names a resolved location outside the variant directory or realized output. In an LGX archive a bad path is invalid-package first (PKG-0587) and the archive holds no links, but an extracted path's resolved location is checked at installation (l.933, l.1503; PKG-0204), so the unit is deferred to 5-5, and 5-10 extends it to the Nix output (G362; Fable's P7 review Q2)."
+
+[[units]]
+id = "PKG-0418"
+decision = "G362"
+
+[[units]]
+id = "PKG-0293"
+decision = "G362"
+
+[[stale]]
+id = "PKG-0110"
+compared = "PM l.549 at 6a4dfa28 is replaced by PKG-0582 (l.550 at 6cac8335), which adds unsupported-manifest between the profile and the commitment. The tags in test_package moved to PKG-0582."
+
+[[stale]]
+id = "PKG-0215"
+compared = "PM l.963 at 6a4dfa28 ('every declared artifact path MUST identify one regular file') is replaced by PKG-0585, which says the same of every variant. The tag in test_lgx moved to PKG-0585."
+
+[[stale]]
+id = "PKG-0275"
+compared = "PM l.1102 at 6a4dfa28 is gone: a missing `hash` fails the manifest's CDDL, invalid-package (l.1074), as G156's interim already did. G156 is settled; TP's test is tagged [PKG-0258]. No successor."
+
+[[stale]]
+id = "PKG-0479"
+compared = "PM l.906 at 6a4dfa28 (an explicit variant-directory entry) is gone (TXT-0464). The writer still emits one directory per variant, and the reader accepts implied directories; TL's directory test keeps G41's tag."
+
+[[deferred]]
+id = "TXT-0463"
+rides = "PKG-0418"
+decision = "G362"
+reason = "A name added to a signer's set is a trust revision (PM l.420): trust continuity is PKG-0418's, which 5-3a builds with the Package Manager's trust input (batch C C2)."
+
+[[deferred]]
+id = "TXT-0472"
+rides = "PKG-0293"
+decision = "G362"
+reason = "A packaged native library is bound to its verified bytes at its installed path (PM l.1185): installation is PKG-0293's, which 5-5 builds."
+
+[[text]]
+id = "TXT-0456"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0561"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0462"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0461"
+step = "P7"
+kind = "informative"
+reading = "A duty of a later revision: this one lists no earlier manifest schema roots, so only the pinned pair is supported."
+compared = "PM l.373 at 6cac8335 against package/manifest.nim supportsManifestSchema, which accepts only PackageManifestSchemaRoot with PackageManifestSubtreeRoot (TP's M26 test)."
+
+[[text]]
+id = "TXT-0492"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0465"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0468"
+step = "P7"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0469"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0470"
+step = "P7"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0562"
+step = "P7"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0504"
+step = "P7"
+kind = "removed"
+reading = "The extracted `logos_package_manager.cddl` file is gone; App A now lists the contract schema in one block (TXT-0454)."
+compared = "PM l.45 at 6a4dfa28 against l.43 and App A at 6cac8335. Our mirrors are cut from the spec text by spectrace, never from a published file."
+
+[[text]]
+id = "TXT-0505"
+step = "P7"
+kind = "removed"
+reading = "The governing rule moved from the extracted file to App A: if an excerpt differs from the appendix, the appendix governs (TXT-0503)."
+compared = "PM l.46 at 6a4dfa28 against l.1845 at 6cac8335."
+
+[[text]]
+id = "TXT-0506"
+step = "P7"
+kind = "removed"
+reading = "Reworded as TXT-0455: the block is called the complete normative Package Manifest schema."
+compared = "PM l.249 at 6a4dfa28 against l.239 at 6cac8335."
+
+[[text]]
+id = "TXT-0507"
+step = "P7"
+kind = "removed"
+reading = "The extracted `logos_package_manifest.cddl` file is gone; §4's block is the schema."
+compared = "PM l.324 at 6a4dfa28 against l.239 at 6cac8335, and spec/mirrors/PKG/4.manifest.cddl, cut from the block by spectrace."
+
+[[text]]
+id = "TXT-0509"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0456, which adds extended contracts, a dependency's contracts and contract documents to the commitment-ordered lists."
+compared = "PM l.355 at 6a4dfa28 against l.350 at 6cac8335."
+
+[[text]]
+id = "TXT-0511"
+step = "P7"
+kind = "removed"
+reading = "The old roots are replaced by TXT-0561's: the manifest schema changed (extends, a dependency's contracts, contract_documents)."
+compared = "PM l.364 at 6a4dfa28 against l.368 at 6cac8335; spec/pins.toml and the generated pins.nim carry the new roots, recomputed from the mirror by test_package."
+
+[[text]]
+id = "TXT-0515"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0467: paths are relative to the directory of the variant that declares them, not to the selected one, so every variant's paths are judged."
+compared = "PM l.963 at 6a4dfa28 against l.963 at 6cac8335."
+
+[[text]]
+id = "TXT-0517"
+step = "P7"
+kind = "removed"
+reading = "Replaced by PKG-0588 (an LGX archive lacks the file of an artifact declared by any variant) and PKG-0273 (the realized output, deferred to 5-10)."
+compared = "PM l.1100 at 6a4dfa28 against l.1098-1099 at 6cac8335."
+
+[[text]]
+id = "TXT-0518"
+step = "P7"
+kind = "removed"
+reading = "Replaced by PKG-0587 (a path that breaks the path rules is invalid-package) and PKG-0274 (a resolved location outside its variant directory or the realized output, deferred to 5-5 with the extraction check, G362)."
+compared = "PM l.1101 at 6a4dfa28 against l.1082 and l.1100 at 6cac8335."
+
+[[text]]
+id = "TXT-0519"
+step = "P7"
+kind = "removed"
+reading = "The bullet is gone: a missing `hash` fails the manifest's CDDL and is invalid-package (l.1074), which settles G156."
+compared = "PM l.1102 at 6a4dfa28 against l.1096-1101 at 6cac8335, and decodeManifest's schema check (TP's [PKG-0258] test)."
+
+[[text]]
+id = "TXT-0521"
+step = "P7"
+kind = "removed"
+reading = "Reworded as TXT-0471: LOGOS-MODULE-LOADER no longer defines the dynamic-linker integration."
+compared = "PM l.1192 at 6a4dfa28 against l.1184 at 6cac8335."
+
+[[text]]
+id = "TXT-0525"
+step = "P7"
+kind = "removed"
+reading = "Reworded as TXT-0499: other specifications obtain package facts through the contract or their own projections."
+compared = "PM l.1777 at 6a4dfa28 against l.1805 at 6cac8335."
+
+[[text]]
+id = "TXT-0455"
+step = "P7"
+kind = "reword"
+pair = "TXT-0506"
+reading = "Only the name of the block changed: §4's CDDL block is still the one manifest schema."
+compared = "PM l.239 at 6cac8335 against l.249 at 6a4dfa28, and package/manifest.nim loadManifestSchema, which accepts the mirrored block and checks its root against the pin."
+
+[[text]]
+id = "TXT-0471"
+step = "P7"
+kind = "reword"
+pair = "TXT-0521"
+reading = "The dynamic-linker integration is still the deployment's; the sentence only stops naming LOGOS-MODULE-LOADER as the document that defines it."
+compared = "PM l.1184 at 6cac8335 against l.1192 at 6a4dfa28, and runtime/artifact.nim mapLibrary (dlopen with RTLD_NOW or RTLD_LOCAL on POSIX, loadLib elsewhere): the platform loader resolves a library's own dependencies (DECISIONS G93)."
+
+[[text]]
+id = "TXT-0499"
+step = "P7"
+kind = "reword"
+pair = "TXT-0525"
+reading = "Other specifications take package facts through the contract or their own wire projections; nothing in this repository projects the records."
+compared = "PM l.1805 at 6cac8335 against l.1777 at 6a4dfa28. The Runtime takes package facts only through the handoff records the Package Manager builds (package/records.nim)."
+
+[[text]]
+id = "TXT-0459"
+step = "P7"
+kind = "informative"
+reading = "A manifest carries no realization strategy or placement: the schema has no such field."
+compared = "PM l.361 at 6cac8335 against spec/mirrors/PKG/4.manifest.cddl: no rule of logos.package_manifest names a strategy or a placement, and the schema refuses unknown keys."
+
+[[text]]
+id = "TXT-0460"
+step = "P7"
+kind = "informative"
+reading = "A note on a future revision; nothing to build."
+compared = "PM l.362 at 6cac8335."
+
+[[text]]
+id = "TXT-0500"
+step = "P7"
+kind = "informative"
+reading = "A projection's own root and meaning bind the specification that defines it; this repository defines none."
+compared = "PM l.1806 at 6cac8335."
+
+[[text]]
+id = "TXT-0464"
+step = "P7"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0467"
+step = "P7"
+kind = "holds"
+reading = "Each variant's paths are resolved under variants/<that variant's id>/."
+compared = "PM l.963 at 6cac8335 against lgx.nim openLgx, which joins VariantsDir, the declaring variant's id and the path for every variant's artifacts (M24's path check and M25's file check); the test removes a file from a variant that is not the host's and still fails."
+site = "tests/test_lgx.nim"
+named = "a declared artifact that is not a regular file, in any variant"
+
+[[moved]]
+id = "PKG/12.runtime-handoff.cddl"
+from = "P8"
+to = "P7"
+reason = "The App A test compares the appendix with every section excerpt, §12's included, so P7a writes the mirror; no code reads it, and P8 builds the handoff records against it (both reviews of the P7 plan, Q3)."
+
+# P7a: Appendix A ----------------------------------------------------------------------------------------------
+
+[[units]]
+id = "PKG-0568"
+decision = "G362"
+
+[[units]]
+id = "PKG-0618"
+decision = "G363"
+
+[[units]]
+id = "PKG-0619"
+decision = "G363"
+
+[[units]]
+id = "PKG-0620"
+decision = "G363"
+
+[[units]]
+id = "PKG-0624"
+decision = "G363"
+
+[[units]]
+id = "PKG-0628"
+decision = "G363"
+
+[[units]]
+id = "PKG-0626"
+decision = "G363"
+
+[[units]]
+id = "PKG-0627"
+decision = "G363"
+
+[[units]]
+id = "PKG-0630"
+decision = "G363"
+
+[[units]]
+id = "PKG-0631"
+decision = "G363"
+
+[[units]]
+id = "PKG-0632"
+decision = "G363"
+
+[[units]]
+id = "PKG-0633"
+decision = "G363"
+
+[[units]]
+id = "PKG-0634"
+decision = "G363"
+
+[[units]]
+id = "PKG-0635"
+decision = "G363"
+
+[[units]]
+id = "PKG-0636"
+decision = "G363"
+
+[[units]]
+id = "PKG-0637"
+decision = "G363"
+
+[[units]]
+id = "PKG-0638"
+decision = "G363"
+
+[[units]]
+id = "PKG-0639"
+decision = "G363"
+
+[[units]]
+id = "PKG-0640"
+decision = "G363"
+
+[[units]]
+id = "PKG-0641"
+decision = "G363"
+
+[[units]]
+id = "PKG-0642"
+decision = "G363"
+
+[[units]]
+id = "PKG-0643"
+decision = "G363"
+
+[[units]]
+id = "PKG-0644"
+decision = "G363"
+
+[[units]]
+id = "PKG-0645"
+decision = "G363"
+
+[[units]]
+id = "PKG-0646"
+decision = "G363"
+
+[[units]]
+id = "PKG-0647"
+decision = "G363"
+
+[[units]]
+id = "PKG-0648"
+decision = "G363"
+
+[[units]]
+id = "PKG-0649"
+decision = "G363"
+
+[[units]]
+id = "PKG-0650"
+decision = "G363"
+
+[[deferred]]
+id = "TXT-0497"
+rides = "PKG-0568"
+decision = "G362"
+reason = "What each progress phase covers (PM l.1787): nothing publishes progress before 5-6b, so nothing shows a phase's coverage; PKG-0568 is the unit of its paragraph."
+
+[[deferred]]
+id = "TXT-0498"
+rides = "PKG-0568"
+decision = "G362"
+reason = "What the installing and removing phases cover and that phases have no order (PM l.1788): nothing publishes progress before 5-6b; PKG-0568 is the unit of its paragraph."
+
+[[text]]
+id = "TXT-0454"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0501"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0502"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0503"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0564"
+step = "P7"
+test = "tests/test_package.nim"
+
+[[text]]
+id = "TXT-0577"
+step = "P7"
+test = "tests/test_package.nim"
+
+# P7b: the resolver --------------------------------------------------------------------------------------------
+
+[[units]]
+id = "PKG-0594"
+decision = "I110"
+
+[[units]]
+id = "PKG-0595"
+decision = "I110"
+
+[[units]]
+id = "PKG-0596"
+decision = "I110"
+
+[[stale]]
+id = "PKG-0317"
+compared = "PM l.1280 at 6a4dfa28 ('exclude a candidate that fails this requirement before ordering candidate versions') is replaced by PKG-0600 (l.1294 at 6cac8335): eligibility is established when a candidate is reached in the required order, and a failing one is excluded before assignment. The test tagged [PKG-0317] is retagged [PKG-0600], and the ineligible record is now charged (TXT-0482)."
+
+[[deferred]]
+id = "TXT-0493"
+rides = "PKG-0608"
+decision = "G166"
+reason = "Which signature counts for the signer replacement of a request without a source (PM l.1687): the replacement is PKG-0608's, which 5-5 builds with install_package. The resolver already keeps the root's selected source (TXT-0489)."
+
+[[deferred]]
+id = "TXT-0494"
+rides = "PKG-0608"
+decision = "G166"
+reason = "The replacement applies to the identity the request names and not to its installed dependencies (PM l.1688): PKG-0608's, which 5-5 builds."
+
+[[deferred]]
+id = "TXT-0495"
+rides = "PKG-0608"
+decision = "G166"
+reason = "The replacement is an installed-state change under §15.1 (PM l.1690): installed state is 5-5's."
+
+[[text]]
+id = "TXT-0473"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0474"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0475"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0476"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0478"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0479"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0481"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0482"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0483"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0484"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0485"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0486"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0487"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0489"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0496"
+step = "P7"
+test = "tests/test_resolver.nim"
+
+[[text]]
+id = "TXT-0522"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0479 and PKG-0599: a name's depth is the greatest number of edges on any path from the root, rechecked when an added edge deepens it."
+compared = "PM l.1250 at 6a4dfa28 against l.1256-1260 at 6cac8335; resolver.nim computeDepths and settleDepths replace the breadth-first depthOf (I69 as revised in I110)."
+
+[[text]]
+id = "TXT-0523"
+step = "P7"
+kind = "removed"
+reading = "Replaced by TXT-0481 to TXT-0483: a consideration is the examination of one record whose version satisfies the requirements, an ineligible one and a root one included."
+compared = "PM l.1254 at 6a4dfa28 against l.1262-1264 at 6cac8335; resolver.nim charges before evaluating, in the dependency loop and in selectRoot."
+
+[[text]]
+id = "TXT-0477"
+step = "P7"
+kind = "informative"
+reading = "Interchangeability is a statement about producers' releases; the Package Manager does not verify it (l.1239) and resolution compares contracts by commitment only."
+compared = "PM l.1238 at 6cac8335 against resolver.nim meets and dependencyCandidate, which check a listed contract by its encoding against what the candidate provides."
+
+[[text]]
+id = "TXT-0491"
+step = "P7"
+kind = "holds"
+reading = "The Capability Authority, not the Package Manager, checks a requested permission against its definition's CDDL; the Package Manager decodes an unknown permission (PKG-0607)."
+compared = "PM l.1369 at 6cac8335 against authority/scopes.nim validateScopes with the selected profile (unknown-permission, invalid-constraints), and package/manifest.nim, which consults no permission definition (test_package's [PKG-0607] case)."
+site = "tests/test_authority.nim"
+named = "a defined permission passes; an undefined one is unknown-permission"

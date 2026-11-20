@@ -17,6 +17,7 @@ type
     pecDependencyUnavailable = "dependency-unavailable"
     pecArtifactIntegrity = "artifact-integrity-failed"
     pecSignature = "signature-verification-failed"
+    pecUnsupportedManifest = "unsupported-manifest"
 
   PackageError* = object
     code*: PackageErrorCode

@@ -198,7 +198,7 @@ file = "spec-module-package-manager.md"
 section = "§4"
 code = "PackageManifestSchemaRoot"
 package = "core"
-value = "b3a53cea950337515b843333795c53c58288702e5bf72ad98930e02c7581e0eb"
+value = "d517cf20219ced88528df307c1631b2785abf04157a8b3caa9ac351e95a705f6"
 
 [pkg-manifest-subtree-root]
 file = "spec-module-package-manager.md"
@@ -206,7 +206,7 @@ section = "§4"
 definition = "logos.package_manifest.manifest"
 code = "PackageManifestSubtreeRoot"
 package = "core"
-value = "fbee48aef4b669bd9e4dfec0126f56513f8c626da858121082e5f25b0e236879"
+value = "23de138c1edb5437388a419928f73901ad7ada309b9a357c35ff6690c06f6d78"
 
 [logos-types-header]
 file = "spec-module-interface.md"
@@ -292,6 +292,27 @@ file = "spec-module-package-manager.md"
 section = "§15"
 mirror = "PKG/15.methods.cddl"
 code = "PackageManagerMethodsDocument"
+package = "core"
+
+[pkg-installed-artifact-document]
+file = "spec-module-package-manager.md"
+section = "§10"
+mirror = "PKG/10.installed-artifact.cddl"
+code = "PackageInstalledArtifactDocument"
+package = "core"
+
+[pkg-runtime-handoff-document]
+file = "spec-module-package-manager.md"
+section = "§12"
+mirror = "PKG/12.runtime-handoff.cddl"
+code = "PackageRuntimeHandoffDocument"
+package = "core"
+
+[pkg-contract-appendix-document]
+file = "spec-module-package-manager.md"
+section = "App A"
+mirror = "PKG/app-a.contract.cddl"
+code = "PackageManagerContractDocument"
 package = "core"
 
 [pkg-errors-document]

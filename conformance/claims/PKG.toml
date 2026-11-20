@@ -48,6 +48,51 @@ default = "deferred:tier-5"
 "PKG-0609" = "deferred:tier-5"
 "PKG-0610" = "deferred:tier-5"
 "PKG-0611" = "deferred:tier-5"
+# App A (re-pin P7a, G363): the appendix repeats each contract rule of the sections in one block, and a
+# copy takes its twin's status. The claim is of the schema text only: the App A test compares all 38 rules
+# with the section excerpts, so a copy is claimed where its twin's rule is built.
+"PKG-0613" = "claimed"
+"PKG-0614" = "claimed"
+"PKG-0615" = "claimed"
+"PKG-0616" = "claimed"
+"PKG-0617" = "claimed"
+"PKG-0621" = "claimed"
+"PKG-0622" = "claimed"
+"PKG-0623" = "claimed"
+"PKG-0625" = "claimed"
+"PKG-0629" = "claimed"
+# Copies of rules that 5-5 (installed artifacts, the handoff's package facts), 5-8 (the Runtime handoff)
+# and 5-6a (the service methods) build; deferred by name with their twins.
+"PKG-0618" = "deferred:tier-5"
+"PKG-0619" = "deferred:tier-5"
+"PKG-0620" = "deferred:tier-5"
+"PKG-0624" = "deferred:tier-5"
+"PKG-0628" = "deferred:tier-5"
+"PKG-0626" = "deferred:tier-5"
+"PKG-0627" = "deferred:tier-5"
+"PKG-0630" = "deferred:tier-5"
+"PKG-0631" = "deferred:tier-5"
+"PKG-0632" = "deferred:tier-5"
+"PKG-0633" = "deferred:tier-5"
+"PKG-0634" = "deferred:tier-5"
+"PKG-0635" = "deferred:tier-5"
+"PKG-0636" = "deferred:tier-5"
+"PKG-0637" = "deferred:tier-5"
+"PKG-0638" = "deferred:tier-5"
+"PKG-0639" = "deferred:tier-5"
+"PKG-0640" = "deferred:tier-5"
+"PKG-0641" = "deferred:tier-5"
+"PKG-0642" = "deferred:tier-5"
+"PKG-0643" = "deferred:tier-5"
+"PKG-0644" = "deferred:tier-5"
+"PKG-0645" = "deferred:tier-5"
+"PKG-0646" = "deferred:tier-5"
+"PKG-0647" = "deferred:tier-5"
+"PKG-0648" = "deferred:tier-5"
+"PKG-0649" = "deferred:tier-5"
+"PKG-0650" = "deferred:tier-5"
+# §15.2: progress phases; TXT-0497 and TXT-0498 ride it to 5-6b (G362).
+"PKG-0568" = "deferred:tier-5"
 # §2: the Nix profile, and the catalog, Storage and backend metadata a manifest
 # must win over, come with fetch and the Nix profile.
 "PKG-0017" = "deferred:tier-5"
@@ -90,6 +135,7 @@ default = "deferred:tier-5"
 # builds the revisioned trust file's carrier for D27's development switch
 # (G299; tests tag PKG-0418 to PKG-0421 as evidence); the units are claimed with
 # the Package Manager, whose package-signing anchors the file carries then.
+# PKG-0418 is work item 5-3a's (DECISIONS G362, carrying TXT-0463).
 # PKG-0422, whether continued execution depends on that trust, is a documentation
 # duty this deployment meets now with a true "no" (docs/DEPLOYMENT.md §1;
 # DECISIONS G137 as amended 2026-11-16, I97): claimed through "§4.1".
@@ -123,12 +169,16 @@ default = "deferred:tier-5"
 "PKG-0493" = "deferred:tier-5"
 # §8: materialization through a source profile.
 "PKG-0271" = "deferred:tier-5"
-# §8: G156 is open (reported as NP-15): the §4 CDDL requires `hash`, so a manifest
-# artifact without one is invalid-package (tested as [IMPL-DECISION G156]), not
-# the artifact-integrity-failed this unit names. The unit's behaviour is not built;
-# it waits for the owner's answer, and PM validation next changes with installation
-# (Tier 5). Tier 3 is closed, so it no longer names tier 3 (DECISIONS I88).
-"PKG-0275" = "deferred:tier-5"
+# §8: a missing artifact of the realized output is the Nix realization profile's (work
+# item 5-10). A resolved location outside the variant directory is checked when an
+# extracted path is installed (PM l.933, l.1503), so work item 5-5 owns PKG-0274 and
+# 5-10 extends it to the Nix output. In LGX a bad path is invalid-package first
+# (PKG-0587) and a missing file is PKG-0588 (DECISIONS G362).
+"PKG-0273" = "deferred:tier-5"
+"PKG-0274" = "deferred:tier-5"
+# §10: keeping an installed path bound to its verified bytes is installation's;
+# work item 5-5 owns it (DECISIONS G362, carrying TXT-0472).
+"PKG-0293" = "deferred:tier-5"
 # §9: checking `implements` against a contract's own commitments (PKG-0287) and what the
 # Package Manager may treat as proof of a call surface (PKG-0289) belong to its inspection
 # and handoff (Tier 5, area 7). PKG-0288, the Runtime validating a selected provider
@@ -147,6 +197,11 @@ default = "deferred:tier-5"
 # (G217 as amended); the rule applies once package-backed requests are presented to
 # policy, with package-backed selection (Tier 5).
 "PKG-0502" = "out-of-scope:a permission for package producers"
+# §11 l.1234-1239: obligations and a permission of package producers across releases, which the
+# Package Manager does not verify (l.1239); a dependency that needs a contract lists it (re-pin P7b, I110 Q11).
+"PKG-0594" = "out-of-scope:a requirement on package producers"
+"PKG-0595" = "out-of-scope:a requirement on package producers"
+"PKG-0596" = "out-of-scope:a permission for package producers"
 "PKG-0335" = "deferred:tier-5"
 # §14: the error codes are built; method results are not.
 "PKG-0358" = "claimed"

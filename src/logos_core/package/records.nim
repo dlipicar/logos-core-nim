@@ -25,7 +25,6 @@ const
   InspectRecordType* = "logos.package_manager.package_inspect_record" ## [SPEC PM §6]
   ResolvedDependencyType* = "logos.package_manager.resolved_package_dependency"
     ## [SPEC PM §11]
-  ModuleRule = "_module"
 
 type
   PackageIdentity* = object
@@ -93,17 +92,17 @@ proc ruleText(doc, name: string): Result[string, string] =
 
 proc recordsDocument(): Result[string, string] =
   ## The records as the Package Manager's module document declares them (PM
-  ## §15's `_module` rule, §16: they live in `logos.package_manager` and
-  ## reference the `logos.package_manifest` supporting schema): PM §5's identity
-  ## block, its `package_source` and `manifest_commitment` rules (its installed
-  ## record names PM §10 types, built in tier 5), PM §4.3, §6 and §11.
+  ## §16: they live in `logos.package_manager` and reference the
+  ## `logos.package_manifest` supporting schema): PM §4.3, whose block opens with
+  ## the module's `_module` rule (PM l.493), then PM §5's identity block, its
+  ## `package_source` and `manifest_commitment` rules (its installed record names
+  ## PM §10 types, built in tier 5), PM §6 and §11.
   ok(
-    ?ruleText(PackageManagerMethodsDocument, ModuleRule) & "\n" &
-      PackageIdentityDocument.strip & "\n\n" &
+    PackageSigningProfileDocument.strip & "\n\n" & PackageIdentityDocument.strip & "\n\n" &
       ?ruleText(PackageRecordsDocument, SourceType) & "\n" &
       ?ruleText(PackageRecordsDocument, CommitmentType) & "\n" &
-      PackageSigningProfileDocument.strip & "\n\n" & PackageCatalogRecordsDocument.strip &
-      "\n\n" & PackageResolvedDependencyDocument.strip & "\n"
+      PackageCatalogRecordsDocument.strip & "\n\n" &
+      PackageResolvedDependencyDocument.strip & "\n"
   )
 
 proc loadRecordSchema(): Result[RecordSchema, string] =

@@ -4,10 +4,13 @@
 ## logs every source it is asked about; one test resolves real signed LGX
 ## packages through `lgxInspector`.
 
-import std/[sequtils, strutils, tables]
+import std/[sequtils, sets, strutils, tables]
 import unittest2
 import logos_sdk/[cbor, pins]
+import logos_sdk/base/hex
+import logos_sdk/testing/specdata
 import logos_sdk/crypto/blake3, ../src/logos_core/crypto/slhdsa
+import ../src/logos_core/pins as core_pins
 import ../src/logos_core/package/[lgx, resolver, signing, trust]
 
 proc b(s: string): seq[byte] =
@@ -17,11 +20,22 @@ proc str(s: seq[byte]): string =
   for c in s:
     result.add(char(c))
 
-proc commitOf(seed: string): ManifestCommitment =
+proc digestOf(h: string): typeof(ManifestCommitment().schemaRoot) =
+  let bytes = hex.fromHex(h).get
+  for i in 0 ..< result.len:
+    result[i] = bytes[i]
+
+proc commitOf(seed: string, supported = true): ManifestCommitment =
+  ## A commitment under the pinned manifest schema, or, when not `supported`,
+  ## under another schema root.
   ManifestCommitment(
     commitmentModel: CommitmentModelId,
-    schemaRoot: blake3(b("schema")),
-    schemaSubtreeRoot: blake3(b("subtree")),
+    schemaRoot:
+      if supported:
+        digestOf(core_pins.PackageManifestSchemaRoot)
+      else:
+        blake3(b("another schema")),
+    schemaSubtreeRoot: digestOf(core_pins.PackageManifestSubtreeRoot),
     valueRoot: blake3(b(seed)),
     hashProfile: HashProfileId,
     hashSuite: HashSuiteId,
@@ -31,14 +45,38 @@ proc ident(s: string): PackageIdentity =
   let at = s.find('@')
   PackageIdentity(package: s[0 ..< at], version: s[at + 1 .. ^1])
 
+proc contract(name: string): CborValue =
+  ## A stand-in for a schema commitment: resolution compares contracts by
+  ## their encoding only.
+  cbor("contract " & name)
+
 proc dep(s: string): PackageDependency =
-  ## "name ^min" (compatible) or "name =version" (exact).
+  ## "name ^min" (compatible) or "name =version" (exact), then "+K" for each
+  ## contract it lists.
   let parts = s.split(' ')
   PackageDependency(
     package: parts[0],
     kind: if parts[1][0] == '=': rkExact else: rkCompatible,
     version: parts[1][1 .. ^1],
+    contracts: parts[2 .. ^1].mapIt(contract(it[1 .. ^1])),
   )
+
+proc edge(s: string): ResolvedDependency =
+  ## "name@version", or "name@version/seed" for another commitment.
+  let at = s.find('/')
+  if at < 0:
+    ResolvedDependency(identity: ident(s), commitment: commitOf(s))
+  else:
+    ResolvedDependency(
+      identity: ident(s[0 ..< at]), commitment: commitOf(s[0 ..< at] & s[at + 1 .. ^1])
+    )
+
+proc providing(contracts: openArray[string]): seq[ModuleDeclaration] =
+  ## One module declaration whose `implements` lists the contracts.
+  if contracts.len > 0:
+    result.add(
+      ModuleDeclaration(module: "m", implements: contracts.mapIt(contract(it)))
+    )
 
 proc source(name, version: string, n = 0): PackageSource =
   PackageSource(
@@ -53,6 +91,8 @@ type
     outcomes: Table[seq[byte], Inspection]
     installed: seq[InstalledPackage]
     log: seq[string] ## the sources inspected, in order
+    altered: HashSet[string] ## installed identities whose retained bytes are altered
+    checked: seq[string] ## the installed records whose retained bytes were checked
 
   Outcome = object
     res: Result[Resolution, PackageError]
@@ -66,8 +106,11 @@ proc add(
     n = 0,
     outcome = ikEligible,
     claims = "",
+    provides: openArray[string] = [],
+    code = pecSignature,
 ) =
-  ## A catalog entry for name@version and what inspecting its source yields.
+  ## A catalog entry for name@version and what inspecting its source yields:
+  ## eligible, or ineligible with `code`.
   let s = source(name, version, n)
   u.catalog.add(
     CatalogEntry(identity: PackageIdentity(package: name, version: version), source: s)
@@ -84,14 +127,20 @@ proc add(
             ident(name & "@" & version),
         commitment: commitOf(name & "@" & version & seed),
         dependencies: deps.mapIt(dep(it)),
+        provides: provided(providing(provides)),
       )
     of ikIneligible:
-      Inspection(
-        kind: ikIneligible,
-        error: packageError(pecSignature, "test: no accepted anchor signed it"),
-      )
+      Inspection(kind: ikIneligible, error: packageError(code, "test: " & $code))
     of ikUnavailable:
       Inspection(kind: ikUnavailable, reason: "test: the source is unreachable")
+
+proc publicKey(fill: byte): PublicKey =
+  for i in 0 ..< PublicKeyBytes:
+    result[i] = fill
+
+let
+  acceptedKey = publicKey(0x11) ## the universe's trust input accepts it for every name
+  withdrawnKey = publicKey(0x22) ## no anchor holds it
 
 proc install(
     u: Universe,
@@ -99,25 +148,57 @@ proc install(
     deps: openArray[string] = [],
     edges: openArray[string] = [],
     seed = "",
+    provides: openArray[string] = [],
+    withdrawn = false,
+    supported = true,
+    n = 0,
 ) =
-  ## An installed record; its recorded edges name installed identities.
+  ## An installed record; its recorded edges name installed identities. Its
+  ## retained signer is accepted unless `withdrawn`, and its retained source
+  ## is `source(name, version, n)`.
   u.installed.add(
     InstalledPackage(
       identity: PackageIdentity(package: name, version: version),
-      commitment: commitOf(name & "@" & version & seed),
+      commitment: commitOf(name & "@" & version & seed, supported),
+      signer: PackageSigner(
+        profile: signingProfile(), key: if withdrawn: withdrawnKey else: acceptedKey
+      ),
+      source: source(name, version, n),
+      modules: providing(provides),
       dependencies: deps.mapIt(dep(it)),
-      resolvedDependencies:
-        edges.mapIt(ResolvedDependency(identity: ident(it), commitment: commitOf(it))),
+      resolvedDependencies: edges.mapIt(edge(it)),
     )
   )
 
+proc trust(u: Universe): TrustInput =
+  ## One anchor holding `acceptedKey` for every installed name.
+  var names = @["none"]
+  for p in u.installed:
+    names.add(p.identity.package)
+  doAssert result.addAnchor(b("universe"), acceptedKey, names).isOk
+
 proc inspector(u: Universe): Inspector =
   let outcomes = u.outcomes
-  result = proc(s: PackageSource): Inspection {.gcsafe, raises: [].} =
+  result = proc(
+      s: PackageSource, trust: TrustInput
+  ): Inspection {.gcsafe, raises: [].} =
     u.log.add(str(s.objectLocator))
     outcomes.getOrDefault(
       s.encoded, Inspection(kind: ikUnavailable, reason: "test: no such source")
     )
+
+proc retained(u: Universe): RetainedCheck =
+  result = proc(p: InstalledPackage): Result[void, string] {.gcsafe, raises: [].} =
+    u.checked.add($p.identity)
+    if $p.identity in u.altered:
+      err("test: a retained artifact is altered")
+    else:
+      ok()
+
+let intact: RetainedCheck = proc(
+    p: InstalledPackage
+): Result[void, string] {.gcsafe, raises: [].} =
+  ok()
 
 proc limits(
     names = 100, depth = 100, candidates = 100, attempts = 10_000
@@ -126,9 +207,15 @@ proc limits(
 
 proc resolveRoot(u: Universe, root: RootReference, lim = limits()): Outcome =
   u.log.setLen(0)
+  u.checked.setLen(0)
   var c: ResolverCounters
   let input = ResolverInput(
-    installed: u.installed, catalog: u.catalog, limits: lim, inspect: u.inspector
+    installed: u.installed,
+    catalog: u.catalog,
+    limits: lim,
+    trust: u.trust,
+    inspect: u.inspector,
+    retained: u.retained,
   )
   let r = resolve(input, root, c)
   Outcome(res: r, counters: c)
@@ -145,6 +232,18 @@ proc resolveName(u: Universe, name: string, version = "", lim = limits()): Outco
     ),
     lim,
   )
+
+proc update(u: Universe, current: string, target = "", via = ""): Outcome =
+  ## `update_package`'s root: `current`, an optional target version and an
+  ## optional source ("name@version#n").
+  var root = RootReference(newerThan: Opt.some(ident(current)))
+  if target.len > 0:
+    root.version = Opt.some(target)
+  if via.len > 0:
+    let at = via.find('#')
+    let id = ident(via[0 ..< at])
+    root.source = Opt.some(source(id.package, id.version, parseInt(via[at + 1 .. ^1])))
+  u.resolveRoot(root)
 
 proc code(o: Outcome): string =
   if o.res.isOk:
@@ -346,7 +445,9 @@ proc appManifest(): CborValue =
     ),
   )
 
-proc libManifest(version: string): CborValue =
+proc libManifest(
+    version: string, id = "linux-x86_64", os = "linux", arch = "x86_64"
+): CborValue =
   cborMap(
     (cbor("package"), cbor("lib")),
     (cbor("version"), cbor(version)),
@@ -355,9 +456,9 @@ proc libManifest(version: string): CborValue =
       cbor("variants"),
       cborArray(
         variant(
-          "linux-x86_64",
-          "linux",
-          "x86_64",
+          id,
+          os,
+          arch,
           cborMap(
             (cbor("id"), cbor("data")),
             (cbor("kind"), cbor("data")),
@@ -417,7 +518,7 @@ suite "pkg.catalog: inspection records (PM §6)":
 
   test "[PKG-0331] [PKG-0501] a record's dependencies are its manifest's, whatever its modules require or its variant":
     let v = verified(appManifest())
-    let i = inspection(v)
+    let i = inspection(v, v.manifest.modules)
     check i.kind == ikEligible
     check i.identity == ident("app@1.0.0")
     check i.dependencies == @[dep("lib ^1.0.0")]
@@ -446,7 +547,7 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check decodeResolverLimits(limitSet(value = cbor("5"))).isErr
     check decodeResolverLimits(limitSet(extra = true)).isErr
     check decodeResolverLimits(cborArray()).isErr
-    check decodeResolverLimits(limitSet(value = cbor(high(uint64)))).isOk
+    check decodeResolverLimits(limitSet(value = cbor(high(uint64)))).isErr
     check resolverLimits(1, 1, 1, 1).isOk
     check resolverLimits(1, 0, 1, 1).isErr
     check resolverLimits(1, 1, 1, -3).isErr
@@ -499,6 +600,7 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     let over = u.resolveName("R", lim = limits(candidates = 2))
     check over.code == "dependency-unavailable"
     check over.considered("A") == 2
+    check "A@1.1.0#0" notin u.log # nothing past the limit is examined
     # More versions than the limit do not fail a closure the examined ones give.
     let v = Universe()
     v.add("R", "1.0.0", ["A ^1.0.0"])
@@ -585,16 +687,22 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check u.resolveName("R").picked == @["A@1.0.0", "B@1.0.0", "C@1.1.0", "R@1.0.0"]
     check u.resolveName("S").picked == @["C@1.2.0", "S@1.0.0"]
 
-  test "[PKG-0315] [PKG-0317] an ineligible record is excluded before ordering and never charged":
+  test "[PKG-0315] [PKG-0600] [TXT-0481] [TXT-0482] an ineligible record is examined in order, charged like any other, and excluded before assignment":
     let u = Universe()
     u.add("R", "1.0.0", ["A ^1.0.0"])
     u.add("A", "1.5.0", outcome = ikIneligible)
     u.add("A", "1.0.0")
-    let o = u.resolveName("R", lim = limits(candidates = 1))
+    let o = u.resolveName("R", lim = limits(candidates = 2))
     check o.picked == @["A@1.0.0", "R@1.0.0"]
-    check o.considered("A") == 1
+    check o.considered("A") == 2
+    check o.counters.attempts == 2 # the root and A@1.0.0: A@1.5.0 is never bound
+    check u.log == @["R@1.0.0#0", "A@1.5.0#0", "A@1.0.0#0"]
+    let short = u.resolveName("R", lim = limits(candidates = 1))
+    check short.code == "dependency-unavailable"
+    check short.considered("A") == 1
+    check "A@1.0.0#0" notin u.log
 
-  test "[PKG-0316] [PKG-0476] a real LGX record is a candidate only when its signer is authorized for its exact name":
+  test "[PKG-0316] [PKG-0476] [PKG-0583] a real LGX record is a candidate only when its signer is authorized for its exact name":
     var archives: Table[seq[byte], seq[byte]]
     var u = Universe()
     proc put(name, version: string, n: int, data: seq[byte]) =
@@ -627,11 +735,15 @@ suite "pkg.resolver: dependency resolution (PM §11)":
         Opt.some(fetched.getOrDefault(k))
       else:
         Opt.none(seq[byte])
-    let inspect = lgxInspector(fetch, anchors, linuxHost, pathRules = PathRules())
+    let inspect = lgxInspector(fetch, linuxHost, pathRules = PathRules())
     var c: ResolverCounters
     let r = resolve(
       ResolverInput(
-        catalog: u.catalog, limits: limits(candidates = 1), inspect: inspect
+        catalog: u.catalog,
+        limits: limits(candidates = 3), # the two ineligible records are charged
+        trust: anchors,
+        inspect: inspect,
+        retained: intact,
       ),
       RootReference(package: Opt.some("app")),
       c,
@@ -640,13 +752,177 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     if r.isOk:
       check r.get.packages.mapIt($it.identity) == @["app@1.0.0", "lib@1.0.0"]
       check r.get.packages[1].source == Opt.some(source("lib", "1.0.0", 0))
-    check inspect(source("lib", "1.1.0")).kind == ikIneligible
-    check inspect(source("lib", "1.1.0")).error.code == pecSignature
-    check inspect(source("lib", "1.2.0")).kind == ikEligible
-    check inspect(source("lib", "1.2.0")).identity == ident("lib@1.0.0")
-    check inspect(PackageSource(kind: skNix, flakeRef: "x")).error.code ==
+    check c.considered == @[("app", 1), ("lib", 3)]
+    check inspect(source("lib", "1.1.0"), anchors).kind == ikIneligible
+    check inspect(source("lib", "1.1.0"), anchors).error.code == pecSignature
+    check inspect(source("lib", "1.2.0"), anchors).kind == ikEligible
+    check inspect(source("lib", "1.2.0"), anchors).identity == ident("lib@1.0.0")
+    check inspect(PackageSource(kind: skNix, flakeRef: "x"), anchors).error.code ==
       pecUnsupportedSource
-    check inspect(source("lib", "9.9.9")).kind == ikUnavailable
+    check inspect(source("lib", "9.9.9"), anchors).kind == ikUnavailable
+
+  test "[PKG-0584] [TXT-0465] packages signed per platform are distinct candidates; the host's platform picks one":
+    # One identity, published as two separately signed single-variant
+    # packages (PM l.959-961): their manifest commitments differ, and only the
+    # one compatible with the host is eligible, so no commitment conflict
+    # arises (G74 counts eligible candidates).
+    var archives: Table[seq[byte], seq[byte]]
+    var u = Universe()
+    proc put(name, version: string, n: int, data: seq[byte]) =
+      let s = source(name, version, n)
+      u.catalog.add(CatalogEntry(identity: ident(name & "@" & version), source: s))
+      archives[s.encoded] = data
+
+    put(
+      "lib",
+      "1.0.0",
+      0,
+      packed(
+        libManifest("1.0.0", "darwin-aarch64", "darwin", "aarch64"),
+        "good",
+        goodKey,
+        ["darwin-aarch64"],
+      ),
+    )
+    put(
+      "lib", "1.0.0", 1, packed(libManifest("1.0.0"), "good", goodKey, ["linux-x86_64"])
+    )
+    let fetched = archives
+    let fetch: Fetch = proc(s: PackageSource): Opt[seq[byte]] {.gcsafe, raises: [].} =
+      let k = s.encoded
+      if k in fetched:
+        Opt.some(fetched.getOrDefault(k))
+      else:
+        Opt.none(seq[byte])
+    let darwinHost = Platform(os: "darwin", architecture: "aarch64")
+    for (host, n) in [(linuxHost, 1), (darwinHost, 0)]:
+      let inspect = lgxInspector(fetch, host, pathRules = PathRules())
+      var c: ResolverCounters
+      let r = resolve(
+        ResolverInput(
+          catalog: u.catalog,
+          limits: limits(),
+          trust: anchors,
+          inspect: inspect,
+          retained: intact,
+        ),
+        RootReference(package: Opt.some("lib")),
+        c,
+      )
+      check r.isOk
+      if r.isOk:
+        check r.get.packages.mapIt($it.identity) == @["lib@1.0.0"]
+        check r.get.packages[0].source == Opt.some(source("lib", "1.0.0", n))
+      check inspect(source("lib", "1.0.0", 1 - n), anchors).error.code ==
+        pecIncompatiblePlatform
+
+  test "[TXT-0473] [IMPL-DECISION I110] a real LGX record provides what its selected variant's module declarations provide (RG-7)":
+    proc commitmentWith(fill: byte): CborValue =
+      var root = newSeq[byte](32)
+      root[0] = fill
+      cborMap(
+        (cbor("commitment_model"), cbor(CommitmentModelId)),
+        (cbor("schema_root"), cbor(root)),
+        (cbor("hash_profile"), cbor(HashProfileId)),
+        (cbor("hash_suite"), cbor(HashSuiteId)),
+      )
+
+    let k = commitmentWith(7)
+    proc art(id, path: string): CborValue =
+      cborMap(
+        (cbor("id"), cbor(id)),
+        (cbor("kind"), cbor("module-binary")),
+        (cbor("path"), cbor(path)),
+        (cbor("hash"), cbor(blake3(binary))),
+      )
+
+    # lib 1.0.0 in two variants, one module each: only the darwin-aarch64
+    # module implements K.
+    let lib = cborMap(
+      (cbor("package"), cbor("lib")),
+      (cbor("version"), cbor("1.0.0")),
+      (
+        cbor("modules"),
+        cborArray(
+          cborMap(
+            (cbor("module"), cbor("lib_darwin")),
+            (cbor("artifact"), cbor("bin-darwin")),
+            (cbor("implements"), cborArray(k)),
+          ),
+          cborMap(
+            (cbor("module"), cbor("lib_linux")), (cbor("artifact"), cbor("bin-linux"))
+          ),
+        ),
+      ),
+      (
+        cbor("variants"),
+        cborArray(
+          variant(
+            "darwin-aarch64", "darwin", "aarch64", art("bin-darwin", "lib/darwin.so")
+          ),
+          variant("linux-x86_64", "linux", "x86_64", art("bin-linux", "lib/linux.so")),
+        ),
+      ),
+    )
+    let app = appManifest() # its dependency on lib lists K
+    for e in app.entries.mitems:
+      if e.key.getText == Opt.some("dependencies"):
+        e.value.items[0].entries.add((cbor("contracts"), cborArray(k)))
+    proc sign(v: CborValue, dirs: seq[(string, seq[(string, seq[byte])])]): seq[byte] =
+      let m = decodeManifest(encodeCbor(v)).get
+      writeLgx(m.encoded, signManifest(m, b("good"), goodKey).get, dirs).get
+
+    var archives: Table[seq[byte], seq[byte]]
+    var u = Universe()
+    for (name, data) in [
+      (
+        "app",
+        sign(
+          app,
+          @[
+            ("linux-x86_64", @[("lib/app.so", binary)]),
+            ("darwin-aarch64", @[("lib/app.so", binary)]),
+          ],
+        ),
+      ),
+      (
+        "lib",
+        sign(
+          lib,
+          @[
+            ("darwin-aarch64", @[("lib/darwin.so", binary)]),
+            ("linux-x86_64", @[("lib/linux.so", binary)]),
+          ],
+        ),
+      ),
+    ]:
+      let s = source(name, "1.0.0")
+      u.catalog.add(CatalogEntry(identity: ident(name & "@1.0.0"), source: s))
+      archives[s.encoded] = data
+    let fetched = archives
+    let fetch: Fetch = proc(s: PackageSource): Opt[seq[byte]] {.gcsafe, raises: [].} =
+      let k = s.encoded
+      if k in fetched:
+        Opt.some(fetched.getOrDefault(k))
+      else:
+        Opt.none(seq[byte])
+    let darwinHost = Platform(os: "darwin", architecture: "aarch64")
+    for (host, outcome) in [(darwinHost, "ok"), (linuxHost, "dependency-unavailable")]:
+      let inspect = lgxInspector(fetch, host, pathRules = PathRules())
+      let r = resolve(
+        ResolverInput(
+          catalog: u.catalog,
+          limits: limits(),
+          trust: anchors,
+          inspect: inspect,
+          retained: intact,
+        ),
+        RootReference(package: Opt.some("app")),
+      )
+      check (if r.isOk: "ok" else: $r.error.code) == outcome
+      let i = inspect(source("lib", "1.0.0"), anchors)
+      check i.kind == ikEligible
+      check i.provides.len == (if host == darwinHost: 1 else: 0)
 
   test "[PKG-0318] an installed record satisfies a dependency without being materialized":
     let u = Universe()
@@ -658,7 +934,7 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check o.chosen("C").source.isNone
     check u.log == @["R@1.0.0#0"]
 
-  test "[PKG-0259] [PKG-0320] [PKG-0321] the root is the highest available normal release unless a version or source fixes it; a source that conflicts with it is an invalid package":
+  test "[PKG-0259] [PKG-0320] [PKG-0321] [PKG-0606] the root is the highest available normal release unless a version or source fixes it; a source that conflicts with it is an invalid package":
     let u = Universe()
     u.add("R", "2.0.0-rc.1")
     u.add("R", "1.4.0", outcome = ikIneligible)
@@ -735,7 +1011,7 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     v.install("C", "1.1.0")
     check v.resolveName("R").picked == @["C@1.1.0", "R@1.0.0"]
 
-  test "[PKG-0329] [PKG-0511] [IMPL-DECISION G167] an installed dependency keeps its recorded edges":
+  test "[PKG-0329] [PKG-0511] [TXT-0484] [TXT-0485] [TXT-0487] [IMPL-DECISION G167] an installed dependency keeps its recorded edges":
     let u = Universe()
     u.install("C", "1.0.0")
     u.install("B", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0"])
@@ -807,7 +1083,7 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check o.chosen("R").commitment == commitOf("R@1.0.0")
     check not o.chosen("R").installed
 
-  test "[PKG-0508] [PKG-0509] unavailable material fails with package-unavailable and is not skipped":
+  test "[PKG-0508] [PKG-0509] [PKG-0601] unavailable material fails with package-unavailable and is not skipped; material not reached is not required":
     let u = Universe()
     u.add("R", "1.0.0", ["A ^1.0.0"])
     u.add("A", "1.1.0", outcome = ikUnavailable)
@@ -829,6 +1105,355 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     let o = u.resolveName("R")
     check o.chosen("A").source == Opt.some(source("A", "1.0.0", 1))
     check u.log == @["R@1.0.0#0", "A@1.0.0#1", "A@1.0.0#2", "A@1.0.0#3"]
+
+  test "[PKG-0598] [IMPL-DECISION G361] a limit above its documented maximum is refused by both constructors":
+    let m = MaxResolverLimits
+    check (m.names, m.depth, m.candidates, m.attempts) == (4096, 4095, 4096, 1_048_576)
+    check resolverLimits(m.names, m.depth, m.candidates, m.attempts).isOk
+    check resolverLimits(m.names + 1, m.depth, m.candidates, m.attempts).isErr
+    check resolverLimits(m.names, m.depth + 1, m.candidates, m.attempts).isErr
+    check resolverLimits(m.names, m.depth, m.candidates + 1, m.attempts).isErr
+    check resolverLimits(m.names, m.depth, m.candidates, m.attempts + 1).isErr
+    proc limitSet(values: openArray[uint64]): CborValue =
+      result = cborMap()
+      for i, k in ResolverLimitKeys:
+        result.entries.add((cbor(k), cbor(values[i])))
+
+    # ResolverLimitKeys: attempts, candidates, depth, names.
+    let most =
+      [uint64(m.attempts), uint64(m.candidates), uint64(m.depth), uint64(m.names)]
+    check decodeResolverLimits(limitSet(most)).isOk
+    for i in 0 ..< most.len:
+      var over = most
+      over[i] += 1
+      check decodeResolverLimits(limitSet(over)).isErr
+      over[i] = high(uint64)
+      check decodeResolverLimits(limitSet(over)).isErr
+    # PKG-0597: the documented maxima are these constants.
+    let doc = readRepoFile("docs/CONFORMANCE.md")
+    for (key, value) in [
+      ("partial_closure_names", "4,096"),
+      ("dependency_depth", "4,095"),
+      ("candidates_per_name", "4,096"),
+      ("assignment_attempts", "1,048,576"),
+    ]:
+      check ("| `" & key & "` | " & value & " |") in doc
+
+  test "[PKG-0598] [IMPL-DECISION G361] a chain of 4,096 names resolves at the maxima":
+    let u = Universe()
+    const n = 4096
+    proc p(i: int): string =
+      "p" & align($i, 4, '0')
+
+    for i in 0 ..< n:
+      if i + 1 < n:
+        u.add(p(i), "1.0.0", [p(i + 1) & " ^1.0.0"])
+      else:
+        u.add(p(i), "1.0.0")
+    let m = MaxResolverLimits
+    let o = u.resolveName(
+      p(0),
+      lim = limits(
+        names = m.names,
+        depth = m.depth,
+        candidates = m.candidates,
+        attempts = m.attempts,
+      ),
+    )
+    check o.code == "ok"
+    check (o.counters.names, o.counters.depth, o.counters.attempts) == (n, n - 1, n)
+    check o.chosen(p(n - 1)).depth == n - 1
+
+  test "[TXT-0483] examining a root candidate is charged, and binding the root is an attempt":
+    let u = Universe()
+    u.add("R", "1.2.0", outcome = ikIneligible)
+    u.add("R", "1.1.0", outcome = ikIneligible)
+    u.add("R", "1.0.0")
+    let o = u.resolveName("R")
+    check o.picked == @["R@1.0.0"]
+    check o.considered("R") == 3
+    check o.counters.attempts == 1
+    let short = u.resolveName("R", lim = limits(candidates = 2))
+    check short.code == "dependency-unavailable"
+    check short.considered("R") == 2
+    check "R@1.0.0#0" notin u.log
+    # A source fixes the root: charged once, after it is inspected. An
+    # ineligible source has no identity to charge under.
+    let bySource = u.resolveRoot(RootReference(source: Opt.some(source("R", "1.0.0"))))
+    check bySource.considered("R") == 1
+    let bad = u.resolveRoot(RootReference(source: Opt.some(source("R", "1.2.0"))))
+    check bad.code == "signature-verification-failed"
+    check bad.counters.considered.len == 0
+
+  test "[TXT-0479] a name's depth is the greatest number of edges on any path from the root":
+    # R -> A -> C, and R -> B -> D -> C: C is at depth 3, not 2.
+    let u = Universe()
+    u.add("R", "1.0.0", ["A ^1.0.0", "B ^1.0.0"])
+    u.add("A", "1.0.0", ["C ^1.0.0"])
+    u.add("B", "1.0.0", ["D ^1.0.0"])
+    u.add("D", "1.0.0", ["C ^1.0.0"])
+    u.add("C", "1.0.0")
+    let o = u.resolveName("R", lim = limits(depth = 3))
+    check o.picked == @["A@1.0.0", "B@1.0.0", "C@1.0.0", "D@1.0.0", "R@1.0.0"]
+    check o.chosen("C").depth == 3
+    check o.counters.depth == 3
+    check u.resolveName("R", lim = limits(depth = 2)).code == "dependency-unavailable"
+
+  test "[PKG-0599] an edge that deepens a bound name checks the depth limit for it and for the names it requires":
+    # C is bound at depth 2 and requires E (depth 3). Binding D adds D -> C,
+    # which puts C at 3 and E, still unbound, at 4.
+    let u = Universe()
+    u.add("R", "1.0.0", ["A ^1.0.0", "B ^1.0.0"])
+    u.add("A", "1.0.0", ["C ^1.0.0"])
+    u.add("B", "1.0.0", ["D ^1.0.0"])
+    u.add("C", "1.0.0", ["E ^1.0.0"])
+    u.add("D", "1.0.0", ["C ^1.0.0"])
+    u.add("E", "1.0.0")
+    let deep = u.resolveName("R", lim = limits(depth = 3))
+    check deep.code == "dependency-unavailable" # it terminates: nothing is backtracked
+    check "E@1.0.0#0" notin u.log
+    check deep.counters.attempts == 5 # R, A, B, C, D
+    let ok = u.resolveName("R", lim = limits(depth = 4))
+    check ok.code == "ok"
+    check (ok.chosen("C").depth, ok.chosen("E").depth) == (3, 4)
+
+  test "[PKG-0592] [TXT-0476] [TXT-0478] a candidate provides every contract an accumulated requirement lists, or it is ineligible":
+    let u = Universe()
+    u.add("R", "1.0.0", ["A ^1.0.0 +K"])
+    u.add("A", "1.2.0", provides = ["L"])
+    u.add("A", "1.1.0", provides = ["K", "L"])
+    let o = u.resolveName("R")
+    check o.picked == @["A@1.1.0", "R@1.0.0"]
+    check o.considered("A") == 2 # A@1.2.0 is examined and charged
+    # TXT-0476: the version names no contract. A newer release that dropped K
+    # is chosen when the dependency lists none (TXT-0478: the producer
+    # obligation is not verified).
+    let v = Universe()
+    v.add("R", "1.0.0", ["A ^1.0.0"])
+    v.add("A", "1.0.1")
+    v.add("A", "1.0.0", provides = ["K"])
+    check v.resolveName("R").picked == @["A@1.0.1", "R@1.0.0"]
+    # A contract that arrives after the name is bound: B's requirement rejects
+    # the bound A@1.2.0, and resolution backtracks.
+    let w = Universe()
+    w.add("R", "1.0.0", ["A ^1.0.0", "B ^1.0.0"])
+    w.add("B", "1.0.0", ["A ^1.0.0 +K"])
+    w.add("A", "1.2.0")
+    w.add("A", "1.1.0", provides = ["K"])
+    check w.resolveName("R").picked == @["A@1.1.0", "B@1.0.0", "R@1.0.0"]
+    # An installed record provides what its retained declarations provide.
+    let x = Universe()
+    x.add("R", "1.0.0", ["A ^1.0.0 +K"])
+    x.install("A", "1.1.0", provides = ["K"])
+    x.install("A", "1.2.0")
+    check x.resolveName("R").picked == @["A@1.1.0", "R@1.0.0"]
+
+  test "[TXT-0475] an installed record naming an unsupported manifest schema is ineligible, and not an integrity failure":
+    let u = Universe()
+    u.add("R", "1.0.0", ["C ^1.0.0"])
+    u.install("C", "1.1.0", supported = false)
+    u.add("C", "1.0.0")
+    u.altered.incl("C@1.1.0") # not judged: the record is ineligible first
+    let o = u.resolveName("R")
+    check o.picked == @["C@1.0.0", "R@1.0.0"]
+    check o.considered("C") == 2
+    check u.checked.len == 0
+    check u.resolveName("C", "1.1.0").code == "unsupported-manifest"
+
+  test "[PKG-0602] [PKG-0603] absent or altered retained bytes of a reached installed candidate fail the operation; the record is not skipped":
+    let u = Universe()
+    u.add("R", "1.0.0", ["C ^1.0.0"])
+    u.install("C", "1.1.0")
+    u.add("C", "1.0.0")
+    u.altered.incl("C@1.1.0")
+    let o = u.resolveName("R")
+    check o.code == "artifact-integrity-failed"
+    check u.checked == @["C@1.1.0"]
+    check "C@1.0.0#0" notin u.log # not treated as ineligible: C@1.0.0 is not tried
+    # A record that is not reached is not checked.
+    let v = Universe()
+    v.add("R", "1.0.0", ["C =1.0.0"])
+    v.install("C", "1.1.0")
+    v.add("C", "1.0.0")
+    v.altered.incl("C@1.1.0")
+    check v.resolveName("R").picked == @["C@1.0.0", "R@1.0.0"]
+    check v.checked.len == 0
+    # The installed root is checked the same way.
+    check u.resolveName("C", "1.1.0").code == "artifact-integrity-failed"
+
+  test "[IMPL-DECISION G166] an installed record whose retained signer is no longer accepted is ineligible":
+    # The same commitment in the catalog under an accepted signer satisfies
+    # the identity: it stays installed (B7).
+    let u = Universe()
+    u.add("R", "1.0.0", ["C ^1.0.0"])
+    u.install("C", "1.1.0", withdrawn = true)
+    u.add("C", "1.1.0")
+    let o = u.resolveName("R")
+    check o.picked == @["C@1.1.0", "R@1.0.0"]
+    check o.chosen("C").installed
+    # With no such record, the next version is tried.
+    let v = Universe()
+    v.add("R", "1.0.0", ["C ^1.0.0"])
+    v.install("C", "1.1.0", withdrawn = true)
+    v.add("C", "1.0.0")
+    let p = v.resolveName("R")
+    check p.picked == @["C@1.0.0", "R@1.0.0"]
+    check p.considered("C") == 2
+    # Another commitment in the catalog is a conflict, eligible or not.
+    let w = Universe()
+    w.add("R", "1.0.0", ["C ^1.0.0"])
+    w.install("C", "1.1.0", withdrawn = true)
+    w.add("C", "1.1.0", seed = "other")
+    w.add("C", "1.0.0")
+    check w.resolveName("R").code == "dependency-unavailable"
+    # The installed root (Q9): an install by name whose catalog brings no
+    # accepted signature fails; one that does re-installs it.
+    let x = Universe()
+    x.install("R", "1.0.0", withdrawn = true)
+    check x.resolveName("R").code == "signature-verification-failed"
+    x.add("R", "1.0.0")
+    let y = x.resolveName("R")
+    check y.picked == @["R@1.0.0"]
+    check y.chosen("R").installed
+
+  test "[TXT-0486] [IMPL-DECISION I110] a pinned version the catalog lists under another commitment is examined, charged and excluded":
+    # B's recorded edge pins C@1.0.0 to the installed commitment; the catalog
+    # lists C@1.0.0 with another. B sorts before C, so the pin is in place
+    # when C is reached (Q8).
+    let u = Universe()
+    u.install("C", "1.0.0")
+    u.install("B", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0"])
+    u.add("C", "1.0.0", seed = "other")
+    u.add("R", "1.0.0", ["B ^1.0.0"])
+    let o = u.resolveName("R")
+    check o.picked == @["B@1.0.0", "C@1.0.0", "R@1.0.0"]
+    check o.chosen("C").commitment == commitOf("C@1.0.0")
+    check o.considered("C") == 1
+    check "C@1.0.0#0" in u.log # its commitment was not known: examined
+    # Reached before the pin exists, the same records conflict.
+    let v = Universe()
+    v.install("A", "1.0.0")
+    v.install("Z", "1.0.0", ["A ^1.0.0"], edges = ["A@1.0.0"])
+    v.add("A", "1.0.0", seed = "other")
+    v.add("R", "1.0.0", ["A ^1.0.0", "Z ^1.0.0"])
+    check v.resolveName("R").code == "dependency-unavailable"
+    # A record whose commitment is known and excluded is neither considered
+    # nor charged (TXT-0485).
+    let w = Universe()
+    w.install("C", "1.0.0")
+    w.install("B", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0/other"])
+    w.add("R", "1.0.0", ["B ^1.0.0"])
+    let x = w.resolveName("R")
+    check x.code == "dependency-unavailable"
+    check x.considered("C") == 0
+
+  test "[PKG-0606] a root release whose closure cannot be resolved is not exchanged for a lower one":
+    let u = Universe()
+    u.add("R", "1.1.0", ["M ^1.0.0"])
+    u.add("R", "1.0.0")
+    check u.resolveName("R").code == "dependency-unavailable"
+    check "R@1.0.0#0" notin u.log
+    check u.resolveName("R", "1.0.0").picked == @["R@1.0.0"]
+
+  test "[PKG-0593] [TXT-0474] a root whose every candidate is ineligible only for an unsupported schema fails unsupported-manifest":
+    let u = Universe()
+    u.add("R", "1.2.0", outcome = ikIneligible, code = pecUnsupportedManifest)
+    u.add("R", "1.1.0", outcome = ikIneligible, code = pecUnsupportedManifest)
+    check u.resolveName("R").code == "unsupported-manifest"
+    check u.resolveName("R", "1.1.0").code == "unsupported-manifest"
+    check u.resolveRoot(RootReference(source: Opt.some(source("R", "1.1.0")))).code ==
+      "unsupported-manifest"
+    u.install("S", "1.0.0", supported = false)
+    check u.resolveName("S").code == "unsupported-manifest"
+    # TXT-0474: as a dependency, such a candidate is excluded.
+    u.add("T", "1.0.0", ["R ^1.0.0"])
+    check u.resolveName("T").code == "dependency-unavailable"
+    # Mixed reasons (Q6, the TF-60 interim): the first error in descending
+    # order, the installed record's before the catalog's.
+    let v = Universe()
+    v.add("R", "1.2.0", outcome = ikIneligible, code = pecIncompatiblePlatform)
+    v.add("R", "1.1.0", outcome = ikIneligible, code = pecUnsupportedManifest)
+    check v.resolveName("R").code == "incompatible-platform"
+    v.install("R", "1.2.0", supported = false)
+    check v.resolveName("R").code == "unsupported-manifest"
+
+  test "[PKG-0508] [IMPL-DECISION I110] every source of a reached identity is reached: an unavailable second source fails":
+    let u = Universe()
+    u.add("R", "1.0.0", ["A ^1.0.0"])
+    u.add("A", "1.0.0", n = 1)
+    u.add("A", "1.0.0", n = 2, outcome = ikUnavailable)
+    check u.resolveName("R").code == "package-unavailable"
+    check u.log == @["R@1.0.0#0", "A@1.0.0#1", "A@1.0.0#2"]
+
+  test "[TXT-0489] the retained source counts only while the catalog lists it, and the root keeps its selected source":
+    proc rootSource(catalog: openArray[int]): (bool, Opt[PackageSource]) =
+      let u = Universe()
+      u.install("R", "1.0.0", n = 2)
+      for n in catalog:
+        u.add("R", "1.0.0", n = n)
+      let o = u.resolveName("R")
+      (o.chosen("R").installed, o.chosen("R").source)
+
+    check rootSource([2]) == (true, Opt.some(source("R", "1.0.0", 2)))
+    check rootSource([1, 2]) == (true, Opt.some(source("R", "1.0.0", 1)))
+    check rootSource([]) == (true, Opt.none(PackageSource))
+    # An explicitly supplied source is kept too.
+    let u = Universe()
+    u.install("R", "1.0.0")
+    u.add("R", "1.0.0", n = 3)
+    let o = u.resolveRoot(RootReference(source: Opt.some(source("R", "1.0.0", 3))))
+    check o.chosen("R").installed
+    check o.chosen("R").source == Opt.some(source("R", "1.0.0", 3))
+
+  test "[TXT-0496] an update selects the highest eligible newer release; a newer one with an unsupported schema is not applicable":
+    let u = Universe()
+    u.install("R", "1.0.0")
+    u.add("R", "1.0.0")
+    u.add("R", "2.0.0-rc.1")
+    u.add("R", "1.2.0", outcome = ikIneligible, code = pecUnsupportedManifest)
+    u.add("R", "1.1.0")
+    let o = u.update("R@1.0.0")
+    check o.picked == @["R@1.1.0"]
+    check not o.res.get.unchanged
+    check o.considered("R") == 2
+    # Only an unsupported newer release: the update changes nothing.
+    let v = Universe()
+    v.install("R", "1.0.0")
+    v.add("R", "1.1.0", outcome = ikIneligible, code = pecUnsupportedManifest)
+    let same = v.update("R@1.0.0")
+    check same.code == "ok"
+    check same.res.get.unchanged
+    check same.res.get.root == ident("R@1.0.0")
+    check same.res.get.packages.len == 0
+    check same.considered("R") == 1
+    # Q7, the TF-60 interim: no newer release is eligible, and one is
+    # ineligible for another reason. A dropped platform is that case.
+    let w = Universe()
+    w.install("R", "1.0.0")
+    w.add("R", "1.2.0", outcome = ikIneligible, code = pecUnsupportedManifest)
+    w.add("R", "1.1.0", outcome = ikIneligible, code = pecIncompatiblePlatform)
+    check w.update("R@1.0.0").code == "incompatible-platform"
+    # A fixed target: strictly newer, and PKG-0593 applies to it.
+    check u.update("R@1.0.0", target = "1.0.0").code == "invalid-request"
+    check u.update("R@1.0.0", target = "0.9.0").code == "invalid-request"
+    check u.update("R@1.0.0", target = "1.2.0").code == "unsupported-manifest"
+    check u.update("R@1.0.0", target = "1.1.0").picked == @["R@1.1.0"]
+    check u.update("R@1.0.0", via = "R@1.1.0#0").picked == @["R@1.1.0"]
+    check u.update("R@1.0.0", via = "R@1.0.0#0").code == "invalid-request"
+    # A source that does not identify the selected target (PM l.1703, l.1074).
+    check u.update("R@1.0.0", target = "1.1.0", via = "R@1.0.0#0").code ==
+      "invalid-package"
+    check u.update("R@0.5.0").code == "package-not-installed"
+    var other =
+      RootReference(package: Opt.some("S"), newerThan: Opt.some(ident("R@1.0.0")))
+    check u.resolveRoot(other).code == "invalid-request"
+
+  test "[IMPL-DECISION G166] an update that changes nothing fails while the retained signer is not accepted (TF-07)":
+    let u = Universe()
+    u.install("R", "1.0.0", withdrawn = true)
+    check u.update("R@1.0.0").code == "signature-verification-failed"
+    u.add("R", "1.1.0")
+    check u.update("R@1.0.0").picked == @["R@1.1.0"]
 
   test "requirements: exact text, or a compatible normal release (PM §11)":
     check satisfies(rkCompatible, "1.2.3", "1.9.0")

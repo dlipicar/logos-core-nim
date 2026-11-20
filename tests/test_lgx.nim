@@ -398,17 +398,19 @@ suite "pkg.lgx: archive rules (PM §7.1, §8)":
       )
     ) == "invalid-package"
 
-  test "[PKG-0478] [PKG-0479] [PKG-0480] [IMPL-DECISION G41] directory entries: optional when descendants imply them, required for an empty variant, type 5 with size zero":
+  test "[PKG-0478] [PKG-0480] [PKG-0194] [PKG-0588] [TXT-0464] [IMPL-DECISION G41] directory entries: optional when descendants imply them; one directory per variant; type 5 with size zero":
     check opened(
       variedArchive(
         proc(es: var seq[Raw]) =
           es.keepItIf(it.typeflag != '5')
       )
     ) == "ok"
-    # A variant with no descendant entry exists only through its directory entry.
-    # Artifacts are never empty (PM §5 l.766), so only a variant whose files are
-    # all missing has none: without the entry the archive is invalid-package,
-    # even on the variant's own platform; with it, the missing artifacts decide.
+    # A variant with no descendant entry has a directory only through its
+    # directory entry. Artifacts are never empty (PM §5 l.766), so only a variant
+    # whose files are all missing has none: without the entry there is no
+    # directory for the variant (PM l.905: invalid-package, the first failure
+    # detected, PM l.1067); with it, its missing files are an integrity failure
+    # on any host (PM l.1098, M25).
     var bare = entriesOf(pack())
     bare.keepItIf(not (it.prefix & it.name).startsWith("variants/darwin-aarch64/"))
     check opened(gz(tar(bare))) == "invalid-package"
@@ -422,7 +424,7 @@ suite "pkg.lgx: archive rules (PM §7.1, §8)":
           b.prefix & b.name.strip(leading = false, chars = {'/'}),
         )
     )
-    check opened(gz(tar(withDir))) == "invalid-package"
+    check opened(gz(tar(withDir))) == "artifact-integrity-failed"
     check opened(gz(tar(withDir)), darwinHost) == "artifact-integrity-failed"
     # An explicit directory entry carries no data.
     check opened(
@@ -602,7 +604,24 @@ suite "pkg.lgx: archive rules (PM §7.1, §8)":
     check opened(p, limits = l) == "ok"
 
 suite "pkg.lgx: manifests, signatures and artifacts in the archive (PM §3, §7.1, §8)":
-  test "[PKG-0023] [PKG-0255] [PKG-0025] [PKG-0277] a missing manifest is invalid-package; a missing signature fails verification":
+  test "[PKG-0587] [TXT-0470] [IMPL-DECISION G40] a manifest path that breaks the LGX path rules is invalid-package, in any variant":
+    # M24 (PM l.1082 with l.913-921): a `.` segment, a name that is not NFC
+    # ("e" and a combining acute accent), a name that fits no USTAR header.
+    for bad in [
+      "data/./alpha.cbor", "data/e\xCC\x81.cbor", "data/" & "x".repeat(120) & ".cbor"
+    ]:
+      for vi in 0 .. 1:
+        let path = bad
+        checkpoint path & " in variant " & $vi
+        let v = manifestValue()
+        let a = v.lookup("variants").get.items[vi].lookup("artifacts").get.items[2]
+        for e in a.entries.mitems:
+          if e.key.getText == Opt.some("path"):
+            e.value = cbor(path)
+        check opened(pack(v)) == "invalid-package"
+        check opened(pack(v), darwinHost) == "invalid-package"
+
+  test "[PKG-0023] [PKG-0255] [PKG-0025] [PKG-0277] [TXT-0562] a missing manifest is invalid-package; a missing signature fails verification":
     check opened(
       variedArchive(
         proc(es: var seq[Raw]) =
@@ -633,12 +652,12 @@ suite "pkg.lgx: manifests, signatures and artifacts in the archive (PM §3, §7.
     check opened(pack(darwin = extraDarwin)) == "invalid-package"
       # every variant, not only the selected one
 
-  test "[PKG-0059] [PKG-0215] [PKG-0216] [PKG-0272] [PKG-0273] a declared artifact that is not a regular file":
+  test "[PKG-0059] [PKG-0585] [PKG-0216] [PKG-0272] [PKG-0588] [TXT-0468] a declared artifact that is not a regular file, in any variant, is an integrity failure":
     let missing = linuxFiles.filterIt(it[0] != "lib/libbeta.so")
     check opened(pack(linux = missing)) == "artifact-integrity-failed"
     let missingDarwin = darwinFiles.filterIt(it[0] != "schema/alpha.cddl")
-    check opened(pack(darwin = missingDarwin)) == "invalid-package"
-      # not the selected variant
+    check opened(pack(darwin = missingDarwin)) == "artifact-integrity-failed"
+      # M25: not the selected variant (PM l.1098)
     check opened(pack(darwin = missingDarwin), darwinHost) == "artifact-integrity-failed"
 
   test "[PKG-0058] [PKG-0059] [PKG-0218] [PKG-0276] [PKG-0067] an artifact whose bytes do not match its signed hash":

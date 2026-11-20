@@ -83,6 +83,8 @@
               ./docs/DAEMON.md
               # test_deployment checks the deployment document's facts block.
               ./docs/DEPLOYMENT.md
+              # test_resolver checks the documented resolver maxima are the ones in src (G361).
+              ./docs/CONFORMANCE.md
               # The service-manager units for logosd (DAEMON.md §13).
               ./contrib
             ];

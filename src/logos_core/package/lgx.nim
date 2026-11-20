@@ -636,14 +636,17 @@ proc openLgx*(
 ): Result[LgxPackage, PackageError] =
   ## [SPEC PM §2, §3, §4, §7.1, §8] In order: the archive rules
   ## (`invalid-package`); `manifest.cbor` present (`invalid-package`) and
-  ## `manifest.cose` present (`signature-verification-failed`); the manifest and
-  ## its signature (`verifyPackage`); one directory per manifest variant
-  ## (`invalid-package`); each variant's files declared exactly once
+  ## `manifest.cose` present (`signature-verification-failed`); the signature,
+  ## the claim and its manifest schema, then the manifest (`verifyPackage`);
+  ## every variant's manifest paths under the LGX path rules
+  ## (`invalid-package`, M24); one directory per manifest variant
   ## (`invalid-package`); the first compatible variant
-  ## (`incompatible-platform`); its paths under the installation's rules
-  ## (`invalid-package`); its artifacts present, within the extracted-size
-  ## limit and matching their hashes (`artifact-integrity-failed`). The
-  ## target platform comes from protected deployment policy (PM §7.1).
+  ## (`incompatible-platform`); in every variant, each declared file present
+  ## (`artifact-integrity-failed`, M25) and each file declared exactly once
+  ## (`invalid-package`); the selected variant's paths under the installation's
+  ## rules (`invalid-package`); its artifacts within the extracted-size limit
+  ## and matching their hashes (`artifact-integrity-failed`). The target
+  ## platform comes from protected deployment policy (PM §7.1).
   let a = ?readLgx(data, limits)
   let manifestCbor = a.file(ManifestCborPath).valueOr:
     return err(invalid("the package has no manifest.cbor"))
@@ -675,24 +678,34 @@ proc openLgx*(
     if not isVariantId(v.id):
       return err(invalid("variant id " & v.id & " is not a valid LGX variant id"))
     ids.incl(v.id)
+  # [SPEC PM §7.1 l.913-921, §8 l.1082; M24] Every manifest path of every
+  # variant, under its variant directory, keeps the LGX path rules and fits a
+  # USTAR header; one that does not is `invalid-package` [IMPL; P7 Q5: every
+  # variant, as PM l.965 judges every variant's files].
+  for v in m.variants:
+    for art in v.artifacts:
+      let full = VariantsDir & "/" & v.id & "/" & art.path
+      checkArchivePath(full).isOkOr:
+        return err(invalid("variant " & v.id & ": artifact " & art.id & ": " & error))
+      discard splitPath(full).valueOr:
+        return err(invalid("variant " & v.id & ": artifact " & art.id & ": " & error))
   if dirs != ids:
     return
       err(invalid("variants/ does not hold exactly one directory per manifest variant"))
 
   let selected = ?selectVariant(m, platform)
-  for vi, v in m.variants:
+  for v in m.variants:
     let have = files.getOrDefault(v.id)
     var declared = initHashSet[string]()
     for art in v.artifacts:
       if declared.containsOrIncl(art.path):
         return err(invalid("variant " & v.id & ": two artifacts declare " & art.path))
       if art.path notin have:
-        let msg = "variant " & v.id & ": artifact " & art.id & " is not a regular file"
+        # [SPEC PM §7.1 l.965, §8 l.1098; M25] in any variant
         return err(
-          if vi == selected:
-            integrity(msg)
-          else:
-            invalid(msg)
+          integrity(
+            "variant " & v.id & ": artifact " & art.id & " is not a regular file"
+          )
         )
     for path in have.keys:
       if path notin declared:

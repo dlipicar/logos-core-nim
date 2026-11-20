@@ -7,9 +7,10 @@
 ## the received object selects the algorithm, the profile or the context. The
 ## structure is `crypto/cose.nim`'s, shared with call evidence (I85).
 ##
-## The claim schema is the mirrored PM §4.3 block plus the
+## The claim schema is the mirrored PM §4.3 block, which opens with the Package
+## Manager's `_module` rule (PM l.493), plus the
 ## `logos.package_manager.manifest_commitment` rule cut from the mirrored PM §5
-## block, accepted as one supporting schema.
+## block, accepted as one module document.
 
 {.push raises: [].}
 
@@ -224,15 +225,16 @@ func decodeCoseSign1*(data: openArray[byte]): Result[CoseSign1, PackageError] =
 proc verifyPackage*(
     manifestCbor, manifestCose: openArray[byte], trust: TrustInput
 ): Result[VerifiedPackage, PackageError] =
-  ## [SPEC PM §4, §4.1, §4.3] In order: the manifest decodes and validates
-  ## (`invalid-package` otherwise); then, each failure being
-  ## `signature-verification-failed`, the COSE structure, an accepted `kid`,
-  ## the SLH-DSA-SHA2-192s signature under that kid's key (FIPS 205 `slh_verify`
-  ## with the zero-length context, no retry), the claim schema and profile,
-  ## every commitment field against the commitment computed from
-  ## `manifest.cbor`, and the signer's authorization for the exact package name.
-  let m = ?decodeManifest(manifestCbor)
-  let computed = ?m.commitment
+  ## [SPEC PM §4, §4.1, §4.3] In order (PM l.558-569), each failure being
+  ## `signature-verification-failed` unless named: the COSE structure, an
+  ## accepted `kid`, the SLH-DSA-SHA2-192s signature under that kid's key (FIPS
+  ## 205 `slh_verify` with the zero-length context, no retry), the claim schema
+  ## and profile; then the claim must name the supported manifest schema
+  ## (`unsupported-manifest`, M26: judged from the signed claim, before the
+  ## manifest is decoded under the pinned schema); then the manifest decodes
+  ## and validates (`invalid-package`, PM l.1073-1074); then every commitment
+  ## field against the commitment computed from `manifest.cbor`, and the
+  ## signer's authorization for the exact package name.
   let cose = ?decodeCoseSign1(manifestCose)
   let anchor = trust.anchor(cose.kid).valueOr:
     return err(refuse("no accepted trust anchor has kid " & cose.kid.toHex))
@@ -249,6 +251,15 @@ proc verifyPackage*(
     return err(refuse("the claim names another profile"))
   let signed = ManifestCommitment.fromCbor(claim.lookup("manifest_commitment").get).valueOr:
     return err(refuse("the claim's manifest commitment is malformed"))
+  if not signed.supportsManifestSchema:
+    return err(
+      packageError(
+        pecUnsupportedManifest,
+        "the signed claim names a manifest schema this Package Manager does not support",
+      )
+    )
+  let m = ?decodeManifest(manifestCbor)
+  let computed = ?m.commitment
   if signed != computed:
     return err(
       refuse(
@@ -271,3 +282,19 @@ func signerRecord*(v: VerifiedPackage): CborValue =
   let s = claims()
   doAssert s.set.validatePath(0, s.signer, r).isOk, "package_signer drifted"
   r
+
+type PackageSigner* = object
+  ## [SPEC PM §4.3] `logos.package_manager.package_signer`: the signing profile
+  ## and the exact public-key bytes, not the kid.
+  profile*: string
+  key*: PublicKey
+
+func packageSigner*(v: VerifiedPackage): PackageSigner =
+  ## The signer the verification that accepted `v` authenticated.
+  PackageSigner(profile: signingProfile(), key: v.signer.key)
+
+func accepts*(t: TrustInput, s: PackageSigner, package: string): bool =
+  ## [SPEC PM §4.1, §11 l.1292-1293] A retained signer is currently accepted
+  ## for `package` when its profile is this verifier's and an accepted anchor
+  ## with exactly its key authorizes exactly that name.
+  s.profile == signingProfile() and t.authorizesKey(s.key, package)

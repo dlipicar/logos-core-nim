@@ -60,6 +60,7 @@ proc base(): CborValue =
     (cbor("artifact"), cbor("alpha")),
     (cbor("primary_contract"), commitmentValue(1)),
     (cbor("implements"), cborArray(byBytes(@[commitmentValue(2), commitmentValue(3)]))),
+    (cbor("extends"), cborArray(byBytes(@[commitmentValue(6), commitmentValue(7)]))),
     (
       cbor("requires"),
       cborArray(
@@ -130,6 +131,10 @@ proc base(): CborValue =
               (cbor("kind"), cbor("compatible")), (cbor("version"), cbor("1.0.0"))
             ),
           ),
+          (
+            cbor("contracts"),
+            cborArray(byBytes(@[commitmentValue(8), commitmentValue(9)])),
+          ),
         ),
         cborMap(
           (cbor("package"), cbor("logos.util")),
@@ -140,6 +145,19 @@ proc base(): CborValue =
             ),
           ),
         ),
+      ),
+    ),
+    (
+      cbor("contract_documents"),
+      cborArray(
+        cborMap(
+          (cbor("commitment"), commitmentValue(10)),
+          (cbor("schema_artifact"), cbor("alpha-config")),
+          (
+            cbor("input_artifacts"),
+            cborArray(cbor("alpha-defaults"), cbor("alpha-config")),
+          ),
+        )
       ),
     ),
   )
@@ -193,14 +211,23 @@ proc bytesOf(s: string): seq[byte] =
 # Suites ----------------------------------------------------------------------------
 
 suite "pkg.manifest: the PM §4 schema and the manifest value commitment":
-  test "[PKG-0035] [PKG-0036] [PKG-0037] [PKG-0038] [PKG-0039] [PKG-0040] [PKG-0041] [PKG-0042] [PKG-0043] [PKG-0044] [PKG-0045] [PKG-0046] [PKG-0047] [PKG-0048] [PKG-0049] [PKG-0050] [PKG-0051] [PKG-0052] the mirrored CDDL is a supporting schema with the pinned roots":
+  test "[PKG-0035] [PKG-0036] [PKG-0037] [PKG-0038] [PKG-0039] [PKG-0040] [PKG-0041] [PKG-0042] [PKG-0043] [PKG-0044] [PKG-0045] [PKG-0046] [PKG-0047] [PKG-0048] [PKG-0049] [PKG-0050] [PKG-0051] [PKG-0052] [PKG-0576] [PKG-0581] [TXT-0561] the mirrored CDDL is a supporting schema with the pinned roots":
     let c = manifestContracts()
     check c.primary.model.namespace == ManifestNamespace
     check c.primary.root.toHex == pin("pkg-manifest-schema-root")
     let d = c.primary.model.find(ManifestType).get
     check declarationRoot(c.primary.model, d).toHex == pin("pkg-manifest-subtree-root")
 
-  test "[PKG-0027] [PKG-0028] [PKG-0029] [PKG-0258] a manifest using every field decodes":
+  test "[PKG-0365] the Package Manager's module document is logos_package_manager, declared at the head of PM §4.3":
+    let doc = core_pins.PackageSigningProfileDocument
+    let rules = parseSource(doc).get
+    check rules[0].name == "_module"
+    check doc.strip.startsWith("_module = \"logos_package_manager\"")
+    check "_module" notin core_pins.PackageManagerMethodsDocument
+    # The claim and record schemas load from it at module load (a doAssert),
+    # so every test in this binary runs under it.
+
+  test "[PKG-0027] [PKG-0028] [PKG-0029] [PKG-0258] [PKG-0576] a manifest using every field decodes":
     let m = decodeManifest(encodeCbor(base()))
     check m.isOk
     let x = m.get
@@ -212,6 +239,13 @@ suite "pkg.manifest: the PM §4 schema and the manifest value commitment":
     check x.modules[0].configuration.get.liveReconfiguration
     check x.modules[0].requestedPermissions[0].reason == Opt.some("caches blocks")
     check x.dependencies[1].kind == rkExact
+    check x.modules[0].extends.len == 2
+    check x.dependencies[0].contracts.len == 2
+    check x.dependencies[1].contracts.len == 0
+    check x.contractDocuments.len == 1
+    check x.contractDocuments[0].schemaArtifact == "alpha-config"
+    # [IMPL; UF-15] input artifacts as written, in their written order
+    check x.contractDocuments[0].inputArtifacts == @["alpha-defaults", "alpha-config"]
     check x.encoded == encodeCbor(base())
 
   test "[PKG-0256] [PKG-0258] values outside the CDDL are invalid-package":
@@ -248,9 +282,10 @@ suite "pkg.manifest: the PM §4 schema and the manifest value commitment":
         m.alpha["configuration"].put("live_reconfiguration", cbor(false))
     ) == "invalid-package"
 
-  test "[IMPL-DECISION G156] an artifact without its hash fails the manifest CDDL: invalid-package":
-    # PM §8 l.1000 names artifact-integrity-failed, but the §4 CDDL requires the
-    # field, and §8 l.974 makes a CDDL failure invalid-package (reported as NP-15).
+  test "[PKG-0258] an artifact without its hash fails the manifest CDDL: invalid-package":
+    # The §4 CDDL requires the field, and PM l.1073-1074 make a CDDL failure
+    # invalid-package; PM l.1096-1101 no longer list a missing hash as an
+    # integrity failure (G156, settled at 6cac8335).
     check mutated(
       proc(m: CborValue) =
         m.linux["artifacts"].items[0].drop("hash")
@@ -258,8 +293,8 @@ suite "pkg.manifest: the PM §4 schema and the manifest value commitment":
 
   test "[PKG-0257] [PKG-0027] non-deterministic CBOR is invalid-package":
     var b = encodeCbor(base())
-    check b[0] == 0xa5
-    var long = @[0xb8'u8, 0x05] & b[1 .. ^1] # a non-shortest map head
+    check b[0] == 0xa6
+    var long = @[0xb8'u8, 0x06] & b[1 .. ^1] # a non-shortest map head
     check decodeManifest(long).error.code == pecInvalidPackage
     check decodeManifest(b & @[0x00'u8]).error.code == pecInvalidPackage
 
@@ -363,17 +398,18 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
         m["modules"].items[1].put("artifact", cbor("alpha"))
     ) == "invalid-package"
 
-  test "[PKG-0056] [PKG-0059] [PKG-0263] the implementation artifact occurs somewhere, always as module-binary":
+  test "[PKG-0056] [PKG-0586] [PKG-0263] [TXT-0469] the implementation artifact occurs somewhere, always as module-binary; another kind is invalid-package":
     check mutated(
       proc(m: CborValue) =
         m["modules"].items[1].put("artifact", cbor("gamma"))
     ) == "invalid-package"
+    # M23: a reference to an artifact of the wrong kind (PM l.1081)
     check mutated(
       proc(m: CborValue) =
         m["variants"].items[1]["artifacts"].items[0].put("kind", cbor("resource"))
-    ) == "artifact-integrity-failed"
+    ) == "invalid-package"
 
-  test "[PKG-0053] [PKG-0054] [PKG-0264] configuration artifacts are in every variant that has the module":
+  test "[PKG-0053] [PKG-0054] [PKG-0264] [PKG-0586] [TXT-0469] configuration artifacts are in every variant that has the module, with the kind the reference requires":
     check mutated(
       proc(m: CborValue) =
         m["variants"].items[1]["artifacts"].items.delete(2)
@@ -385,7 +421,7 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
     check mutated(
       proc(m: CborValue) =
         m.linux["artifacts"].items[1].put("kind", cbor("data"))
-    ) == "artifact-integrity-failed"
+    ) == "invalid-package"
     # beta's variant set is narrower; another module may share alpha's schema.
     check mutated(
       proc(m: CborValue) =
@@ -399,7 +435,15 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
         )
     ) == "ok"
 
-  test "[PKG-0055] [PKG-0285] [PKG-0057] implements, requires and requested permissions are unique and ordered":
+  test "[PKG-0055] [PKG-0285] [PKG-0057] [TXT-0456] implements, extends, requires and requested permissions are unique and ordered":
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha["extends"].items.reverse()
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha.put("extends", cborArray(commitmentValue(6), commitmentValue(6)))
+    ) == "invalid-package"
     check mutated(
       proc(m: CborValue) =
         m.alpha["implements"].items.reverse()
@@ -424,7 +468,7 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
     ) == "invalid-package"
 
   test "[PKG-0286] [PKG-0296] optional arrays are non-empty when present":
-    for f in ["implements", "requires", "requested_permissions"]:
+    for f in ["implements", "extends", "requires", "requested_permissions"]:
       let field = f
       checkpoint field
       check mutated(
@@ -444,6 +488,45 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
         m.drop("dependencies")
     ) == "ok"
 
+  test "[TXT-0456] [PKG-0057] [PKG-0591] a dependency's contracts and the contract documents are in commitment order; a dependency's contracts are non-empty and unique":
+    let deps = proc(m: CborValue): CborValue =
+      m["dependencies"].items[0]
+    check mutated(
+      proc(m: CborValue) =
+        deps(m)["contracts"].items.reverse()
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        deps(m).put("contracts", cborArray(commitmentValue(8), commitmentValue(8)))
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        deps(m).put("contracts", cborArray())
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        deps(m).drop("contracts")
+    ) == "ok"
+    let document = proc(fill: byte): CborValue =
+      cborMap(
+        (cbor("commitment"), commitmentValue(fill)),
+        (cbor("schema_artifact"), cbor("alpha-config")),
+      )
+    check mutated(
+      proc(m: CborValue) =
+        m.put("contract_documents", cborArray(byBytes(@[document(11), document(12)])))
+    ) == "ok"
+    check mutated(
+      proc(m: CborValue) =
+        m.put(
+          "contract_documents",
+          cborArray(byBytes(@[document(11), document(12)]).reversed),
+        )
+    ) == "invalid-package"
+    check mutated(
+      proc(m: CborValue) =
+        m.put("contract_documents", cborArray(document(11), document(11)))
+    ) == "invalid-package"
   test "[PKG-0265] [PKG-0297] [PKG-0057] dependency names are unique and in order":
     check mutated(
       proc(m: CborValue) =
@@ -454,7 +537,14 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
         m["dependencies"].items[1].put("package", cbor("logos.base"))
     ) == "invalid-package"
 
-  test "[PKG-0334] permission constraints are one Logos deterministic-CBOR value":
+  test "[PKG-0334] [PKG-0607] permission constraints are one Logos deterministic-CBOR value; a permission the Package Manager does not know is not refused":
+    # PKG-0607: no permission definition is consulted when a manifest decodes.
+    check mutated(
+      proc(m: CborValue) =
+        m.alpha["requested_permissions"].items[0].put(
+          "permission", cbor("example.undefined")
+        )
+    ) == "ok"
     check mutated(
       proc(m: CborValue) =
         m.alpha["requested_permissions"].items[0].put(
@@ -485,7 +575,7 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
         m.alpha["primary_contract"].put("schema_root", cbor(newSeq[byte](31)))
     ) == "invalid-package"
 
-  test "[PKG-0274] [PKG-0278] [PKG-0279] [PKG-0280] [PKG-0281] artifact paths stay inside the variant":
+  test "[PKG-0587] [PKG-0278] [PKG-0279] [PKG-0280] [PKG-0281] [TXT-0470] an artifact path that leaves the variant breaks the path rules: invalid-package":
     for b in [
       "/etc/passwd", "../x", "lib/../../x", "https://example.org/x", "C:/x", "lib\\x"
     ]:
@@ -494,8 +584,8 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
       check mutated(
         proc(m: CborValue) =
           m.linux["artifacts"].items[0].put("path", cbor(bad))
-      ) == "artifact-integrity-failed"
-    check checkArtifactPath("lib/./x.so").isOk # LGX path rules reject it later
+      ) == "invalid-package"
+    check checkArtifactPath("lib/./x.so").isOk # the LGX path rules refuse it at open
 
   test "[PKG-0259] the manifest names the selected package reference":
     let m = decodeManifest(encodeCbor(base())).get
@@ -642,7 +732,7 @@ suite "pkg.cose: the COSE_Sign1 SLH-DSA-SHA2-192s profile (PM §4, §4.3)":
       manifest.commitment.get
     check parsed.payload == claimPayload(manifest.commitment.get).get
 
-  test "[PKG-0068] [PKG-0074] [PKG-0110] [PKG-0446] [PKG-0447] hedged and deterministic signatures both verify":
+  test "[PKG-0068] [PKG-0074] [PKG-0582] [PKG-0446] [PKG-0447] hedged and deterministic signatures both verify":
     let r = verifyPackage(manifest.encoded, signed, trust)
     check r.isOk
     check r.get.signer.kid == kid
@@ -780,7 +870,7 @@ suite "pkg.cose: the COSE_Sign1 SLH-DSA-SHA2-192s profile (PM §4, §4.3)":
     check otherName.addAnchor(kid, pub, ["logos.other"]).isOk
     check outcome(signed, otherName) == "signature-verification-failed"
 
-  test "[PKG-0066] [PKG-0068] [PKG-0110] [PKG-0432] a claim that differs from the computed commitment fails, even when signed":
+  test "[PKG-0066] [PKG-0068] [PKG-0582] [PKG-0432] a claim that differs from the computed commitment fails, even when signed":
     let c = manifest.commitment.get
     proc claimWith(f: proc(claim: CborValue)): seq[byte] =
       let claim = claimValue(c)
@@ -797,10 +887,6 @@ suite "pkg.cose: the COSE_Sign1 SLH-DSA-SHA2-192s profile (PM §4, §4.3)":
       "other value root": claimWith(
         proc(x: CborValue) =
           x["manifest_commitment"].put("value_root", cbor(newSeq[byte](32)))
-      ),
-      "other subtree root": claimWith(
-        proc(x: CborValue) =
-          x["manifest_commitment"].put("schema_subtree_root", cbor(newSeq[byte](32)))
       ),
       "other model": claimWith(
         proc(x: CborValue) =
@@ -830,8 +916,45 @@ suite "pkg.cose: the COSE_Sign1 SLH-DSA-SHA2-192s profile (PM §4, §4.3)":
     let otherSigned = signManifest(decodeManifest(encodeCbor(other)).get, kid, key).get
     check outcome(otherSigned) == "signature-verification-failed"
 
-  test "[PKG-0068] a manifest that does not decode is invalid-package before any signature check":
+  test "[PKG-0581] [PKG-0582] [PKG-0111] [TXT-0462] [TXT-0492] a claim naming another manifest schema is unsupported-manifest, after the signature and before the manifest decodes":
+    let c = manifest.commitment.get
+    check c.supportsManifestSchema # PKG-0581: the pinned pair is the one supported
+    proc claimWith(f: proc(claim: CborValue)): seq[byte] =
+      let claim = claimValue(c)
+      f(claim)
+      var cose = parsed
+      cose.payload = encodeCbor(claim)
+      resign(cose)
+
+    let cases = {
+      "other schema root": claimWith(
+        proc(x: CborValue) =
+          x["manifest_commitment"].put("schema_root", cbor(newSeq[byte](32)))
+      ),
+      "other subtree root": claimWith(
+        proc(x: CborValue) =
+          x["manifest_commitment"].put("schema_subtree_root", cbor(newSeq[byte](32)))
+      ),
+    }
+    for (name, bytes) in cases:
+      checkpoint name
+      check outcome(bytes) == "unsupported-manifest"
+      # judged before the manifest decodes under the pinned schema (PM l.565)
+      check verifyPackage(@[0xa0'u8], bytes, trust).error.code == pecUnsupportedManifest
+      # but only after the signature (PM l.558-563): any other failure is
+      # signature-verification-failed (PM l.568)
+      var broken = decodeCoseSign1(bytes).get
+      broken.signature[0] = broken.signature[0] xor 1
+      check outcome(encodeCoseSign1(broken)) == "signature-verification-failed"
+    check outcome(signed) == "ok"
+
+  test "[PKG-0068] a manifest that does not decode under a valid signature and supported claim is invalid-package":
     check verifyPackage(@[0xa0'u8], signed, trust).error.code == pecInvalidPackage
+    # under a broken signature the signature check comes first (PM l.558-568)
+    var broken = parsed
+    broken.signature[0] = broken.signature[0] xor 1
+    check verifyPackage(@[0xa0'u8], encodeCoseSign1(broken), trust).error.code ==
+      pecSignature
 
 suite "pkg.ownership: shared type ownership (PM §16)":
   test "[PKG-0413] the interface, transport, commitment and hash layers do not import the Package Manager code":
@@ -862,3 +985,45 @@ suite "pkg.ownership: shared type ownership (PM §16)":
       checkpoint layer
       check scanned > 0
     check checked > 20
+
+suite "pkg.appendix: the complete Package Manager contract schema (PM App A)":
+  proc rules(doc: string): seq[(string, string)] =
+    ## The rules of a mirrored CDDL document, in order: each rule's name and its
+    ## text with whitespace collapsed. A rule starts on a line that begins with a
+    ## name in column zero; every other line, a closing brace included, continues
+    ## it.
+    for line in doc.splitLines:
+      if line.strip.len == 0:
+        continue
+      let flat = line.splitWhitespace.join(" ")
+      if line[0] in {'a' .. 'z', 'A' .. 'Z', '_', '$', '@'}:
+        result.add((flat.split({' ', '/', '='})[0], flat))
+      else:
+        doAssert result.len > 0, "a continuation line before any rule"
+        result[^1][1].add " " & flat
+
+  test "[PKG-0613] [PKG-0614] [PKG-0615] [PKG-0616] [PKG-0617] [PKG-0621] [PKG-0622] [PKG-0623] [PKG-0625] [PKG-0629] [TXT-0454] [TXT-0501] [TXT-0502] [TXT-0503] [TXT-0564] [TXT-0577] App A is the section excerpts joined in spec order, rule for rule, and repeats no manifest rule":
+    # PM l.1842-1845: one block; the section blocks are excerpts of it in the
+    # same order, and it governs. Its rules are compared with the mirrored
+    # excerpts of §4.3, §5 (twice), §6, §10, §11, §12, §14 and §15.
+    let excerpts = [
+      core_pins.PackageSigningProfileDocument, core_pins.PackageIdentityDocument,
+      core_pins.PackageRecordsDocument, core_pins.PackageCatalogRecordsDocument,
+      core_pins.PackageInstalledArtifactDocument,
+      core_pins.PackageResolvedDependencyDocument,
+      core_pins.PackageRuntimeHandoffDocument, core_pins.PackageErrorsDocument,
+      core_pins.PackageManagerMethodsDocument,
+    ]
+    var joined: seq[(string, string)]
+    for e in excerpts:
+      joined.add rules(e)
+    let appendix = rules(core_pins.PackageManagerContractDocument)
+    check appendix.len == 38
+    check appendix.mapIt(it[0]) == joined.mapIt(it[0])
+    for i in 0 ..< min(appendix.len, joined.len):
+      checkpoint appendix[i][0]
+      check appendix[i][1] == joined[i][1]
+    check appendix[0] == ("_module", "_module = \"logos_package_manager\"")
+    # TXT-0502: the manifest schema of §4 is separate and is not repeated.
+    check appendix.allIt(not it[0].startsWith("logos.package_manifest."))
+    check appendix[1 ..^ 1].allIt(it[0].startsWith("logos.package_manager."))
