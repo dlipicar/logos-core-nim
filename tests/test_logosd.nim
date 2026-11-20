@@ -565,6 +565,8 @@ when defined(posix):
       check digestOfFile(c.s.trustPath) == before
       check "unchanged at trust revision 4" in
         c.ctl("trust", "development", "off").stdout
+      check "unchanged at trust revision 4: no anchor has kid 6e6f6e65; nothing was written" in
+        c.ctl("trust", "anchor", "remove", "--kid", "none").stdout
       let on = c.ctl("trust", "development", "on")
       check on.code == 0
       check "trust revision 5: development switch on, 1 development anchor enters force" in

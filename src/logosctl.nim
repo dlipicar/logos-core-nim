@@ -1139,7 +1139,12 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
     )
 
   proc trustWritten(
-      s: Session, command: string, ch: TrustChange, what: string, extra: JsonNode
+      s: Session,
+      command: string,
+      ch: TrustChange,
+      what: string,
+      extra: JsonNode,
+      why = "",
   ): Done =
     ## [G397; Q16] A writer's answer: the revision written, or unchanged.
     let rev = $ch.state.file.revision
@@ -1150,7 +1155,8 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       if ch.changed:
         "trust revision " & rev & ": " & what & "; it applies at the next start"
       else:
-        "unchanged at trust revision " & rev & ": nothing was written"
+        "unchanged at trust revision " & rev & ": " &
+          (if why.len > 0: why & "; " else: "") & "nothing was written"
     s.offline(command, j, text)
 
   proc cmdTrust(c: Cli, s: Session): Result[Done, Fail] =
@@ -1248,6 +1254,12 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       let f = next.valueOr:
         return err(fail(ExitUsage, error))
       let ch = ?trustCommit(s, cur, f)
+      # [G397; Q16] Withdrawing a kid that is not there changes nothing; the
+      # answer names it, so a mistyped kid is not taken for a withdrawal.
+      var absent = op == "remove"
+      for a in cur.file.signing.anchors:
+        if a.kid == kid:
+          absent = false
       let what =
         case op
         of "add": "anchor added"
@@ -1260,6 +1272,7 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
           ch,
           what & " (kid " & toHex(kid) & ")",
           %*{"kid": toHex(kid)},
+          why = (if absent: "no anchor has kid " & toHex(kid) else: ""),
         )
       )
     of "development":
