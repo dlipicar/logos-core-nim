@@ -310,11 +310,12 @@ proc project(p: var Provider, selected: Digest): Result[void, Stop] =
 
 proc provider(c: Ctx, sel: LcnCliProvider): Result[Provider, Stop] =
   let rec = ?c.findRecord(sel.module, sel.instance)
+  let binding = ?c.describe(rec.provider.get, sel.module)
   var p = Provider(
     module: sel.module,
     instance: rec.instance.get(""),
     address: rec.provider.get,
-    binding: ?c.describe(rec.provider.get, sel.module),
+    binding: binding,
     record: rec,
   )
   if sel.contract.isSome:

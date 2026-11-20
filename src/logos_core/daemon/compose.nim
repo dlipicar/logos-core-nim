@@ -517,6 +517,8 @@ proc cliRecord(
     idle_timeout_ms: uint32(c.cli.idleTimeoutMs),
     route_idle_ms: uint32(c.cli.routeIdleMs),
   )
+  let declaration = ?lcnCallDeclaration()
+  let provisioned = ?encodeSettings(settings)
   ok(
     LcnAppModule(
       instance: CliInstance,
@@ -526,8 +528,8 @@ proc cliRecord(
         arm_Process_hosted_dynamic:
           LcnAppImplementationARProcessHostedDynamicMap(artifact: artifact),
       ),
-      configuration: Opt.some(?lcnCallDeclaration()),
-      provisioned_configuration: Opt.some(?encodeSettings(settings)),
+      configuration: Opt.some(declaration),
+      provisioned_configuration: Opt.some(provisioned),
     )
   )
 

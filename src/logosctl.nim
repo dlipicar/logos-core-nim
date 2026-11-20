@@ -972,9 +972,9 @@ offline (the session's files; writers hold its lock):
           arm_lcn_Cli_describe_command: LcnCliDescribeCommand(provider: provider),
         )
       )
-    var call = LcnCliCallCommand(
-      `method`: ?c.arg(2, "METHOD"), provider: provider, json: c.opt("request")
-    )
+    let meth = ?c.arg(2, "METHOD")
+    var call =
+      LcnCliCallCommand(`method`: meth, provider: provider, json: c.opt("request"))
     let args = ?c.argsOf(files)
     if args.len > 0:
       if call.json.isSome:
