@@ -8,12 +8,20 @@
 ## the launcher's connection: the launcher's EOF cancels the call (G344's
 ## half-close). The completion copies the outcome into shared memory and
 ## releases the response owner at once, so no response buffer is held past
-## the completion (IF l.3896). The error channel's code, message and detail are
+## the completion (IF l.3927). The error channel's code, message and detail are
 ## kept for the launcher.
 ##
-## A route handle's operations (`prepare_call`, and `submit` and `cancel` of
-## its calls) hold the handle's lock (IF l.1980). Operations through the
-## Runtime Control binding may run concurrently (IF l.1954): no lock.
+## [G348; plan R5 §3.5 step 7] `prepare_call` on a route handle holds the
+## handle's lock (IF l.1935: operations on one handle are serialized). A
+## call's `submit`, `cancel` and `release` act on the call (IF l.2001,
+## l.2038) and take no handle lock, so a completion that runs inline (IF
+## l.2011) never meets one. Operations through the Runtime Control binding
+## may run concurrently (IF l.1911): no lock.
+##
+## [G348; plan §3.5 step 8] `CallResult.prepared` says whether `prepare_call`
+## succeeded: when it did not, nothing was submitted and the caller may
+## retry on a new route; every later outcome comes through the completion
+## (IF l.2009-2011).
 
 {.push raises: [], gcsafe.}
 
@@ -36,6 +44,7 @@ type
 
   CallResult* = object ## A provider call's outcome.
     cancelled*: bool ## the launcher cancelled before the outcome
+    prepared*: bool ## `prepare_call` succeeded, so the call was submitted
     case ok*: bool
     of true:
       response*: seq[byte]
@@ -213,8 +222,7 @@ proc callAsync[H](
     if checked.isErr:
       cleanup()
       return CallResult(ok: false, failure: failureOf(checked.error))
-    locked(lock):
-      call.vtable.submit(addr call)
+    call.vtable.submit(addr call)
     var cancelled = false
     while true:
       var done = false
@@ -230,8 +238,7 @@ proc callAsync[H](
       if n < 0 and errno != EINTR:
         break
       if watch and (p[1].revents and (POLLIN or POLLHUP or POLLERR)) != 0:
-        locked(lock):
-          call.vtable.cancel(addr call)
+        call.vtable.cancel(addr call)
         cancelled = true
     call.vtable.release(addr call) # waits for a completion that is running
     if slot.code == ecOk:
@@ -244,6 +251,7 @@ proc callAsync[H](
         f.detail = Opt.some(bytesOf(slot.detail))
       result = CallResult(ok: false, failure: f)
     result.cancelled = cancelled
+    result.prepared = true
     cleanup()
   else:
     CallResult(ok: false, failure: failure(ecModule, "not supported on this platform"))
@@ -256,7 +264,8 @@ proc callRoute*(
     deadlineMs: Opt[int],
     cancelFd: cint,
 ): CallResult =
-  ## The provider's method `bare` through `route`, under the handle's lock.
+  ## The provider's method `bare` through `route`; `prepare_call` under the
+  ## handle's lock.
   callAsync(route, handleLock, bare, params, deadlineMs, cancelFd)
 
 # Runtime Control --------------------------------------------------------------------

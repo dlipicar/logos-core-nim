@@ -1,9 +1,9 @@
 ## The lcn_call instance (Tier 5 step N-2; DECISIONS G343, G344;
-## BOOTSTRAP l.384-390, l.517-519). docs/DAEMON.md §7a.
+## BOOTSTRAP l.389-395, l.524-526). docs/DAEMON.md §7a.
 ##
 ## A consumer-only `hosted_dynamic` module: its instance serves the owner's
 ## launcher socket and makes each command's calls through its own binding, as
-## the consumer (RUNTIME l.182-184). Payloads pass between this process and
+## the consumer (RUNTIME l.173-175). Payloads pass between this process and
 ## the provider's; never through logosd. Nothing from the socket stands for
 ## the consumer: no binding, ticket or route crosses it.
 ##
@@ -11,7 +11,7 @@
 ##   logosd), binds the socket (0600, backlog 64; a stale socket of this uid at
 ##   the path is removed, anything else refused), starts the accept thread, the
 ##   workers and the route reaper, then sets `serving` as its last step: a
-##   command admitted earlier waits for it (BCP l.388).
+##   command admitted earlier waits for it (BCP l.393).
 ## - **Admission** (G344). The peer's uid must be this process's effective
 ##   uid; another is closed with no byte written and logged, at most one line
 ##   a second. Uid and pid are kept as provenance in the log line only.
@@ -23,7 +23,7 @@
 ##   launcher's half-close cancels the command (130).
 ## - **Destroy.** Sets `closing`, unlinks the socket, shuts down the read side
 ##   of every connection (its command sees the cancel), joins every thread,
-##   then releases every route handle and closes every route (IF l.3896).
+##   then releases every route handle and closes every route (IF l.3927).
 
 {.push raises: [], gcsafe.}
 
@@ -196,7 +196,7 @@ proc serve(s: ptr Server, worker: int, c: Conn) =
       )
     return
   var fds = req.get.fds
-  # [BCP l.388] No command before `_MODULE_init` returned.
+  # [BCP l.393] No command before `_MODULE_init` returned.
   withLock s.lock:
     while not s.serving and not s.closing:
       wait(s.cond, s.lock)
@@ -264,7 +264,7 @@ proc workerMain(arg: (ptr Server, int)) {.thread.} =
   releasePerThread()
 
 proc admit(s: ptr Server, fd: cint) =
-  ## [G344; BCP l.385, l.389] The owner's uid, or closed with nothing written.
+  ## [G344; BCP l.390, l.394] The owner's uid, or closed with nothing written.
   let peer = credOf(fd)
   if peer.isErr or peer.get.uid != effectiveUid():
     let who =
@@ -493,7 +493,7 @@ proc initModule(
     freeServer(s)
     return fail("cannot start a thread: " & e.msg)
   withLock s.lock:
-    s.serving = true # [BCP l.388] init's last step
+    s.serving = true # [BCP l.393] init's last step
     broadcast(s.cond)
   logInfo("lcn_call: serving " & config.socket)
   ok(CallServer(s: s))
@@ -501,7 +501,7 @@ proc initModule(
 proc destroyModule(m: CallServer) =
   if m.s != nil:
     stop(m.s)
-    closeTable(m.s.env.routes) # [IF l.3896] after every worker has ended
+    closeTable(m.s.env.routes) # [IF l.3927] after every worker has ended
     freeServer(m.s)
     m.s = nil
 

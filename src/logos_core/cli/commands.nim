@@ -8,25 +8,35 @@
 ##   provider, ready. `describe_provider` gives its call surface, validated as
 ##   any consumer validates one (`acceptCallSurfaceDescriptor`); the Runtime
 ##   describes a provider only if every one of its contracts may be discovered
-##   (R l.454), and its refusal is printed as it came.
-## - **Contract.** The primary contract, or the implemented interface
-##   `--contract` names. The surface projected to it (`schemaResponse`) is
+##   (R l.428), and its refusal is printed as it came.
+## - **Contract.** The primary contract, or the exact contract view
+##   `--contract` names: an implemented interface or an earlier contract the
+##   provider extends (R l.90-91). The surface projected to it (`schemaResponse`) is
 ##   accepted again (`acceptSchemaResponse`): the set the arguments are typed
-##   by, and the bytes `materialize_route` takes (IF l.3874).
+##   by, and the bytes `materialize_route` takes (IF l.3905).
 ## - **Call.** The method by its bare or its qualified name. A marked request
-##   or response is refused before any route (IF l.388-389). The arguments are
+##   or response is refused before any route (IF l.368-369). The arguments are
 ##   typed (`args.nim`), the value validated, and the call made through a
-##   leased route (`routes.nim`) with the command's deadline; one made on a
-##   route that ended meanwhile is made once more on a new route.
-## - **Exit codes** (G349): 1 refused before anything was called, 4 a Runtime
-##   Control failure, 5 the call's error channel, 130 the launcher cancelled
+##   leased route (`routes.nim`) with the command's deadline.
+## - **Retry (G348; plan §3.5 step 8).** An ended handle is never leased (rule
+##   1). A call is made once more, on a new route and within what remains of
+##   the deadline, only when `prepare_call` failed with NOT_READY,
+##   NOT_AUTHORISED or TRANSPORT_ERROR, or its completion is NOT_READY or
+##   NOT_AUTHORISED (rule 2): those come before the call is sent, or from the
+##   provider's boundary before dispatch, and provider code cannot answer them
+##   (IF l.3308-3311). A completion TRANSPORT_ERROR, TIMEOUT or CANCELLED is
+##   never retried (rule 3): an admitted call its route's end interrupts may
+##   have run (R l.1271-1272).
+## - **Exit codes** (G349): 1 refused before anything was called, 2 the
+##   outcome unknown, 4 a Runtime Control failure or a code the classifier
+##   does not name, 5 the call's error channel, 130 the launcher cancelled
 ##   (nothing more is written). An output the reader closed ends the command
 ##   with 0; one that cannot be written, with 2 (the user has not seen the
 ##   outcome).
 
 {.push raises: [], gcsafe.}
 
-import std/[json, strutils]
+import std/[json, monotimes, strutils, times]
 import results
 import logos_sdk/cbor
 import logos_sdk/commitment
@@ -87,6 +97,7 @@ type
     set: ContractSet
     surface: CallSurface
     schema: seq[byte] ## the encoded projected `logos.schema_response`
+    record: LogosNSRuntimeControlModuleRecord ## `list_modules`' record
 
 func refused(message: string): Stop =
   Stop(exit: ExitRefused, message: message)
@@ -259,10 +270,14 @@ proc describe(
   ok(b)
 
 func roots(b: ModuleBinding): seq[Digest] =
+  ## [SPEC RUNTIME l.90-91] Every exact contract view: the primary, the
+  ## interfaces and the earlier contracts the provider extends.
   if b.primary.isSome:
     result.add(b.primary.get.root)
   for i in b.interfaces:
     result.add(i.root)
+  for e in b.extends:
+    result.add(e.root)
 
 proc project(p: var Provider, selected: Digest): Result[void, Stop] =
   ## [SPEC INTERFACE §5.1] The surface projected to `selected`, accepted again.
@@ -293,6 +308,7 @@ proc provider(c: Ctx, sel: LcnCliProvider): Result[Provider, Stop] =
     instance: rec.instance.get(""),
     address: rec.provider.get,
     binding: ?c.describe(rec.provider.get, sel.module),
+    record: rec,
   )
   if sel.contract.isSome:
     let want = digestOf(sel.contract.get).valueOr:
@@ -375,6 +391,8 @@ proc runDescribe(c: Ctx, sel: LcnCliProvider): Result[void, Stop] =
     rows.add(("primary", p.binding.primary.get))
   for x in p.binding.interfaces:
     rows.add(("interface", x))
+  for x in p.binding.extends:
+    rows.add(("extended", x)) # [SPEC RUNTIME l.90-91; re-pin RG-9]
   var text =
     p.module & (if p.instance.len > 0: " (instance " & p.instance & ")"
     else: "") & " on node " & c.target & ", provider " & providerText(p.address)
@@ -386,6 +404,18 @@ proc runDescribe(c: Ctx, sel: LcnCliProvider): Result[void, Stop] =
       "\n" & role & " " & x.model.namespace & " " & hexOf(x.root) &
         (if x.root == p.selected: " (selected)" else: "")
     )
+  # [SPEC RUNTIME l.1966] The record's contract roots, beside the surface's.
+  var record = newJObject()
+  if p.record.primary_contract.isSome:
+    record["primary"] = %toHex(p.record.primary_contract.get.schema_root)
+  for (field, list) in [
+    ("implements", p.record.implements), ("extends", p.record.extends)
+  ]:
+    if list.isSome:
+      var a = newJArray()
+      for x in list.get:
+        a.add(%toHex(x.schema_root))
+      record[field] = a
   let result0 = %*{
     "module": p.module,
     "instance": p.instance,
@@ -393,6 +423,7 @@ proc runDescribe(c: Ctx, sel: LcnCliProvider): Result[void, Stop] =
     "node": c.target,
     "selected": hexOf(p.selected),
     "contracts": contracts,
+    "record": record,
     "methods": methods,
     "events": events,
   }
@@ -455,6 +486,93 @@ proc memberRoot(p: Provider, doc: int, name: string): Result[Digest, Stop] =
     return err(refused(name & " is not declared"))
   ok(declarationRoot(model, d))
 
+func retryable*(r: CallResult): bool =
+  ## [G348; plan §3.5 step 8, rule 2] A failure that proves the call was not
+  ## sent: `prepare_call` failed with NOT_READY, NOT_AUTHORISED or
+  ## TRANSPORT_ERROR (nothing was submitted), or the completion is NOT_READY or
+  ## NOT_AUTHORISED (before sending, or the provider's boundary before
+  ## dispatch; provider code cannot answer them, IF l.3308-3311). Never a
+  ## completion TRANSPORT_ERROR, TIMEOUT or CANCELLED (rule 3).
+  if r.ok or r.cancelled:
+    return false
+  let code = r.failure.code
+  if not r.prepared:
+    code in {ecNotReady, ecNotAuthorised, ecTransport}
+  else:
+    code in {ecNotReady, ecNotAuthorised}
+
+func classify*(r: CallResult): Stop =
+  ## [G349; plan §3.6, IMPL on R l.1259-1272 and IF l.3308-3311] A failed
+  ## call's exit, total over the codes.
+  let f = r.failure
+  func unknown(f: Failure): Stop =
+    Stop(
+      exit: ExitUnreachable,
+      code: $f.code,
+      message:
+        "the outcome is unknown: the provider may have run the call" &
+        (if f.message.len > 0: " (" & f.message & ")" else: ""),
+    )
+
+  if r.cancelled:
+    return cancelled()
+  if not r.prepared and f.code == ecTransport:
+    # Nothing was submitted: unreachable, and nothing ran.
+    return Stop(
+      exit: ExitUnreachable,
+      code: $f.code,
+      message:
+        "lcn_call could not reach the provider" &
+        (if f.message.len > 0: " (" & f.message & ")" else: ""),
+    )
+  case f.code
+  of ecTransport, ecTimeout, ecCancelled:
+    # [R l.1271-1272; IF l.2025, l.2112] A CANCELLED the user did not ask for
+    # promises no rollback.
+    unknown(f)
+  of ecMethodNotFound, ecInvalidParams, ecModule:
+    # [IF l.3308-3311] What provider code may answer; "declared" stays true
+    # when the Runtime's boundary answered instead.
+    Stop(
+      exit: ExitProvider,
+      code: $f.code,
+      message: f.message,
+      detail: f.detail,
+      declared: true,
+    )
+  else:
+    # NOT_READY and NOT_AUTHORISED after the retry, VERSION_MISMATCH (IF
+    # l.3920) and every code not named.
+    Stop(exit: ExitRc, code: $f.code, message: f.message, detail: f.detail)
+
+proc callWithRetry(
+    c: Ctx, spec: RouteSpec, bare: string, params: openArray[byte]
+): Result[CallResult, Stop] =
+  ## [G348; plan §3.5 step 8] The call through a leased route, made once more
+  ## on a new route when `retryable`, within what remains of the deadline.
+  let started = getMonoTime()
+  var outcome: CallResult
+  for attempt in 0 .. 1:
+    var deadline = c.deadline
+    if deadline.isSome:
+      let left = deadline.get - int(inMilliseconds(getMonoTime() - started))
+      if attempt > 0 and left <= 0:
+        break # rule 4: no time left; the first outcome stands
+      deadline = Opt.some(max(left, 1))
+    let lease = c.env.routes.acquire(spec, deadline, c.cancelFd).valueOr:
+      if attempt > 0:
+        break # the first outcome stands
+      return err(rcStop(error))
+    let r = callRoute(lease.route, lease.lock, bare, params, deadline, c.cancelFd)
+    let again = attempt == 0 and r.retryable
+    if again:
+      c.env.routes.drop(lease) # before `done`, which may release the handle
+    c.env.routes.done(lease)
+    outcome = r
+    if not again:
+      break
+  ok(outcome)
+
 proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
   ## [G348, G349] One typed call through a leased route.
   let p = ?c.provider(cmd.provider)
@@ -466,7 +584,7 @@ proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
       )
     )
   if m.sensitiveRequest or m.sensitiveResponse:
-    # [SPEC INTERFACE l.388-389; G349 Q2] No path for marked payloads here.
+    # [SPEC INTERFACE l.368-369; G349 Q2] No path for marked payloads here.
     return err(
       refused(m.bare & " carries marked payloads; this CLI does not handle them yet")
     )
@@ -491,28 +609,11 @@ proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
     access: LogosNSRuntimeControlRouteAccess(methods: Opt.some(@[@root])),
     schema: p.schema,
   )
-  var outcome: CallResult
-  for attempt in 0 .. 1:
-    let lease = c.env.routes.acquire(spec, c.cancelFd).valueOr:
-      return err(rcStop(error))
-    outcome = callRoute(lease.route, lease.lock, m.bare, params, c.deadline, c.cancelFd)
-    let ended = c.env.routes.ended(lease)
-    c.env.routes.done(lease)
-    if outcome.cancelled or outcome.ok or not ended or attempt == 1:
-      break
+  let outcome = ?c.callWithRetry(spec, m.bare, params)
   if outcome.cancelled:
     return err(cancelled())
   if not outcome.ok:
-    let f = outcome.failure
-    return err(
-      Stop(
-        exit: ExitProvider,
-        code: $f.code,
-        message: f.message,
-        detail: f.detail,
-        declared: true,
-      )
-    )
+    return err(classify(outcome))
   let v = decodeCbor(outcome.response).valueOr:
     return err(
       Stop(

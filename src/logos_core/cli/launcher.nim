@@ -1,5 +1,5 @@
 ## The CLI's launcher (Tier 5 step N-2; DECISIONS G344, G349; BOOTSTRAP
-## l.384-390): logosctl's side of `call`, `describe`, `subscribe` and
+## l.389-395): logosctl's side of `call`, `describe`, `subscribe` and
 ## `events`. docs/DAEMON.md §7a.
 ##
 ## The launcher hands its terminal to the lcn_call instance and names the
@@ -8,14 +8,28 @@
 ##
 ## - **Connect.** To lcn_call's socket, checking the listener's uid before
 ##   anything is sent (`connectCtl`).
-## - **Activate** (G344). When the socket is absent or refuses, through the
-##   logosctl instance: `list_modules {module: "lcn_call"}` names its record;
-##   `unloaded` → `start_module`, `error` → `recover_module` with the execution
-##   revision, `loaded` or `stopping` → wait, `ready` → the socket again; with
-##   backoff (20 to 500 ms) until the timeout. No record: this logosd has no
-##   CLI module.
+## - **Activate** (G344; plan §3.3). When the socket is absent or refuses,
+##   through the logosctl instance: `list_modules {module: "lcn_call"}` names
+##   its record, read again on every round:
+##   - `unloaded` → `start_module`;
+##   - `error` (`host-terminated` after an unclean end too, R l.3634) with
+##     `requested` intent → `recover_module` with the execution revision; with
+##     any other intent → `start_module` (R l.3512; recovery would be refused,
+##     R l.3403);
+##   - `loaded` or `stopping` → wait; `ready` → the socket again;
+##   - NOT_READY from either request (cleanup unresolved, R l.578) → read
+##     again; an `error` arm `stale-revision` (R l.1819) → read again; any
+##     other `error` arm → 4;
+##   - an attempt that this launcher's request began and that failed (a later
+##     execution revision in `error`) → 4 with its classification.
+##   It acts again whenever the record is `unloaded` or `error` again, with
+##   backoff (20 to 500 ms) until the timeout, then 2 naming the last state
+##   read. It does not depend on when `start_module` answers (TF-20): it waits
+##   for the socket. No record: this logosd has no CLI module.
 ## - **Send.** One request, its descriptors (stdout, stderr, each `@FILE`) on
-##   the frame's first byte. `busy` is retried until the timeout.
+##   the frame's first byte; `deadline_ms` is what remains of the timeout
+##   after activation. `busy` is retried until the timeout; `closing` goes
+##   through activation again.
 ## - **Wait.** For `done`, with no deadline of its own: the command has its
 ##   (`deadline_ms`), a stream none. A readable `cancelFd` (SIGINT or SIGTERM)
 ##   half-closes the connection, which cancels the command; lcn_call answers
@@ -121,33 +135,83 @@ proc record(
       return ok(m)
   err(failure(ExitUnreachable, "this logosd has no CLI module (lcn_call)"))
 
+func revisionOf(rec: LogosNSRuntimeControlModuleRecord): uint64 =
+  if rec.execution.isSome: rec.execution.get.revision else: 0
+
+func errorText(e: LogosNSRuntimeControlError): string =
+  case e.code.kind
+  of LogosNSRuntimeControlErrorCodeKind.Configuration_rejected:
+    "configuration-rejected"
+  of LogosNSRuntimeControlErrorCodeKind.Declaration_unavailable:
+    "declaration-unavailable"
+  of LogosNSRuntimeControlErrorCodeKind.Stale_revision:
+    "stale-revision"
+
+proc lifecycle(
+    l: Launch, rec: LogosNSRuntimeControlModuleRecord, deadline: MonoTime
+): Result[bool, LaunchFailure] =
+  ## [G344; plan §3.3] One start or recovery for the record read: true when the
+  ## Runtime accepted it; false when the record is to be read again (NOT_READY,
+  ## R l.578; `stale-revision`, R l.1819). Any other error arm is a Runtime
+  ## fault.
+  template answered(r: untyped, errKind, accepted: untyped): untyped =
+    if r.isErr:
+      if r.error.code == $ecNotReady:
+        return ok(false)
+      return err(r.error)
+    if r.get.kind == errKind:
+      let e = r.get.arm_Map_error.error
+      if e.code.kind == LogosNSRuntimeControlErrorCodeKind.Stale_revision:
+        return ok(false)
+      return err(
+        failure(ExitRc, "lcn_call's activation answered " & e.errorText, e.errorText)
+      )
+    return ok(true)
+
+  let requested =
+    rec.execution.isSome and
+    rec.execution.get.intent.kind ==
+    LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested
+  if rec.state.kind == LogosNSRuntimeControlStateKind.Error and requested:
+    let r = l.ctlCall(
+      LcnCtlMethodKind.Recover_module,
+      LogosNSRuntimeControlRecoverModuleRequest(
+        module: CliModule,
+        instance: CliModule,
+        expected_execution_revision: rec.revisionOf,
+      ),
+      LogosNSRuntimeControlRecoverModuleResponse,
+      deadline,
+    )
+    answered(r, LogosNSRuntimeControlRecoverModuleResponseKind.Map_error, true)
+  else:
+    let r = l.ctlCall(
+      LcnCtlMethodKind.Start_module,
+      LogosNSRuntimeControlStartModuleRequest(
+        module: CliModule, instance: Opt.some(CliModule)
+      ),
+      LogosNSRuntimeControlStartModuleResponse,
+      deadline,
+    )
+    answered(r, LogosNSRuntimeControlStartModuleResponseKind.Map_error, true)
+
 proc activate(l: Launch, deadline: MonoTime): Result[cint, LaunchFailure] =
-  ## [G344] Starts or recovers lcn_call through the logosctl instance, then
-  ## connects to its socket.
+  ## [G344; plan §3.3] Starts or recovers lcn_call through the logosctl
+  ## instance until its socket answers.
   var ms = 20
-  var acted = false
-  var lastError = ""
+  var acted = Opt.none(uint64) ## the execution revision our last accepted request saw
+  var lastError, lastState = ""
   while true:
     let fd = l.connectCli(deadline)
     if fd.isOk:
       return ok(fd.get)
     lastError = fd.error
     let rec = ?l.record(deadline)
+    lastState = ($rec.state.kind).toLowerAscii
     case rec.state.kind
-    of LogosNSRuntimeControlStateKind.Unloaded:
-      if not acted:
-        acted = true
-        discard ?l.ctlCall(
-          LcnCtlMethodKind.Start_module,
-          LogosNSRuntimeControlStartModuleRequest(
-            module: CliModule, instance: Opt.some(CliModule)
-          ),
-          LogosNSRuntimeControlStartModuleResponse,
-          deadline,
-        )
     of LogosNSRuntimeControlStateKind.Error:
-      if acted:
-        # Started or recovered here and failed: the Loader's classification.
+      if acted.isSome and rec.revisionOf != acted.get:
+        # An attempt begun since our request failed: the Loader's classification.
         return err(
           failure(
             ExitRc,
@@ -156,19 +220,11 @@ proc activate(l: Launch, deadline: MonoTime): Result[cint, LaunchFailure] =
             rec.failure.get($ecNotReady),
           )
         )
-      if rec.execution.isNone:
-        return err(failure(ExitRc, "lcn_call failed and has no execution revision"))
-      acted = true
-      discard ?l.ctlCall(
-        LcnCtlMethodKind.Recover_module,
-        LogosNSRuntimeControlRecoverModuleRequest(
-          module: CliModule,
-          instance: CliModule,
-          expected_execution_revision: rec.execution.get.revision,
-        ),
-        LogosNSRuntimeControlRecoverModuleResponse,
-        deadline,
-      )
+      if ?l.lifecycle(rec, deadline):
+        acted = Opt.some(rec.revisionOf)
+    of LogosNSRuntimeControlStateKind.Unloaded:
+      if ?l.lifecycle(rec, deadline):
+        acted = Opt.some(rec.revisionOf)
     of LogosNSRuntimeControlStateKind.Loaded, LogosNSRuntimeControlStateKind.Stopping,
         LogosNSRuntimeControlStateKind.Ready:
       discard
@@ -176,7 +232,8 @@ proc activate(l: Launch, deadline: MonoTime): Result[cint, LaunchFailure] =
       return err(
         failure(
           ExitUnreachable,
-          "lcn_call is not reachable within the timeout (" & lastError & ")",
+          "lcn_call is not reachable within the timeout (last state " & lastState & "; " &
+            lastError & ")",
         )
       )
 
@@ -239,12 +296,17 @@ proc launch*(l: Launch): Result[int, LaunchFailure] =
     msg.fds.add(role(LcnCliFdRoleKind.File))
   if fds.len > MaxFds:
     return err(failure(ExitRefused, "at most " & $(MaxFds - 2) & " @FILE arguments"))
-  let bytes = msg.encode.valueOr:
-    return err(failure(ExitRefused, error))
   let deadline = getMonoTime() + initDuration(milliseconds = l.timeoutMs)
   var ms = 20
   while true:
     let fd = ?l.activate(deadline)
+    if l.message.deadline_ms.isSome:
+      # [G344; plan §3.3] What remains of the timeout after activation.
+      msg.deadline_ms =
+        Opt.some(uint32(min(int64(l.message.deadline_ms.get), int64(left(deadline)))))
+    let bytes = msg.encode.valueOr:
+      closeFd(fd)
+      return err(failure(ExitRefused, error))
     let wrote = writeRequest(fd, bytes, fds, left(deadline))
     let reply = readReply(
       fd,
@@ -282,7 +344,10 @@ proc launch*(l: Launch): Result[int, LaunchFailure] =
         if not pause(ms, deadline):
           return err(failure(ExitUnreachable, text & " until the timeout"))
       of LcnCliRefusedReasonChoiceKind.Closing:
-        return err(failure(ExitUnreachable, text))
+        # [G344; plan §3.3] Through activation: wait on `stopping`, start
+        # from `unloaded`.
+        if not pause(ms, deadline):
+          return err(failure(ExitUnreachable, text & " until the timeout"))
       else:
         return err(failure(ExitRefused, text))
 

@@ -1,7 +1,7 @@
 ## The CLI's pieces that need no Runtime (Tier 5 step N-2a; DECISIONS G344,
 ## G347, G349; D26 (a); docs/DAEMON.md §7a): the launcher socket's
 ## frames with descriptors, the request checks, the typing of arguments from a
-## request rule, the `--json` reader, and the output written to the
+## request rule, the `--request` reader, and the output written to the
 ## launcher's descriptors. `test_lcn_call` runs the module itself.
 
 when defined(posix):
@@ -383,18 +383,18 @@ cliargs.multi_response = {}
 
     test "structured fields, unknown or repeated keys and missing fields are refused with the field list":
       let p = typed(text("point", "1"))
-      check p.isErr and "--json" in p.error
+      check p.isErr and "--request" in p.error
       let u = typed(text("zzz", "1"))
       check u.isErr and "no field" in u.error and
-        "point?: cliargs.point (map) (--json)" in u.error
+        "point?: cliargs.point (map) (--request)" in u.error
       let d = typed(text("n", "6"))
       check d.isErr and "twice" in d.error
       let m = shapeOf("go").fromArgs(@[text("n", "1")])
       check m.isErr and "needs t" in m.error
 
-    test "a request rule that is a choice takes --json only":
+    test "a request rule that is a choice takes --request only":
       let r = shapeOf("multi").fromArgs(@[text("kind", "a")])
-      check r.isErr and "--json" in r.error
+      check r.isErr and "--request" in r.error
 
     test "@FILE: text must be UTF-8, byte strings are raw, other kinds take key=value":
       let ok1 =
@@ -409,7 +409,7 @@ cliargs.multi_response = {}
       let only = typed(file("raw", @[0xFF'u8]))
       check only.isOk and only.get.field("raw") == cbor(@[0xFF'u8])
 
-  suite "cli.json: --json as G89 writes values (D26 (a), G349)":
+  suite "cli.json: --request as G89 writes values (D26 (a), G349)":
     test "the whole request, as key=value would give it":
       let j =
         shapeOf("go").fromJson("""{"n": 5, "t": "hi", "b": "00ff", "flag": false}""")

@@ -6,21 +6,37 @@
 ##   (`{methods: [root]}` or `{subscribe_events: [root]}`): the Capability
 ##   Authority never narrows, so a wider request would be refused under a
 ##   narrower grant, and a route that cannot carry a marked method is no path
-##   for its payloads (IF l.388).
+##   for its payloads (IF l.368).
 ## - **Establish.** `establish_route` with one provider, cardinality
-##   `single`, a request key `lcall-` and 32 hex digits; on the local binding
-##   one ready record and no continuation. `materialize_route` takes the
-##   surface projected to the selected contract (IF l.3874).
-## - **Handles.** Each handle sits in shared memory with its own count of
-##   operations in flight. Every operation on a route's handles holds that
-##   route's lock (IF l.1980). Lock order: a route's lock, then the table's;
-##   no thread waits for a route's lock while it holds the table's.
-## - **Renewal.** When less than a tenth of the validity or 5 s remain,
-##   `renew_route` and a new handle: a renewal does not extend an existing
-##   session (R l.3477-3478), so new operations go to the new handle and the
-##   old one is released once its operations have ended.
-## - **End.** `observe_end` marks a handle ended; the next command establishes
-##   a new route. A call that failed on an ended handle is retried once.
+##   `single`, a request key `lcall-` and 32 hex digits (a fresh one for every
+##   establishment and renewal, R l.2914, l.1807); one ready record.
+##   `materialize_route` takes the surface projected to the selected contract
+##   (IF l.3905).
+## - **Continuations (G347; plan §3.4).** This table serves `lcn_call`'s own
+##   Runtime Control binding, where the Runtime resolves continuations itself
+##   and the module-facing response carries none (R l.3019-3020): a
+##   continuation here is a Runtime fault, MODULE_ERROR, and nothing is
+##   followed. A `connect_remote` binding's follower is `hops.nim` (5-7a).
+## - **Handles.** Each handle sits in shared memory with its own lock and its
+##   count of commands using it. The lock covers the handle's own operations
+##   (`prepare_call`, `subscribe`, `unsubscribe`, the two end registrations
+##   and `release`; IF l.1935), never a call's `submit`, `cancel` or
+##   `release` (`rpc.nim`). No callback takes a handle lock, and `release`
+##   runs with no lock a callback takes (IF l.1484-1485). Lock order: a
+##   handle's lock, then the table's.
+## - **End registrations (IF l.1477).** At materialization, once per handle:
+##   `observe_end` marks it ended, and `observe_subscription_end` reports a
+##   binding-ended subscription to the table's hook (the streams of N-2c;
+##   none in N-2b). One registration each: commands share handles, so no
+##   command registers its own.
+## - **Renewal.** When less than a tenth of the validity or 5 s remain, or
+##   less than the command's deadline, `renew_route` and a new handle: a
+##   renewal does not extend an existing session (R l.3337-3338), so new
+##   operations go to the new handle and the old one is released once its
+##   operations have ended.
+## - **End (G348; plan §3.5 step 8, rule 1).** An ended handle is not leased:
+##   the next command establishes a new route. `drop` takes a route out of use
+##   for a retry (rule 2) and has it closed by `reap`.
 ## - **Idle.** A route unused for `route_idle_ms` is closed (`close_route`) and
 ##   its handles released, by `reap`, which the server calls once a second.
 ## - **Destroy.** `closeTable`, after every worker has ended: every handle
@@ -52,8 +68,10 @@ type
 
   Box = object ## One materialized handle.
     handle: LogosRouteHandle
+    lock: Lock ## the handle's own operations (IF l.1935)
     inflight: int
     retired, ended: bool
+    subEnds: bool ## `observe_subscription_end` is registered
     tag: ptr EndTag
 
   EndTag = object ## `observe_end`'s user data.
@@ -70,11 +88,13 @@ type
     renewing: bool
     establishedMs, expiresMs: int64 ## wall-clock ms; expiresMs 0: no expiry
     lastUsed: MonoTime
+    closeWanted: bool ## dropped for a retry: closed when reaped
 
   TableObj = object
     lock: Lock
     establishing: Lock ## one establishment at a time
-    handleLocks: array[MaxRoutes, Lock] ## per slot, IF l.1980
+    subHook: LogosSubscriptionEndHandler ## N-2c's streams; nil in N-2b
+    subHookData: pointer
     rc: ptr LogosRuntimeControlBinding
     idleMs: int
     slots: array[MaxRoutes, Slot]
@@ -92,8 +112,9 @@ type
     slot: int
     box: ptr Box
     route*: ptr LogosRouteHandle
-    lock*: ptr Lock
+    lock*: ptr Lock ## the handle's lock
     routeId*: string
+    subEnds*: bool ## binding-ended subscriptions are reported
 
   Detached = object ## A slot taken out of the table, to finish outside its lock.
     slot: int
@@ -143,37 +164,63 @@ proc newRouteTable*(rc: ptr LogosRuntimeControlBinding, idleMs: int): RouteTable
   result = cast[RouteTable](allocShared0(sizeof(TableObj)))
   initLock(result.lock)
   initLock(result.establishing)
-  for i in 0 ..< MaxRoutes:
-    initLock(result.handleLocks[i])
   result.rc = rc
   result.idleMs = idleMs
 
+proc setSubscriptionEndHook*(
+    t: RouteTable, hook: LogosSubscriptionEndHandler, data: pointer
+) =
+  ## [N-2c] Where a handle's binding-ended subscriptions go; set before the
+  ## first route.
+  withLock t.lock:
+    t.subHook = hook
+    t.subHookData = data
+
 proc onEnd(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises: [].} =
   ## [SPEC INTERFACE §2.8] The route ended: the handle takes no new command.
+  ## It takes the table's lock only, never a handle's.
   let tag = cast[ptr EndTag](userData)
   withLock tag.table.lock:
     tag.box.ended = true
 
+proc onSubscriptionEnd(
+    sub: LogosSubscriptionId, reason: CErrorCode, userData: pointer
+) {.cdecl, gcsafe, raises: [].} =
+  ## [SPEC INTERFACE l.1474-1481] A binding-ended subscription on this handle,
+  ## for the table's hook; it operates on no handle (l.1480).
+  let tag = cast[ptr EndTag](userData)
+  var hook: LogosSubscriptionEndHandler = nil
+  var data: pointer = nil
+  withLock tag.table.lock:
+    hook = tag.table.subHook
+    data = tag.table.subHookData
+  if hook != nil:
+    hook(sub, reason, data)
+
 proc freeBox(b: ptr Box) =
   if b.tag != nil:
     deallocShared(b.tag)
+  deinitLock(b.lock)
   deallocShared(b)
 
-proc releaseBox(t: RouteTable, slot: int, b: ptr Box) =
-  ## [SPEC INTERFACE l.3896] No operation is in flight on `b`; every response
-  ## buffer was released by its completion.
-  withLock t.handleLocks[slot]:
+proc releaseBox(b: ptr Box) =
+  ## [SPEC INTERFACE l.3927, l.1484-1485] No operation is in flight on `b`;
+  ## every response buffer was released by its completion; no lock a callback
+  ## takes is held.
+  withLock b.lock:
     b.handle.vtable.release(addr b.handle)
   freeBox(b)
 
 proc materialize(
     t: RouteTable, routeId: string, contract: Digest, schema: openArray[byte]
 ): Result[ptr Box, Failure] =
-  ## [SPEC INTERFACE l.3870-3877] A handle for `routeId`, with its end handler.
+  ## [SPEC INTERFACE l.3901-3908] A handle for `routeId`, with its two end
+  ## registrations (IF l.1477).
   var root: ContractRoot
   for i in 0 ..< root.len:
     root[i] = contract[i]
   let box = cast[ptr Box](allocShared0(sizeof(Box)))
+  initLock(box.lock)
   let p =
     if schema.len == 0:
       nil
@@ -196,11 +243,19 @@ proc materialize(
   box.tag = cast[ptr EndTag](allocShared0(sizeof(EndTag)))
   box.tag.table = t
   box.tag.box = box
-  let o = box.handle.vtable.observeEnd(addr box.handle, onEnd, box.tag)
-  if int64(o.code) != 0:
+  var ended, subEnds = false
+  withLock box.lock:
+    let o = box.handle.vtable.observeEnd(addr box.handle, onEnd, box.tag)
+    ended = int64(o.code) != 0
+    let e = box.handle.vtable.observeSubscriptionEnd(
+      addr box.handle, onSubscriptionEnd, box.tag
+    )
+    subEnds = int64(e.code) == 0
+  withLock t.lock:
     # Already ended, or no end to observe: the handle serves this command only.
-    withLock t.lock:
+    if ended:
       box.ended = true
+    box.subEnds = subEnds
   ok(box)
 
 func failureOfRecord(r: LogosNSRuntimeControlRouteRecord): Failure =
@@ -240,11 +295,10 @@ proc establish(
     t.rc, "establish_route", req, LogosNSRuntimeControlEstablishRouteResponse, cancelFd
   )
   if resp.continuations.len > 0:
+    # [G347; R l.3019-3020] The local binding resolves continuations itself.
     return err(
       failure(
-        ecNotReady,
-        "establish_route answered with a remote continuation; remote providers come " &
-          "with Tier 5 step 5-7a",
+        ecModule, "establish_route answered with a continuation on the local binding"
       )
     )
   if resp.routes.len != 1:
@@ -279,7 +333,7 @@ proc detach(t: RouteTable, i: int, close: bool): Detached =
 proc finish(t: RouteTable, d: var Detached) =
   ## Outside the table's lock: release the handles, then close the route.
   for b in d.boxes:
-    t.releaseBox(d.slot, b)
+    releaseBox(b)
   if d.close:
     t.closeRoute(textOf(d.routeId))
   free(d.routeId)
@@ -316,8 +370,9 @@ proc freeSlot(t: RouteTable, victim: var Opt[Detached]): int =
     ):
       best = i
   if best >= 0:
-    let ended = t.slots[best].current == nil or t.slots[best].current.ended
-    victim = Opt.some(t.detach(best, not ended))
+    let s = addr t.slots[best]
+    let ended = s.current == nil or s.current.ended
+    victim = Opt.some(t.detach(best, not ended or s.closeWanted))
   best
 
 proc lease(t: RouteTable, i: int): Lease =
@@ -329,18 +384,24 @@ proc lease(t: RouteTable, i: int): Lease =
     slot: i,
     box: s.current,
     route: addr s.current.handle,
-    lock: addr t.handleLocks[i],
+    lock: addr s.current.lock,
     routeId: textOf(s.routeId),
+    subEnds: s.current.subEnds,
   )
 
-func needsRenewal(s: Slot, now: int64): bool =
+func needsRenewal(s: Slot, now: int64, deadlineMs: Opt[int]): bool =
+  ## [G348] Less than a tenth of the validity or 5 s left, or (R5) less than
+  ## the command's deadline: a renewal does not extend a session (R
+  ## l.3337-3338), so a call needs a session that outlasts its deadline.
   if s.expiresMs <= 0:
     return false
   let validity = max(s.expiresMs - s.establishedMs, 0)
-  s.expiresMs - now < max(validity div 10, RenewMarginMs)
+  let left = s.expiresMs - now
+  left < max(validity div 10, RenewMarginMs) or
+    (deadlineMs.isSome and left < int64(deadlineMs.get))
 
 proc renew(t: RouteTable, i: int) =
-  ## [SPEC RUNTIME l.3477-3478] Called with the slot marked `renewing`: a
+  ## [SPEC RUNTIME l.3337-3338] Called with the slot marked `renewing`: a
   ## renewal and a new handle; on any failure the current handle stays in use
   ## until it ends.
   var routeId, schema: string
@@ -393,10 +454,10 @@ proc renew(t: RouteTable, i: int) =
       else:
         release = fresh # no room for another retired handle: keep the current one
   if release != nil:
-    t.releaseBox(i, release)
+    releaseBox(release)
 
 proc acquire*(
-    t: RouteTable, spec: RouteSpec, cancelFd: cint = -1
+    t: RouteTable, spec: RouteSpec, deadlineMs = Opt.none(int), cancelFd: cint = -1
 ): Result[Lease, Failure] =
   ## [G348] A lease on the route for `spec.key`, established if there is none;
   ## readable `cancelFd` cancels an establishment.
@@ -405,7 +466,7 @@ proc acquire*(
     let i = t.find(spec.key)
     if i >= 0:
       let s = addr t.slots[i]
-      if not s.renewing and s[].needsRenewal(wallMs()):
+      if not s.renewing and s[].needsRenewal(wallMs(), deadlineMs):
         s.renewing = true
         renewSlot = i
   if renewSlot >= 0:
@@ -449,9 +510,7 @@ proc acquire*(
             )
             result0 = ok(t.lease(slot))
         if orphan != nil:
-          withLock t.handleLocks[0]:
-            orphan.handle.vtable.release(addr orphan.handle)
-          freeBox(orphan)
+          releaseBox(orphan)
           t.closeRoute(routeId)
           result0 =
             err(failure(ecNotReady, "lcn_call holds " & $MaxRoutes & " routes in use"))
@@ -479,7 +538,16 @@ proc done*(t: RouteTable, l: Lease) =
         if r == release:
           r = nil
   if release != nil:
-    t.releaseBox(l.slot, release)
+    releaseBox(release)
+
+proc drop*(t: RouteTable, l: Lease) =
+  ## [G348; plan §3.5 step 8, rule 2] The leased handle takes no new command,
+  ## and its route, when it is still the slot's, is closed when reaped.
+  withLock t.lock:
+    l.box.ended = true
+    let s = addr t.slots[l.slot]
+    if s.used and s.current == l.box:
+      s.closeWanted = true
 
 proc reap*(t: RouteTable) =
   ## [G348] Closes routes idle for `route_idle_ms`, drops ended ones, and
@@ -499,11 +567,11 @@ proc reap*(t: RouteTable) =
       if s[].busy:
         continue
       if s.current == nil or s.current.ended:
-        detached.add(t.detach(i, false))
+        detached.add(t.detach(i, s.closeWanted))
       elif inMilliseconds(now - s.lastUsed) >= t.idleMs:
         detached.add(t.detach(i, true))
   for (i, b) in retired:
-    t.releaseBox(i, b)
+    releaseBox(b)
   for d in detached.mitems:
     t.finish(d)
 
@@ -514,12 +582,11 @@ proc closeTable*(t: RouteTable) =
   withLock t.lock:
     for i in 0 ..< MaxRoutes:
       if t.slots[i].used:
-        let ended = t.slots[i].current == nil or t.slots[i].current.ended
-        detached.add(t.detach(i, not ended))
+        let s = addr t.slots[i]
+        let ended = s.current == nil or s.current.ended
+        detached.add(t.detach(i, not ended or s.closeWanted))
   for d in detached.mitems:
     t.finish(d)
-  for i in 0 ..< MaxRoutes:
-    deinitLock(t.handleLocks[i])
   deinitLock(t.establishing)
   deinitLock(t.lock)
   deallocShared(t)
