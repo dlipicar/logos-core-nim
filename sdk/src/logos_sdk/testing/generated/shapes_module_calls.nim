@@ -14,10 +14,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[invokert, common_mirrors]
+import logos_sdk/codegen/[invokert, consumert, common_mirrors]
 import ./shapes_module_types
 
-export invokert, common_mirrors, shapes_module_types
+export invokert, consumert, common_mirrors, shapes_module_types
 
 const
   primaryDocument = "; -- metadata --\x0A_module = \"shapes_module\"\x0A\x0A; Input for tests/generated/shapes_module_*: a module whose typed provider\x0A; functions (INTERFACE \xC2\xA72.4) carry every C shape lcn-gen\'s kit converts.\x0A\x0Ashapes.blob = bstr .size (1..16)\x0A\x0Ashapes.counter = uint32\x0A\x0Ashapes.digest = bstr .size 4\x0A\x0Ashapes.entry =\x0A  { kind: \"file\", path: tstr } /\x0A  { kind: \"dir\", path: tstr, entries: [* tstr] }\x0A\x0Ashapes.leaf = \"leaf\"\x0A\x0Ashapes.names = [* tstr .size (1..8)]\x0A\x0Ashapes.pair = [shapes.tree, uint64]\x0A\x0Ashapes.tree = {\x0A  ? left: shapes.tree,\x0A  kids: [* shapes.tree],\x0A  tag: shapes.leaf,\x0A  ? twin: shapes.pair,\x0A}\x0A\x0Ashapes.value = uint64 / tstr / bool\x0A\x0Ashapes.reflect_request = {\x0A  a: 7,\x0A  b: int64,\x0A  c: tstr,\x0A  d: bstr .size 32,\x0A  e: [* bstr .size 4],\x0A  f: [* [uint64, tstr]],\x0A  g: shapes.value / [uint64] / [uint64, uint64],\x0A  ? h: [uint64, bstr],\x0A  i: logos.schema_commitment,\x0A  j: [],\x0A  l: bstr .size 0,\x0A  m: int8,\x0A  n: uint16,\x0A  o: shapes.counter,\x0A  p: logos.error_code,\x0A  ? q: logos.error_detail,\x0A  r: shapes.names,\x0A  s: bstr,\x0A  t: [* shapes.entry],\x0A  u: shapes.tree,\x0A  v: { w: bool, ? x: tstr .size (1..8) },\x0A  y: shapes.blob,\x0A  z: shapes.digest,\x0A}\x0A\x0Ashapes.reflect_response = {\x0A  a: 7,\x0A  b: int64,\x0A  c: tstr,\x0A  d: bstr .size 32,\x0A  e: [* bstr .size 4],\x0A  f: [* [uint64, tstr]],\x0A  g: shapes.value / [uint64] / [uint64, uint64],\x0A  ? h: [uint64, bstr],\x0A  i: logos.schema_commitment,\x0A  j: [],\x0A  l: bstr .size 0,\x0A  m: int8,\x0A  n: uint16,\x0A  o: shapes.counter,\x0A  p: logos.error_code,\x0A  ? q: logos.error_detail,\x0A  r: shapes.names,\x0A  s: bstr,\x0A  t: [* shapes.entry],\x0A  u: shapes.tree,\x0A  v: { w: bool, ? x: tstr .size (1..8) },\x0A  y: shapes.blob,\x0A  z: shapes.digest,\x0A}\x0A\x0Ashapes.pick_request =\x0A  { by: \"id\", id: uint64 } /\x0A  { by: \"name\", name: tstr }\x0A\x0Ashapes.pick_response =\x0A  { found: true, entry: shapes.entry } /\x0A  { found: false }\x0A\x0Ashapes.ping_request = {}\x0A\x0Ashapes.ping_response = {}\x0A"
@@ -1647,6 +1647,56 @@ proc callClear2(p1: ptr LogosResponseOwner, p32: ptr uint64, p33: ptr int64, p34
   resetOutput(p59)
   resetOutput(p60)
   resetOutput(p61)
+
+# Over a wrapped route handle (consumert, DECISIONS G339).
+
+proc invoke*(route: RouteHandle, request: ShapesPickRequest): Result[ShapesPickResponse, InvocationFailure] =
+  ## `shapes.pick` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: ShapesPickRequest, onDone: CallDone[ShapesPickResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `shapes.pick` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "pick", params, ShapesPickResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: ShapesPingRequest): Result[ShapesPingResponse, InvocationFailure] =
+  ## `shapes.ping` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: ShapesPingRequest, onDone: CallDone[ShapesPingResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `shapes.ping` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "ping", params, ShapesPingResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: ShapesReflectRequest): Result[ShapesReflectResponse, InvocationFailure] =
+  ## `shapes.reflect` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: ShapesReflectRequest, onDone: CallDone[ShapesReflectResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `shapes.reflect` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "reflect", params, ShapesReflectResponse, onDone, user, timeoutMs)
+  wipe(params)
 
 proc shapesModuleCallsLayout*(): seq[(string, int)] =
   ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).

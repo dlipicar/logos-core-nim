@@ -12,10 +12,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[invokert, common_mirrors]
+import logos_sdk/codegen/[invokert, consumert, common_mirrors]
 import ./meter_module_types
 
-export invokert, common_mirrors, meter_module_types
+export invokert, consumert, common_mirrors, meter_module_types
 
 const
   primaryDocument = "; -- metadata --\x0A_module = \"meter_module\"\x0A\x0Ameter.changed_event = {\x0A  value: uint64,\x0A}\x0A\x0Ameter.reading = {\x0A  ? label: tstr,\x0A  value: uint64,\x0A}\x0A\x0Ameter.read_request = {\x0A  channel: uint32,\x0A}\x0A\x0Ameter.read_response = {\x0A  label: tstr .size (1..64),\x0A  reading: meter.reading,\x0A}\x0A"
@@ -161,6 +161,28 @@ proc callClear0(p1: ptr LogosResponseOwner, p3: ptr logos_tstr_size_1_64_t, p4: 
   clearOwner(p1)
   resetOutput(p3)
   resetOutput(p4)
+
+# Over a wrapped route handle (consumert, DECISIONS G339).
+
+proc invoke*(route: RouteHandle, request: MeterReadRequest): Result[MeterReadResponse, InvocationFailure] =
+  ## `meter.read` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: MeterReadRequest, onDone: CallDone[MeterReadResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `meter.read` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "read", params, MeterReadResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc subscribe*(route: RouteHandle, event: typedesc[MeterChangedEvent], onEvent: EventProc[MeterChangedEvent], onEnd: SubscriptionEndProc = nil, onInvalid: InvalidEventProc = nil, user: pointer = nil): Result[Subscription, InvocationFailure] =
+  ## `meter.changed_event` through `route`, decoded (INTERFACE §2.5, l.1489).
+  subscribeTyped(route, "meter.changed_event", MeterChangedEvent, onEvent, onEnd, onInvalid, user)
 
 proc meterModuleCallsLayout*(): seq[(string, int)] =
   ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).

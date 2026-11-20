@@ -1363,6 +1363,20 @@ when declared(caParity):
   proc evaluations(what: string): int =
     received().countIt(it.what == what)
 
+  type Typed = object
+    count, ends, reason: Atomic[int]
+
+  var typed: Typed
+
+  proc onTyped(ev: MeterChangedEvent, user: pointer) {.nimcall, gcsafe, raises: [].} =
+    discard typed.count.fetchAdd(1)
+
+  proc onTypedEnd(
+      sub: Subscription, reason: ErrorCode, user: pointer
+  ) {.nimcall, gcsafe, raises: [].} =
+    typed.reason.store(ord(reason))
+    discard typed.ends.fetchAdd(1)
+
   suite "run.events: under the Capability Authority (G175; CA l.906-915)":
     setup:
       clearAll()
@@ -1435,6 +1449,37 @@ when declared(caParity):
       check ends[0].reason.load == ord(ecNotAuthorised)
       setScript()
       h.release()
+      e.finish()
+
+    test "[IMPL-DECISION G339] through the typed helper (`consumert`): a subscription the authority stops allowing reaches its onEnd with NOT_AUTHORISED after its earlier deliveries, and a later unsubscribe is OK (INTERFACE l.1479, l.1482)":
+      let e = fixtureEngine(config(extra = @[dmeterStatic]))
+      resetDeferred()
+      discard e.started(dmeter())
+      let (_, rc) = e.startClient()
+      let route = wrapRoute(rc.handle(rc.routeId("k"))).tryGet
+      forget()
+      typed.count.store(0)
+      typed.ends.store(0)
+      typed.reason.store(0)
+      let sub = route.subscribe(MeterChangedEvent, onTyped, onTypedEnd).tryGet
+      let payload = encodeCbor(parseDiag("{\"value\": 7}").get)
+      publishRaw(cstring(Changed), payload)
+      check waitUntil(
+        proc(): bool =
+          typed.count.load == 1
+      )
+      setScript(rule(vDeny, "subscribe-event"))
+      check publish(PolicyChangedName, policyChanged(0, 1))
+      publishRaw(cstring(Changed), payload)
+      check waitUntil(
+        proc(): bool =
+          typed.ends.load == 1
+      )
+      check typed.reason.load == ord(ecNotAuthorised)
+      check typed.count.load == 1
+      setScript()
+      check sub.unsubscribe().isOk
+      check route.release().isOk
       e.finish()
 
     test "[IFC-0669] [TXT-0087] [IMPL-DECISION G225] an end with no registration is not reported later; release waits for a running subscription-end report and suppresses one not begun":
