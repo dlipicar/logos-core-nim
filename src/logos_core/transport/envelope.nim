@@ -321,6 +321,9 @@ proc failureOf(
   if d.isSome:
     f.detail = Opt.some(d.get.bytes)
   checkFailure(f).isOkOr:
+    # [DECISIONS G276] The copies of a refused failure's text: the method is
+    # not known yet (`decodeMessage`).
+    wipe(f)
     return err(fail(eeRule, error, Opt.some(mk), field))
   ok(f)
 

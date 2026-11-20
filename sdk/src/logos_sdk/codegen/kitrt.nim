@@ -186,6 +186,16 @@ proc clearLastFailure*() =
     secureZero(addr resultDetail[0], detailUsed)
     detailUsed = 0
 
+var failureHooked {.threadvar.}: bool
+  ## `releaseLastFailure` is registered for this thread's release
+
+proc releaseLastFailure() {.nimcall, gcsafe, raises: [].} =
+  ## [DECISIONS G276] At the thread's end: a failure no later call cleared is
+  ## zeroed before the system releases the thread's storage, which it does
+  ## without zeroing it.
+  clearLastFailure()
+  failureHooked = false
+
 proc okResult*(): LogosResult =
   LogosResult(code: CErrorCode(0))
 
@@ -210,6 +220,9 @@ proc failureResult*(f: InvocationFailure): LogosResult =
     wipe(f)
     f = InvocationFailure(code: ecModule)
   clearLastFailure()
+  if not failureHooked:
+    failureHooked = true
+    onThreadRelease(releaseLastFailure)
   var r = LogosResult(code: CErrorCode(ord(f.code)))
   if f.message.isSome:
     for i, c in f.message.get:
