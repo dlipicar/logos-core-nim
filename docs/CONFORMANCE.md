@@ -265,7 +265,8 @@ execution scope `local-transport` in a `process` (G272). So:
   order, so codes, ends and their causes are a direct consumer's, and a handle is never retargeted
   (RUN-0181, RUN-0182, RUN-0256, RUN-0837); a stopping hosted consumer's calls are refused
   NOT_READY from stop step 1 as a direct one's (RUN-1093, RUN-0794). `test_hosted_routes` (C-1 to
-  C-10, S-18) shows it with the probe kit library in a host, to direct and hosted providers. The
+  C-10, S-18) shows it with the probe kit library in a host, to direct and hosted providers, and C-14
+  with a consumer written with lcn-gen's typed helpers (Tier 5 step N-1). The
   host waits for its handlers, end observers and completions before `_MODULE_destroy`.
 - **Boundary invariance** (part 4b-3.4; RUNTIME l.51-53, l.161, l.970; INTERFACE Abstract):
   `test_boundary_invariance` runs one case table from the probe through one route handle in four
@@ -592,6 +593,19 @@ direct instead, the unix-stream entry points fail and leave nothing behind, and 
 is refused (`tests/test_windows_profile.nim`). The evidence runs on the Windows CI leg only, which
 blocks since part 5-4c; elsewhere the suite skips. The other 16 §8.2.1 units, Windows support itself,
 are 5-9's.
+
+### What Tier 5 step N-1 changes
+
+The module kit (DECISIONS I101; G339 to G342). Sub-part 2 adds lcn-gen's consumer helpers (G339): a
+generated `<stem>_calls.nim` has, over a wrapped route handle, a typed `subscribe` per event and
+`invoke` and `prepareInvoke` per method, and `logos_sdk/kit/routes` gives a module instance its
+routes and typed Runtime Control subscriptions. IFC-0671, the permission for a generated typed
+subscription helper, is taken for Nim and leaves the inspection item for a test
+(`tests/test_consumert.nim`); IFC-0192, its C example, stays an inspection item, since
+`<stem>_calls.h` has no subscription helper. The helpers keep IFC-0966 and IFC-0967 for a module
+that uses them (the inspection item says how). A marked response decoded by `prepareInvoke` is
+erased once its receiver returns (`test_wipe_routes` W-8, orc). Nothing else changes: the helpers
+call the route and binding vtables as a module would, and the Runtime's side is unchanged.
 
 ### What Tier 5 step N-2b changes
 

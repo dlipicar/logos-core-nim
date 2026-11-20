@@ -14,10 +14,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[invokert, common_mirrors]
+import logos_sdk/codegen/[invokert, consumert, common_mirrors]
 import ./lcn_NS_storage_fetch_types
 
-export invokert, common_mirrors, lcn_NS_storage_fetch_types
+export invokert, consumert, common_mirrors, lcn_NS_storage_fetch_types
 
 const
   primaryDocument = "; -- metadata --\x0A_interface = \"lcn.storage_fetch\"\x0A\x0A; How a Logos Storage provider serves package objects to the Package Manager\x0A; (DECISIONS G91, G136, G395; PACKAGE MANAGER l.854-858, l.1453-1458).\x0A; sdk/docs/STORAGE-FETCH.md documents it.\x0A\x0A; An LGX source\'s `object` or `provenance_object`, as the catalog gives it.\x0A; Opaque to the Package Manager; each provider documents its encoding.\x0Alcn.storage_fetch.locator = bstr .size (1..4096)\x0A\x0Alcn.storage_fetch.readiness = \"starting\" / \"ready\" / \"offline\"\x0A\x0Alcn.storage_fetch.failure = {\x0A  code: \"invalid-length\" / \"invalid-locator\" / \"not-ready\" / \"unavailable\" / \"out-of-range\",\x0A  ? detail: tstr .size (1..256),\x0A}\x0A\x0Alcn.storage_fetch.stat_object_request = {\x0A  object: lcn.storage_fetch.locator,\x0A}\x0A\x0Alcn.storage_fetch.stat_object_response =\x0A  { size: uint64 } /\x0A  { failure: lcn.storage_fetch.failure }\x0A\x0A; `length` is 1..1048576 by rule (STORAGE-FETCH.md); a schema cannot bound\x0A; an integer outside the prelude aliases (INTERFACE l.446-458).\x0Alcn.storage_fetch.read_object_request = {\x0A  object: lcn.storage_fetch.locator,\x0A  offset: uint64,\x0A  length: uint32,\x0A}\x0A\x0Alcn.storage_fetch.read_object_response =\x0A  { data: bstr .size (0..1048576) } /\x0A  { failure: lcn.storage_fetch.failure }\x0A\x0Alcn.storage_fetch.fetch_readiness_request = {}\x0A\x0Alcn.storage_fetch.fetch_readiness_response = {\x0A  readiness: lcn.storage_fetch.readiness,\x0A}\x0A\x0Alcn.storage_fetch.fetch_readiness_changed_event = {\x0A  readiness: lcn.storage_fetch.readiness,\x0A}\x0A"
@@ -656,6 +656,60 @@ proc callClear2(p1: ptr LogosResponseOwner, p3: ptr logos_lcn_NS_storage_fetch_S
   ## resets every output object without reading it.
   clearOwner(p1)
   resetOutput(p3)
+
+# Over a wrapped route handle (consumert, DECISIONS G339).
+
+proc invoke*(route: RouteHandle, request: LcnNSStorageFetchFetchReadinessRequest): Result[LcnNSStorageFetchFetchReadinessResponse, InvocationFailure] =
+  ## `lcn.storage_fetch.fetch_readiness` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: LcnNSStorageFetchFetchReadinessRequest, onDone: CallDone[LcnNSStorageFetchFetchReadinessResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `lcn.storage_fetch.fetch_readiness` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "fetch_readiness", params, LcnNSStorageFetchFetchReadinessResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: LcnNSStorageFetchReadObjectRequest): Result[LcnNSStorageFetchReadObjectResponse, InvocationFailure] =
+  ## `lcn.storage_fetch.read_object` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: LcnNSStorageFetchReadObjectRequest, onDone: CallDone[LcnNSStorageFetchReadObjectResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `lcn.storage_fetch.read_object` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "read_object", params, LcnNSStorageFetchReadObjectResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: LcnNSStorageFetchStatObjectRequest): Result[LcnNSStorageFetchStatObjectResponse, InvocationFailure] =
+  ## `lcn.storage_fetch.stat_object` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: LcnNSStorageFetchStatObjectRequest, onDone: CallDone[LcnNSStorageFetchStatObjectResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `lcn.storage_fetch.stat_object` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "stat_object", params, LcnNSStorageFetchStatObjectResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc subscribe*(route: RouteHandle, event: typedesc[LcnNSStorageFetchFetchReadinessChangedEvent], onEvent: EventProc[LcnNSStorageFetchFetchReadinessChangedEvent], onEnd: SubscriptionEndProc = nil, onInvalid: InvalidEventProc = nil, user: pointer = nil): Result[Subscription, InvocationFailure] =
+  ## `lcn.storage_fetch.fetch_readiness_changed_event` through `route`, decoded (INTERFACE §2.5, l.1489).
+  subscribeTyped(route, "lcn.storage_fetch.fetch_readiness_changed_event", LcnNSStorageFetchFetchReadinessChangedEvent, onEvent, onEnd, onInvalid, user)
 
 proc lcnNSStorageFetchCallsLayout*(): seq[(string, int)] =
   ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).

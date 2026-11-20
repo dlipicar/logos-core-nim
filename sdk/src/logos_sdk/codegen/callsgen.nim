@@ -17,6 +17,12 @@
 ##   `invoke(route: ptr LogosRouteHandle, request: <Request>):
 ##   Result[<Response>, InvocationFailure]` per method, overloaded on the
 ##   request type.
+## - For Nim callers holding a wrapped handle (`consumert.RouteHandle`,
+##   DECISIONS G339): `invoke(route: RouteHandle, request)` under the handle's
+##   operation rules; `prepareInvoke(route, request, onDone, user, timeoutMs)`,
+##   an asynchronous call (§2.9.1) whose completion is decoded to the response
+##   type; and per event `subscribe(route, <Event>, onEvent, onEnd, onInvalid,
+##   user)`, decoding each delivery to the event's type (App A.4, l.1489).
 ## - For C callers, a template `export<Stem>Calls()`. A Nim module
 ##   instantiates it once, at top level, to define `<stem>_calls.h`'s
 ##   `lcn_invoke_<namespace>_<Method>` and `lcn_clear_<namespace>_<Method>`
@@ -32,7 +38,7 @@
 
 import std/[sequtils, strutils, tables]
 import ../pins
-import ../iface/[accept, cmap]
+import ../iface/[accept, cmap, surface]
 import ./[cmirror, nimgen, sdkroot]
 
 type CallsOptions* = object
@@ -46,6 +52,53 @@ func pascal(name: string): string =
 func callsTemplateName*(stem: string): string =
   ## The export template of a set's calls module.
   "export" & pascal(stem) & "Calls"
+
+proc handleHelpers(s: ContractSet, names: Table[string, string]): string =
+  ## [DECISIONS G339] The helpers over a wrapped route handle (`consumert`):
+  ## per method a synchronous `invoke` and a `prepareInvoke`, per event a typed
+  ## `subscribe`. The request tree and bytes of a prepared call are wiped once
+  ## the binding has them (G276; harmless for unmarked requests), and a marked
+  ## response once `onDone` returns (`marked = true`).
+  let surface = callSurface(s)
+  var marked: seq[string]
+  for d in s.documents:
+    marked.add(sensitiveDeclarations(d.model))
+  result = "\n# Over a wrapped route handle (consumert, DECISIONS G339).\n"
+  for m in surface.methods:
+    let request = names.getOrDefault(m.request)
+    let response = names.getOrDefault(m.response)
+    if request.len == 0 or response.len == 0:
+      continue
+    result.add(
+      "\nproc invoke*(route: RouteHandle, request: " & request & "): Result[" & response &
+        ", InvocationFailure] =\n" & "  ## `" & m.name &
+        "` through `route` under its operation rules.\n" &
+        "  ?route.beginOperation()\n  defer:\n    route.endOperation()\n" &
+        "  invoke(route.raw, request)\n"
+    )
+    result.add(
+      "\nproc prepareInvoke*(route: RouteHandle, request: " & request &
+        ", onDone: CallDone[" & response &
+        "], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =\n" &
+        "  ## `" & m.name & "` through `route`, prepared and not yet submitted\n" &
+        "  ## (INTERFACE §2.9.1).\n" &
+        "  let t = toCbor(request)\n  var params = encodeCbor(t)\n  wipe(t)\n" &
+        "  result = prepareTyped(route, " & escape(m.bare) & ", params, " & response &
+        ", onDone, user, timeoutMs" &
+        (if m.response in marked: ", marked = true" else: "") & ")\n  wipe(params)\n"
+    )
+  for e in surface.events:
+    let t = names.getOrDefault(e.id)
+    if t.len == 0:
+      continue
+    result.add(
+      "\nproc subscribe*(route: RouteHandle, event: typedesc[" & t &
+        "], onEvent: EventProc[" & t &
+        "], onEnd: SubscriptionEndProc = nil, onInvalid: InvalidEventProc = nil, user: pointer = nil): Result[Subscription, InvocationFailure] =\n" &
+        "  ## `" & e.id & "` through `route`, decoded (INTERFACE §2.5, l.1489).\n" &
+        "  subscribeTyped(route, " & escape(e.id) & ", " & t &
+        ", onEvent, onEnd, onInvalid, user)\n"
+    )
 
 proc callsModule*(
     s: ContractSet, opts = CallsOptions(importPrefix: SdkImportRoot), system = false
@@ -80,8 +133,8 @@ proc callsModule*(
   )
   o.add(
     "\n#!fmt: off\n{.push raises: [], gcsafe.}\n\n" & "import " & opts.importPrefix &
-      "codegen/[invokert, common_mirrors]\nimport ./" & stem &
-      "_types\n\nexport invokert, common_mirrors, " & stem & "_types\n\n"
+      "codegen/[invokert, consumert, common_mirrors]\nimport ./" & stem &
+      "_types\n\nexport invokert, consumert, common_mirrors, " & stem & "_types\n\n"
   )
   o.add(
     "const\n  primaryDocument = " & escape(s.primary.source) &
@@ -98,6 +151,7 @@ proc callsModule*(
   if mirrors.types.len > 0:
     o.add("\n" & mirrors.types & "\n")
   o.add("\n" & mirrors.procs & "\n")
+  o.add(handleHelpers(s, names))
   o.add("\n" & mirrors.layout & "\n")
   o.add(
     "\ntemplate " & tmpl & "*() =\n" & "  ## Defines `" & stem &

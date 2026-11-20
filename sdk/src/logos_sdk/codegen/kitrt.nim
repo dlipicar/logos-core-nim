@@ -133,6 +133,20 @@ template kitEnter*() =
     nimGC_setStackBottom(addr kitStackBottom)
   clearLastFailure()
 
+template callbackEnter*() =
+  ## [IMPL] The first statement of a callback a binding runs into this library
+  ## (a typed helper's event handler, end report or completion; DECISIONS G339),
+  ## in the callback's own frame: `kitEnter` without clearing the thread's last
+  ## failure, since a callback may run nested inside one of this library's
+  ## entries (a direct provider publishing during a call, INTERFACE l.1405).
+  ## Under refc the stack bottom only ever widens, so a nested callback leaves
+  ## the outer frames scanned.
+  setupForeignThreadGc()
+  enterThread()
+  when not defined(gcDestructors):
+    var kitStackBottom {.volatile, noinit.}: pointer
+    nimGC_setStackBottom(addr kitStackBottom)
+
 # Failures --------------------------------------------------------------------------
 
 func failure*(code: ErrorCode, message: sink string): InvocationFailure =

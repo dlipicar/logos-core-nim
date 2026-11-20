@@ -368,6 +368,15 @@ suite "wipe: a direct route (W-4)":
     else:
       skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
 
+var typedFetched: Atomic[int] ## 1 once `onTypedFetch` saw the canary, 2 otherwise
+
+proc onTypedFetch(
+    o: Result[VaultFetchResponse, InvocationFailure], user: pointer
+) {.nimcall, gcsafe, raises: [].} =
+  ## Reads the decoded response and keeps nothing: the helper erases it.
+  {.cast(gcsafe).}:
+    typedFetched.store(if o.isOk and o.get.secret == canary: 1 else: 2)
+
 suite "wipe: generated code (W-8)":
   teardown:
     disarmWipeAudit()
@@ -521,6 +530,36 @@ suite "wipe: generated code (W-8)":
       check held == canary
       wipe(held)
       h.release()
+      e.finish()
+      if scans:
+        check hits() == 0
+    else:
+      skip() # [DECISIONS G277] a refc build routes no marked contract (W-10)
+
+  test "[IFC-0577] [IMPL-DECISION G339] the typed prepareInvoke over a wrapped handle erases a marked response once onDone returns":
+    when ChannelsMove:
+      let (e, orch) = ready(wipeConfig())
+      var h = orch.vaultHandle(e, Vault, "w8t")
+      arm()
+      var rq = VaultStoreRequest(slot: uint32(Slot), secret: canary)
+      let s = invoke(addr h, rq)
+      wipeTyped(rq)
+      check s.isOk and s.get.stored
+      let rh = wrapRoute(h).valueOr:
+        check false
+        return
+      typedFetched.store(0)
+      let c = rh.prepareInvoke(VaultFetchRequest(slot: uint32(Slot)), onTypedFetch).valueOr:
+        check false
+        return
+      c.submit()
+      check waitUntil(
+        proc(): bool =
+          typedFetched.load != 0
+      )
+      check typedFetched.load == 1 # the canary, decoded
+      check c.release().isOk
+      check rh.release().isOk
       e.finish()
       if scans:
         check hits() == 0

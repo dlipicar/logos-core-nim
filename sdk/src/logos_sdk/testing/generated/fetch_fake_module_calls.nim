@@ -16,10 +16,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[invokert, common_mirrors]
+import logos_sdk/codegen/[invokert, consumert, common_mirrors]
 import ./fetch_fake_module_types
 
-export invokert, common_mirrors, fetch_fake_module_types
+export invokert, consumert, common_mirrors, fetch_fake_module_types
 
 const
   primaryDocument = "; -- metadata --\x0A_module = \"fetch_fake_module\"\x0A_implements = [\x0A  h\'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429\',\x0A]\x0A\x0A; The reference fake provider of `lcn.storage_fetch` (DECISIONS G395; sdk/docs/\x0A; STORAGE-FETCH.md). `_implements` names the contract\'s root, and acceptance\x0A; fails when that root changes and this literal does not. Objects derive from\x0A; their locators; these methods set what the contract only reports.\x0A\x0A; Moves to `readiness`, publishing `fetch_readiness_changed_event` when it\x0A; changes; `held` are the locators served while not `ready`.\x0Afetch_fake.set_readiness_request = {\x0A  readiness: \"starting\" / \"ready\" / \"offline\",\x0A  held: [* bstr .size (1..4096)],\x0A}\x0A\x0Afetch_fake.set_readiness_response = {}\x0A\x0A; For one locator: answer `unavailable` to its next `unavailable` reads and\x0A; stats, and hold each read `delay_ms` milliseconds before it answers.\x0Afetch_fake.set_fault_request = {\x0A  object: bstr .size (1..4096),\x0A  unavailable: uint32,\x0A  delay_ms: uint32,\x0A}\x0A\x0Afetch_fake.set_fault_response = {}\x0A"
@@ -813,6 +813,92 @@ proc callClear4(p1: ptr LogosResponseOwner, p3: ptr logos_lcn_NS_storage_fetch_S
   ## resets every output object without reading it.
   clearOwner(p1)
   resetOutput(p3)
+
+# Over a wrapped route handle (consumert, DECISIONS G339).
+
+proc invoke*(route: RouteHandle, request: LcnNSStorageFetchFetchReadinessRequest): Result[LcnNSStorageFetchFetchReadinessResponse, InvocationFailure] =
+  ## `lcn.storage_fetch.fetch_readiness` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: LcnNSStorageFetchFetchReadinessRequest, onDone: CallDone[LcnNSStorageFetchFetchReadinessResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `lcn.storage_fetch.fetch_readiness` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "fetch_readiness", params, LcnNSStorageFetchFetchReadinessResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: LcnNSStorageFetchReadObjectRequest): Result[LcnNSStorageFetchReadObjectResponse, InvocationFailure] =
+  ## `lcn.storage_fetch.read_object` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: LcnNSStorageFetchReadObjectRequest, onDone: CallDone[LcnNSStorageFetchReadObjectResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `lcn.storage_fetch.read_object` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "read_object", params, LcnNSStorageFetchReadObjectResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: FetchFakeSetFaultRequest): Result[FetchFakeSetFaultResponse, InvocationFailure] =
+  ## `fetch_fake.set_fault` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: FetchFakeSetFaultRequest, onDone: CallDone[FetchFakeSetFaultResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `fetch_fake.set_fault` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "set_fault", params, FetchFakeSetFaultResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: FetchFakeSetReadinessRequest): Result[FetchFakeSetReadinessResponse, InvocationFailure] =
+  ## `fetch_fake.set_readiness` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: FetchFakeSetReadinessRequest, onDone: CallDone[FetchFakeSetReadinessResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `fetch_fake.set_readiness` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "set_readiness", params, FetchFakeSetReadinessResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: LcnNSStorageFetchStatObjectRequest): Result[LcnNSStorageFetchStatObjectResponse, InvocationFailure] =
+  ## `lcn.storage_fetch.stat_object` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: LcnNSStorageFetchStatObjectRequest, onDone: CallDone[LcnNSStorageFetchStatObjectResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `lcn.storage_fetch.stat_object` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "stat_object", params, LcnNSStorageFetchStatObjectResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc subscribe*(route: RouteHandle, event: typedesc[LcnNSStorageFetchFetchReadinessChangedEvent], onEvent: EventProc[LcnNSStorageFetchFetchReadinessChangedEvent], onEnd: SubscriptionEndProc = nil, onInvalid: InvalidEventProc = nil, user: pointer = nil): Result[Subscription, InvocationFailure] =
+  ## `lcn.storage_fetch.fetch_readiness_changed_event` through `route`, decoded (INTERFACE §2.5, l.1489).
+  subscribeTyped(route, "lcn.storage_fetch.fetch_readiness_changed_event", LcnNSStorageFetchFetchReadinessChangedEvent, onEvent, onEnd, onInvalid, user)
 
 proc fetchFakeModuleCallsLayout*(): seq[(string, int)] =
   ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).

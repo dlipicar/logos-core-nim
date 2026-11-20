@@ -2,7 +2,7 @@
 ## (INTERFACE §2.9, §5.2; RUNTIME §9.3; DECISIONS I94).
 ##
 ## A module that holds a `ptr LogosRuntimeControlBinding` (`ModuleServices.
-## runtimeControl`) calls the Runtime through it alone (RUNTIME l.182-184):
+## runtimeControl`) calls the Runtime through it alone (RUNTIME l.173-175):
 ##
 ## - `call` sends a typed request (`kit/rc_types.nim`, types only) by the
 ##   method's bare name and decodes the typed response. Results are checked
@@ -13,11 +13,12 @@
 ##   and a copy of the response in shared memory, and releases the response
 ##   owner; it allocates nothing the garbage collector owns that outlives it,
 ##   so it may run on the Runtime's thread that delivers the completion.
-## - `subscribe` and `unsubscribe` take a module's event handler.
+## - `subscribe` and `unsubscribe` take a module's event handler. Typed
+##   subscriptions with end reports are `kit/routes.nim`'s.
 ##
 ## The binding is never used after the module's `_MODULE_destroy` returns, and
 ## `release` of an asynchronous call is never made from that call's own
-## completion (INTERFACE l.2085).
+## completion (INTERFACE l.2043).
 
 {.push raises: [], gcsafe.}
 
@@ -95,12 +96,19 @@ proc prepareBytes*(
     complete: LogosAsyncCompleteFn,
     userData: pointer,
     outCall: var LogosAsyncCall,
+    timeoutMs: uint64 = 0,
 ): Result[void, RcFailure] =
   ## [SPEC INTERFACE §2.9.1] An asynchronous call, prepared and not yet
-  ## submitted. On failure no call exists and `outCall` is empty.
+  ## submitted. On failure no call exists and `outCall` is empty. A nonzero
+  ## `timeoutMs` is the call's deadline: its completion is TIMEOUT once it
+  ## passes, counted from submission (l.2020, l.2024). Options and callbacks
+  ## are always passed (l.1992).
   outCall = LogosAsyncCall()
   var options = LogosAsyncOptions(
-    abiVersion: AsyncCallAbiVersion, structSize: csize_t(sizeof(LogosAsyncOptions))
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncOptions)),
+    hasTimeout: timeoutMs > 0,
+    timeoutMs: timeoutMs,
   )
   var callbacks = LogosAsyncCallbacks(
     abiVersion: AsyncCallAbiVersion,
@@ -142,11 +150,12 @@ proc prepare*[Req](
     complete: LogosAsyncCompleteFn,
     userData: pointer,
     outCall: var LogosAsyncCall,
+    timeoutMs: uint64 = 0,
 ): Result[void, RcFailure] =
   ## A typed request, prepared asynchronously.
   let params = encode(req).valueOr:
     return err(rcFailure(ecInvalidParams, "the request has no encoding: " & error))
-  prepareBytes(rc, bare, params, complete, userData, outCall)
+  prepareBytes(rc, bare, params, complete, userData, outCall, timeoutMs)
 
 proc submit*(c: var LogosAsyncCall) =
   c.vtable.submit(addr c)
@@ -155,7 +164,7 @@ proc cancel*(c: var LogosAsyncCall) =
   c.vtable.cancel(addr c)
 
 proc release*(c: var LogosAsyncCall) =
-  ## [SPEC INTERFACE l.2079-2087] Ends the call: cancels it if it has no
+  ## [SPEC INTERFACE l.2038-2046] Ends the call: cancels it if it has no
   ## outcome and waits for a completion that is running. Never from that
   ## call's own completion.
   if c.vtable != nil:
@@ -201,7 +210,7 @@ proc subscribe*(
     handler: LogosEventHandler,
     userData: pointer,
 ): Result[LogosSubscriptionId, RcFailure] =
-  ## [SPEC INTERFACE l.3837; G178] The handler runs on a Runtime thread, one
+  ## [SPEC INTERFACE l.3868; G178] The handler runs on a Runtime thread, one
   ## delivery at a time per subscription.
   var id: LogosSubscriptionId = 0
   readStatus(rc.vtable.subscribe(rc, cstring(event), handler, userData, addr id)).isOkOr:

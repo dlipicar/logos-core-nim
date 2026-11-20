@@ -88,6 +88,7 @@ when defined(posix):
     meterLib = buildKitLibrary("meter_impl.nim", "hrmeter")
     deferredLib = buildKitLibrary("deferred_adapter.nim", "hrdeferred")
     probeLib = buildKitLibrary("probe_impl.nim", "probe")
+    listenerLib = buildKitLibrary("listener_impl.nim", "hrlistener")
 
   proc digestOf(path: string): array[32, byte] =
     var h: Blake3Hasher
@@ -100,6 +101,7 @@ when defined(posix):
     meterDigest = digestOf(meterLib)
     deferredDigest = digestOf(deferredLib)
     probeDigest = digestOf(probeLib)
+    listenerDigest = digestOf(listenerLib)
 
   # Set-up -------------------------------------------------------------------------------
 
@@ -1208,6 +1210,28 @@ when defined(posix):
       stateAssignment: Opt.some(state),
     )
 
+  # `listener_impl` is a consumer written with lcn-gen's typed helpers (G339):
+  # the beacon kit's provider, which opens its route to the meter with
+  # `kit/routes` at initialization (`tests/kit/listener_impl.nim`).
+  let beaconRoot = acceptContractSet(
+    readFile(repo / "sdk/src/logos_sdk/testing/fixtures/beacon_module.cddl")
+  ).tryGet.primary.root
+
+  proc listenerRecord(hosted = true, state = "l"): ModuleRecord =
+    ModuleRecord(
+      module: "beacon_module",
+      strategy: (if hosted: stHostedDynamic else: stDirectDynamic),
+      placement: (if hosted: "process" else: ""),
+      artifact: ArtifactRecord(
+        id: "listener",
+        localPath: listenerLib,
+        hash: listenerDigest,
+        hashSuite: HashSuiteId,
+      ),
+      primaryContract: Opt.some(beaconRoot),
+      stateAssignment: Opt.some(state),
+    )
+
   type Consumer = object ## The probe's command files.
     dir: string ## its state directory
     n: int ## the commands posted
@@ -2029,6 +2053,52 @@ when defined(posix):
       check codes == @[Opt.some(ecNotReady), Opt.some(ecNotReady)]
       let invalid = (Opt.some(ecInvalidParams), Opt.some(ecInvalidParams))
       check malformed == @[invalid, invalid]
+
+    test "[IMPL-DECISION G339] C-14 a consumer written with the typed helpers, hosted and direct_dynamic: kit/routes opens its route at initialization, the typed subscribe hears the meter's event, the typed invoke reads through the route, and its RouteSet closes at destroy; a failed initialization closes the set before it returns":
+      for (listenerHosted, providerHosted) in [
+        (true, false), (true, true), (false, true)
+      ]:
+        let cfg = hosted()
+        discard cfg.stateOf()
+        let dir = cfg.stateOf("l")
+        writeFile(
+          dir / "listen.cmd", hexOf(meterRoot) & "\n" & hexOf(meterSchema) & "\n"
+        )
+        let e = fixtureEngine(cfg)
+        discard e.started(
+          if providerHosted:
+            hostedMeter()
+          else:
+            meter(),
+          "m",
+        )
+        check e.started(listenerRecord(listenerHosted), "l").state == msReady
+        let c = Consumer(dir: dir)
+        check c.noted("opened", "0 ")
+        check c.noted("opened", "sub 0")
+        # Channel 21 publishes `meter.changed_event` (210) and answers with
+        # its caller: the listener's own instance.
+        check c.noted("read", "0 l")
+        check c.noted("heard", "210 ")
+        e.finish()
+        check c.linesOf("closed") == @["0"]
+        check noHostLeft()
+      let cfg = hosted()
+      discard cfg.stateOf()
+      let dir = cfg.stateOf("l")
+      writeFile(
+        dir / "listen.cmd", hexOf(meterRoot) & "\n" & hexOf(meterSchema) & "\nfail\n"
+      )
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      let made = e.create(listenerRecord(), "l").tryGet
+      let st = e.start(made.instance)
+      check st.isErr or st.get.state != msReady
+      let c = Consumer(dir: dir)
+      check c.noted("opened", "sub 0")
+      check c.linesOf("closed") == @["0"]
+      e.finish()
+      check noHostLeft()
 
   # M-1 to M-3: a module built with the other memory manager ---------------------------
 

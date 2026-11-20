@@ -12,10 +12,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[invokert, common_mirrors]
+import logos_sdk/codegen/[invokert, consumert, common_mirrors]
 import ./bulk_module_types
 
-export invokert, common_mirrors, bulk_module_types
+export invokert, consumert, common_mirrors, bulk_module_types
 
 const
   primaryDocument = "; -- metadata --\x0A_module = \"bulk_module\"\x0A\x0A; Input for tests/generated/bulk_module_*: a provider whose `send` publishes an\x0A; event of the requested size (step 4b-2c; DECISIONS G165), so an Event can be\x0A; larger than a peer\'s frame limit over local transport.\x0A\x0Abulk.carried_event = {\x0A  data: bstr,\x0A}\x0A\x0Abulk.send_request = {\x0A  size: uint32,\x0A}\x0A\x0Abulk.send_response = {\x0A  size: uint32,\x0A}\x0A"
@@ -111,6 +111,28 @@ proc callClear0(p1: ptr LogosResponseOwner, p3: ptr uint32) =
   ## resets every output object without reading it.
   clearOwner(p1)
   resetOutput(p3)
+
+# Over a wrapped route handle (consumert, DECISIONS G339).
+
+proc invoke*(route: RouteHandle, request: BulkSendRequest): Result[BulkSendResponse, InvocationFailure] =
+  ## `bulk.send` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: BulkSendRequest, onDone: CallDone[BulkSendResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `bulk.send` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "send", params, BulkSendResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc subscribe*(route: RouteHandle, event: typedesc[BulkCarriedEvent], onEvent: EventProc[BulkCarriedEvent], onEnd: SubscriptionEndProc = nil, onInvalid: InvalidEventProc = nil, user: pointer = nil): Result[Subscription, InvocationFailure] =
+  ## `bulk.carried_event` through `route`, decoded (INTERFACE §2.5, l.1489).
+  subscribeTyped(route, "bulk.carried_event", BulkCarriedEvent, onEvent, onEnd, onInvalid, user)
 
 proc bulkModuleCallsLayout*(): seq[(string, int)] =
   ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).
