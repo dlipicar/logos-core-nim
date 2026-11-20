@@ -487,7 +487,7 @@ proc cliArtifact*(c: DaemonConfig, exe: string): Opt[LcnAppArtifact] =
   else:
     let path = companionLibrary(exe).valueOr:
       return Opt.none(LcnAppArtifact)
-    let hash = fromHex(lcnCallArtifactHash).valueOr:
+    let hash = hex.fromHex(lcnCallArtifactHash).valueOr:
       return Opt.none(LcnAppArtifact)
     Opt.some(LcnAppArtifact(id: LcnCallArtifactId, local_path: path, hash: hash))
 
