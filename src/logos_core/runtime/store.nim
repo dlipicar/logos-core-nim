@@ -148,6 +148,13 @@ func toRs*(r: ModuleRecord): LcnRsRecord =
     for d in r.implements:
       s.add(commitment(d))
     result.implements = Opt.some(s)
+  if r.extends.len > 0:
+    # [plan §2.1] Written only when non-empty, so a record without `extends`
+    # keeps its bytes and its fact bytes (G160).
+    var s: seq[SchemaCommitment]
+    for d in r.extends:
+      s.add(commitment(d))
+    result.extends = Opt.some(s)
   if r.requires.len > 0:
     var s: seq[LcnRsRequirement]
     for q in r.requires:
@@ -199,6 +206,11 @@ func fromRs*(r: LcnRsRecord): Result[ModuleRecord, string] =
       return err("a record's implements is present but empty")
     for c in r.implements.get:
       m.implements.add(?digestOf(c))
+  if r.extends.isSome:
+    if r.extends.get.len == 0:
+      return err("a record's extends is present but empty")
+    for c in r.extends.get:
+      m.extends.add(?digestOf(c))
   if r.requires.isSome:
     if r.requires.get.len == 0:
       return err("a record's requires is present but empty")

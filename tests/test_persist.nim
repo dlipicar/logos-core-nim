@@ -497,6 +497,57 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
     check storedOf(base, "k1").record.requestedPermissions[0].reason ==
       Opt.some("another reason")
     check stored(base).runtimeInstanceId == "rt-g160"
+    # [RUN-0258] R l.1303 adds `extends` to the preserved facts: the stored
+    # record carries it, an equal set keeps the instance's facts equal, and a
+    # changed set is a changed declaration fact (the retained record stays).
+    let base2 = freshBase()
+    var earlier, other: Digest
+    earlier[0] = 1
+    other[0] = 2
+    var k2 = keeper()
+    k2.primaryContract = Opt.some(meterRoot)
+    k2.extends = @[earlier]
+    writeSnapshot(
+      base2,
+      Snapshot(
+        runtimeInstanceId: "rt-g160-extends",
+        epoch: 2,
+        instances: @[
+          StoredInstance(
+            instance: "k2",
+            providerId: "p-g160-k2",
+            record: k2,
+            state: msUnloaded,
+            revision: (2'u64 shl 32) + 1,
+            intent: inUninitialized,
+          )
+        ],
+      ),
+    )
+    let kept = storedOf(base2, "k2").record
+    check kept.extends == @[earlier]
+    proc boot2(r: ModuleRecord): Result[InstanceView, EngineError] =
+      let e = openAt(base2)
+      result = e.bootstrap(
+        @[
+          BootstrapInstance(instance: "orch", record: client()),
+          BootstrapInstance(instance: "k2", record: r),
+        ],
+        "orch",
+      )
+      e.finish()
+
+    var same = k2
+    check factBytes(same) == factBytes(kept)
+    check boot2(same).isOk
+    check storedOf(base2, "k2").providerId == "p-g160-k2"
+    var moved = k2
+    moved.extends = @[earlier, other]
+    check factBytes(moved) != factBytes(kept)
+    check boot2(moved).isOk
+    check recordBytes(storedOf(base2, "k2").record) == recordBytes(kept)
+    # A record without `extends` keeps the bytes it had before P8.
+    check toRs(keeper()).extends.isNone and toRs(k2).extends.isSome
 
   test "[IMPL-DECISION G160] [RUN-1103] a retained dynamic instance whose configured facts changed is still refused, naming it (P5 reading B4: l.1319-1322 name static bindings only)":
     let base = freshBase()

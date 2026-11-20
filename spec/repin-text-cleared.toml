@@ -3843,3 +3843,23 @@ test = "tests/test_lgx.nim"
 id = "TXT-0458"
 step = "P8"
 test = "tests/test_lgx.nim"
+
+# P8b: records, host configuration and the store (RUNTIME §8) -----------------------------------------------------
+
+[[units]]
+id = "RUN-0267"
+compared = "RUNTIME l.1428 at 6a4dfa28 required `implements`, `requires` and `requested_permissions` to be non-empty when present; l.1357 at 6cac8335 adds `extends`. The host configuration (lcn.app_module, lcn.app_declaration) and the stored record (lcn.rs_record) gain `? extends`, refused when present and empty; test_host's [RUN-0267] test refuses an empty `extends`, and test_engine's malformed-record test keeps its other cases."
+
+[[stale]]
+id = "RUN-0268"
+compared = "RUNTIME l.1429 at 6a4dfa28 (its unit's paragraph starts at l.1420) required unique implemented commitments. It became RUN-1105 (l.1358 at 6cac8335), which adds extended commitments, unique over both arrays together (G394 r10), and a distinct contract for each `requires` entry (M29). checkRecord enforces both; test_engine's malformed-record test is retagged from RUN-0268 to RUN-1105."
+
+[[text]]
+id = "TXT-0548"
+step = "P8"
+test = "tests/test_host.nim"
+
+[[text]]
+id = "TXT-0552"
+step = "P8"
+test = "tests/test_engine.nim"

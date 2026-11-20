@@ -32,7 +32,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "BCP-0103" = "P9"
 "IFC-0957" = "P8"
 "RUN-1104" = "P8"
-"RUN-1105" = "P8"
 
 [units.changed]
 "IFC-0246" = "P8"
@@ -41,11 +40,9 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "PKG-0351" = "P8"
 "RUN-0258" = "P8"
 "RUN-0265" = "P8"
-"RUN-0267" = "P8"
 
 [stale]
 "BCP-0093" = "P9"
-"RUN-0268" = "P8"
 
 [deploydoc]
 "BCP-0093" = "P9"
@@ -164,17 +161,6 @@ class = "behaviour"
 what = "The handoff carries extends, and Runtime requires the descriptor's extended-contract set to match it exactly"
 
 [[text]]
-id = "TXT-0548"
-step = "P8"
-spec = "RUN"
-line = "1340"
-side = "new"
-section = "§8"
-class = "todo"
-guard = true
-what = "`primary_contract`, `implements`, and `extends` in accepted module facts are expected contract facts supplied by the input source."
-
-[[text]]
 id = "TXT-0549"
 step = "P8"
 spec = "RUN"
@@ -205,16 +191,6 @@ section = "§8"
 source = "review"
 class = "behaviour"
 what = "A route that selects an extended contract resolves methods and events under that contract only."
-
-[[text]]
-id = "TXT-0552"
-step = "P8"
-spec = "RUN"
-line = "1358"
-side = "new"
-source = "M29"
-class = "behaviour"
-what = "Each requires entry names a distinct contract"
 
 [[text]]
 id = "TXT-0147"

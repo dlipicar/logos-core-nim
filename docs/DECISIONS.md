@@ -2028,6 +2028,11 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   missing configuration; the Module Loader instance is the bootstrap mechanism's and never mismatches.
   `Engine.create` has no production caller, so every host instance is configured; tests that create
   instances with it and open the store again name them in the next configuration.
+- **Note at re-pin P8b (2026-11-20, 6cac8335; RUNTIME l.1303; G394):** `extends` is a declaration fact. The
+  stored record (`lcn.rs_record`) carries it, so `factBytes` does, and a changed set is a changed fact: a
+  static instance is then mismatched, any other refused, as for the other facts. It is written only when
+  non-empty, so a record without it keeps the bytes and fact bytes it had before P8 (`test_store`,
+  `test_persist`'s G160 test).
 
 ### G161 — The scope of "observation authority"
 - **Kind:** GAP · **Specs:** RUNTIME l.3665 (a request omitting both selectors needs observation
@@ -4391,6 +4396,24 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   owner. M16 was not stopped under D9 (parent plan, P5). The reading TF-57 suggests is not used: it would
   reverse owner batch A item 6 (G249). `test_loader_engine` (the invalid answers, the authority ending),
   `test_config` (an invalid `apply_configuration` answer), `test_hosted` (S-15c to S-15e).
+
+### G394 — Contract extension: the readings this implementation takes (Runtime)
+- **Kind:** Reading (re-pin P8b; plan `tier5-plans/repin/P8.md` §2 and §4 r10-r16; synthesis
+  `tier5-plans/repin/reviews/P8-synthesis.md` §1, §3) · **Specs:** RUNTIME §8 l.1340-1359.
+- **Description:** at 6cac8335 a module's accepted facts may state `extends`, the earlier contracts that a contract the
+  module provides extends (R l.1340-1347; COMMITMENT §9.1), and one provider record may expose those views beside its
+  primary contract and implemented interfaces. The text leaves the points below to the reader. None is a D9 stop: the two
+  reviews of the plan found none, and each reading follows from the text it cites.
+- **Decision, the record (`runtime/records.nim` `checkRecord`; `host_config.nim`, `store.nim`):**
+  - **r10 (R l.1358).** Implemented and extended commitments are unique over the two arrays together: a root in both is
+    refused, as one that repeats in either.
+  - **r11.** A record with `extends` and neither `primary_contract` nor `implements` is refused. R is silent; PM l.1142
+    refuses the same declaration, and the earlier contracts of l.1344 are those of "a contract provided by the module",
+    which such a record names none of.
+  - With them, as the text says (M29, R l.1358): two `requires` entries that name one contract are refused (TXT-0552).
+  - `extends` is an optional array of the host configuration (`lcn.app_module`, `lcn.app_declaration`) and of the stored
+    record, refused when present and empty (l.1357), and written to the store only when non-empty (the G160 note).
+- **Status:** decided 2026-11-20 (re-pin P8b).
 
 ## 7. Capability Authority
 
@@ -6799,6 +6822,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G378 | an ordinary consumer's `evaluate` | Reading | 7 |
 | G379 | what an evaluating module's scopes may name | GAP (TF-61), interim | 7 |
 | G392 | contract extension: the SDK and Package Manager readings | Reading | 3 |
+| G394 | contract extension: the Runtime readings | Reading | 6 |
 
 ---
 

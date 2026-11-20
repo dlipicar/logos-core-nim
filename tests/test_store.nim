@@ -517,3 +517,25 @@ suite "run.store: the Runtime state store [IMPL]":
     var d = b
     d.requestedPermissions[0].constraints = encodeCbor(cbor(2'u64))
     check factBytes(d) != factBytes(b)
+
+  test "[IMPL-DECISION G160] [G394] a record's extends round-trips, is written only when non-empty, and is a declaration fact":
+    var earlier, other: Digest
+    earlier[0] = 1
+    other[0] = 2
+    var a = sample()
+    a.instances[0].record.extends = @[earlier, other]
+    let bytes = encodeSnapshot(a).tryGet
+    let b = decodeSnapshot(bytes).tryGet
+    check b.instances[0].record.extends == @[earlier, other]
+    check encodeSnapshot(b).tryGet == bytes
+    # A record without it keeps its bytes.
+    check toRs(meterRecord()).extends.isNone
+    check encodeSnapshot(sample()).tryGet != bytes
+    # A changed set is a changed declaration fact.
+    var c = a.instances[0].record
+    c.extends = @[earlier]
+    check factBytes(c) != factBytes(a.instances[0].record)
+    # A present but empty array is refused when read.
+    var empty = toRs(meterRecord())
+    empty.extends = Opt.some(newSeq[typeof(empty.implements.get[0])]())
+    check fromRs(empty).error == "a record's extends is present but empty"

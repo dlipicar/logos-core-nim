@@ -196,7 +196,7 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
   setup:
     reset()
 
-  test "[RUN-0128] [RUN-0261] [RUN-0262] [RUN-0267] [RUN-0268] [RUN-0281] [RUN-0287] [RUN-0289] [RUN-0845] a malformed record creates nothing":
+  test "[RUN-0128] [RUN-0261] [RUN-0262] [RUN-0267] [RUN-0281] [RUN-0287] [RUN-0289] [RUN-0845] [RUN-1105] [TXT-0552] [G394] a malformed record creates nothing":
     let e = newEngine(config())
     let d = default(Digest)
     var bad = @[
@@ -229,6 +229,39 @@ suite "run.engine: records (RUNTIME §8, §9.3 create)":
     for r in bad:
       let x = e.create(r)
       check x.isErr and x.error.code == ecInvalidParams
+    # [RUN-1105; G394 r10, r11] Each refused for its own reason: a root in
+    # both `implements` and `extends`, two requirements naming one contract
+    # (TXT-0552), and `extends` with no contract the module provides.
+    var other, earlier: Digest
+    other[0] = 1
+    earlier[0] = 2
+    var across = gated()
+    across.implements = @[d]
+    across.extends = @[other, d]
+    var required = gated()
+    required.requires = @[
+      ProviderRequirement(contract: d, cardinality: cardSingle),
+      ProviderRequirement(contract: d, cardinality: cardAllVisible),
+    ]
+    var bare = gated()
+    bare.extends = @[d]
+    for (r, why) in [
+      (across, "an implemented or extended schema commitment repeats"),
+      (required, "two requires entries name one contract"),
+      (bare, "extends needs a primary_contract or implements"),
+    ]:
+      let x = e.create(r)
+      check x.isErr and x.error.code == ecInvalidParams and x.error.message == why
+    # The same sets, each well formed, are accepted.
+    var fine = gated()
+    fine.primaryContract = Opt.some(other)
+    fine.implements = @[d]
+    fine.extends = @[earlier]
+    fine.requires = @[
+      ProviderRequirement(contract: d, cardinality: cardSingle),
+      ProviderRequirement(contract: other, cardinality: cardAllVisible),
+    ]
+    check checkRecord(fine).isOk
     check e.list().withoutLoader.len == 0
     e.finish()
 
