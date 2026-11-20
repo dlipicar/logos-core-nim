@@ -2,16 +2,27 @@
 ## G347, G349; D26 (a); docs/DAEMON.md §7a): the launcher socket's
 ## frames with descriptors, the request checks, the typing of arguments from a
 ## request rule, the `--request` reader, and the output written to the
-## launcher's descriptors. `test_lcn_call` runs the module itself.
+## launcher's descriptors; N-2b's pure rules: the continuation rule
+## (`hops`), the launcher's activation decisions, the failure classifier and
+## retry rule, and the projection of an extended contract view.
+## `test_lcn_call` runs the module itself.
 
 when defined(posix):
-  import std/[json, os, strutils, tempfiles]
+  import std/[algorithm, json, os, sequtils, strutils, tempfiles]
   import unittest2
   import logos_sdk/cbor
-  import logos_sdk/iface/[accept, surface]
+  import logos_sdk/hash
+  import logos_sdk/base/hex
+  import logos_sdk/iface/[accept, outcome, surface]
+  import logos_sdk/kit/rc_types
   import ../src/logos_core/daemon/render
   import ../src/logos_core/transport/io/sock
   import ../src/logos_core/cli/[args, fdpass, present, wire]
+  from ../src/logos_core/cli/commands import
+    Stop, classify, retryable, contractViews, projectView
+  from ../src/logos_core/cli/rpc import CallResult, Failure
+  from ../src/logos_core/cli/launcher import Act, ActKind, Answer, nextAct, answerOf
+  import ../src/logos_core/cli/hops
   import std/posix except Stat
 
   discard signal(SIGPIPE, SIG_IGN) # as the Module Host does
@@ -579,3 +590,260 @@ cliargs.multi_response = {}
       check pr.doneValue(cbor(1'u64)).isOk
       check readAvailable(p[0]) == "1\n"
       closeFds(p[0], p[1])
+
+  # N-2b's pure rules -------------------------------------------------------------
+
+  proc continuation(
+      runtime: Opt[string], provider: Opt[string], facade = "facade"
+  ): LogosNSRuntimeControlRouteContinuation =
+    LogosNSRuntimeControlRouteContinuation(
+      provider: LogosNSRuntimeModuleProviderAddress(
+        provider: facade, runtime_instance_id: Opt.some("rt-facade")
+      ),
+      target: LogosNSRuntimeControlRemoteProviderTarget(
+        provider: provider,
+        runtime: LogosNSRuntimeControlRuntimeEndpoint(runtime_instance_id: runtime),
+      ),
+    )
+
+  suite "cli.hops: the continuation rule (G347; R l.3052-3058) [IMPL]":
+    let nodes = @[
+      ConfiguredNode(name: "east", runtimeId: "rt-east"),
+      ConfiguredNode(name: "west", runtimeId: "rt-west"),
+    ]
+    let first = @[HopStep(runtimeId: "rt-east", provider: "p0")]
+
+    test "a configured node is followed through its binding, selecting the target's provider":
+      let h = nextHop(
+        nodes, "rt-own", first, continuation(Opt.some("rt-west"), Opt.some("p1"))
+      )
+      check h.isOk
+      check h.get.node == "west" # the configured node, never the continuation's address
+      check h.get.provider == "p1" # the target's provider, not the facade's
+      check h.get.step == HopStep(runtimeId: "rt-west", provider: "p1")
+
+    test "a target that matches no configured node is refused, naming it (1)":
+      let h = nextHop(
+        nodes, "rt-own", first, continuation(Opt.some("rt-far"), Opt.some("p1"))
+      )
+      check h.isErr and h.error.exit == ExitRefused
+      check "rt-far" in h.error.message and "p1" in h.error.message
+
+    test "a target on lcn_call's own Runtime is refused (1; IF l.3875)":
+      let h = nextHop(
+        nodes, "rt-own", first, continuation(Opt.some("rt-own"), Opt.some("p1"))
+      )
+      check h.isErr and h.error.exit == ExitRefused
+      check "without --node" in h.error.message
+
+    test "a target without its Runtime id or provider is a fault (4; R l.3054)":
+      for c in [
+        continuation(Opt.none(string), Opt.some("p1")),
+        continuation(Opt.some("rt-west"), Opt.none(string)),
+      ]:
+        let h = nextHop(nodes, "rt-own", first, c)
+        check h.isErr and h.error.exit == ExitRc and h.error.code == $ecModule
+
+    test "a repeated (Runtime id, provider) pair is a cycle (4), the facade not in the key":
+      let back = nextHop(
+        nodes, "rt-own", first, continuation(Opt.some("rt-east"), Opt.some("p0"))
+      )
+      check back.isErr and back.error.exit == ExitRc
+      # The same target behind another facade is still the same pair.
+      let again = nextHop(
+        nodes,
+        "rt-own",
+        first,
+        continuation(Opt.some("rt-east"), Opt.some("p0"), facade = "other"),
+      )
+      check again.isErr and again.error.exit == ExitRc
+      # Another provider on the same Runtime is not a cycle.
+      check nextHop(
+        nodes, "rt-own", first, continuation(Opt.some("rt-east"), Opt.some("p2"))
+      ).isOk
+
+    test "the fifth target is refused (4)":
+      var path: seq[HopStep] = @[]
+      for i in 0 ..< MaxHops:
+        path.add(HopStep(runtimeId: "rt-" & $i, provider: "p" & $i))
+      let h = nextHop(
+        nodes, "rt-own", path, continuation(Opt.some("rt-west"), Opt.some("p9"))
+      )
+      check h.isErr and h.error.exit == ExitRc
+      check nextHop(
+        nodes,
+        "rt-own",
+        path[0 ..< MaxHops - 1],
+        continuation(Opt.some("rt-west"), Opt.some("p9")),
+      ).isOk
+
+  proc rec(
+      state: LogosNSRuntimeControlStateKind,
+      intent = Opt.none(LogosNSRuntimeControlExecutionStateIntentChoiceKind),
+      revision = 7'u64,
+  ): LogosNSRuntimeControlModuleRecord =
+    result = LogosNSRuntimeControlModuleRecord(
+      module: "lcn_call",
+      instance: Opt.some("lcn_call"),
+      state: LogosNSRuntimeControlState(kind: state),
+    )
+    if intent.isSome:
+      result.execution = Opt.some(
+        LogosNSRuntimeControlExecutionState(
+          intent: LogosNSRuntimeControlExecutionStateIntentChoice(kind: intent.get),
+          revision: revision,
+        )
+      )
+
+  suite "cli.activation: the launcher's decisions (G344; R l.578, l.1819, l.3403, l.3512, l.3634) [IMPL]":
+    type S = LogosNSRuntimeControlStateKind
+    type I = LogosNSRuntimeControlExecutionStateIntentChoiceKind
+
+    test "unloaded starts, whatever was done before":
+      check nextAct(rec(S.Unloaded), Opt.none(uint64)).kind == akStart
+      check nextAct(rec(S.Unloaded, Opt.some(I.Stopped)), Opt.some(3'u64)).kind ==
+        akStart
+
+    test "error with requested intent recovers at the record's revision":
+      let a = nextAct(rec(S.Error, Opt.some(I.Requested), 9), Opt.none(uint64))
+      check a.kind == akRecover and a.revision == 9
+
+    test "error with any other intent starts (recovery would be refused)":
+      for i in [I.Stopped, I.Uninitialized]:
+        check nextAct(rec(S.Error, Opt.some(i)), Opt.none(uint64)).kind == akStart
+      check nextAct(rec(S.Error), Opt.none(uint64)).kind == akStart
+
+    test "loaded, stopping and ready wait":
+      for st in [S.Loaded, S.Stopping, S.Ready]:
+        check nextAct(rec(st, Opt.some(I.Requested)), Opt.none(uint64)).kind == akWait
+
+    test "error at another revision after our accepted request is our failed attempt (4)":
+      check nextAct(rec(S.Error, Opt.some(I.Requested), 8), Opt.some(7'u64)).kind ==
+        akFailed
+      # The same revision: our request has not taken effect; act again.
+      check nextAct(rec(S.Error, Opt.some(I.Requested), 7), Opt.some(7'u64)).kind ==
+        akRecover
+
+    test "NOT_READY and stale-revision read again; anything else is a fault":
+      check answerOf($ecNotReady) == anReread
+      check answerOf($ecNotAuthorised) == anFault
+      check answerOf(
+        LogosNSRuntimeControlError(
+          code: LogosNSRuntimeControlErrorCode(
+            kind: LogosNSRuntimeControlErrorCodeKind.Stale_revision
+          )
+        )
+      ) == anReread
+      for k in [
+        LogosNSRuntimeControlErrorCodeKind.Configuration_rejected,
+        LogosNSRuntimeControlErrorCodeKind.Declaration_unavailable,
+      ]:
+        check answerOf(
+          LogosNSRuntimeControlError(code: LogosNSRuntimeControlErrorCode(kind: k))
+        ) == anFault
+
+  func failed(code: ErrorCode, prepared = true, cancelled = false): CallResult =
+    CallResult(
+      ok: false,
+      failure: Failure(code: code, message: "m"),
+      prepared: prepared,
+      cancelled: cancelled,
+    )
+
+  suite "cli.classify: a call's failure, total over the codes (G348, G349; R l.1259-1272; IF l.3308-3311) [IMPL]":
+    test "prepare_call NOT_READY, NOT_AUTHORISED or TRANSPORT_ERROR is retried; nothing else from it":
+      for c in [ecNotReady, ecNotAuthorised, ecTransport]:
+        check failed(c, prepared = false).retryable
+      for c in [ecInvalidParams, ecModule, ecTimeout, ecCancelled]:
+        check not failed(c, prepared = false).retryable
+
+    test "a completion is retried only for NOT_READY and NOT_AUTHORISED":
+      for c in ErrorCode:
+        if c == ecOk:
+          continue
+        check failed(c).retryable == (c in {ecNotReady, ecNotAuthorised})
+      check not failed(ecNotReady, cancelled = true).retryable
+
+    test "every code has an exit":
+      for c in ErrorCode:
+        if c == ecOk:
+          continue
+        let s = classify(failed(c))
+        let want =
+          case c
+          of ecTransport, ecTimeout, ecCancelled: ExitUnreachable
+          of ecMethodNotFound, ecInvalidParams, ecModule: ExitProvider
+          else: ExitRc
+        check s.exit == want
+        check s.code == $c
+
+    test "outcome unknown is said for TRANSPORT_ERROR, TIMEOUT and a CANCELLED not asked for":
+      for c in [ecTransport, ecTimeout, ecCancelled]:
+        check "outcome is unknown" in classify(failed(c)).message
+
+    test "a TRANSPORT_ERROR from prepare_call is unreachable, not unknown":
+      let s = classify(failed(ecTransport, prepared = false))
+      check s.exit == ExitUnreachable and "could not reach" in s.message
+
+    test "a cancel the launcher asked for is 130 and silent":
+      let s = classify(failed(ecCancelled, cancelled = true))
+      check s.exit == ExitInterrupted and s.silent
+
+    test "the provider's codes are labelled declared":
+      check classify(failed(ecModule)).declared
+      check not classify(failed(ecNotReady)).declared
+
+  # An extended contract view (R l.90-91), built in process as
+  # sdk/tests/test_call_surface.nim does: no fixture carries `extends`.
+  const
+    unitsDoc = "units.count = uint64\n"
+    tagsDoc = "tags.label = tstr\n"
+    alphaDoc =
+      "_interface = \"alpha\"\n\nalpha.get_request = {}\nalpha.get_response = {\n  n: units.count,\n}\n"
+
+  proc rootOf(doc: string, supp: openArray[string] = []): Digest =
+    let r = acceptContractSet(doc, [], supp)
+    if r.isErr:
+      checkpoint r.error
+    r.get.primary.root
+
+  proc implementing(roots: varargs[Digest]): string =
+    var rs = @roots
+    rs.sort(
+      proc(a, b: Digest): int =
+        cmpBytes(a, b)
+    )
+    "_implements = [" & rs.mapIt("h'" & toHex(it) & "'").join(", ") & "]\n"
+
+  suite "cli.views: --contract takes every exact contract view (R l.90-91; IF l.3905) [IMPL]":
+    let alphaRoot = rootOf(alphaDoc, [unitsDoc])
+    let oldDoc =
+      "_module = \"demo_module\"\n" & implementing(alphaRoot) &
+      "\ndemo.ping_request = {}\ndemo.ping_response = {\n  label: tags.label,\n}\n"
+    let nextDoc = oldDoc & "demo.pong_request = {}\ndemo.pong_response = {}\n"
+    let oldRoot =
+      acceptContractSet(oldDoc, [alphaDoc], [unitsDoc, tagsDoc]).get.primary.root
+    let b = acceptBinding(
+      "demo_module",
+      Opt.some(nextDoc),
+      [alphaDoc],
+      [unitsDoc, tagsDoc],
+      AcceptOptions(),
+      [oldDoc],
+    )
+
+    test "the extended view is a contract view and projects":
+      check b.isOk
+      let views = b.get.contractViews
+      check oldRoot in views and alphaRoot in views and b.get.primary.get.root in views
+      let p = projectView(b.get, "demo_module", oldRoot)
+      check p.isOk
+      let (set, _) = p.get
+      check set.primary.root == oldRoot
+      let names = callSurface(set).methods.mapIt(it.bare)
+      check "ping" in names and "pong" notin names
+
+    test "a root that is no view of the provider does not project":
+      var other = oldRoot
+      other[0] = other[0] xor 0xff
+      check projectView(b.get, "demo_module", other).isErr

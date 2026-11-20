@@ -72,13 +72,13 @@ type
     what*: string ## the op and `module.method` or `module.event`: metadata only
     code*: string ## the error channel's code, or ""
 
-  Stop = object ## Why a command ends early.
-    exit: int
-    code: string
-    message: string
-    detail: Opt[seq[byte]]
-    declared: bool ## the message is a provider's text
-    silent: bool ## cancelled: nothing more is written
+  Stop* = object ## Why a command ends early.
+    exit*: int
+    code*: string
+    message*: string
+    detail*: Opt[seq[byte]]
+    declared*: bool ## the message is a provider's text
+    silent*: bool ## cancelled: nothing more is written
 
   Ctx = object
     env: Env
@@ -269,7 +269,7 @@ proc describe(
     )
   ok(b)
 
-func roots(b: ModuleBinding): seq[Digest] =
+func contractViews*(b: ModuleBinding): seq[Digest] =
   ## [SPEC RUNTIME l.90-91] Every exact contract view: the primary, the
   ## interfaces and the earlier contracts the provider extends.
   if b.primary.isSome:
@@ -279,22 +279,29 @@ func roots(b: ModuleBinding): seq[Digest] =
   for e in b.extends:
     result.add(e.root)
 
-proc project(p: var Provider, selected: Digest): Result[void, Stop] =
-  ## [SPEC INTERFACE §5.1] The surface projected to `selected`, accepted again.
-  let v = schemaResponse(p.binding, selected).valueOr:
-    return err(refused(p.module & ": " & error))
+proc projectView*(
+    b: ModuleBinding, module: string, selected: Digest
+): Result[(ContractSet, seq[byte]), Stop] =
+  ## [SPEC INTERFACE §5.1; R l.90-91] The surface projected to the exact
+  ## contract view `selected` (primary, interface or extended), accepted again:
+  ## the set and the bytes `materialize_route` takes (IF l.3905).
+  let v = schemaResponse(b, selected).valueOr:
+    return err(refused(module & ": " & error))
   let bytes = encodeCbor(v)
   let set = acceptSchemaResponse(
-    bytes, selected, AcceptOptions(system: p.module.startsWith("logos_"))
+    bytes, selected, AcceptOptions(system: module.startsWith("logos_"))
   ).valueOr:
     return err(
       Stop(
         exit: ExitRc,
         code: $ecModule,
-        message:
-          "the projected contract of " & p.module & " does not validate: " & error,
+        message: "the projected contract of " & module & " does not validate: " & error,
       )
     )
+  ok((set, bytes))
+
+proc project(p: var Provider, selected: Digest): Result[void, Stop] =
+  let (set, bytes) = ?projectView(p.binding, p.module, selected)
   p.selected = selected
   p.set = set
   p.surface = callSurface(set)
@@ -313,9 +320,9 @@ proc provider(c: Ctx, sel: LcnCliProvider): Result[Provider, Stop] =
   if sel.contract.isSome:
     let want = digestOf(sel.contract.get).valueOr:
       return err(refused("--contract is 32 bytes"))
-    if want notin p.binding.roots:
+    if want notin p.binding.contractViews:
       var names: seq[string] = @[]
-      for r in p.binding.roots:
+      for r in p.binding.contractViews:
         names.add(hexOf(r))
       return err(
         refused(

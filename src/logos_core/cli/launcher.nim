@@ -138,7 +138,7 @@ proc record(
 func revisionOf(rec: LogosNSRuntimeControlModuleRecord): uint64 =
   if rec.execution.isSome: rec.execution.get.revision else: 0
 
-func errorText(e: LogosNSRuntimeControlError): string =
+func errorText*(e: LogosNSRuntimeControlError): string =
   case e.code.kind
   of LogosNSRuntimeControlErrorCodeKind.Configuration_rejected:
     "configuration-rejected"
@@ -147,43 +147,88 @@ func errorText(e: LogosNSRuntimeControlError): string =
   of LogosNSRuntimeControlErrorCodeKind.Stale_revision:
     "stale-revision"
 
-proc lifecycle(
-    l: Launch, rec: LogosNSRuntimeControlModuleRecord, deadline: MonoTime
-): Result[bool, LaunchFailure] =
-  ## [G344; plan §3.3] One start or recovery for the record read: true when the
-  ## Runtime accepted it; false when the record is to be read again (NOT_READY,
-  ## R l.578; `stale-revision`, R l.1819). Any other error arm is a Runtime
-  ## fault.
-  template answered(r: untyped, errKind, accepted: untyped): untyped =
+type
+  ActKind* = enum
+    akWait ## `loaded`, `stopping` or `ready`: read the record again later
+    akStart ## `start_module`
+    akRecover ## `recover_module` with `Act.revision`
+    akFailed ## an attempt begun since this launcher's request failed: 4
+
+  Act* = object
+    kind*: ActKind
+    revision*: uint64 ## the record's execution revision
+
+  Answer* = enum
+    anAccepted ## the Runtime accepted the request
+    anReread ## read the record again (NOT_READY, R l.578; `stale-revision`, R l.1819)
+    anFault ## any other answer: 4
+
+func nextAct*(rec: LogosNSRuntimeControlModuleRecord, acted: Opt[uint64]): Act =
+  ## [G344; plan §3.3] What the launcher does for the record it read. `acted`
+  ## is the execution revision the record had when a request of this launcher
+  ## was last accepted: an `error` at another revision is an attempt begun
+  ## since, which failed.
+  let rev = rec.revisionOf
+  case rec.state.kind
+  of LogosNSRuntimeControlStateKind.Loaded, LogosNSRuntimeControlStateKind.Stopping,
+      LogosNSRuntimeControlStateKind.Ready:
+    Act(kind: akWait, revision: rev)
+  of LogosNSRuntimeControlStateKind.Unloaded:
+    Act(kind: akStart, revision: rev)
+  of LogosNSRuntimeControlStateKind.Error:
+    if acted.isSome and rev != acted.get:
+      Act(kind: akFailed, revision: rev)
+    elif rec.execution.isSome and
+        rec.execution.get.intent.kind ==
+        LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested:
+      # [R l.3403] Recovery needs `requested` intent; `host-terminated` after
+      # an unclean end (R l.3634) is recovered here.
+      Act(kind: akRecover, revision: rev)
+    else:
+      # [R l.3512] An explicit stop that a cleanup failure or an unclean end
+      # interrupted (R l.577, l.1735): a start establishes `requested` intent.
+      Act(kind: akStart, revision: rev)
+
+func answerOf*(code: string): Answer =
+  ## A start or recovery the Runtime refused with an invocation error.
+  if code == $ecNotReady: anReread else: anFault
+
+func answerOf*(e: LogosNSRuntimeControlError): Answer =
+  ## A start or recovery answered with its `error` arm.
+  if e.code.kind == LogosNSRuntimeControlErrorCodeKind.Stale_revision:
+    anReread
+  else:
+    anFault
+
+proc lifecycle(l: Launch, act: Act, deadline: MonoTime): Result[bool, LaunchFailure] =
+  ## [G344; plan §3.3] One start or recovery: true when the Runtime accepted
+  ## it, false when the record is to be read again.
+  template answered(r: untyped, errKind: untyped): untyped =
     if r.isErr:
-      if r.error.code == $ecNotReady:
+      if answerOf(r.error.code) == anReread:
         return ok(false)
       return err(r.error)
     if r.get.kind == errKind:
       let e = r.get.arm_Map_error.error
-      if e.code.kind == LogosNSRuntimeControlErrorCodeKind.Stale_revision:
+      if answerOf(e) == anReread:
         return ok(false)
       return err(
         failure(ExitRc, "lcn_call's activation answered " & e.errorText, e.errorText)
       )
     return ok(true)
 
-  let requested =
-    rec.execution.isSome and
-    rec.execution.get.intent.kind ==
-    LogosNSRuntimeControlExecutionStateIntentChoiceKind.Requested
-  if rec.state.kind == LogosNSRuntimeControlStateKind.Error and requested:
+  if act.kind == akRecover:
     let r = l.ctlCall(
       LcnCtlMethodKind.Recover_module,
       LogosNSRuntimeControlRecoverModuleRequest(
         module: CliModule,
         instance: CliModule,
-        expected_execution_revision: rec.revisionOf,
+        expected_execution_revision: act.revision,
       ),
       LogosNSRuntimeControlRecoverModuleResponse,
       deadline,
     )
-    answered(r, LogosNSRuntimeControlRecoverModuleResponseKind.Map_error, true)
+    answered(r, LogosNSRuntimeControlRecoverModuleResponseKind.Map_error)
   else:
     let r = l.ctlCall(
       LcnCtlMethodKind.Start_module,
@@ -193,13 +238,13 @@ proc lifecycle(
       LogosNSRuntimeControlStartModuleResponse,
       deadline,
     )
-    answered(r, LogosNSRuntimeControlStartModuleResponseKind.Map_error, true)
+    answered(r, LogosNSRuntimeControlStartModuleResponseKind.Map_error)
 
 proc activate(l: Launch, deadline: MonoTime): Result[cint, LaunchFailure] =
   ## [G344; plan §3.3] Starts or recovers lcn_call through the logosctl
   ## instance until its socket answers.
   var ms = 20
-  var acted = Opt.none(uint64) ## the execution revision our last accepted request saw
+  var acted = Opt.none(uint64)
   var lastError, lastState = ""
   while true:
     let fd = l.connectCli(deadline)
@@ -208,26 +253,23 @@ proc activate(l: Launch, deadline: MonoTime): Result[cint, LaunchFailure] =
     lastError = fd.error
     let rec = ?l.record(deadline)
     lastState = ($rec.state.kind).toLowerAscii
-    case rec.state.kind
-    of LogosNSRuntimeControlStateKind.Error:
-      if acted.isSome and rec.revisionOf != acted.get:
-        # An attempt begun since our request failed: the Loader's classification.
-        return err(
-          failure(
-            ExitRc,
-            "lcn_call did not start" &
-              (if rec.reason.isSome: ": " & rec.reason.get else: ""),
-            rec.failure.get($ecNotReady),
-          )
-        )
-      if ?l.lifecycle(rec, deadline):
-        acted = Opt.some(rec.revisionOf)
-    of LogosNSRuntimeControlStateKind.Unloaded:
-      if ?l.lifecycle(rec, deadline):
-        acted = Opt.some(rec.revisionOf)
-    of LogosNSRuntimeControlStateKind.Loaded, LogosNSRuntimeControlStateKind.Stopping,
-        LogosNSRuntimeControlStateKind.Ready:
+    let act = nextAct(rec, acted)
+    case act.kind
+    of akWait:
       discard
+    of akFailed:
+      # The Loader's classification of the attempt.
+      return err(
+        failure(
+          ExitRc,
+          "lcn_call did not start" &
+            (if rec.reason.isSome: ": " & rec.reason.get else: ""),
+          rec.failure.get($ecNotReady),
+        )
+      )
+    of akStart, akRecover:
+      if ?l.lifecycle(act, deadline):
+        acted = Opt.some(act.revision)
     if not pause(ms, deadline):
       return err(
         failure(
