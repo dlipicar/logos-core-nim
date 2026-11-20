@@ -87,6 +87,8 @@
               ./docs/CONFORMANCE.md
               # The service-manager units for logosd (DAEMON.md §13).
               ./contrib
+              # The digest the logosd package compiles in for liblcn_call (G343).
+              ./tools/artifact_hash.nim
             ];
           };
 
@@ -161,6 +163,7 @@
                   "test_hosted_permissions.nim"
                   "test_hosted_routes.nim"
                   "test_kit_dylib.nim"
+                  "test_lcn_call.nim"
                   "test_logosd.nim"
                   "test_module_host.nim"
                   "test_realizer.nim"
@@ -324,9 +327,36 @@
             meta.mainProgram = "lcn-pkg";
           };
 
+          # The CLI module's library (Tier 5 step N-2b; DECISIONS G343, G340, G341): an orc
+          # release library with its own NimMain prefix, no signal handlers and its export
+          # list. Its own derivation, so the file logosd's digest is taken of is final.
+          sharedLib = pkgs.stdenv.hostPlatform.extensions.sharedLibrary;
+          lcnCallLib = nimDerivation {
+            pname = "liblcn_call";
+            version = daemonVersion;
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --mm:orc -d:release -d:noSignalHandler --app:lib \
+                --nimMainPrefix:liblcn_call ${
+                  if pkgs.stdenv.hostPlatform.isDarwin then
+                    "--passL:-Wl,-exported_symbols_list,src/logos_core/cli/lcn_call_kit.exports"
+                  else
+                    "--passL:-Wl,--version-script=src/logos_core/cli/lcn_call_kit.map"
+                } -o:build/lib/liblcn_call${sharedLib} src/lcn_call.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm444 build/lib/liblcn_call${sharedLib} $out/lib/logos-core/liblcn_call${sharedLib}
+            '';
+          };
+
           # logosd and logosctl (Tier 4b step 4b-6; DECISIONS I95; docs/DAEMON.md): orc
           # release builds without test hooks (R5, D27). logosd finds the Module Host at
-          # ../libexec/logos-core, where its package puts it.
+          # ../libexec/logos-core and liblcn_call at ../lib/logos-core, where its package
+          # puts them. [G343] logosd is built with the BLAKE3-256 of liblcn_call's final
+          # store file, and the library is copied after the fixup, so no strip or patchelf
+          # changes the bytes the Module Loader checks against that digest.
           daemonVersion = "0.0.1";
           logosd = nimDerivation {
             pname = "logosd";
@@ -334,12 +364,19 @@
             src = nimSources;
             buildPhase = ''
               runHook preBuild
-              nim c --mm:orc -d:release -d:lcnVersion=${daemonVersion} --outdir:build/bin src/logosd.nim
+              nim c -d:release --outdir:build/bin tools/artifact_hash.nim
+              cliHash=$(build/bin/artifact_hash ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib})
+              nim c --mm:orc -d:release -d:lcnVersion=${daemonVersion} \
+                -d:lcnCallArtifactHash=$cliHash --outdir:build/bin src/logosd.nim
               runHook postBuild
             '';
             installPhase = ''
               install -Dm755 build/bin/logosd $out/bin/logosd
               install -Dm755 ${lib.getExe logosModuleHost} $out/libexec/logos-core/logos-module-host
+            '';
+            postFixup = ''
+              install -Dm444 ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib} \
+                $out/lib/logos-core/liblcn_call${sharedLib}
             '';
             meta.mainProgram = "logosd";
           };
@@ -372,7 +409,9 @@
                 set -eu
                 s=$TMPDIR/s
                 ctl() { logosctl --session-dir "$s" "$@"; }
-                ctl init > init.out
+                # [G343] One grant, so `describe` below runs the packaged lcn_call to the end.
+                echo '[{"kind": "allow", "subject": {"instances": ["lcn_call"]}, "scopes": [{"kind": "provider-access", "contract": "capability-authority", "actions": ["discover"]}]}]' > cli.diag
+                ctl init --policy @cli.diag > init.out
                 # The default module_host is the packaged one. The build sandbox shows the
                 # store as owned by nobody, which G272 refuses for a Module Host (a deployed
                 # store is root's or the user's), so the smoke runs a copy of it instead.
@@ -402,6 +441,16 @@
                 for i in orchestrator authority logosctl; do
                   grep -q "^$i .* ready" modules.out || { echo "$i is not ready"; cat modules.out; exit 1; }
                 done
+                # [G343] The packaged lcn_call, started from its compiled digest by the
+                # first CLI command; the build sandbox's store ownership does not matter
+                # to an artifact, only its digest does.
+                test -f ${logosd}/lib/logos-core/liblcn_call${sharedLib}
+                ctl --json describe logos_capability_authority > describe.json \
+                  || { echo "describe failed"; cat describe.json logosd.err; exit 1; }
+                grep -q '"status":"ok"' describe.json
+                grep -q '"module":"logos_capability_authority"' describe.json
+                ctl --text module ls > modules.out
+                grep -q "^lcn_call .* ready" modules.out || { echo "lcn_call is not ready"; cat modules.out; exit 1; }
                 ctl daemon stop --wait
                 if ! wait $pid; then echo "logosd did not exit 0"; cat logosd.err; exit 1; fi
                 grep -q "ready: runtime " logosd.err
@@ -696,6 +745,9 @@
           ciWeights = {
             test_boundary_invariance = 35;
             test_logosd = 35;
+            # [N-2b] an estimate until a CI run measures it: in-process logosd with hosted
+            # lcn_call and providers, as test_hosted.
+            test_lcn_call = 18;
             test_hosted_routes = 27;
             test_wipe_routes = 18;
             test_hosted = 18;
