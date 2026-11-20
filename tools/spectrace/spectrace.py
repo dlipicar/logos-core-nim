@@ -1278,6 +1278,24 @@ def decision_rows(root: Path) -> dict[str, str]:
     return rows
 
 
+def spec_title(prefix: str) -> str:
+    """The name one spec uses for another, such as `LOGOS-MODULE-RUNTIME` for RUN."""
+    return "LOGOS-" + PREFIX_FILE.get(prefix, "").removeprefix("spec-").removesuffix(".md").upper()
+
+
+def rides_within(entry: dict, unit: str, unit_section: str | None) -> bool:
+    """[re-pin P6 Q5] Whether a deferred text entry may ride on `unit`: a unit of its own spec and
+    section, or a unit of another spec when the entry's own sentence (`what`) names that spec and a
+    section the unit belongs to, such as "LOGOS-MODULE-RUNTIME Section 9" for a unit of §9.3.1."""
+    spec, prefix = str(entry.get("spec", "")), unit.split("-")[0]
+    if prefix == spec:
+        return unit_section == entry.get("section")
+    if prefix not in PREFIX_FILE or not unit_section:
+        return False
+    named = re.finditer(re.escape(spec_title(prefix)) + r" Section (\d+(?:\.\d+)*)", str(entry.get("what", "")))
+    return any(unit_section == f"§{m.group(1)}" or unit_section.startswith(f"§{m.group(1)}.") for m in named)
+
+
 def baseline_findings(root: Path, pending: Pending, cleared: dict, state) -> list[str]:
     """Every entry of the frozen list is still open on its sub-step, or left with the evidence its kind needs."""
     base = load_toml(root / BASELINE_FILE)
@@ -1357,13 +1375,17 @@ def baseline_findings(root: Path, pending: Pending, cleared: dict, state) -> lis
                 findings.append(f"{tid}: a behaviour entry is lowered only with a [[lowered]] record and a decision row that names it")
         elif tid in pending.deferred:
             # [re-pin P4a] A text entry defers only riding on a unit deferred to the same work item, of
-            # the same spec and section, with a decision row that names the entry.
+            # the same spec and section, with a decision row that names the entry. [re-pin P6 Q5] Or of
+            # another spec, when the entry's own sentence names that spec and a section the unit is in.
             if not unit:
                 findings.append(f"{tid} is in [deferred] with no [[deferred]] record naming the unit it rides on in {CLEARED_FILE}")
             elif pending.deferred.get(unit) != pending.deferred[tid]:
                 findings.append(f"{tid} rides on {unit}, which is not deferred to {pending.deferred[tid]}")
-            elif not unit.startswith(str(b.get("spec", "")) + "-") or section_of(unit) != b.get("section"):
-                findings.append(f"{tid} ({b.get('spec')} {b.get('section')}) rides on {unit}, of another spec or section")
+            elif not rides_within(b, unit, section_of(unit)):
+                findings.append(
+                    f"{tid} ({b.get('spec')} {b.get('section')}) rides on {unit}, of another section,"
+                    " or of another spec its sentence does not name with that section"
+                )
         elif tid not in done:
             findings.append(f"{tid} is neither open nor cleared")
         else:
@@ -1579,6 +1601,11 @@ def pending_self_test() -> int:
         "docs/DECISIONS.md": "### G7 a decision on RUN-0001\n### G8 TXT-0001 waits for 5-7a\n",
     }
     leaves = 'id = "TXT-0001"\nstep = "P3"\ntest = "tests/test_a.nim"\n'
+
+    def abroad(what: str) -> str:
+        """`behind` as an entry of CAP whose sentence is `what`: RUN-0001 is then of another spec."""
+        return behind.replace('spec = "RUN"', 'spec = "CAP"').replace('what = "x"', f'what = "{what}"')
+
     both = 'test "[RUN-0001] [TXT-0001] it holds":\n  check true\n'
     edited = tree("")
     (edited / BASELINE_FILE).write_text("# changed\n", encoding="utf-8")
@@ -1634,6 +1661,9 @@ def pending_self_test() -> int:
         ("a text deferral with no decision row fails", clean(frozen(rides, behind, ruled + rider, files={**ledger, "docs/DECISIONS.md": "### G7 a decision on RUN-0001\n"}), ("deferred:tier-5", True)), False),
         ("a text entry riding on another section's unit fails", clean(frozen(rides, behind.replace("§1", "§2"), ruled + rider, files=ledger), ("deferred:tier-5", True)), False),
         ("a text entry riding on another work item's unit fails", clean(frozen(rides.replace('"TXT-0001" = "5-7a"', '"TXT-0001" = "5-7b"'), behind, ruled + rider, files=ledger), ("deferred:tier-5", True)), False),
+        ("a text entry riding on a unit of another spec its sentence names, in the section named, passes", clean(frozen(rides, abroad("see LOGOS-MODULE-RUNTIME Section 1."), ruled + rider, files=ledger), ("deferred:tier-5", True)), True),
+        ("a text entry riding on a unit of another spec its sentence does not name fails", clean(frozen(rides, abroad("x"), ruled + rider, files=ledger), ("deferred:tier-5", True)), False),
+        ("a text entry riding on a unit of a spec its sentence names, outside the section named, fails", clean(frozen(rides, abroad("see LOGOS-MODULE-RUNTIME Section 2."), ruled + rider, files=ledger), ("deferred:tier-5", True)), False),
         ("a deferred text entry leaving with its unit's test passes", clean(frozen("", behind, ruled + rider + "[[text]]\n" + leaves, tests=both, files=ledger)), True),
         ("a deferred text entry leaving by a test without its unit fails", clean(frozen("", behind, ruled + rider + "[[text]]\n" + leaves, tests=named, files=ledger)), False),
         ("a closed sub-step that owns an entry fails", clean(frozen('closed = ["P3"]\n[[text]]\n' + todo, "[[text]]\n" + todo)), False),

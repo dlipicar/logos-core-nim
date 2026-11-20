@@ -829,7 +829,7 @@ suite "run.permissions: admission (CA l.343-345, l.364, l.417; RUNTIME l.2538)":
       check evaluateRequest(b[0].request, plain.runtimeInstanceId).tryGet.scopes.len == 1
     plain.finish()
 
-  test "[RUN-0906] [RUN-0907] the snapshot is what admission installed: the saved settings at admission, not the declaration":
+  test "[RUN-0906] [RUN-0907] [TXT-0367] the snapshot is what admission installed: the saved settings at admission, not the declaration":
     let e = fixtureEngine(pconfig())
     let (_, rc) = e.startClient("c")
     var rec = client()

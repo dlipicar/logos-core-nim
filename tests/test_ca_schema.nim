@@ -5,8 +5,10 @@
 ## refused (`support/schemasuite`). One test per rule, named by its requirement
 ## id.
 
+import std/[os, strutils]
 import unittest2
 import ../src/logos_core/authority/logos_capability_authority_types
+import logos_sdk/iface/accept
 import logos_sdk/testing/schemasuite
 
 const Rules = [
@@ -64,6 +66,38 @@ template holds(name: string) =
   check problems.len == 0
 
 suite "cap.schema: the Capability Authority contract (CAPABILITY AUTHORITY §3-§9)":
+  test "[CAP-0446] [CAP-0447] [CAP-0448] [CAP-0449] [CAP-0450] [CAP-0451] [CAP-0452] [CAP-0453] [CAP-0454] [CAP-0455] [CAP-0456] [CAP-0457] [CAP-0458] [CAP-0459] [CAP-0460] [CAP-0461] [CAP-0462] [CAP-0463] [CAP-0464] [CAP-0465] [CAP-0466] [CAP-0467] [CAP-0468] [CAP-0469] [CAP-0470] [CAP-0471] [CAP-0472] [CAP-0473] [CAP-0474] [CAP-0475] [CAP-0476] [CAP-0477] [CAP-0478] [CAP-0479] [CAP-0480] [CAP-0481] [CAP-0482] [CAP-0483] [CAP-0484] [CAP-0485] [CAP-0486] [CAP-0487] [CAP-0488] [CAP-0489] [CAP-0490] [CAP-0491] [CAP-0492] [CAP-0493] [CAP-0494] [CAP-0495] [TXT-0358] [TXT-0404] [TXT-0405] [TXT-0406] [TXT-0575] Appendix A is the contract: the section blocks are its excerpts, in order, and it accepts to the same root and rules":
+    # [SPEC CA l.1512-1514] The appendix governs; the nine section blocks,
+    # from which the types are generated, are its excerpts in the same order.
+    let mirrors = currentSourcePath().parentDir.parentDir / "spec" / "mirrors" / "CAP"
+    proc lines(text: string): seq[string] =
+      for l in text.splitLines:
+        if l.strip.len > 0:
+          result.add l.strip
+
+    let appendix = readFile(mirrors / "app-a.contract.cddl")
+    var body: seq[string]
+    for part in [
+      "3.scopes", "4.commitments", "5.evaluate", "6.grants", "7.errors", "8.events",
+      "8.1.watch", "9.audit", "9.1.evidence",
+    ]:
+      body.add lines(readFile(mirrors / (part & ".cddl")))
+    check lines(appendix) == body
+    let (primary, interfaces, supporting) = caDocuments()
+    let generated = acceptContractSet(
+      primary, interfaces, supporting, AcceptOptions(system: true)
+    ).get
+    let app = acceptContractSet(
+      appendix, interfaces, supporting, AcceptOptions(system: true)
+    ).get
+    check app.primary.root == generated.primary.root
+    var a, g: seq[string]
+    for d in app.primary.model.declarations:
+      a.add d.name
+    for d in generated.primary.model.declarations:
+      g.add d.name
+    check a == g and a.len > 0
+
   test "every rule of the contract has its test here":
     for r in model.names:
       checkpoint r

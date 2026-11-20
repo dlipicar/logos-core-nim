@@ -949,6 +949,14 @@ package = "core"
 file = "spec-module-capability-authority.md"
 section = "§9.1"
 
+# Appendix A, the whole contract in one block (CA l.1512-1514). Not generated from: the
+# nine blocks above are, and test_ca_schema checks they are its excerpts, in order.
+[[mirror]]
+out = "CAP/app-a.contract.cddl"
+package = "core"
+file = "spec-module-capability-authority.md"
+section = "App A"
+
 # MODULE LOADER (Tier 4b step 4b-1; DECISIONS I89) ----------------------------------
 # The contract's CDDL blocks in spec order: `_module` (Abstract), then §3 to §10. The
 # generated types and kit join them as one primary document (tests/support/genfixtures_core.nim).

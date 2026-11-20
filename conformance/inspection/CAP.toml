@@ -67,3 +67,13 @@ reason = "Not applicable: no profile here claims per-module device restrictions.
 [[item]]
 ids = ["CAP-0294", "CAP-0295", "CAP-0296", "CAP-0297"]
 reason = "Not applicable: no permission definition is enforced by a module provider. Every shipped definition's enforcement component is Runtime admission (`EnforcementPoint.epRuntimeAdmission`, test [CAP-0083]); the other named points are inactive and none is a provider. No provider checks permissions on the Runtime's behalf, so no integration, subject restriction or decision freshness is defined. CAP-0297 also holds under a broad reading: the Runtime decides admission from the saved settings and the execution decision only, never from grant inspection, grant ids or an instance address (RUNTIME l.2561). DECISIONS G286."
+
+# cap-audit-ack (DECISIONS G376, re-pin P6)
+[[item]]
+ids = ["CAP-0439"]
+reason = "The deployment policy this repository ships defines the acknowledgement point: docs/AUTHORITY-POLICY.md, State, Audit retention says an evaluation's audit record is acknowledged when it is appended to the authority's log in memory while fewer than 4,096 records wait to be written and no write of audit state is failing, what a crash can lose (at most 4,096 acknowledged records), and that this is the one point offered. authority/core.nim `recordBehind` (bounded) and the evaluate entry check build it; tests [CAP-0438] and [IMPL-DECISION G376] in cap.persist show it. docs/DEPLOYMENT.md indexes it (CA l.1207-1208)."
+
+# cap-allowed-scopes (re-pin P6, M20)
+[[item]]
+ids = ["CAP-0436"]
+reason = "Never reached: every decision's `allowed_scopes` is the request's own `scopes` array (authority/core.nim, the `allow` template sets `allowed_scopes = req.scopes`; test [CAP-0108] checks they are the same), and admission already refused any array over 4,194,304 encoded bytes with invalid-request before evaluation began (`validateScopes`, `checkScopeSet` with `MaxScopesBytes`; test [CAP-0435]). So no evaluation can produce allowed scopes over the limit, and the authority-unavailable path of CA l.1200 has no case here."

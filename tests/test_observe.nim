@@ -1051,7 +1051,7 @@ when declared(caParity):
       check p2.ids == @["a2"] and p2.next_cursor.isNone
       e.finish()
 
-    test "[RUN-0950] [RUN-0951] [CAP-0055] a route is matched by its own facts, never by its consumer":
+    test "[RUN-0950] [RUN-0951] [CAP-0055] [TXT-0364] a route is matched by its own facts, never by its consumer; a selector a record does not carry matches nothing":
       let e = fixtureEngine(config())
       discard e.started(meter(), "m1")
       discard e.started(meter(), "m2")
@@ -1074,4 +1074,9 @@ when declared(caParity):
       setScript(narrowing("rc:list_routes", RcNarrow(instances: only("c"))))
       changePolicy(3)
       check rc.routeList().routesListed.routes.len == 0
+      # [SPEC CA l.305] A module record carries no route: a `routes` selector
+      # on `list_modules` matches none of them.
+      setScript(narrowing("rc:list_modules", RcNarrow(routes: only(r2))))
+      changePolicy(4)
+      check rc.modules().listed.modules.len == 0
       e.finish()

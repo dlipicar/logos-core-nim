@@ -108,12 +108,15 @@ func rule(kind: string, subject: CborValue, scopes: varargs[CborValue]): CborVal
     (t("kind"), t(kind)), (t("subject"), subject), (t("scopes"), cborArray(scopes))
   )
 
-func denyRule(subject: CborValue, scopes: varargs[CborValue]): CborValue =
+func denyRule(code: string, subject: CborValue, scopes: varargs[CborValue]): CborValue =
+  ## [G295; G377] A deny rule states its code: `consumer-denied` when it
+  ## denies the consumer an action, `target-denied` when every pattern names
+  ## the target it protects (CA l.783-784).
   cborMap(
     (t("kind"), t("deny")),
     (t("subject"), subject),
     (t("scopes"), cborArray(scopes)),
-    (t("code"), t("target-denied")),
+    (t("code"), t(code)),
   )
 
 func rcScope(
@@ -193,7 +196,9 @@ proc systemRules*(orch: OrchestratorSettings): Result[seq[CborValue], string] =
   let orchSubject = subjectOf("instances", [OrchestratorInstance])
   rules.add rule("allow", orchSubject, rcScope(methods, Opt.none(seq[string])))
   if unsubscribed.len > 0:
-    rules.add denyRule(orchSubject, rcScope(newSeq[string](), Opt.some(unsubscribed)))
+    rules.add denyRule(
+      "consumer-denied", orchSubject, rcScope(newSeq[string](), Opt.some(unsubscribed))
+    )
   if starts.len > 0:
     rules.add rule(
       "allow",
@@ -210,7 +215,9 @@ proc systemRules*(orch: OrchestratorSettings): Result[seq[CborValue], string] =
   # with host-ambient.
   let ctlSubject = subjectOf("instances", [CtlInstance])
   rules.add rule("allow", ctlSubject, rcScope(CtlMethods, Opt.none(seq[string])))
-  rules.add denyRule(ctlSubject, rcScope(newSeq[string](), Opt.none(seq[string])))
+  rules.add denyRule(
+    "consumer-denied", ctlSubject, rcScope(newSeq[string](), Opt.none(seq[string]))
+  )
   rules.add rule(
     "allow", ctlSubject, execScope(cborMap(), ["start", "stop"]), ambientScope()
   )
@@ -225,6 +232,7 @@ proc systemRules*(orch: OrchestratorSettings): Result[seq[CborValue], string] =
   let systemModules =
     subjectOf("modules", [LoaderModuleName, AuthorityModule, CtlModule])
   rules.add denyRule(
+    "target-denied",
     ctlSubject,
     rcScope(
       [
@@ -240,6 +248,7 @@ proc systemRules*(orch: OrchestratorSettings): Result[seq[CborValue], string] =
   # configured only by daemon-config.
   let orchTarget = subjectOf("instances", [OrchestratorInstance])
   rules.add denyRule(
+    "target-denied",
     ctlSubject,
     rcScope(
       [

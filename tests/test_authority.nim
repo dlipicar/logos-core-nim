@@ -249,6 +249,36 @@ proc auditAll(e: Env): seq[AuditRecord] =
   ## Every record, through a second authority-wide inspector.
   e.query("m-c")
 
+proc rcModules(n: int): seq[Scope] =
+  ## A runtime-control scope valid in every other respect: one method and a
+  ## sorted `modules` list of `n` 64-character names, 66 encoded bytes each.
+  var mods = newSeqOfCap[string](n)
+  for i in 0 ..< n:
+    mods.add "m" & align($i, 63, '0')
+  @[
+    toScope(
+      RuntimeControlScope(
+        runtime: Rt,
+        contract: rcContract(),
+        methods: Opt.some(@[rcContractInfo().methods.getOrDefault("stop_module")]),
+        modules: Opt.some(mods),
+      )
+    )
+  ]
+
+proc scopesSize(s: seq[Scope]): int =
+  ## The deterministic-CBOR length of a `scopes` array.
+  var items: seq[CborValue]
+  for x in s:
+    items.add toCbor(x)
+  encodeCbor(cborArray(items)).len
+
+proc overMaxScopes(): seq[Scope] =
+  ## The shortest such array over `MaxScopesBytes` (CA l.1199): past 23
+  ## elements the list's head is 3 bytes, against 1 for one element.
+  let n = (MaxScopesBytes - (scopesSize(rcModules(1)) - 67 + 3)) div 66
+  rcModules(n + 1)
+
 # cap.scopes ---------------------------------------------------------------------------
 
 suite "cap.scopes: form, locality and containment":
@@ -321,13 +351,37 @@ suite "cap.scopes: form, locality and containment":
     check not covers(local, foreign, Rt)
     check checkLocality(foreign, Rt).error.code == CaCode.Unsupported_scope
 
-  test "[CAP-0054] [CAP-0056] Runtime Control: another contract is invalid-request, another runtime unsupported-scope":
+  test "[CAP-0054] [CAP-0056] [TXT-0385] Runtime Control: another contract is invalid-request, another runtime unsupported-scope; remote enrollment is unsupported-scope":
     let other = toScope(RuntimeControlScope(runtime: Rt, contract: testContract()))
     check validateScopes(@[other], Rt, 64, false).error.code == CaCode.Invalid_request
     let remote = toScope(RuntimeControlScope(runtime: "rt-9", contract: rcContract()))
     check validateScopes(@[remote], Rt, 64, false).error.code == CaCode.Unsupported_scope
     let fine = toScope(RuntimeControlScope(runtime: Rt, contract: rcContract()))
     check validateScopes(@[fine], Rt, 64, false).isOk
+    # [SPEC CA l.801; G205] A scope kind this provider does not support.
+    let enroll = toScope(
+      RemoteEnrollmentScope(
+        remote_runtime: "rt-9",
+        actions: @[
+          LogosNSCapabilityAuthorityRemoteEnrollmentScopeActionsLIChoice(
+            kind:
+              LogosNSCapabilityAuthorityRemoteEnrollmentScopeActionsLIChoiceKind.Enroll
+          )
+        ],
+        uses: @[
+          LogosNSCapabilityAuthorityRemoteEnrollmentScopeUsesLIChoice(
+            kind:
+              LogosNSCapabilityAuthorityRemoteEnrollmentScopeUsesLIChoiceKind.Runtime_control
+          )
+        ],
+      )
+    )
+    check validateScopes(@[enroll], Rt, 64, true).error.code == CaCode.Unsupported_scope
+    check validateScopes(@[enroll], Rt, 64, false).error.code == CaCode.Unsupported_scope
+    var e = open(policyBytes(everythingFor(@["beta"])))
+    check e.evaluate("m-b", @[enroll]).errorOf == CaCode.Unsupported_scope
+    check e.issue("m-b", "m-a", @[enroll]).issueErrorOf == CaCode.Unsupported_scope
+    e.close()
 
   test "[CAP-0058] [CAP-0059] [CAP-0060] [CAP-0061] module-execution shape rules":
     var s = ModuleExecutionScope(
@@ -373,6 +427,29 @@ suite "cap.scopes: form, locality and containment":
       access = access(publish = Opt.some(@[root(5)])),
     )
     check e.evaluate("m-a", @[publish]).errorOf == CaCode.Invalid_request
+    e.close()
+
+  test "[CAP-0435] [TXT-0398] a scopes array over 4,194,304 encoded bytes is invalid-request, for evaluate and issue_grant":
+    let over = overMaxScopes()
+    let under = rcModules(over[0].rc.modules.get.len - 1)
+    check scopesSize(under) <= MaxScopesBytes and scopesSize(under) > MaxScopesBytes - 66
+    check scopesSize(over) > MaxScopesBytes
+    check validateScopes(under, Rt, 64, true).isOk
+    check validateScopes(over, Rt, 64, true).error.code == CaCode.Invalid_request
+    var e = open(
+      policyBytes(
+        @[
+          allowRule(subject(modules = @["alpha"]), @[rcPattern()]),
+          issueRule(
+            subject(modules = @["beta"]), targetSubject(anyone()), @[rcPattern()]
+          ),
+        ]
+      )
+    )
+    check e.evaluate("m-a", under).decisionOf.allowed
+    check e.evaluate("m-a", over).errorOf == CaCode.Invalid_request
+    check e.issue("m-b", "m-c", under).grantOf.scopes.len == 1
+    check e.issue("m-b", "m-c", over).issueErrorOf == CaCode.Invalid_request
     e.close()
 
 # cap.policy -----------------------------------------------------------------------------
@@ -470,7 +547,7 @@ suite "cap.policy: load, names and revisions":
     check loadPolicy(rcNamed).get.rules[0].allow[0].methods.get ==
       @[rcMethodRoot("start_module")]
 
-  test "[CAP-0248] [CAP-0356] a rule naming evaluate, grant_changed or policy_changed is refused at load":
+  test "[CAP-0248] [CAP-0356] [IMPL-DECISION G378] a rule naming grant_changed or policy_changed is refused at load; one naming evaluate loads":
     for (m, ev) in [
       (@[declName("evaluate")], newSeq[LcnApDecl]()),
       (newSeq[LcnApDecl](), @[declName("grant_changed")]),
@@ -493,7 +570,11 @@ suite "cap.policy: load, names and revisions":
           )
         ]
       )
-      check loadPolicy(bytes).error.contains("restricted")
+      if m.len > 0:
+        check loadPolicy(bytes).get.rules[0].allow[0].access.get.methods.get ==
+          @[caMethodRoot("evaluate")]
+      else:
+        check loadPolicy(bytes).error.contains("restricted")
     let rcRestricted = policyBytes(
       @[
         allowRule(
@@ -591,12 +672,13 @@ suite "cap.evaluate: decisions":
     check d.allowed
     check d.grant_ids.get == @[g.grant_id]
     check d.valid_until.get == exp
+    # the grant covers the call action, not the method (CA l.788, l.792)
     check e.evaluate("m-a", @[callScope(root(M2))]).decisionOf.denialOf ==
-      DenialKind.Not_granted
+      DenialKind.Scope_denied
     check e.evaluate("m-b", @[callM1()]).decisionOf.denialOf == DenialKind.Not_granted
     e.close()
 
-  test "[IMPL] the deny codes: grant-revoked, grant-expired, else not-granted":
+  test "[CAP-0430] [TXT-0375] [TXT-0376] [TXT-0379] [IMPL-DECISION G377] the deny codes: grant-revoked, grant-expired, else not-granted; a revoked holder comes before an expired one":
     var e = open(policyBytes(everythingFor(@["beta"])))
     let g1 = e.issue("m-b", "m-a", @[callM1()]).grantOf
     discard e.revoke("m-b", g1.grant_id).grantOf
@@ -605,9 +687,154 @@ suite "cap.evaluate: decisions":
     e.clock.advance(1_000)
     check e.evaluate("m-c", @[callM1()]).decisionOf.denialOf == DenialKind.Grant_expired
     check e.evaluate("m-b", @[callM1()]).decisionOf.denialOf == DenialKind.Not_granted
+    # A revoked and an expired grant that each contain the request: revoked
+    # comes first in the table (CA l.785-786, l.794). Under G207 one grant
+    # holds the whole request; "together with" waits on TL-04.
+    discard e.issue("m-b", "m-a", @[callM1()], Opt.some(e.now + 1_000)).grantOf
+    e.clock.advance(1_000)
+    check e.evaluate("m-a", @[callM1()]).decisionOf.denialOf == DenialKind.Grant_revoked
     e.close()
 
-  test "[CAP-0098] [CAP-0152] [CAP-0278] [CAP-0283] lost facts give authority-unavailable, never a deny, recorded with the scopes":
+  test "[CAP-0430] [TXT-0373] [TXT-0374] [TXT-0378] [TXT-0381] [TXT-0382] [IMPL-DECISION G377] the first applicable denial in table order":
+    # 1. Explicit denials: consumer-denied before target-denied, whichever
+    #    rule matches first, and before every lapsed grant (l.783-784, l.794).
+    let toPa = paPattern(
+      @[LcnApActionKind.Call],
+      exact = testContract(),
+      providers = Opt.some(subject(instances = @["m-a"])),
+    )
+    let anyCall = paPattern(@[LcnApActionKind.Call], exact = testContract())
+    var e = open(
+      policyBytes(
+        everythingFor(@["beta"]) &
+          @[
+            denyRule(
+              subject(modules = @["gamma"]),
+              @[toPa],
+              Opt.some(LcnApDenyCodeChoiceKind.Target_denied),
+            ),
+            denyRule(subject(modules = @["gamma"]), @[anyCall]),
+            denyRule(
+              subject(modules = @["alpha"]),
+              @[toPa],
+              Opt.some(LcnApDenyCodeChoiceKind.Target_denied),
+            ),
+          ]
+      )
+    )
+    check e.evaluate("m-c", @[callM1()]).decisionOf.denialOf ==
+      DenialKind.Consumer_denied
+    let g = e.issue("m-b", "m-a", @[callM1()]).grantOf
+    discard e.revoke("m-b", g.grant_id).grantOf
+    check e.evaluate("m-a", @[callM1()]).decisionOf.denialOf == DenialKind.Target_denied
+    # through another provider the target-denied rule does not apply
+    discard e.issue("m-b", "m-a", @[callM1(provider = "p-b")]).grantOf
+    check e.evaluate("m-a", @[callM1(provider = "p-b")]).decisionOf.allowed
+    e.close()
+    # 2. A revoked grant comes before scope-denied, which an allow rule
+    #    covering only the action gives (l.785, l.788).
+    e = open(
+      policyBytes(
+        everythingFor(@["beta"]) &
+          @[
+            allowRule(
+              subject(modules = @["alpha"]),
+              @[
+                paPattern(
+                  @[LcnApActionKind.Call],
+                  exact = testContract(),
+                  access = Opt.some(LcnApAccess(methods: decls(@[declRoot(root(M2))]))),
+                )
+              ],
+            )
+          ]
+      )
+    )
+    check e.evaluate("m-a", @[callM1()]).decisionOf.denialOf == DenialKind.Scope_denied
+    let r = e.issue("m-b", "m-a", @[callM1()]).grantOf
+    discard e.revoke("m-b", r.grant_id).grantOf
+    check e.evaluate("m-a", @[callM1()]).decisionOf.denialOf == DenialKind.Grant_revoked
+    # 5. The action is covered whatever the contract, method or route
+    #    (l.792): a call on another contract is scope-denied, not not-granted.
+    check e.evaluate("m-a", @[callScope(root(M2), contract = testContract(2))]).decisionOf.denialOf ==
+      DenialKind.Scope_denied
+    # 6. Another action, or another consumer, is not-granted (l.789).
+    check e.evaluate(
+      "m-a",
+      @[pa(@[PaActionKind.Discover], providers = Opt.some(@[providerAddr("p-a")]))],
+    ).decisionOf.denialOf == DenialKind.Not_granted
+    check e.evaluate("m-c", @[callM1()]).decisionOf.denialOf == DenialKind.Not_granted
+    e.close()
+    # A runtime-control scope's action is its Runtime and contract (l.793): a
+    # rule for one method covers every other method's action.
+    e = open(
+      policyBytes(
+        @[
+          allowRule(
+            subject(modules = @["alpha"]),
+            @[rcPattern(methods = decls(@[declName("list_modules")]))],
+          )
+        ]
+      )
+    )
+    let rcCall = proc(name: string): Scope =
+      toScope(
+        RuntimeControlScope(
+          runtime: Rt,
+          contract: rcContract(),
+          methods: Opt.some(@[rcContractInfo().methods[name]]),
+        )
+      )
+    check e.evaluate("m-a", @[rcCall("list_modules")]).decisionOf.allowed
+    check e.evaluate("m-a", @[rcCall("get_self")]).decisionOf.denialOf ==
+      DenialKind.Scope_denied
+    check e.evaluate("m-b", @[rcCall("get_self")]).decisionOf.denialOf ==
+      DenialKind.Not_granted
+    e.close()
+    # A permission scope's action is its name (l.793): constraints beyond the
+    # rule's are scope-denied; a name no rule holds, beside a start no rule
+    # holds, is not-granted.
+    e = open(
+      policyBytes(
+        @[
+          allowRule(
+            subject(modules = @["beta"]), @[permPattern(Quota, Opt.some(quota(10)))]
+          )
+        ]
+      ),
+      profile = testProfile,
+    )
+    let start = meScope("alpha", instance = Opt.some("m-a"))
+    var over = @[start, permissionScope(Quota, quota(11))]
+    sortSet(over)
+    check e.evaluate("m-b", over).decisionOf.denialOf == DenialKind.Scope_denied
+    var ambient = @[start, permissionScope(HostAmbient, HostAmbientConstraints)]
+    sortSet(ambient)
+    check e.evaluate("m-b", ambient).decisionOf.denialOf == DenialKind.Not_granted
+    e.close()
+    # A target-denied rule must name its targets: `{}`, no providers, or a
+    # permission names none, and the policy does not load (l.784).
+    for bad in [
+      anyCall,
+      paPattern(
+        @[LcnApActionKind.Call], exact = testContract(), providers = Opt.some(anyone())
+      ),
+      rcPattern(methods = decls(@[declName("stop_module")])),
+      mePattern(anyone(), @[LcnApModuleExecutionActionsLIChoiceKind.Stop]),
+    ]:
+      check loadPolicy(
+        policyBytes(
+          @[denyRule(anyone(), @[bad], Opt.some(LcnApDenyCodeChoiceKind.Target_denied))]
+        )
+      ).error
+        .contains("names no target")
+    check loadPolicy(
+      policyBytes(
+        @[denyRule(anyone(), @[toPa], Opt.some(LcnApDenyCodeChoiceKind.Target_denied))]
+      )
+    ).isOk
+
+  test "[CAP-0098] [CAP-0152] [CAP-0278] [CAP-0283] [CAP-0441] [TXT-0391] lost facts give authority-unavailable, never a deny, recorded with the scopes":
     var e = open(
       policyBytes(
         @[
@@ -722,7 +949,7 @@ suite "cap.evaluate: decisions":
       Opt.some("retain-root")
     e.close()
 
-  test "[CAP-0248] [CAP-0356] evaluate, grant_changed and policy_changed are denied under any rule; other CA scopes are not":
+  test "[CAP-0248] [CAP-0356] [IMPL-DECISION G378] grant_changed and policy_changed are denied under any rule; evaluate under a rule naming no methods; other CA scopes are not":
     var e = open(
       policyBytes(
         @[
@@ -771,6 +998,47 @@ suite "cap.evaluate: decisions":
     check e.evaluate("m-a", @[watch]).decisionOf.allowed
     check e.evaluate("m-a", @[pa(@[PaActionKind.Establish_route], ca, prov, route)]).decisionOf.allowed
     check e.evaluate("m-a", @[pa(@[PaActionKind.Discover], ca, prov)]).decisionOf.allowed
+    e.close()
+
+  test "[CAP-0248] [IMPL-DECISION G378] a call of evaluate is contained only by a rule, grant or issue rule naming it; a broad deny still matches it":
+    let evalCall = callScope(caMethodRoot("evaluate"), caContract())
+    let named = paPattern(
+      @[LcnApActionKind.Call],
+      contract = crCa,
+      access = Opt.some(LcnApAccess(methods: decls(@[declName("evaluate")]))),
+    )
+    let broad = paPattern(@[LcnApActionKind.Call], contract = crCa)
+    # A rule naming it allows it.
+    var e = open(policyBytes(@[allowRule(anyone(), @[named])]))
+    check e.evaluate("m-a", @[evalCall]).decisionOf.allowed
+    e.close()
+    # A broad deny beside it denies it.
+    e =
+      open(policyBytes(@[allowRule(anyone(), @[named]), denyRule(anyone(), @[broad])]))
+    check e.evaluate("m-a", @[evalCall]).decisionOf.denialOf ==
+      DenialKind.Consumer_denied
+    e.close()
+    # A grant with no method list covers its action, not the call.
+    e = open(policyBytes(everythingFor(@["beta"])))
+    let bare = pa(@[PaActionKind.Call], caContract())
+    discard e.a.issueProtected(Source, address("m-a"), @[bare]).get
+    check e.evaluate("m-a", @[evalCall]).decisionOf.denialOf == DenialKind.Scope_denied
+    let g = e.a.issueProtected(Source, address("m-a"), @[evalCall]).get
+    let d = e.evaluate("m-a", @[evalCall]).decisionOf
+    check d.allowed and d.grant_ids.get == @[g.grant_id]
+    e.close()
+    # An issue rule with no method list does not issue a grant naming it; one
+    # naming it does.
+    e = open(
+      policyBytes(
+        @[
+          issueRule(subject(modules = @["beta"]), targetSubject(anyone()), @[broad]),
+          issueRule(subject(modules = @["gamma"]), targetSubject(anyone()), @[named]),
+        ]
+      )
+    )
+    check e.issue("m-b", "m-a", @[evalCall]).issueDenialOf == DenialKind.Scope_denied
+    check e.issue("m-c", "m-a", @[evalCall]).grantOf.target == address("m-a")
     e.close()
 
   test "[CAP-0022] an empty method list is valid; empty actions are invalid-request":
@@ -943,8 +1211,9 @@ suite "cap.permissions: the selected profile (I93)":
     let d = e.evaluate("m-c", startReq(permQuota(5))).decisionOf
     check d.allowed and d.grant_ids.get == @[g.grant_id]
     check same(d.allowed_scopes.get, startReq(permQuota(5)))
+    # the grant covers the start and the quota's name, not 11 (CA l.788, l.793)
     check e.evaluate("m-c", startReq(permQuota(11))).decisionOf.denialOf ==
-      DenialKind.Not_granted
+      DenialKind.Scope_denied
     e.close()
 
   test "[IMPL-DECISION G207] permission scopes stand only beside a start: alone, beside a stop or beside a provider call they are invalid-request, with and without a profile":
@@ -960,14 +1229,15 @@ suite "cap.permissions: the selected profile (I93)":
       check e.evaluate("m-a", @[callM1()]).decisionOf.allowed
       e.close()
 
-  test "[IMPL-DECISION G207] one allow rule must hold the start and every permission; two rules that each hold a part deny; a deny pattern on a permission denies":
+  test "[IMPL-DECISION G207] one allow rule must hold the start and every permission; two rules that each hold a part deny scope-denied; a deny pattern on a permission denies":
     var e = open(
       policyBytes(@[startRule(@[permPattern(HostAmbient)])]), profile = testProfile
     )
     check e.evaluate("m-b", startReq(permAmbient())).decisionOf.allowed
     check e.evaluate("m-b", startReq()).decisionOf.allowed
+    # the rule covers the start's action (CA l.788, G377)
     check e.evaluate("m-b", startReq(permAmbient(), permQuota(1))).decisionOf.denialOf ==
-      DenialKind.Not_granted
+      DenialKind.Scope_denied
     e.close()
     e = open(
       policyBytes(
@@ -980,7 +1250,7 @@ suite "cap.permissions: the selected profile (I93)":
     )
     check e.evaluate("m-b", startReq()).decisionOf.allowed
     check e.evaluate("m-b", startReq(permAmbient())).decisionOf.denialOf ==
-      DenialKind.Not_granted
+      DenialKind.Scope_denied
     e.close()
     e = open(
       policyBytes(@[startRule(@[permPattern(Quota, Opt.some(quota(10)))])]),
@@ -988,7 +1258,7 @@ suite "cap.permissions: the selected profile (I93)":
     )
     check e.evaluate("m-b", startReq(permQuota(10))).decisionOf.allowed
     check e.evaluate("m-b", startReq(permQuota(11))).decisionOf.denialOf ==
-      DenialKind.Not_granted
+      DenialKind.Scope_denied
     e.close()
     e = open(
       policyBytes(
@@ -1001,8 +1271,9 @@ suite "cap.permissions: the selected profile (I93)":
       ),
       profile = testProfile,
     )
+    # a deny rule without a code is consumer-denied (G377)
     check e.evaluate("m-b", startReq(permQuota(5))).decisionOf.denialOf ==
-      DenialKind.Scope_denied
+      DenialKind.Consumer_denied
     check e.evaluate("m-b", startReq(permQuota(500))).decisionOf.allowed
     check e.evaluate("m-b", startReq()).decisionOf.allowed
     e.close()
@@ -1016,11 +1287,11 @@ suite "cap.permissions: the selected profile (I93)":
     check d.grant_ids.get == @[g.grant_id]
     check d.valid_until.get <= exp
     check same(d.allowed_scopes.get, startReq(permAmbient()))
-    # g covers the start but not the quota, and a grant of the quota alone
-    # holds no start: neither covers the request
+    # g holds the start but not the quota, and a grant of the quota alone
+    # holds no start: neither contains the request, and both cover an action
     discard e.issue("m-b", "m-c", @[permQuota(10)]).grantOf
     check e.evaluate("m-c", startReq(permQuota(5))).decisionOf.denialOf ==
-      DenialKind.Not_granted
+      DenialKind.Scope_denied
     let both = e.issue("m-b", "m-c", startReq(permQuota(10))).grantOf
     check e.evaluate("m-c", startReq(permQuota(5))).decisionOf.grant_ids.get ==
       @[both.grant_id]
@@ -1148,7 +1419,7 @@ suite "cap.grants: issue, revoke, expiry, issuers":
     check e.sink.drain().len == 0
     e.close()
 
-  test "[CAP-0141] [CAP-0142] [CAP-0143] revocation keeps the time and reason; an expired grant is not active; a repeat is idempotent":
+  test "[CAP-0141] [CAP-0142] [CAP-0143] [TXT-0389] revocation keeps the time and reason; an expired grant is not active; a repeat is idempotent":
     var e = open(policyBytes(everythingFor(@["beta"])))
     let g = e.issue("m-b", "m-a", @[callM1()]).grantOf
     e.clock.advance(10)
@@ -1164,7 +1435,7 @@ suite "cap.grants: issue, revoke, expiry, issuers":
     check e.revoke("m-b", x.grant_id).revokeErrorOf == CaCode.Grant_not_active
     e.close()
 
-  test "[CAP-0323] issuance policy: consumer-denied, target-denied, scope-denied, and max_validity_ms":
+  test "[CAP-0323] [IMPL-DECISION G377] issuance policy: not-granted, scope-denied, and max_validity_ms":
     var e = open(
       policyBytes(
         @[
@@ -1177,26 +1448,45 @@ suite "cap.grants: issue, revoke, expiry, issuers":
         ]
       )
     )
-    check e.issue("m-a", "m-a", @[callM1()]).issueDenialOf == DenialKind.Consumer_denied
+    # no issue rule for the caller; another target, under a rule covering the
+    # action; an action no issue rule of the caller covers
+    check e.issue("m-a", "m-a", @[callM1()]).issueDenialOf == DenialKind.Not_granted
     check e.issue("m-b", "m-c", @[callM1()], Opt.some(e.now + 1_000)).issueDenialOf ==
-      DenialKind.Target_denied
-    check e.issue("m-b", "m-a", @[meScope("alpha")], Opt.some(e.now + 1_000)).issueDenialOf ==
       DenialKind.Scope_denied
+    check e.issue("m-b", "m-a", @[meScope("alpha")], Opt.some(e.now + 1_000)).issueDenialOf ==
+      DenialKind.Not_granted
     check e.issue("m-b", "m-a", @[callM1()]).issueDenialOf == DenialKind.Scope_denied
     check e.issue("m-b", "m-a", @[callM1()], Opt.some(e.now + 5_001)).issueDenialOf ==
       DenialKind.Scope_denied
     discard e.issue("m-b", "m-a", @[callM1()], Opt.some(e.now + 5_000)).grantOf
     e.close()
 
-  test "[CAP-0262] [CAP-0263] no existence oracle: a caller with no issue rule is consumer-denied whatever it names":
+  test "[CAP-0262] [CAP-0263] no existence oracle: a caller with no issue rule is not-granted whatever it names":
     var e = open(policyBytes(everythingFor(@["beta"])))
-    check e.issue("m-a", "m-zz", @[callM1()]).issueDenialOf == DenialKind.Consumer_denied
+    check e.issue("m-a", "m-zz", @[callM1()]).issueDenialOf == DenialKind.Not_granted
     check e.issue("m-a", "m-b", @[callM1(provider = "p-zz")]).issueDenialOf ==
-      DenialKind.Consumer_denied
+      DenialKind.Not_granted
     let pkg =
       meScope("gamma", instance = Opt.some("m-c"), package = Opt.some("pkg.other"))
-    check e.issue("m-a", "m-b", @[pkg]).issueDenialOf == DenialKind.Consumer_denied
+    check e.issue("m-a", "m-b", @[pkg]).issueDenialOf == DenialKind.Not_granted
     check e.issue("m-b", "m-zz", @[callM1()]).issueErrorOf == CaCode.Invalid_request
+    e.close()
+
+  test "[TXT-0359] [IMPL-DECISION G81] the half with no Runtime enrolled: a grant target on another Runtime does not resolve, so issuance is invalid-request":
+    # Remote enrollment is not built (5-7a), so no other Runtime is enrolled:
+    # a target naming one never resolves, whether or not its instance id is
+    # known here. 5-7a adds the enrolled half under the same tag.
+    var e = open(policyBytes(everythingFor(@["beta"])))
+    for instance in ["m-a", "m-zz"]:
+      check e.a.issueGrant(
+        moduleCaller("m-b"),
+        IssueGrantRequest(
+          consumer: address("m-b"),
+          target: address(instance, "rt-9"),
+          scopes: @[callM1()],
+        ),
+      ).issueErrorOf == CaCode.Invalid_request
+    check e.query("m-b").len == 2
     e.close()
 
   test "[IMPL] D7: an expiry passed during the write fails invalid-request and leaves nothing; D8: a failed expiry write still emits":
@@ -1218,7 +1508,46 @@ suite "cap.grants: issue, revoke, expiry, issuers":
     check e.query("m-a", QueryAuditRequest(grant_id: Opt.some(g.grant_id))).len == 2
     e.close()
 
-  test "[IMPL] a refused revocation of a visible grant is not-authorised with a failure record; a repeat writes a second success record (G206)":
+  test "[IMPL] internal-error: an audit record that cannot be made fails issue_grant and revoke_grant, and changes nothing":
+    var e = open(policyBytes(everythingFor(@["beta"])))
+    let g = e.issue("m-b", "m-a", @[callM1()]).grantOf
+    discard e.sink.drain()
+    e.a.injectWriteFailures(records = true)
+    check e.issue("m-b", "m-a", @[callM1()]).issueErrorOf == CaCode.Internal_error
+    check e.revoke("m-b", g.grant_id).revokeErrorOf == CaCode.Internal_error
+    e.a.injectWriteFailures()
+    check e.sink.drain().len == 0
+    check e.get("m-a", g.grant_id).grantOf.statusKind == GrantStatusKind.Active
+    check e.evaluate("m-a", @[callM1()]).decisionOf.grant_ids.get == @[g.grant_id]
+    e.close()
+
+  test "[CAP-0431] validation before resolution, visibility before policy and state":
+    var e = open(policyBytes(everythingFor(@["beta"])))
+    # [SPEC CA l.810] A request is validated before anything it names is
+    # resolved: a scope of another Runtime naming an unknown instance is
+    # unsupported-scope, for an unknown consumer or target too.
+    let foreign = meScope("zeta", instance = Opt.some("m-zz"), runtimeId = "rt-9")
+    check e.evaluate("m-zz", @[foreign]).errorOf == CaCode.Unsupported_scope
+    check e.issue("m-b", "m-zz", @[foreign]).issueErrorOf == CaCode.Unsupported_scope
+    check e.evaluate("m-zz", @[callM1()]).errorOf == CaCode.Invalid_request
+    check e.issue("m-b", "m-zz", @[callM1()]).issueErrorOf == CaCode.Invalid_request
+    # Visibility before policy: a grant hidden from the caller is not found,
+    # whether or not policy would let it revoke; a visible one is refused.
+    let g = e.issue("m-b", "m-a", @[callM1()]).grantOf
+    check e.revoke("m-c", g.grant_id).revokeErrorOf == CaCode.Grant_not_found
+    check e.get("m-c", g.grant_id).getErrorOf == CaCode.Grant_not_found
+    check e.revoke("m-a", g.grant_id).revokeErrorOf == CaCode.Not_authorised
+    # Visibility and policy before state: an expired grant is not found when
+    # hidden, refused when visible but not revocable, and not active only for
+    # a caller that may revoke it.
+    let x = e.issue("m-b", "m-a", @[callM1()], Opt.some(e.now + 5)).grantOf
+    e.clock.advance(5)
+    check e.revoke("m-c", x.grant_id).revokeErrorOf == CaCode.Grant_not_found
+    check e.revoke("m-a", x.grant_id).revokeErrorOf == CaCode.Not_authorised
+    check e.revoke("m-b", x.grant_id).revokeErrorOf == CaCode.Grant_not_active
+    e.close()
+
+  test "[TXT-0390] [TXT-0393] a refused revocation of a visible grant is not-authorised with a failure record; a repeat returns the grant and writes nothing":
     var e = open(
       policyBytes(
         everythingFor(@["beta"]) &
@@ -1232,8 +1561,8 @@ suite "cap.grants: issue, revoke, expiry, issuers":
     let g = e.issue("m-b", "m-a", @[callM1()]).grantOf
     check e.revoke("m-a", g.grant_id).revokeErrorOf == CaCode.Not_authorised
     check e.revoke("m-c", g.grant_id).revokeErrorOf == CaCode.Grant_not_found
-    discard e.revoke("m-b", g.grant_id).grantOf
-    discard e.revoke("m-b", g.grant_id).grantOf
+    let first = e.revoke("m-b", g.grant_id).grantOf
+    check same(e.revoke("m-b", g.grant_id).grantOf, first)
     let rs = e.query("m-c", QueryAuditRequest(grant_id: Opt.some(g.grant_id)))
     var successes, failures = 0
     for r in rs:
@@ -1241,8 +1570,19 @@ suite "cap.grants: issue, revoke, expiry, issuers":
         inc successes
       if r.kind == AuditKind.Revoke_grant_failure:
         inc failures
-    check successes == 2
+    check successes == 1 # [SPEC CA l.811; G206]
     check failures == 2
+    # a repeated protected revocation alike
+    let p = e.a.issueProtected(Source, address("m-a"), @[callM1()]).get
+    discard e.a.revokeProtected(Source, p.grant_id).get
+    check same(
+      e.a.revokeProtected(Source, p.grant_id).get, e.get("m-a", p.grant_id).grantOf
+    )
+    var protectedSuccesses = 0
+    for r in e.query("m-c", QueryAuditRequest(grant_id: Opt.some(p.grant_id))):
+      if r.kind == AuditKind.Revoke_grant_success:
+        inc protectedSuccesses
+    check protectedSuccesses == 1
     e.close()
 
   test "[CAP-0324] [CAP-0325] [CAP-0326] [CAP-0327] [CAP-0328] [CAP-0329] issuers: the caller, or the protected source without a consumer":
@@ -1523,7 +1863,7 @@ suite "cap.list: list_grants":
     check page.next_cursor.isSome
     e.close()
 
-  test "[CAP-0249] [CAP-0250] [CAP-0262] [CAP-0263] visibility: hidden is not found, self sees its own, revoke implies inspect, fields unchanged":
+  test "[CAP-0249] [CAP-0250] [CAP-0262] [CAP-0263] [TXT-0388] visibility: hidden is not found, self sees its own, revoke implies inspect, fields unchanged":
     var e = open(policyBytes(everythingFor(@["beta"])))
     let g = e.issue("m-b", "m-a", @[callM1()]).grantOf
     check e.get("m-c", g.grant_id).getErrorOf == CaCode.Grant_not_found
@@ -1573,6 +1913,25 @@ suite "cap.audit: query_audit":
         consumer: address("m-a"), since: Opt.some(t0 + 1), until: Opt.some(t0)
       ),
     ).queryErrorOf == CaCode.Invalid_request
+    e.close()
+
+  test "[IMPL-DECISION G51] a query_audit result over the response budget keeps the most recent records that fit":
+    var limits = AuthorityLimits()
+    limits.responseBudget = 1_000
+    var e = open(
+      policyBytes(
+        @[alphaCalls(), inspectRule(anyone(), audit = Opt.some(targetSelf()))]
+      ),
+      limits,
+    )
+    var ids: seq[string]
+    for i in 0 ..< 20:
+      ids.add e.evaluate("m-a", @[callM1()]).decisionOf.decision_id
+      e.clock.advance(1)
+    let rs = e.query("m-a")
+    check rs.len >= 1 and rs.len < 20
+    for i in 0 ..< rs.len:
+      check rs[i].decisionId.get == ids[19 - i]
     e.close()
 
   test "[IMPL] at most 1,000 records come back":
@@ -1842,6 +2201,87 @@ suite "cap.persist: state across restarts and failures":
     e.a.injectWriteFailures()
     discard e.issue("m-b", "m-a", @[callM1()]).grantOf
     discard e.revoke("m-b", g.grant_id).grantOf
+    e.close()
+
+  test "[CAP-0438] [CAP-0440] [CAP-0441] [CAP-0442] [CAP-0443] [IMPL-DECISION G376] a decision only after its record is acknowledged; a failed audit write closes evaluation until a write succeeds":
+    var limits = AuthorityLimits()
+    limits.maxUnwritten = 3
+    var e = open(
+      policyBytes(
+        @[alphaCalls(), inspectRule(anyone(), audit = Opt.some(targetSelf()))]
+      ),
+      limits,
+    )
+    # Acknowledged at the append, under the backlog bound: readable at once,
+    # before any write.
+    e.a.injectWriteFailures(all = true)
+    for i in 0 ..< 3:
+      check e.evaluate("m-a", @[callM1()]).decisionOf.allowed
+    check e.query("m-a").len == 3
+    # The backlog is full: no decision, and no record past the bound (l.1212).
+    check e.evaluate("m-a", @[callM1()]).errorOf == CaCode.Authority_unavailable
+    check e.query("m-a").len == 3
+    e.a.injectWriteFailures()
+    e.a.flushAudit()
+    check e.evaluate("m-a", @[callM1()]).decisionOf.allowed
+    # One failed write closes evaluation at once; the failure record is still
+    # attempted, with the scopes (l.1211).
+    e.a.injectWriteFailures(next = 1)
+    e.a.flushAudit()
+    check e.evaluate("m-a", @[callM1()]).errorOf == CaCode.Authority_unavailable
+    let rs = e.query("m-a")
+    check rs[0].kind == AuditKind.Evaluate_failure
+    check rs[0].arm_Evaluate_failure.scopes.isSome
+    # A successful retry opens it again.
+    e.a.flushAudit()
+    check e.evaluate("m-a", @[callM1()]).decisionOf.allowed
+    e.close()
+
+  test "[IMPL-DECISION G376] with audit.records at 1,024 and every write failing, no acknowledged record is dropped: evaluation fails closed at the backlog bound":
+    var limits = AuthorityLimits()
+    limits.maxUnwritten = 1_100
+    var e = open(
+      policyBytes(
+        @[alphaCalls(), inspectRule(anyone(), audit = Opt.some(targetSelf()))],
+        records = Opt.some(1_024'u64),
+      ),
+      limits,
+    )
+    e.a.injectWriteFailures(all = true)
+    let first = e.evaluate("m-a", @[callM1()]).decisionOf.decision_id
+    var allowed = 1
+    for i in 1 ..< 1_100:
+      if e.evaluate("m-a", @[callM1()]).decisionOf.allowed:
+        inc allowed
+    check allowed == 1_100
+    check e.evaluate("m-a", @[callM1()]).errorOf == CaCode.Authority_unavailable
+    check e.query("m-a", QueryAuditRequest(decision_id: Opt.some(first))).len == 1
+    # Once written, retention drops the oldest segments again.
+    e.a.injectWriteFailures()
+    e.a.flushAudit()
+    check e.evaluate("m-a", @[callM1()]).decisionOf.allowed
+    check e.query("m-a", QueryAuditRequest(decision_id: Opt.some(first))).len == 0
+    e.close()
+
+  test "[CAP-0437] an admission failure answers the same whatever the audit state":
+    var limits = AuthorityLimits()
+    limits.maxUnwritten = 3 # the two failure records of the first pass, and one allow
+    var e = open(policyBytes(@[alphaCalls()]), limits)
+    let b = callScope(root(M1), provider = "p-b")
+    let a = callScope(root(M1), provider = "p-a")
+    var unordered = @[a, b]
+    if isSet(unordered):
+      unordered = @[b, a]
+    let over = overMaxScopes()
+    for full in [false, true]:
+      checkpoint $full
+      if full:
+        e.a.injectWriteFailures(all = true)
+        check e.evaluate("m-a", @[callM1()]).decisionOf.allowed
+        check e.evaluate("m-a", @[callM1()]).errorOf == CaCode.Authority_unavailable
+      check e.evaluate("m-a", unordered).errorOf == CaCode.Invalid_request
+      check e.evaluate("m-a", over).errorOf == CaCode.Invalid_request
+    e.a.injectWriteFailures()
     e.close()
 
   test "[IMPL] the start is refused, files unchanged, for a foreign runtime, another contract, a corrupt grant, an unknown format or a held lock (G111)":
@@ -2405,7 +2845,7 @@ suite "cap.provider: the module through its services":
     freeClock(clock)
     freeSharedFacts(facts)
 
-  test "[CAP-0248] [CAP-0364] [CAP-0146] the caller is the context's: a SYSTEM_SERVICE evaluates and cannot watch; a module cannot evaluate":
+  test "[CAP-0248] [CAP-0364] [CAP-0146] the caller is the context's: a SYSTEM_SERVICE evaluates and cannot watch; a module evaluates only as itself":
     var c = openCa(policyBytes(everythingFor(@["beta"]) & @[alphaCalls()]))
     check c.evaluate("m-a", @[callM1()]).decisionOf.allowed
     actAs("", system = true)
@@ -2416,6 +2856,7 @@ suite "cap.provider: the module through its services":
         encode(WatchChangesRequest(consumer: address("m-a"))).get,
       )
     ) == Opt.some(CaCode.Not_authorised)
+    # With no rule or grant naming `evaluate`, not even for itself (G378).
     actAs("m-a")
     check c.call("evaluate", evalRequest("m-a", @[callM1()]), EvaluateResponse).errorOf ==
       CaCode.Not_authorised
@@ -2427,6 +2868,127 @@ suite "cap.provider: the module through its services":
       ),
       IssueGrantResponse,
     ).issueErrorOf == CaCode.Not_authorised
+    c.close()
+
+  test "[TXT-0402] [CAP-0248] [IMPL-DECISION G378] a module evaluates for itself only under a rule or grant naming `evaluate`":
+    let named = paPattern(
+      @[LcnApActionKind.Call],
+      contract = crCa,
+      access = Opt.some(LcnApAccess(methods: decls(@[declName("evaluate")]))),
+    )
+    let broad = paPattern(@[LcnApActionKind.Call], contract = crCa)
+    var c = openCa(
+      policyBytes(
+        everythingFor(@["beta"]) & @[alphaCalls()] &
+          @[allowRule(subject(modules = @["alpha"]), @[named])]
+      )
+    )
+    let a = authorityFor(c.dir).get
+    proc evaluations(who: string): seq[AuditRecord] =
+      for r in recordsOf(
+        a.queryAudit(moduleCaller(who), QueryAuditRequest(consumer: address(who)))
+      ):
+        if r.kind in {
+          AuditKind.Evaluate_allow, AuditKind.Evaluate_deny, AuditKind.Evaluate_failure
+        }:
+          result.add r
+
+    # For itself: a decision, and an `evaluate` record.
+    actAs("m-a")
+    let d =
+      c.call("evaluate", evalRequest("m-a", @[callM1()]), EvaluateResponse).decisionOf
+    check d.allowed
+    var rs = evaluations("m-a")
+    check rs.len == 1 and rs[0].kind == AuditKind.Evaluate_allow
+    check rs[0].arm_Evaluate_allow.decision_id == d.decision_id
+    # For another consumer, or with `execution_renewal`: not-authorised, and
+    # no record.
+    check c.call("evaluate", evalRequest("m-b", @[callM1()]), EvaluateResponse).errorOf ==
+      CaCode.Not_authorised
+    var renewal = evalRequest("m-a", @[callM1()])
+    renewal.execution_renewal = Opt.some(true)
+    check c.call("evaluate", renewal, EvaluateResponse).errorOf == CaCode.Not_authorised
+    check evaluations("m-a").len == 1
+    # m-b has no rule naming it; a grant naming it is enough.
+    actAs("m-b")
+    check c.call("evaluate", evalRequest("m-b", @[callM1("p-b")]), EvaluateResponse).errorOf ==
+      CaCode.Not_authorised
+    let evalCall = callScope(caMethodRoot("evaluate"), caContract())
+    discard a.issueProtected(Source, address("m-b"), @[evalCall]).get
+    # A decision: scope-denied, as that grant covers the `call` action (G377).
+    check c.call("evaluate", evalRequest("m-b", @[callM1("p-b")]), EvaluateResponse).decisionOf.denialOf ==
+      DenialKind.Scope_denied
+    c.close()
+    # Under a rule with an unconstrained method list: the Runtime-path
+    # evaluation of the call is denied, and the module may not evaluate.
+    c = openCa(policyBytes(everythingFor(@["beta"]) & @[allowRule(anyone(), @[broad])]))
+    check c.evaluate("m-a", @[evalCall]).decisionOf.denialOf == DenialKind.Scope_denied
+    actAs("m-a")
+    check c.call("evaluate", evalRequest("m-a", @[callM1()]), EvaluateResponse).errorOf ==
+      CaCode.Not_authorised
+    c.close()
+    # A broad deny for the caller beside a rule naming it: not-authorised.
+    c = openCa(
+      policyBytes(
+        everythingFor(@["beta"]) &
+          @[
+            allowRule(subject(modules = @["alpha"]), @[named]),
+            denyRule(subject(modules = @["alpha"]), @[broad]),
+          ]
+      )
+    )
+    actAs("m-a")
+    check c.call("evaluate", evalRequest("m-a", @[callM1()]), EvaluateResponse).errorOf ==
+      CaCode.Not_authorised
+    c.close()
+
+  test "[IMPL-DECISION G379] a module's scopes name only its own instance and providers: unknown and other targets answer invalid-request alike":
+    let named = paPattern(
+      @[LcnApActionKind.Call],
+      contract = crCa,
+      access = Opt.some(LcnApAccess(methods: decls(@[declName("evaluate")]))),
+    )
+    var c = openCa(
+      policyBytes(
+        everythingFor(@["beta"]) & @[allowRule(subject(modules = @["alpha"]), @[named])]
+      )
+    )
+    proc stopOn(instance: string): Scope =
+      toScope(
+        RuntimeControlScope(
+          runtime: Rt,
+          contract: rcContract(),
+          methods: Opt.some(@[rcContractInfo().methods.getOrDefault("stop_module")]),
+          instances: Opt.some(@[instance]),
+        )
+      )
+
+    proc raw(scopes: seq[Scope]): seq[byte] =
+      actAs("m-a")
+      callCa(c.ctx, "evaluate", encode(evalRequest("m-a", scopes)).get)
+
+    let cases = [
+      @[stopOn("m-zz")], # an unknown instance
+      @[stopOn("m-b")], # another module's instance
+      @[callM1("p-b")], # another module's provider
+      @[callM1("p-zz")], # an unknown provider
+      @[meScope("beta", Opt.some("m-b"))], # another module's execution
+    ]
+    let first = raw(cases[0])
+    check EvaluateResponse.decode(first).get.errorOf == CaCode.Invalid_request
+    for x in cases[1 ..^ 1]:
+      check raw(x) == first
+    # Its own: a decision, and a wrong module for its own instance stays
+    # invalid-request.
+    check EvaluateResponse.decode(raw(@[stopOn("m-a")])).get.decisionOf.denialOf ==
+      DenialKind.Not_granted
+    check EvaluateResponse.decode(raw(@[meScope("alpha", Opt.some("m-a"))])).get.decisionOf.denialOf ==
+      DenialKind.Not_granted
+    check EvaluateResponse.decode(raw(@[meScope("beta", Opt.some("m-a"))])).get.errorOf ==
+      CaCode.Invalid_request
+    # A scope naming no provider goes to a decision.
+    check EvaluateResponse.decode(raw(@[pa(@[PaActionKind.Discover])])).get.decisionOf.denialOf ==
+      DenialKind.Not_granted
     c.close()
 
   test "[CAP-0375] [CAP-0384] [CAP-0368] [CAP-0369] [CAP-0381] a watch publishes with no CA lock held, and cancellation ends it with {} and no state change":

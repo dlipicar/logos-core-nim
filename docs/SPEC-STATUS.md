@@ -120,7 +120,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | decided (C6: fail); built at re-pin P7b, the update half in the resolver and the install half at resolution (G166) |
 | 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | open (C1) |
 | 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
-| 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5) |
+| 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's |
 | 5-7a | NA-04 (G255); TF-30 point 1 (G194) | kept | decided (B9) |
 | 5-7a | enrollment and trust-anchor changes (G87) | offline, under the session lock, at the next start | decided (B3) |
 | 5-7a | G298 | its answers stay for a profile the build lacks; *no record is kept* is re-decided with listener records | decided (B8) |
@@ -329,6 +329,23 @@ G352 and G354 (DECISIONS, "Open items").
 
   Claimed: PKG-0592, PKG-0593 and PKG-0597 to PKG-0607 (PKG-0597, PKG-0604 and PKG-0605 by inspection;
   PKG-0594 to PKG-0596 out of scope); PKG-0317 is stale. 19 text entries cleared and 3 deferred. P7 closed.
+- 2026-11-19, re-pin P6a (I111), the Capability Authority at 6cac8335:
+  - The denial codes follow CA §7's table: the first that applies, with "covers" by kind and action (G377). A deny
+    rule states `consumer-denied` (the default) or `target-denied`, and `consumer-denied` wins across rules; the
+    lapsed-grant codes keep G207's one holder while TL-04 is open; `issue_grant` answers `not-granted` or
+    `scope-denied` under UF-53.
+  - No `evaluate` decision before its record is acknowledged: at its append under the backlog bound, with no audit
+    write failing (G376). Retention drops only written segments.
+  - A module evaluates for itself under a rule or grant naming `evaluate`, which the authority checks itself (G378),
+    and its scopes name only its own instance and providers (G379, the interim on TF-61).
+  - A repeated revoke records nothing (G206 settled, reversed); `scopes` is limited to 4,194,304 encoded bytes;
+    App A is mirrored and tied to the body; a `query_audit` result is cut to what fits (G51, UF-54). G217 and G226
+    are settled by the text, G205 in part.
+  - `spectrace` lets a deferred text entry ride another spec's unit when its sentence names that spec's section:
+    TXT-0360 rides RUN-1125 to 5-7a. TXT-0359 is claimed for the half with no Runtime enrolled.
+
+  Claimed: CAP-0430, CAP-0431, CAP-0435 to CAP-0444 (CAP-0436 and CAP-0439 by inspection) and App A's CAP-0446 to
+  CAP-0495; CAP-0393 and CAP-0422 re-read. 44 text entries cleared and 1 deferred.
 
 ## Tiers at f4f83471 (the original plan)
 

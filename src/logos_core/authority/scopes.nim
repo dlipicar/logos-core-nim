@@ -79,6 +79,9 @@ type
     events*: Table[string, Root] ## by bare event name, without `_event`
 
 const
+  MaxScopesBytes* = 4_194_304
+    ## [SPEC CA l.1199] The deterministic-CBOR encoding of the `scopes` array of
+    ## an evaluation or grant request, at most; larger is `invalid-request`.
   skProvider* = ScopeKind.logos_NS_capability_authority_Provider_access_scope
   skControl* = ScopeKind.logos_NS_capability_authority_Runtime_control_scope
   skExecution* = ScopeKind.logos_NS_capability_authority_Module_execution_scope
@@ -246,28 +249,35 @@ func hasAction*(s: ProviderAccessScope, a: PaActionKind): bool =
 
 proc isRestrictedOperation*(s: Scope): bool =
   ## A `subscribe-event` on the CA contract for `grant_changed` or
-  ## `policy_changed`, or a `call` of `evaluate`: only the protected engine path
-  ## carries those (§0.1 U7). Always denied `scope-denied`.
+  ## `policy_changed`: only the protected engine path carries those (§0.1 U7;
+  ## CA l.1423). No rule or grant contains one, so it is never allowed; its
+  ## denial code is the table's (G377). `evaluate` is not among them: an
+  ## ordinary consumer evaluates for itself under a rule or grant naming it
+  ## (CA l.1421; G378, `namesEvaluate`).
   if s.kind != skProvider or s.pa.contract != caContract() or s.pa.access.isNone:
     return false
-  let access = s.pa.access.get
-  (
-    s.pa.hasAction(PaActionKind.Subscribe_event) and
-    access.subscribe_events.containsAny(restrictedEvents())
-  ) or (
-    s.pa.hasAction(PaActionKind.Call) and
-    access.methods.containsAny([caMethodRoot("evaluate")])
-  )
+  s.pa.hasAction(PaActionKind.Subscribe_event) and
+    s.pa.access.get.subscribe_events.containsAny(restrictedEvents())
 
 proc namesRestricted*(s: Scope): bool =
-  ## A provider-access scope on the CA contract that names `evaluate`,
-  ## `grant_changed` or `policy_changed` explicitly: refused for issuance and in
-  ## policy rules (§0.1 U7).
+  ## A provider-access scope on the CA contract that names `grant_changed` or
+  ## `policy_changed` explicitly: refused for issuance and in policy rules
+  ## (§0.1 U7).
   if s.kind != skProvider or s.pa.contract != caContract() or s.pa.access.isNone:
     return false
-  let access = s.pa.access.get
-  access.subscribe_events.containsAny(restrictedEvents()) or
-    access.methods.containsAny([caMethodRoot("evaluate")])
+  s.pa.access.get.subscribe_events.containsAny(restrictedEvents())
+
+proc listsEvaluate*(a: Opt[RouteAccess]): bool =
+  ## An `access` whose method list names `evaluate`'s declaration root. An
+  ## absent `access` or method list is unconstrained and does not name it.
+  a.isSome and a.get.methods.containsAny([caMethodRoot("evaluate")])
+
+proc namesEvaluate*(s: Scope): bool =
+  ## [G378; SPEC CA l.1419-1421] A provider-access scope on the CA contract
+  ## whose method list names `evaluate`. Only a rule, grant or issue rule
+  ## that names it too contains it; the Runtime and the deny path keep the
+  ## plain containment, so a broad deny still matches it.
+  s.kind == skProvider and s.pa.contract == caContract() and s.pa.access.listsEvaluate
 
 # Form -------------------------------------------------------------------------------
 
@@ -304,11 +314,37 @@ proc checkScope*(s: Scope): Result[void, CaError] =
     discard
   ok()
 
-proc checkScopeSet*(scopes: openArray[Scope]): Result[void, CaError] =
-  ## [SPEC CA l.128-138] A non-empty scope set, and every array in it.
+func arrayHeadLen(n: int): int =
+  ## The bytes of a definite-length CBOR array head for `n` elements.
+  if n < 24:
+    1
+  elif n < 256:
+    2
+  elif n < 65_536:
+    3
+  else:
+    5
+
+proc checkScopeSet*(
+    scopes: openArray[Scope], maxBytes = high(int)
+): Result[void, CaError] =
+  ## [SPEC CA l.128-138] A non-empty scope set, and every array in it; with
+  ## `maxBytes`, an encoded array of at most that many bytes (CA l.1199), from
+  ## the encodings the set check makes anyway.
   if scopes.len == 0:
     return err(invalid("empty scopes"))
-  if not isSet(scopes):
+  var size = arrayHeadLen(scopes.len)
+  var ordered = true
+  var prev: seq[byte]
+  for i in 0 ..< scopes.len:
+    let e = enc(scopes[i])
+    size += e.len
+    if i > 0 and cmpBytes(prev, e) >= 0:
+      ordered = false
+    prev = e
+  if size > maxBytes:
+    return err(invalid("scopes over " & $maxBytes & " encoded bytes"))
+  if not ordered:
     return err(invalid("scopes is not a set"))
   for s in scopes:
     ?checkScope(s)
@@ -447,9 +483,11 @@ proc validateScopes*(
   ## (`unsupported-scope`), then permission scopes: every name first
   ## (`unknown-permission`, CAP-0073), then every constraints value
   ## (`invalid-constraints`, CAP-0074), both through `profile` (CA l.388-392).
+  ## Form includes the bound on the encoded array (`MaxScopesBytes`, CA
+  ## l.1199); `maxScopes` stays an admission bound beside it (l.1203).
   if scopes.len > maxScopes:
     return err(invalid("too many scopes"))
-  ?checkScopeSet(scopes)
+  ?checkScopeSet(scopes, MaxScopesBytes)
   for s in scopes:
     ?checkShape(s)
   if evaluating:
@@ -638,6 +676,34 @@ proc covers*(
       )
   else:
     covers(broader, narrower, localRuntime)
+
+func actionsMeet[T](requested, held: openArray[T]): bool =
+  for x in requested:
+    for y in held:
+      if y.kind == x.kind:
+        return true
+  false
+
+func coversAction*(held, requested: Scope): bool =
+  ## [SPEC CA l.792-793] Whether a grant's scope `held` covers the action of
+  ## `requested`: the same kind and action, whatever constraints, methods or
+  ## events either carries. The action of a runtime-control scope is its Runtime
+  ## and contract, of a permission scope its name; of the other kinds, the
+  ## action alone, so the contract or module named is not part of it (G377,
+  ## P6 Q-r A6). Of a scope with several actions, any one.
+  if held.kind != requested.kind:
+    return false
+  case held.kind
+  of skProvider:
+    actionsMeet(requested.pa.actions, held.pa.actions)
+  of skControl:
+    held.rc.runtime == requested.rc.runtime and held.rc.contract == requested.rc.contract
+  of skExecution:
+    actionsMeet(requested.me.actions, held.me.actions)
+  of skEnrollment:
+    actionsMeet(requested.enr.actions, held.enr.actions)
+  of skPermission:
+    held.pm.permission == requested.pm.permission
 
 proc coversEach*(
     broader, narrower: openArray[Scope],

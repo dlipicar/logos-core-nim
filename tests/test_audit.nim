@@ -355,7 +355,7 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     d.release()
     e.finish()
 
-  test "[CAP-0211] [CAP-0213] [CAP-0214] a failed call is a failure record holding only the sides that were committed, and none when nothing required was":
+  test "[CAP-0211] [CAP-0213] [CAP-0214] [CAP-0444] a failed call is a failure record holding only the sides that were committed, and none when nothing required was":
     let (e, orch) = ready()
     var h = orch.handle(orch.routeTo(e, Meter, "k"))
     setScript(retaining("call"))
@@ -374,7 +374,15 @@ suite "run.audit: route call records (CA §4, §9 l.1172-1215; RUNTIME l.1762-17
     check h.raw("read", readReq(13)).code == ecModule
     v = e.kept[^1].view
     check not v.success and not v.commitments
-    check e.kept.len == 3
+    # [SPEC CA l.1238] Only the request was required and it was committed:
+    # every required value is in the record, and the outcome is still failure.
+    setScript(retaining("call", response = false))
+    check h.raw("read", readReq(13)).code == ecModule
+    v = e.kept[^1].view
+    check not v.success
+    check v.request == Opt.some(meterRoots("meter.read_request", readReq(13)))
+    check v.response.isNone
+    check e.kept.len == 4
     h.release()
     e.finish()
 

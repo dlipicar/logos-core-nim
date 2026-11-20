@@ -94,6 +94,7 @@ AUTHORITY, IF INTERFACE, CFG CONFIGURATION, PM PACKAGE MANAGER.
 | CA | l.406-407 | each permission's enforcement component and behaviour | [§7](#7-permission-definitions) | CAP-0083 |
 | CA | l.408 | the consent principal of a profile claiming per-module device restrictions | no such claim ([PERMISSIONS.md](PERMISSIONS.md)) | CAP-0292, CAP-0293 |
 | CA | l.760 | historical retention when the Authority contract is replaced | a different contract refuses to start ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), "State") | CAP-0339 |
+| CA | l.1207-1208 | the point at which an evaluation audit record counts as retained | at its append in memory under the backlog bound, with no audit write failing ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), "Audit retention") | CAP-0439 |
 | CA | l.1320 | evidence export: selection, authorization, limits, delivery | [DAEMON.md](DAEMON.md) §9, "Export" and "Limits" | CAP-0415 |
 | T | l.815-816 | event output overflow actions, waits, closure | [CONFORMANCE.md](CONFORMANCE.md), "Event output overflow" | TRN-0309, TRN-0310 |
 | T | l.1343-1345 | finite Transport limits, their scope and exhaustion | [CONFORMANCE.md](CONFORMANCE.md), "Transport limits" | TRN-0378, TRN-0379, TRN-0380 |

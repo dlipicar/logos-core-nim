@@ -69,23 +69,24 @@ proc caRecord(): ModuleRecord =
     stateAssignment: Opt.some(CaAssignment),
   )
 
-proc clientPolicy(): seq[byte] =
+proc clientRules(): seq[LcnApRule] =
   ## The client module issues grants on the test contract to anyone and
   ## revokes what it issued; everyone inspects the grants targeting it and its
   ## own audit.
-  policyBytes(
-    @[
-      issueRule(
-        subject(modules = @["client_module"]),
-        targetSubject(anyone()),
-        @[paPattern(@[LcnApActionKind.Call], exact = testContract())],
-      ),
-      revokeRule(subject(modules = @["client_module"]), targetIssued()),
-      inspectRule(
-        anyone(), grants = Opt.some(targetSelf()), audit = Opt.some(targetSelf())
-      ),
-    ]
-  )
+  @[
+    issueRule(
+      subject(modules = @["client_module"]),
+      targetSubject(anyone()),
+      @[paPattern(@[LcnApActionKind.Call], exact = testContract())],
+    ),
+    revokeRule(subject(modules = @["client_module"]), targetIssued()),
+    inspectRule(
+      anyone(), grants = Opt.some(targetSelf()), audit = Opt.some(targetSelf())
+    ),
+  ]
+
+proc clientPolicy(): seq[byte] =
+  policyBytes(clientRules())
 
 type CaHost = object
   ## One engine run's CA inputs: the state root, and the facts and clock the
@@ -314,31 +315,58 @@ suite "cap.module: the Capability Authority as a direct-mode module":
     e.finish()
     h.free()
 
-  test "[CAP-0248] [CAP-0365] [IMPL] a client's evaluate is not-authorised and leaves no record; a payload naming another consumer is refused before dispatch":
+  test "[CAP-0248] [CAP-0365] [IMPL-DECISION G378] a client's own evaluate reaches a decision only under a rule naming it; without one it is not-authorised and leaves no record; a payload naming another consumer is refused before dispatch":
     var h = newHost()
     h.wire()
     let e = newEngine(h.caConfig)
     discard e.started(caRecord(), "ca")
     let (_, rc) = e.startClient("c1")
     var r = rc.caRoute("ca")
-    let ev =
-      r.ask("evaluate", evalRequest("c1", @[callScope(root(M1))]), EvaluateResponse)
+    # A scope naming no provider: the client's own question (G379).
+    let q = evalRequest("c1", @[pa(@[PaActionKind.Discover])])
+    let ev = r.ask("evaluate", q, EvaluateResponse)
     check ev.kind == LogosNSCapabilityAuthorityEvaluateResponseKind.Map_error
     check ev.arm_Map_error.error.code.kind == CaCode.Not_authorised
     # [S8b-1 interim] The Runtime checks the payload's consumer at the route,
     # whatever the policy kind: the authority's own `not-authorised` is
     # behind it.
     check r.raw("issue_grant", encode(issueReq("c2", "c1")).get).code == ecNotAuthorised
-    let audit = r.ask(
-      "query_audit", QueryAuditRequest(consumer: address("c1")), QueryAuditResponse
+    check r.raw("evaluate", encode(evalRequest("c2", q.scopes)).get).code ==
+      ecNotAuthorised
+    proc evaluations(r: var LogosRouteHandle): seq[AuditRecord] =
+      let audit = r.ask(
+        "query_audit", QueryAuditRequest(consumer: address("c1")), QueryAuditResponse
+      )
+      audit.arm_Map_records.records.filterIt(
+        it.kind in {
+          LogosNSCapabilityAuthorityAuditRecordKind.Evaluate_allow,
+          LogosNSCapabilityAuthorityAuditRecordKind.Evaluate_deny,
+          LogosNSCapabilityAuthorityAuditRecordKind.Evaluate_failure,
+        }
+      )
+
+    check r.evaluations.len == 0
+    # Under a rule naming `evaluate`, the authority's own check passes. The
+    # Runtime's route policy here is the internal `allow-all`, which never
+    # asks the authority: that check is the only one.
+    let evalRule = allowRule(
+      subject(modules = @["client_module"]),
+      @[
+        paPattern(
+          @[LcnApActionKind.Call],
+          contract = crCa,
+          access = Opt.some(LcnApAccess(methods: decls(@[declName("evaluate")]))),
+        )
+      ],
     )
-    check audit.arm_Map_records.records.allIt(
-      it.kind notin {
-        LogosNSCapabilityAuthorityAuditRecordKind.Evaluate_allow,
-        LogosNSCapabilityAuthorityAuditRecordKind.Evaluate_deny,
-        LogosNSCapabilityAuthorityAuditRecordKind.Evaluate_failure,
-      }
-    )
+    discard h.authority.replacePolicy(policyBytes(clientRules() & @[evalRule])).get
+    let d = r.ask("evaluate", q, EvaluateResponse)
+    check d.kind == LogosNSCapabilityAuthorityEvaluateResponseKind.Map_decision
+    check d.arm_Map_decision.decision.consumer == address("c1")
+    check r.evaluations.mapIt(it.kind) ==
+      @[LogosNSCapabilityAuthorityAuditRecordKind.Evaluate_deny]
+    check r.raw("evaluate", encode(evalRequest("c2", q.scopes)).get).code ==
+      ecNotAuthorised
     r.release()
     e.finish()
     h.free()

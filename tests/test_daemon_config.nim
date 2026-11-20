@@ -692,6 +692,15 @@ proc allows(e: PolicyEnv, q: AuthzRequest): bool =
   r.arm_Map_decision.decision.result.kind ==
     LogosNSCapabilityAuthorityDecisionResultKind.Allow
 
+proc denial(e: PolicyEnv, q: AuthzRequest): DenialKind =
+  let req = evaluateRequest(q, Rt).expect("an evaluate request")
+  let r = e.a.evaluate(systemCaller(), req)
+  doAssert r.kind == LogosNSCapabilityAuthorityEvaluateResponseKind.Map_decision,
+    "not a decision"
+  let d = r.arm_Map_decision.decision
+  doAssert d.denial.isSome, "not a denial"
+  d.denial.get.code.kind
+
 const OperatorRules =
   """[{"kind": "allow", "subject": {"instances": ["a"]}, "scopes": [{"kind": "runtime-control", "methods": ["list_modules"]}]},
         {"kind": "allow", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "runtime-control", "methods": ["stop_module"]}, {"kind": "module-execution", "targets": {}, "actions": ["stop"]}]}]"""
@@ -783,6 +792,23 @@ suite "dc.policy: the system rules S1 to S5, decided by the Capability Authority
     check e.allows(rcReq(CtlInstance, "stop_module", "b"))
     check not e.allows(rcReq(CtlInstance, "stop_module", AuthorityInstance))
     check not e.allows(execReq(CtlInstance, AuthorityInstance, stop = true))
+    e.close()
+
+  test "[IMPL-DECISION G377] the system denials' codes: S2 and S3 deny the consumer, S4 and S5 their named targets":
+    var e = openPolicy(policyText())
+    check e.denial(eventReq(OrchestratorInstance, "route_state_changed")) ==
+      DenialKind.Consumer_denied
+    check e.denial(eventReq(CtlInstance, "module_state_changed")) ==
+      DenialKind.Consumer_denied
+    for target in [LoaderInstanceId, AuthorityInstance, CtlInstance]:
+      checkpoint target
+      check e.denial(rcReq(CtlInstance, "stop_module", target)) ==
+        DenialKind.Target_denied
+      check e.denial(execReq(CtlInstance, target)) == DenialKind.Target_denied
+    check e.denial(rcReq(CtlInstance, "retire_module", OrchestratorInstance)) ==
+      DenialKind.Target_denied
+    check e.denial(execReq(CtlInstance, OrchestratorInstance, stop = true)) ==
+      DenialKind.Target_denied
     e.close()
 
   test "the merged policy: every array a set, the system rules first-class, init's policy loadable":
