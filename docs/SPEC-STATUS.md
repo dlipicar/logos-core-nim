@@ -118,7 +118,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-2 | G86, real Runtimes' TLS credentials | a P-256 key and a self-signed certificate as a direct anchor (G86 as re-decided; 5-2's G324) | decided (B2) |
 | 5-2, 5-7a | marked payloads on remote paths (G277; 5-2's G327) | `tls-tcp` and `quic` carry no marked payload (TRANSPORT l.1188-1189; RUNTIME l.1808, l.2939): re-pin P4d built the refusal (`runtime/remotemarked`), which 5-7a calls, and took 5-2d's opt-in `BORINGSSL_ZERO_RECORD_BUFFERS` off again; the carrier erases its own copies (G276) | decided 2026-11-17 (owner); settled by spec text at 6cac8335 (re-pin P4d) |
 | 5-3a | the package trust file; provenance continuity | the package trust file v2: anchors with exact names, the development marker and the catalog and provenance selections under one revision, a selection refused until a profile is built; administered offline by `logosctl trust` (G396 to G398) | decided (C2, C3); built in 5-3a-2 (I114) |
-| 5-3a | the `lcn.storage_fetch` contract has no readiness signal (G91, G136) | 5-3a adds one | planned |
+| 5-3a | the `lcn.storage_fetch` contract has no readiness signal (G91, G136) | 5-3a adds one | built (5-3a-1, G395): `fetch_readiness` and `fetch_readiness_changed_event`; N-4 builds the phases |
 | 5-3b | NP-12 | no platform tag in the catalog document | open (C7) |
 | 5-3b | TF-07 (G166) | the plan's §6 wording; the answer to PM l.408 stays *no* | open (C5); recovery by re-install is PM l.1675 at 6cac8335 (PKG-0608, 5-5) |
 | 5-3b | no §4.2 freshness profile is defined | claim the baseline; a configuration that asks for a profile is refused | open (C9) |
@@ -420,7 +420,13 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: BCP-0101, BCP-0102 and BCP-0103; BCP-0093 retired. TXT-0350 and TXT-0555 cleared by test. P9 closed, and with
   it the re-pin.
-- 2026-11-20, step 5-3a-2 (I114; G396, G397, G398), the package trust file:
+- 2026-11-20, Tier 5 step 5-3a-1 (I114), the `lcn.storage_fetch` contract (G395; G91, G136, G140 amended):
+  the interface document and its generated code and root in `logos_sdk/contracts/`; the reference fake
+  `fetch_fake_module` and the conformance harness in the SDK's testing package; `sdk/docs/STORAGE-FETCH.md`.
+  A hosted consumer reads 4 MiB from a hosted provider and no carrier frame holds the bytes (RUN-0815
+  re-tested). No unit changes status: the contract is half of PKG-0474's evidence, which 5-3b claims.
+
+- 2026-11-20, Tier 5 step 5-3a-2 (I114; G396, G397, G398), the package trust file:
   - `<session>/trust.cbor` is `logos-core-nim.trust.v2`, closed: one revision covers the switch, the signing profile,
     every anchor (kid, 48-byte key, exact names, development marker) and the catalog and provenance selections. Its
     schema and rules are core's (`package/trustdoc`), so the Package Manager reads the same document in 5-3b. A Tier 4b

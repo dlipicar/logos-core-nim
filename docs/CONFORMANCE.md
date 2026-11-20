@@ -800,6 +800,13 @@ At these values a chain of 4,096 names resolves in each build mode (`tests/test_
 bind recomputes every depth, so the worst case is about 4.3e9 edge visits: slow, with no time-out to
 reach. Exceeding a limit ends the root operation with `dependency-unavailable` and changes nothing.
 
+## Storage fetch limits
+
+`lcn.storage_fetch` (DECISIONS G395; `sdk/docs/STORAGE-FETCH.md` §3): a read asks for 1 to 1,048,576
+bytes, and a provider refuses any other `length` with `invalid-length` before it looks at the object; a
+response holds at most 1 MiB of data, far below the 16 MiB frame body (TRANSPORT l.372). A locator is 1
+to 4,096 bytes, as a package source's `object` is (PACKAGE MANAGER l.789-801).
+
 ## Event output overflow
 
 TRANSPORT §5.2 (TRN-0309, TRN-0310) as built in `io/callee.nim` and `io/loop.nim`:

@@ -1,0 +1,47 @@
+; -- metadata --
+_interface = "lcn.storage_fetch"
+
+; How a Logos Storage provider serves package objects to the Package Manager
+; (DECISIONS G91, G136, G395; PACKAGE MANAGER l.854-858, l.1453-1458).
+; sdk/docs/STORAGE-FETCH.md documents it.
+
+; An LGX source's `object` or `provenance_object`, as the catalog gives it.
+; Opaque to the Package Manager; each provider documents its encoding.
+lcn.storage_fetch.locator = bstr .size (1..4096)
+
+lcn.storage_fetch.readiness = "starting" / "ready" / "offline"
+
+lcn.storage_fetch.failure = {
+  code: "invalid-length" / "invalid-locator" / "not-ready" / "unavailable" / "out-of-range",
+  ? detail: tstr .size (1..256),
+}
+
+lcn.storage_fetch.stat_object_request = {
+  object: lcn.storage_fetch.locator,
+}
+
+lcn.storage_fetch.stat_object_response =
+  { size: uint64 } /
+  { failure: lcn.storage_fetch.failure }
+
+; `length` is 1..1048576 by rule (STORAGE-FETCH.md); a schema cannot bound
+; an integer outside the prelude aliases (INTERFACE l.446-458).
+lcn.storage_fetch.read_object_request = {
+  object: lcn.storage_fetch.locator,
+  offset: uint64,
+  length: uint32,
+}
+
+lcn.storage_fetch.read_object_response =
+  { data: bstr .size (0..1048576) } /
+  { failure: lcn.storage_fetch.failure }
+
+lcn.storage_fetch.fetch_readiness_request = {}
+
+lcn.storage_fetch.fetch_readiness_response = {
+  readiness: lcn.storage_fetch.readiness,
+}
+
+lcn.storage_fetch.fetch_readiness_changed_event = {
+  readiness: lcn.storage_fetch.readiness,
+}

@@ -69,3 +69,15 @@ suite "blake3: official test vectors":
         h.update(data.toOpenArray(pos, last - 1))
         pos = last
       check h.finish() == blake3(data)
+
+  test "extendable output from a position is that slice of the whole output":
+    # [DECISIONS G395] The storage-fetch fake reads its objects at any offset this way.
+    var h: Blake3Hasher
+    h.init()
+    h.update(input(1000))
+    var whole = newSeq[byte](5000)
+    h.finish(whole)
+    for (seek, n) in [(0, 64), (1, 63), (63, 2), (64, 1000), (4095, 905), (4999, 1)]:
+      var part = newSeq[byte](n)
+      h.finish(uint64(seek), part)
+      check part == whole[seek ..< seek + n]
