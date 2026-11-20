@@ -1,10 +1,10 @@
 ## logosd and logosctl as processes (Tier 4b step 4b-6; DECISIONS G88, G89,
 ## G296, G297, G299, G300, G302; docs/DAEMON.md): `init`, start, the status,
 ## shutdown by signal and by command, a restart after kill -9, the
-## development switch and its banner, trust continuity, the offline writers'
-## lock, concurrent shells, retirement, the socket path's limits, a Loader
-## loss, a key bound to another Runtime, and the call-evidence store's
-## commands.
+## development switch and its banner, trust continuity, the trust anchor
+## commands and their refusals (G397), the offline writers' lock, concurrent
+## shells, retirement, the socket path's limits, a Loader loss, a key bound to
+## another Runtime, and the call-evidence store's commands.
 ##
 ## The children are built for the suite's variant (`daemonbuild.nim`): logosd
 ## with test hooks, logosctl without. They run with `posix_spawn`, their
@@ -474,12 +474,20 @@ when defined(posix):
       check c.state(instance) == "unloaded"
       check d.stopped == 0
 
-    test "[PKG-0418] [PKG-0419] [PKG-0420] [PKG-0421] trust continuity across starts":
+    test "[PKG-0418] [PKG-0419] [PKG-0420] [PKG-0421] trust continuity across starts, with an anchor in the file":
       let c = newCase()
       check c.initDefault().code == 0
       proc put(revision: uint64, development: bool) =
+        let anchor = LcnTrustAnchor(
+          kid: @[byte 1], public_key: newSeq[byte](48), packages: @["logos.storage"]
+        )
         check writeTrustFile(
-          c.s, LcnPackageTrust(revision: revision, development: development)
+          c.s,
+          LcnPackageTrust(
+            revision: revision,
+            development: development,
+            signing: LcnTrustSigning(anchors: @[anchor]),
+          ),
         ).isOk
 
       proc startsWith(code: int): bool =
@@ -504,6 +512,169 @@ when defined(posix):
       check startsWith(1)
       check c.ctl("trust", "reestablish", "--revision", "3").code == 0
       check startsWith(0)
+
+    test "[PKG-0418] [TXT-0463] [IMPL-DECISION G397] logosctl trust anchor and development: each change writes revision + 1, one added name included, and logosd starts with it; a change that changes nothing writes nothing and exits 0; a Tier 4b v1 session upgrades by its first change":
+      let c = newCase()
+      check c.initDefault().code == 0
+      # A Tier 4b session: the v1 file and the mark of its bytes.
+      let v1 = LcnTrustFile(revision: 1, development: false).encode.expect("v1")
+      check writeAtomic(c.s.dir, TrustName, v1).isOk
+      check writeMark(c.s, TrustFileState(file: floorTrust(), digest: @(blake3(v1)))).isOk
+      let key = repeat("ab", 48)
+      proc wrote(args: varargs[string]): JsonNode =
+        let (code, j) = c.ctlJson(@["trust"] & @args)
+        check code == 0
+        if code != 0:
+          checkpoint($j)
+          return newJObject()
+        j["result"]
+
+      var r = wrote("anchor", "add", "--kid", "org", "--key", key, "logos.storage")
+      check r{"revision"}.getInt == 2 and r{"changed"}.getBool
+      check r{"kid"}.getStr == "6f7267"
+      # A hex kid, the key in lcn-pkg keygen's line, a development anchor.
+      writeFile(c.dir / "dev.pub", "public key: " & repeat("cd", 48) & "\n")
+      r = wrote(
+        "anchor",
+        "add",
+        "--kid",
+        "hex:6465",
+        "--key",
+        "@" & c.dir / "dev.pub",
+        "--development",
+        "logos.example",
+      )
+      check r{"revision"}.getInt == 3
+      # One added name is a new revision (PM l.420).
+      r = wrote("anchor", "add-names", "--kid", "org", "logos.wallet")
+      check r{"revision"}.getInt == 4 and r{"changed"}.getBool
+      # A change that changes nothing writes nothing.
+      let before = digestOfFile(c.s.trustPath)
+      for args in [
+        @["anchor", "add-names", "--kid", "org", "logos.wallet"],
+        @["anchor", "remove-names", "--kid", "org", "logos.chat"],
+        @["anchor", "remove", "--kid", "none"],
+        @[
+          "anchor", "add", "--kid", "org", "--key", key, "logos.storage", "logos.wallet"
+        ],
+        @["development", "off"],
+      ]:
+        checkpoint(args.join(" "))
+        r = wrote(args)
+        check r{"revision"}.getInt == 4 and not r{"changed"}.getBool
+      check digestOfFile(c.s.trustPath) == before
+      check "unchanged at trust revision 4" in
+        c.ctl("trust", "development", "off").stdout
+      let on = c.ctl("trust", "development", "on")
+      check on.code == 0
+      check "trust revision 5: development switch on, 1 development anchor enters force" in
+        on.stdout
+      let again = c.ctl("trust", "development", "on")
+      check again.code == 0 and "unchanged at trust revision 5" in again.stdout
+      let written = readFile(c.s.trustPath)
+      check decodeCbor(written.toOpenArrayByte(0, written.high)).get
+        .lookup("format").get.getText == Opt.some(TrustFormat)
+      # logosd starts with it, without re-establishment: the mark moves to 5.
+      let d = c.start()
+      c.expectReady(d)
+      check readMark(c.s).expect("the mark").get.revision == 5
+      check d.stopped == 0
+      let shown = c.ctl("trust", "show")
+      check shown.code == 0
+      check "NON-PRODUCTION" in shown.stdout
+      check "accepted (the revision in use)" in shown.stdout
+      check "2 (2 in force)" in shown.stdout
+      check "\"logos.storage\" \"logos.wallet\"" in shown.stdout
+      let (sc, sj) = c.ctlJson("trust", "show")
+      check sc == 0
+      check sj["deployment"].getStr == "non-production"
+      let anchors = sj["result"]["signing"]["anchors"]
+      check anchors.len == 2
+      check anchors[0]["kid"].getStr == "6465" and anchors[0]["kid_text"].getStr == "de"
+      check anchors[0]["development"].getBool and anchors[0]["in_force"].getBool
+      check anchors[1]["kid_text"].getStr == "org"
+      check anchors[1]["packages"] == %["logos.storage", "logos.wallet"]
+      check anchors[1]["public_key"].getStr == key
+      check sj["result"]["provenance"] == newJObject()
+      check not sj["result"].hasKey("refused")
+      # Off again: the development anchor leaves force.
+      check "1 development anchor leaves force" in
+        c.ctl("trust", "development", "off").stdout
+
+    test "[PKG-0435] [PKG-0169] [IMPL-DECISION G398] [IMPL-DECISION G397] logosctl trust refusals exit 1 and write nothing; on a file logosd refuses, trust show prints the reason, every writer says to correct the file and trust reestablish writes no mark":
+      let c = newCase()
+      check c.initDefault().code == 0
+      let key = repeat("ab", 48)
+      check c.ctl(
+        "trust", "anchor", "add", "--kid", "org", "--key", key, "logos.storage"
+      ).code == 0
+      let (_, keys) = c.ctlJson("trust", "evidence-keys", "ls")
+      let evidence = keys["result"]["keys"][0]["public_key"].getStr
+      let before = digestOfFile(c.s.trustPath)
+      for (args, says) in [
+        (
+          @["anchor", "add", "--kid", "org", "--key", repeat("cd", 48), "logos.storage"],
+          "is already an anchor",
+        ),
+        (
+          @["anchor", "add", "--kid", "new", "--key", repeat("ab", 47), "x"],
+          "96 hex digits",
+        ),
+        (
+          @["anchor", "add", "--kid", "new", "--key", evidence, "x"],
+          "is a call-evidence key of this session",
+        ),
+        (
+          @["anchor", "add", "--kid", "new", "--key", key, repeat("n", 129)],
+          "1 to 128 bytes",
+        ),
+        (@["anchor", "add", "--kid", "hex:6", "--key", key, "x"], "--kid hex:"),
+        (@["anchor", "add", "--kid", "new", "--key", key], "needs at least one NAME"),
+        (@["anchor", "add-names", "--kid", "dev", "x"], "no anchor has kid"),
+        (
+          @["anchor", "remove-names", "--kid", "org", "logos.storage"],
+          "trust anchor remove withdraws the anchor",
+        ),
+      ]:
+        checkpoint(args.join(" "))
+        let r = c.ctl(@["trust"] & args)
+        check r.code == 1 and says in r.stderr
+      check digestOfFile(c.s.trustPath) == before
+      # A provenance profile selected by hand, at the next revision.
+      var f = readTrust(c.s).expect("the file").file
+      f.revision = 3
+      f.provenance.selected = Opt.some("logos.package-provenance.slsa-v1.2")
+      check writeTrustFile(c.s, f).isOk
+      let selected = digestOfFile(c.s.trustPath)
+      let shown = c.ctl("trust", "show")
+      check shown.code == 0
+      check "selects \"logos.package-provenance.slsa-v1.2\"" in shown.stdout
+      check "supports no provenance profile" in shown.stdout
+      let (sc, sj) = c.ctlJson("trust", "show")
+      check sc == 0
+      check "supports no provenance profile" in sj["result"]["refused"].getStr
+      check sj["result"]["provenance"]["selected"].getStr ==
+        "logos.package-provenance.slsa-v1.2"
+      for args in [
+        @["development", "on"],
+        @["development", "off"],
+        @["anchor", "add-names", "--kid", "org", "logos.chat"],
+      ]:
+        checkpoint(args.join(" "))
+        let r = c.ctl(@["trust"] & args)
+        check r.code == 1
+        check "supports no provenance profile" in r.stderr
+        check "correct trust.cbor by hand" in r.stderr
+      check digestOfFile(c.s.trustPath) == selected
+      let mark = readMark(c.s).expect("the mark").get
+      let re = c.ctl("trust", "reestablish", "--revision", "3")
+      check re.code == 1 and "no mark was written" in re.stderr
+      check readMark(c.s).expect("the mark").get == mark
+      # logosd refuses it too, naming the profile, and the mark stays.
+      let d = c.start()
+      check waitExit(d, ReadyMs) == 1
+      check "supports no provenance profile" in d.errText
+      check readMark(c.s).expect("the mark").get == mark
 
     test "[IMPL-DECISION G192] a session whose state store was lost does not start again under its Runtime id (exit 1; RUNTIME l.2630-2632)":
       let c = newCase()
