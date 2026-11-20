@@ -1,38 +1,18 @@
-# The re-pin to logos-lips 6cac8335: what still follows the previous text (tier5-plans/repin-6cac8335.md §2).
+# What stays deferred past the re-pin to logos-lips 6cac8335 (tier5-plans/repin-6cac8335.md §2). Sub-steps P0 to P9
+# have merged, and what they cleared left this list with its evidence, recorded in spec/repin-text-cleared.toml
+# against the frozen list spec/repin-baseline.toml. `spectrace pending` checks this file, and the file holds [deferred] only
+# (DECISIONS I104, note at re-pin P9):
 #
-# Generated at P0, then only ever shrunk by hand. `spectrace mirror`, `pins`, `gate` and `deploydoc` accept a
-# difference listed here and fail on a listed item that no longer differs; `spectrace pending` checks the list.
+#   [deferred]   unit = the work item that owns it after the re-pin. Its claims file defers it by name, in [units],
+#                and the unit is a live gated requirement. Or a text entry that rides on a deferred unit (same spec
+#                and section, or a spec and section its sentence names, and the same work item), with a [[deferred]]
+#                record in spec/repin-text-cleared.toml naming the unit and a decision row (DECISIONS I108)
 #
-#   [mirror], [pin]   item = sub-step that moves the mirror, the pin and the parser together
-#   [units.added], [units.changed]
-#                     unit = sub-step. A listed unit counts as deferred:tier-5 until the sub-step claims it,
-#                     with a test or an inspection item, or moves it to [deferred] and names its owner
-#   [stale]           retired id still cited = sub-step that removes the citation
-#   [deploydoc]       unit whose row in docs/DEPLOYMENT.md is still missing = sub-step
-#   [[text]]          a changed sentence or table row with no gated unit. class "behaviour" is cleared by a test
-#                     tagged [TXT-nnnn]; class "todo" is read by its sub-step, which either treats it as behaviour
-#                     or records what it compared and why it changes nothing; `guard` entries also name the test or
-#                     code site that was read. A cleared entry moves to spec/repin-text-cleared.toml
-#
-# spec/repin-baseline.toml is the frozen copy of this list. An entry leaves only with its evidence, and changes
-# sub-step only with a [[moved]] record in spec/repin-text-cleared.toml.
-#   [deferred]        unit that stays deferred past the re-pin = the work item that owns it; or a text entry that
-#                     rides on one (same spec and section, same work item), with a [[deferred]] record in
-#                     spec/repin-text-cleared.toml naming the unit and a decision row (DECISIONS I108)
-
-closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
-
-[mirror]
-
-[pin]
-
-[units.added]
-
-[units.changed]
-
-[stale]
-
-[deploydoc]
+# A unit whose claims file still defers it stays here. A unit of the frozen list's [deferred] leaves only claimed;
+# any other unit the re-pin tracked leaves claimed, or with another status named in its claims file and a decision
+# row that names it. A claimed unit needs a test that can run or an inspection item with a reason. A text entry
+# leaves when a test of its unit carries its tag: its [[text]] record in spec/repin-text-cleared.toml gives id,
+# step (the work item) and test (the suite).
 
 [deferred]
 "PKG-0273" = "5-10"
