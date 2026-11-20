@@ -28,8 +28,9 @@ it has.
 ; bytes, with no duplicates (CA l.130-138 applied to this input), and non-empty,
 ; except a method or event list, which permits none of that kind when empty
 ; (CA l.126). The checks the schema cannot express (order, non-empty arrays, the
-; source pattern, bounds, names that resolve, restricted declarations) are
-; applied when the policy is loaded (authority/policy.nim).
+; source pattern, bounds, names that resolve, restricted declarations, a
+; target-denied rule that names no target) are applied when the policy is
+; loaded (authority/policy.nim).
 
 lcn.authority_policy = {
   format: "logos-core-nim.authority-policy.v1",
@@ -52,7 +53,7 @@ lcn.ap_deny = {
   kind: "deny",
   subject: lcn.ap_subject,
   scopes: [* lcn.ap_scope],
-  ? code: "scope-denied" / "consumer-denied" / "target-denied",
+  ? code: "consumer-denied" / "target-denied",
 }
 
 lcn.ap_issue = {
@@ -166,14 +167,27 @@ Runtime's call records, `docs/HOST-CONFIG.md` `call_audit`); the decision's comm
 the request's, every covering rule's and every supporting grant's.
 
 **`deny`.** A consumer matching `subject` is refused a request when any of `scopes` covers any
-requested scope, a permission scope included, with `code` (default `scope-denied`). Deny overrides allow and every grant: rules have no order, and one matching deny
-decides. A deny names no grant and no validity.
+requested scope, a permission scope included, with `code`. Deny overrides allow and every grant: rules
+have no order. A rule states one code (CA l.783-784; DECISIONS G377):
+- `consumer-denied`, the default, denies the consumer the operation;
+- `target-denied` denies it for the targets the rule names. Only a rule whose every pattern names a
+  provider, module or instance may say it: a pattern with `{}`, no `targets` or `providers`, or a
+  permission is refused at load.
+
+When several deny rules match, the answer is `consumer-denied` if any of them says it, else
+`target-denied` (CA l.794), whichever rule comes first. A deny names no grant and no validity.
+
+*Changed with the re-pin to `6cac8335`:* a deny rule with no `code` answered `scope-denied` and now
+answers `consumer-denied`, and a policy naming `scope-denied` as a code no longer loads.
 
 **`issue`.** A module matching `subject` may issue grants to targets matching `targets`, for scopes
 that some of `scopes` covers, valid for at most `max_validity_ms` (a grant without `expires_at` needs
 a rule without `max_validity_ms`). `targets` is a subject or `"self"` (the issuer itself). A caller no
-`issue` rule matches is denied `consumer-denied` before anything it names is looked up, so issuance
-reveals nothing about other instances (CAP-0262, CAP-0263).
+`issue` rule matches is denied `not-granted` before anything it names is looked up, so issuance
+reveals nothing about other instances (CAP-0262, CAP-0263). A caller with an `issue` rule that does not
+fit is denied `scope-denied` when one of its `issue` rules covers the action of a requested scope,
+whatever its targets, and `not-granted` otherwise (G377; issuance has no deny rule, so neither
+`consumer-denied` nor `target-denied`).
 
 **`revoke`.** A module matching `subject` may revoke grants whose target matches `targets`: a subject,
 `"self"` (grants targeting the caller) or `"issued"` (grants the caller issued). A module may always see
@@ -250,13 +264,33 @@ l.214). As modules see it:
 - a route asked for with unconstrained `access` is refused whenever the covering rule or grant
   constrains methods or events. Ask for the methods and events you need.
 
-**Restricted declarations** (CA l.898, l.1375-1376; RUNTIME l.1662). Whatever the rules say:
-- a `subscribe-event` naming `grant_changed` or `policy_changed` on the authority's contract is
-  denied `scope-denied`: those events go only to the Runtime;
-- a `call` naming `evaluate` is denied `scope-denied`: only the Runtime evaluates;
-- a policy rule naming any of the three is refused at load, and so is a grant scope naming one.
+**Restricted declarations** (CA l.898, l.1423; RUNTIME l.1662). Whatever the rules say, no rule or
+grant contains a `subscribe-event` naming `grant_changed` or `policy_changed` on the authority's
+contract (those events go only to the Runtime):
+- such a request is denied `scope-denied` when an allow rule or active grant covers its action (an
+  allow rule for `subscribe-event` on the authority's contract, say), and `not-granted` otherwise;
+- an `issue_grant` naming one is answered the same way from the caller's `issue` rules;
+- a policy rule naming either is refused at load, and so is a grant scope naming one.
 
 Routes, `discover` and `renew-route` to the authority with unconstrained `access` are ordinary scopes.
+
+**`evaluate` for oneself** (CA l.1416-1421; DECISIONS G378, G379). The Runtime evaluates on its
+protected path. A module may also call `evaluate`, with itself as `consumer` and never with
+`execution_renewal`, when an allow rule for it, or an active grant to it, names a `call` of `evaluate`
+on the authority's contract in `access.methods`:
+- only a scope that names `evaluate` contains a call of it. A rule, grant or `issue` rule with no
+  `access`, or no method list, never does: the right comes from naming it, never "merely because" of
+  another (l.1419-1420). A deny rule matches it like any other method, so a broad deny still denies it;
+- the authority checks the right itself, before evaluation begins: under the internal `allow-all`
+  policy the Runtime never asks it about the route call, and over a transport nothing else does. A
+  module without it, or naming another consumer, is `not-authorised`, and nothing is recorded;
+- **a module asks only about itself** (G379, an interim on TF-61). Its scopes name no instance and no
+  provider but its own: any other, known or not, is `invalid-request`, so the answer tells it nothing
+  about other instances. An execution scope names its own instance. A scope that names no provider
+  (a contract, say) goes to a decision;
+- its evaluations share the log and the backlog with the Runtime's: a module with the right can push
+  older records out of a bounded log, and can fill the backlog so that every evaluation fails closed
+  until it drains (Audit retention).
 
 **Permission scopes** (CA l.212-216, l.387-392; DECISIONS I93). The host selects a permission profile
 in protected configuration (`docs/HOST-CONFIG.md`, `permissions`); the authority gets the same profile
@@ -280,33 +314,36 @@ only there.
 - **Validity.** `expires_at` must be in the future. An expired grant supports nothing. The expiry is
   recorded once, at `expires_at`, even when the authority was down then.
 - **Revocation** keeps the time and reason. Revoking a revoked grant returns it unchanged and records
-  another success. Revoking an expired grant is `grant-not-active`.
+  nothing (CA l.811), protected revocation included. Revoking an expired grant is `grant-not-active`.
 - **Use.** A grant supports an evaluation when its target is the consumer, it is active, and it covers
   the whole request: every requested scope inside one of its scopes (G207). Permission scopes are
   contained through their definitions (CAP-0021). When several do, the decision names the one that lasts longest (no
-  `expires_at` first, then the latest, then the lower id) and ends with it. Without a supporting grant
-  the deny is `grant-revoked` or `grant-expired` when such a grant would have covered it, else
-  `not-granted`.
+  `expires_at` first, then the latest, then the lower id) and ends with it. Without a supporting rule
+  or grant the deny is the first that applies (CA l.785-789, l.794): `grant-revoked` when a revoked
+  grant alone would contain the whole request, else `grant-expired` when an expired one would, else
+  `scope-denied` when an allow rule or active grant covers the action of a requested scope, else
+  `not-granted`. Under G207 one rule or grant holds the whole request, so a mix of revoked and expired
+  grants is never counted together (TL-04).
 - **Ids.** `d-` and `g-` ids carry a random prefix drawn at every start, so ids never repeat, even for a
   copied state directory.
 
 ## Error codes and the order of checks (TL-04, extended)
 
-The specification assigns 4 of the 16 codes. This order assigns the rest; the first that applies
-wins.
+The specification orders the denial codes (CA l.779-794): the first in its table that applies. This
+order assigns the rest, and places the denials among the errors; the first that applies wins.
 
 | Step | Condition | `evaluate` | `issue_grant` | `revoke_grant` | `get_grant` | `list_grants` | `query_audit` |
 |---|---|---|---|---|---|---|---|
-| 1 | Wrong caller kind, or `consumer` is not the caller | `not-authorised` | same | same | same | same | same |
+| 1 | Wrong caller kind, or `consumer` is not the caller; for a module's `evaluate`, no rule or grant naming it, or `execution_renewal` | `not-authorised` | same | same | same | same | same |
 | 2 | Queue full, timed out before it ran, or authority closed | `authority-unavailable` | same | same | same | same | same |
 | 3 | Form: set order or duplicates, shape (a permission scope beside anything but a `start`, for `evaluate`), `expires_at` not in the future, limit, cursor, `since > until` | `invalid-request` | `invalid-request` | | | `invalid-request` | `invalid-request` |
 | 4 | Another Runtime, or `remote-enrollment` | `unsupported-scope` | same | | | | |
 | 5 | A permission the selected profile does not define; then constraints that do not conform to their definition | `unknown-permission`; `invalid-constraints` | same | | | | |
 | 6 | Facts unavailable, writes failing, out of ids or room, notification lost | `authority-unavailable` | same | same | same | same | same |
-| 6a | No `issue` rule matches the caller | | deny `consumer-denied` | | | | |
-| 6b | An unknown consumer, target, instance or provider; package facts that differ | `invalid-request` | same | | | | |
+| 6a | No `issue` rule matches the caller | | deny `not-granted` | | | | |
+| 6b | An unknown consumer, target, instance or provider; package facts that differ; for a module's `evaluate`, any instance or provider but its own (G379) | `invalid-request` | same | | | | |
 | 7 | Grant unknown or hidden | | | `grant-not-found` | `grant-not-found` | omitted | omitted |
-| 8 | Policy refuses | deny: `scope-denied` (restricted), the rule's code, `grant-revoked`, `grant-expired`, `not-granted` | deny: `target-denied` or `scope-denied` | `not-authorised` | | | |
+| 8 | Policy refuses | deny: the deny rules' code (`consumer-denied` before `target-denied`), `grant-revoked`, `grant-expired`, `scope-denied`, `not-granted` | deny: `scope-denied` or `not-granted` | `not-authorised` | | | |
 | 9 | State | | | `grant-not-active` | | | |
 
 - A caller the authority does not know (retired) is `not-authorised` for every module method, and
@@ -324,7 +361,8 @@ Nothing is allowed by default. A deployment needs at least:
 - **The authority's own notifications.** `watch_changes` delivers `observed_change` events from the
   authority instance, so it needs `publish-event` for `observed_change` on its own contract.
 - **Module consumers of the authority.** Routes to the authority and calls to the methods each module
-  uses. `evaluate`, `grant_changed` and `policy_changed` cannot be granted (above).
+  uses. `grant_changed` and `policy_changed` cannot be granted (above). A module that evaluates for
+  itself needs a rule or grant whose `access.methods` names `evaluate` ("`evaluate` for oneself").
 - **The orchestration instance.** Runtime Control and module execution for the instance named by the
   host configuration's `orchestration`. Step 8b states the exact rules when the binding lands. With a
   permission profile selected, each `module-execution` `start` pattern holds, in the same rule, a
@@ -450,14 +488,14 @@ records. It is a test input (`tests/test_authority.nim`): it loads as written.
 
 | Limit | Value |
 |---|---|
-| Scopes per request | 64 |
+| Scopes per request | 64, and at most 4,194,304 encoded bytes for the array (CA l.1199); past either, `invalid-request` |
 | Queued module requests | 1,024; a request not started within 30 s is withdrawn (`authority-unavailable`) |
 | Grants kept | 16,384; past it the oldest revoked or expired grant goes, and with all active, issuance is `authority-unavailable` |
 | Audit records kept | `audit.records` (default 65,536) |
-| Unwritten audit records | 4,096; past it evaluations are `authority-unavailable` until the backlog is written |
+| Unwritten audit records | 4,096; at it, or while a write of audit state is failing, evaluations are `authority-unavailable` until the backlog is written (Audit retention) |
 | Watches | 64, 8 per consumer, 256 queued notifications each |
 | `list_grants` | default 100, at most 1,000 per page; a cursor lives 600 s and dies at restart |
-| `query_audit` | at most 1,000 records |
+| `query_audit` | at most 1,000 records; a result over the response budget is cut to the most recent records that fit (G51, UF-54) |
 | A response | at most 15 MiB; a longer list is cut, with a cursor |
 
 ## State
@@ -471,13 +509,14 @@ starts with no grants (RUNTIME l.3549).
 | `lock` | held while the authority runs: a second authority on the directory does not start | at start |
 | `meta.cbor` | format, Runtime id, authority contract root, policy digest, revision and time, the audit floor, the last 64 policy-change records | at start, at a policy change, when a segment is dropped |
 | `grants/<grant id>.cbor` | the grant, its target's facts, and its issue, revoke and expiry records | before each change takes effect |
-| `audit/<16 hex>.cbor` | up to 256 other records, from the named sequence number | within a second |
+| `audit/<16 hex>.cbor` | up to 256 other records, from the named sequence number | in the background, once the request queues are empty (Audit retention) |
 
 - **Durability.** A grant change or policy change is on disk before it takes effect, before its event
-  and before the reply. Evaluation records are written within a second, so a crash can lose up to a
-  second of them (CA l.1169: storage is deployment policy).
-- **A failed write** fails the change with `authority-unavailable` and nothing applied; evaluation keeps
-  answering. The next change tries again.
+  and before the reply. Evaluation records are acknowledged before they are written: see Audit
+  retention below for what a crash can lose.
+- **A failed grant or policy write** fails the change with `authority-unavailable` and nothing applied;
+  evaluation keeps answering. The next change tries again. A failed write of audit records closes
+  evaluation instead (Audit retention).
 - **Protection at rest.** Owner-only directories (0700) and files (0600); no encryption. A directory
   others can read refuses to start.
 - **Refusal to start**, with every file left as it is: state from another Runtime, written under
@@ -489,8 +528,29 @@ starts with no grants (RUNTIME l.3549).
   Runtime stopped. Restoring an older directory brings back every grant revoked since the backup, so
   never restore across a revocation.
 - **Retention is one count** (U6). `audit.records` bounds all consumers together, and the oldest go
-  first, in whole segments: one consumer's evaluations can push others' evaluation records out (CA
-  l.1352 assumes otherwise). Grant records stay with their grant until the grant itself goes.
+  first, in whole segments, and only once written: one consumer's evaluations can push others'
+  evaluation records out (CA l.1352 assumes otherwise). Grant records stay with their grant until the
+  grant itself goes.
+
+**Audit retention** (CA l.1207-1214; DECISIONS G376). The point at which an evaluation's audit
+record counts as retained, as CA l.1208 asks the deployment to define:
+- **Acknowledged at the append.** The record is acknowledged when the authority appends it to its
+  log in memory while fewer than 4,096 records (the backlog bound, Limits) wait to be written and no
+  write of audit state is failing. Only then does `evaluate` return its allow or deny. Otherwise the
+  evaluation fails closed with `authority-unavailable` and no decision (CA l.1210, l.1214).
+- **Written later.** Records go to `audit/` in the background, once the request queues are empty.
+  No time bound is promised.
+- **What a crash loses.** An acknowledged record that the disk write has not reached when the process
+  dies is lost: at most 4,096 records, the backlog bound.
+- **A failed write closes evaluation.** From the first failed write of audit state until a later
+  write succeeds, every evaluation fails closed. The failure record is still attempted: it is
+  appended while the backlog is under the bound, and absent past it (CA l.1211-1212).
+- **Retention waits for the write.** No record is dropped by `audit.records` before it is on disk, so
+  while writes fail the backlog bound is reached instead.
+- **One point only.** This implementation offers this one acknowledgement point. A deployment that
+  needs each record on disk before its decision cannot select that here.
+- **Admission is unchanged.** A request refused before evaluation begins (its form, the 4 MiB scope
+  bound, a full queue) gets the same answer whatever the audit state (CA l.1203-1205).
 - **Retirement is not deletion** (BCP l.395). A retired instance's grants and records stay until
   retention removes them, and queries can still name its address.
 

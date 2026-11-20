@@ -8,7 +8,8 @@
 ## the selected permission profile (DECISIONS I93): an undefined name or
 ## constraints that do not conform fail the load.
 ##
-## Rules have no order. Deny overrides allow.
+## Rules have no order. Deny overrides allow; the code of a denial is the first
+## that applies in CA §7's table (l.783-794; G377).
 
 {.push raises: [].}
 
@@ -147,6 +148,22 @@ func matches*(s: Subject, f: FactsSnapshot): bool =
 func modulesOnly(s: Subject): bool =
   s.modules.isSome and s.instances.isNone and s.signers.isNone and s.packages.isNone
 
+func named(s: Subject): bool =
+  s.instances.isSome or s.modules.isSome or s.signers.isSome or s.packages.isSome
+
+func namesTarget(p: Pattern): bool =
+  ## A pattern naming a provider, module or instance (CA l.784): a subject with
+  ## at least one fact. `{}` and a permission name no target.
+  case p.kind
+  of pkProvider:
+    p.providers.isSome and p.providers.get.named
+  of pkControl:
+    p.targets.isSome and p.targets.get.named
+  of pkExecution:
+    p.execTargets.named
+  of pkPermission:
+    false
+
 # Loading ----------------------------------------------------------------------------
 
 func validSource*(s: string): bool =
@@ -233,11 +250,7 @@ proc resolveDecls(
   ok(Opt.some(roots))
 
 proc restrictedRoots(): seq[Root] =
-  @[
-    caMethodRoot("evaluate"),
-    caEventRoot("grant_changed"),
-    caEventRoot("policy_changed"),
-  ]
+  @[caEventRoot("grant_changed"), caEventRoot("policy_changed")]
 
 proc compilePattern(
     s: LcnApScope, what: string, profile: PermissionProfile
@@ -281,9 +294,9 @@ proc compilePattern(
         access = RouteAccess(
           methods: methods, publish_events: publish, subscribe_events: subscribe
         )
+      # [G378] `evaluate` may be named (CA l.1421): only a pattern naming it
+      # contains a scope naming it for an allow or an issuance (`core.nim`).
       if r.contract == caContract():
-        if access.methods.isSome and caMethodRoot("evaluate") in access.methods.get:
-          return err(what & ": evaluate is restricted to the protected engine path")
         if access.subscribe_events.isSome:
           for e in access.subscribe_events.get:
             if e == caEventRoot("grant_changed") or e == caEventRoot("policy_changed"):
@@ -374,13 +387,21 @@ proc compileRule(
     let a = x.arm_lcn_Ap_deny
     var r = Rule(kind: rkDeny, subject: subject)
     r.deny = ?compilePatterns(a.scopes, what, profile)
-    r.code = DenialKind.Scope_denied
+    # [G377; CA l.783-784] A rule states one explicit denial: `consumer-denied`
+    # unless it says `target-denied`, which only a rule whose every pattern
+    # names a target may say.
+    r.code = DenialKind.Consumer_denied
     if a.code.isSome:
       r.code =
         case a.code.get.kind
         of LcnApDenyCodeChoiceKind.Consumer_denied: DenialKind.Consumer_denied
-        of LcnApDenyCodeChoiceKind.Scope_denied: DenialKind.Scope_denied
         of LcnApDenyCodeChoiceKind.Target_denied: DenialKind.Target_denied
+    if r.code == DenialKind.Target_denied:
+      for i, p in r.deny:
+        if not p.namesTarget:
+          return err(
+            what & ".scopes[" & $i & "]: a target-denied rule's pattern names no target"
+          )
     ok(r)
   of LcnApRuleKind.lcn_Ap_issue:
     let a = x.arm_lcn_Ap_issue
@@ -547,6 +568,37 @@ proc patternContains*(
     else:
       profile.contained(r.pm.permission, r.pm.constraints, p.constraints.get)
 
+func patternCoversAction*(p: Pattern, r: Scope): bool =
+  ## [SPEC CA l.792-793] Whether the pattern `p` covers the action of the
+  ## requested scope `r`, as `scopes.coversAction` does for a grant's scope. A
+  ## runtime-control pattern always means this Runtime and the Runtime Control
+  ## contract, which a valid request names too (`checkShape`, `checkLocality`).
+  case p.kind
+  of pkProvider:
+    if r.kind == skProvider:
+      for a in r.pa.actions:
+        if a.kind in p.paActions:
+          return true
+    false
+  of pkControl:
+    r.kind == skControl
+  of pkExecution:
+    if r.kind == skExecution:
+      for a in r.me.actions:
+        if a.kind in p.meActions:
+          return true
+    false
+  of pkPermission:
+    r.kind == skPermission and r.pm.permission == p.permission
+
+func coversAnAction*(ps: openArray[Pattern], rs: openArray[Scope]): bool =
+  ## Whether some pattern of `ps` covers the action of some scope of `rs`.
+  for r in rs:
+    for p in ps:
+      if p.patternCoversAction(r):
+        return true
+  false
+
 proc containsAny*(
     ps: openArray[Pattern], r: Scope, view: FactsView, profile = NoProfile
 ): bool =
@@ -660,5 +712,16 @@ func hasIssuer*(p: Policy, callerFacts: FactsSnapshot): bool =
   ## [§0.1 U3] Whether any `issue` rule's subject matches the caller.
   for r in p.rules:
     if r.kind == rkIssue and r.subject.matches(callerFacts):
+      return true
+  false
+
+func issueCoversAction*(
+    p: Policy, callerFacts: FactsSnapshot, scopes: openArray[Scope]
+): bool =
+  ## [G377, under UF-53] Whether an `issue` rule for the caller covers the
+  ## action of a requested scope (CA l.788-789, l.792), whatever its targets.
+  for r in p.rules:
+    if r.kind == rkIssue and r.subject.matches(callerFacts) and
+        r.issue.coversAnAction(scopes):
       return true
   false

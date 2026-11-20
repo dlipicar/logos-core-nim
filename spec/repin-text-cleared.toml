@@ -3051,3 +3051,309 @@ reading = "The Capability Authority, not the Package Manager, checks a requested
 compared = "PM l.1369 at 6cac8335 against authority/scopes.nim validateScopes with the selected profile (unknown-permission, invalid-constraints), and package/manifest.nim, which consults no permission definition (test_package's [PKG-0607] case)."
 site = "tests/test_authority.nim"
 named = "a defined permission passes; an undefined one is unknown-permission"
+
+# P6a: the Capability Authority -----------------------------------------------------------------------------------------
+
+[[units]]
+id = "CAP-0393"
+compared = "CA l.1222 at 6cac8335 adds that the enforced call scope is the requested call scope narrowed by every allowed scope. An allow that would narrow a call excludes it (runtime/authscopes.nim narrowedFor), so the enforced scope is the requested one; the claim stays on TAU's boundary-commitment test (TXT-0401)."
+
+[[units]]
+id = "CAP-0422"
+compared = "CA l.1386 at 6cac8335 names the code, authority-unavailable. The evaluate half is unreachable: no shipped permission definition marks a constraint value sensitive. The issue_grant half is unchanged, and the claim stays on TA's issue_grant test."
+
+[[deferred]]
+id = "TXT-0360"
+rides = "RUN-1125"
+decision = "G81"
+reason = "A grant to a target on another Runtime supports authority only for a consumer accepted under RUNTIME §9's forwarding rules (CA l.78, which names that section): forwarding is RUN-1125's, which 5-7a builds with remote enrollment."
+
+[[text]]
+id = "TXT-0358"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0359"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0575"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0364"
+step = "P6"
+test = "tests/test_observe.nim"
+
+[[text]]
+id = "TXT-0367"
+step = "P6"
+test = "tests/test_permissions.nim"
+
+[[text]]
+id = "TXT-0373"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0374"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0375"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0376"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0378"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0379"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0381"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0382"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0385"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0388"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0389"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0390"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0391"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0393"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0398"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0402"
+step = "P6"
+test = "tests/test_authority.nim"
+
+[[text]]
+id = "TXT-0404"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0405"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0406"
+step = "P6"
+test = "tests/test_ca_schema.nim"
+
+[[text]]
+id = "TXT-0362"
+step = "P6"
+kind = "holds"
+reading = "Each selector is compared with the subject's own field: routes, providers, modules and instances (G226)."
+compared = "CA l.303 at 6cac8335 against runtime/observe.nim's selector match (the module header, G226), and the TO test, which matches each selector on its own field."
+site = "tests/test_observe.nim"
+named = "a route is matched by its own facts, never by its consumer"
+
+[[text]]
+id = "TXT-0363"
+step = "P6"
+kind = "holds"
+reading = "A route record is matched on its target provider, module and instance, never on its consumer (G226)."
+compared = "CA l.304 at 6cac8335 against runtime/observe.nim's route match (G226), and the TO test, where a selector naming the consumer's module or instance matches no route."
+site = "tests/test_observe.nim"
+named = "a route is matched by its own facts, never by its consumer"
+
+[[text]]
+id = "TXT-0365"
+step = "P6"
+kind = "holds"
+reading = "A route record the caller may observe is returned whole, its consumer included; one it may not observe is omitted (G161, G226)."
+compared = "CA l.306 at 6cac8335 against runtime/observe.nim, which returns the whole record once observation is allowed and omits it otherwise; the TO test shows both."
+site = "tests/test_observe.nim"
+named = "a route the caller may not observe is omitted"
+
+[[text]]
+id = "TXT-0366"
+step = "P6"
+kind = "holds"
+reading = "An execution decision's permission scopes are the target instance's saved settings, mapped one per setting (G217)."
+compared = "CA l.368 at 6cac8335 against runtime/authscopes.nim evaluateRequest (one permission scope per saved setting, TF-32 interim), and the TP test."
+site = "tests/test_permissions.nim"
+named = "the execution request carries the execution scope and one permission scope per saved setting"
+
+[[text]]
+id = "TXT-0370"
+step = "P6"
+kind = "informative"
+reading = "A note on a future revision; nothing to build."
+compared = "CA l.391 at 6cac8335."
+
+[[text]]
+id = "TXT-0371"
+step = "P6"
+kind = "informative"
+reading = "The sentence introduces the denial table, whose rows clear one by one."
+compared = "CA l.779 at 6cac8335 against l.781-789."
+
+[[text]]
+id = "TXT-0372"
+step = "P6"
+kind = "holds"
+reading = "The table's header: each denial code has one meaning, and the authority answers the first that applies (G377)."
+compared = "CA l.781 at 6cac8335 against core.nim doEvaluate (the codes in table order) and the TA test, which reaches each produced code in turn."
+site = "tests/test_authority.nim"
+named = "the first applicable denial in table order"
+
+[[text]]
+id = "TXT-0377"
+step = "P6"
+kind = "holds"
+reading = "`approval-required` is never produced: there is no approval step, so the row never applies (AUTHORITY-POLICY.md, Error codes)."
+compared = "CA l.787 at 6cac8335 against core.nim doEvaluate, whose step 4 produces nothing, and the TA test, which goes from the lapsed-grant codes straight to scope-denied."
+site = "tests/test_authority.nim"
+named = "the first applicable denial in table order"
+
+[[text]]
+id = "TXT-0380"
+step = "P6"
+kind = "holds"
+reading = "evaluate and issue_grant answer with these codes; revoke_grant has no denial arm."
+compared = "CA l.791 at 6cac8335 against core.nim doEvaluate and doIssue (G377, under UF-53) and the revoke_grant_response arms in App A; the TA test for evaluate, and TA's issuance-policy test for issue_grant."
+site = "tests/test_authority.nim"
+named = "the first applicable denial in table order"
+
+[[text]]
+id = "TXT-0383"
+step = "P6"
+kind = "informative"
+reading = "The sentence introduces the error table, whose rows clear one by one."
+compared = "CA l.796 at 6cac8335 against l.798-808."
+
+[[text]]
+id = "TXT-0384"
+step = "P6"
+kind = "holds"
+reading = "invalid-request is the code for a rule no more specific code covers: unordered or duplicate set arrays, combined operations and bad cursors among them."
+compared = "CA l.800 at 6cac8335 against scopes.nim validateScopes and cursor.nim, with the TA test (sets) and TA's cursor test (stale, foreign and tampered cursors fail alike)."
+site = "tests/test_authority.nim"
+named = "an empty or unordered set array or a duplicate is invalid-request"
+
+[[text]]
+id = "TXT-0386"
+step = "P6"
+kind = "holds"
+reading = "A permission no accepted specification or selected profile defines is unknown-permission."
+compared = "CA l.802 at 6cac8335 against scopes.nim's permission check through the selected profile, and the TA test."
+site = "tests/test_authority.nim"
+named = "a defined permission passes; an undefined one is unknown-permission"
+
+[[text]]
+id = "TXT-0387"
+step = "P6"
+kind = "holds"
+reading = "Constraints that do not conform to their permission's definition are invalid-constraints."
+compared = "CA l.803 at 6cac8335 against scopes.nim's permission check through the selected profile, and the TA test."
+site = "tests/test_authority.nim"
+named = "a defined permission passes; an undefined one is unknown-permission"
+
+[[text]]
+id = "TXT-0392"
+step = "P6"
+kind = "holds"
+reading = "internal-error is the code no other covers: here, an audit record that cannot be made for issue_grant or revoke_grant."
+compared = "CA l.808 at 6cac8335 against core.nim commitIssue and revokeEntry (a newRecord failure), reached in the TA test through the injectWriteFailures(records = true) seam."
+site = "tests/test_authority.nim"
+named = "internal-error: an audit record that cannot be made"
+
+[[text]]
+id = "TXT-0397"
+step = "P6"
+kind = "holds"
+reading = "With `scopes` and `allowed_scopes` each at most 4,194,304 bytes, a decision fits the Transport frame; the response budget is 15 MiB."
+compared = "CA l.1201 at 6cac8335 against scopes.nim MaxScopesBytes and core.nim's response budget, and the TA test at the limit."
+site = "tests/test_authority.nim"
+named = "a scopes array over 4,194,304 encoded bytes"
+
+[[text]]
+id = "TXT-0399"
+step = "P6"
+kind = "holds"
+reading = "No medium or durability level is prescribed: the acknowledgement point is the append under the backlog bound (G376)."
+compared = "CA l.1209 at 6cac8335 against AUTHORITY-POLICY.md, Audit retention, and core.nim recordBehind; the TA test shows a decision only after the append."
+site = "tests/test_authority.nim"
+named = "a decision only after its record is acknowledged"
+
+[[text]]
+id = "TXT-0400"
+step = "P6"
+kind = "holds"
+reading = "A failure record that can be retained by leaving out unvalidated or sensitive scopes is retained."
+compared = "CA l.1213 at 6cac8335 against core.nim doEvaluate's fail template, which writes the scopes only once validated; the TA test keeps the failure record without them."
+site = "tests/test_authority.nim"
+named = "without a permission profile a permission scope is unknown-permission, recorded without scopes"
+
+[[text]]
+id = "TXT-0401"
+step = "P6"
+kind = "holds"
+reading = "The enforced call scope is the requested call scope: an allow whose scopes would narrow a call excludes it, so each allowed scope covers it whole."
+compared = "CA l.1222 at 6cac8335 against runtime/authscopes.nim narrowedFor (any narrowing of a call excludes it) and the TAU test's record, whose scope is the requested call scope."
+site = "tests/test_audit.nim"
+named = "every call commits its request and successful response at the boundary"
+
+[[text]]
+id = "TXT-0407"
+step = "P6"
+kind = "removed"
+reading = "The extracted `logos_capability_authority.cddl` file is gone; App A now lists the contract schema in one block (TXT-0358, TXT-0404)."
+compared = "CA l.32 at 6a4dfa28 against l.32 and l.1512-1514 at 6cac8335. Our mirrors are cut from the spec text by spectrace, and TCS ties them to the appendix."
+
+[[text]]
+id = "TXT-0408"
+step = "P6"
+kind = "removed"
+reading = "The governing rule moved from the extracted file to App A: if an excerpt differs from the appendix, the appendix governs (TXT-0406)."
+compared = "CA l.33 at 6a4dfa28 against l.1514 at 6cac8335."

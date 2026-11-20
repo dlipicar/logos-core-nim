@@ -52,6 +52,11 @@ reason = "docs/DEPLOYMENT.md is logosd's §5.4 document (G310: logosd claims no 
 ids = ["BCP-0038"]
 reason = "R l.3037 (RUN-0940): the time assurance the selected authority policy needs is documented in docs/HOST-CONFIG.md, Under capability-authority, Time assurance (the host's wall clock trusted for valid_until, each validity also held on a monotonic clock, no skew tolerance; no certificate policy is selected), and indexed by docs/DEPLOYMENT.md's duty table."
 
+# bcp-deploy-duty-ca1207 (DECISIONS G376)
+[[item]]
+ids = ["BCP-0038"]
+reason = "CA l.1207-1208 (CAP-0439): the point at which an evaluation audit record counts as retained is documented in docs/AUTHORITY-POLICY.md, State, Audit retention (acknowledged at its append in memory while the backlog is under 4,096 and no audit write is failing), and indexed by docs/DEPLOYMENT.md's duty table."
+
 # bcp-deploy-duty-r3394 (DECISIONS I97)
 [[item]]
 ids = ["BCP-0038"]

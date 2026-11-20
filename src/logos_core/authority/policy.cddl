@@ -6,8 +6,9 @@
 ; bytes, with no duplicates (CA l.130-138 applied to this input), and non-empty,
 ; except a method or event list, which permits none of that kind when empty
 ; (CA l.126). The checks the schema cannot express (order, non-empty arrays, the
-; source pattern, bounds, names that resolve, restricted declarations) are
-; applied when the policy is loaded (authority/policy.nim).
+; source pattern, bounds, names that resolve, restricted declarations, a
+; target-denied rule that names no target) are applied when the policy is
+; loaded (authority/policy.nim).
 
 lcn.authority_policy = {
   format: "logos-core-nim.authority-policy.v1",
@@ -30,7 +31,7 @@ lcn.ap_deny = {
   kind: "deny",
   subject: lcn.ap_subject,
   scopes: [* lcn.ap_scope],
-  ? code: "scope-denied" / "consumer-denied" / "target-denied",
+  ? code: "consumer-denied" / "target-denied",
 }
 
 lcn.ap_issue = {

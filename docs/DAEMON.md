@@ -303,10 +303,10 @@ default configuration they are, one per line:
 ```text
 {"kind": "allow", "subject": {"modules": ["logos_capability_authority"]}, "scopes": [{"kind": "provider-access", "contract": "capability-authority", "actions": ["publish-event"], "access": {"publish_events": ["observed_change"]}}]}
 {"kind": "allow", "subject": {"instances": ["orchestrator"]}, "scopes": [{"kind": "runtime-control", "methods": ["get_self", "list_modules", "get_readiness", "recover_module", "start_module"]}]}
-{"kind": "deny", "subject": {"instances": ["orchestrator"]}, "scopes": [{"kind": "runtime-control", "methods": [], "events": ["route_state_changed"]}], "code": "target-denied"}
+{"kind": "deny", "subject": {"instances": ["orchestrator"]}, "scopes": [{"kind": "runtime-control", "methods": [], "events": ["route_state_changed"]}], "code": "consumer-denied"}
 {"kind": "allow", "subject": {"instances": ["orchestrator"]}, "scopes": [{"kind": "module-execution", "targets": {"instances": ["authority", "logosctl"]}, "actions": ["start"]}, {"kind": "permission", "permission": "logos-core-nim.host-ambient"}]}
 {"kind": "allow", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "runtime-control", "methods": ["get_self", "list_modules", "list_routes", "get_readiness", "get_execution_summary", "get_permission_settings", "get_configuration_schema", "get_configuration_summary", "get_configuration", "update_configuration", "apply_configuration", "create_module", "start_module", "stop_module", "recover_module", "retire_module", "shutdown_runtime"]}]}
-{"kind": "deny", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "runtime-control", "methods": []}], "code": "target-denied"}
+{"kind": "deny", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "runtime-control", "methods": []}], "code": "consumer-denied"}
 {"kind": "allow", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "module-execution", "targets": {}, "actions": ["start", "stop"]}, {"kind": "permission", "permission": "logos-core-nim.host-ambient"}]}
 {"kind": "deny", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "runtime-control", "methods": ["start_module", "stop_module", "recover_module", "retire_module", "update_configuration", "apply_configuration"], "targets": {"modules": ["logos_module_loader", "logos_capability_authority", "logosctl"]}}, {"kind": "module-execution", "targets": {"instances": ["logos_module_loader", "authority", "logosctl"]}, "actions": ["start", "stop"]}], "code": "target-denied"}
 {"kind": "deny", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "runtime-control", "methods": ["start_module", "stop_module", "retire_module", "update_configuration", "apply_configuration"], "targets": {"modules": ["lcn_orchestrator"]}}, {"kind": "module-execution", "targets": {"instances": ["orchestrator"]}, "actions": ["stop"]}], "code": "target-denied"}
@@ -323,6 +323,9 @@ default configuration they are, one per line:
   Capability Authority or itself.
 - **S5**: `logosctl` may restore the orchestrator only with `recover_module` (R l.3807-3808); it may not
   stop, retire or reconfigure it. The orchestrator is configured only by daemon-config.
+- **Codes** (CA l.783-784; DECISIONS G377): the event denials of S2 and S3 deny the consumer an action,
+  so they answer `consumer-denied`; S4 and S5 protect the targets they name, so they answer
+  `target-denied`.
 
 The operator's rules follow, sorted and deduplicated with the system ones. An operator rule may grant
 more to operator instances, and may grant the `logosctl` instance access to operator providers; it
