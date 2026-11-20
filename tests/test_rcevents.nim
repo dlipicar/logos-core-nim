@@ -1491,16 +1491,18 @@ suite "run.rc: realization changes (G227)":
     leftover()
 
   test "[RUN-1183] [IMPL-DECISION G227] the late end of a cleanup gives `execution_state_changed` at a new revision and no state change":
-    var cfg = rcConfig()
-    # [SPEC RUNTIME l.573] An initialization past the startup deadline: the
-    # attempt is `error`, and the end of its late cleanup does not leave it.
-    cfg.startupDeadline = initDuration(milliseconds = 150 * Slow)
-    let e = fixtureEngine(cfg)
+    let e = fixtureEngine(rcConfig())
     let (_, rc) = e.startClient("c")
     e.slows("w")
     var a, b: LogosSubscriptionId
     check rc.subscribe(ExecutionState, addr watches[0], a) == ecOk
     check rc.subscribe(ModuleState, addr watches[1], b) == ecOk
+    # [SPEC RUNTIME l.573] An initialization past the startup deadline: the
+    # attempt is `error`, and the end of its late cleanup does not leave it.
+    # The short deadline is set only now: in the parity pass the fixture's
+    # authority and the client start under the default one, which a loaded CI
+    # runner can take longer than 150 ms to meet.
+    check e.setStartupDeadlineForTests(initDuration(milliseconds = 150 * Slow)).isOk
     slowGate.store(true)
     let failed = e.start("w").tryGet
     check failed.state == msError and
