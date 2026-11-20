@@ -71,6 +71,9 @@ that names another orchestration module supplies an engine without this one, so 
 with the module it supplies, which carries the orchestration duties (`docs/HOST-CONFIG.md`,
 "Orchestration duties").
 
+The sections from here to "Properties not claimed" are dated records, except "What is claimed at the end of Tier 4b":
+each keeps the ids and spec lines of the revision it was written at (4b-6's BCP-0093 is BCP-0103 at 6cac8335).
+
 ### What is claimed at the end of Tier 4
 
 Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --closed-tier 3
@@ -564,6 +567,20 @@ Contract extension in the Runtime at 6cac8335 (DECISIONS I112 part b, G394, G391
   hosted provider that extends is checked in process only: no kit or generator takes `extends`.
 - **Discovery** (CA l.249-256): one `discover` decision per extended view (G394 r15).
 - **The handoff's `extends`** (PM §12; PKG-0338, PKG-0347, PKG-0351): deferred by name to 5-8 (G391).
+
+### What the re-pin's P9 changes
+
+The Credential Store scope, the claim statement and the close at 6cac8335 (DECISIONS I113, G159, G309, D27, I94, I104):
+
+- **The deployment document's new items** (BCP §5.4): BCP-0101 (the Credential Store, `None`, by inspection) and BCP-0102
+  (admission pools, by the test_deployment test) are claimed. BCP-0103 (non-production mechanisms identified by name)
+  is claimed by the logosd test that carried BCP-0093, which is retired at 6cac8335.
+- **The Credential Store** (LOGOS-MODULE-CREDENTIAL-STORE) is not claimed (owner row 38; G159 settled): "Properties not
+  claimed".
+- **The claim statement** (BCP l.286; TXT-0350): "Claims" above; test_deployment compares the facts' composition with
+  logosd's.
+- **The pending file** holds only the 53 units and 19 text entries that stay deferred past the re-pin, each owned by a
+  Tier 5 work item (I104's note); nothing else follows `6a4dfa28`.
 
 ## Properties not claimed
 
