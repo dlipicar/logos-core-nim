@@ -1,0 +1,54 @@
+; -- metadata --
+_module = "ledger_module"
+_sensitive = ["ledger.seal_request", "ledger.seal_response"]
+
+; Input for sdk/src/logos_sdk/testing/generated/ledger_module_*: a thread-confined
+; module (DECISIONS G335-G337; ledger_impl.nim). `post` and `probe` have plain
+; handlers, `wait` an async one, `seal` marks both its payloads (INTERFACE
+; §1.2.1). Every response names the thread its handler ran on.
+
+ledger.post_request = {
+  key: tstr .size (1..64),
+  amount: uint64,
+}
+
+ledger.post_response = {
+  total: uint64,
+  thread: uint64,
+}
+
+ledger.probe_request = {
+  channel: uint32,
+  value: uint64,
+}
+
+ledger.probe_response = {
+  value: uint64,
+  thread: uint64,
+  note: tstr .size (0..256),
+}
+
+ledger.wait_request = {
+  channel: uint32,
+  millis: uint32,
+  value: uint64,
+}
+
+ledger.wait_response = {
+  value: uint64,
+  thread: uint64,
+  note: tstr .size (0..256),
+}
+
+ledger.seal_request = {
+  secret: bstr .size (1..256),
+}
+
+ledger.seal_response = {
+  sealed: bstr .size (1..256),
+}
+
+ledger.posted_event = {
+  key: tstr .size (1..64),
+  total: uint64,
+}

@@ -41,6 +41,7 @@ type NimFixture* = object
   configurationTypes*: bool
     ## the kit's configuration types (`configurationTypesModule`) rather than
     ## the kit
+  confined*: bool ## a thread-confined kit (DECISIONS G335)
 
 proc fixtureSet*(f: NimFixture): Result[(ContractSet, KitOptions), string] =
   try:
@@ -50,7 +51,7 @@ proc fixtureSet*(f: NimFixture): Result[(ContractSet, KitOptions), string] =
       f.supporting.mapIt(readFile(it)),
       AcceptOptions(system: f.system),
     )
-    var opts = KitOptions(importPrefix: fixturePrefix)
+    var opts = KitOptions(importPrefix: fixturePrefix, confined: f.confined)
     if f.configuration.len > 0:
       let cfgSet = ?configurationSet(readFile(f.configuration))
       opts.configuration =

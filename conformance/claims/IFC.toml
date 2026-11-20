@@ -295,10 +295,15 @@ default = "claimed"
 "IFC-0667" = "out-of-scope:a requirement on calling modules"
 "IFC-0668" = "out-of-scope:a requirement on calling modules"
 "IFC-0670" = "out-of-scope:a requirement on calling modules"
-# §2.8: duties of the module that publishes, calls through route handles or is destroyed (the Nim
-# kit meets them for its modules).
-"IFC-0281" = "out-of-scope:a requirement on modules"
-"IFC-0282" = "out-of-scope:a requirement on modules"
+# §2.8, l.1924-1928: re-entry into a publishing module, claimed for the Nim kit's thread-confined
+# modules (`lcn-gen kit --confined`, DECISIONS G335, G337; step N-1 sub-part 3): a direct subscriber
+# re-enters during each of `publish`, `publishAsync` and `publishScoped`, from the publisher thread
+# and from the entry thread, plain and async (sdk/tests/test_kit_confined.nim), and through the
+# Runtime and a Module Host (tests/test_kit_mixed.nim). A plain kit module's own code meets them.
+"IFC-0281" = "claimed"
+"IFC-0282" = "claimed"
+# §2.8: other duties of the module that publishes, calls through route handles or is destroyed (the
+# Nim kit meets them for its modules).
 "IFC-0283" = "out-of-scope:a requirement on modules"
 "IFC-0284" = "out-of-scope:a requirement on modules"
 "IFC-0285" = "out-of-scope:a requirement on modules"
